@@ -176,6 +176,21 @@ describe('planAssignments', () => {
       {},
     );
     expect(ids(r)).toEqual(['APP-1', 'APP-2']);
+    // a glob starting mid-segment is treated conservatively (prefix cut back to the last '/')
+    r = planAssignments(
+      board(mk('APP-1', { touches: ['src/foo*'] }), mk('APP-2', { touches: ['src/foobar/x.ts'] })),
+      wide,
+      okCap,
+      {},
+    );
+    expect(ids(r)).toEqual(['APP-1']);
+    r = planAssignments(
+      board(mk('APP-1', { touches: ['src/a*.ts'] }), mk('APP-2', { touches: ['src/ab.ts'] })),
+      wide,
+      okCap,
+      {},
+    );
+    expect(ids(r)).toEqual(['APP-1']);
     // empty static prefix overlaps everything
     r = planAssignments(
       board(mk('APP-1', { touches: ['**/*.ts'] }), mk('APP-2', { touches: ['docs/x.md'] })),

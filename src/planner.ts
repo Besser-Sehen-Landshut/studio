@@ -37,7 +37,9 @@ function compareIds(a: string, b: string): number {
 
 function staticPrefix(glob: string): string {
   const i = glob.search(/[*?[{]/);
-  const head = i === -1 ? glob : glob.slice(0, i);
+  let head = i === -1 ? glob : glob.slice(0, i);
+  // A glob starting mid-segment (`src/foo*`) cuts the prefix back to the last '/' (`src`).
+  if (i > 0 && glob[i - 1] !== '/') head = head.slice(0, head.lastIndexOf('/') + 1);
   return head.replace(/\/+$/, '');
 }
 
