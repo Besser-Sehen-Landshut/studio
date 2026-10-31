@@ -55,6 +55,7 @@
           ]
         },
         "runner_labels": {
+          "default": [],
           "type": "array",
           "items": {
             "type": "string"
@@ -112,7 +113,6 @@
       "required": [
         "provider",
         "runners",
-        "runner_labels",
         "capacity"
       ],
       "additionalProperties": false
@@ -128,6 +128,7 @@
           ]
         },
         "contract_paths": {
+          "default": [],
           "type": "array",
           "items": {
             "type": "string"
@@ -144,8 +145,7 @@
         }
       },
       "required": [
-        "strategy",
-        "contract_paths"
+        "strategy"
       ],
       "additionalProperties": false
     },

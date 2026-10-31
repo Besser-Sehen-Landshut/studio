@@ -74,7 +74,21 @@ describe('loadConfig', () => {
 
   it('rejects version other than 1', () => {
     const dir = project(MINIMAL.replace('studio: 1', 'studio: 2'));
-    expect(() => loadConfig(dir)).toThrow(/studio/);
+    try {
+      loadConfig(dir);
+      expect.unreachable();
+    } catch (e) {
+      const err = e as ConfigError;
+      expect(err).toBeInstanceOf(ConfigError);
+      expect(err.message.slice(err.path.length)).toMatch(/^: studio: .*1/);
+    }
+  });
+
+  it('defaults runner_labels and contract_paths to empty lists', () => {
+    const yaml = MINIMAL.replace('  runner_labels: []\n', '').replace('  contract_paths: []\n', '');
+    const cfg = loadConfig(project(yaml));
+    expect(cfg.ci.runnerLabels).toEqual([]);
+    expect(cfg.merge.contractPaths).toEqual([]);
   });
 
   it('rejects unknown keys with their dotted path', () => {

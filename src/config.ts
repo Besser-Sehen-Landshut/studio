@@ -19,7 +19,7 @@ const roleSchema = z.strictObject({
 const ciSchema = z.strictObject({
   provider: z.literal('github'),
   runners: z.enum(['github-hosted', 'self-hosted', 'both']),
-  runnerLabels: z.array(z.string()),
+  runnerLabels: strList,
   runnerNamePattern: z.string().optional(),
   capacity: z.strictObject({
     total: z.number().int().positive(),
@@ -44,7 +44,7 @@ export const studioConfigSchema = z.strictObject({
   ci: ciSchema,
   merge: z.strictObject({
     strategy: z.enum(['studio-queue', 'native-queue']),
-    contractPaths: z.array(z.string()),
+    contractPaths: strList,
     method: z.enum(['merge', 'squash', 'rebase']).default('merge'),
   }),
   // Partial record keyed by role template name; at least one role must be configured.
