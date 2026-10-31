@@ -1,8 +1,15 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ConfigError, configWarnings, loadConfig } from '../src/config.js';
+import {
+  ConfigError,
+  configWarnings,
+  loadConfig,
+  loadOwnerConfig,
+  ownerConfigFile,
+  toolchainPathProblem,
+} from '../src/config.js';
 
 const fixture = join(import.meta.dirname, 'fixtures', 'basic');
 const dirs: string[] = [];
@@ -130,22 +137,10 @@ describe('loadConfig', () => {
     expect(cfg.allowAmbientCredentials).toBe(true);
   });
 
-  it('reads crew_toolchain_paths (default empty) and rejects unsafe ones', () => {
-    expect(loadConfig(project(MINIMAL)).crewToolchainPaths).toEqual([]);
-    const ok = loadConfig(project(`${MINIMAL}crew_toolchain_paths: ["${homedir()}/.local/bin"]\n`));
-    expect(ok.crewToolchainPaths).toEqual([`${homedir()}/.local/bin`]);
-    for (const bad of [
-      'relative/bin',
-      '/',
-      homedir(),
-      `${homedir()}/.config`,
-      `${homedir()}/Library`,
-      `${homedir()}/.ssh/x`,
-    ]) {
-      expect(() => loadConfig(project(`${MINIMAL}crew_toolchain_paths: ["${bad}"]\n`))).toThrow(
-        /crew_toolchain_paths/,
-      );
-    }
+  it('refuses crew_toolchain_paths in studio.yaml and points to the owner config', () => {
+    const dir = project(`${MINIMAL}crew_toolchain_paths: ["/opt/tool"]\n`);
+    expect(() => loadConfig(dir)).toThrow(ConfigError);
+    expect(() => loadConfig(dir)).toThrow(/owner config/);
   });
 
   it('reports the file path on a missing file and on invalid YAML', () => {
@@ -159,5 +154,62 @@ describe('loadConfig', () => {
       expect((e as ConfigError).path).toBe(join(empty, '.studio', 'studio.yaml'));
     }
     expect(() => loadConfig(project('a: [unclosed'))).toThrow(ConfigError);
+  });
+});
+
+describe('owner config', () => {
+  const home = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'studio-owner-'));
+    dirs.push(dir);
+    return dir;
+  };
+  const write = (file: string, text: string) => {
+    mkdirSync(join(file, '..'), { recursive: true });
+    writeFileSync(file, text);
+  };
+
+  it('lives under XDG_CONFIG_HOME or <home>/.config; a missing file means defaults', () => {
+    const h = home();
+    expect(ownerConfigFile({ homedir: h, env: {} })).toBe(
+      join(h, '.config', 'studio', 'config.yaml'),
+    );
+    expect(ownerConfigFile({ homedir: h, env: { XDG_CONFIG_HOME: '/x' } })).toBe(
+      '/x/studio/config.yaml',
+    );
+    expect(ownerConfigFile({ homedir: h, env: { XDG_CONFIG_HOME: 'rel' } })).toBe(
+      join(h, '.config', 'studio', 'config.yaml'),
+    );
+    expect(loadOwnerConfig({ homedir: h, env: {} })).toEqual({ crewToolchainPaths: [] });
+  });
+
+  it('reads crew_toolchain_paths from the XDG location', () => {
+    const h = home();
+    const xdg = join(h, 'xdg');
+    write(join(xdg, 'studio', 'config.yaml'), `crew_toolchain_paths: ["${h}/.local/bin"]\n`);
+    expect(loadOwnerConfig({ homedir: h, env: { XDG_CONFIG_HOME: xdg } })).toEqual({
+      crewToolchainPaths: [`${h}/.local/bin`],
+    });
+  });
+
+  it('rejects unknown keys and lexically unsafe toolchain paths', () => {
+    const h = home();
+    const file = join(h, '.config', 'studio', 'config.yaml');
+    write(file, 'other: 1\n');
+    expect(() => loadOwnerConfig({ homedir: h, env: {} })).toThrow(ConfigError);
+    for (const bad of ['relative/bin', '/', h, `${h}/.config`, `${h}/Library`, `${h}/.ssh/x`]) {
+      write(file, `crew_toolchain_paths: ["${bad}"]\n`);
+      expect(() => loadOwnerConfig({ homedir: h, env: {} })).toThrow(/crew_toolchain_paths/);
+    }
+  });
+});
+
+describe('toolchainPathProblem', () => {
+  it('compares case-insensitively on darwin only', () => {
+    expect(toolchainPathProblem('/h/.SSH', '/h', [], 'darwin')).toMatch(/credential/);
+    expect(toolchainPathProblem('/H', '/h', [], 'darwin')).toMatch(/home/);
+    expect(toolchainPathProblem('/h/.CLAUDE/x', '/h', [], 'darwin')).toMatch(/credential/);
+    expect(toolchainPathProblem('/h/.SSH', '/h', [], 'linux')).toBeUndefined();
+    expect(toolchainPathProblem('/h/.claude', '/h', [], 'linux')).toMatch(/credential/);
+    expect(toolchainPathProblem('/h/.local/bin', '/h', [], 'darwin')).toBeUndefined();
   });
 });

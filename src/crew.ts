@@ -1,37 +1,31 @@
-import { randomBytes } from 'node:crypto';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
-  mkdirSync,
   readFileSync,
   realpathSync,
-  renameSync,
-  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { WorkItem } from './board.js';
-import { CREDENTIAL_PATHS, type StudioConfig, toolchainPathProblem } from './config.js';
+import { loadOwnerConfig, type OwnerEnv, type StudioConfig } from './config.js';
 import { DEFAULT_SECRET_GLOBS } from './guard.js';
+import {
+  assertStatePath,
+  canonicalToolchainPaths,
+  credentialLocations,
+  ensureStateDir,
+  removeStateEntry,
+  stateRootFor,
+  writeStateFile,
+} from './paths.js';
 import type { Ports } from './ports.js';
 
 export const crewName = (item: WorkItem): string => `studio-${item.role}-${item.id.toLowerCase()}`;
 
-/** Studio's state directory below a project (briefs, settings, guard contexts, logs, crew.json). */
-export const stateDirOf = (projectDir: string): string => join(projectDir, '.studio', 'state');
-
 const GUARD_BIN = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'studio-guard.mjs');
-
-let tmpCounter = 0;
-
-function writeFileAtomic(file: string, content: string): void {
-  mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${tmpCounter++}.${randomBytes(4).toString('hex')}.tmp`;
-  writeFileSync(tmp, content);
-  renameSync(tmp, file);
-}
 
 const ITEM_ID_RE = /^[A-Z]+-\d+$/;
 
@@ -58,27 +52,39 @@ function cloneBranch(path: string): string | undefined {
 }
 
 /**
- * Gives an item its own blob-less clone `<stateDir>/clones/<id>` on branch `studio/<id>` from
- * `origin/main`. No `git worktree` on the owner's repository: its shared git dir would be writable
- * by the crew. Idempotent: a clone already on that branch is returned untouched; anything else in
- * that place is removed and cloned again.
+ * Gives an item its own blob-less clone `<stateRoot>/clones/<id>` on branch `studio/<id>` from
+ * the project's `origin/main`. No `git worktree` on the owner's repository: its shared git dir
+ * would be writable by the crew. Idempotent: a clone already on that branch is returned untouched;
+ * anything else in that place (a symlink included, which is unlinked, not followed) is removed and
+ * cloned again.
  */
 export async function prepareCheckout(
+  stateRoot: string,
   projectDir: string,
   item: WorkItem,
   ports: Ports,
 ): Promise<{ path: string; branch: string }> {
   assertItemId(item.id);
-  assertSafeState(projectDir);
-  const path = join(stateDirOf(projectDir), 'clones', item.id);
+  const clones = ensureStateDir(stateRoot, join(stateRoot, 'clones'));
+  const path = join(clones, item.id);
   const branch = `studio/${item.id}`;
+  assertStatePath(stateRoot, path);
+  if (isLink(path)) removeStateEntry(stateRoot, path);
   if (cloneBranch(path) === branch) return { path, branch };
-  rmSync(path, { recursive: true, force: true });
-  mkdirSync(dirname(path), { recursive: true });
+  removeStateEntry(stateRoot, path);
   const url = (await ports.git.run(projectDir, ['remote', 'get-url', 'origin'])).trim();
-  await ports.git.run(dirname(path), ['clone', '--filter=blob:none', url, path]);
+  await ports.git.run(clones, ['clone', '--filter=blob:none', url, path]);
+  chmodSync(path, 0o700);
   await ports.git.run(path, ['checkout', '-b', branch, 'origin/main']);
   return { path, branch };
+}
+
+function isLink(p: string): boolean {
+  try {
+    return lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -96,88 +102,25 @@ export function writeHomeFile(homeDir: string, name: string, content: string): v
   writeFileSync(join(parent, basename(target)), content, { flag: 'wx' });
 }
 
-/** Home and environment of the launcher; injectable so tests never touch the real ones. */
-export interface LauncherEnv {
-  homedir?: string;
-  env?: Record<string, string | undefined>;
-}
-
-const within = (child: string, parent: string): boolean =>
-  child === parent || child.startsWith(parent + sep);
-
-/** Resolved variants of a path (literal and, when it exists, its realpath). */
-function variants(p: string): string[] {
-  const out = [resolve(p)];
-  try {
-    out.push(realpathSync(p));
-  } catch {
-    // does not exist: the literal path is all there is
-  }
-  return out;
-}
-
-/**
- * Fails closed on toolchain read paths that would open credentials or the owner's project: the
- * config check (home, credential locations) is repeated with the launcher's home and env extras,
- * and a path that is the project directory or one of its parents is refused.
- */
-function assertToolchainPaths(
-  paths: string[],
-  home: string,
-  extraCredentialPaths: string[],
-  projectDir?: string,
-): void {
-  const projects = projectDir ? variants(projectDir) : [];
-  for (const path of paths) {
-    const problem = toolchainPathProblem(path, home, extraCredentialPaths);
-    if (problem) throw new Error(`crew_toolchain_paths: ${path}: ${problem}`);
-    if (variants(path).some((v) => projects.some((pr) => within(pr, v)))) {
-      throw new Error(
-        `crew_toolchain_paths: ${path}: must not be the project directory or a parent`,
-      );
-    }
-  }
-}
-
-/**
- * Refuses a state directory that is, or sits behind, a symlink (a merged PR could commit `.studio`
- * as a link) before anything below it is deleted or written.
- */
-function assertSafeState(projectDir: string): void {
-  const state = stateDirOf(projectDir);
-  for (const p of [
-    join(projectDir, '.studio'),
-    state,
-    join(state, 'clones'),
-    join(state, 'homes'),
-    join(state, 'tmp'),
-  ]) {
-    let link = false;
-    try {
-      link = lstatSync(p).isSymbolicLink();
-    } catch {
-      continue; // does not exist yet
-    }
-    if (link) throw new Error(`refusing to use ${p}: it is a symlink`);
-  }
-  try {
-    const real = realpathSync(state);
-    if (!within(real, realpathSync(projectDir))) {
-      throw new Error(`refusing to use ${state}: it resolves outside the project`);
-    }
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-  }
-}
+/** Home, environment and platform of the launcher; injectable so tests never touch the real ones. */
+export type LauncherEnv = OwnerEnv;
 
 const list = (xs: string[]): string => (xs.length > 0 ? xs.join(', ') : '(none)');
 
-/** Writes the crew's instructions to `<stateDir>/briefs/<id>.md`. */
-export function writeBrief(stateDir: string, item: WorkItem, config: StudioConfig): string {
+/**
+ * Writes the crew's instructions to `<stateRoot>/briefs/<id>.md`; the role brief comes from the
+ * project's committed `.studio/roles/<role>.md`.
+ */
+export function writeBrief(
+  stateRoot: string,
+  item: WorkItem,
+  config: StudioConfig,
+  projectDir: string,
+): string {
   assertItemId(item.id);
   const role = config.roles[item.role];
   const skills = role?.skills ?? { required: [], allowed: [], denied: [] };
-  const roleFile = join(dirname(stateDir), 'roles', `${item.role}.md`);
+  const roleFile = join(projectDir, '.studio', 'roles', `${item.role}.md`);
   const roleBrief = existsSync(roleFile) ? readFileSync(roleFile, 'utf8').trim() : '';
   const id = item.id;
   const lines = [
@@ -239,8 +182,8 @@ export function writeBrief(stateDir: string, item: WorkItem, config: StudioConfi
     'The body says what changed and how it was verified.',
     '',
   ];
-  const file = join(stateDir, 'briefs', `${id}.md`);
-  writeFileAtomic(file, lines.join('\n'));
+  const file = join(stateRoot, 'briefs', `${id}.md`);
+  writeStateFile(stateRoot, file, lines.join('\n'));
   return file;
 }
 
@@ -255,33 +198,32 @@ export function writeBrief(stateDir: string, item: WorkItem, config: StudioConfi
  * `--permission-mode bypassPermissions` on the command line. The crew token is never written here.
  */
 export function writeCrewSettings(
-  stateDir: string,
+  stateRoot: string,
   item: WorkItem,
   clone: string,
   config: StudioConfig,
-  dirs: { homeDir: string; tmpDir: string },
+  dirs: { homeDir: string; tmpDir: string; projectDir: string; toolchainPaths: string[] },
   launcher: LauncherEnv = {},
 ): string {
   assertItemId(item.id);
   const id = item.id;
   const realHome = launcher.homedir ?? homedir();
   const env = launcher.env ?? process.env;
-  const extraSecret: string[] = [];
-  if (env.GH_CONFIG_DIR) extraSecret.push(env.GH_CONFIG_DIR);
-  if (env.XDG_CONFIG_HOME) {
-    extraSecret.push(
-      join(env.XDG_CONFIG_HOME, 'gh'),
-      join(env.XDG_CONFIG_HOME, 'git', 'credentials'),
-    );
-  }
-  const credentialPaths = [...CREDENTIAL_PATHS.map((p) => join(realHome, p)), ...extraSecret];
-  assertToolchainPaths(config.crewToolchainPaths, realHome, extraSecret);
+  const { all: credentialPaths, extra: extraSecret } = credentialLocations(realHome, env);
+  const toolchain = canonicalToolchainPaths(dirs.toolchainPaths, {
+    home: realHome,
+    env,
+    platform: launcher.platform,
+    projectDir: dirs.projectDir,
+    stateRoot,
+    extraCredentialPaths: extraSecret,
+  });
   // Sandbox reads: the whole real home is denied, then only these are let back in: the clone, the
-  // crew tmp dir, the crew HOME and the configured crew_toolchain_paths. Nothing is derived from
-  // PATH. Credential locations stay listed explicitly as a second net.
+  // crew tmp dir, the crew HOME and the real paths of the owner's crew_toolchain_paths. Nothing is
+  // derived from PATH. Credential locations stay listed explicitly as a second net.
   const denyRead = [realHome, ...credentialPaths];
-  const allowRead = [clone, dirs.tmpDir, dirs.homeDir, ...config.crewToolchainPaths];
-  const ctxFile = join(stateDir, 'guard', `${id}.json`);
+  const allowRead = [clone, dirs.tmpDir, dirs.homeDir, ...toolchain];
+  const ctxFile = join(stateRoot, 'guard', `${id}.json`);
   const ctx = {
     worktree: clone,
     ownerOnly: config.ownerOnly,
@@ -290,16 +232,16 @@ export function writeCrewSettings(
     secretGlobs: [...DEFAULT_SECRET_GLOBS, ...credentialPaths.flatMap((p) => [p, `${p}/**`])],
     crewAllowedWorkflows: config.crewAllowedWorkflows,
     crewAllowedWorkflowRefs: config.crewAllowedWorkflowRefs,
-    protectedPaths: [ctxFile, stateDir],
+    protectedPaths: [ctxFile, stateRoot],
   };
-  writeFileAtomic(ctxFile, `${JSON.stringify(ctx, null, 2)}\n`);
+  writeStateFile(stateRoot, ctxFile, `${JSON.stringify(ctx, null, 2)}\n`);
   const settings = {
     env: {
       STUDIO_ROLE: 'crew',
       STUDIO_ITEM: id,
       STUDIO_PROJECT: config.primaryRepo,
       STUDIO_GUARD_CTX: ctxFile,
-      STUDIO_STATE_DIR: stateDir,
+      STUDIO_STATE_DIR: stateRoot,
     },
     disableAllHooks: false,
     hooks: {
@@ -317,8 +259,8 @@ export function writeCrewSettings(
       network: { allowedDomains: config.sandbox.networkAllow, strictAllowlist: true },
     },
   };
-  const file = join(stateDir, 'settings', `${id}.json`);
-  writeFileAtomic(file, `${JSON.stringify(settings, null, 2)}\n`);
+  const file = join(stateRoot, 'settings', `${id}.json`);
+  writeStateFile(stateRoot, file, `${JSON.stringify(settings, null, 2)}\n`);
   return file;
 }
 
@@ -350,18 +292,19 @@ function readCrewFile(file: string): Record<string, CrewRecord> {
   }
 }
 
-// Updates of crew.json are serialised in-process; the unique temp name of writeFileAtomic keeps
+// Updates of crew.json are serialised in-process; the unique temp name of writeStateFile keeps
 // concurrent writers from different processes from clobbering each other's temp file.
 let crewFileChain: Promise<void> = Promise.resolve();
 
 function updateCrewFile(
+  stateRoot: string,
   file: string,
   mutate: (all: Record<string, CrewRecord>) => void,
 ): Promise<void> {
   const run = crewFileChain.then(() => {
     const all = readCrewFile(file);
     mutate(all);
-    writeFileAtomic(file, `${JSON.stringify(all, null, 2)}\n`);
+    writeStateFile(stateRoot, file, `${JSON.stringify(all, null, 2)}\n`);
   });
   crewFileChain = run.catch(() => {});
   return run;
@@ -389,27 +332,40 @@ export async function launchCrew(
         : 'crew_token is not configured; refusing to launch without a least-privilege token (or set allow_ambient_credentials: true)',
     );
   }
-  assertToolchainPaths(config.crewToolchainPaths, launcher.homedir ?? homedir(), [], projectDir);
-  assertSafeState(projectDir);
-  const stateDir = stateDirOf(projectDir);
-  const wt = await prepareCheckout(projectDir, item, ports);
+  const home = launcher.homedir ?? homedir();
+  const owner: LauncherEnv = { homedir: home, env: penv, platform: launcher.platform };
+  const stateRoot = stateRootFor(config, owner);
+  // Everything that can refuse runs before the first side effect.
+  const toolchainPaths = loadOwnerConfig(owner).crewToolchainPaths;
+  canonicalToolchainPaths(toolchainPaths, {
+    home,
+    env: penv,
+    platform: launcher.platform,
+    projectDir,
+    stateRoot,
+    extraCredentialPaths: credentialLocations(home, penv).extra,
+  });
+  for (const sub of ['clones', 'homes', 'tmp']) {
+    assertStatePath(stateRoot, join(stateRoot, sub, item.id));
+  }
+  const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   // Isolated HOME, recreated from scratch on every launch: only a git identity and a credential
   // helper that reads GH_TOKEN. Nothing is copied or linked from the real home.
-  const homeDir = join(stateDir, 'homes', item.id);
-  rmSync(homeDir, { recursive: true, force: true });
-  mkdirSync(homeDir, { recursive: true });
+  const homeDir = join(stateRoot, 'homes', item.id);
+  removeStateEntry(stateRoot, homeDir);
+  ensureStateDir(stateRoot, homeDir);
   writeHomeFile(homeDir, '.gitconfig', GITCONFIG);
-  const tmpDir = join(stateDir, 'tmp', item.id);
-  rmSync(tmpDir, { recursive: true, force: true });
-  mkdirSync(tmpDir, { recursive: true });
-  const brief = writeBrief(stateDir, item, config);
+  const tmpDir = join(stateRoot, 'tmp', item.id);
+  removeStateEntry(stateRoot, tmpDir);
+  ensureStateDir(stateRoot, tmpDir);
+  const brief = writeBrief(stateRoot, item, config, projectDir);
   const settings = writeCrewSettings(
-    stateDir,
+    stateRoot,
     item,
     wt.path,
     config,
-    { homeDir, tmpDir },
-    launcher,
+    { homeDir, tmpDir, projectDir, toolchainPaths },
+    owner,
   );
   const settingsEnv = (
     JSON.parse(readFileSync(settings, 'utf8')) as { env: Record<string, string> }
@@ -422,15 +378,15 @@ export async function launchCrew(
   env.HOME = homeDir;
   env.TMPDIR = tmpDir;
   // The Claude login and plugins live in the config dir; it holds no gh or git credentials.
-  env.CLAUDE_CONFIG_DIR = penv.CLAUDE_CONFIG_DIR || join(launcher.homedir ?? homedir(), '.claude');
+  env.CLAUDE_CONFIG_DIR = penv.CLAUDE_CONFIG_DIR || join(home, '.claude');
   for (const k of PASS_THROUGH_ENV) {
     const v = penv[k];
     if (v) env[k] = v;
   }
   Object.assign(env, settingsEnv);
   if (token) env.GH_TOKEN = token;
-  const log = join(stateDir, 'logs', `${item.id}.jsonl`);
-  mkdirSync(dirname(log), { recursive: true });
+  const log = join(stateRoot, 'logs', `${item.id}.jsonl`);
+  ensureStateDir(stateRoot, dirname(log));
   const { pid } = await ports.claude.start(
     wt.path,
     [
@@ -458,17 +414,17 @@ export async function launchCrew(
     log,
     startedAt: ports.clock.now().toISOString(),
   };
-  await updateCrewFile(join(stateDir, 'crew.json'), (all) => {
+  await updateCrewFile(stateRoot, join(stateRoot, 'crew.json'), (all) => {
     all[item.id] = record;
   });
   return { name, pid, log };
 }
 
 /** Session id of a crew run (first `system` event of its stream-json log), for `--resume`. */
-export function crewSessionId(stateDir: string, id: string): string | undefined {
+export function crewSessionId(stateRoot: string, id: string): string | undefined {
   let text: string;
   try {
-    text = readFileSync(join(stateDir, 'logs', `${id}.jsonl`), 'utf8');
+    text = readFileSync(join(stateRoot, 'logs', `${id}.jsonl`), 'utf8');
   } catch {
     return undefined;
   }

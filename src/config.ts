@@ -21,27 +21,38 @@ export const CREDENTIAL_PATHS = [
   'Library/Keychains',
 ];
 
-const within = (child: string, parent: string): boolean =>
-  child === parent || child.startsWith(parent + sep);
+/** Locations below the real home a crew toolchain path must not open besides the credentials. */
+export const PROTECTED_HOME_PATHS = [...CREDENTIAL_PATHS, '.claude'];
+
+/** Path comparison key: case-insensitive on darwin (its default file systems are). */
+export const pathKey = (p: string, platform: NodeJS.Platform = process.platform): string =>
+  platform === 'darwin' ? p.toLowerCase() : p;
+
+/** `child` equals `parent` or lies below it (both already resolved and case-folded). */
+export const within = (child: string, parent: string): boolean =>
+  child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
 
 /**
- * Why `path` may not be a crew toolchain read path, or undefined when it is fine. Rejected:
- * relative paths, `/`, the home itself, and any path that equals, contains or lies inside a
- * credential location (so the `.config` and `Library` parents are out as well).
+ * Lexical check (no filesystem access) of a crew toolchain read path; returns why it is refused,
+ * or undefined. Rejected: relative paths, `/`, the home itself or a parent of it, and any path that
+ * equals, contains or lies inside a credential location or the Claude config dir (so the
+ * `.config` and `Library` parents are out as well). Case-insensitive on darwin. The launch repeats
+ * this on the real paths (`canonicalToolchainPaths` in paths.ts).
  */
 export function toolchainPathProblem(
   path: string,
   home: string,
-  extraCredentialPaths: string[] = [],
+  extraProtectedPaths: string[] = [],
+  platform: NodeJS.Platform = process.platform,
 ): string | undefined {
   if (!isAbsolute(path)) return 'must be an absolute path';
-  const p = resolve(path);
-  if (p === resolve('/')) return 'must not be the filesystem root';
-  if (p === resolve(home)) return 'must not be the home directory';
-  const creds = [...CREDENTIAL_PATHS.map((c) => join(home, c)), ...extraCredentialPaths].map((c) =>
-    resolve(c),
+  const key = (x: string) => pathKey(resolve(x), platform);
+  const p = key(path);
+  if (p === key('/')) return 'must not be the filesystem root';
+  if (within(key(home), p)) return 'must not be the home directory or a parent of it';
+  const hit = [...PROTECTED_HOME_PATHS.map((c) => join(home, c)), ...extraProtectedPaths].find(
+    (c) => within(p, key(c)) || within(key(c), p),
   );
-  const hit = creds.find((c) => within(p, c) || within(c, p));
   return hit ? `must not equal, contain or lie inside the credential location ${hit}` : undefined;
 }
 
@@ -93,14 +104,6 @@ export const studioConfigSchema = z.strictObject({
   crewToken: z.strictObject({ env: z.string().min(1) }).optional(),
   // Opt-in: let a crew run start without the least-privilege token (default: refuse).
   allowAmbientCredentials: z.boolean().default(false),
-  // Absolute directories the crew may read in addition to its clone, tmp dir and HOME (toolchains
-  // below the real home, e.g. a version manager). Default empty: crew uses system toolchains.
-  crewToolchainPaths: strList.superRefine((paths, ctx) => {
-    paths.forEach((path, index) => {
-      const problem = toolchainPathProblem(path, homedir());
-      if (problem) ctx.addIssue({ code: 'custom', path: [index], message: `${path}: ${problem}` });
-    });
-  }),
   ownerOnly: strList,
   deployCommands: strList,
   // Workflows (file name or name) a crew session may start with `gh workflow run`.
@@ -147,6 +150,10 @@ function describeIssue(issue: z.core.$ZodIssue): string[] {
   return [`${base || '(root)'}: ${issue.message}`];
 }
 
+/** Where crew_toolchain_paths moved to (it opens reads on the owner's machine, not the repo's call). */
+const OWNER_CONFIG_HINT =
+  'crew_toolchain_paths is not read from studio.yaml any more; move it to the owner config ($XDG_CONFIG_HOME/studio/config.yaml or ~/.config/studio/config.yaml)';
+
 export function loadConfig(projectDir: string): StudioConfig {
   const file = join(projectDir, '.studio', 'studio.yaml');
   let text: string;
@@ -161,10 +168,74 @@ export function loadConfig(projectDir: string): StudioConfig {
   } catch (e) {
     throw new ConfigError(file, `invalid YAML (${(e as Error).message})`);
   }
+  if (raw !== null && typeof raw === 'object' && 'crew_toolchain_paths' in raw) {
+    throw new ConfigError(file, OWNER_CONFIG_HINT);
+  }
   const result = studioConfigSchema.safeParse(camelizeKeys(raw));
   if (!result.success) {
     throw new ConfigError(file, result.error.issues.flatMap(describeIssue).join('; '));
   }
+  return result.data;
+}
+
+/** Owner-level settings, kept outside every repository. */
+export const ownerConfigSchema = z.strictObject({
+  // Absolute directories a crew may read in addition to its clone, tmp dir and HOME (toolchains
+  // below the real home, e.g. a version manager). Default empty: crew uses system toolchains.
+  crewToolchainPaths: strList,
+});
+
+export type OwnerConfig = z.infer<typeof ownerConfigSchema>;
+
+/** Home, environment and platform of the owner; injectable so tests never touch the real ones. */
+export interface OwnerEnv {
+  homedir?: string;
+  env?: Record<string, string | undefined>;
+  platform?: NodeJS.Platform;
+}
+
+/** An XDG base directory variable, or undefined when unset or relative (the spec ignores those). */
+export function xdgDir(env: Record<string, string | undefined>, name: string): string | undefined {
+  const v = env[name];
+  return v && isAbsolute(v) ? v : undefined;
+}
+
+/** `$XDG_CONFIG_HOME/studio/config.yaml`, else `<home>/.config/studio/config.yaml`. */
+export function ownerConfigFile(opts: OwnerEnv = {}): string {
+  const env = opts.env ?? process.env;
+  const base = xdgDir(env, 'XDG_CONFIG_HOME') ?? join(opts.homedir ?? homedir(), '.config');
+  return join(base, 'studio', 'config.yaml');
+}
+
+/**
+ * Reads the owner config; a missing file means defaults. Toolchain paths get the lexical check
+ * here; the launch checks them again against the real filesystem.
+ */
+export function loadOwnerConfig(opts: OwnerEnv = {}): OwnerConfig {
+  const file = ownerConfigFile(opts);
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { crewToolchainPaths: [] };
+    throw new ConfigError(file, `cannot read file (${(e as Error).message})`);
+  }
+  let raw: unknown;
+  try {
+    raw = parseYaml(text) ?? {};
+  } catch (e) {
+    throw new ConfigError(file, `invalid YAML (${(e as Error).message})`);
+  }
+  const result = ownerConfigSchema.safeParse(camelizeKeys(raw));
+  if (!result.success) {
+    throw new ConfigError(file, result.error.issues.flatMap(describeIssue).join('; '));
+  }
+  const home = opts.homedir ?? homedir();
+  const problems = result.data.crewToolchainPaths.flatMap((path) => {
+    const problem = toolchainPathProblem(path, home, [], opts.platform);
+    return problem ? [`crew_toolchain_paths: ${path}: ${problem}`] : [];
+  });
+  if (problems.length > 0) throw new ConfigError(file, problems.join('; '));
   return result.data;
 }
 

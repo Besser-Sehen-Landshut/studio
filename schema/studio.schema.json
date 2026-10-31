@@ -246,13 +246,6 @@
       "default": false,
       "type": "boolean"
     },
-    "crew_toolchain_paths": {
-      "default": [],
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
     "owner_only": {
       "default": [],
       "type": "array",

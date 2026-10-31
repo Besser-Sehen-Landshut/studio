@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -11,14 +12,15 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname as dirnameOf, isAbsolute, join } from 'node:path';
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import type { WorkItem } from '../src/board.js';
 import { type StudioConfig, studioConfigSchema } from '../src/config.js';
 import {
   crewName,
   crewSessionId,
+  type LauncherEnv,
   launchCrew,
   prepareCheckout,
   writeBrief,
@@ -26,6 +28,7 @@ import {
   writeHomeFile,
 } from '../src/crew.js';
 import { DEFAULT_SECRET_GLOBS, evaluateGuard } from '../src/guard.js';
+import { stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-crew-')));
@@ -44,8 +47,27 @@ const git = (cwd: string, ...args: string[]) =>
 let n = 0;
 /** Bare origin plus a clone with one commit on main. Returns the clone (the "project dir"). */
 function makeProject(): string {
+  return makeFixture().project;
+}
+
+interface Fixture {
+  project: string;
+  home: string;
+  launcher: LauncherEnv;
+  state: string;
+}
+
+/** A project plus its own fake owner home (so state roots never collide or touch the real home). */
+function makeFixture(env: Record<string, string | undefined> = {}): Fixture {
   const base = join(root, `p${n++}`);
   mkdirSync(base);
+  const home = join(base, 'home');
+  mkdirSync(home);
+  const launcher: LauncherEnv = { homedir: home, env: { PATH: process.env.PATH, ...env } };
+  return { project: makeRepo(base), home, launcher, state: stateRootFor(config, launcher) };
+}
+
+function makeRepo(base: string): string {
   const origin = join(base, 'origin.git');
   git(base, 'init', '-q', '--bare', '-b', 'main', origin);
   const clone = join(base, 'clone');
@@ -145,10 +167,12 @@ describe('crewName', () => {
 });
 
 describe('prepareCheckout', () => {
-  it('clones the origin blob-less and branches from origin/main', async () => {
-    const project = makeProject();
-    const a = await prepareCheckout(project, item, realPorts());
-    expect(a.path).toBe(join(project, '.studio', 'state', 'clones', 'APP-12'));
+  it('clones the origin blob-less into the state root and branches from origin/main', async () => {
+    const { project, state } = makeFixture();
+    const a = await prepareCheckout(state, project, item, realPorts());
+    expect(a.path).toBe(join(state, 'clones', 'APP-12'));
+    expect(statSync(a.path).mode & 0o777).toBe(0o700);
+    expect(statSync(join(state, 'clones')).mode & 0o777).toBe(0o700);
     expect(a.branch).toBe('studio/APP-12');
     expect(git(a.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('studio/APP-12');
     expect(git(a.path, 'rev-parse', 'HEAD')).toBe(git(project, 'rev-parse', 'origin/main'));
@@ -158,47 +182,63 @@ describe('prepareCheckout', () => {
   });
 
   it('is idempotent: a second call does not clone again', async () => {
-    const project = makeProject();
+    const { project, state } = makeFixture();
     const ports = realPorts();
-    const a = await prepareCheckout(project, item, ports);
+    const a = await prepareCheckout(state, project, item, ports);
     writeFileSync(join(a.path, 'work.txt'), 'wip');
     const inode = statSync(join(a.path, '.git')).ino;
-    const b = await prepareCheckout(project, item, ports);
+    const b = await prepareCheckout(state, project, item, ports);
     expect(b).toEqual(a);
     expect(existsSync(join(a.path, 'work.txt'))).toBe(true);
     expect(statSync(join(a.path, '.git')).ino).toBe(inode);
   });
 
   it('removes and re-clones a directory that is not a valid clone', async () => {
-    const project = makeProject();
-    const dir = join(project, '.studio', 'state', 'clones', 'APP-12');
+    const { project, state } = makeFixture();
+    const dir = join(state, 'clones', 'APP-12');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'junk.txt'), 'x');
-    const a = await prepareCheckout(project, item, realPorts());
+    const a = await prepareCheckout(state, project, item, realPorts());
     expect(existsSync(join(a.path, 'junk.txt'))).toBe(false);
     expect(existsSync(join(a.path, 'README.md'))).toBe(true);
   });
 
   it('leaves the owner repo without a new worktree and rejects unsafe ids', async () => {
-    const project = makeProject();
-    await prepareCheckout(project, item, realPorts());
+    const { project, state } = makeFixture();
+    await prepareCheckout(state, project, item, realPorts());
+    expect(existsSync(join(project, '.studio'))).toBe(false);
     const listed = git(project, 'worktree', 'list', '--porcelain')
       .split('\n')
       .filter((l) => l.startsWith('worktree '));
     expect(listed).toHaveLength(1);
-    await expect(prepareCheckout(project, { ...item, id: 'bad id;' }, realPorts())).rejects.toThrow(
-      /item id/,
-    );
+    await expect(
+      prepareCheckout(state, project, { ...item, id: 'bad id;' }, realPorts()),
+    ).rejects.toThrow(/item id/);
+  });
+
+  it('unlinks a symlink at clones/<id> without following it and clones again', async () => {
+    const { project, state } = makeFixture();
+    // A valid clone elsewhere: following the link would reuse it.
+    const elsewhere = join(root, `elsewhere-${n++}`);
+    git(root, 'clone', '-q', project, elsewhere);
+    git(elsewhere, 'checkout', '-q', '-b', 'studio/APP-12');
+    writeFileSync(join(elsewhere, 'keep'), 'x');
+    mkdirSync(join(state, 'clones'), { recursive: true });
+    symlinkSync(elsewhere, join(state, 'clones', 'APP-12'));
+    const a = await prepareCheckout(state, project, item, realPorts());
+    expect(lstatSync(a.path).isSymbolicLink()).toBe(false);
+    expect(existsSync(join(a.path, 'keep'))).toBe(false);
+    expect(existsSync(join(elsewhere, 'keep'))).toBe(true);
+    expect(existsSync(join(elsewhere, '.git', 'HEAD'))).toBe(true);
   });
 });
 
 describe('writeBrief', () => {
   it('lists required skills of role, the item and the rules', () => {
-    const project = makeProject();
-    const state = join(project, '.studio', 'state');
+    const { project, state } = makeFixture();
     mkdirSync(join(project, '.studio', 'roles'), { recursive: true });
     writeFileSync(join(project, '.studio', 'roles', 'builder.md'), 'ROLE-BRIEF-MARKER');
-    const file = writeBrief(state, item, config);
+    const file = writeBrief(state, item, config, project);
     expect(file).toBe(join(state, 'briefs', 'APP-12.md'));
     const text = readFileSync(file, 'utf8');
     expect(text).toContain('ROLE-BRIEF-MARKER');
@@ -218,8 +258,8 @@ describe('writeBrief', () => {
   });
 
   it('works without a role brief file', () => {
-    const state = join(makeProject(), '.studio', 'state');
-    expect(readFileSync(writeBrief(state, item, config), 'utf8')).toContain('APP-12');
+    const { project, state } = makeFixture();
+    expect(readFileSync(writeBrief(state, item, config, project), 'utf8')).toContain('APP-12');
   });
 });
 
@@ -228,7 +268,7 @@ describe('writeCrewSettings', () => {
     launcher: { env?: Record<string, string | undefined>; toolchain?: string[] } = {},
   ) => {
     const project = makeProject();
-    const state = join(project, '.studio', 'state');
+    const state = join(root, `state-${n++}`);
     const wt = join(state, 'clones', 'APP-12');
     const homeDir = join(state, 'homes', 'APP-12');
     const tmpDir = join(state, 'tmp', 'APP-12');
@@ -236,8 +276,8 @@ describe('writeCrewSettings', () => {
       state,
       item,
       wt,
-      { ...config, crewToolchainPaths: launcher.toolchain ?? [] },
-      { homeDir, tmpDir },
+      config,
+      { homeDir, tmpDir, projectDir: project, toolchainPaths: launcher.toolchain ?? [] },
       { homedir: FAKE_HOME, env: launcher.env ?? {} },
     );
     return {
@@ -312,7 +352,7 @@ describe('writeCrewSettings', () => {
         XDG_CONFIG_HOME: '/xdg',
       },
     });
-    expect(s.sandbox.filesystem.allowRead).toEqual([wt, tmpDir, homeDir, tool]);
+    expect(s.sandbox.filesystem.allowRead).toEqual([wt, tmpDir, homeDir, realpathSync(tool)]);
     const deny = s.sandbox.filesystem.denyRead;
     expect(deny).toContain(FAKE_HOME);
     expect(deny).toEqual(
@@ -334,11 +374,16 @@ describe('writeCrewSettings', () => {
   });
 
   it('rejects item ids that are unsafe in paths', () => {
-    const state = join(makeProject(), '.studio', 'state');
+    const { project, state } = makeFixture();
     const bad = { ...item, id: '../x' };
-    expect(() => writeBrief(state, bad, config)).toThrow(/item id/);
+    expect(() => writeBrief(state, bad, config, project)).toThrow(/item id/);
     expect(() =>
-      writeCrewSettings(state, bad, '/w', config, { homeDir: '/h', tmpDir: '/t' }),
+      writeCrewSettings(state, bad, '/w', config, {
+        homeDir: '/h',
+        tmpDir: '/t',
+        projectDir: project,
+        toolchainPaths: [],
+      }),
     ).toThrow(/item id/);
   });
 
@@ -363,34 +408,14 @@ describe('launchCrew', () => {
   const SECRET = 'tok-secret-value-123';
   const strict: StudioConfig = { ...config, allowAmbientCredentials: false };
   const withToken: StudioConfig = { ...strict, crewToken: { env: TOKEN_VAR } };
-  let saved: Record<string, string | undefined>;
-  beforeEach(() => {
-    saved = {
-      [TOKEN_VAR]: process.env[TOKEN_VAR],
-      CDPATH: process.env.CDPATH,
-      GIT_COMMITTER_DATE: process.env.GIT_COMMITTER_DATE,
-      CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
-      CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
-      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-      SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK,
-      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-      GH_CONFIG_DIR: process.env.GH_CONFIG_DIR,
-    };
-    process.env.CDPATH = '/tmp';
-    process.env.GIT_COMMITTER_DATE = '2020-01-01T00:00:00Z';
-  });
-  afterEach(() => {
-    for (const [k, v] of Object.entries(saved)) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
-  });
 
   it('starts claude -p with --settings, --model and a stream-json log', async () => {
-    const project = makeProject();
+    const { project, state, launcher } = makeFixture({
+      CDPATH: '/tmp',
+      GIT_COMMITTER_DATE: '2020-01-01T00:00:00Z',
+    });
     const started: Started[] = [];
-    const r = await launchCrew(project, item, config, fakePorts(started));
-    const state = join(project, '.studio', 'state');
+    const r = await launchCrew(project, item, config, fakePorts(started), launcher);
     const wt = join(state, 'clones', 'APP-12');
     expect(started).toHaveLength(1);
     const s = started[0] as Started;
@@ -417,6 +442,7 @@ describe('launchCrew', () => {
     expect(s.env.GH_TOKEN).toBeUndefined();
     expect(s.env.STUDIO_ROLE).toBe('crew');
     expect(s.env.STUDIO_GUARD_CTX).toBe(join(state, 'guard', 'APP-12.json'));
+    expect(s.env.STUDIO_STATE_DIR).toBe(state);
     expect(s.env.PATH).toBe(process.env.PATH);
     const rec = JSON.parse(readFileSync(join(state, 'crew.json'), 'utf8'));
     expect(rec['APP-12']).toMatchObject({
@@ -429,13 +455,33 @@ describe('launchCrew', () => {
     expect(typeof rec['APP-12'].startedAt).toBe('string');
   });
 
-  it('launch env maps crew token to GH_TOKEN and the settings file does not contain the token', async () => {
-    process.env[TOKEN_VAR] = SECRET;
-    const project = makeProject();
+  it('keeps all runtime state out of the repository, in 0700 directories', async () => {
+    const { project, state, home, launcher } = makeFixture();
+    await launchCrew(project, item, config, fakePorts([]), launcher);
+    expect(state).toBe(join(home, '.local', 'state', 'studio', 'org__app'));
+    expect(existsSync(join(project, '.studio'))).toBe(false);
+    for (const d of ['', 'clones', 'homes', 'homes/APP-12', 'tmp', 'tmp/APP-12', 'settings']) {
+      expect(statSync(join(state, d)).mode & 0o777).toBe(0o700);
+    }
+    for (const d of ['briefs', 'logs', 'guard']) {
+      expect(statSync(join(state, d)).mode & 0o777).toBe(0o700);
+    }
+    expect(statSync(join(state, 'crew.json')).mode & 0o777).toBe(0o600);
+  });
+
+  it('uses XDG_STATE_HOME for the state root when set', async () => {
+    const xdg = join(root, `xdg-state-${n++}`);
+    const { project, launcher } = makeFixture({ XDG_STATE_HOME: xdg });
     const started: Started[] = [];
-    await launchCrew(project, item, withToken, fakePorts(started));
+    await launchCrew(project, item, config, fakePorts(started), launcher);
+    expect((started[0] as Started).cwd).toBe(join(xdg, 'studio', 'org__app', 'clones', 'APP-12'));
+  });
+
+  it('launch env maps crew token to GH_TOKEN and the settings file does not contain the token', async () => {
+    const { project, state, launcher } = makeFixture({ [TOKEN_VAR]: SECRET });
+    const started: Started[] = [];
+    await launchCrew(project, item, withToken, fakePorts(started), launcher);
     expect((started[0] as Started).env.GH_TOKEN).toBe(SECRET);
-    const state = join(project, '.studio', 'state');
     for (const f of [
       join(state, 'settings', 'APP-12.json'),
       join(state, 'guard', 'APP-12.json'),
@@ -447,39 +493,39 @@ describe('launchCrew', () => {
   });
 
   it('fails closed when the token variable is unset, before touching anything', async () => {
-    delete process.env[TOKEN_VAR];
-    const project = makeProject();
+    const { project, state, launcher } = makeFixture();
     const started: Started[] = [];
-    await expect(launchCrew(project, item, withToken, fakePorts(started))).rejects.toThrow(
-      TOKEN_VAR,
-    );
+    await expect(
+      launchCrew(project, item, withToken, fakePorts(started), launcher),
+    ).rejects.toThrow(TOKEN_VAR);
     expect(started).toHaveLength(0);
-    expect(existsSync(join(project, '.studio', 'state', 'clones'))).toBe(false);
+    expect(existsSync(state)).toBe(false);
   });
 
   it('refuses without crewToken unless allow_ambient_credentials is set', async () => {
-    const project = makeProject();
+    const { project, state, launcher } = makeFixture();
     const started: Started[] = [];
-    await expect(launchCrew(project, item, strict, fakePorts(started))).rejects.toThrow(
+    await expect(launchCrew(project, item, strict, fakePorts(started), launcher)).rejects.toThrow(
       /crew_token|allow_ambient_credentials/,
     );
     expect(started).toHaveLength(0);
-    expect(existsSync(join(project, '.studio'))).toBe(false);
-    await launchCrew(project, item, config, fakePorts(started));
+    expect(existsSync(state)).toBe(false);
+    await launchCrew(project, item, config, fakePorts(started), launcher);
     expect(started).toHaveLength(1);
   });
 
   it('uses an isolated HOME with only a git identity and credential helper', async () => {
-    process.env.SSH_AUTH_SOCK = '/tmp/agent.sock';
-    process.env.XDG_CONFIG_HOME = '/tmp/xdg';
-    process.env.GH_CONFIG_DIR = '/tmp/ghcfg';
-    process.env.ANTHROPIC_API_KEY = 'k-1';
-    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'o-1';
-    const project = makeProject();
+    const { project, state, launcher } = makeFixture({
+      SSH_AUTH_SOCK: '/tmp/agent.sock',
+      XDG_CONFIG_HOME: '/tmp/xdg',
+      GH_CONFIG_DIR: '/tmp/ghcfg',
+      ANTHROPIC_API_KEY: 'k-1',
+      CLAUDE_CODE_OAUTH_TOKEN: 'o-1',
+    });
     const started: Started[] = [];
-    await launchCrew(project, item, config, fakePorts(started));
+    await launchCrew(project, item, config, fakePorts(started), launcher);
     const env = (started[0] as Started).env;
-    const home = join(project, '.studio', 'state', 'homes', 'APP-12');
+    const home = join(state, 'homes', 'APP-12');
     expect(env.HOME).toBe(home);
     expect(readdirSync(home)).toEqual(['.gitconfig']);
     const gc = readFileSync(join(home, '.gitconfig'), 'utf8');
@@ -495,22 +541,22 @@ describe('launchCrew', () => {
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('o-1');
   });
 
-  it('resolves CLAUDE_CONFIG_DIR from the parent env or the real home', async () => {
-    const project = makeProject();
+  it('resolves CLAUDE_CONFIG_DIR from the launcher env or the owner home', async () => {
+    const { project, home, launcher } = makeFixture();
     const started: Started[] = [];
-    delete process.env.CLAUDE_CONFIG_DIR;
-    await launchCrew(project, item, config, fakePorts(started));
-    expect((started[0] as Started).env.CLAUDE_CONFIG_DIR).toBe(join(homedir(), '.claude'));
-    process.env.CLAUDE_CONFIG_DIR = '/tmp/custom-claude';
-    await launchCrew(project, item, config, fakePorts(started));
+    await launchCrew(project, item, config, fakePorts(started), launcher);
+    expect((started[0] as Started).env.CLAUDE_CONFIG_DIR).toBe(join(home, '.claude'));
+    await launchCrew(project, item, config, fakePorts(started), {
+      ...launcher,
+      env: { ...launcher.env, CLAUDE_CONFIG_DIR: '/tmp/custom-claude' },
+    });
     expect((started[1] as Started).env.CLAUDE_CONFIG_DIR).toBe('/tmp/custom-claude');
   });
 
   it('sandbox writes are exactly clone, crew tmp and crew home; TMPDIR is the crew tmp', async () => {
-    const project = makeProject();
+    const { project, state, home, launcher } = makeFixture();
     const started: Started[] = [];
-    await launchCrew(project, item, config, fakePorts(started));
-    const state = join(project, '.studio', 'state');
+    await launchCrew(project, item, config, fakePorts(started), launcher);
     const s = JSON.parse(readFileSync(join(state, 'settings', 'APP-12.json'), 'utf8'));
     expect(s.sandbox.filesystem.allowWrite).toEqual([
       join(state, 'clones', 'APP-12'),
@@ -518,89 +564,188 @@ describe('launchCrew', () => {
       join(state, 'homes', 'APP-12'),
     ]);
     expect((started[0] as Started).env.TMPDIR).toBe(join(state, 'tmp', 'APP-12'));
-    expect(s.sandbox.filesystem.denyRead).toContain(homedir());
+    expect(s.sandbox.filesystem.denyRead).toContain(home);
   });
 
   it('recreates HOME and tmp on every launch', async () => {
-    const project = makeProject();
+    const { project, state, launcher } = makeFixture();
     const ports = fakePorts([]);
-    await launchCrew(project, item, config, ports);
-    const state = join(project, '.studio', 'state');
+    await launchCrew(project, item, config, ports, launcher);
     writeFileSync(join(state, 'homes', 'APP-12', 'stale.txt'), 'x');
     writeFileSync(join(state, 'tmp', 'APP-12', 'stale.txt'), 'x');
-    await launchCrew(project, item, config, ports);
+    await launchCrew(project, item, config, ports, launcher);
     expect(readdirSync(join(state, 'homes', 'APP-12'))).toEqual(['.gitconfig']);
     expect(readdirSync(join(state, 'tmp', 'APP-12'))).toEqual([]);
   });
 
   it('serialises concurrent launches: both crew records survive', async () => {
-    const project = makeProject();
+    const { project, state, launcher } = makeFixture();
     const ports = fakePorts([]);
     await Promise.all([
-      launchCrew(project, item, config, ports),
-      launchCrew(project, { ...item, id: 'APP-13' }, config, ports),
+      launchCrew(project, item, config, ports, launcher),
+      launchCrew(project, { ...item, id: 'APP-13' }, config, ports, launcher),
     ]);
-    const rec = JSON.parse(readFileSync(join(project, '.studio', 'state', 'crew.json'), 'utf8'));
+    const rec = JSON.parse(readFileSync(join(state, 'crew.json'), 'utf8'));
     expect(Object.keys(rec).sort()).toEqual(['APP-12', 'APP-13']);
   });
 
   it('throws when the role is not configured', async () => {
-    const project = makeProject();
+    const { project, launcher } = makeFixture();
     const started: Started[] = [];
     await expect(
-      launchCrew(project, { ...item, role: 'reviewer' }, config, fakePorts(started)),
+      launchCrew(project, { ...item, role: 'reviewer' }, config, fakePorts(started), launcher),
     ).rejects.toThrow(/role/);
     expect(started).toHaveLength(0);
   });
 
   it('keeps earlier crew records when launching a second item', async () => {
-    const project = makeProject();
+    const { project, state, launcher } = makeFixture();
     const ports = fakePorts([]);
-    await launchCrew(project, item, config, ports);
-    await launchCrew(project, { ...item, id: 'APP-13' }, config, ports);
-    const rec = JSON.parse(readFileSync(join(project, '.studio', 'state', 'crew.json'), 'utf8'));
+    await launchCrew(project, item, config, ports, launcher);
+    await launchCrew(project, { ...item, id: 'APP-13' }, config, ports, launcher);
+    const rec = JSON.parse(readFileSync(join(state, 'crew.json'), 'utf8'));
     expect(Object.keys(rec).sort()).toEqual(['APP-12', 'APP-13']);
   });
 });
 
-describe('toolchain paths at launch', () => {
-  it('rejects a toolchain path that is the project dir or one of its parents', async () => {
-    const project = makeProject();
-    for (const bad of [project, dirnameOf(project)]) {
+/** Writes the owner config of a fixture home. */
+function ownerConfig(home: string, paths: string[]): void {
+  mkdirSync(join(home, '.config', 'studio'), { recursive: true });
+  writeFileSync(
+    join(home, '.config', 'studio', 'config.yaml'),
+    `crew_toolchain_paths: ${JSON.stringify(paths)}\n`,
+  );
+}
+
+describe('toolchain paths at launch (owner config)', () => {
+  /** Launch must refuse `bad` before any side effect. */
+  async function refuses(f: Fixture, bad: string, why: RegExp, launcher = f.launcher) {
+    ownerConfig(f.home, [bad]);
+    const started: Started[] = [];
+    await expect(launchCrew(f.project, item, config, fakePorts(started), launcher)).rejects.toThrow(
+      why,
+    );
+    expect(started).toHaveLength(0);
+    expect(existsSync(f.state)).toBe(false);
+  }
+
+  it('accepts an existing directory and puts its real path into allowRead', async () => {
+    const f = makeFixture();
+    const real = join(f.home, '.toolchains', 'node');
+    mkdirSync(real, { recursive: true });
+    const viaLink = join(f.home, '.tools-link');
+    symlinkSync(real, viaLink);
+    ownerConfig(f.home, [viaLink]);
+    await launchCrew(f.project, item, config, fakePorts([]), f.launcher);
+    const s = JSON.parse(readFileSync(join(f.state, 'settings', 'APP-12.json'), 'utf8'));
+    expect(s.sandbox.filesystem.allowRead.slice(3)).toEqual([realpathSync(real)]);
+    expect(s.sandbox.filesystem.allowRead).not.toContain(viaLink);
+  });
+
+  it('rejects a symlink to the credential store ~/.ssh', async () => {
+    const f = makeFixture();
+    mkdirSync(join(f.home, '.ssh'));
+    const link = join(root, `ssh-link-${n++}`);
+    symlinkSync(join(f.home, '.ssh'), link);
+    await refuses(f, link, /protected location/);
+  });
+
+  it('rejects a symlink to the home directory', async () => {
+    const f = makeFixture();
+    const link = join(root, `home-link-${n++}`);
+    symlinkSync(f.home, link);
+    await refuses(f, link, /home directory/);
+  });
+
+  it('rejects the home reached through a symlinked home spelling', async () => {
+    const f = makeFixture();
+    const homeLink = join(root, `home-alias-${n++}`);
+    symlinkSync(f.home, homeLink);
+    mkdirSync(join(f.home, '.aws'));
+    // The launcher knows the home under its link name; the path names the real directory.
+    await refuses(f, join(f.home, '.aws'), /protected location/, {
+      ...f.launcher,
+      homedir: homeLink,
+    });
+  });
+
+  it('rejects .SSH on darwin (case-insensitive comparison)', async () => {
+    const f = makeFixture();
+    mkdirSync(join(f.home, '.SSH'), { recursive: true });
+    await refuses(f, join(f.home, '.SSH'), /credential location|protected location/, {
+      ...f.launcher,
+      platform: 'darwin',
+    });
+  });
+
+  it('rejects a path that does not exist', async () => {
+    const f = makeFixture();
+    await refuses(f, join(f.home, '.toolchains', 'missing'), /does not exist/);
+  });
+
+  it('rejects the project dir, a parent of it and a path inside it', async () => {
+    const f = makeFixture();
+    mkdirSync(join(f.project, 'node_modules'), { recursive: true });
+    await refuses(f, f.project, /project directory/);
+    await refuses(f, join(f.project, 'node_modules'), /project directory/);
+    // The fixture's parent of the project also holds the fake home: refused either way.
+    await refuses(f, dirnameOf(f.project), /project directory|home directory/);
+  });
+
+  it('rejects the state root, a path inside it and a parent of it', async () => {
+    for (const pick of [(s: string) => s, (s: string) => join(s, 'clones'), dirnameOf]) {
+      const f = makeFixture();
+      const target = pick(f.state);
+      mkdirSync(target, { recursive: true });
+      ownerConfig(f.home, [target]);
       const started: Started[] = [];
       await expect(
-        launchCrew(project, item, { ...config, crewToolchainPaths: [bad] }, fakePorts(started)),
-      ).rejects.toThrow(/project directory/);
+        launchCrew(f.project, item, config, fakePorts(started), f.launcher),
+      ).rejects.toThrow(/state root/);
       expect(started).toHaveLength(0);
     }
-    expect(existsSync(join(project, '.studio'))).toBe(false);
+  });
+
+  it('rejects <home>/.claude and CLAUDE_CONFIG_DIR (also through a symlink)', async () => {
+    const f = makeFixture();
+    mkdirSync(join(f.home, '.claude'));
+    await refuses(f, join(f.home, '.claude'), /credential location|protected location/);
+    const g = makeFixture();
+    const cfg = join(root, `claude-cfg-${n++}`);
+    mkdirSync(cfg);
+    const link = join(root, `claude-link-${n++}`);
+    symlinkSync(cfg, link);
+    await refuses(g, link, /protected location/, {
+      ...g.launcher,
+      env: { ...g.launcher.env, CLAUDE_CONFIG_DIR: cfg },
+    });
   });
 });
 
-describe('symlinked state directory', () => {
-  it('launch throws and deletes nothing when .studio is a symlink', async () => {
-    const project = makeProject();
+describe('state root safety', () => {
+  it('refuses a symlinked component below the state root and deletes nothing', async () => {
+    const f = makeFixture();
     const elsewhere = join(root, `elsewhere-${n++}`);
-    mkdirSync(join(elsewhere, 'state', 'homes', 'APP-12'), { recursive: true });
-    mkdirSync(join(elsewhere, 'state', 'clones', 'APP-12'), { recursive: true });
-    writeFileSync(join(elsewhere, 'state', 'homes', 'APP-12', 'keep'), 'x');
-    writeFileSync(join(elsewhere, 'state', 'clones', 'APP-12', 'keep'), 'x');
-    symlinkSync(elsewhere, join(project, '.studio'));
+    mkdirSync(join(elsewhere, 'APP-12'), { recursive: true });
+    writeFileSync(join(elsewhere, 'APP-12', 'keep'), 'x');
+    mkdirSync(f.state, { recursive: true });
+    symlinkSync(elsewhere, join(f.state, 'homes'));
     const started: Started[] = [];
-    await expect(launchCrew(project, item, config, fakePorts(started))).rejects.toThrow(/symlink/);
+    await expect(
+      launchCrew(f.project, item, config, fakePorts(started), f.launcher),
+    ).rejects.toThrow(/symlink/);
     expect(started).toHaveLength(0);
-    expect(existsSync(join(elsewhere, 'state', 'homes', 'APP-12', 'keep'))).toBe(true);
-    expect(existsSync(join(elsewhere, 'state', 'clones', 'APP-12', 'keep'))).toBe(true);
-    await expect(prepareCheckout(project, item, realPorts())).rejects.toThrow(/symlink/);
+    expect(existsSync(join(elsewhere, 'APP-12', 'keep'))).toBe(true);
   });
 
   it('refuses a symlinked clones directory', async () => {
-    const project = makeProject();
+    const f = makeFixture();
     const elsewhere = join(root, `elsewhere-${n++}`);
     mkdirSync(elsewhere);
-    mkdirSync(join(project, '.studio', 'state'), { recursive: true });
-    symlinkSync(elsewhere, join(project, '.studio', 'state', 'clones'));
-    await expect(prepareCheckout(project, item, realPorts())).rejects.toThrow(/symlink/);
+    mkdirSync(f.state, { recursive: true });
+    symlinkSync(elsewhere, join(f.state, 'clones'));
+    await expect(prepareCheckout(f.state, f.project, item, realPorts())).rejects.toThrow(/symlink/);
+    expect(readdirSync(elsewhere)).toEqual([]);
   });
 });
 
