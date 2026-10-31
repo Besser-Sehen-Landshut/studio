@@ -151,6 +151,7 @@ export function writeBrief(
   const roleFile = join(projectDir, '.studio', 'roles', `${item.role}.md`);
   const roleBrief = existsSync(roleFile) ? readFileSync(roleFile, 'utf8').trim() : '';
   const id = item.id;
+  const opensPr = item.type !== 'review' && item.type !== 'research';
   const lines = [
     `# Brief for ${id}`,
     '',
@@ -184,8 +185,13 @@ export function writeBrief(
     '- Test first for code: write a failing test, then the change.',
     '- Stage files by name; never `git add -A` or `git add .`.',
     '- Commit with `git commit -F <message file>` or a literal `-m "..."`; never use `$(...)` inside git or gh commands.',
-    `- Push with an explicit refspec: \`git push -u origin HEAD:refs/heads/studio/${id}\`.`,
-    `- Open the pull request with \`gh pr create --title "${id}: <summary>" --body-file <file>\`.`,
+    // Review and research items open no PR and push nothing, so their brief carries no push or PR rule.
+    ...(opensPr
+      ? [
+          `- Push with an explicit refspec: \`git push -u origin HEAD:refs/heads/studio/${id}\`.`,
+          `- Open the pull request with \`gh pr create --title "${id}: <summary>" --body-file <file>\`.`,
+        ]
+      : []),
     '- Git identity and GitHub authentication are preconfigured; do not change git config or log in.',
     '- Never merge, deploy, force-push, or touch secrets.',
     "- Run the project's full test command; tests_run is the count from that run. If the command errors or fails, fix it or report status failed — never report a partial count.",
@@ -193,7 +199,9 @@ export function writeBrief(
     '',
     '## Report contract',
     '',
-    `Write \`.studio/reports/${id}.md\` in the checkout as the last step, after pushing; do not commit it. head_sha is the SHA of the pushed head (\`git rev-parse HEAD\`).`,
+    opensPr
+      ? `Write \`.studio/reports/${id}.md\` in the checkout as the last step, after pushing; do not commit it. head_sha is the SHA of the pushed head (\`git rev-parse HEAD\`).`
+      : `Write \`.studio/reports/${id}.md\` in the checkout as the last step; do not commit it.`,
     'It starts with YAML frontmatter:',
     '',
     '```yaml',

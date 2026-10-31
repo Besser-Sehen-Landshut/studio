@@ -300,6 +300,18 @@ describe('writeBrief', () => {
     expect(text).toMatch(/result .*in the report body/i);
   });
 
+  it('review and research briefs carry no push or PR rules', () => {
+    const { project, state } = makeFixture();
+    for (const type of ['review', 'research'] as const) {
+      const text = readFileSync(writeBrief(state, { ...item, type }, config, project), 'utf8');
+      expect(text).not.toContain('git push');
+      expect(text).not.toContain('gh pr create');
+    }
+    const build = readFileSync(writeBrief(state, item, config, project), 'utf8');
+    expect(build).toContain('git push');
+    expect(build).toContain('gh pr create');
+  });
+
   it('writes the report last and does not commit it', () => {
     const { project, state } = makeFixture();
     const text = readFileSync(writeBrief(state, item, config, project), 'utf8');
