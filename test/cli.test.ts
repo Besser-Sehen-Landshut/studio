@@ -207,6 +207,22 @@ describe('studio CLI', () => {
     expect(plan.assign.map((i: { id: string }) => i.id)).toEqual(['APP-1']);
     expect(plan.blocked).toEqual([{ id: 'APP-2', reason: 'not ready: missing dod' }]);
     expect(plan.deferred).toEqual([]);
+    expect(plan.capacity).toMatchObject({ ciTotal: 8, ok: true });
+    expect(plan.capacity.error).toBeUndefined();
+  });
+
+  it('plan surfaces why capacity counts as busy', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    const { gh } = fakeGh();
+    gh.api = async () => {
+      throw new Error('HTTP 401: Bad credentials');
+    };
+    const { ports } = fakePorts(gh);
+    const r = await cli(fx, ports, 'plan');
+    expect(r.code).toBe(0);
+    const plan = JSON.parse(r.out);
+    expect(plan.capacity).toMatchObject({ ok: false, ciBusy: 8, ciTotal: 8 });
+    expect(plan.capacity.error).toContain('Bad credentials');
   });
 
   it('launch transitions item to assigned and records crew', async () => {

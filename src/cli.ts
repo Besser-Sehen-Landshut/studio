@@ -145,11 +145,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
       case 'plan': {
         const { config, board } = loadAll();
-        const { plan } = await planNow(config, board);
+        const { plan, capacity } = await planNow(config, board);
         print({
           assign: plan.assign.map((i) => ({ id: i.id, title: i.title, role: i.role })),
           blocked: plan.blocked,
           deferred: plan.deferred,
+          capacity,
         });
         return 0;
       }

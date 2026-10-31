@@ -78,7 +78,7 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 | Command                 | Purpose                                                       |
 | ----------------------- | ------------------------------------------------------------- |
 | `board`                 | Show the board                                                |
-| `plan`                  | Dry-run the planner (JSON: assign, blocked, deferred)         |
+| `plan`                  | Dry-run the planner (JSON incl. capacity and its read error)  |
 | `launch <id>`           | Start a crew session for a planned item                       |
 | `status`                | Crew sessions and their board status                          |
 | `collect <id>`          | Verify a crew report and PR head, move the item               |

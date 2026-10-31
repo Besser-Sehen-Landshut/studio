@@ -249,7 +249,7 @@ const FORWARD: Readonly<Record<ItemStatus, readonly ItemStatus[]>> = {
 
 const TERMINAL: readonly ItemStatus[] = ['merged', 'dropped'];
 
-export function isLegalMove(from: ItemStatus, to: ItemStatus, hasPr = false): boolean {
+export function isLegalMove(from: ItemStatus, to: ItemStatus, hasPr: boolean): boolean {
   if (TERMINAL.includes(from)) return false;
   // in_review -> merged is for items that never had a PR (review, research); a PR goes through the queue.
   if (from === 'in_review' && to === 'merged') return !hasPr;

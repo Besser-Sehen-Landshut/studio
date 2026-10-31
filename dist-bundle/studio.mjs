@@ -27783,7 +27783,7 @@ var FORWARD = {
   dropped: []
 };
 var TERMINAL = ["merged", "dropped"];
-function isLegalMove(from, to, hasPr = false) {
+function isLegalMove(from, to, hasPr) {
   if (TERMINAL.includes(from)) return false;
   if (from === "in_review" && to === "merged") return !hasPr;
   if (to === "blocked") return from !== "blocked";
@@ -27861,8 +27861,9 @@ async function readCapacity(config2, ports, options = {}) {
       return n2;
     };
     ciBusy = Math.min(total, await withTimeout(read(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
-  } catch {
-    return { ciBusy: total, ciTotal: total, hostLoad, ok: false };
+  } catch (err) {
+    const error62 = (err instanceof Error ? err.message : String(err)).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
+    return { ciBusy: total, ciTotal: total, hostLoad, ok: false, error: error62 };
   }
   const ok = ciBusy <= mergeMaxBusy && (hostLoadMax === void 0 || hostLoad <= hostLoadMax);
   return { ciBusy, ciTotal: total, hostLoad, ok };
@@ -29649,11 +29650,12 @@ async function runCli(argv, deps) {
       }
       case "plan": {
         const { config: config2, board } = loadAll();
-        const { plan } = await planNow(config2, board);
+        const { plan, capacity } = await planNow(config2, board);
         print({
           assign: plan.assign.map((i2) => ({ id: i2.id, title: i2.title, role: i2.role })),
           blocked: plan.blocked,
-          deferred: plan.deferred
+          deferred: plan.deferred,
+          capacity
         });
         return 0;
       }

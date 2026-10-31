@@ -2,7 +2,14 @@ import type { Board, WorkItem } from './board.js';
 import type { StudioConfig } from './config.js';
 
 /** CI capacity snapshot (produced by the capacity module). */
-export type Capacity = { ciBusy: number; ciTotal: number; hostLoad: number; ok: boolean };
+export type Capacity = {
+  ciBusy: number;
+  ciTotal: number;
+  hostLoad: number;
+  ok: boolean;
+  /** Why CI could not be read (then everything counts as busy). */
+  error?: string;
+};
 
 export type Plan = {
   assign: WorkItem[];

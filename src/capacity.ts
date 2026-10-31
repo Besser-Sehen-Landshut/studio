@@ -77,8 +77,12 @@ export async function readCapacity(
       return n;
     };
     ciBusy = Math.min(total, await withTimeout(read(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
-  } catch {
-    return { ciBusy: total, ciTotal: total, hostLoad, ok: false };
+  } catch (err) {
+    // Still fully busy (fail closed), but say why so the control room can fix the cause.
+    const error = (err instanceof Error ? err.message : String(err))
+      .replace(/\p{Cc}/gu, ' ')
+      .slice(0, 300);
+    return { ciBusy: total, ciTotal: total, hostLoad, ok: false, error };
   }
   const ok = ciBusy <= mergeMaxBusy && (hostLoadMax === undefined || hostLoad <= hostLoadMax);
   return { ciBusy, ciTotal: total, hostLoad, ok };

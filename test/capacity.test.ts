@@ -79,19 +79,21 @@ describe('readCapacity', () => {
       throw new Error('boom');
     });
     const cap = await readCapacity(mkConfig(), { gh, host: host(0) }, opts);
-    expect(cap).toMatchObject({ ok: false, ciBusy: 8, ciTotal: 8 });
+    expect(cap).toMatchObject({ ok: false, ciBusy: 8, ciTotal: 8, error: 'boom' });
   });
 
   it('unparsable output counts as busy', async () => {
     const gh = fakeGh(() => 'not a table\n');
     const cap = await readCapacity(mkConfig(), { gh, host: host(0) }, opts);
     expect(cap).toMatchObject({ ok: false, ciBusy: 8 });
+    expect(cap.error).toContain('unparsable');
   });
 
   it('timeout counts as busy', async () => {
     const gh = fakeGh(() => new Promise<string>(() => {}));
     const cap = await readCapacity(mkConfig(), { gh, host: host(0) }, { timeoutMs: 20 });
     expect(cap).toMatchObject({ ok: false, ciBusy: 8 });
+    expect(cap.error).toContain('timed out');
   });
 
   it('host load above max → not ok', async () => {

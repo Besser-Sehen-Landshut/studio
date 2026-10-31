@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   BOARD_ROLES,
   BoardError,
+  isLegalMove,
   loadBoard,
   saveBoard,
   TransitionError,
@@ -186,5 +187,14 @@ describe('board', () => {
       ),
     );
     expect(() => transition(withPr, 'APP-1', 'merged', 'x', new Date())).toThrow(TransitionError);
+  });
+});
+
+describe('isLegalMove', () => {
+  it('needs hasPr explicitly: no fail-open default', () => {
+    // A default parameter would not count in Function.length.
+    expect(isLegalMove.length).toBe(3);
+    expect(isLegalMove('in_review', 'merged', true)).toBe(false);
+    expect(isLegalMove('in_review', 'merged', false)).toBe(true);
   });
 });
