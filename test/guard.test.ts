@@ -423,8 +423,7 @@ describe('round 1 regressions', () => {
       "gh api graphql -f query='mutation { mergePullRequest(input:{}) { clientMutationId } }'",
       'gh api $E',
     ]);
-    expect(bash("gh api graphql -f query='query { viewer { login } }'").decision).toBe('allow');
-    expect(bash('gh pr create --title "$T" --body "$(date)"').decision).toBe('allow');
+    expect(bash('gh pr create --title "$T" --body-file body.md').decision).toBe('allow');
   });
 
   it('I5 deploy and owner-only after normalisation', () => {
@@ -514,7 +513,7 @@ describe('round 2 regressions', () => {
       'gh api -f body=@file.txt repos/o/a/issues',
       'gh api -X POST repos/o/a/merges%2523x',
     ]);
-    allows(['gh api repos/o/a/pulls/3', "gh api graphql -f query='query { viewer { login } }'"]);
+    allows(['gh api repos/o/a/pulls/3', 'gh api -X GET repos/o/a/pulls/3']);
   });
 
   it('CR2-2 REST forbidden paths use the normalised path', () => {
@@ -612,17 +611,7 @@ describe('round 2 regressions', () => {
       'xargs --null rm',
       'xargs -0r sudo',
     ]);
-    allows([
-      'env FOO=1 ls',
-      'nohup ls',
-      'timeout 5 ls',
-      'nice ls',
-      'nice -n 5 ls',
-      'time ls',
-      'command ls',
-      'echo a | xargs -n 1 echo',
-      'echo a | xargs -0 -I {} echo {}',
-    ]);
+    allows(['env FOO=1 ls', 'nohup ls', 'timeout 5 ls', 'time ls', 'command ls']);
   });
 
   it('R2-I3b sensitive environment', () => {
@@ -641,7 +630,7 @@ describe('round 2 regressions', () => {
       'mapfile GITHUB_ENV < x',
       'local GIT_DIR=x',
     ]);
-    allows(['export FOO=1', 'printf "%s\\n" hi', 'read -r line < in.txt', 'CI=1 pnpm test']);
+    allows(['export FOO=1', 'printf "%s\\n" hi', 'CI=1 pnpm test']);
   });
 
   it('R2-I4 unresolved command words', () => {
@@ -674,11 +663,15 @@ describe('round 2 regressions', () => {
       'git add src/a.ts',
       'git add -A',
       'git commit -m "feat: add x"',
-      'git commit -m "$(cat <<\'EOF\'\nfeat: x\n\nbody\nEOF\n)"',
+      'git commit -F msg.txt',
       'git push -u origin HEAD:refs/heads/studio/APP-1',
       'git push origin studio/APP-1',
       'git fetch origin && git rebase origin/main',
-      'gh pr create --title "APP-1: x" --body "$(cat <<\'EOF\'\n## Summary\nmerge of things\nEOF\n)"',
+      'gh pr create --title t --body-file body.md',
+      'gh pr view 3',
+      'gh pr checks 3',
+      'gh api repos/org/app/pulls/3',
+      'git config --get user.name',
       'gh pr view 3 --json state,mergeable',
       'gh pr checks 3 --watch',
       "mkdir -p .studio/reports && cat > .studio/reports/APP-1.md <<'EOF'\n# Report\nEOF",
@@ -686,6 +679,148 @@ describe('round 2 regressions', () => {
     expect(tool('Write', { file_path: join(wt, '.studio', 'reports', 'APP-1.md') }).decision).toBe(
       'allow',
     );
+  });
+});
+
+describe('round 3: explicit deny rules', () => {
+  const denies = (cmds: string[]) => {
+    for (const c of cmds) expect(bash(c, wt), c).toMatchObject({ decision: 'deny' });
+  };
+
+  it('D1 xargs', () => {
+    denies(['xargs ls', 'echo a | xargs -n 1 echo', 'xargs -0 -I {} echo {}']);
+  });
+  it('D2 eval, source, dot', () => {
+    denies(['eval ls', 'source x.sh', '. ./x.sh', 'echo a && eval "ls"']);
+  });
+  it('D3 shells with command strings, stdin, heredocs', () => {
+    denies([
+      "bash -c 'ls'",
+      "sh -c 'ls'",
+      "zsh -c 'ls'",
+      "dash -c 'ls'",
+      "ksh -c 'ls'",
+      "fish -c 'ls'",
+      "bash -lc 'ls'",
+      'bash <<EOF\nls\nEOF',
+      'bash <<< "ls"',
+      'echo ls | sh',
+      'echo ls | bash -',
+      'bash -s',
+    ]);
+    expect(bash('bash script.sh', wt).decision).toBe('allow');
+  });
+  it('D4 env with options', () => {
+    denies(["env -S 'ls'", "env --split-string='ls'", 'env -i ls', 'env -u X ls']);
+    expect(bash('env FOO=1 ls', wt).decision).toBe('allow');
+  });
+  it('D5 variable builtins with options and printf -v', () => {
+    denies([
+      'printf -v X 1',
+      'printf -vPATH /tmp/evil',
+      'read -r x',
+      'read -aPATH <<< /tmp/evil',
+      'declare -n r=PATH',
+      'declare -n r=PATH; r=/tmp/evil',
+      'typeset -x A=1',
+      'local -r A=1',
+      'export -n A',
+      'export +x A',
+      'readonly -p',
+      'mapfile x < f',
+      'readarray x < f',
+      'getopts ab opt',
+    ]);
+    expect(bash('export FOO=1', wt).decision).toBe('allow');
+  });
+  it('D6 substitution inside git and gh', () => {
+    denies([
+      'git commit -m "$(date)"',
+      'git commit -m `date`',
+      'git log <(ls)',
+      'gh pr create --body "$(cat f)"',
+      'gh pr view `echo 3`',
+    ]);
+    expect(bash('echo "$(date)" && git status', wt).decision).toBe('allow');
+  });
+  it('D7 wrappers', () => {
+    denies([
+      'nice -n 5 -- sudo ls',
+      'nice ls',
+      'timeout 5 -- sudo ls',
+      'timeout 5 -s KILL ls',
+      'time -- ls',
+      'nohup -- ls',
+      'command -v ls',
+      'exec -a x ls',
+    ]);
+    for (const c of ['time ls', 'nohup ls', 'timeout 5 ls', 'command ls', 'exec ls']) {
+      expect(bash(c, wt).decision, c).toBe('allow');
+    }
+  });
+  it('D8 brace expansion in command position', () => {
+    denies(['{sudo,ls} -l', '{ls,}', 'echo a; {sudo,ls}']);
+  });
+  it('D9 gh api is read-only', () => {
+    denies([
+      'gh api -XPUT repos/o/a/pulls/3/merge',
+      'gh api --method=PUT repos/o/a/pulls/3/merge',
+      'gh api --method PUT repos/o/a/pulls/3/merge',
+      'gh api -X POST repos/o/a/issues',
+      'gh api repos/o/a/issues -fbody=x',
+      'gh api repos/o/a/issues -Fbody=x',
+      'gh api repos/o/a/issues -f body=x',
+      'gh api repos/o/a/issues --field=body=x',
+      'gh api repos/o/a/issues --raw-field body=x',
+      'gh api repos/o/a/issues --input=b.json',
+      'gh api repos/o/a/issues --input b.json',
+      'gh api graphql -f query=x',
+      'gh api repos/o/a/pulls/3/merge%2F.',
+      'gh api https://api.github.com/repos/o/a',
+    ]);
+    expect(bash('gh api repos/o/a/pulls/3', wt).decision).toBe('allow');
+  });
+  it('D10 += assignments to sensitive names', () => {
+    denies([
+      'GIT_CONFIG_COUNT+=1 GIT_CONFIG_KEY_0+=alias.p GIT_CONFIG_VALUE_0+=push git p -f origin HEAD:main',
+      'PATH+=:/tmp ls',
+      'PATH+=:/tmp',
+      'env PATH+=:/tmp ls',
+      'export PATH+=:/tmp',
+    ]);
+  });
+  it('D11 git -c allowlist has no core.pager', () => {
+    denies(['git -c core.pager=ls log', 'git -c core.pager=ls status']);
+    expect(bash('git -c color.ui=never status', wt).decision).toBe('allow');
+  });
+  it('P1 push to workflow refs', () => {
+    denies([
+      'git push origin HEAD:refs/heads/studio-ci',
+      'git push origin studio-ci',
+      'git push origin HEAD:heads/STUDIO-CI',
+    ]);
+    expect(bash('git push origin studio/APP-1', wt).decision).toBe('allow');
+  });
+  it('required crew allows', () => {
+    for (const c of [
+      'pnpm test',
+      'pnpm install',
+      'git add a.ts',
+      'git status',
+      'git diff',
+      'git log',
+      'git commit -m "literal"',
+      'git commit -F msg.txt',
+      'git push origin studio/APP-1',
+      'git push -u origin HEAD:refs/heads/studio/APP-1',
+      'gh pr create --title t --body-file body.md',
+      'gh pr view 3',
+      'gh pr checks 3',
+      'gh api repos/org/app/pulls/3',
+      'git config --get user.name',
+    ]) {
+      expect(bash(c, wt).decision, c).toBe('allow');
+    }
   });
 });
 

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig } from '../src/config.js';
+import { ConfigError, configWarnings, loadConfig } from '../src/config.js';
 
 const fixture = join(import.meta.dirname, 'fixtures', 'basic');
 const dirs: string[] = [];
@@ -82,6 +82,15 @@ describe('loadConfig', () => {
   it('reads crew_allowed_workflow_refs', () => {
     const cfg = loadConfig(project(`${MINIMAL}crew_allowed_workflow_refs: [studio-ci]\n`));
     expect(cfg.crewAllowedWorkflowRefs).toEqual(['studio-ci']);
+  });
+
+  it('warns that allowed workflow refs must be protected server-side', () => {
+    expect(configWarnings(loadConfig(project(MINIMAL)))).toEqual([]);
+    const cfg = loadConfig(project(`${MINIMAL}crew_allowed_workflow_refs: [studio-ci]\n`));
+    const w = configWarnings(cfg);
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain('studio-ci');
+    expect(w[0]).toContain('protected server-side');
   });
 
   it('rejects version other than 1', () => {

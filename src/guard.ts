@@ -3,6 +3,10 @@
 // (Edit/Write/...) to the worktree. Best effort for shell commands; every internal error denies.
 // This hook is the LAST of four layers: sandbox, least-privilege token, server-side branch
 // protection (the primary layer for main) and this guard. It is best effort for shell commands.
+// The guard is a convenience layer, not a security boundary. The boundary is the sandbox, a
+// least-privilege token and server-side branch protection. Constructs that are hard to check
+// (eval, source, shells with command strings, xargs, command substitution inside git/gh, ...) are
+// denied outright instead of being parsed.
 // When in doubt, deny; prefer simple deny rules over clever parsing, and allowlists over deny lists.
 // Principle: fail closed. In any security-relevant position (command word, subcommand and
 // arguments, push refspecs, write paths, deploy matching) an unresolved word (variable, command
@@ -567,8 +571,6 @@ function toSegments(line: string): Segment[] {
 
 interface State {
   cwd: string | null;
-  /** CDPATH was set: a relative `cd` target is no longer predictable (assignment is denied anyway). */
-  cdpath: boolean;
 }
 
 const WRAPPER_WORDS = new Set([
@@ -595,8 +597,16 @@ const DENIED_WRAPPERS = new Set([
   'run0',
   'pkexec',
   'shopt',
+  'nice',
+  'xargs',
+  'eval',
+  'source',
+  '.',
+  'mapfile',
+  'readarray',
+  'getopts',
 ]);
-const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
+const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)\+?=/;
 const SENSITIVE_VAR =
   /^(GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/;
 
@@ -644,17 +654,11 @@ function skipWrappers(words: string[], state: State): number {
         noOption(words, i + 1, b);
         i++;
         break;
-      case 'nice':
-        if (words[i + 1] === '-n' && /^-?\d+$/.test(words[i + 2] ?? '')) i += 3;
-        else {
-          noOption(words, i + 1, 'nice');
-          i++;
-        }
-        break;
       case 'timeout':
         noOption(words, i + 1, 'timeout');
         if (!/^\d+(\.\d+)?[smhd]?$/.test(words[i + 1] ?? ''))
           deny('timeout needs a plain duration');
+        noOption(words, i + 2, 'timeout');
         i += 2;
         break;
       case 'env':
@@ -788,7 +792,13 @@ const PUSH_DANGEROUS = [
   '--all',
 ];
 
-function checkRefspec(ref: string): void {
+const normRef = (r: string): string =>
+  r
+    .replace(/^refs\//, '')
+    .replace(/^heads\//, '')
+    .toLowerCase();
+
+function checkRefspec(env: Env, ref: string): void {
   if (ref === '') deny('git push with empty refspec');
   if (ref.startsWith('+')) deny(`git push with force refspec "${ref}"`);
   if (ref.startsWith(':')) deny(`git push deleting remote ref "${ref}"`);
@@ -806,9 +816,12 @@ function checkRefspec(ref: string): void {
     .replace(/^heads\//, '')
     .toLowerCase();
   if (norm === 'main' || norm === 'master') deny(`git push to protected branch "${norm}"`);
+  if (env.allowedRefs.some((r) => normRef(r) === norm)) {
+    deny(`git push to workflow ref "${norm}" is not allowed`);
+  }
 }
 
-function checkPush(rawArgs: string[]): void {
+function checkPush(env: Env, rawArgs: string[]): void {
   const args = rawArgs.flatMap((a) => braceExpand(a));
   for (const a of args) {
     if (unresolved(a)) deny(`unresolved git push argument: ${a.replaceAll(SUBST, '<runtime>')}`);
@@ -843,11 +856,10 @@ function checkPush(rawArgs: string[]): void {
   const refs = repoGiven ? pos : pos.slice(1);
   if (pos.length === 0) deny('git push needs an explicit remote and branch');
   if (refs.length === 0) deny('git push needs an explicit refspec');
-  for (const ref of refs) checkRefspec(ref);
+  for (const ref of refs) checkRefspec(env, ref);
 }
 
-const GIT_C_ALLOWED =
-  /^(user\.name|user\.email|commit\.gpgsign|core\.pager|color\.ui|advice\..+)$/i;
+const GIT_C_ALLOWED = /^(user\.name|user\.email|commit\.gpgsign|color\.ui|advice\..+)$/i;
 const GIT_CONFIG_READ = ['--get', '--get-all', '--get-regexp', '--list', '-l'];
 const GIT_CONFIG_WRITE = [
   '--add',
@@ -897,7 +909,7 @@ function checkGit(env: Env, args: string[], state: State): void {
   if (sub === undefined) return;
   if (unresolvedWord(sub)) deny('unresolved command word (git subcommand)');
   const rest = args.slice(i + 1);
-  if (sub === 'push') checkPush(rest);
+  if (sub === 'push') checkPush(env, rest);
   else if (sub === 'send-pack' || sub === 'http-push' || sub === 'subtree') {
     deny(`git ${sub} is not allowed`);
   } else if (sub === 'config') {
@@ -926,8 +938,6 @@ function checkInsideDir(env: Env, dir: string, state: State, why: string): void 
 }
 
 const GH_BLOCKED_TOPICS = new Set(['release', 'secret', 'auth', 'alias']);
-const GH_API_FORBIDDEN =
-  /\/merges?$|\/dispatches$|\/releases(\/|$)|\/actions\/workflows\/[^/]+\/dispatches|\/actions\/secrets|\/git\/refs|\/branches\/[^/]+\/protection|\/rulesets|\/contents(\/|$)/i;
 const GH_RUN_VALUE_FLAGS = ['--ref', '-r', '-f', '--raw-field', '-F', '--field', ...GH_VALUE_FLAGS];
 
 function checkGh(env: Env, args: string[]): void {
@@ -970,30 +980,11 @@ function checkGh(env: Env, args: string[]): void {
   if (g0 === 'api') checkGhApi(args);
 }
 
-/** Normalised API path: URL-parsed, host/query/fragment dropped, decoded, `//` and dot segments collapsed. */
-function normalizeEndpoint(endpoint: string): string {
-  if (unresolved(endpoint)) deny('unresolved gh api endpoint');
-  let pathname: string;
-  try {
-    pathname = new URL(endpoint, 'https://api.invalid/').pathname;
-    pathname = decodeURIComponent(pathname);
-  } catch {
-    return deny('unparseable gh api endpoint');
-  }
-  if (/[#%]|:\/\//.test(pathname)) deny('suspicious gh api endpoint');
-  let path = `/${pathname.replace(/\/+/g, '/').replace(/^\/+/, '')}`;
-  path = path.replace(/^\/api\/v3(?=\/|$)/, '').replace(/^\/api\/graphql$/, '/graphql');
-  return path.replace(/\/+$/, '') || '/';
-}
-
+/** `gh api` is read-only: GET, no field or input flags, a plain endpoint. */
 function checkGhApi(rawArgs: string[]): void {
   const stripped = stripGhFlags(rawArgs);
   const args = stripped.slice(stripped.indexOf('api') + 1);
-  let method: string | undefined;
-  let hasFields = false;
-  let input = false;
   let endpoint: string | undefined;
-  const fieldVals: string[] = [];
   const withValue = new Set([
     '-H',
     '--header',
@@ -1005,64 +996,23 @@ function checkGhApi(rawArgs: string[]): void {
     '-p',
     '--preview',
   ]);
+  const checkMethod = (m: string | undefined): void => {
+    if (m === undefined || m.toUpperCase() !== 'GET') deny('gh api is read-only (GET only)');
+  };
   for (let k = 0; k < args.length; k++) {
     const a = args[k] as string;
-    if (a === '-X' || a === '--method') method = args[++k];
-    else if (a.startsWith('--method=')) method = a.slice(9);
-    else if (/^-X./.test(a)) method = a.slice(2);
-    else if (['-f', '-F', '--field', '--raw-field'].includes(a)) {
-      hasFields = true;
-      fieldVals.push(args[++k] ?? '');
-    } else if (a.startsWith('--field=') || a.startsWith('--raw-field=')) {
-      hasFields = true;
-      fieldVals.push(a.slice(a.indexOf('=') + 1));
-    } else if (a === '--input' || a.startsWith('--input=')) {
-      hasFields = true;
-      input = true;
-      if (a === '--input') k++;
-    } else if (withValue.has(a)) k++;
+    if (/^(-[fF]|--field|--raw-field|--input)/.test(a)) {
+      deny('gh api with field or input flags is not allowed (read-only)');
+    }
+    if (a === '-X' || a === '--method') checkMethod(args[++k]);
+    else if (a.startsWith('--method=')) checkMethod(a.slice(9));
+    else if (/^-X./.test(a)) checkMethod(a.slice(2));
+    else if (withValue.has(a)) k++;
     else if (!a.startsWith('-') && endpoint === undefined) endpoint = a;
   }
   if (endpoint === undefined) deny('gh api without endpoint');
-  if (unresolved(endpoint as string) || (method !== undefined && unresolved(method))) {
-    deny('unresolved gh api endpoint or method');
-  }
-  const path = normalizeEndpoint(endpoint as string);
-  const text = args.join(' ');
-  if (
-    /mergePullRequest|enablePullRequestAutoMerge|createRelease|deleteRelease|updateRef|deleteRef/i.test(
-      text,
-    )
-  ) {
-    deny('gh api GraphQL mutation for merge/release/ref is not allowed');
-  }
-  if (/(^|\/)graphql$/.test(path)) {
-    if (input) deny('gh api graphql --input is not allowed');
-    for (const v of fieldVals) {
-      const val = v.includes('=') ? v.slice(v.indexOf('=') + 1) : v;
-      if (val.startsWith('@')) deny('gh api graphql query from file is not allowed');
-      if (/^query=/.test(v) && (val.startsWith('$') || unresolved(val.slice(0, 1)))) {
-        deny('unresolved gh api graphql query');
-      }
-      if (v.includes(SUBST) || v.includes('`')) deny('unresolved gh api graphql field');
-    }
-    if (
-      /mutation/i.test(text) &&
-      /merge|release|dispatch|secret|ref|protection|branch/i.test(text)
-    ) {
-      deny('gh api graphql mutation is not allowed');
-    }
-  }
-  const m = (method ?? (hasFields ? 'POST' : 'GET')).toUpperCase();
-  if (
-    m !== 'GET' &&
-    (input || fieldVals.some((v) => v.slice(v.indexOf('=') + 1).startsWith('@')))
-  ) {
-    deny('gh api with --input or @file values is not allowed');
-  }
-  if (m !== 'GET' && GH_API_FORBIDDEN.test(path)) {
-    deny(`gh api ${m} ${path} is not allowed (merge/release/deploy/contents)`);
-  }
+  if (unresolved(endpoint as string)) deny('unresolved gh api endpoint');
+  if (/[%#]|:\/\//.test(endpoint as string)) deny('suspicious gh api endpoint');
 }
 
 function checkFind(env: Env, args: string[], state: State): void {
@@ -1092,49 +1042,35 @@ function checkFind(env: Env, args: string[], state: State): void {
       if (a === ';' || a === '+') break;
       cmd.push(a === '{}' ? (roots[0] ?? '.') : a);
     }
-    checkWords(env, cmd, state, 0);
+    checkWords(env, cmd, state);
   }
 }
 
-/** Index of the command in `xargs` args; only a few simple short options are allowed. */
-function skipXargsOptions(args: string[]): number {
-  let k = 0;
-  while (k < args.length && (args[k] as string).startsWith('-')) {
-    const a = args[k] as string;
-    if (a === '-0' || a === '-r' || a === '-t') k++;
-    else if (/^-[nILP]$/.test(a)) k += 2;
-    else if (/^-[nILP].+/.test(a)) k++;
-    else deny(`xargs option ${a} is not allowed`);
-  }
-  return k;
-}
-
-function checkSegment(env: Env, seg: Segment, state: State, depth: number): void {
+function checkSegment(env: Env, seg: Segment, state: State): void {
   const base = state.cwd ?? env.wt;
   for (const w of seg.writes) checkWritePath(env, w, state.cwd, 'redirection');
   for (const r of seg.reads) checkSecretToken(env, r, base);
   for (const w of seg.writes) checkSecretToken(env, w, base);
-  checkWords(env, seg.words, state, depth);
+  checkWords(env, seg.words, state);
 }
 
-const ASSIGN_BUILTINS = new Set(['export', 'declare', 'typeset', 'readonly', 'local']);
-const READ_BUILTINS = new Set(['read', 'mapfile', 'readarray']);
+const VAR_BUILTINS = new Set(['read', 'declare', 'typeset', 'local', 'export', 'readonly']);
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish']);
 
-/** export/declare/read/printf -v: every name must be literal and not a sensitive variable. */
+/** export/declare/read/...: no options at all; names must be literal and not sensitive. */
 function checkVarBuiltin(name: string, args: string[]): void {
-  const names: string[] = [];
   if (name === 'printf') {
-    const v = args.indexOf('-v');
-    if (v < 0) return;
-    names.push(args[v + 1] ?? '');
-  } else {
-    for (const a of args) if (!a.startsWith('-')) names.push(a);
+    if (args.some((a) => /^-[A-Za-z]*v/.test(a))) deny('printf -v is not allowed');
+    return;
   }
-  for (const a of args) if (unresolved(a)) deny(`unresolved word in ${name}`);
-  for (const n of names) checkVarName(n.split('=')[0] as string);
+  for (const a of args) {
+    if (/^[-+]/.test(a)) deny(`${name} with options is not allowed`);
+    if (unresolved(a)) deny(`unresolved word in ${name}`);
+    checkVarName((a.split('=')[0] as string).replace(/\+$/, ''));
+  }
 }
 
-function checkWords(env: Env, words: string[], state: State, depth: number): void {
+function checkWords(env: Env, words: string[], state: State): void {
   if (words.length === 0) return;
   const base = state.cwd ?? env.wt;
   for (const w of words) checkSecretToken(env, w, base);
@@ -1143,13 +1079,14 @@ function checkWords(env: Env, words: string[], state: State, depth: number): voi
   if (cmdWord === undefined) return;
   checkCommandGlobs(env, words.slice(at), words);
   if (unresolvedWord(cmdWord)) deny('unresolved command word');
+  if (cmdWord !== '{' && cmdWord.includes('{')) deny('brace expansion in command position');
   const name = basename(cmdWord);
   const args = words.slice(at + 1);
 
   if (name === 'sudo' || name === 'su' || name === 'doas') {
     deny(`privilege escalation (${name}) is not allowed`);
   }
-  if (ASSIGN_BUILTINS.has(name) || READ_BUILTINS.has(name) || name === 'printf') {
+  if (VAR_BUILTINS.has(name) || name === 'printf') {
     checkVarBuiltin(name, args);
     return;
   }
@@ -1165,8 +1102,7 @@ function checkWords(env: Env, words: string[], state: State, depth: number): voi
       target === '-' ||
       unresolved(target) ||
       target.startsWith('~') ||
-      (relative && state.cwd === null) ||
-      (relative && state.cdpath && !/^\.\.?(\/|$)/.test(target))
+      (relative && state.cwd === null)
     ) {
       state.cwd = null;
     } else {
@@ -1174,37 +1110,30 @@ function checkWords(env: Env, words: string[], state: State, depth: number): voi
     }
     return;
   }
-  if (['bash', 'sh', 'zsh', 'dash', 'ksh'].includes(name)) {
-    const idx = args.findIndex((a) => /^-[A-Za-z]*c[A-Za-z]*$/.test(a));
-    if (idx >= 0) {
-      const payload = args[idx + 1];
-      if (payload === undefined) deny('unparseable command (missing -c payload)');
-      checkBash(env, payload as string, state.cwd, depth + 1, state.cdpath);
+  if (SHELLS.has(name)) {
+    if (args.some((a) => /^-[A-Za-z]*[cs]/.test(a) || a.startsWith('--command'))) {
+      deny(`${name} with a command string or stdin script is not allowed`);
     }
-    return;
-  }
-  if (name === 'eval') {
-    checkBash(env, args.join(' '), state.cwd, depth + 1, state.cdpath);
-    return;
-  }
-  if (name === 'xargs') {
-    const k = skipXargsOptions(args);
-    checkWords(env, [...args.slice(k), SUBST], state, depth + 1);
-    return;
+    if (positionals(args).length === 0 || args.includes('-')) {
+      deny(`${name} reading its script from stdin is not allowed`);
+    }
   }
   if (name === 'find') checkFind(env, args, state);
+  if (name === 'git' || name === 'gh') {
+    if (words.some((w) => w.includes(SUBST))) deny(`command substitution in a ${name} command`);
+  }
   if (name === 'git') checkGit(env, args, state);
   if (name === 'gh') checkGh(env, args);
   for (const t of writeTargets(name, args)) checkWritePath(env, t, state.cwd, name);
 }
 
-function checkBash(env: Env, cmd: string, cwd: string | null, depth: number, cdpath = false): void {
+function checkBash(env: Env, cmd: string, cwd: string | null, depth: number): void {
   if (depth > 8) deny('command nesting too deep');
   const { lines, subs } = scan(cmd);
-  for (const sub of subs) checkBash(env, sub, cwd, depth + 1, cdpath);
-  const state: State = { cwd, cdpath };
+  for (const sub of subs) checkBash(env, sub, cwd, depth + 1);
+  const state: State = { cwd };
   for (const line of lines) {
-    for (const seg of toSegments(line)) checkSegment(env, seg, state, depth);
+    for (const seg of toSegments(line)) checkSegment(env, seg, state);
   }
 }
 
