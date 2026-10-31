@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "studio": {
+      "type": "number",
+      "const": 1
+    },
+    "primary_repo": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repos": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "notify": {
+      "type": "object",
+      "properties": {
+        "channel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner_only": {
+          "type": "boolean"
+        },
+        "irreversible_announce": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "channel",
+        "owner_only",
+        "irreversible_announce"
+      ],
+      "additionalProperties": false
+    },
+    "ci": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "const": "github"
+        },
+        "runners": {
+          "type": "string",
+          "enum": [
+            "github-hosted",
+            "self-hosted",
+            "both"
+          ]
+        },
+        "runner_labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "runner_name_pattern": {
+          "type": "string"
+        },
+        "capacity": {
+          "type": "object",
+          "properties": {
+            "total": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "merge_max_busy": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "check_twice_seconds": {
+              "type": "number",
+              "minimum": 0
+            },
+            "host_load_max": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          },
+          "required": [
+            "total",
+            "merge_max_busy",
+            "check_twice_seconds"
+          ],
+          "additionalProperties": false
+        },
+        "rhythm": {
+          "type": "object",
+          "properties": {
+            "build_window": {
+              "type": "string"
+            },
+            "timezone": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "build_window",
+            "timezone"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "provider",
+        "runners",
+        "runner_labels",
+        "capacity"
+      ],
+      "additionalProperties": false
+    },
+    "merge": {
+      "type": "object",
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "studio-queue",
+            "native-queue"
+          ]
+        },
+        "contract_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "method": {
+          "default": "merge",
+          "type": "string",
+          "enum": [
+            "merge",
+            "squash",
+            "rebase"
+          ]
+        }
+      },
+      "required": [
+        "strategy",
+        "contract_paths"
+      ],
+      "additionalProperties": false
+    },
+    "roles": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "enum": [
+          "builder",
+          "reviewer",
+          "designer",
+          "researcher",
+          "release"
+        ]
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "wip": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "skills": {
+            "default": {
+              "required": [],
+              "allowed": [],
+              "denied": []
+            },
+            "type": "object",
+            "properties": {
+              "required": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "allowed": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "denied": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "model",
+          "wip"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "sandbox": {
+      "default": {
+        "networkAllow": []
+      },
+      "type": "object",
+      "properties": {
+        "network_allow": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "crew_token": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "env"
+      ],
+      "additionalProperties": false
+    },
+    "owner_only": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "deploy_commands": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "studio",
+    "primary_repo",
+    "repos",
+    "ci",
+    "merge",
+    "roles"
+  ],
+  "additionalProperties": false
+}

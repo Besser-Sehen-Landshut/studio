@@ -1,0 +1,21 @@
+studio: 1
+primary_repo: org/app
+repos: [org/app, org/app-mobile]
+notify: { channel: pushover, owner_only: true, irreversible_announce: true }
+ci:
+  provider: github
+  runners: self-hosted
+  runner_labels: [self-hosted, linux]
+  capacity: { total: 8, merge_max_busy: 5, check_twice_seconds: 30 }
+  rhythm: { build_window: "18:00-07:00", timezone: Europe/Berlin }
+merge:
+  strategy: native-queue
+  contract_paths: ["contracts/**", "migrations/**"]
+roles:
+  builder:
+    model: strongest
+    wip: 2
+    skills: { required: [test-driven-development], allowed: [rust-skills] }
+  reviewer: { model: strongest, wip: 2, skills: { required: [requesting-code-review] } }
+owner_only: ["buy *", "rotate secrets"]
+deploy_commands: ["gh workflow run deploy*"]
