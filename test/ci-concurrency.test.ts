@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 const workflowUrl = new URL('../.github/workflows/ci.yml', import.meta.url);
+const workspaceUrl = new URL('../pnpm-workspace.yaml', import.meta.url);
 
 // Strip full-line and trailing comments before parsing, so a commented-out
 // concurrency block can never satisfy the guard.
@@ -34,7 +35,7 @@ function evaluate(template: string, github: GithubContext): string {
 
 const workflow = parse(stripComments(readFileSync(workflowUrl, 'utf8'))) as {
   concurrency: { group: string; 'cancel-in-progress': boolean };
-  jobs: Record<string, { 'runs-on': unknown }>;
+  jobs: Record<string, { 'runs-on': unknown; steps?: { name?: string; run?: string }[] }>;
 };
 
 describe('ci workflow guard', () => {
@@ -60,5 +61,30 @@ describe('ci workflow guard', () => {
     for (const [, job] of jobs) {
       expect(job['runs-on']).toBe('ubuntu-latest');
     }
+  });
+
+  it('fails the bundle drift check on modified and on new untracked files', () => {
+    const steps = workflow.jobs.check?.steps ?? [];
+    const drift = steps.find((step) => step.run?.includes('pnpm bundle'));
+    expect(drift?.run).toContain('git status --porcelain -- dist-bundle');
+    expect(drift?.run).not.toContain('git diff --exit-code');
+  });
+});
+
+describe('pnpm workspace settings', () => {
+  const workspace = parse(stripComments(readFileSync(workspaceUrl, 'utf8'))) as Record<
+    string,
+    unknown
+  >;
+
+  it('keeps pmOnFail ignore and never trusts the lockfile past the release-age gate', () => {
+    expect(workspace.pmOnFail).toBe('ignore');
+    expect(workspace).not.toHaveProperty('trustLockfile');
+    expect(workspace).not.toHaveProperty('minimumReleaseAgeExclude');
+  });
+
+  it('rules on every dependency build script so a frozen install does not fail', () => {
+    // pnpm 11+: unreviewed build scripts fail the install (ERR_PNPM_IGNORED_BUILDS).
+    expect(workspace.allowBuilds).toEqual({ esbuild: false });
   });
 });

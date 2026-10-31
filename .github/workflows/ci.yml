@@ -30,7 +30,8 @@ jobs:
       - name: Committed bundle matches source
         run: |
           pnpm bundle
-          git diff --exit-code -- dist-bundle
+          # porcelain also lists new untracked files, which git diff would miss
+          test -z "$(git status --porcelain -- dist-bundle)" || { git status --porcelain -- dist-bundle; exit 1; }
       - run: pnpm test
         env:
           STUDIO_PRIVATE_WORDS: ${{ secrets.STUDIO_PRIVATE_WORDS }}
