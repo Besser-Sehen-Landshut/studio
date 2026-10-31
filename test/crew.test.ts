@@ -7,6 +7,8 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -18,9 +20,10 @@ import {
   crewName,
   crewSessionId,
   launchCrew,
-  prepareWorktree,
+  prepareCheckout,
   writeBrief,
   writeCrewSettings,
+  writeHomeFile,
 } from '../src/crew.js';
 import { DEFAULT_SECRET_GLOBS, evaluateGuard } from '../src/guard.js';
 import { type Ports, realPorts } from '../src/ports.js';
@@ -123,6 +126,7 @@ function fakePorts(started: Started[]): Ports {
   };
 }
 
+const FAKE_HOME = join(root, 'fakehome');
 const CRED_PATHS = [
   '.config/gh',
   '.git-credentials',
@@ -132,7 +136,7 @@ const CRED_PATHS = [
   '.aws',
   '.docker/config.json',
   'Library/Keychains',
-].map((p) => join(homedir(), p));
+].map((p) => join(FAKE_HOME, p));
 
 describe('crewName', () => {
   it('lowercases id', () => {
@@ -140,40 +144,51 @@ describe('crewName', () => {
   });
 });
 
-describe('prepareWorktree', () => {
-  it('is idempotent and branches from origin/main', async () => {
+describe('prepareCheckout', () => {
+  it('clones the origin blob-less and branches from origin/main', async () => {
     const project = makeProject();
-    const ports = realPorts();
-    const a = await prepareWorktree(project, item, ports);
-    expect(a.path).toBe(join(project, '.studio', 'worktrees', 'APP-12'));
+    const a = await prepareCheckout(project, item, realPorts());
+    expect(a.path).toBe(join(project, '.studio', 'state', 'clones', 'APP-12'));
     expect(a.branch).toBe('studio/APP-12');
     expect(git(a.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('studio/APP-12');
     expect(git(a.path, 'rev-parse', 'HEAD')).toBe(git(project, 'rev-parse', 'origin/main'));
-    writeFileSync(join(a.path, 'work.txt'), 'wip');
-    const b = await prepareWorktree(project, item, ports);
-    expect(b).toEqual(a);
-    expect(existsSync(join(a.path, 'work.txt'))).toBe(true);
-  });
-
-  it('prunes stale worktree registrations and rejects unsafe ids', async () => {
-    const project = makeProject();
-    const ports = realPorts();
-    const a = await prepareWorktree(project, item, ports);
-    rmSync(a.path, { recursive: true, force: true });
-    const b = await prepareWorktree(project, item, ports);
-    expect(existsSync(join(b.path, 'README.md'))).toBe(true);
-    await expect(prepareWorktree(project, { ...item, id: 'bad id;' }, ports)).rejects.toThrow(
-      /item id/,
+    expect(git(a.path, 'remote', 'get-url', 'origin')).toBe(
+      git(project, 'remote', 'get-url', 'origin'),
     );
   });
 
-  it('reuses an existing branch whose worktree was removed', async () => {
+  it('is idempotent: a second call does not clone again', async () => {
     const project = makeProject();
     const ports = realPorts();
-    const a = await prepareWorktree(project, item, ports);
-    git(project, 'worktree', 'remove', '--force', a.path);
-    const b = await prepareWorktree(project, item, ports);
-    expect(git(b.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('studio/APP-12');
+    const a = await prepareCheckout(project, item, ports);
+    writeFileSync(join(a.path, 'work.txt'), 'wip');
+    const inode = statSync(join(a.path, '.git')).ino;
+    const b = await prepareCheckout(project, item, ports);
+    expect(b).toEqual(a);
+    expect(existsSync(join(a.path, 'work.txt'))).toBe(true);
+    expect(statSync(join(a.path, '.git')).ino).toBe(inode);
+  });
+
+  it('removes and re-clones a directory that is not a valid clone', async () => {
+    const project = makeProject();
+    const dir = join(project, '.studio', 'state', 'clones', 'APP-12');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'junk.txt'), 'x');
+    const a = await prepareCheckout(project, item, realPorts());
+    expect(existsSync(join(a.path, 'junk.txt'))).toBe(false);
+    expect(existsSync(join(a.path, 'README.md'))).toBe(true);
+  });
+
+  it('leaves the owner repo without a new worktree and rejects unsafe ids', async () => {
+    const project = makeProject();
+    await prepareCheckout(project, item, realPorts());
+    const listed = git(project, 'worktree', 'list', '--porcelain')
+      .split('\n')
+      .filter((l) => l.startsWith('worktree '));
+    expect(listed).toHaveLength(1);
+    await expect(prepareCheckout(project, { ...item, id: 'bad id;' }, realPorts())).rejects.toThrow(
+      /item id/,
+    );
   });
 });
 
@@ -209,21 +224,26 @@ describe('writeBrief', () => {
 });
 
 describe('writeCrewSettings', () => {
-  const setup = () => {
+  const setup = (launcher: { env?: Record<string, string | undefined> } = {}) => {
     const project = makeProject();
     const state = join(project, '.studio', 'state');
-    const wt = join(project, '.studio', 'worktrees', 'APP-12');
-    const gitDir = join(project, '.git', 'worktrees', 'APP-12');
-    const commonDir = join(project, '.git');
+    const wt = join(state, 'clones', 'APP-12');
     const homeDir = join(state, 'homes', 'APP-12');
-    const file = writeCrewSettings(state, item, wt, config, { gitDir, commonDir, homeDir });
+    const tmpDir = join(state, 'tmp', 'APP-12');
+    const file = writeCrewSettings(
+      state,
+      item,
+      wt,
+      config,
+      { homeDir, tmpDir },
+      { homedir: FAKE_HOME, env: launcher.env ?? {} },
+    );
     return {
       project,
       state,
       wt,
-      gitDir,
-      commonDir,
       homeDir,
+      tmpDir,
       file,
       s: JSON.parse(readFileSync(file, 'utf8')),
     };
@@ -252,12 +272,16 @@ describe('writeCrewSettings', () => {
   });
 
   it('enables the sandbox limited to worktree and allowlist', () => {
-    const { wt, commonDir, homeDir, s } = setup();
+    const { wt, tmpDir, homeDir, s } = setup();
     expect(s.sandbox).toEqual({
       enabled: true,
       failIfUnavailable: true,
       allowUnsandboxedCommands: false,
-      filesystem: { allowWrite: [wt, tmpdir(), commonDir, homeDir], denyRead: CRED_PATHS },
+      filesystem: {
+        allowWrite: [wt, tmpDir, homeDir],
+        denyRead: [FAKE_HOME, ...CRED_PATHS],
+        allowRead: [wt, tmpDir, homeDir],
+      },
       network: { allowedDomains: ['github.com', 'api.github.com'], strictAllowlist: true },
     });
   });
@@ -266,11 +290,35 @@ describe('writeCrewSettings', () => {
     const { state, wt } = setup();
     const ctx = JSON.parse(readFileSync(join(state, 'guard', 'APP-12.json'), 'utf8'));
     const r = evaluateGuard(
-      { toolName: 'Read', toolInput: { file_path: join(homedir(), '.ssh', 'id_x') } },
+      { toolName: 'Read', toolInput: { file_path: join(FAKE_HOME, '.ssh', 'id_x') } },
       ctx,
     );
     expect(r.decision).toBe('deny');
     expect(ctx.worktree).toBe(wt);
+  });
+
+  it('allowRead adds PATH entries under the real home only; extras from GH_CONFIG_DIR and XDG', () => {
+    const tool = join(FAKE_HOME, '.tools', 'bin');
+    mkdirSync(tool, { recursive: true });
+    const outside = join(root, 'outside-bin');
+    mkdirSync(outside, { recursive: true });
+    const { wt, tmpDir, homeDir, state, s } = setup({
+      env: {
+        PATH: [tool, outside, join(FAKE_HOME, 'missing')].join(':'),
+        GH_CONFIG_DIR: '/cfg/gh-alt',
+        XDG_CONFIG_HOME: '/xdg',
+      },
+    });
+    expect(s.sandbox.filesystem.allowRead).toEqual([wt, tmpDir, homeDir, realpathSync(tool)]);
+    const deny = s.sandbox.filesystem.denyRead;
+    expect(deny).toContain(FAKE_HOME);
+    expect(deny).toEqual(
+      expect.arrayContaining(['/cfg/gh-alt', '/xdg/gh', '/xdg/git/credentials']),
+    );
+    const ctx = JSON.parse(readFileSync(join(state, 'guard', 'APP-12.json'), 'utf8'));
+    expect(ctx.secretGlobs).toEqual(
+      expect.arrayContaining(['/cfg/gh-alt', '/cfg/gh-alt/**', '/xdg/gh/**']),
+    );
   });
 
   it('rejects item ids that are unsafe in paths', () => {
@@ -278,12 +326,12 @@ describe('writeCrewSettings', () => {
     const bad = { ...item, id: '../x' };
     expect(() => writeBrief(state, bad, config)).toThrow(/item id/);
     expect(() =>
-      writeCrewSettings(state, bad, '/w', config, { gitDir: '/g', commonDir: '/c', homeDir: '/h' }),
+      writeCrewSettings(state, bad, '/w', config, { homeDir: '/h', tmpDir: '/t' }),
     ).toThrow(/item id/);
   });
 
   it('writes the guard context with protected paths', () => {
-    const { state, wt, gitDir, commonDir } = setup();
+    const { state, wt } = setup();
     const ctxFile = join(state, 'guard', 'APP-12.json');
     const ctx = JSON.parse(readFileSync(ctxFile, 'utf8'));
     expect(ctx).toEqual({
@@ -293,7 +341,7 @@ describe('writeCrewSettings', () => {
       secretGlobs: [...DEFAULT_SECRET_GLOBS, ...CRED_PATHS.flatMap((p) => [p, `${p}/**`])],
       crewAllowedWorkflows: ['ci.yml'],
       crewAllowedWorkflowRefs: ['main'],
-      protectedPaths: [ctxFile, state, gitDir, commonDir],
+      protectedPaths: [ctxFile, state],
     });
   });
 });
@@ -331,7 +379,7 @@ describe('launchCrew', () => {
     const started: Started[] = [];
     const r = await launchCrew(project, item, config, fakePorts(started));
     const state = join(project, '.studio', 'state');
-    const wt = join(project, '.studio', 'worktrees', 'APP-12');
+    const wt = join(state, 'clones', 'APP-12');
     expect(started).toHaveLength(1);
     const s = started[0] as Started;
     expect(s.cwd).toBe(wt);
@@ -394,7 +442,7 @@ describe('launchCrew', () => {
       TOKEN_VAR,
     );
     expect(started).toHaveLength(0);
-    expect(existsSync(join(project, '.studio', 'worktrees'))).toBe(false);
+    expect(existsSync(join(project, '.studio', 'state', 'clones'))).toBe(false);
   });
 
   it('refuses without crewToken unless allow_ambient_credentials is set', async () => {
@@ -446,16 +494,31 @@ describe('launchCrew', () => {
     expect((started[1] as Started).env.CLAUDE_CONFIG_DIR).toBe('/tmp/custom-claude');
   });
 
-  it('crew can commit through the sandboxed git dirs: common dir is writable and protected', async () => {
+  it('sandbox writes are exactly clone, crew tmp and crew home; TMPDIR is the crew tmp', async () => {
     const project = makeProject();
-    await launchCrew(project, item, config, fakePorts([]));
+    const started: Started[] = [];
+    await launchCrew(project, item, config, fakePorts(started));
     const state = join(project, '.studio', 'state');
     const s = JSON.parse(readFileSync(join(state, 'settings', 'APP-12.json'), 'utf8'));
-    const ctx = JSON.parse(readFileSync(join(state, 'guard', 'APP-12.json'), 'utf8'));
-    const common = join(project, '.git');
-    expect(s.sandbox.filesystem.allowWrite).toContain(common);
-    expect(ctx.protectedPaths).toContain(common);
-    expect(ctx.protectedPaths).toContain(join(common, 'worktrees', 'APP-12'));
+    expect(s.sandbox.filesystem.allowWrite).toEqual([
+      join(state, 'clones', 'APP-12'),
+      join(state, 'tmp', 'APP-12'),
+      join(state, 'homes', 'APP-12'),
+    ]);
+    expect((started[0] as Started).env.TMPDIR).toBe(join(state, 'tmp', 'APP-12'));
+    expect(s.sandbox.filesystem.denyRead).toContain(homedir());
+  });
+
+  it('recreates HOME and tmp on every launch', async () => {
+    const project = makeProject();
+    const ports = fakePorts([]);
+    await launchCrew(project, item, config, ports);
+    const state = join(project, '.studio', 'state');
+    writeFileSync(join(state, 'homes', 'APP-12', 'stale.txt'), 'x');
+    writeFileSync(join(state, 'tmp', 'APP-12', 'stale.txt'), 'x');
+    await launchCrew(project, item, config, ports);
+    expect(readdirSync(join(state, 'homes', 'APP-12'))).toEqual(['.gitconfig']);
+    expect(readdirSync(join(state, 'tmp', 'APP-12'))).toEqual([]);
   });
 
   it('serialises concurrent launches: both crew records survive', async () => {
@@ -485,6 +548,25 @@ describe('launchCrew', () => {
     await launchCrew(project, { ...item, id: 'APP-13' }, config, ports);
     const rec = JSON.parse(readFileSync(join(project, '.studio', 'state', 'crew.json'), 'utf8'));
     expect(Object.keys(rec).sort()).toEqual(['APP-12', 'APP-13']);
+  });
+});
+
+describe('writeHomeFile', () => {
+  it('does not follow a planted symlink to a file or directory', () => {
+    const base = join(root, `home-${n++}`);
+    const home = join(base, 'home');
+    const outside = join(base, 'outside');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(outside);
+    writeFileSync(join(outside, 'victim'), 'keep');
+    symlinkSync(join(outside, 'victim'), join(home, '.gitconfig'));
+    expect(() => writeHomeFile(home, '.gitconfig', 'evil')).toThrow();
+    expect(readFileSync(join(outside, 'victim'), 'utf8')).toBe('keep');
+    symlinkSync(outside, join(home, 'linked'));
+    expect(() => writeHomeFile(home, 'linked/x', 'evil')).toThrow(/outside the crew home/);
+    expect(existsSync(join(outside, 'x'))).toBe(false);
+    writeHomeFile(home, 'ok', 'fine');
+    expect(readFileSync(join(home, 'ok'), 'utf8')).toBe('fine');
   });
 });
 

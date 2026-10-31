@@ -5,10 +5,11 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, delimiter, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { WorkItem } from './board.js';
 import type { StudioConfig } from './config.js';
@@ -38,51 +39,87 @@ function assertItemId(id: string): void {
   if (!ITEM_ID_RE.test(id)) throw new Error(`invalid item id: ${JSON.stringify(id)}`);
 }
 
-const same = (a: string, b: string): boolean => {
+/**
+ * Rule (D4): the control room never runs git inside a crew clone once a crew has run in it.
+ * A crew-controlled `.git/config` (core.fsmonitor, hooks, ...) would execute in the owner's
+ * context. Git touches the clone only at preparation time; afterwards we read files (the branch
+ * from `.git/HEAD`, the report) or ask `gh`.
+ */
+
+/** Branch of a clone, read from `.git/HEAD` as a plain file; undefined when it is no clone. */
+function cloneBranch(path: string): string | undefined {
   try {
-    return realpathSync(a) === realpathSync(b);
+    const head = readFileSync(join(path, '.git', 'HEAD'), 'utf8').trim();
+    return /^ref: refs\/heads\/(.+)$/.exec(head)?.[1];
   } catch {
-    return resolve(a) === resolve(b);
+    return undefined;
   }
-};
+}
 
 /**
- * Creates `<projectDir>/.studio/worktrees/<id>` on branch `studio/<id>` from `origin/main`.
- * Idempotent: a registered worktree of that path on that branch is returned untouched; an existing
- * branch (worktree removed) is checked out again instead of being recreated.
+ * Gives an item its own blob-less clone `<stateDir>/clones/<id>` on branch `studio/<id>` from
+ * `origin/main`. No `git worktree` on the owner's repository: its shared git dir would be writable
+ * by the crew. Idempotent: a clone already on that branch is returned untouched; anything else in
+ * that place is removed and cloned again.
  */
-export async function prepareWorktree(
+export async function prepareCheckout(
   projectDir: string,
   item: WorkItem,
   ports: Ports,
 ): Promise<{ path: string; branch: string }> {
   assertItemId(item.id);
-  const path = join(projectDir, '.studio', 'worktrees', item.id);
+  const path = join(stateDirOf(projectDir), 'clones', item.id);
   const branch = `studio/${item.id}`;
-  const listing = await ports.git.run(projectDir, ['worktree', 'list', '--porcelain']);
-  for (const block of listing.split(/\r?\n\r?\n/)) {
-    const lines = block.split(/\r?\n/);
-    const wt = lines.find((l) => l.startsWith('worktree '))?.slice('worktree '.length);
-    const br = lines.find((l) => l.startsWith('branch '))?.slice('branch '.length);
-    if (wt && br === `refs/heads/${branch}` && existsSync(wt) && same(wt, path)) {
-      return { path, branch };
-    }
-  }
-  await ports.git.run(projectDir, ['fetch', 'origin']);
-  await ports.git.run(projectDir, ['worktree', 'prune']);
-  let branchExists = true;
-  try {
-    await ports.git.run(projectDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
-  } catch {
-    branchExists = false;
-  }
-  await ports.git.run(
-    projectDir,
-    branchExists
-      ? ['worktree', 'add', path, branch]
-      : ['worktree', 'add', path, '-b', branch, 'origin/main'],
-  );
+  if (cloneBranch(path) === branch) return { path, branch };
+  rmSync(path, { recursive: true, force: true });
+  mkdirSync(dirname(path), { recursive: true });
+  const url = (await ports.git.run(projectDir, ['remote', 'get-url', 'origin'])).trim();
+  await ports.git.run(dirname(path), ['clone', '--filter=blob:none', url, path]);
+  await ports.git.run(path, ['checkout', '-b', branch, 'origin/main']);
   return { path, branch };
+}
+
+/**
+ * Writes `name` into `homeDir` without following a planted link: the parent must resolve to a
+ * place under the real path of `homeDir`, and the file is created with `wx` (fails on any
+ * existing entry, a symlink included).
+ */
+export function writeHomeFile(homeDir: string, name: string, content: string): void {
+  const target = join(homeDir, name);
+  const realHome = realpathSync(homeDir);
+  const parent = realpathSync(dirname(target));
+  if (parent !== realHome && !parent.startsWith(realHome + sep)) {
+    throw new Error(`refusing to write outside the crew home: ${target}`);
+  }
+  writeFileSync(join(parent, basename(target)), content, { flag: 'wx' });
+}
+
+/** Home and environment of the launcher; injectable so tests never touch the real ones. */
+export interface LauncherEnv {
+  homedir?: string;
+  env?: Record<string, string | undefined>;
+}
+
+/** PATH entries (resolved) that lie under the real home, e.g. version-managed toolchains. */
+function pathEntriesUnder(realHome: string, pathVar: string | undefined): string[] {
+  const homes = [realHome];
+  try {
+    homes.push(realpathSync(realHome));
+  } catch {
+    // keep the literal path only
+  }
+  const out: string[] = [];
+  for (const entry of (pathVar ?? '').split(delimiter)) {
+    if (!entry) continue;
+    let real: string;
+    try {
+      real = realpathSync(entry);
+    } catch {
+      continue;
+    }
+    if (homes.some((h) => real.startsWith(h + sep)) && !out.includes(real)) out.push(real);
+  }
+  return out;
 }
 
 const list = (xs: string[]): string => (xs.length > 0 ? xs.join(', ') : '(none)');
@@ -124,7 +161,7 @@ export function writeBrief(stateDir: string, item: WorkItem, config: StudioConfi
     '',
     '## Working rules',
     '',
-    '- Work only inside this worktree.',
+    '- Work only inside this checkout.',
     '- Test first for code: write a failing test, then the change.',
     '- Stage files by name; never `git add -A` or `git add .`.',
     '- Commit with `git commit -F <message file>` or a literal `-m "..."`; never use `$(...)` inside git or gh commands.',
@@ -136,7 +173,7 @@ export function writeBrief(stateDir: string, item: WorkItem, config: StudioConfi
     '',
     '## Report contract',
     '',
-    `Write \`.studio/reports/${id}.md\` in the worktree and commit it with the pull request.`,
+    `Write \`.studio/reports/${id}.md\` in the checkout and commit it with the pull request.`,
     'It starts with YAML frontmatter:',
     '',
     '```yaml',
@@ -172,24 +209,39 @@ export function writeBrief(stateDir: string, item: WorkItem, config: StudioConfi
 export function writeCrewSettings(
   stateDir: string,
   item: WorkItem,
-  worktree: string,
+  clone: string,
   config: StudioConfig,
-  dirs: { gitDir: string; commonDir: string; homeDir: string },
+  dirs: { homeDir: string; tmpDir: string },
+  launcher: LauncherEnv = {},
 ): string {
   assertItemId(item.id);
   const id = item.id;
-  const realHome = homedir();
-  const denyRead = CREDENTIAL_PATHS.map((p) => join(realHome, p));
+  const realHome = launcher.homedir ?? homedir();
+  const env = launcher.env ?? process.env;
+  const extraSecret: string[] = [];
+  if (env.GH_CONFIG_DIR) extraSecret.push(env.GH_CONFIG_DIR);
+  if (env.XDG_CONFIG_HOME) {
+    extraSecret.push(
+      join(env.XDG_CONFIG_HOME, 'gh'),
+      join(env.XDG_CONFIG_HOME, 'git', 'credentials'),
+    );
+  }
+  const credentialPaths = [...CREDENTIAL_PATHS.map((p) => join(realHome, p)), ...extraSecret];
+  // Sandbox reads: the whole real home is denied, then only these are let back in: the clone, the
+  // crew tmp dir, the crew HOME and every PATH entry below the real home (version-managed
+  // toolchains). Credential locations stay listed explicitly as a second net.
+  const denyRead = [realHome, ...credentialPaths];
+  const allowRead = [clone, dirs.tmpDir, dirs.homeDir, ...pathEntriesUnder(realHome, env.PATH)];
   const ctxFile = join(stateDir, 'guard', `${id}.json`);
   const ctx = {
-    worktree,
+    worktree: clone,
     ownerOnly: config.ownerOnly,
     deployCommands: config.deployCommands,
     // Absolute credential locations of the real home, on top of the default globs.
-    secretGlobs: [...DEFAULT_SECRET_GLOBS, ...denyRead.flatMap((p) => [p, `${p}/**`])],
+    secretGlobs: [...DEFAULT_SECRET_GLOBS, ...credentialPaths.flatMap((p) => [p, `${p}/**`])],
     crewAllowedWorkflows: config.crewAllowedWorkflows,
     crewAllowedWorkflowRefs: config.crewAllowedWorkflowRefs,
-    protectedPaths: [ctxFile, stateDir, dirs.gitDir, dirs.commonDir],
+    protectedPaths: [ctxFile, stateDir],
   };
   writeFileAtomic(ctxFile, `${JSON.stringify(ctx, null, 2)}\n`);
   const settings = {
@@ -209,9 +261,9 @@ export function writeCrewSettings(
       failIfUnavailable: true,
       allowUnsandboxedCommands: false,
       filesystem: {
-        // commonDir: git writes objects, refs and worktrees/<id> there on commit and push.
-        allowWrite: [worktree, tmpdir(), dirs.commonDir, dirs.homeDir],
+        allowWrite: [clone, dirs.tmpDir, dirs.homeDir],
         denyRead,
+        allowRead,
       },
       network: { allowedDomains: config.sandbox.networkAllow, strictAllowlist: true },
     },
@@ -241,7 +293,7 @@ const GITCONFIG = `[user]
 \thelper = !gh auth git-credential
 `;
 
-const BASE_ENV = ['PATH', 'LANG', 'TERM', 'USER', 'TMPDIR'] as const;
+const BASE_ENV = ['PATH', 'LANG', 'TERM', 'USER'] as const;
 const PASS_THROUGH_ENV = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'] as const;
 
 export interface CrewRecord {
@@ -283,14 +335,16 @@ export async function launchCrew(
   item: WorkItem,
   config: StudioConfig,
   ports: Ports,
+  launcher: LauncherEnv = {},
 ): Promise<{ name: string; pid: number; log: string }> {
   assertItemId(item.id);
+  const penv = launcher.env ?? process.env;
   const role = config.roles[item.role];
   if (!role) throw new Error(`role ${item.role} is not configured`);
   // Fail closed: without the least-privilege token the session would fall back to ambient
   // credentials, so that needs an explicit opt-in.
   let token: string | undefined;
-  if (config.crewToken) token = process.env[config.crewToken.env] || undefined;
+  if (config.crewToken) token = penv[config.crewToken.env] || undefined;
   if (!token && !config.allowAmbientCredentials) {
     throw new Error(
       config.crewToken
@@ -299,39 +353,39 @@ export async function launchCrew(
     );
   }
   const stateDir = stateDirOf(projectDir);
-  const wt = await prepareWorktree(projectDir, item, ports);
-  const gitDir = resolve(
-    wt.path,
-    (await ports.git.run(wt.path, ['rev-parse', '--git-dir'])).trim(),
-  );
-  const commonDir = resolve(
-    wt.path,
-    (await ports.git.run(wt.path, ['rev-parse', '--git-common-dir'])).trim(),
-  );
-  // Isolated HOME: only a git identity and a credential helper that reads GH_TOKEN. Nothing is
-  // copied or linked from the real home (no gh config, git credential store, ssh keys, netrc).
+  const wt = await prepareCheckout(projectDir, item, ports);
+  // Isolated HOME, recreated from scratch on every launch: only a git identity and a credential
+  // helper that reads GH_TOKEN. Nothing is copied or linked from the real home.
   const homeDir = join(stateDir, 'homes', item.id);
+  rmSync(homeDir, { recursive: true, force: true });
   mkdirSync(homeDir, { recursive: true });
-  writeFileSync(join(homeDir, '.gitconfig'), GITCONFIG);
+  writeHomeFile(homeDir, '.gitconfig', GITCONFIG);
+  const tmpDir = join(stateDir, 'tmp', item.id);
+  rmSync(tmpDir, { recursive: true, force: true });
+  mkdirSync(tmpDir, { recursive: true });
   const brief = writeBrief(stateDir, item, config);
-  const settings = writeCrewSettings(stateDir, item, wt.path, config, {
-    gitDir,
-    commonDir,
-    homeDir,
-  });
+  const settings = writeCrewSettings(
+    stateDir,
+    item,
+    wt.path,
+    config,
+    { homeDir, tmpDir },
+    launcher,
+  );
   const settingsEnv = (
     JSON.parse(readFileSync(settings, 'utf8')) as { env: Record<string, string> }
   ).env;
   const env: Record<string, string> = {};
   for (const k of BASE_ENV) {
-    const v = process.env[k];
+    const v = penv[k];
     if (v !== undefined) env[k] = v;
   }
   env.HOME = homeDir;
+  env.TMPDIR = tmpDir;
   // The Claude login and plugins live in the config dir; it holds no gh or git credentials.
-  env.CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+  env.CLAUDE_CONFIG_DIR = penv.CLAUDE_CONFIG_DIR || join(launcher.homedir ?? homedir(), '.claude');
   for (const k of PASS_THROUGH_ENV) {
-    const v = process.env[k];
+    const v = penv[k];
     if (v) env[k] = v;
   }
   Object.assign(env, settingsEnv);
