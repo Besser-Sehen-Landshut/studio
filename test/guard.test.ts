@@ -4,12 +4,13 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   DEFAULT_SECRET_GLOBS,
   evaluateGuard,
@@ -50,6 +51,8 @@ beforeAll(() => {
   for (const f of ['a', 'b', 'c']) writeFileSync(join(wt, 'many', f), '');
 });
 
+afterAll(() => rmSync(root, { recursive: true, force: true }));
+
 const bash = (command: string, cwd?: string) =>
   evaluateGuard({ toolName: 'Bash', toolInput: { command }, cwd }, ctx);
 const tool = (toolName: string, toolInput: Record<string, unknown>) =>
@@ -76,6 +79,17 @@ describe('git push', () => {
     "bash -c 'git push -f'",
     'echo $(git push -f)',
     'echo ok && git push --force-if-includes',
+    'git push --tags origin studio/APP-1',
+    'git push origin studio/APP-1 --tags',
+    'git push --tag origin studio/APP-1',
+    'git push --follow-tags origin studio/APP-1',
+    'git push --follow origin studio/APP-1',
+    'git push --receive-pack=/tmp/x origin studio/APP-1',
+    'git push --receive-pack /tmp/x origin studio/APP-1',
+    'git push --receive origin studio/APP-1',
+    'git push --exec=/tmp/x origin studio/APP-1',
+    'git push --exec /tmp/x origin studio/APP-1',
+    'git push --repo=origin --exec=/tmp/x studio/APP-1',
   ])('denies %s', (cmd) => {
     expect(bash(cmd).decision).toBe('deny');
   });
@@ -158,8 +172,29 @@ describe('file tools', () => {
   it('allows reading outside the worktree (non-secret)', () => {
     expect(tool('Read', { file_path: join(outside, 'a.ts') }).decision).toBe('allow');
   });
-  it('allows other tools', () => {
-    expect(tool('WebFetch', { url: 'https://example.com' }).decision).toBe('allow');
+  it('allows the listed crew tools', () => {
+    for (const name of ['Skill', 'TodoWrite', 'Task', 'Agent']) {
+      expect(tool(name, { description: 'x', prompt: 'y' }).decision, name).toBe('allow');
+    }
+  });
+  it.each([
+    'WebFetch',
+    'WebSearch',
+    'mcp__github__create_pull_request',
+    'mcp__x__y',
+    'Monitor',
+    'NotebookRead',
+    'SomethingNew',
+    '',
+  ])('denies the unknown or web tool %j', (name) => {
+    const r = tool(name, { url: 'https://example.com', query: 'q' });
+    expect(r.decision).toBe('deny');
+    expect(r.reason).toContain('tool not allowed for crew');
+  });
+  it('denies a tool name that is not a string', () => {
+    expect(evaluateGuard({ toolName: 42 as unknown as string, toolInput: {} }, ctx).decision).toBe(
+      'deny',
+    );
   });
 });
 
@@ -458,7 +493,7 @@ describe('round 1 regressions', () => {
 
   it('I9 other tools', () => {
     expect(tool('Monitor', { command: 'rm /tmp/x' }).decision).toBe('deny');
-    expect(tool('Monitor', { command: 'tail -f log' }).decision).toBe('allow');
+    expect(tool('Monitor', { command: 'tail -f log' }).decision).toBe('deny');
     expect(tool('PowerShell', { command: 'ls' }).decision).toBe('deny');
     expect(tool('SomethingNew', { command: 'git push -f' }).decision).toBe('deny');
   });

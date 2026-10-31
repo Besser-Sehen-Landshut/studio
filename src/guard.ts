@@ -792,6 +792,11 @@ const PUSH_DANGEROUS = [
   '--delete',
   '--prune',
   '--all',
+  // tags would push refs the crew did not name; receive-pack/exec run a program on the remote side
+  '--tags',
+  '--follow-tags',
+  '--receive-pack',
+  '--exec',
 ];
 
 const normRef = (r: string): string =>
@@ -844,10 +849,7 @@ function checkPush(env: Env, rawArgs: string[]): void {
         deny(`git push ${name} is not allowed`);
       }
       if (name === '--repo') repoGiven = true;
-      if (
-        !a.includes('=') &&
-        ['--repo', '--receive-pack', '--exec', '--push-option'].includes(name)
-      ) {
+      if (!a.includes('=') && ['--repo', '--push-option'].includes(name)) {
         k++;
       }
     } else if (/^-[A-Za-z]+$/.test(a)) {
@@ -1157,6 +1159,24 @@ const WRITE_TOOLS: Record<string, string> = {
   MultiEdit: 'file_path',
   NotebookEdit: 'notebook_path',
 };
+/**
+ * Tools a crew session may call at all. Everything else (WebFetch, WebSearch, every `mcp__*` tool,
+ * tools added by later Claude Code versions) is denied: an allowlist fails closed on new tools.
+ */
+const CREW_TOOLS = new Set([
+  'Bash',
+  'Read',
+  'Edit',
+  'Write',
+  'MultiEdit',
+  'NotebookEdit',
+  'Grep',
+  'Glob',
+  'Skill',
+  'TodoWrite',
+  'Task',
+  'Agent',
+]);
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'NotebookRead']);
 const SECRET_FRAGMENT = /\.env|\.pem|\.key|id_rsa|id_ed25519|\.npmrc|\.netrc|credentials/i;
 const SECRET_SAMPLES = [
@@ -1276,7 +1296,9 @@ function check(input: GuardInput, ctx: GuardContext): void {
   const { toolName, toolInput } = input;
   const cwd = resolveReal(input.cwd ?? wt, wt);
 
-  if (toolName === 'PowerShell') deny('PowerShell is not allowed');
+  if (typeof toolName !== 'string' || !CREW_TOOLS.has(toolName)) {
+    deny(`tool not allowed for crew: ${String(toolName)}`);
+  }
   if (toolName === 'Bash' || typeof toolInput.command === 'string') {
     const command = toolInput.command;
     if (typeof command !== 'string') deny(`${toolName} call without a command`);

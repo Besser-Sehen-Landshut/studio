@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
   lstatSync,
@@ -20,6 +20,8 @@ import { type StudioConfig, studioConfigSchema } from '../src/config.js';
 import {
   crewName,
   crewSessionId,
+  GUARD_BIN,
+  guardHookCommand,
   type LauncherEnv,
   launchCrew,
   prepareCheckout,
@@ -393,12 +395,37 @@ describe('writeCrewSettings', () => {
     expect(pre).toHaveLength(1);
     expect(pre[0].matcher).toBe('*');
     expect(pre[0].hooks[0].type).toBe('command');
-    const m = /^node "(.+studio-guard\.mjs)"$/.exec(pre[0].hooks[0].command);
+    const m = /^node "(.+studio-guard\.mjs)" \|\| exit 2$/.exec(pre[0].hooks[0].command);
     expect(m).not.toBeNull();
     const hookPath = (m as RegExpExecArray)[1] as string;
     expect(isAbsolute(hookPath)).toBe(true);
     expect(existsSync(hookPath)).toBe(true);
     expect(s.disableAllHooks).toBe(false);
+    expect(pre[0].hooks[0].onFailure).toBe('block');
+  });
+
+  it('denies web and MCP tools in the permission rules', () => {
+    const { s } = setup();
+    expect(s.permissions).toEqual({ deny: ['WebFetch', 'WebSearch', 'mcp__*'] });
+  });
+
+  it('the hook command blocks (exit 2) when node or the guard script is missing', () => {
+    const { s } = setup();
+    const command = s.hooks.PreToolUse[0].hooks[0].command as string;
+    // node not on PATH: the exact command string from the settings file
+    const noNode = spawnSync('/bin/sh', ['-c', command], {
+      input: '{}',
+      env: { PATH: join(root, 'no-such-bin') },
+    });
+    expect(noNode.status).toBe(2);
+    // guard script missing: the same command shape with a path that does not exist
+    const missing = guardHookCommand(join(root, 'no-such-dir', 'studio-guard.mjs'));
+    const noScript = spawnSync('/bin/sh', ['-c', missing], {
+      input: '{}',
+      env: { PATH: process.env.PATH ?? '' },
+    });
+    expect(noScript.status).toBe(2);
+    expect(command).toBe(guardHookCommand(GUARD_BIN));
   });
 
   it('enables the sandbox limited to worktree and allowlist', () => {
@@ -528,10 +555,16 @@ describe('launchCrew', () => {
       'sonnet',
       '--permission-mode',
       'bypassPermissions',
+      '--strict-mcp-config',
+      '--mcp-config',
+      join(state, 'settings', 'APP-12.mcp.json'),
       '--output-format',
       'stream-json',
       '--verbose',
     ]);
+    expect(JSON.parse(readFileSync(join(state, 'settings', 'APP-12.mcp.json'), 'utf8'))).toEqual({
+      mcpServers: {},
+    });
     expect(s.prompt).toBe(`Read ${join(state, 'briefs', 'APP-12.md')} and follow it.`);
     expect(s.logPath).toBe(join(state, 'logs', 'APP-12.jsonl'));
     expect(r).toEqual({ name: 'studio-builder-app-12', pid: 4242, log: s.logPath });

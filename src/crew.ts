@@ -30,7 +30,23 @@ import type { Ports } from './ports.js';
 
 export const crewName = (item: WorkItem): string => `studio-${item.role}-${item.id.toLowerCase()}`;
 
-const GUARD_BIN = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'studio-guard.mjs');
+export const GUARD_BIN = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'bin',
+  'studio-guard.mjs',
+);
+
+/**
+ * Shell-form hook command for the guard. Exit code 2 blocks the tool call; any other non-zero exit
+ * (node missing: 127, script missing: 1) would be a non-blocking error and let the call through,
+ * so every failure is mapped to 2 (https://code.claude.com/docs/en/hooks, "Exit code 2").
+ */
+export function guardHookCommand(bin: string): string {
+  // The path is placed between double quotes for `sh -c`: refuse anything the shell would expand.
+  if (/["$`\\\n]/.test(bin)) throw new Error(`unsafe guard path: ${JSON.stringify(bin)}`);
+  return `node "${bin}" || exit 2`;
+}
 
 const ITEM_ID_RE = /^[A-Z]+-\d+$/;
 
@@ -309,8 +325,18 @@ export function writeCrewSettings(
       STUDIO_STATE_DIR: stateRoot,
     },
     disableAllHooks: false,
+    // Crew needs neither the web nor MCP servers; the guard denies these tools too.
+    // Bare names remove the tool, `mcp__*` every MCP tool (https://code.claude.com/docs/en/permissions).
+    permissions: { deny: ['WebFetch', 'WebSearch', 'mcp__*'] },
     hooks: {
-      PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: `node "${GUARD_BIN}"` }] }],
+      PreToolUse: [
+        {
+          matcher: '*',
+          // onFailure "block" also blocks when the hook cannot start or times out
+          // (https://code.claude.com/docs/en/hooks, "Block the action when a hook fails").
+          hooks: [{ type: 'command', command: guardHookCommand(GUARD_BIN), onFailure: 'block' }],
+        },
+      ],
     },
     sandbox: {
       enabled: true,
@@ -440,6 +466,10 @@ export async function launchCrew(
     { homeDir, tmpDir, projectDir, toolchainPaths },
     owner,
   );
+  // No MCP server at all: --strict-mcp-config ignores every other MCP configuration and the only
+  // one given is empty (https://code.claude.com/docs/en/cli-reference).
+  const mcpConfig = join(stateRoot, 'settings', `${item.id}.mcp.json`);
+  writeStateFile(stateRoot, mcpConfig, `${JSON.stringify({ mcpServers: {} })}\n`);
   const settingsEnv = (
     JSON.parse(readFileSync(settings, 'utf8')) as { env: Record<string, string> }
   ).env;
@@ -470,6 +500,9 @@ export async function launchCrew(
       role.model,
       '--permission-mode',
       'bypassPermissions',
+      '--strict-mcp-config',
+      '--mcp-config',
+      mcpConfig,
       '--output-format',
       'stream-json',
       '--verbose',

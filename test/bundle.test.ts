@@ -1,8 +1,17 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DEFAULT_SECRET_GLOBS, evaluateGuard, type GuardContext } from '../src/guard.js';
 
 // An installed plugin has bin/ and dist-bundle/ but no node_modules and no dist: simulate that.
 const repo = join(import.meta.dirname, '..');
@@ -35,24 +44,41 @@ describe('self-contained plugin bundle', () => {
     expect(r.stdout).toContain('Usage: studio');
   });
 
-  it('bin/studio-guard.mjs denies from the bundle without node_modules', () => {
+  it('bin/studio-guard.mjs decides from the bundle without node_modules', () => {
+    const wt = join(plugin, 'wt');
+    mkdirSync(wt);
     const ctxFile = join(plugin, 'ctx.json');
-    writeFileSync(
-      ctxFile,
-      JSON.stringify({ worktree: plugin, tmpDir: plugin, repo: 'org/app', allowedWorkflows: [] }),
+    const ctx: GuardContext = {
+      worktree: wt,
+      ownerOnly: ['gh pr merge*'],
+      deployCommands: [],
+      secretGlobs: DEFAULT_SECRET_GLOBS,
+    };
+    writeFileSync(ctxFile, JSON.stringify(ctx));
+    // The context must be valid, or every call is denied as "invalid guard context".
+    expect(evaluateGuard({ toolName: 'Bash', toolInput: { command: 'ls' }, cwd: wt }, ctx)).toEqual(
+      { decision: 'allow' },
     );
-    const r = spawnSync(process.execPath, [join(plugin, 'bin', 'studio-guard.mjs')], {
-      input: JSON.stringify({
-        cwd: plugin,
-        tool_name: 'Bash',
-        tool_input: { command: 'git push --force' },
-        hook_event_name: 'PreToolUse',
-      }),
-      encoding: 'utf8',
-      env: { PATH: process.env.PATH ?? '', STUDIO_GUARD_CTX: ctxFile },
-    });
-    expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe('deny');
+    const run = (command: string) =>
+      spawnSync(process.execPath, [join(plugin, 'bin', 'studio-guard.mjs')], {
+        input: JSON.stringify({
+          cwd: wt,
+          tool_name: 'Bash',
+          tool_input: { command },
+          hook_event_name: 'PreToolUse',
+        }),
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH ?? '', STUDIO_GUARD_CTX: ctxFile },
+      });
+    const allow = run('ls');
+    expect(allow.status).toBe(0);
+    expect(allow.stdout).toBe('');
+    const deny = run('gh pr merge 7 --squash');
+    expect(deny.status).toBe(0);
+    const out = JSON.parse(deny.stdout).hookSpecificOutput;
+    expect(out.permissionDecision).toBe('deny');
+    expect(out.permissionDecisionReason).toMatch(/merge/);
+    expect(out.permissionDecisionReason).not.toMatch(/invalid guard context/);
   });
 
   it('bin/studio-guard.mjs fails closed when no bundle is present', () => {

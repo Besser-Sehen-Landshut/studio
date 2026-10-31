@@ -1143,7 +1143,12 @@ var PUSH_DANGEROUS = [
   "--mirror",
   "--delete",
   "--prune",
-  "--all"
+  "--all",
+  // tags would push refs the crew did not name; receive-pack/exec run a program on the remote side
+  "--tags",
+  "--follow-tags",
+  "--receive-pack",
+  "--exec"
 ];
 var normRef = (r) => r.replace(/^refs\//, "").replace(/^heads\//, "").toLowerCase();
 function checkRefspec(env, ref) {
@@ -1185,7 +1190,7 @@ function checkPush(env, rawArgs) {
         deny(`git push ${name} is not allowed`);
       }
       if (name === "--repo") repoGiven = true;
-      if (!a.includes("=") && ["--repo", "--receive-pack", "--exec", "--push-option"].includes(name)) {
+      if (!a.includes("=") && ["--repo", "--push-option"].includes(name)) {
         k++;
       }
     } else if (/^-[A-Za-z]+$/.test(a)) {
@@ -1461,6 +1466,20 @@ var WRITE_TOOLS = {
   MultiEdit: "file_path",
   NotebookEdit: "notebook_path"
 };
+var CREW_TOOLS = /* @__PURE__ */ new Set([
+  "Bash",
+  "Read",
+  "Edit",
+  "Write",
+  "MultiEdit",
+  "NotebookEdit",
+  "Grep",
+  "Glob",
+  "Skill",
+  "TodoWrite",
+  "Task",
+  "Agent"
+]);
 var FILE_TOOLS = /* @__PURE__ */ new Set(["Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "NotebookRead"]);
 var SECRET_FRAGMENT = /\.env|\.pem|\.key|id_rsa|id_ed25519|\.npmrc|\.netrc|credentials/i;
 var SECRET_SAMPLES = [
@@ -1558,7 +1577,9 @@ function check(input, ctx) {
   };
   const { toolName, toolInput } = input;
   const cwd = resolveReal(input.cwd ?? wt, wt);
-  if (toolName === "PowerShell") deny("PowerShell is not allowed");
+  if (typeof toolName !== "string" || !CREW_TOOLS.has(toolName)) {
+    deny(`tool not allowed for crew: ${String(toolName)}`);
+  }
   if (toolName === "Bash" || typeof toolInput.command === "string") {
     const command = toolInput.command;
     if (typeof command !== "string") deny(`${toolName} call without a command`);

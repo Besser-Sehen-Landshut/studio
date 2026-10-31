@@ -28330,7 +28330,16 @@ function credentialLocations(home, env) {
 
 // src/crew.ts
 var crewName = (item) => `studio-${item.role}-${item.id.toLowerCase()}`;
-var GUARD_BIN = resolve3(dirname2(fileURLToPath(import.meta.url)), "..", "bin", "studio-guard.mjs");
+var GUARD_BIN = resolve3(
+  dirname2(fileURLToPath(import.meta.url)),
+  "..",
+  "bin",
+  "studio-guard.mjs"
+);
+function guardHookCommand(bin) {
+  if (/["$`\\\n]/.test(bin)) throw new Error(`unsafe guard path: ${JSON.stringify(bin)}`);
+  return `node "${bin}" || exit 2`;
+}
 var ITEM_ID_RE = /^[A-Z]+-\d+$/;
 function assertItemId(id) {
   if (!ITEM_ID_RE.test(id)) throw new Error(`invalid item id: ${JSON.stringify(id)}`);
@@ -28520,8 +28529,18 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
       STUDIO_STATE_DIR: stateRoot
     },
     disableAllHooks: false,
+    // Crew needs neither the web nor MCP servers; the guard denies these tools too.
+    // Bare names remove the tool, `mcp__*` every MCP tool (https://code.claude.com/docs/en/permissions).
+    permissions: { deny: ["WebFetch", "WebSearch", "mcp__*"] },
     hooks: {
-      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: `node "${GUARD_BIN}"` }] }]
+      PreToolUse: [
+        {
+          matcher: "*",
+          // onFailure "block" also blocks when the hook cannot start or times out
+          // (https://code.claude.com/docs/en/hooks, "Block the action when a hook fails").
+          hooks: [{ type: "command", command: guardHookCommand(GUARD_BIN), onFailure: "block" }]
+        }
+      ]
     },
     sandbox: {
       enabled: true,
@@ -28616,6 +28635,9 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     { homeDir, tmpDir, projectDir, toolchainPaths },
     owner
   );
+  const mcpConfig = join4(stateRoot, "settings", `${item.id}.mcp.json`);
+  writeStateFile(stateRoot, mcpConfig, `${JSON.stringify({ mcpServers: {} })}
+`);
   const settingsEnv = JSON.parse(readFileSync4(settings, "utf8")).env;
   const env = {};
   for (const k of BASE_ENV) {
@@ -28643,6 +28665,9 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
       role.model,
       "--permission-mode",
       "bypassPermissions",
+      "--strict-mcp-config",
+      "--mcp-config",
+      mcpConfig,
       "--output-format",
       "stream-json",
       "--verbose"
