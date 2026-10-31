@@ -5,11 +5,11 @@ import { execa } from 'execa';
 
 export interface Gh {
   /**
-   * `gh api <path> --paginate [--jq <jq>]`, returns stdout. Always paginates; with `--jq` the
-   * filter runs per page, so use filters that emit one line per record (or a scalar the caller
-   * reads from the first line). Throws on a non-zero exit.
+   * `gh api <path> [--paginate] [--jq <jq>]`, returns stdout. Paginates by default (opt out with
+   * `{ paginate: false }` for single-page reads); with `--jq` the filter runs per page, so use
+   * filters that emit one line per record. Throws on a non-zero exit.
    */
-  api(path: string, jq?: string): Promise<string>;
+  api(path: string, jq?: string, opts?: { paginate?: boolean }): Promise<string>;
   /** Runs `gh <args>` without throwing on a non-zero exit. */
   run(args: string[]): Promise<{ code: number; stdout: string; stderr: string }>;
 }
@@ -28,8 +28,9 @@ export interface Claude {
     logPath: string,
     env: Record<string, string>,
   ): Promise<{ pid: number }>;
+  /** True while the session leader or any process of its group is running. */
   alive(pid: number): boolean;
-  /** SIGTERM, then SIGKILL after a grace period. */
+  /** SIGTERM, then SIGKILL after a grace period, sent to the whole process group (POSIX). */
   stop(pid: number): Promise<void>;
 }
 
@@ -59,8 +60,13 @@ export function realPorts(claudeBin = 'claude'): Ports {
   const clock: Clock = { now: () => new Date(), sleep };
 
   const gh: Gh = {
-    async api(path, jq) {
-      const args = ['api', path, '--paginate', ...(jq === undefined ? [] : ['--jq', jq])];
+    async api(path, jq, opts) {
+      const args = [
+        'api',
+        path,
+        ...(opts?.paginate === false ? [] : ['--paginate']),
+        ...(jq === undefined ? [] : ['--jq', jq]),
+      ];
       const r = await execa('gh', args);
       return r.stdout;
     },
@@ -80,13 +86,30 @@ export function realPorts(claudeBin = 'claude'): Ports {
     },
   };
 
-  const alive = (pid: number): boolean => {
+  const probe = (target: number): boolean => {
     try {
-      process.kill(pid, 0);
+      process.kill(target, 0);
       return true;
     } catch (e) {
       // EPERM: the process exists but belongs to someone else.
       return (e as NodeJS.ErrnoException).code === 'EPERM';
+    }
+  };
+  // Sessions are started detached, so the child leads its own process group (POSIX). `alive` is true
+  // while the leader or any member of that group (shells, tools, MCP servers) is still running.
+  const posix = process.platform !== 'win32';
+  const alive = (pid: number): boolean => (posix && probe(-pid)) || probe(pid);
+  const signal = (pid: number, sig: NodeJS.Signals): void => {
+    try {
+      process.kill(posix ? -pid : pid, sig);
+    } catch (e) {
+      if (!posix || (e as NodeJS.ErrnoException).code !== 'ESRCH') return;
+      // Not a group leader after all: signal the process itself.
+      try {
+        process.kill(pid, sig);
+      } catch {
+        // already gone
+      }
     }
   };
 
@@ -116,16 +139,12 @@ export function realPorts(claudeBin = 'claude'): Ports {
     alive,
     async stop(pid) {
       if (!alive(pid)) return;
-      process.kill(pid, 'SIGTERM');
+      signal(pid, 'SIGTERM');
       for (let waited = 0; waited < STOP_GRACE_MS; waited += STOP_POLL_MS) {
         await sleep(STOP_POLL_MS);
         if (!alive(pid)) return;
       }
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        // already gone
-      }
+      signal(pid, 'SIGKILL');
     },
   };
 

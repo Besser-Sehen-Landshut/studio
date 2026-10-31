@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -6,6 +6,23 @@ import { realPorts } from '../src/ports.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'studio-ports-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+async function until(cond: () => boolean, ms = 5000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error('condition not met before deadline');
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+const isAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 describe('realPorts', () => {
   it('git.run returns stdout and throws with stderr on failure', async () => {
@@ -22,9 +39,23 @@ describe('realPorts', () => {
       PATH: process.env.PATH ?? '',
     });
     expect(claude.alive(pid)).toBe(true);
-    await new Promise((r) => setTimeout(r, 200));
-    expect(readFileSync(log, 'utf8')).toContain('hello');
+    await until(() => readFileSync(log, 'utf8').includes('hello'));
     await claude.stop(pid);
+    expect(claude.alive(pid)).toBe(false);
+  });
+
+  it('claude.stop also terminates descendants of the session', async () => {
+    const { claude } = realPorts('sh');
+    const pidFile = join(dir, 'grandchild.pid');
+    const script = `sleep 30 & echo $! > ${pidFile}; wait`;
+    const { pid } = await claude.start(dir, ['-c', script], '', join(dir, 'gc.log'), {
+      PATH: process.env.PATH ?? '',
+    });
+    await until(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== '');
+    const grandchild = Number(readFileSync(pidFile, 'utf8').trim());
+    expect(isAlive(grandchild)).toBe(true);
+    await claude.stop(pid);
+    await until(() => !isAlive(grandchild));
     expect(claude.alive(pid)).toBe(false);
   });
 

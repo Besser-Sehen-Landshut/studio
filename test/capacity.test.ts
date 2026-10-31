@@ -115,8 +115,8 @@ describe('readCapacity', () => {
     const cfg = mkConfig({ runners: 'github-hosted' });
     const cap = await readCapacity(cfg, { gh, host: host(0) }, opts);
     expect(gh.calls).toEqual([
-      '/repos/org/app/actions/runs?status=in_progress',
-      '/repos/org/app/actions/runs?status=queued',
+      '/repos/org/app/actions/runs?status=in_progress&per_page=1',
+      '/repos/org/app/actions/runs?status=queued&per_page=1',
     ]);
     expect(cap.ciBusy).toBe(5);
   });
@@ -126,6 +126,15 @@ describe('readCapacity', () => {
     const cfg = mkConfig({ runners: 'github-hosted' });
     const cap = await readCapacity(cfg, { gh, host: host(0) }, opts);
     expect(cap).toMatchObject({ ciBusy: 8, ok: false });
+  });
+
+  it('both: org call ok but runs call throws → not ok, ciBusy=total', async () => {
+    const gh = fakeGh((path) => {
+      if (path.startsWith('/orgs/')) return tsv([['pool-1', 'online', true]]);
+      throw new Error('boom');
+    });
+    const cap = await readCapacity(mkConfig({ runners: 'both' }), { gh, host: host(0) }, opts);
+    expect(cap).toMatchObject({ ok: false, ciBusy: 8, ciTotal: 8 });
   });
 
   it('both = self-hosted busy + hosted runs, capped at total', async () => {

@@ -39,10 +39,11 @@ async function selfHostedBusy(config: StudioConfig, gh: Gh): Promise<number> {
 
 async function runCount(config: StudioConfig, gh: Gh, status: string): Promise<number> {
   const out = await gh.api(
-    `/repos/${config.primaryRepo}/actions/runs?status=${status}`,
+    `/repos/${config.primaryRepo}/actions/runs?status=${status}&per_page=1`,
     '.total_count',
+    { paginate: false },
   );
-  // With --paginate the filter runs per page; every page reports the same total, so take the first.
+  // One page of one run is enough: only total_count is read.
   const first = out.split('\n')[0]?.trim() ?? '';
   if (!/^\d+$/.test(first)) throw new Error(`unparsable run count: ${first}`);
   return Number(first);
