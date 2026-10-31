@@ -16,7 +16,7 @@
   "linter": { "enabled": true, "rules": { "preset": "recommended" } },
   "overrides": [
     {
-      "includes": ["skills/**/SKILL.md"],
+      "includes": ["skills/**/SKILL.md", "test/skills/scenarios/**"],
       "formatter": { "enabled": false }
     }
   ]

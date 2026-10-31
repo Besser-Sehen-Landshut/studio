@@ -41,9 +41,9 @@ Body: what changed; how verified (command and its result line).
 `done` needs `pr`, `head_sha`, and for feature/fix/chore `tests_run > 0`. Committing the report moves the head
 and collect rejects it.
 
-**Review item** (type `review`): open no PR, push nothing. Replace `pr`, `head_sha`, `tests_run` with
-`verdict: approve|changes_requested` and `reviews: <owner/repo>#<n>` (the PR you reviewed);
-findings go in the body.
+**Review and research items:** open no PR, push nothing; omit `pr`, `head_sha`, `tests_run`. Review adds
+`verdict: approve|changes_requested` and `reviews: <owner/repo>#<n>` (the PR you reviewed), findings in the body.
+Research gives its result in the body; no verdict.
 
 ## Test command fails or errors
 
@@ -52,8 +52,8 @@ Wrong directory, missing module, red on the unchanged checkout: investigate, fix
 
 ## Blocked
 
-Missing input, owner-only step, unanswerable question: report `status: blocked` with the question in
-`questions`, stop. Never wait, never ask — even if the brief says the owner is online.
+Missing input, owner-only step, unanswerable question: report `blocked` with the question in `questions`,
+stop. Never wait, never ask — even if the brief says the owner is online.
 
 ## Never
 
@@ -65,7 +65,6 @@ the checkout.
 | Thought | Reality |
 |---|---|
 | "`npm test` errors, I'll run just my file" | Partial count = false report. Fix or report failed. |
-| "It failed before my change" | Investigate and report it; never shrink the count. |
 | "A report can't contain its own commit SHA" | Right — so it is not committed. |
 | "The owner is online, I'll ask" | Blocked = report and stop. |
 | "Urgent, skip test-first" | Pressure changes nothing. |

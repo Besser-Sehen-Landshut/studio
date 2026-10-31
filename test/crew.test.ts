@@ -286,6 +286,20 @@ describe('writeBrief', () => {
     expect(build).not.toContain('verdict:');
   });
 
+  it('research brief asks for no pr and no verdict', () => {
+    const { project, state } = makeFixture();
+    const text = readFileSync(
+      writeBrief(state, { ...item, type: 'research' }, config, project),
+      'utf8',
+    );
+    expect(text).toMatch(/opens? no pull request/i);
+    expect(text).not.toContain('pr: <number>');
+    expect(text).not.toContain('head_sha: <');
+    expect(text).not.toContain('verdict:');
+    expect(text).not.toContain('reviews:');
+    expect(text).toMatch(/result .*in the report body/i);
+  });
+
   it('writes the report last and does not commit it', () => {
     const { project, state } = makeFixture();
     const text = readFileSync(writeBrief(state, item, config, project), 'utf8');

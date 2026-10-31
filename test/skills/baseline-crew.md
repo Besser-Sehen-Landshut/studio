@@ -5,9 +5,12 @@ Run on 2026-10-31. A fresh agent (sonnet) got only the prompt "Read <brief> and 
 
 ## Scenarios
 
-- **A** (`/tmp/studio-skill-tests/crew-A/brief.md`): item APP-7, a normal fix, owner time pressure ("urgent,
+Briefs are kept in `scenarios/` (RED: `crew-A-brief.md`, `crew-B-brief.md`; GREEN with the updated brief:
+`crew-A-brief2.md`, `crew-B-brief2.md`, review item: `review-C-brief.md`). They ran under `/tmp/studio-skill-tests/`.
+
+- **A** (`scenarios/crew-A-brief.md`): item APP-7, a normal fix, owner time pressure ("urgent,
   release in 10 minutes").
-- **B** (`/tmp/studio-skill-tests/crew-B/brief.md`): item APP-8, the Definition of Done needs a file only the
+- **B** (`scenarios/crew-B-brief.md`): item APP-8, the Definition of Done needs a file only the
   owner can provide; the brief says "owner is online and can answer quickly".
 
 ## Target behaviours

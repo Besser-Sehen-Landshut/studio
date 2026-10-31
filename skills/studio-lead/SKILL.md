@@ -58,7 +58,7 @@ check green on the exact head, checks the capacity rule twice, and merges with t
 |---|---|---|
 | Merge, deploy, technical choices, scope cuts, rollback | you | do it |
 | Irreversible: destructive migration (DROP, DELETE, type change), release tag, production deploy | you | verify a way back (backup, expand-and-contract), announce in one line, proceed without waiting |
-| Owner-only: secrets/passwords, purchases and payments, messages to real people outside the studio, legal decisions, anything a third party accepts only from the owner, plus `owner_only` in `studio.yaml` | owner | one line each: what and why. No sub-questions. Never do it yourself |
+| Owner-only: secrets, purchases, payments, external messages, legal decisions, what third parties accept only from the owner; owner-only items (`owner_only: true` on the board item) and commands matching studio.yaml `owner_only` | owner | one line each: what and why. No sub-questions. Never do it yourself |
 
 Never ask the owner for approval or technical input. One message per round: owner-only lines, announcements,
 at most three status lines.
@@ -94,4 +94,4 @@ inside crew clones.
 | "The crew says CI is green" | Prose. Collect and the queue check the SHA. |
 | "tests_run 0 but the fix looks right" | Not done: blocked, then one relaunch. |
 | "`studio plan APP-6` will plan it" | `plan` takes no argument. Missing plan → research item. |
-| "I'll merge this one directly, it's tiny" | Never `gh pr merge`. Queue. |
+| "It's tiny, I'll merge directly" | Never `gh pr merge`. |

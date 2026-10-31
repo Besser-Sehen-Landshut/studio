@@ -202,11 +202,13 @@ export function writeBrief(
     `item: ${id}`,
     ...(item.type === 'review'
       ? ['verdict: approve|changes_requested', 'reviews: <repo>#<pr>']
-      : [
-          'pr: <number>',
-          'head_sha: <40-hex sha of the pushed head commit>',
-          'tests_run: <number of tests that ran>',
-        ]),
+      : item.type === 'research'
+        ? []
+        : [
+            'pr: <number>',
+            'head_sha: <40-hex sha of the pushed head commit>',
+            'tests_run: <number of tests that ran>',
+          ]),
     'lessons: []',
     'questions: []',
     '---',
@@ -217,7 +219,12 @@ export function writeBrief(
           'A reviewer opens no pull request: omit pr and head_sha. reviews names the pull request you reviewed.',
           '',
         ]
-      : []),
+      : item.type === 'research'
+        ? [
+            'A research item opens no pull request and pushes nothing: omit pr, head_sha and tests_run. Give the result in the report body.',
+            '',
+          ]
+        : []),
     'The body says what changed and how it was verified.',
     '',
   ];
