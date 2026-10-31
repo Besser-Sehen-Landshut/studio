@@ -28344,6 +28344,14 @@ var ITEM_ID_RE = /^[A-Z]+-\d+$/;
 function assertItemId(id) {
   if (!ITEM_ID_RE.test(id)) throw new Error(`invalid item id: ${JSON.stringify(id)}`);
 }
+var GITHUB_REPO_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
+function githubHttpsUrl(repo) {
+  const name = repo.split("/")[1];
+  if (!GITHUB_REPO_RE.test(repo) || name === "." || name === "..") {
+    throw new Error(`invalid item repo: ${JSON.stringify(repo)}`);
+  }
+  return `https://github.com/${repo}.git`;
+}
 function cloneBranch(path10) {
   try {
     const head = readFileSync4(join4(path10, ".git", "HEAD"), "utf8").trim();
@@ -28357,13 +28365,15 @@ async function prepareCheckout(stateRoot, projectDir, item, ports) {
   const clones = ensureStateDir(stateRoot, join4(stateRoot, "clones"));
   const path10 = join4(clones, item.id);
   const branch = `studio/${item.id}`;
+  const crewOrigin = githubHttpsUrl(item.repo);
   assertStatePath(stateRoot, path10);
   const url2 = await ownerOriginUrl(projectDir, ports);
   if (isLink2(path10)) removeStateEntry(stateRoot, path10);
-  if (cloneBranch(path10) === branch && cloneOriginUrl(path10) === url2) return { path: path10, branch };
+  if (cloneBranch(path10) === branch && cloneOriginUrl(path10) === crewOrigin) return { path: path10, branch };
   removeStateEntry(stateRoot, path10);
   await ports.git.run(clones, ["clone", "--filter=blob:none", url2, path10]);
   chmodSync2(path10, 448);
+  await ports.git.run(path10, ["remote", "set-url", "origin", crewOrigin]);
   await ports.git.run(path10, ["checkout", "-b", branch, "origin/main"]);
   return { path: path10, branch };
 }
@@ -28592,6 +28602,10 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
   const penv = launcher.env ?? process.env;
   const role = config2.roles[item.role];
   if (!role) throw new Error(`role ${item.role} is not configured`);
+  if (item.repo !== config2.primaryRepo && !config2.repos.includes(item.repo)) {
+    throw new Error(`repo ${item.repo} is not configured (primary_repo/repos in studio.yaml)`);
+  }
+  githubHttpsUrl(item.repo);
   let token;
   if (config2.crewToken) token = penv[config2.crewToken.env] || void 0;
   if (!token && !config2.allowAmbientCredentials) {

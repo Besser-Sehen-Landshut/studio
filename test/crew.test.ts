@@ -179,9 +179,8 @@ describe('prepareCheckout', () => {
     expect(a.branch).toBe('studio/APP-12');
     expect(git(a.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('studio/APP-12');
     expect(git(a.path, 'rev-parse', 'HEAD')).toBe(git(project, 'rev-parse', 'origin/main'));
-    expect(git(a.path, 'remote', 'get-url', 'origin')).toBe(
-      git(project, 'remote', 'get-url', 'origin'),
-    );
+    // The crew pushes over HTTPS with the crew token, never through the owner's (ssh) origin.
+    expect(git(a.path, 'remote', 'get-url', 'origin')).toBe('https://github.com/org/app.git');
   });
 
   it('is idempotent: a second call does not clone again', async () => {
@@ -201,13 +200,25 @@ describe('prepareCheckout', () => {
     const a = await prepareCheckout(state, project, item, realPorts());
     writeFileSync(join(a.path, 'planted.txt'), 'x');
     const cfg = join(a.path, '.git', 'config');
-    const url = git(project, 'remote', 'get-url', 'origin');
+    const url = 'https://github.com/org/app.git';
+    expect(readFileSync(cfg, 'utf8')).toContain(url);
     writeFileSync(cfg, readFileSync(cfg, 'utf8').replace(url, 'https://example.com/org/evil.git'));
     const b = await prepareCheckout(state, project, item, realPorts());
     expect(b).toEqual(a);
     expect(existsSync(join(b.path, 'planted.txt'))).toBe(false);
     expect(git(b.path, 'remote', 'get-url', 'origin')).toBe(url);
   });
+
+  it.each(['org', 'org/app/x', '../app', 'org/..', 'org/app;rm', '-org/app', 'org/app name', ''])(
+    'refuses an item repo that is no GitHub owner/name: %j',
+    async (repo) => {
+      const { project, state } = makeFixture();
+      await expect(prepareCheckout(state, project, { ...item, repo }, realPorts())).rejects.toThrow(
+        /invalid item repo/,
+      );
+      expect(existsSync(join(state, 'clones', 'APP-12'))).toBe(false);
+    },
+  );
 
   it('removes and re-clones a directory that is not a valid clone', async () => {
     const { project, state } = makeFixture();
@@ -790,6 +801,16 @@ describe('launchCrew', () => {
     ]);
     const rec = JSON.parse(readFileSync(join(state, 'crew.json'), 'utf8'));
     expect(Object.keys(rec).sort()).toEqual(['APP-12', 'APP-13']);
+  });
+
+  it('refuses an item whose repo is not one of the configured repos, before any side effect', async () => {
+    const { project, state, launcher } = makeFixture();
+    const started: Started[] = [];
+    await expect(
+      launchCrew(project, { ...item, repo: 'org/other' }, config, fakePorts(started), launcher),
+    ).rejects.toThrow(/org\/other is not configured/);
+    expect(started).toHaveLength(0);
+    expect(existsSync(state)).toBe(false);
   });
 
   it('throws when the role is not configured', async () => {

@@ -55,6 +55,21 @@ function assertItemId(id: string): void {
   if (!ITEM_ID_RE.test(id)) throw new Error(`invalid item id: ${JSON.stringify(id)}`);
 }
 
+const GITHUB_REPO_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
+
+/**
+ * HTTPS clone URL of an item's GitHub repository (`owner/name`). The crew clone's origin always
+ * points here, so the crew pushes with its own token through the `gh` credential helper and never
+ * through the owner's origin (which may be an ssh URL that the crew HOME cannot use).
+ */
+export function githubHttpsUrl(repo: string): string {
+  const name = repo.split('/')[1];
+  if (!GITHUB_REPO_RE.test(repo) || name === '.' || name === '..') {
+    throw new Error(`invalid item repo: ${JSON.stringify(repo)}`);
+  }
+  return `https://github.com/${repo}.git`;
+}
+
 /**
  * Rule (D4): the control room never runs git inside a crew clone once a crew has run in it.
  * A crew-controlled `.git/config` (core.fsmonitor, hooks, ...) would execute in the owner's
@@ -74,7 +89,7 @@ function cloneBranch(path: string): string | undefined {
 
 /**
  * Gives an item its own blob-less clone `<stateRoot>/clones/<id>` on branch `studio/<id>` from
- * the project's `origin/main`. No `git worktree` on the owner's repository: its shared git dir
+ * the project's `origin/main`. The clone's origin is then set to the HTTPS URL of `item.repo`. No `git worktree` on the owner's repository: its shared git dir
  * would be writable by the crew. Idempotent: a clone already on that branch is returned untouched;
  * anything else in that place (a symlink included, which is unlinked, not followed) is removed and
  * cloned again.
@@ -89,15 +104,18 @@ export async function prepareCheckout(
   const clones = ensureStateDir(stateRoot, join(stateRoot, 'clones'));
   const path = join(clones, item.id);
   const branch = `studio/${item.id}`;
+  const crewOrigin = githubHttpsUrl(item.repo);
   assertStatePath(stateRoot, path);
   const url = await ownerOriginUrl(projectDir, ports);
   if (isLink(path)) removeStateEntry(stateRoot, path);
-  // Reuse only a clone on the item branch whose `.git/config` (read as a file) names the owner
-  // repo's origin; anything else is removed and cloned again.
-  if (cloneBranch(path) === branch && cloneOriginUrl(path) === url) return { path, branch };
+  // Reuse only a clone on the item branch whose `.git/config` (read as a file) names the item
+  // repo's HTTPS origin; anything else is removed and cloned again.
+  if (cloneBranch(path) === branch && cloneOriginUrl(path) === crewOrigin) return { path, branch };
   removeStateEntry(stateRoot, path);
   await ports.git.run(clones, ['clone', '--filter=blob:none', url, path]);
   chmodSync(path, 0o700);
+  // Still a fresh clone no crew has run in, so git may run here (rule D4).
+  await ports.git.run(path, ['remote', 'set-url', 'origin', crewOrigin]);
   await ports.git.run(path, ['checkout', '-b', branch, 'origin/main']);
   return { path, branch };
 }
@@ -414,6 +432,10 @@ export async function launchCrew(
   const penv = launcher.env ?? process.env;
   const role = config.roles[item.role];
   if (!role) throw new Error(`role ${item.role} is not configured`);
+  if (item.repo !== config.primaryRepo && !config.repos.includes(item.repo)) {
+    throw new Error(`repo ${item.repo} is not configured (primary_repo/repos in studio.yaml)`);
+  }
+  githubHttpsUrl(item.repo);
   // Fail closed: without the least-privilege token the session would fall back to ambient
   // credentials, so that needs an explicit opt-in.
   let token: string | undefined;
