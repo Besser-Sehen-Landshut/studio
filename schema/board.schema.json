@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Z]+-\\d+$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "feature",
+              "fix",
+              "chore",
+              "docs",
+              "research",
+              "review",
+              "release"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "builder",
+              "reviewer",
+              "designer",
+              "researcher",
+              "release"
+            ]
+          },
+          "repo": {
+            "type": "string",
+            "minLength": 1
+          },
+          "size": {
+            "type": "string",
+            "enum": [
+              "S",
+              "M",
+              "L"
+            ]
+          },
+          "priority": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "assigned",
+              "in_progress",
+              "in_review",
+              "queued",
+              "merged",
+              "blocked",
+              "dropped"
+            ]
+          },
+          "paths": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "touches": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conflicts_with": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "depends_on": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dod": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "flag": {
+            "type": "string"
+          },
+          "owner_only": {
+            "type": "boolean"
+          },
+          "plan": {
+            "type": "string"
+          },
+          "pr": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "branch": {
+            "type": "string"
+          },
+          "crew": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "history": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "string"
+                },
+                "from": {
+                  "type": "string",
+                  "enum": [
+                    "ready",
+                    "assigned",
+                    "in_progress",
+                    "in_review",
+                    "queued",
+                    "merged",
+                    "blocked",
+                    "dropped"
+                  ]
+                },
+                "to": {
+                  "type": "string",
+                  "enum": [
+                    "ready",
+                    "assigned",
+                    "in_progress",
+                    "in_review",
+                    "queued",
+                    "merged",
+                    "blocked",
+                    "dropped"
+                  ]
+                },
+                "by": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "at",
+                "from",
+                "to",
+                "by"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "type",
+          "role",
+          "repo",
+          "size",
+          "priority",
+          "status"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "additionalProperties": false
+}

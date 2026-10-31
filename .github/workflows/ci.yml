@@ -27,9 +27,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      - name: Committed bundle matches source
+        run: |
+          pnpm bundle
+          # porcelain also lists new untracked files, which git diff would miss
+          test -z "$(git status --porcelain -- dist-bundle)" || { git status --porcelain -- dist-bundle; exit 1; }
       - run: pnpm test
         env:
-          STUDIO_PRIVATE_WORDS: ${{ vars.STUDIO_PRIVATE_WORDS }}
+          STUDIO_PRIVATE_WORDS: ${{ secrets.STUDIO_PRIVATE_WORDS }}
+          # Fork pull requests get no secrets; only then may the word list be empty.
+          STUDIO_PRIVATE_WORDS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork == true && '1' || '' }}
 
   secrets:
     runs-on: ubuntu-latest

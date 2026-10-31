@@ -1,0 +1,60 @@
+items:
+  - id: APP-1
+    title: Add login page
+    type: feature
+    role: builder
+    repo: org/app
+    size: M
+    priority: 1
+    status: in_progress
+    paths:
+      - src/login/**
+    touches:
+      - src/login/**
+    depends_on: []
+    dod:
+      - Login form renders
+    flag: login_page
+    plan: docs/plans/login.md
+    branch: studio/app-1
+    crew: builder-1
+    history:
+      - at: 2026-10-30T09:00:00.000Z
+        from: ready
+        to: assigned
+        by: lead
+      - at: 2026-10-30T09:05:00.000Z
+        from: assigned
+        to: in_progress
+        by: lead
+  - id: APP-2
+    title: Fix typo in header
+    type: fix
+    role: builder
+    repo: org/app
+    size: S
+    priority: 2
+    status: ready
+    paths: []
+    touches:
+      - src/header/**
+    depends_on:
+      - APP-1
+    dod: []
+    history: []
+  - id: APP-3
+    title: Update readme
+    type: docs
+    role: builder
+    repo: org/app
+    size: S
+    priority: 3
+    status: ready
+    paths: []
+    touches:
+      - README.md
+    conflicts_with:
+      - APP-2
+    depends_on: []
+    dod: []
+    history: []

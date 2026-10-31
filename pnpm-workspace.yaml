@@ -1,1 +1,6 @@
 pmOnFail: ignore
+# pnpm 11+ fails an install on unreviewed build scripts (ERR_PNPM_IGNORED_BUILDS).
+# esbuild's postinstall only verifies its platform binary; `pnpm bundle` works without it.
+# https://pnpm.io/settings/build#allowbuilds
+allowBuilds:
+  esbuild: false

@@ -1,0 +1,13 @@
+#!/usr/bin/env node
+// Studio control-room CLI. Claude Code puts a plugin's bin/ on the Bash tool's PATH, so the lead
+// session runs `studio <command>` as a bare command
+// (https://code.claude.com/docs/en/plugins-reference, "Standard layout", Executables).
+// Loads the committed self-contained bundle (an installed plugin has no node_modules and no dist).
+for (const rel of ['../dist-bundle/studio.mjs', '../dist/main.js']) {
+  try {
+    await import(new URL(rel, import.meta.url).href);
+    break;
+  } catch (err) {
+    if (err?.code !== 'ERR_MODULE_NOT_FOUND' || rel.includes('dist/')) throw err;
+  }
+}
