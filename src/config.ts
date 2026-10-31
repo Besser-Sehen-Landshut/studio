@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
@@ -7,6 +8,42 @@ export const ROLE_TEMPLATES = ['builder', 'reviewer', 'designer', 'researcher', 
 export type RoleTemplate = (typeof ROLE_TEMPLATES)[number];
 
 const strList = z.array(z.string()).default([]);
+
+/** Credential locations below the real home that a crew session must never read. */
+export const CREDENTIAL_PATHS = [
+  '.config/gh',
+  '.git-credentials',
+  '.ssh',
+  '.netrc',
+  '.gnupg',
+  '.aws',
+  '.docker/config.json',
+  'Library/Keychains',
+];
+
+const within = (child: string, parent: string): boolean =>
+  child === parent || child.startsWith(parent + sep);
+
+/**
+ * Why `path` may not be a crew toolchain read path, or undefined when it is fine. Rejected:
+ * relative paths, `/`, the home itself, and any path that equals, contains or lies inside a
+ * credential location (so the `.config` and `Library` parents are out as well).
+ */
+export function toolchainPathProblem(
+  path: string,
+  home: string,
+  extraCredentialPaths: string[] = [],
+): string | undefined {
+  if (!isAbsolute(path)) return 'must be an absolute path';
+  const p = resolve(path);
+  if (p === resolve('/')) return 'must not be the filesystem root';
+  if (p === resolve(home)) return 'must not be the home directory';
+  const creds = [...CREDENTIAL_PATHS.map((c) => join(home, c)), ...extraCredentialPaths].map((c) =>
+    resolve(c),
+  );
+  const hit = creds.find((c) => within(p, c) || within(c, p));
+  return hit ? `must not equal, contain or lie inside the credential location ${hit}` : undefined;
+}
 
 const roleSchema = z.strictObject({
   model: z.string().min(1),
@@ -56,6 +93,14 @@ export const studioConfigSchema = z.strictObject({
   crewToken: z.strictObject({ env: z.string().min(1) }).optional(),
   // Opt-in: let a crew run start without the least-privilege token (default: refuse).
   allowAmbientCredentials: z.boolean().default(false),
+  // Absolute directories the crew may read in addition to its clone, tmp dir and HOME (toolchains
+  // below the real home, e.g. a version manager). Default empty: crew uses system toolchains.
+  crewToolchainPaths: strList.superRefine((paths, ctx) => {
+    paths.forEach((path, index) => {
+      const problem = toolchainPathProblem(path, homedir());
+      if (problem) ctx.addIssue({ code: 'custom', path: [index], message: `${path}: ${problem}` });
+    });
+  }),
   ownerOnly: strList,
   deployCommands: strList,
   // Workflows (file name or name) a crew session may start with `gh workflow run`.

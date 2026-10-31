@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { dirname as dirnameOf, isAbsolute, join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { WorkItem } from '../src/board.js';
 import { type StudioConfig, studioConfigSchema } from '../src/config.js';
@@ -224,7 +224,9 @@ describe('writeBrief', () => {
 });
 
 describe('writeCrewSettings', () => {
-  const setup = (launcher: { env?: Record<string, string | undefined> } = {}) => {
+  const setup = (
+    launcher: { env?: Record<string, string | undefined>; toolchain?: string[] } = {},
+  ) => {
     const project = makeProject();
     const state = join(project, '.studio', 'state');
     const wt = join(state, 'clones', 'APP-12');
@@ -234,7 +236,7 @@ describe('writeCrewSettings', () => {
       state,
       item,
       wt,
-      config,
+      { ...config, crewToolchainPaths: launcher.toolchain ?? [] },
       { homeDir, tmpDir },
       { homedir: FAKE_HOME, env: launcher.env ?? {} },
     );
@@ -297,19 +299,20 @@ describe('writeCrewSettings', () => {
     expect(ctx.worktree).toBe(wt);
   });
 
-  it('allowRead adds PATH entries under the real home only; extras from GH_CONFIG_DIR and XDG', () => {
-    const tool = join(FAKE_HOME, '.tools', 'bin');
+  it('allowRead is exactly clone, tmp, HOME and crew_toolchain_paths; PATH never appears', () => {
+    const tool = join(FAKE_HOME, '.local', 'bin');
     mkdirSync(tool, { recursive: true });
-    const outside = join(root, 'outside-bin');
-    mkdirSync(outside, { recursive: true });
+    const onPath = join(FAKE_HOME, '.tools', 'bin');
+    mkdirSync(onPath, { recursive: true });
     const { wt, tmpDir, homeDir, state, s } = setup({
+      toolchain: [tool],
       env: {
-        PATH: [tool, outside, join(FAKE_HOME, 'missing')].join(':'),
+        PATH: [onPath, tool].join(':'),
         GH_CONFIG_DIR: '/cfg/gh-alt',
         XDG_CONFIG_HOME: '/xdg',
       },
     });
-    expect(s.sandbox.filesystem.allowRead).toEqual([wt, tmpDir, homeDir, realpathSync(tool)]);
+    expect(s.sandbox.filesystem.allowRead).toEqual([wt, tmpDir, homeDir, tool]);
     const deny = s.sandbox.filesystem.denyRead;
     expect(deny).toContain(FAKE_HOME);
     expect(deny).toEqual(
@@ -319,6 +322,15 @@ describe('writeCrewSettings', () => {
     expect(ctx.secretGlobs).toEqual(
       expect.arrayContaining(['/cfg/gh-alt', '/cfg/gh-alt/**', '/xdg/gh/**']),
     );
+  });
+
+  it('refuses toolchain paths that open credentials (launcher home and env extras)', () => {
+    for (const bad of [FAKE_HOME, join(FAKE_HOME, '.config'), join(FAKE_HOME, 'Library'), '/']) {
+      expect(() => setup({ toolchain: [bad] })).toThrow(/crew_toolchain_paths/);
+    }
+    expect(() =>
+      setup({ toolchain: ['/cfg/gh-alt/sub'], env: { GH_CONFIG_DIR: '/cfg/gh-alt' } }),
+    ).toThrow(/credential/);
   });
 
   it('rejects item ids that are unsafe in paths', () => {
@@ -548,6 +560,47 @@ describe('launchCrew', () => {
     await launchCrew(project, { ...item, id: 'APP-13' }, config, ports);
     const rec = JSON.parse(readFileSync(join(project, '.studio', 'state', 'crew.json'), 'utf8'));
     expect(Object.keys(rec).sort()).toEqual(['APP-12', 'APP-13']);
+  });
+});
+
+describe('toolchain paths at launch', () => {
+  it('rejects a toolchain path that is the project dir or one of its parents', async () => {
+    const project = makeProject();
+    for (const bad of [project, dirnameOf(project)]) {
+      const started: Started[] = [];
+      await expect(
+        launchCrew(project, item, { ...config, crewToolchainPaths: [bad] }, fakePorts(started)),
+      ).rejects.toThrow(/project directory/);
+      expect(started).toHaveLength(0);
+    }
+    expect(existsSync(join(project, '.studio'))).toBe(false);
+  });
+});
+
+describe('symlinked state directory', () => {
+  it('launch throws and deletes nothing when .studio is a symlink', async () => {
+    const project = makeProject();
+    const elsewhere = join(root, `elsewhere-${n++}`);
+    mkdirSync(join(elsewhere, 'state', 'homes', 'APP-12'), { recursive: true });
+    mkdirSync(join(elsewhere, 'state', 'clones', 'APP-12'), { recursive: true });
+    writeFileSync(join(elsewhere, 'state', 'homes', 'APP-12', 'keep'), 'x');
+    writeFileSync(join(elsewhere, 'state', 'clones', 'APP-12', 'keep'), 'x');
+    symlinkSync(elsewhere, join(project, '.studio'));
+    const started: Started[] = [];
+    await expect(launchCrew(project, item, config, fakePorts(started))).rejects.toThrow(/symlink/);
+    expect(started).toHaveLength(0);
+    expect(existsSync(join(elsewhere, 'state', 'homes', 'APP-12', 'keep'))).toBe(true);
+    expect(existsSync(join(elsewhere, 'state', 'clones', 'APP-12', 'keep'))).toBe(true);
+    await expect(prepareCheckout(project, item, realPorts())).rejects.toThrow(/symlink/);
+  });
+
+  it('refuses a symlinked clones directory', async () => {
+    const project = makeProject();
+    const elsewhere = join(root, `elsewhere-${n++}`);
+    mkdirSync(elsewhere);
+    mkdirSync(join(project, '.studio', 'state'), { recursive: true });
+    symlinkSync(elsewhere, join(project, '.studio', 'state', 'clones'));
+    await expect(prepareCheckout(project, item, realPorts())).rejects.toThrow(/symlink/);
   });
 });
 

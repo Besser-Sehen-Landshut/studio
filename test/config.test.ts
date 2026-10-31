@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ConfigError, configWarnings, loadConfig } from '../src/config.js';
@@ -128,6 +128,24 @@ describe('loadConfig', () => {
     expect(loadConfig(project(MINIMAL)).allowAmbientCredentials).toBe(false);
     const cfg = loadConfig(project(`${MINIMAL}allow_ambient_credentials: true\n`));
     expect(cfg.allowAmbientCredentials).toBe(true);
+  });
+
+  it('reads crew_toolchain_paths (default empty) and rejects unsafe ones', () => {
+    expect(loadConfig(project(MINIMAL)).crewToolchainPaths).toEqual([]);
+    const ok = loadConfig(project(`${MINIMAL}crew_toolchain_paths: ["${homedir()}/.local/bin"]\n`));
+    expect(ok.crewToolchainPaths).toEqual([`${homedir()}/.local/bin`]);
+    for (const bad of [
+      'relative/bin',
+      '/',
+      homedir(),
+      `${homedir()}/.config`,
+      `${homedir()}/Library`,
+      `${homedir()}/.ssh/x`,
+    ]) {
+      expect(() => loadConfig(project(`${MINIMAL}crew_toolchain_paths: ["${bad}"]\n`))).toThrow(
+        /crew_toolchain_paths/,
+      );
+    }
   });
 
   it('reports the file path on a missing file and on invalid YAML', () => {

@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -9,10 +10,10 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, delimiter, dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { WorkItem } from './board.js';
-import type { StudioConfig } from './config.js';
+import { CREDENTIAL_PATHS, type StudioConfig, toolchainPathProblem } from './config.js';
 import { DEFAULT_SECRET_GLOBS } from './guard.js';
 import type { Ports } from './ports.js';
 
@@ -68,6 +69,7 @@ export async function prepareCheckout(
   ports: Ports,
 ): Promise<{ path: string; branch: string }> {
   assertItemId(item.id);
+  assertSafeState(projectDir);
   const path = join(stateDirOf(projectDir), 'clones', item.id);
   const branch = `studio/${item.id}`;
   if (cloneBranch(path) === branch) return { path, branch };
@@ -100,26 +102,72 @@ export interface LauncherEnv {
   env?: Record<string, string | undefined>;
 }
 
-/** PATH entries (resolved) that lie under the real home, e.g. version-managed toolchains. */
-function pathEntriesUnder(realHome: string, pathVar: string | undefined): string[] {
-  const homes = [realHome];
+const within = (child: string, parent: string): boolean =>
+  child === parent || child.startsWith(parent + sep);
+
+/** Resolved variants of a path (literal and, when it exists, its realpath). */
+function variants(p: string): string[] {
+  const out = [resolve(p)];
   try {
-    homes.push(realpathSync(realHome));
+    out.push(realpathSync(p));
   } catch {
-    // keep the literal path only
-  }
-  const out: string[] = [];
-  for (const entry of (pathVar ?? '').split(delimiter)) {
-    if (!entry) continue;
-    let real: string;
-    try {
-      real = realpathSync(entry);
-    } catch {
-      continue;
-    }
-    if (homes.some((h) => real.startsWith(h + sep)) && !out.includes(real)) out.push(real);
+    // does not exist: the literal path is all there is
   }
   return out;
+}
+
+/**
+ * Fails closed on toolchain read paths that would open credentials or the owner's project: the
+ * config check (home, credential locations) is repeated with the launcher's home and env extras,
+ * and a path that is the project directory or one of its parents is refused.
+ */
+function assertToolchainPaths(
+  paths: string[],
+  home: string,
+  extraCredentialPaths: string[],
+  projectDir?: string,
+): void {
+  const projects = projectDir ? variants(projectDir) : [];
+  for (const path of paths) {
+    const problem = toolchainPathProblem(path, home, extraCredentialPaths);
+    if (problem) throw new Error(`crew_toolchain_paths: ${path}: ${problem}`);
+    if (variants(path).some((v) => projects.some((pr) => within(pr, v)))) {
+      throw new Error(
+        `crew_toolchain_paths: ${path}: must not be the project directory or a parent`,
+      );
+    }
+  }
+}
+
+/**
+ * Refuses a state directory that is, or sits behind, a symlink (a merged PR could commit `.studio`
+ * as a link) before anything below it is deleted or written.
+ */
+function assertSafeState(projectDir: string): void {
+  const state = stateDirOf(projectDir);
+  for (const p of [
+    join(projectDir, '.studio'),
+    state,
+    join(state, 'clones'),
+    join(state, 'homes'),
+    join(state, 'tmp'),
+  ]) {
+    let link = false;
+    try {
+      link = lstatSync(p).isSymbolicLink();
+    } catch {
+      continue; // does not exist yet
+    }
+    if (link) throw new Error(`refusing to use ${p}: it is a symlink`);
+  }
+  try {
+    const real = realpathSync(state);
+    if (!within(real, realpathSync(projectDir))) {
+      throw new Error(`refusing to use ${state}: it resolves outside the project`);
+    }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+  }
 }
 
 const list = (xs: string[]): string => (xs.length > 0 ? xs.join(', ') : '(none)');
@@ -227,11 +275,12 @@ export function writeCrewSettings(
     );
   }
   const credentialPaths = [...CREDENTIAL_PATHS.map((p) => join(realHome, p)), ...extraSecret];
+  assertToolchainPaths(config.crewToolchainPaths, realHome, extraSecret);
   // Sandbox reads: the whole real home is denied, then only these are let back in: the clone, the
-  // crew tmp dir, the crew HOME and every PATH entry below the real home (version-managed
-  // toolchains). Credential locations stay listed explicitly as a second net.
+  // crew tmp dir, the crew HOME and the configured crew_toolchain_paths. Nothing is derived from
+  // PATH. Credential locations stay listed explicitly as a second net.
   const denyRead = [realHome, ...credentialPaths];
-  const allowRead = [clone, dirs.tmpDir, dirs.homeDir, ...pathEntriesUnder(realHome, env.PATH)];
+  const allowRead = [clone, dirs.tmpDir, dirs.homeDir, ...config.crewToolchainPaths];
   const ctxFile = join(stateDir, 'guard', `${id}.json`);
   const ctx = {
     worktree: clone,
@@ -272,18 +321,6 @@ export function writeCrewSettings(
   writeFileAtomic(file, `${JSON.stringify(settings, null, 2)}\n`);
   return file;
 }
-
-/** Credential locations below the real home that a crew session must never read. */
-const CREDENTIAL_PATHS = [
-  '.config/gh',
-  '.git-credentials',
-  '.ssh',
-  '.netrc',
-  '.gnupg',
-  '.aws',
-  '.docker/config.json',
-  'Library/Keychains',
-];
 
 const GITCONFIG = `[user]
 \tname = Studio Crew
@@ -352,6 +389,8 @@ export async function launchCrew(
         : 'crew_token is not configured; refusing to launch without a least-privilege token (or set allow_ambient_credentials: true)',
     );
   }
+  assertToolchainPaths(config.crewToolchainPaths, launcher.homedir ?? homedir(), [], projectDir);
+  assertSafeState(projectDir);
   const stateDir = stateDirOf(projectDir);
   const wt = await prepareCheckout(projectDir, item, ports);
   // Isolated HOME, recreated from scratch on every launch: only a git identity and a credential
