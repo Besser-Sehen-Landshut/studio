@@ -268,36 +268,87 @@ export function writeStateFile(root: string, file: string, content: string): voi
 export interface StateLock {
   /** Removes the lock file if it still is this holder's. */
   release(): void;
-  /** Set when a stale lock of another holder was broken: its age in ms. */
-  brokeStaleMs?: number;
+  /** Records that the holder is still working (no-op once the lock is no longer its own). */
+  heartbeat(now: Date): void;
+  /** Set when another holder's stale lock was broken: why it counted as stale. */
+  broke?: string;
 }
 
-function readLockToken(file: string): string | undefined {
+interface LockBody {
+  token?: unknown;
+  pid?: unknown;
+  startedAt?: unknown;
+  heartbeat?: unknown;
+}
+
+function readLockBody(file: string): LockBody | undefined {
   try {
-    const st = lstatSync(file);
-    if (!st.isFile()) return undefined;
-    const token = (JSON.parse(readFileSync(file, 'utf8')) as { token?: unknown }).token;
-    return typeof token === 'string' ? token : undefined;
+    if (!lstatSync(file).isFile()) return undefined;
+    const body = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+    return body !== null && typeof body === 'object' ? (body as LockBody) : undefined;
   } catch {
     return undefined;
   }
 }
 
+const tokenOf = (file: string): unknown => readLockBody(file)?.token;
+
+/** Whether a process with this pid exists (EPERM: exists, owned by someone else). */
+export function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** Why an existing lock is stale, or undefined while its holder counts as alive. */
+function staleReason(
+  body: LockBody | undefined,
+  mtimeMs: number,
+  now: Date,
+  heartbeatStaleMs: number,
+): string | undefined {
+  const minutes = (ms: number) => `${Math.round(ms / 60_000)} min`;
+  if (body === undefined) {
+    // Possibly being written right now: only an old unreadable lock is stale.
+    const age = now.getTime() - mtimeMs;
+    return age >= heartbeatStaleMs ? `unreadable lock, ${minutes(age)} old` : undefined;
+  }
+  if (typeof body.pid === 'number' && Number.isInteger(body.pid) && body.pid > 0) {
+    if (!pidAlive(body.pid)) return `holder pid ${body.pid} is not running`;
+  }
+  const beat = typeof body.heartbeat === 'string' ? Date.parse(body.heartbeat) : Number.NaN;
+  const age = now.getTime() - (Number.isNaN(beat) ? mtimeMs : beat);
+  return age >= heartbeatStaleMs ? `last heartbeat ${minutes(age)} ago` : undefined;
+}
+
 /**
- * Exclusive lock file `<root>/<name>`, created with O_CREAT|O_EXCL|O_NOFOLLOW (an existing entry,
- * a symlink included, is never followed or overwritten). Returns undefined while another holder's
- * lock is younger than `staleMs`; an older one is broken (moved aside, then removed) and reported
- * through `brokeStaleMs`. Anything at the lock path that is not a regular file is refused.
+ * Exclusive lock file `<root>/<name>` holding `{pid, startedAt, heartbeat, token}`, created with
+ * O_CREAT|O_EXCL|O_NOFOLLOW (an existing entry, a symlink included, is never followed or
+ * overwritten). An existing lock is stale only when its pid is not running or its heartbeat is
+ * older than `heartbeatStaleMs`; then it is broken (moved aside, checked, removed) and the reason
+ * reported through `broke`. Otherwise undefined is returned. Anything at the lock path that is not
+ * a regular file is refused. A lock that vanishes between the create and the check is retried.
  */
 export function acquireStateLock(
   root: string,
   name: string,
-  opts: { now: Date; staleMs: number },
+  opts: {
+    now: Date;
+    heartbeatStaleMs: number;
+    lstat?: (p: string) => { isFile(): boolean; mtimeMs: number };
+  },
 ): StateLock | undefined {
   const file = join(root, name);
   ensureStateDir(root, dirname(file));
   assertStatePath(root, file);
+  const lstat = opts.lstat ?? lstatSync;
   const token = randomBytes(16).toString('hex');
+  const startedAt = opts.now.toISOString();
+  const body = (beat: Date) =>
+    `${JSON.stringify({ pid: process.pid, startedAt, heartbeat: beat.toISOString(), token })}\n`;
   const create = (): boolean => {
     let fd: number;
     try {
@@ -311,36 +362,50 @@ export function acquireStateLock(
       throw err;
     }
     try {
-      writeSync(fd, `${JSON.stringify({ pid: process.pid, at: opts.now.toISOString(), token })}\n`);
+      writeSync(fd, body(opts.now));
     } finally {
       closeSync(fd);
     }
     return true;
   };
-  const release = () => {
-    if (readLockToken(file) === token) unlinkSync(file);
-  };
-  if (create()) return { release };
-  const st = lstatSync(file);
-  if (!st.isFile()) throw new Error(`refusing lock ${file}: it is not a regular file`);
-  const age = opts.now.getTime() - st.mtimeMs;
-  if (age < opts.staleMs) return undefined;
-  // Move the stale lock aside first; if what was moved is not the stale file any more (another
-  // process broke it and took the lock in between), put it back and report the lock as held.
-  const staleToken = readLockToken(file);
-  const aside = `${file}.${randomBytes(4).toString('hex')}.stale`;
-  try {
-    renameSync(file, aside);
-  } catch {
-    return undefined;
+  const lock = (broke?: string): StateLock => ({
+    release: () => {
+      if (tokenOf(file) === token) unlinkSync(file);
+    },
+    heartbeat: (now: Date) => {
+      if (tokenOf(file) === token) writeStateFile(root, file, body(now));
+    },
+    ...(broke === undefined ? {} : { broke }),
+  });
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (create()) return lock();
+    let st: { isFile(): boolean; mtimeMs: number };
+    try {
+      st = lstat(file);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue; // released meanwhile
+      throw err;
+    }
+    if (!st.isFile()) throw new Error(`refusing lock ${file}: it is not a regular file`);
+    const existing = readLockBody(file);
+    const reason = staleReason(existing, st.mtimeMs, opts.now, opts.heartbeatStaleMs);
+    if (reason === undefined) return undefined;
+    // Move the stale lock aside first; if what was moved is not the stale file any more (another
+    // process broke it and took the lock in between), put it back and report the lock as held.
+    const aside = `${file}.${randomBytes(4).toString('hex')}.stale`;
+    try {
+      renameSync(file, aside);
+    } catch {
+      continue;
+    }
+    if (tokenOf(aside) !== existing?.token) {
+      renameSync(aside, file);
+      return undefined;
+    }
+    unlinkSync(aside);
+    return create() ? lock(reason) : undefined;
   }
-  if (readLockToken(aside) !== staleToken) {
-    renameSync(aside, file);
-    return undefined;
-  }
-  unlinkSync(aside);
-  if (!create()) return undefined;
-  return { release, brokeStaleMs: age };
+  return undefined;
 }
 
 /** Literal and (when it exists) real variant of a path, case-folded for comparison. */

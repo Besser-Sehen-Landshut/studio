@@ -28,6 +28,7 @@ import {
   writeStateFile,
 } from './paths.js';
 import type { Ports } from './ports.js';
+import { readCrewRecords } from './state.js';
 
 export const crewName = (item: WorkItem): string => `studio-${item.role}-${item.id.toLowerCase()}`;
 
@@ -493,6 +494,19 @@ export async function launchCrew(
   });
   for (const sub of ['clones', 'homes', 'tmp']) {
     assertStatePath(stateRoot, join(stateRoot, sub, item.id));
+  }
+  // Two crews on one item would share the clone and the report: refuse while one still runs.
+  // A crew.json that cannot be read refuses too (fail closed).
+  const previous = readCrewRecords(stateRoot)[item.id];
+  if (previous !== undefined) {
+    if (!Number.isInteger(previous.pid) || previous.pid <= 0) {
+      throw new Error(`crew record for ${item.id} has no valid pid; refusing to launch`);
+    }
+    if (ports.claude.alive(previous.pid)) {
+      throw new Error(
+        `crew ${previous.name} for ${item.id} is still running (pid ${previous.pid}); stop it first`,
+      );
+    }
   }
   // First side effect: bind the state root to this project and origin (or refuse a mismatch).
   checkStateMarker(stateRoot, {

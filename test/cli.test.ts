@@ -687,6 +687,23 @@ describe('studio CLI', () => {
     expect(existsSync(join(fx.state, 'queue.run.lock'))).toBe(false);
   });
 
+  it('R83: queue run refreshes the lock heartbeat while it works and releases the lock', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    let lock: { pid: number; startedAt: string; heartbeat: string } | undefined;
+    const { gh } = passingGh((l) => {
+      if (l.startsWith('pr merge 5')) {
+        lock = JSON.parse(readFileSync(join(fx.state, 'queue.run.lock'), 'utf8'));
+      }
+    });
+    const { ports } = fakePorts(gh);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+    expect((await cli(fx, ports, 'queue', 'run')).code).toBe(0);
+    expect(lock?.pid).toBe(process.pid);
+    // the capacity double read slept 30 s on the (fake) clock: the heartbeat moved on
+    expect(Date.parse(lock?.heartbeat ?? '')).toBeGreaterThan(Date.parse(lock?.startedAt ?? ''));
+    expect(existsSync(join(fx.state, 'queue.run.lock'))).toBe(false);
+  });
+
   it('R79: the board moves right after each entry, and an entry added mid-run is merged', async () => {
     const fx = makeFx([
       { id: 'APP-1', status: 'in_review', pr: 5 },

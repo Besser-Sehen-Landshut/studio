@@ -10,6 +10,7 @@ import type { Ports } from './ports.js';
 import {
   acquireQueueRunLock,
   enqueue,
+  installSignalRelease,
   loadQueue,
   type QueueDone,
   type QueueState,
@@ -339,6 +340,20 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           const root = await boundStateRoot();
           const log = (m: string) => stderr(`${m}\n`);
           const lock = acquireQueueRunLock(root, ports.clock.now(), log);
+          const removeSignals = installSignalRelease(lock);
+          const beat = () => lock.heartbeat(ports.clock.now());
+          // Every poll and every wait of the queue goes through this clock: each one is a heartbeat.
+          const runPorts: Ports = {
+            ...ports,
+            clock: {
+              now: () => ports.clock.now(),
+              sleep: async (ms) => {
+                beat();
+                await ports.clock.sleep(ms);
+                beat();
+              },
+            },
+          };
           try {
             const state = loadQueue(root);
             reconcileQueued(project, state, ports, stderr);
@@ -346,13 +361,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             await runQueue(
               state,
               config,
-              ports,
+              runPorts,
               // The runner owns `current` and `done`; `pending` stays whatever is on disk.
-              (q) =>
+              (q) => {
+                beat();
                 updateQueue(root, (disk) => {
                   disk.current = q.current;
                   disk.done = q.done;
-                }),
+                });
+              },
               {
                 stateRoot: root,
                 log,
@@ -367,6 +384,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               done: finished,
             });
           } finally {
+            removeSignals();
             lock.release();
           }
           return 0;

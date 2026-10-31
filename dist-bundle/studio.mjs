@@ -28063,15 +28063,15 @@ function configWarnings(config2) {
 // src/crew.ts
 import {
   chmodSync as chmodSync2,
-  existsSync as existsSync2,
-  lstatSync as lstatSync2,
-  readFileSync as readFileSync4,
+  existsSync as existsSync3,
+  lstatSync as lstatSync3,
+  readFileSync as readFileSync5,
   realpathSync as realpathSync2,
   unlinkSync as unlinkSync2,
-  writeFileSync as writeFileSync3
+  writeFileSync as writeFileSync4
 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { basename as basename2, dirname as dirname2, join as join4, resolve as resolve3, sep as sep3 } from "node:path";
+import { basename as basename2, dirname as dirname2, join as join5, resolve as resolve3, sep as sep3 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/guard.ts
@@ -28286,21 +28286,46 @@ function writeStateFile(root, file2, content) {
   writeFileSync2(tmp, content, { mode: 384, flag: "wx" });
   renameSync2(tmp, file2);
 }
-function readLockToken(file2) {
+function readLockBody(file2) {
   try {
-    const st = lstatSync(file2);
-    if (!st.isFile()) return void 0;
-    const token = JSON.parse(readFileSync3(file2, "utf8")).token;
-    return typeof token === "string" ? token : void 0;
+    if (!lstatSync(file2).isFile()) return void 0;
+    const body = JSON.parse(readFileSync3(file2, "utf8"));
+    return body !== null && typeof body === "object" ? body : void 0;
   } catch {
     return void 0;
   }
+}
+var tokenOf = (file2) => readLockBody(file2)?.token;
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+function staleReason(body, mtimeMs, now, heartbeatStaleMs) {
+  const minutes = (ms) => `${Math.round(ms / 6e4)} min`;
+  if (body === void 0) {
+    const age2 = now.getTime() - mtimeMs;
+    return age2 >= heartbeatStaleMs ? `unreadable lock, ${minutes(age2)} old` : void 0;
+  }
+  if (typeof body.pid === "number" && Number.isInteger(body.pid) && body.pid > 0) {
+    if (!pidAlive(body.pid)) return `holder pid ${body.pid} is not running`;
+  }
+  const beat = typeof body.heartbeat === "string" ? Date.parse(body.heartbeat) : Number.NaN;
+  const age = now.getTime() - (Number.isNaN(beat) ? mtimeMs : beat);
+  return age >= heartbeatStaleMs ? `last heartbeat ${minutes(age)} ago` : void 0;
 }
 function acquireStateLock(root, name, opts) {
   const file2 = join3(root, name);
   ensureStateDir(root, dirname(file2));
   assertStatePath(root, file2);
+  const lstat = opts.lstat ?? lstatSync;
   const token = randomBytes(16).toString("hex");
+  const startedAt = opts.now.toISOString();
+  const body = (beat) => `${JSON.stringify({ pid: process.pid, startedAt, heartbeat: beat.toISOString(), token })}
+`;
   const create = () => {
     let fd;
     try {
@@ -28314,35 +28339,48 @@ function acquireStateLock(root, name, opts) {
       throw err;
     }
     try {
-      writeSync(fd, `${JSON.stringify({ pid: process.pid, at: opts.now.toISOString(), token })}
-`);
+      writeSync(fd, body(opts.now));
     } finally {
       closeSync(fd);
     }
     return true;
   };
-  const release = () => {
-    if (readLockToken(file2) === token) unlinkSync(file2);
-  };
-  if (create()) return { release };
-  const st = lstatSync(file2);
-  if (!st.isFile()) throw new Error(`refusing lock ${file2}: it is not a regular file`);
-  const age = opts.now.getTime() - st.mtimeMs;
-  if (age < opts.staleMs) return void 0;
-  const staleToken = readLockToken(file2);
-  const aside = `${file2}.${randomBytes(4).toString("hex")}.stale`;
-  try {
-    renameSync2(file2, aside);
-  } catch {
-    return void 0;
+  const lock = (broke2) => ({
+    release: () => {
+      if (tokenOf(file2) === token) unlinkSync(file2);
+    },
+    heartbeat: (now) => {
+      if (tokenOf(file2) === token) writeStateFile(root, file2, body(now));
+    },
+    ...broke2 === void 0 ? {} : { broke: broke2 }
+  });
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (create()) return lock();
+    let st;
+    try {
+      st = lstat(file2);
+    } catch (err) {
+      if (err.code === "ENOENT") continue;
+      throw err;
+    }
+    if (!st.isFile()) throw new Error(`refusing lock ${file2}: it is not a regular file`);
+    const existing = readLockBody(file2);
+    const reason = staleReason(existing, st.mtimeMs, opts.now, opts.heartbeatStaleMs);
+    if (reason === void 0) return void 0;
+    const aside = `${file2}.${randomBytes(4).toString("hex")}.stale`;
+    try {
+      renameSync2(file2, aside);
+    } catch {
+      continue;
+    }
+    if (tokenOf(aside) !== existing?.token) {
+      renameSync2(aside, file2);
+      return void 0;
+    }
+    unlinkSync(aside);
+    return create() ? lock(reason) : void 0;
   }
-  if (readLockToken(aside) !== staleToken) {
-    renameSync2(aside, file2);
-    return void 0;
-  }
-  unlinkSync(aside);
-  if (!create()) return void 0;
-  return { release, brokeStaleMs: age };
+  return void 0;
 }
 function keys(p, platform2) {
   const out = [pathKey(resolve2(p), platform2)];
@@ -28399,6 +28437,107 @@ function credentialLocations(home, env) {
   return { all: [...CREDENTIAL_PATHS.map((p) => join3(home, p)), ...extra], extra };
 }
 
+// src/state.ts
+import { randomBytes as randomBytes2 } from "node:crypto";
+import { existsSync as existsSync2, lstatSync as lstatSync2, readFileSync as readFileSync4, renameSync as renameSync3, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join4 } from "node:path";
+var defaultWriteFile = (path10, content) => writeFileSync3(path10, content, { mode: 384, flag: "wx" });
+function writeState(stateRoot, snapshot, deps = {}) {
+  const file2 = join4(stateRoot, "state.json");
+  ensureStateDir(stateRoot, stateRoot);
+  assertStatePath(stateRoot, file2);
+  const tmp = `${file2}.${process.pid}.${randomBytes2(6).toString("hex")}.tmp`;
+  try {
+    (deps.writeFile ?? defaultWriteFile)(tmp, `${JSON.stringify(snapshot, null, 2)}
+`);
+    renameSync3(tmp, file2);
+  } catch (err) {
+    rmSync3(tmp, { force: true });
+    throw err;
+  }
+}
+function existsNoLink(file2) {
+  try {
+    if (lstatSync2(file2).isSymbolicLink()) {
+      throw new Error(`refusing to read ${file2}: it is a symlink`);
+    }
+    return true;
+  } catch (err) {
+    if (err.code === "ENOENT") return false;
+    throw err;
+  }
+}
+function readCrewRecords(stateRoot) {
+  const file2 = join4(stateRoot, "crew.json");
+  assertStatePath(stateRoot, file2);
+  if (!existsNoLink(file2)) return {};
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync4(file2, "utf8"));
+  } catch {
+    throw new Error(`crew file ${file2} is not valid JSON`);
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`crew file ${file2} is not a JSON object`);
+  }
+  return raw;
+}
+function readMetricEvents(stateRoot) {
+  const file2 = join4(stateRoot, "metrics.jsonl");
+  assertStatePath(stateRoot, file2);
+  if (!existsSync2(file2) || !existsNoLink(file2)) return [];
+  const events = [];
+  for (const line of readFileSync4(file2, "utf8").split("\n")) {
+    if (line.trim() === "") continue;
+    try {
+      events.push(JSON.parse(line));
+    } catch {
+    }
+  }
+  return events;
+}
+var HOUR_MS = 36e5;
+var asTime = (v) => {
+  if (typeof v !== "string") return void 0;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? void 0 : t;
+};
+function computeMetrics(events) {
+  const leadTimes = [];
+  const perDay = {};
+  let mergedTotal = 0;
+  let deployedTotal = 0;
+  for (const raw of events) {
+    if (raw === null || typeof raw !== "object") continue;
+    const ev = raw;
+    if (ev.type !== "merged" && ev.type !== "deployed") continue;
+    const at = asTime(ev.at);
+    if (at === void 0) continue;
+    const day = new Date(at).toISOString().slice(0, 10);
+    const counts = perDay[day] ?? { merged: 0, deployed: 0 };
+    perDay[day] = counts;
+    if (ev.type === "deployed") {
+      counts.deployed++;
+      deployedTotal++;
+      continue;
+    }
+    counts.merged++;
+    mergedTotal++;
+    const first = asTime(ev.firstCommitAt);
+    if (first === void 0) continue;
+    leadTimes.push({
+      item: typeof ev.item === "string" ? ev.item : null,
+      pr: typeof ev.pr === "number" ? ev.pr : null,
+      at: new Date(at).toISOString(),
+      leadTimeHours: Math.max(0, (at - first) / HOUR_MS)
+    });
+  }
+  const sorted = leadTimes.map((l) => l.leadTimeHours).sort((a2, b) => a2 - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length === 0 ? null : sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  return { leadTimes, medianLeadTimeHours: median, perDay, mergedTotal, deployedTotal };
+}
+
 // src/crew.ts
 var crewName = (item) => `studio-${item.role}-${item.id.toLowerCase()}`;
 var GUARD_BIN = resolve3(
@@ -28425,7 +28564,7 @@ function githubHttpsUrl(repo) {
 }
 function cloneBranch(path10) {
   try {
-    const head = readFileSync4(join4(path10, ".git", "HEAD"), "utf8").trim();
+    const head = readFileSync5(join5(path10, ".git", "HEAD"), "utf8").trim();
     return /^ref: refs\/heads\/(.+)$/.exec(head)?.[1];
   } catch {
     return void 0;
@@ -28433,8 +28572,8 @@ function cloneBranch(path10) {
 }
 async function prepareCheckout(stateRoot, projectDir, item, ports) {
   assertItemId(item.id);
-  const clones = ensureStateDir(stateRoot, join4(stateRoot, "clones"));
-  const path10 = join4(clones, item.id);
+  const clones = ensureStateDir(stateRoot, join5(stateRoot, "clones"));
+  const path10 = join5(clones, item.id);
   const branch = `studio/${item.id}`;
   const crewOrigin = githubHttpsUrl(item.repo);
   assertStatePath(stateRoot, path10);
@@ -28457,11 +28596,11 @@ function removeOldReport(stateRoot, clone2, id) {
   assertItemId(id);
   let cur = clone2;
   for (const seg of [".studio", "reports", `${id}.md`]) {
-    cur = join4(cur, seg);
+    cur = join5(cur, seg);
     assertStatePath(stateRoot, cur);
     let st;
     try {
-      st = lstatSync2(cur);
+      st = lstatSync3(cur);
     } catch {
       return;
     }
@@ -28478,19 +28617,19 @@ function removeOldReport(stateRoot, clone2, id) {
 }
 function isLink2(p) {
   try {
-    return lstatSync2(p).isSymbolicLink();
+    return lstatSync3(p).isSymbolicLink();
   } catch {
     return false;
   }
 }
 function writeHomeFile(homeDir, name, content) {
-  const target = join4(homeDir, name);
+  const target = join5(homeDir, name);
   const realHome = realpathSync2(homeDir);
   const parent = realpathSync2(dirname2(target));
   if (parent !== realHome && !parent.startsWith(realHome + sep3)) {
     throw new Error(`refusing to write outside the crew home: ${target}`);
   }
-  writeFileSync3(join4(parent, basename2(target)), content, { flag: "wx" });
+  writeFileSync4(join5(parent, basename2(target)), content, { flag: "wx" });
 }
 var unique = (xs) => [...new Set(xs)];
 function realOr(p) {
@@ -28509,8 +28648,8 @@ function writeBrief(stateRoot, item, config2, projectDir) {
     "studio:studio-crew",
     ...skills.required.filter((s) => s !== "studio:studio-crew")
   ];
-  const roleFile = join4(projectDir, ".studio", "roles", `${item.role}.md`);
-  const roleBrief = existsSync2(roleFile) ? readFileSync4(roleFile, "utf8").trim() : "";
+  const roleFile = join5(projectDir, ".studio", "roles", `${item.role}.md`);
+  const roleBrief = existsSync3(roleFile) ? readFileSync5(roleFile, "utf8").trim() : "";
   const id = item.id;
   const opensPr = item.type !== "review" && item.type !== "research";
   const lines = [
@@ -28585,7 +28724,7 @@ function writeBrief(stateRoot, item, config2, projectDir) {
     "The body says what changed and how it was verified.",
     ""
   ];
-  const file2 = join4(stateRoot, "briefs", `${id}.md`);
+  const file2 = join5(stateRoot, "briefs", `${id}.md`);
   writeStateFile(stateRoot, file2, lines.join("\n"));
   return file2;
 }
@@ -28606,11 +28745,11 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
   const stateBase = dirname2(stateRoot);
   const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase)]);
   const allowRead = [clone2, dirs.tmpDir, dirs.homeDir, ...toolchain];
-  const ctxFile = join4(stateRoot, "guard", `${id}.json`);
+  const ctxFile = join5(stateRoot, "guard", `${id}.json`);
   const protectedPaths = [
     ctxFile,
-    ...STATE_PROTECTED_DIRS.map((d) => join4(stateRoot, d)),
-    ...STATE_FILES.map((f) => join4(stateRoot, f))
+    ...STATE_PROTECTED_DIRS.map((d) => join5(stateRoot, d)),
+    ...STATE_FILES.map((f) => join5(stateRoot, f))
   ];
   const ctx = {
     worktree: clone2,
@@ -28658,7 +28797,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
       network: { allowedDomains: config2.sandbox.networkAllow, strictAllowlist: true }
     }
   };
-  const file2 = join4(stateRoot, "settings", `${id}.json`);
+  const file2 = join5(stateRoot, "settings", `${id}.json`);
   writeStateFile(stateRoot, file2, `${JSON.stringify(settings, null, 2)}
 `);
   return file2;
@@ -28674,7 +28813,7 @@ var BASE_ENV = ["PATH", "LANG", "TERM", "USER"];
 var PASS_THROUGH_ENV = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
 function readCrewFile(file2) {
   try {
-    return JSON.parse(readFileSync4(file2, "utf8"));
+    return JSON.parse(readFileSync5(file2, "utf8"));
   } catch {
     return {};
   }
@@ -28720,7 +28859,18 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     extraCredentialPaths: credentialLocations(home, penv).extra
   });
   for (const sub of ["clones", "homes", "tmp"]) {
-    assertStatePath(stateRoot, join4(stateRoot, sub, item.id));
+    assertStatePath(stateRoot, join5(stateRoot, sub, item.id));
+  }
+  const previous = readCrewRecords(stateRoot)[item.id];
+  if (previous !== void 0) {
+    if (!Number.isInteger(previous.pid) || previous.pid <= 0) {
+      throw new Error(`crew record for ${item.id} has no valid pid; refusing to launch`);
+    }
+    if (ports.claude.alive(previous.pid)) {
+      throw new Error(
+        `crew ${previous.name} for ${item.id} is still running (pid ${previous.pid}); stop it first`
+      );
+    }
   }
   checkStateMarker(stateRoot, {
     projectRealpath: projectRealpath(projectDir),
@@ -28728,11 +28878,11 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
   });
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
-  const homeDir = join4(stateRoot, "homes", item.id);
+  const homeDir = join5(stateRoot, "homes", item.id);
   removeStateEntry(stateRoot, homeDir);
   ensureStateDir(stateRoot, homeDir);
   writeHomeFile(homeDir, ".gitconfig", GITCONFIG);
-  const tmpDir = join4(stateRoot, "tmp", item.id);
+  const tmpDir = join5(stateRoot, "tmp", item.id);
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
   const brief = writeBrief(stateRoot, item, config2, projectDir);
@@ -28744,10 +28894,10 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     { homeDir, tmpDir, projectDir, toolchainPaths },
     owner
   );
-  const mcpConfig = join4(stateRoot, "settings", `${item.id}.mcp.json`);
+  const mcpConfig = join5(stateRoot, "settings", `${item.id}.mcp.json`);
   writeStateFile(stateRoot, mcpConfig, `${JSON.stringify({ mcpServers: {} })}
 `);
-  const settingsEnv = JSON.parse(readFileSync4(settings, "utf8")).env;
+  const settingsEnv = JSON.parse(readFileSync5(settings, "utf8")).env;
   const env = {};
   for (const k of BASE_ENV) {
     const v = penv[k];
@@ -28755,14 +28905,14 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
   }
   env.HOME = homeDir;
   env.TMPDIR = tmpDir;
-  env.CLAUDE_CONFIG_DIR = penv.CLAUDE_CONFIG_DIR || join4(home, ".claude");
+  env.CLAUDE_CONFIG_DIR = penv.CLAUDE_CONFIG_DIR || join5(home, ".claude");
   for (const k of PASS_THROUGH_ENV) {
     const v = penv[k];
     if (v) env[k] = v;
   }
   Object.assign(env, settingsEnv);
   if (token) env.GH_TOKEN = token;
-  const log = join4(stateRoot, "logs", `${item.id}.jsonl`);
+  const log = join5(stateRoot, "logs", `${item.id}.jsonl`);
   ensureStateDir(stateRoot, dirname2(log));
   const { pid } = await ports.claude.start(
     wt.path,
@@ -28794,7 +28944,7 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     log,
     startedAt: ports.clock.now().toISOString()
   };
-  await updateCrewFile(stateRoot, join4(stateRoot, "crew.json"), (all) => {
+  await updateCrewFile(stateRoot, join5(stateRoot, "crew.json"), (all) => {
     all[item.id] = record2;
   });
   return { name, pid, log };
@@ -28907,8 +29057,9 @@ function planAssignments(board, config2, capacity, running) {
 }
 
 // src/queue.ts
-import { existsSync as existsSync3, lstatSync as lstatSync3, readFileSync as readFileSync5 } from "node:fs";
-import { join as join5 } from "node:path";
+import { existsSync as existsSync4, lstatSync as lstatSync4, readFileSync as readFileSync6 } from "node:fs";
+import { constants as osConstants } from "node:os";
+import { join as join6 } from "node:path";
 var CHECKS_POLL_MS = 3e4;
 var CAPACITY_WAIT_MS = 6e4;
 var QUEUE_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
@@ -28933,16 +29084,16 @@ var stateSchema = external_exports.strictObject({
     })
   )
 });
-var queueFile = (stateRoot) => join5(stateRoot, "queue.json");
+var queueFile = (stateRoot) => join6(stateRoot, "queue.json");
 function loadQueue(stateRoot) {
   const file2 = queueFile(stateRoot);
   assertStatePath(stateRoot, file2);
-  if (!existsSync3(file2)) return { pending: [], done: [] };
-  if (lstatSync3(file2).isSymbolicLink())
+  if (!existsSync4(file2)) return { pending: [], done: [] };
+  if (lstatSync4(file2).isSymbolicLink())
     throw new Error(`refusing to read ${file2}: it is a symlink`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync5(file2, "utf8"));
+    raw = JSON.parse(readFileSync6(file2, "utf8"));
   } catch {
     throw new Error(`queue file ${file2} is not valid JSON`);
   }
@@ -28957,7 +29108,7 @@ function saveQueue(stateRoot, q) {
 var FILE_LOCK = "queue.json.lock";
 var RUN_LOCK = "queue.run.lock";
 var FILE_LOCK_STALE_MS = 3e4;
-var RUN_LOCK_STALE_MS = 6 * 60 * 60 * 1e3;
+var RUN_LOCK_HEARTBEAT_STALE_MS = 15 * 60 * 1e3;
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -28967,7 +29118,7 @@ function updateQueue(stateRoot, mutate, opts = {}) {
   for (; ; ) {
     lock = acquireStateLock(stateRoot, FILE_LOCK, {
       now: /* @__PURE__ */ new Date(),
-      staleMs: FILE_LOCK_STALE_MS
+      heartbeatStaleMs: FILE_LOCK_STALE_MS
     });
     if (lock) break;
     if (Date.now() >= until) throw new Error(`queue file is locked (${FILE_LOCK}); try again`);
@@ -29000,23 +29151,43 @@ function takeNextPending(stateRoot) {
   });
 }
 function acquireQueueRunLock(stateRoot, now, log) {
-  const lock = acquireStateLock(stateRoot, RUN_LOCK, { now, staleMs: RUN_LOCK_STALE_MS });
+  const lock = acquireStateLock(stateRoot, RUN_LOCK, {
+    now,
+    heartbeatStaleMs: RUN_LOCK_HEARTBEAT_STALE_MS
+  });
   if (!lock) throw new Error(`queue already running (lock ${RUN_LOCK} in the state root)`);
-  if (lock.brokeStaleMs !== void 0) {
-    const hours = (lock.brokeStaleMs / 36e5).toFixed(1);
-    log(`note: broke a stale queue lock (${hours} h old); a previous run did not finish`);
+  if (lock.broke !== void 0) {
+    log(`note: broke a stale queue lock (${lock.broke}); a previous run did not finish`);
   }
   return lock;
 }
+var RELEASE_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"];
+function releaseOnSignal(lock, signal, exit = (code) => process.exit(code)) {
+  try {
+    lock.release();
+  } finally {
+    exit(128 + osConstants.signals[signal]);
+  }
+}
+function installSignalRelease(lock) {
+  const handlers = RELEASE_SIGNALS.map((signal) => {
+    const handler = () => releaseOnSignal(lock, signal);
+    process.on(signal, handler);
+    return [signal, handler];
+  });
+  return () => {
+    for (const [signal, handler] of handlers) process.off(signal, handler);
+  };
+}
 function appendStateLine(stateRoot, name, line) {
-  const file2 = join5(stateRoot, name);
+  const file2 = join6(stateRoot, name);
   assertStatePath(stateRoot, file2);
   let prev = "";
-  if (existsSync3(file2)) {
-    if (lstatSync3(file2).isSymbolicLink()) {
+  if (existsSync4(file2)) {
+    if (lstatSync4(file2).isSymbolicLink()) {
       throw new Error(`refusing to use ${file2}: it is a symlink`);
     }
-    prev = readFileSync5(file2, "utf8");
+    prev = readFileSync6(file2, "utf8");
     if (prev !== "" && !prev.endsWith("\n")) prev += "\n";
   }
   writeStateFile(stateRoot, file2, `${prev}${line}
@@ -29328,12 +29499,12 @@ import {
   closeSync as closeSync2,
   constants as constants2,
   fstatSync,
-  lstatSync as lstatSync4,
+  lstatSync as lstatSync5,
   openSync as openSync2,
   readSync,
   realpathSync as realpathSync3
 } from "node:fs";
-import { join as join6, sep as sep4 } from "node:path";
+import { join as join7, sep as sep4 } from "node:path";
 var ReportError = class extends Error {
   constructor(message) {
     super(message);
@@ -29410,9 +29581,9 @@ function readReportFile(root, file2, notBefore) {
   const unsafe = () => new ReportError(UNSAFE);
   let fd;
   try {
-    const parts = [root, join6(root, ".studio"), join6(root, ".studio", "reports"), file2];
+    const parts = [root, join7(root, ".studio"), join7(root, ".studio", "reports"), file2];
     parts.forEach((p, i2) => {
-      const st2 = lstatSync4(p);
+      const st2 = lstatSync5(p);
       if (st2.isSymbolicLink()) throw unsafe();
       if (i2 < parts.length - 1 ? !st2.isDirectory() : !st2.isFile()) throw unsafe();
     });
@@ -29443,114 +29614,13 @@ function readReportFile(root, file2, notBefore) {
   }
 }
 function readReport(worktree, id, item, opts = {}) {
-  const file2 = join6(worktree, ".studio", "reports", `${id}.md`);
+  const file2 = join7(worktree, ".studio", "reports", `${id}.md`);
   return parseReport(readReportFile(worktree, file2, opts.notBefore), item);
 }
 function checkReportHead(report, prHead) {
   if ((report.status === "done" || report.headSha !== void 0) && report.headSha?.toLowerCase() !== prHead.toLowerCase()) {
     throw new ReportError("report head differs from PR head");
   }
-}
-
-// src/state.ts
-import { randomBytes as randomBytes2 } from "node:crypto";
-import { existsSync as existsSync4, lstatSync as lstatSync5, readFileSync as readFileSync6, renameSync as renameSync3, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join7 } from "node:path";
-var defaultWriteFile = (path10, content) => writeFileSync4(path10, content, { mode: 384, flag: "wx" });
-function writeState(stateRoot, snapshot, deps = {}) {
-  const file2 = join7(stateRoot, "state.json");
-  ensureStateDir(stateRoot, stateRoot);
-  assertStatePath(stateRoot, file2);
-  const tmp = `${file2}.${process.pid}.${randomBytes2(6).toString("hex")}.tmp`;
-  try {
-    (deps.writeFile ?? defaultWriteFile)(tmp, `${JSON.stringify(snapshot, null, 2)}
-`);
-    renameSync3(tmp, file2);
-  } catch (err) {
-    rmSync3(tmp, { force: true });
-    throw err;
-  }
-}
-function existsNoLink(file2) {
-  try {
-    if (lstatSync5(file2).isSymbolicLink()) {
-      throw new Error(`refusing to read ${file2}: it is a symlink`);
-    }
-    return true;
-  } catch (err) {
-    if (err.code === "ENOENT") return false;
-    throw err;
-  }
-}
-function readCrewRecords(stateRoot) {
-  const file2 = join7(stateRoot, "crew.json");
-  assertStatePath(stateRoot, file2);
-  if (!existsNoLink(file2)) return {};
-  let raw;
-  try {
-    raw = JSON.parse(readFileSync6(file2, "utf8"));
-  } catch {
-    throw new Error(`crew file ${file2} is not valid JSON`);
-  }
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(`crew file ${file2} is not a JSON object`);
-  }
-  return raw;
-}
-function readMetricEvents(stateRoot) {
-  const file2 = join7(stateRoot, "metrics.jsonl");
-  assertStatePath(stateRoot, file2);
-  if (!existsSync4(file2) || !existsNoLink(file2)) return [];
-  const events = [];
-  for (const line of readFileSync6(file2, "utf8").split("\n")) {
-    if (line.trim() === "") continue;
-    try {
-      events.push(JSON.parse(line));
-    } catch {
-    }
-  }
-  return events;
-}
-var HOUR_MS = 36e5;
-var asTime = (v) => {
-  if (typeof v !== "string") return void 0;
-  const t = Date.parse(v);
-  return Number.isNaN(t) ? void 0 : t;
-};
-function computeMetrics(events) {
-  const leadTimes = [];
-  const perDay = {};
-  let mergedTotal = 0;
-  let deployedTotal = 0;
-  for (const raw of events) {
-    if (raw === null || typeof raw !== "object") continue;
-    const ev = raw;
-    if (ev.type !== "merged" && ev.type !== "deployed") continue;
-    const at = asTime(ev.at);
-    if (at === void 0) continue;
-    const day = new Date(at).toISOString().slice(0, 10);
-    const counts = perDay[day] ?? { merged: 0, deployed: 0 };
-    perDay[day] = counts;
-    if (ev.type === "deployed") {
-      counts.deployed++;
-      deployedTotal++;
-      continue;
-    }
-    counts.merged++;
-    mergedTotal++;
-    const first = asTime(ev.firstCommitAt);
-    if (first === void 0) continue;
-    leadTimes.push({
-      item: typeof ev.item === "string" ? ev.item : null,
-      pr: typeof ev.pr === "number" ? ev.pr : null,
-      at: new Date(at).toISOString(),
-      leadTimeHours: Math.max(0, (at - first) / HOUR_MS)
-    });
-  }
-  const sorted = leadTimes.map((l) => l.leadTimeHours).sort((a2, b) => a2 - b);
-  const mid = Math.floor(sorted.length / 2);
-  const median = sorted.length === 0 ? null : sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-  return { leadTimes, medianLeadTimeHours: median, perDay, mergedTotal, deployedTotal };
 }
 
 // src/cli.ts
@@ -29829,6 +29899,19 @@ async function runCli(argv, deps) {
           const log = (m) => stderr(`${m}
 `);
           const lock = acquireQueueRunLock(root, ports.clock.now(), log);
+          const removeSignals = installSignalRelease(lock);
+          const beat = () => lock.heartbeat(ports.clock.now());
+          const runPorts = {
+            ...ports,
+            clock: {
+              now: () => ports.clock.now(),
+              sleep: async (ms) => {
+                beat();
+                await ports.clock.sleep(ms);
+                beat();
+              }
+            }
+          };
           try {
             const state = loadQueue(root);
             reconcileQueued(project, state, ports, stderr);
@@ -29836,12 +29919,15 @@ async function runCli(argv, deps) {
             await runQueue(
               state,
               config2,
-              ports,
+              runPorts,
               // The runner owns `current` and `done`; `pending` stays whatever is on disk.
-              (q) => updateQueue(root, (disk) => {
-                disk.current = q.current;
-                disk.done = q.done;
-              }),
+              (q) => {
+                beat();
+                updateQueue(root, (disk) => {
+                  disk.current = q.current;
+                  disk.done = q.done;
+                });
+              },
               {
                 stateRoot: root,
                 log,
@@ -29856,6 +29942,7 @@ async function runCli(argv, deps) {
               done: finished7
             });
           } finally {
+            removeSignals();
             lock.release();
           }
           return 0;

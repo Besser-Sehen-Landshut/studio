@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdtempSync,
@@ -15,10 +16,12 @@ import type { Clock, Gh, Host } from '../src/ports.js';
 import {
   acquireQueueRunLock,
   enqueue,
+  installSignalRelease,
   loadQueue,
   mergeOne,
   type QueueCurrent,
   type QueueState,
+  releaseOnSignal,
   runQueue,
   saveQueue,
   takeNextPending,
@@ -914,23 +917,47 @@ describe('R79: queue file updates and the run lock', () => {
     expect(logs.join('\n')).toContain('board busy');
   });
 
-  it('the run lock is exclusive; a lock older than 6 h is broken with a note', () => {
+  it('R83: the run lock is held while its holder lives, broken with a note when it died', () => {
     const root = tmpRoot();
     const notes: string[] = [];
     const a = acquireQueueRunLock(root, new Date(), (m) => notes.push(m));
+    // A live holder (this process) with a fresh heartbeat: held, however old the file is.
+    const old = new Date(Date.now() - 7 * 60 * 60 * 1000);
+    utimesSync(join(root, 'queue.run.lock'), old, old);
     expect(() => acquireQueueRunLock(root, new Date(), (m) => notes.push(m))).toThrow(
       /queue already running/,
     );
     a.release();
-    const b = acquireQueueRunLock(root, new Date(), (m) => notes.push(m));
-    const old = new Date(Date.now() - 7 * 60 * 60 * 1000);
-    utimesSync(join(root, 'queue.run.lock'), old, old);
+    const t = new Date().toISOString();
+    const dead = spawnSync(process.execPath, ['-e', '0']).pid;
+    writeFileSync(
+      join(root, 'queue.run.lock'),
+      JSON.stringify({ pid: dead, startedAt: t, heartbeat: t, token: 'x' }),
+    );
     const c = acquireQueueRunLock(root, new Date(), (m) => notes.push(m));
     expect(notes).toHaveLength(1);
     expect(notes[0]).toMatch(/stale queue lock/);
-    b.release(); // no longer its lock: must not remove c's
-    expect(existsSync(join(root, 'queue.run.lock'))).toBe(true);
+    expect(notes[0]).toMatch(/not running/);
     c.release();
     expect(existsSync(join(root, 'queue.run.lock'))).toBe(false);
+  });
+
+  it('R83: a signal releases the run lock, then exits with the conventional code', () => {
+    const calls: string[] = [];
+    const lock = { release: () => calls.push('release'), heartbeat: () => {} };
+    releaseOnSignal(lock, 'SIGTERM', (code) => calls.push(`exit ${code}`));
+    releaseOnSignal(lock, 'SIGINT', (code) => calls.push(`exit ${code}`));
+    releaseOnSignal(lock, 'SIGHUP', (code) => calls.push(`exit ${code}`));
+    expect(calls).toEqual(['release', 'exit 143', 'release', 'exit 130', 'release', 'exit 129']);
+  });
+
+  it('R83: installed signal handlers are removed again', () => {
+    const before = ['SIGTERM', 'SIGINT', 'SIGHUP'].map((s) => process.listenerCount(s));
+    const remove = installSignalRelease({ release: () => {}, heartbeat: () => {} });
+    expect(['SIGTERM', 'SIGINT', 'SIGHUP'].map((s) => process.listenerCount(s))).toEqual(
+      before.map((n) => n + 1),
+    );
+    remove();
+    expect(['SIGTERM', 'SIGINT', 'SIGHUP'].map((s) => process.listenerCount(s))).toEqual(before);
   });
 });

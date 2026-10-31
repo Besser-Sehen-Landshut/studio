@@ -830,6 +830,23 @@ describe('launchCrew', () => {
     expect(readFileSync(join(outside, 'victim.md'), 'utf8')).toBe('keep');
   });
 
+  it('R83: refuses to launch while a crew for the same item is alive, before any side effect', async () => {
+    const { project, state, launcher } = makeFixture();
+    const started: Started[] = [];
+    const ports = fakePorts(started);
+    await launchCrew(project, item, config, ports, launcher);
+    writeFileSync(join(state, 'homes', 'APP-12', 'marker.txt'), 'x');
+    const alive: Ports = { ...ports, claude: { ...ports.claude, alive: (pid) => pid === 4242 } };
+    await expect(launchCrew(project, item, config, alive, launcher)).rejects.toThrow(
+      /still running/,
+    );
+    expect(started).toHaveLength(1);
+    expect(existsSync(join(state, 'homes', 'APP-12', 'marker.txt'))).toBe(true);
+    // another item is not affected
+    await launchCrew(project, { ...item, id: 'APP-13' }, config, alive, launcher);
+    expect(started).toHaveLength(2);
+  });
+
   it('serialises concurrent launches: both crew records survive', async () => {
     const { project, state, launcher } = makeFixture();
     const ports = fakePorts([]);

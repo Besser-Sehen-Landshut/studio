@@ -1,4 +1,5 @@
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { constants as osConstants } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { capacityHoldsTwice } from './capacity.js';
@@ -91,10 +92,13 @@ export function saveQueue(stateRoot: string, q: QueueState): void {
 
 const FILE_LOCK = 'queue.json.lock';
 const RUN_LOCK = 'queue.run.lock';
-/** A crashed writer's file lock: the critical section is a read and an atomic rename. */
+/** A file lock without heartbeat: the critical section is a read and an atomic rename. */
 const FILE_LOCK_STALE_MS = 30_000;
-/** A `queue run` lock older than this may be broken (spec: stale after 6 h). */
-export const RUN_LOCK_STALE_MS = 6 * 60 * 60 * 1000;
+/**
+ * A `queue run` lock is stale only when its holder is gone (pid not running) or silent: the run
+ * refreshes the heartbeat on every persist and every poll, so 15 minutes without one means stuck.
+ */
+export const RUN_LOCK_HEARTBEAT_STALE_MS = 15 * 60 * 1000;
 
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -114,7 +118,7 @@ export function updateQueue<T>(
   for (;;) {
     lock = acquireStateLock(stateRoot, FILE_LOCK, {
       now: new Date(),
-      staleMs: FILE_LOCK_STALE_MS,
+      heartbeatStaleMs: FILE_LOCK_STALE_MS,
     });
     if (lock) break;
     if (Date.now() >= until) throw new Error(`queue file is locked (${FILE_LOCK}); try again`);
@@ -152,21 +156,51 @@ export function takeNextPending(stateRoot: string): QueueEntry | undefined {
 }
 
 /**
- * Exclusive lock for `queue run`: a second run fails with "queue already running". A lock older
- * than 6 h is taken over, with a note through `log`.
+ * Exclusive lock for `queue run`: a second run fails with "queue already running" while the
+ * holder lives. A lock whose holder died or stopped heartbeating is taken over, with a note.
  */
 export function acquireQueueRunLock(
   stateRoot: string,
   now: Date,
   log: (message: string) => void,
 ): StateLock {
-  const lock = acquireStateLock(stateRoot, RUN_LOCK, { now, staleMs: RUN_LOCK_STALE_MS });
+  const lock = acquireStateLock(stateRoot, RUN_LOCK, {
+    now,
+    heartbeatStaleMs: RUN_LOCK_HEARTBEAT_STALE_MS,
+  });
   if (!lock) throw new Error(`queue already running (lock ${RUN_LOCK} in the state root)`);
-  if (lock.brokeStaleMs !== undefined) {
-    const hours = (lock.brokeStaleMs / 3_600_000).toFixed(1);
-    log(`note: broke a stale queue lock (${hours} h old); a previous run did not finish`);
+  if (lock.broke !== undefined) {
+    log(`note: broke a stale queue lock (${lock.broke}); a previous run did not finish`);
   }
   return lock;
+}
+
+const RELEASE_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const;
+type ReleaseSignal = (typeof RELEASE_SIGNALS)[number];
+
+/** Signal handler body: release the lock, then exit with the conventional code 128 + signo. */
+export function releaseOnSignal(
+  lock: Pick<StateLock, 'release' | 'heartbeat'>,
+  signal: ReleaseSignal,
+  exit: (code: number) => void = (code) => process.exit(code),
+): void {
+  try {
+    lock.release();
+  } finally {
+    exit(128 + osConstants.signals[signal]);
+  }
+}
+
+/** Releases the lock on SIGTERM, SIGINT and SIGHUP; returns a function that removes the handlers. */
+export function installSignalRelease(lock: Pick<StateLock, 'release' | 'heartbeat'>): () => void {
+  const handlers = RELEASE_SIGNALS.map((signal) => {
+    const handler = () => releaseOnSignal(lock, signal);
+    process.on(signal, handler);
+    return [signal, handler] as const;
+  });
+  return () => {
+    for (const [signal, handler] of handlers) process.off(signal, handler);
+  };
 }
 
 /** Appends one line to a state-root file (atomic rewrite; the queue is serial). */

@@ -1,5 +1,7 @@
+import { spawnSync } from 'node:child_process';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -151,40 +153,121 @@ describe('canonicalToolchainPaths', () => {
 });
 
 describe('acquireStateLock', () => {
-  const HOUR = 60 * 60 * 1000;
+  const MIN = 60 * 1000;
+  const HOUR = 60 * MIN;
   const now = () => new Date();
+  const opts = (extra: Record<string, unknown> = {}) => ({
+    now: now(),
+    heartbeatStaleMs: 15 * MIN,
+    ...extra,
+  });
+  /** pid of a process that has already exited */
+  const deadPid = (): number => {
+    const r = spawnSync(process.execPath, ['-e', '0']);
+    return r.pid as number;
+  };
+  const writeLock = (d: string, body: Record<string, unknown>) =>
+    writeFileSync(join(d, 'x.lock'), `${JSON.stringify({ token: 't', ...body })}\n`);
 
-  it('is exclusive until released, then free again', () => {
+  it('is exclusive until released, then free again; records pid, startedAt, heartbeat', () => {
     const d = fresh();
-    const a = acquireStateLock(d, 'x.lock', { now: now(), staleMs: HOUR });
+    const a = acquireStateLock(d, 'x.lock', opts());
     expect(a).toBeDefined();
     expect(statSync(join(d, 'x.lock')).mode & 0o777).toBe(0o600);
-    expect(acquireStateLock(d, 'x.lock', { now: now(), staleMs: HOUR })).toBeUndefined();
+    const body = JSON.parse(readFileSync(join(d, 'x.lock'), 'utf8'));
+    expect(body.pid).toBe(process.pid);
+    expect(typeof body.startedAt).toBe('string');
+    expect(body.heartbeat).toBe(body.startedAt);
+    expect(acquireStateLock(d, 'x.lock', opts())).toBeUndefined();
     a?.release();
     expect(existsSync(join(d, 'x.lock'))).toBe(false);
-    const b = acquireStateLock(d, 'x.lock', { now: now(), staleMs: HOUR });
+    const b = acquireStateLock(d, 'x.lock', opts());
     expect(b).toBeDefined();
-    expect(b?.brokeStaleMs).toBeUndefined();
+    expect(b?.broke).toBeUndefined();
     b?.release();
   });
 
-  it('breaks a lock older than staleMs and reports its age', () => {
+  it('breaks a lock whose holder pid is not running', () => {
     const d = fresh();
-    writeFileSync(join(d, 'x.lock'), '{"pid":1,"at":"old","token":"t"}\n');
-    const old = new Date(Date.now() - 7 * HOUR);
-    utimesSync(join(d, 'x.lock'), old, old);
-    const a = acquireStateLock(d, 'x.lock', { now: now(), staleMs: 6 * HOUR });
+    const t = now().toISOString();
+    writeLock(d, { pid: deadPid(), startedAt: t, heartbeat: t });
+    const a = acquireStateLock(d, 'x.lock', opts());
     expect(a).toBeDefined();
-    expect(a?.brokeStaleMs).toBeGreaterThanOrEqual(7 * HOUR - 60_000);
+    expect(a?.broke).toMatch(/not running/);
     expect(readFileSync(join(d, 'x.lock'), 'utf8')).not.toContain('"token":"t"');
+    a?.release();
+  });
+
+  it('keeps a live holder with a fresh heartbeat, even when it started more than 6 h ago', () => {
+    const d = fresh();
+    const started = new Date(Date.now() - 7 * HOUR);
+    writeLock(d, {
+      pid: process.pid,
+      startedAt: started.toISOString(),
+      heartbeat: now().toISOString(),
+    });
+    utimesSync(join(d, 'x.lock'), started, started);
+    expect(acquireStateLock(d, 'x.lock', opts())).toBeUndefined();
+  });
+
+  it('breaks a live holder whose heartbeat is older than 15 minutes', () => {
+    const d = fresh();
+    const old = new Date(Date.now() - 16 * MIN).toISOString();
+    writeLock(d, { pid: process.pid, startedAt: old, heartbeat: old });
+    const a = acquireStateLock(d, 'x.lock', opts());
+    expect(a?.broke).toMatch(/heartbeat/);
+    a?.release();
+  });
+
+  it('heartbeat() refreshes the lock so it stays held', () => {
+    const d = fresh();
+    const t0 = new Date(Date.now() - 20 * MIN);
+    const a = acquireStateLock(d, 'x.lock', opts({ now: t0 }));
+    const t1 = new Date(t0.getTime() + 10 * MIN);
+    a?.heartbeat(t1);
+    expect(JSON.parse(readFileSync(join(d, 'x.lock'), 'utf8')).heartbeat).toBe(t1.toISOString());
+    expect(acquireStateLock(d, 'x.lock', opts({ now: new Date(t1.getTime() + 5 * MIN) }))).toBe(
+      undefined,
+    );
+    a?.release();
+  });
+
+  it('a lock without a readable body is judged by its mtime', () => {
+    const d = fresh();
+    writeFileSync(join(d, 'x.lock'), '');
+    expect(acquireStateLock(d, 'x.lock', opts())).toBeUndefined();
+    const old = new Date(Date.now() - 16 * MIN);
+    utimesSync(join(d, 'x.lock'), old, old);
+    expect(acquireStateLock(d, 'x.lock', opts())?.broke).toMatch(/unreadable/);
+  });
+
+  it('retries when the lock disappears between create and lstat (ENOENT race)', () => {
+    const d = fresh();
+    const t = now().toISOString();
+    writeLock(d, { pid: process.pid, startedAt: t, heartbeat: t });
+    let calls = 0;
+    const lstat = (p: string) => {
+      calls++;
+      if (calls === 1) {
+        rmSync(p); // the holder released right now
+        const err = new Error('gone') as NodeJS.ErrnoException;
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return lstatSync(p);
+    };
+    const a = acquireStateLock(d, 'x.lock', opts({ lstat }));
+    expect(a).toBeDefined();
+    expect(a?.broke).toBeUndefined();
     a?.release();
   });
 
   it('release leaves a lock that is no longer its own', () => {
     const d = fresh();
-    const a = acquireStateLock(d, 'x.lock', { now: now(), staleMs: HOUR });
+    const a = acquireStateLock(d, 'x.lock', opts());
     writeFileSync(join(d, 'x.lock'), '{"token":"someone-else"}\n');
     a?.release();
+    a?.heartbeat(now());
     expect(readFileSync(join(d, 'x.lock'), 'utf8')).toContain('someone-else');
   });
 
@@ -192,9 +275,7 @@ describe('acquireStateLock', () => {
     const d = fresh();
     const target = join(fresh(), 'victim');
     symlinkSync(target, join(d, 'x.lock'));
-    expect(() => acquireStateLock(d, 'x.lock', { now: now(), staleMs: 0 })).toThrow(
-      /not a regular file/,
-    );
+    expect(() => acquireStateLock(d, 'x.lock', opts())).toThrow(/not a regular file/);
     expect(existsSync(target)).toBe(false);
   });
 });
