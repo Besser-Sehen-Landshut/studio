@@ -513,7 +513,7 @@ describe('round 2 regressions', () => {
       'gh api -f body=@file.txt repos/o/a/issues',
       'gh api -X POST repos/o/a/merges%2523x',
     ]);
-    allows(['gh api repos/o/a/pulls/3', 'gh api -X GET repos/o/a/pulls/3']);
+    allows(['gh api repos/o/a/pulls/3']);
   });
 
   it('CR2-2 REST forbidden paths use the normalised path', () => {
@@ -821,6 +821,68 @@ describe('round 3: explicit deny rules', () => {
     ]) {
       expect(bash(c, wt).decision, c).toBe('allow');
     }
+  });
+});
+
+describe('round 4: allowlists', () => {
+  const denies = (cmds: string[]) => {
+    for (const c of cmds) expect(bash(c, wt), c).toMatchObject({ decision: 'deny' });
+  };
+  const allows = (cmds: string[]) => {
+    for (const c of cmds) expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
+  };
+
+  it('CR4-1 gh api accepts only the exact read flags', () => {
+    denies([
+      'gh api -iXPUT repos/o/a/pulls/3/merge',
+      'gh api -XGET repos/o/a',
+      'gh api -X GET repos/o/a',
+      'gh api --method GET repos/o/a',
+      'gh api --method=GET repos/o/a',
+      'gh api --jq=.x repos/o/a',
+      'gh api --hostname=github.com repos/o/a',
+      'gh api --hostname evil.example.com repos/o/a',
+      'gh api -iX repos/o/a',
+      'gh api -fx=1 repos/o/a',
+      'gh api --silent repos/o/a',
+      'gh api --cache 1h repos/o/a',
+      'gh api graphql',
+      'gh api GraphQL',
+      'gh api /api/graphql',
+      'gh api repos/o/a repos/o/b',
+      'gh api -H',
+      'gh --hostname evil.example.com api repos/o/a',
+    ]);
+    allows([
+      'gh api repos/org/app/pulls/3',
+      "gh api -H 'Accept: application/json' --jq .state repos/org/app/pulls/3",
+      'gh api --paginate -i repos/org/app/issues',
+      'gh api --include repos/org/app/issues',
+      'gh api --hostname github.com repos/org/app',
+      'gh -R org/app api repos/org/app',
+    ]);
+  });
+
+  it('CR4-2 variable names must be plain identifiers', () => {
+    denies([
+      "declare 'PATH[0]=/tmp'",
+      'a[0]=x ls',
+      'PATH[0]=x ls',
+      "read 'x[$(id)]'",
+      "read 'x[0]'",
+      'export A+=1',
+      'export a[0]=1',
+      'export 1A=1',
+      'read -r x',
+      'unset -f x',
+      'unset a[0]',
+      'unset PATH',
+      'A+=1 ls',
+      'env A+=1 ls',
+      'env a[0]=1 ls',
+      'export "A B=1"',
+    ]);
+    allows(['export FOO=1', 'FOO=1 pnpm test', 'env FOO=1 ls', 'unset FOO', 'read x < in.txt']);
   });
 });
 

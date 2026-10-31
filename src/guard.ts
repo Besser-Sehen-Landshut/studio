@@ -606,7 +606,18 @@ const DENIED_WRAPPERS = new Set([
   'readarray',
   'getopts',
 ]);
-const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)\+?=/;
+const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const LOOSE_ASSIGNMENT = /^([^=\s/]+)=/;
+
+/** Name of an assignment word (`NAME=value`), undefined for other words; odd names are denied. */
+function assignmentName(w: string): string | undefined {
+  const m = LOOSE_ASSIGNMENT.exec(w);
+  if (!m) return undefined;
+  const name = m[1] as string;
+  if (!VAR_NAME.test(name))
+    deny(`assignment to "${name}" is not allowed (plain variable names only)`);
+  return name;
+}
 const SENSITIVE_VAR =
   /^(GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/;
 
@@ -620,8 +631,8 @@ function checkVarName(name: string): void {
 }
 
 function checkAssignment(_state: State, a: string): void {
-  const m = ASSIGNMENT.exec(a);
-  if (m) checkVarName(m[1] as string);
+  const name = assignmentName(a);
+  if (name !== undefined) checkVarName(name);
 }
 
 /** Simple wrapper forms only; anything with options is denied. */
@@ -634,7 +645,7 @@ function skipWrappers(words: string[], state: State): number {
   let i = 0;
   while (i < words.length) {
     const w = words[i] as string;
-    if (ASSIGNMENT.test(w)) {
+    if (assignmentName(w) !== undefined) {
       checkAssignment(state, w);
       i++;
       continue;
@@ -666,7 +677,7 @@ function skipWrappers(words: string[], state: State): number {
         while (i < words.length) {
           const x = words[i] as string;
           if (x.startsWith('-')) deny('env with options is not allowed');
-          if (!ASSIGNMENT.test(x)) break;
+          if (assignmentName(x) === undefined) break;
           checkAssignment(state, x);
           i++;
         }
@@ -980,39 +991,39 @@ function checkGh(env: Env, args: string[]): void {
   if (g0 === 'api') checkGhApi(args);
 }
 
-/** `gh api` is read-only: GET, no field or input flags, a plain endpoint. */
+/**
+ * `gh api` for the crew: plain GET reads only. Exact flag allowlist, every flag its own token:
+ * -H/--header V, -q/--jq V, --paginate, -i/--include, --hostname github.com.
+ */
 function checkGhApi(rawArgs: string[]): void {
-  const stripped = stripGhFlags(rawArgs);
-  const args = stripped.slice(stripped.indexOf('api') + 1);
+  const apiAt = rawArgs.indexOf('api');
+  for (let k = 0; k < apiAt; k++) {
+    const a = rawArgs[k] as string;
+    if (a === '-R' || a === '--repo') k++;
+    else deny(`gh option ${a} before api is not allowed`);
+  }
+  const args = rawArgs.slice(apiAt + 1);
   let endpoint: string | undefined;
-  const withValue = new Set([
-    '-H',
-    '--header',
-    '-q',
-    '--jq',
-    '-t',
-    '--template',
-    '--cache',
-    '-p',
-    '--preview',
-  ]);
-  const checkMethod = (m: string | undefined): void => {
-    if (m === undefined || m.toUpperCase() !== 'GET') deny('gh api is read-only (GET only)');
-  };
   for (let k = 0; k < args.length; k++) {
     const a = args[k] as string;
-    if (/^(-[fF]|--field|--raw-field|--input)/.test(a)) {
-      deny('gh api with field or input flags is not allowed (read-only)');
-    }
-    if (a === '-X' || a === '--method') checkMethod(args[++k]);
-    else if (a.startsWith('--method=')) checkMethod(a.slice(9));
-    else if (/^-X./.test(a)) checkMethod(a.slice(2));
-    else if (withValue.has(a)) k++;
-    else if (!a.startsWith('-') && endpoint === undefined) endpoint = a;
+    if (a === '-H' || a === '--header' || a === '-q' || a === '--jq') {
+      if (args[k + 1] === undefined) deny(`missing value for gh api ${a}`);
+      k++;
+    } else if (a === '--hostname') {
+      if (args[++k] !== 'github.com') deny('gh api --hostname must be github.com');
+    } else if (a === '--paginate' || a === '-i' || a === '--include') {
+      // allowed read flags
+    } else if (a.startsWith('-')) {
+      deny(`gh api flag ${a} is not allowed (read-only: -H, -q, --paginate, -i, --hostname)`);
+    } else if (endpoint !== undefined) {
+      deny('gh api with more than one endpoint is not allowed');
+    } else endpoint = a;
   }
   if (endpoint === undefined) deny('gh api without endpoint');
   if (unresolved(endpoint as string)) deny('unresolved gh api endpoint');
   if (/[%#]|:\/\//.test(endpoint as string)) deny('suspicious gh api endpoint');
+  const path = (endpoint as string).split('?')[0]?.replace(/\/+$/, '') as string;
+  if (/graphql$/i.test(path)) deny('gh api graphql is not allowed');
 }
 
 function checkFind(env: Env, args: string[], state: State): void {
@@ -1054,7 +1065,15 @@ function checkSegment(env: Env, seg: Segment, state: State): void {
   checkWords(env, seg.words, state);
 }
 
-const VAR_BUILTINS = new Set(['read', 'declare', 'typeset', 'local', 'export', 'readonly']);
+const VAR_BUILTINS = new Set([
+  'read',
+  'declare',
+  'typeset',
+  'local',
+  'export',
+  'readonly',
+  'unset',
+]);
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish']);
 
 /** export/declare/read/...: no options at all; names must be literal and not sensitive. */
@@ -1066,7 +1085,9 @@ function checkVarBuiltin(name: string, args: string[]): void {
   for (const a of args) {
     if (/^[-+]/.test(a)) deny(`${name} with options is not allowed`);
     if (unresolved(a)) deny(`unresolved word in ${name}`);
-    checkVarName((a.split('=')[0] as string).replace(/\+$/, ''));
+    const vn = a.split('=')[0] as string;
+    if (!VAR_NAME.test(vn)) deny(`${vn} is not a plain variable name`);
+    checkVarName(vn);
   }
 }
 
