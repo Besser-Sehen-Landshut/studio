@@ -12,12 +12,14 @@
     "test": "vitest run",
     "lint": "biome check .",
     "typecheck": "tsc --noEmit",
+    "bundle": "node scripts/bundle.mjs",
     "build": "tsc -p tsconfig.build.json && node scripts/gen-schema.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
     "@types/node": "^26.6.6",
     "@types/shell-quote": "^1.7.5",
+    "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
   },
