@@ -64,7 +64,8 @@ function makeFixture(env: Record<string, string | undefined> = {}): Fixture {
   const home = join(base, 'home');
   mkdirSync(home);
   const launcher: LauncherEnv = { homedir: home, env: { PATH: process.env.PATH, ...env } };
-  return { project: makeRepo(base), home, launcher, state: stateRootFor(config, launcher) };
+  const project = makeRepo(base);
+  return { project, home, launcher, state: stateRootFor(project, launcher) };
 }
 
 function makeRepo(base: string): string {
@@ -191,6 +192,19 @@ describe('prepareCheckout', () => {
     expect(b).toEqual(a);
     expect(existsSync(join(a.path, 'work.txt'))).toBe(true);
     expect(statSync(join(a.path, '.git')).ino).toBe(inode);
+  });
+
+  it('R61: re-clones a clone whose .git/config names another origin', async () => {
+    const { project, state } = makeFixture();
+    const a = await prepareCheckout(state, project, item, realPorts());
+    writeFileSync(join(a.path, 'planted.txt'), 'x');
+    const cfg = join(a.path, '.git', 'config');
+    const url = git(project, 'remote', 'get-url', 'origin');
+    writeFileSync(cfg, readFileSync(cfg, 'utf8').replace(url, 'https://example.com/org/evil.git'));
+    const b = await prepareCheckout(state, project, item, realPorts());
+    expect(b).toEqual(a);
+    expect(existsSync(join(b.path, 'planted.txt'))).toBe(false);
+    expect(git(b.path, 'remote', 'get-url', 'origin')).toBe(url);
   });
 
   it('removes and re-clones a directory that is not a valid clone', async () => {
@@ -321,7 +335,8 @@ describe('writeCrewSettings', () => {
       allowUnsandboxedCommands: false,
       filesystem: {
         allowWrite: [wt, tmpDir, homeDir],
-        denyRead: [FAKE_HOME, ...CRED_PATHS],
+        // root is already a real path, so the state base appears once
+        denyRead: [FAKE_HOME, ...CRED_PATHS, root],
         allowRead: [wt, tmpDir, homeDir],
       },
       network: { allowedDomains: ['github.com', 'api.github.com'], strictAllowlist: true },
@@ -398,7 +413,18 @@ describe('writeCrewSettings', () => {
       secretGlobs: [...DEFAULT_SECRET_GLOBS, ...CRED_PATHS.flatMap((p) => [p, `${p}/**`])],
       crewAllowedWorkflows: ['ci.yml'],
       crewAllowedWorkflowRefs: ['main'],
-      protectedPaths: [ctxFile, state],
+      protectedPaths: [
+        ctxFile,
+        ...['guard', 'settings', 'briefs', 'logs', 'homes', 'tmp'].map((d) => join(state, d)),
+        ...[
+          'crew.json',
+          'queue.json',
+          'state.json',
+          'metrics.jsonl',
+          'guard.jsonl',
+          'marker.json',
+        ].map((f) => join(state, f)),
+      ],
     });
   });
 });
@@ -458,7 +484,8 @@ describe('launchCrew', () => {
   it('keeps all runtime state out of the repository, in 0700 directories', async () => {
     const { project, state, home, launcher } = makeFixture();
     await launchCrew(project, item, config, fakePorts([]), launcher);
-    expect(state).toBe(join(home, '.local', 'state', 'studio', 'org__app'));
+    expect(dirnameOf(state)).toBe(join(home, '.local', 'state', 'studio'));
+    expect(state).toMatch(/\/[0-9a-f]{16}-clone$/);
     expect(existsSync(join(project, '.studio'))).toBe(false);
     for (const d of ['', 'clones', 'homes', 'homes/APP-12', 'tmp', 'tmp/APP-12', 'settings']) {
       expect(statSync(join(state, d)).mode & 0o777).toBe(0o700);
@@ -471,10 +498,62 @@ describe('launchCrew', () => {
 
   it('uses XDG_STATE_HOME for the state root when set', async () => {
     const xdg = join(root, `xdg-state-${n++}`);
-    const { project, launcher } = makeFixture({ XDG_STATE_HOME: xdg });
+    const { project, state, launcher } = makeFixture({ XDG_STATE_HOME: xdg });
     const started: Started[] = [];
     await launchCrew(project, item, config, fakePorts(started), launcher);
-    expect((started[0] as Started).cwd).toBe(join(xdg, 'studio', 'org__app', 'clones', 'APP-12'));
+    expect(dirnameOf(state)).toBe(join(xdg, 'studio'));
+    expect((started[0] as Started).cwd).toBe(join(state, 'clones', 'APP-12'));
+  });
+
+  it('K2: refuses a state root inside the project before any side effect', async () => {
+    const f = makeFixture();
+    const started: Started[] = [];
+    const launcher = { ...f.launcher, env: { ...f.launcher.env, XDG_STATE_HOME: f.project } };
+    await expect(launchCrew(f.project, item, config, fakePorts(started), launcher)).rejects.toThrow(
+      /must not equal, lie inside or contain the project/,
+    );
+    expect(started).toHaveLength(0);
+    expect(existsSync(join(f.project, 'studio'))).toBe(false);
+  });
+
+  it('R61: refuses a state root whose marker names another origin', async () => {
+    const f = makeFixture();
+    const started: Started[] = [];
+    await launchCrew(f.project, item, config, fakePorts(started), f.launcher);
+    const marker = JSON.parse(readFileSync(join(f.state, 'marker.json'), 'utf8'));
+    expect(marker).toEqual({
+      projectRealpath: realpathSync(f.project),
+      originUrl: git(f.project, 'remote', 'get-url', 'origin'),
+    });
+    expect(statSync(join(f.state, 'marker.json')).mode & 0o777).toBe(0o600);
+    git(f.project, 'remote', 'set-url', 'origin', 'https://example.com/org/other.git');
+    await expect(
+      launchCrew(f.project, item, config, fakePorts(started), f.launcher),
+    ).rejects.toThrow(/marker/);
+    expect(started).toHaveLength(1);
+  });
+
+  it('K1: the guard lets the crew write its clone but not the state files', async () => {
+    const { project, state, launcher } = makeFixture();
+    await launchCrew(project, item, config, fakePorts([]), launcher);
+    const ctx = JSON.parse(readFileSync(join(state, 'guard', 'APP-12.json'), 'utf8'));
+    const clone = join(state, 'clones', 'APP-12');
+    const run = (toolName: string, toolInput: Record<string, unknown>) =>
+      evaluateGuard({ toolName, toolInput, cwd: clone }, ctx).decision;
+    expect(run('Write', { file_path: join(clone, 'src', 'a.ts'), content: 'x' })).toBe('allow');
+    expect(
+      run('Edit', {
+        file_path: join(clone, '.studio', 'reports', 'APP-12.md'),
+        old_string: 'a',
+        new_string: 'b',
+      }),
+    ).toBe('allow');
+    expect(run('Bash', { command: 'touch src/a.ts' })).toBe('allow');
+    expect(run('Write', { file_path: join(state, 'crew.json'), content: '{}' })).toBe('deny');
+    expect(run('Write', { file_path: join(state, 'guard', 'x.json'), content: '{}' })).toBe('deny');
+    expect(
+      run('Write', { file_path: join(clone, '.git', 'hooks', 'pre-commit'), content: 'x' }),
+    ).toBe('deny');
   });
 
   it('launch env maps crew token to GH_TOKEN and the settings file does not contain the token', async () => {
@@ -565,6 +644,23 @@ describe('launchCrew', () => {
     ]);
     expect((started[0] as Started).env.TMPDIR).toBe(join(state, 'tmp', 'APP-12'));
     expect(s.sandbox.filesystem.denyRead).toContain(home);
+  });
+
+  it('R62: denies reading the state base (literal and real), re-allows only own dirs', async () => {
+    const realXdg = join(root, `xdg-real-${n++}`);
+    mkdirSync(join(realXdg, 'studio'), { recursive: true });
+    const xdgLink = join(root, `xdg-link-${n++}`);
+    symlinkSync(realXdg, xdgLink);
+    const { project, state, launcher } = makeFixture({ XDG_STATE_HOME: xdgLink });
+    await launchCrew(project, item, config, fakePorts([]), launcher);
+    const fs = JSON.parse(readFileSync(join(state, 'settings', 'APP-12.json'), 'utf8')).sandbox
+      .filesystem;
+    expect(fs.denyRead).toEqual(
+      expect.arrayContaining([join(xdgLink, 'studio'), join(realXdg, 'studio')]),
+    );
+    const own = ['clones', 'tmp', 'homes'].map((d) => join(state, d, 'APP-12'));
+    expect(fs.allowRead).toEqual([own[0], own[1], own[2]]);
+    expect(fs.allowWrite).toEqual([own[0], own[1], own[2]]);
   });
 
   it('recreates HOME and tmp on every launch', async () => {

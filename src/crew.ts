@@ -15,9 +15,14 @@ import { DEFAULT_SECRET_GLOBS } from './guard.js';
 import {
   assertStatePath,
   canonicalToolchainPaths,
+  checkStateMarker,
+  cloneOriginUrl,
   credentialLocations,
   ensureStateDir,
+  projectRealpath,
   removeStateEntry,
+  STATE_FILES,
+  STATE_PROTECTED_DIRS,
   stateRootFor,
   writeStateFile,
 } from './paths.js';
@@ -69,14 +74,23 @@ export async function prepareCheckout(
   const path = join(clones, item.id);
   const branch = `studio/${item.id}`;
   assertStatePath(stateRoot, path);
+  const url = await ownerOriginUrl(projectDir, ports);
   if (isLink(path)) removeStateEntry(stateRoot, path);
-  if (cloneBranch(path) === branch) return { path, branch };
+  // Reuse only a clone on the item branch whose `.git/config` (read as a file) names the owner
+  // repo's origin; anything else is removed and cloned again.
+  if (cloneBranch(path) === branch && cloneOriginUrl(path) === url) return { path, branch };
   removeStateEntry(stateRoot, path);
-  const url = (await ports.git.run(projectDir, ['remote', 'get-url', 'origin'])).trim();
   await ports.git.run(clones, ['clone', '--filter=blob:none', url, path]);
   chmodSync(path, 0o700);
   await ports.git.run(path, ['checkout', '-b', branch, 'origin/main']);
   return { path, branch };
+}
+
+/** Origin URL of the owner's repository (git runs in the owner repo, never in a crew clone). */
+async function ownerOriginUrl(projectDir: string, ports: Ports): Promise<string> {
+  const url = (await ports.git.run(projectDir, ['remote', 'get-url', 'origin'])).trim();
+  if (!url) throw new Error(`project ${projectDir} has no origin URL`);
+  return url;
 }
 
 function isLink(p: string): boolean {
@@ -104,6 +118,16 @@ export function writeHomeFile(homeDir: string, name: string, content: string): v
 
 /** Home, environment and platform of the launcher; injectable so tests never touch the real ones. */
 export type LauncherEnv = OwnerEnv;
+
+const unique = (xs: string[]): string[] => [...new Set(xs)];
+
+function realOr(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
 
 const list = (xs: string[]): string => (xs.length > 0 ? xs.join(', ') : '(none)');
 
@@ -221,9 +245,20 @@ export function writeCrewSettings(
   // Sandbox reads: the whole real home is denied, then only these are let back in: the clone, the
   // crew tmp dir, the crew HOME and the real paths of the owner's crew_toolchain_paths. Nothing is
   // derived from PATH. Credential locations stay listed explicitly as a second net.
-  const denyRead = [realHome, ...credentialPaths];
+  // The state base (parent of every state root: other projects, other items, settings, logs) is
+  // denied too, literal and real spelling, so an XDG_STATE_HOME outside the home is covered.
+  const stateBase = dirname(stateRoot);
+  const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase)]);
   const allowRead = [clone, dirs.tmpDir, dirs.homeDir, ...toolchain];
   const ctxFile = join(stateRoot, 'guard', `${id}.json`);
+  // The clone lives inside the state root, so the root itself cannot be protected (the guard
+  // would deny every write in the clone). Protected: the ctx file, every fixed state directory and
+  // state file. Other items' clones lie outside this clone and are denied by worktree confinement.
+  const protectedPaths = [
+    ctxFile,
+    ...STATE_PROTECTED_DIRS.map((d) => join(stateRoot, d)),
+    ...STATE_FILES.map((f) => join(stateRoot, f)),
+  ];
   const ctx = {
     worktree: clone,
     ownerOnly: config.ownerOnly,
@@ -232,7 +267,7 @@ export function writeCrewSettings(
     secretGlobs: [...DEFAULT_SECRET_GLOBS, ...credentialPaths.flatMap((p) => [p, `${p}/**`])],
     crewAllowedWorkflows: config.crewAllowedWorkflows,
     crewAllowedWorkflowRefs: config.crewAllowedWorkflowRefs,
-    protectedPaths: [ctxFile, stateRoot],
+    protectedPaths,
   };
   writeStateFile(stateRoot, ctxFile, `${JSON.stringify(ctx, null, 2)}\n`);
   const settings = {
@@ -334,7 +369,8 @@ export async function launchCrew(
   }
   const home = launcher.homedir ?? homedir();
   const owner: LauncherEnv = { homedir: home, env: penv, platform: launcher.platform };
-  const stateRoot = stateRootFor(config, owner);
+  // Refuses a state root inside (or around) the project before anything is created.
+  const stateRoot = stateRootFor(projectDir, owner);
   // Everything that can refuse runs before the first side effect.
   const toolchainPaths = loadOwnerConfig(owner).crewToolchainPaths;
   canonicalToolchainPaths(toolchainPaths, {
@@ -348,6 +384,11 @@ export async function launchCrew(
   for (const sub of ['clones', 'homes', 'tmp']) {
     assertStatePath(stateRoot, join(stateRoot, sub, item.id));
   }
+  // First side effect: bind the state root to this project and origin (or refuse a mismatch).
+  checkStateMarker(stateRoot, {
+    projectRealpath: projectRealpath(projectDir),
+    originUrl: await ownerOriginUrl(projectDir, ports),
+  });
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   // Isolated HOME, recreated from scratch on every launch: only a git identity and a credential
   // helper that reads GH_TOKEN. Nothing is copied or linked from the real home.

@@ -1,12 +1,22 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   canonicalToolchainPaths,
+  checkStateMarker,
+  cloneOriginUrl,
   ensureStateDir,
   removeStateEntry,
-  repoSlug,
+  stateDirName,
   stateRootFor,
   writeStateFile,
 } from '../src/paths.js';
@@ -21,23 +31,63 @@ const fresh = (): string => {
 };
 
 describe('stateRootFor', () => {
-  it('uses XDG_STATE_HOME, else <home>/.local/state, with the repo slug', () => {
-    expect(stateRootFor({ primaryRepo: 'org/app' }, { homedir: '/h', env: {} })).toBe(
-      '/h/.local/state/studio/org__app',
+  it('uses XDG_STATE_HOME, else <home>/.local/state, with a hashed project name', () => {
+    const project = join(fresh(), 'my app!');
+    mkdirSync(project);
+    const name = stateDirName(realpathSync(project));
+    expect(name).toMatch(/^[0-9a-f]{16}-my_app_$/);
+    expect(stateRootFor(project, { homedir: '/h', env: {} })).toBe(
+      `/h/.local/state/studio/${name}`,
     );
-    expect(
-      stateRootFor({ primaryRepo: 'org/app' }, { homedir: '/h', env: { XDG_STATE_HOME: '/s' } }),
-    ).toBe('/s/studio/org__app');
-    expect(
-      stateRootFor({ primaryRepo: 'org/app' }, { homedir: '/h', env: { XDG_STATE_HOME: 'rel' } }),
-    ).toBe('/h/.local/state/studio/org__app');
+    expect(stateRootFor(project, { homedir: '/h', env: { XDG_STATE_HOME: '/s' } })).toBe(
+      `/s/studio/${name}`,
+    );
+    expect(stateRootFor(project, { homedir: '/h', env: { XDG_STATE_HOME: 'rel' } })).toBe(
+      `/h/.local/state/studio/${name}`,
+    );
+    expect(stateDirName(`/x/${'a'.repeat(40)}`)).toMatch(/^[0-9a-f]{16}-a{32}$/);
   });
 
-  it('refuses slugs that are not one safe path segment', () => {
-    expect(repoSlug('org/app.js')).toBe('org__app.js');
-    for (const bad of ['..', '.', 'org/a b', 'org\\app', 'org/a;b', '']) {
-      expect(() => repoSlug(bad)).toThrow(/primary_repo/);
-    }
+  it('R61: two projects (same primary_repo, same base name) get different roots', () => {
+    const a = join(fresh(), 'app');
+    const b = join(fresh(), 'app');
+    mkdirSync(a);
+    mkdirSync(b);
+    const opts = { homedir: '/h', env: {} };
+    expect(stateRootFor(a, opts)).not.toBe(stateRootFor(b, opts));
+    expect(() => stateRootFor(join(a, 'missing'), opts)).toThrow(/does not exist/);
+  });
+});
+
+describe('checkStateMarker', () => {
+  it('writes the marker once (0600) and refuses a mismatch or an unmarked root', () => {
+    const state = join(fresh(), 'state');
+    const m = { projectRealpath: '/p', originUrl: 'https://example.com/org/app.git' };
+    checkStateMarker(state, m);
+    expect(statSync(join(state, 'marker.json')).mode & 0o777).toBe(0o600);
+    checkStateMarker(state, m);
+    expect(() => checkStateMarker(state, { ...m, originUrl: 'x' })).toThrow(/marker/);
+    expect(() => checkStateMarker(state, { ...m, projectRealpath: '/q' })).toThrow(/marker/);
+    const unmarked = join(fresh(), 'state');
+    mkdirSync(join(unmarked, 'clones'), { recursive: true });
+    expect(() => checkStateMarker(unmarked, m)).toThrow(/no marker/);
+  });
+});
+
+describe('cloneOriginUrl', () => {
+  it('reads the single simple origin url and rejects anything else', () => {
+    const clone = fresh();
+    mkdirSync(join(clone, '.git'));
+    const cfg = join(clone, '.git', 'config');
+    const put = (s: string) => writeFileSync(cfg, s);
+    put('[core]\n\tbare = false\n[remote "origin"]\n\turl = https://example.com/org/app.git\n');
+    expect(cloneOriginUrl(clone)).toBe('https://example.com/org/app.git');
+    put('[remote "origin"]\n\turl = a\n\turl = b\n');
+    expect(cloneOriginUrl(clone)).toBeUndefined();
+    put('[remote "other"]\n\turl = a\n');
+    expect(cloneOriginUrl(clone)).toBeUndefined();
+    put('[remote "origin"]\n\turl = "a"\n');
+    expect(cloneOriginUrl(clone)).toBeUndefined();
   });
 });
 

@@ -1,8 +1,11 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -10,42 +13,172 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   CREDENTIAL_PATHS,
   type OwnerEnv,
   PROTECTED_HOME_PATHS,
   pathKey,
-  type StudioConfig,
   toolchainPathProblem,
   within,
   xdgDir,
 } from './config.js';
 
-const SLUG_RE = /^[A-Za-z0-9._-]+(__[A-Za-z0-9._-]+)?$/;
+/** Entries of the state root that a crew session must never write (besides its own clone). */
+export const STATE_PROTECTED_DIRS = ['guard', 'settings', 'briefs', 'logs', 'homes', 'tmp'];
+export const STATE_FILES = [
+  'crew.json',
+  'queue.json',
+  'state.json',
+  'metrics.jsonl',
+  'guard.jsonl',
+  'marker.json',
+];
 
-/** `primary_repo` as one path segment: `org/app` becomes `org__app`. */
-export function repoSlug(primaryRepo: string): string {
-  const slug = primaryRepo.replaceAll('/', '__');
-  if (!SLUG_RE.test(slug) || /^\.+$/.test(slug)) {
-    throw new Error(`primary_repo ${JSON.stringify(primaryRepo)} cannot name a state directory`);
+/** `$XDG_STATE_HOME/studio`, else `<home>/.local/state/studio`: the parent of every state root. */
+export function stateBaseFor(opts: OwnerEnv = {}): string {
+  const env = opts.env ?? process.env;
+  const base = xdgDir(env, 'XDG_STATE_HOME') ?? join(opts.homedir ?? homedir(), '.local', 'state');
+  return join(base, 'studio');
+}
+
+/** Real path of the project directory; fails closed when it does not exist. */
+export function projectRealpath(projectDir: string): string {
+  try {
+    return realpathSync(projectDir);
+  } catch {
+    throw new Error(`project directory ${projectDir} does not exist`);
   }
-  return slug;
+}
+
+/**
+ * Directory name of a project's state root: the first 16 hex digits of sha256(realpath(project))
+ * plus a readable suffix (the sanitised base name, at most 32 characters). It does not depend on
+ * repository content, so a repo cannot steer two projects into the same state root.
+ */
+export function stateDirName(projectReal: string): string {
+  const hash = createHash('sha256').update(projectReal).digest('hex').slice(0, 16);
+  const suffix = basename(projectReal)
+    .replace(/[^A-Za-z0-9._-]/g, '_')
+    .slice(0, 32);
+  return suffix ? `${hash}-${suffix}` : hash;
+}
+
+/** `p` with its longest existing prefix replaced by that prefix's real path. */
+function realish(p: string): string {
+  const abs = resolve(p);
+  let cur = abs;
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(cur), ...rest.reverse());
+    } catch {
+      const up = dirname(cur);
+      if (up === cur) return abs;
+      rest.push(basename(cur));
+      cur = up;
+    }
+  }
 }
 
 /**
  * Owner-level runtime state of a project, outside every repository tree:
- * `$XDG_STATE_HOME/studio/<slug>`, else `<home>/.local/state/studio/<slug>`. Holds clones, crew
- * homes, tmp dirs, settings, briefs, logs, guard contexts and crew.json. Only committed files
- * (studio.yaml, board.yaml, roles/, reports/) stay in the project's `.studio/`.
+ * `<stateBaseFor()>/<stateDirName(realpath(projectDir))>`. Holds clones, crew homes, tmp dirs,
+ * settings, briefs, logs, guard contexts, crew.json and marker.json. Only committed files
+ * (studio.yaml, board.yaml, roles/, reports/) stay in the project's `.studio/`. Refused (before
+ * any side effect) when the state root equals, lies inside or contains the project directory,
+ * comparing literal and real spellings (case-insensitively on darwin).
  */
-export function stateRootFor(
-  config: Pick<StudioConfig, 'primaryRepo'>,
-  opts: OwnerEnv = {},
-): string {
-  const env = opts.env ?? process.env;
-  const base = xdgDir(env, 'XDG_STATE_HOME') ?? join(opts.homedir ?? homedir(), '.local', 'state');
-  return join(base, 'studio', repoSlug(config.primaryRepo));
+export function stateRootFor(projectDir: string, opts: OwnerEnv = {}): string {
+  const real = projectRealpath(projectDir);
+  const root = join(stateBaseFor(opts), stateDirName(real));
+  const platform = opts.platform ?? process.platform;
+  const roots = [resolve(root), realish(root)].map((p) => pathKey(p, platform));
+  const projects = [resolve(projectDir), real].map((p) => pathKey(p, platform));
+  if (roots.some((r) => projects.some((pr) => within(r, pr) || within(pr, r)))) {
+    throw new Error(
+      `state root ${root} must not equal, lie inside or contain the project directory ${projectDir}`,
+    );
+  }
+  return root;
+}
+
+export interface StateMarker {
+  projectRealpath: string;
+  originUrl: string;
+}
+
+/**
+ * Binds a state root to one project: on first use writes `<root>/marker.json` (0600, exclusive);
+ * later it must name the same project real path and origin URL, else the launch is refused. A
+ * state root that already has entries but no marker, a symlinked root or marker, or an unreadable
+ * marker are refused as well.
+ */
+export function checkStateMarker(root: string, expected: StateMarker): void {
+  const file = join(root, 'marker.json');
+  if (isLink(root)) throw new Error(`refusing to use state root ${root}: it is a symlink`);
+  const kind = isLink(file);
+  if (kind === undefined) {
+    if (existsSync(root) && readdirSync(root).length > 0) {
+      throw new Error(`state root ${root} has no marker.json; refusing to adopt it`);
+    }
+    ensureStateDir(root, root);
+    try {
+      writeFileSync(file, `${JSON.stringify(expected, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+      return;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+  } else if (kind) {
+    throw new Error(`refusing to use ${file}: it is a symlink`);
+  }
+  let found: Partial<StateMarker> | null;
+  try {
+    found = JSON.parse(readFileSync(file, 'utf8')) as Partial<StateMarker> | null;
+  } catch {
+    throw new Error(`state root marker ${file} is unreadable`);
+  }
+  if (
+    found?.projectRealpath !== expected.projectRealpath ||
+    found?.originUrl !== expected.originUrl
+  ) {
+    throw new Error(
+      `state root marker ${file} belongs to another project or origin; refusing to launch`,
+    );
+  }
+}
+
+/**
+ * URL of `[remote "origin"]` in a clone's `.git/config`, read as a plain file (nothing runs in a
+ * crew clone). Undefined when `.git` or the config is a symlink or not a plain directory/file, or
+ * when the entry is missing, repeated or not a simple unquoted value.
+ */
+export function cloneOriginUrl(clone: string): string | undefined {
+  try {
+    if (!lstatSync(join(clone, '.git')).isDirectory()) return undefined;
+    const cfg = join(clone, '.git', 'config');
+    if (!lstatSync(cfg).isFile()) return undefined;
+    let inOrigin = false;
+    const urls: string[] = [];
+    for (const raw of readFileSync(cfg, 'utf8').split('\n')) {
+      const line = raw.trim();
+      if (line === '' || line.startsWith('#') || line.startsWith(';')) continue;
+      if (line.startsWith('[')) {
+        // Section names are case-insensitive, the subsection name is not.
+        inOrigin = /^\[\s*remote\s+"origin"\s*\]$/i.test(line) && line.includes('"origin"');
+        continue;
+      }
+      if (!inOrigin) continue;
+      const m = /^url\s*=\s*(.*)$/i.exec(line);
+      if (!m) continue;
+      const value = (m[1] as string).trim();
+      if (value === '' || /["\\#;]/.test(value)) return undefined;
+      urls.push(value);
+    }
+    return urls.length === 1 ? urls[0] : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 const isLink = (p: string): boolean | undefined => {
@@ -92,6 +225,7 @@ export function assertStatePath(root: string, target: string): void {
 
 /** Creates `dir` (inside the state root) and every missing directory on the way, mode 0700. */
 export function ensureStateDir(root: string, dir: string): string {
+  if (isLink(root)) throw new Error(`refusing to use state root ${root}: it is a symlink`);
   mkdirSync(root, { recursive: true, mode: 0o700 });
   chmodSync(root, 0o700);
   let cur = resolve(root);
