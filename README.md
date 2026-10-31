@@ -1,15 +1,92 @@
 # studio
 
-Studio is a Claude Code plugin and TypeScript package for running a small software studio of coding-agent sessions from one control room: a lead session plans work from a board and a crew of role-based sessions carries it out in isolated worktrees.
+Studio is a Claude Code plugin and TypeScript package for running a small software studio of coding-agent sessions from one control room: a lead session plans work from a board and a crew of role-based sessions carries it out, each in its own sandboxed clone.
 
-Install:
+Status: 0.1.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue). See [CHANGELOG.md](CHANGELOG.md).
+
+## Install
 
 ```
 /plugin marketplace add Besser-Sehen-Landshut/studio
 /plugin install studio@studio-marketplace
 ```
 
-Status: stage (a) in development
+The plugin ships two skills (`studio:studio-lead` for the control room, `studio:studio-crew` for crew sessions) and a self-contained CLI. Claude Code puts a plugin's `bin/` on the Bash tool's `PATH` ([plugins reference, "Standard layout"](https://code.claude.com/docs/en/plugins-reference)), so the lead session simply runs `studio <command>`. Outside Claude Code, run `node <plugin>/bin/studio <command>`. The plugin needs no `pnpm install`: `bin/` loads the committed bundles in `dist-bundle/` (rebuilt with `pnpm bundle`; CI fails if they drift from `src/`).
+
+## Prerequisites
+
+- Claude Code CLI, `git`, and `gh` (authenticated for the control room's own use).
+- Node.js 24 or newer on `PATH` (the CLI and the crew guard hook run on it).
+- A least-privilege crew token created by the repository owner (for example a fine-grained token limited to the project's repositories: contents and pull requests read/write, no administration, no merge rights beyond what branch protection allows). Export it in the control room's environment and name the variable in `studio.yaml` under `crew_token.env`. Launch refuses without it unless `allow_ambient_credentials: true`.
+- Server-side branch protection on `main` and on every ref listed in `crew_allowed_workflow_refs`.
+- A platform where Claude Code's sandbox is supported.
+
+## Quick start
+
+Create `.studio/` in the project repository.
+
+`.studio/studio.yaml`:
+
+```yaml
+studio: 1
+primary_repo: org/app
+repos: [org/app]
+ci:
+  provider: github
+  runners: github-hosted
+  runner_labels: []
+  capacity: { total: 4, merge_max_busy: 3, check_twice_seconds: 30 }
+merge:
+  strategy: studio-queue
+  contract_paths: []
+roles:
+  builder: { model: strongest, wip: 2 }
+  reviewer: { model: strongest, wip: 1 }
+crew_token: { env: STUDIO_CREW_TOKEN }
+owner_only: []
+deploy_commands: []
+crew_allowed_workflows: []
+crew_allowed_workflow_refs: []
+```
+
+`.studio/board.yaml`:
+
+```yaml
+items:
+  - id: APP-1
+    title: Add a health endpoint
+    type: feature
+    role: builder
+    repo: org/app
+    size: S
+    priority: 1
+    status: ready
+    paths: []
+    touches: ["src/health/**"]
+    depends_on: []
+    dod: ["GET /health returns 200", "test added"]
+    plan: docs/plans/health.md
+    history: []
+```
+
+Then, in a Claude Code session in that repository, ask the lead (skill `studio:studio-lead`) to run the loop, or run it by hand: `studio board`, `studio plan`, `studio launch APP-1`, `studio status`, `studio collect APP-1`, `studio queue add org/app#12`, `studio queue run`. JSON Schemas for editors are in `schema/`.
+
+## CLI
+
+`studio [--project <dir>] [--json] <command>`
+
+| Command                 | Purpose                                                       |
+| ----------------------- | ------------------------------------------------------------- |
+| `board`                 | Show the board                                                |
+| `plan`                  | Dry-run the planner (JSON: assign, blocked, deferred)         |
+| `launch <id>`           | Start a crew session for a planned item                       |
+| `status`                | Crew sessions and their board status                          |
+| `collect <id>`          | Verify a crew report and PR head, move the item               |
+| `queue add <repo>#<pr>` | Put a reviewed PR into the merge queue                        |
+| `queue run`             | Merge queued PRs one at a time (exact head SHA, checks green) |
+| `state`                 | Refresh `state.json` in the state root                        |
+| `stop <id>`             | Stop a crew session                                           |
+| `metrics`               | Lead time and deployment frequency                            |
 
 ## Security model
 
