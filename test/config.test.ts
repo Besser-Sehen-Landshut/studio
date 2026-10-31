@@ -124,6 +124,12 @@ describe('loadConfig', () => {
     expect(cfg.crewToken).toEqual({ env: 'STUDIO_CREW_TOKEN' });
   });
 
+  it('defaults allow_ambient_credentials to false and reads true', () => {
+    expect(loadConfig(project(MINIMAL)).allowAmbientCredentials).toBe(false);
+    const cfg = loadConfig(project(`${MINIMAL}allow_ambient_credentials: true\n`));
+    expect(cfg.allowAmbientCredentials).toBe(true);
+  });
+
   it('reports the file path on a missing file and on invalid YAML', () => {
     const empty = mkdtempSync(join(tmpdir(), 'studio-cfg-'));
     dirs.push(empty);

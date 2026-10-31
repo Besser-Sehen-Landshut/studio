@@ -3,12 +3,13 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { WorkItem } from '../src/board.js';
@@ -21,7 +22,7 @@ import {
   writeBrief,
   writeCrewSettings,
 } from '../src/crew.js';
-import { DEFAULT_SECRET_GLOBS } from '../src/guard.js';
+import { DEFAULT_SECRET_GLOBS, evaluateGuard } from '../src/guard.js';
 import { type Ports, realPorts } from '../src/ports.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-crew-')));
@@ -81,6 +82,7 @@ const config: StudioConfig = studioConfigSchema.parse({
   deployCommands: ['make deploy'],
   crewAllowedWorkflows: ['ci.yml'],
   crewAllowedWorkflowRefs: ['main'],
+  allowAmbientCredentials: true,
 });
 
 const item: WorkItem = {
@@ -121,6 +123,17 @@ function fakePorts(started: Started[]): Ports {
   };
 }
 
+const CRED_PATHS = [
+  '.config/gh',
+  '.git-credentials',
+  '.ssh',
+  '.netrc',
+  '.gnupg',
+  '.aws',
+  '.docker/config.json',
+  'Library/Keychains',
+].map((p) => join(homedir(), p));
+
 describe('crewName', () => {
   it('lowercases id', () => {
     expect(crewName(item)).toBe('studio-builder-app-12');
@@ -140,6 +153,18 @@ describe('prepareWorktree', () => {
     const b = await prepareWorktree(project, item, ports);
     expect(b).toEqual(a);
     expect(existsSync(join(a.path, 'work.txt'))).toBe(true);
+  });
+
+  it('prunes stale worktree registrations and rejects unsafe ids', async () => {
+    const project = makeProject();
+    const ports = realPorts();
+    const a = await prepareWorktree(project, item, ports);
+    rmSync(a.path, { recursive: true, force: true });
+    const b = await prepareWorktree(project, item, ports);
+    expect(existsSync(join(b.path, 'README.md'))).toBe(true);
+    await expect(prepareWorktree(project, { ...item, id: 'bad id;' }, ports)).rejects.toThrow(
+      /item id/,
+    );
   });
 
   it('reuses an existing branch whose worktree was removed', async () => {
@@ -189,8 +214,19 @@ describe('writeCrewSettings', () => {
     const state = join(project, '.studio', 'state');
     const wt = join(project, '.studio', 'worktrees', 'APP-12');
     const gitDir = join(project, '.git', 'worktrees', 'APP-12');
-    const file = writeCrewSettings(state, item, wt, config, gitDir);
-    return { project, state, wt, gitDir, file, s: JSON.parse(readFileSync(file, 'utf8')) };
+    const commonDir = join(project, '.git');
+    const homeDir = join(state, 'homes', 'APP-12');
+    const file = writeCrewSettings(state, item, wt, config, { gitDir, commonDir, homeDir });
+    return {
+      project,
+      state,
+      wt,
+      gitDir,
+      commonDir,
+      homeDir,
+      file,
+      s: JSON.parse(readFileSync(file, 'utf8')),
+    };
   };
 
   it('env carries STUDIO_ROLE=crew and guard hook path is absolute', () => {
@@ -216,28 +252,48 @@ describe('writeCrewSettings', () => {
   });
 
   it('enables the sandbox limited to worktree and allowlist', () => {
-    const { wt, s } = setup();
+    const { wt, commonDir, homeDir, s } = setup();
     expect(s.sandbox).toEqual({
       enabled: true,
       failIfUnavailable: true,
       allowUnsandboxedCommands: false,
-      filesystem: { allowWrite: [wt, tmpdir()] },
+      filesystem: { allowWrite: [wt, tmpdir(), commonDir, homeDir], denyRead: CRED_PATHS },
       network: { allowedDomains: ['github.com', 'api.github.com'], strictAllowlist: true },
     });
   });
 
+  it('guard ctx secret paths deny reading real-home credentials', () => {
+    const { state, wt } = setup();
+    const ctx = JSON.parse(readFileSync(join(state, 'guard', 'APP-12.json'), 'utf8'));
+    const r = evaluateGuard(
+      { toolName: 'Read', toolInput: { file_path: join(homedir(), '.ssh', 'id_x') } },
+      ctx,
+    );
+    expect(r.decision).toBe('deny');
+    expect(ctx.worktree).toBe(wt);
+  });
+
+  it('rejects item ids that are unsafe in paths', () => {
+    const state = join(makeProject(), '.studio', 'state');
+    const bad = { ...item, id: '../x' };
+    expect(() => writeBrief(state, bad, config)).toThrow(/item id/);
+    expect(() =>
+      writeCrewSettings(state, bad, '/w', config, { gitDir: '/g', commonDir: '/c', homeDir: '/h' }),
+    ).toThrow(/item id/);
+  });
+
   it('writes the guard context with protected paths', () => {
-    const { state, wt, gitDir } = setup();
+    const { state, wt, gitDir, commonDir } = setup();
     const ctxFile = join(state, 'guard', 'APP-12.json');
     const ctx = JSON.parse(readFileSync(ctxFile, 'utf8'));
     expect(ctx).toEqual({
       worktree: wt,
       ownerOnly: ['gh release *'],
       deployCommands: ['make deploy'],
-      secretGlobs: DEFAULT_SECRET_GLOBS,
+      secretGlobs: [...DEFAULT_SECRET_GLOBS, ...CRED_PATHS.flatMap((p) => [p, `${p}/**`])],
       crewAllowedWorkflows: ['ci.yml'],
       crewAllowedWorkflowRefs: ['main'],
-      protectedPaths: [ctxFile, state, gitDir],
+      protectedPaths: [ctxFile, state, gitDir, commonDir],
     });
   });
 });
@@ -245,13 +301,20 @@ describe('writeCrewSettings', () => {
 describe('launchCrew', () => {
   const TOKEN_VAR = 'STUDIO_TEST_CREW_TOKEN';
   const SECRET = 'tok-secret-value-123';
-  const withToken: StudioConfig = { ...config, crewToken: { env: TOKEN_VAR } };
+  const strict: StudioConfig = { ...config, allowAmbientCredentials: false };
+  const withToken: StudioConfig = { ...strict, crewToken: { env: TOKEN_VAR } };
   let saved: Record<string, string | undefined>;
   beforeEach(() => {
     saved = {
       [TOKEN_VAR]: process.env[TOKEN_VAR],
       CDPATH: process.env.CDPATH,
       GIT_COMMITTER_DATE: process.env.GIT_COMMITTER_DATE,
+      CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+      CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK,
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+      GH_CONFIG_DIR: process.env.GH_CONFIG_DIR,
     };
     process.env.CDPATH = '/tmp';
     process.env.GIT_COMMITTER_DATE = '2020-01-01T00:00:00Z';
@@ -332,6 +395,78 @@ describe('launchCrew', () => {
     );
     expect(started).toHaveLength(0);
     expect(existsSync(join(project, '.studio', 'worktrees'))).toBe(false);
+  });
+
+  it('refuses without crewToken unless allow_ambient_credentials is set', async () => {
+    const project = makeProject();
+    const started: Started[] = [];
+    await expect(launchCrew(project, item, strict, fakePorts(started))).rejects.toThrow(
+      /crew_token|allow_ambient_credentials/,
+    );
+    expect(started).toHaveLength(0);
+    expect(existsSync(join(project, '.studio'))).toBe(false);
+    await launchCrew(project, item, config, fakePorts(started));
+    expect(started).toHaveLength(1);
+  });
+
+  it('uses an isolated HOME with only a git identity and credential helper', async () => {
+    process.env.SSH_AUTH_SOCK = '/tmp/agent.sock';
+    process.env.XDG_CONFIG_HOME = '/tmp/xdg';
+    process.env.GH_CONFIG_DIR = '/tmp/ghcfg';
+    process.env.ANTHROPIC_API_KEY = 'k-1';
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'o-1';
+    const project = makeProject();
+    const started: Started[] = [];
+    await launchCrew(project, item, config, fakePorts(started));
+    const env = (started[0] as Started).env;
+    const home = join(project, '.studio', 'state', 'homes', 'APP-12');
+    expect(env.HOME).toBe(home);
+    expect(readdirSync(home)).toEqual(['.gitconfig']);
+    const gc = readFileSync(join(home, '.gitconfig'), 'utf8');
+    expect(gc).toContain('name = Studio Crew');
+    expect(gc).toContain('email = crew@studio.invalid');
+    expect(gc).toMatch(
+      /\[credential "https:\/\/github.com"\]\n\thelper =\n\thelper = !gh auth git-credential/,
+    );
+    for (const k of ['SSH_AUTH_SOCK', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR']) {
+      expect(env[k]).toBeUndefined();
+    }
+    expect(env.ANTHROPIC_API_KEY).toBe('k-1');
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('o-1');
+  });
+
+  it('resolves CLAUDE_CONFIG_DIR from the parent env or the real home', async () => {
+    const project = makeProject();
+    const started: Started[] = [];
+    delete process.env.CLAUDE_CONFIG_DIR;
+    await launchCrew(project, item, config, fakePorts(started));
+    expect((started[0] as Started).env.CLAUDE_CONFIG_DIR).toBe(join(homedir(), '.claude'));
+    process.env.CLAUDE_CONFIG_DIR = '/tmp/custom-claude';
+    await launchCrew(project, item, config, fakePorts(started));
+    expect((started[1] as Started).env.CLAUDE_CONFIG_DIR).toBe('/tmp/custom-claude');
+  });
+
+  it('crew can commit through the sandboxed git dirs: common dir is writable and protected', async () => {
+    const project = makeProject();
+    await launchCrew(project, item, config, fakePorts([]));
+    const state = join(project, '.studio', 'state');
+    const s = JSON.parse(readFileSync(join(state, 'settings', 'APP-12.json'), 'utf8'));
+    const ctx = JSON.parse(readFileSync(join(state, 'guard', 'APP-12.json'), 'utf8'));
+    const common = join(project, '.git');
+    expect(s.sandbox.filesystem.allowWrite).toContain(common);
+    expect(ctx.protectedPaths).toContain(common);
+    expect(ctx.protectedPaths).toContain(join(common, 'worktrees', 'APP-12'));
+  });
+
+  it('serialises concurrent launches: both crew records survive', async () => {
+    const project = makeProject();
+    const ports = fakePorts([]);
+    await Promise.all([
+      launchCrew(project, item, config, ports),
+      launchCrew(project, { ...item, id: 'APP-13' }, config, ports),
+    ]);
+    const rec = JSON.parse(readFileSync(join(project, '.studio', 'state', 'crew.json'), 'utf8'));
+    expect(Object.keys(rec).sort()).toEqual(['APP-12', 'APP-13']);
   });
 
   it('throws when the role is not configured', async () => {

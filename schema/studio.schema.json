@@ -242,6 +242,10 @@
       ],
       "additionalProperties": false
     },
+    "allow_ambient_credentials": {
+      "default": false,
+      "type": "boolean"
+    },
     "owner_only": {
       "default": [],
       "type": "array",

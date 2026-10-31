@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -6,7 +7,7 @@ import {
   renameSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { WorkItem } from './board.js';
@@ -21,11 +22,20 @@ export const stateDirOf = (projectDir: string): string => join(projectDir, '.stu
 
 const GUARD_BIN = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'studio-guard.mjs');
 
+let tmpCounter = 0;
+
 function writeFileAtomic(file: string, content: string): void {
   mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
+  const tmp = `${file}.${process.pid}.${tmpCounter++}.${randomBytes(4).toString('hex')}.tmp`;
   writeFileSync(tmp, content);
   renameSync(tmp, file);
+}
+
+const ITEM_ID_RE = /^[A-Z]+-\d+$/;
+
+/** Item ids end up in paths and branch names: refuse anything but the board's id shape. */
+function assertItemId(id: string): void {
+  if (!ITEM_ID_RE.test(id)) throw new Error(`invalid item id: ${JSON.stringify(id)}`);
 }
 
 const same = (a: string, b: string): boolean => {
@@ -46,6 +56,7 @@ export async function prepareWorktree(
   item: WorkItem,
   ports: Ports,
 ): Promise<{ path: string; branch: string }> {
+  assertItemId(item.id);
   const path = join(projectDir, '.studio', 'worktrees', item.id);
   const branch = `studio/${item.id}`;
   const listing = await ports.git.run(projectDir, ['worktree', 'list', '--porcelain']);
@@ -58,6 +69,7 @@ export async function prepareWorktree(
     }
   }
   await ports.git.run(projectDir, ['fetch', 'origin']);
+  await ports.git.run(projectDir, ['worktree', 'prune']);
   let branchExists = true;
   try {
     await ports.git.run(projectDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
@@ -77,6 +89,7 @@ const list = (xs: string[]): string => (xs.length > 0 ? xs.join(', ') : '(none)'
 
 /** Writes the crew's instructions to `<stateDir>/briefs/<id>.md`. */
 export function writeBrief(stateDir: string, item: WorkItem, config: StudioConfig): string {
+  assertItemId(item.id);
   const role = config.roles[item.role];
   const skills = role?.skills ?? { required: [], allowed: [], denied: [] };
   const roleFile = join(dirname(stateDir), 'roles', `${item.role}.md`);
@@ -117,6 +130,7 @@ export function writeBrief(stateDir: string, item: WorkItem, config: StudioConfi
     '- Commit with `git commit -F <message file>` or a literal `-m "..."`; never use `$(...)` inside git or gh commands.',
     `- Push with an explicit refspec: \`git push -u origin HEAD:refs/heads/studio/${id}\`.`,
     `- Open the pull request with \`gh pr create --title "${id}: <summary>" --body-file <file>\`.`,
+    '- Git identity and GitHub authentication are preconfigured; do not change git config or log in.',
     '- Never merge, deploy, force-push, or touch secrets.',
     '- If you are blocked: write the report with status blocked and stop. Never wait for an answer.',
     '',
@@ -160,18 +174,22 @@ export function writeCrewSettings(
   item: WorkItem,
   worktree: string,
   config: StudioConfig,
-  gitDir: string,
+  dirs: { gitDir: string; commonDir: string; homeDir: string },
 ): string {
+  assertItemId(item.id);
   const id = item.id;
+  const realHome = homedir();
+  const denyRead = CREDENTIAL_PATHS.map((p) => join(realHome, p));
   const ctxFile = join(stateDir, 'guard', `${id}.json`);
   const ctx = {
     worktree,
     ownerOnly: config.ownerOnly,
     deployCommands: config.deployCommands,
-    secretGlobs: DEFAULT_SECRET_GLOBS,
+    // Absolute credential locations of the real home, on top of the default globs.
+    secretGlobs: [...DEFAULT_SECRET_GLOBS, ...denyRead.flatMap((p) => [p, `${p}/**`])],
     crewAllowedWorkflows: config.crewAllowedWorkflows,
     crewAllowedWorkflowRefs: config.crewAllowedWorkflowRefs,
-    protectedPaths: [ctxFile, stateDir, gitDir],
+    protectedPaths: [ctxFile, stateDir, dirs.gitDir, dirs.commonDir],
   };
   writeFileAtomic(ctxFile, `${JSON.stringify(ctx, null, 2)}\n`);
   const settings = {
@@ -190,7 +208,11 @@ export function writeCrewSettings(
       enabled: true,
       failIfUnavailable: true,
       allowUnsandboxedCommands: false,
-      filesystem: { allowWrite: [worktree, tmpdir()] },
+      filesystem: {
+        // commonDir: git writes objects, refs and worktrees/<id> there on commit and push.
+        allowWrite: [worktree, tmpdir(), dirs.commonDir, dirs.homeDir],
+        denyRead,
+      },
       network: { allowedDomains: config.sandbox.networkAllow, strictAllowlist: true },
     },
   };
@@ -199,7 +221,28 @@ export function writeCrewSettings(
   return file;
 }
 
-const BASE_ENV = ['PATH', 'HOME', 'LANG', 'TERM', 'USER', 'TMPDIR'] as const;
+/** Credential locations below the real home that a crew session must never read. */
+const CREDENTIAL_PATHS = [
+  '.config/gh',
+  '.git-credentials',
+  '.ssh',
+  '.netrc',
+  '.gnupg',
+  '.aws',
+  '.docker/config.json',
+  'Library/Keychains',
+];
+
+const GITCONFIG = `[user]
+\tname = Studio Crew
+\temail = crew@studio.invalid
+[credential "https://github.com"]
+\thelper =
+\thelper = !gh auth git-credential
+`;
+
+const BASE_ENV = ['PATH', 'LANG', 'TERM', 'USER', 'TMPDIR'] as const;
+const PASS_THROUGH_ENV = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'] as const;
 
 export interface CrewRecord {
   name: string;
@@ -218,29 +261,64 @@ function readCrewFile(file: string): Record<string, CrewRecord> {
   }
 }
 
+// Updates of crew.json are serialised in-process; the unique temp name of writeFileAtomic keeps
+// concurrent writers from different processes from clobbering each other's temp file.
+let crewFileChain: Promise<void> = Promise.resolve();
+
+function updateCrewFile(
+  file: string,
+  mutate: (all: Record<string, CrewRecord>) => void,
+): Promise<void> {
+  const run = crewFileChain.then(() => {
+    const all = readCrewFile(file);
+    mutate(all);
+    writeFileAtomic(file, `${JSON.stringify(all, null, 2)}\n`);
+  });
+  crewFileChain = run.catch(() => {});
+  return run;
+}
+
 export async function launchCrew(
   projectDir: string,
   item: WorkItem,
   config: StudioConfig,
   ports: Ports,
 ): Promise<{ name: string; pid: number; log: string }> {
+  assertItemId(item.id);
   const role = config.roles[item.role];
   if (!role) throw new Error(`role ${item.role} is not configured`);
+  // Fail closed: without the least-privilege token the session would fall back to ambient
+  // credentials, so that needs an explicit opt-in.
   let token: string | undefined;
-  if (config.crewToken) {
-    token = process.env[config.crewToken.env];
-    if (!token) {
-      throw new Error(
-        `crew token variable ${config.crewToken.env} is not set; refusing to launch without the least-privilege token`,
-      );
-    }
+  if (config.crewToken) token = process.env[config.crewToken.env] || undefined;
+  if (!token && !config.allowAmbientCredentials) {
+    throw new Error(
+      config.crewToken
+        ? `crew token variable ${config.crewToken.env} is not set; refusing to launch without the least-privilege token (or set allow_ambient_credentials: true)`
+        : 'crew_token is not configured; refusing to launch without a least-privilege token (or set allow_ambient_credentials: true)',
+    );
   }
   const stateDir = stateDirOf(projectDir);
   const wt = await prepareWorktree(projectDir, item, ports);
-  const gitDirRaw = await ports.git.run(wt.path, ['rev-parse', '--git-dir']);
-  const gitDir = resolve(wt.path, gitDirRaw.trim());
+  const gitDir = resolve(
+    wt.path,
+    (await ports.git.run(wt.path, ['rev-parse', '--git-dir'])).trim(),
+  );
+  const commonDir = resolve(
+    wt.path,
+    (await ports.git.run(wt.path, ['rev-parse', '--git-common-dir'])).trim(),
+  );
+  // Isolated HOME: only a git identity and a credential helper that reads GH_TOKEN. Nothing is
+  // copied or linked from the real home (no gh config, git credential store, ssh keys, netrc).
+  const homeDir = join(stateDir, 'homes', item.id);
+  mkdirSync(homeDir, { recursive: true });
+  writeFileSync(join(homeDir, '.gitconfig'), GITCONFIG);
   const brief = writeBrief(stateDir, item, config);
-  const settings = writeCrewSettings(stateDir, item, wt.path, config, gitDir);
+  const settings = writeCrewSettings(stateDir, item, wt.path, config, {
+    gitDir,
+    commonDir,
+    homeDir,
+  });
   const settingsEnv = (
     JSON.parse(readFileSync(settings, 'utf8')) as { env: Record<string, string> }
   ).env;
@@ -248,6 +326,13 @@ export async function launchCrew(
   for (const k of BASE_ENV) {
     const v = process.env[k];
     if (v !== undefined) env[k] = v;
+  }
+  env.HOME = homeDir;
+  // The Claude login and plugins live in the config dir; it holds no gh or git credentials.
+  env.CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+  for (const k of PASS_THROUGH_ENV) {
+    const v = process.env[k];
+    if (v) env[k] = v;
   }
   Object.assign(env, settingsEnv);
   if (token) env.GH_TOKEN = token;
@@ -272,9 +357,7 @@ export async function launchCrew(
     env,
   );
   const name = crewName(item);
-  const crewFile = join(stateDir, 'crew.json');
-  const all = readCrewFile(crewFile);
-  all[item.id] = {
+  const record: CrewRecord = {
     name,
     item: item.id,
     role: item.role,
@@ -282,7 +365,9 @@ export async function launchCrew(
     log,
     startedAt: ports.clock.now().toISOString(),
   };
-  writeFileAtomic(crewFile, `${JSON.stringify(all, null, 2)}\n`);
+  await updateCrewFile(join(stateDir, 'crew.json'), (all) => {
+    all[item.id] = record;
+  });
   return { name, pid, log };
 }
 

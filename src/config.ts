@@ -54,6 +54,8 @@ export const studioConfigSchema = z.strictObject({
   sandbox: z.strictObject({ networkAllow: strList }).default({ networkAllow: [] }),
   // Name of the env var that holds the least-privilege token (never the token itself).
   crewToken: z.strictObject({ env: z.string().min(1) }).optional(),
+  // Opt-in: let a crew run start without the least-privilege token (default: refuse).
+  allowAmbientCredentials: z.boolean().default(false),
   ownerOnly: strList,
   deployCommands: strList,
   // Workflows (file name or name) a crew session may start with `gh workflow run`.
