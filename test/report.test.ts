@@ -1,10 +1,16 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { WorkItem } from '../src/board.js';
-import { collectReport, MAX_REPORT_BYTES, parseReport, ReportError } from '../src/report.js';
+import {
+  collectReport,
+  MAX_REPORT_BYTES,
+  parseReport,
+  ReportError,
+  readReport,
+} from '../src/report.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'studio-report-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -132,6 +138,18 @@ describe('collectReport', () => {
 
   it('throws ReportError when the file is missing', () => {
     expect(() => collectReport(dir, 'APP-9')).toThrow(ReportError);
+  });
+
+  it('R80: refuses a report last modified before notBefore', () => {
+    write('APP-2', `status: done\npr: 4\nhead_sha: ${SHA}\ntests_run: 2`);
+    const file = join(dir, '.studio', 'reports', 'APP-2.md');
+    utimesSync(file, new Date('2026-10-31T09:00:00Z'), new Date('2026-10-31T09:00:00Z'));
+    const start = new Date('2026-10-31T10:00:00Z');
+    expect(() => readReport(dir, 'APP-2', undefined, { notBefore: start })).toThrow(
+      /older than the crew run/,
+    );
+    utimesSync(file, start, start);
+    expect(readReport(dir, 'APP-2', undefined, { notBefore: start }).status).toBe('done');
   });
 });
 

@@ -28066,6 +28066,7 @@ import {
   lstatSync as lstatSync2,
   readFileSync as readFileSync4,
   realpathSync as realpathSync2,
+  unlinkSync as unlinkSync2,
   writeFileSync as writeFileSync3
 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
@@ -28451,6 +28452,29 @@ async function ownerOriginUrl(projectDir, ports) {
   if (!url2) throw new Error(`project ${projectDir} has no origin URL`);
   return url2;
 }
+function removeOldReport(stateRoot, clone2, id) {
+  assertItemId(id);
+  let cur = clone2;
+  for (const seg of [".studio", "reports", `${id}.md`]) {
+    cur = join4(cur, seg);
+    assertStatePath(stateRoot, cur);
+    let st;
+    try {
+      st = lstatSync2(cur);
+    } catch {
+      return;
+    }
+    if (st.isSymbolicLink()) {
+      unlinkSync2(cur);
+      return;
+    }
+    if (seg === `${id}.md`) {
+      removeStateEntry(stateRoot, cur);
+      return;
+    }
+    if (!st.isDirectory()) return;
+  }
+}
 function isLink2(p) {
   try {
     return lstatSync2(p).isSymbolicLink();
@@ -28702,6 +28726,7 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     originUrl: await ownerOriginUrl(projectDir, ports)
   });
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
+  removeOldReport(stateRoot, wt.path, item.id);
   const homeDir = join4(stateRoot, "homes", item.id);
   removeStateEntry(stateRoot, homeDir);
   ensureStateDir(stateRoot, homeDir);
@@ -29380,15 +29405,15 @@ function parseReport(text, item) {
 }
 var MAX_REPORT_BYTES = 256 * 1024;
 var UNSAFE = "report file is missing or not a safe regular file";
-function readReportFile(root, file2) {
+function readReportFile(root, file2, notBefore) {
   const unsafe = () => new ReportError(UNSAFE);
   let fd;
   try {
     const parts = [root, join6(root, ".studio"), join6(root, ".studio", "reports"), file2];
     parts.forEach((p, i2) => {
-      const st = lstatSync4(p);
-      if (st.isSymbolicLink()) throw unsafe();
-      if (i2 < parts.length - 1 ? !st.isDirectory() : !st.isFile()) throw unsafe();
+      const st2 = lstatSync4(p);
+      if (st2.isSymbolicLink()) throw unsafe();
+      if (i2 < parts.length - 1 ? !st2.isDirectory() : !st2.isFile()) throw unsafe();
     });
     const realRoot = realpathSync3(root);
     if (!realpathSync3(file2).startsWith(realRoot + sep4)) throw unsafe();
@@ -29396,7 +29421,11 @@ function readReportFile(root, file2) {
       file2,
       constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0)
     );
-    if (!fstatSync(fd).isFile()) throw unsafe();
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw unsafe();
+    if (notBefore !== void 0 && !(st.mtimeMs >= notBefore.getTime())) {
+      throw new ReportError("report is older than the crew run");
+    }
     const buf = Buffer.alloc(MAX_REPORT_BYTES + 1);
     let total = 0;
     while (total < buf.length) {
@@ -29412,9 +29441,9 @@ function readReportFile(root, file2) {
     if (fd !== void 0) closeSync2(fd);
   }
 }
-function readReport(worktree, id, item) {
+function readReport(worktree, id, item, opts = {}) {
   const file2 = join6(worktree, ".studio", "reports", `${id}.md`);
-  return parseReport(readReportFile(worktree, file2), item);
+  return parseReport(readReportFile(worktree, file2, opts.notBefore), item);
 }
 function checkReportHead(report, prHead) {
   if ((report.status === "done" || report.headSha !== void 0) && report.headSha?.toLowerCase() !== prHead.toLowerCase()) {
@@ -29692,8 +29721,24 @@ async function runCli(argv, deps) {
             `${item.id} is ${item.status}, only assigned or in_progress items can be collected`
           );
         }
+        const record2 = readCrewRecords(stateRoot())[item.id];
+        let notBefore;
+        if (record2 !== void 0) {
+          if (!Number.isInteger(record2.pid) || record2.pid <= 0) {
+            throw new Error(`crew record for ${item.id} has no valid pid`);
+          }
+          if (ports.claude.alive(record2.pid)) {
+            throw new Error(
+              `crew ${record2.name} is still running (pid ${record2.pid}); collect after it exited, or stop it first`
+            );
+          }
+          notBefore = new Date(record2.startedAt);
+          if (Number.isNaN(notBefore.getTime())) {
+            throw new Error(`crew record for ${item.id} has no valid startedAt`);
+          }
+        }
         const clone2 = join8(stateRoot(), "clones", item.id);
-        const report = readReport(clone2, item.id, item);
+        const report = readReport(clone2, item.id, item, { notBefore });
         let branch = `studio/${item.id}`;
         if (report.pr !== void 0) {
           const holder = board.items.find(

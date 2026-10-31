@@ -7,6 +7,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,7 +15,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { loadBoard } from '../src/board.js';
 import { runCli } from '../src/cli.js';
-import { stateRootFor } from '../src/paths.js';
+import { stateRootFor, writeStateFile } from '../src/paths.js';
 import type { Claude, Gh, Ports } from '../src/ports.js';
 import { realPorts } from '../src/ports.js';
 import { acquireQueueRunLock, enqueue, loadQueue, saveQueue } from '../src/queue.js';
@@ -268,6 +269,55 @@ describe('studio CLI', () => {
       'in_progress>in_review',
     ]);
     expect(calls.some((c) => c.includes('headRefOid'))).toBe(true);
+  });
+
+  it('R80: collect refuses while the crew process is still alive', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    const { gh } = fakeGh();
+    const { ports } = fakePorts(gh);
+    expect((await cli(fx, ports, 'launch', 'APP-1')).code).toBe(0);
+    writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 3`);
+    const r = await cli(fx, ports, 'collect', 'APP-1');
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/crew .* is still running/);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+  });
+
+  it('R80: collect refuses a report older than the crew start', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+    writeStateFile(
+      fx.state,
+      join(fx.state, 'crew.json'),
+      JSON.stringify({
+        'APP-1': {
+          name: 'studio-builder-app-1',
+          item: 'APP-1',
+          role: 'builder',
+          pid: 999999,
+          log: join(fx.state, 'logs', 'APP-1.jsonl'),
+          startedAt: '2026-10-31T10:00:00.000Z',
+        },
+      }),
+    );
+    writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 3`);
+    const file = join(fx.state, 'clones', 'APP-1', '.studio', 'reports', 'APP-1.md');
+    const old = new Date('2026-10-31T09:00:00Z');
+    utimesSync(file, old, old);
+    const { gh } = fakeGh((l) =>
+      l.startsWith('pr view 7 --repo org/app')
+        ? { stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-1', ...OWN }) }
+        : undefined,
+    );
+    const { ports } = fakePorts(gh);
+    const stale = await cli(fx, ports, 'collect', 'APP-1');
+    expect(stale.code).toBe(1);
+    expect(stale.err).toMatch(/older than the crew run/);
+    const fresh = new Date('2026-10-31T10:05:00Z');
+    utimesSync(file, fresh, fresh);
+    const ok = await cli(fx, ports, 'collect', 'APP-1');
+    expect(ok.err).toBe('');
+    expect(ok.code).toBe(0);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('in_review');
   });
 
   it('collect review item without pr → merged, verdict in output and notes', async () => {

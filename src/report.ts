@@ -111,7 +111,7 @@ const UNSAFE = 'report file is missing or not a safe regular file';
  * Reads a crew-written report as untrusted input: no symlink between the clone root and the file,
  * a regular file of at most 256 KB, opened without following links. Errors carry fixed text only.
  */
-function readReportFile(root: string, file: string): string {
+function readReportFile(root: string, file: string, notBefore?: Date): string {
   const unsafe = () => new ReportError(UNSAFE);
   let fd: number | undefined;
   try {
@@ -127,7 +127,12 @@ function readReportFile(root: string, file: string): string {
       file,
       constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
     );
-    if (!fstatSync(fd).isFile()) throw unsafe();
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw unsafe();
+    // A report written before the current crew run started belongs to an earlier run.
+    if (notBefore !== undefined && !(st.mtimeMs >= notBefore.getTime())) {
+      throw new ReportError('report is older than the crew run');
+    }
     // Bounded read that does not trust the size: a file that grows still stops at the cap.
     const buf = Buffer.alloc(MAX_REPORT_BYTES + 1);
     let total = 0;
@@ -145,10 +150,18 @@ function readReportFile(root: string, file: string): string {
   }
 }
 
-/** Reads and parses `<worktree>/.studio/reports/<id>.md` exactly once. */
-export function readReport(worktree: string, id: string, item?: WorkItem): Report {
+/**
+ * Reads and parses `<worktree>/.studio/reports/<id>.md` exactly once. With `notBefore` (the crew
+ * start), a report last modified before that moment is refused.
+ */
+export function readReport(
+  worktree: string,
+  id: string,
+  item?: WorkItem,
+  opts: { notBefore?: Date } = {},
+): Report {
   const file = join(worktree, '.studio', 'reports', `${id}.md`);
-  return parseReport(readReportFile(worktree, file), item);
+  return parseReport(readReportFile(worktree, file, opts.notBefore), item);
 }
 
 /**

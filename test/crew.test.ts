@@ -794,6 +794,42 @@ describe('launchCrew', () => {
     expect(readdirSync(join(state, 'tmp', 'APP-12'))).toEqual([]);
   });
 
+  it('R80: a relaunch deletes the previous report from the reused clone', async () => {
+    const { project, state, launcher } = makeFixture();
+    const ports = fakePorts([]);
+    await launchCrew(project, item, config, ports, launcher);
+    const reports = join(state, 'clones', 'APP-12', '.studio', 'reports');
+    mkdirSync(reports, { recursive: true });
+    writeFileSync(join(reports, 'APP-12.md'), '---\nstatus: done\n---\n');
+    writeFileSync(join(reports, 'APP-99.md'), 'other item');
+    await launchCrew(project, item, config, ports, launcher);
+    expect(existsSync(join(reports, 'APP-12.md'))).toBe(false);
+    expect(existsSync(join(reports, 'APP-99.md'))).toBe(true);
+  });
+
+  it('R80: a planted symlink is unlinked, never followed', async () => {
+    const { project, state, launcher } = makeFixture();
+    const ports = fakePorts([]);
+    await launchCrew(project, item, config, ports, launcher);
+    const clone = join(state, 'clones', 'APP-12');
+    const outside = join(root, `outside-${n++}`);
+    mkdirSync(join(outside, 'reports'), { recursive: true });
+    writeFileSync(join(outside, 'reports', 'APP-12.md'), 'keep');
+    writeFileSync(join(outside, 'victim.md'), 'keep');
+    // .studio itself is a link to a directory outside the clone
+    symlinkSync(outside, join(clone, '.studio'));
+    await launchCrew(project, item, config, ports, launcher);
+    expect(existsSync(join(clone, '.studio'))).toBe(false);
+    expect(readFileSync(join(outside, 'reports', 'APP-12.md'), 'utf8')).toBe('keep');
+    // the report path is a link to a file outside the clone
+    mkdirSync(join(clone, '.studio', 'reports'), { recursive: true });
+    symlinkSync(join(outside, 'victim.md'), join(clone, '.studio', 'reports', 'APP-12.md'));
+    await launchCrew(project, item, config, ports, launcher);
+    expect(lstatSync(join(clone, '.studio', 'reports')).isDirectory()).toBe(true);
+    expect(existsSync(join(clone, '.studio', 'reports', 'APP-12.md'))).toBe(false);
+    expect(readFileSync(join(outside, 'victim.md'), 'utf8')).toBe('keep');
+  });
+
   it('serialises concurrent launches: both crew records survive', async () => {
     const { project, state, launcher } = makeFixture();
     const ports = fakePorts([]);

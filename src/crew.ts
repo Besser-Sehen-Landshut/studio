@@ -4,6 +4,7 @@ import {
   lstatSync,
   readFileSync,
   realpathSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -125,6 +126,35 @@ async function ownerOriginUrl(projectDir: string, ports: Ports): Promise<string>
   const url = (await ports.git.run(projectDir, ['remote', 'get-url', 'origin'])).trim();
   if (!url) throw new Error(`project ${projectDir} has no origin URL`);
   return url;
+}
+
+/**
+ * Deletes `<clone>/.studio/reports/<id>.md` left by an earlier run, so collect can never pick up
+ * a stale report. The clone is crew-controlled: every component is checked with lstat, and a
+ * symlink on the way (or at the report path) is itself unlinked, never followed.
+ */
+export function removeOldReport(stateRoot: string, clone: string, id: string): void {
+  assertItemId(id);
+  let cur = clone;
+  for (const seg of ['.studio', 'reports', `${id}.md`]) {
+    cur = join(cur, seg);
+    assertStatePath(stateRoot, cur);
+    let st: ReturnType<typeof lstatSync>;
+    try {
+      st = lstatSync(cur);
+    } catch {
+      return; // nothing there
+    }
+    if (st.isSymbolicLink()) {
+      unlinkSync(cur);
+      return;
+    }
+    if (seg === `${id}.md`) {
+      removeStateEntry(stateRoot, cur);
+      return;
+    }
+    if (!st.isDirectory()) return; // a file named .studio or reports holds no report
+  }
 }
 
 function isLink(p: string): boolean {
@@ -470,6 +500,7 @@ export async function launchCrew(
     originUrl: await ownerOriginUrl(projectDir, ports),
   });
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
+  removeOldReport(stateRoot, wt.path, item.id);
   // Isolated HOME, recreated from scratch on every launch: only a git identity and a credential
   // helper that reads GH_TOKEN. Nothing is copied or linked from the real home.
   const homeDir = join(stateRoot, 'homes', item.id);

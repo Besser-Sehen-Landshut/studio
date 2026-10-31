@@ -224,10 +224,27 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             `${item.id} is ${item.status}, only assigned or in_progress items can be collected`,
           );
         }
+        // A running crew may still rewrite its report; an earlier run's report is not this one.
+        const record = readCrewRecords(stateRoot())[item.id];
+        let notBefore: Date | undefined;
+        if (record !== undefined) {
+          if (!Number.isInteger(record.pid) || record.pid <= 0) {
+            throw new Error(`crew record for ${item.id} has no valid pid`);
+          }
+          if (ports.claude.alive(record.pid)) {
+            throw new Error(
+              `crew ${record.name} is still running (pid ${record.pid}); collect after it exited, or stop it first`,
+            );
+          }
+          notBefore = new Date(record.startedAt);
+          if (Number.isNaN(notBefore.getTime())) {
+            throw new Error(`crew record for ${item.id} has no valid startedAt`);
+          }
+        }
         // Reading files only: git never runs inside a crew clone.
         const clone = join(stateRoot(), 'clones', item.id);
         // The report is read exactly once; everything below verifies and stores that one result.
-        const report = readReport(clone, item.id, item);
+        const report = readReport(clone, item.id, item, { notBefore });
         let branch = `studio/${item.id}`;
         if (report.pr !== undefined) {
           const holder = board.items.find(
