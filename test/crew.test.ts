@@ -256,7 +256,9 @@ describe('writeBrief', () => {
     expect(file).toBe(join(state, 'briefs', 'APP-12.md'));
     const text = readFileSync(file, 'utf8');
     expect(text).toContain('ROLE-BRIEF-MARKER');
-    expect(text).toContain('Invoke these skills first: superpowers:test-driven-development');
+    expect(text).toContain(
+      'Invoke these skills first: studio:studio-crew, superpowers:test-driven-development',
+    );
     expect(text).toContain('x:ok');
     expect(text).toContain('x:no');
     expect(text).toContain('APP-12');
@@ -269,6 +271,39 @@ describe('writeBrief', () => {
     expect(text).toContain('.studio/reports/APP-12.md');
     expect(text).toMatch(/status: done\|blocked\|failed/);
     expect(text).toMatch(/never merge/i);
+  });
+
+  it('writes the report last and does not commit it', () => {
+    const { project, state } = makeFixture();
+    const text = readFileSync(writeBrief(state, item, config, project), 'utf8');
+    expect(text).toContain('as the last step, after pushing; do not commit it');
+    expect(text).toContain('`git rev-parse HEAD`');
+    expect(text).not.toContain('commit it with the pull request');
+  });
+
+  it('lists studio:studio-crew once, first, even if the role lists it', () => {
+    const { project, state } = makeFixture();
+    const dup = {
+      ...config,
+      roles: {
+        ...config.roles,
+        builder: {
+          ...config.roles.builder,
+          skills: { required: ['a:one', 'studio:studio-crew'], allowed: [], denied: [] },
+        },
+      },
+    } as typeof config;
+    const text = readFileSync(writeBrief(state, item, dup, project), 'utf8');
+    expect(text).toContain('Invoke these skills first: studio:studio-crew, a:one\n');
+  });
+
+  it('tells the crew to run the full test command and never report a partial count', () => {
+    const { project, state } = makeFixture();
+    const text = readFileSync(writeBrief(state, item, config, project), 'utf8');
+    expect(text).toContain(
+      "Run the project's full test command; tests_run is the count from that run.",
+    );
+    expect(text).toContain('never report a partial count');
   });
 
   it('works without a role brief file', () => {

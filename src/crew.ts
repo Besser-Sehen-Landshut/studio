@@ -144,6 +144,10 @@ export function writeBrief(
   assertItemId(item.id);
   const role = config.roles[item.role];
   const skills = role?.skills ?? { required: [], allowed: [], denied: [] };
+  const first = [
+    'studio:studio-crew',
+    ...skills.required.filter((s) => s !== 'studio:studio-crew'),
+  ];
   const roleFile = join(projectDir, '.studio', 'roles', `${item.role}.md`);
   const roleBrief = existsSync(roleFile) ? readFileSync(roleFile, 'utf8').trim() : '';
   const id = item.id;
@@ -170,7 +174,7 @@ export function writeBrief(
     '',
     '## Skills',
     '',
-    `Invoke these skills first: ${list(skills.required)}`,
+    `Invoke these skills first: ${list(first)}`,
     `Allowed skills: ${list(skills.allowed)}`,
     `Denied skills (never invoke): ${list(skills.denied)}`,
     '',
@@ -184,11 +188,12 @@ export function writeBrief(
     `- Open the pull request with \`gh pr create --title "${id}: <summary>" --body-file <file>\`.`,
     '- Git identity and GitHub authentication are preconfigured; do not change git config or log in.',
     '- Never merge, deploy, force-push, or touch secrets.',
+    "- Run the project's full test command; tests_run is the count from that run. If the command errors or fails, fix it or report status failed — never report a partial count.",
     '- If you are blocked: write the report with status blocked and stop. Never wait for an answer.',
     '',
     '## Report contract',
     '',
-    `Write \`.studio/reports/${id}.md\` in the checkout and commit it with the pull request.`,
+    `Write \`.studio/reports/${id}.md\` in the checkout as the last step, after pushing; do not commit it. head_sha is the SHA of the pushed head (\`git rev-parse HEAD\`).`,
     'It starts with YAML frontmatter:',
     '',
     '```yaml',
