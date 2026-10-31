@@ -255,6 +255,13 @@
       "items": {
         "type": "string"
       }
+    },
+    "crew_allowed_workflows": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": [

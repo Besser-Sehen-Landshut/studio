@@ -69,7 +69,13 @@ describe('loadConfig', () => {
     expect(cfg.crewToken).toBeUndefined();
     expect(cfg.ownerOnly).toEqual([]);
     expect(cfg.deployCommands).toEqual([]);
+    expect(cfg.crewAllowedWorkflows).toEqual([]);
     expect(cfg.sandbox.networkAllow).toEqual([]);
+  });
+
+  it('reads crew_allowed_workflows', () => {
+    const cfg = loadConfig(project(`${MINIMAL}crew_allowed_workflows: [ci.yml]\n`));
+    expect(cfg.crewAllowedWorkflows).toEqual(['ci.yml']);
   });
 
   it('rejects version other than 1', () => {

@@ -1,9 +1,14 @@
 // Crew guard: decides whether a tool call of a crew session may run.
 // The sandbox only covers shell commands, so this is the layer that confines the file tools
 // (Edit/Write/...) to the worktree. Best effort for shell commands; every internal error denies.
+// This hook is the LAST of four layers: sandbox, least-privilege token, server-side branch
+// protection (the primary layer for main) and this guard. It is best effort for shell commands.
+// Principle: fail closed. In any security-relevant position (command word, subcommand and
+// arguments, push refspecs, write paths, deploy matching) an unresolved word (variable, command
+// substitution, backtick, unexpandable glob) is a deny, never ignored or taken literally.
 // Keep this module free of imports from other src files: bin/studio-guard.mjs may load it directly
 // through Node's native TypeScript type stripping when the package was not built.
-import { globSync, lstatSync, readlinkSync } from 'node:fs';
+import { type Dirent, globSync, lstatSync, readdirSync, readlinkSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path';
 import { type ParseEntry, parse as shellParse } from 'shell-quote';
 
@@ -21,6 +26,10 @@ export interface GuardContext {
   deployCommands: string[];
   /** Path globs of files a crew session must not touch. */
   secretGlobs: string[];
+  /** Workflows (file name or name) a crew session may start with `gh workflow run`. */
+  crewAllowedWorkflows?: string[];
+  /** Absolute paths that must never be written (guard ctx file, state dir). */
+  protectedPaths?: string[];
 }
 
 export interface GuardResult {
@@ -53,6 +62,8 @@ interface Env {
   secretRes: RegExp[];
   deployGlobs: { glob: string; re: RegExp }[];
   ownerGlobs: { glob: string; re: RegExp }[];
+  allowedWorkflows: string[];
+  protectedReal: string[];
 }
 
 export function evaluateGuard(input: GuardInput, ctx: GuardContext): GuardResult {
@@ -94,7 +105,7 @@ function fileGlobToRegExp(glob: string): RegExp {
       i++;
     }
   }
-  return new RegExp(`^${glob.startsWith('/') ? '' : '(?:.*/)?'}${re}$`);
+  return new RegExp(`^${glob.startsWith('/') ? '' : '(?:.*/)?'}${re}$`, 'i');
 }
 
 function commandGlobToRegExp(glob: string): RegExp {
@@ -185,18 +196,49 @@ function isInside(env: Env, real: string): boolean {
 
 const ALLOWED_DEVICES = new Set(['/dev/null', '/dev/stdout', '/dev/stderr']);
 
+const hasMagic = (t: string): boolean => /[*?[]/.test(t);
+
+/** Concrete candidates for a path with glob characters: matches of its directory part and leaf. */
+function expandGlobPath(t: string, base: string): string[] {
+  const out = [t];
+  if (!hasMagic(t)) return out;
+  const idx = t.lastIndexOf('/');
+  const dirPart = idx > 0 ? t.slice(0, idx) : idx === 0 ? '/' : '';
+  const leaf = t.slice(idx + 1);
+  let dirs: string[] = [dirPart];
+  try {
+    if (dirPart !== '' && hasMagic(dirPart)) dirs = globSync(dirPart, { cwd: base }).slice(0, 500);
+    for (const d of dirs) {
+      if (hasMagic(leaf)) {
+        const where = d === '' ? base : resolveReal(d, base);
+        for (const m of globSync(leaf, { cwd: where }).slice(0, 500)) out.push(join(d, m));
+      } else out.push(join(d, leaf));
+    }
+  } catch {
+    deny(`unexpandable glob in write path: ${t}`);
+  }
+  return out;
+}
+
+function isProtected(env: Env, real: string): boolean {
+  const low = real.toLowerCase();
+  return env.protectedReal.some((p) => low === p || low.startsWith(`${p}/`));
+}
+
 function checkWritePath(env: Env, tok: string, cwd: string | null, why: string): void {
   if (ALLOWED_DEVICES.has(tok)) return;
-  for (const t of braceExpand(tok)) {
-    if (t.includes(SUBST) || t.includes('$') || t.includes('`') || t.startsWith('~')) {
-      deny(`unresolvable path in ${why}: ${t.replaceAll(SUBST, '<runtime>')}`);
+  for (const t0 of braceExpand(tok)) {
+    if (t0.includes(SUBST) || t0.includes('$') || t0.includes('`') || t0.startsWith('~')) {
+      deny(`unresolvable path in ${why}: ${t0.replaceAll(SUBST, '<runtime>')}`);
     }
-    if (t === '') deny(`empty path in ${why}`);
-    if (cwd === null && !isAbsolute(t)) {
-      deny(`relative path after unresolvable cd in ${why}: ${t}`);
+    if (t0 === '') deny(`empty path in ${why}`);
+    if (cwd === null && !isAbsolute(t0)) {
+      deny(`relative path after unresolvable cd in ${why}: ${t0}`);
     }
-    if (!isInside(env, resolveReal(t, cwd ?? env.wt))) {
-      deny(`write outside worktree (${why}): ${t}`);
+    for (const t of expandGlobPath(t0, cwd ?? env.wt)) {
+      const real = resolveReal(t, cwd ?? env.wt);
+      if (!isInside(env, real)) deny(`write outside worktree (${why}): ${t}`);
+      if (isProtected(env, real)) deny(`write to protected path (${why}): ${t}`);
     }
   }
 }
@@ -397,10 +439,32 @@ function scan(src: string): Scanned {
       while (src[j] === ' ' || src[j] === '\t') j++;
       let delim = '';
       let quoted = false;
-      for (; j < n && !/[\s;&|<>()]/.test(src[j] as string); j++) {
+      while (j < n && !/[\s;&|<>()]/.test(src[j] as string)) {
         const d = src[j] as string;
-        if (d === "'" || d === '"' || d === '\\') quoted = true;
-        else delim += d;
+        if (d === '\\') {
+          quoted = true;
+          delim += src[j + 1] ?? '';
+          j += 2;
+        } else if (d === "'") {
+          quoted = true;
+          const e = src.indexOf("'", j + 1);
+          if (e < 0) deny('unparseable command');
+          delim += src.slice(j + 1, e);
+          j = e + 1;
+        } else if (d === '"') {
+          quoted = true;
+          j++;
+          while (j < n && src[j] !== '"') {
+            if (src[j] === '\\' && /["\\$`]/.test(src[j + 1] ?? '')) j++;
+            delim += src[j] ?? '';
+            j++;
+          }
+          if (j >= n) deny('unparseable command');
+          j++;
+        } else {
+          delim += d;
+          j++;
+        }
       }
       heredocs.push({ delim, quoted, strip });
       out += '<< HEREDOC';
@@ -467,11 +531,11 @@ function toSegments(line: string): Segment[] {
         push();
       } else if (t.op === '<<' || t.op === '<<<') {
         k++; // heredoc delimiter or here-string: data
-      } else if (t.op === '<' || t.op === '<>') {
+      } else if (t.op === '<') {
         const target = wordOf(toks[++k]);
         if (target === undefined) deny('unparseable command');
         cur.reads.push(target as string);
-      } else if (['>', '>>', '>|', '&>', '&>>', '>&'].includes(t.op)) {
+      } else if (['>', '>>', '>|', '&>', '&>>', '>&', '<>'].includes(t.op)) {
         const target = wordOf(toks[++k]);
         if (target === undefined) deny('unparseable command');
         if (t.op === '>&' && /^(\d+|-)$/.test(target as string)) continue;
@@ -489,13 +553,14 @@ function toSegments(line: string): Segment[] {
 
 interface State {
   cwd: string | null;
+  /** CDPATH was set: a relative `cd` target is no longer predictable. */
+  cdpath: boolean;
 }
 
 const WRAPPER_WORDS = new Set([
   '{',
   '}',
   '!',
-  'time',
   'then',
   'do',
   'else',
@@ -503,39 +568,101 @@ const WRAPPER_WORDS = new Set([
   'if',
   'while',
   'until',
-  'command',
-  'builtin',
-  'exec',
+  'coproc',
+  'unbuffer',
   'nohup',
   'setsid',
+  'builtin',
 ]);
-const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
+const FORBIDDEN_VARS =
+  /^GIT_(CONFIG|DIR|WORK_TREE|SSH|EXEC_PATH|COMMON_DIR|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE)/;
 
-function skipWrappers(words: string[]): number {
+const unresolved = (w: string): boolean => w.includes(SUBST) || w.includes('$') || w.includes('`');
+
+function checkAssignment(state: State, a: string): void {
+  const m = ASSIGNMENT.exec(a);
+  if (!m) return;
+  const name = m[1] as string;
+  if (FORBIDDEN_VARS.test(name)) deny(`setting ${name} is not allowed`);
+  if (name === 'CDPATH') state.cdpath = true;
+}
+
+function skipOptions(words: string[], from: number, withValue: string[]): number {
+  let i = from;
+  while (i < words.length && (words[i] as string).startsWith('-') && words[i] !== '-') {
+    i += withValue.includes(words[i] as string) ? 2 : 1;
+  }
+  return i;
+}
+
+/** Index of the real command word after env assignments and wrapper commands. */
+function skipWrappers(env: Env, words: string[], state: State, depth: number): number {
   let i = 0;
   while (i < words.length) {
     const w = words[i] as string;
-    if (ASSIGNMENT.test(w) || WRAPPER_WORDS.has(w)) {
+    if (ASSIGNMENT.test(w)) {
+      checkAssignment(state, w);
       i++;
-    } else if (w === 'env') {
+      continue;
+    }
+    const b = basename(w);
+    if (WRAPPER_WORDS.has(b)) {
       i++;
-      while (i < words.length) {
-        const x = words[i] as string;
-        if (x === '-u' || x === '-C' || x === '-S') i += 2;
-        else if (x.startsWith('-') || ASSIGNMENT.test(x)) i++;
-        else break;
+      continue;
+    }
+    switch (b) {
+      case 'time':
+      case 'command':
+        i = skipOptions(words, i + 1, []);
+        break;
+      case 'exec':
+        i = skipOptions(words, i + 1, ['-a']);
+        break;
+      case 'nice':
+        i = skipOptions(words, i + 1, ['-n', '--adjustment']);
+        break;
+      case 'stdbuf':
+        i = skipOptions(words, i + 1, ['-i', '-o', '-e']);
+        break;
+      case 'ionice':
+        i = skipOptions(words, i + 1, ['-c', '-n', '-p', '-P', '-u', '-t']);
+        break;
+      case 'chrt':
+        i = skipOptions(words, i + 1, []);
+        if (/^\d+$/.test(words[i] ?? '')) i++;
+        break;
+      case 'timeout':
+        i = skipOptions(words, i + 1, ['-s', '-k', '--signal', '--kill-after']) + 1;
+        break;
+      case 'env': {
+        i++;
+        while (i < words.length) {
+          const x = words[i] as string;
+          let payload: string | undefined;
+          if (x === '-S' || x === '--split-string')
+            payload = words[i + 1] ?? deny('env -S needs a value');
+          else if (x.startsWith('--split-string=')) payload = x.slice(15);
+          else if (/^-S./.test(x)) payload = x.slice(2);
+          if (payload !== undefined) {
+            checkBash(env, payload, state.cwd, depth + 1, state.cdpath);
+            return words.length;
+          }
+          if (x === '-C' || x === '--chdir' || x.startsWith('--chdir=') || /^-C./.test(x)) {
+            deny('env -C is not allowed');
+          }
+          if (x === '-u' || x === '--unset') i += 2;
+          else if (ASSIGNMENT.test(x)) {
+            checkAssignment(state, x);
+            i++;
+          } else if (x.startsWith('-')) i++;
+          else break;
+        }
+        break;
       }
-    } else if (w === 'nice') {
-      i++;
-      if (words[i] === '-n') i += 2;
-      else if (/^-\d+$/.test(words[i] ?? '')) i++;
-    } else if (w === 'timeout') {
-      i++;
-      while (i < words.length && (words[i] as string).startsWith('-')) {
-        i += words[i] === '-s' || words[i] === '-k' ? 2 : 1;
-      }
-      i++; // duration
-    } else break;
+      default:
+        return i;
+    }
   }
   return i;
 }
@@ -615,12 +742,33 @@ function writeTargets(name: string, args: string[]): string[] {
   }
 }
 
-function checkCommandGlobs(env: Env, words: string[]): void {
-  const text = words.join(' ');
-  for (const g of env.ownerGlobs)
-    if (g.re.test(text)) deny(`owner-only command (matches "${g.glob}")`);
-  for (const g of env.deployGlobs)
-    if (g.re.test(text)) deny(`deploy command (matches "${g.glob}")`);
+const GH_VALUE_FLAGS = ['-R', '--repo', '--hostname'];
+
+/** Drops gh's global flags (`-R x`, `--repo x`, `--repo=x`, `--hostname x`) wherever they appear. */
+function stripGhFlags(args: string[]): string[] {
+  const out: string[] = [];
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k] as string;
+    if (GH_VALUE_FLAGS.includes(a)) k++;
+    else if (a.startsWith('--repo=') || a.startsWith('--hostname=')) continue;
+    else out.push(a);
+  }
+  return out;
+}
+
+function checkCommandGlobs(env: Env, fromCommand: string[], raw: string[]): void {
+  const head = basename(fromCommand[0] as string);
+  const rest = fromCommand.slice(1);
+  const normal = [head, ...(head === 'gh' ? stripGhFlags(rest) : rest)];
+  const texts = new Set([raw.join(' '), fromCommand.join(' '), normal.join(' ')]);
+  for (const text of texts) {
+    for (const g of env.ownerGlobs) {
+      if (g.re.test(text)) deny(`owner-only command (matches "${g.glob}")`);
+    }
+    for (const g of env.deployGlobs) {
+      if (g.re.test(text)) deny(`deploy command (matches "${g.glob}")`);
+    }
+  }
 }
 
 const PUSH_DANGEROUS = [
@@ -634,18 +782,32 @@ const PUSH_DANGEROUS = [
 ];
 
 function checkRefspec(ref: string): void {
+  if (ref === '') deny('git push with empty refspec');
   if (ref.startsWith('+')) deny(`git push with force refspec "${ref}"`);
   if (ref.startsWith(':')) deny(`git push deleting remote ref "${ref}"`);
-  if (ref.includes('*')) deny(`git push with glob refspec "${ref}"`);
-  const dest = (ref.includes(':') ? ref.slice(ref.lastIndexOf(':') + 1) : ref).replace(
-    /^refs\/heads\//,
-    '',
-  );
-  if (dest === 'main' || dest === 'master') deny(`git push to protected branch "${dest}"`);
+  const colon = ref.lastIndexOf(':');
+  if (colon < 0 && (ref === 'HEAD' || ref === '@')) {
+    deny(`git push "${ref}" needs an explicit destination (HEAD:refs/heads/<branch>)`);
+  }
+  const dest = colon < 0 ? ref : ref.slice(colon + 1);
+  if (dest === '' || dest === 'HEAD' || dest === '@' || dest.startsWith('+')) {
+    deny(`git push with unclear destination "${ref}"`);
+  }
+  const norm = dest
+    .replace(/^refs\//, '')
+    .replace(/^heads\//, '')
+    .toLowerCase();
+  if (norm === 'main' || norm === 'master') deny(`git push to protected branch "${norm}"`);
 }
 
-function checkPush(args: string[]): void {
+function checkPush(rawArgs: string[]): void {
+  const args = rawArgs.flatMap((a) => braceExpand(a));
+  for (const a of args) {
+    if (unresolved(a)) deny(`unresolved git push argument: ${a.replaceAll(SUBST, '<runtime>')}`);
+    if (hasMagic(a)) deny(`glob in git push argument: ${a}`);
+  }
   const pos: string[] = [];
+  let repoGiven = false;
   for (let k = 0; k < args.length; k++) {
     const a = args[k] as string;
     if (a === '--') {
@@ -658,23 +820,32 @@ function checkPush(args: string[]): void {
       if (name.length >= 3 && PUSH_DANGEROUS.some((d) => d.startsWith(name))) {
         deny(`git push ${name} is not allowed`);
       }
+      if (name === '--repo') repoGiven = true;
       if (
         !a.includes('=') &&
         ['--repo', '--receive-pack', '--exec', '--push-option'].includes(name)
-      )
+      ) {
         k++;
+      }
     } else if (/^-[A-Za-z]+$/.test(a)) {
       if (/[fd]/.test(a)) deny(`git push ${a} is not allowed`);
       if (a.endsWith('o')) k++;
     } else pos.push(a);
   }
-  for (const ref of pos.slice(1)) checkRefspec(ref);
+  const refs = repoGiven ? pos : pos.slice(1);
+  if (pos.length === 0) deny('git push needs an explicit remote and branch');
+  if (refs.length === 0) deny('git push needs an explicit refspec');
+  for (const ref of refs) checkRefspec(ref);
 }
+
+const GIT_CONFIG_DENY =
+  /^(alias\.|remote\.|push\.|url\.|branch\.|core\.(hookspath|sshcommand|fsmonitor|pager|editor)$|credential\.|include|pager\.)/i;
 
 function checkGit(env: Env, args: string[], state: State): void {
   let i = 0;
   while (i < args.length) {
     const a = args[i] as string;
+    if (unresolved(a)) deny('unresolved git option');
     if (a === '-C' || a === '--git-dir' || a === '--work-tree') {
       const v = args[i + 1];
       if (v === undefined) deny(`missing value for git ${a}`);
@@ -683,18 +854,30 @@ function checkGit(env: Env, args: string[], state: State): void {
     } else if (a.startsWith('--git-dir=') || a.startsWith('--work-tree=')) {
       checkInsideDir(env, a.slice(a.indexOf('=') + 1), state, 'git option');
       i++;
-    } else if (a === '-c') {
-      const kv = args[i + 1] ?? '';
-      if (/^alias\./i.test(kv)) deny('git -c alias is not allowed');
+    } else if (a === '-c' || a === '--config-env') {
+      const key = (args[i + 1] ?? '').split('=')[0] as string;
+      if (GIT_CONFIG_DENY.test(key)) deny(`git ${a} ${key} is not allowed`);
       i += 2;
+    } else if (a.startsWith('--config-env=')) {
+      const key = a.slice(13).split('=')[0] as string;
+      if (GIT_CONFIG_DENY.test(key)) deny(`git --config-env ${key} is not allowed`);
+      i++;
     } else if (a === '--namespace' || a === '--exec-path') i += 2;
     else if (a.startsWith('-')) i++;
     else break;
   }
   const sub = args[i];
+  if (sub === undefined) return;
+  if (unresolved(sub)) deny('unresolved git subcommand');
   const rest = args.slice(i + 1);
   if (sub === 'push') checkPush(rest);
-  else if (sub === 'clone') {
+  else if (sub === 'send-pack' || sub === 'http-push') deny(`git ${sub} is not allowed`);
+  else if (sub === 'config') {
+    if (rest.some((a) => a === '-e' || a === '--edit')) deny('git config --edit is not allowed');
+    for (const a of rest.flatMap((x) => braceExpand(x))) {
+      if (!a.startsWith('-') && GIT_CONFIG_DENY.test(a)) deny(`git config ${a} is not allowed`);
+    }
+  } else if (sub === 'clone') {
     const pos = positionals(rest);
     if (pos.length >= 2) checkWritePath(env, pos[pos.length - 1] as string, state.cwd, 'git clone');
   }
@@ -711,25 +894,45 @@ function checkInsideDir(env: Env, dir: string, state: State, why: string): void 
 
 const GH_BLOCKED_TOPICS = new Set(['release', 'secret', 'auth', 'alias']);
 const GH_API_FORBIDDEN =
-  /\/(merge|dispatches)$|\/releases(\/|$)|\/actions\/workflows\/[^/]+\/dispatches|\/actions\/secrets|\/git\/refs|\/branches\/[^/]+\/protection|\/rulesets/;
+  /\/merges?$|\/dispatches$|\/releases(\/|$)|\/actions\/workflows\/[^/]+\/dispatches|\/actions\/secrets|\/git\/refs|\/branches\/[^/]+\/protection|\/rulesets|\/contents(\/|$)/;
+const GH_RUN_VALUE_FLAGS = ['--ref', '-r', '-f', '--raw-field', '-F', '--field', ...GH_VALUE_FLAGS];
 
-function checkGh(args: string[]): void {
+function checkGh(env: Env, args: string[]): void {
   const words: string[] = [];
   for (let k = 0; k < args.length; k++) {
     const a = args[k] as string;
-    if (a === '-R' || a === '--repo') k++;
+    if (GH_VALUE_FLAGS.includes(a)) k++;
     else if (!a.startsWith('-')) words.push(a);
   }
   const [g0, g1] = words;
+  for (const w of [g0, g1]) if (w !== undefined && unresolved(w)) deny('unresolved gh subcommand');
   if (g0 === 'pr' && g1 === 'merge') deny('gh pr merge is not allowed (merging is owner-only)');
   if (g0 && GH_BLOCKED_TOPICS.has(g0)) deny(`gh ${g0} is not allowed`);
+  if (g0 === 'workflow' && g1 === 'run') {
+    const pos: string[] = [];
+    for (let k = 0; k < args.length; k++) {
+      const a = args[k] as string;
+      if (GH_RUN_VALUE_FLAGS.includes(a)) k++;
+      else if (!a.startsWith('-')) pos.push(a);
+    }
+    const target = pos[2];
+    if (target === undefined) deny('gh workflow run needs an explicit workflow');
+    if (unresolved(target as string)) deny('unresolved workflow name');
+    if (!env.allowedWorkflows.includes(target as string)) {
+      deny(`workflow "${target}" is not in crew_allowed_workflows`);
+    }
+  }
   if (g0 === 'api') checkGhApi(args);
 }
 
-function checkGhApi(args: string[]): void {
+function checkGhApi(rawArgs: string[]): void {
+  const stripped = stripGhFlags(rawArgs);
+  const args = stripped.slice(stripped.indexOf('api') + 1);
   let method: string | undefined;
   let hasFields = false;
+  let input = false;
   let endpoint: string | undefined;
+  const fieldVals: string[] = [];
   const withValue = new Set([
     '-H',
     '--header',
@@ -737,24 +940,33 @@ function checkGhApi(args: string[]): void {
     '--jq',
     '-t',
     '--template',
-    '--hostname',
     '--cache',
     '-p',
     '--preview',
-    '-R',
-    '--repo',
   ]);
-  for (let k = 1; k < args.length; k++) {
+  for (let k = 0; k < args.length; k++) {
     const a = args[k] as string;
     if (a === '-X' || a === '--method') method = args[++k];
     else if (a.startsWith('--method=')) method = a.slice(9);
     else if (/^-X./.test(a)) method = a.slice(2);
-    else if (['-f', '-F', '--field', '--raw-field', '--input'].includes(a)) {
+    else if (['-f', '-F', '--field', '--raw-field'].includes(a)) {
       hasFields = true;
-      k++;
+      fieldVals.push(args[++k] ?? '');
+    } else if (a.startsWith('--field=') || a.startsWith('--raw-field=')) {
+      hasFields = true;
+      fieldVals.push(a.slice(a.indexOf('=') + 1));
+    } else if (a === '--input' || a.startsWith('--input=')) {
+      hasFields = true;
+      input = true;
+      if (a === '--input') k++;
     } else if (withValue.has(a)) k++;
     else if (!a.startsWith('-') && endpoint === undefined) endpoint = a;
   }
+  if (endpoint === undefined) deny('gh api without endpoint');
+  if (unresolved(endpoint as string) || (method !== undefined && unresolved(method))) {
+    deny('unresolved gh api endpoint or method');
+  }
+  const path = (endpoint as string).split('?')[0]?.replace(/\/+$/, '') as string;
   const text = args.join(' ');
   if (
     /mergePullRequest|enablePullRequestAutoMerge|createRelease|deleteRelease|updateRef|deleteRef/i.test(
@@ -763,11 +975,26 @@ function checkGhApi(args: string[]): void {
   ) {
     deny('gh api GraphQL mutation for merge/release/ref is not allowed');
   }
+  if (path === 'graphql') {
+    if (input) deny('gh api graphql --input is not allowed');
+    for (const v of fieldVals) {
+      const val = v.includes('=') ? v.slice(v.indexOf('=') + 1) : v;
+      if (val.startsWith('@')) deny('gh api graphql query from file is not allowed');
+      if (/^query=/.test(v) && (val.startsWith('$') || unresolved(val.slice(0, 1)))) {
+        deny('unresolved gh api graphql query');
+      }
+      if (v.includes(SUBST) || v.includes('`')) deny('unresolved gh api graphql field');
+    }
+    if (
+      /mutation/i.test(text) &&
+      /merge|release|dispatch|secret|ref|protection|branch/i.test(text)
+    ) {
+      deny('gh api graphql mutation is not allowed');
+    }
+  }
   const m = (method ?? (hasFields ? 'POST' : 'GET')).toUpperCase();
-  if (m !== 'GET' && endpoint !== undefined) {
-    const path = endpoint.split('?')[0] as string;
-    if (GH_API_FORBIDDEN.test(path))
-      deny(`gh api ${m} ${path} is not allowed (merge/release/deploy)`);
+  if (m !== 'GET' && GH_API_FORBIDDEN.test(path)) {
+    deny(`gh api ${m} ${path} is not allowed (merge/release/deploy/contents)`);
   }
 }
 
@@ -802,7 +1029,56 @@ function checkFind(env: Env, args: string[], state: State): void {
   }
 }
 
-const XARGS_VALUE_FLAGS = new Set(['-n', '-I', '-P', '-d', '-L', '-s', '-E', '-a']);
+const XARGS_VALUE_SHORT = ['n', 'I', 'P', 'd', 'L', 's', 'E', 'a', 'i', 'l'];
+const XARGS_VALUE_LONG = [
+  '--max-args',
+  '--max-procs',
+  '--delimiter',
+  '--arg-file',
+  '--replace',
+  '--eof',
+  '--max-lines',
+  '--max-chars',
+  '--process-slot-var',
+];
+const XARGS_FLAG_LONG = [
+  '--null',
+  '--verbose',
+  '--no-run-if-empty',
+  '--interactive',
+  '--open-tty',
+  '--exit',
+  '--show-limits',
+];
+
+/** Index of the command in `xargs` args; unknown options are denied. */
+function skipXargsOptions(args: string[]): number {
+  let k = 0;
+  while (k < args.length && (args[k] as string).startsWith('-') && args[k] !== '-') {
+    const a = args[k] as string;
+    if (a === '--') {
+      k++;
+      break;
+    }
+    if (a.startsWith('--')) {
+      if (a.includes('=')) k++;
+      else if (XARGS_VALUE_LONG.includes(a)) k += 2;
+      else if (XARGS_FLAG_LONG.includes(a)) k++;
+      else deny(`unknown xargs option ${a}`);
+    } else {
+      let j = 1;
+      let consumedNext = false;
+      for (; j < a.length; j++) {
+        if (XARGS_VALUE_SHORT.includes(a[j] as string)) {
+          consumedNext = j === a.length - 1;
+          break;
+        }
+      }
+      k += consumedNext ? 2 : 1;
+    }
+  }
+  return k;
+}
 
 function checkSegment(env: Env, seg: Segment, state: State, depth: number): void {
   const base = state.cwd ?? env.wt;
@@ -812,35 +1088,42 @@ function checkSegment(env: Env, seg: Segment, state: State, depth: number): void
   checkWords(env, seg.words, state, depth);
 }
 
+const ASSIGN_BUILTINS = new Set(['export', 'declare', 'typeset', 'readonly', 'local']);
+
 function checkWords(env: Env, words: string[], state: State, depth: number): void {
   if (words.length === 0) return;
   const base = state.cwd ?? env.wt;
   for (const w of words) checkSecretToken(env, w, base);
-  checkCommandGlobs(env, words);
-  const at = skipWrappers(words);
+  const at = skipWrappers(env, words, state, depth);
   const cmdWord = words[at];
   if (cmdWord === undefined) return;
-  if (at > 0) checkCommandGlobs(env, words.slice(at));
-  if (cmdWord.includes(SUBST) || cmdWord.includes('$')) {
-    deny('unresolvable command word');
-  }
+  checkCommandGlobs(env, words.slice(at), words);
+  if (unresolved(cmdWord)) deny('unresolvable command word');
   const name = basename(cmdWord);
   const args = words.slice(at + 1);
 
   if (name === 'sudo' || name === 'su' || name === 'doas') {
     deny(`privilege escalation (${name}) is not allowed`);
   }
+  if (ASSIGN_BUILTINS.has(name)) {
+    for (const a of args) checkAssignment(state, a);
+    return;
+  }
+  if (name === 'popd') {
+    state.cwd = null;
+    return;
+  }
   if (name === 'cd' || name === 'pushd') {
     const target = args.find((a) => !a.startsWith('-') || a === '-');
+    const relative = target !== undefined && !isAbsolute(target);
     if (
       target === undefined ||
       target === '-' ||
-      target.includes(SUBST) ||
-      target.includes('$') ||
-      target.startsWith('~')
+      unresolved(target) ||
+      target.startsWith('~') ||
+      (relative && state.cwd === null) ||
+      (relative && state.cdpath && !/^\.\.?(\/|$)/.test(target))
     ) {
-      state.cwd = null;
-    } else if (state.cwd === null && !isAbsolute(target)) {
       state.cwd = null;
     } else {
       state.cwd = resolveReal(target, state.cwd ?? env.wt);
@@ -852,33 +1135,30 @@ function checkWords(env: Env, words: string[], state: State, depth: number): voi
     if (idx >= 0) {
       const payload = args[idx + 1];
       if (payload === undefined) deny('unparseable command (missing -c payload)');
-      checkBash(env, payload as string, state.cwd, depth + 1);
+      checkBash(env, payload as string, state.cwd, depth + 1, state.cdpath);
     }
     return;
   }
   if (name === 'eval') {
-    checkBash(env, args.join(' '), state.cwd, depth + 1);
+    checkBash(env, args.join(' '), state.cwd, depth + 1, state.cdpath);
     return;
   }
   if (name === 'xargs') {
-    let k = 0;
-    while (k < args.length && (args[k] as string).startsWith('-')) {
-      k += XARGS_VALUE_FLAGS.has(args[k] as string) ? 2 : 1;
-    }
+    const k = skipXargsOptions(args);
     checkWords(env, [...args.slice(k), SUBST], state, depth + 1);
     return;
   }
   if (name === 'find') checkFind(env, args, state);
   if (name === 'git') checkGit(env, args, state);
-  if (name === 'gh') checkGh(args);
+  if (name === 'gh') checkGh(env, args);
   for (const t of writeTargets(name, args)) checkWritePath(env, t, state.cwd, name);
 }
 
-function checkBash(env: Env, cmd: string, cwd: string | null, depth: number): void {
+function checkBash(env: Env, cmd: string, cwd: string | null, depth: number, cdpath = false): void {
   if (depth > 8) deny('command nesting too deep');
   const { lines, subs } = scan(cmd);
-  for (const sub of subs) checkBash(env, sub, cwd, depth + 1);
-  const state: State = { cwd };
+  for (const sub of subs) checkBash(env, sub, cwd, depth + 1, cdpath);
+  const state: State = { cwd, cdpath };
   for (const line of lines) {
     for (const seg of toSegments(line)) checkSegment(env, seg, state, depth);
   }
@@ -892,33 +1172,126 @@ const WRITE_TOOLS: Record<string, string> = {
   MultiEdit: 'file_path',
   NotebookEdit: 'notebook_path',
 };
-const SECRET_KEYS = ['file_path', 'notebook_path', 'path', 'pattern', 'glob'];
-const SECRET_TOOLS = new Set([
-  'Read',
-  'Grep',
-  'Glob',
-  'Edit',
-  'Write',
-  'MultiEdit',
-  'NotebookEdit',
-  'NotebookRead',
-]);
+const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'NotebookRead']);
+const SECRET_FRAGMENT = /\.env|\.pem|\.key|id_rsa|id_ed25519|\.npmrc|\.netrc|credentials/i;
+const SECRET_SAMPLES = [
+  '.env',
+  '.env.local',
+  'a.pem',
+  'a.key',
+  'id_rsa',
+  'id_ed25519',
+  '.npmrc',
+  '.netrc',
+  'credentials',
+  'credentials.json',
+];
+
+/** Denies a directory tree that contains a secret file (no silent exclusion). */
+function scanDirForSecrets(env: Env, dir: string): void {
+  const stack = [dir];
+  let count = 0;
+  while (stack.length > 0) {
+    const d = stack.pop() as string;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(d, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (++count > 50000) deny('directory too large to verify against secret files');
+      const full = join(d, e.name);
+      if (e.isDirectory()) {
+        if (e.name !== 'node_modules' && e.name !== '.git') stack.push(full);
+      } else if (isSecretString(env, full)) {
+        deny(`search over a directory that contains a secret file: ${e.name}`);
+      }
+    }
+  }
+}
+
+function checkSearch(env: Env, path: unknown, globs: unknown[], cwd: string): void {
+  const given = typeof path === 'string' && path !== '' ? path : undefined;
+  if (given !== undefined) checkSecretPath(env, given, cwd);
+  const base = given !== undefined ? resolveReal(given, cwd) : cwd;
+  let isDir = false;
+  try {
+    isDir = statSync(base).isDirectory();
+  } catch {
+    // a missing path searches nothing
+  }
+  if (isDir) scanDirForSecrets(env, base);
+  for (const g of globs) {
+    if (typeof g !== 'string' || g === '') continue;
+    for (const e of braceExpand(g)) {
+      if (e.includes(SUBST)) deny('unresolved search glob');
+      if (isSecretString(env, e) || isSecretString(env, join(base, e))) {
+        deny(`secret file access: ${e}`);
+      }
+      if (!hasMagic(e)) continue;
+      const last = e.slice(e.lastIndexOf('/') + 1);
+      if (SECRET_FRAGMENT.test(last)) {
+        const re = fileGlobToRegExp(last);
+        if (SECRET_SAMPLES.some((s) => re.test(s) && !isSecretExempt(s))) {
+          deny(`search glob may match secret files: ${e}`);
+        }
+      }
+      let matches: string[] = [];
+      try {
+        matches = globSync(e, { cwd: base }).slice(0, 5000);
+      } catch {
+        // unreadable glob: nothing to see
+      }
+      for (const m of matches) if (isSecretString(env, join(base, m))) deny(`secret file: ${m}`);
+    }
+  }
+}
+
+const isSecretExempt = (s: string): boolean => basename(s) === '.env.example';
+
+const isStringArray = (v: unknown): boolean =>
+  Array.isArray(v) && v.every((x) => typeof x === 'string');
 
 function check(input: GuardInput, ctx: GuardContext): void {
+  const c = ctx as unknown as Record<string, unknown> | null;
+  if (
+    c === null ||
+    typeof c !== 'object' ||
+    typeof c.worktree !== 'string' ||
+    !isStringArray(c.ownerOnly) ||
+    !isStringArray(c.deployCommands) ||
+    !isStringArray(c.secretGlobs) ||
+    (c.crewAllowedWorkflows !== undefined && !isStringArray(c.crewAllowedWorkflows)) ||
+    (c.protectedPaths !== undefined && !isStringArray(c.protectedPaths))
+  ) {
+    deny('invalid guard context');
+  }
   const wt = resolveReal(ctx.worktree, '/');
   if (wt === '/') deny('invalid worktree');
+  const protectedPaths = [
+    `${wt}/.claude`,
+    `${wt}/.mcp.json`,
+    `${wt}/.git`,
+    ...(ctx.protectedPaths ?? []),
+  ];
   const env: Env = {
     wt,
     secretRes: ctx.secretGlobs.map(fileGlobToRegExp),
     deployGlobs: ctx.deployCommands.map((glob) => ({ glob, re: commandGlobToRegExp(glob) })),
     ownerGlobs: ctx.ownerOnly.map((glob) => ({ glob, re: commandGlobToRegExp(glob) })),
+    allowedWorkflows: ctx.crewAllowedWorkflows ?? [],
+    protectedReal: protectedPaths
+      .flatMap((p) => [p, resolveReal(p, '/')])
+      .map((p) => p.toLowerCase()),
   };
   const { toolName, toolInput } = input;
   const cwd = resolveReal(input.cwd ?? wt, wt);
 
-  if (toolName === 'Bash') {
+  if (toolName === 'PowerShell') deny('PowerShell is not allowed');
+  if (toolName === 'Bash' || typeof toolInput.command === 'string') {
     const command = toolInput.command;
-    if (typeof command !== 'string') deny('Bash call without a command');
+    if (typeof command !== 'string') deny(`${toolName} call without a command`);
     checkBash(env, command as string, cwd, 0);
     return;
   }
@@ -929,13 +1302,14 @@ function check(input: GuardInput, ctx: GuardContext): void {
     if (typeof p !== 'string' || p === '') deny(`${toolName} call without ${writeKey}`);
     checkWritePath(env, p as string, cwd, toolName);
   }
-  if (SECRET_TOOLS.has(toolName)) {
-    const dir = typeof toolInput.path === 'string' ? toolInput.path : undefined;
-    for (const key of SECRET_KEYS) {
+  if (FILE_TOOLS.has(toolName)) {
+    for (const key of ['file_path', 'notebook_path']) {
       const v = toolInput[key];
-      if (typeof v !== 'string' || v === '') continue;
-      checkSecretPath(env, v, cwd);
-      if (dir !== undefined && key !== 'path') checkSecretPath(env, `${dir}/${v}`, cwd);
+      if (typeof v === 'string' && v !== '') checkSecretPath(env, v, cwd);
     }
+  } else if (toolName === 'Grep') {
+    checkSearch(env, toolInput.path, [toolInput.glob], cwd);
+  } else if (toolName === 'Glob') {
+    checkSearch(env, toolInput.path, [toolInput.pattern], cwd);
   }
 }

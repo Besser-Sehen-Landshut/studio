@@ -53,7 +53,9 @@ try {
     } catch {
       deny('guard context unreadable', summary);
     }
-    if (ctx) {
+    if (ctx !== undefined && (ctx === null || typeof ctx !== 'object' || Array.isArray(ctx))) {
+      deny('guard context is not an object', summary);
+    } else if (ctx) {
       const { evaluateGuard } = await loadGuard();
       const result = evaluateGuard(
         { toolName: hook.tool_name, toolInput: input, cwd: hook.cwd },

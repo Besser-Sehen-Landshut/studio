@@ -33,7 +33,13 @@ beforeAll(() => {
     ownerOnly: ['*terraform apply*'],
     deployCommands: ['gh workflow run deploy-prod.yml*'],
     secretGlobs: DEFAULT_SECRET_GLOBS,
+    crewAllowedWorkflows: ['ci.yml'],
+    protectedPaths: [join(root, 'state')],
   };
+  mkdirSync(join(root, 'state'));
+  mkdirSync(join(root, 'clean'));
+  writeFileSync(join(root, 'clean', 'a.txt'), 'x');
+  mkdirSync(join(wt, '.claude'));
 });
 
 const bash = (command: string, cwd?: string) =>
@@ -55,6 +61,10 @@ describe('git push', () => {
     'git push origin :studio/APP-1',
     'git push origin main',
     'git push origin HEAD:master',
+    'git push -u origin HEAD',
+    'git push',
+    'git push origin',
+    'git push origin @',
     "bash -c 'git push -f'",
     'echo $(git push -f)',
     'echo ok && git push --force-if-includes',
@@ -62,12 +72,13 @@ describe('git push', () => {
     expect(bash(cmd).decision).toBe('deny');
   });
 
-  it.each(['git push origin studio/APP-1', 'git push -u origin HEAD', 'git status'])(
-    'allows %s',
-    (cmd) => {
-      expect(bash(cmd).decision).toBe('allow');
-    },
-  );
+  it.each([
+    'git push origin studio/APP-1',
+    'git push -u origin HEAD:refs/heads/studio/APP-1',
+    'git status',
+  ])('allows %s', (cmd) => {
+    expect(bash(cmd).decision).toBe('allow');
+  });
 });
 
 describe('gh and owner commands', () => {
@@ -273,6 +284,206 @@ describe('evasion attempts', () => {
   });
 });
 
+describe('round 1 regressions', () => {
+  const denies = (cmds: string[], cwd = wt) => {
+    for (const c of cmds) expect(bash(c, cwd), c).toMatchObject({ decision: 'deny' });
+  };
+
+  it('CR-1 Grep/Glob secret access', () => {
+    expect(
+      tool('Grep', { pattern: 'x', glob: '*.{pem,txt}', path: join(root, 'clean') }).decision,
+    ).toBe('deny');
+    expect(tool('Glob', { pattern: '**/.env*', path: join(root, 'clean') }).decision).toBe('deny');
+    expect(tool('Grep', { pattern: 'x', path: wt }).decision).toBe('deny');
+    expect(tool('Glob', { pattern: '*.ts', path: wt }).decision).toBe('deny');
+    expect(tool('Grep', { pattern: 'x' }).decision).toBe('deny');
+    expect(tool('Grep', { pattern: 'credentials', path: join(root, 'clean') }).decision).toBe(
+      'allow',
+    );
+    expect(tool('Grep', { pattern: 'x', path: join(wt, 'sub') }).decision).toBe('allow');
+    expect(tool('Glob', { pattern: '**/*.ts', path: join(root, 'clean') }).decision).toBe('allow');
+  });
+
+  it('CR-2 protected-branch bypasses', () => {
+    denies([
+      'git config alias.p push',
+      'git config --add remote.origin.push +HEAD:refs/heads/main',
+      'git config --replace-all branch.x.merge refs/heads/main',
+      'git config push.default upstream',
+      "env -S 'git push -f'",
+      'env --split-string="sudo ls"',
+      'git push',
+      'git push origin',
+      'git push origin HEAD',
+      'git push origin @',
+      "git push origin ''",
+    ]);
+    expect(bash('git push origin HEAD:refs/heads/studio/APP-1').decision).toBe('allow');
+    expect(bash('git push origin studio/APP-1').decision).toBe('allow');
+  });
+
+  it('CR-3 deploy matching and workflow allow list', () => {
+    denies([
+      '/usr/bin/gh workflow run deploy-prod.yml',
+      '/usr/bin/env gh workflow run deploy-prod.yml',
+      'gh -R org/app workflow run deploy-prod.yml',
+      'gh --repo=org/app workflow run deploy-prod.yml',
+      'gh workflow run --ref main deploy-prod.yml',
+      'gh workflow run other.yml',
+      'gh workflow run',
+      'gh workflow run $W',
+    ]);
+    expect(bash('gh workflow run ci.yml').decision).toBe('allow');
+    expect(bash('gh workflow run --ref x -f a=b ci.yml').decision).toBe('allow');
+  });
+
+  it('CR-4 config and state writes', () => {
+    for (const f of ['.claude/settings.json', '.mcp.json', '.git/config', '.git/hooks/pre-push']) {
+      expect(tool('Write', { file_path: join(wt, f) }).decision, f).toBe('deny');
+    }
+    expect(tool('Edit', { file_path: join(root, 'state', 'ctx.json') }).decision).toBe('deny');
+    denies([
+      'echo x > .claude/settings.json',
+      'rm -rf .git',
+      'cp a .mcp.json',
+      'tee .git/config',
+      `echo x > ${join(root, 'state', 'guard.jsonl')}`,
+      'rm .Claude/x',
+    ]);
+    expect(bash('git status', wt).decision).toBe('allow');
+  });
+
+  it('I1 wrappers', () => {
+    denies([
+      '/usr/bin/env git push -f',
+      '/usr/bin/env sudo ls',
+      '/usr/bin/nohup git push -f',
+      '/usr/bin/timeout 5 git push -f',
+      'command -p git push -f',
+      'exec -a x git push -f',
+      'time -p sudo ls',
+      'nice -n5 sudo ls',
+      'nice -n 5 sudo ls',
+      "env -S 'sudo ls'",
+      'stdbuf -o0 sudo ls',
+      'coproc sudo ls',
+      'xargs --max-args 1 sudo',
+      'xargs --bogus sudo',
+      'env -C /tmp rm x',
+    ]);
+  });
+
+  it('I2 push refspec evasions', () => {
+    denies([
+      'git push origin HEAD:heads/main',
+      'git push origin HEAD:{main,x}',
+      'git push {-f,origin} x',
+      'git push origin $(echo +main)',
+      'R=+main; git push origin $R',
+      'git push $(echo -f) origin x',
+      'echo +main | xargs git push origin',
+      'git push origin HEAD:refs/main',
+      'git push origin studio/*',
+      'git push --repo=origin +main',
+    ]);
+  });
+
+  it('I3 git config injection and plumbing', () => {
+    denies([
+      'git -c remote.origin.push=+HEAD:refs/heads/main push origin',
+      'git -c push.default=upstream push origin',
+      'git --config-env=alias.p=V p origin x',
+      'git --config-env alias.p=V p origin x',
+      'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p -f',
+      'env GIT_DIR=/tmp/x git status',
+      'export GIT_WORK_TREE=/tmp',
+      'git send-pack --force origin HEAD:main',
+      'git -c core.hooksPath=/tmp/h status',
+    ]);
+  });
+
+  it('I4 gh evasions', () => {
+    denies([
+      'gh pr $(echo merge) 3',
+      'gh pr "$M" 3',
+      'gh api -X POST repos/org/app/merges -f base=main -f head=x',
+      'gh api -X PUT repos/org/app/pulls/3/merge/',
+      'gh api -X PUT repos/org/app/contents/a.txt -f branch=main',
+      'gh api graphql -F query=@m.graphql',
+      'gh api graphql -f query="$Q"',
+      'gh api graphql --input q.json',
+      "gh api graphql -f query='mutation { mergePullRequest(input:{}) { clientMutationId } }'",
+      'gh api $E',
+    ]);
+    expect(bash("gh api graphql -f query='query { viewer { login } }'").decision).toBe('allow');
+    expect(bash('gh pr create --title "$T" --body "$(date)"').decision).toBe('allow');
+  });
+
+  it('I5 deploy and owner-only after normalisation', () => {
+    denies(['/usr/local/bin/terraform apply', 'env X=1 /opt/bin/terraform apply -auto-approve']);
+  });
+
+  it('I6 write path globs, cd state, <>', () => {
+    denies([
+      'touch li*/pwned',
+      'rm lin?/x',
+      `cd ${root} && pushd ${wt} && popd && rm x`,
+      'CDPATH=/ cd tmp && rm x',
+      'export CDPATH=/; cd sub; rm x',
+      'exec 3<> /tmp/x',
+      'rm ../*',
+      'touch {a,../b}',
+    ]);
+    expect(bash('touch s*/x', wt).decision).toBe('allow');
+  });
+
+  it('I7 heredoc delimiter quote removal', () => {
+    expect(bash('cat <<E\\"OF\nE"OF\nrm /tmp/x\nEOF', wt).decision).toBe('deny');
+    expect(bash("cat <<'EOF'\nrm /tmp/x\nEOF", wt).decision).toBe('allow');
+    expect(bash('cat <<"EOF"\nrm /tmp/x\nEOF', wt).decision).toBe('allow');
+  });
+
+  it('I8 secret globs are case-insensitive', () => {
+    expect(bash('cat .ENV', wt).decision).toBe('deny');
+    expect(tool('Read', { file_path: join(wt, '.ENV') }).decision).toBe('deny');
+    expect(tool('Read', { file_path: join(wt, 'KEY.PEM') }).decision).toBe('deny');
+  });
+
+  it('I9 other tools', () => {
+    expect(tool('Monitor', { command: 'rm /tmp/x' }).decision).toBe('deny');
+    expect(tool('Monitor', { command: 'tail -f log' }).decision).toBe('allow');
+    expect(tool('PowerShell', { command: 'ls' }).decision).toBe('deny');
+    expect(tool('SomethingNew', { command: 'git push -f' }).decision).toBe('deny');
+  });
+
+  it('M1 invalid ctx is rejected', () => {
+    const bad = { ...ctx, secretGlobs: 'nope' } as unknown as GuardContext;
+    expect(evaluateGuard({ toolName: 'Read', toolInput: {} }, bad).decision).toBe('deny');
+    expect(
+      evaluateGuard({ toolName: 'Read', toolInput: {} }, null as unknown as GuardContext).decision,
+    ).toBe('deny');
+  });
+
+  it('M1 bin denies a ctx file that is not an object', () => {
+    const f = join(root, 'ctx-array.json');
+    writeFileSync(f, '[]');
+    const r = spawnSync(
+      process.execPath,
+      [join(import.meta.dirname, '..', 'bin', 'studio-guard.mjs')],
+      {
+        input: JSON.stringify({
+          cwd: wt,
+          tool_name: 'Read',
+          tool_input: { file_path: join(root, 'clean', 'a.txt') },
+        }),
+        env: { PATH: process.env.PATH ?? '', STUDIO_GUARD_CTX: f },
+        encoding: 'utf8',
+      },
+    );
+    expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe('deny');
+  });
+});
+
 describe('bin/studio-guard.mjs', () => {
   const bin = join(import.meta.dirname, '..', 'bin', 'studio-guard.mjs');
   const run = (input: unknown, env: Record<string, string>) =>
@@ -291,7 +502,7 @@ describe('bin/studio-guard.mjs', () => {
   it('denies, prints the hook JSON and logs; allows silently', () => {
     const ctxFile = join(root, 'ctx.json');
     writeFileSync(ctxFile, JSON.stringify(ctx));
-    const state = join(root, 'state');
+    const state = join(root, 'statedir');
     mkdirSync(state, { recursive: true });
     const env = { STUDIO_GUARD_CTX: ctxFile, STUDIO_STATE_DIR: state };
 

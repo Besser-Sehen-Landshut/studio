@@ -56,6 +56,8 @@ export const studioConfigSchema = z.strictObject({
   crewToken: z.strictObject({ env: z.string().min(1) }).optional(),
   ownerOnly: strList,
   deployCommands: strList,
+  // Workflows (file name or name) a crew session may start with `gh workflow run`.
+  crewAllowedWorkflows: strList,
 });
 
 export type StudioConfig = z.infer<typeof studioConfigSchema>;
