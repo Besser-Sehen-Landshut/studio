@@ -10,7 +10,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULT_SECRET_GLOBS, evaluateGuard, type GuardContext } from '../src/guard.js';
+import {
+  DEFAULT_SECRET_GLOBS,
+  evaluateGuard,
+  GUARD_LIMITS,
+  type GuardContext,
+} from '../src/guard.js';
 
 let root: string;
 let wt: string;
@@ -34,12 +39,15 @@ beforeAll(() => {
     deployCommands: ['gh workflow run deploy-prod.yml*'],
     secretGlobs: DEFAULT_SECRET_GLOBS,
     crewAllowedWorkflows: ['ci.yml'],
+    crewAllowedWorkflowRefs: ['studio-ci'],
     protectedPaths: [join(root, 'state')],
   };
   mkdirSync(join(root, 'state'));
   mkdirSync(join(root, 'clean'));
   writeFileSync(join(root, 'clean', 'a.txt'), 'x');
   mkdirSync(join(wt, '.claude'));
+  mkdirSync(join(wt, 'many'));
+  for (const f of ['a', 'b', 'c']) writeFileSync(join(wt, 'many', f), '');
 });
 
 const bash = (command: string, cwd?: string) =>
@@ -334,7 +342,7 @@ describe('round 1 regressions', () => {
       'gh workflow run $W',
     ]);
     expect(bash('gh workflow run ci.yml').decision).toBe('allow');
-    expect(bash('gh workflow run --ref x -f a=b ci.yml').decision).toBe('allow');
+    expect(bash('gh workflow run --ref studio-ci -f a=b ci.yml').decision).toBe('allow');
   });
 
   it('CR-4 config and state writes', () => {
@@ -481,6 +489,203 @@ describe('round 1 regressions', () => {
       },
     );
     expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe('deny');
+  });
+});
+
+describe('round 2 regressions', () => {
+  const denies = (cmds: string[]) => {
+    for (const c of cmds) expect(bash(c, wt), c).toMatchObject({ decision: 'deny' });
+  };
+  const allows = (cmds: string[]) => {
+    for (const c of cmds) expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
+  };
+
+  it('CR2-1 gh api endpoint normalisation', () => {
+    denies([
+      'gh api -X PUT repos/o/a/pulls/3/merge#x',
+      "gh api -X PUT 'repos/o/a/pulls/3/merge?'",
+      'gh api -X PUT repos/o/a/pulls/3//merge',
+      'gh api -X POST repos/o/a/git/refs#x -f ref=refs/heads/main -f sha=1',
+      'gh api -X PUT repos/o/a/contents//a.txt -f branch=main',
+      'gh api -X POST https://api.github.com/graphql -f query=@q',
+      'gh api -X POST /api/graphql -F query=@q',
+      'gh api -X POST repos/o/a/issues --input body.json',
+      'gh api -X POST repos/o/a/issues -F body=@file.txt',
+      'gh api -f body=@file.txt repos/o/a/issues',
+      'gh api -X POST repos/o/a/merges%2523x',
+    ]);
+    allows(['gh api repos/o/a/pulls/3', "gh api graphql -f query='query { viewer { login } }'"]);
+  });
+
+  it('CR2-2 REST forbidden paths use the normalised path', () => {
+    denies([
+      'gh api -X PUT repos/org/app//pulls/3/./merge',
+      'gh api -X PUT repos/org/app/pulls/3/merg%65',
+      'gh api -X POST https://api.github.com/repos/org/app/merges -f base=main -f head=x',
+      'gh api -X POST /api/v3/repos/org/app/merges -f base=main -f head=x',
+      'gh api -X POST repos/org/app/releases',
+      'gh api -X POST repos/org/app/RELEASES',
+      'gh api -X PUT repos/org/app/pulls/3/x/../merge',
+    ]);
+  });
+
+  it('CR2-3 workflow refs need the allow list', () => {
+    denies([
+      'gh workflow run ci.yml --ref main',
+      'gh workflow run ci.yml --ref=main',
+      'gh workflow run ci.yml -r main',
+      'gh workflow run ci.yml -rmain',
+      'gh workflow run ci.yml --ref $B',
+    ]);
+    allows([
+      'gh workflow run ci.yml',
+      'gh workflow run ci.yml --ref studio-ci',
+      'gh workflow run ci.yml --ref=studio-ci',
+      'gh workflow run ci.yml -rstudio-ci',
+    ]);
+  });
+
+  it('CR2-4 caps fail closed', () => {
+    const saved = { ...GUARD_LIMITS };
+    try {
+      GUARD_LIMITS.glob = 2;
+      expect(bash('rm many/*', wt).reason).toContain('glob expands to too many paths');
+      GUARD_LIMITS.glob = saved.glob;
+      GUARD_LIMITS.walk = 0;
+      const r = tool('Grep', { pattern: 'x', path: join(root, 'clean') });
+      expect(r.decision).toBe('deny');
+      expect(r.reason).toContain('too many paths to check');
+    } finally {
+      Object.assign(GUARD_LIMITS, saved);
+    }
+    expect(bash('rm many/*', wt).decision).toBe('allow');
+  });
+
+  it('R2-CR2/I3 git config allowlist', () => {
+    denies([
+      'git config "$(echo remote.origin.push)" refs/heads/studio/APP-1:refs/heads/main',
+      'git config $K refs/heads/studio/APP-1:refs/heads/main',
+      'git config remot?.origin.push refs/heads/studio/APP-1:refs/heads/main',
+      'git config alia?.p push',
+      'git config user.name x',
+      'git config -f .claude/settings.json a.b c',
+      'git config --file=/tmp/x a.b c',
+      'git config --get -f x user.name',
+      'git config --get user.name --add a',
+      'git -c "$(echo remote.origin.push=refs/heads/x:refs/heads/main)" push origin x',
+      'git -c "$(echo alias.p=push)" p -f origin HEAD:main',
+      'git -c remot?.origin.push=refs/heads/x:refs/heads/main push origin x',
+      'git -c core.hooksPath=/tmp/h status',
+      'git -c alias.p=push p',
+    ]);
+    allows([
+      'git config --get user.name',
+      'git config --list',
+      'git config --get-regexp remote',
+      'git -c user.name=x -c user.email=y@example.com commit -m z',
+      'git -c advice.detachedHead=false checkout x',
+    ]);
+  });
+
+  it('R2-I1 wrappers: simple forms only', () => {
+    denies([
+      "env -vS'sudo ls'",
+      "env -iS 'sudo ls'",
+      "env --split-s='sudo ls'",
+      "env --split 'sudo ls'",
+      'env -P /x sudo ls',
+      'env -a x sudo ls',
+      'env --argv0 x git push -f origin x',
+      'stdbuf --output L sudo ls',
+      'ionice --class 3 sudo ls',
+      'setsid -w sudo ls',
+      'nohup -- sudo ls',
+      'coproc X { sudo ls; }',
+      'command -- sudo ls',
+      'time -- sudo ls',
+      'doas ls',
+      'run0 ls',
+      'pkexec ls',
+      'timeout -k 1 5 ls',
+      'timeout x ls',
+      'xargs -x sudo',
+      'xargs --null rm',
+      'xargs -0r sudo',
+    ]);
+    allows([
+      'env FOO=1 ls',
+      'nohup ls',
+      'timeout 5 ls',
+      'nice ls',
+      'nice -n 5 ls',
+      'time ls',
+      'command ls',
+      'echo a | xargs -n 1 echo',
+      'echo a | xargs -0 -I {} echo {}',
+    ]);
+  });
+
+  it('R2-I3b sensitive environment', () => {
+    denies([
+      "export $(printf 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push'); git p -f origin HEAD:main",
+      'printf -v GIT_CONFIG_COUNT 1; export GIT_CONFIG_COUNT',
+      'read GIT_DIR <<< /tmp/x; export GIT_DIR; git status',
+      'declare -x "$V"=1',
+      'export PATH=/tmp:$PATH',
+      'PATH=/tmp ls',
+      'HOME=/tmp ls',
+      'BASH_ENV=/tmp/x ls',
+      'LD_PRELOAD=/tmp/x ls',
+      'GH_TOKEN=x gh pr view',
+      'IFS=: read a b',
+      'mapfile GITHUB_ENV < x',
+      'local GIT_DIR=x',
+    ]);
+    allows(['export FOO=1', 'printf "%s\\n" hi', 'read -r line < in.txt', 'CI=1 pnpm test']);
+  });
+
+  it('R2-I4 unresolved command words', () => {
+    denies([
+      'gh pr mer?e 3',
+      'git pus? -f origin HEAD:main',
+      'git p[u]sh -f origin HEAD:main',
+      'sud? ls',
+      '$X ls',
+      '*/ls',
+    ]);
+    allows(['[ -f a ] && ls', '[[ -f a ]] && ls']);
+  });
+
+  it('R2-I6 shopt and non-branch push refs', () => {
+    denies([
+      'shopt -s dotglob; touch only/*/pwned',
+      'shopt -s extglob',
+      'git push origin HEAD:refs/tags/v1',
+      'git push origin --tags',
+      'git subtree push --prefix=src origin main',
+    ]);
+  });
+
+  it('crew flow stays allowed', () => {
+    allows([
+      'pnpm test 2>&1 | tail -20',
+      'pnpm install && pnpm lint',
+      'git status && git diff && git log --oneline -5',
+      'git add src/a.ts',
+      'git add -A',
+      'git commit -m "feat: add x"',
+      'git commit -m "$(cat <<\'EOF\'\nfeat: x\n\nbody\nEOF\n)"',
+      'git push -u origin HEAD:refs/heads/studio/APP-1',
+      'git push origin studio/APP-1',
+      'git fetch origin && git rebase origin/main',
+      'gh pr create --title "APP-1: x" --body "$(cat <<\'EOF\'\n## Summary\nmerge of things\nEOF\n)"',
+      'gh pr view 3 --json state,mergeable',
+      'gh pr checks 3 --watch',
+      "mkdir -p .studio/reports && cat > .studio/reports/APP-1.md <<'EOF'\n# Report\nEOF",
+    ]);
+    expect(tool('Write', { file_path: join(wt, '.studio', 'reports', 'APP-1.md') }).decision).toBe(
+      'allow',
+    );
   });
 });
 

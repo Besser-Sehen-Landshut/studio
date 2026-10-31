@@ -58,6 +58,8 @@ export const studioConfigSchema = z.strictObject({
   deployCommands: strList,
   // Workflows (file name or name) a crew session may start with `gh workflow run`.
   crewAllowedWorkflows: strList,
+  // Refs a crew session may pass to `gh workflow run --ref`; empty = default branch only.
+  crewAllowedWorkflowRefs: strList,
 });
 
 export type StudioConfig = z.infer<typeof studioConfigSchema>;

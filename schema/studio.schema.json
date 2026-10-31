@@ -262,6 +262,13 @@
       "items": {
         "type": "string"
       }
+    },
+    "crew_allowed_workflow_refs": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": [
