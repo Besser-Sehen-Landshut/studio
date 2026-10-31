@@ -611,7 +611,7 @@ describe('round 2 regressions', () => {
       'xargs --null rm',
       'xargs -0r sudo',
     ]);
-    allows(['env FOO=1 ls', 'nohup ls', 'timeout 5 ls', 'time ls', 'command ls']);
+    allows(['nohup ls', 'timeout 5 ls', 'time ls', 'command ls']);
   });
 
   it('R2-I3b sensitive environment', () => {
@@ -712,7 +712,6 @@ describe('round 3: explicit deny rules', () => {
   });
   it('D4 env with options', () => {
     denies(["env -S 'ls'", "env --split-string='ls'", 'env -i ls', 'env -u X ls']);
-    expect(bash('env FOO=1 ls', wt).decision).toBe('allow');
   });
   it('D5 variable builtins with options and printf -v', () => {
     denies([
@@ -882,7 +881,29 @@ describe('round 4: allowlists', () => {
       'env a[0]=1 ls',
       'export "A B=1"',
     ]);
-    allows(['export FOO=1', 'FOO=1 pnpm test', 'env FOO=1 ls', 'unset FOO', 'read x < in.txt']);
+    allows(['export FOO=1', 'FOO=1 pnpm test', 'unset FOO', 'read x < in.txt']);
+  });
+});
+
+describe('round 5: env wrapper', () => {
+  it('denies env in every position', () => {
+    for (const c of [
+      'env FOO=1 ls',
+      "env 'a b=c' sudo ls",
+      '/usr/bin/env ls',
+      'nohup env ls',
+      'time env ls',
+      'timeout 5 env ls',
+      'env',
+    ]) {
+      const r = bash(c, wt);
+      expect(r.decision, c).toBe('deny');
+      expect(r.reason, c).toContain('env wrapper denied');
+    }
+  });
+  it('keeps plain prefix assignments', () => {
+    expect(bash('FOO=1 pnpm test', wt).decision).toBe('allow');
+    expect(bash('a[0]=1 pnpm test', wt).decision).toBe('deny');
   });
 });
 

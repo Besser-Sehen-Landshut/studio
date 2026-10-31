@@ -655,6 +655,7 @@ function skipWrappers(words: string[], state: State): number {
       i++;
       continue;
     }
+    if (b === 'env') deny('env wrapper denied; use NAME=value cmd');
     if (DENIED_WRAPPERS.has(b)) deny(`${b} is not allowed`);
     switch (b) {
       case 'time':
@@ -671,16 +672,6 @@ function skipWrappers(words: string[], state: State): number {
           deny('timeout needs a plain duration');
         noOption(words, i + 2, 'timeout');
         i += 2;
-        break;
-      case 'env':
-        i++;
-        while (i < words.length) {
-          const x = words[i] as string;
-          if (x.startsWith('-')) deny('env with options is not allowed');
-          if (assignmentName(x) === undefined) break;
-          checkAssignment(state, x);
-          i++;
-        }
         break;
       default:
         return i;
