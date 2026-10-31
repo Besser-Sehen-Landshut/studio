@@ -90,8 +90,8 @@ function cloneBranch(path: string): string | undefined {
 
 /**
  * Gives an item its own blob-less clone `<stateRoot>/clones/<id>` on branch `studio/<id>` from
- * the project's `origin/main`. The clone's origin is then set to the HTTPS URL of `item.repo`. No `git worktree` on the owner's repository: its shared git dir
- * would be writable by the crew. Idempotent: a clone already on that branch is returned untouched;
+ * the project's `origin/main`; the clone's origin is then set to the HTTPS URL of `item.repo`.
+ * No `git worktree` on the owner's repository: its shared git dir would be writable by the crew. Idempotent: a clone already on that branch is returned untouched;
  * anything else in that place (a symlink included, which is unlinked, not followed) is removed and
  * cloned again.
  */
