@@ -34,6 +34,11 @@ const git = (cwd: string, ...args: string[]) =>
 
 const HEAD = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
+const OWN = {
+  headRepository: { name: 'app' },
+  headRepositoryOwner: { login: 'org' },
+  isCrossRepository: false,
+};
 
 const STUDIO_YAML = `studio: 1
 primary_repo: org/app
@@ -246,7 +251,7 @@ describe('studio CLI', () => {
     writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 12`);
     const { gh, calls } = fakeGh((l) =>
       l.startsWith('pr view 7 --repo org/app')
-        ? { stdout: JSON.stringify({ headRefOid: HEAD }) }
+        ? { stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-1', ...OWN }) }
         : undefined,
     );
     const { ports } = fakePorts(gh);
@@ -267,12 +272,66 @@ describe('studio CLI', () => {
   it('collect refuses a report whose head differs from the PR head', async () => {
     const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
     writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 3`);
-    const { gh } = fakeGh(() => ({ stdout: JSON.stringify({ headRefOid: OTHER }) }));
+    const { gh } = fakeGh(() => ({
+      stdout: JSON.stringify({ headRefOid: OTHER, headRefName: 'studio/APP-1', ...OWN }),
+    }));
     const { ports } = fakePorts(gh);
     const r = await cli(fx, ports, 'collect', 'APP-1');
     expect(r.code).toBe(1);
     expect(r.err).toContain('differs');
     expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+  });
+
+  it('collect refuses a PR on another branch or already held by another item', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'assigned' },
+      { id: 'APP-2', status: 'in_review', pr: 7 },
+    ]);
+    writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 3`);
+    const { gh } = fakeGh(() => ({
+      stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-2', ...OWN }),
+    }));
+    const { ports } = fakePorts(gh);
+    const held = await cli(fx, ports, 'collect', 'APP-1');
+    expect(held.code).toBe(1);
+    expect(held.err).toContain('already held by APP-2');
+    const fx2 = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+    writeReport(fx2, 'APP-1', `status: done\nitem: APP-1\npr: 8\nhead_sha: ${HEAD}\ntests_run: 3`);
+    const other = await cli(fx2, ports, 'collect', 'APP-1');
+    expect(other.code).toBe(1);
+    expect(other.err).toContain('expected studio/APP-1');
+    expect(statusOf(fx2, 'APP-1')?.status).toBe('assigned');
+  });
+
+  it('collect refuses a PR from a fork even with the right branch name', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+    writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 3`);
+    const { gh } = fakeGh(() => ({
+      stdout: JSON.stringify({
+        headRefOid: HEAD,
+        headRefName: 'studio/APP-1',
+        headRepository: { name: 'app' },
+        headRepositoryOwner: { login: 'evil' },
+        isCrossRepository: true,
+      }),
+    }));
+    const { ports } = fakePorts(gh);
+    const r = await cli(fx, ports, 'collect', 'APP-1');
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('does not come from a branch of org/app');
+    expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+  });
+
+  it('collect caps crew-provided notes', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+    const qs = Array.from({ length: 15 }, () => `  - ${'x'.repeat(900)}`).join('\n');
+    writeReport(fx, 'APP-1', `status: blocked\nitem: APP-1\nquestions:\n${qs}`);
+    const { gh } = fakeGh();
+    const { ports } = fakePorts(gh);
+    expect((await cli(fx, ports, 'collect', 'APP-1')).code).toBe(0);
+    const notes = statusOf(fx, 'APP-1')?.notes ?? [];
+    expect(notes).toHaveLength(10);
+    expect(notes.every((x) => x.length <= 500)).toBe(true);
   });
 
   it('collect blocked → blocked with question in notes', async () => {

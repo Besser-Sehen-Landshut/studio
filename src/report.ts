@@ -1,5 +1,13 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+} from 'node:fs';
+import { join, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import type { WorkItem } from './board.js';
@@ -46,8 +54,9 @@ export function parseReport(text: string, item?: WorkItem): Report {
   let raw: unknown;
   try {
     raw = parseYaml(front);
-  } catch (e) {
-    throw new ReportError(`report frontmatter is not valid YAML (${(e as Error).message})`);
+  } catch {
+    // Fixed text: crew-controlled content must never reach the output.
+    throw new ReportError('report frontmatter is not valid YAML');
   }
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new ReportError('report frontmatter must be a mapping');
@@ -56,12 +65,12 @@ export function parseReport(text: string, item?: WorkItem): Report {
   const parsed = reportSchema.safeParse(camelized);
   if (!parsed.success) {
     throw new ReportError(
-      `invalid report: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`,
+      `invalid report: bad field ${[...new Set(parsed.error.issues.map((i) => i.path.map(String).join('.') || '(root)'))].join(', ')}`,
     );
   }
   const d = parsed.data;
   if (item && d.item !== undefined && d.item !== item.id) {
-    throw new ReportError(`report item ${d.item} does not match ${item.id}`);
+    throw new ReportError(`report item does not match ${item.id}`);
   }
   if (d.status === 'done') {
     if (!d.headSha || !SHA_RE.test(d.headSha)) {
@@ -82,6 +91,39 @@ export function parseReport(text: string, item?: WorkItem): Report {
   };
 }
 
+export const MAX_REPORT_BYTES = 256 * 1024;
+const UNSAFE = 'report file is missing or not a safe regular file';
+
+/**
+ * Reads a crew-written report as untrusted input: no symlink between the clone root and the file,
+ * a regular file of at most 256 KB, opened without following links. Errors carry fixed text only.
+ */
+function readReportFile(root: string, file: string): string {
+  const unsafe = () => new ReportError(UNSAFE);
+  let fd: number | undefined;
+  try {
+    const parts = [root, join(root, '.studio'), join(root, '.studio', 'reports'), file];
+    parts.forEach((p, i) => {
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) throw unsafe();
+      if (i < parts.length - 1 ? !st.isDirectory() : !st.isFile()) throw unsafe();
+    });
+    const realRoot = realpathSync(root);
+    if (!realpathSync(file).startsWith(realRoot + sep)) throw unsafe();
+    fd = openSync(
+      file,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+    );
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > MAX_REPORT_BYTES) throw unsafe();
+    return readFileSync(fd, 'utf8');
+  } catch (e) {
+    throw e instanceof ReportError ? e : unsafe();
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 /**
  * Reads `<worktree>/.studio/reports/<id>.md`. With `prHead` (the current PR head sha) a report that
  * names a different head is rejected: a report only counts for the commit it was written for.
@@ -93,21 +135,14 @@ export function collectReport(
   item?: WorkItem,
 ): Report {
   const file = join(worktree, '.studio', 'reports', `${id}.md`);
-  let text: string;
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch (e) {
-    throw new ReportError(`cannot read report ${file} (${(e as Error).message})`);
-  }
+  const text = readReportFile(worktree, file);
   const report = parseReport(text, item);
   if (
     prHead !== undefined &&
     (report.status === 'done' || report.headSha !== undefined) &&
     report.headSha?.toLowerCase() !== prHead.toLowerCase()
   ) {
-    throw new ReportError(
-      `report head ${report.headSha ?? '(none)'} differs from PR head ${prHead}`,
-    );
+    throw new ReportError('report head differs from PR head');
   }
   return report;
 }

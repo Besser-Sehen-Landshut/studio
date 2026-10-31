@@ -219,9 +219,18 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const clone = join(stateRoot(), 'clones', item.id);
         const first = collectReport(clone, item.id, undefined, item);
         let report: Report = first;
+        let branch = `studio/${item.id}`;
         if (first.pr !== undefined) {
-          const head = await prHead(ports, item.repo, first.pr);
-          report = collectReport(clone, item.id, head, item);
+          const holder = board.items.find((i) => i.id !== item.id && i.pr === first.pr);
+          if (holder) throw new Error(`PR ${first.pr} is already held by ${holder.id}`);
+          const info = await prInfo(ports, item.repo, first.pr);
+          if (info.branch !== `studio/${item.id}`) {
+            throw new Error(
+              `PR ${first.pr} is on branch ${info.branch}, expected studio/${item.id}`,
+            );
+          }
+          branch = info.branch;
+          report = collectReport(clone, item.id, info.head, item);
         } else if (first.status === 'done') {
           throw new Error(`done report for ${item.id} names no pr`);
         }
@@ -231,7 +240,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           if (item.status === 'assigned') next = transition(next, item.id, 'in_progress', BY, now);
           next = transition(next, item.id, 'in_review', BY, now);
           const pr = report.pr as number;
-          next = withItem(next, item.id, (i) => ({ ...i, pr, branch: `studio/${item.id}` }));
+          next = withItem(next, item.id, (i) => ({ ...i, pr, branch }));
         } else {
           next = transition(next, item.id, 'blocked', BY, now);
           const notes =
@@ -240,7 +249,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               : report.questions.map((q) => `question: ${q}`);
           next = withItem(next, item.id, (i) => ({
             ...i,
-            notes: [...(i.notes ?? []), ...(notes.length ? notes : ['crew reported blocked'])],
+            notes: [
+              ...(i.notes ?? []),
+              ...capNotes(notes.length ? notes : ['crew reported blocked']),
+            ],
           }));
         }
         saveBoard(project, next);
@@ -365,19 +377,52 @@ function parseCli(argv: string[]) {
   }
 }
 
-async function prHead(ports: Ports, repo: string, pr: number): Promise<string> {
-  const r = await ports.gh.run(['pr', 'view', String(pr), '--repo', repo, '--json', 'headRefOid']);
-  if (r.code !== 0) throw new Error(`cannot read the head of ${repo}#${pr} (gh exit ${r.code})`);
-  let oid: unknown;
+async function prInfo(
+  ports: Ports,
+  repo: string,
+  pr: number,
+): Promise<{ head: string; branch: string }> {
+  const r = await ports.gh.run([
+    'pr',
+    'view',
+    String(pr),
+    '--repo',
+    repo,
+    '--json',
+    'headRefOid,headRefName,headRepository,headRepositoryOwner,isCrossRepository',
+  ]);
+  if (r.code !== 0) throw new Error(`cannot read ${repo}#${pr} (gh exit ${r.code})`);
+  let raw: {
+    headRefOid?: unknown;
+    headRefName?: unknown;
+    headRepository?: { name?: unknown } | null;
+    headRepositoryOwner?: { login?: unknown } | null;
+    isCrossRepository?: unknown;
+  } | null;
   try {
-    oid = (JSON.parse(r.stdout) as { headRefOid?: unknown } | null)?.headRefOid;
+    raw = JSON.parse(r.stdout) as typeof raw;
   } catch {
-    oid = undefined;
+    raw = null;
   }
-  if (typeof oid !== 'string' || !/^[0-9a-f]{40,64}$/i.test(oid)) {
+  const head = raw?.headRefOid;
+  const branch = raw?.headRefName;
+  if (typeof head !== 'string' || !/^[0-9a-f]{40,64}$/i.test(head) || typeof branch !== 'string') {
     throw new Error(`gh returned no valid head for ${repo}#${pr}`);
   }
-  return oid;
+  // Only a branch of the item's own repository counts: no forks.
+  const headRepo = `${String(raw?.headRepositoryOwner?.login)}/${String(raw?.headRepository?.name)}`;
+  if (raw?.isCrossRepository !== false || headRepo.toLowerCase() !== repo.toLowerCase()) {
+    throw new Error(`PR ${repo}#${pr} does not come from a branch of ${repo}`);
+  }
+  return { head, branch };
+}
+
+const MAX_NOTES = 10;
+const MAX_NOTE_CHARS = 500;
+
+/** Crew-provided text is untrusted: at most 10 entries of 500 characters, no control characters. */
+function capNotes(notes: string[]): string[] {
+  return notes.slice(0, MAX_NOTES).map((n) => n.replace(/\p{Cc}/gu, ' ').slice(0, MAX_NOTE_CHARS));
 }
 
 /** Moves board items for the queue entries finished in this run: merged, or back to review. */

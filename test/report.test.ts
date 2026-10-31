@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -96,5 +97,77 @@ describe('collectReport', () => {
 
   it('throws ReportError when the file is missing', () => {
     expect(() => collectReport(dir, 'APP-9')).toThrow(ReportError);
+  });
+});
+
+describe('collectReport treats the report as untrusted input', () => {
+  const SECRET = 'sk-fake-secret-value-123';
+  const mk = () => {
+    const d = mkdtempSync(join(tmpdir(), 'studio-rep-'));
+    dirsToClean.push(d);
+    return d;
+  };
+  const dirsToClean: string[] = [];
+  afterAll(() => {
+    for (const d of dirsToClean) rmSync(d, { recursive: true, force: true });
+  });
+  const errOf = (fn: () => unknown): string => {
+    try {
+      fn();
+    } catch (e) {
+      expect(e).toBeInstanceOf(ReportError);
+      return (e as Error).message;
+    }
+    throw new Error('did not throw');
+  };
+
+  it('refuses a symlinked report and does not leak the target', () => {
+    const d = mk();
+    const target = join(mk(), 'secret.md');
+    writeFileSync(target, `---\nstatus: done\n${SECRET}\n---\n`);
+    mkdirSync(join(d, '.studio', 'reports'), { recursive: true });
+    symlinkSync(target, join(d, '.studio', 'reports', 'APP-1.md'));
+    const msg = errOf(() => collectReport(d, 'APP-1'));
+    expect(msg).not.toContain(SECRET);
+    expect(msg).not.toContain(target);
+  });
+
+  it('refuses a symlinked .studio directory', () => {
+    const d = mk();
+    const other = mk();
+    mkdirSync(join(other, 'reports'));
+    writeFileSync(join(other, 'reports', 'APP-1.md'), '---\nstatus: blocked\n---\n');
+    symlinkSync(other, join(d, '.studio'));
+    expect(() => collectReport(d, 'APP-1')).toThrow(ReportError);
+  });
+
+  it('refuses a FIFO and an oversized report', () => {
+    const d = mk();
+    const dir = join(d, '.studio', 'reports');
+    mkdirSync(dir, { recursive: true });
+    execFileSync('mkfifo', [join(dir, 'APP-1.md')]);
+    expect(() => collectReport(d, 'APP-1')).toThrow(ReportError);
+    const big = mk();
+    mkdirSync(join(big, '.studio', 'reports'), { recursive: true });
+    writeFileSync(
+      join(big, '.studio', 'reports', 'APP-1.md'),
+      `---\nstatus: blocked\n---\n${'x'.repeat(300 * 1024)}`,
+    );
+    expect(() => collectReport(big, 'APP-1')).toThrow(ReportError);
+  });
+
+  it('error messages never contain report content', () => {
+    const d = mk();
+    mkdirSync(join(d, '.studio', 'reports'), { recursive: true });
+    const write = (front: string) =>
+      writeFileSync(join(d, '.studio', 'reports', 'APP-1.md'), `---\n${front}\n---\n`);
+    write(`status: [${SECRET}\n  bad: : :`);
+    expect(errOf(() => collectReport(d, 'APP-1'))).not.toContain(SECRET);
+    write(`status: ${SECRET}`);
+    expect(errOf(() => collectReport(d, 'APP-1'))).not.toContain(SECRET);
+    write(`status: blocked\nitem: ${SECRET}`);
+    expect(errOf(() => collectReport(d, 'APP-1', undefined, item('docs')))).not.toContain(SECRET);
+    write(`status: blocked\nhead_sha: ${SECRET}`);
+    expect(errOf(() => collectReport(d, 'APP-1', 'a'.repeat(40)))).not.toContain(SECRET);
   });
 });

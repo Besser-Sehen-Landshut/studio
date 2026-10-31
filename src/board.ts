@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Document, isMap, isSeq, parseDocument, parse as parseYaml } from 'yaml';
 import { z } from 'zod';
@@ -224,7 +224,15 @@ export function saveBoard(dir: string, board: Board): void {
       }
     }
   }
-  writeFileSync(file, doc.toString({ lineWidth: 0 }));
+  // Atomic: temp file in the same directory, then rename; the temp file is removed on failure.
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tmp, doc.toString({ lineWidth: 0 }), { flag: 'wx' });
+    renameSync(tmp, file);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
 }
 
 // ready→assigned→in_progress→in_review→queued→merged, plus rework and merge-failure loops.

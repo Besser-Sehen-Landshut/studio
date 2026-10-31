@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -49,6 +49,15 @@ describe('board', () => {
     const fresh = project('items: []\n');
     saveBoard(fresh, board);
     expect(readFileSync(join(fresh, '.studio', 'board.yaml'), 'utf8')).toBe(original);
+  });
+
+  it('saveBoard is atomic: a failing write leaves no temp file', () => {
+    const dir = project('items: []\n');
+    const file = join(dir, '.studio', 'board.yaml');
+    rmSync(file);
+    mkdirSync(file); // renaming a file onto a directory fails
+    expect(() => saveBoard(dir, loadBoard(join(fixture)))).toThrow();
+    expect(readdirSync(join(dir, '.studio')).filter((f) => f.endsWith('.tmp'))).toEqual([]);
   });
 
   it('applies defaults on load', () => {
