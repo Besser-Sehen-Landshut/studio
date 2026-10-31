@@ -317,6 +317,8 @@ export interface CrewRecord {
   pid: number;
   log: string;
   startedAt: string;
+  /** Set by `studio stop`. */
+  stoppedAt?: string;
 }
 
 function readCrewFile(file: string): Record<string, CrewRecord> {
