@@ -156,7 +156,7 @@ describe('mergeOne', () => {
     expect(r.result.result).toBe('merged');
     // two polling sleeps plus the 30 s gap of the capacity double read
     expect(r.sleeps.filter((s) => s === 30_000)).toHaveLength(3);
-    expect(r.calls.filter((c) => c.startsWith(CHK) && !c.endsWith('--required'))).toHaveLength(3);
+    expect(r.calls.filter((c) => c.startsWith(CHK) && !c.endsWith('--required'))).toHaveLength(4);
   });
 
   it('fails when a check is fail', async () => {
@@ -293,7 +293,7 @@ describe('mergeOne', () => {
     );
     expect(r.result.result).toBe('merged');
     expect(mergeCalls(r.calls)).toEqual([`${MERGE} --squash --match-head-commit ${H2}`]);
-    expect(r.calls.filter((c) => c.startsWith(CHK) && !c.endsWith('--required'))).toHaveLength(2);
+    expect(r.calls.filter((c) => c.startsWith(CHK) && !c.endsWith('--required'))).toHaveLength(3);
   });
 
   it('gives up after 3 attempts when the head keeps moving', async () => {
@@ -443,6 +443,107 @@ describe('mergeOne', () => {
     expect(r.result.result).toBe('merged');
     expect(mergeCalls(r.calls)).toEqual([`${MERGE} --squash --match-head-commit ${H2}`]);
   });
+
+  it('fails when every check is skipping and none is required', async () => {
+    const r = await run(
+      base([
+        { prefix: REQ, responses: [noRequired] },
+        { prefix: CHK, responses: [checks(['a', 'skipping'], ['b', 'skipping'])] },
+        { prefix: VIEW, responses: [view(H1)] },
+      ]),
+    );
+    expect(r.result).toEqual({ result: 'failed', reason: 'no check passed' });
+    expect(mergeCalls(r.calls)).toHaveLength(0);
+  });
+
+  it('head moving during the checks poll: polls again and merges only the new head', async () => {
+    const r = await run(
+      base([
+        { prefix: REQ, responses: [noRequired] },
+        { prefix: CHK, responses: [checks(['a', 'pass'])] },
+        { prefix: VIEW, responses: [view(H1), view(H2), view(H2)] },
+      ]),
+    );
+    expect(r.result.result).toBe('merged');
+    expect(mergeCalls(r.calls)).toEqual([`${MERGE} --squash --match-head-commit ${H2}`]);
+    // checks step ran twice (H1 -> H2 move), plus the pre-merge re-check
+    expect(r.calls.filter((c) => c.startsWith(CHK) && !c.endsWith('--required'))).toHaveLength(3);
+  });
+
+  it('head moving inside every checks poll: head moved 3 times, no merge', async () => {
+    const r = await run(
+      base([
+        { prefix: REQ, responses: [noRequired] },
+        { prefix: CHK, responses: [checks(['a', 'pass'])] },
+        {
+          prefix: VIEW,
+          responses: [view(H1), view(H2), view(H2), view(H3), view(H3), view(H4)],
+        },
+      ]),
+    );
+    expect(r.result).toEqual({ result: 'failed', reason: 'head moved 3 times' });
+    expect(mergeCalls(r.calls)).toHaveLength(0);
+  });
+
+  it('re-checks right before merging: a check turning pending sends the PR back to checks', async () => {
+    const r = await run(
+      base([
+        { prefix: REQ, responses: [noRequired] },
+        {
+          prefix: CHK,
+          responses: [
+            checks(['a', 'pass']),
+            checks(['a', 'pending']),
+            checks(['a', 'pass']),
+            checks(['a', 'pass']),
+          ],
+        },
+        { prefix: VIEW, responses: [view(H1)] },
+      ]),
+    );
+    expect(r.result.result).toBe('merged');
+    expect(mergeCalls(r.calls)).toHaveLength(1);
+    expect(r.persisted.map((p) => p.step)).toEqual([
+      'update',
+      'checks',
+      'capacity',
+      'merge',
+      'checks',
+      'capacity',
+      'merge',
+    ]);
+  });
+
+  it('re-check right before merging that finds a failure: failed, no merge', async () => {
+    const r = await run(
+      base([
+        { prefix: REQ, responses: [noRequired] },
+        { prefix: CHK, responses: [checks(['a', 'pass']), checks(['a', 'fail'])] },
+        { prefix: VIEW, responses: [view(H1)] },
+      ]),
+    );
+    expect(r.result.result).toBe('failed');
+    expect(mergeCalls(r.calls)).toHaveLength(0);
+  });
+
+  it('waits for a pending check that appears only in the --required list', async () => {
+    const r = await run(
+      base([
+        {
+          prefix: REQ,
+          responses: [
+            checks(['a', 'pass'], ['req', 'pending']),
+            checks(['a', 'pass'], ['req', 'pass']),
+          ],
+        },
+        { prefix: CHK, responses: [checks(['a', 'pass'])] },
+        { prefix: VIEW, responses: [view(H1)] },
+      ]),
+    );
+    expect(r.result.result).toBe('merged');
+    expect(r.sleeps).toContain(30_000);
+    expect(r.calls.filter((c) => c.startsWith(REQ)).length).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe('runQueue', () => {
@@ -556,5 +657,46 @@ describe('loadQueue / saveQueue', () => {
     saveQueue(root, { pending: [], done: [] });
     writeFileSync(join(root, 'queue.json'), '{"pending":"x"}');
     expect(() => loadQueue(root)).toThrow(/invalid/);
+  });
+});
+
+describe('runQueue metrics robustness', () => {
+  const rules = (commits: Res): Rule[] => [
+    { prefix: COMMITS, responses: [commits] },
+    ...base([
+      { prefix: REQ, responses: [noRequired] },
+      { prefix: CHK, responses: [checks(['a', 'pass'])] },
+      { prefix: VIEW, responses: [view(H1)] },
+    ]),
+  ];
+
+  it('writes firstCommitAt: null when the first commit date is unreadable', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'studio-queue-'));
+    const g = fakeGh(rules({ code: 1, stderr: 'boom' }));
+    const state: QueueState = { pending: [{ pr: 5, repo: 'org/app' }], done: [] };
+    await runQueue(state, mkConfig(), { gh: g.gh, clock: fakeClock().clock, host }, () => {}, {
+      stateRoot: root,
+    });
+    const line = readFileSync(join(root, 'metrics.jsonl'), 'utf8').trim();
+    expect(JSON.parse(line)).toMatchObject({ type: 'merged', pr: 5, firstCommitAt: null });
+  });
+
+  it('a failing metrics append is logged and does not stop the queue', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'studio-queue-'));
+    const notADir = join(dir, 'file');
+    writeFileSync(notADir, 'x');
+    const g = fakeGh(rules({ stdout: '2026-10-30T08:00:00Z' }));
+    const logs: string[] = [];
+    const state: QueueState = { pending: [{ pr: 5, repo: 'org/app' }], done: [] };
+    const out = await runQueue(
+      state,
+      mkConfig(),
+      { gh: g.gh, clock: fakeClock().clock, host },
+      () => {},
+      { stateRoot: notADir, log: (m) => logs.push(m) },
+    );
+    expect(out.done.map((d) => d.result)).toEqual(['merged']);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('metrics append failed');
   });
 });

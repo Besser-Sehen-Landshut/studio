@@ -23,6 +23,8 @@ export type QueueOptions = {
   pollMs?: number;
   capacityWaitMs?: number;
   timeoutMs?: number;
+  /** Receives non-fatal problems (default: stderr). */
+  log?: (message: string) => void;
 };
 
 export const CHECKS_POLL_MS = 30_000;
@@ -154,6 +156,9 @@ async function readChecks(entry: QueueEntry, gh: Gh): Promise<ChecksVerdict> {
     }
   }
   if (evaluated.some((c) => c.bucket === 'pending')) return { kind: 'pending' };
+  // Skipped CI is never green: at least one check must have actually passed.
+  if (!evaluated.some((c) => c.bucket === 'pass'))
+    return { kind: 'failed', reason: 'no check passed' };
   return { kind: 'pass' };
 }
 
@@ -254,6 +259,7 @@ export async function mergeOne(
   const moved = `head moved ${MAX_ATTEMPTS} times`;
 
   let attempts = 1;
+  let rechecks = 0;
   let step: QueueStep = entry.step;
   for (;;) {
     if (step === 'update') {
@@ -315,6 +321,13 @@ export async function mergeOne(
       if (now.state === 'CLOSED') return failed('pull request is closed');
       if (head === undefined || now.head !== head) {
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
+        step = 'checks';
+        continue;
+      }
+      // CI may have changed while we waited for capacity: verify once more right before merging.
+      const again = await readChecks(entry, gh);
+      if (again.kind !== 'pass') {
+        if (++rechecks > MAX_ATTEMPTS) return failed(`checks changed ${MAX_ATTEMPTS} times`);
         step = 'checks';
         continue;
       }
@@ -385,19 +398,26 @@ export async function runQueue(
     state.current = undefined;
     persist(state);
     if (outcome.result === 'merged' && opts.stateRoot !== undefined) {
-      const first = await firstCommitAt(current, ports.gh);
-      appendStateLine(
-        opts.stateRoot,
-        'metrics.jsonl',
-        JSON.stringify({
-          type: 'merged',
-          ...(current.item === undefined ? {} : { item: current.item }),
-          pr: current.pr,
-          repo: current.repo,
-          at: ports.clock.now().toISOString(),
-          ...(first === undefined ? {} : { firstCommitAt: first }),
-        }),
-      );
+      try {
+        const first = await firstCommitAt(current, ports.gh);
+        appendStateLine(
+          opts.stateRoot,
+          'metrics.jsonl',
+          JSON.stringify({
+            type: 'merged',
+            ...(current.item === undefined ? {} : { item: current.item }),
+            pr: current.pr,
+            repo: current.repo,
+            at: ports.clock.now().toISOString(),
+            firstCommitAt: first ?? null,
+          }),
+        );
+      } catch (err) {
+        // The PR is merged and recorded in the queue; metrics must not stop the queue.
+        (opts.log ?? ((m: string) => console.error(m)))(
+          `metrics append failed for PR ${current.pr}: ${(err as Error).message}`,
+        );
+      }
     }
   }
 }
