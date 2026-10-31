@@ -5,7 +5,8 @@ Studio is a Claude Code plugin and TypeScript package for running a small softwa
 Install:
 
 ```
-/plugin install studio --marketplace Besser-Sehen-Landshut/studio
+/plugin marketplace add Besser-Sehen-Landshut/studio
+/plugin install studio@studio-marketplace
 ```
 
 Status: stage (a) in development
