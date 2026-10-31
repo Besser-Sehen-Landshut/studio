@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type CliDeps, runCli } from '../../src/cli.js';
 import { crewSessionId } from '../../src/crew.js';
 import { stateRootFor } from '../../src/paths.js';
@@ -152,19 +152,35 @@ describe('crew loop with a fake claude', () => {
     stateRoot = stateRootFor(project, { env, homedir: home });
   });
 
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it('plans, launches, collects, merges and unblocks the dependent item', async () => {
     const first = await json('plan');
     expect(ids(first.assign)).toEqual(['APP-1', 'APP-2']);
-    expect(JSON.stringify([first.blocked, first.deferred])).toContain('APP-3');
+    expect(first.blocked).toContainEqual({ id: 'APP-3', reason: 'waiting on APP-1' });
 
     const pids: number[] = [];
     for (const id of ['APP-1', 'APP-2']) pids.push((await json('launch', id)).pid as number);
 
-    const deadline = Date.now() + 15_000;
-    while (pids.some((p) => ports.claude.alive(p))) {
-      if (Date.now() > deadline) throw new Error('fake claude sessions did not exit in time');
-      await new Promise((r) => setTimeout(r, 50));
+    try {
+      const deadline = Date.now() + 15_000;
+      while (pids.some((p) => ports.claude.alive(p))) {
+        if (Date.now() > deadline) throw new Error('fake claude sessions did not exit in time');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    } finally {
+      for (const p of pids) if (ports.claude.alive(p)) await ports.claude.stop(p);
     }
+
+    // A report whose head differs from the PR head must not move the item.
+    const reportFile = join(cloneOf('APP-2'), '.studio', 'reports', 'APP-2.md');
+    const original = readFileSync(reportFile, 'utf8');
+    writeFileSync(reportFile, original.replace(/^head_sha: .*$/m, `head_sha: ${'b'.repeat(40)}`));
+    await expect(run('collect', 'APP-2')).rejects.toThrow(/exited 1/);
+    expect(await statusOf('APP-2')).toBe('assigned');
+    writeFileSync(reportFile, original);
 
     for (const id of ['APP-1', 'APP-2']) {
       expect((await json('collect', id)).status).toBe('in_review');
