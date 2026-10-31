@@ -8,7 +8,7 @@ import { checkStateMarker, projectRealpath, stateRootFor, writeStateFile } from 
 import { type Capacity, planAssignments } from './planner.js';
 import type { Ports } from './ports.js';
 import { loadQueue, type QueueState, runQueue, saveQueue } from './queue.js';
-import { collectReport, type Report } from './report.js';
+import { checkReportHead, readReport } from './report.js';
 import {
   type CrewSnapshot,
   computeMetrics,
@@ -217,21 +217,23 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
         // Reading files only: git never runs inside a crew clone.
         const clone = join(stateRoot(), 'clones', item.id);
-        const first = collectReport(clone, item.id, undefined, item);
-        let report: Report = first;
+        // The report is read exactly once; everything below verifies and stores that one result.
+        const report = readReport(clone, item.id, item);
         let branch = `studio/${item.id}`;
-        if (first.pr !== undefined) {
-          const holder = board.items.find((i) => i.id !== item.id && i.pr === first.pr);
-          if (holder) throw new Error(`PR ${first.pr} is already held by ${holder.id}`);
-          const info = await prInfo(ports, item.repo, first.pr);
+        if (report.pr !== undefined) {
+          const holder = board.items.find(
+            (i) => i.id !== item.id && i.repo === item.repo && i.pr === report.pr,
+          );
+          if (holder) throw new Error(`PR ${report.pr} is already held by ${holder.id}`);
+          const info = await prInfo(ports, item.repo, report.pr);
           if (info.branch !== `studio/${item.id}`) {
             throw new Error(
-              `PR ${first.pr} is on branch ${info.branch}, expected studio/${item.id}`,
+              `PR ${report.pr} is on branch ${info.branch}, expected studio/${item.id}`,
             );
           }
           branch = info.branch;
-          report = collectReport(clone, item.id, info.head, item);
-        } else if (first.status === 'done') {
+          checkReportHead(report, info.head);
+        } else if (report.status === 'done') {
           throw new Error(`done report for ${item.id} names no pr`);
         }
         const now = ports.clock.now();

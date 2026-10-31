@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { WorkItem } from '../src/board.js';
-import { collectReport, parseReport, ReportError } from '../src/report.js';
+import { collectReport, MAX_REPORT_BYTES, parseReport, ReportError } from '../src/report.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'studio-report-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -154,6 +154,17 @@ describe('collectReport treats the report as untrusted input', () => {
       `---\nstatus: blocked\n---\n${'x'.repeat(300 * 1024)}`,
     );
     expect(() => collectReport(big, 'APP-1')).toThrow(ReportError);
+  });
+
+  it('the size cap is on bytes read: exactly the cap passes, one more byte is refused', () => {
+    const d = mk();
+    const dir = join(d, '.studio', 'reports');
+    mkdirSync(dir, { recursive: true });
+    const head = '---\nstatus: blocked\n---\n';
+    writeFileSync(join(dir, 'APP-1.md'), head + 'x'.repeat(MAX_REPORT_BYTES - head.length));
+    expect(collectReport(d, 'APP-1').status).toBe('blocked');
+    writeFileSync(join(dir, 'APP-1.md'), head + 'x'.repeat(MAX_REPORT_BYTES - head.length + 1));
+    expect(() => collectReport(d, 'APP-1')).toThrow(ReportError);
   });
 
   it('error messages never contain report content', () => {

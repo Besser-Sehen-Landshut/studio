@@ -322,6 +322,43 @@ describe('studio CLI', () => {
     expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
   });
 
+  it('collect reads the report once: a swap during the gh call does not change the stored pr', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+    writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 3`);
+    const { gh } = fakeGh((l) => {
+      if (!l.startsWith('pr view 7')) return undefined;
+      // the crew rewrites its report while the control room talks to gh
+      writeReport(
+        fx,
+        'APP-1',
+        `status: done\nitem: APP-1\npr: 99\nhead_sha: ${HEAD}\ntests_run: 3`,
+      );
+      return { stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-1', ...OWN }) };
+    });
+    const { ports } = fakePorts(gh);
+    const r = await cli(fx, ports, 'collect', 'APP-1');
+    expect(r.code).toBe(0);
+    expect(statusOf(fx, 'APP-1')?.pr).toBe(7);
+  });
+
+  it('a PR number held in another repo does not block collect', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'assigned' },
+      { id: 'APP-2', status: 'in_review', pr: 7 },
+    ]);
+    const text = readFileSync(join(fx.project, '.studio', 'board.yaml'), 'utf8');
+    writeFileSync(
+      join(fx.project, '.studio', 'board.yaml'),
+      text.replace(/(id: APP-2[\s\S]*?repo: )org\/app/, '$1org/other'),
+    );
+    writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 3`);
+    const { gh } = fakeGh(() => ({
+      stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-1', ...OWN }),
+    }));
+    const { ports } = fakePorts(gh);
+    expect((await cli(fx, ports, 'collect', 'APP-1')).code).toBe(0);
+  });
+
   it('collect caps crew-provided notes', async () => {
     const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
     const qs = Array.from({ length: 15 }, () => `  - ${'x'.repeat(900)}`).join('\n');

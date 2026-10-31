@@ -4,7 +4,7 @@ import {
   fstatSync,
   lstatSync,
   openSync,
-  readFileSync,
+  readSync,
   realpathSync,
 } from 'node:fs';
 import { join, sep } from 'node:path';
@@ -114,9 +114,17 @@ function readReportFile(root: string, file: string): string {
       file,
       constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
     );
-    const st = fstatSync(fd);
-    if (!st.isFile() || st.size > MAX_REPORT_BYTES) throw unsafe();
-    return readFileSync(fd, 'utf8');
+    if (!fstatSync(fd).isFile()) throw unsafe();
+    // Bounded read that does not trust the size: a file that grows still stops at the cap.
+    const buf = Buffer.alloc(MAX_REPORT_BYTES + 1);
+    let total = 0;
+    while (total < buf.length) {
+      const n = readSync(fd, buf, total, buf.length - total, null);
+      if (n === 0) break;
+      total += n;
+    }
+    if (total > MAX_REPORT_BYTES) throw unsafe();
+    return buf.toString('utf8', 0, total);
   } catch (e) {
     throw e instanceof ReportError ? e : unsafe();
   } finally {
@@ -124,25 +132,33 @@ function readReportFile(root: string, file: string): string {
   }
 }
 
+/** Reads and parses `<worktree>/.studio/reports/<id>.md` exactly once. */
+export function readReport(worktree: string, id: string, item?: WorkItem): Report {
+  const file = join(worktree, '.studio', 'reports', `${id}.md`);
+  return parseReport(readReportFile(worktree, file), item);
+}
+
 /**
- * Reads `<worktree>/.studio/reports/<id>.md`. With `prHead` (the current PR head sha) a report that
- * names a different head is rejected: a report only counts for the commit it was written for.
+ * A report that names a head (always for `done`) only counts for that exact commit: rejects a
+ * different PR head.
  */
+export function checkReportHead(report: Report, prHead: string): void {
+  if (
+    (report.status === 'done' || report.headSha !== undefined) &&
+    report.headSha?.toLowerCase() !== prHead.toLowerCase()
+  ) {
+    throw new ReportError('report head differs from PR head');
+  }
+}
+
+/** Reads the report once; with `prHead` (the current PR head sha) also checks the head. */
 export function collectReport(
   worktree: string,
   id: string,
   prHead?: string,
   item?: WorkItem,
 ): Report {
-  const file = join(worktree, '.studio', 'reports', `${id}.md`);
-  const text = readReportFile(worktree, file);
-  const report = parseReport(text, item);
-  if (
-    prHead !== undefined &&
-    (report.status === 'done' || report.headSha !== undefined) &&
-    report.headSha?.toLowerCase() !== prHead.toLowerCase()
-  ) {
-    throw new ReportError('report head differs from PR head');
-  }
+  const report = readReport(worktree, id, item);
+  if (prHead !== undefined) checkReportHead(report, prHead);
   return report;
 }
