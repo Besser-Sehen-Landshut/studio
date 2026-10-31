@@ -1,0 +1,5 @@
+# One case-insensitive regular expression per line. Lines starting with # are ignored.
+# Extra words come from the STUDIO_PRIVATE_WORDS environment variable (never committed).
+\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b
+/Users/
+\.ts\.net

@@ -1,0 +1,14 @@
+{
+  "name": "studio-marketplace",
+  "description": "Marketplace for the studio plugin",
+  "owner": {
+    "name": "Studio contributors"
+  },
+  "plugins": [
+    {
+      "name": "studio",
+      "source": "./",
+      "description": "Run a software studio of coding-agent sessions from one control room"
+    }
+  ]
+}
