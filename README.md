@@ -20,6 +20,8 @@ The plugin ships two skills (`studio:studio-lead` for the control room, `studio:
 - A least-privilege crew token created by the repository owner (for example a fine-grained token limited to the project's repositories: contents and pull requests read/write, no administration, no merge rights beyond what branch protection allows). Export it in the control room's environment and name the variable in `studio.yaml` under `crew_token.env`. Launch refuses without it unless `allow_ambient_credentials: true`.
 - Server-side branch protection on `main` and on every ref listed in `crew_allowed_workflow_refs`.
 - A platform where Claude Code's sandbox is supported.
+- Model authentication for crew sessions in the control room's environment: crew sessions get an isolated `HOME`, so they authenticate with `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (passed through when set) or with the Claude login in `CLAUDE_CONFIG_DIR` (default `~/.claude`). Check on the first launch that the crew session starts and authenticates (`studio status`, the crew log in the state root).
+- `sandbox.network_allow` lists every host the crew's shell commands may reach (GitHub for `git` and `gh`, your package registry); everything else is blocked.
 
 ## Quick start
 
@@ -40,8 +42,9 @@ merge:
   strategy: studio-queue
   contract_paths: []
 roles:
-  builder: { model: strongest, wip: 2 }
-  reviewer: { model: strongest, wip: 1 }
+  builder: { model: sonnet, wip: 2 }
+  reviewer: { model: opus, wip: 1 }
+sandbox: { network_allow: [github.com, api.github.com, registry.npmjs.org] }
 crew_token: { env: STUDIO_CREW_TOKEN }
 owner_only: []
 deploy_commands: []
