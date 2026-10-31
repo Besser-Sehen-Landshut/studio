@@ -269,6 +269,43 @@ describe('studio CLI', () => {
     expect(calls.some((c) => c.includes('headRefOid'))).toBe(true);
   });
 
+  it('collect review item without pr → merged, verdict in output and notes', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned', type: 'review' }]);
+    writeReport(
+      fx,
+      'APP-1',
+      'status: done\nitem: APP-1\nverdict: changes_requested\nreviews: org/app#9',
+    );
+    const { gh, calls } = fakeGh();
+    const { ports } = fakePorts(gh);
+    const r = await cli(fx, ports, 'collect', 'APP-1');
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out)).toMatchObject({
+      status: 'merged',
+      verdict: 'changes_requested',
+      reviews: 'org/app#9',
+    });
+    const item = statusOf(fx, 'APP-1');
+    expect(item?.status).toBe('merged');
+    expect(item?.pr).toBeUndefined();
+    expect(item?.history.map((h) => `${h.from}>${h.to}`)).toEqual([
+      'assigned>in_progress',
+      'in_progress>in_review',
+      'in_review>merged',
+    ]);
+    expect(item?.notes?.join(' ')).toContain('changes_requested');
+    expect(calls.some((c) => c.startsWith('pr view'))).toBe(false);
+  });
+
+  it('collect refuses a done build item without pr', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+    writeReport(fx, 'APP-1', `status: done\nitem: APP-1\nhead_sha: ${HEAD}\ntests_run: 2`);
+    const { gh } = fakeGh();
+    const { ports } = fakePorts(gh);
+    expect((await cli(fx, ports, 'collect', 'APP-1')).code).toBe(1);
+  });
+
   it('collect refuses a report whose head differs from the PR head', async () => {
     const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
     writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 3`);

@@ -200,14 +200,24 @@ export function writeBrief(
     '---',
     'status: done|blocked|failed',
     `item: ${id}`,
-    'pr: <number>',
-    'head_sha: <40-hex sha of the pushed head commit>',
-    'tests_run: <number of tests that ran>',
+    ...(item.type === 'review'
+      ? ['verdict: approve|changes_requested', 'reviews: <repo>#<pr>']
+      : [
+          'pr: <number>',
+          'head_sha: <40-hex sha of the pushed head commit>',
+          'tests_run: <number of tests that ran>',
+        ]),
     'lessons: []',
     'questions: []',
     '---',
     '```',
     '',
+    ...(item.type === 'review'
+      ? [
+          'A reviewer opens no pull request: omit pr and head_sha. reviews names the pull request you reviewed.',
+          '',
+        ]
+      : []),
     'The body says what changed and how it was verified.',
     '',
   ];

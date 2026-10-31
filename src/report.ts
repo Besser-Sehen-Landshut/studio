@@ -20,6 +20,8 @@ export class ReportError extends Error {
 }
 
 const BUILD_TYPES: readonly WorkItem['type'][] = ['feature', 'fix', 'chore'];
+const NO_PR_TYPES: readonly WorkItem['type'][] = ['review', 'research'];
+const REVIEWS_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9]\d{0,9}$/;
 const SHA_RE = /^[0-9a-f]{40}$/i;
 
 const reportSchema = z.object({
@@ -28,6 +30,8 @@ const reportSchema = z.object({
   pr: z.number().int().positive().nullish(),
   headSha: z.string().nullish(),
   testsRun: z.number().int().nonnegative().nullish(),
+  verdict: z.enum(['approve', 'changes_requested']).nullish(),
+  reviews: z.string().regex(REVIEWS_RE).nullish(),
   lessons: z.array(z.string()).default([]),
   questions: z.array(z.string()).default([]),
 });
@@ -38,6 +42,8 @@ export interface Report {
   pr?: number;
   headSha?: string;
   testsRun?: number;
+  verdict?: 'approve' | 'changes_requested';
+  reviews?: string;
   lessons: string[];
   questions: string[];
 }
@@ -73,8 +79,13 @@ export function parseReport(text: string, item?: WorkItem): Report {
     throw new ReportError(`report item does not match ${item.id}`);
   }
   if (d.status === 'done') {
-    if (!d.headSha || !SHA_RE.test(d.headSha)) {
+    // Review and research items may finish without a PR; a PR still needs its head.
+    const noPrOk = item !== undefined && NO_PR_TYPES.includes(item.type) && d.pr == null;
+    if (d.headSha ? !SHA_RE.test(d.headSha) : !noPrOk) {
       throw new ReportError('done report needs head_sha (40 hex characters)');
+    }
+    if (item?.type === 'review' && !d.verdict) {
+      throw new ReportError('done report for a review item needs verdict');
     }
     if (item && BUILD_TYPES.includes(item.type) && !(d.testsRun && d.testsRun > 0)) {
       throw new ReportError(`done report for a ${item.type} item needs tests_run > 0`);
@@ -86,6 +97,8 @@ export function parseReport(text: string, item?: WorkItem): Report {
     ...(d.pr != null && { pr: d.pr }),
     ...(d.headSha != null && { headSha: d.headSha }),
     ...(d.testsRun != null && { testsRun: d.testsRun }),
+    ...(d.verdict != null && { verdict: d.verdict }),
+    ...(d.reviews != null && { reviews: d.reviews }),
     lessons: d.lessons,
     questions: d.questions,
   };

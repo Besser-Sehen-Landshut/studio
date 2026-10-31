@@ -174,4 +174,17 @@ describe('board', () => {
     expect(text).toContain('# first');
     expect(text).toContain('status: assigned');
   });
+
+  it('allows in_review -> merged only for an item without a pr', () => {
+    const noPr = loadBoard(
+      project(`items:\n${item('APP-1').replace('status: ready', 'status: in_review')}`),
+    );
+    expect(transition(noPr, 'APP-1', 'merged', 'x', new Date()).items[0]?.status).toBe('merged');
+    const withPr = loadBoard(
+      project(
+        `items:\n${item('APP-1', '    pr: 5\n').replace('status: ready', 'status: in_review')}`,
+      ),
+    );
+    expect(() => transition(withPr, 'APP-1', 'merged', 'x', new Date())).toThrow(TransitionError);
+  });
 });

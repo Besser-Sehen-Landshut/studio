@@ -240,7 +240,7 @@ const FORWARD: Readonly<Record<ItemStatus, readonly ItemStatus[]>> = {
   ready: ['assigned'],
   assigned: ['in_progress'],
   in_progress: ['in_review'],
-  in_review: ['queued', 'in_progress'],
+  in_review: ['queued', 'in_progress', 'merged'],
   queued: ['merged', 'in_review'],
   merged: [],
   blocked: ['ready'],
@@ -249,8 +249,10 @@ const FORWARD: Readonly<Record<ItemStatus, readonly ItemStatus[]>> = {
 
 const TERMINAL: readonly ItemStatus[] = ['merged', 'dropped'];
 
-export function isLegalMove(from: ItemStatus, to: ItemStatus): boolean {
+export function isLegalMove(from: ItemStatus, to: ItemStatus, hasPr = false): boolean {
   if (TERMINAL.includes(from)) return false;
+  // in_review -> merged is for items that never had a PR (review, research); a PR goes through the queue.
+  if (from === 'in_review' && to === 'merged') return !hasPr;
   if (to === 'blocked') return from !== 'blocked';
   if (to === 'dropped') return true;
   return FORWARD[from].includes(to);
@@ -260,7 +262,7 @@ export function isLegalMove(from: ItemStatus, to: ItemStatus): boolean {
 export function transition(board: Board, id: string, to: ItemStatus, by: string, now: Date): Board {
   const current = board.items.find((i) => i.id === id);
   if (!current) throw new TransitionError(`unknown item ${id}`);
-  if (!isLegalMove(current.status, to)) {
+  if (!isLegalMove(current.status, to, current.pr !== undefined)) {
     throw new TransitionError(`illegal move for ${id}: ${current.status} -> ${to}`);
   }
   const entry = { at: now.toISOString(), from: current.status, to, by };

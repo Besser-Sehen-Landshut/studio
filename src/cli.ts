@@ -233,7 +233,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           }
           branch = info.branch;
           checkReportHead(report, info.head);
-        } else if (report.status === 'done') {
+        } else if (report.status === 'done' && !PR_OPTIONAL.includes(item.type)) {
           throw new Error(`done report for ${item.id} names no pr`);
         }
         const now = ports.clock.now();
@@ -241,8 +241,23 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (report.status === 'done') {
           if (item.status === 'assigned') next = transition(next, item.id, 'in_progress', BY, now);
           next = transition(next, item.id, 'in_review', BY, now);
-          const pr = report.pr as number;
-          next = withItem(next, item.id, (i) => ({ ...i, pr, branch }));
+          if (report.pr !== undefined) {
+            const pr = report.pr;
+            next = withItem(next, item.id, (i) => ({ ...i, pr, branch }));
+          } else {
+            // Review and research items open no PR: the result is the report itself.
+            next = transition(next, item.id, 'merged', BY, now);
+            const result = [
+              ...(report.verdict ? [`verdict: ${report.verdict}`] : []),
+              ...(report.reviews ? [`reviews: ${report.reviews}`] : []),
+            ];
+            if (result.length > 0) {
+              next = withItem(next, item.id, (i) => ({
+                ...i,
+                notes: [...(i.notes ?? []), ...capNotes(result)],
+              }));
+            }
+          }
         } else {
           next = transition(next, item.id, 'blocked', BY, now);
           const notes =
@@ -263,6 +278,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           report: report.status,
           status: findItem(next, item.id).status,
           ...(report.pr === undefined ? {} : { pr: report.pr }),
+          ...(report.verdict === undefined ? {} : { verdict: report.verdict }),
+          ...(report.reviews === undefined ? {} : { reviews: report.reviews }),
         });
         return 0;
       }
@@ -419,6 +436,7 @@ async function prInfo(
   return { head, branch };
 }
 
+const PR_OPTIONAL: readonly WorkItem['type'][] = ['review', 'research'];
 const MAX_NOTES = 10;
 const MAX_NOTE_CHARS = 500;
 

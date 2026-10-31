@@ -82,6 +82,41 @@ describe('parseReport', () => {
   });
 });
 
+describe('parseReport for review and research items', () => {
+  it('accepts a done review report without pr and head_sha', () => {
+    const r = parseReport(
+      doc('status: done\nitem: APP-1\nverdict: approve\nreviews: org/app#9'),
+      item('review'),
+    );
+    expect(r).toMatchObject({ status: 'done', verdict: 'approve', reviews: 'org/app#9' });
+    expect(r.pr).toBeUndefined();
+    expect(r.headSha).toBeUndefined();
+  });
+
+  it('requires a verdict on done review reports and rejects bad values', () => {
+    expect(() => parseReport(doc('status: done\nitem: APP-1'), item('review'))).toThrow(/verdict/);
+    expect(() => parseReport(doc('status: done\nverdict: merge_it'), item('review'))).toThrow(
+      ReportError,
+    );
+    expect(() =>
+      parseReport(doc('status: done\nverdict: approve\nreviews: nope'), item('review')),
+    ).toThrow(ReportError);
+  });
+
+  it('accepts a done research report without pr', () => {
+    expect(parseReport(doc('status: done\nitem: APP-1'), item('research')).status).toBe('done');
+  });
+
+  it('still requires head_sha when a pr is present, and for build types', () => {
+    expect(() => parseReport(doc('status: done\nverdict: approve\npr: 3'), item('review'))).toThrow(
+      /head_sha/,
+    );
+    expect(() => parseReport(doc('status: done\ntests_run: 3'), item('feature'))).toThrow(
+      /head_sha/,
+    );
+  });
+});
+
 describe('collectReport', () => {
   const write = (id: string, front: string) => {
     mkdirSync(join(dir, '.studio', 'reports'), { recursive: true });

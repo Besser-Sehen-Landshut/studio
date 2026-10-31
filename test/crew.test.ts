@@ -273,6 +273,19 @@ describe('writeBrief', () => {
     expect(text).toMatch(/never merge/i);
   });
 
+  it('review brief asks for a verdict and no pr', () => {
+    const { project, state } = makeFixture();
+    const text = readFileSync(
+      writeBrief(state, { ...item, type: 'review' }, config, project),
+      'utf8',
+    );
+    expect(text).toContain('verdict: approve|changes_requested');
+    expect(text).toContain('reviews: <repo>#<pr>');
+    expect(text).toMatch(/opens? no pull request/i);
+    const build = readFileSync(writeBrief(state, item, config, project), 'utf8');
+    expect(build).not.toContain('verdict:');
+  });
+
   it('writes the report last and does not commit it', () => {
     const { project, state } = makeFixture();
     const text = readFileSync(writeBrief(state, item, config, project), 'utf8');
