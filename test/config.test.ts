@@ -100,6 +100,15 @@ describe('loadConfig', () => {
     expect(w[0]).toContain('protected server-side');
   });
 
+  it('warns that merge.strategy native-queue is not supported yet', () => {
+    const cfg = loadConfig(
+      project(MINIMAL.replace('strategy: studio-queue', 'strategy: native-queue')),
+    );
+    const w = configWarnings(cfg);
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain('native-queue is not supported yet');
+  });
+
   it('rejects version other than 1', () => {
     const dir = project(MINIMAL.replace('studio: 1', 'studio: 2'));
     try {

@@ -28046,6 +28046,11 @@ function loadOwnerConfig(opts = {}) {
 }
 function configWarnings(config2) {
   const warnings = [];
+  if (config2.merge.strategy === "native-queue") {
+    warnings.push(
+      "merge.strategy native-queue is not supported yet (planned for stage d): queue add and queue run refuse; use studio-queue"
+    );
+  }
   if (config2.crewAllowedWorkflowRefs.length > 0) {
     warnings.push(
       `crew_allowed_workflow_refs (${config2.crewAllowedWorkflowRefs.join(", ")}) must be protected server-side (branch protection or rulesets): the crew guard cannot stop a push to those refs from another path`
@@ -28087,16 +28092,20 @@ var GH_RUN_VALUE_FLAGS = ["--ref", "-r", "-f", "--raw-field", "-F", "--field", .
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync as readFileSync3,
   realpathSync,
   renameSync as renameSync2,
   rmSync as rmSync2,
   unlinkSync,
-  writeFileSync as writeFileSync2
+  writeFileSync as writeFileSync2,
+  writeSync
 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { basename, dirname, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep as sep2 } from "node:path";
@@ -28107,7 +28116,9 @@ var STATE_FILES = [
   "state.json",
   "metrics.jsonl",
   "guard.jsonl",
-  "marker.json"
+  "marker.json",
+  "queue.json.lock",
+  "queue.run.lock"
 ];
 function stateBaseFor(opts = {}) {
   const env = opts.env ?? process.env;
@@ -28272,6 +28283,64 @@ function writeStateFile(root, file2, content) {
   const tmp = `${file2}.${process.pid}.${tmpCounter++}.${randomBytes(4).toString("hex")}.tmp`;
   writeFileSync2(tmp, content, { mode: 384, flag: "wx" });
   renameSync2(tmp, file2);
+}
+function readLockToken(file2) {
+  try {
+    const st = lstatSync(file2);
+    if (!st.isFile()) return void 0;
+    const token = JSON.parse(readFileSync3(file2, "utf8")).token;
+    return typeof token === "string" ? token : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function acquireStateLock(root, name, opts) {
+  const file2 = join3(root, name);
+  ensureStateDir(root, dirname(file2));
+  assertStatePath(root, file2);
+  const token = randomBytes(16).toString("hex");
+  const create = () => {
+    let fd;
+    try {
+      fd = openSync(
+        file2,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+        384
+      );
+    } catch (err) {
+      if (err.code === "EEXIST") return false;
+      throw err;
+    }
+    try {
+      writeSync(fd, `${JSON.stringify({ pid: process.pid, at: opts.now.toISOString(), token })}
+`);
+    } finally {
+      closeSync(fd);
+    }
+    return true;
+  };
+  const release = () => {
+    if (readLockToken(file2) === token) unlinkSync(file2);
+  };
+  if (create()) return { release };
+  const st = lstatSync(file2);
+  if (!st.isFile()) throw new Error(`refusing lock ${file2}: it is not a regular file`);
+  const age = opts.now.getTime() - st.mtimeMs;
+  if (age < opts.staleMs) return void 0;
+  const staleToken = readLockToken(file2);
+  const aside = `${file2}.${randomBytes(4).toString("hex")}.stale`;
+  try {
+    renameSync2(file2, aside);
+  } catch {
+    return void 0;
+  }
+  if (readLockToken(aside) !== staleToken) {
+    renameSync2(aside, file2);
+    return void 0;
+  }
+  unlinkSync(aside);
+  if (!create()) return void 0;
+  return { release, brokeStaleMs: age };
 }
 function keys(p, platform2) {
   const out = [pathKey(resolve2(p), platform2)];
@@ -28818,6 +28887,7 @@ var CHECKS_POLL_MS = 3e4;
 var CAPACITY_WAIT_MS = 6e4;
 var QUEUE_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
 var MAX_ATTEMPTS = 3;
+var CHECKS_GRACE_MS = 5 * 60 * 1e3;
 var entrySchema = external_exports.strictObject({
   pr: external_exports.number().int().positive(),
   repo: external_exports.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
@@ -28858,6 +28928,60 @@ function saveQueue(stateRoot, q) {
   writeStateFile(stateRoot, queueFile(stateRoot), `${JSON.stringify(q, null, 2)}
 `);
 }
+var FILE_LOCK = "queue.json.lock";
+var RUN_LOCK = "queue.run.lock";
+var FILE_LOCK_STALE_MS = 3e4;
+var RUN_LOCK_STALE_MS = 6 * 60 * 60 * 1e3;
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function updateQueue(stateRoot, mutate, opts = {}) {
+  const until = Date.now() + (opts.timeoutMs ?? 5e3);
+  let lock;
+  for (; ; ) {
+    lock = acquireStateLock(stateRoot, FILE_LOCK, {
+      now: /* @__PURE__ */ new Date(),
+      staleMs: FILE_LOCK_STALE_MS
+    });
+    if (lock) break;
+    if (Date.now() >= until) throw new Error(`queue file is locked (${FILE_LOCK}); try again`);
+    sleepSync(25);
+  }
+  try {
+    const q = loadQueue(stateRoot);
+    const result = mutate(q);
+    saveQueue(stateRoot, q);
+    return result;
+  } finally {
+    lock.release();
+  }
+}
+function enqueue(stateRoot, entry) {
+  return updateQueue(stateRoot, (q) => {
+    const dup = [...q.pending, ...q.current ? [q.current] : []].some(
+      (e) => e.pr === entry.pr && e.repo === entry.repo
+    );
+    if (dup) throw new Error(`${entry.repo}#${entry.pr} is already in the queue`);
+    q.pending.push(entry);
+    return q.pending.length;
+  });
+}
+function takeNextPending(stateRoot) {
+  return updateQueue(stateRoot, (q) => {
+    const next = q.pending.shift();
+    if (next) q.current = { ...next, step: "update" };
+    return next;
+  });
+}
+function acquireQueueRunLock(stateRoot, now, log) {
+  const lock = acquireStateLock(stateRoot, RUN_LOCK, { now, staleMs: RUN_LOCK_STALE_MS });
+  if (!lock) throw new Error(`queue already running (lock ${RUN_LOCK} in the state root)`);
+  if (lock.brokeStaleMs !== void 0) {
+    const hours = (lock.brokeStaleMs / 36e5).toFixed(1);
+    log(`note: broke a stale queue lock (${hours} h old); a previous run did not finish`);
+  }
+  return lock;
+}
 function appendStateLine(stateRoot, name, line) {
   const file2 = join5(stateRoot, name);
   assertStatePath(stateRoot, file2);
@@ -28896,6 +29020,9 @@ async function readChecks(entry, gh) {
   const all = await gh.run(base);
   const checks = parseChecks(all.stdout);
   if (checks === void 0) {
+    if (all.stdout.trim() === "" && /no checks reported/i.test(all.stderr)) {
+      return { kind: "none", reason: "no checks reported" };
+    }
     return {
       kind: "failed",
       reason: `no checks reported (gh exit ${all.code}: ${all.stderr.trim()})`
@@ -28910,7 +29037,7 @@ async function readChecks(entry, gh) {
   const requiredNames = new Set(required2.map((c3) => c3.name));
   const known = new Set(checks.map((c3) => c3.name));
   const evaluated = [...checks, ...required2.filter((c3) => !known.has(c3.name))];
-  if (evaluated.length === 0) return { kind: "failed", reason: "no checks reported" };
+  if (evaluated.length === 0) return { kind: "none", reason: "no checks reported" };
   for (const c3 of evaluated) {
     if (!BUCKETS.has(c3.bucket)) {
       return { kind: "failed", reason: `check ${c3.name} has unknown state ${c3.bucket}` };
@@ -28988,6 +29115,11 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
   const deadline = clock.now().getTime() + (opts.timeoutMs ?? QUEUE_TIMEOUT_MS);
   const failed = (reason) => ({ result: "failed", reason });
   const timedOut = () => clock.now().getTime() >= deadline;
+  const graceMs = opts.checksGraceMs ?? CHECKS_GRACE_MS;
+  let graceUntil = Number.NEGATIVE_INFINITY;
+  const headChanged = () => {
+    graceUntil = clock.now().getTime() + graceMs;
+  };
   const enter = (step2) => {
     entry.step = step2;
     persist(entry);
@@ -29008,6 +29140,7 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
     if (step === "update") {
       enter("update");
       const r = await gh.run(["pr", "update-branch", String(entry.pr), "--repo", entry.repo]);
+      if (r.code === 0) headChanged();
       if (r.code !== 0 && !NO_UPDATE_NEEDED.test(r.stderr)) {
         const v = await viewPr(entry, gh);
         if (typeof v === "string" || v.state === "OPEN") {
@@ -29024,6 +29157,9 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
       for (; ; ) {
         const verdict = await readChecks(entry, gh);
         if (verdict.kind === "failed") return failed(verdict.reason);
+        if (verdict.kind === "none" && clock.now().getTime() >= graceUntil) {
+          return failed(verdict.reason);
+        }
         if (verdict.kind === "pass") break;
         if (timedOut()) return failed("checks timed out");
         await clock.sleep(pollMs);
@@ -29035,6 +29171,7 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
       if (after.state === "CLOSED") return failed("pull request is closed");
       if (after.head !== before.head) {
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
+        headChanged();
         continue;
       }
       if (after.mergeable === "CONFLICTING") return failed("pull request has merge conflicts");
@@ -29063,6 +29200,7 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
       if (now.state === "CLOSED") return failed("pull request is closed");
       if (head === void 0 || now.head !== head) {
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
+        headChanged();
         step = "checks";
         continue;
       }
@@ -29085,6 +29223,7 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
       if (r.code === 0) return merged();
       if (HEAD_MOVED.test(r.stderr)) {
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
+        headChanged();
         step = "checks";
         continue;
       }
@@ -29108,9 +29247,10 @@ async function firstCommitAt(entry, gh) {
   return r.code === 0 && v !== "" && !Number.isNaN(Date.parse(v)) ? v : void 0;
 }
 async function runQueue(state, config2, ports, persist, opts = {}) {
+  const log = opts.log ?? ((m) => console.error(m));
   for (; ; ) {
     if (!state.current) {
-      const next = state.pending.shift();
+      const next = opts.takeNext ? opts.takeNext() : state.pending.shift();
       if (!next) return state;
       state.current = { ...next, step: "update" };
       persist(state);
@@ -29118,14 +29258,22 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
     const current = state.current;
     const outcome = await mergeOne(current, config2, ports, () => persist(state), opts);
     const { step: _step, head: _head, ...entry } = current;
-    state.done.push({
+    const done = {
       ...entry,
       result: outcome.result,
       ...outcome.reason === void 0 ? {} : { reason: outcome.reason },
       at: ports.clock.now().toISOString()
-    });
+    };
+    state.done.push(done);
     state.current = void 0;
     persist(state);
+    if (opts.onDone) {
+      try {
+        opts.onDone(done);
+      } catch (err) {
+        log(`board update failed for PR ${current.pr}: ${err.message}`);
+      }
+    }
     if (outcome.result === "merged" && opts.stateRoot !== void 0) {
       try {
         const first = await firstCommitAt(current, ports.gh);
@@ -29142,9 +29290,7 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
           })
         );
       } catch (err) {
-        (opts.log ?? ((m) => console.error(m)))(
-          `metrics append failed for PR ${current.pr}: ${err.message}`
-        );
+        log(`metrics append failed for PR ${current.pr}: ${err.message}`);
       }
     }
   }
@@ -29153,11 +29299,11 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
 // src/report.ts
 var import_yaml3 = __toESM(require_dist(), 1);
 import {
-  closeSync,
-  constants,
+  closeSync as closeSync2,
+  constants as constants2,
   fstatSync,
   lstatSync as lstatSync4,
-  openSync,
+  openSync as openSync2,
   readSync,
   realpathSync as realpathSync3
 } from "node:fs";
@@ -29246,9 +29392,9 @@ function readReportFile(root, file2) {
     });
     const realRoot = realpathSync3(root);
     if (!realpathSync3(file2).startsWith(realRoot + sep4)) throw unsafe();
-    fd = openSync(
+    fd = openSync2(
       file2,
-      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
+      constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0)
     );
     if (!fstatSync(fd).isFile()) throw unsafe();
     const buf = Buffer.alloc(MAX_REPORT_BYTES + 1);
@@ -29263,7 +29409,7 @@ function readReportFile(root, file2) {
   } catch (e) {
     throw e instanceof ReportError ? e : unsafe();
   } finally {
-    if (fd !== void 0) closeSync(fd);
+    if (fd !== void 0) closeSync2(fd);
   }
 }
 function readReport(worktree, id, item) {
@@ -29616,6 +29762,7 @@ async function runCli(argv, deps) {
           const repo = m[1];
           const pr = Number(m[2]);
           const { config: config2, board } = loadAll();
+          refuseNativeQueue(config2);
           if (!config2.repos.includes(repo)) throw new Error(`repository ${repo} is not configured`);
           const item = board.items.find((i2) => i2.pr === pr && i2.repo === repo);
           if (!item) throw new Error(`no board item has PR ${repo}#${pr}`);
@@ -29623,36 +29770,47 @@ async function runCli(argv, deps) {
             throw new Error(`${item.id} is ${item.status}, only in_review items can be queued`);
           }
           const root = await boundStateRoot();
-          const q = loadQueue(root);
-          const dup = [...q.pending, ...q.current ? [q.current] : []].some(
-            (e) => e.pr === pr && e.repo === repo
-          );
-          if (dup) throw new Error(`${repo}#${pr} is already in the queue`);
-          q.pending.push({ pr, repo, item: item.id });
-          saveQueue(root, q);
+          const pending = enqueue(root, { pr, repo, item: item.id });
           saveBoard(project, transition(board, item.id, "queued", BY, ports.clock.now()));
-          print({ queued: item.id, pr, repo, pending: q.pending.length });
+          print({ queued: item.id, pr, repo, pending });
           return 0;
         }
         if (sub === "run") {
           const { config: config2 } = loadAll();
+          refuseNativeQueue(config2);
           const root = await boundStateRoot();
-          const state = loadQueue(root);
-          const before = state.done.length;
+          const log = (m) => stderr(`${m}
+`);
+          const lock = acquireQueueRunLock(root, ports.clock.now(), log);
           try {
-            await runQueue(state, config2, ports, (q) => saveQueue(root, q), {
-              stateRoot: root,
-              log: (m) => stderr(`${m}
-`)
+            const state = loadQueue(root);
+            reconcileQueued(project, state, ports, stderr);
+            const before = state.done.length;
+            await runQueue(
+              state,
+              config2,
+              ports,
+              // The runner owns `current` and `done`; `pending` stays whatever is on disk.
+              (q) => updateQueue(root, (disk) => {
+                disk.current = q.current;
+                disk.done = q.done;
+              }),
+              {
+                stateRoot: root,
+                log,
+                takeNext: () => takeNextPending(root),
+                onDone: (d) => applyQueueResults(project, [d], ports, stderr)
+              }
+            );
+            const finished7 = state.done.slice(before);
+            print({
+              merged: finished7.filter((d) => d.result === "merged").length,
+              failed: finished7.filter((d) => d.result === "failed").length,
+              done: finished7
             });
           } finally {
-            applyQueueResults(project, state.done.slice(before), ports, stderr);
+            lock.release();
           }
-          print({
-            merged: state.done.slice(before).filter((d) => d.result === "merged").length,
-            failed: state.done.slice(before).filter((d) => d.result === "failed").length,
-            done: state.done.slice(before)
-          });
           return 0;
         }
         throw new UsageError("queue needs a subcommand: add <repo>#<pr> | run");
@@ -29753,12 +29911,36 @@ var MAX_NOTE_CHARS = 500;
 function capNotes(notes) {
   return notes.slice(0, MAX_NOTES).map((n2) => n2.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_NOTE_CHARS));
 }
+function refuseNativeQueue(config2) {
+  if (config2.merge.strategy === "native-queue") {
+    throw new Error(
+      "merge.strategy native-queue is not supported yet (planned for stage d); use studio-queue"
+    );
+  }
+}
+var doneMatches = (d, item) => d.item === void 0 ? d.repo === item.repo && d.pr === item.pr : d.item === item.id;
+function reconcileQueued(project, state, ports, stderr) {
+  const board = loadBoard(project);
+  const waiting = [...state.pending, ...state.current ? [state.current] : []];
+  const results = [];
+  for (const item of board.items) {
+    if (item.status !== "queued") continue;
+    if (waiting.some(
+      (e) => e.item === void 0 ? e.pr === item.pr && e.repo === item.repo : e.item === item.id
+    )) {
+      continue;
+    }
+    const last = state.done.filter((d) => doneMatches(d, item)).at(-1);
+    if (last) results.push(last);
+  }
+  applyQueueResults(project, results, ports, stderr);
+}
 function applyQueueResults(project, done, ports, stderr) {
   if (done.length === 0) return;
   let board = loadBoard(project);
   const now = ports.clock.now();
   for (const d of done) {
-    const item = board.items.find((i2) => i2.id === d.item);
+    const item = board.items.find((i2) => doneMatches(d, i2));
     if (!item) continue;
     if (item.status !== "queued") {
       stderr(`warning: ${item.id} is ${item.status}, not queued; board left as is
@@ -29800,7 +29982,7 @@ function buildSnapshot(root, board, capacity, queue, now) {
 
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync3, openSync as openSync3 } from "node:fs";
+import { closeSync as closeSync4, openSync as openSync4 } from "node:fs";
 import { loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -30847,10 +31029,10 @@ var npmRunPathEnv = ({ env = process5.env, ...options } = {}) => {
 import { setTimeout as setTimeout3 } from "node:timers/promises";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/signal.js
-import { constants as constants4 } from "node:os";
+import { constants as constants5 } from "node:os";
 
 // node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/main.js
-import { constants as constants3 } from "node:os";
+import { constants as constants4 } from "node:os";
 
 // node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/realtime.js
 var getRealtimeSignals = () => {
@@ -30868,7 +31050,7 @@ var SIGRTMIN = 34;
 var SIGRTMAX = 64;
 
 // node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/signals.js
-import { constants as constants2 } from "node:os";
+import { constants as constants3 } from "node:os";
 
 // node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/core.js
 var SIGNALS = [
@@ -31159,7 +31341,7 @@ var normalizeSignal = ({
 }) => {
   const {
     signals: { [name]: constantSignal }
-  } = constants2;
+  } = constants3;
   const supported = constantSignal !== void 0;
   const number4 = supported ? constantSignal : defaultNumber;
   return { name, number: number4, description, supported, action, forced, standard };
@@ -31208,7 +31390,7 @@ var getSignalByNumber = (number4, signals2) => {
   };
 };
 var findSignalByNumber = (number4, signals2) => {
-  const signal = signals2.find(({ name }) => constants3.signals[name] === number4);
+  const signal = signals2.find(({ name }) => constants4.signals[name] === number4);
   if (signal !== void 0) {
     return signal;
   }
@@ -31242,13 +31424,13 @@ var normalizeSignalInteger = (signalInteger, optionName) => {
   throw new TypeError(`Invalid ${optionName} ${signalInteger}: this signal integer does not exist.
 ${getAvailableSignals()}`);
 };
-var getSignalsIntegerToName = () => new Map(Object.entries(constants4.signals).reverse().map(([signalName, signalInteger]) => [signalInteger, signalName]));
+var getSignalsIntegerToName = () => new Map(Object.entries(constants5.signals).reverse().map(([signalName, signalInteger]) => [signalInteger, signalName]));
 var signalsIntegerToName = getSignalsIntegerToName();
 var normalizeSignalName = (signalName, optionName) => {
-  if (signalName in constants4.signals) {
+  if (signalName in constants5.signals) {
     return signalName;
   }
-  if (signalName.toUpperCase() in constants4.signals) {
+  if (signalName.toUpperCase() in constants5.signals) {
     throw new TypeError(`Invalid ${optionName} '${signalName}': please rename it to '${signalName.toUpperCase()}'.`);
   }
   throw new TypeError(`Invalid ${optionName} '${signalName}': this signal name does not exist.
@@ -31256,8 +31438,8 @@ ${getAvailableSignals()}`);
 };
 var getAvailableSignals = () => `Available signal names: ${getAvailableSignalNames()}.
 Available signal numbers: ${getAvailableSignalIntegers()}.`;
-var getAvailableSignalNames = () => Object.keys(constants4.signals).sort().map((signalName) => `'${signalName}'`).join(", ");
-var getAvailableSignalIntegers = () => [...new Set(Object.values(constants4.signals).sort((signalInteger, signalIntegerTwo) => signalInteger - signalIntegerTwo))].join(", ");
+var getAvailableSignalNames = () => Object.keys(constants5.signals).sort().map((signalName) => `'${signalName}'`).join(", ");
+var getAvailableSignalIntegers = () => [...new Set(Object.values(constants5.signals).sort((signalInteger, signalIntegerTwo) => signalInteger - signalIntegerTwo))].join(", ");
 var getSignalDescription = (signal) => signalsByName[signal].description;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/timeout.js
@@ -32075,7 +32257,7 @@ var ENCODING_ALIASES = {
 var serializeEncoding = (encoding) => typeof encoding === "string" ? `"${encoding}"` : String(encoding);
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/command-file.js
-import { openSync as openSync2, readSync as readSync2, closeSync as closeSync2 } from "node:fs";
+import { openSync as openSync3, readSync as readSync2, closeSync as closeSync3 } from "node:fs";
 import { Buffer as Buffer2 } from "node:buffer";
 import path5 from "node:path";
 import process7 from "node:process";
@@ -32242,11 +32424,11 @@ var readShebang = (file2) => {
   const buffer = Buffer2.alloc(SHEBANG_BYTE_LENGTH);
   let bytesRead = 0;
   try {
-    const fileDescriptor = openSync2(file2, "r");
+    const fileDescriptor = openSync3(file2, "r");
     try {
       bytesRead = readSync2(fileDescriptor, buffer, 0, SHEBANG_BYTE_LENGTH, 0);
     } finally {
-      closeSync2(fileDescriptor);
+      closeSync3(fileDescriptor);
     }
   } catch {
     return void 0;
@@ -37654,7 +37836,7 @@ function realPorts(claudeBin = "claude") {
   };
   const claude = {
     async start(cwd, args, prompt, logPath, env) {
-      const fd = openSync3(logPath, "a");
+      const fd = openSync4(logPath, "a");
       try {
         const child = spawn2(claudeBin, args, {
           cwd,
@@ -37672,7 +37854,7 @@ function realPorts(claudeBin = "claude") {
         child.unref();
         return { pid };
       } finally {
-        closeSync3(fd);
+        closeSync4(fd);
       }
     },
     alive,

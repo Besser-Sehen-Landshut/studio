@@ -1,16 +1,20 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  acquireStateLock,
   canonicalToolchainPaths,
   checkStateMarker,
   cloneOriginUrl,
@@ -143,5 +147,54 @@ describe('canonicalToolchainPaths', () => {
     ] as const) {
       expect(() => canonicalToolchainPaths([bad], ctx)).toThrow(why);
     }
+  });
+});
+
+describe('acquireStateLock', () => {
+  const HOUR = 60 * 60 * 1000;
+  const now = () => new Date();
+
+  it('is exclusive until released, then free again', () => {
+    const d = fresh();
+    const a = acquireStateLock(d, 'x.lock', { now: now(), staleMs: HOUR });
+    expect(a).toBeDefined();
+    expect(statSync(join(d, 'x.lock')).mode & 0o777).toBe(0o600);
+    expect(acquireStateLock(d, 'x.lock', { now: now(), staleMs: HOUR })).toBeUndefined();
+    a?.release();
+    expect(existsSync(join(d, 'x.lock'))).toBe(false);
+    const b = acquireStateLock(d, 'x.lock', { now: now(), staleMs: HOUR });
+    expect(b).toBeDefined();
+    expect(b?.brokeStaleMs).toBeUndefined();
+    b?.release();
+  });
+
+  it('breaks a lock older than staleMs and reports its age', () => {
+    const d = fresh();
+    writeFileSync(join(d, 'x.lock'), '{"pid":1,"at":"old","token":"t"}\n');
+    const old = new Date(Date.now() - 7 * HOUR);
+    utimesSync(join(d, 'x.lock'), old, old);
+    const a = acquireStateLock(d, 'x.lock', { now: now(), staleMs: 6 * HOUR });
+    expect(a).toBeDefined();
+    expect(a?.brokeStaleMs).toBeGreaterThanOrEqual(7 * HOUR - 60_000);
+    expect(readFileSync(join(d, 'x.lock'), 'utf8')).not.toContain('"token":"t"');
+    a?.release();
+  });
+
+  it('release leaves a lock that is no longer its own', () => {
+    const d = fresh();
+    const a = acquireStateLock(d, 'x.lock', { now: now(), staleMs: HOUR });
+    writeFileSync(join(d, 'x.lock'), '{"token":"someone-else"}\n');
+    a?.release();
+    expect(readFileSync(join(d, 'x.lock'), 'utf8')).toContain('someone-else');
+  });
+
+  it('never follows a planted symlink at the lock path', () => {
+    const d = fresh();
+    const target = join(fresh(), 'victim');
+    symlinkSync(target, join(d, 'x.lock'));
+    expect(() => acquireStateLock(d, 'x.lock', { now: now(), staleMs: 0 })).toThrow(
+      /not a regular file/,
+    );
+    expect(existsSync(target)).toBe(false);
   });
 });

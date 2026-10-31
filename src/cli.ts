@@ -7,7 +7,16 @@ import { launchCrew } from './crew.js';
 import { checkStateMarker, projectRealpath, stateRootFor, writeStateFile } from './paths.js';
 import { type Capacity, planAssignments } from './planner.js';
 import type { Ports } from './ports.js';
-import { loadQueue, type QueueState, runQueue, saveQueue } from './queue.js';
+import {
+  acquireQueueRunLock,
+  enqueue,
+  loadQueue,
+  type QueueDone,
+  type QueueState,
+  runQueue,
+  takeNextPending,
+  updateQueue,
+} from './queue.js';
 import { checkReportHead, readReport } from './report.js';
 import {
   type CrewSnapshot,
@@ -292,6 +301,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           const repo = m[1] as string;
           const pr = Number(m[2]);
           const { config, board } = loadAll();
+          refuseNativeQueue(config);
           if (!config.repos.includes(repo)) throw new Error(`repository ${repo} is not configured`);
           const item = board.items.find((i) => i.pr === pr && i.repo === repo);
           if (!item) throw new Error(`no board item has PR ${repo}#${pr}`);
@@ -299,35 +309,48 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             throw new Error(`${item.id} is ${item.status}, only in_review items can be queued`);
           }
           const root = await boundStateRoot();
-          const q = loadQueue(root);
-          const dup = [...q.pending, ...(q.current ? [q.current] : [])].some(
-            (e) => e.pr === pr && e.repo === repo,
-          );
-          if (dup) throw new Error(`${repo}#${pr} is already in the queue`);
-          q.pending.push({ pr, repo, item: item.id });
-          saveQueue(root, q);
+          // Merged into queue.json on disk under the queue file lock: safe during a running queue.
+          const pending = enqueue(root, { pr, repo, item: item.id });
           saveBoard(project, transition(board, item.id, 'queued', BY, ports.clock.now()));
-          print({ queued: item.id, pr, repo, pending: q.pending.length });
+          print({ queued: item.id, pr, repo, pending });
           return 0;
         }
         if (sub === 'run') {
           const { config } = loadAll();
+          refuseNativeQueue(config);
           const root = await boundStateRoot();
-          const state = loadQueue(root);
-          const before = state.done.length;
+          const log = (m: string) => stderr(`${m}\n`);
+          const lock = acquireQueueRunLock(root, ports.clock.now(), log);
           try {
-            await runQueue(state, config, ports, (q) => saveQueue(root, q), {
-              stateRoot: root,
-              log: (m) => stderr(`${m}\n`),
+            const state = loadQueue(root);
+            reconcileQueued(project, state, ports, stderr);
+            const before = state.done.length;
+            await runQueue(
+              state,
+              config,
+              ports,
+              // The runner owns `current` and `done`; `pending` stays whatever is on disk.
+              (q) =>
+                updateQueue(root, (disk) => {
+                  disk.current = q.current;
+                  disk.done = q.done;
+                }),
+              {
+                stateRoot: root,
+                log,
+                takeNext: () => takeNextPending(root),
+                onDone: (d) => applyQueueResults(project, [d], ports, stderr),
+              },
+            );
+            const finished = state.done.slice(before);
+            print({
+              merged: finished.filter((d) => d.result === 'merged').length,
+              failed: finished.filter((d) => d.result === 'failed').length,
+              done: finished,
             });
           } finally {
-            applyQueueResults(project, state.done.slice(before), ports, stderr);
+            lock.release();
           }
-          print({
-            merged: state.done.slice(before).filter((d) => d.result === 'merged').length,
-            failed: state.done.slice(before).filter((d) => d.result === 'failed').length,
-            done: state.done.slice(before),
-          });
           return 0;
         }
         throw new UsageError('queue needs a subcommand: add <repo>#<pr> | run');
@@ -445,10 +468,49 @@ function capNotes(notes: string[]): string[] {
   return notes.slice(0, MAX_NOTES).map((n) => n.replace(/\p{Cc}/gu, ' ').slice(0, MAX_NOTE_CHARS));
 }
 
-/** Moves board items for the queue entries finished in this run: merged, or back to review. */
+function refuseNativeQueue(config: StudioConfig): void {
+  if (config.merge.strategy === 'native-queue') {
+    throw new Error(
+      'merge.strategy native-queue is not supported yet (planned for stage d); use studio-queue',
+    );
+  }
+}
+
+const doneMatches = (d: QueueDone, item: WorkItem): boolean =>
+  d.item === undefined ? d.repo === item.repo && d.pr === item.pr : d.item === item.id;
+
+/**
+ * A run that stopped after recording a result but before moving the board leaves the item
+ * `queued`. For every queued item that is neither pending nor current, apply its last result.
+ */
+function reconcileQueued(
+  project: string,
+  state: QueueState,
+  ports: Ports,
+  stderr: (s: string) => void,
+): void {
+  const board = loadBoard(project);
+  const waiting = [...state.pending, ...(state.current ? [state.current] : [])];
+  const results: QueueDone[] = [];
+  for (const item of board.items) {
+    if (item.status !== 'queued') continue;
+    if (
+      waiting.some((e) =>
+        e.item === undefined ? e.pr === item.pr && e.repo === item.repo : e.item === item.id,
+      )
+    ) {
+      continue;
+    }
+    const last = state.done.filter((d) => doneMatches(d, item)).at(-1);
+    if (last) results.push(last);
+  }
+  applyQueueResults(project, results, ports, stderr);
+}
+
+/** Moves board items for finished queue entries: merged, or back to review with a note. */
 function applyQueueResults(
   project: string,
-  done: QueueState['done'],
+  done: QueueDone[],
   ports: Ports,
   stderr: (s: string) => void,
 ): void {
@@ -456,7 +518,7 @@ function applyQueueResults(
   let board = loadBoard(project);
   const now = ports.clock.now();
   for (const d of done) {
-    const item = board.items.find((i) => i.id === d.item);
+    const item = board.items.find((i) => doneMatches(d, i));
     if (!item) continue;
     if (item.status !== 'queued') {
       stderr(`warning: ${item.id} is ${item.status}, not queued; board left as is\n`);

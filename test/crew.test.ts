@@ -535,6 +535,8 @@ describe('writeCrewSettings', () => {
           'metrics.jsonl',
           'guard.jsonl',
           'marker.json',
+          'queue.json.lock',
+          'queue.run.lock',
         ].map((f) => join(state, f)),
       ],
     });

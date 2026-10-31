@@ -1,9 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -11,6 +14,7 @@ import {
   rmSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -33,6 +37,8 @@ export const STATE_FILES = [
   'metrics.jsonl',
   'guard.jsonl',
   'marker.json',
+  'queue.json.lock',
+  'queue.run.lock',
 ];
 
 /** `$XDG_STATE_HOME/studio`, else `<home>/.local/state/studio`: the parent of every state root. */
@@ -257,6 +263,84 @@ export function writeStateFile(root: string, file: string, content: string): voi
   const tmp = `${file}.${process.pid}.${tmpCounter++}.${randomBytes(4).toString('hex')}.tmp`;
   writeFileSync(tmp, content, { mode: 0o600, flag: 'wx' });
   renameSync(tmp, file);
+}
+
+export interface StateLock {
+  /** Removes the lock file if it still is this holder's. */
+  release(): void;
+  /** Set when a stale lock of another holder was broken: its age in ms. */
+  brokeStaleMs?: number;
+}
+
+function readLockToken(file: string): string | undefined {
+  try {
+    const st = lstatSync(file);
+    if (!st.isFile()) return undefined;
+    const token = (JSON.parse(readFileSync(file, 'utf8')) as { token?: unknown }).token;
+    return typeof token === 'string' ? token : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Exclusive lock file `<root>/<name>`, created with O_CREAT|O_EXCL|O_NOFOLLOW (an existing entry,
+ * a symlink included, is never followed or overwritten). Returns undefined while another holder's
+ * lock is younger than `staleMs`; an older one is broken (moved aside, then removed) and reported
+ * through `brokeStaleMs`. Anything at the lock path that is not a regular file is refused.
+ */
+export function acquireStateLock(
+  root: string,
+  name: string,
+  opts: { now: Date; staleMs: number },
+): StateLock | undefined {
+  const file = join(root, name);
+  ensureStateDir(root, dirname(file));
+  assertStatePath(root, file);
+  const token = randomBytes(16).toString('hex');
+  const create = (): boolean => {
+    let fd: number;
+    try {
+      fd = openSync(
+        file,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+        0o600,
+      );
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw err;
+    }
+    try {
+      writeSync(fd, `${JSON.stringify({ pid: process.pid, at: opts.now.toISOString(), token })}\n`);
+    } finally {
+      closeSync(fd);
+    }
+    return true;
+  };
+  const release = () => {
+    if (readLockToken(file) === token) unlinkSync(file);
+  };
+  if (create()) return { release };
+  const st = lstatSync(file);
+  if (!st.isFile()) throw new Error(`refusing lock ${file}: it is not a regular file`);
+  const age = opts.now.getTime() - st.mtimeMs;
+  if (age < opts.staleMs) return undefined;
+  // Move the stale lock aside first; if what was moved is not the stale file any more (another
+  // process broke it and took the lock in between), put it back and report the lock as held.
+  const staleToken = readLockToken(file);
+  const aside = `${file}.${randomBytes(4).toString('hex')}.stale`;
+  try {
+    renameSync(file, aside);
+  } catch {
+    return undefined;
+  }
+  if (readLockToken(aside) !== staleToken) {
+    renameSync(aside, file);
+    return undefined;
+  }
+  unlinkSync(aside);
+  if (!create()) return undefined;
+  return { release, brokeStaleMs: age };
 }
 
 /** Literal and (when it exists) real variant of a path, case-folded for comparison. */

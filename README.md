@@ -88,6 +88,8 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 | `stop <id>`             | Stop a crew session                                           |
 | `metrics`               | Lead time and deployment frequency                            |
 
+`queue run` is meant to run in the background. It holds a lock in the state root (a second run exits 1 with "queue already running"; a lock older than 6 h is taken over with a note), picks up PRs added with `queue add` while it runs, and moves each board item as soon as its PR is done. On start it first applies results a previous run recorded but did not put on the board. Right after a head change (branch update or new push) a PR without any reported check counts as pending for 5 minutes, then fails with "no checks reported". `merge.strategy: native-queue` is not supported yet: `queue add` and `queue run` refuse it.
+
 ## Security model
 
 The crew guard is a convenience layer, not a security boundary. The boundary is the sandbox, a least-privilege token and server-side branch protection.

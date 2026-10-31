@@ -1,17 +1,39 @@
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { type StudioConfig, studioConfigSchema } from '../src/config.js';
 import type { Clock, Gh, Host } from '../src/ports.js';
 import {
+  acquireQueueRunLock,
+  enqueue,
   loadQueue,
   mergeOne,
   type QueueCurrent,
   type QueueState,
   runQueue,
   saveQueue,
+  takeNextPending,
+  updateQueue,
 } from '../src/queue.js';
+
+const tmpRoots: string[] = [];
+afterAll(() => {
+  for (const d of tmpRoots) rmSync(d, { recursive: true, force: true });
+});
+const tmpRoot = (): string => {
+  const d = mkdtempSync(join(tmpdir(), 'studio-queue-'));
+  tmpRoots.push(d);
+  return d;
+};
 
 function mkConfig(method: 'merge' | 'squash' | 'rebase' = 'squash'): StudioConfig {
   return studioConfigSchema.parse({
@@ -207,6 +229,81 @@ describe('mergeOne', () => {
     );
     expect(r.result).toMatchObject({ result: 'failed' });
     expect(mergeCalls(r.calls)).toHaveLength(0);
+  });
+
+  it('R78: zero checks right after update-branch are pending during the grace window', async () => {
+    const r = await run(
+      base([
+        { prefix: REQ, responses: [noRequired] },
+        { prefix: CHK, responses: [{ stdout: '[]' }, { stdout: '[]' }, checks(['a', 'pass'])] },
+        { prefix: VIEW, responses: [view(H1)] },
+      ]),
+    );
+    expect(r.result.result).toBe('merged');
+    expect(mergeCalls(r.calls)).toHaveLength(1);
+  });
+
+  it('R78: zero checks still after the 5 min grace: failed "no checks reported", no merge', async () => {
+    let waited = 0;
+    const r = await run(
+      base([
+        { prefix: REQ, responses: [noRequired] },
+        { prefix: CHK, responses: [{ stdout: '[]' }] },
+        { prefix: VIEW, responses: [view(H1)] },
+      ]),
+      { onSleep: (_ms, total) => (waited = total) },
+    );
+    expect(r.result).toEqual({ result: 'failed', reason: 'no checks reported' });
+    expect(mergeCalls(r.calls)).toHaveLength(0);
+    expect(waited).toBeGreaterThanOrEqual(5 * 60_000);
+    expect(waited).toBeLessThan(6 * 60_000);
+  });
+
+  it('R78: gh "no checks reported" on stderr counts as zero checks during the grace', async () => {
+    const none: Res = { code: 1, stdout: '', stderr: "no checks reported on the 'x' branch" };
+    const r = await run(
+      base([
+        { prefix: REQ, responses: [noRequired] },
+        { prefix: CHK, responses: [none, checks(['a', 'pass'])] },
+        { prefix: VIEW, responses: [view(H1)] },
+      ]),
+    );
+    expect(r.result.result).toBe('merged');
+  });
+
+  it('R78: no grace without a head change (update-branch had nothing to do)', async () => {
+    const r = await run([
+      { prefix: UPD, responses: [{ code: 1, stderr: 'no new commits to update' }] },
+      { prefix: REQ, responses: [noRequired] },
+      { prefix: CHK, responses: [{ stdout: '[]' }] },
+      { prefix: VIEW, responses: [view(H1)] },
+      { prefix: MERGE, responses: [{}] },
+    ]);
+    expect(r.result).toEqual({ result: 'failed', reason: 'no checks reported' });
+    expect(r.sleeps).toHaveLength(0);
+  });
+
+  it('R78: a head that moved during the checks poll gets a fresh grace window', async () => {
+    // Resumed at checks (no grace yet); the head moves, then the new head reports no checks for
+    // a while before its CI shows up.
+    const r = await run(
+      base([
+        { prefix: REQ, responses: [noRequired] },
+        {
+          prefix: CHK,
+          responses: [
+            checks(['a', 'pass']),
+            { stdout: '[]' },
+            { stdout: '[]' },
+            checks(['a', 'pass']),
+          ],
+        },
+        { prefix: VIEW, responses: [view(H1), view(H2), view(H2), view(H2)] },
+      ]),
+      { entry: { pr: 5, repo: 'org/app', step: 'checks' } },
+    );
+    expect(r.result.result).toBe('merged');
+    expect(mergeCalls(r.calls)).toEqual([`${MERGE} --squash --match-head-commit ${H2}`]);
   });
 
   it('fails closed on empty or unparsable checks output', async () => {
@@ -602,7 +699,7 @@ describe('runQueue', () => {
   });
 
   it('appends a merged metrics event to metrics.jsonl', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'studio-queue-'));
+    const root = tmpRoot();
     const g = fakeGh(rules());
     const c = fakeClock();
     const state: QueueState = { pending: [{ pr: 5, repo: 'org/app', item: 'T-9' }], done: [] };
@@ -622,7 +719,7 @@ describe('runQueue', () => {
   });
 
   it('does not write a metrics event for a failed PR', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'studio-queue-'));
+    const root = tmpRoot();
     const g = fakeGh(
       base([
         { prefix: REQ, responses: [noRequired] },
@@ -640,7 +737,7 @@ describe('runQueue', () => {
 
 describe('loadQueue / saveQueue', () => {
   it('round-trips with mode 0600 and treats a missing file as empty', () => {
-    const root = mkdtempSync(join(tmpdir(), 'studio-queue-'));
+    const root = tmpRoot();
     expect(loadQueue(root)).toEqual({ pending: [], done: [] });
     const q: QueueState = {
       current: { pr: 1, repo: 'org/app', step: 'checks' },
@@ -653,7 +750,7 @@ describe('loadQueue / saveQueue', () => {
   });
 
   it('refuses a corrupt queue file', () => {
-    const root = mkdtempSync(join(tmpdir(), 'studio-queue-'));
+    const root = tmpRoot();
     saveQueue(root, { pending: [], done: [] });
     writeFileSync(join(root, 'queue.json'), '{"pending":"x"}');
     expect(() => loadQueue(root)).toThrow(/invalid/);
@@ -671,7 +768,7 @@ describe('runQueue metrics robustness', () => {
   ];
 
   it('writes firstCommitAt: null when the first commit date is unreadable', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'studio-queue-'));
+    const root = tmpRoot();
     const g = fakeGh(rules({ code: 1, stderr: 'boom' }));
     const state: QueueState = { pending: [{ pr: 5, repo: 'org/app' }], done: [] };
     await runQueue(state, mkConfig(), { gh: g.gh, clock: fakeClock().clock, host }, () => {}, {
@@ -682,7 +779,7 @@ describe('runQueue metrics robustness', () => {
   });
 
   it('a failing metrics append is logged and does not stop the queue', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'studio-queue-'));
+    const dir = tmpRoot();
     const notADir = join(dir, 'file');
     writeFileSync(notADir, 'x');
     const g = fakeGh(rules({ stdout: '2026-10-30T08:00:00Z' }));
@@ -698,5 +795,142 @@ describe('runQueue metrics robustness', () => {
     expect(out.done.map((d) => d.result)).toEqual(['merged']);
     expect(logs).toHaveLength(1);
     expect(logs[0]).toContain('metrics append failed');
+  });
+});
+
+describe('R79: queue file updates and the run lock', () => {
+  /** Any PR: update, checks and merge succeed. */
+  const passRules = (): Rule[] => [
+    { prefix: 'pr update-branch', responses: [{}] },
+    { prefix: 'pr checks', responses: [checks(['a', 'pass'])] },
+    { prefix: 'pr view', responses: [view(H1)] },
+    { prefix: 'pr merge', responses: [{}] },
+  ];
+
+  it('enqueue merges into the file on disk and refuses duplicates', () => {
+    const root = tmpRoot();
+    saveQueue(root, { current: { pr: 1, repo: 'org/app', step: 'checks' }, pending: [], done: [] });
+    expect(enqueue(root, { pr: 2, repo: 'org/app', item: 'APP-2' })).toBe(1);
+    expect(() => enqueue(root, { pr: 2, repo: 'org/app' })).toThrow(/already in the queue/);
+    expect(() => enqueue(root, { pr: 1, repo: 'org/app' })).toThrow(/already in the queue/);
+    const q = loadQueue(root);
+    expect(q.current?.pr).toBe(1);
+    expect(q.pending).toEqual([{ pr: 2, repo: 'org/app', item: 'APP-2' }]);
+  });
+
+  it('updateQueue waits for the file lock and gives up after its timeout', () => {
+    const root = tmpRoot();
+    writeFileSync(join(root, 'queue.json.lock'), '{"token":"other"}\n');
+    expect(() => updateQueue(root, () => undefined, { timeoutMs: 120 })).toThrow(
+      /queue file is locked/,
+    );
+    rmSync(join(root, 'queue.json.lock'));
+    expect(updateQueue(root, (q) => q.pending.length)).toBe(0);
+    expect(existsSync(join(root, 'queue.json.lock'))).toBe(false);
+  });
+
+  it('runQueue takes each next entry from disk: an entry added during the run is merged too', async () => {
+    const root = tmpRoot();
+    saveQueue(root, { pending: [{ pr: 5, repo: 'org/app' }], done: [] });
+    let added = false;
+    const g = fakeGh(passRules());
+    const gh: Gh = {
+      ...g.gh,
+      async run(args) {
+        if (!added && args.join(' ').startsWith('pr merge 5')) {
+          added = true;
+          enqueue(root, { pr: 6, repo: 'org/app' });
+        }
+        return g.gh.run(args);
+      },
+    };
+    const order: string[] = [];
+    const state = loadQueue(root);
+    const out = await runQueue(
+      state,
+      mkConfig(),
+      { gh, clock: fakeClock().clock, host },
+      (q) =>
+        updateQueue(root, (disk) => {
+          disk.current = q.current;
+          disk.done = q.done;
+        }),
+      {
+        takeNext: () => takeNextPending(root),
+        onDone: (d) => order.push(`done ${d.pr}`),
+      },
+    );
+    expect(out.done.map((d) => [d.pr, d.result])).toEqual([
+      [5, 'merged'],
+      [6, 'merged'],
+    ]);
+    expect(order).toEqual(['done 5', 'done 6']);
+    const disk = loadQueue(root);
+    expect(disk.pending).toEqual([]);
+    expect(disk.current).toBeUndefined();
+    expect(disk.done.map((d) => d.pr)).toEqual([5, 6]);
+  });
+
+  it('onDone runs right after each entry, before the next one starts', async () => {
+    const g = fakeGh(passRules());
+    const events: string[] = [];
+    const gh: Gh = {
+      ...g.gh,
+      async run(args) {
+        const line = args.join(' ');
+        if (line.startsWith('pr update-branch')) events.push(`update ${args[2]}`);
+        return g.gh.run(args);
+      },
+    };
+    const state: QueueState = {
+      pending: [
+        { pr: 5, repo: 'org/app' },
+        { pr: 6, repo: 'org/app' },
+      ],
+      done: [],
+    };
+    await runQueue(state, mkConfig(), { gh, clock: fakeClock().clock, host }, () => {}, {
+      onDone: (d) => events.push(`done ${d.pr}`),
+    });
+    expect(events).toEqual(['update 5', 'done 5', 'update 6', 'done 6']);
+  });
+
+  it('a failing onDone is logged and does not stop the queue', async () => {
+    const logs: string[] = [];
+    const state: QueueState = { pending: [{ pr: 5, repo: 'org/app' }], done: [] };
+    const out = await runQueue(
+      state,
+      mkConfig(),
+      { gh: fakeGh(passRules()).gh, clock: fakeClock().clock, host },
+      () => {},
+      {
+        onDone: () => {
+          throw new Error('board busy');
+        },
+        log: (m) => logs.push(m),
+      },
+    );
+    expect(out.done.map((d) => d.result)).toEqual(['merged']);
+    expect(logs.join('\n')).toContain('board busy');
+  });
+
+  it('the run lock is exclusive; a lock older than 6 h is broken with a note', () => {
+    const root = tmpRoot();
+    const notes: string[] = [];
+    const a = acquireQueueRunLock(root, new Date(), (m) => notes.push(m));
+    expect(() => acquireQueueRunLock(root, new Date(), (m) => notes.push(m))).toThrow(
+      /queue already running/,
+    );
+    a.release();
+    const b = acquireQueueRunLock(root, new Date(), (m) => notes.push(m));
+    const old = new Date(Date.now() - 7 * 60 * 60 * 1000);
+    utimesSync(join(root, 'queue.run.lock'), old, old);
+    const c = acquireQueueRunLock(root, new Date(), (m) => notes.push(m));
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/stale queue lock/);
+    b.release(); // no longer its lock: must not remove c's
+    expect(existsSync(join(root, 'queue.run.lock'))).toBe(true);
+    c.release();
+    expect(existsSync(join(root, 'queue.run.lock'))).toBe(false);
   });
 });

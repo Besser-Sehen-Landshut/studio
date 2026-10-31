@@ -13,18 +13,18 @@ artifacts (report files, PR heads, CI on the exact SHA), never prose. **The lett
 | Step | Do |
 |---|---|
 | 1 Read | `studio board`, `studio status`, open PRs |
-| 2 Plan | `studio plan` (no arguments; JSON: assign, blocked, deferred) |
+| 2 Plan | `studio plan` (no arguments; JSON) |
 | 3 Assign | `studio launch <id>` for each id in `assign` — launch refuses anything else |
 | 4 Watch | `studio status` via Claude Code scheduling; `studio stop <id>` if stuck |
 | 5 Collect | `studio collect <id>` once the crew exited; it verifies report, PR branch and head SHA |
 | 6 Review | one reviewer crew session per PR (below) |
-| 7 Merge | `studio queue add <repo>#<pr>`, then `studio queue run` |
+| 7 Merge | `studio queue add <repo>#<pr>`; `studio queue run` as a background task |
 | 8 Deploy | the project's release workflow, your decision (announce first, below) |
 | 9 Report | `studio state` after decisions; `studio metrics` for the summary |
 
 ## Collect: artifacts, not prose
 
-- Only what `studio collect` accepts counts. "CI is green" in a message proves nothing.
+- Only what `studio collect` accepts counts.
 - Collect rejects a fix/feature/chore with `tests_run: 0`; so do you.
 - Rejected report or crew exited without one: set the item `blocked` with a note (never straight to `ready`;
   `assigned → ready` is illegal). For the one relaunch: `blocked → ready`, `studio plan`, `studio launch`.
@@ -44,10 +44,11 @@ Every PR, however urgent, gets one fresh reviewer crew session before `queue add
 
 ## Merge: the queue is the gate
 
-`studio queue run` merges one PR at a time. It waits until **no** check is pending, requires every required
-check green on the exact head, checks the capacity rule twice, and merges with the head SHA pinned.
+Start `studio queue run` as a Claude Code background task, never in the foreground. It merges one PR at a
+time, also PRs queued meanwhile, waits until **no** check is pending, requires every required check green on
+the exact head, checks capacity twice, and pins the head SHA. "queue already running" = fine.
 
-- Queue right after approval. Do not pre-measure capacity or wait for CI yourself.
+- Queue right after approval. Never pre-measure capacity or wait for CI yourself.
 - Never `gh pr checks --watch` as a gate (exits early). Never `gh pr merge`.
 - Queue failure → item back in `in_review` with a note: fix via crew, review, queue again.
 - Unrelated timeouts = saturated runners: re-run the same SHA later.
@@ -71,7 +72,7 @@ owner question.
 
 ## State on disk
 
-- Batch board edits; `studio state` after each decision round.
+- Batch board edits.
 - Decisions and block reasons go into board notes.
 - At the context threshold: `studio state`, then hand over to a fresh control-room session that resumes from
   disk. Never run two control rooms.

@@ -17,6 +17,7 @@ import { runCli } from '../src/cli.js';
 import { stateRootFor } from '../src/paths.js';
 import type { Claude, Gh, Ports } from '../src/ports.js';
 import { realPorts } from '../src/ports.js';
+import { acquireQueueRunLock, enqueue, loadQueue, saveQueue } from '../src/queue.js';
 import { computeMetrics, type StateSnapshot, writeState } from '../src/state.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-cli-')));
@@ -582,6 +583,135 @@ describe('studio CLI', () => {
     const item = statusOf(fx, 'APP-1');
     expect(item?.status).toBe('in_review');
     expect(item?.notes?.join('\n')).toContain('merge failed: check ci failed');
+  });
+
+  /** gh for any PR: update, checks, views and merges succeed. */
+  const passingGh = (onLine: (line: string) => void = () => {}) =>
+    fakeGh((l) => {
+      onLine(l);
+      if (l.startsWith('pr update-branch')) return {};
+      if (/^pr view \d+ --repo org\/app --json headRefOid,state,mergeable/.test(l)) {
+        return {
+          stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN', mergeable: 'MERGEABLE' }),
+        };
+      }
+      if (l.startsWith('pr checks')) {
+        return { stdout: JSON.stringify([{ name: 'ci', bucket: 'pass' }]) };
+      }
+      if (l.startsWith('pr merge')) return {};
+      if (l.includes('--json mergeCommit')) {
+        return { stdout: JSON.stringify({ mergeCommit: { oid: 'c'.repeat(40) } }) };
+      }
+      if (l.includes('--json commits')) return { stdout: '2026-10-30T08:00:00Z\n' };
+      return undefined;
+    });
+
+  it('R79: a second queue run exits 1 while the run lock is held', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const { ports } = fakePorts(passingGh().gh);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+    const lock = acquireQueueRunLock(fx.state, new Date(), () => {});
+    const run = await cli(fx, ports, 'queue', 'run');
+    expect(run.code).toBe(1);
+    expect(run.err).toContain('queue already running');
+    expect(statusOf(fx, 'APP-1')?.status).toBe('queued');
+    lock.release();
+    expect((await cli(fx, ports, 'queue', 'run')).code).toBe(0);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('merged');
+    expect(existsSync(join(fx.state, 'queue.run.lock'))).toBe(false);
+  });
+
+  it('R79: the board moves right after each entry, and an entry added mid-run is merged', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'in_review', pr: 5 },
+      { id: 'APP-2', status: 'queued', pr: 6 },
+    ]);
+    let firstAtSecondMerge: string | undefined;
+    let added = false;
+    const { gh } = passingGh((l) => {
+      if (l.startsWith('pr merge 5') && !added) {
+        added = true;
+        enqueue(fx.state, { pr: 6, repo: 'org/app', item: 'APP-2' });
+      }
+      if (l.startsWith('pr merge 6')) firstAtSecondMerge = statusOf(fx, 'APP-1')?.status;
+    });
+    const { ports } = fakePorts(gh);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+    const run = await cli(fx, ports, 'queue', 'run');
+    expect(run.code).toBe(0);
+    expect(firstAtSecondMerge).toBe('merged');
+    expect(statusOf(fx, 'APP-1')?.status).toBe('merged');
+    expect(statusOf(fx, 'APP-2')?.status).toBe('merged');
+    expect(JSON.parse(run.out).merged).toBe(2);
+  });
+
+  it('R79: queue run first reconciles queued items with finished queue entries', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'in_review', pr: 5 },
+      { id: 'APP-2', status: 'in_review', pr: 6 },
+    ]);
+    const { ports } = fakePorts(fakeGh().gh);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#6')).code).toBe(0);
+    // A run that died after recording both results but before moving the board.
+    saveQueue(fx.state, {
+      pending: [],
+      done: [
+        { pr: 5, repo: 'org/app', item: 'APP-1', result: 'merged', at: '2026-10-31T09:00:00Z' },
+        {
+          pr: 6,
+          repo: 'org/app',
+          item: 'APP-2',
+          result: 'failed',
+          reason: 'check ci failed',
+          at: '2026-10-31T09:01:00Z',
+        },
+      ],
+    });
+    const run = await cli(fx, ports, 'queue', 'run');
+    expect(run.code).toBe(0);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('merged');
+    expect(statusOf(fx, 'APP-2')?.status).toBe('in_review');
+    expect(statusOf(fx, 'APP-2')?.notes?.join('\n')).toContain('merge failed: check ci failed');
+  });
+
+  it('R79: reconcile leaves a re-queued item alone while it is pending again', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const { ports } = fakePorts(passingGh().gh);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+    const q = loadQueue(fx.state);
+    q.done.push({
+      pr: 5,
+      repo: 'org/app',
+      item: 'APP-1',
+      result: 'failed',
+      reason: 'old failure',
+      at: '2026-10-30T09:00:00Z',
+    });
+    saveQueue(fx.state, q);
+    const run = await cli(fx, ports, 'queue', 'run');
+    expect(run.code).toBe(0);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('merged');
+    expect(statusOf(fx, 'APP-1')?.notes ?? []).not.toContain('merge failed: old failure');
+  });
+
+  it('merge.strategy native-queue: queue add and run refuse until stage (d), with a warning', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    writeFileSync(
+      join(fx.project, '.studio', 'studio.yaml'),
+      STUDIO_YAML.replace('strategy: studio-queue', 'strategy: native-queue'),
+    );
+    const { gh, calls } = fakeGh();
+    const { ports } = fakePorts(gh);
+    const add = await cli(fx, ports, 'queue', 'add', 'org/app#5');
+    expect(add.code).toBe(1);
+    expect(add.err).toMatch(/native-queue/);
+    const run = await cli(fx, ports, 'queue', 'run');
+    expect(run.code).toBe(1);
+    expect(run.err).toMatch(/native-queue is not supported yet/);
+    expect(run.err).toMatch(/warning: .*native-queue/);
+    expect(calls).toEqual([]);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('in_review');
   });
 
   it('queue add refuses a PR that is not on the board in review', async () => {

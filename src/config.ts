@@ -242,6 +242,11 @@ export function loadOwnerConfig(opts: OwnerEnv = {}): OwnerConfig {
 /** Non-fatal findings about a loaded config. */
 export function configWarnings(config: StudioConfig): string[] {
   const warnings: string[] = [];
+  if (config.merge.strategy === 'native-queue') {
+    warnings.push(
+      'merge.strategy native-queue is not supported yet (planned for stage d): queue add and queue run refuse; use studio-queue',
+    );
+  }
   if (config.crewAllowedWorkflowRefs.length > 0) {
     warnings.push(
       `crew_allowed_workflow_refs (${config.crewAllowedWorkflowRefs.join(', ')}) must be protected server-side (branch protection or rulesets): the crew guard cannot stop a push to those refs from another path`,

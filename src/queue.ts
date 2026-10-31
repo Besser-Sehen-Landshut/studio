@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { capacityHoldsTwice } from './capacity.js';
 import type { StudioConfig } from './config.js';
-import { assertStatePath, writeStateFile } from './paths.js';
+import { acquireStateLock, assertStatePath, type StateLock, writeStateFile } from './paths.js';
 import type { Clock, Gh, Host } from './ports.js';
 
 export type QueueStep = 'update' | 'checks' | 'capacity' | 'merge';
@@ -22,15 +22,26 @@ export type QueueOptions = {
   stateRoot?: string;
   pollMs?: number;
   capacityWaitMs?: number;
+  /** How long zero checks count as pending after a head change (default 5 min). */
+  checksGraceMs?: number;
   timeoutMs?: number;
   /** Receives non-fatal problems (default: stderr). */
   log?: (message: string) => void;
+  /**
+   * Supplies the next entry (default: `state.pending.shift()`). The CLI reads it from queue.json
+   * on disk, so entries added by `queue add` during a run are not lost.
+   */
+  takeNext?: () => QueueEntry | undefined;
+  /** Called right after each entry finished and was persisted (board update); errors are logged. */
+  onDone?: (done: QueueDone) => void;
 };
 
 export const CHECKS_POLL_MS = 30_000;
 export const CAPACITY_WAIT_MS = 60_000;
 export const QUEUE_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 export const MAX_ATTEMPTS = 3;
+/** CI needs a moment to register its checks for a new head; until then zero checks are pending. */
+export const CHECKS_GRACE_MS = 5 * 60 * 1000;
 
 const entrySchema = z.strictObject({
   pr: z.number().int().positive(),
@@ -78,6 +89,86 @@ export function saveQueue(stateRoot: string, q: QueueState): void {
   writeStateFile(stateRoot, queueFile(stateRoot), `${JSON.stringify(q, null, 2)}\n`);
 }
 
+const FILE_LOCK = 'queue.json.lock';
+const RUN_LOCK = 'queue.run.lock';
+/** A crashed writer's file lock: the critical section is a read and an atomic rename. */
+const FILE_LOCK_STALE_MS = 30_000;
+/** A `queue run` lock older than this may be broken (spec: stale after 6 h). */
+export const RUN_LOCK_STALE_MS = 6 * 60 * 60 * 1000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Read-modify-write of queue.json under a short exclusive file lock, so `queue add` and a running
+ * `queue run` never overwrite each other's changes. Retries for `timeoutMs` (default 5 s).
+ */
+export function updateQueue<T>(
+  stateRoot: string,
+  mutate: (q: QueueState) => T,
+  opts: { timeoutMs?: number } = {},
+): T {
+  const until = Date.now() + (opts.timeoutMs ?? 5000);
+  let lock: StateLock | undefined;
+  for (;;) {
+    lock = acquireStateLock(stateRoot, FILE_LOCK, {
+      now: new Date(),
+      staleMs: FILE_LOCK_STALE_MS,
+    });
+    if (lock) break;
+    if (Date.now() >= until) throw new Error(`queue file is locked (${FILE_LOCK}); try again`);
+    sleepSync(25);
+  }
+  try {
+    const q = loadQueue(stateRoot);
+    const result = mutate(q);
+    saveQueue(stateRoot, q);
+    return result;
+  } finally {
+    lock.release();
+  }
+}
+
+/** Adds an entry to the pending list on disk; returns the new pending length. */
+export function enqueue(stateRoot: string, entry: QueueEntry): number {
+  return updateQueue(stateRoot, (q) => {
+    const dup = [...q.pending, ...(q.current ? [q.current] : [])].some(
+      (e) => e.pr === entry.pr && e.repo === entry.repo,
+    );
+    if (dup) throw new Error(`${entry.repo}#${entry.pr} is already in the queue`);
+    q.pending.push(entry);
+    return q.pending.length;
+  });
+}
+
+/** Moves the first pending entry on disk to `current`; undefined when nothing is pending. */
+export function takeNextPending(stateRoot: string): QueueEntry | undefined {
+  return updateQueue(stateRoot, (q) => {
+    const next = q.pending.shift();
+    if (next) q.current = { ...next, step: 'update' };
+    return next;
+  });
+}
+
+/**
+ * Exclusive lock for `queue run`: a second run fails with "queue already running". A lock older
+ * than 6 h is taken over, with a note through `log`.
+ */
+export function acquireQueueRunLock(
+  stateRoot: string,
+  now: Date,
+  log: (message: string) => void,
+): StateLock {
+  const lock = acquireStateLock(stateRoot, RUN_LOCK, { now, staleMs: RUN_LOCK_STALE_MS });
+  if (!lock) throw new Error(`queue already running (lock ${RUN_LOCK} in the state root)`);
+  if (lock.brokeStaleMs !== undefined) {
+    const hours = (lock.brokeStaleMs / 3_600_000).toFixed(1);
+    log(`note: broke a stale queue lock (${hours} h old); a previous run did not finish`);
+  }
+  return lock;
+}
+
 /** Appends one line to a state-root file (atomic rewrite; the queue is serial). */
 function appendStateLine(stateRoot: string, name: string, line: string): void {
   const file = join(stateRoot, name);
@@ -116,13 +207,21 @@ function parseChecks(stdout: string): Check[] | undefined {
   return out;
 }
 
-type ChecksVerdict = { kind: 'pending' } | { kind: 'pass' } | { kind: 'failed'; reason: string };
+type ChecksVerdict =
+  | { kind: 'pending' }
+  | { kind: 'pass' }
+  | { kind: 'failed'; reason: string }
+  /** No check reported at all: pending during the grace after a head change, else failed. */
+  | { kind: 'none'; reason: string };
 
 async function readChecks(entry: QueueEntry, gh: Gh): Promise<ChecksVerdict> {
   const base = ['pr', 'checks', String(entry.pr), '--repo', entry.repo, '--json', 'name,bucket'];
   const all = await gh.run(base);
   const checks = parseChecks(all.stdout);
   if (checks === undefined) {
+    if (all.stdout.trim() === '' && /no checks reported/i.test(all.stderr)) {
+      return { kind: 'none', reason: 'no checks reported' };
+    }
     return {
       kind: 'failed',
       reason: `no checks reported (gh exit ${all.code}: ${all.stderr.trim()})`,
@@ -139,7 +238,7 @@ async function readChecks(entry: QueueEntry, gh: Gh): Promise<ChecksVerdict> {
   // A required check missing from the full list still counts, with its own bucket.
   const known = new Set(checks.map((c) => c.name));
   const evaluated = [...checks, ...required.filter((c) => !known.has(c.name))];
-  if (evaluated.length === 0) return { kind: 'failed', reason: 'no checks reported' };
+  if (evaluated.length === 0) return { kind: 'none', reason: 'no checks reported' };
   for (const c of evaluated) {
     if (!BUCKETS.has(c.bucket)) {
       return { kind: 'failed', reason: `check ${c.name} has unknown state ${c.bucket}` };
@@ -242,6 +341,12 @@ export async function mergeOne(
   const deadline = clock.now().getTime() + (opts.timeoutMs ?? QUEUE_TIMEOUT_MS);
   const failed = (reason: string): MergeOutcome => ({ result: 'failed', reason });
   const timedOut = () => clock.now().getTime() >= deadline;
+  const graceMs = opts.checksGraceMs ?? CHECKS_GRACE_MS;
+  // Zero checks right after a head change (update-branch, a moved head) are pending until then.
+  let graceUntil = Number.NEGATIVE_INFINITY;
+  const headChanged = () => {
+    graceUntil = clock.now().getTime() + graceMs;
+  };
   const enter = (step: QueueStep) => {
     entry.step = step;
     persist(entry);
@@ -265,6 +370,7 @@ export async function mergeOne(
     if (step === 'update') {
       enter('update');
       const r = await gh.run(['pr', 'update-branch', String(entry.pr), '--repo', entry.repo]);
+      if (r.code === 0) headChanged();
       if (r.code !== 0 && !NO_UPDATE_NEEDED.test(r.stderr)) {
         // A PR merged before a restart cannot be updated any more: only an open PR is an error.
         const v = await viewPr(entry, gh);
@@ -282,6 +388,9 @@ export async function mergeOne(
       for (;;) {
         const verdict = await readChecks(entry, gh);
         if (verdict.kind === 'failed') return failed(verdict.reason);
+        if (verdict.kind === 'none' && clock.now().getTime() >= graceUntil) {
+          return failed(verdict.reason);
+        }
         if (verdict.kind === 'pass') break;
         if (timedOut()) return failed('checks timed out');
         await clock.sleep(pollMs);
@@ -293,6 +402,7 @@ export async function mergeOne(
       if (after.state === 'CLOSED') return failed('pull request is closed');
       if (after.head !== before.head) {
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
+        headChanged();
         continue; // the checks may belong to the old head: evaluate again
       }
       if (after.mergeable === 'CONFLICTING') return failed('pull request has merge conflicts');
@@ -321,6 +431,7 @@ export async function mergeOne(
       if (now.state === 'CLOSED') return failed('pull request is closed');
       if (head === undefined || now.head !== head) {
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
+        headChanged();
         step = 'checks';
         continue;
       }
@@ -344,6 +455,7 @@ export async function mergeOne(
       if (r.code === 0) return merged();
       if (HEAD_MOVED.test(r.stderr)) {
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
+        headChanged();
         step = 'checks';
         continue;
       }
@@ -369,8 +481,9 @@ async function firstCommitAt(entry: QueueEntry, gh: Gh): Promise<string | undefi
 }
 
 /**
- * Processes the queue serially: resumes `state.current` first (never re-added), then `pending` in
- * FIFO order. Persists after every transition and returns the final state.
+ * Processes the queue serially: resumes `state.current` first (never re-added), then the pending
+ * entries in FIFO order (from `opts.takeNext` when given). Persists after every transition, calls
+ * `opts.onDone` after each entry and returns the final state.
  */
 export async function runQueue(
   state: QueueState,
@@ -379,9 +492,10 @@ export async function runQueue(
   persist: (q: QueueState) => void,
   opts: QueueOptions = {},
 ): Promise<QueueState> {
+  const log = opts.log ?? ((m: string) => console.error(m));
   for (;;) {
     if (!state.current) {
-      const next = state.pending.shift();
+      const next = opts.takeNext ? opts.takeNext() : state.pending.shift();
       if (!next) return state;
       state.current = { ...next, step: 'update' };
       persist(state);
@@ -389,14 +503,23 @@ export async function runQueue(
     const current = state.current;
     const outcome = await mergeOne(current, config, ports, () => persist(state), opts);
     const { step: _step, head: _head, ...entry } = current;
-    state.done.push({
+    const done: QueueDone = {
       ...entry,
       result: outcome.result,
       ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
       at: ports.clock.now().toISOString(),
-    });
+    };
+    state.done.push(done);
     state.current = undefined;
     persist(state);
+    if (opts.onDone) {
+      try {
+        opts.onDone(done);
+      } catch (err) {
+        // The result is in queue.json; the next run reconciles the board from it.
+        log(`board update failed for PR ${current.pr}: ${(err as Error).message}`);
+      }
+    }
     if (outcome.result === 'merged' && opts.stateRoot !== undefined) {
       try {
         const first = await firstCommitAt(current, ports.gh);
@@ -414,9 +537,7 @@ export async function runQueue(
         );
       } catch (err) {
         // The PR is merged and recorded in the queue; metrics must not stop the queue.
-        (opts.log ?? ((m: string) => console.error(m)))(
-          `metrics append failed for PR ${current.pr}: ${(err as Error).message}`,
-        );
+        log(`metrics append failed for PR ${current.pr}: ${(err as Error).message}`);
       }
     }
   }
