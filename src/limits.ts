@@ -602,7 +602,10 @@ export interface BlockReconcileResult {
   lockFailed: boolean;
 }
 
-/** Active items of records marked `block` go back to `ready`; also finishes after a crash. */
+/**
+ * Active items of records marked `block` go back to `ready`; also finishes after a crash. An item
+ * with a report stays active: `collect` takes it, and a later launch would delete the report.
+ */
 function moveBlockedToReady(
   project: string,
   stateRoot: string,
@@ -613,7 +616,7 @@ function moveBlockedToReady(
     for (const [id, rec] of Object.entries(readCrewRecords(stateRoot))) {
       if (rec.block === undefined) continue;
       const status = loadBoard(project).items.find((i) => i.id === id)?.status;
-      if (status === undefined || !ACTIVE.has(status)) continue;
+      if (status === undefined || !ACTIVE.has(status) || hasReport(stateRoot, id)) continue;
       const label = rec.label ?? DEFAULT_LABEL;
       const note = `account block (${rec.block.reason}): run on ${label} stopped, clone and branch kept`;
       backToReady(project, id, note, now, 'studio');
@@ -627,11 +630,12 @@ function moveBlockedToReady(
  * Applies account blocks; runs before `reconcileLimits` and does not depend on `limits.json`. Every
  * event of a current run is recorded in `blocks.json` first, then the crews stop, so a crash leaves
  * the state blocked. While any block exists or the file is unreadable, every reconcile stops every
- * crew still alive, of all labels and regardless of board status: safe to repeat, and a crash
- * mid-stop heals. Records get `stoppedAt` and `block`, no `limit`, so nothing resumes by itself and a
- * cleared event does not trigger again. A report does not excuse a block event: an account problem
- * outranks a finished run. A hit found while the file is unreadable stays unmarked, so it is recorded
- * once the owner fixed the file.
+ * crew still alive on an active item, of all labels: safe to repeat, and a crash mid-stop heals, since
+ * an active item without `stoppedAt` is tried again. Only active items are scanned or stopped. Records
+ * get `stoppedAt` and `block`, no `limit`, so nothing resumes by itself and a cleared event does not
+ * trigger again. A report does not excuse a block event: an account problem outranks a finished run,
+ * but the work stays collectable. A hit found while the file is unreadable stays unmarked, so it is
+ * recorded once the owner fixed the file.
  */
 export async function reconcileBlocks(o: {
   project: string;
@@ -651,7 +655,14 @@ export async function reconcileBlocks(o: {
   }
   try {
     const at = now.toISOString();
-    const records = readCrewRecords(stateRoot);
+    // Records of finished items stay in crew.json for good, and their pids get reused.
+    const board = loadBoard(project);
+    const records = Object.fromEntries(
+      Object.entries(readCrewRecords(stateRoot)).filter(([id]) => {
+        const status = board.items.find((i) => i.id === id)?.status;
+        return status !== undefined && ACTIVE.has(status);
+      }),
+    );
     const hits = new Map<string, DetectedBlock>();
     for (const [id, rec] of Object.entries(records)) {
       if (rec.stoppedAt !== undefined) continue;

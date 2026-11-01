@@ -29018,7 +29018,7 @@ function moveBlockedToReady(project, stateRoot, now, result) {
     for (const [id, rec] of Object.entries(readCrewRecords(stateRoot))) {
       if (rec.block === void 0) continue;
       const status = loadBoard(project).items.find((i2) => i2.id === id)?.status;
-      if (status === void 0 || !ACTIVE.has(status)) continue;
+      if (status === void 0 || !ACTIVE.has(status) || hasReport(stateRoot, id)) continue;
       const label = rec.label ?? DEFAULT_LABEL;
       const note = `account block (${rec.block.reason}): run on ${label} stopped, clone and branch kept`;
       backToReady(project, id, note, now, "studio");
@@ -29041,7 +29041,13 @@ async function reconcileBlocks(o2) {
   }
   try {
     const at = now.toISOString();
-    const records = readCrewRecords(stateRoot);
+    const board = loadBoard(project);
+    const records = Object.fromEntries(
+      Object.entries(readCrewRecords(stateRoot)).filter(([id]) => {
+        const status = board.items.find((i2) => i2.id === id)?.status;
+        return status !== void 0 && ACTIVE.has(status);
+      })
+    );
     const hits = /* @__PURE__ */ new Map();
     for (const [id, rec] of Object.entries(records)) {
       if (rec.stoppedAt !== void 0) continue;

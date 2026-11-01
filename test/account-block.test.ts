@@ -8,12 +8,13 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { loadBoard } from '../src/board.js';
+import { loadBoard, saveBoard } from '../src/board.js';
 import { type CliDeps, runCli } from '../src/cli.js';
 import { loadConfig } from '../src/config.js';
 import { limitHold } from '../src/credentials.js';
@@ -538,6 +539,95 @@ describe('account block details', () => {
     expect(p.stopped).toEqual([5002]);
     expect(recordOf(fx, 'APP-1').stoppedAt).toBeDefined();
     expect(recordOf(fx, 'APP-1').block).toBeDefined();
+
+    // The finished work stays active, also on later reconciles, and collect takes it end to end.
+    await cli(fx, p.ports, ['status']);
+    expect(itemOf(fx, 'APP-1')?.status).toBe('assigned');
+    expect(itemOf(fx, 'APP-2')?.status).toBe('ready');
+    const head = 'a'.repeat(40);
+    const file = join(reports, 'APP-1.md');
+    writeFileSync(
+      file,
+      `---\nstatus: done\nitem: APP-1\npr: 7\nhead_sha: ${head}\ntests_run: 3\nlessons: []\nquestions: []\n---\nbody\n`,
+    );
+    utimesSync(file, new Date('2026-11-02T00:00:00Z'), new Date('2026-11-02T00:00:00Z'));
+    p.ports.gh.run = async () => ({
+      code: 0,
+      stderr: '',
+      stdout: JSON.stringify({
+        headRefOid: head,
+        headRefName: 'studio/APP-1',
+        headRepository: { name: 'app' },
+        headRepositoryOwner: { login: 'org' },
+        isCrossRepository: false,
+      }),
+    });
+    const c = await cli(fx, p.ports, ['collect', 'APP-1']);
+    expect(c.err).toBe('');
+    expect(c.code).toBe(0);
+    expect(itemOf(fx, 'APP-1')?.status).toBe('in_review');
+    expect(itemOf(fx, 'APP-1')?.pr).toBe(7);
+  });
+
+  it('a live crew stopped just after writing its report keeps its item active', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    await twoCrews(fx, p);
+    const reports = join(fx.state, 'clones', 'APP-2', '.studio', 'reports');
+    mkdirSync(reports, { recursive: true });
+    writeFileSync(join(reports, 'APP-2.md'), 'x');
+    log(fx, 'APP-1', ON_HOLD);
+    await cli(fx, p.ports, ['status']);
+    expect(p.stopped.sort()).toEqual([5001, 5002]);
+    expect(recordOf(fx, 'APP-2').block).toBeDefined();
+    expect(itemOf(fx, 'APP-2')?.status).toBe('assigned');
+    expect(itemOf(fx, 'APP-1')?.status).toBe('ready');
+  });
+
+  /** Moves an item on the board without touching its crew record. */
+  const setStatus = (fx: Fx, id: string, status: 'merged') => {
+    const board = loadBoard(fx.project);
+    saveBoard(fx.project, {
+      ...board,
+      items: board.items.map((i) => (i.id === id ? { ...i, status } : i)),
+    });
+  };
+
+  it('a live pid on a merged item is not stopped by a block', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    await twoCrews(fx, p);
+    setStatus(fx, 'APP-2', 'merged');
+    log(fx, 'APP-1', ON_HOLD);
+    await cli(fx, p.ports, ['status']);
+    expect(p.stopped).toEqual([5001]);
+    expect(p.alive.has(5002)).toBe(true);
+    expect(recordOf(fx, 'APP-2').stoppedAt).toBeUndefined();
+    expect(recordOf(fx, 'APP-2').block).toBeUndefined();
+    expect(itemOf(fx, 'APP-2')?.status).toBe('merged');
+  });
+
+  it('the old log of a merged item raises no block', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    await twoCrews(fx, p);
+    setStatus(fx, 'APP-2', 'merged');
+    log(fx, 'APP-2', ON_HOLD);
+    await cli(fx, p.ports, ['status']);
+    expect(existsSync(blocksFile(fx))).toBe(false);
+    expect(p.stopped).toEqual([]);
+  });
+
+  it('a live crew on an active item of another label is stopped', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    await twoCrews(fx, p);
+    log(fx, 'APP-1', ON_HOLD);
+    await cli(fx, p.ports, ['status']);
+    expect(recordOf(fx, 'APP-2').label).toBe('label-b');
+    expect(p.stopped).toContain(5002);
+    expect(p.alive.has(5002)).toBe(false);
+    expect(recordOf(fx, 'APP-2').block).toMatchObject({ reason: 'account_on_hold' });
   });
 
   it('a retry with a later success is no block; without one it counts for a live crew', async () => {
@@ -690,7 +780,7 @@ describe('account block details', () => {
     expect(s.forOwner).toEqual([]);
   });
 
-  it('crews cannot reach the clear command or the block files', () => {
+  it('the guard denies the clear command and lists the block files, as a second net', () => {
     expect(STATE_FILES).toEqual(expect.arrayContaining(['blocks.json', 'blocks.lock']));
     const wt = join(root, 'guard-wt');
     mkdirSync(wt, { recursive: true });
