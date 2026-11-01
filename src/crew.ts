@@ -60,6 +60,7 @@ import {
 import { PAUSED_LINE, readPause } from './pause.js';
 import type { Ports } from './ports.js';
 import { renderReviewRoutine } from './review.js';
+import { readRoleBrief } from './role-memory.js';
 import { readCrewRecords } from './state.js';
 import {
   LABEL_FULL_LINE,
@@ -434,8 +435,7 @@ export function writeBrief(
 ): string {
   assertItemId(item.id);
   const first = ['studio:studio-crew', ...caps.required.filter((s) => s !== 'studio:studio-crew')];
-  const roleFile = join(projectDir, '.studio', 'roles', `${item.role}.md`);
-  const roleBrief = existsSync(roleFile) ? readFileSync(roleFile, 'utf8').trim() : '';
+  const roleBrief = readRoleBrief(projectDir, item.role);
   const id = item.id;
   const opensPr = item.type !== 'review' && item.type !== 'research';
   const lines = [

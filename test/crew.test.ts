@@ -2248,4 +2248,16 @@ describe('capabilities at launch', () => {
     expect(capsOf(f, 'APP-20').analyzers).toContain('similar-bugs');
     expect(brief(f, 'APP-20')).toContain('Review round: 2');
   });
+
+  it('the brief shows a role file with an accepted lesson', async () => {
+    const { project, state } = makeFixture();
+    mkdirSync(join(project, '.studio', 'roles'), { recursive: true });
+    writeFileSync(
+      join(project, '.studio', 'roles', 'builder.md'),
+      'BRIEF\n\n## Lessons\n\n- LESSON-MARKER\n',
+    );
+    const text = readFileSync(writeBrief(state, item, config, project, NO_RULES), 'utf8');
+    expect(text).toContain('BRIEF');
+    expect(text).toContain('- LESSON-MARKER');
+  });
 });

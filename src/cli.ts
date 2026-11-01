@@ -58,6 +58,13 @@ import {
   readCrewCaps,
   reviewRounds,
 } from './review.js';
+import {
+  acceptLesson,
+  dropLesson,
+  listLessons,
+  proposeLessons,
+  pruneLesson,
+} from './role-memory.js';
 import { runDoctor, runSecretSet } from './secret-command.js';
 import { runSetupCi } from './setup-ci-command.js';
 import { applySource, checkSources, loadSources, setupSources } from './sources.js';
@@ -109,6 +116,11 @@ Commands:
   stop <id>                Stop a crew session
   metrics                  Lead time and deployment frequency
   setup sources [<id>...]  Fetch the referenced third-party sources (nothing runs)
+  lessons [list]           Lessons crews proposed for the role memory
+  lessons accept <n>       Move a proposed lesson into its role file
+  lessons drop <n>         Discard a proposed lesson
+  lessons prune <role> <l> Remove a lesson line from a role file
+  escalate <id>            Run a stuck item on the role's stronger model
   sources list             Third-party sources and their licences
   sources check            Judge upstream updates: fits, unclear or conflict; adopts nothing
   sources apply <id>       Adopt a candidate that fits
@@ -491,6 +503,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           }
         }
         saveBoard(project, next);
+        // Proposals only: a lesson reaches a role file through `lessons accept`. The item has moved
+        // already, so a problem here must not read as a failed collect.
+        let lessonsProposed = 0;
+        try {
+          lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now);
+        } catch (e) {
+          stderr(`error: lessons: ${(e as Error).message.replace(/\p{Cc}/gu, ' ')}\n`);
+        }
         print({
           item: item.id,
           report: report.status,
@@ -500,6 +520,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ...(report.reviews === undefined ? {} : { reviews: report.reviews }),
           ...(reviewDone.skipped.length === 0 ? {} : { skipped: capNotes(reviewDone.skipped) }),
           ...(fixLimit ? { fixLimit } : {}),
+          ...(lessonsProposed > 0 ? { lessonsProposed } : {}),
         });
         return 0;
       }
@@ -798,6 +819,52 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         throw new UsageError('sources needs a subcommand: list | check | apply <id>');
       }
 
+      case 'lessons': {
+        const [sub = 'list', a, b] = rest;
+        if (sub === 'list' && rest.length <= 1) {
+          print(listLessons(stateRoot()));
+          return 0;
+        }
+        refuseCrew(deps.env);
+        if (sub === 'accept' && rest.length === 2) {
+          print(acceptLesson(project, stateRoot(), lessonNumber(a)));
+          return 0;
+        }
+        if (sub === 'drop' && rest.length === 2) {
+          dropLesson(stateRoot(), lessonNumber(a));
+          print({ dropped: lessonNumber(a) });
+          return 0;
+        }
+        if (sub === 'prune' && rest.length === 3 && a !== undefined) {
+          pruneLesson(project, a, lessonNumber(b));
+          print({ role: a, pruned: lessonNumber(b) });
+          return 0;
+        }
+        throw new UsageError('lessons needs: list | accept <n> | drop <n> | prune <role> <line>');
+      }
+
+      case 'escalate': {
+        refuseCrew(deps.env);
+        if (rest.length !== 1) throw new UsageError('escalate needs one item id');
+        const { config, board } = loadAll();
+        const item = findItem(board, rest[0]);
+        const to = config.roles[item.role]?.escalateTo;
+        if (to === undefined) {
+          throw new Error(`role ${item.role} has no escalate_to in studio.yaml`);
+        }
+        if (item.model === to) throw new Error(`${item.id} already runs on ${to}`);
+        saveBoard(
+          project,
+          withItem(board, item.id, (i) => ({
+            ...i,
+            model: to,
+            notes: [...(i.notes ?? []), `model escalated to ${to}`],
+          })),
+        );
+        print({ item: item.id, model: to, status: item.status });
+        return 0;
+      }
+
       case 'metrics': {
         print(computeMetrics(readMetricEvents(stateRoot())));
         return 0;
@@ -883,6 +950,11 @@ const MAX_NOTE_CHARS = 500;
 /** Crew-provided text is untrusted: at most 10 entries of 500 characters, no control characters. */
 function capNotes(notes: string[]): string[] {
   return notes.slice(0, MAX_NOTES).map((n) => n.replace(/\p{Cc}/gu, ' ').slice(0, MAX_NOTE_CHARS));
+}
+
+function lessonNumber(arg: string | undefined): number {
+  if (!/^[1-9]\d{0,6}$/.test(arg ?? '')) throw new UsageError('a lesson number is needed');
+  return Number(arg);
 }
 
 /** Crew sessions run with this role: what changes owner state is not theirs. */
