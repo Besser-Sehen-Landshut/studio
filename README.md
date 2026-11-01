@@ -2,7 +2,7 @@
 
 Studio is a Claude Code plugin and TypeScript package for running a small software studio of coding-agent sessions from one control room: a lead session plans work from a board and a crew of role-based sessions carries it out, each in its own sandboxed clone.
 
-Status: 0.4.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules) and stage (b) (the Studio board inside Claude Code, pause and resume, push notifications). See [CHANGELOG.md](CHANGELOG.md).
+Status: 0.5.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store). See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -90,7 +90,15 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 | `state`                  | Refresh `state.json` in the state root                        |
 | `pause`, `resume`        | Owner only, in a terminal: hold or release launches, merges   |
 | `stop <id>`              | Stop a crew session                                           |
-| `metrics`                | Lead time and deployment frequency                            |
+| `metrics`                | Lead time, deploy frequency, change failure rate, restore time, flaky count |
+| `deploy record [<sha>]`  | Record a production deploy                                    |
+| `incident open <id>`, `incident resolve <id>` | Record a failure after a deploy and its restore |
+| `flaky record <test> <sha> pass\|fail`, `flaky [list]` | The flaky-test ledger                  |
+| `solutions search <words>` | Earlier solutions in `.studio/solutions/`                   |
+| `lessons [list]`, `lessons accept <n>`, `lessons drop <n>`, `lessons prune <role> <line>` | Role memory |
+| `escalate <id>`          | Run a stuck item on the role's `escalate_to` model            |
+| `setup stack [--write]`  | Detect the project's stacks from its manifest files           |
+| `setup sources [<id>...]`, `sources list`, `sources check`, `sources apply <id>` | Third-party sources |
 | `setup ci [--write]`     | Detect CI runners, propose the `ci:` block, lint workflows    |
 | `secret set crew-token`  | Store the crew's GitHub token (hidden input, checked first)   |
 | `doctor`                 | What is set and what is missing, never values                 |
@@ -114,6 +122,47 @@ In the owner's interactive Claude Code session in a Studio project, the plugin s
 - **Keeping it fresh.** Only `studio state` writes `state.json`. The lead's heartbeat (`studio status` and `studio state` every 120 s, see the lead skill) refreshes it and also reads crew logs, so an account block stops crews at most one heartbeat (120 s) after the event. Without a running lead nothing refreshes the board and nothing stops crews: a project with no lead is swept for a block only when another project reconciles.
 
 `pnpm test:mod` runs the mod's tests with `claude plugin test`; it needs the `claude` CLI and is not part of CI.
+
+## Capabilities
+
+`capabilities/INDEX.yaml` says, per role, item type, stack, phase, changed path, risk tag and trigger, which skills a crew must use or may use, which analyzers a reviewer runs and which knowledge files apply. The denied list wins over everything. At launch Studio works this out, names the skills in the brief (only a named skill is used reliably) and copies only the matching files beside the brief; a crew never gets the rest. A required skill that is definitely not installed refuses the launch; an optional one reads `skipped: skill not installed`. A malformed index refuses the launch.
+
+- **Stacks.** `studio setup stack` reads manifest files in the root and one level of `apps`, `packages`, `crates` and `services`, proposes `stacks:` for `studio.yaml`, and stores it with `--write`. It never opens `.env` and never follows a link.
+- **Per item.** Optional board fields: `risk` (`ui`, `landing`, `auth`, `security`, `data`, `migration`), `triggers` (`epic-end`, `release`), `model`. Roles can add `skills.when` entries with `paths`, `item_types`, `required` and `allowed`. A glob is limited in length, wildcards and braces (no nested braces); one over the limits is refused in a config file.
+- **Model.** `roles.<role>.model`, `roles.<role>.types.<item type>` for another model per item type, and `escalate_to`. `studio escalate <id>` sets the item's `model`, which wins; the status stays as it is.
+
+## Review
+
+A review item carries the note `review <owner/repo>#<n>`; without it the launch refuses. Studio reads the pull request and writes a routine into the brief, by tier.
+
+- **Small:** at most 400 changed lines outside markdown. Diff review and spec check (not for `type: docs`).
+- **Large:** more lines, a risk tag `auth`, `security`, `data` or `migration`, a security-sensitive change, or a file list it cannot read completely. Adds performance, and accessibility, design and motion analyzers where they apply.
+- **Security always** when a changed path concerns auth, sessions, logins, passwords, permissions, API routes, middleware, migrations, DB schema, signup, reset, OTP, upload, access policies, workflows or local actions. A file list that cannot be read, or a path with a control character, counts as such a change. Spellings are matched case-insensitively.
+- **Later rounds and epic end.** After an earlier `changes_requested` the similar-bug scan runs; `triggers: [epic-end]` or `[release]` add the full scans.
+
+The spec check holds a mutation probe: break the guarding line in a throwaway copy, the named test must go red.
+
+`collect` holds a finished review to the record written at launch (`briefs/<id>.caps.json`): `reviews` must name the recorded pull request, for every verdict. An approval needs a result for every listed analyzer (`pass`, `findings` or `skipped: <reason>`) and `mutation_probe`, and cannot skip diff review, spec check or security. Output lists skipped analyzers by id; reasons stay in the report. A missing analyzer source reads `skipped: <reason>`, never a pass.
+
+Fix limit: 3 attempts per finding (`finding_attempts`), hard stop after 6 rounds of requested changes. Reaching it blocks the builder item with a note, and `queue run` merges only an item that is `queued` on the board at that moment.
+
+## Third-party sources
+
+Nothing with an unknown or copyleft licence is copied into this repository; MIT and Apache-2.0 content only with its notice (`capabilities/NOTICE.md`). `capabilities/SOURCES.yaml` lists every source with its licence. `studio setup sources` fetches the referenced ones below the owner root with hooks and links off; nothing from them ever runs.
+
+`studio sources check` holds one rule. `setup sources` records a sha256 for every file the source's contract reads and for its licence files. `fits`: every one of those files is byte-identical to its recorded hash. `unclear`: one changed, is new or is missing, or something could not be read; the output names the files, and a person or the lead reads the diff. `conflict`: a licence file is missing or changed. Files outside the contract are not judged, because they never reach a crew. It installs nothing, not even a `fits`. `studio sources apply <id>` judges the candidate again and adopts only a `fits`; there is no command that adopts a held update.
+
+## Role memory
+
+`.studio/roles/<role>.md` holds the role's brief and a `## Lessons` section of at most 40 lines. `collect` stores a report's lessons as proposals in the state root; only `studio lessons accept <n>` moves one into the file, which the lead then commits. Lessons are crew text: `lessons list` says so, each is reduced to one plain line, and a brief shows them in a labelled data block apart from the role's instructions.
+
+## Metrics and learning
+
+`studio metrics` adds change failure rate (deploys followed by an incident, over deploys; `null` without a deploy), median time to restore and open incidents to lead time and deploy frequency, from `studio deploy record` and `studio incident open|resolve`. An incident counts against the latest deploy before it, once per deploy.
+
+`studio flaky record <test> <sha> pass` counts a test that failed and passed on a rerun; `fail` is a real failure and is not recorded, because nothing is retried into green. `studio flaky` lists the worst first, for a scheduled fix item.
+
+`.studio/solutions/*.md` is a store of earlier solutions, one file per topic with a `# Title`. `studio solutions search`, `studio plan` and builder and designer briefs answer with paths and titles.
 
 ## Using your own runners
 

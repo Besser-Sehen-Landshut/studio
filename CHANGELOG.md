@@ -3,6 +3,40 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.5.0] - 2026-11-01
+
+Stage (c): capabilities, tiered review, sources contract, role memory, model per type, more metrics.
+Not tagged or published as a GitHub release yet; the maintainers tag after the merge.
+
+### Added
+
+- `capabilities/INDEX.yaml` with a loader and schema: per role, item type, stack, phase, path, risk
+  and trigger, the skills, analyzers and knowledge a crew gets. The denied list wins. The brief names
+  the skills; only matching files are copied beside it.
+- `studio setup stack [--write]`: stacks from manifest files, stored in `studio.yaml`.
+- A review routine in reviewer briefs, tiered by change size, with security always on for sensitive
+  paths, a spec check with mutation probe, a fix limit and a similar-bug scan. `collect` holds the
+  report to the record written at launch.
+- `capabilities/SOURCES.yaml`, `studio setup sources` (records hashes), `studio sources check`
+  (`fits` only when every file the contract reads is byte-identical; a changed file is `unclear`, a
+  changed licence `conflict`; adopts nothing) and `studio sources apply <id>` (`fits` only).
+- Role memory: `lessons` commands; `collect` only proposes.
+- `roles.<role>.types`, `escalate_to` and `studio escalate <id>`; `skills.when`; board fields `risk`,
+  `triggers`, `model`.
+- `studio deploy record`, `studio incident open|resolve`; `metrics` shows change failure rate and
+  time to restore. `studio flaky`, `studio solutions search`; `plan` lists matching solutions.
+
+### Changed
+
+- A review item needs the note `review <owner/repo>#<n>`; a launch without it refuses. `collect`
+  refuses a finished review without the record of its launch: relaunch reviews started before this.
+- Index rows add required skills: a `feature` or `fix` builder needs test-driven development, a `fix`
+  also systematic debugging. A launch refuses when one is definitely not installed; deny it in
+  `skills.denied` to opt out.
+- `queue run` merges only an item that is `queued` on the board right before the merge.
+- `model` values must look like a model name: they can no longer start with a dash.
+- The brief says `Offered skills` in place of `Allowed skills`. `lessons` in a report are now stored.
+
 ## [0.4.0] - 2026-11-01
 
 Stage (b): the Studio board inside Claude Code, pause and resume, push notifications. Not tagged or
