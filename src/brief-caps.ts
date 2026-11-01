@@ -85,6 +85,10 @@ export async function resolveForItem(o: {
   if (target === undefined && item.type === 'review') {
     throw new Error(`${item.id} names no pull request: add the note review <owner/repo>#<n>`);
   }
+  // The clone's origin is the item's repo: a review of another repo would read the wrong pull request.
+  if (target !== undefined && target.repo !== item.repo) {
+    throw new Error(`${item.id}: the pull request is in ${target.repo}, the item in ${item.repo}`);
+  }
   const facts = target === undefined ? undefined : await readPrFacts(o.ports, target);
   const paths: ChangedPaths = facts?.complete ? [...facts.files, ...declared] : 'unknown';
   const name = target === undefined ? undefined : `${target.repo}#${target.pr}`;
@@ -107,12 +111,6 @@ export async function resolveForItem(o: {
     triggers,
     tier,
   });
-  // A change of markdown only has no behaviour for a spec check to probe.
-  const docsOnly =
-    facts?.complete === true &&
-    facts.files.length > 0 &&
-    facts.files.every((f) => f.toLowerCase().endsWith('.md'));
-  if (docsOnly) resolved.analyzers = resolved.analyzers.filter((a) => a.id !== 'spec-check');
   return {
     resolved,
     review: {
@@ -156,6 +154,8 @@ export interface BriefCaps {
   denied: string[];
   skipped: { id: string; reason: string }[];
   knowledge: { ref: string; where: string; fallback?: string }[];
+  /** Where in the checkout this run's report goes; a launch draws it anew. */
+  reportName?: string;
   review?: {
     tier: 'small' | 'large';
     reasons: string[];

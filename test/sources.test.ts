@@ -120,18 +120,24 @@ describe('compareToPin: fits only when every read file is byte-identical', () =>
   it('a tree that cannot be read is never fits', () => {
     expect(compareToPin(pinOf(), join(root, 'nope'), source).verdict).not.toBe('fits');
   });
-  it.each(['license-check.sh', 'copying-guide.md', 'licensed.txt'])(
+  it.each(['license-check.sh', 'copying.py', 'licensed.txt', 'notices.md'])(
     '%s is no licence file',
     (name) => {
       expect(verdict({ ...OLD, [name]: 'x' }).verdict).toBe('fits');
     },
   );
-  it.each(['NOTICE', 'UNLICENSE', 'LICENCE.md', 'copying'])(
-    'a new %s is a licence change',
-    (name) => {
-      expect(verdict({ ...OLD, [name]: 'x' }).verdict).toBe('conflict');
-    },
-  );
+  it.each([
+    'NOTICE',
+    'UNLICENSE',
+    'LICENCE.md',
+    'copying',
+    'LICENSE-MIT',
+    'LICENSE_APACHE',
+    'LICENSE.txt',
+    'COPYING.LESSER',
+  ])('a new %s is a licence change', (name) => {
+    expect(verdict({ ...OLD, [name]: 'x' }).verdict).toBe('conflict');
+  });
 });
 
 const file: SourcesFile = {

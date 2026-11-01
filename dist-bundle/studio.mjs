@@ -28507,24 +28507,24 @@ async function capacityHoldsTwice(config2, ports, options = {}) {
 }
 
 // src/credentials.ts
-import { randomBytes as randomBytes3 } from "node:crypto";
+import { randomBytes as randomBytes4 } from "node:crypto";
 import {
   chmodSync as chmodSync2,
-  lstatSync as lstatSync4,
+  lstatSync as lstatSync5,
   mkdirSync as mkdirSync2,
-  readFileSync as readFileSync7,
-  realpathSync as realpathSync2,
+  readFileSync as readFileSync8,
+  realpathSync as realpathSync3,
   renameSync as renameSync4,
   statSync,
   unlinkSync as unlinkSync2,
   writeFileSync as writeFileSync4
 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { dirname as dirname4, isAbsolute as isAbsolute4, sep as sep3 } from "node:path";
+import { dirname as dirname4, isAbsolute as isAbsolute4, sep as sep4 } from "node:path";
 
 // src/limits.ts
-import { closeSync as closeSync2, fstatSync, lstatSync as lstatSync3, openSync as openSync2, readFileSync as readFileSync6, readSync } from "node:fs";
-import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute3, join as join6, resolve as resolve3 } from "node:path";
+import { closeSync as closeSync3, fstatSync as fstatSync2, lstatSync as lstatSync4, openSync as openSync3, readFileSync as readFileSync7, readSync as readSync2 } from "node:fs";
+import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute3, join as join7, resolve as resolve3 } from "node:path";
 
 // src/paths.ts
 import { createHash, randomBytes } from "node:crypto";
@@ -28918,16 +28918,179 @@ function credentialLocations(home, env) {
   return { all: [...CREDENTIAL_PATHS.map((p) => join4(home, p)), ...extra], extra };
 }
 
-// src/state.ts
+// src/report.ts
+var import_yaml4 = __toESM(require_dist(), 1);
 import { randomBytes as randomBytes2 } from "node:crypto";
-import { existsSync as existsSync2, lstatSync as lstatSync2, readFileSync as readFileSync5, renameSync as renameSync3, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join5 } from "node:path";
+import {
+  closeSync as closeSync2,
+  constants as constants2,
+  fstatSync,
+  lstatSync as lstatSync2,
+  openSync as openSync2,
+  readFileSync as readFileSync5,
+  readSync,
+  realpathSync as realpathSync2
+} from "node:fs";
+import { join as join5, sep as sep3 } from "node:path";
+var ReportError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ReportError";
+  }
+};
+var BUILD_TYPES = ["feature", "fix", "chore"];
+var NO_PR_TYPES = ["research"];
+var REVIEWS_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9]\d{0,9}$/;
+var SHA_RE = /^[0-9a-f]{40}$/i;
+var reportSchema = external_exports.object({
+  status: external_exports.enum(["done", "blocked", "failed"]),
+  item: external_exports.string().optional(),
+  pr: external_exports.number().int().positive().nullish(),
+  headSha: external_exports.string().nullish(),
+  testsRun: external_exports.number().int().nonnegative().nullish(),
+  verdict: external_exports.enum(["approve", "changes_requested"]).nullish(),
+  reviews: external_exports.string().regex(REVIEWS_RE).nullish(),
+  // Results per analyzer; a missing source reads `skipped: <reason>`, never a pass.
+  analyzers: external_exports.record(
+    external_exports.string().regex(/^[a-z0-9-]{1,64}$/),
+    external_exports.string().regex(/^(pass|findings|skipped: .{1,300})$/)
+  ).refine((m) => Object.keys(m).length <= 50).nullish(),
+  mutationProbe: external_exports.string().regex(/^(red: .{1,300}|green: .{1,300}|skipped: .{1,300})$/).nullish(),
+  findingAttempts: external_exports.number().int().nonnegative().nullish(),
+  lessons: external_exports.array(external_exports.string()).default([]),
+  questions: external_exports.array(external_exports.string()).default([])
+});
+var camel4 = (key) => key.replace(/_([a-z0-9])/g, (_, c3) => c3.toUpperCase());
+function parseReport(text, item) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+  if (!m) throw new ReportError("report has no YAML frontmatter");
+  const front = m[1].replace(/^(head_sha:[ \t]*)([0-9a-fA-F]{40})[ \t]*$/m, '$1"$2"');
+  let raw;
+  try {
+    raw = (0, import_yaml4.parse)(front);
+  } catch {
+    throw new ReportError("report frontmatter is not valid YAML");
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ReportError("report frontmatter must be a mapping");
+  }
+  const camelized = Object.fromEntries(Object.entries(raw).map(([k, v]) => [camel4(k), v]));
+  const parsed = reportSchema.safeParse(camelized);
+  if (!parsed.success) {
+    throw new ReportError(
+      `invalid report: bad field ${[...new Set(parsed.error.issues.map((i2) => i2.path.map(String).join(".") || "(root)"))].join(", ")}`
+    );
+  }
+  const d = parsed.data;
+  if (item && d.item !== void 0 && d.item !== item.id) {
+    throw new ReportError(`report item does not match ${item.id}`);
+  }
+  if (d.status === "done") {
+    const noPrOk = item !== void 0 && NO_PR_TYPES.includes(item.type) && d.pr == null;
+    if (d.headSha ? !SHA_RE.test(d.headSha) : !noPrOk) {
+      throw new ReportError("done report needs head_sha (40 hex characters)");
+    }
+    if (item?.type === "review" && d.pr != null) {
+      throw new ReportError("a review report names no pr of its own");
+    }
+    if (item?.type === "review" && !d.verdict) {
+      throw new ReportError("done report for a review item needs verdict");
+    }
+    if (item && BUILD_TYPES.includes(item.type) && !(d.testsRun && d.testsRun > 0)) {
+      throw new ReportError(`done report for a ${item.type} item needs tests_run > 0`);
+    }
+  }
+  return {
+    status: d.status,
+    ...d.item !== void 0 && { item: d.item },
+    ...d.pr != null && { pr: d.pr },
+    ...d.headSha != null && { headSha: d.headSha },
+    ...d.testsRun != null && { testsRun: d.testsRun },
+    ...d.verdict != null && { verdict: d.verdict },
+    ...d.reviews != null && { reviews: d.reviews },
+    ...d.analyzers != null && { analyzers: d.analyzers },
+    ...d.mutationProbe != null && { mutationProbe: d.mutationProbe },
+    ...d.findingAttempts != null && { findingAttempts: d.findingAttempts },
+    lessons: d.lessons,
+    questions: d.questions
+  };
+}
+var NAME_FILE = (stateRoot, id) => join5(stateRoot, "briefs", `${id}.report-name`);
+var REPORT_NAME = /^[A-Z]+-\d+\.[0-9a-f]{32}\.md$/;
+function newReportName(stateRoot, id) {
+  const name = `${id}.${randomBytes2(16).toString("hex")}.md`;
+  writeStateFile(stateRoot, NAME_FILE(stateRoot, id), name);
+  return name;
+}
+function reportName(stateRoot, id) {
+  const file2 = NAME_FILE(stateRoot, id);
+  try {
+    assertStatePath(stateRoot, file2);
+    if (!lstatSync2(file2).isFile()) return void 0;
+    const name = readFileSync5(file2, "utf8");
+    return REPORT_NAME.test(name) && name.startsWith(`${id}.`) ? name : void 0;
+  } catch {
+    return void 0;
+  }
+}
+var MAX_REPORT_BYTES = 256 * 1024;
+var UNSAFE = "report file is missing or not a safe regular file";
+function readReportFile(root, file2, notBefore) {
+  const unsafe = () => new ReportError(UNSAFE);
+  let fd;
+  try {
+    const parts = [root, join5(root, ".studio"), join5(root, ".studio", "reports"), file2];
+    parts.forEach((p, i2) => {
+      const st2 = lstatSync2(p);
+      if (st2.isSymbolicLink()) throw unsafe();
+      if (i2 < parts.length - 1 ? !st2.isDirectory() : !st2.isFile()) throw unsafe();
+    });
+    const realRoot = realpathSync2(root);
+    if (!realpathSync2(file2).startsWith(realRoot + sep3)) throw unsafe();
+    fd = openSync2(
+      file2,
+      constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0)
+    );
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw unsafe();
+    if (notBefore !== void 0 && !(st.mtimeMs >= notBefore.getTime())) {
+      throw new ReportError("report is older than the crew run");
+    }
+    const buf = Buffer.alloc(MAX_REPORT_BYTES + 1);
+    let total = 0;
+    while (total < buf.length) {
+      const n2 = readSync(fd, buf, total, buf.length - total, null);
+      if (n2 === 0) break;
+      total += n2;
+    }
+    if (total > MAX_REPORT_BYTES) throw unsafe();
+    return buf.toString("utf8", 0, total);
+  } catch (e) {
+    throw e instanceof ReportError ? e : unsafe();
+  } finally {
+    if (fd !== void 0) closeSync2(fd);
+  }
+}
+function readReport(worktree, id, item, opts = {}) {
+  const file2 = join5(worktree, ".studio", "reports", opts.fileName ?? `${id}.md`);
+  return parseReport(readReportFile(worktree, file2, opts.notBefore), item);
+}
+function checkReportHead(report, prHead) {
+  if ((report.status === "done" || report.headSha !== void 0) && report.headSha?.toLowerCase() !== prHead.toLowerCase()) {
+    throw new ReportError("report head differs from PR head");
+  }
+}
+
+// src/state.ts
+import { randomBytes as randomBytes3 } from "node:crypto";
+import { existsSync as existsSync2, lstatSync as lstatSync3, readFileSync as readFileSync6, renameSync as renameSync3, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join6 } from "node:path";
 var defaultWriteFile = (path10, content) => writeFileSync3(path10, content, { mode: 384, flag: "wx" });
 function writeState(stateRoot, snapshot, deps = {}) {
-  const file2 = join5(stateRoot, "state.json");
+  const file2 = join6(stateRoot, "state.json");
   ensureStateDir(stateRoot, stateRoot);
   assertStatePath(stateRoot, file2);
-  const tmp = `${file2}.${process.pid}.${randomBytes2(6).toString("hex")}.tmp`;
+  const tmp = `${file2}.${process.pid}.${randomBytes3(6).toString("hex")}.tmp`;
   try {
     (deps.writeFile ?? defaultWriteFile)(tmp, `${JSON.stringify(snapshot, null, 2)}
 `);
@@ -28939,7 +29102,7 @@ function writeState(stateRoot, snapshot, deps = {}) {
 }
 function existsNoLink(file2) {
   try {
-    if (lstatSync2(file2).isSymbolicLink()) {
+    if (lstatSync3(file2).isSymbolicLink()) {
       throw new Error(`refusing to read ${file2}: it is a symlink`);
     }
     return true;
@@ -28949,12 +29112,12 @@ function existsNoLink(file2) {
   }
 }
 function readCrewRecords(stateRoot) {
-  const file2 = join5(stateRoot, "crew.json");
+  const file2 = join6(stateRoot, "crew.json");
   assertStatePath(stateRoot, file2);
   if (!existsNoLink(file2)) return {};
   let raw;
   try {
-    raw = JSON.parse(readFileSync5(file2, "utf8"));
+    raw = JSON.parse(readFileSync6(file2, "utf8"));
   } catch {
     throw new Error(`crew file ${file2} is not valid JSON`);
   }
@@ -28964,11 +29127,11 @@ function readCrewRecords(stateRoot) {
   return raw;
 }
 function readMetricEvents(stateRoot) {
-  const file2 = join5(stateRoot, "metrics.jsonl");
+  const file2 = join6(stateRoot, "metrics.jsonl");
   assertStatePath(stateRoot, file2);
   if (!existsSync2(file2) || !existsNoLink(file2)) return [];
   const events = [];
-  for (const line of readFileSync5(file2, "utf8").split("\n")) {
+  for (const line of readFileSync6(file2, "utf8").split("\n")) {
     if (line.trim() === "") continue;
     try {
       events.push(JSON.parse(line));
@@ -29151,20 +29314,20 @@ function parkUntil(resetsAt, now) {
   if (Number.isNaN(t) || t <= now.getTime() || t > now.getTime() + MAX_PARK_MS) return fallback;
   return new Date(t);
 }
-var limitsFile = (ownerRoot) => join6(ownerRoot, "limits.json");
+var limitsFile = (ownerRoot) => join7(ownerRoot, "limits.json");
 function readLimits(ownerRoot) {
   if (ownerFileHeld(ownerRoot, "limits.json")) return { ok: false };
   return readLimitsFile(limitsFile(ownerRoot));
 }
 function readLimitsFile(file2) {
   try {
-    if (!lstatSync3(file2).isFile()) return { ok: false };
+    if (!lstatSync4(file2).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, labels: {} } : { ok: false };
   }
   let raw;
   try {
-    raw = JSON.parse(readFileSync6(file2, "utf8"));
+    raw = JSON.parse(readFileSync7(file2, "utf8"));
   } catch {
     return { ok: false };
   }
@@ -29208,22 +29371,22 @@ function earliestReset(parks) {
 }
 function readRange(file2, pick3) {
   try {
-    if (!lstatSync3(file2).isFile()) return void 0;
-    const fd = openSync2(file2, "r");
+    if (!lstatSync4(file2).isFile()) return void 0;
+    const fd = openSync3(file2, "r");
     try {
-      const { start, length } = pick3(fstatSync(fd).size);
+      const { start, length } = pick3(fstatSync2(fd).size);
       if (length <= 0) return void 0;
       const buf = Buffer.alloc(length);
-      const got = readSync(fd, buf, 0, length, start);
+      const got = readSync2(fd, buf, 0, length, start);
       return { text: buf.toString("utf8", 0, got), start };
     } finally {
-      closeSync2(fd);
+      closeSync3(fd);
     }
   } catch {
     return void 0;
   }
 }
-var logFile = (stateRoot, id) => join6(stateRoot, "logs", `${id}.jsonl`);
+var logFile = (stateRoot, id) => join7(stateRoot, "logs", `${id}.jsonl`);
 function parsedEvent(line) {
   try {
     const ev = JSON.parse(line);
@@ -29277,14 +29440,16 @@ function sessionIdSince(stateRoot, id, from) {
 }
 function hasReport(stateRoot, id) {
   try {
-    return lstatSync3(join6(stateRoot, "clones", id, ".studio", "reports", `${id}.md`)).isFile();
+    const name = reportName(stateRoot, id);
+    if (name === void 0) return false;
+    return lstatSync4(join7(stateRoot, "clones", id, ".studio", "reports", name)).isFile();
   } catch {
     return false;
   }
 }
 function exists(file2) {
   try {
-    lstatSync3(file2);
+    lstatSync4(file2);
     return true;
   } catch {
     return false;
@@ -29302,7 +29467,7 @@ function backToReady(project, id, note, now, by) {
 async function reconcileLimits(o2) {
   const { project, stateRoot, ownerRoot, ports } = o2;
   const result = { stopped: [], errors: [] };
-  const crewFile = join6(stateRoot, "crew.json");
+  const crewFile = join7(stateRoot, "crew.json");
   if (!exists(crewFile) && !exists(limitsFile(ownerRoot))) return result;
   const now = ports.clock.now();
   const unreadable = () => result.errors.push(
@@ -29477,7 +29642,7 @@ function scanLogForBlock(stateRoot, id, from) {
   }
   return retry;
 }
-var blocksFile = (ownerRoot) => join6(ownerRoot, "blocks.json");
+var blocksFile = (ownerRoot) => join7(ownerRoot, "blocks.json");
 var BLOCK_REASON = /^[a-z_]{1,64}$/;
 function parseBlock(raw) {
   if (!isObject2(raw) || Object.keys(raw).length !== 3) return void 0;
@@ -29493,13 +29658,13 @@ function readBlocks(ownerRoot) {
 }
 function readBlocksFile(file2) {
   try {
-    if (!lstatSync3(file2).isFile()) return { ok: false };
+    if (!lstatSync4(file2).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, blocks: [] } : { ok: false };
   }
   let raw;
   try {
-    raw = JSON.parse(readFileSync6(file2, "utf8"));
+    raw = JSON.parse(readFileSync7(file2, "utf8"));
   } catch {
     return { ok: false };
   }
@@ -29542,7 +29707,7 @@ function moveBlockedToReady(project, stateRoot, now, result) {
 var FINISHED = /* @__PURE__ */ new Set(["merged", "dropped"]);
 function logEnd(stateRoot, id) {
   try {
-    const st = lstatSync3(logFile(stateRoot, id));
+    const st = lstatSync4(logFile(stateRoot, id));
     return st.isFile() ? st.size : void 0;
   } catch {
     return void 0;
@@ -29558,9 +29723,9 @@ async function crewProcess(rec, ports) {
 }
 function boardOfRoot(root) {
   try {
-    const file2 = join6(root, "marker.json");
-    if (!lstatSync3(file2).isFile()) return void 0;
-    const marker = JSON.parse(readFileSync6(file2, "utf8"));
+    const file2 = join7(root, "marker.json");
+    if (!lstatSync4(file2).isFile()) return void 0;
+    const marker = JSON.parse(readFileSync7(file2, "utf8"));
     const project = isObject2(marker) ? marker.projectRealpath : void 0;
     if (typeof project !== "string" || !isAbsolute3(project)) return void 0;
     if (stateDirName(project) !== basename2(root)) return void 0;
@@ -29571,7 +29736,7 @@ function boardOfRoot(root) {
 }
 async function stopCrewsOf(o2) {
   const { root, board, other, ownerRoot, ports, lock, at, result } = o2;
-  const crewFile = join6(root, "crew.json");
+  const crewFile = join7(root, "crew.json");
   const where = other ? ` in ${root}` : "";
   const statusOf = (id) => board?.items.find((i2) => i2.id === id)?.status;
   const records = Object.fromEntries(
@@ -29663,7 +29828,7 @@ async function reconcileBlocks(o2) {
   const { project, stateRoot, ownerRoot, ports } = o2;
   const result = { stopped: [], errors: [], lockFailed: false };
   const first = readBlocks(ownerRoot);
-  if (first.ok && first.blocks.length === 0 && !exists(join6(stateRoot, "crew.json"))) return result;
+  if (first.ok && first.blocks.length === 0 && !exists(join7(stateRoot, "crew.json"))) return result;
   const now = ports.clock.now();
   const lock = acquireStateLock(ownerRoot, "blocks.lock", { now, heartbeatStaleMs: LOCK_STALE_MS });
   if (!lock) {
@@ -29689,7 +29854,7 @@ async function reconcileBlocks(o2) {
     const after2 = readBlocks(ownerRoot);
     if (!after2.ok || after2.blocks.length > 0) {
       for (const root of projectStateRoots(dirname3(ownerRoot))) {
-        if (resolve3(root) === resolve3(stateRoot) || !exists(join6(root, "crew.json"))) continue;
+        if (resolve3(root) === resolve3(stateRoot) || !exists(join7(root, "crew.json"))) continue;
         try {
           await stopCrewsOf({ ...phase, root, board: boardOfRoot(root), other: true });
         } catch (e) {
@@ -29730,7 +29895,7 @@ function clearBlocks(ownerRoot, label, now) {
         }
       }
       if (moved) {
-        const crewFile = join6(root, "crew.json");
+        const crewFile = join7(root, "crew.json");
         writeStateFile(root, crewFile, `${JSON.stringify(records, null, 2)}
 `);
       }
@@ -29792,7 +29957,7 @@ function checkCredentialCommand(path10, owner) {
   if (!isAbsolute4(path10)) refuse("must be an absolute path");
   let st;
   try {
-    st = lstatSync4(path10);
+    st = lstatSync5(path10);
   } catch {
     throw new Error(`crew_credential_command ${path10} must be a regular file`);
   }
@@ -29807,14 +29972,14 @@ function checkProviderConfigDir(dir, owner) {
   let ownerReal = "";
   let st;
   try {
-    real = realpathSync2(dir);
-    ownerReal = realpathSync2(ownerConfigDir(owner));
+    real = realpathSync3(dir);
+    ownerReal = realpathSync3(ownerConfigDir(owner));
     st = statSync(real);
   } catch {
     return fail("config dir must be an existing directory");
   }
   if (!st.isDirectory()) return fail("config dir must be an existing directory");
-  if (!real.startsWith(ownerReal + sep3)) {
+  if (!real.startsWith(ownerReal + sep4)) {
     return fail("config dir must lie below the owner config dir");
   }
   if (st.uid !== uidOf(owner)) return fail("config dir must be owned by the current user");
@@ -29824,7 +29989,7 @@ function readSettings(file2) {
   let text;
   try {
     if (!statSync(file2).isFile()) return { problem: `${file2} is not a regular file` };
-    text = readFileSync7(file2, "utf8");
+    text = readFileSync8(file2, "utf8");
   } catch (e) {
     return e.code === "ENOENT" ? {} : { problem: `${file2} cannot be read` };
   }
@@ -29858,7 +30023,7 @@ function readCrewTokenFile(owner) {
   const file2 = crewTokenFile(owner);
   let st;
   try {
-    st = lstatSync4(file2);
+    st = lstatSync5(file2);
   } catch (e) {
     if (e.code === "ENOENT") return { kind: "absent" };
     return { kind: "bad", why: `${file2} cannot be read` };
@@ -29870,7 +30035,7 @@ function readCrewTokenFile(owner) {
   }
   let token;
   try {
-    token = readFileSync7(file2, "utf8").trim();
+    token = readFileSync8(file2, "utf8").trim();
   } catch {
     return { kind: "bad", why: `${file2} cannot be read` };
   }
@@ -29882,7 +30047,7 @@ function installCrewToken(token, owner) {
   const parent = dirname4(file2);
   mkdirSync2(dirname4(parent), { recursive: true, mode: 448 });
   try {
-    if (lstatSync4(parent).isSymbolicLink()) {
+    if (lstatSync5(parent).isSymbolicLink()) {
       throw new Error(`refusing to use ${parent}: it is a symlink`);
     }
   } catch (e) {
@@ -29890,7 +30055,7 @@ function installCrewToken(token, owner) {
     mkdirSync2(parent, { mode: 448 });
   }
   chmodSync2(parent, 448);
-  const tmp = `${file2}.${process.pid}.${randomBytes3(4).toString("hex")}.tmp`;
+  const tmp = `${file2}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
   try {
     writeFileSync4(tmp, `${token}
 `, { flag: "wx", mode: 384 });
@@ -29962,24 +30127,24 @@ async function parksHold(parks, ownerConfig, ports, owner) {
 import {
   chmodSync as chmodSync3,
   existsSync as existsSync3,
-  lstatSync as lstatSync13,
+  lstatSync as lstatSync14,
   readdirSync as readdirSync4,
-  readFileSync as readFileSync15,
-  realpathSync as realpathSync3,
+  readFileSync as readFileSync16,
+  realpathSync as realpathSync4,
   unlinkSync as unlinkSync3,
   writeFileSync as writeFileSync6
 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { basename as basename4, dirname as dirname8, join as join15, resolve as resolve4, sep as sep4 } from "node:path";
+import { basename as basename4, dirname as dirname8, join as join16, resolve as resolve4, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/brief-caps.ts
-import { lstatSync as lstatSync7, readFileSync as readFileSync10 } from "node:fs";
-import { join as join9 } from "node:path";
+import { lstatSync as lstatSync8, readFileSync as readFileSync11 } from "node:fs";
+import { join as join10 } from "node:path";
 
 // src/review.ts
-import { lstatSync as lstatSync5, readFileSync as readFileSync8 } from "node:fs";
-import { join as join7 } from "node:path";
+import { lstatSync as lstatSync6, readFileSync as readFileSync9 } from "node:fs";
+import { join as join8 } from "node:path";
 var MAX_FIX_ATTEMPTS = 3;
 var MAX_REVIEW_ROUNDS = 6;
 var SMALL_MAX_LINES = 400;
@@ -30051,7 +30216,7 @@ function renderReviewRoutine(r) {
       `Load the pull request first, staying on your branch: \`git fetch origin pull/${r.pr}/head\`, then \`git reset --hard FETCH_HEAD\`. The diff is \`git diff origin/main...HEAD\`; save it to an untracked file in the checkout.`,
       ""
     ],
-    `Run each analyzer below as one read-only subagent with the model named there; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,
+    `Run each analyzer below as one subagent with the model named there, read-only except for the spec check's probe; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,
     "",
     ...r.analyzers.map(
       (a2) => `- ${a2.id} (model: ${MODEL_ALIAS[a2.model ?? "standard"]}): \`${a2.path}\``
@@ -30074,13 +30239,13 @@ var crewCapsSchema = external_exports.strictObject({
   /** Ids launch could not provide, for the lead: they never count as a pass. */
   skipped: external_exports.array(external_exports.string()).optional()
 });
-var capsFile = (stateRoot, id) => join7(stateRoot, "briefs", `${id}.caps.json`);
+var capsFile = (stateRoot, id) => join8(stateRoot, "briefs", `${id}.caps.json`);
 function readCrewCaps(stateRoot, id) {
   const file2 = capsFile(stateRoot, id);
   try {
     assertStatePath(stateRoot, file2);
-    if (!lstatSync5(file2).isFile()) return void 0;
-    const parsed = crewCapsSchema.safeParse(JSON.parse(readFileSync8(file2, "utf8")));
+    if (!lstatSync6(file2).isFile()) return void 0;
+    const parsed = crewCapsSchema.safeParse(JSON.parse(readFileSync9(file2, "utf8")));
     return parsed.success ? parsed.data : void 0;
   } catch {
     return void 0;
@@ -30121,10 +30286,10 @@ function checkReviewCaps(caps, report) {
 }
 
 // src/sources.ts
-var import_yaml4 = __toESM(require_dist(), 1);
+var import_yaml5 = __toESM(require_dist(), 1);
 import { createHash as createHash2 } from "node:crypto";
-import { lstatSync as lstatSync6, readdirSync as readdirSync2, readFileSync as readFileSync9, renameSync as renameSync5 } from "node:fs";
-import { join as join8 } from "node:path";
+import { lstatSync as lstatSync7, readdirSync as readdirSync2, readFileSync as readFileSync10, renameSync as renameSync5 } from "node:fs";
+import { join as join9 } from "node:path";
 var VENDORABLE = ["MIT", "Apache-2.0"];
 var safeRelative = (p) => p.length > 0 && !p.startsWith("/") && !p.includes("\\") && !p.split("/").some((seg) => seg === ".." || seg === "" || seg === ".") && !new RegExp("\\p{Cc}", "u").test(p);
 var sourceSchema = external_exports.strictObject({
@@ -30161,10 +30326,10 @@ var SourcesError = class extends Error {
   }
 };
 function loadSources(dir = capabilitiesDir()) {
-  const file2 = join8(dir, "SOURCES.yaml");
+  const file2 = join9(dir, "SOURCES.yaml");
   let raw;
   try {
-    raw = (0, import_yaml4.parse)(readFileSync9(file2, "utf8"));
+    raw = (0, import_yaml5.parse)(readFileSync10(file2, "utf8"));
   } catch (e) {
     throw new SourcesError(`${file2}: cannot read (${e.message.split("\n")[0]})`);
   }
@@ -30180,26 +30345,28 @@ function loadSources(dir = capabilitiesDir()) {
   }
   return parsed.data;
 }
-var LICENSE_NAME = /^(?:un)?licen[cs]e(?:\.[a-z]+)?$|^copying(?:\.[a-z]+)?$|^notice(?:\.[a-z]+)?$/i;
+var LICENSE_NAME = /^(?:(?:un)?licen[cs]e|copying|notice)(?:[-_.][a-z0-9._-]*)?$/i;
+var SCRIPT_NAME = /\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|rb|pl|ps1)$/i;
+var isLicenseName = (name) => LICENSE_NAME.test(name) && !SCRIPT_NAME.test(name);
 var clean = (text) => text.replace(/[\p{Cc}\p{Cf}]/gu, " ").slice(0, 300);
 function hashOf(dir, rel) {
   try {
     let at = dir;
     const segments = rel.split("/");
     for (const [i2, seg] of segments.entries()) {
-      at = join8(at, seg);
-      const st = lstatSync6(at);
+      at = join9(at, seg);
+      const st = lstatSync7(at);
       if (st.isSymbolicLink()) return void 0;
       if (i2 < segments.length - 1 ? !st.isDirectory() : !st.isFile()) return void 0;
     }
-    return createHash2("sha256").update(readFileSync9(at)).digest("hex");
+    return createHash2("sha256").update(readFileSync10(at)).digest("hex");
   } catch {
     return void 0;
   }
 }
 function licenseFiles(dir) {
   try {
-    return readdirSync2(dir).filter((n2) => LICENSE_NAME.test(n2));
+    return readdirSync2(dir).filter((n2) => isLicenseName(n2));
   } catch {
     return [];
   }
@@ -30216,8 +30383,8 @@ function compareToPin(pin, dir, source) {
   const conflict = [];
   const unclear = [];
   const licenses = new Set(licenseFiles(dir));
-  for (const name of Object.keys(pin)) if (LICENSE_NAME.test(name)) licenses.add(name);
-  for (const rel of source.reads) if (LICENSE_NAME.test(rel)) licenses.add(rel);
+  for (const name of Object.keys(pin)) if (isLicenseName(name)) licenses.add(name);
+  for (const rel of source.reads) if (isLicenseName(rel)) licenses.add(rel);
   for (const name of licenses) {
     const now = hashOf(dir, name);
     if (now === void 0) {
@@ -30237,8 +30404,8 @@ function compareToPin(pin, dir, source) {
   const verdict = conflict.length > 0 ? "conflict" : unclear.length > 0 ? "unclear" : "fits";
   return { verdict, findings };
 }
-var sourcesDir = (ownerRoot) => join8(ownerRoot, "sources");
-var lockPath = (ownerRoot) => join8(sourcesDir(ownerRoot), "lock.json");
+var sourcesDir = (ownerRoot) => join9(ownerRoot, "sources");
+var lockPath = (ownerRoot) => join9(sourcesDir(ownerRoot), "lock.json");
 var lockSchema = external_exports.record(
   external_exports.string(),
   external_exports.object({
@@ -30250,7 +30417,7 @@ var lockSchema = external_exports.record(
 );
 function readLock(ownerRoot) {
   try {
-    const parsed = lockSchema.safeParse(JSON.parse(readFileSync9(lockPath(ownerRoot), "utf8")));
+    const parsed = lockSchema.safeParse(JSON.parse(readFileSync10(lockPath(ownerRoot), "utf8")));
     return parsed.success ? parsed.data : void 0;
   } catch {
     return void 0;
@@ -30260,7 +30427,7 @@ var writeLock = (ownerRoot, lock) => writeStateFile(ownerRoot, lockPath(ownerRoo
 `);
 var exists2 = (p) => {
   try {
-    lstatSync6(p);
+    lstatSync7(p);
     return true;
   } catch {
     return false;
@@ -30269,12 +30436,12 @@ var exists2 = (p) => {
 function pinProblem(ownerRoot, id, rel) {
   const want = readLock(ownerRoot)?.[id]?.hashes?.[rel];
   if (want === void 0) return "it has no recorded hash";
-  return hashOf(join8(sourcesDir(ownerRoot), id), rel) === want ? void 0 : "differs from its pin";
+  return hashOf(join9(sourcesDir(ownerRoot), id), rel) === want ? void 0 : "differs from its pin";
 }
 var FULL_SHA = /^[0-9a-f]{40,64}$/;
 async function fetchTo(ports, ownerRoot, source, name) {
   const base = sourcesDir(ownerRoot);
-  const dest = join8(base, name);
+  const dest = join9(base, name);
   removeStateEntry(ownerRoot, dest);
   try {
     await ports.git.run(base, [
@@ -30313,7 +30480,7 @@ async function setupSources(o2) {
   const list2 = pick2(o2.index, o2.only);
   ensureStateDir(o2.ownerRoot, sourcesDir(o2.ownerRoot));
   for (const source of list2) {
-    const dir = join8(sourcesDir(o2.ownerRoot), source.id);
+    const dir = join9(sourcesDir(o2.ownerRoot), source.id);
     if (exists2(dir)) {
       out.push({ id: source.id, result: "present" });
       continue;
@@ -30323,7 +30490,7 @@ async function setupSources(o2) {
       if (lock === void 0) throw new Error("the lock cannot be read");
       const fetching = `${source.id}.fetching`;
       const commit = await fetchTo(o2.ports, o2.ownerRoot, source, fetching);
-      renameSync5(join8(sourcesDir(o2.ownerRoot), fetching), dir);
+      renameSync5(join9(sourcesDir(o2.ownerRoot), fetching), dir);
       lock[source.id] = {
         commit,
         license: source.license,
@@ -30349,7 +30516,7 @@ async function checkSources(o2) {
   const list2 = pick2(o2.index, void 0);
   const lock = readLock(o2.ownerRoot);
   for (const source of list2) {
-    const active = join8(sourcesDir(o2.ownerRoot), source.id);
+    const active = join9(sourcesDir(o2.ownerRoot), source.id);
     if (!exists2(active)) {
       out.push(held(source.id, "not-fetched", "run studio setup sources"));
       continue;
@@ -30382,7 +30549,7 @@ async function checkSources(o2) {
     }
     try {
       const candidate = await fetchTo(o2.ports, o2.ownerRoot, source, `${source.id}.candidate`);
-      const candidateDir = join8(sourcesDir(o2.ownerRoot), `${source.id}.candidate`);
+      const candidateDir = join9(sourcesDir(o2.ownerRoot), `${source.id}.candidate`);
       out.push({ id: source.id, ...compareToPin(hashes, candidateDir, source), pinned, candidate });
     } catch {
       out.push(held(source.id, "fetch-failed", "the candidate could not be fetched", pinned));
@@ -30394,8 +30561,8 @@ async function applySource(o2) {
   const source = pick2(o2.index, [o2.id])[0];
   if (source === void 0) throw new SourcesError(`unknown source ${clean(o2.id)}`);
   const base = sourcesDir(o2.ownerRoot);
-  const active = join8(base, source.id);
-  const candidate = join8(base, `${source.id}.candidate`);
+  const active = join9(base, source.id);
+  const candidate = join9(base, `${source.id}.candidate`);
   if (!exists2(active) || !exists2(candidate)) {
     return { id: source.id, applied: false, reason: "no candidate: run studio sources check" };
   }
@@ -30408,7 +30575,7 @@ async function applySource(o2) {
   if (r.verdict !== "fits") return { id: source.id, applied: false, reason: `held: ${r.verdict}` };
   const commit = (await o2.ports.git.run(candidate, ["rev-parse", "HEAD"])).trim();
   if (!FULL_SHA.test(commit)) return { id: source.id, applied: false, reason: "no commit" };
-  const old = join8(base, `${source.id}.old`);
+  const old = join9(base, `${source.id}.old`);
   removeStateEntry(o2.ownerRoot, old);
   renameSync5(active, old);
   try {
@@ -30462,6 +30629,9 @@ async function resolveForItem(o2) {
   if (target === void 0 && item.type === "review") {
     throw new Error(`${item.id} names no pull request: add the note review <owner/repo>#<n>`);
   }
+  if (target !== void 0 && target.repo !== item.repo) {
+    throw new Error(`${item.id}: the pull request is in ${target.repo}, the item in ${item.repo}`);
+  }
   const facts = target === void 0 ? void 0 : await readPrFacts(o2.ports, target);
   const paths = facts?.complete ? [...facts.files, ...declared] : "unknown";
   const name = target === void 0 ? void 0 : `${target.repo}#${target.pr}`;
@@ -30483,8 +30653,6 @@ async function resolveForItem(o2) {
     triggers: triggers2,
     tier
   });
-  const docsOnly = facts?.complete === true && facts.files.length > 0 && facts.files.every((f) => f.toLowerCase().endsWith(".md"));
-  if (docsOnly) resolved.analyzers = resolved.analyzers.filter((a2) => a2.id !== "spec-check");
   return {
     resolved,
     review: {
@@ -30500,11 +30668,11 @@ function readBelow(root, rel) {
   try {
     let at = root;
     const segments = rel.split("/");
-    if (lstatSync7(at).isSymbolicLink()) return { why: "it is reached through a link" };
+    if (lstatSync8(at).isSymbolicLink()) return { why: "it is reached through a link" };
     for (const [i2, seg] of segments.entries()) {
       if (seg === ".." || seg === "" || seg === ".") return { why: "it leaves the source" };
-      at = join9(at, seg);
-      const st = lstatSync7(at);
+      at = join10(at, seg);
+      const st = lstatSync8(at);
       if (st.isSymbolicLink()) return { why: "it is reached through a link" };
       if (i2 < segments.length - 1 ? !st.isDirectory() : !st.isFile()) {
         return { why: "it is not a regular file" };
@@ -30513,7 +30681,7 @@ function readBelow(root, rel) {
         return { why: "it is larger than 256 KiB" };
       }
     }
-    return { text: readFileSync10(at, "utf8") };
+    return { text: readFileSync11(at, "utf8") };
   } catch {
     return { why: "it cannot be read" };
   }
@@ -30541,12 +30709,12 @@ function writeCaps(o2) {
   const { stateRoot, id, forItem } = o2;
   const { resolved, review } = forItem;
   const shipped = o2.dir ?? capabilitiesDir();
-  const capsDir = join9(stateRoot, "briefs", `${id}.caps`);
+  const capsDir = join10(stateRoot, "briefs", `${id}.caps`);
   removeStateEntry(stateRoot, capsDir);
   removeStateEntry(stateRoot, capsFile(stateRoot, id));
   const skipped = [];
   const copy = (rel, text) => {
-    const file2 = join9(capsDir, ...rel.split("/"));
+    const file2 = join10(capsDir, ...rel.split("/"));
     writeStateFile(stateRoot, file2, text);
     return file2;
   };
@@ -30554,7 +30722,7 @@ function writeCaps(o2) {
     const entry = loadSources(shipped).sources.find((s) => s.id === source);
     return entry?.reads.filter((r) => r !== "LICENSE");
   };
-  const sourceRoot = (source) => join9(o2.ownerRoot, "sources", source);
+  const sourceRoot = (source) => join10(o2.ownerRoot, "sources", source);
   const knowledge = [];
   for (const k of resolved.knowledge) {
     const colon = k.ref.indexOf(":");
@@ -30572,7 +30740,7 @@ function writeCaps(o2) {
       const source = rest.slice(0, rest.indexOf("/"));
       const rel = rest.slice(source.length + 1);
       try {
-        lstatSync7(sourceRoot(source));
+        lstatSync8(sourceRoot(source));
       } catch {
         skipped.push({ id: k.rowId, reason: `source ${source} not fetched` });
         continue;
@@ -30586,7 +30754,7 @@ function writeCaps(o2) {
       knowledge.push({ ref: k.ref, where: copy(`sources/${source}/${rel}`, got2.text) });
       continue;
     }
-    const got = readBelow(join9(shipped, kind), rest);
+    const got = readBelow(join10(shipped, kind), rest);
     if ("why" in got) {
       skipped.push({ id: k.rowId, reason: `shipped file: ${got.why}` });
       continue;
@@ -30595,7 +30763,7 @@ function writeCaps(o2) {
   }
   const analyzers = [];
   const copyAnalyzer = (a2) => {
-    const got = readBelow(join9(shipped, "analyzers"), `${a2.id}.md`);
+    const got = readBelow(join10(shipped, "analyzers"), `${a2.id}.md`);
     if ("why" in got) {
       if (MANDATORY.includes(a2.id)) {
         throw new Error(`analyzer ${a2.id} is missing from the plugin; refusing to launch`);
@@ -30608,7 +30776,7 @@ function writeCaps(o2) {
       const texts = [];
       for (const rel of reads) {
         try {
-          lstatSync7(sourceRoot(a2.source));
+          lstatSync8(sourceRoot(a2.source));
         } catch {
           skipped.push({ id: a2.id, reason: `source ${a2.source} not fetched` });
           return false;
@@ -30641,7 +30809,7 @@ function writeCaps(o2) {
   }
   let reviewOut;
   if (review !== void 0) {
-    const contract = readBelow(join9(shipped, "analyzers"), "CONTRACT.md");
+    const contract = readBelow(join10(shipped, "analyzers"), "CONTRACT.md");
     if ("why" in contract) throw new Error("the analyzer contract is missing from the plugin");
     reviewOut = {
       tier: review.tier,
@@ -30690,12 +30858,12 @@ var GH_VALUE_FLAGS = ["-R", "--repo", "--hostname"];
 var GH_RUN_VALUE_FLAGS = ["--ref", "-r", "-f", "--raw-field", "-F", "--field", ...GH_VALUE_FLAGS];
 
 // src/owner-state.ts
-import { lstatSync as lstatSync9, renameSync as renameSync6 } from "node:fs";
-import { basename as basename3, dirname as dirname6, join as join11 } from "node:path";
+import { lstatSync as lstatSync10, renameSync as renameSync6 } from "node:fs";
+import { basename as basename3, dirname as dirname6, join as join12 } from "node:path";
 
 // src/usage.ts
-import { lstatSync as lstatSync8, readFileSync as readFileSync11 } from "node:fs";
-import { dirname as dirname5, join as join10 } from "node:path";
+import { lstatSync as lstatSync9, readFileSync as readFileSync12 } from "node:fs";
+import { dirname as dirname5, join as join11 } from "node:path";
 var LAUNCH_LOCK = "launch.lock";
 var LAUNCH_LOCK_STALE_MS = 10 * 6e4;
 var USAGE_DAYS_KEPT = 8;
@@ -30718,20 +30886,20 @@ function dayKey(now, timezone) {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 var isObject3 = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
-var usageFile = (ownerRoot) => join10(ownerRoot, "usage.json");
+var usageFile = (ownerRoot) => join11(ownerRoot, "usage.json");
 function readUsage(ownerRoot) {
   if (ownerFileHeld(ownerRoot, "usage.json")) return { ok: false };
   return readUsageFile(usageFile(ownerRoot));
 }
 function readUsageFile(file2) {
   try {
-    if (!lstatSync8(file2).isFile()) return { ok: false };
+    if (!lstatSync9(file2).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, days: {} } : { ok: false };
   }
   let raw;
   try {
-    raw = JSON.parse(readFileSync11(file2, "utf8"));
+    raw = JSON.parse(readFileSync12(file2, "utf8"));
   } catch {
     return { ok: false };
   }
@@ -30859,7 +31027,7 @@ var LOCK_STALE_MS2 = 5 * 6e4;
 function mergeBlocks(ownerRoot, legacy) {
   const old = readBlocksFile(legacy);
   if (!old.ok) return "legacy-unreadable";
-  const own2 = readBlocksFile(join11(ownerRoot, "blocks.json"));
+  const own2 = readBlocksFile(join12(ownerRoot, "blocks.json"));
   if (!own2.ok) return "owner-unreadable";
   const merged = own2.blocks.map((b) => ({ ...b }));
   for (const block of old.blocks) {
@@ -30874,7 +31042,7 @@ var parkEnd = (until) => until === void 0 ? Number.NEGATIVE_INFINITY : Date.pars
 function mergeLimits(ownerRoot, legacy) {
   const old = readLimitsFile(legacy);
   if (!old.ok) return "legacy-unreadable";
-  const own2 = readLimitsFile(join11(ownerRoot, "limits.json"));
+  const own2 = readLimitsFile(join12(ownerRoot, "limits.json"));
   if (!own2.ok) return "owner-unreadable";
   const merged = { ...own2.labels };
   for (const [label, park] of Object.entries(old.labels)) {
@@ -30887,7 +31055,7 @@ function mergeLimits(ownerRoot, legacy) {
 function mergeUsage(ownerRoot, legacy) {
   const old = readUsageFile(legacy);
   if (!old.ok) return "legacy-unreadable";
-  const own2 = readUsageFile(join11(ownerRoot, "usage.json"));
+  const own2 = readUsageFile(join12(ownerRoot, "usage.json"));
   if (!own2.ok) return "owner-unreadable";
   const merged = own2.days;
   for (const [day, labels] of Object.entries(old.days)) {
@@ -30905,10 +31073,10 @@ var FILES = [
   { name: "limits.json", lock: "limits.lock", staleMs: LOCK_STALE_MS2, merge: mergeLimits },
   { name: "usage.json", lock: LAUNCH_LOCK, staleMs: LAUNCH_LOCK_STALE_MS, merge: mergeUsage }
 ];
-var present = (file2) => lstatSync9(file2, { throwIfNoEntry: false }) !== void 0;
+var present = (file2) => lstatSync10(file2, { throwIfNoEntry: false }) !== void 0;
 function pendingLegacyState(stateBase) {
   return projectStateRoots(stateBase).flatMap(
-    (root) => FILES.map((f) => join11(root, f.name)).filter(present)
+    (root) => FILES.map((f) => join12(root, f.name)).filter(present)
   );
 }
 function freeName(file2) {
@@ -30917,10 +31085,10 @@ function freeName(file2) {
   return candidate;
 }
 function keepUnreadable(ownerRoot, root, name) {
-  const legacy = join11(root, name);
-  const kept = freeName(join11(ownerRoot, `${name}.legacy-${basename3(root)}`));
+  const legacy = join12(root, name);
+  const kept = freeName(join12(ownerRoot, `${name}.legacy-${basename3(root)}`));
   ensureStateDir(ownerRoot, ownerRoot);
-  if (lstatSync9(legacy).isSymbolicLink()) {
+  if (lstatSync10(legacy).isSymbolicLink()) {
     const note = `${name} in the project state root ${basename3(root)} was a symlink; it was not followed
 `;
     writeStateFile(ownerRoot, kept, note);
@@ -30930,7 +31098,7 @@ function keepUnreadable(ownerRoot, root, name) {
   }
 }
 function migrateFile(ownerRoot, roots, file2, now, problems) {
-  const here = roots.filter((root) => present(join11(root, file2.name)));
+  const here = roots.filter((root) => present(join12(root, file2.name)));
   if (here.length === 0) return;
   const lock = acquireStateLock(ownerRoot, file2.lock, { now, heartbeatStaleMs: file2.staleMs });
   if (!lock) {
@@ -30939,14 +31107,14 @@ function migrateFile(ownerRoot, roots, file2, now, problems) {
   }
   try {
     for (const root of here) {
-      const legacy = join11(root, file2.name);
-      const link = lstatSync9(legacy).isSymbolicLink();
+      const legacy = join12(root, file2.name);
+      const link = lstatSync10(legacy).isSymbolicLink();
       const merged = link ? "legacy-unreadable" : file2.merge(ownerRoot, legacy);
       if (merged === "merged") removeStateEntry(root, legacy);
       else if (merged === "legacy-unreadable") keepUnreadable(ownerRoot, root, file2.name);
       else {
         problems.push(
-          `${join11(ownerRoot, file2.name)} is unreadable, so ${legacy} was not merged: inspect or remove the owner file`
+          `${join12(ownerRoot, file2.name)} is unreadable, so ${legacy} was not merged: inspect or remove the owner file`
         );
       }
     }
@@ -30975,7 +31143,7 @@ function migrateOwnerState(ownerRoot, now) {
     }
     for (const entry of legacyEntries(ownerRoot)) {
       problems.push(
-        `${join11(ownerRoot, entry)} is an old state file Studio could not read: no crew starts until the owner inspects and removes it`
+        `${join12(ownerRoot, entry)} is an old state file Studio could not read: no crew starts until the owner inspects and removes it`
       );
     }
   } catch (e) {
@@ -30985,17 +31153,17 @@ function migrateOwnerState(ownerRoot, now) {
 }
 
 // src/pause.ts
-import { lstatSync as lstatSync10, readFileSync as readFileSync12 } from "node:fs";
-import { join as join12 } from "node:path";
+import { lstatSync as lstatSync11, readFileSync as readFileSync13 } from "node:fs";
+import { join as join13 } from "node:path";
 var PAUSE_FILE = "pause.json";
 var PAUSED_LINE = "paused: no crew starts and nothing is merged until the owner runs studio resume";
 function readPause(root) {
-  const file2 = join12(root, PAUSE_FILE);
+  const file2 = join13(root, PAUSE_FILE);
   try {
-    const st = lstatSync10(file2, { throwIfNoEntry: false });
+    const st = lstatSync11(file2, { throwIfNoEntry: false });
     if (st === void 0) return { paused: false };
     if (!st.isFile()) return { paused: true };
-    const raw = JSON.parse(readFileSync12(file2, "utf8"));
+    const raw = JSON.parse(readFileSync13(file2, "utf8"));
     const at = raw?.at;
     return typeof at === "string" && !Number.isNaN(Date.parse(at)) ? { paused: true, at } : { paused: true };
   } catch {
@@ -31003,17 +31171,17 @@ function readPause(root) {
   }
 }
 function setPause(root, now) {
-  writeStateFile(root, join12(root, PAUSE_FILE), `${JSON.stringify({ at: now.toISOString() })}
+  writeStateFile(root, join13(root, PAUSE_FILE), `${JSON.stringify({ at: now.toISOString() })}
 `);
 }
 function clearPause(root) {
-  removeStateEntry(root, join12(root, PAUSE_FILE));
+  removeStateEntry(root, join13(root, PAUSE_FILE));
 }
 
 // src/role-memory.ts
-import { randomBytes as randomBytes4 } from "node:crypto";
-import { lstatSync as lstatSync11, mkdirSync as mkdirSync3, readFileSync as readFileSync13, renameSync as renameSync7, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "node:fs";
-import { dirname as dirname7, join as join13 } from "node:path";
+import { randomBytes as randomBytes5 } from "node:crypto";
+import { lstatSync as lstatSync12, mkdirSync as mkdirSync3, readFileSync as readFileSync14, renameSync as renameSync7, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "node:fs";
+import { dirname as dirname7, join as join14 } from "node:path";
 var MAX_LESSON_LINES = 40;
 var MAX_LESSON_CHARS = 300;
 var MAX_PENDING = 200;
@@ -31035,13 +31203,13 @@ var fileSchema = external_exports.object({
   next: external_exports.number().int().positive(),
   lessons: external_exports.array(proposalSchema)
 });
-var lessonsFile = (stateRoot) => join13(stateRoot, "lessons.json");
+var lessonsFile = (stateRoot) => join14(stateRoot, "lessons.json");
 function readFile(stateRoot) {
   const file2 = lessonsFile(stateRoot);
   assertStatePath(stateRoot, file2);
   let text;
   try {
-    text = readFileSync13(file2, "utf8");
+    text = readFileSync14(file2, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return { next: 1, lessons: [] };
     throw new Error("lessons.json cannot be read");
@@ -31086,12 +31254,12 @@ function roleFile(projectDir, role) {
   let at = projectDir;
   const segments = [".studio", "roles", `${role}.md`];
   for (const [i2, seg] of segments.entries()) {
-    at = join13(at, seg);
+    at = join14(at, seg);
     let st;
     try {
-      st = lstatSync11(at);
+      st = lstatSync12(at);
     } catch (e) {
-      if (e.code === "ENOENT") return join13(projectDir, ...segments);
+      if (e.code === "ENOENT") return join14(projectDir, ...segments);
       throw new Error(`the role file cannot be reached (${e.code})`);
     }
     if (st.isSymbolicLink()) throw new Error(`${at} is a link; refusing`);
@@ -31104,7 +31272,7 @@ function roleFile(projectDir, role) {
 function readRole(projectDir, role) {
   const file2 = roleFile(projectDir, role);
   try {
-    return readFileSync13(file2, "utf8");
+    return readFileSync14(file2, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return "";
     throw e;
@@ -31114,7 +31282,7 @@ function writeRole(projectDir, role, text) {
   const file2 = roleFile(projectDir, role);
   mkdirSync3(dirname7(file2), { recursive: true });
   roleFile(projectDir, role);
-  const tmp = `${file2}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
+  const tmp = `${file2}.${process.pid}.${randomBytes5(4).toString("hex")}.tmp`;
   try {
     writeFileSync5(tmp, text, { flag: "wx" });
     renameSync7(tmp, file2);
@@ -31188,8 +31356,8 @@ function readRoleMemory(projectDir, role) {
 }
 
 // src/solutions.ts
-import { lstatSync as lstatSync12, readdirSync as readdirSync3, readFileSync as readFileSync14 } from "node:fs";
-import { join as join14 } from "node:path";
+import { lstatSync as lstatSync13, readdirSync as readdirSync3, readFileSync as readFileSync15 } from "node:fs";
+import { join as join15 } from "node:path";
 var MAX_FILE_BYTES = 64 * 1024;
 var MAX_FILES = 1e3;
 var MIN_WORD = 3;
@@ -31201,7 +31369,7 @@ var wordsOf = (text) => [
 ];
 var isReal = (path10, test) => {
   try {
-    const st = lstatSync12(path10);
+    const st = lstatSync13(path10);
     return test === "dir" ? st.isDirectory() : st.isFile() && st.size <= MAX_FILE_BYTES;
   } catch {
     return false;
@@ -31209,15 +31377,15 @@ var isReal = (path10, test) => {
 };
 function searchSolutions(projectDir, query, limit = 5) {
   const words = wordsOf(query);
-  const studio = join14(projectDir, ".studio");
-  const dir = join14(studio, "solutions");
+  const studio = join15(projectDir, ".studio");
+  const dir = join15(studio, "solutions");
   if (words.length === 0 || !isReal(studio, "dir") || !isReal(dir, "dir")) return [];
   const hits = [];
   for (const name of readdirSync3(dir).sort().slice(0, MAX_FILES)) {
-    if (!SAFE_NAME.test(name) || !isReal(join14(dir, name), "file")) continue;
+    if (!SAFE_NAME.test(name) || !isReal(join15(dir, name), "file")) continue;
     let text;
     try {
-      text = readFileSync14(join14(dir, name), "utf8");
+      text = readFileSync15(join15(dir, name), "utf8");
     } catch {
       continue;
     }
@@ -31258,7 +31426,7 @@ function githubHttpsUrl(repo) {
 }
 function cloneBranch(path10) {
   try {
-    const head = readFileSync15(join15(path10, ".git", "HEAD"), "utf8").trim();
+    const head = readFileSync16(join16(path10, ".git", "HEAD"), "utf8").trim();
     return /^ref: refs\/heads\/(.+)$/.exec(head)?.[1];
   } catch {
     return void 0;
@@ -31266,8 +31434,8 @@ function cloneBranch(path10) {
 }
 async function prepareCheckout(stateRoot, projectDir, item, ports) {
   assertItemId(item.id);
-  const clones = ensureStateDir(stateRoot, join15(stateRoot, "clones"));
-  const path10 = join15(clones, item.id);
+  const clones = ensureStateDir(stateRoot, join16(stateRoot, "clones"));
+  const path10 = join16(clones, item.id);
   const branch = `studio/${item.id}`;
   const crewOrigin = githubHttpsUrl(item.repo);
   assertStatePath(stateRoot, path10);
@@ -31293,11 +31461,11 @@ function removeOldReport(stateRoot, clone2, id) {
   assertItemId(id);
   let cur = clone2;
   for (const seg of [".studio", "reports", `${id}.md`]) {
-    cur = join15(cur, seg);
+    cur = join16(cur, seg);
     assertStatePath(stateRoot, cur);
     let st;
     try {
-      st = lstatSync13(cur);
+      st = lstatSync14(cur);
     } catch {
       return;
     }
@@ -31314,7 +31482,7 @@ function removeOldReport(stateRoot, clone2, id) {
 }
 function existsNoFollow(p) {
   try {
-    lstatSync13(p);
+    lstatSync14(p);
     return true;
   } catch {
     return false;
@@ -31322,31 +31490,31 @@ function existsNoFollow(p) {
 }
 function fileSize(p) {
   try {
-    return lstatSync13(p).size;
+    return lstatSync14(p).size;
   } catch {
     return 0;
   }
 }
 function isLink2(p) {
   try {
-    return lstatSync13(p).isSymbolicLink();
+    return lstatSync14(p).isSymbolicLink();
   } catch {
     return false;
   }
 }
 function writeHomeFile(homeDir, name, content) {
-  const target = join15(homeDir, name);
-  const realHome = realpathSync3(homeDir);
-  const parent = realpathSync3(dirname8(target));
-  if (parent !== realHome && !parent.startsWith(realHome + sep4)) {
+  const target = join16(homeDir, name);
+  const realHome = realpathSync4(homeDir);
+  const parent = realpathSync4(dirname8(target));
+  if (parent !== realHome && !parent.startsWith(realHome + sep5)) {
     throw new Error(`refusing to write outside the crew home: ${target}`);
   }
-  writeFileSync6(join15(parent, basename4(target)), content, { flag: "wx" });
+  writeFileSync6(join16(parent, basename4(target)), content, { flag: "wx" });
 }
 var unique2 = (xs) => [...new Set(xs)];
 function realOr(p) {
   try {
-    return realpathSync3(p);
+    return realpathSync4(p);
   } catch {
     return p;
   }
@@ -31362,14 +31530,14 @@ function entries(dir) {
 function skillInstalled(configDir, name) {
   if (!Array.isArray(entries(configDir))) return void 0;
   let present2 = false;
-  const skills = join15(configDir, "skills");
+  const skills = join16(configDir, "skills");
   const direct = entries(skills);
   if (direct === void 0) return void 0;
   if (direct !== null) {
     present2 = true;
-    if (existsSync3(join15(skills, name, "SKILL.md"))) return true;
+    if (existsSync3(join16(skills, name, "SKILL.md"))) return true;
   }
-  const cache = join15(configDir, "plugins", "cache");
+  const cache = join16(configDir, "plugins", "cache");
   const top = entries(cache);
   if (top === void 0) return void 0;
   if (top !== null) {
@@ -31380,11 +31548,11 @@ function skillInstalled(configDir, name) {
       for (const d of dirs) {
         const names = entries(d);
         if (names === void 0) return void 0;
-        next.push(...(names ?? []).map((n2) => join15(d, n2)));
+        next.push(...(names ?? []).map((n2) => join16(d, n2)));
       }
       dirs = next;
     }
-    if (dirs.some((d) => existsSync3(join15(d, "skills", name, "SKILL.md")))) return true;
+    if (dirs.some((d) => existsSync3(join16(d, "skills", name, "SKILL.md")))) return true;
   }
   return present2 ? false : void 0;
 }
@@ -31452,11 +31620,11 @@ async function readPinnedRules(projectDir, ports) {
 }
 function writePinnedRules(stateRoot, id, rules) {
   assertItemId(id);
-  const dir = join15(stateRoot, "briefs", `${id}.rules`);
+  const dir = join16(stateRoot, "briefs", `${id}.rules`);
   removeStateEntry(stateRoot, dir);
   const paths = [];
   for (const f of rules.files) {
-    const file2 = join15(dir, f.name);
+    const file2 = join16(dir, f.name);
     writeStateFile(stateRoot, file2, f.content);
     paths.push(file2);
   }
@@ -31470,6 +31638,7 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
   const solutions = item.role === "builder" || item.role === "designer" ? searchSolutions(projectDir, [item.title, ...item.touches].join(" ")) : [];
   const roleBrief = memory.brief;
   const id = item.id;
+  const reportFile = `.studio/reports/${caps.reportName ?? `${id}.md`}`;
   const opensPr = item.type !== "review" && item.type !== "research";
   const lines = [
     `# Brief for ${id}`,
@@ -31551,7 +31720,7 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
     "",
     "## Report contract",
     "",
-    opensPr ? `Write \`.studio/reports/${id}.md\` in the checkout as the last step, after pushing; do not commit it. head_sha is the SHA of the pushed head (\`git rev-parse HEAD\`).` : `Write \`.studio/reports/${id}.md\` in the checkout as the last step; do not commit it.`,
+    opensPr ? `Write \`${reportFile}\` in the checkout as the last step, after pushing; do not commit it. Only that file name counts. head_sha is the SHA of the pushed head (\`git rev-parse HEAD\`).` : `Write \`${reportFile}\` in the checkout as the last step, only that file name counts; do not commit it.${item.type === "review" ? " head_sha is the SHA of the pull request head you reviewed (`git rev-parse HEAD` after loading it)." : ""}`,
     "It starts with YAML frontmatter:",
     "",
     "```yaml",
@@ -31561,6 +31730,7 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
     ...item.type === "review" ? [
       "verdict: approve|changes_requested",
       "reviews: <repo>#<pr>",
+      "head_sha: <40-hex sha of the pull request head you reviewed>",
       'analyzers: { <id>: pass|findings|"skipped: <reason>" }',
       'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"',
       "finding_attempts: <highest number of attempts on one finding>"
@@ -31575,7 +31745,7 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
     "```",
     "",
     ...item.type === "review" ? [
-      "A reviewer opens no pull request: omit pr and head_sha. reviews names the pull request you reviewed.",
+      "A reviewer opens no pull request: omit pr. reviews names the pull request you reviewed.",
       ""
     ] : item.type === "research" ? [
       "A research item opens no pull request and pushes nothing: omit pr, head_sha and tests_run. Give the result in the report body.",
@@ -31597,7 +31767,7 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
       ""
     ] : []
   ];
-  const file2 = join15(stateRoot, "briefs", `${id}.md`);
+  const file2 = join16(stateRoot, "briefs", `${id}.md`);
   writeStateFile(stateRoot, file2, lines.join("\n"));
   return file2;
 }
@@ -31625,13 +31795,13 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
     ...toolchain,
     ...loginDir === void 0 ? [] : [loginDir]
   ];
-  const ctxFile = join15(stateRoot, "guard", `${id}.json`);
+  const ctxFile = join16(stateRoot, "guard", `${id}.json`);
   const protectedPaths = [
     ctxFile,
-    ...STATE_PROTECTED_DIRS.map((d) => join15(stateRoot, d)),
-    ...STATE_FILES.map((f) => join15(stateRoot, f)),
+    ...STATE_PROTECTED_DIRS.map((d) => join16(stateRoot, d)),
+    ...STATE_FILES.map((f) => join16(stateRoot, f)),
     // Below the state base, so the sandbox already keeps crews out; this is the second net.
-    join15(stateBase, OWNER_DIR)
+    join16(stateBase, OWNER_DIR)
   ];
   const ctx = {
     worktree: clone2,
@@ -31687,7 +31857,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
       network: { allowedDomains: config2.sandbox.networkAllow, strictAllowlist: true }
     }
   };
-  const file2 = join15(stateRoot, "settings", `${id}.json`);
+  const file2 = join16(stateRoot, "settings", `${id}.json`);
   writeStateFile(stateRoot, file2, `${JSON.stringify(settings, null, 2)}
 `);
   return file2;
@@ -31703,7 +31873,7 @@ var BASE_ENV = ["PATH", "LANG", "TERM", "USER"];
 var API_BILLING_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
 function readCrewFile(file2) {
   try {
-    return JSON.parse(readFileSync15(file2, "utf8"));
+    return JSON.parse(readFileSync16(file2, "utf8"));
   } catch {
     return {};
   }
@@ -31817,12 +31987,12 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     extraCredentialPaths: credentialLocations(home, penv).extra
   });
   for (const sub of ["clones", "homes", "tmp"]) {
-    assertStatePath(stateRoot, join15(stateRoot, sub, item.id));
+    assertStatePath(stateRoot, join16(stateRoot, sub, item.id));
   }
   const previous = refuseIfRunning(stateRoot, item, ports);
   const limits = readLimits(ownerRoot);
   if (!limits.ok) {
-    throw new Error(`${join15(ownerRoot, "limits.json")} is unreadable; refusing to launch`);
+    throw new Error(`${join16(ownerRoot, "limits.json")} is unreadable; refusing to launch`);
   }
   const parks = activeParks(limits.labels, ports.clock.now());
   const usage = labelUsage({ ownerRoot, ownerConfig, ports });
@@ -31863,9 +32033,9 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
       providerConfigDir = checkProviderConfigDir(got.configDir, owner);
     }
   }
-  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join15(home, ".claude"));
+  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join16(home, ".claude"));
   const billing = apiBillingProblem(
-    join15(claudeConfigDir, "settings.json"),
+    join16(claudeConfigDir, "settings.json"),
     ownerConfig.allowApiBilling
   );
   if (billing) throw new Error(billing);
@@ -31879,7 +32049,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   readRoleMemory(projectDir, item.role);
   const missingSkill = firstMissingSkill(claudeConfigDir, forItem.resolved.required);
   if (missingSkill) throw new Error(missingSkill);
-  const clonePath = join15(stateRoot, "clones", item.id);
+  const clonePath = join16(stateRoot, "clones", item.id);
   if ((previous?.limit || previous?.block) && existsNoFollow(clonePath) && (cloneBranch(clonePath) !== `studio/${item.id}` || cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))) {
     throw new Error(
       `the clone of ${item.id} left its branch after ${previous.limit ? "a usage limit" : "an account block"}; refusing to replace it (inspect it, then remove ${clonePath} to start over)`
@@ -31908,7 +32078,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     if (!lock.owned()) throw new Error("the launch lock was lost; refusing to launch, try again");
     refuseIfRunning(stateRoot, item, ports);
     const again = readLimits(ownerRoot);
-    if (!again.ok) throw new Error(`${join15(ownerRoot, "limits.json")} is unreadable; refusing`);
+    if (!again.ok) throw new Error(`${join16(ownerRoot, "limits.json")} is unreadable; refusing`);
     const parkedNow = activeParks(again.labels, ports.clock.now());
     if (Object.hasOwn(parkedNow, label)) {
       throw new Error(allParkedLine(parkedNow[label]?.parkedUntil));
@@ -31920,11 +32090,11 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   recheck();
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
-  const homeDir = join15(stateRoot, "homes", item.id);
+  const homeDir = join16(stateRoot, "homes", item.id);
   removeStateEntry(stateRoot, homeDir);
   ensureStateDir(stateRoot, homeDir);
   writeHomeFile(homeDir, ".gitconfig", GITCONFIG);
-  const tmpDir = join15(stateRoot, "tmp", item.id);
+  const tmpDir = join16(stateRoot, "tmp", item.id);
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
   const briefRules = writePinnedRules(stateRoot, item.id, pinned);
@@ -31936,6 +32106,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     ...launcher.capabilitiesDir === void 0 ? {} : { dir: launcher.capabilitiesDir },
     isInstalled: (skill) => skillInstalled(claudeConfigDir, skill.split(":").at(-1) ?? "")
   });
+  caps.reportName = newReportName(stateRoot, item.id);
   const brief = writeBrief(stateRoot, item, config2, projectDir, briefRules, caps);
   const settings = writeCrewSettings(
     stateRoot,
@@ -31945,10 +32116,10 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     { homeDir, tmpDir, projectDir, toolchainPaths, providerConfigDir },
     owner
   );
-  const mcpConfig = join15(stateRoot, "settings", `${item.id}.mcp.json`);
+  const mcpConfig = join16(stateRoot, "settings", `${item.id}.mcp.json`);
   writeStateFile(stateRoot, mcpConfig, `${JSON.stringify({ mcpServers: {} })}
 `);
-  const settingsEnv = JSON.parse(readFileSync15(settings, "utf8")).env;
+  const settingsEnv = JSON.parse(readFileSync16(settings, "utf8")).env;
   const env = {};
   for (const k of BASE_ENV) {
     const v = penv[k];
@@ -31966,7 +32137,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   }
   Object.assign(env, settingsEnv);
   if (token) env.GH_TOKEN = token;
-  const log = join15(stateRoot, "logs", `${item.id}.jsonl`);
+  const log = join16(stateRoot, "logs", `${item.id}.jsonl`);
   ensureStateDir(stateRoot, dirname8(log));
   const logStart = fileSize(log);
   refuseIfBlocked(ownerRoot);
@@ -32033,15 +32204,15 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     ...tokenConfigDir === void 0 ? {} : { tokenConfigDir },
     logStart
   };
-  await updateCrewFile(stateRoot, join15(stateRoot, "crew.json"), (all) => {
+  await updateCrewFile(stateRoot, join16(stateRoot, "crew.json"), (all) => {
     all[item.id] = record2;
   });
   return { name, pid, log };
 }
 
 // src/flaky.ts
-import { readFileSync as readFileSync16 } from "node:fs";
-import { join as join16 } from "node:path";
+import { readFileSync as readFileSync17 } from "node:fs";
+import { join as join17 } from "node:path";
 var MAX_FLAKY = 500;
 var MAX_NAME = 200;
 var entrySchema = external_exports.object({
@@ -32050,13 +32221,13 @@ var entrySchema = external_exports.object({
   lastSha: external_exports.string(),
   lastAt: external_exports.string()
 });
-var fileOf = (stateRoot) => join16(stateRoot, "flaky.json");
+var fileOf = (stateRoot) => join17(stateRoot, "flaky.json");
 function read(stateRoot) {
   const file2 = fileOf(stateRoot);
   assertStatePath(stateRoot, file2);
   let text;
   try {
-    text = readFileSync16(file2, "utf8");
+    text = readFileSync17(file2, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw new Error("flaky.json cannot be read");
@@ -32169,9 +32340,9 @@ async function readMainBuild(config2, ports) {
 }
 
 // src/notify.ts
-import { lstatSync as lstatSync14, readFileSync as readFileSync17 } from "node:fs";
+import { lstatSync as lstatSync15, readFileSync as readFileSync18 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { join as join17 } from "node:path";
+import { join as join18 } from "node:path";
 var MAX_SENDS_PER_RUN = 20;
 var MAX_TEXT = 500;
 var LOCK_STALE_MS3 = 2 * 6e4;
@@ -32197,12 +32368,12 @@ function messagesOf(projectKey, snapshot) {
 }
 function readNotified(file2) {
   try {
-    if (!lstatSync14(file2).isFile()) return { ok: false };
+    if (!lstatSync15(file2).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, keys: [] } : { ok: false };
   }
   try {
-    const raw = JSON.parse(readFileSync17(file2, "utf8"));
+    const raw = JSON.parse(readFileSync18(file2, "utf8"));
     if (!Array.isArray(raw) || !raw.every((k) => typeof k === "string")) return { ok: false };
     return { ok: true, keys: raw };
   } catch {
@@ -32224,7 +32395,7 @@ async function sendNotifications(o2) {
   }
 }
 async function sendLocked(o2, notify, lock) {
-  const file2 = join17(o2.ownerRoot, "notified.json");
+  const file2 = join18(o2.ownerRoot, "notified.json");
   const read3 = readNotified(file2);
   if (!read3.ok) return ["notify: notified.json is unreadable; nothing sent"];
   try {
@@ -32289,7 +32460,7 @@ async function sendLocked(o2, notify, lock) {
 }
 
 // src/planner.ts
-var BUILD_TYPES = ["feature", "fix", "chore"];
+var BUILD_TYPES2 = ["feature", "fix", "chore"];
 var ACTIVE2 = ["assigned", "in_progress", "in_review", "queued"];
 function isReady(item) {
   const missing = [];
@@ -32380,7 +32551,7 @@ function planAssignments(board, config2, capacity, running, hold, credentialSlot
   const assign = [];
   const deferred = [];
   for (const item of eligible) {
-    const isBuild = BUILD_TYPES.includes(item.type);
+    const isBuild = BUILD_TYPES2.includes(item.type);
     const clash = [...active, ...assign].find((o2) => conflicts(item, o2));
     if (hold !== void 0) deferred.push({ id: item.id, reason: hold });
     else if (credentialSlots2 !== void 0 && credentialSlots2 <= 0) {
@@ -32400,16 +32571,16 @@ function planAssignments(board, config2, capacity, running, hold, credentialSlot
 
 // src/queue.ts
 import {
-  closeSync as closeSync3,
-  constants as constants2,
+  closeSync as closeSync4,
+  constants as constants3,
   existsSync as existsSync4,
-  lstatSync as lstatSync15,
-  openSync as openSync3,
-  readFileSync as readFileSync18,
+  lstatSync as lstatSync16,
+  openSync as openSync4,
+  readFileSync as readFileSync19,
   writeSync as writeSync2
 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { dirname as dirname9, join as join18 } from "node:path";
+import { dirname as dirname9, join as join19 } from "node:path";
 var QueueHeld = class extends Error {
   constructor(line) {
     super(line);
@@ -32442,16 +32613,16 @@ var stateSchema = external_exports.strictObject({
     })
   )
 });
-var queueFile = (stateRoot) => join18(stateRoot, "queue.json");
+var queueFile = (stateRoot) => join19(stateRoot, "queue.json");
 function loadQueue(stateRoot) {
   const file2 = queueFile(stateRoot);
   assertStatePath(stateRoot, file2);
   if (!existsSync4(file2)) return { pending: [], done: [] };
-  if (lstatSync15(file2).isSymbolicLink())
+  if (lstatSync16(file2).isSymbolicLink())
     throw new Error(`refusing to read ${file2}: it is a symlink`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync18(file2, "utf8"));
+    raw = JSON.parse(readFileSync19(file2, "utf8"));
   } catch {
     throw new Error(`queue file ${file2} is not valid JSON`);
   }
@@ -32538,28 +32709,28 @@ function installSignalRelease(lock) {
   };
 }
 function appendStateLine(stateRoot, name, line) {
-  const file2 = join18(stateRoot, name);
+  const file2 = join19(stateRoot, name);
   assertStatePath(stateRoot, file2);
   let torn = false;
   if (existsSync4(file2)) {
-    if (lstatSync15(file2).isSymbolicLink()) {
+    if (lstatSync16(file2).isSymbolicLink()) {
       throw new Error(`refusing to use ${file2}: it is a symlink`);
     }
-    const prev = readFileSync18(file2, "utf8");
+    const prev = readFileSync19(file2, "utf8");
     torn = prev !== "" && !prev.endsWith("\n");
   } else {
     ensureStateDir(stateRoot, dirname9(file2));
   }
-  const fd = openSync3(
+  const fd = openSync4(
     file2,
-    constants2.O_WRONLY | constants2.O_CREAT | constants2.O_APPEND | (constants2.O_NOFOLLOW ?? 0),
+    constants3.O_WRONLY | constants3.O_CREAT | constants3.O_APPEND | (constants3.O_NOFOLLOW ?? 0),
     384
   );
   try {
     writeSync2(fd, `${torn ? "\n" : ""}${line}
 `);
   } finally {
-    closeSync3(fd);
+    closeSync4(fd);
   }
 }
 var BUCKETS = /* @__PURE__ */ new Set(["pass", "fail", "pending", "skipping", "cancel"]);
@@ -32881,158 +33052,18 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
   }
 }
 
-// src/report.ts
-var import_yaml5 = __toESM(require_dist(), 1);
-import {
-  closeSync as closeSync4,
-  constants as constants3,
-  fstatSync as fstatSync2,
-  lstatSync as lstatSync16,
-  openSync as openSync4,
-  readSync as readSync2,
-  realpathSync as realpathSync4
-} from "node:fs";
-import { join as join19, sep as sep5 } from "node:path";
-var ReportError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "ReportError";
-  }
-};
-var BUILD_TYPES2 = ["feature", "fix", "chore"];
-var NO_PR_TYPES = ["review", "research"];
-var REVIEWS_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9]\d{0,9}$/;
-var SHA_RE = /^[0-9a-f]{40}$/i;
-var reportSchema = external_exports.object({
-  status: external_exports.enum(["done", "blocked", "failed"]),
-  item: external_exports.string().optional(),
-  pr: external_exports.number().int().positive().nullish(),
-  headSha: external_exports.string().nullish(),
-  testsRun: external_exports.number().int().nonnegative().nullish(),
-  verdict: external_exports.enum(["approve", "changes_requested"]).nullish(),
-  reviews: external_exports.string().regex(REVIEWS_RE).nullish(),
-  // Results per analyzer; a missing source reads `skipped: <reason>`, never a pass.
-  analyzers: external_exports.record(
-    external_exports.string().regex(/^[a-z0-9-]{1,64}$/),
-    external_exports.string().regex(/^(pass|findings|skipped: .{1,300})$/)
-  ).refine((m) => Object.keys(m).length <= 50).nullish(),
-  mutationProbe: external_exports.string().regex(/^(red: .{1,300}|green: .{1,300}|skipped: .{1,300})$/).nullish(),
-  findingAttempts: external_exports.number().int().nonnegative().nullish(),
-  lessons: external_exports.array(external_exports.string()).default([]),
-  questions: external_exports.array(external_exports.string()).default([])
-});
-var camel4 = (key) => key.replace(/_([a-z0-9])/g, (_, c3) => c3.toUpperCase());
-function parseReport(text, item) {
-  const m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
-  if (!m) throw new ReportError("report has no YAML frontmatter");
-  const front = m[1].replace(/^(head_sha:[ \t]*)([0-9a-fA-F]{40})[ \t]*$/m, '$1"$2"');
-  let raw;
-  try {
-    raw = (0, import_yaml5.parse)(front);
-  } catch {
-    throw new ReportError("report frontmatter is not valid YAML");
-  }
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new ReportError("report frontmatter must be a mapping");
-  }
-  const camelized = Object.fromEntries(Object.entries(raw).map(([k, v]) => [camel4(k), v]));
-  const parsed = reportSchema.safeParse(camelized);
-  if (!parsed.success) {
-    throw new ReportError(
-      `invalid report: bad field ${[...new Set(parsed.error.issues.map((i2) => i2.path.map(String).join(".") || "(root)"))].join(", ")}`
-    );
-  }
-  const d = parsed.data;
-  if (item && d.item !== void 0 && d.item !== item.id) {
-    throw new ReportError(`report item does not match ${item.id}`);
-  }
-  if (d.status === "done") {
-    const noPrOk = item !== void 0 && NO_PR_TYPES.includes(item.type) && d.pr == null;
-    if (d.headSha ? !SHA_RE.test(d.headSha) : !noPrOk) {
-      throw new ReportError("done report needs head_sha (40 hex characters)");
-    }
-    if (item?.type === "review" && !d.verdict) {
-      throw new ReportError("done report for a review item needs verdict");
-    }
-    if (item && BUILD_TYPES2.includes(item.type) && !(d.testsRun && d.testsRun > 0)) {
-      throw new ReportError(`done report for a ${item.type} item needs tests_run > 0`);
-    }
-  }
-  return {
-    status: d.status,
-    ...d.item !== void 0 && { item: d.item },
-    ...d.pr != null && { pr: d.pr },
-    ...d.headSha != null && { headSha: d.headSha },
-    ...d.testsRun != null && { testsRun: d.testsRun },
-    ...d.verdict != null && { verdict: d.verdict },
-    ...d.reviews != null && { reviews: d.reviews },
-    ...d.analyzers != null && { analyzers: d.analyzers },
-    ...d.mutationProbe != null && { mutationProbe: d.mutationProbe },
-    ...d.findingAttempts != null && { findingAttempts: d.findingAttempts },
-    lessons: d.lessons,
-    questions: d.questions
-  };
-}
-var MAX_REPORT_BYTES = 256 * 1024;
-var UNSAFE = "report file is missing or not a safe regular file";
-function readReportFile(root, file2, notBefore) {
-  const unsafe = () => new ReportError(UNSAFE);
-  let fd;
-  try {
-    const parts = [root, join19(root, ".studio"), join19(root, ".studio", "reports"), file2];
-    parts.forEach((p, i2) => {
-      const st2 = lstatSync16(p);
-      if (st2.isSymbolicLink()) throw unsafe();
-      if (i2 < parts.length - 1 ? !st2.isDirectory() : !st2.isFile()) throw unsafe();
-    });
-    const realRoot = realpathSync4(root);
-    if (!realpathSync4(file2).startsWith(realRoot + sep5)) throw unsafe();
-    fd = openSync4(
-      file2,
-      constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0)
-    );
-    const st = fstatSync2(fd);
-    if (!st.isFile()) throw unsafe();
-    if (notBefore !== void 0 && !(st.mtimeMs >= notBefore.getTime())) {
-      throw new ReportError("report is older than the crew run");
-    }
-    const buf = Buffer.alloc(MAX_REPORT_BYTES + 1);
-    let total = 0;
-    while (total < buf.length) {
-      const n2 = readSync2(fd, buf, total, buf.length - total, null);
-      if (n2 === 0) break;
-      total += n2;
-    }
-    if (total > MAX_REPORT_BYTES) throw unsafe();
-    return buf.toString("utf8", 0, total);
-  } catch (e) {
-    throw e instanceof ReportError ? e : unsafe();
-  } finally {
-    if (fd !== void 0) closeSync4(fd);
-  }
-}
-function readReport(worktree, id, item, opts = {}) {
-  const file2 = join19(worktree, ".studio", "reports", `${id}.md`);
-  return parseReport(readReportFile(worktree, file2, opts.notBefore), item);
-}
-function checkReportHead(report, prHead) {
-  if ((report.status === "done" || report.headSha !== void 0) && report.headSha?.toLowerCase() !== prHead.toLowerCase()) {
-    throw new ReportError("report head differs from PR head");
-  }
-}
-
 // src/secret-command.ts
 var import_yaml8 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync20 } from "node:fs";
+import { readFileSync as readFileSync21 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import { join as join21 } from "node:path";
 
 // src/setup-ci-command.ts
 var import_yaml7 = __toESM(require_dist(), 1);
-import { randomBytes as randomBytes5 } from "node:crypto";
+import { randomBytes as randomBytes6 } from "node:crypto";
 import {
   readdirSync as readdirSync5,
-  readFileSync as readFileSync19,
+  readFileSync as readFileSync20,
   renameSync as renameSync8,
   statSync as statSync2,
   unlinkSync as unlinkSync4,
@@ -33414,7 +33445,7 @@ function readWorkflows(project) {
   for (const name of yaml) {
     const path10 = `${rel}/${name}`;
     try {
-      files.push({ path: path10, text: readFileSync19(join20(dir, name), "utf8") });
+      files.push({ path: path10, text: readFileSync20(join20(dir, name), "utf8") });
     } catch (e) {
       errors.push(`${path10}: cannot read file (${e.code ?? "error"})`);
     }
@@ -33448,7 +33479,7 @@ function applyCi(doc, ci) {
   }
 }
 function writeAtomic(file2, text) {
-  const tmp = `${file2}.${process.pid}.${randomBytes5(4).toString("hex")}.tmp`;
+  const tmp = `${file2}.${process.pid}.${randomBytes6(4).toString("hex")}.tmp`;
   try {
     writeFileSync7(tmp, text, { flag: "wx", mode: statSync2(file2).mode & 511 });
     renameSync8(tmp, file2);
@@ -33474,7 +33505,7 @@ async function runSetupCi(o2) {
   const file2 = join20(o2.project, ".studio", "studio.yaml");
   let text;
   try {
-    text = readFileSync19(file2, "utf8");
+    text = readFileSync20(file2, "utf8");
   } catch (e) {
     throw new Error(
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
@@ -33548,7 +33579,7 @@ function readPrimaryRepo(project) {
   const file2 = join21(project, ".studio", "studio.yaml");
   let raw;
   try {
-    raw = (0, import_yaml8.parse)(readFileSync20(file2, "utf8"));
+    raw = (0, import_yaml8.parse)(readFileSync21(file2, "utf8"));
   } catch {
     throw new Error("cannot read .studio/studio.yaml");
   }
@@ -33659,7 +33690,7 @@ function runDoctor(o2) {
 
 // src/stack.ts
 var import_yaml9 = __toESM(require_dist(), 1);
-import { lstatSync as lstatSync17, readdirSync as readdirSync6, readFileSync as readFileSync21 } from "node:fs";
+import { lstatSync as lstatSync17, readdirSync as readdirSync6, readFileSync as readFileSync22 } from "node:fs";
 import { join as join22 } from "node:path";
 var MAX_FILE_BYTES2 = 1024 * 1024;
 var MAX_ENTRIES = 200;
@@ -33695,7 +33726,7 @@ function readSmall(path10, notes, name) {
       notes.push(`${name}: larger than 1 MiB, not read`);
       return void 0;
     }
-    return readFileSync21(path10, "utf8");
+    return readFileSync22(path10, "utf8");
   } catch {
     notes.push(`${name}: cannot be read`);
     return void 0;
@@ -33790,7 +33821,7 @@ function runSetupStack(o2) {
   const file2 = join22(o2.project, ".studio", "studio.yaml");
   let text;
   try {
-    text = readFileSync21(file2, "utf8");
+    text = readFileSync22(file2, "utf8");
   } catch (e) {
     throw new Error(
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
@@ -34147,8 +34178,17 @@ async function runCli(argv, deps) {
           }
         }
         const clone2 = join23(stateRoot(), "clones", item.id);
-        const report = readReport(clone2, item.id, item, { notBefore });
+        const fileName = reportName(stateRoot(), item.id);
+        if (fileName === void 0) {
+          throw new Error(`no report name was drawn for ${item.id}: relaunch it, nothing moved`);
+        }
+        const report = readReport(clone2, item.id, item, { notBefore, fileName });
         const reviewDone = item.type === "review" && report.status === "done" ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report) : { skipped: [], target: void 0 };
+        if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0) {
+          const m = /^(.+)#(\d+)$/.exec(reviewDone.target);
+          const info = await prInfo(ports, m[1], Number(m[2]));
+          checkReportHead(report, info.head);
+        }
         let branch = `studio/${item.id}`;
         if (report.pr !== void 0) {
           const holder = board.items.find(
@@ -34357,7 +34397,11 @@ async function runCli(argv, deps) {
             mainBuild: await readMainBuild(config2, ports),
             crewRecordsUnreadable: crewProblem !== void 0,
             alive: (pid) => Number.isInteger(pid) && pid > 0 && ports.claude.alive(pid),
-            hasReport: (item) => isItemId(item) && existsSync5(join23(root, "clones", item, ".studio", "reports", `${item}.md`))
+            hasReport: (item) => {
+              if (!isItemId(item)) return false;
+              const name = reportName(root, item);
+              return name !== void 0 && existsSync5(join23(root, "clones", item, ".studio", "reports", name));
+            }
           }
         );
         writeState(root, snapshot);
@@ -34907,7 +34951,7 @@ function readHiddenLine(prompt, input2, write) {
 
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync6, openSync as openSync6, readFileSync as readFileSync24 } from "node:fs";
+import { closeSync as closeSync6, openSync as openSync6, readFileSync as readFileSync25 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -38603,7 +38647,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync23 } from "node:fs";
+import { readFileSync as readFileSync24 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value, optionName) => {
@@ -38959,7 +39003,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync22 } from "node:fs";
+import { readFileSync as readFileSync23 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -39073,7 +39117,7 @@ var getTargetFd = ({ value, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync22(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync23(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value, fdNumber) => {
   if (value === "inherit") {
@@ -39467,8 +39511,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync23(value))] }),
-    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync23(file2))] }),
+    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync24(value))] }),
+    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync24(file2))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value }) => ({ contents: () => [...value] }),
     string: ({ value }) => ({ contents: [value] }),
@@ -42804,7 +42848,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync24(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync25(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }

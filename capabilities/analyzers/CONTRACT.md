@@ -40,7 +40,7 @@ Report the sweep in the `Checked:` line: probes run, candidates found, candidate
 
 ## Rules for the analyzer
 
-- **Read-only.** Never edit files, never run anything that writes, deploys or sends. Reading,
+- **Read-only.** Never edit files (the spec check's mutation probe is the one exception, and restores what it broke), never run anything that writes, deploys or sends. Reading,
   searching and running read-only commands (type checks, `git log`, `grep`) is fine.
 - **Every finding needs evidence from the code:** file and line, the quoted line(s), and the
   concrete input or sequence that makes it fail. "Could be a problem" without a trace is not a

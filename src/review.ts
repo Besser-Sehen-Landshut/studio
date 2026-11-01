@@ -127,7 +127,7 @@ export function renderReviewRoutine(r: {
           `Load the pull request first, staying on your branch: \`git fetch origin pull/${r.pr}/head\`, then \`git reset --hard FETCH_HEAD\`. The diff is \`git diff origin/main...HEAD\`; save it to an untracked file in the checkout.`,
           '',
         ]),
-    `Run each analyzer below as one read-only subagent with the model named there; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,
+    `Run each analyzer below as one subagent with the model named there, read-only except for the spec check's probe; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,
     '',
     ...r.analyzers.map(
       (a) => `- ${a.id} (model: ${MODEL_ALIAS[a.model ?? 'standard']}): \`${a.path}\``,

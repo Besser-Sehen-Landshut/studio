@@ -136,12 +136,14 @@ In the owner's interactive Claude Code session in a Studio project, the plugin s
 
 A review item has `type: review` and `role: reviewer` together, a Definition of Done and the note `review <owner/repo>#<n>`; a launch refuses otherwise. Studio reads the pull request and writes a routine into the brief, by tier.
 
-- **Small:** at most 400 changed lines outside markdown. Diff review and spec check (none for a change of markdown only).
+- **Small:** at most 400 changed lines outside markdown. Diff review and spec check.
 - **Large:** more lines, a risk tag `auth`, `security`, `data` or `migration`, a security-sensitive change, or a file list it cannot read completely. Adds performance, and accessibility, design and motion analyzers where they apply.
 - **Security always** when a changed path concerns auth, sessions, logins, passwords, permissions, API routes, middleware, migrations, DB schema, signup, reset, OTP, upload, access policies, workflows or local actions. A file list that cannot be read, or a path with a control character, counts as such a change. Spellings are matched case-insensitively.
 - **Later rounds and epic end.** After an earlier `changes_requested` the similar-bug scan runs; `triggers: [epic-end]` or `[release]` add the full scans.
 
 The spec check runs last and alone and holds a mutation probe: break the guarding line in the checkout, the named test must go red, restore. An approval is refused when the test stayed green, and in the large tier when the probe did not run.
+
+A launch draws a random report file name, known only to that crew's brief, and `collect` reads only that file, so a report shipped inside a pull request never counts. A review report also carries `head_sha`, which must be the pull request's head at collect.
 
 `collect` holds a finished review to the record written at launch (`briefs/<id>.caps.json`): `reviews` must name the recorded pull request, for every verdict. An approval needs a result for every listed analyzer (`pass`, `findings` or `skipped: <reason>`) and `mutation_probe`, and cannot skip diff review, spec check or security. Output lists skipped analyzers by id, also those launch could not provide; reasons stay in the report. A missing analyzer source reads `skipped: <reason>`, never a pass.
 

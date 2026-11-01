@@ -33,6 +33,9 @@ Not tagged or published as a GitHub release yet; the maintainers tag after the m
 - Index rows add required skills: a `feature` or `fix` builder needs test-driven development, a `fix`
   also systematic debugging. A launch refuses when one is definitely not installed; deny it in
   `skills.denied` to opt out.
+- Crew reports go to a file name drawn at each launch and named in the brief; `collect` reads only
+  that file. A review report needs `head_sha`, checked against the pull request's head. Relaunch a
+  crew started before this.
 - `queue run` merges only an item that is `queued` on the board right before the merge.
 - `model` values must look like a model name: they can no longer start with a dash.
 - The brief says `Offered skills` in place of `Allowed skills`. `lessons` in a report are now stored.

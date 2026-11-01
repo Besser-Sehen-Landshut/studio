@@ -36,8 +36,11 @@ validation, or security or data-integrity behaviour is critical.
 
 ## Mutation probe
 
-The mutation probe runs in the large tier only; the verdict table stays in both tiers. Pick at most 2 criteria that are security-
-or contract-critical and `met` by an existing test. For each:
+The mutation probe runs in the large tier; the small tier may skip it. The verdict table stays in
+both. Pick at most 2 criteria met by an existing test, security- or contract-critical ones first;
+when none is critical, take any met criterion. A large-tier change where no criterion has a test
+to probe is a finding (d): the verdict is `changes_requested`, because an approval needs a probe
+that ran. For each:
 
 1. Name the test that is supposed to guard the criterion.
 2. In the checkout, break the guarding line (comment it out, negate it, change a default value).
@@ -57,5 +60,5 @@ The contract format, analyzer name `Spec check`: the verdict table, then the fin
 
 - `mutation_probe: red: <test>` when the probe ran and the named test went red;
 - `mutation_probe: green: <test>` when the test stayed green, a critical finding;
-- `mutation_probe: skipped: <reason>` when it did not run (small tier, no criterion qualified, no
-  runnable test).
+- `mutation_probe: skipped: <reason>` when it did not run, in the small tier, or in the large tier
+  together with `changes_requested`.

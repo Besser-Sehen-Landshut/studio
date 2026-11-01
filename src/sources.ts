@@ -94,8 +94,9 @@ export interface Finding {
 }
 export type Hashes = Record<string, string>;
 
-const LICENSE_NAME =
-  /^(?:un)?licen[cs]e(?:\.[a-z]+)?$|^copying(?:\.[a-z]+)?$|^notice(?:\.[a-z]+)?$/i;
+const LICENSE_NAME = /^(?:(?:un)?licen[cs]e|copying|notice)(?:[-_.][a-z0-9._-]*)?$/i;
+const SCRIPT_NAME = /\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|rb|pl|ps1)$/i;
+const isLicenseName = (name: string): boolean => LICENSE_NAME.test(name) && !SCRIPT_NAME.test(name);
 
 const clean = (text: string): string => text.replace(/[\p{Cc}\p{Cf}]/gu, ' ').slice(0, 300);
 
@@ -118,7 +119,7 @@ function hashOf(dir: string, rel: string): string | undefined {
 
 function licenseFiles(dir: string): string[] {
   try {
-    return readdirSync(dir).filter((n) => LICENSE_NAME.test(n));
+    return readdirSync(dir).filter((n) => isLicenseName(n));
   } catch {
     return [];
   }
@@ -143,8 +144,8 @@ export function compareToPin(
   const conflict: Finding[] = [];
   const unclear: Finding[] = [];
   const licenses = new Set(licenseFiles(dir));
-  for (const name of Object.keys(pin)) if (LICENSE_NAME.test(name)) licenses.add(name);
-  for (const rel of source.reads) if (LICENSE_NAME.test(rel)) licenses.add(rel);
+  for (const name of Object.keys(pin)) if (isLicenseName(name)) licenses.add(name);
+  for (const rel of source.reads) if (isLicenseName(rel)) licenses.add(rel);
   for (const name of licenses) {
     const now = hashOf(dir, name);
     if (now === undefined) {

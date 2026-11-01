@@ -23,7 +23,7 @@ You work one item, headless. Nobody answers; the control room trusts only artifa
 
 ## Report contract
 
-`.studio/reports/<id>.md` in the checkout, untracked, after the push:
+The file the brief names under `.studio/reports/`, in the checkout, untracked, after the push. Only that exact name counts:
 
 ```yaml
 ---
@@ -51,6 +51,7 @@ status: done
 item: <id>
 verdict: approve            # or changes_requested
 reviews: <owner/repo>#<n>   # the pull request of your brief
+head_sha: <40 hex>          # `git rev-parse HEAD` of the head you reviewed
 analyzers:                  # one key per analyzer the brief lists, its id exactly
   diff-review: pass         # pass | findings | "skipped: <reason>"
   motion: "skipped: source not fetched"

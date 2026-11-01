@@ -59,6 +59,7 @@ import {
 } from './paths.js';
 import { PAUSED_LINE, readPause } from './pause.js';
 import type { Ports } from './ports.js';
+import { newReportName } from './report.js';
 import { renderReviewRoutine } from './review.js';
 import { readRoleMemory } from './role-memory.js';
 import { searchSolutions } from './solutions.js';
@@ -443,6 +444,7 @@ export function writeBrief(
       : [];
   const roleBrief = memory.brief;
   const id = item.id;
+  const reportFile = `.studio/reports/${caps.reportName ?? `${id}.md`}`;
   const opensPr = item.type !== 'review' && item.type !== 'research';
   const lines = [
     `# Brief for ${id}`,
@@ -536,8 +538,8 @@ export function writeBrief(
     '## Report contract',
     '',
     opensPr
-      ? `Write \`.studio/reports/${id}.md\` in the checkout as the last step, after pushing; do not commit it. head_sha is the SHA of the pushed head (\`git rev-parse HEAD\`).`
-      : `Write \`.studio/reports/${id}.md\` in the checkout as the last step; do not commit it.`,
+      ? `Write \`${reportFile}\` in the checkout as the last step, after pushing; do not commit it. Only that file name counts. head_sha is the SHA of the pushed head (\`git rev-parse HEAD\`).`
+      : `Write \`${reportFile}\` in the checkout as the last step, only that file name counts; do not commit it.${item.type === 'review' ? ' head_sha is the SHA of the pull request head you reviewed (`git rev-parse HEAD` after loading it).' : ''}`,
     'It starts with YAML frontmatter:',
     '',
     '```yaml',
@@ -548,6 +550,7 @@ export function writeBrief(
       ? [
           'verdict: approve|changes_requested',
           'reviews: <repo>#<pr>',
+          'head_sha: <40-hex sha of the pull request head you reviewed>',
           'analyzers: { <id>: pass|findings|"skipped: <reason>" }',
           'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"',
           'finding_attempts: <highest number of attempts on one finding>',
@@ -566,7 +569,7 @@ export function writeBrief(
     '',
     ...(item.type === 'review'
       ? [
-          'A reviewer opens no pull request: omit pr and head_sha. reviews names the pull request you reviewed.',
+          'A reviewer opens no pull request: omit pr. reviews names the pull request you reviewed.',
           '',
         ]
       : item.type === 'research'
@@ -1077,6 +1080,7 @@ async function launchCrewLocked(
     ...(launcher.capabilitiesDir === undefined ? {} : { dir: launcher.capabilitiesDir }),
     isInstalled: (skill) => skillInstalled(claudeConfigDir, skill.split(':').at(-1) ?? ''),
   });
+  caps.reportName = newReportName(stateRoot, item.id);
   const brief = writeBrief(stateRoot, item, config, projectDir, briefRules, caps);
   const settings = writeCrewSettings(
     stateRoot,

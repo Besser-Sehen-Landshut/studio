@@ -54,7 +54,7 @@ import {
   takeNextPending,
   updateQueue,
 } from './queue.js';
-import { checkReportHead, readReport } from './report.js';
+import { checkReportHead, readReport, reportName } from './report.js';
 import {
   checkReviewCaps,
   MAX_FIX_ATTEMPTS,
@@ -450,11 +450,21 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         // Reading files only: git never runs inside a crew clone.
         const clone = join(stateRoot(), 'clones', item.id);
         // The report is read exactly once; everything below verifies and stores that one result.
-        const report = readReport(clone, item.id, item, { notBefore });
+        const fileName = reportName(stateRoot(), item.id);
+        if (fileName === undefined) {
+          throw new Error(`no report name was drawn for ${item.id}: relaunch it, nothing moved`);
+        }
+        const report = readReport(clone, item.id, item, { notBefore, fileName });
         const reviewDone =
           item.type === 'review' && report.status === 'done'
             ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report)
             : { skipped: [] as string[], target: undefined };
+        // A verdict counts for the commit reviewed: the pull request's head right now.
+        if (item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined) {
+          const m = /^(.+)#(\d+)$/.exec(reviewDone.target) as RegExpExecArray;
+          const info = await prInfo(ports, m[1] as string, Number(m[2]));
+          checkReportHead(report, info.head);
+        }
         let branch = `studio/${item.id}`;
         if (report.pr !== undefined) {
           const holder = board.items.find(
@@ -682,9 +692,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             mainBuild: await readMainBuild(config, ports),
             crewRecordsUnreadable: crewProblem !== undefined,
             alive: (pid) => Number.isInteger(pid) && pid > 0 && ports.claude.alive(pid),
-            hasReport: (item) =>
-              isItemId(item) &&
-              existsSync(join(root, 'clones', item, '.studio', 'reports', `${item}.md`)),
+            hasReport: (item) => {
+              if (!isItemId(item)) return false;
+              const name = reportName(root, item);
+              return (
+                name !== undefined &&
+                existsSync(join(root, 'clones', item, '.studio', 'reports', name))
+              );
+            },
           },
         );
         writeState(root, snapshot);

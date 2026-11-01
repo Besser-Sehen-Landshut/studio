@@ -80,7 +80,6 @@ export async function runSecretSet(o: {
 
 const API_KEY_VARS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
 
-/** `studio doctor`: what is set and what is missing, never a value. */
 /** The foundation builders need: feature and fix items require its skills. */
 function superpowersState(owner: OwnerEnv, env: Record<string, string | undefined>): string {
   const dir = env.CLAUDE_CONFIG_DIR ?? join(owner.homedir ?? homedir(), '.claude');
@@ -88,6 +87,7 @@ function superpowersState(owner: OwnerEnv, env: Record<string, string | undefine
   return found === undefined ? 'cannot tell' : found ? 'installed' : 'not found';
 }
 
+/** `studio doctor`: what is set and what is missing, never a value. */
 export function runDoctor(o: {
   project: string;
   owner: OwnerEnv;

@@ -1,9 +1,11 @@
+import { randomBytes } from 'node:crypto';
 import {
   closeSync,
   constants,
   fstatSync,
   lstatSync,
   openSync,
+  readFileSync,
   readSync,
   realpathSync,
 } from 'node:fs';
@@ -11,6 +13,7 @@ import { join, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import type { WorkItem } from './board.js';
+import { assertStatePath, writeStateFile } from './paths.js';
 
 export class ReportError extends Error {
   constructor(message: string) {
@@ -20,7 +23,7 @@ export class ReportError extends Error {
 }
 
 const BUILD_TYPES: readonly WorkItem['type'][] = ['feature', 'fix', 'chore'];
-const NO_PR_TYPES: readonly WorkItem['type'][] = ['review', 'research'];
+const NO_PR_TYPES: readonly WorkItem['type'][] = ['research'];
 const REVIEWS_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9]\d{0,9}$/;
 const SHA_RE = /^[0-9a-f]{40}$/i;
 
@@ -100,6 +103,9 @@ export function parseReport(text: string, item?: WorkItem): Report {
     if (d.headSha ? !SHA_RE.test(d.headSha) : !noPrOk) {
       throw new ReportError('done report needs head_sha (40 hex characters)');
     }
+    if (item?.type === 'review' && d.pr != null) {
+      throw new ReportError('a review report names no pr of its own');
+    }
     if (item?.type === 'review' && !d.verdict) {
       throw new ReportError('done report for a review item needs verdict');
     }
@@ -121,6 +127,32 @@ export function parseReport(text: string, item?: WorkItem): Report {
     lessons: d.lessons,
     questions: d.questions,
   };
+}
+
+const NAME_FILE = (stateRoot: string, id: string) => join(stateRoot, 'briefs', `${id}.report-name`);
+const REPORT_NAME = /^[A-Z]+-\d+\.[0-9a-f]{32}\.md$/;
+
+/**
+ * Draws this run's report file name. Only the crew's brief knows it, and it did not exist when a
+ * pull request was written, so a report shipped in a pull request can never be the one collected.
+ */
+export function newReportName(stateRoot: string, id: string): string {
+  const name = `${id}.${randomBytes(16).toString('hex')}.md`;
+  writeStateFile(stateRoot, NAME_FILE(stateRoot, id), name);
+  return name;
+}
+
+/** The name drawn at launch; undefined when there is none or it is not one Studio could draw. */
+export function reportName(stateRoot: string, id: string): string | undefined {
+  const file = NAME_FILE(stateRoot, id);
+  try {
+    assertStatePath(stateRoot, file);
+    if (!lstatSync(file).isFile()) return undefined;
+    const name = readFileSync(file, 'utf8');
+    return REPORT_NAME.test(name) && name.startsWith(`${id}.`) ? name : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export const MAX_REPORT_BYTES = 256 * 1024;
@@ -177,9 +209,9 @@ export function readReport(
   worktree: string,
   id: string,
   item?: WorkItem,
-  opts: { notBefore?: Date } = {},
+  opts: { notBefore?: Date; fileName?: string } = {},
 ): Report {
-  const file = join(worktree, '.studio', 'reports', `${id}.md`);
+  const file = join(worktree, '.studio', 'reports', opts.fileName ?? `${id}.md`);
   return parseReport(readReportFile(worktree, file, opts.notBefore), item);
 }
 

@@ -89,21 +89,48 @@ describe('parseReport', () => {
 });
 
 describe('parseReport for review and research items', () => {
-  it('accepts a done review report without pr and head_sha', () => {
+  it('accepts a done review report without pr, with the head it reviewed', () => {
     const r = parseReport(
-      doc('status: done\nitem: APP-1\nverdict: approve\nreviews: org/app#9'),
+      doc(
+        'status: done\nitem: APP-1\nverdict: approve\nreviews: org/app#9\nhead_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      ),
       item('review'),
     );
     expect(r).toMatchObject({ status: 'done', verdict: 'approve', reviews: 'org/app#9' });
     expect(r.pr).toBeUndefined();
-    expect(r.headSha).toBeUndefined();
+    expect(r.headSha).toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+  });
+
+  it('refuses a done review report without head_sha, or with a pr of its own', () => {
+    expect(() =>
+      parseReport(
+        doc('status: done\nitem: APP-1\nverdict: approve\nreviews: org/app#9'),
+        item('review'),
+      ),
+    ).toThrow(/head_sha/);
+    expect(() =>
+      parseReport(
+        doc(
+          'status: done\nverdict: approve\npr: 3\nhead_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        ),
+        item('review'),
+      ),
+    ).toThrow(/no pr/);
   });
 
   it('requires a verdict on done review reports and rejects bad values', () => {
-    expect(() => parseReport(doc('status: done\nitem: APP-1'), item('review'))).toThrow(/verdict/);
-    expect(() => parseReport(doc('status: done\nverdict: merge_it'), item('review'))).toThrow(
-      ReportError,
-    );
+    expect(() =>
+      parseReport(
+        doc('status: done\nitem: APP-1\nhead_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
+        item('review'),
+      ),
+    ).toThrow(/verdict/);
+    expect(() =>
+      parseReport(
+        doc('status: done\nverdict: merge_it\nhead_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
+        item('review'),
+      ),
+    ).toThrow(ReportError);
     expect(() =>
       parseReport(doc('status: done\nverdict: approve\nreviews: nope'), item('review')),
     ).toThrow(ReportError);

@@ -35,6 +35,7 @@ import {
 import { DEFAULT_SECRET_GLOBS, evaluateGuard } from '../src/guard.js';
 import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
+import { reportName } from '../src/report.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-crew-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -2341,14 +2342,34 @@ describe('capabilities at launch', () => {
     expect(started).toHaveLength(0);
   });
 
-  it('a markdown-only pull request has no spec check', async () => {
+  it('a review of a pull request in another repo refuses', async () => {
+    const f = makeFixture();
+    const started: Started[] = [];
+    const other = { ...reviewItem, notes: ['review org/other#7'] };
+    await expect(
+      launchCrew(f.project, other, reviewerConfig, fakePorts(started), f.launcher),
+    ).rejects.toThrow(/org\/other/);
+    expect(started).toHaveLength(0);
+  });
+
+  it('a markdown-only pull request still gets the spec check', async () => {
     const f = makeFixture();
     mkdirSync(join(f.project, '.studio'), { recursive: true });
     writeFileSync(join(f.project, '.studio', 'board.yaml'), 'items: []\n');
     const ports = portsWithGh([], () => ({ code: 0, stdout: pr('docs/a.md') }));
     await launchCrew(f.project, reviewItem, reviewerConfig, ports, f.launcher);
-    expect(capsOf(f, 'APP-20').analyzers).toEqual(['diff-review']);
-    expect(capsOf(f, 'APP-20').mandatory).toEqual(['diff-review']);
+    expect(capsOf(f, 'APP-20').mandatory).toEqual(['diff-review', 'spec-check']);
+  });
+
+  it('each launch names its own report file in the brief, and a planted name is replaced', async () => {
+    const f = makeFixture();
+    await launchCrew(f.project, item, config, fakePorts([]), f.launcher);
+    const first = reportName(f.state, item.id) as string;
+    expect(first).toMatch(/^APP-12\.[0-9a-f]{32}\.md$/);
+    expect(brief(f, item.id)).toContain(`.studio/reports/${first}`);
+    expect(brief(f, item.id)).not.toContain('.studio/reports/APP-12.md');
+    await launchCrew(f.project, item, config, fakePorts([]), f.launcher);
+    expect(reportName(f.state, item.id)).not.toBe(first);
   });
 
   it('a fetched file that differs from its pin is not copied, and the lead hears of it', async () => {
