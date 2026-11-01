@@ -254,6 +254,44 @@ describe('install steps and upstream text', () => {
   });
 });
 
+describe('continuations and fenced code', () => {
+  it.each([
+    ['a split install', 'npm \\\n  install -g thing\n'],
+    ['a split download', 'cu\\\nrl https://x.example\n'],
+    ['a split pipe', 'cat a \\\n  | \\\n  sh\n'],
+  ])('%s is an install step', (_name, text) => {
+    const r = verdict({ ...OLD, 'docs/b.md': text });
+    expect(r.findings.map((f) => f.kind)).toContain('install-step');
+  });
+  it('a joined line over the limit is unclear', () => {
+    const r = verdict({ ...OLD, 'docs/b.md': `${'x\\\n'.repeat(5000)}end\n` });
+    expect(r.findings.map((f) => f.kind)).toContain('long-line');
+  });
+  it.each([
+    ['backticks', '```\nsomething harmless\n```\n'],
+    ['with a language', '```bash\n./run-me\n```\n'],
+    ['tildes', '~~~\n./run-me\n~~~\n'],
+    ['never closed', '```\n./run-me\n'],
+  ])('a new line in a fence is unclear: %s', (_name, text) => {
+    const r = verdict({ ...OLD, 'docs/b.md': text });
+    expect(r.verdict).toBe('unclear');
+    expect(r.findings.map((f) => f.kind)).toContain('fenced-change');
+  });
+  it('a changed line in a fence is unclear, an unchanged one is not', () => {
+    const old = { ...OLD, 'docs/b.md': '```\nsame\n```\n' };
+    expect(verdict({ ...old, 'docs/b.md': '```\nother\n```\n' }, old).verdict).toBe('unclear');
+    expect(verdict({ ...old, 'docs/b.md': 'new prose\n\n```\nsame\n```\n' }, old).verdict).toBe(
+      'fits',
+    );
+  });
+  it('prose after a closed fence fits', () => {
+    const old = { ...OLD, 'docs/b.md': '```\nsame\n```\n' };
+    expect(verdict({ ...old, 'docs/b.md': '```\nsame\n```\nnew prose\n' }, old).verdict).toBe(
+      'fits',
+    );
+  });
+});
+
 describe('setupSources', () => {
   it('fetches a git source without hooks or links and pins the commit', async () => {
     const o = ownerRoot();

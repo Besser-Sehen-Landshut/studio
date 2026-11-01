@@ -30197,11 +30197,32 @@ var readBounded = (dir, path10, e) => e && !e.link && e.size <= MAX_SCAN_BYTES ?
 var normalizeLine = (line) => line.trim().replace(/\s+/g, " ");
 function linesOf(text) {
   const lines = [];
+  let open2 = "";
   for (const raw of (text ?? "").split("\n")) {
     if (raw.length > MAX_LINE_CHARS) return void 0;
-    lines.push(normalizeLine(raw));
+    const clean3 = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    const joined = open2 + clean3;
+    if (joined.length > MAX_LINE_CHARS) return void 0;
+    if (clean3.endsWith("\\")) {
+      open2 = joined.slice(0, -1);
+      continue;
+    }
+    lines.push(normalizeLine(joined));
+    open2 = "";
   }
+  if (open2 !== "") lines.push(normalizeLine(open2));
   return lines;
+}
+function newFencedLine(lines, known) {
+  let fence;
+  for (const line of lines) {
+    const marker = line.startsWith("```") ? "```" : line.startsWith("~~~") ? "~~~" : void 0;
+    if (fence === void 0) {
+      if (marker !== void 0) fence = marker;
+    } else if (marker === fence) fence = void 0;
+    else if (line !== "" && !known.has(line)) return true;
+  }
+  return false;
 }
 function frontMatter(lines) {
   if (lines[0] !== "---") return "none";
@@ -30255,6 +30276,9 @@ function compareTrees(oldDir, newDir, source, opts = {}) {
           unclear.push({ kind: "hook", detail: clean(path10) });
         }
         const known = new Set(knownLines);
+        if (newFencedLine(lines, known)) {
+          unclear.push({ kind: "fenced-change", detail: clean(path10) });
+        }
         for (const line of lines) {
           if (!known.has(line) && INSTALL_TOKEN.test(line)) {
             unclear.push({ kind: "install-step", detail: clean(`${path10}: ${line}`) });

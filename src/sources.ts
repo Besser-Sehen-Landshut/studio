@@ -136,14 +136,40 @@ const readBounded = (dir: string, path: string, e: Entry | undefined): string | 
 
 const normalizeLine = (line: string): string => line.trim().replace(/\s+/g, ' ');
 
-/** Normalized lines; undefined when one is too long to run a pattern over. */
+/**
+ * Normalized lines with `\\` continuations joined, no shell parsing; undefined when one is too long
+ * to run a pattern over.
+ */
 function linesOf(text: string | undefined): string[] | undefined {
   const lines: string[] = [];
+  let open = '';
   for (const raw of (text ?? '').split('\n')) {
     if (raw.length > MAX_LINE_CHARS) return undefined;
-    lines.push(normalizeLine(raw));
+    const clean = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+    const joined = open + clean;
+    if (joined.length > MAX_LINE_CHARS) return undefined;
+    if (clean.endsWith('\\')) {
+      open = joined.slice(0, -1);
+      continue;
+    }
+    lines.push(normalizeLine(joined));
+    open = '';
   }
+  if (open !== '') lines.push(normalizeLine(open));
   return lines;
+}
+
+/** Whether any line that is new here lies inside a fence; an unclosed fence runs to the end. */
+function newFencedLine(lines: readonly string[], known: ReadonlySet<string>): boolean {
+  let fence: string | undefined;
+  for (const line of lines) {
+    const marker = line.startsWith('```') ? '```' : line.startsWith('~~~') ? '~~~' : undefined;
+    if (fence === undefined) {
+      if (marker !== undefined) fence = marker;
+    } else if (marker === fence) fence = undefined;
+    else if (line !== '' && !known.has(line)) return true;
+  }
+  return false;
 }
 
 /** Front matter from the very start of the file, closed within a bounded number of lines. */
@@ -208,6 +234,9 @@ export function compareTrees(
           unclear.push({ kind: 'hook', detail: clean(path) });
         }
         const known = new Set(knownLines);
+        if (newFencedLine(lines, known)) {
+          unclear.push({ kind: 'fenced-change', detail: clean(path) });
+        }
         for (const line of lines) {
           if (!known.has(line) && INSTALL_TOKEN.test(line)) {
             unclear.push({ kind: 'install-step', detail: clean(`${path}: ${line}`) });
