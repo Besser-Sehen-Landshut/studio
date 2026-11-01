@@ -3,6 +3,9 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import { globProblem } from './glob.js';
+
+export { globProblem };
 
 export const ROLE_TEMPLATES = ['builder', 'reviewer', 'designer', 'researcher', 'release'] as const;
 export type RoleTemplate = (typeof ROLE_TEMPLATES)[number];
@@ -70,7 +73,14 @@ const roleSkillsSchema = z.strictObject({
   when: z
     .array(
       z.strictObject({
-        paths: z.array(z.string().min(1)).optional(),
+        paths: z
+          .array(
+            z.string().superRefine((g, ctx) => {
+              const problem = globProblem(g);
+              if (problem !== undefined) ctx.addIssue({ code: 'custom', message: problem });
+            }),
+          )
+          .optional(),
         itemTypes: z.array(z.enum(ITEM_TYPES)).optional(),
         required: z.array(z.string()).optional(),
         allowed: z.array(z.string()).optional(),

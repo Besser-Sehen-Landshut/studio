@@ -7468,7 +7468,7 @@ var require_quote = __commonJS({
 var require_parse = __commonJS({
   "node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/parse.js"(exports, module) {
     "use strict";
-    var CONTROL = (
+    var CONTROL2 = (
       /** @type {const} */
       "(?:" + /** @type {const} */
       [
@@ -7496,7 +7496,7 @@ var require_parse = __commonJS({
       ) + /** @type {const} */
       ")"
     );
-    var controlRE = new RegExp("^" + CONTROL + "$");
+    var controlRE = new RegExp("^" + CONTROL2 + "$");
     var META = (
       /** @type {const} */
       "|&;()<> \\t"
@@ -7595,7 +7595,7 @@ var require_parse = __commonJS({
       var BAREWORD = "(\\" + BS + `['"$\\` + BS + META + "]|\\$\\$|\\$(?!" + ANSI_C_QUOTE.slice(2) + `)|[^\\s'"$` + META + "])+";
       var DOUBLE_QUOTE = '"(?:\\' + BS + '[\\s\\S]|[^"\\' + BS + '])*"';
       var chunker = new RegExp([
-        "(" + CONTROL + ")",
+        "(" + CONTROL2 + ")",
         // control chars
         "(" + ANSI_C_QUOTE + "|" + BAREWORD + "|" + DOUBLE_QUOTE + "|" + SINGLE_QUOTE + ")+"
       ].join("|"), "g");
@@ -27821,6 +27821,62 @@ var import_yaml2 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync2 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join as join2, resolve, sep } from "node:path";
+
+// src/glob.ts
+var MAX_GLOB_LENGTH = 256;
+var MAX_GLOB_GROUPS = 8;
+var MAX_GLOB_EXPANSIONS = 64;
+var MAX_GLOB_WILDCARDS = 16;
+var CONTROL = new RegExp("\\p{Cc}", "u");
+function normalize(glob) {
+  return glob.replace(/\*{3,}/g, "**").replace(/(?:\*\*\/)+/g, "**/").replace(/\*\*\/\*\*(?!\/)/g, "**");
+}
+function countExpansions(glob) {
+  let total = 1;
+  let i2 = 0;
+  while (i2 < glob.length) {
+    const c3 = glob[i2];
+    if (c3 === "}") return void 0;
+    if (c3 !== "{") {
+      i2++;
+      continue;
+    }
+    let depth = 1;
+    let j = i2 + 1;
+    let start = j;
+    let sum = 0;
+    for (; j < glob.length && depth > 0; j++) {
+      if (glob[j] === "{") depth++;
+      else if (glob[j] === "}") depth--;
+      if (depth === 1 && glob[j] === "," || depth === 0) {
+        const part = countExpansions(glob.slice(start, j));
+        if (part === void 0) return void 0;
+        sum += part;
+        start = j + 1;
+      }
+    }
+    if (depth > 0) return void 0;
+    total = Math.min(total * sum, MAX_GLOB_EXPANSIONS + 1);
+    i2 = j;
+  }
+  return total;
+}
+function globProblem(glob) {
+  if (glob.length === 0) return "empty glob";
+  if (glob.length > MAX_GLOB_LENGTH) return `glob longer than ${MAX_GLOB_LENGTH} characters`;
+  if (CONTROL.test(glob)) return "control character in glob";
+  if ([...glob].filter((c3) => c3 === "{").length > MAX_GLOB_GROUPS) {
+    return `more than ${MAX_GLOB_GROUPS} brace groups in glob`;
+  }
+  const n2 = countExpansions(glob);
+  if (n2 === void 0) return "unbalanced braces in glob";
+  if (n2 > MAX_GLOB_EXPANSIONS) return `glob expands to more than ${MAX_GLOB_EXPANSIONS} patterns`;
+  const wildcards = normalize(glob).match(/\*+|\?/g)?.length ?? 0;
+  if (wildcards > MAX_GLOB_WILDCARDS) return `more than ${MAX_GLOB_WILDCARDS} wildcards in glob`;
+  return void 0;
+}
+
+// src/config.ts
 var ROLE_TEMPLATES = ["builder", "reviewer", "designer", "researcher", "release"];
 var strList2 = external_exports.array(external_exports.string()).default([]);
 var CREDENTIAL_PATHS = [
@@ -27857,7 +27913,12 @@ var roleSkillsSchema = external_exports.strictObject({
   // More skills when the item's paths or type match, on top of capabilities/INDEX.yaml.
   when: external_exports.array(
     external_exports.strictObject({
-      paths: external_exports.array(external_exports.string().min(1)).optional(),
+      paths: external_exports.array(
+        external_exports.string().superRefine((g, ctx) => {
+          const problem = globProblem(g);
+          if (problem !== void 0) ctx.addIssue({ code: "custom", message: problem });
+        })
+      ).optional(),
       itemTypes: external_exports.array(external_exports.enum(ITEM_TYPES)).optional(),
       required: external_exports.array(external_exports.string()).optional(),
       allowed: external_exports.array(external_exports.string()).optional()

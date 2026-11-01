@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -6,13 +6,14 @@ import { MODEL_NAME_RE as BOARD_MODEL_RE, type WorkItem } from '../src/board.js'
 import {
   CapabilitiesError,
   capabilitiesDir,
+  globProblem,
   itemTriggers,
   loadCapabilities,
   matchGlob,
   phaseOf,
   resolveSkills,
 } from '../src/capabilities.js';
-import { MODEL_NAME_RE } from '../src/config.js';
+import { globProblem as configGlobProblem, loadConfig, MODEL_NAME_RE } from '../src/config.js';
 
 const item = (over: Partial<WorkItem> = {}): WorkItem => ({
   id: 'APP-1',
@@ -268,5 +269,105 @@ describe('item facts', () => {
     expect(BOARD_MODEL_RE.source).toBe(MODEL_NAME_RE.source);
     expect(MODEL_NAME_RE.test('opus[1m]')).toBe(true);
     expect(MODEL_NAME_RE.test('--evil')).toBe(false);
+  });
+});
+
+describe('hostile paths', () => {
+  it.each([
+    ['**/*.ts', 'a\nb.ts'],
+    ['src/**', 'src/a\nb'],
+    ['**/*auth*', 'a\nauth'],
+    ['a?b', 'a\nb'],
+  ])('%j matches across a newline in %j', (glob, path) => {
+    expect(matchGlob(glob, path)).toBe(true);
+  });
+  it.each([
+    'docs/a\nb.md',
+    'docs/a\u0007.md',
+    'docs/\u001b[2Ja.md',
+    'docs/a\tb.md',
+    'docs/a\u0085.md',
+  ])('a path with a control character turns every path row on: %j', (path) => {
+    expect(analyzerIds([path])).toContain('security');
+  });
+  it('an absurdly long path turns every path row on', () => {
+    expect(analyzerIds([`docs/${'a'.repeat(5000)}.md`])).toContain('security');
+  });
+  it('a harmless path does not', () => {
+    expect(analyzerIds(['docs/readme.md'])).not.toContain('security');
+  });
+});
+
+describe('auth paths in any position', () => {
+  it.each([
+    'src/oauth/callback.ts',
+    'lib/oauth2.ts',
+    'src/OAuthProvider.tsx',
+    'lib/preauth.ts',
+    'src/user-session.ts',
+    'web/usersessions/a.ts',
+    'web/relogin.tsx',
+    'web/sso-login/page.tsx',
+    'lib/forgot-password.ts',
+    'web/change-password/page.tsx',
+    'lib/has_permission.py',
+    'lib/role-permissions/a.py',
+    '.github/actions/setup/run.sh',
+    '.github/actions/setup/action.yml',
+    'tools/deploy/action.yaml',
+    'action.yml',
+  ])('security is on for %s', (path) => {
+    expect(analyzerIds([path])).toContain('security');
+  });
+  it('the stack row for workflows sees local actions too', () => {
+    const r = resolveSkills(review(), 'reviewer', ['gha'], ['tools/x/action.yaml'], 'review');
+    expect(r.knowledge.map((k) => k.rowId)).toContain('gha-security');
+  });
+});
+
+describe('glob limits', () => {
+  const big = `${'{a,b}'.repeat(20)}`;
+  it.each([
+    ['too long', 'a'.repeat(257)],
+    ['too many brace groups', '{a,b}/'.repeat(9)],
+    ['too many expansions', '{a,b,c,d,e,f,g,h,i,j}{a,b,c,d,e,f,g,h,i,j}'],
+    ['nested expansions', '{a,{b,{c,{d,e}}}}{a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s}'],
+    ['unbalanced', '{a,b'],
+    ['too many wildcards', '*a'.repeat(17)],
+    ['a control character', 'a\nb'],
+    ['empty', ''],
+  ])('refuses %s', (_name, glob) => {
+    expect(globProblem(glob)).toBeDefined();
+    expect(configGlobProblem(glob)).toBeDefined();
+  });
+  it.each(['**/*.{tsx,css}', 'src/**', '**/**/**/a', '*', 'a/b.ts'])('accepts %s', (glob) => {
+    expect(globProblem(glob)).toBeUndefined();
+    expect(configGlobProblem(glob)).toBeUndefined();
+  });
+  it('matchGlob fails closed on a glob over the limits, without expanding it', () => {
+    const t = Date.now();
+    expect(matchGlob(big, 'nothing')).toBe(true);
+    expect(Date.now() - t).toBeLessThan(200);
+  });
+  it('collapses repeated globstars and stays fast on a near miss', () => {
+    expect(matchGlob('**/**/**/**/a', 'a')).toBe(true);
+    expect(matchGlob('**/**/**/**/a', 'x/y/a')).toBe(true);
+    const t = Date.now();
+    expect(matchGlob(`${'**/'.repeat(80)}a`, `${'x/'.repeat(1000)}b`)).toBe(false);
+    expect(matchGlob('***', 'a/b')).toBe(true);
+    expect(Date.now() - t).toBeLessThan(200);
+  });
+  it('the index refuses a glob over the limits', () => {
+    const text = `version: 1\nrows:\n  - { id: a, ref: "skill:x", mode: offered, load: invoke, when: { paths: ["${'{a,b}'.repeat(9)}"] } }\n`;
+    expect(() => loadCapabilities(fixture(text))).toThrow(CapabilitiesError);
+  });
+  it('studio.yaml refuses a glob over the limits in skills.when', () => {
+    const d = fixture(undefined);
+    mkdirSync(join(d, '.studio'));
+    writeFileSync(
+      join(d, '.studio', 'studio.yaml'),
+      `studio: 1\nprimary_repo: org/app\nrepos: [org/app]\nci:\n  provider: github\n  runners: github-hosted\n  capacity: { total: 1, merge_max_busy: 1, check_twice_seconds: 0 }\nmerge: { strategy: studio-queue }\nroles:\n  builder: { model: a, wip: 1, skills: { when: [{ paths: ["${'{a,b}'.repeat(9)}"] }] } }\n`,
+    );
+    expect(() => loadConfig(d)).toThrow(/skills/);
   });
 });

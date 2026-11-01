@@ -98,20 +98,20 @@ rows:
       any:
         - risks: [auth, security, data, migration]
         - paths:
-            - "**/auth*"
-            - "**/auth*/**"
-            - "**/login*"
-            - "**/login*/**"
+            - "**/*auth*"
+            - "**/*auth*/**"
+            - "**/*login*"
+            - "**/*login*/**"
             - "**/logout*"
             - "**/logout*/**"
-            - "**/password*"
-            - "**/password*/**"
-            - "**/session*"
-            - "**/session*/**"
+            - "**/*password*"
+            - "**/*password*/**"
+            - "**/*session*"
+            - "**/*session*/**"
             - "**/middleware*"
             - "**/middleware*/**"
-            - "**/permission*"
-            - "**/permission*/**"
+            - "**/*permission*"
+            - "**/*permission*/**"
             - "**/polic*"
             - "**/polic*/**"
             - "**/rls*"
@@ -140,6 +140,8 @@ rows:
             - "**/upload*"
             - "**/upload*/**"
             - ".github/workflows/**"
+            - ".github/actions/**"
+            - "**/action.y*ml"
     mode: review
     load: subagent
     model: capable
@@ -344,7 +346,12 @@ rows:
   - id: gha-security
     ref: source:gha/skills/gha-security-review/SKILL.md
     source: gha
-    when: { stacks: [gha], roles: [reviewer], paths: [".github/workflows/**", "**/action.yml"] }
+    when:
+      {
+        stacks: [gha],
+        roles: [reviewer],
+        paths: [".github/workflows/**", ".github/actions/**", "**/action.y*ml"],
+      }
     mode: review
     load: subagent
   - id: docker-compose

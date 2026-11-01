@@ -5,8 +5,9 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import type { WorkItem } from './board.js';
 import type { RoleSkills } from './config.js';
+import { globProblem, hostilePath, matchGlob } from './glob.js';
 
-// scripts/gen-schema.ts loads this file through node's type stripping: type imports only.
+export { globProblem, matchGlob };
 
 export const PHASES = ['design', 'build', 'review'] as const;
 export type Phase = (typeof PHASES)[number];
@@ -20,8 +21,13 @@ const TIERS = ['small', 'large'] as const;
 const REF_RE = /^(skill|analyzer|knowledge|design|source|bundled):[^\s]+$/;
 const refSchema = z.string().regex(REF_RE, 'must be <kind>:<name>');
 
+const globSchema = z.string().superRefine((g, ctx) => {
+  const problem = globProblem(g);
+  if (problem !== undefined) ctx.addIssue({ code: 'custom', message: problem });
+});
+
 const whenPart = {
-  paths: z.array(z.string().min(1)).optional(),
+  paths: z.array(globSchema).optional(),
   risks: z.array(z.enum(RISKS)).optional(),
 };
 
@@ -105,38 +111,6 @@ export function loadCapabilities(dir: string = capabilitiesDir()): CapabilitiesI
   return parsed.data;
 }
 
-function expandBraces(glob: string): string[] {
-  const m = /\{([^{}]*)\}/.exec(glob);
-  if (!m) return [glob];
-  const head = glob.slice(0, m.index);
-  const tail = glob.slice(m.index + m[0].length);
-  return (m[1] as string).split(',').flatMap((alt) => expandBraces(head + alt + tail));
-}
-
-function globToRegExp(glob: string): RegExp {
-  let out = '';
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i] as string;
-    if (c === '*' && glob[i + 1] === '*') {
-      if (glob[i + 2] === '/') {
-        out += '(?:[^/]*/)*';
-        i += 2;
-      } else {
-        out += '.*';
-        i += 1;
-      }
-    } else if (c === '*') out += '[^/]*';
-    else if (c === '?') out += '[^/]';
-    else out += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  }
-  return new RegExp(`^${out}$`, 'i');
-}
-
-/** `**`, `*`, `?` and `{a,b}`; case-insensitive, because a file system or a person may be. */
-export function matchGlob(glob: string, path: string): boolean {
-  return expandBraces(glob).some((g) => globToRegExp(g).test(path));
-}
-
 export type ChangedPaths = readonly string[] | 'unknown';
 
 export interface ResolveOptions {
@@ -174,9 +148,9 @@ export interface ResolvedSkills {
   denied: string[];
 }
 
-/** Unknown changed paths match every path condition: a security row must not fall silent. */
+/** Unknown or hostile changed paths match every path condition: a security row must not fall silent. */
 const pathsHit = (globs: readonly string[], paths: ChangedPaths): boolean =>
-  paths === 'unknown' || paths.some((p) => globs.some((g) => matchGlob(g, p)));
+  paths === 'unknown' || paths.some((p) => hostilePath(p) || globs.some((g) => matchGlob(g, p)));
 
 const someOf = <T>(want: readonly T[], have: readonly T[]): boolean =>
   want.some((w) => have.includes(w));
