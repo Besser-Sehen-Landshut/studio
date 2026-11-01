@@ -13,6 +13,7 @@ registerHooks({
 const { boardSchema } = await import('../src/board.ts');
 const { capabilitiesSchema } = await import('../src/capabilities.ts');
 const { ownerConfigSchema, studioConfigSchema } = await import('../src/config.ts');
+const { sourcesSchema } = await import('../src/sources.ts');
 
 const snake = (key: string): string => key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 
@@ -48,6 +49,7 @@ for (const [file, zodSchema] of [
   ['schema/board.schema.json', boardSchema],
   ['schema/owner.schema.json', ownerConfigSchema],
   ['schema/capabilities.schema.json', capabilitiesSchema],
+  ['schema/sources.schema.json', sourcesSchema],
 ] as const) {
   const schema = snakeProps(z.toJSONSchema(zodSchema, { io: 'input' }));
   writeFileSync(file, `${JSON.stringify(schema, null, 2)}\n`);

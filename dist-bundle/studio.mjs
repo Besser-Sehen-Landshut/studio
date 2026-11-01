@@ -7845,7 +7845,7 @@ import { homedir as homedir6 } from "node:os";
 
 // src/cli.ts
 import { existsSync as existsSync5 } from "node:fs";
-import { dirname as dirname8, join as join16, resolve as resolve5 } from "node:path";
+import { dirname as dirname8, join as join17, resolve as resolve5 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/board.ts
@@ -23784,12 +23784,12 @@ function finalize(ctx, schema) {
     if (ref) {
       flattenRef(ref);
       const refSeen = ctx.seen.get(ref);
-      const refSchema = refSeen.schema;
-      if (refSchema.$ref && (ctx.target === "draft-07" || ctx.target === "draft-04" || ctx.target === "openapi-3.0")) {
+      const refSchema2 = refSeen.schema;
+      if (refSchema2.$ref && (ctx.target === "draft-07" || ctx.target === "draft-04" || ctx.target === "openapi-3.0")) {
         schema2.allOf = schema2.allOf ?? [];
-        schema2.allOf.push(refSchema);
+        schema2.allOf.push(refSchema2);
       } else {
-        assignProps(schema2, refSchema);
+        assignProps(schema2, refSchema2);
       }
       assignProps(schema2, _cached);
       const isParentRef = zodSchema._zod.parent === ref;
@@ -23802,7 +23802,7 @@ function finalize(ctx, schema) {
           }
         }
       }
-      if (refSchema.$ref && refSeen.def) {
+      if (refSchema2.$ref && refSeen.def) {
         for (const key in schema2) {
           if (key === "$ref" || key === "allOf")
             continue;
@@ -27816,11 +27816,9 @@ function transition(board, id, to, by, now) {
   };
 }
 
-// src/config.ts
+// src/capabilities.ts
 var import_yaml2 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync2 } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, join as join2, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // src/glob.ts
 var MAX_GLOB_LENGTH = 256;
@@ -27876,7 +27874,60 @@ function globProblem(glob) {
   return void 0;
 }
 
+// src/capabilities.ts
+var PHASES = ["design", "build", "review"];
+var TRIGGERS = ["rework", "after-fix", "epic-end", "release"];
+var ROLES = ["lead", "builder", "reviewer", "designer", "researcher", "release"];
+var ITEM_TYPES = ["feature", "fix", "chore", "docs", "research", "review", "release"];
+var RISKS = ["ui", "landing", "auth", "security", "data", "migration"];
+var TIERS = ["small", "large"];
+var REF_RE = /^(skill|analyzer|knowledge|design|source|bundled):[^\s]+$/;
+var refSchema = external_exports.string().regex(REF_RE, "must be <kind>:<name>");
+var globSchema = external_exports.string().superRefine((g, ctx) => {
+  const problem = globProblem(g);
+  if (problem !== void 0) ctx.addIssue({ code: "custom", message: problem });
+});
+var whenPart = {
+  paths: external_exports.array(globSchema).optional(),
+  risks: external_exports.array(external_exports.enum(RISKS)).optional()
+};
+var whenSchema = external_exports.strictObject({
+  roles: external_exports.array(external_exports.enum(ROLES)).optional(),
+  itemTypes: external_exports.array(external_exports.enum(ITEM_TYPES)).optional(),
+  itemTypesNot: external_exports.array(external_exports.enum(ITEM_TYPES)).optional(),
+  stacks: external_exports.array(external_exports.string().min(1)).optional(),
+  phases: external_exports.array(external_exports.enum(PHASES)).optional(),
+  triggers: external_exports.array(external_exports.enum(TRIGGERS)).optional(),
+  tiers: external_exports.array(external_exports.enum(TIERS)).optional(),
+  any: external_exports.array(external_exports.strictObject(whenPart)).optional(),
+  ...whenPart
+});
+var rowSchema = external_exports.strictObject({
+  id: external_exports.string().regex(/^[a-z0-9-]+$/),
+  ref: external_exports.union([refSchema, external_exports.array(refSchema).min(1)]),
+  when: whenSchema,
+  mode: external_exports.enum(["required", "offered", "review"]),
+  load: external_exports.enum(["invoke", "read", "subagent", "run"]),
+  source: external_exports.string().optional(),
+  fallback: refSchema.optional(),
+  model: external_exports.enum(["standard", "capable"]).optional(),
+  optional: external_exports.boolean().optional(),
+  overrides: external_exports.array(external_exports.string()).optional()
+});
+var capabilitiesSchema = external_exports.strictObject({
+  version: external_exports.literal(1),
+  rows: external_exports.array(rowSchema),
+  denied: external_exports.array(refSchema).default([])
+});
+function capabilitiesDir() {
+  return fileURLToPath(new URL("../capabilities/", import.meta.url));
+}
+
 // src/config.ts
+var import_yaml3 = __toESM(require_dist(), 1);
+import { readFileSync as readFileSync2 } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join as join2, resolve, sep } from "node:path";
 var ROLE_TEMPLATES = ["builder", "reviewer", "designer", "researcher", "release"];
 var strList2 = external_exports.array(external_exports.string()).default([]);
 var CREDENTIAL_PATHS = [
@@ -27905,7 +27956,7 @@ function toolchainPathProblem(path10, home, extraProtectedPaths = [], platform2 
 }
 var MODEL_NAME_RE2 = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
 var modelName = external_exports.string().regex(MODEL_NAME_RE2, "not a model name");
-var ITEM_TYPES = ["feature", "fix", "chore", "docs", "research", "review", "release"];
+var ITEM_TYPES2 = ["feature", "fix", "chore", "docs", "research", "review", "release"];
 var roleSkillsSchema = external_exports.strictObject({
   required: strList2,
   allowed: strList2,
@@ -27919,7 +27970,7 @@ var roleSkillsSchema = external_exports.strictObject({
           if (problem !== void 0) ctx.addIssue({ code: "custom", message: problem });
         })
       ).optional(),
-      itemTypes: external_exports.array(external_exports.enum(ITEM_TYPES)).optional(),
+      itemTypes: external_exports.array(external_exports.enum(ITEM_TYPES2)).optional(),
       required: external_exports.array(external_exports.string()).optional(),
       allowed: external_exports.array(external_exports.string()).optional()
     })
@@ -27928,7 +27979,7 @@ var roleSkillsSchema = external_exports.strictObject({
 var roleSchema = external_exports.strictObject({
   model: modelName,
   // Another model for some item types, e.g. a cheaper one for docs.
-  types: external_exports.partialRecord(external_exports.enum(ITEM_TYPES), modelName).optional(),
+  types: external_exports.partialRecord(external_exports.enum(ITEM_TYPES2), modelName).optional(),
   // What `studio escalate <id>` moves a stuck item of this role to.
   escalateTo: modelName.optional(),
   wip: external_exports.number().int().positive(),
@@ -28022,7 +28073,7 @@ function loadConfig(projectDir) {
   }
   let raw;
   try {
-    raw = (0, import_yaml2.parse)(text);
+    raw = (0, import_yaml3.parse)(text);
   } catch (e) {
     throw new ConfigError(file2, `invalid YAML (${e.message})`);
   }
@@ -28088,7 +28139,7 @@ function loadOwnerConfig(opts = {}) {
   }
   let raw;
   try {
-    raw = (0, import_yaml2.parse)(text) ?? {};
+    raw = (0, import_yaml3.parse)(text) ?? {};
   } catch (e) {
     throw new ConfigError(file2, `invalid YAML (${e.message})`);
   }
@@ -29640,7 +29691,7 @@ import {
 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { basename as basename4, dirname as dirname7, join as join9, resolve as resolve4, sep as sep4 } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/guard.ts
 var import_shell_quote = __toESM(require_shell_quote(), 1);
@@ -29982,7 +30033,7 @@ function clearPause(root) {
 // src/crew.ts
 var crewName = (item) => `studio-${item.role}-${item.id.toLowerCase()}`;
 var GUARD_BIN = resolve4(
-  dirname7(fileURLToPath(import.meta.url)),
+  dirname7(fileURLToPath2(import.meta.url)),
   "..",
   "bin",
   "studio-guard.mjs"
@@ -31507,7 +31558,7 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
 }
 
 // src/report.ts
-var import_yaml3 = __toESM(require_dist(), 1);
+var import_yaml4 = __toESM(require_dist(), 1);
 import {
   closeSync as closeSync3,
   constants as constants2,
@@ -31546,7 +31597,7 @@ function parseReport(text, item) {
   const front = m[1].replace(/^(head_sha:[ \t]*)([0-9a-fA-F]{40})[ \t]*$/m, '$1"$2"');
   let raw;
   try {
-    raw = (0, import_yaml3.parse)(front);
+    raw = (0, import_yaml4.parse)(front);
   } catch {
     throw new ReportError("report frontmatter is not valid YAML");
   }
@@ -31637,12 +31688,12 @@ function checkReportHead(report, prHead) {
 }
 
 // src/secret-command.ts
-var import_yaml6 = __toESM(require_dist(), 1);
+var import_yaml7 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync13 } from "node:fs";
 import { join as join14 } from "node:path";
 
 // src/setup-ci-command.ts
-var import_yaml5 = __toESM(require_dist(), 1);
+var import_yaml6 = __toESM(require_dist(), 1);
 import { randomBytes as randomBytes4 } from "node:crypto";
 import {
   readdirSync as readdirSync3,
@@ -31655,7 +31706,7 @@ import {
 import { join as join13 } from "node:path";
 
 // src/setup-ci.ts
-var import_yaml4 = __toESM(require_dist(), 1);
+var import_yaml5 = __toESM(require_dist(), 1);
 var RUNNER_JQ2 = '.runners[] | [.name, .status, .busy, ([.labels[].name] | join(","))] | @tsv';
 var RUNNER_LINE2 = /^(\S+)\t(online|offline)\t(true|false)\t([^\t]*)$/;
 var SAFE_NAME = /^[A-Za-z0-9_.-]+$/;
@@ -31840,7 +31891,7 @@ function resolveRunsOn(value) {
 function parseWorkflow(text) {
   let doc;
   try {
-    doc = (0, import_yaml4.parse)(text);
+    doc = (0, import_yaml5.parse)(text);
   } catch (err) {
     return { ok: false, error: `cannot parse: ${clean(err instanceof Error ? err.message : err)}` };
   }
@@ -31992,13 +32043,13 @@ function syncMap(doc, map2, want) {
   if (!map2) return;
   for (const [key, value] of Object.entries(want)) {
     const existing = map2.get(key, true);
-    if (isPlainObject2(value) && (0, import_yaml5.isMap)(existing)) syncMap(doc, existing, value);
-    else if ((0, import_yaml5.isScalar)(existing) && (value === null || typeof value !== "object")) {
+    if (isPlainObject2(value) && (0, import_yaml6.isMap)(existing)) syncMap(doc, existing, value);
+    else if ((0, import_yaml6.isScalar)(existing) && (value === null || typeof value !== "object")) {
       existing.value = value;
     } else map2.set(key, doc.createNode(value));
   }
   for (const pair of [...map2.items]) {
-    const key = (0, import_yaml5.isScalar)(pair.key) ? pair.key.value : pair.key;
+    const key = (0, import_yaml6.isScalar)(pair.key) ? pair.key.value : pair.key;
     if (typeof key !== "string" || !(key in want)) map2.delete(key);
   }
 }
@@ -32049,7 +32100,7 @@ async function readVisibility(gh, repo) {
 function applyCi(doc, ci) {
   const want = snakeKeys(ci);
   const node2 = doc.get("ci", true);
-  if ((0, import_yaml5.isMap)(node2)) syncMap(doc, node2, want);
+  if ((0, import_yaml6.isMap)(node2)) syncMap(doc, node2, want);
   else doc.set("ci", doc.createNode(want));
   const raw = doc.toJS();
   if (isPlainObject2(raw) && "crew_toolchain_paths" in raw) {
@@ -32094,7 +32145,7 @@ async function runSetupCi(o2) {
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
     );
   }
-  const doc = (0, import_yaml5.parseDocument)(text);
+  const doc = (0, import_yaml6.parseDocument)(text);
   if (doc.errors.length > 0) throw new Error(".studio/studio.yaml is not valid YAML");
   const primary = assertPrimaryRepo(doc.get("primary_repo"));
   const [owner = "", name = ""] = primary.split("/");
@@ -32141,7 +32192,7 @@ async function runSetupCi(o2) {
     if (ciOut === void 0) lines.push("  none");
     else
       lines.push(
-        ...(0, import_yaml5.stringify)(ciOut).trimEnd().split("\n").map((l) => `  ${l}`)
+        ...(0, import_yaml6.stringify)(ciOut).trimEnd().split("\n").map((l) => `  ${l}`)
       );
     const section = (title, items) => {
       if (items.length > 0) lines.push(`${title}:`, ...items.map((i2) => `  - ${i2}`));
@@ -32162,7 +32213,7 @@ function readPrimaryRepo(project) {
   const file2 = join14(project, ".studio", "studio.yaml");
   let raw;
   try {
-    raw = (0, import_yaml6.parse)(readFileSync13(file2, "utf8"));
+    raw = (0, import_yaml7.parse)(readFileSync13(file2, "utf8"));
   } catch {
     throw new Error("cannot read .studio/studio.yaml");
   }
@@ -32264,10 +32315,67 @@ function runDoctor(o2) {
   return required2 && crewToken.status !== "set" ? 1 : 0;
 }
 
-// src/stack.ts
-var import_yaml7 = __toESM(require_dist(), 1);
-import { lstatSync as lstatSync12, readdirSync as readdirSync4, readFileSync as readFileSync14 } from "node:fs";
+// src/sources.ts
+var import_yaml8 = __toESM(require_dist(), 1);
+import { readFileSync as readFileSync14 } from "node:fs";
 import { join as join15 } from "node:path";
+var VENDORABLE = ["MIT", "Apache-2.0"];
+var safeRelative = (p) => p.length > 0 && !p.startsWith("/") && !p.includes("\\") && !p.split("/").some((seg) => seg === ".." || seg === "" || seg === ".") && !new RegExp("\\p{Cc}", "u").test(p);
+var sourceSchema = external_exports.strictObject({
+  id: external_exports.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+  kind: external_exports.enum(["git", "plugin", "skill"]),
+  url: external_exports.string().regex(/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "must be a GitHub https URL").optional(),
+  license: external_exports.string().min(1),
+  vendored: external_exports.boolean(),
+  notice: external_exports.string().optional(),
+  reads: external_exports.array(external_exports.string().refine(safeRelative, "must stay inside the source"))
+}).superRefine((s, ctx) => {
+  if (s.kind === "git" && s.url === void 0) {
+    ctx.addIssue({ code: "custom", message: "a git source needs a url", path: ["url"] });
+  }
+  if (s.vendored && !VENDORABLE.includes(s.license)) {
+    ctx.addIssue({ code: "custom", message: "only MIT or Apache-2.0 may be vendored" });
+  }
+  if (s.vendored && s.notice === void 0) {
+    ctx.addIssue({ code: "custom", message: "vendored content needs its notice" });
+  }
+});
+var sourcesSchema = external_exports.strictObject({
+  version: external_exports.literal(1),
+  rules: external_exports.array(external_exports.string()).default([]),
+  sources: external_exports.array(sourceSchema)
+});
+var SourcesError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "SourcesError";
+  }
+};
+function loadSources(dir = capabilitiesDir()) {
+  const file2 = join15(dir, "SOURCES.yaml");
+  let raw;
+  try {
+    raw = (0, import_yaml8.parse)(readFileSync14(file2, "utf8"));
+  } catch (e) {
+    throw new SourcesError(`${file2}: cannot read (${e.message.split("\n")[0]})`);
+  }
+  const parsed = sourcesSchema.safeParse(raw);
+  if (!parsed.success) {
+    const where = parsed.error.issues.map((i2) => i2.path.join(".") || "(root)").join(", ");
+    throw new SourcesError(`${file2}: invalid at ${where}`);
+  }
+  const ids = /* @__PURE__ */ new Set();
+  for (const s of parsed.data.sources) {
+    if (ids.has(s.id)) throw new SourcesError(`${file2}: duplicate source id ${s.id}`);
+    ids.add(s.id);
+  }
+  return parsed.data;
+}
+
+// src/stack.ts
+var import_yaml9 = __toESM(require_dist(), 1);
+import { lstatSync as lstatSync12, readdirSync as readdirSync4, readFileSync as readFileSync15 } from "node:fs";
+import { join as join16 } from "node:path";
 var MAX_FILE_BYTES = 1024 * 1024;
 var MAX_ENTRIES = 200;
 var MONOREPO_DIRS = ["apps", "packages", "crates", "services"];
@@ -32302,7 +32410,7 @@ function readSmall(path10, notes, name) {
       notes.push(`${name}: larger than 1 MiB, not read`);
       return void 0;
     }
-    return readFileSync14(path10, "utf8");
+    return readFileSync15(path10, "utf8");
   } catch {
     notes.push(`${name}: cannot be read`);
     return void 0;
@@ -32310,7 +32418,7 @@ function readSmall(path10, notes, name) {
 }
 var isFileEntry = (dir, name) => {
   try {
-    return lstatSync12(join15(dir, name)).isFile();
+    return lstatSync12(join16(dir, name)).isFile();
   } catch {
     return false;
   }
@@ -32344,7 +32452,7 @@ function scanDir(dir, label, found, notes) {
     return;
   }
   const file2 = (n2) => isFileEntry(dir, n2);
-  const read2 = (n2) => readSmall(join15(dir, n2), notes, label ? `${label}/${n2}` : n2);
+  const read2 = (n2) => readSmall(join16(dir, n2), notes, label ? `${label}/${n2}` : n2);
   const some = (re) => names.some((n2) => re.test(n2) && file2(n2));
   const pkg = names.includes("package.json") && file2("package.json") ? read2("package.json") : void 0;
   if (pkg !== void 0) {
@@ -32354,7 +32462,7 @@ function scanDir(dir, label, found, notes) {
   }
   if (some(/^next\.config\./)) found.add("nextjs");
   if (some(/^components\.json$/)) found.add("shadcn");
-  if (isRealDir(join15(dir, "migrations"))) found.add("postgres");
+  if (isRealDir(join16(dir, "migrations"))) found.add("postgres");
   if (some(/^(Podfile|Package\.swift)$/) || names.some((n2) => n2.endsWith(".xcodeproj"))) {
     found.add("ios");
   }
@@ -32362,7 +32470,7 @@ function scanDir(dir, label, found, notes) {
     if (/WinUI|WindowsAppSDK/i.test(read2(n2) ?? "")) found.add("winui");
   }
   if (some(/^Cargo\.toml$/)) found.add("rust");
-  if (isRealDir(join15(dir, "src-tauri"))) {
+  if (isRealDir(join16(dir, "src-tauri"))) {
     found.add("tauri");
     found.add("rust");
   }
@@ -32371,7 +32479,7 @@ function scanDir(dir, label, found, notes) {
   if (some(/^svelte\.config\./)) found.add("svelte");
   if (some(/^(astro\.config\..*|vite\.config\..*|index\.html)$/)) found.add("web");
   if (some(/^Dockerfile/) || some(/^(docker-)?compose.*\.ya?ml$/)) found.add("docker");
-  if (some(/^wp-config\.php$/) || isRealDir(join15(dir, "wp-content"))) found.add("wordpress");
+  if (some(/^wp-config\.php$/) || isRealDir(join16(dir, "wp-content"))) found.add("wordpress");
   if (some(/^style\.css$/) && /Theme Name:/.test(read2("style.css") ?? "")) found.add("wordpress");
   for (const n2 of names.filter((x) => x.endsWith(".php") && file2(x))) {
     if (/Plugin Name:/.test(read2(n2) ?? "")) found.add("wordpress");
@@ -32381,29 +32489,29 @@ function detectStacks(dir) {
   const found = /* @__PURE__ */ new Set();
   const notes = [];
   scanDir(dir, "", found, notes);
-  if (isRealDir(join15(dir, ".github", "workflows"))) found.add("gha");
+  if (isRealDir(join16(dir, ".github", "workflows"))) found.add("gha");
   for (const group of MONOREPO_DIRS) {
-    const base = join15(dir, group);
+    const base = join16(dir, group);
     if (!isRealDir(base)) continue;
     for (const name of readdirSync4(base).slice(0, MAX_ENTRIES)) {
       if (name.startsWith(".") || name === "node_modules") continue;
-      if (isRealDir(join15(base, name))) scanDir(join15(base, name), `${group}/${name}`, found, notes);
+      if (isRealDir(join16(base, name))) scanDir(join16(base, name), `${group}/${name}`, found, notes);
     }
   }
   if (OTHER_WEB.some((s) => found.has(s))) found.delete("web");
   return { stacks: [...found].sort(), notes };
 }
 function runSetupStack(o2) {
-  const file2 = join15(o2.project, ".studio", "studio.yaml");
+  const file2 = join16(o2.project, ".studio", "studio.yaml");
   let text;
   try {
-    text = readFileSync14(file2, "utf8");
+    text = readFileSync15(file2, "utf8");
   } catch (e) {
     throw new Error(
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
     );
   }
-  const doc = (0, import_yaml7.parseDocument)(text);
+  const doc = (0, import_yaml9.parseDocument)(text);
   if (doc.errors.length > 0) throw new Error(".studio/studio.yaml is not valid YAML");
   const { stacks, notes } = detectStacks(o2.project);
   let stored = [];
@@ -32456,6 +32564,7 @@ Commands:
   resume                   Owner only: lift the pause
   stop <id>                Stop a crew session
   metrics                  Lead time and deployment frequency
+  sources list             Third-party sources and their licences
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
   setup stack [--write]    Detect the project's stacks from its manifest files
   secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
@@ -32721,7 +32830,7 @@ async function runCli(argv, deps) {
             throw new Error(`crew record for ${item.id} has no valid startedAt`);
           }
         }
-        const clone2 = join16(stateRoot(), "clones", item.id);
+        const clone2 = join17(stateRoot(), "clones", item.id);
         const report = readReport(clone2, item.id, item, { notBefore });
         let branch = `studio/${item.id}`;
         if (report.pr !== void 0) {
@@ -32899,7 +33008,7 @@ async function runCli(argv, deps) {
             mainBuild: await readMainBuild(config2, ports),
             crewRecordsUnreadable: crewProblem !== void 0,
             alive: (pid) => Number.isInteger(pid) && pid > 0 && ports.claude.alive(pid),
-            hasReport: (item) => isItemId(item) && existsSync5(join16(root, "clones", item, ".studio", "reports", `${item}.md`))
+            hasReport: (item) => isItemId(item) && existsSync5(join17(root, "clones", item, ".studio", "reports", `${item}.md`))
           }
         );
         writeState(root, snapshot);
@@ -32952,7 +33061,7 @@ async function runCli(argv, deps) {
         const stoppedAt = ports.clock.now().toISOString();
         const latest = readCrewRecords(root);
         latest[id] = { ...latest[id] ?? rec, stoppedAt };
-        writeStateFile(root, join16(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
+        writeStateFile(root, join17(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
 `);
         print({ item: id, name: rec.name, pid: rec.pid, stoppedAt });
         return 0;
@@ -33001,6 +33110,14 @@ async function runCli(argv, deps) {
         const r = clearBlocks(ownerRoot(), label, ports.clock.now());
         print({ label, ...r });
         return 0;
+      }
+      case "sources": {
+        const [sub] = rest;
+        if (sub === "list") {
+          print({ capabilitiesDir: capabilitiesDir(), sources: loadSources().sources });
+          return 0;
+        }
+        throw new UsageError("sources needs a subcommand: list");
       }
       case "metrics": {
         print(computeMetrics(readMetricEvents(stateRoot())));
@@ -33257,7 +33374,7 @@ function readHiddenLine(prompt, input2, write) {
 
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync5, openSync as openSync5, readFileSync as readFileSync17 } from "node:fs";
+import { closeSync as closeSync5, openSync as openSync5, readFileSync as readFileSync18 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -33270,7 +33387,7 @@ function isPlainObject3(value) {
 }
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/file-url.js
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 var safeNormalizeFileUrl = (file2, name) => {
   const fileString = normalizeFileUrl(normalizeDenoExecPath(file2));
   if (typeof fileString !== "string") {
@@ -33280,7 +33397,7 @@ var safeNormalizeFileUrl = (file2, name) => {
 };
 var normalizeDenoExecPath = (file2) => isDenoExecPath(file2) ? file2.toString() : file2;
 var isDenoExecPath = (file2) => typeof file2 !== "string" && file2 && Object.getPrototypeOf(file2) === String.prototype;
-var normalizeFileUrl = (file2) => file2 instanceof URL ? fileURLToPath2(file2) : file2;
+var normalizeFileUrl = (file2) => file2 instanceof URL ? fileURLToPath3(file2) : file2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/parameters.js
 var normalizeParameters = (rawFile, rawArguments = [], rawOptions, ...rawExtraArguments) => {
@@ -34239,10 +34356,10 @@ function pathKey2(options = {}) {
 import { promisify } from "node:util";
 import { execFile as execFileCallback, execFileSync as execFileSyncOriginal } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
 var execFileOriginal = promisify(execFileCallback);
 function toPath(urlOrPath) {
-  return urlOrPath instanceof URL ? fileURLToPath3(urlOrPath) : urlOrPath;
+  return urlOrPath instanceof URL ? fileURLToPath4(urlOrPath) : urlOrPath;
 }
 function traversePathUp(startPath) {
   return {
@@ -36953,7 +37070,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync16 } from "node:fs";
+import { readFileSync as readFileSync17 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value, optionName) => {
@@ -37309,7 +37426,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync15 } from "node:fs";
+import { readFileSync as readFileSync16 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -37423,7 +37540,7 @@ var getTargetFd = ({ value, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync15(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync16(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value, fdNumber) => {
   if (value === "inherit") {
@@ -37492,9 +37609,9 @@ var getInputFileType = (inputFile) => {
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/duplicate.js
 import path8 from "node:path";
-import { fileURLToPath as fileURLToPath4 } from "node:url";
+import { fileURLToPath as fileURLToPath5 } from "node:url";
 var isFileType = (type) => SPECIAL_DUPLICATE_TYPES_SYNC.has(type);
-var getFileTarget = ({ type, value }) => type === "filePath" ? path8.resolve(value.file) : fileURLToPath4(value);
+var getFileTarget = ({ type, value }) => type === "filePath" ? path8.resolve(value.file) : fileURLToPath5(value);
 var filterDuplicates = (stdioItems) => stdioItems.filter((stdioItemOne, indexOne) => stdioItems.every((stdioItemTwo, indexTwo) => !hasSameValueAndDirection(stdioItemOne, stdioItemTwo) || indexOne >= indexTwo || stdioItemOne.type === "generator" || stdioItemOne.type === "asyncGenerator"));
 var hasSameValueAndDirection = (stdioItemOne, stdioItemTwo) => stdioItemOne.value === stdioItemTwo.value && stdioItemOne.direction === stdioItemTwo.direction;
 var getDuplicateStream = ({ stdioItem: { type, value, optionName }, direction, fileDescriptors, isSync }) => {
@@ -37817,8 +37934,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync16(value))] }),
-    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync16(file2))] }),
+    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync17(value))] }),
+    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync17(file2))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value }) => ({ contents: () => [...value] }),
     string: ({ value }) => ({ contents: [value] }),
@@ -41150,7 +41267,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync17(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync18(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }

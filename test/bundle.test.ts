@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -138,5 +139,17 @@ describe('self-contained plugin bundle', () => {
     } finally {
       rmSync(empty, { recursive: true, force: true });
     }
+  });
+});
+
+describe('capabilities in an installed plugin', () => {
+  it('the bundle finds them next to dist-bundle, without node_modules', () => {
+    const r = spawnSync('node', [join(plugin, 'bin', 'studio'), 'sources', 'list', '--json'], {
+      cwd: plugin,
+      encoding: 'utf8',
+    });
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).capabilitiesDir).toBe(join(realpathSync(plugin), 'capabilities/'));
   });
 });

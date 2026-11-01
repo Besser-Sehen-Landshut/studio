@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { type Board, loadBoard, saveBoard, transition, type WorkItem } from './board.js';
+import { capabilitiesDir } from './capabilities.js';
 import { readCapacity } from './capacity.js';
 import {
   configWarnings,
@@ -52,6 +53,7 @@ import {
 import { checkReportHead, readReport } from './report.js';
 import { runDoctor, runSecretSet } from './secret-command.js';
 import { runSetupCi } from './setup-ci-command.js';
+import { loadSources } from './sources.js';
 import { runSetupStack } from './stack.js';
 import {
   type CrewSnapshot,
@@ -99,6 +101,7 @@ Commands:
   resume                   Owner only: lift the pause
   stop <id>                Stop a crew session
   metrics                  Lead time and deployment frequency
+  sources list             Third-party sources and their licences
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
   setup stack [--write]    Detect the project's stacks from its manifest files
   secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
@@ -699,6 +702,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const r = clearBlocks(ownerRoot(), label, ports.clock.now());
         print({ label, ...r });
         return 0;
+      }
+
+      case 'sources': {
+        const [sub] = rest;
+        if (sub === 'list') {
+          print({ capabilitiesDir: capabilitiesDir(), sources: loadSources().sources });
+          return 0;
+        }
+        throw new UsageError('sources needs a subcommand: list');
       }
 
       case 'metrics': {
