@@ -608,8 +608,8 @@ var require_Node = __commonJS({
         };
         const res = toJS.toJS(this, "", ctx);
         if (typeof onAnchor === "function")
-          for (const { count: count2, res: res2 } of ctx.anchors.values())
-            onAnchor(res2, count2);
+          for (const { count: count3, res: res2 } of ctx.anchors.values())
+            onAnchor(res2, count3);
         return typeof reviver === "function" ? applyReviver.applyReviver(reviver, { "": res }, "", res) : res;
       }
     };
@@ -717,13 +717,13 @@ var require_Alias = __commonJS({
         const anchor2 = anchors2 && source && anchors2.get(source);
         return anchor2 ? anchor2.count * anchor2.aliasCount : 0;
       } else if (identity3.isCollection(node2)) {
-        let count2 = 0;
+        let count3 = 0;
         for (const item of node2.items) {
           const c3 = getAliasCount(doc, item, anchors2);
-          if (c3 > count2)
-            count2 = c3;
+          if (c3 > count3)
+            count3 = c3;
         }
-        return count2;
+        return count3;
       } else if (identity3.isPair(node2)) {
         const kc = getAliasCount(doc, node2.key, anchors2);
         const vc = getAliasCount(doc, node2.value, anchors2);
@@ -3676,8 +3676,8 @@ var require_Document = __commonJS({
         };
         const res = toJS.toJS(this.contents, jsonArg ?? "", ctx);
         if (typeof onAnchor === "function")
-          for (const { count: count2, res: res2 } of ctx.anchors.values())
-            onAnchor(res2, count2);
+          for (const { count: count3, res: res2 } of ctx.anchors.values())
+            onAnchor(res2, count3);
         return typeof reviver === "function" ? applyReviver.applyReviver(reviver, { "": res }, "", res) : res;
       }
       /**
@@ -3754,12 +3754,12 @@ var require_errors = __commonJS({
         lineStr = prev + lineStr;
       }
       if (/[^ ]/.test(lineStr)) {
-        let count2 = 1;
+        let count3 = 1;
         const end = error62.linePos[1];
         if (end?.line === line && end.col > col) {
-          count2 = Math.max(1, Math.min(end.col - col, 80 - ci));
+          count3 = Math.max(1, Math.min(end.col - col, 80 - ci));
         }
-        const pointer = " ".repeat(ci) + "^".repeat(count2);
+        const pointer = " ".repeat(ci) + "^".repeat(count3);
         error62.message += `:
 
 ${lineStr}
@@ -9079,14 +9079,14 @@ function codePointLength(str) {
   const units = str.length;
   if (!highSurrogate.test(str))
     return units;
-  let count2 = units;
+  let count3 = units;
   for (let i2 = 0; i2 < units - 1; i2++) {
     if ((str.charCodeAt(i2) & 64512) === 55296 && (str.charCodeAt(i2 + 1) & 64512) === 56320) {
-      count2--;
+      count3--;
       i2++;
     }
   }
-  return count2;
+  return count3;
 }
 function getLengthableOrigin(input2) {
   if (Array.isArray(input2))
@@ -13469,8 +13469,8 @@ function az_default() {
 }
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/be.js
-function getBelarusianPlural(count2, one, few, many) {
-  const absCount = Math.abs(count2);
+function getBelarusianPlural(count3, one, few, many) {
+  const absCount = Math.abs(count3);
   const lastDigit = absCount % 10;
   const lastTwoDigits = absCount % 100;
   if (lastTwoDigits >= 11 && lastTwoDigits <= 19) {
@@ -16117,8 +16117,8 @@ function hu_default() {
 }
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hy.js
-function getArmenianPlural(count2, one, many) {
-  return Math.abs(count2) === 1 ? one : many;
+function getArmenianPlural(count3, one, many) {
+  return Math.abs(count3) === 1 ? one : many;
 }
 function withDefiniteArticle(word) {
   if (!word)
@@ -18856,8 +18856,8 @@ function ro_default() {
 }
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ru.js
-function getRussianPlural(count2, one, few, many) {
-  const absCount = Math.abs(count2);
+function getRussianPlural(count3, one, few, many) {
+  const absCount = Math.abs(count3);
   const lastDigit = absCount % 10;
   const lastTwoDigits = absCount % 100;
   if (lastTwoDigits >= 11 && lastTwoDigits <= 19) {
@@ -28411,6 +28411,7 @@ function acquireStateLock(root, name, opts) {
     heartbeat: (now) => {
       if (tokenOf(file2) === token) writeStateFile(root, file2, body(now));
     },
+    owned: () => tokenOf(file2) === token,
     ...broke2 === void 0 ? {} : { broke: broke2 }
   });
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -29423,7 +29424,7 @@ async function parksHold(parks, ownerConfig, ports, owner) {
       owner
     );
     if (got === void 0) return allParkedLine(earliestReset(parks));
-    if (parks[got.label]) return fail("returned a parked label");
+    if (Object.hasOwn(parks, got.label)) return fail("returned a parked label");
     return void 0;
   } catch {
     return "credential provider failed: no crew starts until it works again";
@@ -29501,10 +29502,10 @@ function readUsage(stateRoot) {
     return { ok: false };
   }
   if (!isObject3(raw)) return { ok: false };
-  const days = {};
+  const days = /* @__PURE__ */ Object.create(null);
   for (const [day, labels] of Object.entries(raw)) {
     if (!DAY_RE.test(day) || !isObject3(labels)) return { ok: false };
-    const counts = {};
+    const counts = /* @__PURE__ */ Object.create(null);
     for (const [label, runs] of Object.entries(labels)) {
       if (!validLabel(label)) return { ok: false };
       if (typeof runs !== "number" || !Number.isSafeInteger(runs) || runs < 0) return { ok: false };
@@ -29519,47 +29520,43 @@ function recordRun(stateRoot, label, now, timezone) {
   if (!read2.ok) throw new Error(USAGE_UNREADABLE);
   const today = dayKey(now, timezone);
   const cutoff = dayKey(new Date(now.getTime() - (USAGE_DAYS_KEPT - 1) * 864e5), timezone);
-  const days = {};
+  const days = /* @__PURE__ */ Object.create(null);
   for (const day of Object.keys(read2.days).sort()) {
     if (day >= cutoff) days[day] = read2.days[day];
   }
-  const todays = days[today] ?? {};
-  todays[label] = (todays[label] ?? 0) + 1;
+  const todays = days[today] ?? /* @__PURE__ */ Object.create(null);
+  todays[label] = count(todays, label) + 1;
   days[today] = todays;
   writeStateFile(stateRoot, usageFile(stateRoot), `${JSON.stringify(days, null, 2)}
 `);
 }
-function boardOrUndefined(project) {
-  try {
-    return loadBoard(project);
-  } catch {
-    return void 0;
-  }
-}
-function runningPerLabel(stateRoot, ports, board) {
-  const out = {};
+var count = (map2, label) => Object.hasOwn(map2, label) ? map2[label] : 0;
+function runningPerLabel(stateRoot, ports) {
+  const out = /* @__PURE__ */ Object.create(null);
   for (const rec of Object.values(readCrewRecords(stateRoot))) {
     if (rec.stoppedAt !== void 0) continue;
-    const status = board?.items.find((i2) => i2.id === rec.item)?.status;
-    if (status === "merged" || status === "dropped") continue;
     const validPid = Number.isInteger(rec.pid) && rec.pid > 0;
     if (validPid && !ports.claude.alive(rec.pid)) continue;
     const label = typeof rec.label === "string" && validLabel(rec.label) ? rec.label : DEFAULT_LABEL;
-    out[label] = (out[label] ?? 0) + 1;
+    out[label] = count(out, label) + 1;
   }
   return out;
 }
 function labelUsage(o2) {
   const { maxParallel, maxRunsPerDay, timezone } = o2.ownerConfig.crewLabelLimits;
   const day = dayKey(o2.ports.clock.now(), timezone);
-  const running = runningPerLabel(o2.stateRoot, o2.ports, boardOrUndefined(o2.project));
+  const running = runningPerLabel(o2.stateRoot, o2.ports);
   const read2 = readUsage(o2.stateRoot);
-  const runsToday = read2.ok ? { ...read2.days[day] ?? {} } : {};
+  const runsToday = Object.assign(
+    /* @__PURE__ */ Object.create(null),
+    read2.ok ? read2.days[day] : {}
+  );
   const remaining = (label) => {
     if (!read2.ok) return 0;
-    const parallel = maxParallel - (running[label] ?? 0);
-    const daily = maxRunsPerDay === void 0 ? Infinity : maxRunsPerDay - (runsToday[label] ?? 0);
-    return Math.max(0, Math.min(parallel, daily));
+    const parallel = maxParallel - count(running, label);
+    const daily = maxRunsPerDay === void 0 ? Infinity : maxRunsPerDay - count(runsToday, label);
+    const room = Math.min(parallel, daily);
+    return Number.isNaN(room) ? 0 : Math.max(0, room);
   };
   const known = [.../* @__PURE__ */ new Set([...Object.keys(running), ...Object.keys(runsToday)])].sort();
   return {
@@ -29610,8 +29607,8 @@ function labelUsageSnapshot(o2) {
     .../* @__PURE__ */ new Set([...Object.keys(usage.running), ...Object.keys(usage.runsToday)])
   ].sort()) {
     labels[label] = {
-      running: usage.running[label] ?? 0,
-      runsToday: usage.runsToday[label] ?? 0
+      running: count(usage.running, label),
+      runsToday: count(usage.runsToday, label)
     };
   }
   return Object.keys(labels).length === 0 ? void 0 : { day: usage.day, labels };
@@ -30013,9 +30010,27 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
   try {
     return await launchCrewLocked(projectDir, item, config2, ports, launcher, held);
   } finally {
-    held.lock?.release();
-    done();
+    try {
+      held.lock?.release();
+    } catch {
+    } finally {
+      done();
+    }
   }
+}
+function refuseIfRunning(stateRoot, item, ports) {
+  const previous = readCrewRecords(stateRoot)[item.id];
+  if (previous !== void 0) {
+    if (!Number.isInteger(previous.pid) || previous.pid <= 0) {
+      throw new Error(`crew record for ${item.id} has no valid pid; refusing to launch`);
+    }
+    if (ports.claude.alive(previous.pid)) {
+      throw new Error(
+        `crew ${previous.name} for ${item.id} is still running (pid ${previous.pid}); stop it first`
+      );
+    }
+  }
+  return previous;
 }
 var launchChain = Promise.resolve();
 async function launchCrewLocked(projectDir, item, config2, ports, launcher, held) {
@@ -30061,23 +30076,13 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   for (const sub of ["clones", "homes", "tmp"]) {
     assertStatePath(stateRoot, join7(stateRoot, sub, item.id));
   }
-  const previous = readCrewRecords(stateRoot)[item.id];
-  if (previous !== void 0) {
-    if (!Number.isInteger(previous.pid) || previous.pid <= 0) {
-      throw new Error(`crew record for ${item.id} has no valid pid; refusing to launch`);
-    }
-    if (ports.claude.alive(previous.pid)) {
-      throw new Error(
-        `crew ${previous.name} for ${item.id} is still running (pid ${previous.pid}); stop it first`
-      );
-    }
-  }
+  const previous = refuseIfRunning(stateRoot, item, ports);
   const limits = readLimits(stateRoot);
   if (!limits.ok) {
     throw new Error(`${join7(stateRoot, "limits.json")} is unreadable; refusing to launch`);
   }
   const parks = activeParks(limits.labels, ports.clock.now());
-  const usage = labelUsage({ project: projectDir, stateRoot, ownerConfig, ports });
+  const usage = labelUsage({ stateRoot, ownerConfig, ports });
   if (!usage.ok) throw new Error(USAGE_UNREADABLE);
   const refuseFull = () => {
     throw new Error("credential limit: the label is at its configured parallel or daily limit");
@@ -30090,7 +30095,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     if (parks[DEFAULT_LABEL]) {
       throw new Error(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
     }
-    if (usage.remaining(DEFAULT_LABEL) <= 0) refuseFull();
+    if (!(usage.remaining(DEFAULT_LABEL) > 0)) refuseFull();
   } else {
     const parked = Object.keys(parks);
     const exclude = [.../* @__PURE__ */ new Set([...parked, ...usage.full])];
@@ -30105,8 +30110,9 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
       if (parked.length > 0) throw new Error(allParkedLine(earliestReset(parks)));
       throw new Error("credential provider: returned nothing while no label is parked");
     }
-    if (parks[got.label]) throw new Error("credential provider: returned a parked label");
-    if (exclude.includes(got.label) || usage.remaining(got.label) <= 0) refuseFull();
+    if (Object.hasOwn(parks, got.label))
+      throw new Error("credential provider: returned a parked label");
+    if (exclude.includes(got.label) || !(usage.remaining(got.label) > 0)) refuseFull();
     label = got.label;
     oauthToken = got.token;
     if (got.configDir !== void 0) {
@@ -30146,9 +30152,20 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   });
   if (!lock) throw new Error("another launch is in progress (launch.lock); try again");
   held.lock = lock;
-  const locked = labelUsage({ project: projectDir, stateRoot, ownerConfig, ports });
-  if (!locked.ok) throw new Error(USAGE_UNREADABLE);
-  if (locked.remaining(label) <= 0) refuseFull();
+  const recheck = () => {
+    if (!lock.owned()) throw new Error("the launch lock was lost; refusing to launch, try again");
+    refuseIfRunning(stateRoot, item, ports);
+    const again = readLimits(stateRoot);
+    if (!again.ok) throw new Error(`${join7(stateRoot, "limits.json")} is unreadable; refusing`);
+    const parkedNow = activeParks(again.labels, ports.clock.now());
+    if (Object.hasOwn(parkedNow, label)) {
+      throw new Error(allParkedLine(parkedNow[label]?.parkedUntil));
+    }
+    const locked = labelUsage({ stateRoot, ownerConfig, ports });
+    if (!locked.ok) throw new Error(USAGE_UNREADABLE);
+    if (!(locked.remaining(label) > 0)) refuseFull();
+  };
+  recheck();
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
   const homeDir = join7(stateRoot, "homes", item.id);
@@ -30192,7 +30209,8 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   ensureStateDir(stateRoot, dirname4(log));
   const logStart = fileSize(log);
   refuseIfBlocked(stateRoot);
-  held.lock?.heartbeat(ports.clock.now());
+  lock.heartbeat(ports.clock.now());
+  recheck();
   recordRun(stateRoot, label, ports.clock.now(), ownerConfig.crewLabelLimits.timezone);
   const { pid } = await ports.claude.start(
     wt.path,
@@ -31041,9 +31059,9 @@ function proposeCi(detect, repoVisibility, current, usage) {
   const group = unused ? void 0 : groups[0];
   const mode = !group ? "github-hosted" : usage?.githubHosted && usage.selfHosted ? "both" : "self-hosted";
   if (unused && groups.length > 0) {
-    const count2 = groups.reduce((sum, g) => sum + g.runners.length, 0);
+    const count3 = groups.reduce((sum, g) => sum + g.runners.length, 0);
     notes.push(
-      `${count2} self-hosted runner(s) exist but are not used: all workflows run on GitHub-hosted runners`
+      `${count3} self-hosted runner(s) exist but are not used: all workflows run on GitHub-hosted runners`
     );
   }
   if (detect.source === "repo" && mode !== "github-hosted") {
@@ -31656,7 +31674,6 @@ async function runCli(argv, deps) {
       let line = hold;
       if (hold === void 0) {
         const got = await credentialSlots({
-          project,
           stateRoot: stateRoot(),
           ownerConfig,
           ports,
@@ -31951,7 +31968,6 @@ async function runCli(argv, deps) {
           hold,
           read2.ok ? activeParks(read2.labels, ports.clock.now()) : {},
           labelUsageSnapshot({
-            project,
             stateRoot: root,
             ownerConfig: loadOwnerConfig(owner),
             ports
@@ -34032,13 +34048,13 @@ var handleSendStrict = ({ anyProcess, channel, isSubprocess, message, strict }) 
   const ipcEmitter = getIpcEmitter(anyProcess, channel, isSubprocess);
   const hasListeners = hasMessageListeners(anyProcess, ipcEmitter);
   return {
-    id: count++,
+    id: count2++,
     type: REQUEST_TYPE,
     message,
     hasListeners
   };
 };
-var count = 0;
+var count2 = 0;
 var validateStrictDeadlock = (outgoingMessages, wrappedMessage) => {
   if (!isStrictRequest(wrappedMessage) || wrappedMessage.hasListeners) {
     return;
@@ -35773,7 +35789,7 @@ function parseMilliseconds(milliseconds) {
 
 // node_modules/.pnpm/pretty-ms@9.3.1/node_modules/pretty-ms/index.js
 var isZero = (value) => value === 0 || value === 0n;
-var pluralize = (word, count2) => count2 === 1 || count2 === 1n ? word : `${word}s`;
+var pluralize = (word, count3) => count3 === 1 || count3 === 1n ? word : `${word}s`;
 var SECOND_ROUNDING_EPSILON = 1e-7;
 var ONE_DAY_IN_MILLISECONDS = 24n * 60n * 60n * 1000n;
 function prettyMilliseconds(milliseconds, options) {
@@ -38284,12 +38300,12 @@ var SignalExit = class extends SignalExitBase {
     for (const sig of signals) {
       this.#sigListeners[sig] = () => {
         const listeners = this.#process.listeners(sig);
-        let { count: count2 } = this.#emitter;
+        let { count: count3 } = this.#emitter;
         const p = process14;
         if (typeof p.__signal_exit_emitter__ === "object" && typeof p.__signal_exit_emitter__.count === "number") {
-          count2 += p.__signal_exit_emitter__.count;
+          count3 += p.__signal_exit_emitter__.count;
         }
-        if (listeners.length === count2) {
+        if (listeners.length === count3) {
           this.unload();
           const ret = this.#emitter.emit("exit", null, sig);
           const s = sig === "SIGHUP" ? this.#hupSig : sig;

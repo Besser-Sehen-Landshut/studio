@@ -19,7 +19,7 @@
     },
     "crew_label_limits": {
       "default": {
-        "maxParallel": 2
+        "max_parallel": 2
       },
       "type": "object",
       "properties": {

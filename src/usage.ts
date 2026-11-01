@@ -1,6 +1,5 @@
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Board, loadBoard } from './board.js';
 import type { OwnerConfig, OwnerEnv } from './config.js';
 import { runCredentialProvider } from './credentials.js';
 import { activeParks, DEFAULT_LABEL, readLimits, validLabel } from './limits.js';
@@ -64,10 +63,10 @@ export function readUsage(stateRoot: string): UsageRead {
     return { ok: false };
   }
   if (!isObject(raw)) return { ok: false };
-  const days: Usage = {};
+  const days: Usage = Object.create(null);
   for (const [day, labels] of Object.entries(raw)) {
     if (!DAY_RE.test(day) || !isObject(labels)) return { ok: false };
-    const counts: Record<string, number> = {};
+    const counts: Record<string, number> = Object.create(null);
     for (const [label, runs] of Object.entries(labels)) {
       if (!validLabel(label)) return { ok: false };
       if (typeof runs !== 'number' || !Number.isSafeInteger(runs) || runs < 0) return { ok: false };
@@ -89,45 +88,35 @@ export function recordRun(
   if (!read.ok) throw new Error(USAGE_UNREADABLE);
   const today = dayKey(now, timezone);
   const cutoff = dayKey(new Date(now.getTime() - (USAGE_DAYS_KEPT - 1) * 86_400_000), timezone);
-  const days: Usage = {};
+  const days: Usage = Object.create(null);
   for (const day of Object.keys(read.days).sort()) {
     if (day >= cutoff) days[day] = read.days[day] as Record<string, number>;
   }
-  const todays = days[today] ?? {};
-  todays[label] = (todays[label] ?? 0) + 1;
+  const todays: Record<string, number> = days[today] ?? Object.create(null);
+  todays[label] = count(todays, label) + 1;
   days[today] = todays;
   writeStateFile(stateRoot, usageFile(stateRoot), `${JSON.stringify(days, null, 2)}\n`);
 }
 
-/** The board for the merged/dropped filter; undefined when it cannot be read (then all count). */
-export function boardOrUndefined(project: string): Board | undefined {
-  try {
-    return loadBoard(project);
-  } catch {
-    return undefined;
-  }
-}
+/** An own count of a label: a name such as `toString` must not reach an inherited value. */
+const count = (map: Record<string, number>, label: string): number =>
+  Object.hasOwn(map, label) ? (map[label] as number) : 0;
 
 /**
- * Crews running per label: records without `stoppedAt` whose process is alive, on items that are
- * not merged or dropped. A record with an invalid pid counts (fail closed); a record without a
- * label counts for the default label. An unreadable crew.json throws, as readCrewRecords does.
+ * Crews running per label: every record without `stoppedAt` whose process is alive, whatever the
+ * board says about its item (a merged or dropped item with a live crew still uses the credential).
+ * A record with an invalid pid counts (fail closed); a record without a label counts for the
+ * default label. An unreadable crew.json throws, as readCrewRecords does.
  */
-export function runningPerLabel(
-  stateRoot: string,
-  ports: Ports,
-  board: Board | undefined,
-): Record<string, number> {
-  const out: Record<string, number> = {};
+export function runningPerLabel(stateRoot: string, ports: Ports): Record<string, number> {
+  const out: Record<string, number> = Object.create(null);
   for (const rec of Object.values(readCrewRecords(stateRoot))) {
     if (rec.stoppedAt !== undefined) continue;
-    const status = board?.items.find((i) => i.id === rec.item)?.status;
-    if (status === 'merged' || status === 'dropped') continue;
     const validPid = Number.isInteger(rec.pid) && rec.pid > 0;
     if (validPid && !ports.claude.alive(rec.pid)) continue;
     const label =
       typeof rec.label === 'string' && validLabel(rec.label) ? rec.label : DEFAULT_LABEL;
-    out[label] = (out[label] ?? 0) + 1;
+    out[label] = count(out, label) + 1;
   }
   return out;
 }
@@ -145,21 +134,25 @@ export interface LabelUsage {
 }
 
 export function labelUsage(o: {
-  project: string;
   stateRoot: string;
   ownerConfig: OwnerConfig;
   ports: Ports;
 }): LabelUsage {
   const { maxParallel, maxRunsPerDay, timezone } = o.ownerConfig.crewLabelLimits;
   const day = dayKey(o.ports.clock.now(), timezone);
-  const running = runningPerLabel(o.stateRoot, o.ports, boardOrUndefined(o.project));
+  const running = runningPerLabel(o.stateRoot, o.ports);
   const read = readUsage(o.stateRoot);
-  const runsToday = read.ok ? { ...(read.days[day] ?? {}) } : {};
+  const runsToday: Record<string, number> = Object.assign(
+    Object.create(null),
+    read.ok ? read.days[day] : {},
+  );
   const remaining = (label: string): number => {
     if (!read.ok) return 0;
-    const parallel = maxParallel - (running[label] ?? 0);
-    const daily = maxRunsPerDay === undefined ? Infinity : maxRunsPerDay - (runsToday[label] ?? 0);
-    return Math.max(0, Math.min(parallel, daily));
+    const parallel = maxParallel - count(running, label);
+    const daily = maxRunsPerDay === undefined ? Infinity : maxRunsPerDay - count(runsToday, label);
+    const room = Math.min(parallel, daily);
+    // NaN (which no comparison catches) reads as no room.
+    return Number.isNaN(room) ? 0 : Math.max(0, room);
   };
   const known = [...new Set([...Object.keys(running), ...Object.keys(runsToday)])].sort();
   return {
@@ -179,7 +172,6 @@ export function labelUsage(o: {
  * never stored, logged or returned.
  */
 export async function credentialSlots(o: {
-  project: string;
   stateRoot: string;
   ownerConfig: OwnerConfig;
   ports: Ports;
@@ -225,7 +217,6 @@ export interface LabelUsageSnapshot {
 
 /** Running crews and runs today per label, for state.json; undefined when there is nothing to show. */
 export function labelUsageSnapshot(o: {
-  project: string;
   stateRoot: string;
   ownerConfig: OwnerConfig;
   ports: Ports;
@@ -237,8 +228,8 @@ export function labelUsageSnapshot(o: {
     ...new Set([...Object.keys(usage.running), ...Object.keys(usage.runsToday)]),
   ].sort()) {
     labels[label] = {
-      running: usage.running[label] ?? 0,
-      runsToday: usage.runsToday[label] ?? 0,
+      running: count(usage.running, label),
+      runsToday: count(usage.runsToday, label),
     };
   }
   return Object.keys(labels).length === 0 ? undefined : { day: usage.day, labels };

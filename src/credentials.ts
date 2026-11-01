@@ -304,7 +304,7 @@ async function parksHold(
       owner,
     );
     if (got === undefined) return allParkedLine(earliestReset(parks));
-    if (parks[got.label]) return fail('returned a parked label');
+    if (Object.hasOwn(parks, got.label)) return fail('returned a parked label');
     return undefined;
   } catch {
     return 'credential provider failed: no crew starts until it works again';

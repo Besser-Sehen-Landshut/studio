@@ -76,12 +76,13 @@ function makeFx(ids: string[]) {
 }
 type Fx = ReturnType<typeof makeFx>;
 
-function makePorts() {
+function makePorts(startIso = '2026-11-01T10:00:00Z') {
   const real = realPorts();
   const alive = new Set<number>();
   const started: { args: string[]; env: Record<string, string> }[] = [];
   let pid = 5000;
-  let t = Date.parse('2026-11-01T10:00:00Z');
+  let t = Date.parse(startIso);
+  const hooks: { afterGit?: (args: string[]) => void | Promise<void> } = {};
   const claude: Ports['claude'] = {
     async start(_cwd, args, _prompt, logPath, env) {
       started.push({ args, env });
@@ -100,11 +101,19 @@ function makePorts() {
     ...real,
     gh: { api: async () => '0', run: async () => ({ code: 0, stdout: '', stderr: '' }) },
     claude,
+    git: {
+      async run(cwd, args) {
+        const out = await real.git.run(cwd, args);
+        await hooks.afterGit?.(args);
+        return out;
+      },
+    },
     clock: { now: () => new Date(t), sleep: async () => {} },
     host: { loadAvg1: () => 0, cpuCount: () => 4 },
   };
   return {
     ports,
+    hooks,
     alive,
     started,
     advance: (ms: number) => {
@@ -405,5 +414,131 @@ describe('per-credential limits', () => {
     const p = makePorts();
     await cli(fx, p.ports, ['state']);
     expect(stateOf(fx).labelUsage).toBeUndefined();
+  });
+});
+
+describe('limit races and counting', () => {
+  const launchDirect = (fx: Fx, p: ReturnType<typeof makePorts>, id: string) => {
+    const item = loadBoard(fx.project).items.find((i) => i.id === id) as WorkItem;
+    return launchCrew(fx.project, item, loadConfig(fx.project), p.ports, {
+      env: fx.env,
+      homedir: fx.home,
+    });
+  };
+  /** Another launch lands: a live record appears in crew.json. */
+  const inject = (fx: Fx, p: ReturnType<typeof makePorts>, id: string, pid: number) => {
+    const records = crewOf(fx);
+    records[id] = {
+      name: `studio-builder-${id.toLowerCase()}`,
+      item: id,
+      role: 'builder',
+      pid,
+      log: 'x',
+      startedAt: '2026-11-01T10:00:00.000Z',
+      label: 'default',
+    };
+    writeFileSync(join(fx.state, 'crew.json'), JSON.stringify(records));
+    p.alive.add(pid);
+  };
+  /** Runs `fn` once, after the first `git remote get-url` of the next launch (between pick and lock). */
+  const betweenPickAndLock = (p: ReturnType<typeof makePorts>, fn: () => void) => {
+    p.hooks.afterGit = (args) => {
+      if (args[0] !== 'remote' || args[1] !== 'get-url') return;
+      p.hooks.afterGit = undefined;
+      fn();
+    };
+  };
+
+  it('a live crew on a merged item still counts as running', async () => {
+    const fx = makeFx(ITEMS);
+    ownerConfig(fx, 'crew_label_limits:\n  max_parallel: 1\n');
+    const p = makePorts();
+    expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
+    const board = join(fx.project, '.studio', 'board.yaml');
+    writeFileSync(board, readFileSync(board, 'utf8').replace('status: assigned', 'status: merged'));
+    expect((await cli(fx, p.ports, ['launch', 'APP-2'])).code).toBe(1);
+    expect(p.started).toHaveLength(1);
+  });
+
+  it('a launch landing between pick and lock is refused, and the lock is released', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    await launchDirect(fx, p, 'APP-1');
+    betweenPickAndLock(p, () => inject(fx, p, 'APP-9', 7777));
+    await expect(launchDirect(fx, p, 'APP-2')).rejects.toThrow(/credential limit/);
+    expect(p.started).toHaveLength(1);
+    // The refusal came under the lock; a later launch gets the lock again and starts.
+    p.alive.delete(7777);
+    await launchDirect(fx, p, 'APP-2');
+    expect(p.started).toHaveLength(2);
+  });
+
+  it('a launch of the same item landing between pick and lock is refused', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    await launchDirect(fx, p, 'APP-2');
+    betweenPickAndLock(p, () => inject(fx, p, 'APP-1', 7778));
+    await expect(launchDirect(fx, p, 'APP-1')).rejects.toThrow(/still running/);
+    expect(p.started).toHaveLength(1);
+  });
+
+  it('two concurrent launches of one item start one crew', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    await launchDirect(fx, p, 'APP-3');
+    const results = await Promise.allSettled([
+      launchDirect(fx, p, 'APP-1'),
+      launchDirect(fx, p, 'APP-1'),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(p.started).toHaveLength(2);
+    expect(Object.keys(crewOf(fx)).sort()).toEqual(['APP-1', 'APP-3']);
+  });
+
+  it('a lost launch lock refuses before the run is counted', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    await launchDirect(fx, p, 'APP-2');
+    p.hooks.afterGit = (args) => {
+      if (args[0] !== 'clone') return;
+      p.hooks.afterGit = undefined;
+      // Another process broke the stale lock and took it.
+      writeFileSync(
+        join(fx.state, 'launch.lock'),
+        `${JSON.stringify({ pid: process.pid, startedAt: 'x', heartbeat: '2026-11-01T10:00:00.000Z', token: 'other' })}\n`,
+      );
+    };
+    await expect(launchDirect(fx, p, 'APP-1')).rejects.toThrow(/lock was lost/);
+    expect(p.started).toHaveLength(1);
+    expect(usageOf(fx)).toEqual({ '2026-11-01': { default: 1 } });
+  });
+
+  it('a label named like an inherited property is counted and limited', async () => {
+    const fx = makeFx(ITEMS);
+    stubbornProvider(fx, 'toString', 'crew_label_limits:\n  max_parallel: 1\n  timezone: UTC\n');
+    const p = makePorts();
+    await launchDirect(fx, p, 'APP-1');
+    expect(usageOf(fx)).toEqual({ '2026-11-01': { toString: 1 } });
+    await expect(launchDirect(fx, p, 'APP-2')).rejects.toThrow(/credential limit/);
+    expect(p.started).toHaveLength(1);
+  });
+
+  it('the day limit follows local midnight across a DST change', async () => {
+    const fx = makeFx(ITEMS);
+    ownerConfig(
+      fx,
+      'crew_label_limits:\n  max_parallel: 5\n  max_runs_per_day: 1\n  timezone: America/New_York\n',
+    );
+    // 00:30 EDT on 2026-11-01; clocks go back at 06:00Z, so local midnight is 05:00Z on the 2nd.
+    const p = makePorts('2026-11-01T04:30:00Z');
+    expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
+    p.alive.clear();
+    // 24 hours later is only 23:30 on the same local day.
+    p.advance(24 * HOUR);
+    expect((await cli(fx, p.ports, ['launch', 'APP-2'])).code).toBe(1);
+    p.advance(29 * MIN);
+    expect((await cli(fx, p.ports, ['launch', 'APP-2'])).code).toBe(1);
+    p.advance(2 * MIN);
+    expect((await cli(fx, p.ports, ['launch', 'APP-2'])).code).toBe(0);
   });
 });

@@ -170,7 +170,6 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       let line = hold;
       if (hold === undefined) {
         const got = await credentialSlots({
-          project,
           stateRoot: stateRoot(),
           ownerConfig,
           ports,
@@ -484,7 +483,6 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           hold,
           read.ok ? activeParks(read.labels, ports.clock.now()) : {},
           labelUsageSnapshot({
-            project,
             stateRoot: root,
             ownerConfig: loadOwnerConfig(owner),
             ports,

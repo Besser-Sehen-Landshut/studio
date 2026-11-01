@@ -637,9 +637,34 @@ export async function launchCrew(
   try {
     return await launchCrewLocked(projectDir, item, config, ports, launcher, held);
   } finally {
-    held.lock?.release();
-    done();
+    try {
+      held.lock?.release();
+    } catch {
+      // A lock file that cannot be removed goes stale by itself; it must not turn a launch that
+      // already started a crew into an error, nor keep the next launch of this process waiting.
+    } finally {
+      done();
+    }
   }
+}
+
+/**
+ * Two crews on one item would share the clone and the report: refuse while one still runs. A
+ * crew.json that cannot be read refuses too (fail closed). Returns the item's earlier record.
+ */
+function refuseIfRunning(stateRoot: string, item: WorkItem, ports: Ports): CrewRecord | undefined {
+  const previous = readCrewRecords(stateRoot)[item.id];
+  if (previous !== undefined) {
+    if (!Number.isInteger(previous.pid) || previous.pid <= 0) {
+      throw new Error(`crew record for ${item.id} has no valid pid; refusing to launch`);
+    }
+    if (ports.claude.alive(previous.pid)) {
+      throw new Error(
+        `crew ${previous.name} for ${item.id} is still running (pid ${previous.pid}); stop it first`,
+      );
+    }
+  }
+  return previous;
 }
 
 let launchChain: Promise<void> = Promise.resolve();
@@ -703,24 +728,14 @@ async function launchCrewLocked(
   }
   // Two crews on one item would share the clone and the report: refuse while one still runs.
   // A crew.json that cannot be read refuses too (fail closed).
-  const previous = readCrewRecords(stateRoot)[item.id];
-  if (previous !== undefined) {
-    if (!Number.isInteger(previous.pid) || previous.pid <= 0) {
-      throw new Error(`crew record for ${item.id} has no valid pid; refusing to launch`);
-    }
-    if (ports.claude.alive(previous.pid)) {
-      throw new Error(
-        `crew ${previous.name} for ${item.id} is still running (pid ${previous.pid}); stop it first`,
-      );
-    }
-  }
+  const previous = refuseIfRunning(stateRoot, item, ports);
   const limits = readLimits(stateRoot);
   if (!limits.ok) {
     throw new Error(`${join(stateRoot, 'limits.json')} is unreadable; refusing to launch`);
   }
   const parks = activeParks(limits.labels, ports.clock.now());
   // Per-label restraint: labels at max_parallel or at the day limit are excluded like parked ones.
-  const usage = labelUsage({ project: projectDir, stateRoot, ownerConfig, ports });
+  const usage = labelUsage({ stateRoot, ownerConfig, ports });
   if (!usage.ok) throw new Error(USAGE_UNREADABLE);
   const refuseFull = (): never => {
     throw new Error('credential limit: the label is at its configured parallel or daily limit');
@@ -735,7 +750,7 @@ async function launchCrewLocked(
     if (parks[DEFAULT_LABEL]) {
       throw new Error(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
     }
-    if (usage.remaining(DEFAULT_LABEL) <= 0) refuseFull();
+    if (!(usage.remaining(DEFAULT_LABEL) > 0)) refuseFull();
   } else {
     const parked = Object.keys(parks);
     const exclude = [...new Set([...parked, ...usage.full])];
@@ -750,8 +765,9 @@ async function launchCrewLocked(
       if (parked.length > 0) throw new Error(allParkedLine(earliestReset(parks)));
       throw new Error('credential provider: returned nothing while no label is parked');
     }
-    if (parks[got.label]) throw new Error('credential provider: returned a parked label');
-    if (exclude.includes(got.label) || usage.remaining(got.label) <= 0) refuseFull();
+    if (Object.hasOwn(parks, got.label))
+      throw new Error('credential provider: returned a parked label');
+    if (exclude.includes(got.label) || !(usage.remaining(got.label) > 0)) refuseFull();
     label = got.label;
     oauthToken = got.token;
     if (got.configDir !== undefined) {
@@ -806,9 +822,21 @@ async function launchCrewLocked(
   });
   if (!lock) throw new Error('another launch is in progress (launch.lock); try again');
   held.lock = lock;
-  const locked = labelUsage({ project: projectDir, stateRoot, ownerConfig, ports });
-  if (!locked.ok) throw new Error(USAGE_UNREADABLE);
-  if (locked.remaining(label) <= 0) refuseFull();
+  /** Everything the pick relied on, read again from the files: the last word before a start. */
+  const recheck = (): void => {
+    if (!lock.owned()) throw new Error('the launch lock was lost; refusing to launch, try again');
+    refuseIfRunning(stateRoot, item, ports);
+    const again = readLimits(stateRoot);
+    if (!again.ok) throw new Error(`${join(stateRoot, 'limits.json')} is unreadable; refusing`);
+    const parkedNow = activeParks(again.labels, ports.clock.now());
+    if (Object.hasOwn(parkedNow, label)) {
+      throw new Error(allParkedLine(parkedNow[label]?.parkedUntil));
+    }
+    const locked = labelUsage({ stateRoot, ownerConfig, ports });
+    if (!locked.ok) throw new Error(USAGE_UNREADABLE);
+    if (!(locked.remaining(label) > 0)) refuseFull();
+  };
+  recheck();
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
   // Isolated HOME, recreated from scratch on every launch: only a git identity and a credential
@@ -858,7 +886,10 @@ async function launchCrewLocked(
   const logStart = fileSize(log);
   // A block may have arrived while this launch was preparing.
   refuseIfBlocked(stateRoot);
-  held.lock?.heartbeat(ports.clock.now());
+  // Preparing may have taken long: keep the lock, and if it was lost refuse. The checks run once
+  // more, as the last ones before the run is counted and started.
+  lock.heartbeat(ports.clock.now());
+  recheck();
   // Counted before the start, so a start that fails still counts as a run.
   recordRun(stateRoot, label, ports.clock.now(), ownerConfig.crewLabelLimits.timezone);
   const { pid } = await ports.claude.start(

@@ -16,11 +16,20 @@ function snakeProps(node: unknown): unknown {
       out[k] = Object.fromEntries(Object.entries(v).map(([p, s]) => [snake(p), snakeProps(s)]));
     } else if (k === 'required' && Array.isArray(v)) {
       out[k] = v.map((r) => (typeof r === 'string' ? snake(r) : r));
+    } else if (k === 'default') {
+      out[k] = snakeKeys(v);
     } else {
       out[k] = snakeProps(v);
     }
   }
   return out;
+}
+
+// A default value is data in the YAML shape, so its keys are snake_case too.
+function snakeKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(snakeKeys);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([k, v]) => [snake(k), snakeKeys(v)]));
 }
 
 mkdirSync('schema', { recursive: true });

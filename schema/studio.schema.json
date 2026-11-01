@@ -223,7 +223,7 @@
     },
     "sandbox": {
       "default": {
-        "networkAllow": []
+        "network_allow": []
       },
       "type": "object",
       "properties": {

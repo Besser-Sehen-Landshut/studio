@@ -278,6 +278,8 @@ export interface StateLock {
   release(): void;
   /** Records that the holder is still working (no-op once the lock is no longer its own). */
   heartbeat(now: Date): void;
+  /** Whether the lock file still is this holder's (it is not once another process broke it). */
+  owned(): boolean;
   /** Set when another holder's stale lock was broken: why it counted as stale. */
   broke?: string;
 }
@@ -383,6 +385,7 @@ export function acquireStateLock(
     heartbeat: (now: Date) => {
       if (tokenOf(file) === token) writeStateFile(root, file, body(now));
     },
+    owned: () => tokenOf(file) === token,
     ...(broke === undefined ? {} : { broke }),
   });
   for (let attempt = 0; attempt < 5; attempt++) {
