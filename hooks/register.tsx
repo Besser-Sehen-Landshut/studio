@@ -192,8 +192,14 @@ export const register: Register = (on) => {
   on('command.run', { command: 'studio' }, async ($, e) => {
     const arg = e.args.trim();
     // A plugin reload may have lost the module's variables and its timer: derive both again.
+    // The command can only be typed where something draws, so a session without a surface is not one.
     const project =
-      live.project ?? (await ownerProject($, true, await $.session.cwd()).catch(() => undefined));
+      live.project ??
+      (await ownerProject(
+        $,
+        (await $.session.surfaces().catch(() => [])).length > 0,
+        await $.session.cwd(),
+      ).catch(() => undefined));
     if (project === undefined) return { text: 'Not in a Studio project.' };
     live.project = project;
     if (!live.timer) armTimer($, project);

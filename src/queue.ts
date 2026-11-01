@@ -490,7 +490,11 @@ export async function mergeOne(
         continue;
       }
       const held = opts.hold?.();
-      if (held !== undefined) throw new QueueHeld(held);
+      if (held !== undefined) {
+        // Resume at capacity: the head or the capacity may differ by then.
+        enter('capacity');
+        throw new QueueHeld(held);
+      }
       const r = await gh.run([
         'pr',
         'merge',

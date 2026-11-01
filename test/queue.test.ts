@@ -701,7 +701,7 @@ describe('runQueue', () => {
     expect(logs.join('\n')).toContain('account block on default');
   });
 
-  it('hold turning true before the merge: no merge, current stays at merge with head, a later run merges', async () => {
+  it('hold turning true before the merge: no merge, current stays at capacity with head, a later run merges', async () => {
     const g = fakeGh(rules());
     const c = fakeClock();
     const state: QueueState = { pending: [{ pr: 5, repo: 'org/app' }], done: [] };
@@ -719,8 +719,8 @@ describe('runQueue', () => {
     });
     expect(mergeCalls(g.calls)).toHaveLength(0);
     expect(out.done).toHaveLength(0);
-    expect(out.current).toMatchObject({ pr: 5, step: 'merge', head: H1 });
-    expect(snapshots.at(-1)?.current).toMatchObject({ step: 'merge', head: H1 });
+    expect(out.current).toMatchObject({ pr: 5, step: 'capacity', head: H1 });
+    expect(snapshots.at(-1)?.current).toMatchObject({ step: 'capacity', head: H1 });
 
     const g2 = fakeGh(rules());
     const again = await runQueue(
@@ -732,6 +732,31 @@ describe('runQueue', () => {
     );
     expect(mergeCalls(g2.calls)).toHaveLength(1);
     expect(again.done[0]).toMatchObject({ pr: 5, result: 'merged' });
+  });
+
+  it('head moved during the hold: the resume does not merge the old head', async () => {
+    const g = fakeGh([
+      { prefix: 'pr update-branch', responses: [{}] },
+      { prefix: 'pr checks', responses: [checks(['a', 'pass'])] },
+      { prefix: MC, responses: [{ stdout: JSON.stringify({ mergeCommit: { oid: MERGE_SHA } }) }] },
+      { prefix: VIEW, responses: [view(H2)] },
+      { prefix: 'pr merge', responses: [{}] },
+    ]);
+    const state: QueueState = {
+      pending: [],
+      done: [],
+      current: { pr: 5, repo: 'org/app', step: 'capacity', head: H1 },
+    } as QueueState;
+    const out = await runQueue(
+      state,
+      mkConfig(),
+      { gh: g.gh, clock: fakeClock().clock, host },
+      () => {},
+      { hold: () => undefined },
+    );
+    expect(mergeCalls(g.calls)).toEqual([`${MERGE} --squash --match-head-commit ${H2}`]);
+    expect(mergeCalls(g.calls).join('\n')).not.toContain(H1);
+    expect(out.done[0]).toMatchObject({ pr: 5, result: 'merged' });
   });
 
   it('processes pending FIFO, one at a time, and records failures', async () => {

@@ -51,16 +51,18 @@ describe('crewStateOf', () => {
 const CONFIG = { primaryRepo: 'org/app' } as StudioConfig;
 function ghWith(reply: { code?: number; stdout?: string } | Error) {
   const calls: string[][] = [];
+  const timeouts: Array<number | undefined> = [];
   const ports = {
     gh: {
-      async run(args: string[]) {
+      async run(args: string[], opts?: { timeoutMs?: number }) {
         calls.push(args);
+        timeouts.push(opts?.timeoutMs);
         if (reply instanceof Error) throw reply;
         return { code: reply.code ?? 0, stdout: reply.stdout ?? '', stderr: '' };
       },
     },
   } as unknown as Ports;
-  return { ports, calls };
+  return { ports, calls, timeouts };
 }
 const run = (
   workflowName: string,
@@ -90,6 +92,12 @@ describe('readMainBuild', () => {
       '--json',
       'status,conclusion,headSha,workflowName',
     ]);
+  });
+
+  it('reads with a 30 s timeout', async () => {
+    const g = ghWith({ stdout: '[]' });
+    await readMainBuild(CONFIG, g.ports);
+    expect(g.timeouts).toEqual([30_000]);
   });
 
   it('green when the newest run of every workflow succeeded', async () => {

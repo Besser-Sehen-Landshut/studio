@@ -44,6 +44,8 @@ type WorldOptions = {
   extraEntries?: Record<string, string[]>;
   openFails?: boolean;
   cwd?: string;
+  /** What the session draws on; default one terminal. */
+  surfaces?: ('terminal' | 'app')[];
 };
 
 /** Stands for the engine: a file system in memory, and a record of everything the mod asked for. */
@@ -71,6 +73,7 @@ function world(on: On, options: WorldOptions = {}) {
     mock.store(on, options.store);
   }
   on('session.start', (_, e) => ({ cwd: e.cwd }));
+  on('session.surfaces', () => ({ value: options.surfaces ?? ['terminal'] }));
   on('session.cwd', () => ({ value: options.cwd ?? PROJECT }));
   on('command.register', (_, e) => {
     seen.commands.push(e.name);
@@ -161,6 +164,25 @@ test('a crew session registers nothing and starts no timer', async ($, on) => {
     files: withState(),
   });
   await $.session.start(start);
+  await clock.advance(60_000);
+  expectQuiet(seen, 0);
+});
+
+test('a command run by a crew session arms no timer and reads no file', async ($, on) => {
+  const { clock, seen } = world(on, {
+    env: { HOME: '/home/u', STUDIO_ROLE: 'crew' },
+    files: withState(),
+  });
+  const { text } = await $.command.run({ ...run, command: 'studio', args: 'status' });
+  expect(text).toBe('Not in a Studio project.');
+  await clock.advance(60_000);
+  expectQuiet(seen, 0);
+});
+
+test('a command run with no surface arms no timer and reads no file', async ($, on) => {
+  const { clock, seen } = world(on, { files: withState(), surfaces: [] });
+  const { text } = await $.command.run({ ...run, command: 'studio', args: 'status' });
+  expect(text).toBe('Not in a Studio project.');
   await clock.advance(60_000);
   expectQuiet(seen, 0);
 });

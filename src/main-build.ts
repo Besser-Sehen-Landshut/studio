@@ -10,6 +10,7 @@ export interface MainBuild {
 const UNKNOWN: MainBuild = { status: 'unknown' };
 const RED = new Set(['failure', 'timed_out', 'startup_failure']);
 const MAX_NAME = 100;
+const READ_TIMEOUT_MS = 30_000;
 
 interface Run {
   workflow: string;
@@ -53,20 +54,23 @@ const validSha = (s: string): string | undefined => (/^[0-9a-f]{7,64}$/i.test(s)
  */
 export async function readMainBuild(config: StudioConfig, ports: Ports): Promise<MainBuild> {
   try {
-    const reply = await ports.gh.run([
-      'run',
-      'list',
-      '--repo',
-      config.primaryRepo,
-      '--branch',
-      'main',
-      '--event',
-      'push',
-      '--limit',
-      '30',
-      '--json',
-      'status,conclusion,headSha,workflowName',
-    ]);
+    const reply = await ports.gh.run(
+      [
+        'run',
+        'list',
+        '--repo',
+        config.primaryRepo,
+        '--branch',
+        'main',
+        '--event',
+        'push',
+        '--limit',
+        '30',
+        '--json',
+        'status,conclusion,headSha,workflowName',
+      ],
+      { timeoutMs: READ_TIMEOUT_MS },
+    );
     if (reply.code !== 0) return UNKNOWN;
     const runs = parseRuns(reply.stdout);
     if (runs === undefined) return UNKNOWN;

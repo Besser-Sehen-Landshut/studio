@@ -730,7 +730,7 @@ describe('studio CLI', () => {
     expect(run.code).toBe(1);
     expect(JSON.parse(run.out).held).toContain('account block');
     expect(g.calls.some((l) => l.startsWith('pr merge'))).toBe(false);
-    expect(loadQueue(fx.state).current).toMatchObject({ pr: 5, step: 'merge' });
+    expect(loadQueue(fx.state).current).toMatchObject({ pr: 5, step: 'capacity' });
     expect(existsSync(join(fx.state, 'queue.run.lock'))).toBe(false);
   });
 
@@ -765,7 +765,7 @@ describe('studio CLI', () => {
     expect(run.code).toBe(1);
     expect(JSON.parse(run.out).held).toContain('paused');
     expect(g.calls.some((l) => l.startsWith('pr merge'))).toBe(false);
-    expect(loadQueue(fx.state).current).toMatchObject({ pr: 5, step: 'merge' });
+    expect(loadQueue(fx.state).current).toMatchObject({ pr: 5, step: 'capacity' });
   });
 
   it('queue run: old project state files that were not migrated hold the queue', async () => {

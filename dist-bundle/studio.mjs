@@ -28054,11 +28054,11 @@ function withTimeout(work, ms) {
 }
 var RUNNER_JQ = ".runners[] | [.name, .status, .busy] | @tsv";
 var RUNNER_LINE = /^(\S+)\t(\S+)\t(true|false)$/;
-async function selfHostedBusy(config2, gh) {
+async function selfHostedBusy(config2, gh, timeoutMs) {
   const org = config2.primaryRepo.split("/")[0];
   const pattern = config2.ci.runnerNamePattern;
   const re = pattern === void 0 ? void 0 : new RegExp(pattern);
-  const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ);
+  const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ, { timeoutMs });
   let busy = 0;
   let matching = 0;
   for (const line of out.split("\n")) {
@@ -28077,19 +28077,19 @@ async function selfHostedBusy(config2, gh) {
   }
   return busy;
 }
-async function runCount(config2, gh, status) {
+async function runCount(config2, gh, status, timeoutMs) {
   const out = await gh.api(
     `/repos/${config2.primaryRepo}/actions/runs?status=${status}&per_page=1`,
     ".total_count",
-    { paginate: false }
+    { paginate: false, timeoutMs }
   );
   const first = out.split("\n")[0]?.trim() ?? "";
   if (!/^\d+$/.test(first)) throw new Error(`unparsable run count: ${first}`);
   return Number(first);
 }
-async function githubHostedBusy(config2, gh) {
-  const running = await runCount(config2, gh, "in_progress");
-  const queued = await runCount(config2, gh, "queued");
+async function githubHostedBusy(config2, gh, timeoutMs) {
+  const running = await runCount(config2, gh, "in_progress", timeoutMs);
+  const queued = await runCount(config2, gh, "queued", timeoutMs);
   return running + queued;
 }
 async function readCapacity(config2, ports, options = {}) {
@@ -28097,18 +28097,19 @@ async function readCapacity(config2, ports, options = {}) {
   const { sharedHost, githubHostedLimit } = config2.ci;
   const hostLoad = ports.host.loadAvg1();
   const mode = config2.ci.runners;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let selfBusy = 0;
   let hostedBusy = 0;
   try {
     const read2 = async () => {
       if (mode === "self-hosted" || mode === "both") {
-        selfBusy = await selfHostedBusy(config2, ports.gh);
+        selfBusy = await selfHostedBusy(config2, ports.gh, timeoutMs);
       }
       if (mode === "github-hosted" || mode === "both") {
-        hostedBusy = await githubHostedBusy(config2, ports.gh);
+        hostedBusy = await githubHostedBusy(config2, ports.gh, timeoutMs);
       }
     };
-    await withTimeout(read2(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    await withTimeout(read2(), timeoutMs);
   } catch (err) {
     const error62 = (err instanceof Error ? err.message : String(err)).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
     return { ciBusy: total, ciTotal: total, hostLoad, ok: false, error: error62 };
@@ -30644,6 +30645,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
 var UNKNOWN = { status: "unknown" };
 var RED = /* @__PURE__ */ new Set(["failure", "timed_out", "startup_failure"]);
 var MAX_NAME = 100;
+var READ_TIMEOUT_MS = 3e4;
 function parseRuns(stdout) {
   let raw;
   try {
@@ -30673,20 +30675,23 @@ var cleanName = (s) => s.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_
 var validSha = (s) => /^[0-9a-f]{7,64}$/i.test(s) ? s : void 0;
 async function readMainBuild(config2, ports) {
   try {
-    const reply = await ports.gh.run([
-      "run",
-      "list",
-      "--repo",
-      config2.primaryRepo,
-      "--branch",
-      "main",
-      "--event",
-      "push",
-      "--limit",
-      "30",
-      "--json",
-      "status,conclusion,headSha,workflowName"
-    ]);
+    const reply = await ports.gh.run(
+      [
+        "run",
+        "list",
+        "--repo",
+        config2.primaryRepo,
+        "--branch",
+        "main",
+        "--event",
+        "push",
+        "--limit",
+        "30",
+        "--json",
+        "status,conclusion,headSha,workflowName"
+      ],
+      { timeoutMs: READ_TIMEOUT_MS }
+    );
     if (reply.code !== 0) return UNKNOWN;
     const runs = parseRuns(reply.stdout);
     if (runs === void 0) return UNKNOWN;
@@ -31306,7 +31311,10 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
         continue;
       }
       const held = opts.hold?.();
-      if (held !== void 0) throw new QueueHeld(held);
+      if (held !== void 0) {
+        enter("capacity");
+        throw new QueueHeld(held);
+      }
       const r = await gh.run([
         "pr",
         "merge",
@@ -40796,11 +40804,16 @@ function realPorts(claudeBin = "claude") {
         ...opts?.paginate === false ? [] : ["--paginate"],
         ...jq === void 0 ? [] : ["--jq", jq]
       ];
-      const r = await execa("gh", args);
+      const r = await execa("gh", args, {
+        ...opts?.timeoutMs === void 0 ? {} : { timeout: opts.timeoutMs }
+      });
       return r.stdout;
     },
-    async run(args) {
-      const r = await execa("gh", args, { reject: false });
+    async run(args, opts) {
+      const r = await execa("gh", args, {
+        reject: false,
+        ...opts?.timeoutMs === void 0 ? {} : { timeout: opts.timeoutMs }
+      });
       return { code: r.exitCode ?? 1, stdout: r.stdout, stderr: r.stderr };
     }
   };
