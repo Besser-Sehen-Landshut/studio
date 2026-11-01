@@ -612,10 +612,37 @@ describe('round 1 regressions', () => {
       'node -- $X',
       'node -',
       'node',
+      'node --no-warnings',
+      'node --no-warnings -',
+      'node --title x',
+      'echo x | node',
+      'node -e "console.log(1)"',
+      'node -p 1',
+      'node --eval 1',
+      'node --print=1',
       'node -e "$X"',
       'node -e \'import("./bin/studio")\'',
       'node --eval=\'import("./bin/studio")\'',
     ]);
+  });
+
+  it('I5g arithmetic that assigns is denied, plain arithmetic is allowed', () => {
+    denies([
+      '(( STUDIO_ROLE = 1 ))',
+      'echo $(( X = 1 ))',
+      '(( X++ ))',
+      '(( X-- ))',
+      '(( X += 2 ))',
+      '(( X <<= 2 ))',
+    ]);
+    for (const c of [
+      'echo $((1 + 2))',
+      '[ $((a + 1)) -eq 2 ]',
+      'echo $((a == 1))',
+      '(( a <= 2 ))',
+    ]) {
+      expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
+    }
   });
 
   it('I5e ordinary node and npm commands are allowed, also with these words as arguments', () => {
@@ -629,9 +656,8 @@ describe('round 1 regressions', () => {
       'node --test test/a.test.js',
       'node --max-old-space-size=4096 app.js',
       'node --version',
-      'node -e "console.log(1)"',
-      'node -e "console.log([1, 2 * 3])"',
-      'node --eval="console.log([1])"',
+      'node --help',
+      'node --test',
       'npm run resume',
       'npm run pause',
       'pnpm test',

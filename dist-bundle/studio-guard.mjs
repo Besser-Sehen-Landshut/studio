@@ -1444,34 +1444,33 @@ function checkVarBuiltin(name, args) {
 var CREW_NO_STUDIO = "a crew may not run studio";
 var NODE_NAME = /^node(js)?[0-9.]*$/i;
 var isStudioBinary = (w) => /^studio(\.(mjs|cjs|js))?$/i.test(basename(w));
+var NODE_INFO_FLAGS = /* @__PURE__ */ new Set(["--version", "--help", "--test"]);
 function checkNode(args) {
   const notLiteral = "node with a script argument that is not literal is not allowed";
-  if (args.length === 0) deny("node reading its script from stdin is not allowed");
+  const noScript = "node without a literal script file is not allowed";
   let mayBeValue = false;
-  let inlineCode = false;
   for (let k = 0; k < args.length; k++) {
     const a = args[k];
-    const code = inlineCode || /^--(eval|print)=/.test(a);
-    if (code ? unresolved(a) : unresolvedWord(a)) deny(notLiteral);
-    if (a === "-") deny("node reading its script from stdin is not allowed");
+    if (unresolvedWord(a)) deny(notLiteral);
+    if (a === "-") deny(noScript);
     if (a === "--") {
       const script = args[k + 1];
+      if (script === void 0) deny(noScript);
       if (script !== void 0 && unresolvedWord(script)) deny(notLiteral);
       if (script !== void 0 && isStudioBinary(script)) deny(CREW_NO_STUDIO);
       return;
     }
-    if (inlineCode && /studio/i.test(a)) deny(CREW_NO_STUDIO);
-    if (a.startsWith("-") && !inlineCode) {
+    if (a.startsWith("-")) {
       if (/studio/i.test(a)) deny(CREW_NO_STUDIO);
+      if (/^(-[A-Za-z]*[pe][A-Za-z]*|--eval|--print)(=|$)/.test(a)) deny(noScript);
       mayBeValue = !a.includes("=");
-      inlineCode = /^(-[pe]+|--eval|--print)$/.test(a);
       continue;
     }
-    inlineCode = false;
     if (isStudioBinary(a)) deny(CREW_NO_STUDIO);
     if (!mayBeValue) return;
     mayBeValue = false;
   }
+  if (!args.some((a) => NODE_INFO_FLAGS.has(a))) deny(noScript);
 }
 var RUNNER_FLAGS = /* @__PURE__ */ new Set([
   "-y",
@@ -1593,6 +1592,9 @@ function checkWords(env, words, state) {
 }
 function checkBash(env, cmd, cwd, depth) {
   if (depth > 8) deny("command nesting too deep");
+  if (cmd.includes("((") && /(?<![=!<>])=(?!=)|<<=|>>=|\+\+|--/.test(cmd)) {
+    deny("assignment in arithmetic is not allowed");
+  }
   const { lines, subs } = scan(cmd);
   for (const sub of subs) checkBash(env, sub, cwd, depth + 1);
   const state = { cwd };
