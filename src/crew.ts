@@ -16,7 +16,6 @@ import {
   allParkedLine,
   apiBillingProblem,
   checkProviderConfigDir,
-  cloneSettingsProblem,
   readCrewTokenFile,
   runCredentialProvider,
 } from './credentials.js';
@@ -664,15 +663,6 @@ export async function launchCrew(
   });
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
-  // The clone's project settings would apply to the crew as well. Read as plain files (rule D4).
-  for (const name of ['settings.json', 'settings.local.json']) {
-    const problem = cloneSettingsProblem(
-      join(wt.path, '.claude', name),
-      ownerConfig.allowApiBilling,
-      reused,
-    );
-    if (problem) throw new Error(problem);
-  }
   // Isolated HOME, recreated from scratch on every launch: only a git identity and a credential
   // helper that reads GH_TOKEN. Nothing is copied or linked from the real home.
   const homeDir = join(stateRoot, 'homes', item.id);
@@ -734,6 +724,10 @@ export async function launchCrew(
       '--output-format',
       'stream-json',
       '--verbose',
+      // Project and local settings of the clone are repo-controlled; only user settings and the
+      // file passed with --settings apply.
+      '--setting-sources',
+      'user',
       ...(resumeId === undefined ? [] : ['--resume', resumeId]),
     ],
     `Read ${brief} and follow it.`,

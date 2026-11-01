@@ -457,13 +457,14 @@ describe('usage limits through the CLI', () => {
         ['apiKeyHelper', '{"apiKeyHelper":"fake-value-helper"}'],
         ['env.HTTPS_PROXY', '{"env":{"https_proxy":"http://fake-value.example.com"}}'],
       ] as const) {
-        it(`${name} with ${key} refuses the launch and starts no process`, async () => {
+        it(`${name} with ${key} does not refuse; the relaunch ignores project settings`, async () => {
           const { r, started } = await planted(name, body);
-          expect(r.code).toBe(1);
-          expect(r.err).toContain(key);
+          expect(r.code).toBe(0);
           expect(r.err).not.toContain('fake-value');
-          expect(r.err).not.toContain(TOKEN);
-          expect(started).toHaveLength(1);
+          expect(started).toHaveLength(2);
+          const args = (started[1] as { args: string[] }).args;
+          const i = args.indexOf('--setting-sources');
+          expect(args[i + 1]).toBe('user');
         });
       }
     }

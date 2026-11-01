@@ -39,11 +39,12 @@ tag after the merge.
   `host_load_max` (default: the number of CPU cores).
 - Dependabot opens a separate pull request for major updates.
 - **API billing is off by default.** `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` no longer reach
-  crew sessions, and a launch refuses Claude settings that set `apiKeyHelper` or those variables.
+  crew sessions, and a launch refuses the owner's Claude settings that set `apiKeyHelper` or those variables.
   Set `allow_api_billing: true` in the owner config to allow them.
-- A launch refuses clone settings that are not regular files or that redirect the model endpoint or
-  proxy through `env`, whatever `allow_api_billing` says, and on a reused clone `hooks` and
-  `apiKeyHelper`.
+- Crews ignore repo-controlled Claude Code settings: every launch, fresh or resumed, passes
+  `--setting-sources user`, so the clone's `.claude/settings.json` and `.claude/settings.local.json`
+  (hooks, `env`, `apiKeyHelper`) no longer apply, and Studio no longer reads them. Only user settings
+  and the file passed with `--settings` apply.
 - Self-hosted capacity fails closed with a stated error when a read finds no matching organisation
   runner. Repository-level runners are not supported by capacity.
 - The owner config directory is denied to crew sessions, and crew toolchain paths may not open it.

@@ -579,6 +579,8 @@ describe('launchCrew', () => {
       '--output-format',
       'stream-json',
       '--verbose',
+      '--setting-sources',
+      'user',
     ]);
     expect(JSON.parse(readFileSync(join(state, 'settings', 'APP-12.mcp.json'), 'utf8'))).toEqual({
       mcpServers: {},
@@ -1196,20 +1198,6 @@ describe('crew credentials', () => {
       expect(started).toHaveLength(1);
     });
 
-    it('refuses a clone whose project settings use API billing', async () => {
-      const { project, launcher } = fx();
-      mkdirSync(join(project, '.claude'));
-      writeFileSync(join(project, '.claude', 'settings.json'), '{"apiKeyHelper":"fake-value-h"}');
-      git(project, 'add', '.claude/settings.json');
-      git(project, 'commit', '-q', '-m', 'helper');
-      git(project, 'push', '-q', 'origin', 'main');
-      const started: Started[] = [];
-      await expect(launchCrew(project, item, config, fakePorts(started), launcher)).rejects.toThrow(
-        /apiKeyHelper/,
-      );
-      expect(started).toHaveLength(0);
-    });
-
     const commitCloneSettings = (project: string, name: string, body: string) => {
       mkdirSync(join(project, '.claude'), { recursive: true });
       writeFileSync(join(project, '.claude', name), body);
@@ -1218,43 +1206,55 @@ describe('crew credentials', () => {
       git(project, 'push', '-q', 'origin', 'main');
     };
 
-    it('refuses a clone redirecting the model endpoint, even with allow_api_billing', async () => {
-      for (const name of ['settings.json', 'settings.local.json']) {
-        const { project, launcher, ownerDir } = fx();
-        owner(ownerDir, 'allow_api_billing: true\n');
-        commitCloneSettings(
-          project,
-          name,
-          '{"env":{"ANTHROPIC_BASE_URL":"https://fake-value.example.com"}}',
-        );
-        const started: Started[] = [];
-        const p = launchCrew(project, item, config, fakePorts(started), launcher);
-        await expect(p).rejects.toThrow(/env\.ANTHROPIC_BASE_URL/);
-        await p.catch((e: Error) => expect(e.message).not.toContain('fake-value'));
-        expect(started).toHaveLength(0);
-      }
-    });
-
-    it('a fresh clone may carry hooks from the repository', async () => {
-      const { project, launcher } = fx();
-      commitCloneSettings(project, 'settings.json', '{"hooks":{}}');
+    it('a clone with project and local settings neither refuses nor changes args or env', async () => {
+      const base = fx();
+      const baseStarted: Started[] = [];
+      await launchCrew(base.project, item, config, fakePorts(baseStarted), base.launcher);
+      const { project, launcher, state } = fx();
+      const body = JSON.stringify({
+        apiKeyHelper: 'fake-value-helper',
+        hooks: { Stop: [{ hooks: [{ type: 'command', command: 'fake-value-hook' }] }] },
+        env: {
+          ANTHROPIC_API_KEY: 'fake-value-key',
+          ANTHROPIC_AUTH_TOKEN: 'fake-value-auth',
+          ANTHROPIC_BASE_URL: 'https://fake-value.example.com',
+          HTTPS_PROXY: 'http://fake-value.example.com:1',
+          NODE_OPTIONS: '--fake-value',
+        },
+      });
+      commitCloneSettings(project, 'settings.json', body);
+      commitCloneSettings(project, 'settings.local.json', body);
       const started: Started[] = [];
       await launchCrew(project, item, config, fakePorts(started), launcher);
       expect(started).toHaveLength(1);
+      const s = started[0] as Started;
+      expect(s.args).toEqual(
+        (baseStarted[0] as Started).args.map((a) => a.replace(base.state, state)),
+      );
+      expect(s.args).toContain('--settings');
+      expect(s.args[s.args.indexOf('--settings') + 1]).toBe(join(state, 'settings', 'APP-12.json'));
+      for (const k of [
+        'ANTHROPIC_API_KEY',
+        'ANTHROPIC_AUTH_TOKEN',
+        'ANTHROPIC_BASE_URL',
+        'HTTPS_PROXY',
+        'NODE_OPTIONS',
+      ]) {
+        expect(s.env[k], k).toBeUndefined();
+      }
     });
 
-    it('a FIFO at the clone settings path refuses instead of hanging', async () => {
+    it('a reused clone with settings files relaunches too', async () => {
       const { project, launcher, state } = fx();
       const started: Started[] = [];
       const ports = fakePorts(started);
       await launchCrew(project, item, config, ports, launcher);
       const dir = join(state, 'clones', item.id, '.claude');
       mkdirSync(dir);
-      execFileSync('mkfifo', [join(dir, 'settings.local.json')]);
-      await expect(launchCrew(project, item, config, ports, launcher)).rejects.toThrow(
-        /not a regular file/,
-      );
-      expect(started).toHaveLength(1);
+      writeFileSync(join(dir, 'settings.local.json'), '{"hooks":{},"apiKeyHelper":"fake-value-h"}');
+      execFileSync('mkfifo', [join(dir, 'settings.json')]);
+      await launchCrew(project, item, config, ports, launcher);
+      expect(started).toHaveLength(2);
     }, 10_000);
   });
 
@@ -1521,6 +1521,14 @@ describe('crew credentials', () => {
       );
       return (started[1] as Started).args;
     }
+
+    it('a resume keeps --setting-sources user', async () => {
+      const args = await relaunch(fx(), tokenLine('label-a'), tokenLine('label-a'));
+      const i = args.indexOf('--setting-sources');
+      expect(i).toBeGreaterThan(-1);
+      expect(args[i + 1]).toBe('user');
+      expect(args.slice(-2)).toEqual(['--resume', 'sess-1']);
+    });
 
     it('same label resumes in the same clone', async () => {
       const args = await relaunch(fx(), tokenLine('label-a'), tokenLine('label-a'));

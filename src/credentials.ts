@@ -124,22 +124,13 @@ export function checkProviderConfigDir(dir: string, owner: OwnerEnv): string {
   return real;
 }
 
-type SettingsFile = { env?: unknown; apiKeyHelper?: unknown; hooks?: unknown };
+type SettingsFile = { env?: unknown; apiKeyHelper?: unknown };
 type SettingsRead = { settings?: SettingsFile; problem?: string };
 
-/**
- * Reads a Claude settings file; neither field is set for a missing file. `plainOnly` requires a
- * regular file: one in a crew clone is crew-controlled (a FIFO would hang the launch), an owner's
- * may be a dotfile link.
- */
-function readSettings(file: string, plainOnly: boolean): SettingsRead {
+/** Reads the owner's Claude settings file (may be a dotfile link); no fields for a missing file. */
+function readSettings(file: string): SettingsRead {
   let text: string;
   try {
-    if (plainOnly) {
-      const st = lstatSync(file);
-      if (st.isSymbolicLink()) return { problem: `${file} is a symlink` };
-      if (!st.isFile()) return { problem: `${file} is not a regular file` };
-    }
     text = readFileSync(file, 'utf8');
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'ENOENT'
@@ -174,55 +165,9 @@ function billingProblem(file: string, s: SettingsFile): string | undefined {
  * `allowed` the keys pass, an unparsable file never does. Names the key, never a value.
  */
 export function apiBillingProblem(file: string, allowed = false): string | undefined {
-  const { settings, problem } = readSettings(file, false);
+  const { settings, problem } = readSettings(file);
   if (problem !== undefined) return problem;
   return settings === undefined || allowed ? undefined : billingProblem(file, settings);
-}
-
-/** Env keys that send the Claude process, and with it a newly issued token, somewhere else. */
-const REDIRECT_ENV = new Set([
-  'ANTHROPIC_BASE_URL',
-  'ANTHROPIC_BEDROCK_BASE_URL',
-  'ANTHROPIC_VERTEX_BASE_URL',
-  'ANTHROPIC_FOUNDRY_BASE_URL',
-  'CLAUDE_CODE_USE_BEDROCK',
-  'CLAUDE_CODE_USE_VERTEX',
-  'CLAUDE_CODE_USE_FOUNDRY',
-  'HTTP_PROXY',
-  'HTTPS_PROXY',
-  'ALL_PROXY',
-  'NODE_EXTRA_CA_CERTS',
-  'NODE_OPTIONS',
-]);
-
-/**
- * Why a settings file in a crew clone may not be used; undefined when it may. These files apply to
- * the Claude process, which runs outside the sandbox. A redirecting env key refuses always,
- * `allow_api_billing` or not. On a reused clone, which a crew has already run in, `hooks` and
- * `apiKeyHelper` refuse too. Billing keys follow `allowBilling`. Names the key, never a value.
- */
-export function cloneSettingsProblem(
-  file: string,
-  allowBilling: boolean,
-  reused: boolean,
-): string | undefined {
-  const { settings, problem } = readSettings(file, true);
-  if (problem !== undefined) return problem;
-  if (settings === undefined) return undefined;
-  if (settings.env !== null && typeof settings.env === 'object') {
-    for (const key of Object.keys(settings.env)) {
-      const name = key.toUpperCase();
-      if (REDIRECT_ENV.has(name)) return `${file} sets env.${name}; refusing to use it`;
-    }
-  }
-  if (reused) {
-    for (const key of ['hooks', 'apiKeyHelper'] as const) {
-      if (settings[key] !== undefined) {
-        return `${file} sets ${key} in a reused clone; refusing to use it (inspect it, then remove the clone to start over)`;
-      }
-    }
-  }
-  return allowBilling ? undefined : billingProblem(file, settings);
 }
 
 export type CrewTokenRead =

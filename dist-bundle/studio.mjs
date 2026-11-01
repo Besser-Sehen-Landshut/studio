@@ -28957,14 +28957,9 @@ function checkProviderConfigDir(dir, owner) {
   if (st.uid !== uidOf(owner)) return fail("config dir must be owned by the current user");
   return real;
 }
-function readSettings(file2, plainOnly) {
+function readSettings(file2) {
   let text;
   try {
-    if (plainOnly) {
-      const st = lstatSync4(file2);
-      if (st.isSymbolicLink()) return { problem: `${file2} is a symlink` };
-      if (!st.isFile()) return { problem: `${file2} is not a regular file` };
-    }
     text = readFileSync6(file2, "utf8");
   } catch (e) {
     return e.code === "ENOENT" ? {} : { problem: `${file2} cannot be read` };
@@ -28991,42 +28986,9 @@ function billingProblem(file2, s) {
   return void 0;
 }
 function apiBillingProblem(file2, allowed = false) {
-  const { settings, problem } = readSettings(file2, false);
+  const { settings, problem } = readSettings(file2);
   if (problem !== void 0) return problem;
   return settings === void 0 || allowed ? void 0 : billingProblem(file2, settings);
-}
-var REDIRECT_ENV = /* @__PURE__ */ new Set([
-  "ANTHROPIC_BASE_URL",
-  "ANTHROPIC_BEDROCK_BASE_URL",
-  "ANTHROPIC_VERTEX_BASE_URL",
-  "ANTHROPIC_FOUNDRY_BASE_URL",
-  "CLAUDE_CODE_USE_BEDROCK",
-  "CLAUDE_CODE_USE_VERTEX",
-  "CLAUDE_CODE_USE_FOUNDRY",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "NODE_EXTRA_CA_CERTS",
-  "NODE_OPTIONS"
-]);
-function cloneSettingsProblem(file2, allowBilling, reused) {
-  const { settings, problem } = readSettings(file2, true);
-  if (problem !== void 0) return problem;
-  if (settings === void 0) return void 0;
-  if (settings.env !== null && typeof settings.env === "object") {
-    for (const key of Object.keys(settings.env)) {
-      const name = key.toUpperCase();
-      if (REDIRECT_ENV.has(name)) return `${file2} sets env.${name}; refusing to use it`;
-    }
-  }
-  if (reused) {
-    for (const key of ["hooks", "apiKeyHelper"]) {
-      if (settings[key] !== void 0) {
-        return `${file2} sets ${key} in a reused clone; refusing to use it (inspect it, then remove the clone to start over)`;
-      }
-    }
-  }
-  return allowBilling ? void 0 : billingProblem(file2, settings);
 }
 function readCrewTokenFile(owner) {
   const file2 = crewTokenFile(owner);
@@ -29593,14 +29555,6 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
   });
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
-  for (const name2 of ["settings.json", "settings.local.json"]) {
-    const problem = cloneSettingsProblem(
-      join6(wt.path, ".claude", name2),
-      ownerConfig.allowApiBilling,
-      reused
-    );
-    if (problem) throw new Error(problem);
-  }
   const homeDir = join6(stateRoot, "homes", item.id);
   removeStateEntry(stateRoot, homeDir);
   ensureStateDir(stateRoot, homeDir);
@@ -29657,6 +29611,10 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
       "--output-format",
       "stream-json",
       "--verbose",
+      // Project and local settings of the clone are repo-controlled; only user settings and the
+      // file passed with --settings apply.
+      "--setting-sources",
+      "user",
       ...resumeId === void 0 ? [] : ["--resume", resumeId]
     ],
     `Read ${brief} and follow it.`,
