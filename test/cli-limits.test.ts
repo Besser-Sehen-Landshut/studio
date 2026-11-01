@@ -284,6 +284,82 @@ describe('usage limits through the CLI', () => {
     expect(p.stopped).toEqual([]);
   });
 
+  describe('rate_limit retries', () => {
+    const RETRY = { type: 'system', subtype: 'api_retry', error: 'rate_limit' };
+    const RECOVERED = { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } };
+    const launched = async () => {
+      const fx = makeFx();
+      provider(fx, tokenLine('label-a'));
+      const p = makePorts();
+      await cli(fx, p.ports, ['launch', 'APP-1']);
+      return { fx, p };
+    };
+    const untouched = (fx: Fx, p: ReturnType<typeof makePorts>) => {
+      expect(p.stopped).toEqual([]);
+      expect(existsSync(join(fx.state, 'limits.json'))).toBe(false);
+      expect(itemOf(fx, 'APP-1')?.status).toBe('assigned');
+      expect(recordOf(fx, 'APP-1').limit).toBeUndefined();
+    };
+
+    it('retry then recovery parks nothing on a live crew', async () => {
+      const { fx, p } = await launched();
+      hitLimit(fx, 'APP-1', RETRY);
+      hitLimit(fx, 'APP-1', RECOVERED);
+      await cli(fx, p.ports, ['status']);
+      untouched(fx, p);
+    });
+
+    it('retry then recovery parks nothing on an exited crew', async () => {
+      const { fx, p } = await launched();
+      p.alive.clear();
+      hitLimit(fx, 'APP-1', RETRY);
+      hitLimit(fx, 'APP-1', RECOVERED);
+      await cli(fx, p.ports, ['status']);
+      untouched(fx, p);
+    });
+
+    it('a live crew with an unrecovered retry is not stopped and not parked', async () => {
+      const { fx, p } = await launched();
+      hitLimit(fx, 'APP-1', RETRY);
+      await cli(fx, p.ports, ['status']);
+      untouched(fx, p);
+    });
+
+    it('an exited crew with an unrecovered retry parks', async () => {
+      const { fx, p } = await launched();
+      p.alive.clear();
+      hitLimit(fx, 'APP-1', RETRY);
+      await cli(fx, p.ports, ['status']);
+      expect(p.stopped).toEqual([]);
+      expect(limitsOf(fx)['label-a']).toMatchObject({
+        parkedUntil: '2026-11-01T11:00:00.000Z',
+        kind: 'session',
+      });
+      expect(itemOf(fx, 'APP-1')?.status).toBe('ready');
+    });
+
+    it('an exited crew with an unrecovered retry and a report goes to collect', async () => {
+      const { fx, p } = await launched();
+      p.alive.clear();
+      hitLimit(fx, 'APP-1', RETRY);
+      const reports = join(fx.state, 'clones', 'APP-1', '.studio', 'reports');
+      mkdirSync(reports, { recursive: true });
+      writeFileSync(join(reports, 'APP-1.md'), '---\nstatus: done\n---\n');
+      await cli(fx, p.ports, ['status']);
+      untouched(fx, p);
+    });
+
+    it('terminal limit text on a live crew stops and parks', async () => {
+      const { fx, p } = await launched();
+      hitLimit(fx, 'APP-1', RETRY);
+      hitLimit(fx, 'APP-1');
+      await cli(fx, p.ports, ['status']);
+      expect(p.stopped).toEqual([5001]);
+      expect(limitsOf(fx)['label-a'].kind).toBe('weekly');
+      expect(itemOf(fx, 'APP-1')?.status).toBe('ready');
+    });
+  });
+
   it('a crew stopped by the owner is left alone', async () => {
     const fx = makeFx();
     provider(fx, tokenLine('label-a'));

@@ -22,7 +22,8 @@ tag after the merge.
 - `studio doctor`: lists what is set and what is missing, never values.
 - Usage limits: a limit event in a crew log stops the run, parks its label in `limits.json` in the
   state root and returns the item to `ready`, keeping clone and branch; the next launch resumes the
-  session when it can. With no credential available nothing starts and `forOwner` gets one line.
+  session when it can. A recovered `rate_limit` retry is ignored, and a retry alone never stops a
+  running crew. With no credential available nothing starts and `forOwner` gets one line.
 - Ports `credentials.runProvider` and `credentials.ghWithToken`.
 
 ### Changed

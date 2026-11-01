@@ -226,6 +226,53 @@ describe('scanLogForLimit', () => {
     expect(scanLogForLimit(s, 'APP-2', 0)?.kind).toBe('weekly');
   });
 
+  describe('retries', () => {
+    const scan = (...events: unknown[]) => {
+      const s = stateDir();
+      const body = events.map((e) => (typeof e === 'string' ? e : JSON.stringify(e))).join('\n');
+      writeFileSync(join(s, 'logs', 'APP-1.jsonl'), `${body}\n`);
+      return scanLogForLimit(s, 'APP-1', 0);
+    };
+    const retryEv = { type: 'system', subtype: 'api_retry', error: 'rate_limit' };
+    const assistant = { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } };
+
+    it('a retry followed by an assistant event or a good result is recovered', () => {
+      expect(scan(retryEv, assistant)).toBeUndefined();
+      expect(scan(retryEv, { type: 'result', is_error: false, result: 'done' })).toBeUndefined();
+      expect(scan(retryEv, { type: 'result', result: 'done' })).toBeUndefined();
+      expect(scan(retryEv, assistant, retryEv, assistant)).toBeUndefined();
+    });
+
+    it('a retry with nothing recovering it is reported as retry only', () => {
+      expect(scan(retryEv)).toEqual({ kind: 'session', retryOnly: true });
+      expect(scan(assistant, retryEv)).toEqual({ kind: 'session', retryOnly: true });
+      expect(scan(retryEv, { type: 'user', message: { content: [] } }, 'noise')).toEqual({
+        kind: 'session',
+        retryOnly: true,
+      });
+    });
+
+    it('error events do not recover a retry', () => {
+      const apiError = { ...assistant, isApiErrorMessage: true };
+      const flagged = { ...assistant, error: 'server_error' };
+      const failed = { type: 'result', is_error: true, result: 'boom' };
+      for (const ev of [apiError, flagged, failed]) {
+        expect(scan(retryEv, ev)).toEqual({ kind: 'session', retryOnly: true });
+      }
+    });
+
+    it('terminal limit text counts at once, after a retry and after later events', () => {
+      const terminal = { type: 'result', is_error: true, result: WEEKLY };
+      expect(scan(retryEv, terminal)).toEqual({ kind: 'weekly', resetsAt: 'Nov 3, 9am' });
+      expect(scan(terminal, assistant)).toEqual({ kind: 'weekly', resetsAt: 'Nov 3, 9am' });
+      expect(scan(WEEKLY, retryEv)).toEqual({ kind: 'weekly', resetsAt: 'Nov 3, 9am' });
+    });
+
+    it('detectLimit itself still parses the retry event', () => {
+      expect(detectLimit(JSON.stringify(retryEv))).toEqual({ kind: 'session' });
+    });
+  });
+
   it('a missing or symlinked log finds nothing', () => {
     const s = stateDir();
     expect(scanLogForLimit(s, 'APP-1', 0)).toBeUndefined();

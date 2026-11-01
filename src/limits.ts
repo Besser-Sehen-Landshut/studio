@@ -196,16 +196,39 @@ function readRange(
 
 const logFile = (stateRoot: string, id: string): string => join(stateRoot, 'logs', `${id}.jsonl`);
 
+/** A scan result; `retryOnly` means an unrecovered `rate_limit` retry, no terminal limit text. */
+export interface ScannedLimit extends DetectedLimit {
+  retryOnly?: true;
+}
+
+function parsedEvent(line: string): Record<string, unknown> | undefined {
+  try {
+    const ev: unknown = JSON.parse(line);
+    return isObject(ev) ? ev : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A later event like this shows the API call behind an earlier retry succeeded. */
+function showsRecovery(ev: Record<string, unknown> | undefined): boolean {
+  if (ev?.type === 'assistant') return ev.isApiErrorMessage !== true && ev.error === undefined;
+  if (ev?.type === 'result') return ev.is_error !== true;
+  return false;
+}
+
 /**
- * The last limit event in the bounded tail of an item's log, from byte `from` on (the log is
- * appended across runs; `from` is where this run began). When the tail starts inside the file, its
- * first line is torn and dropped: it could begin in the middle of crew output.
+ * Walks the bounded tail of an item's log from the end, from byte `from` on (the log is appended
+ * across runs; `from` is where this run began). Terminal limit text counts at once. A `rate_limit`
+ * retry is transient unless proven otherwise: it counts only with no later successful `assistant`
+ * or `result` event, and then as `retryOnly`. When the tail starts inside the file, its first line
+ * is torn and dropped: it could begin in the middle of crew output.
  */
 export function scanLogForLimit(
   stateRoot: string,
   id: string,
   from: number,
-): DetectedLimit | undefined {
+): ScannedLimit | undefined {
   const range = readRange(logFile(stateRoot, id), (size) => {
     const start = Math.max(from, size - TAIL_BYTES, 0);
     return { start, length: size - start };
@@ -213,11 +236,18 @@ export function scanLogForLimit(
   if (!range) return undefined;
   const lines = range.text.split('\n');
   if (range.start > from) lines.shift();
+  let recovered = false;
+  let retry: ScannedLimit | undefined;
   for (const line of lines.reverse()) {
     const hit = detectLimit(line);
-    if (hit) return hit;
+    const ev = parsedEvent(line);
+    if (hit) {
+      // Keep walking after a retry: terminal text further back still wins.
+      if (ev?.type !== 'system') return hit;
+      if (!recovered) retry ??= { ...hit, retryOnly: true };
+    } else if (showsRecovery(ev)) recovered = true;
   }
-  return undefined;
+  return retry;
 }
 
 /** A session id goes into argv: nothing that could read as an option or carry odd characters. */
@@ -283,6 +313,7 @@ function backToReady(project: string, id: string, note: string, now: Date, by: s
  * of its current run stops the run, parks the label and returns the item to `ready` with a note;
  * clone and branch stay. Each step is safe to repeat, and the record's `limit` makes the whole thing
  * idempotent: it survives a crash between the steps, and an old log line never parks a later run.
+ * A retry stops nothing while the crew lives; an exited crew counts an unrecovered one as a limit.
  * A crew that already exited counts too (`claude -p` ends on a limit), unless it left a report; then
  * the run finished after all and `collect` takes it. Writes nothing in a state root without crew
  * records or limits, so a plan never creates one.
@@ -334,6 +365,8 @@ export async function reconcileLimits(o: {
         continue;
       }
       const alive = ports.claude.alive(rec.pid);
+      // A live crew may still recover from a retry: only terminal limit text stops it.
+      if (alive && hit.retryOnly) continue;
       if (!alive && hasReport(stateRoot, id)) continue;
       const until = parkUntil(hit.resetsAt, now).toISOString();
       const earlier = labels[label]?.parkedUntil;

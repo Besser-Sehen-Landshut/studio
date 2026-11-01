@@ -28709,6 +28709,19 @@ function readRange(file2, pick2) {
   }
 }
 var logFile = (stateRoot, id) => join5(stateRoot, "logs", `${id}.jsonl`);
+function parsedEvent(line) {
+  try {
+    const ev = JSON.parse(line);
+    return isObject2(ev) ? ev : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function showsRecovery(ev) {
+  if (ev?.type === "assistant") return ev.isApiErrorMessage !== true && ev.error === void 0;
+  if (ev?.type === "result") return ev.is_error !== true;
+  return false;
+}
 function scanLogForLimit(stateRoot, id, from) {
   const range = readRange(logFile(stateRoot, id), (size) => {
     const start = Math.max(from, size - TAIL_BYTES, 0);
@@ -28717,11 +28730,17 @@ function scanLogForLimit(stateRoot, id, from) {
   if (!range) return void 0;
   const lines = range.text.split("\n");
   if (range.start > from) lines.shift();
+  let recovered = false;
+  let retry;
   for (const line of lines.reverse()) {
     const hit = detectLimit(line);
-    if (hit) return hit;
+    const ev = parsedEvent(line);
+    if (hit) {
+      if (ev?.type !== "system") return hit;
+      if (!recovered) retry ??= { ...hit, retryOnly: true };
+    } else if (showsRecovery(ev)) recovered = true;
   }
-  return void 0;
+  return retry;
 }
 var SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 function sessionIdSince(stateRoot, id, from) {
@@ -28806,6 +28825,7 @@ async function reconcileLimits(o2) {
         continue;
       }
       const alive = ports.claude.alive(rec.pid);
+      if (alive && hit.retryOnly) continue;
       if (!alive && hasReport(stateRoot, id)) continue;
       const until = parkUntil(hit.resetsAt, now).toISOString();
       const earlier = labels[label]?.parkedUntil;
