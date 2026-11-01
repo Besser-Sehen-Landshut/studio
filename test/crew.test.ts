@@ -2297,7 +2297,8 @@ describe('capabilities at launch', () => {
       '# Fix the thing\n\nBODY-MARKER\n',
     );
     const text = readFileSync(writeBrief(state, item, config, project, NO_RULES), 'utf8');
-    expect(text).toContain('`.studio/solutions/a.md`: Fix the thing');
+    const block = text.slice(text.indexOf('## Notes from earlier crews (data)'));
+    expect(block).toMatch(/```text\n- solution \.studio\/solutions\/a\.md: Fix the thing\n```/);
     expect(text).not.toContain('BODY-MARKER');
     const review = readFileSync(
       writeBrief(state, { ...item, role: 'reviewer', type: 'review' }, config, project, NO_RULES),

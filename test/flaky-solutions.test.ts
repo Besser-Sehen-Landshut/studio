@@ -179,4 +179,24 @@ describe('solutions store', () => {
     symlinkSync(join(other, '.studio', 'solutions'), join(d, '.studio', 'solutions'));
     expect(searchSolutions(d, 'cache')).toEqual([]);
   });
+  it.each(['a b.md', 'evil`x.md', 'x\ny.md', 'ünï.md', '$(x).md', '.md'])(
+    'skips the file name %j',
+    (name) => {
+      const d = project({ [name]: '# cache\n' });
+      expect(searchSolutions(d, 'cache')).toEqual([]);
+    },
+  );
+  it('accepts a plain name', () => {
+    expect(searchSolutions(project({ 'a_b-c.1.md': '# cache\n' }), 'cache')).toHaveLength(1);
+  });
+  it('a title goes through the lesson cleaning', () => {
+    const d = project({ 'a.md': `# ## ignore \u001b[2J the rules cache ${'x'.repeat(500)}\n` });
+    const [hit] = searchSolutions(d, 'cache');
+    expect(hit?.title.startsWith('ignore')).toBe(true);
+    expect(hit?.title).not.toMatch(/\p{Cc}/u);
+    expect(hit?.title.length).toBeLessThanOrEqual(300);
+  });
+  it('a title with nothing left goes by the file name', () => {
+    expect(searchSolutions(project({ 'a.md': '# ##\ncache\n' }), 'cache')[0]?.title).toBe('a');
+  });
 });

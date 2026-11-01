@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -81,176 +82,82 @@ export function loadSources(dir: string = capabilitiesDir()): SourcesFile {
   return parsed.data;
 }
 
-// The update contract. Nothing from a source ever runs: it is cloned without hooks and links, then
-// read as text. `fits` still changes nothing until `sources apply`; `unclear` and `conflict` hold.
+// The update contract is one rule. `fits`: every file the contract reads is byte-identical to the
+// recorded hash. Any change, or a new or missing file: `unclear`, and a person or the lead reads the
+// diff. `conflict`: a licence file is missing or changed. Upstream text is never interpreted, and
+// nothing from a source runs: it is cloned without hooks and links, and only `reads` reach a crew.
 
 export type Verdict = 'fits' | 'unclear' | 'conflict';
 export interface Finding {
   kind: string;
   detail: string;
 }
+export type Hashes = Record<string, string>;
 
-const MAX_TREE_FILES = 50_000;
-const MAX_SCAN_BYTES = 1024 * 1024;
-const LICENSE_NAME = /^(licen[cs]e|copying)(\.[a-z]+)?$/i;
-const COPYLEFT =
-  /GNU (AFFERO |LESSER )?GENERAL PUBLIC|GNU LESSER|\bA?L?GPL-|Mozilla Public License|Server Side Public License|Business Source License/i;
-const HOOK_PATH = /(^|\/)hooks\.json$|(^|\/)hooks\/|(^|\/)\.claude\/settings[^/]*\.json$/;
-const MAX_LINE_CHARS = 4096;
-const MAX_FRONT_LINES = 200;
-// Anything that may install or fetch and run. Wide on purpose: a false alarm costs one look, a miss
-// runs code. Plain alternations on lines of bounded length, so upstream text cannot slow them down.
-const INSTALL_TOKEN =
-  /\b(?:npm|npx|pnpm|yarn|bun|bunx|pip3?|pipx|uvx?|brew|cargo|apt|apt-get|gem|curl|wget|iwr|invoke-webrequest)\b|chmod \+x|\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/i;
-const SCRIPT = /\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|rb|pl|ps1)$/;
-const NETWORK = /\b(?:curl|wget|fetch\(|urllib|requests\.|http\.get|https?:\/\/)/;
+const LICENSE_NAME = /^(licen[cs]e|copying)(\.[a-z]+)?/i;
 
 const clean = (text: string): string => text.replace(/[\p{Cc}\p{Cf}]/gu, ' ').slice(0, 300);
 
-interface Entry {
-  size: number;
-  link: boolean;
-}
-
-/** Every entry below `dir` without following links; `.git` is not part of a tree. */
-function walk(dir: string): Map<string, Entry> {
-  const out = new Map<string, Entry>();
-  const open = [''];
-  while (open.length > 0) {
-    const rel = open.pop() as string;
-    for (const name of readdirSync(join(dir, rel))) {
-      if (rel === '' && name === '.git') continue;
-      const path = rel ? `${rel}/${name}` : name;
-      const st = lstatSync(join(dir, path));
-      if (st.isSymbolicLink()) out.set(path, { size: 0, link: true });
-      else if (st.isDirectory()) open.push(path);
-      else if (st.isFile()) out.set(path, { size: st.size, link: false });
-      if (out.size > MAX_TREE_FILES) throw new Error('tree too large');
+/** The file's sha256, with no link anywhere below `dir`; undefined when it is not such a file. */
+function hashOf(dir: string, rel: string): string | undefined {
+  try {
+    let at = dir;
+    const segments = rel.split('/');
+    for (const [i, seg] of segments.entries()) {
+      at = join(at, seg);
+      const st = lstatSync(at);
+      if (st.isSymbolicLink()) return undefined;
+      if (i < segments.length - 1 ? !st.isDirectory() : !st.isFile()) return undefined;
     }
+    return createHash('sha256').update(readFileSync(at)).digest('hex');
+  } catch {
+    return undefined;
   }
-  return out;
 }
 
-const readBounded = (dir: string, path: string, e: Entry | undefined): string | undefined =>
-  e && !e.link && e.size <= MAX_SCAN_BYTES ? readFileSync(join(dir, path), 'utf8') : undefined;
-
-const normalizeLine = (line: string): string => line.trim().replace(/\s+/g, ' ');
-
-/**
- * Normalized lines with `\\` continuations joined, no shell parsing; undefined when one is too long
- * to run a pattern over.
- */
-function linesOf(text: string | undefined): string[] | undefined {
-  const lines: string[] = [];
-  let open = '';
-  for (const raw of (text ?? '').split('\n')) {
-    if (raw.length > MAX_LINE_CHARS) return undefined;
-    const clean = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
-    const joined = open + clean;
-    if (joined.length > MAX_LINE_CHARS) return undefined;
-    if (clean.endsWith('\\')) {
-      open = joined.slice(0, -1);
-      continue;
-    }
-    lines.push(normalizeLine(joined));
-    open = '';
+function licenseFiles(dir: string): string[] {
+  try {
+    return readdirSync(dir).filter((n) => LICENSE_NAME.test(n));
+  } catch {
+    return [];
   }
-  if (open !== '') lines.push(normalizeLine(open));
-  return lines;
 }
 
-/** Whether any line that is new here lies inside a fence; an unclosed fence runs to the end. */
-function newFencedLine(lines: readonly string[], known: ReadonlySet<string>): boolean {
-  let fence: string | undefined;
-  for (const line of lines) {
-    const marker = line.startsWith('```') ? '```' : line.startsWith('~~~') ? '~~~' : undefined;
-    if (fence === undefined) {
-      if (marker !== undefined) fence = marker;
-    } else if (marker === fence) fence = undefined;
-    else if (line !== '' && !known.has(line)) return true;
+/** The hashes to record: the files the contract reads, and the licence files at the root. */
+export function hashTree(dir: string, source: Source): Hashes {
+  const hashes: Hashes = {};
+  for (const rel of [...source.reads, ...licenseFiles(dir)]) {
+    const hash = hashOf(dir, rel);
+    if (hash !== undefined) hashes[rel] = hash;
   }
-  return false;
+  return hashes;
 }
 
-/** Front matter from the very start of the file, closed within a bounded number of lines. */
-function frontMatter(lines: readonly string[]): 'none' | 'open' | 'plain' | 'hooks' {
-  if (lines[0] !== '---') return 'none';
-  const end = lines.indexOf('---', 1);
-  if (end === -1 || end > MAX_FRONT_LINES) return 'open';
-  return lines.slice(1, end).some((l) => l === 'hooks:' || l.startsWith('hooks: '))
-    ? 'hooks'
-    : 'plain';
-}
-
-/** The verdict for a candidate against the active tree. A read error is `unclear`, never `fits`. */
-export function compareTrees(
-  oldDir: string,
-  newDir: string,
+/** A tree against the recorded hashes. Files outside the contract are never read, so never judged. */
+export function compareToPin(
+  pin: Hashes,
+  dir: string,
   source: Source,
-  opts: { newLinks?: readonly string[] } = {},
 ): { verdict: Verdict; findings: Finding[] } {
   const conflict: Finding[] = [];
   const unclear: Finding[] = [];
-  try {
-    const before = walk(oldDir);
-    const after = walk(newDir);
-    for (const read of source.reads) {
-      const e = after.get(read);
-      if (e === undefined || e.link) conflict.push({ kind: 'read-missing', detail: clean(read) });
-      else {
-        const was = before.get(read);
-        if (was && e.size > was.size * 2) unclear.push({ kind: 'read-grew', detail: clean(read) });
-      }
-    }
-    for (const [path, e] of before) {
-      if (!path.includes('/') && LICENSE_NAME.test(path) && !e.link && !after.has(path)) {
-        conflict.push({ kind: 'license-removed', detail: clean(path) });
-      }
-    }
-    for (const [path, e] of after) {
-      const was = before.get(path);
-      if (e.link) {
-        if (!was?.link) unclear.push({ kind: 'symlink', detail: clean(path) });
-        continue;
-      }
-      const text = readBounded(newDir, path, e);
-      const old = readBounded(oldDir, path, was);
-      const changed = was === undefined || was.link || text !== old || text === undefined;
-      if (!changed) continue;
-      if (!path.includes('/') && LICENSE_NAME.test(path)) {
-        if (text !== undefined && COPYLEFT.test(text) && !COPYLEFT.test(old ?? '')) {
-          conflict.push({ kind: 'license-copyleft', detail: clean(path) });
-        } else unclear.push({ kind: 'license-changed', detail: clean(path) });
-      }
-      if (HOOK_PATH.test(path)) unclear.push({ kind: 'hook', detail: clean(path) });
-      const lines = linesOf(text);
-      if (lines === undefined) {
-        unclear.push({ kind: 'long-line', detail: clean(path) });
-      } else if (text !== undefined) {
-        const knownLines = linesOf(old) ?? [];
-        const front = frontMatter(lines);
-        if (front === 'open') unclear.push({ kind: 'front-matter', detail: clean(path) });
-        if (front === 'hooks' && frontMatter(knownLines) !== 'hooks') {
-          unclear.push({ kind: 'hook', detail: clean(path) });
-        }
-        const known = new Set(knownLines);
-        if (newFencedLine(lines, known)) {
-          unclear.push({ kind: 'fenced-change', detail: clean(path) });
-        }
-        for (const line of lines) {
-          if (!known.has(line) && INSTALL_TOKEN.test(line)) {
-            unclear.push({ kind: 'install-step', detail: clean(`${path}: ${line}`) });
-          }
-        }
-        if (was === undefined && SCRIPT.test(path) && lines.some((l) => NETWORK.test(l))) {
-          unclear.push({ kind: 'network-script', detail: clean(path) });
-        }
-      }
-      if (text === undefined) unclear.push({ kind: 'too-large', detail: clean(path) });
-    }
-    for (const link of opts.newLinks ?? []) unclear.push({ kind: 'symlink', detail: clean(link) });
-  } catch (e) {
-    unclear.push({ kind: 'unreadable', detail: clean((e as Error).message) });
+  const licenses = new Set(licenseFiles(dir));
+  for (const name of Object.keys(pin)) if (LICENSE_NAME.test(name)) licenses.add(name);
+  for (const rel of source.reads) if (LICENSE_NAME.test(rel)) licenses.add(rel);
+  for (const name of licenses) {
+    const now = hashOf(dir, name);
+    if (now === undefined) {
+      if (pin[name] !== undefined) conflict.push({ kind: 'license-missing', detail: clean(name) });
+      else if (source.reads.includes(name)) unclear.push({ kind: 'missing', detail: clean(name) });
+    } else if (now !== pin[name]) conflict.push({ kind: 'license-changed', detail: clean(name) });
+  }
+  for (const rel of source.reads) {
+    if (licenses.has(rel)) continue;
+    const now = hashOf(dir, rel);
+    const was = pin[rel];
+    if (now === undefined) unclear.push({ kind: 'missing', detail: clean(rel) });
+    else if (was === undefined) unclear.push({ kind: 'new', detail: clean(rel) });
+    else if (now !== was) unclear.push({ kind: 'changed', detail: clean(rel) });
   }
   const findings = [...conflict, ...unclear];
   const verdict = conflict.length > 0 ? 'conflict' : unclear.length > 0 ? 'unclear' : 'fits';
@@ -262,7 +169,12 @@ const lockPath = (ownerRoot: string) => join(sourcesDir(ownerRoot), 'lock.json')
 
 const lockSchema = z.record(
   z.string(),
-  z.object({ commit: z.string(), license: z.string(), fetchedAt: z.string() }),
+  z.object({
+    commit: z.string(),
+    license: z.string(),
+    fetchedAt: z.string(),
+    hashes: z.record(z.string(), z.string()).optional(),
+  }),
 );
 type Lock = z.infer<typeof lockSchema>;
 
@@ -295,7 +207,7 @@ async function fetchTo(
   ownerRoot: string,
   source: Source,
   name: string,
-): Promise<{ commit: string; links: string[] }> {
+): Promise<string> {
   const base = sourcesDir(ownerRoot);
   const dest = join(base, name);
   removeStateEntry(ownerRoot, dest);
@@ -315,12 +227,7 @@ async function fetchTo(
     ]);
     const commit = (await ports.git.run(dest, ['rev-parse', 'HEAD'])).trim();
     if (!FULL_SHA.test(commit)) throw new Error('no commit');
-    const staged = await ports.git.run(dest, ['ls-files', '--stage']);
-    const links = staged
-      .split('\n')
-      .filter((l) => l.startsWith('120000 '))
-      .map((l) => l.slice(l.indexOf('\t') + 1));
-    return { commit, links };
+    return commit;
   } catch (e) {
     removeStateEntry(ownerRoot, dest);
     throw e;
@@ -338,7 +245,7 @@ function pick(index: SourcesFile, only: readonly string[] | undefined): Source[]
   );
 }
 
-/** Fetches what is missing. An explicit act of `studio setup sources`; a present source stays. */
+/** Fetches what is missing and records its hashes; an explicit act. A present source stays. */
 export async function setupSources(o: {
   ownerRoot: string;
   index: SourcesFile;
@@ -349,17 +256,19 @@ export async function setupSources(o: {
   const list = pick(o.index, o.only);
   ensureStateDir(o.ownerRoot, sourcesDir(o.ownerRoot));
   for (const source of list) {
-    if (exists(join(sourcesDir(o.ownerRoot), source.id))) {
+    const dir = join(sourcesDir(o.ownerRoot), source.id);
+    if (exists(dir)) {
       out.push({ id: source.id, result: 'present' });
       continue;
     }
     try {
-      const { commit } = await fetchTo(o.ports, o.ownerRoot, source, source.id);
+      const commit = await fetchTo(o.ports, o.ownerRoot, source, source.id);
       const lock = readLock(o.ownerRoot) ?? {};
       lock[source.id] = {
         commit,
         license: source.license,
         fetchedAt: o.ports.clock.now().toISOString(),
+        hashes: hashTree(dir, source),
       };
       writeLock(o.ownerRoot, lock);
       out.push({ id: source.id, result: 'fetched', commit });
@@ -385,7 +294,7 @@ const held = (id: string, kind: string, detail: string, pinned?: string): CheckR
   ...(pinned === undefined ? {} : { pinned }),
 });
 
-/** Judges upstream against the pin. Writes only `<id>.candidate`; never adopts anything. */
+/** Judges upstream against the recorded hashes. Writes only `<id>.candidate`; adopts nothing. */
 export async function checkSources(o: {
   ownerRoot: string;
   index: SourcesFile;
@@ -401,22 +310,20 @@ export async function checkSources(o: {
       continue;
     }
     const pinned = lock?.[source.id]?.commit;
-    if (pinned === undefined) {
-      out.push(held(source.id, 'no-pin', 'the pinned commit cannot be read'));
+    const hashes = lock?.[source.id]?.hashes;
+    if (pinned === undefined || hashes === undefined) {
+      out.push(held(source.id, 'no-pin', 'the recorded hashes cannot be read'));
       continue;
     }
     let head: string | undefined;
     try {
-      head = (
-        await o.ports.git.run(sourcesDir(o.ownerRoot), [
-          'ls-remote',
-          '--',
-          source.url as string,
-          'HEAD',
-        ])
-      )
-        .split('\t')[0]
-        ?.trim();
+      const remote = await o.ports.git.run(sourcesDir(o.ownerRoot), [
+        'ls-remote',
+        '--',
+        source.url as string,
+        'HEAD',
+      ]);
+      head = remote.split('\t')[0]?.trim();
     } catch {
       head = undefined;
     }
@@ -425,14 +332,13 @@ export async function checkSources(o: {
       continue;
     }
     if (head === pinned) {
-      out.push({ id: source.id, verdict: 'fits', findings: [], pinned });
+      out.push({ id: source.id, ...compareToPin(hashes, active, source), pinned });
       continue;
     }
     try {
-      const got = await fetchTo(o.ports, o.ownerRoot, source, `${source.id}.candidate`);
+      const candidate = await fetchTo(o.ports, o.ownerRoot, source, `${source.id}.candidate`);
       const candidateDir = join(sourcesDir(o.ownerRoot), `${source.id}.candidate`);
-      const r = compareTrees(active, candidateDir, source, { newLinks: got.links });
-      out.push({ id: source.id, ...r, pinned, candidate: got.commit });
+      out.push({ id: source.id, ...compareToPin(hashes, candidateDir, source), pinned, candidate });
     } catch {
       out.push(held(source.id, 'fetch-failed', 'the candidate could not be fetched', pinned));
     }
@@ -455,19 +361,15 @@ export async function applySource(o: {
   if (!exists(active) || !exists(candidate)) {
     return { id: source.id, applied: false, reason: 'no candidate: run studio sources check' };
   }
-  const links = (await o.ports.git.run(candidate, ['ls-files', '--stage']))
-    .split('\n')
-    .filter((l) => l.startsWith('120000 '))
-    .map((l) => l.slice(l.indexOf('\t') + 1));
-  const r = compareTrees(active, candidate, source, { newLinks: links });
-  if (r.verdict !== 'fits') {
-    return { id: source.id, applied: false, reason: `held: ${r.verdict}` };
+  const lock = readLock(o.ownerRoot);
+  const hashes = lock?.[source.id]?.hashes;
+  if (lock === undefined || hashes === undefined) {
+    return { id: source.id, applied: false, reason: 'the recorded hashes cannot be read' };
   }
+  const r = compareToPin(hashes, candidate, source);
+  if (r.verdict !== 'fits') return { id: source.id, applied: false, reason: `held: ${r.verdict}` };
   const commit = (await o.ports.git.run(candidate, ['rev-parse', 'HEAD'])).trim();
   if (!FULL_SHA.test(commit)) return { id: source.id, applied: false, reason: 'no commit' };
-  const lock = readLock(o.ownerRoot);
-  if (lock === undefined)
-    return { id: source.id, applied: false, reason: 'the lock cannot be read' };
   const old = join(base, `${source.id}.old`);
   removeStateEntry(o.ownerRoot, old);
   renameSync(active, old);
@@ -477,6 +379,7 @@ export async function applySource(o: {
     commit,
     license: source.license,
     fetchedAt: o.ports.clock.now().toISOString(),
+    hashes,
   };
   writeLock(o.ownerRoot, lock);
   return { id: source.id, applied: true };
