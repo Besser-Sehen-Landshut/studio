@@ -4,12 +4,14 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { build } from 'esbuild';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_SECRET_GLOBS, evaluateGuard, type GuardContext } from '../src/guard.js';
 
@@ -25,6 +27,47 @@ beforeAll(() => {
 });
 
 afterAll(() => rmSync(plugin, { recursive: true, force: true }));
+
+// `claude plugin test` needs the CLI, which CI does not have: these are the checks CI can make.
+describe('the board mod', () => {
+  const hooks = join(repo, 'hooks');
+
+  it('hooks.json names the module, and the manifest the contract', () => {
+    const { modules } = JSON.parse(readFileSync(join(hooks, 'hooks.json'), 'utf8'));
+    expect(modules).toEqual(['./register.tsx']);
+    expect(existsSync(join(hooks, 'register.tsx'))).toBe(true);
+    const manifest = JSON.parse(readFileSync(join(repo, '.claude-plugin', 'plugin.json'), 'utf8'));
+    expect(manifest.types).toBe('./types/index.d.ts');
+    expect(existsSync(join(repo, 'types', 'index.d.ts'))).toBe(true);
+  });
+
+  it('register.tsx and what it imports transform under esbuild', async () => {
+    const out = await build({
+      entryPoints: [join(hooks, 'register.tsx')],
+      bundle: true,
+      write: false,
+      format: 'esm',
+      logLevel: 'silent',
+      external: ['claude-code'],
+      jsx: 'transform',
+      jsxFactory: 'h',
+      jsxFragment: 'Fragment',
+    });
+    const text = out.outputFiles[0]?.text ?? '';
+    expect(text).toContain('export {');
+    expect(text).toContain('stateDirName');
+  });
+
+  it('only displays: no process, no file write, no import the engine would refuse', () => {
+    const source = readFileSync(join(hooks, 'register.tsx'), 'utf8');
+    expect(source).not.toMatch(/\$\.process\b|\$\.fs\.write\b|\bimport\(|node:/);
+  });
+
+  it('stays out of vitest', () => {
+    const config = readFileSync(join(repo, 'vitest.config.ts'), 'utf8');
+    expect(config).toContain("'hooks/**'");
+  });
+});
 
 describe('self-contained plugin bundle', () => {
   it('ships the bundles and an executable bare `studio` command', () => {

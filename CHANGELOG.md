@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- The Studio board inside Claude Code: a pane, a status line and toasts for the owner's interactive
+  session in a Studio project, refreshed every 10 seconds, plus `/studio [status | pause | resume]`.
+  It only displays: pausing and resuming still happen in a terminal, and `/studio` names the command
+  to run. Crew sessions, `claude -p` and other projects get none of it.
 - `studio pause` and `studio resume` (owner only, in a terminal): while paused nothing new is
   planned, launched or merged; running crews continue. A `pause.json` that cannot be read still
   pauses.

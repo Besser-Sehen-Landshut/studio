@@ -9,6 +9,7 @@ Stack: Node >= 24, TypeScript, pnpm >= 12.7.0 (pinned in `package.json`), vitest
 ```bash
 pnpm install --frozen-lockfile
 pnpm test        # vitest run; must print a test count, never 0 tests
+pnpm test:mod    # the board mod's tests under claude plugin test, on a copy holding only the mod; local only, needs the claude CLI
 pnpm lint        # biome check .
 pnpm typecheck   # tsc --noEmit
 pnpm bundle      # rebuild dist-bundle/ from src/
