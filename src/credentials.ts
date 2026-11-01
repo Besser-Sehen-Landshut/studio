@@ -127,10 +127,14 @@ export function checkProviderConfigDir(dir: string, owner: OwnerEnv): string {
 type SettingsFile = { env?: unknown; apiKeyHelper?: unknown };
 type SettingsRead = { settings?: SettingsFile; problem?: string };
 
-/** Reads the owner's Claude settings file (may be a dotfile link); no fields for a missing file. */
+/**
+ * Reads the owner's Claude settings file; no fields for a missing file. A link is followed (it may
+ * be a dotfile link), but the target must be a regular file, so a FIFO cannot hang the launch.
+ */
 function readSettings(file: string): SettingsRead {
   let text: string;
   try {
+    if (!statSync(file).isFile()) return { problem: `${file} is not a regular file` };
     text = readFileSync(file, 'utf8');
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'ENOENT'

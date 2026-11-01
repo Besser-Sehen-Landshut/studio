@@ -28608,7 +28608,7 @@ function matchLimitText(text) {
     if (!SEGMENT.test(segment)) return void 0;
     reset2 ??= RESET_SEGMENT.exec(segment)?.[1];
   }
-  const kind = m[1] === "weekly" ? "weekly" : "session";
+  const kind = /\bweekly\b/i.test(m[1] ?? "") ? "weekly" : "session";
   const resetsAt = reset2?.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_RESET_CHARS);
   return { kind, ...resetsAt ? { resetsAt } : {} };
 }
@@ -28960,6 +28960,7 @@ function checkProviderConfigDir(dir, owner) {
 function readSettings(file2) {
   let text;
   try {
+    if (!statSync(file2).isFile()) return { problem: `${file2} is not a regular file` };
     text = readFileSync6(file2, "utf8");
   } catch (e) {
     return e.code === "ENOENT" ? {} : { problem: `${file2} cannot be read` };
@@ -30419,7 +30420,7 @@ function proposeCi(detect, repoVisibility, current, usage) {
     return { notes, errors: [`cannot read runners: ${detect.error ?? "unknown error"}`] };
   }
   const groups = groupSelfHosted(detect.runners);
-  const unused = usage?.githubHosted === true && !usage.selfHosted;
+  const unused = usage?.githubHosted === true && !usage.selfHosted && !usage.unverified;
   const group = unused ? void 0 : groups[0];
   const mode = !group ? "github-hosted" : usage?.githubHosted && usage.selfHosted ? "both" : "self-hosted";
   if (unused && groups.length > 0) {
@@ -30540,15 +30541,22 @@ function triggers(on6) {
   return /* @__PURE__ */ new Set();
 }
 function workflowRunnerUsage(files) {
-  const usage = { githubHosted: false, selfHosted: false };
+  const usage = { githubHosted: false, selfHosted: false, unverified: false };
   for (const f of files) {
     const p = parseWorkflow(f.text);
-    if (!p.ok) continue;
+    if (!p.ok) {
+      usage.unverified = true;
+      continue;
+    }
     for (const [, job] of p.jobs) {
-      if (typeof job.uses === "string" || !("runs-on" in job)) continue;
+      if (typeof job.uses === "string" || !("runs-on" in job)) {
+        usage.unverified = true;
+        continue;
+      }
       const r = resolveRunsOn(job["runs-on"]);
       if (r.kind === "hosted") usage.githubHosted = true;
       else if (r.kind === "set") usage.selfHosted = true;
+      else usage.unverified = true;
     }
   }
   return usage;
@@ -30605,31 +30613,37 @@ function lintWorkflows(files, detect, expectedGroup) {
       else if (r.kind === "unverifiable") warnings.push(`${where}: cannot verify, ${r.why}`);
       else if (r.kind === "set") {
         if (r.group) warnings.push(`${where}: cannot verify runner group membership`);
-        const shown = r.labels.map(clean).join(", ");
+        const shown2 = r.labels.map(clean).join(", ");
         const want = r.labels.map((l) => l.toLowerCase());
         if (detect.source === "unknown") {
-          warnings.push(`${where}: cannot verify runs-on [${shown}], runners are unknown`);
+          warnings.push(`${where}: cannot verify runs-on [${shown2}], runners are unknown`);
         } else if (!online.some((have) => want.every((l) => have.has(l)))) {
           errors.push(
-            `${where}: runs-on [${shown}] matches no online runner; it would wait forever`
+            `${where}: runs-on [${shown2}] matches no online runner; it would wait forever`
           );
         }
       }
     }
     const t = triggers(p.doc.on);
-    if (t.has("push") && t.has("pull_request")) {
+    const pushAndPr = t.has("push") && t.has("pull_request");
+    if (pushAndPr) {
       const problem = lintConcurrency(p.doc, expectedGroup);
       if (problem) errors.push(`${path10}: ${problem}`);
     }
-    const group = concurrencyGroup(p.doc)?.toLowerCase();
-    if (group !== void 0 && !/github\.(workflow|run_id)/.test(group)) {
-      byGroup.set(group, [...byGroup.get(group) ?? [], path10]);
+    const shown = concurrencyGroup(p.doc);
+    const group = shown?.toLowerCase();
+    if (shown !== void 0 && group !== void 0 && !/github\.(workflow|run_id)/.test(group)) {
+      const entry = byGroup.get(group) ?? { shown, paths: [], cancelling: false };
+      entry.paths.push(path10);
+      const c3 = p.doc.concurrency;
+      if (pushAndPr && isRecord(c3) && c3["cancel-in-progress"] === true) entry.cancelling = true;
+      byGroup.set(group, entry);
     }
   }
-  for (const [group, paths] of byGroup) {
-    if (paths.length > 1) {
+  for (const { shown, paths, cancelling } of byGroup.values()) {
+    if (paths.length > 1 && cancelling) {
       errors.push(
-        `${paths.join(" and ")} share the concurrency group ${clean(group)}; groups are repo-wide, so they would cancel each other`
+        `${paths.join(" and ")} share the concurrency group ${clean(shown)}; groups are repo-wide, so they would cancel each other`
       );
     }
   }

@@ -12,7 +12,7 @@ export type Detected = {
 
 export type CiConfig = StudioConfig['ci'];
 
-export type WorkflowUsage = { githubHosted: boolean; selfHosted: boolean };
+export type WorkflowUsage = { githubHosted: boolean; selfHosted: boolean; unverified: boolean };
 
 const RUNNER_JQ = '.runners[] | [.name, .status, .busy, ([.labels[].name] | join(","))] | @tsv';
 const RUNNER_LINE = /^(\S+)\t(online|offline)\t(true|false)\t([^\t]*)$/;
@@ -146,7 +146,7 @@ export function proposeCi(
     return { notes, errors: [`cannot read runners: ${detect.error ?? 'unknown error'}`] };
   }
   const groups = groupSelfHosted(detect.runners);
-  const unused = usage?.githubHosted === true && !usage.selfHosted;
+  const unused = usage?.githubHosted === true && !usage.selfHosted && !usage.unverified;
   const group = unused ? undefined : groups[0];
   const mode: CiConfig['runners'] = !group
     ? 'github-hosted'
@@ -303,17 +303,28 @@ function triggers(on: unknown): Set<string> {
   return new Set();
 }
 
-/** Which runner kinds the workflows use; expressions and unparsable files count toward neither. */
+/**
+ * Which runner kinds the workflows use. A runner that cannot be classified (expression, group
+ * without labels, reusable workflow, job without runs-on, unparsable file) counts toward neither
+ * kind and sets `unverified`.
+ */
 export function workflowRunnerUsage(files: WorkflowFile[]): WorkflowUsage {
-  const usage: WorkflowUsage = { githubHosted: false, selfHosted: false };
+  const usage: WorkflowUsage = { githubHosted: false, selfHosted: false, unverified: false };
   for (const f of files) {
     const p = parseWorkflow(f.text);
-    if (!p.ok) continue;
+    if (!p.ok) {
+      usage.unverified = true;
+      continue;
+    }
     for (const [, job] of p.jobs) {
-      if (typeof job.uses === 'string' || !('runs-on' in job)) continue;
+      if (typeof job.uses === 'string' || !('runs-on' in job)) {
+        usage.unverified = true;
+        continue;
+      }
       const r = resolveRunsOn(job['runs-on']);
       if (r.kind === 'hosted') usage.githubHosted = true;
       else if (r.kind === 'set') usage.selfHosted = true;
+      else usage.unverified = true;
     }
   }
   return usage;
@@ -371,7 +382,7 @@ export function lintWorkflows(
   const online = detect.runners
     .filter((r) => r.online)
     .map((r) => new Set(r.labels.map((l) => l.toLowerCase())));
-  const byGroup = new Map<string, string[]>();
+  const byGroup = new Map<string, { shown: string; paths: string[]; cancelling: boolean }>();
   for (const f of files) {
     const path = clean(f.path);
     const p = parseWorkflow(f.text);
@@ -403,20 +414,27 @@ export function lintWorkflows(
       }
     }
     const t = triggers(p.doc.on);
-    if (t.has('push') && t.has('pull_request')) {
+    const pushAndPr = t.has('push') && t.has('pull_request');
+    if (pushAndPr) {
       const problem = lintConcurrency(p.doc, expectedGroup);
       if (problem) errors.push(`${path}: ${problem}`);
     }
-    const group = concurrencyGroup(p.doc)?.toLowerCase();
+    const shown = concurrencyGroup(p.doc);
+    const group = shown?.toLowerCase();
     // The same text with one of these expressions is a different group in each workflow or run.
-    if (group !== undefined && !/github\.(workflow|run_id)/.test(group)) {
-      byGroup.set(group, [...(byGroup.get(group) ?? []), path]);
+    if (shown !== undefined && group !== undefined && !/github\.(workflow|run_id)/.test(group)) {
+      const entry = byGroup.get(group) ?? { shown, paths: [], cancelling: false };
+      entry.paths.push(path);
+      const c = p.doc.concurrency;
+      if (pushAndPr && isRecord(c) && c['cancel-in-progress'] === true) entry.cancelling = true;
+      byGroup.set(group, entry);
     }
   }
-  for (const [group, paths] of byGroup) {
-    if (paths.length > 1) {
+  // Sharing is harmless unless a push+pull_request workflow cancels runs in the shared group.
+  for (const { shown, paths, cancelling } of byGroup.values()) {
+    if (paths.length > 1 && cancelling) {
       errors.push(
-        `${paths.join(' and ')} share the concurrency group ${clean(group)}; groups are repo-wide, so they would cancel each other`,
+        `${paths.join(' and ')} share the concurrency group ${clean(shown)}; groups are repo-wide, so they would cancel each other`,
       );
     }
   }

@@ -54,7 +54,7 @@ function matchLimitText(text: unknown): DetectedLimit | undefined {
     if (!SEGMENT.test(segment)) return undefined;
     reset ??= RESET_SEGMENT.exec(segment)?.[1];
   }
-  const kind: LimitKind = m[1] === 'weekly' ? 'weekly' : 'session';
+  const kind: LimitKind = /\bweekly\b/i.test(m[1] ?? '') ? 'weekly' : 'session';
   const resetsAt = reset?.replace(/\p{Cc}/gu, ' ').slice(0, MAX_RESET_CHARS);
   return { kind, ...(resetsAt ? { resetsAt } : {}) };
 }

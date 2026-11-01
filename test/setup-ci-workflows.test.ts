@@ -340,31 +340,61 @@ describe('lintWorkflows: fail closed on untrusted files', () => {
   });
 });
 
+describe('lintWorkflows: shared concurrency group', () => {
+  const dep = (group: string, cancel: boolean, on = 'on: push\n') =>
+    `${on}concurrency:\n  group: ${group}\n  cancel-in-progress: ${cancel}\n${job('ubuntu-latest')}`;
+  const run = (a: string, b: string) =>
+    lintWorkflows(
+      [file(a, '.github/workflows/a.yml'), file(b, '.github/workflows/b.yml')],
+      detected(),
+      EXPECTED,
+    ).errors;
+
+  it('two deploy workflows sharing a group without cancelling pass', () => {
+    expect(run(dep('Deploy-Prod', false), dep('Deploy-Prod', false))).toEqual([]);
+  });
+
+  it('a push+pull_request sharer with cancel-in-progress true errors, group as written', () => {
+    const ci = dep('Deploy-Prod', true, 'on: [push, pull_request]\n');
+    const shared = run(ci, dep('Deploy-Prod', false)).filter((e) => /share/.test(e));
+    expect(shared).toHaveLength(1);
+    expect(shared[0]).toContain('Deploy-Prod');
+  });
+
+  it('cancelling sharers that are not push+pull_request pass', () => {
+    expect(run(dep('g', true), dep('g', true))).toEqual([]);
+  });
+});
+
 describe('workflowRunnerUsage', () => {
   it('classifies hosted and self-hosted jobs', () => {
     expect(workflowRunnerUsage([fixture('hosted.yml')])).toEqual({
       githubHosted: true,
       selfHosted: false,
+      unverified: false,
     });
     expect(workflowRunnerUsage([fixture('self-hosted-pool.yml')])).toEqual({
       githubHosted: false,
       selfHosted: true,
+      unverified: false,
     });
     expect(workflowRunnerUsage([fixture('hosted.yml'), fixture('self-hosted-pool.yml')])).toEqual({
       githubHosted: true,
       selfHosted: true,
+      unverified: false,
     });
   });
 
-  it('expressions, reusable calls, groups and unparsable files count toward neither', () => {
-    expect(
-      workflowRunnerUsage([
-        fixture('matrix.yml'),
-        file('jobs:\n  b:\n    uses: org/app/.github/workflows/x.yml@main\n'),
-        file('jobs: [unclosed'),
-        file('jobs:\n  b:\n    runs-on:\n      group: g\n'),
-      ]),
-    ).toEqual({ githubHosted: false, selfHosted: false });
+  it('expressions, reusable calls, groups and unparsable files are unverified', () => {
+    const unverified = { githubHosted: false, selfHosted: false, unverified: true };
+    for (const f of [
+      fixture('matrix.yml'),
+      file('jobs:\n  b:\n    uses: org/app/.github/workflows/x.yml@main\n'),
+      file('jobs: [unclosed'),
+      file('jobs:\n  b:\n    runs-on:\n      group: g\n'),
+    ]) {
+      expect(workflowRunnerUsage([f])).toEqual(unverified);
+    }
   });
 
   it('a group with labels counts as self-hosted', () => {
@@ -372,13 +402,14 @@ describe('workflowRunnerUsage', () => {
       workflowRunnerUsage([
         file('jobs:\n  b:\n    runs-on:\n      group: g\n      labels: pool\n'),
       ]),
-    ).toEqual({ githubHosted: false, selfHosted: true });
+    ).toEqual({ githubHosted: false, selfHosted: true, unverified: false });
   });
 
   it('a mixed list counts as self-hosted', () => {
     expect(workflowRunnerUsage([file(job('[ubuntu-latest, pool]'))])).toEqual({
       githubHosted: false,
       selfHosted: true,
+      unverified: false,
     });
   });
 });

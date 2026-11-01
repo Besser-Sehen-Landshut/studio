@@ -47,6 +47,16 @@ describe('detectLimit', () => {
     }
   });
 
+  it('weekly is recognised as a word in the label, in any case', () => {
+    for (const label of ['Weekly', 'weekly Opus', 'Weekly Sonnet', 'Opus weekly']) {
+      expect(detectLimit(`You've hit your ${label} limit · resets 3pm`), label).toEqual({
+        kind: 'weekly',
+        resetsAt: '3pm',
+      });
+    }
+    expect(detectLimit("You've hit your biweekly limit")).toEqual({ kind: 'session' });
+  });
+
   it('takes other segments before or after the reset', () => {
     expect(detectLimit("You've hit your limit · progress saved")).toEqual({ kind: 'session' });
     expect(detectLimit("You've hit your weekly limit · resets 3pm · progress saved")).toEqual({

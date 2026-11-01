@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import {
   chmodSync,
@@ -193,6 +194,15 @@ describe('apiBillingProblem', () => {
     symlinkSync(target, link);
     expect(apiBillingProblem(link)).toBeUndefined();
   });
+
+  it('a non-regular owner settings file is a problem instead of a hang', () => {
+    const d = join(dir(), 'settings.json');
+    mkdirSync(d);
+    expect(apiBillingProblem(d)).toMatch(/not a regular file/);
+    const f = join(dir(), 'settings.json');
+    execFileSync('mkfifo', [f]);
+    expect(apiBillingProblem(f)).toMatch(/not a regular file/);
+  }, 5000);
 
   it('with billing allowed the keys pass, an unparsable file still does not', () => {
     expect(apiBillingProblem(settings('{"apiKeyHelper":"x"}'), true)).toBeUndefined();

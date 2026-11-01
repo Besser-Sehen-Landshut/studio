@@ -37,7 +37,7 @@ const det = (runners: R[], source: 'org' | 'repo' = 'org'): Detected => ({
     busy: r.busy === true,
   })),
 });
-const both = { githubHosted: true, selfHosted: true };
+const both = { githubHosted: true, selfHosted: true, unverified: false };
 
 describe('detectRunners', () => {
   it('reads org runners and parses labels', async () => {
@@ -257,8 +257,8 @@ describe('proposeCi', () => {
 
   it('chooses the mode from workflow usage', () => {
     const d = det(pool(4));
-    const self = { githubHosted: false, selfHosted: true };
-    const hosted = { githubHosted: true, selfHosted: false };
+    const self = { githubHosted: false, selfHosted: true, unverified: false };
+    const hosted = { githubHosted: true, selfHosted: false, unverified: false };
     expect(proposeCi(d, 'private', undefined, self).ci?.runners).toBe('self-hosted');
     expect(proposeCi(d, 'private', undefined, hosted).ci?.runners).toBe('github-hosted');
     const b = proposeCi(d, 'private', undefined, both);
@@ -269,7 +269,7 @@ describe('proposeCi', () => {
   });
 
   it('unused runners with only GitHub-hosted workflows propose github-hosted', () => {
-    const hosted = { githubHosted: true, selfHosted: false };
+    const hosted = { githubHosted: true, selfHosted: false, unverified: false };
     const p = proposeCi(det(pool(4)), 'public', undefined, hosted);
     expect(p.ci?.runners).toBe('github-hosted');
     expect(p.ci?.runnerLabels).toEqual([]);
@@ -279,6 +279,14 @@ describe('proposeCi', () => {
     expect(p.notes.join('\n')).toMatch(/4 self-hosted runner\(s\).*not used/);
   });
 
+  it('unverified usage keeps the runners and the public-repository error', () => {
+    const usage = { githubHosted: true, selfHosted: false, unverified: true };
+    const p = proposeCi(det(pool(4)), 'public', undefined, usage);
+    expect(p.ci?.runners).toBe('self-hosted');
+    expect(p.errors).toHaveLength(1);
+    expect(p.notes.join('\n')).not.toMatch(/not used/);
+  });
+
   it('notes that capacity does not support repository-level runners', () => {
     const p = proposeCi(det(pool(2), 'repo'), 'private');
     expect(p.ci?.runners).toBe('self-hosted');
@@ -286,7 +294,7 @@ describe('proposeCi', () => {
   });
 
   it('has no capacity note for repository runners that stay unused', () => {
-    const hosted = { githubHosted: true, selfHosted: false };
+    const hosted = { githubHosted: true, selfHosted: false, unverified: false };
     const p = proposeCi(det(pool(2), 'repo'), 'private', undefined, hosted);
     expect(p.notes.join('\n')).not.toMatch(/organi[sz]ation runners only/);
   });

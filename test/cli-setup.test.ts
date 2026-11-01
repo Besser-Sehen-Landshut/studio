@@ -328,6 +328,49 @@ describe('studio setup ci', () => {
     expect(j.errors.join('\n')).toMatch(/a\.yml.*b\.yml/);
   });
 
+  describe('a hosted job next to a job with an unclassifiable runner, public repository', () => {
+    const REUSABLE = `name: r
+on: [push, pull_request]
+concurrency:
+  group: ${GROUP.replace('ci-', 'r-')}
+  cancel-in-progress: true
+jobs:
+  call:
+    uses: org/app/.github/workflows/x.yml@main
+`;
+    const cases: [string, string][] = [
+      ['a group alone', WORKFLOW('{ group: g }', GROUP.replace('ci-', 'g-'))],
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression
+      ['an expression', WORKFLOW('${{ matrix.os }}', GROUP.replace('ci-', 'm-'))],
+      ['a reusable workflow', REUSABLE],
+    ];
+    for (const [what, other] of cases) {
+      it(`${what}: public-repository error and --write refuses`, async () => {
+        const fx = fixture({
+          visibility: 'public',
+          workflows: { 'a.yml': WORKFLOW('ubuntu-latest'), 'b.yml': other },
+        });
+        const r = await cli(fx, 'setup', 'ci', '--write', '--json');
+        expect(r.code).toBe(1);
+        const j = JSON.parse(r.out);
+        expect(j.written).toBe(false);
+        expect(j.errors.join('\n')).toMatch(/public repository/);
+        expect(j.proposal.ci.runners).not.toBe('github-hosted');
+        expect(readFileSync(fx.file, 'utf8')).toBe(YAML);
+      });
+    }
+
+    it('only hosted jobs still propose github-hosted on a public repository', async () => {
+      const fx = fixture({
+        visibility: 'public',
+        workflows: { 'a.yml': WORKFLOW('ubuntu-latest') },
+      });
+      const j = JSON.parse((await cli(fx, 'setup', 'ci', '--json')).out);
+      expect(j.proposal.ci.runners).toBe('github-hosted');
+      expect(j.errors).toEqual([]);
+    });
+  });
+
   it('usage from workflows selects both', async () => {
     const fx = fixture({
       workflows: {
