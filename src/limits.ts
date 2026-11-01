@@ -387,7 +387,10 @@ export async function reconcileLimits(o: {
       if (process === 'gone' && hasReport(stateRoot, id)) continue;
       const until = parkUntil(hit.resetsAt, now).toISOString();
       const earlier = labels[label]?.parkedUntil;
-      const parkedUntil = earlier && Date.parse(earlier) > Date.parse(until) ? earlier : until;
+      const parkedUntil =
+        earlier && (process === 'unknown' || Date.parse(earlier) > Date.parse(until))
+          ? earlier
+          : until;
       labels = { ...labels, [label]: { parkedUntil, kind: hit.kind } };
       writeLimits(stateRoot, labels);
       if (process === 'unknown') {
@@ -672,9 +675,9 @@ async function crewProcess(rec: CrewRecord, ports: Ports): Promise<CrewProcess> 
  * crash leaves the state blocked. While any block exists or the file is unreadable, every reconcile
  * stops every live crew of all labels, except on `merged` and `dropped` items, and only after its
  * process identity matches: safe to repeat, and a crash mid-stop heals. A live crew it cannot verify
- * is reported, not signalled. A new entry comes only from a run shown to be current: a live verified
- * crew in any unfinished status, or an exited crew on an active item (any item when the board is
- * unreadable). An invalid pid or an unverified live crew raises none and is reported. Records get `stoppedAt` and `block`,
+ * is reported, not signalled. A new entry comes from a live crew in any unfinished status, verified
+ * or not, an invalid pid included, or from an exited crew on an active item (any item when the board
+ * is unreadable). A clear moves `logStart`, so an unmarked record does not raise an old event again. Records get `stoppedAt` and `block`,
  * no `limit`, so nothing resumes by itself and a cleared event does not trigger again. A report does
  * not excuse a block event: an account problem outranks a finished run, but the work stays
  * collectable. A hit found while the file is unreadable stays unmarked, so it is recorded once the
@@ -728,12 +731,8 @@ export async function reconcileBlocks(o: {
       if (process !== 'verified' && !exitedActive && !unproven) continue;
       const hit = scanLogForBlock(stateRoot, id, rec.logStart ?? 0);
       if (!hit) continue;
-      if (unproven) {
-        // Not shown to be this crew's current run: no new entry, but the owner sees it.
-        result.errors.push(
-          `crew ${id} (pid ${rec.pid}) has a block event but cannot be verified as current; no block recorded from it`,
-        );
-      } else hits.set(id, hit);
+      // Fails closed also for a crew that cannot be verified; the stop below reports it unsignalled.
+      hits.set(id, hit);
     }
     const read = readBlocks(stateRoot);
     if (read.ok) {

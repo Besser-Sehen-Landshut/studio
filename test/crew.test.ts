@@ -147,7 +147,7 @@ function fakePorts(started: Started[]): Ports {
         return { pid: 4242 };
       },
       alive: () => false,
-      identity: async () => undefined,
+      identity: async () => 'start-4242',
       stop: async () => {},
     },
   };

@@ -28851,7 +28851,7 @@ async function reconcileLimits(o2) {
       if (process14 === "gone" && hasReport(stateRoot, id)) continue;
       const until = parkUntil(hit.resetsAt, now).toISOString();
       const earlier = labels[label]?.parkedUntil;
-      const parkedUntil = earlier && Date.parse(earlier) > Date.parse(until) ? earlier : until;
+      const parkedUntil = earlier && (process14 === "unknown" || Date.parse(earlier) > Date.parse(until)) ? earlier : until;
       labels = { ...labels, [label]: { parkedUntil, kind: hit.kind } };
       writeLimits(stateRoot, labels);
       if (process14 === "unknown") {
@@ -29091,11 +29091,7 @@ async function reconcileBlocks(o2) {
       if (process14 !== "verified" && !exitedActive && !unproven) continue;
       const hit = scanLogForBlock(stateRoot, id, rec.logStart ?? 0);
       if (!hit) continue;
-      if (unproven) {
-        result.errors.push(
-          `crew ${id} (pid ${rec.pid}) has a block event but cannot be verified as current; no block recorded from it`
-        );
-      } else hits.set(id, hit);
+      hits.set(id, hit);
     }
     const read2 = readBlocks(stateRoot);
     if (read2.ok) {
@@ -30016,12 +30012,26 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
   );
   const name = crewName(item);
   const identity3 = await ports.claude.identity(pid);
+  if (identity3 === void 0) {
+    if (Number.isInteger(pid) && pid > 0) {
+      try {
+        await ports.claude.stop(pid);
+      } catch {
+        throw new Error(
+          `cannot read the process identity of the new crew for ${item.id}, and stopping pid ${pid} failed; check it by hand`
+        );
+      }
+    }
+    throw new Error(
+      `cannot read the process identity of the new crew for ${item.id}; stopped it and refusing to launch`
+    );
+  }
   const record2 = {
     name,
     item: item.id,
     role: item.role,
     pid,
-    ...identity3 === void 0 ? {} : { identity: identity3 },
+    identity: identity3,
     log,
     startedAt: ports.clock.now().toISOString(),
     label,

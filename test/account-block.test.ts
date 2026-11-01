@@ -544,6 +544,11 @@ describe('identity check before a limit stop', () => {
     // The limit still counts for new launches on those labels.
     const limits = JSON.parse(readFileSync(join(fx.state, 'limits.json'), 'utf8'));
     expect(Object.keys(limits).sort()).toEqual(['label-a', 'label-b']);
+
+    // A later reconcile of the same skipped crew keeps the first parkedUntil.
+    const later = new Date('2026-11-01T10:30:00Z');
+    await cli(fx, { ...p.ports, clock: { ...p.ports.clock, now: () => later } }, ['status']);
+    expect(JSON.parse(readFileSync(join(fx.state, 'limits.json'), 'utf8'))).toEqual(limits);
   });
 });
 
@@ -807,17 +812,41 @@ describe('account block details', () => {
     expect(r.err).toContain('5002');
   });
 
-  it('an unverifiable record raises no new block entry and is reported', async () => {
+  it('an identity read failure at launch stops the child and refuses', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    provider(fx, 'label-a');
+    p.identities.set(5001, undefined);
+    const r = await cli(fx, p.ports, ['launch', 'APP-1']);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('identity');
+    expect(p.started).toHaveLength(1);
+    expect(p.stopped).toEqual([5001]);
+    expect(existsSync(join(fx.state, 'crew.json'))).toBe(false);
+    expect(itemOf(fx, 'APP-1')?.status).toBe('ready');
+  });
+
+  it('an event from an unverifiable record still blocks, unsignalled and reported', async () => {
     const unknown = makeFx();
     const p = makePorts();
     await twoCrews(unknown, p);
     log(unknown, 'APP-1', ON_HOLD);
     p.identities.set(5001, undefined);
+    p.identities.set(5002, 'someone-else');
     const r = await cli(unknown, p.ports, ['status']);
-    expect(existsSync(blocksFile(unknown))).toBe(false);
+    expect(blocksOf(unknown)).toEqual([
+      { label: 'label-a', reason: 'account_on_hold', at: '2026-11-01T10:00:00.000Z' },
+    ]);
     expect(p.stopped).toEqual([]);
     expect(r.err).toContain('APP-1');
     expect(r.err).toContain('5001');
+    expect((await cli(unknown, p.ports, ['launch', 'APP-1'])).code).toBe(1);
+
+    // After a clear the old event stays out, although the record is still unmarked.
+    await cli(unknown, p.ports, ['accounts-clear', 'label-a'], { isTerminal: true });
+    expect(recordOf(unknown, 'APP-1').stoppedAt).toBeUndefined();
+    await cli(unknown, p.ports, ['status']);
+    expect(blocksOf(unknown)).toEqual([]);
 
     const invalid = makeFx();
     const p2 = makePorts();
@@ -827,8 +856,9 @@ describe('account block details', () => {
     writeFileSync(join(invalid.state, 'crew.json'), JSON.stringify(records));
     log(invalid, 'APP-1', ON_HOLD);
     const r2 = await cli(invalid, p2.ports, ['status']);
-    expect(existsSync(blocksFile(invalid))).toBe(false);
-    expect(p2.stopped).toEqual([]);
+    expect(blocksOf(invalid)).toHaveLength(1);
+    // The other crew is verified and stops; the invalid pid is never signalled.
+    expect(p2.stopped).toEqual([5002]);
     expect(r2.err).toContain('APP-1');
   });
 

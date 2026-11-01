@@ -826,12 +826,28 @@ export async function launchCrew(
   );
   const name = crewName(item);
   const identity = await ports.claude.identity(pid);
+  if (identity === undefined) {
+    // The one stop without a stored identity: this child was spawned by us just now. A crew that
+    // could never be verified must not run, since no block or limit could stop it later.
+    if (Number.isInteger(pid) && pid > 0) {
+      try {
+        await ports.claude.stop(pid);
+      } catch {
+        throw new Error(
+          `cannot read the process identity of the new crew for ${item.id}, and stopping pid ${pid} failed; check it by hand`,
+        );
+      }
+    }
+    throw new Error(
+      `cannot read the process identity of the new crew for ${item.id}; stopped it and refusing to launch`,
+    );
+  }
   const record: CrewRecord = {
     name,
     item: item.id,
     role: item.role,
     pid,
-    ...(identity === undefined ? {} : { identity }),
+    identity,
     log,
     startedAt: ports.clock.now().toISOString(),
     label,
