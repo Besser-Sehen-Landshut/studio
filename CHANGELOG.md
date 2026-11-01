@@ -17,12 +17,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
-- The crew guard denies running `studio` directly, `node` without a literal script file, and setting
-  or unsetting `STUDIO_*`, `NODE_OPTIONS`, `NODE_PATH`, `npm_config_*`, `PNPM_*`, `YARN_*` and
-  `COREPACK_*` (any case). It also denies `script`, `flock` and `watch`.
-- Package runners follow one simple rule: `npx`, `pnpx`, `bunx`, `corepack`, `bun x`, `npm exec`,
-  `pnpm exec`, `pnpm dlx`, `yarn dlx`, `yarn exec` and `--shell-mode` are denied; everything else in
-  npm, pnpm and yarn passes (`pnpm test`, `npm run resume`, `yarn build`, `yarn studio`).
+- The crew guard denies running `studio` directly, and setting or unsetting `STUDIO_*`,
+  `NODE_OPTIONS`, `NODE_PATH`, `npm_config_*`, `PNPM_*`, `YARN_*` and `COREPACK_*` (any case). It also
+  denies `script`, `flock` and `watch`, arithmetic (`((`, `$((`, `$[`) and `${VAR:=x}` / `${VAR=x}`.
+- `node` runs only as `node --version`, `node --help` or `node <literal relative path>` (no option
+  before the path, no `..`, not the studio binary).
+- `npm`, `pnpm`, `yarn` and `bun` pass only with a first argument from a short allowlist (`test`,
+  `run`, `install`, `i`, `ci`, `lint`, `build`, `typecheck`, `format`, `add`, `remove`, `list`, `ls`,
+  `audit`, `outdated`, `why`, `--version`, `-v`, `--help`); `--shell*` is denied anywhere. `npx`,
+  `pnpx`, `bunx` and `corepack` are denied.
 - The guard does not contain a malicious crew: `package.json` scripts can run anything. The boundary
   is the sandbox, the token and branch protection; owner-only commands need a terminal.
 - Notifications stop at the first failing send in a run (one error, the rest is retried next run), and

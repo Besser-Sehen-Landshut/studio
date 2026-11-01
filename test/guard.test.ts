@@ -626,23 +626,47 @@ describe('round 1 regressions', () => {
     ]);
   });
 
-  it('I5g arithmetic that assigns is denied, plain arithmetic is allowed', () => {
+  it('I5g arithmetic and ${VAR=...} are denied outright', () => {
     denies([
       '(( STUDIO_ROLE = 1 ))',
       'echo $(( X = 1 ))',
       '(( X++ ))',
-      '(( X-- ))',
-      '(( X += 2 ))',
-      '(( X <<= 2 ))',
-    ]);
-    for (const c of [
+      '(( a <= 2 ))',
       'echo $((1 + 2))',
       '[ $((a + 1)) -eq 2 ]',
       'echo $((a == 1))',
-      '(( a <= 2 ))',
-    ]) {
+      'echo $[1 + 2]',
+      'echo $[ X = 1 ]',
+      'echo ${STUDIO_ROLE:=owner}',
+      'echo ${STUDIO_ROLE=owner}',
+      'echo ${X:=1}',
+      'echo ${a[0]:=1}',
+    ]);
+    for (const c of ['echo ${X:-a}', 'echo ${X}', 'echo "$X"', 'test "$X" = a']) {
       expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
     }
+  });
+
+  it('I5g2 node runs only --version, --help or a literal relative script path', () => {
+    denies([
+      'node --test',
+      'node --test test/a.test.js',
+      'node --no-warnings x.js',
+      'node --no-warnings app.js pause',
+      'node --max-old-space-size=4096 app.js',
+      'node --version x',
+      'node /dev/stdin',
+      'node /abs/app.js',
+      'node ../app.js',
+      'node a/../../app.js',
+      'node ~/app.js',
+      'node -r x.js app.js',
+      'node --import x.js app.js',
+      'node -r bin/studio app.js',
+      'node -- app.js',
+      'node dist-bundle/studio.mjs',
+      'node ./bin/studio',
+    ]);
   });
 
   it('I5e ordinary node and npm commands are allowed, also with these words as arguments', () => {
@@ -652,12 +676,9 @@ describe('round 1 regressions', () => {
       'node app.js studio',
       'node app.js "$X"',
       'node app.js $(echo x)',
-      'node --no-warnings app.js pause',
-      'node --test test/a.test.js',
-      'node --max-old-space-size=4096 app.js',
+      'node ./scripts/run.js resume',
       'node --version',
       'node --help',
-      'node --test',
       'npm run resume',
       'npm run pause',
       'pnpm test',
@@ -721,18 +742,52 @@ describe('round 1 regressions', () => {
       'npm test --shell-mode',
       'pnpm run lint --shell-mode=true',
       'yarn build --shell-mode',
+      'npm test --shell',
+      'npm test --shell-m',
+      'pnpm run lint --shell=x',
+      'pnpm',
+      'npm',
+      'yarn',
+      'bun',
+      'yarn studio',
+      'pnpm -w test',
+      'pnpm --filter app test',
+      'npm -- test',
+      'npm -w a test',
+      'npm $X',
+      'pnpm "$X" test',
+      'bun x',
+      'bun repl',
+      'npm publish',
+      'pnpm exec',
     ]);
   });
 
-  it('I5j other npm, pnpm and yarn commands pass', () => {
+  it('I5j allowlisted first arguments of npm, pnpm, yarn and bun pass', () => {
     for (const c of [
       'pnpm test',
       'pnpm test "$X"',
       'pnpm run lint',
+      'pnpm run --filter x build',
       'pnpm install',
+      'pnpm i',
+      'pnpm ci',
+      'npm ci',
       'yarn test',
       'yarn build',
-      'yarn studio',
+      'yarn lint',
+      'yarn add x',
+      'pnpm remove x',
+      'pnpm list',
+      'pnpm ls',
+      'pnpm audit',
+      'pnpm outdated',
+      'pnpm why x',
+      'pnpm typecheck',
+      'pnpm format',
+      'pnpm --version',
+      'pnpm -v',
+      'pnpm --help',
       'npm run resume',
       'npm test',
       'bun test',

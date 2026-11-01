@@ -1147,60 +1147,61 @@ const NODE_NAME = /^node(js)?[0-9.]*$/i;
 /** `bin/studio` or `dist-bundle/studio.mjs`; case-insensitive because file systems can be. */
 const isStudioBinary = (w: string): boolean => /^studio(\.(mjs|cjs|js))?$/i.test(basename(w));
 
-/** Flags that make node print something and run no script. */
-const NODE_INFO_FLAGS = new Set(['--version', '--help', '--test']);
-
 /**
- * Denies node unless it runs a literal script file (or only prints information). Inline code
- * (`-e`, `-p`, `--eval`, `--print`) and scripts read from stdin are denied: node may read stdin after
- * flags, so a missing script path is a denial. An option without `=` may take the next word as its
- * value, so that word and the one after it both count as possible scripts. Words after the script
- * are its arguments and stay free. Flags before a script are allowed (`node --no-warnings a.js`).
+ * Running node directly is denied except `node --version`, `node --help` and `node <path>`: the path is
+ * the first argument (no option before it), literal, relative, without a `..` segment and not the studio
+ * binary. Words after the path are the script's arguments and stay free.
  */
 function checkNode(args: string[]): void {
-  const notLiteral = 'node with a script argument that is not literal is not allowed';
-  const noScript = 'node without a literal script file is not allowed';
-  let mayBeValue = false;
-  for (let k = 0; k < args.length; k++) {
-    const a = args[k] as string;
-    if (unresolvedWord(a)) deny(notLiteral);
-    if (a === '-') deny(noScript);
-    if (a === '--') {
-      const script = args[k + 1];
-      if (script === undefined) deny(noScript);
-      if (script !== undefined && unresolvedWord(script)) deny(notLiteral);
-      if (script !== undefined && isStudioBinary(script)) deny(CREW_NO_STUDIO);
-      return;
-    }
-    if (a.startsWith('-')) {
-      if (/studio/i.test(a)) deny(CREW_NO_STUDIO);
-      if (/^(-[A-Za-z]*[pe][A-Za-z]*|--eval|--print)(=|$)/.test(a)) deny(noScript);
-      mayBeValue = !a.includes('=');
-      continue;
-    }
-    if (isStudioBinary(a)) deny(CREW_NO_STUDIO);
-    if (!mayBeValue) return;
-    mayBeValue = false;
+  const first = args[0] ?? '-';
+  if (args.length === 1 && (first === '--version' || first === '--help')) return;
+  if (first.startsWith('-') || first.startsWith('~')) {
+    deny('node without a literal relative script path is not allowed');
   }
-  if (!args.some((a) => NODE_INFO_FLAGS.has(a))) deny(noScript);
+  if (unresolvedWord(first) || isAbsolute(first) || first.split('/').includes('..')) {
+    deny('node with a script path that is not literal and relative is not allowed');
+  }
+  if (isStudioBinary(first)) deny(CREW_NO_STUDIO);
 }
 
+/** First arguments of npm, pnpm, yarn and bun that may run; anything else is denied. */
+const PACKAGE_COMMANDS = new Set([
+  'test',
+  'run',
+  'install',
+  'i',
+  'ci',
+  'lint',
+  'build',
+  'typecheck',
+  'format',
+  'add',
+  'remove',
+  'list',
+  'ls',
+  'audit',
+  'outdated',
+  'why',
+  '--version',
+  '-v',
+  '--help',
+]);
+
 /**
- * One simple rule for package runners: tools that fetch and run a package, and `--shell-mode`, are
- * denied. Everything else in npm, pnpm and yarn passes; the guard does not contain a malicious crew
- * (package.json scripts run anything), the sandbox does.
+ * npx, pnpx, bunx and corepack are denied. npm, pnpm, yarn and bun pass only with an allowlisted first
+ * argument, and `--shell*` (`--shell-mode` and its abbreviations) is denied anywhere. The guard does
+ * not contain a malicious crew (package.json scripts run anything), the sandbox does.
  */
 function checkPackageRunner(name: string, args: string[]): void {
-  const deniedRunner = (): never => deny(`${name} is a package runner and is not allowed`);
-  if (name === 'npx' || name === 'pnpx' || name === 'bunx' || name === 'corepack') deniedRunner();
-  if (name === 'bun' && args[0] === 'x') deniedRunner();
-  if (name !== 'npm' && name !== 'pnpm' && name !== 'yarn') return;
-  if (args.some((a) => a === '--shell-mode' || a.startsWith('--shell-mode='))) {
-    deny(`${name} --shell-mode is not allowed`);
+  if (name === 'npx' || name === 'pnpx' || name === 'bunx' || name === 'corepack') {
+    deny(`${name} is a package runner and is not allowed`);
   }
-  const own = args.indexOf('--');
-  const before = own === -1 ? args : args.slice(0, own);
-  if (before.some((a) => a === 'exec' || a === 'dlx')) deniedRunner();
+  if (name !== 'npm' && name !== 'pnpm' && name !== 'yarn' && name !== 'bun') return;
+  const first = args[0];
+  if (first === undefined || unresolvedWord(first) || !PACKAGE_COMMANDS.has(first)) {
+    deny(`${name} is only allowed with a known command as its first argument`);
+  }
+  if (args.some((a) => a.startsWith('--shell'))) deny(`${name} --shell-mode is not allowed`);
 }
 
 function checkWords(env: Env, words: string[], state: State): void {
@@ -1269,10 +1270,9 @@ function checkWords(env: Env, words: string[], state: State): void {
 
 function checkBash(env: Env, cmd: string, cwd: string | null, depth: number): void {
   if (depth > 8) deny('command nesting too deep');
-  // Arithmetic can assign (`(( X = 1 ))`, `$(( X++ ))`) without an assignment word; deny any `((` command
-  // that has an assignment or increment operator. `==`, `!=`, `<=`, `>=` are comparisons and stay allowed.
-  if (cmd.includes('((') && /(?<![=!<>])=(?!=)|<<=|>>=|\+\+|--/.test(cmd)) {
-    deny('assignment in arithmetic is not allowed');
+  // Arithmetic and `${VAR:=x}` can assign without an assignment word; deny them outright.
+  if (/\(\(|\$\[|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?:?=/.test(cmd)) {
+    deny('arithmetic and parameter-expansion assignment are not allowed');
   }
   const { lines, subs } = scan(cmd);
   for (const sub of subs) checkBash(env, sub, cwd, depth + 1);

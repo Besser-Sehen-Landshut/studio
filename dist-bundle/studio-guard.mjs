@@ -1444,45 +1444,48 @@ function checkVarBuiltin(name, args) {
 var CREW_NO_STUDIO = "a crew may not run studio";
 var NODE_NAME = /^node(js)?[0-9.]*$/i;
 var isStudioBinary = (w) => /^studio(\.(mjs|cjs|js))?$/i.test(basename(w));
-var NODE_INFO_FLAGS = /* @__PURE__ */ new Set(["--version", "--help", "--test"]);
 function checkNode(args) {
-  const notLiteral = "node with a script argument that is not literal is not allowed";
-  const noScript = "node without a literal script file is not allowed";
-  let mayBeValue = false;
-  for (let k = 0; k < args.length; k++) {
-    const a = args[k];
-    if (unresolvedWord(a)) deny(notLiteral);
-    if (a === "-") deny(noScript);
-    if (a === "--") {
-      const script = args[k + 1];
-      if (script === void 0) deny(noScript);
-      if (script !== void 0 && unresolvedWord(script)) deny(notLiteral);
-      if (script !== void 0 && isStudioBinary(script)) deny(CREW_NO_STUDIO);
-      return;
-    }
-    if (a.startsWith("-")) {
-      if (/studio/i.test(a)) deny(CREW_NO_STUDIO);
-      if (/^(-[A-Za-z]*[pe][A-Za-z]*|--eval|--print)(=|$)/.test(a)) deny(noScript);
-      mayBeValue = !a.includes("=");
-      continue;
-    }
-    if (isStudioBinary(a)) deny(CREW_NO_STUDIO);
-    if (!mayBeValue) return;
-    mayBeValue = false;
+  const first = args[0] ?? "-";
+  if (args.length === 1 && (first === "--version" || first === "--help")) return;
+  if (first.startsWith("-") || first.startsWith("~")) {
+    deny("node without a literal relative script path is not allowed");
   }
-  if (!args.some((a) => NODE_INFO_FLAGS.has(a))) deny(noScript);
+  if (unresolvedWord(first) || isAbsolute(first) || first.split("/").includes("..")) {
+    deny("node with a script path that is not literal and relative is not allowed");
+  }
+  if (isStudioBinary(first)) deny(CREW_NO_STUDIO);
 }
+var PACKAGE_COMMANDS = /* @__PURE__ */ new Set([
+  "test",
+  "run",
+  "install",
+  "i",
+  "ci",
+  "lint",
+  "build",
+  "typecheck",
+  "format",
+  "add",
+  "remove",
+  "list",
+  "ls",
+  "audit",
+  "outdated",
+  "why",
+  "--version",
+  "-v",
+  "--help"
+]);
 function checkPackageRunner(name, args) {
-  const deniedRunner = () => deny(`${name} is a package runner and is not allowed`);
-  if (name === "npx" || name === "pnpx" || name === "bunx" || name === "corepack") deniedRunner();
-  if (name === "bun" && args[0] === "x") deniedRunner();
-  if (name !== "npm" && name !== "pnpm" && name !== "yarn") return;
-  if (args.some((a) => a === "--shell-mode" || a.startsWith("--shell-mode="))) {
-    deny(`${name} --shell-mode is not allowed`);
+  if (name === "npx" || name === "pnpx" || name === "bunx" || name === "corepack") {
+    deny(`${name} is a package runner and is not allowed`);
   }
-  const own = args.indexOf("--");
-  const before = own === -1 ? args : args.slice(0, own);
-  if (before.some((a) => a === "exec" || a === "dlx")) deniedRunner();
+  if (name !== "npm" && name !== "pnpm" && name !== "yarn" && name !== "bun") return;
+  const first = args[0];
+  if (first === void 0 || unresolvedWord(first) || !PACKAGE_COMMANDS.has(first)) {
+    deny(`${name} is only allowed with a known command as its first argument`);
+  }
+  if (args.some((a) => a.startsWith("--shell"))) deny(`${name} --shell-mode is not allowed`);
 }
 function checkWords(env, words, state) {
   if (words.length === 0) return;
@@ -1541,8 +1544,8 @@ function checkWords(env, words, state) {
 }
 function checkBash(env, cmd, cwd, depth) {
   if (depth > 8) deny("command nesting too deep");
-  if (cmd.includes("((") && /(?<![=!<>])=(?!=)|<<=|>>=|\+\+|--/.test(cmd)) {
-    deny("assignment in arithmetic is not allowed");
+  if (/\(\(|\$\[|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?:?=/.test(cmd)) {
+    deny("arithmetic and parameter-expansion assignment are not allowed");
   }
   const { lines, subs } = scan(cmd);
   for (const sub of subs) checkBash(env, sub, cwd, depth + 1);
