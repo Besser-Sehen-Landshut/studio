@@ -75,6 +75,9 @@ export async function resolveForItem(o: {
     };
   }
   const target = reviewTarget(item);
+  if (target === undefined && item.type === 'review') {
+    throw new Error(`${item.id} names no pull request: add the note review <owner/repo>#<n>`);
+  }
   const facts = target === undefined ? undefined : await readPrFacts(o.ports, target);
   const paths: ChangedPaths = facts?.complete ? [...facts.files, ...declared] : 'unknown';
   const name = target === undefined ? undefined : `${target.repo}#${target.pr}`;

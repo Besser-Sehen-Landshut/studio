@@ -1045,3 +1045,32 @@ describe('R79: queue file updates and the run lock', () => {
     expect(['SIGTERM', 'SIGINT', 'SIGHUP'].map((s) => process.listenerCount(s))).toEqual(before);
   });
 });
+
+describe('mergeAllowed', () => {
+  it('a refusal fails the entry before gh pr merge; no refusal merges', async () => {
+    const rules = () =>
+      base([
+        { prefix: REQ, responses: [noRequired] },
+        { prefix: VIEW, responses: [view(H1)] },
+        { prefix: CHK, responses: [checks(['a', 'pass'])] },
+      ]);
+    const go = async (reason: string | undefined) => {
+      const g = fakeGh(rules());
+      const c = fakeClock();
+      const result = await mergeOne(
+        entry(),
+        mkConfig(),
+        { gh: g.gh, clock: c.clock, host },
+        () => {},
+        {
+          mergeAllowed: () => reason,
+        },
+      );
+      return { result, merged: g.calls.some((l: string) => l.startsWith('pr merge')) };
+    };
+    const refused = await go('board item is blocked');
+    expect(refused.result).toMatchObject({ result: 'failed', reason: 'board item is blocked' });
+    expect(refused.merged).toBe(false);
+    expect((await go(undefined)).merged).toBe(true);
+  });
+});

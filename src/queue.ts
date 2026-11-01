@@ -40,6 +40,8 @@ export type QueueOptions = {
    * loop and right before `gh pr merge`; a stop keeps `current` and `pending` as they are.
    */
   hold?: () => string | undefined;
+  /** Why this entry must not merge, read right before `gh pr merge`; a reason fails the entry. */
+  mergeAllowed?: (entry: QueueEntry) => string | undefined;
 };
 
 /** Internal stop: the hold fired between capacity and merge. `current` stays persisted. */
@@ -495,6 +497,8 @@ export async function mergeOne(
         enter('capacity');
         throw new QueueHeld(held);
       }
+      const refused = opts.mergeAllowed?.(entry);
+      if (refused !== undefined) return failed(refused);
       const r = await gh.run([
         'pr',
         'merge',

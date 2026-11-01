@@ -199,7 +199,7 @@ describe('checkReviewCaps', () => {
     ...over,
   });
   it('accepts a complete approval and lists what was skipped', () => {
-    expect(checkReviewCaps(caps, report())).toEqual({ skipped: ['motion: skipped: no source'] });
+    expect(checkReviewCaps(caps, report())).toEqual({ skipped: ['motion'], target: 'org/app#7' });
   });
   it('refuses a missing analyzer', () => {
     const r = report({
@@ -230,14 +230,47 @@ describe('checkReviewCaps', () => {
     expect(() => checkReviewCaps(caps, report({ reviews: 'org/app#8' }))).toThrow(/reviews/);
     expect(() => checkReviewCaps(caps, report({ reviews: undefined }))).toThrow(/reviews/);
   });
-  it('requested changes pass without analyzers', () => {
+  it('requested changes need no analyzers but the recorded target', () => {
     const r = {
       status: 'done' as const,
       verdict: 'changes_requested' as const,
+      reviews: 'org/app#7',
       lessons: [],
       questions: [],
     };
-    expect(checkReviewCaps(caps, r)).toEqual({ skipped: [] });
+    expect(checkReviewCaps(caps, r)).toEqual({ skipped: [], target: 'org/app#7' });
+  });
+  it.each(['changes_requested', 'approve'] as const)(
+    'a %s report naming another pull request is refused',
+    (verdict) => {
+      const r = {
+        status: 'done' as const,
+        verdict,
+        reviews: 'org/app#8',
+        lessons: [],
+        questions: [],
+      };
+      expect(() => checkReviewCaps(caps, r)).toThrow(/reviews/);
+    },
+  );
+  it.each(['changes_requested', 'approve'] as const)(
+    'a %s report without a recorded target is refused',
+    (verdict) => {
+      const r = {
+        status: 'done' as const,
+        verdict,
+        reviews: 'org/app#7',
+        lessons: [],
+        questions: [],
+      };
+      const { reviewsTarget: _t, ...noTarget } = caps;
+      expect(() => checkReviewCaps(noTarget, r)).toThrow(/relaunch/);
+      expect(() => checkReviewCaps(undefined, r)).toThrow(/relaunch/);
+    },
+  );
+  it('a blocked or failed report owes nothing and has no target', () => {
+    const r = { status: 'blocked' as const, lessons: [], questions: [] };
+    expect(checkReviewCaps(undefined, r)).toEqual({ skipped: [] });
   });
   it('refuses an approval without caps, also an unknown ones', () => {
     expect(() => checkReviewCaps(undefined, report())).toThrow(/relaunch/);

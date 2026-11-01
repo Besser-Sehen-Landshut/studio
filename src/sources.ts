@@ -96,18 +96,12 @@ const LICENSE_NAME = /^(licen[cs]e|copying)(\.[a-z]+)?$/i;
 const COPYLEFT =
   /GNU (AFFERO |LESSER )?GENERAL PUBLIC|GNU LESSER|\bA?L?GPL-|Mozilla Public License|Server Side Public License|Business Source License/i;
 const HOOK_PATH = /(^|\/)hooks\.json$|(^|\/)hooks\/|(^|\/)\.claude\/settings[^/]*\.json$/;
-const HOOK_FRONT = /^---\r?\n[\s\S]*?^hooks:/m;
-const INSTALL = [
-  /\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z)?sh\b/g,
-  /\bnpm (?:i|install) (?:-g|--global)\b/g,
-  /\bpnpm add (?:-g|--global)\b/g,
-  /\byarn global add\b/g,
-  /\bbrew install\b/g,
-  /\bpip3? install\b/g,
-  /\bcargo install\b/g,
-  /\bapt(?:-get)? install\b/g,
-  /\bgem install\b/g,
-];
+const MAX_LINE_CHARS = 4096;
+const MAX_FRONT_LINES = 200;
+// Anything that may install or fetch and run. Wide on purpose: a false alarm costs one look, a miss
+// runs code. Plain alternations on lines of bounded length, so upstream text cannot slow them down.
+const INSTALL_TOKEN =
+  /\b(?:npm|npx|pnpm|yarn|bun|bunx|pip3?|pipx|uvx?|brew|cargo|apt|apt-get|gem|curl|wget|iwr|invoke-webrequest)\b|chmod \+x|\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/i;
 const SCRIPT = /\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|rb|pl|ps1)$/;
 const NETWORK = /\b(?:curl|wget|fetch\(|urllib|requests\.|http\.get|https?:\/\/)/;
 
@@ -140,10 +134,26 @@ function walk(dir: string): Map<string, Entry> {
 const readBounded = (dir: string, path: string, e: Entry | undefined): string | undefined =>
   e && !e.link && e.size <= MAX_SCAN_BYTES ? readFileSync(join(dir, path), 'utf8') : undefined;
 
-function installSteps(text: string | undefined): Set<string> {
-  const hits = new Set<string>();
-  for (const re of INSTALL) for (const m of (text ?? '').matchAll(re)) hits.add(m[0]);
-  return hits;
+const normalizeLine = (line: string): string => line.trim().replace(/\s+/g, ' ');
+
+/** Normalized lines; undefined when one is too long to run a pattern over. */
+function linesOf(text: string | undefined): string[] | undefined {
+  const lines: string[] = [];
+  for (const raw of (text ?? '').split('\n')) {
+    if (raw.length > MAX_LINE_CHARS) return undefined;
+    lines.push(normalizeLine(raw));
+  }
+  return lines;
+}
+
+/** Front matter from the very start of the file, closed within a bounded number of lines. */
+function frontMatter(lines: readonly string[]): 'none' | 'open' | 'plain' | 'hooks' {
+  if (lines[0] !== '---') return 'none';
+  const end = lines.indexOf('---', 1);
+  if (end === -1 || end > MAX_FRONT_LINES) return 'open';
+  return lines.slice(1, end).some((l) => l === 'hooks:' || l.startsWith('hooks: '))
+    ? 'hooks'
+    : 'plain';
 }
 
 /** The verdict for a candidate against the active tree. A read error is `unclear`, never `fits`. */
@@ -186,16 +196,26 @@ export function compareTrees(
           conflict.push({ kind: 'license-copyleft', detail: clean(path) });
         } else unclear.push({ kind: 'license-changed', detail: clean(path) });
       }
-      if (HOOK_PATH.test(path) || (HOOK_FRONT.test(text ?? '') && !HOOK_FRONT.test(old ?? ''))) {
-        unclear.push({ kind: 'hook', detail: clean(path) });
-      }
-      const known = installSteps(old);
-      for (const hit of installSteps(text)) {
-        if (!known.has(hit))
-          unclear.push({ kind: 'install-step', detail: clean(`${path}: ${hit}`) });
-      }
-      if (was === undefined && SCRIPT.test(path) && NETWORK.test(text ?? '')) {
-        unclear.push({ kind: 'network-script', detail: clean(path) });
+      if (HOOK_PATH.test(path)) unclear.push({ kind: 'hook', detail: clean(path) });
+      const lines = linesOf(text);
+      if (lines === undefined) {
+        unclear.push({ kind: 'long-line', detail: clean(path) });
+      } else if (text !== undefined) {
+        const knownLines = linesOf(old) ?? [];
+        const front = frontMatter(lines);
+        if (front === 'open') unclear.push({ kind: 'front-matter', detail: clean(path) });
+        if (front === 'hooks' && frontMatter(knownLines) !== 'hooks') {
+          unclear.push({ kind: 'hook', detail: clean(path) });
+        }
+        const known = new Set(knownLines);
+        for (const line of lines) {
+          if (!known.has(line) && INSTALL_TOKEN.test(line)) {
+            unclear.push({ kind: 'install-step', detail: clean(`${path}: ${line}`) });
+          }
+        }
+        if (was === undefined && SCRIPT.test(path) && lines.some((l) => NETWORK.test(l))) {
+          unclear.push({ kind: 'network-script', detail: clean(path) });
+        }
       }
       if (text === undefined) unclear.push({ kind: 'too-large', detail: clean(path) });
     }

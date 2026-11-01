@@ -165,21 +165,23 @@ export function readCrewCaps(stateRoot: string, id: string): CrewCaps | undefine
 type ReviewReport = Pick<Report, 'status' | 'verdict' | 'reviews' | 'analyzers' | 'mutationProbe'>;
 
 /**
- * Holds an approval to what the brief asked. Requested changes pass: nothing merges on them. The
- * lines returned name what was skipped, so it can never read as a pass. Crew text is not echoed
- * here beyond a result that already passed the report schema.
+ * Holds a finished review to what its brief recorded. The pull request it acts on comes from that
+ * record, never from the report, so a crew cannot reach another builder. An approval also owes every
+ * analyzer. Only analyzer ids come back: a crew's reasons stay in its report file.
  */
 export function checkReviewCaps(
   caps: CrewCaps | undefined,
   report: ReviewReport,
-): { skipped: string[] } {
-  if (report.status !== 'done' || report.verdict !== 'approve') return { skipped: [] };
-  if (caps === undefined) {
-    throw new Error('no record of what this review owes: relaunch the review, nothing was moved');
+): { skipped: string[]; target?: string } {
+  if (report.status !== 'done') return { skipped: [] };
+  if (caps?.reviewsTarget === undefined) {
+    throw new Error('no record of what this review is about: relaunch the review, nothing moved');
   }
-  if (caps.reviewsTarget !== undefined && report.reviews !== caps.reviewsTarget) {
-    throw new Error(`report reviews another pull request than ${caps.reviewsTarget}`);
+  const target = caps.reviewsTarget;
+  if (report.reviews !== target) {
+    throw new Error(`report reviews another pull request than ${target}`);
   }
+  if (report.verdict !== 'approve') return { skipped: [], target };
   const results = report.analyzers ?? {};
   const skipped: string[] = [];
   for (const id of caps.analyzers) {
@@ -189,11 +191,11 @@ export function checkReviewCaps(
       if (caps.mandatory.includes(id)) {
         throw new Error(`approval with the mandatory analyzer ${id} skipped`);
       }
-      skipped.push(`${id}: ${result}`);
+      skipped.push(id);
     }
   }
   if (caps.mandatory.includes('spec-check') && report.mutationProbe === undefined) {
     throw new Error('approval without mutation_probe for the spec check');
   }
-  return { skipped };
+  return { skipped, target };
 }

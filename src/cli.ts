@@ -45,6 +45,7 @@ import {
   installSignalRelease,
   loadQueue,
   type QueueDone,
+  type QueueEntry,
   type QueueState,
   runQueue,
   takeNextPending,
@@ -426,7 +427,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const reviewDone =
           item.type === 'review' && report.status === 'done'
             ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report)
-            : { skipped: [] };
+            : { skipped: [] as string[], target: undefined };
         let branch = `studio/${item.id}`;
         if (report.pr !== undefined) {
           const holder = board.items.find(
@@ -480,7 +481,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ],
           }));
         }
-        const limitTarget = report.verdict === 'changes_requested' ? report.reviews : undefined;
+        const limitTarget =
+          report.status === 'done' && report.verdict === 'changes_requested'
+            ? reviewDone.target
+            : undefined;
         let fixLimit = false;
         if (limitTarget !== undefined) {
           const rounds = reviewRounds(next, limitTarget);
@@ -518,7 +522,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ...(report.pr === undefined ? {} : { pr: report.pr }),
           ...(report.verdict === undefined ? {} : { verdict: report.verdict }),
           ...(report.reviews === undefined ? {} : { reviews: report.reviews }),
-          ...(reviewDone.skipped.length === 0 ? {} : { skipped: capNotes(reviewDone.skipped) }),
+          ...(reviewDone.skipped.length === 0 ? {} : { skipped: reviewDone.skipped }),
           ...(fixLimit ? { fixLimit } : {}),
           ...(lessonsProposed > 0 ? { lessonsProposed } : {}),
         });
@@ -600,6 +604,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 stateRoot: root,
                 log,
                 hold,
+                mergeAllowed: (entry) => boardBlocksMerge(project, entry),
                 takeNext: () => takeNextPending(root),
                 onDone: (d) => applyQueueResults(project, [d], ports, stderr),
               },
@@ -968,6 +973,21 @@ function refuseNativeQueue(config: StudioConfig): void {
       'merge.strategy native-queue is not supported yet (planned for stage d); use studio-queue',
     );
   }
+}
+
+/** Why the board forbids this merge; only a readable board with the item `queued` allows it. */
+function boardBlocksMerge(project: string, entry: QueueEntry): string | undefined {
+  let board: Board;
+  try {
+    board = loadBoard(project);
+  } catch {
+    return 'the board cannot be read';
+  }
+  const item = board.items.find((i) =>
+    entry.item === undefined ? i.repo === entry.repo && i.pr === entry.pr : i.id === entry.item,
+  );
+  if (item === undefined) return 'the pull request has no board item';
+  return item.status === 'queued' ? undefined : `board item ${item.id} is ${item.status}`;
 }
 
 const doneMatches = (d: QueueDone, item: WorkItem): boolean =>

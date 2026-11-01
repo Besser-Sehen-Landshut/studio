@@ -1024,7 +1024,7 @@ var require_foldFlowLines = __commonJS({
         else
           end = lineWidth - indentAtStart;
       }
-      let split = void 0;
+      let split2 = void 0;
       let prev = void 0;
       let overflow = false;
       let i2 = -1;
@@ -1057,18 +1057,18 @@ var require_foldFlowLines = __commonJS({
           if (mode === FOLD_BLOCK)
             i2 = consumeMoreIndentedLines(text, i2, indent.length);
           end = i2 + indent.length + endStep;
-          split = void 0;
+          split2 = void 0;
         } else {
           if (ch === " " && prev && prev !== " " && prev !== "\n" && prev !== "	") {
             const next = text[i2 + 1];
             if (next && next !== " " && next !== "\n" && next !== "	")
-              split = i2;
+              split2 = i2;
           }
           if (i2 >= end) {
-            if (split) {
-              folds.push(split);
-              end = split + endStep;
-              split = void 0;
+            if (split2) {
+              folds.push(split2);
+              end = split2 + endStep;
+              split2 = void 0;
             } else if (mode === FOLD_QUOTED) {
               while (prev === " " || prev === "	") {
                 prev = ch;
@@ -1081,7 +1081,7 @@ var require_foldFlowLines = __commonJS({
               folds.push(j);
               escapedFolds[j] = true;
               end = j + endStep;
-              split = void 0;
+              split2 = void 0;
             } else {
               overflow = true;
             }
@@ -4615,13 +4615,13 @@ var require_resolve_block_scalar = __commonJS({
       return { mode, indent, chomp, comment, length };
     }
     function splitLines(source) {
-      const split = source.split(/\n( *)/);
-      const first = split[0];
+      const split2 = source.split(/\n( *)/);
+      const first = split2[0];
       const m = first.match(/^( *)/);
       const line0 = m?.[1] ? [m[1], first.slice(m[1].length)] : ["", first];
       const lines = [line0];
-      for (let i2 = 1; i2 < split.length; i2 += 2)
-        lines.push([split[i2], split[i2 + 1]]);
+      for (let i2 = 1; i2 < split2.length; i2 += 2)
+        lines.push([split2[i2], split2[i2 + 1]]);
       return lines;
     }
     exports.resolveBlockScalar = resolveBlockScalar;
@@ -7844,8 +7844,8 @@ var require_shell_quote = __commonJS({
 import { homedir as homedir6 } from "node:os";
 
 // src/cli.ts
-import { existsSync as existsSync5 } from "node:fs";
-import { dirname as dirname8, join as join20, resolve as resolve5 } from "node:path";
+import { existsSync as existsSync6 } from "node:fs";
+import { dirname as dirname9, join as join21, resolve as resolve5 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/board.ts
@@ -29903,16 +29903,16 @@ async function parksHold(parks, ownerConfig, ports, owner) {
 // src/crew.ts
 import {
   chmodSync as chmodSync3,
-  existsSync as existsSync3,
-  lstatSync as lstatSync11,
+  existsSync as existsSync4,
+  lstatSync as lstatSync12,
   readdirSync as readdirSync3,
-  readFileSync as readFileSync13,
+  readFileSync as readFileSync14,
   realpathSync as realpathSync3,
   unlinkSync as unlinkSync3,
-  writeFileSync as writeFileSync5
+  writeFileSync as writeFileSync6
 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { basename as basename4, dirname as dirname7, join as join13, resolve as resolve4, sep as sep4 } from "node:path";
+import { basename as basename4, dirname as dirname8, join as join14, resolve as resolve4, sep as sep4 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/brief-caps.ts
@@ -30023,13 +30023,15 @@ function readCrewCaps(stateRoot, id) {
   }
 }
 function checkReviewCaps(caps, report) {
-  if (report.status !== "done" || report.verdict !== "approve") return { skipped: [] };
-  if (caps === void 0) {
-    throw new Error("no record of what this review owes: relaunch the review, nothing was moved");
+  if (report.status !== "done") return { skipped: [] };
+  if (caps?.reviewsTarget === void 0) {
+    throw new Error("no record of what this review is about: relaunch the review, nothing moved");
   }
-  if (caps.reviewsTarget !== void 0 && report.reviews !== caps.reviewsTarget) {
-    throw new Error(`report reviews another pull request than ${caps.reviewsTarget}`);
+  const target = caps.reviewsTarget;
+  if (report.reviews !== target) {
+    throw new Error(`report reviews another pull request than ${target}`);
   }
+  if (report.verdict !== "approve") return { skipped: [], target };
   const results = report.analyzers ?? {};
   const skipped = [];
   for (const id of caps.analyzers) {
@@ -30039,13 +30041,13 @@ function checkReviewCaps(caps, report) {
       if (caps.mandatory.includes(id)) {
         throw new Error(`approval with the mandatory analyzer ${id} skipped`);
       }
-      skipped.push(`${id}: ${result}`);
+      skipped.push(id);
     }
   }
   if (caps.mandatory.includes("spec-check") && report.mutationProbe === void 0) {
     throw new Error("approval without mutation_probe for the spec check");
   }
-  return { skipped };
+  return { skipped, target };
 }
 
 // src/sources.ts
@@ -30112,18 +30114,9 @@ var MAX_SCAN_BYTES = 1024 * 1024;
 var LICENSE_NAME = /^(licen[cs]e|copying)(\.[a-z]+)?$/i;
 var COPYLEFT = /GNU (AFFERO |LESSER )?GENERAL PUBLIC|GNU LESSER|\bA?L?GPL-|Mozilla Public License|Server Side Public License|Business Source License/i;
 var HOOK_PATH = /(^|\/)hooks\.json$|(^|\/)hooks\/|(^|\/)\.claude\/settings[^/]*\.json$/;
-var HOOK_FRONT = /^---\r?\n[\s\S]*?^hooks:/m;
-var INSTALL = [
-  /\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z)?sh\b/g,
-  /\bnpm (?:i|install) (?:-g|--global)\b/g,
-  /\bpnpm add (?:-g|--global)\b/g,
-  /\byarn global add\b/g,
-  /\bbrew install\b/g,
-  /\bpip3? install\b/g,
-  /\bcargo install\b/g,
-  /\bapt(?:-get)? install\b/g,
-  /\bgem install\b/g
-];
+var MAX_LINE_CHARS = 4096;
+var MAX_FRONT_LINES = 200;
+var INSTALL_TOKEN = /\b(?:npm|npx|pnpm|yarn|bun|bunx|pip3?|pipx|uvx?|brew|cargo|apt|apt-get|gem|curl|wget|iwr|invoke-webrequest)\b|chmod \+x|\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/i;
 var SCRIPT = /\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|rb|pl|ps1)$/;
 var NETWORK = /\b(?:curl|wget|fetch\(|urllib|requests\.|http\.get|https?:\/\/)/;
 var clean = (text) => text.replace(/[\p{Cc}\p{Cf}]/gu, " ").slice(0, 300);
@@ -30145,10 +30138,20 @@ function walk(dir) {
   return out;
 }
 var readBounded = (dir, path10, e) => e && !e.link && e.size <= MAX_SCAN_BYTES ? readFileSync9(join8(dir, path10), "utf8") : void 0;
-function installSteps(text) {
-  const hits = /* @__PURE__ */ new Set();
-  for (const re of INSTALL) for (const m of (text ?? "").matchAll(re)) hits.add(m[0]);
-  return hits;
+var normalizeLine = (line) => line.trim().replace(/\s+/g, " ");
+function linesOf(text) {
+  const lines = [];
+  for (const raw of (text ?? "").split("\n")) {
+    if (raw.length > MAX_LINE_CHARS) return void 0;
+    lines.push(normalizeLine(raw));
+  }
+  return lines;
+}
+function frontMatter(lines) {
+  if (lines[0] !== "---") return "none";
+  const end = lines.indexOf("---", 1);
+  if (end === -1 || end > MAX_FRONT_LINES) return "open";
+  return lines.slice(1, end).some((l) => l === "hooks:" || l.startsWith("hooks: ")) ? "hooks" : "plain";
 }
 function compareTrees(oldDir, newDir, source, opts = {}) {
   const conflict = [];
@@ -30184,16 +30187,26 @@ function compareTrees(oldDir, newDir, source, opts = {}) {
           conflict.push({ kind: "license-copyleft", detail: clean(path10) });
         } else unclear.push({ kind: "license-changed", detail: clean(path10) });
       }
-      if (HOOK_PATH.test(path10) || HOOK_FRONT.test(text ?? "") && !HOOK_FRONT.test(old ?? "")) {
-        unclear.push({ kind: "hook", detail: clean(path10) });
-      }
-      const known = installSteps(old);
-      for (const hit of installSteps(text)) {
-        if (!known.has(hit))
-          unclear.push({ kind: "install-step", detail: clean(`${path10}: ${hit}`) });
-      }
-      if (was === void 0 && SCRIPT.test(path10) && NETWORK.test(text ?? "")) {
-        unclear.push({ kind: "network-script", detail: clean(path10) });
+      if (HOOK_PATH.test(path10)) unclear.push({ kind: "hook", detail: clean(path10) });
+      const lines = linesOf(text);
+      if (lines === void 0) {
+        unclear.push({ kind: "long-line", detail: clean(path10) });
+      } else if (text !== void 0) {
+        const knownLines = linesOf(old) ?? [];
+        const front = frontMatter(lines);
+        if (front === "open") unclear.push({ kind: "front-matter", detail: clean(path10) });
+        if (front === "hooks" && frontMatter(knownLines) !== "hooks") {
+          unclear.push({ kind: "hook", detail: clean(path10) });
+        }
+        const known = new Set(knownLines);
+        for (const line of lines) {
+          if (!known.has(line) && INSTALL_TOKEN.test(line)) {
+            unclear.push({ kind: "install-step", detail: clean(`${path10}: ${line}`) });
+          }
+        }
+        if (was === void 0 && SCRIPT.test(path10) && lines.some((l) => NETWORK.test(l))) {
+          unclear.push({ kind: "network-script", detail: clean(path10) });
+        }
       }
       if (text === void 0) unclear.push({ kind: "too-large", detail: clean(path10) });
     }
@@ -30402,6 +30415,9 @@ async function resolveForItem(o2) {
     };
   }
   const target = reviewTarget(item);
+  if (target === void 0 && item.type === "review") {
+    throw new Error(`${item.id} names no pull request: add the note review <owner/repo>#<n>`);
+  }
   const facts = target === void 0 ? void 0 : await readPrFacts(o2.ports, target);
   const paths = facts?.complete ? [...facts.files, ...declared] : "unknown";
   const name = target === void 0 ? void 0 : `${target.repo}#${target.pr}`;
@@ -30786,9 +30802,9 @@ function mergeBlocks(ownerRoot, legacy) {
   if (!own2.ok) return "owner-unreadable";
   const merged = own2.blocks.map((b) => ({ ...b }));
   for (const block of old.blocks) {
-    const same = merged.find((b) => b.label === block.label && b.reason === block.reason);
-    if (!same) merged.push({ ...block });
-    else if (Date.parse(block.at) < Date.parse(same.at)) same.at = block.at;
+    const same2 = merged.find((b) => b.label === block.label && b.reason === block.reason);
+    if (!same2) merged.push({ ...block });
+    else if (Date.parse(block.at) < Date.parse(same2.at)) same2.at = block.at;
   }
   writeBlocks(ownerRoot, merged);
   return "merged";
@@ -30933,10 +30949,184 @@ function clearPause(root) {
   removeStateEntry(root, join12(root, PAUSE_FILE));
 }
 
+// src/role-memory.ts
+import { randomBytes as randomBytes4 } from "node:crypto";
+import {
+  existsSync as existsSync3,
+  lstatSync as lstatSync11,
+  mkdirSync as mkdirSync3,
+  readFileSync as readFileSync13,
+  renameSync as renameSync7,
+  rmSync as rmSync4,
+  writeFileSync as writeFileSync5
+} from "node:fs";
+import { dirname as dirname7, join as join13 } from "node:path";
+var MAX_LESSON_LINES = 40;
+var MAX_LESSON_CHARS = 300;
+var MAX_PENDING = 200;
+var MAX_PER_REPORT = 10;
+var HEADING = "## Lessons";
+var CUT_NOTE = "(older lessons cut)";
+function sanitizeLesson(text) {
+  const flat = text.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ").trim();
+  const plain = flat.replace(/^(?:[#>*+-]+\s*)+/, "").trim();
+  return plain === "" ? void 0 : plain.slice(0, MAX_LESSON_CHARS);
+}
+var proposalSchema = external_exports.object({
+  n: external_exports.number().int().positive(),
+  role: external_exports.string(),
+  item: external_exports.string(),
+  text: external_exports.string(),
+  at: external_exports.string()
+});
+var fileSchema = external_exports.object({
+  next: external_exports.number().int().positive(),
+  lessons: external_exports.array(proposalSchema)
+});
+var lessonsFile = (stateRoot) => join13(stateRoot, "lessons.json");
+function readFile(stateRoot) {
+  const file2 = lessonsFile(stateRoot);
+  assertStatePath(stateRoot, file2);
+  let text;
+  try {
+    text = readFileSync13(file2, "utf8");
+  } catch (e) {
+    if (e.code === "ENOENT") return { next: 1, lessons: [] };
+    throw new Error("lessons.json cannot be read");
+  }
+  let raw;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw new Error("lessons.json is not valid JSON");
+  }
+  const parsed = fileSchema.safeParse(raw);
+  if (!parsed.success) throw new Error("lessons.json has the wrong shape");
+  return parsed.data;
+}
+var writeFile_ = (stateRoot, data) => writeStateFile(stateRoot, lessonsFile(stateRoot), `${JSON.stringify(data, null, 2)}
+`);
+var same = (a2, b) => a2.toLowerCase() === b.toLowerCase();
+function proposeLessons(stateRoot, role, item, lessons, now) {
+  const data = readFile(stateRoot);
+  let added = 0;
+  for (const raw of lessons.slice(0, 50)) {
+    if (added >= MAX_PER_REPORT || data.lessons.length >= MAX_PENDING) break;
+    const text = sanitizeLesson(raw);
+    if (text === void 0) continue;
+    if (data.lessons.some((l) => l.role === role && same(l.text, text))) continue;
+    data.lessons.push({ n: data.next++, role, item, text, at: now.toISOString() });
+    added++;
+  }
+  if (added > 0) writeFile_(stateRoot, data);
+  return added;
+}
+var listLessons = (stateRoot) => readFile(stateRoot).lessons;
+function dropLesson(stateRoot, n2) {
+  const data = readFile(stateRoot);
+  if (!data.lessons.some((l) => l.n === n2)) throw new Error(`no proposed lesson ${n2}`);
+  writeFile_(stateRoot, { ...data, lessons: data.lessons.filter((l) => l.n !== n2) });
+}
+function roleFile(projectDir, role) {
+  if (!ROLE_TEMPLATES.includes(role)) {
+    throw new Error("not a role template");
+  }
+  return join13(projectDir, ".studio", "roles", `${role}.md`);
+}
+function readRole(file2) {
+  try {
+    const st = lstatSync11(file2);
+    if (st.isSymbolicLink() || !st.isFile()) {
+      throw new Error("the role file is a link or not a regular file; refusing");
+    }
+  } catch (e) {
+    if (e.code === "ENOENT") return "";
+    throw e;
+  }
+  return readFileSync13(file2, "utf8");
+}
+function writeRole(file2, text) {
+  mkdirSync3(dirname7(file2), { recursive: true });
+  const tmp = `${file2}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
+  try {
+    writeFileSync5(tmp, text, { flag: "wx" });
+    renameSync7(tmp, file2);
+  } catch (e) {
+    rmSync4(tmp, { force: true });
+    throw e;
+  }
+}
+function split(text) {
+  const lines = text.split("\n");
+  const start = lines.findIndex((l) => l.trim() === HEADING);
+  if (start === -1) return { before: lines, lessons: [], after: [], found: false };
+  let end = lines.findIndex((l, i2) => i2 > start && /^##? /.test(l));
+  if (end === -1) end = lines.length;
+  return {
+    before: lines.slice(0, start),
+    lessons: lines.slice(start + 1, end).filter((l) => l.trim() !== ""),
+    after: lines.slice(end),
+    found: true
+  };
+}
+function join_(p) {
+  const head = p.before.join("\n").trimEnd();
+  const tail = p.after.join("\n").trim();
+  return [
+    ...head === "" ? [] : [head, ""],
+    HEADING,
+    "",
+    ...p.lessons,
+    ...tail === "" ? [] : ["", tail],
+    ""
+  ].join("\n");
+}
+function acceptLesson(projectDir, stateRoot, n2) {
+  const data = readFile(stateRoot);
+  const proposal = data.lessons.find((l) => l.n === n2);
+  if (!proposal) throw new Error(`no proposed lesson ${n2}`);
+  const file2 = roleFile(projectDir, proposal.role);
+  const text = sanitizeLesson(proposal.text);
+  if (text === void 0) throw new Error(`proposed lesson ${n2} is empty`);
+  const parts = split(readRole(file2));
+  const known = parts.lessons.some((l) => same(l.replace(/^- /, ""), text));
+  if (!known) {
+    if (parts.lessons.length >= MAX_LESSON_LINES) {
+      throw new Error(
+        `the Lessons of ${proposal.role} are full (${MAX_LESSON_LINES} lines): prune one first`
+      );
+    }
+    parts.lessons.push(`- ${text}`);
+    writeRole(file2, join_(parts));
+  }
+  writeFile_(stateRoot, { ...data, lessons: data.lessons.filter((l) => l.n !== n2) });
+  return { role: proposal.role, text, lines: parts.lessons.length };
+}
+function pruneLesson(projectDir, role, line) {
+  const file2 = roleFile(projectDir, role);
+  const parts = split(readRole(file2));
+  if (!Number.isInteger(line) || line < 1 || line > parts.lessons.length) {
+    throw new Error(`${role} has no lesson ${line}`);
+  }
+  parts.lessons.splice(line - 1, 1);
+  writeRole(file2, join_(parts));
+}
+function readRoleBrief(projectDir, role) {
+  const file2 = join13(projectDir, ".studio", "roles", `${role}.md`);
+  if (!existsSync3(file2)) return "";
+  const text = readFileSync13(file2, "utf8");
+  const parts = split(text);
+  if (parts.lessons.length <= MAX_LESSON_LINES) return text.trim();
+  return join_({
+    ...parts,
+    lessons: [CUT_NOTE, ...parts.lessons.slice(-MAX_LESSON_LINES)]
+  }).trim();
+}
+
 // src/crew.ts
 var crewName = (item) => `studio-${item.role}-${item.id.toLowerCase()}`;
 var GUARD_BIN = resolve4(
-  dirname7(fileURLToPath2(import.meta.url)),
+  dirname8(fileURLToPath2(import.meta.url)),
   "..",
   "bin",
   "studio-guard.mjs"
@@ -30960,7 +31150,7 @@ function githubHttpsUrl(repo) {
 }
 function cloneBranch(path10) {
   try {
-    const head = readFileSync13(join13(path10, ".git", "HEAD"), "utf8").trim();
+    const head = readFileSync14(join14(path10, ".git", "HEAD"), "utf8").trim();
     return /^ref: refs\/heads\/(.+)$/.exec(head)?.[1];
   } catch {
     return void 0;
@@ -30968,8 +31158,8 @@ function cloneBranch(path10) {
 }
 async function prepareCheckout(stateRoot, projectDir, item, ports) {
   assertItemId(item.id);
-  const clones = ensureStateDir(stateRoot, join13(stateRoot, "clones"));
-  const path10 = join13(clones, item.id);
+  const clones = ensureStateDir(stateRoot, join14(stateRoot, "clones"));
+  const path10 = join14(clones, item.id);
   const branch = `studio/${item.id}`;
   const crewOrigin = githubHttpsUrl(item.repo);
   assertStatePath(stateRoot, path10);
@@ -30995,11 +31185,11 @@ function removeOldReport(stateRoot, clone2, id) {
   assertItemId(id);
   let cur = clone2;
   for (const seg of [".studio", "reports", `${id}.md`]) {
-    cur = join13(cur, seg);
+    cur = join14(cur, seg);
     assertStatePath(stateRoot, cur);
     let st;
     try {
-      st = lstatSync11(cur);
+      st = lstatSync12(cur);
     } catch {
       return;
     }
@@ -31016,7 +31206,7 @@ function removeOldReport(stateRoot, clone2, id) {
 }
 function existsNoFollow(p) {
   try {
-    lstatSync11(p);
+    lstatSync12(p);
     return true;
   } catch {
     return false;
@@ -31024,26 +31214,26 @@ function existsNoFollow(p) {
 }
 function fileSize(p) {
   try {
-    return lstatSync11(p).size;
+    return lstatSync12(p).size;
   } catch {
     return 0;
   }
 }
 function isLink2(p) {
   try {
-    return lstatSync11(p).isSymbolicLink();
+    return lstatSync12(p).isSymbolicLink();
   } catch {
     return false;
   }
 }
 function writeHomeFile(homeDir, name, content) {
-  const target = join13(homeDir, name);
+  const target = join14(homeDir, name);
   const realHome = realpathSync3(homeDir);
-  const parent = realpathSync3(dirname7(target));
+  const parent = realpathSync3(dirname8(target));
   if (parent !== realHome && !parent.startsWith(realHome + sep4)) {
     throw new Error(`refusing to write outside the crew home: ${target}`);
   }
-  writeFileSync5(join13(parent, basename4(target)), content, { flag: "wx" });
+  writeFileSync6(join14(parent, basename4(target)), content, { flag: "wx" });
 }
 var unique2 = (xs) => [...new Set(xs)];
 function realOr(p) {
@@ -31064,14 +31254,14 @@ function entries(dir) {
 function skillInstalled(configDir, name) {
   if (!Array.isArray(entries(configDir))) return void 0;
   let present2 = false;
-  const skills = join13(configDir, "skills");
+  const skills = join14(configDir, "skills");
   const direct = entries(skills);
   if (direct === void 0) return void 0;
   if (direct !== null) {
     present2 = true;
-    if (existsSync3(join13(skills, name, "SKILL.md"))) return true;
+    if (existsSync4(join14(skills, name, "SKILL.md"))) return true;
   }
-  const cache = join13(configDir, "plugins", "cache");
+  const cache = join14(configDir, "plugins", "cache");
   const top = entries(cache);
   if (top === void 0) return void 0;
   if (top !== null) {
@@ -31082,11 +31272,11 @@ function skillInstalled(configDir, name) {
       for (const d of dirs) {
         const names = entries(d);
         if (names === void 0) return void 0;
-        next.push(...(names ?? []).map((n2) => join13(d, n2)));
+        next.push(...(names ?? []).map((n2) => join14(d, n2)));
       }
       dirs = next;
     }
-    if (dirs.some((d) => existsSync3(join13(d, "skills", name, "SKILL.md")))) return true;
+    if (dirs.some((d) => existsSync4(join14(d, "skills", name, "SKILL.md")))) return true;
   }
   return present2 ? false : void 0;
 }
@@ -31154,11 +31344,11 @@ async function readPinnedRules(projectDir, ports) {
 }
 function writePinnedRules(stateRoot, id, rules) {
   assertItemId(id);
-  const dir = join13(stateRoot, "briefs", `${id}.rules`);
+  const dir = join14(stateRoot, "briefs", `${id}.rules`);
   removeStateEntry(stateRoot, dir);
   const paths = [];
   for (const f of rules.files) {
-    const file2 = join13(dir, f.name);
+    const file2 = join14(dir, f.name);
     writeStateFile(stateRoot, file2, f.content);
     paths.push(file2);
   }
@@ -31168,8 +31358,7 @@ var list = (xs) => xs.length > 0 ? xs.join(", ") : "(none)";
 function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCaps(item, config2)) {
   assertItemId(item.id);
   const first = ["studio:studio-crew", ...caps.required.filter((s) => s !== "studio:studio-crew")];
-  const roleFile = join13(projectDir, ".studio", "roles", `${item.role}.md`);
-  const roleBrief = existsSync3(roleFile) ? readFileSync13(roleFile, "utf8").trim() : "";
+  const roleBrief = readRoleBrief(projectDir, item.role);
   const id = item.id;
   const opensPr = item.type !== "review" && item.type !== "research";
   const lines = [
@@ -31284,7 +31473,7 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
     "The body says what changed and how it was verified.",
     ""
   ];
-  const file2 = join13(stateRoot, "briefs", `${id}.md`);
+  const file2 = join14(stateRoot, "briefs", `${id}.md`);
   writeStateFile(stateRoot, file2, lines.join("\n"));
   return file2;
 }
@@ -31302,7 +31491,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
     stateRoot,
     extraCredentialPaths: extraSecret
   });
-  const stateBase = dirname7(stateRoot);
+  const stateBase = dirname8(stateRoot);
   const denyRead = unique2([realHome, ...credentialPaths, stateBase, realOr(stateBase)]);
   const loginDir = dirs.providerConfigDir;
   const allowRead = [
@@ -31312,13 +31501,13 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
     ...toolchain,
     ...loginDir === void 0 ? [] : [loginDir]
   ];
-  const ctxFile = join13(stateRoot, "guard", `${id}.json`);
+  const ctxFile = join14(stateRoot, "guard", `${id}.json`);
   const protectedPaths = [
     ctxFile,
-    ...STATE_PROTECTED_DIRS.map((d) => join13(stateRoot, d)),
-    ...STATE_FILES.map((f) => join13(stateRoot, f)),
+    ...STATE_PROTECTED_DIRS.map((d) => join14(stateRoot, d)),
+    ...STATE_FILES.map((f) => join14(stateRoot, f)),
     // Below the state base, so the sandbox already keeps crews out; this is the second net.
-    join13(stateBase, OWNER_DIR)
+    join14(stateBase, OWNER_DIR)
   ];
   const ctx = {
     worktree: clone2,
@@ -31374,7 +31563,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
       network: { allowedDomains: config2.sandbox.networkAllow, strictAllowlist: true }
     }
   };
-  const file2 = join13(stateRoot, "settings", `${id}.json`);
+  const file2 = join14(stateRoot, "settings", `${id}.json`);
   writeStateFile(stateRoot, file2, `${JSON.stringify(settings, null, 2)}
 `);
   return file2;
@@ -31390,7 +31579,7 @@ var BASE_ENV = ["PATH", "LANG", "TERM", "USER"];
 var API_BILLING_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
 function readCrewFile(file2) {
   try {
-    return JSON.parse(readFileSync13(file2, "utf8"));
+    return JSON.parse(readFileSync14(file2, "utf8"));
   } catch {
     return {};
   }
@@ -31490,7 +31679,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   migrateOwnerState(ownerRoot, ports.clock.now());
   refuseIfBlocked(ownerRoot);
   refuseIfPaused(stateRoot);
-  if (pendingLegacyState(dirname7(ownerRoot)).length > 0) {
+  if (pendingLegacyState(dirname8(ownerRoot)).length > 0) {
     throw new Error("old project state files are not migrated yet; refusing to launch, try again");
   }
   const ownerConfig = loadOwnerConfig(owner);
@@ -31504,12 +31693,12 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     extraCredentialPaths: credentialLocations(home, penv).extra
   });
   for (const sub of ["clones", "homes", "tmp"]) {
-    assertStatePath(stateRoot, join13(stateRoot, sub, item.id));
+    assertStatePath(stateRoot, join14(stateRoot, sub, item.id));
   }
   const previous = refuseIfRunning(stateRoot, item, ports);
   const limits = readLimits(ownerRoot);
   if (!limits.ok) {
-    throw new Error(`${join13(ownerRoot, "limits.json")} is unreadable; refusing to launch`);
+    throw new Error(`${join14(ownerRoot, "limits.json")} is unreadable; refusing to launch`);
   }
   const parks = activeParks(limits.labels, ports.clock.now());
   const usage = labelUsage({ ownerRoot, ownerConfig, ports });
@@ -31550,9 +31739,9 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
       providerConfigDir = checkProviderConfigDir(got.configDir, owner);
     }
   }
-  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join13(home, ".claude"));
+  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join14(home, ".claude"));
   const billing = apiBillingProblem(
-    join13(claudeConfigDir, "settings.json"),
+    join14(claudeConfigDir, "settings.json"),
     ownerConfig.allowApiBilling
   );
   if (billing) throw new Error(billing);
@@ -31565,7 +31754,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   });
   const missingSkill = firstMissingSkill(claudeConfigDir, forItem.resolved.required);
   if (missingSkill) throw new Error(missingSkill);
-  const clonePath = join13(stateRoot, "clones", item.id);
+  const clonePath = join14(stateRoot, "clones", item.id);
   if ((previous?.limit || previous?.block) && existsNoFollow(clonePath) && (cloneBranch(clonePath) !== `studio/${item.id}` || cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))) {
     throw new Error(
       `the clone of ${item.id} left its branch after ${previous.limit ? "a usage limit" : "an account block"}; refusing to replace it (inspect it, then remove ${clonePath} to start over)`
@@ -31594,7 +31783,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     if (!lock.owned()) throw new Error("the launch lock was lost; refusing to launch, try again");
     refuseIfRunning(stateRoot, item, ports);
     const again = readLimits(ownerRoot);
-    if (!again.ok) throw new Error(`${join13(ownerRoot, "limits.json")} is unreadable; refusing`);
+    if (!again.ok) throw new Error(`${join14(ownerRoot, "limits.json")} is unreadable; refusing`);
     const parkedNow = activeParks(again.labels, ports.clock.now());
     if (Object.hasOwn(parkedNow, label)) {
       throw new Error(allParkedLine(parkedNow[label]?.parkedUntil));
@@ -31606,11 +31795,11 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   recheck();
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
-  const homeDir = join13(stateRoot, "homes", item.id);
+  const homeDir = join14(stateRoot, "homes", item.id);
   removeStateEntry(stateRoot, homeDir);
   ensureStateDir(stateRoot, homeDir);
   writeHomeFile(homeDir, ".gitconfig", GITCONFIG);
-  const tmpDir = join13(stateRoot, "tmp", item.id);
+  const tmpDir = join14(stateRoot, "tmp", item.id);
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
   const briefRules = writePinnedRules(stateRoot, item.id, pinned);
@@ -31631,10 +31820,10 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     { homeDir, tmpDir, projectDir, toolchainPaths, providerConfigDir },
     owner
   );
-  const mcpConfig = join13(stateRoot, "settings", `${item.id}.mcp.json`);
+  const mcpConfig = join14(stateRoot, "settings", `${item.id}.mcp.json`);
   writeStateFile(stateRoot, mcpConfig, `${JSON.stringify({ mcpServers: {} })}
 `);
-  const settingsEnv = JSON.parse(readFileSync13(settings, "utf8")).env;
+  const settingsEnv = JSON.parse(readFileSync14(settings, "utf8")).env;
   const env = {};
   for (const k of BASE_ENV) {
     const v = penv[k];
@@ -31652,8 +31841,8 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   }
   Object.assign(env, settingsEnv);
   if (token) env.GH_TOKEN = token;
-  const log = join13(stateRoot, "logs", `${item.id}.jsonl`);
-  ensureStateDir(stateRoot, dirname7(log));
+  const log = join14(stateRoot, "logs", `${item.id}.jsonl`);
+  ensureStateDir(stateRoot, dirname8(log));
   const logStart = fileSize(log);
   refuseIfBlocked(ownerRoot);
   refuseIfPaused(stateRoot);
@@ -31719,7 +31908,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     ...tokenConfigDir === void 0 ? {} : { tokenConfigDir },
     logStart
   };
-  await updateCrewFile(stateRoot, join13(stateRoot, "crew.json"), (all) => {
+  await updateCrewFile(stateRoot, join14(stateRoot, "crew.json"), (all) => {
     all[item.id] = record2;
   });
   return { name, pid, log };
@@ -31806,9 +31995,9 @@ async function readMainBuild(config2, ports) {
 }
 
 // src/notify.ts
-import { lstatSync as lstatSync12, readFileSync as readFileSync14 } from "node:fs";
+import { lstatSync as lstatSync13, readFileSync as readFileSync15 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 var MAX_SENDS_PER_RUN = 20;
 var MAX_TEXT = 500;
 var LOCK_STALE_MS3 = 2 * 6e4;
@@ -31834,12 +32023,12 @@ function messagesOf(projectKey, snapshot) {
 }
 function readNotified(file2) {
   try {
-    if (!lstatSync12(file2).isFile()) return { ok: false };
+    if (!lstatSync13(file2).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, keys: [] } : { ok: false };
   }
   try {
-    const raw = JSON.parse(readFileSync14(file2, "utf8"));
+    const raw = JSON.parse(readFileSync15(file2, "utf8"));
     if (!Array.isArray(raw) || !raw.every((k) => typeof k === "string")) return { ok: false };
     return { ok: true, keys: raw };
   } catch {
@@ -31861,7 +32050,7 @@ async function sendNotifications(o2) {
   }
 }
 async function sendLocked(o2, notify, lock) {
-  const file2 = join14(o2.ownerRoot, "notified.json");
+  const file2 = join15(o2.ownerRoot, "notified.json");
   const read2 = readNotified(file2);
   if (!read2.ok) return ["notify: notified.json is unreadable; nothing sent"];
   try {
@@ -32036,9 +32225,9 @@ function planAssignments(board, config2, capacity, running, hold, credentialSlot
 }
 
 // src/queue.ts
-import { existsSync as existsSync4, lstatSync as lstatSync13, readFileSync as readFileSync15 } from "node:fs";
+import { existsSync as existsSync5, lstatSync as lstatSync14, readFileSync as readFileSync16 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { join as join15 } from "node:path";
+import { join as join16 } from "node:path";
 var QueueHeld = class extends Error {
   constructor(line) {
     super(line);
@@ -32071,16 +32260,16 @@ var stateSchema = external_exports.strictObject({
     })
   )
 });
-var queueFile = (stateRoot) => join15(stateRoot, "queue.json");
+var queueFile = (stateRoot) => join16(stateRoot, "queue.json");
 function loadQueue(stateRoot) {
   const file2 = queueFile(stateRoot);
   assertStatePath(stateRoot, file2);
-  if (!existsSync4(file2)) return { pending: [], done: [] };
-  if (lstatSync13(file2).isSymbolicLink())
+  if (!existsSync5(file2)) return { pending: [], done: [] };
+  if (lstatSync14(file2).isSymbolicLink())
     throw new Error(`refusing to read ${file2}: it is a symlink`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync15(file2, "utf8"));
+    raw = JSON.parse(readFileSync16(file2, "utf8"));
   } catch {
     throw new Error(`queue file ${file2} is not valid JSON`);
   }
@@ -32167,14 +32356,14 @@ function installSignalRelease(lock) {
   };
 }
 function appendStateLine(stateRoot, name, line) {
-  const file2 = join15(stateRoot, name);
+  const file2 = join16(stateRoot, name);
   assertStatePath(stateRoot, file2);
   let prev = "";
-  if (existsSync4(file2)) {
-    if (lstatSync13(file2).isSymbolicLink()) {
+  if (existsSync5(file2)) {
+    if (lstatSync14(file2).isSymbolicLink()) {
       throw new Error(`refusing to use ${file2}: it is a symlink`);
     }
-    prev = readFileSync15(file2, "utf8");
+    prev = readFileSync16(file2, "utf8");
     if (prev !== "" && !prev.endsWith("\n")) prev += "\n";
   }
   writeStateFile(stateRoot, file2, `${prev}${line}
@@ -32399,6 +32588,8 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
         enter("capacity");
         throw new QueueHeld(held2);
       }
+      const refused = opts.mergeAllowed?.(entry);
+      if (refused !== void 0) return failed(refused);
       const r = await gh.run([
         "pr",
         "merge",
@@ -32503,12 +32694,12 @@ import {
   closeSync as closeSync3,
   constants as constants2,
   fstatSync as fstatSync2,
-  lstatSync as lstatSync14,
+  lstatSync as lstatSync15,
   openSync as openSync3,
   readSync as readSync2,
   realpathSync as realpathSync4
 } from "node:fs";
-import { join as join16, sep as sep5 } from "node:path";
+import { join as join17, sep as sep5 } from "node:path";
 var ReportError = class extends Error {
   constructor(message) {
     super(message);
@@ -32595,9 +32786,9 @@ function readReportFile(root, file2, notBefore) {
   const unsafe = () => new ReportError(UNSAFE);
   let fd;
   try {
-    const parts = [root, join16(root, ".studio"), join16(root, ".studio", "reports"), file2];
+    const parts = [root, join17(root, ".studio"), join17(root, ".studio", "reports"), file2];
     parts.forEach((p, i2) => {
-      const st2 = lstatSync14(p);
+      const st2 = lstatSync15(p);
       if (st2.isSymbolicLink()) throw unsafe();
       if (i2 < parts.length - 1 ? !st2.isDirectory() : !st2.isFile()) throw unsafe();
     });
@@ -32628,7 +32819,7 @@ function readReportFile(root, file2, notBefore) {
   }
 }
 function readReport(worktree, id, item, opts = {}) {
-  const file2 = join16(worktree, ".studio", "reports", `${id}.md`);
+  const file2 = join17(worktree, ".studio", "reports", `${id}.md`);
   return parseReport(readReportFile(worktree, file2, opts.notBefore), item);
 }
 function checkReportHead(report, prHead) {
@@ -32639,21 +32830,21 @@ function checkReportHead(report, prHead) {
 
 // src/secret-command.ts
 var import_yaml8 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync17 } from "node:fs";
-import { join as join18 } from "node:path";
+import { readFileSync as readFileSync18 } from "node:fs";
+import { join as join19 } from "node:path";
 
 // src/setup-ci-command.ts
 var import_yaml7 = __toESM(require_dist(), 1);
-import { randomBytes as randomBytes4 } from "node:crypto";
+import { randomBytes as randomBytes5 } from "node:crypto";
 import {
   readdirSync as readdirSync4,
-  readFileSync as readFileSync16,
-  renameSync as renameSync7,
+  readFileSync as readFileSync17,
+  renameSync as renameSync8,
   statSync as statSync2,
   unlinkSync as unlinkSync4,
-  writeFileSync as writeFileSync6
+  writeFileSync as writeFileSync7
 } from "node:fs";
-import { join as join17 } from "node:path";
+import { join as join18 } from "node:path";
 
 // src/setup-ci.ts
 var import_yaml6 = __toESM(require_dist(), 1);
@@ -33010,7 +33201,7 @@ function assertPrimaryRepo(primary) {
   return primary;
 }
 function readWorkflows(project) {
-  const dir = join17(project, ...WORKFLOW_DIR);
+  const dir = join18(project, ...WORKFLOW_DIR);
   const rel = WORKFLOW_DIR.join("/");
   const files = [];
   const errors = [];
@@ -33029,7 +33220,7 @@ function readWorkflows(project) {
   for (const name of yaml) {
     const path10 = `${rel}/${name}`;
     try {
-      files.push({ path: path10, text: readFileSync16(join17(dir, name), "utf8") });
+      files.push({ path: path10, text: readFileSync17(join18(dir, name), "utf8") });
     } catch (e) {
       errors.push(`${path10}: cannot read file (${e.code ?? "error"})`);
     }
@@ -33063,10 +33254,10 @@ function applyCi(doc, ci) {
   }
 }
 function writeAtomic(file2, text) {
-  const tmp = `${file2}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
+  const tmp = `${file2}.${process.pid}.${randomBytes5(4).toString("hex")}.tmp`;
   try {
-    writeFileSync6(tmp, text, { flag: "wx", mode: statSync2(file2).mode & 511 });
-    renameSync7(tmp, file2);
+    writeFileSync7(tmp, text, { flag: "wx", mode: statSync2(file2).mode & 511 });
+    renameSync8(tmp, file2);
   } catch (e) {
     try {
       unlinkSync4(tmp);
@@ -33086,10 +33277,10 @@ function describeDetection(d) {
   return lines;
 }
 async function runSetupCi(o2) {
-  const file2 = join17(o2.project, ".studio", "studio.yaml");
+  const file2 = join18(o2.project, ".studio", "studio.yaml");
   let text;
   try {
-    text = readFileSync16(file2, "utf8");
+    text = readFileSync17(file2, "utf8");
   } catch (e) {
     throw new Error(
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
@@ -33160,10 +33351,10 @@ async function runSetupCi(o2) {
 
 // src/secret-command.ts
 function readPrimaryRepo(project) {
-  const file2 = join18(project, ".studio", "studio.yaml");
+  const file2 = join19(project, ".studio", "studio.yaml");
   let raw;
   try {
-    raw = (0, import_yaml8.parse)(readFileSync17(file2, "utf8"));
+    raw = (0, import_yaml8.parse)(readFileSync18(file2, "utf8"));
   } catch {
     throw new Error("cannot read .studio/studio.yaml");
   }
@@ -33267,8 +33458,8 @@ function runDoctor(o2) {
 
 // src/stack.ts
 var import_yaml9 = __toESM(require_dist(), 1);
-import { lstatSync as lstatSync15, readdirSync as readdirSync5, readFileSync as readFileSync18 } from "node:fs";
-import { join as join19 } from "node:path";
+import { lstatSync as lstatSync16, readdirSync as readdirSync5, readFileSync as readFileSync19 } from "node:fs";
+import { join as join20 } from "node:path";
 var MAX_FILE_BYTES = 1024 * 1024;
 var MAX_ENTRIES = 200;
 var MONOREPO_DIRS = ["apps", "packages", "crates", "services"];
@@ -33290,20 +33481,20 @@ var DEP_STACKS = {
 };
 function isRealDir(path10) {
   try {
-    return lstatSync15(path10).isDirectory();
+    return lstatSync16(path10).isDirectory();
   } catch {
     return false;
   }
 }
 function readSmall(path10, notes, name) {
   try {
-    const st = lstatSync15(path10);
+    const st = lstatSync16(path10);
     if (!st.isFile()) return void 0;
     if (st.size > MAX_FILE_BYTES) {
       notes.push(`${name}: larger than 1 MiB, not read`);
       return void 0;
     }
-    return readFileSync18(path10, "utf8");
+    return readFileSync19(path10, "utf8");
   } catch {
     notes.push(`${name}: cannot be read`);
     return void 0;
@@ -33311,7 +33502,7 @@ function readSmall(path10, notes, name) {
 }
 var isFileEntry = (dir, name) => {
   try {
-    return lstatSync15(join19(dir, name)).isFile();
+    return lstatSync16(join20(dir, name)).isFile();
   } catch {
     return false;
   }
@@ -33345,7 +33536,7 @@ function scanDir(dir, label, found, notes) {
     return;
   }
   const file2 = (n2) => isFileEntry(dir, n2);
-  const read2 = (n2) => readSmall(join19(dir, n2), notes, label ? `${label}/${n2}` : n2);
+  const read2 = (n2) => readSmall(join20(dir, n2), notes, label ? `${label}/${n2}` : n2);
   const some = (re) => names.some((n2) => re.test(n2) && file2(n2));
   const pkg = names.includes("package.json") && file2("package.json") ? read2("package.json") : void 0;
   if (pkg !== void 0) {
@@ -33355,7 +33546,7 @@ function scanDir(dir, label, found, notes) {
   }
   if (some(/^next\.config\./)) found.add("nextjs");
   if (some(/^components\.json$/)) found.add("shadcn");
-  if (isRealDir(join19(dir, "migrations"))) found.add("postgres");
+  if (isRealDir(join20(dir, "migrations"))) found.add("postgres");
   if (some(/^(Podfile|Package\.swift)$/) || names.some((n2) => n2.endsWith(".xcodeproj"))) {
     found.add("ios");
   }
@@ -33363,7 +33554,7 @@ function scanDir(dir, label, found, notes) {
     if (/WinUI|WindowsAppSDK/i.test(read2(n2) ?? "")) found.add("winui");
   }
   if (some(/^Cargo\.toml$/)) found.add("rust");
-  if (isRealDir(join19(dir, "src-tauri"))) {
+  if (isRealDir(join20(dir, "src-tauri"))) {
     found.add("tauri");
     found.add("rust");
   }
@@ -33372,7 +33563,7 @@ function scanDir(dir, label, found, notes) {
   if (some(/^svelte\.config\./)) found.add("svelte");
   if (some(/^(astro\.config\..*|vite\.config\..*|index\.html)$/)) found.add("web");
   if (some(/^Dockerfile/) || some(/^(docker-)?compose.*\.ya?ml$/)) found.add("docker");
-  if (some(/^wp-config\.php$/) || isRealDir(join19(dir, "wp-content"))) found.add("wordpress");
+  if (some(/^wp-config\.php$/) || isRealDir(join20(dir, "wp-content"))) found.add("wordpress");
   if (some(/^style\.css$/) && /Theme Name:/.test(read2("style.css") ?? "")) found.add("wordpress");
   for (const n2 of names.filter((x) => x.endsWith(".php") && file2(x))) {
     if (/Plugin Name:/.test(read2(n2) ?? "")) found.add("wordpress");
@@ -33382,23 +33573,23 @@ function detectStacks(dir) {
   const found = /* @__PURE__ */ new Set();
   const notes = [];
   scanDir(dir, "", found, notes);
-  if (isRealDir(join19(dir, ".github", "workflows"))) found.add("gha");
+  if (isRealDir(join20(dir, ".github", "workflows"))) found.add("gha");
   for (const group of MONOREPO_DIRS) {
-    const base = join19(dir, group);
+    const base = join20(dir, group);
     if (!isRealDir(base)) continue;
     for (const name of readdirSync5(base).slice(0, MAX_ENTRIES)) {
       if (name.startsWith(".") || name === "node_modules") continue;
-      if (isRealDir(join19(base, name))) scanDir(join19(base, name), `${group}/${name}`, found, notes);
+      if (isRealDir(join20(base, name))) scanDir(join20(base, name), `${group}/${name}`, found, notes);
     }
   }
   if (OTHER_WEB.some((s) => found.has(s))) found.delete("web");
   return { stacks: [...found].sort(), notes };
 }
 function runSetupStack(o2) {
-  const file2 = join19(o2.project, ".studio", "studio.yaml");
+  const file2 = join20(o2.project, ".studio", "studio.yaml");
   let text;
   try {
-    text = readFileSync18(file2, "utf8");
+    text = readFileSync19(file2, "utf8");
   } catch (e) {
     throw new Error(
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
@@ -33458,6 +33649,11 @@ Commands:
   stop <id>                Stop a crew session
   metrics                  Lead time and deployment frequency
   setup sources [<id>...]  Fetch the referenced third-party sources (nothing runs)
+  lessons [list]           Lessons crews proposed for the role memory
+  lessons accept <n>       Move a proposed lesson into its role file
+  lessons drop <n>         Discard a proposed lesson
+  lessons prune <role> <l> Remove a lesson line from a role file
+  escalate <id>            Run a stuck item on the role's stronger model
   sources list             Third-party sources and their licences
   sources check            Judge upstream updates: fits, unclear or conflict; adopts nothing
   sources apply <id>       Adopt a candidate that fits
@@ -33726,9 +33922,9 @@ async function runCli(argv, deps) {
             throw new Error(`crew record for ${item.id} has no valid startedAt`);
           }
         }
-        const clone2 = join20(stateRoot(), "clones", item.id);
+        const clone2 = join21(stateRoot(), "clones", item.id);
         const report = readReport(clone2, item.id, item, { notBefore });
-        const reviewDone = item.type === "review" && report.status === "done" ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report) : { skipped: [] };
+        const reviewDone = item.type === "review" && report.status === "done" ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report) : { skipped: [], target: void 0 };
         let branch = `studio/${item.id}`;
         if (report.pr !== void 0) {
           const holder = board.items.find(
@@ -33778,7 +33974,7 @@ async function runCli(argv, deps) {
             ]
           }));
         }
-        const limitTarget = report.verdict === "changes_requested" ? report.reviews : void 0;
+        const limitTarget = report.status === "done" && report.verdict === "changes_requested" ? reviewDone.target : void 0;
         let fixLimit = false;
         if (limitTarget !== void 0) {
           const rounds = reviewRounds(next, limitTarget);
@@ -33800,6 +33996,13 @@ async function runCli(argv, deps) {
           }
         }
         saveBoard(project, next);
+        let lessonsProposed = 0;
+        try {
+          lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now);
+        } catch (e) {
+          stderr(`error: lessons: ${e.message.replace(new RegExp("\\p{Cc}", "gu"), " ")}
+`);
+        }
         print({
           item: item.id,
           report: report.status,
@@ -33807,8 +34010,9 @@ async function runCli(argv, deps) {
           ...report.pr === void 0 ? {} : { pr: report.pr },
           ...report.verdict === void 0 ? {} : { verdict: report.verdict },
           ...report.reviews === void 0 ? {} : { reviews: report.reviews },
-          ...reviewDone.skipped.length === 0 ? {} : { skipped: capNotes(reviewDone.skipped) },
-          ...fixLimit ? { fixLimit } : {}
+          ...reviewDone.skipped.length === 0 ? {} : { skipped: reviewDone.skipped },
+          ...fixLimit ? { fixLimit } : {},
+          ...lessonsProposed > 0 ? { lessonsProposed } : {}
         });
         return 0;
       }
@@ -33837,7 +34041,7 @@ async function runCli(argv, deps) {
           const { config: config2 } = loadAll();
           refuseNativeQueue(config2);
           const root = await boundStateRoot();
-          const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname8(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
+          const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname9(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
           const blockedNow = queueHold();
           if (blockedNow !== void 0) throw new Error(blockedNow);
           let heldLine;
@@ -33882,6 +34086,7 @@ async function runCli(argv, deps) {
                 stateRoot: root,
                 log,
                 hold,
+                mergeAllowed: (entry) => boardBlocksMerge(project, entry),
                 takeNext: () => takeNextPending(root),
                 onDone: (d) => applyQueueResults(project, [d], ports, stderr)
               }
@@ -33928,7 +34133,7 @@ async function runCli(argv, deps) {
             mainBuild: await readMainBuild(config2, ports),
             crewRecordsUnreadable: crewProblem !== void 0,
             alive: (pid) => Number.isInteger(pid) && pid > 0 && ports.claude.alive(pid),
-            hasReport: (item) => isItemId(item) && existsSync5(join20(root, "clones", item, ".studio", "reports", `${item}.md`))
+            hasReport: (item) => isItemId(item) && existsSync6(join21(root, "clones", item, ".studio", "reports", `${item}.md`))
           }
         );
         writeState(root, snapshot);
@@ -33981,7 +34186,7 @@ async function runCli(argv, deps) {
         const stoppedAt = ports.clock.now().toISOString();
         const latest = readCrewRecords(root);
         latest[id] = { ...latest[id] ?? rec, stoppedAt };
-        writeStateFile(root, join20(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
+        writeStateFile(root, join21(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
 `);
         print({ item: id, name: rec.name, pid: rec.pid, stoppedAt });
         return 0;
@@ -34086,6 +34291,50 @@ async function runCli(argv, deps) {
         }
         throw new UsageError("sources needs a subcommand: list | check | apply <id>");
       }
+      case "lessons": {
+        const [sub = "list", a2, b] = rest;
+        if (sub === "list" && rest.length <= 1) {
+          print(listLessons(stateRoot()));
+          return 0;
+        }
+        refuseCrew(deps.env);
+        if (sub === "accept" && rest.length === 2) {
+          print(acceptLesson(project, stateRoot(), lessonNumber(a2)));
+          return 0;
+        }
+        if (sub === "drop" && rest.length === 2) {
+          dropLesson(stateRoot(), lessonNumber(a2));
+          print({ dropped: lessonNumber(a2) });
+          return 0;
+        }
+        if (sub === "prune" && rest.length === 3 && a2 !== void 0) {
+          pruneLesson(project, a2, lessonNumber(b));
+          print({ role: a2, pruned: lessonNumber(b) });
+          return 0;
+        }
+        throw new UsageError("lessons needs: list | accept <n> | drop <n> | prune <role> <line>");
+      }
+      case "escalate": {
+        refuseCrew(deps.env);
+        if (rest.length !== 1) throw new UsageError("escalate needs one item id");
+        const { config: config2, board } = loadAll();
+        const item = findItem(board, rest[0]);
+        const to = config2.roles[item.role]?.escalateTo;
+        if (to === void 0) {
+          throw new Error(`role ${item.role} has no escalate_to in studio.yaml`);
+        }
+        if (item.model === to) throw new Error(`${item.id} already runs on ${to}`);
+        saveBoard(
+          project,
+          withItem(board, item.id, (i2) => ({
+            ...i2,
+            model: to,
+            notes: [...i2.notes ?? [], `model escalated to ${to}`]
+          }))
+        );
+        print({ item: item.id, model: to, status: item.status });
+        return 0;
+      }
       case "metrics": {
         print(computeMetrics(readMetricEvents(stateRoot())));
         return 0;
@@ -34158,6 +34407,10 @@ var MAX_NOTE_CHARS = 500;
 function capNotes(notes) {
   return notes.slice(0, MAX_NOTES).map((n2) => n2.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_NOTE_CHARS));
 }
+function lessonNumber(arg) {
+  if (!/^[1-9]\d{0,6}$/.test(arg ?? "")) throw new UsageError("a lesson number is needed");
+  return Number(arg);
+}
 function refuseCrew(env) {
   if (env.STUDIO_ROLE === "crew") throw new Error("this command is not for crew sessions");
 }
@@ -34167,6 +34420,19 @@ function refuseNativeQueue(config2) {
       "merge.strategy native-queue is not supported yet (planned for stage d); use studio-queue"
     );
   }
+}
+function boardBlocksMerge(project, entry) {
+  let board;
+  try {
+    board = loadBoard(project);
+  } catch {
+    return "the board cannot be read";
+  }
+  const item = board.items.find(
+    (i2) => entry.item === void 0 ? i2.repo === entry.repo && i2.pr === entry.pr : i2.id === entry.item
+  );
+  if (item === void 0) return "the pull request has no board item";
+  return item.status === "queued" ? void 0 : `board item ${item.id} is ${item.status}`;
 }
 var doneMatches = (d, item) => d.item === void 0 ? d.repo === item.repo && d.pr === item.pr : d.item === item.id;
 function reconcileQueued(project, state, ports, stderr) {
@@ -34344,7 +34610,7 @@ function readHiddenLine(prompt, input2, write) {
 
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync5, openSync as openSync5, readFileSync as readFileSync21 } from "node:fs";
+import { closeSync as closeSync5, openSync as openSync5, readFileSync as readFileSync22 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -38040,7 +38306,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync20 } from "node:fs";
+import { readFileSync as readFileSync21 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value, optionName) => {
@@ -38396,7 +38662,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync19 } from "node:fs";
+import { readFileSync as readFileSync20 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -38510,7 +38776,7 @@ var getTargetFd = ({ value, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync19(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync20(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value, fdNumber) => {
   if (value === "inherit") {
@@ -38904,8 +39170,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync20(value))] }),
-    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync20(file2))] }),
+    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync21(value))] }),
+    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync21(file2))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value }) => ({ contents: () => [...value] }),
     string: ({ value }) => ({ contents: [value] }),
@@ -39201,7 +39467,7 @@ var throwOnSerializableInput = (optionName, invalidItem) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-sync.js
-import { writeFileSync as writeFileSync7, appendFileSync } from "node:fs";
+import { writeFileSync as writeFileSync8, appendFileSync } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/output.js
 var shouldLogOutput = ({ stdioItems, encoding, verboseInfo, fdNumber }) => fdNumber !== "all" && isFullVerbose(verboseInfo, fdNumber) && !BINARY_ENCODINGS.has(encoding) && isFdVerbose(fdNumber) && (stdioItems.some(({ type, value }) => type === "native" && PIPED_STDIO_VALUES.has(value)) || stdioItems.every(({ type }) => TRANSFORM_TYPES.has(type)));
@@ -39335,7 +39601,7 @@ var writeToFiles = (chunks, stdioItems, outputFiles) => {
     if (append || outputFiles.has(path10)) {
       appendFileSync(path10, contents);
     } else {
-      writeFileSync7(path10, contents);
+      writeFileSync8(path10, contents);
     }
     outputFiles.add(path10);
   }
@@ -42237,7 +42503,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync21(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync22(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }

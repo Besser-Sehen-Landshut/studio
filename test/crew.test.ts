@@ -2000,17 +2000,20 @@ describe('capabilities at launch', () => {
     expect(capsOf(f, 'APP-20').mandatory).toContain('security');
   });
 
-  it('a review note without a target fails closed', async () => {
+  it('a review item without a target is refused and starts nothing', async () => {
     const f = makeFixture();
-    await launchCrew(
-      f.project,
-      { ...reviewItem, notes: [] },
-      reviewerConfig,
-      fakePorts([]),
-      f.launcher,
-    );
-    expect(capsOf(f, 'APP-20')).toMatchObject({ tier: 'large' });
-    expect(capsOf(f, 'APP-20').mandatory).toContain('security');
+    const started: Started[] = [];
+    await expect(
+      launchCrew(
+        f.project,
+        { ...reviewItem, notes: [] },
+        reviewerConfig,
+        fakePorts(started),
+        f.launcher,
+      ),
+    ).rejects.toThrow(/review <owner\/repo>#<n>/);
+    expect(started).toHaveLength(0);
+    expect(existsSync(join(f.state, 'clones'))).toBe(false);
   });
 
   it('a one-line change in an auth file is large, with security', async () => {
