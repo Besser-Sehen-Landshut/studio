@@ -3,7 +3,10 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
-## [Unreleased]
+## [0.3.0] - 2026-11-01
+
+Stage (a.2): account blocks, usage limits per credential and pinned crew rules. Not tagged or
+published as a GitHub release yet; the maintainers tag after the merge.
 
 ### Added
 
@@ -11,7 +14,27 @@ All notable changes to this project are documented here. The format follows
   account or organization, Studio records it in `blocks.json`, stops every crew of the project and
   starts nothing, with no provider call, until the owner runs `studio accounts-clear <label>` in a
   terminal. An unreadable `blocks.json` counts as blocked. `state.json` gets one `account-block`
-  `forOwner` line and a `notifications` array.
+  `forOwner` line and a `notifications` array. `studio accounts-clear <label>` (owner, in a terminal)
+  clears a label's block.
+- Usage limits per credential: `crew_label_limits` in the owner config sets `max_parallel` and
+  optionally `max_runs_per_day` per credential label, with a `timezone` for the day. Counts live in
+  `usage.json` in the state root and show in `state.json` as `labelUsage`. A label at its limit is
+  excluded like a parked one, and launches of one project are serialised with a `launch.lock`.
+- Guard: `git update-ref`, `git replace`, `git symbolic-ref` and fetch refspecs that write below
+  `refs/remotes/` are denied.
+
+### Changed
+
+- Before a block signals a crew, the process start time stored at launch is compared; a mismatch
+  means the crew is gone, and a crew whose identity cannot be verified is reported, not signalled.
+  A launch whose new process has no readable identity is stopped and refused.
+- Crew rules come from a pinned copy outside the clone (issue #6). Studio fetches `origin/main` in
+  the owner's checkout, reads `AGENTS.md` and `CLAUDE.md` at that SHA (plain files only, at most
+  256 KiB, replace objects ignored) and saves them next to the brief; the brief points to the copies
+  instead of telling the crew to run `git show` in its own clone. Items in a secondary repository
+  get the rules of the project checkout. A failed fetch refuses the launch.
+- Crew runs have Claude Code auto memory off: `autoMemoryEnabled: false` and
+  `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in the crew settings file.
 
 ## [0.2.0] - 2026-11-01
 
