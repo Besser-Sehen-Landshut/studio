@@ -27590,6 +27590,7 @@ var historySchema = external_exports.strictObject({
   to: statusSchema,
   by: external_exports.string()
 });
+var MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
 var workItemSchema = external_exports.strictObject({
   id: external_exports.string().regex(/^[A-Z]+-\d+$/, "must match ^[A-Z]+-\\d+$"),
   title: external_exports.string().min(1),
@@ -27611,6 +27612,11 @@ var workItemSchema = external_exports.strictObject({
   branch: external_exports.string().optional(),
   crew: external_exports.string().optional(),
   notes: external_exports.array(external_exports.string()).optional(),
+  // Drives the review tier, the analyzers and the skills (capabilities/INDEX.yaml).
+  risk: external_exports.array(external_exports.enum(["ui", "landing", "auth", "security", "data", "migration"])).optional(),
+  triggers: external_exports.array(external_exports.enum(["epic-end", "release"])).optional(),
+  // Set by `studio escalate`; wins over the role's model.
+  model: external_exports.string().regex(MODEL_NAME_RE, "not a model name").optional(),
   history: external_exports.array(historySchema).default([])
 });
 var boardSchema = external_exports.strictObject({ items: external_exports.array(workItemSchema) });
@@ -27704,6 +27710,9 @@ var KEY_ORDER = [
   "branch",
   "crew",
   "notes",
+  "risk",
+  "triggers",
+  "model",
   "history"
 ];
 function orderedItem(item) {
@@ -27838,10 +27847,31 @@ function toolchainPathProblem(path10, home, extraProtectedPaths = [], platform2 
   );
   return hit ? `must not equal, contain or lie inside the credential location ${hit}` : void 0;
 }
+var MODEL_NAME_RE2 = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
+var modelName = external_exports.string().regex(MODEL_NAME_RE2, "not a model name");
+var ITEM_TYPES = ["feature", "fix", "chore", "docs", "research", "review", "release"];
+var roleSkillsSchema = external_exports.strictObject({
+  required: strList2,
+  allowed: strList2,
+  denied: strList2,
+  // More skills when the item's paths or type match, on top of capabilities/INDEX.yaml.
+  when: external_exports.array(
+    external_exports.strictObject({
+      paths: external_exports.array(external_exports.string().min(1)).optional(),
+      itemTypes: external_exports.array(external_exports.enum(ITEM_TYPES)).optional(),
+      required: external_exports.array(external_exports.string()).optional(),
+      allowed: external_exports.array(external_exports.string()).optional()
+    })
+  ).optional()
+});
 var roleSchema = external_exports.strictObject({
-  model: external_exports.string().min(1),
+  model: modelName,
+  // Another model for some item types, e.g. a cheaper one for docs.
+  types: external_exports.partialRecord(external_exports.enum(ITEM_TYPES), modelName).optional(),
+  // What `studio escalate <id>` moves a stuck item of this role to.
+  escalateTo: modelName.optional(),
   wip: external_exports.number().int().positive(),
-  skills: external_exports.strictObject({ required: strList2, allowed: strList2, denied: strList2 }).default({ required: [], allowed: [], denied: [] })
+  skills: roleSkillsSchema.default({ required: [], allowed: [], denied: [] })
 });
 var ciSchema = external_exports.strictObject({
   provider: external_exports.literal("github"),
@@ -27878,6 +27908,8 @@ var studioConfigSchema = external_exports.strictObject({
   }),
   // Partial record keyed by role template name; at least one role must be configured.
   roles: external_exports.partialRecord(external_exports.enum(ROLE_TEMPLATES), roleSchema).refine((r) => Object.keys(r).length > 0, "at least one role is required"),
+  // Detected from manifest files and stored by `studio setup stack`.
+  stacks: external_exports.array(external_exports.string().min(1)).optional(),
   sandbox: external_exports.strictObject({ networkAllow: strList2 }).default({ networkAllow: [] }),
   // Name of the env var that holds the least-privilege token (never the token itself).
   crewToken: external_exports.strictObject({ env: external_exports.string().min(1) }).optional(),

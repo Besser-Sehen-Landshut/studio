@@ -174,7 +174,30 @@
         "properties": {
           "model": {
             "type": "string",
-            "minLength": 1
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:[\\]-]*$"
+          },
+          "types": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "enum": [
+                "feature",
+                "fix",
+                "chore",
+                "docs",
+                "research",
+                "review",
+                "release"
+              ]
+            },
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:[\\]-]*$"
+            }
+          },
+          "escalate_to": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:[\\]-]*$"
           },
           "wip": {
             "type": "integer",
@@ -209,6 +232,49 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "when": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "item_types": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "feature",
+                          "fix",
+                          "chore",
+                          "docs",
+                          "research",
+                          "review",
+                          "release"
+                        ]
+                      }
+                    },
+                    "required": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "allowed": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
               }
             },
             "additionalProperties": false
@@ -219,6 +285,13 @@
           "wip"
         ],
         "additionalProperties": false
+      }
+    },
+    "stacks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
       }
     },
     "sandbox": {

@@ -2,6 +2,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { z } from 'zod';
 import { boardSchema } from '../src/board.ts';
+import { capabilitiesSchema } from '../src/capabilities.ts';
 import { ownerConfigSchema, studioConfigSchema } from '../src/config.ts';
 
 const snake = (key: string): string => key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
@@ -37,6 +38,7 @@ for (const [file, zodSchema] of [
   ['schema/studio.schema.json', studioConfigSchema],
   ['schema/board.schema.json', boardSchema],
   ['schema/owner.schema.json', ownerConfigSchema],
+  ['schema/capabilities.schema.json', capabilitiesSchema],
 ] as const) {
   const schema = snakeProps(z.toJSONSchema(zodSchema, { io: 'input' }));
   writeFileSync(file, `${JSON.stringify(schema, null, 2)}\n`);

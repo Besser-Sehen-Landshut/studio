@@ -23,6 +23,7 @@ beforeAll(() => {
   plugin = mkdtempSync(join(tmpdir(), 'studio-bundle-'));
   cpSync(join(repo, 'bin'), join(plugin, 'bin'), { recursive: true });
   cpSync(join(repo, 'dist-bundle'), join(plugin, 'dist-bundle'), { recursive: true });
+  cpSync(join(repo, 'capabilities'), join(plugin, 'capabilities'), { recursive: true });
   writeFileSync(join(plugin, 'package.json'), '{"type":"module"}\n');
 });
 

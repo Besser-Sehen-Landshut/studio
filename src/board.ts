@@ -29,6 +29,9 @@ const historySchema = z.strictObject({
   by: z.string(),
 });
 
+/** A value for `--model`: it never starts with a dash. Same rule as in config.ts (a test keeps them equal). */
+export const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
+
 export const workItemSchema = z.strictObject({
   id: z.string().regex(/^[A-Z]+-\d+$/, 'must match ^[A-Z]+-\\d+$'),
   title: z.string().min(1),
@@ -50,6 +53,11 @@ export const workItemSchema = z.strictObject({
   branch: z.string().optional(),
   crew: z.string().optional(),
   notes: z.array(z.string()).optional(),
+  // Drives the review tier, the analyzers and the skills (capabilities/INDEX.yaml).
+  risk: z.array(z.enum(['ui', 'landing', 'auth', 'security', 'data', 'migration'])).optional(),
+  triggers: z.array(z.enum(['epic-end', 'release'])).optional(),
+  // Set by `studio escalate`; wins over the role's model.
+  model: z.string().regex(MODEL_NAME_RE, 'not a model name').optional(),
   history: z.array(historySchema).default([]),
 });
 
@@ -158,6 +166,9 @@ const KEY_ORDER: readonly (keyof WorkItem)[] = [
   'branch',
   'crew',
   'notes',
+  'risk',
+  'triggers',
+  'model',
   'history',
 ];
 

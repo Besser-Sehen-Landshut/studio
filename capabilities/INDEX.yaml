@@ -1,0 +1,409 @@
+# Trigger matrix: one row is one capability. Read by src/capabilities.ts; schema/capabilities.schema.json.
+#
+# when:   all given keys must match; a list means any of. `any` is a list of alternatives.
+# mode:   required (named in the brief, must be used) | offered | review (run as read-only review).
+# load:   invoke (skill) | read (a file of at most 200 lines) | subagent (digest of at most 40 lines, or
+#         findings) | run (a script).
+# source: id in SOURCES.yaml. A source that is not fetched reads `skipped: <reason>`, never a pass.
+# model:  standard | capable, for the subagent the reviewer dispatches.
+version: 1
+rows:
+  # Process skills
+  - id: tdd
+    ref: skill:superpowers:test-driven-development
+    when: { roles: [builder], item_types: [feature, fix] }
+    mode: required
+    load: invoke
+  - id: debugging
+    ref: skill:superpowers:systematic-debugging
+    when: { roles: [builder], item_types: [fix] }
+    mode: required
+    load: invoke
+  - id: rework
+    ref: skill:superpowers:receiving-code-review
+    when: { roles: [builder], triggers: [rework] }
+    mode: required
+    load: invoke
+  - id: planned-execution
+    ref: skill:superpowers:subagent-driven-development
+    when: { roles: [builder], item_types: [feature] }
+    mode: offered
+    load: invoke
+  - id: verification
+    ref: skill:superpowers:verification-before-completion
+    when: { roles: [builder] }
+    mode: offered
+    load: invoke
+  - id: design-brainstorm
+    ref: skill:superpowers:brainstorming
+    when: { roles: [lead, designer], phases: [design] }
+    mode: required
+    load: invoke
+  - id: simplify
+    ref: skill:simplify
+    when: { roles: [builder], item_types: [chore] }
+    mode: offered
+    load: invoke
+  - id: prose
+    ref: skill:elements-of-style:writing-clearly-and-concisely
+    when: { item_types: [docs] }
+    mode: required
+    load: invoke
+    optional: true
+  - id: skill-authoring
+    ref: skill:superpowers:writing-skills
+    when: { paths: ["skills/**", "**/SKILL.md"] }
+    mode: required
+    load: invoke
+
+  # Knowledge for builders and reviewers
+  - id: live-docs
+    ref: knowledge:docs-lookup.md
+    when: { roles: [builder, reviewer, designer], phases: [design, build, review] }
+    mode: offered
+    load: read
+  - id: commands-per-stack
+    ref: knowledge:commands-per-stack.md
+    when: { roles: [builder], item_types: [feature, fix, chore] }
+    mode: offered
+    load: read
+  - id: e2e-levels
+    ref: knowledge:e2e-levels.md
+    when: { roles: [builder, reviewer], risks: [ui, landing] }
+    mode: offered
+    load: read
+  - id: context7
+    ref: skill:context7-mcp
+    when: { roles: [builder, reviewer] }
+    mode: offered
+    load: invoke
+
+  # Analyzers, run by the reviewer role
+  - id: analyzer-diff
+    ref: analyzer:diff-review
+    when: { roles: [reviewer] }
+    mode: review
+    load: subagent
+    model: standard
+  - id: analyzer-spec
+    ref: analyzer:spec-check
+    when: { roles: [reviewer], item_types_not: [docs] }
+    mode: review
+    load: subagent
+    model: standard
+  - id: analyzer-security
+    ref: analyzer:security
+    when:
+      roles: [reviewer]
+      any:
+        - risks: [auth, security, data, migration]
+        - paths:
+            - "**/auth*"
+            - "**/auth*/**"
+            - "**/login*"
+            - "**/login*/**"
+            - "**/logout*"
+            - "**/logout*/**"
+            - "**/password*"
+            - "**/password*/**"
+            - "**/session*"
+            - "**/session*/**"
+            - "**/middleware*"
+            - "**/middleware*/**"
+            - "**/permission*"
+            - "**/permission*/**"
+            - "**/polic*"
+            - "**/polic*/**"
+            - "**/rls*"
+            - "**/rls*/**"
+            - "**/api/**"
+            - "**/routes/**"
+            - "**/route.*"
+            - "**/controllers/**"
+            - "**/actions/**"
+            - "**/migrations/**"
+            - "**/migration/**"
+            - "**/*.sql"
+            - "**/schema.prisma"
+            - "**/schema.rb"
+            - "**/schema.sql"
+            - "**/signup*"
+            - "**/signup*/**"
+            - "**/sign-up*"
+            - "**/sign-up*/**"
+            - "**/sign_up*"
+            - "**/sign_up*/**"
+            - "**/reset*"
+            - "**/reset*/**"
+            - "**/otp*"
+            - "**/otp*/**"
+            - "**/upload*"
+            - "**/upload*/**"
+            - ".github/workflows/**"
+    mode: review
+    load: subagent
+    model: capable
+  - id: analyzer-performance
+    ref: analyzer:performance
+    when: { roles: [reviewer], tiers: [large] }
+    mode: review
+    load: subagent
+    model: standard
+  - id: analyzer-similar-bugs
+    ref: analyzer:similar-bugs
+    when: { roles: [reviewer], triggers: [after-fix] }
+    mode: review
+    load: subagent
+    model: standard
+  - id: analyzer-full-scan
+    ref: [analyzer:bugs, analyzer:security, analyzer:performance, analyzer:dead-code]
+    when: { roles: [reviewer], triggers: [epic-end, release] }
+    mode: review
+    load: subagent
+    model: capable
+  - id: analyzer-accessibility
+    ref: analyzer:accessibility
+    when: { roles: [reviewer], risks: [ui, landing] }
+    mode: review
+    load: subagent
+    model: standard
+  - id: analyzer-design-detector
+    ref: analyzer:design-detector
+    source: impeccable
+    when:
+      roles: [reviewer]
+      tiers: [large]
+      paths: ["**/*.{tsx,jsx,svelte,vue,astro,html,css,scss,less}"]
+    mode: review
+    load: subagent
+    model: standard
+  - id: analyzer-motion
+    ref: analyzer:motion
+    source: emil
+    when: { roles: [reviewer], tiers: [large], risks: [ui, landing] }
+    mode: review
+    load: subagent
+    model: standard
+  - id: pr-toolkit
+    ref: skill:pr-review-toolkit:review-pr
+    when: { roles: [reviewer], tiers: [large] }
+    mode: offered
+    load: invoke
+  - id: second-opinion-security
+    ref: skill:security-review
+    when: { roles: [reviewer], risks: [auth, security] }
+    mode: offered
+    load: invoke
+  - id: second-opinion-review
+    ref: skill:code-review
+    when: { roles: [reviewer], triggers: [epic-end, release] }
+    mode: offered
+    load: invoke
+
+  # Design library
+  - id: design-forms-states
+    ref: [design:forms.md, design:states.md, design:ux-writing.md]
+    when: { roles: [designer, builder], risks: [ui] }
+    mode: offered
+    load: read
+  - id: design-onboarding-density
+    ref: [design:onboarding.md, design:density-critique.md]
+    when: { roles: [designer], risks: [ui] }
+    mode: offered
+    load: read
+  - id: design-platform-web
+    ref: design:platform-web.md
+    when:
+      { roles: [designer, builder, reviewer], risks: [ui], stacks: [web, nextjs, svelte, shadcn] }
+    mode: required
+    load: read
+  - id: design-platform-apple
+    ref: design:platform-apple.md
+    when: { roles: [designer, builder, reviewer], risks: [ui], stacks: [ios, expo] }
+    mode: required
+    load: read
+  - id: design-platform-android
+    ref: design:platform-android.md
+    when: { roles: [designer, builder, reviewer], risks: [ui], stacks: [android, expo] }
+    mode: required
+    load: read
+  - id: design-landing-taste
+    ref: source:taste/skills/taste-skill/SKILL.md
+    source: taste
+    when: { roles: [designer, reviewer], risks: [landing] }
+    mode: required
+    load: subagent
+  - id: ui-design-skill
+    ref: skill:ux-ui-design
+    when: { roles: [designer, builder], risks: [ui, landing] }
+    mode: required
+    load: invoke
+    optional: true
+  - id: apple-design
+    ref: skill:apple-design
+    when: { roles: [designer, reviewer], risks: [ui], stacks: [ios] }
+    mode: offered
+    load: invoke
+  - id: browser-check
+    ref: skill:playwright-cli
+    when:
+      { roles: [builder, reviewer], risks: [ui], stacks: [web, nextjs, svelte, shadcn, playwright] }
+    mode: offered
+    load: invoke
+
+  # Stack rows
+  - id: shadcn
+    ref: skill:shadcn
+    when: { stacks: [shadcn], roles: [designer, builder, reviewer], risks: [ui] }
+    mode: offered
+    load: invoke
+  - id: postgres-review
+    ref: skill:pg:design-postgres-tables
+    when:
+      stacks: [postgres]
+      roles: [reviewer]
+      paths: ["**/migrations/**", "**/*.sql", "**/schema.*"]
+    mode: review
+    load: invoke
+  - id: postgres-review-source
+    ref: source:postgres/skills/postgres-best-practices/SKILL.md
+    source: postgres
+    when:
+      stacks: [postgres]
+      roles: [reviewer]
+      paths: ["**/migrations/**", "**/*.sql", "**/schema.*"]
+    mode: review
+    load: subagent
+  - id: postgres-build
+    ref: [skill:pg:design-postgres-tables, skill:pg:postgres-database-migration]
+    when: { stacks: [postgres], roles: [builder], risks: [data, migration] }
+    mode: offered
+    load: invoke
+  - id: rust-review
+    ref: [skill:rust-best-practices, skill:rust-testing]
+    when: { stacks: [rust], roles: [reviewer], paths: ["**/*.rs"] }
+    mode: review
+    load: invoke
+    optional: true
+  - id: rust-build
+    ref: skill:rust-testing
+    when: { stacks: [rust], roles: [builder] }
+    mode: offered
+    load: invoke
+  - id: swift-review
+    ref: [skill:swiftui-pro, skill:swift-concurrency-pro, skill:swift-testing-pro]
+    when: { stacks: [ios], roles: [reviewer], paths: ["**/*.swift"] }
+    mode: review
+    load: invoke
+    optional: true
+  - id: swift-build
+    ref: skill:using-xcode-cli:using-xcode-cli
+    when: { stacks: [ios], roles: [builder] }
+    mode: offered
+    load: invoke
+  - id: tauri-review
+    ref: skill:tauri-v2
+    when: { stacks: [tauri], roles: [reviewer], paths: ["src-tauri/**"] }
+    mode: review
+    load: invoke
+    optional: true
+  - id: tauri-release
+    ref:
+      [skill:tauri-macos-distribution, skill:tauri-windows-distribution, skill:tauri-code-signing]
+    when: { stacks: [tauri], roles: [release] }
+    mode: offered
+    load: invoke
+  - id: winui-review
+    ref: skill:winui-pro
+    when: { stacks: [winui], roles: [reviewer, builder], paths: ["**/*.cs", "**/*.xaml"] }
+    mode: review
+    load: invoke
+    optional: true
+  - id: svelte-build
+    ref: skill:svelte:svelte-code-writer
+    when: { stacks: [svelte], roles: [builder], paths: ["**/*.svelte", "**/*.svelte.ts"] }
+    mode: required
+    load: invoke
+    optional: true
+  - id: svelte-review
+    ref: skill:svelte:svelte-core-bestpractices
+    when: { stacks: [svelte], roles: [reviewer], paths: ["**/*.svelte", "src/lib/**"] }
+    mode: review
+    load: invoke
+    optional: true
+  - id: nextjs-docs
+    ref: bundled:node_modules/next/dist/docs/index.md
+    fallback: skill:next-best-practices
+    when:
+      {
+        stacks: [nextjs],
+        paths: ["src/app/**", "app/**", "src/pages/**", "pages/**", "next.config.*"],
+      }
+    mode: review
+    load: subagent
+  - id: gha-security
+    ref: source:gha/skills/gha-security-review/SKILL.md
+    source: gha
+    when: { stacks: [gha], roles: [reviewer], paths: [".github/workflows/**", "**/action.yml"] }
+    mode: review
+    load: subagent
+  - id: docker-compose
+    ref: source:docker/skills/docker-compose-patterns/SKILL.md
+    source: docker
+    when: { stacks: [docker], paths: ["**/compose*.y*ml", "**/docker-compose*.y*ml"] }
+    mode: offered
+    load: read
+  - id: docker-build
+    ref: source:docker/skills/docker-build-strategies/SKILL.md
+    source: docker
+    when: { stacks: [docker], paths: ["**/Dockerfile*", "**/.dockerignore"] }
+    mode: offered
+    load: read
+  - id: better-auth
+    ref: source:better-auth/better-auth/best-practices/SKILL.md
+    source: better-auth
+    when: { stacks: [better-auth], risks: [auth] }
+    mode: offered
+    load: subagent
+  - id: stripe
+    ref: source:stripe/skills/stripe-best-practices/SKILL.md
+    source: stripe
+    when: { stacks: [stripe], paths: ["**/stripe*", "**/payment*", "**/billing*"] }
+    mode: offered
+    load: subagent
+  - id: fastify
+    ref: source:fastify/skills/fastify/SKILL.md
+    source: fastify
+    when: { stacks: [fastify], paths: ["**/routes/**", "**/plugins/**"] }
+    mode: offered
+    load: subagent
+  - id: wordpress
+    ref: source:wordpress/skills/wp-plugin-development/SKILL.md
+    source: wordpress
+    when: { stacks: [wordpress] }
+    mode: offered
+    load: subagent
+
+  # Release
+  - id: release-polish-web
+    ref: skill:vibepolish
+    when: { roles: [reviewer], triggers: [release], stacks: [web, nextjs, svelte, shadcn] }
+    mode: review
+    load: subagent
+    optional: true
+denied:
+  - skill:superpowers:finishing-a-development-branch # the control room merges
+  - skill:superpowers:executing-plans # a crew runs in its own clone, one item
+  - skill:superpowers:using-git-worktrees # nested worktrees broke earlier runs
+  - skill:bug-prospector # legacy aliases of the analyzers
+  - skill:security-audit
+  - skill:performance-check
+  - skill:review-changes
+  - skill:scan-similar-bugs
+  - skill:dead-code-scanner
+  - skill:ui-scan
+  - skill:ui-ux-pro-max # rejected, do not propose again
+  - skill:feature-dev:feature-dev # rejected as a replacement
+  - skill:commit-commands:clean_gone # deletes branches
+  - skill:claude-md-management:revise-claude-md # no project CLAUDE.md
+  - skill:claude-md-management:claude-md-improver

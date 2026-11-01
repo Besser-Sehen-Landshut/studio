@@ -198,3 +198,28 @@ describe('isLegalMove', () => {
     expect(isLegalMove('in_review', 'merged', false)).toBe(true);
   });
 });
+
+describe('capability fields on an item', () => {
+  const text = (extra: string) =>
+    `items:\n  - { id: APP-1, title: t, type: fix, role: builder, repo: org/app, size: S, priority: 1, status: ready${extra} }\n`;
+  const write = (extra: string) => {
+    const d = mkdtempSync(join(tmpdir(), 'studio-board-cap-'));
+    mkdirSync(join(d, '.studio'));
+    writeFileSync(join(d, '.studio', 'board.yaml'), text(extra));
+    return d;
+  };
+  it('survives a save', () => {
+    const d = write(', risk: [auth], triggers: [epic-end], model: opus');
+    saveBoard(d, loadBoard(d));
+    const it0 = loadBoard(d).items[0];
+    expect(it0?.risk).toEqual(['auth']);
+    expect(it0?.triggers).toEqual(['epic-end']);
+    expect(it0?.model).toBe('opus');
+    rmSync(d, { recursive: true, force: true });
+  });
+  it.each([', model: --evil', ', risk: [nope]', ', triggers: [rework]'])('refuses %s', (extra) => {
+    const d = write(extra);
+    expect(() => loadBoard(d)).toThrow();
+    rmSync(d, { recursive: true, force: true });
+  });
+});

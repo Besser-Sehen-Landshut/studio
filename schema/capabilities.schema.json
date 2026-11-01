@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(skill|analyzer|knowledge|design|source|bundled):[^\\s]+$"
+              },
+              {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^(skill|analyzer|knowledge|design|source|bundled):[^\\s]+$"
+                }
+              }
+            ]
+          },
+          "when": {
+            "type": "object",
+            "properties": {
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "lead",
+                    "builder",
+                    "reviewer",
+                    "designer",
+                    "researcher",
+                    "release"
+                  ]
+                }
+              },
+              "item_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "feature",
+                    "fix",
+                    "chore",
+                    "docs",
+                    "research",
+                    "review",
+                    "release"
+                  ]
+                }
+              },
+              "item_types_not": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "feature",
+                    "fix",
+                    "chore",
+                    "docs",
+                    "research",
+                    "review",
+                    "release"
+                  ]
+                }
+              },
+              "stacks": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "phases": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "design",
+                    "build",
+                    "review"
+                  ]
+                }
+              },
+              "triggers": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "rework",
+                    "after-fix",
+                    "epic-end",
+                    "release"
+                  ]
+                }
+              },
+              "tiers": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "small",
+                    "large"
+                  ]
+                }
+              },
+              "any": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "risks": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "ui",
+                          "landing",
+                          "auth",
+                          "security",
+                          "data",
+                          "migration"
+                        ]
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "risks": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "ui",
+                    "landing",
+                    "auth",
+                    "security",
+                    "data",
+                    "migration"
+                  ]
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "required",
+              "offered",
+              "review"
+            ]
+          },
+          "load": {
+            "type": "string",
+            "enum": [
+              "invoke",
+              "read",
+              "subagent",
+              "run"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "fallback": {
+            "type": "string",
+            "pattern": "^(skill|analyzer|knowledge|design|source|bundled):[^\\s]+$"
+          },
+          "model": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "capable"
+            ]
+          },
+          "optional": {
+            "type": "boolean"
+          },
+          "overrides": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "ref",
+          "when",
+          "mode",
+          "load"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "denied": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(skill|analyzer|knowledge|design|source|bundled):[^\\s]+$"
+      }
+    }
+  },
+  "required": [
+    "version",
+    "rows"
+  ],
+  "additionalProperties": false
+}
