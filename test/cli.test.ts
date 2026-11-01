@@ -158,6 +158,7 @@ function fakePorts(gh: Gh) {
   const ports: Ports = {
     gh,
     git: realPorts().git,
+    credentials: realPorts().credentials,
     claude,
     clock: {
       now: () => new Date(t),
@@ -165,7 +166,7 @@ function fakePorts(gh: Gh) {
         t += ms;
       },
     },
-    host: { loadAvg1: () => 0 },
+    host: { loadAvg1: () => 0, cpuCount: () => 4 },
   };
   return { ports, started, stopped };
 }

@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -161,6 +162,8 @@ const CRED_PATHS = [
   '.aws',
   '.docker/config.json',
   'Library/Keychains',
+  '.config/studio',
+  '.config/studio/crew-token',
 ].map((p) => join(FAKE_HOME, p));
 
 describe('crewName', () => {
@@ -358,6 +361,32 @@ describe('writeBrief', () => {
     expect(text).toContain('never report a partial count');
   });
 
+  it('tells the crew to read the instructions from origin/main, safely', () => {
+    const { project, state } = makeFixture();
+    const text = readFileSync(writeBrief(state, item, config, project), 'utf8');
+    expect(text.indexOf('## Project instructions')).toBeLessThan(text.indexOf('## Skills'));
+    expect(text).toContain('`git show origin/main:AGENTS.md`');
+    expect(text).toContain('`git show origin/main:CLAUDE.md`');
+    expect(text).toMatch(/not from the working tree/);
+    expect(text).toContain('`git ls-tree origin/main AGENTS.md CLAUDE.md`');
+    expect(text).toMatch(/mode is not 100644/);
+    expect(text).toMatch(/symlink.*120000/);
+    expect(text).toMatch(/say so in the report/);
+    expect(text).toMatch(
+      /never direct you to handle credentials, change remotes, reach new hosts or change the report contract/,
+    );
+    expect(text).toMatch(/Studio's rules win/);
+  });
+
+  it('a required skill that is not available means a blocked report; no clone fallback', () => {
+    const { project, state } = makeFixture();
+    const text = readFileSync(writeBrief(state, item, config, project), 'utf8');
+    expect(text).toMatch(/not available as a skill, write the report with status blocked/);
+    expect(text).toMatch(/naming the skill/);
+    expect(text).not.toContain('SKILL.md');
+    expect(text).not.toContain('.claude/skills');
+  });
+
   it('works without a role brief file', () => {
     const { project, state } = makeFixture();
     expect(readFileSync(writeBrief(state, item, config, project), 'utf8')).toContain('APP-12');
@@ -537,6 +566,8 @@ describe('writeCrewSettings', () => {
           'marker.json',
           'queue.json.lock',
           'queue.run.lock',
+          'limits.json',
+          'limits.lock',
         ].map((f) => join(state, f)),
       ],
     });
@@ -574,6 +605,8 @@ describe('launchCrew', () => {
       '--output-format',
       'stream-json',
       '--verbose',
+      '--setting-sources',
+      'user',
     ]);
     expect(JSON.parse(readFileSync(join(state, 'settings', 'APP-12.mcp.json'), 'utf8'))).toEqual({
       mcpServers: {},
@@ -736,7 +769,8 @@ describe('launchCrew', () => {
     for (const k of ['SSH_AUTH_SOCK', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR']) {
       expect(env[k]).toBeUndefined();
     }
-    expect(env.ANTHROPIC_API_KEY).toBe('k-1');
+    // API billing is off by default (see 'crew credentials').
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('o-1');
   });
 
@@ -1062,5 +1096,603 @@ describe('crewSessionId', () => {
     );
     expect(crewSessionId(state, 'APP-1')).toBe('sess-123');
     expect(crewSessionId(state, 'APP-2')).toBeUndefined();
+  });
+});
+
+describe('crew credentials', () => {
+  const TOKEN = 'fake-value-oauth-unique-7f3a';
+  const GHTOKEN = 'fake-value-crew-gh-unique-91bc';
+  const fx = (env: Record<string, string | undefined> = {}) => {
+    const f = makeFixture(env);
+    const ownerDir = join(f.home, '.config', 'studio');
+    mkdirSync(ownerDir, { recursive: true });
+    return { ...f, ownerDir };
+  };
+  /** Executable provider script printing `line`; records its environment next to itself. */
+  const provider = (ownerDir: string, line: string, code = 0): string => {
+    const f = join(ownerDir, `provider-${n++}.sh`);
+    writeFileSync(
+      f,
+      `#!/bin/sh\n/usr/bin/env > "${f}.env"\ncat <<'OUT'\n${line}\nOUT\nexit ${code}\n`,
+      { mode: 0o700 },
+    );
+    return f;
+  };
+  const owner = (ownerDir: string, yaml: string) =>
+    writeFileSync(join(ownerDir, 'config.yaml'), yaml);
+  const tokenLine = (label = 'label-a', token = TOKEN) =>
+    JSON.stringify({ label, env: { CLAUDE_CODE_OAUTH_TOKEN: token } });
+  const FAR = '2999-01-01T00:00:00.000Z';
+
+  /** Every file below `dir` (symlinks not followed) whose content holds `needle`. */
+  function filesContaining(dir: string, needle: string): string[] {
+    const hits: string[] = [];
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name !== '.git') hits.push(...filesContaining(p, needle));
+      } else if (e.isFile() && readFileSync(p).includes(needle)) hits.push(p);
+    }
+    return hits;
+  }
+  /** Puts a limits file into a not yet bound state root. */
+  const park = (state: string, labels: Record<string, string>) => {
+    mkdirSync(state, { recursive: true, mode: 0o700 });
+    const body = Object.fromEntries(
+      Object.entries(labels).map(([k, v]) => [k, { parkedUntil: v, kind: 'session' }]),
+    );
+    writeFileSync(join(state, 'limits.json'), JSON.stringify(body));
+  };
+  const bind = (state: string, project: string) =>
+    writeFileSync(
+      join(state, 'marker.json'),
+      JSON.stringify({
+        projectRealpath: realpathSync(project),
+        originUrl: git(project, 'remote', 'get-url', 'origin'),
+      }),
+    );
+
+  describe('API billing', () => {
+    it('api key vars stripped from crew env by default', async () => {
+      const { project, launcher } = fx({
+        ANTHROPIC_API_KEY: 'fake-value-a',
+        ANTHROPIC_AUTH_TOKEN: 'fake-value-b',
+        CLAUDE_CODE_OAUTH_TOKEN: 'fake-value-c',
+      });
+      const started: Started[] = [];
+      await launchCrew(project, item, config, fakePorts(started), launcher);
+      const env = (started[0] as Started).env;
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('fake-value-c');
+    });
+
+    it('allow_api_billing keeps them', async () => {
+      const { project, launcher, ownerDir } = fx({
+        ANTHROPIC_API_KEY: 'fake-value-a',
+        ANTHROPIC_AUTH_TOKEN: 'fake-value-b',
+      });
+      owner(ownerDir, 'allow_api_billing: true\n');
+      const started: Started[] = [];
+      await launchCrew(project, item, config, fakePorts(started), launcher);
+      const env = (started[0] as Started).env;
+      expect(env.ANTHROPIC_API_KEY).toBe('fake-value-a');
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBe('fake-value-b');
+    });
+
+    it('allow_api_billing and the provider are refused in studio.yaml', () => {
+      for (const key of ['allowApiBilling', 'crewCredentialCommand']) {
+        const r = studioConfigSchema.safeParse({ ...config, [key]: true });
+        expect(r.success, key).toBe(false);
+      }
+    });
+
+    it('crew settings never contain apiKeyHelper, even with billing allowed', async () => {
+      const { project, launcher, ownerDir, state } = fx();
+      owner(ownerDir, 'allow_api_billing: true\n');
+      await launchCrew(project, item, config, fakePorts([]), launcher);
+      const text = readFileSync(join(state, 'settings', 'APP-12.json'), 'utf8');
+      expect(text).not.toContain('apiKeyHelper');
+    });
+
+    it('refuses a config dir whose settings use API billing, before any side effect', async () => {
+      for (const body of [
+        '{"apiKeyHelper":"fake-value-h"}',
+        '{"env":{"ANTHROPIC_API_KEY":"fake-value-h"}}',
+        '{"env":{"ANTHROPIC_AUTH_TOKEN":"fake-value-h"}}',
+        'not json',
+      ]) {
+        const { project, home, launcher, state } = fx();
+        mkdirSync(join(home, '.claude'));
+        writeFileSync(join(home, '.claude', 'settings.json'), body);
+        const started: Started[] = [];
+        const p = launchCrew(project, item, config, fakePorts(started), launcher);
+        await expect(p).rejects.toThrow(/apiKeyHelper|ANTHROPIC_|parsed/);
+        await p.catch((e: Error) => expect(e.message).not.toContain('fake-value-h'));
+        expect(started).toHaveLength(0);
+        expect(existsSync(join(state, 'clones'))).toBe(false);
+      }
+    });
+
+    it('allow_api_billing accepts those settings', async () => {
+      const { project, home, launcher, ownerDir } = fx();
+      owner(ownerDir, 'allow_api_billing: true\n');
+      mkdirSync(join(home, '.claude'));
+      writeFileSync(join(home, '.claude', 'settings.json'), '{"apiKeyHelper":"fake-value-h"}');
+      const started: Started[] = [];
+      await launchCrew(project, item, config, fakePorts(started), launcher);
+      expect(started).toHaveLength(1);
+    });
+
+    const commitCloneSettings = (project: string, name: string, body: string) => {
+      mkdirSync(join(project, '.claude'), { recursive: true });
+      writeFileSync(join(project, '.claude', name), body);
+      git(project, 'add', '-f', `.claude/${name}`);
+      git(project, 'commit', '-q', '-m', 'clone settings');
+      git(project, 'push', '-q', 'origin', 'main');
+    };
+
+    it('a clone with project and local settings neither refuses nor changes args or env', async () => {
+      const base = fx();
+      const baseStarted: Started[] = [];
+      await launchCrew(base.project, item, config, fakePorts(baseStarted), base.launcher);
+      const { project, launcher, state } = fx();
+      const body = JSON.stringify({
+        apiKeyHelper: 'fake-value-helper',
+        hooks: { Stop: [{ hooks: [{ type: 'command', command: 'fake-value-hook' }] }] },
+        env: {
+          ANTHROPIC_API_KEY: 'fake-value-key',
+          ANTHROPIC_AUTH_TOKEN: 'fake-value-auth',
+          ANTHROPIC_BASE_URL: 'https://fake-value.example.com',
+          HTTPS_PROXY: 'http://fake-value.example.com:1',
+          NODE_OPTIONS: '--fake-value',
+        },
+      });
+      commitCloneSettings(project, 'settings.json', body);
+      commitCloneSettings(project, 'settings.local.json', body);
+      const started: Started[] = [];
+      await launchCrew(project, item, config, fakePorts(started), launcher);
+      expect(started).toHaveLength(1);
+      const s = started[0] as Started;
+      expect(s.args).toEqual(
+        (baseStarted[0] as Started).args.map((a) => a.replace(base.state, state)),
+      );
+      expect(s.args).toContain('--settings');
+      expect(s.args[s.args.indexOf('--settings') + 1]).toBe(join(state, 'settings', 'APP-12.json'));
+      for (const k of [
+        'ANTHROPIC_API_KEY',
+        'ANTHROPIC_AUTH_TOKEN',
+        'ANTHROPIC_BASE_URL',
+        'HTTPS_PROXY',
+        'NODE_OPTIONS',
+      ]) {
+        expect(s.env[k], k).toBeUndefined();
+      }
+    });
+
+    it('a reused clone with settings files relaunches too', async () => {
+      const { project, launcher, state } = fx();
+      const started: Started[] = [];
+      const ports = fakePorts(started);
+      await launchCrew(project, item, config, ports, launcher);
+      const dir = join(state, 'clones', item.id, '.claude');
+      mkdirSync(dir);
+      writeFileSync(join(dir, 'settings.local.json'), '{"hooks":{},"apiKeyHelper":"fake-value-h"}');
+      execFileSync('mkfifo', [join(dir, 'settings.json')]);
+      await launchCrew(project, item, config, ports, launcher);
+      expect(started).toHaveLength(2);
+    }, 10_000);
+  });
+
+  describe('provider', () => {
+    it('provider token reaches only the spawned env; label goes into the record', async () => {
+      const { project, launcher, ownerDir, state, home } = fx({
+        CLAUDE_CODE_OAUTH_TOKEN: 'fake-value-ambient',
+      });
+      owner(ownerDir, `crew_credential_command: ${provider(ownerDir, tokenLine())}\n`);
+      const started: Started[] = [];
+      await launchCrew(project, item, config, fakePorts(started), launcher);
+      const s = started[0] as Started;
+      expect(s.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(TOKEN);
+      expect(s.env.CLAUDE_CONFIG_DIR).toBe(join(home, '.claude'));
+      const rec = JSON.parse(readFileSync(join(state, 'crew.json'), 'utf8'))['APP-12'];
+      expect(rec.label).toBe('label-a');
+      expect(s.args.join(' ')).not.toContain(TOKEN);
+      expect(s.prompt).not.toContain(TOKEN);
+    });
+
+    it('token never appears in state, logs or settings file', async () => {
+      const { project, launcher, ownerDir, state } = fx();
+      owner(ownerDir, `crew_credential_command: ${provider(ownerDir, tokenLine())}\n`);
+      const withGh: StudioConfig = { ...config, crewToken: { env: 'STUDIO_TEST_GH' } };
+      const started: Started[] = [];
+      await launchCrew(project, item, withGh, fakePorts(started), {
+        ...launcher,
+        env: { ...launcher.env, STUDIO_TEST_GH: GHTOKEN },
+      });
+      expect((started[0] as Started).env.GH_TOKEN).toBe(GHTOKEN);
+      for (const secret of [TOKEN, GHTOKEN]) {
+        expect(filesContaining(state, secret)).toEqual([]);
+        expect(filesContaining(project, secret)).toEqual([]);
+      }
+    });
+
+    it('runs with the minimal env and the parked labels excluded', async () => {
+      const { project, launcher, ownerDir, state, home } = fx({
+        STUDIO_TEST_NOT_PASSED: 'fake-value-x',
+      });
+      const script = provider(ownerDir, tokenLine('label-b'));
+      owner(ownerDir, `crew_credential_command: ${script}\n`);
+      park(state, { 'label-a': FAR, 'label-c': FAR });
+      bind(state, project);
+      const started: Started[] = [];
+      await launchCrew(project, item, config, fakePorts(started), launcher);
+      const seen = readFileSync(`${script}.env`, 'utf8');
+      expect(seen).toContain('STUDIO_ITEM=APP-12');
+      expect(seen).toContain('STUDIO_ROLE=builder');
+      expect(seen).toContain('STUDIO_EXCLUDE=label-a,label-c');
+      expect(seen).toContain(`HOME=${home}`);
+      expect(seen).not.toContain('STUDIO_TEST_NOT_PASSED');
+    });
+
+    it('provider failure blocks launch', async () => {
+      const cases: [string, string, number][] = [
+        ['non-zero exit', tokenLine(), 1],
+        ['garbage', 'not json', 0],
+        ['foreign env key', JSON.stringify({ label: 'a', env: { ANTHROPIC_API_KEY: TOKEN } }), 0],
+        ['empty with nothing parked', '', 0],
+      ];
+      for (const [name, line, code] of cases) {
+        const { project, launcher, ownerDir, state } = fx();
+        owner(ownerDir, `crew_credential_command: ${provider(ownerDir, line, code)}\n`);
+        const started: Started[] = [];
+        const p = launchCrew(project, item, config, fakePorts(started), launcher);
+        await expect(p, name).rejects.toThrow(/credential provider/);
+        await p.catch((e: Error) => expect(e.message).not.toContain(TOKEN));
+        expect(started, name).toHaveLength(0);
+        // R17: the provider runs before the first side effect.
+        expect(existsSync(state), name).toBe(false);
+      }
+    });
+
+    it('refuses an unsafe provider path', async () => {
+      const { project, launcher, ownerDir, state } = fx();
+      const script = provider(ownerDir, tokenLine());
+      chmodSync(script, 0o722);
+      owner(ownerDir, `crew_credential_command: ${script}\n`);
+      const started: Started[] = [];
+      await expect(launchCrew(project, item, config, fakePorts(started), launcher)).rejects.toThrow(
+        /writable/,
+      );
+      expect(existsSync(state)).toBe(false);
+    });
+
+    it('refuses a parked label the provider hands out anyway', async () => {
+      const { project, launcher, ownerDir, state } = fx();
+      owner(ownerDir, `crew_credential_command: ${provider(ownerDir, tokenLine('label-a'))}\n`);
+      park(state, { 'label-a': FAR });
+      const started: Started[] = [];
+      await expect(launchCrew(project, item, config, fakePorts(started), launcher)).rejects.toThrow(
+        /credential provider/,
+      );
+      expect(started).toHaveLength(0);
+    });
+
+    it('config dir form: env, sandbox read of exactly that dir, guard deny', async () => {
+      const { project, launcher, ownerDir, state } = fx({
+        CLAUDE_CODE_OAUTH_TOKEN: 'fake-value-ambient',
+      });
+      const login = join(ownerDir, 'accounts', 'label-a');
+      mkdirSync(login, { recursive: true });
+      const line = JSON.stringify({ label: 'label-a', env: { CLAUDE_CONFIG_DIR: login } });
+      owner(ownerDir, `crew_credential_command: ${provider(ownerDir, line)}\n`);
+      const started: Started[] = [];
+      await launchCrew(project, item, config, fakePorts(started), launcher);
+      const s = started[0] as Started;
+      expect(s.env.CLAUDE_CONFIG_DIR).toBe(login);
+      expect(s.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+      const settings = JSON.parse(readFileSync(join(state, 'settings', 'APP-12.json'), 'utf8'));
+      expect(settings.sandbox.filesystem.allowRead).toContain(login);
+      expect(settings.sandbox.filesystem.allowRead).not.toContain(ownerDir);
+      expect(settings.sandbox.filesystem.denyRead).toContain(ownerDir);
+      const ctx = JSON.parse(readFileSync(join(state, 'guard', 'APP-12.json'), 'utf8'));
+      expect(ctx.secretGlobs).toEqual(expect.arrayContaining([login, `${login}/**`]));
+      const read = evaluateGuard(
+        { toolName: 'Read', toolInput: { file_path: join(login, '.credentials.json') } },
+        ctx,
+      );
+      expect(read.decision).toBe('deny');
+    });
+
+    it('config dir form checks the settings of that dir and refuses a bad dir', async () => {
+      const a = fx();
+      const login = join(a.ownerDir, 'label-a');
+      mkdirSync(login);
+      writeFileSync(join(login, 'settings.json'), '{"apiKeyHelper":"fake-value-h"}');
+      const line = (dir: string) =>
+        JSON.stringify({ label: 'label-a', env: { CLAUDE_CONFIG_DIR: dir } });
+      owner(a.ownerDir, `crew_credential_command: ${provider(a.ownerDir, line(login))}\n`);
+      await expect(launchCrew(a.project, item, config, fakePorts([]), a.launcher)).rejects.toThrow(
+        /apiKeyHelper/,
+      );
+      const b = fx();
+      owner(b.ownerDir, `crew_credential_command: ${provider(b.ownerDir, line(b.ownerDir))}\n`);
+      await expect(launchCrew(b.project, item, config, fakePorts([]), b.launcher)).rejects.toThrow(
+        /below/,
+      );
+    });
+  });
+
+  describe('crew token file', () => {
+    const tokenFile = (ownerDir: string, mode = 0o600) => {
+      writeFileSync(join(ownerDir, 'crew-token'), `${GHTOKEN}\n`, { mode });
+      chmodSync(join(ownerDir, 'crew-token'), mode);
+    };
+    const strict: StudioConfig = { ...config, allowAmbientCredentials: false };
+
+    it('uses the file when the variable is unset, and the variable first', async () => {
+      const { project, launcher, ownerDir, state } = fx();
+      tokenFile(ownerDir);
+      const started: Started[] = [];
+      await launchCrew(project, item, strict, fakePorts(started), launcher);
+      expect((started[0] as Started).env.GH_TOKEN).toBe(GHTOKEN);
+      expect(filesContaining(state, GHTOKEN)).toEqual([]);
+      const named: StudioConfig = { ...strict, crewToken: { env: 'STUDIO_TEST_GH' } };
+      await launchCrew(project, item, named, fakePorts(started), {
+        ...launcher,
+        env: { ...launcher.env, STUDIO_TEST_GH: 'fake-value-from-var' },
+      });
+      expect((started[1] as Started).env.GH_TOKEN).toBe('fake-value-from-var');
+    });
+
+    it('refuses a file with a wide mode, even with ambient credentials allowed', async () => {
+      const { project, launcher, ownerDir, state } = fx();
+      tokenFile(ownerDir, 0o644);
+      const started: Started[] = [];
+      const p = launchCrew(project, item, config, fakePorts(started), launcher);
+      await expect(p).rejects.toThrow(/crew-token/);
+      await p.catch((e: Error) => expect(e.message).not.toContain(GHTOKEN));
+      expect(started).toHaveLength(0);
+      expect(existsSync(state)).toBe(false);
+    });
+
+    it('sandbox and guard deny the token file when XDG_CONFIG_HOME is outside the home', async () => {
+      const xdg = join(root, `xdg-${n++}`);
+      mkdirSync(join(xdg, 'studio'), { recursive: true });
+      const { project, launcher, state } = makeFixture({ XDG_CONFIG_HOME: xdg });
+      const file = join(xdg, 'studio', 'crew-token');
+      writeFileSync(file, `${GHTOKEN}\n`, { mode: 0o600 });
+      await launchCrew(project, item, strict, fakePorts([]), launcher);
+      const settings = JSON.parse(readFileSync(join(state, 'settings', 'APP-12.json'), 'utf8'));
+      expect(settings.sandbox.filesystem.denyRead).toContain(file);
+      expect(settings.sandbox.filesystem.denyRead).toContain(join(xdg, 'studio'));
+      const ctx = JSON.parse(readFileSync(join(state, 'guard', 'APP-12.json'), 'utf8'));
+      expect(
+        evaluateGuard({ toolName: 'Read', toolInput: { file_path: file } }, ctx).decision,
+      ).toBe('deny');
+    });
+
+    it('a toolchain path may not open the owner config dir', async () => {
+      const xdg = join(root, `xdg-${n++}`);
+      mkdirSync(join(xdg, 'studio', 'tools'), { recursive: true });
+      writeFileSync(
+        join(xdg, 'studio', 'config.yaml'),
+        `crew_toolchain_paths: ["${join(xdg, 'studio', 'tools')}"]\n`,
+      );
+      const { project, launcher } = makeFixture({ XDG_CONFIG_HOME: xdg });
+      await expect(launchCrew(project, item, config, fakePorts([]), launcher)).rejects.toThrow(
+        /crew_toolchain_paths/,
+      );
+    });
+  });
+
+  describe('limit state at launch', () => {
+    it('without a provider a parked default label waits', async () => {
+      const { project, launcher, state } = fx();
+      park(state, { default: FAR });
+      const started: Started[] = [];
+      await expect(launchCrew(project, item, config, fakePorts(started), launcher)).rejects.toThrow(
+        /2999-01-01/,
+      );
+      expect(started).toHaveLength(0);
+    });
+
+    it('an unreadable limits file refuses (fail closed)', async () => {
+      const { project, launcher, state } = fx();
+      mkdirSync(state, { recursive: true, mode: 0o700 });
+      writeFileSync(join(state, 'limits.json'), 'not json');
+      const started: Started[] = [];
+      await expect(launchCrew(project, item, config, fakePorts(started), launcher)).rejects.toThrow(
+        /limits/,
+      );
+      expect(started).toHaveLength(0);
+    });
+
+    it('all parked: provider empty with labels parked names the earliest reset', async () => {
+      const { project, launcher, ownerDir, state } = fx();
+      owner(ownerDir, `crew_credential_command: ${provider(ownerDir, '')}\n`);
+      park(state, { 'label-a': '2999-02-02T00:00:00.000Z', 'label-b': FAR });
+      const started: Started[] = [];
+      await expect(launchCrew(project, item, config, fakePorts(started), launcher)).rejects.toThrow(
+        /2999-01-01/,
+      );
+      expect(started).toHaveLength(0);
+    });
+
+    /** Launch once, mark the record the way reconcile does, return the relaunch args. */
+    async function relaunch(
+      f: ReturnType<typeof fx>,
+      first: string,
+      second: string,
+      limit: Record<string, unknown> = { sessionId: 'sess-1' },
+    ) {
+      owner(f.ownerDir, `crew_credential_command: ${provider(f.ownerDir, first)}\n`);
+      const started: Started[] = [];
+      await launchCrew(f.project, item, config, fakePorts(started), f.launcher);
+      const wt = join(f.state, 'clones', 'APP-12');
+      writeFileSync(join(wt, 'work-in-progress.txt'), 'kept');
+      const file = join(f.state, 'crew.json');
+      const recs = JSON.parse(readFileSync(file, 'utf8'));
+      recs['APP-12'] = {
+        ...recs['APP-12'],
+        stoppedAt: '2026-11-01T10:00:00.000Z',
+        limit: { at: '2026-11-01T10:00:00.000Z', kind: 'session', ...limit },
+      };
+      writeFileSync(file, JSON.stringify(recs));
+      owner(f.ownerDir, `crew_credential_command: ${provider(f.ownerDir, second)}\n`);
+      await launchCrew(f.project, item, config, fakePorts(started), f.launcher);
+      expect(readFileSync(join(wt, 'work-in-progress.txt'), 'utf8')).toBe('kept');
+      expect(readFileSync(join(wt, '.git', 'HEAD'), 'utf8').trim()).toBe(
+        'ref: refs/heads/studio/APP-12',
+      );
+      return (started[1] as Started).args;
+    }
+
+    it('a resume keeps --setting-sources user', async () => {
+      const args = await relaunch(fx(), tokenLine('label-a'), tokenLine('label-a'));
+      const i = args.indexOf('--setting-sources');
+      expect(i).toBeGreaterThan(-1);
+      expect(args[i + 1]).toBe('user');
+      expect(args.slice(-2)).toEqual(['--resume', 'sess-1']);
+    });
+
+    it('same label resumes in the same clone', async () => {
+      const args = await relaunch(fx(), tokenLine('label-a'), tokenLine('label-a'));
+      expect(args.slice(-2)).toEqual(['--resume', 'sess-1']);
+    });
+
+    it('both token form with the same config dir resumes across labels', async () => {
+      const args = await relaunch(fx(), tokenLine('label-a'), tokenLine('label-b'));
+      expect(args.slice(-2)).toEqual(['--resume', 'sess-1']);
+    });
+
+    it('another config dir runs fresh in the same clone', async () => {
+      const f = fx();
+      const dirFor = (l: string) => {
+        const d = join(f.ownerDir, l);
+        mkdirSync(d, { recursive: true });
+        return JSON.stringify({ label: l, env: { CLAUDE_CONFIG_DIR: d } });
+      };
+      expect(await relaunch(f, dirFor('label-a'), dirFor('label-b'))).not.toContain('--resume');
+    });
+
+    it('a change of form runs fresh', async () => {
+      const f = fx();
+      const login = join(f.ownerDir, 'label-b');
+      mkdirSync(login);
+      const second = JSON.stringify({ label: 'label-b', env: { CLAUDE_CONFIG_DIR: login } });
+      expect(await relaunch(f, tokenLine('label-a'), second)).not.toContain('--resume');
+    });
+
+    it('no usable session id runs fresh', async () => {
+      const args = await relaunch(fx(), tokenLine('label-a'), tokenLine('label-a'), {});
+      expect(args).not.toContain('--resume');
+    });
+
+    it('a relaunch after a limit refuses to replace a clone that left its branch', async () => {
+      const f = fx();
+      const started: Started[] = [];
+      await launchCrew(f.project, item, config, fakePorts(started), f.launcher);
+      const wt = join(f.state, 'clones', 'APP-12');
+      writeFileSync(join(wt, '.git', 'HEAD'), 'ref: refs/heads/other\n');
+      writeFileSync(join(wt, 'work-in-progress.txt'), 'kept');
+      const file = join(f.state, 'crew.json');
+      const recs = JSON.parse(readFileSync(file, 'utf8'));
+      recs['APP-12'].limit = { at: 'x', kind: 'session' };
+      writeFileSync(file, JSON.stringify(recs));
+      await expect(
+        launchCrew(f.project, item, config, fakePorts(started), f.launcher),
+      ).rejects.toThrow(/clone/);
+      expect(existsSync(join(wt, 'work-in-progress.txt'))).toBe(true);
+    });
+  });
+});
+
+describe('required skills at launch', () => {
+  const NAME = 'test-driven-development';
+  const setup = () => {
+    const f = makeFixture();
+    const dir = join(f.home, '.claude');
+    mkdirSync(dir);
+    return { ...f, dir };
+  };
+  const put = (file: string) => {
+    mkdirSync(dirnameOf(file), { recursive: true });
+    writeFileSync(file, '---\nname: x\n---\n');
+  };
+  const launch = (f: ReturnType<typeof setup>, cfg: StudioConfig = config) => {
+    const started: Started[] = [];
+    return { started, p: launchCrew(f.project, item, cfg, fakePorts(started), f.launcher) };
+  };
+  const withSkill = (name: string): StudioConfig => ({
+    ...config,
+    roles: {
+      ...config.roles,
+      builder: {
+        ...(config.roles.builder as NonNullable<StudioConfig['roles']['builder']>),
+        skills: { required: [name], allowed: [], denied: [] },
+      },
+    },
+  });
+
+  it('a skill in the config dir skills directory is found', async () => {
+    const f = setup();
+    put(join(f.dir, 'skills', NAME, 'SKILL.md'));
+    const { started, p } = launch(f);
+    await p;
+    expect(started).toHaveLength(1);
+  });
+
+  it('a skill in the plugin cache is found', async () => {
+    const f = setup();
+    put(join(f.dir, 'plugins', 'cache', 'mkt', 'superpowers', '1.0.0', 'skills', NAME, 'SKILL.md'));
+    const { started, p } = launch(f);
+    await p;
+    expect(started).toHaveLength(1);
+  });
+
+  it('a definitely absent skill refuses before any side effect, naming it', async () => {
+    const f = setup();
+    mkdirSync(join(f.dir, 'skills', 'other'), { recursive: true });
+    const { started, p } = launch(f);
+    await expect(p).rejects.toThrow(/test-driven-development/);
+    expect(started).toHaveLength(0);
+    expect(existsSync(join(f.state, 'clones'))).toBe(false);
+    expect(existsSync(join(f.state, 'briefs'))).toBe(false);
+  });
+
+  it('an unreadable skills directory or a missing config dir does not refuse', async () => {
+    const f = setup();
+    mkdirSync(join(f.dir, 'skills'));
+    chmodSync(join(f.dir, 'skills'), 0o000);
+    try {
+      const { started, p } = launch(f);
+      await p;
+      expect(started).toHaveLength(1);
+    } finally {
+      chmodSync(join(f.dir, 'skills'), 0o700);
+    }
+    const g = makeFixture();
+    const started: Started[] = [];
+    await launchCrew(g.project, item, config, fakePorts(started), g.launcher);
+    expect(started).toHaveLength(1);
+  });
+
+  it('a name that could leave the skills directory refuses', async () => {
+    for (const bad of ['a:../../x', '../x', 'a/b', 'a:b:c', '', 'a:']) {
+      const f = setup();
+      mkdirSync(join(f.dir, 'skills', 'other'), { recursive: true });
+      const { started, p } = launch(f, withSkill(bad));
+      await expect(p, bad).rejects.toThrow(/skill/);
+      expect(started).toHaveLength(0);
+    }
+  });
+
+  it('a plugin prefix is stripped', async () => {
+    const f = setup();
+    put(join(f.dir, 'skills', 'one', 'SKILL.md'));
+    const { started, p } = launch(f, withSkill('a:one'));
+    await p;
+    expect(started).toHaveLength(1);
   });
 });

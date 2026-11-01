@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
@@ -64,11 +64,16 @@ const roleSchema = z.strictObject({
     .default({ required: [], allowed: [], denied: [] }),
 });
 
-const ciSchema = z.strictObject({
+export const ciSchema = z.strictObject({
   provider: z.literal('github'),
   runners: z.enum(['github-hosted', 'self-hosted', 'both']),
   runnerLabels: strList,
   runnerNamePattern: z.string().optional(),
+  // The self-hosted runners share their host with other workloads: host load is capped at
+  // `hostLoadMax`, or at the core count when that is unset.
+  sharedHost: z.boolean().optional(),
+  // Most GitHub-hosted runs (in progress + queued) allowed with `runners: both`.
+  githubHostedLimit: z.number().int().positive().optional(),
   capacity: z.strictObject({
     total: z.number().int().positive(),
     mergeMaxBusy: z.number().int().nonnegative(),
@@ -127,7 +132,7 @@ const camel = (key: string): string =>
   key.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
 
 /** Recursively convert snake_case object keys to camelCase. Role keys are template names (single words), so they pass through unchanged. */
-function camelizeKeys(value: unknown): unknown {
+export function camelizeKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(camelizeKeys);
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [camel(k), camelizeKeys(v)]));
@@ -183,6 +188,11 @@ export const ownerConfigSchema = z.strictObject({
   // Absolute directories a crew may read in addition to its clone, tmp dir and HOME (toolchains
   // below the real home, e.g. a version manager). Default empty: crew uses system toolchains.
   crewToolchainPaths: strList,
+  // Absolute path of an executable that hands a crew run its model credential (see README).
+  crewCredentialCommand: z.string().min(1).optional(),
+  // Opt-in: let crew runs bill the API. An API key would otherwise take precedence over the
+  // subscription login, so the variables and settings for it are refused by default.
+  allowApiBilling: z.boolean().default(false),
 });
 
 export type OwnerConfig = z.infer<typeof ownerConfigSchema>;
@@ -192,6 +202,8 @@ export interface OwnerEnv {
   homedir?: string;
   env?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
+  /** The current user id for ownership checks; defaults to the process's. */
+  uid?: number;
 }
 
 /** An XDG base directory variable, or undefined when unset or relative (the spec ignores those). */
@@ -207,6 +219,13 @@ export function ownerConfigFile(opts: OwnerEnv = {}): string {
   return join(base, 'studio', 'config.yaml');
 }
 
+/** The directory of the owner config. */
+export const ownerConfigDir = (opts: OwnerEnv = {}): string => dirname(ownerConfigFile(opts));
+
+/** Where `studio secret set crew-token` keeps the least-privilege GitHub token. */
+export const crewTokenFile = (opts: OwnerEnv = {}): string =>
+  join(ownerConfigDir(opts), 'crew-token');
+
 /**
  * Reads the owner config; a missing file means defaults. Toolchain paths get the lexical check
  * here; the launch checks them again against the real filesystem.
@@ -217,7 +236,7 @@ export function loadOwnerConfig(opts: OwnerEnv = {}): OwnerConfig {
   try {
     text = readFileSync(file, 'utf8');
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { crewToolchainPaths: [] };
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return ownerConfigSchema.parse({});
     throw new ConfigError(file, `cannot read file (${(e as Error).message})`);
   }
   let raw: unknown;
@@ -235,9 +254,16 @@ export function loadOwnerConfig(opts: OwnerEnv = {}): OwnerConfig {
     const problem = toolchainPathProblem(path, home, [], opts.platform);
     return problem ? [`crew_toolchain_paths: ${path}: ${problem}`] : [];
   });
+  const command = result.data.crewCredentialCommand;
+  if (command !== undefined && !isAbsolute(command)) {
+    problems.push('crew_credential_command: must be an absolute path');
+  }
   if (problems.length > 0) throw new ConfigError(file, problems.join('; '));
   return result.data;
 }
+
+export const GITHUB_HOSTED_UNLIMITED =
+  'ci.runners both: GitHub-hosted concurrency is not checked until github_hosted_limit is set';
 
 /** Non-fatal findings about a loaded config. */
 export function configWarnings(config: StudioConfig): string[] {
@@ -246,6 +272,9 @@ export function configWarnings(config: StudioConfig): string[] {
     warnings.push(
       'merge.strategy native-queue is not supported yet (planned for stage d): queue add and queue run refuse; use studio-queue',
     );
+  }
+  if (config.ci.runners === 'both' && config.ci.githubHostedLimit === undefined) {
+    warnings.push(GITHUB_HOSTED_UNLIMITED);
   }
   if (config.crewAllowedWorkflowRefs.length > 0) {
     warnings.push(

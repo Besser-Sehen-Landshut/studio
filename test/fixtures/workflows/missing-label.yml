@@ -1,0 +1,7 @@
+name: missing
+on: [push]
+jobs:
+  build:
+    runs-on: [self-hosted, nonexistent]
+    steps:
+      - run: echo ok

@@ -86,7 +86,9 @@ function fakeGh(rules: Rule[], busy = { n: 0 }) {
     async api(path) {
       calls.push(`api ${path}`);
       if (path.includes('/actions/runners')) {
-        return Array.from({ length: busy.n }, (_, i) => `pool-${i}\tonline\ttrue`).join('\n');
+        const rows = Array.from({ length: busy.n }, (_, i) => `pool-${i}\tonline\ttrue`);
+        // An offline runner keeps the list non-empty: an empty list fails capacity closed.
+        return [...rows, 'pool-99\toffline\tfalse'].join('\n');
       }
       throw new Error(`unexpected api ${path}`);
     },
@@ -120,7 +122,7 @@ function fakeClock(onSleep?: (ms: number, total: number) => void) {
   return { clock, sleeps };
 }
 
-const host: Host = { loadAvg1: () => 0 };
+const host: Host = { loadAvg1: () => 0, cpuCount: () => 4 };
 const CHK = 'pr checks 5 --repo org/app --json name,bucket';
 const REQ = `${CHK} --required`;
 const VIEW = 'pr view 5 --repo org/app --json headRefOid,state,mergeable';

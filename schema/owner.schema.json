@@ -8,6 +8,14 @@
       "items": {
         "type": "string"
       }
+    },
+    "crew_credential_command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "allow_api_billing": {
+      "default": false,
+      "type": "boolean"
     }
   },
   "additionalProperties": false

@@ -100,6 +100,33 @@ describe('loadConfig', () => {
     expect(w[0]).toContain('protected server-side');
   });
 
+  it('reads ci.shared_host and ci.github_hosted_limit; rejects bad limits', () => {
+    const both = MINIMAL.replace('github-hosted', 'both');
+    const extra = '  runner_labels: []\n  shared_host: true\n  github_hosted_limit: 20';
+    const ok = loadConfig(project(both.replace('  runner_labels: []', extra)));
+    expect(ok.ci.sharedHost).toBe(true);
+    expect(ok.ci.githubHostedLimit).toBe(20);
+    for (const bad of ['0', '1.5', '-2']) {
+      const yaml = both.replace(
+        '  runner_labels: []',
+        `  runner_labels: []\n  github_hosted_limit: ${bad}`,
+      );
+      expect(() => loadConfig(project(yaml))).toThrow(/github_hosted_limit/);
+    }
+  });
+
+  it('warns that runners: both without github_hosted_limit does not limit hosted runs', () => {
+    const both = MINIMAL.replace('github-hosted', 'both');
+    const w = configWarnings(loadConfig(project(both)));
+    expect(w).toHaveLength(1);
+    expect(w[0]).toMatch(/GitHub-hosted concurrency is not checked/);
+    const limited = both.replace(
+      '  runner_labels: []',
+      '  runner_labels: []\n  github_hosted_limit: 20',
+    );
+    expect(configWarnings(loadConfig(project(limited)))).toEqual([]);
+  });
+
   it('warns that merge.strategy native-queue is not supported yet', () => {
     const cfg = loadConfig(
       project(MINIMAL.replace('strategy: studio-queue', 'strategy: native-queue')),
@@ -188,7 +215,10 @@ describe('owner config', () => {
     expect(ownerConfigFile({ homedir: h, env: { XDG_CONFIG_HOME: 'rel' } })).toBe(
       join(h, '.config', 'studio', 'config.yaml'),
     );
-    expect(loadOwnerConfig({ homedir: h, env: {} })).toEqual({ crewToolchainPaths: [] });
+    expect(loadOwnerConfig({ homedir: h, env: {} })).toEqual({
+      crewToolchainPaths: [],
+      allowApiBilling: false,
+    });
   });
 
   it('reads crew_toolchain_paths from the XDG location', () => {
@@ -197,6 +227,7 @@ describe('owner config', () => {
     write(join(xdg, 'studio', 'config.yaml'), `crew_toolchain_paths: ["${h}/.local/bin"]\n`);
     expect(loadOwnerConfig({ homedir: h, env: { XDG_CONFIG_HOME: xdg } })).toEqual({
       crewToolchainPaths: [`${h}/.local/bin`],
+      allowApiBilling: false,
     });
   });
 

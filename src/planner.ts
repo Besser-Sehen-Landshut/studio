@@ -9,6 +9,11 @@ export type Capacity = {
   ok: boolean;
   /** Why CI could not be read (then everything counts as busy). */
   error?: string;
+  /** `runners: both` only: GitHub-hosted runs in progress or queued, and the configured limit. */
+  githubHostedBusy?: number;
+  githubHostedLimit?: number;
+  /** A limit that is not enforced, e.g. GitHub-hosted concurrency in `both` without a limit. */
+  warning?: string;
 };
 
 export type Plan = {
@@ -98,12 +103,14 @@ function cycleTainted(items: WorkItem[]): Set<string> {
  * unmerged dependencies). Candidates held back only by role WIP, CI capacity or an overlap go to
  * `deferred`, which callers may ignore. When several blocked reasons apply, the first of this order wins:
  * not ready, dependency cycle, unknown dependency, owner only, role not configured, waiting.
+ * With `hold` (no crew credential available) nothing is assigned; every candidate is deferred.
  */
 export function planAssignments(
   board: Board,
   config: StudioConfig,
   capacity: Capacity,
   running: Record<string, number>,
+  hold?: string,
 ): Plan {
   const byId = new Map(board.items.map((i) => [i.id, i]));
   const tainted = cycleTainted(board.items);
@@ -146,7 +153,8 @@ export function planAssignments(
   for (const item of eligible) {
     const isBuild = BUILD_TYPES.includes(item.type);
     const clash = [...active, ...assign].find((o) => conflicts(item, o));
-    if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: 'role wip full' });
+    if (hold !== undefined) deferred.push({ id: item.id, reason: hold });
+    else if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: 'role wip full' });
     else if (isBuild && buildSlots <= 0) deferred.push({ id: item.id, reason: 'ci capacity' });
     else if (clash) deferred.push({ id: item.id, reason: `overlaps ${clash.id}` });
     else {

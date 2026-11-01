@@ -53,6 +53,14 @@ beforeAll(() => {
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
+describe('repo skills', () => {
+  it('denies crew writes below .claude', () => {
+    expect(tool('Write', { file_path: join(wt, '.claude/skills/demo/SKILL.md') }).decision).toBe(
+      'deny',
+    );
+  });
+});
+
 const bash = (command: string, cwd?: string) =>
   evaluateGuard({ toolName: 'Bash', toolInput: { command }, cwd }, ctx);
 const tool = (toolName: string, toolInput: Record<string, unknown>) =>

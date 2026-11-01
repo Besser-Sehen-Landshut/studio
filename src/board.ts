@@ -235,11 +235,12 @@ export function saveBoard(dir: string, board: Board): void {
   }
 }
 
-// ready→assigned→in_progress→in_review→queued→merged, plus rework and merge-failure loops.
+// ready→assigned→in_progress→in_review→queued→merged, plus rework and merge-failure loops. A run
+// stopped at a usage limit returns from assigned or in_progress to ready.
 const FORWARD: Readonly<Record<ItemStatus, readonly ItemStatus[]>> = {
   ready: ['assigned'],
-  assigned: ['in_progress'],
-  in_progress: ['in_review'],
+  assigned: ['in_progress', 'ready'],
+  in_progress: ['in_review', 'ready'],
   in_review: ['queued', 'in_progress', 'merged'],
   queued: ['merged', 'in_review'],
   merged: [],

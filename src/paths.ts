@@ -20,7 +20,9 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   CREDENTIAL_PATHS,
+  crewTokenFile,
   type OwnerEnv,
+  ownerConfigDir,
   PROTECTED_HOME_PATHS,
   pathKey,
   toolchainPathProblem,
@@ -39,6 +41,8 @@ export const STATE_FILES = [
   'marker.json',
   'queue.json.lock',
   'queue.run.lock',
+  'limits.json',
+  'limits.lock',
 ];
 
 /** `$XDG_STATE_HOME/studio`, else `<home>/.local/state/studio`: the parent of every state root. */
@@ -487,5 +491,12 @@ export function credentialLocations(
   if (env.XDG_CONFIG_HOME) {
     extra.push(join(env.XDG_CONFIG_HOME, 'gh'), join(env.XDG_CONFIG_HOME, 'git', 'credentials'));
   }
+  // The crew token file and the logins kept next to it, also when XDG_CONFIG_HOME is outside the
+  // home. A config dir handed out by the provider is let back in on its own (writeCrewSettings).
+  const owner = { homedir: home, env };
+  const ownerDir = ownerConfigDir(owner);
+  extra.push(ownerDir, crewTokenFile(owner));
+  const realDir = realish(ownerDir);
+  if (realDir !== ownerDir) extra.push(realDir, join(realDir, basename(crewTokenFile(owner))));
   return { all: [...CREDENTIAL_PATHS.map((p) => join(home, p)), ...extra], extra };
 }

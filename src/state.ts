@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CrewRecord } from './crew.js';
+import type { Parks } from './limits.js';
 import { assertStatePath, ensureStateDir } from './paths.js';
 import type { Capacity } from './planner.js';
 import type { QueueState } from './queue.js';
@@ -34,14 +35,18 @@ export interface CrewSnapshot {
   status: string;
   pr?: number;
   since: string;
+  /** Label of the credential this crew runs on (never the credential). */
+  label?: string;
 }
 
 export interface StateSnapshot {
   crew: CrewSnapshot[];
   queue: QueueState;
   capacity: Capacity;
-  /** Owner-only items that are not merged or dropped. */
+  /** Owner-only items that are not merged or dropped, plus at most one `usage-limit` line. */
   forOwner: { id: string; title: string }[];
+  /** Credential labels parked at a usage limit. */
+  limits?: Parks;
   updatedAt: string;
   metrics: Metrics;
 }

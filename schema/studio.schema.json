@@ -64,6 +64,14 @@
         "runner_name_pattern": {
           "type": "string"
         },
+        "shared_host": {
+          "type": "boolean"
+        },
+        "github_hosted_limit": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
         "capacity": {
           "type": "object",
           "properties": {

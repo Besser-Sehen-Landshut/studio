@@ -1,0 +1,12 @@
+name: pool
+on:
+  push:
+  pull_request:
+concurrency:
+  group: ci-${{ github.head_ref || github.ref_name }} # comment
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: [self-hosted, pool]
+    steps:
+      - run: echo ok
