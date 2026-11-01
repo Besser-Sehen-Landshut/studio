@@ -37,14 +37,14 @@ const TONE: Record<NonNullable<Line['tone']>, TextProps> = {
 };
 
 const isAbsolute = (p: string): boolean => /^(?:[\\/]|[A-Za-z]:[\\/])/.test(p);
-const withoutTrailingSlash = (p: string): string => p.replace(/[\\/]+$/, '');
+const withoutTrailingSlash = (p: string): string => p.replace(/\/+$/, '');
 
 /** The nearest folder at or above `cwd` holding `.studio/studio.yaml`. */
 async function findProject($: EngineInterface, cwd: string): Promise<string | undefined> {
   let dir = withoutTrailingSlash(cwd);
   for (let depth = 0; depth < MAX_PATH_DEPTH; depth++) {
     if (await $.fs.exists(`${dir}/.studio/studio.yaml`)) return dir === '' ? '/' : dir;
-    const cut = Math.max(dir.lastIndexOf('/'), dir.lastIndexOf('\\'));
+    const cut = dir.lastIndexOf('/');
     if (cut < 0) return undefined;
     dir = dir.slice(0, cut);
   }
@@ -78,6 +78,15 @@ async function readBoard($: EngineInterface, root: string): Promise<BoardRead> {
   }
 }
 
+const TOAST_MAX = 1500;
+
+/** One toast per tick: a plugin's toast replaces its own, so several would overwrite each other. */
+function oneToast(texts: string[]): string {
+  const joined = texts.join(' · ');
+  const cps = [...joined];
+  return cps.length <= TOAST_MAX ? joined : `${cps.slice(0, TOAST_MAX - 1).join('')}…`;
+}
+
 /** The seen list is saved before anything shows, so a store that fails never repeats a toast. */
 async function raiseToasts(
   $: EngineInterface,
@@ -90,7 +99,7 @@ async function raiseToasts(
     const seen = Array.isArray(stored) ? stored.filter((s) => typeof s === 'string') : [];
     const fresh = newAlerts(seen, state);
     await $.store.set(key, fresh.seen);
-    for (const text of fresh.toasts) $.ui.toast(text);
+    if (fresh.toasts.length > 0) $.ui.toast(oneToast(fresh.toasts));
   } catch {
     // The pane and the status line still say what the toast would have.
   }
@@ -103,7 +112,12 @@ function shellWord(path: string): string {
 }
 
 /** What one session holds beyond the state atoms: none of it is drawn from. */
-const live: { project?: string; shownStatus?: string; running?: Promise<void> } = {};
+const live: {
+  project?: string;
+  timer?: boolean;
+  shownStatus?: string;
+  running?: Promise<void>;
+} = {};
 
 async function publish($: EngineInterface, next: BoardRead, isPaused: boolean) {
   await update($, board, () => next);
@@ -115,11 +129,21 @@ async function publish($: EngineInterface, next: BoardRead, isPaused: boolean) {
   }
 }
 
+/** As readPause in src/pause.ts: any entry named pause.json counts, a dangling link too. */
+async function isPaused($: EngineInterface, root: string): Promise<boolean> {
+  try {
+    return (await $.fs.list(root)).some((entry) => entry.name === 'pause.json');
+  } catch {
+    // A missing root is not paused; a root that exists but cannot be listed fails closed.
+    return $.fs.exists(root);
+  }
+}
+
 async function refreshOnce($: EngineInterface, dir: string) {
   try {
     const { dirName, root } = await stateRoot($, dir);
     const next = await readBoard($, root);
-    await publish($, next, await $.fs.exists(`${root}/pause.json`));
+    await publish($, next, await isPaused($, root));
     if (next.kind === 'ok') await raiseToasts($, dirName, next.state);
   } catch {
     try {
@@ -136,6 +160,11 @@ function refresh($: EngineInterface, dir: string): Promise<void> {
     live.running = undefined;
   });
   return live.running;
+}
+
+function armTimer($: EngineInterface, dir: string) {
+  live.timer = true;
+  $.clock.every(TICK_MS, () => void refresh($, dir));
 }
 
 async function ownerProject($: EngineInterface, isInteractive: boolean, cwd: string) {
@@ -155,17 +184,25 @@ export const register: Register = (on) => {
       argumentHint: 'status | pause | resume',
     });
     await refresh($, dir);
-    $.clock.every(TICK_MS, () => void refresh($, dir));
+    armTimer($, dir);
     void $.ui.open(PANE).catch(() => undefined);
     return next(e);
   });
 
   on('command.run', { command: 'studio' }, async ($, e) => {
     const arg = e.args.trim();
-    const project = live.project;
+    // A plugin reload may have lost the module's variables and its timer: derive both again.
+    const project =
+      live.project ?? (await ownerProject($, true, await $.session.cwd()).catch(() => undefined));
     if (project === undefined) return { text: 'Not in a Studio project.' };
+    live.project = project;
+    if (!live.timer) armTimer($, project);
     if (arg === '') {
-      await $.ui.open(PANE);
+      try {
+        await $.ui.open(PANE);
+      } catch {
+        return { text: 'The board could not be opened here.' };
+      }
       return { text: 'Studio board opened.' };
     }
     if (arg === 'status') {
@@ -173,14 +210,15 @@ export const register: Register = (on) => {
       const current = (await read($, board)) as BoardRead;
       return { text: statusText(current, await read($, paused)) };
     }
+    const binary = shellWord(`${$.plugin.root}/bin/studio`);
     if (arg === 'pause') {
       return {
-        text: `Pausing needs a terminal: run studio --project ${shellWord(project)} pause`,
+        text: `Pausing needs a terminal: run ${binary} --project ${shellWord(project)} pause`,
       };
     }
     if (arg === 'resume') {
       return {
-        text: `Resuming needs a terminal: run studio --project ${shellWord(project)} resume`,
+        text: `Resuming needs a terminal: run ${binary} --project ${shellWord(project)} resume`,
       };
     }
     return { text: USAGE };

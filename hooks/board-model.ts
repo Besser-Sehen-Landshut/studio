@@ -44,6 +44,7 @@ export type Line = { text: string; tone?: 'ok' | 'wait' | 'idle' | 'err' | 'dim'
 const MAX_STRING = 200;
 const STALE_MS = 15 * 60_000;
 const MISSING_TEXT = 'No board yet. The control room writes it with studio state.';
+const PAUSED_TEXT = 'Paused.';
 const UNREADABLE_TEXT = 'The board cannot be read just now. It refreshes by itself.';
 const STATES: readonly CrewState[] = [
   'working',
@@ -377,8 +378,11 @@ export function boardLines(
     ? Math.min(1000, Math.max(20, Math.floor(o.columns)))
     : 20;
   const clip = (lines: Line[]): Line[] => lines.map((l) => ({ ...l, text: cut(l.text, columns) }));
-  if (read.kind === 'missing') return clip([{ text: MISSING_TEXT, tone: 'dim' }]);
-  if (read.kind === 'unreadable') return clip([{ text: UNREADABLE_TEXT, tone: 'dim' }]);
+  if (read.kind !== 'ok') {
+    const text = read.kind === 'missing' ? MISSING_TEXT : UNREADABLE_TEXT;
+    const note: Line[] = o.paused ? [{ text: PAUSED_TEXT, tone: 'dim' }] : [];
+    return clip([{ text, tone: 'dim' }, ...note]);
+  }
   const s = read.state;
   const out: Line[] = [];
   const updated = s.updatedAt === undefined ? Number.NaN : Date.parse(s.updatedAt);
@@ -429,8 +433,10 @@ export function boardLines(
 }
 
 export function statusText(read: BoardRead, paused: boolean): string {
-  if (read.kind === 'missing') return MISSING_TEXT;
-  if (read.kind === 'unreadable') return UNREADABLE_TEXT;
+  if (read.kind !== 'ok') {
+    const text = read.kind === 'missing' ? MISSING_TEXT : UNREADABLE_TEXT;
+    return paused ? `${text} ${PAUSED_TEXT}` : text;
+  }
   return statusLine(read.state, paused);
 }
 
@@ -438,7 +444,7 @@ export function statusText(read: BoardRead, paused: boolean): string {
 
 export function stateDirName(realPath: string, sha256Hex: string): string {
   const hash = sha256Hex.slice(0, 16);
-  const parts = realPath.split(/[\\/]/).filter((p) => p !== '');
+  const parts = realPath.split('/').filter((p) => p !== '');
   const suffix = (parts[parts.length - 1] ?? '').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 32);
   return suffix ? `${hash}-${suffix}` : hash;
 }

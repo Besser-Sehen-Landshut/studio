@@ -347,9 +347,21 @@ describe('boardLines', () => {
       'No board yet. The control room writes it with studio state.',
     );
     expect(statusText({ kind: 'unreadable' }, true)).toBe(
-      'The board cannot be read just now. It refreshes by itself.',
+      'The board cannot be read just now. It refreshes by itself. Paused.',
     );
     expect(statusText(read(), true)).toBe(statusLine(ok(), true));
+  });
+});
+
+describe('a paused board with no state', () => {
+  const o = { columns: 80, nowMs: NOW, paused: true };
+  it.each(['missing', 'unreadable'] as const)('%s adds a dim Paused. line', (kind) => {
+    const lines = boardLines({ kind }, o);
+    expect(lines.length).toBe(2);
+    expect(lines[1]).toEqual({ text: 'Paused.', tone: 'dim' });
+    expect(statusText({ kind }, true).endsWith(' Paused.')).toBe(true);
+    expect(boardLines({ kind }, { ...o, paused: false }).length).toBe(1);
+    expect(statusText({ kind }, false).includes('Paused.')).toBe(false);
   });
 });
 
@@ -376,6 +388,8 @@ describe('stateDirName parity with src/paths.ts', () => {
     '/srv/a/app/',
     '/',
     '/srv/a/we!rd$name',
+    '/srv/a/a\\b',
+    '/srv/a/ends-with\\',
   ])('%s', (p) => {
     expect(stateDirName(p, sha(p))).toBe(srcStateDirName(p));
   });

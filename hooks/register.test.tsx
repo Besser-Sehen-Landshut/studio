@@ -40,6 +40,10 @@ type WorldOptions = {
   unreadable?: string[];
   store?: Record<string, unknown>;
   storeFails?: boolean;
+  /** Names a listing shows without a file behind them, as a dangling link. */
+  extraEntries?: Record<string, string[]>;
+  openFails?: boolean;
+  cwd?: string;
 };
 
 /** Stands for the engine: a file system in memory, and a record of everything the mod asked for. */
@@ -67,12 +71,14 @@ function world(on: On, options: WorldOptions = {}) {
     mock.store(on, options.store);
   }
   on('session.start', (_, e) => ({ cwd: e.cwd }));
+  on('session.cwd', () => ({ value: options.cwd ?? PROJECT }));
   on('command.register', (_, e) => {
     seen.commands.push(e.name);
     seen.hints.push(e.argumentHint);
     return { value: { command: e.name } };
   });
   on('ui.open', (_, e) => {
+    if (options.openFails) throw new Error('refused');
     seen.opened.push(`${e.id}:${e.title}`);
     return { value: { isPlaced: true } };
   });
@@ -87,6 +93,23 @@ function world(on: On, options: WorldOptions = {}) {
   on('fs.exists', (_, e) => {
     seen.fsCalls.push(e.path);
     return { value: files.has(e.path) };
+  });
+  on('fs.list', (_, e) => {
+    const dir = `${e.path ?? ''}/`;
+    const names = [...files.keys()]
+      .filter((f) => f.startsWith(dir))
+      .map((f) => f.slice(dir.length).split('/')[0] as string);
+    const extra = options.extraEntries?.[e.path ?? ''] ?? [];
+    if (names.length + extra.length === 0) throw new Error('ENOENT');
+    return {
+      value: [...new Set([...names, ...extra])].map((name) => ({
+        name,
+        kind: 'file' as const,
+        size: 0,
+        mtimeMs: 0,
+        isLink: false,
+      })),
+    };
   });
   on('fs.stat', (_, e) => ({
     value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath: e.path },
@@ -433,7 +456,9 @@ test('/studio pause names the terminal command and runs nothing', async ($, on) 
   const { seen, files } = world(on, { files: withState() });
   await $.session.start(start);
   const { text } = await $.command.run({ ...run, command: 'studio', args: 'pause' });
-  expect(text).toBe('Pausing needs a terminal: run studio --project /work/app pause');
+  expect(text).toMatch(
+    /^Pausing needs a terminal: run \/\S+\/bin\/studio --project \/work\/app pause$/,
+  );
   expect(seen.forbidden).toEqual([]);
   expect(files.has(PAUSE)).toBe(false);
 });
@@ -442,7 +467,9 @@ test('/studio resume names the terminal command and runs nothing', async ($, on)
   const { seen, files } = world(on, { files: { ...withState(), [PAUSE]: '{}' } });
   await $.session.start(start);
   const { text } = await $.command.run({ ...run, command: 'studio', args: 'resume' });
-  expect(text).toBe('Resuming needs a terminal: run studio --project /work/app resume');
+  expect(text).toMatch(
+    /^Resuming needs a terminal: run \/\S+\/bin\/studio --project \/work\/app resume$/,
+  );
   expect(seen.forbidden).toEqual([]);
   expect(files.has(PAUSE)).toBe(true);
 });
@@ -452,8 +479,8 @@ test('a project path with shell characters is quoted in the terminal command', a
   world(on, { env: { XDG_STATE_HOME: '/xdg' }, files: { [`${odd}/.studio/studio.yaml`]: 'x' } });
   await $.session.start({ ...start, cwd: odd });
   const { text } = await $.command.run({ ...run, command: 'studio', args: 'pause' });
-  expect(text).toBe(
-    "Pausing needs a terminal: run studio --project '/work/my app; it'\\''s' pause",
+  expect(text).toMatch(
+    /^Pausing needs a terminal: run \/\S+\/bin\/studio --project '\/work\/my app; it'\\''s' pause$/,
   );
 });
 
@@ -477,4 +504,104 @@ test('the mod never writes a file or runs a process', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
   await ui.unmount();
   expect(seen.forbidden).toEqual([]);
+});
+
+// ---------- fix round ----------
+
+const ALERT = (n: number) => ({ id: `d${n}`, title: `Decide APP-${n}` });
+
+test('two alerts in one tick raise one toast', async ($, on) => {
+  const { clock, files, seen } = world(on, { files: withState() });
+  await $.session.start(start);
+  files.set(STATE, JSON.stringify({ ...OK_STATE, forOwner: [ALERT(1), ALERT(2)] }));
+  await clock.advance(10_000);
+  expect(seen.toasts).toEqual(['For you: Decide APP-1 · For you: Decide APP-2']);
+});
+
+test('more than five alerts raise one toast that says how many more', async ($, on) => {
+  const { clock, files, seen } = world(on, { files: withState() });
+  await $.session.start(start);
+  const forOwner = [1, 2, 3, 4, 5, 6, 7].map(ALERT);
+  files.set(STATE, JSON.stringify({ ...OK_STATE, forOwner }));
+  await clock.advance(10_000);
+  expect(seen.toasts.length).toBe(1);
+  expect(seen.toasts[0]).toMatch(/Decide APP-5 · … 2 more$/);
+});
+
+test('a joined toast is capped at 1500 characters', async ($, on) => {
+  const { seen } = world(on, {
+    files: withState({
+      ...OK_STATE,
+      forOwner: [1, 2, 3, 4, 5].map((n) => ({ id: `d${n}`, title: `${'x'.repeat(600)}${n}` })),
+    }),
+  });
+  await $.session.start(start);
+  expect(seen.toasts.length).toBe(1);
+  expect([...(seen.toasts[0] as string)].length).toBeLessThanOrEqual(1500);
+});
+
+test('a dangling pause.json entry counts as paused', async ($, on) => {
+  const { seen } = world(on, { files: withState(), extraEntries: { [ROOT]: ['pause.json'] } });
+  await $.session.start(start);
+  expect(seen.statuses).toEqual([`${OK_LINE} · paused`]);
+});
+
+test('a missing state root is not paused', async ($, on) => {
+  const { seen } = world(on, { files: { [YAML]: 'x' } });
+  await $.session.start(start);
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  expect(await ui.find({ type: 'Text', text: 'Paused.' })).toBeUndefined();
+  await ui.unmount();
+  expect(seen.statuses).toEqual([]);
+});
+
+test('a pause with no state file shows Paused. in the pane and in status', async ($, on) => {
+  world(on, { files: { [YAML]: 'x', [PAUSE]: '{}' } });
+  await $.session.start(start);
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  expect((await ui.find({ type: 'Text', text: 'Paused.' }))?.text).toBe('Paused.');
+  await ui.unmount();
+  const { text } = await $.command.run({ ...run, command: 'studio', args: 'status' });
+  expect(text).toMatch(/ Paused\.$/);
+});
+
+test('a command run after a reload, with no session start, answers and starts the refresh', async ($, on) => {
+  const { clock, files, seen } = world(on, { files: withState() });
+  const { text } = await $.command.run({ ...run, command: 'studio', args: 'status' });
+  expect(text).toBe(OK_LINE);
+  files.set(STATE, JSON.stringify({ ...OK_STATE, counts: { ready: 0, queued: 3 } }));
+  await clock.advance(10_000);
+  expect(seen.statuses.at(-1)).toMatch(/3 queued/);
+});
+
+test('a command run after a reload outside a Studio project answers calmly', async ($, on) => {
+  const { clock, seen } = world(on, { cwd: '/elsewhere' });
+  const { text } = await $.command.run({ ...run, command: 'studio', args: 'status' });
+  expect(text).toBe('Not in a Studio project.');
+  await clock.advance(30_000);
+  expect(seen.statuses).toEqual([]);
+});
+
+test('a refused pane open answers a fixed line', async ($, on) => {
+  world(on, { files: withState(), openFails: true });
+  await $.session.start(start);
+  const { text } = await $.command.run({ ...run, command: 'studio', args: '' });
+  expect(text).toBe('The board could not be opened here.');
+});
+
+test('a folder name with a backslash is one name, as in src/paths.ts', async ($, on) => {
+  // POSIX: `a\b` is a single folder. Its state suffix is a_b, and its parent is not the project.
+  const odd = '/work/a\\b';
+  const { seen } = world(on, {
+    files: { '/work/a/.studio/studio.yaml': 'x', [`${odd}/.studio/studio.yaml`]: 'x' },
+  });
+  await $.session.start({ ...start, cwd: odd });
+  expect(seen.commands).toEqual(['studio']);
+  expect(seen.fsCalls.some((p) => p.includes('-a_b/'))).toBe(true);
+});
+
+test('a backslash folder with no project of its own does not find its look-alike parent', async ($, on) => {
+  const { seen } = world(on, { files: { '/work/a/.studio/studio.yaml': 'x' } });
+  await $.session.start({ ...start, cwd: '/work/a\\b' });
+  expect(seen.commands).toEqual([]);
 });
