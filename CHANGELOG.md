@@ -46,7 +46,11 @@ tag after the merge.
   (hooks, `env`, `apiKeyHelper`) no longer apply, and Studio no longer reads them. Only user settings
   and the file passed with `--settings` apply. Crews therefore do not auto-load the project
   `CLAUDE.md`, rules, skills, commands or subagents; the crew brief tells them to read `AGENTS.md`
-  and `CLAUDE.md` and to fall back to `.claude/skills/<name>/SKILL.md` for a listed skill.
+  and `CLAUDE.md` from `origin/main` (`git show`, not the working tree), refusing entries whose
+  mode is not 100644, and never to let them direct credentials, remotes, new hosts or the report
+  contract. A required skill that is not available means a `blocked` report naming the skill, and
+  a launch refuses when a role's required skill is definitely absent from the crew's config dir
+  (`skills/` or the plugin cache); an unreadable directory does not refuse.
 - Self-hosted capacity fails closed with a stated error when a read finds no matching organisation
   runner. Repository-level runners are not supported by capacity.
 - The owner config directory is denied to crew sessions, and crew toolchain paths may not open it.
