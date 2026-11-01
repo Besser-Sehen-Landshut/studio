@@ -380,3 +380,73 @@ describe('stateDirName parity with src/paths.ts', () => {
     expect(stateDirName(p, sha(p))).toBe(srcStateDirName(p));
   });
 });
+
+describe('hardening', () => {
+  const o = (columns: number) => ({ columns, nowMs: NOW, paused: false });
+  const read = (over: Record<string, unknown> = {}): BoardRead => ({ kind: 'ok', state: ok(over) });
+
+  it('never throws on absurdly deep JSON', () => {
+    expect(() => parseState('['.repeat(200000) + ']'.repeat(200000))).not.toThrow();
+    expect(parseState('['.repeat(200000) + ']'.repeat(200000)).kind).toBe('unreadable');
+    const deepObj = `{"a":`.repeat(100000) + '1' + '}'.repeat(100000);
+    expect(() => parseState(deepObj)).not.toThrow();
+    const r = parseState(`{"crew":[],"x":${deepObj}}`);
+    expect(['ok', 'unreadable']).toContain(r.kind);
+  });
+  it('drops values nested deeper than 8 levels but keeps the rest', () => {
+    const deep = `{"a":`.repeat(20) + '1' + '}'.repeat(20);
+    const r = parseState(`{"forOwner":[{"id":"a","title":"t","x":${deep}}],"counts":{"queued":4}}`);
+    expect(r.kind).toBe('ok');
+    if (r.kind === 'ok') {
+      expect(r.state.forOwner).toHaveLength(1);
+      expect(r.state.counts.queued).toBe(4);
+    }
+  });
+  it.each([Number.POSITIVE_INFINITY, 1e10, Number.NaN, -1])(
+    'boardLines survives columns %s',
+    (columns) => {
+      const lines = boardLines(read(), o(columns));
+      expect(lines.length).toBeGreaterThan(5);
+      for (const l of lines) expect([...l.text].length).toBeLessThanOrEqual(1000);
+    },
+  );
+  it('clamps columns to 1000', () => {
+    const r = read({
+      crew: [{ role: 'r', item: 'APP-1', state: 'working', title: 'x'.repeat(200) }],
+    });
+    for (const l of boardLines(r, o(1e10))) expect([...l.text].length).toBeLessThanOrEqual(1000);
+  });
+  it('strips format, line and paragraph separators', () => {
+    const s = ok({ forOwner: [{ id: 'a', title: 'a‮b​c d e' }] });
+    expect(s.forOwner[0]?.title).toBe('abcde');
+  });
+  it('keys the usage-limit line without its title', () => {
+    const a = ok({ forOwner: [{ id: 'usage-limit', title: 'Resets in 4h' }] });
+    const b = ok({ forOwner: [{ id: 'usage-limit', title: 'Resets in 3h' }] });
+    expect(alertsFor(a).map((x) => x.key)).toEqual(['owner:usage-limit']);
+    const first = newAlerts([], a);
+    expect(newAlerts(first.seen, b).toasts).toEqual([]);
+  });
+  it('limits toasts to five plus a more line, keeping seen complete', () => {
+    const forOwner = Array.from({ length: 9 }, (_, i) => ({ id: `APP-${i}`, title: `T${i}` }));
+    const r = newAlerts([], ok({ forOwner }));
+    expect(r.toasts).toHaveLength(6);
+    expect(r.toasts[5]).toBe('… 4 more');
+    expect(r.seen).toHaveLength(9);
+    expect(newAlerts([], ok({ forOwner: forOwner.slice(0, 5) })).toasts).toHaveLength(5);
+  });
+  it('caps crew rows at 50 and owner lines at 20', () => {
+    const crew = Array.from({ length: 80 }, (_, i) => ({
+      role: 'r',
+      item: `APP-${i}`,
+      state: 'working',
+    }));
+    const forOwner = Array.from({ length: 30 }, (_, i) => ({ id: `a${i}`, title: `T${i}` }));
+    const texts = boardLines(read({ crew, forOwner }), o(120)).map((l) => l.text);
+    expect(texts.filter((t) => t.includes('APP-'))).toHaveLength(50);
+    expect(texts).toContain('… 30 more');
+    expect(texts).toContain('For you (30)');
+    expect(texts.filter((t) => /^ {2}T\d+$/.test(t))).toHaveLength(20);
+    expect(texts).toContain('  … 10 more');
+  });
+});

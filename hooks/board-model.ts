@@ -56,19 +56,25 @@ const STATES: readonly CrewState[] = [
 
 // ---------- parsing ----------
 
-/** Strips control characters and caps at 200 code points. */
+/** Strips control, format (bidi overrides, zero-width) and line/paragraph separators; caps at 200 code points. */
 function clean(s: string): string {
-  const stripped = s.replace(/\p{Cc}/gu, '');
+  const stripped = s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '');
   const cps = [...stripped];
   return cps.length > MAX_STRING ? cps.slice(0, MAX_STRING).join('') : stripped;
 }
 
-/** Cleans every string (and object key) of a parsed JSON value. */
-function sanitize(v: unknown): unknown {
+const MAX_DEPTH = 8;
+
+/** Cleans every string (and object key) of a parsed JSON value. Values nested deeper than 8 are dropped. */
+function sanitize(v: unknown, depth = 0): unknown {
   if (typeof v === 'string') return clean(v);
-  if (Array.isArray(v)) return v.map(sanitize);
+  if (Array.isArray(v))
+    return depth >= MAX_DEPTH ? undefined : v.map((x) => sanitize(x, depth + 1));
   if (v !== null && typeof v === 'object') {
-    return Object.fromEntries(Object.entries(v).map(([k, x]) => [clean(k), sanitize(x)]));
+    if (depth >= MAX_DEPTH) return undefined;
+    return Object.fromEntries(
+      Object.entries(v).map(([k, x]) => [clean(k), sanitize(x, depth + 1)]),
+    );
   }
   return v;
 }
@@ -175,15 +181,13 @@ function toState(root: Obj): BoardState {
 }
 
 export function parseState(text: string): BoardRead {
-  let raw: unknown;
   try {
-    raw = JSON.parse(text);
+    const root = obj(sanitize(JSON.parse(text)));
+    if (!root) return { kind: 'unreadable' };
+    return { kind: 'ok', state: toState(root) };
   } catch {
     return { kind: 'unreadable' };
   }
-  const root = obj(sanitize(raw));
-  if (!root) return { kind: 'unreadable' };
-  return { kind: 'ok', state: toState(root) };
 }
 
 // ---------- status line and alerts ----------
@@ -200,7 +204,9 @@ export function alertsFor(state: BoardState): { key: string; text: string }[] {
   const out: { key: string; text: string }[] = [];
   for (const f of state.forOwner) {
     if (f.id === 'account-block') continue;
-    out.push({ key: `owner:${f.id}:${f.title}`, text: `For you: ${f.title}` });
+    // The usage-limit title carries a time that changes; key it by id so it toasts once while it stands.
+    const key = f.id === 'usage-limit' ? 'owner:usage-limit' : `owner:${f.id}:${f.title}`;
+    out.push({ key, text: `For you: ${f.title}` });
   }
   for (const n of state.notifications) {
     out.push({
@@ -226,6 +232,8 @@ export function alertsFor(state: BoardState): { key: string; text: string }[] {
   return out;
 }
 
+const MAX_TOASTS = 5;
+
 export function newAlerts(
   seen: readonly string[],
   state: BoardState,
@@ -238,7 +246,9 @@ export function newAlerts(
     keys.add(a.key);
     if (!known.has(a.key)) toasts.push(a.text);
   }
-  return { toasts, seen: [...keys] };
+  const shown = toasts.slice(0, MAX_TOASTS);
+  if (toasts.length > MAX_TOASTS) shown.push(`… ${toasts.length - MAX_TOASTS} more`);
+  return { toasts: shown, seen: [...keys] };
 }
 
 // ---------- layout ----------
@@ -282,11 +292,14 @@ function runtimeOf(c: BoardCrew, nowMs: number): string {
   return formatRuntime((Number.isNaN(stop) ? nowMs : stop) - start);
 }
 
+const MAX_CREW_ROWS = 50;
+const MAX_OWNER_LINES = 20;
+
 function crewLines(state: BoardState, columns: number, nowMs: number): Line[] {
   const rows = state.crew.length > 10 ? state.crew.filter((c) => c.state !== 'done') : state.crew;
   if (rows.length === 0) return [{ text: 'No crew running.', tone: 'dim' }];
   const out: Line[] = [];
-  for (const c of rows) {
+  for (const c of rows.slice(0, MAX_CREW_ROWS)) {
     const look = LOOK[c.state];
     const pr = c.pr === undefined ? '' : `#${c.pr}`;
     const runtime = runtimeOf(c, nowMs);
@@ -310,6 +323,9 @@ function crewLines(state: BoardState, columns: number, nowMs: number): Line[] {
       const rest = [c.title ?? '', pr, runtime, label].filter((x) => x !== '').join(' · ');
       out.push({ text: `  ${rest}`.trimEnd(), tone: 'dim' });
     }
+  }
+  if (rows.length > MAX_CREW_ROWS) {
+    out.push({ text: `… ${rows.length - MAX_CREW_ROWS} more`, tone: 'dim' });
   }
   return out;
 }
@@ -357,7 +373,9 @@ export function boardLines(
   read: BoardRead,
   o: { columns: number; nowMs: number; paused: boolean },
 ): Line[] {
-  const columns = Math.max(20, Math.floor(o.columns) || 20);
+  const columns = Number.isFinite(o.columns)
+    ? Math.min(1000, Math.max(20, Math.floor(o.columns)))
+    : 20;
   const clip = (lines: Line[]): Line[] => lines.map((l) => ({ ...l, text: cut(l.text, columns) }));
   if (read.kind === 'missing') return clip([{ text: MISSING_TEXT, tone: 'dim' }]);
   if (read.kind === 'unreadable') return clip([{ text: UNREADABLE_TEXT, tone: 'dim' }]);
@@ -381,7 +399,10 @@ export function boardLines(
     });
   }
   out.push({ text: `For you (${s.forOwner.length})`, tone: 'head' });
-  for (const f of s.forOwner) out.push({ text: `  ${f.title}` });
+  for (const f of s.forOwner.slice(0, MAX_OWNER_LINES)) out.push({ text: `  ${f.title}` });
+  if (s.forOwner.length > MAX_OWNER_LINES) {
+    out.push({ text: `  … ${s.forOwner.length - MAX_OWNER_LINES} more`, tone: 'dim' });
+  }
   for (const n of s.notifications) {
     out.push({
       text: `  Account blocked${n.label ? ` (${n.label})` : ''}: ${n.reason}`,
