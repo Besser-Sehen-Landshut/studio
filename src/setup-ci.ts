@@ -1,3 +1,4 @@
+import { parse } from 'yaml';
 import type { StudioConfig } from './config.js';
 import type { Gh } from './ports.js';
 
@@ -209,4 +210,170 @@ export function proposeCi(
   if (runnerNamePattern === undefined) delete ci.runnerNamePattern;
   else ci.runnerNamePattern = runnerNamePattern;
   return { ci, notes, errors };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Workflow lint. Workflow files are untrusted data: they are parsed as plain YAML, never
+// evaluated, and every piece of their text that reaches a message is sanitised.
+
+export type WorkflowFile = { path: string; text: string };
+
+const GITHUB_HOSTED = /^(ubuntu|windows|macos)-/i;
+const MAX_TEXT = 120;
+
+function clean(text: unknown): string {
+  return String(text)
+    .replace(/\p{Cc}/gu, ' ')
+    .slice(0, MAX_TEXT);
+}
+
+type RunsOn =
+  | { kind: 'hosted' }
+  | { kind: 'set'; labels: string[] }
+  | { kind: 'unverifiable'; why: string }
+  | { kind: 'invalid'; why: string };
+
+function labelList(value: unknown): string[] | undefined {
+  const items = typeof value === 'string' ? [value] : value;
+  if (!Array.isArray(items) || items.length === 0) return undefined;
+  if (!items.every((l) => typeof l === 'string' && l.trim() !== '')) return undefined;
+  return items.map((l: string) => l.trim());
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** The one classification shared by the lint and the usage summary. */
+function resolveRunsOn(value: unknown): RunsOn {
+  const record = isRecord(value) ? value : undefined;
+  if (record && !('labels' in record)) {
+    return 'group' in record
+      ? { kind: 'unverifiable', why: 'runner group without labels' }
+      : { kind: 'invalid', why: 'runs-on map has no labels' };
+  }
+  const labels = labelList(record ? record.labels : value);
+  if (!labels) return { kind: 'invalid', why: 'runs-on is not a label or list of labels' };
+  if (labels.some((l) => l.includes('${{'))) {
+    return { kind: 'unverifiable', why: 'runs-on uses an expression' };
+  }
+  if (record && 'group' in record) {
+    return { kind: 'unverifiable', why: 'runner group membership is not checked' };
+  }
+  const [only] = labels;
+  if (labels.length === 1 && only !== undefined && GITHUB_HOSTED.test(only)) {
+    return { kind: 'hosted' };
+  }
+  return { kind: 'set', labels };
+}
+
+type Parsed =
+  | { ok: true; doc: Record<string, unknown>; jobs: [string, Record<string, unknown>][] }
+  | { ok: false; error: string };
+
+function parseWorkflow(text: string): Parsed {
+  let doc: unknown;
+  try {
+    doc = parse(text);
+  } catch (err) {
+    return { ok: false, error: `cannot parse: ${clean(err instanceof Error ? err.message : err)}` };
+  }
+  if (!isRecord(doc)) return { ok: false, error: 'not a YAML mapping' };
+  const jobs = doc.jobs;
+  if (!isRecord(jobs) || Object.keys(jobs).length === 0) {
+    return { ok: false, error: 'has no jobs map' };
+  }
+  const entries: [string, Record<string, unknown>][] = [];
+  for (const [name, job] of Object.entries(jobs)) {
+    if (!isRecord(job)) return { ok: false, error: `job "${clean(name)}" is not a mapping` };
+    entries.push([name, job]);
+  }
+  return { ok: true, doc, jobs: entries };
+}
+
+function triggers(on: unknown): Set<string> {
+  if (typeof on === 'string') return new Set([on]);
+  if (Array.isArray(on)) return new Set(on.filter((t): t is string => typeof t === 'string'));
+  if (isRecord(on)) return new Set(Object.keys(on));
+  return new Set();
+}
+
+/** Which runner kinds the workflows use; expressions and unparsable files count toward neither. */
+export function workflowRunnerUsage(files: WorkflowFile[]): WorkflowUsage {
+  const usage: WorkflowUsage = { githubHosted: false, selfHosted: false };
+  for (const f of files) {
+    const p = parseWorkflow(f.text);
+    if (!p.ok) continue;
+    for (const [, job] of p.jobs) {
+      if (typeof job.uses === 'string' || !('runs-on' in job)) continue;
+      const r = resolveRunsOn(job['runs-on']);
+      if (r.kind === 'hosted') usage.githubHosted = true;
+      else if (r.kind === 'set') usage.selfHosted = true;
+    }
+  }
+  return usage;
+}
+
+function lintConcurrency(doc: Record<string, unknown>, expectedGroup: string): string | undefined {
+  const c = doc.concurrency;
+  if (!isRecord(c)) {
+    return 'push and pull_request without a workflow-level concurrency group (or not in map form)';
+  }
+  if (typeof c.group !== 'string' || c.group.trim() !== expectedGroup) {
+    return `concurrency.group must be exactly ${clean(expectedGroup)}`;
+  }
+  if (c['cancel-in-progress'] !== true) return 'concurrency.cancel-in-progress must be true';
+  return undefined;
+}
+
+/**
+ * Checks workflows against the detected runners: every self-hosted label set needs an online
+ * runner carrying all its labels (otherwise the job waits forever), and workflows triggered by both
+ * push and pull_request need the shared concurrency group with cancel-in-progress.
+ */
+export function lintWorkflows(
+  files: WorkflowFile[],
+  detect: Detected,
+  expectedGroup: string,
+): { errors: string[]; warnings: string[] } {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const online = detect.runners
+    .filter((r) => r.online)
+    .map((r) => new Set(r.labels.map((l) => l.toLowerCase())));
+  for (const f of files) {
+    const path = clean(f.path);
+    const p = parseWorkflow(f.text);
+    if (!p.ok) {
+      errors.push(`${path}: ${p.error}`);
+      continue;
+    }
+    for (const [name, job] of p.jobs) {
+      const where = `${path}: job "${clean(name)}"`;
+      if (typeof job.uses === 'string') continue;
+      if (!('runs-on' in job)) {
+        errors.push(`${where} has no runs-on and no uses`);
+        continue;
+      }
+      const r = resolveRunsOn(job['runs-on']);
+      if (r.kind === 'invalid') errors.push(`${where}: ${r.why}`);
+      else if (r.kind === 'unverifiable') warnings.push(`${where}: cannot verify, ${r.why}`);
+      else if (r.kind === 'set') {
+        const shown = r.labels.map(clean).join(', ');
+        const want = r.labels.map((l) => l.toLowerCase());
+        if (detect.source === 'unknown') {
+          warnings.push(`${where}: cannot verify runs-on [${shown}], runners are unknown`);
+        } else if (!online.some((have) => want.every((l) => have.has(l)))) {
+          errors.push(
+            `${where}: runs-on [${shown}] matches no online runner; it would wait forever`,
+          );
+        }
+      }
+    }
+    const t = triggers(p.doc.on);
+    if (t.has('push') && t.has('pull_request')) {
+      const problem = lintConcurrency(p.doc, expectedGroup);
+      if (problem) errors.push(`${path}: ${problem}`);
+    }
+  }
+  return { errors, warnings };
 }

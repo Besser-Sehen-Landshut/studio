@@ -1,0 +1,12 @@
+name: hosted
+on:
+  push:
+  pull_request:
+concurrency:
+  group: ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ok
