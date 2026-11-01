@@ -2,7 +2,7 @@
 
 Studio is a Claude Code plugin and TypeScript package for running a small software studio of coding-agent sessions from one control room: a lead session plans work from a board and a crew of role-based sessions carries it out, each in its own sandboxed clone.
 
-Status: 0.2.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits). See [CHANGELOG.md](CHANGELOG.md).
+Status: 0.4.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules) and stage (b) (the Studio board inside Claude Code, pause and resume, push notifications). See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -102,6 +102,19 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 
 `queue run` is meant to run in the background. It holds a lock in the state root (a second run exits 1 with "queue already running" while the holder lives; the lock records pid, start and a heartbeat refreshed on every step and poll, and is taken over with a note only when that pid is gone or the heartbeat is older than 15 minutes; SIGTERM, SIGINT and SIGHUP release it), picks up PRs added with `queue add` while it runs, and moves each board item as soon as its PR is done. On start it first applies results a previous run recorded but did not put on the board. Right after a head change (branch update or new push) a PR without any reported check counts as pending for 5 minutes, then fails with "no checks reported". `merge.strategy: native-queue` is not supported yet: `queue add` and `queue run` refuse it.
 
+## The Studio board
+
+In the owner's interactive Claude Code session in a Studio project, the plugin shows what Studio is doing. It only displays: it writes no file and starts no process. Crew sessions (`STUDIO_ROLE=crew`), `claude -p` and folders without `.studio/studio.yaml` get none of it.
+
+- **Pane.** "Studio board": the crew with a state per item (`working`, `waiting`, `blocked`, `stopped`, `crashed`, `done`), CI use, the lines for you, merges and deploys today, and the state of the push builds on `main`. A `state.json` that is missing, unreadable or the wrong shape gives a calm message, never an error.
+- **Status line.** `● N working · N waiting · N queued · CI x/y · for you: n`, with `· paused` while paused.
+- **Toasts.** One toast per refresh, only for lines that are new since the last one shown: a line for you, an account block, a red build on `main` and a crew that crashed and was not healed. A `usage-limit` line toasts once while it stands. Titles have control characters stripped.
+- **Commands.** `/studio` opens the pane and always places it. `/studio status` prints the status line text. `/studio pause` and `/studio resume` only print the terminal command to run, because pausing needs a terminal (`studio pause`, `studio resume`).
+- **Where it reads.** The plugin reads `state.json` and `pause.json` from the project's state root (see below), not from `.studio/`, every 10 seconds. At session start it opens the pane by itself only when the terminal is wide (about 144 columns); in a narrower one it waits undrawn until you run `/studio`.
+- **Keeping it fresh.** Only `studio state` writes `state.json`. The lead's heartbeat (`studio status` and `studio state` every 120 s, see the lead skill) refreshes it and also reads crew logs, so an account block stops crews at most one heartbeat (120 s) after the event. Without a running lead nothing refreshes the board and nothing stops crews: a project with no lead is swept for a block only when another project reconciles.
+
+`pnpm test:mod` runs the mod's tests with `claude plugin test`; it needs the `claude` CLI and is not part of CI.
+
 ## Using your own runners
 
 `studio setup ci` reads the runners GitHub shows for your repository and proposes the `ci:` block of `.studio/studio.yaml`. It needs `primary_repo` (`owner/name`) in that file and a logged-in `gh`.
@@ -142,7 +155,7 @@ When no credential is available (without a provider: `default` is parked; with o
 
 Studio records the label and a reason code in `blocks.json` in the owner root (`<state base>/owner`), then stops every running crew of all your projects, of all labels, except on `merged` and `dropped` items, also when a board cannot be read. Another project's board is only read; its items move back the next time Studio runs there. It signals a crew only when the process start time stored at launch still matches; a running crew it cannot verify is not signalled but reported with item and pid, so check it by hand. `assigned` and `in_progress` items return to `ready` with a note; clone and branch stay. An item whose crew left a report stays where it is, so `collect` still works. Nothing starts and no credential provider is called while any block exists, under any label. `state.json` shows one `forOwner` line (`account-block`) and one entry per block under `notifications`. An unreadable `blocks.json` (malformed, a symlink, not a file) counts as blocked in the same way; a missing file means no block.
 
-Nothing clears by itself. `studio accounts-clear <label>` removes that label's entries, moves the scan start of that label's crews in all projects to the end of their logs so an old event does not return, restarts nothing, and needs a terminal; crews cannot write the state base. On an unreadable file it refuses: inspect or remove the file.
+Nothing clears by itself. `studio accounts-clear <label>` removes that label's entries, moves the scan start of that label's crews in all projects to the end of their logs so an old event does not return, restarts nothing, and needs a terminal. Crews cannot write the owner root, because the sandbox lets them write only their own clone, tmp dir and `HOME`; those lie below the state base, but not in the owner root. On an unreadable file it refuses: inspect or remove the file.
 
 **Upgrading.** Older versions kept `blocks.json`, `limits.json` and `usage.json` per project. The first command that needs them merges them into the owner root and removes the old files: blocks by label and reason with the earliest time, per label the later park, usage summed. A file that cannot be read is not interpreted. It is kept as `<owner root>/<name>.legacy-<project root>` (for a symlink, only a note), and until you inspect and remove that entry the file counts as unreadable, so nothing starts.
 

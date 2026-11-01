@@ -79,4 +79,16 @@ describe('README quick start', () => {
     expect(readme).toMatch(/`githubHostedBusy` counts all runs of the repository/);
     expect(readme).toMatch(/restricted to other repositories by runner groups are counted/);
   });
+
+  it('documents the board, pause, notify and owner-wide state', () => {
+    expect(readme).toContain('## The Studio board');
+    expect(readme).toContain('`/studio`');
+    expect(readme).toContain('studio pause');
+    expect(readme).toMatch(/notify: \{ channel, command \}/);
+    expect(readme).toContain('`blocks.json` in the owner root');
+    expect(readme).toContain('.legacy-');
+    expect(readme).toMatch(/Status: 0\.4\.0/);
+    expect(readme).not.toMatch(/crews cannot write the state base/);
+    expect(readme).not.toMatch(/blocks?[^.]{0,40}per project/i);
+  });
 });

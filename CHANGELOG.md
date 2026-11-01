@@ -3,7 +3,10 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
-## [Unreleased]
+## [0.4.0] - 2026-11-01
+
+Stage (b): the Studio board inside Claude Code, pause and resume, push notifications. Not tagged or
+published as a GitHub release yet; the maintainers tag after the merge.
 
 ### Added
 
@@ -18,6 +21,10 @@ All notable changes to this project are documented here. The format follows
   `stopped`, `crashed`, `done`) with title and repository, CI use, today's merges and deploys, runs
   per day and label, the state of the latest push builds on `main`, and the ready and queued counts.
   Labels only: no credential value is written.
+
+- Push notifications: `notify: { channel, command }` in the owner config hands each line for the owner
+  and each account block once to an owner-chosen command (absolute path, no shell, minimal
+  environment, control characters stripped); `notified.json` in the owner root remembers what was sent.
 
 ### Fixed
 
