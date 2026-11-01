@@ -21,6 +21,9 @@ All notable changes to this project are documented here. The format follows
   a script argument that is not literal, and setting or unsetting `STUDIO_*` variables. Before, `$(...)`,
   `$VAR` or a glob got past the check of owner-only subcommands. `node app.js pause` and
   `npm run resume` are no longer denied.
+- The crew guard also denies `script`, `flock`, `watch`, `npx`/`pnpm exec`/`pnpm dlx`/`yarn`/`npm exec`
+  when the target is `studio` or not literal, and setting `NODE_OPTIONS`. `npx vitest`, `pnpm test`
+  and `npm run resume` stay allowed.
 - `studio state` still writes `state.json` when crew records of another project cannot be read; it
   leaves out the per-label figures and adds a `crew-records` line for the owner. Plan and launch
   still refuse.

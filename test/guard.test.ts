@@ -666,6 +666,72 @@ describe('round 1 regressions', () => {
     ]);
   });
 
+  it('I5h runners that start a command unexamined stay denied', () => {
+    denies([
+      'script -q /dev/null studio pause',
+      'script -q /dev/null echo hi',
+      'flock /tmp/x studio pause',
+      'flock -n /tmp/x echo hi',
+      'watch studio state',
+      'watch -n 5 echo hi',
+    ]);
+  });
+
+  it('I5i package runners are denied for studio or a non-literal target', () => {
+    denies([
+      'npx studio pause',
+      'npx -y studio pause',
+      'npx studio@1.0.0 pause',
+      'npx --no-install studio',
+      'npx -c "studio pause"',
+      'npx $X',
+      'npx "$(which studio)"',
+      'pnpm exec studio pause',
+      'pnpm --filter app exec studio pause',
+      'pnpm exec $X',
+      'pnpm dlx studio',
+      'pnpm dlx $X',
+      'yarn studio',
+      'yarn exec studio pause',
+      'yarn dlx studio',
+      'yarn run studio',
+      'npm exec studio pause',
+      'npm exec -- studio pause',
+      'npm exec $X',
+      'npm x studio',
+      'pnpm $X studio',
+    ]);
+  });
+
+  it('I5j ordinary package runner commands are allowed', () => {
+    for (const c of [
+      'npx vitest',
+      'npx -y vitest run test/guard.test.ts',
+      'npx tsc --noEmit',
+      'pnpm exec vitest',
+      'pnpm exec vitest run test/studio.test.ts',
+      'pnpm test',
+      'pnpm test "$X"',
+      'pnpm run lint',
+      'pnpm dlx cowsay hi',
+      'yarn test',
+      'yarn exec vitest',
+      'npm exec vitest',
+      'npm run resume',
+      'npm test',
+    ]) {
+      expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
+    }
+  });
+
+  it('I5k NODE_OPTIONS cannot be set', () => {
+    denies([
+      'NODE_OPTIONS=--require=./bin/studio node app.js',
+      'export NODE_OPTIONS=--require=./bin/studio',
+      'NODE_OPTIONS= node app.js',
+    ]);
+  });
+
   it('I5g variables with the STUDIO_ prefix cannot be set or unset', () => {
     denies([
       'STUDIO_ROLE=owner cmd',
