@@ -76,3 +76,9 @@ Same scenario, opus and sonnet. Both started the 120-second loop, ended the turn
 Refactor: review of the first wording showed a plain background task wakes the lead only when it exits, so a block or an exited crew would have gone unnoticed by the model. The rule now runs under the Monitor tool and prints only on a status change or a problem. Sonnet re-run: "Start the heartbeat under the Monitor tool (not a plain background task)", failed login "noticed within 120 seconds", all three crews stopped at that poll.
 
 Not exercised: a real Monitor run with real crews. Those are not run yet.
+
+# Baseline: launch refused by a lock, 2026-11-01
+
+Scenario: `scenarios/lead-launch-lock-scenario.md`, one opus and one sonnet agent, unchanged `studio-lead` skill.
+
+Weak baseline, stated plainly: neither agent failed. Both left APP-5 `ready`, did not set `blocked` and did not delete `launch.lock`. They differ in when they retry: opus "run `studio launch APP-5` again, and if the same error comes back, I wait briefly and retry" (an immediate, open-ended retry); sonnet "after the next tick". The edit is the maintainers' instruction, kept to one sentence that fixes the retry point at the next heartbeat tick.

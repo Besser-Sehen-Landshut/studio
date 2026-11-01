@@ -32,6 +32,7 @@ while sleep 120; do s=$(studio status 2>&1); [ "$s" = "$p" ] || echo "$s"; p=$s;
 
 - It prints only when the status changes or `studio state` reports a problem, so it costs no model turn while nothing happens. "Keep it cheap" never lengthens it: 120 seconds, always.
 - It also feeds the Studio board (`studio state` writes `state.json`).
+- A launch refused because of a lock (`another launch is in progress`) is not a failure: leave the item `ready` and retry it on the next heartbeat tick.
 - Each printed line is your wake-up: a crew that exited goes to Collect; a `note:` or `error:` line, read and act on. During a block relaunch nothing and tell the owner in one line.
 
 ## Collect: artifacts, not prose
