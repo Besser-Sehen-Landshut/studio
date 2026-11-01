@@ -27,6 +27,12 @@ export interface Metrics {
   perDay: Record<string, DayCount>;
   mergedTotal: number;
   deployedTotal: number;
+  /** Deploys followed by an incident, over all deploys; null without a deploy. */
+  changeFailureRate: number | null;
+  failedDeploys: number;
+  medianTimeToRestoreHours: number | null;
+  openIncidents: number;
+  restores: { incident: string; hours: number }[];
 }
 
 export interface CrewSnapshot {
@@ -203,13 +209,73 @@ export function computeMetrics(events: readonly unknown[]): Metrics {
       leadTimeHours: Math.max(0, (at - first) / HOUR_MS),
     });
   }
-  const sorted = leadTimes.map((l) => l.leadTimeHours).sort((a, b) => a - b);
+  const incidents = incidentMetrics(events);
+  return {
+    leadTimes,
+    medianLeadTimeHours: medianOf(leadTimes.map((l) => l.leadTimeHours)),
+    perDay,
+    mergedTotal,
+    deployedTotal,
+    changeFailureRate: deployedTotal === 0 ? null : incidents.failedDeploys / deployedTotal,
+    ...incidents,
+  };
+}
+
+function medianOf(values: readonly number[]): number | null {
+  const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
-  const median =
-    sorted.length === 0
-      ? null
-      : sorted.length % 2
-        ? (sorted[mid] as number)
-        : ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2;
-  return { leadTimes, medianLeadTimeHours: median, perDay, mergedTotal, deployedTotal };
+  if (sorted.length === 0) return null;
+  return sorted.length % 2
+    ? (sorted[mid] as number)
+    : ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2;
+}
+
+/** An incident counts against the latest deploy before it; events are taken in order of time. */
+function incidentMetrics(events: readonly unknown[]) {
+  const timed: { type: string; at: number; incident?: string; n: number }[] = [];
+  events.forEach((raw, n) => {
+    if (raw === null || typeof raw !== 'object') return;
+    const ev = raw as Record<string, unknown>;
+    const at = asTime(ev.at);
+    if (at === undefined || typeof ev.type !== 'string') return;
+    if (ev.type === 'deployed') timed.push({ type: ev.type, at, n });
+    else if (
+      (ev.type === 'incident_opened' || ev.type === 'incident_resolved') &&
+      typeof ev.incident === 'string'
+    ) {
+      timed.push({ type: ev.type, at, incident: ev.incident, n });
+    }
+  });
+  timed.sort((a, b) => a.at - b.at || a.n - b.n);
+  // The file order decides between a resolve and its open when the clock says otherwise.
+  const opened = new Map<string, number>();
+  const restores: { incident: string; hours: number }[] = [];
+  const failed = new Set<number>();
+  let lastDeploy: number | undefined;
+  for (const e of timed) {
+    if (e.type === 'deployed') lastDeploy = e.n;
+    else if (e.type === 'incident_opened' && !opened.has(e.incident as string)) {
+      opened.set(e.incident as string, e.at);
+      if (lastDeploy !== undefined) failed.add(lastDeploy);
+    }
+  }
+  const stillOpen = new Map(opened);
+  for (const raw of events) {
+    if (raw === null || typeof raw !== 'object') continue;
+    const ev = raw as Record<string, unknown>;
+    const at = asTime(ev.at);
+    if (ev.type !== 'incident_resolved' || at === undefined || typeof ev.incident !== 'string') {
+      continue;
+    }
+    const start = stillOpen.get(ev.incident);
+    if (start === undefined) continue;
+    stillOpen.delete(ev.incident);
+    restores.push({ incident: ev.incident, hours: Math.max(0, (at - start) / HOUR_MS) });
+  }
+  return {
+    failedDeploys: failed.size,
+    medianTimeToRestoreHours: medianOf(restores.map((r) => r.hours)),
+    openIncidents: stillOpen.size,
+    restores,
+  };
 }

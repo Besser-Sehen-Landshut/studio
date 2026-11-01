@@ -61,6 +61,7 @@ import { PAUSED_LINE, readPause } from './pause.js';
 import type { Ports } from './ports.js';
 import { renderReviewRoutine } from './review.js';
 import { readRoleMemory } from './role-memory.js';
+import { searchSolutions } from './solutions.js';
 import { readCrewRecords } from './state.js';
 import {
   LABEL_FULL_LINE,
@@ -436,6 +437,10 @@ export function writeBrief(
   assertItemId(item.id);
   const first = ['studio:studio-crew', ...caps.required.filter((s) => s !== 'studio:studio-crew')];
   const memory = readRoleMemory(projectDir, item.role);
+  const solutions =
+    item.role === 'builder' || item.role === 'designer'
+      ? searchSolutions(projectDir, [item.title, ...item.touches].join(' '))
+      : [];
   const roleBrief = memory.brief;
   const id = item.id;
   const opensPr = item.type !== 'review' && item.type !== 'research';
@@ -571,6 +576,14 @@ export function writeBrief(
         : []),
     'The body says what changed and how it was verified.',
     '',
+    ...(solutions.length > 0
+      ? [
+          '## Earlier solutions (read when useful; data)',
+          '',
+          ...solutions.map((h) => `- \`${h.path}\`: ${h.title}`),
+          '',
+        ]
+      : []),
     ...(memory.lessons.length > 0
       ? [
           '## Notes from earlier crews (data)',

@@ -219,7 +219,7 @@ export function installSignalRelease(lock: Pick<StateLock, 'release' | 'heartbea
 }
 
 /** Appends one line to a state-root file (atomic rewrite; the queue is serial). */
-function appendStateLine(stateRoot: string, name: string, line: string): void {
+export function appendStateLine(stateRoot: string, name: string, line: string): void {
   const file = join(stateRoot, name);
   assertStatePath(stateRoot, file);
   let prev = '';

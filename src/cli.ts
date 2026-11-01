@@ -13,6 +13,7 @@ import {
 } from './config.js';
 import { limitHold } from './credentials.js';
 import { crewStateOf, isItemId, launchCrew } from './crew.js';
+import { listFlaky, recordFlaky } from './flaky.js';
 import {
   activeParks,
   blockHold,
@@ -41,6 +42,7 @@ import { type Capacity, planAssignments } from './planner.js';
 import type { Ports } from './ports.js';
 import {
   acquireQueueRunLock,
+  appendStateLine,
   enqueue,
   installSignalRelease,
   loadQueue,
@@ -68,6 +70,7 @@ import {
 } from './role-memory.js';
 import { runDoctor, runSecretSet } from './secret-command.js';
 import { runSetupCi } from './setup-ci-command.js';
+import { searchSolutions } from './solutions.js';
 import { applySource, checkSources, loadSources, setupSources } from './sources.js';
 import { runSetupStack } from './stack.js';
 import {
@@ -115,7 +118,13 @@ Commands:
   pause                    Owner only: nothing new starts or merges until resume
   resume                   Owner only: lift the pause
   stop <id>                Stop a crew session
-  metrics                  Lead time and deployment frequency
+  metrics                  Lead time, deploy frequency, change failure rate, time to restore
+  deploy record [<sha>]    Record a production deploy
+  incident open <id>       Record that a deploy broke something
+  incident resolve <id>    Record that service is restored
+  flaky record <t> <s> pass|fail  Record a test that failed once, with its rerun
+  flaky [list]             The flaky-test ledger, worst first
+  solutions search <words> Earlier solutions in .studio/solutions
   setup sources [<id>...]  Fetch the referenced third-party sources (nothing runs)
   lessons [list]           Lessons crews proposed for the role memory
   lessons accept <n>       Move a proposed lesson into its role file
@@ -135,6 +144,8 @@ Commands:
 class UsageError extends Error {}
 
 const BY = 'studio';
+const SHORT_SHA = /^[0-9a-f]{7,64}$/i;
+const INCIDENT_ID = /^[A-Za-z0-9._-]{1,64}$/;
 
 const LEGACY_LINE =
   'old project state files are not migrated yet: no merge until they are (run any studio command again)';
@@ -317,8 +328,23 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         await reconcile();
         const { config, board } = loadAll();
         const { plan, capacity } = await planNow(config, board);
+        let solutionsError: string | undefined;
+        const solutionsFor = (i: WorkItem) => {
+          try {
+            return searchSolutions(project, [i.title, ...i.touches].join(' '));
+          } catch {
+            solutionsError = 'the solutions store cannot be read';
+            return [];
+          }
+        };
         print({
-          assign: plan.assign.map((i) => ({ id: i.id, title: i.title, role: i.role })),
+          assign: plan.assign.map((i) => ({
+            id: i.id,
+            title: i.title,
+            role: i.role,
+            solutions: solutionsFor(i),
+          })),
+          ...(solutionsError === undefined ? {} : { solutionsError }),
           blocked: plan.blocked,
           deferred: plan.deferred,
           capacity,
@@ -875,7 +901,80 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'metrics': {
-        print(computeMetrics(readMetricEvents(stateRoot())));
+        const entries = listFlaky(stateRoot());
+        print({
+          ...computeMetrics(readMetricEvents(stateRoot())),
+          flaky: {
+            tests: entries.length,
+            runs: entries.reduce((sum, e) => sum + e.count, 0),
+            worst: entries.slice(0, 5),
+          },
+        });
+        return 0;
+      }
+
+      case 'deploy': {
+        refuseCrew(deps.env);
+        const [sub, sha] = rest;
+        if (sub !== 'record' || rest.length > 2 || (sha !== undefined && !SHORT_SHA.test(sha))) {
+          throw new UsageError('deploy needs: record [<sha>]');
+        }
+        const event = {
+          type: 'deployed',
+          at: ports.clock.now().toISOString(),
+          ...(sha === undefined ? {} : { sha }),
+        };
+        appendStateLine(await boundStateRoot(), 'metrics.jsonl', JSON.stringify(event));
+        print(event);
+        return 0;
+      }
+
+      case 'incident': {
+        refuseCrew(deps.env);
+        const [sub, id] = rest;
+        if (
+          (sub !== 'open' && sub !== 'resolve') ||
+          rest.length !== 2 ||
+          !INCIDENT_ID.test(id ?? '')
+        ) {
+          throw new UsageError('incident needs: open <id> | resolve <id>');
+        }
+        const event = {
+          type: sub === 'open' ? 'incident_opened' : 'incident_resolved',
+          at: ports.clock.now().toISOString(),
+          incident: id,
+        };
+        appendStateLine(await boundStateRoot(), 'metrics.jsonl', JSON.stringify(event));
+        print(event);
+        return 0;
+      }
+
+      case 'flaky': {
+        const [sub, test, sha, rerun] = rest;
+        if ((sub === undefined || sub === 'list') && rest.length <= 1) {
+          print(listFlaky(stateRoot()));
+          return 0;
+        }
+        refuseCrew(deps.env);
+        if (
+          sub !== 'record' ||
+          rest.length !== 4 ||
+          test === undefined ||
+          !SHORT_SHA.test(sha ?? '') ||
+          (rerun !== 'pass' && rerun !== 'fail')
+        ) {
+          throw new UsageError('flaky needs: list | record <test> <sha> pass|fail');
+        }
+        print(recordFlaky(await boundStateRoot(), test, sha as string, rerun, ports.clock.now()));
+        return 0;
+      }
+
+      case 'solutions': {
+        const [sub, ...words] = rest;
+        if (sub !== 'search' || words.length === 0) {
+          throw new UsageError('solutions needs: search <words...>');
+        }
+        print(searchSolutions(project, words.join(' ')));
         return 0;
       }
 

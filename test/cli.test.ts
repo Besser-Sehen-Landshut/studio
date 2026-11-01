@@ -1300,3 +1300,73 @@ describe('the merge step reads the board', () => {
     expect(g.calls.some((l) => l.startsWith('pr merge'))).toBe(false);
   });
 });
+
+describe('deploys, incidents, flaky tests and solutions in the CLI', () => {
+  const setup = () => {
+    const fx = makeFx([{ id: 'APP-1', title: 'cache flush' }]);
+    const { gh } = fakeGh();
+    const { ports } = fakePorts(gh);
+    return { fx, ports };
+  };
+  it('metrics shows the rate, the restore time and the flaky count', async () => {
+    const { fx, ports } = setup();
+    expect((await cli(fx, ports, 'deploy', 'record', 'abcdef1')).code).toBe(0);
+    expect((await cli(fx, ports, 'incident', 'open', 'INC-1')).code).toBe(0);
+    expect((await cli(fx, ports, 'incident', 'resolve', 'INC-1')).code).toBe(0);
+    expect((await cli(fx, ports, 'flaky', 'record', 'a test', 'abcdef1', 'pass')).code).toBe(0);
+    const m = JSON.parse((await cli(fx, ports, 'metrics')).out);
+    expect(m.deployedTotal).toBe(1);
+    expect(m.changeFailureRate).toBe(1);
+    expect(m.medianTimeToRestoreHours).not.toBeNull();
+    expect(m.flaky).toMatchObject({ tests: 1, runs: 1 });
+    const list = JSON.parse((await cli(fx, ports, 'flaky')).out);
+    expect(list[0].test).toBe('a test');
+  });
+  it('a failing rerun is reported as real', async () => {
+    const { fx, ports } = setup();
+    const r = await cli(fx, ports, 'flaky', 'record', 'a', 'abcdef1', 'fail');
+    expect(JSON.parse(r.out)).toEqual({ status: 'real' });
+  });
+  it.each([
+    [['deploy', 'record', 'not a sha']],
+    [['deploy']],
+    [['incident', 'open', '../x']],
+    [['incident', 'close', 'a']],
+    [['flaky', 'record', 'a', 'zzz', 'pass']],
+    [['flaky', 'record', 'a', 'abcdef1', 'maybe']],
+    [['solutions', 'search']],
+  ])('%j is a usage error', async (argv) => {
+    const { fx, ports } = setup();
+    const r = await cli(fx, ports, ...argv);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('Usage');
+  });
+  it.each([
+    [['deploy', 'record']],
+    [['incident', 'open', 'a']],
+    [['flaky', 'record', 'a', 'abcdef1', 'pass']],
+  ])('%j refuses for a crew', async (argv) => {
+    const { fx, ports } = setup();
+    fx.env.STUDIO_ROLE = 'crew';
+    const r = await cli(fx, ports, ...argv);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('not for crew');
+  });
+  it('plan and search read the solutions, with paths only', async () => {
+    const { fx, ports } = setup();
+    mkdirSync(join(fx.project, '.studio', 'solutions'));
+    writeFileSync(
+      join(fx.project, '.studio', 'solutions', 'c.md'),
+      '# Cache flush\n\nBODY-MARKER\n',
+    );
+    const plan = await cli(fx, ports, 'plan');
+    const assign = JSON.parse(plan.out).assign;
+    expect(assign[0].solutions[0]).toMatchObject({
+      path: '.studio/solutions/c.md',
+      title: 'Cache flush',
+    });
+    expect(plan.out).not.toContain('BODY-MARKER');
+    const r = await cli(fx, ports, 'solutions', 'search', 'cache', 'flush');
+    expect(JSON.parse(r.out)[0].score).toBe(2);
+  });
+});

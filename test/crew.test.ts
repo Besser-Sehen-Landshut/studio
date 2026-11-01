@@ -2288,4 +2288,21 @@ describe('capabilities at launch', () => {
     ).rejects.toThrow(/link/);
     expect(started).toHaveLength(0);
   });
+
+  it('a builder brief names matching solutions, a reviewer brief not', () => {
+    const { project, state } = makeFixture();
+    mkdirSync(join(project, '.studio', 'solutions'), { recursive: true });
+    writeFileSync(
+      join(project, '.studio', 'solutions', 'a.md'),
+      '# Fix the thing\n\nBODY-MARKER\n',
+    );
+    const text = readFileSync(writeBrief(state, item, config, project, NO_RULES), 'utf8');
+    expect(text).toContain('`.studio/solutions/a.md`: Fix the thing');
+    expect(text).not.toContain('BODY-MARKER');
+    const review = readFileSync(
+      writeBrief(state, { ...item, role: 'reviewer', type: 'review' }, config, project, NO_RULES),
+      'utf8',
+    );
+    expect(review).not.toContain('solutions/a.md');
+  });
 });
