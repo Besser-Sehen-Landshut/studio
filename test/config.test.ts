@@ -278,3 +278,35 @@ describe('toolchainPathProblem', () => {
     expect(toolchainPathProblem('/h/.local/bin', '/h', [], 'darwin')).toBeUndefined();
   });
 });
+
+describe('model settings', () => {
+  const yaml = (role: string) =>
+    `studio: 1\nprimary_repo: org/app\nrepos: [org/app]\nci:\n  provider: github\n  runners: github-hosted\n  capacity: { total: 1, merge_max_busy: 1, check_twice_seconds: 0 }\nmerge: { strategy: studio-queue }\nstacks: [rust]\nroles:\n  builder: ${role}\n`;
+  const load = (role: string) => {
+    const d = mkdtempSync(join(tmpdir(), 'studio-model-'));
+    mkdirSync(join(d, '.studio'));
+    writeFileSync(join(d, '.studio', 'studio.yaml'), yaml(role));
+    try {
+      return loadConfig(d);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  };
+  it('reads item type models, the escalation model and stacks', () => {
+    const c = load('{ model: sonnet, wip: 1, types: { docs: haiku }, escalate_to: opus }');
+    expect(c.roles.builder?.types?.docs).toBe('haiku');
+    expect(c.roles.builder?.escalateTo).toBe('opus');
+    expect(c.stacks).toEqual(['rust']);
+  });
+  it('reads skills.when', () => {
+    const c = load(
+      '{ model: sonnet, wip: 1, skills: { when: [{ paths: ["m/**"], item_types: [fix], required: ["a:b"] }] } }',
+    );
+    expect(c.roles.builder?.skills.when?.[0]?.itemTypes).toEqual(['fix']);
+  });
+  it.each(['--evil', '-x', 'a b', ''])('refuses the model %j', (m) => {
+    expect(() => load(`{ model: "${m}", wip: 1 }`)).toThrow();
+    expect(() => load(`{ model: ok, wip: 1, escalate_to: "${m}" }`)).toThrow();
+    expect(() => load(`{ model: ok, wip: 1, types: { docs: "${m}" } }`)).toThrow();
+  });
+});

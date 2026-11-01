@@ -28,6 +28,7 @@ Bundle drift check (what CI runs): `pnpm bundle`, then `git status --porcelain -
 - **`main` is protected:** changes arrive by pull request with the checks `check` (lint, typecheck, bundle drift, tests) and `secrets` (gitleaks) passing.
 - **The crew guard is a convenience layer, not the security boundary.** The boundary is the sandbox, a least-privilege token, and server-side branch protection. See `SECURITY.md`.
 - **Skills change only after a recorded failing baseline.** Before editing anything under `skills/`, record how an agent fails without the change in `test/skills/` (`baseline-lead.md`, `baseline-crew.md`, `scenarios/`), then write the change.
+- **No vendoring of unknown or copyleft content.** Third-party content goes into `capabilities/` only under MIT or Apache-2.0 with its notice in `capabilities/NOTICE.md`; everything else is listed in `capabilities/SOURCES.yaml` and fetched. Tests guard this.
 - **Concurrency.** CI keeps the group `ci-${{ github.head_ref || github.ref_name }}` with `cancel-in-progress: true`; a test guards it (`test/ci-concurrency.test.ts`).
 
 ## Where things live
@@ -36,4 +37,5 @@ Bundle drift check (what CI runs): `pnpm bundle`, then `git status --porcelain -
 - `SECURITY.md`: vulnerability reporting and the security model.
 - `CHANGELOG.md`: release notes; add an entry for user-visible changes.
 - `src/`: source; `dist-bundle/`: committed bundles; `schema/`: generated JSON Schemas.
+- `capabilities/`: trigger matrix, sources list, analyzers, design and knowledge files; loaded per row, never whole.
 - `skills/`: the lead and crew skills; `test/`: tests, fixtures, skill baselines.

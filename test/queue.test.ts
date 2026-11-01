@@ -5,6 +5,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -15,6 +16,7 @@ import { type StudioConfig, studioConfigSchema } from '../src/config.js';
 import type { Clock, Gh, Host } from '../src/ports.js';
 import {
   acquireQueueRunLock,
+  appendStateLine,
   enqueue,
   installSignalRelease,
   loadQueue,
@@ -1043,5 +1045,53 @@ describe('R79: queue file updates and the run lock', () => {
     );
     remove();
     expect(['SIGTERM', 'SIGINT', 'SIGHUP'].map((s) => process.listenerCount(s))).toEqual(before);
+  });
+});
+
+describe('mergeAllowed', () => {
+  it('a refusal fails the entry before gh pr merge; no refusal merges', async () => {
+    const rules = () =>
+      base([
+        { prefix: REQ, responses: [noRequired] },
+        { prefix: VIEW, responses: [view(H1)] },
+        { prefix: CHK, responses: [checks(['a', 'pass'])] },
+      ]);
+    const go = async (reason: string | undefined) => {
+      const g = fakeGh(rules());
+      const c = fakeClock();
+      const result = await mergeOne(
+        entry(),
+        mkConfig(),
+        { gh: g.gh, clock: c.clock, host },
+        () => {},
+        {
+          mergeAllowed: () => reason,
+        },
+      );
+      return { result, merged: g.calls.some((l: string) => l.startsWith('pr merge')) };
+    };
+    const refused = await go('board item is blocked');
+    expect(refused.result).toMatchObject({ result: 'failed', reason: 'board item is blocked' });
+    expect(refused.merged).toBe(false);
+    expect((await go(undefined)).merged).toBe(true);
+  });
+});
+
+describe('appendStateLine', () => {
+  it('adds to the end, keeps what a parallel writer added, ends a torn line', () => {
+    const d = mkdtempSync(join(tmpdir(), 'studio-append-'));
+    writeFileSync(join(d, 'm.jsonl'), 'a');
+    appendStateLine(d, 'm.jsonl', 'b');
+    appendStateLine(d, 'm.jsonl', 'c');
+    expect(readFileSync(join(d, 'm.jsonl'), 'utf8')).toBe('a\nb\nc\n');
+    rmSync(d, { recursive: true, force: true });
+  });
+  it('refuses a link', () => {
+    const d = mkdtempSync(join(tmpdir(), 'studio-append-'));
+    writeFileSync(join(d, 'real'), 'x\n');
+    symlinkSync(join(d, 'real'), join(d, 'm.jsonl'));
+    expect(() => appendStateLine(d, 'm.jsonl', 'b')).toThrow();
+    expect(readFileSync(join(d, 'real'), 'utf8')).toBe('x\n');
+    rmSync(d, { recursive: true, force: true });
   });
 });

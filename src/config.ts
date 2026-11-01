@@ -3,6 +3,9 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import { globProblem } from './glob.js';
+
+export { globProblem };
 
 export const ROLE_TEMPLATES = ['builder', 'reviewer', 'designer', 'researcher', 'release'] as const;
 export type RoleTemplate = (typeof ROLE_TEMPLATES)[number];
@@ -56,13 +59,47 @@ export function toolchainPathProblem(
   return hit ? `must not equal, contain or lie inside the credential location ${hit}` : undefined;
 }
 
-const roleSchema = z.strictObject({
-  model: z.string().min(1),
-  wip: z.number().int().positive(),
-  skills: z
-    .strictObject({ required: strList, allowed: strList, denied: strList })
-    .default({ required: [], allowed: [], denied: [] }),
+/** A value for `--model`: it never starts with a dash. Same rule as in board.ts (a test keeps them equal). */
+export const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
+const modelName = z.string().regex(MODEL_NAME_RE, 'not a model name');
+
+const ITEM_TYPES = ['feature', 'fix', 'chore', 'docs', 'research', 'review', 'release'] as const;
+
+const roleSkillsSchema = z.strictObject({
+  required: strList,
+  allowed: strList,
+  denied: strList,
+  // More skills when the item's paths or type match, on top of capabilities/INDEX.yaml.
+  when: z
+    .array(
+      z.strictObject({
+        paths: z
+          .array(
+            z.string().superRefine((g, ctx) => {
+              const problem = globProblem(g);
+              if (problem !== undefined) ctx.addIssue({ code: 'custom', message: problem });
+            }),
+          )
+          .optional(),
+        itemTypes: z.array(z.enum(ITEM_TYPES)).optional(),
+        required: z.array(z.string()).optional(),
+        allowed: z.array(z.string()).optional(),
+      }),
+    )
+    .optional(),
 });
+export type RoleSkills = z.infer<typeof roleSkillsSchema>;
+
+const roleSchema = z.strictObject({
+  model: modelName,
+  // Another model for some item types, e.g. a cheaper one for docs.
+  types: z.partialRecord(z.enum(ITEM_TYPES), modelName).optional(),
+  // What `studio escalate <id>` moves a stuck item of this role to.
+  escalateTo: modelName.optional(),
+  wip: z.number().int().positive(),
+  skills: roleSkillsSchema.default({ required: [], allowed: [], denied: [] }),
+});
+export type RoleConfig = z.infer<typeof roleSchema>;
 
 export const ciSchema = z.strictObject({
   provider: z.literal('github'),
@@ -104,6 +141,8 @@ export const studioConfigSchema = z.strictObject({
   roles: z
     .partialRecord(z.enum(ROLE_TEMPLATES), roleSchema)
     .refine((r) => Object.keys(r).length > 0, 'at least one role is required'),
+  // Detected from manifest files and stored by `studio setup stack`.
+  stacks: z.array(z.string().min(1)).optional(),
   sandbox: z.strictObject({ networkAllow: strList }).default({ networkAllow: [] }),
   // Name of the env var that holds the least-privilege token (never the token itself).
   crewToken: z.strictObject({ env: z.string().min(1) }).optional(),

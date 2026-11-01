@@ -1,10 +1,24 @@
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import {
+  closeSync,
+  constants,
+  existsSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  writeSync,
+} from 'node:fs';
 import { constants as osConstants } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { capacityHoldsTwice } from './capacity.js';
 import type { StudioConfig } from './config.js';
-import { acquireStateLock, assertStatePath, type StateLock, writeStateFile } from './paths.js';
+import {
+  acquireStateLock,
+  assertStatePath,
+  ensureStateDir,
+  type StateLock,
+  writeStateFile,
+} from './paths.js';
 import type { Clock, Gh, Host } from './ports.js';
 
 export type QueueStep = 'update' | 'checks' | 'capacity' | 'merge';
@@ -40,6 +54,8 @@ export type QueueOptions = {
    * loop and right before `gh pr merge`; a stop keeps `current` and `pending` as they are.
    */
   hold?: () => string | undefined;
+  /** Why this entry must not merge, read right before `gh pr merge`; a reason fails the entry. */
+  mergeAllowed?: (entry: QueueEntry) => string | undefined;
 };
 
 /** Internal stop: the hold fired between capacity and merge. `current` stays persisted. */
@@ -216,19 +232,30 @@ export function installSignalRelease(lock: Pick<StateLock, 'release' | 'heartbea
   };
 }
 
-/** Appends one line to a state-root file (atomic rewrite; the queue is serial). */
-function appendStateLine(stateRoot: string, name: string, line: string): void {
+/** Appends one line to a state-root file; a real append, so parallel writers lose nothing. */
+export function appendStateLine(stateRoot: string, name: string, line: string): void {
   const file = join(stateRoot, name);
   assertStatePath(stateRoot, file);
-  let prev = '';
+  let torn = false;
   if (existsSync(file)) {
     if (lstatSync(file).isSymbolicLink()) {
       throw new Error(`refusing to use ${file}: it is a symlink`);
     }
-    prev = readFileSync(file, 'utf8');
-    if (prev !== '' && !prev.endsWith('\n')) prev += '\n';
+    const prev = readFileSync(file, 'utf8');
+    torn = prev !== '' && !prev.endsWith('\n');
+  } else {
+    ensureStateDir(stateRoot, dirname(file));
   }
-  writeStateFile(stateRoot, file, `${prev}${line}\n`);
+  const fd = openSync(
+    file,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | (constants.O_NOFOLLOW ?? 0),
+    0o600,
+  );
+  try {
+    writeSync(fd, `${torn ? '\n' : ''}${line}\n`);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 type Check = { name: string; bucket: string };
@@ -495,6 +522,8 @@ export async function mergeOne(
         enter('capacity');
         throw new QueueHeld(held);
       }
+      const refused = opts.mergeAllowed?.(entry);
+      if (refused !== undefined) return failed(refused);
       const r = await gh.run([
         'pr',
         'merge',

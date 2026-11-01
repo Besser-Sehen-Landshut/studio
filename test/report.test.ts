@@ -89,21 +89,48 @@ describe('parseReport', () => {
 });
 
 describe('parseReport for review and research items', () => {
-  it('accepts a done review report without pr and head_sha', () => {
+  it('accepts a done review report without pr, with the head it reviewed', () => {
     const r = parseReport(
-      doc('status: done\nitem: APP-1\nverdict: approve\nreviews: org/app#9'),
+      doc(
+        'status: done\nitem: APP-1\nverdict: approve\nreviews: org/app#9\nhead_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      ),
       item('review'),
     );
     expect(r).toMatchObject({ status: 'done', verdict: 'approve', reviews: 'org/app#9' });
     expect(r.pr).toBeUndefined();
-    expect(r.headSha).toBeUndefined();
+    expect(r.headSha).toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+  });
+
+  it('refuses a done review report without head_sha, or with a pr of its own', () => {
+    expect(() =>
+      parseReport(
+        doc('status: done\nitem: APP-1\nverdict: approve\nreviews: org/app#9'),
+        item('review'),
+      ),
+    ).toThrow(/head_sha/);
+    expect(() =>
+      parseReport(
+        doc(
+          'status: done\nverdict: approve\npr: 3\nhead_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        ),
+        item('review'),
+      ),
+    ).toThrow(/no pr/);
   });
 
   it('requires a verdict on done review reports and rejects bad values', () => {
-    expect(() => parseReport(doc('status: done\nitem: APP-1'), item('review'))).toThrow(/verdict/);
-    expect(() => parseReport(doc('status: done\nverdict: merge_it'), item('review'))).toThrow(
-      ReportError,
-    );
+    expect(() =>
+      parseReport(
+        doc('status: done\nitem: APP-1\nhead_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
+        item('review'),
+      ),
+    ).toThrow(/verdict/);
+    expect(() =>
+      parseReport(
+        doc('status: done\nverdict: merge_it\nhead_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
+        item('review'),
+      ),
+    ).toThrow(ReportError);
     expect(() =>
       parseReport(doc('status: done\nverdict: approve\nreviews: nope'), item('review')),
     ).toThrow(ReportError);
@@ -233,5 +260,30 @@ describe('collectReport treats the report as untrusted input', () => {
     expect(errOf(() => collectReport(d, 'APP-1', undefined, item('docs')))).not.toContain(SECRET);
     write(`status: blocked\nhead_sha: ${SECRET}`);
     expect(errOf(() => collectReport(d, 'APP-1', 'a'.repeat(40)))).not.toContain(SECRET);
+  });
+});
+
+describe('review fields', () => {
+  const parse = (front: string) => parseReport(`---\nstatus: blocked\n${front}\n---\n`);
+  it('reads a probe that stayed green', () => {
+    expect(parse('mutation_probe: "green: t"').mutationProbe).toBe('green: t');
+  });
+  it('reads analyzers, the probe and the attempts', () => {
+    const r = parse(
+      'analyzers: { a: pass, b: findings, c: "skipped: no source" }\nmutation_probe: "red: t"\nfinding_attempts: 2',
+    );
+    expect(r.analyzers).toEqual({ a: 'pass', b: 'findings', c: 'skipped: no source' });
+    expect(r.mutationProbe).toBe('red: t');
+    expect(r.findingAttempts).toBe(2);
+  });
+  it.each([
+    'analyzers: { a: maybe }',
+    'analyzers: { a: "pass\\nx" }',
+    'analyzers: { "a b": pass }',
+    'mutation_probe: green',
+    'mutation_probe: "red: "',
+    'finding_attempts: -1',
+  ])('refuses %s, without echoing it', (front) => {
+    expect(() => parse(front)).toThrow(/bad field/);
   });
 });

@@ -1,5 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -175,7 +183,11 @@ describe('crew loop with a fake claude', () => {
     }
 
     // A report whose head differs from the PR head must not move the item.
-    const reportFile = join(cloneOf('APP-2'), '.studio', 'reports', 'APP-2.md');
+    const reportDir = join(cloneOf('APP-2'), '.studio', 'reports');
+    const reportFile = join(
+      reportDir,
+      readdirSync(reportDir).find((n) => n.startsWith('APP-2.') && n.endsWith('.md')) as string,
+    );
     const original = readFileSync(reportFile, 'utf8');
     writeFileSync(reportFile, original.replace(/^head_sha: .*$/m, `head_sha: ${'b'.repeat(40)}`));
     await expect(run('collect', 'APP-2')).rejects.toThrow(/exited 1/);

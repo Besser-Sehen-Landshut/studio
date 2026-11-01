@@ -17,6 +17,7 @@ import { loadBoard } from '../src/board.js';
 import { type CliDeps, runCli } from '../src/cli.js';
 import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
+import { newReportName } from '../src/report.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-cli-limits-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -296,7 +297,7 @@ describe('usage limits through the CLI', () => {
     hitLimit(fx, 'APP-2');
     const reports = join(fx.state, 'clones', 'APP-2', '.studio', 'reports');
     mkdirSync(reports, { recursive: true });
-    writeFileSync(join(reports, 'APP-2.md'), '---\nstatus: done\n---\n');
+    writeFileSync(join(reports, newReportName(fx.state, 'APP-2')), '---\nstatus: done\n---\n');
     await cli(fx, p.ports, ['status']);
     expect(itemOf(fx, 'APP-1')?.status).toBe('ready');
     expect(itemOf(fx, 'APP-2')?.status).toBe('assigned');
@@ -363,7 +364,7 @@ describe('usage limits through the CLI', () => {
       hitLimit(fx, 'APP-1', RETRY);
       const reports = join(fx.state, 'clones', 'APP-1', '.studio', 'reports');
       mkdirSync(reports, { recursive: true });
-      writeFileSync(join(reports, 'APP-1.md'), '---\nstatus: done\n---\n');
+      writeFileSync(join(reports, newReportName(fx.state, 'APP-1')), '---\nstatus: done\n---\n');
       await cli(fx, p.ports, ['status']);
       untouched(fx, p);
     });

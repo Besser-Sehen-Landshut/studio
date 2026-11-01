@@ -19,6 +19,7 @@ import { launchCrew } from '../src/crew.js';
 import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import { enqueue, loadQueue, saveQueue } from '../src/queue.js';
+import { newReportName } from '../src/report.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-label-limits-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -617,7 +618,7 @@ describe('pane fields in state.json', () => {
     expect(stateOf(fx).crew[0].state).toBe('crashed');
     const dir = join(fx.state, 'clones', 'APP-1', '.studio', 'reports');
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'APP-1.md'), '---\nstatus: done\n---\n');
+    writeFileSync(join(dir, newReportName(fx.state, 'APP-1')), '---\nstatus: done\n---\n');
     await cli(fx, p.ports, ['state']);
     expect(stateOf(fx).crew[0].state).toBe('waiting');
   });

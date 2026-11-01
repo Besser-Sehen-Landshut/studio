@@ -23,6 +23,7 @@ import { DEFAULT_SECRET_GLOBS, evaluateGuard } from '../src/guard.js';
 import { detectBlock, readBlocks } from '../src/limits.js';
 import { ownerStateRootFor, STATE_FILES, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
+import { newReportName } from '../src/report.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-block-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -626,7 +627,7 @@ describe('account block details', () => {
     p.alive.delete(5001);
     const reports = join(fx.state, 'clones', 'APP-1', '.studio', 'reports');
     mkdirSync(reports, { recursive: true });
-    writeFileSync(join(reports, 'APP-1.md'), 'x');
+    writeFileSync(join(reports, newReportName(fx.state, 'APP-1')), 'x');
     await cli(fx, p.ports, ['status']);
     expect(blocksOf(fx)[0]).toMatchObject({ label: 'label-a', reason: 'authentication_failed' });
     expect(p.stopped).toEqual([5002]);
@@ -638,7 +639,7 @@ describe('account block details', () => {
     expect(itemOf(fx, 'APP-1')?.status).toBe('assigned');
     expect(itemOf(fx, 'APP-2')?.status).toBe('ready');
     const head = 'a'.repeat(40);
-    const file = join(reports, 'APP-1.md');
+    const file = join(reports, newReportName(fx.state, 'APP-1'));
     writeFileSync(
       file,
       `---\nstatus: done\nitem: APP-1\npr: 7\nhead_sha: ${head}\ntests_run: 3\nlessons: []\nquestions: []\n---\nbody\n`,
@@ -668,7 +669,7 @@ describe('account block details', () => {
     await twoCrews(fx, p);
     const reports = join(fx.state, 'clones', 'APP-2', '.studio', 'reports');
     mkdirSync(reports, { recursive: true });
-    writeFileSync(join(reports, 'APP-2.md'), 'x');
+    writeFileSync(join(reports, newReportName(fx.state, 'APP-2')), 'x');
     log(fx, 'APP-1', ON_HOLD);
     await cli(fx, p.ports, ['status']);
     expect(p.stopped.sort()).toEqual([5001, 5002]);
@@ -749,7 +750,7 @@ describe('account block details', () => {
     await twoCrews(fx, p);
     const reports = join(fx.state, 'clones', 'APP-1', '.studio', 'reports');
     mkdirSync(reports, { recursive: true });
-    const file = join(reports, 'APP-1.md');
+    const file = join(reports, newReportName(fx.state, 'APP-1'));
     writeFileSync(
       file,
       '---\nstatus: failed\nitem: APP-1\nlessons: []\nquestions: []\n---\nbody\n',
