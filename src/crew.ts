@@ -31,6 +31,7 @@ import {
   sessionIdSince,
 } from './limits.js';
 import {
+  acquireStateLock,
   assertStatePath,
   canonicalToolchainPaths,
   checkStateMarker,
@@ -41,11 +42,20 @@ import {
   removeStateEntry,
   STATE_FILES,
   STATE_PROTECTED_DIRS,
+  type StateLock,
   stateRootFor,
   writeStateFile,
 } from './paths.js';
 import type { Ports } from './ports.js';
 import { readCrewRecords } from './state.js';
+import {
+  LABEL_FULL_LINE,
+  LAUNCH_LOCK,
+  LAUNCH_LOCK_STALE_MS,
+  labelUsage,
+  recordRun,
+  USAGE_UNREADABLE,
+} from './usage.js';
 
 export const crewName = (item: WorkItem): string => `studio-${item.role}-${item.id.toLowerCase()}`;
 
@@ -615,6 +625,33 @@ export async function launchCrew(
   ports: Ports,
   launcher: LauncherEnv = {},
 ): Promise<{ name: string; pid: number; log: string }> {
+  // Launches of one process wait for each other; launches of different processes are serialised
+  // by the launch lock, taken inside once the state root is known and always released here.
+  const turn = launchChain;
+  let done: () => void = () => {};
+  launchChain = new Promise<void>((resolve) => {
+    done = resolve;
+  });
+  await turn;
+  const held: { lock?: StateLock } = {};
+  try {
+    return await launchCrewLocked(projectDir, item, config, ports, launcher, held);
+  } finally {
+    held.lock?.release();
+    done();
+  }
+}
+
+let launchChain: Promise<void> = Promise.resolve();
+
+async function launchCrewLocked(
+  projectDir: string,
+  item: WorkItem,
+  config: StudioConfig,
+  ports: Ports,
+  launcher: LauncherEnv,
+  held: { lock?: StateLock },
+): Promise<{ name: string; pid: number; log: string }> {
   assertItemId(item.id);
   const penv = launcher.env ?? process.env;
   const role = config.roles[item.role];
@@ -682,6 +719,12 @@ export async function launchCrew(
     throw new Error(`${join(stateRoot, 'limits.json')} is unreadable; refusing to launch`);
   }
   const parks = activeParks(limits.labels, ports.clock.now());
+  // Per-label restraint: labels at max_parallel or at the day limit are excluded like parked ones.
+  const usage = labelUsage({ project: projectDir, stateRoot, ownerConfig, ports });
+  if (!usage.ok) throw new Error(USAGE_UNREADABLE);
+  const refuseFull = (): never => {
+    throw new Error('credential limit: the label is at its configured parallel or daily limit');
+  };
   // The credential, before the first side effect. Provider or not, the value stays in this function
   // and reaches only the environment of the spawned process.
   let label = DEFAULT_LABEL;
@@ -692,19 +735,23 @@ export async function launchCrew(
     if (parks[DEFAULT_LABEL]) {
       throw new Error(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
     }
+    if (usage.remaining(DEFAULT_LABEL) <= 0) refuseFull();
   } else {
     const parked = Object.keys(parks);
+    const exclude = [...new Set([...parked, ...usage.full])];
     const got = await runCredentialProvider(
       command,
-      { item: item.id, role: item.role, exclude: parked },
+      { item: item.id, role: item.role, exclude },
       ports,
       owner,
     );
     if (got === undefined) {
+      if (usage.full.length > 0) throw new Error(LABEL_FULL_LINE);
       if (parked.length > 0) throw new Error(allParkedLine(earliestReset(parks)));
       throw new Error('credential provider: returned nothing while no label is parked');
     }
     if (parks[got.label]) throw new Error('credential provider: returned a parked label');
+    if (exclude.includes(got.label) || usage.remaining(got.label) <= 0) refuseFull();
     label = got.label;
     oauthToken = got.token;
     if (got.configDir !== undefined) {
@@ -744,11 +791,24 @@ export async function launchCrew(
       tokenConfigDir !== undefined && previous?.tokenConfigDir === tokenConfigDir;
     return sameLabel || sameTokenDir ? sessionId : undefined;
   })();
-  // First side effect: bind the state root to this project and origin (or refuse a mismatch).
+  // Bind the state root to this project and origin (or refuse a mismatch).
   checkStateMarker(stateRoot, {
     projectRealpath: projectRealpath(projectDir),
     originUrl: await ownerOriginUrl(projectDir, ports),
   });
+  // From here to the crew record one launch at a time, because the running and daily counts read
+  // the records. The lock file needs the bound state root, so it comes after the marker. No lock
+  // means refuse. Under the lock the chosen label is checked against the counts once more: the
+  // pick above may have run next to another launch.
+  const lock = acquireStateLock(stateRoot, LAUNCH_LOCK, {
+    now: ports.clock.now(),
+    heartbeatStaleMs: LAUNCH_LOCK_STALE_MS,
+  });
+  if (!lock) throw new Error('another launch is in progress (launch.lock); try again');
+  held.lock = lock;
+  const locked = labelUsage({ project: projectDir, stateRoot, ownerConfig, ports });
+  if (!locked.ok) throw new Error(USAGE_UNREADABLE);
+  if (locked.remaining(label) <= 0) refuseFull();
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
   // Isolated HOME, recreated from scratch on every launch: only a git identity and a credential
@@ -798,6 +858,9 @@ export async function launchCrew(
   const logStart = fileSize(log);
   // A block may have arrived while this launch was preparing.
   refuseIfBlocked(stateRoot);
+  held.lock?.heartbeat(ports.clock.now());
+  // Counted before the start, so a start that fails still counts as a run.
+  recordRun(stateRoot, label, ports.clock.now(), ownerConfig.crewLabelLimits.timezone);
   const { pid } = await ports.claude.start(
     wt.path,
     [

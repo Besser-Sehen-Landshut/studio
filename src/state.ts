@@ -56,6 +56,8 @@ export interface StateSnapshot {
   forOwner: { id: string; title: string }[];
   /** Credential labels parked at a usage limit. */
   limits?: Parks;
+  /** Crews running and runs today per credential label (labels only); absent when empty. */
+  labelUsage?: { day: string; labels: Record<string, { running: number; runsToday: number }> };
   /** One entry per account block, for whatever shows the owner this state; absent without a block. */
   notifications?: Notification[];
   updatedAt: string;

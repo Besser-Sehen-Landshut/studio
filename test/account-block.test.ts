@@ -143,7 +143,9 @@ const provider = (fx: Fx, label: string, before = '') => {
   const line = JSON.stringify({ label, env: { CLAUDE_CODE_OAUTH_TOKEN: 'fake-value-block-9f3a' } });
   writeFileSync(
     f,
-    `#!/bin/sh\necho called >> "${fx.base}/provider-calls"\n${before}\ncat <<'OUT'\n${line}\nOUT\n`,
+    // Keeps to the STUDIO_EXCLUDE contract: nothing for an excluded label (the planner asks again
+    // with the label excluded and holds on an answer that still names it).
+    `#!/bin/sh\necho called >> "${fx.base}/provider-calls"\n${before}\ncase ",$STUDIO_EXCLUDE," in *,${label},*) exit 0;; esac\ncat <<'OUT'\n${line}\nOUT\n`,
     { mode: 0o700 },
   );
   writeFileSync(join(fx.ownerDir, 'config.yaml'), `crew_credential_command: ${f}\n`);

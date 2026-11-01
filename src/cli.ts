@@ -42,6 +42,7 @@ import {
   type StateSnapshot,
   writeState,
 } from './state.js';
+import { credentialSlots, LABEL_FULL_LINE, labelUsageSnapshot } from './usage.js';
 
 export interface CliDeps {
   ports: Ports;
@@ -161,11 +162,32 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     };
     const planNow = async (config: StudioConfig, board: Board) => {
       const capacity = await readCapacity(config, ports);
-      const hold = await limitHold(stateRoot(), loadOwnerConfig(owner), ports, owner);
+      const ownerConfig = loadOwnerConfig(owner);
+      let hold = await limitHold(stateRoot(), ownerConfig, ports, owner);
+      // Room under the per-label limits; asked only while nothing else holds (no provider call
+      // during a block).
+      let slots: number | undefined;
+      let line = hold;
+      if (hold === undefined) {
+        const got = await credentialSlots({
+          project,
+          stateRoot: stateRoot(),
+          ownerConfig,
+          ports,
+          owner,
+        });
+        if (got.hold !== undefined) {
+          hold = got.hold;
+          line = got.hold;
+        } else {
+          slots = got.slots;
+          if (slots <= 0) line = LABEL_FULL_LINE;
+        }
+      }
       return {
         capacity,
-        hold,
-        plan: planAssignments(board, config, capacity, runningPerRole(board), hold),
+        hold: line,
+        plan: planAssignments(board, config, capacity, runningPerRole(board), hold, slots),
       };
     };
 
@@ -461,6 +483,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ports.clock.now(),
           hold,
           read.ok ? activeParks(read.labels, ports.clock.now()) : {},
+          labelUsageSnapshot({
+            project,
+            stateRoot: root,
+            ownerConfig: loadOwnerConfig(owner),
+            ports,
+          }),
         );
         writeState(root, snapshot);
         print(snapshot);
@@ -693,6 +721,7 @@ function buildSnapshot(
   now: Date,
   hold: string | undefined,
   limits: Parks,
+  labelUsage: StateSnapshot['labelUsage'],
 ): StateSnapshot {
   const blocks = readBlocks(root);
   const blocked = blockLine(blocks);
@@ -740,6 +769,7 @@ function buildSnapshot(
           : [{ id: 'usage-limit', title: hold }]),
     ],
     ...(Object.keys(limits).length > 0 ? { limits } : {}),
+    ...(labelUsage === undefined ? {} : { labelUsage }),
     ...(notifications.length > 0 ? { notifications } : {}),
     updatedAt: now.toISOString(),
     metrics: computeMetrics(readMetricEvents(root)),

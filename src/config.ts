@@ -183,6 +183,29 @@ export function loadConfig(projectDir: string): StudioConfig {
   return result.data;
 }
 
+/** Whether Intl knows this time zone (an IANA name). */
+export function validTimeZone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Usage limits per credential label; the whole block defaults to two crews at once per label. */
+export const crewLabelLimitsSchema = z
+  .strictObject({
+    maxParallel: z.number().int().positive().default(2),
+    maxRunsPerDay: z.number().int().positive().optional(),
+    // IANA zone whose midnight starts the day count; default is the system zone.
+    timezone: z
+      .string()
+      .refine(validTimeZone, { message: 'not a known IANA time zone' })
+      .optional(),
+  })
+  .default({ maxParallel: 2 });
+
 /** Owner-level settings, kept outside every repository. */
 export const ownerConfigSchema = z.strictObject({
   // Absolute directories a crew may read in addition to its clone, tmp dir and HOME (toolchains
@@ -193,6 +216,7 @@ export const ownerConfigSchema = z.strictObject({
   // Opt-in: let crew runs bill the API. An API key would otherwise take precedence over the
   // subscription login, so the variables and settings for it are refused by default.
   allowApiBilling: z.boolean().default(false),
+  crewLabelLimits: crewLabelLimitsSchema,
 });
 
 export type OwnerConfig = z.infer<typeof ownerConfigSchema>;

@@ -7844,7 +7844,7 @@ var require_shell_quote = __commonJS({
 import { homedir as homedir5 } from "node:os";
 
 // src/cli.ts
-import { join as join11, resolve as resolve4 } from "node:path";
+import { join as join12, resolve as resolve4 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/board.ts
@@ -11414,7 +11414,7 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
     }
     return propValues;
   });
-  const isObject4 = isObject;
+  const isObject5 = isObject;
   const catchall = def.catchall;
   let value;
   const memo2 = globalConfig.memoizer;
@@ -11422,7 +11422,7 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
   inst._zod.parse = (payload, ctx) => {
     value ?? (value = _normalized.value);
     const input2 = payload.value;
-    if (!isObject4(input2)) {
+    if (!isObject5(input2)) {
       payload.issues.push({
         expected: "object",
         code: "invalid_type",
@@ -11558,7 +11558,7 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
     return doc.compile();
   };
   let fastpass;
-  const isObject4 = isObject;
+  const isObject5 = isObject;
   const jit = !globalConfig.jitless;
   const allowsEval2 = allowsEval;
   const fastEnabled = jit && allowsEval2.value;
@@ -11567,7 +11567,7 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
   inst._zod.parse = (payload, ctx) => {
     value ?? (value = _normalized.value);
     const input2 = payload.value;
-    if (!isObject4(input2)) {
+    if (!isObject5(input2)) {
       payload.issues.push({
         expected: "object",
         code: "invalid_type",
@@ -27941,6 +27941,20 @@ function loadConfig(projectDir) {
   }
   return result.data;
 }
+function validTimeZone(zone) {
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+var crewLabelLimitsSchema = external_exports.strictObject({
+  maxParallel: external_exports.number().int().positive().default(2),
+  maxRunsPerDay: external_exports.number().int().positive().optional(),
+  // IANA zone whose midnight starts the day count; default is the system zone.
+  timezone: external_exports.string().refine(validTimeZone, { message: "not a known IANA time zone" }).optional()
+}).default({ maxParallel: 2 });
 var ownerConfigSchema = external_exports.strictObject({
   // Absolute directories a crew may read in addition to its clone, tmp dir and HOME (toolchains
   // below the real home, e.g. a version manager). Default empty: crew uses system toolchains.
@@ -27949,7 +27963,8 @@ var ownerConfigSchema = external_exports.strictObject({
   crewCredentialCommand: external_exports.string().min(1).optional(),
   // Opt-in: let crew runs bill the API. An API key would otherwise take precedence over the
   // subscription login, so the variables and settings for it are refused by default.
-  allowApiBilling: external_exports.boolean().default(false)
+  allowApiBilling: external_exports.boolean().default(false),
+  crewLabelLimits: crewLabelLimitsSchema
 });
 function xdgDir(env, name) {
   const v = env[name];
@@ -28162,7 +28177,9 @@ var STATE_FILES = [
   "limits.json",
   "limits.lock",
   "blocks.json",
-  "blocks.lock"
+  "blocks.lock",
+  "usage.json",
+  "launch.lock"
 ];
 function stateBaseFor(opts = {}) {
   const env = opts.env ?? process.env;
@@ -29417,15 +29434,15 @@ async function parksHold(parks, ownerConfig, ports, owner) {
 import {
   chmodSync as chmodSync3,
   existsSync as existsSync3,
-  lstatSync as lstatSync5,
+  lstatSync as lstatSync6,
   readdirSync as readdirSync2,
-  readFileSync as readFileSync7,
+  readFileSync as readFileSync8,
   realpathSync as realpathSync3,
   unlinkSync as unlinkSync3,
   writeFileSync as writeFileSync5
 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { basename as basename2, dirname as dirname4, join as join6, resolve as resolve3, sep as sep4 } from "node:path";
+import { basename as basename2, dirname as dirname4, join as join7, resolve as resolve3, sep as sep4 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/guard.ts
@@ -29443,6 +29460,162 @@ var DEFAULT_SECRET_GLOBS = [
 ];
 var GH_VALUE_FLAGS = ["-R", "--repo", "--hostname"];
 var GH_RUN_VALUE_FLAGS = ["--ref", "-r", "-f", "--raw-field", "-F", "--field", ...GH_VALUE_FLAGS];
+
+// src/usage.ts
+import { lstatSync as lstatSync5, readFileSync as readFileSync7 } from "node:fs";
+import { join as join6 } from "node:path";
+var LAUNCH_LOCK = "launch.lock";
+var LAUNCH_LOCK_STALE_MS = 10 * 6e4;
+var USAGE_DAYS_KEPT = 8;
+var MAX_PROBES = 16;
+var USAGE_UNREADABLE = "usage.json is unreadable: no crew starts until it is fixed or removed";
+var LABEL_FULL_LINE = "usage limit: every crew credential is at its configured limit; work resumes when a run ends or the day changes";
+var PROVIDER_HOLD_LINE = "credential provider failed or answered unexpectedly: no crew starts until it works again";
+var PROVIDER_EMPTY_LINE = "credential provider returned nothing while no label is at a limit: no crew starts";
+var DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+function dayKey(now, timezone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    calendar: "gregory",
+    numberingSystem: "latn",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(now);
+  const get = (type) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+var isObject3 = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+var usageFile = (stateRoot) => join6(stateRoot, "usage.json");
+function readUsage(stateRoot) {
+  const file2 = usageFile(stateRoot);
+  try {
+    if (!lstatSync5(file2).isFile()) return { ok: false };
+  } catch (e) {
+    return e.code === "ENOENT" ? { ok: true, days: {} } : { ok: false };
+  }
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync7(file2, "utf8"));
+  } catch {
+    return { ok: false };
+  }
+  if (!isObject3(raw)) return { ok: false };
+  const days = {};
+  for (const [day, labels] of Object.entries(raw)) {
+    if (!DAY_RE.test(day) || !isObject3(labels)) return { ok: false };
+    const counts = {};
+    for (const [label, runs] of Object.entries(labels)) {
+      if (!validLabel(label)) return { ok: false };
+      if (typeof runs !== "number" || !Number.isSafeInteger(runs) || runs < 0) return { ok: false };
+      counts[label] = runs;
+    }
+    days[day] = counts;
+  }
+  return { ok: true, days };
+}
+function recordRun(stateRoot, label, now, timezone) {
+  const read2 = readUsage(stateRoot);
+  if (!read2.ok) throw new Error(USAGE_UNREADABLE);
+  const today = dayKey(now, timezone);
+  const cutoff = dayKey(new Date(now.getTime() - (USAGE_DAYS_KEPT - 1) * 864e5), timezone);
+  const days = {};
+  for (const day of Object.keys(read2.days).sort()) {
+    if (day >= cutoff) days[day] = read2.days[day];
+  }
+  const todays = days[today] ?? {};
+  todays[label] = (todays[label] ?? 0) + 1;
+  days[today] = todays;
+  writeStateFile(stateRoot, usageFile(stateRoot), `${JSON.stringify(days, null, 2)}
+`);
+}
+function boardOrUndefined(project) {
+  try {
+    return loadBoard(project);
+  } catch {
+    return void 0;
+  }
+}
+function runningPerLabel(stateRoot, ports, board) {
+  const out = {};
+  for (const rec of Object.values(readCrewRecords(stateRoot))) {
+    if (rec.stoppedAt !== void 0) continue;
+    const status = board?.items.find((i2) => i2.id === rec.item)?.status;
+    if (status === "merged" || status === "dropped") continue;
+    const validPid = Number.isInteger(rec.pid) && rec.pid > 0;
+    if (validPid && !ports.claude.alive(rec.pid)) continue;
+    const label = typeof rec.label === "string" && validLabel(rec.label) ? rec.label : DEFAULT_LABEL;
+    out[label] = (out[label] ?? 0) + 1;
+  }
+  return out;
+}
+function labelUsage(o2) {
+  const { maxParallel, maxRunsPerDay, timezone } = o2.ownerConfig.crewLabelLimits;
+  const day = dayKey(o2.ports.clock.now(), timezone);
+  const running = runningPerLabel(o2.stateRoot, o2.ports, boardOrUndefined(o2.project));
+  const read2 = readUsage(o2.stateRoot);
+  const runsToday = read2.ok ? { ...read2.days[day] ?? {} } : {};
+  const remaining = (label) => {
+    if (!read2.ok) return 0;
+    const parallel = maxParallel - (running[label] ?? 0);
+    const daily = maxRunsPerDay === void 0 ? Infinity : maxRunsPerDay - (runsToday[label] ?? 0);
+    return Math.max(0, Math.min(parallel, daily));
+  };
+  const known = [.../* @__PURE__ */ new Set([...Object.keys(running), ...Object.keys(runsToday)])].sort();
+  return {
+    ok: read2.ok,
+    day,
+    running,
+    runsToday,
+    full: known.filter((l) => remaining(l) <= 0),
+    remaining
+  };
+}
+async function credentialSlots(o2) {
+  const usage = labelUsage(o2);
+  if (!usage.ok) return { hold: USAGE_UNREADABLE };
+  const limits = readLimits(o2.stateRoot);
+  if (!limits.ok) {
+    return { hold: "usage limit state is unreadable (limits.json): no crew starts until fixed" };
+  }
+  const parked = Object.keys(activeParks(limits.labels, o2.ports.clock.now()));
+  const exclude = [.../* @__PURE__ */ new Set([...parked, ...usage.full])];
+  const command = o2.ownerConfig.crewCredentialCommand;
+  if (command === void 0) {
+    return { slots: exclude.includes(DEFAULT_LABEL) ? 0 : usage.remaining(DEFAULT_LABEL) };
+  }
+  let slots = 0;
+  for (let call = 0; call < MAX_PROBES; call++) {
+    let label;
+    try {
+      label = (await runCredentialProvider(command, { item: "", role: "", exclude }, o2.ports, o2.owner))?.label;
+    } catch {
+      return { hold: PROVIDER_HOLD_LINE };
+    }
+    if (label === void 0) {
+      if (call === 0 && exclude.length === 0) return { hold: PROVIDER_EMPTY_LINE };
+      break;
+    }
+    if (exclude.includes(label)) return { hold: PROVIDER_HOLD_LINE };
+    slots += usage.remaining(label);
+    exclude.push(label);
+  }
+  return { slots };
+}
+function labelUsageSnapshot(o2) {
+  const usage = labelUsage(o2);
+  if (!usage.ok) return void 0;
+  const labels = {};
+  for (const label of [
+    .../* @__PURE__ */ new Set([...Object.keys(usage.running), ...Object.keys(usage.runsToday)])
+  ].sort()) {
+    labels[label] = {
+      running: usage.running[label] ?? 0,
+      runsToday: usage.runsToday[label] ?? 0
+    };
+  }
+  return Object.keys(labels).length === 0 ? void 0 : { day: usage.day, labels };
+}
 
 // src/crew.ts
 var crewName = (item) => `studio-${item.role}-${item.id.toLowerCase()}`;
@@ -29470,7 +29643,7 @@ function githubHttpsUrl(repo) {
 }
 function cloneBranch(path10) {
   try {
-    const head = readFileSync7(join6(path10, ".git", "HEAD"), "utf8").trim();
+    const head = readFileSync8(join7(path10, ".git", "HEAD"), "utf8").trim();
     return /^ref: refs\/heads\/(.+)$/.exec(head)?.[1];
   } catch {
     return void 0;
@@ -29478,8 +29651,8 @@ function cloneBranch(path10) {
 }
 async function prepareCheckout(stateRoot, projectDir, item, ports) {
   assertItemId(item.id);
-  const clones = ensureStateDir(stateRoot, join6(stateRoot, "clones"));
-  const path10 = join6(clones, item.id);
+  const clones = ensureStateDir(stateRoot, join7(stateRoot, "clones"));
+  const path10 = join7(clones, item.id);
   const branch = `studio/${item.id}`;
   const crewOrigin = githubHttpsUrl(item.repo);
   assertStatePath(stateRoot, path10);
@@ -29505,11 +29678,11 @@ function removeOldReport(stateRoot, clone2, id) {
   assertItemId(id);
   let cur = clone2;
   for (const seg of [".studio", "reports", `${id}.md`]) {
-    cur = join6(cur, seg);
+    cur = join7(cur, seg);
     assertStatePath(stateRoot, cur);
     let st;
     try {
-      st = lstatSync5(cur);
+      st = lstatSync6(cur);
     } catch {
       return;
     }
@@ -29526,7 +29699,7 @@ function removeOldReport(stateRoot, clone2, id) {
 }
 function existsNoFollow(p) {
   try {
-    lstatSync5(p);
+    lstatSync6(p);
     return true;
   } catch {
     return false;
@@ -29534,26 +29707,26 @@ function existsNoFollow(p) {
 }
 function fileSize(p) {
   try {
-    return lstatSync5(p).size;
+    return lstatSync6(p).size;
   } catch {
     return 0;
   }
 }
 function isLink2(p) {
   try {
-    return lstatSync5(p).isSymbolicLink();
+    return lstatSync6(p).isSymbolicLink();
   } catch {
     return false;
   }
 }
 function writeHomeFile(homeDir, name, content) {
-  const target = join6(homeDir, name);
+  const target = join7(homeDir, name);
   const realHome = realpathSync3(homeDir);
   const parent = realpathSync3(dirname4(target));
   if (parent !== realHome && !parent.startsWith(realHome + sep4)) {
     throw new Error(`refusing to write outside the crew home: ${target}`);
   }
-  writeFileSync5(join6(parent, basename2(target)), content, { flag: "wx" });
+  writeFileSync5(join7(parent, basename2(target)), content, { flag: "wx" });
 }
 var unique = (xs) => [...new Set(xs)];
 function realOr(p) {
@@ -29574,14 +29747,14 @@ function entries(dir) {
 function skillInstalled(configDir, name) {
   if (!Array.isArray(entries(configDir))) return void 0;
   let present = false;
-  const skills = join6(configDir, "skills");
+  const skills = join7(configDir, "skills");
   const direct = entries(skills);
   if (direct === void 0) return void 0;
   if (direct !== null) {
     present = true;
-    if (existsSync3(join6(skills, name, "SKILL.md"))) return true;
+    if (existsSync3(join7(skills, name, "SKILL.md"))) return true;
   }
-  const cache = join6(configDir, "plugins", "cache");
+  const cache = join7(configDir, "plugins", "cache");
   const top = entries(cache);
   if (top === void 0) return void 0;
   if (top !== null) {
@@ -29592,11 +29765,11 @@ function skillInstalled(configDir, name) {
       for (const d of dirs) {
         const names = entries(d);
         if (names === void 0) return void 0;
-        next.push(...(names ?? []).map((n2) => join6(d, n2)));
+        next.push(...(names ?? []).map((n2) => join7(d, n2)));
       }
       dirs = next;
     }
-    if (dirs.some((d) => existsSync3(join6(d, "skills", name, "SKILL.md")))) return true;
+    if (dirs.some((d) => existsSync3(join7(d, "skills", name, "SKILL.md")))) return true;
   }
   return present ? false : void 0;
 }
@@ -29622,8 +29795,8 @@ function writeBrief(stateRoot, item, config2, projectDir) {
     "studio:studio-crew",
     ...skills.required.filter((s) => s !== "studio:studio-crew")
   ];
-  const roleFile = join6(projectDir, ".studio", "roles", `${item.role}.md`);
-  const roleBrief = existsSync3(roleFile) ? readFileSync7(roleFile, "utf8").trim() : "";
+  const roleFile = join7(projectDir, ".studio", "roles", `${item.role}.md`);
+  const roleBrief = existsSync3(roleFile) ? readFileSync8(roleFile, "utf8").trim() : "";
   const id = item.id;
   const opensPr = item.type !== "review" && item.type !== "research";
   const lines = [
@@ -29707,7 +29880,7 @@ function writeBrief(stateRoot, item, config2, projectDir) {
     "The body says what changed and how it was verified.",
     ""
   ];
-  const file2 = join6(stateRoot, "briefs", `${id}.md`);
+  const file2 = join7(stateRoot, "briefs", `${id}.md`);
   writeStateFile(stateRoot, file2, lines.join("\n"));
   return file2;
 }
@@ -29735,11 +29908,11 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
     ...toolchain,
     ...loginDir === void 0 ? [] : [loginDir]
   ];
-  const ctxFile = join6(stateRoot, "guard", `${id}.json`);
+  const ctxFile = join7(stateRoot, "guard", `${id}.json`);
   const protectedPaths = [
     ctxFile,
-    ...STATE_PROTECTED_DIRS.map((d) => join6(stateRoot, d)),
-    ...STATE_FILES.map((f) => join6(stateRoot, f))
+    ...STATE_PROTECTED_DIRS.map((d) => join7(stateRoot, d)),
+    ...STATE_FILES.map((f) => join7(stateRoot, f))
   ];
   const ctx = {
     worktree: clone2,
@@ -29791,7 +29964,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
       network: { allowedDomains: config2.sandbox.networkAllow, strictAllowlist: true }
     }
   };
-  const file2 = join6(stateRoot, "settings", `${id}.json`);
+  const file2 = join7(stateRoot, "settings", `${id}.json`);
   writeStateFile(stateRoot, file2, `${JSON.stringify(settings, null, 2)}
 `);
   return file2;
@@ -29807,7 +29980,7 @@ var BASE_ENV = ["PATH", "LANG", "TERM", "USER"];
 var API_BILLING_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
 function readCrewFile(file2) {
   try {
-    return JSON.parse(readFileSync7(file2, "utf8"));
+    return JSON.parse(readFileSync8(file2, "utf8"));
   } catch {
     return {};
   }
@@ -29829,6 +30002,23 @@ function refuseIfBlocked(stateRoot) {
   if (line !== void 0) throw new Error(line);
 }
 async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
+  const turn = launchChain;
+  let done = () => {
+  };
+  launchChain = new Promise((resolve5) => {
+    done = resolve5;
+  });
+  await turn;
+  const held = {};
+  try {
+    return await launchCrewLocked(projectDir, item, config2, ports, launcher, held);
+  } finally {
+    held.lock?.release();
+    done();
+  }
+}
+var launchChain = Promise.resolve();
+async function launchCrewLocked(projectDir, item, config2, ports, launcher, held) {
   assertItemId(item.id);
   const penv = launcher.env ?? process.env;
   const role = config2.roles[item.role];
@@ -29869,7 +30059,7 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     extraCredentialPaths: credentialLocations(home, penv).extra
   });
   for (const sub of ["clones", "homes", "tmp"]) {
-    assertStatePath(stateRoot, join6(stateRoot, sub, item.id));
+    assertStatePath(stateRoot, join7(stateRoot, sub, item.id));
   }
   const previous = readCrewRecords(stateRoot)[item.id];
   if (previous !== void 0) {
@@ -29884,9 +30074,14 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
   }
   const limits = readLimits(stateRoot);
   if (!limits.ok) {
-    throw new Error(`${join6(stateRoot, "limits.json")} is unreadable; refusing to launch`);
+    throw new Error(`${join7(stateRoot, "limits.json")} is unreadable; refusing to launch`);
   }
   const parks = activeParks(limits.labels, ports.clock.now());
+  const usage = labelUsage({ project: projectDir, stateRoot, ownerConfig, ports });
+  if (!usage.ok) throw new Error(USAGE_UNREADABLE);
+  const refuseFull = () => {
+    throw new Error("credential limit: the label is at its configured parallel or daily limit");
+  };
   let label = DEFAULT_LABEL;
   let oauthToken = penv.CLAUDE_CODE_OAUTH_TOKEN || void 0;
   let providerConfigDir;
@@ -29895,34 +30090,38 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     if (parks[DEFAULT_LABEL]) {
       throw new Error(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
     }
+    if (usage.remaining(DEFAULT_LABEL) <= 0) refuseFull();
   } else {
     const parked = Object.keys(parks);
+    const exclude = [.../* @__PURE__ */ new Set([...parked, ...usage.full])];
     const got = await runCredentialProvider(
       command,
-      { item: item.id, role: item.role, exclude: parked },
+      { item: item.id, role: item.role, exclude },
       ports,
       owner
     );
     if (got === void 0) {
+      if (usage.full.length > 0) throw new Error(LABEL_FULL_LINE);
       if (parked.length > 0) throw new Error(allParkedLine(earliestReset(parks)));
       throw new Error("credential provider: returned nothing while no label is parked");
     }
     if (parks[got.label]) throw new Error("credential provider: returned a parked label");
+    if (exclude.includes(got.label) || usage.remaining(got.label) <= 0) refuseFull();
     label = got.label;
     oauthToken = got.token;
     if (got.configDir !== void 0) {
       providerConfigDir = checkProviderConfigDir(got.configDir, owner);
     }
   }
-  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join6(home, ".claude"));
+  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join7(home, ".claude"));
   const billing = apiBillingProblem(
-    join6(claudeConfigDir, "settings.json"),
+    join7(claudeConfigDir, "settings.json"),
     ownerConfig.allowApiBilling
   );
   if (billing) throw new Error(billing);
   const missingSkill = firstMissingSkill(claudeConfigDir, role?.skills.required ?? []);
   if (missingSkill) throw new Error(missingSkill);
-  const clonePath = join6(stateRoot, "clones", item.id);
+  const clonePath = join7(stateRoot, "clones", item.id);
   if ((previous?.limit || previous?.block) && existsNoFollow(clonePath) && (cloneBranch(clonePath) !== `studio/${item.id}` || cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))) {
     throw new Error(
       `the clone of ${item.id} left its branch after ${previous.limit ? "a usage limit" : "an account block"}; refusing to replace it (inspect it, then remove ${clonePath} to start over)`
@@ -29941,13 +30140,22 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     projectRealpath: projectRealpath(projectDir),
     originUrl: await ownerOriginUrl(projectDir, ports)
   });
+  const lock = acquireStateLock(stateRoot, LAUNCH_LOCK, {
+    now: ports.clock.now(),
+    heartbeatStaleMs: LAUNCH_LOCK_STALE_MS
+  });
+  if (!lock) throw new Error("another launch is in progress (launch.lock); try again");
+  held.lock = lock;
+  const locked = labelUsage({ project: projectDir, stateRoot, ownerConfig, ports });
+  if (!locked.ok) throw new Error(USAGE_UNREADABLE);
+  if (locked.remaining(label) <= 0) refuseFull();
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
-  const homeDir = join6(stateRoot, "homes", item.id);
+  const homeDir = join7(stateRoot, "homes", item.id);
   removeStateEntry(stateRoot, homeDir);
   ensureStateDir(stateRoot, homeDir);
   writeHomeFile(homeDir, ".gitconfig", GITCONFIG);
-  const tmpDir = join6(stateRoot, "tmp", item.id);
+  const tmpDir = join7(stateRoot, "tmp", item.id);
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
   const brief = writeBrief(stateRoot, item, config2, projectDir);
@@ -29959,10 +30167,10 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     { homeDir, tmpDir, projectDir, toolchainPaths, providerConfigDir },
     owner
   );
-  const mcpConfig = join6(stateRoot, "settings", `${item.id}.mcp.json`);
+  const mcpConfig = join7(stateRoot, "settings", `${item.id}.mcp.json`);
   writeStateFile(stateRoot, mcpConfig, `${JSON.stringify({ mcpServers: {} })}
 `);
-  const settingsEnv = JSON.parse(readFileSync7(settings, "utf8")).env;
+  const settingsEnv = JSON.parse(readFileSync8(settings, "utf8")).env;
   const env = {};
   for (const k of BASE_ENV) {
     const v = penv[k];
@@ -29980,10 +30188,12 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
   }
   Object.assign(env, settingsEnv);
   if (token) env.GH_TOKEN = token;
-  const log = join6(stateRoot, "logs", `${item.id}.jsonl`);
+  const log = join7(stateRoot, "logs", `${item.id}.jsonl`);
   ensureStateDir(stateRoot, dirname4(log));
   const logStart = fileSize(log);
   refuseIfBlocked(stateRoot);
+  held.lock?.heartbeat(ports.clock.now());
+  recordRun(stateRoot, label, ports.clock.now(), ownerConfig.crewLabelLimits.timezone);
   const { pid } = await ports.claude.start(
     wt.path,
     [
@@ -30038,7 +30248,7 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     ...tokenConfigDir === void 0 ? {} : { tokenConfigDir },
     logStart
   };
-  await updateCrewFile(stateRoot, join6(stateRoot, "crew.json"), (all) => {
+  await updateCrewFile(stateRoot, join7(stateRoot, "crew.json"), (all) => {
     all[item.id] = record2;
   });
   return { name, pid, log };
@@ -30103,7 +30313,7 @@ function cycleTainted(items) {
   }
   return tainted;
 }
-function planAssignments(board, config2, capacity, running, hold) {
+function planAssignments(board, config2, capacity, running, hold, credentialSlots2) {
   const byId = new Map(board.items.map((i2) => [i2.id, i2]));
   const tainted = cycleTainted(board.items);
   const blocked = [];
@@ -30139,22 +30349,25 @@ function planAssignments(board, config2, capacity, running, hold) {
     const isBuild = BUILD_TYPES.includes(item.type);
     const clash = [...active, ...assign].find((o2) => conflicts(item, o2));
     if (hold !== void 0) deferred.push({ id: item.id, reason: hold });
-    else if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: "role wip full" });
+    else if (credentialSlots2 !== void 0 && credentialSlots2 <= 0) {
+      deferred.push({ id: item.id, reason: "credential limit" });
+    } else if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: "role wip full" });
     else if (isBuild && buildSlots <= 0) deferred.push({ id: item.id, reason: "ci capacity" });
     else if (clash) deferred.push({ id: item.id, reason: `overlaps ${clash.id}` });
     else {
       assign.push(item);
       roleSlots.set(item.role, slotsFor(item.role) - 1);
       if (isBuild) buildSlots -= 1;
+      if (credentialSlots2 !== void 0) credentialSlots2 -= 1;
     }
   }
   return { assign, blocked, deferred };
 }
 
 // src/queue.ts
-import { existsSync as existsSync4, lstatSync as lstatSync6, readFileSync as readFileSync8 } from "node:fs";
+import { existsSync as existsSync4, lstatSync as lstatSync7, readFileSync as readFileSync9 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 var CHECKS_POLL_MS = 3e4;
 var CAPACITY_WAIT_MS = 6e4;
 var QUEUE_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
@@ -30179,16 +30392,16 @@ var stateSchema = external_exports.strictObject({
     })
   )
 });
-var queueFile = (stateRoot) => join7(stateRoot, "queue.json");
+var queueFile = (stateRoot) => join8(stateRoot, "queue.json");
 function loadQueue(stateRoot) {
   const file2 = queueFile(stateRoot);
   assertStatePath(stateRoot, file2);
   if (!existsSync4(file2)) return { pending: [], done: [] };
-  if (lstatSync6(file2).isSymbolicLink())
+  if (lstatSync7(file2).isSymbolicLink())
     throw new Error(`refusing to read ${file2}: it is a symlink`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync8(file2, "utf8"));
+    raw = JSON.parse(readFileSync9(file2, "utf8"));
   } catch {
     throw new Error(`queue file ${file2} is not valid JSON`);
   }
@@ -30275,14 +30488,14 @@ function installSignalRelease(lock) {
   };
 }
 function appendStateLine(stateRoot, name, line) {
-  const file2 = join7(stateRoot, name);
+  const file2 = join8(stateRoot, name);
   assertStatePath(stateRoot, file2);
   let prev = "";
   if (existsSync4(file2)) {
-    if (lstatSync6(file2).isSymbolicLink()) {
+    if (lstatSync7(file2).isSymbolicLink()) {
       throw new Error(`refusing to use ${file2}: it is a symlink`);
     }
-    prev = readFileSync8(file2, "utf8");
+    prev = readFileSync9(file2, "utf8");
     if (prev !== "" && !prev.endsWith("\n")) prev += "\n";
   }
   writeStateFile(stateRoot, file2, `${prev}${line}
@@ -30594,12 +30807,12 @@ import {
   closeSync as closeSync3,
   constants as constants2,
   fstatSync as fstatSync2,
-  lstatSync as lstatSync7,
+  lstatSync as lstatSync8,
   openSync as openSync3,
   readSync as readSync2,
   realpathSync as realpathSync4
 } from "node:fs";
-import { join as join8, sep as sep5 } from "node:path";
+import { join as join9, sep as sep5 } from "node:path";
 var ReportError = class extends Error {
   constructor(message) {
     super(message);
@@ -30676,9 +30889,9 @@ function readReportFile(root, file2, notBefore) {
   const unsafe = () => new ReportError(UNSAFE);
   let fd;
   try {
-    const parts = [root, join8(root, ".studio"), join8(root, ".studio", "reports"), file2];
+    const parts = [root, join9(root, ".studio"), join9(root, ".studio", "reports"), file2];
     parts.forEach((p, i2) => {
-      const st2 = lstatSync7(p);
+      const st2 = lstatSync8(p);
       if (st2.isSymbolicLink()) throw unsafe();
       if (i2 < parts.length - 1 ? !st2.isDirectory() : !st2.isFile()) throw unsafe();
     });
@@ -30709,7 +30922,7 @@ function readReportFile(root, file2, notBefore) {
   }
 }
 function readReport(worktree, id, item, opts = {}) {
-  const file2 = join8(worktree, ".studio", "reports", `${id}.md`);
+  const file2 = join9(worktree, ".studio", "reports", `${id}.md`);
   return parseReport(readReportFile(worktree, file2, opts.notBefore), item);
 }
 function checkReportHead(report, prHead) {
@@ -30720,21 +30933,21 @@ function checkReportHead(report, prHead) {
 
 // src/secret-command.ts
 var import_yaml6 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync10 } from "node:fs";
-import { join as join10 } from "node:path";
+import { readFileSync as readFileSync11 } from "node:fs";
+import { join as join11 } from "node:path";
 
 // src/setup-ci-command.ts
 var import_yaml5 = __toESM(require_dist(), 1);
 import { randomBytes as randomBytes4 } from "node:crypto";
 import {
   readdirSync as readdirSync3,
-  readFileSync as readFileSync9,
+  readFileSync as readFileSync10,
   renameSync as renameSync5,
   statSync as statSync2,
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync6
 } from "node:fs";
-import { join as join9 } from "node:path";
+import { join as join10 } from "node:path";
 
 // src/setup-ci.ts
 var import_yaml4 = __toESM(require_dist(), 1);
@@ -31091,7 +31304,7 @@ function assertPrimaryRepo(primary) {
   return primary;
 }
 function readWorkflows(project) {
-  const dir = join9(project, ...WORKFLOW_DIR);
+  const dir = join10(project, ...WORKFLOW_DIR);
   const rel = WORKFLOW_DIR.join("/");
   const files = [];
   const errors = [];
@@ -31110,7 +31323,7 @@ function readWorkflows(project) {
   for (const name of yaml) {
     const path10 = `${rel}/${name}`;
     try {
-      files.push({ path: path10, text: readFileSync9(join9(dir, name), "utf8") });
+      files.push({ path: path10, text: readFileSync10(join10(dir, name), "utf8") });
     } catch (e) {
       errors.push(`${path10}: cannot read file (${e.code ?? "error"})`);
     }
@@ -31167,10 +31380,10 @@ function describeDetection(d) {
   return lines;
 }
 async function runSetupCi(o2) {
-  const file2 = join9(o2.project, ".studio", "studio.yaml");
+  const file2 = join10(o2.project, ".studio", "studio.yaml");
   let text;
   try {
-    text = readFileSync9(file2, "utf8");
+    text = readFileSync10(file2, "utf8");
   } catch (e) {
     throw new Error(
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
@@ -31241,10 +31454,10 @@ async function runSetupCi(o2) {
 
 // src/secret-command.ts
 function readPrimaryRepo(project) {
-  const file2 = join10(project, ".studio", "studio.yaml");
+  const file2 = join11(project, ".studio", "studio.yaml");
   let raw;
   try {
-    raw = (0, import_yaml6.parse)(readFileSync10(file2, "utf8"));
+    raw = (0, import_yaml6.parse)(readFileSync11(file2, "utf8"));
   } catch {
     throw new Error("cannot read .studio/studio.yaml");
   }
@@ -31437,11 +31650,30 @@ async function runCli(argv, deps) {
     };
     const planNow = async (config2, board) => {
       const capacity = await readCapacity(config2, ports);
-      const hold = await limitHold(stateRoot(), loadOwnerConfig(owner), ports, owner);
+      const ownerConfig = loadOwnerConfig(owner);
+      let hold = await limitHold(stateRoot(), ownerConfig, ports, owner);
+      let slots;
+      let line = hold;
+      if (hold === void 0) {
+        const got = await credentialSlots({
+          project,
+          stateRoot: stateRoot(),
+          ownerConfig,
+          ports,
+          owner
+        });
+        if (got.hold !== void 0) {
+          hold = got.hold;
+          line = got.hold;
+        } else {
+          slots = got.slots;
+          if (slots <= 0) line = LABEL_FULL_LINE;
+        }
+      }
       return {
         capacity,
-        hold,
-        plan: planAssignments(board, config2, capacity, runningPerRole(board), hold)
+        hold: line,
+        plan: planAssignments(board, config2, capacity, runningPerRole(board), hold, slots)
       };
     };
     switch (cmd) {
@@ -31564,7 +31796,7 @@ async function runCli(argv, deps) {
             throw new Error(`crew record for ${item.id} has no valid startedAt`);
           }
         }
-        const clone2 = join11(stateRoot(), "clones", item.id);
+        const clone2 = join12(stateRoot(), "clones", item.id);
         const report = readReport(clone2, item.id, item, { notBefore });
         let branch = `studio/${item.id}`;
         if (report.pr !== void 0) {
@@ -31717,7 +31949,13 @@ async function runCli(argv, deps) {
           loadQueue(root),
           ports.clock.now(),
           hold,
-          read2.ok ? activeParks(read2.labels, ports.clock.now()) : {}
+          read2.ok ? activeParks(read2.labels, ports.clock.now()) : {},
+          labelUsageSnapshot({
+            project,
+            stateRoot: root,
+            ownerConfig: loadOwnerConfig(owner),
+            ports
+          })
         );
         writeState(root, snapshot);
         print(snapshot);
@@ -31734,7 +31972,7 @@ async function runCli(argv, deps) {
         const stoppedAt = ports.clock.now().toISOString();
         const latest = readCrewRecords(root);
         latest[id] = { ...latest[id] ?? rec, stoppedAt };
-        writeStateFile(root, join11(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
+        writeStateFile(root, join12(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
 `);
         print({ item: id, name: rec.name, pid: rec.pid, stoppedAt });
         return 0;
@@ -31899,7 +32137,7 @@ function applyQueueResults(project, done, ports, stderr) {
   }
   saveBoard(project, board);
 }
-function buildSnapshot(root, board, capacity, queue, now, hold, limits) {
+function buildSnapshot(root, board, capacity, queue, now, hold, limits, labelUsage2) {
   const blocks = readBlocks(root);
   const blocked = blockLine(blocks);
   const notifications = blocks.ok ? blocks.blocks.map((b) => ({
@@ -31938,6 +32176,7 @@ function buildSnapshot(root, board, capacity, queue, now, hold, limits) {
       ...blocked !== void 0 ? [{ id: "account-block", title: blocked }] : hold === void 0 ? [] : [{ id: "usage-limit", title: hold }]
     ],
     ...Object.keys(limits).length > 0 ? { limits } : {},
+    ...labelUsage2 === void 0 ? {} : { labelUsage: labelUsage2 },
     ...notifications.length > 0 ? { notifications } : {},
     updatedAt: now.toISOString(),
     metrics: computeMetrics(readMetricEvents(root))
@@ -35672,7 +35911,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync12 } from "node:fs";
+import { readFileSync as readFileSync13 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value, optionName) => {
@@ -35766,9 +36005,9 @@ var isReadableStream2 = (value) => Object.prototype.toString.call(value) === "[o
 var isWritableStream2 = (value) => Object.prototype.toString.call(value) === "[object WritableStream]";
 var isWebStream = (value) => isReadableStream2(value) || isWritableStream2(value);
 var isTransformStream = (value) => isReadableStream2(value?.readable) && isWritableStream2(value?.writable);
-var isAsyncIterableObject = (value) => isObject3(value) && typeof value[Symbol.asyncIterator] === "function";
-var isIterableObject = (value) => isObject3(value) && typeof value[Symbol.iterator] === "function";
-var isObject3 = (value) => typeof value === "object" && value !== null;
+var isAsyncIterableObject = (value) => isObject4(value) && typeof value[Symbol.asyncIterator] === "function";
+var isIterableObject = (value) => isObject4(value) && typeof value[Symbol.iterator] === "function";
+var isObject4 = (value) => typeof value === "object" && value !== null;
 var TRANSFORM_TYPES = /* @__PURE__ */ new Set(["generator", "asyncGenerator", "duplex", "webTransform"]);
 var FILE_TYPES = /* @__PURE__ */ new Set(["fileUrl", "filePath", "fileNumber"]);
 var SPECIAL_DUPLICATE_TYPES_SYNC = /* @__PURE__ */ new Set(["fileUrl", "filePath"]);
@@ -36028,7 +36267,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync11 } from "node:fs";
+import { readFileSync as readFileSync12 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -36142,7 +36381,7 @@ var getTargetFd = ({ value, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync11(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync12(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value, fdNumber) => {
   if (value === "inherit") {
@@ -36536,8 +36775,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync12(value))] }),
-    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync12(file2))] }),
+    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync13(value))] }),
+    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync13(file2))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value }) => ({ contents: () => [...value] }),
     string: ({ value }) => ({ contents: [value] }),

@@ -571,6 +571,8 @@ describe('writeCrewSettings', () => {
           'limits.lock',
           'blocks.json',
           'blocks.lock',
+          'usage.json',
+          'launch.lock',
         ].map((f) => join(state, f)),
       ],
     });
