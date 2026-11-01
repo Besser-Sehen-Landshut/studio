@@ -29148,12 +29148,12 @@ function earliestReset(parks) {
   }
   return best;
 }
-function readRange(file2, pick2) {
+function readRange(file2, pick3) {
   try {
     if (!lstatSync3(file2).isFile()) return void 0;
     const fd = openSync2(file2, "r");
     try {
-      const { start, length } = pick2(fstatSync(fd).size);
+      const { start, length } = pick3(fstatSync(fd).size);
       if (length <= 0) return void 0;
       const buf = Buffer.alloc(length);
       const got = readSync(fd, buf, 0, length, start);
@@ -29904,8 +29904,8 @@ async function parksHold(parks, ownerConfig, ports, owner) {
 import {
   chmodSync as chmodSync3,
   existsSync as existsSync3,
-  lstatSync as lstatSync10,
-  readdirSync as readdirSync2,
+  lstatSync as lstatSync11,
+  readdirSync as readdirSync3,
   readFileSync as readFileSync13,
   realpathSync as realpathSync3,
   unlinkSync as unlinkSync3,
@@ -29916,7 +29916,7 @@ import { basename as basename4, dirname as dirname7, join as join13, resolve as 
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/brief-caps.ts
-import { lstatSync as lstatSync6, readFileSync as readFileSync10 } from "node:fs";
+import { lstatSync as lstatSync7, readFileSync as readFileSync10 } from "node:fs";
 import { join as join9 } from "node:path";
 
 // src/review.ts
@@ -30050,7 +30050,7 @@ function checkReviewCaps(caps, report) {
 
 // src/sources.ts
 var import_yaml4 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync9 } from "node:fs";
+import { lstatSync as lstatSync6, readdirSync as readdirSync2, readFileSync as readFileSync9, renameSync as renameSync5 } from "node:fs";
 import { join as join8 } from "node:path";
 var VENDORABLE = ["MIT", "Apache-2.0"];
 var safeRelative = (p) => p.length > 0 && !p.startsWith("/") && !p.includes("\\") && !p.split("/").some((seg) => seg === ".." || seg === "" || seg === ".") && !new RegExp("\\p{Cc}", "u").test(p);
@@ -30107,6 +30107,275 @@ function loadSources(dir = capabilitiesDir()) {
   }
   return parsed.data;
 }
+var MAX_TREE_FILES = 5e4;
+var MAX_SCAN_BYTES = 1024 * 1024;
+var LICENSE_NAME = /^(licen[cs]e|copying)(\.[a-z]+)?$/i;
+var COPYLEFT = /GNU (AFFERO |LESSER )?GENERAL PUBLIC|GNU LESSER|\bA?L?GPL-|Mozilla Public License|Server Side Public License|Business Source License/i;
+var HOOK_PATH = /(^|\/)hooks\.json$|(^|\/)hooks\/|(^|\/)\.claude\/settings[^/]*\.json$/;
+var HOOK_FRONT = /^---\r?\n[\s\S]*?^hooks:/m;
+var INSTALL = [
+  /\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z)?sh\b/g,
+  /\bnpm (?:i|install) (?:-g|--global)\b/g,
+  /\bpnpm add (?:-g|--global)\b/g,
+  /\byarn global add\b/g,
+  /\bbrew install\b/g,
+  /\bpip3? install\b/g,
+  /\bcargo install\b/g,
+  /\bapt(?:-get)? install\b/g,
+  /\bgem install\b/g
+];
+var SCRIPT = /\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|rb|pl|ps1)$/;
+var NETWORK = /\b(?:curl|wget|fetch\(|urllib|requests\.|http\.get|https?:\/\/)/;
+var clean = (text) => text.replace(/[\p{Cc}\p{Cf}]/gu, " ").slice(0, 300);
+function walk(dir) {
+  const out = /* @__PURE__ */ new Map();
+  const open2 = [""];
+  while (open2.length > 0) {
+    const rel = open2.pop();
+    for (const name of readdirSync2(join8(dir, rel))) {
+      if (rel === "" && name === ".git") continue;
+      const path10 = rel ? `${rel}/${name}` : name;
+      const st = lstatSync6(join8(dir, path10));
+      if (st.isSymbolicLink()) out.set(path10, { size: 0, link: true });
+      else if (st.isDirectory()) open2.push(path10);
+      else if (st.isFile()) out.set(path10, { size: st.size, link: false });
+      if (out.size > MAX_TREE_FILES) throw new Error("tree too large");
+    }
+  }
+  return out;
+}
+var readBounded = (dir, path10, e) => e && !e.link && e.size <= MAX_SCAN_BYTES ? readFileSync9(join8(dir, path10), "utf8") : void 0;
+function installSteps(text) {
+  const hits = /* @__PURE__ */ new Set();
+  for (const re of INSTALL) for (const m of (text ?? "").matchAll(re)) hits.add(m[0]);
+  return hits;
+}
+function compareTrees(oldDir, newDir, source, opts = {}) {
+  const conflict = [];
+  const unclear = [];
+  try {
+    const before = walk(oldDir);
+    const after2 = walk(newDir);
+    for (const read2 of source.reads) {
+      const e = after2.get(read2);
+      if (e === void 0 || e.link) conflict.push({ kind: "read-missing", detail: clean(read2) });
+      else {
+        const was = before.get(read2);
+        if (was && e.size > was.size * 2) unclear.push({ kind: "read-grew", detail: clean(read2) });
+      }
+    }
+    for (const [path10, e] of before) {
+      if (!path10.includes("/") && LICENSE_NAME.test(path10) && !e.link && !after2.has(path10)) {
+        conflict.push({ kind: "license-removed", detail: clean(path10) });
+      }
+    }
+    for (const [path10, e] of after2) {
+      const was = before.get(path10);
+      if (e.link) {
+        if (!was?.link) unclear.push({ kind: "symlink", detail: clean(path10) });
+        continue;
+      }
+      const text = readBounded(newDir, path10, e);
+      const old = readBounded(oldDir, path10, was);
+      const changed = was === void 0 || was.link || text !== old || text === void 0;
+      if (!changed) continue;
+      if (!path10.includes("/") && LICENSE_NAME.test(path10)) {
+        if (text !== void 0 && COPYLEFT.test(text) && !COPYLEFT.test(old ?? "")) {
+          conflict.push({ kind: "license-copyleft", detail: clean(path10) });
+        } else unclear.push({ kind: "license-changed", detail: clean(path10) });
+      }
+      if (HOOK_PATH.test(path10) || HOOK_FRONT.test(text ?? "") && !HOOK_FRONT.test(old ?? "")) {
+        unclear.push({ kind: "hook", detail: clean(path10) });
+      }
+      const known = installSteps(old);
+      for (const hit of installSteps(text)) {
+        if (!known.has(hit))
+          unclear.push({ kind: "install-step", detail: clean(`${path10}: ${hit}`) });
+      }
+      if (was === void 0 && SCRIPT.test(path10) && NETWORK.test(text ?? "")) {
+        unclear.push({ kind: "network-script", detail: clean(path10) });
+      }
+      if (text === void 0) unclear.push({ kind: "too-large", detail: clean(path10) });
+    }
+    for (const link of opts.newLinks ?? []) unclear.push({ kind: "symlink", detail: clean(link) });
+  } catch (e) {
+    unclear.push({ kind: "unreadable", detail: clean(e.message) });
+  }
+  const findings = [...conflict, ...unclear];
+  const verdict = conflict.length > 0 ? "conflict" : unclear.length > 0 ? "unclear" : "fits";
+  return { verdict, findings };
+}
+var sourcesDir = (ownerRoot) => join8(ownerRoot, "sources");
+var lockPath = (ownerRoot) => join8(sourcesDir(ownerRoot), "lock.json");
+var lockSchema = external_exports.record(
+  external_exports.string(),
+  external_exports.object({ commit: external_exports.string(), license: external_exports.string(), fetchedAt: external_exports.string() })
+);
+function readLock(ownerRoot) {
+  try {
+    const parsed = lockSchema.safeParse(JSON.parse(readFileSync9(lockPath(ownerRoot), "utf8")));
+    return parsed.success ? parsed.data : void 0;
+  } catch {
+    return void 0;
+  }
+}
+var writeLock = (ownerRoot, lock) => writeStateFile(ownerRoot, lockPath(ownerRoot), `${JSON.stringify(lock, null, 2)}
+`);
+var exists2 = (p) => {
+  try {
+    lstatSync6(p);
+    return true;
+  } catch {
+    return false;
+  }
+};
+var FULL_SHA = /^[0-9a-f]{40,64}$/;
+async function fetchTo(ports, ownerRoot, source, name) {
+  const base = sourcesDir(ownerRoot);
+  const dest = join8(base, name);
+  removeStateEntry(ownerRoot, dest);
+  try {
+    await ports.git.run(base, [
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "core.symlinks=false",
+      "clone",
+      "--quiet",
+      "--depth",
+      "1",
+      "--",
+      source.url,
+      name
+    ]);
+    const commit = (await ports.git.run(dest, ["rev-parse", "HEAD"])).trim();
+    if (!FULL_SHA.test(commit)) throw new Error("no commit");
+    const staged = await ports.git.run(dest, ["ls-files", "--stage"]);
+    const links = staged.split("\n").filter((l) => l.startsWith("120000 ")).map((l) => l.slice(l.indexOf("	") + 1));
+    return { commit, links };
+  } catch (e) {
+    removeStateEntry(ownerRoot, dest);
+    throw e;
+  }
+}
+function pick2(index, only) {
+  for (const id of only ?? []) {
+    if (!index.sources.some((s) => s.id === id && s.kind === "git")) {
+      throw new SourcesError(`unknown source ${clean(id)}`);
+    }
+  }
+  return index.sources.filter(
+    (s) => s.kind === "git" && !s.vendored && (only === void 0 || only.includes(s.id))
+  );
+}
+async function setupSources(o2) {
+  const out = [];
+  const list2 = pick2(o2.index, o2.only);
+  ensureStateDir(o2.ownerRoot, sourcesDir(o2.ownerRoot));
+  for (const source of list2) {
+    if (exists2(join8(sourcesDir(o2.ownerRoot), source.id))) {
+      out.push({ id: source.id, result: "present" });
+      continue;
+    }
+    try {
+      const { commit } = await fetchTo(o2.ports, o2.ownerRoot, source, source.id);
+      const lock = readLock(o2.ownerRoot) ?? {};
+      lock[source.id] = {
+        commit,
+        license: source.license,
+        fetchedAt: o2.ports.clock.now().toISOString()
+      };
+      writeLock(o2.ownerRoot, lock);
+      out.push({ id: source.id, result: "fetched", commit });
+    } catch {
+      out.push({ id: source.id, result: "failed" });
+    }
+  }
+  return out;
+}
+var held = (id, kind, detail, pinned) => ({
+  id,
+  verdict: "unclear",
+  findings: [{ kind, detail }],
+  ...pinned === void 0 ? {} : { pinned }
+});
+async function checkSources(o2) {
+  const out = [];
+  const list2 = pick2(o2.index, void 0);
+  const lock = readLock(o2.ownerRoot);
+  for (const source of list2) {
+    const active = join8(sourcesDir(o2.ownerRoot), source.id);
+    if (!exists2(active)) {
+      out.push(held(source.id, "not-fetched", "run studio setup sources"));
+      continue;
+    }
+    const pinned = lock?.[source.id]?.commit;
+    if (pinned === void 0) {
+      out.push(held(source.id, "no-pin", "the pinned commit cannot be read"));
+      continue;
+    }
+    let head;
+    try {
+      head = (await o2.ports.git.run(sourcesDir(o2.ownerRoot), [
+        "ls-remote",
+        "--",
+        source.url,
+        "HEAD"
+      ])).split("	")[0]?.trim();
+    } catch {
+      head = void 0;
+    }
+    if (head === void 0 || !FULL_SHA.test(head)) {
+      out.push(held(source.id, "upstream-unreadable", "upstream cannot be read", pinned));
+      continue;
+    }
+    if (head === pinned) {
+      out.push({ id: source.id, verdict: "fits", findings: [], pinned });
+      continue;
+    }
+    try {
+      const got = await fetchTo(o2.ports, o2.ownerRoot, source, `${source.id}.candidate`);
+      const candidateDir = join8(sourcesDir(o2.ownerRoot), `${source.id}.candidate`);
+      const r = compareTrees(active, candidateDir, source, { newLinks: got.links });
+      out.push({ id: source.id, ...r, pinned, candidate: got.commit });
+    } catch {
+      out.push(held(source.id, "fetch-failed", "the candidate could not be fetched", pinned));
+    }
+  }
+  return out;
+}
+async function applySource(o2) {
+  const source = pick2(o2.index, [o2.id])[0];
+  if (source === void 0) throw new SourcesError(`unknown source ${clean(o2.id)}`);
+  const base = sourcesDir(o2.ownerRoot);
+  const active = join8(base, source.id);
+  const candidate = join8(base, `${source.id}.candidate`);
+  if (!exists2(active) || !exists2(candidate)) {
+    return { id: source.id, applied: false, reason: "no candidate: run studio sources check" };
+  }
+  const links = (await o2.ports.git.run(candidate, ["ls-files", "--stage"])).split("\n").filter((l) => l.startsWith("120000 ")).map((l) => l.slice(l.indexOf("	") + 1));
+  const r = compareTrees(active, candidate, source, { newLinks: links });
+  if (r.verdict !== "fits") {
+    return { id: source.id, applied: false, reason: `held: ${r.verdict}` };
+  }
+  const commit = (await o2.ports.git.run(candidate, ["rev-parse", "HEAD"])).trim();
+  if (!FULL_SHA.test(commit)) return { id: source.id, applied: false, reason: "no commit" };
+  const lock = readLock(o2.ownerRoot);
+  if (lock === void 0)
+    return { id: source.id, applied: false, reason: "the lock cannot be read" };
+  const old = join8(base, `${source.id}.old`);
+  removeStateEntry(o2.ownerRoot, old);
+  renameSync5(active, old);
+  renameSync5(candidate, active);
+  removeStateEntry(o2.ownerRoot, old);
+  lock[source.id] = {
+    commit,
+    license: source.license,
+    fetchedAt: o2.ports.clock.now().toISOString()
+  };
+  writeLock(o2.ownerRoot, lock);
+  return { id: source.id, applied: true };
+}
 
 // src/brief-caps.ts
 var MAX_COPY_BYTES = 256 * 1024;
@@ -30158,11 +30427,11 @@ function readBelow(root, rel) {
   try {
     let at = root;
     const segments = rel.split("/");
-    if (lstatSync6(at).isSymbolicLink()) return { why: "it is reached through a link" };
+    if (lstatSync7(at).isSymbolicLink()) return { why: "it is reached through a link" };
     for (const [i2, seg] of segments.entries()) {
       if (seg === ".." || seg === "" || seg === ".") return { why: "it leaves the source" };
       at = join9(at, seg);
-      const st = lstatSync6(at);
+      const st = lstatSync7(at);
       if (st.isSymbolicLink()) return { why: "it is reached through a link" };
       if (i2 < segments.length - 1 ? !st.isDirectory() : !st.isFile()) {
         return { why: "it is not a regular file" };
@@ -30230,7 +30499,7 @@ function writeCaps(o2) {
       const source = rest.slice(0, rest.indexOf("/"));
       const rel = rest.slice(source.length + 1);
       try {
-        lstatSync6(sourceRoot(source));
+        lstatSync7(sourceRoot(source));
       } catch {
         skipped.push({ id: k.rowId, reason: `source ${source} not fetched` });
         continue;
@@ -30265,7 +30534,7 @@ function writeCaps(o2) {
       const texts = [];
       for (const rel of reads) {
         try {
-          lstatSync6(sourceRoot(a2.source));
+          lstatSync7(sourceRoot(a2.source));
         } catch {
           skipped.push({ id: a2.id, reason: `source ${a2.source} not fetched` });
           return false;
@@ -30344,11 +30613,11 @@ var GH_VALUE_FLAGS = ["-R", "--repo", "--hostname"];
 var GH_RUN_VALUE_FLAGS = ["--ref", "-r", "-f", "--raw-field", "-F", "--field", ...GH_VALUE_FLAGS];
 
 // src/owner-state.ts
-import { lstatSync as lstatSync8, renameSync as renameSync5 } from "node:fs";
+import { lstatSync as lstatSync9, renameSync as renameSync6 } from "node:fs";
 import { basename as basename3, dirname as dirname6, join as join11 } from "node:path";
 
 // src/usage.ts
-import { lstatSync as lstatSync7, readFileSync as readFileSync11 } from "node:fs";
+import { lstatSync as lstatSync8, readFileSync as readFileSync11 } from "node:fs";
 import { dirname as dirname5, join as join10 } from "node:path";
 var LAUNCH_LOCK = "launch.lock";
 var LAUNCH_LOCK_STALE_MS = 10 * 6e4;
@@ -30379,7 +30648,7 @@ function readUsage(ownerRoot) {
 }
 function readUsageFile(file2) {
   try {
-    if (!lstatSync7(file2).isFile()) return { ok: false };
+    if (!lstatSync8(file2).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, days: {} } : { ok: false };
   }
@@ -30559,7 +30828,7 @@ var FILES = [
   { name: "limits.json", lock: "limits.lock", staleMs: LOCK_STALE_MS2, merge: mergeLimits },
   { name: "usage.json", lock: LAUNCH_LOCK, staleMs: LAUNCH_LOCK_STALE_MS, merge: mergeUsage }
 ];
-var present = (file2) => lstatSync8(file2, { throwIfNoEntry: false }) !== void 0;
+var present = (file2) => lstatSync9(file2, { throwIfNoEntry: false }) !== void 0;
 function pendingLegacyState(stateBase) {
   return projectStateRoots(stateBase).flatMap(
     (root) => FILES.map((f) => join11(root, f.name)).filter(present)
@@ -30574,13 +30843,13 @@ function keepUnreadable(ownerRoot, root, name) {
   const legacy = join11(root, name);
   const kept = freeName(join11(ownerRoot, `${name}.legacy-${basename3(root)}`));
   ensureStateDir(ownerRoot, ownerRoot);
-  if (lstatSync8(legacy).isSymbolicLink()) {
+  if (lstatSync9(legacy).isSymbolicLink()) {
     const note = `${name} in the project state root ${basename3(root)} was a symlink; it was not followed
 `;
     writeStateFile(ownerRoot, kept, note);
     removeStateEntry(root, legacy);
   } else {
-    renameSync5(legacy, kept);
+    renameSync6(legacy, kept);
   }
 }
 function migrateFile(ownerRoot, roots, file2, now, problems) {
@@ -30594,7 +30863,7 @@ function migrateFile(ownerRoot, roots, file2, now, problems) {
   try {
     for (const root of here) {
       const legacy = join11(root, file2.name);
-      const link = lstatSync8(legacy).isSymbolicLink();
+      const link = lstatSync9(legacy).isSymbolicLink();
       const merged = link ? "legacy-unreadable" : file2.merge(ownerRoot, legacy);
       if (merged === "merged") removeStateEntry(root, legacy);
       else if (merged === "legacy-unreadable") keepUnreadable(ownerRoot, root, file2.name);
@@ -30639,14 +30908,14 @@ function migrateOwnerState(ownerRoot, now) {
 }
 
 // src/pause.ts
-import { lstatSync as lstatSync9, readFileSync as readFileSync12 } from "node:fs";
+import { lstatSync as lstatSync10, readFileSync as readFileSync12 } from "node:fs";
 import { join as join12 } from "node:path";
 var PAUSE_FILE = "pause.json";
 var PAUSED_LINE = "paused: no crew starts and nothing is merged until the owner runs studio resume";
 function readPause(root) {
   const file2 = join12(root, PAUSE_FILE);
   try {
-    const st = lstatSync9(file2, { throwIfNoEntry: false });
+    const st = lstatSync10(file2, { throwIfNoEntry: false });
     if (st === void 0) return { paused: false };
     if (!st.isFile()) return { paused: true };
     const raw = JSON.parse(readFileSync12(file2, "utf8"));
@@ -30730,7 +30999,7 @@ function removeOldReport(stateRoot, clone2, id) {
     assertStatePath(stateRoot, cur);
     let st;
     try {
-      st = lstatSync10(cur);
+      st = lstatSync11(cur);
     } catch {
       return;
     }
@@ -30747,7 +31016,7 @@ function removeOldReport(stateRoot, clone2, id) {
 }
 function existsNoFollow(p) {
   try {
-    lstatSync10(p);
+    lstatSync11(p);
     return true;
   } catch {
     return false;
@@ -30755,14 +31024,14 @@ function existsNoFollow(p) {
 }
 function fileSize(p) {
   try {
-    return lstatSync10(p).size;
+    return lstatSync11(p).size;
   } catch {
     return 0;
   }
 }
 function isLink2(p) {
   try {
-    return lstatSync10(p).isSymbolicLink();
+    return lstatSync11(p).isSymbolicLink();
   } catch {
     return false;
   }
@@ -30787,7 +31056,7 @@ function realOr(p) {
 var SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 function entries(dir) {
   try {
-    return readdirSync2(dir);
+    return readdirSync3(dir);
   } catch (e) {
     return e.code === "ENOENT" ? null : void 0;
   }
@@ -30836,7 +31105,7 @@ function firstMissingSkill(configDir, required2) {
 }
 var RULE_FILES = ["AGENTS.md", "CLAUDE.md"];
 var MAX_RULE_BYTES = 256 * 1024;
-var FULL_SHA = /^[0-9a-f]{40}$/;
+var FULL_SHA2 = /^[0-9a-f]{40}$/;
 async function readPinnedRules(projectDir, ports) {
   try {
     await ports.git.run(projectDir, [
@@ -30851,7 +31120,7 @@ async function readPinnedRules(projectDir, ports) {
   }
   const g = (args) => ports.git.run(projectDir, ["--no-replace-objects", ...args]);
   const sha = (await g(["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"])).trim();
-  if (!FULL_SHA.test(sha)) throw new Error("refusing to launch: origin/main is not a commit SHA");
+  if (!FULL_SHA2.test(sha)) throw new Error("refusing to launch: origin/main is not a commit SHA");
   const tree = await g(["ls-tree", sha, ...RULE_FILES]);
   const files = [];
   for (const line of tree.split("\n").filter((l) => l !== "")) {
@@ -31161,12 +31430,12 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     done = resolve6;
   });
   await turn;
-  const held = {};
+  const held2 = {};
   try {
-    return await launchCrewLocked(projectDir, item, config2, ports, launcher, held);
+    return await launchCrewLocked(projectDir, item, config2, ports, launcher, held2);
   } finally {
     try {
-      held.lock?.release();
+      held2.lock?.release();
     } catch {
     } finally {
       done();
@@ -31188,7 +31457,7 @@ function refuseIfRunning(stateRoot, item, ports) {
   return previous;
 }
 var launchChain = Promise.resolve();
-async function launchCrewLocked(projectDir, item, config2, ports, launcher, held) {
+async function launchCrewLocked(projectDir, item, config2, ports, launcher, held2) {
   assertItemId(item.id);
   const penv = launcher.env ?? process.env;
   const role = config2.roles[item.role];
@@ -31320,7 +31589,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     heartbeatStaleMs: LAUNCH_LOCK_STALE_MS
   });
   if (!lock) throw new Error("another launch is in progress (launch.lock); try again");
-  held.lock = lock;
+  held2.lock = lock;
   const recheck = () => {
     if (!lock.owned()) throw new Error("the launch lock was lost; refusing to launch, try again");
     refuseIfRunning(stateRoot, item, ports);
@@ -31537,7 +31806,7 @@ async function readMainBuild(config2, ports) {
 }
 
 // src/notify.ts
-import { lstatSync as lstatSync11, readFileSync as readFileSync14 } from "node:fs";
+import { lstatSync as lstatSync12, readFileSync as readFileSync14 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { join as join14 } from "node:path";
 var MAX_SENDS_PER_RUN = 20;
@@ -31565,7 +31834,7 @@ function messagesOf(projectKey, snapshot) {
 }
 function readNotified(file2) {
   try {
-    if (!lstatSync11(file2).isFile()) return { ok: false };
+    if (!lstatSync12(file2).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, keys: [] } : { ok: false };
   }
@@ -31767,7 +32036,7 @@ function planAssignments(board, config2, capacity, running, hold, credentialSlot
 }
 
 // src/queue.ts
-import { existsSync as existsSync4, lstatSync as lstatSync12, readFileSync as readFileSync15 } from "node:fs";
+import { existsSync as existsSync4, lstatSync as lstatSync13, readFileSync as readFileSync15 } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { join as join15 } from "node:path";
 var QueueHeld = class extends Error {
@@ -31807,7 +32076,7 @@ function loadQueue(stateRoot) {
   const file2 = queueFile(stateRoot);
   assertStatePath(stateRoot, file2);
   if (!existsSync4(file2)) return { pending: [], done: [] };
-  if (lstatSync12(file2).isSymbolicLink())
+  if (lstatSync13(file2).isSymbolicLink())
     throw new Error(`refusing to read ${file2}: it is a symlink`);
   let raw;
   try {
@@ -31902,7 +32171,7 @@ function appendStateLine(stateRoot, name, line) {
   assertStatePath(stateRoot, file2);
   let prev = "";
   if (existsSync4(file2)) {
-    if (lstatSync12(file2).isSymbolicLink()) {
+    if (lstatSync13(file2).isSymbolicLink()) {
       throw new Error(`refusing to use ${file2}: it is a symlink`);
     }
     prev = readFileSync15(file2, "utf8");
@@ -32125,10 +32394,10 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
         step = "checks";
         continue;
       }
-      const held = opts.hold?.();
-      if (held !== void 0) {
+      const held2 = opts.hold?.();
+      if (held2 !== void 0) {
         enter("capacity");
-        throw new QueueHeld(held);
+        throw new QueueHeld(held2);
       }
       const r = await gh.run([
         "pr",
@@ -32169,9 +32438,9 @@ async function firstCommitAt(entry, gh) {
 async function runQueue(state, config2, ports, persist, opts = {}) {
   const log = opts.log ?? ((m) => console.error(m));
   for (; ; ) {
-    const held = opts.hold?.();
-    if (held !== void 0) {
-      log(`queue held: ${held}`);
+    const held2 = opts.hold?.();
+    if (held2 !== void 0) {
+      log(`queue held: ${held2}`);
       return state;
     }
     if (!state.current) {
@@ -32234,7 +32503,7 @@ import {
   closeSync as closeSync3,
   constants as constants2,
   fstatSync as fstatSync2,
-  lstatSync as lstatSync13,
+  lstatSync as lstatSync14,
   openSync as openSync3,
   readSync as readSync2,
   realpathSync as realpathSync4
@@ -32328,7 +32597,7 @@ function readReportFile(root, file2, notBefore) {
   try {
     const parts = [root, join16(root, ".studio"), join16(root, ".studio", "reports"), file2];
     parts.forEach((p, i2) => {
-      const st2 = lstatSync13(p);
+      const st2 = lstatSync14(p);
       if (st2.isSymbolicLink()) throw unsafe();
       if (i2 < parts.length - 1 ? !st2.isDirectory() : !st2.isFile()) throw unsafe();
     });
@@ -32377,9 +32646,9 @@ import { join as join18 } from "node:path";
 var import_yaml7 = __toESM(require_dist(), 1);
 import { randomBytes as randomBytes4 } from "node:crypto";
 import {
-  readdirSync as readdirSync3,
+  readdirSync as readdirSync4,
   readFileSync as readFileSync16,
-  renameSync as renameSync6,
+  renameSync as renameSync7,
   statSync as statSync2,
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync6
@@ -32542,7 +32811,7 @@ function proposeCi(detect, repoVisibility, current, usage) {
 }
 var GITHUB_HOSTED = /^(ubuntu|windows|macos)-/i;
 var MAX_TEXT2 = 120;
-function clean(text) {
+function clean2(text) {
   return String(text).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_TEXT2);
 }
 function labelList(value) {
@@ -32574,7 +32843,7 @@ function parseWorkflow(text) {
   try {
     doc = (0, import_yaml6.parse)(text);
   } catch (err) {
-    return { ok: false, error: `cannot parse: ${clean(err instanceof Error ? err.message : err)}` };
+    return { ok: false, error: `cannot parse: ${clean2(err instanceof Error ? err.message : err)}` };
   }
   if (!isRecord(doc)) return { ok: false, error: "not a YAML mapping" };
   const jobs = doc.jobs;
@@ -32583,7 +32852,7 @@ function parseWorkflow(text) {
   }
   const entries2 = [];
   for (const [name, job] of Object.entries(jobs)) {
-    if (!isRecord(job)) return { ok: false, error: `job "${clean(name)}" is not a mapping` };
+    if (!isRecord(job)) return { ok: false, error: `job "${clean2(name)}" is not a mapping` };
     entries2.push([name, job]);
   }
   return { ok: true, doc, jobs: entries2 };
@@ -32638,7 +32907,7 @@ function lintConcurrency(doc, expectedGroup) {
     return "push and pull_request without a workflow-level concurrency group (or not in map form)";
   }
   if (typeof c3.group !== "string" || !isExpectedForm(c3.group.trim(), expectedGroup)) {
-    return `concurrency.group must be ${clean(formOfGroup(expectedGroup))}`;
+    return `concurrency.group must be ${clean2(formOfGroup(expectedGroup))}`;
   }
   if (c3["cancel-in-progress"] !== true) return "concurrency.cancel-in-progress must be true";
   return void 0;
@@ -32649,14 +32918,14 @@ function lintWorkflows(files, detect, expectedGroup) {
   const online = detect.runners.filter((r) => r.online).map((r) => new Set(r.labels.map((l) => l.toLowerCase())));
   const byGroup = /* @__PURE__ */ new Map();
   for (const f of files) {
-    const path10 = clean(f.path);
+    const path10 = clean2(f.path);
     const p = parseWorkflow(f.text);
     if (!p.ok) {
       errors.push(`${path10}: ${p.error}`);
       continue;
     }
     for (const [name, job] of p.jobs) {
-      const where = `${path10}: job "${clean(name)}"`;
+      const where = `${path10}: job "${clean2(name)}"`;
       if (typeof job.uses === "string") continue;
       if (!("runs-on" in job)) {
         errors.push(`${where} has no runs-on and no uses`);
@@ -32667,7 +32936,7 @@ function lintWorkflows(files, detect, expectedGroup) {
       else if (r.kind === "unverifiable") warnings.push(`${where}: cannot verify, ${r.why}`);
       else if (r.kind === "set") {
         if (r.group) warnings.push(`${where}: cannot verify runner group membership`);
-        const shown2 = r.labels.map(clean).join(", ");
+        const shown2 = r.labels.map(clean2).join(", ");
         const want = r.labels.map((l) => l.toLowerCase());
         if (detect.source === "unknown") {
           warnings.push(`${where}: cannot verify runs-on [${shown2}], runners are unknown`);
@@ -32697,7 +32966,7 @@ function lintWorkflows(files, detect, expectedGroup) {
   for (const { shown, paths, cancelling } of byGroup.values()) {
     if (paths.length > 1 && cancelling) {
       errors.push(
-        `${paths.join(" and ")} share the concurrency group ${clean(shown)}; groups are repo-wide, so they would cancel each other`
+        `${paths.join(" and ")} share the concurrency group ${clean2(shown)}; groups are repo-wide, so they would cancel each other`
       );
     }
   }
@@ -32748,7 +33017,7 @@ function readWorkflows(project) {
   const notes = [];
   let names;
   try {
-    names = readdirSync3(dir);
+    names = readdirSync4(dir);
   } catch (e) {
     if (e.code === "ENOENT") {
       notes.push(`no workflows found: ${rel} does not exist`);
@@ -32797,7 +33066,7 @@ function writeAtomic(file2, text) {
   const tmp = `${file2}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
   try {
     writeFileSync6(tmp, text, { flag: "wx", mode: statSync2(file2).mode & 511 });
-    renameSync6(tmp, file2);
+    renameSync7(tmp, file2);
   } catch (e) {
     try {
       unlinkSync4(tmp);
@@ -32998,7 +33267,7 @@ function runDoctor(o2) {
 
 // src/stack.ts
 var import_yaml9 = __toESM(require_dist(), 1);
-import { lstatSync as lstatSync14, readdirSync as readdirSync4, readFileSync as readFileSync18 } from "node:fs";
+import { lstatSync as lstatSync15, readdirSync as readdirSync5, readFileSync as readFileSync18 } from "node:fs";
 import { join as join19 } from "node:path";
 var MAX_FILE_BYTES = 1024 * 1024;
 var MAX_ENTRIES = 200;
@@ -33021,14 +33290,14 @@ var DEP_STACKS = {
 };
 function isRealDir(path10) {
   try {
-    return lstatSync14(path10).isDirectory();
+    return lstatSync15(path10).isDirectory();
   } catch {
     return false;
   }
 }
 function readSmall(path10, notes, name) {
   try {
-    const st = lstatSync14(path10);
+    const st = lstatSync15(path10);
     if (!st.isFile()) return void 0;
     if (st.size > MAX_FILE_BYTES) {
       notes.push(`${name}: larger than 1 MiB, not read`);
@@ -33042,7 +33311,7 @@ function readSmall(path10, notes, name) {
 }
 var isFileEntry = (dir, name) => {
   try {
-    return lstatSync14(join19(dir, name)).isFile();
+    return lstatSync15(join19(dir, name)).isFile();
   } catch {
     return false;
   }
@@ -33070,7 +33339,7 @@ function depStacks(text, notes, name) {
 function scanDir(dir, label, found, notes) {
   let names;
   try {
-    names = readdirSync4(dir).slice(0, MAX_ENTRIES * 5);
+    names = readdirSync5(dir).slice(0, MAX_ENTRIES * 5);
   } catch {
     notes.push(`${label || "."}: cannot be read`);
     return;
@@ -33117,7 +33386,7 @@ function detectStacks(dir) {
   for (const group of MONOREPO_DIRS) {
     const base = join19(dir, group);
     if (!isRealDir(base)) continue;
-    for (const name of readdirSync4(base).slice(0, MAX_ENTRIES)) {
+    for (const name of readdirSync5(base).slice(0, MAX_ENTRIES)) {
       if (name.startsWith(".") || name === "node_modules") continue;
       if (isRealDir(join19(base, name))) scanDir(join19(base, name), `${group}/${name}`, found, notes);
     }
@@ -33188,7 +33457,10 @@ Commands:
   resume                   Owner only: lift the pause
   stop <id>                Stop a crew session
   metrics                  Lead time and deployment frequency
+  setup sources [<id>...]  Fetch the referenced third-party sources (nothing runs)
   sources list             Third-party sources and their licences
+  sources check            Judge upstream updates: fits, unclear or conflict; adopts nothing
+  sources apply <id>       Adopt a candidate that fits
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
   setup stack [--write]    Detect the project's stacks from its manifest files
   secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
@@ -33715,11 +33987,24 @@ async function runCli(argv, deps) {
         return 0;
       }
       case "setup": {
+        if (rest[0] === "sources") {
+          refuseCrew(deps.env);
+          const results = await setupSources({
+            ownerRoot: ownerRoot(),
+            index: loadSources(),
+            ports,
+            ...rest.length > 1 ? { only: rest.slice(1) } : {}
+          });
+          print(results);
+          return results.some((r) => r.result === "failed") ? 1 : 0;
+        }
         if (rest[0] === "stack" && rest.length === 1) {
           return runSetupStack({ project, json: json2, write: values.write === true, stdout });
         }
         if (rest[0] !== "ci" || rest.length !== 1) {
-          throw new UsageError("setup needs a subcommand: ci [--write] | stack [--write]");
+          throw new UsageError(
+            "setup needs a subcommand: ci [--write] | stack [--write] | sources [<id>...]"
+          );
         }
         return await runSetupCi({
           project,
@@ -33760,12 +34045,46 @@ async function runCli(argv, deps) {
         return 0;
       }
       case "sources": {
-        const [sub] = rest;
+        const [sub, arg] = rest;
         if (sub === "list") {
           print({ capabilitiesDir: capabilitiesDir(), sources: loadSources().sources });
           return 0;
         }
-        throw new UsageError("sources needs a subcommand: list");
+        if (sub === "check" && rest.length === 1) {
+          refuseCrew(deps.env);
+          const index = loadSources();
+          const results = await checkSources({ ownerRoot: ownerRoot(), index, ports });
+          if (json2) {
+            print({
+              results,
+              notWatched: index.sources.filter((s) => s.kind !== "git").map((s) => s.id)
+            });
+          } else {
+            stdout(
+              table([
+                ["SOURCE", "VERDICT", "FINDINGS"],
+                ...results.map((r) => [
+                  r.id,
+                  r.verdict,
+                  r.findings.map((f) => `${f.kind}: ${f.detail}`).join("; ") || "-"
+                ])
+              ])
+            );
+          }
+          return 0;
+        }
+        if (sub === "apply" && arg !== void 0 && rest.length === 2) {
+          refuseCrew(deps.env);
+          const r = await applySource({
+            ownerRoot: ownerRoot(),
+            index: loadSources(),
+            ports,
+            id: arg
+          });
+          print(r);
+          return r.applied ? 0 : 1;
+        }
+        throw new UsageError("sources needs a subcommand: list | check | apply <id>");
       }
       case "metrics": {
         print(computeMetrics(readMetricEvents(stateRoot())));
@@ -33838,6 +34157,9 @@ var MAX_NOTES = 10;
 var MAX_NOTE_CHARS = 500;
 function capNotes(notes) {
   return notes.slice(0, MAX_NOTES).map((n2) => n2.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_NOTE_CHARS));
+}
+function refuseCrew(env) {
+  if (env.STUDIO_ROLE === "crew") throw new Error("this command is not for crew sessions");
 }
 function refuseNativeQueue(config2) {
   if (config2.merge.strategy === "native-queue") {

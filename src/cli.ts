@@ -60,7 +60,7 @@ import {
 } from './review.js';
 import { runDoctor, runSecretSet } from './secret-command.js';
 import { runSetupCi } from './setup-ci-command.js';
-import { loadSources } from './sources.js';
+import { applySource, checkSources, loadSources, setupSources } from './sources.js';
 import { runSetupStack } from './stack.js';
 import {
   type CrewSnapshot,
@@ -108,7 +108,10 @@ Commands:
   resume                   Owner only: lift the pause
   stop <id>                Stop a crew session
   metrics                  Lead time and deployment frequency
+  setup sources [<id>...]  Fetch the referenced third-party sources (nothing runs)
   sources list             Third-party sources and their licences
+  sources check            Judge upstream updates: fits, unclear or conflict; adopts nothing
+  sources apply <id>       Adopt a candidate that fits
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
   setup stack [--write]    Detect the project's stacks from its manifest files
   secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
@@ -689,11 +692,24 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'setup': {
+        if (rest[0] === 'sources') {
+          refuseCrew(deps.env);
+          const results = await setupSources({
+            ownerRoot: ownerRoot(),
+            index: loadSources(),
+            ports,
+            ...(rest.length > 1 ? { only: rest.slice(1) } : {}),
+          });
+          print(results);
+          return results.some((r) => r.result === 'failed') ? 1 : 0;
+        }
         if (rest[0] === 'stack' && rest.length === 1) {
           return runSetupStack({ project, json, write: values.write === true, stdout });
         }
         if (rest[0] !== 'ci' || rest.length !== 1) {
-          throw new UsageError('setup needs a subcommand: ci [--write] | stack [--write]');
+          throw new UsageError(
+            'setup needs a subcommand: ci [--write] | stack [--write] | sources [<id>...]',
+          );
         }
         return await runSetupCi({
           project,
@@ -740,12 +756,46 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'sources': {
-        const [sub] = rest;
+        const [sub, arg] = rest;
         if (sub === 'list') {
           print({ capabilitiesDir: capabilitiesDir(), sources: loadSources().sources });
           return 0;
         }
-        throw new UsageError('sources needs a subcommand: list');
+        if (sub === 'check' && rest.length === 1) {
+          refuseCrew(deps.env);
+          const index = loadSources();
+          const results = await checkSources({ ownerRoot: ownerRoot(), index, ports });
+          if (json) {
+            print({
+              results,
+              notWatched: index.sources.filter((s) => s.kind !== 'git').map((s) => s.id),
+            });
+          } else {
+            stdout(
+              table([
+                ['SOURCE', 'VERDICT', 'FINDINGS'],
+                ...results.map((r) => [
+                  r.id,
+                  r.verdict,
+                  r.findings.map((f) => `${f.kind}: ${f.detail}`).join('; ') || '-',
+                ]),
+              ]),
+            );
+          }
+          return 0;
+        }
+        if (sub === 'apply' && arg !== undefined && rest.length === 2) {
+          refuseCrew(deps.env);
+          const r = await applySource({
+            ownerRoot: ownerRoot(),
+            index: loadSources(),
+            ports,
+            id: arg,
+          });
+          print(r);
+          return r.applied ? 0 : 1;
+        }
+        throw new UsageError('sources needs a subcommand: list | check | apply <id>');
       }
 
       case 'metrics': {
@@ -833,6 +883,11 @@ const MAX_NOTE_CHARS = 500;
 /** Crew-provided text is untrusted: at most 10 entries of 500 characters, no control characters. */
 function capNotes(notes: string[]): string[] {
   return notes.slice(0, MAX_NOTES).map((n) => n.replace(/\p{Cc}/gu, ' ').slice(0, MAX_NOTE_CHARS));
+}
+
+/** Crew sessions run with this role: what changes owner state is not theirs. */
+function refuseCrew(env: Record<string, string | undefined>): void {
+  if (env.STUDIO_ROLE === 'crew') throw new Error('this command is not for crew sessions');
 }
 
 function refuseNativeQueue(config: StudioConfig): void {
