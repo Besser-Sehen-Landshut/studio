@@ -1475,8 +1475,10 @@ function checkWords(env, words, state) {
       deny(`${name} reading its script from stdin is not allowed`);
     }
   }
-  if ((name === "studio" || name === "node") && args.includes("accounts-clear")) {
-    deny("studio accounts-clear is owner-only");
+  if (name === "studio" || name === "node") {
+    for (const sub of OWNER_ONLY_SUBCOMMANDS) {
+      if (args.includes(sub)) deny(`studio ${sub} is owner-only`);
+    }
   }
   if (name === "find") checkFind(env, args, state);
   if (name === "git" || name === "gh") {
@@ -1486,6 +1488,7 @@ function checkWords(env, words, state) {
   if (name === "gh") checkGh(env, args);
   for (const t of writeTargets(name, args)) checkWritePath(env, t, state.cwd, name);
 }
+var OWNER_ONLY_SUBCOMMANDS = ["accounts-clear", "pause", "resume"];
 function checkBash(env, cmd, cwd, depth) {
   if (depth > 8) deny("command nesting too deep");
   const { lines, subs } = scan(cmd);

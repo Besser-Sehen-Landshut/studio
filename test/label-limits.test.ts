@@ -725,6 +725,26 @@ describe('pause and resume', () => {
     expect(stateOf(fx).crew[0].state).toBe('working');
   });
 
+  it('a pause set while the clone is prepared refuses before the run is counted and started', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    p.hooks.afterGit = (args) => {
+      if (args[0] !== 'clone') return;
+      p.hooks.afterGit = undefined;
+      writeFileSync(pauseFile(fx), JSON.stringify({ at: '2026-11-01T10:00:00.000Z' }));
+    };
+    const item = loadBoard(fx.project).items.find((i) => i.id === 'APP-1') as WorkItem;
+    await expect(
+      launchCrew(fx.project, item, loadConfig(fx.project), p.ports, {
+        env: fx.env,
+        homedir: fx.home,
+      }),
+    ).rejects.toThrow(/paused/);
+    expect(p.started).toHaveLength(0);
+    await cli(fx, p.ports, ['state']);
+    expect(stateOf(fx).labelUsage).toBeUndefined();
+  });
+
   it('resume lifts the pause', async () => {
     const fx = makeFx(ITEMS);
     const p = makePorts();

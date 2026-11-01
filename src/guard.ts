@@ -1180,9 +1180,12 @@ function checkWords(env: Env, words: string[], state: State): void {
       deny(`${name} reading its script from stdin is not allowed`);
     }
   }
-  // Clearing an account block is the owner's decision. `node` covers `node <plugin>/bin/studio ...`.
-  if ((name === 'studio' || name === 'node') && args.includes('accounts-clear')) {
-    deny('studio accounts-clear is owner-only');
+  // Clearing an account block, pausing and resuming are the owner's decisions (the CLI refuses
+  // them for the crew role too; this is the second net). `node` covers `node <plugin>/bin/studio ...`.
+  if (name === 'studio' || name === 'node') {
+    for (const sub of OWNER_ONLY_SUBCOMMANDS) {
+      if (args.includes(sub)) deny(`studio ${sub} is owner-only`);
+    }
   }
   if (name === 'find') checkFind(env, args, state);
   if (name === 'git' || name === 'gh') {
@@ -1192,6 +1195,8 @@ function checkWords(env: Env, words: string[], state: State): void {
   if (name === 'gh') checkGh(env, args);
   for (const t of writeTargets(name, args)) checkWritePath(env, t, state.cwd, name);
 }
+
+const OWNER_ONLY_SUBCOMMANDS = ['accounts-clear', 'pause', 'resume'];
 
 function checkBash(env: Env, cmd: string, cwd: string | null, depth: number): void {
   if (depth > 8) deny('command nesting too deep');

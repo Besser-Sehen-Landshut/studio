@@ -517,6 +517,22 @@ describe('round 1 regressions', () => {
     denies(['/usr/local/bin/terraform apply', 'env X=1 /opt/bin/terraform apply -auto-approve']);
   });
 
+  it('I5b pause, resume and accounts-clear are owner-only in every form', () => {
+    const forms = (sub: string) => [
+      `studio ${sub}`,
+      `studio --project . ${sub}`,
+      `STUDIO_ROLE=owner studio ${sub}`,
+      `env STUDIO_ROLE= studio ${sub}`,
+      `/usr/local/bin/studio ${sub}`,
+      `node /opt/plugin/bin/studio ${sub}`,
+      `echo x && studio ${sub}`,
+    ];
+    denies([...forms('pause'), ...forms('resume'), ...forms('accounts-clear label-a')]);
+    for (const c of ['studio state', 'studio plan', 'studio launch APP-1', 'echo pause resume']) {
+      expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
+    }
+  });
+
   it('I6 write path globs, cd state, <>', () => {
     denies([
       'touch li*/pwned',
