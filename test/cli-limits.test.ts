@@ -100,6 +100,7 @@ function makePorts(tokenReplies: { code?: number; stdout?: string }[] = []) {
         return { pid };
       },
       alive: (p) => alive.has(p),
+      identity: async (p) => `start-${p}`,
       async stop(p) {
         stopped.push(p);
         alive.delete(p);
@@ -150,8 +151,19 @@ async function cli(fx: Fx, ports: Ports, argv: string[], extra: Partial<CliDeps>
 const provider = (fx: Fx, line: string) => {
   mkdirSync(fx.ownerDir, { recursive: true });
   const f = join(fx.ownerDir, `provider-${n++}.sh`);
-  writeFileSync(f, `#!/bin/sh\ncat <<'OUT'\n${line}\nOUT\n`, { mode: 0o700 });
-  writeFileSync(join(fx.ownerDir, 'config.yaml'), `crew_credential_command: ${f}\n`);
+  // Keeps to the STUDIO_EXCLUDE contract: nothing for a label that is excluded. The planner asks
+  // again with the label excluded and treats an answer with that label as a broken provider.
+  const label = line === '' ? '-' : (JSON.parse(line) as { label: string }).label;
+  writeFileSync(
+    f,
+    `#!/bin/sh\ncase ",$STUDIO_EXCLUDE," in *,${label},*) exit 0;; esac\ncat <<'OUT'\n${line}\nOUT\n`,
+    { mode: 0o700 },
+  );
+  // These tests are about usage-limit parking, not the per-label parallel limit (default 2).
+  writeFileSync(
+    join(fx.ownerDir, 'config.yaml'),
+    `crew_credential_command: ${f}\ncrew_label_limits:\n  max_parallel: 8\n`,
+  );
 };
 const TOKEN = 'fake-value-oauth-cli-5d21';
 const tokenLine = (label: string) =>

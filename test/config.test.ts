@@ -218,6 +218,7 @@ describe('owner config', () => {
     expect(loadOwnerConfig({ homedir: h, env: {} })).toEqual({
       crewToolchainPaths: [],
       allowApiBilling: false,
+      crewLabelLimits: { maxParallel: 2 },
     });
   });
 
@@ -228,6 +229,7 @@ describe('owner config', () => {
     expect(loadOwnerConfig({ homedir: h, env: { XDG_CONFIG_HOME: xdg } })).toEqual({
       crewToolchainPaths: [`${h}/.local/bin`],
       allowApiBilling: false,
+      crewLabelLimits: { maxParallel: 2 },
     });
   });
 

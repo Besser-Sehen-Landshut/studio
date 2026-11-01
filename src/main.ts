@@ -11,5 +11,6 @@ process.exitCode = await runCli(process.argv.slice(2), {
   env: process.env,
   homedir: homedir(),
   cwd: process.cwd(),
+  isTerminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
   readSecret: (prompt) => readHiddenLine(prompt, process.stdin, (s) => process.stderr.write(s)),
 });

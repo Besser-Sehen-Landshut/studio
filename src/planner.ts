@@ -104,6 +104,8 @@ function cycleTainted(items: WorkItem[]): Set<string> {
  * `deferred`, which callers may ignore. When several blocked reasons apply, the first of this order wins:
  * not ready, dependency cycle, unknown dependency, owner only, role not configured, waiting.
  * With `hold` (no crew credential available) nothing is assigned; every candidate is deferred.
+ * `credentialSlots` is how many more crews the credentials allow (per-label limits); at 0 every
+ * candidate is deferred with the reason `credential limit`, and each assignment uses one slot.
  */
 export function planAssignments(
   board: Board,
@@ -111,6 +113,7 @@ export function planAssignments(
   capacity: Capacity,
   running: Record<string, number>,
   hold?: string,
+  credentialSlots?: number,
 ): Plan {
   const byId = new Map(board.items.map((i) => [i.id, i]));
   const tainted = cycleTainted(board.items);
@@ -154,13 +157,16 @@ export function planAssignments(
     const isBuild = BUILD_TYPES.includes(item.type);
     const clash = [...active, ...assign].find((o) => conflicts(item, o));
     if (hold !== undefined) deferred.push({ id: item.id, reason: hold });
-    else if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: 'role wip full' });
+    else if (credentialSlots !== undefined && credentialSlots <= 0) {
+      deferred.push({ id: item.id, reason: 'credential limit' });
+    } else if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: 'role wip full' });
     else if (isBuild && buildSlots <= 0) deferred.push({ id: item.id, reason: 'ci capacity' });
     else if (clash) deferred.push({ id: item.id, reason: `overlaps ${clash.id}` });
     else {
       assign.push(item);
       roleSlots.set(item.role, slotsFor(item.role) - 1);
       if (isBuild) buildSlots -= 1;
+      if (credentialSlots !== undefined) credentialSlots -= 1;
     }
   }
 

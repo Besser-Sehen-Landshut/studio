@@ -886,6 +886,45 @@ function checkGitC(kv: string): void {
   }
 }
 
+/**
+ * Whether a fetch refspec writes below `refs/remotes/`. The crew clone's `origin/main` must stay
+ * what the owner's fetch put there, so such destinations are refused (also with a leading `+`,
+ * abbreviated as `remotes/...`, or as a glob that reaches `refs/remotes/`).
+ */
+function writesRemoteRefs(refspec: string): boolean {
+  const colon = refspec.indexOf(':');
+  if (colon < 0) return false;
+  const dest = refspec.slice(colon + 1).toLowerCase();
+  if (dest.startsWith('refs/remotes/') || dest.startsWith('remotes/')) return true;
+  const star = dest.indexOf('*');
+  if (star < 0) return false;
+  const prefix = dest.slice(0, star);
+  return 'refs/remotes/'.startsWith(prefix) || 'remotes/'.startsWith(prefix);
+}
+
+function checkFetch(rawArgs: string[]): void {
+  const args = rawArgs.flatMap((a) => braceExpand(a));
+  for (const a of args) {
+    if (unresolvedWord(a)) {
+      deny(`unresolved git fetch argument: ${a.replaceAll(SUBST, '<runtime>')}`);
+    }
+  }
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k] as string;
+    const refmap = a === '--refmap' ? args[k + 1] : a.startsWith('--refmap=') ? a.slice(9) : null;
+    if (refmap !== null) {
+      // a --refmap that is not a plain refspec cannot be told from one that writes remote refs
+      if (refmap === undefined || writesRemoteRefs(refmap.replace(/^\+/, ''))) {
+        deny('git fetch --refmap into refs/remotes/ is not allowed');
+      }
+      continue;
+    }
+    if (!a.startsWith('-') && writesRemoteRefs(a.replace(/^\+/, ''))) {
+      deny('git fetch into refs/remotes/ is not allowed (origin/* is set by the owner)');
+    }
+  }
+}
+
 function checkGit(env: Env, args: string[], state: State): void {
   let i = 0;
   while (i < args.length) {
@@ -914,7 +953,16 @@ function checkGit(env: Env, args: string[], state: State): void {
   if (unresolvedWord(sub)) deny('unresolved command word (git subcommand)');
   const rest = args.slice(i + 1);
   if (sub === 'push') checkPush(env, rest);
-  else if (sub === 'send-pack' || sub === 'http-push' || sub === 'subtree') {
+  else if (sub === 'fetch' || sub === 'pull') checkFetch(rest);
+  else if (
+    sub === 'send-pack' ||
+    sub === 'http-push' ||
+    sub === 'subtree' ||
+    sub === 'update-ref' ||
+    sub === 'replace' ||
+    sub === 'symbolic-ref'
+  ) {
+    // update-ref, replace and symbolic-ref rewrite refs or objects that origin/main is read from
     deny(`git ${sub} is not allowed`);
   } else if (sub === 'config') {
     // allowlist: reads only
@@ -1131,6 +1179,10 @@ function checkWords(env: Env, words: string[], state: State): void {
     if (positionals(args).length === 0 || args.includes('-')) {
       deny(`${name} reading its script from stdin is not allowed`);
     }
+  }
+  // Clearing an account block is the owner's decision. `node` covers `node <plugin>/bin/studio ...`.
+  if ((name === 'studio' || name === 'node') && args.includes('accounts-clear')) {
+    deny('studio accounts-clear is owner-only');
   }
   if (name === 'find') checkFind(env, args, state);
   if (name === 'git' || name === 'gh') {

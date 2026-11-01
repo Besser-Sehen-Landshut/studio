@@ -150,6 +150,7 @@ function fakePorts(gh: Gh) {
       return { pid: 4242 };
     },
     alive: (pid) => pid === 4242,
+    identity: async () => 'start-4242',
     async stop(pid) {
       stopped.push(pid);
     },

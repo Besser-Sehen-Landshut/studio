@@ -78,21 +78,22 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 
 `studio [--project <dir>] [--json] <command>`
 
-| Command                 | Purpose                                                       |
-| ----------------------- | ------------------------------------------------------------- |
-| `board`                 | Show the board                                                |
-| `plan`                  | Dry-run the planner (JSON incl. capacity and its read error)  |
-| `launch <id>`           | Start a crew session for a planned item                       |
-| `status`                | Crew sessions and their board status                          |
-| `collect <id>`          | Verify a crew report and PR head, move the item               |
-| `queue add <repo>#<pr>` | Put a reviewed PR into the merge queue                        |
-| `queue run`             | Merge queued PRs one at a time (exact head SHA, checks green) |
-| `state`                 | Refresh `state.json` in the state root                        |
-| `stop <id>`             | Stop a crew session                                           |
-| `metrics`               | Lead time and deployment frequency                            |
-| `setup ci [--write]`    | Detect CI runners, propose the `ci:` block, lint workflows    |
-| `secret set crew-token` | Store the crew's GitHub token (hidden input, checked first)   |
-| `doctor`                | What is set and what is missing, never values                 |
+| Command                  | Purpose                                                       |
+| ------------------------ | ------------------------------------------------------------- |
+| `board`                  | Show the board                                                |
+| `plan`                   | Dry-run the planner (JSON incl. capacity and its read error)  |
+| `launch <id>`            | Start a crew session for a planned item                       |
+| `status`                 | Crew sessions and their board status                          |
+| `collect <id>`           | Verify a crew report and PR head, move the item               |
+| `queue add <repo>#<pr>`  | Put a reviewed PR into the merge queue                        |
+| `queue run`              | Merge queued PRs one at a time (exact head SHA, checks green) |
+| `state`                  | Refresh `state.json` in the state root                        |
+| `stop <id>`              | Stop a crew session                                           |
+| `metrics`                | Lead time and deployment frequency                            |
+| `setup ci [--write]`     | Detect CI runners, propose the `ci:` block, lint workflows    |
+| `secret set crew-token`  | Store the crew's GitHub token (hidden input, checked first)   |
+| `doctor`                 | What is set and what is missing, never values                 |
+| `accounts-clear <label>` | Owner only, in a terminal: clear a label's account block      |
 
 `launch` refuses while a crew for the same item is still running and deletes a report an earlier run left in a reused clone. `collect` refuses while the item's crew process is still alive and refuses a report last modified before the crew started.
 
@@ -118,7 +119,7 @@ Without `--write` nothing changes. With `--write` the command changes only the `
 
 **API billing** stays off unless the owner config sets `allow_api_billing: true`. Then `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` pass through to the crew. Without it, a launch also refuses when the `settings.json` in the crew's Claude config dir sets `apiKeyHelper`, `env.ANTHROPIC_API_KEY` or `env.ANTHROPIC_AUTH_TOKEN`. An unparsable settings file, or one that is not a regular file, refuses in either case. Crew settings written by Studio never contain `apiKeyHelper`.
 
-**Settings sources.** Crews ignore the project and local Claude Code settings of the clone (`.claude/settings.json`, `.claude/settings.local.json`): Studio starts every crew, fresh or resumed, with `--setting-sources user`, so only the user settings and the file Studio passes with `--settings` apply. Hooks, `env` and `apiKeyHelper` from the repository therefore have no effect, and Studio no longer reads those files. Crews also do not auto-load the project `CLAUDE.md`, rules, skills, commands or subagents; the brief tells them to read `AGENTS.md` and `CLAUDE.md` from `origin/main` with `git show` (not from the working tree, and only entries of mode 100644, so no symlinks). These files cannot change settings or Studio's rules, and can never direct a crew to handle credentials, change remotes, reach new hosts or change the report contract. Before a launch, Studio refuses a role whose required skill is definitely absent from the crew's Claude config dir (`skills/<name>/SKILL.md` or a plugin cache `skills/<name>/SKILL.md`, any `plugin:` prefix stripped); an unreadable directory does not refuse. A required skill that is not available in the session means a `blocked` report naming it.
+**Settings sources.** Crews ignore the project and local Claude Code settings of the clone (`.claude/settings.json`, `.claude/settings.local.json`): Studio starts every crew, fresh or resumed, with `--setting-sources user`, so only the user settings and the file Studio passes with `--settings` apply. Hooks, `env` and `apiKeyHelper` from the repository therefore have no effect, and Studio no longer reads those files. Crews also do not auto-load the project `CLAUDE.md`, rules, skills, commands or subagents; Studio reads `AGENTS.md` and `CLAUDE.md` itself, in the owner's checkout, at the SHA of a freshly fetched `origin/main` (replace objects ignored), and saves copies next to the crew's brief in the state root (`briefs/<id>.rules/`); the brief points to those copies. The crew can read them but not write them, and a reused clone with moved refs cannot change them. A launch refuses when the fetch fails, when an entry is not a plain file (mode 100644, so no symlinks) or when a file is over 256 KiB. Items in another repository get the rules of the project checkout. The guard denies `git update-ref`, `git replace`, `git symbolic-ref` and fetch refspecs that write below `refs/remotes/`. Claude Code auto memory is off for crew runs (`autoMemoryEnabled: false` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`). These files cannot change settings or Studio's rules, and can never direct a crew to handle credentials, change remotes, reach new hosts or change the report contract. Before a launch, Studio refuses a role whose required skill is definitely absent from the crew's Claude config dir (`skills/<name>/SKILL.md` or a plugin cache `skills/<name>/SKILL.md`, any `plugin:` prefix stripped); an unreadable directory does not refuse. A required skill that is not available in the session means a `blocked` report naming it.
 
 **Credential provider.** You can set `crew_credential_command` in the owner config (it is refused in `studio.yaml`). It is the absolute path of an executable file you own that neither group nor others can write. Studio runs it without a shell, with a 30 s timeout, and with only `PATH`, `HOME`, `STUDIO_ITEM`, `STUDIO_ROLE` (both empty when a plan only asks whether a credential is available) and `STUDIO_EXCLUDE` (comma-separated labels that are parked). It reads exactly one JSON line from stdout, at most 64 KiB; stderr is discarded:
 
@@ -131,6 +132,14 @@ Without `--write` nothing changes. With `--write` the command changes only the `
 **Usage limits.** At the start of `status`, `plan`, `launch` and `state`, Studio reads the end of each active crew's log. Only events Claude Code itself emits count; tool output that quotes a limit message does not. A `rate_limit` retry alone never stops a running crew; it counts only when the crew exited without a report and no later successful event shows it recovered. On a limit it stops the run, parks the label in `limits.json` in the state root, and returns the item to `ready` with a note; clone and branch stay. A label is parked until the reset when the event gives an absolute time, otherwise for one hour, and clears by itself afterwards. The next launch resumes the session when the clone is still there and the session is usable with the new credential (same label, or the token form with the same config dir), otherwise it starts fresh. A crew that left a report is not treated as limited, and a clone that left its branch is not replaced: the launch refuses and names it.
 
 When no credential is available (without a provider: `default` is parked; with one: it answers empty while labels are parked), nothing is planned or started, and `state.json` shows one `forOwner` line with the earliest reset. Work continues by itself once a label is free. An unreadable `limits.json` counts as all parked and is reported.
+
+**Usage limits per credential.** Each credential label has a ceiling set in the owner config under `crew_label_limits`: `max_parallel` (default 2) crews running at once, and optionally `max_runs_per_day` crew launches per day; `timezone` (an IANA name such as `Europe/Berlin`, default the system zone) decides where the day ends. A crew counts as running while its process is alive, whatever the board says. A launch counts when the crew is started, also when the start fails. Counts per day and label are kept in `usage.json` in the state root and shown in `state.json` as `labelUsage` (labels only). A label at its limit is added to `STUDIO_EXCLUDE` like a parked one; a provider that returns it anyway makes the launch refuse. `plan` asks the provider with a growing exclude list (at most 16 calls, token never kept) and plans only as many items as the free labels allow; the rest wait with the reason `credential limit`, and with no free label `state.json` shows one `usage-limit` line. A provider must honour `STUDIO_EXCLUDE`: one that returns an excluded label makes the launch refuse and also holds `plan` (nothing is planned), even when no label is full. A live crew counts whatever the board says about its item. The counts are per project (per state root), like account blocks: they are not a limit across projects or for the machine, so two projects using the same credential each count their own crews. An unreadable `usage.json` counts as all labels full. Launches of one project are serialised with a `launch.lock` in its state root, and the checks run again under the lock, after the clone is prepared and just before the run is counted and started; a launch that lost the lock refuses.
+
+**Account blocks.** When an account looks blocked, Studio stops, so automation never makes it worse. At the start of `status`, `plan`, `launch` and `state`, it looks in the current run of every crew not yet stopped on an `assigned` or `in_progress` item, and of every running crew it can verify in another unfinished status, for events Claude Code itself emits: a failed authentication (also with no earlier success), an account on hold, disabled, suspended or banned, a disabled organization, a usage policy refusal. Tool output that quotes such a message does not count, and neither do billing errors or usage limits. A retry with a block category counts at once, also for a running crew, unless a later successful event shows the run recovered; a crew that left a report still counts.
+
+Studio records the label and a reason code in `blocks.json` in the state root, then stops every running crew of this project, of all labels, except on `merged` and `dropped` items, also when the board cannot be read. It signals a crew only when the process start time stored at launch still matches; a running crew it cannot verify is not signalled but reported with item and pid, so check it by hand. `assigned` and `in_progress` items return to `ready` with a note; clone and branch stay. An item whose crew left a report stays where it is, so `collect` still works. Nothing starts and no credential provider is called while any block exists, under any label. `state.json` shows one `forOwner` line (`account-block`) and one entry per block under `notifications`. An unreadable `blocks.json` (malformed, a symlink, not a file) counts as blocked in the same way; a missing file means no block.
+
+Nothing clears by itself. `studio accounts-clear <label>` removes that label's entries, moves the scan start of that label's crews to the end of their logs so an old event does not return, restarts nothing, and needs a terminal; crews cannot write the state root. On an unreadable file it refuses: inspect or remove the file.
 
 ## Security model
 
@@ -153,6 +162,10 @@ Settings that open reads on the owner's machine are not the repository's call. T
 crew_toolchain_paths: [] # absolute directories a crew may read, e.g. a version manager's install dir
 crew_credential_command: /absolute/path/to/provider # optional, see "Crew credentials and usage limits"
 allow_api_billing: false # true lets crew runs bill the API
+crew_label_limits: # usage limits per credential label, see "Usage limits per credential"
+  max_parallel: 2 # crews running at once per label
+  # max_runs_per_day: 20 # optional launches per label and day
+  # timezone: Europe/Berlin # optional, where the day ends; default the system zone
 ```
 
 A `studio.yaml` that still contains `crew_toolchain_paths` is refused. At launch every toolchain path must exist; Studio resolves it to its real path (which goes into the sandbox) and refuses it, comparing literal and real spellings and case-insensitively on macOS, when it is the home or a parent of it, equals, contains or lies inside a credential store, `~/.claude` or `CLAUDE_CONFIG_DIR`, or equals, contains or lies inside the project directory or the state root.

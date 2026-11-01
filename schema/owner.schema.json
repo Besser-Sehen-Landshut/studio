@@ -16,6 +16,29 @@
     "allow_api_billing": {
       "default": false,
       "type": "boolean"
+    },
+    "crew_label_limits": {
+      "default": {
+        "max_parallel": 2
+      },
+      "type": "object",
+      "properties": {
+        "max_parallel": {
+          "default": 2,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_runs_per_day": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "timezone": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

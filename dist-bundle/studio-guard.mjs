@@ -1224,6 +1224,37 @@ function checkGitC(kv) {
     deny(`git -c ${key} is not allowed`);
   }
 }
+function writesRemoteRefs(refspec) {
+  const colon = refspec.indexOf(":");
+  if (colon < 0) return false;
+  const dest = refspec.slice(colon + 1).toLowerCase();
+  if (dest.startsWith("refs/remotes/") || dest.startsWith("remotes/")) return true;
+  const star = dest.indexOf("*");
+  if (star < 0) return false;
+  const prefix = dest.slice(0, star);
+  return "refs/remotes/".startsWith(prefix) || "remotes/".startsWith(prefix);
+}
+function checkFetch(rawArgs) {
+  const args = rawArgs.flatMap((a) => braceExpand(a));
+  for (const a of args) {
+    if (unresolvedWord(a)) {
+      deny(`unresolved git fetch argument: ${a.replaceAll(SUBST, "<runtime>")}`);
+    }
+  }
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    const refmap = a === "--refmap" ? args[k + 1] : a.startsWith("--refmap=") ? a.slice(9) : null;
+    if (refmap !== null) {
+      if (refmap === void 0 || writesRemoteRefs(refmap.replace(/^\+/, ""))) {
+        deny("git fetch --refmap into refs/remotes/ is not allowed");
+      }
+      continue;
+    }
+    if (!a.startsWith("-") && writesRemoteRefs(a.replace(/^\+/, ""))) {
+      deny("git fetch into refs/remotes/ is not allowed (origin/* is set by the owner)");
+    }
+  }
+}
 function checkGit(env, args, state) {
   let i = 0;
   while (i < args.length) {
@@ -1252,7 +1283,8 @@ function checkGit(env, args, state) {
   if (unresolvedWord(sub)) deny("unresolved command word (git subcommand)");
   const rest = args.slice(i + 1);
   if (sub === "push") checkPush(env, rest);
-  else if (sub === "send-pack" || sub === "http-push" || sub === "subtree") {
+  else if (sub === "fetch" || sub === "pull") checkFetch(rest);
+  else if (sub === "send-pack" || sub === "http-push" || sub === "subtree" || sub === "update-ref" || sub === "replace" || sub === "symbolic-ref") {
     deny(`git ${sub} is not allowed`);
   } else if (sub === "config") {
     const all = rest.flatMap((x) => braceExpand(x));
@@ -1442,6 +1474,9 @@ function checkWords(env, words, state) {
     if (positionals(args).length === 0 || args.includes("-")) {
       deny(`${name} reading its script from stdin is not allowed`);
     }
+  }
+  if ((name === "studio" || name === "node") && args.includes("accounts-clear")) {
+    deny("studio accounts-clear is owner-only");
   }
   if (name === "find") checkFind(env, args, state);
   if (name === "git" || name === "gh") {
