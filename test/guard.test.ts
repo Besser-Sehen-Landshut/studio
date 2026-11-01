@@ -111,6 +111,50 @@ describe('git push', () => {
   });
 });
 
+describe('git ref rewriting (issue 6)', () => {
+  it.each([
+    'git update-ref refs/remotes/origin/main HEAD',
+    'git update-ref -d refs/remotes/origin/main',
+    'git -C . update-ref refs/remotes/origin/main HEAD',
+    'git replace abc123 def456',
+    'git replace --graft HEAD HEAD~2',
+    'git symbolic-ref HEAD refs/heads/x',
+    'git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/x',
+    'git symbolic-ref HEAD',
+    'git fetch origin main:refs/remotes/origin/main',
+    'git fetch origin +main:refs/remotes/origin/main',
+    "git fetch origin '+refs/heads/*:refs/remotes/origin/*'",
+    'git fetch origin refs/heads/x:refs/remotes/origin/main',
+    'git fetch origin x:remotes/origin/main',
+    'git fetch origin +x:remotes/origin/main',
+    'git fetch origin x:refs/remotes/upstream/y',
+    'git fetch origin refs/heads/*:refs/remotes/*',
+    'git fetch --refmap=refs/heads/*:refs/remotes/origin/* origin main',
+    "git fetch --refmap 'refs/heads/*:refs/remotes/origin/*' origin main",
+    'git fetch -f origin main:refs/remotes/origin/main',
+    'git fetch origin main:$X',
+    'git pull origin +x:refs/remotes/origin/main',
+    'git fetch origin $(echo main:refs/remotes/origin/main)',
+    'git fetch origin refs/heads/{a,b}:refs/remotes/origin/main',
+  ])('denies %s', (cmd) => {
+    expect(bash(cmd).decision).toBe('deny');
+  });
+
+  it.each([
+    'git fetch origin',
+    'git pull --rebase origin main',
+    'git fetch origin main',
+    'git fetch --prune origin',
+    'git fetch origin studio/APP-1',
+    'git fetch origin main:refs/heads/scratch',
+    'git fetch origin refs/pull/3/head:refs/heads/pr-3',
+    'git remote -v',
+    'git show origin/main:AGENTS.md',
+  ])('allows %s', (cmd) => {
+    expect(bash(cmd).decision).toBe('allow');
+  });
+});
+
 describe('gh and owner commands', () => {
   it('denies gh pr merge', () => {
     const r = bash('gh pr merge 3');

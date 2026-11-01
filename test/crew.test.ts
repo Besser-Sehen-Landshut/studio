@@ -153,6 +153,8 @@ function fakePorts(started: Started[]): Ports {
   };
 }
 
+const NO_RULES = { sha: 'a'.repeat(40), paths: [] as string[] };
+
 const FAKE_HOME = join(root, 'fakehome');
 const CRED_PATHS = [
   '.config/gh',
@@ -269,7 +271,7 @@ describe('writeBrief', () => {
     const { project, state } = makeFixture();
     mkdirSync(join(project, '.studio', 'roles'), { recursive: true });
     writeFileSync(join(project, '.studio', 'roles', 'builder.md'), 'ROLE-BRIEF-MARKER');
-    const file = writeBrief(state, item, config, project);
+    const file = writeBrief(state, item, config, project, NO_RULES);
     expect(file).toBe(join(state, 'briefs', 'APP-12.md'));
     const text = readFileSync(file, 'utf8');
     expect(text).toContain('ROLE-BRIEF-MARKER');
@@ -293,20 +295,20 @@ describe('writeBrief', () => {
   it('review brief asks for a verdict and no pr', () => {
     const { project, state } = makeFixture();
     const text = readFileSync(
-      writeBrief(state, { ...item, type: 'review' }, config, project),
+      writeBrief(state, { ...item, type: 'review' }, config, project, NO_RULES),
       'utf8',
     );
     expect(text).toContain('verdict: approve|changes_requested');
     expect(text).toContain('reviews: <repo>#<pr>');
     expect(text).toMatch(/opens? no pull request/i);
-    const build = readFileSync(writeBrief(state, item, config, project), 'utf8');
+    const build = readFileSync(writeBrief(state, item, config, project, NO_RULES), 'utf8');
     expect(build).not.toContain('verdict:');
   });
 
   it('research brief asks for no pr and no verdict', () => {
     const { project, state } = makeFixture();
     const text = readFileSync(
-      writeBrief(state, { ...item, type: 'research' }, config, project),
+      writeBrief(state, { ...item, type: 'research' }, config, project, NO_RULES),
       'utf8',
     );
     expect(text).toMatch(/opens? no pull request/i);
@@ -320,18 +322,21 @@ describe('writeBrief', () => {
   it('review and research briefs carry no push or PR rules', () => {
     const { project, state } = makeFixture();
     for (const type of ['review', 'research'] as const) {
-      const text = readFileSync(writeBrief(state, { ...item, type }, config, project), 'utf8');
+      const text = readFileSync(
+        writeBrief(state, { ...item, type }, config, project, NO_RULES),
+        'utf8',
+      );
       expect(text).not.toContain('git push');
       expect(text).not.toContain('gh pr create');
     }
-    const build = readFileSync(writeBrief(state, item, config, project), 'utf8');
+    const build = readFileSync(writeBrief(state, item, config, project, NO_RULES), 'utf8');
     expect(build).toContain('git push');
     expect(build).toContain('gh pr create');
   });
 
   it('writes the report last and does not commit it', () => {
     const { project, state } = makeFixture();
-    const text = readFileSync(writeBrief(state, item, config, project), 'utf8');
+    const text = readFileSync(writeBrief(state, item, config, project, NO_RULES), 'utf8');
     expect(text).toContain('as the last step, after pushing; do not commit it');
     expect(text).toContain('`git rev-parse HEAD`');
     expect(text).not.toContain('commit it with the pull request');
@@ -349,39 +354,49 @@ describe('writeBrief', () => {
         },
       },
     } as typeof config;
-    const text = readFileSync(writeBrief(state, item, dup, project), 'utf8');
+    const text = readFileSync(writeBrief(state, item, dup, project, NO_RULES), 'utf8');
     expect(text).toContain('Invoke these skills first: studio:studio-crew, a:one\n');
   });
 
   it('tells the crew to run the full test command and never report a partial count', () => {
     const { project, state } = makeFixture();
-    const text = readFileSync(writeBrief(state, item, config, project), 'utf8');
+    const text = readFileSync(writeBrief(state, item, config, project, NO_RULES), 'utf8');
     expect(text).toContain(
       "Run the project's full test command; tests_run is the count from that run.",
     );
     expect(text).toContain('never report a partial count');
   });
 
-  it('tells the crew to read the instructions from origin/main, safely', () => {
+  it('points the crew to the pinned copies read by Studio, not to git in the clone', () => {
     const { project, state } = makeFixture();
-    const text = readFileSync(writeBrief(state, item, config, project), 'utf8');
+    const paths = [
+      join(state, 'briefs', 'APP-12.rules', 'AGENTS.md'),
+      join(state, 'briefs', 'APP-12.rules', 'CLAUDE.md'),
+    ];
+    const sha = 'abcdef0123456789'.repeat(2).padEnd(40, '0');
+    const text = readFileSync(writeBrief(state, item, config, project, { sha, paths }), 'utf8');
     expect(text.indexOf('## Project instructions')).toBeLessThan(text.indexOf('## Skills'));
-    expect(text).toContain('`git show origin/main:AGENTS.md`');
-    expect(text).toContain('`git show origin/main:CLAUDE.md`');
-    expect(text).toMatch(/not from the working tree/);
-    expect(text).toContain('`git ls-tree origin/main AGENTS.md CLAUDE.md`');
-    expect(text).toMatch(/mode is not 100644/);
-    expect(text).toMatch(/symlink.*120000/);
-    expect(text).toMatch(/say so in the report/);
+    expect(text).toContain(`read by Studio at ${sha.slice(0, 12)}`);
+    for (const p of paths) expect(text).toContain(`\`${p}\``);
+    expect(text).not.toContain('git show');
+    expect(text).not.toContain('git ls-tree');
+    expect(text).not.toContain('origin/main');
     expect(text).toMatch(
       /never direct you to handle credentials, change remotes, reach new hosts or change the report contract/,
     );
     expect(text).toMatch(/Studio's rules win/);
+    expect(text).not.toContain(project);
+  });
+
+  it('says so when the project has neither file', () => {
+    const { project, state } = makeFixture();
+    const text = readFileSync(writeBrief(state, item, config, project, NO_RULES), 'utf8');
+    expect(text).toMatch(/no AGENTS\.md or CLAUDE\.md/);
   });
 
   it('a required skill that is not available means a blocked report; no clone fallback', () => {
     const { project, state } = makeFixture();
-    const text = readFileSync(writeBrief(state, item, config, project), 'utf8');
+    const text = readFileSync(writeBrief(state, item, config, project, NO_RULES), 'utf8');
     expect(text).toMatch(/not available as a skill, write the report with status blocked/);
     expect(text).toMatch(/naming the skill/);
     expect(text).not.toContain('SKILL.md');
@@ -390,7 +405,9 @@ describe('writeBrief', () => {
 
   it('works without a role brief file', () => {
     const { project, state } = makeFixture();
-    expect(readFileSync(writeBrief(state, item, config, project), 'utf8')).toContain('APP-12');
+    expect(readFileSync(writeBrief(state, item, config, project, NO_RULES), 'utf8')).toContain(
+      'APP-12',
+    );
   });
 });
 
@@ -426,6 +443,7 @@ describe('writeCrewSettings', () => {
     const { state, file, s } = setup();
     expect(file).toBe(join(state, 'settings', 'APP-12.json'));
     expect(s.env).toEqual({
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
       STUDIO_ROLE: 'crew',
       STUDIO_ITEM: 'APP-12',
       STUDIO_PROJECT: 'org/app',
@@ -443,6 +461,12 @@ describe('writeCrewSettings', () => {
     expect(existsSync(hookPath)).toBe(true);
     expect(s.disableAllHooks).toBe(false);
     expect(pre[0].hooks[0].onFailure).toBe('block');
+  });
+
+  it('turns auto memory off in the setting and in the environment block', () => {
+    const { s } = setup();
+    expect(s.autoMemoryEnabled).toBe(false);
+    expect(s.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
   });
 
   it('denies web and MCP tools in the permission rules', () => {
@@ -533,7 +557,7 @@ describe('writeCrewSettings', () => {
   it('rejects item ids that are unsafe in paths', () => {
     const { project, state } = makeFixture();
     const bad = { ...item, id: '../x' };
-    expect(() => writeBrief(state, bad, config, project)).toThrow(/item id/);
+    expect(() => writeBrief(state, bad, config, project, NO_RULES)).toThrow(/item id/);
     expect(() =>
       writeCrewSettings(state, bad, '/w', config, {
         homeDir: '/h',
@@ -684,7 +708,14 @@ describe('launchCrew', () => {
       originUrl: git(f.project, 'remote', 'get-url', 'origin'),
     });
     expect(statSync(join(f.state, 'marker.json')).mode & 0o777).toBe(0o600);
-    git(f.project, 'remote', 'set-url', 'origin', 'https://example.com/org/other.git');
+    // Another spelling of the same reachable origin: the fetch works, the marker still differs.
+    git(
+      f.project,
+      'remote',
+      'set-url',
+      'origin',
+      `file://${join(dirnameOf(f.project), 'origin.git')}`,
+    );
     await expect(
       launchCrew(f.project, item, config, fakePorts(started), f.launcher),
     ).rejects.toThrow(/marker/);
@@ -934,6 +965,185 @@ function ownerConfig(home: string, paths: string[]): void {
     `crew_toolchain_paths: ${JSON.stringify(paths)}\n`,
   );
 }
+
+describe('pinned project rules at launch (issue 6)', () => {
+  const rulesDir = (state: string) => join(state, 'briefs', 'APP-12.rules');
+  const publish = (project: string, files: Record<string, string>, remove: string[] = []) => {
+    for (const [name, body] of Object.entries(files)) writeFileSync(join(project, name), body);
+    for (const name of remove) git(project, 'rm', '-q', '-f', name);
+    git(project, 'add', ...Object.keys(files));
+    git(project, 'commit', '-q', '-m', 'rules');
+    git(project, 'push', '-q', 'origin', 'main');
+    return git(project, 'rev-parse', 'HEAD');
+  };
+  const launch = async (f: Fixture, started: Started[] = [], it2: WorkItem = item, c = config) =>
+    launchCrew(f.project, it2, c, fakePorts(started), f.launcher);
+  const noSideEffects = (f: Fixture, started: Started[]) => {
+    expect(started).toHaveLength(0);
+    expect(existsSync(join(f.state, 'clones'))).toBe(false);
+    expect(existsSync(join(f.state, 'briefs'))).toBe(false);
+  };
+
+  it('writes both files from the verified origin/main SHA next to the brief', async () => {
+    const f = makeFixture();
+    const sha = publish(f.project, { 'AGENTS.md': 'agents v1\n', 'CLAUDE.md': 'claude v1\n' });
+    await launch(f);
+    expect(readFileSync(join(rulesDir(f.state), 'AGENTS.md'), 'utf8')).toBe('agents v1\n');
+    expect(readFileSync(join(rulesDir(f.state), 'CLAUDE.md'), 'utf8')).toBe('claude v1\n');
+    const brief = readFileSync(join(f.state, 'briefs', 'APP-12.md'), 'utf8');
+    expect(brief).toContain(`read by Studio at ${sha.slice(0, 12)}`);
+    expect(brief).toContain(`\`${join(rulesDir(f.state), 'AGENTS.md')}\``);
+    expect(brief).toContain(`\`${join(rulesDir(f.state), 'CLAUDE.md')}\``);
+  });
+
+  it('fetches origin main first, so a newer origin commit is the one pinned', async () => {
+    const f = makeFixture();
+    publish(f.project, { 'AGENTS.md': 'old\n' });
+    const other = join(dirnameOf(f.project), 'other');
+    git(dirnameOf(f.project), 'clone', '-q', join(dirnameOf(f.project), 'origin.git'), other);
+    const sha = publish(other, { 'AGENTS.md': 'new\n' });
+    await launch(f);
+    expect(readFileSync(join(rulesDir(f.state), 'AGENTS.md'), 'utf8')).toBe('new\n');
+    expect(readFileSync(join(f.state, 'briefs', 'APP-12.md'), 'utf8')).toContain(sha.slice(0, 12));
+  });
+
+  it('a failing fetch refuses the launch before any side effect', async () => {
+    const f = makeFixture();
+    git(f.project, 'remote', 'set-url', 'origin', join(f.home, 'gone.git'));
+    const started: Started[] = [];
+    await expect(launch(f, started)).rejects.toThrow(/fetch/);
+    noSideEffects(f, started);
+  });
+
+  it('a file absent at the SHA is not written, and older copies are removed', async () => {
+    const f = makeFixture();
+    publish(f.project, { 'AGENTS.md': 'a\n', 'CLAUDE.md': 'c\n' });
+    await launch(f);
+    expect(existsSync(join(rulesDir(f.state), 'CLAUDE.md'))).toBe(true);
+    publish(f.project, { 'AGENTS.md': 'a2\n' }, ['CLAUDE.md']);
+    await launch(f);
+    expect(readFileSync(join(rulesDir(f.state), 'AGENTS.md'), 'utf8')).toBe('a2\n');
+    expect(existsSync(join(rulesDir(f.state), 'CLAUDE.md'))).toBe(false);
+  });
+
+  it('neither file: nothing is written and the brief says none exist', async () => {
+    const f = makeFixture();
+    await launch(f);
+    expect(existsSync(join(rulesDir(f.state), 'AGENTS.md'))).toBe(false);
+    expect(readFileSync(join(f.state, 'briefs', 'APP-12.md'), 'utf8')).toMatch(
+      /no AGENTS\.md or CLAUDE\.md/,
+    );
+  });
+
+  it.each([
+    ['a symlink', 'AGENTS.md'],
+    ['an executable file', 'CLAUDE.md'],
+  ])('%s at the SHA refuses, naming the path, before any side effect', async (kind, name) => {
+    const f = makeFixture();
+    if (kind === 'a symlink') {
+      symlinkSync('README.md', join(f.project, name));
+    } else {
+      writeFileSync(join(f.project, name), 'x\n');
+      chmodSync(join(f.project, name), 0o755);
+    }
+    git(f.project, 'add', name);
+    git(f.project, 'commit', '-q', '-m', 'odd');
+    git(f.project, 'push', '-q', 'origin', 'main');
+    const started: Started[] = [];
+    await expect(launch(f, started)).rejects.toThrow(new RegExp(name.replace('.', '\\.')));
+    noSideEffects(f, started);
+  });
+
+  it('a directory with the file name refuses (not a blob)', async () => {
+    const f = makeFixture();
+    mkdirSync(join(f.project, 'AGENTS.md'));
+    writeFileSync(join(f.project, 'AGENTS.md', 'x'), 'x\n');
+    git(f.project, 'add', 'AGENTS.md/x');
+    git(f.project, 'commit', '-q', '-m', 'dir');
+    git(f.project, 'push', '-q', 'origin', 'main');
+    const started: Started[] = [];
+    await expect(launch(f, started)).rejects.toThrow(/AGENTS\.md/);
+    noSideEffects(f, started);
+  });
+
+  it('a file over 256 KiB refuses', async () => {
+    const f = makeFixture();
+    publish(f.project, { 'AGENTS.md': 'x'.repeat(256 * 1024 + 1) });
+    const started: Started[] = [];
+    await expect(launch(f, started)).rejects.toThrow(/256 KiB/);
+    noSideEffects(f, started);
+  });
+
+  it('a replace object in the owner checkout does not change what is read', async () => {
+    const f = makeFixture();
+    publish(f.project, { 'AGENTS.md': 'real\n' });
+    const real = git(f.project, 'rev-parse', 'HEAD:AGENTS.md');
+    const fake = execFileSync('git', ['hash-object', '-w', '--stdin'], {
+      cwd: f.project,
+      env: GIT_ENV,
+      encoding: 'utf8',
+      input: 'forged\n',
+    }).trim();
+    git(f.project, 'replace', real, fake);
+    expect(git(f.project, 'show', 'HEAD:AGENTS.md')).toBe('forged');
+    await launch(f);
+    expect(readFileSync(join(rulesDir(f.state), 'AGENTS.md'), 'utf8')).toBe('real\n');
+  });
+
+  it('moved refs in a reused clone neither change the rules nor discard the work', async () => {
+    const f = makeFixture();
+    publish(f.project, { 'AGENTS.md': 'trusted\n' });
+    await launch(f);
+    const clone = join(f.state, 'clones', 'APP-12');
+    writeFileSync(join(clone, 'AGENTS.md'), 'poisoned\n');
+    writeFileSync(join(clone, 'work.txt'), 'kept\n');
+    git(clone, 'add', 'AGENTS.md', 'work.txt');
+    git(clone, 'commit', '-q', '-m', 'work');
+    git(clone, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+    const started: Started[] = [];
+    await launch(f, started);
+    expect(started).toHaveLength(1);
+    expect(readFileSync(join(rulesDir(f.state), 'AGENTS.md'), 'utf8')).toBe('trusted\n');
+    expect(readFileSync(join(clone, 'work.txt'), 'utf8')).toBe('kept\n');
+  });
+
+  it('items in a secondary repo get the rules of the project checkout', async () => {
+    const f = makeFixture();
+    publish(f.project, { 'AGENTS.md': 'project rules\n' });
+    const two: StudioConfig = { ...config, repos: ['org/app', 'org/other'] };
+    await launch(f, [], { ...item, repo: 'org/other' }, two);
+    expect(readFileSync(join(rulesDir(f.state), 'AGENTS.md'), 'utf8')).toBe('project rules\n');
+  });
+
+  it('the copies are outside everything the crew can write', async () => {
+    const f = makeFixture();
+    publish(f.project, { 'AGENTS.md': 'a\n' });
+    await launch(f);
+    const file = join(rulesDir(f.state), 'AGENTS.md');
+    const s = JSON.parse(readFileSync(join(f.state, 'settings', 'APP-12.json'), 'utf8'));
+    const ctx = JSON.parse(readFileSync(join(f.state, 'guard', 'APP-12.json'), 'utf8'));
+    for (const w of s.sandbox.filesystem.allowWrite as string[]) {
+      expect(file.startsWith(`${w}/`)).toBe(false);
+    }
+    expect(ctx.protectedPaths).toContain(join(f.state, 'briefs'));
+    expect(evaluateGuard({ toolName: 'Write', toolInput: { file_path: file } }, ctx).decision).toBe(
+      'deny',
+    );
+    expect(evaluateGuard({ toolName: 'Edit', toolInput: { file_path: file } }, ctx).decision).toBe(
+      'deny',
+    );
+    expect(evaluateGuard({ toolName: 'Read', toolInput: { file_path: file } }, ctx).decision).toBe(
+      'allow',
+    );
+  });
+
+  it('the started session gets auto memory off in its environment', async () => {
+    const f = makeFixture();
+    const started: Started[] = [];
+    await launch(f, started);
+    expect((started[0] as Started).env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
+  });
+});
 
 describe('toolchain paths at launch (owner config)', () => {
   /** Launch must refuse `bad` before any side effect. */
