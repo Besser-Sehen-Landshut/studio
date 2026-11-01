@@ -7251,7 +7251,7 @@ var require_public_api = __commonJS({
         return docs;
       return Object.assign([], { empty: true }, composer$1.streamInfo());
     }
-    function parseDocument3(source, options = {}) {
+    function parseDocument4(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
       const parser$1 = new parser.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
@@ -7277,7 +7277,7 @@ var require_public_api = __commonJS({
       } else if (options === void 0 && reviver && typeof reviver === "object") {
         options = reviver;
       }
-      const doc = parseDocument3(src, options);
+      const doc = parseDocument4(src, options);
       if (!doc)
         return null;
       doc.warnings.forEach((warning) => log.warn(doc.options.logLevel, warning));
@@ -7313,7 +7313,7 @@ var require_public_api = __commonJS({
     }
     exports.parse = parse4;
     exports.parseAllDocuments = parseAllDocuments;
-    exports.parseDocument = parseDocument3;
+    exports.parseDocument = parseDocument4;
     exports.stringify = stringify2;
   }
 });
@@ -7845,7 +7845,7 @@ import { homedir as homedir6 } from "node:os";
 
 // src/cli.ts
 import { existsSync as existsSync5 } from "node:fs";
-import { dirname as dirname8, join as join15, resolve as resolve5 } from "node:path";
+import { dirname as dirname8, join as join16, resolve as resolve5 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/board.ts
@@ -32175,6 +32175,7 @@ function runDoctor(o2) {
     crewToken: { ...crewToken, required: required2 },
     crewTokenFile: crewTokenFile(o2.owner),
     studioYaml: config2 ? "readable" : "not readable",
+    stacks: config2?.stacks ?? null,
     ownerConfig: ownerConfig ? "readable" : "invalid",
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
@@ -32189,6 +32190,7 @@ function runDoctor(o2) {
     const lines = [
       `crew token: ${crewToken.status}${source}${required2 ? "" : " (optional: allow_ambient_credentials)"}`,
       `studio.yaml: ${report.studioYaml}`,
+      `stacks: ${report.stacks === null ? "not set: run studio setup stack" : report.stacks.join(", ") || "(none)"}`,
       `owner config: ${report.ownerConfig}`,
       `credential provider: ${provider === null ? "not configured" : `configured ${provider}`}`,
       `notify: ${report.notify}`,
@@ -32199,6 +32201,182 @@ function runDoctor(o2) {
 `);
   }
   return required2 && crewToken.status !== "set" ? 1 : 0;
+}
+
+// src/stack.ts
+var import_yaml7 = __toESM(require_dist(), 1);
+import { lstatSync as lstatSync12, readdirSync as readdirSync4, readFileSync as readFileSync14 } from "node:fs";
+import { join as join15 } from "node:path";
+var MAX_FILE_BYTES = 1024 * 1024;
+var MAX_ENTRIES = 200;
+var MONOREPO_DIRS = ["apps", "packages", "crates", "services"];
+var OTHER_WEB = ["nextjs", "shadcn", "svelte"];
+var DEP_STACKS = {
+  next: "nextjs",
+  pg: "postgres",
+  postgres: "postgres",
+  "react-native": "expo",
+  expo: "expo",
+  svelte: "svelte",
+  "better-auth": "better-auth",
+  stripe: "stripe",
+  fastify: "fastify",
+  ai: "ai-sdk",
+  "@playwright/test": "playwright",
+  playwright: "playwright",
+  tailwindcss: "tailwind"
+};
+function isRealDir(path10) {
+  try {
+    return lstatSync12(path10).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function readSmall(path10, notes, name) {
+  try {
+    const st = lstatSync12(path10);
+    if (!st.isFile()) return void 0;
+    if (st.size > MAX_FILE_BYTES) {
+      notes.push(`${name}: larger than 1 MiB, not read`);
+      return void 0;
+    }
+    return readFileSync14(path10, "utf8");
+  } catch {
+    notes.push(`${name}: cannot be read`);
+    return void 0;
+  }
+}
+var isFileEntry = (dir, name) => {
+  try {
+    return lstatSync12(join15(dir, name)).isFile();
+  } catch {
+    return false;
+  }
+};
+function depStacks(text, notes, name) {
+  let raw;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    notes.push(`${name}: not valid JSON`);
+    return [];
+  }
+  if (raw === null || typeof raw !== "object") return [];
+  const out = [];
+  for (const key of ["dependencies", "devDependencies", "peerDependencies"]) {
+    const deps = raw[key];
+    if (deps === null || typeof deps !== "object" || Array.isArray(deps)) continue;
+    for (const dep of Object.keys(deps)) {
+      const stack = DEP_STACKS[dep];
+      if (stack !== void 0) out.push(stack);
+    }
+  }
+  return out;
+}
+function scanDir(dir, label, found, notes) {
+  let names;
+  try {
+    names = readdirSync4(dir).slice(0, MAX_ENTRIES * 5);
+  } catch {
+    notes.push(`${label || "."}: cannot be read`);
+    return;
+  }
+  const file2 = (n2) => isFileEntry(dir, n2);
+  const read2 = (n2) => readSmall(join15(dir, n2), notes, label ? `${label}/${n2}` : n2);
+  const some = (re) => names.some((n2) => re.test(n2) && file2(n2));
+  const pkg = names.includes("package.json") && file2("package.json") ? read2("package.json") : void 0;
+  if (pkg !== void 0) {
+    for (const s of depStacks(pkg, notes, label ? `${label}/package.json` : "package.json")) {
+      found.add(s);
+    }
+  }
+  if (some(/^next\.config\./)) found.add("nextjs");
+  if (some(/^components\.json$/)) found.add("shadcn");
+  if (isRealDir(join15(dir, "migrations"))) found.add("postgres");
+  if (some(/^(Podfile|Package\.swift)$/) || names.some((n2) => n2.endsWith(".xcodeproj"))) {
+    found.add("ios");
+  }
+  for (const n2 of names.filter((x) => x.endsWith(".csproj") && file2(x))) {
+    if (/WinUI|WindowsAppSDK/i.test(read2(n2) ?? "")) found.add("winui");
+  }
+  if (some(/^Cargo\.toml$/)) found.add("rust");
+  if (isRealDir(join15(dir, "src-tauri"))) {
+    found.add("tauri");
+    found.add("rust");
+  }
+  if (some(/^(build\.gradle.*|AndroidManifest\.xml)$/)) found.add("android");
+  if (some(/^app\.json$/) && /"expo"\s*:/.test(read2("app.json") ?? "")) found.add("expo");
+  if (some(/^svelte\.config\./)) found.add("svelte");
+  if (some(/^(astro\.config\..*|vite\.config\..*|index\.html)$/)) found.add("web");
+  if (some(/^Dockerfile/) || some(/^(docker-)?compose.*\.ya?ml$/)) found.add("docker");
+  if (some(/^wp-config\.php$/) || isRealDir(join15(dir, "wp-content"))) found.add("wordpress");
+  if (some(/^style\.css$/) && /Theme Name:/.test(read2("style.css") ?? "")) found.add("wordpress");
+  for (const n2 of names.filter((x) => x.endsWith(".php") && file2(x))) {
+    if (/Plugin Name:/.test(read2(n2) ?? "")) found.add("wordpress");
+  }
+}
+function detectStacks(dir) {
+  const found = /* @__PURE__ */ new Set();
+  const notes = [];
+  scanDir(dir, "", found, notes);
+  if (isRealDir(join15(dir, ".github", "workflows"))) found.add("gha");
+  for (const group of MONOREPO_DIRS) {
+    const base = join15(dir, group);
+    if (!isRealDir(base)) continue;
+    for (const name of readdirSync4(base).slice(0, MAX_ENTRIES)) {
+      if (name.startsWith(".") || name === "node_modules") continue;
+      if (isRealDir(join15(base, name))) scanDir(join15(base, name), `${group}/${name}`, found, notes);
+    }
+  }
+  if (OTHER_WEB.some((s) => found.has(s))) found.delete("web");
+  return { stacks: [...found].sort(), notes };
+}
+function runSetupStack(o2) {
+  const file2 = join15(o2.project, ".studio", "studio.yaml");
+  let text;
+  try {
+    text = readFileSync14(file2, "utf8");
+  } catch (e) {
+    throw new Error(
+      `cannot read .studio/studio.yaml (${e.code ?? "error"})`
+    );
+  }
+  const doc = (0, import_yaml7.parseDocument)(text);
+  if (doc.errors.length > 0) throw new Error(".studio/studio.yaml is not valid YAML");
+  const { stacks, notes } = detectStacks(o2.project);
+  let stored = [];
+  try {
+    stored = loadConfig(o2.project).stacks ?? [];
+  } catch {
+    stored = [];
+  }
+  const added = stacks.filter((s) => !stored.includes(s));
+  const removed = stored.filter((s) => !stacks.includes(s));
+  let written = false;
+  if (o2.write) {
+    doc.set("stacks", stacks);
+    const check2 = studioConfigSchema.safeParse(camelizeKeys(doc.toJS()));
+    if (!check2.success)
+      throw new Error("the resulting studio.yaml would be invalid, nothing written");
+    writeAtomic(file2, doc.toString({ lineWidth: 0 }));
+    written = true;
+  }
+  if (o2.json) {
+    o2.stdout(`${JSON.stringify({ stacks, added, removed, notes, written }, null, 2)}
+`);
+  } else {
+    const lines = [
+      `Stacks: ${stacks.join(", ") || "(none)"}`,
+      ...added.length > 0 ? [`Added: ${added.join(", ")}`] : [],
+      ...removed.length > 0 ? [`Removed: ${removed.join(", ")}`] : [],
+      ...notes.map((n2) => `Note: ${n2}`),
+      ...written ? ["written: .studio/studio.yaml"] : []
+    ];
+    o2.stdout(`${lines.map(safe).join("\n")}
+`);
+  }
+  return 0;
 }
 
 // src/cli.ts
@@ -32218,6 +32396,7 @@ Commands:
   stop <id>                Stop a crew session
   metrics                  Lead time and deployment frequency
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
+  setup stack [--write]    Detect the project's stacks from its manifest files
   secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
   doctor                   What is set and what is missing, never values
   accounts-clear <label>   Owner only, in a terminal: clear a label's account block
@@ -32481,7 +32660,7 @@ async function runCli(argv, deps) {
             throw new Error(`crew record for ${item.id} has no valid startedAt`);
           }
         }
-        const clone2 = join15(stateRoot(), "clones", item.id);
+        const clone2 = join16(stateRoot(), "clones", item.id);
         const report = readReport(clone2, item.id, item, { notBefore });
         let branch = `studio/${item.id}`;
         if (report.pr !== void 0) {
@@ -32659,7 +32838,7 @@ async function runCli(argv, deps) {
             mainBuild: await readMainBuild(config2, ports),
             crewRecordsUnreadable: crewProblem !== void 0,
             alive: (pid) => Number.isInteger(pid) && pid > 0 && ports.claude.alive(pid),
-            hasReport: (item) => isItemId(item) && existsSync5(join15(root, "clones", item, ".studio", "reports", `${item}.md`))
+            hasReport: (item) => isItemId(item) && existsSync5(join16(root, "clones", item, ".studio", "reports", `${item}.md`))
           }
         );
         writeState(root, snapshot);
@@ -32712,14 +32891,17 @@ async function runCli(argv, deps) {
         const stoppedAt = ports.clock.now().toISOString();
         const latest = readCrewRecords(root);
         latest[id] = { ...latest[id] ?? rec, stoppedAt };
-        writeStateFile(root, join15(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
+        writeStateFile(root, join16(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
 `);
         print({ item: id, name: rec.name, pid: rec.pid, stoppedAt });
         return 0;
       }
       case "setup": {
+        if (rest[0] === "stack" && rest.length === 1) {
+          return runSetupStack({ project, json: json2, write: values.write === true, stdout });
+        }
         if (rest[0] !== "ci" || rest.length !== 1) {
-          throw new UsageError("setup needs a subcommand: ci [--write]");
+          throw new UsageError("setup needs a subcommand: ci [--write] | stack [--write]");
         }
         return await runSetupCi({
           project,
@@ -33014,7 +33196,7 @@ function readHiddenLine(prompt, input2, write) {
 
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync5, openSync as openSync5, readFileSync as readFileSync16 } from "node:fs";
+import { closeSync as closeSync5, openSync as openSync5, readFileSync as readFileSync17 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -36710,7 +36892,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync15 } from "node:fs";
+import { readFileSync as readFileSync16 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value, optionName) => {
@@ -37066,7 +37248,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync14 } from "node:fs";
+import { readFileSync as readFileSync15 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -37180,7 +37362,7 @@ var getTargetFd = ({ value, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync14(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync15(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value, fdNumber) => {
   if (value === "inherit") {
@@ -37574,8 +37756,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync15(value))] }),
-    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync15(file2))] }),
+    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync16(value))] }),
+    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync16(file2))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value }) => ({ contents: () => [...value] }),
     string: ({ value }) => ({ contents: [value] }),
@@ -40907,7 +41089,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync16(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync17(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }

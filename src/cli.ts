@@ -52,6 +52,7 @@ import {
 import { checkReportHead, readReport } from './report.js';
 import { runDoctor, runSecretSet } from './secret-command.js';
 import { runSetupCi } from './setup-ci-command.js';
+import { runSetupStack } from './stack.js';
 import {
   type CrewSnapshot,
   computeMetrics,
@@ -99,6 +100,7 @@ Commands:
   stop <id>                Stop a crew session
   metrics                  Lead time and deployment frequency
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
+  setup stack [--write]    Detect the project's stacks from its manifest files
   secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
   doctor                   What is set and what is missing, never values
   accounts-clear <label>   Owner only, in a terminal: clear a label's account block
@@ -649,8 +651,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'setup': {
+        if (rest[0] === 'stack' && rest.length === 1) {
+          return runSetupStack({ project, json, write: values.write === true, stdout });
+        }
         if (rest[0] !== 'ci' || rest.length !== 1) {
-          throw new UsageError('setup needs a subcommand: ci [--write]');
+          throw new UsageError('setup needs a subcommand: ci [--write] | stack [--write]');
         }
         return await runSetupCi({
           project,

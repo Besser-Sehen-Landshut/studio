@@ -112,6 +112,7 @@ export function runDoctor(o: {
     crewToken: { ...crewToken, required },
     crewTokenFile: crewTokenFile(o.owner),
     studioYaml: config ? 'readable' : 'not readable',
+    stacks: config?.stacks ?? null,
     ownerConfig: ownerConfig ? 'readable' : 'invalid',
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
@@ -125,6 +126,7 @@ export function runDoctor(o: {
     const lines = [
       `crew token: ${crewToken.status}${source}${required ? '' : ' (optional: allow_ambient_credentials)'}`,
       `studio.yaml: ${report.studioYaml}`,
+      `stacks: ${report.stacks === null ? 'not set: run studio setup stack' : report.stacks.join(', ') || '(none)'}`,
       `owner config: ${report.ownerConfig}`,
       `credential provider: ${provider === null ? 'not configured' : `configured ${provider}`}`,
       `notify: ${report.notify}`,
