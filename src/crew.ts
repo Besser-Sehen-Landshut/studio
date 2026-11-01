@@ -333,7 +333,11 @@ export interface BriefRules {
  */
 export async function readPinnedRules(projectDir: string, ports: Ports): Promise<PinnedRules> {
   try {
-    await ports.git.run(projectDir, ['fetch', 'origin', 'main']);
+    await ports.git.run(projectDir, [
+      'fetch',
+      'origin',
+      '+refs/heads/main:refs/remotes/origin/main',
+    ]);
   } catch (e) {
     throw new Error(
       `refusing to launch: cannot fetch origin main in the project checkout (${(e as Error).message})`,
@@ -1020,6 +1024,11 @@ async function launchCrewLocked(
   const name = crewName(item);
   const identity = await ports.claude.identity(pid);
   if (identity === undefined) {
+    if (!ports.claude.alive(pid)) {
+      throw new Error(
+        `the new crew for ${item.id} exited right after start; see its log ${log}; refusing to launch`,
+      );
+    }
     // The one stop without a stored identity: this child was spawned by us just now. A crew that
     // could never be verified must not run, since no block or limit could stop it later.
     if (Number.isInteger(pid) && pid > 0) {

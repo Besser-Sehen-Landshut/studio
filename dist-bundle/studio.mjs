@@ -29788,7 +29788,11 @@ var MAX_RULE_BYTES = 256 * 1024;
 var FULL_SHA = /^[0-9a-f]{40}$/;
 async function readPinnedRules(projectDir, ports) {
   try {
-    await ports.git.run(projectDir, ["fetch", "origin", "main"]);
+    await ports.git.run(projectDir, [
+      "fetch",
+      "origin",
+      "+refs/heads/main:refs/remotes/origin/main"
+    ]);
   } catch (e) {
     throw new Error(
       `refusing to launch: cannot fetch origin main in the project checkout (${e.message})`
@@ -30308,6 +30312,11 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   const name = crewName(item);
   const identity3 = await ports.claude.identity(pid);
   if (identity3 === void 0) {
+    if (!ports.claude.alive(pid)) {
+      throw new Error(
+        `the new crew for ${item.id} exited right after start; see its log ${log}; refusing to launch`
+      );
+    }
     if (Number.isInteger(pid) && pid > 0) {
       try {
         await ports.claude.stop(pid);
@@ -32298,7 +32307,7 @@ function readHiddenLine(prompt, input2, write) {
 
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync5, openSync as openSync5 } from "node:fs";
+import { closeSync as closeSync5, openSync as openSync5, readFileSync as readFileSync14 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -40099,6 +40108,13 @@ var {
 } = getIpcExport();
 
 // src/ports.ts
+function parseLinuxStartTime(stat) {
+  const close = stat.lastIndexOf(")");
+  if (close < 0) return void 0;
+  const fields = stat.slice(close + 1).trim().split(/\s+/);
+  const start = fields[19];
+  return start !== void 0 && /^\d+$/.test(start) ? start : void 0;
+}
 var STOP_GRACE_MS = 5e3;
 var STOP_POLL_MS = 100;
 var IDENTITY_TIMEOUT_MS = 5e3;
@@ -40177,6 +40193,13 @@ function realPorts(claudeBin = "claude") {
     alive,
     async identity(pid) {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
+      if (process.platform === "linux") {
+        try {
+          return parseLinuxStartTime(readFileSync14(`/proc/${pid}/stat`, "utf8"));
+        } catch {
+          return void 0;
+        }
+      }
       const r = await execa("ps", ["-o", "lstart=", "-p", String(pid)], {
         env: { LC_ALL: "C", TZ: "UTC" },
         reject: false,

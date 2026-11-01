@@ -828,6 +828,23 @@ describe('account block details', () => {
     expect(itemOf(fx, 'APP-1')?.status).toBe('ready');
   });
 
+  it('a crew that exited right after start is named as such, and the launch is refused', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    provider(fx, 'label-a');
+    p.ports.claude.identity = async (pid) => {
+      p.alive.delete(pid);
+      return undefined;
+    };
+    const r = await cli(fx, p.ports, ['launch', 'APP-1']);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('exited right after start');
+    expect(r.err).toContain('log');
+    expect(r.err).not.toContain('cannot read the process identity');
+    expect(existsSync(join(fx.state, 'crew.json'))).toBe(false);
+    expect(itemOf(fx, 'APP-1')?.status).toBe('ready');
+  });
+
   it('an event from an unverifiable record still blocks, unsignalled and reported', async () => {
     const unknown = makeFx();
     const p = makePorts();

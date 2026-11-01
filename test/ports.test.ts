@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { realPorts } from '../src/ports.js';
+import { parseLinuxStartTime, realPorts } from '../src/ports.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'studio-ports-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -66,5 +66,40 @@ describe('realPorts', () => {
     expect(clock.now().getTime() - t0).toBeGreaterThanOrEqual(15);
     expect(host.loadAvg1()).toBeGreaterThanOrEqual(0);
     expect(host.cpuCount()).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('parseLinuxStartTime', () => {
+  const fields = (after: string[]) => `4242 (comm) ${after.join(' ')}\n`;
+  const rest = (start: string) => {
+    // Fields 3..22: state, then 18 numbers, then starttime (field 22).
+    const a = ['S', ...Array.from({ length: 18 }, (_, i) => String(i)), start];
+    return a;
+  };
+
+  it('returns field 22 of a plain stat line', () => {
+    expect(parseLinuxStartTime(fields(rest('987654')))).toBe('987654');
+  });
+
+  it('parses after the last ")" when comm holds spaces and parens', () => {
+    const line = `4242 (a) (b c) d) ${rest('13579').join(' ')} 0 0\n`;
+    expect(parseLinuxStartTime(line)).toBe('13579');
+  });
+
+  it('returns undefined for malformed input', () => {
+    expect(parseLinuxStartTime('')).toBeUndefined();
+    expect(parseLinuxStartTime('4242 no parens S 1 2 3')).toBeUndefined();
+    expect(parseLinuxStartTime('4242 (comm) S 1 2 3')).toBeUndefined();
+    expect(parseLinuxStartTime(fields(rest('12x4')))).toBeUndefined();
+    expect(parseLinuxStartTime(fields(rest('')))).toBeUndefined();
+    expect(parseLinuxStartTime(fields(rest('-5')))).toBeUndefined();
+  });
+
+  it.skipIf(process.platform !== 'linux')('reads a stable identity from /proc twice', async () => {
+    const { claude } = realPorts();
+    const first = await claude.identity(process.pid);
+    expect(first).toMatch(/^\d+$/);
+    expect(await claude.identity(process.pid)).toBe(first);
+    expect(await claude.identity(2 ** 30)).toBeUndefined();
   });
 });

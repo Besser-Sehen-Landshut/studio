@@ -1007,6 +1007,23 @@ describe('pinned project rules at launch (issue 6)', () => {
     expect(readFileSync(join(f.state, 'briefs', 'APP-12.md'), 'utf8')).toContain(sha.slice(0, 12));
   });
 
+  it('fetches the rules ref explicitly, so a narrow fetch config cannot leave it stale', async () => {
+    const f = makeFixture();
+    publish(f.project, { 'AGENTS.md': 'old\n' });
+    git(
+      f.project,
+      'config',
+      '--replace-all',
+      'remote.origin.fetch',
+      '+refs/heads/other:refs/remotes/origin/other',
+    );
+    const other = join(dirnameOf(f.project), 'other');
+    git(dirnameOf(f.project), 'clone', '-q', join(dirnameOf(f.project), 'origin.git'), other);
+    publish(other, { 'AGENTS.md': 'newer\n' });
+    await launch(f);
+    expect(readFileSync(join(rulesDir(f.state), 'AGENTS.md'), 'utf8')).toBe('newer\n');
+  });
+
   it('a failing fetch refuses the launch before any side effect', async () => {
     const f = makeFixture();
     git(f.project, 'remote', 'set-url', 'origin', join(f.home, 'gone.git'));

@@ -1,7 +1,23 @@
 import { spawn } from 'node:child_process';
-import { closeSync, openSync } from 'node:fs';
+import { closeSync, openSync, readFileSync } from 'node:fs';
 import { availableParallelism, loadavg } from 'node:os';
 import { execa } from 'execa';
+
+/**
+ * Field 22 (`starttime`, clock ticks since boot) of a `/proc/<pid>/stat` line. The comm field can
+ * hold spaces and parens, so fields are counted after the last `)`. Anything malformed is unknown.
+ */
+export function parseLinuxStartTime(stat: string): string | undefined {
+  const close = stat.lastIndexOf(')');
+  if (close < 0) return undefined;
+  // Field 3 (state) is the first token after the comm; starttime is field 22, so index 19.
+  const fields = stat
+    .slice(close + 1)
+    .trim()
+    .split(/\s+/);
+  const start = fields[19];
+  return start !== undefined && /^\d+$/.test(start) ? start : undefined;
+}
 
 export interface Gh {
   /**
@@ -166,6 +182,14 @@ export function realPorts(claudeBin = 'claude'): Ports {
     alive,
     async identity(pid) {
       if (!Number.isInteger(pid) || pid <= 0) return undefined;
+      if (process.platform === 'linux') {
+        // `ps -o lstart=` derives from the boot time, which can shift after a clock step or suspend.
+        try {
+          return parseLinuxStartTime(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+        } catch {
+          return undefined;
+        }
+      }
       // Locale and zone are pinned: a changed setting must not read as another process.
       const r = await execa('ps', ['-o', 'lstart=', '-p', String(pid)], {
         env: { LC_ALL: 'C', TZ: 'UTC' },
