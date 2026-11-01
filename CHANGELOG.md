@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [Unreleased]
+
+### Changed
+
+- Account blocks, usage limits and per-label usage are owner-wide, in `<state base>/owner`: a block
+  recorded by one project stops the crews of all projects and refuses their launches, and
+  `max_parallel` and `max_runs_per_day` count across projects. Old per-project files are merged on
+  first use; a file that cannot be read is kept as `<name>.legacy-<project root>` and holds all work
+  until the owner removes it.
+
 ## [0.3.0] - 2026-11-01
 
 Stage (a.2): account blocks, usage limits per credential and pinned crew rules. Not tagged or

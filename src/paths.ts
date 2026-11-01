@@ -3,6 +3,7 @@ import {
   chmodSync,
   closeSync,
   constants,
+  type Dirent,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -54,6 +55,60 @@ export function stateBaseFor(opts: OwnerEnv = {}): string {
   const env = opts.env ?? process.env;
   const base = xdgDir(env, 'XDG_STATE_HOME') ?? join(opts.homedir ?? homedir(), '.local', 'state');
   return join(base, 'studio');
+}
+
+export const OWNER_DIR = 'owner';
+
+/**
+ * State shared by all projects of this owner: account blocks, limits, usage and the launch lock. It
+ * lies below the state base, so crews cannot read or write it. No project root can have this name.
+ */
+export function ownerStateRootFor(opts: OwnerEnv = {}): string {
+  return join(stateBaseFor(opts), OWNER_DIR);
+}
+
+const PROJECT_ROOT_NAME = /^[0-9a-f]{16}(-.*)?$/;
+
+/** The project state roots below `base`: real directories with such a name, never a symlink. */
+export function projectStateRoots(base: string): string[] {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(base, { withFileTypes: true });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw e;
+  }
+  return entries
+    .filter((e) => e.isDirectory() && PROJECT_ROOT_NAME.test(e.name))
+    .map((e) => join(base, e.name));
+}
+
+const LEGACY_MARK = '.legacy-';
+
+/**
+ * Names of the kept copies of old state files in the owner root, `<name>.legacy-<project root>`:
+ * files the migration would not interpret. Empty while the owner root does not exist.
+ */
+export function legacyEntries(ownerRoot: string): string[] {
+  try {
+    return readdirSync(ownerRoot).filter((e) => e.includes(LEGACY_MARK));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw e;
+  }
+}
+
+/**
+ * Whether the owner file `name` must read as unreadable although the file itself may be fine: a kept
+ * copy of it waits for the owner, or the owner root is not a plain directory. Fails closed.
+ */
+export function ownerFileHeld(ownerRoot: string, name: string): boolean {
+  try {
+    if (!lstatSync(ownerRoot).isDirectory()) return true;
+    return legacyEntries(ownerRoot).some((e) => e.startsWith(`${name}${LEGACY_MARK}`));
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
 }
 
 /** Real path of the project directory; fails closed when it does not exist. */

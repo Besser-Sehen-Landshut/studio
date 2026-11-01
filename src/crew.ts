@@ -30,6 +30,7 @@ import {
   readLimits,
   sessionIdSince,
 } from './limits.js';
+import { migrateOwnerState, pendingLegacyState } from './owner-state.js';
 import {
   acquireStateLock,
   assertStatePath,
@@ -38,6 +39,8 @@ import {
   cloneOriginUrl,
   credentialLocations,
   ensureStateDir,
+  OWNER_DIR,
+  ownerStateRootFor,
   projectRealpath,
   removeStateEntry,
   STATE_FILES,
@@ -589,6 +592,8 @@ export function writeCrewSettings(
     ctxFile,
     ...STATE_PROTECTED_DIRS.map((d) => join(stateRoot, d)),
     ...STATE_FILES.map((f) => join(stateRoot, f)),
+    // Below the state base, so the sandbox already keeps crews out; this is the second net.
+    join(stateBase, OWNER_DIR),
   ];
   const ctx = {
     worktree: clone,
@@ -712,8 +717,8 @@ function updateCrewFile(
   return run;
 }
 
-function refuseIfBlocked(stateRoot: string): void {
-  const line = blockHold(stateRoot);
+function refuseIfBlocked(ownerRoot: string): void {
+  const line = blockHold(ownerRoot);
   if (line !== undefined) throw new Error(line);
 }
 
@@ -809,8 +814,14 @@ async function launchCrewLocked(
   }
   // Refuses a state root inside (or around) the project before anything is created.
   const stateRoot = stateRootFor(projectDir, owner);
+  const ownerRoot = ownerStateRootFor(owner);
+  migrateOwnerState(ownerRoot, ports.clock.now());
   // An account block refuses before any provider call.
-  refuseIfBlocked(stateRoot);
+  refuseIfBlocked(ownerRoot);
+  // A block in an old project file that was not merged yet would go unseen.
+  if (pendingLegacyState(dirname(ownerRoot)).length > 0) {
+    throw new Error('old project state files are not migrated yet; refusing to launch, try again');
+  }
   // Everything that can refuse runs before the first side effect.
   const ownerConfig = loadOwnerConfig(owner);
   const toolchainPaths = ownerConfig.crewToolchainPaths;
@@ -828,13 +839,13 @@ async function launchCrewLocked(
   // Two crews on one item would share the clone and the report: refuse while one still runs.
   // A crew.json that cannot be read refuses too (fail closed).
   const previous = refuseIfRunning(stateRoot, item, ports);
-  const limits = readLimits(stateRoot);
+  const limits = readLimits(ownerRoot);
   if (!limits.ok) {
-    throw new Error(`${join(stateRoot, 'limits.json')} is unreadable; refusing to launch`);
+    throw new Error(`${join(ownerRoot, 'limits.json')} is unreadable; refusing to launch`);
   }
   const parks = activeParks(limits.labels, ports.clock.now());
   // Per-label restraint: labels at max_parallel or at the day limit are excluded like parked ones.
-  const usage = labelUsage({ stateRoot, ownerConfig, ports });
+  const usage = labelUsage({ ownerRoot, ownerConfig, ports });
   if (!usage.ok) throw new Error(USAGE_UNREADABLE);
   const refuseFull = (): never => {
     throw new Error('credential limit: the label is at its configured parallel or daily limit');
@@ -914,11 +925,10 @@ async function launchCrewLocked(
     projectRealpath: projectRealpath(projectDir),
     originUrl: await ownerOriginUrl(projectDir, ports),
   });
-  // From here to the crew record one launch at a time, because the running and daily counts read
-  // the records. The lock file needs the bound state root, so it comes after the marker. No lock
-  // means refuse. Under the lock the chosen label is checked against the counts once more: the
+  // From here to the crew record one launch at a time over all projects of the owner, because the
+  // running and daily counts read the records. No lock means refuse. Under the lock the chosen label is checked against the counts once more: the
   // pick above may have run next to another launch.
-  const lock = acquireStateLock(stateRoot, LAUNCH_LOCK, {
+  const lock = acquireStateLock(ownerRoot, LAUNCH_LOCK, {
     now: ports.clock.now(),
     heartbeatStaleMs: LAUNCH_LOCK_STALE_MS,
   });
@@ -928,13 +938,13 @@ async function launchCrewLocked(
   const recheck = (): void => {
     if (!lock.owned()) throw new Error('the launch lock was lost; refusing to launch, try again');
     refuseIfRunning(stateRoot, item, ports);
-    const again = readLimits(stateRoot);
-    if (!again.ok) throw new Error(`${join(stateRoot, 'limits.json')} is unreadable; refusing`);
+    const again = readLimits(ownerRoot);
+    if (!again.ok) throw new Error(`${join(ownerRoot, 'limits.json')} is unreadable; refusing`);
     const parkedNow = activeParks(again.labels, ports.clock.now());
     if (Object.hasOwn(parkedNow, label)) {
       throw new Error(allParkedLine(parkedNow[label]?.parkedUntil));
     }
-    const locked = labelUsage({ stateRoot, ownerConfig, ports });
+    const locked = labelUsage({ ownerRoot, ownerConfig, ports });
     if (!locked.ok) throw new Error(USAGE_UNREADABLE);
     if (!(locked.remaining(label) > 0)) refuseFull();
   };
@@ -988,13 +998,13 @@ async function launchCrewLocked(
   ensureStateDir(stateRoot, dirname(log));
   const logStart = fileSize(log);
   // A block may have arrived while this launch was preparing.
-  refuseIfBlocked(stateRoot);
+  refuseIfBlocked(ownerRoot);
   // Preparing may have taken long: keep the lock, and if it was lost refuse. The checks run once
   // more, as the last ones before the run is counted and started.
   lock.heartbeat(ports.clock.now());
   recheck();
   // Counted before the start, so a start that fails still counts as a run.
-  recordRun(stateRoot, label, ports.clock.now(), ownerConfig.crewLabelLimits.timezone);
+  recordRun(ownerRoot, label, ports.clock.now(), ownerConfig.crewLabelLimits.timezone);
   const { pid } = await ports.claude.start(
     wt.path,
     [

@@ -17,7 +17,14 @@ import {
   reconcileLimits,
   validLabel,
 } from './limits.js';
-import { checkStateMarker, projectRealpath, stateRootFor, writeStateFile } from './paths.js';
+import { migrateOwnerState } from './owner-state.js';
+import {
+  checkStateMarker,
+  ownerStateRootFor,
+  projectRealpath,
+  stateRootFor,
+  writeStateFile,
+} from './paths.js';
 import { type Capacity, planAssignments } from './planner.js';
 import type { Ports } from './ports.js';
 import {
@@ -135,6 +142,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       return { config, board: loadBoard(project) };
     };
     const stateRoot = () => stateRootFor(project, owner);
+    let migrated = false;
+    /** The owner-wide state; the first use in a process merges what old versions left behind. */
+    const ownerRoot = () => {
+      const root = ownerStateRootFor(owner);
+      if (!migrated) {
+        migrated = true;
+        for (const line of migrateOwnerState(root, ports.clock.now())) stderr(`error: ${line}\n`);
+      }
+      return root;
+    };
     /** Binds the state root to this project before the first write (launch does the same). */
     const boundStateRoot = async () => {
       const root = stateRoot();
@@ -147,12 +164,23 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
      * at the board. Returns whether the block reconcile could not run.
      */
     const reconcile = async (): Promise<boolean> => {
-      const b = await reconcileBlocks({ project, stateRoot: stateRoot(), ports });
+      const b = await reconcileBlocks({
+        project,
+        stateRoot: stateRoot(),
+        ownerRoot: ownerRoot(),
+        ports,
+      });
       for (const s of b.stopped) {
-        stderr(`note: ${s.item} on ${s.label} stopped: account block (${s.reason})\n`);
+        const where = s.root === undefined ? '' : ` in ${s.root}`;
+        stderr(`note: ${s.item}${where} on ${s.label} stopped: account block (${s.reason})\n`);
       }
       for (const e of b.errors) stderr(`error: ${e}\n`);
-      const r = await reconcileLimits({ project, stateRoot: stateRoot(), ports });
+      const r = await reconcileLimits({
+        project,
+        stateRoot: stateRoot(),
+        ownerRoot: ownerRoot(),
+        ports,
+      });
       for (const s of r.stopped) {
         stderr(
           `note: ${s.item} stopped at a ${s.kind} limit, ${s.label} parked until ${s.parkedUntil}\n`,
@@ -164,14 +192,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     const planNow = async (config: StudioConfig, board: Board) => {
       const capacity = await readCapacity(config, ports);
       const ownerConfig = loadOwnerConfig(owner);
-      let hold = await limitHold(stateRoot(), ownerConfig, ports, owner);
+      let hold = await limitHold(ownerRoot(), ownerConfig, ports, owner);
       // Room under the per-label limits; asked only while nothing else holds (no provider call
       // during a block).
       let slots: number | undefined;
       let line = hold;
       if (hold === undefined) {
         const got = await credentialSlots({
-          stateRoot: stateRoot(),
+          ownerRoot: ownerRoot(),
           ownerConfig,
           ports,
           owner,
@@ -415,11 +443,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           const { config } = loadAll();
           refuseNativeQueue(config);
           const root = await boundStateRoot();
-          const blockedNow = blockHold(root);
+          const blockedNow = blockHold(ownerRoot());
           if (blockedNow !== undefined) throw new Error(blockedNow);
           let heldLine: string | undefined;
           const hold = () => {
-            const line = blockHold(root);
+            const line = blockHold(ownerRoot());
             if (line !== undefined) heldLine = line;
             return line;
           };
@@ -485,9 +513,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const { config, board } = loadAll();
         const root = await boundStateRoot();
         const { capacity, hold } = await planNow(config, board);
-        const read = readLimits(root);
+        const read = readLimits(ownerRoot());
         const snapshot = buildSnapshot(
           root,
+          ownerRoot(),
           board,
           capacity,
           loadQueue(root),
@@ -495,7 +524,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           hold,
           read.ok ? activeParks(read.labels, ports.clock.now()) : {},
           labelUsageSnapshot({
-            stateRoot: root,
+            ownerRoot: ownerRoot(),
             ownerConfig: loadOwnerConfig(owner),
             ports,
           }),
@@ -563,7 +592,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (rest.length !== 1 || label === undefined || !validLabel(label)) {
           throw new UsageError('accounts-clear needs exactly one valid label');
         }
-        const r = clearBlocks(await boundStateRoot(), label, ports.clock.now());
+        await boundStateRoot();
+        const r = clearBlocks(ownerRoot(), label, ports.clock.now());
         print({ label, ...r });
         return 0;
       }
@@ -725,6 +755,7 @@ function applyQueueResults(
 
 function buildSnapshot(
   root: string,
+  ownerRoot: string,
   board: Board,
   capacity: Capacity,
   queue: QueueState,
@@ -733,7 +764,7 @@ function buildSnapshot(
   limits: Parks,
   labelUsage: StateSnapshot['labelUsage'],
 ): StateSnapshot {
-  const blocks = readBlocks(root);
+  const blocks = readBlocks(ownerRoot);
   const blocked = blockLine(blocks);
   const notifications: Notification[] = blocks.ok
     ? blocks.blocks.map((b) => ({

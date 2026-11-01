@@ -15,7 +15,7 @@ import { loadBoard, type WorkItem } from '../src/board.js';
 import { type CliDeps, runCli } from '../src/cli.js';
 import { loadConfig } from '../src/config.js';
 import { launchCrew } from '../src/crew.js';
-import { stateRootFor } from '../src/paths.js';
+import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-label-limits-')));
@@ -72,7 +72,14 @@ function makeFx(ids: string[]) {
   );
   const env: Record<string, string | undefined> = { PATH: process.env.PATH };
   const ownerDir = join(home, '.config', 'studio');
-  return { project, home, env, ownerDir, state: stateRootFor(project, { env, homedir: home }) };
+  return {
+    project,
+    home,
+    env,
+    ownerDir,
+    state: stateRootFor(project, { env, homedir: home }),
+    owner: ownerStateRootFor({ env, homedir: home }),
+  };
 }
 type Fx = ReturnType<typeof makeFx>;
 
@@ -181,7 +188,7 @@ const stubbornProvider = (fx: Fx, label: string, limits: string) => {
 };
 const stateOf = (fx: Fx) => JSON.parse(readFileSync(join(fx.state, 'state.json'), 'utf8'));
 const crewOf = (fx: Fx) => JSON.parse(readFileSync(join(fx.state, 'crew.json'), 'utf8'));
-const usageOf = (fx: Fx) => JSON.parse(readFileSync(join(fx.state, 'usage.json'), 'utf8'));
+const usageOf = (fx: Fx) => JSON.parse(readFileSync(join(fx.owner, 'usage.json'), 'utf8'));
 
 function filesContaining(dir: string, needle: string): string[] {
   const hits: string[] = [];
@@ -293,7 +300,7 @@ describe('per-credential limits', () => {
     const p = makePorts();
     expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
     writeFileSync(
-      join(fx.state, 'usage.json'),
+      join(fx.owner, 'usage.json'),
       JSON.stringify({
         '2026-10-01': { default: 3 },
         '2026-10-30': { default: 1 },
@@ -308,7 +315,7 @@ describe('per-credential limits', () => {
     const fx = makeFx(ITEMS);
     const p = makePorts();
     expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
-    writeFileSync(join(fx.state, 'usage.json'), '{not json');
+    writeFileSync(join(fx.owner, 'usage.json'), '{not json');
     expect((await cli(fx, p.ports, ['launch', 'APP-2'])).code).toBe(1);
     expect(p.started).toHaveLength(1);
     const plan = JSON.parse((await cli(fx, p.ports, ['plan'])).out);
@@ -325,7 +332,7 @@ describe('per-credential limits', () => {
       heartbeat: '2026-11-01T10:00:00.000Z',
       token: 't',
     };
-    writeFileSync(join(fx.state, 'launch.lock'), `${JSON.stringify(body)}\n`);
+    writeFileSync(join(fx.owner, 'launch.lock'), `${JSON.stringify(body)}\n`);
     expect((await cli(fx, p.ports, ['launch', 'APP-2'])).code).toBe(1);
     expect(p.started).toHaveLength(1);
   });
@@ -504,7 +511,7 @@ describe('limit races and counting', () => {
       p.hooks.afterGit = undefined;
       // Another process broke the stale lock and took it.
       writeFileSync(
-        join(fx.state, 'launch.lock'),
+        join(fx.owner, 'launch.lock'),
         `${JSON.stringify({ pid: process.pid, startedAt: 'x', heartbeat: '2026-11-01T10:00:00.000Z', token: 'other' })}\n`,
       );
     };

@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { loadBoard } from '../src/board.js';
 import { type CliDeps, runCli } from '../src/cli.js';
-import { stateRootFor } from '../src/paths.js';
+import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-cli-limits-')));
@@ -72,7 +72,14 @@ function makeFx(ids: string[] = ['APP-1'], yaml = STUDIO_YAML) {
   );
   const env: Record<string, string | undefined> = { PATH: process.env.PATH };
   const ownerDir = join(home, '.config', 'studio');
-  return { project, home, env, ownerDir, state: stateRootFor(project, { env, homedir: home }) };
+  return {
+    project,
+    home,
+    env,
+    ownerDir,
+    state: stateRootFor(project, { env, homedir: home }),
+    owner: ownerStateRootFor({ env, homedir: home }),
+  };
 }
 type Fx = ReturnType<typeof makeFx>;
 
@@ -179,7 +186,7 @@ const init = (fx: Fx, id: string, sid: string) =>
   hitLimit(fx, id, { type: 'system', subtype: 'init', session_id: sid });
 
 const itemOf = (fx: Fx, id: string) => loadBoard(fx.project).items.find((i) => i.id === id);
-const limitsOf = (fx: Fx) => JSON.parse(readFileSync(join(fx.state, 'limits.json'), 'utf8'));
+const limitsOf = (fx: Fx) => JSON.parse(readFileSync(join(fx.owner, 'limits.json'), 'utf8'));
 const recordOf = (fx: Fx, id: string) =>
   JSON.parse(readFileSync(join(fx.state, 'crew.json'), 'utf8'))[id];
 const HOUR = 3_600_000;
@@ -260,7 +267,7 @@ describe('usage limits through the CLI', () => {
     });
     await cli(fx, p.ports, ['status']);
     expect(p.stopped).toEqual([]);
-    expect(existsSync(join(fx.state, 'limits.json'))).toBe(false);
+    expect(existsSync(join(fx.owner, 'limits.json'))).toBe(false);
     expect(itemOf(fx, 'APP-1')?.status).toBe('assigned');
   });
 
@@ -308,7 +315,7 @@ describe('usage limits through the CLI', () => {
     };
     const untouched = (fx: Fx, p: ReturnType<typeof makePorts>) => {
       expect(p.stopped).toEqual([]);
-      expect(existsSync(join(fx.state, 'limits.json'))).toBe(false);
+      expect(existsSync(join(fx.owner, 'limits.json'))).toBe(false);
       expect(itemOf(fx, 'APP-1')?.status).toBe('assigned');
       expect(recordOf(fx, 'APP-1').limit).toBeUndefined();
     };
@@ -381,7 +388,7 @@ describe('usage limits through the CLI', () => {
     hitLimit(fx, 'APP-1');
     await cli(fx, p.ports, ['status']);
     expect(itemOf(fx, 'APP-1')?.status).toBe('assigned');
-    expect(existsSync(join(fx.state, 'limits.json'))).toBe(false);
+    expect(existsSync(join(fx.owner, 'limits.json'))).toBe(false);
   });
 
   it('a crew record with an invalid pid is never signalled', async () => {
@@ -537,8 +544,9 @@ describe('usage limits through the CLI', () => {
   it('an unreadable limits file holds everything and tells the owner', async () => {
     const fx = makeFx();
     const p = makePorts();
+    mkdirSync(fx.owner, { recursive: true, mode: 0o700 });
     mkdirSync(fx.state, { recursive: true, mode: 0o700 });
-    writeFileSync(join(fx.state, 'limits.json'), 'not json');
+    writeFileSync(join(fx.owner, 'limits.json'), 'not json');
     const r = await cli(fx, p.ports, ['plan']);
     expect(r.err).toContain('limits');
     expect(JSON.parse(r.out).assign).toEqual([]);
@@ -584,10 +592,12 @@ describe('usage limits through the CLI', () => {
     await run('doctor');
     expect(printed).not.toContain(TOKEN);
     expect(filesContaining(fx.state, TOKEN)).toEqual([]);
+    expect(filesContaining(fx.owner, TOKEN)).toEqual([]);
     expect(readFileSync(join(fx.project, '.studio', 'board.yaml'), 'utf8')).not.toContain(TOKEN);
-    for (const name of ['crew.json', 'limits.json', 'state.json']) {
+    for (const name of ['crew.json', 'state.json']) {
       expect(readFileSync(join(fx.state, name), 'utf8')).not.toContain(TOKEN);
     }
+    expect(readFileSync(join(fx.owner, 'limits.json'), 'utf8')).not.toContain(TOKEN);
   });
 });
 

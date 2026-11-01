@@ -267,15 +267,15 @@ export const allParkedLine = (reset: string | undefined): string =>
 
 /** Why no crew may start at all right now, as the one line for the owner; undefined when one may. */
 export async function limitHold(
-  stateRoot: string,
+  ownerRoot: string,
   ownerConfig: OwnerConfig,
   ports: Ports,
   owner: OwnerEnv,
 ): Promise<string | undefined> {
   // First, and with no provider call.
-  const blocked = blockHold(stateRoot);
+  const blocked = blockHold(ownerRoot);
   if (blocked !== undefined) return blocked;
-  const read = readLimits(stateRoot);
+  const read = readLimits(ownerRoot);
   if (!read.ok)
     return 'usage limit state is unreadable (limits.json): no crew starts until it is fixed';
   const parks = activeParks(read.labels, ports.clock.now());

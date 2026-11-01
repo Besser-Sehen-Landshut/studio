@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { loadBoard } from '../src/board.js';
 import { runCli } from '../src/cli.js';
-import { stateRootFor, writeStateFile } from '../src/paths.js';
+import { ownerStateRootFor, stateRootFor, writeStateFile } from '../src/paths.js';
 import type { Claude, Gh, Ports } from '../src/ports.js';
 import { realPorts } from '../src/ports.js';
 import { acquireQueueRunLock, enqueue, loadQueue, saveQueue } from '../src/queue.js';
@@ -96,6 +96,7 @@ interface Fx {
   home: string;
   env: Record<string, string | undefined>;
   state: string;
+  owner: string;
 }
 
 function makeFx(items: ItemSpec[]): Fx {
@@ -119,7 +120,13 @@ function makeFx(items: ItemSpec[]): Fx {
     `items:\n${items.map(itemYaml).join('\n')}\n`,
   );
   const env = { PATH: process.env.PATH };
-  return { project, home, env, state: stateRootFor(project, { env, homedir: home }) };
+  return {
+    project,
+    home,
+    env,
+    state: stateRootFor(project, { env, homedir: home }),
+    owner: ownerStateRootFor({ env, homedir: home }),
+  };
 }
 
 type GhReply = { code?: number; stdout?: string; stderr?: string };
@@ -686,8 +693,9 @@ describe('studio CLI', () => {
       ]),
       'not json',
     ];
+    mkdirSync(fx.owner, { recursive: true, mode: 0o700 });
     for (const body of bodies) {
-      writeFileSync(join(fx.state, 'blocks.json'), body);
+      writeFileSync(join(fx.owner, 'blocks.json'), body);
       const run = await cli(fx, ports, 'queue', 'run');
       expect(run.code).toBe(1);
       expect(run.err).toContain('account block');
@@ -700,9 +708,10 @@ describe('studio CLI', () => {
   it('queue run: a block appearing mid-run stops before the merge, prints held, exits 1', async () => {
     const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
     const g = passingGh((l) => {
-      if (l.startsWith('pr checks 5') && !existsSync(join(fx.state, 'blocks.json'))) {
+      if (l.startsWith('pr checks 5') && !existsSync(join(fx.owner, 'blocks.json'))) {
+        mkdirSync(fx.owner, { recursive: true, mode: 0o700 });
         writeFileSync(
-          join(fx.state, 'blocks.json'),
+          join(fx.owner, 'blocks.json'),
           JSON.stringify([
             { label: 'default', reason: 'authentication_failed', at: '2026-10-31T09:00:00Z' },
           ]),
