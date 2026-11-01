@@ -28847,12 +28847,20 @@ async function reconcileLimits(o2) {
       const alive = ports.claude.alive(rec.pid);
       if (alive && hit.retryOnly) continue;
       if (!alive && hasReport(stateRoot, id)) continue;
+      const process14 = alive ? await crewProcess(rec, ports) : "dead";
+      if (process14 === "gone" && hasReport(stateRoot, id)) continue;
       const until = parkUntil(hit.resetsAt, now).toISOString();
       const earlier = labels[label]?.parkedUntil;
       const parkedUntil = earlier && Date.parse(earlier) > Date.parse(until) ? earlier : until;
       labels = { ...labels, [label]: { parkedUntil, kind: hit.kind } };
       writeLimits(stateRoot, labels);
-      if (alive) await ports.claude.stop(rec.pid);
+      if (process14 === "unknown") {
+        result.errors.push(
+          `crew ${id} (pid ${rec.pid}) hit a usage limit but its identity cannot be verified; not stopping it, check it by hand`
+        );
+        continue;
+      }
+      if (process14 === "verified") await ports.claude.stop(rec.pid);
       const sessionId = sessionIdSince(stateRoot, id, rec.logStart ?? 0);
       const latest = readCrewRecords(stateRoot);
       latest[id] = {

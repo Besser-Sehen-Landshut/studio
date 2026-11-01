@@ -382,12 +382,22 @@ export async function reconcileLimits(o: {
       // A live crew may still recover from a retry: only terminal limit text stops it.
       if (alive && hit.retryOnly) continue;
       if (!alive && hasReport(stateRoot, id)) continue;
+      // Another process on this pid means the crew is gone, so it counts as exited.
+      const process = alive ? await crewProcess(rec, ports) : 'dead';
+      if (process === 'gone' && hasReport(stateRoot, id)) continue;
       const until = parkUntil(hit.resetsAt, now).toISOString();
       const earlier = labels[label]?.parkedUntil;
       const parkedUntil = earlier && Date.parse(earlier) > Date.parse(until) ? earlier : until;
       labels = { ...labels, [label]: { parkedUntil, kind: hit.kind } };
       writeLimits(stateRoot, labels);
-      if (alive) await ports.claude.stop(rec.pid);
+      if (process === 'unknown') {
+        // The label stays parked; record and board wait until the crew can be told apart or exits.
+        result.errors.push(
+          `crew ${id} (pid ${rec.pid}) hit a usage limit but its identity cannot be verified; not stopping it, check it by hand`,
+        );
+        continue;
+      }
+      if (process === 'verified') await ports.claude.stop(rec.pid);
       const sessionId = sessionIdSince(stateRoot, id, rec.logStart ?? 0);
       const latest = readCrewRecords(stateRoot);
       latest[id] = {

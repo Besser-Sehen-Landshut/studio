@@ -495,6 +495,58 @@ describe('account block', () => {
   });
 });
 
+describe('identity check before a limit stop', () => {
+  const LIMIT = {
+    type: 'result',
+    is_error: true,
+    result: "You've hit your weekly limit · resets Nov 3, 9am",
+  };
+
+  it('a matching identity is stopped; a mismatch is gone and not signalled', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    await twoCrews(fx, p);
+    log(fx, 'APP-1', LIMIT);
+    log(fx, 'APP-2', LIMIT);
+    p.identities.set(5002, 'someone-else');
+    const r = await cli(fx, p.ports, ['status']);
+    expect(p.stopped).toEqual([5001]);
+    expect(p.alive.has(5002)).toBe(true);
+    expect(r.err).not.toContain('error:');
+    for (const id of ['APP-1', 'APP-2']) {
+      expect(recordOf(fx, id).limit).toMatchObject({ kind: 'weekly' });
+      expect(itemOf(fx, id)?.status).toBe('ready');
+    }
+  });
+
+  it('an unverified crew or a legacy record is not signalled and is reported', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    await twoCrews(fx, p);
+    const records = recordsOf(fx);
+    delete records['APP-2'].identity;
+    writeFileSync(join(fx.state, 'crew.json'), JSON.stringify(records));
+    p.identities.set(5001, undefined);
+    log(fx, 'APP-1', LIMIT);
+    log(fx, 'APP-2', LIMIT);
+    const r = await cli(fx, p.ports, ['status']);
+    expect(p.stopped).toEqual([]);
+    for (const [id, pid] of [
+      ['APP-1', '5001'],
+      ['APP-2', '5002'],
+    ] as const) {
+      expect(r.err).toContain(id);
+      expect(r.err).toContain(pid);
+      expect(recordOf(fx, id).stoppedAt).toBeUndefined();
+      expect(recordOf(fx, id).limit).toBeUndefined();
+      expect(itemOf(fx, id)?.status).toBe('assigned');
+    }
+    // The limit still counts for new launches on those labels.
+    const limits = JSON.parse(readFileSync(join(fx.state, 'limits.json'), 'utf8'));
+    expect(Object.keys(limits).sort()).toEqual(['label-a', 'label-b']);
+  });
+});
+
 describe('account block details', () => {
   it('writes blocks.json before the first stop', async () => {
     const fx = makeFx();
