@@ -17,9 +17,9 @@ builder's reasoning.
 2. Return a verdict table first, one row per criterion:
 
 ```markdown
-| Criterion | Verdict | Evidence |
-|---|---|---|
-| C1 | met / not met / untested | test name or file:line |
+| Criterion | Verdict                  | Evidence               |
+| --------- | ------------------------ | ---------------------- |
+| C1        | met / not met / untested | test name or file:line |
 ```
 
 3. Then the findings, each with a quote of the requirement:

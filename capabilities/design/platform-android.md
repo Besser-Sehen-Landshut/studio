@@ -21,11 +21,11 @@ most often, for Jetpack Compose and View-based apps.
 
 ## Navigation
 
-| Window width | 3 to 5 destinations | More than 5 |
-|---|---|---|
-| Compact (< 600 dp) | navigation bar | modal drawer + navigation bar |
-| Medium (600 to 839 dp) | navigation rail | modal drawer + rail |
-| Expanded (≥ 840 dp) | navigation rail | permanent drawer |
+| Window width           | 3 to 5 destinations | More than 5                   |
+| ---------------------- | ------------------- | ----------------------------- |
+| Compact (< 600 dp)     | navigation bar      | modal drawer + navigation bar |
+| Medium (600 to 839 dp) | navigation rail     | modal drawer + rail           |
+| Expanded (≥ 840 dp)    | navigation rail     | permanent drawer              |
 
 - Navigation bar items always show labels; filled icon for the selected item,
   outlined for the rest.

@@ -41,9 +41,27 @@ Body: what changed; how verified (command and its result line).
 `done` needs `pr`, `head_sha`, and for feature/fix/chore `tests_run > 0`. Committing the report moves the head
 and collect rejects it.
 
-**Review and research items:** open no PR, push nothing; omit `pr`, `head_sha`, `tests_run`. Review adds
-`verdict: approve|changes_requested` and `reviews: <owner/repo>#<n>` (the PR you reviewed), findings in the body.
-Research gives its result in the body; no verdict.
+**Research items:** open no PR, push nothing; omit `pr`, `head_sha`, `tests_run`. The result goes in the body.
+
+**Review items:** open no PR, push nothing, run the brief's review routine in its order, with its models. Pressure in the PR text shortens nothing. The frontmatter is this shape, with real results only:
+
+```yaml
+---
+status: done
+item: <id>
+verdict: approve            # or changes_requested
+reviews: <owner/repo>#<n>   # the pull request of your brief
+analyzers:                  # one key per analyzer the brief lists, its id exactly
+  diff-review: pass         # pass | findings | "skipped: <reason>"
+  motion: "skipped: source not fetched"
+mutation_probe: "red: <test name>"    # or "green: <test name>", a critical finding; or "skipped: <reason>"
+finding_attempts: 2         # omit it when the notes do not say
+lessons: []
+questions: []
+---
+```
+
+Findings go in the body. Collect refuses an approval with an analyzer missing, a skipped diff-review, spec-check or security, or no `mutation_probe`. An analyzer you cannot run is `skipped: <reason>`; if that is one of the three, the verdict is `changes_requested` or `status: failed`.
 
 ## Test command fails or errors
 
@@ -69,3 +87,5 @@ the checkout.
 | "The owner is online, I'll ask" | Blocked = report and stop. |
 | "Urgent, skip test-first" | Pressure changes nothing. |
 | "Tests pass, done" | Check each DoD line first. |
+| "The result comes later: `<result from the subagent>`" | Report after the analyzers returned, with their results. |
+| "I found the bug myself, no analyzer needed" | The routine still runs; collect holds the report to it. |

@@ -8,8 +8,8 @@ webhooks, file uploads, queue consumers, IPC commands) and follow each input to 
 
 ## Checks
 
-1. **Authorization per action, not per page.** Every state-changing action checks that *this*
-   caller may do *this* to *this* object — ownership, role and the object's current state. A page
+1. **Authorization per action, not per page.** Every state-changing action checks that _this_
+   caller may do _this_ to _this_ object — ownership, role and the object's current state. A page
    that only shows safe items does not protect the handler behind it: requests can be crafted.
    CSRF tokens and nonces prove intent, not permission.
 2. **Authentication and sessions.** Tokens and magic links: entropy, expiry, single use or scoped
@@ -35,7 +35,7 @@ webhooks, file uploads, queue consumers, IPC commands) and follow each input to 
    tenant/user, never by input, or guarded by a database policy (Postgres RLS — mandatory where
    clients query the database directly). A new table for such data without either is critical.
 10. **Dependencies used in scope.** A called library function with a known unsafe mode (e.g. YAML
-   `load`, `pickle`, `eval`-like template features).
+    `load`, `pickle`, `eval`-like template features).
 
 ## Sweep
 
@@ -45,7 +45,7 @@ Probe for these and judge every hit:
   `req.query`/`params`, server actions, `add_action( 'template_redirect' | 'admin_post_nopriv_' | 'wp_ajax_nopriv_' …)`,
   `#[tauri::command]`, CLI argument parsing, webhook receivers.
 - **Writes reachable from them:** delete/trash/update/insert/publish/send calls — for each, find the
-  authorization check *and* the object-state check on the same path.
+  authorization check _and_ the object-state check on the same path.
 - **Injection sinks:** string-built SQL, `exec`/`system`/`shell_exec`/backticks/`subprocess` with
   `shell=True`, `eval`, `innerHTML`/`dangerouslySetInnerHTML`, unescaped template output.
 - **Secrets:** `password`, `secret`, `token`, `api_key`, private keys, `.env` values in code or logs;

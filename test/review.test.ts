@@ -226,6 +226,9 @@ describe('checkReviewCaps', () => {
     const { mutationProbe: _m, ...rest } = report();
     expect(() => checkReviewCaps(caps, rest)).toThrow(/mutation_probe/);
   });
+  it('refuses an approval whose probe stayed green: the test cannot fail', () => {
+    expect(() => checkReviewCaps(caps, report({ mutationProbe: 'green: t1' }))).toThrow(/green/);
+  });
   it('refuses a review of another pull request', () => {
     expect(() => checkReviewCaps(caps, report({ reviews: 'org/app#8' }))).toThrow(/reviews/);
     expect(() => checkReviewCaps(caps, report({ reviews: undefined }))).toThrow(/reviews/);

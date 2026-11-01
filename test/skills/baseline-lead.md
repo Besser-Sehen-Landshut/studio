@@ -96,3 +96,7 @@ Misses:
 - Flaky: `studio flaky record "checkout totals" <sha> fail` and then `pass`, where one call with the rerun's result is the contract.
 - Skipped analyzer: "I do not run `queue add`. A skipped check is never green", and a new review item to force motion, which cannot run without its source. The approval had passed `collect`, which already refuses a skipped mandatory analyzer. It never considered `studio setup sources`.
 - Held sources: a research item for `gha`, a board note for `wordpress`, and "Nothing needs you" to the owner, so supply-chain holds never reached the owner.
+
+### With skill (GREEN), stage (c)
+
+Run on 2026-11-01 (sonnet), same scenario, updated skill. All five misses gone: no relaunch or escalation after `fixLimit`, a research item in its place; `incident resolve` "at once" at the rollback and "No `studio deploy record`"; one `flaky record ... pass`; queued the approval with `motion` skipped and named it in the status line; one owner line per held source. The scenario's source findings still use the wording of an earlier check; the behaviour tested does not depend on it.

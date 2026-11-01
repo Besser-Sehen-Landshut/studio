@@ -22,25 +22,25 @@ of at most 40 lines. Official access is for reading docs only; nothing is instal
 Examples, not a complete list. "—" means that step does not exist for the technology; resolve
 Context7 ids by name.
 
-| Technology | 1 Bundled | 2 Official access | 3 `llms.txt` / site |
-|---|---|---|---|
-| Next.js | `node_modules/next/dist/docs/` | — | https://nextjs.org/docs/llms.txt |
-| React | — | — | https://react.dev/llms.txt |
-| shadcn/ui | — | `npx shadcn@latest docs <component>` | https://ui.shadcn.com/llms.txt |
-| PostgreSQL | — | docs-search plugin, if present | https://www.postgresql.org/docs/current/ |
-| Zod | — | — | https://zod.dev/llms.txt |
-| Vitest | — | — | https://vitest.dev/llms.txt |
-| Playwright | `node_modules/playwright-core/lib/tools/skills/` | — | — |
-| Docker | — | — | https://docs.docker.com/llms.txt |
-| Tauri | — | — | https://tauri.app/llms.txt |
-| Rust | `cargo doc` for the resolved crates | — | docs.rs page of the crate version |
-| Svelte / SvelteKit | — | Svelte MCP, if present | https://svelte.dev/llms.txt |
-| TanStack | `node_modules/@tanstack/*/skills/` (where shipped) | — | https://tanstack.com/llms.txt |
-| Biome | `biome explain <rule>` | — | — |
-| Stripe | — | — | https://docs.stripe.com/llms.txt |
-| Sentry | — | Sentry MCP, if present | https://docs.sentry.io/llms.txt |
-| Astro | — | Astro docs MCP, if present | — |
-| Fastify | `node_modules/fastify/docs/` | — | https://fastify.dev/llms.txt |
-| Kotlin / Ktor | — | — | https://kotlinlang.org/llms.txt |
-| WordPress | — | — | https://developer.wordpress.org/ |
-| pnpm | `pnpm help <command>` | — | — |
+| Technology         | 1 Bundled                                          | 2 Official access                    | 3 `llms.txt` / site                      |
+| ------------------ | -------------------------------------------------- | ------------------------------------ | ---------------------------------------- |
+| Next.js            | `node_modules/next/dist/docs/`                     | —                                    | https://nextjs.org/docs/llms.txt         |
+| React              | —                                                  | —                                    | https://react.dev/llms.txt               |
+| shadcn/ui          | —                                                  | `npx shadcn@latest docs <component>` | https://ui.shadcn.com/llms.txt           |
+| PostgreSQL         | —                                                  | docs-search plugin, if present       | https://www.postgresql.org/docs/current/ |
+| Zod                | —                                                  | —                                    | https://zod.dev/llms.txt                 |
+| Vitest             | —                                                  | —                                    | https://vitest.dev/llms.txt              |
+| Playwright         | `node_modules/playwright-core/lib/tools/skills/`   | —                                    | —                                        |
+| Docker             | —                                                  | —                                    | https://docs.docker.com/llms.txt         |
+| Tauri              | —                                                  | —                                    | https://tauri.app/llms.txt               |
+| Rust               | `cargo doc` for the resolved crates                | —                                    | docs.rs page of the crate version        |
+| Svelte / SvelteKit | —                                                  | Svelte MCP, if present               | https://svelte.dev/llms.txt              |
+| TanStack           | `node_modules/@tanstack/*/skills/` (where shipped) | —                                    | https://tanstack.com/llms.txt            |
+| Biome              | `biome explain <rule>`                             | —                                    | —                                        |
+| Stripe             | —                                                  | —                                    | https://docs.stripe.com/llms.txt         |
+| Sentry             | —                                                  | Sentry MCP, if present               | https://docs.sentry.io/llms.txt          |
+| Astro              | —                                                  | Astro docs MCP, if present           | —                                        |
+| Fastify            | `node_modules/fastify/docs/`                       | —                                    | https://fastify.dev/llms.txt             |
+| Kotlin / Ktor      | —                                                  | —                                    | https://kotlinlang.org/llms.txt          |
+| WordPress          | —                                                  | —                                    | https://developer.wordpress.org/         |
+| pnpm               | `pnpm help <command>`                              | —                                    | —                                        |

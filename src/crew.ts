@@ -548,7 +548,7 @@ export function writeBrief(
           'verdict: approve|changes_requested',
           'reviews: <repo>#<pr>',
           'analyzers: { <id>: pass|findings|"skipped: <reason>" }',
-          'mutation_probe: "red: <test>"|"skipped: <reason>"',
+          'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"',
           'finding_attempts: <highest number of attempts on one finding>',
         ]
       : item.type === 'research'

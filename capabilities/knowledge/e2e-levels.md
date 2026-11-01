@@ -13,15 +13,15 @@ This list is what the check is measured against.
 
 **Step 2: Pick the level that can actually exercise them.**
 
-| Technology | Proves UI flows | Does **not** prove UI flows on its own |
-|---|---|---|
-| Web app (Next.js, React, Vue, Svelte, ...) | Playwright (preferred), Cypress, Vitest Browser Mode | unit tests, component tests without a browser |
-| REST/GraphQL API (no UI) | integration tests against a running server (`supertest`, HTTP calls) | unit tests of handlers |
-| CLI tool | tests that run the built binary with real arguments | unit tests of internal functions |
-| Native app (iOS/macOS) | XCUITest (UI tests in `xcodebuild test`) | XCTest/Swift Testing unit tests |
-| Native app (Windows/WinUI) | UI automation (WinAppDriver, FlaUI, Appium) | xUnit unit tests |
-| Library/package | the public API tested as a consumer would call it | — |
-| Hybrid (web app + API) | browser tests for UI parts, integration tests for API parts | — |
+| Technology                                 | Proves UI flows                                                      | Does **not** prove UI flows on its own        |
+| ------------------------------------------ | -------------------------------------------------------------------- | --------------------------------------------- |
+| Web app (Next.js, React, Vue, Svelte, ...) | Playwright (preferred), Cypress, Vitest Browser Mode                 | unit tests, component tests without a browser |
+| REST/GraphQL API (no UI)                   | integration tests against a running server (`supertest`, HTTP calls) | unit tests of handlers                        |
+| CLI tool                                   | tests that run the built binary with real arguments                  | unit tests of internal functions              |
+| Native app (iOS/macOS)                     | XCUITest (UI tests in `xcodebuild test`)                             | XCTest/Swift Testing unit tests               |
+| Native app (Windows/WinUI)                 | UI automation (WinAppDriver, FlaUI, Appium)                          | xUnit unit tests                              |
+| Library/package                            | the public API tested as a consumer would call it                    | —                                             |
+| Hybrid (web app + API)                     | browser tests for UI parts, integration tests for API parts          | —                                             |
 
 A **substitute** for the preferred tool counts only if it runs the same flows with the same
 assertions against the same candidate (for example Cypress instead of Playwright, or a Playwright
@@ -51,7 +51,7 @@ record in the report which flows are unverified and why.
 - Caused by the item: fix, rerun.
 - Believed to be pre-existing: only with proof — the same failure with the same cause, reproduced
   on the unchanged base; the change neither causes nor hides anything; the tests covering this
-  item's flows still run and pass. Then the item completes *with a known pre-existing failure*,
+  item's flows still run and pass. Then the item completes _with a known pre-existing failure_,
   named as such — never "all green". A flaky test without proof is not pre-existing. None of this
   excuses a failing required CI run.
 - After fixes: rerun the failing tests on the new candidate.

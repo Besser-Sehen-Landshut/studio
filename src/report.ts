@@ -42,7 +42,7 @@ const reportSchema = z.object({
     .nullish(),
   mutationProbe: z
     .string()
-    .regex(/^(red: .{1,300}|skipped: .{1,300})$/)
+    .regex(/^(red: .{1,300}|green: .{1,300}|skipped: .{1,300})$/)
     .nullish(),
   findingAttempts: z.number().int().nonnegative().nullish(),
   lessons: z.array(z.string()).default([]),

@@ -19,12 +19,12 @@ whole codebase).
    string-based lookups (hooks and filter names, reflection, dynamic imports, templates, routes
    defined by file name), stylesheets, config and build files, scripts in `package.json`/`Makefile`,
    CI workflows, tests, and other repositories or services that may call a public API.
-4. **Classify:** *safe* (private and provably unreferenced), *likely* (public or referenced by name
-   in a way a search cannot rule out), *keep* (used dynamically or intentionally reserved — say why).
+4. **Classify:** _safe_ (private and provably unreferenced), _likely_ (public or referenced by name
+   in a way a search cannot rule out), _keep_ (used dynamically or intentionally reserved — say why).
 
 ## Output
 
 Contract format. Severity: dead code is a **note**, except where it misleads — a config option the
 code never reads while users set it, or a guard that looks active but is unreachable — then
-**critical**. The lead removes *safe* items and asks before removing *likely* ones; removals
+**critical**. The lead removes _safe_ items and asks before removing _likely_ ones; removals
 never ride along in an unrelated commit.

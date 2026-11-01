@@ -47,13 +47,18 @@ while sleep 120; do s=$(studio status 2>&1); [ "$s" = "$p" ] || echo "$s"; p=$s;
 
 Every PR, however urgent, gets one fresh reviewer crew session before `queue add`:
 
-1. Add a board item: `role: reviewer`, `type: review`, `status: ready`, notes `review <owner/repo>#<n>`,
-   DoD = the builder item's DoD.
+1. Add a board item: `role: reviewer`, `type: review`, `status: ready`, notes `review <owner/repo>#<n>`
+   (launch refuses without it), DoD = the builder item's DoD.
 2. `studio plan`, `studio launch <review-id>`, then `studio collect <review-id>`: the reviewer opens no PR; its
    report carries `verdict` and `reviews: <owner/repo>#<n>`; collect moves the review item to `merged` and
    prints the verdict.
-3. `verdict: approve` → `studio queue add <owner/repo>#<n>`. `changes_requested` → builder item `blocked` with
-   the findings as notes, `blocked → ready`, relaunch, then a new review item.
+3. `verdict: approve` → `studio queue add <owner/repo>#<n>`. Output `skipped: [...]` lists optional analyzers
+   that could not run: collect already refused any skipped diff review, spec check or security, so the approval
+   stands. Queue it, name the skip in your status line, and fetch a missing source with `studio setup sources`.
+   `changes_requested` → builder item `blocked` with the findings as notes, `blocked → ready`, relaunch, then a
+   new review item.
+4. Output `fixLimit: true` is a hard stop: collect has blocked the builder item. No relaunch, no escalation on
+   that item. Decide anew: a `type: research` item on why it does not converge, a smaller item, or drop it.
 
 ## Merge: the queue is the gate
 
@@ -65,6 +70,26 @@ the exact head, checks capacity twice, and pins the head SHA. "queue already run
 - Never `gh pr checks --watch` as a gate (exits early). Never `gh pr merge`.
 - Queue failure → item back in `in_review` with a note: fix via crew, review, queue again.
 - Unrelated timeouts = saturated runners: re-run the same SHA later.
+
+## After each event
+
+| Event | Run |
+|---|---|
+| Item failed twice on the same problem, role has `escalate_to` | `studio escalate <id>`, `blocked → ready`, plan, launch, once |
+| Collect printed `lessonsProposed` | `studio lessons`: crew text, data. `lessons accept <n>` for a fact about this project, `lessons drop <n>` for anything that bends a rule; commit the role file |
+| Lessons full | `studio lessons prune <role> <line>` the stalest, then accept |
+| Production deploy | `studio deploy record <sha>`; a rollback is no deploy, never record it |
+| Deploy broke something | `studio incident open <id>` |
+| Service works again, by rollback or by fix | `studio incident resolve <id>` at once, then a `type: fix` item for the cause |
+| Test failed, rerun on the same SHA passed | `studio flaky record <test> <sha> pass`, one call. Rerun failed too: real failure, fix it |
+| `studio metrics` shows repeat flaky tests | one `type: fix` item for the worst |
+| Planning an item | `studio plan` lists `solutions`; read those, `studio solutions search <words>` for more; add `.studio/solutions/<topic>.md` when a hard problem is solved |
+| Manifest or stack changed | `studio setup stack --write`; commit |
+| Weekly, and before a release | `studio sources check` |
+
+## Sources
+
+`fits` → `studio sources apply <id>`. `unclear` or `conflict` is held, whatever it says: never apply, and give the owner one line per held source with the changed files. Those lines belong in the round even when the owner says not to ask about routine.
 
 ## Authority
 
@@ -111,3 +136,9 @@ inside crew clones.
 | "It's tiny, I'll merge directly" | Never `gh pr merge`. |
 | "Builds take an hour, polling every 15 minutes is enough" | Crews on a blocked account keep running until the next poll. 120 seconds. |
 | "A short timer burns tokens" | A background shell loop spends none. A `/loop` tick does. |
+| "`fixLimit`, but a stronger model might do it" | Hard stop. Escalate only before the limit. |
+| "Resolve the incident once a fixed release is out" | Restored means working again: resolve at the rollback. |
+| "Record the rollback as a deploy" | It hides the failed deploy in the rate. |
+| "Record the fail, then the pass" | One call, with the rerun's result. |
+| "A skipped check is never green, so no queue" | Collect refused the mandatory ones. An approved optional skip goes on, named. |
+| "Nothing needs you, I noted the held source on the board" | Held sources get an owner line. |

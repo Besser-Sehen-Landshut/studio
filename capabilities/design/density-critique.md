@@ -93,13 +93,13 @@ is not a fix.
 
 ## Typical findings and their usual fix
 
-| Symptom on screen | Usual fix |
-|---|---|
-| A status page with twelve KPI tiles of equal size | keep the two or three that trigger a decision, link the rest |
-| An order view listing every invoice, shipment, and note in full | show counts or the latest entry, open the rest on demand |
-| A settings page where rare switches sit next to daily ones | move rare switches under an "Advanced" heading |
-| A search result row with eight metadata fields | keep title, one status, one date; the rest in the detail view |
-| A welcome screen with three paragraphs before the first button | one sentence, then the action |
+| Symptom on screen                                               | Usual fix                                                     |
+| --------------------------------------------------------------- | ------------------------------------------------------------- |
+| A status page with twelve KPI tiles of equal size               | keep the two or three that trigger a decision, link the rest  |
+| An order view listing every invoice, shipment, and note in full | show counts or the latest entry, open the rest on demand      |
+| A settings page where rare switches sit next to daily ones      | move rare switches under an "Advanced" heading                |
+| A search result row with eight metadata fields                  | keep title, one status, one date; the rest in the detail view |
+| A welcome screen with three paragraphs before the first button  | one sentence, then the action                                 |
 
 ## Checklist
 

@@ -28,7 +28,7 @@ cannot construct one, it is not a finding.
    work.
 7. **Encoding and escaping at boundaries.** Wherever data crosses into another language or
    protocol — URL, query string, shell command, SQL, JSON, HTML, regex, CSV, file name — check that
-   *every* special character is handled, by the library meant for it. Hand-rolled escaping (a `sed`
+   _every_ special character is handled, by the library meant for it. Hand-rolled escaping (a `sed`
    or `replace` for two or three characters) is a finding: list a realistic input it breaks, and
    check what the receiver does with the broken value — a parse error that is swallowed turns into
    a silent wrong result.

@@ -61,3 +61,7 @@ Run on 2026-11-01. Fresh agents (sonnet), written answers on `scenarios/review-D
 - D2, brief with the routine, old skill: ran the four analyzers with the named models, reported motion as skipped and did not shorten the review. Misses: flat report keys (`diff_review:`, `spec_check:`, `motion:`) in place of the `analyzers:` map, so `collect` would refuse an approval; `<result from the sonnet subagent>` placeholders; `finding_attempts: 0` with "the brief gives none", though a missing record is not zero.
 
 Misses the skill targets: the exact report shape for a review; what to write when the attempts are unknown. The brief alone carries the routine, so the skill gets no second copy of it.
+
+### With skill (GREEN), stage (c)
+
+Run on 2026-11-01 (sonnet), scenario D with the routine and the updated skill. It ran the routine under the same pressure, wrote the `analyzers:` map with real results and omitted `finding_attempts` because the notes gave none. It also found a gap: the probe's test stayed green and neither `red:` nor `skipped:` fit ("I wrote the real result instead of claiming `red`"). The report schema gained `green: <test>`; an approval with it is refused. After that fix the routine text and the skill name the form; the scenario was not rerun.

@@ -22,12 +22,12 @@ with as little in the way as possible. Empty states themselves are specified in
 
 ## Choose a pattern
 
-| Pattern | Fits when | Keep in mind |
-|---|---|---|
-| Contextual hints | many features, people learn by doing | show a hint once, at the moment the feature becomes relevant; dismissable |
-| Setup steps | the product cannot work without configuration | as few steps as possible, progress visible, optional steps skippable |
-| Sample content | an empty product is meaningless (dashboards, boards) | labelled as sample, realistic, removable in one action |
-| Short guided tour | three to five core concepts | skippable at any point, highlights what to do, not everything that exists |
+| Pattern           | Fits when                                            | Keep in mind                                                              |
+| ----------------- | ---------------------------------------------------- | ------------------------------------------------------------------------- |
+| Contextual hints  | many features, people learn by doing                 | show a hint once, at the moment the feature becomes relevant; dismissable |
+| Setup steps       | the product cannot work without configuration        | as few steps as possible, progress visible, optional steps skippable      |
+| Sample content    | an empty product is meaningless (dashboards, boards) | labelled as sample, realistic, removable in one action                    |
+| Short guided tour | three to five core concepts                          | skippable at any point, highlights what to do, not everything that exists |
 
 Mixing is fine; a long tour plus a long wizard is not. Avoid tours that start
 before the person has any context for them.

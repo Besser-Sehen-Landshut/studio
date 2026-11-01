@@ -10,24 +10,24 @@ what the project runs.
 
 Pick the package manager `$PM` from the lock file, once per session:
 
-| Lock file | Package manager |
-|---|---|
-| `pnpm-lock.yaml` | `pnpm` |
-| `bun.lockb` / `bun.lock` | `bun` |
-| `yarn.lock` | `yarn` |
-| `package-lock.json` | `npm` |
-| none | the first of `pnpm`, `bun`, `yarn` found in PATH, else `npm` |
+| Lock file                | Package manager                                              |
+| ------------------------ | ------------------------------------------------------------ |
+| `pnpm-lock.yaml`         | `pnpm`                                                       |
+| `bun.lockb` / `bun.lock` | `bun`                                                        |
+| `yarn.lock`              | `yarn`                                                       |
+| `package-lock.json`      | `npm`                                                        |
+| none                     | the first of `pnpm`, `bun`, `yarn` found in PATH, else `npm` |
 
 Script names come from `package.json`: `$PM tsc --noEmit`, `$PM lint`, `$PM test`,
 `$PM test:e2e` (or `$PM run ...`).
 
 ## Other stacks
 
-| Stack | Typecheck | Lint (if configured) | Tests |
-|---|---|---|---|
-| Rust | `cargo check` | `cargo clippy -- -D warnings` | `cargo test` |
-| Swift / iOS / macOS | covered by the production build | `swiftlint` | `swift test` or `xcodebuild test` |
-| Go | `go vet ./...` | `golangci-lint run` | `go test ./...` |
-| Python | `mypy` / `pyright` | `ruff check` | `pytest` |
-| PHP | `php -l` on changed files; `phpstan` | `phpcs` | `phpunit` or the project's test script |
-| .NET / WinUI | covered by the production build | `dotnet format --verify-no-changes` | `dotnet test` |
+| Stack               | Typecheck                            | Lint (if configured)                | Tests                                  |
+| ------------------- | ------------------------------------ | ----------------------------------- | -------------------------------------- |
+| Rust                | `cargo check`                        | `cargo clippy -- -D warnings`       | `cargo test`                           |
+| Swift / iOS / macOS | covered by the production build      | `swiftlint`                         | `swift test` or `xcodebuild test`      |
+| Go                  | `go vet ./...`                       | `golangci-lint run`                 | `go test ./...`                        |
+| Python              | `mypy` / `pyright`                   | `ruff check`                        | `pytest`                               |
+| PHP                 | `php -l` on changed files; `phpstan` | `phpcs`                             | `phpunit` or the project's test script |
+| .NET / WinUI        | covered by the production build      | `dotnet format --verify-no-changes` | `dotnet test`                          |

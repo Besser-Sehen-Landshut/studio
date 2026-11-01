@@ -39,17 +39,17 @@ wording of error messages lives in `ux-writing.md#error-messages`.
 
 ## Pick the right control
 
-| Data | Control |
-|---|---|
-| Short free text | single-line input |
-| Long free text | multi-line input that can grow |
-| One of up to about five options | radio group, all options visible |
-| One of many options | select or searchable combobox |
-| Several of a few options | checkboxes |
-| On/off that applies immediately | switch; on submit-style forms, a checkbox |
-| Date | date picker or separate day/month/year inputs, never one free text box |
-| Phone, card, IBAN | text input with tolerant formatting, accept spaces and dashes |
-| Password | password input with a show/hide toggle, paste allowed |
+| Data                            | Control                                                                |
+| ------------------------------- | ---------------------------------------------------------------------- |
+| Short free text                 | single-line input                                                      |
+| Long free text                  | multi-line input that can grow                                         |
+| One of up to about five options | radio group, all options visible                                       |
+| One of many options             | select or searchable combobox                                          |
+| Several of a few options        | checkboxes                                                             |
+| On/off that applies immediately | switch; on submit-style forms, a checkbox                              |
+| Date                            | date picker or separate day/month/year inputs, never one free text box |
+| Phone, card, IBAN               | text input with tolerant formatting, accept spaces and dashes          |
+| Password                        | password input with a show/hide toggle, paste allowed                  |
 
 On the web, choose `type` and `inputmode` for the right mobile keyboard and set
 `autocomplete` for personal data so browsers and password managers can fill it.

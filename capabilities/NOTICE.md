@@ -44,16 +44,16 @@ under this repository's MIT licence.
 These upstream projects are referenced by name only. Nothing from them is copied into this
 repository; they are fetched by the user or the host when wanted.
 
-| Upstream | Licence |
-|---|---|
-| emilkowalski/skills | MIT |
-| leonxlnx/taste-skill | MIT |
-| pbakaus/impeccable | Apache-2.0 |
-| docker/skills | Apache-2.0 |
-| getsentry/skills | Apache-2.0 |
-| better-auth/skills | licence unknown |
-| neondatabase/postgres-skills | Apache-2.0 |
-| stripe/ai | MIT |
-| mcollina/skills | MIT |
-| WordPress/agent-skills | GPL-2.0-or-later |
-| vercel/next.js | MIT |
+| Upstream                     | Licence          |
+| ---------------------------- | ---------------- |
+| emilkowalski/skills          | MIT              |
+| leonxlnx/taste-skill         | MIT              |
+| pbakaus/impeccable           | Apache-2.0       |
+| docker/skills                | Apache-2.0       |
+| getsentry/skills             | Apache-2.0       |
+| better-auth/skills           | licence unknown  |
+| neondatabase/postgres-skills | Apache-2.0       |
+| stripe/ai                    | MIT              |
+| mcollina/skills              | MIT              |
+| WordPress/agent-skills       | GPL-2.0-or-later |
+| vercel/next.js               | MIT              |

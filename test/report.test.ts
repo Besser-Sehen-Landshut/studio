@@ -238,6 +238,9 @@ describe('collectReport treats the report as untrusted input', () => {
 
 describe('review fields', () => {
   const parse = (front: string) => parseReport(`---\nstatus: blocked\n${front}\n---\n`);
+  it('reads a probe that stayed green', () => {
+    expect(parse('mutation_probe: "green: t"').mutationProbe).toBe('green: t');
+  });
   it('reads analyzers, the probe and the attempts', () => {
     const r = parse(
       'analyzers: { a: pass, b: findings, c: "skipped: no source" }\nmutation_probe: "red: t"\nfinding_attempts: 2',

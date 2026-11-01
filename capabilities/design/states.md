@@ -10,17 +10,17 @@ in `forms.md`.
 
 For each data-driven view, define and render:
 
-| State | Shown when |
-|---|---|
-| Loading (first) | nothing to show yet |
-| Loading (refresh) | old data exists, new data on the way |
-| Empty | request succeeded, there is nothing |
-| No results | a filter or search excluded everything |
-| Partial | some parts loaded, others failed |
-| Error | the request failed |
-| Offline | no connection; show what is cached |
-| No permission | the person may not see or do this |
-| Success | content, the normal case |
+| State             | Shown when                             |
+| ----------------- | -------------------------------------- |
+| Loading (first)   | nothing to show yet                    |
+| Loading (refresh) | old data exists, new data on the way   |
+| Empty             | request succeeded, there is nothing    |
+| No results        | a filter or search excluded everything |
+| Partial           | some parts loaded, others failed       |
+| Error             | the request failed                     |
+| Offline           | no connection; show what is cached     |
+| No permission     | the person may not see or do this      |
+| Success           | content, the normal case               |
 
 A screen that only has "success" plus a spinner is unfinished.
 
@@ -74,14 +74,14 @@ Prevent first, then detect, then explain, then help recover.
 
 ### Where errors appear
 
-| Scope | Presentation |
-|---|---|
-| One field | inline under the field (`forms.md`) |
-| A form | summary at the top plus inline errors |
-| A region or widget | inline message in that region with retry; rest stays usable |
-| The whole page | full-page state with retry and a way back |
+| Scope                 | Presentation                                                                    |
+| --------------------- | ------------------------------------------------------------------------------- |
+| One field             | inline under the field (`forms.md`)                                             |
+| A form                | summary at the top plus inline errors                                           |
+| A region or widget    | inline message in that region with retry; rest stays usable                     |
+| The whole page        | full-page state with retry and a way back                                       |
 | Background or network | non-blocking banner or toast with retry; not auto-dismissed if action is needed |
-| Permission | name the missing access and who can grant it |
+| Permission            | name the missing access and who can grant it                                    |
 
 Severity is visible and consistent: error, warning, info, success each have a
 distinct colour plus an icon or word, never colour alone.

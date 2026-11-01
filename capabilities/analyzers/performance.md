@@ -9,7 +9,7 @@ payload size). A quadratic loop over ten items is a note; over ten thousand it i
 **Do the arithmetic before you judge.** For every query, loop or fan-out in scope, write down the
 work it does with the given sizes — rows touched, combinations, calls — as a number. "Fast today"
 without that number is not a conclusion. If you cannot measure, reason from the shape: the same
-table joined *k* times on one key with *r* rows per key means up to *r*^*k* combinations per item
+table joined _k_ times on one key with _r_ rows per key means up to _r_^_k_ combinations per item
 (9 rows and 6 joins ≈ 530 000). Anything on a per-request path that reaches the hundred-thousands
 per item, or runs more than once per request, is **critical**, even when the data set looks small.
 

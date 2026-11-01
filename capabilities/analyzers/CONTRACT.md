@@ -24,7 +24,7 @@ Give the reviewer, in this order:
 
 **Do not** hand over why you believe the change is correct. The reviewer gets the artifact and the
 requirement, never your reasoning — otherwise it returns your conclusions instead of a review.
-Ask for refutation: *"Find what is wrong with this change"*, not *"check this change"*.
+Ask for refutation: _"Find what is wrong with this change"_, not _"check this change"_.
 
 ## How the analyzer works: sweep, then judge
 
@@ -75,9 +75,9 @@ Return exactly this, in the user's language (headings may stay English):
 
 Checked: <sweep: N probes, M candidates, K confirmed; lenses covered>
 
-| # | Severity | Where | Finding | Evidence | Fix |
-|---|---|---|---|---|---|
-| 1 | critical | path/file.ext:42 | <one sentence> | <quoted line + failing input/sequence> | <one sentence> |
+| #   | Severity | Where            | Finding        | Evidence                               | Fix            |
+| --- | -------- | ---------------- | -------------- | -------------------------------------- | -------------- |
+| 1   | critical | path/file.ext:42 | <one sentence> | <quoted line + failing input/sequence> | <one sentence> |
 
 Outside scope: <optional, one line each>
 
