@@ -19,7 +19,7 @@ import {
   MAX_LESSON_LINES,
   proposeLessons,
   pruneLesson,
-  readRoleBrief,
+  readRoleMemory,
   sanitizeLesson,
 } from '../src/role-memory.js';
 
@@ -200,25 +200,80 @@ describe('pruneLesson', () => {
   });
 });
 
-describe('readRoleBrief', () => {
+describe('readRoleMemory', () => {
   it('is empty without a file', () => {
-    expect(readRoleBrief(dirs().project, 'builder')).toBe('');
+    expect(readRoleMemory(dirs().project, 'builder')).toEqual({
+      brief: '',
+      lessons: [],
+      cut: false,
+    });
   });
-  it('leaves a capped file as it is', () => {
+  it('keeps instructions and lessons apart', () => {
     const { project } = dirs();
-    writeFileSync(roleFile(project), 'text\n\n## Lessons\n\n- a\n');
-    expect(readRoleBrief(project, 'builder')).toBe('text\n\n## Lessons\n\n- a');
+    writeFileSync(roleFile(project), 'text\n\n## Lessons\n\n- a\n\n## Other\n\nmore\n');
+    expect(readRoleMemory(project, 'builder')).toEqual({
+      brief: 'text\n\n## Other\n\nmore',
+      lessons: ['a'],
+      cut: false,
+    });
   });
   it('a hand-edited file shows only the newest 40 lessons', () => {
     const { project } = dirs();
     const lines = Array.from({ length: 60 }, (_, i) => `- l${i}`).join('\n');
-    writeFileSync(roleFile(project), `text\n\n## Lessons\n\n${lines}\n\n## Other\n\nmore\n`);
-    const text = readRoleBrief(project, 'builder');
-    expect(text).not.toContain('- l19\n');
-    expect(text).toContain('- l20\n');
-    expect(text).toContain('- l59');
-    expect(text).toContain('(older lessons cut)');
-    expect(text).toContain('## Other');
-    expect(text).toContain('text');
+    writeFileSync(roleFile(project), `text\n\n## Lessons\n\n${lines}\n`);
+    const m = readRoleMemory(project, 'builder');
+    expect(m.lessons).toHaveLength(40);
+    expect(m.lessons[0]).toBe('l20');
+    expect(m.cut).toBe(true);
+  });
+  it('a hand-edited lesson is cleaned on the way out', () => {
+    const { project } = dirs();
+    writeFileSync(roleFile(project), '## Lessons\n\n``` closing fence\n- \u001b[2Jnote\n');
+    expect(readRoleMemory(project, 'builder').lessons).toEqual(['``` closing fence', '[2Jnote']);
+  });
+});
+
+describe('the role file is reached safely', () => {
+  const linked = (segment: 'studio' | 'roles' | 'file') => {
+    const base = join(root, `s${n++}`);
+    const project = join(base, 'project');
+    mkdirSync(project, { recursive: true });
+    const outside = join(base, 'outside');
+    mkdirSync(join(outside, 'roles'), { recursive: true });
+    writeFileSync(join(outside, 'roles', 'builder.md'), 'OUTSIDE');
+    writeFileSync(join(outside, 'builder.md'), 'OUTSIDE');
+    if (segment === 'studio') symlinkSync(outside, join(project, '.studio'));
+    else {
+      mkdirSync(join(project, '.studio'));
+      if (segment === 'roles')
+        symlinkSync(join(outside, 'roles'), join(project, '.studio', 'roles'));
+      else {
+        mkdirSync(join(project, '.studio', 'roles'));
+        symlinkSync(join(outside, 'builder.md'), join(project, '.studio', 'roles', 'builder.md'));
+      }
+    }
+    return { project, outside };
+  };
+  it.each(['studio', 'roles', 'file'] as const)('a link at %s is refused everywhere', (segment) => {
+    const { project, outside } = linked(segment);
+    const state = join(root, `st${n++}`);
+    mkdirSync(state);
+    proposeLessons(state, 'builder', 'APP-1', ['x'], NOW);
+    expect(() => readRoleMemory(project, 'builder')).toThrow(/link/);
+    expect(() => acceptLesson(project, state, 1)).toThrow(/link/);
+    expect(() => pruneLesson(project, 'builder', 1)).toThrow(/link/);
+    expect(readFileSync(join(outside, 'builder.md'), 'utf8')).toBe('OUTSIDE');
+    expect(readFileSync(join(outside, 'roles', 'builder.md'), 'utf8')).toBe('OUTSIDE');
+    expect(listLessons(state)).toHaveLength(1);
+  });
+  it.each(['../evil', 'lead', 'builder/../reviewer', ''])('the role %j is refused', (role) => {
+    const { project } = dirs();
+    expect(() => readRoleMemory(project, role)).toThrow(/role/);
+    expect(() => pruneLesson(project, role, 1)).toThrow(/role/);
+  });
+  it('a folder in place of the file is refused', () => {
+    const { project } = dirs();
+    mkdirSync(roleFile(project));
+    expect(() => readRoleMemory(project, 'builder')).toThrow();
   });
 });

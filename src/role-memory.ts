@@ -1,13 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { ROLE_TEMPLATES } from './config.js';
@@ -18,7 +10,6 @@ export const MAX_LESSON_CHARS = 300;
 export const MAX_PENDING = 200;
 const MAX_PER_REPORT = 10;
 const HEADING = '## Lessons';
-const CUT_NOTE = '(older lessons cut)';
 
 /** A crew's lesson reaches every later crew of its role: one plain line, no markup, bounded. */
 export function sanitizeLesson(text: string): string | undefined {
@@ -101,28 +92,48 @@ export function dropLesson(stateRoot: string, n: number): void {
   writeFile_(stateRoot, { ...data, lessons: data.lessons.filter((l) => l.n !== n) });
 }
 
+/**
+ * The one way to the role file: the role must be a template, and no segment below the project may
+ * be a link. A missing segment is fine: the reader sees an empty file, the writer creates it.
+ */
 function roleFile(projectDir: string, role: string): string {
   if (!(ROLE_TEMPLATES as readonly string[]).includes(role)) {
     throw new Error('not a role template');
   }
-  return join(projectDir, '.studio', 'roles', `${role}.md`);
+  let at = projectDir;
+  const segments = ['.studio', 'roles', `${role}.md`];
+  for (const [i, seg] of segments.entries()) {
+    at = join(at, seg);
+    let st: ReturnType<typeof lstatSync>;
+    try {
+      st = lstatSync(at);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return join(projectDir, ...segments);
+      throw new Error(`the role file cannot be reached (${(e as NodeJS.ErrnoException).code})`);
+    }
+    if (st.isSymbolicLink()) throw new Error(`${at} is a link; refusing`);
+    if (i < segments.length - 1 ? !st.isDirectory() : !st.isFile()) {
+      throw new Error(`${at} is not what a role file needs; refusing`);
+    }
+  }
+  return at;
 }
 
-function readRole(file: string): string {
+function readRole(projectDir: string, role: string): string {
+  const file = roleFile(projectDir, role);
   try {
-    const st = lstatSync(file);
-    if (st.isSymbolicLink() || !st.isFile()) {
-      throw new Error('the role file is a link or not a regular file; refusing');
-    }
+    return readFileSync(file, 'utf8');
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return '';
     throw e;
   }
-  return readFileSync(file, 'utf8');
 }
 
-function writeRole(file: string, text: string): void {
+function writeRole(projectDir: string, role: string, text: string): void {
+  const file = roleFile(projectDir, role);
   mkdirSync(dirname(file), { recursive: true });
+  // The folders may have just been made: look again before writing through them.
+  roleFile(projectDir, role);
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   try {
     writeFileSync(tmp, text, { flag: 'wx' });
@@ -177,10 +188,9 @@ export function acceptLesson(
   const data = readFile(stateRoot);
   const proposal = data.lessons.find((l) => l.n === n);
   if (!proposal) throw new Error(`no proposed lesson ${n}`);
-  const file = roleFile(projectDir, proposal.role);
   const text = sanitizeLesson(proposal.text);
   if (text === undefined) throw new Error(`proposed lesson ${n} is empty`);
-  const parts = split(readRole(file));
+  const parts = split(readRole(projectDir, proposal.role));
   const known = parts.lessons.some((l) => same(l.replace(/^- /, ''), text));
   if (!known) {
     if (parts.lessons.length >= MAX_LESSON_LINES) {
@@ -189,7 +199,7 @@ export function acceptLesson(
       );
     }
     parts.lessons.push(`- ${text}`);
-    writeRole(file, join_(parts));
+    writeRole(projectDir, proposal.role, join_(parts));
   }
   writeFile_(stateRoot, { ...data, lessons: data.lessons.filter((l) => l.n !== n) });
   return { role: proposal.role, text, lines: parts.lessons.length };
@@ -197,24 +207,33 @@ export function acceptLesson(
 
 /** Removes the line'th lesson (from 1) of a role. */
 export function pruneLesson(projectDir: string, role: string, line: number): void {
-  const file = roleFile(projectDir, role);
-  const parts = split(readRole(file));
+  const parts = split(readRole(projectDir, role));
   if (!Number.isInteger(line) || line < 1 || line > parts.lessons.length) {
     throw new Error(`${role} has no lesson ${line}`);
   }
   parts.lessons.splice(line - 1, 1);
-  writeRole(file, join_(parts));
+  writeRole(projectDir, role, join_(parts));
 }
 
-/** The role file for a brief; a file edited past the cap shows only its newest lessons. */
-export function readRoleBrief(projectDir: string, role: string): string {
-  const file = join(projectDir, '.studio', 'roles', `${role}.md`);
-  if (!existsSync(file)) return '';
-  const text = readFileSync(file, 'utf8');
-  const parts = split(text);
-  if (parts.lessons.length <= MAX_LESSON_LINES) return text.trim();
-  return join_({
-    ...parts,
-    lessons: [CUT_NOTE, ...parts.lessons.slice(-MAX_LESSON_LINES)],
-  }).trim();
+/**
+ * The role file for a brief: its instructions, and apart from them the lessons, which are crew
+ * output. Each lesson is cleaned again, and a file edited past the cap shows only the newest.
+ */
+export function readRoleMemory(
+  projectDir: string,
+  role: string,
+): { brief: string; lessons: string[]; cut: boolean } {
+  const parts = split(readRole(projectDir, role));
+  const instructions = parts.found
+    ? [...parts.before, ...parts.after]
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+    : parts.before.join('\n').trim();
+  const lessons = parts.lessons.flatMap((l) => sanitizeLesson(l) ?? []);
+  return {
+    brief: instructions,
+    lessons: lessons.slice(-MAX_LESSON_LINES),
+    cut: lessons.length > MAX_LESSON_LINES,
+  };
 }
