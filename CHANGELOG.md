@@ -24,6 +24,8 @@ All notable changes to this project are documented here. The format follows
 - The crew guard also denies `script`, `flock`, `watch`, `npx`/`pnpm exec`/`pnpm dlx`/`yarn`/`npm exec`
   when the target is `studio` or not literal, and setting `NODE_OPTIONS`. `npx vitest`, `pnpm test`
   and `npm run resume` stay allowed.
+- Notifications stop at the first failing send in a run (one error, the rest is retried next run), and
+  a `notify.lock` keeps overlapping `studio state` runs from sending twice or losing keys.
 - `studio state` still writes `state.json` when crew records of another project cannot be read; it
   leaves out the per-label figures and adds a `crew-records` line for the owner. Plan and launch
   still refuse.

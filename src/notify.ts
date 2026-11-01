@@ -3,13 +3,14 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { OwnerConfig, OwnerEnv } from './config.js';
 import { checkCredentialCommand, PROVIDER_MAX_BYTES, PROVIDER_TIMEOUT_MS } from './credentials.js';
-import { writeStateFile } from './paths.js';
+import { acquireStateLock, type StateLock, writeStateFile } from './paths.js';
 import type { Ports } from './ports.js';
 import type { StateSnapshot } from './state.js';
 
 /** Most messages one run sends; the rest follows on the next run. */
 export const MAX_SENDS_PER_RUN = 20;
 const MAX_TEXT = 500;
+const LOCK_STALE_MS = 2 * 60_000;
 
 type Kind = 'owner-item' | 'usage-limit' | 'account-block';
 
@@ -88,6 +89,23 @@ export async function sendNotifications(o: {
 }): Promise<string[]> {
   const notify = o.ownerConfig.notify;
   if (notify === undefined) return [];
+  const lock = acquireStateLock(o.ownerRoot, 'notify.lock', {
+    now: new Date(),
+    heartbeatStaleMs: LOCK_STALE_MS,
+  });
+  if (!lock) return []; // another run is sending right now; it records what it sent
+  try {
+    return await sendLocked(o, notify, lock);
+  } finally {
+    if (lock.owned()) lock.release();
+  }
+}
+
+async function sendLocked(
+  o: Parameters<typeof sendNotifications>[0],
+  notify: NonNullable<OwnerConfig['notify']>,
+  lock: StateLock,
+): Promise<string[]> {
   const file = join(o.ownerRoot, 'notified.json');
   const read = readNotified(file);
   if (!read.ok) return ['notify: notified.json is unreadable; nothing sent'];
@@ -121,17 +139,24 @@ export async function sendNotifications(o: {
       STUDIO_NOTIFY_TEXT: cleanText(m.text),
     };
     if (penv.PATH !== undefined) env.PATH = penv.PATH;
+    lock.heartbeat(new Date());
     try {
       const reply = await o.ports.credentials.runProvider(notify.command, env, {
         timeoutMs: PROVIDER_TIMEOUT_MS,
         maxBytes: PROVIDER_MAX_BYTES,
       });
       if (reply.code === 0) sent.add(m.key);
-      else errors.push(`notify: the notify command failed (${m.kind}); it is retried next time`);
+      else {
+        errors.push(
+          `notify: the notify command failed (${m.kind}); it and the rest are retried next time`,
+        );
+        break;
+      }
     } catch {
       errors.push(
-        `notify: the notify command could not be run (${m.kind}); it is retried next time`,
+        `notify: the notify command could not be run (${m.kind}); it and the rest are retried next time`,
       );
+      break;
     }
   }
   const keys = [...sent];

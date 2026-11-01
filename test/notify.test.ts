@@ -14,7 +14,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { runCli } from '../src/cli.js';
 import { type OwnerConfig, ownerConfigSchema } from '../src/config.js';
 import { sendNotifications } from '../src/notify.js';
-import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
+import { acquireStateLock, ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import type { StateSnapshot } from '../src/state.js';
 
@@ -116,6 +116,60 @@ describe('sendNotifications', () => {
     expect(s.calls).toHaveLength(2);
     expect(await run(s, sn)).toEqual([]);
     expect(s.calls).toHaveLength(2);
+  });
+
+  it('stops after the first failure and retries the later keys next run', async () => {
+    const s = setup();
+    s.replies.push(1);
+    const sn = snap(
+      ['APP-1', 'APP-2', 'APP-3', 'APP-4', 'APP-5'].map((id) => ({ id, title: 't' })),
+    );
+    const errs = await run(s, sn);
+    expect(s.calls).toHaveLength(1);
+    expect(errs).toHaveLength(1);
+    expect(await run(s, sn)).toEqual([]);
+    expect(s.calls).toHaveLength(6); // one failed call, then all five keys
+  });
+
+  it('stops after a command that cannot be run, once', async () => {
+    const s = setup();
+    s.ports.credentials.runProvider = async () => {
+      s.calls.push({} as Call);
+      throw new Error('boom SECRET');
+    };
+    const sn = snap(['APP-1', 'APP-2', 'APP-3'].map((id) => ({ id, title: 't' })));
+    const errs = await run(s, sn);
+    expect(s.calls).toHaveLength(1);
+    expect(errs).toHaveLength(1);
+    expect(errs.join('\n')).not.toMatch(/SECRET|boom/);
+  });
+
+  it('sends nothing, without an error, while another process holds notify.lock', async () => {
+    const s = setup();
+    const held = acquireStateLock(s.ownerRoot, 'notify.lock', {
+      now: new Date(),
+      heartbeatStaleMs: 120_000,
+    });
+    expect(held).toBeDefined();
+    const sn = snap([{ id: 'APP-1', title: 'Decide' }]);
+    expect(await run(s, sn)).toEqual([]);
+    expect(s.calls).toHaveLength(0);
+    held?.release();
+    expect(await run(s, sn)).toEqual([]);
+    expect(s.calls).toHaveLength(1);
+  });
+
+  it('releases notify.lock after a run, also after a failure', async () => {
+    const s = setup();
+    s.replies.push(1);
+    const sn = snap([{ id: 'APP-1', title: 'Decide' }]);
+    await run(s, sn);
+    const again = acquireStateLock(s.ownerRoot, 'notify.lock', {
+      now: new Date(),
+      heartbeatStaleMs: 120_000,
+    });
+    expect(again).toBeDefined();
+    again?.release();
   });
 
   it('a recurrence after the line vanished sends again', async () => {

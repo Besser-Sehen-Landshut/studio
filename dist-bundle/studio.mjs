@@ -30722,6 +30722,7 @@ import { homedir as homedir5 } from "node:os";
 import { join as join10 } from "node:path";
 var MAX_SENDS_PER_RUN = 20;
 var MAX_TEXT = 500;
+var LOCK_STALE_MS3 = 2 * 6e4;
 var cleanText = (s) => Array.from(s.replace(new RegExp("\\p{Cc}", "gu"), " ")).slice(0, MAX_TEXT).join("");
 function messagesOf(projectKey, snapshot) {
   const notes = snapshot.notifications ?? [];
@@ -30759,6 +30760,18 @@ function readNotified(file2) {
 async function sendNotifications(o2) {
   const notify = o2.ownerConfig.notify;
   if (notify === void 0) return [];
+  const lock = acquireStateLock(o2.ownerRoot, "notify.lock", {
+    now: /* @__PURE__ */ new Date(),
+    heartbeatStaleMs: LOCK_STALE_MS3
+  });
+  if (!lock) return [];
+  try {
+    return await sendLocked(o2, notify, lock);
+  } finally {
+    if (lock.owned()) lock.release();
+  }
+}
+async function sendLocked(o2, notify, lock) {
   const file2 = join10(o2.ownerRoot, "notified.json");
   const read2 = readNotified(file2);
   if (!read2.ok) return ["notify: notified.json is unreadable; nothing sent"];
@@ -30791,17 +30804,24 @@ async function sendNotifications(o2) {
       STUDIO_NOTIFY_TEXT: cleanText(m.text)
     };
     if (penv.PATH !== void 0) env.PATH = penv.PATH;
+    lock.heartbeat(/* @__PURE__ */ new Date());
     try {
       const reply = await o2.ports.credentials.runProvider(notify.command, env, {
         timeoutMs: PROVIDER_TIMEOUT_MS,
         maxBytes: PROVIDER_MAX_BYTES
       });
       if (reply.code === 0) sent.add(m.key);
-      else errors.push(`notify: the notify command failed (${m.kind}); it is retried next time`);
+      else {
+        errors.push(
+          `notify: the notify command failed (${m.kind}); it and the rest are retried next time`
+        );
+        break;
+      }
     } catch {
       errors.push(
-        `notify: the notify command could not be run (${m.kind}); it is retried next time`
+        `notify: the notify command could not be run (${m.kind}); it and the rest are retried next time`
       );
+      break;
     }
   }
   const keys2 = [...sent];
