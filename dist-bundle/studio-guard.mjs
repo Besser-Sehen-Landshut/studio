@@ -998,7 +998,7 @@ function assignmentName(w) {
     deny(`assignment to "${name}" is not allowed (plain variable names only)`);
   return name;
 }
-var SENSITIVE_VAR = /^(STUDIO_|NODE_OPTIONS$|GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/;
+var SENSITIVE_VAR = /^(STUDIO_|NODE_OPTIONS$|NODE_PATH$|NPM_CONFIG_|PNPM_|YARN_|COREPACK_|GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/i;
 var unresolved = (w) => w.includes(SUBST) || w.includes("$") || w.includes("`");
 var unresolvedWord = (w) => unresolved(w) || /[*?[]/.test(w) && w !== "[" && w !== "[[";
 function checkVarName(name) {
@@ -1472,68 +1472,17 @@ function checkNode(args) {
   }
   if (!args.some((a) => NODE_INFO_FLAGS.has(a))) deny(noScript);
 }
-var RUNNER_FLAGS = /* @__PURE__ */ new Set([
-  "-y",
-  "--yes",
-  "--no",
-  "--no-install",
-  "-q",
-  "--quiet",
-  "--ignore-existing"
-]);
-var RUNNER_VALUE_OPTIONS = /* @__PURE__ */ new Set([
-  "--filter",
-  "-F",
-  "--dir",
-  "-C",
-  "--prefix",
-  "--workspace",
-  "-w"
-]);
-var stripVersion = (w) => w.replace(/@[^/@]*$/, "");
-function checkRunnerTarget(args) {
-  const notLiteral = "a package runner with a target that is not literal is not allowed";
-  let mayBeValue = false;
-  for (let k = 0; k < args.length; k++) {
-    const a = args[k];
-    if (unresolvedWord(a)) deny(notLiteral);
-    if (a === "--") {
-      const t = args[k + 1];
-      if (t !== void 0 && unresolvedWord(t)) deny(notLiteral);
-      if (t !== void 0 && isStudioBinary(stripVersion(t))) deny(CREW_NO_STUDIO);
-      return;
-    }
-    if (a === "-c" || a === "--call" || a.startsWith("--call=")) {
-      deny("a package runner with a command string is not allowed");
-    }
-    if (isStudioBinary(stripVersion(a)) || /studio/i.test(a) && a.startsWith("-"))
-      deny(CREW_NO_STUDIO);
-    if (a.startsWith("-")) {
-      mayBeValue = !a.includes("=") && !RUNNER_FLAGS.has(a);
-      continue;
-    }
-    if (!mayBeValue) return;
-    mayBeValue = false;
-  }
-}
 function checkPackageRunner(name, args) {
-  if (name === "npx" || name === "pnpx" || name === "bunx") {
-    checkRunnerTarget(args);
-    return;
-  }
+  const deniedRunner = () => deny(`${name} is a package runner and is not allowed`);
+  if (name === "npx" || name === "pnpx" || name === "bunx" || name === "corepack") deniedRunner();
+  if (name === "bun" && args[0] === "x") deniedRunner();
   if (name !== "npm" && name !== "pnpm" && name !== "yarn") return;
-  let k = 0;
-  while (k < args.length && args[k].startsWith("-")) {
-    k += RUNNER_VALUE_OPTIONS.has(args[k]) ? 2 : 1;
+  if (args.some((a) => a === "--shell-mode" || a.startsWith("--shell-mode="))) {
+    deny(`${name} --shell-mode is not allowed`);
   }
-  const sub = args[k];
-  if (sub === void 0) return;
-  if (unresolvedWord(sub)) deny("a package manager subcommand that is not literal is not allowed");
-  const rest = args.slice(k + 1);
-  if (sub === "exec" || sub === "dlx" || sub === "x") checkRunnerTarget(rest);
-  else if (sub === "run" || sub === "run-script") {
-    if (name !== "npm") checkRunnerTarget(rest.filter((a) => a !== "--"));
-  } else if (name === "yarn" && isStudioBinary(stripVersion(sub))) deny(CREW_NO_STUDIO);
+  const own = args.indexOf("--");
+  const before = own === -1 ? args : args.slice(0, own);
+  if (before.some((a) => a === "exec" || a === "dlx")) deniedRunner();
 }
 function checkWords(env, words, state) {
   if (words.length === 0) return;

@@ -17,13 +17,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
-- The crew guard denies `studio` whatever the arguments, also through `node`, and denies `node` with
-  a script argument that is not literal, and setting or unsetting `STUDIO_*` variables. Before, `$(...)`,
-  `$VAR` or a glob got past the check of owner-only subcommands. `node app.js pause` and
-  `npm run resume` are no longer denied.
-- The crew guard also denies `script`, `flock`, `watch`, `npx`/`pnpm exec`/`pnpm dlx`/`yarn`/`npm exec`
-  when the target is `studio` or not literal, and setting `NODE_OPTIONS`. `npx vitest`, `pnpm test`
-  and `npm run resume` stay allowed.
+- The crew guard denies running `studio` directly, `node` without a literal script file, and setting
+  or unsetting `STUDIO_*`, `NODE_OPTIONS`, `NODE_PATH`, `npm_config_*`, `PNPM_*`, `YARN_*` and
+  `COREPACK_*` (any case). It also denies `script`, `flock` and `watch`.
+- Package runners follow one simple rule: `npx`, `pnpx`, `bunx`, `corepack`, `bun x`, `npm exec`,
+  `pnpm exec`, `pnpm dlx`, `yarn dlx`, `yarn exec` and `--shell-mode` are denied; everything else in
+  npm, pnpm and yarn passes (`pnpm test`, `npm run resume`, `yarn build`, `yarn studio`).
+- The guard does not contain a malicious crew: `package.json` scripts can run anything. The boundary
+  is the sandbox, the token and branch protection; owner-only commands need a terminal.
 - Notifications stop at the first failing send in a run (one error, the rest is retried next run), and
   a `notify.lock` keeps overlapping `studio state` runs from sending twice or losing keys.
 - `studio state` still writes `state.json` when crew records of another project cannot be read; it

@@ -703,51 +703,55 @@ describe('round 1 regressions', () => {
     ]);
   });
 
-  it('I5i package runners are denied for studio or a non-literal target', () => {
+  it('I5i package runners are denied outright', () => {
     denies([
-      'npx studio pause',
-      'npx -y studio pause',
-      'npx studio@1.0.0 pause',
-      'npx --no-install studio',
-      'npx -c "studio pause"',
-      'npx $X',
-      'npx "$(which studio)"',
-      'pnpm exec studio pause',
-      'pnpm --filter app exec studio pause',
-      'pnpm exec $X',
-      'pnpm dlx studio',
-      'pnpm dlx $X',
-      'yarn studio',
-      'yarn exec studio pause',
-      'yarn dlx studio',
-      'yarn run studio',
-      'npm exec studio pause',
+      'npx vitest',
+      'pnpx vitest',
+      'bunx vitest',
+      'corepack enable',
+      'corepack pnpm test',
+      'bun x vitest',
+      'npm exec vitest',
       'npm exec -- studio pause',
-      'npm exec $X',
-      'npm x studio',
-      'pnpm $X studio',
+      'pnpm exec vitest',
+      'pnpm --filter app exec vitest',
+      'pnpm dlx cowsay hi',
+      'yarn dlx cowsay',
+      'yarn exec vitest',
+      'npm test --shell-mode',
+      'pnpm run lint --shell-mode=true',
+      'yarn build --shell-mode',
     ]);
   });
 
-  it('I5j ordinary package runner commands are allowed', () => {
+  it('I5j other npm, pnpm and yarn commands pass', () => {
     for (const c of [
-      'npx vitest',
-      'npx -y vitest run test/guard.test.ts',
-      'npx tsc --noEmit',
-      'pnpm exec vitest',
-      'pnpm exec vitest run test/studio.test.ts',
       'pnpm test',
       'pnpm test "$X"',
       'pnpm run lint',
-      'pnpm dlx cowsay hi',
+      'pnpm install',
       'yarn test',
-      'yarn exec vitest',
-      'npm exec vitest',
+      'yarn build',
+      'yarn studio',
       'npm run resume',
       'npm test',
+      'bun test',
     ]) {
       expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
     }
+  });
+
+  it('I5j2 package manager variables cannot be set', () => {
+    denies([
+      'npm_config_script_shell=/tmp/x pnpm test',
+      'NPM_CONFIG_SCRIPT_SHELL=/tmp/x pnpm test',
+      'export PNPM_HOME=/tmp/x',
+      'YARN_RC_FILENAME=x yarn build',
+      'pnpm_config_x=1 pnpm test',
+      'COREPACK_HOME=/tmp/x pnpm test',
+      'NODE_PATH=/tmp/x node a.js',
+      'node_path=/tmp/x node a.js',
+    ]);
   });
 
   it('I5k NODE_OPTIONS cannot be set', () => {

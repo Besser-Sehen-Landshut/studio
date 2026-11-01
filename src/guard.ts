@@ -626,7 +626,7 @@ function assignmentName(w: string): string | undefined {
   return name;
 }
 const SENSITIVE_VAR =
-  /^(STUDIO_|NODE_OPTIONS$|GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/;
+  /^(STUDIO_|NODE_OPTIONS$|NODE_PATH$|NPM_CONFIG_|PNPM_|YARN_|COREPACK_|GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/i;
 
 const unresolved = (w: string): boolean => w.includes(SUBST) || w.includes('$') || w.includes('`');
 /** A word whose real value depends on the shell at run time (variables, substitutions, globs). */
@@ -1185,73 +1185,22 @@ function checkNode(args: string[]): void {
   if (!args.some((a) => NODE_INFO_FLAGS.has(a))) deny(noScript);
 }
 
-/** Options of package runners that take no value; any other option may take the next word. */
-const RUNNER_FLAGS = new Set([
-  '-y',
-  '--yes',
-  '--no',
-  '--no-install',
-  '-q',
-  '--quiet',
-  '--ignore-existing',
-]);
-const RUNNER_VALUE_OPTIONS = new Set([
-  '--filter',
-  '-F',
-  '--dir',
-  '-C',
-  '--prefix',
-  '--workspace',
-  '-w',
-]);
-const stripVersion = (w: string): string => w.replace(/@[^/@]*$/, '');
-
-/** The word that follows the runner subcommand must be a literal and must not be the studio binary. */
-function checkRunnerTarget(args: string[]): void {
-  const notLiteral = 'a package runner with a target that is not literal is not allowed';
-  let mayBeValue = false;
-  for (let k = 0; k < args.length; k++) {
-    const a = args[k] as string;
-    if (unresolvedWord(a)) deny(notLiteral);
-    if (a === '--') {
-      const t = args[k + 1];
-      if (t !== undefined && unresolvedWord(t)) deny(notLiteral);
-      if (t !== undefined && isStudioBinary(stripVersion(t))) deny(CREW_NO_STUDIO);
-      return;
-    }
-    if (a === '-c' || a === '--call' || a.startsWith('--call=')) {
-      deny('a package runner with a command string is not allowed');
-    }
-    if (isStudioBinary(stripVersion(a)) || (/studio/i.test(a) && a.startsWith('-')))
-      deny(CREW_NO_STUDIO);
-    if (a.startsWith('-')) {
-      mayBeValue = !a.includes('=') && !RUNNER_FLAGS.has(a);
-      continue;
-    }
-    if (!mayBeValue) return;
-    mayBeValue = false;
-  }
-}
-
-/** npx-like tools and the exec/dlx/run forms of npm, pnpm and yarn. */
+/**
+ * One simple rule for package runners: tools that fetch and run a package, and `--shell-mode`, are
+ * denied. Everything else in npm, pnpm and yarn passes; the guard does not contain a malicious crew
+ * (package.json scripts run anything), the sandbox does.
+ */
 function checkPackageRunner(name: string, args: string[]): void {
-  if (name === 'npx' || name === 'pnpx' || name === 'bunx') {
-    checkRunnerTarget(args);
-    return;
-  }
+  const deniedRunner = (): never => deny(`${name} is a package runner and is not allowed`);
+  if (name === 'npx' || name === 'pnpx' || name === 'bunx' || name === 'corepack') deniedRunner();
+  if (name === 'bun' && args[0] === 'x') deniedRunner();
   if (name !== 'npm' && name !== 'pnpm' && name !== 'yarn') return;
-  let k = 0;
-  while (k < args.length && (args[k] as string).startsWith('-')) {
-    k += RUNNER_VALUE_OPTIONS.has(args[k] as string) ? 2 : 1;
+  if (args.some((a) => a === '--shell-mode' || a.startsWith('--shell-mode='))) {
+    deny(`${name} --shell-mode is not allowed`);
   }
-  const sub = args[k];
-  if (sub === undefined) return;
-  if (unresolvedWord(sub)) deny('a package manager subcommand that is not literal is not allowed');
-  const rest = args.slice(k + 1);
-  if (sub === 'exec' || sub === 'dlx' || sub === 'x') checkRunnerTarget(rest);
-  else if (sub === 'run' || sub === 'run-script') {
-    if (name !== 'npm') checkRunnerTarget(rest.filter((a) => a !== '--'));
-  } else if (name === 'yarn' && isStudioBinary(stripVersion(sub))) deny(CREW_NO_STUDIO);
+  const own = args.indexOf('--');
+  const before = own === -1 ? args : args.slice(0, own);
+  if (before.some((a) => a === 'exec' || a === 'dlx')) deniedRunner();
 }
 
 function checkWords(env: Env, words: string[], state: State): void {
