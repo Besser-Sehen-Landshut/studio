@@ -28029,12 +28029,20 @@ async function selfHostedBusy(config2, gh) {
   const re = pattern === void 0 ? void 0 : new RegExp(pattern);
   const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ);
   let busy = 0;
+  let matching = 0;
   for (const line of out.split("\n")) {
     if (line.trim() === "") continue;
     const m = RUNNER_LINE.exec(line);
     if (!m) throw new Error(`unparsable runner line: ${line}`);
     const [, name = "", status, isBusy] = m;
-    if (status === "online" && isBusy === "true" && (re === void 0 || re.test(name))) busy++;
+    if (re !== void 0 && !re.test(name)) continue;
+    matching++;
+    if (status === "online" && isBusy === "true") busy++;
+  }
+  if (matching === 0) {
+    throw new Error(
+      pattern === void 0 ? `no organisation runner found for ${org}; capacity reads organisation runners only` : `no organisation runner of ${org} matches ${pattern}; capacity reads organisation runners only`
+    );
   }
   return busy;
 }
@@ -28586,13 +28594,23 @@ var TAIL_BYTES = 256 * 1024;
 var HEAD_BYTES = 1024 * 1024;
 var LOCK_STALE_MS = 5 * 6e4;
 var MAX_RESET_CHARS = 100;
-var LIMIT_TEXT = /^You['’]ve hit your (session|weekly) limit(?:\s*·\s*resets\s+(\S.*?))?\s*$/;
+var LIMIT_HEAD = /^You['’]ve hit your (?:([\p{L}\p{N}.-]+(?: [\p{L}\p{N}.-]+){0,4}) )?limit$/u;
+var RESET_SEGMENT = /^resets\s+(\S.*)$/u;
+var SEGMENT = /^.+$/u;
 function matchLimitText(text) {
   if (typeof text !== "string") return void 0;
-  const m = LIMIT_TEXT.exec(text);
+  const [head = "", ...segments] = text.split("\xB7");
+  const m = LIMIT_HEAD.exec(head.trimEnd());
   if (!m) return void 0;
-  const reset2 = m[2]?.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_RESET_CHARS);
-  return { kind: m[1], ...reset2 ? { resetsAt: reset2 } : {} };
+  let reset2;
+  for (const raw of segments) {
+    const segment = raw.trim();
+    if (!SEGMENT.test(segment)) return void 0;
+    reset2 ??= RESET_SEGMENT.exec(segment)?.[1];
+  }
+  const kind = m[1] === "weekly" ? "weekly" : "session";
+  const resetsAt = reset2?.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_RESET_CHARS);
+  return { kind, ...resetsAt ? { resetsAt } : {} };
 }
 var isObject2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 function detectLimit(logLine2) {
@@ -28939,13 +28957,17 @@ function checkProviderConfigDir(dir, owner) {
   if (st.uid !== uidOf(owner)) return fail("config dir must be owned by the current user");
   return real;
 }
-function apiBillingProblem(file2, allowed = false, noLinks = false) {
+function readSettings(file2, plainOnly) {
   let text;
   try {
-    if (noLinks && lstatSync4(file2).isSymbolicLink()) return `${file2} is a symlink`;
+    if (plainOnly) {
+      const st = lstatSync4(file2);
+      if (st.isSymbolicLink()) return { problem: `${file2} is a symlink` };
+      if (!st.isFile()) return { problem: `${file2} is not a regular file` };
+    }
     text = readFileSync6(file2, "utf8");
   } catch (e) {
-    return e.code === "ENOENT" ? void 0 : `${file2} cannot be read`;
+    return e.code === "ENOENT" ? {} : { problem: `${file2} cannot be read` };
   }
   let raw;
   try {
@@ -28954,11 +28976,12 @@ function apiBillingProblem(file2, allowed = false, noLinks = false) {
     raw = void 0;
   }
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    return `${file2} cannot be parsed`;
+    return { problem: `${file2} cannot be parsed` };
   }
-  if (allowed) return void 0;
+  return { settings: raw };
+}
+function billingProblem(file2, s) {
   const hint = "refusing API billing (set allow_api_billing: true in the owner config to allow it)";
-  const s = raw;
   if (s.apiKeyHelper !== void 0) return `${file2} sets apiKeyHelper; ${hint}`;
   if (s.env !== null && typeof s.env === "object") {
     for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) {
@@ -28966,6 +28989,44 @@ function apiBillingProblem(file2, allowed = false, noLinks = false) {
     }
   }
   return void 0;
+}
+function apiBillingProblem(file2, allowed = false) {
+  const { settings, problem } = readSettings(file2, false);
+  if (problem !== void 0) return problem;
+  return settings === void 0 || allowed ? void 0 : billingProblem(file2, settings);
+}
+var REDIRECT_ENV = /* @__PURE__ */ new Set([
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_BEDROCK_BASE_URL",
+  "ANTHROPIC_VERTEX_BASE_URL",
+  "ANTHROPIC_FOUNDRY_BASE_URL",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NODE_EXTRA_CA_CERTS",
+  "NODE_OPTIONS"
+]);
+function cloneSettingsProblem(file2, allowBilling, reused) {
+  const { settings, problem } = readSettings(file2, true);
+  if (problem !== void 0) return problem;
+  if (settings === void 0) return void 0;
+  if (settings.env !== null && typeof settings.env === "object") {
+    for (const key of Object.keys(settings.env)) {
+      const name = key.toUpperCase();
+      if (REDIRECT_ENV.has(name)) return `${file2} sets env.${name}; refusing to use it`;
+    }
+  }
+  if (reused) {
+    for (const key of ["hooks", "apiKeyHelper"]) {
+      if (settings[key] !== void 0) {
+        return `${file2} sets ${key} in a reused clone; refusing to use it (inspect it, then remove the clone to start over)`;
+      }
+    }
+  }
+  return allowBilling ? void 0 : billingProblem(file2, settings);
 }
 function readCrewTokenFile(owner) {
   const file2 = crewTokenFile(owner);
@@ -29140,13 +29201,16 @@ async function prepareCheckout(stateRoot, projectDir, item, ports) {
   assertStatePath(stateRoot, path10);
   const url2 = await ownerOriginUrl(projectDir, ports);
   if (isLink2(path10)) removeStateEntry(stateRoot, path10);
-  if (cloneBranch(path10) === branch && cloneOriginUrl(path10) === crewOrigin) return { path: path10, branch };
+  if (isReusableClone(path10, item)) return { path: path10, branch };
   removeStateEntry(stateRoot, path10);
   await ports.git.run(clones, ["clone", "--filter=blob:none", url2, path10]);
   chmodSync3(path10, 448);
   await ports.git.run(path10, ["remote", "set-url", "origin", crewOrigin]);
   await ports.git.run(path10, ["checkout", "-b", branch, "origin/main"]);
   return { path: path10, branch };
+}
+function isReusableClone(path10, item) {
+  return !isLink2(path10) && cloneBranch(path10) === `studio/${item.id}` && cloneOriginUrl(path10) === githubHttpsUrl(item.repo);
 }
 async function ownerOriginUrl(projectDir, ports) {
   const url2 = (await ports.git.run(projectDir, ["remote", "get-url", "origin"])).trim();
@@ -29515,9 +29579,10 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     );
   }
   const tokenConfigDir = providerConfigDir === void 0 && oauthToken !== void 0 ? claudeConfigDir : void 0;
+  const reused = isReusableClone(clonePath, item);
   const resumeId = (() => {
     const sessionId = previous?.limit?.sessionId;
-    if (sessionId === void 0) return void 0;
+    if (sessionId === void 0 || !reused) return void 0;
     const sameLabel = (previous?.label ?? DEFAULT_LABEL) === label;
     const sameTokenDir = tokenConfigDir !== void 0 && previous?.tokenConfigDir === tokenConfigDir;
     return sameLabel || sameTokenDir ? sessionId : void 0;
@@ -29529,10 +29594,10 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
   for (const name2 of ["settings.json", "settings.local.json"]) {
-    const problem = apiBillingProblem(
+    const problem = cloneSettingsProblem(
       join6(wt.path, ".claude", name2),
       ownerConfig.allowApiBilling,
-      true
+      reused
     );
     if (problem) throw new Error(problem);
   }
@@ -30396,11 +30461,18 @@ function proposeCi(detect, repoVisibility, current, usage) {
     return { notes, errors: [`cannot read runners: ${detect.error ?? "unknown error"}`] };
   }
   const groups = groupSelfHosted(detect.runners);
-  const group = groups[0];
+  const unused = usage?.githubHosted === true && !usage.selfHosted;
+  const group = unused ? void 0 : groups[0];
   const mode = !group ? "github-hosted" : usage?.githubHosted && usage.selfHosted ? "both" : "self-hosted";
-  if (detect.source === "repo") {
+  if (unused && groups.length > 0) {
+    const count2 = groups.reduce((sum, g) => sum + g.runners.length, 0);
     notes.push(
-      "runners were read from the repository; capacity reads organisation runners only and will count as busy"
+      `${count2} self-hosted runner(s) exist but are not used: all workflows run on GitHub-hosted runners`
+    );
+  }
+  if (detect.source === "repo" && mode !== "github-hosted") {
+    notes.push(
+      "repository-level runners are not supported by capacity: it reads organisation runners only, so it will report fully busy with an error"
     );
   }
   if (mode !== "github-hosted" && repoVisibility === "public") errors.push(PUBLIC_REPO_ERROR);
@@ -30477,9 +30549,7 @@ function resolveRunsOn(value) {
   if (labels.some((l) => l.includes("${{"))) {
     return { kind: "unverifiable", why: "runs-on uses an expression" };
   }
-  if (record2 && "group" in record2) {
-    return { kind: "unverifiable", why: "runner group membership is not checked" };
-  }
+  if (record2 && "group" in record2) return { kind: "set", labels, group: true };
   const [only] = labels;
   if (labels.length === 1 && only !== void 0 && GITHUB_HOSTED.test(only)) {
     return { kind: "hosted" };
@@ -30525,13 +30595,30 @@ function workflowRunnerUsage(files) {
   }
   return usage;
 }
+var GROUP_PREFIX = /^[A-Za-z0-9._-]+$/;
+var EXPRESSION_START = "${{";
+function isExpectedForm(group, expectedGroup) {
+  const at = expectedGroup.indexOf(EXPRESSION_START);
+  if (at < 0) return group === expectedGroup;
+  const suffix = `-${expectedGroup.slice(at)}`;
+  return group.endsWith(suffix) && GROUP_PREFIX.test(group.slice(0, -suffix.length));
+}
+function formOfGroup(expectedGroup) {
+  const at = expectedGroup.indexOf(EXPRESSION_START);
+  return at < 0 ? expectedGroup : `<prefix>-${expectedGroup.slice(at)}`;
+}
+function concurrencyGroup(doc) {
+  const c3 = doc.concurrency;
+  const group = isRecord(c3) ? c3.group : c3;
+  return typeof group === "string" && group.trim() !== "" ? group.trim() : void 0;
+}
 function lintConcurrency(doc, expectedGroup) {
   const c3 = doc.concurrency;
   if (!isRecord(c3)) {
     return "push and pull_request without a workflow-level concurrency group (or not in map form)";
   }
-  if (typeof c3.group !== "string" || c3.group.trim() !== expectedGroup) {
-    return `concurrency.group must be exactly ${clean(expectedGroup)}`;
+  if (typeof c3.group !== "string" || !isExpectedForm(c3.group.trim(), expectedGroup)) {
+    return `concurrency.group must be ${clean(formOfGroup(expectedGroup))}`;
   }
   if (c3["cancel-in-progress"] !== true) return "concurrency.cancel-in-progress must be true";
   return void 0;
@@ -30540,6 +30627,7 @@ function lintWorkflows(files, detect, expectedGroup) {
   const errors = [];
   const warnings = [];
   const online = detect.runners.filter((r) => r.online).map((r) => new Set(r.labels.map((l) => l.toLowerCase())));
+  const byGroup = /* @__PURE__ */ new Map();
   for (const f of files) {
     const path10 = clean(f.path);
     const p = parseWorkflow(f.text);
@@ -30558,6 +30646,7 @@ function lintWorkflows(files, detect, expectedGroup) {
       if (r.kind === "invalid") errors.push(`${where}: ${r.why}`);
       else if (r.kind === "unverifiable") warnings.push(`${where}: cannot verify, ${r.why}`);
       else if (r.kind === "set") {
+        if (r.group) warnings.push(`${where}: cannot verify runner group membership`);
         const shown = r.labels.map(clean).join(", ");
         const want = r.labels.map((l) => l.toLowerCase());
         if (detect.source === "unknown") {
@@ -30573,6 +30662,17 @@ function lintWorkflows(files, detect, expectedGroup) {
     if (t.has("push") && t.has("pull_request")) {
       const problem = lintConcurrency(p.doc, expectedGroup);
       if (problem) errors.push(`${path10}: ${problem}`);
+    }
+    const group = concurrencyGroup(p.doc)?.toLowerCase();
+    if (group !== void 0 && !/github\.(workflow|run_id)/.test(group)) {
+      byGroup.set(group, [...byGroup.get(group) ?? [], path10]);
+    }
+  }
+  for (const [group, paths] of byGroup) {
+    if (paths.length > 1) {
+      errors.push(
+        `${paths.join(" and ")} share the concurrency group ${clean(group)}; groups are repo-wide, so they would cancel each other`
+      );
     }
   }
   return { errors, warnings };

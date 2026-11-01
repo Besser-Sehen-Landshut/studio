@@ -260,7 +260,7 @@ describe('proposeCi', () => {
     const self = { githubHosted: false, selfHosted: true };
     const hosted = { githubHosted: true, selfHosted: false };
     expect(proposeCi(d, 'private', undefined, self).ci?.runners).toBe('self-hosted');
-    expect(proposeCi(d, 'private', undefined, hosted).ci?.runners).toBe('self-hosted');
+    expect(proposeCi(d, 'private', undefined, hosted).ci?.runners).toBe('github-hosted');
     const b = proposeCi(d, 'private', undefined, both);
     expect(b.ci?.runners).toBe('both');
     expect(b.ci?.capacity.total).toBe(4);
@@ -268,9 +268,27 @@ describe('proposeCi', () => {
     expect(proposeCi(d, 'private').ci?.runners).toBe('self-hosted');
   });
 
-  it('notes that a repo-level source is not what capacity reads', () => {
+  it('unused runners with only GitHub-hosted workflows propose github-hosted', () => {
+    const hosted = { githubHosted: true, selfHosted: false };
+    const p = proposeCi(det(pool(4)), 'public', undefined, hosted);
+    expect(p.ci?.runners).toBe('github-hosted');
+    expect(p.ci?.runnerLabels).toEqual([]);
+    expect(p.ci?.runnerNamePattern).toBeUndefined();
+    expect(p.ci?.capacity.total).toBe(20);
+    expect(p.errors).toEqual([]);
+    expect(p.notes.join('\n')).toMatch(/4 self-hosted runner\(s\).*not used/);
+  });
+
+  it('notes that capacity does not support repository-level runners', () => {
     const p = proposeCi(det(pool(2), 'repo'), 'private');
-    expect(p.notes.join('\n')).toMatch(/organi[sz]ation runners only.*busy/);
+    expect(p.ci?.runners).toBe('self-hosted');
+    expect(p.notes.join('\n')).toMatch(/not supported.*organi[sz]ation runners only.*fully busy/);
+  });
+
+  it('has no capacity note for repository runners that stay unused', () => {
+    const hosted = { githubHosted: true, selfHosted: false };
+    const p = proposeCi(det(pool(2), 'repo'), 'private', undefined, hosted);
+    expect(p.notes.join('\n')).not.toMatch(/organi[sz]ation runners only/);
   });
 
   it('keeps provider, rhythm, checkTwiceSeconds, hostLoadMax and further keys from current', () => {

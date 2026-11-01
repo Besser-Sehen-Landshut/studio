@@ -20,19 +20,33 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
 const RUNNER_JQ = '.runners[] | [.name, .status, .busy] | @tsv';
 const RUNNER_LINE = /^(\S+)\t(\S+)\t(true|false)$/;
 
-/** Online, busy runners of the organisation whose name matches the pattern (all when unset). */
+/**
+ * Online, busy runners of the organisation whose name matches the pattern (all when unset). A read
+ * that finds no runner to count says nothing about capacity, so it throws: repository-level runners
+ * are not read here, and an empty list must not look like idle runners.
+ */
 async function selfHostedBusy(config: StudioConfig, gh: Gh): Promise<number> {
   const org = config.primaryRepo.split('/')[0];
   const pattern = config.ci.runnerNamePattern;
   const re = pattern === undefined ? undefined : new RegExp(pattern);
   const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ);
   let busy = 0;
+  let matching = 0;
   for (const line of out.split('\n')) {
     if (line.trim() === '') continue;
     const m = RUNNER_LINE.exec(line);
     if (!m) throw new Error(`unparsable runner line: ${line}`);
     const [, name = '', status, isBusy] = m;
-    if (status === 'online' && isBusy === 'true' && (re === undefined || re.test(name))) busy++;
+    if (re !== undefined && !re.test(name)) continue;
+    matching++;
+    if (status === 'online' && isBusy === 'true') busy++;
+  }
+  if (matching === 0) {
+    throw new Error(
+      pattern === undefined
+        ? `no organisation runner found for ${org}; capacity reads organisation runners only`
+        : `no organisation runner of ${org} matches ${pattern}; capacity reads organisation runners only`,
+    );
   }
   return busy;
 }

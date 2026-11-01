@@ -306,6 +306,28 @@ describe('studio setup ci', () => {
     expect(j.errors[0]).toMatch(/concurrency/);
   });
 
+  it('two workflows with their own prefixes pass, a shared group refuses --write', async () => {
+    const lint = GROUP.replace('ci-', 'lint-');
+    const ok = fixture({
+      workflows: {
+        'a.yml': WORKFLOW('[self-hosted, linux]'),
+        'b.yml': WORKFLOW('[self-hosted, linux]', lint),
+      },
+    });
+    expect(JSON.parse((await cli(ok, 'setup', 'ci', '--json')).out).errors).toEqual([]);
+    const shared = fixture({
+      workflows: {
+        'a.yml': WORKFLOW('[self-hosted, linux]'),
+        'b.yml': WORKFLOW('[self-hosted, linux]'),
+      },
+    });
+    const r = await cli(shared, 'setup', 'ci', '--write', '--json');
+    expect(r.code).toBe(1);
+    const j = JSON.parse(r.out);
+    expect(j.written).toBe(false);
+    expect(j.errors.join('\n')).toMatch(/a\.yml.*b\.yml/);
+  });
+
   it('usage from workflows selects both', async () => {
     const fx = fixture({
       workflows: {

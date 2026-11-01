@@ -53,4 +53,30 @@ describe('README quick start', () => {
     expect(pre).toContain('ANTHROPIC_API_KEY');
     expect(pre).toContain('CLAUDE_CONFIG_DIR');
   });
+
+  const repoFile = (name: string) => readFileSync(join(import.meta.dirname, '..', name), 'utf8');
+
+  it('does not overstate the config dir form of the provider', () => {
+    for (const text of [readme, repoFile('CHANGELOG.md')]) {
+      expect(text).not.toMatch(/CLAUDE_CONFIG_DIR`? \(preferred/);
+      expect(text).toMatch(/verified fallback/);
+      expect(text).toMatch(/not yet been verified with an isolated `?HOME`? on macOS/);
+    }
+  });
+
+  it('says plainly what can reach the crew log', () => {
+    const security = repoFile('SECURITY.md');
+    expect(security).not.toMatch(/never writes a crew credential to [^.]*logs/);
+    expect(security).toMatch(/output of crew commands is logged as is/i);
+    expect(security).toMatch(/0700/);
+  });
+
+  it('states the limits of setup ci and the token check', () => {
+    expect(readme).not.toContain('Block fork pull request workflows first');
+    expect(readme).toMatch(/at your own risk/);
+    expect(readme).toMatch(/comments inside a replaced list are lost/);
+    expect(readme).toMatch(/does not prove the token's scope/);
+    expect(readme).toMatch(/`githubHostedBusy` counts all runs of the repository/);
+    expect(readme).toMatch(/restricted to other repositories by runner groups are counted/);
+  });
 });

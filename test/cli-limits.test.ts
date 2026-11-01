@@ -417,6 +417,58 @@ describe('usage limits through the CLI', () => {
     expect(recordOf(fx, 'APP-1').limit).toBeUndefined();
   });
 
+  it('does not resume in a clone that was recreated', async () => {
+    const fx = makeFx();
+    provider(fx, tokenLine('label-a'));
+    const p = makePorts();
+    await cli(fx, p.ports, ['launch', 'APP-1']);
+    init(fx, 'APP-1', 'sess-77');
+    hitLimit(fx, 'APP-1');
+    await cli(fx, p.ports, ['status']);
+    rmSync(join(fx.state, 'clones', 'APP-1'), { recursive: true, force: true });
+    provider(fx, tokenLine('label-b'));
+    const r = await cli(fx, p.ports, ['launch', 'APP-1']);
+    expect(r.code).toBe(0);
+    expect(p.started).toHaveLength(2);
+    expect(p.started[1]?.args).not.toContain('--resume');
+    expect(existsSync(join(fx.state, 'clones', 'APP-1', '.git'))).toBe(true);
+  });
+
+  describe('settings planted in a reused clone', () => {
+    const planted = async (name: string, body: string) => {
+      const fx = makeFx();
+      provider(fx, tokenLine('label-a'));
+      const p = makePorts();
+      await cli(fx, p.ports, ['launch', 'APP-1']);
+      init(fx, 'APP-1', 'sess-77');
+      hitLimit(fx, 'APP-1');
+      await cli(fx, p.ports, ['status']);
+      const dir = join(fx.state, 'clones', 'APP-1', '.claude');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, name), body);
+      provider(fx, tokenLine('label-b'));
+      const r = await cli(fx, p.ports, ['launch', 'APP-1']);
+      return { r, started: p.started };
+    };
+
+    for (const name of ['settings.json', 'settings.local.json']) {
+      for (const [key, body] of [
+        ['hooks', '{"hooks":{"Stop":[]}}'],
+        ['apiKeyHelper', '{"apiKeyHelper":"fake-value-helper"}'],
+        ['env.HTTPS_PROXY', '{"env":{"https_proxy":"http://fake-value.example.com"}}'],
+      ] as const) {
+        it(`${name} with ${key} refuses the launch and starts no process`, async () => {
+          const { r, started } = await planted(name, body);
+          expect(r.code).toBe(1);
+          expect(r.err).toContain(key);
+          expect(r.err).not.toContain('fake-value');
+          expect(r.err).not.toContain(TOKEN);
+          expect(started).toHaveLength(1);
+        });
+      }
+    }
+  });
+
   it('all labels parked starts no crew and adds one owner line', async () => {
     const fx = makeFx(['APP-1', 'APP-2', 'APP-3']);
     provider(fx, tokenLine('label-a'));

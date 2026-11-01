@@ -36,14 +36,27 @@ const HEAD_BYTES = 1024 * 1024;
 const LOCK_STALE_MS = 5 * 60_000;
 const MAX_RESET_CHARS = 100;
 
-const LIMIT_TEXT = /^You['’]ve hit your (session|weekly) limit(?:\s*·\s*resets\s+(\S.*?))?\s*$/;
+/** `You've hit your <words> limit`: "limit" alone, or up to five words before it. */
+const LIMIT_HEAD = /^You['’]ve hit your (?:([\p{L}\p{N}.-]+(?: [\p{L}\p{N}.-]+){0,4}) )?limit$/u;
+const RESET_SEGMENT = /^resets\s+(\S.*)$/u;
+/** One line of text; `.` stops at every line terminator. */
+const SEGMENT = /^.+$/u;
 
+/** The whole string must be the head plus optional ` · ` segments; the first `resets …` counts. */
 function matchLimitText(text: unknown): DetectedLimit | undefined {
   if (typeof text !== 'string') return undefined;
-  const m = LIMIT_TEXT.exec(text);
+  const [head = '', ...segments] = text.split('·');
+  const m = LIMIT_HEAD.exec(head.trimEnd());
   if (!m) return undefined;
-  const reset = m[2]?.replace(/\p{Cc}/gu, ' ').slice(0, MAX_RESET_CHARS);
-  return { kind: m[1] as LimitKind, ...(reset ? { resetsAt: reset } : {}) };
+  let reset: string | undefined;
+  for (const raw of segments) {
+    const segment = raw.trim();
+    if (!SEGMENT.test(segment)) return undefined;
+    reset ??= RESET_SEGMENT.exec(segment)?.[1];
+  }
+  const kind: LimitKind = m[1] === 'weekly' ? 'weekly' : 'session';
+  const resetsAt = reset?.replace(/\p{Cc}/gu, ' ').slice(0, MAX_RESET_CHARS);
+  return { kind, ...(resetsAt ? { resetsAt } : {}) };
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> =>

@@ -16,6 +16,7 @@ import {
   allParkedLine,
   apiBillingProblem,
   checkProviderConfigDir,
+  cloneSettingsProblem,
   readCrewTokenFile,
   runCredentialProvider,
 } from './credentials.js';
@@ -127,7 +128,7 @@ export async function prepareCheckout(
   if (isLink(path)) removeStateEntry(stateRoot, path);
   // Reuse only a clone on the item branch whose `.git/config` (read as a file) names the item
   // repo's HTTPS origin; anything else is removed and cloned again.
-  if (cloneBranch(path) === branch && cloneOriginUrl(path) === crewOrigin) return { path, branch };
+  if (isReusableClone(path, item)) return { path, branch };
   removeStateEntry(stateRoot, path);
   await ports.git.run(clones, ['clone', '--filter=blob:none', url, path]);
   chmodSync(path, 0o700);
@@ -135,6 +136,15 @@ export async function prepareCheckout(
   await ports.git.run(path, ['remote', 'set-url', 'origin', crewOrigin]);
   await ports.git.run(path, ['checkout', '-b', branch, 'origin/main']);
   return { path, branch };
+}
+
+/** Whether `prepareCheckout` would keep what lies at `path` instead of cloning again. */
+function isReusableClone(path: string, item: WorkItem): boolean {
+  return (
+    !isLink(path) &&
+    cloneBranch(path) === `studio/${item.id}` &&
+    cloneOriginUrl(path) === githubHttpsUrl(item.repo)
+  );
 }
 
 /** Origin URL of the owner's repository (git runs in the owner repo, never in a crew clone). */
@@ -637,9 +647,11 @@ export async function launchCrew(
   }
   const tokenConfigDir =
     providerConfigDir === undefined && oauthToken !== undefined ? claudeConfigDir : undefined;
+  // A clone that is about to be recreated has no session to go back to, and no crew has run in it.
+  const reused = isReusableClone(clonePath, item);
   const resumeId = (() => {
     const sessionId = previous?.limit?.sessionId;
-    if (sessionId === undefined) return undefined;
+    if (sessionId === undefined || !reused) return undefined;
     const sameLabel = (previous?.label ?? DEFAULT_LABEL) === label;
     const sameTokenDir =
       tokenConfigDir !== undefined && previous?.tokenConfigDir === tokenConfigDir;
@@ -654,10 +666,10 @@ export async function launchCrew(
   removeOldReport(stateRoot, wt.path, item.id);
   // The clone's project settings would apply to the crew as well. Read as plain files (rule D4).
   for (const name of ['settings.json', 'settings.local.json']) {
-    const problem = apiBillingProblem(
+    const problem = cloneSettingsProblem(
       join(wt.path, '.claude', name),
       ownerConfig.allowApiBilling,
-      true,
+      reused,
     );
     if (problem) throw new Error(problem);
   }

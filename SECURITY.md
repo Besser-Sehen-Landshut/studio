@@ -8,7 +8,9 @@ The crew guard is a convenience layer, not a security boundary. The boundary is 
 
 ## Crew credentials
 
-Studio never writes a crew credential to state, board, brief, settings, logs or errors, and never prints it. A provider's token reaches only the environment of the crew process, as does the crew's GitHub token. That means crew shell commands can see both tokens in their environment: keep the GitHub token least-privilege, and treat a crew as able to use its model credential while it runs.
+Studio itself writes no crew credential to state, board, brief, settings, logs or errors, and never prints it. Output of crew commands is logged as is, so a crew printing its environment would put its credentials in the crew log, which lies in a state directory with mode 0700. A provider's token reaches only the environment of the crew process, as does the crew's GitHub token. That means crew shell commands can see both tokens in their environment: keep the GitHub token least-privilege, and treat a crew as able to use its model credential while it runs.
+
+A clone's Claude settings apply to the Claude process, which runs outside the sandbox. A launch therefore refuses clone settings whose `env` would redirect that process (endpoints, proxies, `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS`), and on a reused clone also `hooks` and `apiKeyHelper`, so that an earlier crew cannot capture a newly issued token this way.
 
 The owner config directory, including the `crew-token` file, is denied to crew shell commands and file tools, also when `XDG_CONFIG_HOME` lies outside the home. When a provider returns a `CLAUDE_CONFIG_DIR`, the sandbox allows reading exactly that directory, because the session needs it. The sandbox boundary then does not protect that login from crew shell commands; the guard denies it to the crew's file tools only as a second net. Other logins below the owner config directory stay denied.
 

@@ -37,6 +37,57 @@ describe('detectLimit', () => {
     expect(detectLimit("You've hit your session limit")).toEqual({ kind: 'session' });
   });
 
+  it('matches the other wordings; only weekly maps to weekly', () => {
+    for (const words of ['limit', 'usage limit', '5-hour limit', 'Opus limit', 'Sonnet limit']) {
+      expect(detectLimit(`You've hit your ${words}`), words).toEqual({ kind: 'session' });
+      expect(detectLimit(`You’ve hit your ${words} · resets 3pm`), words).toEqual({
+        kind: 'session',
+        resetsAt: '3pm',
+      });
+    }
+  });
+
+  it('takes other segments before or after the reset', () => {
+    expect(detectLimit("You've hit your limit · progress saved")).toEqual({ kind: 'session' });
+    expect(detectLimit("You've hit your weekly limit · resets 3pm · progress saved")).toEqual({
+      kind: 'weekly',
+      resetsAt: '3pm',
+    });
+    expect(detectLimit("You've hit your Opus limit · progress saved · resets 3pm")).toEqual({
+      kind: 'session',
+      resetsAt: '3pm',
+    });
+  });
+
+  it('still matches only the whole string', () => {
+    for (const text of [
+      "You've hit your limit of patience",
+      "You've hit your limit.",
+      "You've hit your limit ·",
+      "You've hit your limit · · resets 3pm",
+      "You've hit your limit · resets 3pm\nand more",
+      "You've hit your",
+      "You've hit your  limit",
+      "you've hit your limit",
+      "You've hit your weekly limit today · resets 3pm",
+    ]) {
+      expect(
+        detectLimit(JSON.stringify({ type: 'result', is_error: true, result: text })),
+        text,
+      ).toBeUndefined();
+    }
+  });
+
+  it('new wordings stay event-aware: a model answer or tool output does not count', () => {
+    const text = "You've hit your usage limit";
+    expect(detectLimit(JSON.stringify({ type: 'result', result: text }))).toBeUndefined();
+    expect(detectLimit(JSON.stringify({ type: 'user', text }))).toBeUndefined();
+    expect(detectLimit(`tool said: ${text}`)).toBeUndefined();
+    expect(detectLimit(JSON.stringify({ type: 'result', is_error: true, result: text }))).toEqual({
+      kind: 'session',
+    });
+  });
+
   it('detectLimit parses rate_limit retry event', () => {
     const line = JSON.stringify({ type: 'system', subtype: 'api_retry', error: 'rate_limit' });
     expect(detectLimit(line)).toEqual({ kind: 'session' });

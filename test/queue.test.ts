@@ -86,7 +86,9 @@ function fakeGh(rules: Rule[], busy = { n: 0 }) {
     async api(path) {
       calls.push(`api ${path}`);
       if (path.includes('/actions/runners')) {
-        return Array.from({ length: busy.n }, (_, i) => `pool-${i}\tonline\ttrue`).join('\n');
+        const rows = Array.from({ length: busy.n }, (_, i) => `pool-${i}\tonline\ttrue`);
+        // An offline runner keeps the list non-empty: an empty list fails capacity closed.
+        return [...rows, 'pool-99\toffline\tfalse'].join('\n');
       }
       throw new Error(`unexpected api ${path}`);
     },

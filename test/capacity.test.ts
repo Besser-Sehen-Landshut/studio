@@ -74,6 +74,32 @@ describe('readCapacity', () => {
     expect(cap.ciBusy).toBe(2);
   });
 
+  it('a successful read with no runners fails closed and says why', async () => {
+    const gh = fakeGh(() => '');
+    const cap = await readCapacity(mkConfig(), { gh, host: host(0) }, opts);
+    expect(cap).toMatchObject({ ciBusy: 8, ciTotal: 8, ok: false });
+    expect(cap.error).toMatch(/no organisation runner/);
+    const none = mkConfig({ runnerNamePattern: undefined });
+    expect((await readCapacity(none, { gh, host: host(0) }, opts)).ok).toBe(false);
+  });
+
+  it('runners that all miss the pattern fail closed, in mode both too', async () => {
+    const gh = fakeGh((path) =>
+      path.includes('/runs') ? '0' : tsv([['other-1', 'online', true]]),
+    );
+    const cap = await readCapacity(mkConfig(), { gh, host: host(0) }, opts);
+    expect(cap).toMatchObject({ ciBusy: 8, ok: false });
+    expect(cap.error).toContain('^pool-[0-9]');
+    const both = await readCapacity(mkConfig({ runners: 'both' }), { gh, host: host(0) }, opts);
+    expect(both).toMatchObject({ ciBusy: 8, ok: false });
+  });
+
+  it('idle or offline runners that match still count as a good read', async () => {
+    const gh = fakeGh(() => tsv([['pool-1', 'offline', false]]));
+    const cap = await readCapacity(mkConfig(), { gh, host: host(0) }, opts);
+    expect(cap).toEqual({ ciBusy: 0, ciTotal: 8, hostLoad: 0, ok: true });
+  });
+
   it('api error counts as busy (ok=false, ciBusy=total)', async () => {
     const gh = fakeGh(() => {
       throw new Error('boom');
@@ -97,7 +123,7 @@ describe('readCapacity', () => {
   });
 
   it('host load above max → not ok', async () => {
-    const gh = fakeGh(() => '');
+    const gh = fakeGh(() => busyRows(1));
     const cfg = mkConfig({
       capacity: { total: 8, mergeMaxBusy: 5, checkTwiceSeconds: 30, hostLoadMax: 4 },
     });
@@ -156,8 +182,9 @@ describe('readCapacity', () => {
 
   it('both: hosted busy above github_hosted_limit is not ok, equal is ok', async () => {
     const cfg = mkConfig({ runners: 'both', githubHostedLimit: 5 });
-    const at = fakeGh((p) => (p.startsWith('/orgs/') ? '' : p.includes('queued') ? '2' : '3'));
-    const over = fakeGh((p) => (p.startsWith('/orgs/') ? '' : p.includes('queued') ? '3' : '3'));
+    const idle = tsv([['pool-1', 'online', false]]);
+    const at = fakeGh((p) => (p.startsWith('/orgs/') ? idle : p.includes('queued') ? '2' : '3'));
+    const over = fakeGh((p) => (p.startsWith('/orgs/') ? idle : '3'));
     const ok = await readCapacity(cfg, { gh: at, host: host(0) }, opts);
     expect(ok).toMatchObject({ ok: true, githubHostedBusy: 5, githubHostedLimit: 5 });
     expect(ok.warning).toBeUndefined();
@@ -178,7 +205,7 @@ describe('readCapacity', () => {
   });
 
   it('sharedHost without hostLoadMax uses the core count', async () => {
-    const gh = fakeGh(() => '');
+    const gh = fakeGh(() => busyRows(1));
     const cfg = mkConfig({ sharedHost: true });
     expect((await readCapacity(cfg, { gh, host: host(4, 4) }, opts)).ok).toBe(true);
     expect((await readCapacity(cfg, { gh, host: host(4.1, 4) }, opts)).ok).toBe(false);
@@ -186,7 +213,7 @@ describe('readCapacity', () => {
   });
 
   it('sharedHost with an invalid core count is not ok', async () => {
-    const gh = fakeGh(() => '');
+    const gh = fakeGh(() => busyRows(1));
     const cfg = mkConfig({ sharedHost: true });
     for (const n of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect((await readCapacity(cfg, { gh, host: host(0, n) }, opts)).ok).toBe(false);
@@ -194,7 +221,7 @@ describe('readCapacity', () => {
   });
 
   it('explicit hostLoadMax wins over the core count, with or without sharedHost', async () => {
-    const gh = fakeGh(() => '');
+    const gh = fakeGh(() => busyRows(1));
     const cap = { total: 8, mergeMaxBusy: 5, checkTwiceSeconds: 30, hostLoadMax: 2 };
     const shared = mkConfig({ sharedHost: true, capacity: cap });
     const plain = mkConfig({ capacity: cap });
@@ -204,7 +231,7 @@ describe('readCapacity', () => {
   });
 
   it('without sharedHost the core count is ignored', async () => {
-    const gh = fakeGh(() => '');
+    const gh = fakeGh(() => busyRows(1));
     expect((await readCapacity(mkConfig(), { gh, host: host(50, 0) }, opts)).ok).toBe(true);
   });
 });

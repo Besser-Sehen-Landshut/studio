@@ -131,7 +131,8 @@ const mergeMaxBusyFor = (total: number): number => Math.max(1, Math.round(total 
 
 /**
  * Proposes the `ci:` block from detected runners. `usage` says which runner kinds the workflows
- * use; without it a self-hosted group means `self-hosted`. Unknown runners propose nothing.
+ * use; without it a self-hosted group means `self-hosted`. Self-hosted runners that only
+ * GitHub-hosted workflows ignore stay out of the proposal. Unknown runners propose nothing.
  */
 export function proposeCi(
   detect: Detected,
@@ -145,16 +146,23 @@ export function proposeCi(
     return { notes, errors: [`cannot read runners: ${detect.error ?? 'unknown error'}`] };
   }
   const groups = groupSelfHosted(detect.runners);
-  const group = groups[0];
+  const unused = usage?.githubHosted === true && !usage.selfHosted;
+  const group = unused ? undefined : groups[0];
   const mode: CiConfig['runners'] = !group
     ? 'github-hosted'
     : usage?.githubHosted && usage.selfHosted
       ? 'both'
       : 'self-hosted';
 
-  if (detect.source === 'repo') {
+  if (unused && groups.length > 0) {
+    const count = groups.reduce((sum, g) => sum + g.runners.length, 0);
     notes.push(
-      'runners were read from the repository; capacity reads organisation runners only and will count as busy',
+      `${count} self-hosted runner(s) exist but are not used: all workflows run on GitHub-hosted runners`,
+    );
+  }
+  if (detect.source === 'repo' && mode !== 'github-hosted') {
+    notes.push(
+      'repository-level runners are not supported by capacity: it reads organisation runners only, so it will report fully busy with an error',
     );
   }
   if (mode !== 'github-hosted' && repoVisibility === 'public') errors.push(PUBLIC_REPO_ERROR);
@@ -229,7 +237,7 @@ function clean(text: unknown): string {
 
 type RunsOn =
   | { kind: 'hosted' }
-  | { kind: 'set'; labels: string[] }
+  | { kind: 'set'; labels: string[]; group?: true }
   | { kind: 'unverifiable'; why: string }
   | { kind: 'invalid'; why: string };
 
@@ -256,9 +264,7 @@ function resolveRunsOn(value: unknown): RunsOn {
   if (labels.some((l) => l.includes('${{'))) {
     return { kind: 'unverifiable', why: 'runs-on uses an expression' };
   }
-  if (record && 'group' in record) {
-    return { kind: 'unverifiable', why: 'runner group membership is not checked' };
-  }
+  if (record && 'group' in record) return { kind: 'set', labels, group: true };
   const [only] = labels;
   if (labels.length === 1 && only !== undefined && GITHUB_HOSTED.test(only)) {
     return { kind: 'hosted' };
@@ -313,13 +319,36 @@ export function workflowRunnerUsage(files: WorkflowFile[]): WorkflowUsage {
   return usage;
 }
 
+const GROUP_PREFIX = /^[A-Za-z0-9._-]+$/;
+const EXPRESSION_START = '${{';
+
+/** `<prefix>-<expression>`, the expression being the one that ends `expectedGroup`. */
+function isExpectedForm(group: string, expectedGroup: string): boolean {
+  const at = expectedGroup.indexOf(EXPRESSION_START);
+  if (at < 0) return group === expectedGroup;
+  const suffix = `-${expectedGroup.slice(at)}`;
+  return group.endsWith(suffix) && GROUP_PREFIX.test(group.slice(0, -suffix.length));
+}
+
+function formOfGroup(expectedGroup: string): string {
+  const at = expectedGroup.indexOf(EXPRESSION_START);
+  return at < 0 ? expectedGroup : `<prefix>-${expectedGroup.slice(at)}`;
+}
+
+/** The workflow-level concurrency group, in either form GitHub accepts. */
+function concurrencyGroup(doc: Record<string, unknown>): string | undefined {
+  const c = doc.concurrency;
+  const group = isRecord(c) ? c.group : c;
+  return typeof group === 'string' && group.trim() !== '' ? group.trim() : undefined;
+}
+
 function lintConcurrency(doc: Record<string, unknown>, expectedGroup: string): string | undefined {
   const c = doc.concurrency;
   if (!isRecord(c)) {
     return 'push and pull_request without a workflow-level concurrency group (or not in map form)';
   }
-  if (typeof c.group !== 'string' || c.group.trim() !== expectedGroup) {
-    return `concurrency.group must be exactly ${clean(expectedGroup)}`;
+  if (typeof c.group !== 'string' || !isExpectedForm(c.group.trim(), expectedGroup)) {
+    return `concurrency.group must be ${clean(formOfGroup(expectedGroup))}`;
   }
   if (c['cancel-in-progress'] !== true) return 'concurrency.cancel-in-progress must be true';
   return undefined;
@@ -328,7 +357,9 @@ function lintConcurrency(doc: Record<string, unknown>, expectedGroup: string): s
 /**
  * Checks workflows against the detected runners: every self-hosted label set needs an online
  * runner carrying all its labels (otherwise the job waits forever), and workflows triggered by both
- * push and pull_request need the shared concurrency group with cancel-in-progress.
+ * push and pull_request need a concurrency group of the form `expectedGroup` ends in, with
+ * cancel-in-progress. Concurrency groups are repo-wide and case-insensitive, so two workflows
+ * sharing one would cancel each other: that is an error too.
  */
 export function lintWorkflows(
   files: WorkflowFile[],
@@ -340,6 +371,7 @@ export function lintWorkflows(
   const online = detect.runners
     .filter((r) => r.online)
     .map((r) => new Set(r.labels.map((l) => l.toLowerCase())));
+  const byGroup = new Map<string, string[]>();
   for (const f of files) {
     const path = clean(f.path);
     const p = parseWorkflow(f.text);
@@ -358,6 +390,7 @@ export function lintWorkflows(
       if (r.kind === 'invalid') errors.push(`${where}: ${r.why}`);
       else if (r.kind === 'unverifiable') warnings.push(`${where}: cannot verify, ${r.why}`);
       else if (r.kind === 'set') {
+        if (r.group) warnings.push(`${where}: cannot verify runner group membership`);
         const shown = r.labels.map(clean).join(', ');
         const want = r.labels.map((l) => l.toLowerCase());
         if (detect.source === 'unknown') {
@@ -373,6 +406,18 @@ export function lintWorkflows(
     if (t.has('push') && t.has('pull_request')) {
       const problem = lintConcurrency(p.doc, expectedGroup);
       if (problem) errors.push(`${path}: ${problem}`);
+    }
+    const group = concurrencyGroup(p.doc)?.toLowerCase();
+    // The same text with one of these expressions is a different group in each workflow or run.
+    if (group !== undefined && !/github\.(workflow|run_id)/.test(group)) {
+      byGroup.set(group, [...(byGroup.get(group) ?? []), path]);
+    }
+  }
+  for (const [group, paths] of byGroup) {
+    if (paths.length > 1) {
+      errors.push(
+        `${paths.join(' and ')} share the concurrency group ${clean(group)}; groups are repo-wide, so they would cancel each other`,
+      );
     }
   }
   return { errors, warnings };

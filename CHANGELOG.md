@@ -11,18 +11,22 @@ tag after the merge.
 ### Added
 
 - `studio setup ci [--write] [--json]`: detects CI runners, proposes the `ci:` block, lints
-  workflows (`runs-on` labels against online runners, the shared concurrency group) and refuses
-  self-hosted runners on public repositories. `--write` updates only the `ci:` block.
+  workflows (`runs-on` labels against online runners, one concurrency group per workflow of the form
+  `<prefix>-${{ github.head_ref || github.ref_name }}`) and refuses self-hosted runners on public
+  repositories. `--write` updates only the `ci:` block. Runners that only GitHub-hosted workflows
+  ignore give `github-hosted`, with a note.
 - `ci.shared_host` and `ci.github_hosted_limit` in `.studio/studio.yaml` (and the JSON Schema).
 - Host port `cpuCount()`.
 - Credential provider: `crew_credential_command` in the owner config hands a crew run a label and
-  either `CLAUDE_CONFIG_DIR` (preferred) or `CLAUDE_CODE_OAUTH_TOKEN`. Only the label is stored.
+  either `CLAUDE_CODE_OAUTH_TOKEN` (the verified fallback) or `CLAUDE_CONFIG_DIR` (accepted; it has
+  not yet been verified with an isolated `HOME` on macOS). Only the label is stored.
 - `studio secret set crew-token`: hidden input, checked against GitHub, installed with mode 0600
   only after the check passes. Launch uses `crew_token.env` first, then this file.
 - `studio doctor`: lists what is set and what is missing, never values.
 - Usage limits: a limit event in a crew log stops the run, parks its label in `limits.json` in the
   state root and returns the item to `ready`, keeping clone and branch; the next launch resumes the
-  session when it can. A recovered `rate_limit` retry is ignored, and a retry alone never stops a
+  session when the clone is still there and the credential allows it. All wordings of the form
+  `You've hit your <words> limit` count; only `weekly` is kind `weekly`. A recovered `rate_limit` retry is ignored, and a retry alone never stops a
   running crew. With no credential available nothing starts and `forOwner` gets one line.
 - Ports `credentials.runProvider` and `credentials.ghWithToken`.
 
@@ -37,6 +41,11 @@ tag after the merge.
 - **API billing is off by default.** `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` no longer reach
   crew sessions, and a launch refuses Claude settings that set `apiKeyHelper` or those variables.
   Set `allow_api_billing: true` in the owner config to allow them.
+- A launch refuses clone settings that are not regular files or that redirect the model endpoint or
+  proxy through `env`, whatever `allow_api_billing` says, and on a reused clone `hooks` and
+  `apiKeyHelper`.
+- Self-hosted capacity fails closed with a stated error when a read finds no matching organisation
+  runner. Repository-level runners are not supported by capacity.
 - The owner config directory is denied to crew sessions, and crew toolchain paths may not open it.
 - The board allows `assigned` and `in_progress` to return to `ready`.
 

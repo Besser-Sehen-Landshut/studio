@@ -21,7 +21,7 @@ import {
   workflowRunnerUsage,
 } from './setup-ci.js';
 
-/** Exactly the group the CI guard test expects; the lint compares it as a literal string. */
+/** The lint requires this expression after a prefix of the workflow's own; `ci` is only the default. */
 // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, not a JS template
 const EXPECTED_GROUP = 'ci-${{ github.head_ref || github.ref_name }}';
 const WORKFLOW_DIR = ['.github', 'workflows'];

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import {
   chmodSync,
@@ -19,6 +20,7 @@ import {
   apiBillingProblem,
   checkCredentialCommand,
   checkProviderConfigDir,
+  cloneSettingsProblem,
   installCrewToken,
   parseProviderOutput,
   readCrewTokenFile,
@@ -192,13 +194,101 @@ describe('apiBillingProblem', () => {
     const link = join(dir(), 'settings.json');
     symlinkSync(target, link);
     expect(apiBillingProblem(link)).toBeUndefined();
-    expect(apiBillingProblem(link, false, true)).toMatch(/symlink/);
+    expect(cloneSettingsProblem(link, false, false)).toMatch(/symlink/);
   });
 
   it('with billing allowed the keys pass, an unparsable file still does not', () => {
     expect(apiBillingProblem(settings('{"apiKeyHelper":"x"}'), true)).toBeUndefined();
     expect(apiBillingProblem(settings('nope'), true)).toMatch(/cannot be parsed/);
   });
+});
+
+describe('cloneSettingsProblem', () => {
+  const settings = (body: unknown): string => {
+    const f = join(dir(), 'settings.json');
+    writeFileSync(f, typeof body === 'string' ? body : JSON.stringify(body));
+    return f;
+  };
+  const V = 'fake-value-example.com';
+  const KEYS = [
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_BEDROCK_BASE_URL',
+    'ANTHROPIC_VERTEX_BASE_URL',
+    'ANTHROPIC_FOUNDRY_BASE_URL',
+    'CLAUDE_CODE_USE_BEDROCK',
+    'CLAUDE_CODE_USE_VERTEX',
+    'CLAUDE_CODE_USE_FOUNDRY',
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'ALL_PROXY',
+    'NODE_EXTRA_CA_CERTS',
+    'NODE_OPTIONS',
+  ];
+
+  it('refuses each redirecting env key, naming the key, never the value, billing allowed or not', () => {
+    for (const key of KEYS) {
+      for (const allowed of [false, true]) {
+        for (const reused of [false, true]) {
+          const p = cloneSettingsProblem(settings({ env: { [key]: V } }), allowed, reused);
+          expect(p, key).toContain(`env.${key}`);
+          expect(p).not.toContain(V);
+          expect(p).not.toMatch(/allow_api_billing/);
+        }
+      }
+    }
+  });
+
+  it('matches the proxy keys in any case', () => {
+    for (const key of ['http_proxy', 'https_proxy', 'all_proxy', 'Https_Proxy']) {
+      expect(cloneSettingsProblem(settings({ env: { [key]: V } }), true, false), key).toBeDefined();
+    }
+  });
+
+  it('refuses hooks and apiKeyHelper on a reused clone, billing allowed or not', () => {
+    for (const allowed of [false, true]) {
+      const hooks = cloneSettingsProblem(settings({ hooks: { Stop: [{ x: V }] } }), allowed, true);
+      expect(hooks).toContain('hooks');
+      expect(hooks).not.toContain(V);
+      const helper = cloneSettingsProblem(settings({ apiKeyHelper: V }), allowed, true);
+      expect(helper).toContain('apiKeyHelper');
+      expect(helper).not.toContain(V);
+    }
+  });
+
+  it('on a fresh clone hooks pass and apiKeyHelper follows the billing switch', () => {
+    expect(cloneSettingsProblem(settings({ hooks: {} }), false, false)).toBeUndefined();
+    expect(cloneSettingsProblem(settings({ apiKeyHelper: V }), true, false)).toBeUndefined();
+    expect(cloneSettingsProblem(settings({ apiKeyHelper: V }), false, false)).toMatch(
+      /apiKeyHelper/,
+    );
+  });
+
+  it('keeps the billing keys behind the switch and passes clean settings', () => {
+    const f = settings({ env: { ANTHROPIC_API_KEY: V } });
+    expect(cloneSettingsProblem(f, false, true)).toContain('env.ANTHROPIC_API_KEY');
+    expect(cloneSettingsProblem(f, true, true)).toBeUndefined();
+    expect(cloneSettingsProblem(settings({ env: { FOO: '1' } }), false, true)).toBeUndefined();
+    expect(cloneSettingsProblem(join(dir(), 'none.json'), false, true)).toBeUndefined();
+  });
+
+  it('an unparsable file or a symlink refuses', () => {
+    expect(cloneSettingsProblem(settings('nope'), true, false)).toMatch(/cannot be parsed/);
+    const link = join(dir(), 'settings.json');
+    symlinkSync(settings({}), link);
+    expect(cloneSettingsProblem(link, true, false)).toMatch(/symlink/);
+  });
+
+  it('a directory refuses as not a regular file', () => {
+    const d = join(dir(), 'settings.json');
+    mkdirSync(d);
+    expect(cloneSettingsProblem(d, true, false)).toMatch(/not a regular file/);
+  });
+
+  it('a FIFO refuses at once instead of hanging', () => {
+    const f = join(dir(), 'settings.json');
+    execFileSync('mkfifo', [f]);
+    expect(cloneSettingsProblem(f, true, false)).toMatch(/not a regular file/);
+  }, 5000);
 });
 
 describe('crew token file', () => {

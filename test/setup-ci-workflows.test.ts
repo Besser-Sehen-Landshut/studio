@@ -102,6 +102,27 @@ describe('lintWorkflows: runs-on', () => {
     expect(e.warnings).toHaveLength(1);
   });
 
+  it('a group with labels checks the labels and warns about the membership', () => {
+    const ok = lint(
+      'jobs:\n  b:\n    runs-on:\n      group: g\n      labels: [self-hosted, pool]\n',
+    );
+    expect(ok.errors).toEqual([]);
+    expect(ok.warnings).toHaveLength(1);
+    expect(ok.warnings[0]).toMatch(/group membership/);
+    const bad = lint(
+      'jobs:\n  b:\n    runs-on:\n      group: g\n      labels: [self-hosted, gone]\n',
+    );
+    expect(bad.errors).toHaveLength(1);
+    expect(bad.errors[0]).toContain('wait forever');
+    expect(bad.warnings).toHaveLength(1);
+  });
+
+  it('a group with a hosted-looking label is still checked as a self-hosted set', () => {
+    expect(
+      lint('jobs:\n  b:\n    runs-on:\n      group: g\n      labels: ubuntu-latest\n').errors,
+    ).toHaveLength(1);
+  });
+
   it('a job without runs-on is an error unless it calls a reusable workflow', () => {
     expect(lint('jobs:\n  b:\n    steps: []\n').errors).toHaveLength(1);
     expect(lint('jobs:\n  b:\n    uses: org/app/.github/workflows/x.yml@main\n')).toEqual({
@@ -135,6 +156,95 @@ describe('lintWorkflows: concurrency', () => {
     expect(
       lint(both(`concurrency:\n  group: ${GROUP}   # why\n  cancel-in-progress: true\n`)).errors,
     ).toEqual([]);
+  });
+
+  it('any prefix of the allowed form passes; other prefixes and refs do not', () => {
+    const conc = (g: string) => `concurrency:\n  group: ${g}\n  cancel-in-progress: true\n`;
+    const expr = GROUP.slice('ci-'.length);
+    for (const p of ['lint', 'a.b_c-d', 'A9']) {
+      expect(lint(both(conc(`${p}-${expr}`))).errors, p).toEqual([]);
+    }
+    for (const g of [
+      expr,
+      `-${expr}`,
+      `a b-${expr}`,
+      `a/b-${expr}`,
+      `ci${expr}`,
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal expression
+      'ci-${{ github.ref }}',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal expression
+      'ci-${{ github.head_ref || github.run_id }}',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal expression
+      '${{ github.workflow }}-${{ github.head_ref || github.ref_name }}',
+      'ci-main',
+    ]) {
+      expect(lint(both(conc(`"${g}"`))).errors, g).toHaveLength(1);
+    }
+  });
+
+  it('cancel-in-progress is still required with another prefix', () => {
+    const g = `lint-${GROUP.slice('ci-'.length)}`;
+    expect(lint(both(`concurrency:\n  group: ${g}\n`)).errors).toHaveLength(1);
+  });
+
+  it('two workflows sharing a group is an error naming both files', () => {
+    const r = lintWorkflows(
+      [
+        file(both(goodConc), '.github/workflows/a.yml'),
+        file(both(goodConc), '.github/workflows/b.yml'),
+      ],
+      detected(),
+      EXPECTED,
+    );
+    expect(r.errors).toHaveLength(1);
+    expect(r.errors[0]).toContain('a.yml');
+    expect(r.errors[0]).toContain('b.yml');
+    expect(r.errors[0]).toMatch(/share/);
+  });
+
+  it('distinct prefixes in two workflows pass; group names compare case-insensitively', () => {
+    const expr = GROUP.slice('ci-'.length);
+    const conc = (p: string) => `concurrency:\n  group: ${p}-${expr}\n  cancel-in-progress: true\n`;
+    const run = (a: string, b: string) =>
+      lintWorkflows(
+        [
+          file(both(conc(a)), '.github/workflows/a.yml'),
+          file(both(conc(b)), '.github/workflows/b.yml'),
+        ],
+        detected(),
+        EXPECTED,
+      ).errors;
+    expect(run('lint', 'test')).toEqual([]);
+    expect(run('lint', 'LINT')).toHaveLength(1);
+  });
+
+  it('a group naming the workflow or run differs at run time, so it is not shared', () => {
+    for (const g of [
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal expression
+      '${{ github.workflow }}-${{ github.ref }}',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal expression
+      'deploy-${{ github.run_id }}',
+    ]) {
+      const t = `on: push\nconcurrency:\n  group: ${g}\n${job('ubuntu-latest')}`;
+      const r = lintWorkflows(
+        [file(t, '.github/workflows/a.yml'), file(t, '.github/workflows/b.yml')],
+        detected(),
+        EXPECTED,
+      );
+      expect(r.errors, g).toEqual([]);
+    }
+  });
+
+  it('a push-only workflow sharing the group counts too', () => {
+    const r = lintWorkflows(
+      [
+        file(both(goodConc), '.github/workflows/a.yml'),
+        file(`on: push\n${goodConc}${job('ubuntu-latest')}`, '.github/workflows/b.yml'),
+      ],
+      detected(),
+      EXPECTED,
+    );
+    expect(r.errors).toHaveLength(1);
   });
 
   it('a commented-out concurrency block does not count', () => {
@@ -255,6 +365,14 @@ describe('workflowRunnerUsage', () => {
         file('jobs:\n  b:\n    runs-on:\n      group: g\n'),
       ]),
     ).toEqual({ githubHosted: false, selfHosted: false });
+  });
+
+  it('a group with labels counts as self-hosted', () => {
+    expect(
+      workflowRunnerUsage([
+        file('jobs:\n  b:\n    runs-on:\n      group: g\n      labels: pool\n'),
+      ]),
+    ).toEqual({ githubHosted: false, selfHosted: true });
   });
 
   it('a mixed list counts as self-hosted', () => {
