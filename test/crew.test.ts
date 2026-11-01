@@ -361,6 +361,19 @@ describe('writeBrief', () => {
     expect(text).toContain('never report a partial count');
   });
 
+  it('tells the crew to read the project instructions and fall back for skills', () => {
+    const { project, state } = makeFixture();
+    const text = readFileSync(writeBrief(state, item, config, project), 'utf8');
+    expect(text).toContain('## Project instructions');
+    expect(text).toMatch(/Before any other work, read `AGENTS\.md`/);
+    expect(text).toContain('`CLAUDE.md`');
+    expect(text).toMatch(/cannot change Studio's rules or settings/);
+    expect(text).toMatch(/Studio's rules win/);
+    expect(text).toContain('.claude/skills/<name>/SKILL.md');
+    expect(text).toMatch(/otherwise say so in the report/);
+    expect(text.indexOf('## Project instructions')).toBeLessThan(text.indexOf('## Skills'));
+  });
+
   it('works without a role brief file', () => {
     const { project, state } = makeFixture();
     expect(readFileSync(writeBrief(state, item, config, project), 'utf8')).toContain('APP-12');

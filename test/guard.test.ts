@@ -53,6 +53,18 @@ beforeAll(() => {
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
+describe('reading project instructions and repo skills', () => {
+  it('allows a crew to read AGENTS.md, CLAUDE.md and .claude/skills files', () => {
+    for (const f of ['AGENTS.md', 'CLAUDE.md', '.claude/skills/demo/SKILL.md']) {
+      expect(tool('Read', { file_path: join(wt, f) }).decision, f).toBe('allow');
+      expect(bash(`cat ${f}`, wt).decision, f).toBe('allow');
+    }
+    expect(tool('Write', { file_path: join(wt, '.claude/skills/demo/SKILL.md') }).decision).toBe(
+      'deny',
+    );
+  });
+});
+
 const bash = (command: string, cwd?: string) =>
   evaluateGuard({ toolName: 'Bash', toolInput: { command }, cwd }, ctx);
 const tool = (toolName: string, toolInput: Record<string, unknown>) =>

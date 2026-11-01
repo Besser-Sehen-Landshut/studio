@@ -26,7 +26,7 @@ tag after the merge.
 - Usage limits: a limit event in a crew log stops the run, parks its label in `limits.json` in the
   state root and returns the item to `ready`, keeping clone and branch; the next launch resumes the
   session when the clone is still there and the credential allows it. All wordings of the form
-  `You've hit your <words> limit` count; only `weekly` is kind `weekly`. A recovered `rate_limit` retry is ignored, and a retry alone never stops a
+  `You've hit your <words> limit` count; `kind` is `weekly` when the label contains the word weekly (any case). A recovered `rate_limit` retry is ignored, and a retry alone never stops a
   running crew. With no credential available nothing starts and `forOwner` gets one line.
 - Ports `credentials.runProvider` and `credentials.ghWithToken`.
 
@@ -44,7 +44,9 @@ tag after the merge.
 - Crews ignore repo-controlled Claude Code settings: every launch, fresh or resumed, passes
   `--setting-sources user`, so the clone's `.claude/settings.json` and `.claude/settings.local.json`
   (hooks, `env`, `apiKeyHelper`) no longer apply, and Studio no longer reads them. Only user settings
-  and the file passed with `--settings` apply.
+  and the file passed with `--settings` apply. Crews therefore do not auto-load the project
+  `CLAUDE.md`, rules, skills, commands or subagents; the crew brief tells them to read `AGENTS.md`
+  and `CLAUDE.md` and to fall back to `.claude/skills/<name>/SKILL.md` for a listed skill.
 - Self-hosted capacity fails closed with a stated error when a read finds no matching organisation
   runner. Repository-level runners are not supported by capacity.
 - The owner config directory is denied to crew sessions, and crew toolchain paths may not open it.

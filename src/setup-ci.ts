@@ -369,8 +369,9 @@ function lintConcurrency(doc: Record<string, unknown>, expectedGroup: string): s
  * Checks workflows against the detected runners: every self-hosted label set needs an online
  * runner carrying all its labels (otherwise the job waits forever), and workflows triggered by both
  * push and pull_request need a concurrency group of the form `expectedGroup` ends in, with
- * cancel-in-progress. Concurrency groups are repo-wide and case-insensitive, so two workflows
- * sharing one would cancel each other: that is an error too.
+ * cancel-in-progress. Concurrency groups are repo-wide and case-insensitive; sharing one is an
+ * error only when a sharer is a push and pull_request workflow with cancel-in-progress true, since
+ * that one would cancel the others' runs.
  */
 export function lintWorkflows(
   files: WorkflowFile[],
