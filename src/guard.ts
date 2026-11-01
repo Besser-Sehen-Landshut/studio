@@ -527,6 +527,10 @@ function wordOf(entry: Entry | undefined): string | undefined {
   return undefined;
 }
 
+function isOp(e: Entry | undefined, op: string): boolean {
+  return typeof e === 'object' && e !== null && 'op' in e && e.op === op;
+}
+
 function toSegments(line: string): Segment[] {
   const toks = shellParse(line, (key) => `$${key}`) as Entry[];
   const segments: Segment[] = [];
@@ -540,6 +544,8 @@ function toSegments(line: string): Segment[] {
     const word = wordOf(t);
     if (word !== undefined) {
       cur.words.push(word);
+    } else if (isOp(t, '(') && isOp(toks[k + 1], '(')) {
+      deny(ARITHMETIC_DENIED);
     } else if (typeof t !== 'object') {
       // unreachable: strings are words
     } else if ('comment' in t) {
@@ -625,8 +631,10 @@ function assignmentName(w: string): string | undefined {
     deny(`assignment to "${name}" is not allowed (plain variable names only)`);
   return name;
 }
+/** Case-sensitive on purpose: `path=src` and `env=prod` are ordinary names. Only npm reads `npm_config_*` in any case. */
 const SENSITIVE_VAR =
-  /^(STUDIO_|NODE_OPTIONS$|NODE_PATH$|NPM_CONFIG_|PNPM_|YARN_|COREPACK_|GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/i;
+  /^(STUDIO_|NODE_OPTIONS$|NODE_PATH$|NPM_CONFIG_|PNPM_|YARN_|COREPACK_|GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/;
+const SENSITIVE_VAR_ANY_CASE = /^npm_config_/i;
 
 const unresolved = (w: string): boolean => w.includes(SUBST) || w.includes('$') || w.includes('`');
 /** A word whose real value depends on the shell at run time (variables, substitutions, globs). */
@@ -634,7 +642,8 @@ const unresolvedWord = (w: string): boolean =>
   unresolved(w) || (/[*?[]/.test(w) && w !== '[' && w !== '[[');
 
 function checkVarName(name: string): void {
-  if (SENSITIVE_VAR.test(name)) deny(`setting ${name} is not allowed`);
+  if (SENSITIVE_VAR.test(name) || SENSITIVE_VAR_ANY_CASE.test(name))
+    deny(`setting ${name} is not allowed`);
 }
 
 function checkAssignment(_state: State, a: string): void {
@@ -1147,61 +1156,93 @@ const NODE_NAME = /^node(js)?[0-9.]*$/i;
 /** `bin/studio` or `dist-bundle/studio.mjs`; case-insensitive because file systems can be. */
 const isStudioBinary = (w: string): boolean => /^studio(\.(mjs|cjs|js))?$/i.test(basename(w));
 
+const NODE_ALTERNATIVE = 'use node <relative script> or node --test <relative path>';
+
 /**
- * Running node directly is denied except `node --version`, `node --help` and `node <path>`: the path is
- * the first argument (no option before it), literal, relative, without a `..` segment and not the studio
- * binary. Words after the path are the script's arguments and stay free.
+ * Running node directly is denied except `node --version`, `node --help`, `node --test`,
+ * `node --test <path>` and `node <path>`: the path is the first argument (no option before it), literal,
+ * relative, without a `..` segment and not the studio binary. Words after a script path are the
+ * script's arguments and stay free.
  */
 function checkNode(args: string[]): void {
   const first = args[0] ?? '-';
-  if (args.length === 1 && (first === '--version' || first === '--help')) return;
-  if (first.startsWith('-') || first.startsWith('~')) {
-    deny('node without a literal relative script path is not allowed');
+  if (args.length === 1 && (first === '--version' || first === '--help' || first === '--test')) {
+    return;
   }
-  if (unresolvedWord(first) || isAbsolute(first) || first.split('/').includes('..')) {
-    deny('node with a script path that is not literal and relative is not allowed');
+  const testPath = first === '--test' && args.length === 2 && !(args[1] as string).startsWith('-');
+  if (!testPath && (first.startsWith('-') || first.startsWith('~'))) {
+    deny(`node without a literal relative script path is not allowed; ${NODE_ALTERNATIVE}`);
   }
-  if (isStudioBinary(first)) deny(CREW_NO_STUDIO);
+  const path = testPath ? (args[1] as string) : first;
+  if (
+    unresolvedWord(path) ||
+    path.startsWith('~') ||
+    isAbsolute(path) ||
+    path.split('/').includes('..')
+  ) {
+    deny(`node with a path that is not literal and relative is not allowed; ${NODE_ALTERNATIVE}`);
+  }
+  if (isStudioBinary(path)) deny(CREW_NO_STUDIO);
 }
 
-/** First arguments of npm, pnpm, yarn and bun that may run; anything else is denied. */
-const PACKAGE_COMMANDS = new Set([
-  'test',
-  'run',
-  'install',
-  'i',
-  'ci',
-  'lint',
-  'build',
-  'typecheck',
-  'format',
-  'add',
-  'remove',
-  'list',
-  'ls',
-  'audit',
-  'outdated',
-  'why',
-  '--version',
-  '-v',
-  '--help',
+/** Options of npm, pnpm, yarn and bun that take the next word as a value; skipped to find the command. */
+const PACKAGE_VALUE_OPTIONS = new Set([
+  '--filter',
+  '-F',
+  '--dir',
+  '-C',
+  '--prefix',
+  '--workspace',
+  '-w',
+  '--cwd',
+  '--registry',
+  '--config',
 ]);
+const PACKAGE_RUN_INSTEAD =
+  'run an installed tool with "pnpm exec <tool>" or a package.json script';
 
 /**
- * npx, pnpx, bunx and corepack are denied. npm, pnpm, yarn and bun pass only with an allowlisted first
- * argument, and `--shell*` (`--shell-mode` and its abbreviations) is denied anywhere. The guard does
- * not contain a malicious crew (package.json scripts run anything), the sandbox does.
+ * A short denylist, not an allowlist: the guard does not contain a malicious crew (package.json scripts
+ * run anything), the sandbox does. Denied are what fetches and runs foreign code (`npx`, `pnpx`, `bunx`,
+ * `corepack`, `dlx`, `bun x`, `create`, `init`) and the options that run a shell string (`--shell*`,
+ * `--script-shell`). The command is the first word that is not an option or an option's value.
  */
 function checkPackageRunner(name: string, args: string[]): void {
   if (name === 'npx' || name === 'pnpx' || name === 'bunx' || name === 'corepack') {
-    deny(`${name} is a package runner and is not allowed`);
+    deny(`${name} downloads and runs foreign code and is not allowed; ${PACKAGE_RUN_INSTEAD}`);
   }
   if (name !== 'npm' && name !== 'pnpm' && name !== 'yarn' && name !== 'bun') return;
-  const first = args[0];
-  if (first === undefined || unresolvedWord(first) || !PACKAGE_COMMANDS.has(first)) {
-    deny(`${name} is only allowed with a known command as its first argument`);
+  if (args.some((a) => a.startsWith('--shell') || a.startsWith('--script-shell'))) {
+    deny(
+      `${name} with a shell option is not allowed; run it without --shell-mode and --script-shell`,
+    );
   }
-  if (args.some((a) => a.startsWith('--shell'))) deny(`${name} --shell-mode is not allowed`);
+  let cmd: string | undefined;
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k] as string;
+    if (a === '--') break;
+    if (a.startsWith('-')) {
+      if (PACKAGE_VALUE_OPTIONS.has(a)) k++;
+      continue;
+    }
+    cmd = a;
+    break;
+  }
+  if (cmd === undefined) return;
+  if (unresolvedWord(cmd))
+    deny(`${name} with a command that is not literal is not allowed; name the command`);
+  if (cmd === 'create' || cmd === 'init') {
+    deny(`${name} ${cmd} fetches a template and is not allowed; create the files by hand`);
+  }
+  if (
+    cmd === 'dlx' ||
+    (name === 'bun' && cmd === 'x') ||
+    (name === 'npm' && (cmd === 'x' || cmd === 'exec'))
+  ) {
+    deny(
+      `${name} ${cmd} downloads and runs foreign code and is not allowed; ${PACKAGE_RUN_INSTEAD}`,
+    );
+  }
 }
 
 function checkWords(env: Env, words: string[], state: State): void {
@@ -1268,14 +1309,22 @@ function checkWords(env: Env, words: string[], state: State): void {
   for (const t of writeTargets(name, args)) checkWritePath(env, t, state.cwd, name);
 }
 
+const ARITHMETIC_DENIED =
+  'arithmetic ((...)) is not allowed; use test or [ ] for comparisons, or a script';
+
 function checkBash(env: Env, cmd: string, cwd: string | null, depth: number): void {
   if (depth > 8) deny('command nesting too deep');
-  // Arithmetic and `${VAR:=x}` can assign without an assignment word; deny them outright.
-  if (/\(\(|\$\[|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?:?=/.test(cmd)) {
+  // `$[` and `${VAR:=x}` can assign without an assignment word; deny them outright. `((` and `$((` are
+  // checked on the unquoted text only (below), so they may appear inside quoted words.
+  if (/\$\[|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?:?=/.test(cmd)) {
     deny('arithmetic and parameter-expansion assignment are not allowed');
   }
   const { lines, subs } = scan(cmd);
-  for (const sub of subs) checkBash(env, sub, cwd, depth + 1);
+  for (const sub of subs) {
+    // scan() turns `$((` into a substitution whose text starts with `(`.
+    if (sub.startsWith('(')) deny(ARITHMETIC_DENIED);
+    checkBash(env, sub, cwd, depth + 1);
+  }
   const state: State = { cwd };
   for (const line of lines) {
     for (const seg of toSegments(line)) checkSegment(env, seg, state);

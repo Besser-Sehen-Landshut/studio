@@ -626,6 +626,19 @@ describe('round 1 regressions', () => {
     ]);
   });
 
+  it('I5g2b (( and $(( inside quotes are text, not arithmetic', () => {
+    for (const c of [
+      'gh pr create --title "a ((b))" --body x',
+      "echo '(( X = 1 ))'",
+      "echo '$((1+2))'",
+      'echo "((x))"',
+      'git commit -m "fix ((a)) and (( b ))"',
+    ]) {
+      expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
+    }
+    denies(['echo "$((1+2))"', 'echo "x $(( X = 1 )) y"', 'a; ((X++))']);
+  });
+
   it('I5g arithmetic and ${VAR=...} are denied outright', () => {
     denies([
       '(( STUDIO_ROLE = 1 ))',
@@ -649,8 +662,12 @@ describe('round 1 regressions', () => {
 
   it('I5g2 node runs only --version, --help or a literal relative script path', () => {
     denies([
-      'node --test',
-      'node --test test/a.test.js',
+      'node --test --watch',
+      'node --test a.js b.js',
+      'node --test ../a.js',
+      'node --test /abs/a.js',
+      'node --test $X',
+      'node --test bin/studio',
       'node --no-warnings x.js',
       'node --no-warnings app.js pause',
       'node --max-old-space-size=4096 app.js',
@@ -679,6 +696,9 @@ describe('round 1 regressions', () => {
       'node ./scripts/run.js resume',
       'node --version',
       'node --help',
+      'node --test',
+      'node --test test/a.test.js',
+      'node --test test',
       'npm run resume',
       'npm run pause',
       'pnpm test',
@@ -724,7 +744,7 @@ describe('round 1 regressions', () => {
     ]);
   });
 
-  it('I5i package runners are denied outright', () => {
+  it('I5i commands that fetch and run foreign code, or use a shell string, are denied', () => {
     denies([
       'npx vitest',
       'pnpx vitest',
@@ -732,38 +752,46 @@ describe('round 1 regressions', () => {
       'corepack enable',
       'corepack pnpm test',
       'bun x vitest',
+      'bun x',
+      'npm x vitest',
       'npm exec vitest',
-      'npm exec -- studio pause',
-      'pnpm exec vitest',
-      'pnpm --filter app exec vitest',
+      'npm exec -- vitest',
+      'npm --prefix app exec vitest',
       'pnpm dlx cowsay hi',
+      'pnpm --filter app dlx cowsay',
+      'pnpm -C app dlx cowsay',
       'yarn dlx cowsay',
-      'yarn exec vitest',
+      'npm create vite',
+      'pnpm create vite',
+      'yarn create vite',
+      'bun create vite',
+      'npm init',
+      'pnpm init',
+      'yarn init',
+      'bun init',
       'npm test --shell-mode',
       'pnpm run lint --shell-mode=true',
       'yarn build --shell-mode',
       'npm test --shell',
       'npm test --shell-m',
       'pnpm run lint --shell=x',
-      'pnpm',
-      'npm',
-      'yarn',
-      'bun',
-      'yarn studio',
-      'pnpm -w test',
-      'pnpm --filter app test',
-      'npm -- test',
-      'npm -w a test',
-      'npm $X',
+      'npm test --script-shell=/tmp/x',
+      'npm --script-shell /tmp/x test',
+      'pnpm $X test',
       'pnpm "$X" test',
-      'bun x',
-      'bun repl',
-      'npm publish',
-      'pnpm exec',
     ]);
   });
 
-  it('I5j allowlisted first arguments of npm, pnpm, yarn and bun pass', () => {
+  it('I5i2 denial messages name the allowed alternative', () => {
+    expect(bash('pnpm dlx cowsay', wt).reason).toContain('pnpm exec');
+    expect(bash('npx vitest', wt).reason).toContain('pnpm exec');
+    expect(bash('npm init', wt).reason).toContain('by hand');
+    expect(bash('npm test --shell-mode', wt).reason).toContain('without');
+    expect(bash('node -e 1', wt).reason).toContain('node <relative script>');
+    expect(bash('node --test /abs/a.js', wt).reason).toContain('node --test <relative path>');
+  });
+
+  it('I5j package manager commands other than the denylist pass', () => {
     for (const c of [
       'pnpm test',
       'pnpm test "$X"',
@@ -779,18 +807,40 @@ describe('round 1 regressions', () => {
       'yarn add x',
       'pnpm remove x',
       'pnpm list',
-      'pnpm ls',
       'pnpm audit',
-      'pnpm outdated',
       'pnpm why x',
-      'pnpm typecheck',
-      'pnpm format',
       'pnpm --version',
       'pnpm -v',
       'pnpm --help',
       'npm run resume',
       'npm test',
       'bun test',
+      'pnpm -r test',
+      'pnpm --filter app test',
+      'pnpm --filter=app test',
+      'pnpm -F app test',
+      'pnpm -C app test',
+      'pnpm --dir app test',
+      'npm --prefix app test',
+      'npm -w a test',
+      'npm -- test',
+      'pnpm -w test',
+      'pnpm test:unit',
+      'pnpm bundle',
+      'pnpm exec vitest run',
+      'pnpm --filter app exec vitest',
+      'yarn exec vitest',
+      'pnpm run init',
+      'pnpm test init',
+      'pnpm --filter dlx test',
+      'bun run x',
+      'bun repl',
+      'npm publish',
+      'pnpm',
+      'npm',
+      'yarn',
+      'bun',
+      'yarn studio',
     ]) {
       expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
     }
@@ -802,11 +852,22 @@ describe('round 1 regressions', () => {
       'NPM_CONFIG_SCRIPT_SHELL=/tmp/x pnpm test',
       'export PNPM_HOME=/tmp/x',
       'YARN_RC_FILENAME=x yarn build',
-      'pnpm_config_x=1 pnpm test',
+      'Npm_Config_Script_Shell=/tmp/x pnpm test',
       'COREPACK_HOME=/tmp/x pnpm test',
       'NODE_PATH=/tmp/x node a.js',
-      'node_path=/tmp/x node a.js',
+      'PATH=/tmp/x pnpm test',
+      'HOME=/tmp/x pnpm test',
+      'export PATH=/tmp/x',
     ]);
+    for (const c of [
+      'path=src ls',
+      'env=prod ls',
+      'home=x ls',
+      'pnpm_config_x=1 pnpm test',
+      'node_path=x ls',
+    ]) {
+      expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
+    }
   });
 
   it('I5k NODE_OPTIONS cannot be set', () => {

@@ -46,6 +46,26 @@ published as a GitHub release yet; the maintainers tag after the merge.
   still refuse.
 - `queue run` holds while old per-project state files have not been migrated.
 
+### Fixed (crew guard usability)
+
+The guard is a convenience layer, not the security boundary (`SECURITY.md`), so these loosen it for
+real crews, for example in monorepos. This replaces the stricter wording under Fixed above for
+package managers, `node` and variable names.
+
+- `npm`, `pnpm`, `yarn` and `bun` pass with any command and any option (`pnpm -r test`,
+  `pnpm --filter app test`, `pnpm -C app test`, `npm --prefix app test`, `pnpm test:unit`,
+  `pnpm exec vitest run`, bare `yarn`). Denied: `npx`, `pnpx`, `bunx`, `bun x`, `corepack`, the
+  commands `dlx`, `create`, `init`, `npm x` and `npm exec` (`pnpm exec` and `yarn exec` run local
+  binaries and pass), and the options `--shell*` and `--script-shell`.
+- `node --test` and `node --test <literal relative path>` pass.
+- Only `npm_config_*` is matched case-insensitively: `path=src` and `env=prod` pass; `PATH=`, `HOME=`
+  and the other uppercase names stay denied.
+- `((` and `$((` inside quoted text no longer deny (`gh pr create --title "a ((b))"`); arithmetic in
+  unquoted text and `$((` in double quotes still do. A nested subshell written `( (` is now denied too.
+- Denial messages name the allowed alternative where there is one.
+- Minimal skill edit: `studio-lead` retries a launch refused because of a lock on the next heartbeat
+  tick instead of treating it as a failure (one sentence; baseline in `test/skills/baseline-lead.md`).
+
 ### Changed
 
 - Account blocks, usage limits and per-label usage are owner-wide, in `<state base>/owner`: a block

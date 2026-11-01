@@ -912,6 +912,9 @@ function wordOf(entry) {
   if (entry && "op" in entry && entry.op === "glob") return entry.pattern;
   return void 0;
 }
+function isOp(e, op) {
+  return typeof e === "object" && e !== null && "op" in e && e.op === op;
+}
 function toSegments(line) {
   const toks = (0, import_shell_quote.parse)(line, (key) => `$${key}`);
   const segments = [];
@@ -925,6 +928,8 @@ function toSegments(line) {
     const word = wordOf(t);
     if (word !== void 0) {
       cur.words.push(word);
+    } else if (isOp(t, "(") && isOp(toks[k + 1], "(")) {
+      deny(ARITHMETIC_DENIED);
     } else if (typeof t !== "object") {
     } else if ("comment" in t) {
     } else if ("op" in t) {
@@ -998,11 +1003,13 @@ function assignmentName(w) {
     deny(`assignment to "${name}" is not allowed (plain variable names only)`);
   return name;
 }
-var SENSITIVE_VAR = /^(STUDIO_|NODE_OPTIONS$|NODE_PATH$|NPM_CONFIG_|PNPM_|YARN_|COREPACK_|GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/i;
+var SENSITIVE_VAR = /^(STUDIO_|NODE_OPTIONS$|NODE_PATH$|NPM_CONFIG_|PNPM_|YARN_|COREPACK_|GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/;
+var SENSITIVE_VAR_ANY_CASE = /^npm_config_/i;
 var unresolved = (w) => w.includes(SUBST) || w.includes("$") || w.includes("`");
 var unresolvedWord = (w) => unresolved(w) || /[*?[]/.test(w) && w !== "[" && w !== "[[";
 function checkVarName(name) {
-  if (SENSITIVE_VAR.test(name)) deny(`setting ${name} is not allowed`);
+  if (SENSITIVE_VAR.test(name) || SENSITIVE_VAR_ANY_CASE.test(name))
+    deny(`setting ${name} is not allowed`);
 }
 function checkAssignment(_state, a) {
   const name = assignmentName(a);
@@ -1444,48 +1451,67 @@ function checkVarBuiltin(name, args) {
 var CREW_NO_STUDIO = "a crew may not run studio";
 var NODE_NAME = /^node(js)?[0-9.]*$/i;
 var isStudioBinary = (w) => /^studio(\.(mjs|cjs|js))?$/i.test(basename(w));
+var NODE_ALTERNATIVE = "use node <relative script> or node --test <relative path>";
 function checkNode(args) {
   const first = args[0] ?? "-";
-  if (args.length === 1 && (first === "--version" || first === "--help")) return;
-  if (first.startsWith("-") || first.startsWith("~")) {
-    deny("node without a literal relative script path is not allowed");
+  if (args.length === 1 && (first === "--version" || first === "--help" || first === "--test")) {
+    return;
   }
-  if (unresolvedWord(first) || isAbsolute(first) || first.split("/").includes("..")) {
-    deny("node with a script path that is not literal and relative is not allowed");
+  const testPath = first === "--test" && args.length === 2 && !args[1].startsWith("-");
+  if (!testPath && (first.startsWith("-") || first.startsWith("~"))) {
+    deny(`node without a literal relative script path is not allowed; ${NODE_ALTERNATIVE}`);
   }
-  if (isStudioBinary(first)) deny(CREW_NO_STUDIO);
+  const path = testPath ? args[1] : first;
+  if (unresolvedWord(path) || path.startsWith("~") || isAbsolute(path) || path.split("/").includes("..")) {
+    deny(`node with a path that is not literal and relative is not allowed; ${NODE_ALTERNATIVE}`);
+  }
+  if (isStudioBinary(path)) deny(CREW_NO_STUDIO);
 }
-var PACKAGE_COMMANDS = /* @__PURE__ */ new Set([
-  "test",
-  "run",
-  "install",
-  "i",
-  "ci",
-  "lint",
-  "build",
-  "typecheck",
-  "format",
-  "add",
-  "remove",
-  "list",
-  "ls",
-  "audit",
-  "outdated",
-  "why",
-  "--version",
-  "-v",
-  "--help"
+var PACKAGE_VALUE_OPTIONS = /* @__PURE__ */ new Set([
+  "--filter",
+  "-F",
+  "--dir",
+  "-C",
+  "--prefix",
+  "--workspace",
+  "-w",
+  "--cwd",
+  "--registry",
+  "--config"
 ]);
+var PACKAGE_RUN_INSTEAD = 'run an installed tool with "pnpm exec <tool>" or a package.json script';
 function checkPackageRunner(name, args) {
   if (name === "npx" || name === "pnpx" || name === "bunx" || name === "corepack") {
-    deny(`${name} is a package runner and is not allowed`);
+    deny(`${name} downloads and runs foreign code and is not allowed; ${PACKAGE_RUN_INSTEAD}`);
   }
   if (name !== "npm" && name !== "pnpm" && name !== "yarn" && name !== "bun") return;
-  const first = args[0];
-  if (first === void 0 || unresolvedWord(first) || !PACKAGE_COMMANDS.has(first)) {
-    deny(`${name} is only allowed with a known command as its first argument`);
+  if (args.some((a) => a.startsWith("--shell") || a.startsWith("--script-shell"))) {
+    deny(
+      `${name} with a shell option is not allowed; run it without --shell-mode and --script-shell`
+    );
   }
-  if (args.some((a) => a.startsWith("--shell"))) deny(`${name} --shell-mode is not allowed`);
+  let cmd;
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (a === "--") break;
+    if (a.startsWith("-")) {
+      if (PACKAGE_VALUE_OPTIONS.has(a)) k++;
+      continue;
+    }
+    cmd = a;
+    break;
+  }
+  if (cmd === void 0) return;
+  if (unresolvedWord(cmd))
+    deny(`${name} with a command that is not literal is not allowed; name the command`);
+  if (cmd === "create" || cmd === "init") {
+    deny(`${name} ${cmd} fetches a template and is not allowed; create the files by hand`);
+  }
+  if (cmd === "dlx" || name === "bun" && cmd === "x" || name === "npm" && (cmd === "x" || cmd === "exec")) {
+    deny(
+      `${name} ${cmd} downloads and runs foreign code and is not allowed; ${PACKAGE_RUN_INSTEAD}`
+    );
+  }
 }
 function checkWords(env, words, state) {
   if (words.length === 0) return;
@@ -1542,13 +1568,17 @@ function checkWords(env, words, state) {
   if (name === "gh") checkGh(env, args);
   for (const t of writeTargets(name, args)) checkWritePath(env, t, state.cwd, name);
 }
+var ARITHMETIC_DENIED = "arithmetic ((...)) is not allowed; use test or [ ] for comparisons, or a script";
 function checkBash(env, cmd, cwd, depth) {
   if (depth > 8) deny("command nesting too deep");
-  if (/\(\(|\$\[|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?:?=/.test(cmd)) {
+  if (/\$\[|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?:?=/.test(cmd)) {
     deny("arithmetic and parameter-expansion assignment are not allowed");
   }
   const { lines, subs } = scan(cmd);
-  for (const sub of subs) checkBash(env, sub, cwd, depth + 1);
+  for (const sub of subs) {
+    if (sub.startsWith("(")) deny(ARITHMETIC_DENIED);
+    checkBash(env, sub, cwd, depth + 1);
+  }
   const state = { cwd };
   for (const line of lines) {
     for (const seg of toSegments(line)) checkSegment(env, seg, state);
