@@ -597,6 +597,7 @@ describe('writeCrewSettings', () => {
           'blocks.lock',
           'usage.json',
           'launch.lock',
+          'pause.json',
         ].map((f) => join(state, f)),
         join(dirnameOf(state), 'owner'),
       ],

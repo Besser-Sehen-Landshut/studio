@@ -49,6 +49,7 @@ import {
   stateRootFor,
   writeStateFile,
 } from './paths.js';
+import { PAUSED_LINE, readPause } from './pause.js';
 import type { Ports } from './ports.js';
 import { readCrewRecords } from './state.js';
 import {
@@ -81,6 +82,9 @@ export function guardHookCommand(bin: string): string {
 }
 
 const ITEM_ID_RE = /^[A-Z]+-\d+$/;
+
+/** Whether `id` has the board's id shape (safe in paths and branch names). */
+export const isItemId = (id: string): boolean => ITEM_ID_RE.test(id);
 
 /** Item ids end up in paths and branch names: refuse anything but the board's id shape. */
 function assertItemId(id: string): void {
@@ -722,6 +726,32 @@ function refuseIfBlocked(ownerRoot: string): void {
   if (line !== undefined) throw new Error(line);
 }
 
+/** A pause of the owner refuses a launch; a pause file that cannot be read pauses too. */
+function refuseIfPaused(stateRoot: string): void {
+  if (readPause(stateRoot).paused) throw new Error(PAUSED_LINE);
+}
+
+export type CrewState = 'working' | 'waiting' | 'blocked' | 'stopped' | 'crashed' | 'done';
+
+/**
+ * What a crew is doing, for the pane. A finished item is done; a record marked stopped is stopped;
+ * otherwise a live process is working whatever the board says; without one the board status
+ * decides (a report that waits to be collected counts as waiting, no report means it crashed).
+ */
+export function crewStateOf(
+  rec: Pick<CrewRecord, 'stoppedAt'>,
+  status: string,
+  alive: boolean,
+  hasReport: boolean,
+): CrewState {
+  if (status === 'merged' || status === 'dropped') return 'done';
+  if (rec.stoppedAt !== undefined) return 'stopped';
+  if (alive) return 'working';
+  if (status === 'blocked') return 'blocked';
+  if (status === 'in_review' || status === 'queued') return 'waiting';
+  return hasReport ? 'waiting' : 'crashed';
+}
+
 export async function launchCrew(
   projectDir: string,
   item: WorkItem,
@@ -818,6 +848,7 @@ async function launchCrewLocked(
   migrateOwnerState(ownerRoot, ports.clock.now());
   // An account block refuses before any provider call.
   refuseIfBlocked(ownerRoot);
+  refuseIfPaused(stateRoot);
   // A block in an old project file that was not merged yet would go unseen.
   if (pendingLegacyState(dirname(ownerRoot)).length > 0) {
     throw new Error('old project state files are not migrated yet; refusing to launch, try again');
@@ -997,8 +1028,9 @@ async function launchCrewLocked(
   const log = join(stateRoot, 'logs', `${item.id}.jsonl`);
   ensureStateDir(stateRoot, dirname(log));
   const logStart = fileSize(log);
-  // A block may have arrived while this launch was preparing.
+  // A block or a pause may have arrived while this launch was preparing.
   refuseIfBlocked(ownerRoot);
+  refuseIfPaused(stateRoot);
   // Preparing may have taken long: keep the lock, and if it was lost refuse. The checks run once
   // more, as the last ones before the run is counted and started.
   lock.heartbeat(ports.clock.now());

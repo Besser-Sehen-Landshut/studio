@@ -48,6 +48,7 @@ export const STATE_FILES = [
   'blocks.lock',
   'usage.json',
   'launch.lock',
+  'pause.json',
 ];
 
 /** `$XDG_STATE_HOME/studio`, else `<home>/.local/state/studio`: the parent of every state root. */

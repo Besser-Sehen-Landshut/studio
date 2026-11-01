@@ -88,6 +88,7 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 | `queue add <repo>#<pr>`  | Put a reviewed PR into the merge queue                        |
 | `queue run`              | Merge queued PRs one at a time (exact head SHA, checks green) |
 | `state`                  | Refresh `state.json` in the state root                        |
+| `pause`, `resume`        | Owner only: hold or release new launches and merges           |
 | `stop <id>`              | Stop a crew session                                           |
 | `metrics`                | Lead time and deployment frequency                            |
 | `setup ci [--write]`     | Detect CI runners, propose the `ci:` block, lint workflows    |
@@ -96,6 +97,8 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 | `accounts-clear <label>` | Owner only, in a terminal: clear a label's account block      |
 
 `launch` refuses while a crew for the same item is still running and deletes a report an earlier run left in a reused clone. `collect` refuses while the item's crew process is still alive and refuses a report last modified before the crew started.
+
+`pause` writes `pause.json` in the state root: `plan` assigns nothing (reason `paused`), `launch` refuses, and `queue run` holds before the next merge. Running crews continue. Any entry under that name counts as paused, readable or not; `resume` removes it. A crew (`STUDIO_ROLE=crew`) cannot run either command. `queue run` also holds while old per-project state files are not yet merged into the owner root.
 
 `queue run` is meant to run in the background. It holds a lock in the state root (a second run exits 1 with "queue already running" while the holder lives; the lock records pid, start and a heartbeat refreshed on every step and poll, and is taken over with a note only when that pid is gone or the heartbeat is older than 15 minutes; SIGTERM, SIGINT and SIGHUP release it), picks up PRs added with `queue add` while it runs, and moves each board item as soon as its PR is done. On start it first applies results a previous run recorded but did not put on the board. Right after a head change (branch update or new push) a PR without any reported check counts as pending for 5 minutes, then fails with "no checks reported". `merge.strategy: native-queue` is not supported yet: `queue add` and `queue run` refuse it.
 

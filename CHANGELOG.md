@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `studio pause` and `studio resume` (owner only): while paused nothing new is planned, launched or
+  merged; running crews continue. A `pause.json` that cannot be read still pauses.
+- `state.json` carries what a status pane needs: a state per crew (`working`, `waiting`, `blocked`,
+  `stopped`, `crashed`, `done`) with title and repository, CI use, today's merges and deploys, runs
+  per day and label, the state of the latest push builds on `main`, and the ready and queued counts.
+  Labels only: no credential value is written.
+
+### Fixed
+
+- `studio state` still writes `state.json` when crew records of another project cannot be read; it
+  leaves out the per-label figures and adds a `crew-records` line for the owner. Plan and launch
+  still refuse.
+- `queue run` holds while old per-project state files have not been migrated.
+
 ### Changed
 
 - Account blocks, usage limits and per-label usage are owner-wide, in `<state base>/owner`: a block

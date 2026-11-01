@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CrewRecord } from './crew.js';
+import type { CrewRecord, CrewState } from './crew.js';
 import type { Parks } from './limits.js';
+import type { MainBuild } from './main-build.js';
 import { assertStatePath, ensureStateDir } from './paths.js';
 import type { Capacity } from './planner.js';
 import type { QueueState } from './queue.js';
@@ -37,6 +38,18 @@ export interface CrewSnapshot {
   since: string;
   /** Label of the credential this crew runs on (never the credential). */
   label?: string;
+  /** Title of the board item; absent when the item is not on the board. */
+  title?: string;
+  /** What the crew is doing, for the pane; `status` stays the board status. */
+  state: CrewState;
+  stoppedAt?: string;
+  repo?: string;
+}
+
+export interface MergedToday {
+  pr: number;
+  repo: string;
+  at: string;
 }
 
 export interface Notification {
@@ -52,6 +65,13 @@ export interface StateSnapshot {
   crew: CrewSnapshot[];
   queue: QueueState;
   capacity: Capacity;
+  ci: { busy: number; total: number; mergeMaxBusy: number; ok: boolean };
+  /** Merges and deploys of this project on the owner's local day (`crew_label_limits.timezone`). */
+  today: { day: string; merged: MergedToday[]; deployed: number };
+  /** Runs per day and credential label (labels only); absent when nothing ran or the file is unreadable. */
+  usageDays?: Record<string, Record<string, number>>;
+  mainBuild: MainBuild;
+  counts: { ready: number; queued: number };
   /** Owner-only items that are not merged or dropped, plus at most one `account-block` or `usage-limit` line. */
   forOwner: { id: string; title: string }[];
   /** Credential labels parked at a usage limit. */
