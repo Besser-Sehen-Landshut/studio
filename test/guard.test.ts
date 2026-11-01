@@ -517,18 +517,197 @@ describe('round 1 regressions', () => {
     denies(['/usr/local/bin/terraform apply', 'env X=1 /opt/bin/terraform apply -auto-approve']);
   });
 
-  it('I5b pause, resume and accounts-clear are owner-only in every form', () => {
-    const forms = (sub: string) => [
-      `studio ${sub}`,
-      `studio --project . ${sub}`,
-      `STUDIO_ROLE=owner studio ${sub}`,
-      `env STUDIO_ROLE= studio ${sub}`,
-      `/usr/local/bin/studio ${sub}`,
-      `node /opt/plugin/bin/studio ${sub}`,
-      `echo x && studio ${sub}`,
+  it('I5b a crew may not run studio at all, whatever the arguments', () => {
+    const forms = (args: string) => [
+      `studio ${args}`,
+      `studio --project . ${args}`,
+      `A=1 studio ${args}`,
+      `env studio ${args}`,
+      `env A=1 studio ${args}`,
+      `/usr/local/bin/studio ${args}`,
+      `bin/studio ${args}`,
+      `./bin/studio ${args}`,
+      `../plugin/bin/studio ${args}`,
+      `Studio ${args}`,
+      `dist-bundle/studio.mjs ${args}`,
+      `node /opt/plugin/bin/studio ${args}`,
+      `node bin/studio ${args}`,
+      `node ./bin/studio ${args}`,
+      `node /opt/plugin/dist-bundle/studio.mjs ${args}`,
+      `node dist-bundle/studio.mjs ${args}`,
+      `node --no-warnings bin/studio ${args}`,
+      `node --title x bin/studio ${args}`,
+      `node --require=bin/studio app.js ${args}`,
+      `node -r bin/studio app.js ${args}`,
+      `node -- bin/studio ${args}`,
+      `/usr/bin/node bin/studio ${args}`,
+      `nodejs bin/studio ${args}`,
+      `A=1 node bin/studio ${args}`,
+      `exec studio ${args}`,
+      `command studio ${args}`,
+      `nohup studio ${args}`,
+      `timeout 5 studio ${args}`,
+      `echo x && studio ${args}`,
+      `echo x; studio ${args}`,
+      `echo x | studio ${args}`,
+      `false || node bin/studio ${args}`,
+      `(studio ${args})`,
+      `{ studio ${args}; }`,
+      `if true; then studio ${args}; fi`,
+      `f() { studio ${args}; }; f`,
+      `echo $(studio ${args})`,
+      `echo \`studio ${args}\``,
+      `find . -exec studio ${args} \\;`,
+      `sh bin/studio ${args}`,
     ];
-    denies([...forms('pause'), ...forms('resume'), ...forms('accounts-clear label-a')]);
-    for (const c of ['studio state', 'studio plan', 'studio launch APP-1', 'echo pause resume']) {
+    for (const args of ['pause', 'resume', 'accounts-clear label-a', 'state', 'plan', '']) {
+      denies(forms(args));
+    }
+    denies(['studio launch APP-1', 'studio --help']);
+  });
+
+  it('I5c a command word that is an expansion or a glob is denied', () => {
+    denies([
+      '$X pause',
+      '"$X" pause',
+      `\${X} pause`,
+      '$(which studio) pause',
+      '"$(which studio)" pause',
+      '`which studio` pause',
+      '/opt/bin/stud* pause',
+      '/opt/bin/studi? pause',
+      '/opt/bin/[s]tudio pause',
+      'stud* pause',
+      '$X/studio pause',
+      'bin/$X pause',
+      's"tu"dio pause',
+      "s'tu'dio pause",
+      '\\studio pause',
+      'stu\\dio pause',
+      '"studio" pause',
+      "$'studio' pause",
+      '{studio,pause}',
+      'exec $X pause',
+      'A=1 $X pause',
+    ]);
+  });
+
+  it('I5d node needs a literal script argument', () => {
+    denies([
+      'node $X',
+      `node \${X}`,
+      'node "$X"',
+      'node $X pause',
+      'node $(which studio)',
+      'node "$(which studio)" pause',
+      'node `which studio`',
+      'node bin/$X',
+      'node bin/stud*',
+      'node bin/studi?',
+      'node bin/[s]tudio',
+      'node "bin/stud"*',
+      'node --no-warnings $X',
+      'node --title $X app.js',
+      'node --require=$X app.js',
+      'node -- $X',
+      'node -',
+      'node',
+      'node -e "$X"',
+      'node -e \'import("./bin/studio")\'',
+      'node --eval=\'import("./bin/studio")\'',
+    ]);
+  });
+
+  it('I5e ordinary node and npm commands are allowed, also with these words as arguments', () => {
+    for (const c of [
+      'node scripts/run.js resume',
+      'node app.js pause',
+      'node app.js studio',
+      'node app.js "$X"',
+      'node app.js $(echo x)',
+      'node --no-warnings app.js pause',
+      'node --test test/a.test.js',
+      'node --max-old-space-size=4096 app.js',
+      'node --version',
+      'node -e "console.log(1)"',
+      'node -e "console.log([1, 2 * 3])"',
+      'node --eval="console.log([1])"',
+      'npm run resume',
+      'npm run pause',
+      'pnpm test',
+      'echo pause resume',
+      'echo studio pause',
+      'ls studio',
+      'cat .studio/reports/APP-1.md',
+      'git push -u origin HEAD:refs/heads/studio/APP-1',
+      './studio.sh',
+    ]) {
+      expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
+    }
+  });
+
+  it('I5f other ways a shell runs a string stay denied with studio', () => {
+    denies([
+      'eval studio pause',
+      'eval "studio pause"',
+      'sh -c "studio pause"',
+      'bash -c "studio pause"',
+      'zsh -c "node bin/studio resume"',
+      'sh -c "$X"',
+      'echo studio pause | sh',
+      'echo studio pause | bash -s',
+      'source ./x',
+      '. ./x',
+      'xargs studio pause',
+      'echo pause | xargs studio',
+      "trap 'studio pause' EXIT",
+      'alias s=studio',
+      'hash -p bin/studio s',
+    ]);
+  });
+
+  it('I5g variables with the STUDIO_ prefix cannot be set or unset', () => {
+    denies([
+      'STUDIO_ROLE=owner cmd',
+      'STUDIO_ROLE= cmd',
+      'STUDIO_ROLE=owner',
+      'A=1 STUDIO_ROLE=owner cmd',
+      'STUDIO_ANYTHING=1 cmd',
+      'STUDIO_ROLE=owner studio pause',
+      'export STUDIO_ROLE=',
+      'export STUDIO_ROLE=owner',
+      'export A=1 STUDIO_ROLE=owner',
+      'export STUDIO_ROLE',
+      'declare STUDIO_ROLE=owner',
+      'declare -x STUDIO_ROLE=owner',
+      'typeset STUDIO_ROLE=owner',
+      'local STUDIO_ROLE=owner',
+      'readonly STUDIO_ROLE=owner',
+      'read STUDIO_ROLE',
+      'unset STUDIO_ROLE',
+      'unset -v STUDIO_ROLE',
+      'env STUDIO_ROLE=',
+      'env STUDIO_ROLE=owner cmd',
+      'env -u STUDIO_ROLE',
+      'env -u STUDIO_ROLE cmd',
+      '/usr/bin/env -u STUDIO_ROLE cmd',
+      'printf -v STUDIO_ROLE x',
+      'for STUDIO_ROLE in owner; do cmd; done',
+      'select STUDIO_ROLE in owner; do cmd; done',
+      'let STUDIO_ROLE=1',
+      '(( STUDIO_ROLE = 1 ))',
+      '((STUDIO_ROLE=1))',
+      '(STUDIO_ROLE=owner cmd)',
+      '{ STUDIO_ROLE=owner; }',
+      'echo x; STUDIO_ROLE=owner',
+      'echo $(STUDIO_ROLE=owner cmd)',
+      'exec STUDIO_ROLE=owner',
+    ]);
+    for (const c of [
+      'echo "$STUDIO_ROLE"',
+      'test "$STUDIO_ROLE" = crew',
+      'for x in a b; do echo x; done',
+    ]) {
       expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
     }
   });

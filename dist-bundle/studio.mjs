@@ -32624,8 +32624,8 @@ async function runCli(argv, deps) {
       }
       case "pause":
       case "resume": {
-        if (deps.env.STUDIO_ROLE === "crew") {
-          stderr(`studio: ${cmd} is for the owner; nothing written
+        if (deps.env.STUDIO_ROLE === "crew" || deps.isTerminal !== true) {
+          stderr(`studio: ${cmd} is for the owner and needs a terminal; nothing written
 `);
           return 1;
         }

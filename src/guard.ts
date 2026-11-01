@@ -605,6 +605,10 @@ const DENIED_WRAPPERS = new Set([
   'mapfile',
   'readarray',
   'getopts',
+  'trap',
+  'alias',
+  'hash',
+  'let',
 ]);
 const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const LOOSE_ASSIGNMENT = /^([^=\s/]+)=/;
@@ -619,7 +623,7 @@ function assignmentName(w: string): string | undefined {
   return name;
 }
 const SENSITIVE_VAR =
-  /^(GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/;
+  /^(STUDIO_|GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/;
 
 const unresolved = (w: string): boolean => w.includes(SUBST) || w.includes('$') || w.includes('`');
 /** A word whose real value depends on the shell at run time (variables, substitutions, globs). */
@@ -1132,6 +1136,50 @@ function checkVarBuiltin(name: string, args: string[]): void {
   }
 }
 
+// A crew has no use for the studio CLI (its skill uses no studio command), and the owner's commands
+// must stay the owner's. The CLI refuses those without a terminal; this is a second net, and a file
+// a crew writes or copies itself can still get past it: the sandbox is the boundary.
+const CREW_NO_STUDIO = 'a crew may not run studio';
+const NODE_NAME = /^node(js)?[0-9.]*$/i;
+/** `bin/studio` or `dist-bundle/studio.mjs`; case-insensitive because file systems can be. */
+const isStudioBinary = (w: string): boolean => /^studio(\.(mjs|cjs|js))?$/i.test(basename(w));
+
+/**
+ * Denies node when its script may be the studio binary or cannot be read from the command line.
+ * An option without `=` may take the next word as its value, so that word and the one after it
+ * both count as possible scripts. Words after the script are its arguments and stay free.
+ */
+function checkNode(args: string[]): void {
+  const notLiteral = 'node with a script argument that is not literal is not allowed';
+  if (args.length === 0) deny('node reading its script from stdin is not allowed');
+  let mayBeValue = false;
+  let inlineCode = false;
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k] as string;
+    // Inline code is not a path: brackets and `*` in it are not globs, but `$` may still expand.
+    const code = inlineCode || /^--(eval|print)=/.test(a);
+    if (code ? unresolved(a) : unresolvedWord(a)) deny(notLiteral);
+    if (a === '-') deny('node reading its script from stdin is not allowed');
+    if (a === '--') {
+      const script = args[k + 1];
+      if (script !== undefined && unresolvedWord(script)) deny(notLiteral);
+      if (script !== undefined && isStudioBinary(script)) deny(CREW_NO_STUDIO);
+      return;
+    }
+    if (inlineCode && /studio/i.test(a)) deny(CREW_NO_STUDIO);
+    if (a.startsWith('-') && !inlineCode) {
+      if (/studio/i.test(a)) deny(CREW_NO_STUDIO);
+      mayBeValue = !a.includes('=');
+      inlineCode = /^(-[pe]+|--eval|--print)$/.test(a);
+      continue;
+    }
+    inlineCode = false;
+    if (isStudioBinary(a)) deny(CREW_NO_STUDIO);
+    if (!mayBeValue) return;
+    mayBeValue = false;
+  }
+}
+
 function checkWords(env: Env, words: string[], state: State): void {
   if (words.length === 0) return;
   const base = state.cwd ?? env.wt;
@@ -1179,14 +1227,13 @@ function checkWords(env: Env, words: string[], state: State): void {
     if (positionals(args).length === 0 || args.includes('-')) {
       deny(`${name} reading its script from stdin is not allowed`);
     }
+    if (positionals(args).some(isStudioBinary)) deny(CREW_NO_STUDIO);
   }
-  // Clearing an account block, pausing and resuming are the owner's decisions (the CLI refuses
-  // them for the crew role too; this is the second net). `node` covers `node <plugin>/bin/studio ...`.
-  if (name === 'studio' || name === 'node') {
-    for (const sub of OWNER_ONLY_SUBCOMMANDS) {
-      if (args.includes(sub)) deny(`studio ${sub} is owner-only`);
-    }
-  }
+  if (isStudioBinary(name)) deny(CREW_NO_STUDIO);
+  if (NODE_NAME.test(name)) checkNode(args);
+  // `for NAME in ...`, `select NAME in ...` and `(( NAME = 1 ))` set NAME without an assignment word.
+  if (name === 'for' || name === 'select') checkVarName(args[0] ?? '');
+  checkVarName(/^[A-Za-z_][A-Za-z0-9_]*/.exec(name)?.[0] ?? '');
   if (name === 'find') checkFind(env, args, state);
   if (name === 'git' || name === 'gh') {
     if (words.some((w) => w.includes(SUBST))) deny(`command substitution in a ${name} command`);
@@ -1195,8 +1242,6 @@ function checkWords(env: Env, words: string[], state: State): void {
   if (name === 'gh') checkGh(env, args);
   for (const t of writeTargets(name, args)) checkWritePath(env, t, state.cwd, name);
 }
-
-const OWNER_ONLY_SUBCOMMANDS = ['accounts-clear', 'pause', 'resume'];
 
 function checkBash(env: Env, cmd: string, cwd: string | null, depth: number): void {
   if (depth > 8) deny('command nesting too deep');

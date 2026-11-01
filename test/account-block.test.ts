@@ -1174,7 +1174,7 @@ describe('account block details', () => {
     ]) {
       expect(run(c), c).toBe('deny');
     }
-    expect(run('studio status')).toBe('allow');
+    expect(run('studio status')).toBe('deny');
     expect(run('echo accounts-clear')).toBe('allow');
   });
 });

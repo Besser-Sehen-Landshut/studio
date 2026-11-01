@@ -614,9 +614,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
       case 'pause':
       case 'resume': {
-        // Owner only: a crew must not lift or set the owner's pause.
-        if (deps.env.STUDIO_ROLE === 'crew') {
-          stderr(`studio: ${cmd} is for the owner; nothing written\n`);
+        // Owner only: a crew runs without a terminal and with this role in its environment.
+        if (deps.env.STUDIO_ROLE === 'crew' || deps.isTerminal !== true) {
+          stderr(`studio: ${cmd} is for the owner and needs a terminal; nothing written\n`);
           return 1;
         }
         if (rest.length > 0) throw new UsageError(`${cmd} takes no arguments`);

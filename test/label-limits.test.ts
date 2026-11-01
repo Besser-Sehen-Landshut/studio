@@ -131,6 +131,8 @@ function makePorts(startIso = '2026-11-01T10:00:00Z') {
   };
 }
 
+const TERMINAL: Partial<CliDeps> = { isTerminal: true };
+
 async function cli(fx: Fx, ports: Ports, argv: string[], extra: Partial<CliDeps> = {}) {
   let out = '';
   let err = '';
@@ -697,7 +699,7 @@ describe('pause and resume', () => {
     const fx = makeFx(ITEMS);
     const p = makePorts();
     expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
-    const r = await cli(fx, p.ports, ['pause']);
+    const r = await cli(fx, p.ports, ['pause'], TERMINAL);
     expect(r.code).toBe(0);
     expect(JSON.parse(r.out)).toMatchObject({ paused: true });
     expect(existsSync(pauseFile(fx))).toBe(true);
@@ -748,8 +750,8 @@ describe('pause and resume', () => {
   it('resume lifts the pause', async () => {
     const fx = makeFx(ITEMS);
     const p = makePorts();
-    await cli(fx, p.ports, ['pause']);
-    const r = await cli(fx, p.ports, ['resume']);
+    await cli(fx, p.ports, ['pause'], TERMINAL);
+    const r = await cli(fx, p.ports, ['resume'], TERMINAL);
     expect(r.code).toBe(0);
     expect(JSON.parse(r.out)).toMatchObject({ paused: false });
     expect(existsSync(pauseFile(fx))).toBe(false);
@@ -760,12 +762,33 @@ describe('pause and resume', () => {
   it('a crew role may neither pause nor resume', async () => {
     const fx = makeFx(ITEMS);
     const p = makePorts();
-    const crewEnv = { env: { ...fx.env, STUDIO_ROLE: 'crew' } };
+    const crewEnv = { env: { ...fx.env, STUDIO_ROLE: 'crew' }, isTerminal: true };
     expect((await cli(fx, p.ports, ['pause'], crewEnv)).code).toBe(1);
     expect(existsSync(pauseFile(fx))).toBe(false);
-    await cli(fx, p.ports, ['pause']);
+    await cli(fx, p.ports, ['pause'], TERMINAL);
     expect((await cli(fx, p.ports, ['resume'], crewEnv)).code).toBe(1);
     expect(existsSync(pauseFile(fx))).toBe(true);
+  });
+
+  it('pause and resume need a terminal: fixed message, exit 1, nothing written', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    const noTerminal: Partial<CliDeps>[] = [{}, { isTerminal: false }];
+    for (const extra of noTerminal) {
+      const r = await cli(fx, p.ports, ['pause'], extra);
+      expect(r.code).toBe(1);
+      expect(r.err).toBe('studio: pause is for the owner and needs a terminal; nothing written\n');
+      expect(r.out).toBe('');
+      expect(existsSync(pauseFile(fx))).toBe(false);
+    }
+    await cli(fx, p.ports, ['pause'], TERMINAL);
+    for (const extra of noTerminal) {
+      const r = await cli(fx, p.ports, ['resume'], extra);
+      expect(r.code).toBe(1);
+      expect(r.err).toBe('studio: resume is for the owner and needs a terminal; nothing written\n');
+      expect(r.out).toBe('');
+      expect(existsSync(pauseFile(fx))).toBe(true);
+    }
   });
 
   it('a corrupt pause.json is paused; resume clears it', async () => {
@@ -775,7 +798,7 @@ describe('pause and resume', () => {
     writeFileSync(pauseFile(fx), 'garbage');
     expect(JSON.parse((await cli(fx, p.ports, ['plan'])).out).assign).toEqual([]);
     expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(1);
-    expect((await cli(fx, p.ports, ['resume'])).code).toBe(0);
+    expect((await cli(fx, p.ports, ['resume'], TERMINAL)).code).toBe(0);
     expect(existsSync(pauseFile(fx))).toBe(false);
     expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
   });

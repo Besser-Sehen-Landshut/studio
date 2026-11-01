@@ -7,8 +7,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- `studio pause` and `studio resume` (owner only): while paused nothing new is planned, launched or
-  merged; running crews continue. A `pause.json` that cannot be read still pauses.
+- `studio pause` and `studio resume` (owner only, in a terminal): while paused nothing new is
+  planned, launched or merged; running crews continue. A `pause.json` that cannot be read still
+  pauses.
 - `state.json` carries what a status pane needs: a state per crew (`working`, `waiting`, `blocked`,
   `stopped`, `crashed`, `done`) with title and repository, CI use, today's merges and deploys, runs
   per day and label, the state of the latest push builds on `main`, and the ready and queued counts.
@@ -16,6 +17,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- The crew guard denies `studio` whatever the arguments, also through `node`, and denies `node` with
+  a script argument that is not literal, and setting or unsetting `STUDIO_*` variables. Before, `$(...)`,
+  `$VAR` or a glob got past the check of owner-only subcommands. `node app.js pause` and
+  `npm run resume` are no longer denied.
 - `studio state` still writes `state.json` when crew records of another project cannot be read; it
   leaves out the per-label figures and adds a `crew-records` line for the owner. Plan and launch
   still refuse.

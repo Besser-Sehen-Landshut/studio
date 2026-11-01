@@ -193,6 +193,8 @@ async function cli(fx: Fx, ports: Ports, ...argv: string[]) {
     env: fx.env,
     homedir: fx.home,
     cwd: fx.project,
+    // These two are the owner's and need a terminal; everything else runs without one.
+    isTerminal: argv[0] === 'pause' || argv[0] === 'resume',
   });
   return { code, out, err };
 }

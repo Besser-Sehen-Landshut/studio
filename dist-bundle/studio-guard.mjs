@@ -979,7 +979,11 @@ var DENIED_WRAPPERS = /* @__PURE__ */ new Set([
   ".",
   "mapfile",
   "readarray",
-  "getopts"
+  "getopts",
+  "trap",
+  "alias",
+  "hash",
+  "let"
 ]);
 var VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 var LOOSE_ASSIGNMENT = /^([^=\s/]+)=/;
@@ -991,7 +995,7 @@ function assignmentName(w) {
     deny(`assignment to "${name}" is not allowed (plain variable names only)`);
   return name;
 }
-var SENSITIVE_VAR = /^(GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/;
+var SENSITIVE_VAR = /^(STUDIO_|GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/;
 var unresolved = (w) => w.includes(SUBST) || w.includes("$") || w.includes("`");
 var unresolvedWord = (w) => unresolved(w) || /[*?[]/.test(w) && w !== "[" && w !== "[[";
 function checkVarName(name) {
@@ -1434,6 +1438,38 @@ function checkVarBuiltin(name, args) {
     checkVarName(vn);
   }
 }
+var CREW_NO_STUDIO = "a crew may not run studio";
+var NODE_NAME = /^node(js)?[0-9.]*$/i;
+var isStudioBinary = (w) => /^studio(\.(mjs|cjs|js))?$/i.test(basename(w));
+function checkNode(args) {
+  const notLiteral = "node with a script argument that is not literal is not allowed";
+  if (args.length === 0) deny("node reading its script from stdin is not allowed");
+  let mayBeValue = false;
+  let inlineCode = false;
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    const code = inlineCode || /^--(eval|print)=/.test(a);
+    if (code ? unresolved(a) : unresolvedWord(a)) deny(notLiteral);
+    if (a === "-") deny("node reading its script from stdin is not allowed");
+    if (a === "--") {
+      const script = args[k + 1];
+      if (script !== void 0 && unresolvedWord(script)) deny(notLiteral);
+      if (script !== void 0 && isStudioBinary(script)) deny(CREW_NO_STUDIO);
+      return;
+    }
+    if (inlineCode && /studio/i.test(a)) deny(CREW_NO_STUDIO);
+    if (a.startsWith("-") && !inlineCode) {
+      if (/studio/i.test(a)) deny(CREW_NO_STUDIO);
+      mayBeValue = !a.includes("=");
+      inlineCode = /^(-[pe]+|--eval|--print)$/.test(a);
+      continue;
+    }
+    inlineCode = false;
+    if (isStudioBinary(a)) deny(CREW_NO_STUDIO);
+    if (!mayBeValue) return;
+    mayBeValue = false;
+  }
+}
 function checkWords(env, words, state) {
   if (words.length === 0) return;
   const base = state.cwd ?? env.wt;
@@ -1474,12 +1510,12 @@ function checkWords(env, words, state) {
     if (positionals(args).length === 0 || args.includes("-")) {
       deny(`${name} reading its script from stdin is not allowed`);
     }
+    if (positionals(args).some(isStudioBinary)) deny(CREW_NO_STUDIO);
   }
-  if (name === "studio" || name === "node") {
-    for (const sub of OWNER_ONLY_SUBCOMMANDS) {
-      if (args.includes(sub)) deny(`studio ${sub} is owner-only`);
-    }
-  }
+  if (isStudioBinary(name)) deny(CREW_NO_STUDIO);
+  if (NODE_NAME.test(name)) checkNode(args);
+  if (name === "for" || name === "select") checkVarName(args[0] ?? "");
+  checkVarName(/^[A-Za-z_][A-Za-z0-9_]*/.exec(name)?.[0] ?? "");
   if (name === "find") checkFind(env, args, state);
   if (name === "git" || name === "gh") {
     if (words.some((w) => w.includes(SUBST))) deny(`command substitution in a ${name} command`);
@@ -1488,7 +1524,6 @@ function checkWords(env, words, state) {
   if (name === "gh") checkGh(env, args);
   for (const t of writeTargets(name, args)) checkWritePath(env, t, state.cwd, name);
 }
-var OWNER_ONLY_SUBCOMMANDS = ["accounts-clear", "pause", "resume"];
 function checkBash(env, cmd, cwd, depth) {
   if (depth > 8) deny("command nesting too deep");
   const { lines, subs } = scan(cmd);
