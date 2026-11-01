@@ -167,6 +167,7 @@ Settings that open reads on the owner's machine are not the repository's call. T
 crew_toolchain_paths: [] # absolute directories a crew may read, e.g. a version manager's install dir
 crew_credential_command: /absolute/path/to/provider # optional, see "Crew credentials and usage limits"
 allow_api_billing: false # true lets crew runs bill the API
+# notify: { channel: my-channel, command: /absolute/path/to/notify } # optional push, see below
 crew_label_limits: # usage limits per credential label, see "Usage limits per credential"
   max_parallel: 2 # crews running at once per label
   # max_runs_per_day: 20 # optional launches per label and day
@@ -174,3 +175,5 @@ crew_label_limits: # usage limits per credential label, see "Usage limits per cr
 ```
 
 A `studio.yaml` that still contains `crew_toolchain_paths` is refused. At launch every toolchain path must exist; Studio resolves it to its real path (which goes into the sandbox) and refuses it, comparing literal and real spellings and case-insensitively on macOS, when it is the home or a parent of it, equals, contains or lies inside a credential store, `~/.claude` or `CLAUDE_CONFIG_DIR`, or equals, contains or lies inside the project directory or the state root.
+
+**Push notifications.** With `notify: { channel, command }` in the owner config (a `notify` block in `studio.yaml` stays parsed, has no effect, and `studio` warns), `studio state` hands each line for you and each account block to `command` once. `channel` matches `[A-Za-z0-9._-]{1,64}`; `command` is checked like the credential provider (absolute, a regular file you own, not group- or world-writable) and runs without a shell, with a 30 s timeout, output ignored. Its environment is exactly `PATH`, `HOME`, `STUDIO_NOTIFY_CHANNEL`, `STUDIO_NOTIFY_KIND` (`owner-item`, `usage-limit` or `account-block`), `STUDIO_NOTIFY_ID`, `STUDIO_NOTIFY_PROJECT` and `STUDIO_NOTIFY_TEXT` (control characters replaced by spaces, at most 500 characters). Sent messages are remembered in `notified.json` in the owner state root; a failing command is retried on the next run, a line that vanishes and returns is sent again, at most 20 are sent per run, and an unreadable `notified.json` sends nothing. `studio doctor` shows only whether notify is set.

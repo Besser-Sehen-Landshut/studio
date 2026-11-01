@@ -7841,11 +7841,11 @@ var require_shell_quote = __commonJS({
 });
 
 // src/main.ts
-import { homedir as homedir5 } from "node:os";
+import { homedir as homedir6 } from "node:os";
 
 // src/cli.ts
 import { existsSync as existsSync5 } from "node:fs";
-import { dirname as dirname8, join as join14, resolve as resolve5 } from "node:path";
+import { dirname as dirname8, join as join15, resolve as resolve5 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/board.ts
@@ -27965,7 +27965,13 @@ var ownerConfigSchema = external_exports.strictObject({
   // Opt-in: let crew runs bill the API. An API key would otherwise take precedence over the
   // subscription login, so the variables and settings for it are refused by default.
   allowApiBilling: external_exports.boolean().default(false),
-  crewLabelLimits: crewLabelLimitsSchema
+  crewLabelLimits: crewLabelLimitsSchema,
+  // Push notifications: an absolute executable that gets each message in its environment (see
+  // README). It lives here, not in studio.yaml, because it runs on the owner's machine.
+  notify: external_exports.strictObject({
+    channel: external_exports.string().regex(/^[A-Za-z0-9._-]{1,64}$/, "must match [A-Za-z0-9._-]{1,64}"),
+    command: external_exports.string().min(1)
+  }).optional()
 });
 function xdgDir(env, name) {
   const v = env[name];
@@ -28006,6 +28012,10 @@ function loadOwnerConfig(opts = {}) {
   if (command !== void 0 && !isAbsolute(command)) {
     problems.push("crew_credential_command: must be an absolute path");
   }
+  const notifyCommand = result.data.notify?.command;
+  if (notifyCommand !== void 0 && !isAbsolute(notifyCommand)) {
+    problems.push("notify.command: must be an absolute path");
+  }
   if (problems.length > 0) throw new ConfigError(file2, problems.join("; "));
   return result.data;
 }
@@ -28023,6 +28033,11 @@ function configWarnings(config2) {
   if (config2.crewAllowedWorkflowRefs.length > 0) {
     warnings.push(
       `crew_allowed_workflow_refs (${config2.crewAllowedWorkflowRefs.join(", ")}) must be protected server-side (branch protection or rulesets): the crew guard cannot stop a push to those refs from another path`
+    );
+  }
+  if (config2.notify !== void 0) {
+    warnings.push(
+      "notify in studio.yaml has no effect: the notify command is set in the owner config ($XDG_CONFIG_HOME/studio/config.yaml or ~/.config/studio/config.yaml)"
     );
   }
   return warnings;
@@ -30701,6 +30716,106 @@ async function readMainBuild(config2, ports) {
   }
 }
 
+// src/notify.ts
+import { lstatSync as lstatSync9, readFileSync as readFileSync10 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { join as join10 } from "node:path";
+var MAX_SENDS_PER_RUN = 20;
+var MAX_TEXT = 500;
+var cleanText = (s) => Array.from(s.replace(new RegExp("\\p{Cc}", "gu"), " ")).slice(0, MAX_TEXT).join("");
+function messagesOf(projectKey, snapshot) {
+  const notes = snapshot.notifications ?? [];
+  const out = [];
+  for (const line of snapshot.forOwner) {
+    if (line.id === "account-block" && notes.length > 0) continue;
+    const kind = line.id === "account-block" ? "account-block" : line.id === "usage-limit" ? "usage-limit" : "owner-item";
+    out.push({
+      key: `${projectKey}:${line.id}:${line.title}`,
+      kind,
+      id: line.id,
+      text: line.title
+    });
+  }
+  for (const note of notes) {
+    const key = note.label === void 0 ? `block::${note.reason}` : `block:${note.label}:${note.reason}:${note.at}`;
+    out.push({ key, kind: "account-block", id: note.id, text: note.title });
+  }
+  return out;
+}
+function readNotified(file2) {
+  try {
+    if (!lstatSync9(file2).isFile()) return { ok: false };
+  } catch (e) {
+    return e.code === "ENOENT" ? { ok: true, keys: [] } : { ok: false };
+  }
+  try {
+    const raw = JSON.parse(readFileSync10(file2, "utf8"));
+    if (!Array.isArray(raw) || !raw.every((k) => typeof k === "string")) return { ok: false };
+    return { ok: true, keys: raw };
+  } catch {
+    return { ok: false };
+  }
+}
+async function sendNotifications(o2) {
+  const notify = o2.ownerConfig.notify;
+  if (notify === void 0) return [];
+  const file2 = join10(o2.ownerRoot, "notified.json");
+  const read2 = readNotified(file2);
+  if (!read2.ok) return ["notify: notified.json is unreadable; nothing sent"];
+  try {
+    checkCredentialCommand(notify.command, o2.owner);
+  } catch {
+    return [
+      "notify: the notify command is not trusted (absolute, own regular file, not writable by others); nothing sent"
+    ];
+  }
+  const messages = messagesOf(o2.projectKey, o2.snapshot);
+  const current = new Set(messages.map((m) => m.key));
+  const prefix = `${o2.projectKey}:`;
+  const sent = new Set(
+    read2.keys.filter((k) => current.has(k) || !(k.startsWith(prefix) || k.startsWith("block:")))
+  );
+  const penv = o2.owner.env ?? process.env;
+  const errors = [];
+  let sends = 0;
+  for (const m of messages) {
+    if (sent.has(m.key)) continue;
+    if (sends >= MAX_SENDS_PER_RUN) break;
+    sends++;
+    const env = {
+      HOME: o2.owner.homedir ?? homedir5(),
+      STUDIO_NOTIFY_CHANNEL: notify.channel,
+      STUDIO_NOTIFY_KIND: m.kind,
+      STUDIO_NOTIFY_ID: cleanText(m.id),
+      STUDIO_NOTIFY_PROJECT: cleanText(o2.primaryRepo),
+      STUDIO_NOTIFY_TEXT: cleanText(m.text)
+    };
+    if (penv.PATH !== void 0) env.PATH = penv.PATH;
+    try {
+      const reply = await o2.ports.credentials.runProvider(notify.command, env, {
+        timeoutMs: PROVIDER_TIMEOUT_MS,
+        maxBytes: PROVIDER_MAX_BYTES
+      });
+      if (reply.code === 0) sent.add(m.key);
+      else errors.push(`notify: the notify command failed (${m.kind}); it is retried next time`);
+    } catch {
+      errors.push(
+        `notify: the notify command could not be run (${m.kind}); it is retried next time`
+      );
+    }
+  }
+  const keys2 = [...sent];
+  if (keys2.length !== read2.keys.length || keys2.some((k, i2) => k !== read2.keys[i2])) {
+    try {
+      writeStateFile(o2.ownerRoot, file2, `${JSON.stringify(keys2, null, 2)}
+`);
+    } catch {
+      errors.push("notify: notified.json could not be written; messages may repeat");
+    }
+  }
+  return errors;
+}
+
 // src/planner.ts
 var BUILD_TYPES = ["feature", "fix", "chore"];
 var ACTIVE2 = ["assigned", "in_progress", "in_review", "queued"];
@@ -30812,9 +30927,9 @@ function planAssignments(board, config2, capacity, running, hold, credentialSlot
 }
 
 // src/queue.ts
-import { existsSync as existsSync4, lstatSync as lstatSync9, readFileSync as readFileSync10 } from "node:fs";
+import { existsSync as existsSync4, lstatSync as lstatSync10, readFileSync as readFileSync11 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { join as join10 } from "node:path";
+import { join as join11 } from "node:path";
 var QueueHeld = class extends Error {
   constructor(line) {
     super(line);
@@ -30847,16 +30962,16 @@ var stateSchema = external_exports.strictObject({
     })
   )
 });
-var queueFile = (stateRoot) => join10(stateRoot, "queue.json");
+var queueFile = (stateRoot) => join11(stateRoot, "queue.json");
 function loadQueue(stateRoot) {
   const file2 = queueFile(stateRoot);
   assertStatePath(stateRoot, file2);
   if (!existsSync4(file2)) return { pending: [], done: [] };
-  if (lstatSync9(file2).isSymbolicLink())
+  if (lstatSync10(file2).isSymbolicLink())
     throw new Error(`refusing to read ${file2}: it is a symlink`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync10(file2, "utf8"));
+    raw = JSON.parse(readFileSync11(file2, "utf8"));
   } catch {
     throw new Error(`queue file ${file2} is not valid JSON`);
   }
@@ -30943,14 +31058,14 @@ function installSignalRelease(lock) {
   };
 }
 function appendStateLine(stateRoot, name, line) {
-  const file2 = join10(stateRoot, name);
+  const file2 = join11(stateRoot, name);
   assertStatePath(stateRoot, file2);
   let prev = "";
   if (existsSync4(file2)) {
-    if (lstatSync9(file2).isSymbolicLink()) {
+    if (lstatSync10(file2).isSymbolicLink()) {
       throw new Error(`refusing to use ${file2}: it is a symlink`);
     }
-    prev = readFileSync10(file2, "utf8");
+    prev = readFileSync11(file2, "utf8");
     if (prev !== "" && !prev.endsWith("\n")) prev += "\n";
   }
   writeStateFile(stateRoot, file2, `${prev}${line}
@@ -31276,12 +31391,12 @@ import {
   closeSync as closeSync3,
   constants as constants2,
   fstatSync as fstatSync2,
-  lstatSync as lstatSync10,
+  lstatSync as lstatSync11,
   openSync as openSync3,
   readSync as readSync2,
   realpathSync as realpathSync4
 } from "node:fs";
-import { join as join11, sep as sep5 } from "node:path";
+import { join as join12, sep as sep5 } from "node:path";
 var ReportError = class extends Error {
   constructor(message) {
     super(message);
@@ -31358,9 +31473,9 @@ function readReportFile(root, file2, notBefore) {
   const unsafe = () => new ReportError(UNSAFE);
   let fd;
   try {
-    const parts = [root, join11(root, ".studio"), join11(root, ".studio", "reports"), file2];
+    const parts = [root, join12(root, ".studio"), join12(root, ".studio", "reports"), file2];
     parts.forEach((p, i2) => {
-      const st2 = lstatSync10(p);
+      const st2 = lstatSync11(p);
       if (st2.isSymbolicLink()) throw unsafe();
       if (i2 < parts.length - 1 ? !st2.isDirectory() : !st2.isFile()) throw unsafe();
     });
@@ -31391,7 +31506,7 @@ function readReportFile(root, file2, notBefore) {
   }
 }
 function readReport(worktree, id, item, opts = {}) {
-  const file2 = join11(worktree, ".studio", "reports", `${id}.md`);
+  const file2 = join12(worktree, ".studio", "reports", `${id}.md`);
   return parseReport(readReportFile(worktree, file2, opts.notBefore), item);
 }
 function checkReportHead(report, prHead) {
@@ -31402,21 +31517,21 @@ function checkReportHead(report, prHead) {
 
 // src/secret-command.ts
 var import_yaml6 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync12 } from "node:fs";
-import { join as join13 } from "node:path";
+import { readFileSync as readFileSync13 } from "node:fs";
+import { join as join14 } from "node:path";
 
 // src/setup-ci-command.ts
 var import_yaml5 = __toESM(require_dist(), 1);
 import { randomBytes as randomBytes4 } from "node:crypto";
 import {
   readdirSync as readdirSync3,
-  readFileSync as readFileSync11,
+  readFileSync as readFileSync12,
   renameSync as renameSync6,
   statSync as statSync2,
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync6
 } from "node:fs";
-import { join as join12 } from "node:path";
+import { join as join13 } from "node:path";
 
 // src/setup-ci.ts
 var import_yaml4 = __toESM(require_dist(), 1);
@@ -31573,9 +31688,9 @@ function proposeCi(detect, repoVisibility, current, usage) {
   return { ci, notes, errors };
 }
 var GITHUB_HOSTED = /^(ubuntu|windows|macos)-/i;
-var MAX_TEXT = 120;
+var MAX_TEXT2 = 120;
 function clean(text) {
-  return String(text).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_TEXT);
+  return String(text).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_TEXT2);
 }
 function labelList(value) {
   const items = typeof value === "string" ? [value] : value;
@@ -31773,7 +31888,7 @@ function assertPrimaryRepo(primary) {
   return primary;
 }
 function readWorkflows(project) {
-  const dir = join12(project, ...WORKFLOW_DIR);
+  const dir = join13(project, ...WORKFLOW_DIR);
   const rel = WORKFLOW_DIR.join("/");
   const files = [];
   const errors = [];
@@ -31792,7 +31907,7 @@ function readWorkflows(project) {
   for (const name of yaml) {
     const path10 = `${rel}/${name}`;
     try {
-      files.push({ path: path10, text: readFileSync11(join12(dir, name), "utf8") });
+      files.push({ path: path10, text: readFileSync12(join13(dir, name), "utf8") });
     } catch (e) {
       errors.push(`${path10}: cannot read file (${e.code ?? "error"})`);
     }
@@ -31849,10 +31964,10 @@ function describeDetection(d) {
   return lines;
 }
 async function runSetupCi(o2) {
-  const file2 = join12(o2.project, ".studio", "studio.yaml");
+  const file2 = join13(o2.project, ".studio", "studio.yaml");
   let text;
   try {
-    text = readFileSync11(file2, "utf8");
+    text = readFileSync12(file2, "utf8");
   } catch (e) {
     throw new Error(
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
@@ -31923,10 +32038,10 @@ async function runSetupCi(o2) {
 
 // src/secret-command.ts
 function readPrimaryRepo(project) {
-  const file2 = join13(project, ".studio", "studio.yaml");
+  const file2 = join14(project, ".studio", "studio.yaml");
   let raw;
   try {
-    raw = (0, import_yaml6.parse)(readFileSync12(file2, "utf8"));
+    raw = (0, import_yaml6.parse)(readFileSync13(file2, "utf8"));
   } catch {
     throw new Error("cannot read .studio/studio.yaml");
   }
@@ -32003,6 +32118,7 @@ function runDoctor(o2) {
     ownerConfig: ownerConfig ? "readable" : "invalid",
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
+    notify: ownerConfig?.notify ? "configured" : "not configured",
     apiKeyVarsInEnvironment: API_KEY_VARS.filter((k) => o2.env[k])
   };
   if (o2.json) o2.stdout(`${JSON.stringify(report, null, 2)}
@@ -32015,6 +32131,7 @@ function runDoctor(o2) {
       `studio.yaml: ${report.studioYaml}`,
       `owner config: ${report.ownerConfig}`,
       `credential provider: ${provider === null ? "not configured" : `configured ${provider}`}`,
+      `notify: ${report.notify}`,
       `allow_api_billing: ${report.allowApiBilling ? "on" : "off"}`,
       `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(", ") || "none"}`
     ];
@@ -32304,7 +32421,7 @@ async function runCli(argv, deps) {
             throw new Error(`crew record for ${item.id} has no valid startedAt`);
           }
         }
-        const clone2 = join14(stateRoot(), "clones", item.id);
+        const clone2 = join15(stateRoot(), "clones", item.id);
         const report = readReport(clone2, item.id, item, { notBefore });
         let branch = `studio/${item.id}`;
         if (report.pr !== void 0) {
@@ -32482,10 +32599,26 @@ async function runCli(argv, deps) {
             mainBuild: await readMainBuild(config2, ports),
             crewRecordsUnreadable: crewProblem !== void 0,
             alive: (pid) => Number.isInteger(pid) && pid > 0 && ports.claude.alive(pid),
-            hasReport: (item) => isItemId(item) && existsSync5(join14(root, "clones", item, ".studio", "reports", `${item}.md`))
+            hasReport: (item) => isItemId(item) && existsSync5(join15(root, "clones", item, ".studio", "reports", `${item}.md`))
           }
         );
         writeState(root, snapshot);
+        try {
+          for (const line of await sendNotifications({
+            ownerRoot: ownerRoot(),
+            projectKey: stateDirName(projectRealpath(project)),
+            primaryRepo: config2.primaryRepo,
+            snapshot,
+            ownerConfig,
+            ports,
+            owner
+          })) {
+            stderr(`error: ${line}
+`);
+          }
+        } catch {
+          stderr("error: notify: could not send notifications\n");
+        }
         print(snapshot);
         return 0;
       }
@@ -32519,7 +32652,7 @@ async function runCli(argv, deps) {
         const stoppedAt = ports.clock.now().toISOString();
         const latest = readCrewRecords(root);
         latest[id] = { ...latest[id] ?? rec, stoppedAt };
-        writeStateFile(root, join14(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
+        writeStateFile(root, join15(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
 `);
         print({ item: id, name: rec.name, pid: rec.pid, stoppedAt });
         return 0;
@@ -32821,7 +32954,7 @@ function readHiddenLine(prompt, input2, write) {
 
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync5, openSync as openSync5, readFileSync as readFileSync15 } from "node:fs";
+import { closeSync as closeSync5, openSync as openSync5, readFileSync as readFileSync16 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -36517,7 +36650,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync14 } from "node:fs";
+import { readFileSync as readFileSync15 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value, optionName) => {
@@ -36873,7 +37006,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync13 } from "node:fs";
+import { readFileSync as readFileSync14 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -36987,7 +37120,7 @@ var getTargetFd = ({ value, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync13(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync14(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value, fdNumber) => {
   if (value === "inherit") {
@@ -37381,8 +37514,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync14(value))] }),
-    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync14(file2))] }),
+    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync15(value))] }),
+    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync15(file2))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value }) => ({ contents: () => [...value] }),
     string: ({ value }) => ({ contents: [value] }),
@@ -40709,7 +40842,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync15(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync16(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }
@@ -40783,7 +40916,7 @@ process.exitCode = await runCli(process.argv.slice(2), {
   stdout: (s) => process.stdout.write(s),
   stderr: (s) => process.stderr.write(s),
   env: process.env,
-  homedir: homedir5(),
+  homedir: homedir6(),
   cwd: process.cwd(),
   isTerminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
   readSecret: (prompt) => readHiddenLine(prompt, process.stdin, (s) => process.stderr.write(s))

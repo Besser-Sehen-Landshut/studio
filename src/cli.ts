@@ -25,11 +25,13 @@ import {
   validLabel,
 } from './limits.js';
 import { readMainBuild } from './main-build.js';
+import { sendNotifications } from './notify.js';
 import { migrateOwnerState, pendingLegacyState } from './owner-state.js';
 import {
   checkStateMarker,
   ownerStateRootFor,
   projectRealpath,
+  stateDirName,
   stateRootFor,
   writeStateFile,
 } from './paths.js';
@@ -590,6 +592,22 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           },
         );
         writeState(root, snapshot);
+        try {
+          for (const line of await sendNotifications({
+            ownerRoot: ownerRoot(),
+            projectKey: stateDirName(projectRealpath(project)),
+            primaryRepo: config.primaryRepo,
+            snapshot,
+            ownerConfig,
+            ports,
+            owner,
+          })) {
+            stderr(`error: ${line}\n`);
+          }
+        } catch {
+          // A notification problem never fails the command.
+          stderr('error: notify: could not send notifications\n');
+        }
         print(snapshot);
         return 0;
       }
