@@ -5,9 +5,9 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import type { WorkItem } from './board.js';
 import type { RoleSkills } from './config.js';
-import { globProblem, hostilePath, matchGlob } from './glob.js';
+import { expandBraces, globProblem, hostilePath, matchGlob } from './glob.js';
 
-export { globProblem, matchGlob };
+export { expandBraces, globProblem, matchGlob };
 
 export const PHASES = ['design', 'build', 'review'] as const;
 export type Phase = (typeof PHASES)[number];

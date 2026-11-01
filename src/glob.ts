@@ -18,36 +18,24 @@ function normalize(glob: string): string {
     .replace(/\*\*\/\*\*(?!\/)/g, '**');
 }
 
-/** How many plain globs a pattern stands for; undefined when its braces do not balance. */
-function countExpansions(glob: string): number | undefined {
-  let total = 1;
-  let i = 0;
-  while (i < glob.length) {
-    const c = glob[i];
-    if (c === '}') return undefined;
-    if (c !== '{') {
-      i++;
-      continue;
-    }
-    let depth = 1;
-    let j = i + 1;
-    let start = j;
-    let sum = 0;
-    for (; j < glob.length && depth > 0; j++) {
-      if (glob[j] === '{') depth++;
-      else if (glob[j] === '}') depth--;
-      if ((depth === 1 && glob[j] === ',') || depth === 0) {
-        const part = countExpansions(glob.slice(start, j));
-        if (part === undefined) return undefined;
-        sum += part;
-        start = j + 1;
-      }
-    }
-    if (depth > 0) return undefined;
-    total = Math.min(total * sum, MAX_GLOB_EXPANSIONS + 1);
-    i = j;
+/** Brace structure: flat groups only, so this count and the expander cannot disagree. */
+function braceShape(glob: string): { problem?: string; expansions: number } {
+  let depth = 0;
+  let alternatives = 1;
+  let expansions = 1;
+  for (const c of glob) {
+    if (c === '{') {
+      if (depth > 0) return { problem: 'nested braces in glob', expansions };
+      depth = 1;
+      alternatives = 1;
+    } else if (c === '}') {
+      if (depth === 0) return { problem: 'unbalanced braces in glob', expansions };
+      depth = 0;
+      expansions = Math.min(expansions * alternatives, MAX_GLOB_EXPANSIONS + 1);
+    } else if (c === ',' && depth > 0) alternatives++;
   }
-  return total;
+  if (depth > 0) return { problem: 'unbalanced braces in glob', expansions };
+  return { expansions };
 }
 
 /** Why this glob is refused, or undefined. Schemas use it; `matchGlob` treats a refused one as a hit. */
@@ -55,23 +43,43 @@ export function globProblem(glob: string): string | undefined {
   if (glob.length === 0) return 'empty glob';
   if (glob.length > MAX_GLOB_LENGTH) return `glob longer than ${MAX_GLOB_LENGTH} characters`;
   if (CONTROL.test(glob)) return 'control character in glob';
+  const shape = braceShape(glob);
+  if (shape.problem !== undefined) return shape.problem;
   if ([...glob].filter((c) => c === '{').length > MAX_GLOB_GROUPS) {
     return `more than ${MAX_GLOB_GROUPS} brace groups in glob`;
   }
-  const n = countExpansions(glob);
-  if (n === undefined) return 'unbalanced braces in glob';
-  if (n > MAX_GLOB_EXPANSIONS) return `glob expands to more than ${MAX_GLOB_EXPANSIONS} patterns`;
+  if (shape.expansions > MAX_GLOB_EXPANSIONS) {
+    return `glob expands to more than ${MAX_GLOB_EXPANSIONS} patterns`;
+  }
   const wildcards = normalize(glob).match(/\*+|\?/g)?.length ?? 0;
   if (wildcards > MAX_GLOB_WILDCARDS) return `more than ${MAX_GLOB_WILDCARDS} wildcards in glob`;
   return undefined;
 }
 
-function expandBraces(glob: string): string[] {
-  const m = /\{([^{}]*)\}/.exec(glob);
-  if (!m) return [glob];
-  const head = glob.slice(0, m.index);
-  const tail = glob.slice(m.index + m[0].length);
-  return (m[1] as string).split(',').flatMap((alt) => expandBraces(head + alt + tail));
+/**
+ * The plain globs a pattern stands for, or undefined at the budget. The budget runs over all work,
+ * so no shape of braces can outrun it, whatever the validator said.
+ */
+export function expandBraces(glob: string): string[] | undefined {
+  const done: string[] = [];
+  const open = [glob];
+  let steps = 0;
+  while (open.length > 0) {
+    if (++steps > MAX_GLOB_EXPANSIONS * 4) return undefined;
+    const g = open.pop() as string;
+    const m = /\{([^{}]*)\}/.exec(g);
+    if (!m) {
+      done.push(g);
+      if (done.length > MAX_GLOB_EXPANSIONS) return undefined;
+      continue;
+    }
+    const alternatives = (m[1] as string).split(',');
+    if (open.length + alternatives.length > MAX_GLOB_EXPANSIONS * 4) return undefined;
+    const head = g.slice(0, m.index);
+    const tail = g.slice(m.index + m[0].length);
+    for (const alt of alternatives.reverse()) open.push(head + alt + tail);
+  }
+  return [...new Set(done)];
 }
 
 type Token =
@@ -149,8 +157,10 @@ function run(tokens: readonly Token[], path: string): boolean {
  */
 export function matchGlob(glob: string, path: string): boolean {
   if (globProblem(glob) !== undefined) return true;
+  const globs = expandBraces(normalize(glob));
+  if (globs === undefined) return true;
   const lower = path.toLowerCase();
-  return expandBraces(normalize(glob)).some((g) => run(tokenize(g), lower));
+  return globs.some((g) => run(tokenize(g), lower));
 }
 
 /** A path no reviewer can read at a glance: every path condition counts as hit. */

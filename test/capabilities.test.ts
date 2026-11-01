@@ -6,6 +6,7 @@ import { MODEL_NAME_RE as BOARD_MODEL_RE, type WorkItem } from '../src/board.js'
 import {
   CapabilitiesError,
   capabilitiesDir,
+  expandBraces,
   globProblem,
   itemTriggers,
   loadCapabilities,
@@ -369,5 +370,40 @@ describe('glob limits', () => {
       `studio: 1\nprimary_repo: org/app\nrepos: [org/app]\nci:\n  provider: github\n  runners: github-hosted\n  capacity: { total: 1, merge_max_busy: 1, check_twice_seconds: 0 }\nmerge: { strategy: studio-queue }\nroles:\n  builder: { model: a, wip: 1, skills: { when: [{ paths: ["${'{a,b}'.repeat(9)}"] }] } }\n`,
     );
     expect(() => loadConfig(d)).toThrow(/skills/);
+  });
+});
+
+describe('nested braces', () => {
+  const nested = (levels: number): string => {
+    let g = 'x,y';
+    for (let i = 0; i < levels; i++) g = `{a,b}${'{'}${g}${'}'}`.replace(/^/, 'p,');
+    return `{${g}}`;
+  };
+  it.each([
+    ['one level', '{a,{b,c}}'],
+    ['eight levels', nested(8)],
+    ['eight plain levels', '{{{{{{{{a}}}}}}}}'],
+  ])('refuses %s', (_name, glob) => {
+    expect(globProblem(glob)).toMatch(/nested/);
+    expect(configGlobProblem(glob)).toMatch(/nested/);
+  });
+  it('an eight-level glob fails closed at once', () => {
+    const t = Date.now();
+    expect(matchGlob(nested(8), 'nothing')).toBe(true);
+    expect(Date.now() - t).toBeLessThan(200);
+  });
+  it('the expander refuses at the budget, however the glob is shaped', () => {
+    expect(expandBraces('{a,b}{c,d}')).toEqual(['ac', 'ad', 'bc', 'bd']);
+    expect(expandBraces('{a,{b,c}}')?.sort()).toEqual(['a', 'b', 'c']);
+    const t = Date.now();
+    expect(expandBraces('{a,b}'.repeat(40))).toBeUndefined();
+    expect(expandBraces(nested(30))).toBeUndefined();
+    expect(Date.now() - t).toBeLessThan(200);
+  });
+  it('the validator and the expander agree on what they accept', () => {
+    for (const g of ['{a,b}/{c,d}/{e,f}', `{${'a,'.repeat(63)}a}`, '{a,b,c,d}{a,b,c,d}{a,b,c,d}']) {
+      expect(globProblem(g)).toBeUndefined();
+      expect(expandBraces(g)?.length).toBeLessThanOrEqual(64);
+    }
   });
 });

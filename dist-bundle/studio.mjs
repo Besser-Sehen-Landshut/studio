@@ -27829,46 +27829,36 @@ var CONTROL = new RegExp("\\p{Cc}", "u");
 function normalize(glob) {
   return glob.replace(/\*{3,}/g, "**").replace(/(?:\*\*\/)+/g, "**/").replace(/\*\*\/\*\*(?!\/)/g, "**");
 }
-function countExpansions(glob) {
-  let total = 1;
-  let i2 = 0;
-  while (i2 < glob.length) {
-    const c3 = glob[i2];
-    if (c3 === "}") return void 0;
-    if (c3 !== "{") {
-      i2++;
-      continue;
-    }
-    let depth = 1;
-    let j = i2 + 1;
-    let start = j;
-    let sum = 0;
-    for (; j < glob.length && depth > 0; j++) {
-      if (glob[j] === "{") depth++;
-      else if (glob[j] === "}") depth--;
-      if (depth === 1 && glob[j] === "," || depth === 0) {
-        const part = countExpansions(glob.slice(start, j));
-        if (part === void 0) return void 0;
-        sum += part;
-        start = j + 1;
-      }
-    }
-    if (depth > 0) return void 0;
-    total = Math.min(total * sum, MAX_GLOB_EXPANSIONS + 1);
-    i2 = j;
+function braceShape(glob) {
+  let depth = 0;
+  let alternatives = 1;
+  let expansions = 1;
+  for (const c3 of glob) {
+    if (c3 === "{") {
+      if (depth > 0) return { problem: "nested braces in glob", expansions };
+      depth = 1;
+      alternatives = 1;
+    } else if (c3 === "}") {
+      if (depth === 0) return { problem: "unbalanced braces in glob", expansions };
+      depth = 0;
+      expansions = Math.min(expansions * alternatives, MAX_GLOB_EXPANSIONS + 1);
+    } else if (c3 === "," && depth > 0) alternatives++;
   }
-  return total;
+  if (depth > 0) return { problem: "unbalanced braces in glob", expansions };
+  return { expansions };
 }
 function globProblem(glob) {
   if (glob.length === 0) return "empty glob";
   if (glob.length > MAX_GLOB_LENGTH) return `glob longer than ${MAX_GLOB_LENGTH} characters`;
   if (CONTROL.test(glob)) return "control character in glob";
+  const shape = braceShape(glob);
+  if (shape.problem !== void 0) return shape.problem;
   if ([...glob].filter((c3) => c3 === "{").length > MAX_GLOB_GROUPS) {
     return `more than ${MAX_GLOB_GROUPS} brace groups in glob`;
   }
-  const n2 = countExpansions(glob);
-  if (n2 === void 0) return "unbalanced braces in glob";
-  if (n2 > MAX_GLOB_EXPANSIONS) return `glob expands to more than ${MAX_GLOB_EXPANSIONS} patterns`;
+  if (shape.expansions > MAX_GLOB_EXPANSIONS) {
+    return `glob expands to more than ${MAX_GLOB_EXPANSIONS} patterns`;
+  }
   const wildcards = normalize(glob).match(/\*+|\?/g)?.length ?? 0;
   if (wildcards > MAX_GLOB_WILDCARDS) return `more than ${MAX_GLOB_WILDCARDS} wildcards in glob`;
   return void 0;
@@ -32324,7 +32314,10 @@ var safeRelative = (p) => p.length > 0 && !p.startsWith("/") && !p.includes("\\"
 var sourceSchema = external_exports.strictObject({
   id: external_exports.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
   kind: external_exports.enum(["git", "plugin", "skill"]),
-  url: external_exports.string().regex(/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "must be a GitHub https URL").optional(),
+  url: external_exports.string().regex(
+    /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/,
+    "must be a GitHub https URL"
+  ).optional(),
   license: external_exports.string().min(1),
   vendored: external_exports.boolean(),
   notice: external_exports.string().optional(),
