@@ -100,6 +100,7 @@ function makePorts(tokenReplies: { code?: number; stdout?: string }[] = []) {
         return { pid };
       },
       alive: (p) => alive.has(p),
+      identity: async () => undefined,
       async stop(p) {
         stopped.push(p);
         alive.delete(p);

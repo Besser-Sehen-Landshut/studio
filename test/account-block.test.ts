@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { loadBoard, saveBoard } from '../src/board.js';
+import { type ItemStatus, loadBoard, saveBoard } from '../src/board.js';
 import { type CliDeps, runCli } from '../src/cli.js';
 import { loadConfig } from '../src/config.js';
 import { limitHold } from '../src/credentials.js';
@@ -89,6 +89,8 @@ function makePorts() {
   const stopped: number[] = [];
   const started: string[][] = [];
   const hooks: { onStop?: (pid: number) => void } = {};
+  /** Overrides what the identity port answers for a pid; undefined means a failed read. */
+  const identities = new Map<number, string | undefined>();
   let pid = 5000;
   const ports: Ports = {
     ...real,
@@ -102,6 +104,7 @@ function makePorts() {
         return { pid };
       },
       alive: (p) => alive.has(p),
+      identity: async (p) => (identities.has(p) ? identities.get(p) : `start-${p}`),
       async stop(p) {
         hooks.onStop?.(p);
         stopped.push(p);
@@ -111,7 +114,7 @@ function makePorts() {
     clock: { now: () => new Date('2026-11-01T10:00:00Z'), sleep: async () => {} },
     host: { loadAvg1: () => 0, cpuCount: () => 4 },
   };
-  return { ports, alive, stopped, started, hooks };
+  return { ports, alive, stopped, started, hooks, identities };
 }
 
 async function cli(fx: Fx, ports: Ports, argv: string[], extra: Partial<CliDeps> = {}) {
@@ -175,6 +178,18 @@ async function twoCrews(fx: Fx, p: ReturnType<typeof makePorts>) {
   provider(fx, 'label-b');
   expect((await cli(fx, p.ports, ['launch', 'APP-2'])).code).toBe(0);
 }
+
+describe('the real identity port', () => {
+  it('reads a stable identity, and none for an invalid or unused pid', async () => {
+    const { claude } = realPorts();
+    const first = await claude.identity(process.pid);
+    expect(first).toEqual(expect.any(String));
+    expect(await claude.identity(process.pid)).toBe(first);
+    expect(await claude.identity(-1)).toBeUndefined();
+    expect(await claude.identity(0)).toBeUndefined();
+    expect(await claude.identity(2 ** 30)).toBeUndefined();
+  });
+});
 
 describe('detectBlock', () => {
   it('counts block categories on retry and top-level assistant events', () => {
@@ -585,7 +600,7 @@ describe('account block details', () => {
   });
 
   /** Moves an item on the board without touching its crew record. */
-  const setStatus = (fx: Fx, id: string, status: 'merged') => {
+  const setStatus = (fx: Fx, id: string, status: ItemStatus) => {
     const board = loadBoard(fx.project);
     saveBoard(fx.project, {
       ...board,
@@ -681,6 +696,179 @@ describe('account block details', () => {
     expect(recordOf(fx, 'APP-2').stoppedAt).toBeUndefined();
     await cli(fx, p.ports, ['status']);
     expect(itemOf(fx, 'APP-2')?.status).toBe('assigned');
+  });
+
+  it('stores the identity at launch and stops on a match', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    await twoCrews(fx, p);
+    expect(recordOf(fx, 'APP-1').identity).toBe('start-5001');
+    log(fx, 'APP-1', ON_HOLD);
+    await cli(fx, p.ports, ['status']);
+    expect(p.stopped.sort()).toEqual([5001, 5002]);
+  });
+
+  it('an identity mismatch is not signalled: the crew is gone, no error', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    await twoCrews(fx, p);
+    log(fx, 'APP-1', ON_HOLD);
+    p.identities.set(5002, 'someone-else');
+    const r = await cli(fx, p.ports, ['status']);
+    expect(p.stopped).toEqual([5001]);
+    expect(p.alive.has(5002)).toBe(true);
+    expect(r.err).not.toContain('error:');
+    const rec = recordOf(fx, 'APP-2');
+    expect(rec.processGone).toBe('2026-11-01T10:00:00.000Z');
+    expect(rec.stoppedAt).toBeDefined();
+    expect(rec.block).toBeUndefined();
+    // Marked: later reconciles leave it alone.
+    await cli(fx, p.ports, ['status']);
+    expect(p.stopped).toEqual([5001]);
+  });
+
+  it('an unknown identity is skipped and reported, and launches stay refused', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    await twoCrews(fx, p);
+    log(fx, 'APP-1', ON_HOLD);
+    p.identities.set(5002, undefined);
+    const r = await cli(fx, p.ports, ['status']);
+    expect(p.stopped).toEqual([5001]);
+    expect(r.err).toContain('APP-2');
+    expect(r.err).toContain('5002');
+    expect(recordOf(fx, 'APP-2').stoppedAt).toBeUndefined();
+    expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(1);
+  });
+
+  it('a legacy record with no stored identity is skipped and reported', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    await twoCrews(fx, p);
+    const records = recordsOf(fx);
+    delete records['APP-2'].identity;
+    writeFileSync(join(fx.state, 'crew.json'), JSON.stringify(records));
+    log(fx, 'APP-1', ON_HOLD);
+    const r = await cli(fx, p.ports, ['status']);
+    expect(p.stopped).toEqual([5001]);
+    expect(r.err).toContain('APP-2');
+    expect(r.err).toContain('5002');
+  });
+
+  it('an unverifiable record raises no new block entry and is reported', async () => {
+    const unknown = makeFx();
+    const p = makePorts();
+    await twoCrews(unknown, p);
+    log(unknown, 'APP-1', ON_HOLD);
+    p.identities.set(5001, undefined);
+    const r = await cli(unknown, p.ports, ['status']);
+    expect(existsSync(blocksFile(unknown))).toBe(false);
+    expect(p.stopped).toEqual([]);
+    expect(r.err).toContain('APP-1');
+    expect(r.err).toContain('5001');
+
+    const invalid = makeFx();
+    const p2 = makePorts();
+    await twoCrews(invalid, p2);
+    const records = recordsOf(invalid);
+    records['APP-1'].pid = -1;
+    writeFileSync(join(invalid.state, 'crew.json'), JSON.stringify(records));
+    log(invalid, 'APP-1', ON_HOLD);
+    const r2 = await cli(invalid, p2.ports, ['status']);
+    expect(existsSync(blocksFile(invalid))).toBe(false);
+    expect(p2.stopped).toEqual([]);
+    expect(r2.err).toContain('APP-1');
+  });
+
+  it('a clear moves logStart: the old event stays out, a new one counts', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    await twoCrews(fx, p);
+    // Unverified, so this record stays unmarked through the block.
+    p.identities.set(5001, undefined);
+    log(fx, 'APP-1', ON_HOLD);
+    log(fx, 'APP-2', { type: 'system', subtype: 'init', session_id: 'other' });
+    writeFileSync(blocksFile(fx), JSON.stringify([A_BLOCK('label-a')]));
+    await cli(fx, p.ports, ['status']);
+    expect(recordOf(fx, 'APP-1').stoppedAt).toBeUndefined();
+    const logA = join(fx.state, 'logs', 'APP-1.jsonl');
+    const logB = join(fx.state, 'logs', 'APP-2.jsonl');
+    const startB = recordOf(fx, 'APP-2').logStart;
+
+    await cli(fx, p.ports, ['accounts-clear', 'label-a'], { isTerminal: true });
+    expect(recordOf(fx, 'APP-1').logStart).toBe(lstatSync(logA).size);
+    // Another label's record keeps its place.
+    expect(lstatSync(logB).size).toBeGreaterThan(startB);
+    expect(recordOf(fx, 'APP-2').logStart).toBe(startB);
+
+    p.identities.delete(5001);
+    await cli(fx, p.ports, ['status']);
+    expect(blocksOf(fx)).toEqual([]);
+    expect(p.alive.has(5001)).toBe(true);
+
+    log(fx, 'APP-1', ON_HOLD);
+    await cli(fx, p.ports, ['status']);
+    expect(blocksOf(fx)[0]).toMatchObject({ label: 'label-a', reason: 'account_on_hold' });
+    expect(p.alive.has(5001)).toBe(false);
+  });
+
+  it('launch refuses on an unreadable board', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    provider(fx, 'label-a');
+    writeFileSync(join(fx.project, '.studio', 'board.yaml'), 'items: [not closed');
+    const r = await cli(fx, p.ports, ['launch', 'APP-1']);
+    expect(r.code).toBe(1);
+    expect(p.started).toHaveLength(0);
+    expect(providerCalls(fx)).toBe(0);
+  });
+
+  it('a live crew in any non-terminal status, or on a missing item, is stopped', async () => {
+    for (const status of ['in_review', 'queued', 'ready', 'missing'] as const) {
+      const fx = makeFx();
+      const p = makePorts();
+      await twoCrews(fx, p);
+      if (status === 'missing') {
+        const board = loadBoard(fx.project);
+        saveBoard(fx.project, { ...board, items: board.items.filter((i) => i.id !== 'APP-2') });
+      } else setStatus(fx, 'APP-2', status);
+      log(fx, 'APP-1', ON_HOLD);
+      await cli(fx, p.ports, ['status']);
+      expect(p.stopped.sort(), status).toEqual([5001, 5002]);
+      expect(recordOf(fx, 'APP-2').block, status).toBeDefined();
+      // Board moves are for assigned and in_progress only.
+      if (status !== 'missing') expect(itemOf(fx, 'APP-2')?.status, status).toBe(status);
+    }
+  }, 30_000);
+
+  it('a live crew on a merged or dropped item is not stopped', async () => {
+    for (const status of ['merged', 'dropped'] as const) {
+      const fx = makeFx();
+      const p = makePorts();
+      await twoCrews(fx, p);
+      setStatus(fx, 'APP-2', status);
+      log(fx, 'APP-1', ON_HOLD);
+      const r = await cli(fx, p.ports, ['status']);
+      expect(p.stopped, status).toEqual([5001]);
+      expect(recordOf(fx, 'APP-2').stoppedAt, status).toBeUndefined();
+      expect(r.err, status).not.toContain('APP-2');
+    }
+  });
+
+  it('an event of a live verified crew on a non-active item counts; of a finished one not', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    await twoCrews(fx, p);
+    setStatus(fx, 'APP-2', 'in_review');
+    log(fx, 'APP-2', ON_HOLD);
+    p.alive.delete(5002);
+    await cli(fx, p.ports, ['status']);
+    expect(existsSync(blocksFile(fx))).toBe(false);
+
+    p.alive.add(5002);
+    await cli(fx, p.ports, ['status']);
+    expect(blocksOf(fx)[0]).toMatchObject({ label: 'label-b' });
+    expect(p.stopped.sort()).toEqual([5001, 5002]);
   });
 
   it('a live crew on an active item of another label is stopped', async () => {

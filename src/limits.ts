@@ -1,6 +1,7 @@
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Board, loadBoard, saveBoard, transition } from './board.js';
+import type { CrewRecord } from './crew.js';
 import { acquireStateLock, writeStateFile } from './paths.js';
 import type { Ports } from './ports.js';
 import { readCrewRecords } from './state.js';
@@ -626,16 +627,48 @@ function moveBlockedToReady(
   }
 }
 
+const FINISHED = new Set(['merged', 'dropped']);
+
+/** Size of a plain log file; undefined for a missing one or anything else. */
+function logEnd(stateRoot: string, id: string): number | undefined {
+  try {
+    const st = lstatSync(logFile(stateRoot, id));
+    return st.isFile() ? st.size : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+type CrewProcess = 'invalid' | 'dead' | 'verified' | 'unknown' | 'gone';
+
 /**
- * Applies account blocks; runs before `reconcileLimits` and does not depend on `limits.json`. Every
- * event of a current run is recorded in `blocks.json` first, then the crews stop, so a crash leaves
- * the state blocked. While any block exists or the file is unreadable, every reconcile stops every
- * crew still alive on an active item, of all labels: safe to repeat, and a crash mid-stop heals, since
- * an active item without `stoppedAt` is tried again. Only active items are scanned or stopped. Records
- * get `stoppedAt` and `block`, no `limit`, so nothing resumes by itself and a cleared event does not
- * trigger again. A report does not excuse a block event: an account problem outranks a finished run,
- * but the work stays collectable. A hit found while the file is unreadable stays unmarked, so it is
- * recorded once the owner fixed the file.
+ * What lies behind a record's pid. Only `verified` may be signalled: the pid is alive and has the
+ * start time stored at launch. `gone`: another process holds the pid now. `unknown`: alive, but
+ * there is no stored identity or it cannot be read.
+ */
+async function crewProcess(rec: CrewRecord, ports: Ports): Promise<CrewProcess> {
+  // A negative pid would signal a whole process group, -1 everything the owner runs.
+  if (!Number.isInteger(rec.pid) || rec.pid <= 0) return 'invalid';
+  if (!ports.claude.alive(rec.pid)) return 'dead';
+  if (rec.identity === undefined) return 'unknown';
+  const current = await ports.claude.identity(rec.pid);
+  if (current === undefined) return 'unknown';
+  return current === rec.identity ? 'verified' : 'gone';
+}
+
+/**
+ * Applies account blocks; runs before `reconcileLimits` and depends on neither `limits.json` nor the
+ * board. Every event of a current run is recorded in `blocks.json` first, then the crews stop, so a
+ * crash leaves the state blocked. While any block exists or the file is unreadable, every reconcile
+ * stops every live crew of all labels, except on `merged` and `dropped` items, and only after its
+ * process identity matches: safe to repeat, and a crash mid-stop heals. A live crew it cannot verify
+ * is reported, not signalled. A new entry comes only from a run shown to be current: a live verified
+ * crew in any unfinished status, or an exited crew on an active item (any item when the board is
+ * unreadable). An invalid pid or an unverified live crew raises none and is reported. Records get `stoppedAt` and `block`,
+ * no `limit`, so nothing resumes by itself and a cleared event does not trigger again. A report does
+ * not excuse a block event: an account problem outranks a finished run, but the work stays
+ * collectable. A hit found while the file is unreadable stays unmarked, so it is recorded once the
+ * owner fixed the file.
  */
 export async function reconcileBlocks(o: {
   project: string;
@@ -655,29 +688,42 @@ export async function reconcileBlocks(o: {
   }
   try {
     const at = now.toISOString();
-    // Records of finished items stay in crew.json for good, and their pids get reused.
-    // Without a board nothing tells them apart: for this reconcile every record counts as active,
-    // so a block is still recorded and crews still stop. The board moves wait until it reads again.
+    // The stop does not depend on the board: without one every record is in scope, and the board
+    // moves wait until it reads again.
     let board: Board | undefined;
     try {
       board = loadBoard(project);
     } catch (e) {
       result.errors.push(
-        `board is unreadable, so every crew record counts as active: ${(e as Error).message}`,
+        `board is unreadable, so every crew record is in scope: ${(e as Error).message}`,
       );
     }
+    const statusOf = (id: string) => board?.items.find((i) => i.id === id)?.status;
     const records = Object.fromEntries(
       Object.entries(readCrewRecords(stateRoot)).filter(([id]) => {
-        if (board === undefined) return true;
-        const status = board.items.find((i) => i.id === id)?.status;
-        return status !== undefined && ACTIVE.has(status);
+        const status = statusOf(id);
+        return status === undefined || !FINISHED.has(status);
       }),
     );
     const hits = new Map<string, DetectedBlock>();
     for (const [id, rec] of Object.entries(records)) {
       if (rec.stoppedAt !== undefined) continue;
+      // The old log of a long-finished crew raises no block.
+      const status = statusOf(id);
+      const process = await crewProcess(rec, ports);
+      const exitedActive =
+        (process === 'dead' || process === 'gone') &&
+        (board === undefined || (status !== undefined && ACTIVE.has(status)));
+      const unproven = process === 'invalid' || process === 'unknown';
+      if (process !== 'verified' && !exitedActive && !unproven) continue;
       const hit = scanLogForBlock(stateRoot, id, rec.logStart ?? 0);
-      if (hit) hits.set(id, hit);
+      if (!hit) continue;
+      if (unproven) {
+        // Not shown to be this crew's current run: no new entry, but the owner sees it.
+        result.errors.push(
+          `crew ${id} (pid ${rec.pid}) has a block event but cannot be verified as current; no block recorded from it`,
+        );
+      } else hits.set(id, hit);
     }
     const read = readBlocks(stateRoot);
     if (read.ok) {
@@ -701,14 +747,26 @@ export async function reconcileBlocks(o: {
       for (const [id, rec] of Object.entries(records)) {
         if (rec.stoppedAt !== undefined) continue;
         const hit = hits.get(id);
-        // A negative pid would signal a whole process group, -1 everything the owner runs.
-        if (!Number.isInteger(rec.pid) || rec.pid <= 0) {
+        // Read right before the signal, every time.
+        const process = await crewProcess(rec, ports);
+        if (process === 'invalid') {
           result.errors.push(`crew record for ${id} has no valid pid; not stopping it`);
           continue;
         }
-        const alive = ports.claude.alive(rec.pid);
-        if (!alive && hit === undefined) continue;
-        if (alive) {
+        if (process === 'unknown') {
+          result.errors.push(
+            `crew ${id} (pid ${rec.pid}) is alive but its identity cannot be verified; not stopping it, check it by hand`,
+          );
+          continue;
+        }
+        if (hit === undefined && process === 'dead') continue;
+        if (hit === undefined && process === 'gone') {
+          const latest = readCrewRecords(stateRoot);
+          latest[id] = { ...(latest[id] ?? rec), stoppedAt: at, processGone: at };
+          writeStateFile(stateRoot, crewFile, `${JSON.stringify(latest, null, 2)}\n`);
+          continue;
+        }
+        if (process === 'verified') {
           try {
             await ports.claude.stop(rec.pid);
           } catch {
@@ -741,8 +799,9 @@ export async function reconcileBlocks(o: {
 }
 
 /**
- * Removes the entries of one label; restarts nothing. Throws, writing nothing, when the file is
- * unreadable or another process holds the lock.
+ * Removes the entries of one label and moves `logStart` of that label's records to the end of their
+ * logs, so an old event cannot raise the block again and a new one can; restarts nothing. Throws,
+ * writing nothing, when a state file is unreadable or another process holds the lock.
  */
 export function clearBlocks(
   stateRoot: string,
@@ -758,6 +817,21 @@ export function clearBlocks(
     if (!read.ok) throw new Error(unreadable);
     const kept = read.blocks.filter((b) => b.label !== label);
     const removed = read.blocks.length - kept.length;
+    // Logs first: a crash in between leaves the block in place, never an old event ready to return.
+    const records = readCrewRecords(stateRoot);
+    let moved = false;
+    for (const [id, rec] of Object.entries(records)) {
+      if ((rec.label ?? DEFAULT_LABEL) !== label) continue;
+      const end = logEnd(stateRoot, id);
+      if (end !== undefined && end !== rec.logStart) {
+        records[id] = { ...rec, logStart: end };
+        moved = true;
+      }
+    }
+    if (moved) {
+      const crewFile = join(stateRoot, 'crew.json');
+      writeStateFile(stateRoot, crewFile, `${JSON.stringify(records, null, 2)}\n`);
+    }
     if (removed > 0) writeBlocks(stateRoot, kept);
     return { removed, remaining: kept.length };
   } finally {

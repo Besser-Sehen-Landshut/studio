@@ -29027,6 +29027,23 @@ function moveBlockedToReady(project, stateRoot, now, result) {
     result.errors.push(`board not updated after an account block: ${e.message}`);
   }
 }
+var FINISHED = /* @__PURE__ */ new Set(["merged", "dropped"]);
+function logEnd(stateRoot, id) {
+  try {
+    const st = lstatSync3(logFile(stateRoot, id));
+    return st.isFile() ? st.size : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function crewProcess(rec, ports) {
+  if (!Number.isInteger(rec.pid) || rec.pid <= 0) return "invalid";
+  if (!ports.claude.alive(rec.pid)) return "dead";
+  if (rec.identity === void 0) return "unknown";
+  const current = await ports.claude.identity(rec.pid);
+  if (current === void 0) return "unknown";
+  return current === rec.identity ? "verified" : "gone";
+}
 async function reconcileBlocks(o2) {
   const { project, stateRoot, ports } = o2;
   const result = { stopped: [], errors: [], lockFailed: false };
@@ -29046,21 +29063,31 @@ async function reconcileBlocks(o2) {
       board = loadBoard(project);
     } catch (e) {
       result.errors.push(
-        `board is unreadable, so every crew record counts as active: ${e.message}`
+        `board is unreadable, so every crew record is in scope: ${e.message}`
       );
     }
+    const statusOf = (id) => board?.items.find((i2) => i2.id === id)?.status;
     const records = Object.fromEntries(
       Object.entries(readCrewRecords(stateRoot)).filter(([id]) => {
-        if (board === void 0) return true;
-        const status = board.items.find((i2) => i2.id === id)?.status;
-        return status !== void 0 && ACTIVE.has(status);
+        const status = statusOf(id);
+        return status === void 0 || !FINISHED.has(status);
       })
     );
     const hits = /* @__PURE__ */ new Map();
     for (const [id, rec] of Object.entries(records)) {
       if (rec.stoppedAt !== void 0) continue;
+      const status = statusOf(id);
+      const process14 = await crewProcess(rec, ports);
+      const exitedActive = (process14 === "dead" || process14 === "gone") && (board === void 0 || status !== void 0 && ACTIVE.has(status));
+      const unproven = process14 === "invalid" || process14 === "unknown";
+      if (process14 !== "verified" && !exitedActive && !unproven) continue;
       const hit = scanLogForBlock(stateRoot, id, rec.logStart ?? 0);
-      if (hit) hits.set(id, hit);
+      if (!hit) continue;
+      if (unproven) {
+        result.errors.push(
+          `crew ${id} (pid ${rec.pid}) has a block event but cannot be verified as current; no block recorded from it`
+        );
+      } else hits.set(id, hit);
     }
     const read2 = readBlocks(stateRoot);
     if (read2.ok) {
@@ -29084,13 +29111,26 @@ async function reconcileBlocks(o2) {
       for (const [id, rec] of Object.entries(records)) {
         if (rec.stoppedAt !== void 0) continue;
         const hit = hits.get(id);
-        if (!Number.isInteger(rec.pid) || rec.pid <= 0) {
+        const process14 = await crewProcess(rec, ports);
+        if (process14 === "invalid") {
           result.errors.push(`crew record for ${id} has no valid pid; not stopping it`);
           continue;
         }
-        const alive = ports.claude.alive(rec.pid);
-        if (!alive && hit === void 0) continue;
-        if (alive) {
+        if (process14 === "unknown") {
+          result.errors.push(
+            `crew ${id} (pid ${rec.pid}) is alive but its identity cannot be verified; not stopping it, check it by hand`
+          );
+          continue;
+        }
+        if (hit === void 0 && process14 === "dead") continue;
+        if (hit === void 0 && process14 === "gone") {
+          const latest2 = readCrewRecords(stateRoot);
+          latest2[id] = { ...latest2[id] ?? rec, stoppedAt: at, processGone: at };
+          writeStateFile(stateRoot, crewFile, `${JSON.stringify(latest2, null, 2)}
+`);
+          continue;
+        }
+        if (process14 === "verified") {
           try {
             await ports.claude.stop(rec.pid);
           } catch {
@@ -29131,6 +29171,21 @@ function clearBlocks(stateRoot, label, now) {
     if (!read2.ok) throw new Error(unreadable);
     const kept = read2.blocks.filter((b) => b.label !== label);
     const removed = read2.blocks.length - kept.length;
+    const records = readCrewRecords(stateRoot);
+    let moved = false;
+    for (const [id, rec] of Object.entries(records)) {
+      if ((rec.label ?? DEFAULT_LABEL) !== label) continue;
+      const end = logEnd(stateRoot, id);
+      if (end !== void 0 && end !== rec.logStart) {
+        records[id] = { ...rec, logStart: end };
+        moved = true;
+      }
+    }
+    if (moved) {
+      const crewFile = join5(stateRoot, "crew.json");
+      writeStateFile(stateRoot, crewFile, `${JSON.stringify(records, null, 2)}
+`);
+    }
     if (removed > 0) writeBlocks(stateRoot, kept);
     return { removed, remaining: kept.length };
   } finally {
@@ -29952,11 +30007,13 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     env
   );
   const name = crewName(item);
+  const identity3 = await ports.claude.identity(pid);
   const record2 = {
     name,
     item: item.id,
     role: item.role,
     pid,
+    ...identity3 === void 0 ? {} : { identity: identity3 },
     log,
     startedAt: ports.clock.now().toISOString(),
     label,
@@ -39704,6 +39761,7 @@ var {
 // src/ports.ts
 var STOP_GRACE_MS = 5e3;
 var STOP_POLL_MS = 100;
+var IDENTITY_TIMEOUT_MS = 5e3;
 var sleep = (ms) => new Promise((resolve5) => setTimeout(resolve5, ms));
 function realPorts(claudeBin = "claude") {
   const clock = { now: () => /* @__PURE__ */ new Date(), sleep };
@@ -39777,6 +39835,17 @@ function realPorts(claudeBin = "claude") {
       }
     },
     alive,
+    async identity(pid) {
+      if (!Number.isInteger(pid) || pid <= 0) return void 0;
+      const r = await execa("ps", ["-o", "lstart=", "-p", String(pid)], {
+        env: { LC_ALL: "C", TZ: "UTC" },
+        reject: false,
+        stdin: "ignore",
+        timeout: IDENTITY_TIMEOUT_MS
+      });
+      const text = r.failed ? "" : String(r.stdout).trim();
+      return text === "" ? void 0 : text;
+    },
     async stop(pid) {
       if (!alive(pid)) return;
       signal(pid, "SIGTERM");

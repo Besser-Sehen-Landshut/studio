@@ -30,6 +30,11 @@ export interface Claude {
   ): Promise<{ pid: number }>;
   /** True while the session leader or any process of its group is running. */
   alive(pid: number): boolean;
+  /**
+   * What tells this process from a later one with a reused pid: its start time. Undefined when it
+   * cannot be read, also when the pid has no process of its own. Never throws.
+   */
+  identity(pid: number): Promise<string | undefined>;
   /** SIGTERM, then SIGKILL after a grace period, sent to the whole process group (POSIX). */
   stop(pid: number): Promise<void>;
 }
@@ -74,6 +79,7 @@ export interface Ports {
 
 const STOP_GRACE_MS = 5000;
 const STOP_POLL_MS = 100;
+const IDENTITY_TIMEOUT_MS = 5000;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -158,6 +164,18 @@ export function realPorts(claudeBin = 'claude'): Ports {
       }
     },
     alive,
+    async identity(pid) {
+      if (!Number.isInteger(pid) || pid <= 0) return undefined;
+      // Locale and zone are pinned: a changed setting must not read as another process.
+      const r = await execa('ps', ['-o', 'lstart=', '-p', String(pid)], {
+        env: { LC_ALL: 'C', TZ: 'UTC' },
+        reject: false,
+        stdin: 'ignore',
+        timeout: IDENTITY_TIMEOUT_MS,
+      });
+      const text = r.failed ? '' : String(r.stdout).trim();
+      return text === '' ? undefined : text;
+    },
     async stop(pid) {
       if (!alive(pid)) return;
       signal(pid, 'SIGTERM');

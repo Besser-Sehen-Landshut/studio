@@ -563,6 +563,10 @@ export interface CrewRecord {
   stoppedAt?: string;
   /** The run was stopped because of an account block; never resumed by itself. */
   block?: { at: string; reason: string };
+  /** Start time of the process, read at launch: only a process that matches gets a block's signal. */
+  identity?: string;
+  /** Set when another process held this pid at a block: this crew was already gone. */
+  processGone?: string;
   /** Label of the credential this run used; the credential itself is never recorded. */
   label?: string;
   /** Config dir of a run in the token form: `--resume` works across labels sharing it. */
@@ -821,11 +825,13 @@ export async function launchCrew(
     env,
   );
   const name = crewName(item);
+  const identity = await ports.claude.identity(pid);
   const record: CrewRecord = {
     name,
     item: item.id,
     role: item.role,
     pid,
+    ...(identity === undefined ? {} : { identity }),
     log,
     startedAt: ports.clock.now().toISOString(),
     label,
