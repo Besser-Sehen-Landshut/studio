@@ -28160,7 +28160,9 @@ var STATE_FILES = [
   "queue.json.lock",
   "queue.run.lock",
   "limits.json",
-  "limits.lock"
+  "limits.lock",
+  "blocks.json",
+  "blocks.lock"
 ];
 function stateBaseFor(opts = {}) {
   const env = opts.env ?? process.env;
@@ -28878,6 +28880,249 @@ async function reconcileLimits(o2) {
   }
   return result;
 }
+var BLOCK_CATEGORIES = /* @__PURE__ */ new Map([
+  ["authentication_failed", "authentication_failed"],
+  ["oauth_org_not_allowed", "organization_not_allowed"],
+  ["account_on_hold", "account_on_hold"]
+]);
+var MAX_BLOCK_TEXT = 500;
+var API_ERROR_PREFIX = /^API Error: \d{3} /;
+var BLOCK_TEXTS = [
+  [/^Failed to authenticate\b/, "authentication_failed"],
+  [/^OAuth token (?:revoked|has expired)\b/, "authentication_failed"],
+  [/^Your account does not have access to Claude\b/, "authentication_failed"],
+  [/^Your account is on hold and can['’]t\b/, "account_on_hold"],
+  [/^This organization has been disabled\b/, "organization_disabled"],
+  [/^Your ANTHROPIC_API_KEY belongs to a disabled organization\b/, "organization_disabled"],
+  [/^Your organization has disabled Claude subscription access\b/, "organization_disabled"],
+  [
+    /^Claude Code is unable to respond to this request, which appears to violate our Usage Policy\b/,
+    "policy_violation"
+  ],
+  [
+    /^(?:Your|This) account (?:has been|is|was) (?:disabled|suspended|banned)\b/,
+    "account_disabled"
+  ]
+];
+var ORG_DISABLED_BODY = /^\{[^\n]*"message":\s*"This organization has been disabled\b/;
+function matchBlockText(text) {
+  if (typeof text !== "string" || text.length > MAX_BLOCK_TEXT) return void 0;
+  const bare = text.replace(API_ERROR_PREFIX, "");
+  if (bare !== text && ORG_DISABLED_BODY.test(bare)) return { reason: "organization_disabled" };
+  for (const [re, reason] of BLOCK_TEXTS) {
+    if (re.test(bare)) return { reason };
+  }
+  return void 0;
+}
+function matchBlockCategory(error62) {
+  const reason = typeof error62 === "string" ? BLOCK_CATEGORIES.get(error62) : void 0;
+  return reason === void 0 ? void 0 : { reason };
+}
+function detectBlock(logLine2) {
+  const line = logLine2.trimEnd();
+  let ev;
+  try {
+    ev = JSON.parse(line);
+  } catch {
+    return line.startsWith("{") ? void 0 : matchBlockText(line);
+  }
+  if (!isObject2(ev)) return void 0;
+  if (ev.type === "system") {
+    return ev.subtype === "api_retry" ? matchBlockCategory(ev.error) : void 0;
+  }
+  if (ev.type === "result") {
+    return matchBlockCategory(ev.error) ?? matchBlockText(ev.error) ?? (ev.is_error === true ? matchBlockText(ev.result) : void 0);
+  }
+  if (ev.type === "assistant") {
+    const category = matchBlockCategory(ev.error);
+    if (category) return category;
+    if (ev.isApiErrorMessage !== true && typeof ev.error !== "string") return void 0;
+    const content = isObject2(ev.message) ? ev.message.content : void 0;
+    if (!Array.isArray(content)) return void 0;
+    for (const block of content) {
+      if (isObject2(block) && block.type === "text") {
+        const hit = matchBlockText(block.text);
+        if (hit) return hit;
+      }
+    }
+  }
+  return void 0;
+}
+function scanLogForBlock(stateRoot, id, from) {
+  const range = readRange(logFile(stateRoot, id), (size) => {
+    const start = Math.max(from, size - TAIL_BYTES, 0);
+    return { start, length: size - start };
+  });
+  if (!range) return void 0;
+  const lines = range.text.split("\n");
+  if (range.start > from) lines.shift();
+  let recovered = false;
+  let retry;
+  for (const line of lines.reverse()) {
+    const hit = detectBlock(line);
+    const ev = parsedEvent(line);
+    if (hit) {
+      if (ev?.type !== "system") return hit;
+      if (!recovered) retry ??= hit;
+    } else if (showsRecovery(ev)) recovered = true;
+  }
+  return retry;
+}
+var blocksFile = (stateRoot) => join5(stateRoot, "blocks.json");
+var BLOCK_REASON = /^[a-z_]{1,64}$/;
+function parseBlock(raw) {
+  if (!isObject2(raw) || Object.keys(raw).length !== 3) return void 0;
+  const { label, reason, at } = raw;
+  if (typeof label !== "string" || !validLabel(label)) return void 0;
+  if (typeof reason !== "string" || !BLOCK_REASON.test(reason)) return void 0;
+  if (typeof at !== "string" || Number.isNaN(Date.parse(at))) return void 0;
+  return { label, reason, at };
+}
+function readBlocks(stateRoot) {
+  const file2 = blocksFile(stateRoot);
+  try {
+    if (!lstatSync3(file2).isFile()) return { ok: false };
+  } catch (e) {
+    return e.code === "ENOENT" ? { ok: true, blocks: [] } : { ok: false };
+  }
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync5(file2, "utf8"));
+  } catch {
+    return { ok: false };
+  }
+  if (!Array.isArray(raw)) return { ok: false };
+  const blocks = [];
+  for (const entry of raw) {
+    const block = parseBlock(entry);
+    if (!block) return { ok: false };
+    blocks.push(block);
+  }
+  return { ok: true, blocks };
+}
+function writeBlocks(stateRoot, blocks) {
+  writeStateFile(stateRoot, blocksFile(stateRoot), `${JSON.stringify(blocks, null, 2)}
+`);
+}
+function blockLine(read2) {
+  if (!read2.ok) {
+    return "account block state is unreadable (blocks.json): all crew stopped, no crew starts until the owner inspects or removes the file";
+  }
+  if (read2.blocks.length === 0) return void 0;
+  const labels = [...new Set(read2.blocks.map((b) => b.label))].join(", ");
+  return `account block on ${labels}: all crew stopped, no crew starts until the owner runs studio accounts-clear <label>`;
+}
+var blockHold = (stateRoot) => blockLine(readBlocks(stateRoot));
+function moveBlockedToReady(project, stateRoot, now, result) {
+  try {
+    for (const [id, rec] of Object.entries(readCrewRecords(stateRoot))) {
+      if (rec.block === void 0) continue;
+      const status = loadBoard(project).items.find((i2) => i2.id === id)?.status;
+      if (status === void 0 || !ACTIVE.has(status)) continue;
+      const label = rec.label ?? DEFAULT_LABEL;
+      const note = `account block (${rec.block.reason}): run on ${label} stopped, clone and branch kept`;
+      backToReady(project, id, note, now, "studio");
+    }
+  } catch (e) {
+    result.errors.push(`board not updated after an account block: ${e.message}`);
+  }
+}
+async function reconcileBlocks(o2) {
+  const { project, stateRoot, ports } = o2;
+  const result = { stopped: [], errors: [], lockFailed: false };
+  const crewFile = join5(stateRoot, "crew.json");
+  const first = readBlocks(stateRoot);
+  if (first.ok && first.blocks.length === 0 && !exists(crewFile)) return result;
+  const now = ports.clock.now();
+  const lock = acquireStateLock(stateRoot, "blocks.lock", { now, heartbeatStaleMs: LOCK_STALE_MS });
+  if (!lock) {
+    result.lockFailed = true;
+    return result;
+  }
+  try {
+    const at = now.toISOString();
+    const records = readCrewRecords(stateRoot);
+    const hits = /* @__PURE__ */ new Map();
+    for (const [id, rec] of Object.entries(records)) {
+      if (rec.stoppedAt !== void 0) continue;
+      const hit = scanLogForBlock(stateRoot, id, rec.logStart ?? 0);
+      if (hit) hits.set(id, hit);
+    }
+    const read2 = readBlocks(stateRoot);
+    if (read2.ok) {
+      const known = [...read2.blocks];
+      for (const [id, hit] of hits) {
+        const raw = records[id]?.label ?? DEFAULT_LABEL;
+        const label = validLabel(raw) ? raw : DEFAULT_LABEL;
+        if (!known.some((b) => b.label === label && b.reason === hit.reason)) {
+          known.push({ label, reason: hit.reason, at });
+        }
+      }
+      if (known.length !== read2.blocks.length) writeBlocks(stateRoot, known);
+      read2.blocks = known;
+    } else {
+      result.errors.push(
+        `${blocksFile(stateRoot)} is unreadable: all crew stopped and no crew starts until the owner inspects or removes the file`
+      );
+    }
+    const firstReason = read2.ok ? read2.blocks[0]?.reason : "state_unreadable";
+    if (firstReason !== void 0) {
+      for (const [id, rec] of Object.entries(records)) {
+        if (rec.stoppedAt !== void 0) continue;
+        const hit = hits.get(id);
+        if (!Number.isInteger(rec.pid) || rec.pid <= 0) {
+          result.errors.push(`crew record for ${id} has no valid pid; not stopping it`);
+          continue;
+        }
+        const alive = ports.claude.alive(rec.pid);
+        if (!alive && hit === void 0) continue;
+        if (alive) {
+          try {
+            await ports.claude.stop(rec.pid);
+          } catch {
+            result.errors.push(`could not stop crew ${id} (pid ${rec.pid})`);
+            continue;
+          }
+          lock.heartbeat(ports.clock.now());
+          result.stopped.push({
+            item: id,
+            label: rec.label ?? DEFAULT_LABEL,
+            reason: hit?.reason ?? firstReason
+          });
+        }
+        if (!read2.ok && hit !== void 0) continue;
+        const latest = readCrewRecords(stateRoot);
+        latest[id] = {
+          ...latest[id] ?? rec,
+          stoppedAt: at,
+          block: { at, reason: hit?.reason ?? firstReason }
+        };
+        writeStateFile(stateRoot, crewFile, `${JSON.stringify(latest, null, 2)}
+`);
+      }
+    }
+    moveBlockedToReady(project, stateRoot, now, result);
+  } finally {
+    lock.release();
+  }
+  return result;
+}
+function clearBlocks(stateRoot, label, now) {
+  const unreadable = `${blocksFile(stateRoot)} is unreadable; nothing cleared: inspect or remove the file`;
+  if (!readBlocks(stateRoot).ok) throw new Error(unreadable);
+  const lock = acquireStateLock(stateRoot, "blocks.lock", { now, heartbeatStaleMs: LOCK_STALE_MS });
+  if (!lock) throw new Error("another Studio process is reconciling; nothing cleared, try again");
+  try {
+    const read2 = readBlocks(stateRoot);
+    if (!read2.ok) throw new Error(unreadable);
+    const kept = read2.blocks.filter((b) => b.label !== label);
+    const removed = read2.blocks.length - kept.length;
+    if (removed > 0) writeBlocks(stateRoot, kept);
+    return { removed, remaining: kept.length };
+  } finally {
+    lock.release();
+  }
+}
 
 // src/credentials.ts
 var PROVIDER_TIMEOUT_MS = 3e4;
@@ -29064,6 +29309,8 @@ async function runCredentialProvider(command, ctx, ports, owner) {
 }
 var allParkedLine = (reset2) => `usage limit: no crew credential available; earliest reset ${reset2 ?? "unknown"}`;
 async function limitHold(stateRoot, ownerConfig, ports, owner) {
+  const blocked = blockHold(stateRoot);
+  if (blocked !== void 0) return blocked;
   const read2 = readLimits(stateRoot);
   if (!read2.ok)
     return "usage limit state is unreadable (limits.json): no crew starts until it is fixed";
@@ -29504,6 +29751,10 @@ function updateCrewFile(stateRoot, file2, mutate) {
   });
   return run;
 }
+function refuseIfBlocked(stateRoot) {
+  const line = blockHold(stateRoot);
+  if (line !== void 0) throw new Error(line);
+}
 async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
   assertItemId(item.id);
   const penv = launcher.env ?? process.env;
@@ -29533,6 +29784,7 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     );
   }
   const stateRoot = stateRootFor(projectDir, owner);
+  refuseIfBlocked(stateRoot);
   const ownerConfig = loadOwnerConfig(owner);
   const toolchainPaths = ownerConfig.crewToolchainPaths;
   canonicalToolchainPaths(toolchainPaths, {
@@ -29598,9 +29850,9 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
   const missingSkill = firstMissingSkill(claudeConfigDir, role?.skills.required ?? []);
   if (missingSkill) throw new Error(missingSkill);
   const clonePath = join6(stateRoot, "clones", item.id);
-  if (previous?.limit && existsNoFollow(clonePath) && (cloneBranch(clonePath) !== `studio/${item.id}` || cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))) {
+  if ((previous?.limit || previous?.block) && existsNoFollow(clonePath) && (cloneBranch(clonePath) !== `studio/${item.id}` || cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))) {
     throw new Error(
-      `the clone of ${item.id} left its branch after a usage limit; refusing to replace it (inspect it, then remove ${clonePath} to start over)`
+      `the clone of ${item.id} left its branch after ${previous.limit ? "a usage limit" : "an account block"}; refusing to replace it (inspect it, then remove ${clonePath} to start over)`
     );
   }
   const tokenConfigDir = providerConfigDir === void 0 && oauthToken !== void 0 ? claudeConfigDir : void 0;
@@ -29658,6 +29910,7 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
   const log = join6(stateRoot, "logs", `${item.id}.jsonl`);
   ensureStateDir(stateRoot, dirname4(log));
   const logStart = fileSize(log);
+  refuseIfBlocked(stateRoot);
   const { pid } = await ports.claude.start(
     wt.path,
     [
@@ -31017,6 +31270,7 @@ Commands:
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
   secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
   doctor                   What is set and what is missing, never values
+  accounts-clear <label>   Owner only, in a terminal: clear a label's account block
 `;
 var UsageError = class extends Error {
 };
@@ -31074,6 +31328,13 @@ async function runCli(argv, deps) {
       return root;
     };
     const reconcile = async () => {
+      const b = await reconcileBlocks({ project, stateRoot: stateRoot(), ports });
+      for (const s of b.stopped) {
+        stderr(`note: ${s.item} on ${s.label} stopped: account block (${s.reason})
+`);
+      }
+      for (const e of b.errors) stderr(`error: ${e}
+`);
       const r = await reconcileLimits({ project, stateRoot: stateRoot(), ports });
       for (const s of r.stopped) {
         stderr(
@@ -31083,6 +31344,7 @@ async function runCli(argv, deps) {
       }
       for (const e of r.errors) stderr(`error: ${e}
 `);
+      return b.lockFailed;
     };
     const planNow = async (config2, board) => {
       const capacity = await readCapacity(config2, ports);
@@ -31127,7 +31389,11 @@ async function runCli(argv, deps) {
         return 0;
       }
       case "launch": {
-        await reconcile();
+        if (await reconcile()) {
+          throw new Error(
+            "another Studio process is reconciling account blocks; refusing to launch, try again"
+          );
+        }
         const { config: config2, board } = loadAll();
         const item = findItem(board, rest[0]);
         if (item.status !== "ready") {
@@ -31412,6 +31678,19 @@ async function runCli(argv, deps) {
       case "doctor": {
         return runDoctor({ project, owner, env: deps.env, json: json2, stdout });
       }
+      case "accounts-clear": {
+        if (deps.env.STUDIO_ROLE === "crew" || deps.isTerminal !== true) {
+          stderr("studio: accounts-clear is for the owner and needs a terminal; nothing written\n");
+          return 1;
+        }
+        const label = rest[0];
+        if (rest.length !== 1 || label === void 0 || !validLabel(label)) {
+          throw new UsageError("accounts-clear needs exactly one valid label");
+        }
+        const r = clearBlocks(await boundStateRoot(), label, ports.clock.now());
+        print({ label, ...r });
+        return 0;
+      }
       case "metrics": {
         print(computeMetrics(readMetricEvents(stateRoot())));
         return 0;
@@ -31532,6 +31811,22 @@ function applyQueueResults(project, done, ports, stderr) {
   saveBoard(project, board);
 }
 function buildSnapshot(root, board, capacity, queue, now, hold, limits) {
+  const blocks = readBlocks(root);
+  const blocked = blockLine(blocks);
+  const notifications = blocks.ok ? blocks.blocks.map((b) => ({
+    id: "account-block",
+    title: `account block on ${b.label}: ${b.reason}`,
+    reason: b.reason,
+    at: b.at,
+    label: b.label
+  })) : [
+    {
+      id: "account-block",
+      title: blocked ?? "account block",
+      reason: "state_unreadable",
+      at: now.toISOString()
+    }
+  ];
   const crew = Object.values(readCrewRecords(root)).map((r) => {
     const item = board.items.find((i2) => i2.id === r.item);
     return {
@@ -31550,10 +31845,11 @@ function buildSnapshot(root, board, capacity, queue, now, hold, limits) {
     capacity,
     forOwner: [
       ...board.items.filter((i2) => i2.ownerOnly && i2.status !== "merged" && i2.status !== "dropped").map((i2) => ({ id: i2.id, title: i2.title })),
-      // Exactly one line however many items wait.
-      ...hold === void 0 ? [] : [{ id: "usage-limit", title: hold }]
+      // Exactly one line however many items wait or labels are blocked; a block outranks a limit.
+      ...blocked !== void 0 ? [{ id: "account-block", title: blocked }] : hold === void 0 ? [] : [{ id: "usage-limit", title: hold }]
     ],
     ...Object.keys(limits).length > 0 ? { limits } : {},
+    ...notifications.length > 0 ? { notifications } : {},
     updatedAt: now.toISOString(),
     metrics: computeMetrics(readMetricEvents(root))
   };
@@ -39529,5 +39825,6 @@ process.exitCode = await runCli(process.argv.slice(2), {
   env: process.env,
   homedir: homedir5(),
   cwd: process.cwd(),
+  isTerminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
   readSecret: (prompt) => readHiddenLine(prompt, process.stdin, (s) => process.stderr.write(s))
 });

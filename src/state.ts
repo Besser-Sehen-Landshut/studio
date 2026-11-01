@@ -39,14 +39,25 @@ export interface CrewSnapshot {
   label?: string;
 }
 
+export interface Notification {
+  id: 'account-block';
+  title: string;
+  reason: string;
+  at: string;
+  /** Absent when the block file is unreadable, so no label is known. */
+  label?: string;
+}
+
 export interface StateSnapshot {
   crew: CrewSnapshot[];
   queue: QueueState;
   capacity: Capacity;
-  /** Owner-only items that are not merged or dropped, plus at most one `usage-limit` line. */
+  /** Owner-only items that are not merged or dropped, plus at most one `account-block` or `usage-limit` line. */
   forOwner: { id: string; title: string }[];
   /** Credential labels parked at a usage limit. */
   limits?: Parks;
+  /** One entry per account block, for whatever shows the owner this state; absent without a block. */
+  notifications?: Notification[];
   updatedAt: string;
   metrics: Metrics;
 }

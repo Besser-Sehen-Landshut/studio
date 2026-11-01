@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- Account blocks: when a crew log shows Claude Code reporting a failed authentication or a blocked
+  account or organization, Studio records it in `blocks.json`, stops every crew of the project and
+  starts nothing, with no provider call, until the owner runs `studio accounts-clear <label>` in a
+  terminal. An unreadable `blocks.json` counts as blocked. `state.json` gets one `account-block`
+  `forOwner` line and a `notifications` array.
+
 ## [0.2.0] - 2026-11-01
 
 Stage (a.1): your own runners. Not tagged or published as a GitHub release yet; the maintainers

@@ -568,6 +568,8 @@ describe('writeCrewSettings', () => {
           'queue.run.lock',
           'limits.json',
           'limits.lock',
+          'blocks.json',
+          'blocks.lock',
         ].map((f) => join(state, f)),
       ],
     });

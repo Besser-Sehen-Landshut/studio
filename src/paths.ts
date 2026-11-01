@@ -43,6 +43,8 @@ export const STATE_FILES = [
   'queue.run.lock',
   'limits.json',
   'limits.lock',
+  'blocks.json',
+  'blocks.lock',
 ];
 
 /** `$XDG_STATE_HOME/studio`, else `<home>/.local/state/studio`: the parent of every state root. */

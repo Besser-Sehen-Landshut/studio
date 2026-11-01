@@ -1132,6 +1132,10 @@ function checkWords(env: Env, words: string[], state: State): void {
       deny(`${name} reading its script from stdin is not allowed`);
     }
   }
+  // Clearing an account block is the owner's decision. `node` covers `node <plugin>/bin/studio ...`.
+  if ((name === 'studio' || name === 'node') && args.includes('accounts-clear')) {
+    deny('studio accounts-clear is owner-only');
+  }
   if (name === 'find') checkFind(env, args, state);
   if (name === 'git' || name === 'gh') {
     if (words.some((w) => w.includes(SUBST))) deny(`command substitution in a ${name} command`);

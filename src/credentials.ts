@@ -15,6 +15,7 @@ import { dirname, isAbsolute, sep } from 'node:path';
 import { crewTokenFile, type OwnerConfig, type OwnerEnv, ownerConfigDir } from './config.js';
 import {
   activeParks,
+  blockHold,
   DEFAULT_LABEL,
   earliestReset,
   type Parks,
@@ -271,6 +272,9 @@ export async function limitHold(
   ports: Ports,
   owner: OwnerEnv,
 ): Promise<string | undefined> {
+  // First, and with no provider call.
+  const blocked = blockHold(stateRoot);
+  if (blocked !== undefined) return blocked;
   const read = readLimits(stateRoot);
   if (!read.ok)
     return 'usage limit state is unreadable (limits.json): no crew starts until it is fixed';

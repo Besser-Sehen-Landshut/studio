@@ -78,21 +78,22 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 
 `studio [--project <dir>] [--json] <command>`
 
-| Command                 | Purpose                                                       |
-| ----------------------- | ------------------------------------------------------------- |
-| `board`                 | Show the board                                                |
-| `plan`                  | Dry-run the planner (JSON incl. capacity and its read error)  |
-| `launch <id>`           | Start a crew session for a planned item                       |
-| `status`                | Crew sessions and their board status                          |
-| `collect <id>`          | Verify a crew report and PR head, move the item               |
-| `queue add <repo>#<pr>` | Put a reviewed PR into the merge queue                        |
-| `queue run`             | Merge queued PRs one at a time (exact head SHA, checks green) |
-| `state`                 | Refresh `state.json` in the state root                        |
-| `stop <id>`             | Stop a crew session                                           |
-| `metrics`               | Lead time and deployment frequency                            |
-| `setup ci [--write]`    | Detect CI runners, propose the `ci:` block, lint workflows    |
-| `secret set crew-token` | Store the crew's GitHub token (hidden input, checked first)   |
-| `doctor`                | What is set and what is missing, never values                 |
+| Command                  | Purpose                                                       |
+| ------------------------ | ------------------------------------------------------------- |
+| `board`                  | Show the board                                                |
+| `plan`                   | Dry-run the planner (JSON incl. capacity and its read error)  |
+| `launch <id>`            | Start a crew session for a planned item                       |
+| `status`                 | Crew sessions and their board status                          |
+| `collect <id>`           | Verify a crew report and PR head, move the item               |
+| `queue add <repo>#<pr>`  | Put a reviewed PR into the merge queue                        |
+| `queue run`              | Merge queued PRs one at a time (exact head SHA, checks green) |
+| `state`                  | Refresh `state.json` in the state root                        |
+| `stop <id>`              | Stop a crew session                                           |
+| `metrics`                | Lead time and deployment frequency                            |
+| `setup ci [--write]`     | Detect CI runners, propose the `ci:` block, lint workflows    |
+| `secret set crew-token`  | Store the crew's GitHub token (hidden input, checked first)   |
+| `doctor`                 | What is set and what is missing, never values                 |
+| `accounts-clear <label>` | Owner only, in a terminal: clear a label's account block      |
 
 `launch` refuses while a crew for the same item is still running and deletes a report an earlier run left in a reused clone. `collect` refuses while the item's crew process is still alive and refuses a report last modified before the crew started.
 
@@ -131,6 +132,12 @@ Without `--write` nothing changes. With `--write` the command changes only the `
 **Usage limits.** At the start of `status`, `plan`, `launch` and `state`, Studio reads the end of each active crew's log. Only events Claude Code itself emits count; tool output that quotes a limit message does not. A `rate_limit` retry alone never stops a running crew; it counts only when the crew exited without a report and no later successful event shows it recovered. On a limit it stops the run, parks the label in `limits.json` in the state root, and returns the item to `ready` with a note; clone and branch stay. A label is parked until the reset when the event gives an absolute time, otherwise for one hour, and clears by itself afterwards. The next launch resumes the session when the clone is still there and the session is usable with the new credential (same label, or the token form with the same config dir), otherwise it starts fresh. A crew that left a report is not treated as limited, and a clone that left its branch is not replaced: the launch refuses and names it.
 
 When no credential is available (without a provider: `default` is parked; with one: it answers empty while labels are parked), nothing is planned or started, and `state.json` shows one `forOwner` line with the earliest reset. Work continues by itself once a label is free. An unreadable `limits.json` counts as all parked and is reported.
+
+**Account blocks.** When an account looks blocked, Studio stops, so automation never makes it worse. At the start of `status`, `plan`, `launch` and `state`, it looks in the current run of every crew not yet stopped for events Claude Code itself emits: a failed authentication (also with no earlier success), an account on hold, disabled, suspended or banned, a disabled organization, a usage policy refusal. Tool output that quotes such a message does not count, and neither do billing errors or usage limits. A retry with a block category counts at once, also for a running crew, unless a later successful event shows the run recovered; a crew that left a report still counts.
+
+Studio records the label and a reason code in `blocks.json` in the state root, then stops every running crew of this project, of all labels and regardless of board status. Active items return to `ready` with a note; clone and branch stay. Nothing starts and no credential provider is called while any block exists, under any label. `state.json` shows one `forOwner` line (`account-block`) and one entry per block under `notifications`. An unreadable `blocks.json` (malformed, a symlink, not a file) counts as blocked in the same way; a missing file means no block.
+
+Nothing clears by itself. `studio accounts-clear <label>` removes that label's entries, restarts nothing, needs a terminal and is denied to crews. On an unreadable file it refuses: inspect or remove the file.
 
 ## Security model
 

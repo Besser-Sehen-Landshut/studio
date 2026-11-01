@@ -5,7 +5,17 @@ import { readCapacity } from './capacity.js';
 import { configWarnings, loadConfig, loadOwnerConfig, type StudioConfig } from './config.js';
 import { limitHold } from './credentials.js';
 import { launchCrew } from './crew.js';
-import { activeParks, type Parks, readLimits, reconcileLimits } from './limits.js';
+import {
+  activeParks,
+  blockLine,
+  clearBlocks,
+  type Parks,
+  readBlocks,
+  readLimits,
+  reconcileBlocks,
+  reconcileLimits,
+  validLabel,
+} from './limits.js';
 import { checkStateMarker, projectRealpath, stateRootFor, writeStateFile } from './paths.js';
 import { type Capacity, planAssignments } from './planner.js';
 import type { Ports } from './ports.js';
@@ -26,6 +36,7 @@ import { runSetupCi } from './setup-ci-command.js';
 import {
   type CrewSnapshot,
   computeMetrics,
+  type Notification,
   readCrewRecords,
   readMetricEvents,
   type StateSnapshot,
@@ -41,6 +52,8 @@ export interface CliDeps {
   cwd: string;
   /** Hidden terminal input; missing or undefined means there is no terminal. */
   readSecret?: (prompt: string) => Promise<string | undefined>;
+  /** Stdin and stdout are a terminal; missing means there is none. */
+  isTerminal?: boolean;
 }
 
 const USAGE = `Usage: studio [--project <dir>] [--json] <command>
@@ -59,6 +72,7 @@ Commands:
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
   secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
   doctor                   What is set and what is missing, never values
+  accounts-clear <label>   Owner only, in a terminal: clear a label's account block
 `;
 
 class UsageError extends Error {}
@@ -126,8 +140,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       checkStateMarker(root, { projectRealpath: projectRealpath(project), originUrl: url });
       return root;
     };
-    /** Applies usage limits found in the crew logs; runs before anything looks at the board. */
-    const reconcile = async () => {
+    /**
+     * Applies account blocks, then usage limits, found in the crew logs; runs before anything looks
+     * at the board. Returns whether the block reconcile could not run.
+     */
+    const reconcile = async (): Promise<boolean> => {
+      const b = await reconcileBlocks({ project, stateRoot: stateRoot(), ports });
+      for (const s of b.stopped) {
+        stderr(`note: ${s.item} on ${s.label} stopped: account block (${s.reason})\n`);
+      }
+      for (const e of b.errors) stderr(`error: ${e}\n`);
       const r = await reconcileLimits({ project, stateRoot: stateRoot(), ports });
       for (const s of r.stopped) {
         stderr(
@@ -135,6 +157,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         );
       }
       for (const e of r.errors) stderr(`error: ${e}\n`);
+      return b.lockFailed;
     };
     const planNow = async (config: StudioConfig, board: Board) => {
       const capacity = await readCapacity(config, ports);
@@ -182,7 +205,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'launch': {
-        await reconcile();
+        if (await reconcile()) {
+          throw new Error(
+            'another Studio process is reconciling account blocks; refusing to launch, try again',
+          );
+        }
         const { config, board } = loadAll();
         const item = findItem(board, rest[0]);
         if (item.status !== 'ready') {
@@ -488,6 +515,21 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         return runDoctor({ project, owner, env: deps.env, json, stdout });
       }
 
+      case 'accounts-clear': {
+        // Owner only: a crew runs without a terminal and with this role in its environment.
+        if (deps.env.STUDIO_ROLE === 'crew' || deps.isTerminal !== true) {
+          stderr('studio: accounts-clear is for the owner and needs a terminal; nothing written\n');
+          return 1;
+        }
+        const label = rest[0];
+        if (rest.length !== 1 || label === undefined || !validLabel(label)) {
+          throw new UsageError('accounts-clear needs exactly one valid label');
+        }
+        const r = clearBlocks(await boundStateRoot(), label, ports.clock.now());
+        print({ label, ...r });
+        return 0;
+      }
+
       case 'metrics': {
         print(computeMetrics(readMetricEvents(stateRoot())));
         return 0;
@@ -652,6 +694,24 @@ function buildSnapshot(
   hold: string | undefined,
   limits: Parks,
 ): StateSnapshot {
+  const blocks = readBlocks(root);
+  const blocked = blockLine(blocks);
+  const notifications: Notification[] = blocks.ok
+    ? blocks.blocks.map((b) => ({
+        id: 'account-block',
+        title: `account block on ${b.label}: ${b.reason}`,
+        reason: b.reason,
+        at: b.at,
+        label: b.label,
+      }))
+    : [
+        {
+          id: 'account-block',
+          title: blocked ?? 'account block',
+          reason: 'state_unreadable',
+          at: now.toISOString(),
+        },
+      ];
   const crew: CrewSnapshot[] = Object.values(readCrewRecords(root)).map((r) => {
     const item = board.items.find((i) => i.id === r.item);
     return {
@@ -672,10 +732,15 @@ function buildSnapshot(
       ...board.items
         .filter((i) => i.ownerOnly && i.status !== 'merged' && i.status !== 'dropped')
         .map((i) => ({ id: i.id, title: i.title })),
-      // Exactly one line however many items wait.
-      ...(hold === undefined ? [] : [{ id: 'usage-limit', title: hold }]),
+      // Exactly one line however many items wait or labels are blocked; a block outranks a limit.
+      ...(blocked !== undefined
+        ? [{ id: 'account-block', title: blocked }]
+        : hold === undefined
+          ? []
+          : [{ id: 'usage-limit', title: hold }]),
     ],
     ...(Object.keys(limits).length > 0 ? { limits } : {}),
+    ...(notifications.length > 0 ? { notifications } : {}),
     updatedAt: now.toISOString(),
     metrics: computeMetrics(readMetricEvents(root)),
   };

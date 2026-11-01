@@ -23,6 +23,7 @@ import {
 import { DEFAULT_SECRET_GLOBS } from './guard.js';
 import {
   activeParks,
+  blockHold,
   DEFAULT_LABEL,
   earliestReset,
   type LimitKind,
@@ -558,8 +559,10 @@ export interface CrewRecord {
   pid: number;
   log: string;
   startedAt: string;
-  /** Set by `studio stop` and when a usage limit stopped the run. */
+  /** Set by `studio stop` and when a usage limit or an account block stopped the run. */
   stoppedAt?: string;
+  /** The run was stopped because of an account block; never resumed by itself. */
+  block?: { at: string; reason: string };
   /** Label of the credential this run used; the credential itself is never recorded. */
   label?: string;
   /** Config dir of a run in the token form: `--resume` works across labels sharing it. */
@@ -594,6 +597,11 @@ function updateCrewFile(
   });
   crewFileChain = run.catch(() => {});
   return run;
+}
+
+function refuseIfBlocked(stateRoot: string): void {
+  const line = blockHold(stateRoot);
+  if (line !== undefined) throw new Error(line);
 }
 
 export async function launchCrew(
@@ -636,6 +644,8 @@ export async function launchCrew(
   }
   // Refuses a state root inside (or around) the project before anything is created.
   const stateRoot = stateRootFor(projectDir, owner);
+  // An account block refuses before any provider call.
+  refuseIfBlocked(stateRoot);
   // Everything that can refuse runs before the first side effect.
   const ownerConfig = loadOwnerConfig(owner);
   const toolchainPaths = ownerConfig.crewToolchainPaths;
@@ -707,15 +717,15 @@ export async function launchCrew(
   const missingSkill = firstMissingSkill(claudeConfigDir, role?.skills.required ?? []);
   if (missingSkill) throw new Error(missingSkill);
   const clonePath = join(stateRoot, 'clones', item.id);
-  // A run stopped at a limit keeps its work: never let prepareCheckout replace that clone.
+  // A run stopped at a limit or a block keeps its work: never let prepareCheckout replace that clone.
   if (
-    previous?.limit &&
+    (previous?.limit || previous?.block) &&
     existsNoFollow(clonePath) &&
     (cloneBranch(clonePath) !== `studio/${item.id}` ||
       cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))
   ) {
     throw new Error(
-      `the clone of ${item.id} left its branch after a usage limit; refusing to replace it (inspect it, then remove ${clonePath} to start over)`,
+      `the clone of ${item.id} left its branch after ${previous.limit ? 'a usage limit' : 'an account block'}; refusing to replace it (inspect it, then remove ${clonePath} to start over)`,
     );
   }
   const tokenConfigDir =
@@ -782,6 +792,8 @@ export async function launchCrew(
   const log = join(stateRoot, 'logs', `${item.id}.jsonl`);
   ensureStateDir(stateRoot, dirname(log));
   const logStart = fileSize(log);
+  // A block may have arrived while this launch was preparing.
+  refuseIfBlocked(stateRoot);
   const { pid } = await ports.claude.start(
     wt.path,
     [

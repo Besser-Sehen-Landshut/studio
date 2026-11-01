@@ -413,3 +413,333 @@ export async function reconcileLimits(o: {
   }
   return result;
 }
+
+/** One account block; the file is `<stateRoot>/blocks.json`. `reason` is a code of ours, see below. */
+export interface AccountBlock {
+  label: string;
+  reason: string;
+  at: string;
+}
+export type BlocksRead = { ok: true; blocks: AccountBlock[] } | { ok: false };
+export interface DetectedBlock {
+  reason: string;
+}
+
+/** `error` categories of `api_retry` and assistant events; `billing_error` and `rate_limit` are not blocks. */
+const BLOCK_CATEGORIES = new Map([
+  ['authentication_failed', 'authentication_failed'],
+  ['oauth_org_not_allowed', 'organization_not_allowed'],
+  ['account_on_hold', 'account_on_hold'],
+]);
+
+const MAX_BLOCK_TEXT = 500;
+const API_ERROR_PREFIX = /^API Error: \d{3} /;
+/** Each anchored at the start of the text. The reason is always our code, never text from the log. */
+const BLOCK_TEXTS: readonly [RegExp, string][] = [
+  [/^Failed to authenticate\b/, 'authentication_failed'],
+  [/^OAuth token (?:revoked|has expired)\b/, 'authentication_failed'],
+  [/^Your account does not have access to Claude\b/, 'authentication_failed'],
+  [/^Your account is on hold and can['’]t\b/, 'account_on_hold'],
+  [/^This organization has been disabled\b/, 'organization_disabled'],
+  [/^Your ANTHROPIC_API_KEY belongs to a disabled organization\b/, 'organization_disabled'],
+  [/^Your organization has disabled Claude subscription access\b/, 'organization_disabled'],
+  [
+    /^Claude Code is unable to respond to this request, which appears to violate our Usage Policy\b/,
+    'policy_violation',
+  ],
+  [
+    /^(?:Your|This) account (?:has been|is|was) (?:disabled|suspended|banned)\b/,
+    'account_disabled',
+  ],
+];
+/** The same organization message when the API error body is printed as JSON. */
+const ORG_DISABLED_BODY = /^\{[^\n]*"message":\s*"This organization has been disabled\b/;
+
+function matchBlockText(text: unknown): DetectedBlock | undefined {
+  if (typeof text !== 'string' || text.length > MAX_BLOCK_TEXT) return undefined;
+  const bare = text.replace(API_ERROR_PREFIX, '');
+  if (bare !== text && ORG_DISABLED_BODY.test(bare)) return { reason: 'organization_disabled' };
+  for (const [re, reason] of BLOCK_TEXTS) {
+    if (re.test(bare)) return { reason };
+  }
+  return undefined;
+}
+
+function matchBlockCategory(error: unknown): DetectedBlock | undefined {
+  const reason = typeof error === 'string' ? BLOCK_CATEGORIES.get(error) : undefined;
+  return reason === undefined ? undefined : { reason };
+}
+
+/**
+ * Finds an account block in one line of a crew log, in the positions `detectLimit` trusts: crew tool
+ * output also lands in this log, so a `tool_result`, an unflagged assistant text or a `result`
+ * without an error never count.
+ */
+export function detectBlock(logLine: string): DetectedBlock | undefined {
+  const line = logLine.trimEnd();
+  let ev: unknown;
+  try {
+    ev = JSON.parse(line);
+  } catch {
+    return line.startsWith('{') ? undefined : matchBlockText(line);
+  }
+  if (!isObject(ev)) return undefined;
+  if (ev.type === 'system') {
+    return ev.subtype === 'api_retry' ? matchBlockCategory(ev.error) : undefined;
+  }
+  if (ev.type === 'result') {
+    return (
+      matchBlockCategory(ev.error) ??
+      matchBlockText(ev.error) ??
+      (ev.is_error === true ? matchBlockText(ev.result) : undefined)
+    );
+  }
+  if (ev.type === 'assistant') {
+    const category = matchBlockCategory(ev.error);
+    if (category) return category;
+    if (ev.isApiErrorMessage !== true && typeof ev.error !== 'string') return undefined;
+    const content = isObject(ev.message) ? ev.message.content : undefined;
+    if (!Array.isArray(content)) return undefined;
+    for (const block of content) {
+      if (isObject(block) && block.type === 'text') {
+        const hit = matchBlockText(block.text);
+        if (hit) return hit;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Walks the bounded tail of an item's log from the end, from byte `from` on, as `scanLogForLimit`
+ * does. A terminal event counts at once; a retry with a block category counts unless a later
+ * successful event shows the run recovered.
+ */
+export function scanLogForBlock(
+  stateRoot: string,
+  id: string,
+  from: number,
+): DetectedBlock | undefined {
+  const range = readRange(logFile(stateRoot, id), (size) => {
+    const start = Math.max(from, size - TAIL_BYTES, 0);
+    return { start, length: size - start };
+  });
+  if (!range) return undefined;
+  const lines = range.text.split('\n');
+  if (range.start > from) lines.shift();
+  let recovered = false;
+  let retry: DetectedBlock | undefined;
+  for (const line of lines.reverse()) {
+    const hit = detectBlock(line);
+    const ev = parsedEvent(line);
+    if (hit) {
+      if (ev?.type !== 'system') return hit;
+      if (!recovered) retry ??= hit;
+    } else if (showsRecovery(ev)) recovered = true;
+  }
+  return retry;
+}
+
+const blocksFile = (stateRoot: string): string => join(stateRoot, 'blocks.json');
+const BLOCK_REASON = /^[a-z_]{1,64}$/;
+
+function parseBlock(raw: unknown): AccountBlock | undefined {
+  if (!isObject(raw) || Object.keys(raw).length !== 3) return undefined;
+  const { label, reason, at } = raw;
+  if (typeof label !== 'string' || !validLabel(label)) return undefined;
+  if (typeof reason !== 'string' || !BLOCK_REASON.test(reason)) return undefined;
+  if (typeof at !== 'string' || Number.isNaN(Date.parse(at))) return undefined;
+  return { label, reason, at };
+}
+
+/** Fails closed: only a missing file means no block; anything else malformed reads as `{ ok: false }`. */
+export function readBlocks(stateRoot: string): BlocksRead {
+  const file = blocksFile(stateRoot);
+  try {
+    if (!lstatSync(file).isFile()) return { ok: false };
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { ok: true, blocks: [] }
+      : { ok: false };
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return { ok: false };
+  }
+  if (!Array.isArray(raw)) return { ok: false };
+  const blocks: AccountBlock[] = [];
+  for (const entry of raw) {
+    const block = parseBlock(entry);
+    if (!block) return { ok: false };
+    blocks.push(block);
+  }
+  return { ok: true, blocks };
+}
+
+function writeBlocks(stateRoot: string, blocks: AccountBlock[]): void {
+  writeStateFile(stateRoot, blocksFile(stateRoot), `${JSON.stringify(blocks, null, 2)}\n`);
+}
+
+/** The one line for the owner; undefined when nothing is blocked. */
+export function blockLine(read: BlocksRead): string | undefined {
+  if (!read.ok) {
+    return 'account block state is unreadable (blocks.json): all crew stopped, no crew starts until the owner inspects or removes the file';
+  }
+  if (read.blocks.length === 0) return undefined;
+  const labels = [...new Set(read.blocks.map((b) => b.label))].join(', ');
+  return `account block on ${labels}: all crew stopped, no crew starts until the owner runs studio accounts-clear <label>`;
+}
+
+export const blockHold = (stateRoot: string): string | undefined =>
+  blockLine(readBlocks(stateRoot));
+
+export interface BlockReconcileResult {
+  stopped: { item: string; label: string; reason: string }[];
+  errors: string[];
+  /** Another process holds the reconcile lock: nothing was checked, so a launch must refuse. */
+  lockFailed: boolean;
+}
+
+/** Active items of records marked `block` go back to `ready`; also finishes after a crash. */
+function moveBlockedToReady(
+  project: string,
+  stateRoot: string,
+  now: Date,
+  result: BlockReconcileResult,
+): void {
+  try {
+    for (const [id, rec] of Object.entries(readCrewRecords(stateRoot))) {
+      if (rec.block === undefined) continue;
+      const status = loadBoard(project).items.find((i) => i.id === id)?.status;
+      if (status === undefined || !ACTIVE.has(status)) continue;
+      const label = rec.label ?? DEFAULT_LABEL;
+      const note = `account block (${rec.block.reason}): run on ${label} stopped, clone and branch kept`;
+      backToReady(project, id, note, now, 'studio');
+    }
+  } catch (e) {
+    result.errors.push(`board not updated after an account block: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * Applies account blocks; runs before `reconcileLimits` and does not depend on `limits.json`. Every
+ * event of a current run is recorded in `blocks.json` first, then the crews stop, so a crash leaves
+ * the state blocked. While any block exists or the file is unreadable, every reconcile stops every
+ * crew still alive, of all labels and regardless of board status: safe to repeat, and a crash
+ * mid-stop heals. Records get `stoppedAt` and `block`, no `limit`, so nothing resumes by itself and a
+ * cleared event does not trigger again. A report does not excuse a block event: an account problem
+ * outranks a finished run. A hit found while the file is unreadable stays unmarked, so it is recorded
+ * once the owner fixed the file.
+ */
+export async function reconcileBlocks(o: {
+  project: string;
+  stateRoot: string;
+  ports: Ports;
+}): Promise<BlockReconcileResult> {
+  const { project, stateRoot, ports } = o;
+  const result: BlockReconcileResult = { stopped: [], errors: [], lockFailed: false };
+  const crewFile = join(stateRoot, 'crew.json');
+  const first = readBlocks(stateRoot);
+  if (first.ok && first.blocks.length === 0 && !exists(crewFile)) return result;
+  const now = ports.clock.now();
+  const lock = acquireStateLock(stateRoot, 'blocks.lock', { now, heartbeatStaleMs: LOCK_STALE_MS });
+  if (!lock) {
+    result.lockFailed = true;
+    return result;
+  }
+  try {
+    const at = now.toISOString();
+    const records = readCrewRecords(stateRoot);
+    const hits = new Map<string, DetectedBlock>();
+    for (const [id, rec] of Object.entries(records)) {
+      if (rec.stoppedAt !== undefined) continue;
+      const hit = scanLogForBlock(stateRoot, id, rec.logStart ?? 0);
+      if (hit) hits.set(id, hit);
+    }
+    const read = readBlocks(stateRoot);
+    if (read.ok) {
+      const known = [...read.blocks];
+      for (const [id, hit] of hits) {
+        const raw = records[id]?.label ?? DEFAULT_LABEL;
+        const label = validLabel(raw) ? raw : DEFAULT_LABEL;
+        if (!known.some((b) => b.label === label && b.reason === hit.reason)) {
+          known.push({ label, reason: hit.reason, at });
+        }
+      }
+      if (known.length !== read.blocks.length) writeBlocks(stateRoot, known);
+      read.blocks = known;
+    } else {
+      result.errors.push(
+        `${blocksFile(stateRoot)} is unreadable: all crew stopped and no crew starts until the owner inspects or removes the file`,
+      );
+    }
+    const firstReason = read.ok ? read.blocks[0]?.reason : 'state_unreadable';
+    if (firstReason !== undefined) {
+      for (const [id, rec] of Object.entries(records)) {
+        if (rec.stoppedAt !== undefined) continue;
+        const hit = hits.get(id);
+        // A negative pid would signal a whole process group, -1 everything the owner runs.
+        if (!Number.isInteger(rec.pid) || rec.pid <= 0) {
+          result.errors.push(`crew record for ${id} has no valid pid; not stopping it`);
+          continue;
+        }
+        const alive = ports.claude.alive(rec.pid);
+        if (!alive && hit === undefined) continue;
+        if (alive) {
+          try {
+            await ports.claude.stop(rec.pid);
+          } catch {
+            // Not marked: the next reconcile tries again, and launches stay refused meanwhile.
+            result.errors.push(`could not stop crew ${id} (pid ${rec.pid})`);
+            continue;
+          }
+          lock.heartbeat(ports.clock.now());
+          result.stopped.push({
+            item: id,
+            label: rec.label ?? DEFAULT_LABEL,
+            reason: hit?.reason ?? firstReason,
+          });
+        }
+        if (!read.ok && hit !== undefined) continue;
+        const latest = readCrewRecords(stateRoot);
+        latest[id] = {
+          ...(latest[id] ?? rec),
+          stoppedAt: at,
+          block: { at, reason: hit?.reason ?? firstReason },
+        };
+        writeStateFile(stateRoot, crewFile, `${JSON.stringify(latest, null, 2)}\n`);
+      }
+    }
+    moveBlockedToReady(project, stateRoot, now, result);
+  } finally {
+    lock.release();
+  }
+  return result;
+}
+
+/**
+ * Removes the entries of one label; restarts nothing. Throws, writing nothing, when the file is
+ * unreadable or another process holds the lock.
+ */
+export function clearBlocks(
+  stateRoot: string,
+  label: string,
+  now: Date,
+): { removed: number; remaining: number } {
+  const unreadable = `${blocksFile(stateRoot)} is unreadable; nothing cleared: inspect or remove the file`;
+  if (!readBlocks(stateRoot).ok) throw new Error(unreadable);
+  const lock = acquireStateLock(stateRoot, 'blocks.lock', { now, heartbeatStaleMs: LOCK_STALE_MS });
+  if (!lock) throw new Error('another Studio process is reconciling; nothing cleared, try again');
+  try {
+    const read = readBlocks(stateRoot);
+    if (!read.ok) throw new Error(unreadable);
+    const kept = read.blocks.filter((b) => b.label !== label);
+    const removed = read.blocks.length - kept.length;
+    if (removed > 0) writeBlocks(stateRoot, kept);
+    return { removed, remaining: kept.length };
+  } finally {
+    lock.release();
+  }
+}
