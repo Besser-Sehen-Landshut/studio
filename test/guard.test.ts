@@ -1455,3 +1455,14 @@ describe('bin/studio-guard.mjs', () => {
     expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe('deny');
   });
 });
+
+describe('what the review routine asks a reviewer to run', () => {
+  it.each([
+    'git fetch origin pull/41/head',
+    'git reset --hard FETCH_HEAD',
+    'git checkout -- src/a.ts',
+    'git diff origin/main...HEAD',
+  ])('%s is allowed', (cmd) => {
+    expect(bash(cmd).decision).toBe('allow');
+  });
+});

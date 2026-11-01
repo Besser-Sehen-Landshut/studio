@@ -1163,6 +1163,26 @@ describe('lessons and escalation in the CLI', () => {
     const r = await cli(fx, ports, 'lessons', 'accept', '--', arg);
     expect(r.code).toBe(1);
   });
+  it.each([
+    ['a merged item', 'merged', 'sonnet', 'opus'],
+    ['a dropped item', 'dropped', 'sonnet', 'opus'],
+    ['a role already on that model', 'blocked', 'opus', 'opus'],
+  ])('escalate refuses %s', async (_n, status, model, to) => {
+    const fx = makeFx([{ id: 'APP-1', status: status as never }]);
+    const file = join(fx.project, '.studio', 'studio.yaml');
+    writeFileSync(
+      file,
+      readFileSync(file, 'utf8').replace(
+        /builder: \{ model: \S+,/,
+        `builder: { model: ${model}, escalate_to: ${to},`,
+      ),
+    );
+    const { gh } = fakeGh();
+    const { ports } = fakePorts(gh);
+    const r = await cli(fx, ports, 'escalate', 'APP-1');
+    expect(r.code).toBe(1);
+    expect(statusOf(fx, 'APP-1')?.model).toBeUndefined();
+  });
   it('escalate needs escalate_to, then sets the model and a note, once', async () => {
     const fx = makeFx([{ id: 'APP-1', status: 'blocked' }]);
     const { gh } = fakeGh();
@@ -1321,6 +1341,13 @@ describe('deploys, incidents, flaky tests and solutions in the CLI', () => {
     expect(m.flaky).toMatchObject({ tests: 1, runs: 1 });
     const list = JSON.parse((await cli(fx, ports, 'flaky')).out);
     expect(list[0].test).toBe('a test');
+  });
+  it('a corrupt flaky ledger does not take metrics down', async () => {
+    const { fx, ports } = setup();
+    writeStateFile(fx.state, join(fx.state, 'flaky.json'), '{nope');
+    const r = await cli(fx, ports, 'metrics');
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out).flakyError).toContain('flaky.json');
   });
   it('a failing rerun is reported as real', async () => {
     const { fx, ports } = setup();

@@ -407,3 +407,21 @@ describe('nested braces', () => {
     }
   });
 });
+
+describe('rows that can make a launch refuse', () => {
+  const stacks = ['rust', 'postgres', 'ios', 'tauri', 'winui', 'svelte', 'nextjs', 'gha', 'docker'];
+  it('nothing a pull request can trigger is a required skill of a reviewer', () => {
+    expect(resolveSkills(review(), 'reviewer', stacks, 'unknown', 'review').required).toEqual([]);
+    const ctl = resolveSkills(review(), 'reviewer', stacks, ['a\nb'], 'review');
+    expect(ctl.required).toEqual([]);
+  });
+  it('a designer can run headless: brainstorming is offered, not required', () => {
+    const r = resolveSkills(item({ role: 'designer' }), 'designer', [], [], 'design');
+    expect(r.required).not.toContain('superpowers:brainstorming');
+    expect(r.offered).toContain('superpowers:brainstorming');
+  });
+  it('no crew is offered what its session cannot reach', () => {
+    const r = resolveSkills(item(), 'builder', [], [], 'build');
+    expect(r.offered).not.toContain('context7-mcp');
+  });
+});

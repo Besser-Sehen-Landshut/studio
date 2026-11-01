@@ -9,10 +9,11 @@ import {
   loadConfig,
   loadOwnerConfig,
   type OwnerConfig,
+  type RoleConfig,
   type StudioConfig,
 } from './config.js';
 import { limitHold } from './credentials.js';
-import { crewStateOf, isItemId, launchCrew } from './crew.js';
+import { crewStateOf, isItemId, launchCrew, resolveModel } from './crew.js';
 import { listFlaky, recordFlaky } from './flaky.js';
 import {
   activeParks,
@@ -887,7 +888,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (to === undefined) {
           throw new Error(`role ${item.role} has no escalate_to in studio.yaml`);
         }
-        if (item.model === to) throw new Error(`${item.id} already runs on ${to}`);
+        if (item.status === 'merged' || item.status === 'dropped') {
+          throw new Error(`${item.id} is ${item.status}, nothing to escalate`);
+        }
+        const role = config.roles[item.role] as RoleConfig;
+        if (resolveModel(item, role) === to) throw new Error(`${item.id} already runs on ${to}`);
         saveBoard(
           project,
           withItem(board, item.id, (i) => ({
@@ -901,15 +906,22 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'metrics': {
-        const entries = listFlaky(stateRoot());
-        print({
-          ...computeMetrics(readMetricEvents(stateRoot())),
-          flaky: {
+        let flaky: unknown;
+        try {
+          const entries = listFlaky(stateRoot());
+          flaky = {
             tests: entries.length,
             runs: entries.reduce((sum, e) => sum + e.count, 0),
             worst: entries.slice(0, 5),
-          },
-        });
+          };
+        } catch (e) {
+          print({
+            ...computeMetrics(readMetricEvents(stateRoot())),
+            flakyError: (e as Error).message.replace(/\p{Cc}/gu, ' '),
+          });
+          return 0;
+        }
+        print({ ...computeMetrics(readMetricEvents(stateRoot())), flaky });
         return 0;
       }
 

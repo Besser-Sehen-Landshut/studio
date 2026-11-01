@@ -239,5 +239,6 @@ describe('studio setup stack', () => {
     expect(await doctor(d)).toContain('stacks: rust');
     const none = project({ '.studio/studio.yaml': YAML });
     expect(await doctor(none)).toContain('stacks: not set: run studio setup stack');
+    expect(await doctor(none)).toMatch(/superpowers: (cannot tell|not found|installed)/);
   });
 });

@@ -94,7 +94,8 @@ export interface Finding {
 }
 export type Hashes = Record<string, string>;
 
-const LICENSE_NAME = /^(licen[cs]e|copying)(\.[a-z]+)?/i;
+const LICENSE_NAME =
+  /^(?:un)?licen[cs]e(?:\.[a-z]+)?$|^copying(?:\.[a-z]+)?$|^notice(?:\.[a-z]+)?$/i;
 
 const clean = (text: string): string => text.replace(/[\p{Cc}\p{Cf}]/gu, ' ').slice(0, 300);
 
@@ -199,6 +200,13 @@ const exists = (p: string): boolean => {
   }
 };
 
+/** Why a fetched file must not reach a crew: it differs from what was recorded at the fetch. */
+export function pinProblem(ownerRoot: string, id: string, rel: string): string | undefined {
+  const want = readLock(ownerRoot)?.[id]?.hashes?.[rel];
+  if (want === undefined) return 'it has no recorded hash';
+  return hashOf(join(sourcesDir(ownerRoot), id), rel) === want ? undefined : 'differs from its pin';
+}
+
 const FULL_SHA = /^[0-9a-f]{40,64}$/;
 
 /** No hooks and no links: nothing in the clone can run or point elsewhere. */
@@ -262,8 +270,12 @@ export async function setupSources(o: {
       continue;
     }
     try {
-      const commit = await fetchTo(o.ports, o.ownerRoot, source, source.id);
-      const lock = readLock(o.ownerRoot) ?? {};
+      // An unreadable lock holds pins nobody can see: never write over it.
+      const lock = exists(lockPath(o.ownerRoot)) ? readLock(o.ownerRoot) : {};
+      if (lock === undefined) throw new Error('the lock cannot be read');
+      const fetching = `${source.id}.fetching`;
+      const commit = await fetchTo(o.ports, o.ownerRoot, source, fetching);
+      renameSync(join(sourcesDir(o.ownerRoot), fetching), dir);
       lock[source.id] = {
         commit,
         license: source.license,
@@ -373,7 +385,12 @@ export async function applySource(o: {
   const old = join(base, `${source.id}.old`);
   removeStateEntry(o.ownerRoot, old);
   renameSync(active, old);
-  renameSync(candidate, active);
+  try {
+    renameSync(candidate, active);
+  } catch (e) {
+    renameSync(old, active);
+    throw e;
+  }
   removeStateEntry(o.ownerRoot, old);
   lock[source.id] = {
     commit,

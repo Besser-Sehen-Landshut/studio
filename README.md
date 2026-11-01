@@ -16,6 +16,7 @@ The plugin ships two skills (`studio:studio-lead` for the control room, `studio:
 ## Prerequisites
 
 - Claude Code CLI, `git`, and `gh` (authenticated for the control room's own use).
+- The `superpowers` plugin: feature and fix items require its skills, and a launch refuses when one is definitely not installed (`studio doctor` shows it; a role can opt out with `skills.denied`).
 - Node.js 24 or newer on `PATH` (the CLI and the crew guard hook run on it).
 - A least-privilege crew token created by the repository owner (for example a fine-grained token limited to the project's repositories: contents and pull requests read/write, no administration, no merge rights beyond what branch protection allows). Store it with `studio secret set crew-token` (Studio then loads it itself), or export it and name the variable in `studio.yaml` under `crew_token.env`; the variable wins when it is set. Launch refuses without it unless `allow_ambient_credentials: true`.
 - Server-side branch protection on `main` and on every ref listed in `crew_allowed_workflow_refs`.
@@ -133,16 +134,16 @@ In the owner's interactive Claude Code session in a Studio project, the plugin s
 
 ## Review
 
-A review item carries the note `review <owner/repo>#<n>`; without it the launch refuses. Studio reads the pull request and writes a routine into the brief, by tier.
+A review item has `type: review` and `role: reviewer` together, a Definition of Done and the note `review <owner/repo>#<n>`; a launch refuses otherwise. Studio reads the pull request and writes a routine into the brief, by tier.
 
-- **Small:** at most 400 changed lines outside markdown. Diff review and spec check (not for `type: docs`).
+- **Small:** at most 400 changed lines outside markdown. Diff review and spec check (none for a change of markdown only).
 - **Large:** more lines, a risk tag `auth`, `security`, `data` or `migration`, a security-sensitive change, or a file list it cannot read completely. Adds performance, and accessibility, design and motion analyzers where they apply.
 - **Security always** when a changed path concerns auth, sessions, logins, passwords, permissions, API routes, middleware, migrations, DB schema, signup, reset, OTP, upload, access policies, workflows or local actions. A file list that cannot be read, or a path with a control character, counts as such a change. Spellings are matched case-insensitively.
 - **Later rounds and epic end.** After an earlier `changes_requested` the similar-bug scan runs; `triggers: [epic-end]` or `[release]` add the full scans.
 
-The spec check holds a mutation probe: break the guarding line in a throwaway copy, the named test must go red.
+The spec check runs last and alone and holds a mutation probe: break the guarding line in the checkout, the named test must go red, restore. An approval is refused when the test stayed green, and in the large tier when the probe did not run.
 
-`collect` holds a finished review to the record written at launch (`briefs/<id>.caps.json`): `reviews` must name the recorded pull request, for every verdict. An approval needs a result for every listed analyzer (`pass`, `findings` or `skipped: <reason>`) and `mutation_probe`, and cannot skip diff review, spec check or security. Output lists skipped analyzers by id; reasons stay in the report. A missing analyzer source reads `skipped: <reason>`, never a pass.
+`collect` holds a finished review to the record written at launch (`briefs/<id>.caps.json`): `reviews` must name the recorded pull request, for every verdict. An approval needs a result for every listed analyzer (`pass`, `findings` or `skipped: <reason>`) and `mutation_probe`, and cannot skip diff review, spec check or security. Output lists skipped analyzers by id, also those launch could not provide; reasons stay in the report. A missing analyzer source reads `skipped: <reason>`, never a pass.
 
 Fix limit: 3 attempts per finding (`finding_attempts`), hard stop after 6 rounds of requested changes. Reaching it blocks the builder item with a note, and `queue run` merges only an item that is `queued` on the board at that moment.
 
@@ -150,7 +151,7 @@ Fix limit: 3 attempts per finding (`finding_attempts`), hard stop after 6 rounds
 
 Nothing with an unknown or copyleft licence is copied into this repository; MIT and Apache-2.0 content only with its notice (`capabilities/NOTICE.md`). `capabilities/SOURCES.yaml` lists every source with its licence. `studio setup sources` fetches the referenced ones below the owner root with hooks and links off; nothing from them ever runs.
 
-`studio sources check` holds one rule. `setup sources` records a sha256 for every file the source's contract reads and for its licence files. `fits`: every one of those files is byte-identical to its recorded hash. `unclear`: one changed, is new or is missing, or something could not be read; the output names the files, and a person or the lead reads the diff. `conflict`: a licence file is missing or changed. Files outside the contract are not judged, because they never reach a crew. It installs nothing, not even a `fits`. `studio sources apply <id>` judges the candidate again and adopts only a `fits`; there is no command that adopts a held update.
+`studio sources check` holds one rule. `setup sources` records a sha256 for every file the source's contract reads and for its licence files. `fits`: every one of those files is byte-identical to its recorded hash. `unclear`: one changed, is new or is missing, or something could not be read; the output names the files, and a person or the lead reads the diff. `conflict`: a licence file is missing or changed. Files outside the contract are not judged, because they never reach a crew. A brief copies a fetched file only when it still matches its hash; otherwise the row reads `skipped:`. It installs nothing, not even a `fits`. `studio sources apply <id>` judges the candidate again and adopts only a `fits`; there is no command that adopts a held update.
 
 ## Role memory
 

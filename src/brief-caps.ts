@@ -23,7 +23,7 @@ import {
   reviewTarget,
   reviewTier,
 } from './review.js';
-import { loadSources } from './sources.js';
+import { loadSources, pinProblem } from './sources.js';
 
 const MAX_COPY_BYTES = 256 * 1024;
 const MANDATORY = ['diff-review', 'spec-check', 'security'];
@@ -45,6 +45,7 @@ export interface ResolvedForItem {
     reasons: string[];
     round: number;
     target?: string;
+    pr?: number;
   };
 }
 
@@ -60,6 +61,12 @@ export async function resolveForItem(o: {
   dir?: string;
 }): Promise<ResolvedForItem> {
   const { item, config } = o;
+  if ((item.type === 'review') !== (item.role === 'reviewer')) {
+    throw new Error(`${item.id}: a review needs type review and role reviewer together`);
+  }
+  if (item.type === 'review' && !item.dod.some((d) => d.trim() !== '')) {
+    throw new Error(`${item.id}: a review needs a Definition of Done to check against`);
+  }
   const index = loadCapabilities(o.dir ?? capabilitiesDir());
   const roleSkills = config.roles[item.role]?.skills ?? NO_SKILLS;
   const stack = config.stacks ?? [];
@@ -95,9 +102,26 @@ export async function resolveForItem(o: {
     facts,
     first.analyzers.some((a) => a.id === 'security'),
   );
+  const resolved = resolveSkills(item, item.role, stack, paths, phase, {
+    ...base,
+    triggers,
+    tier,
+  });
+  // A change of markdown only has no behaviour for a spec check to probe.
+  const docsOnly =
+    facts?.complete === true &&
+    facts.files.length > 0 &&
+    facts.files.every((f) => f.toLowerCase().endsWith('.md'));
+  if (docsOnly) resolved.analyzers = resolved.analyzers.filter((a) => a.id !== 'spec-check');
   return {
-    resolved: resolveSkills(item, item.role, stack, paths, phase, { ...base, triggers, tier }),
-    review: { tier, reasons, round, ...(name === undefined ? {} : { target: name }) },
+    resolved,
+    review: {
+      tier,
+      reasons,
+      round,
+      ...(name === undefined ? {} : { target: name }),
+      ...(target === undefined ? {} : { pr: target.pr }),
+    },
   };
 }
 
@@ -136,6 +160,7 @@ export interface BriefCaps {
     tier: 'small' | 'large';
     reasons: string[];
     round: number;
+    pr?: number;
     contract: string;
     analyzers: RoutineAnalyzer[];
   };
@@ -218,8 +243,9 @@ export function writeCaps(o: {
         continue;
       }
       const got = readBelow(sourceRoot(source), rel);
-      if ('why' in got) {
-        skipped.push({ id: k.rowId, reason: `source ${source}: ${got.why}` });
+      const off = 'why' in got ? got.why : pinProblem(o.ownerRoot, source, rel);
+      if (off !== undefined || 'why' in got) {
+        skipped.push({ id: k.rowId, reason: `source ${source}: ${off}` });
         continue;
       }
       knowledge.push({ ref: k.ref, where: copy(`sources/${source}/${rel}`, got.text) });
@@ -254,8 +280,9 @@ export function writeCaps(o: {
           return false;
         }
         const part = readBelow(sourceRoot(a.source), rel);
-        if ('why' in part) {
-          skipped.push({ id: a.id, reason: `source ${a.source}: ${part.why}` });
+        const off = 'why' in part ? part.why : pinProblem(o.ownerRoot, a.source, rel);
+        if (off !== undefined || 'why' in part) {
+          skipped.push({ id: a.id, reason: `source ${a.source}: ${off}` });
           return false;
         }
         texts.push({ rel, text: part.text });
@@ -288,6 +315,7 @@ export function writeCaps(o: {
       tier: review.tier,
       reasons: review.reasons,
       round: review.round,
+      ...(review.pr === undefined ? {} : { pr: review.pr }),
       contract: copy('analyzers/CONTRACT.md', contract.text),
       analyzers,
     };
@@ -297,6 +325,7 @@ export function writeCaps(o: {
       analyzers: ids,
       mandatory: MANDATORY.filter((m) => ids.includes(m)),
       ...(review.target === undefined ? {} : { reviewsTarget: review.target }),
+      ...(skipped.length === 0 ? {} : { skipped: skipped.map((x) => x.id) }),
     };
     writeStateFile(stateRoot, capsFile(stateRoot, id), `${JSON.stringify(caps, null, 2)}\n`);
   }

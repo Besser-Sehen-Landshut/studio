@@ -1,6 +1,6 @@
 # Analyzer contract
 
-Every file in `analyzers/` is an instruction for **one read-only reviewer session**. The lead
+Every file in `analyzers/` is an instruction for **one read-only reviewer session** (only the spec check's mutation probe edits, and restores). The lead
 dispatches it for an item's pull request (the review routine) and again, on the fix diff only, after
 fixes. At epic end or before a release the same files are used with a wider scope. `diff-review.md`
 does the whole-diff pass for an item; `bugs.md` serves full-scope scans. No analyzer is a command,
@@ -86,5 +86,6 @@ Result: <N critical, M notes> | no findings | skipped: <reason>
 
 The `Result:` line is what the lead copies into the report as evidence. `skipped: <reason>`
 (an analyzer whose optional source is missing) is never a pass and never "no findings": the lead
-records exactly that text as the evidence for the check, which does not block the item, and lists
-it under skipped checks in the report.
+records exactly that text as the evidence for the check and lists it under skipped checks in the
+report. Skipping an optional analyzer does not block the item; skipping diff review, spec check or
+security does.

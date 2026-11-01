@@ -1,7 +1,9 @@
 # Live docs lookup
 
 Use this when a decision depends on a framework, library or tool. The order is fixed — take the
-first source that exists and stop:
+first source that exists and stop. A crew session has no MCP server, no web fetch and reaches only
+the hosts in the project's allowlist, so for a crew the bundled docs are usually the only step;
+without them, mark the fact UNVERIFIED rather than guess:
 
 1. **Bundled** — docs or skills shipped inside the project's own packages (version-matched).
 2. **Official access** — the vendor's docs MCP server, plugin or CLI, if the host already has it.

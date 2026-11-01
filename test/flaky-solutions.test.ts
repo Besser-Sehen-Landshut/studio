@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -67,6 +75,22 @@ describe('DORA', () => {
     ]);
     expect(m.restores).toEqual([{ incident: 'a', hours: 0 }]);
     expect(m.openIncidents).toBe(0);
+  });
+  it('a resolve before an open does not close it; an id can be used again', () => {
+    const a = computeMetrics([
+      ev('incident_resolved', '2026-11-01T08:00:00Z', { incident: 'x' }),
+      ev('incident_opened', '2026-11-01T09:00:00Z', { incident: 'x' }),
+    ]);
+    expect(a.openIncidents).toBe(1);
+    expect(a.restores).toEqual([]);
+    const b = computeMetrics([
+      ev('incident_opened', '2026-11-01T09:00:00Z', { incident: 'x' }),
+      ev('incident_resolved', '2026-11-01T10:00:00Z', { incident: 'x' }),
+      ev('incident_opened', '2026-11-02T09:00:00Z', { incident: 'x' }),
+      ev('incident_resolved', '2026-11-02T11:00:00Z', { incident: 'x' }),
+    ]);
+    expect(b.restores.map((r) => r.hours)).toEqual([1, 2]);
+    expect(b.openIncidents).toBe(0);
   });
   it('garbage is skipped', () => {
     const m = computeMetrics([
@@ -170,6 +194,11 @@ describe('solutions store', () => {
     writeFileSync(secret, 'cache');
     symlinkSync(secret, join(d, '.studio', 'solutions', 'link.md'));
     expect(searchSolutions(d, 'cache')).toEqual([]);
+  });
+  it('an unreadable file is skipped, not fatal', () => {
+    const d = project({ 'bad.md': 'cache', 'good.md': 'cache' });
+    chmodSync(join(d, '.studio', 'solutions', 'bad.md'), 0o000);
+    expect(searchSolutions(d, 'cache').map((h) => h.path)).toEqual(['.studio/solutions/good.md']);
   });
   it('a missing or linked folder gives nothing', () => {
     expect(searchSolutions(fresh(), 'cache')).toEqual([]);

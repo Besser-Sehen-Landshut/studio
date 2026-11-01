@@ -120,11 +120,18 @@ describe('compareToPin: fits only when every read file is byte-identical', () =>
   it('a tree that cannot be read is never fits', () => {
     expect(compareToPin(pinOf(), join(root, 'nope'), source).verdict).not.toBe('fits');
   });
-  it('a file name is cleaned for the terminal', () => {
-    const next = tree(OLD);
-    writeFileSync(join(next, 'LICENSE\u001b[2J'), 'x');
-    expect(JSON.stringify(compareToPin(pinOf(), next, source))).not.toContain('\\u001b');
-  });
+  it.each(['license-check.sh', 'copying-guide.md', 'licensed.txt'])(
+    '%s is no licence file',
+    (name) => {
+      expect(verdict({ ...OLD, [name]: 'x' }).verdict).toBe('fits');
+    },
+  );
+  it.each(['NOTICE', 'UNLICENSE', 'LICENCE.md', 'copying'])(
+    'a new %s is a licence change',
+    (name) => {
+      expect(verdict({ ...OLD, [name]: 'x' }).verdict).toBe('conflict');
+    },
+  );
 });
 
 const file: SourcesFile = {
@@ -211,6 +218,41 @@ describe('setupSources', () => {
     await expect(
       setupSources({ ownerRoot: o, index: file, ports, only: ['../x'] }),
     ).rejects.toThrow(/unknown source/);
+  });
+});
+
+describe('the fetch cannot leave a half copy or lose pins', () => {
+  it('a corrupt lock fails the fetch and stays as it was', async () => {
+    const o = ownerRoot();
+    mkdirSync(join(o, 'sources'));
+    writeFileSync(join(o, 'sources', 'lock.json'), '{nope');
+    const r = await setupSources({
+      ownerRoot: o,
+      index: file,
+      ports: fakeGit({ tree: tree(OLD), commit: SHA1 }).ports,
+    });
+    expect(r[0]?.result).toBe('failed');
+    expect(read(o, 'sources/lock.json')).toBe('{nope');
+    expect(existsSync(join(o, 'sources', 'demo'))).toBe(false);
+  });
+  it('the clone goes to a temporary name first', async () => {
+    const o = ownerRoot();
+    const { ports, calls } = fakeGit({ tree: tree(OLD), commit: SHA1 });
+    await setupSources({ ownerRoot: o, index: file, ports });
+    expect((calls.find((c) => c.includes('clone')) as string[]).at(-1)).toBe('demo.fetching');
+    expect(existsSync(join(o, 'sources', 'demo.fetching'))).toBe(false);
+    expect(existsSync(join(o, 'sources', 'demo', 'LICENSE'))).toBe(true);
+  });
+  it('a leftover temporary clone is replaced, never served', async () => {
+    const o = ownerRoot();
+    mkdirSync(join(o, 'sources', 'demo.fetching'), { recursive: true });
+    writeFileSync(join(o, 'sources', 'demo.fetching', 'stale'), 'x');
+    await setupSources({
+      ownerRoot: o,
+      index: file,
+      ports: fakeGit({ tree: tree(OLD), commit: SHA1 }).ports,
+    });
+    expect(existsSync(join(o, 'sources', 'demo', 'stale'))).toBe(false);
   });
 });
 

@@ -61,7 +61,7 @@ questions: []
 ---
 ```
 
-Findings go in the body. Collect refuses an approval with an analyzer missing, a skipped diff-review, spec-check or security, or no `mutation_probe`. An analyzer you cannot run is `skipped: <reason>`; if that is one of the three, the verdict is `changes_requested` or `status: failed`.
+Findings go in the body. Collect refuses an approval with an analyzer missing, a skipped diff-review, spec-check or security, no `mutation_probe`, a `green:` probe, or in the large tier a probe that did not run. An analyzer you cannot run is `skipped: <reason>`; if that is one of the three, the verdict is `changes_requested` or `status: failed`.
 
 ## Test command fails or errors
 

@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -2138,6 +2139,21 @@ describe('capabilities at launch', () => {
     const src = join(owner(f), 'sources', 'gha', 'skills', 'gha-security-review');
     mkdirSync(src, { recursive: true });
     writeFileSync(join(src, 'SKILL.md'), 'FETCHED-MARKER');
+    writeFileSync(
+      join(owner(f), 'sources', 'lock.json'),
+      JSON.stringify({
+        gha: {
+          commit: 'a'.repeat(40),
+          license: 'x',
+          fetchedAt: 'x',
+          hashes: {
+            'skills/gha-security-review/SKILL.md': createHash('sha256')
+              .update('FETCHED-MARKER')
+              .digest('hex'),
+          },
+        },
+      }),
+    );
     await launchCrew(f.project, reviewItem, gha, ports, f.launcher);
     const copy = join(
       f.state,
@@ -2305,5 +2321,65 @@ describe('capabilities at launch', () => {
       'utf8',
     );
     expect(review).not.toContain('solutions/a.md');
+  });
+
+  it.each<[string, Partial<WorkItem>, RegExp]>([
+    ['a review in a builder role', { role: 'builder' }, /role reviewer/],
+    ['a reviewer on another type', { type: 'fix' }, /role reviewer/],
+    ['a review without a Definition of Done', { dod: [' '] }, /Definition of Done/],
+  ])('%s refuses and starts nothing', async (_name, over, want) => {
+    const f = makeFixture();
+    const started: Started[] = [];
+    const both: StudioConfig = {
+      ...reviewerConfig,
+      roles: { ...reviewerConfig.roles, builder: reviewerConfig.roles.builder },
+    };
+    const ports = portsWithGh(started, () => ({ code: 0, stdout: pr('src/a.ts') }));
+    await expect(
+      launchCrew(f.project, { ...reviewItem, ...over }, both, ports, f.launcher),
+    ).rejects.toThrow(want);
+    expect(started).toHaveLength(0);
+  });
+
+  it('a markdown-only pull request has no spec check', async () => {
+    const f = makeFixture();
+    mkdirSync(join(f.project, '.studio'), { recursive: true });
+    writeFileSync(join(f.project, '.studio', 'board.yaml'), 'items: []\n');
+    const ports = portsWithGh([], () => ({ code: 0, stdout: pr('docs/a.md') }));
+    await launchCrew(f.project, reviewItem, reviewerConfig, ports, f.launcher);
+    expect(capsOf(f, 'APP-20').analyzers).toEqual(['diff-review']);
+    expect(capsOf(f, 'APP-20').mandatory).toEqual(['diff-review']);
+  });
+
+  it('a fetched file that differs from its pin is not copied, and the lead hears of it', async () => {
+    const f = makeFixture();
+    const gha: StudioConfig = { ...reviewerConfig, stacks: ['gha'] };
+    const ports = portsWithGh([], () => ({ code: 0, stdout: pr('.github/workflows/ci.yml') }));
+    const src = join(owner(f), 'sources', 'gha', 'skills', 'gha-security-review');
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, 'SKILL.md'), 'EDITED-MARKER');
+    writeFileSync(
+      join(owner(f), 'sources', 'lock.json'),
+      JSON.stringify({
+        gha: {
+          commit: 'a'.repeat(40),
+          license: 'x',
+          fetchedAt: 'x',
+          hashes: { 'skills/gha-security-review/SKILL.md': 'b'.repeat(64) },
+        },
+      }),
+    );
+    await launchCrew(f.project, reviewItem, gha, ports, f.launcher);
+    expect(brief(f, 'APP-20')).toContain('gha-security: skipped: source gha: differs from its pin');
+    expect(existsSync(join(f.state, 'briefs', 'APP-20.caps', 'sources'))).toBe(false);
+    expect(capsOf(f, 'APP-20').skipped).toContain('gha-security');
+  });
+
+  it('the refusal for a missing skill says what to do', async () => {
+    const f = makeFixture();
+    mkdirSync(join(f.home, '.claude', 'skills', 'other'), { recursive: true });
+    await expect(
+      launchCrew(f.project, { ...item, type: 'fix' }, config, fakePorts([]), f.launcher),
+    ).rejects.toThrow(/skills\.denied/);
   });
 });

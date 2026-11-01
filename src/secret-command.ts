@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import {
@@ -10,6 +11,7 @@ import {
   type StudioConfig,
 } from './config.js';
 import { installCrewToken, readCrewTokenFile, validToken } from './credentials.js';
+import { skillInstalled } from './crew.js';
 import type { Ports } from './ports.js';
 import { assertPrimaryRepo, safe } from './setup-ci-command.js';
 
@@ -79,6 +81,13 @@ export async function runSecretSet(o: {
 const API_KEY_VARS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
 
 /** `studio doctor`: what is set and what is missing, never a value. */
+/** The foundation builders need: feature and fix items require its skills. */
+function superpowersState(owner: OwnerEnv, env: Record<string, string | undefined>): string {
+  const dir = env.CLAUDE_CONFIG_DIR ?? join(owner.homedir ?? homedir(), '.claude');
+  const found = skillInstalled(dir, 'test-driven-development');
+  return found === undefined ? 'cannot tell' : found ? 'installed' : 'not found';
+}
+
 export function runDoctor(o: {
   project: string;
   owner: OwnerEnv;
@@ -113,6 +122,7 @@ export function runDoctor(o: {
     crewTokenFile: crewTokenFile(o.owner),
     studioYaml: config ? 'readable' : 'not readable',
     stacks: config?.stacks ?? null,
+    superpowers: superpowersState(o.owner, o.env),
     ownerConfig: ownerConfig ? 'readable' : 'invalid',
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
@@ -126,6 +136,7 @@ export function runDoctor(o: {
     const lines = [
       `crew token: ${crewToken.status}${source}${required ? '' : ' (optional: allow_ambient_credentials)'}`,
       `studio.yaml: ${report.studioYaml}`,
+      `superpowers: ${report.superpowers}`,
       `stacks: ${report.stacks === null ? 'not set: run studio setup stack' : report.stacks.join(', ') || '(none)'}`,
       `owner config: ${report.ownerConfig}`,
       `credential provider: ${provider === null ? 'not configured' : `configured ${provider}`}`,

@@ -48,7 +48,7 @@ while sleep 120; do s=$(studio status 2>&1); [ "$s" = "$p" ] || echo "$s"; p=$s;
 Every PR, however urgent, gets one fresh reviewer crew session before `queue add`:
 
 1. Add a board item: `role: reviewer`, `type: review`, `status: ready`, notes `review <owner/repo>#<n>`
-   (launch refuses without it), DoD = the builder item's DoD.
+   (launch refuses without it, without a DoD, or with another role or type), DoD = the builder item's DoD.
 2. `studio plan`, `studio launch <review-id>`, then `studio collect <review-id>`: the reviewer opens no PR; its
    report carries `verdict` and `reviews: <owner/repo>#<n>`; collect moves the review item to `merged` and
    prints the verdict.

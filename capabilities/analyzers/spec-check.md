@@ -4,9 +4,9 @@
 test prove each one?
 
 The requirement is the item's Definition of Done (DoD). If the item has no DoD, there is nothing to
-check: return `Result: skipped: no DoD`. Dispatch this check in a throwaway copy of the
-checkout inside the crew's tmp dir, because breaking code in the shared tree would mislead other
-analyzers. The reviewer removes the copy when done.
+check: return `Result: skipped: no DoD`. Run this check last and alone, because its
+mutation probe edits the checkout and would mislead an analyzer running beside it. It is the one
+analyzer that edits, and it restores what it broke.
 
 Besides the contract: the diff as a file (including untracked files) and the DoD. Never the
 builder's reasoning.
@@ -40,10 +40,9 @@ The mutation probe runs in the large tier only; the verdict table stays in both 
 or contract-critical and `met` by an existing test. For each:
 
 1. Name the test that is supposed to guard the criterion.
-2. In the throwaway copy, break the guarding line (comment it out, negate it, change a default
-   value).
+2. In the checkout, break the guarding line (comment it out, negate it, change a default value).
 3. Run only that test.
-4. Restore the line.
+4. Restore the file with `git checkout -- <file>`.
 
 Outcomes:
 
@@ -57,5 +56,6 @@ The contract format, analyzer name `Spec check`: the verdict table, then the fin
 `Result:` line is followed by one more line for the report's `mutation_probe` field:
 
 - `mutation_probe: red: <test>` when the probe ran and the named test went red;
+- `mutation_probe: green: <test>` when the test stayed green, a critical finding;
 - `mutation_probe: skipped: <reason>` when it did not run (small tier, no criterion qualified, no
   runnable test).

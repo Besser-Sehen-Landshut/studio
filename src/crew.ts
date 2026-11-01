@@ -286,7 +286,7 @@ function entries(dir: string): string[] | null | undefined {
  * undefined when that cannot be told (the config dir or a directory on the way is unreadable, or
  * neither location exists), so that only definite absence refuses.
  */
-function skillInstalled(configDir: string, name: string): boolean | undefined {
+export function skillInstalled(configDir: string, name: string): boolean | undefined {
   if (!Array.isArray(entries(configDir))) return undefined;
   let present = false;
   const skills = join(configDir, 'skills');
@@ -326,7 +326,7 @@ function firstMissingSkill(configDir: string, required: string[]): string | unde
       return `required skill "${skill.slice(0, 80)}" is not a valid skill name`;
     }
     if (skillInstalled(configDir, name) === false) {
-      return `required skill ${skill} is not installed in the Claude config dir; install it or remove it from the role`;
+      return `required skill ${skill} is not installed in the Claude config dir; install it (superpowers is a prerequisite), or list it under skills.denied of the role`;
     }
   }
   return undefined;
@@ -513,6 +513,7 @@ export function writeBrief(
           skipped: caps.skipped,
           contract: caps.review.contract,
           round: caps.review.round,
+          ...(caps.review.pr === undefined ? {} : { pr: caps.review.pr }),
         })),
     '## Working rules',
     '',

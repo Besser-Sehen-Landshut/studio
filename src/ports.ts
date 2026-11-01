@@ -136,7 +136,12 @@ export function realPorts(claudeBin = 'claude'): Ports {
 
   const git: Git = {
     async run(cwd, args) {
-      const r = await execa('git', args, { cwd, reject: false });
+      // No prompt for a moved or removed upstream: a command must fail, not wait for a person.
+      const r = await execa('git', args, {
+        cwd,
+        reject: false,
+        env: { GIT_TERMINAL_PROMPT: '0' },
+      });
       if (r.exitCode !== 0) {
         throw new Error(`git ${args.join(' ')} failed (${r.exitCode}): ${r.stderr}`);
       }

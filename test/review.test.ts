@@ -167,6 +167,21 @@ describe('renderReviewRoutine', () => {
     expect(text).toContain('motion: skipped: source emil not fetched');
     expect(text).toMatch(/never a pass/i);
   });
+  it('says how to get the head, and runs the probe last and alone', () => {
+    const t = renderReviewRoutine({
+      tier: 'small',
+      reasons: [],
+      analyzers: [],
+      skipped: [],
+      contract: '/c',
+      round: 0,
+      pr: 41,
+    }).join('\n');
+    expect(t).toContain('git fetch origin pull/41/head');
+    expect(t).toContain('git reset --hard FETCH_HEAD');
+    expect(t).toMatch(/last and alone/);
+    expect(t).toContain('git checkout -- <file>');
+  });
   it('holds the fix limit, the probe, the round and refutation', () => {
     expect(text).toContain('3 attempts per finding');
     expect(text).toContain('6 rounds');
@@ -228,6 +243,25 @@ describe('checkReviewCaps', () => {
   });
   it('refuses an approval whose probe stayed green: the test cannot fail', () => {
     expect(() => checkReviewCaps(caps, report({ mutationProbe: 'green: t1' }))).toThrow(/green/);
+  });
+  it('a large tier cannot skip the probe; a small one can', () => {
+    expect(() => checkReviewCaps(caps, report({ mutationProbe: 'skipped: no test' }))).toThrow(
+      /large/,
+    );
+    expect(
+      checkReviewCaps(
+        { ...caps, tier: 'small' as const },
+        report({ mutationProbe: 'skipped: small tier' }),
+      ),
+    ).toEqual({ skipped: ['motion'], target: 'org/app#7' });
+  });
+  it('what launch skipped reaches the lead, by id', () => {
+    const r = report({
+      analyzers: { 'diff-review': 'pass', 'spec-check': 'pass', security: 'pass', motion: 'pass' },
+    });
+    expect(
+      checkReviewCaps({ ...caps, skipped: ['design-detector', 'gha-security'] }, r).skipped,
+    ).toEqual(['design-detector', 'gha-security']);
   });
   it('refuses a review of another pull request', () => {
     expect(() => checkReviewCaps(caps, report({ reviews: 'org/app#8' }))).toThrow(/reviews/);

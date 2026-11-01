@@ -247,7 +247,6 @@ function incidentMetrics(events: readonly unknown[]) {
     }
   });
   timed.sort((a, b) => a.at - b.at || a.n - b.n);
-  // The file order decides between a resolve and its open when the clock says otherwise.
   const opened = new Map<string, number>();
   const restores: { incident: string; hours: number }[] = [];
   const failed = new Set<number>();
@@ -259,18 +258,21 @@ function incidentMetrics(events: readonly unknown[]) {
       if (lastDeploy !== undefined) failed.add(lastDeploy);
     }
   }
-  const stillOpen = new Map(opened);
+  // Restores follow the order commands ran, which the file keeps, even when clocks disagree.
+  const stillOpen = new Map<string, number>();
   for (const raw of events) {
     if (raw === null || typeof raw !== 'object') continue;
     const ev = raw as Record<string, unknown>;
     const at = asTime(ev.at);
-    if (ev.type !== 'incident_resolved' || at === undefined || typeof ev.incident !== 'string') {
-      continue;
+    if (at === undefined || typeof ev.incident !== 'string') continue;
+    if (ev.type === 'incident_opened' && !stillOpen.has(ev.incident)) {
+      stillOpen.set(ev.incident, at);
+    } else if (ev.type === 'incident_resolved') {
+      const start = stillOpen.get(ev.incident);
+      if (start === undefined) continue;
+      stillOpen.delete(ev.incident);
+      restores.push({ incident: ev.incident, hours: Math.max(0, (at - start) / HOUR_MS) });
     }
-    const start = stillOpen.get(ev.incident);
-    if (start === undefined) continue;
-    stillOpen.delete(ev.incident);
-    restores.push({ incident: ev.incident, hours: Math.max(0, (at - start) / HOUR_MS) });
   }
   return {
     failedDeploys: failed.size,

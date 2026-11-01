@@ -43,7 +43,12 @@ export function searchSolutions(projectDir: string, query: string, limit = 5): S
   const hits: SolutionHit[] = [];
   for (const name of readdirSync(dir).sort().slice(0, MAX_FILES)) {
     if (!SAFE_NAME.test(name) || !isReal(join(dir, name), 'file')) continue;
-    const text = readFileSync(join(dir, name), 'utf8');
+    let text: string;
+    try {
+      text = readFileSync(join(dir, name), 'utf8');
+    } catch {
+      continue;
+    }
     const lower = text.toLowerCase();
     const score = words.filter((w) => lower.includes(w)).length;
     if (score === 0) continue;

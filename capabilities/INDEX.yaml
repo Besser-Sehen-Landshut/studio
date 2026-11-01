@@ -37,7 +37,7 @@ rows:
   - id: design-brainstorm
     ref: skill:superpowers:brainstorming
     when: { roles: [lead, designer], phases: [design] }
-    mode: required
+    mode: offered
     load: invoke
   - id: simplify
     ref: skill:simplify
@@ -52,9 +52,10 @@ rows:
     optional: true
   - id: skill-authoring
     ref: skill:superpowers:writing-skills
-    when: { paths: ["skills/**", "**/SKILL.md"] }
+    when: { roles: [builder, designer], paths: ["skills/**", "**/SKILL.md"] }
     mode: required
     load: invoke
+    optional: true
 
   # Knowledge for builders and reviewers
   - id: live-docs
@@ -72,11 +73,6 @@ rows:
     when: { roles: [builder, reviewer], risks: [ui, landing] }
     mode: offered
     load: read
-  - id: context7
-    ref: skill:context7-mcp
-    when: { roles: [builder, reviewer] }
-    mode: offered
-    load: invoke
 
   # Analyzers, run by the reviewer role
   - id: analyzer-diff
@@ -267,6 +263,7 @@ rows:
       paths: ["**/migrations/**", "**/*.sql", "**/schema.*"]
     mode: review
     load: invoke
+    optional: true
   - id: postgres-review-source
     ref: source:postgres/skills/postgres-best-practices/SKILL.md
     source: postgres
