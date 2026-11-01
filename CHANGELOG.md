@@ -55,7 +55,8 @@ package managers, `node` and variable names.
 - `npm`, `pnpm`, `yarn` and `bun` pass with any command and any option (`pnpm -r test`,
   `pnpm --filter app test`, `pnpm -C app test`, `npm --prefix app test`, `pnpm test:unit`,
   `pnpm exec vitest run`, bare `yarn`). Denied: `npx`, `pnpx`, `bunx`, `bun x`, `corepack`, the
-  commands `dlx`, `create` and `init`, and the options `--shell*` and `--script-shell`.
+  commands `dlx`, `create`, `init`, `npm x` and `npm exec` (`pnpm exec` and `yarn exec` run local
+  binaries and pass), and the options `--shell*` and `--script-shell`.
 - `node --test` and `node --test <literal relative path>` pass.
 - Only `npm_config_*` is matched case-insensitively: `path=src` and `env=prod` pass; `PATH=`, `HOME=`
   and the other uppercase names stay denied.

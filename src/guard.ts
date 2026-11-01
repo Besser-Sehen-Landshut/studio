@@ -1234,7 +1234,11 @@ function checkPackageRunner(name: string, args: string[]): void {
   if (cmd === 'create' || cmd === 'init') {
     deny(`${name} ${cmd} fetches a template and is not allowed; create the files by hand`);
   }
-  if (cmd === 'dlx' || (name === 'bun' && cmd === 'x')) {
+  if (
+    cmd === 'dlx' ||
+    (name === 'bun' && cmd === 'x') ||
+    (name === 'npm' && (cmd === 'x' || cmd === 'exec'))
+  ) {
     deny(
       `${name} ${cmd} downloads and runs foreign code and is not allowed; ${PACKAGE_RUN_INSTEAD}`,
     );
