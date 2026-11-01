@@ -674,6 +674,51 @@ describe('studio CLI', () => {
       return undefined;
     });
 
+  it('queue run: an account block refuses before the lock and any gh call', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const g = passingGh();
+    const { ports } = fakePorts(g.gh);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+    const before = g.calls.length;
+    const bodies = [
+      JSON.stringify([
+        { label: 'default', reason: 'authentication_failed', at: '2026-10-31T09:00:00Z' },
+      ]),
+      'not json',
+    ];
+    for (const body of bodies) {
+      writeFileSync(join(fx.state, 'blocks.json'), body);
+      const run = await cli(fx, ports, 'queue', 'run');
+      expect(run.code).toBe(1);
+      expect(run.err).toContain('account block');
+      expect(g.calls.length).toBe(before);
+      expect(existsSync(join(fx.state, 'queue.run.lock'))).toBe(false);
+      expect(statusOf(fx, 'APP-1')?.status).toBe('queued');
+    }
+  });
+
+  it('queue run: a block appearing mid-run stops before the merge, prints held, exits 1', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const g = passingGh((l) => {
+      if (l.startsWith('pr checks 5') && !existsSync(join(fx.state, 'blocks.json'))) {
+        writeFileSync(
+          join(fx.state, 'blocks.json'),
+          JSON.stringify([
+            { label: 'default', reason: 'authentication_failed', at: '2026-10-31T09:00:00Z' },
+          ]),
+        );
+      }
+    });
+    const { ports } = fakePorts(g.gh);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+    const run = await cli(fx, ports, 'queue', 'run');
+    expect(run.code).toBe(1);
+    expect(JSON.parse(run.out).held).toContain('account block');
+    expect(g.calls.some((l) => l.startsWith('pr merge'))).toBe(false);
+    expect(loadQueue(fx.state).current).toMatchObject({ pr: 5, step: 'merge' });
+    expect(existsSync(join(fx.state, 'queue.run.lock'))).toBe(false);
+  });
+
   it('R79: a second queue run exits 1 while the run lock is held', async () => {
     const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
     const { ports } = fakePorts(passingGh().gh);

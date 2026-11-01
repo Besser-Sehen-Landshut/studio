@@ -7,6 +7,7 @@ import { limitHold } from './credentials.js';
 import { launchCrew } from './crew.js';
 import {
   activeParks,
+  blockHold,
   blockLine,
   clearBlocks,
   type Parks,
@@ -414,6 +415,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           const { config } = loadAll();
           refuseNativeQueue(config);
           const root = await boundStateRoot();
+          const blockedNow = blockHold(root);
+          if (blockedNow !== undefined) throw new Error(blockedNow);
+          let heldLine: string | undefined;
+          const hold = () => {
+            const line = blockHold(root);
+            if (line !== undefined) heldLine = line;
+            return line;
+          };
           const log = (m: string) => stderr(`${m}\n`);
           const lock = acquireQueueRunLock(root, ports.clock.now(), log);
           const removeSignals = installSignalRelease(lock);
@@ -449,16 +458,19 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               {
                 stateRoot: root,
                 log,
+                hold,
                 takeNext: () => takeNextPending(root),
                 onDone: (d) => applyQueueResults(project, [d], ports, stderr),
               },
             );
             const finished = state.done.slice(before);
             print({
+              ...(heldLine === undefined ? {} : { held: heldLine }),
               merged: finished.filter((d) => d.result === 'merged').length,
               failed: finished.filter((d) => d.result === 'failed').length,
               done: finished,
             });
+            if (heldLine !== undefined) return 1;
           } finally {
             removeSignals();
             lock.release();

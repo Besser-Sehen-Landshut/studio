@@ -28915,6 +28915,7 @@ var MAX_BLOCK_TEXT = 500;
 var API_ERROR_PREFIX = /^API Error: \d{3} /;
 var BLOCK_TEXTS = [
   [/^Failed to authenticate\b/, "authentication_failed"],
+  [/^Login expired · Please run \/login\b/, "authentication_failed"],
   [/^OAuth token (?:revoked|has expired)\b/, "authentication_failed"],
   [/^Your account does not have access to Claude\b/, "authentication_failed"],
   [/^Your account is on hold and can['’]t\b/, "account_on_hold"],
@@ -30462,6 +30463,14 @@ function planAssignments(board, config2, capacity, running, hold, credentialSlot
 import { existsSync as existsSync4, lstatSync as lstatSync7, readFileSync as readFileSync9 } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { join as join8 } from "node:path";
+var QueueHeld = class extends Error {
+  constructor(line) {
+    super(line);
+    this.line = line;
+    this.name = "QueueHeld";
+  }
+  line;
+};
 var CHECKS_POLL_MS = 3e4;
 var CAPACITY_WAIT_MS = 6e4;
 var QUEUE_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
@@ -30809,6 +30818,8 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
         step = "checks";
         continue;
       }
+      const held = opts.hold?.();
+      if (held !== void 0) throw new QueueHeld(held);
       const r = await gh.run([
         "pr",
         "merge",
@@ -30848,6 +30859,11 @@ async function firstCommitAt(entry, gh) {
 async function runQueue(state, config2, ports, persist, opts = {}) {
   const log = opts.log ?? ((m) => console.error(m));
   for (; ; ) {
+    const held = opts.hold?.();
+    if (held !== void 0) {
+      log(`queue held: ${held}`);
+      return state;
+    }
     if (!state.current) {
       const next = opts.takeNext ? opts.takeNext() : state.pending.shift();
       if (!next) return state;
@@ -30855,7 +30871,14 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
       persist(state);
     }
     const current = state.current;
-    const outcome = await mergeOne(current, config2, ports, () => persist(state), opts);
+    let outcome;
+    try {
+      outcome = await mergeOne(current, config2, ports, () => persist(state), opts);
+    } catch (err) {
+      if (!(err instanceof QueueHeld)) throw err;
+      log(`queue held: ${err.line}`);
+      return state;
+    }
     const { step: _step, head: _head, ...entry } = current;
     const done = {
       ...entry,
@@ -31976,6 +31999,14 @@ async function runCli(argv, deps) {
           const { config: config2 } = loadAll();
           refuseNativeQueue(config2);
           const root = await boundStateRoot();
+          const blockedNow = blockHold(root);
+          if (blockedNow !== void 0) throw new Error(blockedNow);
+          let heldLine;
+          const hold = () => {
+            const line = blockHold(root);
+            if (line !== void 0) heldLine = line;
+            return line;
+          };
           const log = (m) => stderr(`${m}
 `);
           const lock = acquireQueueRunLock(root, ports.clock.now(), log);
@@ -32011,16 +32042,19 @@ async function runCli(argv, deps) {
               {
                 stateRoot: root,
                 log,
+                hold,
                 takeNext: () => takeNextPending(root),
                 onDone: (d) => applyQueueResults(project, [d], ports, stderr)
               }
             );
             const finished7 = state.done.slice(before);
             print({
+              ...heldLine === void 0 ? {} : { held: heldLine },
               merged: finished7.filter((d) => d.result === "merged").length,
               failed: finished7.filter((d) => d.result === "failed").length,
               done: finished7
             });
+            if (heldLine !== void 0) return 1;
           } finally {
             removeSignals();
             lock.release();

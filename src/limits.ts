@@ -451,6 +451,7 @@ const API_ERROR_PREFIX = /^API Error: \d{3} /;
 /** Each anchored at the start of the text. The reason is always our code, never text from the log. */
 const BLOCK_TEXTS: readonly [RegExp, string][] = [
   [/^Failed to authenticate\b/, 'authentication_failed'],
+  [/^Login expired · Please run \/login\b/, 'authentication_failed'],
   [/^OAuth token (?:revoked|has expired)\b/, 'authentication_failed'],
   [/^Your account does not have access to Claude\b/, 'authentication_failed'],
   [/^Your account is on hold and can['’]t\b/, 'account_on_hold'],

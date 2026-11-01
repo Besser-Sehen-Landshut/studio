@@ -35,7 +35,20 @@ export type QueueOptions = {
   takeNext?: () => QueueEntry | undefined;
   /** Called right after each entry finished and was persisted (board update); errors are logged. */
   onDone?: (done: QueueDone) => void;
+  /**
+   * Returns a line while the queue must not merge (an account block). Checked at the top of every
+   * loop and right before `gh pr merge`; a stop keeps `current` and `pending` as they are.
+   */
+  hold?: () => string | undefined;
 };
+
+/** Internal stop: the hold fired between capacity and merge. `current` stays persisted. */
+export class QueueHeld extends Error {
+  constructor(readonly line: string) {
+    super(line);
+    this.name = 'QueueHeld';
+  }
+}
 
 export const CHECKS_POLL_MS = 30_000;
 export const CAPACITY_WAIT_MS = 60_000;
@@ -476,6 +489,8 @@ export async function mergeOne(
         step = 'checks';
         continue;
       }
+      const held = opts.hold?.();
+      if (held !== undefined) throw new QueueHeld(held);
       const r = await gh.run([
         'pr',
         'merge',
@@ -528,6 +543,11 @@ export async function runQueue(
 ): Promise<QueueState> {
   const log = opts.log ?? ((m: string) => console.error(m));
   for (;;) {
+    const held = opts.hold?.();
+    if (held !== undefined) {
+      log(`queue held: ${held}`);
+      return state;
+    }
     if (!state.current) {
       const next = opts.takeNext ? opts.takeNext() : state.pending.shift();
       if (!next) return state;
@@ -535,7 +555,14 @@ export async function runQueue(
       persist(state);
     }
     const current = state.current;
-    const outcome = await mergeOne(current, config, ports, () => persist(state), opts);
+    let outcome: MergeOutcome;
+    try {
+      outcome = await mergeOne(current, config, ports, () => persist(state), opts);
+    } catch (err) {
+      if (!(err instanceof QueueHeld)) throw err;
+      log(`queue held: ${err.line}`);
+      return state;
+    }
     const { step: _step, head: _head, ...entry } = current;
     const done: QueueDone = {
       ...entry,

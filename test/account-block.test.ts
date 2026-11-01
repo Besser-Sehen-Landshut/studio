@@ -247,6 +247,7 @@ describe('detectBlock', () => {
     ['Your account has been disabled.', 'account_disabled'],
     ['This account has been suspended', 'account_disabled'],
     ['Your account was banned', 'account_disabled'],
+    ['Login expired · Please run /login', 'authentication_failed'],
   ];
 
   it('matches documented text in the trusted positions, with a fixed reason code', () => {
@@ -270,6 +271,16 @@ describe('detectBlock', () => {
         text,
       ).toEqual({ reason });
     }
+  });
+
+  it('an expired login quoted in tool output or unflagged text is no block', () => {
+    const text = 'Login expired · Please run /login';
+    const quoted = [
+      { type: 'user', message: { content: [{ type: 'tool_result', content: text }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text }] } },
+      { type: 'result', is_error: false, result: text },
+    ];
+    for (const ev of quoted) expect(detectBlock(JSON.stringify(ev))).toBeUndefined();
   });
 
   it('text is anchored and length-capped', () => {
