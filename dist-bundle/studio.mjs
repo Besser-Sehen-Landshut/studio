@@ -29041,9 +29041,17 @@ async function reconcileBlocks(o2) {
   }
   try {
     const at = now.toISOString();
-    const board = loadBoard(project);
+    let board;
+    try {
+      board = loadBoard(project);
+    } catch (e) {
+      result.errors.push(
+        `board is unreadable, so every crew record counts as active: ${e.message}`
+      );
+    }
     const records = Object.fromEntries(
       Object.entries(readCrewRecords(stateRoot)).filter(([id]) => {
+        if (board === void 0) return true;
         const status = board.items.find((i2) => i2.id === id)?.status;
         return status !== void 0 && ACTIVE.has(status);
       })
@@ -29107,7 +29115,7 @@ async function reconcileBlocks(o2) {
 `);
       }
     }
-    moveBlockedToReady(project, stateRoot, now, result);
+    if (board !== void 0) moveBlockedToReady(project, stateRoot, now, result);
   } finally {
     lock.release();
   }

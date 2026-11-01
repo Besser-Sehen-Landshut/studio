@@ -618,6 +618,71 @@ describe('account block details', () => {
     expect(p.stopped).toEqual([]);
   });
 
+  it('an unreadable board still records the block and stops crews, and moves nothing', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    await twoCrews(fx, p);
+    log(fx, 'APP-1', ON_HOLD);
+    const boardFile = join(fx.project, '.studio', 'board.yaml');
+    const good = readFileSync(boardFile, 'utf8');
+    writeFileSync(boardFile, 'items: [not closed');
+
+    const r = await cli(fx, p.ports, ['status']);
+    expect(r.err).toContain('board');
+    expect(blocksOf(fx)).toEqual([
+      { label: 'label-a', reason: 'account_on_hold', at: '2026-11-01T10:00:00.000Z' },
+    ]);
+    expect(p.stopped.sort()).toEqual([5001, 5002]);
+    expect(recordOf(fx, 'APP-2').block).toMatchObject({ reason: 'account_on_hold' });
+    expect(readFileSync(boardFile, 'utf8')).toBe('items: [not closed');
+
+    const before = p.started.length;
+    expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(1);
+    expect(p.started).toHaveLength(before);
+    expect(readFileSync(boardFile, 'utf8')).toBe('items: [not closed');
+
+    // Once the board is back, the moves left out are made, and the block still holds.
+    writeFileSync(boardFile, good);
+    await cli(fx, p.ports, ['status']);
+    expect(itemOf(fx, 'APP-1')?.status).toBe('ready');
+    expect(itemOf(fx, 'APP-2')?.status).toBe('ready');
+    expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(1);
+    expect(p.started).toHaveLength(before);
+  });
+
+  it('a block marker left after a clear hinders neither collect nor the next launch', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    await twoCrews(fx, p);
+    const reports = join(fx.state, 'clones', 'APP-1', '.studio', 'reports');
+    mkdirSync(reports, { recursive: true });
+    const file = join(reports, 'APP-1.md');
+    writeFileSync(
+      file,
+      '---\nstatus: failed\nitem: APP-1\nlessons: []\nquestions: []\n---\nbody\n',
+    );
+    utimesSync(file, new Date('2026-11-02T00:00:00Z'), new Date('2026-11-02T00:00:00Z'));
+    log(fx, 'APP-1', ON_HOLD);
+    await cli(fx, p.ports, ['status']);
+    await cli(fx, p.ports, ['accounts-clear', 'label-a'], { isTerminal: true });
+    await cli(fx, p.ports, ['status']);
+    expect(recordOf(fx, 'APP-1').block).toBeDefined();
+    expect(itemOf(fx, 'APP-1')?.status).toBe('assigned');
+    expect(p.stopped).toHaveLength(2);
+
+    const c = await cli(fx, p.ports, ['collect', 'APP-1']);
+    expect(c.err).toBe('');
+    expect(c.code).toBe(0);
+    expect(itemOf(fx, 'APP-1')?.status).toBe('blocked');
+
+    // The next launch of a stopped item starts clean: a new record, no marker.
+    expect((await cli(fx, p.ports, ['launch', 'APP-2'])).code).toBe(0);
+    expect(recordOf(fx, 'APP-2').block).toBeUndefined();
+    expect(recordOf(fx, 'APP-2').stoppedAt).toBeUndefined();
+    await cli(fx, p.ports, ['status']);
+    expect(itemOf(fx, 'APP-2')?.status).toBe('assigned');
+  });
+
   it('a live crew on an active item of another label is stopped', async () => {
     const fx = makeFx();
     const p = makePorts();

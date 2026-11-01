@@ -656,9 +656,19 @@ export async function reconcileBlocks(o: {
   try {
     const at = now.toISOString();
     // Records of finished items stay in crew.json for good, and their pids get reused.
-    const board = loadBoard(project);
+    // Without a board nothing tells them apart: for this reconcile every record counts as active,
+    // so a block is still recorded and crews still stop. The board moves wait until it reads again.
+    let board: Board | undefined;
+    try {
+      board = loadBoard(project);
+    } catch (e) {
+      result.errors.push(
+        `board is unreadable, so every crew record counts as active: ${(e as Error).message}`,
+      );
+    }
     const records = Object.fromEntries(
       Object.entries(readCrewRecords(stateRoot)).filter(([id]) => {
+        if (board === undefined) return true;
         const status = board.items.find((i) => i.id === id)?.status;
         return status !== undefined && ACTIVE.has(status);
       }),
@@ -723,7 +733,7 @@ export async function reconcileBlocks(o: {
         writeStateFile(stateRoot, crewFile, `${JSON.stringify(latest, null, 2)}\n`);
       }
     }
-    moveBlockedToReady(project, stateRoot, now, result);
+    if (board !== undefined) moveBlockedToReady(project, stateRoot, now, result);
   } finally {
     lock.release();
   }
