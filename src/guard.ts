@@ -605,6 +605,13 @@ const DENIED_WRAPPERS = new Set([
   'mapfile',
   'readarray',
   'getopts',
+  'trap',
+  'alias',
+  'hash',
+  'let',
+  'script',
+  'flock',
+  'watch',
 ]);
 const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const LOOSE_ASSIGNMENT = /^([^=\s/]+)=/;
@@ -619,7 +626,7 @@ function assignmentName(w: string): string | undefined {
   return name;
 }
 const SENSITIVE_VAR =
-  /^(GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/;
+  /^(STUDIO_|NODE_OPTIONS$|NODE_PATH$|NPM_CONFIG_|PNPM_|YARN_|COREPACK_|GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/i;
 
 const unresolved = (w: string): boolean => w.includes(SUBST) || w.includes('$') || w.includes('`');
 /** A word whose real value depends on the shell at run time (variables, substitutions, globs). */
@@ -1132,6 +1139,71 @@ function checkVarBuiltin(name: string, args: string[]): void {
   }
 }
 
+// A crew has no use for the studio CLI (its skill uses no studio command), and the owner's commands
+// must stay the owner's. The CLI refuses those without a terminal; this is a second net, and a file
+// a crew writes or copies itself can still get past it: the sandbox is the boundary.
+const CREW_NO_STUDIO = 'a crew may not run studio';
+const NODE_NAME = /^node(js)?[0-9.]*$/i;
+/** `bin/studio` or `dist-bundle/studio.mjs`; case-insensitive because file systems can be. */
+const isStudioBinary = (w: string): boolean => /^studio(\.(mjs|cjs|js))?$/i.test(basename(w));
+
+/**
+ * Running node directly is denied except `node --version`, `node --help` and `node <path>`: the path is
+ * the first argument (no option before it), literal, relative, without a `..` segment and not the studio
+ * binary. Words after the path are the script's arguments and stay free.
+ */
+function checkNode(args: string[]): void {
+  const first = args[0] ?? '-';
+  if (args.length === 1 && (first === '--version' || first === '--help')) return;
+  if (first.startsWith('-') || first.startsWith('~')) {
+    deny('node without a literal relative script path is not allowed');
+  }
+  if (unresolvedWord(first) || isAbsolute(first) || first.split('/').includes('..')) {
+    deny('node with a script path that is not literal and relative is not allowed');
+  }
+  if (isStudioBinary(first)) deny(CREW_NO_STUDIO);
+}
+
+/** First arguments of npm, pnpm, yarn and bun that may run; anything else is denied. */
+const PACKAGE_COMMANDS = new Set([
+  'test',
+  'run',
+  'install',
+  'i',
+  'ci',
+  'lint',
+  'build',
+  'typecheck',
+  'format',
+  'add',
+  'remove',
+  'list',
+  'ls',
+  'audit',
+  'outdated',
+  'why',
+  '--version',
+  '-v',
+  '--help',
+]);
+
+/**
+ * npx, pnpx, bunx and corepack are denied. npm, pnpm, yarn and bun pass only with an allowlisted first
+ * argument, and `--shell*` (`--shell-mode` and its abbreviations) is denied anywhere. The guard does
+ * not contain a malicious crew (package.json scripts run anything), the sandbox does.
+ */
+function checkPackageRunner(name: string, args: string[]): void {
+  if (name === 'npx' || name === 'pnpx' || name === 'bunx' || name === 'corepack') {
+    deny(`${name} is a package runner and is not allowed`);
+  }
+  if (name !== 'npm' && name !== 'pnpm' && name !== 'yarn' && name !== 'bun') return;
+  const first = args[0];
+  if (first === undefined || unresolvedWord(first) || !PACKAGE_COMMANDS.has(first)) {
+    deny(`${name} is only allowed with a known command as its first argument`);
+  }
+  if (args.some((a) => a.startsWith('--shell'))) deny(`${name} --shell-mode is not allowed`);
+}
+
 function checkWords(env: Env, words: string[], state: State): void {
   if (words.length === 0) return;
   const base = state.cwd ?? env.wt;
@@ -1179,11 +1251,14 @@ function checkWords(env: Env, words: string[], state: State): void {
     if (positionals(args).length === 0 || args.includes('-')) {
       deny(`${name} reading its script from stdin is not allowed`);
     }
+    if (positionals(args).some(isStudioBinary)) deny(CREW_NO_STUDIO);
   }
-  // Clearing an account block is the owner's decision. `node` covers `node <plugin>/bin/studio ...`.
-  if ((name === 'studio' || name === 'node') && args.includes('accounts-clear')) {
-    deny('studio accounts-clear is owner-only');
-  }
+  if (isStudioBinary(name)) deny(CREW_NO_STUDIO);
+  if (NODE_NAME.test(name)) checkNode(args);
+  checkPackageRunner(name, args);
+  // `for NAME in ...`, `select NAME in ...` and `(( NAME = 1 ))` set NAME without an assignment word.
+  if (name === 'for' || name === 'select') checkVarName(args[0] ?? '');
+  checkVarName(/^[A-Za-z_][A-Za-z0-9_]*/.exec(name)?.[0] ?? '');
   if (name === 'find') checkFind(env, args, state);
   if (name === 'git' || name === 'gh') {
     if (words.some((w) => w.includes(SUBST))) deny(`command substitution in a ${name} command`);
@@ -1195,6 +1270,10 @@ function checkWords(env: Env, words: string[], state: State): void {
 
 function checkBash(env: Env, cmd: string, cwd: string | null, depth: number): void {
   if (depth > 8) deny('command nesting too deep');
+  // Arithmetic and `${VAR:=x}` can assign without an assignment word; deny them outright.
+  if (/\(\(|\$\[|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?:?=/.test(cmd)) {
+    deny('arithmetic and parameter-expansion assignment are not allowed');
+  }
   const { lines, subs } = scan(cmd);
   for (const sub of subs) checkBash(env, sub, cwd, depth + 1);
   const state: State = { cwd };

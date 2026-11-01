@@ -31,12 +31,15 @@ const busyRows = (n: number) =>
 
 function fakeGh(
   handler: (path: string, jq?: string) => Promise<string> | string,
-): Gh & { calls: string[] } {
+): Gh & { calls: string[]; timeouts: Array<number | undefined> } {
   const calls: string[] = [];
+  const timeouts: Array<number | undefined> = [];
   return {
     calls,
-    api: async (path, jq) => {
+    timeouts,
+    api: async (path, jq, o) => {
       calls.push(path);
+      timeouts.push(o?.timeoutMs);
       return handler(path, jq);
     },
     run: async () => ({ code: 0, stdout: '', stderr: '' }),
@@ -113,6 +116,13 @@ describe('readCapacity', () => {
     const cap = await readCapacity(mkConfig(), { gh, host: host(0) }, opts);
     expect(cap).toMatchObject({ ok: false, ciBusy: 8 });
     expect(cap.error).toContain('unparsable');
+  });
+
+  it('passes the timeout to every CI read', async () => {
+    const gh = fakeGh(() => busyRows(1));
+    await readCapacity(mkConfig(), { gh, host: host(0) }, { timeoutMs: 1234 });
+    expect(gh.timeouts.length).toBeGreaterThan(0);
+    expect(gh.timeouts.every((t) => t === 1234)).toBe(true);
   });
 
   it('timeout counts as busy', async () => {

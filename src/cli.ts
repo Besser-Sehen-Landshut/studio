@@ -1,12 +1,20 @@
-import { join, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { type Board, loadBoard, saveBoard, transition, type WorkItem } from './board.js';
 import { readCapacity } from './capacity.js';
-import { configWarnings, loadConfig, loadOwnerConfig, type StudioConfig } from './config.js';
+import {
+  configWarnings,
+  loadConfig,
+  loadOwnerConfig,
+  type OwnerConfig,
+  type StudioConfig,
+} from './config.js';
 import { limitHold } from './credentials.js';
-import { launchCrew } from './crew.js';
+import { crewStateOf, isItemId, launchCrew } from './crew.js';
 import {
   activeParks,
+  blockHold,
   blockLine,
   clearBlocks,
   type Parks,
@@ -16,7 +24,18 @@ import {
   reconcileLimits,
   validLabel,
 } from './limits.js';
-import { checkStateMarker, projectRealpath, stateRootFor, writeStateFile } from './paths.js';
+import { readMainBuild } from './main-build.js';
+import { sendNotifications } from './notify.js';
+import { migrateOwnerState, pendingLegacyState } from './owner-state.js';
+import {
+  checkStateMarker,
+  ownerStateRootFor,
+  projectRealpath,
+  stateDirName,
+  stateRootFor,
+  writeStateFile,
+} from './paths.js';
+import { clearPause, PAUSED_LINE, readPause, setPause } from './pause.js';
 import { type Capacity, planAssignments } from './planner.js';
 import type { Ports } from './ports.js';
 import {
@@ -42,7 +61,14 @@ import {
   type StateSnapshot,
   writeState,
 } from './state.js';
-import { credentialSlots, LABEL_FULL_LINE, labelUsageSnapshot } from './usage.js';
+import {
+  credentialSlots,
+  dayKey,
+  LABEL_FULL_LINE,
+  labelUsageSnapshot,
+  readUsage,
+  runningPerLabel,
+} from './usage.js';
 
 export interface CliDeps {
   ports: Ports;
@@ -68,6 +94,8 @@ Commands:
   queue add <repo>#<pr>    Put a reviewed PR into the merge queue
   queue run                Merge the queued PRs, one at a time
   state                    Refresh state.json in the state root
+  pause                    Owner only: nothing new starts or merges until resume
+  resume                   Owner only: lift the pause
   stop <id>                Stop a crew session
   metrics                  Lead time and deployment frequency
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
@@ -79,6 +107,9 @@ Commands:
 class UsageError extends Error {}
 
 const BY = 'studio';
+
+const LEGACY_LINE =
+  'old project state files are not migrated yet: no merge until they are (run any studio command again)';
 
 const ACTIVE_FOR_WIP: readonly WorkItem['status'][] = ['assigned', 'in_progress'];
 
@@ -134,6 +165,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       return { config, board: loadBoard(project) };
     };
     const stateRoot = () => stateRootFor(project, owner);
+    let migrated = false;
+    /** The owner-wide state; the first use in a process merges what old versions left behind. */
+    const ownerRoot = () => {
+      const root = ownerStateRootFor(owner);
+      if (!migrated) {
+        migrated = true;
+        for (const line of migrateOwnerState(root, ports.clock.now())) stderr(`error: ${line}\n`);
+      }
+      return root;
+    };
     /** Binds the state root to this project before the first write (launch does the same). */
     const boundStateRoot = async () => {
       const root = stateRoot();
@@ -146,12 +187,23 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
      * at the board. Returns whether the block reconcile could not run.
      */
     const reconcile = async (): Promise<boolean> => {
-      const b = await reconcileBlocks({ project, stateRoot: stateRoot(), ports });
+      const b = await reconcileBlocks({
+        project,
+        stateRoot: stateRoot(),
+        ownerRoot: ownerRoot(),
+        ports,
+      });
       for (const s of b.stopped) {
-        stderr(`note: ${s.item} on ${s.label} stopped: account block (${s.reason})\n`);
+        const where = s.root === undefined ? '' : ` in ${s.root}`;
+        stderr(`note: ${s.item}${where} on ${s.label} stopped: account block (${s.reason})\n`);
       }
       for (const e of b.errors) stderr(`error: ${e}\n`);
-      const r = await reconcileLimits({ project, stateRoot: stateRoot(), ports });
+      const r = await reconcileLimits({
+        project,
+        stateRoot: stateRoot(),
+        ownerRoot: ownerRoot(),
+        ports,
+      });
       for (const s of r.stopped) {
         stderr(
           `note: ${s.item} stopped at a ${s.kind} limit, ${s.label} parked until ${s.parkedUntil}\n`,
@@ -160,17 +212,30 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       for (const e of r.errors) stderr(`error: ${e}\n`);
       return b.lockFailed;
     };
-    const planNow = async (config: StudioConfig, board: Board) => {
+    /**
+     * Why crew records of some project cannot be read, as a single line; undefined when they can.
+     * They are needed to count running crews per credential label.
+     */
+    const crewRecordsProblem = (): string | undefined => {
+      try {
+        runningPerLabel(ownerRoot(), ports);
+        return undefined;
+      } catch (e) {
+        return (e as Error).message.replace(/\p{Cc}/gu, ' ');
+      }
+    };
+    /** `skipLabelCount`: `state` goes on without the per-label room when crew records are unreadable. */
+    const planNow = async (config: StudioConfig, board: Board, skipLabelCount = false) => {
       const capacity = await readCapacity(config, ports);
       const ownerConfig = loadOwnerConfig(owner);
-      let hold = await limitHold(stateRoot(), ownerConfig, ports, owner);
+      let hold = await limitHold(ownerRoot(), ownerConfig, ports, owner);
       // Room under the per-label limits; asked only while nothing else holds (no provider call
       // during a block).
       let slots: number | undefined;
       let line = hold;
-      if (hold === undefined) {
+      if (hold === undefined && !skipLabelCount) {
         const got = await credentialSlots({
-          stateRoot: stateRoot(),
+          ownerRoot: ownerRoot(),
           ownerConfig,
           ports,
           owner,
@@ -186,7 +251,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       return {
         capacity,
         hold: line,
-        plan: planAssignments(board, config, capacity, runningPerRole(board), hold, slots),
+        // A pause holds the plan but is no usage limit: `hold` (the line for the owner) stays as is.
+        plan: planAssignments(
+          board,
+          config,
+          capacity,
+          runningPerRole(board),
+          readPause(stateRoot()).paused ? 'paused' : hold,
+          slots,
+        ),
       };
     };
 
@@ -414,6 +487,19 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           const { config } = loadAll();
           refuseNativeQueue(config);
           const root = await boundStateRoot();
+          /** An account block, a pause, or old state files that were not merged into the owner root. */
+          const queueHold = (): string | undefined =>
+            blockHold(ownerRoot()) ??
+            (readPause(root).paused ? PAUSED_LINE : undefined) ??
+            (pendingLegacyState(dirname(ownerRoot())).length > 0 ? LEGACY_LINE : undefined);
+          const blockedNow = queueHold();
+          if (blockedNow !== undefined) throw new Error(blockedNow);
+          let heldLine: string | undefined;
+          const hold = () => {
+            const line = queueHold();
+            if (line !== undefined) heldLine = line;
+            return line;
+          };
           const log = (m: string) => stderr(`${m}\n`);
           const lock = acquireQueueRunLock(root, ports.clock.now(), log);
           const removeSignals = installSignalRelease(lock);
@@ -449,16 +535,19 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               {
                 stateRoot: root,
                 log,
+                hold,
                 takeNext: () => takeNextPending(root),
                 onDone: (d) => applyQueueResults(project, [d], ports, stderr),
               },
             );
             const finished = state.done.slice(before);
             print({
+              ...(heldLine === undefined ? {} : { held: heldLine }),
               merged: finished.filter((d) => d.result === 'merged').length,
               failed: finished.filter((d) => d.result === 'failed').length,
               done: finished,
             });
+            if (heldLine !== undefined) return 1;
           } finally {
             removeSignals();
             lock.release();
@@ -472,24 +561,74 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         await reconcile();
         const { config, board } = loadAll();
         const root = await boundStateRoot();
-        const { capacity, hold } = await planNow(config, board);
-        const read = readLimits(root);
+        // Crew records of any project that cannot be read: plan and launch refuse, but the pane
+        // still gets its state, without the per-label figures, and a line for the owner.
+        const crewProblem = crewRecordsProblem();
+        if (crewProblem !== undefined) stderr(`error: ${crewProblem}\n`);
+        const { capacity, hold } = await planNow(config, board, crewProblem !== undefined);
+        const read = readLimits(ownerRoot());
+        const ownerConfig = loadOwnerConfig(owner);
         const snapshot = buildSnapshot(
           root,
+          ownerRoot(),
           board,
           capacity,
           loadQueue(root),
           ports.clock.now(),
           hold,
           read.ok ? activeParks(read.labels, ports.clock.now()) : {},
-          labelUsageSnapshot({
-            stateRoot: root,
-            ownerConfig: loadOwnerConfig(owner),
-            ports,
-          }),
+          crewProblem === undefined
+            ? labelUsageSnapshot({ ownerRoot: ownerRoot(), ownerConfig, ports })
+            : undefined,
+          {
+            config,
+            ownerConfig,
+            mainBuild: await readMainBuild(config, ports),
+            crewRecordsUnreadable: crewProblem !== undefined,
+            alive: (pid) => Number.isInteger(pid) && pid > 0 && ports.claude.alive(pid),
+            hasReport: (item) =>
+              isItemId(item) &&
+              existsSync(join(root, 'clones', item, '.studio', 'reports', `${item}.md`)),
+          },
         );
         writeState(root, snapshot);
+        try {
+          for (const line of await sendNotifications({
+            ownerRoot: ownerRoot(),
+            projectKey: stateDirName(projectRealpath(project)),
+            primaryRepo: config.primaryRepo,
+            snapshot,
+            ownerConfig,
+            ports,
+            owner,
+          })) {
+            stderr(`error: ${line}\n`);
+          }
+        } catch {
+          // A notification problem never fails the command.
+          stderr('error: notify: could not send notifications\n');
+        }
         print(snapshot);
+        return 0;
+      }
+
+      case 'pause':
+      case 'resume': {
+        // Owner only: a crew runs without a terminal and with this role in its environment.
+        if (deps.env.STUDIO_ROLE === 'crew' || deps.isTerminal !== true) {
+          stderr(`studio: ${cmd} is for the owner and needs a terminal; nothing written\n`);
+          return 1;
+        }
+        if (rest.length > 0) throw new UsageError(`${cmd} takes no arguments`);
+        const root = await boundStateRoot();
+        if (cmd === 'pause') {
+          const now = ports.clock.now();
+          setPause(root, now);
+          print({ paused: true, at: now.toISOString() });
+        } else {
+          clearPause(root);
+          print({ paused: false });
+        }
         return 0;
       }
 
@@ -551,7 +690,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (rest.length !== 1 || label === undefined || !validLabel(label)) {
           throw new UsageError('accounts-clear needs exactly one valid label');
         }
-        const r = clearBlocks(await boundStateRoot(), label, ports.clock.now());
+        await boundStateRoot();
+        const r = clearBlocks(ownerRoot(), label, ports.clock.now());
         print({ label, ...r });
         return 0;
       }
@@ -711,8 +851,59 @@ function applyQueueResults(
   saveBoard(project, board);
 }
 
+interface SnapshotExtra {
+  config: StudioConfig;
+  ownerConfig: OwnerConfig;
+  mainBuild: StateSnapshot['mainBuild'];
+  crewRecordsUnreadable: boolean;
+  alive(pid: number): boolean;
+  hasReport(item: string): boolean;
+}
+
+const MAX_MERGED_TODAY = 200;
+
+/** Merges and deploys of one local day, from metric events (anything malformed is skipped). */
+function todayFrom(
+  events: readonly unknown[],
+  now: Date,
+  timezone: string | undefined,
+): StateSnapshot['today'] {
+  const day = dayKey(now, timezone);
+  const merged: (StateSnapshot['today']['merged'][number] & { t: number })[] = [];
+  let deployed = 0;
+  for (const raw of events) {
+    if (raw === null || typeof raw !== 'object') continue;
+    const ev = raw as Record<string, unknown>;
+    if ((ev.type !== 'merged' && ev.type !== 'deployed') || typeof ev.at !== 'string') continue;
+    const t = Date.parse(ev.at);
+    if (Number.isNaN(t) || dayKey(new Date(t), timezone) !== day) continue;
+    if (ev.type === 'deployed') deployed++;
+    else if (typeof ev.pr === 'number' && Number.isInteger(ev.pr)) {
+      merged.push({ pr: ev.pr, repo: typeof ev.repo === 'string' ? ev.repo : '', at: ev.at, t });
+    }
+  }
+  merged.sort((a, b) => a.t - b.t);
+  return {
+    day,
+    merged: merged.slice(-MAX_MERGED_TODAY).map(({ pr, repo, at }) => ({ pr, repo, at })),
+    deployed,
+  };
+}
+
+function usageDaysFrom(ownerRoot: string): StateSnapshot['usageDays'] {
+  const read = readUsage(ownerRoot);
+  if (!read.ok) return undefined;
+  const days: Record<string, Record<string, number>> = {};
+  for (const day of Object.keys(read.days).sort()) {
+    const labels = Object.entries(read.days[day] ?? {}).filter(([, n]) => typeof n === 'number');
+    if (labels.length > 0) days[day] = Object.fromEntries(labels);
+  }
+  return Object.keys(days).length === 0 ? undefined : days;
+}
+
 function buildSnapshot(
   root: string,
+  ownerRoot: string,
   board: Board,
   capacity: Capacity,
   queue: QueueState,
@@ -720,8 +911,9 @@ function buildSnapshot(
   hold: string | undefined,
   limits: Parks,
   labelUsage: StateSnapshot['labelUsage'],
+  extra: SnapshotExtra,
 ): StateSnapshot {
-  const blocks = readBlocks(root);
+  const blocks = readBlocks(ownerRoot);
   const blocked = blockLine(blocks);
   const notifications: Notification[] = blocks.ok
     ? blocks.blocks.map((b) => ({
@@ -741,20 +933,39 @@ function buildSnapshot(
       ];
   const crew: CrewSnapshot[] = Object.values(readCrewRecords(root)).map((r) => {
     const item = board.items.find((i) => i.id === r.item);
+    const status = item?.status ?? 'unknown';
     return {
       name: r.name,
       role: r.role,
       item: r.item,
-      status: item?.status ?? 'unknown',
+      status,
       ...(item?.pr === undefined ? {} : { pr: item.pr }),
       since: r.startedAt,
       ...(r.label === undefined ? {} : { label: r.label }),
+      ...(item === undefined ? {} : { title: item.title, repo: item.repo }),
+      state: crewStateOf(r, status, extra.alive(r.pid), extra.hasReport(r.item)),
+      ...(r.stoppedAt === undefined ? {} : { stoppedAt: r.stoppedAt }),
     };
   });
+  const events = readMetricEvents(root);
+  const usageDays = usageDaysFrom(ownerRoot);
   return {
     crew,
     queue,
     capacity,
+    ci: {
+      busy: capacity.ciBusy,
+      total: capacity.ciTotal,
+      mergeMaxBusy: extra.config.ci.capacity.mergeMaxBusy,
+      ok: capacity.ok,
+    },
+    today: todayFrom(events, now, extra.ownerConfig.crewLabelLimits.timezone),
+    ...(usageDays === undefined ? {} : { usageDays }),
+    mainBuild: extra.mainBuild,
+    counts: {
+      ready: board.items.filter((i) => i.status === 'ready').length,
+      queued: queue.pending.length + (queue.current === undefined ? 0 : 1),
+    },
     forOwner: [
       ...board.items
         .filter((i) => i.ownerOnly && i.status !== 'merged' && i.status !== 'dropped')
@@ -765,11 +976,20 @@ function buildSnapshot(
         : hold === undefined
           ? []
           : [{ id: 'usage-limit', title: hold }]),
+      ...(extra.crewRecordsUnreadable
+        ? [
+            {
+              id: 'crew-records',
+              title:
+                'crew records of a project are unreadable: no crew starts and per-label usage is not shown until the owner inspects or removes the file',
+            },
+          ]
+        : []),
     ],
     ...(Object.keys(limits).length > 0 ? { limits } : {}),
     ...(labelUsage === undefined ? {} : { labelUsage }),
     ...(notifications.length > 0 ? { notifications } : {}),
     updatedAt: now.toISOString(),
-    metrics: computeMetrics(readMetricEvents(root)),
+    metrics: computeMetrics(events),
   };
 }

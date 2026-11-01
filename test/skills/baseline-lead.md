@@ -56,3 +56,23 @@ Run on 2026-10-31 with the `studio-lead` skill (opus twice, sonnet once), same s
 - The first GREEN opus run proposed `assigned → ready` (illegal) and an invented `planning` item type; this led
   to the refactor (blocked → ready for the relaunch, valid item types listed, planning = research item).
 - Remaining nit: sonnet used an invented phrase "studio deploy-equivalent"; accepted.
+
+# Baseline (RED): heartbeat, 2026-11-01
+
+Run with one opus and one sonnet agent, each with the unchanged `studio-lead` skill and `scenarios/lead-heartbeat-scenario.md`.
+
+Target: an account block stops every crew at once, so the watch runs on a timer of at most 2 minutes, costs no model turn while nothing happens, and refreshes `state.json` for the board.
+
+Opus: "`/loop 15m studio status`"; "Fifteen minutes is my tradeoff"; a failed login is noticed "about 10 minutes later, and at most 15 minutes". No `studio state`. Rejected a shell loop outright: "Poll every minute or so, or run a foreground `sleep` or watch loop: this is the token burn the owner asked me to avoid".
+
+Sonnet: "every 10 minutes"; "No polling interval under about 10 minutes. That is the budget-versus-detection tradeoff"; "the other two crews keep running". No `studio state`.
+
+Both took the owner's "keep it cheap" as a reason for a long interval, and both spent a model turn on every tick. Both assumed a short timer burns tokens; a background shell loop does not.
+
+## With the heartbeat rule (GREEN), 2026-11-01
+
+Same scenario, opus and sonnet. Both started the 120-second loop, ended the turn, named a detection delay of at most 120 seconds, and refused to lengthen the interval: "The loop spends no tokens, so it stays at 120 seconds" (opus); "A shell loop spends no tokens, unlike a `/loop` tick" (sonnet). Both refused `/loop`.
+
+Refactor: review of the first wording showed a plain background task wakes the lead only when it exits, so a block or an exited crew would have gone unnoticed by the model. The rule now runs under the Monitor tool and prints only on a status change or a problem. Sonnet re-run: "Start the heartbeat under the Monitor tool (not a plain background task)", failed login "noticed within 120 seconds", all three crews stopped at that poll.
+
+Not exercised: a real Monitor run with real crews. Those are not run yet.

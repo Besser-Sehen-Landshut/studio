@@ -21,7 +21,7 @@ import { limitHold } from '../src/credentials.js';
 import { launchCrew } from '../src/crew.js';
 import { DEFAULT_SECRET_GLOBS, evaluateGuard } from '../src/guard.js';
 import { detectBlock, readBlocks } from '../src/limits.js';
-import { STATE_FILES, stateRootFor } from '../src/paths.js';
+import { ownerStateRootFor, STATE_FILES, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-block-')));
@@ -79,7 +79,15 @@ function makeFx(ids: string[] = ['APP-1', 'APP-2']) {
   const env: Record<string, string | undefined> = { PATH: process.env.PATH };
   const ownerDir = join(home, '.config', 'studio');
   const state = stateRootFor(project, { env, homedir: home });
-  return { base, project, home, env, ownerDir, state };
+  return {
+    base,
+    project,
+    home,
+    env,
+    ownerDir,
+    state,
+    owner: ownerStateRootFor({ env, homedir: home }),
+  };
 }
 type Fx = ReturnType<typeof makeFx>;
 
@@ -158,10 +166,10 @@ const providerCalls = (fx: Fx): number => {
 const log = (fx: Fx, id: string, ev: unknown) =>
   writeFileSync(join(fx.state, 'logs', `${id}.jsonl`), `${JSON.stringify(ev)}\n`, { flag: 'a' });
 const ON_HOLD = { type: 'system', subtype: 'api_retry', error: 'account_on_hold' };
-const blocksFile = (fx: Fx) => join(fx.state, 'blocks.json');
+const blocksFile = (fx: Fx) => join(fx.owner, 'blocks.json');
 const blocksOf = (fx: Fx) => JSON.parse(readFileSync(blocksFile(fx), 'utf8'));
 const seedBlocks = (fx: Fx, body: string) => {
-  mkdirSync(fx.state, { recursive: true, mode: 0o700 });
+  mkdirSync(fx.owner, { recursive: true, mode: 0o700 });
   writeFileSync(blocksFile(fx), body);
 };
 const A_BLOCK = (label = 'label-a') => ({
@@ -247,6 +255,7 @@ describe('detectBlock', () => {
     ['Your account has been disabled.', 'account_disabled'],
     ['This account has been suspended', 'account_disabled'],
     ['Your account was banned', 'account_disabled'],
+    ['Login expired · Please run /login', 'authentication_failed'],
   ];
 
   it('matches documented text in the trusted positions, with a fixed reason code', () => {
@@ -270,6 +279,16 @@ describe('detectBlock', () => {
         text,
       ).toEqual({ reason });
     }
+  });
+
+  it('an expired login quoted in tool output or unflagged text is no block', () => {
+    const text = 'Login expired · Please run /login';
+    const quoted = [
+      { type: 'user', message: { content: [{ type: 'tool_result', content: text }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text }] } },
+      { type: 'result', is_error: false, result: text },
+    ];
+    for (const ev of quoted) expect(detectBlock(JSON.stringify(ev))).toBeUndefined();
   });
 
   it('text is anchored and length-capped', () => {
@@ -315,7 +334,7 @@ describe('account block', () => {
       expect(item?.notes?.join(' ')).toContain('account block');
     }
     expect(lstatSync(clone).isDirectory()).toBe(true);
-    expect(existsSync(join(fx.state, 'limits.json'))).toBe(false);
+    expect(existsSync(join(fx.owner, 'limits.json'))).toBe(false);
 
     // Repeating changes nothing.
     const notes = itemOf(fx, 'APP-1')?.notes;
@@ -339,7 +358,7 @@ describe('account block', () => {
 
     const owner = { env: fx.env, homedir: fx.home };
     const hold = await limitHold(
-      fx.state,
+      fx.owner,
       { crewCredentialCommand: join(fx.ownerDir, 'absent') } as never,
       p.ports,
       owner,
@@ -403,7 +422,7 @@ describe('account block', () => {
       const p = makePorts();
       await twoCrews(fx, p);
       plant(fx);
-      expect(readBlocks(fx.state)).toEqual({ ok: false });
+      expect(readBlocks(fx.owner)).toEqual({ ok: false });
 
       // Stops running crews and refuses launches; nothing is overwritten.
       const r = await cli(fx, p.ports, ['status', '--json']);
@@ -421,7 +440,7 @@ describe('account block', () => {
     }
 
     // A missing file is no block.
-    expect(readBlocks(makeFx().state)).toEqual({ ok: true, blocks: [] });
+    expect(readBlocks(makeFx().owner)).toEqual({ ok: true, blocks: [] });
   }, 60_000);
 
   it('limit events still only park the label', async () => {
@@ -435,7 +454,7 @@ describe('account block', () => {
     });
     await cli(fx, p.ports, ['status']);
     expect(p.stopped).toEqual([5001]);
-    expect(readBlocks(fx.state)).toEqual({ ok: true, blocks: [] });
+    expect(readBlocks(fx.owner)).toEqual({ ok: true, blocks: [] });
     expect(existsSync(blocksFile(fx))).toBe(false);
     expect(recordOf(fx, 'APP-1').limit).toMatchObject({ kind: 'weekly' });
     expect(recordOf(fx, 'APP-1').block).toBeUndefined();
@@ -544,13 +563,13 @@ describe('identity check before a limit stop', () => {
       expect(itemOf(fx, id)?.status).toBe('assigned');
     }
     // The limit still counts for new launches on those labels.
-    const limits = JSON.parse(readFileSync(join(fx.state, 'limits.json'), 'utf8'));
+    const limits = JSON.parse(readFileSync(join(fx.owner, 'limits.json'), 'utf8'));
     expect(Object.keys(limits).sort()).toEqual(['label-a', 'label-b']);
 
     // A later reconcile of the same skipped crew keeps the first parkedUntil.
     const later = new Date('2026-11-01T10:30:00Z');
     await cli(fx, { ...p.ports, clock: { ...p.ports.clock, now: () => later } }, ['status']);
-    expect(JSON.parse(readFileSync(join(fx.state, 'limits.json'), 'utf8'))).toEqual(limits);
+    expect(JSON.parse(readFileSync(join(fx.owner, 'limits.json'), 'utf8'))).toEqual(limits);
   });
 });
 
@@ -1081,7 +1100,7 @@ describe('account block details', () => {
     const p = makePorts();
     await twoCrews(fx, p);
     writeFileSync(
-      join(fx.state, 'blocks.lock'),
+      join(fx.owner, 'blocks.lock'),
       JSON.stringify({
         pid: process.pid,
         startedAt: '2026-11-01T10:00:00Z',
@@ -1101,7 +1120,7 @@ describe('account block details', () => {
     const p = makePorts();
     await twoCrews(fx, p);
     log(fx, 'APP-1', ON_HOLD);
-    writeFileSync(join(fx.state, 'limits.json'), 'not json');
+    writeFileSync(join(fx.owner, 'limits.json'), 'not json');
     await cli(fx, p.ports, ['status']);
     expect(p.stopped.sort()).toEqual([5001, 5002]);
     expect(blocksOf(fx)).toHaveLength(1);
@@ -1129,7 +1148,7 @@ describe('account block details', () => {
     const fx = makeFx();
     await cli(fx, makePorts().ports, ['state']);
     const s = JSON.parse(readFileSync(join(fx.state, 'state.json'), 'utf8'));
-    expect(readBlocks(fx.state)).toEqual({ ok: true, blocks: [] });
+    expect(readBlocks(fx.owner)).toEqual({ ok: true, blocks: [] });
     expect(s.notifications).toBeUndefined();
     expect(s.forOwner).toEqual([]);
   });
@@ -1155,7 +1174,7 @@ describe('account block details', () => {
     ]) {
       expect(run(c), c).toBe('deny');
     }
-    expect(run('studio status')).toBe('allow');
+    expect(run('studio status')).toBe('deny');
     expect(run('echo accounts-clear')).toBe('allow');
   });
 });

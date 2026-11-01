@@ -1,6 +1,6 @@
 {
   "name": "studio",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Run a software studio of coding-agent sessions from one control room",
   "license": "MIT",
   "type": "module",
@@ -10,6 +10,7 @@
   "packageManager": "pnpm@12.7.0",
   "scripts": {
     "test": "vitest run",
+    "test:mod": "node scripts/test-mod.mjs",
     "lint": "biome check .",
     "typecheck": "tsc --noEmit",
     "bundle": "node scripts/bundle.mjs",

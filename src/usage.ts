@@ -1,9 +1,9 @@
 import { lstatSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { OwnerConfig, OwnerEnv } from './config.js';
 import { runCredentialProvider } from './credentials.js';
 import { activeParks, DEFAULT_LABEL, readLimits, validLabel } from './limits.js';
-import { writeStateFile } from './paths.js';
+import { ownerFileHeld, projectStateRoots, writeStateFile } from './paths.js';
 import type { Ports } from './ports.js';
 import { readCrewRecords } from './state.js';
 
@@ -46,11 +46,16 @@ export function dayKey(now: Date, timezone?: string): string {
 const isObject = (v: unknown): v is Record<string, unknown> =>
   v !== null && typeof v === 'object' && !Array.isArray(v);
 
-const usageFile = (stateRoot: string): string => join(stateRoot, 'usage.json');
+const usageFile = (ownerRoot: string): string => join(ownerRoot, 'usage.json');
 
 /** Strict. A missing file is empty; a link, a non-file or anything malformed is `{ ok: false }`. */
-export function readUsage(stateRoot: string): UsageRead {
-  const file = usageFile(stateRoot);
+export function readUsage(ownerRoot: string): UsageRead {
+  if (ownerFileHeld(ownerRoot, 'usage.json')) return { ok: false };
+  return readUsageFile(usageFile(ownerRoot));
+}
+
+/** One usage file by its path, strictly; the migration reads old project files with this. */
+export function readUsageFile(file: string): UsageRead {
   try {
     if (!lstatSync(file).isFile()) return { ok: false };
   } catch (e) {
@@ -79,12 +84,12 @@ export function readUsage(stateRoot: string): UsageRead {
 
 /** Counts one run of a label today and drops days older than the last eight. Throws when unreadable. */
 export function recordRun(
-  stateRoot: string,
+  ownerRoot: string,
   label: string,
   now: Date,
   timezone: string | undefined,
 ): void {
-  const read = readUsage(stateRoot);
+  const read = readUsage(ownerRoot);
   if (!read.ok) throw new Error(USAGE_UNREADABLE);
   const today = dayKey(now, timezone);
   const cutoff = dayKey(new Date(now.getTime() - (USAGE_DAYS_KEPT - 1) * 86_400_000), timezone);
@@ -95,7 +100,11 @@ export function recordRun(
   const todays: Record<string, number> = days[today] ?? Object.create(null);
   todays[label] = count(todays, label) + 1;
   days[today] = todays;
-  writeStateFile(stateRoot, usageFile(stateRoot), `${JSON.stringify(days, null, 2)}\n`);
+  writeUsage(ownerRoot, days);
+}
+
+export function writeUsage(ownerRoot: string, days: Usage): void {
+  writeStateFile(ownerRoot, usageFile(ownerRoot), `${JSON.stringify(days, null, 2)}\n`);
 }
 
 /** An own count of a label: a name such as `toString` must not reach an inherited value. */
@@ -103,20 +112,23 @@ const count = (map: Record<string, number>, label: string): number =>
   Object.hasOwn(map, label) ? (map[label] as number) : 0;
 
 /**
- * Crews running per label: every record without `stoppedAt` whose process is alive, whatever the
- * board says about its item (a merged or dropped item with a live crew still uses the credential).
- * A record with an invalid pid counts (fail closed); a record without a label counts for the
- * default label. An unreadable crew.json throws, as readCrewRecords does.
+ * Crews running per label over all projects of the owner: every record without `stoppedAt` whose
+ * process is alive, whatever the board says about its item (a merged or dropped item with a live
+ * crew still uses the credential). A record with an invalid pid counts (fail closed); a record
+ * without a label counts for the default label. An unreadable crew.json of any project throws, as
+ * readCrewRecords does: its crews could not be counted.
  */
-export function runningPerLabel(stateRoot: string, ports: Ports): Record<string, number> {
+export function runningPerLabel(ownerRoot: string, ports: Ports): Record<string, number> {
   const out: Record<string, number> = Object.create(null);
-  for (const rec of Object.values(readCrewRecords(stateRoot))) {
-    if (rec.stoppedAt !== undefined) continue;
-    const validPid = Number.isInteger(rec.pid) && rec.pid > 0;
-    if (validPid && !ports.claude.alive(rec.pid)) continue;
-    const label =
-      typeof rec.label === 'string' && validLabel(rec.label) ? rec.label : DEFAULT_LABEL;
-    out[label] = count(out, label) + 1;
+  for (const root of projectStateRoots(dirname(ownerRoot))) {
+    for (const rec of Object.values(readCrewRecords(root))) {
+      if (rec.stoppedAt !== undefined) continue;
+      const validPid = Number.isInteger(rec.pid) && rec.pid > 0;
+      if (validPid && !ports.claude.alive(rec.pid)) continue;
+      const label =
+        typeof rec.label === 'string' && validLabel(rec.label) ? rec.label : DEFAULT_LABEL;
+      out[label] = count(out, label) + 1;
+    }
   }
   return out;
 }
@@ -134,14 +146,14 @@ export interface LabelUsage {
 }
 
 export function labelUsage(o: {
-  stateRoot: string;
+  ownerRoot: string;
   ownerConfig: OwnerConfig;
   ports: Ports;
 }): LabelUsage {
   const { maxParallel, maxRunsPerDay, timezone } = o.ownerConfig.crewLabelLimits;
   const day = dayKey(o.ports.clock.now(), timezone);
-  const running = runningPerLabel(o.stateRoot, o.ports);
-  const read = readUsage(o.stateRoot);
+  const running = runningPerLabel(o.ownerRoot, o.ports);
+  const read = readUsage(o.ownerRoot);
   const runsToday: Record<string, number> = Object.assign(
     Object.create(null),
     read.ok ? read.days[day] : {},
@@ -172,14 +184,14 @@ export function labelUsage(o: {
  * never stored, logged or returned.
  */
 export async function credentialSlots(o: {
-  stateRoot: string;
+  ownerRoot: string;
   ownerConfig: OwnerConfig;
   ports: Ports;
   owner: OwnerEnv;
 }): Promise<{ slots: number; hold?: undefined } | { hold: string; slots?: undefined }> {
   const usage = labelUsage(o);
   if (!usage.ok) return { hold: USAGE_UNREADABLE };
-  const limits = readLimits(o.stateRoot);
+  const limits = readLimits(o.ownerRoot);
   if (!limits.ok) {
     return { hold: 'usage limit state is unreadable (limits.json): no crew starts until fixed' };
   }
@@ -217,7 +229,7 @@ export interface LabelUsageSnapshot {
 
 /** Running crews and runs today per label, for state.json; undefined when there is nothing to show. */
 export function labelUsageSnapshot(o: {
-  stateRoot: string;
+  ownerRoot: string;
   ownerConfig: OwnerConfig;
   ports: Ports;
 }): LabelUsageSnapshot | undefined {

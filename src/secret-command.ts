@@ -115,6 +115,7 @@ export function runDoctor(o: {
     ownerConfig: ownerConfig ? 'readable' : 'invalid',
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
+    notify: ownerConfig?.notify ? 'configured' : 'not configured',
     apiKeyVarsInEnvironment: API_KEY_VARS.filter((k) => o.env[k]),
   };
   if (o.json) o.stdout(`${JSON.stringify(report, null, 2)}\n`);
@@ -126,6 +127,7 @@ export function runDoctor(o: {
       `studio.yaml: ${report.studioYaml}`,
       `owner config: ${report.ownerConfig}`,
       `credential provider: ${provider === null ? 'not configured' : `configured ${provider}`}`,
+      `notify: ${report.notify}`,
       `allow_api_billing: ${report.allowApiBilling ? 'on' : 'off'}`,
       `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(', ') || 'none'}`,
     ];

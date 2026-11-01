@@ -979,7 +979,14 @@ var DENIED_WRAPPERS = /* @__PURE__ */ new Set([
   ".",
   "mapfile",
   "readarray",
-  "getopts"
+  "getopts",
+  "trap",
+  "alias",
+  "hash",
+  "let",
+  "script",
+  "flock",
+  "watch"
 ]);
 var VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 var LOOSE_ASSIGNMENT = /^([^=\s/]+)=/;
@@ -991,7 +998,7 @@ function assignmentName(w) {
     deny(`assignment to "${name}" is not allowed (plain variable names only)`);
   return name;
 }
-var SENSITIVE_VAR = /^(GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/;
+var SENSITIVE_VAR = /^(STUDIO_|NODE_OPTIONS$|NODE_PATH$|NPM_CONFIG_|PNPM_|YARN_|COREPACK_|GIT_|GH_|GITHUB_|LD_|DYLD_|CDPATH$|PATH$|HOME$|BASH_ENV$|ENV$|SHELLOPTS$|BASHOPTS$|PROMPT_COMMAND$|IFS$)/i;
 var unresolved = (w) => w.includes(SUBST) || w.includes("$") || w.includes("`");
 var unresolvedWord = (w) => unresolved(w) || /[*?[]/.test(w) && w !== "[" && w !== "[[";
 function checkVarName(name) {
@@ -1434,6 +1441,52 @@ function checkVarBuiltin(name, args) {
     checkVarName(vn);
   }
 }
+var CREW_NO_STUDIO = "a crew may not run studio";
+var NODE_NAME = /^node(js)?[0-9.]*$/i;
+var isStudioBinary = (w) => /^studio(\.(mjs|cjs|js))?$/i.test(basename(w));
+function checkNode(args) {
+  const first = args[0] ?? "-";
+  if (args.length === 1 && (first === "--version" || first === "--help")) return;
+  if (first.startsWith("-") || first.startsWith("~")) {
+    deny("node without a literal relative script path is not allowed");
+  }
+  if (unresolvedWord(first) || isAbsolute(first) || first.split("/").includes("..")) {
+    deny("node with a script path that is not literal and relative is not allowed");
+  }
+  if (isStudioBinary(first)) deny(CREW_NO_STUDIO);
+}
+var PACKAGE_COMMANDS = /* @__PURE__ */ new Set([
+  "test",
+  "run",
+  "install",
+  "i",
+  "ci",
+  "lint",
+  "build",
+  "typecheck",
+  "format",
+  "add",
+  "remove",
+  "list",
+  "ls",
+  "audit",
+  "outdated",
+  "why",
+  "--version",
+  "-v",
+  "--help"
+]);
+function checkPackageRunner(name, args) {
+  if (name === "npx" || name === "pnpx" || name === "bunx" || name === "corepack") {
+    deny(`${name} is a package runner and is not allowed`);
+  }
+  if (name !== "npm" && name !== "pnpm" && name !== "yarn" && name !== "bun") return;
+  const first = args[0];
+  if (first === void 0 || unresolvedWord(first) || !PACKAGE_COMMANDS.has(first)) {
+    deny(`${name} is only allowed with a known command as its first argument`);
+  }
+  if (args.some((a) => a.startsWith("--shell"))) deny(`${name} --shell-mode is not allowed`);
+}
 function checkWords(env, words, state) {
   if (words.length === 0) return;
   const base = state.cwd ?? env.wt;
@@ -1474,10 +1527,13 @@ function checkWords(env, words, state) {
     if (positionals(args).length === 0 || args.includes("-")) {
       deny(`${name} reading its script from stdin is not allowed`);
     }
+    if (positionals(args).some(isStudioBinary)) deny(CREW_NO_STUDIO);
   }
-  if ((name === "studio" || name === "node") && args.includes("accounts-clear")) {
-    deny("studio accounts-clear is owner-only");
-  }
+  if (isStudioBinary(name)) deny(CREW_NO_STUDIO);
+  if (NODE_NAME.test(name)) checkNode(args);
+  checkPackageRunner(name, args);
+  if (name === "for" || name === "select") checkVarName(args[0] ?? "");
+  checkVarName(/^[A-Za-z_][A-Za-z0-9_]*/.exec(name)?.[0] ?? "");
   if (name === "find") checkFind(env, args, state);
   if (name === "git" || name === "gh") {
     if (words.some((w) => w.includes(SUBST))) deny(`command substitution in a ${name} command`);
@@ -1488,6 +1544,9 @@ function checkWords(env, words, state) {
 }
 function checkBash(env, cmd, cwd, depth) {
   if (depth > 8) deny("command nesting too deep");
+  if (/\(\(|\$\[|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?:?=/.test(cmd)) {
+    deny("arithmetic and parameter-expansion assignment are not allowed");
+  }
   const { lines, subs } = scan(cmd);
   for (const sub of subs) checkBash(env, sub, cwd, depth + 1);
   const state = { cwd };

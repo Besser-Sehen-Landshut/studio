@@ -7841,10 +7841,11 @@ var require_shell_quote = __commonJS({
 });
 
 // src/main.ts
-import { homedir as homedir5 } from "node:os";
+import { homedir as homedir6 } from "node:os";
 
 // src/cli.ts
-import { join as join12, resolve as resolve4 } from "node:path";
+import { existsSync as existsSync5 } from "node:fs";
+import { dirname as dirname8, join as join15, resolve as resolve5 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/board.ts
@@ -12919,7 +12920,7 @@ var recursive = /* @__PURE__ */ new WeakMap();
 var NONE = 0;
 var ASSUMED = 1;
 var PROVEN = 2;
-function isRecursive(inst, stack, resolve5) {
+function isRecursive(inst, stack, resolve6) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -12929,7 +12930,7 @@ function isRecursive(inst, stack, resolve5) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve5);
+      const answer = isRecursive(child, stack, resolve6);
       if (answer > result)
         result = answer;
     }
@@ -12940,7 +12941,7 @@ function isRecursive(inst, stack, resolve5) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve5) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve6) : NONE;
       if (child > answer)
         answer = child;
     }
@@ -13004,7 +13005,7 @@ function isRecursive(inst, stack, resolve5) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve5 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve6 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -27964,7 +27965,13 @@ var ownerConfigSchema = external_exports.strictObject({
   // Opt-in: let crew runs bill the API. An API key would otherwise take precedence over the
   // subscription login, so the variables and settings for it are refused by default.
   allowApiBilling: external_exports.boolean().default(false),
-  crewLabelLimits: crewLabelLimitsSchema
+  crewLabelLimits: crewLabelLimitsSchema,
+  // Push notifications: an absolute executable that gets each message in its environment (see
+  // README). It lives here, not in studio.yaml, because it runs on the owner's machine.
+  notify: external_exports.strictObject({
+    channel: external_exports.string().regex(/^[A-Za-z0-9._-]{1,64}$/, "must match [A-Za-z0-9._-]{1,64}"),
+    command: external_exports.string().min(1)
+  }).optional()
 });
 function xdgDir(env, name) {
   const v = env[name];
@@ -28005,6 +28012,10 @@ function loadOwnerConfig(opts = {}) {
   if (command !== void 0 && !isAbsolute(command)) {
     problems.push("crew_credential_command: must be an absolute path");
   }
+  const notifyCommand = result.data.notify?.command;
+  if (notifyCommand !== void 0 && !isAbsolute(notifyCommand)) {
+    problems.push("notify.command: must be an absolute path");
+  }
   if (problems.length > 0) throw new ConfigError(file2, problems.join("; "));
   return result.data;
 }
@@ -28024,6 +28035,11 @@ function configWarnings(config2) {
       `crew_allowed_workflow_refs (${config2.crewAllowedWorkflowRefs.join(", ")}) must be protected server-side (branch protection or rulesets): the crew guard cannot stop a push to those refs from another path`
     );
   }
+  if (config2.notify !== void 0) {
+    warnings.push(
+      "notify in studio.yaml has no effect: the notify command is set in the owner config ($XDG_CONFIG_HOME/studio/config.yaml or ~/.config/studio/config.yaml)"
+    );
+  }
   return warnings;
 }
 
@@ -28038,11 +28054,11 @@ function withTimeout(work, ms) {
 }
 var RUNNER_JQ = ".runners[] | [.name, .status, .busy] | @tsv";
 var RUNNER_LINE = /^(\S+)\t(\S+)\t(true|false)$/;
-async function selfHostedBusy(config2, gh) {
+async function selfHostedBusy(config2, gh, timeoutMs) {
   const org = config2.primaryRepo.split("/")[0];
   const pattern = config2.ci.runnerNamePattern;
   const re = pattern === void 0 ? void 0 : new RegExp(pattern);
-  const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ);
+  const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ, { timeoutMs });
   let busy = 0;
   let matching = 0;
   for (const line of out.split("\n")) {
@@ -28061,19 +28077,19 @@ async function selfHostedBusy(config2, gh) {
   }
   return busy;
 }
-async function runCount(config2, gh, status) {
+async function runCount(config2, gh, status, timeoutMs) {
   const out = await gh.api(
     `/repos/${config2.primaryRepo}/actions/runs?status=${status}&per_page=1`,
     ".total_count",
-    { paginate: false }
+    { paginate: false, timeoutMs }
   );
   const first = out.split("\n")[0]?.trim() ?? "";
   if (!/^\d+$/.test(first)) throw new Error(`unparsable run count: ${first}`);
   return Number(first);
 }
-async function githubHostedBusy(config2, gh) {
-  const running = await runCount(config2, gh, "in_progress");
-  const queued = await runCount(config2, gh, "queued");
+async function githubHostedBusy(config2, gh, timeoutMs) {
+  const running = await runCount(config2, gh, "in_progress", timeoutMs);
+  const queued = await runCount(config2, gh, "queued", timeoutMs);
   return running + queued;
 }
 async function readCapacity(config2, ports, options = {}) {
@@ -28081,18 +28097,19 @@ async function readCapacity(config2, ports, options = {}) {
   const { sharedHost, githubHostedLimit } = config2.ci;
   const hostLoad = ports.host.loadAvg1();
   const mode = config2.ci.runners;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let selfBusy = 0;
   let hostedBusy = 0;
   try {
     const read2 = async () => {
       if (mode === "self-hosted" || mode === "both") {
-        selfBusy = await selfHostedBusy(config2, ports.gh);
+        selfBusy = await selfHostedBusy(config2, ports.gh, timeoutMs);
       }
       if (mode === "github-hosted" || mode === "both") {
-        hostedBusy = await githubHostedBusy(config2, ports.gh);
+        hostedBusy = await githubHostedBusy(config2, ports.gh, timeoutMs);
       }
     };
-    await withTimeout(read2(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    await withTimeout(read2(), timeoutMs);
   } catch (err) {
     const error62 = (err instanceof Error ? err.message : String(err)).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
     return { ciBusy: total, ciTotal: total, hostLoad, ok: false, error: error62 };
@@ -28137,11 +28154,11 @@ import {
   writeFileSync as writeFileSync4
 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { dirname as dirname3, isAbsolute as isAbsolute3, sep as sep3 } from "node:path";
+import { dirname as dirname4, isAbsolute as isAbsolute4, sep as sep3 } from "node:path";
 
 // src/limits.ts
 import { closeSync as closeSync2, fstatSync, lstatSync as lstatSync3, openSync as openSync2, readFileSync as readFileSync5, readSync } from "node:fs";
-import { join as join5 } from "node:path";
+import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute3, join as join5, resolve as resolve3 } from "node:path";
 
 // src/paths.ts
 import { createHash, randomBytes } from "node:crypto";
@@ -28179,12 +28196,45 @@ var STATE_FILES = [
   "blocks.json",
   "blocks.lock",
   "usage.json",
-  "launch.lock"
+  "launch.lock",
+  "pause.json"
 ];
 function stateBaseFor(opts = {}) {
   const env = opts.env ?? process.env;
   const base = xdgDir(env, "XDG_STATE_HOME") ?? join3(opts.homedir ?? homedir2(), ".local", "state");
   return join3(base, "studio");
+}
+var OWNER_DIR = "owner";
+function ownerStateRootFor(opts = {}) {
+  return join3(stateBaseFor(opts), OWNER_DIR);
+}
+var PROJECT_ROOT_NAME = /^[0-9a-f]{16}(-.*)?$/;
+function projectStateRoots(base) {
+  let entries2;
+  try {
+    entries2 = readdirSync(base, { withFileTypes: true });
+  } catch (e) {
+    if (e.code === "ENOENT") return [];
+    throw e;
+  }
+  return entries2.filter((e) => e.isDirectory() && PROJECT_ROOT_NAME.test(e.name)).map((e) => join3(base, e.name));
+}
+var LEGACY_MARK = ".legacy-";
+function legacyEntries(ownerRoot) {
+  try {
+    return readdirSync(ownerRoot).filter((e) => e.includes(LEGACY_MARK));
+  } catch (e) {
+    if (e.code === "ENOENT") return [];
+    throw e;
+  }
+}
+function ownerFileHeld(ownerRoot, name) {
+  try {
+    if (!lstatSync(ownerRoot).isDirectory()) return true;
+    return legacyEntries(ownerRoot).some((e) => e.startsWith(`${name}${LEGACY_MARK}`));
+  } catch (e) {
+    return e.code !== "ENOENT";
+  }
 }
 function projectRealpath(projectDir) {
   try {
@@ -28677,9 +28727,12 @@ function parkUntil(resetsAt, now) {
   if (Number.isNaN(t) || t <= now.getTime() || t > now.getTime() + MAX_PARK_MS) return fallback;
   return new Date(t);
 }
-var limitsFile = (stateRoot) => join5(stateRoot, "limits.json");
-function readLimits(stateRoot) {
-  const file2 = limitsFile(stateRoot);
+var limitsFile = (ownerRoot) => join5(ownerRoot, "limits.json");
+function readLimits(ownerRoot) {
+  if (ownerFileHeld(ownerRoot, "limits.json")) return { ok: false };
+  return readLimitsFile(limitsFile(ownerRoot));
+}
+function readLimitsFile(file2) {
   try {
     if (!lstatSync3(file2).isFile()) return { ok: false };
   } catch (e) {
@@ -28710,8 +28763,8 @@ function readLimits(stateRoot) {
   }
   return { ok: true, labels };
 }
-function writeLimits(stateRoot, labels) {
-  writeStateFile(stateRoot, limitsFile(stateRoot), `${JSON.stringify(labels, null, 2)}
+function writeLimits(ownerRoot, labels) {
+  writeStateFile(ownerRoot, limitsFile(ownerRoot), `${JSON.stringify(labels, null, 2)}
 `);
 }
 function activeParks(labels, now) {
@@ -28823,25 +28876,30 @@ function backToReady(project, id, note, now, by) {
   });
 }
 async function reconcileLimits(o2) {
-  const { project, stateRoot, ports } = o2;
+  const { project, stateRoot, ownerRoot, ports } = o2;
   const result = { stopped: [], errors: [] };
   const crewFile = join5(stateRoot, "crew.json");
-  if (!exists(crewFile) && !exists(limitsFile(stateRoot))) return result;
+  if (!exists(crewFile) && !exists(limitsFile(ownerRoot))) return result;
   const now = ports.clock.now();
-  const limits = readLimits(stateRoot);
-  if (!limits.ok) {
-    result.errors.push(
-      `${limitsFile(stateRoot)} is unreadable: all crew credentials count as parked until it is fixed or removed`
-    );
+  const unreadable = () => result.errors.push(
+    `${limitsFile(ownerRoot)} is unreadable: all crew credentials count as parked until it is fixed or removed`
+  );
+  if (!readLimits(ownerRoot).ok) {
+    unreadable();
     return result;
   }
-  const lock = acquireStateLock(stateRoot, "limits.lock", { now, heartbeatStaleMs: LOCK_STALE_MS });
+  const lock = acquireStateLock(ownerRoot, "limits.lock", { now, heartbeatStaleMs: LOCK_STALE_MS });
   if (!lock) return result;
   try {
+    const limits = readLimits(ownerRoot);
+    if (!limits.ok) {
+      unreadable();
+      return result;
+    }
     let labels = limits.labels;
     const kept = activeParks(labels, now);
     if (Object.keys(kept).length !== Object.keys(labels).length) {
-      writeLimits(stateRoot, kept);
+      writeLimits(ownerRoot, kept);
       labels = kept;
     }
     const records = readCrewRecords(stateRoot);
@@ -28871,7 +28929,7 @@ async function reconcileLimits(o2) {
       const earlier = labels[label]?.parkedUntil;
       const parkedUntil = earlier && (process14 === "unknown" || Date.parse(earlier) > Date.parse(until)) ? earlier : until;
       labels = { ...labels, [label]: { parkedUntil, kind: hit.kind } };
-      writeLimits(stateRoot, labels);
+      writeLimits(ownerRoot, labels);
       if (process14 === "unknown") {
         result.errors.push(
           `crew ${id} (pid ${rec.pid}) hit a usage limit but its identity cannot be verified; not stopping it, check it by hand`
@@ -28915,6 +28973,7 @@ var MAX_BLOCK_TEXT = 500;
 var API_ERROR_PREFIX = /^API Error: \d{3} /;
 var BLOCK_TEXTS = [
   [/^Failed to authenticate\b/, "authentication_failed"],
+  [/^Login expired · Please run \/login\b/, "authentication_failed"],
   [/^OAuth token (?:revoked|has expired)\b/, "authentication_failed"],
   [/^Your account does not have access to Claude\b/, "authentication_failed"],
   [/^Your account is on hold and can['’]t\b/, "account_on_hold"],
@@ -28994,7 +29053,7 @@ function scanLogForBlock(stateRoot, id, from) {
   }
   return retry;
 }
-var blocksFile = (stateRoot) => join5(stateRoot, "blocks.json");
+var blocksFile = (ownerRoot) => join5(ownerRoot, "blocks.json");
 var BLOCK_REASON = /^[a-z_]{1,64}$/;
 function parseBlock(raw) {
   if (!isObject2(raw) || Object.keys(raw).length !== 3) return void 0;
@@ -29004,8 +29063,11 @@ function parseBlock(raw) {
   if (typeof at !== "string" || Number.isNaN(Date.parse(at))) return void 0;
   return { label, reason, at };
 }
-function readBlocks(stateRoot) {
-  const file2 = blocksFile(stateRoot);
+function readBlocks(ownerRoot) {
+  if (ownerFileHeld(ownerRoot, "blocks.json")) return { ok: false };
+  return readBlocksFile(blocksFile(ownerRoot));
+}
+function readBlocksFile(file2) {
   try {
     if (!lstatSync3(file2).isFile()) return { ok: false };
   } catch (e) {
@@ -29026,8 +29088,8 @@ function readBlocks(stateRoot) {
   }
   return { ok: true, blocks };
 }
-function writeBlocks(stateRoot, blocks) {
-  writeStateFile(stateRoot, blocksFile(stateRoot), `${JSON.stringify(blocks, null, 2)}
+function writeBlocks(ownerRoot, blocks) {
+  writeStateFile(ownerRoot, blocksFile(ownerRoot), `${JSON.stringify(blocks, null, 2)}
 `);
 }
 function blockLine(read2) {
@@ -29038,7 +29100,7 @@ function blockLine(read2) {
   const labels = [...new Set(read2.blocks.map((b) => b.label))].join(", ");
   return `account block on ${labels}: all crew stopped, no crew starts until the owner runs studio accounts-clear <label>`;
 }
-var blockHold = (stateRoot) => blockLine(readBlocks(stateRoot));
+var blockHold = (ownerRoot) => blockLine(readBlocks(ownerRoot));
 function moveBlockedToReady(project, stateRoot, now, result) {
   try {
     for (const [id, rec] of Object.entries(readCrewRecords(stateRoot))) {
@@ -29070,20 +29132,121 @@ async function crewProcess(rec, ports) {
   if (current === void 0) return "unknown";
   return current === rec.identity ? "verified" : "gone";
 }
+function boardOfRoot(root) {
+  try {
+    const file2 = join5(root, "marker.json");
+    if (!lstatSync3(file2).isFile()) return void 0;
+    const marker = JSON.parse(readFileSync5(file2, "utf8"));
+    const project = isObject2(marker) ? marker.projectRealpath : void 0;
+    if (typeof project !== "string" || !isAbsolute3(project)) return void 0;
+    if (stateDirName(project) !== basename2(root)) return void 0;
+    return loadBoard(project);
+  } catch {
+    return void 0;
+  }
+}
+async function stopCrewsOf(o2) {
+  const { root, board, other, ownerRoot, ports, lock, at, result } = o2;
+  const crewFile = join5(root, "crew.json");
+  const where = other ? ` in ${root}` : "";
+  const statusOf = (id) => board?.items.find((i2) => i2.id === id)?.status;
+  const records = Object.fromEntries(
+    Object.entries(readCrewRecords(root)).filter(([id]) => {
+      const status = statusOf(id);
+      return status === void 0 || !FINISHED.has(status);
+    })
+  );
+  const hits = /* @__PURE__ */ new Map();
+  for (const [id, rec] of Object.entries(records)) {
+    if (rec.stoppedAt !== void 0) continue;
+    const status = statusOf(id);
+    const process14 = await crewProcess(rec, ports);
+    const exitedActive = (process14 === "dead" || process14 === "gone") && (board === void 0 || status !== void 0 && ACTIVE.has(status));
+    const unproven = process14 === "invalid" || process14 === "unknown";
+    if (process14 !== "verified" && !exitedActive && !unproven) continue;
+    const hit = scanLogForBlock(root, id, rec.logStart ?? 0);
+    if (!hit) continue;
+    hits.set(id, hit);
+  }
+  const read2 = readBlocks(ownerRoot);
+  if (read2.ok) {
+    const known = [...read2.blocks];
+    for (const [id, hit] of hits) {
+      const raw = records[id]?.label ?? DEFAULT_LABEL;
+      const label = validLabel(raw) ? raw : DEFAULT_LABEL;
+      if (!known.some((b) => b.label === label && b.reason === hit.reason)) {
+        known.push({ label, reason: hit.reason, at });
+      }
+    }
+    if (known.length !== read2.blocks.length) writeBlocks(ownerRoot, known);
+    read2.blocks = known;
+  } else {
+    const line = `${blocksFile(ownerRoot)} is unreadable: all crew stopped and no crew starts until the owner inspects or removes the file`;
+    if (!result.errors.includes(line)) result.errors.push(line);
+  }
+  const firstReason = read2.ok ? read2.blocks[0]?.reason : "state_unreadable";
+  if (firstReason !== void 0) {
+    for (const [id, rec] of Object.entries(records)) {
+      if (rec.stoppedAt !== void 0) continue;
+      const hit = hits.get(id);
+      const process14 = await crewProcess(rec, ports);
+      if (process14 === "invalid") {
+        result.errors.push(`crew record for ${id}${where} has no valid pid; not stopping it`);
+        continue;
+      }
+      if (process14 === "unknown") {
+        result.errors.push(
+          `crew ${id}${where} (pid ${rec.pid}) is alive but its identity cannot be verified; not stopping it, check it by hand`
+        );
+        continue;
+      }
+      if (hit === void 0 && process14 === "dead") continue;
+      if (hit === void 0 && process14 === "gone") {
+        const latest2 = readCrewRecords(root);
+        latest2[id] = { ...latest2[id] ?? rec, stoppedAt: at, processGone: at };
+        writeStateFile(root, crewFile, `${JSON.stringify(latest2, null, 2)}
+`);
+        continue;
+      }
+      if (process14 === "verified") {
+        try {
+          await ports.claude.stop(rec.pid);
+        } catch {
+          result.errors.push(`could not stop crew ${id}${where} (pid ${rec.pid})`);
+          continue;
+        }
+        lock.heartbeat(ports.clock.now());
+        result.stopped.push({
+          item: id,
+          label: rec.label ?? DEFAULT_LABEL,
+          reason: hit?.reason ?? firstReason,
+          ...other ? { root } : {}
+        });
+      }
+      if (!read2.ok && hit !== void 0) continue;
+      const latest = readCrewRecords(root);
+      latest[id] = {
+        ...latest[id] ?? rec,
+        stoppedAt: at,
+        block: { at, reason: hit?.reason ?? firstReason }
+      };
+      writeStateFile(root, crewFile, `${JSON.stringify(latest, null, 2)}
+`);
+    }
+  }
+}
 async function reconcileBlocks(o2) {
-  const { project, stateRoot, ports } = o2;
+  const { project, stateRoot, ownerRoot, ports } = o2;
   const result = { stopped: [], errors: [], lockFailed: false };
-  const crewFile = join5(stateRoot, "crew.json");
-  const first = readBlocks(stateRoot);
-  if (first.ok && first.blocks.length === 0 && !exists(crewFile)) return result;
+  const first = readBlocks(ownerRoot);
+  if (first.ok && first.blocks.length === 0 && !exists(join5(stateRoot, "crew.json"))) return result;
   const now = ports.clock.now();
-  const lock = acquireStateLock(stateRoot, "blocks.lock", { now, heartbeatStaleMs: LOCK_STALE_MS });
+  const lock = acquireStateLock(ownerRoot, "blocks.lock", { now, heartbeatStaleMs: LOCK_STALE_MS });
   if (!lock) {
     result.lockFailed = true;
     return result;
   }
   try {
-    const at = now.toISOString();
     let board;
     try {
       board = loadBoard(project);
@@ -29092,123 +29255,63 @@ async function reconcileBlocks(o2) {
         `board is unreadable, so every crew record is in scope: ${e.message}`
       );
     }
-    const statusOf = (id) => board?.items.find((i2) => i2.id === id)?.status;
-    const records = Object.fromEntries(
-      Object.entries(readCrewRecords(stateRoot)).filter(([id]) => {
-        const status = statusOf(id);
-        return status === void 0 || !FINISHED.has(status);
-      })
-    );
-    const hits = /* @__PURE__ */ new Map();
-    for (const [id, rec] of Object.entries(records)) {
-      if (rec.stoppedAt !== void 0) continue;
-      const status = statusOf(id);
-      const process14 = await crewProcess(rec, ports);
-      const exitedActive = (process14 === "dead" || process14 === "gone") && (board === void 0 || status !== void 0 && ACTIVE.has(status));
-      const unproven = process14 === "invalid" || process14 === "unknown";
-      if (process14 !== "verified" && !exitedActive && !unproven) continue;
-      const hit = scanLogForBlock(stateRoot, id, rec.logStart ?? 0);
-      if (!hit) continue;
-      hits.set(id, hit);
+    const phase = { ownerRoot, ports, lock, at: now.toISOString(), result };
+    let ownFailure;
+    try {
+      await stopCrewsOf({ ...phase, root: stateRoot, board, other: false });
+    } catch (error62) {
+      ownFailure = { error: error62 };
     }
-    const read2 = readBlocks(stateRoot);
-    if (read2.ok) {
-      const known = [...read2.blocks];
-      for (const [id, hit] of hits) {
-        const raw = records[id]?.label ?? DEFAULT_LABEL;
-        const label = validLabel(raw) ? raw : DEFAULT_LABEL;
-        if (!known.some((b) => b.label === label && b.reason === hit.reason)) {
-          known.push({ label, reason: hit.reason, at });
+    const after = readBlocks(ownerRoot);
+    if (!after.ok || after.blocks.length > 0) {
+      for (const root of projectStateRoots(dirname3(ownerRoot))) {
+        if (resolve3(root) === resolve3(stateRoot) || !exists(join5(root, "crew.json"))) continue;
+        try {
+          await stopCrewsOf({ ...phase, root, board: boardOfRoot(root), other: true });
+        } catch (e) {
+          result.errors.push(`crews in ${root} were not checked: ${e.message}`);
         }
-      }
-      if (known.length !== read2.blocks.length) writeBlocks(stateRoot, known);
-      read2.blocks = known;
-    } else {
-      result.errors.push(
-        `${blocksFile(stateRoot)} is unreadable: all crew stopped and no crew starts until the owner inspects or removes the file`
-      );
-    }
-    const firstReason = read2.ok ? read2.blocks[0]?.reason : "state_unreadable";
-    if (firstReason !== void 0) {
-      for (const [id, rec] of Object.entries(records)) {
-        if (rec.stoppedAt !== void 0) continue;
-        const hit = hits.get(id);
-        const process14 = await crewProcess(rec, ports);
-        if (process14 === "invalid") {
-          result.errors.push(`crew record for ${id} has no valid pid; not stopping it`);
-          continue;
-        }
-        if (process14 === "unknown") {
-          result.errors.push(
-            `crew ${id} (pid ${rec.pid}) is alive but its identity cannot be verified; not stopping it, check it by hand`
-          );
-          continue;
-        }
-        if (hit === void 0 && process14 === "dead") continue;
-        if (hit === void 0 && process14 === "gone") {
-          const latest2 = readCrewRecords(stateRoot);
-          latest2[id] = { ...latest2[id] ?? rec, stoppedAt: at, processGone: at };
-          writeStateFile(stateRoot, crewFile, `${JSON.stringify(latest2, null, 2)}
-`);
-          continue;
-        }
-        if (process14 === "verified") {
-          try {
-            await ports.claude.stop(rec.pid);
-          } catch {
-            result.errors.push(`could not stop crew ${id} (pid ${rec.pid})`);
-            continue;
-          }
-          lock.heartbeat(ports.clock.now());
-          result.stopped.push({
-            item: id,
-            label: rec.label ?? DEFAULT_LABEL,
-            reason: hit?.reason ?? firstReason
-          });
-        }
-        if (!read2.ok && hit !== void 0) continue;
-        const latest = readCrewRecords(stateRoot);
-        latest[id] = {
-          ...latest[id] ?? rec,
-          stoppedAt: at,
-          block: { at, reason: hit?.reason ?? firstReason }
-        };
-        writeStateFile(stateRoot, crewFile, `${JSON.stringify(latest, null, 2)}
-`);
+        lock.heartbeat(ports.clock.now());
       }
     }
+    if (ownFailure) throw ownFailure.error;
     if (board !== void 0) moveBlockedToReady(project, stateRoot, now, result);
   } finally {
     lock.release();
   }
   return result;
 }
-function clearBlocks(stateRoot, label, now) {
-  const unreadable = `${blocksFile(stateRoot)} is unreadable; nothing cleared: inspect or remove the file`;
-  if (!readBlocks(stateRoot).ok) throw new Error(unreadable);
-  const lock = acquireStateLock(stateRoot, "blocks.lock", { now, heartbeatStaleMs: LOCK_STALE_MS });
+function clearBlocks(ownerRoot, label, now) {
+  const unreadable = `${blocksFile(ownerRoot)} is unreadable; nothing cleared: inspect or remove the file`;
+  if (!readBlocks(ownerRoot).ok) throw new Error(unreadable);
+  const lock = acquireStateLock(ownerRoot, "blocks.lock", { now, heartbeatStaleMs: LOCK_STALE_MS });
   if (!lock) throw new Error("another Studio process is reconciling; nothing cleared, try again");
   try {
-    const read2 = readBlocks(stateRoot);
+    const read2 = readBlocks(ownerRoot);
     if (!read2.ok) throw new Error(unreadable);
     const kept = read2.blocks.filter((b) => b.label !== label);
     const removed = read2.blocks.length - kept.length;
-    const records = readCrewRecords(stateRoot);
-    let moved = false;
-    for (const [id, rec] of Object.entries(records)) {
-      if ((rec.label ?? DEFAULT_LABEL) !== label) continue;
-      const end = logEnd(stateRoot, id);
-      if (end !== void 0 && end !== rec.logStart) {
-        records[id] = { ...rec, logStart: end };
-        moved = true;
+    const roots = projectStateRoots(dirname3(ownerRoot)).map((root) => ({
+      root,
+      records: readCrewRecords(root)
+    }));
+    for (const { root, records } of roots) {
+      let moved = false;
+      for (const [id, rec] of Object.entries(records)) {
+        if ((rec.label ?? DEFAULT_LABEL) !== label) continue;
+        const end = logEnd(root, id);
+        if (end !== void 0 && end !== rec.logStart) {
+          records[id] = { ...rec, logStart: end };
+          moved = true;
+        }
+      }
+      if (moved) {
+        const crewFile = join5(root, "crew.json");
+        writeStateFile(root, crewFile, `${JSON.stringify(records, null, 2)}
+`);
       }
     }
-    if (moved) {
-      const crewFile = join5(stateRoot, "crew.json");
-      writeStateFile(stateRoot, crewFile, `${JSON.stringify(records, null, 2)}
-`);
-    }
-    if (removed > 0) writeBlocks(stateRoot, kept);
+    if (removed > 0) writeBlocks(ownerRoot, kept);
     return { removed, remaining: kept.length };
   } finally {
     lock.release();
@@ -29262,7 +29365,7 @@ function checkCredentialCommand(path10, owner) {
   const refuse = (why) => {
     throw new Error(`crew_credential_command ${path10} ${why}`);
   };
-  if (!isAbsolute3(path10)) refuse("must be an absolute path");
+  if (!isAbsolute4(path10)) refuse("must be an absolute path");
   let st;
   try {
     st = lstatSync4(path10);
@@ -29275,7 +29378,7 @@ function checkCredentialCommand(path10, owner) {
   if ((st.mode & 64) === 0) refuse("must be executable");
 }
 function checkProviderConfigDir(dir, owner) {
-  if (!isAbsolute3(dir)) return fail("config dir must be an absolute path");
+  if (!isAbsolute4(dir)) return fail("config dir must be an absolute path");
   let real = "";
   let ownerReal = "";
   let st;
@@ -29352,8 +29455,8 @@ function readCrewTokenFile(owner) {
 }
 function installCrewToken(token, owner) {
   const file2 = crewTokenFile(owner);
-  const parent = dirname3(file2);
-  mkdirSync2(dirname3(parent), { recursive: true, mode: 448 });
+  const parent = dirname4(file2);
+  mkdirSync2(dirname4(parent), { recursive: true, mode: 448 });
   try {
     if (lstatSync4(parent).isSymbolicLink()) {
       throw new Error(`refusing to use ${parent}: it is a symlink`);
@@ -29399,10 +29502,10 @@ async function runCredentialProvider(command, ctx, ports, owner) {
   return parseProviderOutput(reply.stdout);
 }
 var allParkedLine = (reset2) => `usage limit: no crew credential available; earliest reset ${reset2 ?? "unknown"}`;
-async function limitHold(stateRoot, ownerConfig, ports, owner) {
-  const blocked = blockHold(stateRoot);
+async function limitHold(ownerRoot, ownerConfig, ports, owner) {
+  const blocked = blockHold(ownerRoot);
   if (blocked !== void 0) return blocked;
-  const read2 = readLimits(stateRoot);
+  const read2 = readLimits(ownerRoot);
   if (!read2.ok)
     return "usage limit state is unreadable (limits.json): no crew starts until it is fixed";
   const parks = activeParks(read2.labels, ports.clock.now());
@@ -29435,15 +29538,15 @@ async function parksHold(parks, ownerConfig, ports, owner) {
 import {
   chmodSync as chmodSync3,
   existsSync as existsSync3,
-  lstatSync as lstatSync6,
+  lstatSync as lstatSync8,
   readdirSync as readdirSync2,
-  readFileSync as readFileSync8,
+  readFileSync as readFileSync9,
   realpathSync as realpathSync3,
   unlinkSync as unlinkSync3,
   writeFileSync as writeFileSync5
 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import { basename as basename2, dirname as dirname4, join as join7, resolve as resolve3, sep as sep4 } from "node:path";
+import { basename as basename4, dirname as dirname7, join as join9, resolve as resolve4, sep as sep4 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/guard.ts
@@ -29462,9 +29565,13 @@ var DEFAULT_SECRET_GLOBS = [
 var GH_VALUE_FLAGS = ["-R", "--repo", "--hostname"];
 var GH_RUN_VALUE_FLAGS = ["--ref", "-r", "-f", "--raw-field", "-F", "--field", ...GH_VALUE_FLAGS];
 
+// src/owner-state.ts
+import { lstatSync as lstatSync6, renameSync as renameSync5 } from "node:fs";
+import { basename as basename3, dirname as dirname6, join as join7 } from "node:path";
+
 // src/usage.ts
 import { lstatSync as lstatSync5, readFileSync as readFileSync7 } from "node:fs";
-import { join as join6 } from "node:path";
+import { dirname as dirname5, join as join6 } from "node:path";
 var LAUNCH_LOCK = "launch.lock";
 var LAUNCH_LOCK_STALE_MS = 10 * 6e4;
 var USAGE_DAYS_KEPT = 8;
@@ -29487,9 +29594,12 @@ function dayKey(now, timezone) {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 var isObject3 = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
-var usageFile = (stateRoot) => join6(stateRoot, "usage.json");
-function readUsage(stateRoot) {
-  const file2 = usageFile(stateRoot);
+var usageFile = (ownerRoot) => join6(ownerRoot, "usage.json");
+function readUsage(ownerRoot) {
+  if (ownerFileHeld(ownerRoot, "usage.json")) return { ok: false };
+  return readUsageFile(usageFile(ownerRoot));
+}
+function readUsageFile(file2) {
   try {
     if (!lstatSync5(file2).isFile()) return { ok: false };
   } catch (e) {
@@ -29515,8 +29625,8 @@ function readUsage(stateRoot) {
   }
   return { ok: true, days };
 }
-function recordRun(stateRoot, label, now, timezone) {
-  const read2 = readUsage(stateRoot);
+function recordRun(ownerRoot, label, now, timezone) {
+  const read2 = readUsage(ownerRoot);
   if (!read2.ok) throw new Error(USAGE_UNREADABLE);
   const today = dayKey(now, timezone);
   const cutoff = dayKey(new Date(now.getTime() - (USAGE_DAYS_KEPT - 1) * 864e5), timezone);
@@ -29527,26 +29637,31 @@ function recordRun(stateRoot, label, now, timezone) {
   const todays = days[today] ?? /* @__PURE__ */ Object.create(null);
   todays[label] = count(todays, label) + 1;
   days[today] = todays;
-  writeStateFile(stateRoot, usageFile(stateRoot), `${JSON.stringify(days, null, 2)}
+  writeUsage(ownerRoot, days);
+}
+function writeUsage(ownerRoot, days) {
+  writeStateFile(ownerRoot, usageFile(ownerRoot), `${JSON.stringify(days, null, 2)}
 `);
 }
 var count = (map2, label) => Object.hasOwn(map2, label) ? map2[label] : 0;
-function runningPerLabel(stateRoot, ports) {
+function runningPerLabel(ownerRoot, ports) {
   const out = /* @__PURE__ */ Object.create(null);
-  for (const rec of Object.values(readCrewRecords(stateRoot))) {
-    if (rec.stoppedAt !== void 0) continue;
-    const validPid = Number.isInteger(rec.pid) && rec.pid > 0;
-    if (validPid && !ports.claude.alive(rec.pid)) continue;
-    const label = typeof rec.label === "string" && validLabel(rec.label) ? rec.label : DEFAULT_LABEL;
-    out[label] = count(out, label) + 1;
+  for (const root of projectStateRoots(dirname5(ownerRoot))) {
+    for (const rec of Object.values(readCrewRecords(root))) {
+      if (rec.stoppedAt !== void 0) continue;
+      const validPid = Number.isInteger(rec.pid) && rec.pid > 0;
+      if (validPid && !ports.claude.alive(rec.pid)) continue;
+      const label = typeof rec.label === "string" && validLabel(rec.label) ? rec.label : DEFAULT_LABEL;
+      out[label] = count(out, label) + 1;
+    }
   }
   return out;
 }
 function labelUsage(o2) {
   const { maxParallel, maxRunsPerDay, timezone } = o2.ownerConfig.crewLabelLimits;
   const day = dayKey(o2.ports.clock.now(), timezone);
-  const running = runningPerLabel(o2.stateRoot, o2.ports);
-  const read2 = readUsage(o2.stateRoot);
+  const running = runningPerLabel(o2.ownerRoot, o2.ports);
+  const read2 = readUsage(o2.ownerRoot);
   const runsToday = Object.assign(
     /* @__PURE__ */ Object.create(null),
     read2.ok ? read2.days[day] : {}
@@ -29571,7 +29686,7 @@ function labelUsage(o2) {
 async function credentialSlots(o2) {
   const usage = labelUsage(o2);
   if (!usage.ok) return { hold: USAGE_UNREADABLE };
-  const limits = readLimits(o2.stateRoot);
+  const limits = readLimits(o2.ownerRoot);
   if (!limits.ok) {
     return { hold: "usage limit state is unreadable (limits.json): no crew starts until fixed" };
   }
@@ -29614,10 +29729,167 @@ function labelUsageSnapshot(o2) {
   return Object.keys(labels).length === 0 ? void 0 : { day: usage.day, labels };
 }
 
+// src/owner-state.ts
+var MIGRATE_LOCK = "migrate.lock";
+var LOCK_STALE_MS2 = 5 * 6e4;
+function mergeBlocks(ownerRoot, legacy) {
+  const old = readBlocksFile(legacy);
+  if (!old.ok) return "legacy-unreadable";
+  const own2 = readBlocksFile(join7(ownerRoot, "blocks.json"));
+  if (!own2.ok) return "owner-unreadable";
+  const merged = own2.blocks.map((b) => ({ ...b }));
+  for (const block of old.blocks) {
+    const same = merged.find((b) => b.label === block.label && b.reason === block.reason);
+    if (!same) merged.push({ ...block });
+    else if (Date.parse(block.at) < Date.parse(same.at)) same.at = block.at;
+  }
+  writeBlocks(ownerRoot, merged);
+  return "merged";
+}
+var parkEnd = (until) => until === void 0 ? Number.NEGATIVE_INFINITY : Date.parse(until);
+function mergeLimits(ownerRoot, legacy) {
+  const old = readLimitsFile(legacy);
+  if (!old.ok) return "legacy-unreadable";
+  const own2 = readLimitsFile(join7(ownerRoot, "limits.json"));
+  if (!own2.ok) return "owner-unreadable";
+  const merged = { ...own2.labels };
+  for (const [label, park] of Object.entries(old.labels)) {
+    const current = merged[label];
+    if (!current || parkEnd(park.parkedUntil) > parkEnd(current.parkedUntil)) merged[label] = park;
+  }
+  writeLimits(ownerRoot, merged);
+  return "merged";
+}
+function mergeUsage(ownerRoot, legacy) {
+  const old = readUsageFile(legacy);
+  if (!old.ok) return "legacy-unreadable";
+  const own2 = readUsageFile(join7(ownerRoot, "usage.json"));
+  if (!own2.ok) return "owner-unreadable";
+  const merged = own2.days;
+  for (const [day, labels] of Object.entries(old.days)) {
+    const counts = merged[day] ?? /* @__PURE__ */ Object.create(null);
+    for (const [label, runs] of Object.entries(labels)) {
+      counts[label] = (Object.hasOwn(counts, label) ? counts[label] : 0) + runs;
+    }
+    merged[day] = counts;
+  }
+  writeUsage(ownerRoot, merged);
+  return "merged";
+}
+var FILES = [
+  { name: "blocks.json", lock: "blocks.lock", staleMs: LOCK_STALE_MS2, merge: mergeBlocks },
+  { name: "limits.json", lock: "limits.lock", staleMs: LOCK_STALE_MS2, merge: mergeLimits },
+  { name: "usage.json", lock: LAUNCH_LOCK, staleMs: LAUNCH_LOCK_STALE_MS, merge: mergeUsage }
+];
+var present = (file2) => lstatSync6(file2, { throwIfNoEntry: false }) !== void 0;
+function pendingLegacyState(stateBase) {
+  return projectStateRoots(stateBase).flatMap(
+    (root) => FILES.map((f) => join7(root, f.name)).filter(present)
+  );
+}
+function freeName(file2) {
+  let candidate = file2;
+  for (let i2 = 1; present(candidate); i2++) candidate = `${file2}.${i2}`;
+  return candidate;
+}
+function keepUnreadable(ownerRoot, root, name) {
+  const legacy = join7(root, name);
+  const kept = freeName(join7(ownerRoot, `${name}.legacy-${basename3(root)}`));
+  ensureStateDir(ownerRoot, ownerRoot);
+  if (lstatSync6(legacy).isSymbolicLink()) {
+    const note = `${name} in the project state root ${basename3(root)} was a symlink; it was not followed
+`;
+    writeStateFile(ownerRoot, kept, note);
+    removeStateEntry(root, legacy);
+  } else {
+    renameSync5(legacy, kept);
+  }
+}
+function migrateFile(ownerRoot, roots, file2, now, problems) {
+  const here = roots.filter((root) => present(join7(root, file2.name)));
+  if (here.length === 0) return;
+  const lock = acquireStateLock(ownerRoot, file2.lock, { now, heartbeatStaleMs: file2.staleMs });
+  if (!lock) {
+    problems.push(`${file2.name} from older versions was not migrated: ${file2.lock} is held`);
+    return;
+  }
+  try {
+    for (const root of here) {
+      const legacy = join7(root, file2.name);
+      const link = lstatSync6(legacy).isSymbolicLink();
+      const merged = link ? "legacy-unreadable" : file2.merge(ownerRoot, legacy);
+      if (merged === "merged") removeStateEntry(root, legacy);
+      else if (merged === "legacy-unreadable") keepUnreadable(ownerRoot, root, file2.name);
+      else {
+        problems.push(
+          `${join7(ownerRoot, file2.name)} is unreadable, so ${legacy} was not merged: inspect or remove the owner file`
+        );
+      }
+    }
+  } finally {
+    lock.release();
+  }
+}
+function migrateOwnerState(ownerRoot, now) {
+  const problems = [];
+  try {
+    if (pendingLegacyState(dirname6(ownerRoot)).length > 0) {
+      const lock = acquireStateLock(ownerRoot, MIGRATE_LOCK, {
+        now,
+        heartbeatStaleMs: LOCK_STALE_MS2
+      });
+      if (!lock) {
+        problems.push("another Studio process is migrating old state files; skipped this run");
+      } else {
+        try {
+          const roots = projectStateRoots(dirname6(ownerRoot));
+          for (const file2 of FILES) migrateFile(ownerRoot, roots, file2, now, problems);
+        } finally {
+          lock.release();
+        }
+      }
+    }
+    for (const entry of legacyEntries(ownerRoot)) {
+      problems.push(
+        `${join7(ownerRoot, entry)} is an old state file Studio could not read: no crew starts until the owner inspects and removes it`
+      );
+    }
+  } catch (e) {
+    problems.push(`old state files were not migrated: ${e.message}`);
+  }
+  return problems;
+}
+
+// src/pause.ts
+import { lstatSync as lstatSync7, readFileSync as readFileSync8 } from "node:fs";
+import { join as join8 } from "node:path";
+var PAUSE_FILE = "pause.json";
+var PAUSED_LINE = "paused: no crew starts and nothing is merged until the owner runs studio resume";
+function readPause(root) {
+  const file2 = join8(root, PAUSE_FILE);
+  try {
+    const st = lstatSync7(file2, { throwIfNoEntry: false });
+    if (st === void 0) return { paused: false };
+    if (!st.isFile()) return { paused: true };
+    const raw = JSON.parse(readFileSync8(file2, "utf8"));
+    const at = raw?.at;
+    return typeof at === "string" && !Number.isNaN(Date.parse(at)) ? { paused: true, at } : { paused: true };
+  } catch {
+    return { paused: true };
+  }
+}
+function setPause(root, now) {
+  writeStateFile(root, join8(root, PAUSE_FILE), `${JSON.stringify({ at: now.toISOString() })}
+`);
+}
+function clearPause(root) {
+  removeStateEntry(root, join8(root, PAUSE_FILE));
+}
+
 // src/crew.ts
 var crewName = (item) => `studio-${item.role}-${item.id.toLowerCase()}`;
-var GUARD_BIN = resolve3(
-  dirname4(fileURLToPath(import.meta.url)),
+var GUARD_BIN = resolve4(
+  dirname7(fileURLToPath(import.meta.url)),
   "..",
   "bin",
   "studio-guard.mjs"
@@ -29627,6 +29899,7 @@ function guardHookCommand(bin) {
   return `node "${bin}" || exit 2`;
 }
 var ITEM_ID_RE = /^[A-Z]+-\d+$/;
+var isItemId = (id) => ITEM_ID_RE.test(id);
 function assertItemId(id) {
   if (!ITEM_ID_RE.test(id)) throw new Error(`invalid item id: ${JSON.stringify(id)}`);
 }
@@ -29640,7 +29913,7 @@ function githubHttpsUrl(repo) {
 }
 function cloneBranch(path10) {
   try {
-    const head = readFileSync8(join7(path10, ".git", "HEAD"), "utf8").trim();
+    const head = readFileSync9(join9(path10, ".git", "HEAD"), "utf8").trim();
     return /^ref: refs\/heads\/(.+)$/.exec(head)?.[1];
   } catch {
     return void 0;
@@ -29648,8 +29921,8 @@ function cloneBranch(path10) {
 }
 async function prepareCheckout(stateRoot, projectDir, item, ports) {
   assertItemId(item.id);
-  const clones = ensureStateDir(stateRoot, join7(stateRoot, "clones"));
-  const path10 = join7(clones, item.id);
+  const clones = ensureStateDir(stateRoot, join9(stateRoot, "clones"));
+  const path10 = join9(clones, item.id);
   const branch = `studio/${item.id}`;
   const crewOrigin = githubHttpsUrl(item.repo);
   assertStatePath(stateRoot, path10);
@@ -29675,11 +29948,11 @@ function removeOldReport(stateRoot, clone2, id) {
   assertItemId(id);
   let cur = clone2;
   for (const seg of [".studio", "reports", `${id}.md`]) {
-    cur = join7(cur, seg);
+    cur = join9(cur, seg);
     assertStatePath(stateRoot, cur);
     let st;
     try {
-      st = lstatSync6(cur);
+      st = lstatSync8(cur);
     } catch {
       return;
     }
@@ -29696,7 +29969,7 @@ function removeOldReport(stateRoot, clone2, id) {
 }
 function existsNoFollow(p) {
   try {
-    lstatSync6(p);
+    lstatSync8(p);
     return true;
   } catch {
     return false;
@@ -29704,26 +29977,26 @@ function existsNoFollow(p) {
 }
 function fileSize(p) {
   try {
-    return lstatSync6(p).size;
+    return lstatSync8(p).size;
   } catch {
     return 0;
   }
 }
 function isLink2(p) {
   try {
-    return lstatSync6(p).isSymbolicLink();
+    return lstatSync8(p).isSymbolicLink();
   } catch {
     return false;
   }
 }
 function writeHomeFile(homeDir, name, content) {
-  const target = join7(homeDir, name);
+  const target = join9(homeDir, name);
   const realHome = realpathSync3(homeDir);
-  const parent = realpathSync3(dirname4(target));
+  const parent = realpathSync3(dirname7(target));
   if (parent !== realHome && !parent.startsWith(realHome + sep4)) {
     throw new Error(`refusing to write outside the crew home: ${target}`);
   }
-  writeFileSync5(join7(parent, basename2(target)), content, { flag: "wx" });
+  writeFileSync5(join9(parent, basename4(target)), content, { flag: "wx" });
 }
 var unique = (xs) => [...new Set(xs)];
 function realOr(p) {
@@ -29743,32 +30016,32 @@ function entries(dir) {
 }
 function skillInstalled(configDir, name) {
   if (!Array.isArray(entries(configDir))) return void 0;
-  let present = false;
-  const skills = join7(configDir, "skills");
+  let present2 = false;
+  const skills = join9(configDir, "skills");
   const direct = entries(skills);
   if (direct === void 0) return void 0;
   if (direct !== null) {
-    present = true;
-    if (existsSync3(join7(skills, name, "SKILL.md"))) return true;
+    present2 = true;
+    if (existsSync3(join9(skills, name, "SKILL.md"))) return true;
   }
-  const cache = join7(configDir, "plugins", "cache");
+  const cache = join9(configDir, "plugins", "cache");
   const top = entries(cache);
   if (top === void 0) return void 0;
   if (top !== null) {
-    present = true;
+    present2 = true;
     let dirs = [cache];
     for (let depth = 0; depth < 3; depth++) {
       const next = [];
       for (const d of dirs) {
         const names = entries(d);
         if (names === void 0) return void 0;
-        next.push(...(names ?? []).map((n2) => join7(d, n2)));
+        next.push(...(names ?? []).map((n2) => join9(d, n2)));
       }
       dirs = next;
     }
-    if (dirs.some((d) => existsSync3(join7(d, "skills", name, "SKILL.md")))) return true;
+    if (dirs.some((d) => existsSync3(join9(d, "skills", name, "SKILL.md")))) return true;
   }
-  return present ? false : void 0;
+  return present2 ? false : void 0;
 }
 function firstMissingSkill(configDir, required2) {
   for (const skill of required2) {
@@ -29834,11 +30107,11 @@ async function readPinnedRules(projectDir, ports) {
 }
 function writePinnedRules(stateRoot, id, rules) {
   assertItemId(id);
-  const dir = join7(stateRoot, "briefs", `${id}.rules`);
+  const dir = join9(stateRoot, "briefs", `${id}.rules`);
   removeStateEntry(stateRoot, dir);
   const paths = [];
   for (const f of rules.files) {
-    const file2 = join7(dir, f.name);
+    const file2 = join9(dir, f.name);
     writeStateFile(stateRoot, file2, f.content);
     paths.push(file2);
   }
@@ -29853,8 +30126,8 @@ function writeBrief(stateRoot, item, config2, projectDir, rules) {
     "studio:studio-crew",
     ...skills.required.filter((s) => s !== "studio:studio-crew")
   ];
-  const roleFile = join7(projectDir, ".studio", "roles", `${item.role}.md`);
-  const roleBrief = existsSync3(roleFile) ? readFileSync8(roleFile, "utf8").trim() : "";
+  const roleFile = join9(projectDir, ".studio", "roles", `${item.role}.md`);
+  const roleBrief = existsSync3(roleFile) ? readFileSync9(roleFile, "utf8").trim() : "";
   const id = item.id;
   const opensPr = item.type !== "review" && item.type !== "research";
   const lines = [
@@ -29942,7 +30215,7 @@ function writeBrief(stateRoot, item, config2, projectDir, rules) {
     "The body says what changed and how it was verified.",
     ""
   ];
-  const file2 = join7(stateRoot, "briefs", `${id}.md`);
+  const file2 = join9(stateRoot, "briefs", `${id}.md`);
   writeStateFile(stateRoot, file2, lines.join("\n"));
   return file2;
 }
@@ -29960,7 +30233,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
     stateRoot,
     extraCredentialPaths: extraSecret
   });
-  const stateBase = dirname4(stateRoot);
+  const stateBase = dirname7(stateRoot);
   const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase)]);
   const loginDir = dirs.providerConfigDir;
   const allowRead = [
@@ -29970,11 +30243,13 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
     ...toolchain,
     ...loginDir === void 0 ? [] : [loginDir]
   ];
-  const ctxFile = join7(stateRoot, "guard", `${id}.json`);
+  const ctxFile = join9(stateRoot, "guard", `${id}.json`);
   const protectedPaths = [
     ctxFile,
-    ...STATE_PROTECTED_DIRS.map((d) => join7(stateRoot, d)),
-    ...STATE_FILES.map((f) => join7(stateRoot, f))
+    ...STATE_PROTECTED_DIRS.map((d) => join9(stateRoot, d)),
+    ...STATE_FILES.map((f) => join9(stateRoot, f)),
+    // Below the state base, so the sandbox already keeps crews out; this is the second net.
+    join9(stateBase, OWNER_DIR)
   ];
   const ctx = {
     worktree: clone2,
@@ -30030,7 +30305,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
       network: { allowedDomains: config2.sandbox.networkAllow, strictAllowlist: true }
     }
   };
-  const file2 = join7(stateRoot, "settings", `${id}.json`);
+  const file2 = join9(stateRoot, "settings", `${id}.json`);
   writeStateFile(stateRoot, file2, `${JSON.stringify(settings, null, 2)}
 `);
   return file2;
@@ -30046,7 +30321,7 @@ var BASE_ENV = ["PATH", "LANG", "TERM", "USER"];
 var API_BILLING_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
 function readCrewFile(file2) {
   try {
-    return JSON.parse(readFileSync8(file2, "utf8"));
+    return JSON.parse(readFileSync9(file2, "utf8"));
   } catch {
     return {};
   }
@@ -30063,16 +30338,27 @@ function updateCrewFile(stateRoot, file2, mutate) {
   });
   return run;
 }
-function refuseIfBlocked(stateRoot) {
-  const line = blockHold(stateRoot);
+function refuseIfBlocked(ownerRoot) {
+  const line = blockHold(ownerRoot);
   if (line !== void 0) throw new Error(line);
+}
+function refuseIfPaused(stateRoot) {
+  if (readPause(stateRoot).paused) throw new Error(PAUSED_LINE);
+}
+function crewStateOf(rec, status, alive, hasReport2) {
+  if (status === "merged" || status === "dropped") return "done";
+  if (rec.stoppedAt !== void 0) return "stopped";
+  if (alive) return "working";
+  if (status === "blocked") return "blocked";
+  if (status === "in_review" || status === "queued") return "waiting";
+  return hasReport2 ? "waiting" : "crashed";
 }
 async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
   const turn = launchChain;
   let done = () => {
   };
-  launchChain = new Promise((resolve5) => {
-    done = resolve5;
+  launchChain = new Promise((resolve6) => {
+    done = resolve6;
   });
   await turn;
   const held = {};
@@ -30131,7 +30417,13 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     );
   }
   const stateRoot = stateRootFor(projectDir, owner);
-  refuseIfBlocked(stateRoot);
+  const ownerRoot = ownerStateRootFor(owner);
+  migrateOwnerState(ownerRoot, ports.clock.now());
+  refuseIfBlocked(ownerRoot);
+  refuseIfPaused(stateRoot);
+  if (pendingLegacyState(dirname7(ownerRoot)).length > 0) {
+    throw new Error("old project state files are not migrated yet; refusing to launch, try again");
+  }
   const ownerConfig = loadOwnerConfig(owner);
   const toolchainPaths = ownerConfig.crewToolchainPaths;
   canonicalToolchainPaths(toolchainPaths, {
@@ -30143,15 +30435,15 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     extraCredentialPaths: credentialLocations(home, penv).extra
   });
   for (const sub of ["clones", "homes", "tmp"]) {
-    assertStatePath(stateRoot, join7(stateRoot, sub, item.id));
+    assertStatePath(stateRoot, join9(stateRoot, sub, item.id));
   }
   const previous = refuseIfRunning(stateRoot, item, ports);
-  const limits = readLimits(stateRoot);
+  const limits = readLimits(ownerRoot);
   if (!limits.ok) {
-    throw new Error(`${join7(stateRoot, "limits.json")} is unreadable; refusing to launch`);
+    throw new Error(`${join9(ownerRoot, "limits.json")} is unreadable; refusing to launch`);
   }
   const parks = activeParks(limits.labels, ports.clock.now());
-  const usage = labelUsage({ stateRoot, ownerConfig, ports });
+  const usage = labelUsage({ ownerRoot, ownerConfig, ports });
   if (!usage.ok) throw new Error(USAGE_UNREADABLE);
   const refuseFull = () => {
     throw new Error("credential limit: the label is at its configured parallel or daily limit");
@@ -30189,15 +30481,15 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
       providerConfigDir = checkProviderConfigDir(got.configDir, owner);
     }
   }
-  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join7(home, ".claude"));
+  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join9(home, ".claude"));
   const billing = apiBillingProblem(
-    join7(claudeConfigDir, "settings.json"),
+    join9(claudeConfigDir, "settings.json"),
     ownerConfig.allowApiBilling
   );
   if (billing) throw new Error(billing);
   const missingSkill = firstMissingSkill(claudeConfigDir, role?.skills.required ?? []);
   if (missingSkill) throw new Error(missingSkill);
-  const clonePath = join7(stateRoot, "clones", item.id);
+  const clonePath = join9(stateRoot, "clones", item.id);
   if ((previous?.limit || previous?.block) && existsNoFollow(clonePath) && (cloneBranch(clonePath) !== `studio/${item.id}` || cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))) {
     throw new Error(
       `the clone of ${item.id} left its branch after ${previous.limit ? "a usage limit" : "an account block"}; refusing to replace it (inspect it, then remove ${clonePath} to start over)`
@@ -30216,7 +30508,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     projectRealpath: projectRealpath(projectDir),
     originUrl: await ownerOriginUrl(projectDir, ports)
   });
-  const lock = acquireStateLock(stateRoot, LAUNCH_LOCK, {
+  const lock = acquireStateLock(ownerRoot, LAUNCH_LOCK, {
     now: ports.clock.now(),
     heartbeatStaleMs: LAUNCH_LOCK_STALE_MS
   });
@@ -30225,24 +30517,24 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   const recheck = () => {
     if (!lock.owned()) throw new Error("the launch lock was lost; refusing to launch, try again");
     refuseIfRunning(stateRoot, item, ports);
-    const again = readLimits(stateRoot);
-    if (!again.ok) throw new Error(`${join7(stateRoot, "limits.json")} is unreadable; refusing`);
+    const again = readLimits(ownerRoot);
+    if (!again.ok) throw new Error(`${join9(ownerRoot, "limits.json")} is unreadable; refusing`);
     const parkedNow = activeParks(again.labels, ports.clock.now());
     if (Object.hasOwn(parkedNow, label)) {
       throw new Error(allParkedLine(parkedNow[label]?.parkedUntil));
     }
-    const locked = labelUsage({ stateRoot, ownerConfig, ports });
+    const locked = labelUsage({ ownerRoot, ownerConfig, ports });
     if (!locked.ok) throw new Error(USAGE_UNREADABLE);
     if (!(locked.remaining(label) > 0)) refuseFull();
   };
   recheck();
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
-  const homeDir = join7(stateRoot, "homes", item.id);
+  const homeDir = join9(stateRoot, "homes", item.id);
   removeStateEntry(stateRoot, homeDir);
   ensureStateDir(stateRoot, homeDir);
   writeHomeFile(homeDir, ".gitconfig", GITCONFIG);
-  const tmpDir = join7(stateRoot, "tmp", item.id);
+  const tmpDir = join9(stateRoot, "tmp", item.id);
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
   const briefRules = writePinnedRules(stateRoot, item.id, pinned);
@@ -30255,10 +30547,10 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     { homeDir, tmpDir, projectDir, toolchainPaths, providerConfigDir },
     owner
   );
-  const mcpConfig = join7(stateRoot, "settings", `${item.id}.mcp.json`);
+  const mcpConfig = join9(stateRoot, "settings", `${item.id}.mcp.json`);
   writeStateFile(stateRoot, mcpConfig, `${JSON.stringify({ mcpServers: {} })}
 `);
-  const settingsEnv = JSON.parse(readFileSync8(settings, "utf8")).env;
+  const settingsEnv = JSON.parse(readFileSync9(settings, "utf8")).env;
   const env = {};
   for (const k of BASE_ENV) {
     const v = penv[k];
@@ -30276,13 +30568,14 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   }
   Object.assign(env, settingsEnv);
   if (token) env.GH_TOKEN = token;
-  const log = join7(stateRoot, "logs", `${item.id}.jsonl`);
-  ensureStateDir(stateRoot, dirname4(log));
+  const log = join9(stateRoot, "logs", `${item.id}.jsonl`);
+  ensureStateDir(stateRoot, dirname7(log));
   const logStart = fileSize(log);
-  refuseIfBlocked(stateRoot);
+  refuseIfBlocked(ownerRoot);
+  refuseIfPaused(stateRoot);
   lock.heartbeat(ports.clock.now());
   recheck();
-  recordRun(stateRoot, label, ports.clock.now(), ownerConfig.crewLabelLimits.timezone);
+  recordRun(ownerRoot, label, ports.clock.now(), ownerConfig.crewLabelLimits.timezone);
   const { pid } = await ports.claude.start(
     wt.path,
     [
@@ -30342,10 +30635,210 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     ...tokenConfigDir === void 0 ? {} : { tokenConfigDir },
     logStart
   };
-  await updateCrewFile(stateRoot, join7(stateRoot, "crew.json"), (all) => {
+  await updateCrewFile(stateRoot, join9(stateRoot, "crew.json"), (all) => {
     all[item.id] = record2;
   });
   return { name, pid, log };
+}
+
+// src/main-build.ts
+var UNKNOWN = { status: "unknown" };
+var RED = /* @__PURE__ */ new Set(["failure", "timed_out", "startup_failure"]);
+var MAX_NAME = 100;
+var READ_TIMEOUT_MS = 3e4;
+function parseRuns(stdout) {
+  let raw;
+  try {
+    raw = JSON.parse(stdout);
+  } catch {
+    return void 0;
+  }
+  if (!Array.isArray(raw)) return void 0;
+  const runs = [];
+  for (const r of raw) {
+    if (r === null || typeof r !== "object") return void 0;
+    const { status, conclusion, headSha, workflowName } = r;
+    if (typeof status !== "string" || typeof workflowName !== "string") return void 0;
+    if (conclusion !== null && conclusion !== void 0 && typeof conclusion !== "string") {
+      return void 0;
+    }
+    runs.push({
+      workflow: workflowName,
+      status,
+      conclusion: conclusion ?? "",
+      sha: typeof headSha === "string" ? headSha : ""
+    });
+  }
+  return runs;
+}
+var cleanName = (s) => s.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_NAME);
+var validSha = (s) => /^[0-9a-f]{7,64}$/i.test(s) ? s : void 0;
+async function readMainBuild(config2, ports) {
+  try {
+    const reply = await ports.gh.run(
+      [
+        "run",
+        "list",
+        "--repo",
+        config2.primaryRepo,
+        "--branch",
+        "main",
+        "--event",
+        "push",
+        "--limit",
+        "30",
+        "--json",
+        "status,conclusion,headSha,workflowName"
+      ],
+      { timeoutMs: READ_TIMEOUT_MS }
+    );
+    if (reply.code !== 0) return UNKNOWN;
+    const runs = parseRuns(reply.stdout);
+    if (runs === void 0) return UNKNOWN;
+    const newest = /* @__PURE__ */ new Map();
+    for (const r of runs) if (!newest.has(r.workflow)) newest.set(r.workflow, r);
+    const latest = [...newest.values()];
+    if (latest.length === 0) return UNKNOWN;
+    const red2 = latest.find((r) => r.status === "completed" && RED.has(r.conclusion));
+    if (red2) {
+      const sha2 = validSha(red2.sha);
+      return {
+        status: "red",
+        ...sha2 === void 0 ? {} : { sha: sha2 },
+        workflow: cleanName(red2.workflow)
+      };
+    }
+    if (latest.some((r) => r.status !== "completed")) return { status: "pending" };
+    const first = latest[0];
+    const sha = validSha(first.sha);
+    return {
+      status: "green",
+      ...sha === void 0 ? {} : { sha },
+      workflow: cleanName(first.workflow)
+    };
+  } catch {
+    return UNKNOWN;
+  }
+}
+
+// src/notify.ts
+import { lstatSync as lstatSync9, readFileSync as readFileSync10 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { join as join10 } from "node:path";
+var MAX_SENDS_PER_RUN = 20;
+var MAX_TEXT = 500;
+var LOCK_STALE_MS3 = 2 * 6e4;
+var cleanText = (s) => Array.from(s.replace(new RegExp("\\p{Cc}", "gu"), " ")).slice(0, MAX_TEXT).join("");
+function messagesOf(projectKey, snapshot) {
+  const notes = snapshot.notifications ?? [];
+  const out = [];
+  for (const line of snapshot.forOwner) {
+    if (line.id === "account-block" && notes.length > 0) continue;
+    const kind = line.id === "account-block" ? "account-block" : line.id === "usage-limit" ? "usage-limit" : "owner-item";
+    out.push({
+      key: `${projectKey}:${line.id}:${line.title}`,
+      kind,
+      id: line.id,
+      text: line.title
+    });
+  }
+  for (const note of notes) {
+    const key = note.label === void 0 ? `block::${note.reason}` : `block:${note.label}:${note.reason}:${note.at}`;
+    out.push({ key, kind: "account-block", id: note.id, text: note.title });
+  }
+  return out;
+}
+function readNotified(file2) {
+  try {
+    if (!lstatSync9(file2).isFile()) return { ok: false };
+  } catch (e) {
+    return e.code === "ENOENT" ? { ok: true, keys: [] } : { ok: false };
+  }
+  try {
+    const raw = JSON.parse(readFileSync10(file2, "utf8"));
+    if (!Array.isArray(raw) || !raw.every((k) => typeof k === "string")) return { ok: false };
+    return { ok: true, keys: raw };
+  } catch {
+    return { ok: false };
+  }
+}
+async function sendNotifications(o2) {
+  const notify = o2.ownerConfig.notify;
+  if (notify === void 0) return [];
+  const lock = acquireStateLock(o2.ownerRoot, "notify.lock", {
+    now: /* @__PURE__ */ new Date(),
+    heartbeatStaleMs: LOCK_STALE_MS3
+  });
+  if (!lock) return [];
+  try {
+    return await sendLocked(o2, notify, lock);
+  } finally {
+    if (lock.owned()) lock.release();
+  }
+}
+async function sendLocked(o2, notify, lock) {
+  const file2 = join10(o2.ownerRoot, "notified.json");
+  const read2 = readNotified(file2);
+  if (!read2.ok) return ["notify: notified.json is unreadable; nothing sent"];
+  try {
+    checkCredentialCommand(notify.command, o2.owner);
+  } catch {
+    return [
+      "notify: the notify command is not trusted (absolute, own regular file, not writable by others); nothing sent"
+    ];
+  }
+  const messages = messagesOf(o2.projectKey, o2.snapshot);
+  const current = new Set(messages.map((m) => m.key));
+  const prefix = `${o2.projectKey}:`;
+  const sent = new Set(
+    read2.keys.filter((k) => current.has(k) || !(k.startsWith(prefix) || k.startsWith("block:")))
+  );
+  const penv = o2.owner.env ?? process.env;
+  const errors = [];
+  let sends = 0;
+  for (const m of messages) {
+    if (sent.has(m.key)) continue;
+    if (sends >= MAX_SENDS_PER_RUN) break;
+    sends++;
+    const env = {
+      HOME: o2.owner.homedir ?? homedir5(),
+      STUDIO_NOTIFY_CHANNEL: notify.channel,
+      STUDIO_NOTIFY_KIND: m.kind,
+      STUDIO_NOTIFY_ID: cleanText(m.id),
+      STUDIO_NOTIFY_PROJECT: cleanText(o2.primaryRepo),
+      STUDIO_NOTIFY_TEXT: cleanText(m.text)
+    };
+    if (penv.PATH !== void 0) env.PATH = penv.PATH;
+    lock.heartbeat(/* @__PURE__ */ new Date());
+    try {
+      const reply = await o2.ports.credentials.runProvider(notify.command, env, {
+        timeoutMs: PROVIDER_TIMEOUT_MS,
+        maxBytes: PROVIDER_MAX_BYTES
+      });
+      if (reply.code === 0) sent.add(m.key);
+      else {
+        errors.push(
+          `notify: the notify command failed (${m.kind}); it and the rest are retried next time`
+        );
+        break;
+      }
+    } catch {
+      errors.push(
+        `notify: the notify command could not be run (${m.kind}); it and the rest are retried next time`
+      );
+      break;
+    }
+  }
+  const keys2 = [...sent];
+  if (keys2.length !== read2.keys.length || keys2.some((k, i2) => k !== read2.keys[i2])) {
+    try {
+      writeStateFile(o2.ownerRoot, file2, `${JSON.stringify(keys2, null, 2)}
+`);
+    } catch {
+      errors.push("notify: notified.json could not be written; messages may repeat");
+    }
+  }
+  return errors;
 }
 
 // src/planner.ts
@@ -30459,9 +30952,17 @@ function planAssignments(board, config2, capacity, running, hold, credentialSlot
 }
 
 // src/queue.ts
-import { existsSync as existsSync4, lstatSync as lstatSync7, readFileSync as readFileSync9 } from "node:fs";
+import { existsSync as existsSync4, lstatSync as lstatSync10, readFileSync as readFileSync11 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { join as join8 } from "node:path";
+import { join as join11 } from "node:path";
+var QueueHeld = class extends Error {
+  constructor(line) {
+    super(line);
+    this.line = line;
+    this.name = "QueueHeld";
+  }
+  line;
+};
 var CHECKS_POLL_MS = 3e4;
 var CAPACITY_WAIT_MS = 6e4;
 var QUEUE_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
@@ -30486,16 +30987,16 @@ var stateSchema = external_exports.strictObject({
     })
   )
 });
-var queueFile = (stateRoot) => join8(stateRoot, "queue.json");
+var queueFile = (stateRoot) => join11(stateRoot, "queue.json");
 function loadQueue(stateRoot) {
   const file2 = queueFile(stateRoot);
   assertStatePath(stateRoot, file2);
   if (!existsSync4(file2)) return { pending: [], done: [] };
-  if (lstatSync7(file2).isSymbolicLink())
+  if (lstatSync10(file2).isSymbolicLink())
     throw new Error(`refusing to read ${file2}: it is a symlink`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync9(file2, "utf8"));
+    raw = JSON.parse(readFileSync11(file2, "utf8"));
   } catch {
     throw new Error(`queue file ${file2} is not valid JSON`);
   }
@@ -30582,14 +31083,14 @@ function installSignalRelease(lock) {
   };
 }
 function appendStateLine(stateRoot, name, line) {
-  const file2 = join8(stateRoot, name);
+  const file2 = join11(stateRoot, name);
   assertStatePath(stateRoot, file2);
   let prev = "";
   if (existsSync4(file2)) {
-    if (lstatSync7(file2).isSymbolicLink()) {
+    if (lstatSync10(file2).isSymbolicLink()) {
       throw new Error(`refusing to use ${file2}: it is a symlink`);
     }
-    prev = readFileSync9(file2, "utf8");
+    prev = readFileSync11(file2, "utf8");
     if (prev !== "" && !prev.endsWith("\n")) prev += "\n";
   }
   writeStateFile(stateRoot, file2, `${prev}${line}
@@ -30809,6 +31310,11 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
         step = "checks";
         continue;
       }
+      const held = opts.hold?.();
+      if (held !== void 0) {
+        enter("capacity");
+        throw new QueueHeld(held);
+      }
       const r = await gh.run([
         "pr",
         "merge",
@@ -30848,6 +31354,11 @@ async function firstCommitAt(entry, gh) {
 async function runQueue(state, config2, ports, persist, opts = {}) {
   const log = opts.log ?? ((m) => console.error(m));
   for (; ; ) {
+    const held = opts.hold?.();
+    if (held !== void 0) {
+      log(`queue held: ${held}`);
+      return state;
+    }
     if (!state.current) {
       const next = opts.takeNext ? opts.takeNext() : state.pending.shift();
       if (!next) return state;
@@ -30855,7 +31366,14 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
       persist(state);
     }
     const current = state.current;
-    const outcome = await mergeOne(current, config2, ports, () => persist(state), opts);
+    let outcome;
+    try {
+      outcome = await mergeOne(current, config2, ports, () => persist(state), opts);
+    } catch (err) {
+      if (!(err instanceof QueueHeld)) throw err;
+      log(`queue held: ${err.line}`);
+      return state;
+    }
     const { step: _step, head: _head, ...entry } = current;
     const done = {
       ...entry,
@@ -30901,12 +31419,12 @@ import {
   closeSync as closeSync3,
   constants as constants2,
   fstatSync as fstatSync2,
-  lstatSync as lstatSync8,
+  lstatSync as lstatSync11,
   openSync as openSync3,
   readSync as readSync2,
   realpathSync as realpathSync4
 } from "node:fs";
-import { join as join9, sep as sep5 } from "node:path";
+import { join as join12, sep as sep5 } from "node:path";
 var ReportError = class extends Error {
   constructor(message) {
     super(message);
@@ -30983,9 +31501,9 @@ function readReportFile(root, file2, notBefore) {
   const unsafe = () => new ReportError(UNSAFE);
   let fd;
   try {
-    const parts = [root, join9(root, ".studio"), join9(root, ".studio", "reports"), file2];
+    const parts = [root, join12(root, ".studio"), join12(root, ".studio", "reports"), file2];
     parts.forEach((p, i2) => {
-      const st2 = lstatSync8(p);
+      const st2 = lstatSync11(p);
       if (st2.isSymbolicLink()) throw unsafe();
       if (i2 < parts.length - 1 ? !st2.isDirectory() : !st2.isFile()) throw unsafe();
     });
@@ -31016,7 +31534,7 @@ function readReportFile(root, file2, notBefore) {
   }
 }
 function readReport(worktree, id, item, opts = {}) {
-  const file2 = join9(worktree, ".studio", "reports", `${id}.md`);
+  const file2 = join12(worktree, ".studio", "reports", `${id}.md`);
   return parseReport(readReportFile(worktree, file2, opts.notBefore), item);
 }
 function checkReportHead(report, prHead) {
@@ -31027,21 +31545,21 @@ function checkReportHead(report, prHead) {
 
 // src/secret-command.ts
 var import_yaml6 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync11 } from "node:fs";
-import { join as join11 } from "node:path";
+import { readFileSync as readFileSync13 } from "node:fs";
+import { join as join14 } from "node:path";
 
 // src/setup-ci-command.ts
 var import_yaml5 = __toESM(require_dist(), 1);
 import { randomBytes as randomBytes4 } from "node:crypto";
 import {
   readdirSync as readdirSync3,
-  readFileSync as readFileSync10,
-  renameSync as renameSync5,
+  readFileSync as readFileSync12,
+  renameSync as renameSync6,
   statSync as statSync2,
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync6
 } from "node:fs";
-import { join as join10 } from "node:path";
+import { join as join13 } from "node:path";
 
 // src/setup-ci.ts
 var import_yaml4 = __toESM(require_dist(), 1);
@@ -31198,9 +31716,9 @@ function proposeCi(detect, repoVisibility, current, usage) {
   return { ci, notes, errors };
 }
 var GITHUB_HOSTED = /^(ubuntu|windows|macos)-/i;
-var MAX_TEXT = 120;
+var MAX_TEXT2 = 120;
 function clean(text) {
-  return String(text).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_TEXT);
+  return String(text).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_TEXT2);
 }
 function labelList(value) {
   const items = typeof value === "string" ? [value] : value;
@@ -31398,7 +31916,7 @@ function assertPrimaryRepo(primary) {
   return primary;
 }
 function readWorkflows(project) {
-  const dir = join10(project, ...WORKFLOW_DIR);
+  const dir = join13(project, ...WORKFLOW_DIR);
   const rel = WORKFLOW_DIR.join("/");
   const files = [];
   const errors = [];
@@ -31417,7 +31935,7 @@ function readWorkflows(project) {
   for (const name of yaml) {
     const path10 = `${rel}/${name}`;
     try {
-      files.push({ path: path10, text: readFileSync10(join10(dir, name), "utf8") });
+      files.push({ path: path10, text: readFileSync12(join13(dir, name), "utf8") });
     } catch (e) {
       errors.push(`${path10}: cannot read file (${e.code ?? "error"})`);
     }
@@ -31454,7 +31972,7 @@ function writeAtomic(file2, text) {
   const tmp = `${file2}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
   try {
     writeFileSync6(tmp, text, { flag: "wx", mode: statSync2(file2).mode & 511 });
-    renameSync5(tmp, file2);
+    renameSync6(tmp, file2);
   } catch (e) {
     try {
       unlinkSync4(tmp);
@@ -31474,10 +31992,10 @@ function describeDetection(d) {
   return lines;
 }
 async function runSetupCi(o2) {
-  const file2 = join10(o2.project, ".studio", "studio.yaml");
+  const file2 = join13(o2.project, ".studio", "studio.yaml");
   let text;
   try {
-    text = readFileSync10(file2, "utf8");
+    text = readFileSync12(file2, "utf8");
   } catch (e) {
     throw new Error(
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
@@ -31548,10 +32066,10 @@ async function runSetupCi(o2) {
 
 // src/secret-command.ts
 function readPrimaryRepo(project) {
-  const file2 = join11(project, ".studio", "studio.yaml");
+  const file2 = join14(project, ".studio", "studio.yaml");
   let raw;
   try {
-    raw = (0, import_yaml6.parse)(readFileSync11(file2, "utf8"));
+    raw = (0, import_yaml6.parse)(readFileSync13(file2, "utf8"));
   } catch {
     throw new Error("cannot read .studio/studio.yaml");
   }
@@ -31628,6 +32146,7 @@ function runDoctor(o2) {
     ownerConfig: ownerConfig ? "readable" : "invalid",
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
+    notify: ownerConfig?.notify ? "configured" : "not configured",
     apiKeyVarsInEnvironment: API_KEY_VARS.filter((k) => o2.env[k])
   };
   if (o2.json) o2.stdout(`${JSON.stringify(report, null, 2)}
@@ -31640,6 +32159,7 @@ function runDoctor(o2) {
       `studio.yaml: ${report.studioYaml}`,
       `owner config: ${report.ownerConfig}`,
       `credential provider: ${provider === null ? "not configured" : `configured ${provider}`}`,
+      `notify: ${report.notify}`,
       `allow_api_billing: ${report.allowApiBilling ? "on" : "off"}`,
       `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(", ") || "none"}`
     ];
@@ -31661,6 +32181,8 @@ Commands:
   queue add <repo>#<pr>    Put a reviewed PR into the merge queue
   queue run                Merge the queued PRs, one at a time
   state                    Refresh state.json in the state root
+  pause                    Owner only: nothing new starts or merges until resume
+  resume                   Owner only: lift the pause
   stop <id>                Stop a crew session
   metrics                  Lead time and deployment frequency
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
@@ -31671,6 +32193,7 @@ Commands:
 var UsageError = class extends Error {
 };
 var BY = "studio";
+var LEGACY_LINE = "old project state files are not migrated yet: no merge until they are (run any studio command again)";
 var ACTIVE_FOR_WIP = ["assigned", "in_progress"];
 function table(rows) {
   const widths = rows[0]?.map((_, c3) => Math.max(...rows.map((r) => (r[c3] ?? "").length))) ?? [];
@@ -31705,7 +32228,7 @@ async function runCli(argv, deps) {
       return 0;
     }
     const [cmd, ...rest] = positionals;
-    const project = resolve4(deps.cwd, values.project ?? ".");
+    const project = resolve5(deps.cwd, values.project ?? ".");
     const json2 = values.json === true;
     const print = (v) => stdout(`${JSON.stringify(v, null, 2)}
 `);
@@ -31717,6 +32240,16 @@ async function runCli(argv, deps) {
       return { config: config2, board: loadBoard(project) };
     };
     const stateRoot = () => stateRootFor(project, owner);
+    let migrated = false;
+    const ownerRoot = () => {
+      const root = ownerStateRootFor(owner);
+      if (!migrated) {
+        migrated = true;
+        for (const line of migrateOwnerState(root, ports.clock.now())) stderr(`error: ${line}
+`);
+      }
+      return root;
+    };
     const boundStateRoot = async () => {
       const root = stateRoot();
       const url2 = (await ports.git.run(project, ["remote", "get-url", "origin"])).trim();
@@ -31724,14 +32257,25 @@ async function runCli(argv, deps) {
       return root;
     };
     const reconcile = async () => {
-      const b = await reconcileBlocks({ project, stateRoot: stateRoot(), ports });
+      const b = await reconcileBlocks({
+        project,
+        stateRoot: stateRoot(),
+        ownerRoot: ownerRoot(),
+        ports
+      });
       for (const s of b.stopped) {
-        stderr(`note: ${s.item} on ${s.label} stopped: account block (${s.reason})
+        const where = s.root === void 0 ? "" : ` in ${s.root}`;
+        stderr(`note: ${s.item}${where} on ${s.label} stopped: account block (${s.reason})
 `);
       }
       for (const e of b.errors) stderr(`error: ${e}
 `);
-      const r = await reconcileLimits({ project, stateRoot: stateRoot(), ports });
+      const r = await reconcileLimits({
+        project,
+        stateRoot: stateRoot(),
+        ownerRoot: ownerRoot(),
+        ports
+      });
       for (const s of r.stopped) {
         stderr(
           `note: ${s.item} stopped at a ${s.kind} limit, ${s.label} parked until ${s.parkedUntil}
@@ -31742,15 +32286,23 @@ async function runCli(argv, deps) {
 `);
       return b.lockFailed;
     };
-    const planNow = async (config2, board) => {
+    const crewRecordsProblem = () => {
+      try {
+        runningPerLabel(ownerRoot(), ports);
+        return void 0;
+      } catch (e) {
+        return e.message.replace(new RegExp("\\p{Cc}", "gu"), " ");
+      }
+    };
+    const planNow = async (config2, board, skipLabelCount = false) => {
       const capacity = await readCapacity(config2, ports);
       const ownerConfig = loadOwnerConfig(owner);
-      let hold = await limitHold(stateRoot(), ownerConfig, ports, owner);
+      let hold = await limitHold(ownerRoot(), ownerConfig, ports, owner);
       let slots;
       let line = hold;
-      if (hold === void 0) {
+      if (hold === void 0 && !skipLabelCount) {
         const got = await credentialSlots({
-          stateRoot: stateRoot(),
+          ownerRoot: ownerRoot(),
           ownerConfig,
           ports,
           owner
@@ -31766,7 +32318,15 @@ async function runCli(argv, deps) {
       return {
         capacity,
         hold: line,
-        plan: planAssignments(board, config2, capacity, runningPerRole(board), hold, slots)
+        // A pause holds the plan but is no usage limit: `hold` (the line for the owner) stays as is.
+        plan: planAssignments(
+          board,
+          config2,
+          capacity,
+          runningPerRole(board),
+          readPause(stateRoot()).paused ? "paused" : hold,
+          slots
+        )
       };
     };
     switch (cmd) {
@@ -31889,7 +32449,7 @@ async function runCli(argv, deps) {
             throw new Error(`crew record for ${item.id} has no valid startedAt`);
           }
         }
-        const clone2 = join12(stateRoot(), "clones", item.id);
+        const clone2 = join15(stateRoot(), "clones", item.id);
         const report = readReport(clone2, item.id, item, { notBefore });
         let branch = `studio/${item.id}`;
         if (report.pr !== void 0) {
@@ -31976,6 +32536,15 @@ async function runCli(argv, deps) {
           const { config: config2 } = loadAll();
           refuseNativeQueue(config2);
           const root = await boundStateRoot();
+          const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname8(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
+          const blockedNow = queueHold();
+          if (blockedNow !== void 0) throw new Error(blockedNow);
+          let heldLine;
+          const hold = () => {
+            const line = queueHold();
+            if (line !== void 0) heldLine = line;
+            return line;
+          };
           const log = (m) => stderr(`${m}
 `);
           const lock = acquireQueueRunLock(root, ports.clock.now(), log);
@@ -32011,16 +32580,19 @@ async function runCli(argv, deps) {
               {
                 stateRoot: root,
                 log,
+                hold,
                 takeNext: () => takeNextPending(root),
                 onDone: (d) => applyQueueResults(project, [d], ports, stderr)
               }
             );
             const finished7 = state.done.slice(before);
             print({
+              ...heldLine === void 0 ? {} : { held: heldLine },
               merged: finished7.filter((d) => d.result === "merged").length,
               failed: finished7.filter((d) => d.result === "failed").length,
               done: finished7
             });
+            if (heldLine !== void 0) return 1;
           } finally {
             removeSignals();
             lock.release();
@@ -32033,24 +32605,68 @@ async function runCli(argv, deps) {
         await reconcile();
         const { config: config2, board } = loadAll();
         const root = await boundStateRoot();
-        const { capacity, hold } = await planNow(config2, board);
-        const read2 = readLimits(root);
+        const crewProblem = crewRecordsProblem();
+        if (crewProblem !== void 0) stderr(`error: ${crewProblem}
+`);
+        const { capacity, hold } = await planNow(config2, board, crewProblem !== void 0);
+        const read2 = readLimits(ownerRoot());
+        const ownerConfig = loadOwnerConfig(owner);
         const snapshot = buildSnapshot(
           root,
+          ownerRoot(),
           board,
           capacity,
           loadQueue(root),
           ports.clock.now(),
           hold,
           read2.ok ? activeParks(read2.labels, ports.clock.now()) : {},
-          labelUsageSnapshot({
-            stateRoot: root,
-            ownerConfig: loadOwnerConfig(owner),
-            ports
-          })
+          crewProblem === void 0 ? labelUsageSnapshot({ ownerRoot: ownerRoot(), ownerConfig, ports }) : void 0,
+          {
+            config: config2,
+            ownerConfig,
+            mainBuild: await readMainBuild(config2, ports),
+            crewRecordsUnreadable: crewProblem !== void 0,
+            alive: (pid) => Number.isInteger(pid) && pid > 0 && ports.claude.alive(pid),
+            hasReport: (item) => isItemId(item) && existsSync5(join15(root, "clones", item, ".studio", "reports", `${item}.md`))
+          }
         );
         writeState(root, snapshot);
+        try {
+          for (const line of await sendNotifications({
+            ownerRoot: ownerRoot(),
+            projectKey: stateDirName(projectRealpath(project)),
+            primaryRepo: config2.primaryRepo,
+            snapshot,
+            ownerConfig,
+            ports,
+            owner
+          })) {
+            stderr(`error: ${line}
+`);
+          }
+        } catch {
+          stderr("error: notify: could not send notifications\n");
+        }
         print(snapshot);
+        return 0;
+      }
+      case "pause":
+      case "resume": {
+        if (deps.env.STUDIO_ROLE === "crew" || deps.isTerminal !== true) {
+          stderr(`studio: ${cmd} is for the owner and needs a terminal; nothing written
+`);
+          return 1;
+        }
+        if (rest.length > 0) throw new UsageError(`${cmd} takes no arguments`);
+        const root = await boundStateRoot();
+        if (cmd === "pause") {
+          const now = ports.clock.now();
+          setPause(root, now);
+          print({ paused: true, at: now.toISOString() });
+        } else {
+          clearPause(root);
+          print({ paused: false });
+        }
         return 0;
       }
       case "stop": {
@@ -32064,7 +32680,7 @@ async function runCli(argv, deps) {
         const stoppedAt = ports.clock.now().toISOString();
         const latest = readCrewRecords(root);
         latest[id] = { ...latest[id] ?? rec, stoppedAt };
-        writeStateFile(root, join12(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
+        writeStateFile(root, join15(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
 `);
         print({ item: id, name: rec.name, pid: rec.pid, stoppedAt });
         return 0;
@@ -32106,7 +32722,8 @@ async function runCli(argv, deps) {
         if (rest.length !== 1 || label === void 0 || !validLabel(label)) {
           throw new UsageError("accounts-clear needs exactly one valid label");
         }
-        const r = clearBlocks(await boundStateRoot(), label, ports.clock.now());
+        await boundStateRoot();
+        const r = clearBlocks(ownerRoot(), label, ports.clock.now());
         print({ label, ...r });
         return 0;
       }
@@ -32229,8 +32846,41 @@ function applyQueueResults(project, done, ports, stderr) {
   }
   saveBoard(project, board);
 }
-function buildSnapshot(root, board, capacity, queue, now, hold, limits, labelUsage2) {
-  const blocks = readBlocks(root);
+var MAX_MERGED_TODAY = 200;
+function todayFrom(events, now, timezone) {
+  const day = dayKey(now, timezone);
+  const merged = [];
+  let deployed = 0;
+  for (const raw of events) {
+    if (raw === null || typeof raw !== "object") continue;
+    const ev = raw;
+    if (ev.type !== "merged" && ev.type !== "deployed" || typeof ev.at !== "string") continue;
+    const t = Date.parse(ev.at);
+    if (Number.isNaN(t) || dayKey(new Date(t), timezone) !== day) continue;
+    if (ev.type === "deployed") deployed++;
+    else if (typeof ev.pr === "number" && Number.isInteger(ev.pr)) {
+      merged.push({ pr: ev.pr, repo: typeof ev.repo === "string" ? ev.repo : "", at: ev.at, t });
+    }
+  }
+  merged.sort((a2, b) => a2.t - b.t);
+  return {
+    day,
+    merged: merged.slice(-MAX_MERGED_TODAY).map(({ pr, repo, at }) => ({ pr, repo, at })),
+    deployed
+  };
+}
+function usageDaysFrom(ownerRoot) {
+  const read2 = readUsage(ownerRoot);
+  if (!read2.ok) return void 0;
+  const days = {};
+  for (const day of Object.keys(read2.days).sort()) {
+    const labels = Object.entries(read2.days[day] ?? {}).filter(([, n2]) => typeof n2 === "number");
+    if (labels.length > 0) days[day] = Object.fromEntries(labels);
+  }
+  return Object.keys(days).length === 0 ? void 0 : days;
+}
+function buildSnapshot(root, ownerRoot, board, capacity, queue, now, hold, limits, labelUsage2, extra) {
+  const blocks = readBlocks(ownerRoot);
   const blocked = blockLine(blocks);
   const notifications = blocks.ok ? blocks.blocks.map((b) => ({
     id: "account-block",
@@ -32248,30 +32898,55 @@ function buildSnapshot(root, board, capacity, queue, now, hold, limits, labelUsa
   ];
   const crew = Object.values(readCrewRecords(root)).map((r) => {
     const item = board.items.find((i2) => i2.id === r.item);
+    const status = item?.status ?? "unknown";
     return {
       name: r.name,
       role: r.role,
       item: r.item,
-      status: item?.status ?? "unknown",
+      status,
       ...item?.pr === void 0 ? {} : { pr: item.pr },
       since: r.startedAt,
-      ...r.label === void 0 ? {} : { label: r.label }
+      ...r.label === void 0 ? {} : { label: r.label },
+      ...item === void 0 ? {} : { title: item.title, repo: item.repo },
+      state: crewStateOf(r, status, extra.alive(r.pid), extra.hasReport(r.item)),
+      ...r.stoppedAt === void 0 ? {} : { stoppedAt: r.stoppedAt }
     };
   });
+  const events = readMetricEvents(root);
+  const usageDays = usageDaysFrom(ownerRoot);
   return {
     crew,
     queue,
     capacity,
+    ci: {
+      busy: capacity.ciBusy,
+      total: capacity.ciTotal,
+      mergeMaxBusy: extra.config.ci.capacity.mergeMaxBusy,
+      ok: capacity.ok
+    },
+    today: todayFrom(events, now, extra.ownerConfig.crewLabelLimits.timezone),
+    ...usageDays === void 0 ? {} : { usageDays },
+    mainBuild: extra.mainBuild,
+    counts: {
+      ready: board.items.filter((i2) => i2.status === "ready").length,
+      queued: queue.pending.length + (queue.current === void 0 ? 0 : 1)
+    },
     forOwner: [
       ...board.items.filter((i2) => i2.ownerOnly && i2.status !== "merged" && i2.status !== "dropped").map((i2) => ({ id: i2.id, title: i2.title })),
       // Exactly one line however many items wait or labels are blocked; a block outranks a limit.
-      ...blocked !== void 0 ? [{ id: "account-block", title: blocked }] : hold === void 0 ? [] : [{ id: "usage-limit", title: hold }]
+      ...blocked !== void 0 ? [{ id: "account-block", title: blocked }] : hold === void 0 ? [] : [{ id: "usage-limit", title: hold }],
+      ...extra.crewRecordsUnreadable ? [
+        {
+          id: "crew-records",
+          title: "crew records of a project are unreadable: no crew starts and per-label usage is not shown until the owner inspects or removes the file"
+        }
+      ] : []
     ],
     ...Object.keys(limits).length > 0 ? { limits } : {},
     ...labelUsage2 === void 0 ? {} : { labelUsage: labelUsage2 },
     ...notifications.length > 0 ? { notifications } : {},
     updatedAt: now.toISOString(),
-    metrics: computeMetrics(readMetricEvents(root))
+    metrics: computeMetrics(events)
   };
 }
 
@@ -32283,14 +32958,14 @@ function readHiddenLine(prompt, input2, write) {
   input2.setRawMode(true);
   input2.setEncoding("utf8");
   input2.resume();
-  return new Promise((resolve5) => {
+  return new Promise((resolve6) => {
     let value = "";
     const done = (result) => {
       input2.removeListener("data", onData);
       input2.setRawMode?.(false);
       input2.pause();
       write("\n");
-      resolve5(result);
+      resolve6(result);
     };
     const onData = (chunk) => {
       for (const ch of chunk) {
@@ -32307,7 +32982,7 @@ function readHiddenLine(prompt, input2, write) {
 
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync5, openSync as openSync5, readFileSync as readFileSync14 } from "node:fs";
+import { closeSync as closeSync5, openSync as openSync5, readFileSync as readFileSync16 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -33972,8 +34647,8 @@ var disconnect = (anyProcess) => {
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/deferred.js
 var createDeferred = () => {
   const methods = {};
-  const promise2 = new Promise((resolve5, reject) => {
-    Object.assign(methods, { resolve: resolve5, reject });
+  const promise2 = new Promise((resolve6, reject) => {
+    Object.assign(methods, { resolve: resolve6, reject });
   });
   return Object.assign(promise2, methods);
 };
@@ -36003,7 +36678,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync13 } from "node:fs";
+import { readFileSync as readFileSync15 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value, optionName) => {
@@ -36359,7 +37034,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync12 } from "node:fs";
+import { readFileSync as readFileSync14 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -36473,7 +37148,7 @@ var getTargetFd = ({ value, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync12(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync14(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value, fdNumber) => {
   if (value === "inherit") {
@@ -36867,8 +37542,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync13(value))] }),
-    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync13(file2))] }),
+    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync15(value))] }),
+    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync15(file2))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value }) => ({ contents: () => [...value] }),
     string: ({ value }) => ({ contents: [value] }),
@@ -38529,11 +39204,11 @@ var addConcurrentStream = (concurrentStreams, stream, waitName) => {
   const promises = weakMap.get(stream);
   const promise2 = createDeferred();
   promises.push(promise2);
-  const resolve5 = promise2.resolve.bind(promise2);
-  return { resolve: resolve5, promises };
+  const resolve6 = promise2.resolve.bind(promise2);
+  return { resolve: resolve6, promises };
 };
-var waitForConcurrentStreams = async ({ resolve: resolve5, promises }, subprocess) => {
-  resolve5();
+var waitForConcurrentStreams = async ({ resolve: resolve6, promises }, subprocess) => {
+  resolve6();
   const [isSubprocessExit] = await Promise.race([
     Promise.allSettled([true, subprocess]),
     Promise.all([false, ...promises])
@@ -40118,7 +40793,7 @@ function parseLinuxStartTime(stat) {
 var STOP_GRACE_MS = 5e3;
 var STOP_POLL_MS = 100;
 var IDENTITY_TIMEOUT_MS = 5e3;
-var sleep = (ms) => new Promise((resolve5) => setTimeout(resolve5, ms));
+var sleep = (ms) => new Promise((resolve6) => setTimeout(resolve6, ms));
 function realPorts(claudeBin = "claude") {
   const clock = { now: () => /* @__PURE__ */ new Date(), sleep };
   const gh = {
@@ -40129,11 +40804,16 @@ function realPorts(claudeBin = "claude") {
         ...opts?.paginate === false ? [] : ["--paginate"],
         ...jq === void 0 ? [] : ["--jq", jq]
       ];
-      const r = await execa("gh", args);
+      const r = await execa("gh", args, {
+        ...opts?.timeoutMs === void 0 ? {} : { timeout: opts.timeoutMs }
+      });
       return r.stdout;
     },
-    async run(args) {
-      const r = await execa("gh", args, { reject: false });
+    async run(args, opts) {
+      const r = await execa("gh", args, {
+        reject: false,
+        ...opts?.timeoutMs === void 0 ? {} : { timeout: opts.timeoutMs }
+      });
       return { code: r.exitCode ?? 1, stdout: r.stdout, stderr: r.stderr };
     }
   };
@@ -40177,9 +40857,9 @@ function realPorts(claudeBin = "claude") {
           detached: true,
           stdio: ["pipe", fd, fd]
         });
-        const pid = await new Promise((resolve5, reject) => {
+        const pid = await new Promise((resolve6, reject) => {
           child.once("error", reject);
-          child.once("spawn", () => resolve5(child.pid));
+          child.once("spawn", () => resolve6(child.pid));
         });
         child.stdin?.on("error", () => {
         });
@@ -40195,7 +40875,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync14(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync16(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }
@@ -40237,8 +40917,8 @@ function realPorts(claudeBin = "claude") {
         forceKillAfterDelay: 1e3
       });
       let timer;
-      const late = new Promise((resolve5) => {
-        timer = setTimeout(() => resolve5({ code: 1, stdout: "" }), opts.timeoutMs + 2e3);
+      const late = new Promise((resolve6) => {
+        timer = setTimeout(() => resolve6({ code: 1, stdout: "" }), opts.timeoutMs + 2e3);
         timer.unref();
       });
       const run = child.then((r) => ({
@@ -40269,7 +40949,7 @@ process.exitCode = await runCli(process.argv.slice(2), {
   stdout: (s) => process.stdout.write(s),
   stderr: (s) => process.stderr.write(s),
   env: process.env,
-  homedir: homedir5(),
+  homedir: homedir6(),
   cwd: process.cwd(),
   isTerminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
   readSecret: (prompt) => readHiddenLine(prompt, process.stdin, (s) => process.stderr.write(s))

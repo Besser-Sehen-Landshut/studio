@@ -15,12 +15,24 @@ artifacts (report files, PR heads, CI on the exact SHA), never prose. **The lett
 | 1 Read | `studio board`, `studio status`, open PRs |
 | 2 Plan | `studio plan` (no arguments; JSON) |
 | 3 Assign | `studio launch <id>` for each id in `assign` — launch refuses anything else |
-| 4 Watch | `studio status` via Claude Code scheduling; `studio stop <id>` if stuck |
+| 4 Watch | the heartbeat (below) while any crew is live; `studio stop <id>` if stuck |
 | 5 Collect | `studio collect <id>` once the crew exited; it verifies report, PR branch and head SHA |
 | 6 Review | one reviewer crew session per PR (below) |
 | 7 Merge | `studio queue add <repo>#<pr>`; `studio queue run` as a background task |
 | 8 Deploy | the project's release workflow, your decision (announce first, below) |
 | 9 Report | `studio state` after decisions; `studio metrics` for the summary |
+
+## Heartbeat
+
+Crew logs are read only when a `studio` command runs, so an account block stops crews one poll later. The poll is what makes "stops at once" true. The heartbeat is this one command, run under Claude Code's Monitor tool (a plain background task wakes you only when it exits), started with the first launch and ended when no crew is live:
+
+```bash
+while sleep 120; do s=$(studio status 2>&1); [ "$s" = "$p" ] || echo "$s"; p=$s; studio state 2>&1 >/dev/null | grep -v '^warning:'; done
+```
+
+- It prints only when the status changes or `studio state` reports a problem, so it costs no model turn while nothing happens. "Keep it cheap" never lengthens it: 120 seconds, always.
+- It also feeds the Studio board (`studio state` writes `state.json`).
+- Each printed line is your wake-up: a crew that exited goes to Collect; a `note:` or `error:` line, read and act on. During a block relaunch nothing and tell the owner in one line.
 
 ## Collect: artifacts, not prose
 
@@ -96,3 +108,5 @@ inside crew clones.
 | "tests_run 0 but the fix looks right" | Not done: blocked, then one relaunch. |
 | "`studio plan APP-6` will plan it" | `plan` takes no argument. Missing plan → research item. |
 | "It's tiny, I'll merge directly" | Never `gh pr merge`. |
+| "Builds take an hour, polling every 15 minutes is enough" | Crews on a blocked account keep running until the next poll. 120 seconds. |
+| "A short timer burns tokens" | A background shell loop spends none. A `/loop` tick does. |

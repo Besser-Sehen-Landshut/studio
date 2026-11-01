@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { loadBoard } from '../src/board.js';
 import { runCli } from '../src/cli.js';
-import { stateRootFor, writeStateFile } from '../src/paths.js';
+import { acquireStateLock, ownerStateRootFor, stateRootFor, writeStateFile } from '../src/paths.js';
 import type { Claude, Gh, Ports } from '../src/ports.js';
 import { realPorts } from '../src/ports.js';
 import { acquireQueueRunLock, enqueue, loadQueue, saveQueue } from '../src/queue.js';
@@ -96,6 +96,7 @@ interface Fx {
   home: string;
   env: Record<string, string | undefined>;
   state: string;
+  owner: string;
 }
 
 function makeFx(items: ItemSpec[]): Fx {
@@ -119,7 +120,13 @@ function makeFx(items: ItemSpec[]): Fx {
     `items:\n${items.map(itemYaml).join('\n')}\n`,
   );
   const env = { PATH: process.env.PATH };
-  return { project, home, env, state: stateRootFor(project, { env, homedir: home }) };
+  return {
+    project,
+    home,
+    env,
+    state: stateRootFor(project, { env, homedir: home }),
+    owner: ownerStateRootFor({ env, homedir: home }),
+  };
 }
 
 type GhReply = { code?: number; stdout?: string; stderr?: string };
@@ -186,6 +193,8 @@ async function cli(fx: Fx, ports: Ports, ...argv: string[]) {
     env: fx.env,
     homedir: fx.home,
     cwd: fx.project,
+    // These two are the owner's and need a terminal; everything else runs without one.
+    isTerminal: argv[0] === 'pause' || argv[0] === 'resume',
   });
   return { code, out, err };
 }
@@ -506,6 +515,10 @@ describe('studio CLI', () => {
       crew: [],
       queue: { pending: [], done: [] },
       capacity: { ciBusy: 0, ciTotal: 8, hostLoad: 0, ok: true },
+      ci: { busy: 0, total: 8, mergeMaxBusy: 5, ok: true },
+      today: { day: '2026-10-31', merged: [], deployed: 0 },
+      mainBuild: { status: 'unknown' },
+      counts: { ready: 0, queued: 0 },
       forOwner: [],
       updatedAt: '2026-10-31T10:00:00.000Z',
       metrics: computeMetrics([]),
@@ -673,6 +686,125 @@ describe('studio CLI', () => {
       if (l.includes('--json commits')) return { stdout: '2026-10-30T08:00:00Z\n' };
       return undefined;
     });
+
+  it('queue run: an account block refuses before the lock and any gh call', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const g = passingGh();
+    const { ports } = fakePorts(g.gh);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+    const before = g.calls.length;
+    const bodies = [
+      JSON.stringify([
+        { label: 'default', reason: 'authentication_failed', at: '2026-10-31T09:00:00Z' },
+      ]),
+      'not json',
+    ];
+    mkdirSync(fx.owner, { recursive: true, mode: 0o700 });
+    for (const body of bodies) {
+      writeFileSync(join(fx.owner, 'blocks.json'), body);
+      const run = await cli(fx, ports, 'queue', 'run');
+      expect(run.code).toBe(1);
+      expect(run.err).toContain('account block');
+      expect(g.calls.length).toBe(before);
+      expect(existsSync(join(fx.state, 'queue.run.lock'))).toBe(false);
+      expect(statusOf(fx, 'APP-1')?.status).toBe('queued');
+    }
+  });
+
+  it('queue run: a block appearing mid-run stops before the merge, prints held, exits 1', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const g = passingGh((l) => {
+      if (l.startsWith('pr checks 5') && !existsSync(join(fx.owner, 'blocks.json'))) {
+        mkdirSync(fx.owner, { recursive: true, mode: 0o700 });
+        writeFileSync(
+          join(fx.owner, 'blocks.json'),
+          JSON.stringify([
+            { label: 'default', reason: 'authentication_failed', at: '2026-10-31T09:00:00Z' },
+          ]),
+        );
+      }
+    });
+    const { ports } = fakePorts(g.gh);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+    const run = await cli(fx, ports, 'queue', 'run');
+    expect(run.code).toBe(1);
+    expect(JSON.parse(run.out).held).toContain('account block');
+    expect(g.calls.some((l) => l.startsWith('pr merge'))).toBe(false);
+    expect(loadQueue(fx.state).current).toMatchObject({ pr: 5, step: 'capacity' });
+    expect(existsSync(join(fx.state, 'queue.run.lock'))).toBe(false);
+  });
+
+  it('queue run: a pause refuses before the lock and any gh call; resume lets it merge', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const g = passingGh();
+    const { ports } = fakePorts(g.gh);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+    expect((await cli(fx, ports, 'pause')).code).toBe(0);
+    const before = g.calls.length;
+    const run = await cli(fx, ports, 'queue', 'run');
+    expect(run.code).toBe(1);
+    expect(run.err).toContain('paused');
+    expect(g.calls.length).toBe(before);
+    expect(existsSync(join(fx.state, 'queue.run.lock'))).toBe(false);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('queued');
+    expect((await cli(fx, ports, 'resume')).code).toBe(0);
+    expect((await cli(fx, ports, 'queue', 'run')).code).toBe(0);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('merged');
+  });
+
+  it('queue run: a pause appearing mid-run stops before the merge, prints held, exits 1', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const g = passingGh((l) => {
+      if (l.startsWith('pr checks 5') && !existsSync(join(fx.state, 'pause.json'))) {
+        writeFileSync(join(fx.state, 'pause.json'), 'garbage');
+      }
+    });
+    const { ports } = fakePorts(g.gh);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+    const run = await cli(fx, ports, 'queue', 'run');
+    expect(run.code).toBe(1);
+    expect(JSON.parse(run.out).held).toContain('paused');
+    expect(g.calls.some((l) => l.startsWith('pr merge'))).toBe(false);
+    expect(loadQueue(fx.state).current).toMatchObject({ pr: 5, step: 'capacity' });
+  });
+
+  it('queue run: old project state files that were not migrated hold the queue', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const g = passingGh();
+    const { ports } = fakePorts(g.gh);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+    writeFileSync(join(fx.state, 'blocks.json'), '[]');
+    // Another process holds the migration lock, so this run cannot migrate.
+    const lock = acquireStateLock(fx.owner, 'migrate.lock', {
+      now: ports.clock.now(),
+      heartbeatStaleMs: 300_000,
+    });
+    try {
+      const before = g.calls.length;
+      const run = await cli(fx, ports, 'queue', 'run');
+      expect(run.code).toBe(1);
+      expect(run.err).toContain('not migrated');
+      expect(g.calls.length).toBe(before);
+      expect(existsSync(join(fx.state, 'queue.run.lock'))).toBe(false);
+    } finally {
+      lock?.release();
+    }
+  });
+
+  it('queue run: an old state file appearing mid-run stops before the merge', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const g = passingGh((l) => {
+      if (l.startsWith('pr checks 5') && !existsSync(join(fx.state, 'limits.json'))) {
+        writeFileSync(join(fx.state, 'limits.json'), '{}');
+      }
+    });
+    const { ports } = fakePorts(g.gh);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+    const run = await cli(fx, ports, 'queue', 'run');
+    expect(run.code).toBe(1);
+    expect(JSON.parse(run.out).held).toContain('not migrated');
+    expect(g.calls.some((l) => l.startsWith('pr merge'))).toBe(false);
+  });
 
   it('R79: a second queue run exits 1 while the run lock is held', async () => {
     const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);

@@ -217,6 +217,14 @@ export const ownerConfigSchema = z.strictObject({
   // subscription login, so the variables and settings for it are refused by default.
   allowApiBilling: z.boolean().default(false),
   crewLabelLimits: crewLabelLimitsSchema,
+  // Push notifications: an absolute executable that gets each message in its environment (see
+  // README). It lives here, not in studio.yaml, because it runs on the owner's machine.
+  notify: z
+    .strictObject({
+      channel: z.string().regex(/^[A-Za-z0-9._-]{1,64}$/, 'must match [A-Za-z0-9._-]{1,64}'),
+      command: z.string().min(1),
+    })
+    .optional(),
 });
 
 export type OwnerConfig = z.infer<typeof ownerConfigSchema>;
@@ -282,6 +290,10 @@ export function loadOwnerConfig(opts: OwnerEnv = {}): OwnerConfig {
   if (command !== undefined && !isAbsolute(command)) {
     problems.push('crew_credential_command: must be an absolute path');
   }
+  const notifyCommand = result.data.notify?.command;
+  if (notifyCommand !== undefined && !isAbsolute(notifyCommand)) {
+    problems.push('notify.command: must be an absolute path');
+  }
   if (problems.length > 0) throw new ConfigError(file, problems.join('; '));
   return result.data;
 }
@@ -303,6 +315,11 @@ export function configWarnings(config: StudioConfig): string[] {
   if (config.crewAllowedWorkflowRefs.length > 0) {
     warnings.push(
       `crew_allowed_workflow_refs (${config.crewAllowedWorkflowRefs.join(', ')}) must be protected server-side (branch protection or rulesets): the crew guard cannot stop a push to those refs from another path`,
+    );
+  }
+  if (config.notify !== undefined) {
+    warnings.push(
+      'notify in studio.yaml has no effect: the notify command is set in the owner config ($XDG_CONFIG_HOME/studio/config.yaml or ~/.config/studio/config.yaml)',
     );
   }
   return warnings;

@@ -4,5 +4,6 @@ export default defineConfig({
   test: {
     reporters: ['default'],
     passWithNoTests: false,
+    exclude: ['node_modules/**', 'dist/**', 'hooks/**', '.worktrees/**'],
   },
 });

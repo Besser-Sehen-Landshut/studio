@@ -517,6 +517,352 @@ describe('round 1 regressions', () => {
     denies(['/usr/local/bin/terraform apply', 'env X=1 /opt/bin/terraform apply -auto-approve']);
   });
 
+  it('I5b a crew may not run studio at all, whatever the arguments', () => {
+    const forms = (args: string) => [
+      `studio ${args}`,
+      `studio --project . ${args}`,
+      `A=1 studio ${args}`,
+      `env studio ${args}`,
+      `env A=1 studio ${args}`,
+      `/usr/local/bin/studio ${args}`,
+      `bin/studio ${args}`,
+      `./bin/studio ${args}`,
+      `../plugin/bin/studio ${args}`,
+      `Studio ${args}`,
+      `dist-bundle/studio.mjs ${args}`,
+      `node /opt/plugin/bin/studio ${args}`,
+      `node bin/studio ${args}`,
+      `node ./bin/studio ${args}`,
+      `node /opt/plugin/dist-bundle/studio.mjs ${args}`,
+      `node dist-bundle/studio.mjs ${args}`,
+      `node --no-warnings bin/studio ${args}`,
+      `node --title x bin/studio ${args}`,
+      `node --require=bin/studio app.js ${args}`,
+      `node -r bin/studio app.js ${args}`,
+      `node -- bin/studio ${args}`,
+      `/usr/bin/node bin/studio ${args}`,
+      `nodejs bin/studio ${args}`,
+      `A=1 node bin/studio ${args}`,
+      `exec studio ${args}`,
+      `command studio ${args}`,
+      `nohup studio ${args}`,
+      `timeout 5 studio ${args}`,
+      `echo x && studio ${args}`,
+      `echo x; studio ${args}`,
+      `echo x | studio ${args}`,
+      `false || node bin/studio ${args}`,
+      `(studio ${args})`,
+      `{ studio ${args}; }`,
+      `if true; then studio ${args}; fi`,
+      `f() { studio ${args}; }; f`,
+      `echo $(studio ${args})`,
+      `echo \`studio ${args}\``,
+      `find . -exec studio ${args} \\;`,
+      `sh bin/studio ${args}`,
+    ];
+    for (const args of ['pause', 'resume', 'accounts-clear label-a', 'state', 'plan', '']) {
+      denies(forms(args));
+    }
+    denies(['studio launch APP-1', 'studio --help']);
+  });
+
+  it('I5c a command word that is an expansion or a glob is denied', () => {
+    denies([
+      '$X pause',
+      '"$X" pause',
+      `\${X} pause`,
+      '$(which studio) pause',
+      '"$(which studio)" pause',
+      '`which studio` pause',
+      '/opt/bin/stud* pause',
+      '/opt/bin/studi? pause',
+      '/opt/bin/[s]tudio pause',
+      'stud* pause',
+      '$X/studio pause',
+      'bin/$X pause',
+      's"tu"dio pause',
+      "s'tu'dio pause",
+      '\\studio pause',
+      'stu\\dio pause',
+      '"studio" pause',
+      "$'studio' pause",
+      '{studio,pause}',
+      'exec $X pause',
+      'A=1 $X pause',
+    ]);
+  });
+
+  it('I5d node needs a literal script argument', () => {
+    denies([
+      'node $X',
+      `node \${X}`,
+      'node "$X"',
+      'node $X pause',
+      'node $(which studio)',
+      'node "$(which studio)" pause',
+      'node `which studio`',
+      'node bin/$X',
+      'node bin/stud*',
+      'node bin/studi?',
+      'node bin/[s]tudio',
+      'node "bin/stud"*',
+      'node --no-warnings $X',
+      'node --title $X app.js',
+      'node --require=$X app.js',
+      'node -- $X',
+      'node -',
+      'node',
+      'node --no-warnings',
+      'node --no-warnings -',
+      'node --title x',
+      'echo x | node',
+      'node -e "console.log(1)"',
+      'node -p 1',
+      'node --eval 1',
+      'node --print=1',
+      'node -e "$X"',
+      'node -e \'import("./bin/studio")\'',
+      'node --eval=\'import("./bin/studio")\'',
+    ]);
+  });
+
+  it('I5g arithmetic and ${VAR=...} are denied outright', () => {
+    denies([
+      '(( STUDIO_ROLE = 1 ))',
+      'echo $(( X = 1 ))',
+      '(( X++ ))',
+      '(( a <= 2 ))',
+      'echo $((1 + 2))',
+      '[ $((a + 1)) -eq 2 ]',
+      'echo $((a == 1))',
+      'echo $[1 + 2]',
+      'echo $[ X = 1 ]',
+      'echo ${STUDIO_ROLE:=owner}',
+      'echo ${STUDIO_ROLE=owner}',
+      'echo ${X:=1}',
+      'echo ${a[0]:=1}',
+    ]);
+    for (const c of ['echo ${X:-a}', 'echo ${X}', 'echo "$X"', 'test "$X" = a']) {
+      expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
+    }
+  });
+
+  it('I5g2 node runs only --version, --help or a literal relative script path', () => {
+    denies([
+      'node --test',
+      'node --test test/a.test.js',
+      'node --no-warnings x.js',
+      'node --no-warnings app.js pause',
+      'node --max-old-space-size=4096 app.js',
+      'node --version x',
+      'node /dev/stdin',
+      'node /abs/app.js',
+      'node ../app.js',
+      'node a/../../app.js',
+      'node ~/app.js',
+      'node -r x.js app.js',
+      'node --import x.js app.js',
+      'node -r bin/studio app.js',
+      'node -- app.js',
+      'node dist-bundle/studio.mjs',
+      'node ./bin/studio',
+    ]);
+  });
+
+  it('I5e ordinary node and npm commands are allowed, also with these words as arguments', () => {
+    for (const c of [
+      'node scripts/run.js resume',
+      'node app.js pause',
+      'node app.js studio',
+      'node app.js "$X"',
+      'node app.js $(echo x)',
+      'node ./scripts/run.js resume',
+      'node --version',
+      'node --help',
+      'npm run resume',
+      'npm run pause',
+      'pnpm test',
+      'echo pause resume',
+      'echo studio pause',
+      'ls studio',
+      'cat .studio/reports/APP-1.md',
+      'git push -u origin HEAD:refs/heads/studio/APP-1',
+      './studio.sh',
+    ]) {
+      expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
+    }
+  });
+
+  it('I5f other ways a shell runs a string stay denied with studio', () => {
+    denies([
+      'eval studio pause',
+      'eval "studio pause"',
+      'sh -c "studio pause"',
+      'bash -c "studio pause"',
+      'zsh -c "node bin/studio resume"',
+      'sh -c "$X"',
+      'echo studio pause | sh',
+      'echo studio pause | bash -s',
+      'source ./x',
+      '. ./x',
+      'xargs studio pause',
+      'echo pause | xargs studio',
+      "trap 'studio pause' EXIT",
+      'alias s=studio',
+      'hash -p bin/studio s',
+    ]);
+  });
+
+  it('I5h runners that start a command unexamined stay denied', () => {
+    denies([
+      'script -q /dev/null studio pause',
+      'script -q /dev/null echo hi',
+      'flock /tmp/x studio pause',
+      'flock -n /tmp/x echo hi',
+      'watch studio state',
+      'watch -n 5 echo hi',
+    ]);
+  });
+
+  it('I5i package runners are denied outright', () => {
+    denies([
+      'npx vitest',
+      'pnpx vitest',
+      'bunx vitest',
+      'corepack enable',
+      'corepack pnpm test',
+      'bun x vitest',
+      'npm exec vitest',
+      'npm exec -- studio pause',
+      'pnpm exec vitest',
+      'pnpm --filter app exec vitest',
+      'pnpm dlx cowsay hi',
+      'yarn dlx cowsay',
+      'yarn exec vitest',
+      'npm test --shell-mode',
+      'pnpm run lint --shell-mode=true',
+      'yarn build --shell-mode',
+      'npm test --shell',
+      'npm test --shell-m',
+      'pnpm run lint --shell=x',
+      'pnpm',
+      'npm',
+      'yarn',
+      'bun',
+      'yarn studio',
+      'pnpm -w test',
+      'pnpm --filter app test',
+      'npm -- test',
+      'npm -w a test',
+      'npm $X',
+      'pnpm "$X" test',
+      'bun x',
+      'bun repl',
+      'npm publish',
+      'pnpm exec',
+    ]);
+  });
+
+  it('I5j allowlisted first arguments of npm, pnpm, yarn and bun pass', () => {
+    for (const c of [
+      'pnpm test',
+      'pnpm test "$X"',
+      'pnpm run lint',
+      'pnpm run --filter x build',
+      'pnpm install',
+      'pnpm i',
+      'pnpm ci',
+      'npm ci',
+      'yarn test',
+      'yarn build',
+      'yarn lint',
+      'yarn add x',
+      'pnpm remove x',
+      'pnpm list',
+      'pnpm ls',
+      'pnpm audit',
+      'pnpm outdated',
+      'pnpm why x',
+      'pnpm typecheck',
+      'pnpm format',
+      'pnpm --version',
+      'pnpm -v',
+      'pnpm --help',
+      'npm run resume',
+      'npm test',
+      'bun test',
+    ]) {
+      expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
+    }
+  });
+
+  it('I5j2 package manager variables cannot be set', () => {
+    denies([
+      'npm_config_script_shell=/tmp/x pnpm test',
+      'NPM_CONFIG_SCRIPT_SHELL=/tmp/x pnpm test',
+      'export PNPM_HOME=/tmp/x',
+      'YARN_RC_FILENAME=x yarn build',
+      'pnpm_config_x=1 pnpm test',
+      'COREPACK_HOME=/tmp/x pnpm test',
+      'NODE_PATH=/tmp/x node a.js',
+      'node_path=/tmp/x node a.js',
+    ]);
+  });
+
+  it('I5k NODE_OPTIONS cannot be set', () => {
+    denies([
+      'NODE_OPTIONS=--require=./bin/studio node app.js',
+      'export NODE_OPTIONS=--require=./bin/studio',
+      'NODE_OPTIONS= node app.js',
+    ]);
+  });
+
+  it('I5g variables with the STUDIO_ prefix cannot be set or unset', () => {
+    denies([
+      'STUDIO_ROLE=owner cmd',
+      'STUDIO_ROLE= cmd',
+      'STUDIO_ROLE=owner',
+      'A=1 STUDIO_ROLE=owner cmd',
+      'STUDIO_ANYTHING=1 cmd',
+      'STUDIO_ROLE=owner studio pause',
+      'export STUDIO_ROLE=',
+      'export STUDIO_ROLE=owner',
+      'export A=1 STUDIO_ROLE=owner',
+      'export STUDIO_ROLE',
+      'declare STUDIO_ROLE=owner',
+      'declare -x STUDIO_ROLE=owner',
+      'typeset STUDIO_ROLE=owner',
+      'local STUDIO_ROLE=owner',
+      'readonly STUDIO_ROLE=owner',
+      'read STUDIO_ROLE',
+      'unset STUDIO_ROLE',
+      'unset -v STUDIO_ROLE',
+      'env STUDIO_ROLE=',
+      'env STUDIO_ROLE=owner cmd',
+      'env -u STUDIO_ROLE',
+      'env -u STUDIO_ROLE cmd',
+      '/usr/bin/env -u STUDIO_ROLE cmd',
+      'printf -v STUDIO_ROLE x',
+      'for STUDIO_ROLE in owner; do cmd; done',
+      'select STUDIO_ROLE in owner; do cmd; done',
+      'let STUDIO_ROLE=1',
+      '(( STUDIO_ROLE = 1 ))',
+      '((STUDIO_ROLE=1))',
+      '(STUDIO_ROLE=owner cmd)',
+      '{ STUDIO_ROLE=owner; }',
+      'echo x; STUDIO_ROLE=owner',
+      'echo $(STUDIO_ROLE=owner cmd)',
+      'exec STUDIO_ROLE=owner',
+    ]);
+    for (const c of [
+      'echo "$STUDIO_ROLE"',
+      'test "$STUDIO_ROLE" = crew',
+      'for x in a b; do echo x; done',
+    ]) {
+      expect(bash(c, wt), c).toMatchObject({ decision: 'allow' });
+    }
+  });
+
   it('I6 write path globs, cd state, <>', () => {
     denies([
       'touch li*/pwned',

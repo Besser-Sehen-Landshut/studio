@@ -23,11 +23,21 @@ export interface Gh {
   /**
    * `gh api <path> [--paginate] [--jq <jq>]`, returns stdout. Paginates by default (opt out with
    * `{ paginate: false }` for single-page reads); with `--jq` the filter runs per page, so use
-   * filters that emit one line per record. Throws on a non-zero exit.
+   * filters that emit one line per record. Throws on a non-zero exit or when `timeoutMs` elapses.
    */
-  api(path: string, jq?: string, opts?: { paginate?: boolean }): Promise<string>;
-  /** Runs `gh <args>` without throwing on a non-zero exit. */
-  run(args: string[]): Promise<{ code: number; stdout: string; stderr: string }>;
+  api(
+    path: string,
+    jq?: string,
+    opts?: { paginate?: boolean; timeoutMs?: number },
+  ): Promise<string>;
+  /**
+   * Runs `gh <args>` without throwing on a non-zero exit; a run that exceeds `timeoutMs` is killed
+   * and returns a non-zero code.
+   */
+  run(
+    args: string[],
+    opts?: { timeoutMs?: number },
+  ): Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
 export interface Git {
@@ -110,11 +120,16 @@ export function realPorts(claudeBin = 'claude'): Ports {
         ...(opts?.paginate === false ? [] : ['--paginate']),
         ...(jq === undefined ? [] : ['--jq', jq]),
       ];
-      const r = await execa('gh', args);
+      const r = await execa('gh', args, {
+        ...(opts?.timeoutMs === undefined ? {} : { timeout: opts.timeoutMs }),
+      });
       return r.stdout;
     },
-    async run(args) {
-      const r = await execa('gh', args, { reject: false });
+    async run(args, opts) {
+      const r = await execa('gh', args, {
+        reject: false,
+        ...(opts?.timeoutMs === undefined ? {} : { timeout: opts.timeoutMs }),
+      });
       return { code: r.exitCode ?? 1, stdout: r.stdout, stderr: r.stderr };
     },
   };

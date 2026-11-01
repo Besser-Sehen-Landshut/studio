@@ -42,6 +42,15 @@ afterEach(() => {
 });
 
 describe('loadConfig', () => {
+  it('warns that a notify block in studio.yaml has no effect', () => {
+    const cfg = loadConfig(
+      project(
+        `${MINIMAL}notify: { channel: label-a, owner_only: true, irreversible_announce: true }\n`,
+      ),
+    );
+    expect(configWarnings(cfg).join('\n')).toMatch(/notify.*no effect.*owner config/);
+  });
+
   it('loads basic fixture', () => {
     const cfg = loadConfig(fixture);
     expect(cfg.primaryRepo).toBe('org/app');
@@ -242,6 +251,20 @@ describe('owner config', () => {
       write(file, `crew_toolchain_paths: ["${bad}"]\n`);
       expect(() => loadOwnerConfig({ homedir: h, env: {} })).toThrow(/crew_toolchain_paths/);
     }
+  });
+
+  it('reads the notify block and refuses a relative command or a bad channel', () => {
+    const h = home();
+    const file = join(h, '.config', 'studio', 'config.yaml');
+    write(file, 'notify: { channel: label-a, command: /opt/n/send }\n');
+    expect(loadOwnerConfig({ homedir: h, env: {} }).notify).toEqual({
+      channel: 'label-a',
+      command: '/opt/n/send',
+    });
+    write(file, 'notify: { channel: label-a, command: send }\n');
+    expect(() => loadOwnerConfig({ homedir: h, env: {} })).toThrow(/notify/);
+    write(file, 'notify: { channel: "a b", command: /opt/n/send }\n');
+    expect(() => loadOwnerConfig({ homedir: h, env: {} })).toThrow(/notify/);
   });
 });
 

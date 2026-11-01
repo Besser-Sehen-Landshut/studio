@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -9,14 +10,15 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { loadBoard, type WorkItem } from '../src/board.js';
 import { type CliDeps, runCli } from '../src/cli.js';
 import { loadConfig } from '../src/config.js';
 import { launchCrew } from '../src/crew.js';
-import { stateRootFor } from '../src/paths.js';
+import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
+import { enqueue, loadQueue, saveQueue } from '../src/queue.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-label-limits-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -72,7 +74,14 @@ function makeFx(ids: string[]) {
   );
   const env: Record<string, string | undefined> = { PATH: process.env.PATH };
   const ownerDir = join(home, '.config', 'studio');
-  return { project, home, env, ownerDir, state: stateRootFor(project, { env, homedir: home }) };
+  return {
+    project,
+    home,
+    env,
+    ownerDir,
+    state: stateRootFor(project, { env, homedir: home }),
+    owner: ownerStateRootFor({ env, homedir: home }),
+  };
 }
 type Fx = ReturnType<typeof makeFx>;
 
@@ -121,6 +130,8 @@ function makePorts(startIso = '2026-11-01T10:00:00Z') {
     },
   };
 }
+
+const TERMINAL: Partial<CliDeps> = { isTerminal: true };
 
 async function cli(fx: Fx, ports: Ports, argv: string[], extra: Partial<CliDeps> = {}) {
   let out = '';
@@ -181,7 +192,7 @@ const stubbornProvider = (fx: Fx, label: string, limits: string) => {
 };
 const stateOf = (fx: Fx) => JSON.parse(readFileSync(join(fx.state, 'state.json'), 'utf8'));
 const crewOf = (fx: Fx) => JSON.parse(readFileSync(join(fx.state, 'crew.json'), 'utf8'));
-const usageOf = (fx: Fx) => JSON.parse(readFileSync(join(fx.state, 'usage.json'), 'utf8'));
+const usageOf = (fx: Fx) => JSON.parse(readFileSync(join(fx.owner, 'usage.json'), 'utf8'));
 
 function filesContaining(dir: string, needle: string): string[] {
   const hits: string[] = [];
@@ -293,7 +304,7 @@ describe('per-credential limits', () => {
     const p = makePorts();
     expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
     writeFileSync(
-      join(fx.state, 'usage.json'),
+      join(fx.owner, 'usage.json'),
       JSON.stringify({
         '2026-10-01': { default: 3 },
         '2026-10-30': { default: 1 },
@@ -308,7 +319,7 @@ describe('per-credential limits', () => {
     const fx = makeFx(ITEMS);
     const p = makePorts();
     expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
-    writeFileSync(join(fx.state, 'usage.json'), '{not json');
+    writeFileSync(join(fx.owner, 'usage.json'), '{not json');
     expect((await cli(fx, p.ports, ['launch', 'APP-2'])).code).toBe(1);
     expect(p.started).toHaveLength(1);
     const plan = JSON.parse((await cli(fx, p.ports, ['plan'])).out);
@@ -325,7 +336,7 @@ describe('per-credential limits', () => {
       heartbeat: '2026-11-01T10:00:00.000Z',
       token: 't',
     };
-    writeFileSync(join(fx.state, 'launch.lock'), `${JSON.stringify(body)}\n`);
+    writeFileSync(join(fx.owner, 'launch.lock'), `${JSON.stringify(body)}\n`);
     expect((await cli(fx, p.ports, ['launch', 'APP-2'])).code).toBe(1);
     expect(p.started).toHaveLength(1);
   });
@@ -504,7 +515,7 @@ describe('limit races and counting', () => {
       p.hooks.afterGit = undefined;
       // Another process broke the stale lock and took it.
       writeFileSync(
-        join(fx.state, 'launch.lock'),
+        join(fx.owner, 'launch.lock'),
         `${JSON.stringify({ pid: process.pid, startedAt: 'x', heartbeat: '2026-11-01T10:00:00.000Z', token: 'other' })}\n`,
       );
     };
@@ -540,5 +551,255 @@ describe('limit races and counting', () => {
     expect((await cli(fx, p.ports, ['launch', 'APP-2'])).code).toBe(1);
     p.advance(2 * MIN);
     expect((await cli(fx, p.ports, ['launch', 'APP-2'])).code).toBe(0);
+  });
+});
+
+const GREEN_RUNS = JSON.stringify([
+  { workflowName: 'ci', status: 'completed', conclusion: 'success', headSha: 'a'.repeat(40) },
+]);
+const withMainBuild = (p: ReturnType<typeof makePorts>, stdout = GREEN_RUNS) => {
+  p.ports.gh = {
+    api: async () => '0',
+    run: async (args) =>
+      args[0] === 'run' ? { code: 0, stdout, stderr: '' } : { code: 0, stdout: '', stderr: '' },
+  };
+};
+
+describe('pane fields in state.json', () => {
+  it('ci, today, usageDays, mainBuild, counts and crew rows; no credential value anywhere', async () => {
+    const fx = makeFx(ITEMS);
+    rotatingProvider(fx, ['label-a'], 'crew_label_limits:\n  timezone: UTC\n');
+    const p = makePorts();
+    withMainBuild(p);
+    expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
+    const ev = (o: object) => `${JSON.stringify(o)}\n`;
+    writeFileSync(
+      join(fx.state, 'metrics.jsonl'),
+      ev({ type: 'merged', item: 'APP-9', pr: 7, repo: 'org/app', at: '2026-11-01T08:00:00Z' }) +
+        ev({ type: 'merged', item: 'APP-8', pr: 6, repo: 'org/app', at: '2026-10-31T23:00:00Z' }) +
+        ev({ type: 'deployed', at: '2026-11-01T09:00:00Z' }) +
+        ev({ type: 'deployed', at: '2026-10-31T09:00:00Z' }),
+    );
+    enqueue(fx.state, { pr: 11, repo: 'org/app', item: 'APP-5' });
+    enqueue(fx.state, { pr: 12, repo: 'org/app', item: 'APP-6' });
+    const r = await cli(fx, p.ports, ['state']);
+    expect(r.code).toBe(0);
+    const s = stateOf(fx);
+    expect(s.ci).toEqual({ busy: 0, total: 8, mergeMaxBusy: 5, ok: true });
+    expect(s.today).toEqual({
+      day: '2026-11-01',
+      merged: [{ pr: 7, repo: 'org/app', at: '2026-11-01T08:00:00Z' }],
+      deployed: 1,
+    });
+    expect(s.usageDays).toEqual({ '2026-11-01': { 'label-a': 1 } });
+    expect(s.mainBuild).toEqual({ status: 'green', sha: 'a'.repeat(40), workflow: 'ci' });
+    expect(s.counts).toEqual({ ready: 2, queued: 2 });
+    expect(s.crew).toHaveLength(1);
+    expect(s.crew[0]).toMatchObject({
+      item: 'APP-1',
+      title: 'Item APP-1',
+      state: 'working',
+      repo: 'org/app',
+      status: 'assigned',
+    });
+    expect(s.crew[0].stoppedAt).toBeUndefined();
+    expect(JSON.stringify(s)).not.toContain(SECRET);
+    expect(r.out).not.toContain(SECRET);
+    expect(filesContaining(fx.state, SECRET)).toEqual([]);
+  });
+
+  it('crew state follows the process and the report', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
+    p.alive.clear();
+    await cli(fx, p.ports, ['state']);
+    expect(stateOf(fx).crew[0].state).toBe('crashed');
+    const dir = join(fx.state, 'clones', 'APP-1', '.studio', 'reports');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'APP-1.md'), '---\nstatus: done\n---\n');
+    await cli(fx, p.ports, ['state']);
+    expect(stateOf(fx).crew[0].state).toBe('waiting');
+  });
+
+  it('counts.queued includes the entry being merged', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    await cli(fx, p.ports, ['state']);
+    saveQueue(fx.state, {
+      ...loadQueue(fx.state),
+      current: { pr: 11, repo: 'org/app', item: 'APP-5', step: 'checks' },
+    });
+    enqueue(fx.state, { pr: 12, repo: 'org/app', item: 'APP-6' });
+    await cli(fx, p.ports, ['state']);
+    expect(stateOf(fx).counts.queued).toBe(2);
+  });
+
+  it('mainBuild is unknown when gh cannot say; usageDays is absent without usage', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    await cli(fx, p.ports, ['state']);
+    const s = stateOf(fx);
+    expect(s.mainBuild).toEqual({ status: 'unknown' });
+    expect(s.usageDays).toBeUndefined();
+    expect(s.today.merged).toEqual([]);
+    expect(s.counts).toEqual({ ready: 3, queued: 0 });
+  });
+
+  describe('crew records of another project are unreadable', () => {
+    const otherRoot = (fx: Fx) => join(dirname(fx.owner), '0123456789abcdef');
+    const breakOther = (fx: Fx) => {
+      mkdirSync(otherRoot(fx), { recursive: true, mode: 0o700 });
+      writeFileSync(join(otherRoot(fx), 'crew.json'), '{not json');
+    };
+
+    it('state still writes state.json: no labelUsage, one crew-records line, no path', async () => {
+      const fx = makeFx(ITEMS);
+      const p = makePorts();
+      expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
+      breakOther(fx);
+      const r = await cli(fx, p.ports, ['state']);
+      expect(r.code).toBe(0);
+      const s = stateOf(fx);
+      expect(s.labelUsage).toBeUndefined();
+      const lines = s.forOwner.filter((o: { id: string }) => o.id === 'crew-records');
+      expect(lines).toHaveLength(1);
+      expect(lines[0].title).toContain('unreadable');
+      expect(lines[0].title).not.toContain(otherRoot(fx));
+      expect(lines[0].title).not.toContain(fx.home);
+      expect(lines[0].title).not.toMatch(/\p{Cc}/u);
+      expect(r.err).toContain('error:');
+    });
+
+    it('plan and launch stay refused', async () => {
+      const fx = makeFx(ITEMS);
+      const p = makePorts();
+      breakOther(fx);
+      expect((await cli(fx, p.ports, ['plan'])).code).toBe(1);
+      expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(1);
+      expect(p.started).toEqual([]);
+    });
+
+    it('an unreadable crew.json of this project still fails state, as before', async () => {
+      const fx = makeFx(ITEMS);
+      const p = makePorts();
+      await cli(fx, p.ports, ['state']);
+      writeFileSync(join(fx.state, 'crew.json'), '{not json');
+      const r = await cli(fx, p.ports, ['state']);
+      expect(r.code).toBe(1);
+      expect(r.err).toContain('crew file');
+    });
+  });
+});
+
+describe('pause and resume', () => {
+  const pauseFile = (fx: Fx) => join(fx.state, 'pause.json');
+
+  it('pause blocks plan, launch and launchCrew; running crews continue; no forOwner line', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
+    const r = await cli(fx, p.ports, ['pause'], TERMINAL);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out)).toMatchObject({ paused: true });
+    expect(existsSync(pauseFile(fx))).toBe(true);
+
+    const plan = JSON.parse((await cli(fx, p.ports, ['plan'])).out);
+    expect(plan.assign).toEqual([]);
+    expect(plan.deferred.map((d: { reason: string }) => d.reason)).toEqual(['paused', 'paused']);
+
+    const launch = await cli(fx, p.ports, ['launch', 'APP-2']);
+    expect(launch.code).toBe(1);
+    expect(launch.err).toContain('paused');
+    const item = loadBoard(fx.project).items.find((i) => i.id === 'APP-3') as WorkItem;
+    await expect(
+      launchCrew(fx.project, item, loadConfig(fx.project), p.ports, {
+        env: fx.env,
+        homedir: fx.home,
+      }),
+    ).rejects.toThrow(/paused/);
+    expect(p.started).toHaveLength(1);
+
+    expect(crewOf(fx)['APP-1'].stoppedAt).toBeUndefined();
+    expect(p.alive.size).toBe(1);
+    await cli(fx, p.ports, ['state']);
+    expect(stateOf(fx).forOwner).toEqual([]);
+    expect(stateOf(fx).crew[0].state).toBe('working');
+  });
+
+  it('a pause set while the clone is prepared refuses before the run is counted and started', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    p.hooks.afterGit = (args) => {
+      if (args[0] !== 'clone') return;
+      p.hooks.afterGit = undefined;
+      writeFileSync(pauseFile(fx), JSON.stringify({ at: '2026-11-01T10:00:00.000Z' }));
+    };
+    const item = loadBoard(fx.project).items.find((i) => i.id === 'APP-1') as WorkItem;
+    await expect(
+      launchCrew(fx.project, item, loadConfig(fx.project), p.ports, {
+        env: fx.env,
+        homedir: fx.home,
+      }),
+    ).rejects.toThrow(/paused/);
+    expect(p.started).toHaveLength(0);
+    await cli(fx, p.ports, ['state']);
+    expect(stateOf(fx).labelUsage).toBeUndefined();
+  });
+
+  it('resume lifts the pause', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    await cli(fx, p.ports, ['pause'], TERMINAL);
+    const r = await cli(fx, p.ports, ['resume'], TERMINAL);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out)).toMatchObject({ paused: false });
+    expect(existsSync(pauseFile(fx))).toBe(false);
+    expect(JSON.parse((await cli(fx, p.ports, ['plan'])).out).assign).toHaveLength(2);
+    expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
+  });
+
+  it('a crew role may neither pause nor resume', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    const crewEnv = { env: { ...fx.env, STUDIO_ROLE: 'crew' }, isTerminal: true };
+    expect((await cli(fx, p.ports, ['pause'], crewEnv)).code).toBe(1);
+    expect(existsSync(pauseFile(fx))).toBe(false);
+    await cli(fx, p.ports, ['pause'], TERMINAL);
+    expect((await cli(fx, p.ports, ['resume'], crewEnv)).code).toBe(1);
+    expect(existsSync(pauseFile(fx))).toBe(true);
+  });
+
+  it('pause and resume need a terminal: fixed message, exit 1, nothing written', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    const noTerminal: Partial<CliDeps>[] = [{}, { isTerminal: false }];
+    for (const extra of noTerminal) {
+      const r = await cli(fx, p.ports, ['pause'], extra);
+      expect(r.code).toBe(1);
+      expect(r.err).toBe('studio: pause is for the owner and needs a terminal; nothing written\n');
+      expect(r.out).toBe('');
+      expect(existsSync(pauseFile(fx))).toBe(false);
+    }
+    await cli(fx, p.ports, ['pause'], TERMINAL);
+    for (const extra of noTerminal) {
+      const r = await cli(fx, p.ports, ['resume'], extra);
+      expect(r.code).toBe(1);
+      expect(r.err).toBe('studio: resume is for the owner and needs a terminal; nothing written\n');
+      expect(r.out).toBe('');
+      expect(existsSync(pauseFile(fx))).toBe(true);
+    }
+  });
+
+  it('a corrupt pause.json is paused; resume clears it', async () => {
+    const fx = makeFx(ITEMS);
+    const p = makePorts();
+    await cli(fx, p.ports, ['state']);
+    writeFileSync(pauseFile(fx), 'garbage');
+    expect(JSON.parse((await cli(fx, p.ports, ['plan'])).out).assign).toEqual([]);
+    expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(1);
+    expect((await cli(fx, p.ports, ['resume'], TERMINAL)).code).toBe(0);
+    expect(existsSync(pauseFile(fx))).toBe(false);
+    expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
   });
 });

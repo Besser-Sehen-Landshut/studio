@@ -25,11 +25,11 @@ const RUNNER_LINE = /^(\S+)\t(\S+)\t(true|false)$/;
  * that finds no runner to count says nothing about capacity, so it throws: repository-level runners
  * are not read here, and an empty list must not look like idle runners.
  */
-async function selfHostedBusy(config: StudioConfig, gh: Gh): Promise<number> {
+async function selfHostedBusy(config: StudioConfig, gh: Gh, timeoutMs: number): Promise<number> {
   const org = config.primaryRepo.split('/')[0];
   const pattern = config.ci.runnerNamePattern;
   const re = pattern === undefined ? undefined : new RegExp(pattern);
-  const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ);
+  const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ, { timeoutMs });
   let busy = 0;
   let matching = 0;
   for (const line of out.split('\n')) {
@@ -51,11 +51,16 @@ async function selfHostedBusy(config: StudioConfig, gh: Gh): Promise<number> {
   return busy;
 }
 
-async function runCount(config: StudioConfig, gh: Gh, status: string): Promise<number> {
+async function runCount(
+  config: StudioConfig,
+  gh: Gh,
+  status: string,
+  timeoutMs: number,
+): Promise<number> {
   const out = await gh.api(
     `/repos/${config.primaryRepo}/actions/runs?status=${status}&per_page=1`,
     '.total_count',
-    { paginate: false },
+    { paginate: false, timeoutMs },
   );
   // One page of one run is enough: only total_count is read.
   const first = out.split('\n')[0]?.trim() ?? '';
@@ -63,9 +68,9 @@ async function runCount(config: StudioConfig, gh: Gh, status: string): Promise<n
   return Number(first);
 }
 
-async function githubHostedBusy(config: StudioConfig, gh: Gh): Promise<number> {
-  const running = await runCount(config, gh, 'in_progress');
-  const queued = await runCount(config, gh, 'queued');
+async function githubHostedBusy(config: StudioConfig, gh: Gh, timeoutMs: number): Promise<number> {
+  const running = await runCount(config, gh, 'in_progress', timeoutMs);
+  const queued = await runCount(config, gh, 'queued', timeoutMs);
   return running + queued;
 }
 
@@ -82,18 +87,19 @@ export async function readCapacity(
   const { sharedHost, githubHostedLimit } = config.ci;
   const hostLoad = ports.host.loadAvg1();
   const mode = config.ci.runners;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let selfBusy = 0;
   let hostedBusy = 0;
   try {
     const read = async () => {
       if (mode === 'self-hosted' || mode === 'both') {
-        selfBusy = await selfHostedBusy(config, ports.gh);
+        selfBusy = await selfHostedBusy(config, ports.gh, timeoutMs);
       }
       if (mode === 'github-hosted' || mode === 'both') {
-        hostedBusy = await githubHostedBusy(config, ports.gh);
+        hostedBusy = await githubHostedBusy(config, ports.gh, timeoutMs);
       }
     };
-    await withTimeout(read(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    await withTimeout(read(), timeoutMs);
   } catch (err) {
     // Still fully busy (fail closed), but say why so the control room can fix the cause.
     const error = (err instanceof Error ? err.message : String(err))

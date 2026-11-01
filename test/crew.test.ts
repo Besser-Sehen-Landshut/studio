@@ -597,7 +597,9 @@ describe('writeCrewSettings', () => {
           'blocks.lock',
           'usage.json',
           'launch.lock',
+          'pause.json',
         ].map((f) => join(state, f)),
+        join(dirnameOf(state), 'owner'),
       ],
     });
   });
@@ -1370,10 +1372,12 @@ describe('crew credentials', () => {
   /** Puts a limits file into a not yet bound state root. */
   const park = (state: string, labels: Record<string, string>) => {
     mkdirSync(state, { recursive: true, mode: 0o700 });
+    const owner = join(dirnameOf(state), 'owner');
+    mkdirSync(owner, { recursive: true, mode: 0o700 });
     const body = Object.fromEntries(
       Object.entries(labels).map(([k, v]) => [k, { parkedUntil: v, kind: 'session' }]),
     );
-    writeFileSync(join(state, 'limits.json'), JSON.stringify(body));
+    writeFileSync(join(owner, 'limits.json'), JSON.stringify(body));
   };
   const bind = (state: string, project: string) =>
     writeFileSync(
@@ -1731,8 +1735,9 @@ describe('crew credentials', () => {
 
     it('an unreadable limits file refuses (fail closed)', async () => {
       const { project, launcher, state } = fx();
-      mkdirSync(state, { recursive: true, mode: 0o700 });
-      writeFileSync(join(state, 'limits.json'), 'not json');
+      const owner = join(dirnameOf(state), 'owner');
+      mkdirSync(owner, { recursive: true, mode: 0o700 });
+      writeFileSync(join(owner, 'limits.json'), 'not json');
       const started: Started[] = [];
       await expect(launchCrew(project, item, config, fakePorts(started), launcher)).rejects.toThrow(
         /limits/,

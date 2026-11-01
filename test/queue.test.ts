@@ -677,6 +677,88 @@ describe('runQueue', () => {
     expect(snapshots.length).toBeGreaterThan(1);
   });
 
+  it('hold: takes no entry and leaves pending intact', async () => {
+    const g = fakeGh(rules());
+    const c = fakeClock();
+    const state: QueueState = {
+      pending: [{ pr: 5, repo: 'org/app' }],
+      done: [],
+    };
+    const logs: string[] = [];
+    let taken = 0;
+    const out = await runQueue(state, mkConfig(), { gh: g.gh, clock: c.clock, host }, () => {}, {
+      hold: () => 'account block on default',
+      log: (m) => logs.push(m),
+      takeNext: () => {
+        taken++;
+        return state.pending.shift();
+      },
+    });
+    expect(taken).toBe(0);
+    expect(out.pending).toHaveLength(1);
+    expect(out.current).toBeUndefined();
+    expect(g.calls).toEqual([]);
+    expect(logs.join('\n')).toContain('account block on default');
+  });
+
+  it('hold turning true before the merge: no merge, current stays at capacity with head, a later run merges', async () => {
+    const g = fakeGh(rules());
+    const c = fakeClock();
+    const state: QueueState = { pending: [{ pr: 5, repo: 'org/app' }], done: [] };
+    const snapshots: QueueState[] = [];
+    const persist = (q: QueueState) => snapshots.push(structuredClone(q));
+    let blocked = false;
+    // Capacity is read twice, 30 s apart: the block appears while it waits.
+    const clock = fakeClock(() => {
+      blocked = true;
+    });
+    const logs: string[] = [];
+    const out = await runQueue(state, mkConfig(), { gh: g.gh, clock: clock.clock, host }, persist, {
+      hold: () => (blocked ? 'account block on default' : undefined),
+      log: (m) => logs.push(m),
+    });
+    expect(mergeCalls(g.calls)).toHaveLength(0);
+    expect(out.done).toHaveLength(0);
+    expect(out.current).toMatchObject({ pr: 5, step: 'capacity', head: H1 });
+    expect(snapshots.at(-1)?.current).toMatchObject({ step: 'capacity', head: H1 });
+
+    const g2 = fakeGh(rules());
+    const again = await runQueue(
+      structuredClone(snapshots.at(-1) as QueueState),
+      mkConfig(),
+      { gh: g2.gh, clock: c.clock, host },
+      () => {},
+      { hold: () => undefined },
+    );
+    expect(mergeCalls(g2.calls)).toHaveLength(1);
+    expect(again.done[0]).toMatchObject({ pr: 5, result: 'merged' });
+  });
+
+  it('head moved during the hold: the resume does not merge the old head', async () => {
+    const g = fakeGh([
+      { prefix: 'pr update-branch', responses: [{}] },
+      { prefix: 'pr checks', responses: [checks(['a', 'pass'])] },
+      { prefix: MC, responses: [{ stdout: JSON.stringify({ mergeCommit: { oid: MERGE_SHA } }) }] },
+      { prefix: VIEW, responses: [view(H2)] },
+      { prefix: 'pr merge', responses: [{}] },
+    ]);
+    const state: QueueState = {
+      pending: [],
+      done: [],
+      current: { pr: 5, repo: 'org/app', step: 'capacity', head: H1 },
+    } as QueueState;
+    const out = await runQueue(
+      state,
+      mkConfig(),
+      { gh: g.gh, clock: fakeClock().clock, host },
+      () => {},
+      { hold: () => undefined },
+    );
+    expect(mergeCalls(g.calls)).toEqual([`${MERGE} --squash --match-head-commit ${H2}`]);
+    expect(mergeCalls(g.calls).join('\n')).not.toContain(H1);
+    expect(out.done[0]).toMatchObject({ pr: 5, result: 'merged' });
+  });
+
   it('processes pending FIFO, one at a time, and records failures', async () => {
     const g = fakeGh([
       { prefix: 'pr update-branch', responses: [{}] },

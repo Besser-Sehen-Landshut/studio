@@ -3,6 +3,57 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.4.0] - 2026-11-01
+
+Stage (b): the Studio board inside Claude Code, pause and resume, push notifications. Not tagged or
+published as a GitHub release yet; the maintainers tag after the merge.
+
+### Added
+
+- The Studio board inside Claude Code: a pane, a status line and toasts for the owner's interactive
+  session in a Studio project, refreshed every 10 seconds, plus `/studio [status | pause | resume]`.
+  It only displays: pausing and resuming still happen in a terminal, and `/studio` names the command
+  to run. Crew sessions, `claude -p` and other projects get none of it.
+- `studio pause` and `studio resume` (owner only, in a terminal): while paused nothing new is
+  planned, launched or merged; running crews continue. A `pause.json` that cannot be read still
+  pauses.
+- `state.json` carries what a status pane needs: a state per crew (`working`, `waiting`, `blocked`,
+  `stopped`, `crashed`, `done`) with title and repository, CI use, today's merges and deploys, runs
+  per day and label, the state of the latest push builds on `main`, and the ready and queued counts.
+  Labels only: no credential value is written.
+
+- Push notifications: `notify: { channel, command }` in the owner config hands each line for the owner
+  and each account block once to an owner-chosen command (absolute path, no shell, minimal
+  environment, control characters stripped); `notified.json` in the owner root remembers what was sent.
+
+### Fixed
+
+- The crew guard denies running `studio` directly, and setting or unsetting `STUDIO_*`,
+  `NODE_OPTIONS`, `NODE_PATH`, `npm_config_*`, `PNPM_*`, `YARN_*` and `COREPACK_*` (any case). It also
+  denies `script`, `flock` and `watch`, arithmetic (`((`, `$((`, `$[`) and `${VAR:=x}` / `${VAR=x}`.
+- `node` runs only as `node --version`, `node --help` or `node <literal relative path>` (no option
+  before the path, no `..`, not the studio binary).
+- `npm`, `pnpm`, `yarn` and `bun` pass only with a first argument from a short allowlist (`test`,
+  `run`, `install`, `i`, `ci`, `lint`, `build`, `typecheck`, `format`, `add`, `remove`, `list`, `ls`,
+  `audit`, `outdated`, `why`, `--version`, `-v`, `--help`); `--shell*` is denied anywhere. `npx`,
+  `pnpx`, `bunx` and `corepack` are denied.
+- The guard does not contain a malicious crew: `package.json` scripts can run anything. The boundary
+  is the sandbox, the token and branch protection; owner-only commands need a terminal.
+- Notifications stop at the first failing send in a run (one error, the rest is retried next run), and
+  a `notify.lock` keeps overlapping `studio state` runs from sending twice or losing keys.
+- `studio state` still writes `state.json` when crew records of another project cannot be read; it
+  leaves out the per-label figures and adds a `crew-records` line for the owner. Plan and launch
+  still refuse.
+- `queue run` holds while old per-project state files have not been migrated.
+
+### Changed
+
+- Account blocks, usage limits and per-label usage are owner-wide, in `<state base>/owner`: a block
+  recorded by one project stops the crews of all projects and refuses their launches, and
+  `max_parallel` and `max_runs_per_day` count across projects. Old per-project files are merged on
+  first use; a file that cannot be read is kept as `<name>.legacy-<project root>` and holds all work
+  until the owner removes it.
+
 ## [0.3.0] - 2026-11-01
 
 Stage (a.2): account blocks, usage limits per credential and pinned crew rules. Not tagged or
