@@ -4003,10 +4003,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep5, value } = collItem;
+        const { start, key, sep: sep6, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep5?.[0],
+          next: key ?? sep6?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -4020,7 +4020,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep5) {
+          if (!keyProps.anchor && !keyProps.tag && !sep6) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map2.comment)
@@ -4044,7 +4044,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map2.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep5 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep6 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -4060,7 +4060,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep5, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep6, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -4151,7 +4151,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep5 = "";
+        let sep6 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -4165,13 +4165,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep5 + cb;
-              sep5 = "";
+                comment += sep6 + cb;
+              sep6 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep5 += source;
+                sep6 += source;
               hasSpace = true;
               break;
             default:
@@ -4214,18 +4214,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i2 = 0; i2 < fc.items.length; ++i2) {
         const collItem = fc.items[i2];
-        const { start, key, sep: sep5, value } = collItem;
+        const { start, key, sep: sep6, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep5?.[0],
+          next: key ?? sep6?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep5 && !value) {
+          if (!props.anchor && !props.tag && !sep6 && !value) {
             if (i2 === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i2 < fc.items.length - 1)
@@ -4279,8 +4279,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap3 && !sep5 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep5, null, props, onError);
+        if (!isMap3 && !sep6 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep6, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -4292,7 +4292,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep5 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep6 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -4303,8 +4303,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap3 && !props.found && ctx.options.strict) {
-              if (sep5)
-                for (const st of sep5) {
+              if (sep6)
+                for (const st of sep6) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -4321,7 +4321,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep5, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep6, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -4501,7 +4501,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i2 + 1;
       }
       let value = "";
-      let sep5 = "";
+      let sep6 = "";
       let prevMoreIndented = false;
       for (let i2 = 0; i2 < contentStart; ++i2)
         value += lines[i2][0].slice(trimIndent) + "\n";
@@ -4518,24 +4518,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep5 + indent.slice(trimIndent) + content;
-          sep5 = "\n";
+          value += sep6 + indent.slice(trimIndent) + content;
+          sep6 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep5 === " ")
-            sep5 = "\n";
-          else if (!prevMoreIndented && sep5 === "\n")
-            sep5 = "\n\n";
-          value += sep5 + indent.slice(trimIndent) + content;
-          sep5 = "\n";
+          if (sep6 === " ")
+            sep6 = "\n";
+          else if (!prevMoreIndented && sep6 === "\n")
+            sep6 = "\n\n";
+          value += sep6 + indent.slice(trimIndent) + content;
+          sep6 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep5 === "\n")
+          if (sep6 === "\n")
             value += "\n";
           else
-            sep5 = "\n";
+            sep6 = "\n";
         } else {
-          value += sep5 + content;
-          sep5 = " ";
+          value += sep6 + content;
+          sep6 = " ";
           prevMoreIndented = false;
         }
       }
@@ -4718,25 +4718,25 @@ var require_resolve_flow_scalar = __commonJS({
         trimBoth = /^[ \t]+|[ \t]+$/g;
       }
       let res = match[1].replace(trimEnd, "");
-      let sep5 = " ";
+      let sep6 = " ";
       let pos = line.lastIndex;
       while (match = line.exec(source)) {
         const lm = match[1].replace(trimBoth, "");
         if (lm === "") {
-          if (sep5 === "\n")
-            res += sep5;
+          if (sep6 === "\n")
+            res += sep6;
           else
-            sep5 = "\n";
+            sep6 = "\n";
         } else {
-          res += sep5 + lm;
-          sep5 = " ";
+          res += sep6 + lm;
+          sep6 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep5 + (match?.[1] ?? "");
+      return res + sep6 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -5546,14 +5546,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep5, value }) {
+    function stringifyItem({ start, key, sep: sep6, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep5)
-        for (const st of sep5)
+      if (sep6)
+        for (const st of sep6)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -6720,18 +6720,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep5;
+          let sep6;
           if (scalar.end) {
-            sep5 = scalar.end;
-            sep5.push(this.sourceToken);
+            sep6 = scalar.end;
+            sep6.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep5 = [this.sourceToken];
+            sep6 = [this.sourceToken];
           const map2 = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep5 }]
+            items: [{ start, key: scalar, sep: sep6 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map2;
@@ -6884,15 +6884,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep5 = it.sep;
-                  sep5.push(this.sourceToken);
+                  const sep6 = it.sep;
+                  sep6.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep5 }]
+                    items: [{ start: start2, key, sep: sep6 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -7086,13 +7086,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep5 = fc.end.splice(1, fc.end.length);
-            sep5.push(this.sourceToken);
+            const sep6 = fc.end.splice(1, fc.end.length);
+            sep6.push(this.sourceToken);
             const map2 = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep5 }]
+              items: [{ start, key: fc, sep: sep6 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map2;
@@ -7841,10 +7841,10 @@ var require_shell_quote = __commonJS({
 });
 
 // src/main.ts
-import { homedir as homedir4 } from "node:os";
+import { homedir as homedir5 } from "node:os";
 
 // src/cli.ts
-import { join as join9, resolve as resolve4 } from "node:path";
+import { join as join11, resolve as resolve4 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/board.ts
@@ -11414,7 +11414,7 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
     }
     return propValues;
   });
-  const isObject3 = isObject;
+  const isObject4 = isObject;
   const catchall = def.catchall;
   let value;
   const memo2 = globalConfig.memoizer;
@@ -11422,7 +11422,7 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
   inst._zod.parse = (payload, ctx) => {
     value ?? (value = _normalized.value);
     const input2 = payload.value;
-    if (!isObject3(input2)) {
+    if (!isObject4(input2)) {
       payload.issues.push({
         expected: "object",
         code: "invalid_type",
@@ -11558,7 +11558,7 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
     return doc.compile();
   };
   let fastpass;
-  const isObject3 = isObject;
+  const isObject4 = isObject;
   const jit = !globalConfig.jitless;
   const allowsEval2 = allowsEval;
   const fastEnabled = jit && allowsEval2.value;
@@ -11567,7 +11567,7 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
   inst._zod.parse = (payload, ctx) => {
     value ?? (value = _normalized.value);
     const input2 = payload.value;
-    if (!isObject3(input2)) {
+    if (!isObject4(input2)) {
       payload.issues.push({
         expected: "object",
         code: "invalid_type",
@@ -27774,8 +27774,8 @@ function saveBoard(dir, board) {
 }
 var FORWARD = {
   ready: ["assigned"],
-  assigned: ["in_progress"],
-  in_progress: ["in_review"],
+  assigned: ["in_progress", "ready"],
+  in_progress: ["in_review", "ready"],
   in_review: ["queued", "in_progress", "merged"],
   queued: ["merged", "in_review"],
   merged: [],
@@ -27810,7 +27810,7 @@ function transition(board, id, to, by, now) {
 var import_yaml2 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync2 } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join as join2, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join as join2, resolve, sep } from "node:path";
 var ROLE_TEMPLATES = ["builder", "reviewer", "designer", "researcher", "release"];
 var strList2 = external_exports.array(external_exports.string()).default([]);
 var CREDENTIAL_PATHS = [
@@ -27944,7 +27944,12 @@ function loadConfig(projectDir) {
 var ownerConfigSchema = external_exports.strictObject({
   // Absolute directories a crew may read in addition to its clone, tmp dir and HOME (toolchains
   // below the real home, e.g. a version manager). Default empty: crew uses system toolchains.
-  crewToolchainPaths: strList2
+  crewToolchainPaths: strList2,
+  // Absolute path of an executable that hands a crew run its model credential (see README).
+  crewCredentialCommand: external_exports.string().min(1).optional(),
+  // Opt-in: let crew runs bill the API. An API key would otherwise take precedence over the
+  // subscription login, so the variables and settings for it are refused by default.
+  allowApiBilling: external_exports.boolean().default(false)
 });
 function xdgDir(env, name) {
   const v = env[name];
@@ -27955,13 +27960,15 @@ function ownerConfigFile(opts = {}) {
   const base = xdgDir(env, "XDG_CONFIG_HOME") ?? join2(opts.homedir ?? homedir(), ".config");
   return join2(base, "studio", "config.yaml");
 }
+var ownerConfigDir = (opts = {}) => dirname(ownerConfigFile(opts));
+var crewTokenFile = (opts = {}) => join2(ownerConfigDir(opts), "crew-token");
 function loadOwnerConfig(opts = {}) {
   const file2 = ownerConfigFile(opts);
   let text;
   try {
     text = readFileSync2(file2, "utf8");
   } catch (e) {
-    if (e.code === "ENOENT") return { crewToolchainPaths: [] };
+    if (e.code === "ENOENT") return ownerConfigSchema.parse({});
     throw new ConfigError(file2, `cannot read file (${e.message})`);
   }
   let raw;
@@ -27979,6 +27986,10 @@ function loadOwnerConfig(opts = {}) {
     const problem = toolchainPathProblem(path10, home, [], opts.platform);
     return problem ? [`crew_toolchain_paths: ${path10}: ${problem}`] : [];
   });
+  const command = result.data.crewCredentialCommand;
+  if (command !== void 0 && !isAbsolute(command)) {
+    problems.push("crew_credential_command: must be an absolute path");
+  }
   if (problems.length > 0) throw new ConfigError(file2, problems.join("; "));
   return result.data;
 }
@@ -28089,35 +28100,25 @@ async function capacityHoldsTwice(config2, ports, options = {}) {
   return (await readCapacity(config2, ports, options)).ok;
 }
 
-// src/crew.ts
+// src/credentials.ts
+import { randomBytes as randomBytes3 } from "node:crypto";
 import {
   chmodSync as chmodSync2,
-  existsSync as existsSync3,
-  lstatSync as lstatSync3,
-  readFileSync as readFileSync5,
+  lstatSync as lstatSync4,
+  mkdirSync as mkdirSync2,
+  readFileSync as readFileSync6,
   realpathSync as realpathSync2,
+  renameSync as renameSync4,
+  statSync,
   unlinkSync as unlinkSync2,
   writeFileSync as writeFileSync4
 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { basename as basename2, dirname as dirname2, join as join5, resolve as resolve3, sep as sep3 } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname as dirname3, isAbsolute as isAbsolute3, sep as sep3 } from "node:path";
 
-// src/guard.ts
-var import_shell_quote = __toESM(require_shell_quote(), 1);
-var DEFAULT_SECRET_GLOBS = [
-  "**/.env",
-  "**/.env.*",
-  "**/*.pem",
-  "**/*.key",
-  "**/id_rsa*",
-  "**/id_ed25519*",
-  "**/.npmrc",
-  "**/.netrc",
-  "**/credentials*"
-];
-var GH_VALUE_FLAGS = ["-R", "--repo", "--hostname"];
-var GH_RUN_VALUE_FLAGS = ["--ref", "-r", "-f", "--raw-field", "-F", "--field", ...GH_VALUE_FLAGS];
+// src/limits.ts
+import { closeSync as closeSync2, fstatSync, lstatSync as lstatSync3, openSync as openSync2, readFileSync as readFileSync5, readSync } from "node:fs";
+import { join as join5 } from "node:path";
 
 // src/paths.ts
 import { createHash, randomBytes } from "node:crypto";
@@ -28139,7 +28140,7 @@ import {
   writeSync
 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { basename, dirname, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep as sep2 } from "node:path";
+import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep as sep2 } from "node:path";
 var STATE_PROTECTED_DIRS = ["guard", "settings", "briefs", "logs", "homes", "tmp"];
 var STATE_FILES = [
   "crew.json",
@@ -28149,7 +28150,9 @@ var STATE_FILES = [
   "guard.jsonl",
   "marker.json",
   "queue.json.lock",
-  "queue.run.lock"
+  "queue.run.lock",
+  "limits.json",
+  "limits.lock"
 ];
 function stateBaseFor(opts = {}) {
   const env = opts.env ?? process.env;
@@ -28176,7 +28179,7 @@ function realish(p) {
     try {
       return join3(realpathSync(cur), ...rest.reverse());
     } catch {
-      const up = dirname(cur);
+      const up = dirname2(cur);
       if (up === cur) return abs;
       rest.push(basename(cur));
       cur = up;
@@ -28278,7 +28281,7 @@ function assertStatePath(root, target) {
   if (segs.length === 0) return;
   let realParent;
   try {
-    realParent = realpathSync(dirname(resolve2(target)));
+    realParent = realpathSync(dirname2(resolve2(target)));
   } catch {
     return;
   }
@@ -28309,7 +28312,7 @@ function removeStateEntry(root, target) {
 }
 var tmpCounter = 0;
 function writeStateFile(root, file2, content) {
-  ensureStateDir(root, dirname(file2));
+  ensureStateDir(root, dirname2(file2));
   assertStatePath(root, file2);
   const tmp = `${file2}.${process.pid}.${tmpCounter++}.${randomBytes(4).toString("hex")}.tmp`;
   writeFileSync2(tmp, content, { mode: 384, flag: "wx" });
@@ -28348,7 +28351,7 @@ function staleReason(body, mtimeMs, now, heartbeatStaleMs) {
 }
 function acquireStateLock(root, name, opts) {
   const file2 = join3(root, name);
-  ensureStateDir(root, dirname(file2));
+  ensureStateDir(root, dirname2(file2));
   assertStatePath(root, file2);
   const lstat = opts.lstat ?? lstatSync;
   const token = randomBytes(16).toString("hex");
@@ -28434,24 +28437,24 @@ function canonicalToolchainPaths(paths, ctx) {
   ].flatMap((p) => keys(p, platform2));
   const fenced = [ctx.projectDir, ctx.stateRoot].flatMap((p) => keys(p, platform2));
   return paths.map((path10) => {
-    const fail = (why) => {
+    const fail2 = (why) => {
       throw new Error(`crew_toolchain_paths: ${path10}: ${why}`);
     };
     const lexical = toolchainPathProblem(path10, ctx.home, ctx.extraCredentialPaths, platform2);
-    if (lexical) fail(lexical);
+    if (lexical) fail2(lexical);
     let real = "";
     try {
       real = realpathSync(path10);
     } catch {
-      fail("does not exist");
+      fail2("does not exist");
     }
     const vs = [pathKey(resolve2(path10), platform2), pathKey(real, platform2)];
     for (const v of vs) {
-      if (homes.some((h2) => within(h2, v))) fail("must not be the home directory or a parent of it");
+      if (homes.some((h2) => within(h2, v))) fail2("must not be the home directory or a parent of it");
       const cred = sealed.find((c3) => within(v, c3) || within(c3, v));
-      if (cred) fail(`must not equal, contain or lie inside the protected location ${cred}`);
+      if (cred) fail2(`must not equal, contain or lie inside the protected location ${cred}`);
       if (fenced.some((f) => within(v, f) || within(f, v))) {
-        fail("must not equal, contain or lie inside the project directory or the state root");
+        fail2("must not equal, contain or lie inside the project directory or the state root");
       }
     }
     return real;
@@ -28463,6 +28466,11 @@ function credentialLocations(home, env) {
   if (env.XDG_CONFIG_HOME) {
     extra.push(join3(env.XDG_CONFIG_HOME, "gh"), join3(env.XDG_CONFIG_HOME, "git", "credentials"));
   }
+  const owner = { homedir: home, env };
+  const ownerDir = ownerConfigDir(owner);
+  extra.push(ownerDir, crewTokenFile(owner));
+  const realDir = realish(ownerDir);
+  if (realDir !== ownerDir) extra.push(realDir, join3(realDir, basename(crewTokenFile(owner))));
   return { all: [...CREDENTIAL_PATHS.map((p) => join3(home, p)), ...extra], extra };
 }
 
@@ -28567,10 +28575,514 @@ function computeMetrics(events) {
   return { leadTimes, medianLeadTimeHours: median, perDay, mergedTotal, deployedTotal };
 }
 
+// src/limits.ts
+var LABEL_RE = /^[A-Za-z0-9._-]{1,64}$/;
+var RESERVED_LABELS = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
+var validLabel = (label) => LABEL_RE.test(label) && !RESERVED_LABELS.has(label);
+var DEFAULT_LABEL = "default";
+var HOUR_MS2 = 36e5;
+var MAX_PARK_MS = 8 * 24 * HOUR_MS2;
+var TAIL_BYTES = 256 * 1024;
+var HEAD_BYTES = 1024 * 1024;
+var LOCK_STALE_MS = 5 * 6e4;
+var MAX_RESET_CHARS = 100;
+var LIMIT_TEXT = /^You['’]ve hit your (session|weekly) limit(?:\s*·\s*resets\s+(\S.*?))?\s*$/;
+function matchLimitText(text) {
+  if (typeof text !== "string") return void 0;
+  const m = LIMIT_TEXT.exec(text);
+  if (!m) return void 0;
+  const reset2 = m[2]?.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_RESET_CHARS);
+  return { kind: m[1], ...reset2 ? { resetsAt: reset2 } : {} };
+}
+var isObject2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+function detectLimit(logLine2) {
+  const line = logLine2.trimEnd();
+  let ev;
+  try {
+    ev = JSON.parse(line);
+  } catch {
+    return line.startsWith("{") ? void 0 : matchLimitText(line);
+  }
+  if (!isObject2(ev)) return void 0;
+  if (ev.type === "system") {
+    if (ev.subtype !== "api_retry" || ev.error !== "rate_limit") return void 0;
+    const reset2 = ev.resets_at ?? ev.resetsAt;
+    const raw = typeof reset2 === "string" || typeof reset2 === "number" ? String(reset2) : void 0;
+    return {
+      kind: "session",
+      ...raw ? { resetsAt: raw.slice(0, MAX_RESET_CHARS) } : {}
+    };
+  }
+  if (ev.type === "result") {
+    return matchLimitText(ev.error) ?? (ev.is_error === true ? matchLimitText(ev.result) : void 0);
+  }
+  if (ev.type === "assistant" && (ev.isApiErrorMessage === true || typeof ev.error === "string")) {
+    const content = isObject2(ev.message) ? ev.message.content : void 0;
+    if (!Array.isArray(content)) return void 0;
+    for (const block of content) {
+      if (isObject2(block) && block.type === "text") {
+        const hit = matchLimitText(block.text);
+        if (hit) return hit;
+      }
+    }
+  }
+  return void 0;
+}
+var ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/;
+function parkUntil(resetsAt, now) {
+  const fallback = new Date(now.getTime() + HOUR_MS2);
+  if (resetsAt === void 0) return fallback;
+  let t = Number.NaN;
+  if (ISO_TIME.test(resetsAt)) t = Date.parse(resetsAt);
+  else if (/^\d{10}$/.test(resetsAt)) t = Number(resetsAt) * 1e3;
+  else if (/^\d{13}$/.test(resetsAt)) t = Number(resetsAt);
+  if (Number.isNaN(t) || t <= now.getTime() || t > now.getTime() + MAX_PARK_MS) return fallback;
+  return new Date(t);
+}
+var limitsFile = (stateRoot) => join5(stateRoot, "limits.json");
+function readLimits(stateRoot) {
+  const file2 = limitsFile(stateRoot);
+  try {
+    if (!lstatSync3(file2).isFile()) return { ok: false };
+  } catch (e) {
+    return e.code === "ENOENT" ? { ok: true, labels: {} } : { ok: false };
+  }
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync5(file2, "utf8"));
+  } catch {
+    return { ok: false };
+  }
+  if (!isObject2(raw)) return { ok: false };
+  const labels = {};
+  for (const [label, park] of Object.entries(raw)) {
+    if (!validLabel(label) || !isObject2(park)) return { ok: false };
+    const { parkedUntil, kind, ...rest } = park;
+    if (Object.keys(rest).length > 0) return { ok: false };
+    if (parkedUntil !== void 0) {
+      if (typeof parkedUntil !== "string" || Number.isNaN(Date.parse(parkedUntil))) {
+        return { ok: false };
+      }
+    }
+    if (kind !== void 0 && typeof kind !== "string") return { ok: false };
+    labels[label] = {
+      ...parkedUntil === void 0 ? {} : { parkedUntil },
+      ...kind === void 0 ? {} : { kind }
+    };
+  }
+  return { ok: true, labels };
+}
+function writeLimits(stateRoot, labels) {
+  writeStateFile(stateRoot, limitsFile(stateRoot), `${JSON.stringify(labels, null, 2)}
+`);
+}
+function activeParks(labels, now) {
+  return Object.fromEntries(
+    Object.entries(labels).filter(
+      ([, p]) => p.parkedUntil !== void 0 && Date.parse(p.parkedUntil) > now.getTime()
+    )
+  );
+}
+function earliestReset(parks) {
+  let best;
+  for (const p of Object.values(parks)) {
+    if (p.parkedUntil === void 0) continue;
+    if (best === void 0 || Date.parse(p.parkedUntil) < Date.parse(best)) best = p.parkedUntil;
+  }
+  return best;
+}
+function readRange(file2, pick2) {
+  try {
+    if (!lstatSync3(file2).isFile()) return void 0;
+    const fd = openSync2(file2, "r");
+    try {
+      const { start, length } = pick2(fstatSync(fd).size);
+      if (length <= 0) return void 0;
+      const buf = Buffer.alloc(length);
+      const got = readSync(fd, buf, 0, length, start);
+      return { text: buf.toString("utf8", 0, got), start };
+    } finally {
+      closeSync2(fd);
+    }
+  } catch {
+    return void 0;
+  }
+}
+var logFile = (stateRoot, id) => join5(stateRoot, "logs", `${id}.jsonl`);
+function scanLogForLimit(stateRoot, id, from) {
+  const range = readRange(logFile(stateRoot, id), (size) => {
+    const start = Math.max(from, size - TAIL_BYTES, 0);
+    return { start, length: size - start };
+  });
+  if (!range) return void 0;
+  const lines = range.text.split("\n");
+  if (range.start > from) lines.shift();
+  for (const line of lines.reverse()) {
+    const hit = detectLimit(line);
+    if (hit) return hit;
+  }
+  return void 0;
+}
+var SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+function sessionIdSince(stateRoot, id, from) {
+  const range = readRange(logFile(stateRoot, id), (size) => ({
+    start: Math.min(from, size),
+    length: Math.min(HEAD_BYTES, size - Math.min(from, size))
+  }));
+  if (!range) return void 0;
+  for (const line of range.text.split("\n")) {
+    try {
+      const ev = JSON.parse(line);
+      if (ev?.type === "system" && typeof ev.session_id === "string") {
+        return SESSION_ID.test(ev.session_id) ? ev.session_id : void 0;
+      }
+    } catch {
+    }
+  }
+  return void 0;
+}
+function hasReport(stateRoot, id) {
+  try {
+    return lstatSync3(join5(stateRoot, "clones", id, ".studio", "reports", `${id}.md`)).isFile();
+  } catch {
+    return false;
+  }
+}
+function exists(file2) {
+  try {
+    lstatSync3(file2);
+    return true;
+  } catch {
+    return false;
+  }
+}
+var ACTIVE = /* @__PURE__ */ new Set(["assigned", "in_progress"]);
+function backToReady(project, id, note, now, by) {
+  const fresh = loadBoard(project);
+  const moved = transition(fresh, id, "ready", by, now);
+  saveBoard(project, {
+    ...moved,
+    items: moved.items.map((i2) => i2.id === id ? { ...i2, notes: [...i2.notes ?? [], note] } : i2)
+  });
+}
+async function reconcileLimits(o2) {
+  const { project, stateRoot, ports } = o2;
+  const result = { stopped: [], errors: [] };
+  const crewFile = join5(stateRoot, "crew.json");
+  if (!exists(crewFile) && !exists(limitsFile(stateRoot))) return result;
+  const now = ports.clock.now();
+  const limits = readLimits(stateRoot);
+  if (!limits.ok) {
+    result.errors.push(
+      `${limitsFile(stateRoot)} is unreadable: all crew credentials count as parked until it is fixed or removed`
+    );
+    return result;
+  }
+  const lock = acquireStateLock(stateRoot, "limits.lock", { now, heartbeatStaleMs: LOCK_STALE_MS });
+  if (!lock) return result;
+  try {
+    let labels = limits.labels;
+    const kept = activeParks(labels, now);
+    if (Object.keys(kept).length !== Object.keys(labels).length) {
+      writeLimits(stateRoot, kept);
+      labels = kept;
+    }
+    const records = readCrewRecords(stateRoot);
+    const board = loadBoard(project);
+    for (const [id, rec] of Object.entries(records)) {
+      const status = board.items.find((i2) => i2.id === id)?.status;
+      if (status === void 0 || !ACTIVE.has(status)) continue;
+      const label = rec.label ?? DEFAULT_LABEL;
+      if (rec.limit) {
+        const note = `usage limit (${rec.limit.kind}) on ${label}: run stopped, clone and branch kept`;
+        backToReady(project, id, note, now, "studio");
+        continue;
+      }
+      if (rec.stoppedAt !== void 0) continue;
+      const hit = scanLogForLimit(stateRoot, id, rec.logStart ?? 0);
+      if (!hit) continue;
+      if (!Number.isInteger(rec.pid) || rec.pid <= 0) {
+        result.errors.push(`crew record for ${id} has no valid pid; not stopping it`);
+        continue;
+      }
+      const alive = ports.claude.alive(rec.pid);
+      if (!alive && hasReport(stateRoot, id)) continue;
+      const until = parkUntil(hit.resetsAt, now).toISOString();
+      const earlier = labels[label]?.parkedUntil;
+      const parkedUntil = earlier && Date.parse(earlier) > Date.parse(until) ? earlier : until;
+      labels = { ...labels, [label]: { parkedUntil, kind: hit.kind } };
+      writeLimits(stateRoot, labels);
+      if (alive) await ports.claude.stop(rec.pid);
+      const sessionId = sessionIdSince(stateRoot, id, rec.logStart ?? 0);
+      const latest = readCrewRecords(stateRoot);
+      latest[id] = {
+        ...latest[id] ?? rec,
+        stoppedAt: now.toISOString(),
+        limit: {
+          at: now.toISOString(),
+          kind: hit.kind,
+          ...sessionId === void 0 ? {} : { sessionId }
+        }
+      };
+      writeStateFile(stateRoot, crewFile, `${JSON.stringify(latest, null, 2)}
+`);
+      backToReady(
+        project,
+        id,
+        `usage limit (${hit.kind}) on ${label}: run stopped until ${parkedUntil}, clone and branch kept`,
+        now,
+        "studio"
+      );
+      result.stopped.push({ item: id, label, kind: hit.kind, parkedUntil });
+    }
+  } finally {
+    lock.release();
+  }
+  return result;
+}
+
+// src/credentials.ts
+var PROVIDER_TIMEOUT_MS = 3e4;
+var PROVIDER_MAX_BYTES = 64 * 1024;
+var fail = (what) => {
+  throw new Error(`credential provider: ${what}`);
+};
+var validToken = (t) => /^[^\s\p{Cc}]+$/u.test(t);
+function parseProviderOutput(stdout) {
+  const text = stdout.trim();
+  if (text === "") return void 0;
+  if (text.includes("\n")) return fail("output must be exactly one JSON line");
+  let raw;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return fail("output is not valid JSON");
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return fail("output must be a JSON object");
+  }
+  const obj = raw;
+  if (Object.keys(obj).sort().join() !== "env,label") {
+    return fail("output must have exactly the keys label and env");
+  }
+  const { label, env } = obj;
+  if (typeof label !== "string" || !validLabel(label)) return fail("label is not valid");
+  if (env === null || typeof env !== "object" || Array.isArray(env)) {
+    return fail("env must be an object");
+  }
+  const keys2 = Object.keys(env);
+  if (keys2.length !== 1) return fail("env must have exactly one key");
+  const value = env[keys2[0]];
+  if (keys2[0] === "CLAUDE_CODE_OAUTH_TOKEN") {
+    if (typeof value !== "string" || !validToken(value)) return fail("the token is not valid");
+    return { label, token: value };
+  }
+  if (keys2[0] === "CLAUDE_CONFIG_DIR") {
+    if (typeof value !== "string" || value === "") return fail("the config dir is not valid");
+    return { label, configDir: value };
+  }
+  return fail("env holds a key that is not accepted");
+}
+var uidOf = (o2) => o2.uid ?? process.getuid?.();
+function checkCredentialCommand(path10, owner) {
+  const refuse = (why) => {
+    throw new Error(`crew_credential_command ${path10} ${why}`);
+  };
+  if (!isAbsolute3(path10)) refuse("must be an absolute path");
+  let st;
+  try {
+    st = lstatSync4(path10);
+  } catch {
+    throw new Error(`crew_credential_command ${path10} must be a regular file`);
+  }
+  if (!st.isFile()) refuse("must be a regular file");
+  if (st.uid !== uidOf(owner)) refuse("must be owned by the current user");
+  if ((st.mode & 18) !== 0) refuse("must not be group- or world-writable");
+  if ((st.mode & 64) === 0) refuse("must be executable");
+}
+function checkProviderConfigDir(dir, owner) {
+  if (!isAbsolute3(dir)) return fail("config dir must be an absolute path");
+  let real = "";
+  let ownerReal = "";
+  let st;
+  try {
+    real = realpathSync2(dir);
+    ownerReal = realpathSync2(ownerConfigDir(owner));
+    st = statSync(real);
+  } catch {
+    return fail("config dir must be an existing directory");
+  }
+  if (!st.isDirectory()) return fail("config dir must be an existing directory");
+  if (!real.startsWith(ownerReal + sep3)) {
+    return fail("config dir must lie below the owner config dir");
+  }
+  if (st.uid !== uidOf(owner)) return fail("config dir must be owned by the current user");
+  return real;
+}
+function apiBillingProblem(file2, allowed = false, noLinks = false) {
+  let text;
+  try {
+    if (noLinks && lstatSync4(file2).isSymbolicLink()) return `${file2} is a symlink`;
+    text = readFileSync6(file2, "utf8");
+  } catch (e) {
+    return e.code === "ENOENT" ? void 0 : `${file2} cannot be read`;
+  }
+  let raw;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    raw = void 0;
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return `${file2} cannot be parsed`;
+  }
+  if (allowed) return void 0;
+  const hint = "refusing API billing (set allow_api_billing: true in the owner config to allow it)";
+  const s = raw;
+  if (s.apiKeyHelper !== void 0) return `${file2} sets apiKeyHelper; ${hint}`;
+  if (s.env !== null && typeof s.env === "object") {
+    for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) {
+      if (key in s.env) return `${file2} sets env.${key}; ${hint}`;
+    }
+  }
+  return void 0;
+}
+function readCrewTokenFile(owner) {
+  const file2 = crewTokenFile(owner);
+  let st;
+  try {
+    st = lstatSync4(file2);
+  } catch (e) {
+    if (e.code === "ENOENT") return { kind: "absent" };
+    return { kind: "bad", why: `${file2} cannot be read` };
+  }
+  if (!st.isFile()) return { kind: "bad", why: `${file2} is not a regular file` };
+  if (st.uid !== uidOf(owner)) return { kind: "bad", why: `${file2} has another owner` };
+  if ((st.mode & 511 & ~384) !== 0) {
+    return { kind: "bad", why: `${file2} has a mode wider than 0600` };
+  }
+  let token;
+  try {
+    token = readFileSync6(file2, "utf8").trim();
+  } catch {
+    return { kind: "bad", why: `${file2} cannot be read` };
+  }
+  if (!validToken(token)) return { kind: "bad", why: `${file2} holds no valid token` };
+  return { kind: "ok", token };
+}
+function installCrewToken(token, owner) {
+  const file2 = crewTokenFile(owner);
+  const parent = dirname3(file2);
+  mkdirSync2(dirname3(parent), { recursive: true, mode: 448 });
+  try {
+    if (lstatSync4(parent).isSymbolicLink()) {
+      throw new Error(`refusing to use ${parent}: it is a symlink`);
+    }
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+    mkdirSync2(parent, { mode: 448 });
+  }
+  chmodSync2(parent, 448);
+  const tmp = `${file2}.${process.pid}.${randomBytes3(4).toString("hex")}.tmp`;
+  try {
+    writeFileSync4(tmp, `${token}
+`, { flag: "wx", mode: 384 });
+    renameSync4(tmp, file2);
+  } catch (e) {
+    try {
+      unlinkSync2(tmp);
+    } catch {
+    }
+    throw e;
+  }
+}
+async function runCredentialProvider(command, ctx, ports, owner) {
+  checkCredentialCommand(command, owner);
+  const penv = owner.env ?? process.env;
+  const env = {
+    HOME: owner.homedir ?? homedir3(),
+    STUDIO_ITEM: ctx.item,
+    STUDIO_ROLE: ctx.role,
+    STUDIO_EXCLUDE: ctx.exclude.join(",")
+  };
+  if (penv.PATH !== void 0) env.PATH = penv.PATH;
+  let reply;
+  try {
+    reply = await ports.credentials.runProvider(command, env, {
+      timeoutMs: PROVIDER_TIMEOUT_MS,
+      maxBytes: PROVIDER_MAX_BYTES
+    });
+  } catch {
+    return fail("could not be run");
+  }
+  if (reply.code !== 0) return fail("failed");
+  return parseProviderOutput(reply.stdout);
+}
+var allParkedLine = (reset2) => `usage limit: no crew credential available; earliest reset ${reset2 ?? "unknown"}`;
+async function limitHold(stateRoot, ownerConfig, ports, owner) {
+  const read2 = readLimits(stateRoot);
+  if (!read2.ok)
+    return "usage limit state is unreadable (limits.json): no crew starts until it is fixed";
+  const parks = activeParks(read2.labels, ports.clock.now());
+  return parksHold(parks, ownerConfig, ports, owner);
+}
+async function parksHold(parks, ownerConfig, ports, owner) {
+  const labels = Object.keys(parks);
+  const command = ownerConfig.crewCredentialCommand;
+  if (command === void 0) {
+    const park = parks[DEFAULT_LABEL];
+    return park ? allParkedLine(park.parkedUntil) : void 0;
+  }
+  if (labels.length === 0) return void 0;
+  try {
+    const got = await runCredentialProvider(
+      command,
+      { item: "", role: "", exclude: labels },
+      ports,
+      owner
+    );
+    if (got === void 0) return allParkedLine(earliestReset(parks));
+    if (parks[got.label]) return fail("returned a parked label");
+    return void 0;
+  } catch {
+    return "credential provider failed: no crew starts until it works again";
+  }
+}
+
+// src/crew.ts
+import {
+  chmodSync as chmodSync3,
+  existsSync as existsSync3,
+  lstatSync as lstatSync5,
+  readFileSync as readFileSync7,
+  realpathSync as realpathSync3,
+  unlinkSync as unlinkSync3,
+  writeFileSync as writeFileSync5
+} from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { basename as basename2, dirname as dirname4, join as join6, resolve as resolve3, sep as sep4 } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// src/guard.ts
+var import_shell_quote = __toESM(require_shell_quote(), 1);
+var DEFAULT_SECRET_GLOBS = [
+  "**/.env",
+  "**/.env.*",
+  "**/*.pem",
+  "**/*.key",
+  "**/id_rsa*",
+  "**/id_ed25519*",
+  "**/.npmrc",
+  "**/.netrc",
+  "**/credentials*"
+];
+var GH_VALUE_FLAGS = ["-R", "--repo", "--hostname"];
+var GH_RUN_VALUE_FLAGS = ["--ref", "-r", "-f", "--raw-field", "-F", "--field", ...GH_VALUE_FLAGS];
+
 // src/crew.ts
 var crewName = (item) => `studio-${item.role}-${item.id.toLowerCase()}`;
 var GUARD_BIN = resolve3(
-  dirname2(fileURLToPath(import.meta.url)),
+  dirname4(fileURLToPath(import.meta.url)),
   "..",
   "bin",
   "studio-guard.mjs"
@@ -28593,7 +29105,7 @@ function githubHttpsUrl(repo) {
 }
 function cloneBranch(path10) {
   try {
-    const head = readFileSync5(join5(path10, ".git", "HEAD"), "utf8").trim();
+    const head = readFileSync7(join6(path10, ".git", "HEAD"), "utf8").trim();
     return /^ref: refs\/heads\/(.+)$/.exec(head)?.[1];
   } catch {
     return void 0;
@@ -28601,8 +29113,8 @@ function cloneBranch(path10) {
 }
 async function prepareCheckout(stateRoot, projectDir, item, ports) {
   assertItemId(item.id);
-  const clones = ensureStateDir(stateRoot, join5(stateRoot, "clones"));
-  const path10 = join5(clones, item.id);
+  const clones = ensureStateDir(stateRoot, join6(stateRoot, "clones"));
+  const path10 = join6(clones, item.id);
   const branch = `studio/${item.id}`;
   const crewOrigin = githubHttpsUrl(item.repo);
   assertStatePath(stateRoot, path10);
@@ -28611,7 +29123,7 @@ async function prepareCheckout(stateRoot, projectDir, item, ports) {
   if (cloneBranch(path10) === branch && cloneOriginUrl(path10) === crewOrigin) return { path: path10, branch };
   removeStateEntry(stateRoot, path10);
   await ports.git.run(clones, ["clone", "--filter=blob:none", url2, path10]);
-  chmodSync2(path10, 448);
+  chmodSync3(path10, 448);
   await ports.git.run(path10, ["remote", "set-url", "origin", crewOrigin]);
   await ports.git.run(path10, ["checkout", "-b", branch, "origin/main"]);
   return { path: path10, branch };
@@ -28625,16 +29137,16 @@ function removeOldReport(stateRoot, clone2, id) {
   assertItemId(id);
   let cur = clone2;
   for (const seg of [".studio", "reports", `${id}.md`]) {
-    cur = join5(cur, seg);
+    cur = join6(cur, seg);
     assertStatePath(stateRoot, cur);
     let st;
     try {
-      st = lstatSync3(cur);
+      st = lstatSync5(cur);
     } catch {
       return;
     }
     if (st.isSymbolicLink()) {
-      unlinkSync2(cur);
+      unlinkSync3(cur);
       return;
     }
     if (seg === `${id}.md`) {
@@ -28644,26 +29156,41 @@ function removeOldReport(stateRoot, clone2, id) {
     if (!st.isDirectory()) return;
   }
 }
+function existsNoFollow(p) {
+  try {
+    lstatSync5(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function fileSize(p) {
+  try {
+    return lstatSync5(p).size;
+  } catch {
+    return 0;
+  }
+}
 function isLink2(p) {
   try {
-    return lstatSync3(p).isSymbolicLink();
+    return lstatSync5(p).isSymbolicLink();
   } catch {
     return false;
   }
 }
 function writeHomeFile(homeDir, name, content) {
-  const target = join5(homeDir, name);
-  const realHome = realpathSync2(homeDir);
-  const parent = realpathSync2(dirname2(target));
-  if (parent !== realHome && !parent.startsWith(realHome + sep3)) {
+  const target = join6(homeDir, name);
+  const realHome = realpathSync3(homeDir);
+  const parent = realpathSync3(dirname4(target));
+  if (parent !== realHome && !parent.startsWith(realHome + sep4)) {
     throw new Error(`refusing to write outside the crew home: ${target}`);
   }
-  writeFileSync4(join5(parent, basename2(target)), content, { flag: "wx" });
+  writeFileSync5(join6(parent, basename2(target)), content, { flag: "wx" });
 }
 var unique = (xs) => [...new Set(xs)];
 function realOr(p) {
   try {
-    return realpathSync2(p);
+    return realpathSync3(p);
   } catch {
     return p;
   }
@@ -28677,8 +29204,8 @@ function writeBrief(stateRoot, item, config2, projectDir) {
     "studio:studio-crew",
     ...skills.required.filter((s) => s !== "studio:studio-crew")
   ];
-  const roleFile = join5(projectDir, ".studio", "roles", `${item.role}.md`);
-  const roleBrief = existsSync3(roleFile) ? readFileSync5(roleFile, "utf8").trim() : "";
+  const roleFile = join6(projectDir, ".studio", "roles", `${item.role}.md`);
+  const roleBrief = existsSync3(roleFile) ? readFileSync7(roleFile, "utf8").trim() : "";
   const id = item.id;
   const opensPr = item.type !== "review" && item.type !== "research";
   const lines = [
@@ -28753,14 +29280,14 @@ function writeBrief(stateRoot, item, config2, projectDir) {
     "The body says what changed and how it was verified.",
     ""
   ];
-  const file2 = join5(stateRoot, "briefs", `${id}.md`);
+  const file2 = join6(stateRoot, "briefs", `${id}.md`);
   writeStateFile(stateRoot, file2, lines.join("\n"));
   return file2;
 }
 function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}) {
   assertItemId(item.id);
   const id = item.id;
-  const realHome = launcher.homedir ?? homedir3();
+  const realHome = launcher.homedir ?? homedir4();
   const env = launcher.env ?? process.env;
   const { all: credentialPaths, extra: extraSecret } = credentialLocations(realHome, env);
   const toolchain = canonicalToolchainPaths(dirs.toolchainPaths, {
@@ -28771,21 +29298,32 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
     stateRoot,
     extraCredentialPaths: extraSecret
   });
-  const stateBase = dirname2(stateRoot);
+  const stateBase = dirname4(stateRoot);
   const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase)]);
-  const allowRead = [clone2, dirs.tmpDir, dirs.homeDir, ...toolchain];
-  const ctxFile = join5(stateRoot, "guard", `${id}.json`);
+  const loginDir = dirs.providerConfigDir;
+  const allowRead = [
+    clone2,
+    dirs.tmpDir,
+    dirs.homeDir,
+    ...toolchain,
+    ...loginDir === void 0 ? [] : [loginDir]
+  ];
+  const ctxFile = join6(stateRoot, "guard", `${id}.json`);
   const protectedPaths = [
     ctxFile,
-    ...STATE_PROTECTED_DIRS.map((d) => join5(stateRoot, d)),
-    ...STATE_FILES.map((f) => join5(stateRoot, f))
+    ...STATE_PROTECTED_DIRS.map((d) => join6(stateRoot, d)),
+    ...STATE_FILES.map((f) => join6(stateRoot, f))
   ];
   const ctx = {
     worktree: clone2,
     ownerOnly: config2.ownerOnly,
     deployCommands: config2.deployCommands,
     // Absolute credential locations of the real home, on top of the default globs.
-    secretGlobs: [...DEFAULT_SECRET_GLOBS, ...credentialPaths.flatMap((p) => [p, `${p}/**`])],
+    secretGlobs: [
+      ...DEFAULT_SECRET_GLOBS,
+      ...credentialPaths.flatMap((p) => [p, `${p}/**`]),
+      ...loginDir === void 0 ? [] : [loginDir, `${loginDir}/**`]
+    ],
     crewAllowedWorkflows: config2.crewAllowedWorkflows,
     crewAllowedWorkflowRefs: config2.crewAllowedWorkflowRefs,
     protectedPaths
@@ -28826,7 +29364,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
       network: { allowedDomains: config2.sandbox.networkAllow, strictAllowlist: true }
     }
   };
-  const file2 = join5(stateRoot, "settings", `${id}.json`);
+  const file2 = join6(stateRoot, "settings", `${id}.json`);
   writeStateFile(stateRoot, file2, `${JSON.stringify(settings, null, 2)}
 `);
   return file2;
@@ -28839,10 +29377,10 @@ var GITCONFIG = `[user]
 	helper = !gh auth git-credential
 `;
 var BASE_ENV = ["PATH", "LANG", "TERM", "USER"];
-var PASS_THROUGH_ENV = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
+var API_BILLING_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
 function readCrewFile(file2) {
   try {
-    return JSON.parse(readFileSync5(file2, "utf8"));
+    return JSON.parse(readFileSync7(file2, "utf8"));
   } catch {
     return {};
   }
@@ -28868,17 +29406,28 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     throw new Error(`repo ${item.repo} is not configured (primary_repo/repos in studio.yaml)`);
   }
   githubHttpsUrl(item.repo);
+  const home = launcher.homedir ?? homedir4();
+  const owner = {
+    homedir: home,
+    env: penv,
+    platform: launcher.platform,
+    uid: launcher.uid
+  };
   let token;
   if (config2.crewToken) token = penv[config2.crewToken.env] || void 0;
+  if (!token) {
+    const file2 = readCrewTokenFile(owner);
+    if (file2.kind === "bad") throw new Error(`refusing the crew token file: ${file2.why}`);
+    if (file2.kind === "ok") token = file2.token;
+  }
   if (!token && !config2.allowAmbientCredentials) {
     throw new Error(
-      config2.crewToken ? `crew token variable ${config2.crewToken.env} is not set; refusing to launch without the least-privilege token (or set allow_ambient_credentials: true)` : "crew_token is not configured; refusing to launch without a least-privilege token (or set allow_ambient_credentials: true)"
+      config2.crewToken ? `crew token variable ${config2.crewToken.env} is not set and there is no crew-token file; refusing to launch without the least-privilege token (run studio secret set crew-token, or set allow_ambient_credentials: true)` : "crew_token is not configured and there is no crew-token file; refusing to launch without a least-privilege token (run studio secret set crew-token, or set allow_ambient_credentials: true)"
     );
   }
-  const home = launcher.homedir ?? homedir3();
-  const owner = { homedir: home, env: penv, platform: launcher.platform };
   const stateRoot = stateRootFor(projectDir, owner);
-  const toolchainPaths = loadOwnerConfig(owner).crewToolchainPaths;
+  const ownerConfig = loadOwnerConfig(owner);
+  const toolchainPaths = ownerConfig.crewToolchainPaths;
   canonicalToolchainPaths(toolchainPaths, {
     home,
     env: penv,
@@ -28888,7 +29437,7 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     extraCredentialPaths: credentialLocations(home, penv).extra
   });
   for (const sub of ["clones", "homes", "tmp"]) {
-    assertStatePath(stateRoot, join5(stateRoot, sub, item.id));
+    assertStatePath(stateRoot, join6(stateRoot, sub, item.id));
   }
   const previous = readCrewRecords(stateRoot)[item.id];
   if (previous !== void 0) {
@@ -28901,17 +29450,77 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
       );
     }
   }
+  const limits = readLimits(stateRoot);
+  if (!limits.ok) {
+    throw new Error(`${join6(stateRoot, "limits.json")} is unreadable; refusing to launch`);
+  }
+  const parks = activeParks(limits.labels, ports.clock.now());
+  let label = DEFAULT_LABEL;
+  let oauthToken = penv.CLAUDE_CODE_OAUTH_TOKEN || void 0;
+  let providerConfigDir;
+  const command = ownerConfig.crewCredentialCommand;
+  if (command === void 0) {
+    if (parks[DEFAULT_LABEL]) {
+      throw new Error(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
+    }
+  } else {
+    const parked = Object.keys(parks);
+    const got = await runCredentialProvider(
+      command,
+      { item: item.id, role: item.role, exclude: parked },
+      ports,
+      owner
+    );
+    if (got === void 0) {
+      if (parked.length > 0) throw new Error(allParkedLine(earliestReset(parks)));
+      throw new Error("credential provider: returned nothing while no label is parked");
+    }
+    if (parks[got.label]) throw new Error("credential provider: returned a parked label");
+    label = got.label;
+    oauthToken = got.token;
+    if (got.configDir !== void 0) {
+      providerConfigDir = checkProviderConfigDir(got.configDir, owner);
+    }
+  }
+  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join6(home, ".claude"));
+  const billing = apiBillingProblem(
+    join6(claudeConfigDir, "settings.json"),
+    ownerConfig.allowApiBilling
+  );
+  if (billing) throw new Error(billing);
+  const clonePath = join6(stateRoot, "clones", item.id);
+  if (previous?.limit && existsNoFollow(clonePath) && (cloneBranch(clonePath) !== `studio/${item.id}` || cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))) {
+    throw new Error(
+      `the clone of ${item.id} left its branch after a usage limit; refusing to replace it (inspect it, then remove ${clonePath} to start over)`
+    );
+  }
+  const tokenConfigDir = providerConfigDir === void 0 && oauthToken !== void 0 ? claudeConfigDir : void 0;
+  const resumeId = (() => {
+    const sessionId = previous?.limit?.sessionId;
+    if (sessionId === void 0) return void 0;
+    const sameLabel = (previous?.label ?? DEFAULT_LABEL) === label;
+    const sameTokenDir = tokenConfigDir !== void 0 && previous?.tokenConfigDir === tokenConfigDir;
+    return sameLabel || sameTokenDir ? sessionId : void 0;
+  })();
   checkStateMarker(stateRoot, {
     projectRealpath: projectRealpath(projectDir),
     originUrl: await ownerOriginUrl(projectDir, ports)
   });
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
-  const homeDir = join5(stateRoot, "homes", item.id);
+  for (const name2 of ["settings.json", "settings.local.json"]) {
+    const problem = apiBillingProblem(
+      join6(wt.path, ".claude", name2),
+      ownerConfig.allowApiBilling,
+      true
+    );
+    if (problem) throw new Error(problem);
+  }
+  const homeDir = join6(stateRoot, "homes", item.id);
   removeStateEntry(stateRoot, homeDir);
   ensureStateDir(stateRoot, homeDir);
   writeHomeFile(homeDir, ".gitconfig", GITCONFIG);
-  const tmpDir = join5(stateRoot, "tmp", item.id);
+  const tmpDir = join6(stateRoot, "tmp", item.id);
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
   const brief = writeBrief(stateRoot, item, config2, projectDir);
@@ -28920,13 +29529,13 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     item,
     wt.path,
     config2,
-    { homeDir, tmpDir, projectDir, toolchainPaths },
+    { homeDir, tmpDir, projectDir, toolchainPaths, providerConfigDir },
     owner
   );
-  const mcpConfig = join5(stateRoot, "settings", `${item.id}.mcp.json`);
+  const mcpConfig = join6(stateRoot, "settings", `${item.id}.mcp.json`);
   writeStateFile(stateRoot, mcpConfig, `${JSON.stringify({ mcpServers: {} })}
 `);
-  const settingsEnv = JSON.parse(readFileSync5(settings, "utf8")).env;
+  const settingsEnv = JSON.parse(readFileSync7(settings, "utf8")).env;
   const env = {};
   for (const k of BASE_ENV) {
     const v = penv[k];
@@ -28934,15 +29543,19 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
   }
   env.HOME = homeDir;
   env.TMPDIR = tmpDir;
-  env.CLAUDE_CONFIG_DIR = penv.CLAUDE_CONFIG_DIR || join5(home, ".claude");
-  for (const k of PASS_THROUGH_ENV) {
-    const v = penv[k];
-    if (v) env[k] = v;
+  env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+  if (oauthToken !== void 0) env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
+  if (ownerConfig.allowApiBilling) {
+    for (const k of API_BILLING_ENV) {
+      const v = penv[k];
+      if (v) env[k] = v;
+    }
   }
   Object.assign(env, settingsEnv);
   if (token) env.GH_TOKEN = token;
-  const log = join5(stateRoot, "logs", `${item.id}.jsonl`);
-  ensureStateDir(stateRoot, dirname2(log));
+  const log = join6(stateRoot, "logs", `${item.id}.jsonl`);
+  ensureStateDir(stateRoot, dirname4(log));
+  const logStart = fileSize(log);
   const { pid } = await ports.claude.start(
     wt.path,
     [
@@ -28958,7 +29571,8 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
       mcpConfig,
       "--output-format",
       "stream-json",
-      "--verbose"
+      "--verbose",
+      ...resumeId === void 0 ? [] : ["--resume", resumeId]
     ],
     `Read ${brief} and follow it.`,
     log,
@@ -28971,9 +29585,12 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     role: item.role,
     pid,
     log,
-    startedAt: ports.clock.now().toISOString()
+    startedAt: ports.clock.now().toISOString(),
+    label,
+    ...tokenConfigDir === void 0 ? {} : { tokenConfigDir },
+    logStart
   };
-  await updateCrewFile(stateRoot, join5(stateRoot, "crew.json"), (all) => {
+  await updateCrewFile(stateRoot, join6(stateRoot, "crew.json"), (all) => {
     all[item.id] = record2;
   });
   return { name, pid, log };
@@ -28981,7 +29598,7 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
 
 // src/planner.ts
 var BUILD_TYPES = ["feature", "fix", "chore"];
-var ACTIVE = ["assigned", "in_progress", "in_review", "queued"];
+var ACTIVE2 = ["assigned", "in_progress", "in_review", "queued"];
 function isReady(item) {
   const missing = [];
   if (!item.title?.trim()) missing.push("title");
@@ -29038,7 +29655,7 @@ function cycleTainted(items) {
   }
   return tainted;
 }
-function planAssignments(board, config2, capacity, running) {
+function planAssignments(board, config2, capacity, running, hold) {
   const byId = new Map(board.items.map((i2) => [i2.id, i2]));
   const tainted = cycleTainted(board.items);
   const blocked = [];
@@ -29067,13 +29684,14 @@ function planAssignments(board, config2, capacity, running) {
     return roleSlots.get(role);
   };
   let buildSlots = capacity.ok ? Math.max(0, config2.ci.capacity.mergeMaxBusy - capacity.ciBusy) : 0;
-  const active = board.items.filter((i2) => ACTIVE.includes(i2.status));
+  const active = board.items.filter((i2) => ACTIVE2.includes(i2.status));
   const assign = [];
   const deferred = [];
   for (const item of eligible) {
     const isBuild = BUILD_TYPES.includes(item.type);
     const clash = [...active, ...assign].find((o2) => conflicts(item, o2));
-    if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: "role wip full" });
+    if (hold !== void 0) deferred.push({ id: item.id, reason: hold });
+    else if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: "role wip full" });
     else if (isBuild && buildSlots <= 0) deferred.push({ id: item.id, reason: "ci capacity" });
     else if (clash) deferred.push({ id: item.id, reason: `overlaps ${clash.id}` });
     else {
@@ -29086,9 +29704,9 @@ function planAssignments(board, config2, capacity, running) {
 }
 
 // src/queue.ts
-import { existsSync as existsSync4, lstatSync as lstatSync4, readFileSync as readFileSync6 } from "node:fs";
+import { existsSync as existsSync4, lstatSync as lstatSync6, readFileSync as readFileSync8 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 var CHECKS_POLL_MS = 3e4;
 var CAPACITY_WAIT_MS = 6e4;
 var QUEUE_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
@@ -29113,16 +29731,16 @@ var stateSchema = external_exports.strictObject({
     })
   )
 });
-var queueFile = (stateRoot) => join6(stateRoot, "queue.json");
+var queueFile = (stateRoot) => join7(stateRoot, "queue.json");
 function loadQueue(stateRoot) {
   const file2 = queueFile(stateRoot);
   assertStatePath(stateRoot, file2);
   if (!existsSync4(file2)) return { pending: [], done: [] };
-  if (lstatSync4(file2).isSymbolicLink())
+  if (lstatSync6(file2).isSymbolicLink())
     throw new Error(`refusing to read ${file2}: it is a symlink`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync6(file2, "utf8"));
+    raw = JSON.parse(readFileSync8(file2, "utf8"));
   } catch {
     throw new Error(`queue file ${file2} is not valid JSON`);
   }
@@ -29209,14 +29827,14 @@ function installSignalRelease(lock) {
   };
 }
 function appendStateLine(stateRoot, name, line) {
-  const file2 = join6(stateRoot, name);
+  const file2 = join7(stateRoot, name);
   assertStatePath(stateRoot, file2);
   let prev = "";
   if (existsSync4(file2)) {
-    if (lstatSync4(file2).isSymbolicLink()) {
+    if (lstatSync6(file2).isSymbolicLink()) {
       throw new Error(`refusing to use ${file2}: it is a symlink`);
     }
-    prev = readFileSync6(file2, "utf8");
+    prev = readFileSync8(file2, "utf8");
     if (prev !== "" && !prev.endsWith("\n")) prev += "\n";
   }
   writeStateFile(stateRoot, file2, `${prev}${line}
@@ -29525,15 +30143,15 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
 // src/report.ts
 var import_yaml3 = __toESM(require_dist(), 1);
 import {
-  closeSync as closeSync2,
+  closeSync as closeSync3,
   constants as constants2,
-  fstatSync,
-  lstatSync as lstatSync5,
-  openSync as openSync2,
-  readSync,
-  realpathSync as realpathSync3
+  fstatSync as fstatSync2,
+  lstatSync as lstatSync7,
+  openSync as openSync3,
+  readSync as readSync2,
+  realpathSync as realpathSync4
 } from "node:fs";
-import { join as join7, sep as sep4 } from "node:path";
+import { join as join8, sep as sep5 } from "node:path";
 var ReportError = class extends Error {
   constructor(message) {
     super(message);
@@ -29610,19 +30228,19 @@ function readReportFile(root, file2, notBefore) {
   const unsafe = () => new ReportError(UNSAFE);
   let fd;
   try {
-    const parts = [root, join7(root, ".studio"), join7(root, ".studio", "reports"), file2];
+    const parts = [root, join8(root, ".studio"), join8(root, ".studio", "reports"), file2];
     parts.forEach((p, i2) => {
-      const st2 = lstatSync5(p);
+      const st2 = lstatSync7(p);
       if (st2.isSymbolicLink()) throw unsafe();
       if (i2 < parts.length - 1 ? !st2.isDirectory() : !st2.isFile()) throw unsafe();
     });
-    const realRoot = realpathSync3(root);
-    if (!realpathSync3(file2).startsWith(realRoot + sep4)) throw unsafe();
-    fd = openSync2(
+    const realRoot = realpathSync4(root);
+    if (!realpathSync4(file2).startsWith(realRoot + sep5)) throw unsafe();
+    fd = openSync3(
       file2,
       constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0)
     );
-    const st = fstatSync(fd);
+    const st = fstatSync2(fd);
     if (!st.isFile()) throw unsafe();
     if (notBefore !== void 0 && !(st.mtimeMs >= notBefore.getTime())) {
       throw new ReportError("report is older than the crew run");
@@ -29630,7 +30248,7 @@ function readReportFile(root, file2, notBefore) {
     const buf = Buffer.alloc(MAX_REPORT_BYTES + 1);
     let total = 0;
     while (total < buf.length) {
-      const n2 = readSync(fd, buf, total, buf.length - total, null);
+      const n2 = readSync2(fd, buf, total, buf.length - total, null);
       if (n2 === 0) break;
       total += n2;
     }
@@ -29639,11 +30257,11 @@ function readReportFile(root, file2, notBefore) {
   } catch (e) {
     throw e instanceof ReportError ? e : unsafe();
   } finally {
-    if (fd !== void 0) closeSync2(fd);
+    if (fd !== void 0) closeSync3(fd);
   }
 }
 function readReport(worktree, id, item, opts = {}) {
-  const file2 = join7(worktree, ".studio", "reports", `${id}.md`);
+  const file2 = join8(worktree, ".studio", "reports", `${id}.md`);
   return parseReport(readReportFile(worktree, file2, opts.notBefore), item);
 }
 function checkReportHead(report, prHead) {
@@ -29652,18 +30270,23 @@ function checkReportHead(report, prHead) {
   }
 }
 
+// src/secret-command.ts
+var import_yaml6 = __toESM(require_dist(), 1);
+import { readFileSync as readFileSync10 } from "node:fs";
+import { join as join10 } from "node:path";
+
 // src/setup-ci-command.ts
 var import_yaml5 = __toESM(require_dist(), 1);
-import { randomBytes as randomBytes3 } from "node:crypto";
+import { randomBytes as randomBytes4 } from "node:crypto";
 import {
   readdirSync as readdirSync2,
-  readFileSync as readFileSync7,
-  renameSync as renameSync4,
-  statSync,
-  unlinkSync as unlinkSync3,
-  writeFileSync as writeFileSync5
+  readFileSync as readFileSync9,
+  renameSync as renameSync5,
+  statSync as statSync2,
+  unlinkSync as unlinkSync4,
+  writeFileSync as writeFileSync6
 } from "node:fs";
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 
 // src/setup-ci.ts
 var import_yaml4 = __toESM(require_dist(), 1);
@@ -29965,8 +30588,14 @@ function syncMap(doc, map2, want) {
     if (typeof key !== "string" || !(key in want)) map2.delete(key);
   }
 }
+function assertPrimaryRepo(primary) {
+  if (typeof primary !== "string" || !REPO_NAME.test(primary) || primary.split("/").some((p) => p === "." || p === "..")) {
+    throw new Error(".studio/studio.yaml: primary_repo must be owner/name");
+  }
+  return primary;
+}
 function readWorkflows(project) {
-  const dir = join8(project, ...WORKFLOW_DIR);
+  const dir = join9(project, ...WORKFLOW_DIR);
   const rel = WORKFLOW_DIR.join("/");
   const files = [];
   const errors = [];
@@ -29985,7 +30614,7 @@ function readWorkflows(project) {
   for (const name of yaml) {
     const path10 = `${rel}/${name}`;
     try {
-      files.push({ path: path10, text: readFileSync7(join8(dir, name), "utf8") });
+      files.push({ path: path10, text: readFileSync9(join9(dir, name), "utf8") });
     } catch (e) {
       errors.push(`${path10}: cannot read file (${e.code ?? "error"})`);
     }
@@ -30019,13 +30648,13 @@ function applyCi(doc, ci) {
   }
 }
 function writeAtomic(file2, text) {
-  const tmp = `${file2}.${process.pid}.${randomBytes3(4).toString("hex")}.tmp`;
+  const tmp = `${file2}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
   try {
-    writeFileSync5(tmp, text, { flag: "wx", mode: statSync(file2).mode & 511 });
-    renameSync4(tmp, file2);
+    writeFileSync6(tmp, text, { flag: "wx", mode: statSync2(file2).mode & 511 });
+    renameSync5(tmp, file2);
   } catch (e) {
     try {
-      unlinkSync3(tmp);
+      unlinkSync4(tmp);
     } catch {
     }
     throw e;
@@ -30042,10 +30671,10 @@ function describeDetection(d) {
   return lines;
 }
 async function runSetupCi(o2) {
-  const file2 = join8(o2.project, ".studio", "studio.yaml");
+  const file2 = join9(o2.project, ".studio", "studio.yaml");
   let text;
   try {
-    text = readFileSync7(file2, "utf8");
+    text = readFileSync9(file2, "utf8");
   } catch (e) {
     throw new Error(
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
@@ -30053,10 +30682,7 @@ async function runSetupCi(o2) {
   }
   const doc = (0, import_yaml5.parseDocument)(text);
   if (doc.errors.length > 0) throw new Error(".studio/studio.yaml is not valid YAML");
-  const primary = doc.get("primary_repo");
-  if (typeof primary !== "string" || !REPO_NAME.test(primary) || primary.split("/").some((p) => p === "." || p === "..")) {
-    throw new Error(".studio/studio.yaml: primary_repo must be owner/name");
-  }
+  const primary = assertPrimaryRepo(doc.get("primary_repo"));
   const [owner = "", name = ""] = primary.split("/");
   const notes = [];
   let current;
@@ -30117,6 +30743,109 @@ async function runSetupCi(o2) {
   return errors.length > 0 ? 1 : 0;
 }
 
+// src/secret-command.ts
+function readPrimaryRepo(project) {
+  const file2 = join10(project, ".studio", "studio.yaml");
+  let raw;
+  try {
+    raw = (0, import_yaml6.parse)(readFileSync10(file2, "utf8"));
+  } catch {
+    throw new Error("cannot read .studio/studio.yaml");
+  }
+  return assertPrimaryRepo(raw?.primary_repo);
+}
+async function checkToken(token, repo, ports) {
+  const call = async (path10) => {
+    try {
+      return await ports.credentials.ghWithToken(token, ["api", path10]);
+    } catch {
+      return { code: 1, stdout: "", stderr: "" };
+    }
+  };
+  const info = await call(`/repos/${repo}`);
+  if (info.code !== 0) return "repository read (or GitHub is not reachable)";
+  let push;
+  try {
+    push = JSON.parse(info.stdout).permissions?.push;
+  } catch {
+    return "repository read (unexpected answer)";
+  }
+  if (push !== true) return "contents write";
+  const pulls = await call(`/repos/${repo}/pulls?per_page=1`);
+  return pulls.code === 0 ? void 0 : "pull requests read";
+}
+async function runSecretSet(o2) {
+  const repo = readPrimaryRepo(o2.project);
+  const input2 = o2.readSecret ? await o2.readSecret("Crew token (input hidden): ") : void 0;
+  if (input2 === void 0) {
+    throw new Error("studio secret set needs a terminal for hidden input; nothing written");
+  }
+  const token = input2.replace(/\s+/g, "");
+  if (token === "") throw new Error("empty value; nothing written");
+  if (!validToken(token)) throw new Error("the value holds control characters; nothing written");
+  const failing = await checkToken(token, repo, o2.ports);
+  if (failing !== void 0) {
+    o2.stdout(`failing permission: ${failing}
+`);
+    return 1;
+  }
+  installCrewToken(token, o2.owner);
+  o2.stdout(`valid for ${repo}
+`);
+  return 0;
+}
+var API_KEY_VARS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+function runDoctor(o2) {
+  let config2;
+  try {
+    config2 = loadConfig(o2.project);
+  } catch {
+    config2 = void 0;
+  }
+  let ownerConfig;
+  try {
+    ownerConfig = loadOwnerConfig(o2.owner);
+  } catch {
+    ownerConfig = void 0;
+  }
+  const envName = config2?.crewToken?.env;
+  let crewToken;
+  if (envName && o2.env[envName]) crewToken = { status: "set", source: `env ${envName}` };
+  else {
+    const file2 = readCrewTokenFile(o2.owner);
+    if (file2.kind === "ok") crewToken = { status: "set", source: "file" };
+    else if (file2.kind === "bad") crewToken = { status: "invalid", source: "file" };
+    else crewToken = { status: "missing" };
+  }
+  const required2 = !(config2?.allowAmbientCredentials ?? false);
+  const report = {
+    crewToken: { ...crewToken, required: required2 },
+    crewTokenFile: crewTokenFile(o2.owner),
+    studioYaml: config2 ? "readable" : "not readable",
+    ownerConfig: ownerConfig ? "readable" : "invalid",
+    credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
+    allowApiBilling: ownerConfig?.allowApiBilling ?? false,
+    apiKeyVarsInEnvironment: API_KEY_VARS.filter((k) => o2.env[k])
+  };
+  if (o2.json) o2.stdout(`${JSON.stringify(report, null, 2)}
+`);
+  else {
+    const source = crewToken.source ? ` (${crewToken.source})` : "";
+    const provider = report.credentialProvider;
+    const lines = [
+      `crew token: ${crewToken.status}${source}${required2 ? "" : " (optional: allow_ambient_credentials)"}`,
+      `studio.yaml: ${report.studioYaml}`,
+      `owner config: ${report.ownerConfig}`,
+      `credential provider: ${provider === null ? "not configured" : `configured ${provider}`}`,
+      `allow_api_billing: ${report.allowApiBilling ? "on" : "off"}`,
+      `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(", ") || "none"}`
+    ];
+    o2.stdout(`${lines.map(safe).join("\n")}
+`);
+  }
+  return required2 && crewToken.status !== "set" ? 1 : 0;
+}
+
 // src/cli.ts
 var USAGE = `Usage: studio [--project <dir>] [--json] <command>
 
@@ -30132,6 +30861,8 @@ Commands:
   stop <id>                Stop a crew session
   metrics                  Lead time and deployment frequency
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
+  secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
+  doctor                   What is set and what is missing, never values
 `;
 var UsageError = class extends Error {
 };
@@ -30188,9 +30919,25 @@ async function runCli(argv, deps) {
       checkStateMarker(root, { projectRealpath: projectRealpath(project), originUrl: url2 });
       return root;
     };
+    const reconcile = async () => {
+      const r = await reconcileLimits({ project, stateRoot: stateRoot(), ports });
+      for (const s of r.stopped) {
+        stderr(
+          `note: ${s.item} stopped at a ${s.kind} limit, ${s.label} parked until ${s.parkedUntil}
+`
+        );
+      }
+      for (const e of r.errors) stderr(`error: ${e}
+`);
+    };
     const planNow = async (config2, board) => {
       const capacity = await readCapacity(config2, ports);
-      return { capacity, plan: planAssignments(board, config2, capacity, runningPerRole(board)) };
+      const hold = await limitHold(stateRoot(), loadOwnerConfig(owner), ports, owner);
+      return {
+        capacity,
+        hold,
+        plan: planAssignments(board, config2, capacity, runningPerRole(board), hold)
+      };
     };
     switch (cmd) {
       case "board": {
@@ -30214,6 +30961,7 @@ async function runCli(argv, deps) {
         return 0;
       }
       case "plan": {
+        await reconcile();
         const { config: config2, board } = loadAll();
         const { plan, capacity } = await planNow(config2, board);
         print({
@@ -30225,6 +30973,7 @@ async function runCli(argv, deps) {
         return 0;
       }
       case "launch": {
+        await reconcile();
         const { config: config2, board } = loadAll();
         const item = findItem(board, rest[0]);
         if (item.status !== "ready") {
@@ -30250,6 +30999,7 @@ async function runCli(argv, deps) {
         return 0;
       }
       case "status": {
+        await reconcile();
         const board = loadBoard(project);
         const root = stateRoot();
         const rows = Object.values(readCrewRecords(root)).map((r) => ({
@@ -30260,6 +31010,7 @@ async function runCli(argv, deps) {
           alive: ports.claude.alive(r.pid),
           status: board.items.find((i2) => i2.id === r.item)?.status ?? "unknown",
           startedAt: r.startedAt,
+          ...r.label === void 0 ? {} : { label: r.label },
           ...r.stoppedAt === void 0 ? {} : { stoppedAt: r.stoppedAt }
         }));
         if (json2) print(rows);
@@ -30304,7 +31055,7 @@ async function runCli(argv, deps) {
             throw new Error(`crew record for ${item.id} has no valid startedAt`);
           }
         }
-        const clone2 = join9(stateRoot(), "clones", item.id);
+        const clone2 = join11(stateRoot(), "clones", item.id);
         const report = readReport(clone2, item.id, item, { notBefore });
         let branch = `studio/${item.id}`;
         if (report.pr !== void 0) {
@@ -30445,10 +31196,20 @@ async function runCli(argv, deps) {
         throw new UsageError("queue needs a subcommand: add <repo>#<pr> | run");
       }
       case "state": {
+        await reconcile();
         const { config: config2, board } = loadAll();
         const root = await boundStateRoot();
-        const { capacity } = await planNow(config2, board);
-        const snapshot = buildSnapshot(root, board, capacity, loadQueue(root), ports.clock.now());
+        const { capacity, hold } = await planNow(config2, board);
+        const read2 = readLimits(root);
+        const snapshot = buildSnapshot(
+          root,
+          board,
+          capacity,
+          loadQueue(root),
+          ports.clock.now(),
+          hold,
+          read2.ok ? activeParks(read2.labels, ports.clock.now()) : {}
+        );
         writeState(root, snapshot);
         print(snapshot);
         return 0;
@@ -30464,7 +31225,7 @@ async function runCli(argv, deps) {
         const stoppedAt = ports.clock.now().toISOString();
         const latest = readCrewRecords(root);
         latest[id] = { ...latest[id] ?? rec, stoppedAt };
-        writeStateFile(root, join9(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
+        writeStateFile(root, join11(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
 `);
         print({ item: id, name: rec.name, pid: rec.pid, stoppedAt });
         return 0;
@@ -30480,6 +31241,22 @@ async function runCli(argv, deps) {
           write: values.write === true,
           stdout
         });
+      }
+      case "secret": {
+        if (rest.length !== 2 || rest[0] !== "set" || rest[1] !== "crew-token") {
+          stderr("studio: secret takes exactly: set crew-token (the value is asked for, hidden)\n");
+          return 1;
+        }
+        return await runSecretSet({
+          project,
+          ports,
+          owner,
+          readSecret: deps.readSecret,
+          stdout
+        });
+      }
+      case "doctor": {
+        return runDoctor({ project, owner, env: deps.env, json: json2, stdout });
       }
       case "metrics": {
         print(computeMetrics(readMetricEvents(stateRoot())));
@@ -30600,7 +31377,7 @@ function applyQueueResults(project, done, ports, stderr) {
   }
   saveBoard(project, board);
 }
-function buildSnapshot(root, board, capacity, queue, now) {
+function buildSnapshot(root, board, capacity, queue, now, hold, limits) {
   const crew = Object.values(readCrewRecords(root)).map((r) => {
     const item = board.items.find((i2) => i2.id === r.item);
     return {
@@ -30609,22 +31386,58 @@ function buildSnapshot(root, board, capacity, queue, now) {
       item: r.item,
       status: item?.status ?? "unknown",
       ...item?.pr === void 0 ? {} : { pr: item.pr },
-      since: r.startedAt
+      since: r.startedAt,
+      ...r.label === void 0 ? {} : { label: r.label }
     };
   });
   return {
     crew,
     queue,
     capacity,
-    forOwner: board.items.filter((i2) => i2.ownerOnly && i2.status !== "merged" && i2.status !== "dropped").map((i2) => ({ id: i2.id, title: i2.title })),
+    forOwner: [
+      ...board.items.filter((i2) => i2.ownerOnly && i2.status !== "merged" && i2.status !== "dropped").map((i2) => ({ id: i2.id, title: i2.title })),
+      // Exactly one line however many items wait.
+      ...hold === void 0 ? [] : [{ id: "usage-limit", title: hold }]
+    ],
+    ...Object.keys(limits).length > 0 ? { limits } : {},
     updatedAt: now.toISOString(),
     metrics: computeMetrics(readMetricEvents(root))
   };
 }
 
+// src/hidden-input.ts
+var MAX_CHARS = 64 * 1024;
+function readHiddenLine(prompt, input2, write) {
+  if (!input2.isTTY || !input2.setRawMode) return Promise.resolve(void 0);
+  write(prompt);
+  input2.setRawMode(true);
+  input2.setEncoding("utf8");
+  input2.resume();
+  return new Promise((resolve5) => {
+    let value = "";
+    const done = (result) => {
+      input2.removeListener("data", onData);
+      input2.setRawMode?.(false);
+      input2.pause();
+      write("\n");
+      resolve5(result);
+    };
+    const onData = (chunk) => {
+      for (const ch of chunk) {
+        if (ch === "\r" || ch === "\n") return done(value);
+        if (ch === "" || ch === "") return done(void 0);
+        if (ch === "\x7F" || ch === "\b") value = value.slice(0, -1);
+        else if (value.length >= MAX_CHARS) return done(void 0);
+        else value += ch;
+      }
+    };
+    input2.on("data", onData);
+  });
+}
+
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync4, openSync as openSync4 } from "node:fs";
+import { closeSync as closeSync5, openSync as openSync5 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -32899,7 +33712,7 @@ var ENCODING_ALIASES = {
 var serializeEncoding = (encoding) => typeof encoding === "string" ? `"${encoding}"` : String(encoding);
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/command-file.js
-import { openSync as openSync3, readSync as readSync2, closeSync as closeSync3 } from "node:fs";
+import { openSync as openSync4, readSync as readSync3, closeSync as closeSync4 } from "node:fs";
 import { Buffer as Buffer2 } from "node:buffer";
 import path5 from "node:path";
 import process7 from "node:process";
@@ -33066,11 +33879,11 @@ var readShebang = (file2) => {
   const buffer = Buffer2.alloc(SHEBANG_BYTE_LENGTH);
   let bytesRead = 0;
   try {
-    const fileDescriptor = openSync3(file2, "r");
+    const fileDescriptor = openSync4(file2, "r");
     try {
-      bytesRead = readSync2(fileDescriptor, buffer, 0, SHEBANG_BYTE_LENGTH, 0);
+      bytesRead = readSync3(fileDescriptor, buffer, 0, SHEBANG_BYTE_LENGTH, 0);
     } finally {
-      closeSync3(fileDescriptor);
+      closeSync4(fileDescriptor);
     }
   } catch {
     return void 0;
@@ -33117,7 +33930,7 @@ var escapeArgument = (rawArgument) => {
 var shouldQuoteArgument = (argument) => argument === "" || argument.endsWith("\\") || quotedCharacterRegExp.test(argument);
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/cwd.js
-import { statSync as statSync2 } from "node:fs";
+import { statSync as statSync3 } from "node:fs";
 import path6 from "node:path";
 import process8 from "node:process";
 var normalizeCwd = (cwd = getDefaultCwd()) => {
@@ -33145,7 +33958,7 @@ var fixCwdError = (originalMessage, cwd) => {
   }
   let cwdStat;
   try {
-    cwdStat = statSync2(cwd);
+    cwdStat = statSync3(cwd);
   } catch (error62) {
     return `The "cwd" option is invalid: ${cwd}.
 ${error62.message}
@@ -34320,7 +35133,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync9 } from "node:fs";
+import { readFileSync as readFileSync12 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value, optionName) => {
@@ -34414,9 +35227,9 @@ var isReadableStream2 = (value) => Object.prototype.toString.call(value) === "[o
 var isWritableStream2 = (value) => Object.prototype.toString.call(value) === "[object WritableStream]";
 var isWebStream = (value) => isReadableStream2(value) || isWritableStream2(value);
 var isTransformStream = (value) => isReadableStream2(value?.readable) && isWritableStream2(value?.writable);
-var isAsyncIterableObject = (value) => isObject2(value) && typeof value[Symbol.asyncIterator] === "function";
-var isIterableObject = (value) => isObject2(value) && typeof value[Symbol.iterator] === "function";
-var isObject2 = (value) => typeof value === "object" && value !== null;
+var isAsyncIterableObject = (value) => isObject3(value) && typeof value[Symbol.asyncIterator] === "function";
+var isIterableObject = (value) => isObject3(value) && typeof value[Symbol.iterator] === "function";
+var isObject3 = (value) => typeof value === "object" && value !== null;
 var TRANSFORM_TYPES = /* @__PURE__ */ new Set(["generator", "asyncGenerator", "duplex", "webTransform"]);
 var FILE_TYPES = /* @__PURE__ */ new Set(["fileUrl", "filePath", "fileNumber"]);
 var SPECIAL_DUPLICATE_TYPES_SYNC = /* @__PURE__ */ new Set(["fileUrl", "filePath"]);
@@ -34676,7 +35489,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync8 } from "node:fs";
+import { readFileSync as readFileSync11 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -34790,7 +35603,7 @@ var getTargetFd = ({ value, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync8(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync11(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value, fdNumber) => {
   if (value === "inherit") {
@@ -35184,8 +35997,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync9(value))] }),
-    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync9(file2))] }),
+    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync12(value))] }),
+    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync12(file2))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value }) => ({ contents: () => [...value] }),
     string: ({ value }) => ({ contents: [value] }),
@@ -35481,7 +36294,7 @@ var throwOnSerializableInput = (optionName, invalidItem) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-sync.js
-import { writeFileSync as writeFileSync6, appendFileSync } from "node:fs";
+import { writeFileSync as writeFileSync7, appendFileSync } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/output.js
 var shouldLogOutput = ({ stdioItems, encoding, verboseInfo, fdNumber }) => fdNumber !== "all" && isFullVerbose(verboseInfo, fdNumber) && !BINARY_ENCODINGS.has(encoding) && isFdVerbose(fdNumber) && (stdioItems.some(({ type, value }) => type === "native" && PIPED_STDIO_VALUES.has(value)) || stdioItems.every(({ type }) => TRANSFORM_TYPES.has(type)));
@@ -35615,7 +36428,7 @@ var writeToFiles = (chunks, stdioItems, outputFiles) => {
     if (append || outputFiles.has(path10)) {
       appendFileSync(path10, contents);
     } else {
-      writeFileSync6(path10, contents);
+      writeFileSync7(path10, contents);
     }
     outputFiles.add(path10);
   }
@@ -38478,7 +39291,7 @@ function realPorts(claudeBin = "claude") {
   };
   const claude = {
     async start(cwd, args, prompt, logPath, env) {
-      const fd = openSync4(logPath, "a");
+      const fd = openSync5(logPath, "a");
       try {
         const child = spawn2(claudeBin, args, {
           cwd,
@@ -38496,7 +39309,7 @@ function realPorts(claudeBin = "claude") {
         child.unref();
         return { pid };
       } finally {
-        closeSync4(fd);
+        closeSync5(fd);
       }
     },
     alive,
@@ -38514,7 +39327,44 @@ function realPorts(claudeBin = "claude") {
     loadAvg1: () => loadavg()[0] ?? 0,
     cpuCount: () => availableParallelism()
   };
-  return { gh, git, claude, clock, host };
+  const credentials = {
+    async runProvider(command, env, opts) {
+      const child = execa(command, [], {
+        env,
+        extendEnv: false,
+        shell: false,
+        reject: false,
+        stdin: "ignore",
+        stderr: "ignore",
+        timeout: opts.timeoutMs,
+        maxBuffer: opts.maxBytes,
+        forceKillAfterDelay: 1e3
+      });
+      let timer;
+      const late = new Promise((resolve5) => {
+        timer = setTimeout(() => resolve5({ code: 1, stdout: "" }), opts.timeoutMs + 2e3);
+        timer.unref();
+      });
+      const run = child.then((r) => ({
+        code: r.failed ? r.exitCode || 1 : 0,
+        stdout: r.failed ? "" : String(r.stdout ?? "")
+      }));
+      try {
+        return await Promise.race([run, late]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    async ghWithToken(token, args) {
+      const r = await execa("gh", args, {
+        env: { GH_TOKEN: token, GH_HOST: "github.com" },
+        reject: false,
+        stdin: "ignore"
+      });
+      return { code: r.exitCode ?? 1, stdout: String(r.stdout), stderr: String(r.stderr) };
+    }
+  };
+  return { gh, git, claude, clock, host, credentials };
 }
 
 // src/main.ts
@@ -38523,6 +39373,7 @@ process.exitCode = await runCli(process.argv.slice(2), {
   stdout: (s) => process.stdout.write(s),
   stderr: (s) => process.stderr.write(s),
   env: process.env,
-  homedir: homedir4(),
-  cwd: process.cwd()
+  homedir: homedir5(),
+  cwd: process.cwd(),
+  readSecret: (prompt) => readHiddenLine(prompt, process.stdin, (s) => process.stderr.write(s))
 });

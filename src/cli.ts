@@ -2,8 +2,10 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { type Board, loadBoard, saveBoard, transition, type WorkItem } from './board.js';
 import { readCapacity } from './capacity.js';
-import { configWarnings, loadConfig, type StudioConfig } from './config.js';
+import { configWarnings, loadConfig, loadOwnerConfig, type StudioConfig } from './config.js';
+import { limitHold } from './credentials.js';
 import { launchCrew } from './crew.js';
+import { activeParks, type Parks, readLimits, reconcileLimits } from './limits.js';
 import { checkStateMarker, projectRealpath, stateRootFor, writeStateFile } from './paths.js';
 import { type Capacity, planAssignments } from './planner.js';
 import type { Ports } from './ports.js';
@@ -19,6 +21,7 @@ import {
   updateQueue,
 } from './queue.js';
 import { checkReportHead, readReport } from './report.js';
+import { runDoctor, runSecretSet } from './secret-command.js';
 import { runSetupCi } from './setup-ci-command.js';
 import {
   type CrewSnapshot,
@@ -36,6 +39,8 @@ export interface CliDeps {
   env: Record<string, string | undefined>;
   homedir: string;
   cwd: string;
+  /** Hidden terminal input; missing or undefined means there is no terminal. */
+  readSecret?: (prompt: string) => Promise<string | undefined>;
 }
 
 const USAGE = `Usage: studio [--project <dir>] [--json] <command>
@@ -52,6 +57,8 @@ Commands:
   stop <id>                Stop a crew session
   metrics                  Lead time and deployment frequency
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
+  secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
+  doctor                   What is set and what is missing, never values
 `;
 
 class UsageError extends Error {}
@@ -119,9 +126,24 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       checkStateMarker(root, { projectRealpath: projectRealpath(project), originUrl: url });
       return root;
     };
+    /** Applies usage limits found in the crew logs; runs before anything looks at the board. */
+    const reconcile = async () => {
+      const r = await reconcileLimits({ project, stateRoot: stateRoot(), ports });
+      for (const s of r.stopped) {
+        stderr(
+          `note: ${s.item} stopped at a ${s.kind} limit, ${s.label} parked until ${s.parkedUntil}\n`,
+        );
+      }
+      for (const e of r.errors) stderr(`error: ${e}\n`);
+    };
     const planNow = async (config: StudioConfig, board: Board) => {
       const capacity = await readCapacity(config, ports);
-      return { capacity, plan: planAssignments(board, config, capacity, runningPerRole(board)) };
+      const hold = await limitHold(stateRoot(), loadOwnerConfig(owner), ports, owner);
+      return {
+        capacity,
+        hold,
+        plan: planAssignments(board, config, capacity, runningPerRole(board), hold),
+      };
     };
 
     switch (cmd) {
@@ -147,6 +169,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'plan': {
+        await reconcile();
         const { config, board } = loadAll();
         const { plan, capacity } = await planNow(config, board);
         print({
@@ -159,6 +182,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'launch': {
+        await reconcile();
         const { config, board } = loadAll();
         const item = findItem(board, rest[0]);
         if (item.status !== 'ready') {
@@ -189,6 +213,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'status': {
+        await reconcile();
         const board = loadBoard(project);
         const root = stateRoot();
         const rows = Object.values(readCrewRecords(root)).map((r) => ({
@@ -199,6 +224,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           alive: ports.claude.alive(r.pid),
           status: board.items.find((i) => i.id === r.item)?.status ?? 'unknown',
           startedAt: r.startedAt,
+          ...(r.label === undefined ? {} : { label: r.label }),
           ...(r.stoppedAt === undefined ? {} : { stoppedAt: r.stoppedAt }),
         }));
         if (json) print(rows);
@@ -395,10 +421,20 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'state': {
+        await reconcile();
         const { config, board } = loadAll();
         const root = await boundStateRoot();
-        const { capacity } = await planNow(config, board);
-        const snapshot = buildSnapshot(root, board, capacity, loadQueue(root), ports.clock.now());
+        const { capacity, hold } = await planNow(config, board);
+        const read = readLimits(root);
+        const snapshot = buildSnapshot(
+          root,
+          board,
+          capacity,
+          loadQueue(root),
+          ports.clock.now(),
+          hold,
+          read.ok ? activeParks(read.labels, ports.clock.now()) : {},
+        );
         writeState(root, snapshot);
         print(snapshot);
         return 0;
@@ -431,6 +467,25 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           write: values.write === true,
           stdout,
         });
+      }
+
+      case 'secret': {
+        // Never echo these arguments: a value typed here by mistake must not reach the output.
+        if (rest.length !== 2 || rest[0] !== 'set' || rest[1] !== 'crew-token') {
+          stderr('studio: secret takes exactly: set crew-token (the value is asked for, hidden)\n');
+          return 1;
+        }
+        return await runSecretSet({
+          project,
+          ports,
+          owner,
+          readSecret: deps.readSecret,
+          stdout,
+        });
+      }
+
+      case 'doctor': {
+        return runDoctor({ project, owner, env: deps.env, json, stdout });
       }
 
       case 'metrics': {
@@ -594,6 +649,8 @@ function buildSnapshot(
   capacity: Capacity,
   queue: QueueState,
   now: Date,
+  hold: string | undefined,
+  limits: Parks,
 ): StateSnapshot {
   const crew: CrewSnapshot[] = Object.values(readCrewRecords(root)).map((r) => {
     const item = board.items.find((i) => i.id === r.item);
@@ -604,15 +661,21 @@ function buildSnapshot(
       status: item?.status ?? 'unknown',
       ...(item?.pr === undefined ? {} : { pr: item.pr }),
       since: r.startedAt,
+      ...(r.label === undefined ? {} : { label: r.label }),
     };
   });
   return {
     crew,
     queue,
     capacity,
-    forOwner: board.items
-      .filter((i) => i.ownerOnly && i.status !== 'merged' && i.status !== 'dropped')
-      .map((i) => ({ id: i.id, title: i.title })),
+    forOwner: [
+      ...board.items
+        .filter((i) => i.ownerOnly && i.status !== 'merged' && i.status !== 'dropped')
+        .map((i) => ({ id: i.id, title: i.title })),
+      // Exactly one line however many items wait.
+      ...(hold === undefined ? [] : [{ id: 'usage-limit', title: hold }]),
+    ],
+    ...(Object.keys(limits).length > 0 ? { limits } : {}),
     updatedAt: now.toISOString(),
     metrics: computeMetrics(readMetricEvents(root)),
   };

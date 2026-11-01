@@ -2,7 +2,7 @@
 
 Studio is a Claude Code plugin and TypeScript package for running a small software studio of coding-agent sessions from one control room: a lead session plans work from a board and a crew of role-based sessions carries it out, each in its own sandboxed clone.
 
-Status: 0.2.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue). See [CHANGELOG.md](CHANGELOG.md).
+Status: 0.2.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits). See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -17,10 +17,10 @@ The plugin ships two skills (`studio:studio-lead` for the control room, `studio:
 
 - Claude Code CLI, `git`, and `gh` (authenticated for the control room's own use).
 - Node.js 24 or newer on `PATH` (the CLI and the crew guard hook run on it).
-- A least-privilege crew token created by the repository owner (for example a fine-grained token limited to the project's repositories: contents and pull requests read/write, no administration, no merge rights beyond what branch protection allows). Export it in the control room's environment and name the variable in `studio.yaml` under `crew_token.env`. Launch refuses without it unless `allow_ambient_credentials: true`.
+- A least-privilege crew token created by the repository owner (for example a fine-grained token limited to the project's repositories: contents and pull requests read/write, no administration, no merge rights beyond what branch protection allows). Store it with `studio secret set crew-token` (Studio then loads it itself), or export it and name the variable in `studio.yaml` under `crew_token.env`; the variable wins when it is set. Launch refuses without it unless `allow_ambient_credentials: true`.
 - Server-side branch protection on `main` and on every ref listed in `crew_allowed_workflow_refs`.
 - A platform where Claude Code's sandbox is supported.
-- Model authentication for crew sessions in the control room's environment: crew sessions get an isolated `HOME`, so they authenticate with `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (passed through when set) or with the Claude login in `CLAUDE_CONFIG_DIR` (default `~/.claude`). Check on the first launch that the crew session starts and authenticates (`studio status`, the crew log in the state root).
+- Model authentication for crew sessions in the control room's environment: crew sessions get an isolated `HOME`, so they authenticate with `CLAUDE_CODE_OAUTH_TOKEN` (passed through when set), with the Claude login in `CLAUDE_CONFIG_DIR` (default `~/.claude`), or through a credential provider (see [Crew credentials](#crew-credentials-and-usage-limits)). API billing is off by default: `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are removed from the crew's environment because an API key would otherwise take precedence over `CLAUDE_CODE_OAUTH_TOKEN`. Check on the first launch that the crew session starts and authenticates (`studio status`, the crew log in the state root).
 - `sandbox.network_allow` lists every host the crew's shell commands may reach (GitHub for `git` and `gh`, your package registry); everything else is blocked.
 
 ## Quick start
@@ -91,6 +91,8 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 | `stop <id>`             | Stop a crew session                                           |
 | `metrics`               | Lead time and deployment frequency                            |
 | `setup ci [--write]`    | Detect CI runners, propose the `ci:` block, lint workflows    |
+| `secret set crew-token` | Store the crew's GitHub token (hidden input, checked first)   |
+| `doctor`                | What is set and what is missing, never values                 |
 
 `launch` refuses while a crew for the same item is still running and deletes a report an earlier run left in a reused clone. `collect` refuses while the item's crew process is still alive and refuses a report last modified before the crew started.
 
@@ -107,6 +109,26 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 - **Shared host.** Set `ci.shared_host: true` when the runners share their machine with other work. Capacity then also requires the 1-minute load average to stay at or below `ci.capacity.host_load_max`, or at the number of CPU cores when that is unset. An explicit `host_load_max` applies with or without `shared_host`.
 
 Without `--write` nothing changes. With `--write` the command changes only the `ci:` block (other keys and comments stay), validates the whole file first, and writes it atomically. Any error, from the proposal or from the workflow lint, makes it write nothing and exit 1. `--json` prints one object with `detection`, `proposal` (`ci`, `notes`), `errors`, `warnings` and `written`.
+
+## Crew credentials and usage limits
+
+**GitHub token.** `studio secret set crew-token` asks for the token with hidden input (it refuses without a terminal), strips whitespace, checks the token once against the GitHub API for `primary_repo`, and only then writes `$XDG_CONFIG_HOME/studio/crew-token` (default `~/.config/studio/crew-token`) with mode 0600. It prints `valid for <repo>` or the failing permission and nothing from `gh`; after a failed check nothing changes. At launch a `crew_token.env` variable that is set comes first, then this file. A file with a mode wider than 0600 or another owner makes the launch refuse.
+
+**`studio doctor`** lists the crew token and its source, the credential provider, `allow_api_billing`, the names of API key variables in the environment and whether `studio.yaml` and the owner config are readable. It never prints a value. It exits 1 when the crew token is missing, unless `allow_ambient_credentials: true`.
+
+**API billing** stays off unless the owner config sets `allow_api_billing: true`. Then `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` pass through to the crew. Without it, a launch also refuses when the Claude settings of the crew's config dir, or the `.claude/settings.json` or `.claude/settings.local.json` of the clone, set `apiKeyHelper`, `env.ANTHROPIC_API_KEY` or `env.ANTHROPIC_AUTH_TOKEN`. An unparsable settings file refuses in either case. Crew settings written by Studio never contain `apiKeyHelper`.
+
+**Credential provider.** You can set `crew_credential_command` in the owner config (it is refused in `studio.yaml`). It is the absolute path of an executable file you own that neither group nor others can write. Studio runs it without a shell, with a 30 s timeout, and with only `PATH`, `HOME`, `STUDIO_ITEM`, `STUDIO_ROLE` (both empty when a plan only asks whether a credential is available) and `STUDIO_EXCLUDE` (comma-separated labels that are parked). It reads exactly one JSON line from stdout, at most 64 KiB; stderr is discarded:
+
+```json
+{ "label": "label-a", "env": { "CLAUDE_CONFIG_DIR": "/absolute/path/below/the/owner/config/dir" } }
+```
+
+`env` has exactly one key: `CLAUDE_CONFIG_DIR` (preferred, a login directory that must exist, belong to you and have a real path below the owner config dir) or `CLAUDE_CODE_OAUTH_TOKEN`. The label matches `^[A-Za-z0-9._-]{1,64}$`. Only the label goes into state and board; a token reaches only the environment of the crew process. Any failure, a parked label in the answer, or an empty answer while no label is parked keeps the crew from starting. Without a provider Studio uses the environment as described under Prerequisites, under the label `default`.
+
+**Usage limits.** At the start of `status`, `plan`, `launch` and `state`, Studio reads the end of each active crew's log. Only events Claude Code itself emits count; tool output that quotes a limit message does not. On a limit it stops the run, parks the label in `limits.json` in the state root, and returns the item to `ready` with a note; clone and branch stay. A label is parked until the reset when the event gives an absolute time, otherwise for one hour, and clears by itself afterwards. The next launch resumes the session when it is usable with the new credential (same label, or the token form with the same config dir), otherwise it starts fresh in the same clone. A crew that left a report is not treated as limited, and a clone that left its branch is not replaced: the launch refuses and names it.
+
+When no credential is available (without a provider: `default` is parked; with one: it answers empty while labels are parked), nothing is planned or started, and `state.json` shows one `forOwner` line with the earliest reset. Work continues by itself once a label is free. An unreadable `limits.json` counts as all parked and is reported.
 
 ## Security model
 
@@ -127,6 +149,8 @@ Settings that open reads on the owner's machine are not the repository's call. T
 
 ```yaml
 crew_toolchain_paths: [] # absolute directories a crew may read, e.g. a version manager's install dir
+crew_credential_command: /absolute/path/to/provider # optional, see "Crew credentials and usage limits"
+allow_api_billing: false # true lets crew runs bill the API
 ```
 
 A `studio.yaml` that still contains `crew_toolchain_paths` is refused. At launch every toolchain path must exist; Studio resolves it to its real path (which goes into the sandbox) and refuses it, comparing literal and real spellings and case-insensitively on macOS, when it is the home or a parent of it, equals, contains or lies inside a credential store, `~/.claude` or `CLAUDE_CONFIG_DIR`, or equals, contains or lies inside the project directory or the state root.

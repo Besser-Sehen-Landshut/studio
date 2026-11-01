@@ -215,7 +215,10 @@ describe('owner config', () => {
     expect(ownerConfigFile({ homedir: h, env: { XDG_CONFIG_HOME: 'rel' } })).toBe(
       join(h, '.config', 'studio', 'config.yaml'),
     );
-    expect(loadOwnerConfig({ homedir: h, env: {} })).toEqual({ crewToolchainPaths: [] });
+    expect(loadOwnerConfig({ homedir: h, env: {} })).toEqual({
+      crewToolchainPaths: [],
+      allowApiBilling: false,
+    });
   });
 
   it('reads crew_toolchain_paths from the XDG location', () => {
@@ -224,6 +227,7 @@ describe('owner config', () => {
     write(join(xdg, 'studio', 'config.yaml'), `crew_toolchain_paths: ["${h}/.local/bin"]\n`);
     expect(loadOwnerConfig({ homedir: h, env: { XDG_CONFIG_HOME: xdg } })).toEqual({
       crewToolchainPaths: [`${h}/.local/bin`],
+      allowApiBilling: false,
     });
   });
 

@@ -45,8 +45,27 @@ export interface Host {
   cpuCount(): number;
 }
 
+/** Everything that handles a credential value goes through here: nothing is logged or echoed. */
+export interface Credentials {
+  /**
+   * Runs `command` without a shell and with exactly `env`; stderr is discarded. A timeout, a stdout
+   * above `maxBytes` or a start failure come back as a non-zero `code`, never as an exception.
+   */
+  runProvider(
+    command: string,
+    env: Record<string, string>,
+    opts: { timeoutMs: number; maxBytes: number },
+  ): Promise<{ code: number; stdout: string }>;
+  /** `gh <args>` authenticated with `token` through `GH_TOKEN`, never through argv. */
+  ghWithToken(
+    token: string,
+    args: string[],
+  ): Promise<{ code: number; stdout: string; stderr: string }>;
+}
+
 export interface Ports {
   gh: Gh;
+  credentials: Credentials;
   git: Git;
   claude: Claude;
   clock: Clock;
@@ -154,5 +173,44 @@ export function realPorts(claudeBin = 'claude'): Ports {
     loadAvg1: () => loadavg()[0] ?? 0,
     cpuCount: () => availableParallelism(),
   };
-  return { gh, git, claude, clock, host };
+  const credentials: Credentials = {
+    async runProvider(command, env, opts) {
+      const child = execa(command, [], {
+        env,
+        extendEnv: false,
+        shell: false,
+        reject: false,
+        stdin: 'ignore',
+        stderr: 'ignore',
+        timeout: opts.timeoutMs,
+        maxBuffer: opts.maxBytes,
+        forceKillAfterDelay: 1000,
+      });
+      // A grandchild holding stdout open must not outlive the timeout: that counts as a failure.
+      let timer: NodeJS.Timeout | undefined;
+      const late = new Promise<{ code: number; stdout: string }>((resolve) => {
+        timer = setTimeout(() => resolve({ code: 1, stdout: '' }), opts.timeoutMs + 2000);
+        timer.unref();
+      });
+      const run = child.then((r) => ({
+        code: r.failed ? r.exitCode || 1 : 0,
+        stdout: r.failed ? '' : String(r.stdout ?? ''),
+      }));
+      try {
+        return await Promise.race([run, late]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    async ghWithToken(token, args) {
+      // GH_HOST is pinned: the token never goes to a host named by the environment.
+      const r = await execa('gh', args, {
+        env: { GH_TOKEN: token, GH_HOST: 'github.com' },
+        reject: false,
+        stdin: 'ignore',
+      });
+      return { code: r.exitCode ?? 1, stdout: String(r.stdout), stderr: String(r.stderr) };
+    },
+  };
+  return { gh, git, claude, clock, host, credentials };
 }

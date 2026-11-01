@@ -12,7 +12,22 @@ import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { WorkItem } from './board.js';
 import { loadOwnerConfig, type OwnerEnv, type StudioConfig } from './config.js';
+import {
+  allParkedLine,
+  apiBillingProblem,
+  checkProviderConfigDir,
+  readCrewTokenFile,
+  runCredentialProvider,
+} from './credentials.js';
 import { DEFAULT_SECRET_GLOBS } from './guard.js';
+import {
+  activeParks,
+  DEFAULT_LABEL,
+  earliestReset,
+  type LimitKind,
+  readLimits,
+  sessionIdSince,
+} from './limits.js';
 import {
   assertStatePath,
   canonicalToolchainPaths,
@@ -155,6 +170,23 @@ export function removeOldReport(stateRoot: string, clone: string, id: string): v
       return;
     }
     if (!st.isDirectory()) return; // a file named .studio or reports holds no report
+  }
+}
+
+function existsNoFollow(p: string): boolean {
+  try {
+    lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function fileSize(p: string): number {
+  try {
+    return lstatSync(p).size;
+  } catch {
+    return 0;
   }
 }
 
@@ -321,7 +353,14 @@ export function writeCrewSettings(
   item: WorkItem,
   clone: string,
   config: StudioConfig,
-  dirs: { homeDir: string; tmpDir: string; projectDir: string; toolchainPaths: string[] },
+  dirs: {
+    homeDir: string;
+    tmpDir: string;
+    projectDir: string;
+    toolchainPaths: string[];
+    /** Real path of a provider's CLAUDE_CONFIG_DIR. */
+    providerConfigDir?: string;
+  },
   launcher: LauncherEnv = {},
 ): string {
   assertItemId(item.id);
@@ -344,7 +383,17 @@ export function writeCrewSettings(
   // denied too, literal and real spelling, so an XDG_STATE_HOME outside the home is covered.
   const stateBase = dirname(stateRoot);
   const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase)]);
-  const allowRead = [clone, dirs.tmpDir, dirs.homeDir, ...toolchain];
+  // A provider's login dir is opened for reads on purpose. So the sandbox does not protect that
+  // login from crew shell commands; the guard entry below is only a second net for the crew's file
+  // tools (see SECURITY.md).
+  const loginDir = dirs.providerConfigDir;
+  const allowRead = [
+    clone,
+    dirs.tmpDir,
+    dirs.homeDir,
+    ...toolchain,
+    ...(loginDir === undefined ? [] : [loginDir]),
+  ];
   const ctxFile = join(stateRoot, 'guard', `${id}.json`);
   // The clone lives inside the state root, so the root itself cannot be protected (the guard
   // would deny every write in the clone). Protected: the ctx file, every fixed state directory and
@@ -359,7 +408,11 @@ export function writeCrewSettings(
     ownerOnly: config.ownerOnly,
     deployCommands: config.deployCommands,
     // Absolute credential locations of the real home, on top of the default globs.
-    secretGlobs: [...DEFAULT_SECRET_GLOBS, ...credentialPaths.flatMap((p) => [p, `${p}/**`])],
+    secretGlobs: [
+      ...DEFAULT_SECRET_GLOBS,
+      ...credentialPaths.flatMap((p) => [p, `${p}/**`]),
+      ...(loginDir === undefined ? [] : [loginDir, `${loginDir}/**`]),
+    ],
     crewAllowedWorkflows: config.crewAllowedWorkflows,
     crewAllowedWorkflowRefs: config.crewAllowedWorkflowRefs,
     protectedPaths,
@@ -413,7 +466,9 @@ const GITCONFIG = `[user]
 `;
 
 const BASE_ENV = ['PATH', 'LANG', 'TERM', 'USER'] as const;
-const PASS_THROUGH_ENV = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'] as const;
+// An API key would take precedence over CLAUDE_CODE_OAUTH_TOKEN and bill the API, so these pass
+// only with allow_api_billing: true in the owner config.
+const API_BILLING_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] as const;
 
 export interface CrewRecord {
   name: string;
@@ -422,8 +477,16 @@ export interface CrewRecord {
   pid: number;
   log: string;
   startedAt: string;
-  /** Set by `studio stop`. */
+  /** Set by `studio stop` and when a usage limit stopped the run. */
   stoppedAt?: string;
+  /** Label of the credential this run used; the credential itself is never recorded. */
+  label?: string;
+  /** Config dir of a run in the token form: `--resume` works across labels sharing it. */
+  tokenConfigDir?: string;
+  /** Size of the log when this run started (the log is appended across runs). */
+  logStart?: number;
+  /** The run was stopped at a usage limit. */
+  limit?: { at: string; kind: LimitKind; sessionId?: string };
 }
 
 function readCrewFile(file: string): Record<string, CrewRecord> {
@@ -469,21 +532,32 @@ export async function launchCrew(
   githubHttpsUrl(item.repo);
   // Fail closed: without the least-privilege token the session would fall back to ambient
   // credentials, so that needs an explicit opt-in.
+  const home = launcher.homedir ?? homedir();
+  const owner: LauncherEnv = {
+    homedir: home,
+    env: penv,
+    platform: launcher.platform,
+    uid: launcher.uid,
+  };
   let token: string | undefined;
   if (config.crewToken) token = penv[config.crewToken.env] || undefined;
+  if (!token) {
+    const file = readCrewTokenFile(owner);
+    if (file.kind === 'bad') throw new Error(`refusing the crew token file: ${file.why}`);
+    if (file.kind === 'ok') token = file.token;
+  }
   if (!token && !config.allowAmbientCredentials) {
     throw new Error(
       config.crewToken
-        ? `crew token variable ${config.crewToken.env} is not set; refusing to launch without the least-privilege token (or set allow_ambient_credentials: true)`
-        : 'crew_token is not configured; refusing to launch without a least-privilege token (or set allow_ambient_credentials: true)',
+        ? `crew token variable ${config.crewToken.env} is not set and there is no crew-token file; refusing to launch without the least-privilege token (run studio secret set crew-token, or set allow_ambient_credentials: true)`
+        : 'crew_token is not configured and there is no crew-token file; refusing to launch without a least-privilege token (run studio secret set crew-token, or set allow_ambient_credentials: true)',
     );
   }
-  const home = launcher.homedir ?? homedir();
-  const owner: LauncherEnv = { homedir: home, env: penv, platform: launcher.platform };
   // Refuses a state root inside (or around) the project before anything is created.
   const stateRoot = stateRootFor(projectDir, owner);
   // Everything that can refuse runs before the first side effect.
-  const toolchainPaths = loadOwnerConfig(owner).crewToolchainPaths;
+  const ownerConfig = loadOwnerConfig(owner);
+  const toolchainPaths = ownerConfig.crewToolchainPaths;
   canonicalToolchainPaths(toolchainPaths, {
     home,
     env: penv,
@@ -508,6 +582,69 @@ export async function launchCrew(
       );
     }
   }
+  const limits = readLimits(stateRoot);
+  if (!limits.ok) {
+    throw new Error(`${join(stateRoot, 'limits.json')} is unreadable; refusing to launch`);
+  }
+  const parks = activeParks(limits.labels, ports.clock.now());
+  // The credential, before the first side effect. Provider or not, the value stays in this function
+  // and reaches only the environment of the spawned process.
+  let label = DEFAULT_LABEL;
+  let oauthToken = penv.CLAUDE_CODE_OAUTH_TOKEN || undefined;
+  let providerConfigDir: string | undefined;
+  const command = ownerConfig.crewCredentialCommand;
+  if (command === undefined) {
+    if (parks[DEFAULT_LABEL]) {
+      throw new Error(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
+    }
+  } else {
+    const parked = Object.keys(parks);
+    const got = await runCredentialProvider(
+      command,
+      { item: item.id, role: item.role, exclude: parked },
+      ports,
+      owner,
+    );
+    if (got === undefined) {
+      if (parked.length > 0) throw new Error(allParkedLine(earliestReset(parks)));
+      throw new Error('credential provider: returned nothing while no label is parked');
+    }
+    if (parks[got.label]) throw new Error('credential provider: returned a parked label');
+    label = got.label;
+    oauthToken = got.token;
+    if (got.configDir !== undefined) {
+      providerConfigDir = checkProviderConfigDir(got.configDir, owner);
+    }
+  }
+  // The Claude login and plugins live in the config dir; it holds no gh or git credentials.
+  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join(home, '.claude'));
+  const billing = apiBillingProblem(
+    join(claudeConfigDir, 'settings.json'),
+    ownerConfig.allowApiBilling,
+  );
+  if (billing) throw new Error(billing);
+  const clonePath = join(stateRoot, 'clones', item.id);
+  // A run stopped at a limit keeps its work: never let prepareCheckout replace that clone.
+  if (
+    previous?.limit &&
+    existsNoFollow(clonePath) &&
+    (cloneBranch(clonePath) !== `studio/${item.id}` ||
+      cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))
+  ) {
+    throw new Error(
+      `the clone of ${item.id} left its branch after a usage limit; refusing to replace it (inspect it, then remove ${clonePath} to start over)`,
+    );
+  }
+  const tokenConfigDir =
+    providerConfigDir === undefined && oauthToken !== undefined ? claudeConfigDir : undefined;
+  const resumeId = (() => {
+    const sessionId = previous?.limit?.sessionId;
+    if (sessionId === undefined) return undefined;
+    const sameLabel = (previous?.label ?? DEFAULT_LABEL) === label;
+    const sameTokenDir =
+      tokenConfigDir !== undefined && previous?.tokenConfigDir === tokenConfigDir;
+    return sameLabel || sameTokenDir ? sessionId : undefined;
+  })();
   // First side effect: bind the state root to this project and origin (or refuse a mismatch).
   checkStateMarker(stateRoot, {
     projectRealpath: projectRealpath(projectDir),
@@ -515,6 +652,15 @@ export async function launchCrew(
   });
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
+  // The clone's project settings would apply to the crew as well. Read as plain files (rule D4).
+  for (const name of ['settings.json', 'settings.local.json']) {
+    const problem = apiBillingProblem(
+      join(wt.path, '.claude', name),
+      ownerConfig.allowApiBilling,
+      true,
+    );
+    if (problem) throw new Error(problem);
+  }
   // Isolated HOME, recreated from scratch on every launch: only a git identity and a credential
   // helper that reads GH_TOKEN. Nothing is copied or linked from the real home.
   const homeDir = join(stateRoot, 'homes', item.id);
@@ -530,7 +676,7 @@ export async function launchCrew(
     item,
     wt.path,
     config,
-    { homeDir, tmpDir, projectDir, toolchainPaths },
+    { homeDir, tmpDir, projectDir, toolchainPaths, providerConfigDir },
     owner,
   );
   // No MCP server at all: --strict-mcp-config ignores every other MCP configuration and the only
@@ -547,16 +693,19 @@ export async function launchCrew(
   }
   env.HOME = homeDir;
   env.TMPDIR = tmpDir;
-  // The Claude login and plugins live in the config dir; it holds no gh or git credentials.
-  env.CLAUDE_CONFIG_DIR = penv.CLAUDE_CONFIG_DIR || join(home, '.claude');
-  for (const k of PASS_THROUGH_ENV) {
-    const v = penv[k];
-    if (v) env[k] = v;
+  env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+  if (oauthToken !== undefined) env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
+  if (ownerConfig.allowApiBilling) {
+    for (const k of API_BILLING_ENV) {
+      const v = penv[k];
+      if (v) env[k] = v;
+    }
   }
   Object.assign(env, settingsEnv);
   if (token) env.GH_TOKEN = token;
   const log = join(stateRoot, 'logs', `${item.id}.jsonl`);
   ensureStateDir(stateRoot, dirname(log));
+  const logStart = fileSize(log);
   const { pid } = await ports.claude.start(
     wt.path,
     [
@@ -573,6 +722,7 @@ export async function launchCrew(
       '--output-format',
       'stream-json',
       '--verbose',
+      ...(resumeId === undefined ? [] : ['--resume', resumeId]),
     ],
     `Read ${brief} and follow it.`,
     log,
@@ -586,6 +736,9 @@ export async function launchCrew(
     pid,
     log,
     startedAt: ports.clock.now().toISOString(),
+    label,
+    ...(tokenConfigDir === undefined ? {} : { tokenConfigDir }),
+    logStart,
   };
   await updateCrewFile(stateRoot, join(stateRoot, 'crew.json'), (all) => {
     all[item.id] = record;
@@ -595,19 +748,5 @@ export async function launchCrew(
 
 /** Session id of a crew run (first `system` event of its stream-json log), for `--resume`. */
 export function crewSessionId(stateRoot: string, id: string): string | undefined {
-  let text: string;
-  try {
-    text = readFileSync(join(stateRoot, 'logs', `${id}.jsonl`), 'utf8');
-  } catch {
-    return undefined;
-  }
-  for (const line of text.split('\n')) {
-    try {
-      const ev = JSON.parse(line) as { type?: unknown; session_id?: unknown };
-      if (ev.type === 'system' && typeof ev.session_id === 'string') return ev.session_id;
-    } catch {
-      // not a JSON line (stderr noise)
-    }
-  }
-  return undefined;
+  return sessionIdSince(stateRoot, id, 0);
 }

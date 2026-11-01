@@ -15,6 +15,15 @@ tag after the merge.
   self-hosted runners on public repositories. `--write` updates only the `ci:` block.
 - `ci.shared_host` and `ci.github_hosted_limit` in `.studio/studio.yaml` (and the JSON Schema).
 - Host port `cpuCount()`.
+- Credential provider: `crew_credential_command` in the owner config hands a crew run a label and
+  either `CLAUDE_CONFIG_DIR` (preferred) or `CLAUDE_CODE_OAUTH_TOKEN`. Only the label is stored.
+- `studio secret set crew-token`: hidden input, checked against GitHub, installed with mode 0600
+  only after the check passes. Launch uses `crew_token.env` first, then this file.
+- `studio doctor`: lists what is set and what is missing, never values.
+- Usage limits: a limit event in a crew log stops the run, parks its label in `limits.json` in the
+  state root and returns the item to `ready`, keeping clone and branch; the next launch resumes the
+  session when it can. With no credential available nothing starts and `forOwner` gets one line.
+- Ports `credentials.runProvider` and `credentials.ghWithToken`.
 
 ### Changed
 
@@ -24,6 +33,11 @@ tag after the merge.
 - With `shared_host: true`, capacity also requires the host load to stay at or below
   `host_load_max` (default: the number of CPU cores).
 - Dependabot opens a separate pull request for major updates.
+- **API billing is off by default.** `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` no longer reach
+  crew sessions, and a launch refuses Claude settings that set `apiKeyHelper` or those variables.
+  Set `allow_api_billing: true` in the owner config to allow them.
+- The owner config directory is denied to crew sessions, and crew toolchain paths may not open it.
+- The board allows `assigned` and `in_progress` to return to `ready`.
 
 ## [0.1.0] - 2026-10-31
 

@@ -158,6 +158,7 @@ function fakePorts(gh: Gh) {
   const ports: Ports = {
     gh,
     git: realPorts().git,
+    credentials: realPorts().credentials,
     claude,
     clock: {
       now: () => new Date(t),

@@ -36,7 +36,7 @@ export type SetupCiOptions = {
 };
 
 /** Untrusted text on its way to a terminal: no control or format characters (escapes, bidi). */
-const safe = (text: unknown): string => String(text).replace(/[\p{Cc}\p{Cf}]/gu, ' ');
+export const safe = (text: unknown): string => String(text).replace(/[\p{Cc}\p{Cf}]/gu, ' ');
 
 const snake = (key: string): string => key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 
@@ -73,6 +73,18 @@ function syncMap(doc: Document, map: ReturnType<typeof asMap>, want: Record<stri
 }
 
 const asMap = (node: unknown) => (isMap(node) ? node : undefined);
+
+/** `primary_repo` of studio.yaml as `owner/name`; throws for anything else. */
+export function assertPrimaryRepo(primary: unknown): string {
+  if (
+    typeof primary !== 'string' ||
+    !REPO_NAME.test(primary) ||
+    primary.split('/').some((p) => p === '.' || p === '..')
+  ) {
+    throw new Error('.studio/studio.yaml: primary_repo must be owner/name');
+  }
+  return primary;
+}
 
 function readWorkflows(project: string): {
   files: WorkflowFile[];
@@ -179,14 +191,7 @@ export async function runSetupCi(o: SetupCiOptions): Promise<number> {
   }
   const doc = parseDocument(text);
   if (doc.errors.length > 0) throw new Error('.studio/studio.yaml is not valid YAML');
-  const primary = doc.get('primary_repo');
-  if (
-    typeof primary !== 'string' ||
-    !REPO_NAME.test(primary) ||
-    primary.split('/').some((p) => p === '.' || p === '..')
-  ) {
-    throw new Error('.studio/studio.yaml: primary_repo must be owner/name');
-  }
+  const primary = assertPrimaryRepo(doc.get('primary_repo'));
   const [owner = '', name = ''] = primary.split('/');
 
   const notes: string[] = [];
