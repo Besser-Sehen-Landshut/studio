@@ -235,3 +235,25 @@ describe('collectReport treats the report as untrusted input', () => {
     expect(errOf(() => collectReport(d, 'APP-1', 'a'.repeat(40)))).not.toContain(SECRET);
   });
 });
+
+describe('review fields', () => {
+  const parse = (front: string) => parseReport(`---\nstatus: blocked\n${front}\n---\n`);
+  it('reads analyzers, the probe and the attempts', () => {
+    const r = parse(
+      'analyzers: { a: pass, b: findings, c: "skipped: no source" }\nmutation_probe: "red: t"\nfinding_attempts: 2',
+    );
+    expect(r.analyzers).toEqual({ a: 'pass', b: 'findings', c: 'skipped: no source' });
+    expect(r.mutationProbe).toBe('red: t');
+    expect(r.findingAttempts).toBe(2);
+  });
+  it.each([
+    'analyzers: { a: maybe }',
+    'analyzers: { a: "pass\\nx" }',
+    'analyzers: { "a b": pass }',
+    'mutation_probe: green',
+    'mutation_probe: "red: "',
+    'finding_attempts: -1',
+  ])('refuses %s, without echoing it', (front) => {
+    expect(() => parse(front)).toThrow(/bad field/);
+  });
+});

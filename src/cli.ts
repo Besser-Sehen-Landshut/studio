@@ -51,6 +51,13 @@ import {
   updateQueue,
 } from './queue.js';
 import { checkReportHead, readReport } from './report.js';
+import {
+  checkReviewCaps,
+  MAX_FIX_ATTEMPTS,
+  MAX_REVIEW_ROUNDS,
+  readCrewCaps,
+  reviewRounds,
+} from './review.js';
 import { runDoctor, runSecretSet } from './secret-command.js';
 import { runSetupCi } from './setup-ci-command.js';
 import { loadSources } from './sources.js';
@@ -401,6 +408,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const clone = join(stateRoot(), 'clones', item.id);
         // The report is read exactly once; everything below verifies and stores that one result.
         const report = readReport(clone, item.id, item, { notBefore });
+        const reviewDone =
+          item.type === 'review' && report.status === 'done'
+            ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report)
+            : { skipped: [] };
         let branch = `studio/${item.id}`;
         if (report.pr !== undefined) {
           const holder = board.items.find(
@@ -454,6 +465,28 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ],
           }));
         }
+        const limitTarget = report.verdict === 'changes_requested' ? report.reviews : undefined;
+        let fixLimit = false;
+        if (limitTarget !== undefined) {
+          const rounds = reviewRounds(next, limitTarget);
+          fixLimit =
+            rounds >= MAX_REVIEW_ROUNDS || (report.findingAttempts ?? 0) >= MAX_FIX_ATTEMPTS;
+          const builder = next.items.find(
+            (i) => `${i.repo}#${i.pr}` === limitTarget && i.type !== 'review',
+          );
+          if (fixLimit && builder && builder.status !== 'merged' && builder.status !== 'dropped') {
+            if (builder.status !== 'blocked') {
+              next = transition(next, builder.id, 'blocked', BY, now);
+            }
+            next = withItem(next, builder.id, (i) => ({
+              ...i,
+              notes: [
+                ...(i.notes ?? []),
+                `fix limit reached: ${rounds} review rounds, attempts on one finding ${report.findingAttempts ?? 'unknown'}`,
+              ],
+            }));
+          }
+        }
         saveBoard(project, next);
         print({
           item: item.id,
@@ -462,6 +495,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ...(report.pr === undefined ? {} : { pr: report.pr }),
           ...(report.verdict === undefined ? {} : { verdict: report.verdict }),
           ...(report.reviews === undefined ? {} : { reviews: report.reviews }),
+          ...(reviewDone.skipped.length === 0 ? {} : { skipped: capNotes(reviewDone.skipped) }),
+          ...(fixLimit ? { fixLimit } : {}),
         });
         return 0;
       }

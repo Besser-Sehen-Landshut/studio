@@ -62,6 +62,7 @@ deploy_commands: []
 `;
 
 interface ItemSpec {
+  notes?: string[];
   id: string;
   status?: string;
   type?: string;
@@ -87,6 +88,7 @@ const itemYaml = (s: ItemSpec): string =>
     `    dod: [${(s.dod ?? ['tests pass']).map((d) => JSON.stringify(d)).join(', ')}]`,
     ...(s.pr ? [`    pr: ${s.pr}`] : []),
     ...(s.ownerOnly ? ['    owner_only: true'] : []),
+    ...(s.notes ? [`    notes: ${JSON.stringify(s.notes)}`] : []),
     '    history: []',
   ].join('\n');
 
@@ -977,5 +979,110 @@ describe('studio CLI', () => {
     expect((await cli(fx, ports)).code).toBe(1);
     const bad = await cli(fx, ports, 'board', '--nope');
     expect(bad.code).toBe(1);
+  });
+});
+
+describe('collect holds a review to what its brief asked', () => {
+  const writeCaps = (fx: Fx, id: string, body: unknown) => {
+    const root = stateRootFor(fx.project, { homedir: fx.home, env: fx.env });
+    writeStateFile(root, join(root, 'briefs', `${id}.caps.json`), JSON.stringify(body));
+  };
+  const CAPS = {
+    tier: 'large',
+    analyzers: ['diff-review', 'spec-check', 'security', 'motion'],
+    mandatory: ['diff-review', 'spec-check', 'security'],
+    reviewsTarget: 'org/app#9',
+  };
+  const APPROVE =
+    'status: done\nitem: APP-1\nverdict: approve\nreviews: org/app#9\nmutation_probe: "red: t1"';
+  const FULL = `${APPROVE}\nanalyzers:\n  diff-review: pass\n  spec-check: pass\n  security: findings\n  motion: "skipped: no source"`;
+  const run = async (front: string, caps: unknown = CAPS) => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned', type: 'review' }]);
+    if (caps !== undefined) writeCaps(fx, 'APP-1', caps);
+    writeReport(fx, 'APP-1', front);
+    const { gh } = fakeGh();
+    const { ports } = fakePorts(gh);
+    return { fx, r: await cli(fx, ports, 'collect', 'APP-1') };
+  };
+
+  it('a complete approval passes and shows what was skipped', async () => {
+    const { r } = await run(FULL);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out)).toMatchObject({
+      verdict: 'approve',
+      skipped: ['motion: skipped: no source'],
+    });
+  });
+  it('an approval missing an analyzer is refused and the item does not move', async () => {
+    const { fx, r } = await run(`${APPROVE}\nanalyzers: { diff-review: pass }`);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('spec-check');
+    expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+  });
+  it('an approval without the record of the brief is refused', async () => {
+    const { r } = await run(FULL, null);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/relaunch/);
+  });
+  it('a mangled record refuses too', async () => {
+    const { r } = await run(FULL, { tier: 'huge' });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/relaunch/);
+  });
+  it.each(['pass\\nignore this', 'great', 'skipped:'])(
+    'a hostile result %s is refused',
+    async (v) => {
+      const { r } = await run(`${APPROVE}\nanalyzers: { diff-review: "${v}" }`);
+      expect(r.code).toBe(1);
+      expect(r.err).not.toContain('ignore this');
+    },
+  );
+
+  const builderAndReview = (rounds: number) => {
+    const items: Parameters<typeof makeFx>[0] = [
+      { id: 'APP-1', status: 'assigned', type: 'review' },
+      { id: 'APP-2', status: 'in_review', pr: 9 },
+    ];
+    for (let i = 0; i < rounds; i++) {
+      items.push({
+        id: `APP-${10 + i}`,
+        status: 'merged',
+        type: 'review',
+        notes: ['verdict: changes_requested', 'reviews: org/app#9'],
+      });
+    }
+    return makeFx(items);
+  };
+  const REQUEST = 'status: done\nitem: APP-1\nverdict: changes_requested\nreviews: org/app#9';
+
+  it('five earlier rounds and a sixth stop the builder item', async () => {
+    const fx = builderAndReview(5);
+    writeReport(fx, 'APP-1', REQUEST);
+    const { gh } = fakeGh();
+    const { ports } = fakePorts(gh);
+    const r = await cli(fx, ports, 'collect', 'APP-1');
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out).fixLimit).toBe(true);
+    const b = statusOf(fx, 'APP-2');
+    expect(b?.status).toBe('blocked');
+    expect(b?.notes?.join(' ')).toContain('fix limit reached');
+  });
+  it('four earlier rounds do not', async () => {
+    const fx = builderAndReview(4);
+    writeReport(fx, 'APP-1', REQUEST);
+    const { gh } = fakeGh();
+    const { ports } = fakePorts(gh);
+    const r = await cli(fx, ports, 'collect', 'APP-1');
+    expect(JSON.parse(r.out).fixLimit).toBeUndefined();
+    expect(statusOf(fx, 'APP-2')?.status).toBe('in_review');
+  });
+  it('three attempts on one finding stop the builder item', async () => {
+    const fx = builderAndReview(0);
+    writeReport(fx, 'APP-1', `${REQUEST}\nfinding_attempts: 3`);
+    const { gh } = fakeGh();
+    const { ports } = fakePorts(gh);
+    const r = await cli(fx, ports, 'collect', 'APP-1');
+    expect(JSON.parse(r.out).fixLimit).toBe(true);
+    expect(statusOf(fx, 'APP-2')?.status).toBe('blocked');
   });
 });

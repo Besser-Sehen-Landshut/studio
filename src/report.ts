@@ -32,6 +32,19 @@ const reportSchema = z.object({
   testsRun: z.number().int().nonnegative().nullish(),
   verdict: z.enum(['approve', 'changes_requested']).nullish(),
   reviews: z.string().regex(REVIEWS_RE).nullish(),
+  // Results per analyzer; a missing source reads `skipped: <reason>`, never a pass.
+  analyzers: z
+    .record(
+      z.string().regex(/^[a-z0-9-]{1,64}$/),
+      z.string().regex(/^(pass|findings|skipped: .{1,300})$/),
+    )
+    .refine((m) => Object.keys(m).length <= 50)
+    .nullish(),
+  mutationProbe: z
+    .string()
+    .regex(/^(red: .{1,300}|skipped: .{1,300})$/)
+    .nullish(),
+  findingAttempts: z.number().int().nonnegative().nullish(),
   lessons: z.array(z.string()).default([]),
   questions: z.array(z.string()).default([]),
 });
@@ -44,6 +57,9 @@ export interface Report {
   testsRun?: number;
   verdict?: 'approve' | 'changes_requested';
   reviews?: string;
+  analyzers?: Record<string, string>;
+  mutationProbe?: string;
+  findingAttempts?: number;
   lessons: string[];
   questions: string[];
 }
@@ -99,6 +115,9 @@ export function parseReport(text: string, item?: WorkItem): Report {
     ...(d.testsRun != null && { testsRun: d.testsRun }),
     ...(d.verdict != null && { verdict: d.verdict }),
     ...(d.reviews != null && { reviews: d.reviews }),
+    ...(d.analyzers != null && { analyzers: d.analyzers }),
+    ...(d.mutationProbe != null && { mutationProbe: d.mutationProbe }),
+    ...(d.findingAttempts != null && { findingAttempts: d.findingAttempts }),
     lessons: d.lessons,
     questions: d.questions,
   };
