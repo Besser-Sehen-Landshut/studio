@@ -53,9 +53,9 @@ var require_identity = __commonJS({
     var NODE_TYPE = /* @__PURE__ */ Symbol.for("yaml.node.type");
     var isAlias = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === ALIAS;
     var isDocument = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === DOC;
-    var isMap2 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === MAP;
+    var isMap3 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === MAP;
     var isPair = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === PAIR;
-    var isScalar = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === SCALAR;
+    var isScalar2 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === SCALAR;
     var isSeq2 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === SEQ;
     function isCollection(node2) {
       if (node2 && typeof node2 === "object")
@@ -77,7 +77,7 @@ var require_identity = __commonJS({
         }
       return false;
     }
-    var hasAnchor = (node2) => (isScalar(node2) || isCollection(node2)) && !!node2.anchor;
+    var hasAnchor = (node2) => (isScalar2(node2) || isCollection(node2)) && !!node2.anchor;
     exports.ALIAS = ALIAS;
     exports.DOC = DOC;
     exports.MAP = MAP;
@@ -89,10 +89,10 @@ var require_identity = __commonJS({
     exports.isAlias = isAlias;
     exports.isCollection = isCollection;
     exports.isDocument = isDocument;
-    exports.isMap = isMap2;
+    exports.isMap = isMap3;
     exports.isNode = isNode;
     exports.isPair = isPair;
-    exports.isScalar = isScalar;
+    exports.isScalar = isScalar2;
     exports.isSeq = isSeq2;
   }
 });
@@ -1510,7 +1510,7 @@ var require_stringify = __commonJS({
         props.push(doc.directives.tagString(tag));
       return props.join(" ");
     }
-    function stringify(item, ctx, onComment, onChompKeep) {
+    function stringify2(item, ctx, onComment, onChompKeep) {
       if (identity3.isPair(item))
         return item.toString(ctx, onComment, onChompKeep);
       if (identity3.isAlias(item)) {
@@ -1539,7 +1539,7 @@ var require_stringify = __commonJS({
 ${ctx.indent}${str}`;
     }
     exports.createStringifyContext = createStringifyContext;
-    exports.stringify = stringify;
+    exports.stringify = stringify2;
   }
 });
 
@@ -1549,7 +1549,7 @@ var require_stringifyPair = __commonJS({
     "use strict";
     var identity3 = require_identity();
     var Scalar = require_Scalar();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyPair({ key, value }, ctx, onComment, onChompKeep) {
       const { allNullValues, doc, indent, indentStep, options: { commentString, indentSeq, simpleKeys } } = ctx;
@@ -1571,7 +1571,7 @@ var require_stringifyPair = __commonJS({
       });
       let keyCommentDone = false;
       let chompKeep = false;
-      let str = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
+      let str = stringify2.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
       if (!explicitKey && !ctx.inFlow && str.length > 1024) {
         if (simpleKeys)
           throw new Error("With simple keys, single line scalar must not span more than 1024 characters");
@@ -1623,7 +1623,7 @@ ${indent}:`;
         ctx.indent = ctx.indent.substring(2);
       }
       let valueCommentDone = false;
-      const valueStr = stringify.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
+      const valueStr = stringify2.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
       let ws = " ";
       if (keyComment || vsb || vcb) {
         ws = vsb ? "\n" : "";
@@ -1764,7 +1764,7 @@ var require_addPairToJSMap = __commonJS({
     "use strict";
     var log = require_log();
     var merge2 = require_merge();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var identity3 = require_identity();
     var toJS = require_toJS();
     function addPairToJSMap(ctx, map2, { key, value }) {
@@ -1800,7 +1800,7 @@ var require_addPairToJSMap = __commonJS({
       if (typeof jsKey !== "object")
         return String(jsKey);
       if (identity3.isNode(key) && ctx?.doc) {
-        const strCtx = stringify.createStringifyContext(ctx.doc, {});
+        const strCtx = stringify2.createStringifyContext(ctx.doc, {});
         strCtx.anchors = /* @__PURE__ */ new Set();
         for (const node2 of ctx.anchors.keys())
           strCtx.anchors.add(node2.anchor);
@@ -1867,12 +1867,12 @@ var require_stringifyCollection = __commonJS({
   "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
     "use strict";
     var identity3 = require_identity();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyCollection(collection, ctx, options) {
       const flow = ctx.inFlow ?? collection.flow;
-      const stringify2 = flow ? stringifyFlowCollection : stringifyBlockCollection;
-      return stringify2(collection, ctx, options);
+      const stringify3 = flow ? stringifyFlowCollection : stringifyBlockCollection;
+      return stringify3(collection, ctx, options);
     }
     function stringifyBlockCollection({ comment, items }, ctx, { blockItemPrefix, flowChars, itemIndent, onChompKeep, onComment }) {
       const { indent, options: { commentString } } = ctx;
@@ -1897,7 +1897,7 @@ var require_stringifyCollection = __commonJS({
           }
         }
         chompKeep = false;
-        let str2 = stringify.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
+        let str2 = stringify2.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
         if (comment2)
           str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
@@ -1964,7 +1964,7 @@ ${indent}${line}` : "\n";
         }
         if (comment)
           reqNewline = true;
-        let str = stringify.stringify(item, itemCtx, () => comment = null);
+        let str = stringify2.stringify(item, itemCtx, () => comment = null);
         reqNewline || (reqNewline = lines.length > linesAtValue || str.includes("\n"));
         if (i2 < items.length - 1) {
           str += ",";
@@ -3325,7 +3325,7 @@ var require_stringifyDocument = __commonJS({
   "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
     "use strict";
     var identity3 = require_identity();
-    var stringify = require_stringify();
+    var stringify2 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyDocument(doc, options) {
       const lines = [];
@@ -3340,7 +3340,7 @@ var require_stringifyDocument = __commonJS({
       }
       if (hasDirectives)
         lines.push("---");
-      const ctx = stringify.createStringifyContext(doc, options);
+      const ctx = stringify2.createStringifyContext(doc, options);
       const { commentString } = ctx.options;
       if (doc.commentBefore) {
         if (lines.length !== 1)
@@ -3362,7 +3362,7 @@ var require_stringifyDocument = __commonJS({
           contentComment = doc.contents.comment;
         }
         const onChompKeep = contentComment ? void 0 : () => chompKeep = true;
-        let body = stringify.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
+        let body = stringify2.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
         if (contentComment)
           body += stringifyComment.lineComment(body, "", commentString(contentComment));
         if ((body[0] === "|" || body[0] === ">") && lines[lines.length - 1] === "---") {
@@ -3370,7 +3370,7 @@ var require_stringifyDocument = __commonJS({
         } else
           lines.push(body);
       } else {
-        lines.push(stringify.stringify(doc.contents, ctx));
+        lines.push(stringify2.stringify(doc.contents, ctx));
       }
       if (doc.directives?.docEnd) {
         if (doc.comment) {
@@ -4201,9 +4201,9 @@ var require_resolve_flow_collection = __commonJS({
     var blockMsg = "Block collections are not allowed within flow collections";
     var isBlock = (token) => token && (token.type === "block-map" || token.type === "block-seq");
     function resolveFlowCollection({ composeNode, composeEmptyNode }, ctx, fc, onError, tag) {
-      const isMap2 = fc.start.source === "{";
-      const fcName = isMap2 ? "flow map" : "flow sequence";
-      const NodeClass = tag?.nodeClass ?? (isMap2 ? YAMLMap.YAMLMap : YAMLSeq.YAMLSeq);
+      const isMap3 = fc.start.source === "{";
+      const fcName = isMap3 ? "flow map" : "flow sequence";
+      const NodeClass = tag?.nodeClass ?? (isMap3 ? YAMLMap.YAMLMap : YAMLSeq.YAMLSeq);
       const coll = new NodeClass(ctx.schema);
       coll.flow = true;
       const atRoot = ctx.atRoot;
@@ -4239,7 +4239,7 @@ var require_resolve_flow_collection = __commonJS({
             offset = props.end;
             continue;
           }
-          if (!isMap2 && ctx.options.strict && utilContainsNewline.containsNewline(key))
+          if (!isMap3 && ctx.options.strict && utilContainsNewline.containsNewline(key))
             onError(
               key,
               // checked by containsNewline()
@@ -4279,7 +4279,7 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap2 && !sep5 && !props.found) {
+        if (!isMap3 && !sep5 && !props.found) {
           const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep5, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
@@ -4302,7 +4302,7 @@ var require_resolve_flow_collection = __commonJS({
             startOnNewline: false
           });
           if (valueProps.found) {
-            if (!isMap2 && !props.found && ctx.options.strict) {
+            if (!isMap3 && !props.found && ctx.options.strict) {
               if (sep5)
                 for (const st of sep5) {
                   if (st === valueProps.found)
@@ -4334,7 +4334,7 @@ var require_resolve_flow_collection = __commonJS({
           const pair = new Pair.Pair(keyNode, valueNode);
           if (ctx.options.keepSourceTokens)
             pair.srcToken = collItem;
-          if (isMap2) {
+          if (isMap3) {
             const map2 = coll;
             if (utilMapIncludes.mapIncludes(ctx, map2.items, keyNode))
               onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
@@ -4350,7 +4350,7 @@ var require_resolve_flow_collection = __commonJS({
           offset = valueNode ? valueNode.range[2] : valueProps.end;
         }
       }
-      const expectedEnd = isMap2 ? "}" : "]";
+      const expectedEnd = isMap3 ? "}" : "]";
       const [ce, ...ee] = fc.end;
       let cePos = offset;
       if (ce?.source === expectedEnd)
@@ -5506,7 +5506,7 @@ var require_cst_scalar = __commonJS({
 var require_cst_stringify = __commonJS({
   "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
     "use strict";
-    var stringify = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
+    var stringify2 = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
     function stringifyToken(token) {
       switch (token.type) {
         case "block-scalar": {
@@ -5559,7 +5559,7 @@ var require_cst_stringify = __commonJS({
         res += stringifyToken(value);
       return res;
     }
-    exports.stringify = stringify;
+    exports.stringify = stringify2;
   }
 });
 
@@ -5637,7 +5637,7 @@ var require_cst = __commonJS({
     var FLOW_END = "";
     var SCALAR = "";
     var isCollection = (token) => !!token && "items" in token;
-    var isScalar = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
+    var isScalar2 = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
     function prettyToken(token) {
       switch (token) {
         case BOM:
@@ -5721,7 +5721,7 @@ var require_cst = __commonJS({
     exports.FLOW_END = FLOW_END;
     exports.SCALAR = SCALAR;
     exports.isCollection = isCollection;
-    exports.isScalar = isScalar;
+    exports.isScalar = isScalar2;
     exports.prettyToken = prettyToken;
     exports.tokenType = tokenType;
   }
@@ -7251,7 +7251,7 @@ var require_public_api = __commonJS({
         return docs;
       return Object.assign([], { empty: true }, composer$1.streamInfo());
     }
-    function parseDocument2(source, options = {}) {
+    function parseDocument3(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
       const parser$1 = new parser.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
@@ -7270,14 +7270,14 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse3(src, reviver, options) {
+    function parse4(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
       } else if (options === void 0 && reviver && typeof reviver === "object") {
         options = reviver;
       }
-      const doc = parseDocument2(src, options);
+      const doc = parseDocument3(src, options);
       if (!doc)
         return null;
       doc.warnings.forEach((warning) => log.warn(doc.options.logLevel, warning));
@@ -7289,7 +7289,7 @@ var require_public_api = __commonJS({
       }
       return doc.toJS(Object.assign({ reviver: _reviver }, options));
     }
-    function stringify(value, replacer, options) {
+    function stringify2(value, replacer, options) {
       let _replacer = null;
       if (typeof replacer === "function" || Array.isArray(replacer)) {
         _replacer = replacer;
@@ -7311,10 +7311,10 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document2.Document(value, _replacer, options).toString(options);
     }
-    exports.parse = parse3;
+    exports.parse = parse4;
     exports.parseAllDocuments = parseAllDocuments;
-    exports.parseDocument = parseDocument2;
-    exports.stringify = stringify;
+    exports.parseDocument = parseDocument3;
+    exports.stringify = stringify2;
   }
 });
 
@@ -7803,7 +7803,7 @@ var require_parse = __commonJS({
         []
       );
     }
-    module.exports = function parse3(s, env, opts) {
+    module.exports = function parse4(s, env, opts) {
       var mapped = parseInternal(s, env, opts);
       if (typeof env !== "function") {
         return mapped;
@@ -7844,7 +7844,7 @@ var require_shell_quote = __commonJS({
 import { homedir as homedir4 } from "node:os";
 
 // src/cli.ts
-import { join as join8, resolve as resolve4 } from "node:path";
+import { join as join9, resolve as resolve4 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/board.ts
@@ -9710,18 +9710,18 @@ var validateAsync = async (schema, value, _ctx) => {
   return result.issues.length === 0;
 };
 var _encode = (_Err) => {
-  const parse3 = _parse(_Err);
+  const parse4 = _parse(_Err);
   const fn = (schema, value, _ctx, _params) => {
     const ctx = _ctx ? { ..._ctx, direction: "backward" } : { direction: "backward" };
-    return parse3(schema, value, ctx, finalizeParams(fn, _params));
+    return parse4(schema, value, ctx, finalizeParams(fn, _params));
   };
   return fn;
 };
 var encode = /* @__PURE__ */ _encode($ZodRealError);
 var _decode = (_Err) => {
-  const parse3 = _parse(_Err);
+  const parse4 = _parse(_Err);
   const fn = (schema, value, _ctx, _params) => {
-    return parse3(schema, value, _ctx, finalizeParams(fn, _params));
+    return parse4(schema, value, _ctx, finalizeParams(fn, _params));
   };
   return fn;
 };
@@ -11216,7 +11216,7 @@ function capSize(inst, size) {
   if (!caps.length)
     return;
   const cap = Math.min(...caps.map((c3) => c3[0]));
-  const parse3 = inst._zod.parse;
+  const parse4 = inst._zod.parse;
   inst._zod.parse = (payload, ctx) => {
     const n2 = size(payload.value);
     if (n2 > cap && !ctx?.skipChecks && ctx?.direction !== "backward") {
@@ -11230,7 +11230,7 @@ function capSize(inst, size) {
         }
       }
     }
-    return parse3(payload, ctx);
+    return parse4(payload, ctx);
   };
 }
 var arraySize = (input2) => Array.isArray(input2) ? input2.length : -1;
@@ -27806,74 +27806,6 @@ function transition(board, id, to, by, now) {
   };
 }
 
-// src/capacity.ts
-var DEFAULT_TIMEOUT_MS = 3e4;
-function withTimeout(work, ms) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`CI read timed out after ${ms} ms`)), ms);
-  });
-  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
-}
-var RUNNER_JQ = ".runners[] | [.name, .status, .busy] | @tsv";
-var RUNNER_LINE = /^(\S+)\t(\S+)\t(true|false)$/;
-async function selfHostedBusy(config2, gh) {
-  const org = config2.primaryRepo.split("/")[0];
-  const pattern = config2.ci.runnerNamePattern;
-  const re = pattern === void 0 ? void 0 : new RegExp(pattern);
-  const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ);
-  let busy = 0;
-  for (const line of out.split("\n")) {
-    if (line.trim() === "") continue;
-    const m = RUNNER_LINE.exec(line);
-    if (!m) throw new Error(`unparsable runner line: ${line}`);
-    const [, name = "", status, isBusy] = m;
-    if (status === "online" && isBusy === "true" && (re === void 0 || re.test(name))) busy++;
-  }
-  return busy;
-}
-async function runCount(config2, gh, status) {
-  const out = await gh.api(
-    `/repos/${config2.primaryRepo}/actions/runs?status=${status}&per_page=1`,
-    ".total_count",
-    { paginate: false }
-  );
-  const first = out.split("\n")[0]?.trim() ?? "";
-  if (!/^\d+$/.test(first)) throw new Error(`unparsable run count: ${first}`);
-  return Number(first);
-}
-async function githubHostedBusy(config2, gh) {
-  const running = await runCount(config2, gh, "in_progress");
-  const queued = await runCount(config2, gh, "queued");
-  return running + queued;
-}
-async function readCapacity(config2, ports, options = {}) {
-  const { total, mergeMaxBusy, hostLoadMax } = config2.ci.capacity;
-  const hostLoad = ports.host.loadAvg1();
-  const mode = config2.ci.runners;
-  let ciBusy;
-  try {
-    const read = async () => {
-      let n2 = 0;
-      if (mode === "self-hosted" || mode === "both") n2 += await selfHostedBusy(config2, ports.gh);
-      if (mode === "github-hosted" || mode === "both")
-        n2 += await githubHostedBusy(config2, ports.gh);
-      return n2;
-    };
-    ciBusy = Math.min(total, await withTimeout(read(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
-  } catch (err) {
-    const error62 = (err instanceof Error ? err.message : String(err)).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
-    return { ciBusy: total, ciTotal: total, hostLoad, ok: false, error: error62 };
-  }
-  const ok = ciBusy <= mergeMaxBusy && (hostLoadMax === void 0 || hostLoad <= hostLoadMax);
-  return { ciBusy, ciTotal: total, hostLoad, ok };
-}
-async function capacityHoldsTwice(config2, ports, options = {}) {
-  if (!(await readCapacity(config2, ports, options)).ok) return false;
-  await ports.clock.sleep(config2.ci.capacity.checkTwiceSeconds * 1e3);
-  return (await readCapacity(config2, ports, options)).ok;
-}
-
 // src/config.ts
 var import_yaml2 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync2 } from "node:fs";
@@ -27915,6 +27847,11 @@ var ciSchema = external_exports.strictObject({
   runners: external_exports.enum(["github-hosted", "self-hosted", "both"]),
   runnerLabels: strList2,
   runnerNamePattern: external_exports.string().optional(),
+  // The self-hosted runners share their host with other workloads: host load is capped at
+  // `hostLoadMax`, or at the core count when that is unset.
+  sharedHost: external_exports.boolean().optional(),
+  // Most GitHub-hosted runs (in progress + queued) allowed with `runners: both`.
+  githubHostedLimit: external_exports.number().int().positive().optional(),
   capacity: external_exports.strictObject({
     total: external_exports.number().int().positive(),
     mergeMaxBusy: external_exports.number().int().nonnegative(),
@@ -28045,6 +27982,7 @@ function loadOwnerConfig(opts = {}) {
   if (problems.length > 0) throw new ConfigError(file2, problems.join("; "));
   return result.data;
 }
+var GITHUB_HOSTED_UNLIMITED = "ci.runners both: GitHub-hosted concurrency is not checked until github_hosted_limit is set";
 function configWarnings(config2) {
   const warnings = [];
   if (config2.merge.strategy === "native-queue") {
@@ -28052,12 +27990,103 @@ function configWarnings(config2) {
       "merge.strategy native-queue is not supported yet (planned for stage d): queue add and queue run refuse; use studio-queue"
     );
   }
+  if (config2.ci.runners === "both" && config2.ci.githubHostedLimit === void 0) {
+    warnings.push(GITHUB_HOSTED_UNLIMITED);
+  }
   if (config2.crewAllowedWorkflowRefs.length > 0) {
     warnings.push(
       `crew_allowed_workflow_refs (${config2.crewAllowedWorkflowRefs.join(", ")}) must be protected server-side (branch protection or rulesets): the crew guard cannot stop a push to those refs from another path`
     );
   }
   return warnings;
+}
+
+// src/capacity.ts
+var DEFAULT_TIMEOUT_MS = 3e4;
+function withTimeout(work, ms) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`CI read timed out after ${ms} ms`)), ms);
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
+var RUNNER_JQ = ".runners[] | [.name, .status, .busy] | @tsv";
+var RUNNER_LINE = /^(\S+)\t(\S+)\t(true|false)$/;
+async function selfHostedBusy(config2, gh) {
+  const org = config2.primaryRepo.split("/")[0];
+  const pattern = config2.ci.runnerNamePattern;
+  const re = pattern === void 0 ? void 0 : new RegExp(pattern);
+  const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ);
+  let busy = 0;
+  for (const line of out.split("\n")) {
+    if (line.trim() === "") continue;
+    const m = RUNNER_LINE.exec(line);
+    if (!m) throw new Error(`unparsable runner line: ${line}`);
+    const [, name = "", status, isBusy] = m;
+    if (status === "online" && isBusy === "true" && (re === void 0 || re.test(name))) busy++;
+  }
+  return busy;
+}
+async function runCount(config2, gh, status) {
+  const out = await gh.api(
+    `/repos/${config2.primaryRepo}/actions/runs?status=${status}&per_page=1`,
+    ".total_count",
+    { paginate: false }
+  );
+  const first = out.split("\n")[0]?.trim() ?? "";
+  if (!/^\d+$/.test(first)) throw new Error(`unparsable run count: ${first}`);
+  return Number(first);
+}
+async function githubHostedBusy(config2, gh) {
+  const running = await runCount(config2, gh, "in_progress");
+  const queued = await runCount(config2, gh, "queued");
+  return running + queued;
+}
+async function readCapacity(config2, ports, options = {}) {
+  const { total, mergeMaxBusy, hostLoadMax } = config2.ci.capacity;
+  const { sharedHost, githubHostedLimit } = config2.ci;
+  const hostLoad = ports.host.loadAvg1();
+  const mode = config2.ci.runners;
+  let selfBusy = 0;
+  let hostedBusy = 0;
+  try {
+    const read2 = async () => {
+      if (mode === "self-hosted" || mode === "both") {
+        selfBusy = await selfHostedBusy(config2, ports.gh);
+      }
+      if (mode === "github-hosted" || mode === "both") {
+        hostedBusy = await githubHostedBusy(config2, ports.gh);
+      }
+    };
+    await withTimeout(read2(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  } catch (err) {
+    const error62 = (err instanceof Error ? err.message : String(err)).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
+    return { ciBusy: total, ciTotal: total, hostLoad, ok: false, error: error62 };
+  }
+  const ciBusy = Math.min(total, mode === "github-hosted" ? hostedBusy : selfBusy);
+  let ok = ciBusy <= mergeMaxBusy;
+  const out = { ciBusy, ciTotal: total, hostLoad, ok };
+  if (mode === "both") {
+    out.githubHostedBusy = hostedBusy;
+    if (githubHostedLimit === void 0) out.warning = GITHUB_HOSTED_UNLIMITED;
+    else {
+      out.githubHostedLimit = githubHostedLimit;
+      ok = ok && hostedBusy <= githubHostedLimit;
+    }
+  }
+  if (hostLoadMax !== void 0) {
+    ok = ok && hostLoad <= hostLoadMax;
+  } else if (sharedHost === true) {
+    const cores = ports.host.cpuCount();
+    ok = ok && Number.isFinite(cores) && cores > 0 && hostLoad <= cores;
+  }
+  out.ok = ok;
+  return out;
+}
+async function capacityHoldsTwice(config2, ports, options = {}) {
+  if (!(await readCapacity(config2, ports, options)).ok) return false;
+  await ports.clock.sleep(config2.ci.capacity.checkTwiceSeconds * 1e3);
+  return (await readCapacity(config2, ports, options)).ok;
 }
 
 // src/crew.ts
@@ -29623,6 +29652,471 @@ function checkReportHead(report, prHead) {
   }
 }
 
+// src/setup-ci-command.ts
+var import_yaml5 = __toESM(require_dist(), 1);
+import { randomBytes as randomBytes3 } from "node:crypto";
+import {
+  readdirSync as readdirSync2,
+  readFileSync as readFileSync7,
+  renameSync as renameSync4,
+  statSync,
+  unlinkSync as unlinkSync3,
+  writeFileSync as writeFileSync5
+} from "node:fs";
+import { join as join8 } from "node:path";
+
+// src/setup-ci.ts
+var import_yaml4 = __toESM(require_dist(), 1);
+var RUNNER_JQ2 = '.runners[] | [.name, .status, .busy, ([.labels[].name] | join(","))] | @tsv';
+var RUNNER_LINE2 = /^(\S+)\t(online|offline)\t(true|false)\t([^\t]*)$/;
+var SAFE_NAME = /^[A-Za-z0-9_.-]+$/;
+var DEFAULT_GITHUB_HOSTED_TOTAL = 20;
+var DEFAULT_CHECK_TWICE_SECONDS = 30;
+var PUBLIC_REPO_ERROR = "self-hosted runners on a public repository need fork pull requests blocked";
+function parseRunners(out) {
+  const runners = [];
+  for (const line of out.split("\n")) {
+    if (line.trim() === "") continue;
+    const m = RUNNER_LINE2.exec(line);
+    if (!m) throw new Error("unparsable runner line");
+    const [, name = "", status, busy, labels = ""] = m;
+    runners.push({
+      name,
+      labels: labels === "" ? [] : labels.split(","),
+      online: status === "online",
+      busy: busy === "true"
+    });
+  }
+  return runners;
+}
+function errorText(err) {
+  return (err instanceof Error ? err.message : String(err)).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
+}
+async function read(gh, path10) {
+  try {
+    return { ok: true, runners: parseRunners(await gh.api(path10, RUNNER_JQ2)) };
+  } catch (err) {
+    return { ok: false, error: errorText(err) };
+  }
+}
+async function detectRunners(owner, repo, ports) {
+  if (!SAFE_NAME.test(owner) || !SAFE_NAME.test(repo) || owner === "." || owner === ".." || repo === "." || repo === "..") {
+    return { source: "unknown", runners: [], error: "invalid repository name" };
+  }
+  const org = await read(ports.gh, `/orgs/${owner}/actions/runners`);
+  if (org.ok && org.runners.length > 0) return { source: "org", runners: org.runners };
+  const rep = await read(ports.gh, `/repos/${owner}/${repo}/actions/runners`);
+  if (rep.ok && rep.runners.length > 0) return { source: "repo", runners: rep.runners };
+  if (org.ok && rep.ok) return { source: "none", runners: [] };
+  const errors = [
+    ...org.ok ? [] : [`org: ${org.error}`],
+    ...rep.ok ? [] : [`repo: ${rep.error}`]
+  ];
+  return { source: "unknown", runners: [], error: errors.join("; ").slice(0, 300) };
+}
+var labelKey = (labels) => [...new Set(labels.map((l) => l.toLowerCase()))].sort().join(",");
+function groupSelfHosted(runners) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const r of runners) {
+    if (!r.labels.some((l) => l.toLowerCase() === "self-hosted")) continue;
+    const key = labelKey(r.labels);
+    const g = groups.get(key) ?? { key, labels: [], runners: [] };
+    if (g.runners.length === 0) g.labels = [...new Set(r.labels)].sort();
+    g.runners.push(r);
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort(
+    (a2, b) => b.runners.length - a2.runners.length || (a2.key < b.key ? -1 : 1)
+  );
+}
+var escapeRegex2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function commonPrefix(names) {
+  let prefix = names[0] ?? "";
+  for (const n2 of names) {
+    let i2 = 0;
+    while (i2 < prefix.length && i2 < n2.length && prefix[i2] === n2[i2]) i2++;
+    prefix = prefix.slice(0, i2);
+  }
+  return prefix;
+}
+function namePattern(names) {
+  const prefix = commonPrefix(names).replace(/[0-9]+$/, "");
+  if (prefix === "") return void 0;
+  const digitNext = names.every((n2) => /^[0-9]/.test(n2.slice(prefix.length)));
+  return `^${escapeRegex2(prefix)}${digitNext ? "[0-9]" : ""}`;
+}
+var mergeMaxBusyFor = (total) => Math.max(1, Math.round(total * 0.625));
+function proposeCi(detect, repoVisibility, current, usage) {
+  const notes = [];
+  const errors = [];
+  if (detect.source === "unknown") {
+    return { notes, errors: [`cannot read runners: ${detect.error ?? "unknown error"}`] };
+  }
+  const groups = groupSelfHosted(detect.runners);
+  const group = groups[0];
+  const mode = !group ? "github-hosted" : usage?.githubHosted && usage.selfHosted ? "both" : "self-hosted";
+  if (detect.source === "repo") {
+    notes.push(
+      "runners were read from the repository; capacity reads organisation runners only and will count as busy"
+    );
+  }
+  if (mode !== "github-hosted" && repoVisibility === "public") errors.push(PUBLIC_REPO_ERROR);
+  let total;
+  let runnerLabels = [];
+  let runnerNamePattern;
+  if (group) {
+    total = group.runners.length;
+    runnerLabels = group.labels;
+    const others = groups.slice(1);
+    if (others.length > 0) {
+      notes.push(
+        `other runner groups ignored: ${others.map((g) => `${g.labels.join(",")} (${g.runners.length})`).join("; ")}`
+      );
+    }
+    const offline = group.runners.filter((r) => !r.online).length;
+    if (offline > 0) notes.push(`${offline} of ${total} runners in the group are offline`);
+    runnerNamePattern = namePattern(group.runners.map((r) => r.name));
+    if (runnerNamePattern === void 0) {
+      notes.push(
+        "runners share no name prefix: no name pattern proposed, capacity counts all organisation runners"
+      );
+    } else {
+      const re = new RegExp(runnerNamePattern);
+      const inGroup = new Set(group.runners);
+      const extra = detect.runners.filter((r) => !inGroup.has(r) && re.test(r.name)).length;
+      if (extra > 0)
+        notes.push(`the name pattern would also match ${extra} runner(s) outside the group`);
+    }
+    if (mode === "both") {
+      notes.push(
+        "GitHub-hosted concurrency is not limited until `github_hosted_limit` is set; total counts self-hosted runners only"
+      );
+    }
+  } else {
+    total = current?.capacity.total ?? DEFAULT_GITHUB_HOSTED_TOTAL;
+    notes.push("GitHub-hosted concurrency depends on the plan; check the total against it");
+  }
+  const ci = {
+    ...current,
+    provider: current?.provider ?? "github",
+    runners: mode,
+    runnerLabels,
+    capacity: {
+      ...current?.capacity,
+      total,
+      mergeMaxBusy: mergeMaxBusyFor(total),
+      checkTwiceSeconds: current?.capacity.checkTwiceSeconds ?? DEFAULT_CHECK_TWICE_SECONDS
+    }
+  };
+  if (runnerNamePattern === void 0) delete ci.runnerNamePattern;
+  else ci.runnerNamePattern = runnerNamePattern;
+  return { ci, notes, errors };
+}
+var GITHUB_HOSTED = /^(ubuntu|windows|macos)-/i;
+var MAX_TEXT = 120;
+function clean(text) {
+  return String(text).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_TEXT);
+}
+function labelList(value) {
+  const items = typeof value === "string" ? [value] : value;
+  if (!Array.isArray(items) || items.length === 0) return void 0;
+  if (!items.every((l) => typeof l === "string" && l.trim() !== "")) return void 0;
+  return items.map((l) => l.trim());
+}
+var isRecord = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+function resolveRunsOn(value) {
+  const record2 = isRecord(value) ? value : void 0;
+  if (record2 && !("labels" in record2)) {
+    return "group" in record2 ? { kind: "unverifiable", why: "runner group without labels" } : { kind: "invalid", why: "runs-on map has no labels" };
+  }
+  const labels = labelList(record2 ? record2.labels : value);
+  if (!labels) return { kind: "invalid", why: "runs-on is not a label or list of labels" };
+  if (labels.some((l) => l.includes("${{"))) {
+    return { kind: "unverifiable", why: "runs-on uses an expression" };
+  }
+  if (record2 && "group" in record2) {
+    return { kind: "unverifiable", why: "runner group membership is not checked" };
+  }
+  const [only] = labels;
+  if (labels.length === 1 && only !== void 0 && GITHUB_HOSTED.test(only)) {
+    return { kind: "hosted" };
+  }
+  return { kind: "set", labels };
+}
+function parseWorkflow(text) {
+  let doc;
+  try {
+    doc = (0, import_yaml4.parse)(text);
+  } catch (err) {
+    return { ok: false, error: `cannot parse: ${clean(err instanceof Error ? err.message : err)}` };
+  }
+  if (!isRecord(doc)) return { ok: false, error: "not a YAML mapping" };
+  const jobs = doc.jobs;
+  if (!isRecord(jobs) || Object.keys(jobs).length === 0) {
+    return { ok: false, error: "has no jobs map" };
+  }
+  const entries = [];
+  for (const [name, job] of Object.entries(jobs)) {
+    if (!isRecord(job)) return { ok: false, error: `job "${clean(name)}" is not a mapping` };
+    entries.push([name, job]);
+  }
+  return { ok: true, doc, jobs: entries };
+}
+function triggers(on6) {
+  if (typeof on6 === "string") return /* @__PURE__ */ new Set([on6]);
+  if (Array.isArray(on6)) return new Set(on6.filter((t) => typeof t === "string"));
+  if (isRecord(on6)) return new Set(Object.keys(on6));
+  return /* @__PURE__ */ new Set();
+}
+function workflowRunnerUsage(files) {
+  const usage = { githubHosted: false, selfHosted: false };
+  for (const f of files) {
+    const p = parseWorkflow(f.text);
+    if (!p.ok) continue;
+    for (const [, job] of p.jobs) {
+      if (typeof job.uses === "string" || !("runs-on" in job)) continue;
+      const r = resolveRunsOn(job["runs-on"]);
+      if (r.kind === "hosted") usage.githubHosted = true;
+      else if (r.kind === "set") usage.selfHosted = true;
+    }
+  }
+  return usage;
+}
+function lintConcurrency(doc, expectedGroup) {
+  const c3 = doc.concurrency;
+  if (!isRecord(c3)) {
+    return "push and pull_request without a workflow-level concurrency group (or not in map form)";
+  }
+  if (typeof c3.group !== "string" || c3.group.trim() !== expectedGroup) {
+    return `concurrency.group must be exactly ${clean(expectedGroup)}`;
+  }
+  if (c3["cancel-in-progress"] !== true) return "concurrency.cancel-in-progress must be true";
+  return void 0;
+}
+function lintWorkflows(files, detect, expectedGroup) {
+  const errors = [];
+  const warnings = [];
+  const online = detect.runners.filter((r) => r.online).map((r) => new Set(r.labels.map((l) => l.toLowerCase())));
+  for (const f of files) {
+    const path10 = clean(f.path);
+    const p = parseWorkflow(f.text);
+    if (!p.ok) {
+      errors.push(`${path10}: ${p.error}`);
+      continue;
+    }
+    for (const [name, job] of p.jobs) {
+      const where = `${path10}: job "${clean(name)}"`;
+      if (typeof job.uses === "string") continue;
+      if (!("runs-on" in job)) {
+        errors.push(`${where} has no runs-on and no uses`);
+        continue;
+      }
+      const r = resolveRunsOn(job["runs-on"]);
+      if (r.kind === "invalid") errors.push(`${where}: ${r.why}`);
+      else if (r.kind === "unverifiable") warnings.push(`${where}: cannot verify, ${r.why}`);
+      else if (r.kind === "set") {
+        const shown = r.labels.map(clean).join(", ");
+        const want = r.labels.map((l) => l.toLowerCase());
+        if (detect.source === "unknown") {
+          warnings.push(`${where}: cannot verify runs-on [${shown}], runners are unknown`);
+        } else if (!online.some((have) => want.every((l) => have.has(l)))) {
+          errors.push(
+            `${where}: runs-on [${shown}] matches no online runner; it would wait forever`
+          );
+        }
+      }
+    }
+    const t = triggers(p.doc.on);
+    if (t.has("push") && t.has("pull_request")) {
+      const problem = lintConcurrency(p.doc, expectedGroup);
+      if (problem) errors.push(`${path10}: ${problem}`);
+    }
+  }
+  return { errors, warnings };
+}
+
+// src/setup-ci-command.ts
+var EXPECTED_GROUP = "ci-${{ github.head_ref || github.ref_name }}";
+var WORKFLOW_DIR = [".github", "workflows"];
+var REPO_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+var safe = (text) => String(text).replace(/[\p{Cc}\p{Cf}]/gu, " ");
+var snake3 = (key) => key.replace(/[A-Z]/g, (c3) => `_${c3.toLowerCase()}`);
+function snakeKeys(value) {
+  if (Array.isArray(value)) return value.map(snakeKeys);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).filter(([, v]) => v !== void 0).map(([k, v]) => [snake3(k), snakeKeys(v)])
+    );
+  }
+  return value;
+}
+var isPlainObject2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+function syncMap(doc, map2, want) {
+  if (!map2) return;
+  for (const [key, value] of Object.entries(want)) {
+    const existing = map2.get(key, true);
+    if (isPlainObject2(value) && (0, import_yaml5.isMap)(existing)) syncMap(doc, existing, value);
+    else if ((0, import_yaml5.isScalar)(existing) && (value === null || typeof value !== "object")) {
+      existing.value = value;
+    } else map2.set(key, doc.createNode(value));
+  }
+  for (const pair of [...map2.items]) {
+    const key = (0, import_yaml5.isScalar)(pair.key) ? pair.key.value : pair.key;
+    if (typeof key !== "string" || !(key in want)) map2.delete(key);
+  }
+}
+function readWorkflows(project) {
+  const dir = join8(project, ...WORKFLOW_DIR);
+  const rel = WORKFLOW_DIR.join("/");
+  const files = [];
+  const errors = [];
+  const notes = [];
+  let names;
+  try {
+    names = readdirSync2(dir);
+  } catch (e) {
+    if (e.code === "ENOENT") {
+      notes.push(`no workflows found: ${rel} does not exist`);
+    } else errors.push(`cannot read ${rel}: ${e.code ?? "error"}`);
+    return { files, errors, notes };
+  }
+  const yaml = names.filter((n2) => n2.endsWith(".yml") || n2.endsWith(".yaml")).sort();
+  if (yaml.length === 0) notes.push(`no workflows found in ${rel}`);
+  for (const name of yaml) {
+    const path10 = `${rel}/${name}`;
+    try {
+      files.push({ path: path10, text: readFileSync7(join8(dir, name), "utf8") });
+    } catch (e) {
+      errors.push(`${path10}: cannot read file (${e.code ?? "error"})`);
+    }
+  }
+  return { files, errors, notes };
+}
+async function readVisibility(gh, repo) {
+  try {
+    const out = (await gh.api(`/repos/${repo}`, ".visibility", { paginate: false })).trim();
+    return { visibility: out === "private" || out === "internal" ? "private" : "public" };
+  } catch {
+    return {
+      visibility: "public",
+      note: "cannot read the repository visibility: treated as public"
+    };
+  }
+}
+function applyCi(doc, ci) {
+  const want = snakeKeys(ci);
+  const node2 = doc.get("ci", true);
+  if ((0, import_yaml5.isMap)(node2)) syncMap(doc, node2, want);
+  else doc.set("ci", doc.createNode(want));
+  const raw = doc.toJS();
+  if (isPlainObject2(raw) && "crew_toolchain_paths" in raw) {
+    throw new Error("crew_toolchain_paths is not read from studio.yaml any more");
+  }
+  const result = studioConfigSchema.safeParse(camelizeKeys(raw));
+  if (!result.success) {
+    const why = result.error.issues.map((i2) => `${i2.path.map((p) => snake3(String(p))).join(".") || "(root)"}: ${i2.message}`).join("; ");
+    throw new Error(`the resulting studio.yaml would be invalid, nothing written (${safe(why)})`);
+  }
+}
+function writeAtomic(file2, text) {
+  const tmp = `${file2}.${process.pid}.${randomBytes3(4).toString("hex")}.tmp`;
+  try {
+    writeFileSync5(tmp, text, { flag: "wx", mode: statSync(file2).mode & 511 });
+    renameSync4(tmp, file2);
+  } catch (e) {
+    try {
+      unlinkSync3(tmp);
+    } catch {
+    }
+    throw e;
+  }
+}
+function describeDetection(d) {
+  const lines = [`Detection: source ${d.source}, ${d.runners.length} runner(s)`];
+  for (const r of d.runners) {
+    lines.push(
+      `  ${r.name}  ${r.online ? "online" : "offline"}  ${r.busy ? "busy" : "idle"}  ${r.labels.join(",")}`
+    );
+  }
+  if (d.error) lines.push(`  error: ${d.error}`);
+  return lines;
+}
+async function runSetupCi(o2) {
+  const file2 = join8(o2.project, ".studio", "studio.yaml");
+  let text;
+  try {
+    text = readFileSync7(file2, "utf8");
+  } catch (e) {
+    throw new Error(
+      `cannot read .studio/studio.yaml (${e.code ?? "error"})`
+    );
+  }
+  const doc = (0, import_yaml5.parseDocument)(text);
+  if (doc.errors.length > 0) throw new Error(".studio/studio.yaml is not valid YAML");
+  const primary = doc.get("primary_repo");
+  if (typeof primary !== "string" || !REPO_NAME.test(primary) || primary.split("/").some((p) => p === "." || p === "..")) {
+    throw new Error(".studio/studio.yaml: primary_repo must be owner/name");
+  }
+  const [owner = "", name = ""] = primary.split("/");
+  const notes = [];
+  let current;
+  if (doc.has("ci")) {
+    const parsed = ciSchema.safeParse(camelizeKeys(doc.toJS().ci));
+    if (parsed.success) current = parsed.data;
+    else notes.push("the existing ci block is invalid and was ignored for the proposal");
+  }
+  const vis = await readVisibility(o2.ports.gh, primary);
+  if (vis.note) notes.push(vis.note);
+  const wf = readWorkflows(o2.project);
+  notes.push(...wf.notes);
+  const detection = await detectRunners(owner, name, o2.ports);
+  const proposal = proposeCi(detection, vis.visibility, current, workflowRunnerUsage(wf.files));
+  const lint = lintWorkflows(wf.files, detection, EXPECTED_GROUP);
+  const allNotes = [...notes, ...proposal.notes];
+  const errors = [...proposal.errors, ...wf.errors, ...lint.errors];
+  const warnings = lint.warnings;
+  let written = false;
+  let refused;
+  if (o2.write) {
+    if (errors.length > 0 || proposal.ci === void 0) {
+      refused = "not written: fix the errors above first";
+    } else {
+      applyCi(doc, proposal.ci);
+      writeAtomic(file2, doc.toString({ lineWidth: 0 }));
+      written = true;
+    }
+  }
+  const ciOut = proposal.ci === void 0 ? void 0 : snakeKeys(proposal.ci);
+  if (o2.json) {
+    o2.stdout(
+      `${JSON.stringify(
+        { detection, proposal: { ci: ciOut, notes: allNotes }, errors, warnings, written },
+        null,
+        2
+      )}
+`
+    );
+  } else {
+    const lines = [...describeDetection(detection), "Proposal:"];
+    if (ciOut === void 0) lines.push("  none");
+    else
+      lines.push(
+        ...(0, import_yaml5.stringify)(ciOut).trimEnd().split("\n").map((l) => `  ${l}`)
+      );
+    const section = (title, items) => {
+      if (items.length > 0) lines.push(`${title}:`, ...items.map((i2) => `  - ${i2}`));
+    };
+    section("Notes", allNotes);
+    section("Errors", errors);
+    section("Warnings", warnings);
+    if (refused) lines.push(refused);
+    if (written) lines.push("written: .studio/studio.yaml");
+    o2.stdout(`${lines.map(safe).join("\n")}
+`);
+  }
+  return errors.length > 0 ? 1 : 0;
+}
+
 // src/cli.ts
 var USAGE = `Usage: studio [--project <dir>] [--json] <command>
 
@@ -29637,6 +30131,7 @@ Commands:
   state                    Refresh state.json in the state root
   stop <id>                Stop a crew session
   metrics                  Lead time and deployment frequency
+  setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
 `;
 var UsageError = class extends Error {
 };
@@ -29809,7 +30304,7 @@ async function runCli(argv, deps) {
             throw new Error(`crew record for ${item.id} has no valid startedAt`);
           }
         }
-        const clone2 = join8(stateRoot(), "clones", item.id);
+        const clone2 = join9(stateRoot(), "clones", item.id);
         const report = readReport(clone2, item.id, item, { notBefore });
         let branch = `studio/${item.id}`;
         if (report.pr !== void 0) {
@@ -29969,10 +30464,22 @@ async function runCli(argv, deps) {
         const stoppedAt = ports.clock.now().toISOString();
         const latest = readCrewRecords(root);
         latest[id] = { ...latest[id] ?? rec, stoppedAt };
-        writeStateFile(root, join8(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
+        writeStateFile(root, join9(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
 `);
         print({ item: id, name: rec.name, pid: rec.pid, stoppedAt });
         return 0;
+      }
+      case "setup": {
+        if (rest[0] !== "ci" || rest.length !== 1) {
+          throw new UsageError("setup needs a subcommand: ci [--write]");
+        }
+        return await runSetupCi({
+          project,
+          ports,
+          json: json2,
+          write: values.write === true,
+          stdout
+        });
       }
       case "metrics": {
         print(computeMetrics(readMetricEvents(stateRoot())));
@@ -30002,6 +30509,7 @@ function parseCli(argv) {
       options: {
         project: { type: "string" },
         json: { type: "boolean" },
+        write: { type: "boolean" },
         help: { type: "boolean" }
       },
       allowPositionals: true,
@@ -30117,10 +30625,10 @@ function buildSnapshot(root, board, capacity, queue, now) {
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
 import { closeSync as closeSync4, openSync as openSync4 } from "node:fs";
-import { loadavg } from "node:os";
+import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
-function isPlainObject2(value) {
+function isPlainObject3(value) {
   if (typeof value !== "object" || value === null) {
     return false;
   }
@@ -30146,11 +30654,11 @@ var normalizeParameters = (rawFile, rawArguments = [], rawOptions, ...rawExtraAr
   if (rawExtraArguments.length > 0) {
     throw new TypeError("Execa accepts at most three arguments: file, arguments, options.");
   }
-  if (rawOptions !== void 0 && isPlainObject2(rawArguments)) {
+  if (rawOptions !== void 0 && isPlainObject3(rawArguments)) {
     throw new TypeError("Execa accepts at most one options object. Please merge the second and third arguments.");
   }
   const filePath = safeNormalizeFileUrl(rawFile, "First argument");
-  const [commandArguments, options = {}] = isPlainObject2(rawArguments) ? [[], rawArguments] : [rawArguments, rawOptions];
+  const [commandArguments, options = {}] = isPlainObject3(rawArguments) ? [[], rawArguments] : [rawArguments, rawOptions];
   if (!Array.isArray(commandArguments)) {
     throw new TypeError(`Second argument must be either an array of arguments or an options object: ${commandArguments}`);
   }
@@ -30162,7 +30670,7 @@ var normalizeParameters = (rawFile, rawArguments = [], rawOptions, ...rawExtraAr
   if (nullByteArgument !== void 0) {
     throw new TypeError(`Arguments cannot contain null bytes ("\\0"): ${nullByteArgument}`);
   }
-  if (!isPlainObject2(options)) {
+  if (!isPlainObject3(options)) {
     throw new TypeError(`Last argument must be an options object: ${options}`);
   }
   return [filePath, normalizedArguments, { __proto__: null, ...options }];
@@ -30388,7 +30896,7 @@ var parseExpression = (expression) => {
   if (typeOfExpression === "number") {
     return String(expression);
   }
-  if ((isPlainObject2(expression) || isExecaError(expression)) && (Object.hasOwn(expression, "stdout") || Object.hasOwn(expression, "isMaxBuffer"))) {
+  if ((isPlainObject3(expression) || isExecaError(expression)) && (Object.hasOwn(expression, "stdout") || Object.hasOwn(expression, "isMaxBuffer"))) {
     return getSubprocessResult(expression);
   }
   if (expression instanceof ChildProcess || Object.prototype.toString.call(expression) === "[object Promise]") {
@@ -30455,7 +30963,7 @@ var normalizeFdSpecificOption = (options, optionName) => {
 };
 var getStdioLength = ({ stdio }) => Array.isArray(stdio) ? Math.max(stdio.length, STANDARD_STREAMS_ALIASES.length) : STANDARD_STREAMS_ALIASES.length;
 var normalizeFdSpecificValue = (optionValue, optionArray, optionName, stdioLength) => {
-  if (isPlainObject2(optionValue)) {
+  if (isPlainObject3(optionValue)) {
     return normalizeOptionObject(optionValue, optionArray, optionName, stdioLength);
   }
   validateFdSpecificValue(optionValue, optionName);
@@ -32609,7 +33117,7 @@ var escapeArgument = (rawArgument) => {
 var shouldQuoteArgument = (argument) => argument === "" || argument.endsWith("\\") || quotedCharacterRegExp.test(argument);
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/cwd.js
-import { statSync } from "node:fs";
+import { statSync as statSync2 } from "node:fs";
 import path6 from "node:path";
 import process8 from "node:process";
 var normalizeCwd = (cwd = getDefaultCwd()) => {
@@ -32637,7 +33145,7 @@ var fixCwdError = (originalMessage, cwd) => {
   }
   let cwdStat;
   try {
-    cwdStat = statSync(cwd);
+    cwdStat = statSync2(cwd);
   } catch (error62) {
     return `The "cwd" option is invalid: ${cwd}.
 ${error62.message}
@@ -33812,7 +34320,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync8 } from "node:fs";
+import { readFileSync as readFileSync9 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value, optionName) => {
@@ -33892,13 +34400,13 @@ var getGeneratorObjectType = ({ transform: transform2, final, binary, objectMode
 var isGenerator = (value) => isAsyncGenerator(value) || isSyncGenerator(value);
 var isAsyncGenerator = (value) => Object.prototype.toString.call(value) === "[object AsyncGeneratorFunction]";
 var isSyncGenerator = (value) => Object.prototype.toString.call(value) === "[object GeneratorFunction]";
-var isTransformOptions = (value) => isPlainObject2(value) && (value.transform !== void 0 || value.final !== void 0);
+var isTransformOptions = (value) => isPlainObject3(value) && (value.transform !== void 0 || value.final !== void 0);
 var isUrl = (value) => Object.prototype.toString.call(value) === "[object URL]";
 var isRegularUrl = (value) => isUrl(value) && value.protocol !== "file:";
-var isFilePathObject = (value) => isPlainObject2(value) && Object.keys(value).length > 0 && Object.keys(value).every((key) => FILE_PATH_KEYS.has(key)) && isFilePathString(value.file);
+var isFilePathObject = (value) => isPlainObject3(value) && Object.keys(value).length > 0 && Object.keys(value).every((key) => FILE_PATH_KEYS.has(key)) && isFilePathString(value.file);
 var FILE_PATH_KEYS = /* @__PURE__ */ new Set(["file", "append"]);
 var isFilePathString = (file2) => typeof file2 === "string";
-var isStdioValueObject = (value) => isPlainObject2(value) && Object.keys(value).length > 0 && Object.keys(value).every((key) => STDIO_VALUE_KEYS.has(key)) && "value" in value;
+var isStdioValueObject = (value) => isPlainObject3(value) && Object.keys(value).length > 0 && Object.keys(value).every((key) => STDIO_VALUE_KEYS.has(key)) && "value" in value;
 var STDIO_VALUE_KEYS = /* @__PURE__ */ new Set(["value", "input"]);
 var isUnknownStdioString = (type, value) => type === "native" && typeof value === "string" && !KNOWN_STDIO_STRINGS.has(value);
 var KNOWN_STDIO_STRINGS = /* @__PURE__ */ new Set(["ipc", "ignore", "inherit", "overlapped", "pipe"]);
@@ -34008,7 +34516,7 @@ var normalizeDuplex = ({ stdioItem, optionName }) => {
   };
 };
 var normalizeTransformStream = ({ stdioItem, stdioItem: { value }, index, newTransforms, direction }) => {
-  const { transform: transform2, objectMode } = isPlainObject2(value) ? value : { transform: value };
+  const { transform: transform2, objectMode } = isPlainObject3(value) ? value : { transform: value };
   const { writableObjectMode, readableObjectMode } = getTransformObjectModes(objectMode, index, newTransforms, direction);
   return {
     ...stdioItem,
@@ -34022,7 +34530,7 @@ var normalizeGenerator = ({ stdioItem, stdioItem: { value }, index, newTransform
     binary: binaryOption = false,
     preserveNewlines = false,
     objectMode
-  } = isPlainObject2(value) ? value : { transform: value };
+  } = isPlainObject3(value) ? value : { transform: value };
   const binary = binaryOption || BINARY_ENCODINGS.has(encoding);
   const { writableObjectMode, readableObjectMode } = getTransformObjectModes(objectMode, index, newTransforms, direction);
   return {
@@ -34168,7 +34676,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync7 } from "node:fs";
+import { readFileSync as readFileSync8 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -34282,7 +34790,7 @@ var getTargetFd = ({ value, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync7(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync8(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value, fdNumber) => {
   if (value === "inherit") {
@@ -34676,8 +35184,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync8(value))] }),
-    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync8(file2))] }),
+    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync9(value))] }),
+    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync9(file2))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value }) => ({ contents: () => [...value] }),
     string: ({ value }) => ({ contents: [value] }),
@@ -34973,7 +35481,7 @@ var throwOnSerializableInput = (optionName, invalidItem) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-sync.js
-import { writeFileSync as writeFileSync5, appendFileSync } from "node:fs";
+import { writeFileSync as writeFileSync6, appendFileSync } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/output.js
 var shouldLogOutput = ({ stdioItems, encoding, verboseInfo, fdNumber }) => fdNumber !== "all" && isFullVerbose(verboseInfo, fdNumber) && !BINARY_ENCODINGS.has(encoding) && isFdVerbose(fdNumber) && (stdioItems.some(({ type, value }) => type === "native" && PIPED_STDIO_VALUES.has(value)) || stdioItems.every(({ type }) => TRANSFORM_TYPES.has(type)));
@@ -35107,7 +35615,7 @@ var writeToFiles = (chunks, stdioItems, outputFiles) => {
     if (append || outputFiles.has(path10)) {
       appendFileSync(path10, contents);
     } else {
-      writeFileSync5(path10, contents);
+      writeFileSync6(path10, contents);
     }
     outputFiles.add(path10);
   }
@@ -36593,7 +37101,7 @@ var createReadable = ({ subprocess, concurrentStreams, encoding }, options) => {
   const subprocessStdout = getFromStream(subprocess, from);
   const waitReadableDestroy = addConcurrentStream(concurrentStreams, subprocessStdout, "readableDestroy");
   const { readableEncoding, readableObjectMode, readableHighWaterMark } = getReadableOptions(subprocessStdout, binary);
-  const { read, onStdoutDataDone } = getReadableMethods({
+  const { read: read2, onStdoutDataDone } = getReadableMethods({
     subprocessStdout,
     subprocess,
     binary,
@@ -36601,7 +37109,7 @@ var createReadable = ({ subprocess, concurrentStreams, encoding }, options) => {
     preserveNewlines
   });
   const readable = new Readable3({
-    read,
+    read: read2,
     destroy: callbackify3(onReadableDestroy.bind(void 0, { subprocessStdout, subprocess, waitReadableDestroy })),
     highWaterMark: readableHighWaterMark,
     objectMode: readableObjectMode,
@@ -36927,7 +37435,7 @@ var unpipeOnSignalAbort = async (unpipeSignal, { sourceStream, mergedStream, fil
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/pipe/setup.js
 var pipeToSubprocess = (sourceInfo, ...pipeArguments) => {
-  if (isPlainObject2(pipeArguments[0])) {
+  if (isPlainObject3(pipeArguments[0])) {
     return pipeToSubprocess.bind(void 0, {
       ...sourceInfo,
       boundOptions: { ...sourceInfo.boundOptions, ...pipeArguments[0] }
@@ -37573,7 +38081,7 @@ var createDuplex = ({ subprocess, concurrentStreams, encoding }, options) => {
   const waitReadableDestroy = addConcurrentStream(concurrentStreams, subprocessStdout, "readableDestroy");
   const { waitWritableFinal, waitWritableDestroy } = addWritableConcurrentStreams(concurrentStreams, subprocessStdin);
   const { readableEncoding, readableObjectMode, readableHighWaterMark } = getReadableOptions(subprocessStdout, binary);
-  const { read, onStdoutDataDone } = getReadableMethods({
+  const { read: read2, onStdoutDataDone } = getReadableMethods({
     subprocessStdout,
     subprocess,
     binary,
@@ -37581,7 +38089,7 @@ var createDuplex = ({ subprocess, concurrentStreams, encoding }, options) => {
     preserveNewlines
   });
   const duplex = new Duplex4({
-    read,
+    read: read2,
     ...getWritableMethods(subprocessStdin, subprocess, waitWritableFinal),
     destroy: callbackify5(onDuplexDestroy.bind(void 0, {
       subprocessStdout,
@@ -37841,7 +38349,7 @@ var mergeOptions = (boundOptions, options) => {
   ]));
   return { __proto__: null, ...safeBoundOptions, ...mergedOptions };
 };
-var mergeOption = (optionName, boundOptionValue, optionValue) => DEEP_OPTIONS.has(optionName) && isPlainObject2(boundOptionValue) && isPlainObject2(optionValue) ? { ...boundOptionValue, ...optionValue } : optionValue;
+var mergeOption = (optionName, boundOptionValue, optionValue) => DEEP_OPTIONS.has(optionName) && isPlainObject3(boundOptionValue) && isPlainObject3(optionValue) ? { ...boundOptionValue, ...optionValue } : optionValue;
 var DEEP_OPTIONS = /* @__PURE__ */ new Set(["env", ...FD_SPECIFIC_OPTIONS]);
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/create.js
@@ -37860,7 +38368,7 @@ var createExeca = (mapArguments, boundOptions, deepOptions, setBoundExeca) => {
   return boundExeca;
 };
 var callBoundExeca = ({ mapArguments, deepOptions = {}, boundOptions = {}, setBoundExeca, createNested }, firstArgument, ...nextArguments) => {
-  if (isPlainObject2(firstArgument)) {
+  if (isPlainObject3(firstArgument)) {
     return createNested(mapArguments, mergeOptions(boundOptions, firstArgument), setBoundExeca);
   }
   const { file: file2, commandArguments, options, isSync } = parseArguments({
@@ -38002,7 +38510,11 @@ function realPorts(claudeBin = "claude") {
       signal(pid, "SIGKILL");
     }
   };
-  return { gh, git, claude, clock, host: { loadAvg1: () => loadavg()[0] ?? 0 } };
+  const host = {
+    loadAvg1: () => loadavg()[0] ?? 0,
+    cpuCount: () => availableParallelism()
+  };
+  return { gh, git, claude, clock, host };
 }
 
 // src/main.ts

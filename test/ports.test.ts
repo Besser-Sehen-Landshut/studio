@@ -65,5 +65,6 @@ describe('realPorts', () => {
     await clock.sleep(20);
     expect(clock.now().getTime() - t0).toBeGreaterThanOrEqual(15);
     expect(host.loadAvg1()).toBeGreaterThanOrEqual(0);
+    expect(host.cpuCount()).toBeGreaterThanOrEqual(1);
   });
 });

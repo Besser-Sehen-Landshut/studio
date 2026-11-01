@@ -2,7 +2,7 @@
 
 Studio is a Claude Code plugin and TypeScript package for running a small software studio of coding-agent sessions from one control room: a lead session plans work from a board and a crew of role-based sessions carries it out, each in its own sandboxed clone.
 
-Status: 0.1.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue). See [CHANGELOG.md](CHANGELOG.md).
+Status: 0.2.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue). See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -90,10 +90,23 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 | `state`                 | Refresh `state.json` in the state root                        |
 | `stop <id>`             | Stop a crew session                                           |
 | `metrics`               | Lead time and deployment frequency                            |
+| `setup ci [--write]`    | Detect CI runners, propose the `ci:` block, lint workflows    |
 
 `launch` refuses while a crew for the same item is still running and deletes a report an earlier run left in a reused clone. `collect` refuses while the item's crew process is still alive and refuses a report last modified before the crew started.
 
 `queue run` is meant to run in the background. It holds a lock in the state root (a second run exits 1 with "queue already running" while the holder lives; the lock records pid, start and a heartbeat refreshed on every step and poll, and is taken over with a note only when that pid is gone or the heartbeat is older than 15 minutes; SIGTERM, SIGINT and SIGHUP release it), picks up PRs added with `queue add` while it runs, and moves each board item as soon as its PR is done. On start it first applies results a previous run recorded but did not put on the board. Right after a head change (branch update or new push) a PR without any reported check counts as pending for 5 minutes, then fails with "no checks reported". `merge.strategy: native-queue` is not supported yet: `queue add` and `queue run` refuse it.
+
+## Using your own runners
+
+`studio setup ci` reads the runners GitHub shows for your repository and proposes the `ci:` block of `.studio/studio.yaml`. It needs `primary_repo` (`owner/name`) in that file and a logged-in `gh`.
+
+- **Detection.** It lists the organisation's runners first and the repository's runners as a fallback. Runners with the `self-hosted` label are grouped by their exact label set; the largest group becomes `runner_labels`, `ci.capacity.total` is its size, and a name prefix shared by the group becomes an anchored `runner_name_pattern`. If a read fails, the result is "unknown" and nothing is proposed. Without any self-hosted runner it proposes `github-hosted`. Workflows that use both kinds of runner give `runners: both`.
+- **Labels.** The command also lints `.github/workflows/*.yml` and `*.yaml`: every job whose `runs-on` names self-hosted labels needs an online runner that carries all of them, otherwise the job would wait forever instead of failing. Workflows triggered by both `push` and `pull_request` must use the concurrency group `ci-${{ github.head_ref || github.ref_name }}` with `cancel-in-progress: true`.
+- **Merge rule.** `merge_max_busy` is about 62% of `total` (at least 1). Studio plans and merges only while the busy self-hosted runners stay at or below it. With `runners: both`, only self-hosted runners count toward `ci_busy`; GitHub-hosted runs (in progress plus queued) are counted separately and compared with `github_hosted_limit`. Until you set that limit the check is skipped, and Studio says so in a warning.
+- **Public repositories.** A self-hosted runner on a public repository would run code from fork pull requests, so the command reports an error and `--write` refuses. Block fork pull request workflows first, or use GitHub-hosted runners. When the visibility cannot be read, the repository counts as public.
+- **Shared host.** Set `ci.shared_host: true` when the runners share their machine with other work. Capacity then also requires the 1-minute load average to stay at or below `ci.capacity.host_load_max`, or at the number of CPU cores when that is unset. An explicit `host_load_max` applies with or without `shared_host`.
+
+Without `--write` nothing changes. With `--write` the command changes only the `ci:` block (other keys and comments stay), validates the whole file first, and writes it atomically. Any error, from the proposal or from the workflow lint, makes it write nothing and exit 1. `--json` prints one object with `detection`, `proposal` (`ci`, `notes`), `errors`, `warnings` and `written`.
 
 ## Security model
 

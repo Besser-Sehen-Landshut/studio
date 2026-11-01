@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
-import { loadavg } from 'node:os';
+import { availableParallelism, loadavg } from 'node:os';
 import { execa } from 'execa';
 
 export interface Gh {
@@ -41,6 +41,8 @@ export interface Clock {
 
 export interface Host {
   loadAvg1(): number;
+  /** Logical CPUs available to this process. */
+  cpuCount(): number;
 }
 
 export interface Ports {
@@ -148,5 +150,9 @@ export function realPorts(claudeBin = 'claude'): Ports {
     },
   };
 
-  return { gh, git, claude, clock, host: { loadAvg1: () => loadavg()[0] ?? 0 } };
+  const host: Host = {
+    loadAvg1: () => loadavg()[0] ?? 0,
+    cpuCount: () => availableParallelism(),
+  };
+  return { gh, git, claude, clock, host };
 }

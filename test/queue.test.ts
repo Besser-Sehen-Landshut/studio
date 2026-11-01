@@ -120,7 +120,7 @@ function fakeClock(onSleep?: (ms: number, total: number) => void) {
   return { clock, sleeps };
 }
 
-const host: Host = { loadAvg1: () => 0 };
+const host: Host = { loadAvg1: () => 0, cpuCount: () => 4 };
 const CHK = 'pr checks 5 --repo org/app --json name,bucket';
 const REQ = `${CHK} --required`;
 const VIEW = 'pr view 5 --repo org/app --json headRefOid,state,mergeable';

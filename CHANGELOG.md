@@ -3,6 +3,28 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.2.0] - 2026-11-01
+
+Stage (a.1): your own runners. Not tagged or published as a GitHub release yet; the maintainers
+tag after the merge.
+
+### Added
+
+- `studio setup ci [--write] [--json]`: detects CI runners, proposes the `ci:` block, lints
+  workflows (`runs-on` labels against online runners, the shared concurrency group) and refuses
+  self-hosted runners on public repositories. `--write` updates only the `ci:` block.
+- `ci.shared_host` and `ci.github_hosted_limit` in `.studio/studio.yaml` (and the JSON Schema).
+- Host port `cpuCount()`.
+
+### Changed
+
+- Capacity with `runners: both` counts only self-hosted busy runners in `ci_busy`; GitHub-hosted
+  runs are reported as `githubHostedBusy` and compared with `github_hosted_limit`. Without that
+  limit a warning says GitHub-hosted concurrency is not checked.
+- With `shared_host: true`, capacity also requires the host load to stay at or below
+  `host_load_max` (default: the number of CPU cores).
+- Dependabot opens a separate pull request for major updates.
+
 ## [0.1.0] - 2026-10-31
 
 First release: stage (a), the control-room core. Not tagged or published as a GitHub release yet;

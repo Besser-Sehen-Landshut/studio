@@ -19,6 +19,7 @@ import {
   updateQueue,
 } from './queue.js';
 import { checkReportHead, readReport } from './report.js';
+import { runSetupCi } from './setup-ci-command.js';
 import {
   type CrewSnapshot,
   computeMetrics,
@@ -50,6 +51,7 @@ Commands:
   state                    Refresh state.json in the state root
   stop <id>                Stop a crew session
   metrics                  Lead time and deployment frequency
+  setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
 `;
 
 class UsageError extends Error {}
@@ -418,6 +420,19 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         return 0;
       }
 
+      case 'setup': {
+        if (rest[0] !== 'ci' || rest.length !== 1) {
+          throw new UsageError('setup needs a subcommand: ci [--write]');
+        }
+        return await runSetupCi({
+          project,
+          ports,
+          json,
+          write: values.write === true,
+          stdout,
+        });
+      }
+
       case 'metrics': {
         print(computeMetrics(readMetricEvents(stateRoot())));
         return 0;
@@ -445,6 +460,7 @@ function parseCli(argv: string[]) {
       options: {
         project: { type: 'string' },
         json: { type: 'boolean' },
+        write: { type: 'boolean' },
         help: { type: 'boolean' },
       },
       allowPositionals: true,

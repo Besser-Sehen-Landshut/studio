@@ -1,6 +1,6 @@
 {
   "name": "studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Run a software studio of coding-agent sessions from one control room",
   "license": "MIT",
   "type": "module",

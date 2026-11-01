@@ -43,7 +43,7 @@ function fakeGh(
   };
 }
 
-const host = (load: number): Host => ({ loadAvg1: () => load });
+const host = (load: number, cpus = 4): Host => ({ loadAvg1: () => load, cpuCount: () => cpus });
 const opts = { timeoutMs: 50 };
 
 describe('readCapacity', () => {
@@ -139,13 +139,73 @@ describe('readCapacity', () => {
     expect(cap).toMatchObject({ ok: false, ciBusy: 8, ciTotal: 8 });
   });
 
-  it('both = self-hosted busy + hosted runs, capped at total', async () => {
+  it('both counts only self-hosted busy runners; hosted runs are reported separately', async () => {
     const cfg = mkConfig({ runners: 'both' });
-    const runners = tsv([['pool-1', 'online', true]]);
-    const small = fakeGh((path) => (path.startsWith('/orgs/') ? runners : '2'));
-    expect((await readCapacity(cfg, { gh: small, host: host(0) }, opts)).ciBusy).toBe(5);
-    const big = fakeGh((path) => (path.startsWith('/orgs/') ? runners : '9'));
-    expect((await readCapacity(cfg, { gh: big, host: host(0) }, opts)).ciBusy).toBe(8);
+    const runners = tsv([
+      ['pool-1', 'online', true],
+      ['pool-2', 'online', true],
+    ]);
+    const gh = fakeGh((path) => {
+      if (path.startsWith('/orgs/')) return runners;
+      return path.includes('status=queued') ? '2' : '3';
+    });
+    const cap = await readCapacity(cfg, { gh, host: host(0) }, opts);
+    expect(cap).toMatchObject({ ciBusy: 2, ciTotal: 8, githubHostedBusy: 5, ok: true });
+    expect(cap.warning).toMatch(/GitHub-hosted concurrency is not checked/);
+  });
+
+  it('both: hosted busy above github_hosted_limit is not ok, equal is ok', async () => {
+    const cfg = mkConfig({ runners: 'both', githubHostedLimit: 5 });
+    const at = fakeGh((p) => (p.startsWith('/orgs/') ? '' : p.includes('queued') ? '2' : '3'));
+    const over = fakeGh((p) => (p.startsWith('/orgs/') ? '' : p.includes('queued') ? '3' : '3'));
+    const ok = await readCapacity(cfg, { gh: at, host: host(0) }, opts);
+    expect(ok).toMatchObject({ ok: true, githubHostedBusy: 5, githubHostedLimit: 5 });
+    expect(ok.warning).toBeUndefined();
+    const bad = await readCapacity(cfg, { gh: over, host: host(0) }, opts);
+    expect(bad).toMatchObject({ ok: false, githubHostedBusy: 6, ciBusy: 0 });
+  });
+
+  it('github-hosted mode keeps counting runs into ciBusy', async () => {
+    const gh = fakeGh(() => '9');
+    const cap = await readCapacity(
+      mkConfig({ runners: 'github-hosted' }),
+      { gh, host: host(0) },
+      opts,
+    );
+    expect(cap).toMatchObject({ ciBusy: 8, ok: false });
+    expect(cap.githubHostedBusy).toBeUndefined();
+    expect(cap.warning).toBeUndefined();
+  });
+
+  it('sharedHost without hostLoadMax uses the core count', async () => {
+    const gh = fakeGh(() => '');
+    const cfg = mkConfig({ sharedHost: true });
+    expect((await readCapacity(cfg, { gh, host: host(4, 4) }, opts)).ok).toBe(true);
+    expect((await readCapacity(cfg, { gh, host: host(4.1, 4) }, opts)).ok).toBe(false);
+    expect((await readCapacity(cfg, { gh, host: host(4.1, 6) }, opts)).ok).toBe(true);
+  });
+
+  it('sharedHost with an invalid core count is not ok', async () => {
+    const gh = fakeGh(() => '');
+    const cfg = mkConfig({ sharedHost: true });
+    for (const n of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect((await readCapacity(cfg, { gh, host: host(0, n) }, opts)).ok).toBe(false);
+    }
+  });
+
+  it('explicit hostLoadMax wins over the core count, with or without sharedHost', async () => {
+    const gh = fakeGh(() => '');
+    const cap = { total: 8, mergeMaxBusy: 5, checkTwiceSeconds: 30, hostLoadMax: 2 };
+    const shared = mkConfig({ sharedHost: true, capacity: cap });
+    const plain = mkConfig({ capacity: cap });
+    expect((await readCapacity(shared, { gh, host: host(3, 16) }, opts)).ok).toBe(false);
+    expect((await readCapacity(plain, { gh, host: host(3, 16) }, opts)).ok).toBe(false);
+    expect((await readCapacity(plain, { gh, host: host(1, 1) }, opts)).ok).toBe(true);
+  });
+
+  it('without sharedHost the core count is ignored', async () => {
+    const gh = fakeGh(() => '');
+    expect((await readCapacity(mkConfig(), { gh, host: host(50, 0) }, opts)).ok).toBe(true);
   });
 });
 

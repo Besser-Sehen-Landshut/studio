@@ -1,4 +1,4 @@
-import type { StudioConfig } from './config.js';
+import { GITHUB_HOSTED_UNLIMITED, type StudioConfig } from './config.js';
 import type { Capacity } from './planner.js';
 import type { Clock, Gh, Host } from './ports.js';
 
@@ -65,18 +65,21 @@ export async function readCapacity(
   options: CapacityOptions = {},
 ): Promise<Capacity> {
   const { total, mergeMaxBusy, hostLoadMax } = config.ci.capacity;
+  const { sharedHost, githubHostedLimit } = config.ci;
   const hostLoad = ports.host.loadAvg1();
   const mode = config.ci.runners;
-  let ciBusy: number;
+  let selfBusy = 0;
+  let hostedBusy = 0;
   try {
     const read = async () => {
-      let n = 0;
-      if (mode === 'self-hosted' || mode === 'both') n += await selfHostedBusy(config, ports.gh);
-      if (mode === 'github-hosted' || mode === 'both')
-        n += await githubHostedBusy(config, ports.gh);
-      return n;
+      if (mode === 'self-hosted' || mode === 'both') {
+        selfBusy = await selfHostedBusy(config, ports.gh);
+      }
+      if (mode === 'github-hosted' || mode === 'both') {
+        hostedBusy = await githubHostedBusy(config, ports.gh);
+      }
     };
-    ciBusy = Math.min(total, await withTimeout(read(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
+    await withTimeout(read(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   } catch (err) {
     // Still fully busy (fail closed), but say why so the control room can fix the cause.
     const error = (err instanceof Error ? err.message : String(err))
@@ -84,8 +87,26 @@ export async function readCapacity(
       .slice(0, 300);
     return { ciBusy: total, ciTotal: total, hostLoad, ok: false, error };
   }
-  const ok = ciBusy <= mergeMaxBusy && (hostLoadMax === undefined || hostLoad <= hostLoadMax);
-  return { ciBusy, ciTotal: total, hostLoad, ok };
+  // `both` keeps the two kinds apart: only self-hosted runners count toward ciBusy.
+  const ciBusy = Math.min(total, mode === 'github-hosted' ? hostedBusy : selfBusy);
+  let ok = ciBusy <= mergeMaxBusy;
+  const out: Capacity = { ciBusy, ciTotal: total, hostLoad, ok };
+  if (mode === 'both') {
+    out.githubHostedBusy = hostedBusy;
+    if (githubHostedLimit === undefined) out.warning = GITHUB_HOSTED_UNLIMITED;
+    else {
+      out.githubHostedLimit = githubHostedLimit;
+      ok = ok && hostedBusy <= githubHostedLimit;
+    }
+  }
+  if (hostLoadMax !== undefined) {
+    ok = ok && hostLoad <= hostLoadMax;
+  } else if (sharedHost === true) {
+    const cores = ports.host.cpuCount();
+    ok = ok && Number.isFinite(cores) && cores > 0 && hostLoad <= cores;
+  }
+  out.ok = ok;
+  return out;
 }
 
 /** Two reads `checkTwiceSeconds` apart, both ok. A busy first read returns false without waiting. */

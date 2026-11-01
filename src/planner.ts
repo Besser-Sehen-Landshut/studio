@@ -9,6 +9,11 @@ export type Capacity = {
   ok: boolean;
   /** Why CI could not be read (then everything counts as busy). */
   error?: string;
+  /** `runners: both` only: GitHub-hosted runs in progress or queued, and the configured limit. */
+  githubHostedBusy?: number;
+  githubHostedLimit?: number;
+  /** A limit that is not enforced, e.g. GitHub-hosted concurrency in `both` without a limit. */
+  warning?: string;
 };
 
 export type Plan = {

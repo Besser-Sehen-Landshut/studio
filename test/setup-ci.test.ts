@@ -195,7 +195,7 @@ describe('proposeCi', () => {
       crewAllowedWorkflowRefs: [],
     });
     const gh = fakeGh(() => rows(rs));
-    const cap = await readCapacity(config, { gh, host: { loadAvg1: () => 0 } });
+    const cap = await readCapacity(config, { gh, host: { loadAvg1: () => 0, cpuCount: () => 4 } });
     expect(cap.ciBusy).toBe(2);
   });
 

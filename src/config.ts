@@ -64,11 +64,16 @@ const roleSchema = z.strictObject({
     .default({ required: [], allowed: [], denied: [] }),
 });
 
-const ciSchema = z.strictObject({
+export const ciSchema = z.strictObject({
   provider: z.literal('github'),
   runners: z.enum(['github-hosted', 'self-hosted', 'both']),
   runnerLabels: strList,
   runnerNamePattern: z.string().optional(),
+  // The self-hosted runners share their host with other workloads: host load is capped at
+  // `hostLoadMax`, or at the core count when that is unset.
+  sharedHost: z.boolean().optional(),
+  // Most GitHub-hosted runs (in progress + queued) allowed with `runners: both`.
+  githubHostedLimit: z.number().int().positive().optional(),
   capacity: z.strictObject({
     total: z.number().int().positive(),
     mergeMaxBusy: z.number().int().nonnegative(),
@@ -127,7 +132,7 @@ const camel = (key: string): string =>
   key.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
 
 /** Recursively convert snake_case object keys to camelCase. Role keys are template names (single words), so they pass through unchanged. */
-function camelizeKeys(value: unknown): unknown {
+export function camelizeKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(camelizeKeys);
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [camel(k), camelizeKeys(v)]));
@@ -239,6 +244,9 @@ export function loadOwnerConfig(opts: OwnerEnv = {}): OwnerConfig {
   return result.data;
 }
 
+export const GITHUB_HOSTED_UNLIMITED =
+  'ci.runners both: GitHub-hosted concurrency is not checked until github_hosted_limit is set';
+
 /** Non-fatal findings about a loaded config. */
 export function configWarnings(config: StudioConfig): string[] {
   const warnings: string[] = [];
@@ -246,6 +254,9 @@ export function configWarnings(config: StudioConfig): string[] {
     warnings.push(
       'merge.strategy native-queue is not supported yet (planned for stage d): queue add and queue run refuse; use studio-queue',
     );
+  }
+  if (config.ci.runners === 'both' && config.ci.githubHostedLimit === undefined) {
+    warnings.push(GITHUB_HOSTED_UNLIMITED);
   }
   if (config.crewAllowedWorkflowRefs.length > 0) {
     warnings.push(
