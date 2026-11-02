@@ -46,12 +46,14 @@ export interface ResolvedForItem {
     round: number;
     target?: string;
     pr?: number;
+    head?: string;
   };
 }
 
 /**
  * Works out the item's skills, knowledge and analyzers without writing anything. For review work
- * it reads the pull request; whatever it cannot read counts as everything changed.
+ * it reads the pull request. A pull request it cannot read, or one from a fork, refuses: a reviewer
+ * loads that head and runs its tests with the crew token and network.
  */
 export async function resolveForItem(o: {
   item: WorkItem;
@@ -90,6 +92,14 @@ export async function resolveForItem(o: {
     throw new Error(`${item.id}: the pull request is in ${target.repo}, the item in ${item.repo}`);
   }
   const facts = target === undefined ? undefined : await readPrFacts(o.ports, target);
+  if (target !== undefined && facts === undefined) {
+    throw new Error(`${item.id}: cannot read ${target.repo}#${target.pr}; refusing to launch`);
+  }
+  if (target !== undefined && facts?.crossRepository !== false) {
+    throw new Error(
+      `${item.id}: ${target.repo}#${target.pr} comes from a fork; a crew never runs a fork's code, review it by hand`,
+    );
+  }
   const paths: ChangedPaths = facts?.complete ? [...facts.files, ...declared] : 'unknown';
   const name = target === undefined ? undefined : `${target.repo}#${target.pr}`;
   let round: number;
@@ -119,6 +129,7 @@ export async function resolveForItem(o: {
       round,
       ...(name === undefined ? {} : { target: name }),
       ...(target === undefined ? {} : { pr: target.pr }),
+      ...(facts === undefined ? {} : { head: facts.head }),
     },
   };
 }
@@ -325,6 +336,7 @@ export function writeCaps(o: {
       analyzers: ids,
       mandatory: MANDATORY.filter((m) => ids.includes(m)),
       ...(review.target === undefined ? {} : { reviewsTarget: review.target }),
+      ...(review.head === undefined ? {} : { headRefOid: review.head }),
       ...(skipped.length === 0 ? {} : { skipped: skipped.map((x) => x.id) }),
     };
     writeStateFile(stateRoot, capsFile(stateRoot, id), `${JSON.stringify(caps, null, 2)}\n`);

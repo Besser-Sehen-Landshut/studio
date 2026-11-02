@@ -20,9 +20,14 @@ export interface PrFacts {
   lines: number;
   /** False when GitHub listed fewer files than the pull request changes. */
   complete: boolean;
+  /** The commit these facts describe; read in the same call, so they belong together. */
+  head: string;
+  crossRepository: boolean;
 }
 
 const prSchema = z.object({
+  headRefOid: z.string().regex(/^[0-9a-f]{40,64}$/i),
+  isCrossRepository: z.boolean(),
   changedFiles: z.number().int().nonnegative(),
   files: z.array(
     z.object({
@@ -33,26 +38,36 @@ const prSchema = z.object({
   ),
 });
 
-/** What the pull request changes; undefined on any failure, which the caller treats as unknown. */
+/** What the pull request changes and where its head lives; undefined on any failure. */
 export async function readPrFacts(
   ports: Ports,
   target: { repo: string; pr: number },
 ): Promise<PrFacts | undefined> {
   try {
     const r = await ports.gh.run(
-      ['pr', 'view', String(target.pr), '--repo', target.repo, '--json', 'files,changedFiles'],
+      [
+        'pr',
+        'view',
+        String(target.pr),
+        '--repo',
+        target.repo,
+        '--json',
+        'files,changedFiles,headRefOid,isCrossRepository',
+      ],
       { timeoutMs: GH_TIMEOUT_MS },
     );
     if (r.code !== 0) return undefined;
     const parsed = prSchema.safeParse(JSON.parse(r.stdout));
     if (!parsed.success) return undefined;
-    const { files, changedFiles } = parsed.data;
+    const { files, changedFiles, headRefOid, isCrossRepository } = parsed.data;
     return {
       files: files.map((f) => f.path),
       lines: files
         .filter((f) => !f.path.toLowerCase().endsWith('.md'))
         .reduce((sum, f) => sum + f.additions + f.deletions, 0),
       complete: files.length >= changedFiles,
+      head: headRefOid,
+      crossRepository: isCrossRepository,
     };
   } catch {
     return undefined;
@@ -73,7 +88,7 @@ export function reviewTarget(item: WorkItem): { repo: string; pr: number } | und
 /** Size alone never makes a change small: a sensitive path, a risk tag or a gap makes it large. */
 export function reviewTier(
   item: WorkItem,
-  facts: PrFacts | undefined,
+  facts: Pick<PrFacts, 'lines' | 'complete'> | undefined,
   securityHit: boolean,
 ): { tier: 'small' | 'large'; reasons: string[] } {
   const reasons: string[] = [];
@@ -148,6 +163,8 @@ export const crewCapsSchema = z.strictObject({
   analyzers: z.array(z.string()),
   mandatory: z.array(z.string()),
   reviewsTarget: z.string().optional(),
+  /** The head the tier and the analyzers were chosen for. */
+  headRefOid: z.string().optional(),
   /** Ids launch could not provide, for the lead: they never count as a pass. */
   skipped: z.array(z.string()).optional(),
 });
@@ -171,7 +188,10 @@ export function readCrewCaps(stateRoot: string, id: string): CrewCaps | undefine
   }
 }
 
-type ReviewReport = Pick<Report, 'status' | 'verdict' | 'reviews' | 'analyzers' | 'mutationProbe'>;
+type ReviewReport = Pick<
+  Report,
+  'status' | 'verdict' | 'reviews' | 'headSha' | 'analyzers' | 'mutationProbe'
+>;
 
 /**
  * Holds a finished review to what its brief recorded. The pull request it acts on comes from that
@@ -191,6 +211,15 @@ export function checkReviewCaps(
     throw new Error(`report reviews another pull request than ${target}`);
   }
   if (report.verdict !== 'approve') return { skipped: [], target };
+  // The tier and the analyzers belong to the head at launch: a later push could need more of them.
+  if (
+    caps.headRefOid === undefined ||
+    report.headSha?.toLowerCase() !== caps.headRefOid.toLowerCase()
+  ) {
+    throw new Error(
+      `the approval is for another head than the review was launched on (${String(caps.headRefOid)}): relaunch the review, nothing moved`,
+    );
+  }
   const results = report.analyzers ?? {};
   const skipped: string[] = [...(caps.skipped ?? [])];
   for (const id of caps.analyzers) {

@@ -57,10 +57,13 @@ describe('reviewTarget', () => {
   );
 });
 
+const PR_HEAD = { headRefOid: 'a'.repeat(40), isCrossRepository: false };
+
 describe('readPrFacts', () => {
   const target = { repo: 'org/app', pr: 7 };
   it('counts lines without markdown', async () => {
     const out = JSON.stringify({
+      ...PR_HEAD,
       changedFiles: 2,
       files: [
         { path: 'a.ts', additions: 3, deletions: 2 },
@@ -71,19 +74,34 @@ describe('readPrFacts', () => {
       files: ['a.ts', 'README.md'],
       lines: 5,
       complete: true,
+      head: PR_HEAD.headRefOid,
+      crossRepository: false,
     });
   });
   it('fewer files than changed is incomplete', async () => {
     const out = JSON.stringify({
+      ...PR_HEAD,
       changedFiles: 200,
       files: [{ path: 'a', additions: 1, deletions: 0 }],
     });
     expect((await readPrFacts(ghWith(0, out), target))?.complete).toBe(false);
   });
+  it('a fork is reported as such', async () => {
+    const out = JSON.stringify({
+      ...PR_HEAD,
+      isCrossRepository: true,
+      changedFiles: 0,
+      files: [],
+    });
+    expect((await readPrFacts(ghWith(0, out), target))?.crossRepository).toBe(true);
+  });
   it.each([
     [1, '{}'],
     [0, 'nope'],
     [0, '{}'],
+    [0, '{"changedFiles":0,"files":[],"isCrossRepository":false}'],
+    [0, '{"changedFiles":0,"files":[],"headRefOid":"zz","isCrossRepository":false}'],
+    [0, `{"changedFiles":0,"files":[],"headRefOid":"${'a'.repeat(40)}"}`],
     [0, '{"changedFiles":1,"files":[{"path":3}]}'],
     [0, '{"changedFiles":"x","files":[]}'],
   ])('gh exit %i with %s gives nothing', async (code, out) => {
@@ -197,11 +215,13 @@ describe('checkReviewCaps', () => {
     analyzers: ['diff-review', 'spec-check', 'security', 'motion'],
     mandatory: ['diff-review', 'spec-check', 'security'],
     reviewsTarget: 'org/app#7',
+    headRefOid: PR_HEAD.headRefOid,
   };
   const report = (over = {}) => ({
     status: 'done' as const,
     verdict: 'approve' as const,
     reviews: 'org/app#7',
+    headSha: PR_HEAD.headRefOid,
     lessons: [],
     questions: [],
     mutationProbe: 'red: t1',
@@ -215,6 +235,18 @@ describe('checkReviewCaps', () => {
   });
   it('accepts a complete approval and lists what was skipped', () => {
     expect(checkReviewCaps(caps, report())).toEqual({ skipped: ['motion'], target: 'org/app#7' });
+  });
+  it('refuses an approval of another head than launch saw: its tier may be wrong', () => {
+    const r = report({ headSha: 'b'.repeat(40) });
+    expect(() => checkReviewCaps(caps, r)).toThrow(/relaunch/);
+  });
+  it('refuses an approval when the record holds no head', () => {
+    const { headRefOid: _, ...old } = caps;
+    expect(() => checkReviewCaps(old, report())).toThrow(/relaunch/);
+  });
+  it('a request for changes on another head still counts', () => {
+    const r = report({ headSha: 'b'.repeat(40), verdict: 'changes_requested' });
+    expect(checkReviewCaps(caps, r).target).toBe('org/app#7');
   });
   it('refuses a missing analyzer', () => {
     const r = report({

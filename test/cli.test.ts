@@ -212,7 +212,7 @@ const writeReport = (fx: Fx, id: string, front: string) => {
 const writeReviewCaps = (
   fx: Fx,
   id: string,
-  body: unknown = { analyzers: [], mandatory: [], reviewsTarget: 'org/app#9' },
+  body: unknown = { analyzers: [], mandatory: [], reviewsTarget: 'org/app#9', headRefOid: HEAD },
 ) => writeStateFile(fx.state, join(fx.state, 'briefs', `${id}.caps.json`), JSON.stringify(body));
 
 /** A gh that answers the head lookup collect makes for a finished review. */
@@ -1023,6 +1023,7 @@ describe('collect holds a review to what its brief asked', () => {
     analyzers: ['diff-review', 'spec-check', 'security', 'motion'],
     mandatory: ['diff-review', 'spec-check', 'security'],
     reviewsTarget: 'org/app#9',
+    headRefOid: HEAD,
   };
   const APPROVE = `status: done\nitem: APP-1\nverdict: approve\nreviews: org/app#9\nhead_sha: ${HEAD}\nmutation_probe: "red: t1"`;
   const FULL = `${APPROVE}\nanalyzers:\n  diff-review: pass\n  spec-check: pass\n  security: findings\n  motion: "skipped: no source"`;
@@ -1048,6 +1049,12 @@ describe('collect holds a review to what its brief asked', () => {
     const { fx, r } = await run(`${APPROVE}\nanalyzers: { diff-review: pass }`);
     expect(r.code).toBe(1);
     expect(r.err).toContain('spec-check');
+    expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+  });
+  it('a push after launch: the head matches the PR but not the launch, so no approval', async () => {
+    const { fx, r } = await run(FULL, { ...CAPS, headRefOid: 'b'.repeat(40) });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/relaunch/);
     expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
   });
   it('an approval without the record of the brief is refused', async () => {
@@ -1287,6 +1294,7 @@ describe('a review can only act on its own pull request', () => {
       analyzers: ['motion'],
       mandatory: [],
       reviewsTarget: 'org/app#9',
+      headRefOid: HEAD,
     });
     writeReport(
       fx,
@@ -1425,6 +1433,7 @@ describe('collect reads only the report this run was told to write', () => {
     analyzers: ['diff-review'],
     mandatory: ['diff-review'],
     reviewsTarget: 'org/app#9',
+    headRefOid: HEAD,
   };
   const reports = (fx: Fx) => join(fx.state, 'clones', 'APP-1', '.studio', 'reports');
   const setup = () => {

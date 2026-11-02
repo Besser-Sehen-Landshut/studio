@@ -1961,6 +1961,7 @@ describe('required skills at launch', () => {
 });
 
 describe('capabilities at launch', () => {
+  const PR_HEAD = { headRefOid: 'a'.repeat(40), isCrossRepository: false };
   const reviewItem: WorkItem = {
     ...item,
     id: 'APP-20',
@@ -1980,33 +1981,72 @@ describe('capabilities at launch', () => {
     gh: { api: async () => '', run: async () => ({ ...run(), stderr: '' }) },
   });
   const pr = (path: string, additions = 1) =>
-    JSON.stringify({ changedFiles: 1, files: [{ path, additions, deletions: 0 }] });
+    JSON.stringify({
+      ...PR_HEAD,
+      changedFiles: 1,
+      files: [{ path, additions, deletions: 0 }],
+    });
   const brief = (f: Fixture, id: string) =>
     readFileSync(join(f.state, 'briefs', `${id}.md`), 'utf8');
   const capsOf = (f: Fixture, id: string) =>
     JSON.parse(readFileSync(join(f.state, 'briefs', `${id}.caps.json`), 'utf8'));
   const owner = (f: Fixture) => ownerStateRootFor(f.launcher);
 
-  it('a failed PR read makes the tier large with security', async () => {
+  it('a failed PR read refuses: a fork could not be told apart', async () => {
     const f = makeFixture();
     const started: Started[] = [];
+    await expect(
+      launchCrew(
+        f.project,
+        reviewItem,
+        reviewerConfig,
+        portsWithGh(started, () => ({ code: 1, stdout: '' })),
+        f.launcher,
+      ),
+    ).rejects.toThrow(/cannot read org\/app#7/);
+    expect(started).toHaveLength(0);
+    expect(existsSync(join(f.state, 'clones'))).toBe(false);
+  });
+
+  it('a pull request from a fork refuses before anything starts: its code would run with the crew token', async () => {
+    const f = makeFixture();
+    const started: Started[] = [];
+    const out = JSON.stringify({
+      ...PR_HEAD,
+      isCrossRepository: true,
+      changedFiles: 1,
+      files: [{ path: 'a.ts', additions: 1, deletions: 0 }],
+    });
+    await expect(
+      launchCrew(
+        f.project,
+        reviewItem,
+        reviewerConfig,
+        portsWithGh(started, () => ({ code: 0, stdout: out })),
+        f.launcher,
+      ),
+    ).rejects.toThrow(/fork/);
+    expect(started).toHaveLength(0);
+    expect(existsSync(join(f.state, 'clones'))).toBe(false);
+    expect(existsSync(join(f.state, 'crew.json'))).toBe(false);
+  });
+
+  it('the record holds the head launch saw', async () => {
+    const f = makeFixture();
     await launchCrew(
       f.project,
       reviewItem,
       reviewerConfig,
-      portsWithGh(started, () => ({ code: 1, stdout: '' })),
+      portsWithGh([], () => ({ code: 0, stdout: pr('a.ts') })),
       f.launcher,
     );
-    expect(started).toHaveLength(1);
-    const text = brief(f, 'APP-20');
-    expect(text).toContain('Tier: large');
-    expect(text).toMatch(/security.*model: opus/);
-    expect(capsOf(f, 'APP-20').mandatory).toContain('security');
+    expect(capsOf(f, 'APP-20').headRefOid).toBe(PR_HEAD.headRefOid);
   });
 
-  it('an incomplete file list fails closed the same way', async () => {
+  it('an incomplete file list makes the tier large with security', async () => {
     const f = makeFixture();
     const out = JSON.stringify({
+      ...PR_HEAD,
       changedFiles: 300,
       files: [{ path: 'README.txt', additions: 1, deletions: 0 }],
     });
