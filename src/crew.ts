@@ -288,24 +288,21 @@ function entries(dir: string): string[] | null | undefined {
 
 /**
  * Whether `<config dir>/skills/<name>/SKILL.md` or a plugin cache `skills/<name>/SKILL.md` exists.
- * undefined when that cannot be told (the config dir or a directory on the way is unreadable, or
- * neither location exists), so that only definite absence refuses.
+ * undefined when that cannot be told (the config dir is missing, or it or a directory on the way is
+ * unreadable), so that only definite absence refuses. A new login with neither location has none.
  */
 export function skillInstalled(configDir: string, name: string): boolean | undefined {
   if (!Array.isArray(entries(configDir))) return undefined;
-  let present = false;
   const skills = join(configDir, 'skills');
   const direct = entries(skills);
   if (direct === undefined) return undefined;
   if (direct !== null) {
-    present = true;
     if (existsSync(join(skills, name, 'SKILL.md'))) return true;
   }
   const cache = join(configDir, 'plugins', 'cache');
   const top = entries(cache);
   if (top === undefined) return undefined;
   if (top !== null) {
-    present = true;
     // <marketplace>/<plugin>/<version>
     let dirs = [cache];
     for (let depth = 0; depth < 3; depth++) {
@@ -319,7 +316,16 @@ export function skillInstalled(configDir: string, name: string): boolean | undef
     }
     if (dirs.some((d) => existsSync(join(d, 'skills', name, 'SKILL.md')))) return true;
   }
-  return present ? false : undefined;
+  return false;
+}
+
+/** Every brief makes this the first skill, and a crew without it stops as blocked. */
+export const CREW_SKILL = 'studio:studio-crew';
+
+/** What the owner types to give a config dir the Studio plugin. */
+export function studioPluginHint(configDir: string): string {
+  const inDir = `CLAUDE_CONFIG_DIR=${configDir} claude plugin`;
+  return `run ${inDir} marketplace add Besser-Sehen-Landshut/studio, then ${inDir} install studio@studio-marketplace`;
 }
 
 /** An error text for the first required skill that is definitely not installed, else undefined. */
@@ -329,6 +335,9 @@ function firstMissingSkill(configDir: string, required: string[]): string | unde
     const name = parts.at(-1) ?? '';
     if (parts.length > 2 || !parts.every((p) => SKILL_NAME.test(p))) {
       return `required skill "${skill.slice(0, 80)}" is not a valid skill name`;
+    }
+    if (skillInstalled(configDir, name) === false && skill === CREW_SKILL) {
+      return `required skill ${skill} is not installed in the Claude config dir; ${studioPluginHint(configDir)}`;
     }
     if (skillInstalled(configDir, name) === false) {
       return `required skill ${skill} is not installed in the Claude config dir; install it (superpowers is a prerequisite), or list it under skills.denied of the role`;
@@ -440,7 +449,7 @@ export function writeBrief(
   caps: BriefCaps = plainCaps(item, config),
 ): string {
   assertItemId(item.id);
-  const first = ['studio:studio-crew', ...caps.required.filter((s) => s !== 'studio:studio-crew')];
+  const first = [CREW_SKILL, ...caps.required.filter((s) => s !== CREW_SKILL)];
   const memory = readRoleMemory(projectDir, item.role);
   const solutions =
     item.role === 'builder' || item.role === 'designer'
@@ -1009,7 +1018,10 @@ async function launchCrewLocked(
     ...(launcher.capabilitiesDir === undefined ? {} : { dir: launcher.capabilitiesDir }),
   });
   readRoleMemory(projectDir, item.role);
-  const missingSkill = firstMissingSkill(claudeConfigDir, forItem.resolved.required);
+  const missingSkill = firstMissingSkill(claudeConfigDir, [
+    CREW_SKILL,
+    ...forItem.resolved.required,
+  ]);
   if (missingSkill) throw new Error(missingSkill);
   const clonePath = join(stateRoot, 'clones', item.id);
   // A run stopped at a limit or a block keeps its work: never let prepareCheckout replace that clone.

@@ -10,8 +10,14 @@ import {
   type OwnerEnv,
   type StudioConfig,
 } from './config.js';
-import { installCrewToken, readCrewTokenFile, validToken } from './credentials.js';
-import { skillInstalled } from './crew.js';
+import {
+  checkProviderConfigDir,
+  installCrewToken,
+  readCrewTokenFile,
+  runCredentialProvider,
+  validToken,
+} from './credentials.js';
+import { CREW_SKILL, skillInstalled, studioPluginHint } from './crew.js';
 import type { Ports } from './ports.js';
 import { assertPrimaryRepo, safe } from './setup-ci-command.js';
 
@@ -80,21 +86,45 @@ export async function runSecretSet(o: {
 
 const API_KEY_VARS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
 
-/** The foundation builders need: feature and fix items require its skills. */
-function superpowersState(owner: OwnerEnv, env: Record<string, string | undefined>): string {
-  const dir = env.CLAUDE_CONFIG_DIR ?? join(owner.homedir ?? homedir(), '.claude');
-  const found = skillInstalled(dir, 'test-driven-development');
+/** The config dir a crew would get; undefined when a provider cannot say. Its token is dropped. */
+async function crewConfigDir(
+  command: string | undefined,
+  owner: OwnerEnv,
+  env: Record<string, string | undefined>,
+  ports: Ports,
+): Promise<string | undefined> {
+  const fallback = env.CLAUDE_CONFIG_DIR || join(owner.homedir ?? homedir(), '.claude');
+  if (command === undefined) return fallback;
+  try {
+    // No item: a probe, which a provider does not count as use.
+    const got = await runCredentialProvider(
+      command,
+      { item: '', role: '', exclude: [] },
+      ports,
+      owner,
+    );
+    if (got === undefined) return undefined;
+    return got.configDir === undefined ? fallback : checkProviderConfigDir(got.configDir, owner);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a skill a crew needs is in that config dir. */
+function skillState(dir: string | undefined, name: string): string {
+  const found = dir === undefined ? undefined : skillInstalled(dir, name);
   return found === undefined ? 'cannot tell' : found ? 'installed' : 'not found';
 }
 
 /** `studio doctor`: what is set and what is missing, never a value. */
-export function runDoctor(o: {
+export async function runDoctor(o: {
   project: string;
   owner: OwnerEnv;
   env: Record<string, string | undefined>;
+  ports: Ports;
   json: boolean;
   stdout(s: string): void;
-}): number {
+}): Promise<number> {
   let config: StudioConfig | undefined;
   try {
     config = loadConfig(o.project);
@@ -117,12 +147,21 @@ export function runDoctor(o: {
     else crewToken = { status: 'missing' };
   }
   const required = !(config?.allowAmbientCredentials ?? false);
+  const configDir = await crewConfigDir(
+    ownerConfig?.crewCredentialCommand,
+    o.owner,
+    o.env,
+    o.ports,
+  );
+  const studioCrew = skillState(configDir, CREW_SKILL.split(':').at(-1) ?? '');
   const report = {
     crewToken: { ...crewToken, required },
     crewTokenFile: crewTokenFile(o.owner),
     studioYaml: config ? 'readable' : 'not readable',
     stacks: config?.stacks ?? null,
-    superpowers: superpowersState(o.owner, o.env),
+    // The foundation builders need: feature and fix items require its skills.
+    superpowers: skillState(configDir, 'test-driven-development'),
+    studioCrew,
     ownerConfig: ownerConfig ? 'readable' : 'invalid',
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
@@ -137,6 +176,7 @@ export function runDoctor(o: {
       `crew token: ${crewToken.status}${source}${required ? '' : ' (optional: allow_ambient_credentials)'}`,
       `studio.yaml: ${report.studioYaml}`,
       `superpowers: ${report.superpowers}`,
+      `studio plugin: ${studioCrew}${studioCrew === 'not found' && configDir !== undefined ? ` (${studioPluginHint(configDir)})` : ''}`,
       `stacks: ${report.stacks === null ? 'not set: run studio setup stack' : report.stacks.join(', ') || '(none)'}`,
       `owner config: ${report.ownerConfig}`,
       `credential provider: ${provider === null ? 'not configured' : `configured ${provider}`}`,

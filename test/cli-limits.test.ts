@@ -764,4 +764,57 @@ describe('studio doctor', () => {
     const r = await cli(fx, makePorts().ports, ['doctor']);
     expect(r.out).toMatch(/credential provider: configured .*provider-/);
   });
+
+  describe('plugins a crew needs', () => {
+    const skill = (dir: string, name: string) => {
+      mkdirSync(join(dir, 'skills', name), { recursive: true });
+      writeFileSync(join(dir, 'skills', name, 'SKILL.md'), '---\nname: x\n---\n');
+    };
+    const loginWith = (fx: Fx, ...skills: string[]) => {
+      const login = join(fx.ownerDir, 'accounts', 'label-a');
+      mkdirSync(login, { recursive: true });
+      for (const s of skills) skill(login, s);
+      provider(fx, JSON.stringify({ label: 'label-a', env: { CLAUDE_CONFIG_DIR: login } }));
+      return login;
+    };
+
+    it('looks in the config dir of the provider, not in the default one', async () => {
+      const fx = makeFx();
+      skill(join(fx.home, '.claude'), 'studio-crew');
+      skill(join(fx.home, '.claude'), 'test-driven-development');
+      const login = loginWith(fx);
+      const r = await cli(fx, makePorts().ports, ['doctor', '--json']);
+      expect(JSON.parse(r.out)).toMatchObject({
+        superpowers: 'not found',
+        studioCrew: 'not found',
+      });
+      const text = await cli(fx, makePorts().ports, ['doctor']);
+      expect(text.out).toContain(`CLAUDE_CONFIG_DIR=${login} claude plugin install studio@`);
+    });
+
+    it('both installed in the provider dir read installed, with no hint', async () => {
+      const fx = makeFx();
+      loginWith(fx, 'studio-crew', 'test-driven-development');
+      const r = await cli(fx, makePorts().ports, ['doctor']);
+      expect(r.out).toContain('superpowers: installed');
+      expect(r.out).toContain('studio plugin: installed');
+      expect(r.out).not.toContain('claude plugin install');
+    });
+
+    it('the Studio plugin missing from the default dir gets the hint', async () => {
+      const fx = makeFx();
+      skill(join(fx.home, '.claude'), 'test-driven-development');
+      const r = await cli(fx, makePorts().ports, ['doctor']);
+      expect(r.out).toContain('studio plugin: not found');
+      expect(r.out).toContain('claude plugin install studio@studio-marketplace');
+    });
+
+    it('a provider that gives nothing reads cannot tell', async () => {
+      const fx = makeFx();
+      provider(fx, '');
+      const r = await cli(fx, makePorts().ports, ['doctor']);
+      expect(r.out).toContain('superpowers: cannot tell');
+      expect(r.out).toContain('studio plugin: cannot tell');
+    });
+  });
 });

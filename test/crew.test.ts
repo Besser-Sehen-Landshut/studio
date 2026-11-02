@@ -36,6 +36,7 @@ import { DEFAULT_SECRET_GLOBS, evaluateGuard } from '../src/guard.js';
 import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import { reportName } from '../src/report.js';
+import { readUsage } from '../src/usage.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-crew-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -171,6 +172,13 @@ const CRED_PATHS = [
   '.config/studio',
   '.config/studio/crew-token',
 ].map((p) => join(FAKE_HOME, p));
+
+const installCrewSkill = (configDir: string, ...more: string[]) => {
+  for (const name of ['studio-crew', ...more]) {
+    mkdirSync(join(configDir, 'skills', name), { recursive: true });
+    writeFileSync(join(configDir, 'skills', name, 'SKILL.md'), '---\nname: x\n---\n');
+  }
+};
 
 describe('crewName', () => {
   it('lowercases id', () => {
@@ -1460,6 +1468,7 @@ describe('crew credentials', () => {
       const { project, home, launcher, ownerDir } = fx();
       owner(ownerDir, 'allow_api_billing: true\n');
       mkdirSync(join(home, '.claude'));
+      installCrewSkill(join(home, '.claude'), 'test-driven-development', 'systematic-debugging');
       writeFileSync(join(home, '.claude', 'settings.json'), '{"apiKeyHelper":"fake-value-h"}');
       const started: Started[] = [];
       await launchCrew(project, item, config, fakePorts(started), launcher);
@@ -1626,6 +1635,7 @@ describe('crew credentials', () => {
       });
       const login = join(ownerDir, 'accounts', 'label-a');
       mkdirSync(login, { recursive: true });
+      installCrewSkill(login, 'test-driven-development', 'systematic-debugging');
       const line = JSON.stringify({ label: 'label-a', env: { CLAUDE_CONFIG_DIR: login } });
       owner(ownerDir, `crew_credential_command: ${provider(ownerDir, line)}\n`);
       const started: Started[] = [];
@@ -1814,6 +1824,7 @@ describe('crew credentials', () => {
       const dirFor = (l: string) => {
         const d = join(f.ownerDir, l);
         mkdirSync(d, { recursive: true });
+        installCrewSkill(d, 'test-driven-development', 'systematic-debugging');
         return JSON.stringify({ label: l, env: { CLAUDE_CONFIG_DIR: d } });
       };
       expect(await relaunch(f, dirFor('label-a'), dirFor('label-b'))).not.toContain('--resume');
@@ -1823,6 +1834,7 @@ describe('crew credentials', () => {
       const f = fx();
       const login = join(f.ownerDir, 'label-b');
       mkdirSync(login);
+      installCrewSkill(login, 'test-driven-development', 'systematic-debugging');
       const second = JSON.stringify({ label: 'label-b', env: { CLAUDE_CONFIG_DIR: login } });
       expect(await relaunch(f, tokenLine('label-a'), second)).not.toContain('--resume');
     });
@@ -1857,6 +1869,7 @@ describe('required skills at launch', () => {
     const f = makeFixture();
     const dir = join(f.home, '.claude');
     mkdirSync(dir);
+    put(join(dir, 'skills', 'studio-crew', 'SKILL.md'));
     return { ...f, dir };
   };
   const put = (file: string) => {
@@ -1895,6 +1908,17 @@ describe('required skills at launch', () => {
     expect(started).toHaveLength(1);
   });
 
+  it('the Studio plugin missing refuses before a run is counted, saying how to install it', async () => {
+    const f = setup();
+    rmSync(join(f.dir, 'skills', 'studio-crew'), { recursive: true });
+    put(join(f.dir, 'skills', NAME, 'SKILL.md'));
+    const { started, p } = launch(f);
+    await expect(p).rejects.toThrow(/studio:studio-crew.*claude plugin install studio@/);
+    expect(started).toHaveLength(0);
+    expect(existsSync(join(f.state, 'clones'))).toBe(false);
+    expect(readUsage(ownerStateRootFor(f.launcher))).toMatchObject({ ok: true, days: {} });
+  });
+
   it('a stray file in the plugin cache does not hide a missing skill', async () => {
     const f = setup();
     put(join(f.dir, 'plugins', 'cache', '.DS_Store'));
@@ -1926,7 +1950,6 @@ describe('required skills at launch', () => {
 
   it('an unreadable skills directory or a missing config dir does not refuse', async () => {
     const f = setup();
-    mkdirSync(join(f.dir, 'skills'));
     chmodSync(join(f.dir, 'skills'), 0o000);
     try {
       const { started, p } = launch(f);
@@ -2129,7 +2152,7 @@ describe('capabilities at launch', () => {
   it('an index-required skill that is definitely absent refuses; a denied one does not', async () => {
     const f = makeFixture();
     const dir = join(f.home, '.claude');
-    mkdirSync(join(dir, 'skills', 'other'), { recursive: true });
+    installCrewSkill(dir);
     const fix: WorkItem = { ...item, type: 'fix' };
     const noRole: StudioConfig = {
       ...config,
@@ -2162,7 +2185,7 @@ describe('capabilities at launch', () => {
   it('an optional skill that is absent reads skipped and the crew starts', async () => {
     const f = makeFixture();
     const dir = join(f.home, '.claude');
-    mkdirSync(join(dir, 'skills', 'other'), { recursive: true });
+    installCrewSkill(dir);
     const started: Started[] = [];
     const ui: WorkItem = { ...item, type: 'chore', risk: ['ui'] };
     const plain: StudioConfig = {
@@ -2457,7 +2480,7 @@ describe('capabilities at launch', () => {
 
   it('the refusal for a missing skill says what to do', async () => {
     const f = makeFixture();
-    mkdirSync(join(f.home, '.claude', 'skills', 'other'), { recursive: true });
+    installCrewSkill(join(f.home, '.claude'));
     await expect(
       launchCrew(f.project, { ...item, type: 'fix' }, config, fakePorts([]), f.launcher),
     ).rejects.toThrow(/skills\.denied/);

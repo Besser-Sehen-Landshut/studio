@@ -804,7 +804,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'doctor': {
-        return runDoctor({ project, owner, env: deps.env, json, stdout });
+        return await runDoctor({ project, owner, env: deps.env, ports, json, stdout });
       }
 
       case 'accounts-clear': {
