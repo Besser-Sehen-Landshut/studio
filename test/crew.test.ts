@@ -1895,6 +1895,25 @@ describe('required skills at launch', () => {
     expect(started).toHaveLength(1);
   });
 
+  it('a stray file in the plugin cache does not hide a missing skill', async () => {
+    const f = setup();
+    put(join(f.dir, 'plugins', 'cache', '.DS_Store'));
+    put(join(f.dir, 'plugins', 'cache', 'mkt', '.DS_Store'));
+    put(join(f.dir, 'plugins', 'cache', 'mkt', 'other', '1.0.0', 'skills', 'x', 'SKILL.md'));
+    const { started, p } = launch(f);
+    await expect(p).rejects.toThrow(/test-driven-development/);
+    expect(started).toHaveLength(0);
+  });
+
+  it('a stray file in the plugin cache does not hide a present skill', async () => {
+    const f = setup();
+    put(join(f.dir, 'plugins', 'cache', '.DS_Store'));
+    put(join(f.dir, 'plugins', 'cache', 'mkt', 'superpowers', '1.0.0', 'skills', NAME, 'SKILL.md'));
+    const { started, p } = launch(f);
+    await p;
+    expect(started).toHaveLength(1);
+  });
+
   it('a definitely absent skill refuses before any side effect, naming it', async () => {
     const f = setup();
     mkdirSync(join(f.dir, 'skills', 'other'), { recursive: true });

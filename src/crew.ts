@@ -273,12 +273,16 @@ function realOr(p: string): string {
 
 const SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** Directory entries; null when the directory is missing, undefined when it cannot be read. */
+/**
+ * Directory entries; null when there is no directory there (nothing, or a file such as `.DS_Store`),
+ * undefined when it cannot be read.
+ */
 function entries(dir: string): string[] | null | undefined {
   try {
     return readdirSync(dir);
   } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? null : undefined;
+    const code = (e as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? null : undefined;
   }
 }
 
