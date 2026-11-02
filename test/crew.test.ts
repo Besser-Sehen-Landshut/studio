@@ -454,10 +454,11 @@ describe('writeCrewSettings', () => {
   };
 
   it('env carries STUDIO_ROLE=crew and guard hook path is absolute', () => {
-    const { state, file, s } = setup();
+    const { state, file, s, tmpDir } = setup();
     expect(file).toBe(join(state, 'settings', 'APP-12.json'));
     expect(s.env).toEqual({
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+      CLAUDE_CODE_TMPDIR: tmpDir,
       STUDIO_ROLE: 'crew',
       STUDIO_ITEM: 'APP-12',
       STUDIO_PROJECT: 'org/app',
@@ -591,6 +592,8 @@ describe('writeCrewSettings', () => {
       ownerOnly: ['gh release *'],
       deployCommands: ['make deploy'],
       secretGlobs: [...DEFAULT_SECRET_GLOBS, ...CRED_PATHS.flatMap((p) => [p, `${p}/**`])],
+      readRoots: expect.any(Array),
+      skillRoots: expect.any(Array),
       crewAllowedWorkflows: ['ci.yml'],
       crewAllowedWorkflowRefs: ['main'],
       protectedPaths: [
@@ -1654,6 +1657,42 @@ describe('crew credentials', () => {
         ctx,
       );
       expect(read.decision).toBe('deny');
+      // The crew's read tools: its own files and the skills of that login, nothing else there.
+      const decide = (file_path: string) =>
+        evaluateGuard({ toolName: 'Read', toolInput: { file_path } }, ctx).decision;
+      const briefs = join(state, 'briefs');
+      const munged = realpathSync(join(state, 'clones', 'APP-12')).replace(/[^A-Za-z0-9]/g, '-');
+      for (const file of [
+        join(briefs, 'APP-12.md'),
+        join(briefs, 'APP-12.rules', 'AGENTS.md'),
+        join(briefs, 'APP-12.caps', 'analyzers', 'diff-review.md'),
+        join(state, 'clones', 'APP-12', 'src', 'a.ts'),
+        join(state, 'homes', 'APP-12', '.gitconfig'),
+        join(state, 'tmp', 'APP-12', 'diff.txt'),
+        join(login, 'plugins', 'cache', 'm', 'p', '1', 'skills', 's', 'x.md'),
+        join(login, 'plugins', 'marketplaces', 'm', 'README.txt'),
+        join(login, 'skills', 's', 'x.md'),
+        join(login, 'projects', munged, 'session', 'tool-results', 'out.txt'),
+      ]) {
+        expect(decide(file), file).toBe('allow');
+      }
+      for (const file of [
+        join(briefs, 'APP-13.md'),
+        join(briefs, 'APP-13.rules', 'AGENTS.md'),
+        join(briefs, 'APP-13.caps', 'x.md'),
+        join(briefs, 'APP-12.caps.json'),
+        join(state, 'clones', 'APP-13', 'a.ts'),
+        join(state, 'homes', 'APP-13', '.gitconfig'),
+        join(state, 'settings', 'APP-12.json'),
+        join(login, 'settings.json'),
+        join(login, 'plugins', 'data', 'p', 'state.txt'),
+        join(login, 'projects', 'another-project', 'session.jsonl'),
+        join(dirnameOf(login), 'label-b', 'settings.json'),
+      ]) {
+        expect(decide(file), file).toBe('deny');
+      }
+      // Claude Code's own temp files of this run go to the crew's tmp dir, not a shared /tmp.
+      expect(settings.env.CLAUDE_CODE_TMPDIR).toBe(join(state, 'tmp', 'APP-12'));
     });
 
     it('config dir form checks the settings of that dir and refuses a bad dir', async () => {

@@ -42,6 +42,7 @@ beforeAll(() => {
     crewAllowedWorkflows: ['ci.yml'],
     crewAllowedWorkflowRefs: ['studio-ci'],
     protectedPaths: [join(root, 'state')],
+    readRoots: [join(root, 'clean')],
   };
   mkdirSync(join(root, 'state'));
   mkdirSync(join(root, 'clean'));
@@ -221,8 +222,8 @@ describe('file tools', () => {
   it('denies a missing path argument for write tools', () => {
     expect(tool('Edit', {}).decision).toBe('deny');
   });
-  it('allows reading outside the worktree (non-secret)', () => {
-    expect(tool('Read', { file_path: join(outside, 'a.ts') }).decision).toBe('allow');
+  it('denies reading outside the worktree', () => {
+    expect(tool('Read', { file_path: join(outside, 'a.ts') }).decision).toBe('deny');
   });
   it('allows the listed crew tools', () => {
     for (const name of ['Skill', 'TodoWrite', 'Task', 'Agent']) {

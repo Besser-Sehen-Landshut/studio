@@ -683,8 +683,29 @@ export function writeCrewSettings(
     // Below the state base, so the sandbox already keeps crews out; this is the second net.
     join(stateBase, OWNER_DIR),
   ];
+  // The crew's file tools read only this, on top of the clone: the sandbox does not cover them.
+  // `projects/<clone>` is where Claude Code saves a tool output too long to show, and tells the
+  // crew to read it. `plugins/data` stays out: plugins keep their own state there.
+  const configDir = loginDir ?? (env.CLAUDE_CONFIG_DIR || join(realHome, '.claude'));
+  const skillRoots = unique([
+    join(configDir, 'skills'),
+    join(configDir, 'plugins', 'cache'),
+    join(configDir, 'plugins', 'marketplaces'),
+    join(configDir, 'projects', clone.replace(/[^A-Za-z0-9]/g, '-')),
+    join(configDir, 'projects', realOr(clone).replace(/[^A-Za-z0-9]/g, '-')),
+  ]);
+  const readRoots = [
+    join(stateRoot, 'briefs', `${id}.md`),
+    join(stateRoot, 'briefs', `${id}.caps`),
+    join(stateRoot, 'briefs', `${id}.rules`),
+    dirs.homeDir,
+    dirs.tmpDir,
+    ...skillRoots,
+  ];
   const ctx = {
     worktree: clone,
+    readRoots,
+    skillRoots,
     ownerOnly: config.ownerOnly,
     deployCommands: config.deployCommands,
     // Absolute credential locations of the real home, on top of the default globs.
@@ -704,6 +725,9 @@ export function writeCrewSettings(
     autoMemoryEnabled: false,
     env: {
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+      // Claude Code's own temp files of this run, which the crew reads back, stay in its tmp dir
+      // and out of the /tmp every crew shares (https://code.claude.com/docs/en/env-vars).
+      CLAUDE_CODE_TMPDIR: dirs.tmpDir,
       STUDIO_ROLE: 'crew',
       STUDIO_ITEM: id,
       STUDIO_PROJECT: config.primaryRepo,

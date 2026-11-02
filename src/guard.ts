@@ -37,6 +37,10 @@ export interface GuardContext {
   crewAllowedWorkflowRefs?: string[];
   /** Absolute paths that must never be written (guard ctx file, state dir). */
   protectedPaths?: string[];
+  /** Files and directories the read tools may reach, besides the worktree. Nothing else is. */
+  readRoots?: string[];
+  /** Read roots of Claude Code's own files; a secret glob over a login dir does not cover them. */
+  skillRoots?: string[];
 }
 
 export interface GuardResult {
@@ -75,7 +79,12 @@ interface Env {
   allowedWorkflows: string[];
   allowedRefs: string[];
   protectedReal: string[];
+  readRoots: string[];
+  skillRoots: string[];
 }
+
+const isUnder = (roots: string[], p: string): boolean =>
+  roots.some((r) => p === r || p.startsWith(`${r}/`));
 
 export function evaluateGuard(input: GuardInput, ctx: GuardContext): GuardResult {
   try {
@@ -125,6 +134,7 @@ function commandGlobToRegExp(glob: string): RegExp {
 
 function isSecretString(env: Env, s: string): boolean {
   if (basename(s) === '.env.example') return false;
+  if (isUnder(env.skillRoots, s) && !s.split('/').includes('..')) return false;
   return env.secretRes.some((re) => re.test(s));
 }
 
@@ -1396,6 +1406,28 @@ function scanDirForSecrets(env: Env, dir: string): void {
   }
 }
 
+/** The one rule for read tools: the worktree and the listed roots, on the real path; nothing else. */
+function checkReadScope(env: Env, tok: string, base: string, tool: string): void {
+  if (tok === '~' || tok.startsWith('~/')) deny(`${tool}: unresolvable path: ${tok}`);
+  const real = resolveReal(tok, base);
+  if (!isInside(env, real) && !isUnder(env.readRoots, real)) {
+    deny(`${tool} outside this crew's files: ${tok}`);
+  }
+}
+
+/** A glob stays in scope when the part before its first wildcard does and no `..` follows it. */
+function checkGlobScope(env: Env, pattern: string, base: string, tool: string): void {
+  for (const e of braceExpand(pattern)) {
+    const segs = e.split('/');
+    const first = segs.findIndex((s) => hasMagic(s));
+    if (first >= 0 && segs.slice(first).includes('..')) {
+      deny(`${tool} outside this crew's files: ${e}`);
+    }
+    const prefix = first < 0 ? e : segs.slice(0, first).join('/') || (isAbsolute(e) ? '/' : '.');
+    checkReadScope(env, prefix, base, tool);
+  }
+}
+
 function checkSearch(env: Env, path: unknown, globs: unknown[], cwd: string): void {
   const given = typeof path === 'string' && path !== '' ? path : undefined;
   if (given !== undefined) checkSecretPath(env, given, cwd);
@@ -1450,7 +1482,9 @@ function check(input: GuardInput, ctx: GuardContext): void {
     !isStringArray(c.secretGlobs) ||
     (c.crewAllowedWorkflows !== undefined && !isStringArray(c.crewAllowedWorkflows)) ||
     (c.crewAllowedWorkflowRefs !== undefined && !isStringArray(c.crewAllowedWorkflowRefs)) ||
-    (c.protectedPaths !== undefined && !isStringArray(c.protectedPaths))
+    (c.protectedPaths !== undefined && !isStringArray(c.protectedPaths)) ||
+    (c.readRoots !== undefined && !isStringArray(c.readRoots)) ||
+    (c.skillRoots !== undefined && !isStringArray(c.skillRoots))
   ) {
     deny('invalid guard context');
   }
@@ -1472,6 +1506,8 @@ function check(input: GuardInput, ctx: GuardContext): void {
     protectedReal: protectedPaths
       .flatMap((p) => [p, resolveReal(p, '/')])
       .map((p) => p.toLowerCase()),
+    readRoots: (ctx.readRoots ?? []).map((p) => resolveReal(p, '/')),
+    skillRoots: (ctx.skillRoots ?? []).flatMap((p) => [p, resolveReal(p, '/')]),
   };
   const { toolName, toolInput } = input;
   const cwd = resolveReal(input.cwd ?? wt, wt);
@@ -1492,14 +1528,26 @@ function check(input: GuardInput, ctx: GuardContext): void {
     if (typeof p !== 'string' || p === '') deny(`${toolName} call without ${writeKey}`);
     checkWritePath(env, p as string, cwd, toolName);
   }
+  if (toolName === 'Read') {
+    const p = toolInput.file_path;
+    if (typeof p !== 'string' || p === '') deny('Read call without file_path');
+    checkReadScope(env, p as string, cwd, toolName);
+  }
   if (FILE_TOOLS.has(toolName)) {
     for (const key of ['file_path', 'notebook_path']) {
       const v = toolInput[key];
       if (typeof v === 'string' && v !== '') checkSecretPath(env, v, cwd);
     }
-  } else if (toolName === 'Grep') {
-    checkSearch(env, toolInput.path, [toolInput.glob], cwd);
-  } else if (toolName === 'Glob') {
-    checkSearch(env, toolInput.path, [toolInput.pattern], cwd);
+  } else if (toolName === 'Grep' || toolName === 'Glob') {
+    const given = typeof toolInput.path === 'string' ? toolInput.path : '';
+    checkReadScope(env, given === '' ? '.' : given, cwd, toolName);
+    if (toolName === 'Grep') {
+      checkSearch(env, toolInput.path, [toolInput.glob], cwd);
+    } else {
+      if (typeof toolInput.pattern === 'string') {
+        checkGlobScope(env, toolInput.pattern, resolveReal(given || '.', cwd), toolName);
+      }
+      checkSearch(env, toolInput.path, [toolInput.pattern], cwd);
+    }
   }
 }
