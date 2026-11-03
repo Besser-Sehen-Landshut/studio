@@ -20,7 +20,7 @@ You work one item, headless. Nobody answers; the control room trusts only artifa
 6. Push without `-u`: `git push origin HEAD:refs/heads/studio/<id>`. Verify with
    `git ls-remote origin refs/heads/studio/<id>` = `git rev-parse HEAD`; an upstream or `.git/config` error
    after a verified push is harmless.
-7. PR: `gh pr create --head studio/<id> --title "<id>: <summary>" --body-file <file>`. If the brief says Studio opens it, run no gh: give `pr_title` in the report and the pull request text as its body.
+7. PR, exactly this form (the guard refuses any other): `gh pr create --head studio/<id> --base <base> --title "<id>: <summary>" --body-file <file>`, `<base>` as the brief names it, `<file>` a relative path inside the checkout, run from the checkout root. If the brief says Studio opens it, run no gh: give `pr_title` in the report and the pull request text as its body.
 8. Verify every Definition of Done line against the diff and test output.
 9. Write the report **last**, do not commit it, stop.
 

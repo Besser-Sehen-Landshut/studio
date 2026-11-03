@@ -85,3 +85,11 @@ Run on 2026-11-03 (sonnet), `scenarios/crew-E-brief2.md` (the new brief wording)
 
 - E1: `status: done`, `tests_run: 742`, `not_run_here` with `cargo test --workspace`, `missing: database` and the error line as reason. It pushed without `-u`, checked `git ls-remote` against `git rev-parse HEAD`, and called the `.git/config` error harmless once the two matched.
 - E2: `status: failed`, not pushed: "Because one failure is not a missing service, the run counts as failed. I did not leave the failing test out to get a green count."
+
+## One `gh pr create` form: baseline (RED), 0.6.6
+
+An independent review of 0.6.6 found the guard's reading of `gh pr create` flags differed from gh's own parser (short groups, `=`, aliases, `--recover`, `--template`, `--body-file -`). Ruling: one form only, `gh pr create --head studio/<id> --base <branch> --title <text> --body-file <relative file>`. The baseline is deterministic, so it is a test, not an agent run: `test/guard.test.ts` ("the crew skill and brief name the one gh pr create form the guard allows") fills in the skill's and the brief's command and asks the new guard. With the 0.6.5 wording, `gh pr create --head studio/<id> --title "<id>: <summary>" --body-file <file>`, both were denied (no `--base`): a crew following the skill could not open its pull request.
+
+### With skill (GREEN), 0.6.6
+
+The skill and the brief name `gh pr create --head studio/<id> --base main --title "<id>: <summary>" --body-file <file>`, with the file a relative path in the checkout; the same test allows both. Crews branch from `origin/main`, so the base is `main`.

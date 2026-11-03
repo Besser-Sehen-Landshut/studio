@@ -3,6 +3,74 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.6] - 2026-11-03
+
+From an independent review and an automated security review of 0.6.5 and of this release's first
+draft: a `not_run_here` command could end up run nowhere while every gate passed, and the guard's
+reading of `gh` and `git` options differed from theirs. Not tagged yet; the maintainers tag after
+the merge.
+
+### Changed
+
+- The reviewer reads CI workflows at the base (`git show origin/<base>:.github/workflows/<file>`),
+  never in the pull request head, which the crew may have edited. A change under `.github/`
+  (workflows, actions) is a finding that blocks the approval. A CI item, one that declares paths
+  below `.github/` in its `paths` or `touches`, may change what those globs name and nothing else
+  there; a symbolic link at `.github` or below always counts. Launch reads the
+  change in the owner's checkout with `git diff --name-only --no-renames <base>...<head>` (both
+  sides of a rename count, any case, and a symbolic link at `.github` or below counts too), not
+  from gh's file list, which can be cut short. A change it cannot read counts as one. `collect`
+  refuses the approval then.
+- A review report names, for each `not_run_here` command, the workflow file at the base and the
+  job that runs it (`not_run_here_jobs: [{ command, workflow, job }]`). `collect` checks each in
+  the owner's checkout at the pull request's base commit (`baseRefOid`, the base its checks ran
+  against) and at its head: the workflow must run on `pull_request`, and its `name:` must be unique
+  among the workflow files there, because `gh pr checks` names a workflow, not its file; the job must be
+  in that file (by its `name:`, else its id) with no `if:`, no `continue-on-error` and no `uses:`
+  (reusable workflows are refused); a `run:` step without `if:` or `continue-on-error` must start
+  a line with the whole command (a heuristic). When the pull request changes that workflow file,
+  the version at its head must pass the same test under the same name. Every check of that job in
+  that workflow (`gh pr checks --json name,bucket,workflow`; matrix legs `<job> (<leg>)` count as
+  instances, commit statuses do not count) must have passed: a skipped check that is not required
+  counted as green before. A refusal blocks the review item with a note for the lead
+  and stores no approval. An approval stores the jobs (`approved_jobs`), and the merge queue checks
+  them again right before it merges.
+- `collect` prints only the count and the missing services of `not_run_here`, no crew text.
+- When `collect` reuses an open pull request of the branch, it renews its text with
+  `gh pr edit --body-file`, so the `not_run_here` list there is never stale. Opening and editing
+  both wait for CI capacity.
+- The pull request text Studio writes starts with Studio's attribution and its `not_run_here`
+  section; the crew's text follows below a line. Title and text lose control and format characters
+  (bidi overrides, zero-width).
+- `not_run_here` fields lose format characters; a field that is only such characters refuses the
+  report, and the board refuses them. An empty YAML value (`not_run_here:`, `lessons:`,
+  `questions:`, `not_run_here_jobs:`) reads as an empty list.
+- The crew skill and brief name the one `gh pr create` form the guard allows (below).
+
+### Security
+
+- The guard no longer models gh's or git's option grammar; it allows listed forms only.
+  - gh: `gh pr view`, `checks`, `diff`, `list` and `status`, each with its own exact list of
+    flags (`--json`, `--jq`, and for some `--watch`, `--required`, `--name-only`, `--state`,
+    `--limit`; every flag its own word, no `=`, no clusters, no `--web`), and exactly `gh pr create --head
+    studio/<id> --base <item base> --title <text> --body-file <file>` from the clone root, each
+    option once in any order, the file a plain relative path whose real path is in the clone. With
+    `crew_allowed_workflows` set, also exactly `gh workflow run <listed workflow> --ref <listed
+    ref>`. Everything else is refused: other subcommands and aliases, `gh api`, short or grouped
+    options, `=`, `--template`, `--recover`, `--attach`, `-R`/`--repo`/`--hostname` anywhere.
+  - git global options are an allowlist: `-C <dir in the clone>`, `-c <allowed key>`,
+    `--git-dir=`/`--work-tree=` in the clone, `--no-pager`, `-P`, `--no-replace-objects`.
+  - `git fetch` and `git pull` take listed options only (quiet, verbose, prune, tags, depth; for
+    pull also rebase, fast-forward, autostash and `-X`/`--strategy-option` with a plain value),
+    only `origin` as remote and plain refspecs. `git ls-remote` is `git ls-remote origin
+    [<ref>...]`; `git push` goes to `origin` only. These and `gh pr create` run from the clone root,
+    without `-C`, `--git-dir` or `--work-tree`.
+  - `git clone`, `init`, `fetch-pack`, `upload-pack`, `upload-archive` and `archive --remote`,
+    `--exec` or `--output` are refused. `git remote` is read-only (`-v`, `get-url origin`,
+    `show [-n] origin`), `git submodule` only `status`. No write reaches a `.git` at any depth.
+- The guard context names the crew's item and its base (`main`, where crews branch from), for the
+  `--head` and `--base` checks; the brief names the same base.
+
 ## [0.6.5] - 2026-11-03
 
 From a real crew run: a correct, one-crate fix ended `blocked` because the workspace's full test

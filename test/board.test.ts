@@ -223,3 +223,18 @@ describe('capability fields on an item', () => {
     rmSync(d, { recursive: true, force: true });
   });
 });
+
+describe('not_run_here on the board', () => {
+  it('refuses a format character (bidi, zero-width) in a command', () => {
+    const p = project(
+      `items:\n${item('APP-1', '    not_run_here:\n      - { command: "make\\u202e e2e", missing: docker, reason: x }\n')}`,
+    );
+    expect(() => loadBoard(p)).toThrow(BoardError);
+  });
+  it('takes a plain entry', () => {
+    const p = project(
+      `items:\n${item('APP-1', '    not_run_here:\n      - { command: make e2e, missing: docker, reason: x }\n')}`,
+    );
+    expect(loadBoard(p).items[0]?.notRunHere).toHaveLength(1);
+  });
+});

@@ -124,6 +124,32 @@
             "type": "string",
             "minLength": 1
           },
+          "approved_jobs": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "workflow": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+                },
+                "job": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+                }
+              },
+              "required": [
+                "workflow",
+                "job"
+              ],
+              "additionalProperties": false
+            }
+          },
           "not_run_here": {
             "maxItems": 20,
             "type": "array",
@@ -134,7 +160,7 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 300,
-                  "pattern": "^[^\\p{Cc}]+$"
+                  "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
                 },
                 "missing": {
                   "type": "string",
@@ -149,7 +175,7 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 300,
-                  "pattern": "^[^\\p{Cc}]+$"
+                  "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
                 }
               },
               "required": [

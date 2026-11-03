@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runAccount } from './account-command.js';
 import {
+  type ApprovedJob,
   type Board,
   loadBoard,
   type NotRunHere,
@@ -13,6 +14,7 @@ import {
 } from './board.js';
 import { capabilitiesDir } from './capabilities.js';
 import { readCapacity, readCapacityTwice } from './capacity.js';
+import { approvedJobsProblem, verifyNotRunHereJobs } from './ci-jobs.js';
 import {
   configWarnings,
   loadConfig,
@@ -504,7 +506,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const reviewDone =
           item.type === 'review' && report.status === 'done'
             ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report)
-            : { skipped: [] as string[], target: undefined };
+            : { skipped: [] as string[], target: undefined, notRunHere: undefined };
+        let approvedJobs: ApprovedJob[] = [];
         // A verdict counts for the commit reviewed: the pull request's head right now.
         if (item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined) {
           const m = /^(.+)#(\d+)$/.exec(reviewDone.target) as RegExpExecArray;
@@ -519,6 +522,39 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               throw new Error(
                 `the approval counts only with green checks (${why}); collect again once they pass, nothing moved`,
               );
+            }
+            // A skipped check counts as green above, so each command the builder could not run
+            // needs a job of a base workflow that runs it and passed here. A refusal goes to the
+            // lead: the review item is blocked with a note, the approval is not stored.
+            if (reviewDone.notRunHere !== undefined) {
+              const config = loadConfig(project);
+              const gate = await verifyNotRunHereJobs({
+                git: ports.git,
+                checkout: approvalCheckout(project, config, m[1] as string),
+                baseOid: info.baseOid,
+                headOid: info.head,
+                commands: reviewDone.notRunHere,
+                entries: report.notRunHereJobs,
+                checks: checks.checks,
+              });
+              if (!gate.ok) {
+                const note = `approval refused: not_run_here entry ${gate.entry}: ${gate.why}`;
+                await withBoardLock(stateRoot(), ports.clock.now(), () => {
+                  const fresh = loadBoard(project);
+                  if (findItem(fresh, item.id).status !== item.status) {
+                    throw new Error(`${item.id} changed while it was collected; nothing moved`);
+                  }
+                  let next = transition(fresh, item.id, 'blocked', BY, ports.clock.now());
+                  next = withItem(next, item.id, (i) => ({
+                    ...i,
+                    notes: [...(i.notes ?? []), note],
+                  }));
+                  saveBoard(project, next);
+                });
+                stderr(`${item.id}: ${note}; no approval, ${item.id} is blocked for the lead\n`);
+                return 1;
+              }
+              approvedJobs = gate.jobs;
             }
           }
         }
@@ -666,10 +702,18 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             );
             if (reviewed !== undefined) {
               const approvedBase = readCrewCaps(stateRoot(), item.id)?.baseRefName;
-              next = withItem(next, reviewed.id, ({ approvedHead: _h, approvedBase: _b, ...i }) =>
-                report.verdict === 'approve'
-                  ? { ...i, approvedHead: report.headSha, approvedBase }
-                  : i,
+              next = withItem(
+                next,
+                reviewed.id,
+                ({ approvedHead: _h, approvedBase: _b, approvedJobs: _j, ...i }) =>
+                  report.verdict === 'approve'
+                    ? {
+                        ...i,
+                        approvedHead: report.headSha,
+                        approvedBase,
+                        ...(approvedJobs.length === 0 ? {} : { approvedJobs }),
+                      }
+                    : i,
               );
             }
           }
@@ -727,9 +771,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ...(supersededBy === undefined ? {} : { supersededBy }),
           ...(fixLimit ? { fixLimit } : {}),
           ...(lessonsProposed > 0 ? { lessonsProposed } : {}),
-          // Crew text, cleaned: what CI must run because the sandbox could not.
+          // What CI must run because the sandbox could not: only the count and the services, which
+          // the schema fixes; the commands are crew text and stay on the item and in the PR body.
           ...(report.status === 'done' && report.notRunHere.length > 0
-            ? { notRunHere: report.notRunHere.map((x) => `${x.command} (missing ${x.missing})`) }
+            ? {
+                notRunHere: {
+                  count: report.notRunHere.length,
+                  missing: [...new Set(report.notRunHere.map((x) => x.missing))],
+                },
+              }
             : {}),
         });
         return 0;
@@ -1319,7 +1369,7 @@ async function prInfo(
   ports: Ports,
   repo: string,
   pr: number,
-): Promise<{ head: string; branch: string }> {
+): Promise<{ head: string; branch: string; baseOid?: string }> {
   const r = await ports.gh.run([
     'pr',
     'view',
@@ -1327,7 +1377,7 @@ async function prInfo(
     '--repo',
     repo,
     '--json',
-    'headRefOid,headRefName,headRepository,headRepositoryOwner,isCrossRepository',
+    'headRefOid,headRefName,headRepository,headRepositoryOwner,isCrossRepository,baseRefOid',
   ]);
   if (r.code !== 0) throw new Error(`cannot read ${repo}#${pr} (gh exit ${r.code})`);
   let raw: {
@@ -1336,6 +1386,7 @@ async function prInfo(
     headRepository?: { name?: unknown } | null;
     headRepositoryOwner?: { login?: unknown } | null;
     isCrossRepository?: unknown;
+    baseRefOid?: unknown;
   } | null;
   try {
     raw = JSON.parse(r.stdout) as typeof raw;
@@ -1352,7 +1403,11 @@ async function prInfo(
   if (raw?.isCrossRepository !== false || headRepo.toLowerCase() !== repo.toLowerCase()) {
     throw new Error(`PR ${repo}#${pr} does not come from a branch of ${repo}`);
   }
-  return { head, branch };
+  const baseOid =
+    typeof raw?.baseRefOid === 'string' && /^[0-9a-f]{40,64}$/i.test(raw.baseRefOid)
+      ? raw.baseRefOid
+      : undefined;
+  return { head, branch, ...(baseOid === undefined ? {} : { baseOid }) };
 }
 
 const PR_OPTIONAL: readonly WorkItem['type'][] = ['review', 'research'];
@@ -1385,8 +1440,8 @@ function prHeldNote(cap: Capacity, config: StudioConfig): string {
 /**
  * Opens the pull request of a crew that pushed `studio/<id>` but could not run gh, with the crew
  * token, outside the sandbox. Title and body are crew text: cleaned, cut and passed as data in a
- * file, never on a command line. An open pull request of that branch is taken instead, without
- * asking `capacity`: it starts no new CI. A new one is opened only when `capacity` holds;
+ * file, never on a command line. An open pull request of that branch is taken instead and its
+ * text renewed with `gh pr edit`; both wait for `capacity`. A new one is opened only when `capacity` holds;
  * otherwise nothing is opened and the read that decided comes back as `held`. `unchanged` runs
  * after the capacity wait, right before the create, and throws when the item moved meanwhile.
  */
@@ -1409,26 +1464,60 @@ async function openCrewPr(
     throw new Error(`cannot list pull requests of ${head} (gh exit ${list.code})`);
   const open = JSON.parse(list.stdout || '[]') as { number?: unknown }[];
   const known = open.find((p) => Number.isInteger(p.number))?.number;
-  if (typeof known === 'number') return { pr: known };
+  // Crew text loses control and format characters (bidi overrides, zero-width).
+  const plainTitle = title.replace(/[\p{Cc}\p{Cf}]/gu, '').trim();
+  if (plainTitle === '')
+    throw new Error(`the pull request title for ${head} is empty; nothing moved`);
+  // Studio's own lines come first, so crew text can neither push them out of view nor fake an end.
+  const text = `Opened by Studio for ${item.id}; the text below the line was written by the crew.\n${notRunSection(notRunHere)}\n---\n\n${body.replace(/[^\P{Cc}\n\t]|\p{Cf}/gu, '').slice(0, PR_BODY_MAX)}\n`;
+  const withBody = async <T>(use: (file: string) => Promise<T>): Promise<T> => {
+    const dir = mkdtempSync(join(tmpdir(), 'studio-pr-'));
+    try {
+      const file = join(dir, 'body.md');
+      writeFileSync(file, text, { mode: 0o600 });
+      return await use(file);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  // Opening and editing both wait for CI capacity: an edit can start workflows too.
   const room = await capacity();
   if (!room.ok) return { held: room.capacity };
   unchanged();
-  const text = `${body.replace(/[^\P{Cc}\n\t]/gu, '').slice(0, PR_BODY_MAX)}\n\n---\nOpened by Studio for ${item.id}; the text above was written by the crew.\n${notRunSection(notRunHere)}`;
-  const dir = mkdtempSync(join(tmpdir(), 'studio-pr-'));
-  try {
-    const file = join(dir, 'body.md');
-    writeFileSync(file, text, { mode: 0o600 });
+  if (typeof known === 'number') {
+    // The open pull request gets this report's text, so its not_run_here list is never stale.
+    return withBody(async (file) => {
+      const r = await ports.gh.run(
+        ['pr', 'edit', String(known), '--repo', item.repo, '--body-file', file],
+        { token },
+      );
+      if (r.code !== 0) {
+        throw new Error(`gh pr edit failed for ${head} (exit ${r.code}); nothing moved`);
+      }
+      return { pr: known };
+    });
+  }
+  return withBody(async (file) => {
     const r = await ports.gh.run(
-      ['pr', 'create', '--repo', item.repo, '--head', head, '--title', title, '--body-file', file],
+      [
+        'pr',
+        'create',
+        '--repo',
+        item.repo,
+        '--head',
+        head,
+        '--title',
+        plainTitle,
+        '--body-file',
+        file,
+      ],
       { token },
     );
     const m = /\/pull\/(\d+)\s*$/.exec(r.stdout);
     if (r.code !== 0 || !m)
       throw new Error(`gh pr create failed for ${head} (exit ${r.code}); nothing moved`);
     return { pr: Number(m[1]) };
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 }
 /**
  * The pull request section for commands the crew could not run in its sandbox. Each line is crew
@@ -1498,13 +1587,18 @@ async function boardBlocksMerge(
   const target = `${entry.repo}#${entry.pr}`;
   const open = openReview(root, board, target);
   if (open !== undefined) return openReviewLine(open, target);
-  return approvalProblem(
+  const problem = await approvalProblem(
     ports,
     approvalCheckout(project, config, entry.repo),
     entry,
     { head: item.approvedHead, base: item.approvedBase },
     head,
   );
+  if (problem !== undefined || (item.approvedJobs ?? []).length === 0) return problem;
+  // The jobs the approval named for commands the builder could not run must still have passed.
+  const checks = await readChecks(entry, ports.gh);
+  if (checks.kind !== 'pass') return 'the checks are not green';
+  return approvedJobsProblem(item.approvedJobs ?? [], checks.checks);
 }
 
 /** The owner's checkout tracks the primary repo; another repo is reached by its URL. */

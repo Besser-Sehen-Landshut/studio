@@ -28024,12 +28024,19 @@ var historySchema = external_exports.strictObject({
 });
 var MODEL_NAME_RE2 = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
 var NOT_RUN_SERVICES = ["database", "docker", "network", "service"];
-var plainLine = external_exports.string().min(1).max(300).regex(/^[^\p{Cc}]+$/u, "one line of at most 300 characters");
+var plainLine = external_exports.string().min(1).max(300).regex(/^[^\p{Cc}\p{Cf}]+$/u, "one line of at most 300 characters");
 var notRunHereSchema = external_exports.strictObject({
   command: plainLine,
   missing: external_exports.enum(NOT_RUN_SERVICES),
   reason: plainLine
 });
+var crewLine = external_exports.string().transform((s) => s.replace(new RegExp("\\p{Cf}", "gu"), "")).pipe(plainLine);
+var notRunHereReportSchema = external_exports.strictObject({
+  command: crewLine,
+  missing: external_exports.enum(NOT_RUN_SERVICES),
+  reason: crewLine
+});
+var approvedJobSchema = external_exports.strictObject({ workflow: plainLine, job: plainLine });
 var workItemSchema = external_exports.strictObject({
   id: external_exports.string().regex(/^[A-Z]+-\d+$/, "must match ^[A-Z]+-\\d+$"),
   title: external_exports.string().min(1),
@@ -28053,6 +28060,9 @@ var workItemSchema = external_exports.strictObject({
   approvedHead: external_exports.string().regex(/^[0-9a-f]{40,64}$/i, "not a commit").optional(),
   // The base branch that approval was given for.
   approvedBase: external_exports.string().min(1).optional(),
+  // The CI jobs the approval named for commands the builder could not run; the merge checks them
+  // again.
+  approvedJobs: external_exports.array(approvedJobSchema).max(20).optional(),
   // Set by `collect` from a done report: commands the crew could not run in its sandbox, which CI
   // must cover. Crew text; a reviewer gets it as data.
   notRunHere: external_exports.array(notRunHereSchema).max(20).optional(),
@@ -28157,6 +28167,7 @@ var KEY_ORDER = [
   "branch",
   "approvedHead",
   "approvedBase",
+  "approvedJobs",
   "notRunHere",
   "crew",
   "notes",
@@ -28702,6 +28713,7 @@ var BUILD_TYPES = ["feature", "fix", "chore"];
 var NO_PR_TYPES = ["research"];
 var REVIEWS_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9]\d{0,9}$/;
 var SHA_RE = /^[0-9a-f]{40}$/i;
+var emptyList = (list2) => list2.nullish().transform((v) => v ?? []);
 var reportSchema = external_exports.object({
   status: external_exports.enum(["done", "blocked", "failed"]),
   item: external_exports.string().optional(),
@@ -28720,9 +28732,14 @@ var reportSchema = external_exports.object({
   mutationProbe: external_exports.string().regex(/^(red: .{1,300}|green: .{1,300}|skipped: .{1,300})$/).nullish(),
   findingAttempts: external_exports.number().int().nonnegative().nullish(),
   // Commands the sandbox cannot run for lack of a service; CI is the authority for them.
-  notRunHere: external_exports.array(notRunHereSchema).max(20).default([]),
-  lessons: external_exports.array(external_exports.string()).default([]),
-  questions: external_exports.array(external_exports.string()).default([])
+  // An empty YAML value (`key:` alone) is null: it reads as the empty list.
+  notRunHere: emptyList(external_exports.array(notRunHereReportSchema).max(20)),
+  // A reviewer's answer for each such command: the base workflow and the job whose check runs it.
+  notRunHereJobs: emptyList(
+    external_exports.array(external_exports.strictObject({ command: crewLine, workflow: crewLine, job: crewLine })).max(20)
+  ),
+  lessons: emptyList(external_exports.array(external_exports.string())),
+  questions: emptyList(external_exports.array(external_exports.string()))
 });
 var camel3 = (key) => key.replace(/_([a-z0-9])/g, (_, c3) => c3.toUpperCase());
 function parseReport(text, item) {
@@ -28778,6 +28795,7 @@ function parseReport(text, item) {
     ...d.mutationProbe != null && { mutationProbe: d.mutationProbe },
     ...d.findingAttempts != null && { findingAttempts: d.findingAttempts },
     notRunHere: d.notRunHere,
+    notRunHereJobs: d.notRunHereJobs,
     lessons: d.lessons,
     questions: d.questions
   };
@@ -31253,6 +31271,134 @@ async function capacityHoldsTwice(config2, ports, options = {}) {
   return (await readCapacityTwice(config2, ports, options)).ok;
 }
 
+// src/ci-jobs.ts
+var import_yaml7 = __toESM(require_dist(), 1);
+var GIT_FETCH_MS = 12e4;
+var GIT_LOCAL_MS = 6e4;
+var WORKFLOWS_DIR = ".github/workflows/";
+var WORKFLOW_FILE = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/;
+var SHA = /^[0-9a-f]{40,64}$/i;
+var instances = (checks, workflow, job) => checks.filter(
+  (c3) => c3.workflow !== void 0 && c3.workflow === workflow && (c3.name === job || c3.name.startsWith(`${job} (`) && c3.name.endsWith(")"))
+);
+var jobPassed = (checks, workflow, job) => {
+  const mine = instances(checks, workflow, job);
+  return mine.length > 0 && mine.every((c3) => c3.bucket === "pass");
+};
+function runsOnPullRequest(on6) {
+  if (on6 === "pull_request") return true;
+  if (Array.isArray(on6)) return on6.includes("pull_request");
+  return on6 !== null && typeof on6 === "object" && "pull_request" in on6;
+}
+function readWorkflow(text, path10) {
+  let doc;
+  try {
+    doc = (0, import_yaml7.parse)(text);
+  } catch {
+    return void 0;
+  }
+  if (doc === null || typeof doc !== "object") return void 0;
+  const wf = doc;
+  const name = typeof wf.name === "string" && wf.name.trim() !== "" ? wf.name : path10;
+  const jobs = wf.jobs !== null && typeof wf.jobs === "object" ? Object.entries(wf.jobs) : [];
+  return { name, jobs, onPullRequest: runsOnPullRequest(wf.on) };
+}
+function jobProblem(wf, job, command) {
+  const found = wf.jobs.find(([id, j]) => {
+    const name = j?.name;
+    return (typeof name === "string" ? name : id) === job;
+  })?.[1];
+  if (found === void 0 || found === null || typeof found !== "object") {
+    return "the job is not in the workflow";
+  }
+  if ("uses" in found) return "the job calls a reusable workflow, which the gate cannot follow";
+  if ("if" in found || "continue-on-error" in found) {
+    return "the job has an if or continue-on-error";
+  }
+  const cmd = command.trim();
+  const runs = (Array.isArray(found.steps) ? found.steps : []).filter(
+    (s) => s !== null && typeof s === "object" && !("if" in s) && !("continue-on-error" in s)
+  ).map((s) => s.run).filter((r) => typeof r === "string");
+  const starts = (line) => line === cmd || line.startsWith(cmd) && /[\s;&|]/.test(line[cmd.length]);
+  if (!runs.some((r) => r.split("\n").some((l) => starts(l.trim())))) {
+    return "no run step of the job starts a line with the command";
+  }
+  return void 0;
+}
+async function verifyNotRunHereJobs(o2) {
+  const g = (args, timeoutMs) => o2.git.run(o2.checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
+  const read3 = async (oid, path10) => {
+    try {
+      return readWorkflow(await g(["cat-file", "blob", `${oid}:${path10}`], GIT_LOCAL_MS), path10);
+    } catch {
+      return void 0;
+    }
+  };
+  let fetched;
+  const jobs = [];
+  for (const [i2, command] of o2.commands.entries()) {
+    const fail2 = (why) => ({ ok: false, entry: i2 + 1, why });
+    const named = o2.entries.find((e) => e.command.trim() === command.trim());
+    if (named === void 0) return fail2("no CI job named for it");
+    const base = o2.baseOid;
+    if (base === void 0 || !SHA.test(base) || !SHA.test(o2.headOid)) {
+      return fail2("the base commit is unknown");
+    }
+    if (!WORKFLOW_FILE.test(named.workflow)) {
+      return fail2("the workflow is no file in .github/workflows");
+    }
+    if (fetched === void 0) {
+      try {
+        await g(
+          ["fetch", "--no-tags", "--no-write-fetch-head", o2.checkout.remote, base, o2.headOid],
+          GIT_FETCH_MS
+        );
+        fetched = true;
+      } catch {
+        fetched = false;
+      }
+    }
+    if (!fetched) return fail2("the base commit cannot be fetched");
+    const at = async (oid, where) => {
+      const w = await read3(oid, named.workflow);
+      if (w === void 0) return `the workflow is not at ${where} or not valid YAML`;
+      if (!w.onPullRequest) return `the workflow does not run on pull_request at ${where}`;
+      let others;
+      try {
+        others = (await g(["ls-tree", "--name-only", "-z", oid, WORKFLOWS_DIR], GIT_LOCAL_MS)).split("\0").filter((p) => p !== "" && p !== named.workflow && WORKFLOW_FILE.test(p));
+      } catch {
+        return `the workflows at ${where} cannot be listed`;
+      }
+      for (const other of others) {
+        const x = await read3(oid, other);
+        if (x === void 0 || x.name === w.name)
+          return `the workflow name is not unique at ${where}`;
+      }
+      const problem = jobProblem(w, named.job, command);
+      return problem === void 0 ? w : `${problem} at ${where}`;
+    };
+    const wf = await at(base, "the base");
+    if (typeof wf === "string") return fail2(wf);
+    const head = await at(o2.headOid, "the pull request head");
+    if (typeof head === "string") return fail2(head);
+    if (head.name !== wf.name)
+      return fail2("the workflow has another name at the pull request head");
+    if (!jobPassed(o2.checks, wf.name, named.job)) {
+      return fail2("the job has no passing check on the pull request (missing or skipped)");
+    }
+    jobs.push({ workflow: wf.name, job: named.job });
+  }
+  return { ok: true, jobs };
+}
+function approvedJobsProblem(jobs, checks) {
+  for (const [i2, j] of jobs.entries()) {
+    if (!jobPassed(checks, j.workflow, j.job)) {
+      return `approved CI job ${i2 + 1} has no passing check on the pull request now: review it again`;
+    }
+  }
+  return void 0;
+}
+
 // src/crew.ts
 import {
   chmodSync as chmodSync5,
@@ -31284,6 +31430,7 @@ var GH_TIMEOUT_MS = 6e4;
 var prSchema = external_exports.object({
   headRefOid: external_exports.string().regex(/^[0-9a-f]{40,64}$/i),
   baseRefName: external_exports.string().min(1),
+  baseRefOid: external_exports.string().regex(/^[0-9a-f]{40,64}$/i).optional(),
   title: external_exports.string().default(""),
   body: external_exports.string().nullish(),
   isCrossRepository: external_exports.boolean(),
@@ -31306,18 +31453,28 @@ async function readPrFacts(ports, target) {
         "--repo",
         target.repo,
         "--json",
-        "files,changedFiles,headRefOid,baseRefName,isCrossRepository,title,body"
+        "files,changedFiles,headRefOid,baseRefName,baseRefOid,isCrossRepository,title,body"
       ],
       { timeoutMs: GH_TIMEOUT_MS }
     );
     if (r.code !== 0) return void 0;
     const parsed = prSchema.safeParse(JSON.parse(r.stdout));
     if (!parsed.success) return void 0;
-    const { files, changedFiles, headRefOid, baseRefName, isCrossRepository, title, body } = parsed.data;
+    const {
+      files,
+      changedFiles,
+      headRefOid,
+      baseRefName,
+      baseRefOid,
+      isCrossRepository,
+      title,
+      body
+    } = parsed.data;
     return {
       files: files.map((f) => f.path),
       lines: files.filter((f) => !f.path.toLowerCase().endsWith(".md")).reduce((sum, f) => sum + f.additions + f.deletions, 0),
       complete: files.length >= changedFiles,
+      ...baseRefOid === void 0 ? {} : { baseOid: baseRefOid },
       head: headRefOid,
       base: baseRefName,
       title,
@@ -31390,6 +31547,8 @@ function renderReviewRoutine(r) {
     "",
     ...r.pr === void 0 ? [] : [
       `Load the base and the pull request first, staying on your branch: \`git fetch origin ${r.base}\`, \`git fetch origin pull/${r.pr}/head\`, then \`git reset --hard FETCH_HEAD\`. The diff is \`git diff origin/${r.base}...HEAD\`; save it to an untracked file in the checkout.`,
+      "",
+      `Read CI workflows at the base, never the checkout's copy, which the pull request can change: \`git ls-tree --name-only origin/${r.base} .github/workflows/\` and \`git show origin/${r.base}:.github/workflows/<file>\`. ${r.ciItem === true ? "This item is a CI item: it may change what its paths and touches name below `.github/`; review those changes like code. Any other change under `.github/` blocks the approval." : "A change under `.github/` (workflows, actions) in this pull request is a finding that blocks the approval: this item is no CI item."}`,
       ""
     ],
     ...r.pullRequest === void 0 ? [] : [
@@ -31397,7 +31556,7 @@ function renderReviewRoutine(r) {
       ""
     ],
     ...r.notRunHere === void 0 ? [] : [
-      `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: check in the checkout's CI workflows that one does, and report a command no workflow runs as a finding. An approval counts only with green checks.`,
+      `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: for each command, find the workflow at the base and the job in it that runs the command, and list it in \`not_run_here_jobs\` with the command as listed, the workflow file path at the base (\`.github/workflows/<file>\`) and the job's \`name:\`, or its id when it has none${r.pullRequest === void 0 ? "" : ` (the check names are in \`${r.pullRequest.checks}\`)`}. A command no base workflow runs is a finding. Studio checks at the base, and at the head when the pull request changes that file, that the job is in it with no \`if:\`, no \`continue-on-error\` and no reusable workflow (\`uses:\`), that a \`run:\` step without \`if:\` starts a line with the whole command, and that the workflow name is unique; it refuses an approval unless every check of that job (each matrix leg \`<job> (<leg>)\`) passed on this pull request.`,
       ""
     ],
     `Run each analyzer below as one subagent with the model named there, read-only except for the spec check's probe; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,
@@ -31427,7 +31586,11 @@ var crewCapsSchema = external_exports.strictObject({
   /** When this launch began, written before any earlier approval is cleared. */
   startedAt: external_exports.string().optional(),
   /** Ids launch could not provide, for the lead: they never count as a pass. */
-  skipped: external_exports.array(external_exports.string()).optional()
+  skipped: external_exports.array(external_exports.string()).optional(),
+  /** Commands the builder could not run; an approval names the CI job for each. */
+  notRunHere: external_exports.array(external_exports.string()).optional(),
+  /** The pull request changes `.github/` (or that could not be read) and its item is no CI item. */
+  workflowChange: external_exports.literal(true).optional()
 });
 var capsFile = (stateRoot, id) => join11(stateRoot, "briefs", `${id}.caps.json`);
 function readCrewCaps(stateRoot, id) {
@@ -31508,11 +31671,17 @@ function checkReviewCaps(caps, report) {
   if (report.mutationProbe?.startsWith("green:")) {
     throw new Error("approval with a mutation probe that stayed green: the test cannot fail");
   }
-  return { skipped, target };
+  if (caps.workflowChange === true) {
+    throw new Error(
+      "the pull request changes .github/ (or its change list could not be shown complete) and its item is no CI item: no approval, nothing moved"
+    );
+  }
+  const notRunHere = caps.notRunHere ?? [];
+  return { skipped, target, ...notRunHere.length === 0 ? {} : { notRunHere } };
 }
 
 // src/sources.ts
-var import_yaml7 = __toESM(require_dist(), 1);
+var import_yaml8 = __toESM(require_dist(), 1);
 import { createHash as createHash2 } from "node:crypto";
 import { lstatSync as lstatSync9, readdirSync as readdirSync5, readFileSync as readFileSync13, renameSync as renameSync7 } from "node:fs";
 import { join as join12 } from "node:path";
@@ -31555,7 +31724,7 @@ function loadSources(dir = capabilitiesDir()) {
   const file2 = join12(dir, "SOURCES.yaml");
   let raw;
   try {
-    raw = (0, import_yaml7.parse)(readFileSync13(file2, "utf8"));
+    raw = (0, import_yaml8.parse)(readFileSync13(file2, "utf8"));
   } catch (e) {
     throw new SourcesError(`${file2}: cannot read (${e.message.split("\n")[0]})`);
   }
@@ -31829,6 +31998,35 @@ function resolveModel(item, role) {
   return item.model ?? role.types?.[item.type] ?? role.model;
 }
 var concrete = (globs) => globs.map((g) => g.replace(/\*+|\?/g, "x"));
+var isGithubPath = (p) => {
+  const lower = p.toLowerCase();
+  return lower === ".github" || lower.startsWith(".github/");
+};
+var isCiItem = (i2) => [...i2.paths, ...i2.touches].some(isGithubPath);
+var GIT_FETCH_MS2 = 12e4;
+var GIT_LOCAL_MS2 = 6e4;
+async function changesGithub(ports, checkout, base, head, allowed) {
+  const g = (args, timeoutMs) => ports.git.run(checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
+  try {
+    await g(
+      ["fetch", "--no-tags", "--no-write-fetch-head", checkout.remote, head, base],
+      GIT_FETCH_MS2
+    );
+    const diff = await g(
+      ["diff", "--name-only", "--no-renames", "-z", `${base}...${head}`],
+      GIT_LOCAL_MS2
+    );
+    const outside = (p) => isGithubPath(p) && !(p.startsWith(".github/") && allowed.some((glob) => globProblem(glob) === void 0 && matchGlob(glob, p)));
+    if (diff.split("\0").some((p) => p !== "" && outside(p))) return true;
+    const tree = await g(["ls-tree", "-r", "-z", "--full-tree", head], GIT_LOCAL_MS2);
+    return tree.split("\0").some((line) => {
+      const tab = line.indexOf("	");
+      return tab > 0 && line.startsWith("120000 ") && isGithubPath(line.slice(tab + 1));
+    });
+  } catch {
+    return void 0;
+  }
+}
 async function resolveForItem(o2) {
   const { item, config: config2 } = o2;
   if (item.type === "review" !== (item.role === "reviewer")) {
@@ -31882,10 +32080,14 @@ async function resolveForItem(o2) {
     }
   }
   let notRunHere;
+  let ciItem = false;
+  let ciGlobs = [];
   if (target !== void 0) {
     const name2 = `${target.repo}#${target.pr}`;
     const holder = o2.readBoard().items.find((i2) => i2.type !== "review" && i2.repo === target.repo && i2.pr === target.pr);
     notRunHere = holder?.notRunHere;
+    ciItem = holder !== void 0 && isCiItem(holder);
+    ciGlobs = holder === void 0 ? [] : [...holder.paths, ...holder.touches].filter(isGithubPath);
     if (!holder) {
       throw new Error(
         `${item.id}: no board item holds ${name2}; tie it to its item with studio link <id> ${name2}`
@@ -31893,6 +32095,10 @@ async function resolveForItem(o2) {
     }
   }
   const checks = target === void 0 ? void 0 : await readCheckLines(o2.ports, target);
+  let workflowChange = false;
+  if (target !== void 0 && facts !== void 0) {
+    workflowChange = o2.checkout === void 0 || facts.baseOid === void 0 ? true : await changesGithub(o2.ports, o2.checkout, facts.baseOid, facts.head, ciGlobs) ?? true;
+  }
   const paths = facts?.complete ? [...facts.files, ...declared] : "unknown";
   const name = target === void 0 ? void 0 : `${target.repo}#${target.pr}`;
   let round;
@@ -31930,7 +32136,9 @@ async function resolveForItem(o2) {
           ...checks === void 0 ? {} : { checks }
         }
       },
-      ...notRunHere === void 0 || notRunHere.length === 0 ? {} : { notRunHere }
+      ...notRunHere === void 0 || notRunHere.length === 0 ? {} : { notRunHere },
+      ...target === void 0 ? {} : { ciItem },
+      ...workflowChange ? { workflowChange: true } : {}
     }
   };
 }
@@ -32117,7 +32325,8 @@ ${clean3(p.body, 2e4)}
 ${review.notRunHere.map((x) => clean3(`${x.command} (missing ${x.missing}: ${x.reason})`, 700)).join("\n")}
 `
         )
-      }
+      },
+      ...review.ciItem === void 0 ? {} : { ciItem: review.ciItem }
     };
     const ids = analyzers.map((a2) => a2.id);
     const caps = {
@@ -32128,7 +32337,9 @@ ${review.notRunHere.map((x) => clean3(`${x.command} (missing ${x.missing}: ${x.r
       ...review.head === void 0 ? {} : { headRefOid: review.head },
       ...review.base === void 0 ? {} : { baseRefName: review.base },
       ...o2.startedAt === void 0 ? {} : { startedAt: o2.startedAt },
-      ...skipped.length === 0 ? {} : { skipped: skipped.map((x) => x.id) }
+      ...skipped.length === 0 ? {} : { skipped: skipped.map((x) => x.id) },
+      ...review.notRunHere === void 0 ? {} : { notRunHere: review.notRunHere.map((x) => x.command) },
+      ...review.workflowChange === true ? { workflowChange: true } : {}
     };
     writeStateFile(stateRoot, capsFile(stateRoot, id), `${JSON.stringify(caps, null, 2)}
 `);
@@ -32157,8 +32368,38 @@ var DEFAULT_SECRET_GLOBS = [
   "**/.netrc",
   "**/credentials*"
 ];
-var GH_VALUE_FLAGS = ["-R", "--repo", "--hostname"];
-var GH_RUN_VALUE_FLAGS = ["--ref", "-r", "-f", "--raw-field", "-F", "--field", ...GH_VALUE_FLAGS];
+var FETCH_FLAGS = /* @__PURE__ */ new Set([
+  "-q",
+  "--quiet",
+  "-v",
+  "--verbose",
+  "-p",
+  "--prune",
+  "-t",
+  "--tags",
+  "--no-tags",
+  "--dry-run",
+  "--unshallow",
+  "--progress",
+  "--no-progress"
+]);
+var PULL_FLAGS = /* @__PURE__ */ new Set([
+  ...FETCH_FLAGS,
+  "-r",
+  "--rebase",
+  "--rebase=true",
+  "--rebase=false",
+  "--rebase=merges",
+  "--no-rebase",
+  "--ff",
+  "--no-ff",
+  "--ff-only",
+  "--autostash",
+  "--no-autostash",
+  "--no-edit",
+  "--stat",
+  "--no-stat"
+]);
 
 // src/owner-state.ts
 import { lstatSync as lstatSync11, renameSync as renameSync8 } from "node:fs";
@@ -32558,6 +32799,7 @@ function assertItemId(id) {
   if (!ITEM_ID_RE.test(id)) throw new Error(`invalid item id: ${JSON.stringify(id)}`);
 }
 var GITHUB_REPO_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
+var ITEM_BASE = "main";
 function githubHttpsUrl(repo) {
   const name = repo.split("/")[1];
   if (!GITHUB_REPO_RE.test(repo) || name === "." || name === "..") {
@@ -32587,7 +32829,7 @@ async function prepareCheckout(stateRoot, projectDir, item, ports) {
   await ports.git.run(clones, ["clone", "--filter=blob:none", url2, path10]);
   chmodSync5(path10, 448);
   await ports.git.run(path10, ["remote", "set-url", "origin", crewOrigin]);
-  await ports.git.run(path10, ["checkout", "-b", branch, "origin/main"]);
+  await ports.git.run(path10, ["checkout", "-b", branch, `origin/${ITEM_BASE}`]);
   return { path: path10, branch };
 }
 function isReusableClone(path10, item) {
@@ -32850,7 +33092,8 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
       ...caps.review.pr === void 0 ? {} : { pr: caps.review.pr },
       ...caps.review.base === void 0 ? {} : { base: caps.review.base },
       ...caps.review.pullRequest === void 0 ? {} : { pullRequest: caps.review.pullRequest },
-      ...caps.review.notRunHere === void 0 ? {} : { notRunHere: caps.review.notRunHere }
+      ...caps.review.notRunHere === void 0 ? {} : { notRunHere: caps.review.notRunHere },
+      ...caps.review.ciItem === void 0 ? {} : { ciItem: caps.review.ciItem }
     }),
     "## Working rules",
     "",
@@ -32866,7 +33109,7 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
       ...caps.prByStudio === true ? [
         `- Do not open the pull request, and do not run gh at all: it cannot verify TLS in this sandbox. Give \`pr_title: "${id}: <summary>"\` in the report and write the pull request text as the report body; Studio opens the pull request from your pushed branch.`
       ] : [
-        `- Open the pull request with \`gh pr create --head studio/${id} --title "${id}: <summary>" --body-file <file>\`. If the report lists not_run_here commands, the pull request text lists them too.`
+        `- Open the pull request with exactly this form, which is the only one the guard allows: \`gh pr create --head studio/${id} --base ${ITEM_BASE} --title "${id}: <summary>" --body-file <file>\`, with <file> a relative path inside the checkout. If the report lists not_run_here commands, the pull request text lists them too.`
       ]
     ] : [],
     "- Git identity and GitHub authentication are preconfigured; do not change git config or log in.",
@@ -32891,7 +33134,8 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
       "head_sha: <40-hex sha of the pull request head you reviewed>",
       'analyzers: { <id>: pass|findings|"skipped: <reason>" }',
       'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"',
-      "finding_attempts: <highest number of attempts on one finding>"
+      "finding_attempts: <highest number of attempts on one finding>",
+      "not_run_here_jobs: []   # or entries { command: <command as listed>, workflow: <workflow file at the base>, job: <check name> }"
     ] : item.type === "research" ? [] : [
       caps.prByStudio === true ? `pr_title: "${id}: <summary, one line, at most 200 characters>"` : "pr: <number>",
       "head_sha: <40-hex sha of the pushed head commit>",
@@ -33003,7 +33247,9 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
     ],
     crewAllowedWorkflows: config2.crewAllowedWorkflows,
     crewAllowedWorkflowRefs: config2.crewAllowedWorkflowRefs,
-    protectedPaths
+    protectedPaths,
+    item: id,
+    base: ITEM_BASE
   };
   writeStateFile(stateRoot, ctxFile, `${JSON.stringify(ctx, null, 2)}
 `);
@@ -33263,7 +33509,11 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     config: config2,
     ports,
     readBoard: () => loadBoard(projectDir),
-    ...launcher.capabilitiesDir === void 0 ? {} : { dir: launcher.capabilitiesDir }
+    ...launcher.capabilitiesDir === void 0 ? {} : { dir: launcher.capabilitiesDir },
+    checkout: {
+      dir: projectDir,
+      remote: item.repo === config2.primaryRepo ? "origin" : githubHttpsUrl(item.repo)
+    }
   });
   readRoleMemory(projectDir, item.role);
   const missingSkill = firstMissingSkill(claudeConfigDir, [
@@ -33401,7 +33651,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
         ...board,
         items: board.items.map((i2) => {
           if (`${i2.repo}#${i2.pr}` !== reviewing || i2.type === "review") return i2;
-          const { approvedHead: _head, approvedBase: _base, ...rest } = i2;
+          const { approvedHead: _head, approvedBase: _base, approvedJobs: _jobs, ...rest } = i2;
           return rest;
         })
       });
@@ -34006,7 +34256,7 @@ function appendStateLine(stateRoot, name, line) {
   }
 }
 var BUCKETS = /* @__PURE__ */ new Set(["pass", "fail", "pending", "skipping", "cancel"]);
-var SHA = /^[0-9a-f]{40,64}$/;
+var SHA2 = /^[0-9a-f]{40,64}$/;
 function parseChecks(stdout) {
   let raw;
   try {
@@ -34018,14 +34268,26 @@ function parseChecks(stdout) {
   const out = [];
   for (const c3 of raw) {
     if (typeof c3 !== "object" || c3 === null) return void 0;
-    const { name, bucket } = c3;
+    const { name, bucket, workflow } = c3;
     if (typeof name !== "string" || typeof bucket !== "string") return void 0;
-    out.push({ name, bucket });
+    out.push({
+      name,
+      bucket,
+      ...typeof workflow === "string" && workflow !== "" ? { workflow } : {}
+    });
   }
   return out;
 }
 async function readChecks(entry, gh) {
-  const base = ["pr", "checks", String(entry.pr), "--repo", entry.repo, "--json", "name,bucket"];
+  const base = [
+    "pr",
+    "checks",
+    String(entry.pr),
+    "--repo",
+    entry.repo,
+    "--json",
+    "name,bucket,workflow"
+  ];
   const all = await gh.run(base);
   const checks = parseChecks(all.stdout);
   if (checks === void 0) {
@@ -34064,17 +34326,17 @@ async function readChecks(entry, gh) {
   if (evaluated.some((c3) => c3.bucket === "pending")) return { kind: "pending" };
   if (!evaluated.some((c3) => c3.bucket === "pass"))
     return { kind: "failed", reason: "no check passed" };
-  return { kind: "pass" };
+  return { kind: "pass", checks: evaluated };
 }
-var GIT_FETCH_MS = 12e4;
-var GIT_LOCAL_MS = 6e4;
+var GIT_FETCH_MS3 = 12e4;
+var GIT_LOCAL_MS3 = 6e4;
 async function isBranchUpdate({ gh, git }, checkout, target, approved, head) {
   try {
     const c3 = await gh.run(["api", `repos/${target.repo}/commits/${head}`]);
     if (c3.code !== 0) return false;
     const commit = JSON.parse(c3.stdout);
     const [first, second, ...rest] = commit.parents ?? [];
-    if (typeof first?.sha !== "string" || first.sha.toLowerCase() !== approved.head.toLowerCase() || typeof second?.sha !== "string" || !SHA.test(second.sha) || rest.length > 0 || commit.committer?.login !== "web-flow" || commit.commit?.verification?.verified !== true) {
+    if (typeof first?.sha !== "string" || first.sha.toLowerCase() !== approved.head.toLowerCase() || typeof second?.sha !== "string" || !SHA2.test(second.sha) || rest.length > 0 || commit.committer?.login !== "web-flow" || commit.commit?.verification?.verified !== true) {
       return false;
     }
     const base = approved.base.split("/").map(encodeURIComponent).join("/");
@@ -34091,19 +34353,19 @@ async function sameTreeAsMerge(git, checkout, first, second, head) {
   const g = (args, timeoutMs) => git.run(checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
   const said = (e) => e.message.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
   try {
-    await g(["fetch", "--no-tags", "--no-write-fetch-head", checkout.remote, head], GIT_FETCH_MS);
+    await g(["fetch", "--no-tags", "--no-write-fetch-head", checkout.remote, head], GIT_FETCH_MS3);
   } catch (e) {
     return `cannot fetch ${head} to compare its tree: ${said(e)}`;
   }
   let merged;
   try {
-    merged = await g(["merge-tree", "--write-tree", first, second], GIT_LOCAL_MS);
+    merged = await g(["merge-tree", "--write-tree", first, second], GIT_LOCAL_MS3);
   } catch (e) {
     if (/failed \(1\):/.test(e.message)) return false;
     return `git merge-tree failed; git 2.38 or newer is needed (see studio doctor): ${said(e)}`;
   }
   try {
-    const tree = await g(["rev-parse", "--verify", `${head}^{tree}`], GIT_LOCAL_MS);
+    const tree = await g(["rev-parse", "--verify", `${head}^{tree}`], GIT_LOCAL_MS3);
     return merged.trim() !== "" && merged.trim() === tree.trim();
   } catch (e) {
     return `cannot read the tree of ${head}: ${said(e)}`;
@@ -34162,7 +34424,7 @@ async function viewPr(entry, gh) {
     return "gh pr view returned unparsable output";
   }
   const { headRefOid, state, mergeable } = raw ?? {};
-  if (typeof headRefOid !== "string" || !SHA.test(headRefOid)) {
+  if (typeof headRefOid !== "string" || !SHA2.test(headRefOid)) {
     return "gh pr view returned no valid head SHA";
   }
   if (state !== "OPEN" && state !== "MERGED" && state !== "CLOSED") {
@@ -34188,7 +34450,7 @@ async function mergeShaOf(entry, gh) {
   try {
     const parsed = JSON.parse(r.stdout);
     const oid = parsed?.mergeCommit?.oid;
-    return typeof oid === "string" && SHA.test(oid) ? oid : void 0;
+    return typeof oid === "string" && SHA2.test(oid) ? oid : void 0;
   } catch {
     return void 0;
   }
@@ -34403,7 +34665,7 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
 }
 
 // src/secret-command.ts
-var import_yaml8 = __toESM(require_dist(), 1);
+var import_yaml9 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync22, realpathSync as realpathSync5, statSync as statSync3 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { join as join22 } from "node:path";
@@ -34411,7 +34673,7 @@ function readPrimaryRepo(project) {
   const file2 = join22(project, ".studio", "studio.yaml");
   let raw;
   try {
-    raw = (0, import_yaml8.parse)(readFileSync22(file2, "utf8"));
+    raw = (0, import_yaml9.parse)(readFileSync22(file2, "utf8"));
   } catch {
     throw new Error("cannot read .studio/studio.yaml");
   }
@@ -34639,7 +34901,7 @@ async function runDoctor(o2) {
 }
 
 // src/stack.ts
-var import_yaml9 = __toESM(require_dist(), 1);
+var import_yaml10 = __toESM(require_dist(), 1);
 import { lstatSync as lstatSync18, readdirSync as readdirSync8, readFileSync as readFileSync23 } from "node:fs";
 import { join as join23 } from "node:path";
 var MAX_FILE_BYTES2 = 1024 * 1024;
@@ -34777,7 +35039,7 @@ function runSetupStack(o2) {
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
     );
   }
-  const doc = (0, import_yaml9.parseDocument)(text);
+  const doc = (0, import_yaml10.parseDocument)(text);
   if (doc.errors.length > 0) throw new Error(".studio/studio.yaml is not valid YAML");
   const { stacks, notes } = detectStacks(o2.project);
   let stored = [];
@@ -35149,7 +35411,8 @@ async function runCli(argv, deps) {
           throw new Error(`no report name was drawn for ${item.id}: relaunch it, nothing moved`);
         }
         let report = readReport(clone2, item.id, item, { notBefore, fileName });
-        const reviewDone = item.type === "review" && report.status === "done" ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report) : { skipped: [], target: void 0 };
+        const reviewDone = item.type === "review" && report.status === "done" ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report) : { skipped: [], target: void 0, notRunHere: void 0 };
+        let approvedJobs = [];
         if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0) {
           const m = /^(.+)#(\d+)$/.exec(reviewDone.target);
           const info = await prInfo(ports, m[1], Number(m[2]));
@@ -35161,6 +35424,37 @@ async function runCli(argv, deps) {
               throw new Error(
                 `the approval counts only with green checks (${why}); collect again once they pass, nothing moved`
               );
+            }
+            if (reviewDone.notRunHere !== void 0) {
+              const config2 = loadConfig(project);
+              const gate = await verifyNotRunHereJobs({
+                git: ports.git,
+                checkout: approvalCheckout(project, config2, m[1]),
+                baseOid: info.baseOid,
+                headOid: info.head,
+                commands: reviewDone.notRunHere,
+                entries: report.notRunHereJobs,
+                checks: checks.checks
+              });
+              if (!gate.ok) {
+                const note = `approval refused: not_run_here entry ${gate.entry}: ${gate.why}`;
+                await withBoardLock(stateRoot(), ports.clock.now(), () => {
+                  const fresh = loadBoard(project);
+                  if (findItem(fresh, item.id).status !== item.status) {
+                    throw new Error(`${item.id} changed while it was collected; nothing moved`);
+                  }
+                  let next2 = transition(fresh, item.id, "blocked", BY, ports.clock.now());
+                  next2 = withItem(next2, item.id, (i2) => ({
+                    ...i2,
+                    notes: [...i2.notes ?? [], note]
+                  }));
+                  saveBoard(project, next2);
+                });
+                stderr(`${item.id}: ${note}; no approval, ${item.id} is blocked for the lead
+`);
+                return 1;
+              }
+              approvedJobs = gate.jobs;
             }
           }
         }
@@ -35281,7 +35575,12 @@ async function runCli(argv, deps) {
               next2 = withItem(
                 next2,
                 reviewed.id,
-                ({ approvedHead: _h, approvedBase: _b, ...i2 }) => report.verdict === "approve" ? { ...i2, approvedHead: report.headSha, approvedBase } : i2
+                ({ approvedHead: _h, approvedBase: _b, approvedJobs: _j, ...i2 }) => report.verdict === "approve" ? {
+                  ...i2,
+                  approvedHead: report.headSha,
+                  approvedBase,
+                  ...approvedJobs.length === 0 ? {} : { approvedJobs }
+                } : i2
               );
             }
           }
@@ -35327,8 +35626,14 @@ async function runCli(argv, deps) {
           ...supersededBy === void 0 ? {} : { supersededBy },
           ...fixLimit ? { fixLimit } : {},
           ...lessonsProposed > 0 ? { lessonsProposed } : {},
-          // Crew text, cleaned: what CI must run because the sandbox could not.
-          ...report.status === "done" && report.notRunHere.length > 0 ? { notRunHere: report.notRunHere.map((x) => `${x.command} (missing ${x.missing})`) } : {}
+          // What CI must run because the sandbox could not: only the count and the services, which
+          // the schema fixes; the commands are crew text and stay on the item and in the PR body.
+          ...report.status === "done" && report.notRunHere.length > 0 ? {
+            notRunHere: {
+              count: report.notRunHere.length,
+              missing: [...new Set(report.notRunHere.map((x) => x.missing))]
+            }
+          } : {}
         });
         return 0;
       }
@@ -35874,7 +36179,7 @@ async function prInfo(ports, repo, pr) {
     "--repo",
     repo,
     "--json",
-    "headRefOid,headRefName,headRepository,headRepositoryOwner,isCrossRepository"
+    "headRefOid,headRefName,headRepository,headRepositoryOwner,isCrossRepository,baseRefOid"
   ]);
   if (r.code !== 0) throw new Error(`cannot read ${repo}#${pr} (gh exit ${r.code})`);
   let raw;
@@ -35892,7 +36197,8 @@ async function prInfo(ports, repo, pr) {
   if (raw?.isCrossRepository !== false || headRepo.toLowerCase() !== repo.toLowerCase()) {
     throw new Error(`PR ${repo}#${pr} does not come from a branch of ${repo}`);
   }
-  return { head, branch };
+  const baseOid = typeof raw?.baseRefOid === "string" && /^[0-9a-f]{40,64}$/i.test(raw.baseRefOid) ? raw.baseRefOid : void 0;
+  return { head, branch, ...baseOid === void 0 ? {} : { baseOid } };
 }
 var PR_OPTIONAL = ["review", "research"];
 var PR_BODY_MAX = 2e4;
@@ -35925,30 +36231,61 @@ async function openCrewPr(ports, item, title, body, notRunHere, token, capacity,
     throw new Error(`cannot list pull requests of ${head} (gh exit ${list2.code})`);
   const open2 = JSON.parse(list2.stdout || "[]");
   const known = open2.find((p) => Number.isInteger(p.number))?.number;
-  if (typeof known === "number") return { pr: known };
+  const plainTitle = title.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
+  if (plainTitle === "")
+    throw new Error(`the pull request title for ${head} is empty; nothing moved`);
+  const text = `Opened by Studio for ${item.id}; the text below the line was written by the crew.
+${notRunSection(notRunHere)}
+---
+
+${body.replace(new RegExp("[^\\P{Cc}\\n\\t]|\\p{Cf}", "gu"), "").slice(0, PR_BODY_MAX)}
+`;
+  const withBody = async (use) => {
+    const dir = mkdtempSync(join24(tmpdir(), "studio-pr-"));
+    try {
+      const file2 = join24(dir, "body.md");
+      writeFileSync9(file2, text, { mode: 384 });
+      return await use(file2);
+    } finally {
+      rmSync5(dir, { recursive: true, force: true });
+    }
+  };
   const room = await capacity();
   if (!room.ok) return { held: room.capacity };
   unchanged();
-  const text = `${body.replace(/[^\P{Cc}\n\t]/gu, "").slice(0, PR_BODY_MAX)}
-
----
-Opened by Studio for ${item.id}; the text above was written by the crew.
-${notRunSection(notRunHere)}`;
-  const dir = mkdtempSync(join24(tmpdir(), "studio-pr-"));
-  try {
-    const file2 = join24(dir, "body.md");
-    writeFileSync9(file2, text, { mode: 384 });
+  if (typeof known === "number") {
+    return withBody(async (file2) => {
+      const r = await ports.gh.run(
+        ["pr", "edit", String(known), "--repo", item.repo, "--body-file", file2],
+        { token }
+      );
+      if (r.code !== 0) {
+        throw new Error(`gh pr edit failed for ${head} (exit ${r.code}); nothing moved`);
+      }
+      return { pr: known };
+    });
+  }
+  return withBody(async (file2) => {
     const r = await ports.gh.run(
-      ["pr", "create", "--repo", item.repo, "--head", head, "--title", title, "--body-file", file2],
+      [
+        "pr",
+        "create",
+        "--repo",
+        item.repo,
+        "--head",
+        head,
+        "--title",
+        plainTitle,
+        "--body-file",
+        file2
+      ],
       { token }
     );
     const m = /\/pull\/(\d+)\s*$/.exec(r.stdout);
     if (r.code !== 0 || !m)
       throw new Error(`gh pr create failed for ${head} (exit ${r.code}); nothing moved`);
     return { pr: Number(m[1]) };
-  } finally {
-    rmSync5(dir, { recursive: true, force: true });
-  }
+  });
 }
 function notRunSection(list2) {
   if (list2.length === 0) return "";
@@ -36000,13 +36337,17 @@ async function boardBlocksMerge(project, root, config2, entry, head, ports) {
   const target = `${entry.repo}#${entry.pr}`;
   const open2 = openReview(root, board, target);
   if (open2 !== void 0) return openReviewLine(open2, target);
-  return approvalProblem(
+  const problem = await approvalProblem(
     ports,
     approvalCheckout(project, config2, entry.repo),
     entry,
     { head: item.approvedHead, base: item.approvedBase },
     head
   );
+  if (problem !== void 0 || (item.approvedJobs ?? []).length === 0) return problem;
+  const checks = await readChecks(entry, ports.gh);
+  if (checks.kind !== "pass") return "the checks are not green";
+  return approvedJobsProblem(item.approvedJobs ?? [], checks.checks);
 }
 function approvalCheckout(project, config2, repo) {
   return { dir: project, remote: repo === config2.primaryRepo ? "origin" : githubHttpsUrl(repo) };

@@ -305,8 +305,20 @@ describe('review fields', () => {
     'mutation_probe: green',
     'mutation_probe: "red: "',
     'finding_attempts: -1',
+    'not_run_here_jobs:\n  - { command: make e2e, job: e2e }',
+    'not_run_here_jobs:\n  - { command: make e2e, workflow: ci.yml, job: "e2e\\nx" }',
+    'not_run_here_jobs:\n  - { command: make e2e, workflow: ci.yml, job: e2e, passed: true }',
   ])('refuses %s, without echoing it', (front) => {
     expect(() => parse(front)).toThrow(/bad field/);
+  });
+  it('reads the CI job named for each not_run_here command; an empty value is none', () => {
+    expect(
+      parse(
+        'not_run_here_jobs:\n  - { command: make e2e, workflow: .github/workflows/ci.yml, job: e2e }',
+      ).notRunHereJobs,
+    ).toEqual([{ command: 'make e2e', workflow: '.github/workflows/ci.yml', job: 'e2e' }]);
+    expect(parse('not_run_here_jobs:').notRunHereJobs).toEqual([]);
+    expect(parse('').notRunHereJobs).toEqual([]);
   });
 });
 
@@ -334,6 +346,32 @@ describe('commands a crew could not run in its sandbox', () => {
 
   it('defaults to an empty list', () => {
     expect(parseReport(done(''), item('fix')).notRunHere).toEqual([]);
+  });
+
+  it('reads an empty value as an empty list, like lessons and questions', () => {
+    const r = parseReport(done('not_run_here:\nlessons:\nquestions:'), item('fix'));
+    expect(r.notRunHere).toEqual([]);
+    expect(r.lessons).toEqual([]);
+    expect(r.questions).toEqual([]);
+  });
+
+  it('strips format characters (bidi, zero-width) from command and reason', () => {
+    const r = parseReport(
+      done(
+        'not_run_here:\n  - { command: "make\u202e e2e\u200b", missing: docker, reason: "no\u2066 docker\ufeff" }',
+      ),
+      item('fix'),
+    );
+    expect(r.notRunHere).toEqual([{ command: 'make e2e', missing: 'docker', reason: 'no docker' }]);
+  });
+
+  it('refuses a field that is only format characters', () => {
+    expect(() =>
+      parseReport(
+        done('not_run_here:\n  - { command: "\u200b", missing: docker, reason: x }'),
+        item('fix'),
+      ),
+    ).toThrow(/bad field notRunHere/);
   });
 
   it.each(['database', 'docker', 'network', 'service'])('names the missing %s', (missing) => {

@@ -20,6 +20,8 @@ export interface PrFacts {
   lines: number;
   /** False when GitHub listed fewer files than the pull request changes. */
   complete: boolean;
+  /** The base commit the pull request is compared against, when gh names one. */
+  baseOid?: string;
   /** The commit these facts describe; read in the same call, so they belong together. */
   head: string;
   base: string;
@@ -32,6 +34,10 @@ export interface PrFacts {
 const prSchema = z.object({
   headRefOid: z.string().regex(/^[0-9a-f]{40,64}$/i),
   baseRefName: z.string().min(1),
+  baseRefOid: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/i)
+    .optional(),
   title: z.string().default(''),
   body: z.string().nullish(),
   isCrossRepository: z.boolean(),
@@ -59,21 +65,30 @@ export async function readPrFacts(
         '--repo',
         target.repo,
         '--json',
-        'files,changedFiles,headRefOid,baseRefName,isCrossRepository,title,body',
+        'files,changedFiles,headRefOid,baseRefName,baseRefOid,isCrossRepository,title,body',
       ],
       { timeoutMs: GH_TIMEOUT_MS },
     );
     if (r.code !== 0) return undefined;
     const parsed = prSchema.safeParse(JSON.parse(r.stdout));
     if (!parsed.success) return undefined;
-    const { files, changedFiles, headRefOid, baseRefName, isCrossRepository, title, body } =
-      parsed.data;
+    const {
+      files,
+      changedFiles,
+      headRefOid,
+      baseRefName,
+      baseRefOid,
+      isCrossRepository,
+      title,
+      body,
+    } = parsed.data;
     return {
       files: files.map((f) => f.path),
       lines: files
         .filter((f) => !f.path.toLowerCase().endsWith('.md'))
         .reduce((sum, f) => sum + f.additions + f.deletions, 0),
       complete: files.length >= changedFiles,
+      ...(baseRefOid === undefined ? {} : { baseOid: baseRefOid }),
       head: headRefOid,
       base: baseRefName,
       title,
@@ -188,6 +203,8 @@ export function renderReviewRoutine(r: {
   pullRequest?: { description: string; checks: string; files: string };
   /** A file listing commands the builder could not run in its sandbox. */
   notRunHere?: string;
+  /** The item holding the pull request declares `.github/`: it may change it. */
+  ciItem?: boolean;
 }): string[] {
   return [
     '## Review routine',
@@ -200,6 +217,12 @@ export function renderReviewRoutine(r: {
       : [
           `Load the base and the pull request first, staying on your branch: \`git fetch origin ${r.base}\`, \`git fetch origin pull/${r.pr}/head\`, then \`git reset --hard FETCH_HEAD\`. The diff is \`git diff origin/${r.base}...HEAD\`; save it to an untracked file in the checkout.`,
           '',
+          `Read CI workflows at the base, never the checkout's copy, which the pull request can change: \`git ls-tree --name-only origin/${r.base} .github/workflows/\` and \`git show origin/${r.base}:.github/workflows/<file>\`. ${
+            r.ciItem === true
+              ? 'This item is a CI item: it may change what its paths and touches name below `.github/`; review those changes like code. Any other change under `.github/` blocks the approval.'
+              : 'A change under `.github/` (workflows, actions) in this pull request is a finding that blocks the approval: this item is no CI item.'
+          }`,
+          '',
         ]),
     ...(r.pullRequest === undefined
       ? []
@@ -210,7 +233,7 @@ export function renderReviewRoutine(r: {
     ...(r.notRunHere === undefined
       ? []
       : [
-          `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: check in the checkout's CI workflows that one does, and report a command no workflow runs as a finding. An approval counts only with green checks.`,
+          `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: for each command, find the workflow at the base and the job in it that runs the command, and list it in \`not_run_here_jobs\` with the command as listed, the workflow file path at the base (\`.github/workflows/<file>\`) and the job's \`name:\`, or its id when it has none${r.pullRequest === undefined ? '' : ` (the check names are in \`${r.pullRequest.checks}\`)`}. A command no base workflow runs is a finding. Studio checks at the base, and at the head when the pull request changes that file, that the job is in it with no \`if:\`, no \`continue-on-error\` and no reusable workflow (\`uses:\`), that a \`run:\` step without \`if:\` starts a line with the whole command, and that the workflow name is unique; it refuses an approval unless every check of that job (each matrix leg \`<job> (<leg>)\`) passed on this pull request.`,
           '',
         ]),
     `Run each analyzer below as one subagent with the model named there, read-only except for the spec check's probe; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,
@@ -242,6 +265,10 @@ export const crewCapsSchema = z.strictObject({
   startedAt: z.string().optional(),
   /** Ids launch could not provide, for the lead: they never count as a pass. */
   skipped: z.array(z.string()).optional(),
+  /** Commands the builder could not run; an approval names the CI job for each. */
+  notRunHere: z.array(z.string()).optional(),
+  /** The pull request changes `.github/` (or that could not be read) and its item is no CI item. */
+  workflowChange: z.literal(true).optional(),
 });
 
 /** What a reviewer owes, written beside the brief at launch, out of the crew's reach. */
@@ -316,7 +343,8 @@ export function openReview(stateRoot: string, board: Board, target: string): str
 type ReviewReport = Pick<
   Report,
   'status' | 'verdict' | 'reviews' | 'headSha' | 'analyzers' | 'mutationProbe'
->;
+> &
+  Partial<Pick<Report, 'notRunHereJobs'>>;
 
 /**
  * Holds a finished review to what its brief recorded. The pull request it acts on comes from that
@@ -326,7 +354,7 @@ type ReviewReport = Pick<
 export function checkReviewCaps(
   caps: CrewCaps | undefined,
   report: ReviewReport,
-): { skipped: string[]; target?: string } {
+): { skipped: string[]; target?: string; notRunHere?: string[] } {
   if (report.status !== 'done') return { skipped: [] };
   if (caps?.reviewsTarget === undefined) {
     throw new Error('no record of what this review is about: relaunch the review, nothing moved');
@@ -371,5 +399,12 @@ export function checkReviewCaps(
   if (report.mutationProbe?.startsWith('green:')) {
     throw new Error('approval with a mutation probe that stayed green: the test cannot fail');
   }
-  return { skipped, target };
+  if (caps.workflowChange === true) {
+    throw new Error(
+      'the pull request changes .github/ (or its change list could not be shown complete) and its item is no CI item: no approval, nothing moved',
+    );
+  }
+  // Each command the builder could not run needs the CI job that runs it; collect checks them.
+  const notRunHere = caps.notRunHere ?? [];
+  return { skipped, target, ...(notRunHere.length === 0 ? {} : { notRunHere }) };
 }

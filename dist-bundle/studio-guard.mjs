@@ -661,7 +661,8 @@ function expandGlobPath(t, base) {
 }
 function isProtected(env, real) {
   const low = real.toLowerCase();
-  return env.protectedReal.some((p) => low === p || low.startsWith(`${p}/`));
+  const below = isInside(env, real) ? low.slice(env.wt.length).split("/") : [];
+  return below.includes(".git") || env.protectedReal.some((p) => low === p || low.startsWith(`${p}/`));
 }
 function checkWritePath(env, tok, cwd, why) {
   if (ALLOWED_DEVICES.has(tok)) return;
@@ -1194,7 +1195,7 @@ function checkPush(env, rawArgs) {
     if (hasMagic(a)) deny(`glob in git push argument: ${a}`);
   }
   const pos = [];
-  let repoGiven = false;
+  const repoGiven = false;
   for (let k = 0; k < args.length; k++) {
     const a = args[k];
     if (a === "--") {
@@ -1206,7 +1207,7 @@ function checkPush(env, rawArgs) {
       if (name.length >= 3 && PUSH_DANGEROUS.some((d) => d.startsWith(name))) {
         deny(`git push ${name} is not allowed`);
       }
-      if (name === "--repo") repoGiven = true;
+      if (name === "--repo") deny("git push --repo is not allowed: push to origin");
       if (!a.includes("=") && ["--repo", "--push-option"].includes(name)) {
         k++;
       }
@@ -1217,6 +1218,7 @@ function checkPush(env, rawArgs) {
   }
   const refs = repoGiven ? pos : pos.slice(1);
   if (pos.length === 0) deny("git push needs an explicit remote and branch");
+  if (pos[0] !== "origin") deny("git push only to origin");
   if (refs.length === 0) deny("git push needs an explicit refspec");
   for (const ref of refs) checkRefspec(env, ref);
 }
@@ -1251,66 +1253,157 @@ function writesRemoteRefs(refspec) {
   const prefix = dest.slice(0, star);
   return "refs/remotes/".startsWith(prefix) || "remotes/".startsWith(prefix);
 }
-function checkFetch(rawArgs) {
+var FETCH_FLAGS = /* @__PURE__ */ new Set([
+  "-q",
+  "--quiet",
+  "-v",
+  "--verbose",
+  "-p",
+  "--prune",
+  "-t",
+  "--tags",
+  "--no-tags",
+  "--dry-run",
+  "--unshallow",
+  "--progress",
+  "--no-progress"
+]);
+var PULL_FLAGS = /* @__PURE__ */ new Set([
+  ...FETCH_FLAGS,
+  "-r",
+  "--rebase",
+  "--rebase=true",
+  "--rebase=false",
+  "--rebase=merges",
+  "--no-rebase",
+  "--ff",
+  "--no-ff",
+  "--ff-only",
+  "--autostash",
+  "--no-autostash",
+  "--no-edit",
+  "--stat",
+  "--no-stat"
+]);
+var COUNT_FLAG = /^--(depth|deepen)=[1-9]\d{0,6}$/;
+var STRATEGY_OPTION = /^[A-Za-z][A-Za-z0-9-]*(=[A-Za-z0-9._/-]+)?$/;
+function checkFetchPull(sub, rawArgs) {
   const args = rawArgs.flatMap((a) => braceExpand(a));
-  for (const a of args) {
-    if (unresolvedWord(a)) {
-      deny(`unresolved git fetch argument: ${a.replaceAll(SUBST, "<runtime>")}`);
-    }
-  }
+  const pos = [];
   for (let k = 0; k < args.length; k++) {
     const a = args[k];
-    const refmap = a === "--refmap" ? args[k + 1] : a.startsWith("--refmap=") ? a.slice(9) : null;
-    if (refmap !== null) {
-      if (refmap === void 0 || writesRemoteRefs(refmap.replace(/^\+/, ""))) {
-        deny("git fetch --refmap into refs/remotes/ is not allowed");
-      }
+    if (unresolvedWord(a))
+      deny(`unresolved git ${sub} argument: ${a.replaceAll(SUBST, "<runtime>")}`);
+    if (!a.startsWith("-")) {
+      pos.push(a);
       continue;
     }
-    if (!a.startsWith("-") && writesRemoteRefs(a.replace(/^\+/, ""))) {
-      deny("git fetch into refs/remotes/ is not allowed (origin/* is set by the owner)");
+    if ((sub === "fetch" ? FETCH_FLAGS : PULL_FLAGS).has(a) || COUNT_FLAG.test(a)) continue;
+    if (sub === "pull") {
+      let opt;
+      if (a === "-X" || a === "--strategy-option") opt = args[++k] ?? "";
+      else if (a.startsWith("--strategy-option=")) opt = a.slice(18);
+      else if (a.startsWith("-X")) opt = a.slice(2);
+      if (opt !== void 0) {
+        if (!STRATEGY_OPTION.test(opt)) deny(`git pull strategy option "${opt}" is not allowed`);
+        continue;
+      }
+    }
+    deny(`git ${sub} ${a.split("=")[0]} is not allowed`);
+  }
+  if (pos.length > 0 && pos[0] !== "origin") {
+    deny(`git ${sub} only from origin, not "${pos[0]}"`);
+  }
+  for (const ref of pos.slice(1)) {
+    const sides = ref.replace(/^\+/, "").split(":");
+    if (sides.length > 2 || sides.some(
+      (x) => !/^[A-Za-z0-9._/-]+$/.test(x) || x.startsWith("/") || x.includes("//") || x.split("/").includes("..")
+    )) {
+      deny(`git ${sub} refspec "${ref}" is not a plain ref`);
+    }
+    if (writesRemoteRefs(ref.replace(/^\+/, ""))) {
+      deny(`git ${sub} into refs/remotes/ is not allowed (origin/* is set by the owner)`);
     }
   }
 }
+function checkLsRemote(rawArgs) {
+  const args = rawArgs.flatMap((a) => braceExpand(a));
+  if (args.some((a) => unresolvedWord(a) || a.startsWith("-"))) {
+    deny("git ls-remote takes no options: git ls-remote origin [<ref>...]");
+  }
+  if (args[0] !== "origin") deny("git ls-remote only for origin: git ls-remote origin [<ref>...]");
+}
+function checkRemote(args) {
+  const form = args.join(" ");
+  if (["", "-v", "--verbose", "get-url origin", "show origin", "show -n origin"].includes(form)) {
+    return;
+  }
+  deny("git remote is read-only for crews: git remote -v, get-url origin, show [-n] origin");
+}
+var GIT_NETWORK = /* @__PURE__ */ new Set(["fetch", "pull", "ls-remote", "push"]);
 function checkGit(env, args, state) {
   let i = 0;
+  let moved = false;
   while (i < args.length) {
     const a = args[i];
     if (unresolvedWord(a)) deny("unresolved git option");
-    if (a === "-C" || a === "--git-dir" || a === "--work-tree") {
+    if (!a.startsWith("-")) break;
+    if (a === "-C") {
       const v = args[i + 1];
-      if (v === void 0) deny(`missing value for git ${a}`);
-      checkInsideDir(env, v, state, `git ${a}`);
+      if (v === void 0) deny("missing value for git -C");
+      checkInsideDir(env, v, state, "git -C");
+      moved = true;
       i += 2;
     } else if (a.startsWith("--git-dir=") || a.startsWith("--work-tree=")) {
       checkInsideDir(env, a.slice(a.indexOf("=") + 1), state, "git option");
+      moved = true;
       i++;
-    } else if (a === "-c" || a === "--config-env") {
+    } else if (a === "-c") {
       checkGitC(args[i + 1] ?? "");
       i += 2;
-    } else if (a.startsWith("--config-env=")) {
-      checkGitC(a.slice(13));
+    } else if (a === "--no-pager" || a === "-P" || a === "--no-replace-objects") {
       i++;
-    } else if (a === "--namespace" || a === "--exec-path") i += 2;
-    else if (a.startsWith("-")) i++;
-    else break;
+    } else {
+      deny(
+        `git option ${a.split("=")[0]} is not allowed (-C, -c, --git-dir=, --work-tree=, --no-pager, -P, --no-replace-objects)`
+      );
+    }
   }
   const sub = args[i];
   if (sub === void 0) return;
   if (unresolvedWord(sub)) deny("unresolved command word (git subcommand)");
   const rest = args.slice(i + 1);
+  if (GIT_NETWORK.has(sub) && (moved || state.cwd !== env.wt)) {
+    deny(`git ${sub} runs from the clone root only, without -C, --git-dir or --work-tree`);
+  }
+  if (sub === "init") deny("git init is not allowed (no repository inside the clone)");
   if (sub === "push") checkPush(env, rest);
-  else if (sub === "fetch" || sub === "pull") checkFetch(rest);
-  else if (sub === "send-pack" || sub === "http-push" || sub === "subtree" || sub === "update-ref" || sub === "replace" || sub === "symbolic-ref") {
+  else if (sub === "fetch" || sub === "pull") checkFetchPull(sub, rest);
+  else if (sub === "ls-remote") checkLsRemote(rest);
+  else if (sub === "remote") checkRemote(rest);
+  else if (sub === "submodule") {
+    const all = rest.flatMap((x) => braceExpand(x));
+    if (!(all.length === 0 || all.length === 1 && all[0] === "status")) {
+      deny("git submodule is allowed only as git submodule status");
+    }
+  } else if (sub === "archive") {
+    const all = rest.flatMap((x) => braceExpand(x));
+    if (all.some((a) => {
+      const name = a.split("=")[0];
+      return name.length >= 3 && "--remote".startsWith(name) || name.length >= 3 && "--exec".startsWith(name) || name.length >= 3 && "--output".startsWith(name) || /^-[A-Za-z]*o/.test(a);
+    })) {
+      deny("git archive --remote, --exec and --output are not allowed (it writes to stdout)");
+    }
+  } else if (
+    // A crew has its clone: cloning or fetching packs reaches any URL with any options.
+    sub === "clone" || sub === "fetch-pack" || sub === "upload-pack" || sub === "upload-archive" || sub === "send-pack" || sub === "http-push" || sub === "subtree" || sub === "update-ref" || sub === "replace" || sub === "symbolic-ref"
+  ) {
     deny(`git ${sub} is not allowed`);
   } else if (sub === "config") {
     const all = rest.flatMap((x) => braceExpand(x));
     if (all.some(unresolvedWord) || !all.some((a) => GIT_CONFIG_READ.includes(a)) || all.some((a) => GIT_CONFIG_WRITE.includes(a) || a.startsWith("--file="))) {
       deny("git config is allowed for reads only (--get, --get-all, --get-regexp, --list)");
     }
-  } else if (sub === "clone") {
-    const pos = positionals(rest);
-    if (pos.length >= 2) checkWritePath(env, pos[pos.length - 1], state.cwd, "git clone");
   }
 }
 function checkInsideDir(env, dir, state, why) {
@@ -1321,75 +1414,107 @@ function checkInsideDir(env, dir, state, why) {
   if (!isInside(env, resolveReal(dir, state.cwd ?? env.wt)))
     deny(`${why} outside worktree: ${dir}`);
 }
-var GH_BLOCKED_TOPICS = /* @__PURE__ */ new Set(["release", "secret", "auth", "alias"]);
-var GH_RUN_VALUE_FLAGS = ["--ref", "-r", "-f", "--raw-field", "-F", "--field", ...GH_VALUE_FLAGS];
-function checkGh(env, args) {
-  const words = [];
-  for (let k = 0; k < args.length; k++) {
-    const a = args[k];
-    if (GH_VALUE_FLAGS.includes(a)) k++;
-    else if (!a.startsWith("-")) words.push(a);
+var PR_CREATE_OPTIONS = ["--head", "--base", "--title", "--body-file"];
+function checkPrCreate(env, args, cwd) {
+  const FORM = "gh pr create --head studio/<id> --base <branch> --title <text> --body-file <file>";
+  if (env.item === void 0) deny("gh pr create needs the item in the guard context");
+  if (args[0] !== "pr" || args[1] !== "create" || args.length !== 10) deny(`use exactly: ${FORM}`);
+  const got = /* @__PURE__ */ new Map();
+  for (let k = 2; k < args.length; k += 2) {
+    const flag = args[k];
+    const value = args[k + 1];
+    if (!PR_CREATE_OPTIONS.includes(flag) || got.has(flag)) deny(`use exactly: ${FORM}`);
+    if (value.startsWith("-")) deny(`gh pr create ${flag} value may not start with "-"`);
+    got.set(flag, value);
   }
-  const [g0, g1] = words;
+  const own = `studio/${env.item}`;
+  if (got.get("--head") !== own) deny(`gh pr create needs --head ${own} (the item's own branch)`);
+  const base = got.get("--base");
+  if (env.base === void 0 || base !== env.base) {
+    deny(`gh pr create needs --base ${env.base ?? "<the item base>"} (the item's base branch)`);
+  }
+  const file = got.get("--body-file");
+  if (unresolvedWord(file) || !/^[A-Za-z0-9._ /-]+$/.test(file) || isAbsolute(file) || file.split("/").includes("..")) {
+    deny("gh pr create --body-file needs a plain relative path inside the clone");
+  }
+  if (cwd !== env.wt) deny("gh pr create runs from the clone root only");
+  if (!isInside(env, resolveReal(file, cwd))) {
+    deny(`gh pr create --body-file outside the clone: ${file}`);
+  }
+}
+var JSON_FIELDS = /^[A-Za-z]+(,[A-Za-z]+)*$/;
+var JQ = /^[^-]/;
+var COUNT = /^[1-9]\d{0,3}$/;
+var REF_NAME = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/;
+var GH_PR_READ = {
+  view: { number: true, flags: [], values: { "--json": JSON_FIELDS, "--jq": JQ } },
+  checks: {
+    number: true,
+    flags: ["--watch", "--required", "--fail-fast"],
+    values: { "--json": JSON_FIELDS, "--jq": JQ, "--interval": COUNT }
+  },
+  diff: { number: true, flags: ["--name-only", "--patch"], values: {} },
+  list: {
+    number: false,
+    flags: [],
+    values: {
+      "--json": JSON_FIELDS,
+      "--jq": JQ,
+      "--state": /^(open|closed|merged|all)$/,
+      "--limit": COUNT,
+      "--head": REF_NAME,
+      "--base": REF_NAME
+    }
+  },
+  status: { number: false, flags: [], values: { "--json": JSON_FIELDS, "--jq": JQ } }
+};
+function checkPrRead(sub, spec, rest) {
+  let numbers = 0;
+  for (let k = 0; k < rest.length; k++) {
+    const a = rest[k];
+    if (spec.flags.includes(a)) continue;
+    const valid = spec.values[a];
+    if (valid !== void 0) {
+      const v = rest[++k];
+      if (v === void 0 || unresolvedWord(v) || !valid.test(v)) {
+        deny(`gh pr ${sub} ${a} needs a plain value`);
+      }
+      continue;
+    }
+    if (spec.number && /^[1-9]\d{0,9}$/.test(a) && numbers++ === 0) continue;
+    deny(`gh pr ${sub} does not take ${a.startsWith("-") ? a.split("=")[0] : "that argument"}`);
+  }
+}
+function checkGh(env, args, cwd) {
+  const [g0, g1] = args;
   for (const w of [g0, g1]) {
     if (w !== void 0 && unresolvedWord(w)) deny("unresolved command word (gh subcommand)");
   }
-  if (g0 === "pr" && g1 === "merge") deny("gh pr merge is not allowed (merging is owner-only)");
-  if (g0 && GH_BLOCKED_TOPICS.has(g0)) deny(`gh ${g0} is not allowed`);
-  if (g0 === "workflow" && g1 === "run") {
-    const pos = [];
-    for (let k = 0; k < args.length; k++) {
-      const a = args[k];
-      if (GH_RUN_VALUE_FLAGS.includes(a)) k++;
-      else if (!a.startsWith("-")) pos.push(a);
-    }
-    for (let k = 0; k < args.length; k++) {
-      const a = args[k];
-      let ref;
-      if (a === "--ref" || a === "-r") ref = args[k + 1] ?? "";
-      else if (a.startsWith("--ref=")) ref = a.slice(6);
-      else if (/^-r./.test(a) && !a.startsWith("--")) ref = a.slice(2);
-      if (ref !== void 0 && (unresolvedWord(ref) || !env.allowedRefs.includes(ref))) {
-        deny(`workflow ref "${ref}" is not in crew_allowed_workflow_refs`);
-      }
-    }
-    const target = pos[2];
-    if (target === void 0) deny("gh workflow run needs an explicit workflow");
-    if (unresolved(target)) deny("unresolved workflow name");
-    if (!env.allowedWorkflows.includes(target)) {
-      deny(`workflow "${target}" is not in crew_allowed_workflows`);
-    }
+  if (args.some(
+    (a) => /^-R/.test(a) || a === "--repo" || a.startsWith("--repo=") || a === "--hostname" || a.startsWith("--hostname=")
+  )) {
+    deny("gh -R, --repo and --hostname are not allowed: crews work on their own repository");
   }
-  if (g0 === "api") checkGhApi(args);
-}
-function checkGhApi(rawArgs) {
-  const apiAt = rawArgs.indexOf("api");
-  for (let k = 0; k < apiAt; k++) {
-    const a = rawArgs[k];
-    if (a === "-R" || a === "--repo") k++;
-    else deny(`gh option ${a} before api is not allowed`);
+  if (g0 === "pr" && g1 !== void 0 && Object.hasOwn(GH_PR_READ, g1)) {
+    checkPrRead(g1, GH_PR_READ[g1], args.slice(2));
+    return;
   }
-  const args = rawArgs.slice(apiAt + 1);
-  let endpoint;
-  for (let k = 0; k < args.length; k++) {
-    const a = args[k];
-    if (a === "-H" || a === "--header" || a === "-q" || a === "--jq") {
-      if (args[k + 1] === void 0) deny(`missing value for gh api ${a}`);
-      k++;
-    } else if (a === "--hostname") {
-      if (args[++k] !== "github.com") deny("gh api --hostname must be github.com");
-    } else if (a === "--paginate" || a === "-i" || a === "--include") {
-    } else if (a.startsWith("-")) {
-      deny(`gh api flag ${a} is not allowed (read-only: -H, -q, --paginate, -i, --hostname)`);
-    } else if (endpoint !== void 0) {
-      deny("gh api with more than one endpoint is not allowed");
-    } else endpoint = a;
+  if (g0 === "pr" && g1 === "create") {
+    checkPrCreate(env, args, cwd);
+    return;
   }
-  if (endpoint === void 0) deny("gh api without endpoint");
-  if (unresolved(endpoint)) deny("unresolved gh api endpoint");
-  if (/[%#]|:\/\//.test(endpoint)) deny("suspicious gh api endpoint");
-  const path = endpoint.split("?")[0]?.replace(/\/+$/, "");
-  if (/graphql$/i.test(path)) deny("gh api graphql is not allowed");
+  if (g0 === "workflow" && g1 === "run" && env.allowedWorkflows.length > 0) {
+    const [, , target, flag, ref, ...more] = args;
+    if (flag !== "--ref" || more.length > 0 || target === void 0 || ref === void 0 || !env.allowedWorkflows.includes(target) || !env.allowedRefs.includes(ref)) {
+      deny(
+        "use exactly: gh workflow run <crew_allowed_workflows entry> --ref <crew_allowed_workflow_refs entry>"
+      );
+    }
+    return;
+  }
+  deny(
+    `gh ${[g0, g1].filter((x) => x !== void 0).join(" ")} is not allowed for crews (gh pr view, checks, diff, list, status and gh pr create)`
+  );
 }
 function checkFind(env, args, state) {
   const roots = [];
@@ -1595,7 +1720,7 @@ function checkWords(env, words, state) {
     if (words.some((w) => w.includes(SUBST))) deny(`command substitution in a ${name} command`);
   }
   if (name === "git") checkGit(env, args, state);
-  if (name === "gh") checkGh(env, args);
+  if (name === "gh") checkGh(env, args, state.cwd);
   for (const t of writeTargets(name, args)) checkWritePath(env, t, state.cwd, name);
 }
 var ARITHMETIC_DENIED = "arithmetic ((...)) is not allowed; use test or [ ] for comparisons, or a script";
@@ -1761,7 +1886,7 @@ var isSecretExempt = (s) => basename(s) === ".env.example";
 var isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === "string");
 function check(input, ctx) {
   const c = ctx;
-  if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs)) {
+  if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs) || c.item !== void 0 && (typeof c.item !== "string" || !/^[A-Z]+-\d+$/.test(c.item)) || c.base !== void 0 && (typeof c.base !== "string" || !/^[A-Za-z0-9._/-]+$/.test(c.base))) {
     deny("invalid guard context");
   }
   const wt = resolveReal(ctx.worktree, "/");
@@ -1783,7 +1908,9 @@ function check(input, ctx) {
     readRoots: [ctx.worktree, ...ctx.readRoots ?? []].map((p) => resolveReal(p, "/")),
     skillRoots: (ctx.skillRoots ?? []).flatMap((p) => [p, resolveReal(p, "/")]),
     toolResultRes: (ctx.toolResultGlobs ?? []).map(fileGlobToRegExp),
-    hardSecretRes: ctx.secretGlobs.filter((g) => !(ctx.skillRootWaivedGlobs ?? []).includes(g)).map(fileGlobToRegExp)
+    hardSecretRes: ctx.secretGlobs.filter((g) => !(ctx.skillRootWaivedGlobs ?? []).includes(g)).map(fileGlobToRegExp),
+    item: ctx.item,
+    base: ctx.base
   };
   const { toolName, toolInput } = input;
   const given = input.cwd;
