@@ -1656,17 +1656,29 @@ function checkReadScope(env, tok, base, tool) {
 function refuseDotDot(tok, tool) {
   if (tok.split("/").includes("..")) deny(`${tool}: write the path without ..: ${tok}`);
 }
-function mayMatchDotDot(segment) {
-  const plain = segment.replace(/\\(.)/g, "$1").replace(/\[[^\]]*\]/g, "?");
-  return /^[.?]{2}$/.test(plain);
+function flatBraces(pattern) {
+  let open = false;
+  for (const c of pattern) {
+    if (c === "{") {
+      if (open) return false;
+      open = true;
+    } else if (c === "}") {
+      if (!open) return false;
+      open = false;
+    }
+  }
+  return !open;
 }
 function checkGlobScope(env, pattern, base, tool) {
-  if (pattern.includes("..")) deny(`${tool}: write the pattern without ..: ${pattern}`);
+  const refuse = (why) => deny(`${tool}: ${why}: ${pattern}; use a narrower pattern, or Bash in the sandbox`);
+  if (!/^[\p{L}\p{N}_\-./*?,{}]+$/u.test(pattern)) refuse("only plain Glob patterns are allowed");
+  if (!flatBraces(pattern)) refuse("braces must close and must not nest");
+  if (pattern.includes("..")) refuse("write the pattern without ..");
   for (const e of braceExpand(pattern)) {
-    if (e.includes("{")) deny(`${tool}: a brace group needs a comma: ${pattern}`);
+    if (e.includes("{") || e.includes("}")) refuse("a brace group needs a comma");
     const segs = e.split("/");
-    if (e.includes("..") || segs.some(mayMatchDotDot)) {
-      deny(`${tool}: write the pattern without ..: ${pattern}`);
+    if (e.includes("..") || segs.some((s) => /^[.?]{2}$/.test(s))) {
+      refuse("write the pattern without ..");
     }
     const first = segs.findIndex((s) => hasMagic(s));
     const prefix = first < 0 ? e : segs.slice(0, first).join("/") || (isAbsolute(e) ? "/" : ".");

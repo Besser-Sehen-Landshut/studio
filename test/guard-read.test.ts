@@ -344,13 +344,48 @@ describe('read tools stay in the crew area', () => {
     ])('%s can become .. and is denied', (pattern) => {
       expect(decide('Glob', { pattern }, wt)).toBe('deny');
     });
-    it.each(['**/*.{ts,tsx}', '**/.*', '.github/**', 'a?/*.ts', '[ab]c/*', '?a.ts', 'file.?s'])(
-      '%s is an ordinary pattern and stays allowed',
-      (pattern) => {
-        expect(decide('Glob', { pattern }, wt)).toBe('allow');
-      },
-    );
-    it.each(['*.{ts,tsx}', 'src/**/*.{ts,tsx}', '{src,test}/**/*.ts', '{a,{b,c}}/*.ts'])(
+    it.each([
+      '[ab]c/*',
+      '*/@(..)/y',
+      '*/@(a|b)/y',
+      '*/!(x)/y',
+      '*/{.,\\}x}./y',
+      '*/a b/*',
+      '*/a\tb/*',
+      '$HOME/*',
+      '`x`/*',
+      '^a/*',
+      '~/*',
+      '{a,{b,c}}/*.ts',
+      '{a,b/*',
+      'a,b}/*',
+      '}a,b{/*',
+      '',
+    ])('%j is outside the allowed characters or brace shape', (pattern) => {
+      expect(decide('Glob', { pattern }, wt)).toBe('deny');
+    });
+    it('the refusal says what to use instead', () => {
+      const r = evaluateGuard({ toolName: 'Glob', toolInput: { pattern: '[ab]/*' } }, ctx);
+      expect(r.reason).toMatch(/Bash|narrower/);
+    });
+    it('Grep glob only filters and stays free', () => {
+      expect(decide('Grep', { pattern: 'x', glob: '*.[ch]' }, wt)).toBe('allow');
+    });
+    it.each([
+      '**/*.{ts,tsx}',
+      'src/**/*.test.ts',
+      '*.md',
+      '**/.*',
+      '.github/**',
+      'a?/*.ts',
+      '?a.ts',
+      'file.?s',
+      'größe/*.md',
+      'a_b-c/*.ts',
+    ])('%s is an ordinary pattern and stays allowed', (pattern) => {
+      expect(decide('Glob', { pattern }, wt)).toBe('allow');
+    });
+    it.each(['*.{ts,tsx}', 'src/**/*.{ts,tsx}', '{src,test}/**/*.ts'])(
       '%s still works',
       (pattern) => {
         expect(decide('Glob', { pattern }, wt)).toBe('allow');

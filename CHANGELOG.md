@@ -68,7 +68,8 @@ Not tagged or published as a GitHub release yet; the maintainers tag after the m
 
 - A crew's `Read`, `Glob` and `Grep` reach only its clone, its own brief with `briefs/<id>.caps/` and
   `briefs/<id>.rules/`, its `HOME` and tmp dir, and in its config dir the skills, plugin cache,
-  marketplaces and saved tool outputs. They refuse any `..` segment: write the path without it. A
+  marketplaces and saved tool outputs. They refuse any `..` segment: write the path without it. A Glob pattern may hold only letters,
+  digits and `_ - . / * ? , { }`, with flat braces. A
   `command` on any tool but Bash is denied. See `SECURITY.md`.
 - Crew sessions set `CLAUDE_CODE_TMPDIR` to the crew's tmp dir.
 
