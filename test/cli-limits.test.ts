@@ -13,11 +13,13 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { activeLabel, addAccount } from '../src/accounts.js';
 import { loadBoard } from '../src/board.js';
 import { type CliDeps, runCli } from '../src/cli.js';
-import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
+import { acquireStateLock, ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import { newReportName } from '../src/report.js';
+import { prepareCrewDir } from './crew-dir.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-cli-limits-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -172,6 +174,7 @@ const provider = (fx: Fx, line: string) => {
     join(fx.ownerDir, 'config.yaml'),
     `crew_credential_command: ${f}\ncrew_label_limits:\n  max_parallel: 8\n`,
   );
+  prepareCrewDir(fx.ownerDir);
 };
 const TOKEN = 'fake-value-oauth-cli-5d21';
 const tokenLine = (label: string) =>
@@ -691,6 +694,210 @@ describe('studio secret set crew-token', () => {
     expect(r.code).toBe(1);
     expect(r.err).toContain('primary_repo');
     expect(p.tokens).toEqual([]);
+  });
+});
+
+describe('studio account', () => {
+  const TOKEN = `fake-value-cli-account-${'z'.repeat(30)}`;
+  /** A claude that records plugin calls and their environment instead of running. */
+  const withPlugins = (code = 0) => {
+    const p = makePorts();
+    const calls: { args: string[]; env: Record<string, string>; cwd: string }[] = [];
+    const ports: Ports = {
+      ...p.ports,
+      plugins: {
+        run: async (args, env, cwd) => {
+          calls.push({ args, env, cwd });
+          return { code, stdout: '', stderr: code === 0 ? '' : 'failed' };
+        },
+      },
+    };
+    return { ports, calls };
+  };
+  const owner = (fx: Fx) => ({ homedir: fx.home, env: fx.env });
+  const terminal = (token = TOKEN) => ({ isTerminal: true, readSecret: async () => token });
+
+  it('add stores the token hidden, makes it active and sets up the plugins once', async () => {
+    const fx = makeFx();
+    const { ports, calls } = withPlugins();
+    const r = await cli(fx, ports, ['account', 'add', 'work'], terminal());
+    expect(r.code).toBe(0);
+    expect(`${r.out}${r.err}`).not.toContain(TOKEN);
+    expect(activeLabel(owner(fx))).toBe('work');
+    expect(calls).toHaveLength(4);
+    for (const c of calls) {
+      expect(c.env.CLAUDE_CONFIG_DIR).toBe(join(fx.ownerDir, 'claude'));
+      expect(Object.values(c.env).join(' ')).not.toContain(TOKEN);
+      expect(c.cwd).toBe(join(fx.ownerDir, 'claude'));
+    }
+    expect(statSync(join(fx.ownerDir, 'claude')).mode & 0o777).toBe(0o700);
+    await cli(fx, ports, ['account', 'add', 'spare'], terminal());
+    expect(calls).toHaveLength(4);
+  });
+
+  it('add needs a terminal, the owner and a value; a wrong value stores nothing', async () => {
+    const fx = makeFx();
+    const { ports } = withPlugins();
+    expect(
+      (await cli(fx, ports, ['account', 'add', 'work'], { readSecret: async () => TOKEN })).code,
+    ).toBe(1);
+    fx.env.STUDIO_ROLE = 'crew';
+    expect((await cli(fx, ports, ['account', 'add', 'work'], terminal())).code).toBe(1);
+    delete fx.env.STUDIO_ROLE;
+    const bad = await cli(fx, ports, ['account', 'add', 'work'], terminal('short'));
+    expect(bad.code).toBe(1);
+    expect(bad.err).not.toContain('short');
+    expect(existsSync(join(fx.ownerDir, 'tokens', 'work.json'))).toBe(false);
+    expect((await cli(fx, ports, ['account', 'add', '../x'], terminal())).code).toBe(1);
+  });
+
+  it('failed plugin setup keeps the token and names setup-plugins', async () => {
+    const fx = makeFx();
+    const { ports } = withPlugins(1);
+    const r = await cli(fx, ports, ['account', 'add', 'work'], terminal());
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('studio account setup-plugins');
+    expect(existsSync(join(fx.ownerDir, 'tokens', 'work.json'))).toBe(true);
+    const again = withPlugins();
+    expect(
+      (await cli(fx, again.ports, ['account', 'setup-plugins'], { isTerminal: true })).code,
+    ).toBe(0);
+    expect(again.calls).toHaveLength(4);
+  });
+
+  it('list shows labels, dates, the active one and the state, never a token', async () => {
+    const fx = makeFx();
+    const { ports } = withPlugins();
+    await cli(fx, ports, ['account', 'add', 'work'], terminal());
+    await cli(fx, ports, ['account', 'add', 'spare'], terminal());
+    const r = await cli(fx, ports, ['account', 'list', '--json']);
+    expect(r.out).not.toContain(TOKEN);
+    const rows = JSON.parse(r.out).accounts;
+    expect(rows.map((x: { label: string }) => x.label)).toEqual(['spare', 'work']);
+    expect(rows.find((x: { label: string }) => x.label === 'work')).toMatchObject({
+      active: true,
+      state: 'free',
+      expiry: 'ok',
+      runsToday: 0,
+    });
+    const text = await cli(fx, ports, ['account', 'list']);
+    expect(text.out).toMatch(/work.*active/);
+  });
+
+  it('list marks a parked account and warns near the end of the year', async () => {
+    const fx = makeFx();
+    const { ports } = withPlugins();
+    addAccount(owner(fx), 'old', TOKEN, new Date('2025-11-20T00:00:00Z'));
+    mkdirSync(fx.owner, { recursive: true });
+    writeFileSync(
+      join(fx.owner, 'limits.json'),
+      JSON.stringify({ old: { parkedUntil: '2999-01-01T00:00:00.000Z', kind: 'session' } }),
+    );
+    const rows = JSON.parse((await cli(fx, ports, ['account', 'list', '--json'])).out).accounts;
+    expect(rows[0]).toMatchObject({ label: 'old', expiry: 'soon' });
+    expect(rows[0].state).toMatch(/^parked until/);
+    expect((await cli(fx, ports, ['account', 'list'])).out).toMatch(/expires .*claude setup-token/);
+  });
+
+  it('use switches the active label, only in a terminal, only to an existing one', async () => {
+    const fx = makeFx();
+    const { ports } = withPlugins();
+    await cli(fx, ports, ['account', 'add', 'work'], terminal());
+    await cli(fx, ports, ['account', 'add', 'spare'], terminal());
+    expect((await cli(fx, ports, ['account', 'use', 'spare'])).code).toBe(1);
+    expect((await cli(fx, ports, ['account', 'use', 'spare'], terminal())).code).toBe(0);
+    expect(activeLabel(owner(fx))).toBe('spare');
+    expect((await cli(fx, ports, ['account', 'use', 'none'], terminal())).code).toBe(1);
+  });
+
+  it('remove refuses while a crew runs on the label, then removes it', async () => {
+    const fx = makeFx();
+    const { ports } = withPlugins();
+    await cli(fx, ports, ['account', 'add', 'work'], terminal());
+    for (const s of ['studio-crew', 'test-driven-development', 'systematic-debugging']) {
+      mkdirSync(join(fx.ownerDir, 'claude', 'skills', s), { recursive: true });
+      writeFileSync(join(fx.ownerDir, 'claude', 'skills', s, 'SKILL.md'), '---\nname: x\n---\n');
+    }
+    await cli(fx, ports, ['launch', 'APP-1']);
+    const busy = await cli(fx, ports, ['account', 'remove', 'work'], terminal());
+    expect(busy.code).toBe(1);
+    expect(busy.err).toMatch(/running/);
+    await cli(fx, ports, ['stop', 'APP-1']);
+    expect((await cli(fx, ports, ['account', 'remove', 'work'])).code).toBe(1);
+    expect((await cli(fx, ports, ['account', 'remove', 'work'], terminal())).code).toBe(0);
+    expect(existsSync(join(fx.ownerDir, 'tokens', 'work.json'))).toBe(false);
+  });
+
+  it('setup-plugins is for the owner in a terminal', async () => {
+    const fx = makeFx();
+    const { ports, calls } = withPlugins();
+    expect((await cli(fx, ports, ['account', 'setup-plugins'])).code).toBe(1);
+    expect(calls).toHaveLength(0);
+    expect((await cli(fx, ports, ['account', 'setup-plugins'], { isTerminal: true })).code).toBe(0);
+    expect(calls).toHaveLength(4);
+  });
+
+  it('remove refuses while a launch holds the launch lock', async () => {
+    const fx = makeFx();
+    const { ports } = withPlugins();
+    await cli(fx, ports, ['account', 'add', 'work'], terminal());
+    mkdirSync(fx.owner, { recursive: true });
+    const lock = acquireStateLock(fx.owner, 'launch.lock', {
+      now: new Date(),
+      heartbeatStaleMs: 60_000,
+    });
+    try {
+      const r = await cli(fx, ports, ['account', 'remove', 'work'], terminal());
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/launch/);
+      expect(existsSync(join(fx.ownerDir, 'tokens', 'work.json'))).toBe(true);
+    } finally {
+      lock?.release();
+    }
+  });
+
+  it('removing the last account says that launches use the main login again', async () => {
+    const fx = makeFx();
+    const { ports } = withPlugins();
+    await cli(fx, ports, ['account', 'add', 'work'], terminal());
+    await cli(fx, ports, ['account', 'add', 'spare'], terminal());
+    const first = await cli(fx, ports, ['account', 'remove', 'spare'], terminal());
+    expect(first.err).not.toMatch(/main login/);
+    const last = await cli(fx, ports, ['account', 'remove', 'work'], terminal());
+    expect(last.code).toBe(0);
+    expect(last.err).toMatch(/warning: .*no stored account is left.*main login/);
+  });
+
+  it('planning counts the room of the active account only', async () => {
+    const fx = makeFx(['APP-1', 'APP-2']);
+    const { ports } = withPlugins();
+    await cli(fx, ports, ['account', 'add', 'work'], terminal());
+    await cli(fx, ports, ['account', 'add', 'spare'], terminal());
+    mkdirSync(fx.owner, { recursive: true });
+    writeFileSync(
+      join(fx.owner, 'limits.json'),
+      JSON.stringify({ work: { parkedUntil: '2999-01-01T00:00:00.000Z', kind: 'session' } }),
+    );
+    const plan = JSON.parse((await cli(fx, ports, ['plan'])).out);
+    expect(plan.assign).toEqual([]);
+  });
+
+  it('doctor names the accounts, the active one and the way crews log in', async () => {
+    const fx = makeFx();
+    const { ports } = withPlugins();
+    const none = JSON.parse((await cli(fx, ports, ['doctor', '--json'])).out);
+    expect(none.claudeLogin).toBe('main login (~/.claude or CLAUDE_CONFIG_DIR)');
+    await cli(fx, ports, ['account', 'add', 'work'], terminal());
+    const doc = JSON.parse((await cli(fx, ports, ['doctor', '--json'])).out);
+    expect(doc.claudeLogin).toBe('account work');
+    expect(doc.accounts).toEqual([
+      expect.objectContaining({ label: 'work', active: true, expiry: 'ok' }),
+    ]);
+    expect(JSON.stringify(doc)).not.toContain(TOKEN);
+    provider(fx, JSON.stringify({ label: 'p', env: { CLAUDE_CODE_OAUTH_TOKEN: TOKEN } }));
+    const text = await cli(fx, ports, ['doctor']);
+    expect(text.out).toMatch(/claude login: credential provider \(it comes before the accounts\)/);
+    expect(text.out).not.toContain(TOKEN);
   });
 });
 

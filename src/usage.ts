@@ -1,5 +1,6 @@
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { builtInAccount } from './accounts.js';
 import type { OwnerConfig, OwnerEnv } from './config.js';
 import { runCredentialProvider } from './credentials.js';
 import { activeParks, DEFAULT_LABEL, readLimits, validLabel } from './limits.js';
@@ -199,7 +200,13 @@ export async function credentialSlots(o: {
   const exclude = [...new Set([...parked, ...usage.full])];
   const command = o.ownerConfig.crewCredentialCommand;
   if (command === undefined) {
-    return { slots: exclude.includes(DEFAULT_LABEL) ? 0 : usage.remaining(DEFAULT_LABEL) };
+    let label = DEFAULT_LABEL;
+    try {
+      label = builtInAccount(o.owner, o.ports.clock.now())?.label ?? DEFAULT_LABEL;
+    } catch (e) {
+      return { hold: `Claude accounts: ${(e as Error).message}` };
+    }
+    return { slots: exclude.includes(label) ? 0 : usage.remaining(label) };
   }
   let slots = 0;
   for (let call = 0; call < MAX_PROBES; call++) {

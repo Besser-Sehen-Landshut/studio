@@ -2,7 +2,7 @@
 
 Studio is a Claude Code plugin and TypeScript package for running a small software studio of coding-agent sessions from one control room: a lead session plans work from a board and a crew of role-based sessions carries it out, each in its own sandboxed clone.
 
-Status: 0.5.1, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store). See [CHANGELOG.md](CHANGELOG.md).
+Status: 0.6.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store). See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -80,32 +80,33 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 
 `studio [--project <dir>] [--json] <command>`
 
-| Command                                                                                   | Purpose                                                                                                                     |
-| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `board`                                                                                   | Show the board                                                                                                              |
-| `plan`                                                                                    | Dry-run the planner (JSON incl. capacity and its read error)                                                                |
-| `launch <id>`                                                                             | Start a crew session for a planned item                                                                                     |
-| `status`                                                                                  | Crew sessions and their board status                                                                                        |
-| `collect <id>`                                                                            | Verify a crew report and PR head, move the item                                                                             |
-| `queue add <repo>#<pr>`                                                                   | Put an approved PR into the merge queue (needs an approval for its head)                                                    |
-| `queue run`                                                                               | Merge queued PRs one at a time (exact head SHA, checks green)                                                               |
-| `state`                                                                                   | Refresh `state.json` in the state root                                                                                      |
-| `pause`, `resume`                                                                         | Owner only, in a terminal: hold or release launches, merges                                                                 |
-| `stop <id> [--release]`                                                                   | Stop a crew session. A crew it cannot verify gets no signal; `--release` closes its record and prints what to check by hand |
-| `drop <id>`                                                                               | End an item; refuses while its crew runs                                                                                    |
-| `metrics`                                                                                 | Lead time, deploy frequency, change failure rate, restore time, flaky count                                                 |
-| `deploy record [<sha>]`                                                                   | Record a production deploy                                                                                                  |
-| `incident open <id>`, `incident resolve <id>`                                             | Record a failure after a deploy and its restore                                                                             |
-| `flaky record <test> <sha> pass\|fail`, `flaky [list]`                                    | The flaky-test ledger                                                                                                       |
-| `solutions search <words>`                                                                | Earlier solutions in `.studio/solutions/`                                                                                   |
-| `lessons [list]`, `lessons accept <n>`, `lessons drop <n>`, `lessons prune <role> <line>` | Role memory                                                                                                                 |
-| `escalate <id>`                                                                           | Run a stuck item on the role's `escalate_to` model                                                                          |
-| `setup stack [--write]`                                                                   | Detect the project's stacks from its manifest files                                                                         |
-| `setup sources [<id>...]`, `sources list`, `sources check`, `sources apply <id>`          | Third-party sources                                                                                                         |
-| `setup ci [--write]`                                                                      | Detect CI runners, propose the `ci:` block, lint workflows                                                                  |
-| `secret set crew-token`                                                                   | Store the crew's GitHub token (hidden input, checked first)                                                                 |
-| `doctor`                                                                                  | What is set and what is missing, never values                                                                               |
-| `accounts-clear <label>`                                                                  | Owner only, in a terminal: clear a label's account block                                                                    |
+| Command                                                                                                         | Purpose                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `board`                                                                                                         | Show the board                                                                                                              |
+| `plan`                                                                                                          | Dry-run the planner (JSON incl. capacity and its read error)                                                                |
+| `launch <id>`                                                                                                   | Start a crew session for a planned item                                                                                     |
+| `status`                                                                                                        | Crew sessions and their board status                                                                                        |
+| `collect <id>`                                                                                                  | Verify a crew report and PR head, move the item                                                                             |
+| `queue add <repo>#<pr>`                                                                                         | Put an approved PR into the merge queue (needs an approval for its head)                                                    |
+| `queue run`                                                                                                     | Merge queued PRs one at a time (exact head SHA, checks green)                                                               |
+| `state`                                                                                                         | Refresh `state.json` in the state root                                                                                      |
+| `pause`, `resume`                                                                                               | Owner only, in a terminal: hold or release launches, merges                                                                 |
+| `stop <id> [--release]`                                                                                         | Stop a crew session. A crew it cannot verify gets no signal; `--release` closes its record and prints what to check by hand |
+| `drop <id>`                                                                                                     | End an item; refuses while its crew runs                                                                                    |
+| `metrics`                                                                                                       | Lead time, deploy frequency, change failure rate, restore time, flaky count                                                 |
+| `deploy record [<sha>]`                                                                                         | Record a production deploy                                                                                                  |
+| `incident open <id>`, `incident resolve <id>`                                                                   | Record a failure after a deploy and its restore                                                                             |
+| `flaky record <test> <sha> pass\|fail`, `flaky [list]`                                                          | The flaky-test ledger                                                                                                       |
+| `solutions search <words>`                                                                                      | Earlier solutions in `.studio/solutions/`                                                                                   |
+| `lessons [list]`, `lessons accept <n>`, `lessons drop <n>`, `lessons prune <role> <line>`                       | Role memory                                                                                                                 |
+| `escalate <id>`                                                                                                 | Run a stuck item on the role's `escalate_to` model                                                                          |
+| `setup stack [--write]`                                                                                         | Detect the project's stacks from its manifest files                                                                         |
+| `setup sources [<id>...]`, `sources list`, `sources check`, `sources apply <id>`                                | Third-party sources                                                                                                         |
+| `setup ci [--write]`                                                                                            | Detect CI runners, propose the `ci:` block, lint workflows                                                                  |
+| `secret set crew-token`                                                                                         | Store the crew's GitHub token (hidden input, checked first)                                                                 |
+| `doctor`                                                                                                        | What is set and what is missing, never values                                                                               |
+| `account add <label>`, `account list`, `account use <label>`, `account remove <label>`, `account setup-plugins` | Stored Claude accounts for crews, see "Claude accounts"; `add`, `use` and `remove` need the owner in a terminal             |
+| `accounts-clear <label>`                                                                                        | Owner only, in a terminal: clear a label's account block                                                                    |
 
 `launch` refuses while a crew for the same item is still running and deletes a report an earlier run left in a reused clone. `collect` refuses while the item's crew process is still alive and refuses a report last modified before the crew started.
 
@@ -181,11 +182,27 @@ Nothing with an unknown or copyleft licence is copied into this repository; MIT 
 
 Without `--write` nothing changes. With `--write` the command changes only the `ci:` block (other keys and comments stay, but comments inside a replaced list are lost), validates the whole file first, and writes it atomically. Any error, from the proposal or from the workflow lint, makes it write nothing and exit 1. `--json` prints one object with `detection`, `proposal` (`ci`, `notes`), `errors`, `warnings` and `written`.
 
+## Claude accounts
+
+Studio can keep the Claude login of crews apart from your own. You store a long-lived token per account; crews then use it with their own Claude config dir, so logging in or switching accounts in your own sessions never changes theirs. You are responsible for using your accounts within the terms that apply to them.
+
+1. `claude setup-token`: creates a token valid for one year and prints it. It needs a Pro, Max, Ultra, Team or Enterprise plan.
+2. `studio account add <label>`: asks for the token with hidden input and stores it. The first account becomes the active one and sets up the crew config dir.
+3. `studio doctor`: shows the accounts, which one is active and how crews log in.
+
+`studio account list` shows each label with the day it was added, whether it is free, parked until a reset, blocked or at its limit, and its runs today; never a token. `studio account use <label>` makes another account the active one. `studio account remove <label>` removes one, and refuses while a crew runs on it. `add`, `use`, `remove` and `setup-plugins` are for the owner and need a terminal; `remove` refuses while a launch is in progress, and warns when the last account goes, since launches then use the environment or your main login again. Crews use the active account only: while it is parked, blocked or at its limit, nothing starts until it is free again.
+
+Studio checks only that a token has a plausible form (no spaces or control characters, 20 to 4096 characters). The Claude Code documentation names no way to check a token without a model call, so a wrong token shows up only when a crew starts. `account list` and `doctor` warn from 30 days before one year has passed since a token was added; after that a launch refuses and names `claude setup-token`.
+
+**Crew config dir.** Crews of stored accounts use `$XDG_CONFIG_HOME/studio/claude` (default `~/.config/studio/claude`, mode 0700) as `CLAUDE_CONFIG_DIR`, never `~/.claude`. The first `account add` installs the `superpowers` and `studio` plugins there; `studio account setup-plugins` does it again. It runs `claude plugin marketplace add` with the HTTPS addresses of both marketplaces and `claude plugin install` with only `CLAUDE_CONFIG_DIR`, `HOME` and `PATH` in the environment, no token. A launch refuses while this directory is missing, and a role whose required skill is missing there, as for any config dir.
+
+**Which way a launch takes.** A configured `crew_credential_command` comes first and is unchanged. Without one, stored accounts come next, with the active label. Without accounts, the environment and your normal Claude login are used, as before, under the label `default`.
+
 ## Crew credentials and usage limits
 
 **GitHub token.** `studio secret set crew-token` asks for the token with hidden input (it refuses without a terminal), strips whitespace, checks the token once against the GitHub API for `primary_repo`, and only then writes `$XDG_CONFIG_HOME/studio/crew-token` (default `~/.config/studio/crew-token`) with mode 0600. It prints `valid for <repo>` or the failing permission and nothing from `gh`; after a failed check nothing changes. The check shows the token can use the repository; it does not prove the token's scope, so check yourself that it is least-privilege. At launch a `crew_token.env` variable that is set comes first, then this file. A file with a mode wider than 0600 or another owner makes the launch refuse.
 
-**`studio doctor`** lists the crew token and its source, the credential provider, `allow_api_billing`, the names of API key variables in the environment and whether `studio.yaml` and the owner config are readable. It never prints a value. It exits 1 when the crew token is missing, unless `allow_ambient_credentials: true`.
+**`studio doctor`** shows how crews log in to Claude (credential provider, the active stored account, a token in the environment, or your main login), the stored accounts with their state and expiry, and lists the crew token and its source, the credential provider, `allow_api_billing`, the names of API key variables in the environment and whether `studio.yaml` and the owner config are readable. It never prints a value. It exits 1 when the crew token is missing, unless `allow_ambient_credentials: true`.
 
 **API billing** stays off unless the owner config sets `allow_api_billing: true`. Then `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` pass through to the crew. Without it, a launch also refuses when the `settings.json` in the crew's Claude config dir sets `apiKeyHelper`, `env.ANTHROPIC_API_KEY` or `env.ANTHROPIC_AUTH_TOKEN`. An unparsable settings file, or one that is not a regular file, refuses in either case. Crew settings written by Studio never contain `apiKeyHelper`.
 
@@ -197,7 +214,18 @@ Without `--write` nothing changes. With `--write` the command changes only the `
 { "label": "label-a", "env": { "CLAUDE_CONFIG_DIR": "/absolute/path/below/the/owner/config/dir" } }
 ```
 
-`env` has exactly one key: `CLAUDE_CODE_OAUTH_TOKEN`, the verified fallback, or `CLAUDE_CONFIG_DIR`, which is also accepted (a login directory that must exist, belong to you and have a real path below the owner config dir). The config dir form has not yet been verified with an isolated `HOME` on macOS. The label matches `^[A-Za-z0-9._-]{1,64}$`. Only the label goes into state and board; a token reaches only the environment of the crew process. Any failure, a parked label in the answer, or an empty answer while no label is parked keeps the crew from starting. Without a provider Studio uses the environment as described under Prerequisites, under the label `default`.
+`env` has exactly one key: `CLAUDE_CODE_OAUTH_TOKEN`, the verified fallback, or `CLAUDE_CONFIG_DIR`, which is also accepted (a login directory that must exist, belong to you and have a real path below the owner config dir). The config dir form has not yet been verified with an isolated `HOME` on macOS. The label matches `^[A-Za-z0-9._-]{1,64}$`. Only the label goes into state and board; a token reaches only the environment of the crew process. Any failure, a parked label in the answer, or an empty answer while no label is parked keeps the crew from starting. Without a provider Studio uses stored accounts (see "Claude accounts"), else the environment as described under Prerequisites, under the label `default`.
+
+**Stored accounts, as a contract for providers.** A provider may hand out the tokens that `studio account add` stores, without its own copy. The layout is stable within a major version:
+
+- `$XDG_CONFIG_HOME/studio/tokens/` (default `~/.config/studio/tokens/`): a directory, mode 0700, owned by the user, no symlink.
+- `tokens/<label>.json`: one per account, mode 0600, owned by the user, no symlink, holding one JSON object `{"label": "<label>", "token": "<token>", "addedAt": "<ISO 8601 time>"}`. `label` equals the file name without `.json` and matches `^[A-Za-z0-9._-]{1,64}$`, not starting with a dot.
+- `tokens/active`: mode 0600, the active label and a newline.
+- `$XDG_CONFIG_HOME/studio/claude/`: the crew config dir with the plugins. For these tokens a provider returns `CLAUDE_CODE_OAUTH_TOKEN`.
+
+Whenever a provider answers in the `CLAUDE_CODE_OAUTH_TOKEN` form, for a stored account or any other token, the crew gets this crew config dir as `CLAUDE_CONFIG_DIR`, as on the built-in way, never `~/.claude`; a launch refuses while it is missing (`studio account setup-plugins`). The `CLAUDE_CONFIG_DIR` form keeps the directory the provider names.
+
+Studio reads these files only when no provider is configured. A provider reading them must apply the same checks (owner, mode, no link) and must never print a token except in its one JSON line.
 
 **Usage limits.** At the start of `status`, `plan`, `launch` and `state`, Studio reads the end of each active crew's log. Only events Claude Code itself emits count; tool output that quotes a limit message does not. A `rate_limit` retry alone never stops a running crew; it counts only when the crew exited without a report and no later successful event shows it recovered. On a limit it stops the run, parks the label in `limits.json` in the owner root, for all projects, and returns the item to `ready` with a note; clone and branch stay. A label is parked until the reset when the event gives an absolute time, otherwise for one hour, and clears by itself afterwards. The next launch resumes the session when the clone is still there and the session is usable with the new credential (same label, or the token form with the same config dir), otherwise it starts fresh. A crew that left a report is not treated as limited, and a clone that left its branch is not replaced: the launch refuses and names it.
 

@@ -94,6 +94,15 @@ export interface Credentials {
   ): Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
+/** Runs `claude <args>` for plugin setup only: no model call, no token in `env`. */
+export interface PluginCli {
+  run(
+    args: string[],
+    env: Record<string, string>,
+    cwd: string,
+  ): Promise<{ code: number; stdout: string; stderr: string }>;
+}
+
 export interface Ports {
   gh: Gh;
   credentials: Credentials;
@@ -101,7 +110,11 @@ export interface Ports {
   claude: Claude;
   clock: Clock;
   host: Host;
+  /** Optional so test doubles need not run a real `claude`; a missing one refuses. */
+  plugins?: PluginCli;
 }
+
+const PLUGIN_TIMEOUT_MS = 300_000;
 
 const STOP_GRACE_MS = 5000;
 const STOP_POLL_MS = 100;
@@ -276,5 +289,23 @@ export function realPorts(claudeBin = 'claude'): Ports {
       return { code: r.exitCode ?? 1, stdout: String(r.stdout), stderr: String(r.stderr) };
     },
   };
-  return { gh, git, claude, clock, host, credentials };
+  const plugins: PluginCli = {
+    async run(args, env, cwd) {
+      const r = await execa(claudeBin, args, {
+        cwd,
+        env,
+        extendEnv: false,
+        reject: false,
+        stdin: 'ignore',
+        timeout: PLUGIN_TIMEOUT_MS,
+      });
+      return {
+        code: r.timedOut ? 124 : (r.exitCode ?? 1),
+        stdout: String(r.stdout ?? ''),
+        stderr: String(r.stderr ?? ''),
+      };
+    },
+  };
+
+  return { gh, git, claude, clock, host, credentials, plugins };
 }

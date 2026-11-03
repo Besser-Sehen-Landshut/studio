@@ -11,6 +11,7 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { builtInAccount, crewClaudeDir } from './accounts.js';
 import type { WorkItem } from './board.js';
 import { boardPath, loadBoard, saveBoard } from './board.js';
 import {
@@ -664,16 +665,17 @@ export function writeCrewSettings(
   // denied too, literal and real spelling, so an XDG_STATE_HOME outside the home is covered.
   const stateBase = dirname(stateRoot);
   const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase)]);
-  // A provider's login dir is opened for reads on purpose. So the sandbox does not protect that
-  // login from crew shell commands; the guard entry below is only a second net for the crew's file
-  // tools (see SECURITY.md).
   const loginDir = dirs.providerConfigDir;
+  // Of a login dir only what skills need: it also holds the transcripts, `.claude.json` and shell
+  // snapshots of other crews. Claude Code itself runs outside the sandbox and reaches the rest.
   const allowRead = [
     clone,
     dirs.tmpDir,
     dirs.homeDir,
     ...toolchain,
-    ...(loginDir === undefined ? [] : [loginDir]),
+    ...(loginDir === undefined
+      ? []
+      : ['skills', 'plugins/cache', 'plugins/marketplaces'].map((p) => join(loginDir, p))),
   ];
   const ctxFile = join(stateRoot, 'guard', `${id}.json`);
   // The clone lives inside the state root, so the root itself cannot be protected (the guard
@@ -936,6 +938,15 @@ export const unverifiedRefusal = (rec: CrewRecord): string =>
 export const unverifiedHandgrip = (rec: CrewRecord): string =>
   `crew ${rec.name} (pid ${rec.pid}) got no signal, because it cannot be verified as that crew. Look with pgrep -g ${rec.pid}; if those processes are this crew's, stop them with kill -- -${rec.pid}.`;
 
+/** The crew config dir for a token; a launch refuses while it is missing. */
+function crewDirOrRefuse(owner: LauncherEnv): string {
+  const dir = crewClaudeDir(owner);
+  if (!existsSync(dir)) {
+    throw new Error(`the crew config dir ${dir} is missing; run studio account setup-plugins`);
+  }
+  return dir;
+}
+
 async function refuseIfRunning(
   stateRoot: string,
   item: WorkItem,
@@ -1046,7 +1057,16 @@ async function launchCrewLocked(
   let oauthToken = penv.CLAUDE_CODE_OAUTH_TOKEN || undefined;
   let providerConfigDir: string | undefined;
   const command = ownerConfig.crewCredentialCommand;
-  if (command === undefined) {
+  // Without a provider, accounts kept by Studio come next: only the active one, never another.
+  const account = command === undefined ? builtInAccount(owner, ports.clock.now()) : undefined;
+  if (account !== undefined) {
+    label = account.label;
+    oauthToken = account.token;
+    providerConfigDir = checkProviderConfigDir(crewDirOrRefuse(owner), owner);
+    const parkedHere = parks[label];
+    if (parkedHere) throw new Error(allParkedLine(parkedHere.parkedUntil));
+    if (!(usage.remaining(label) > 0)) refuseFull();
+  } else if (command === undefined) {
     if (parks[DEFAULT_LABEL]) {
       throw new Error(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
     }
@@ -1070,9 +1090,8 @@ async function launchCrewLocked(
     if (exclude.includes(got.label) || !(usage.remaining(got.label) > 0)) refuseFull();
     label = got.label;
     oauthToken = got.token;
-    if (got.configDir !== undefined) {
-      providerConfigDir = checkProviderConfigDir(got.configDir, owner);
-    }
+    // A token comes with the crew config dir and its plugins, never with the owner's own login.
+    providerConfigDir = checkProviderConfigDir(got.configDir ?? crewDirOrRefuse(owner), owner);
   }
   // The Claude login and plugins live in the config dir; it holds no gh or git credentials.
   const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join(home, '.claude'));
@@ -1107,8 +1126,7 @@ async function launchCrewLocked(
       `the clone of ${item.id} left its branch after ${previous.limit ? 'a usage limit' : 'an account block'}; refusing to replace it (inspect it, then remove ${clonePath} to start over)`,
     );
   }
-  const tokenConfigDir =
-    providerConfigDir === undefined && oauthToken !== undefined ? claudeConfigDir : undefined;
+  const tokenConfigDir = oauthToken !== undefined ? claudeConfigDir : undefined;
   // A clone that is about to be recreated has no session to go back to, and no crew has run in it.
   const reused = isReusableClone(clonePath, item);
   const resumeId = (() => {

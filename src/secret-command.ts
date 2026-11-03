@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { type AccountRow, accountRows, expiryLine } from './account-command.js';
+import { builtInAccount, crewClaudeDir } from './accounts.js';
 import {
   crewTokenFile,
   loadConfig,
@@ -18,6 +20,7 @@ import {
   validToken,
 } from './credentials.js';
 import { CREW_SKILL, skillInstalled, studioPluginHint } from './crew.js';
+import { ownerStateRootFor } from './paths.js';
 import type { Ports } from './ports.js';
 import { assertPrimaryRepo, safe } from './setup-ci-command.js';
 
@@ -104,7 +107,9 @@ async function crewConfigDir(
       owner,
     );
     if (got === undefined) return undefined;
-    return got.configDir === undefined ? fallback : checkProviderConfigDir(got.configDir, owner);
+    return got.configDir === undefined
+      ? crewClaudeDir(owner)
+      : checkProviderConfigDir(got.configDir, owner);
   } catch {
     return undefined;
   }
@@ -161,15 +166,42 @@ export async function runDoctor(o: {
     else crewToken = { status: 'missing' };
   }
   const required = !(config?.allowAmbientCredentials ?? false);
-  const configDir = await crewConfigDir(
-    ownerConfig?.crewCredentialCommand,
-    o.owner,
-    o.env,
-    o.ports,
-  );
+  const command = ownerConfig?.crewCredentialCommand;
+  let accounts: AccountRow[] = [];
+  let accountProblem: string | undefined;
+  let account: string | undefined;
+  try {
+    accounts = accountRows({
+      owner: o.owner,
+      ownerRoot: ownerStateRootFor(o.owner),
+      ports: o.ports,
+    });
+    account = builtInAccount(o.owner, o.ports.clock.now())?.label;
+  } catch (e) {
+    accountProblem = (e as Error).message;
+  }
+  // The way a crew logs in to Claude, in the order a launch tries them.
+  let claudeLogin: string;
+  if (command !== undefined) {
+    claudeLogin = `credential provider${accounts.length > 0 ? ' (it comes before the accounts)' : ''}`;
+  } else if (accountProblem !== undefined) {
+    claudeLogin = `accounts, but a launch refuses: ${accountProblem}`;
+  } else if (account !== undefined) {
+    claudeLogin = `account ${account}`;
+  } else if (o.env.CLAUDE_CODE_OAUTH_TOKEN) {
+    claudeLogin = 'CLAUDE_CODE_OAUTH_TOKEN from the environment';
+  } else {
+    claudeLogin = 'main login (~/.claude or CLAUDE_CONFIG_DIR)';
+  }
+  const configDir =
+    command === undefined && account !== undefined
+      ? crewClaudeDir(o.owner)
+      : await crewConfigDir(command, o.owner, o.env, o.ports);
   const studioCrew = skillState(configDir, CREW_SKILL.split(':').at(-1) ?? '');
   const git = await gitState(o.project, o.ports);
   const report = {
+    claudeLogin,
+    accounts,
     git,
     crewToken: { ...crewToken, required },
     crewTokenFile: crewTokenFile(o.owner),
@@ -189,6 +221,12 @@ export async function runDoctor(o: {
     const source = crewToken.source ? ` (${crewToken.source})` : '';
     const provider = report.credentialProvider;
     const lines = [
+      `claude login: ${claudeLogin}`,
+      ...accounts.map(
+        (a) =>
+          `account ${a.label}${a.active ? ' (active)' : ''}: added ${a.addedAt.slice(0, 10)}, ${a.state}`,
+      ),
+      ...accounts.flatMap((a) => expiryLine(a) ?? []),
       `crew token: ${crewToken.status}${source}${required ? '' : ' (optional: allow_ambient_credentials)'}`,
       `studio.yaml: ${report.studioYaml}`,
       `superpowers: ${report.superpowers}`,
