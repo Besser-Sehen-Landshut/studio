@@ -2167,7 +2167,7 @@ describe('capabilities at launch', () => {
 
     it('a pid another process holds now does not block', async () => {
       await expect(
-        after(
+        launchAfter(
           () => {},
           () => 'start-other',
         ),
@@ -2186,7 +2186,7 @@ describe('capabilities at launch', () => {
     });
     it('a process that cannot be verified blocks: fail closed', async () => {
       await expect(
-        after(
+        launchAfter(
           () => {},
           () => undefined,
         ),
