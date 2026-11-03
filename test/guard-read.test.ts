@@ -183,7 +183,7 @@ describe('read tools stay in the crew area', () => {
     });
   });
 
-  describe('a tool may normalise `..` before it follows a link', () => {
+  describe('links combined with `..`', () => {
     it('both the written and the real path must be allowed', () => {
       mkdirSync(join(wt, 'sub', 'deep'), { recursive: true });
       symlinkSync(join(wt, 'sub', 'deep'), join(wt, 'inner'));
@@ -239,6 +239,85 @@ describe('read tools stay in the crew area', () => {
           file_path,
         ).toBe('allow');
       }
+    });
+  });
+
+  describe('no `..` in any read path', () => {
+    const LINKS: [string, () => string][] = [
+      ['inner', () => join(wt, 'sub', 'deep')],
+      ['outer', () => outside],
+    ];
+    beforeAll(() => {
+      mkdirSync(join(wt, 'sub', 'deep'), { recursive: true });
+      for (const [name, to] of LINKS) symlinkSync(to(), join(wt, name));
+    });
+    afterAll(() => {
+      for (const [name] of LINKS) rmSync(join(wt, name));
+    });
+    const reason = (toolName: string, toolInput: Record<string, unknown>, cwd?: string) =>
+      evaluateGuard({ toolName, toolInput, cwd }, ctx);
+
+    // Each of these reported forms lands in the area under some reading of `..`.
+    it.each<[string, () => [string, Record<string, unknown>, string?]]>([
+      ['written form ends on a link', () => ['Read', { file_path: `${wt}/inner/../link/a.ts` }]],
+      [
+        'relative from a linked cwd',
+        () => ['Read', { file_path: '../link/a.ts' }, join(wt, 'inner')],
+      ],
+      ['real form stays in', () => ['Read', { file_path: `${wt}/inner/../../wt-other/x` }]],
+      ['stays in the clone', () => ['Read', { file_path: `${wt}/sub/../sub/a.ts` }]],
+      ['relative and harmless', () => ['Read', { file_path: 'sub/../sub/a.ts' }, wt]],
+      ['in a listed root', () => ['Read', { file_path: `${home}/x/../.gitconfig` }]],
+      ['trailing', () => ['Read', { file_path: `${wt}/sub/..` }]],
+      ['Grep path', () => ['Grep', { pattern: 'x', path: `${wt}/sub/..` }]],
+      ['Grep relative path', () => ['Grep', { pattern: 'x', path: '../sub' }, join(wt, 'inner')]],
+      ['Glob path', () => ['Glob', { pattern: '*', path: `${wt}/sub/../sub` }]],
+      ['Glob relative path', () => ['Glob', { pattern: '*', path: '..' }, join(wt, 'sub')]],
+      ['Glob pattern', () => ['Glob', { pattern: 'sub/../*.ts' }, wt]],
+      ['Glob pattern after a wildcard', () => ['Glob', { pattern: '*/../*.ts' }, wt]],
+      ['Glob pattern at the end', () => ['Glob', { pattern: 'sub/*/..' }, wt]],
+      ['Glob pattern in braces', () => ['Glob', { pattern: '{sub,..}/*.ts' }, wt]],
+      [
+        'Glob pattern from a linked path',
+        () => ['Glob', { pattern: '../*', path: join(wt, 'inner') }],
+      ],
+    ])('%s is denied and says what to do', (_name, input) => {
+      const [tool, toolInput, cwd] = input();
+      const r = reason(tool, toolInput, cwd);
+      expect(r.decision).toBe('deny');
+      expect(r.reason).toContain('without ..');
+    });
+
+    it.each<[string, () => string, (() => string)?]>([
+      ['a link out of the clone', () => join(wt, 'outer', 'a.ts')],
+      ['a relative name from a cwd outside', () => 'a.ts', () => outside],
+    ])('without `..` the real path decides: %s', (_name, file, cwd) => {
+      expect(read(file(), cwd ? cwd() : wt)).toBe('deny');
+    });
+
+    it('from a linked cwd in the clone, a plain name is fine', () => {
+      expect(read('a.ts', join(wt, 'inner'))).toBe('allow');
+      expect(decide('Glob', { pattern: '*.ts', path: 'inner' }, wt)).toBe('allow');
+      expect(decide('Glob', { pattern: '*.ts', path: join(wt, 'outer') })).toBe('deny');
+      expect(decide('Glob', { pattern: 'outer/*.ts' }, wt)).toBe('deny');
+    });
+
+    it('a name that only starts with dots is not `..`', () => {
+      expect(read(join(wt, 'sub', '..foo', 'a.ts'))).toBe('allow');
+      expect(read(join(wt, '...', 'a.ts'))).toBe('allow');
+    });
+
+    it('`..` does not slip past the secret check of the write tools', () => {
+      mkdirSync(join(root, 'wt-secret', 'sub'), { recursive: true });
+      const secret = join(root, 'wt-secret');
+      const check = (file_path: string) =>
+        evaluateGuard(
+          { toolName: 'Edit', toolInput: { file_path }, cwd: secret },
+          { ...ctx, worktree: secret },
+        ).decision;
+      expect(check(`${secret}/sub/../.env`)).toBe('deny');
+      expect(check('sub/../.env')).toBe('deny');
+      expect(check(`${secret}/sub/../a.ts`)).toBe('allow');
     });
   });
 
