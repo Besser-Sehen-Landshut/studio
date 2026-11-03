@@ -11,6 +11,7 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { builtInAccount, crewClaudeDir } from './accounts.js';
 import type { WorkItem } from './board.js';
 import { boardPath, loadBoard, saveBoard } from './board.js';
 import {
@@ -1046,7 +1047,20 @@ async function launchCrewLocked(
   let oauthToken = penv.CLAUDE_CODE_OAUTH_TOKEN || undefined;
   let providerConfigDir: string | undefined;
   const command = ownerConfig.crewCredentialCommand;
-  if (command === undefined) {
+  // Without a provider, accounts kept by Studio come next: only the active one, never another.
+  const account = command === undefined ? builtInAccount(owner, ports.clock.now()) : undefined;
+  if (account !== undefined) {
+    label = account.label;
+    oauthToken = account.token;
+    const dir = crewClaudeDir(owner);
+    if (!existsSync(dir)) {
+      throw new Error(`the crew config dir ${dir} is missing; run studio account setup-plugins`);
+    }
+    providerConfigDir = checkProviderConfigDir(dir, owner);
+    const parkedHere = parks[label];
+    if (parkedHere) throw new Error(allParkedLine(parkedHere.parkedUntil));
+    if (!(usage.remaining(label) > 0)) refuseFull();
+  } else if (command === undefined) {
     if (parks[DEFAULT_LABEL]) {
       throw new Error(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
     }

@@ -17,6 +17,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname as dirnameOf, isAbsolute, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { addAccount, crewClaudeDir } from '../src/accounts.js';
 import type { WorkItem } from '../src/board.js';
 import { type RoleConfig, type StudioConfig, studioConfigSchema } from '../src/config.js';
 import {
@@ -1406,6 +1407,93 @@ describe('crew credentials', () => {
         originUrl: git(project, 'remote', 'get-url', 'origin'),
       }),
     );
+
+  describe('Claude accounts kept by Studio', () => {
+    const ACCOUNT_TOKEN = `fake-value-account-${'q'.repeat(30)}`;
+    const NOW = new Date('2026-10-31T10:00:00Z');
+    const withAccounts = (labels: string[] = ['work'], env = {}) => {
+      const f = fx(env);
+      for (const l of labels) addAccount(f.launcher, l, `${ACCOUNT_TOKEN}-${l}`, NOW);
+      const dir = crewClaudeDir(f.launcher);
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      installCrewSkill(dir, 'test-driven-development', 'systematic-debugging');
+      return { ...f, dir };
+    };
+
+    it('a launch uses the active account: its token in the env, the crew config dir, its label', async () => {
+      const f = withAccounts(['work', 'spare']);
+      const started: Started[] = [];
+      await launchCrew(f.project, item, config, fakePorts(started), f.launcher);
+      const s = started[0] as Started;
+      expect(s.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(`${ACCOUNT_TOKEN}-work`);
+      expect(s.env.CLAUDE_CONFIG_DIR).toBe(realpathSync(f.dir));
+      expect(JSON.parse(readFileSync(join(f.state, 'crew.json'), 'utf8'))[item.id].label).toBe(
+        'work',
+      );
+      expect(filesContaining(f.state, ACCOUNT_TOKEN)).toEqual([]);
+      expect(filesContaining(f.dir, ACCOUNT_TOKEN)).toEqual([]);
+      // The crew may read its config dir, never the tokens beside it.
+      const ctx = JSON.parse(readFileSync(join(f.state, 'guard', `${item.id}.json`), 'utf8'));
+      const settings = JSON.parse(
+        readFileSync(join(f.state, 'settings', `${item.id}.json`), 'utf8'),
+      );
+      const tokenFile = join(f.ownerDir, 'tokens', 'work.json');
+      for (const tool of ['Read', 'Edit']) {
+        const r = evaluateGuard({ toolName: tool, toolInput: { file_path: tokenFile } }, ctx);
+        expect(r.decision, tool).toBe('deny');
+      }
+      expect(settings.sandbox.filesystem.denyRead).toContain(f.ownerDir);
+      expect(settings.sandbox.filesystem.allowRead).not.toContain(join(f.ownerDir, 'tokens'));
+    });
+
+    it('the main login is never the crew config dir', async () => {
+      const f = withAccounts(['work'], { CLAUDE_CONFIG_DIR: '/somewhere/else' });
+      const started: Started[] = [];
+      await launchCrew(f.project, item, config, fakePorts(started), f.launcher);
+      expect((started[0] as Started).env.CLAUDE_CONFIG_DIR).toBe(realpathSync(f.dir));
+    });
+
+    it('accounts take over from a token in the environment', async () => {
+      const f = withAccounts(['work'], { CLAUDE_CODE_OAUTH_TOKEN: TOKEN });
+      const started: Started[] = [];
+      await launchCrew(f.project, item, config, fakePorts(started), f.launcher);
+      expect((started[0] as Started).env.CLAUDE_CODE_OAUTH_TOKEN).toBe(`${ACCOUNT_TOKEN}-work`);
+    });
+
+    it('an active account at its limit waits: no other account is taken', async () => {
+      const f = withAccounts(['work', 'spare']);
+      park(f.state, { work: FAR });
+      const started: Started[] = [];
+      await expect(
+        launchCrew(f.project, item, config, fakePorts(started), f.launcher),
+      ).rejects.toThrow(/usage limit/);
+      expect(started).toHaveLength(0);
+    });
+
+    it('a missing crew config dir refuses, naming setup-plugins', async () => {
+      const f = withAccounts();
+      rmSync(f.dir, { recursive: true });
+      await expect(launchCrew(f.project, item, config, fakePorts([]), f.launcher)).rejects.toThrow(
+        /studio account setup-plugins/,
+      );
+    });
+
+    it('a configured credential provider still comes first', async () => {
+      const f = withAccounts();
+      owner(f.ownerDir, `crew_credential_command: ${provider(f.ownerDir, tokenLine('label-p'))}\n`);
+      const started: Started[] = [];
+      await launchCrew(f.project, item, config, fakePorts(started), f.launcher);
+      expect((started[0] as Started).env.CLAUDE_CODE_OAUTH_TOKEN).toBe(TOKEN);
+    });
+
+    it('a broken account file refuses instead of falling back', async () => {
+      const f = withAccounts();
+      chmodSync(join(f.ownerDir, 'tokens', 'work.json'), 0o644);
+      await expect(launchCrew(f.project, item, config, fakePorts([]), f.launcher)).rejects.toThrow(
+        /mode wider/,
+      );
+    });
+  });
 
   describe('API billing', () => {
     it('api key vars stripped from crew env by default', async () => {

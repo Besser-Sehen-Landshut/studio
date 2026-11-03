@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.0] - 2026-11-03
+
+Claude accounts kept by Studio. Not tagged yet; the maintainers tag after the merge.
+
+### Added
+
+- `studio account add <label>`: stores a token from `claude setup-token` (hidden input, owner only,
+  terminal) in `tokens/<label>.json` in the owner config, mode 0600. The first account becomes
+  active and installs the `superpowers` and `studio` plugins into the crew config dir.
+- `studio account list`, `use <label>`, `remove <label>` and `setup-plugins`.
+- Without a credential provider, crews use the active stored account with `CLAUDE_CODE_OAUTH_TOKEN`
+  and the crew config dir `claude/` in the owner config, never `~/.claude`. Without accounts nothing
+  changes.
+- `studio doctor` shows how crews log in, the accounts and their state. It and `account list` warn
+  30 days before a token is a year old; after that a launch refuses.
+- README: "Claude accounts", and the layout of stored accounts as a contract for providers.
+
 ## [0.5.1] - 2026-11-03
 
 No state should need a hand edit of the board before the first real crew run. Not tagged yet; the

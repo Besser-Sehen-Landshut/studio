@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { runAccount } from './account-command.js';
 import { type Board, loadBoard, saveBoard, transition, type WorkItem } from './board.js';
 import { capabilitiesDir } from './capabilities.js';
 import { readCapacity } from './capacity.js';
@@ -156,6 +157,11 @@ Commands:
   setup stack [--write]    Detect the project's stacks from its manifest files
   secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
   doctor                   What is set and what is missing, never values
+  account add <label>      Owner only, in a terminal: store a token from claude setup-token
+  account list             Stored Claude accounts and their state, never a token
+  account use <label>      Owner only, in a terminal: make another account the active one
+  account remove <label>   Owner only, in a terminal: remove a stored account
+  account setup-plugins    Install the plugins crews need into the crew config dir
   accounts-clear <label>   Owner only, in a terminal: clear a label's account block
 `;
 
@@ -931,6 +937,21 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
       case 'doctor': {
         return await runDoctor({ project, owner, env: deps.env, ports, json, stdout });
+      }
+
+      case 'account': {
+        return await runAccount({
+          args: rest,
+          owner,
+          ownerRoot: ownerRoot(),
+          ports,
+          env: deps.env,
+          json,
+          isTerminal: deps.isTerminal === true,
+          ...(deps.readSecret === undefined ? {} : { readSecret: deps.readSecret }),
+          stdout,
+          stderr,
+        });
       }
 
       case 'accounts-clear': {
