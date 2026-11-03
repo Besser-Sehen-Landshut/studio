@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -218,6 +219,22 @@ describe('errors never carry file content', () => {
     addAccount(o, 'a', TOKEN, NOW);
     writeFileSync(join(accountsDir(o), 'active'), `${SECRET}\n`, { mode: 0o600 });
     for (const m of messages(o)) expect(m).not.toContain(SECRET.slice(0, 24));
+  });
+  it('a FIFO in place of the account file refuses at once, without hanging', () => {
+    const o = owner();
+    addAccount(o, 'a', TOKEN, NOW);
+    rmSync(accountFile(o, 'a'));
+    spawnSync('mkfifo', ['-m', '600', accountFile(o, 'a')]);
+    expect(() => builtInAccount(o, NOW)).toThrow(/not a regular file/);
+  });
+  it('a link in place of the account file is not followed', () => {
+    const o = owner();
+    addAccount(o, 'a', TOKEN, NOW);
+    const real = join(o.homedir, 'real.json');
+    writeFileSync(real, readFileSync(accountFile(o, 'a')), { mode: 0o600 });
+    rmSync(accountFile(o, 'a'));
+    symlinkSync(real, accountFile(o, 'a'));
+    expect(() => builtInAccount(o, NOW)).toThrow(/cannot be read \(ELOOP\)|not a regular file/);
   });
   it('an unreadable file names the error code, nothing else', () => {
     const o = owner();

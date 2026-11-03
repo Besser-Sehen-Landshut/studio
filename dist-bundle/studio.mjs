@@ -7856,8 +7856,12 @@ import { homedir as homedir4 } from "node:os";
 import { randomBytes as randomBytes4 } from "node:crypto";
 import {
   chmodSync as chmodSync2,
+  closeSync as closeSync4,
+  constants as constants3,
+  fstatSync as fstatSync3,
   lstatSync as lstatSync5,
   mkdirSync as mkdirSync2,
+  openSync as openSync4,
   readdirSync as readdirSync2,
   readFileSync as readFileSync7,
   renameSync as renameSync4,
@@ -29670,11 +29674,16 @@ function checkDir(o2) {
   if ((st.mode & 63) !== 0) throw new Error(`${dir} has a mode wider than 0700`);
 }
 function readPrivate(o2, file2) {
-  const st = lstatSync5(file2);
-  if (!st.isFile()) throw new Error(`${file2} is not a regular file`);
-  if (st.uid !== uidOf(o2)) throw new Error(`${file2} has another owner`);
-  if ((st.mode & 511 & ~384) !== 0) throw new Error(`${file2} has a mode wider than 0600`);
-  return readFileSync7(file2, "utf8");
+  const fd = openSync4(file2, constants3.O_RDONLY | constants3.O_NOFOLLOW | constants3.O_NONBLOCK);
+  try {
+    const st = fstatSync3(fd);
+    if (!st.isFile()) throw new Error(`${file2} is not a regular file`);
+    if (st.uid !== uidOf(o2)) throw new Error(`${file2} has another owner`);
+    if ((st.mode & 511 & ~384) !== 0) throw new Error(`${file2} has a mode wider than 0600`);
+    return readFileSync7(fd, "utf8");
+  } finally {
+    closeSync4(fd);
+  }
 }
 function readOrCode(o2, file2, missing) {
   try {
@@ -30824,17 +30833,32 @@ async function runAccount(o2) {
   }
   if (sub === "remove" && !noLabel()) {
     ownerOnly();
-    const row = accountRows(o2).find((r) => r.label === label);
-    if (row === void 0) throw new Error(`no account ${label}`);
-    if (row.state.startsWith("unknown") || row.running > 0) {
-      throw new Error(`account ${label} may have a crew running; stop it first, nothing removed`);
+    const lock = acquireStateLock(o2.ownerRoot, LAUNCH_LOCK, {
+      now: o2.ports.clock.now(),
+      heartbeatStaleMs: LAUNCH_LOCK_STALE_MS
+    });
+    if (!lock) throw new Error("a launch is in progress (launch.lock); try again, nothing removed");
+    try {
+      const row = accountRows(o2).find((r) => r.label === label);
+      if (row === void 0) throw new Error(`no account ${label}`);
+      if (row.state.startsWith("unknown") || row.running > 0) {
+        throw new Error(`account ${label} may have a crew running; stop it first, nothing removed`);
+      }
+      removeAccount(o2.owner, label);
+    } finally {
+      lock.release();
     }
-    removeAccount(o2.owner, label);
     o2.stdout(`account ${label} removed
 `);
+    if (listAccounts(o2.owner).length === 0) {
+      o2.stderr(
+        "warning: no stored account is left: launches use the environment or your main login (~/.claude or CLAUDE_CONFIG_DIR) again, unless a credential provider is set\n"
+      );
+    }
     return 0;
   }
   if (sub === "setup-plugins" && label === void 0) {
+    ownerOnly();
     const failed = await setupPlugins(o2.owner, o2.ports, o2.env);
     if (failed !== void 0) throw new Error(`plugin setup: ${failed}`);
     o2.stdout(`plugins installed in ${crewClaudeDir(o2.owner)}
@@ -32770,7 +32794,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
     dirs.tmpDir,
     dirs.homeDir,
     ...toolchain,
-    ...loginDir === void 0 ? [] : [loginDir]
+    ...loginDir === void 0 ? [] : ["skills", "plugins/cache", "plugins/marketplaces"].map((p) => join18(loginDir, p))
   ];
   const ctxFile = join18(stateRoot, "guard", `${id}.json`);
   const protectedPaths = [
@@ -33633,11 +33657,11 @@ function planAssignments(board, config2, capacity, running, hold, credentialSlot
 
 // src/queue.ts
 import {
-  closeSync as closeSync4,
-  constants as constants3,
+  closeSync as closeSync5,
+  constants as constants4,
   existsSync as existsSync5,
   lstatSync as lstatSync17,
-  openSync as openSync4,
+  openSync as openSync5,
   readFileSync as readFileSync21,
   writeSync as writeSync2
 } from "node:fs";
@@ -33783,16 +33807,16 @@ function appendStateLine(stateRoot, name, line) {
   } else {
     ensureStateDir(stateRoot, dirname9(file2));
   }
-  const fd = openSync4(
+  const fd = openSync5(
     file2,
-    constants3.O_WRONLY | constants3.O_CREAT | constants3.O_APPEND | (constants3.O_NOFOLLOW ?? 0),
+    constants4.O_WRONLY | constants4.O_CREAT | constants4.O_APPEND | (constants4.O_NOFOLLOW ?? 0),
     384
   );
   try {
     writeSync2(fd, `${torn ? "\n" : ""}${line}
 `);
   } finally {
-    closeSync4(fd);
+    closeSync5(fd);
   }
 }
 var BUCKETS = /* @__PURE__ */ new Set(["pass", "fail", "pending", "skipping", "cancel"]);
@@ -35761,7 +35785,7 @@ function readHiddenLine(prompt, input2, write) {
 
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync6, openSync as openSync6, readFileSync as readFileSync26 } from "node:fs";
+import { closeSync as closeSync7, openSync as openSync7, readFileSync as readFileSync26 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -36808,10 +36832,10 @@ var npmRunPathEnv = ({ env = process5.env, ...options } = {}) => {
 import { setTimeout as setTimeout3 } from "node:timers/promises";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/signal.js
-import { constants as constants6 } from "node:os";
+import { constants as constants7 } from "node:os";
 
 // node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/main.js
-import { constants as constants5 } from "node:os";
+import { constants as constants6 } from "node:os";
 
 // node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/realtime.js
 var getRealtimeSignals = () => {
@@ -36829,7 +36853,7 @@ var SIGRTMIN = 34;
 var SIGRTMAX = 64;
 
 // node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/signals.js
-import { constants as constants4 } from "node:os";
+import { constants as constants5 } from "node:os";
 
 // node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/core.js
 var SIGNALS = [
@@ -37120,7 +37144,7 @@ var normalizeSignal = ({
 }) => {
   const {
     signals: { [name]: constantSignal }
-  } = constants4;
+  } = constants5;
   const supported = constantSignal !== void 0;
   const number4 = supported ? constantSignal : defaultNumber;
   return { name, number: number4, description, supported, action, forced, standard };
@@ -37169,7 +37193,7 @@ var getSignalByNumber = (number4, signals2) => {
   };
 };
 var findSignalByNumber = (number4, signals2) => {
-  const signal = signals2.find(({ name }) => constants5.signals[name] === number4);
+  const signal = signals2.find(({ name }) => constants6.signals[name] === number4);
   if (signal !== void 0) {
     return signal;
   }
@@ -37203,13 +37227,13 @@ var normalizeSignalInteger = (signalInteger, optionName) => {
   throw new TypeError(`Invalid ${optionName} ${signalInteger}: this signal integer does not exist.
 ${getAvailableSignals()}`);
 };
-var getSignalsIntegerToName = () => new Map(Object.entries(constants6.signals).reverse().map(([signalName, signalInteger]) => [signalInteger, signalName]));
+var getSignalsIntegerToName = () => new Map(Object.entries(constants7.signals).reverse().map(([signalName, signalInteger]) => [signalInteger, signalName]));
 var signalsIntegerToName = getSignalsIntegerToName();
 var normalizeSignalName = (signalName, optionName) => {
-  if (signalName in constants6.signals) {
+  if (signalName in constants7.signals) {
     return signalName;
   }
-  if (signalName.toUpperCase() in constants6.signals) {
+  if (signalName.toUpperCase() in constants7.signals) {
     throw new TypeError(`Invalid ${optionName} '${signalName}': please rename it to '${signalName.toUpperCase()}'.`);
   }
   throw new TypeError(`Invalid ${optionName} '${signalName}': this signal name does not exist.
@@ -37217,8 +37241,8 @@ ${getAvailableSignals()}`);
 };
 var getAvailableSignals = () => `Available signal names: ${getAvailableSignalNames()}.
 Available signal numbers: ${getAvailableSignalIntegers()}.`;
-var getAvailableSignalNames = () => Object.keys(constants6.signals).sort().map((signalName) => `'${signalName}'`).join(", ");
-var getAvailableSignalIntegers = () => [...new Set(Object.values(constants6.signals).sort((signalInteger, signalIntegerTwo) => signalInteger - signalIntegerTwo))].join(", ");
+var getAvailableSignalNames = () => Object.keys(constants7.signals).sort().map((signalName) => `'${signalName}'`).join(", ");
+var getAvailableSignalIntegers = () => [...new Set(Object.values(constants7.signals).sort((signalInteger, signalIntegerTwo) => signalInteger - signalIntegerTwo))].join(", ");
 var getSignalDescription = (signal) => signalsByName[signal].description;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/timeout.js
@@ -38036,7 +38060,7 @@ var ENCODING_ALIASES = {
 var serializeEncoding = (encoding) => typeof encoding === "string" ? `"${encoding}"` : String(encoding);
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/command-file.js
-import { openSync as openSync5, readSync as readSync3, closeSync as closeSync5 } from "node:fs";
+import { openSync as openSync6, readSync as readSync3, closeSync as closeSync6 } from "node:fs";
 import { Buffer as Buffer2 } from "node:buffer";
 import path5 from "node:path";
 import process7 from "node:process";
@@ -38203,11 +38227,11 @@ var readShebang = (file2) => {
   const buffer = Buffer2.alloc(SHEBANG_BYTE_LENGTH);
   let bytesRead = 0;
   try {
-    const fileDescriptor = openSync5(file2, "r");
+    const fileDescriptor = openSync6(file2, "r");
     try {
       bytesRead = readSync3(fileDescriptor, buffer, 0, SHEBANG_BYTE_LENGTH, 0);
     } finally {
-      closeSync5(fileDescriptor);
+      closeSync6(fileDescriptor);
     }
   } catch {
     return void 0;
@@ -43635,7 +43659,7 @@ function realPorts(claudeBin = "claude") {
   };
   const claude = {
     async start(cwd, args, prompt, logPath, env) {
-      const fd = openSync6(logPath, "a");
+      const fd = openSync7(logPath, "a");
       try {
         const child = spawn2(claudeBin, args, {
           cwd,
@@ -43653,7 +43677,7 @@ function realPorts(claudeBin = "claude") {
         child.unref();
         return { pid };
       } finally {
-        closeSync6(fd);
+        closeSync7(fd);
       }
     },
     alive,

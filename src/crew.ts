@@ -665,16 +665,17 @@ export function writeCrewSettings(
   // denied too, literal and real spelling, so an XDG_STATE_HOME outside the home is covered.
   const stateBase = dirname(stateRoot);
   const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase)]);
-  // A provider's login dir is opened for reads on purpose. So the sandbox does not protect that
-  // login from crew shell commands; the guard entry below is only a second net for the crew's file
-  // tools (see SECURITY.md).
   const loginDir = dirs.providerConfigDir;
+  // Of a login dir only what skills need: it also holds the transcripts, `.claude.json` and shell
+  // snapshots of other crews. Claude Code itself runs outside the sandbox and reaches the rest.
   const allowRead = [
     clone,
     dirs.tmpDir,
     dirs.homeDir,
     ...toolchain,
-    ...(loginDir === undefined ? [] : [loginDir]),
+    ...(loginDir === undefined
+      ? []
+      : ['skills', 'plugins/cache', 'plugins/marketplaces'].map((p) => join(loginDir, p))),
   ];
   const ctxFile = join(stateRoot, 'guard', `${id}.json`);
   // The clone lives inside the state root, so the root itself cannot be protected (the guard

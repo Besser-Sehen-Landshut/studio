@@ -16,7 +16,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { activeLabel, addAccount } from '../src/accounts.js';
 import { loadBoard } from '../src/board.js';
 import { type CliDeps, runCli } from '../src/cli.js';
-import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
+import { acquireStateLock, ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import { newReportName } from '../src/report.js';
 import { prepareCrewDir } from './crew-dir.js';
@@ -759,7 +759,9 @@ describe('studio account', () => {
     expect(r.err).toContain('studio account setup-plugins');
     expect(existsSync(join(fx.ownerDir, 'tokens', 'work.json'))).toBe(true);
     const again = withPlugins();
-    expect((await cli(fx, again.ports, ['account', 'setup-plugins'])).code).toBe(0);
+    expect(
+      (await cli(fx, again.ports, ['account', 'setup-plugins'], { isTerminal: true })).code,
+    ).toBe(0);
     expect(again.calls).toHaveLength(4);
   });
 
@@ -824,6 +826,46 @@ describe('studio account', () => {
     expect((await cli(fx, ports, ['account', 'remove', 'work'])).code).toBe(1);
     expect((await cli(fx, ports, ['account', 'remove', 'work'], terminal())).code).toBe(0);
     expect(existsSync(join(fx.ownerDir, 'tokens', 'work.json'))).toBe(false);
+  });
+
+  it('setup-plugins is for the owner in a terminal', async () => {
+    const fx = makeFx();
+    const { ports, calls } = withPlugins();
+    expect((await cli(fx, ports, ['account', 'setup-plugins'])).code).toBe(1);
+    expect(calls).toHaveLength(0);
+    expect((await cli(fx, ports, ['account', 'setup-plugins'], { isTerminal: true })).code).toBe(0);
+    expect(calls).toHaveLength(4);
+  });
+
+  it('remove refuses while a launch holds the launch lock', async () => {
+    const fx = makeFx();
+    const { ports } = withPlugins();
+    await cli(fx, ports, ['account', 'add', 'work'], terminal());
+    mkdirSync(fx.owner, { recursive: true });
+    const lock = acquireStateLock(fx.owner, 'launch.lock', {
+      now: new Date(),
+      heartbeatStaleMs: 60_000,
+    });
+    try {
+      const r = await cli(fx, ports, ['account', 'remove', 'work'], terminal());
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/launch/);
+      expect(existsSync(join(fx.ownerDir, 'tokens', 'work.json'))).toBe(true);
+    } finally {
+      lock?.release();
+    }
+  });
+
+  it('removing the last account says that launches use the main login again', async () => {
+    const fx = makeFx();
+    const { ports } = withPlugins();
+    await cli(fx, ports, ['account', 'add', 'work'], terminal());
+    await cli(fx, ports, ['account', 'add', 'spare'], terminal());
+    const first = await cli(fx, ports, ['account', 'remove', 'spare'], terminal());
+    expect(first.err).not.toMatch(/main login/);
+    const last = await cli(fx, ports, ['account', 'remove', 'work'], terminal());
+    expect(last.code).toBe(0);
+    expect(last.err).toMatch(/warning: .*no stored account is left.*main login/);
   });
 
   it('planning counts the room of the active account only', async () => {

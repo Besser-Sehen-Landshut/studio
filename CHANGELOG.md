@@ -26,6 +26,9 @@ Claude accounts kept by Studio. Not tagged yet; the maintainers tag after the me
   instead of `~/.claude` or the launching shell's `CLAUDE_CONFIG_DIR`. Run
   `studio account setup-plugins` once before the next launch; until then a launch refuses.
 - Errors about account files name only the file and an error code, never its content.
+- Crew shell commands may read only `skills/`, `plugins/cache/` and `plugins/marketplaces/` of the crew's
+  Claude config dir, no longer all of it. `account setup-plugins` needs the owner in a terminal.
+  `account remove` runs under the launch lock and warns when the last account goes.
 
 ## [0.5.1] - 2026-11-03
 

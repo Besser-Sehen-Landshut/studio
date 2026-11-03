@@ -1,8 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import {
   chmodSync,
+  closeSync,
+  constants,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -60,11 +64,17 @@ function checkDir(o: OwnerEnv): void {
 
 /** A regular file of ours, mode 0600 or narrower, no link; its text. */
 function readPrivate(o: OwnerEnv, file: string): string {
-  const st = lstatSync(file);
-  if (!st.isFile()) throw new Error(`${file} is not a regular file`);
-  if (st.uid !== uidOf(o)) throw new Error(`${file} has another owner`);
-  if ((st.mode & 0o777 & ~0o600) !== 0) throw new Error(`${file} has a mode wider than 0600`);
-  return readFileSync(file, 'utf8');
+  // Opened without following a link and without blocking on a FIFO; checked on what was opened.
+  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw new Error(`${file} is not a regular file`);
+    if (st.uid !== uidOf(o)) throw new Error(`${file} has another owner`);
+    if ((st.mode & 0o777 & ~0o600) !== 0) throw new Error(`${file} has a mode wider than 0600`);
+    return readFileSync(fd, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**

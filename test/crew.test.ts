@@ -1435,6 +1435,16 @@ describe('crew credentials', () => {
       );
       expect(filesContaining(f.state, ACCOUNT_TOKEN)).toEqual([]);
       expect(filesContaining(f.dir, ACCOUNT_TOKEN)).toEqual([]);
+      const allowRead = JSON.parse(
+        readFileSync(join(f.state, 'settings', `${item.id}.json`), 'utf8'),
+      ).sandbox.filesystem.allowRead as string[];
+      const real = realpathSync(f.dir);
+      expect(allowRead).not.toContain(real);
+      expect(allowRead).toEqual(
+        expect.arrayContaining(
+          ['skills', 'plugins/cache', 'plugins/marketplaces'].map((p) => join(real, p)),
+        ),
+      );
       // The crew may read its config dir, never the tokens beside it.
       const ctx = JSON.parse(readFileSync(join(f.state, 'guard', `${item.id}.json`), 'utf8'));
       const settings = JSON.parse(
@@ -1761,7 +1771,16 @@ describe('crew credentials', () => {
       expect(s.env.CLAUDE_CONFIG_DIR).toBe(login);
       expect(s.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
       const settings = JSON.parse(readFileSync(join(state, 'settings', 'APP-12.json'), 'utf8'));
-      expect(settings.sandbox.filesystem.allowRead).toContain(login);
+      // Only what skills need; transcripts, .claude.json and shell snapshots of other crews stay shut.
+      expect(settings.sandbox.filesystem.allowRead).not.toContain(login);
+      expect(settings.sandbox.filesystem.allowRead).toEqual(
+        expect.arrayContaining(
+          ['skills', 'plugins/cache', 'plugins/marketplaces'].map((p) => join(login, p)),
+        ),
+      );
+      for (const p of settings.sandbox.filesystem.allowRead as string[]) {
+        expect(p.startsWith(`${login}/projects`) || p.endsWith('.claude.json')).toBe(false);
+      }
       expect(settings.sandbox.filesystem.allowRead).not.toContain(ownerDir);
       expect(settings.sandbox.filesystem.denyRead).toContain(ownerDir);
       const ctx = JSON.parse(readFileSync(join(state, 'guard', 'APP-12.json'), 'utf8'));

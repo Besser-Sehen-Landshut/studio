@@ -12,9 +12,10 @@ import {
 } from './accounts.js';
 import { loadOwnerConfig, type OwnerEnv } from './config.js';
 import { activeParks, readBlocks, readLimits } from './limits.js';
+import { acquireStateLock } from './paths.js';
 import type { Ports } from './ports.js';
 import { safe } from './setup-ci-command.js';
-import { labelUsage } from './usage.js';
+import { LAUNCH_LOCK, LAUNCH_LOCK_STALE_MS, labelUsage } from './usage.js';
 
 export interface AccountRow {
   label: string;
@@ -144,16 +145,32 @@ export async function runAccount(o: {
   }
   if (sub === 'remove' && !noLabel()) {
     ownerOnly();
-    const row = accountRows(o).find((r) => r.label === label);
-    if (row === undefined) throw new Error(`no account ${label}`);
-    if (row.state.startsWith('unknown') || row.running > 0) {
-      throw new Error(`account ${label} may have a crew running; stop it first, nothing removed`);
+    // Under the launch lock: no launch can pick this account between the check and the removal.
+    const lock = acquireStateLock(o.ownerRoot, LAUNCH_LOCK, {
+      now: o.ports.clock.now(),
+      heartbeatStaleMs: LAUNCH_LOCK_STALE_MS,
+    });
+    if (!lock) throw new Error('a launch is in progress (launch.lock); try again, nothing removed');
+    try {
+      const row = accountRows(o).find((r) => r.label === label);
+      if (row === undefined) throw new Error(`no account ${label}`);
+      if (row.state.startsWith('unknown') || row.running > 0) {
+        throw new Error(`account ${label} may have a crew running; stop it first, nothing removed`);
+      }
+      removeAccount(o.owner, label as string);
+    } finally {
+      lock.release();
     }
-    removeAccount(o.owner, label as string);
     o.stdout(`account ${label} removed\n`);
+    if (listAccounts(o.owner).length === 0) {
+      o.stderr(
+        'warning: no stored account is left: launches use the environment or your main login (~/.claude or CLAUDE_CONFIG_DIR) again, unless a credential provider is set\n',
+      );
+    }
     return 0;
   }
   if (sub === 'setup-plugins' && label === undefined) {
+    ownerOnly();
     const failed = await setupPlugins(o.owner, o.ports, o.env);
     if (failed !== undefined) throw new Error(`plugin setup: ${failed}`);
     o.stdout(`plugins installed in ${crewClaudeDir(o.owner)}\n`);
