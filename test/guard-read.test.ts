@@ -202,6 +202,25 @@ describe('read tools stay in the crew area', () => {
         rmSync(join(wt, 'inner'));
       }
     });
+    it('a link as the working directory or Glob path counts too', () => {
+      mkdirSync(join(wt, 'sub', 'deep'), { recursive: true });
+      symlinkSync(join(wt, 'sub', 'deep'), join(wt, 'inner'));
+      const inner = join(wt, 'inner');
+      try {
+        expect(read('../../wt-other/x', inner)).toBe('deny');
+        expect(decide('Grep', { pattern: 'x', path: '../../wt-other' }, inner)).toBe('deny');
+        expect(decide('Glob', { pattern: '*', path: '../../wt-other' }, inner)).toBe('deny');
+        expect(decide('Glob', { pattern: '../../wt-other/*' }, inner)).toBe('deny');
+        expect(decide('Glob', { pattern: '../../wt-other/*', path: inner })).toBe('deny');
+        expect(decide('Glob', { pattern: '../../wt-other/*', path: 'inner' }, wt)).toBe('deny');
+        // Inside on every form: no reason to refuse.
+        expect(read('a.ts', inner)).toBe('allow');
+        expect(decide('Glob', { pattern: '*.ts', path: inner })).toBe('allow');
+        expect(decide('Glob', { pattern: '*.ts', path: 'inner' }, wt)).toBe('allow');
+      } finally {
+        rmSync(inner);
+      }
+    });
     it('a link that stays inside on both forms is fine', () => {
       symlinkSync(join(wt, 'sub'), join(wt, 'inner'));
       try {

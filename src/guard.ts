@@ -1418,22 +1418,27 @@ function scanDirForSecrets(env: Env, dir: string): void {
 }
 
 /** The one rule for read tools: the worktree and the listed roots, on the real path; nothing else. */
-function checkReadScope(env: Env, tok: string, base: string, tool: string): void {
+function checkReadScope(env: Env, tok: string, bases: string[], tool: string): void {
   // A tool may trim or expand these where this check would not: refuse rather than guess.
   if (tok.startsWith('~') || /^\s|\s$|\p{Cc}/u.test(tok)) {
     deny(`${tool}: unresolvable path: ${JSON.stringify(tok)}`);
   }
-  // A tool may drop `..` before it follows a link, or after: both forms must stay in the area.
-  const written = normalize(isAbsolute(tok) ? tok : join(base, tok));
-  for (const p of [written, resolveReal(tok, base)]) {
-    if (!isUnder(env.readRoots, p) && !isClaudeFile(env, p)) {
-      deny(`${tool} outside this crew's files: ${tok}`);
+  // A tool may drop `..` before it follows a link, or after, and may start from the working
+  // directory as written or as resolved: every form must stay in the area.
+  for (const base of bases) {
+    for (const p of [writtenPath(tok, base), resolveReal(tok, base)]) {
+      if (!isUnder(env.readRoots, p) && !isClaudeFile(env, p)) {
+        deny(`${tool} outside this crew's files: ${tok}`);
+      }
     }
   }
 }
 
+const writtenPath = (tok: string, base: string): string =>
+  normalize(isAbsolute(tok) ? tok : join(base, tok));
+
 /** A glob stays in scope when the part before its first wildcard does and no `..` follows it. */
-function checkGlobScope(env: Env, pattern: string, base: string, tool: string): void {
+function checkGlobScope(env: Env, pattern: string, bases: string[], tool: string): void {
   for (const e of braceExpand(pattern)) {
     const segs = e.split('/');
     const first = segs.findIndex((s) => hasMagic(s));
@@ -1441,7 +1446,7 @@ function checkGlobScope(env: Env, pattern: string, base: string, tool: string): 
       deny(`${tool} outside this crew's files: ${e}`);
     }
     const prefix = first < 0 ? e : segs.slice(0, first).join('/') || (isAbsolute(e) ? '/' : '.');
-    checkReadScope(env, prefix, base, tool);
+    checkReadScope(env, prefix, bases, tool);
   }
 }
 
@@ -1534,6 +1539,7 @@ function check(input: GuardInput, ctx: GuardContext): void {
   };
   const { toolName, toolInput } = input;
   const cwd = resolveReal(input.cwd ?? wt, wt);
+  const cwdForms = [writtenPath(input.cwd ?? ctx.worktree, wt), cwd];
 
   if (typeof toolName !== 'string' || !CREW_TOOLS.has(toolName)) {
     deny(`tool not allowed for crew: ${String(toolName)}`);
@@ -1556,7 +1562,7 @@ function check(input: GuardInput, ctx: GuardContext): void {
   if (toolName === 'Read') {
     const p = toolInput.file_path;
     if (typeof p !== 'string' || p === '') deny('Read call without file_path');
-    checkReadScope(env, p as string, cwd, toolName);
+    checkReadScope(env, p as string, cwdForms, toolName);
   }
   if (FILE_TOOLS.has(toolName)) {
     for (const key of ['file_path', 'notebook_path']) {
@@ -1568,12 +1574,14 @@ function check(input: GuardInput, ctx: GuardContext): void {
       deny(`${toolName} call with a path that is not a string`);
     }
     const given = (toolInput.path ?? '') as string;
-    checkReadScope(env, given === '' ? '.' : given, cwd, toolName);
+    const start = given === '' ? '.' : given;
+    checkReadScope(env, start, cwdForms, toolName);
     if (toolName === 'Grep') {
       checkSearch(env, toolInput.path, [toolInput.glob], cwd);
     } else {
       if (typeof toolInput.pattern !== 'string') deny('Glob call without a pattern');
-      checkGlobScope(env, toolInput.pattern as string, resolveReal(given || '.', cwd), toolName);
+      const starts = cwdForms.flatMap((b) => [writtenPath(start, b), resolveReal(start, b)]);
+      checkGlobScope(env, toolInput.pattern as string, starts, toolName);
       checkSearch(env, toolInput.path, [toolInput.pattern], cwd);
     }
   }
