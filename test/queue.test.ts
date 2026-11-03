@@ -23,6 +23,7 @@ import {
   loadQueue,
   mergeOne,
   type QueueCurrent,
+  QueueHeld,
   type QueueState,
   releaseOnSignal,
   runQueue,
@@ -1109,6 +1110,29 @@ describe('approvalProblem', () => {
 });
 
 describe('mergeAllowed', () => {
+  it('a pause arriving while the approval is checked stops the merge', async () => {
+    const g = fakeGh(
+      base([
+        { prefix: REQ, responses: [noRequired] },
+        { prefix: VIEW, responses: [view(H1)] },
+        { prefix: CHK, responses: [checks(['a', 'pass'])] },
+      ]),
+    );
+    let paused = false;
+    const current = entry();
+    await expect(
+      mergeOne(current, mkConfig(), { gh: g.gh, clock: fakeClock().clock, host }, () => {}, {
+        hold: () => (paused ? 'paused' : undefined),
+        mergeAllowed: async () => {
+          paused = true;
+          return undefined;
+        },
+      }),
+    ).rejects.toBeInstanceOf(QueueHeld);
+    expect(g.calls.some((l: string) => l.startsWith('pr merge'))).toBe(false);
+    expect(current.step).toBe('capacity');
+  });
+
   it('is asked about the head that would be merged', async () => {
     const g = fakeGh(
       base([

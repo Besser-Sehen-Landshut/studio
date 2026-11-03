@@ -588,14 +588,15 @@ export async function mergeOne(
         step = 'checks';
         continue;
       }
+      const refused = await opts.mergeAllowed?.(entry, head);
+      if (refused !== undefined) return failed(refused);
+      // Last, because the check above goes to the network: a pause may have arrived meanwhile.
       const held = opts.hold?.();
       if (held !== undefined) {
         // Resume at capacity: the head or the capacity may differ by then.
         enter('capacity');
         throw new QueueHeld(held);
       }
-      const refused = await opts.mergeAllowed?.(entry, head);
-      if (refused !== undefined) return failed(refused);
       const r = await gh.run([
         'pr',
         'merge',
