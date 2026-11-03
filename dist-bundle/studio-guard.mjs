@@ -1454,21 +1454,43 @@ function checkVarBuiltin(name, args) {
 var CREW_NO_STUDIO = "a crew may not run studio";
 var NODE_NAME = /^node(js)?[0-9.]*$/i;
 var isStudioBinary = (w) => /^studio(\.(mjs|cjs|js))?$/i.test(basename(w));
-var NODE_ALTERNATIVE = "use node <relative script> or node --test <relative path>";
+var NODE_ALTERNATIVE = "use node <relative script> or node --test <relative paths or patterns>";
+var STUDIO_NAMES = ["studio", "studio.mjs", "studio.cjs", "studio.js"];
+function checkNodePath(path) {
+  if (unresolved(path) || path.startsWith("~") || isAbsolute(path) || path.split("/").includes("..")) {
+    deny(`node with a path that is not literal and relative is not allowed; ${NODE_ALTERNATIVE}`);
+  }
+  if (!hasMagic(path) && !path.includes("{")) {
+    if (isStudioBinary(path)) deny(CREW_NO_STUDIO);
+    return;
+  }
+  const plain = plainGlob(path);
+  if ("why" in plain) deny(`node --test: ${plain.why}: ${path}; ${NODE_ALTERNATIVE}`);
+  for (const e of plain.expansions) {
+    const last = fileGlobToRegExp(e.slice(e.lastIndexOf("/") + 1));
+    if (STUDIO_NAMES.some((n) => last.test(n))) deny(CREW_NO_STUDIO);
+  }
+}
 function checkNode(args) {
   const first = args[0] ?? "-";
   if (args.length === 1 && (first === "--version" || first === "--help" || first === "--test")) {
     return;
   }
-  const testPath = first === "--test" && args.length === 2 && !args[1].startsWith("-");
-  if (!testPath && (first.startsWith("-") || first.startsWith("~"))) {
+  if (first === "--test") {
+    const paths = args.slice(1);
+    if (paths.some((p) => p.startsWith("-"))) {
+      deny(`node --test takes only paths here, no options; ${NODE_ALTERNATIVE}`);
+    }
+    for (const p of paths) checkNodePath(p);
+    return;
+  }
+  if (first.startsWith("-") || first.startsWith("~")) {
     deny(`node without a literal relative script path is not allowed; ${NODE_ALTERNATIVE}`);
   }
-  const path = testPath ? args[1] : first;
-  if (unresolvedWord(path) || path.startsWith("~") || isAbsolute(path) || path.split("/").includes("..")) {
-    deny(`node with a path that is not literal and relative is not allowed; ${NODE_ALTERNATIVE}`);
+  checkNodePath(first);
+  if (hasMagic(first) || first.includes("{")) {
+    deny(`node runs one literal script path; ${NODE_ALTERNATIVE}`);
   }
-  if (isStudioBinary(path)) deny(CREW_NO_STUDIO);
 }
 var PACKAGE_VALUE_OPTIONS = /* @__PURE__ */ new Set([
   "--filter",
@@ -1669,17 +1691,27 @@ function flatBraces(pattern) {
   }
   return !open;
 }
-function checkGlobScope(env, pattern, base, tool) {
-  const refuse = (why) => deny(`${tool}: ${why}: ${pattern}; use a narrower pattern, or Bash in the sandbox`);
-  if (!/^[\p{L}\p{N}_\-./*?,{}]+$/u.test(pattern)) refuse("only plain Glob patterns are allowed");
-  if (!flatBraces(pattern)) refuse("braces must close and must not nest");
-  if (pattern.includes("..")) refuse("write the pattern without ..");
-  for (const e of braceExpand(pattern)) {
-    if (e.includes("{") || e.includes("}")) refuse("a brace group needs a comma");
-    const segs = e.split("/");
-    if (e.includes("..") || segs.some((s) => /^[.?]{2}$/.test(s))) {
-      refuse("write the pattern without ..");
+function plainGlob(pattern) {
+  if (!/^[\p{L}\p{N}_\-./*?,{}]+$/u.test(pattern))
+    return { why: "only plain patterns are allowed" };
+  if (!flatBraces(pattern)) return { why: "braces must close and must not nest" };
+  if (pattern.includes("..")) return { why: "write the pattern without .." };
+  const expansions = braceExpand(pattern);
+  for (const e of expansions) {
+    if (e.includes("{") || e.includes("}")) return { why: "a brace group needs a comma" };
+    if (e.includes("..") || e.split("/").some((s) => /^[.?]{2}$/.test(s))) {
+      return { why: "write the pattern without .." };
     }
+  }
+  return { expansions };
+}
+function checkGlobScope(env, pattern, base, tool) {
+  const plain = plainGlob(pattern);
+  if ("why" in plain) {
+    deny(`${tool}: ${plain.why}: ${pattern}; use a narrower pattern, or Bash in the sandbox`);
+  }
+  for (const e of plain.expansions) {
+    const segs = e.split("/");
     const first = segs.findIndex((s) => hasMagic(s));
     const prefix = first < 0 ? e : segs.slice(0, first).join("/") || (isAbsolute(e) ? "/" : ".");
     checkReadScope(env, prefix, base, tool);

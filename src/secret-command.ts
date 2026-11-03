@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -11,6 +11,7 @@ import {
   type OwnerConfig,
   type OwnerEnv,
   type StudioConfig,
+  within,
 } from './config.js';
 import {
   checkProviderConfigDir,
@@ -129,6 +130,60 @@ async function gitState(project: string, ports: Ports): Promise<string> {
   }
 }
 
+/** A launch needs the project folder to be a git checkout with `origin`. */
+async function checkoutState(project: string, ports: Ports): Promise<string> {
+  try {
+    await ports.git.run(project, ['rev-parse', '--show-toplevel']);
+  } catch {
+    return 'not a git checkout: clone the repository and run studio in that clone';
+  }
+  try {
+    await ports.git.run(project, ['remote', 'get-url', 'origin']);
+  } catch {
+    return 'no remote origin: add it with git remote add origin <url>';
+  }
+  return 'git checkout with origin';
+}
+
+const CREW_TOOLS = ['cargo', 'rustc', 'rustup', 'node', 'pnpm', 'npm', 'gh', 'git'];
+
+/**
+ * Tools on PATH that lie below the home but outside `crew_toolchain_paths`: the sandbox denies the
+ * home, so crews cannot run them.
+ */
+function toolsOutside(
+  env: Record<string, string | undefined>,
+  home: string,
+  toolchain: string[],
+): string[] {
+  const real = (p: string) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  const realHome = real(home);
+  const open = toolchain.map(real);
+  const out: string[] = [];
+  for (const tool of CREW_TOOLS) {
+    for (const dir of (env.PATH ?? '').split(':').filter((d) => d !== '')) {
+      const file = join(dir, tool);
+      try {
+        if (!statSync(file).isFile()) continue;
+      } catch {
+        continue;
+      }
+      const at = real(file);
+      if (within(at, realHome) && !open.some((t) => within(at, t) || within(file, t))) {
+        out.push(`${tool} lies at ${file}, outside crew_toolchain_paths: crews cannot run it`);
+      }
+      break;
+    }
+  }
+  return out;
+}
+
 /** Whether a skill a crew needs is in that config dir. */
 function skillState(dir: string | undefined, name: string): string {
   const found = dir === undefined ? undefined : skillInstalled(dir, name);
@@ -199,8 +254,16 @@ export async function runDoctor(o: {
       : await crewConfigDir(command, o.owner, o.env, o.ports);
   const studioCrew = skillState(configDir, CREW_SKILL.split(':').at(-1) ?? '');
   const git = await gitState(o.project, o.ports);
+  const projectCheckout = await checkoutState(o.project, o.ports);
+  const toolchain = toolsOutside(
+    o.env,
+    o.owner.homedir ?? homedir(),
+    ownerConfig?.crewToolchainPaths ?? [],
+  );
   const report = {
     claudeLogin,
+    projectCheckout,
+    toolchainOutside: toolchain,
     accounts,
     git,
     crewToken: { ...crewToken, required },
@@ -221,6 +284,8 @@ export async function runDoctor(o: {
     const source = crewToken.source ? ` (${crewToken.source})` : '';
     const provider = report.credentialProvider;
     const lines = [
+      `project checkout: ${projectCheckout}`,
+      ...toolchain.map((t) => `toolchain: ${t}`),
       `claude login: ${claudeLogin}`,
       ...accounts.map(
         (a) =>

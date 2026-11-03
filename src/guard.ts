@@ -1177,33 +1177,60 @@ const NODE_NAME = /^node(js)?[0-9.]*$/i;
 /** `bin/studio` or `dist-bundle/studio.mjs`; case-insensitive because file systems can be. */
 const isStudioBinary = (w: string): boolean => /^studio(\.(mjs|cjs|js))?$/i.test(basename(w));
 
-const NODE_ALTERNATIVE = 'use node <relative script> or node --test <relative path>';
+const NODE_ALTERNATIVE = 'use node <relative script> or node --test <relative paths or patterns>';
 
-/**
- * Running node directly is denied except `node --version`, `node --help`, `node --test`,
- * `node --test <path>` and `node <path>`: the path is the first argument (no option before it), literal,
- * relative, without a `..` segment and not the studio binary. Words after a script path are the
- * script's arguments and stay free.
- */
-function checkNode(args: string[]): void {
-  const first = args[0] ?? '-';
-  if (args.length === 1 && (first === '--version' || first === '--help' || first === '--test')) {
-    return;
-  }
-  const testPath = first === '--test' && args.length === 2 && !(args[1] as string).startsWith('-');
-  if (!testPath && (first.startsWith('-') || first.startsWith('~'))) {
-    deny(`node without a literal relative script path is not allowed; ${NODE_ALTERNATIVE}`);
-  }
-  const path = testPath ? (args[1] as string) : first;
+const STUDIO_NAMES = ['studio', 'studio.mjs', 'studio.cjs', 'studio.js'];
+
+/** One path for node: literal and relative with no `..`, or a plain pattern; never the studio binary. */
+function checkNodePath(path: string): void {
   if (
-    unresolvedWord(path) ||
+    unresolved(path) ||
     path.startsWith('~') ||
     isAbsolute(path) ||
     path.split('/').includes('..')
   ) {
     deny(`node with a path that is not literal and relative is not allowed; ${NODE_ALTERNATIVE}`);
   }
-  if (isStudioBinary(path)) deny(CREW_NO_STUDIO);
+  if (!hasMagic(path) && !path.includes('{')) {
+    if (isStudioBinary(path)) deny(CREW_NO_STUDIO);
+    return;
+  }
+  const plain = plainGlob(path);
+  if ('why' in plain) deny(`node --test: ${plain.why}: ${path}; ${NODE_ALTERNATIVE}`);
+  // A pattern that could name the studio binary is refused whether or not it matches now.
+  for (const e of (plain as { expansions: string[] }).expansions) {
+    const last = fileGlobToRegExp(e.slice(e.lastIndexOf('/') + 1));
+    if (STUDIO_NAMES.some((n) => last.test(n))) deny(CREW_NO_STUDIO);
+  }
+}
+
+/**
+ * Running node directly is denied except `node --version`, `node --help`, `node --test`,
+ * `node --test <paths>` and `node <path>`. A script path is the first argument (no option before
+ * it), literal, relative, without a `..` segment and not the studio binary; words after it are the
+ * script's arguments and stay free. After `--test` every word is such a path or a plain pattern
+ * (see `plainGlob`), with no option among them.
+ */
+function checkNode(args: string[]): void {
+  const first = args[0] ?? '-';
+  if (args.length === 1 && (first === '--version' || first === '--help' || first === '--test')) {
+    return;
+  }
+  if (first === '--test') {
+    const paths = args.slice(1);
+    if (paths.some((p) => p.startsWith('-'))) {
+      deny(`node --test takes only paths here, no options; ${NODE_ALTERNATIVE}`);
+    }
+    for (const p of paths) checkNodePath(p);
+    return;
+  }
+  if (first.startsWith('-') || first.startsWith('~')) {
+    deny(`node without a literal relative script path is not allowed; ${NODE_ALTERNATIVE}`);
+  }
+  checkNodePath(first);
+  if (hasMagic(first) || first.includes('{')) {
+    deny(`node runs one literal script path; ${NODE_ALTERNATIVE}`);
+  }
 }
 
 /** Options of npm, pnpm, yarn and bun that take the next word as a value; skipped to find the command. */
@@ -1459,18 +1486,32 @@ function flatBraces(pattern: string): boolean {
  * nothing that is or could match `..`. A glob stays in scope when the part before its first wildcard
  * does.
  */
-function checkGlobScope(env: Env, pattern: string, base: string, tool: string): void {
-  const refuse = (why: string): never =>
-    deny(`${tool}: ${why}: ${pattern}; use a narrower pattern, or Bash in the sandbox`);
-  if (!/^[\p{L}\p{N}_\-./*?,{}]+$/u.test(pattern)) refuse('only plain Glob patterns are allowed');
-  if (!flatBraces(pattern)) refuse('braces must close and must not nest');
-  if (pattern.includes('..')) refuse('write the pattern without ..');
-  for (const e of braceExpand(pattern)) {
-    if (e.includes('{') || e.includes('}')) refuse('a brace group needs a comma');
-    const segs = e.split('/');
-    if (e.includes('..') || segs.some((s) => /^[.?]{2}$/.test(s))) {
-      refuse('write the pattern without ..');
+/**
+ * The plain-pattern allowlist, shared by the Glob tool and `node --test`: the brace expansions of
+ * `pattern`, or why it is refused.
+ */
+function plainGlob(pattern: string): { expansions: string[] } | { why: string } {
+  if (!/^[\p{L}\p{N}_\-./*?,{}]+$/u.test(pattern))
+    return { why: 'only plain patterns are allowed' };
+  if (!flatBraces(pattern)) return { why: 'braces must close and must not nest' };
+  if (pattern.includes('..')) return { why: 'write the pattern without ..' };
+  const expansions = braceExpand(pattern);
+  for (const e of expansions) {
+    if (e.includes('{') || e.includes('}')) return { why: 'a brace group needs a comma' };
+    if (e.includes('..') || e.split('/').some((s) => /^[.?]{2}$/.test(s))) {
+      return { why: 'write the pattern without ..' };
     }
+  }
+  return { expansions };
+}
+
+function checkGlobScope(env: Env, pattern: string, base: string, tool: string): void {
+  const plain = plainGlob(pattern);
+  if ('why' in plain) {
+    deny(`${tool}: ${plain.why}: ${pattern}; use a narrower pattern, or Bash in the sandbox`);
+  }
+  for (const e of (plain as { expansions: string[] }).expansions) {
+    const segs = e.split('/');
     const first = segs.findIndex((s) => hasMagic(s));
     const prefix = first < 0 ? e : segs.slice(0, first).join('/') || (isAbsolute(e) ? '/' : '.');
     checkReadScope(env, prefix, base, tool);

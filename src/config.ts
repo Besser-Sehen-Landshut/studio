@@ -22,6 +22,8 @@ export const CREDENTIAL_PATHS = [
   '.aws',
   '.docker/config.json',
   'Library/Keychains',
+  '.cargo/credentials',
+  '.cargo/credentials.toml',
 ];
 
 /** Locations below the real home a crew toolchain path must not open besides the credentials. */
