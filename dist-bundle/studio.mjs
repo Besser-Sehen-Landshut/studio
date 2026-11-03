@@ -28801,6 +28801,26 @@ function staleReason(body, mtimeMs, now, heartbeatStaleMs) {
   const age = now.getTime() - (Number.isNaN(beat) ? mtimeMs : beat);
   return age >= heartbeatStaleMs ? `last heartbeat ${minutes(age)} ago` : void 0;
 }
+var BOARD_LOCK = "board.lock";
+var BOARD_LOCK_STALE_MS = 3e4;
+async function withBoardLock(root, now, fn) {
+  const until = Date.now() + 5e3;
+  for (; ; ) {
+    const lock = acquireStateLock(root, BOARD_LOCK, {
+      now,
+      heartbeatStaleMs: BOARD_LOCK_STALE_MS
+    });
+    if (lock) {
+      try {
+        return await fn();
+      } finally {
+        lock.release();
+      }
+    }
+    if (Date.now() >= until) throw new Error(`the board is locked (${BOARD_LOCK}); try again`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
 function acquireStateLock(root, name, opts) {
   const file2 = join4(root, name);
   ensureStateDir(root, dirname2(file2));
@@ -30137,7 +30157,7 @@ import {
   chmodSync as chmodSync3,
   existsSync as existsSync3,
   lstatSync as lstatSync14,
-  readdirSync as readdirSync4,
+  readdirSync as readdirSync5,
   readFileSync as readFileSync16,
   realpathSync as realpathSync4,
   unlinkSync as unlinkSync3,
@@ -30152,7 +30172,7 @@ import { lstatSync as lstatSync8, readFileSync as readFileSync11 } from "node:fs
 import { join as join10 } from "node:path";
 
 // src/review.ts
-import { lstatSync as lstatSync6, readFileSync as readFileSync9 } from "node:fs";
+import { lstatSync as lstatSync6, readdirSync as readdirSync2, readFileSync as readFileSync9 } from "node:fs";
 import { join as join8 } from "node:path";
 var MAX_FIX_ATTEMPTS = 3;
 var MAX_REVIEW_ROUNDS = 6;
@@ -30215,6 +30235,9 @@ async function readDefaultBranch(ports, repo) {
     return void 0;
   }
 }
+function usableBaseName(name) {
+  return /^[A-Za-z0-9_.][A-Za-z0-9._-]*(\/[A-Za-z0-9._-]+)*$/.test(name) && !name.includes("..");
+}
 var TARGET_NOTE = /^review ([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d{0,9})\b/;
 function reviewTarget(item) {
   for (const note of item.notes ?? []) {
@@ -30248,7 +30271,7 @@ function renderReviewRoutine(r) {
     `Review round: ${r.round + 1}`,
     "",
     ...r.pr === void 0 ? [] : [
-      `Load the pull request first, staying on your branch: \`git fetch origin pull/${r.pr}/head\`, then \`git reset --hard FETCH_HEAD\`. The diff is \`git diff origin/main...HEAD\`; save it to an untracked file in the checkout.`,
+      `Load the base and the pull request first, staying on your branch: \`git fetch origin ${r.base}\`, \`git fetch origin pull/${r.pr}/head\`, then \`git reset --hard FETCH_HEAD\`. The diff is \`git diff origin/${r.base}...HEAD\`; save it to an untracked file in the checkout.`,
       ""
     ],
     `Run each analyzer below as one subagent with the model named there, read-only except for the spec check's probe; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,
@@ -30275,6 +30298,8 @@ var crewCapsSchema = external_exports.strictObject({
   headRefOid: external_exports.string().optional(),
   /** The base branch the pull request had then; an approval holds only for it. */
   baseRefName: external_exports.string().optional(),
+  /** When this launch began, written before any earlier approval is cleared. */
+  startedAt: external_exports.string().optional(),
   /** Ids launch could not provide, for the lead: they never count as a pass. */
   skipped: external_exports.array(external_exports.string()).optional()
 });
@@ -30290,11 +30315,34 @@ function readCrewCaps(stateRoot, id) {
     return void 0;
   }
 }
+function launchRecords(stateRoot) {
+  try {
+    return readdirSync2(join8(stateRoot, "briefs")).flatMap((n2) => {
+      const m = /^(.+)\.caps\.json$/.exec(n2);
+      return m ? [m[1]] : [];
+    });
+  } catch {
+    return [];
+  }
+}
 function newerReview(stateRoot, id, target, records) {
-  const mine = records[id]?.startedAt;
-  for (const [other, record2] of Object.entries(records)) {
+  const startOf = (item) => readCrewCaps(stateRoot, item)?.startedAt ?? records[item]?.startedAt;
+  const mine = startOf(id);
+  for (const other of /* @__PURE__ */ new Set([...Object.keys(records), ...launchRecords(stateRoot)])) {
     if (other === id || readCrewCaps(stateRoot, other)?.reviewsTarget !== target) continue;
-    if (mine === void 0 || !(Date.parse(record2.startedAt) < Date.parse(mine))) return other;
+    const theirs = startOf(other);
+    if (mine === void 0 || theirs === void 0) return other;
+    if (!(Date.parse(theirs) < Date.parse(mine))) return other;
+  }
+  return void 0;
+}
+function openReview(stateRoot, board, target) {
+  for (const i2 of board.items) {
+    if (i2.type !== "review" || i2.status === "merged" || i2.status === "dropped") continue;
+    const note = reviewTarget(i2);
+    const named = note !== void 0 && `${note.repo}#${note.pr}` === target;
+    if (named && (i2.status === "assigned" || i2.status === "in_progress")) return i2.id;
+    if (readCrewCaps(stateRoot, i2.id)?.reviewsTarget === target) return i2.id;
   }
   return void 0;
 }
@@ -30340,7 +30388,7 @@ function checkReviewCaps(caps, report) {
 // src/sources.ts
 var import_yaml5 = __toESM(require_dist(), 1);
 import { createHash as createHash2 } from "node:crypto";
-import { lstatSync as lstatSync7, readdirSync as readdirSync2, readFileSync as readFileSync10, renameSync as renameSync5 } from "node:fs";
+import { lstatSync as lstatSync7, readdirSync as readdirSync3, readFileSync as readFileSync10, renameSync as renameSync5 } from "node:fs";
 import { join as join9 } from "node:path";
 var VENDORABLE = ["MIT", "Apache-2.0"];
 var safeRelative = (p) => p.length > 0 && !p.startsWith("/") && !p.includes("\\") && !p.split("/").some((seg) => seg === ".." || seg === "" || seg === ".") && !new RegExp("\\p{Cc}", "u").test(p);
@@ -30418,7 +30466,7 @@ function hashOf(dir, rel) {
 }
 function licenseFiles(dir) {
   try {
-    return readdirSync2(dir).filter((n2) => isLicenseName(n2));
+    return readdirSync3(dir).filter((n2) => isLicenseName(n2));
   } catch {
     return [];
   }
@@ -30693,6 +30741,9 @@ async function resolveForItem(o2) {
       `${item.id}: ${target.repo}#${target.pr} comes from a fork; a crew never runs a fork's code, review it by hand`
     );
   }
+  if (facts !== void 0 && !usableBaseName(facts.base)) {
+    throw new Error(`${item.id}: the base branch name cannot be used in a review`);
+  }
   if (target !== void 0 && facts !== void 0 && !config2.reviewBases.includes(facts.base)) {
     const defaultBranch = await readDefaultBranch(o2.ports, target.repo);
     if (defaultBranch === void 0) {
@@ -30888,6 +30939,7 @@ function writeCaps(o2) {
       reasons: review.reasons,
       round: review.round,
       ...review.pr === void 0 ? {} : { pr: review.pr },
+      ...review.base === void 0 ? {} : { base: review.base },
       contract: copy("analyzers/CONTRACT.md", contract.text),
       analyzers
     };
@@ -30899,6 +30951,7 @@ function writeCaps(o2) {
       ...review.target === void 0 ? {} : { reviewsTarget: review.target },
       ...review.head === void 0 ? {} : { headRefOid: review.head },
       ...review.base === void 0 ? {} : { baseRefName: review.base },
+      ...o2.startedAt === void 0 ? {} : { startedAt: o2.startedAt },
       ...skipped.length === 0 ? {} : { skipped: skipped.map((x) => x.id) }
     };
     writeStateFile(stateRoot, capsFile(stateRoot, id), `${JSON.stringify(caps, null, 2)}
@@ -31430,7 +31483,7 @@ function readRoleMemory(projectDir, role) {
 }
 
 // src/solutions.ts
-import { lstatSync as lstatSync13, readdirSync as readdirSync3, readFileSync as readFileSync15 } from "node:fs";
+import { lstatSync as lstatSync13, readdirSync as readdirSync4, readFileSync as readFileSync15 } from "node:fs";
 import { join as join15 } from "node:path";
 var MAX_FILE_BYTES = 64 * 1024;
 var MAX_FILES = 1e3;
@@ -31455,7 +31508,7 @@ function searchSolutions(projectDir, query, limit = 5) {
   const dir = join15(studio, "solutions");
   if (words.length === 0 || !isReal(studio, "dir") || !isReal(dir, "dir")) return [];
   const hits = [];
-  for (const name of readdirSync3(dir).sort().slice(0, MAX_FILES)) {
+  for (const name of readdirSync4(dir).sort().slice(0, MAX_FILES)) {
     if (!SAFE_NAME.test(name) || !isReal(join15(dir, name), "file")) continue;
     let text;
     try {
@@ -31596,7 +31649,7 @@ function realOr(p) {
 var SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 function entries(dir) {
   try {
-    return readdirSync4(dir);
+    return readdirSync5(dir);
   } catch (e) {
     const code = e.code;
     return code === "ENOENT" || code === "ENOTDIR" ? null : void 0;
@@ -31780,7 +31833,8 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
       skipped: caps.skipped,
       contract: caps.review.contract,
       round: caps.review.round,
-      ...caps.review.pr === void 0 ? {} : { pr: caps.review.pr }
+      ...caps.review.pr === void 0 ? {} : { pr: caps.review.pr },
+      ...caps.review.base === void 0 ? {} : { base: caps.review.base }
     }),
     "## Working rules",
     "",
@@ -32232,7 +32286,8 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     id: item.id,
     forItem,
     ...launcher.capabilitiesDir === void 0 ? {} : { dir: launcher.capabilitiesDir },
-    isInstalled: (skill) => skillInstalled(claudeConfigDir, skill.split(":").at(-1) ?? "")
+    isInstalled: (skill) => skillInstalled(claudeConfigDir, skill.split(":").at(-1) ?? ""),
+    startedAt: ports.clock.now().toISOString()
   });
   caps.reportName = newReportName(stateRoot, item.id);
   const brief = writeBrief(stateRoot, item, config2, projectDir, briefRules, caps);
@@ -32274,14 +32329,16 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   await recheck();
   if (forItem.review?.target !== void 0 && existsSync3(boardPath(projectDir))) {
     const reviewing = forItem.review.target;
-    const board = loadBoard(projectDir);
-    saveBoard(projectDir, {
-      ...board,
-      items: board.items.map((i2) => {
-        if (`${i2.repo}#${i2.pr}` !== reviewing || i2.type === "review") return i2;
-        const { approvedHead: _head, approvedBase: _base, ...rest } = i2;
-        return rest;
-      })
+    await withBoardLock(stateRoot, ports.clock.now(), () => {
+      const board = loadBoard(projectDir);
+      saveBoard(projectDir, {
+        ...board,
+        items: board.items.map((i2) => {
+          if (`${i2.repo}#${i2.pr}` !== reviewing || i2.type === "review") return i2;
+          const { approvedHead: _head, approvedBase: _base, ...rest } = i2;
+          return rest;
+        })
+      });
     });
   }
   recordRun(ownerRoot, label, ports.clock.now(), ownerConfig.crewLabelLimits.timezone);
@@ -33280,7 +33337,7 @@ import { join as join21 } from "node:path";
 var import_yaml7 = __toESM(require_dist(), 1);
 import { randomBytes as randomBytes6 } from "node:crypto";
 import {
-  readdirSync as readdirSync5,
+  readdirSync as readdirSync6,
   readFileSync as readFileSync20,
   renameSync as renameSync8,
   statSync as statSync2,
@@ -33651,7 +33708,7 @@ function readWorkflows(project) {
   const notes = [];
   let names;
   try {
-    names = readdirSync5(dir);
+    names = readdirSync6(dir);
   } catch (e) {
     if (e.code === "ENOENT") {
       notes.push(`no workflows found: ${rel} does not exist`);
@@ -33946,7 +34003,7 @@ async function runDoctor(o2) {
 
 // src/stack.ts
 var import_yaml9 = __toESM(require_dist(), 1);
-import { lstatSync as lstatSync17, readdirSync as readdirSync6, readFileSync as readFileSync22 } from "node:fs";
+import { lstatSync as lstatSync17, readdirSync as readdirSync7, readFileSync as readFileSync22 } from "node:fs";
 import { join as join22 } from "node:path";
 var MAX_FILE_BYTES2 = 1024 * 1024;
 var MAX_ENTRIES = 200;
@@ -34018,7 +34075,7 @@ function depStacks(text, notes, name) {
 function scanDir(dir, label, found, notes) {
   let names;
   try {
-    names = readdirSync6(dir).slice(0, MAX_ENTRIES * 5);
+    names = readdirSync7(dir).slice(0, MAX_ENTRIES * 5);
   } catch {
     notes.push(`${label || "."}: cannot be read`);
     return;
@@ -34065,7 +34122,7 @@ function detectStacks(dir) {
   for (const group of MONOREPO_DIRS) {
     const base = join22(dir, group);
     if (!isRealDir(base)) continue;
-    for (const name of readdirSync6(base).slice(0, MAX_ENTRIES)) {
+    for (const name of readdirSync7(base).slice(0, MAX_ENTRIES)) {
       if (name.startsWith(".") || name === "node_modules") continue;
       if (isRealDir(join22(base, name))) scanDir(join22(base, name), `${group}/${name}`, found, notes);
     }
@@ -34363,16 +34420,18 @@ async function runCli(argv, deps) {
           throw new Error(`${item.id} is not in the current plan: ${why}`);
         }
         const res = await launchCrew(project, item, config2, ports, owner);
-        const fresh = loadBoard(project);
-        if (findItem(fresh, item.id).status !== "ready") {
-          throw new Error(`${item.id} changed while launching; crew ${res.name} is running`);
-        }
-        const moved = withItem(
-          transition(fresh, item.id, "assigned", BY, ports.clock.now()),
-          item.id,
-          (i2) => ({ ...i2, crew: res.name })
-        );
-        saveBoard(project, moved);
+        await withBoardLock(stateRoot(), ports.clock.now(), () => {
+          const fresh = loadBoard(project);
+          if (findItem(fresh, item.id).status !== "ready") {
+            throw new Error(`${item.id} changed while launching; crew ${res.name} is running`);
+          }
+          const moved = withItem(
+            transition(fresh, item.id, "assigned", BY, ports.clock.now()),
+            item.id,
+            (i2) => ({ ...i2, crew: res.name })
+          );
+          saveBoard(project, moved);
+        });
         print(res);
         return 0;
       }
@@ -34462,74 +34521,82 @@ async function runCli(argv, deps) {
         } else if (report.status === "done" && !PR_OPTIONAL.includes(item.type)) {
           throw new Error(`done report for ${item.id} names no pr`);
         }
-        const supersededBy = item.type === "review" && report.status === "done" && reviewDone.target !== void 0 ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot())) : void 0;
         const now = ports.clock.now();
-        let next = board;
-        if (report.status === "done") {
-          if (item.status === "assigned") next = transition(next, item.id, "in_progress", BY, now);
-          next = transition(next, item.id, "in_review", BY, now);
-          if (report.pr !== void 0) {
-            const pr = report.pr;
-            next = withItem(next, item.id, (i2) => ({ ...i2, pr, branch }));
+        const { next, fixLimit, supersededBy } = await withBoardLock(stateRoot(), now, () => {
+          const fresh = loadBoard(project);
+          if (findItem(fresh, item.id).status !== item.status) {
+            throw new Error(`${item.id} changed while it was collected; nothing moved`);
+          }
+          const supersededBy2 = item.type === "review" && report.status === "done" && reviewDone.target !== void 0 ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot())) : void 0;
+          let next2 = fresh;
+          if (report.status === "done") {
+            if (item.status === "assigned")
+              next2 = transition(next2, item.id, "in_progress", BY, now);
+            next2 = transition(next2, item.id, "in_review", BY, now);
+            if (report.pr !== void 0) {
+              const pr = report.pr;
+              next2 = withItem(next2, item.id, (i2) => ({ ...i2, pr, branch }));
+            } else {
+              next2 = transition(next2, item.id, "merged", BY, now);
+              const result = [
+                ...supersededBy2 !== void 0 ? [`superseded by ${supersededBy2}`] : report.verdict ? [`verdict: ${report.verdict}`] : [],
+                ...report.reviews ? [`reviews: ${report.reviews}`] : []
+              ];
+              if (result.length > 0) {
+                next2 = withItem(next2, item.id, (i2) => ({
+                  ...i2,
+                  notes: [...i2.notes ?? [], ...capNotes(result)]
+                }));
+              }
+            }
           } else {
-            next = transition(next, item.id, "merged", BY, now);
-            const result = [
-              ...supersededBy !== void 0 ? [`superseded by ${supersededBy}`] : report.verdict ? [`verdict: ${report.verdict}`] : [],
-              ...report.reviews ? [`reviews: ${report.reviews}`] : []
-            ];
-            if (result.length > 0) {
-              next = withItem(next, item.id, (i2) => ({
-                ...i2,
-                notes: [...i2.notes ?? [], ...capNotes(result)]
-              }));
-            }
-          }
-        } else {
-          next = transition(next, item.id, "blocked", BY, now);
-          const notes = report.status === "failed" ? ["crew run failed", ...report.questions.map((q) => `question: ${q}`)] : report.questions.map((q) => `question: ${q}`);
-          next = withItem(next, item.id, (i2) => ({
-            ...i2,
-            notes: [
-              ...i2.notes ?? [],
-              ...capNotes(notes.length ? notes : ["crew reported blocked"])
-            ]
-          }));
-        }
-        if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0 && supersededBy === void 0) {
-          const reviewed = next.items.find(
-            (i2) => `${i2.repo}#${i2.pr}` === reviewDone.target && i2.type !== "review"
-          );
-          if (reviewed !== void 0) {
-            const approvedBase = readCrewCaps(stateRoot(), item.id)?.baseRefName;
-            next = withItem(
-              next,
-              reviewed.id,
-              ({ approvedHead: _h, approvedBase: _b, ...i2 }) => report.verdict === "approve" ? { ...i2, approvedHead: report.headSha, approvedBase } : i2
-            );
-          }
-        }
-        const limitTarget = report.status === "done" && report.verdict === "changes_requested" && supersededBy === void 0 ? reviewDone.target : void 0;
-        let fixLimit = false;
-        if (limitTarget !== void 0) {
-          const rounds = reviewRounds(next, limitTarget);
-          fixLimit = rounds >= MAX_REVIEW_ROUNDS || (report.findingAttempts ?? 0) >= MAX_FIX_ATTEMPTS;
-          const builder = next.items.find(
-            (i2) => `${i2.repo}#${i2.pr}` === limitTarget && i2.type !== "review"
-          );
-          if (fixLimit && builder && builder.status !== "merged" && builder.status !== "dropped") {
-            if (builder.status !== "blocked") {
-              next = transition(next, builder.id, "blocked", BY, now);
-            }
-            next = withItem(next, builder.id, (i2) => ({
+            next2 = transition(next2, item.id, "blocked", BY, now);
+            const notes = report.status === "failed" ? ["crew run failed", ...report.questions.map((q) => `question: ${q}`)] : report.questions.map((q) => `question: ${q}`);
+            next2 = withItem(next2, item.id, (i2) => ({
               ...i2,
               notes: [
                 ...i2.notes ?? [],
-                `fix limit reached: ${rounds} review rounds, attempts on one finding ${report.findingAttempts ?? "unknown"}`
+                ...capNotes(notes.length ? notes : ["crew reported blocked"])
               ]
             }));
           }
-        }
-        saveBoard(project, next);
+          if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0 && supersededBy2 === void 0) {
+            const reviewed = next2.items.find(
+              (i2) => `${i2.repo}#${i2.pr}` === reviewDone.target && i2.type !== "review"
+            );
+            if (reviewed !== void 0) {
+              const approvedBase = readCrewCaps(stateRoot(), item.id)?.baseRefName;
+              next2 = withItem(
+                next2,
+                reviewed.id,
+                ({ approvedHead: _h, approvedBase: _b, ...i2 }) => report.verdict === "approve" ? { ...i2, approvedHead: report.headSha, approvedBase } : i2
+              );
+            }
+          }
+          const limitTarget = report.status === "done" && report.verdict === "changes_requested" && supersededBy2 === void 0 ? reviewDone.target : void 0;
+          let fixLimit2 = false;
+          if (limitTarget !== void 0) {
+            const rounds = reviewRounds(next2, limitTarget);
+            fixLimit2 = rounds >= MAX_REVIEW_ROUNDS || (report.findingAttempts ?? 0) >= MAX_FIX_ATTEMPTS;
+            const builder = next2.items.find(
+              (i2) => `${i2.repo}#${i2.pr}` === limitTarget && i2.type !== "review"
+            );
+            if (fixLimit2 && builder && builder.status !== "merged" && builder.status !== "dropped") {
+              if (builder.status !== "blocked") {
+                next2 = transition(next2, builder.id, "blocked", BY, now);
+              }
+              next2 = withItem(next2, builder.id, (i2) => ({
+                ...i2,
+                notes: [
+                  ...i2.notes ?? [],
+                  `fix limit reached: ${rounds} review rounds, attempts on one finding ${report.findingAttempts ?? "unknown"}`
+                ]
+              }));
+            }
+          }
+          saveBoard(project, next2);
+          return { next: next2, fixLimit: fixLimit2, supersededBy: supersededBy2 };
+        });
         let lessonsProposed = 0;
         try {
           lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now);
@@ -34577,8 +34644,18 @@ async function runCli(argv, deps) {
           );
           if (problem !== void 0) throw new Error(problem);
           const root = await boundStateRoot();
-          const pending = enqueue(root, { pr, repo, item: item.id });
-          saveBoard(project, transition(board, item.id, "queued", BY, ports.clock.now()));
+          const pending = await withBoardLock(stateRoot(), ports.clock.now(), () => {
+            const fresh = loadBoard(project);
+            const now = findItem(fresh, item.id);
+            if (now.status !== "in_review" || now.approvedHead !== item.approvedHead) {
+              throw new Error(`${item.id} changed while it was checked; try again`);
+            }
+            const open2 = openReview(stateRoot(), fresh, `${repo}#${pr}`);
+            if (open2 !== void 0) throw new Error(openReviewLine(open2, `${repo}#${pr}`));
+            const added = enqueue(root, { pr, repo, item: item.id });
+            saveBoard(project, transition(fresh, item.id, "queued", BY, ports.clock.now()));
+            return added;
+          });
           print({ queued: item.id, pr, repo, pending });
           return 0;
         }
@@ -34631,7 +34708,7 @@ async function runCli(argv, deps) {
                 stateRoot: root,
                 log,
                 hold,
-                mergeAllowed: (entry, head) => boardBlocksMerge(project, config2, entry, head, ports),
+                mergeAllowed: (entry, head) => boardBlocksMerge(project, root, config2, entry, head, ports),
                 takeNext: () => takeNextPending(root),
                 onDone: (d) => applyQueueResults(project, [d], ports, stderr)
               }
@@ -35056,7 +35133,8 @@ function refuseNativeQueue(config2) {
     );
   }
 }
-async function boardBlocksMerge(project, config2, entry, head, ports) {
+var openReviewLine = (id, target) => `review ${id} of ${target} is open: collect or drop it first`;
+async function boardBlocksMerge(project, root, config2, entry, head, ports) {
   let board;
   try {
     board = loadBoard(project);
@@ -35068,6 +35146,9 @@ async function boardBlocksMerge(project, config2, entry, head, ports) {
   );
   if (item === void 0) return "the pull request has no board item";
   if (item.status !== "queued") return `board item ${item.id} is ${item.status}`;
+  const target = `${entry.repo}#${entry.pr}`;
+  const open2 = openReview(root, board, target);
+  if (open2 !== void 0) return openReviewLine(open2, target);
   return approvalProblem(
     ports,
     approvalCheckout(project, config2, entry.repo),

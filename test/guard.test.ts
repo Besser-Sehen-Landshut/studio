@@ -1459,6 +1459,9 @@ describe('bin/studio-guard.mjs', () => {
 
 describe('what the review routine asks a reviewer to run', () => {
   it.each([
+    'git fetch origin main',
+    'git fetch origin release/2.x',
+    'git diff origin/release/2.x...HEAD',
     'git fetch origin pull/41/head',
     'git reset --hard FETCH_HEAD',
     'git checkout -- src/a.ts',

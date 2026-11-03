@@ -56,6 +56,7 @@ import {
   STATE_PROTECTED_DIRS,
   type StateLock,
   stateRootFor,
+  withBoardLock,
   writeStateFile,
 } from './paths.js';
 import { PAUSED_LINE, readPause } from './pause.js';
@@ -530,6 +531,7 @@ export function writeBrief(
           contract: caps.review.contract,
           round: caps.review.round,
           ...(caps.review.pr === undefined ? {} : { pr: caps.review.pr }),
+          ...(caps.review.base === undefined ? {} : { base: caps.review.base }),
         })),
     '## Working rules',
     '',
@@ -1151,6 +1153,7 @@ async function launchCrewLocked(
     forItem,
     ...(launcher.capabilitiesDir === undefined ? {} : { dir: launcher.capabilitiesDir }),
     isInstalled: (skill) => skillInstalled(claudeConfigDir, skill.split(':').at(-1) ?? ''),
+    startedAt: ports.clock.now().toISOString(),
   });
   caps.reportName = newReportName(stateRoot, item.id);
   const brief = writeBrief(stateRoot, item, config, projectDir, briefRules, caps);
@@ -1197,16 +1200,19 @@ async function launchCrewLocked(
   lock.heartbeat(ports.clock.now());
   await recheck();
   // From here the verdict is open again: an older approval must not outlive a review that fails.
+  // The launch record with its start is on disk by now, so a collect after this sees it as newer.
   if (forItem.review?.target !== undefined && existsSync(boardPath(projectDir))) {
     const reviewing = forItem.review.target;
-    const board = loadBoard(projectDir);
-    saveBoard(projectDir, {
-      ...board,
-      items: board.items.map((i) => {
-        if (`${i.repo}#${i.pr}` !== reviewing || i.type === 'review') return i;
-        const { approvedHead: _head, approvedBase: _base, ...rest } = i;
-        return rest;
-      }),
+    await withBoardLock(stateRoot, ports.clock.now(), () => {
+      const board = loadBoard(projectDir);
+      saveBoard(projectDir, {
+        ...board,
+        items: board.items.map((i) => {
+          if (`${i.repo}#${i.pr}` !== reviewing || i.type === 'review') return i;
+          const { approvedHead: _head, approvedBase: _base, ...rest } = i;
+          return rest;
+        }),
+      });
     });
   }
   // Counted before the start, so a start that fails still counts as a run.

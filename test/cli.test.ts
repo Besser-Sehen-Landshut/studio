@@ -1144,6 +1144,107 @@ describe('studio CLI', () => {
       });
     });
 
+    describe('an open review blocks the queue, whatever the board says about approval', () => {
+      const withOpenReview = (status: string) =>
+        makeFx([
+          { id: 'APP-1', status: 'in_review', pr: 5 },
+          { id: 'APP-9', status, type: 'review', notes: ['review org/app#5'] },
+        ]);
+      it.each(['assigned', 'in_progress'])('queue add refuses with a review %s', async (status) => {
+        const fx = withOpenReview(status);
+        const r = await cli(fx, fakePorts(headIs(HEAD).gh).ports, 'queue', 'add', 'org/app#5');
+        expect(r.code).toBe(1);
+        expect(r.err).toMatch(/APP-9.*open/);
+      });
+      it('a review not launched yet, or finished, does not block', async () => {
+        for (const status of ['ready', 'merged', 'dropped']) {
+          const fx = withOpenReview(status);
+          const r = await cli(fx, fakePorts(headIs(HEAD).gh).ports, 'queue', 'add', 'org/app#5');
+          expect(r.code, status).toBe(0);
+        }
+      });
+      it('a launch record of a review counts as open before the board moved', async () => {
+        const fx = withOpenReview('ready');
+        writeReviewCaps(fx, 'APP-9', {
+          analyzers: [],
+          mandatory: [],
+          reviewsTarget: 'org/app#5',
+        });
+        const r = await cli(fx, fakePorts(headIs(HEAD).gh).ports, 'queue', 'add', 'org/app#5');
+        expect(r.code).toBe(1);
+      });
+      it('queue run refuses when a review opened after queue add', async () => {
+        const fx = withOpenReview('ready');
+        await cli(fx, fakePorts(headIs(HEAD).gh).ports, 'queue', 'add', 'org/app#5');
+        writeReviewCaps(fx, 'APP-9', {
+          analyzers: [],
+          mandatory: [],
+          reviewsTarget: 'org/app#5',
+        });
+        const { gh, calls } = headIs(HEAD);
+        await cli(fx, fakePorts(gh).ports, 'queue', 'run');
+        expect(calls.some((c) => c.startsWith('pr merge'))).toBe(false);
+      });
+    });
+
+    describe('the board is read again under its lock', () => {
+      it('collect keeps what changed while it waited for GitHub', async () => {
+        const fx = makeFx([
+          { id: 'APP-1', status: 'assigned', type: 'review' },
+          { id: 'APP-2', status: 'in_review', pr: 9, approvedHead: null },
+          { id: 'APP-4', status: 'ready' },
+        ]);
+        writeReviewCaps(fx, 'APP-1');
+        writeReport(fx, 'APP-1', REVIEW('changes_requested'));
+        const { gh } = fakeGh((l) => {
+          const file = join(fx.project, '.studio', 'board.yaml');
+          writeFileSync(
+            file,
+            readFileSync(file, 'utf8').replace(/(id: APP-4[\s\S]*?status: )ready/, '$1dropped'),
+          );
+          return reviewGh().gh && /headRefOid,headRefName/.test(l)
+            ? {
+                stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-2', ...OWN }),
+              }
+            : undefined;
+        });
+        expect((await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1')).code).toBe(0);
+        expect(statusOf(fx, 'APP-4')?.status).toBe('dropped');
+      });
+      it('collect refuses when the item moved while it waited', async () => {
+        const fx = makeFx([{ id: 'APP-1', status: 'assigned', type: 'review' }]);
+        writeReviewCaps(fx, 'APP-1');
+        writeReport(fx, 'APP-1', REVIEW('approve'));
+        const { gh } = fakeGh(() => {
+          const file = join(fx.project, '.studio', 'board.yaml');
+          writeFileSync(
+            file,
+            readFileSync(file, 'utf8').replace(/(id: APP-1[\s\S]*?status: )assigned/, '$1dropped'),
+          );
+          return { stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'x', ...OWN }) };
+        });
+        const r = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+        expect(r.code).toBe(1);
+        expect(statusOf(fx, 'APP-1')?.status).toBe('dropped');
+      });
+      it('collect refuses while another process holds the lock', async () => {
+        const fx = makeFx([{ id: 'APP-1', status: 'assigned', type: 'review' }]);
+        writeReviewCaps(fx, 'APP-1');
+        writeReport(fx, 'APP-1', REVIEW('approve'));
+        const lock = acquireStateLock(fx.state, 'board.lock', {
+          now: new Date(),
+          heartbeatStaleMs: 60_000,
+        });
+        try {
+          const r = await cli(fx, fakePorts(reviewGh().gh).ports, 'collect', 'APP-1');
+          expect(r.code).toBe(1);
+          expect(r.err).toMatch(/board\.lock/);
+        } finally {
+          lock?.release();
+        }
+      }, 15_000);
+    });
+
     it('an approval also stores the base it was given for', async () => {
       const fx = makeFx([
         { id: 'APP-1', status: 'assigned', type: 'review' },
@@ -1186,6 +1287,32 @@ describe('studio CLI', () => {
         const r = await cli(fx, dead, 'collect', 'APP-1');
         return { fx, r, dead };
       };
+
+      it('a newer review that has only its launch record, no crew record yet, counts', async () => {
+        const fx = makeFx([
+          { id: 'APP-1', status: 'assigned', type: 'review' },
+          { id: 'APP-3', status: 'ready', type: 'review' },
+          { id: 'APP-2', status: 'in_review', pr: 9, approvedHead: null },
+        ]);
+        writeReviewCaps(fx, 'APP-1');
+        writeReviewCaps(fx, 'APP-3', {
+          analyzers: [],
+          mandatory: [],
+          reviewsTarget: 'org/app#9',
+          startedAt: '2026-10-30T09:00:00.000Z',
+        });
+        writeStateFile(
+          fx.state,
+          join(fx.state, 'crew.json'),
+          JSON.stringify({ 'APP-1': record('APP-1', '2026-10-30T08:00:00.000Z') }),
+        );
+        const { ports } = fakePorts(reviewGh().gh);
+        const dead = { ...ports, claude: { ...ports.claude, alive: () => false } };
+        writeReport(fx, 'APP-1', REVIEW('approve'));
+        const r = await cli(fx, dead, 'collect', 'APP-1');
+        expect(JSON.parse(r.out).supersededBy).toBe('APP-3');
+        expect(statusOf(fx, 'APP-2')?.approvedHead).toBeUndefined();
+      });
 
       it('an older approval changes nothing and says so', async () => {
         const { fx, r } = await collectOlder('approve', null);

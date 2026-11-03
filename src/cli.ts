@@ -37,6 +37,7 @@ import {
   projectRealpath,
   stateDirName,
   stateRootFor,
+  withBoardLock,
   writeStateFile,
 } from './paths.js';
 import { clearPause, PAUSED_LINE, readPause, setPause } from './pause.js';
@@ -63,6 +64,7 @@ import {
   MAX_FIX_ATTEMPTS,
   MAX_REVIEW_ROUNDS,
   newerReview,
+  openReview,
   readCrewCaps,
   reviewRounds,
 } from './review.js';
@@ -378,16 +380,18 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
         const res = await launchCrew(project, item, config, ports, owner);
         // The launch took a while: re-read the board and move the item on the fresh copy.
-        const fresh = loadBoard(project);
-        if (findItem(fresh, item.id).status !== 'ready') {
-          throw new Error(`${item.id} changed while launching; crew ${res.name} is running`);
-        }
-        const moved = withItem(
-          transition(fresh, item.id, 'assigned', BY, ports.clock.now()),
-          item.id,
-          (i) => ({ ...i, crew: res.name }),
-        );
-        saveBoard(project, moved);
+        await withBoardLock(stateRoot(), ports.clock.now(), () => {
+          const fresh = loadBoard(project);
+          if (findItem(fresh, item.id).status !== 'ready') {
+            throw new Error(`${item.id} changed while launching; crew ${res.name} is running`);
+          }
+          const moved = withItem(
+            transition(fresh, item.id, 'assigned', BY, ports.clock.now()),
+            item.id,
+            (i) => ({ ...i, crew: res.name }),
+          );
+          saveBoard(project, moved);
+        });
         print(res);
         return 0;
       }
@@ -486,98 +490,113 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         } else if (report.status === 'done' && !PR_OPTIONAL.includes(item.type)) {
           throw new Error(`done report for ${item.id} names no pr`);
         }
-        const supersededBy =
-          item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined
-            ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot()))
-            : undefined;
         const now = ports.clock.now();
-        let next = board;
-        if (report.status === 'done') {
-          if (item.status === 'assigned') next = transition(next, item.id, 'in_progress', BY, now);
-          next = transition(next, item.id, 'in_review', BY, now);
-          if (report.pr !== undefined) {
-            const pr = report.pr;
-            next = withItem(next, item.id, (i) => ({ ...i, pr, branch }));
+        // Under the lock from reading the board again to saving it: a launch clearing an approval
+        // cannot slip in, and what moved while GitHub was asked stays.
+        const { next, fixLimit, supersededBy } = await withBoardLock(stateRoot(), now, () => {
+          const fresh = loadBoard(project);
+          if (findItem(fresh, item.id).status !== item.status) {
+            throw new Error(`${item.id} changed while it was collected; nothing moved`);
+          }
+          const supersededBy =
+            item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined
+              ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot()))
+              : undefined;
+          let next = fresh;
+          if (report.status === 'done') {
+            if (item.status === 'assigned')
+              next = transition(next, item.id, 'in_progress', BY, now);
+            next = transition(next, item.id, 'in_review', BY, now);
+            if (report.pr !== undefined) {
+              const pr = report.pr;
+              next = withItem(next, item.id, (i) => ({ ...i, pr, branch }));
+            } else {
+              // Review and research items open no PR: the result is the report itself.
+              next = transition(next, item.id, 'merged', BY, now);
+              // A superseded verdict is no round: the verdict note is what `reviewRounds` counts.
+              const result = [
+                ...(supersededBy !== undefined
+                  ? [`superseded by ${supersededBy}`]
+                  : report.verdict
+                    ? [`verdict: ${report.verdict}`]
+                    : []),
+                ...(report.reviews ? [`reviews: ${report.reviews}`] : []),
+              ];
+              if (result.length > 0) {
+                next = withItem(next, item.id, (i) => ({
+                  ...i,
+                  notes: [...(i.notes ?? []), ...capNotes(result)],
+                }));
+              }
+            }
           } else {
-            // Review and research items open no PR: the result is the report itself.
-            next = transition(next, item.id, 'merged', BY, now);
-            // A superseded verdict is no round: the verdict note is what `reviewRounds` counts.
-            const result = [
-              ...(supersededBy !== undefined
-                ? [`superseded by ${supersededBy}`]
-                : report.verdict
-                  ? [`verdict: ${report.verdict}`]
-                  : []),
-              ...(report.reviews ? [`reviews: ${report.reviews}`] : []),
-            ];
-            if (result.length > 0) {
-              next = withItem(next, item.id, (i) => ({
-                ...i,
-                notes: [...(i.notes ?? []), ...capNotes(result)],
-              }));
-            }
-          }
-        } else {
-          next = transition(next, item.id, 'blocked', BY, now);
-          const notes =
-            report.status === 'failed'
-              ? ['crew run failed', ...report.questions.map((q) => `question: ${q}`)]
-              : report.questions.map((q) => `question: ${q}`);
-          next = withItem(next, item.id, (i) => ({
-            ...i,
-            notes: [
-              ...(i.notes ?? []),
-              ...capNotes(notes.length ? notes : ['crew reported blocked']),
-            ],
-          }));
-        }
-        // The verdict goes on the item that holds the pull request; `queue add` and the merge read it.
-        if (
-          item.type === 'review' &&
-          report.status === 'done' &&
-          reviewDone.target !== undefined &&
-          supersededBy === undefined
-        ) {
-          const reviewed = next.items.find(
-            (i) => `${i.repo}#${i.pr}` === reviewDone.target && i.type !== 'review',
-          );
-          if (reviewed !== undefined) {
-            const approvedBase = readCrewCaps(stateRoot(), item.id)?.baseRefName;
-            next = withItem(next, reviewed.id, ({ approvedHead: _h, approvedBase: _b, ...i }) =>
-              report.verdict === 'approve'
-                ? { ...i, approvedHead: report.headSha, approvedBase }
-                : i,
-            );
-          }
-        }
-        const limitTarget =
-          report.status === 'done' &&
-          report.verdict === 'changes_requested' &&
-          supersededBy === undefined
-            ? reviewDone.target
-            : undefined;
-        let fixLimit = false;
-        if (limitTarget !== undefined) {
-          const rounds = reviewRounds(next, limitTarget);
-          fixLimit =
-            rounds >= MAX_REVIEW_ROUNDS || (report.findingAttempts ?? 0) >= MAX_FIX_ATTEMPTS;
-          const builder = next.items.find(
-            (i) => `${i.repo}#${i.pr}` === limitTarget && i.type !== 'review',
-          );
-          if (fixLimit && builder && builder.status !== 'merged' && builder.status !== 'dropped') {
-            if (builder.status !== 'blocked') {
-              next = transition(next, builder.id, 'blocked', BY, now);
-            }
-            next = withItem(next, builder.id, (i) => ({
+            next = transition(next, item.id, 'blocked', BY, now);
+            const notes =
+              report.status === 'failed'
+                ? ['crew run failed', ...report.questions.map((q) => `question: ${q}`)]
+                : report.questions.map((q) => `question: ${q}`);
+            next = withItem(next, item.id, (i) => ({
               ...i,
               notes: [
                 ...(i.notes ?? []),
-                `fix limit reached: ${rounds} review rounds, attempts on one finding ${report.findingAttempts ?? 'unknown'}`,
+                ...capNotes(notes.length ? notes : ['crew reported blocked']),
               ],
             }));
           }
-        }
-        saveBoard(project, next);
+          // The verdict goes on the item that holds the pull request; `queue add` and the merge read it.
+          if (
+            item.type === 'review' &&
+            report.status === 'done' &&
+            reviewDone.target !== undefined &&
+            supersededBy === undefined
+          ) {
+            const reviewed = next.items.find(
+              (i) => `${i.repo}#${i.pr}` === reviewDone.target && i.type !== 'review',
+            );
+            if (reviewed !== undefined) {
+              const approvedBase = readCrewCaps(stateRoot(), item.id)?.baseRefName;
+              next = withItem(next, reviewed.id, ({ approvedHead: _h, approvedBase: _b, ...i }) =>
+                report.verdict === 'approve'
+                  ? { ...i, approvedHead: report.headSha, approvedBase }
+                  : i,
+              );
+            }
+          }
+          const limitTarget =
+            report.status === 'done' &&
+            report.verdict === 'changes_requested' &&
+            supersededBy === undefined
+              ? reviewDone.target
+              : undefined;
+          let fixLimit = false;
+          if (limitTarget !== undefined) {
+            const rounds = reviewRounds(next, limitTarget);
+            fixLimit =
+              rounds >= MAX_REVIEW_ROUNDS || (report.findingAttempts ?? 0) >= MAX_FIX_ATTEMPTS;
+            const builder = next.items.find(
+              (i) => `${i.repo}#${i.pr}` === limitTarget && i.type !== 'review',
+            );
+            if (
+              fixLimit &&
+              builder &&
+              builder.status !== 'merged' &&
+              builder.status !== 'dropped'
+            ) {
+              if (builder.status !== 'blocked') {
+                next = transition(next, builder.id, 'blocked', BY, now);
+              }
+              next = withItem(next, builder.id, (i) => ({
+                ...i,
+                notes: [
+                  ...(i.notes ?? []),
+                  `fix limit reached: ${rounds} review rounds, attempts on one finding ${report.findingAttempts ?? 'unknown'}`,
+                ],
+              }));
+            }
+          }
+          saveBoard(project, next);
+          return { next, fixLimit, supersededBy };
+        });
         // Proposals only: a lesson reaches a role file through `lessons accept`. The item has moved
         // already, so a problem here must not read as a failed collect.
         let lessonsProposed = 0;
@@ -628,9 +647,20 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           );
           if (problem !== undefined) throw new Error(problem);
           const root = await boundStateRoot();
-          // Merged into queue.json on disk under the queue file lock: safe during a running queue.
-          const pending = enqueue(root, { pr, repo, item: item.id });
-          saveBoard(project, transition(board, item.id, 'queued', BY, ports.clock.now()));
+          const pending = await withBoardLock(stateRoot(), ports.clock.now(), () => {
+            // What the checks above read may have moved while they went to GitHub.
+            const fresh = loadBoard(project);
+            const now = findItem(fresh, item.id);
+            if (now.status !== 'in_review' || now.approvedHead !== item.approvedHead) {
+              throw new Error(`${item.id} changed while it was checked; try again`);
+            }
+            const open = openReview(stateRoot(), fresh, `${repo}#${pr}`);
+            if (open !== undefined) throw new Error(openReviewLine(open, `${repo}#${pr}`));
+            // Merged into queue.json on disk under the queue file lock: safe during a running queue.
+            const added = enqueue(root, { pr, repo, item: item.id });
+            saveBoard(project, transition(fresh, item.id, 'queued', BY, ports.clock.now()));
+            return added;
+          });
           print({ queued: item.id, pr, repo, pending });
           return 0;
         }
@@ -688,7 +718,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 log,
                 hold,
                 mergeAllowed: (entry, head) =>
-                  boardBlocksMerge(project, config, entry, head, ports),
+                  boardBlocksMerge(project, root, config, entry, head, ports),
                 takeNext: () => takeNextPending(root),
                 onDone: (d) => applyQueueResults(project, [d], ports, stderr),
               },
@@ -1170,8 +1200,12 @@ function refuseNativeQueue(config: StudioConfig): void {
  * Why the board forbids this merge; only a readable board with the item `queued` and an approval
  * covering this head allows it.
  */
+const openReviewLine = (id: string, target: string): string =>
+  `review ${id} of ${target} is open: collect or drop it first`;
+
 async function boardBlocksMerge(
   project: string,
+  root: string,
   config: StudioConfig,
   entry: QueueEntry,
   head: string,
@@ -1188,6 +1222,9 @@ async function boardBlocksMerge(
   );
   if (item === undefined) return 'the pull request has no board item';
   if (item.status !== 'queued') return `board item ${item.id} is ${item.status}`;
+  const target = `${entry.repo}#${entry.pr}`;
+  const open = openReview(root, board, target);
+  if (open !== undefined) return openReviewLine(open, target);
   return approvalProblem(
     ports,
     approvalCheckout(project, config, entry.repo),

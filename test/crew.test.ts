@@ -33,7 +33,7 @@ import {
   writeHomeFile,
 } from '../src/crew.js';
 import { DEFAULT_SECRET_GLOBS, evaluateGuard } from '../src/guard.js';
-import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
+import { acquireStateLock, ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import { reportName } from '../src/report.js';
 import { readUsage } from '../src/usage.js';
@@ -2231,6 +2231,59 @@ describe('capabilities at launch', () => {
       await go(f, []);
       expect(approvalOf(f)).toBe(false);
     });
+    it('the launch record exists with its start before the approval goes, and the crew starts after', async () => {
+      const f = makeFixture();
+      boardWith(f, 7);
+      const seen: { capsStarted: unknown; approval: boolean }[] = [];
+      const base = portsWithGh([], () => ({ code: 0, stdout: pr('a.ts') }));
+      const ports: Ports = {
+        ...base,
+        claude: {
+          ...base.claude,
+          start: async (...args) => {
+            seen.push({ capsStarted: capsOf(f, 'APP-20').startedAt, approval: approvalOf(f) });
+            return base.claude.start(...args);
+          },
+        },
+      };
+      await launchCrew(f.project, reviewItem, reviewerConfig, ports, f.launcher);
+      expect(seen).toHaveLength(1);
+      expect(typeof seen[0]?.capsStarted).toBe('string');
+      expect(seen[0]?.approval).toBe(false);
+    });
+    it('a board lock held elsewhere refuses before the crew starts', async () => {
+      const f = makeFixture();
+      boardWith(f, 7);
+      const started: Started[] = [];
+      const base = portsWithGh(started, () => ({ code: 0, stdout: pr('a.ts') }));
+      let lock: ReturnType<typeof acquireStateLock>;
+      // Taken during the checkout: the state root is set up by then.
+      const git: Ports['git'] = {
+        run: async (cwd, args, opts) => {
+          lock ??= acquireStateLock(f.state, 'board.lock', {
+            now: new Date(),
+            heartbeatStaleMs: 60_000,
+          });
+          return base.git.run(cwd, args, opts);
+        },
+      };
+      const ports: Ports = {
+        ...base,
+        git: {
+          run: (cwd, args, opts) =>
+            args.includes('clone') ? git.run(cwd, args, opts) : base.git.run(cwd, args, opts),
+        },
+      };
+      try {
+        await expect(
+          launchCrew(f.project, reviewItem, reviewerConfig, ports, f.launcher),
+        ).rejects.toThrow(/board\.lock/);
+        expect(started).toHaveLength(0);
+        expect(approvalOf(f)).toBe(true);
+      } finally {
+        lock?.release();
+      }
+    }, 15_000);
     it('another pull request keeps its approval', async () => {
       const f = makeFixture();
       boardWith(f, 8);
@@ -2257,6 +2310,26 @@ describe('capabilities at launch', () => {
         portsWithGh(started, () => ({ code: 0, stdout })),
         f.launcher,
       );
+    it('the reviewer loads the bound base and diffs against it', async () => {
+      const f = makeFixture();
+      const cfg = { ...reviewerConfig, reviewBases: ['release/2.x'] };
+      await go(f, withBase('release/2.x'), cfg);
+      const text = brief(f, 'APP-20');
+      expect(text).toContain('git fetch origin release/2.x');
+      expect(text).toContain('git diff origin/release/2.x...HEAD');
+      expect(text).not.toContain('origin/main');
+      expect(text.indexOf('git fetch origin release/2.x')).toBeLessThan(
+        text.indexOf('git fetch origin pull/7/head'),
+      );
+      expect(capsOf(f, 'APP-20').baseRefName).toBe('release/2.x');
+    });
+    it.each(['-x', 'a b', 'a..b', 'a`x`', 'a;b', 'a$b', '/a', 'a/', 'a\nb'])(
+      'a base named %j refuses, even when listed',
+      async (name) => {
+        const cfg = { ...reviewerConfig, reviewBases: [name] };
+        await expect(go(makeFixture(), withBase(name), cfg)).rejects.toThrow(/cannot be used/);
+      },
+    );
     it('another base than the default branch refuses, naming the setting', async () => {
       const f = makeFixture();
       const started: Started[] = [];

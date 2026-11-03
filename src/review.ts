@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { Board, WorkItem } from './board.js';
@@ -92,6 +92,11 @@ export async function readDefaultBranch(ports: Ports, repo: string): Promise<str
   }
 }
 
+/** A branch name that is safe to write into a brief as part of a command. */
+export function usableBaseName(name: string): boolean {
+  return /^[A-Za-z0-9_.][A-Za-z0-9._-]*(\/[A-Za-z0-9._-]+)*$/.test(name) && !name.includes('..');
+}
+
 const TARGET_NOTE = /^review ([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d{0,9})\b/;
 
 /** The pull request a review item is about, from the note the lead writes. */
@@ -147,6 +152,8 @@ export function renderReviewRoutine(r: {
   contract: string;
   round: number;
   pr?: number;
+  /** The base the approval will be bound to; checked with `usableBaseName` at launch. */
+  base?: string;
 }): string[] {
   return [
     '## Review routine',
@@ -157,7 +164,7 @@ export function renderReviewRoutine(r: {
     ...(r.pr === undefined
       ? []
       : [
-          `Load the pull request first, staying on your branch: \`git fetch origin pull/${r.pr}/head\`, then \`git reset --hard FETCH_HEAD\`. The diff is \`git diff origin/main...HEAD\`; save it to an untracked file in the checkout.`,
+          `Load the base and the pull request first, staying on your branch: \`git fetch origin ${r.base}\`, \`git fetch origin pull/${r.pr}/head\`, then \`git reset --hard FETCH_HEAD\`. The diff is \`git diff origin/${r.base}...HEAD\`; save it to an untracked file in the checkout.`,
           '',
         ]),
     `Run each analyzer below as one subagent with the model named there, read-only except for the spec check's probe; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,
@@ -185,6 +192,8 @@ export const crewCapsSchema = z.strictObject({
   headRefOid: z.string().optional(),
   /** The base branch the pull request had then; an approval holds only for it. */
   baseRefName: z.string().optional(),
+  /** When this launch began, written before any earlier approval is cleared. */
+  startedAt: z.string().optional(),
   /** Ids launch could not provide, for the lead: they never count as a pass. */
   skipped: z.array(z.string()).optional(),
 });
@@ -208,9 +217,22 @@ export function readCrewCaps(stateRoot: string, id: string): CrewCaps | undefine
   }
 }
 
+/** Items that have a launch record, which a launch writes before its crew has a crew record. */
+function launchRecords(stateRoot: string): string[] {
+  try {
+    return readdirSync(join(stateRoot, 'briefs')).flatMap((n) => {
+      const m = /^(.+)\.caps\.json$/.exec(n);
+      return m ? [m[1] as string] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
 /**
- * Another review of `target` started at the same time as this one or later, from their crew records
- * and launch records; only the one started last counts. A review with no start of its own is older.
+ * Another review of `target` started at the same time as this one or later; only the one started
+ * last counts. The start comes from the launch record, else the crew record. A review with no start
+ * counts as older when it is this one and as newer when it is another.
  */
 export function newerReview(
   stateRoot: string,
@@ -218,10 +240,29 @@ export function newerReview(
   target: string,
   records: Record<string, { startedAt: string }>,
 ): string | undefined {
-  const mine = records[id]?.startedAt;
-  for (const [other, record] of Object.entries(records)) {
+  const startOf = (item: string) =>
+    readCrewCaps(stateRoot, item)?.startedAt ?? records[item]?.startedAt;
+  const mine = startOf(id);
+  for (const other of new Set([...Object.keys(records), ...launchRecords(stateRoot)])) {
     if (other === id || readCrewCaps(stateRoot, other)?.reviewsTarget !== target) continue;
-    if (mine === undefined || !(Date.parse(record.startedAt) < Date.parse(mine))) return other;
+    const theirs = startOf(other);
+    if (mine === undefined || theirs === undefined) return other;
+    if (!(Date.parse(theirs) < Date.parse(mine))) return other;
+  }
+  return undefined;
+}
+
+/**
+ * A review of `target` that is not finished: moved on the board, or launched and not yet moved. No
+ * approval holds while one is open. The launch clears it anyway; this is the second net.
+ */
+export function openReview(stateRoot: string, board: Board, target: string): string | undefined {
+  for (const i of board.items) {
+    if (i.type !== 'review' || i.status === 'merged' || i.status === 'dropped') continue;
+    const note = reviewTarget(i);
+    const named = note !== undefined && `${note.repo}#${note.pr}` === target;
+    if (named && (i.status === 'assigned' || i.status === 'in_progress')) return i.id;
+    if (readCrewCaps(stateRoot, i.id)?.reviewsTarget === target) return i.id;
   }
   return undefined;
 }

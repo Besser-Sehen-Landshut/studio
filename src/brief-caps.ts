@@ -23,6 +23,7 @@ import {
   reviewRounds,
   reviewTarget,
   reviewTier,
+  usableBaseName,
 } from './review.js';
 import { loadSources, pinProblem } from './sources.js';
 
@@ -101,6 +102,9 @@ export async function resolveForItem(o: {
     throw new Error(
       `${item.id}: ${target.repo}#${target.pr} comes from a fork; a crew never runs a fork's code, review it by hand`,
     );
+  }
+  if (facts !== undefined && !usableBaseName(facts.base)) {
+    throw new Error(`${item.id}: the base branch name cannot be used in a review`);
   }
   // A crew could point its pull request at a branch of its own, whose protection nobody set up.
   if (target !== undefined && facts !== undefined && !config.reviewBases.includes(facts.base)) {
@@ -186,6 +190,7 @@ export interface BriefCaps {
     reasons: string[];
     round: number;
     pr?: number;
+    base?: string;
     contract: string;
     analyzers: RoutineAnalyzer[];
   };
@@ -226,6 +231,7 @@ export function writeCaps(o: {
   forItem: ResolvedForItem;
   dir?: string;
   isInstalled: (skill: string) => boolean | undefined;
+  startedAt?: string;
 }): BriefCaps {
   const { stateRoot, id, forItem } = o;
   const { resolved, review } = forItem;
@@ -341,6 +347,7 @@ export function writeCaps(o: {
       reasons: review.reasons,
       round: review.round,
       ...(review.pr === undefined ? {} : { pr: review.pr }),
+      ...(review.base === undefined ? {} : { base: review.base }),
       contract: copy('analyzers/CONTRACT.md', contract.text),
       analyzers,
     };
@@ -352,6 +359,7 @@ export function writeCaps(o: {
       ...(review.target === undefined ? {} : { reviewsTarget: review.target }),
       ...(review.head === undefined ? {} : { headRefOid: review.head }),
       ...(review.base === undefined ? {} : { baseRefName: review.base }),
+      ...(o.startedAt === undefined ? {} : { startedAt: o.startedAt }),
       ...(skipped.length === 0 ? {} : { skipped: skipped.map((x) => x.id) }),
     };
     writeStateFile(stateRoot, capsFile(stateRoot, id), `${JSON.stringify(caps, null, 2)}\n`);
