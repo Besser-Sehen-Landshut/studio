@@ -1,8 +1,19 @@
 // Writes schema/*.schema.json from the zod schemas. Run with node's native TS type stripping.
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { registerHooks } from 'node:module';
 import { z } from 'zod';
-import { boardSchema } from '../src/board.ts';
-import { ownerConfigSchema, studioConfigSchema } from '../src/config.ts';
+
+// Sources import each other as './x.js'; type stripping runs them as './x.ts'.
+registerHooks({
+  resolve(specifier, context, next) {
+    const ours = specifier.startsWith('./') && context.parentURL?.includes('/src/');
+    return next(ours ? specifier.replace(/\.js$/, '.ts') : specifier, context);
+  },
+});
+const { boardSchema } = await import('../src/board.ts');
+const { capabilitiesSchema } = await import('../src/capabilities.ts');
+const { ownerConfigSchema, studioConfigSchema } = await import('../src/config.ts');
+const { sourcesSchema } = await import('../src/sources.ts');
 
 const snake = (key: string): string => key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 
@@ -37,6 +48,8 @@ for (const [file, zodSchema] of [
   ['schema/studio.schema.json', studioConfigSchema],
   ['schema/board.schema.json', boardSchema],
   ['schema/owner.schema.json', ownerConfigSchema],
+  ['schema/capabilities.schema.json', capabilitiesSchema],
+  ['schema/sources.schema.json', sourcesSchema],
 ] as const) {
   const schema = snakeProps(z.toJSONSchema(zodSchema, { io: 'input' }));
   writeFileSync(file, `${JSON.stringify(schema, null, 2)}\n`);

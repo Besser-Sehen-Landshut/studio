@@ -11,6 +11,7 @@ import {
   writeStateFile,
 } from './paths.js';
 import type { Ports } from './ports.js';
+import { reportName } from './report.js';
 import { readCrewRecords } from './state.js';
 
 export type LimitKind = 'session' | 'weekly';
@@ -302,7 +303,9 @@ export function sessionIdSince(stateRoot: string, id: string, from: number): str
 /** A report in the clone: launch removed older ones, so this run wrote it. Read by lstat only. */
 function hasReport(stateRoot: string, id: string): boolean {
   try {
-    return lstatSync(join(stateRoot, 'clones', id, '.studio', 'reports', `${id}.md`)).isFile();
+    const name = reportName(stateRoot, id);
+    if (name === undefined) return false;
+    return lstatSync(join(stateRoot, 'clones', id, '.studio', 'reports', name)).isFile();
   } catch {
     return false;
   }
@@ -687,7 +690,7 @@ type CrewProcess = 'invalid' | 'dead' | 'verified' | 'unknown' | 'gone';
  * start time stored at launch. `gone`: another process holds the pid now. `unknown`: alive, but
  * there is no stored identity or it cannot be read.
  */
-async function crewProcess(rec: CrewRecord, ports: Ports): Promise<CrewProcess> {
+export async function crewProcess(rec: CrewRecord, ports: Ports): Promise<CrewProcess> {
   // A negative pid would signal a whole process group, -1 everything the owner runs.
   if (!Number.isInteger(rec.pid) || rec.pid <= 0) return 'invalid';
   if (!ports.claude.alive(rec.pid)) return 'dead';

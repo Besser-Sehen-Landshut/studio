@@ -42,6 +42,7 @@ beforeAll(() => {
     crewAllowedWorkflows: ['ci.yml'],
     crewAllowedWorkflowRefs: ['studio-ci'],
     protectedPaths: [join(root, 'state')],
+    readRoots: [join(root, 'clean')],
   };
   mkdirSync(join(root, 'state'));
   mkdirSync(join(root, 'clean'));
@@ -221,8 +222,8 @@ describe('file tools', () => {
   it('denies a missing path argument for write tools', () => {
     expect(tool('Edit', {}).decision).toBe('deny');
   });
-  it('allows reading outside the worktree (non-secret)', () => {
-    expect(tool('Read', { file_path: join(outside, 'a.ts') }).decision).toBe('allow');
+  it('denies reading outside the worktree', () => {
+    expect(tool('Read', { file_path: join(outside, 'a.ts') }).decision).toBe('deny');
   });
   it('allows the listed crew tools', () => {
     for (const name of ['Skill', 'TodoWrite', 'Task', 'Agent']) {
@@ -1453,5 +1454,19 @@ describe('bin/studio-guard.mjs', () => {
   it('denies on garbage stdin', () => {
     const r = spawnSync(process.execPath, [bin], { input: 'not json', encoding: 'utf8', env: {} });
     expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe('deny');
+  });
+});
+
+describe('what the review routine asks a reviewer to run', () => {
+  it.each([
+    'git fetch origin main',
+    'git fetch origin release/2.x',
+    'git diff origin/release/2.x...HEAD',
+    'git fetch origin pull/41/head',
+    'git reset --hard FETCH_HEAD',
+    'git checkout -- src/a.ts',
+    'git diff origin/main...HEAD',
+  ])('%s is allowed', (cmd) => {
+    expect(bash(cmd).decision).toBe('allow');
   });
 });

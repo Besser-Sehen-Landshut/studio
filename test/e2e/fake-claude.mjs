@@ -3,7 +3,7 @@
 // launcher passes, reads the prompt from stdin, and behaves like a crew session that finishes
 // its item: one commit in the cwd (the crew clone) and a report file.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const args = process.argv.slice(2);
@@ -54,8 +54,13 @@ const head = git('rev-parse', 'HEAD');
 // Simplification: the report is written after the last commit and stays untracked, so its
 // head_sha is the real head of the branch. The control room only reads the file.
 mkdirSync(join(cwd, '.studio', 'reports'), { recursive: true });
+const named = /\.studio\/reports\/([^`\s]+\.md)/.exec(readFileSync(brief, 'utf8'));
+if (!named) {
+  process.stderr.write('fake-claude: the brief names no report file\n');
+  process.exit(2);
+}
 writeFileSync(
-  join(cwd, '.studio', 'reports', `${id}.md`),
+  join(cwd, '.studio', 'reports', named[1]),
   [
     '---',
     'status: done',

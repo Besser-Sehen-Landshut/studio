@@ -37,6 +37,14 @@ export interface GuardContext {
   crewAllowedWorkflowRefs?: string[];
   /** Absolute paths that must never be written (guard ctx file, state dir). */
   protectedPaths?: string[];
+  /** Files and directories the read tools may reach, besides the worktree. Nothing else is. */
+  readRoots?: string[];
+  /** Read roots of Claude Code's own files, where `skillRootWaivedGlobs` give way. */
+  skillRoots?: string[];
+  /** Path globs of the saved tool outputs of this run, readable like a skill root. */
+  toolResultGlobs?: string[];
+  /** Entries of `secretGlobs` that cover a whole login dir. Every other entry always applies. */
+  skillRootWaivedGlobs?: string[];
 }
 
 export interface GuardResult {
@@ -75,7 +83,19 @@ interface Env {
   allowedWorkflows: string[];
   allowedRefs: string[];
   protectedReal: string[];
+  readRoots: string[];
+  skillRoots: string[];
+  toolResultRes: RegExp[];
+  /** The secret rules no read root waives. */
+  hardSecretRes: RegExp[];
 }
+
+const isUnder = (roots: string[], p: string): boolean =>
+  roots.some((r) => p === r || p.startsWith(`${r}/`));
+
+/** Skill files and saved tool outputs in a config dir: not the login beside them. */
+const isClaudeFile = (env: Env, p: string): boolean =>
+  isUnder(env.skillRoots, p) || env.toolResultRes.some((re) => re.test(p));
 
 export function evaluateGuard(input: GuardInput, ctx: GuardContext): GuardResult {
   try {
@@ -125,7 +145,8 @@ function commandGlobToRegExp(glob: string): RegExp {
 
 function isSecretString(env: Env, s: string): boolean {
   if (basename(s) === '.env.example') return false;
-  return env.secretRes.some((re) => re.test(s));
+  const ownFile = !s.split('/').includes('..') && isClaudeFile(env, s);
+  return (ownFile ? env.hardSecretRes : env.secretRes).some((re) => re.test(s));
 }
 
 /** Expands simple comma brace lists (`{a,b}`); ranges are left alone. */
@@ -1396,6 +1417,66 @@ function scanDirForSecrets(env: Env, dir: string): void {
   }
 }
 
+/** The one rule for read tools: the worktree and the listed roots, on the real path; nothing else. */
+function checkReadScope(env: Env, tok: string, base: string, tool: string): void {
+  // A tool may trim or expand these where this check would not: refuse rather than guess.
+  if (tok.startsWith('~') || /^\s|\s$|\p{Cc}/u.test(tok)) {
+    deny(`${tool}: unresolvable path: ${JSON.stringify(tok)}`);
+  }
+  refuseDotDot(tok, tool);
+  // Without `..` a tool and this check reach the same file, so the real path decides.
+  const real = resolveReal(tok, base);
+  if (!isUnder(env.readRoots, real) && !isClaudeFile(env, real)) {
+    deny(`${tool} outside this crew's files: ${tok}`);
+  }
+}
+
+/**
+ * A tool may drop `..` before it follows a link or after, and the two can name different files. No
+ * set of checks covers every mix of links and `..`, so read tools do not take it at all.
+ */
+function refuseDotDot(tok: string, tool: string): void {
+  if (tok.split('/').includes('..')) deny(`${tool}: write the path without ..: ${tok}`);
+}
+
+/** Braces that close in order and do not nest. */
+function flatBraces(pattern: string): boolean {
+  let open = false;
+  for (const c of pattern) {
+    if (c === '{') {
+      if (open) return false;
+      open = true;
+    } else if (c === '}') {
+      if (!open) return false;
+      open = false;
+    }
+  }
+  return !open;
+}
+
+/**
+ * Deliberately an allowlist, not a model of glob syntax: only these characters and flat braces, and
+ * nothing that is or could match `..`. A glob stays in scope when the part before its first wildcard
+ * does.
+ */
+function checkGlobScope(env: Env, pattern: string, base: string, tool: string): void {
+  const refuse = (why: string): never =>
+    deny(`${tool}: ${why}: ${pattern}; use a narrower pattern, or Bash in the sandbox`);
+  if (!/^[\p{L}\p{N}_\-./*?,{}]+$/u.test(pattern)) refuse('only plain Glob patterns are allowed');
+  if (!flatBraces(pattern)) refuse('braces must close and must not nest');
+  if (pattern.includes('..')) refuse('write the pattern without ..');
+  for (const e of braceExpand(pattern)) {
+    if (e.includes('{') || e.includes('}')) refuse('a brace group needs a comma');
+    const segs = e.split('/');
+    if (e.includes('..') || segs.some((s) => /^[.?]{2}$/.test(s))) {
+      refuse('write the pattern without ..');
+    }
+    const first = segs.findIndex((s) => hasMagic(s));
+    const prefix = first < 0 ? e : segs.slice(0, first).join('/') || (isAbsolute(e) ? '/' : '.');
+    checkReadScope(env, prefix, base, tool);
+  }
+}
+
 function checkSearch(env: Env, path: unknown, globs: unknown[], cwd: string): void {
   const given = typeof path === 'string' && path !== '' ? path : undefined;
   if (given !== undefined) checkSecretPath(env, given, cwd);
@@ -1450,7 +1531,11 @@ function check(input: GuardInput, ctx: GuardContext): void {
     !isStringArray(c.secretGlobs) ||
     (c.crewAllowedWorkflows !== undefined && !isStringArray(c.crewAllowedWorkflows)) ||
     (c.crewAllowedWorkflowRefs !== undefined && !isStringArray(c.crewAllowedWorkflowRefs)) ||
-    (c.protectedPaths !== undefined && !isStringArray(c.protectedPaths))
+    (c.protectedPaths !== undefined && !isStringArray(c.protectedPaths)) ||
+    (c.readRoots !== undefined && !isStringArray(c.readRoots)) ||
+    (c.skillRoots !== undefined && !isStringArray(c.skillRoots)) ||
+    (c.toolResultGlobs !== undefined && !isStringArray(c.toolResultGlobs)) ||
+    (c.skillRootWaivedGlobs !== undefined && !isStringArray(c.skillRootWaivedGlobs))
   ) {
     deny('invalid guard context');
   }
@@ -1472,19 +1557,34 @@ function check(input: GuardInput, ctx: GuardContext): void {
     protectedReal: protectedPaths
       .flatMap((p) => [p, resolveReal(p, '/')])
       .map((p) => p.toLowerCase()),
+    readRoots: [ctx.worktree, ...(ctx.readRoots ?? [])].map((p) => resolveReal(p, '/')),
+    skillRoots: (ctx.skillRoots ?? []).flatMap((p) => [p, resolveReal(p, '/')]),
+    toolResultRes: (ctx.toolResultGlobs ?? []).map(fileGlobToRegExp),
+    hardSecretRes: ctx.secretGlobs
+      .filter((g) => !(ctx.skillRootWaivedGlobs ?? []).includes(g))
+      .map(fileGlobToRegExp),
   };
   const { toolName, toolInput } = input;
+  const given = input.cwd as unknown;
+  if (
+    given !== undefined &&
+    (typeof given !== 'string' || !isAbsolute(given) || given.split('/').includes('..'))
+  ) {
+    deny('invalid working directory');
+  }
   const cwd = resolveReal(input.cwd ?? wt, wt);
 
   if (typeof toolName !== 'string' || !CREW_TOOLS.has(toolName)) {
     deny(`tool not allowed for crew: ${String(toolName)}`);
   }
-  if (toolName === 'Bash' || typeof toolInput.command === 'string') {
+  if (toolName === 'Bash') {
     const command = toolInput.command;
     if (typeof command !== 'string') deny(`${toolName} call without a command`);
     checkBash(env, command as string, cwd, 0);
     return;
   }
+  // Only Bash has this field; on another tool it is not what the checks below look at.
+  if (toolInput.command !== undefined) deny(`${toolName} call with a command`);
 
   const writeKey = WRITE_TOOLS[toolName];
   if (writeKey !== undefined) {
@@ -1492,14 +1592,29 @@ function check(input: GuardInput, ctx: GuardContext): void {
     if (typeof p !== 'string' || p === '') deny(`${toolName} call without ${writeKey}`);
     checkWritePath(env, p as string, cwd, toolName);
   }
+  if (toolName === 'Read') {
+    const p = toolInput.file_path;
+    if (typeof p !== 'string' || p === '') deny('Read call without file_path');
+    checkReadScope(env, p as string, cwd, toolName);
+  }
   if (FILE_TOOLS.has(toolName)) {
     for (const key of ['file_path', 'notebook_path']) {
       const v = toolInput[key];
       if (typeof v === 'string' && v !== '') checkSecretPath(env, v, cwd);
     }
-  } else if (toolName === 'Grep') {
-    checkSearch(env, toolInput.path, [toolInput.glob], cwd);
-  } else if (toolName === 'Glob') {
-    checkSearch(env, toolInput.path, [toolInput.pattern], cwd);
+  } else if (toolName === 'Grep' || toolName === 'Glob') {
+    if (toolInput.path !== undefined && typeof toolInput.path !== 'string') {
+      deny(`${toolName} call with a path that is not a string`);
+    }
+    const given = (toolInput.path ?? '') as string;
+    const start = given === '' ? '.' : given;
+    checkReadScope(env, start, cwd, toolName);
+    if (toolName === 'Grep') {
+      checkSearch(env, toolInput.path, [toolInput.glob], cwd);
+    } else {
+      if (typeof toolInput.pattern !== 'string') deny('Glob call without a pattern');
+      checkGlobScope(env, toolInput.pattern as string, resolveReal(start, cwd), toolName);
+      checkSearch(env, toolInput.path, [toolInput.pattern], cwd);
+    }
   }
 }

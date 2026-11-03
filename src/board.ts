@@ -29,6 +29,9 @@ const historySchema = z.strictObject({
   by: z.string(),
 });
 
+/** A value for `--model`: it never starts with a dash. Same rule as in config.ts (a test keeps them equal). */
+export const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
+
 export const workItemSchema = z.strictObject({
   id: z.string().regex(/^[A-Z]+-\d+$/, 'must match ^[A-Z]+-\\d+$'),
   title: z.string().min(1),
@@ -48,8 +51,20 @@ export const workItemSchema = z.strictObject({
   plan: z.string().optional(),
   pr: z.number().int().positive().optional(),
   branch: z.string().optional(),
+  // Set by `collect` from an approving review; a request for changes clears it.
+  approvedHead: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/i, 'not a commit')
+    .optional(),
+  // The base branch that approval was given for.
+  approvedBase: z.string().min(1).optional(),
   crew: z.string().optional(),
   notes: z.array(z.string()).optional(),
+  // Drives the review tier, the analyzers and the skills (capabilities/INDEX.yaml).
+  risk: z.array(z.enum(['ui', 'landing', 'auth', 'security', 'data', 'migration'])).optional(),
+  triggers: z.array(z.enum(['epic-end', 'release'])).optional(),
+  // Set by `studio escalate`; wins over the role's model.
+  model: z.string().regex(MODEL_NAME_RE, 'not a model name').optional(),
   history: z.array(historySchema).default([]),
 });
 
@@ -99,7 +114,8 @@ function describeIssue(issue: z.core.$ZodIssue): string[] {
   return [`${base || '(root)'}: ${issue.message}`];
 }
 
-const boardFile = (dir: string): string => join(dir, '.studio', 'board.yaml');
+export const boardPath = (dir: string): string => join(dir, '.studio', 'board.yaml');
+const boardFile = boardPath;
 
 export function loadBoard(dir: string): Board {
   const file = boardFile(dir);
@@ -156,8 +172,13 @@ const KEY_ORDER: readonly (keyof WorkItem)[] = [
   'plan',
   'pr',
   'branch',
+  'approvedHead',
+  'approvedBase',
   'crew',
   'notes',
+  'risk',
+  'triggers',
+  'model',
   'history',
 ];
 

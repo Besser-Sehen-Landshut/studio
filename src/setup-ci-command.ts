@@ -153,7 +153,7 @@ function applyCi(doc: Document, ci: CiConfig): void {
 }
 
 /** Temp file next to the target, then rename: a reader never sees half a file. */
-function writeAtomic(file: string, text: string): void {
+export function writeAtomic(file: string, text: string): void {
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   try {
     writeFileSync(tmp, text, { flag: 'wx', mode: statSync(file).mode & 0o777 });

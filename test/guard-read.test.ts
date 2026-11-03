@@ -1,0 +1,541 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DEFAULT_SECRET_GLOBS, evaluateGuard, type GuardContext } from '../src/guard.js';
+
+let root: string;
+let wt: string;
+let outside: string;
+let state: string;
+let brief: string;
+let caps: string;
+let home: string;
+let tmp: string;
+let login: string;
+let plugins: string;
+let ctx: GuardContext;
+
+beforeAll(() => {
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'guard-read-')));
+  wt = join(root, 'wt');
+  outside = join(root, 'elsewhere');
+  state = join(root, 'state');
+  brief = join(state, 'briefs', 'APP-1.md');
+  caps = join(state, 'briefs', 'APP-1.caps');
+  home = join(state, 'homes', 'APP-1');
+  tmp = join(state, 'tmp', 'APP-1');
+  login = join(root, 'login');
+  plugins = join(login, 'plugins', 'cache');
+  for (const d of [join(wt, 'sub'), outside, join(root, 'wt-other'), caps, home, tmp, plugins]) {
+    mkdirSync(d, { recursive: true });
+  }
+  mkdirSync(join(root, 'wt-secret'));
+  writeFileSync(join(root, 'wt-secret', '.env'), 'x');
+  symlinkSync(outside, join(wt, 'link'));
+  ctx = {
+    worktree: wt,
+    ownerOnly: [],
+    deployCommands: [],
+    secretGlobs: [...DEFAULT_SECRET_GLOBS, login, `${login}/**`],
+    readRoots: [brief, caps, home, tmp, plugins],
+    skillRoots: [plugins],
+    skillRootWaivedGlobs: [login, `${login}/**`],
+  };
+});
+
+afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+const decide = (toolName: string, toolInput: Record<string, unknown>, cwd?: string) =>
+  evaluateGuard({ toolName, toolInput, cwd }, ctx).decision;
+const read = (file_path: string, cwd?: string) => decide('Read', { file_path }, cwd);
+
+describe('read tools stay in the crew area', () => {
+  it.each<[string, () => string]>([
+    ['the clone', () => join(wt, 'sub', 'a.ts')],
+    ['the own brief', () => brief],
+    ['a copied analyzer', () => join(caps, 'analyzers', 'diff-review.md')],
+    ['the crew HOME', () => join(home, '.gitconfig')],
+    ['the crew tmp dir', () => join(tmp, 'diff.txt')],
+    [
+      'a skill file of a plugin in a login dir',
+      () => join(plugins, 'm', 'p', '1', 'skills', 's', 'x.md'),
+    ],
+  ])('Read of %s is allowed', (_name, file) => {
+    expect(read(file())).toBe('allow');
+  });
+
+  it.each<[string, () => string]>([
+    ['another brief', () => join(state, 'briefs', 'APP-2.md')],
+    ['a name that starts like the brief', () => `${brief}.bak`],
+    ['a directory that starts like the caps', () => join(`${caps}2`, 'x.md')],
+    ['another clone', () => join(root, 'wt-other', 'a.ts')],
+    ['another file of the login', () => join(login, 'settings.json')],
+    ['a way out of the plugins', () => `${plugins}/../../.credentials.json`],
+    ['the system', () => '/etc/hosts'],
+    ['the home shorthand', () => '~/notes.txt'],
+    ['a dotted way out', () => `${wt}/../elsewhere/a.ts`],
+    ['a link out of the clone', () => join(wt, 'link', 'a.ts')],
+  ])('Read of %s is denied', (_name, file) => {
+    expect(read(file())).toBe('deny');
+  });
+
+  describe('secret rules inside the read roots', () => {
+    const owner = () => join(root, 'owner');
+    const hardened = (): GuardContext => {
+      const skills = join(owner(), 'accounts', 'a', 'plugins', 'cache');
+      return {
+        ...ctx,
+        secretGlobs: [
+          ...DEFAULT_SECRET_GLOBS,
+          owner(),
+          `${owner()}/**`,
+          join(owner(), 'crew-token'),
+        ],
+        readRoots: [skills],
+        skillRoots: [skills],
+        skillRootWaivedGlobs: [owner(), `${owner()}/**`],
+      };
+    };
+    const at = (file_path: string) =>
+      evaluateGuard({ toolName: 'Read', toolInput: { file_path } }, hardened()).decision;
+    const skills = () => join(owner(), 'accounts', 'a', 'plugins', 'cache');
+
+    it('only the waived directory rule gives way to a skill file', () => {
+      expect(at(join(skills(), 'm', 'p', '1', 'skills', 's', 'SKILL.md'))).toBe('allow');
+    });
+    it.each(['.env', 'cert.pem', 'id_rsa', 'credentials.json', '.npmrc'])(
+      'the default rule for %s still applies in a plugin',
+      (name) => {
+        expect(at(join(skills(), 'm', name))).toBe('deny');
+      },
+    );
+    it('with no waived list, a secret glob over the login applies to its plugins too', () => {
+      const none: GuardContext = { ...hardened(), skillRootWaivedGlobs: undefined };
+      const r = evaluateGuard(
+        { toolName: 'Read', toolInput: { file_path: join(skills(), 'SKILL.md') } },
+        none,
+      );
+      expect(r.decision).toBe('deny');
+    });
+    it('a waived list that is not a list is an invalid context', () => {
+      const bad = { ...ctx, skillRootWaivedGlobs: 'x' } as unknown as GuardContext;
+      const r = evaluateGuard({ toolName: 'Read', toolInput: { file_path: brief } }, bad);
+      expect(r.reason).toContain('invalid');
+    });
+  });
+
+  describe('saved tool outputs', () => {
+    const projects = () => join(login, 'projects', 'clone');
+    const withResults = (): GuardContext => ({
+      ...ctx,
+      toolResultGlobs: [`${projects()}/*/tool-results/**`],
+      skillRootWaivedGlobs: [login, `${login}/**`],
+    });
+    const at = (file_path: string) =>
+      evaluateGuard({ toolName: 'Read', toolInput: { file_path } }, withResults()).decision;
+
+    it('a saved output is readable', () => {
+      expect(at(join(projects(), 'session', 'tool-results', 'out.txt'))).toBe('allow');
+    });
+    it.each(['session.jsonl', 'session/subagents/a.jsonl', 'memory/MEMORY.md'])(
+      'the transcript or file %s is not',
+      (rel) => {
+        expect(at(join(projects(), rel))).toBe('deny');
+      },
+    );
+    it('a dotted way out of a saved output is not', () => {
+      expect(at(`${projects()}/session/tool-results/../../session.jsonl`)).toBe('deny');
+    });
+    it('a secret name among them stays denied', () => {
+      expect(at(join(projects(), 'session', 'tool-results', '.env'))).toBe('deny');
+    });
+  });
+
+  describe('paths a tool may read differently', () => {
+    it.each([
+      ' /etc/hosts',
+      '/etc/hosts ',
+      '\t/etc/hosts',
+      '\n/etc/hosts',
+      ' ~/x',
+      '~root/x',
+      '~+/x',
+      'sub/a\u0000.ts',
+      'sub/a\n.ts',
+      'sub/a.ts ',
+      ' sub/a.ts',
+      ' /etc/hosts',
+    ])('Read of %j is denied, also when it would land in the clone', (p) => {
+      expect(read(p, wt)).toBe('deny');
+    });
+    it('a space inside a name is fine', () => {
+      expect(read('sub/my file.ts', wt)).toBe('allow');
+    });
+    it.each([
+      ['Grep', { pattern: 'x', path: ' /etc' }],
+      ['Glob', { pattern: '*', path: ' /etc' }],
+      ['Glob', { pattern: ' /etc/*' }],
+      ['Glob', { pattern: ' ~/*' }],
+      ['Glob', { pattern: '{sub, /etc}/*' }],
+    ])('%s %j is denied', (name, input) => {
+      expect(decide(name, input, wt)).toBe('deny');
+    });
+  });
+
+  describe('links combined with `..`', () => {
+    it('both the written and the real path must be allowed', () => {
+      mkdirSync(join(wt, 'sub', 'deep'), { recursive: true });
+      symlinkSync(join(wt, 'sub', 'deep'), join(wt, 'inner'));
+      try {
+        // Written form leaves the clone (<root>/wt-other/x), real form stays in it (<wt>/wt-other/x).
+        expect(read(`${wt}/inner/../../wt-other/x`)).toBe('deny');
+        expect(decide('Grep', { pattern: 'x', path: `${wt}/inner/../../wt-other` })).toBe('deny');
+        expect(decide('Glob', { pattern: '*', path: `${wt}/inner/../../wt-other` })).toBe('deny');
+        expect(decide('Glob', { pattern: `${wt}/inner/../../wt-other/*` })).toBe('deny');
+        // Written form stays inside the clone, real form leaves it.
+        expect(read(`${wt}/link/../a.ts`)).toBe('deny');
+        expect(decide('Grep', { pattern: 'x', path: `${wt}/link/../sub` })).toBe('deny');
+        expect(decide('Glob', { pattern: `${wt}/link/../*` })).toBe('deny');
+        expect(decide('Glob', { pattern: '*', path: `${wt}/link/../sub` })).toBe('deny');
+      } finally {
+        rmSync(join(wt, 'inner'));
+      }
+    });
+    it('a link as the working directory or Glob path counts too', () => {
+      mkdirSync(join(wt, 'sub', 'deep'), { recursive: true });
+      symlinkSync(join(wt, 'sub', 'deep'), join(wt, 'inner'));
+      const inner = join(wt, 'inner');
+      try {
+        expect(read('../../wt-other/x', inner)).toBe('deny');
+        expect(decide('Grep', { pattern: 'x', path: '../../wt-other' }, inner)).toBe('deny');
+        expect(decide('Glob', { pattern: '*', path: '../../wt-other' }, inner)).toBe('deny');
+        expect(decide('Glob', { pattern: '../../wt-other/*' }, inner)).toBe('deny');
+        expect(decide('Glob', { pattern: '../../wt-other/*', path: inner })).toBe('deny');
+        expect(decide('Glob', { pattern: '../../wt-other/*', path: 'inner' }, wt)).toBe('deny');
+        // Inside on every form: no reason to refuse.
+        expect(read('a.ts', inner)).toBe('allow');
+        expect(decide('Glob', { pattern: '*.ts', path: inner })).toBe('allow');
+        expect(decide('Glob', { pattern: '*.ts', path: 'inner' }, wt)).toBe('allow');
+      } finally {
+        rmSync(inner);
+      }
+    });
+    it('a link that stays inside on both forms is fine', () => {
+      symlinkSync(join(wt, 'sub'), join(wt, 'inner'));
+      try {
+        expect(read(`${wt}/inner/a.ts`)).toBe('allow');
+      } finally {
+        rmSync(join(wt, 'inner'));
+      }
+    });
+    it('a listed root works under its written and its real spelling', () => {
+      symlinkSync(state, join(root, 'state-link'));
+      const viaLink = join(root, 'state-link', 'briefs', 'APP-1.md');
+      const linked: GuardContext = { ...ctx, readRoots: [viaLink] };
+      for (const file_path of [viaLink, brief]) {
+        expect(
+          evaluateGuard({ toolName: 'Read', toolInput: { file_path } }, linked).decision,
+          file_path,
+        ).toBe('allow');
+      }
+    });
+  });
+
+  describe('no `..` in any read path', () => {
+    const LINKS: [string, () => string][] = [
+      ['inner', () => join(wt, 'sub', 'deep')],
+      ['outer', () => outside],
+    ];
+    beforeAll(() => {
+      mkdirSync(join(wt, 'sub', 'deep'), { recursive: true });
+      for (const [name, to] of LINKS) symlinkSync(to(), join(wt, name));
+    });
+    afterAll(() => {
+      for (const [name] of LINKS) rmSync(join(wt, name));
+    });
+    const reason = (toolName: string, toolInput: Record<string, unknown>, cwd?: string) =>
+      evaluateGuard({ toolName, toolInput, cwd }, ctx);
+
+    // Each of these reported forms lands in the area under some reading of `..`.
+    it.each<[string, () => [string, Record<string, unknown>, string?]]>([
+      ['written form ends on a link', () => ['Read', { file_path: `${wt}/inner/../link/a.ts` }]],
+      [
+        'relative from a linked cwd',
+        () => ['Read', { file_path: '../link/a.ts' }, join(wt, 'inner')],
+      ],
+      ['real form stays in', () => ['Read', { file_path: `${wt}/inner/../../wt-other/x` }]],
+      ['stays in the clone', () => ['Read', { file_path: `${wt}/sub/../sub/a.ts` }]],
+      ['relative and harmless', () => ['Read', { file_path: 'sub/../sub/a.ts' }, wt]],
+      ['in a listed root', () => ['Read', { file_path: `${home}/x/../.gitconfig` }]],
+      ['trailing', () => ['Read', { file_path: `${wt}/sub/..` }]],
+      ['Grep path', () => ['Grep', { pattern: 'x', path: `${wt}/sub/..` }]],
+      ['Grep relative path', () => ['Grep', { pattern: 'x', path: '../sub' }, join(wt, 'inner')]],
+      ['Glob path', () => ['Glob', { pattern: '*', path: `${wt}/sub/../sub` }]],
+      ['Glob relative path', () => ['Glob', { pattern: '*', path: '..' }, join(wt, 'sub')]],
+      ['Glob pattern', () => ['Glob', { pattern: 'sub/../*.ts' }, wt]],
+      ['Glob pattern after a wildcard', () => ['Glob', { pattern: '*/../*.ts' }, wt]],
+      ['Glob pattern at the end', () => ['Glob', { pattern: 'sub/*/..' }, wt]],
+      ['Glob pattern in braces', () => ['Glob', { pattern: '{sub,..}/*.ts' }, wt]],
+      [
+        'Glob pattern from a linked path',
+        () => ['Glob', { pattern: '../*', path: join(wt, 'inner') }],
+      ],
+    ])('%s is denied and says what to do', (_name, input) => {
+      const [tool, toolInput, cwd] = input();
+      const r = reason(tool, toolInput, cwd);
+      expect(r.decision).toBe('deny');
+      expect(r.reason).toContain('without ..');
+    });
+
+    it.each<[string, () => string, (() => string)?]>([
+      ['a link out of the clone', () => join(wt, 'outer', 'a.ts')],
+      ['a relative name from a cwd outside', () => 'a.ts', () => outside],
+    ])('without `..` the real path decides: %s', (_name, file, cwd) => {
+      expect(read(file(), cwd ? cwd() : wt)).toBe('deny');
+    });
+
+    it('from a linked cwd in the clone, a plain name is fine', () => {
+      expect(read('a.ts', join(wt, 'inner'))).toBe('allow');
+      expect(decide('Glob', { pattern: '*.ts', path: 'inner' }, wt)).toBe('allow');
+      expect(decide('Glob', { pattern: '*.ts', path: join(wt, 'outer') })).toBe('deny');
+      expect(decide('Glob', { pattern: 'outer/*.ts' }, wt)).toBe('deny');
+    });
+
+    it('a name that only starts with dots is not `..`', () => {
+      expect(read(join(wt, 'sub', '..foo', 'a.ts'))).toBe('allow');
+      expect(read(join(wt, '...', 'a.ts'))).toBe('allow');
+    });
+
+    it('`..` does not slip past the secret check of the write tools', () => {
+      mkdirSync(join(root, 'wt-secret', 'sub'), { recursive: true });
+      const secret = join(root, 'wt-secret');
+      const check = (file_path: string) =>
+        evaluateGuard(
+          { toolName: 'Edit', toolInput: { file_path }, cwd: secret },
+          { ...ctx, worktree: secret },
+        ).decision;
+      expect(check(`${secret}/sub/../.env`)).toBe('deny');
+      expect(check('sub/../.env')).toBe('deny');
+      expect(check(`${secret}/sub/../a.ts`)).toBe('allow');
+    });
+  });
+
+  describe('Glob patterns the brace expansion may not see through', () => {
+    it.each(['{..}/x', '{a}/../x', '{{..}}/x', '{a}/*', '{/etc}/*', 'a{b/*', '{..,}/x', 'a..b/*'])(
+      '%s is denied',
+      (pattern) => {
+        expect(decide('Glob', { pattern }, wt)).toBe('deny');
+      },
+    );
+    it.each([
+      '*/.{.,x}/y',
+      '*/{.,x}./y',
+      '*/.[.]/y',
+      '*/[.]./y',
+      '*/[.][.]/y',
+      '*/.\\./y',
+      '*/\\.\\./y',
+      '*/?./y',
+      '*/.?/y',
+      '*/??/y',
+      '*/.[!a]/y',
+      '.{.,x}/y',
+    ])('%s can become .. and is denied', (pattern) => {
+      expect(decide('Glob', { pattern }, wt)).toBe('deny');
+    });
+    it.each([
+      '[ab]c/*',
+      '*/@(..)/y',
+      '*/@(a|b)/y',
+      '*/!(x)/y',
+      '*/{.,\\}x}./y',
+      '*/a b/*',
+      '*/a\tb/*',
+      '$HOME/*',
+      '`x`/*',
+      '^a/*',
+      '~/*',
+      '{a,{b,c}}/*.ts',
+      '{a,b/*',
+      'a,b}/*',
+      '}a,b{/*',
+      '',
+    ])('%j is outside the allowed characters or brace shape', (pattern) => {
+      expect(decide('Glob', { pattern }, wt)).toBe('deny');
+    });
+    it('the refusal says what to use instead', () => {
+      const r = evaluateGuard({ toolName: 'Glob', toolInput: { pattern: '[ab]/*' } }, ctx);
+      expect(r.reason).toMatch(/Bash|narrower/);
+    });
+    it('Grep glob only filters and stays free', () => {
+      expect(decide('Grep', { pattern: 'x', glob: '*.[ch]' }, wt)).toBe('allow');
+    });
+    it.each([
+      '**/*.{ts,tsx}',
+      'src/**/*.test.ts',
+      '*.md',
+      '**/.*',
+      '.github/**',
+      'a?/*.ts',
+      '?a.ts',
+      'file.?s',
+      'größe/*.md',
+      'a_b-c/*.ts',
+    ])('%s is an ordinary pattern and stays allowed', (pattern) => {
+      expect(decide('Glob', { pattern }, wt)).toBe('allow');
+    });
+    it.each(['*.{ts,tsx}', 'src/**/*.{ts,tsx}', '{src,test}/**/*.ts'])(
+      '%s still works',
+      (pattern) => {
+        expect(decide('Glob', { pattern }, wt)).toBe('allow');
+      },
+    );
+  });
+
+  describe('the working directory a tool reports', () => {
+    it.each<[string, unknown]>([
+      ['not a string', 1],
+      ['an object', { a: 1 }],
+      ['relative', 'sub'],
+      ['with a dotted segment', '/x/../y'],
+    ])('%s is denied', (_name, cwd) => {
+      for (const [toolName, toolInput] of [
+        ['Read', { file_path: '/nowhere' }],
+        ['Grep', { pattern: 'x' }],
+        ['Glob', { pattern: '*' }],
+      ] as const) {
+        const input = { toolName, toolInput, cwd } as unknown as Parameters<
+          typeof evaluateGuard
+        >[0];
+        const r = evaluateGuard(input, ctx);
+        expect(r.decision, toolName).toBe('deny');
+        expect(r.reason, toolName).toContain('working directory');
+      }
+    });
+    it('a dotted segment in the absolute working directory is denied too', () => {
+      const r = decide('Read', { file_path: 'sub/a.ts' }, `${wt}/sub/..`);
+      expect(r).toBe('deny');
+    });
+    it('none at all counts from the clone', () => {
+      expect(decide('Read', { file_path: 'sub/a.ts' })).toBe('allow');
+    });
+  });
+
+  describe('fields that do not fit the tool', () => {
+    it.each([
+      'Read',
+      'Edit',
+      'Write',
+      'MultiEdit',
+      'NotebookEdit',
+      'Grep',
+      'Glob',
+      'Skill',
+      'TodoWrite',
+      'Task',
+      'Agent',
+    ])('a command on %s is denied', (name) => {
+      const r = decide(name, {
+        command: 'ls',
+        file_path: join(wt, 'a.ts'),
+        notebook_path: join(wt, 'a.ipynb'),
+        pattern: '*',
+      });
+      expect(r).toBe('deny');
+    });
+    it('a command cannot carry a Read past the read rule', () => {
+      expect(decide('Read', { command: 'ls', file_path: '/etc/hosts' })).toBe('deny');
+    });
+    it('Bash needs a string command', () => {
+      expect(decide('Bash', {})).toBe('deny');
+      expect(decide('Bash', { command: 1 })).toBe('deny');
+    });
+    it.each<[string, Record<string, unknown>]>([
+      ['Grep', { pattern: 'x', path: ['/etc'] }],
+      ['Grep', { pattern: 'x', path: 1 }],
+      ['Grep', { pattern: 'x', path: null }],
+      ['Glob', { pattern: '*', path: { a: 1 } }],
+      ['Glob', { pattern: ['/etc/*'] }],
+      ['Glob', {}],
+    ])('%s %j is denied', (name, input) => {
+      expect(decide(name, input, wt)).toBe('deny');
+    });
+  });
+
+  it('a relative path counts from the working directory', () => {
+    expect(read('sub/a.ts', wt)).toBe('allow');
+    expect(read('../elsewhere/a.ts', wt)).toBe('deny');
+    expect(read('a.ts', outside)).toBe('deny');
+  });
+
+  it('a file name with a dollar sign in the clone is allowed', () => {
+    expect(read(join(wt, 'routes', '$id.tsx'))).toBe('allow');
+  });
+
+  it('a Read with no path is denied', () => {
+    expect(decide('Read', {})).toBe('deny');
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['Grep', { pattern: 'x' }],
+    ['Grep', { pattern: 'x', path: 'sub' }],
+    ['Grep', { pattern: 'x', glob: '**/*.ts' }],
+    ['Glob', { pattern: '**/*.ts' }],
+    ['Glob', { pattern: 'sub/*.ts' }],
+    ['Glob', { pattern: '*.ts', path: 'sub' }],
+    ['Glob', { pattern: '{src,test}/**/*.ts' }],
+    ['Glob', { pattern: '*.ts', path: '' }],
+  ])('%s %j in the clone is allowed', (name, input) => {
+    expect(decide(name, input, wt)).toBe('allow');
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['Grep', { pattern: 'x', path: '/etc' }],
+    ['Grep', { pattern: 'x', path: '..' }],
+    ['Glob', { pattern: '*', path: '/etc' }],
+    ['Glob', { pattern: '/etc/*' }],
+    ['Glob', { pattern: '/**' }],
+    ['Glob', { pattern: '../**' }],
+    ['Glob', { pattern: 'sub/../../**' }],
+    ['Glob', { pattern: '*/../../**' }],
+    ['Glob', { pattern: '{sub,/etc}/*' }],
+    ['Glob', { pattern: '~/*' }],
+  ])('%s %j is denied', (name, input) => {
+    expect(decide(name, input, wt)).toBe('deny');
+  });
+
+  it('a search with no path counts from the working directory', () => {
+    expect(decide('Grep', { pattern: 'x' }, outside)).toBe('deny');
+    expect(decide('Glob', { pattern: '*' }, outside)).toBe('deny');
+  });
+
+  it('without a list only the clone is readable', () => {
+    const bare: GuardContext = { ...ctx, readRoots: undefined, skillRoots: undefined };
+    const at = (file_path: string) =>
+      evaluateGuard({ toolName: 'Read', toolInput: { file_path } }, bare).decision;
+    expect(at(join(wt, 'a.ts'))).toBe('allow');
+    expect(at(brief)).toBe('deny');
+  });
+
+  it.each(['readRoots', 'skillRoots'])('%s that is not a list is an invalid context', (key) => {
+    const bad = { ...ctx, [key]: 'x' } as unknown as GuardContext;
+    const r = evaluateGuard({ toolName: 'Read', toolInput: { file_path: brief } }, bad);
+    expect(r.decision).toBe('deny');
+    expect(r.reason).toContain('invalid');
+  });
+
+  it('secrets in the clone stay denied', () => {
+    const secret = join(root, 'wt-secret');
+    const inClone = (toolName: string, toolInput: Record<string, unknown>) =>
+      evaluateGuard({ toolName, toolInput, cwd: secret }, { ...ctx, worktree: secret }).decision;
+    expect(inClone('Read', { file_path: join(secret, '.env') })).toBe('deny');
+    expect(inClone('Grep', { pattern: 'x', path: join(secret, '.env') })).toBe('deny');
+    expect(inClone('Grep', { pattern: 'x' })).toBe('deny');
+  });
+
+  it('writes are not widened', () => {
+    expect(decide('Write', { file_path: brief })).toBe('deny');
+    expect(decide('Edit', { file_path: join(plugins, 'x.md') })).toBe('deny');
+  });
+});

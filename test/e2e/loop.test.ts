@@ -1,5 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -91,6 +99,7 @@ describe('crew loop with a fake claude', () => {
           JSON.stringify({
             headRefOid: git(cloneOf(id), 'rev-parse', 'HEAD'),
             headRefName: `studio/${id}`,
+            baseRefName: 'main',
             isCrossRepository: false,
             headRepository: { name: 'app' },
             headRepositoryOwner: { login: 'org' },
@@ -175,7 +184,11 @@ describe('crew loop with a fake claude', () => {
     }
 
     // A report whose head differs from the PR head must not move the item.
-    const reportFile = join(cloneOf('APP-2'), '.studio', 'reports', 'APP-2.md');
+    const reportDir = join(cloneOf('APP-2'), '.studio', 'reports');
+    const reportFile = join(
+      reportDir,
+      readdirSync(reportDir).find((n) => n.startsWith('APP-2.') && n.endsWith('.md')) as string,
+    );
     const original = readFileSync(reportFile, 'utf8');
     writeFileSync(reportFile, original.replace(/^head_sha: .*$/m, `head_sha: ${'b'.repeat(40)}`));
     await expect(run('collect', 'APP-2')).rejects.toThrow(/exited 1/);
@@ -193,6 +206,18 @@ describe('crew loop with a fake claude', () => {
     expect(crewSessionId(stateRoot, 'APP-1')).toBe('fake-APP-1');
 
     expect((await json('plan')).assign).toEqual([]);
+
+    // No approval, no queue. The review itself is not part of this loop: its verdict is written here.
+    await expect(run('queue', 'add', 'org/app#1')).rejects.toThrow(/no approval/);
+    const boardFile = join(project, '.studio', 'board.yaml');
+    const approved = git(cloneOf('APP-1'), 'rev-parse', 'HEAD');
+    writeFileSync(
+      boardFile,
+      readFileSync(boardFile, 'utf8').replace(
+        /^(\s*)pr: 1$/m,
+        `$1pr: 1\n$1approved_head: ${approved}\n$1approved_base: main`,
+      ),
+    );
 
     await run('queue', 'add', 'org/app#1');
     expect((await json('queue', 'run')).merged).toBe(1);

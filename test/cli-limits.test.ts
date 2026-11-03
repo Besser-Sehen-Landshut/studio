@@ -17,6 +17,7 @@ import { loadBoard } from '../src/board.js';
 import { type CliDeps, runCli } from '../src/cli.js';
 import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
+import { newReportName } from '../src/report.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-cli-limits-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -296,7 +297,7 @@ describe('usage limits through the CLI', () => {
     hitLimit(fx, 'APP-2');
     const reports = join(fx.state, 'clones', 'APP-2', '.studio', 'reports');
     mkdirSync(reports, { recursive: true });
-    writeFileSync(join(reports, 'APP-2.md'), '---\nstatus: done\n---\n');
+    writeFileSync(join(reports, newReportName(fx.state, 'APP-2')), '---\nstatus: done\n---\n');
     await cli(fx, p.ports, ['status']);
     expect(itemOf(fx, 'APP-1')?.status).toBe('ready');
     expect(itemOf(fx, 'APP-2')?.status).toBe('assigned');
@@ -363,7 +364,7 @@ describe('usage limits through the CLI', () => {
       hitLimit(fx, 'APP-1', RETRY);
       const reports = join(fx.state, 'clones', 'APP-1', '.studio', 'reports');
       mkdirSync(reports, { recursive: true });
-      writeFileSync(join(reports, 'APP-1.md'), '---\nstatus: done\n---\n');
+      writeFileSync(join(reports, newReportName(fx.state, 'APP-1')), '---\nstatus: done\n---\n');
       await cli(fx, p.ports, ['status']);
       untouched(fx, p);
     });
@@ -762,5 +763,96 @@ describe('studio doctor', () => {
     provider(fx, tokenLine('label-a'));
     const r = await cli(fx, makePorts().ports, ['doctor']);
     expect(r.out).toMatch(/credential provider: configured .*provider-/);
+  });
+
+  describe('the git the merge check needs', () => {
+    const withGit = (run: () => string) => {
+      const p = makePorts();
+      return { ...p.ports, git: { run: async () => run() } };
+    };
+    it.each<[string, string]>([
+      ['git version 2.38.0', 'git: 2.38.0'],
+      ['git version 2.54.0 (Apple Git-157)', 'git: 2.54.0'],
+      ['git version 3.0.0', 'git: 3.0.0'],
+    ])('%s is enough', async (version, line) => {
+      const r = await cli(
+        makeFx(),
+        withGit(() => version),
+        ['doctor'],
+      );
+      expect(r.out).toContain(line);
+      expect(r.out).not.toContain('too old');
+    });
+    it('2.37 is too old, and says what it blocks', async () => {
+      const r = await cli(
+        makeFx(),
+        withGit(() => 'git version 2.37.9'),
+        ['doctor'],
+      );
+      expect(r.out).toMatch(/git: 2\.37\.9 \(too old: 2\.38 or newer/);
+    });
+    it('no git reads cannot tell', async () => {
+      const r = await cli(
+        makeFx(),
+        withGit(() => {
+          throw new Error('no git');
+        }),
+        ['doctor'],
+      );
+      expect(r.out).toContain('git: cannot tell');
+    });
+  });
+
+  describe('plugins a crew needs', () => {
+    const skill = (dir: string, name: string) => {
+      mkdirSync(join(dir, 'skills', name), { recursive: true });
+      writeFileSync(join(dir, 'skills', name, 'SKILL.md'), '---\nname: x\n---\n');
+    };
+    const loginWith = (fx: Fx, ...skills: string[]) => {
+      const login = join(fx.ownerDir, 'accounts', 'label-a');
+      mkdirSync(login, { recursive: true });
+      for (const s of skills) skill(login, s);
+      provider(fx, JSON.stringify({ label: 'label-a', env: { CLAUDE_CONFIG_DIR: login } }));
+      return login;
+    };
+
+    it('looks in the config dir of the provider, not in the default one', async () => {
+      const fx = makeFx();
+      skill(join(fx.home, '.claude'), 'studio-crew');
+      skill(join(fx.home, '.claude'), 'test-driven-development');
+      const login = loginWith(fx);
+      const r = await cli(fx, makePorts().ports, ['doctor', '--json']);
+      expect(JSON.parse(r.out)).toMatchObject({
+        superpowers: 'not found',
+        studioCrew: 'not found',
+      });
+      const text = await cli(fx, makePorts().ports, ['doctor']);
+      expect(text.out).toContain(`CLAUDE_CONFIG_DIR=${login} claude plugin install studio@`);
+    });
+
+    it('both installed in the provider dir read installed, with no hint', async () => {
+      const fx = makeFx();
+      loginWith(fx, 'studio-crew', 'test-driven-development');
+      const r = await cli(fx, makePorts().ports, ['doctor']);
+      expect(r.out).toContain('superpowers: installed');
+      expect(r.out).toContain('studio plugin: installed');
+      expect(r.out).not.toContain('claude plugin install');
+    });
+
+    it('the Studio plugin missing from the default dir gets the hint', async () => {
+      const fx = makeFx();
+      skill(join(fx.home, '.claude'), 'test-driven-development');
+      const r = await cli(fx, makePorts().ports, ['doctor']);
+      expect(r.out).toContain('studio plugin: not found');
+      expect(r.out).toContain('claude plugin install studio@studio-marketplace');
+    });
+
+    it('a provider that gives nothing reads cannot tell', async () => {
+      const fx = makeFx();
+      provider(fx, '');
+      const r = await cli(fx, makePorts().ports, ['doctor']);
+      expect(r.out).toContain('superpowers: cannot tell');
+      expect(r.out).toContain('studio plugin: cannot tell');
+    });
   });
 });

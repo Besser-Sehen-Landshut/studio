@@ -3,6 +3,78 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.5.0] - 2026-11-01
+
+Stage (c): capabilities, tiered review, sources contract, role memory, model per type, more metrics.
+Not tagged or published as a GitHub release yet; the maintainers tag after the merge.
+
+### Added
+
+- `capabilities/INDEX.yaml` with a loader and schema: per role, item type, stack, phase, path, risk
+  and trigger, the skills, analyzers and knowledge a crew gets. The denied list wins. The brief names
+  the skills; only matching files are copied beside it.
+- `studio setup stack [--write]`: stacks from manifest files, stored in `studio.yaml`.
+- A review routine in reviewer briefs, tiered by change size, with security always on for sensitive
+  paths, a spec check with mutation probe, a fix limit and a similar-bug scan. `collect` holds the
+  report to the record written at launch.
+- `capabilities/SOURCES.yaml`, `studio setup sources` (records hashes), `studio sources check`
+  (`fits` only when every file the contract reads is byte-identical; a changed file is `unclear`, a
+  changed licence `conflict`; adopts nothing) and `studio sources apply <id>` (`fits` only).
+- Role memory: `lessons` commands; `collect` only proposes.
+- `roles.<role>.types`, `escalate_to` and `studio escalate <id>`; `skills.when`; board fields `risk`,
+  `triggers`, `model`.
+- `studio deploy record`, `studio incident open|resolve`; `metrics` shows change failure rate and
+  time to restore. `studio flaky`, `studio solutions search`; `plan` lists matching solutions.
+
+### Changed
+
+- A review item needs the note `review <owner/repo>#<n>`; a launch without it refuses. `collect`
+  refuses a finished review without the record of its launch: relaunch reviews started before this.
+- Index rows add required skills: a `feature` or `fix` builder needs test-driven development, a `fix`
+  also systematic debugging. A launch refuses when one is definitely not installed; deny it in
+  `skills.denied` to opt out.
+- Crew reports go to a file name drawn at each launch and named in the brief; `collect` reads only
+  that file. A review report needs `head_sha`, checked against the pull request's head. Relaunch a
+  crew started before this.
+- `queue run` merges only an item that is `queued` on the board right before the merge.
+- `model` values must look like a model name: they can no longer start with a dash.
+- The brief says `Offered skills` in place of `Allowed skills`. `lessons` in a report are now stored.
+- A review launch refuses a pull request from a fork, or one it cannot read. An approval counts only
+  for the head the review was launched on.
+- `queue add` needs an approval for the current head, and `queue run` checks again before the merge.
+  `collect` stores the approved head and base on the item that holds the pull request (`approved_head`,
+  `approved_base`). Another base refuses. Besides the approved head, one commit counts: it only merges
+  the base into that head, GitHub signed it, and its tree equals a local `git merge-tree`. A conflict
+  resolved by hand or a second update needs a new review. Pull requests approved or queued before
+  this need a new review.
+- Only one review of a pull request runs at a time, and `collect` applies only the verdict of the
+  review started last (`supersededBy` names it otherwise).
+- The pause and block check before a merge now runs after the approval check, as its last step.
+- A review launch clears an earlier approval of that pull request, and refuses a base that is neither
+  the default branch nor listed in the new `review_bases` setting (empty by default). The reviewer's
+  brief fetches and diffs against that base. An open review of a pull request blocks `queue add` and
+  the merge. Launch and collect change the board under a lock (`board.lock`).
+- `studio stop` signals only a process with the start time stored at launch; another process on the
+  pid gets no signal, and one that cannot be verified makes the stop fail.
+- A failed fetch or a git older than 2.38 now says so when a merged base is checked. `studio doctor`
+  shows the git version.
+- A launch refuses when the Studio plugin is not installed in the crew's config dir, before anything
+  is counted; a readable config dir with no skills or plugins now counts as not installed. `studio
+  doctor` shows it with the install command and looks in a credential provider's config dir.
+
+### Fixed
+
+- A stray file such as `.DS_Store` in the plugin cache no longer hides a missing skill.
+
+### Security
+
+- A crew's `Read`, `Glob` and `Grep` reach only its clone, its own brief with `briefs/<id>.caps/` and
+  `briefs/<id>.rules/`, its `HOME` and tmp dir, and in its config dir the skills, plugin cache,
+  marketplaces and saved tool outputs. They refuse any `..` segment: write the path without it. A Glob pattern may hold only letters,
+  digits and `_ - . / * ? , { }`, with flat braces. A
+  `command` on any tool but Bash is denied. See `SECURITY.md`.
+- Crew sessions set `CLAUDE_CODE_TMPDIR` to the crew's tmp dir.
+
 ## [0.4.0] - 2026-11-01
 
 Stage (b): the Studio board inside Claude Code, pause and resume, push notifications. Not tagged or

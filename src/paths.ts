@@ -398,6 +398,36 @@ function staleReason(
  * reported through `broke`. Otherwise undefined is returned. Anything at the lock path that is not
  * a regular file is refused. A lock that vanishes between the create and the check is retried.
  */
+const BOARD_LOCK = 'board.lock';
+const BOARD_LOCK_STALE_MS = 30_000;
+
+/**
+ * Runs `fn`, which must read the board itself and be short, under the project's board lock, so a
+ * launch clearing an approval and a collect setting one cannot overwrite each other. Waits up to 5 s.
+ */
+export async function withBoardLock<T>(
+  root: string,
+  now: Date,
+  fn: () => Promise<T> | T,
+): Promise<T> {
+  const until = Date.now() + 5000;
+  for (;;) {
+    const lock = acquireStateLock(root, BOARD_LOCK, {
+      now,
+      heartbeatStaleMs: BOARD_LOCK_STALE_MS,
+    });
+    if (lock) {
+      try {
+        return await fn();
+      } finally {
+        lock.release();
+      }
+    }
+    if (Date.now() >= until) throw new Error(`the board is locked (${BOARD_LOCK}); try again`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
 export function acquireStateLock(
   root: string,
   name: string,

@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -23,6 +24,7 @@ beforeAll(() => {
   plugin = mkdtempSync(join(tmpdir(), 'studio-bundle-'));
   cpSync(join(repo, 'bin'), join(plugin, 'bin'), { recursive: true });
   cpSync(join(repo, 'dist-bundle'), join(plugin, 'dist-bundle'), { recursive: true });
+  cpSync(join(repo, 'capabilities'), join(plugin, 'capabilities'), { recursive: true });
   writeFileSync(join(plugin, 'package.json'), '{"type":"module"}\n');
 });
 
@@ -137,5 +139,17 @@ describe('self-contained plugin bundle', () => {
     } finally {
       rmSync(empty, { recursive: true, force: true });
     }
+  });
+});
+
+describe('capabilities in an installed plugin', () => {
+  it('the bundle finds them next to dist-bundle, without node_modules', () => {
+    const r = spawnSync('node', [join(plugin, 'bin', 'studio'), 'sources', 'list', '--json'], {
+      cwd: plugin,
+      encoding: 'utf8',
+    });
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).capabilitiesDir).toBe(join(realpathSync(plugin), 'capabilities/'));
   });
 });

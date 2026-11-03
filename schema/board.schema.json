@@ -116,6 +116,14 @@
           "branch": {
             "type": "string"
           },
+          "approved_head": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40,64}$"
+          },
+          "approved_base": {
+            "type": "string",
+            "minLength": 1
+          },
           "crew": {
             "type": "string"
           },
@@ -124,6 +132,34 @@
             "items": {
               "type": "string"
             }
+          },
+          "risk": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "ui",
+                "landing",
+                "auth",
+                "security",
+                "data",
+                "migration"
+              ]
+            }
+          },
+          "triggers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "epic-end",
+                "release"
+              ]
+            }
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:[\\]-]*$"
           },
           "history": {
             "default": [],

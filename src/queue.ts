@@ -1,11 +1,25 @@
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import {
+  closeSync,
+  constants,
+  existsSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  writeSync,
+} from 'node:fs';
 import { constants as osConstants } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { capacityHoldsTwice } from './capacity.js';
 import type { StudioConfig } from './config.js';
-import { acquireStateLock, assertStatePath, type StateLock, writeStateFile } from './paths.js';
-import type { Clock, Gh, Host } from './ports.js';
+import {
+  acquireStateLock,
+  assertStatePath,
+  ensureStateDir,
+  type StateLock,
+  writeStateFile,
+} from './paths.js';
+import type { Clock, Gh, Git, Host } from './ports.js';
 
 export type QueueStep = 'update' | 'checks' | 'capacity' | 'merge';
 export type QueueEntry = { pr: number; repo: string; item?: string };
@@ -40,6 +54,11 @@ export type QueueOptions = {
    * loop and right before `gh pr merge`; a stop keeps `current` and `pending` as they are.
    */
   hold?: () => string | undefined;
+  /** Why this entry must not merge, read right before `gh pr merge`; a reason fails the entry. */
+  mergeAllowed?: (
+    entry: QueueEntry,
+    head: string,
+  ) => string | undefined | Promise<string | undefined>;
 };
 
 /** Internal stop: the hold fired between capacity and merge. `current` stays persisted. */
@@ -216,19 +235,30 @@ export function installSignalRelease(lock: Pick<StateLock, 'release' | 'heartbea
   };
 }
 
-/** Appends one line to a state-root file (atomic rewrite; the queue is serial). */
-function appendStateLine(stateRoot: string, name: string, line: string): void {
+/** Appends one line to a state-root file; a real append, so parallel writers lose nothing. */
+export function appendStateLine(stateRoot: string, name: string, line: string): void {
   const file = join(stateRoot, name);
   assertStatePath(stateRoot, file);
-  let prev = '';
+  let torn = false;
   if (existsSync(file)) {
     if (lstatSync(file).isSymbolicLink()) {
       throw new Error(`refusing to use ${file}: it is a symlink`);
     }
-    prev = readFileSync(file, 'utf8');
-    if (prev !== '' && !prev.endsWith('\n')) prev += '\n';
+    const prev = readFileSync(file, 'utf8');
+    torn = prev !== '' && !prev.endsWith('\n');
+  } else {
+    ensureStateDir(stateRoot, dirname(file));
   }
-  writeStateFile(stateRoot, file, `${prev}${line}\n`);
+  const fd = openSync(
+    file,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | (constants.O_NOFOLLOW ?? 0),
+    0o600,
+  );
+  try {
+    writeSync(fd, `${torn ? '\n' : ''}${line}\n`);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 type Check = { name: string; bucket: string };
@@ -310,8 +340,138 @@ async function readChecks(entry: QueueEntry, gh: Gh): Promise<ChecksVerdict> {
 
 type PrView = { head: string; state: 'OPEN' | 'MERGED' | 'CLOSED'; mergeable: string };
 
+export type ApprovalPorts = { gh: Gh; git: Git };
+/** The owner's checkout, and how it reaches the pull request's repository. */
+export type ApprovalCheckout = { dir: string; remote: string };
+const GIT_FETCH_MS = 120_000;
+const GIT_LOCAL_MS = 60_000;
+
+/**
+ * Whether `head` is nothing but the merge of the base into `approved`: GitHub signed it, the approved
+ * head is its first parent, the other parent is already on the approved base, and its tree is what
+ * merging those two gives here. The signature alone proves little: the API signs a commit with any
+ * tree and any parents. A conflict makes the merge fail, so a hand resolution never passes.
+ */
+async function isBranchUpdate(
+  { gh, git }: ApprovalPorts,
+  checkout: ApprovalCheckout,
+  target: { repo: string; pr: number },
+  approved: { head: string; base: string },
+  head: string,
+): Promise<boolean | string> {
+  try {
+    const c = await gh.run(['api', `repos/${target.repo}/commits/${head}`]);
+    if (c.code !== 0) return false;
+    const commit = JSON.parse(c.stdout) as {
+      parents?: { sha?: unknown }[];
+      committer?: { login?: unknown } | null;
+      commit?: { verification?: { verified?: unknown } };
+    };
+    const [first, second, ...rest] = commit.parents ?? [];
+    if (
+      typeof first?.sha !== 'string' ||
+      first.sha.toLowerCase() !== approved.head.toLowerCase() ||
+      typeof second?.sha !== 'string' ||
+      !SHA.test(second.sha) ||
+      rest.length > 0 ||
+      commit.committer?.login !== 'web-flow' ||
+      commit.commit?.verification?.verified !== true
+    ) {
+      return false;
+    }
+    const base = approved.base.split('/').map(encodeURIComponent).join('/');
+    const d = await gh.run(['api', `repos/${target.repo}/compare/${base}...${second.sha}`]);
+    if (d.code !== 0) return false;
+    const { status } = JSON.parse(d.stdout) as { status?: unknown };
+    if (status !== 'behind' && status !== 'identical') return false;
+    return await sameTreeAsMerge(git, checkout, approved.head, second.sha, head);
+  } catch {
+    return false;
+  }
+}
+
+/** True or false for the comparison; a string when git could not make it, which says why. */
+async function sameTreeAsMerge(
+  git: Git,
+  checkout: ApprovalCheckout,
+  first: string,
+  second: string,
+  head: string,
+): Promise<boolean | string> {
+  const g = (args: string[], timeoutMs: number) =>
+    git.run(checkout.dir, ['--no-replace-objects', ...args], { timeoutMs });
+  const said = (e: unknown) => (e as Error).message.replace(/\p{Cc}/gu, ' ').slice(0, 300);
+  try {
+    await g(['fetch', '--no-tags', '--no-write-fetch-head', checkout.remote, head], GIT_FETCH_MS);
+  } catch (e) {
+    return `cannot fetch ${head} to compare its tree: ${said(e)}`;
+  }
+  let merged: string;
+  try {
+    merged = await g(['merge-tree', '--write-tree', first, second], GIT_LOCAL_MS);
+  } catch (e) {
+    // Exit 1 is a conflict: the merge has no clean result, so nothing can match it.
+    if (/failed \(1\):/.test((e as Error).message)) return false;
+    return `git merge-tree failed; git 2.38 or newer is needed (see studio doctor): ${said(e)}`;
+  }
+  try {
+    const tree = await g(['rev-parse', '--verify', `${head}^{tree}`], GIT_LOCAL_MS);
+    return merged.trim() !== '' && merged.trim() === tree.trim();
+  } catch (e) {
+    return `cannot read the tree of ${head}: ${said(e)}`;
+  }
+}
+
+async function liveBase(gh: Gh, target: { repo: string; pr: number }): Promise<string | undefined> {
+  try {
+    const v = await gh.run([
+      'pr',
+      'view',
+      String(target.pr),
+      '--repo',
+      target.repo,
+      '--json',
+      'baseRefName',
+    ]);
+    if (v.code !== 0) return undefined;
+    const { baseRefName } = JSON.parse(v.stdout) as { baseRefName?: unknown };
+    return typeof baseRefName === 'string' && baseRefName !== '' ? baseRefName : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Why a review verdict does not cover `head` on the pull request's current base, else undefined.
+ * Besides the approved head itself, only a commit that passes `isBranchUpdate` counts as approved. A
+ * second update on top of that one has another first parent and needs a new review.
+ */
+export async function approvalProblem(
+  ports: ApprovalPorts,
+  checkout: ApprovalCheckout,
+  target: { repo: string; pr: number },
+  approval: { head?: string | undefined; base?: string | undefined },
+  head: string,
+): Promise<string | undefined> {
+  const name = `${target.repo}#${target.pr}`;
+  const { head: approvedHead, base } = approval;
+  if (approvedHead === undefined || base === undefined) {
+    return `no approval recorded for ${name}: review it first`;
+  }
+  const live = await liveBase(ports.gh, target);
+  if (live !== base) {
+    return `${name} has base ${String(live)}, the approval is for ${base}: review it again`;
+  }
+  if (approvedHead.toLowerCase() === head.toLowerCase()) return undefined;
+  const approved = { head: approvedHead, base };
+  const update = await isBranchUpdate(ports, checkout, target, approved, head);
+  if (update === true) return undefined;
+  if (typeof update === 'string') return `${name}: ${update}`;
+  return `${name} is at ${head}, the approval is for ${approvedHead}: review it again`;
+}
+
 /** The PR's head, state and mergeability; a string is the failure reason. */
-async function viewPr(entry: QueueEntry, gh: Gh): Promise<PrView | string> {
+export async function viewPr(entry: QueueEntry, gh: Gh): Promise<PrView | string> {
   const r = await gh.run([
     'pr',
     'view',
@@ -489,6 +649,9 @@ export async function mergeOne(
         step = 'checks';
         continue;
       }
+      const refused = await opts.mergeAllowed?.(entry, head);
+      if (refused !== undefined) return failed(refused);
+      // Last, because the check above goes to the network: a pause may have arrived meanwhile.
       const held = opts.hold?.();
       if (held !== undefined) {
         // Resume at capacity: the head or the capacity may differ by then.

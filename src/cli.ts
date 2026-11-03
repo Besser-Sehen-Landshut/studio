@@ -2,21 +2,25 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { type Board, loadBoard, saveBoard, transition, type WorkItem } from './board.js';
+import { capabilitiesDir } from './capabilities.js';
 import { readCapacity } from './capacity.js';
 import {
   configWarnings,
   loadConfig,
   loadOwnerConfig,
   type OwnerConfig,
+  type RoleConfig,
   type StudioConfig,
 } from './config.js';
 import { limitHold } from './credentials.js';
-import { crewStateOf, isItemId, launchCrew } from './crew.js';
+import { crewStateOf, githubHttpsUrl, isItemId, launchCrew, resolveModel } from './crew.js';
+import { listFlaky, recordFlaky } from './flaky.js';
 import {
   activeParks,
   blockHold,
   blockLine,
   clearBlocks,
+  crewProcess,
   type Parks,
   readBlocks,
   readLimits,
@@ -33,6 +37,7 @@ import {
   projectRealpath,
   stateDirName,
   stateRootFor,
+  withBoardLock,
   writeStateFile,
 } from './paths.js';
 import { clearPause, PAUSED_LINE, readPause, setPause } from './pause.js';
@@ -40,18 +45,41 @@ import { type Capacity, planAssignments } from './planner.js';
 import type { Ports } from './ports.js';
 import {
   acquireQueueRunLock,
+  appendStateLine,
+  approvalProblem,
   enqueue,
   installSignalRelease,
   loadQueue,
   type QueueDone,
+  type QueueEntry,
   type QueueState,
   runQueue,
   takeNextPending,
   updateQueue,
+  viewPr,
 } from './queue.js';
-import { checkReportHead, readReport } from './report.js';
+import { checkReportHead, readReport, reportName } from './report.js';
+import {
+  checkReviewCaps,
+  MAX_FIX_ATTEMPTS,
+  MAX_REVIEW_ROUNDS,
+  newerReview,
+  openReview,
+  readCrewCaps,
+  reviewRounds,
+} from './review.js';
+import {
+  acceptLesson,
+  dropLesson,
+  listLessons,
+  proposeLessons,
+  pruneLesson,
+} from './role-memory.js';
 import { runDoctor, runSecretSet } from './secret-command.js';
 import { runSetupCi } from './setup-ci-command.js';
+import { searchSolutions } from './solutions.js';
+import { applySource, checkSources, loadSources, setupSources } from './sources.js';
+import { runSetupStack } from './stack.js';
 import {
   type CrewSnapshot,
   computeMetrics,
@@ -97,8 +125,24 @@ Commands:
   pause                    Owner only: nothing new starts or merges until resume
   resume                   Owner only: lift the pause
   stop <id>                Stop a crew session
-  metrics                  Lead time and deployment frequency
+  metrics                  Lead time, deploy frequency, change failure rate, time to restore
+  deploy record [<sha>]    Record a production deploy
+  incident open <id>       Record that a deploy broke something
+  incident resolve <id>    Record that service is restored
+  flaky record <t> <s> pass|fail  Record a test that failed once, with its rerun
+  flaky [list]             The flaky-test ledger, worst first
+  solutions search <words> Earlier solutions in .studio/solutions
+  setup sources [<id>...]  Fetch the referenced third-party sources (nothing runs)
+  lessons [list]           Lessons crews proposed for the role memory
+  lessons accept <n>       Move a proposed lesson into its role file
+  lessons drop <n>         Discard a proposed lesson
+  lessons prune <role> <l> Remove a lesson line from a role file
+  escalate <id>            Run a stuck item on the role's stronger model
+  sources list             Third-party sources and their licences
+  sources check            Judge upstream updates: fits, unclear or conflict; adopts nothing
+  sources apply <id>       Adopt a candidate that fits
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
+  setup stack [--write]    Detect the project's stacks from its manifest files
   secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
   doctor                   What is set and what is missing, never values
   accounts-clear <label>   Owner only, in a terminal: clear a label's account block
@@ -107,6 +151,8 @@ Commands:
 class UsageError extends Error {}
 
 const BY = 'studio';
+const SHORT_SHA = /^[0-9a-f]{7,64}$/i;
+const INCIDENT_ID = /^[A-Za-z0-9._-]{1,64}$/;
 
 const LEGACY_LINE =
   'old project state files are not migrated yet: no merge until they are (run any studio command again)';
@@ -289,8 +335,23 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         await reconcile();
         const { config, board } = loadAll();
         const { plan, capacity } = await planNow(config, board);
+        let solutionsError: string | undefined;
+        const solutionsFor = (i: WorkItem) => {
+          try {
+            return searchSolutions(project, [i.title, ...i.touches].join(' '));
+          } catch {
+            solutionsError = 'the solutions store cannot be read';
+            return [];
+          }
+        };
         print({
-          assign: plan.assign.map((i) => ({ id: i.id, title: i.title, role: i.role })),
+          assign: plan.assign.map((i) => ({
+            id: i.id,
+            title: i.title,
+            role: i.role,
+            solutions: solutionsFor(i),
+          })),
+          ...(solutionsError === undefined ? {} : { solutionsError }),
           blocked: plan.blocked,
           deferred: plan.deferred,
           capacity,
@@ -319,16 +380,18 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
         const res = await launchCrew(project, item, config, ports, owner);
         // The launch took a while: re-read the board and move the item on the fresh copy.
-        const fresh = loadBoard(project);
-        if (findItem(fresh, item.id).status !== 'ready') {
-          throw new Error(`${item.id} changed while launching; crew ${res.name} is running`);
-        }
-        const moved = withItem(
-          transition(fresh, item.id, 'assigned', BY, ports.clock.now()),
-          item.id,
-          (i) => ({ ...i, crew: res.name }),
-        );
-        saveBoard(project, moved);
+        await withBoardLock(stateRoot(), ports.clock.now(), () => {
+          const fresh = loadBoard(project);
+          if (findItem(fresh, item.id).status !== 'ready') {
+            throw new Error(`${item.id} changed while launching; crew ${res.name} is running`);
+          }
+          const moved = withItem(
+            transition(fresh, item.id, 'assigned', BY, ports.clock.now()),
+            item.id,
+            (i) => ({ ...i, crew: res.name }),
+          );
+          saveBoard(project, moved);
+        });
         print(res);
         return 0;
       }
@@ -395,7 +458,21 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         // Reading files only: git never runs inside a crew clone.
         const clone = join(stateRoot(), 'clones', item.id);
         // The report is read exactly once; everything below verifies and stores that one result.
-        const report = readReport(clone, item.id, item, { notBefore });
+        const fileName = reportName(stateRoot(), item.id);
+        if (fileName === undefined) {
+          throw new Error(`no report name was drawn for ${item.id}: relaunch it, nothing moved`);
+        }
+        const report = readReport(clone, item.id, item, { notBefore, fileName });
+        const reviewDone =
+          item.type === 'review' && report.status === 'done'
+            ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report)
+            : { skipped: [] as string[], target: undefined };
+        // A verdict counts for the commit reviewed: the pull request's head right now.
+        if (item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined) {
+          const m = /^(.+)#(\d+)$/.exec(reviewDone.target) as RegExpExecArray;
+          const info = await prInfo(ports, m[1] as string, Number(m[2]));
+          checkReportHead(report, info.head);
+        }
         let branch = `studio/${item.id}`;
         if (report.pr !== undefined) {
           const holder = board.items.find(
@@ -414,42 +491,120 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           throw new Error(`done report for ${item.id} names no pr`);
         }
         const now = ports.clock.now();
-        let next = board;
-        if (report.status === 'done') {
-          if (item.status === 'assigned') next = transition(next, item.id, 'in_progress', BY, now);
-          next = transition(next, item.id, 'in_review', BY, now);
-          if (report.pr !== undefined) {
-            const pr = report.pr;
-            next = withItem(next, item.id, (i) => ({ ...i, pr, branch }));
+        // Under the lock from reading the board again to saving it: a launch clearing an approval
+        // cannot slip in, and what moved while GitHub was asked stays.
+        const { next, fixLimit, supersededBy } = await withBoardLock(stateRoot(), now, () => {
+          const fresh = loadBoard(project);
+          if (findItem(fresh, item.id).status !== item.status) {
+            throw new Error(`${item.id} changed while it was collected; nothing moved`);
+          }
+          const supersededBy =
+            item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined
+              ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot()))
+              : undefined;
+          let next = fresh;
+          if (report.status === 'done') {
+            if (item.status === 'assigned')
+              next = transition(next, item.id, 'in_progress', BY, now);
+            next = transition(next, item.id, 'in_review', BY, now);
+            if (report.pr !== undefined) {
+              const pr = report.pr;
+              next = withItem(next, item.id, (i) => ({ ...i, pr, branch }));
+            } else {
+              // Review and research items open no PR: the result is the report itself.
+              next = transition(next, item.id, 'merged', BY, now);
+              // A superseded verdict is no round: the verdict note is what `reviewRounds` counts.
+              const result = [
+                ...(supersededBy !== undefined
+                  ? [`superseded by ${supersededBy}`]
+                  : report.verdict
+                    ? [`verdict: ${report.verdict}`]
+                    : []),
+                ...(report.reviews ? [`reviews: ${report.reviews}`] : []),
+              ];
+              if (result.length > 0) {
+                next = withItem(next, item.id, (i) => ({
+                  ...i,
+                  notes: [...(i.notes ?? []), ...capNotes(result)],
+                }));
+              }
+            }
           } else {
-            // Review and research items open no PR: the result is the report itself.
-            next = transition(next, item.id, 'merged', BY, now);
-            const result = [
-              ...(report.verdict ? [`verdict: ${report.verdict}`] : []),
-              ...(report.reviews ? [`reviews: ${report.reviews}`] : []),
-            ];
-            if (result.length > 0) {
-              next = withItem(next, item.id, (i) => ({
+            next = transition(next, item.id, 'blocked', BY, now);
+            const notes =
+              report.status === 'failed'
+                ? ['crew run failed', ...report.questions.map((q) => `question: ${q}`)]
+                : report.questions.map((q) => `question: ${q}`);
+            next = withItem(next, item.id, (i) => ({
+              ...i,
+              notes: [
+                ...(i.notes ?? []),
+                ...capNotes(notes.length ? notes : ['crew reported blocked']),
+              ],
+            }));
+          }
+          // The verdict goes on the item that holds the pull request; `queue add` and the merge read it.
+          if (
+            item.type === 'review' &&
+            report.status === 'done' &&
+            reviewDone.target !== undefined &&
+            supersededBy === undefined
+          ) {
+            const reviewed = next.items.find(
+              (i) => `${i.repo}#${i.pr}` === reviewDone.target && i.type !== 'review',
+            );
+            if (reviewed !== undefined) {
+              const approvedBase = readCrewCaps(stateRoot(), item.id)?.baseRefName;
+              next = withItem(next, reviewed.id, ({ approvedHead: _h, approvedBase: _b, ...i }) =>
+                report.verdict === 'approve'
+                  ? { ...i, approvedHead: report.headSha, approvedBase }
+                  : i,
+              );
+            }
+          }
+          const limitTarget =
+            report.status === 'done' &&
+            report.verdict === 'changes_requested' &&
+            supersededBy === undefined
+              ? reviewDone.target
+              : undefined;
+          let fixLimit = false;
+          if (limitTarget !== undefined) {
+            const rounds = reviewRounds(next, limitTarget);
+            fixLimit =
+              rounds >= MAX_REVIEW_ROUNDS || (report.findingAttempts ?? 0) >= MAX_FIX_ATTEMPTS;
+            const builder = next.items.find(
+              (i) => `${i.repo}#${i.pr}` === limitTarget && i.type !== 'review',
+            );
+            if (
+              fixLimit &&
+              builder &&
+              builder.status !== 'merged' &&
+              builder.status !== 'dropped'
+            ) {
+              if (builder.status !== 'blocked') {
+                next = transition(next, builder.id, 'blocked', BY, now);
+              }
+              next = withItem(next, builder.id, (i) => ({
                 ...i,
-                notes: [...(i.notes ?? []), ...capNotes(result)],
+                notes: [
+                  ...(i.notes ?? []),
+                  `fix limit reached: ${rounds} review rounds, attempts on one finding ${report.findingAttempts ?? 'unknown'}`,
+                ],
               }));
             }
           }
-        } else {
-          next = transition(next, item.id, 'blocked', BY, now);
-          const notes =
-            report.status === 'failed'
-              ? ['crew run failed', ...report.questions.map((q) => `question: ${q}`)]
-              : report.questions.map((q) => `question: ${q}`);
-          next = withItem(next, item.id, (i) => ({
-            ...i,
-            notes: [
-              ...(i.notes ?? []),
-              ...capNotes(notes.length ? notes : ['crew reported blocked']),
-            ],
-          }));
+          saveBoard(project, next);
+          return { next, fixLimit, supersededBy };
+        });
+        // Proposals only: a lesson reaches a role file through `lessons accept`. The item has moved
+        // already, so a problem here must not read as a failed collect.
+        let lessonsProposed = 0;
+        try {
+          lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now);
+        } catch (e) {
+          stderr(`error: lessons: ${(e as Error).message.replace(/\p{Cc}/gu, ' ')}\n`);
         }
-        saveBoard(project, next);
         print({
           item: item.id,
           report: report.status,
@@ -457,6 +612,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ...(report.pr === undefined ? {} : { pr: report.pr }),
           ...(report.verdict === undefined ? {} : { verdict: report.verdict }),
           ...(report.reviews === undefined ? {} : { reviews: report.reviews }),
+          ...(reviewDone.skipped.length === 0 ? {} : { skipped: reviewDone.skipped }),
+          ...(supersededBy === undefined ? {} : { supersededBy }),
+          ...(fixLimit ? { fixLimit } : {}),
+          ...(lessonsProposed > 0 ? { lessonsProposed } : {}),
         });
         return 0;
       }
@@ -476,10 +635,32 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           if (item.status !== 'in_review') {
             throw new Error(`${item.id} is ${item.status}, only in_review items can be queued`);
           }
+          // Every pull request goes through a reviewer first (spec, section 5): no type is exempt.
+          const view = await viewPr({ pr, repo }, ports.gh);
+          if (typeof view === 'string') throw new Error(view);
+          const problem = await approvalProblem(
+            ports,
+            approvalCheckout(project, config, repo),
+            { repo, pr },
+            { head: item.approvedHead, base: item.approvedBase },
+            view.head,
+          );
+          if (problem !== undefined) throw new Error(problem);
           const root = await boundStateRoot();
-          // Merged into queue.json on disk under the queue file lock: safe during a running queue.
-          const pending = enqueue(root, { pr, repo, item: item.id });
-          saveBoard(project, transition(board, item.id, 'queued', BY, ports.clock.now()));
+          const pending = await withBoardLock(stateRoot(), ports.clock.now(), () => {
+            // What the checks above read may have moved while they went to GitHub.
+            const fresh = loadBoard(project);
+            const now = findItem(fresh, item.id);
+            if (now.status !== 'in_review' || now.approvedHead !== item.approvedHead) {
+              throw new Error(`${item.id} changed while it was checked; try again`);
+            }
+            const open = openReview(stateRoot(), fresh, `${repo}#${pr}`);
+            if (open !== undefined) throw new Error(openReviewLine(open, `${repo}#${pr}`));
+            // Merged into queue.json on disk under the queue file lock: safe during a running queue.
+            const added = enqueue(root, { pr, repo, item: item.id });
+            saveBoard(project, transition(fresh, item.id, 'queued', BY, ports.clock.now()));
+            return added;
+          });
           print({ queued: item.id, pr, repo, pending });
           return 0;
         }
@@ -536,6 +717,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 stateRoot: root,
                 log,
                 hold,
+                mergeAllowed: (entry, head) =>
+                  boardBlocksMerge(project, root, config, entry, head, ports),
                 takeNext: () => takeNextPending(root),
                 onDone: (d) => applyQueueResults(project, [d], ports, stderr),
               },
@@ -586,9 +769,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             mainBuild: await readMainBuild(config, ports),
             crewRecordsUnreadable: crewProblem !== undefined,
             alive: (pid) => Number.isInteger(pid) && pid > 0 && ports.claude.alive(pid),
-            hasReport: (item) =>
-              isItemId(item) &&
-              existsSync(join(root, 'clones', item, '.studio', 'reports', `${item}.md`)),
+            hasReport: (item) => {
+              if (!isItemId(item)) return false;
+              const name = reportName(root, item);
+              return (
+                name !== undefined &&
+                existsSync(join(root, 'clones', item, '.studio', 'reports', name))
+              );
+            },
           },
         );
         writeState(root, snapshot);
@@ -639,18 +827,48 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const records = readCrewRecords(root);
         const rec = records[id];
         if (!rec) throw new Error(`no crew record for ${id}`);
-        await ports.claude.stop(rec.pid);
+        // Only the process started for this crew gets a signal: the pid may be another's by now.
+        const process = await crewProcess(rec, ports);
+        if (process === 'invalid') throw new Error(`crew record for ${id} has no valid pid`);
+        if (process === 'unknown') {
+          throw new Error(
+            `crew ${rec.name} (pid ${rec.pid}) is alive but cannot be verified; not stopping it, check it by hand`,
+          );
+        }
+        if (process === 'verified') await ports.claude.stop(rec.pid);
         const stoppedAt = ports.clock.now().toISOString();
         const latest = readCrewRecords(root);
         latest[id] = { ...(latest[id] ?? rec), stoppedAt };
         writeStateFile(root, join(root, 'crew.json'), `${JSON.stringify(latest, null, 2)}\n`);
-        print({ item: id, name: rec.name, pid: rec.pid, stoppedAt });
+        print({
+          item: id,
+          name: rec.name,
+          pid: rec.pid,
+          stoppedAt,
+          ...(process === 'verified' ? {} : { processGone: true }),
+        });
         return 0;
       }
 
       case 'setup': {
+        if (rest[0] === 'sources') {
+          refuseCrew(deps.env);
+          const results = await setupSources({
+            ownerRoot: ownerRoot(),
+            index: loadSources(),
+            ports,
+            ...(rest.length > 1 ? { only: rest.slice(1) } : {}),
+          });
+          print(results);
+          return results.some((r) => r.result === 'failed') ? 1 : 0;
+        }
+        if (rest[0] === 'stack' && rest.length === 1) {
+          return runSetupStack({ project, json, write: values.write === true, stdout });
+        }
         if (rest[0] !== 'ci' || rest.length !== 1) {
-          throw new UsageError('setup needs a subcommand: ci [--write]');
+          throw new UsageError(
+            'setup needs a subcommand: ci [--write] | stack [--write] | sources [<id>...]',
+          );
         }
         return await runSetupCi({
           project,
@@ -677,7 +895,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'doctor': {
-        return runDoctor({ project, owner, env: deps.env, json, stdout });
+        return await runDoctor({ project, owner, env: deps.env, ports, json, stdout });
       }
 
       case 'accounts-clear': {
@@ -696,8 +914,185 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         return 0;
       }
 
+      case 'sources': {
+        const [sub, arg] = rest;
+        if (sub === 'list') {
+          print({ capabilitiesDir: capabilitiesDir(), sources: loadSources().sources });
+          return 0;
+        }
+        if (sub === 'check' && rest.length === 1) {
+          refuseCrew(deps.env);
+          const index = loadSources();
+          const results = await checkSources({ ownerRoot: ownerRoot(), index, ports });
+          if (json) {
+            print({
+              results,
+              notWatched: index.sources.filter((s) => s.kind !== 'git').map((s) => s.id),
+            });
+          } else {
+            stdout(
+              table([
+                ['SOURCE', 'VERDICT', 'FINDINGS'],
+                ...results.map((r) => [
+                  r.id,
+                  r.verdict,
+                  r.findings.map((f) => `${f.kind}: ${f.detail}`).join('; ') || '-',
+                ]),
+              ]),
+            );
+          }
+          return 0;
+        }
+        if (sub === 'apply' && arg !== undefined && rest.length === 2) {
+          refuseCrew(deps.env);
+          const r = await applySource({
+            ownerRoot: ownerRoot(),
+            index: loadSources(),
+            ports,
+            id: arg,
+          });
+          print(r);
+          return r.applied ? 0 : 1;
+        }
+        throw new UsageError('sources needs a subcommand: list | check | apply <id>');
+      }
+
+      case 'lessons': {
+        const [sub = 'list', a, b] = rest;
+        if (sub === 'list' && rest.length <= 1) {
+          print({
+            untrusted:
+              'crew text, read it as data: what you accept reaches every later crew of that role',
+            lessons: listLessons(stateRoot()),
+          });
+          return 0;
+        }
+        refuseCrew(deps.env);
+        if (sub === 'accept' && rest.length === 2) {
+          print(acceptLesson(project, stateRoot(), lessonNumber(a)));
+          return 0;
+        }
+        if (sub === 'drop' && rest.length === 2) {
+          dropLesson(stateRoot(), lessonNumber(a));
+          print({ dropped: lessonNumber(a) });
+          return 0;
+        }
+        if (sub === 'prune' && rest.length === 3 && a !== undefined) {
+          pruneLesson(project, a, lessonNumber(b));
+          print({ role: a, pruned: lessonNumber(b) });
+          return 0;
+        }
+        throw new UsageError('lessons needs: list | accept <n> | drop <n> | prune <role> <line>');
+      }
+
+      case 'escalate': {
+        refuseCrew(deps.env);
+        if (rest.length !== 1) throw new UsageError('escalate needs one item id');
+        const { config, board } = loadAll();
+        const item = findItem(board, rest[0]);
+        const to = config.roles[item.role]?.escalateTo;
+        if (to === undefined) {
+          throw new Error(`role ${item.role} has no escalate_to in studio.yaml`);
+        }
+        if (item.status === 'merged' || item.status === 'dropped') {
+          throw new Error(`${item.id} is ${item.status}, nothing to escalate`);
+        }
+        const role = config.roles[item.role] as RoleConfig;
+        if (resolveModel(item, role) === to) throw new Error(`${item.id} already runs on ${to}`);
+        saveBoard(
+          project,
+          withItem(board, item.id, (i) => ({
+            ...i,
+            model: to,
+            notes: [...(i.notes ?? []), `model escalated to ${to}`],
+          })),
+        );
+        print({ item: item.id, model: to, status: item.status });
+        return 0;
+      }
+
       case 'metrics': {
-        print(computeMetrics(readMetricEvents(stateRoot())));
+        let flaky: unknown;
+        try {
+          const entries = listFlaky(stateRoot());
+          flaky = {
+            tests: entries.length,
+            runs: entries.reduce((sum, e) => sum + e.count, 0),
+            worst: entries.slice(0, 5),
+          };
+        } catch (e) {
+          print({
+            ...computeMetrics(readMetricEvents(stateRoot())),
+            flakyError: (e as Error).message.replace(/\p{Cc}/gu, ' '),
+          });
+          return 0;
+        }
+        print({ ...computeMetrics(readMetricEvents(stateRoot())), flaky });
+        return 0;
+      }
+
+      case 'deploy': {
+        refuseCrew(deps.env);
+        const [sub, sha] = rest;
+        if (sub !== 'record' || rest.length > 2 || (sha !== undefined && !SHORT_SHA.test(sha))) {
+          throw new UsageError('deploy needs: record [<sha>]');
+        }
+        const event = {
+          type: 'deployed',
+          at: ports.clock.now().toISOString(),
+          ...(sha === undefined ? {} : { sha }),
+        };
+        appendStateLine(await boundStateRoot(), 'metrics.jsonl', JSON.stringify(event));
+        print(event);
+        return 0;
+      }
+
+      case 'incident': {
+        refuseCrew(deps.env);
+        const [sub, id] = rest;
+        if (
+          (sub !== 'open' && sub !== 'resolve') ||
+          rest.length !== 2 ||
+          !INCIDENT_ID.test(id ?? '')
+        ) {
+          throw new UsageError('incident needs: open <id> | resolve <id>');
+        }
+        const event = {
+          type: sub === 'open' ? 'incident_opened' : 'incident_resolved',
+          at: ports.clock.now().toISOString(),
+          incident: id,
+        };
+        appendStateLine(await boundStateRoot(), 'metrics.jsonl', JSON.stringify(event));
+        print(event);
+        return 0;
+      }
+
+      case 'flaky': {
+        const [sub, test, sha, rerun] = rest;
+        if ((sub === undefined || sub === 'list') && rest.length <= 1) {
+          print(listFlaky(stateRoot()));
+          return 0;
+        }
+        refuseCrew(deps.env);
+        if (
+          sub !== 'record' ||
+          rest.length !== 4 ||
+          test === undefined ||
+          !SHORT_SHA.test(sha ?? '') ||
+          (rerun !== 'pass' && rerun !== 'fail')
+        ) {
+          throw new UsageError('flaky needs: list | record <test> <sha> pass|fail');
+        }
+        print(recordFlaky(await boundStateRoot(), test, sha as string, rerun, ports.clock.now()));
+        return 0;
+      }
+
+      case 'solutions': {
+        const [sub, ...words] = rest;
+        if (sub !== 'search' || words.length === 0) {
+          throw new UsageError('solutions needs: search <words...>');
+        }
+        print(searchSolutions(project, words.join(' ')));
         return 0;
       }
 
@@ -783,12 +1178,65 @@ function capNotes(notes: string[]): string[] {
   return notes.slice(0, MAX_NOTES).map((n) => n.replace(/\p{Cc}/gu, ' ').slice(0, MAX_NOTE_CHARS));
 }
 
+function lessonNumber(arg: string | undefined): number {
+  if (!/^[1-9]\d{0,6}$/.test(arg ?? '')) throw new UsageError('a lesson number is needed');
+  return Number(arg);
+}
+
+/** Crew sessions run with this role: what changes owner state is not theirs. */
+function refuseCrew(env: Record<string, string | undefined>): void {
+  if (env.STUDIO_ROLE === 'crew') throw new Error('this command is not for crew sessions');
+}
+
 function refuseNativeQueue(config: StudioConfig): void {
   if (config.merge.strategy === 'native-queue') {
     throw new Error(
       'merge.strategy native-queue is not supported yet (planned for stage d); use studio-queue',
     );
   }
+}
+
+/**
+ * Why the board forbids this merge; only a readable board with the item `queued` and an approval
+ * covering this head allows it.
+ */
+const openReviewLine = (id: string, target: string): string =>
+  `review ${id} of ${target} is open: collect or drop it first`;
+
+async function boardBlocksMerge(
+  project: string,
+  root: string,
+  config: StudioConfig,
+  entry: QueueEntry,
+  head: string,
+  ports: Ports,
+): Promise<string | undefined> {
+  let board: Board;
+  try {
+    board = loadBoard(project);
+  } catch {
+    return 'the board cannot be read';
+  }
+  const item = board.items.find((i) =>
+    entry.item === undefined ? i.repo === entry.repo && i.pr === entry.pr : i.id === entry.item,
+  );
+  if (item === undefined) return 'the pull request has no board item';
+  if (item.status !== 'queued') return `board item ${item.id} is ${item.status}`;
+  const target = `${entry.repo}#${entry.pr}`;
+  const open = openReview(root, board, target);
+  if (open !== undefined) return openReviewLine(open, target);
+  return approvalProblem(
+    ports,
+    approvalCheckout(project, config, entry.repo),
+    entry,
+    { head: item.approvedHead, base: item.approvedBase },
+    head,
+  );
+}
+
+/** The owner's checkout tracks the primary repo; another repo is reached by its URL. */
+function approvalCheckout(project: string, config: StudioConfig, repo: string) {
+  return { dir: project, remote: repo === config.primaryRepo ? 'origin' : githubHttpsUrl(repo) };
 }
 
 const doneMatches = (d: QueueDone, item: WorkItem): boolean =>
