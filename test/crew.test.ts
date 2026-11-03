@@ -2334,7 +2334,14 @@ describe('capabilities at launch', () => {
   };
   const portsWithGh = (started: Started[], run: () => { code: number; stdout: string }): Ports => ({
     ...fakePorts(started),
-    gh: { api: async () => '', run: async () => ({ ...run(), stderr: '' }) },
+    gh: {
+      api: async () => '',
+      // Checks have completed unless a test says otherwise: a review waits while any still runs.
+      run: async (args) =>
+        args[1] === 'checks'
+          ? { code: 0, stdout: JSON.stringify([{ name: 'ci', bucket: 'pass' }]), stderr: '' }
+          : { ...run(), stderr: '' },
+    },
   });
   const pr = (path: string, additions = 1) =>
     JSON.stringify({
@@ -2697,6 +2704,34 @@ describe('capabilities at launch', () => {
     const other: WorkItem = { ...reviewItem, id: 'APP-21', notes: ['review org/app#8'] };
     await launchCrew(f.project, other, reviewerConfig, alive, f.launcher);
     expect(started).toHaveLength(2);
+  });
+
+  it('a review is not launched while checks of the pull request head are still running', async () => {
+    const f = makeFixture();
+    const started: Started[] = [];
+    const facts = pr('a.ts');
+    const run: Ports['gh']['run'] = async (args) =>
+      args[1] === 'checks'
+        ? {
+            code: 8,
+            stderr: '',
+            stdout: JSON.stringify([
+              { name: 'ci', bucket: 'pass' },
+              { name: 'e2e', bucket: 'pending' },
+            ]),
+          }
+        : { code: 0, stderr: '', stdout: facts };
+    const base = portsWithGh(started, () => ({ code: 0, stdout: facts }));
+    await expect(
+      launchCrew(
+        f.project,
+        reviewItem,
+        reviewerConfig,
+        { ...base, gh: { ...base.gh, run } },
+        f.launcher,
+      ),
+    ).rejects.toThrow(/ci pending/);
+    expect(started).toHaveLength(0);
   });
 
   it('a review refuses when no board item holds the pull request, naming studio link', async () => {

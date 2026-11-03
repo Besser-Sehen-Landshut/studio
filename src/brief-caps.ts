@@ -18,6 +18,7 @@ import type { Ports } from './ports.js';
 import {
   type CrewCaps,
   capsFile,
+  checksPending,
   type RoutineAnalyzer,
   readCheckLines,
   readDefaultBranch,
@@ -205,6 +206,12 @@ export async function resolveForItem(o: {
         `${item.id}: no board item holds ${name}; tie it to its item with studio link <id> ${name}`,
       );
     }
+  }
+  // A reviewer on running CI cannot tell its result and would ask for a needless round.
+  if (target !== undefined && (await checksPending(o.ports, target))) {
+    throw new Error(
+      `${item.id}: ci pending: checks of ${target.repo}#${target.pr} are still running; launch the review once they have completed`,
+    );
   }
   const checks = target === undefined ? undefined : await readCheckLines(o.ports, target);
   // Whether the pull request changes `.github/`; one that cannot be read counts as a change.

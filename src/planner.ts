@@ -115,6 +115,9 @@ function cycleTainted(items: WorkItem[]): Set<string> {
  * `credentialSlots` is how many more crews the credentials allow (per-label limits); at 0 every
  * candidate is deferred with the reason `credential limit`, and each assignment uses one slot.
  */
+/** Why a review waits: a reviewer launched on running CI would ask for changes CI may not need. */
+export const CI_PENDING = 'ci pending';
+
 export function planAssignments(
   board: Board,
   config: StudioConfig,
@@ -122,6 +125,8 @@ export function planAssignments(
   running: Record<string, number>,
   hold?: string,
   credentialSlots?: number,
+  /** Review items whose pull request head still has checks running: they wait (`ci pending`). */
+  ciPending?: ReadonlySet<string>,
 ): Plan {
   const byId = new Map(board.items.map((i) => [i.id, i]));
   const tainted = cycleTainted(board.items);
@@ -175,6 +180,7 @@ export function planAssignments(
     const isBuild = BUILD_TYPES.includes(item.type);
     const clash = [...active, ...planned].find((o) => conflicts(item, o));
     if (hold !== undefined) deferred.push({ id: item.id, reason: hold });
+    else if (ciPending?.has(item.id)) deferred.push({ id: item.id, reason: CI_PENDING });
     else if (credentialSlots !== undefined && credentialSlots <= 0) {
       deferred.push({ id: item.id, reason: 'credential limit' });
     } else if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: 'role wip full' });

@@ -148,6 +148,21 @@ describe('planAssignments', () => {
     expect(r.deferred).toEqual([{ id: 'APP-1', reason: 'host load' }]);
   });
 
+  it('defers a review whose pull request still has checks running: ci pending', () => {
+    const b = board(
+      mk('APP-1', { type: 'review', role: 'reviewer', notes: ['review org/app#7'] }),
+      mk('APP-2'),
+    );
+    const r = planAssignments(b, config, okCap, {}, undefined, undefined, new Set(['APP-1']));
+    expect(ids(r)).toEqual(['APP-2']);
+    expect(r.deferred).toEqual([{ id: 'APP-1', reason: 'ci pending' }]);
+    // once the checks have completed, it is planned
+    expect(ids(planAssignments(b, config, okCap, {}, undefined, undefined, new Set()))).toEqual([
+      'APP-1',
+      'APP-2',
+    ]);
+  });
+
   it('starts at most one build item per plan: one host load reading backs one start', () => {
     const b = board(
       mk('APP-1'),
