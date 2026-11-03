@@ -57,15 +57,54 @@ export interface ResolvedForItem {
     notRunHere?: NotRunHere[];
     /** The item holding the pull request declares `.github/workflows/` in its paths or touches. */
     ciItem?: boolean;
-    /** The pull request changes `.github/workflows/` (as far as its file list shows). */
+    /** The pull request changes `.github/`, or the change could not be read (fails closed). */
     workflowChange?: boolean;
   };
 }
 
-const WORKFLOWS = '.github/workflows/';
-/** A CI item declares the workflows it may change; nothing else may change them unreviewed. */
-const isCiItem = (i: WorkItem): boolean =>
-  [...i.paths, ...i.touches].some((p) => `${p}/`.startsWith(WORKFLOWS));
+/** `.github` itself or anything below it, in any case: workflows, actions, their links. */
+const isGithubPath = (p: string): boolean => {
+  const lower = p.toLowerCase();
+  return lower === '.github' || lower.startsWith('.github/');
+};
+/** A CI item declares `.github/` in its paths or touches; nothing else may change it unreviewed. */
+const isCiItem = (i: WorkItem): boolean => [...i.paths, ...i.touches].some(isGithubPath);
+const GIT_FETCH_MS = 120_000;
+const GIT_LOCAL_MS = 60_000;
+
+/**
+ * Whether the pull request changes `.github/`, read in the owner checkout and not from gh, whose
+ * file list can be cut short: `git diff --name-only --no-renames base...head`, so both sides of a
+ * rename count, and a symbolic link at `.github` or below in the head counts too. Undefined when
+ * it cannot be read.
+ */
+async function changesGithub(
+  ports: Ports,
+  checkout: { dir: string; remote: string },
+  base: string,
+  head: string,
+): Promise<boolean | undefined> {
+  const g = (args: string[], timeoutMs: number) =>
+    ports.git.run(checkout.dir, ['--no-replace-objects', ...args], { timeoutMs });
+  try {
+    await g(
+      ['fetch', '--no-tags', '--no-write-fetch-head', checkout.remote, head, base],
+      GIT_FETCH_MS,
+    );
+    const diff = await g(
+      ['diff', '--name-only', '--no-renames', '-z', `${base}...${head}`],
+      GIT_LOCAL_MS,
+    );
+    if (diff.split('\0').some((p) => p !== '' && isGithubPath(p))) return true;
+    const tree = await g(['ls-tree', '-r', '-z', '--full-tree', head], GIT_LOCAL_MS);
+    return tree.split('\0').some((line) => {
+      const tab = line.indexOf('\t');
+      return tab > 0 && line.startsWith('120000 ') && isGithubPath(line.slice(tab + 1));
+    });
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Works out the item's skills, knowledge and analyzers without writing anything. For review work
@@ -78,6 +117,8 @@ export async function resolveForItem(o: {
   ports: Ports;
   readBoard: () => Board;
   dir?: string;
+  /** The owner's checkout and how it reaches the repository, for the `.github/` gate. */
+  checkout?: { dir: string; remote: string };
 }): Promise<ResolvedForItem> {
   const { item, config } = o;
   if ((item.type === 'review') !== (item.role === 'reviewer')) {
@@ -149,6 +190,14 @@ export async function resolveForItem(o: {
     }
   }
   const checks = target === undefined ? undefined : await readCheckLines(o.ports, target);
+  // Whether the pull request changes `.github/`; one that cannot be read counts as a change.
+  let workflowChange = false;
+  if (target !== undefined && facts !== undefined && !ciItem) {
+    workflowChange =
+      o.checkout === undefined || facts.baseOid === undefined
+        ? true
+        : ((await changesGithub(o.ports, o.checkout, facts.baseOid, facts.head)) ?? true);
+  }
   const paths: ChangedPaths = facts?.complete ? [...facts.files, ...declared] : 'unknown';
   const name = target === undefined ? undefined : `${target.repo}#${target.pr}`;
   let round: number;
@@ -191,7 +240,7 @@ export async function resolveForItem(o: {
           }),
       ...(notRunHere === undefined || notRunHere.length === 0 ? {} : { notRunHere }),
       ...(target === undefined ? {} : { ciItem }),
-      ...(facts?.files.some((f) => f.startsWith(WORKFLOWS)) ? { workflowChange: true } : {}),
+      ...(workflowChange ? { workflowChange: true } : {}),
     },
   };
 }

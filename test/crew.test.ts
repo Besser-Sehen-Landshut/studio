@@ -339,7 +339,7 @@ describe('writeBrief', () => {
     expect(text).toContain('`git push origin HEAD:refs/heads/studio/APP-12`');
     expect(text).not.toContain('push -u');
     expect(text).toContain('git ls-remote origin refs/heads/studio/APP-12');
-    expect(text).toContain('gh pr create --head studio/APP-12 --title "APP-12: ');
+    expect(text).toContain('gh pr create --head studio/APP-12 --base main --title "APP-12: ');
     expect(text).toContain('--body-file');
     expect(text).toContain('git commit -F');
     expect(text).toContain('.studio/reports/APP-12.md');
@@ -2817,48 +2817,119 @@ describe('capabilities at launch', () => {
       ].join('\n'),
     );
 
-  it('every review reads CI workflows at the base, never in the pull request head', async () => {
-    const f = makeFixture();
-    await launchCrew(
-      f.project,
-      reviewItem,
-      reviewerConfig,
-      portsWithGh([], () => ({ code: 0, stdout: pr('a.ts') })),
-      f.launcher,
-    );
-    const b = brief(f, 'APP-20');
-    expect(b).toContain('git ls-tree --name-only origin/main .github/workflows/');
-    expect(b).toMatch(/never the checkout's copy/);
-    expect(b).toMatch(/A change under `\.github\/workflows\/` in this pull request is a finding/);
-    expect(capsOf(f, 'APP-20').workflowChange).toBeUndefined();
-  });
+  describe('the workflow gate reads the change in the owner checkout, not in gh', () => {
+    type Entry = string | { link: string };
+    /** Commits `files` on a branch from main in the owner checkout, pushes it, returns both ends. */
+    const prHead = (
+      f: Fixture,
+      files: Record<string, Entry>,
+      onBase: Record<string, string> = {},
+    ) => {
+      if (Object.keys(onBase).length > 0) {
+        for (const [path, text] of Object.entries(onBase)) {
+          mkdirSync(dirnameOf(join(f.project, path)), { recursive: true });
+          writeFileSync(join(f.project, path), text);
+          git(f.project, 'add', path);
+        }
+        git(f.project, 'commit', '-q', '-m', 'base');
+        git(f.project, 'push', '-q', 'origin', 'main');
+      }
+      const base = git(f.project, 'rev-parse', 'HEAD');
+      git(f.project, 'checkout', '-q', '-b', `pr-${n}`);
+      for (const [path, e] of Object.entries(files)) {
+        const at = join(f.project, path);
+        if (e === '') {
+          rmSync(at);
+          git(f.project, 'rm', '-q', '--cached', path);
+          continue;
+        }
+        mkdirSync(dirnameOf(at), { recursive: true });
+        if (typeof e === 'string') writeFileSync(at, e);
+        else symlinkSync(e.link, at);
+        git(f.project, 'add', path);
+      }
+      git(f.project, 'commit', '-q', '-m', 'pr');
+      git(f.project, 'push', '-q', 'origin', `HEAD:refs/heads/pr-${n}`);
+      const head = git(f.project, 'rev-parse', 'HEAD');
+      git(f.project, 'checkout', '-q', 'main');
+      return { head, base };
+    };
+    /** gh shows a list cut short: one harmless file of many. */
+    const facts = (ends: { head: string; base: string }) =>
+      JSON.stringify({
+        ...PR_HEAD,
+        headRefOid: ends.head,
+        baseRefOid: ends.base,
+        changedFiles: 300,
+        files: [{ path: 'a.ts', additions: 1, deletions: 0 }],
+      });
+    const launch = async (f: Fixture, out: string) =>
+      launchCrew(
+        f.project,
+        reviewItem,
+        reviewerConfig,
+        portsWithGh([], () => ({ code: 0, stdout: out })),
+        f.launcher,
+      );
 
-  it('a pull request that changes a workflow of an item that is no CI item: the record blocks an approval', async () => {
-    const f = makeFixture();
-    holderBoard(f);
-    await launchCrew(
-      f.project,
-      reviewItem,
-      reviewerConfig,
-      portsWithGh([], () => ({ code: 0, stdout: pr('.github/workflows/ci.yml') })),
-      f.launcher,
-    );
-    expect(capsOf(f, 'APP-20').workflowChange).toBe(true);
-    expect(brief(f, 'APP-20')).toMatch(/blocks the approval/);
-  });
-
-  it('a CI item may change workflows: it declares them in paths or touches', async () => {
-    const f = makeFixture();
-    holderBoard(f, ['    touches: [".github/workflows/**"]']);
-    await launchCrew(
-      f.project,
-      reviewItem,
-      reviewerConfig,
-      portsWithGh([], () => ({ code: 0, stdout: pr('.github/workflows/ci.yml') })),
-      f.launcher,
-    );
-    expect(capsOf(f, 'APP-20').workflowChange).toBeUndefined();
-    expect(brief(f, 'APP-20')).toMatch(/is a CI item/);
+    it('every review reads CI workflows at the base, never in the pull request head', async () => {
+      const f = makeFixture();
+      holderBoard(f);
+      await launch(f, facts(prHead(f, { 'src/a.ts': 'x\n' })));
+      const b = brief(f, 'APP-20');
+      expect(b).toContain('git ls-tree --name-only origin/main .github/workflows/');
+      expect(b).toMatch(/never the checkout's copy/);
+      expect(b).toMatch(
+        /A change under `\.github\/` \(workflows, actions\) in this pull request is a finding/,
+      );
+      expect(capsOf(f, 'APP-20').workflowChange).toBeUndefined();
+    });
+    it.each<[string, Record<string, Entry>]>([
+      [
+        'a workflow gh did not list',
+        { 'src/a.ts': 'x\n', '.github/workflows/ci.yml': 'on: push\n' },
+      ],
+      ['an action', { '.github/actions/setup/action.yml': 'runs: {}\n' }],
+      ['another case', { '.GitHub/workflows/ci.yml': 'on: push\n' }],
+      ['a symlink at .github', { '.github': { link: 'ci' } }],
+      ['a symlink below .github', { '.github/workflows/x.yml': { link: '../../ci.yml' } }],
+    ])('%s counts as a change of .github/', async (_why, files) => {
+      const f = makeFixture();
+      holderBoard(f);
+      await launch(f, facts(prHead(f, files)));
+      expect(capsOf(f, 'APP-20').workflowChange).toBe(true);
+      expect(brief(f, 'APP-20')).toMatch(/blocks the approval/);
+    });
+    it('a rename out of .github counts on both sides', async () => {
+      const f = makeFixture();
+      holderBoard(f);
+      const ends = prHead(
+        f,
+        { '.github/workflows/ci.yml': '', 'old-ci.yml': 'on: push\n' },
+        { '.github/workflows/ci.yml': 'on: push\n' },
+      );
+      await launch(f, facts(ends));
+      expect(capsOf(f, 'APP-20').workflowChange).toBe(true);
+    });
+    it('a head the owner checkout cannot fetch fails closed', async () => {
+      const f = makeFixture();
+      holderBoard(f);
+      await launch(f, facts({ head: 'b'.repeat(40), base: 'c'.repeat(40) }));
+      expect(capsOf(f, 'APP-20').workflowChange).toBe(true);
+    });
+    it('no base commit from gh fails closed', async () => {
+      const f = makeFixture();
+      holderBoard(f);
+      await launch(f, pr('a.ts'));
+      expect(capsOf(f, 'APP-20').workflowChange).toBe(true);
+    });
+    it('a CI item may change .github/: it declares it in paths or touches', async () => {
+      const f = makeFixture();
+      holderBoard(f, ['    touches: [".github/workflows/**"]']);
+      await launch(f, facts(prHead(f, { '.github/workflows/ci.yml': 'on: push\n' })));
+      expect(capsOf(f, 'APP-20').workflowChange).toBeUndefined();
+      expect(brief(f, 'APP-20')).toMatch(/is a CI item/);
+    });
   });
 
   it('without such commands there is no file and no line about it', async () => {

@@ -60,6 +60,10 @@ export const notRunHereReportSchema = z.strictObject({
   reason: crewLine,
 });
 
+/** A CI job by its workflow name and its check name, as `gh pr checks` reports them. */
+export const approvedJobSchema = z.strictObject({ workflow: plainLine, job: plainLine });
+export type ApprovedJob = z.infer<typeof approvedJobSchema>;
+
 export const workItemSchema = z.strictObject({
   id: z.string().regex(/^[A-Z]+-\d+$/, 'must match ^[A-Z]+-\\d+$'),
   title: z.string().min(1),
@@ -86,6 +90,9 @@ export const workItemSchema = z.strictObject({
     .optional(),
   // The base branch that approval was given for.
   approvedBase: z.string().min(1).optional(),
+  // The CI jobs the approval named for commands the builder could not run; the merge checks them
+  // again.
+  approvedJobs: z.array(approvedJobSchema).max(20).optional(),
   // Set by `collect` from a done report: commands the crew could not run in its sandbox, which CI
   // must cover. Crew text; a reviewer gets it as data.
   notRunHere: z.array(notRunHereSchema).max(20).optional(),
@@ -205,6 +212,7 @@ const KEY_ORDER: readonly (keyof WorkItem)[] = [
   'branch',
   'approvedHead',
   'approvedBase',
+  'approvedJobs',
   'notRunHere',
   'crew',
   'notes',

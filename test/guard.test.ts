@@ -68,80 +68,259 @@ const bash = (command: string, cwd?: string) =>
 const tool = (toolName: string, toolInput: Record<string, unknown>) =>
   evaluateGuard({ toolName, toolInput }, ctx);
 
-describe('upload-pack and crew pull requests', () => {
+describe('the bypasses an independent review found', () => {
+  // $OUT stands for a directory outside the clone.
+  const out = () => join(root, 'elsewhere');
   it.each([
-    'git ls-remote --upload-pack=/tmp/x origin',
-    'git ls-remote --upload-pack /tmp/x origin',
-    'git ls-remote --upload origin',
-    'git ls-remote -u /tmp/x origin',
-    'git fetch --upload-pack=/tmp/x origin',
-    'git fetch --upload-pack /tmp/x origin',
-    'git fetch -u origin',
-    'git fetch -qu origin',
-    'git pull --upload-pack=/tmp/x origin studio/APP-1',
-    'git pull -u origin',
-    'git clone --upload-pack=/tmp/x https://github.com/org/app sub/app',
-    'git clone -u /tmp/x https://github.com/org/app sub/app',
-    'git clone -u/tmp/x https://github.com/org/app sub/app',
-    'git -C sub fetch --upload-pack=/tmp/x origin',
+    'gh pr create -H studio/APP-1 -t --body-file --head=evil',
+    'gh pr create -H studio/APP-1 --title --body-file --head=main',
+    'gh pr create -H studio/APP-1 --title --body-file --body-file $OUT/s.txt',
+    'gh pr create -H studio/APP-1 --title t --body-file f.md',
+    'gh pr create -H studio/APP-1 --title t --body-file link/s.txt',
+    'GH_REPO=org/other gh pr create -H studio/APP-1 --title t --body x',
+    'export GH_REPO=org/other; gh pr create -H studio/APP-1 --title t --body x',
+    'env GH_REPO=org/other gh pr create -H studio/APP-1 --title t --body x',
+    'GH_HOST=evil.example gh pr create -H studio/APP-1 --title t --body x',
+    'gh pr create -H studio/APP-1 --title t --body-file -',
+    'gh pr create -H studio/APP-1 --title t --body-file - < $OUT/s.txt',
+    'cat $OUT/s.txt | gh pr create -H studio/APP-1 --title t --body-file -',
+    'gh pr create -H studio/APP-1 --title t -F-',
+    'gh pr create -H studio/APP-1 --title t -B other-base --body x',
+    'gh pr create -H studio/APP-1 --title t --body x --template $OUT/s.txt',
+    'gh pr create -H studio/APP-1 --title t --body x -T $OUT/s.txt',
+    'gh pr create -H studio/APP-1 --title t --recover $OUT/s.txt',
+    'gh api -X POST repos/org/other/pulls -f head=evil -f base=main -f title=x',
+    'gh api --method POST repos/org/app/pulls -f head=main -f base=x -f title=x',
+    "gh api graphql -f query='mutation { createPullRequest(input:{}) { clientMutationId } }'",
+    'gh pr new -H studio/APP-2 --title t --body x',
+    'gh pr create -Hstudio/APP-1 --title t --body x',
+    'gh pr create --hea studio/APP-2 --title t --body x',
+    'gh pr edit 5 --body-file $OUT/s.txt',
+    'gh pr comment 5 --body-file $OUT/s.txt',
+    'gh pr edit 5 --base other',
+    'git push --set-upstream origin HEAD',
+    'git fetch --update-head-ok origin',
+    'git fetch --upl=/tmp/x origin',
+    'git fetch --upload-pac=/tmp/x origin',
+    'git -c remote.origin.uploadpack=/tmp/x fetch origin',
+    'git config remote.origin.uploadpack /tmp/x',
+    'git fetch --all',
+    'git remote update',
+    'git fetch $OUT/repo',
+    'git ls-remote -hu origin',
+    'git fetch -ju origin',
+    'git fetch -j4u origin',
+    'git fetch -o u origin',
+    'git fetch -ou origin',
+    'git clone -bu https://github.com/org/app x',
+    'git fetch origin -- --upload-pack=/tmp/x',
+    'git pull origin main -- -u',
+    'git fetch "--upload-pack=/tmp/x" origin',
+    'git fetch --upload-pack={/tmp/x,y} origin',
+    'git fetch --{upload-pack=/tmp/x,} origin',
+    'git fetch-pack --upload-pack=/tmp/x /tmp/repo',
+    'git remote add -f --upload x /tmp/r',
+    "git -c protocol.ext.allow=always fetch 'ext::sh -c touch% /tmp/pwn'",
+    "git fetch 'ext::sh -c touch% /tmp/pwn'",
+    'git submodule update --init',
+    'git clone -c remote.origin.uploadpack=/tmp/x /tmp/repo sub/x',
+    'git clone --config=remote.origin.uploadpack=/tmp/x /tmp/repo sub/x',
+    'git clone --config remote.origin.uploadpack=/tmp/x /tmp/repo sub/x',
+    'git clone --template=/tmp/tpl https://github.com/org/app sub/x',
+    'git fetch --upload-pack=/tmp/x',
+    'git ls-remote --upload-pack=/tmp/x',
+    'git pull --upload-pack /tmp/x',
+    'gh pr create -H studio/APP-1 -t t --body x --attach $OUT/s.txt',
+    'gh pr new -H studio/APP-9 -t t -b x',
+    'gh pr create -H studio/APP-1 -t --body-file --body-file $OUT/s.txt',
+    'gh pr create -H studio/APP-1 -b --head=main -t t',
+    'gh pr create -H studio/APP-1 -R=org/other -t t -b x',
+    'gh pr create -H studio/APP-1 -t t -b x --repo',
+    'gh --repo=org/other pr create -H studio/APP-1 -t t -b x',
   ])('denies %s', (cmd) => {
-    expect(bash(cmd, wt).decision).toBe('deny');
+    expect(bash(cmd.replaceAll('$OUT', out()), wt).decision).toBe('deny');
   });
   it.each([
-    'git ls-remote origin refs/heads/studio/APP-1',
+    'git pull',
+    'git pull --ff-only',
+    'git pull --rebase origin main',
+    'git pull -Xours origin main',
+    'git pull -Xsubtree=x origin main',
+    'git pull -r origin main',
+    'git push -u origin studio/APP-1',
     'git fetch origin',
-    'git fetch -q origin main',
-    'git clone -o up https://github.com/org/app sub/app',
-    'git clone -b dev https://github.com/org/app sub/app',
+    'git fetch origin main',
+    'git fetch -q --prune origin',
+    'git fetch --depth=1 origin main',
+    'git pull --ff-only origin main',
+    'git pull --rebase=merges origin main',
+    'git pull -X subtree=x origin main',
+    'git pull --strategy-option=ours origin main',
+    'git push origin studio/APP-1',
+    'git ls-remote origin',
+    'git ls-remote origin refs/heads/studio/APP-1',
+    'git submodule status',
+    'git remote -v',
+    'git remote get-url origin',
+  ])('allows the crew form %s', (cmd) => {
+    expect(bash(cmd, wt).decision).toBe('allow');
+  });
+});
+
+describe('gh pr create: one form only', () => {
+  const PR = 'gh pr create --head studio/APP-1 --base main --title t --body-file body.md';
+  it.each([
+    PR,
+    'gh pr create --title "APP-1: fix it" --body-file body.md --base main --head studio/APP-1',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file sub/body.md',
+    'gh pr create --head studio/APP-1 --base release/2.x --title "$T" --body-file body.md',
   ])('allows %s', (cmd) => {
     expect(bash(cmd, wt).decision).toBe('allow');
   });
   it.each([
-    // no head, or another item's branch
-    'gh pr create --title t --body-file body.md',
-    'gh pr create --fill',
-    'gh pr create --head studio/APP-2 --title t --body-file body.md',
-    'gh pr create --head main --title t --body x',
-    'gh pr create --head org:studio/APP-1 --title t --body x',
-    'gh pr create -H studio/APP-2 --title t --body x',
-    'gh pr create --head=studio/APP-2 --title t --body x',
-    'gh pr create --head studio/APP-1 --head studio/APP-2 --title t --body x',
-    // another repository
-    'gh pr create --head studio/APP-1 -R org/other --title t --body x',
-    'gh pr create --head studio/APP-1 --repo org/other --title t --body x',
-    'gh pr create --head studio/APP-1 --repo=org/other --title t --body x',
-    'gh -R org/other pr create --head studio/APP-1 --title t --body x',
-    // a body file outside the clone
-    'gh pr create --head studio/APP-1 --title t --body-file ../elsewhere/x.md',
-    'gh pr create --head studio/APP-1 --title t --body-file=/etc/passwd',
-    'gh pr create --head studio/APP-1 --title t -F /etc/passwd',
-    'gh pr create --head studio/APP-1 --title t --body-file link/x.md',
+    // a short, grouped, `=` or unknown option, or one given twice or left out
+    'gh pr create -H studio/APP-1 --base main --title t --body-file body.md',
+    'gh pr create --head=studio/APP-1 --base main --title t --body-file body.md',
+    'gh pr create --head studio/APP-1 --base main --title=t --body-file body.md',
+    'gh pr create -dH studio/APP-1 --base main --title t --body-file body.md',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file body.md --draft',
+    'gh pr create --head studio/APP-1 --base main --title t --body x',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file body.md --head studio/APP-1',
+    'gh pr create --head studio/APP-1 --title t --body-file body.md',
+    'gh pr create --head studio/APP-1 --base main --body-file body.md',
+    'gh pr create --head studio/APP-1 --base main --title t',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file body.md --fill',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file body.md --template x',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file body.md --recover x',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file body.md --attach x',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file body.md --repo org/app',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file body.md -R org/app',
+    'gh -R org/app pr create --head studio/APP-1 --base main --title t --body-file body.md',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file body.md extra',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file body.md --',
+    // a value that is a flag, another head, a bad base
+    'gh pr create --head studio/APP-1 --base main --title --body-file --body-file body.md',
+    'gh pr create --head studio/APP-2 --base main --title t --body-file body.md',
+    'gh pr create --head main --base main --title t --body-file body.md',
+    'gh pr create --head studio/APP-1 --base -x --title t --body-file body.md',
+    'gh pr create --head studio/APP-1 --base $B --title t --body-file body.md',
+    // the body file: stdin, absolute, outside, through a link
+    'gh pr create --head studio/APP-1 --base main --title t --body-file -',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file /etc/passwd',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file ../elsewhere/x.md',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file link/x.md',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file $F',
+    // aliases and the other pr commands that write
+    'gh pr new --head studio/APP-1 --base main --title t --body-file body.md',
+    'gh pr edit 5 --body-file body.md',
+    'gh pr comment 5 --body-file body.md',
+    'gh pr review 5 --approve',
+    'gh pr close 5',
+    'gh pr ready 5',
   ])('denies %s', (cmd) => {
     expect(bash(cmd, wt).decision).toBe('deny');
   });
-  it.each([
-    'gh pr create --head studio/APP-1 --title "APP-1: fix" --body-file body.md',
-    'gh pr create -H studio/APP-1 --title t -F sub/body.md',
-    'gh pr create --head=studio/APP-1 --title t --body x',
-  ])('allows %s', (cmd) => {
-    expect(bash(cmd, wt).decision).toBe('allow');
-  });
-  it('holds an absolute body file to the clone, also a readable file outside it', () => {
-    const create = (f: string) => `gh pr create --head studio/APP-1 --title t --body-file ${f}`;
-    expect(bash(create(join(wt, 'body.md')), wt).decision).toBe('allow');
+  it('holds an absolute body file to the clone too: only a relative path is taken', () => {
+    const create = (f: string) =>
+      `gh pr create --head studio/APP-1 --base main --title t --body-file ${f}`;
+    expect(bash(create(join(wt, 'body.md')), wt).decision).toBe('deny');
     expect(bash(create(join(root, 'clean', 'a.txt')), wt).decision).toBe('deny');
   });
   it('denies gh pr create when the guard context names no item', () => {
     const { item: _i, ...noItem } = ctx;
-    expect(
-      evaluateGuard(
-        {
-          toolName: 'Bash',
-          toolInput: { command: 'gh pr create --head studio/APP-1 --title t --body x' },
-        },
-        noItem,
-      ).decision,
-    ).toBe('deny');
+    expect(evaluateGuard({ toolName: 'Bash', toolInput: { command: PR } }, noItem).decision).toBe(
+      'deny',
+    );
+  });
+  it.each(['gh pr view 3', 'gh pr checks 3', 'gh pr diff 3', 'gh pr list', 'gh pr status'])(
+    'allows the read %s',
+    (cmd) => {
+      expect(bash(cmd, wt).decision).toBe('allow');
+    },
+  );
+});
+
+describe('gh: the command words come first', () => {
+  it.each([
+    // grouped or plain flags before the subcommand words, which cobra may read differently
+    'gh -dR org/other pr create --head studio/APP-1 --base main --title t --body-file body.md',
+    'gh -xyzR org/app pr view 3',
+    'gh -R org/app pr view 3',
+    'gh --repo org/app pr checks 3',
+    'gh --hostname github.com pr view 3',
+    'gh pr -R org/app view 3',
+    'gh pr --repo=org/app create --head studio/APP-1 --base main --title t --body-file body.md',
+    // --recover reads a file of its own choosing
+    'gh pr create --head studio/APP-1 --base main --title t --recover ../elsewhere/x.json',
+    'gh pr create --head studio/APP-1 --base main --title t --body-file body.md --recover x',
+  ])('denies %s', (cmd) => {
+    expect(bash(cmd, wt).decision).toBe('deny');
+  });
+  it.each(['gh pr view 3 --json state', 'gh api repos/org/app/pulls', 'gh run list'])(
+    'allows %s',
+    (cmd) => {
+      expect(bash(cmd, wt).decision).toBe('allow');
+    },
+  );
+});
+
+describe('the crew skill and brief name the one gh pr create form the guard allows', () => {
+  const skill = readFileSync(
+    join(import.meta.dirname, '..', 'skills', 'studio-crew', 'SKILL.md'),
+    'utf8',
+  );
+  const brief = readFileSync(join(import.meta.dirname, '..', 'src', 'crew.ts'), 'utf8');
+  /** The command in backticks after "gh pr create", with its placeholders filled in. */
+  const filled = (text: string, idForm: RegExp) => {
+    const m = /`(gh pr create [^`]+)`/.exec(text);
+    expect(m, 'a gh pr create line').not.toBeNull();
+    return ((m as RegExpExecArray)[1] as string)
+      .replace(idForm, 'APP-1')
+      .replaceAll('<summary>', 'fix it')
+      .replaceAll('<file>', 'body.md');
+  };
+  it('the skill line is allowed', () => {
+    expect(bash(filled(skill, /<id>/g), wt).decision).toBe('allow');
+  });
+  it('the brief line is allowed', () => {
+    expect(bash(filled(brief, /\$\{id\}/g), wt).decision).toBe('allow');
+  });
+});
+
+describe('git: commands that fetch from anywhere', () => {
+  it.each([
+    'git clone https://github.com/org/app sub/app',
+    'git clone -o up https://github.com/org/app sub/app',
+    'git fetch-pack /tmp/repo',
+    'git archive --remote=/tmp/r HEAD',
+    'git archive --remote /tmp/r HEAD',
+    'git archive --rem=/tmp/r HEAD',
+    'git archive --exec=/tmp/x --remote=/tmp/r HEAD',
+    'git ls-remote -h origin',
+    'git ls-remote --heads origin',
+    'git ls-remote https://github.com/org/other',
+    'git ls-remote /tmp/r',
+    'git fetch https://github.com/org/other main',
+    'git fetch upstream',
+    'git fetch -u origin',
+    'git fetch -j4 origin',
+    'git fetch -o x origin',
+    'git fetch --recurse-submodules origin',
+    'git fetch --negotiation-tip=x origin',
+    'git pull --upload-pack=/tmp/x origin main',
+    'git pull -s ours origin main',
+    'git pull -X -u origin main',
+    'git pull upstream main',
+    'git remote add x /tmp/r',
+    'git remote set-url origin /tmp/r',
+    'git remote update',
+    'git submodule update --init',
+    'git submodule add https://github.com/org/x x',
+  ])('denies %s', (cmd) => {
+    expect(bash(cmd, wt).decision).toBe('deny');
+  });
+  it('allows git archive without a remote', () => {
+    expect(bash('git archive -o out.tar HEAD', wt).decision).toBe('allow');
   });
 });
 
@@ -256,12 +435,7 @@ describe('gh and owner commands', () => {
   ])('denies %s', (cmd) => {
     expect(bash(cmd).decision).toBe('deny');
   });
-  it.each([
-    'gh pr create --head studio/APP-1 --fill',
-    'gh pr view 3',
-    'gh pr checks 3',
-    'gh api repos/org/app/pulls',
-  ])('allows %s', (cmd) => {
+  it.each(['gh pr view 3', 'gh pr checks 3', 'gh api repos/org/app/pulls'])('allows %s', (cmd) => {
     expect(bash(cmd).decision).toBe('allow');
   });
   it.each(['sudo ls', 'ls && sudo rm x', 'su -', 'doas ls', "bash -c 'sudo ls'"])(
@@ -591,9 +765,10 @@ describe('round 1 regressions', () => {
       "gh api graphql -f query='mutation { mergePullRequest(input:{}) { clientMutationId } }'",
       'gh api $E',
     ]);
-    expect(bash('gh pr create --head studio/APP-1 --title "$T" --body-file body.md').decision).toBe(
-      'allow',
-    );
+    expect(
+      bash('gh pr create --head studio/APP-1 --base main --title "$T" --body-file body.md')
+        .decision,
+    ).toBe('allow');
   });
 
   it('I5 deploy and owner-only after normalisation', () => {
@@ -711,7 +886,7 @@ describe('round 1 regressions', () => {
 
   it('I5g2b (( and $(( inside quotes are text, not arithmetic', () => {
     for (const c of [
-      'gh pr create --head studio/APP-1 --title "a ((b))" --body x',
+      'gh pr create --head studio/APP-1 --base main --title "a ((b))" --body-file b.md',
       "echo '(( X = 1 ))'",
       "echo '$((1+2))'",
       'echo "((x))"',
@@ -1266,7 +1441,7 @@ describe('round 2 regressions', () => {
       'git push origin HEAD:refs/heads/studio/APP-1',
       'git ls-remote origin refs/heads/studio/APP-1',
       'git fetch origin && git rebase origin/main',
-      'gh pr create --head studio/APP-1 --title "APP-1: fix" --body-file body.md',
+      'gh pr create --head studio/APP-1 --base main --title "APP-1: fix" --body-file body.md',
       'gh pr view 3',
       'gh pr checks 3',
       'gh api repos/org/app/pulls/3',
@@ -1411,7 +1586,7 @@ describe('round 3: explicit deny rules', () => {
       'git commit -F msg.txt',
       'git push origin studio/APP-1',
       'git push -u origin HEAD:refs/heads/studio/APP-1',
-      'gh pr create --head studio/APP-1 --title t --body-file body.md',
+      'gh pr create --head studio/APP-1 --base main --title t --body-file body.md',
       'gh pr view 3',
       'gh pr checks 3',
       'gh api repos/org/app/pulls/3',
@@ -1457,8 +1632,9 @@ describe('round 4: allowlists', () => {
       'gh api --paginate -i repos/org/app/issues',
       'gh api --include repos/org/app/issues',
       'gh api --hostname github.com repos/org/app',
-      'gh -R org/app api repos/org/app',
     ]);
+    // No gh flag before the command words, not even -R.
+    denies(['gh -R org/app api repos/org/app']);
   });
 
   it('CR4-2 variable names must be plain identifiers', () => {

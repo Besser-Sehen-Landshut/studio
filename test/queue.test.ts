@@ -126,7 +126,7 @@ function fakeClock(onSleep?: (ms: number, total: number) => void) {
 }
 
 const host: Host = { loadAvg1: () => 0, cpuCount: () => 4 };
-const CHK = 'pr checks 5 --repo org/app --json name,bucket';
+const CHK = 'pr checks 5 --repo org/app --json name,bucket,workflow';
 const REQ = `${CHK} --required`;
 const VIEW = 'pr view 5 --repo org/app --json headRefOid,state,mergeable';
 const MERGE = 'pr merge 5 --repo org/app';

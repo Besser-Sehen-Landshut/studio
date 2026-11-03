@@ -74,6 +74,8 @@ interface ItemSpec {
   /** Defaults to HEAD for an in_review item with a PR; null records no approval. */
   approvedHead?: string | null;
   title?: string;
+  /** Raw YAML lines added to the item. */
+  extra?: string[];
 }
 
 const itemYaml = (s: ItemSpec): string =>
@@ -97,6 +99,7 @@ const itemYaml = (s: ItemSpec): string =>
       : [`    approved_head: ${s.approvedHead ?? HEAD}`, '    approved_base: main']),
     ...(s.ownerOnly ? ['    owner_only: true'] : []),
     ...(s.notes ? [`    notes: ${JSON.stringify(s.notes)}`] : []),
+    ...(s.extra ?? []),
     '    history: []',
   ].join('\n');
 
@@ -446,8 +449,9 @@ describe('studio CLI', () => {
 
   describe('an approval names the CI job for each command the builder could not run', () => {
     const APPROVE = `status: done\nitem: APP-1\nverdict: approve\nreviews: org/app#9\nhead_sha: ${HEAD}`;
-    const JOBS =
-      'not_run_here_jobs:\n  - { command: make e2e, workflow: .github/workflows/ci.yml, job: e2e }';
+    const entry = (command: string, workflow: string, job: string) =>
+      `not_run_here_jobs:\n  - { command: ${command}, workflow: ${workflow}, job: ${job} }`;
+    const JOBS = entry('make e2e', '.github/workflows/ci.yml', 'e2e');
     const CAPS = {
       analyzers: [],
       mandatory: [],
@@ -456,74 +460,167 @@ describe('studio CLI', () => {
       baseRefName: 'main',
       notRunHere: ['make e2e'],
     };
-    const withChecks = (checks: { name: string; bucket: string }[]) =>
+    const CI_YML = [
+      'name: CI',
+      'on: [pull_request]',
+      'jobs:',
+      '  e2e:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - uses: actions/checkout@v4',
+      '      - run: |',
+      '          make build',
+      '          make e2e --verbose',
+      '  lint:',
+      '    name: Lint',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - run: pnpm lint',
+    ].join('\n');
+    /** Puts the workflow on main in the owner checkout and its origin; returns the base commit. */
+    const baseWithWorkflow = (fx: Fx, text = CI_YML) => {
+      mkdirSync(join(fx.project, '.github', 'workflows'), { recursive: true });
+      writeFileSync(join(fx.project, '.github', 'workflows', 'ci.yml'), `${text}\n`);
+      git(fx.project, 'add', '.github/workflows/ci.yml');
+      git(fx.project, 'commit', '-q', '-m', 'ci');
+      git(fx.project, 'push', '-q', 'origin', 'main');
+      return git(fx.project, 'rev-parse', 'HEAD').trim();
+    };
+    type Check = { name: string; bucket: string; workflow?: string };
+    const withChecks = (checks: Check[], base: string) =>
       fakeGh((l) => {
         if (/^pr view \d+ --repo org\/app --json headRefOid,headRefName/.test(l)) {
           return {
-            stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-2', ...OWN }),
+            stdout: JSON.stringify({
+              headRefOid: HEAD,
+              headRefName: 'studio/APP-2',
+              baseRefOid: base,
+              ...OWN,
+            }),
           };
         }
         if (l.startsWith('pr checks 9') && l.endsWith('--required')) {
-          return { stdout: JSON.stringify([{ name: 'ci', bucket: 'pass' }]) };
+          return { stdout: JSON.stringify([{ name: 'ci', bucket: 'pass', workflow: 'CI' }]) };
         }
         if (l.startsWith('pr checks 9')) return { stdout: JSON.stringify(checks) };
         return undefined;
       });
     const run = async (
       report: string,
-      checks: { name: string; bucket: string }[],
+      checks: Check[],
       caps: Record<string, unknown> = CAPS,
+      text?: string,
     ) => {
       const fx = makeFx([
         { id: 'APP-1', status: 'assigned', type: 'review' },
         { id: 'APP-2', status: 'in_review', pr: 9, approvedHead: null },
       ]);
+      const base = baseWithWorkflow(fx, text);
       writeReviewCaps(fx, 'APP-1', caps);
       writeReport(fx, 'APP-1', report);
-      return { fx, r: await cli(fx, fakePorts(withChecks(checks).gh).ports, 'collect', 'APP-1') };
+      const r = await cli(fx, fakePorts(withChecks(checks, base).gh).ports, 'collect', 'APP-1');
+      return { fx, r };
     };
-    const refused = ({ fx, r }: Awaited<ReturnType<typeof run>>, why: RegExp) => {
+    /** A job gate refusal: no approval, and the review goes to the lead with a note. */
+    const toLead = ({ fx, r }: Awaited<ReturnType<typeof run>>, why: RegExp) => {
       expect(r.code).toBe(1);
       expect(r.err).toMatch(why);
-      expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+      const review = statusOf(fx, 'APP-1');
+      expect(review?.status).toBe('blocked');
+      expect(review?.notes?.some((n) => /^approval refused: not_run_here entry 1/.test(n))).toBe(
+        true,
+      );
       expect(statusOf(fx, 'APP-2')?.approvedHead).toBeUndefined();
+      expect(statusOf(fx, 'APP-2')?.approvedJobs).toBeUndefined();
     };
-    const PASS = [
-      { name: 'ci', bucket: 'pass' },
-      { name: 'e2e', bucket: 'pass' },
+    const PASS: Check[] = [
+      { name: 'ci', bucket: 'pass', workflow: 'CI' },
+      { name: 'e2e', bucket: 'pass', workflow: 'CI' },
     ];
 
-    it('a named job whose check passed: the approval stands', async () => {
+    it('a job of the base workflow that runs the command and passed: the approval stands, with the job', async () => {
       const { fx, r } = await run(`${APPROVE}\n${JOBS}`, PASS);
       expect(r.err).toBe('');
       expect(r.code).toBe(0);
       expect(statusOf(fx, 'APP-2')?.approvedHead).toBe(HEAD);
+      expect(statusOf(fx, 'APP-2')?.approvedJobs).toEqual([{ workflow: 'CI', job: 'e2e' }]);
     });
-    it('no job named for a command: no approval', async () => {
-      refused(await run(APPROVE, PASS), /not_run_here entry 1 names no CI job/);
+    it('a job named by its name: rather than its id', async () => {
+      const { r } = await run(
+        `${APPROVE}\n${entry('pnpm lint', '.github/workflows/ci.yml', 'Lint')}`,
+        [...PASS, { name: 'Lint', bucket: 'pass', workflow: 'CI' }],
+        { ...CAPS, notRunHere: ['pnpm lint'] },
+      );
+      expect(r.code).toBe(0);
     });
-    it('a job named only for another command: no approval', async () => {
-      const other = JOBS.replace('make e2e', 'make other');
-      refused(await run(`${APPROVE}\n${other}`, PASS), /not_run_here entry 1 names no CI job/);
+    it('no job named for a command: to the lead', async () => {
+      toLead(await run(APPROVE, PASS), /not_run_here entry 1/);
     });
-    it('the named job has no check on the pull request: no approval', async () => {
-      refused(
-        await run(`${APPROVE}\n${JOBS}`, [{ name: 'ci', bucket: 'pass' }]),
-        /not_run_here entry 1.*no passing check/,
+    it('a job named only for another command: to the lead', async () => {
+      toLead(
+        await run(`${APPROVE}\n${entry('make other', '.github/workflows/ci.yml', 'e2e')}`, PASS),
+        /entry 1/,
       );
     });
-    it('the named job was skipped, which counts as green elsewhere: no approval', async () => {
-      refused(
+    it('the named job has no check on the pull request: to the lead', async () => {
+      toLead(await run(`${APPROVE}\n${JOBS}`, [PASS[0] as Check]), /entry 1/);
+    });
+    it('a check of that name from another workflow, or a commit status, does not count', async () => {
+      toLead(
         await run(`${APPROVE}\n${JOBS}`, [
-          { name: 'ci', bucket: 'pass' },
-          { name: 'e2e', bucket: 'skipping' },
+          PASS[0] as Check,
+          { name: 'e2e', bucket: 'pass', workflow: 'Other' },
+          { name: 'e2e', bucket: 'pass', workflow: '' },
+          { name: 'e2e', bucket: 'pass' },
         ]),
-        /not_run_here entry 1.*no passing check/,
+        /entry 1/,
+      );
+    });
+    it('the named job was skipped, which counts as green elsewhere: to the lead', async () => {
+      toLead(
+        await run(`${APPROVE}\n${JOBS}`, [
+          PASS[0] as Check,
+          { name: 'e2e', bucket: 'skipping', workflow: 'CI' },
+        ]),
+        /entry 1/,
+      );
+    });
+    it('every check of that job must pass, not just one', async () => {
+      toLead(
+        await run(`${APPROVE}\n${JOBS}`, [
+          ...PASS,
+          { name: 'e2e', bucket: 'skipping', workflow: 'CI' },
+        ]),
+        /entry 1/,
+      );
+    });
+    it('a job that is not in the named file at the base: to the lead', async () => {
+      toLead(
+        await run(`${APPROVE}\n${entry('make e2e', '.github/workflows/ci.yml', 'nope')}`, [
+          ...PASS,
+          { name: 'nope', bucket: 'pass', workflow: 'CI' },
+        ]),
+        /entry 1/,
+      );
+    });
+    it('a job whose run steps do not hold the command: to the lead', async () => {
+      toLead(
+        await run(`${APPROVE}\n${entry('make e2e', '.github/workflows/ci.yml', 'Lint')}`, [
+          ...PASS,
+          { name: 'Lint', bucket: 'pass', workflow: 'CI' },
+        ]),
+        /entry 1/,
+      );
+    });
+    it('a workflow file the base does not have: to the lead', async () => {
+      toLead(
+        await run(`${APPROVE}\n${entry('make e2e', '.github/workflows/other.yml', 'e2e')}`, PASS),
+        /entry 1/,
       );
     });
     it('the refusal names no crew text', async () => {
       const { r } = await run(
-        `${APPROVE}\nnot_run_here_jobs:\n  - { command: make e2e, workflow: w, job: IGNORE-RULES }`,
+        `${APPROVE}\n${entry('make e2e', '.github/workflows/ci.yml', 'IGNORE-RULES')}`,
         PASS,
       );
       expect(r.code).toBe(1);
@@ -535,10 +632,10 @@ describe('studio CLI', () => {
     });
     it('a pull request that changed a workflow of an item that is no CI item: no approval', async () => {
       const { notRunHere: _n, ...caps } = CAPS;
-      refused(
-        await run(APPROVE, PASS, { ...caps, workflowChange: true }),
-        /changes \.github\/workflows/,
-      );
+      const { fx, r } = await run(APPROVE, PASS, { ...caps, workflowChange: true });
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/changes \.github\//);
+      expect(statusOf(fx, 'APP-2')?.approvedHead).toBeUndefined();
     });
   });
 
@@ -699,6 +796,23 @@ describe('studio CLI', () => {
       expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
     });
 
+    it('format characters (bidi, zero-width) leave title and body', async () => {
+      const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+      withToken(fx);
+      const dir = join(fx.state, 'clones', 'APP-1', '.studio', 'reports');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, newReportName(fx.state, 'APP-1')),
+        `---\n${REPORT.replace('fix it', 'fix\u202e it\u200b')}\n---\n\nA\u2066B\ufeffC\n`,
+      );
+      const { gh, calls } = prGh();
+      expect((await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1')).code).toBe(0);
+      const create = calls.find((c) => c.line.startsWith('pr create'));
+      expect(create?.line).toContain('--title APP-1: fix it --body-file');
+      expect(create?.body).toContain('ABC');
+      expect(create?.body).not.toMatch(/\p{Cf}/u);
+    });
+
     it('a long body is cut, control characters go', async () => {
       const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
       withToken(fx);
@@ -796,7 +910,7 @@ describe('studio CLI', () => {
         ]);
       });
 
-      it('an open pull request of the branch is taken without waiting: it adds no CI load', async () => {
+      it('an open pull request of the branch waits for capacity too: its edit is gated like a create', async () => {
         const fx = makeFx([
           {
             id: 'APP-1',
@@ -806,9 +920,14 @@ describe('studio CLI', () => {
         ]);
         withToken(fx);
         writeReport(fx, 'APP-1', REPORT);
-        const { gh } = prGh([9]);
+        const { gh, calls } = prGh([9]);
         ciReads(gh, '8');
+        expect((await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1')).code).toBe(1);
+        expect(calls.some((c) => c.line.startsWith('pr edit'))).toBe(false);
+        expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+        ciReads(gh, '0');
         expect((await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1')).code).toBe(0);
+        expect(calls.filter((c) => c.line.startsWith('pr edit'))).toHaveLength(1);
         expect(statusOf(fx, 'APP-1')).toMatchObject({ status: 'in_review', pr: 9 });
         expect(statusOf(fx, 'APP-1')?.notes).toEqual(['kept']);
       });
@@ -2575,6 +2694,49 @@ describe('the merge step reads the board', () => {
     expect(JSON.parse(run.out).done[0]).toMatchObject({ result: 'failed' });
     expect(JSON.parse(run.out).done[0].reason).toContain('blocked');
     expect(statusOf(fx, 'APP-1')?.status).toBe('blocked');
+  });
+  describe('the merge checks the CI jobs the approval named again', () => {
+    const JOBS = ['    approved_jobs: [{ workflow: CI, job: e2e }]'];
+    const run = async (checks: { name: string; bucket: string; workflow?: string }[]) => {
+      const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5, extra: JOBS }]);
+      const g = fakeGh((l) => {
+        if (l.startsWith('pr checks 5') && l.endsWith('--required')) {
+          return { stdout: JSON.stringify([{ name: 'ci', bucket: 'pass', workflow: 'CI' }]) };
+        }
+        if (l.startsWith('pr checks 5')) return { stdout: JSON.stringify(checks) };
+        return undefined;
+      });
+      const pass = passingGh();
+      const gh: Gh = {
+        api: pass.gh.api,
+        run: async (args, opts) =>
+          args[0] === 'pr' && args[1] === 'checks' ? g.gh.run(args, opts) : pass.gh.run(args, opts),
+      };
+      const { ports } = fakePorts(gh);
+      expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+      const r = await cli(fx, ports, 'queue', 'run');
+      return { fx, r, merged: pass.calls.some((l) => l.startsWith('pr merge')) };
+    };
+    it('the job passed: merged', async () => {
+      const { merged } = await run([
+        { name: 'ci', bucket: 'pass', workflow: 'CI' },
+        { name: 'e2e', bucket: 'pass', workflow: 'CI' },
+      ]);
+      expect(merged).toBe(true);
+    });
+    it('the job is gone or skipped now: not merged', async () => {
+      for (const checks of [
+        [{ name: 'ci', bucket: 'pass', workflow: 'CI' }],
+        [
+          { name: 'ci', bucket: 'pass', workflow: 'CI' },
+          { name: 'e2e', bucket: 'skipping', workflow: 'CI' },
+        ],
+      ]) {
+        const { r, merged } = await run(checks);
+        expect(merged).toBe(false);
+        expect(JSON.parse(r.out).done[0].reason).toMatch(/approved CI job 1/);
+      }
+    });
   });
   it('a board that cannot be read refuses the merge', async () => {
     const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);

@@ -5,35 +5,57 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.6.6] - 2026-11-03
 
-From an independent review of 0.6.5: a `not_run_here` command could end up run nowhere while every
-gate passed. Not tagged yet; the maintainers tag after the merge.
+From an independent review and an automated security review of 0.6.5 and of this release's first
+draft: a `not_run_here` command could end up run nowhere while every gate passed, and the guard's
+reading of `gh` and `git` options differed from theirs. Not tagged yet; the maintainers tag after
+the merge.
 
 ### Changed
 
 - The reviewer reads CI workflows at the base (`git show origin/<base>:.github/workflows/<file>`),
-  never in the pull request head, which the crew may have edited. A change under
-  `.github/workflows/` is a finding that blocks the approval unless the item holding the pull
-  request is a CI item: one that declares `.github/workflows/` in its `paths` or `touches`.
-  Launch records such a change in the review record and `collect` refuses the approval.
-- A review report names, for each `not_run_here` command, the workflow at the base and the job that
-  runs it (`not_run_here_jobs: [{ command, workflow, job }]`, `job` being the check name).
-  `collect` refuses an approval when a command has no job, or when that job's check on the pull
-  request is missing or `skipping`: a skipped check that is not required counted as green before.
+  never in the pull request head, which the crew may have edited. A change under `.github/`
+  (workflows, actions) is a finding that blocks the approval unless the item holding the pull
+  request is a CI item: one that declares `.github/` in its `paths` or `touches`. Launch reads the
+  change in the owner's checkout with `git diff --name-only --no-renames <base>...<head>` (both
+  sides of a rename count, any case, and a symbolic link at `.github` or below counts too), not
+  from gh's file list, which can be cut short. A change it cannot read counts as one. `collect`
+  refuses the approval then.
+- A review report names, for each `not_run_here` command, the workflow file at the base and the
+  job that runs it (`not_run_here_jobs: [{ command, workflow, job }]`). `collect` checks each in
+  the owner's checkout at the base commit: the job must be in that file (by its `name:`, else its
+  id), one of its `run:` steps must hold the command's program and first argument (a substring
+  test, a heuristic), and every check of that job in that workflow (`gh pr checks --json
+  name,bucket,workflow`; commit statuses do not count) must have passed: a skipped check that is
+  not required counted as green before. A refusal blocks the review item with a note for the lead
+  and stores no approval. An approval stores the jobs (`approved_jobs`), and the merge queue checks
+  them again right before it merges.
 - `collect` prints only the count and the missing services of `not_run_here`, no crew text.
 - When `collect` reuses an open pull request of the branch, it renews its text with
-  `gh pr edit --body-file`, so the `not_run_here` list there is never stale.
+  `gh pr edit --body-file`, so the `not_run_here` list there is never stale. Opening and editing
+  both wait for CI capacity.
 - The pull request text Studio writes starts with Studio's attribution and its `not_run_here`
-  section; the crew's text follows below a line.
-- `not_run_here` fields lose format characters (bidi overrides, zero-width); a field that is only
-  such characters refuses the report, and the board refuses them. An empty YAML value
-  (`not_run_here:`, `lessons:`, `questions:`, `not_run_here_jobs:`) reads as an empty list.
+  section; the crew's text follows below a line. Title and text lose control and format characters
+  (bidi overrides, zero-width).
+- `not_run_here` fields lose format characters; a field that is only such characters refuses the
+  report, and the board refuses them. An empty YAML value (`not_run_here:`, `lessons:`,
+  `questions:`, `not_run_here_jobs:`) reads as an empty list.
+- The crew skill and brief name the one `gh pr create` form the guard allows (below).
 
 ### Security
 
-- The guard refuses `--upload-pack` and `-u` for `git ls-remote`, `fetch`, `pull` and `clone`, as
-  `push` refuses `--receive-pack` and `--exec`.
-- `gh pr create` from a crew needs `--head studio/<id>` of its own item and takes no `-R`/`--repo`
-  and no `--body-file` outside the clone. The guard context names the item for this.
+- The guard no longer models gh's or git's option grammar; it allows listed forms only.
+  - `gh pr create`: exactly `gh pr create --head studio/<id> --base <branch> --title <text>
+    --body-file <file>`, each option once in any order, the file a relative path whose real path is
+    in the clone. Short or grouped options, `=`, `--template`, `--recover`, `--attach`, `-R`,
+    `--body-file -` and `gh pr new` are refused. Of `gh pr` a crew may otherwise only `view`,
+    `checks`, `diff`, `list` and `status`. No gh flag may come before the command words.
+  - `git fetch` and `git pull` take listed options only (quiet, verbose, prune, tags, depth; for
+    pull also rebase, fast-forward, autostash and `-X`/`--strategy-option` with a plain value) and
+    only `origin` as remote. `git ls-remote` is `git ls-remote origin [<ref>...]` with no options.
+  - `git clone`, `fetch-pack`, `upload-pack`, `upload-archive` and `archive --remote` are refused:
+    a crew has its clone. `git remote` is read-only (list, `-v`, `get-url`, `show`), and
+    `git submodule` only `status`.
+- The guard context names the crew's item, for the `--head` check.
 
 ## [0.6.5] - 2026-11-03
 

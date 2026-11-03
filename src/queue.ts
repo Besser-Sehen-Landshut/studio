@@ -261,7 +261,8 @@ export function appendStateLine(stateRoot: string, name: string, line: string): 
   }
 }
 
-type Check = { name: string; bucket: string };
+/** A check as `gh pr checks` reports it; `workflow` is empty or missing for a commit status. */
+export type Check = { name: string; bucket: string; workflow?: string };
 const BUCKETS = new Set(['pass', 'fail', 'pending', 'skipping', 'cancel']);
 const SHA = /^[0-9a-f]{40,64}$/;
 
@@ -277,9 +278,13 @@ function parseChecks(stdout: string): Check[] | undefined {
   const out: Check[] = [];
   for (const c of raw) {
     if (typeof c !== 'object' || c === null) return undefined;
-    const { name, bucket } = c as Record<string, unknown>;
+    const { name, bucket, workflow } = c as Record<string, unknown>;
     if (typeof name !== 'string' || typeof bucket !== 'string') return undefined;
-    out.push({ name, bucket });
+    out.push({
+      name,
+      bucket,
+      ...(typeof workflow === 'string' && workflow !== '' ? { workflow } : {}),
+    });
   }
   return out;
 }
@@ -293,7 +298,15 @@ type ChecksVerdict =
   | { kind: 'none'; reason: string };
 
 export async function readChecks(entry: QueueEntry, gh: Gh): Promise<ChecksVerdict> {
-  const base = ['pr', 'checks', String(entry.pr), '--repo', entry.repo, '--json', 'name,bucket'];
+  const base = [
+    'pr',
+    'checks',
+    String(entry.pr),
+    '--repo',
+    entry.repo,
+    '--json',
+    'name,bucket,workflow',
+  ];
   const all = await gh.run(base);
   const checks = parseChecks(all.stdout);
   if (checks === undefined) {

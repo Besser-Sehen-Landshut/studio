@@ -942,50 +942,101 @@ function writesRemoteRefs(refspec: string): boolean {
   return 'refs/remotes/'.startsWith(prefix) || 'remotes/'.startsWith(prefix);
 }
 
+// Options a crew may give `git fetch` and `git pull`, each a whole word. Anything else is refused:
+// fetch options are a grammar of their own (`--upload-pack`, `-u` as `--update-head-ok`, groups),
+// so they are listed, not parsed.
+const FETCH_FLAGS = new Set([
+  '-q',
+  '--quiet',
+  '-v',
+  '--verbose',
+  '-p',
+  '--prune',
+  '-t',
+  '--tags',
+  '--no-tags',
+  '--dry-run',
+  '--unshallow',
+  '--progress',
+  '--no-progress',
+]);
+const PULL_FLAGS = new Set([
+  ...FETCH_FLAGS,
+  '-r',
+  '--rebase',
+  '--rebase=true',
+  '--rebase=false',
+  '--rebase=merges',
+  '--no-rebase',
+  '--ff',
+  '--no-ff',
+  '--ff-only',
+  '--autostash',
+  '--no-autostash',
+  '--no-edit',
+  '--stat',
+  '--no-stat',
+]);
+const COUNT_FLAG = /^--(depth|deepen)=[1-9]\d{0,6}$/;
+// A merge strategy option such as `ours`, `theirs` or `subtree=<path>`: plain words only.
+const STRATEGY_OPTION = /^[A-Za-z][A-Za-z0-9-]*(=[A-Za-z0-9._/-]+)?$/;
+
 /**
- * `--upload-pack` (and `-u` of clone, ls-remote and pull) names a program that git runs for the
- * transfer, like push's `--receive-pack`. `valueFlags` are the short options of the subcommand
- * that take a value, so `-ou` is the remote name `u`, not `-u`.
+ * `git fetch` and `git pull` for a crew: listed options only, the remote is `origin` (or left out),
+ * and no refspec writes below `refs/remotes/`, so `origin/*` stays what the owner's fetch put there.
  */
-function checkUploadPack(sub: string, args: string[], valueFlags: string): void {
-  for (const a of args) {
-    if (a === '--') return;
-    if (a.startsWith('--')) {
-      const name = a.split('=')[0] as string;
-      // git accepts unambiguous prefixes of long options
-      if (name.length >= 3 && '--upload-pack'.startsWith(name)) {
-        deny(`git ${sub} ${name} is not allowed`);
+function checkFetchPull(sub: 'fetch' | 'pull', rawArgs: string[]): void {
+  const args = rawArgs.flatMap((a) => braceExpand(a));
+  const pos: string[] = [];
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k] as string;
+    if (unresolvedWord(a))
+      deny(`unresolved git ${sub} argument: ${a.replaceAll(SUBST, '<runtime>')}`);
+    if (!a.startsWith('-')) {
+      pos.push(a);
+      continue;
+    }
+    if ((sub === 'fetch' ? FETCH_FLAGS : PULL_FLAGS).has(a) || COUNT_FLAG.test(a)) continue;
+    if (sub === 'pull') {
+      // -X<option>, -X <option>, --strategy-option=<option>, --strategy-option <option>
+      let opt: string | undefined;
+      if (a === '-X' || a === '--strategy-option') opt = args[++k] ?? '';
+      else if (a.startsWith('--strategy-option=')) opt = a.slice(18);
+      else if (a.startsWith('-X')) opt = a.slice(2);
+      if (opt !== undefined) {
+        if (!STRATEGY_OPTION.test(opt)) deny(`git pull strategy option "${opt}" is not allowed`);
+        continue;
       }
-    } else if (/^-[^-]/.test(a)) {
-      for (const ch of a.slice(1)) {
-        if (ch === 'u') deny(`git ${sub} -u is not allowed (it names an upload-pack program)`);
-        if (valueFlags.includes(ch)) break;
-      }
+    }
+    deny(`git ${sub} ${a.split('=')[0]} is not allowed`);
+  }
+  if (pos.length > 0 && pos[0] !== 'origin') {
+    deny(`git ${sub} only from origin, not "${pos[0]}"`);
+  }
+  for (const ref of pos.slice(1)) {
+    if (writesRemoteRefs(ref.replace(/^\+/, ''))) {
+      deny(`git ${sub} into refs/remotes/ is not allowed (origin/* is set by the owner)`);
     }
   }
 }
 
-function checkFetch(rawArgs: string[]): void {
+/** `git ls-remote origin [<ref>...]`: no options, no other remote. */
+function checkLsRemote(rawArgs: string[]): void {
   const args = rawArgs.flatMap((a) => braceExpand(a));
-  for (const a of args) {
-    if (unresolvedWord(a)) {
-      deny(`unresolved git fetch argument: ${a.replaceAll(SUBST, '<runtime>')}`);
-    }
+  if (args.some((a) => unresolvedWord(a) || a.startsWith('-'))) {
+    deny('git ls-remote takes no options: git ls-remote origin [<ref>...]');
   }
-  for (let k = 0; k < args.length; k++) {
-    const a = args[k] as string;
-    const refmap = a === '--refmap' ? args[k + 1] : a.startsWith('--refmap=') ? a.slice(9) : null;
-    if (refmap !== null) {
-      // a --refmap that is not a plain refspec cannot be told from one that writes remote refs
-      if (refmap === undefined || writesRemoteRefs(refmap.replace(/^\+/, ''))) {
-        deny('git fetch --refmap into refs/remotes/ is not allowed');
-      }
-      continue;
-    }
-    if (!a.startsWith('-') && writesRemoteRefs(a.replace(/^\+/, ''))) {
-      deny('git fetch into refs/remotes/ is not allowed (origin/* is set by the owner)');
-    }
+  if (args[0] !== 'origin') deny('git ls-remote only for origin: git ls-remote origin [<ref>...]');
+}
+
+/** Read-only `git remote`: list, `-v`, `get-url`, `show`. Changing a remote is not for crews. */
+function checkRemote(args: string[]): void {
+  const [first] = args;
+  if (first === undefined || (args.length === 1 && (first === '-v' || first === '--verbose'))) {
+    return;
   }
+  if (first === 'get-url' || first === 'show') return;
+  deny(`git remote ${first} is not allowed (crews never change remotes)`);
 }
 
 function checkGit(env: Env, args: string[], state: State): void {
@@ -1015,13 +1066,35 @@ function checkGit(env: Env, args: string[], state: State): void {
   if (sub === undefined) return;
   if (unresolvedWord(sub)) deny('unresolved command word (git subcommand)');
   const rest = args.slice(i + 1);
-  const expanded = rest.flatMap((a) => braceExpand(a));
-  if (sub === 'fetch' || sub === 'pull') checkUploadPack(sub, expanded, 'oj');
-  else if (sub === 'clone') checkUploadPack(sub, expanded, 'obcj');
-  else if (sub === 'ls-remote') checkUploadPack(sub, expanded, 'o');
   if (sub === 'push') checkPush(env, rest);
-  else if (sub === 'fetch' || sub === 'pull') checkFetch(rest);
-  else if (
+  else if (sub === 'fetch' || sub === 'pull') checkFetchPull(sub, rest);
+  else if (sub === 'ls-remote') checkLsRemote(rest);
+  else if (sub === 'remote') checkRemote(rest);
+  else if (sub === 'submodule') {
+    // update, add and sync fetch from URLs a pull request can write into .gitmodules
+    const all = rest.flatMap((x) => braceExpand(x));
+    if (!(all.length === 0 || (all.length === 1 && all[0] === 'status'))) {
+      deny('git submodule is allowed only as git submodule status');
+    }
+  } else if (sub === 'archive') {
+    const all = rest.flatMap((x) => braceExpand(x));
+    if (
+      all.some((a) => {
+        const name = a.split('=')[0] as string;
+        return (
+          (name.length >= 3 && '--remote'.startsWith(name)) ||
+          (name.length >= 3 && '--exec'.startsWith(name))
+        );
+      })
+    ) {
+      deny('git archive --remote is not allowed');
+    }
+  } else if (
+    // A crew has its clone: cloning or fetching packs reaches any URL with any options.
+    sub === 'clone' ||
+    sub === 'fetch-pack' ||
+    sub === 'upload-pack' ||
+    sub === 'upload-archive' ||
     sub === 'send-pack' ||
     sub === 'http-push' ||
     sub === 'subtree' ||
@@ -1041,9 +1114,6 @@ function checkGit(env: Env, args: string[], state: State): void {
     ) {
       deny('git config is allowed for reads only (--get, --get-all, --get-regexp, --list)');
     }
-  } else if (sub === 'clone') {
-    const pos = positionals(rest);
-    if (pos.length >= 2) checkWritePath(env, pos[pos.length - 1] as string, state.cwd, 'git clone');
   }
 }
 
@@ -1059,58 +1129,67 @@ function checkInsideDir(env: Env, dir: string, state: State, why: string): void 
 const GH_BLOCKED_TOPICS = new Set(['release', 'secret', 'auth', 'alias']);
 const GH_RUN_VALUE_FLAGS = ['--ref', '-r', '-f', '--raw-field', '-F', '--field', ...GH_VALUE_FLAGS];
 
+const PR_CREATE_OPTIONS = ['--head', '--base', '--title', '--body-file'];
+const BRANCH_NAME = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/;
+
 /**
- * `gh pr create` from a crew: only for its own branch, in the clone's repository, with a body file
- * inside the clone. `--head`/`-H` names exactly `studio/<item>`; `-R`/`--repo` are refused.
+ * `gh pr create` from a crew has one form: `gh pr create --head studio/<id> --base <branch>
+ * --title <text> --body-file <file>`, each option once, in any order, nothing else. The body file
+ * is a relative path whose real path lies inside the clone. gh's own flag grammar (short groups,
+ * `=`, aliases) is never parsed: anything but this form is refused.
  */
 function checkPrCreate(env: Env, args: string[], cwd: string | null): void {
+  const FORM = 'gh pr create --head studio/<id> --base <branch> --title <text> --body-file <file>';
   if (env.item === undefined) deny('gh pr create needs the item in the guard context');
-  const heads: string[] = [];
-  for (let k = 0; k < args.length; k++) {
-    const a = args[k] as string;
-    if (a === '--') break;
-    if (a === '-R' || a === '--repo' || a.startsWith('--repo=') || /^-R./.test(a)) {
-      deny(
-        'gh pr create with -R/--repo is not allowed: the pull request goes to the clone repository',
-      );
-    }
-    let head: string | undefined;
-    let file: string | undefined;
-    if (a === '--head' || a === '-H') head = args[++k] ?? '';
-    else if (a.startsWith('--head=')) head = a.slice(7);
-    else if (/^-H./.test(a)) head = a.slice(2);
-    else if (a === '--body-file' || a === '-F') file = args[++k] ?? '';
-    else if (a.startsWith('--body-file=')) file = a.slice(12);
-    else if (/^-F./.test(a)) file = a.slice(2);
-    if (head !== undefined) heads.push(head);
-    if (file !== undefined && file !== '-') {
-      if (unresolved(file) || file.includes('$') || file.startsWith('~') || file === '') {
-        deny('unresolvable gh pr create --body-file');
-      }
-      if (cwd === null && !isAbsolute(file)) deny('relative --body-file after unresolvable cd');
-      if (!isInside(env, resolveReal(file, cwd ?? env.wt))) {
-        deny(`gh pr create --body-file outside the clone: ${file}`);
-      }
-    }
+  if (args[0] !== 'pr' || args[1] !== 'create' || args.length !== 10) deny(`use exactly: ${FORM}`);
+  const got = new Map<string, string>();
+  for (let k = 2; k < args.length; k += 2) {
+    const flag = args[k] as string;
+    const value = args[k + 1] as string;
+    if (!PR_CREATE_OPTIONS.includes(flag) || got.has(flag)) deny(`use exactly: ${FORM}`);
+    if (value.startsWith('-')) deny(`gh pr create ${flag} value may not start with "-"`);
+    got.set(flag, value);
   }
   const own = `studio/${env.item}`;
-  if (heads.length !== 1 || heads[0] !== own) {
-    deny(`gh pr create needs --head ${own} (the item's own branch)`);
+  if (got.get('--head') !== own) deny(`gh pr create needs --head ${own} (the item's own branch)`);
+  const base = got.get('--base') as string;
+  if (
+    unresolvedWord(base) ||
+    base.includes('$') ||
+    !BRANCH_NAME.test(base) ||
+    base.includes('..')
+  ) {
+    deny('gh pr create --base needs a plain branch name');
+  }
+  const file = got.get('--body-file') as string;
+  if (unresolvedWord(file) || /[$`~*?[]/.test(file) || isAbsolute(file) || file === '') {
+    deny('gh pr create --body-file needs a plain relative path inside the clone');
+  }
+  if (cwd === null) deny('gh pr create --body-file after an unresolvable cd');
+  if (!isInside(env, resolveReal(file, cwd as string))) {
+    deny(`gh pr create --body-file outside the clone: ${file}`);
   }
 }
 
+// What a crew may do with gh pr: read, and open its own pull request.
+const GH_PR_ALLOWED = new Set(['view', 'checks', 'diff', 'list', 'status', 'create']);
+
 function checkGh(env: Env, args: string[], cwd: string | null): void {
-  const words: string[] = [];
-  for (let k = 0; k < args.length; k++) {
-    const a = args[k] as string;
-    if (GH_VALUE_FLAGS.includes(a)) k++;
-    else if (!a.startsWith('-')) words.push(a);
+  // The command words come first, literally: no gh flag before them. Locating them behind flags
+  // would mean modelling cobra's parser, and crews need no flag there.
+  if (args[0]?.startsWith('-')) deny('gh flags before the command are not allowed');
+  if (args[0] !== 'api' && args[1]?.startsWith('-')) {
+    deny('gh flags before the subcommand are not allowed');
   }
+  const words = args.slice(0, 2);
   const [g0, g1] = words;
   for (const w of [g0, g1]) {
     if (w !== undefined && unresolvedWord(w)) deny('unresolved command word (gh subcommand)');
   }
   if (g0 === 'pr' && g1 === 'merge') deny('gh pr merge is not allowed (merging is owner-only)');
+  if (g0 === 'pr' && g1 !== undefined && !GH_PR_ALLOWED.has(g1)) {
+    deny(`gh pr ${g1} is not allowed (crews read pull requests and open their own)`);
+  }
   if (g0 === 'pr' && g1 === 'create') checkPrCreate(env, args, cwd);
   if (g0 && GH_BLOCKED_TOPICS.has(g0)) deny(`gh ${g0} is not allowed`);
   if (g0 === 'workflow' && g1 === 'run') {

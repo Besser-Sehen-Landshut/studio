@@ -556,7 +556,7 @@ export function writeBrief(
                 `- Do not open the pull request, and do not run gh at all: it cannot verify TLS in this sandbox. Give \`pr_title: "${id}: <summary>"\` in the report and write the pull request text as the report body; Studio opens the pull request from your pushed branch.`,
               ]
             : [
-                `- Open the pull request with \`gh pr create --head studio/${id} --title "${id}: <summary>" --body-file <file>\`. If the report lists not_run_here commands, the pull request text lists them too.`,
+                `- Open the pull request with exactly this form, which is the only one the guard allows: \`gh pr create --head studio/${id} --base main --title "${id}: <summary>" --body-file <file>\`, with <file> a relative path inside the checkout. If the report lists not_run_here commands, the pull request text lists them too.`,
               ]),
         ]
       : []),
@@ -1137,6 +1137,10 @@ async function launchCrewLocked(
     ports,
     readBoard: () => loadBoard(projectDir),
     ...(launcher.capabilitiesDir === undefined ? {} : { dir: launcher.capabilitiesDir }),
+    checkout: {
+      dir: projectDir,
+      remote: item.repo === config.primaryRepo ? 'origin' : githubHttpsUrl(item.repo),
+    },
   });
   readRoleMemory(projectDir, item.role);
   const missingSkill = firstMissingSkill(claudeConfigDir, [
@@ -1302,7 +1306,7 @@ async function launchCrewLocked(
         ...board,
         items: board.items.map((i) => {
           if (`${i.repo}#${i.pr}` !== reviewing || i.type === 'review') return i;
-          const { approvedHead: _head, approvedBase: _base, ...rest } = i;
+          const { approvedHead: _head, approvedBase: _base, approvedJobs: _jobs, ...rest } = i;
           return rest;
         }),
       });
