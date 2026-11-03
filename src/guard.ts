@@ -1423,9 +1423,12 @@ function checkReadScope(env: Env, tok: string, base: string, tool: string): void
   if (tok.startsWith('~') || /^\s|\s$|\p{Cc}/u.test(tok)) {
     deny(`${tool}: unresolvable path: ${JSON.stringify(tok)}`);
   }
-  const real = resolveReal(tok, base);
-  if (!isInside(env, real) && !isUnder(env.readRoots, real) && !isClaudeFile(env, real)) {
-    deny(`${tool} outside this crew's files: ${tok}`);
+  // A tool may drop `..` before it follows a link, or after: both forms must stay in the area.
+  const written = normalize(isAbsolute(tok) ? tok : join(base, tok));
+  for (const p of [written, resolveReal(tok, base)]) {
+    if (!isUnder(env.readRoots, p) && !isClaudeFile(env, p)) {
+      deny(`${tool} outside this crew's files: ${tok}`);
+    }
   }
 }
 
@@ -1522,7 +1525,7 @@ function check(input: GuardInput, ctx: GuardContext): void {
     protectedReal: protectedPaths
       .flatMap((p) => [p, resolveReal(p, '/')])
       .map((p) => p.toLowerCase()),
-    readRoots: (ctx.readRoots ?? []).map((p) => resolveReal(p, '/')),
+    readRoots: [ctx.worktree, ...(ctx.readRoots ?? [])].flatMap((p) => [p, resolveReal(p, '/')]),
     skillRoots: (ctx.skillRoots ?? []).flatMap((p) => [p, resolveReal(p, '/')]),
     toolResultRes: (ctx.toolResultGlobs ?? []).map(fileGlobToRegExp),
     hardSecretRes: ctx.secretGlobs
@@ -1535,12 +1538,14 @@ function check(input: GuardInput, ctx: GuardContext): void {
   if (typeof toolName !== 'string' || !CREW_TOOLS.has(toolName)) {
     deny(`tool not allowed for crew: ${String(toolName)}`);
   }
-  if (toolName === 'Bash' || typeof toolInput.command === 'string') {
+  if (toolName === 'Bash') {
     const command = toolInput.command;
     if (typeof command !== 'string') deny(`${toolName} call without a command`);
     checkBash(env, command as string, cwd, 0);
     return;
   }
+  // Only Bash has this field; on another tool it is not what the checks below look at.
+  if (toolInput.command !== undefined) deny(`${toolName} call with a command`);
 
   const writeKey = WRITE_TOOLS[toolName];
   if (writeKey !== undefined) {
@@ -1559,14 +1564,16 @@ function check(input: GuardInput, ctx: GuardContext): void {
       if (typeof v === 'string' && v !== '') checkSecretPath(env, v, cwd);
     }
   } else if (toolName === 'Grep' || toolName === 'Glob') {
-    const given = typeof toolInput.path === 'string' ? toolInput.path : '';
+    if (toolInput.path !== undefined && typeof toolInput.path !== 'string') {
+      deny(`${toolName} call with a path that is not a string`);
+    }
+    const given = (toolInput.path ?? '') as string;
     checkReadScope(env, given === '' ? '.' : given, cwd, toolName);
     if (toolName === 'Grep') {
       checkSearch(env, toolInput.path, [toolInput.glob], cwd);
     } else {
-      if (typeof toolInput.pattern === 'string') {
-        checkGlobScope(env, toolInput.pattern, resolveReal(given || '.', cwd), toolName);
-      }
+      if (typeof toolInput.pattern !== 'string') deny('Glob call without a pattern');
+      checkGlobScope(env, toolInput.pattern as string, resolveReal(given || '.', cwd), toolName);
       checkSearch(env, toolInput.path, [toolInput.pattern], cwd);
     }
   }

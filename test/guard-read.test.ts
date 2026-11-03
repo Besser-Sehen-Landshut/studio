@@ -183,6 +183,87 @@ describe('read tools stay in the crew area', () => {
     });
   });
 
+  describe('a tool may normalise `..` before it follows a link', () => {
+    it('both the written and the real path must be allowed', () => {
+      mkdirSync(join(wt, 'sub', 'deep'), { recursive: true });
+      symlinkSync(join(wt, 'sub', 'deep'), join(wt, 'inner'));
+      try {
+        // Written form leaves the clone (<root>/wt-other/x), real form stays in it (<wt>/wt-other/x).
+        expect(read(`${wt}/inner/../../wt-other/x`)).toBe('deny');
+        expect(decide('Grep', { pattern: 'x', path: `${wt}/inner/../../wt-other` })).toBe('deny');
+        expect(decide('Glob', { pattern: '*', path: `${wt}/inner/../../wt-other` })).toBe('deny');
+        expect(decide('Glob', { pattern: `${wt}/inner/../../wt-other/*` })).toBe('deny');
+        // Written form stays inside the clone, real form leaves it.
+        expect(read(`${wt}/link/../a.ts`)).toBe('deny');
+        expect(decide('Grep', { pattern: 'x', path: `${wt}/link/../sub` })).toBe('deny');
+        expect(decide('Glob', { pattern: `${wt}/link/../*` })).toBe('deny');
+        expect(decide('Glob', { pattern: '*', path: `${wt}/link/../sub` })).toBe('deny');
+      } finally {
+        rmSync(join(wt, 'inner'));
+      }
+    });
+    it('a link that stays inside on both forms is fine', () => {
+      symlinkSync(join(wt, 'sub'), join(wt, 'inner'));
+      try {
+        expect(read(`${wt}/inner/a.ts`)).toBe('allow');
+      } finally {
+        rmSync(join(wt, 'inner'));
+      }
+    });
+    it('a listed root works under its written and its real spelling', () => {
+      symlinkSync(state, join(root, 'state-link'));
+      const viaLink = join(root, 'state-link', 'briefs', 'APP-1.md');
+      const linked: GuardContext = { ...ctx, readRoots: [viaLink] };
+      for (const file_path of [viaLink, brief]) {
+        expect(
+          evaluateGuard({ toolName: 'Read', toolInput: { file_path } }, linked).decision,
+          file_path,
+        ).toBe('allow');
+      }
+    });
+  });
+
+  describe('fields that do not fit the tool', () => {
+    it.each([
+      'Read',
+      'Edit',
+      'Write',
+      'MultiEdit',
+      'NotebookEdit',
+      'Grep',
+      'Glob',
+      'Skill',
+      'TodoWrite',
+      'Task',
+      'Agent',
+    ])('a command on %s is denied', (name) => {
+      const r = decide(name, {
+        command: 'ls',
+        file_path: join(wt, 'a.ts'),
+        notebook_path: join(wt, 'a.ipynb'),
+        pattern: '*',
+      });
+      expect(r).toBe('deny');
+    });
+    it('a command cannot carry a Read past the read rule', () => {
+      expect(decide('Read', { command: 'ls', file_path: '/etc/hosts' })).toBe('deny');
+    });
+    it('Bash needs a string command', () => {
+      expect(decide('Bash', {})).toBe('deny');
+      expect(decide('Bash', { command: 1 })).toBe('deny');
+    });
+    it.each<[string, Record<string, unknown>]>([
+      ['Grep', { pattern: 'x', path: ['/etc'] }],
+      ['Grep', { pattern: 'x', path: 1 }],
+      ['Grep', { pattern: 'x', path: null }],
+      ['Glob', { pattern: '*', path: { a: 1 } }],
+      ['Glob', { pattern: ['/etc/*'] }],
+      ['Glob', {}],
+    ])('%s %j is denied', (name, input) => {
+      expect(decide(name, input, wt)).toBe('deny');
+    });
+  });
+
   it('a relative path counts from the working directory', () => {
     expect(read('sub/a.ts', wt)).toBe('allow');
     expect(read('../elsewhere/a.ts', wt)).toBe('deny');
