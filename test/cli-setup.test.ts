@@ -158,6 +158,15 @@ describe('studio setup ci', () => {
     expect(r.out).not.toMatch(/[\u001b‮]/);
   });
 
+  it('warns, without failing, about a workflow that every crew branch push starts', async () => {
+    const fx = fixture({ workflows: { 'ci.yml': WORKFLOW('[self-hosted, linux]') } });
+    const r = await cli(fx, 'setup', 'ci', '--json');
+    expect(r.code).toBe(0);
+    const j = JSON.parse(r.out);
+    expect(j.errors).toEqual([]);
+    expect(j.warnings).toEqual([expect.stringMatching(/ci\.yml: runs on push to crew branches/)]);
+  });
+
   it('fails clearly without a readable studio.yaml or a valid primary_repo, without calling gh', async () => {
     const missing = fixture({ yaml: null });
     const a = await cli(missing, 'setup', 'ci');

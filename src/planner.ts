@@ -6,7 +6,10 @@ export type Capacity = {
   ciBusy: number;
   ciTotal: number;
   hostLoad: number;
+  /** The merge rule: CI busy count, GitHub-hosted limit and host load all within limits. */
   ok: boolean;
+  /** Host load alone within limits (`host_load_max`, or the cores with `shared_host`). */
+  hostOk: boolean;
   /** Why CI could not be read (then everything counts as busy). */
   error?: string;
   /** `runners: both` only: GitHub-hosted runs in progress or queued, and the configured limit. */
@@ -20,7 +23,7 @@ export type Plan = {
   assign: WorkItem[];
   /** Candidates that cannot be assigned for a reason other than plain limits. */
   blocked: { id: string; reason: string }[];
-  /** Candidates that are fine but wait for WIP, CI capacity or an overlap to clear. Informational. */
+  /** Candidates that are fine but wait for WIP, host load or an overlap to clear. Informational. */
   deferred: { id: string; reason: string }[];
 };
 
@@ -100,8 +103,10 @@ function cycleTainted(items: WorkItem[]): Set<string> {
  * Priority: LOWER number = higher priority (P1 before P2); ties by natural id order.
  * Only `ready` items are candidates. `blocked` lists candidates that cannot run for a non-limit
  * reason (not ready, cycle, unknown dependency, role not configured, owner only, waiting on
- * unmerged dependencies). Candidates held back only by role WIP, CI capacity or an overlap go to
- * `deferred`, which callers may ignore. When several blocked reasons apply, the first of this order wins:
+ * unmerged dependencies). Candidates held back only by role WIP, host load or an overlap go to
+ * `deferred`, which callers may ignore. CI runner capacity does not hold a launch: a crew builds
+ * and tests in its own clone, and Studio gates CI load where it starts it, when `collect` opens
+ * the pull request and in the merge queue. When several blocked reasons apply, the first of this order wins:
  * not ready, dependency cycle, unknown dependency, owner only, role not configured, waiting.
  * With `hold` (no crew credential available) nothing is assigned; every candidate is deferred.
  * `credentialSlots` is how many more crews the credentials allow (per-label limits); at 0 every
@@ -147,7 +152,6 @@ export function planAssignments(
     }
     return roleSlots.get(role) as number;
   };
-  let buildSlots = capacity.ok ? Math.max(0, config.ci.capacity.mergeMaxBusy - capacity.ciBusy) : 0;
 
   const active = board.items.filter((i) => ACTIVE.includes(i.status));
   const assign: WorkItem[] = [];
@@ -160,12 +164,11 @@ export function planAssignments(
     else if (credentialSlots !== undefined && credentialSlots <= 0) {
       deferred.push({ id: item.id, reason: 'credential limit' });
     } else if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: 'role wip full' });
-    else if (isBuild && buildSlots <= 0) deferred.push({ id: item.id, reason: 'ci capacity' });
+    else if (isBuild && !capacity.hostOk) deferred.push({ id: item.id, reason: 'host load' });
     else if (clash) deferred.push({ id: item.id, reason: `overlaps ${clash.id}` });
     else {
       assign.push(item);
       roleSlots.set(item.role, slotsFor(item.role) - 1);
-      if (isBuild) buildSlots -= 1;
       if (credentialSlots !== undefined) credentialSlots -= 1;
     }
   }

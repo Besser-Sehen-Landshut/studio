@@ -3,6 +3,29 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.4] - 2026-11-03
+
+Not tagged yet; the maintainers tag after the merge.
+
+### Changed
+
+- Launches no longer wait for CI runners. A crew builds and tests in its own clone and puts no load
+  on CI until a pull request exists, so busy runners kept crews idle for nothing. A fix, feature or
+  chore still waits for the host load (`host_load_max`, or the cores with `shared_host`), now with
+  the reason `host load` instead of `ci capacity`; the CI busy count no longer limits how many
+  build items a plan assigns. A CI read error no longer holds launches either.
+- `collect` checks CI capacity before it opens a crew's pull request, with the merge queue's rule:
+  at or below `merge_max_busy`, twice `check_twice_seconds` apart, a read error counting as busy.
+  Without room it opens nothing, keeps the item's status and branch, notes
+  `pr held: ci capacity (busy N of M, limit L)` and exits 1; a later `collect` opens the pull
+  request once. An open pull request of the branch is still taken at once.
+- Capacity snapshots (`studio plan`, `state.json`) carry `hostOk`, the host part of `ok`.
+
+### Added
+
+- `studio setup ci` warns about a workflow whose `push` trigger matches crew branches
+  (`studio/<id>`): every crew push would then start CI that no capacity check sees.
+
 ## [0.6.3] - 2026-11-03
 
 Fixes from the second real crew run, a review. Not tagged yet; the maintainers tag after the merge.

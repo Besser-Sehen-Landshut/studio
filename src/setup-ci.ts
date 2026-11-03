@@ -1,5 +1,6 @@
 import { parse } from 'yaml';
 import type { StudioConfig } from './config.js';
+import { matchGlob } from './glob.js';
 import type { Gh } from './ports.js';
 
 export type DetectedRunner = { name: string; labels: string[]; online: boolean; busy: boolean };
@@ -440,4 +441,63 @@ export function lintWorkflows(
     }
   }
   return { errors, warnings };
+}
+
+/** A crew branch, `studio/<id>`, for matching branch filters; `x-1` stands for any id. */
+const CREW_BRANCH = 'studio/x-1';
+/** Filter characters whose meaning `matchGlob` shares with GitHub; anything else is unknown. */
+const PLAIN_FILTER = /^[A-Za-z0-9._/*?-]+$/;
+
+/** The filter certainly matches every crew branch. */
+function matchesEveryCrewBranch(pattern: unknown): boolean {
+  return (
+    typeof pattern === 'string' && PLAIN_FILTER.test(pattern) && matchGlob(pattern, CREW_BRANCH)
+  );
+}
+
+/** The filter may match a crew branch: it names `studio/`, matches one, or cannot be read. */
+function mayMatchCrewBranch(pattern: unknown): boolean {
+  if (typeof pattern !== 'string' || !PLAIN_FILTER.test(pattern)) return true;
+  return pattern.startsWith('studio/') || matchGlob(pattern, CREW_BRANCH);
+}
+
+const filterList = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
+
+/** Whether a push to some crew branch may start a workflow with these triggers. */
+function pushRunsOnCrewBranches(on: unknown): boolean {
+  if (!triggers(on).has('push')) return false;
+  const push = isRecord(on) ? on.push : undefined;
+  if (!isRecord(push)) return true;
+  if ('branches' in push) {
+    // In order, the last matching filter wins; `!` excludes.
+    let runs = false;
+    for (const p of filterList(push.branches)) {
+      if (typeof p === 'string' && p.startsWith('!')) {
+        if (matchesEveryCrewBranch(p.slice(1))) runs = false;
+      } else if (mayMatchCrewBranch(p)) runs = true;
+    }
+    return runs;
+  }
+  if ('branches-ignore' in push) {
+    return !filterList(push['branches-ignore']).some(matchesEveryCrewBranch);
+  }
+  // Only tag filters: a branch push does not start it.
+  return !('tags' in push || 'tags-ignore' in push);
+}
+
+/**
+ * Workflows that a crew's own `git push` of `studio/<id>` would start. Studio gates the CI load it
+ * causes itself (opening the pull request, merging), but not a crew's branch push, so such a
+ * trigger puts load on CI that no capacity check sees. Unparsable files are left to the lint.
+ */
+export function crewPushWarnings(files: WorkflowFile[]): string[] {
+  const warnings: string[] = [];
+  for (const f of files) {
+    const p = parseWorkflow(f.text);
+    if (!p.ok || !pushRunsOnCrewBranches(p.doc.on)) continue;
+    warnings.push(
+      `${clean(f.path)}: runs on push to crew branches (studio/<id>), so every crew push starts CI that Studio's capacity check does not hold back; limit on.push.branches to the default branch and let pull_request run the checks`,
+    );
+  }
+  return warnings;
 }

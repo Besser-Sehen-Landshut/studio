@@ -41,7 +41,7 @@ describe('README quick start', () => {
     const plan = planAssignments(
       board,
       config,
-      { ciBusy: 0, ciTotal: config.ci.capacity.total, hostLoad: 0, ok: true },
+      { ciBusy: 0, ciTotal: config.ci.capacity.total, hostLoad: 0, ok: true, hostOk: true },
       {},
     );
     expect(plan.assign.map((i) => i.id)).toEqual(['APP-1']);
@@ -87,7 +87,7 @@ describe('README quick start', () => {
     expect(readme).toMatch(/notify: \{ channel, command \}/);
     expect(readme).toContain('`blocks.json` in the owner root');
     expect(readme).toContain('.legacy-');
-    expect(readme).toMatch(/Status: 0\.6\.3/);
+    expect(readme).toMatch(/Status: 0\.6\.4/);
     expect(readme).not.toMatch(/crews cannot write the state base/);
     expect(readme).not.toMatch(/blocks?[^.]{0,40}per project/i);
   });

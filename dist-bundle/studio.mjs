@@ -30163,6 +30163,45 @@ function lintWorkflows(files, detect, expectedGroup) {
   }
   return { errors, warnings };
 }
+var CREW_BRANCH = "studio/x-1";
+var PLAIN_FILTER = /^[A-Za-z0-9._/*?-]+$/;
+function matchesEveryCrewBranch(pattern) {
+  return typeof pattern === "string" && PLAIN_FILTER.test(pattern) && matchGlob(pattern, CREW_BRANCH);
+}
+function mayMatchCrewBranch(pattern) {
+  if (typeof pattern !== "string" || !PLAIN_FILTER.test(pattern)) return true;
+  return pattern.startsWith("studio/") || matchGlob(pattern, CREW_BRANCH);
+}
+var filterList = (value) => Array.isArray(value) ? value : [value];
+function pushRunsOnCrewBranches(on6) {
+  if (!triggers(on6).has("push")) return false;
+  const push = isRecord(on6) ? on6.push : void 0;
+  if (!isRecord(push)) return true;
+  if ("branches" in push) {
+    let runs = false;
+    for (const p of filterList(push.branches)) {
+      if (typeof p === "string" && p.startsWith("!")) {
+        if (matchesEveryCrewBranch(p.slice(1))) runs = false;
+      } else if (mayMatchCrewBranch(p)) runs = true;
+    }
+    return runs;
+  }
+  if ("branches-ignore" in push) {
+    return !filterList(push["branches-ignore"]).some(matchesEveryCrewBranch);
+  }
+  return !("tags" in push || "tags-ignore" in push);
+}
+function crewPushWarnings(files) {
+  const warnings = [];
+  for (const f of files) {
+    const p = parseWorkflow(f.text);
+    if (!p.ok || !pushRunsOnCrewBranches(p.doc.on)) continue;
+    warnings.push(
+      `${clean(f.path)}: runs on push to crew branches (studio/<id>), so every crew push starts CI that Studio's capacity check does not hold back; limit on.push.branches to the default branch and let pull_request run the checks`
+    );
+  }
+  return warnings;
+}
 
 // src/setup-ci-command.ts
 var EXPECTED_GROUP = "ci-${{ github.head_ref || github.ref_name }}";
@@ -30306,7 +30345,7 @@ async function runSetupCi(o2) {
   const lint = lintWorkflows(wf.files, detection, EXPECTED_GROUP);
   const allNotes = [...notes, ...proposal.notes];
   const errors = [...proposal.errors, ...wf.errors, ...lint.errors];
-  const warnings = lint.warnings;
+  const warnings = [...lint.warnings, ...crewPushWarnings(wf.files)];
   let written = false;
   let refused;
   if (o2.write) {
@@ -31143,10 +31182,20 @@ async function githubHostedBusy(config2, gh, timeoutMs) {
   const queued = await runCount(config2, gh, "queued", timeoutMs);
   return running + queued;
 }
+function hostLoadOk(config2, host, hostLoad) {
+  const { hostLoadMax } = config2.ci.capacity;
+  if (hostLoadMax !== void 0) return hostLoad <= hostLoadMax;
+  if (config2.ci.sharedHost === true) {
+    const cores = host.cpuCount();
+    return Number.isFinite(cores) && cores > 0 && hostLoad <= cores;
+  }
+  return true;
+}
 async function readCapacity(config2, ports, options = {}) {
-  const { total, mergeMaxBusy, hostLoadMax } = config2.ci.capacity;
-  const { sharedHost, githubHostedLimit } = config2.ci;
+  const { total, mergeMaxBusy } = config2.ci.capacity;
+  const { githubHostedLimit } = config2.ci;
   const hostLoad = ports.host.loadAvg1();
+  const hostOk = hostLoadOk(config2, ports.host, hostLoad);
   const mode = config2.ci.runners;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let selfBusy = 0;
@@ -31163,11 +31212,11 @@ async function readCapacity(config2, ports, options = {}) {
     await withTimeout(read3(), timeoutMs);
   } catch (err) {
     const error62 = (err instanceof Error ? err.message : String(err)).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
-    return { ciBusy: total, ciTotal: total, hostLoad, ok: false, error: error62 };
+    return { ciBusy: total, ciTotal: total, hostLoad, ok: false, hostOk, error: error62 };
   }
   const ciBusy = Math.min(total, mode === "github-hosted" ? hostedBusy : selfBusy);
   let ok = ciBusy <= mergeMaxBusy;
-  const out = { ciBusy, ciTotal: total, hostLoad, ok };
+  const out = { ciBusy, ciTotal: total, hostLoad, ok, hostOk };
   if (mode === "both") {
     out.githubHostedBusy = hostedBusy;
     if (githubHostedLimit === void 0) out.warning = GITHUB_HOSTED_UNLIMITED;
@@ -31176,19 +31225,18 @@ async function readCapacity(config2, ports, options = {}) {
       ok = ok && hostedBusy <= githubHostedLimit;
     }
   }
-  if (hostLoadMax !== void 0) {
-    ok = ok && hostLoad <= hostLoadMax;
-  } else if (sharedHost === true) {
-    const cores = ports.host.cpuCount();
-    ok = ok && Number.isFinite(cores) && cores > 0 && hostLoad <= cores;
-  }
-  out.ok = ok;
+  out.ok = ok && hostOk;
   return out;
 }
-async function capacityHoldsTwice(config2, ports, options = {}) {
-  if (!(await readCapacity(config2, ports, options)).ok) return false;
+async function readCapacityTwice(config2, ports, options = {}) {
+  const first = await readCapacity(config2, ports, options);
+  if (!first.ok) return { ok: false, capacity: first };
   await ports.clock.sleep(config2.ci.capacity.checkTwiceSeconds * 1e3);
-  return (await readCapacity(config2, ports, options)).ok;
+  const second = await readCapacity(config2, ports, options);
+  return { ok: second.ok, capacity: second };
+}
+async function capacityHoldsTwice(config2, ports, options = {}) {
+  return (await readCapacityTwice(config2, ports, options)).ok;
 }
 
 // src/crew.ts
@@ -33725,7 +33773,6 @@ function planAssignments(board, config2, capacity, running, hold, credentialSlot
     }
     return roleSlots.get(role);
   };
-  let buildSlots = capacity.ok ? Math.max(0, config2.ci.capacity.mergeMaxBusy - capacity.ciBusy) : 0;
   const active = board.items.filter((i2) => ACTIVE2.includes(i2.status));
   const assign = [];
   const deferred = [];
@@ -33736,12 +33783,11 @@ function planAssignments(board, config2, capacity, running, hold, credentialSlot
     else if (credentialSlots2 !== void 0 && credentialSlots2 <= 0) {
       deferred.push({ id: item.id, reason: "credential limit" });
     } else if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: "role wip full" });
-    else if (isBuild && buildSlots <= 0) deferred.push({ id: item.id, reason: "ci capacity" });
+    else if (isBuild && !capacity.hostOk) deferred.push({ id: item.id, reason: "host load" });
     else if (clash) deferred.push({ id: item.id, reason: `overlaps ${clash.id}` });
     else {
       assign.push(item);
       roleSlots.set(item.role, slotsFor(item.role) - 1);
-      if (isBuild) buildSlots -= 1;
       if (credentialSlots2 !== void 0) credentialSlots2 -= 1;
     }
   }
@@ -35072,9 +35118,36 @@ async function runCli(argv, deps) {
         }
         let branch = `studio/${item.id}`;
         if (report.status === "done" && report.pr === void 0 && report.prTitle !== void 0 && !PR_OPTIONAL.includes(item.type)) {
-          const token = crewTokenFor(loadConfig(project), owner);
-          const pr = await openCrewPr(ports, item, report.prTitle, report.body, token);
-          report = { ...report, pr };
+          const config2 = loadConfig(project);
+          const token = crewTokenFor(config2, owner);
+          const opened = await openCrewPr(
+            ports,
+            item,
+            report.prTitle,
+            report.body,
+            token,
+            () => readCapacityTwice(config2, ports)
+          );
+          if ("held" in opened) {
+            const note = prHeldNote(opened.held, config2);
+            await withBoardLock(stateRoot(), ports.clock.now(), () => {
+              const fresh = loadBoard(project);
+              if (findItem(fresh, item.id).status !== item.status) {
+                throw new Error(`${item.id} changed while it was collected; nothing moved`);
+              }
+              const held2 = withItem(fresh, item.id, (i2) => ({
+                ...i2,
+                notes: [...(i2.notes ?? []).filter((n2) => !n2.startsWith(PR_HELD)), note]
+              }));
+              saveBoard(project, held2);
+            });
+            stderr(
+              `${item.id}: ${note}; the pull request was not opened and branch studio/${item.id} stays as it is. Run studio collect ${item.id} again once CI has room.
+`
+            );
+            return 1;
+          }
+          report = { ...report, pr: opened.pr };
         }
         if (report.pr !== void 0) {
           const holder = board.items.find(
@@ -35762,7 +35835,17 @@ function crewTokenFor(config2, owner) {
     "opening the pull request needs the crew token (studio secret set crew-token); nothing moved"
   );
 }
-async function openCrewPr(ports, item, title, body, token) {
+var PR_HELD = "pr held: ";
+function prHeldNote(cap, config2) {
+  const parts = [`busy ${cap.ciBusy} of ${cap.ciTotal}, limit ${config2.ci.capacity.mergeMaxBusy}`];
+  if (cap.githubHostedBusy !== void 0 && cap.githubHostedLimit !== void 0) {
+    parts.push(`github-hosted ${cap.githubHostedBusy}, limit ${cap.githubHostedLimit}`);
+  }
+  if (!cap.hostOk) parts.push(`host load ${cap.hostLoad.toFixed(2)}`);
+  const why = cap.error === void 0 ? "" : `; CI read failed: ${cap.error}`;
+  return capNotes([`${PR_HELD}ci capacity (${parts.join(", ")}${why})`])[0];
+}
+async function openCrewPr(ports, item, title, body, token, capacity) {
   const head = `studio/${item.id}`;
   const list2 = await ports.gh.run(
     ["pr", "list", "--repo", item.repo, "--head", head, "--state", "open", "--json", "number"],
@@ -35772,7 +35855,9 @@ async function openCrewPr(ports, item, title, body, token) {
     throw new Error(`cannot list pull requests of ${head} (gh exit ${list2.code})`);
   const open2 = JSON.parse(list2.stdout || "[]");
   const known = open2.find((p) => Number.isInteger(p.number))?.number;
-  if (typeof known === "number") return known;
+  if (typeof known === "number") return { pr: known };
+  const room = await capacity();
+  if (!room.ok) return { held: room.capacity };
   const text = `${body.replace(/[^\P{Cc}\n\t]/gu, "").slice(0, PR_BODY_MAX)}
 
 ---
@@ -35789,7 +35874,7 @@ Opened by Studio for ${item.id}; the text above was written by the crew.
     const m = /\/pull\/(\d+)\s*$/.exec(r.stdout);
     if (r.code !== 0 || !m)
       throw new Error(`gh pr create failed for ${head} (exit ${r.code}); nothing moved`);
-    return Number(m[1]);
+    return { pr: Number(m[1]) };
   } finally {
     rmSync5(dir, { recursive: true, force: true });
   }

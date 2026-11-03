@@ -75,17 +75,33 @@ async function githubHostedBusy(config: StudioConfig, gh: Gh, timeoutMs: number)
 }
 
 /**
+ * Whether the local host's load allows more work: at or below `hostLoadMax`, or with
+ * `shared_host` at or below the core count. Without either setting the host never holds.
+ */
+function hostLoadOk(config: StudioConfig, host: Host, hostLoad: number): boolean {
+  const { hostLoadMax } = config.ci.capacity;
+  if (hostLoadMax !== undefined) return hostLoad <= hostLoadMax;
+  if (config.ci.sharedHost === true) {
+    const cores = host.cpuCount();
+    return Number.isFinite(cores) && cores > 0 && hostLoad <= cores;
+  }
+  return true;
+}
+
+/**
  * Reads CI busy count and host load. Any error, unparsable output or timeout from GitHub counts
- * as fully busy (`ciBusy = total`, `ok = false`).
+ * as fully busy (`ciBusy = total`, `ok = false`). `ok` is the merge rule (CI and host); `hostOk`
+ * is the host part alone, which launches use: a crew loads the host, not CI.
  */
 export async function readCapacity(
   config: StudioConfig,
   ports: { gh: Gh; host: Host },
   options: CapacityOptions = {},
 ): Promise<Capacity> {
-  const { total, mergeMaxBusy, hostLoadMax } = config.ci.capacity;
-  const { sharedHost, githubHostedLimit } = config.ci;
+  const { total, mergeMaxBusy } = config.ci.capacity;
+  const { githubHostedLimit } = config.ci;
   const hostLoad = ports.host.loadAvg1();
+  const hostOk = hostLoadOk(config, ports.host, hostLoad);
   const mode = config.ci.runners;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let selfBusy = 0;
@@ -105,12 +121,12 @@ export async function readCapacity(
     const error = (err instanceof Error ? err.message : String(err))
       .replace(/\p{Cc}/gu, ' ')
       .slice(0, 300);
-    return { ciBusy: total, ciTotal: total, hostLoad, ok: false, error };
+    return { ciBusy: total, ciTotal: total, hostLoad, ok: false, hostOk, error };
   }
   // `both` keeps the two kinds apart: only self-hosted runners count toward ciBusy.
   const ciBusy = Math.min(total, mode === 'github-hosted' ? hostedBusy : selfBusy);
   let ok = ciBusy <= mergeMaxBusy;
-  const out: Capacity = { ciBusy, ciTotal: total, hostLoad, ok };
+  const out: Capacity = { ciBusy, ciTotal: total, hostLoad, ok, hostOk };
   if (mode === 'both') {
     out.githubHostedBusy = hostedBusy;
     if (githubHostedLimit === undefined) out.warning = GITHUB_HOSTED_UNLIMITED;
@@ -119,14 +135,24 @@ export async function readCapacity(
       ok = ok && hostedBusy <= githubHostedLimit;
     }
   }
-  if (hostLoadMax !== undefined) {
-    ok = ok && hostLoad <= hostLoadMax;
-  } else if (sharedHost === true) {
-    const cores = ports.host.cpuCount();
-    ok = ok && Number.isFinite(cores) && cores > 0 && hostLoad <= cores;
-  }
-  out.ok = ok;
+  out.ok = ok && hostOk;
   return out;
+}
+
+/**
+ * Two reads `checkTwiceSeconds` apart, both ok; `capacity` is the read that decided. A busy first
+ * read returns without waiting. The merge queue and the pull request `collect` opens share it.
+ */
+export async function readCapacityTwice(
+  config: StudioConfig,
+  ports: { gh: Gh; host: Host; clock: Clock },
+  options: CapacityOptions = {},
+): Promise<{ ok: boolean; capacity: Capacity }> {
+  const first = await readCapacity(config, ports, options);
+  if (!first.ok) return { ok: false, capacity: first };
+  await ports.clock.sleep(config.ci.capacity.checkTwiceSeconds * 1000);
+  const second = await readCapacity(config, ports, options);
+  return { ok: second.ok, capacity: second };
 }
 
 /** Two reads `checkTwiceSeconds` apart, both ok. A busy first read returns false without waiting. */
@@ -135,7 +161,5 @@ export async function capacityHoldsTwice(
   ports: { gh: Gh; host: Host; clock: Clock },
   options: CapacityOptions = {},
 ): Promise<boolean> {
-  if (!(await readCapacity(config, ports, options)).ok) return false;
-  await ports.clock.sleep(config.ci.capacity.checkTwiceSeconds * 1000);
-  return (await readCapacity(config, ports, options)).ok;
+  return (await readCapacityTwice(config, ports, options)).ok;
 }

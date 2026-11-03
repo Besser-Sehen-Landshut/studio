@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { type Detected, lintWorkflows, workflowRunnerUsage } from '../src/setup-ci.js';
+import {
+  crewPushWarnings,
+  type Detected,
+  lintWorkflows,
+  workflowRunnerUsage,
+} from '../src/setup-ci.js';
 
 // biome-ignore lint/suspicious/noTemplateCurlyInString: the GitHub Actions expression is literal text
 const EXPECTED = 'ci-${{ github.head_ref || github.ref_name }}';
@@ -411,5 +416,49 @@ describe('workflowRunnerUsage', () => {
       selfHosted: true,
       unverified: false,
     });
+  });
+});
+
+describe('crewPushWarnings', () => {
+  const warns = (on: string) => crewPushWarnings([file(`on:${on}\n${job('ubuntu-latest')}`)]);
+
+  it('warns when a push to a crew branch studio/<id> would start the workflow', () => {
+    for (const on of [
+      ' push',
+      ' [push, pull_request]',
+      '\n  push:\n  pull_request:',
+      '\n  push:\n    paths: [src/**]',
+      '\n  push:\n    branches: ["**"]',
+      '\n  push:\n    branches: ["studio/*"]',
+      '\n  push:\n    branches: ["studio/APP-*"]',
+      '\n  push:\n    branches: [main, "feature/[ab]*"]',
+      '\n  push:\n    branches: ["**", "!main"]',
+      '\n  push:\n    branches-ignore: [main]',
+      '\n  push:\n    branches-ignore: ["studio/APP-*"]',
+    ]) {
+      const w = warns(on);
+      expect(w, on).toHaveLength(1);
+      expect(w[0], on).toContain('.github/workflows/w.yml');
+      expect(w[0], on).toContain('studio/<id>');
+    }
+  });
+
+  it('stays quiet when crew pushes cannot start it', () => {
+    for (const on of [
+      ' pull_request',
+      ' [pull_request, workflow_dispatch]',
+      '\n  push:\n    branches: [main]',
+      '\n  push:\n    branches: [main, "release/**"]',
+      '\n  push:\n    branches: ["**", "!studio/**"]',
+      '\n  push:\n    branches-ignore: ["studio/**"]',
+      '\n  push:\n    tags: ["v*"]',
+      '\n  pull_request:\n    branches: ["**"]',
+    ]) {
+      expect(warns(on), on).toEqual([]);
+    }
+  });
+
+  it('ignores files it cannot parse; the lint reports those', () => {
+    expect(crewPushWarnings([file('on: [unclosed')])).toEqual([]);
   });
 });

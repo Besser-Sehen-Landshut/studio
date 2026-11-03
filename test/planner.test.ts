@@ -22,7 +22,7 @@ const config: StudioConfig = studioConfigSchema.parse({
   deployCommands: [],
 });
 
-const okCap: Capacity = { ciBusy: 0, ciTotal: 8, hostLoad: 0, ok: true };
+const okCap: Capacity = { ciBusy: 0, ciTotal: 8, hostLoad: 0, ok: true, hostOk: true };
 
 function mk(id: string, extra: Partial<WorkItem> = {}): WorkItem {
   return {
@@ -120,21 +120,39 @@ describe('planAssignments', () => {
     ]);
   });
 
-  it('assigns no build items when capacity not ok but still assigns docs/research', () => {
+  it('assigns build items while CI is fully busy, as long as the host is fine', () => {
+    const b = board(mk('APP-1'), mk('APP-2', { type: 'docs' }), mk('APP-3', { type: 'chore' }));
+    const busy: Capacity = { ...okCap, ciBusy: 8, ok: false, hostOk: true };
+    const r = planAssignments(b, wide, busy, {});
+    expect(ids(r)).toEqual(['APP-1', 'APP-2', 'APP-3']);
+    expect(r.deferred).toEqual([]);
+    // A CI read error says nothing about the host either.
+    const unread: Capacity = { ...busy, error: 'HTTP 401' };
+    expect(ids(planAssignments(b, wide, unread, {}))).toEqual(['APP-1', 'APP-2', 'APP-3']);
+  });
+
+  it('defers build items when the host load is too high, still assigns docs/research', () => {
     const b = board(
       mk('APP-1'),
       mk('APP-2', { type: 'docs' }),
       mk('APP-3', { type: 'research', role: 'reviewer' }),
     );
-    const r = planAssignments(b, config, { ...okCap, ok: false }, {});
+    const r = planAssignments(b, config, { ...okCap, hostLoad: 9, ok: false, hostOk: false }, {});
     expect(ids(r)).toEqual(['APP-2', 'APP-3']);
     expect(r.blocked).toEqual([]);
+    expect(r.deferred).toEqual([{ id: 'APP-1', reason: 'host load' }]);
   });
 
-  it('limits build items to mergeMaxBusy minus ciBusy', () => {
+  it('CI busy count no longer limits how many build items are assigned', () => {
     const b = board(mk('APP-1'), mk('APP-2'));
-    expect(ids(planAssignments(b, config, { ...okCap, ciBusy: 4 }, {}))).toEqual(['APP-1']);
-    expect(ids(planAssignments(b, config, { ...okCap, ciBusy: 7 }, {}))).toEqual([]);
+    expect(ids(planAssignments(b, config, { ...okCap, ciBusy: 4 }, {}))).toEqual([
+      'APP-1',
+      'APP-2',
+    ]);
+    expect(ids(planAssignments(b, config, { ...okCap, ciBusy: 7, ok: false }, {}))).toEqual([
+      'APP-1',
+      'APP-2',
+    ]);
   });
 
   it('ownerOnly item is never assigned', () => {
