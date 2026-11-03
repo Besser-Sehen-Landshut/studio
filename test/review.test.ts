@@ -76,6 +76,8 @@ describe('readPrFacts', () => {
       complete: true,
       head: PR_HEAD.headRefOid,
       base: 'main',
+      title: '',
+      body: '',
       crossRepository: false,
     });
   });

@@ -291,7 +291,7 @@ type ChecksVerdict =
   /** No check reported at all: pending during the grace after a head change, else failed. */
   | { kind: 'none'; reason: string };
 
-async function readChecks(entry: QueueEntry, gh: Gh): Promise<ChecksVerdict> {
+export async function readChecks(entry: QueueEntry, gh: Gh): Promise<ChecksVerdict> {
   const base = ['pr', 'checks', String(entry.pr), '--repo', entry.repo, '--json', 'name,bucket'];
   const all = await gh.run(base);
   const checks = parseChecks(all.stdout);

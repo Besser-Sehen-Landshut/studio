@@ -2,7 +2,7 @@
 
 Studio is a Claude Code plugin and TypeScript package for running a small software studio of coding-agent sessions from one control room: a lead session plans work from a board and a crew of role-based sessions carries it out, each in its own sandboxed clone.
 
-Status: 0.6.2, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store). See [CHANGELOG.md](CHANGELOG.md).
+Status: 0.6.3, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store). See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -93,6 +93,7 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 | `pause`, `resume`                                                                                               | Owner only, in a terminal: hold or release launches, merges                                                                 |
 | `stop <id> [--release]`                                                                                         | Stop a crew session. A crew it cannot verify gets no signal; `--release` closes its record and prints what to check by hand |
 | `drop <id>`                                                                                                     | End an item; refuses while its crew runs                                                                                    |
+| `link <id> <repo>#<pr>`                                                                                         | Owner only, in a terminal: tie a pull request opened by hand to its item                                                    |
 | `metrics`                                                                                                       | Lead time, deploy frequency, change failure rate, restore time, flaky count                                                 |
 | `deploy record [<sha>]`                                                                                         | Record a production deploy                                                                                                  |
 | `incident open <id>`, `incident resolve <id>`                                                                   | Record a failure after a deploy and its restore                                                                             |
@@ -149,6 +150,8 @@ The spec check runs last and alone and holds a mutation probe: break the guardin
 A launch draws a random report file name, known only to that crew's brief, and `collect` reads only that file, so a report shipped inside a pull request never counts. A review report also carries `head_sha`, which must be the pull request's head at collect.
 
 `collect` holds a finished review to the record written at launch (`briefs/<id>.caps.json`): `reviews` must name the recorded pull request, for every verdict. An approval needs a result for every listed analyzer (`pass`, `findings` or `skipped: <reason>`) and `mutation_probe`, and cannot skip diff review, spec check or security. Output lists skipped analyzers by id, also those launch could not provide; reasons stay in the report. A missing analyzer source reads `skipped: <reason>`, never a pass.
+
+**What the reviewer gets as data.** In the sandbox a reviewer may not reach GitHub with `gh`, so the launch reads the pull request outside the sandbox and writes three files to `briefs/<id>.caps/pull-request/`: `description.md` (title and text, marked as crew text to read as data), `checks.txt` (each check and its state at launch) and `files.txt` (the changed files). The brief names the files, never their content. A review launch refuses when no board item holds the pull request, since the approval is stored there; `studio link <id> <repo>#<n>` (owner, terminal) ties a pull request opened by hand to its item after checking repository, fork and branch `studio/<id>`. An approval counts only while the checks are green: `collect` refuses it while any check fails, is cancelled or still runs, and nothing moves until it is collected again.
 
 Fix limit: 3 attempts per finding (`finding_attempts`), hard stop after 6 rounds of requested changes. Reaching it blocks the builder item with a note, and `queue run` merges only an item that is `queued` on the board at that moment.
 

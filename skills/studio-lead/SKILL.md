@@ -52,7 +52,9 @@ Every PR, however urgent, gets one fresh reviewer crew session before `queue add
 2. `studio plan`, `studio launch <review-id>`, then `studio collect <review-id>`: the reviewer opens no PR; its
    report carries `verdict` and `reviews: <owner/repo>#<n>`; collect moves the review item to `merged` and
    prints the verdict.
-3. `verdict: approve` → `studio queue add <owner/repo>#<n>`. `collect` stores the approved head on the builder
+3. `verdict: approve` → `studio queue add <owner/repo>#<n>`. `collect` takes an approval only with green checks;
+   otherwise collect again once they pass. A review launch needs a board item holding the PR: for a PR opened by
+   hand, `studio link <builder-id> <owner/repo>#<n>` first. `collect` stores the approved head on the builder
    item with the base; `queue add` and the merge refuse another base, and any other head except one commit that
    only merges the base into the approved head and whose tree proves it. So a later push, a conflict resolved by
    hand or a second branch update needs a new review. A launch refuses a pull request from a fork, or a second

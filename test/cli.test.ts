@@ -154,7 +154,9 @@ function fakeGh(handler: (line: string) => GhReply | undefined = () => undefined
         handler(line) ??
         (line.endsWith('--json baseRefName')
           ? { stdout: JSON.stringify({ baseRefName: 'main' }) }
-          : undefined);
+          : line.startsWith('pr checks')
+            ? { stdout: JSON.stringify([{ name: 'ci', bucket: 'pass' }]) }
+            : undefined);
       if (!r) throw new Error(`unscripted gh call: ${line}`);
       return { code: r.code ?? 0, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
     },
@@ -209,6 +211,26 @@ async function cli(fx: Fx, ports: Ports, ...argv: string[]) {
     cwd: fx.project,
     // These two are the owner's and need a terminal; everything else runs without one.
     isTerminal: argv[0] === 'pause' || argv[0] === 'resume',
+  });
+  return { code, out, err };
+}
+
+/** `cli` with a terminal or not, for owner commands. */
+async function cliWith(fx: Fx, ports: Ports, deps: { isTerminal: boolean }, ...argv: string[]) {
+  let out = '';
+  let err = '';
+  const code = await runCli(['--project', fx.project, ...argv], {
+    ports,
+    stdout: (s) => {
+      out += s;
+    },
+    stderr: (s) => {
+      err += s;
+    },
+    env: fx.env,
+    homedir: fx.home,
+    cwd: fx.project,
+    isTerminal: deps.isTerminal,
   });
   return { code, out, err };
 }
@@ -336,6 +358,98 @@ describe('studio CLI', () => {
     expect(unknown.code).toBe(1);
     expect(started).toHaveLength(0);
     expect(statusOf(fx, 'APP-2')?.status).toBe('ready');
+  });
+
+  describe('an approval needs green checks', () => {
+    const APPROVE = `status: done\nitem: APP-1\nverdict: approve\nreviews: org/app#9\nhead_sha: ${HEAD}`;
+    const withChecks = (bucket: string) =>
+      fakeGh((l) => {
+        if (/^pr view \d+ --repo org\/app --json headRefOid,headRefName/.test(l)) {
+          return {
+            stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-2', ...OWN }),
+          };
+        }
+        if (l.startsWith('pr checks 9')) {
+          return { stdout: JSON.stringify([{ name: 'ci', bucket }]) };
+        }
+        return undefined;
+      });
+    const run = async (bucket: string) => {
+      const fx = makeFx([
+        { id: 'APP-1', status: 'assigned', type: 'review' },
+        { id: 'APP-2', status: 'in_review', pr: 9, approvedHead: null },
+      ]);
+      writeReviewCaps(fx, 'APP-1');
+      writeReport(fx, 'APP-1', APPROVE);
+      return { fx, r: await cli(fx, fakePorts(withChecks(bucket).gh).ports, 'collect', 'APP-1') };
+    };
+    it.each(['fail', 'pending', 'cancel'])(
+      'checks that are %s: no approval, nothing moves',
+      async (b) => {
+        const { fx, r } = await run(b);
+        expect(r.code).toBe(1);
+        expect(r.err).toMatch(/checks/);
+        expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+        expect(statusOf(fx, 'APP-2')?.approvedHead).toBeUndefined();
+      },
+    );
+    it('passing checks: the approval stands', async () => {
+      const { fx, r } = await run('pass');
+      expect(r.code).toBe(0);
+      expect(statusOf(fx, 'APP-2')?.approvedHead).toBe(HEAD);
+    });
+  });
+
+  describe('studio link', () => {
+    const view = (over: Record<string, unknown> = {}) =>
+      fakeGh((l) =>
+        /^pr view 12 --repo org\/app --json headRefOid,headRefName/.test(l)
+          ? {
+              stdout: JSON.stringify({
+                headRefOid: HEAD,
+                headRefName: 'studio/APP-1',
+                ...OWN,
+                ...over,
+              }),
+            }
+          : undefined,
+      );
+    const term = { isTerminal: true };
+    it('ties a pull request opened by hand to its item', async () => {
+      const fx = makeFx([{ id: 'APP-1', status: 'in_review' }]);
+      const r = await cliWith(fx, fakePorts(view().gh).ports, term, 'link', 'APP-1', 'org/app#12');
+      expect(r.code).toBe(0);
+      expect(statusOf(fx, 'APP-1')).toMatchObject({ pr: 12, branch: 'studio/APP-1' });
+    });
+    it.each<[string, Record<string, unknown>]>([
+      ['another branch', { headRefName: 'feature/x' }],
+      ['a fork', { isCrossRepository: true }],
+    ])('refuses %s and changes nothing', async (_n, over) => {
+      const fx = makeFx([{ id: 'APP-1', status: 'in_review' }]);
+      const r = await cliWith(
+        fx,
+        fakePorts(view(over).gh).ports,
+        term,
+        'link',
+        'APP-1',
+        'org/app#12',
+      );
+      expect(r.code).toBe(1);
+      expect(statusOf(fx, 'APP-1')?.pr).toBeUndefined();
+    });
+    it('refuses another repo, a pull request another item holds, a review item and no terminal', async () => {
+      const fx = makeFx([
+        { id: 'APP-1', status: 'in_review' },
+        { id: 'APP-2', status: 'in_review', pr: 12 },
+        { id: 'APP-3', status: 'ready', type: 'review' },
+      ]);
+      const { ports } = fakePorts(view().gh);
+      expect((await cliWith(fx, ports, term, 'link', 'APP-1', 'org/other#12')).code).toBe(1);
+      expect((await cliWith(fx, ports, term, 'link', 'APP-1', 'org/app#12')).err).toMatch(/APP-2/);
+      expect((await cliWith(fx, ports, term, 'link', 'APP-3', 'org/app#12')).code).toBe(1);
+      expect((await cli(fx, ports, 'link', 'APP-1', 'org/app#12')).code).toBe(1);
+      expect(statusOf(fx, 'APP-1')?.pr).toBeUndefined();
+    });
   });
 
   describe('collect opens the pull request a crew could not', () => {
