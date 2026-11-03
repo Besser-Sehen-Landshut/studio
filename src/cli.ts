@@ -3,7 +3,14 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runAccount } from './account-command.js';
-import { type Board, loadBoard, saveBoard, transition, type WorkItem } from './board.js';
+import {
+  type Board,
+  loadBoard,
+  type NotRunHere,
+  saveBoard,
+  transition,
+  type WorkItem,
+} from './board.js';
 import { capabilitiesDir } from './capabilities.js';
 import { readCapacity, readCapacityTwice } from './capacity.js';
 import {
@@ -540,6 +547,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             item,
             report.prTitle,
             report.body,
+            report.notRunHere,
             token,
             () => readCapacityTwice(config, ports),
             unchanged,
@@ -601,10 +609,17 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             if (report.pr !== undefined) {
               const pr = report.pr;
               // A pull request exists now: an earlier hold is over (history keeps the moves).
+              // What CI must cover is the latest report's list; an earlier one is replaced.
               next = withItem(next, item.id, (i) => {
                 const notes = (i.notes ?? []).filter((n) => !n.startsWith(PR_HELD));
-                const { notes: _n, ...rest } = i;
-                return { ...rest, ...(notes.length > 0 ? { notes } : {}), pr, branch };
+                const { notes: _n, notRunHere: _r, ...rest } = i;
+                return {
+                  ...rest,
+                  ...(notes.length > 0 ? { notes } : {}),
+                  ...(report.notRunHere.length > 0 ? { notRunHere: report.notRunHere } : {}),
+                  pr,
+                  branch,
+                };
               });
             } else {
               // Review and research items open no PR: the result is the report itself.
@@ -712,6 +727,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ...(supersededBy === undefined ? {} : { supersededBy }),
           ...(fixLimit ? { fixLimit } : {}),
           ...(lessonsProposed > 0 ? { lessonsProposed } : {}),
+          // Crew text, cleaned: what CI must run because the sandbox could not.
+          ...(report.status === 'done' && report.notRunHere.length > 0
+            ? { notRunHere: report.notRunHere.map((x) => `${x.command} (missing ${x.missing})`) }
+            : {}),
         });
         return 0;
       }
@@ -1376,6 +1395,7 @@ async function openCrewPr(
   item: WorkItem,
   title: string,
   body: string,
+  notRunHere: readonly NotRunHere[],
   token: string,
   capacity: () => Promise<{ ok: boolean; capacity: Capacity }>,
   unchanged: () => void,
@@ -1393,7 +1413,7 @@ async function openCrewPr(
   const room = await capacity();
   if (!room.ok) return { held: room.capacity };
   unchanged();
-  const text = `${body.replace(/[^\P{Cc}\n\t]/gu, '').slice(0, PR_BODY_MAX)}\n\n---\nOpened by Studio for ${item.id}; the text above was written by the crew.\n`;
+  const text = `${body.replace(/[^\P{Cc}\n\t]/gu, '').slice(0, PR_BODY_MAX)}\n\n---\nOpened by Studio for ${item.id}; the text above was written by the crew.\n${notRunSection(notRunHere)}`;
   const dir = mkdtempSync(join(tmpdir(), 'studio-pr-'));
   try {
     const file = join(dir, 'body.md');
@@ -1410,6 +1430,18 @@ async function openCrewPr(
     rmSync(dir, { recursive: true, force: true });
   }
 }
+/**
+ * The pull request section for commands the crew could not run in its sandbox. Each line is crew
+ * text, already one plain line by the report schema; fences are cut so it stays in its block.
+ */
+function notRunSection(list: readonly NotRunHere[]): string {
+  if (list.length === 0) return '';
+  const lines = list.map((x) =>
+    `${x.command} (missing ${x.missing}: ${x.reason})`.replace(/`{3,}/g, ''),
+  );
+  return `\n## Not run in the crew sandbox\n\nThe crew could not run these commands, because its sandbox lacks the service named (crew text). CI must run them; an approval counts only with green checks.\n\n\`\`\`text\n${lines.join('\n')}\n\`\`\`\n`;
+}
+
 const MAX_NOTES = 10;
 const MAX_NOTE_CHARS = 500;
 

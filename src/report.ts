@@ -12,7 +12,7 @@ import {
 import { join, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
-import type { WorkItem } from './board.js';
+import { type NotRunHere, notRunHereSchema, type WorkItem } from './board.js';
 import { assertStatePath, writeStateFile } from './paths.js';
 
 export class ReportError extends Error {
@@ -55,6 +55,8 @@ const reportSchema = z.object({
     .regex(/^(red: .{1,300}|green: .{1,300}|skipped: .{1,300})$/)
     .nullish(),
   findingAttempts: z.number().int().nonnegative().nullish(),
+  // Commands the sandbox cannot run for lack of a service; CI is the authority for them.
+  notRunHere: z.array(notRunHereSchema).max(20).default([]),
   lessons: z.array(z.string()).default([]),
   questions: z.array(z.string()).default([]),
 });
@@ -73,6 +75,8 @@ export interface Report {
   analyzers?: Record<string, string>;
   mutationProbe?: string;
   findingAttempts?: number;
+  /** Commands the crew could not run in its sandbox, each with the missing service: crew text. */
+  notRunHere: NotRunHere[];
   lessons: string[];
   questions: string[];
 }
@@ -136,6 +140,7 @@ export function parseReport(text: string, item?: WorkItem): Report {
     ...(d.analyzers != null && { analyzers: d.analyzers }),
     ...(d.mutationProbe != null && { mutationProbe: d.mutationProbe }),
     ...(d.findingAttempts != null && { findingAttempts: d.findingAttempts }),
+    notRunHere: d.notRunHere,
     lessons: d.lessons,
     questions: d.questions,
   };

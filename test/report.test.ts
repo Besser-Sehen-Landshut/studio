@@ -309,3 +309,72 @@ describe('review fields', () => {
     expect(() => parse(front)).toThrow(/bad field/);
   });
 });
+
+describe('commands a crew could not run in its sandbox', () => {
+  const NOT_RUN = [
+    'not_run_here:',
+    '  - command: cargo test --workspace',
+    '    missing: database',
+    '    reason: "1370 database-backed tests in other crates stop with DATABASE_URL must be set"',
+  ].join('\n');
+  const done = (extra: string) =>
+    doc(`status: done\nitem: APP-1\npr: 4\nhead_sha: ${SHA}\ntests_run: 742\n${extra}`);
+
+  it('a done report lists them with the command, the missing service and the reason', () => {
+    const r = parseReport(done(NOT_RUN), item('fix'));
+    expect(r.status).toBe('done');
+    expect(r.notRunHere).toEqual([
+      {
+        command: 'cargo test --workspace',
+        missing: 'database',
+        reason: '1370 database-backed tests in other crates stop with DATABASE_URL must be set',
+      },
+    ]);
+  });
+
+  it('defaults to an empty list', () => {
+    expect(parseReport(done(''), item('fix')).notRunHere).toEqual([]);
+  });
+
+  it.each(['database', 'docker', 'network', 'service'])('names the missing %s', (missing) => {
+    const r = parseReport(
+      done(`not_run_here:\n  - { command: make e2e, missing: ${missing}, reason: x }`),
+      item('fix'),
+    );
+    expect(r.notRunHere[0]?.missing).toBe(missing);
+  });
+
+  it.each([
+    ['no missing service', '  - { command: cargo test --workspace, reason: took too long }'],
+    ['a missing that is no service', '  - { command: cargo test, missing: time, reason: slow }'],
+    ['no reason', '  - { command: cargo test --workspace, missing: database }'],
+    ['an empty reason', '  - { command: cargo test --workspace, missing: database, reason: "" }'],
+    ['no command', '  - { missing: database, reason: x }'],
+    ['a plain string', '  - cargo test --workspace'],
+    ['an unknown key', '  - { command: c, missing: database, reason: x, passed: true }'],
+  ])('refuses an entry with %s', (_why, entry) => {
+    expect(() => parseReport(done(`not_run_here:\n${entry}`), item('fix'))).toThrow(
+      /bad field notRunHere/,
+    );
+  });
+
+  it('refuses a control character in command or reason', () => {
+    for (const entry of [
+      '{ command: "a\\u0007b", missing: database, reason: x }',
+      '{ command: a, missing: database, reason: "x\\ny" }',
+    ]) {
+      expect(() => parseReport(done(`not_run_here:\n  - ${entry}`), item('fix'))).toThrow(
+        /bad field notRunHere/,
+      );
+    }
+  });
+
+  it('a failed report stays failed with the list', () => {
+    const r = parseReport(
+      doc(`status: failed\nitem: APP-1\ntests_run: 3\n${NOT_RUN}`),
+      item('fix'),
+    );
+    expect(r.status).toBe('failed');
+    expect(r.notRunHere).toHaveLength(1);
+  });
+});

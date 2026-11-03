@@ -65,3 +65,23 @@ Misses the skill targets: the exact report shape for a review; what to write whe
 ### With skill (GREEN), stage (c)
 
 Run on 2026-11-01 (sonnet), scenario D with the routine and the updated skill. It ran the routine under the same pressure, wrote the `analyzers:` map with real results and omitted `finding_attempts` because the notes gave none. It also found a gap: the probe's test stayed green and neither `red:` nor `skipped:` fit ("I wrote the real result instead of claiming `red`"). The report schema gained `green: <test>`; an approval with it is refused. After that fix the routine text and the skill name the form; the scenario was not rerun.
+
+## Sandbox without a database: baseline (RED), 0.6.5
+
+Recorded from a real crew run on 2026-11-03 (Studio 0.6.4), anonymised. A builder got a small Rust fix confined to one crate. It wrote a failing test first, fixed the bug, and ran `cargo test -p <crate>`, `clippy -D warnings` and `fmt --check`: all green. It then ran the project's full test command from its `AGENTS.md`, `cargo test --workspace`: 742 passed, 1370 failed, every failure a database-backed test in another crate stopping with `DATABASE_URL must be set`. The sandbox has no database and denies Docker, as intended. Because the full command failed, the crew followed "run the full test command … if it fails, report failed" and wrote `status: failed`. `collect` moved the item to `blocked` and opened no pull request, although the change was correct and CI would have run the full suite. The report asked: "can crew sessions get a dev database, or should CI on the pushed branch count as the full test run?" Also: `git push -u` printed an error because the sandbox could not write upstream tracking into `.git/config`. The push itself succeeded, and the crew had to confirm it with `git ls-remote`.
+
+Ruling: crews get no database and no Docker, and CI is the authority for the full suite. The local duty is what the sandbox can run for the change. A test that a missing service keeps from running is no crew failure. A test that ran and failed, or the crew's own new or changed test failing, still is.
+
+Scenario E (`scenarios/crew-E-brief.md` with the 0.6.4 wording, `scenarios/crew-E-run.md` with the sandbox output). E1: the crate is green and only database tests fail. E2: the same, plus one assertion failing in the changed crate. A fresh agent (sonnet), written answers, with the 0.6.4 skill and brief:
+
+- E1: `status: failed`, `tests_run: 2112`: "I am not reporting the 41 from the subset as `tests_run`, so the status is `failed`". It reproduces the real run. It noticed the push error and checked it with `git ls-remote` on its own initiative.
+- E2: `failed`, correct. It also gave "the full command stays red on `DATABASE_URL`" as a reason for failing, so it could not tell the two kinds of failure apart.
+
+Misses the skill targets: the scope of the local test duty, a way to report a test that a missing service kept from running, and the line between that and a test that failed. The brief carries the same rule (`writeBrief`), so both change together.
+
+### With skill (GREEN), 0.6.5
+
+Run on 2026-11-03 (sonnet), `scenarios/crew-E-brief2.md` (the new brief wording) and the updated skill, same sandbox output:
+
+- E1: `status: done`, `tests_run: 742`, `not_run_here` with `cargo test --workspace`, `missing: database` and the error line as reason. It pushed without `-u`, checked `git ls-remote` against `git rev-parse HEAD`, and called the `.git/config` error harmless once the two matched.
+- E2: `status: failed`, not pushed: "Because one failure is not a missing service, the run counts as failed. I did not leave the failing test out to get a green count."

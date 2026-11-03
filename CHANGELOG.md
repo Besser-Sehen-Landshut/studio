@@ -3,6 +3,34 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.5] - 2026-11-03
+
+From a real crew run: a correct, one-crate fix ended `blocked` because the workspace's full test
+command needed a database the sandbox does not have. Not tagged yet; the maintainers tag after the
+merge.
+
+### Added
+
+- Reports take `not_run_here`: commands a missing service kept from running in the sandbox, each
+  with `command`, `missing` (`database`, `docker`, `network` or `service`) and `reason`. The
+  report stays `done`. An entry without one of those services, without a reason, or with control
+  characters refuses the report; a `failed` report still blocks the item.
+- `collect` carries the list on: into the pull request it opens (a section saying CI must run
+  those commands), onto the board item (`not_run_here`, replaced by each done report) and into its
+  output. A review launch writes it to `briefs/<id>.caps/pull-request/not-run-here.txt` and the
+  routine tells the reviewer to check that a CI workflow runs them. An approval still needs green
+  checks at collect, so CI stays the gate.
+
+### Changed
+
+- Crew briefs and the `studio-crew` skill scope the local test duty: the touched package, crate or
+  workspace member, the Definition of Done's tests, lint and format, plus the full test command
+  where it can run. A test that ran and failed is `failed`, never `not_run_here`.
+- Crews push without `-u` (`git push origin HEAD:refs/heads/studio/<id>`), since the sandbox
+  cannot write upstream tracking into `.git/config` and git printed an error after a good push.
+  The brief names `git ls-remote` as the check; a crew that opens its own pull request passes
+  `--head studio/<id>`.
+
 ## [0.6.4] - 2026-11-03
 
 Not tagged yet; the maintainers tag after the merge.

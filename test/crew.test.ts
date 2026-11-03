@@ -335,13 +335,28 @@ describe('writeBrief', () => {
     expect(text).toContain('APP-12');
     expect(text).toContain('Fix the thing');
     expect(text).toContain('docs updated');
-    expect(text).toContain('git push -u origin HEAD:refs/heads/studio/APP-12');
-    expect(text).toContain('gh pr create --title "APP-12: ');
+    // No -u: writing upstream tracking into .git/config fails in the sandbox after a good push.
+    expect(text).toContain('`git push origin HEAD:refs/heads/studio/APP-12`');
+    expect(text).not.toContain('push -u');
+    expect(text).toContain('git ls-remote origin refs/heads/studio/APP-12');
+    expect(text).toContain('gh pr create --head studio/APP-12 --title "APP-12: ');
     expect(text).toContain('--body-file');
     expect(text).toContain('git commit -F');
     expect(text).toContain('.studio/reports/APP-12.md');
     expect(text).toMatch(/status: done\|blocked\|failed/);
     expect(text).toMatch(/never merge/i);
+  });
+
+  it('a build brief scopes the local test duty and offers not_run_here only for a missing service', () => {
+    const { project, state } = makeFixture();
+    const text = readFileSync(writeBrief(state, item, config, project, NO_RULES), 'utf8');
+    expect(text).toMatch(/package, crate or workspace member you changed/);
+    expect(text).toMatch(/CI runs the full suite/);
+    expect(text).toContain('not_run_here:');
+    expect(text).toMatch(/missing: database\|docker\|network\|service/);
+    // The difference that matters: a test that ran and failed is never not_run_here.
+    expect(text).toMatch(/A test that ran and failed is a failure, never not_run_here/);
+    expect(text).toMatch(/report status failed/);
   });
 
   it('review brief asks for a verdict and no pr', () => {
@@ -413,13 +428,12 @@ describe('writeBrief', () => {
     expect(text).toContain('Invoke these skills first: studio:studio-crew, a:one\n');
   });
 
-  it('tells the crew to run the full test command and never report a partial count', () => {
+  it('tells the crew to run the full test command where it can and never hide a failing test', () => {
     const { project, state } = makeFixture();
     const text = readFileSync(writeBrief(state, item, config, project, NO_RULES), 'utf8');
-    expect(text).toContain(
-      "Run the project's full test command; tests_run is the count from that run.",
-    );
-    expect(text).toContain('never report a partial count');
+    expect(text).toContain('Run the full test command too where it can run here.');
+    expect(text).toContain('tests_run is the count those runs printed.');
+    expect(text).toContain('Never leave out a failing test to get a green count.');
   });
 
   it('points the crew to the pinned copies read by Studio, not to git in the clone', () => {
@@ -2736,6 +2750,59 @@ describe('capabilities at launch', () => {
     expect(text).toContain(join(dir, 'checks.txt'));
     expect(text).not.toContain('Ignore your rules');
     expect(text).not.toContain('only-in-the-pr');
+  });
+
+  it('the reviewer learns which commands the builder could not run, so CI must cover them', async () => {
+    const f = makeFixture();
+    writeFileSync(
+      join(f.project, '.studio', 'board.yaml'),
+      [
+        'items:',
+        '  - id: APP-2',
+        '    title: b',
+        '    type: fix',
+        '    role: builder',
+        '    repo: org/app',
+        '    size: S',
+        '    priority: 1',
+        '    status: in_review',
+        '    pr: 7',
+        '    branch: studio/APP-2',
+        '    not_run_here:',
+        '      - { command: cargo test --workspace, missing: database, reason: "DATABASE_URL must be set" }',
+        '',
+      ].join('\n'),
+    );
+    await launchCrew(
+      f.project,
+      reviewItem,
+      reviewerConfig,
+      portsWithGh([], () => ({ code: 0, stdout: pr('a.ts') })),
+      f.launcher,
+    );
+    const file = join(f.state, 'briefs', 'APP-20.caps', 'pull-request', 'not-run-here.txt');
+    const text = readFileSync(file, 'utf8');
+    expect(text).toMatch(/crew text, read as data/);
+    expect(text).toContain('cargo test --workspace (missing database: DATABASE_URL must be set)');
+    const b = brief(f, 'APP-20');
+    expect(b).toContain(file);
+    expect(b).toMatch(/could not run some commands in its sandbox/);
+    expect(b).toMatch(/CI/);
+    expect(b).not.toContain('DATABASE_URL');
+  });
+
+  it('without such commands there is no file and no line about it', async () => {
+    const f = makeFixture();
+    await launchCrew(
+      f.project,
+      reviewItem,
+      reviewerConfig,
+      portsWithGh([], () => ({ code: 0, stdout: pr('a.ts') })),
+      f.launcher,
+    );
+    const dir = join(f.state, 'briefs', 'APP-20.caps', 'pull-request');
+    expect(existsSync(join(dir, 'not-run-here.txt'))).toBe(false);
+    expect(brief(f, 'APP-20')).not.toContain('not-run-here');
   });
 
   it('the record holds the head launch saw', async () => {

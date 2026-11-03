@@ -710,6 +710,105 @@ describe('studio CLI', () => {
       expect(calls.some((c) => c.line.startsWith('pr create'))).toBe(false);
       expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
     });
+
+    describe('commands the crew could not run in its sandbox', () => {
+      const NOT_RUN =
+        'not_run_here:\n  - { command: cargo test --workspace, missing: database, reason: "DATABASE_URL must be set (1370 tests in other crates)" }';
+
+      it('a done report with them opens the pull request, which lists them for CI', async () => {
+        const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+        withToken(fx);
+        writeReport(fx, 'APP-1', `${REPORT}\n${NOT_RUN}`);
+        const { gh, calls } = prGh();
+        const r = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+        expect(r.err).toBe('');
+        expect(r.code).toBe(0);
+        const body = calls.find((c) => c.line.startsWith('pr create'))?.body ?? '';
+        expect(body).toMatch(/not run in the crew sandbox/i);
+        expect(body).toContain('cargo test --workspace');
+        expect(body).toContain('missing database: DATABASE_URL must be set');
+        expect(body).toMatch(/CI must run/);
+        const item = statusOf(fx, 'APP-1');
+        expect(item).toMatchObject({ status: 'in_review', pr: 31 });
+        expect(item?.notRunHere).toEqual([
+          {
+            command: 'cargo test --workspace',
+            missing: 'database',
+            reason: 'DATABASE_URL must be set (1370 tests in other crates)',
+          },
+        ]);
+        expect(JSON.parse(r.out).notRunHere).toEqual(['cargo test --workspace (missing database)']);
+      });
+
+      it('a crew that opened its own pull request still gets them on the item', async () => {
+        const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+        writeReport(
+          fx,
+          'APP-1',
+          `status: done\nitem: APP-1\npr: 9\nhead_sha: ${HEAD}\ntests_run: 3\n${NOT_RUN}`,
+        );
+        const { gh } = prGh();
+        expect((await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1')).code).toBe(0);
+        expect(statusOf(fx, 'APP-1')?.notRunHere).toHaveLength(1);
+      });
+
+      it('a later done report without them clears the list', async () => {
+        const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+        writeReport(
+          fx,
+          'APP-1',
+          `status: done\nitem: APP-1\npr: 9\nhead_sha: ${HEAD}\ntests_run: 3\n${NOT_RUN}`,
+        );
+        const { gh } = prGh();
+        await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+        const board = join(fx.project, '.studio', 'board.yaml');
+        writeFileSync(
+          board,
+          readFileSync(board, 'utf8').replace('status: in_review', 'status: in_progress'),
+        );
+        writeReport(
+          fx,
+          'APP-1',
+          `status: done\nitem: APP-1\npr: 9\nhead_sha: ${HEAD}\ntests_run: 3`,
+        );
+        expect((await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1')).code).toBe(0);
+        expect(statusOf(fx, 'APP-1')?.notRunHere).toBeUndefined();
+      });
+
+      it('a failed report still blocks and opens nothing, whatever it lists', async () => {
+        const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+        withToken(fx);
+        writeReport(
+          fx,
+          'APP-1',
+          `status: failed\nitem: APP-1\npr_title: "APP-1: fix it"\ntests_run: 3\n${NOT_RUN}`,
+        );
+        const { gh, calls } = prGh();
+        const r = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+        expect(r.code).toBe(0);
+        expect(calls.some((c) => c.line.startsWith('pr create'))).toBe(false);
+        const item = statusOf(fx, 'APP-1');
+        expect(item?.status).toBe('blocked');
+        expect(item?.pr).toBeUndefined();
+        expect(item?.notRunHere).toBeUndefined();
+      });
+
+      it('an entry that names no missing service refuses the report and moves nothing', async () => {
+        const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+        withToken(fx);
+        writeReport(
+          fx,
+          'APP-1',
+          `${REPORT}\nnot_run_here:\n  - { command: cargo test --workspace, reason: too slow }`,
+        );
+        const { gh, calls } = prGh();
+        const r = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+        expect(r.code).not.toBe(0);
+        expect(r.err).toMatch(/not_run_here|notRunHere/);
+        expect(calls.some((c) => c.line.startsWith('pr create'))).toBe(false);
+        expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+      });
+    });
   });
 
   it('collect done → in_review with pr', async () => {

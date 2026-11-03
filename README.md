@@ -2,7 +2,7 @@
 
 Studio is a Claude Code plugin and TypeScript package for running a small software studio of coding-agent sessions from one control room: a lead session plans work from a board and a crew of role-based sessions carries it out, each in its own sandboxed clone.
 
-Status: 0.6.4, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store). See [CHANGELOG.md](CHANGELOG.md).
+Status: 0.6.5, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store). See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -110,6 +110,8 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 | `accounts-clear <label>`                                                                                        | Owner only, in a terminal: clear a label's account block                                                                    |
 
 `launch` refuses while a crew for the same item is still running and deletes a report an earlier run left in a reused clone. `collect` refuses while the item's crew process is still alive and refuses a report last modified before the crew started.
+
+**Tests a crew cannot run.** Crews get no database, no Docker and no network outside the allow list, so CI is the authority for the full suite. A crew runs what its sandbox can for what it changed (the touched package, crate or workspace member, the Definition of Done's tests, lint, format) and lists a command that a missing service kept from running under `not_run_here`, with `command`, `missing` (`database`, `docker`, `network` or `service`) and `reason`; the report stays `done`. A test that ran and failed is `failed`, never `not_run_here`, and an entry without one of those four services refuses the report. `collect` then works as usual: it opens the pull request under the capacity check with a section listing those commands for CI, stores the list on the item (`not_run_here`) and prints it. A review launch writes it to `briefs/<id>.caps/pull-request/not-run-here.txt`, and an approval still counts only with green checks.
 
 `pause` writes `pause.json` in the state root: `plan` assigns nothing (reason `paused`), `launch` refuses, and `queue run` holds before the next merge. Running crews continue. Any entry under that name counts as paused, readable or not; `resume` removes it. Both commands need a terminal and refuse under `STUDIO_ROLE=crew`. `queue run` also holds while old per-project state files are not yet merged into the owner root.
 
