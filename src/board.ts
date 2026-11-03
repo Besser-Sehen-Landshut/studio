@@ -114,7 +114,8 @@ function describeIssue(issue: z.core.$ZodIssue): string[] {
   return [`${base || '(root)'}: ${issue.message}`];
 }
 
-const boardFile = (dir: string): string => join(dir, '.studio', 'board.yaml');
+export const boardPath = (dir: string): string => join(dir, '.studio', 'board.yaml');
+const boardFile = boardPath;
 
 export function loadBoard(dir: string): Board {
   const file = boardFile(dir);

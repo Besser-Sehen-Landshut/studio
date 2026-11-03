@@ -154,6 +154,8 @@ export const studioConfigSchema = z.strictObject({
   crewAllowedWorkflows: strList,
   // Refs a crew session may pass to `gh workflow run --ref`; empty = default branch only.
   crewAllowedWorkflowRefs: strList,
+  // Base branches a pull request may be reviewed against; empty = default branch only.
+  reviewBases: strList,
 });
 
 export type StudioConfig = z.infer<typeof studioConfigSchema>;

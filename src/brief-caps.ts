@@ -18,6 +18,7 @@ import {
   type CrewCaps,
   capsFile,
   type RoutineAnalyzer,
+  readDefaultBranch,
   readPrFacts,
   reviewRounds,
   reviewTarget,
@@ -100,6 +101,18 @@ export async function resolveForItem(o: {
     throw new Error(
       `${item.id}: ${target.repo}#${target.pr} comes from a fork; a crew never runs a fork's code, review it by hand`,
     );
+  }
+  // A crew could point its pull request at a branch of its own, whose protection nobody set up.
+  if (target !== undefined && facts !== undefined && !config.reviewBases.includes(facts.base)) {
+    const defaultBranch = await readDefaultBranch(o.ports, target.repo);
+    if (defaultBranch === undefined) {
+      throw new Error(`${item.id}: cannot read the default branch of ${target.repo}`);
+    }
+    if (facts.base !== defaultBranch) {
+      throw new Error(
+        `${item.id}: ${target.repo}#${target.pr} targets ${facts.base}, neither the default branch nor listed in review_bases`,
+      );
+    }
   }
   const paths: ChangedPaths = facts?.complete ? [...facts.files, ...declared] : 'unknown';
   const name = target === undefined ? undefined : `${target.repo}#${target.pr}`;

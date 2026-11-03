@@ -77,6 +77,21 @@ export async function readPrFacts(
   }
 }
 
+/** The repository's default branch; undefined on any failure. */
+export async function readDefaultBranch(ports: Ports, repo: string): Promise<string | undefined> {
+  try {
+    const r = await ports.gh.run(['repo', 'view', repo, '--json', 'defaultBranchRef'], {
+      timeoutMs: GH_TIMEOUT_MS,
+    });
+    if (r.code !== 0) return undefined;
+    const name = (JSON.parse(r.stdout) as { defaultBranchRef?: { name?: unknown } | null })
+      .defaultBranchRef?.name;
+    return typeof name === 'string' && name !== '' ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const TARGET_NOTE = /^review ([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d{0,9})\b/;
 
 /** The pull request a review item is about, from the note the lead writes. */

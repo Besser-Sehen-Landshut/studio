@@ -1656,11 +1656,18 @@ function checkReadScope(env, tok, base, tool) {
 function refuseDotDot(tok, tool) {
   if (tok.split("/").includes("..")) deny(`${tool}: write the path without ..: ${tok}`);
 }
+function mayMatchDotDot(segment) {
+  const plain = segment.replace(/\\(.)/g, "$1").replace(/\[[^\]]*\]/g, "?");
+  return /^[.?]{2}$/.test(plain);
+}
 function checkGlobScope(env, pattern, base, tool) {
-  refuseDotDot(pattern, tool);
+  if (pattern.includes("..")) deny(`${tool}: write the pattern without ..: ${pattern}`);
   for (const e of braceExpand(pattern)) {
-    refuseDotDot(e, tool);
+    if (e.includes("{")) deny(`${tool}: a brace group needs a comma: ${pattern}`);
     const segs = e.split("/");
+    if (e.includes("..") || segs.some(mayMatchDotDot)) {
+      deny(`${tool}: write the pattern without ..: ${pattern}`);
+    }
     const first = segs.findIndex((s) => hasMagic(s));
     const prefix = first < 0 ? e : segs.slice(0, first).join("/") || (isAbsolute(e) ? "/" : ".");
     checkReadScope(env, prefix, base, tool);
@@ -1730,6 +1737,10 @@ function check(input, ctx) {
     hardSecretRes: ctx.secretGlobs.filter((g) => !(ctx.skillRootWaivedGlobs ?? []).includes(g)).map(fileGlobToRegExp)
   };
   const { toolName, toolInput } = input;
+  const given = input.cwd;
+  if (given !== void 0 && (typeof given !== "string" || !isAbsolute(given) || given.split("/").includes(".."))) {
+    deny("invalid working directory");
+  }
   const cwd = resolveReal(input.cwd ?? wt, wt);
   if (typeof toolName !== "string" || !CREW_TOOLS.has(toolName)) {
     deny(`tool not allowed for crew: ${String(toolName)}`);
@@ -1761,8 +1772,8 @@ function check(input, ctx) {
     if (toolInput.path !== void 0 && typeof toolInput.path !== "string") {
       deny(`${toolName} call with a path that is not a string`);
     }
-    const given = toolInput.path ?? "";
-    const start = given === "" ? "." : given;
+    const given2 = toolInput.path ?? "";
+    const start = given2 === "" ? "." : given2;
     checkReadScope(env, start, cwd, toolName);
     if (toolName === "Grep") {
       checkSearch(env, toolInput.path, [toolInput.glob], cwd);

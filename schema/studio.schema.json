@@ -353,6 +353,13 @@
       "items": {
         "type": "string"
       }
+    },
+    "review_bases": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": [

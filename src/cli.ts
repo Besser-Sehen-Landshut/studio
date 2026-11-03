@@ -20,6 +20,7 @@ import {
   blockHold,
   blockLine,
   clearBlocks,
+  crewProcess,
   type Parks,
   readBlocks,
   readLimits,
@@ -485,6 +486,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         } else if (report.status === 'done' && !PR_OPTIONAL.includes(item.type)) {
           throw new Error(`done report for ${item.id} names no pr`);
         }
+        const supersededBy =
+          item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined
+            ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot()))
+            : undefined;
         const now = ports.clock.now();
         let next = board;
         if (report.status === 'done') {
@@ -496,8 +501,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           } else {
             // Review and research items open no PR: the result is the report itself.
             next = transition(next, item.id, 'merged', BY, now);
+            // A superseded verdict is no round: the verdict note is what `reviewRounds` counts.
             const result = [
-              ...(report.verdict ? [`verdict: ${report.verdict}`] : []),
+              ...(supersededBy !== undefined
+                ? [`superseded by ${supersededBy}`]
+                : report.verdict
+                  ? [`verdict: ${report.verdict}`]
+                  : []),
               ...(report.reviews ? [`reviews: ${report.reviews}`] : []),
             ];
             if (result.length > 0) {
@@ -522,10 +532,6 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           }));
         }
         // The verdict goes on the item that holds the pull request; `queue add` and the merge read it.
-        const supersededBy =
-          item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined
-            ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot()))
-            : undefined;
         if (
           item.type === 'review' &&
           report.status === 'done' &&
@@ -791,12 +797,26 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const records = readCrewRecords(root);
         const rec = records[id];
         if (!rec) throw new Error(`no crew record for ${id}`);
-        await ports.claude.stop(rec.pid);
+        // Only the process started for this crew gets a signal: the pid may be another's by now.
+        const process = await crewProcess(rec, ports);
+        if (process === 'invalid') throw new Error(`crew record for ${id} has no valid pid`);
+        if (process === 'unknown') {
+          throw new Error(
+            `crew ${rec.name} (pid ${rec.pid}) is alive but cannot be verified; not stopping it, check it by hand`,
+          );
+        }
+        if (process === 'verified') await ports.claude.stop(rec.pid);
         const stoppedAt = ports.clock.now().toISOString();
         const latest = readCrewRecords(root);
         latest[id] = { ...(latest[id] ?? rec), stoppedAt };
         writeStateFile(root, join(root, 'crew.json'), `${JSON.stringify(latest, null, 2)}\n`);
-        print({ item: id, name: rec.name, pid: rec.pid, stoppedAt });
+        print({
+          item: id,
+          name: rec.name,
+          pid: rec.pid,
+          stoppedAt,
+          ...(process === 'verified' ? {} : { processGone: true }),
+        });
         return 0;
       }
 

@@ -20,6 +20,7 @@ import type { Claude, Gh, Ports } from '../src/ports.js';
 import { realPorts } from '../src/ports.js';
 import { acquireQueueRunLock, enqueue, loadQueue, saveQueue } from '../src/queue.js';
 import { newReportName, reportName } from '../src/report.js';
+import { reviewRounds } from '../src/review.js';
 import { computeMetrics, type StateSnapshot, writeState } from '../src/state.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-cli-')));
@@ -1100,6 +1101,49 @@ describe('studio CLI', () => {
       expect(calls.some((c) => c.startsWith('pr merge 5'))).toBe(true);
     });
 
+    describe('`studio stop` signals only the process it started', () => {
+      const launched = async (identityNow: () => string | undefined, alive = true) => {
+        const fx = makeFx([{ id: 'APP-1' }]);
+        const { ports, stopped } = fakePorts(fakeGh().gh);
+        expect((await cli(fx, ports, 'launch', 'APP-1')).code).toBe(0);
+        const later = {
+          ...ports,
+          claude: {
+            ...ports.claude,
+            alive: () => alive,
+            identity: async () => identityNow(),
+          },
+        };
+        return { fx, later, stopped };
+      };
+      it('another process on that pid is left alone; the record says the crew is gone', async () => {
+        const { fx, later, stopped } = await launched(() => 'start-other');
+        const r = await cli(fx, later, 'stop', 'APP-1');
+        expect(r.code).toBe(0);
+        expect(stopped).toEqual([]);
+        expect(JSON.parse(r.out).processGone).toBe(true);
+        const crew = JSON.parse(readFileSync(join(fx.state, 'crew.json'), 'utf8'));
+        expect(typeof crew['APP-1'].stoppedAt).toBe('string');
+      });
+      it('a process that cannot be verified is left alone and the stop fails', async () => {
+        const { fx, later, stopped } = await launched(() => undefined);
+        const r = await cli(fx, later, 'stop', 'APP-1');
+        expect(r.code).toBe(1);
+        expect(r.err).toMatch(/cannot be verified/);
+        expect(stopped).toEqual([]);
+      });
+      it('a process already gone gets no signal', async () => {
+        const { fx, later, stopped } = await launched(() => 'start-4242', false);
+        expect((await cli(fx, later, 'stop', 'APP-1')).code).toBe(0);
+        expect(stopped).toEqual([]);
+      });
+      it('the verified process is stopped', async () => {
+        const { fx, later, stopped } = await launched(() => 'start-4242');
+        expect((await cli(fx, later, 'stop', 'APP-1')).code).toBe(0);
+        expect(stopped).toEqual([4242]);
+      });
+    });
+
     it('an approval also stores the base it was given for', async () => {
       const fx = makeFx([
         { id: 'APP-1', status: 'assigned', type: 'review' },
@@ -1153,6 +1197,14 @@ describe('studio CLI', () => {
       it('an older request for changes takes nothing back either', async () => {
         const { fx } = await collectOlder('changes_requested', HEAD);
         expect(statusOf(fx, 'APP-2')?.approvedHead).toBe(HEAD);
+        expect(statusOf(fx, 'APP-2')?.status).toBe('in_review');
+      });
+      it('an older request for changes is not a counted round; the note says why', async () => {
+        const { fx } = await collectOlder('changes_requested', null);
+        const notes = statusOf(fx, 'APP-1')?.notes ?? [];
+        expect(notes).not.toContain('verdict: changes_requested');
+        expect(notes).toContain('superseded by APP-3');
+        expect(reviewRounds(loadBoard(fx.project), 'org/app#9')).toBe(0);
       });
       it('the newer one counts, in either order', async () => {
         const { fx, dead } = await collectOlder('changes_requested', null);

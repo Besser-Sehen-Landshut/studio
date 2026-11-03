@@ -50,6 +50,12 @@ Not tagged or published as a GitHub release yet; the maintainers tag after the m
 - Only one review of a pull request runs at a time, and `collect` applies only the verdict of the
   review started last (`supersededBy` names it otherwise).
 - The pause and block check before a merge now runs after the approval check, as its last step.
+- A review launch clears an earlier approval of that pull request, and refuses a base that is neither
+  the default branch nor listed in the new `review_bases` setting (empty by default).
+- `studio stop` signals only a process with the start time stored at launch; another process on the
+  pid gets no signal, and one that cannot be verified makes the stop fail.
+- A failed fetch or a git older than 2.38 now says so when a merged base is checked. `studio doctor`
+  shows the git version.
 - A launch refuses when the Studio plugin is not installed in the crew's config dir, before anything
   is counted; a readable config dir with no skills or plugins now counts as not installed. `studio
   doctor` shows it with the install command and looks in a credential provider's config dir.

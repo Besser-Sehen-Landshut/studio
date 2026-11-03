@@ -2028,7 +2028,12 @@ describe('required skills at launch', () => {
 });
 
 describe('capabilities at launch', () => {
-  const PR_HEAD = { headRefOid: 'a'.repeat(40), baseRefName: 'main', isCrossRepository: false };
+  const PR_HEAD = {
+    headRefOid: 'a'.repeat(40),
+    baseRefName: 'main',
+    isCrossRepository: false,
+    defaultBranchRef: { name: 'main' },
+  };
   const reviewItem: WorkItem = {
     ...item,
     id: 'APP-20',
@@ -2117,6 +2122,174 @@ describe('capabilities at launch', () => {
     alive = false;
     await launchCrew(f.project, second, reviewerConfig, ports, f.launcher);
     expect(started).toHaveLength(2);
+  });
+
+  describe('what counts as a review still running', () => {
+    const second: WorkItem = { ...reviewItem, id: 'APP-21' };
+    const launchAfter = async (
+      change: (f: Fixture) => void,
+      identity: () => string | undefined = () => 'start-4242',
+    ) => {
+      const f = makeFixture();
+      const started: Started[] = [];
+      const base = portsWithGh(started, () => ({ code: 0, stdout: pr('a.ts') }));
+      const ports: Ports = {
+        ...base,
+        claude: { ...base.claude, alive: () => false, identity: async () => 'start-4242' },
+      };
+      await launchCrew(f.project, reviewItem, reviewerConfig, ports, f.launcher);
+      change(f);
+      const later: Ports = {
+        ...base,
+        claude: {
+          ...base.claude,
+          // Only the earlier crew's pid may look alive: this launch has no record yet.
+          alive: () => true,
+          identity: async () => identity(),
+        },
+      };
+      // The first crew's own relaunch check is not at stake: APP-21 has no record.
+      return launchCrew(f.project, second, reviewerConfig, later, f.launcher);
+    };
+    const editRecord = (f: Fixture, over: Record<string, unknown>) => {
+      const file = join(f.state, 'crew.json');
+      const all = JSON.parse(readFileSync(file, 'utf8'));
+      all['APP-20'] = { ...all['APP-20'], ...over };
+      writeFileSync(file, JSON.stringify(all));
+    };
+    const board = (f: Fixture, status: string) => {
+      mkdirSync(join(f.project, '.studio'), { recursive: true });
+      writeFileSync(
+        join(f.project, '.studio', 'board.yaml'),
+        `items:\n  - { id: APP-20, title: r, type: review, role: reviewer, repo: org/app, size: S, priority: 1, status: ${status} }\n`,
+      );
+    };
+
+    it('a pid another process holds now does not block', async () => {
+      await expect(
+        after(
+          () => {},
+          () => 'start-other',
+        ),
+      ).resolves.toBeDefined();
+    });
+    it('a stopped review does not block', async () => {
+      await expect(
+        launchAfter((f) => editRecord(f, { stoppedAt: '2026-10-30T08:00:00.000Z' })),
+      ).resolves.toBeDefined();
+    });
+    it.each(['merged', 'dropped'])('a review item that is %s does not block', async (status) => {
+      await expect(launchAfter((f) => board(f, status))).resolves.toBeDefined();
+    });
+    it('a live review that matches blocks', async () => {
+      await expect(launchAfter(() => {})).rejects.toThrow(/still reviewing/);
+    });
+    it('a process that cannot be verified blocks: fail closed', async () => {
+      await expect(
+        after(
+          () => {},
+          () => undefined,
+        ),
+      ).rejects.toThrow(/still reviewing/);
+    });
+    it('an active review item blocks', async () => {
+      await expect(launchAfter((f) => board(f, 'assigned'))).rejects.toThrow(/still reviewing/);
+    });
+    it('a board that cannot be read blocks: fail closed', async () => {
+      await expect(
+        launchAfter((f) => {
+          mkdirSync(join(f.project, '.studio'), { recursive: true });
+          writeFileSync(join(f.project, '.studio', 'board.yaml'), 'items: [');
+        }),
+      ).rejects.toThrow();
+    });
+  });
+
+  describe('launching a review takes back an earlier approval', () => {
+    const boardWith = (f: Fixture, repoNumber: number) => {
+      mkdirSync(join(f.project, '.studio'), { recursive: true });
+      writeFileSync(
+        join(f.project, '.studio', 'board.yaml'),
+        `items:\n  - { id: APP-2, title: b, type: fix, role: builder, repo: org/app, size: S, priority: 1, status: in_review, pr: ${repoNumber}, approved_head: ${'a'.repeat(40)}, approved_base: main }\n`,
+      );
+    };
+    const approvalOf = (f: Fixture) => {
+      const text = readFileSync(join(f.project, '.studio', 'board.yaml'), 'utf8');
+      return /approved_(head|base)/.test(text);
+    };
+    const go = (f: Fixture, started: Started[], stdout = pr('a.ts')) =>
+      launchCrew(
+        f.project,
+        reviewItem,
+        reviewerConfig,
+        portsWithGh(started, () => ({ code: 0, stdout })),
+        f.launcher,
+      );
+    it('head and base are gone from the item of that pull request', async () => {
+      const f = makeFixture();
+      boardWith(f, 7);
+      await go(f, []);
+      expect(approvalOf(f)).toBe(false);
+    });
+    it('another pull request keeps its approval', async () => {
+      const f = makeFixture();
+      boardWith(f, 8);
+      await go(f, []);
+      expect(approvalOf(f)).toBe(true);
+    });
+    it('a refused launch keeps it', async () => {
+      const f = makeFixture();
+      boardWith(f, 7);
+      const fork = JSON.stringify({ ...JSON.parse(pr('a.ts')), isCrossRepository: true });
+      await expect(go(f, [], fork)).rejects.toThrow(/fork/);
+      expect(approvalOf(f)).toBe(true);
+    });
+  });
+
+  describe('the base of a reviewed pull request', () => {
+    const withBase = (baseRefName: string) =>
+      JSON.stringify({ ...JSON.parse(pr('a.ts')), baseRefName });
+    const go = (f: Fixture, stdout: string, cfg = reviewerConfig, started: Started[] = []) =>
+      launchCrew(
+        f.project,
+        reviewItem,
+        cfg,
+        portsWithGh(started, () => ({ code: 0, stdout })),
+        f.launcher,
+      );
+    it('another base than the default branch refuses, naming the setting', async () => {
+      const f = makeFixture();
+      const started: Started[] = [];
+      await expect(go(f, withBase('feature/x'), reviewerConfig, started)).rejects.toThrow(
+        /feature\/x.*review_bases/,
+      );
+      expect(started).toHaveLength(0);
+    });
+    it('the default branch goes through', async () => {
+      await expect(go(makeFixture(), withBase('main'))).resolves.toBeDefined();
+    });
+    it('a listed base goes through', async () => {
+      const cfg = { ...reviewerConfig, reviewBases: ['release'] };
+      await expect(go(makeFixture(), withBase('release'), cfg)).resolves.toBeDefined();
+    });
+    it('a default branch that cannot be read refuses', async () => {
+      const f = makeFixture();
+      const facts = withBase('feature/x');
+      const ports = portsWithGh([], () => ({ code: 0, stdout: facts }));
+      const run: Ports['gh']['run'] = async (args) =>
+        args.includes('defaultBranchRef')
+          ? { code: 1, stdout: '', stderr: '' }
+          : ports.gh.run(args);
+      await expect(
+        launchCrew(
+          f.project,
+          reviewItem,
+          { ...reviewerConfig, reviewBases: [] },
+          { ...ports, gh: { ...ports.gh, run } },
+          f.launcher,
+        ),
+      ).rejects.toThrow(/default branch/);
+    });
   });
 
   it('a running review of another pull request does not stop this one', async () => {

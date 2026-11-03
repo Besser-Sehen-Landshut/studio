@@ -27658,7 +27658,8 @@ function describeIssue(issue2) {
   }
   return [`${base || "(root)"}: ${issue2.message}`];
 }
-var boardFile = (dir) => join(dir, ".studio", "board.yaml");
+var boardPath = (dir) => join(dir, ".studio", "board.yaml");
+var boardFile = boardPath;
 function loadBoard(dir) {
   const file2 = boardFile(dir);
   let text;
@@ -28260,7 +28261,9 @@ var studioConfigSchema = external_exports.strictObject({
   // Workflows (file name or name) a crew session may start with `gh workflow run`.
   crewAllowedWorkflows: strList2,
   // Refs a crew session may pass to `gh workflow run --ref`; empty = default branch only.
-  crewAllowedWorkflowRefs: strList2
+  crewAllowedWorkflowRefs: strList2,
+  // Base branches a pull request may be reviewed against; empty = default branch only.
+  reviewBases: strList2
 });
 var ConfigError = class extends Error {
   path;
@@ -30200,6 +30203,18 @@ async function readPrFacts(ports, target) {
     return void 0;
   }
 }
+async function readDefaultBranch(ports, repo) {
+  try {
+    const r = await ports.gh.run(["repo", "view", repo, "--json", "defaultBranchRef"], {
+      timeoutMs: GH_TIMEOUT_MS
+    });
+    if (r.code !== 0) return void 0;
+    const name = JSON.parse(r.stdout).defaultBranchRef?.name;
+    return typeof name === "string" && name !== "" ? name : void 0;
+  } catch {
+    return void 0;
+  }
+}
 var TARGET_NOTE = /^review ([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d{0,9})\b/;
 function reviewTarget(item) {
   for (const note of item.notes ?? []) {
@@ -30677,6 +30692,17 @@ async function resolveForItem(o2) {
     throw new Error(
       `${item.id}: ${target.repo}#${target.pr} comes from a fork; a crew never runs a fork's code, review it by hand`
     );
+  }
+  if (target !== void 0 && facts !== void 0 && !config2.reviewBases.includes(facts.base)) {
+    const defaultBranch = await readDefaultBranch(o2.ports, target.repo);
+    if (defaultBranch === void 0) {
+      throw new Error(`${item.id}: cannot read the default branch of ${target.repo}`);
+    }
+    if (facts.base !== defaultBranch) {
+      throw new Error(
+        `${item.id}: ${target.repo}#${target.pr} targets ${facts.base}, neither the default branch nor listed in review_bases`
+      );
+    }
   }
   const paths = facts?.complete ? [...facts.files, ...declared] : "unknown";
   const name = target === void 0 ? void 0 : `${target.repo}#${target.pr}`;
@@ -32163,15 +32189,20 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   });
   if (!lock) throw new Error("another launch is in progress (launch.lock); try again");
   held2.lock = lock;
-  const recheck = () => {
+  const recheck = async () => {
     if (!lock.owned()) throw new Error("the launch lock was lost; refusing to launch, try again");
     refuseIfRunning(stateRoot, item, ports);
     const target = forItem.review?.target;
     if (target !== void 0) {
+      const items = existsSync3(boardPath(projectDir)) ? loadBoard(projectDir).items : [];
       for (const [other, crew] of Object.entries(readCrewRecords(stateRoot))) {
-        if (other !== item.id && readCrewCaps(stateRoot, other)?.reviewsTarget === target && ports.claude.alive(crew.pid)) {
-          throw new Error(`${other} is still reviewing ${target}; collect or stop it first`);
-        }
+        if (other === item.id || readCrewCaps(stateRoot, other)?.reviewsTarget !== target) continue;
+        if (crew.stoppedAt !== void 0) continue;
+        const status = items.find((i2) => i2.id === other)?.status;
+        if (status === "merged" || status === "dropped") continue;
+        const process14 = await crewProcess(crew, ports);
+        if (process14 === "dead" || process14 === "gone") continue;
+        throw new Error(`${other} is still reviewing ${target}; collect or stop it first`);
       }
     }
     const again = readLimits(ownerRoot);
@@ -32184,7 +32215,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     if (!locked.ok) throw new Error(USAGE_UNREADABLE);
     if (!(locked.remaining(label) > 0)) refuseFull();
   };
-  recheck();
+  await recheck();
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
   const homeDir = join16(stateRoot, "homes", item.id);
@@ -32240,7 +32271,19 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   refuseIfBlocked(ownerRoot);
   refuseIfPaused(stateRoot);
   lock.heartbeat(ports.clock.now());
-  recheck();
+  await recheck();
+  if (forItem.review?.target !== void 0 && existsSync3(boardPath(projectDir))) {
+    const reviewing = forItem.review.target;
+    const board = loadBoard(projectDir);
+    saveBoard(projectDir, {
+      ...board,
+      items: board.items.map((i2) => {
+        if (`${i2.repo}#${i2.pr}` !== reviewing || i2.type === "review") return i2;
+        const { approvedHead: _head, approvedBase: _base, ...rest } = i2;
+        return rest;
+      })
+    });
+  }
   recordRun(ownerRoot, label, ports.clock.now(), ownerConfig.crewLabelLimits.timezone);
   const { pid } = await ports.claude.start(
     wt.path,
@@ -32891,6 +32934,8 @@ async function readChecks(entry, gh) {
     return { kind: "failed", reason: "no check passed" };
   return { kind: "pass" };
 }
+var GIT_FETCH_MS = 12e4;
+var GIT_LOCAL_MS = 6e4;
 async function isBranchUpdate({ gh, git }, checkout, target, approved, head) {
   try {
     const c3 = await gh.run(["api", `repos/${target.repo}/commits/${head}`]);
@@ -32905,13 +32950,31 @@ async function isBranchUpdate({ gh, git }, checkout, target, approved, head) {
     if (d.code !== 0) return false;
     const { status } = JSON.parse(d.stdout);
     if (status !== "behind" && status !== "identical") return false;
-    const g = (args) => git.run(checkout.dir, ["--no-replace-objects", ...args]);
-    await g(["fetch", "--no-tags", "--no-write-fetch-head", checkout.remote, head]);
-    const merged = await g(["merge-tree", "--write-tree", approved.head, second.sha]);
-    const tree = await g(["rev-parse", "--verify", `${head}^{tree}`]);
-    return merged.trim() !== "" && merged.trim() === tree.trim();
+    return await sameTreeAsMerge(git, checkout, approved.head, second.sha, head);
   } catch {
     return false;
+  }
+}
+async function sameTreeAsMerge(git, checkout, first, second, head) {
+  const g = (args, timeoutMs) => git.run(checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
+  const said = (e) => e.message.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
+  try {
+    await g(["fetch", "--no-tags", "--no-write-fetch-head", checkout.remote, head], GIT_FETCH_MS);
+  } catch (e) {
+    return `cannot fetch ${head} to compare its tree: ${said(e)}`;
+  }
+  let merged;
+  try {
+    merged = await g(["merge-tree", "--write-tree", first, second], GIT_LOCAL_MS);
+  } catch (e) {
+    if (/failed \(1\):/.test(e.message)) return false;
+    return `git merge-tree failed; git 2.38 or newer is needed (see studio doctor): ${said(e)}`;
+  }
+  try {
+    const tree = await g(["rev-parse", "--verify", `${head}^{tree}`], GIT_LOCAL_MS);
+    return merged.trim() !== "" && merged.trim() === tree.trim();
+  } catch (e) {
+    return `cannot read the tree of ${head}: ${said(e)}`;
   }
 }
 async function liveBase(gh, target) {
@@ -32944,7 +33007,9 @@ async function approvalProblem(ports, checkout, target, approval, head) {
   }
   if (approvedHead.toLowerCase() === head.toLowerCase()) return void 0;
   const approved = { head: approvedHead, base };
-  if (await isBranchUpdate(ports, checkout, target, approved, head)) return void 0;
+  const update = await isBranchUpdate(ports, checkout, target, approved, head);
+  if (update === true) return void 0;
+  if (typeof update === "string") return `${name}: ${update}`;
   return `${name} is at ${head}, the approval is for ${approvedHead}: review it again`;
 }
 async function viewPr(entry, gh) {
@@ -33795,6 +33860,16 @@ async function crewConfigDir(command, owner, env, ports) {
     return void 0;
   }
 }
+async function gitState(project, ports) {
+  try {
+    const m = /(\d+)\.(\d+)\.(\d+)/.exec(await ports.git.run(project, ["--version"]));
+    if (!m) return "cannot tell";
+    const enough = Number(m[1]) > 2 || Number(m[1]) === 2 && Number(m[2]) >= 38;
+    return enough ? m[0] : `${m[0]} (too old: 2.38 or newer is needed to accept a merged base)`;
+  } catch {
+    return "cannot tell";
+  }
+}
 function skillState(dir, name) {
   const found = dir === void 0 ? void 0 : skillInstalled(dir, name);
   return found === void 0 ? "cannot tell" : found ? "installed" : "not found";
@@ -33829,7 +33904,9 @@ async function runDoctor(o2) {
     o2.ports
   );
   const studioCrew = skillState(configDir, CREW_SKILL2.split(":").at(-1) ?? "");
+  const git = await gitState(o2.project, o2.ports);
   const report = {
+    git,
     crewToken: { ...crewToken, required: required2 },
     crewTokenFile: crewTokenFile(o2.owner),
     studioYaml: config2 ? "readable" : "not readable",
@@ -33852,6 +33929,7 @@ async function runDoctor(o2) {
       `crew token: ${crewToken.status}${source}${required2 ? "" : " (optional: allow_ambient_credentials)"}`,
       `studio.yaml: ${report.studioYaml}`,
       `superpowers: ${report.superpowers}`,
+      `git: ${git}`,
       `studio plugin: ${studioCrew}${studioCrew === "not found" && configDir !== void 0 ? ` (${studioPluginHint(configDir)})` : ""}`,
       `stacks: ${report.stacks === null ? "not set: run studio setup stack" : report.stacks.join(", ") || "(none)"}`,
       `owner config: ${report.ownerConfig}`,
@@ -34384,6 +34462,7 @@ async function runCli(argv, deps) {
         } else if (report.status === "done" && !PR_OPTIONAL.includes(item.type)) {
           throw new Error(`done report for ${item.id} names no pr`);
         }
+        const supersededBy = item.type === "review" && report.status === "done" && reviewDone.target !== void 0 ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot())) : void 0;
         const now = ports.clock.now();
         let next = board;
         if (report.status === "done") {
@@ -34395,7 +34474,7 @@ async function runCli(argv, deps) {
           } else {
             next = transition(next, item.id, "merged", BY, now);
             const result = [
-              ...report.verdict ? [`verdict: ${report.verdict}`] : [],
+              ...supersededBy !== void 0 ? [`superseded by ${supersededBy}`] : report.verdict ? [`verdict: ${report.verdict}`] : [],
               ...report.reviews ? [`reviews: ${report.reviews}`] : []
             ];
             if (result.length > 0) {
@@ -34416,7 +34495,6 @@ async function runCli(argv, deps) {
             ]
           }));
         }
-        const supersededBy = item.type === "review" && report.status === "done" && reviewDone.target !== void 0 ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot())) : void 0;
         if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0 && supersededBy === void 0) {
           const reviewed = next.items.find(
             (i2) => `${i2.repo}#${i2.pr}` === reviewDone.target && i2.type !== "review"
@@ -34653,13 +34731,26 @@ async function runCli(argv, deps) {
         const records = readCrewRecords(root);
         const rec = records[id];
         if (!rec) throw new Error(`no crew record for ${id}`);
-        await ports.claude.stop(rec.pid);
+        const process14 = await crewProcess(rec, ports);
+        if (process14 === "invalid") throw new Error(`crew record for ${id} has no valid pid`);
+        if (process14 === "unknown") {
+          throw new Error(
+            `crew ${rec.name} (pid ${rec.pid}) is alive but cannot be verified; not stopping it, check it by hand`
+          );
+        }
+        if (process14 === "verified") await ports.claude.stop(rec.pid);
         const stoppedAt = ports.clock.now().toISOString();
         const latest = readCrewRecords(root);
         latest[id] = { ...latest[id] ?? rec, stoppedAt };
         writeStateFile(root, join23(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
 `);
-        print({ item: id, name: rec.name, pid: rec.pid, stoppedAt });
+        print({
+          item: id,
+          name: rec.name,
+          pid: rec.pid,
+          stoppedAt,
+          ...process14 === "verified" ? {} : { processGone: true }
+        });
         return 0;
       }
       case "setup": {
@@ -43000,12 +43091,14 @@ function realPorts(claudeBin = "claude") {
     }
   };
   const git = {
-    async run(cwd, args) {
+    async run(cwd, args, opts) {
       const r = await execa("git", args, {
         cwd,
         reject: false,
-        env: { GIT_TERMINAL_PROMPT: "0" }
+        env: { GIT_TERMINAL_PROMPT: "0" },
+        ...opts?.timeoutMs === void 0 ? {} : { timeout: opts.timeoutMs }
       });
+      if (r.timedOut) throw new Error(`git ${args.join(" ")} timed out`);
       if (r.exitCode !== 0) {
         throw new Error(`git ${args.join(" ")} failed (${r.exitCode}): ${r.stderr}`);
       }

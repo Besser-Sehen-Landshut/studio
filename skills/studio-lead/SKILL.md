@@ -56,7 +56,8 @@ Every PR, however urgent, gets one fresh reviewer crew session before `queue add
    item with the base; `queue add` and the merge refuse another base, and any other head except one commit that
    only merges the base into the approved head and whose tree proves it. So a later push, a conflict resolved by
    hand or a second branch update needs a new review. A launch refuses a pull request from a fork, or a second
-   review while one of that pull request runs; output `supersededBy` means a newer review counts instead. Output `skipped: [...]` lists optional analyzers
+   review while one of that pull request runs, or a base outside the default branch and `review_bases`; launching
+   a review clears the earlier approval; output `supersededBy` means a newer review counts instead. Output `skipped: [...]` lists optional analyzers
    that could not run: collect already refused any skipped diff review, spec check or security, so the approval
    stands. Queue it, name the skip in your status line, and fetch a missing source with `studio setup sources`.
    `changes_requested` → builder item `blocked` with the findings as notes, `blocked → ready`, relaunch, then a

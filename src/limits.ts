@@ -690,7 +690,7 @@ type CrewProcess = 'invalid' | 'dead' | 'verified' | 'unknown' | 'gone';
  * start time stored at launch. `gone`: another process holds the pid now. `unknown`: alive, but
  * there is no stored identity or it cannot be read.
  */
-async function crewProcess(rec: CrewRecord, ports: Ports): Promise<CrewProcess> {
+export async function crewProcess(rec: CrewRecord, ports: Ports): Promise<CrewProcess> {
   // A negative pid would signal a whole process group, -1 everything the owner runs.
   if (!Number.isInteger(rec.pid) || rec.pid <= 0) return 'invalid';
   if (!ports.claude.alive(rec.pid)) return 'dead';

@@ -51,6 +51,7 @@ owner_only: []
 deploy_commands: []
 crew_allowed_workflows: []
 crew_allowed_workflow_refs: []
+review_bases: [] # base branches besides the default branch a pull request may be reviewed against
 ```
 
 `.studio/board.yaml`:

@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { WorkItem } from './board.js';
-import { loadBoard } from './board.js';
+import { boardPath, loadBoard, saveBoard } from './board.js';
 import {
   type BriefCaps,
   plainCaps,
@@ -32,6 +32,7 @@ import { DEFAULT_SECRET_GLOBS } from './guard.js';
 import {
   activeParks,
   blockHold,
+  crewProcess,
   DEFAULT_LABEL,
   earliestReset,
   type LimitKind,
@@ -1103,20 +1104,21 @@ async function launchCrewLocked(
   if (!lock) throw new Error('another launch is in progress (launch.lock); try again');
   held.lock = lock;
   /** Everything the pick relied on, read again from the files: the last word before a start. */
-  const recheck = (): void => {
+  const recheck = async (): Promise<void> => {
     if (!lock.owned()) throw new Error('the launch lock was lost; refusing to launch, try again');
     refuseIfRunning(stateRoot, item, ports);
     // Two reviews of one pull request at a time could overwrite each other's verdict.
     const target = forItem.review?.target;
     if (target !== undefined) {
+      const items = existsSync(boardPath(projectDir)) ? loadBoard(projectDir).items : [];
       for (const [other, crew] of Object.entries(readCrewRecords(stateRoot))) {
-        if (
-          other !== item.id &&
-          readCrewCaps(stateRoot, other)?.reviewsTarget === target &&
-          ports.claude.alive(crew.pid)
-        ) {
-          throw new Error(`${other} is still reviewing ${target}; collect or stop it first`);
-        }
+        if (other === item.id || readCrewCaps(stateRoot, other)?.reviewsTarget !== target) continue;
+        if (crew.stoppedAt !== undefined) continue;
+        const status = items.find((i) => i.id === other)?.status;
+        if (status === 'merged' || status === 'dropped') continue;
+        const process = await crewProcess(crew, ports);
+        if (process === 'dead' || process === 'gone') continue;
+        throw new Error(`${other} is still reviewing ${target}; collect or stop it first`);
       }
     }
     const again = readLimits(ownerRoot);
@@ -1129,7 +1131,7 @@ async function launchCrewLocked(
     if (!locked.ok) throw new Error(USAGE_UNREADABLE);
     if (!(locked.remaining(label) > 0)) refuseFull();
   };
-  recheck();
+  await recheck();
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
   removeOldReport(stateRoot, wt.path, item.id);
   // Isolated HOME, recreated from scratch on every launch: only a git identity and a credential
@@ -1193,7 +1195,20 @@ async function launchCrewLocked(
   // Preparing may have taken long: keep the lock, and if it was lost refuse. The checks run once
   // more, as the last ones before the run is counted and started.
   lock.heartbeat(ports.clock.now());
-  recheck();
+  await recheck();
+  // From here the verdict is open again: an older approval must not outlive a review that fails.
+  if (forItem.review?.target !== undefined && existsSync(boardPath(projectDir))) {
+    const reviewing = forItem.review.target;
+    const board = loadBoard(projectDir);
+    saveBoard(projectDir, {
+      ...board,
+      items: board.items.map((i) => {
+        if (`${i.repo}#${i.pr}` !== reviewing || i.type === 'review') return i;
+        const { approvedHead: _head, approvedBase: _base, ...rest } = i;
+        return rest;
+      }),
+    });
+  }
   // Counted before the start, so a start that fails still counts as a run.
   recordRun(ownerRoot, label, ports.clock.now(), ownerConfig.crewLabelLimits.timezone);
   const { pid } = await ports.claude.start(
