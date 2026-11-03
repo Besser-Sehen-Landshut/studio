@@ -19,6 +19,7 @@ import { type CliDeps, runCli } from '../src/cli.js';
 import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import { newReportName } from '../src/report.js';
+import { prepareCrewDir } from './crew-dir.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-cli-limits-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -173,6 +174,7 @@ const provider = (fx: Fx, line: string) => {
     join(fx.ownerDir, 'config.yaml'),
     `crew_credential_command: ${f}\ncrew_label_limits:\n  max_parallel: 8\n`,
   );
+  prepareCrewDir(fx.ownerDir);
 };
 const TOKEN = 'fake-value-oauth-cli-5d21';
 const tokenLine = (label: string) =>

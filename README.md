@@ -221,7 +221,9 @@ Studio checks only that a token has a plausible form (no spaces or control chara
 - `$XDG_CONFIG_HOME/studio/tokens/` (default `~/.config/studio/tokens/`): a directory, mode 0700, owned by the user, no symlink.
 - `tokens/<label>.json`: one per account, mode 0600, owned by the user, no symlink, holding one JSON object `{"label": "<label>", "token": "<token>", "addedAt": "<ISO 8601 time>"}`. `label` equals the file name without `.json` and matches `^[A-Za-z0-9._-]{1,64}$`, not starting with a dot.
 - `tokens/active`: mode 0600, the active label and a newline.
-- `$XDG_CONFIG_HOME/studio/claude/`: the crew config dir with the plugins. A provider may return it in the `CLAUDE_CONFIG_DIR` form only for a login stored there; for these tokens it returns `CLAUDE_CODE_OAUTH_TOKEN`.
+- `$XDG_CONFIG_HOME/studio/claude/`: the crew config dir with the plugins. For these tokens a provider returns `CLAUDE_CODE_OAUTH_TOKEN`.
+
+Whenever a provider answers in the `CLAUDE_CODE_OAUTH_TOKEN` form, for a stored account or any other token, the crew gets this crew config dir as `CLAUDE_CONFIG_DIR`, as on the built-in way, never `~/.claude`; a launch refuses while it is missing (`studio account setup-plugins`). The `CLAUDE_CONFIG_DIR` form keeps the directory the provider names.
 
 Studio reads these files only when no provider is configured. A provider reading them must apply the same checks (owner, mode, no link) and must never print a token except in its one JSON line.
 

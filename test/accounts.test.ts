@@ -180,6 +180,57 @@ describe('the built-in way', () => {
   });
 });
 
+describe('errors never carry file content', () => {
+  const SECRET = `fake-value-secret-${'s'.repeat(40)}`;
+  const messages = (o: ReturnType<typeof owner>): string[] => {
+    const out: string[] = [];
+    for (const call of [
+      () => builtInAccount(o, NOW),
+      () => listAccounts(o),
+      () => setActiveLabel(o, 'a'),
+      () => removeAccount(o, 'a'),
+      () => activeLabel(o),
+    ]) {
+      try {
+        call();
+      } catch (e) {
+        out.push((e as Error).message);
+      }
+    }
+    return out;
+  };
+  it.each([
+    `{"label":"a","token":"${SECRET}"`,
+    `${SECRET}`,
+    `{"label":"a","token":"${SECRET}","addedAt":}`,
+    `{"label":"a","token":${SECRET}}`,
+  ])('a broken account file %#: refused, and the token is in no message', (text) => {
+    const o = owner();
+    addAccount(o, 'a', TOKEN, NOW);
+    writeFileSync(accountFile(o, 'a'), text, { mode: 0o600 });
+    const all = messages(o);
+    expect(all.length).toBeGreaterThan(0);
+    for (const m of all) expect(m).not.toContain(SECRET.slice(0, 24));
+    expect(all.some((m) => m.endsWith('is not valid JSON'))).toBe(true);
+  });
+  it('a broken active file: refused, and its content is in no message', () => {
+    const o = owner();
+    addAccount(o, 'a', TOKEN, NOW);
+    writeFileSync(join(accountsDir(o), 'active'), `${SECRET}\n`, { mode: 0o600 });
+    for (const m of messages(o)) expect(m).not.toContain(SECRET.slice(0, 24));
+  });
+  it('an unreadable file names the error code, nothing else', () => {
+    const o = owner();
+    addAccount(o, 'a', TOKEN, NOW);
+    chmodSync(accountFile(o, 'a'), 0o000);
+    try {
+      expect(() => builtInAccount(o, NOW)).toThrow(/cannot be read \(EACCES\)$/);
+    } finally {
+      chmodSync(accountFile(o, 'a'), 0o600);
+    }
+  });
+});
+
 describe('expiry, one year after the token was added', () => {
   const added = '2026-01-01T00:00:00.000Z';
   it.each<[string, string]>([

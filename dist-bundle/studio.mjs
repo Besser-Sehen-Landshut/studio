@@ -29676,6 +29676,16 @@ function readPrivate(o2, file2) {
   if ((st.mode & 511 & ~384) !== 0) throw new Error(`${file2} has a mode wider than 0600`);
   return readFileSync7(file2, "utf8");
 }
+function readOrCode(o2, file2, missing) {
+  try {
+    return readPrivate(o2, file2);
+  } catch (e) {
+    const code = e.code;
+    if (code === "ENOENT") throw missing();
+    if (typeof code === "string") throw new Error(`${file2} cannot be read (${code})`);
+    throw e;
+  }
+}
 function writePrivate(file2, text) {
   const tmp = `${file2}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
   try {
@@ -29711,12 +29721,12 @@ function readAccount(o2, label) {
   checkLabel(label);
   checkDir(o2);
   const file2 = accountFile(o2, label);
+  const text = readOrCode(o2, file2, () => new Error(`no account ${label}`));
   let raw;
   try {
-    raw = JSON.parse(readPrivate(o2, file2));
-  } catch (e) {
-    if (e.code === "ENOENT") throw new Error(`no account ${label}`);
-    throw new Error(`${file2} cannot be read: ${e.message.replaceAll(file2, "it")}`);
+    raw = JSON.parse(text);
+  } catch {
+    throw new Error(`${file2} is not valid JSON`);
   }
   const a2 = raw;
   if (a2 === null || typeof a2 !== "object" || a2.label !== label || typeof a2.token !== "string" || !looksLikeToken(a2.token) || typeof a2.addedAt !== "string" || Number.isNaN(Date.parse(a2.addedAt))) {
@@ -29737,29 +29747,37 @@ function addAccount(o2, label, token, now) {
   );
   if (activeLabel(o2) === void 0) setActiveLabel(o2, label);
 }
-function listAccounts(o2) {
+function listAccountNames(o2) {
   let names;
   try {
     names = readdirSync2(accountsDir(o2));
   } catch (e) {
-    if (e.code === "ENOENT") return [];
-    throw e;
+    const code = e.code;
+    if (code === "ENOENT") return [];
+    throw new Error(`${accountsDir(o2)} cannot be read (${String(code)})`);
   }
-  return names.filter((n2) => n2.endsWith(".json")).map((n2) => n2.slice(0, -".json".length)).sort().map((label) => {
+  return names.filter((n2) => n2.endsWith(".json")).map((n2) => n2.slice(0, -".json".length)).sort();
+}
+function listAccounts(o2) {
+  return listAccountNames(o2).map((label) => {
     const { addedAt } = readAccount(o2, label);
     return { label, addedAt };
   });
 }
 function activeLabel(o2) {
+  const absent = new Error("absent");
   let text;
   try {
-    text = readPrivate(o2, activeFile(o2));
+    text = readOrCode(o2, activeFile(o2), () => absent);
   } catch (e) {
-    if (e.code === "ENOENT") return void 0;
+    if (e === absent) return void 0;
     throw e;
   }
   const label = text.trim();
-  checkLabel(label);
+  const known = listAccountNames(o2);
+  if (!validLabel(label) || label.startsWith(".") || !known.includes(label)) {
+    throw new Error(`${activeFile(o2)} names no stored account; run studio account use <label>`);
+  }
   return label;
 }
 function setActiveLabel(o2, label) {
@@ -29769,8 +29787,8 @@ function setActiveLabel(o2, label) {
 }
 function removeAccount(o2, label) {
   readAccount(o2, label);
-  unlinkSync2(accountFile(o2, label));
   if (activeLabel(o2) === label) unlinkSync2(activeFile(o2));
+  unlinkSync2(accountFile(o2, label));
 }
 function expiryState(addedAt, now) {
   const end = Date.parse(addedAt) + TOKEN_LIFETIME_DAYS * DAY_MS;
@@ -32923,6 +32941,13 @@ async function crewHold(rec, ports) {
 }
 var unverifiedRefusal = (rec) => `crew ${rec.name} may be still running (pid ${rec.pid}) but cannot be verified, so it gets no signal; check it by hand, then run studio stop ${rec.item} --release`;
 var unverifiedHandgrip = (rec) => `crew ${rec.name} (pid ${rec.pid}) got no signal, because it cannot be verified as that crew. Look with pgrep -g ${rec.pid}; if those processes are this crew's, stop them with kill -- -${rec.pid}.`;
+function crewDirOrRefuse(owner) {
+  const dir = crewClaudeDir(owner);
+  if (!existsSync4(dir)) {
+    throw new Error(`the crew config dir ${dir} is missing; run studio account setup-plugins`);
+  }
+  return dir;
+}
 async function refuseIfRunning(stateRoot, item, ports) {
   const previous = readCrewRecords(stateRoot)[item.id];
   if (previous !== void 0) {
@@ -33009,11 +33034,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   if (account !== void 0) {
     label = account.label;
     oauthToken = account.token;
-    const dir = crewClaudeDir(owner);
-    if (!existsSync4(dir)) {
-      throw new Error(`the crew config dir ${dir} is missing; run studio account setup-plugins`);
-    }
-    providerConfigDir = checkProviderConfigDir(dir, owner);
+    providerConfigDir = checkProviderConfigDir(crewDirOrRefuse(owner), owner);
     const parkedHere = parks[label];
     if (parkedHere) throw new Error(allParkedLine(parkedHere.parkedUntil));
     if (!(usage.remaining(label) > 0)) refuseFull();
@@ -33041,9 +33062,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     if (exclude.includes(got.label) || !(usage.remaining(got.label) > 0)) refuseFull();
     label = got.label;
     oauthToken = got.token;
-    if (got.configDir !== void 0) {
-      providerConfigDir = checkProviderConfigDir(got.configDir, owner);
-    }
+    providerConfigDir = checkProviderConfigDir(got.configDir ?? crewDirOrRefuse(owner), owner);
   }
   const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join18(home, ".claude"));
   const billing = apiBillingProblem(
@@ -33070,7 +33089,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
       `the clone of ${item.id} left its branch after ${previous.limit ? "a usage limit" : "an account block"}; refusing to replace it (inspect it, then remove ${clonePath} to start over)`
     );
   }
-  const tokenConfigDir = providerConfigDir === void 0 && oauthToken !== void 0 ? claudeConfigDir : void 0;
+  const tokenConfigDir = oauthToken !== void 0 ? claudeConfigDir : void 0;
   const reused = isReusableClone(clonePath, item);
   const resumeId = (() => {
     const sessionId = previous?.limit?.sessionId;
@@ -34240,7 +34259,7 @@ async function crewConfigDir(command, owner, env, ports) {
       owner
     );
     if (got === void 0) return void 0;
-    return got.configDir === void 0 ? fallback : checkProviderConfigDir(got.configDir, owner);
+    return got.configDir === void 0 ? crewClaudeDir(owner) : checkProviderConfigDir(got.configDir, owner);
   } catch {
     return void 0;
   }

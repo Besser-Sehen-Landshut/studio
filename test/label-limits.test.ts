@@ -20,6 +20,7 @@ import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import { enqueue, loadQueue, saveQueue } from '../src/queue.js';
 import { newReportName } from '../src/report.js';
+import { prepareCrewDir } from './crew-dir.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-label-limits-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -178,6 +179,7 @@ const rotatingProvider = (fx: Fx, labels: string[], limits: string) => {
     mode: 0o700,
   });
   ownerConfig(fx, `crew_credential_command: ${f}\n${limits}`);
+  prepareCrewDir(fx.ownerDir);
   return () => readFileSync(calls, 'utf8').trimEnd().split('\n');
 };
 /** A provider that always hands out one label, whatever is excluded. */
@@ -190,6 +192,7 @@ const stubbornProvider = (fx: Fx, label: string, limits: string) => {
     { mode: 0o700 },
   );
   ownerConfig(fx, `crew_credential_command: ${f}\n${limits}`);
+  prepareCrewDir(fx.ownerDir);
 };
 const stateOf = (fx: Fx) => JSON.parse(readFileSync(join(fx.state, 'state.json'), 'utf8'));
 const crewOf = (fx: Fx) => JSON.parse(readFileSync(join(fx.state, 'crew.json'), 'utf8'));

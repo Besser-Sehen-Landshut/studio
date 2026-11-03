@@ -937,6 +937,15 @@ export const unverifiedRefusal = (rec: CrewRecord): string =>
 export const unverifiedHandgrip = (rec: CrewRecord): string =>
   `crew ${rec.name} (pid ${rec.pid}) got no signal, because it cannot be verified as that crew. Look with pgrep -g ${rec.pid}; if those processes are this crew's, stop them with kill -- -${rec.pid}.`;
 
+/** The crew config dir for a token; a launch refuses while it is missing. */
+function crewDirOrRefuse(owner: LauncherEnv): string {
+  const dir = crewClaudeDir(owner);
+  if (!existsSync(dir)) {
+    throw new Error(`the crew config dir ${dir} is missing; run studio account setup-plugins`);
+  }
+  return dir;
+}
+
 async function refuseIfRunning(
   stateRoot: string,
   item: WorkItem,
@@ -1052,11 +1061,7 @@ async function launchCrewLocked(
   if (account !== undefined) {
     label = account.label;
     oauthToken = account.token;
-    const dir = crewClaudeDir(owner);
-    if (!existsSync(dir)) {
-      throw new Error(`the crew config dir ${dir} is missing; run studio account setup-plugins`);
-    }
-    providerConfigDir = checkProviderConfigDir(dir, owner);
+    providerConfigDir = checkProviderConfigDir(crewDirOrRefuse(owner), owner);
     const parkedHere = parks[label];
     if (parkedHere) throw new Error(allParkedLine(parkedHere.parkedUntil));
     if (!(usage.remaining(label) > 0)) refuseFull();
@@ -1084,9 +1089,8 @@ async function launchCrewLocked(
     if (exclude.includes(got.label) || !(usage.remaining(got.label) > 0)) refuseFull();
     label = got.label;
     oauthToken = got.token;
-    if (got.configDir !== undefined) {
-      providerConfigDir = checkProviderConfigDir(got.configDir, owner);
-    }
+    // A token comes with the crew config dir and its plugins, never with the owner's own login.
+    providerConfigDir = checkProviderConfigDir(got.configDir ?? crewDirOrRefuse(owner), owner);
   }
   // The Claude login and plugins live in the config dir; it holds no gh or git credentials.
   const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join(home, '.claude'));
@@ -1121,8 +1125,7 @@ async function launchCrewLocked(
       `the clone of ${item.id} left its branch after ${previous.limit ? 'a usage limit' : 'an account block'}; refusing to replace it (inspect it, then remove ${clonePath} to start over)`,
     );
   }
-  const tokenConfigDir =
-    providerConfigDir === undefined && oauthToken !== undefined ? claudeConfigDir : undefined;
+  const tokenConfigDir = oauthToken !== undefined ? claudeConfigDir : undefined;
   // A clone that is about to be recreated has no session to go back to, and no crew has run in it.
   const reused = isReusableClone(clonePath, item);
   const resumeId = (() => {

@@ -24,6 +24,7 @@ import { detectBlock, readBlocks } from '../src/limits.js';
 import { ownerStateRootFor, STATE_FILES, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import { newReportName } from '../src/report.js';
+import { prepareCrewDir } from './crew-dir.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-block-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -158,6 +159,7 @@ const provider = (fx: Fx, label: string, before = '') => {
     { mode: 0o700 },
   );
   writeFileSync(join(fx.ownerDir, 'config.yaml'), `crew_credential_command: ${f}\n`);
+  prepareCrewDir(fx.ownerDir);
 };
 const providerCalls = (fx: Fx): number => {
   const f = join(fx.base, 'provider-calls');

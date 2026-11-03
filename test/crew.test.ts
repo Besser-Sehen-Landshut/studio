@@ -38,6 +38,7 @@ import { acquireStateLock, ownerStateRootFor, stateRootFor } from '../src/paths.
 import { type Ports, realPorts } from '../src/ports.js';
 import { reportName } from '../src/report.js';
 import { readUsage } from '../src/usage.js';
+import { prepareCrewDir } from './crew-dir.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-crew-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -1372,8 +1373,10 @@ describe('crew credentials', () => {
     );
     return f;
   };
-  const owner = (ownerDir: string, yaml: string) =>
+  const owner = (ownerDir: string, yaml: string) => {
     writeFileSync(join(ownerDir, 'config.yaml'), yaml);
+    if (yaml.includes('crew_credential_command')) prepareCrewDir(ownerDir);
+  };
   const tokenLine = (label = 'label-a', token = TOKEN) =>
     JSON.stringify({ label, env: { CLAUDE_CODE_OAUTH_TOKEN: token } });
   const FAR = '2999-01-01T00:00:00.000Z';
@@ -1484,6 +1487,27 @@ describe('crew credentials', () => {
       const started: Started[] = [];
       await launchCrew(f.project, item, config, fakePorts(started), f.launcher);
       expect((started[0] as Started).env.CLAUDE_CODE_OAUTH_TOKEN).toBe(TOKEN);
+    });
+
+    it('a provider handing out a token gets the same crew config dir, never ~/.claude', async () => {
+      const f = withAccounts([], { CLAUDE_CONFIG_DIR: '/somewhere/else' });
+      owner(f.ownerDir, `crew_credential_command: ${provider(f.ownerDir, tokenLine('label-p'))}\n`);
+      const started: Started[] = [];
+      await launchCrew(f.project, item, config, fakePorts(started), f.launcher);
+      const s = started[0] as Started;
+      expect(s.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(TOKEN);
+      expect(s.env.CLAUDE_CONFIG_DIR).toBe(realpathSync(f.dir));
+    });
+
+    it('a provider token with no crew config dir refuses, naming setup-plugins', async () => {
+      const f = withAccounts([]);
+      owner(f.ownerDir, `crew_credential_command: ${provider(f.ownerDir, tokenLine('label-p'))}\n`);
+      rmSync(f.dir, { recursive: true });
+      const started: Started[] = [];
+      await expect(
+        launchCrew(f.project, item, config, fakePorts(started), f.launcher),
+      ).rejects.toThrow(/studio account setup-plugins/);
+      expect(started).toHaveLength(0);
     });
 
     it('a broken account file refuses instead of falling back', async () => {
@@ -1638,7 +1662,7 @@ describe('crew credentials', () => {
       await launchCrew(project, item, config, fakePorts(started), launcher);
       const s = started[0] as Started;
       expect(s.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(TOKEN);
-      expect(s.env.CLAUDE_CONFIG_DIR).toBe(join(home, '.claude'));
+      expect(s.env.CLAUDE_CONFIG_DIR).toBe(realpathSync(join(home, '.config', 'studio', 'claude')));
       const rec = JSON.parse(readFileSync(join(state, 'crew.json'), 'utf8'))['APP-12'];
       expect(rec.label).toBe('label-a');
       expect(s.args.join(' ')).not.toContain(TOKEN);

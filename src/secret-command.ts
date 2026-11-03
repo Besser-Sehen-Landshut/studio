@@ -107,7 +107,9 @@ async function crewConfigDir(
       owner,
     );
     if (got === undefined) return undefined;
-    return got.configDir === undefined ? fallback : checkProviderConfigDir(got.configDir, owner);
+    return got.configDir === undefined
+      ? crewClaudeDir(owner)
+      : checkProviderConfigDir(got.configDir, owner);
   } catch {
     return undefined;
   }

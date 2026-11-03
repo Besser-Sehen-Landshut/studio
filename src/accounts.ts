@@ -67,6 +67,21 @@ function readPrivate(o: OwnerEnv, file: string): string {
   return readFileSync(file, 'utf8');
 }
 
+/**
+ * `readPrivate`, with errors reduced to fixed text: a missing file gives `missing()`, a failed stat
+ * or read only its error code. Nothing read from the file ever reaches a message.
+ */
+function readOrCode(o: OwnerEnv, file: string, missing: () => Error): string {
+  try {
+    return readPrivate(o, file);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') throw missing();
+    if (typeof code === 'string') throw new Error(`${file} cannot be read (${code})`);
+    throw e;
+  }
+}
+
 function writePrivate(file: string, text: string): void {
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   try {
@@ -112,12 +127,13 @@ function readAccount(o: OwnerEnv, label: string): Account {
   checkLabel(label);
   checkDir(o);
   const file = accountFile(o, label);
+  const text = readOrCode(o, file, () => new Error(`no account ${label}`));
+  // A parse error quotes the text it failed on, which may be the token: never pass it on.
   let raw: unknown;
   try {
-    raw = JSON.parse(readPrivate(o, file));
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`no account ${label}`);
-    throw new Error(`${file} cannot be read: ${(e as Error).message.replaceAll(file, 'it')}`);
+    raw = JSON.parse(text);
+  } catch {
+    throw new Error(`${file} is not valid JSON`);
   }
   const a = raw as Partial<Account> | null;
   if (
@@ -148,35 +164,44 @@ export function addAccount(o: OwnerEnv, label: string, token: string, now: Date)
   if (activeLabel(o) === undefined) setActiveLabel(o, label);
 }
 
-/** Labels and dates, never a token. */
-export function listAccounts(o: OwnerEnv): { label: string; addedAt: string }[] {
+function listAccountNames(o: OwnerEnv): string[] {
   let names: string[];
   try {
     names = readdirSync(accountsDir(o));
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw e;
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return [];
+    throw new Error(`${accountsDir(o)} cannot be read (${String(code)})`);
   }
   return names
     .filter((n) => n.endsWith('.json'))
     .map((n) => n.slice(0, -'.json'.length))
-    .sort()
-    .map((label) => {
-      const { addedAt } = readAccount(o, label);
-      return { label, addedAt };
-    });
+    .sort();
+}
+
+/** Labels and dates, never a token. */
+export function listAccounts(o: OwnerEnv): { label: string; addedAt: string }[] {
+  return listAccountNames(o).map((label) => {
+    const { addedAt } = readAccount(o, label);
+    return { label, addedAt };
+  });
 }
 
 export function activeLabel(o: OwnerEnv): string | undefined {
+  const absent = new Error('absent');
   let text: string;
   try {
-    text = readPrivate(o, activeFile(o));
+    text = readOrCode(o, activeFile(o), () => absent);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if (e === absent) return undefined;
     throw e;
   }
   const label = text.trim();
-  checkLabel(label);
+  // The file's text is named nowhere: an odd value only says that it is odd.
+  const known = listAccountNames(o);
+  if (!validLabel(label) || label.startsWith('.') || !known.includes(label)) {
+    throw new Error(`${activeFile(o)} names no stored account; run studio account use <label>`);
+  }
   return label;
 }
 
@@ -187,8 +212,8 @@ export function setActiveLabel(o: OwnerEnv, label: string): void {
 
 export function removeAccount(o: OwnerEnv, label: string): void {
   readAccount(o, label);
-  unlinkSync(accountFile(o, label));
   if (activeLabel(o) === label) unlinkSync(activeFile(o));
+  unlinkSync(accountFile(o, label));
 }
 
 export function expiryState(

@@ -20,6 +20,13 @@ Claude accounts kept by Studio. Not tagged yet; the maintainers tag after the me
   30 days before a token is a year old; after that a launch refuses.
 - README: "Claude accounts", and the layout of stored accounts as a contract for providers.
 
+### Changed
+
+- A credential provider's token now comes with the crew config dir `claude/` in the owner config
+  instead of `~/.claude` or the launching shell's `CLAUDE_CONFIG_DIR`. Run
+  `studio account setup-plugins` once before the next launch; until then a launch refuses.
+- Errors about account files name only the file and an error code, never its content.
+
 ## [0.5.1] - 2026-11-03
 
 No state should need a hand edit of the board before the first real crew run. Not tagged yet; the
