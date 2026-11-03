@@ -12,6 +12,7 @@ import {
   resolveSkills,
 } from './capabilities.js';
 import type { RoleConfig, StudioConfig } from './config.js';
+import { globProblem, matchGlob } from './glob.js';
 import { removeStateEntry, writeStateFile } from './paths.js';
 import type { Ports } from './ports.js';
 import {
@@ -67,7 +68,10 @@ const isGithubPath = (p: string): boolean => {
   const lower = p.toLowerCase();
   return lower === '.github' || lower.startsWith('.github/');
 };
-/** A CI item declares `.github/` in its paths or touches; nothing else may change it unreviewed. */
+/**
+ * A CI item declares paths below `.github/` in its paths or touches; it may change what those globs
+ * name, and nothing else may change `.github/` unreviewed.
+ */
 const isCiItem = (i: WorkItem): boolean => [...i.paths, ...i.touches].some(isGithubPath);
 const GIT_FETCH_MS = 120_000;
 const GIT_LOCAL_MS = 60_000;
@@ -83,6 +87,7 @@ async function changesGithub(
   checkout: { dir: string; remote: string },
   base: string,
   head: string,
+  allowed: readonly string[],
 ): Promise<boolean | undefined> {
   const g = (args: string[], timeoutMs: number) =>
     ports.git.run(checkout.dir, ['--no-replace-objects', ...args], { timeoutMs });
@@ -95,7 +100,17 @@ async function changesGithub(
       ['diff', '--name-only', '--no-renames', '-z', `${base}...${head}`],
       GIT_LOCAL_MS,
     );
-    if (diff.split('\0').some((p) => p !== '' && isGithubPath(p))) return true;
+    // A CI item may change what its own globs name, nothing else of `.github/`.
+    // The glob match ignores case and a glob over the limits matches all: for an exemption the
+    // path must also start with `.github/` exactly and the glob must be within the limits.
+    const outside = (p: string) =>
+      isGithubPath(p) &&
+      !(
+        p.startsWith('.github/') &&
+        allowed.some((glob) => globProblem(glob) === undefined && matchGlob(glob, p))
+      );
+    if (diff.split('\0').some((p) => p !== '' && outside(p))) return true;
+    // A symbolic link at `.github` or below always counts, inside a CI item's globs too.
     const tree = await g(['ls-tree', '-r', '-z', '--full-tree', head], GIT_LOCAL_MS);
     return tree.split('\0').some((line) => {
       const tab = line.indexOf('\t');
@@ -176,6 +191,7 @@ export async function resolveForItem(o: {
   // The approval is stored on the item that holds the pull request: without one it would be lost.
   let notRunHere: NotRunHere[] | undefined;
   let ciItem = false;
+  let ciGlobs: string[] = [];
   if (target !== undefined) {
     const name = `${target.repo}#${target.pr}`;
     const holder = o
@@ -183,6 +199,7 @@ export async function resolveForItem(o: {
       .items.find((i) => i.type !== 'review' && i.repo === target.repo && i.pr === target.pr);
     notRunHere = holder?.notRunHere;
     ciItem = holder !== undefined && isCiItem(holder);
+    ciGlobs = holder === undefined ? [] : [...holder.paths, ...holder.touches].filter(isGithubPath);
     if (!holder) {
       throw new Error(
         `${item.id}: no board item holds ${name}; tie it to its item with studio link <id> ${name}`,
@@ -192,11 +209,11 @@ export async function resolveForItem(o: {
   const checks = target === undefined ? undefined : await readCheckLines(o.ports, target);
   // Whether the pull request changes `.github/`; one that cannot be read counts as a change.
   let workflowChange = false;
-  if (target !== undefined && facts !== undefined && !ciItem) {
+  if (target !== undefined && facts !== undefined) {
     workflowChange =
       o.checkout === undefined || facts.baseOid === undefined
         ? true
-        : ((await changesGithub(o.ports, o.checkout, facts.baseOid, facts.head)) ?? true);
+        : ((await changesGithub(o.ports, o.checkout, facts.baseOid, facts.head, ciGlobs)) ?? true);
   }
   const paths: ChangedPaths = facts?.complete ? [...facts.files, ...declared] : 'unknown';
   const name = target === undefined ? undefined : `${target.repo}#${target.pr}`;
@@ -491,9 +508,7 @@ export function writeCaps(o: {
       ...(review.notRunHere === undefined
         ? {}
         : { notRunHere: review.notRunHere.map((x) => x.command) }),
-      ...(review.workflowChange === true && review.ciItem !== true
-        ? { workflowChange: true as const }
-        : {}),
+      ...(review.workflowChange === true ? { workflowChange: true as const } : {}),
     };
     writeStateFile(stateRoot, capsFile(stateRoot, id), `${JSON.stringify(caps, null, 2)}\n`);
   }

@@ -47,6 +47,8 @@ export interface GuardContext {
   skillRootWaivedGlobs?: string[];
   /** The crew's item: `gh pr create` is allowed only for its branch `studio/<item>`. */
   item?: string;
+  /** The branch the item's pull request targets: `gh pr create --base` must name it. */
+  base?: string;
 }
 
 export interface GuardResult {
@@ -91,6 +93,7 @@ interface Env {
   /** The secret rules no read root waives. */
   hardSecretRes: RegExp[];
   item: string | undefined;
+  base: string | undefined;
 }
 
 const isUnder = (roots: string[], p: string): boolean =>
@@ -263,7 +266,11 @@ function expandGlobPath(t: string, base: string): string[] {
 
 function isProtected(env: Env, real: string): boolean {
   const low = real.toLowerCase();
-  return env.protectedReal.some((p) => low === p || low.startsWith(`${p}/`));
+  // A `.git` at any depth below the clone: a nested repository has hooks and config of its own.
+  const below = isInside(env, real) ? low.slice(env.wt.length).split('/') : [];
+  return (
+    below.includes('.git') || env.protectedReal.some((p) => low === p || low.startsWith(`${p}/`))
+  );
 }
 
 function checkWritePath(env: Env, tok: string, cwd: string | null, why: string): void {
@@ -875,7 +882,7 @@ function checkPush(env: Env, rawArgs: string[]): void {
     if (hasMagic(a)) deny(`glob in git push argument: ${a}`);
   }
   const pos: string[] = [];
-  let repoGiven = false;
+  const repoGiven = false;
   for (let k = 0; k < args.length; k++) {
     const a = args[k] as string;
     if (a === '--') {
@@ -888,7 +895,7 @@ function checkPush(env: Env, rawArgs: string[]): void {
       if (name.length >= 3 && PUSH_DANGEROUS.some((d) => d.startsWith(name))) {
         deny(`git push ${name} is not allowed`);
       }
-      if (name === '--repo') repoGiven = true;
+      if (name === '--repo') deny('git push --repo is not allowed: push to origin');
       if (!a.includes('=') && ['--repo', '--push-option'].includes(name)) {
         k++;
       }
@@ -899,6 +906,7 @@ function checkPush(env: Env, rawArgs: string[]): void {
   }
   const refs = repoGiven ? pos : pos.slice(1);
   if (pos.length === 0) deny('git push needs an explicit remote and branch');
+  if (pos[0] !== 'origin') deny('git push only to origin');
   if (refs.length === 0) deny('git push needs an explicit refspec');
   for (const ref of refs) checkRefspec(env, ref);
 }
@@ -1014,6 +1022,20 @@ function checkFetchPull(sub: 'fetch' | 'pull', rawArgs: string[]): void {
     deny(`git ${sub} only from origin, not "${pos[0]}"`);
   }
   for (const ref of pos.slice(1)) {
+    // A plain ref or src:dst of plain refs: no URL, no `..`, no empty or rooted side.
+    const sides = ref.replace(/^\+/, '').split(':');
+    if (
+      sides.length > 2 ||
+      sides.some(
+        (x) =>
+          !/^[A-Za-z0-9._/-]+$/.test(x) ||
+          x.startsWith('/') ||
+          x.includes('//') ||
+          x.split('/').includes('..'),
+      )
+    ) {
+      deny(`git ${sub} refspec "${ref}" is not a plain ref`);
+    }
     if (writesRemoteRefs(ref.replace(/^\+/, ''))) {
       deny(`git ${sub} into refs/remotes/ is not allowed (origin/* is set by the owner)`);
     }
@@ -1029,43 +1051,56 @@ function checkLsRemote(rawArgs: string[]): void {
   if (args[0] !== 'origin') deny('git ls-remote only for origin: git ls-remote origin [<ref>...]');
 }
 
-/** Read-only `git remote`: list, `-v`, `get-url`, `show`. Changing a remote is not for crews. */
+/** Read-only `git remote`: list, `-v`, `get-url origin`, `show [-n] origin`. */
 function checkRemote(args: string[]): void {
-  const [first] = args;
-  if (first === undefined || (args.length === 1 && (first === '-v' || first === '--verbose'))) {
+  const form = args.join(' ');
+  if (['', '-v', '--verbose', 'get-url origin', 'show origin', 'show -n origin'].includes(form)) {
     return;
   }
-  if (first === 'get-url' || first === 'show') return;
-  deny(`git remote ${first} is not allowed (crews never change remotes)`);
+  deny('git remote is read-only for crews: git remote -v, get-url origin, show [-n] origin');
 }
 
+// Network git runs from the clone root: another directory could hold a repository of its own.
+const GIT_NETWORK = new Set(['fetch', 'pull', 'ls-remote', 'push']);
+
 function checkGit(env: Env, args: string[], state: State): void {
+  // Global options are an allowlist: an unknown one could take the next word as its value and hide
+  // the subcommand, or change what git runs (`--exec-path`, `--attr-source`, `--config-env`).
   let i = 0;
+  let moved = false;
   while (i < args.length) {
     const a = args[i] as string;
     if (unresolvedWord(a)) deny('unresolved git option');
-    if (a === '-C' || a === '--git-dir' || a === '--work-tree') {
+    if (!a.startsWith('-')) break;
+    if (a === '-C') {
       const v = args[i + 1];
-      if (v === undefined) deny(`missing value for git ${a}`);
-      checkInsideDir(env, v as string, state, `git ${a}`);
+      if (v === undefined) deny('missing value for git -C');
+      checkInsideDir(env, v as string, state, 'git -C');
+      moved = true;
       i += 2;
     } else if (a.startsWith('--git-dir=') || a.startsWith('--work-tree=')) {
       checkInsideDir(env, a.slice(a.indexOf('=') + 1), state, 'git option');
+      moved = true;
       i++;
-    } else if (a === '-c' || a === '--config-env') {
+    } else if (a === '-c') {
       checkGitC(args[i + 1] ?? '');
       i += 2;
-    } else if (a.startsWith('--config-env=')) {
-      checkGitC(a.slice(13));
+    } else if (a === '--no-pager' || a === '-P' || a === '--no-replace-objects') {
       i++;
-    } else if (a === '--namespace' || a === '--exec-path') i += 2;
-    else if (a.startsWith('-')) i++;
-    else break;
+    } else {
+      deny(
+        `git option ${a.split('=')[0]} is not allowed (-C, -c, --git-dir=, --work-tree=, --no-pager, -P, --no-replace-objects)`,
+      );
+    }
   }
   const sub = args[i];
   if (sub === undefined) return;
   if (unresolvedWord(sub)) deny('unresolved command word (git subcommand)');
   const rest = args.slice(i + 1);
+  if (GIT_NETWORK.has(sub) && (moved || state.cwd !== env.wt)) {
+    deny(`git ${sub} runs from the clone root only, without -C, --git-dir or --work-tree`);
+  }
+  if (sub === 'init') deny('git init is not allowed (no repository inside the clone)');
   if (sub === 'push') checkPush(env, rest);
   else if (sub === 'fetch' || sub === 'pull') checkFetchPull(sub, rest);
   else if (sub === 'ls-remote') checkLsRemote(rest);
@@ -1083,11 +1118,13 @@ function checkGit(env: Env, args: string[], state: State): void {
         const name = a.split('=')[0] as string;
         return (
           (name.length >= 3 && '--remote'.startsWith(name)) ||
-          (name.length >= 3 && '--exec'.startsWith(name))
+          (name.length >= 3 && '--exec'.startsWith(name)) ||
+          (name.length >= 3 && '--output'.startsWith(name)) ||
+          /^-[A-Za-z]*o/.test(a)
         );
       })
     ) {
-      deny('git archive --remote is not allowed');
+      deny('git archive --remote, --exec and --output are not allowed (it writes to stdout)');
     }
   } else if (
     // A crew has its clone: cloning or fetching packs reaches any URL with any options.
@@ -1126,11 +1163,7 @@ function checkInsideDir(env: Env, dir: string, state: State, why: string): void 
     deny(`${why} outside worktree: ${dir}`);
 }
 
-const GH_BLOCKED_TOPICS = new Set(['release', 'secret', 'auth', 'alias']);
-const GH_RUN_VALUE_FLAGS = ['--ref', '-r', '-f', '--raw-field', '-F', '--field', ...GH_VALUE_FLAGS];
-
 const PR_CREATE_OPTIONS = ['--head', '--base', '--title', '--body-file'];
-const BRANCH_NAME = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/;
 
 /**
  * `gh pr create` from a crew has one form: `gh pr create --head studio/<id> --base <branch>
@@ -1153,105 +1186,70 @@ function checkPrCreate(env: Env, args: string[], cwd: string | null): void {
   const own = `studio/${env.item}`;
   if (got.get('--head') !== own) deny(`gh pr create needs --head ${own} (the item's own branch)`);
   const base = got.get('--base') as string;
-  if (
-    unresolvedWord(base) ||
-    base.includes('$') ||
-    !BRANCH_NAME.test(base) ||
-    base.includes('..')
-  ) {
-    deny('gh pr create --base needs a plain branch name');
+  if (env.base === undefined || base !== env.base) {
+    deny(`gh pr create needs --base ${env.base ?? '<the item base>'} (the item's base branch)`);
   }
   const file = got.get('--body-file') as string;
-  if (unresolvedWord(file) || /[$`~*?[]/.test(file) || isAbsolute(file) || file === '') {
+  if (
+    unresolvedWord(file) ||
+    !/^[A-Za-z0-9._ /-]+$/.test(file) ||
+    isAbsolute(file) ||
+    file.split('/').includes('..')
+  ) {
     deny('gh pr create --body-file needs a plain relative path inside the clone');
   }
-  if (cwd === null) deny('gh pr create --body-file after an unresolvable cd');
+  if (cwd !== env.wt) deny('gh pr create runs from the clone root only');
   if (!isInside(env, resolveReal(file, cwd as string))) {
     deny(`gh pr create --body-file outside the clone: ${file}`);
   }
 }
 
-// What a crew may do with gh pr: read, and open its own pull request.
-const GH_PR_ALLOWED = new Set(['view', 'checks', 'diff', 'list', 'status', 'create']);
+// The gh a crew may run: these reads of pull requests, the one `gh pr create` form and, when the
+// owner lists workflows, `gh workflow run <workflow> --ref <ref>`. Nothing else.
+const GH_PR_READ = new Set(['view', 'checks', 'diff', 'list', 'status']);
 
 function checkGh(env: Env, args: string[], cwd: string | null): void {
-  // The command words come first, literally: no gh flag before them. Locating them behind flags
-  // would mean modelling cobra's parser, and crews need no flag there.
-  if (args[0]?.startsWith('-')) deny('gh flags before the command are not allowed');
-  if (args[0] !== 'api' && args[1]?.startsWith('-')) {
-    deny('gh flags before the subcommand are not allowed');
-  }
-  const words = args.slice(0, 2);
-  const [g0, g1] = words;
+  const [g0, g1] = args;
   for (const w of [g0, g1]) {
     if (w !== undefined && unresolvedWord(w)) deny('unresolved command word (gh subcommand)');
   }
-  if (g0 === 'pr' && g1 === 'merge') deny('gh pr merge is not allowed (merging is owner-only)');
-  if (g0 === 'pr' && g1 !== undefined && !GH_PR_ALLOWED.has(g1)) {
-    deny(`gh pr ${g1} is not allowed (crews read pull requests and open their own)`);
+  // No other repository or host, anywhere in the command.
+  if (
+    args.some(
+      (a) =>
+        /^-R/.test(a) ||
+        a === '--repo' ||
+        a.startsWith('--repo=') ||
+        a === '--hostname' ||
+        a.startsWith('--hostname='),
+    )
+  ) {
+    deny('gh -R, --repo and --hostname are not allowed: crews work on their own repository');
   }
-  if (g0 === 'pr' && g1 === 'create') checkPrCreate(env, args, cwd);
-  if (g0 && GH_BLOCKED_TOPICS.has(g0)) deny(`gh ${g0} is not allowed`);
-  if (g0 === 'workflow' && g1 === 'run') {
-    const pos: string[] = [];
-    for (let k = 0; k < args.length; k++) {
-      const a = args[k] as string;
-      if (GH_RUN_VALUE_FLAGS.includes(a)) k++;
-      else if (!a.startsWith('-')) pos.push(a);
+  if (g0 === 'pr' && g1 !== undefined && GH_PR_READ.has(g1)) return;
+  if (g0 === 'pr' && g1 === 'create') {
+    checkPrCreate(env, args, cwd);
+    return;
+  }
+  if (g0 === 'workflow' && g1 === 'run' && env.allowedWorkflows.length > 0) {
+    const [, , target, flag, ref, ...more] = args;
+    if (
+      flag !== '--ref' ||
+      more.length > 0 ||
+      target === undefined ||
+      ref === undefined ||
+      !env.allowedWorkflows.includes(target) ||
+      !env.allowedRefs.includes(ref)
+    ) {
+      deny(
+        'use exactly: gh workflow run <crew_allowed_workflows entry> --ref <crew_allowed_workflow_refs entry>',
+      );
     }
-    for (let k = 0; k < args.length; k++) {
-      const a = args[k] as string;
-      let ref: string | undefined;
-      if (a === '--ref' || a === '-r') ref = args[k + 1] ?? '';
-      else if (a.startsWith('--ref=')) ref = a.slice(6);
-      else if (/^-r./.test(a) && !a.startsWith('--')) ref = a.slice(2);
-      if (ref !== undefined && (unresolvedWord(ref) || !env.allowedRefs.includes(ref))) {
-        deny(`workflow ref "${ref}" is not in crew_allowed_workflow_refs`);
-      }
-    }
-    const target = pos[2];
-    if (target === undefined) deny('gh workflow run needs an explicit workflow');
-    if (unresolved(target as string)) deny('unresolved workflow name');
-    if (!env.allowedWorkflows.includes(target as string)) {
-      deny(`workflow "${target}" is not in crew_allowed_workflows`);
-    }
+    return;
   }
-  if (g0 === 'api') checkGhApi(args);
-}
-
-/**
- * `gh api` for the crew: plain GET reads only. Exact flag allowlist, every flag its own token:
- * -H/--header V, -q/--jq V, --paginate, -i/--include, --hostname github.com.
- */
-function checkGhApi(rawArgs: string[]): void {
-  const apiAt = rawArgs.indexOf('api');
-  for (let k = 0; k < apiAt; k++) {
-    const a = rawArgs[k] as string;
-    if (a === '-R' || a === '--repo') k++;
-    else deny(`gh option ${a} before api is not allowed`);
-  }
-  const args = rawArgs.slice(apiAt + 1);
-  let endpoint: string | undefined;
-  for (let k = 0; k < args.length; k++) {
-    const a = args[k] as string;
-    if (a === '-H' || a === '--header' || a === '-q' || a === '--jq') {
-      if (args[k + 1] === undefined) deny(`missing value for gh api ${a}`);
-      k++;
-    } else if (a === '--hostname') {
-      if (args[++k] !== 'github.com') deny('gh api --hostname must be github.com');
-    } else if (a === '--paginate' || a === '-i' || a === '--include') {
-      // allowed read flags
-    } else if (a.startsWith('-')) {
-      deny(`gh api flag ${a} is not allowed (read-only: -H, -q, --paginate, -i, --hostname)`);
-    } else if (endpoint !== undefined) {
-      deny('gh api with more than one endpoint is not allowed');
-    } else endpoint = a;
-  }
-  if (endpoint === undefined) deny('gh api without endpoint');
-  if (unresolved(endpoint as string)) deny('unresolved gh api endpoint');
-  if (/[%#]|:\/\//.test(endpoint as string)) deny('suspicious gh api endpoint');
-  const path = (endpoint as string).split('?')[0]?.replace(/\/+$/, '') as string;
-  if (/graphql$/i.test(path)) deny('gh api graphql is not allowed');
+  deny(
+    `gh ${[g0, g1].filter((x) => x !== undefined).join(' ')} is not allowed for crews (gh pr view, checks, diff, list, status and gh pr create)`,
+  );
 }
 
 function checkFind(env: Env, args: string[], state: State): void {
@@ -1733,7 +1731,8 @@ function check(input: GuardInput, ctx: GuardContext): void {
     (c.skillRoots !== undefined && !isStringArray(c.skillRoots)) ||
     (c.toolResultGlobs !== undefined && !isStringArray(c.toolResultGlobs)) ||
     (c.skillRootWaivedGlobs !== undefined && !isStringArray(c.skillRootWaivedGlobs)) ||
-    (c.item !== undefined && (typeof c.item !== 'string' || !/^[A-Z]+-\d+$/.test(c.item)))
+    (c.item !== undefined && (typeof c.item !== 'string' || !/^[A-Z]+-\d+$/.test(c.item))) ||
+    (c.base !== undefined && (typeof c.base !== 'string' || !/^[A-Za-z0-9._/-]+$/.test(c.base)))
   ) {
     deny('invalid guard context');
   }
@@ -1762,6 +1761,7 @@ function check(input: GuardInput, ctx: GuardContext): void {
       .filter((g) => !(ctx.skillRootWaivedGlobs ?? []).includes(g))
       .map(fileGlobToRegExp),
     item: ctx.item,
+    base: ctx.base,
   };
   const { toolName, toolInput } = input;
   const given = input.cwd as unknown;

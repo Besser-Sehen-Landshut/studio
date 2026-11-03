@@ -219,7 +219,7 @@ export function renderReviewRoutine(r: {
           '',
           `Read CI workflows at the base, never the checkout's copy, which the pull request can change: \`git ls-tree --name-only origin/${r.base} .github/workflows/\` and \`git show origin/${r.base}:.github/workflows/<file>\`. ${
             r.ciItem === true
-              ? 'This item is a CI item: it may change `.github/`; review those changes like code.'
+              ? 'This item is a CI item: it may change what its paths and touches name below `.github/`; review those changes like code. Any other change under `.github/` blocks the approval.'
               : 'A change under `.github/` (workflows, actions) in this pull request is a finding that blocks the approval: this item is no CI item.'
           }`,
           '',
@@ -233,7 +233,7 @@ export function renderReviewRoutine(r: {
     ...(r.notRunHere === undefined
       ? []
       : [
-          `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: for each command, find the workflow at the base and the job in it that runs the command, and list it in \`not_run_here_jobs\` with the command as listed, the workflow file path at the base (\`.github/workflows/<file>\`) and the job's \`name:\`, or its id when it has none${r.pullRequest === undefined ? '' : ` (the check names are in \`${r.pullRequest.checks}\`)`}. A command no base workflow runs is a finding. Studio checks at the base that the job is in that file and a \`run:\` step of it holds the command, and refuses an approval unless every check of that job passed on this pull request.`,
+          `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: for each command, find the workflow at the base and the job in it that runs the command, and list it in \`not_run_here_jobs\` with the command as listed, the workflow file path at the base (\`.github/workflows/<file>\`) and the job's \`name:\`, or its id when it has none${r.pullRequest === undefined ? '' : ` (the check names are in \`${r.pullRequest.checks}\`)`}. A command no base workflow runs is a finding. Studio checks at the base, and at the head when the pull request changes that file, that the job is in it with no \`if:\`, no \`continue-on-error\` and no reusable workflow (\`uses:\`), that a \`run:\` step without \`if:\` starts a line with the whole command, and that the workflow name is unique; it refuses an approval unless every check of that job (each matrix leg \`<job> (<leg>)\`) passed on this pull request.`,
           '',
         ]),
     `Run each analyzer below as one subagent with the model named there, read-only except for the spec check's probe; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,

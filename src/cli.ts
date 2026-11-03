@@ -532,6 +532,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 git: ports.git,
                 checkout: approvalCheckout(project, config, m[1] as string),
                 baseOid: info.baseOid,
+                headOid: info.head,
                 commands: reviewDone.notRunHere,
                 entries: report.notRunHereJobs,
                 checks: checks.checks,

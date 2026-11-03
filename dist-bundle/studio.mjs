@@ -31275,30 +31275,77 @@ async function capacityHoldsTwice(config2, ports, options = {}) {
 var import_yaml7 = __toESM(require_dist(), 1);
 var GIT_FETCH_MS = 12e4;
 var GIT_LOCAL_MS = 6e4;
+var WORKFLOWS_DIR = ".github/workflows/";
 var WORKFLOW_FILE = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/;
+var SHA = /^[0-9a-f]{40,64}$/i;
+var instances = (checks, workflow, job) => checks.filter(
+  (c3) => c3.workflow !== void 0 && c3.workflow === workflow && (c3.name === job || c3.name.startsWith(`${job} (`) && c3.name.endsWith(")"))
+);
 var jobPassed = (checks, workflow, job) => {
-  const mine = checks.filter(
-    (c3) => c3.workflow !== void 0 && c3.workflow === workflow && c3.name === job
-  );
+  const mine = instances(checks, workflow, job);
   return mine.length > 0 && mine.every((c3) => c3.bucket === "pass");
 };
+function readWorkflow(text, path10) {
+  let doc;
+  try {
+    doc = (0, import_yaml7.parse)(text);
+  } catch {
+    return void 0;
+  }
+  if (doc === null || typeof doc !== "object") return void 0;
+  const wf = doc;
+  const name = typeof wf.name === "string" && wf.name.trim() !== "" ? wf.name : path10;
+  const jobs = wf.jobs !== null && typeof wf.jobs === "object" ? Object.entries(wf.jobs) : [];
+  return { name, jobs };
+}
+function jobProblem(wf, job, command) {
+  const found = wf.jobs.find(([id, j]) => {
+    const name = j?.name;
+    return (typeof name === "string" ? name : id) === job;
+  })?.[1];
+  if (found === void 0 || found === null || typeof found !== "object") {
+    return "the job is not in the workflow";
+  }
+  if ("uses" in found) return "the job calls a reusable workflow, which the gate cannot follow";
+  if ("if" in found || "continue-on-error" in found) {
+    return "the job has an if or continue-on-error";
+  }
+  const cmd = command.trim();
+  const runs = (Array.isArray(found.steps) ? found.steps : []).filter(
+    (s) => s !== null && typeof s === "object" && !("if" in s) && !("continue-on-error" in s)
+  ).map((s) => s.run).filter((r) => typeof r === "string");
+  const starts = (line) => line === cmd || line.startsWith(cmd) && /[\s;&|]/.test(line[cmd.length]);
+  if (!runs.some((r) => r.split("\n").some((l) => starts(l.trim())))) {
+    return "no run step of the job starts a line with the command";
+  }
+  return void 0;
+}
 async function verifyNotRunHereJobs(o2) {
   const g = (args, timeoutMs) => o2.git.run(o2.checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
+  const read3 = async (oid, path10) => {
+    try {
+      return readWorkflow(await g(["cat-file", "blob", `${oid}:${path10}`], GIT_LOCAL_MS), path10);
+    } catch {
+      return void 0;
+    }
+  };
   let fetched;
   const jobs = [];
   for (const [i2, command] of o2.commands.entries()) {
     const fail2 = (why) => ({ ok: false, entry: i2 + 1, why });
     const named = o2.entries.find((e) => e.command.trim() === command.trim());
     if (named === void 0) return fail2("no CI job named for it");
-    if (o2.baseOid === void 0 || !/^[0-9a-f]{40,64}$/i.test(o2.baseOid)) {
+    const base = o2.baseOid;
+    if (base === void 0 || !SHA.test(base) || !SHA.test(o2.headOid)) {
       return fail2("the base commit is unknown");
     }
-    if (!WORKFLOW_FILE.test(named.workflow))
+    if (!WORKFLOW_FILE.test(named.workflow)) {
       return fail2("the workflow is no file in .github/workflows");
+    }
     if (fetched === void 0) {
       try {
         await g(
-          ["fetch", "--no-tags", "--no-write-fetch-head", o2.checkout.remote, o2.baseOid],
+          ["fetch", "--no-tags", "--no-write-fetch-head", o2.checkout.remote, base, o2.headOid],
           GIT_FETCH_MS
         );
         fetched = true;
@@ -31307,31 +31354,51 @@ async function verifyNotRunHereJobs(o2) {
       }
     }
     if (!fetched) return fail2("the base commit cannot be fetched");
-    let doc;
+    const wf = await read3(base, named.workflow);
+    if (wf === void 0) return fail2("the workflow is not at the base or not valid YAML");
+    let others;
     try {
-      doc = (0, import_yaml7.parse)(
-        await g(["cat-file", "blob", `${o2.baseOid}:${named.workflow}`], GIT_LOCAL_MS)
-      );
+      others = (await g(["ls-tree", "--name-only", "-z", base, WORKFLOWS_DIR], GIT_LOCAL_MS)).split("\0").filter((p) => p !== "" && p !== named.workflow && WORKFLOW_FILE.test(p));
     } catch {
-      return fail2("the workflow is not at the base or not valid YAML");
+      return fail2("the workflows at the base cannot be listed");
     }
-    const wf = doc ?? {};
-    const workflow = typeof wf.name === "string" && wf.name.trim() !== "" ? wf.name : named.workflow;
-    const all = wf.jobs !== null && typeof wf.jobs === "object" ? Object.entries(wf.jobs) : [];
-    const job = all.find(([id, j]) => {
-      const name = j?.name;
-      return (typeof name === "string" ? name : id) === named.job;
-    })?.[1];
-    if (job === void 0) return fail2("the job is not in the workflow at the base");
-    const runs = (Array.isArray(job.steps) ? job.steps : []).map((s) => s?.run).filter((r) => typeof r === "string");
-    const need = command.trim().split(/\s+/).slice(0, 2);
-    if (!runs.some((r) => need.every((t) => r.includes(t)))) {
-      return fail2("no run step of the job holds the command");
+    for (const other of others) {
+      const w = await read3(base, other);
+      if (w === void 0 || w.name === wf.name) {
+        return fail2("the workflow name is not unique at the base");
+      }
     }
-    if (!jobPassed(o2.checks, workflow, named.job)) {
+    const atBase = jobProblem(wf, named.job, command);
+    if (atBase !== void 0) return fail2(`${atBase} at the base`);
+    let changed;
+    try {
+      changed = (await g(
+        [
+          "diff",
+          "--name-only",
+          "--no-renames",
+          "-z",
+          `${base}...${o2.headOid}`,
+          "--",
+          named.workflow
+        ],
+        GIT_LOCAL_MS
+      )).trim() !== "";
+    } catch {
+      return fail2("the change of the workflow cannot be read");
+    }
+    if (changed) {
+      const head = await read3(o2.headOid, named.workflow);
+      if (head === void 0) return fail2("the workflow is gone at the pull request head");
+      if (head.name !== wf.name)
+        return fail2("the workflow has another name at the pull request head");
+      const atHead = jobProblem(head, named.job, command);
+      if (atHead !== void 0) return fail2(`${atHead} at the pull request head`);
+    }
+    if (!jobPassed(o2.checks, wf.name, named.job)) {
       return fail2("the job has no passing check on the pull request (missing or skipped)");
     }
-    jobs.push({ workflow, job: named.job });
+    jobs.push({ workflow: wf.name, job: named.job });
   }
   return { ok: true, jobs };
 }
@@ -31493,7 +31560,7 @@ function renderReviewRoutine(r) {
     ...r.pr === void 0 ? [] : [
       `Load the base and the pull request first, staying on your branch: \`git fetch origin ${r.base}\`, \`git fetch origin pull/${r.pr}/head\`, then \`git reset --hard FETCH_HEAD\`. The diff is \`git diff origin/${r.base}...HEAD\`; save it to an untracked file in the checkout.`,
       "",
-      `Read CI workflows at the base, never the checkout's copy, which the pull request can change: \`git ls-tree --name-only origin/${r.base} .github/workflows/\` and \`git show origin/${r.base}:.github/workflows/<file>\`. ${r.ciItem === true ? "This item is a CI item: it may change `.github/`; review those changes like code." : "A change under `.github/` (workflows, actions) in this pull request is a finding that blocks the approval: this item is no CI item."}`,
+      `Read CI workflows at the base, never the checkout's copy, which the pull request can change: \`git ls-tree --name-only origin/${r.base} .github/workflows/\` and \`git show origin/${r.base}:.github/workflows/<file>\`. ${r.ciItem === true ? "This item is a CI item: it may change what its paths and touches name below `.github/`; review those changes like code. Any other change under `.github/` blocks the approval." : "A change under `.github/` (workflows, actions) in this pull request is a finding that blocks the approval: this item is no CI item."}`,
       ""
     ],
     ...r.pullRequest === void 0 ? [] : [
@@ -31501,7 +31568,7 @@ function renderReviewRoutine(r) {
       ""
     ],
     ...r.notRunHere === void 0 ? [] : [
-      `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: for each command, find the workflow at the base and the job in it that runs the command, and list it in \`not_run_here_jobs\` with the command as listed, the workflow file path at the base (\`.github/workflows/<file>\`) and the job's \`name:\`, or its id when it has none${r.pullRequest === void 0 ? "" : ` (the check names are in \`${r.pullRequest.checks}\`)`}. A command no base workflow runs is a finding. Studio checks at the base that the job is in that file and a \`run:\` step of it holds the command, and refuses an approval unless every check of that job passed on this pull request.`,
+      `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: for each command, find the workflow at the base and the job in it that runs the command, and list it in \`not_run_here_jobs\` with the command as listed, the workflow file path at the base (\`.github/workflows/<file>\`) and the job's \`name:\`, or its id when it has none${r.pullRequest === void 0 ? "" : ` (the check names are in \`${r.pullRequest.checks}\`)`}. A command no base workflow runs is a finding. Studio checks at the base, and at the head when the pull request changes that file, that the job is in it with no \`if:\`, no \`continue-on-error\` and no reusable workflow (\`uses:\`), that a \`run:\` step without \`if:\` starts a line with the whole command, and that the workflow name is unique; it refuses an approval unless every check of that job (each matrix leg \`<job> (<leg>)\`) passed on this pull request.`,
       ""
     ],
     `Run each analyzer below as one subagent with the model named there, read-only except for the spec check's probe; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,
@@ -31950,7 +32017,7 @@ var isGithubPath = (p) => {
 var isCiItem = (i2) => [...i2.paths, ...i2.touches].some(isGithubPath);
 var GIT_FETCH_MS2 = 12e4;
 var GIT_LOCAL_MS2 = 6e4;
-async function changesGithub(ports, checkout, base, head) {
+async function changesGithub(ports, checkout, base, head, allowed) {
   const g = (args, timeoutMs) => ports.git.run(checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
   try {
     await g(
@@ -31961,7 +32028,8 @@ async function changesGithub(ports, checkout, base, head) {
       ["diff", "--name-only", "--no-renames", "-z", `${base}...${head}`],
       GIT_LOCAL_MS2
     );
-    if (diff.split("\0").some((p) => p !== "" && isGithubPath(p))) return true;
+    const outside = (p) => isGithubPath(p) && !(p.startsWith(".github/") && allowed.some((glob) => globProblem(glob) === void 0 && matchGlob(glob, p)));
+    if (diff.split("\0").some((p) => p !== "" && outside(p))) return true;
     const tree = await g(["ls-tree", "-r", "-z", "--full-tree", head], GIT_LOCAL_MS2);
     return tree.split("\0").some((line) => {
       const tab = line.indexOf("	");
@@ -32025,11 +32093,13 @@ async function resolveForItem(o2) {
   }
   let notRunHere;
   let ciItem = false;
+  let ciGlobs = [];
   if (target !== void 0) {
     const name2 = `${target.repo}#${target.pr}`;
     const holder = o2.readBoard().items.find((i2) => i2.type !== "review" && i2.repo === target.repo && i2.pr === target.pr);
     notRunHere = holder?.notRunHere;
     ciItem = holder !== void 0 && isCiItem(holder);
+    ciGlobs = holder === void 0 ? [] : [...holder.paths, ...holder.touches].filter(isGithubPath);
     if (!holder) {
       throw new Error(
         `${item.id}: no board item holds ${name2}; tie it to its item with studio link <id> ${name2}`
@@ -32038,8 +32108,8 @@ async function resolveForItem(o2) {
   }
   const checks = target === void 0 ? void 0 : await readCheckLines(o2.ports, target);
   let workflowChange = false;
-  if (target !== void 0 && facts !== void 0 && !ciItem) {
-    workflowChange = o2.checkout === void 0 || facts.baseOid === void 0 ? true : await changesGithub(o2.ports, o2.checkout, facts.baseOid, facts.head) ?? true;
+  if (target !== void 0 && facts !== void 0) {
+    workflowChange = o2.checkout === void 0 || facts.baseOid === void 0 ? true : await changesGithub(o2.ports, o2.checkout, facts.baseOid, facts.head, ciGlobs) ?? true;
   }
   const paths = facts?.complete ? [...facts.files, ...declared] : "unknown";
   const name = target === void 0 ? void 0 : `${target.repo}#${target.pr}`;
@@ -32281,7 +32351,7 @@ ${review.notRunHere.map((x) => clean3(`${x.command} (missing ${x.missing}: ${x.r
       ...o2.startedAt === void 0 ? {} : { startedAt: o2.startedAt },
       ...skipped.length === 0 ? {} : { skipped: skipped.map((x) => x.id) },
       ...review.notRunHere === void 0 ? {} : { notRunHere: review.notRunHere.map((x) => x.command) },
-      ...review.workflowChange === true && review.ciItem !== true ? { workflowChange: true } : {}
+      ...review.workflowChange === true ? { workflowChange: true } : {}
     };
     writeStateFile(stateRoot, capsFile(stateRoot, id), `${JSON.stringify(caps, null, 2)}
 `);
@@ -32310,7 +32380,6 @@ var DEFAULT_SECRET_GLOBS = [
   "**/.netrc",
   "**/credentials*"
 ];
-var GH_VALUE_FLAGS = ["-R", "--repo", "--hostname"];
 var FETCH_FLAGS = /* @__PURE__ */ new Set([
   "-q",
   "--quiet",
@@ -32343,7 +32412,6 @@ var PULL_FLAGS = /* @__PURE__ */ new Set([
   "--stat",
   "--no-stat"
 ]);
-var GH_RUN_VALUE_FLAGS = ["--ref", "-r", "-f", "--raw-field", "-F", "--field", ...GH_VALUE_FLAGS];
 
 // src/owner-state.ts
 import { lstatSync as lstatSync11, renameSync as renameSync8 } from "node:fs";
@@ -32743,6 +32811,7 @@ function assertItemId(id) {
   if (!ITEM_ID_RE.test(id)) throw new Error(`invalid item id: ${JSON.stringify(id)}`);
 }
 var GITHUB_REPO_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
+var ITEM_BASE = "main";
 function githubHttpsUrl(repo) {
   const name = repo.split("/")[1];
   if (!GITHUB_REPO_RE.test(repo) || name === "." || name === "..") {
@@ -32772,7 +32841,7 @@ async function prepareCheckout(stateRoot, projectDir, item, ports) {
   await ports.git.run(clones, ["clone", "--filter=blob:none", url2, path10]);
   chmodSync5(path10, 448);
   await ports.git.run(path10, ["remote", "set-url", "origin", crewOrigin]);
-  await ports.git.run(path10, ["checkout", "-b", branch, "origin/main"]);
+  await ports.git.run(path10, ["checkout", "-b", branch, `origin/${ITEM_BASE}`]);
   return { path: path10, branch };
 }
 function isReusableClone(path10, item) {
@@ -33052,7 +33121,7 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
       ...caps.prByStudio === true ? [
         `- Do not open the pull request, and do not run gh at all: it cannot verify TLS in this sandbox. Give \`pr_title: "${id}: <summary>"\` in the report and write the pull request text as the report body; Studio opens the pull request from your pushed branch.`
       ] : [
-        `- Open the pull request with exactly this form, which is the only one the guard allows: \`gh pr create --head studio/${id} --base main --title "${id}: <summary>" --body-file <file>\`, with <file> a relative path inside the checkout. If the report lists not_run_here commands, the pull request text lists them too.`
+        `- Open the pull request with exactly this form, which is the only one the guard allows: \`gh pr create --head studio/${id} --base ${ITEM_BASE} --title "${id}: <summary>" --body-file <file>\`, with <file> a relative path inside the checkout. If the report lists not_run_here commands, the pull request text lists them too.`
       ]
     ] : [],
     "- Git identity and GitHub authentication are preconfigured; do not change git config or log in.",
@@ -33191,7 +33260,8 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
     crewAllowedWorkflows: config2.crewAllowedWorkflows,
     crewAllowedWorkflowRefs: config2.crewAllowedWorkflowRefs,
     protectedPaths,
-    item: id
+    item: id,
+    base: ITEM_BASE
   };
   writeStateFile(stateRoot, ctxFile, `${JSON.stringify(ctx, null, 2)}
 `);
@@ -34198,7 +34268,7 @@ function appendStateLine(stateRoot, name, line) {
   }
 }
 var BUCKETS = /* @__PURE__ */ new Set(["pass", "fail", "pending", "skipping", "cancel"]);
-var SHA = /^[0-9a-f]{40,64}$/;
+var SHA2 = /^[0-9a-f]{40,64}$/;
 function parseChecks(stdout) {
   let raw;
   try {
@@ -34278,7 +34348,7 @@ async function isBranchUpdate({ gh, git }, checkout, target, approved, head) {
     if (c3.code !== 0) return false;
     const commit = JSON.parse(c3.stdout);
     const [first, second, ...rest] = commit.parents ?? [];
-    if (typeof first?.sha !== "string" || first.sha.toLowerCase() !== approved.head.toLowerCase() || typeof second?.sha !== "string" || !SHA.test(second.sha) || rest.length > 0 || commit.committer?.login !== "web-flow" || commit.commit?.verification?.verified !== true) {
+    if (typeof first?.sha !== "string" || first.sha.toLowerCase() !== approved.head.toLowerCase() || typeof second?.sha !== "string" || !SHA2.test(second.sha) || rest.length > 0 || commit.committer?.login !== "web-flow" || commit.commit?.verification?.verified !== true) {
       return false;
     }
     const base = approved.base.split("/").map(encodeURIComponent).join("/");
@@ -34366,7 +34436,7 @@ async function viewPr(entry, gh) {
     return "gh pr view returned unparsable output";
   }
   const { headRefOid, state, mergeable } = raw ?? {};
-  if (typeof headRefOid !== "string" || !SHA.test(headRefOid)) {
+  if (typeof headRefOid !== "string" || !SHA2.test(headRefOid)) {
     return "gh pr view returned no valid head SHA";
   }
   if (state !== "OPEN" && state !== "MERGED" && state !== "CLOSED") {
@@ -34392,7 +34462,7 @@ async function mergeShaOf(entry, gh) {
   try {
     const parsed = JSON.parse(r.stdout);
     const oid = parsed?.mergeCommit?.oid;
-    return typeof oid === "string" && SHA.test(oid) ? oid : void 0;
+    return typeof oid === "string" && SHA2.test(oid) ? oid : void 0;
   } catch {
     return void 0;
   }
@@ -35373,6 +35443,7 @@ async function runCli(argv, deps) {
                 git: ports.git,
                 checkout: approvalCheckout(project, config2, m[1]),
                 baseOid: info.baseOid,
+                headOid: info.head,
                 commands: reviewDone.notRunHere,
                 entries: report.notRunHereJobs,
                 checks: checks.checks

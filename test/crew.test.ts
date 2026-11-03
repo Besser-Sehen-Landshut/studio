@@ -690,6 +690,7 @@ describe('writeCrewSettings', () => {
       crewAllowedWorkflows: ['ci.yml'],
       crewAllowedWorkflowRefs: ['main'],
       item: 'APP-12',
+      base: 'main',
       protectedPaths: [
         ctxFile,
         ...['guard', 'settings', 'briefs', 'logs', 'homes', 'tmp'].map((d) => join(state, d)),
@@ -2921,6 +2922,16 @@ describe('capabilities at launch', () => {
       const f = makeFixture();
       holderBoard(f);
       await launch(f, pr('a.ts'));
+      expect(capsOf(f, 'APP-20').workflowChange).toBe(true);
+    });
+    it.each<[string, Record<string, Entry>]>([
+      ['a .github path outside its globs', { '.github/actions/setup/action.yml': 'runs: {}\n' }],
+      ['another case than its globs', { '.GitHub/workflows/ci.yml': 'on: push\n' }],
+      ['a symlink, even inside its globs', { '.github/workflows/x.yml': { link: '../../ci.yml' } }],
+    ])('a CI item is held to its globs: %s counts as a change', async (_why, files) => {
+      const f = makeFixture();
+      holderBoard(f, ['    touches: [".github/workflows/**"]']);
+      await launch(f, facts(prHead(f, files)));
       expect(capsOf(f, 'APP-20').workflowChange).toBe(true);
     });
     it('a CI item may change .github/: it declares it in paths or touches', async () => {

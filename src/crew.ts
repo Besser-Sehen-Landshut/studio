@@ -115,6 +115,9 @@ const GITHUB_REPO_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
  * points here, so the crew pushes with its own token through the `gh` credential helper and never
  * through the owner's origin (which may be an ssh URL that the crew HOME cannot use).
  */
+/** The branch a crew's work starts from and its pull request targets. */
+export const ITEM_BASE = 'main';
+
 export function githubHttpsUrl(repo: string): string {
   const name = repo.split('/')[1];
   if (!GITHUB_REPO_RE.test(repo) || name === '.' || name === '..') {
@@ -169,7 +172,7 @@ export async function prepareCheckout(
   chmodSync(path, 0o700);
   // Still a fresh clone no crew has run in, so git may run here (rule D4).
   await ports.git.run(path, ['remote', 'set-url', 'origin', crewOrigin]);
-  await ports.git.run(path, ['checkout', '-b', branch, 'origin/main']);
+  await ports.git.run(path, ['checkout', '-b', branch, `origin/${ITEM_BASE}`]);
   return { path, branch };
 }
 
@@ -556,7 +559,7 @@ export function writeBrief(
                 `- Do not open the pull request, and do not run gh at all: it cannot verify TLS in this sandbox. Give \`pr_title: "${id}: <summary>"\` in the report and write the pull request text as the report body; Studio opens the pull request from your pushed branch.`,
               ]
             : [
-                `- Open the pull request with exactly this form, which is the only one the guard allows: \`gh pr create --head studio/${id} --base main --title "${id}: <summary>" --body-file <file>\`, with <file> a relative path inside the checkout. If the report lists not_run_here commands, the pull request text lists them too.`,
+                `- Open the pull request with exactly this form, which is the only one the guard allows: \`gh pr create --head studio/${id} --base ${ITEM_BASE} --title "${id}: <summary>" --body-file <file>\`, with <file> a relative path inside the checkout. If the report lists not_run_here commands, the pull request text lists them too.`,
               ]),
         ]
       : []),
@@ -761,6 +764,7 @@ export function writeCrewSettings(
     crewAllowedWorkflowRefs: config.crewAllowedWorkflowRefs,
     protectedPaths,
     item: id,
+    base: ITEM_BASE,
   };
   writeStateFile(stateRoot, ctxFile, `${JSON.stringify(ctx, null, 2)}\n`);
   const settings = {

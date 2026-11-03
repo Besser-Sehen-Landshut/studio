@@ -14,19 +14,24 @@ the merge.
 
 - The reviewer reads CI workflows at the base (`git show origin/<base>:.github/workflows/<file>`),
   never in the pull request head, which the crew may have edited. A change under `.github/`
-  (workflows, actions) is a finding that blocks the approval unless the item holding the pull
-  request is a CI item: one that declares `.github/` in its `paths` or `touches`. Launch reads the
+  (workflows, actions) is a finding that blocks the approval. A CI item, one that declares paths
+  below `.github/` in its `paths` or `touches`, may change what those globs name and nothing else
+  there; a symbolic link at `.github` or below always counts. Launch reads the
   change in the owner's checkout with `git diff --name-only --no-renames <base>...<head>` (both
   sides of a rename count, any case, and a symbolic link at `.github` or below counts too), not
   from gh's file list, which can be cut short. A change it cannot read counts as one. `collect`
   refuses the approval then.
 - A review report names, for each `not_run_here` command, the workflow file at the base and the
   job that runs it (`not_run_here_jobs: [{ command, workflow, job }]`). `collect` checks each in
-  the owner's checkout at the base commit: the job must be in that file (by its `name:`, else its
-  id), one of its `run:` steps must hold the command's program and first argument (a substring
-  test, a heuristic), and every check of that job in that workflow (`gh pr checks --json
-  name,bucket,workflow`; commit statuses do not count) must have passed: a skipped check that is
-  not required counted as green before. A refusal blocks the review item with a note for the lead
+  the owner's checkout at the pull request's base commit (`baseRefOid`, the base its checks ran
+  against): the workflow's `name:` must be unique among the workflow files there; the job must be
+  in that file (by its `name:`, else its id) with no `if:`, no `continue-on-error` and no `uses:`
+  (reusable workflows are refused); a `run:` step without `if:` or `continue-on-error` must start
+  a line with the whole command (a heuristic). When the pull request changes that workflow file,
+  the version at its head must pass the same test under the same name. Every check of that job in
+  that workflow (`gh pr checks --json name,bucket,workflow`; matrix legs `<job> (<leg>)` count as
+  instances, commit statuses do not count) must have passed: a skipped check that is not required
+  counted as green before. A refusal blocks the review item with a note for the lead
   and stores no approval. An approval stores the jobs (`approved_jobs`), and the merge queue checks
   them again right before it merges.
 - `collect` prints only the count and the missing services of `not_run_here`, no crew text.
@@ -44,18 +49,24 @@ the merge.
 ### Security
 
 - The guard no longer models gh's or git's option grammar; it allows listed forms only.
-  - `gh pr create`: exactly `gh pr create --head studio/<id> --base <branch> --title <text>
-    --body-file <file>`, each option once in any order, the file a relative path whose real path is
-    in the clone. Short or grouped options, `=`, `--template`, `--recover`, `--attach`, `-R`,
-    `--body-file -` and `gh pr new` are refused. Of `gh pr` a crew may otherwise only `view`,
-    `checks`, `diff`, `list` and `status`. No gh flag may come before the command words.
+  - gh: `gh pr view`, `checks`, `diff`, `list` and `status`, and exactly `gh pr create --head
+    studio/<id> --base <item base> --title <text> --body-file <file>` from the clone root, each
+    option once in any order, the file a plain relative path whose real path is in the clone. With
+    `crew_allowed_workflows` set, also exactly `gh workflow run <listed workflow> --ref <listed
+    ref>`. Everything else is refused: other subcommands and aliases, `gh api`, short or grouped
+    options, `=`, `--template`, `--recover`, `--attach`, `-R`/`--repo`/`--hostname` anywhere.
+  - git global options are an allowlist: `-C <dir in the clone>`, `-c <allowed key>`,
+    `--git-dir=`/`--work-tree=` in the clone, `--no-pager`, `-P`, `--no-replace-objects`.
   - `git fetch` and `git pull` take listed options only (quiet, verbose, prune, tags, depth; for
-    pull also rebase, fast-forward, autostash and `-X`/`--strategy-option` with a plain value) and
-    only `origin` as remote. `git ls-remote` is `git ls-remote origin [<ref>...]` with no options.
-  - `git clone`, `fetch-pack`, `upload-pack`, `upload-archive` and `archive --remote` are refused:
-    a crew has its clone. `git remote` is read-only (list, `-v`, `get-url`, `show`), and
-    `git submodule` only `status`.
-- The guard context names the crew's item, for the `--head` check.
+    pull also rebase, fast-forward, autostash and `-X`/`--strategy-option` with a plain value),
+    only `origin` as remote and plain refspecs. `git ls-remote` is `git ls-remote origin
+    [<ref>...]`; `git push` goes to `origin` only. These and `gh pr create` run from the clone root,
+    without `-C`, `--git-dir` or `--work-tree`.
+  - `git clone`, `init`, `fetch-pack`, `upload-pack`, `upload-archive` and `archive --remote`,
+    `--exec` or `--output` are refused. `git remote` is read-only (`-v`, `get-url origin`,
+    `show [-n] origin`), `git submodule` only `status`. No write reaches a `.git` at any depth.
+- The guard context names the crew's item and its base (`main`, where crews branch from), for the
+  `--head` and `--base` checks; the brief names the same base.
 
 ## [0.6.5] - 2026-11-03
 

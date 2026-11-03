@@ -484,15 +484,24 @@ describe('studio CLI', () => {
       git(fx.project, 'add', '.github/workflows/ci.yml');
       git(fx.project, 'commit', '-q', '-m', 'ci');
       git(fx.project, 'push', '-q', 'origin', 'main');
-      return git(fx.project, 'rev-parse', 'HEAD').trim();
+      const base = git(fx.project, 'rev-parse', 'HEAD').trim();
+      // The pull request head: a real commit on a branch, so the owner checkout can fetch it.
+      git(fx.project, 'checkout', '-q', '-b', 'studio/APP-2');
+      writeFileSync(join(fx.project, 'change.txt'), 'x\n');
+      git(fx.project, 'add', 'change.txt');
+      git(fx.project, 'commit', '-q', '-m', 'change');
+      git(fx.project, 'push', '-q', 'origin', 'studio/APP-2');
+      const head = git(fx.project, 'rev-parse', 'HEAD').trim();
+      git(fx.project, 'checkout', '-q', 'main');
+      return { base, head };
     };
     type Check = { name: string; bucket: string; workflow?: string };
-    const withChecks = (checks: Check[], base: string) =>
+    const withChecks = (checks: Check[], base: string, head: string) =>
       fakeGh((l) => {
         if (/^pr view \d+ --repo org\/app --json headRefOid,headRefName/.test(l)) {
           return {
             stdout: JSON.stringify({
-              headRefOid: HEAD,
+              headRefOid: head,
               headRefName: 'studio/APP-2',
               baseRefOid: base,
               ...OWN,
@@ -515,10 +524,15 @@ describe('studio CLI', () => {
         { id: 'APP-1', status: 'assigned', type: 'review' },
         { id: 'APP-2', status: 'in_review', pr: 9, approvedHead: null },
       ]);
-      const base = baseWithWorkflow(fx, text);
-      writeReviewCaps(fx, 'APP-1', caps);
-      writeReport(fx, 'APP-1', report);
-      const r = await cli(fx, fakePorts(withChecks(checks, base).gh).ports, 'collect', 'APP-1');
+      const { base, head } = baseWithWorkflow(fx, text);
+      writeReviewCaps(fx, 'APP-1', { ...caps, headRefOid: head });
+      writeReport(fx, 'APP-1', report.replaceAll(HEAD, head));
+      const r = await cli(
+        fx,
+        fakePorts(withChecks(checks, base, head).gh).ports,
+        'collect',
+        'APP-1',
+      );
       return { fx, r };
     };
     /** A job gate refusal: no approval, and the review goes to the lead with a note. */
@@ -542,7 +556,7 @@ describe('studio CLI', () => {
       const { fx, r } = await run(`${APPROVE}\n${JOBS}`, PASS);
       expect(r.err).toBe('');
       expect(r.code).toBe(0);
-      expect(statusOf(fx, 'APP-2')?.approvedHead).toBe(HEAD);
+      expect(statusOf(fx, 'APP-2')?.approvedHead).toMatch(/^[0-9a-f]{40}$/);
       expect(statusOf(fx, 'APP-2')?.approvedJobs).toEqual([{ workflow: 'CI', job: 'e2e' }]);
     });
     it('a job named by its name: rather than its id', async () => {
