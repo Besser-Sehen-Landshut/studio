@@ -1439,6 +1439,15 @@ function refuseDotDot(tok: string, tool: string): void {
   if (tok.split('/').includes('..')) deny(`${tool}: write the path without ..: ${tok}`);
 }
 
+/**
+ * A segment of exactly two characters, each of them a dot or something that may match one: `?`, a
+ * bracket class or an escape. `*` and `.*` are left out: they are ordinary patterns. See SECURITY.md.
+ */
+function mayMatchDotDot(segment: string): boolean {
+  const plain = segment.replace(/\\(.)/g, '$1').replace(/\[[^\]]*\]/g, '?');
+  return /^[.?]{2}$/.test(plain);
+}
+
 /** A glob stays in scope when the part before its first wildcard does. */
 function checkGlobScope(env: Env, pattern: string, base: string, tool: string): void {
   // The tool's own brace rules may differ, so the text as a whole counts, also inside braces.
@@ -1446,6 +1455,9 @@ function checkGlobScope(env: Env, pattern: string, base: string, tool: string): 
   for (const e of braceExpand(pattern)) {
     if (e.includes('{')) deny(`${tool}: a brace group needs a comma: ${pattern}`);
     const segs = e.split('/');
+    if (e.includes('..') || segs.some(mayMatchDotDot)) {
+      deny(`${tool}: write the pattern without ..: ${pattern}`);
+    }
     const first = segs.findIndex((s) => hasMagic(s));
     const prefix = first < 0 ? e : segs.slice(0, first).join('/') || (isAbsolute(e) ? '/' : '.');
     checkReadScope(env, prefix, base, tool);

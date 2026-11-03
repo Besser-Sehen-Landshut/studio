@@ -328,6 +328,28 @@ describe('read tools stay in the crew area', () => {
         expect(decide('Glob', { pattern }, wt)).toBe('deny');
       },
     );
+    it.each([
+      '*/.{.,x}/y',
+      '*/{.,x}./y',
+      '*/.[.]/y',
+      '*/[.]./y',
+      '*/[.][.]/y',
+      '*/.\\./y',
+      '*/\\.\\./y',
+      '*/?./y',
+      '*/.?/y',
+      '*/??/y',
+      '*/.[!a]/y',
+      '.{.,x}/y',
+    ])('%s can become .. and is denied', (pattern) => {
+      expect(decide('Glob', { pattern }, wt)).toBe('deny');
+    });
+    it.each(['**/*.{ts,tsx}', '**/.*', '.github/**', 'a?/*.ts', '[ab]c/*', '?a.ts', 'file.?s'])(
+      '%s is an ordinary pattern and stays allowed',
+      (pattern) => {
+        expect(decide('Glob', { pattern }, wt)).toBe('allow');
+      },
+    );
     it.each(['*.{ts,tsx}', 'src/**/*.{ts,tsx}', '{src,test}/**/*.ts', '{a,{b,c}}/*.ts'])(
       '%s still works',
       (pattern) => {
