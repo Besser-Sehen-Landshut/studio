@@ -48,7 +48,7 @@ export type QueueOptions = {
    */
   takeNext?: () => QueueEntry | undefined;
   /** Called right after each entry finished and was persisted (board update); errors are logged. */
-  onDone?: (done: QueueDone) => void;
+  onDone?: (done: QueueDone) => unknown;
   /**
    * Returns a line while the queue must not merge (an account block). Checked at the top of every
    * loop and right before `gh pr merge`; a stop keeps `current` and `pending` as they are.
@@ -742,7 +742,7 @@ export async function runQueue(
     persist(state);
     if (opts.onDone) {
       try {
-        opts.onDone(done);
+        await opts.onDone(done);
       } catch (err) {
         // The result is in queue.json; the next run reconciles the board from it.
         log(`board update failed for PR ${current.pr}: ${(err as Error).message}`);

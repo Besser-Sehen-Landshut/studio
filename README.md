@@ -2,7 +2,7 @@
 
 Studio is a Claude Code plugin and TypeScript package for running a small software studio of coding-agent sessions from one control room: a lead session plans work from a board and a crew of role-based sessions carries it out, each in its own sandboxed clone.
 
-Status: 0.5.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store). See [CHANGELOG.md](CHANGELOG.md).
+Status: 0.5.1, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store). See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -80,31 +80,32 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 
 `studio [--project <dir>] [--json] <command>`
 
-| Command                                                                                   | Purpose                                                                     |
-| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `board`                                                                                   | Show the board                                                              |
-| `plan`                                                                                    | Dry-run the planner (JSON incl. capacity and its read error)                |
-| `launch <id>`                                                                             | Start a crew session for a planned item                                     |
-| `status`                                                                                  | Crew sessions and their board status                                        |
-| `collect <id>`                                                                            | Verify a crew report and PR head, move the item                             |
-| `queue add <repo>#<pr>`                                                                   | Put an approved PR into the merge queue (needs an approval for its head)    |
-| `queue run`                                                                               | Merge queued PRs one at a time (exact head SHA, checks green)               |
-| `state`                                                                                   | Refresh `state.json` in the state root                                      |
-| `pause`, `resume`                                                                         | Owner only, in a terminal: hold or release launches, merges                 |
-| `stop <id>`                                                                               | Stop a crew session                                                         |
-| `metrics`                                                                                 | Lead time, deploy frequency, change failure rate, restore time, flaky count |
-| `deploy record [<sha>]`                                                                   | Record a production deploy                                                  |
-| `incident open <id>`, `incident resolve <id>`                                             | Record a failure after a deploy and its restore                             |
-| `flaky record <test> <sha> pass\|fail`, `flaky [list]`                                    | The flaky-test ledger                                                       |
-| `solutions search <words>`                                                                | Earlier solutions in `.studio/solutions/`                                   |
-| `lessons [list]`, `lessons accept <n>`, `lessons drop <n>`, `lessons prune <role> <line>` | Role memory                                                                 |
-| `escalate <id>`                                                                           | Run a stuck item on the role's `escalate_to` model                          |
-| `setup stack [--write]`                                                                   | Detect the project's stacks from its manifest files                         |
-| `setup sources [<id>...]`, `sources list`, `sources check`, `sources apply <id>`          | Third-party sources                                                         |
-| `setup ci [--write]`                                                                      | Detect CI runners, propose the `ci:` block, lint workflows                  |
-| `secret set crew-token`                                                                   | Store the crew's GitHub token (hidden input, checked first)                 |
-| `doctor`                                                                                  | What is set and what is missing, never values                               |
-| `accounts-clear <label>`                                                                  | Owner only, in a terminal: clear a label's account block                    |
+| Command                                                                                   | Purpose                                                                                                                     |
+| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `board`                                                                                   | Show the board                                                                                                              |
+| `plan`                                                                                    | Dry-run the planner (JSON incl. capacity and its read error)                                                                |
+| `launch <id>`                                                                             | Start a crew session for a planned item                                                                                     |
+| `status`                                                                                  | Crew sessions and their board status                                                                                        |
+| `collect <id>`                                                                            | Verify a crew report and PR head, move the item                                                                             |
+| `queue add <repo>#<pr>`                                                                   | Put an approved PR into the merge queue (needs an approval for its head)                                                    |
+| `queue run`                                                                               | Merge queued PRs one at a time (exact head SHA, checks green)                                                               |
+| `state`                                                                                   | Refresh `state.json` in the state root                                                                                      |
+| `pause`, `resume`                                                                         | Owner only, in a terminal: hold or release launches, merges                                                                 |
+| `stop <id> [--release]`                                                                   | Stop a crew session. A crew it cannot verify gets no signal; `--release` closes its record and prints what to check by hand |
+| `drop <id>`                                                                               | End an item; refuses while its crew runs                                                                                    |
+| `metrics`                                                                                 | Lead time, deploy frequency, change failure rate, restore time, flaky count                                                 |
+| `deploy record [<sha>]`                                                                   | Record a production deploy                                                                                                  |
+| `incident open <id>`, `incident resolve <id>`                                             | Record a failure after a deploy and its restore                                                                             |
+| `flaky record <test> <sha> pass\|fail`, `flaky [list]`                                    | The flaky-test ledger                                                                                                       |
+| `solutions search <words>`                                                                | Earlier solutions in `.studio/solutions/`                                                                                   |
+| `lessons [list]`, `lessons accept <n>`, `lessons drop <n>`, `lessons prune <role> <line>` | Role memory                                                                                                                 |
+| `escalate <id>`                                                                           | Run a stuck item on the role's `escalate_to` model                                                                          |
+| `setup stack [--write]`                                                                   | Detect the project's stacks from its manifest files                                                                         |
+| `setup sources [<id>...]`, `sources list`, `sources check`, `sources apply <id>`          | Third-party sources                                                                                                         |
+| `setup ci [--write]`                                                                      | Detect CI runners, propose the `ci:` block, lint workflows                                                                  |
+| `secret set crew-token`                                                                   | Store the crew's GitHub token (hidden input, checked first)                                                                 |
+| `doctor`                                                                                  | What is set and what is missing, never values                                                                               |
+| `accounts-clear <label>`                                                                  | Owner only, in a terminal: clear a label's account block                                                                    |
 
 `launch` refuses while a crew for the same item is still running and deletes a report an earlier run left in a reused clone. `collect` refuses while the item's crew process is still alive and refuses a report last modified before the crew started.
 

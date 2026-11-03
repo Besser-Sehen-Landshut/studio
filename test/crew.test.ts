@@ -2124,6 +2124,44 @@ describe('capabilities at launch', () => {
     expect(started).toHaveLength(2);
   });
 
+  describe('relaunching an item over an earlier crew record', () => {
+    const again = async (identity: () => string | undefined, stoppedAt?: string) => {
+      const f = makeFixture();
+      const started: Started[] = [];
+      const base = fakePorts(started);
+      await launchCrew(f.project, item, config, base, f.launcher);
+      if (stoppedAt !== undefined) {
+        const file = join(f.state, 'crew.json');
+        const all = JSON.parse(readFileSync(file, 'utf8'));
+        all[item.id] = { ...all[item.id], stoppedAt };
+        writeFileSync(file, JSON.stringify(all));
+      }
+      const later: Ports = {
+        ...base,
+        claude: { ...base.claude, alive: () => true, identity: async () => identity() },
+      };
+      return { started, p: launchCrew(f.project, item, config, later, f.launcher) };
+    };
+    it('a pid another process holds does not block, and gets no signal', async () => {
+      const { started, p } = await again(() => 'start-other');
+      await expect(p).resolves.toBeDefined();
+      expect(started).toHaveLength(2);
+    });
+    it('an unverified crew blocks and names the release', async () => {
+      const { started, p } = await again(() => undefined);
+      await expect(p).rejects.toThrow(/--release/);
+      expect(started).toHaveLength(1);
+    });
+    it('a released crew does not block', async () => {
+      // Unreadable for the old crew, readable again for the process this launch starts.
+      let calls = 0;
+      const identity = () => (++calls <= 1 ? undefined : 'start-new');
+      const { started, p } = await again(identity, '2026-11-03T00:00:00.000Z');
+      await expect(p).resolves.toBeDefined();
+      expect(started).toHaveLength(2);
+    });
+  });
+
   describe('what counts as a review still running', () => {
     const second: WorkItem = { ...reviewItem, id: 'APP-21' };
     const launchAfter = async (
