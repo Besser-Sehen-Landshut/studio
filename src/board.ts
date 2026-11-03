@@ -51,6 +51,11 @@ export const workItemSchema = z.strictObject({
   plan: z.string().optional(),
   pr: z.number().int().positive().optional(),
   branch: z.string().optional(),
+  // Set by `collect` from an approving review; a request for changes clears it.
+  approvedHead: z
+    .string()
+    .regex(/^[0-9a-f]{40,64}$/i, 'not a commit')
+    .optional(),
   crew: z.string().optional(),
   notes: z.array(z.string()).optional(),
   // Drives the review tier, the analyzers and the skills (capabilities/INDEX.yaml).
@@ -164,6 +169,7 @@ const KEY_ORDER: readonly (keyof WorkItem)[] = [
   'plan',
   'pr',
   'branch',
+  'approvedHead',
   'crew',
   'notes',
   'risk',

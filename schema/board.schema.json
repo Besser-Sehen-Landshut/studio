@@ -116,6 +116,10 @@
           "branch": {
             "type": "string"
           },
+          "approved_head": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40,64}$"
+          },
           "crew": {
             "type": "string"
           },

@@ -55,7 +55,10 @@ export type QueueOptions = {
    */
   hold?: () => string | undefined;
   /** Why this entry must not merge, read right before `gh pr merge`; a reason fails the entry. */
-  mergeAllowed?: (entry: QueueEntry) => string | undefined;
+  mergeAllowed?: (
+    entry: QueueEntry,
+    head: string,
+  ) => string | undefined | Promise<string | undefined>;
 };
 
 /** Internal stop: the hold fired between capacity and merge. `current` stays persisted. */
@@ -337,8 +340,77 @@ async function readChecks(entry: QueueEntry, gh: Gh): Promise<ChecksVerdict> {
 
 type PrView = { head: string; state: 'OPEN' | 'MERGED' | 'CLOSED'; mergeable: string };
 
+/**
+ * Whether `head` only merges the base into `approved`, as `gh pr update-branch` does: GitHub signed
+ * it, the approved head is its first parent, and the other parent is already on the base. A push
+ * cannot forge the signature, and the check on the other parent keeps out a merge of another branch.
+ */
+async function isBranchUpdate(
+  gh: Gh,
+  target: { repo: string; pr: number },
+  approved: string,
+  head: string,
+): Promise<boolean> {
+  try {
+    const c = await gh.run(['api', `repos/${target.repo}/commits/${head}`]);
+    if (c.code !== 0) return false;
+    const commit = JSON.parse(c.stdout) as {
+      parents?: { sha?: unknown }[];
+      committer?: { login?: unknown } | null;
+      commit?: { verification?: { verified?: unknown } };
+    };
+    const [first, second, ...rest] = commit.parents ?? [];
+    if (
+      typeof first?.sha !== 'string' ||
+      first.sha.toLowerCase() !== approved.toLowerCase() ||
+      typeof second?.sha !== 'string' ||
+      !SHA.test(second.sha) ||
+      rest.length > 0 ||
+      commit.committer?.login !== 'web-flow' ||
+      commit.commit?.verification?.verified !== true
+    ) {
+      return false;
+    }
+    const v = await gh.run([
+      'pr',
+      'view',
+      String(target.pr),
+      '--repo',
+      target.repo,
+      '--json',
+      'baseRefName',
+    ]);
+    if (v.code !== 0) return false;
+    const base = (JSON.parse(v.stdout) as { baseRefName?: unknown }).baseRefName;
+    if (typeof base !== 'string' || base === '') return false;
+    const d = await gh.run(['api', `repos/${target.repo}/compare/${base}...${second.sha}`]);
+    if (d.code !== 0) return false;
+    const { status } = JSON.parse(d.stdout) as { status?: unknown };
+    return status === 'behind' || status === 'identical';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Why a review verdict does not cover `head`, else undefined. The queue's own branch update changes
+ * the head without changing what was reviewed, so that one commit counts as approved too.
+ */
+export async function approvalProblem(
+  gh: Gh,
+  target: { repo: string; pr: number },
+  approved: string | undefined,
+  head: string,
+): Promise<string | undefined> {
+  const name = `${target.repo}#${target.pr}`;
+  if (approved === undefined) return `no approval recorded for ${name}: review it first`;
+  if (approved.toLowerCase() === head.toLowerCase()) return undefined;
+  if (await isBranchUpdate(gh, target, approved, head)) return undefined;
+  return `${name} is at ${head}, the approval is for ${approved}: review it again`;
+}
+
 /** The PR's head, state and mergeability; a string is the failure reason. */
-async function viewPr(entry: QueueEntry, gh: Gh): Promise<PrView | string> {
+export async function viewPr(entry: QueueEntry, gh: Gh): Promise<PrView | string> {
   const r = await gh.run([
     'pr',
     'view',
@@ -522,7 +594,7 @@ export async function mergeOne(
         enter('capacity');
         throw new QueueHeld(held);
       }
-      const refused = opts.mergeAllowed?.(entry);
+      const refused = await opts.mergeAllowed?.(entry, head);
       if (refused !== undefined) return failed(refused);
       const r = await gh.run([
         'pr',

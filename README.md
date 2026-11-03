@@ -86,7 +86,7 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 | `launch <id>`                                                                             | Start a crew session for a planned item                                     |
 | `status`                                                                                  | Crew sessions and their board status                                        |
 | `collect <id>`                                                                            | Verify a crew report and PR head, move the item                             |
-| `queue add <repo>#<pr>`                                                                   | Put a reviewed PR into the merge queue                                      |
+| `queue add <repo>#<pr>`                                                                   | Put an approved PR into the merge queue (needs an approval for its head)    |
 | `queue run`                                                                               | Merge queued PRs one at a time (exact head SHA, checks green)               |
 | `state`                                                                                   | Refresh `state.json` in the state root                                      |
 | `pause`, `resume`                                                                         | Owner only, in a terminal: hold or release launches, merges                 |

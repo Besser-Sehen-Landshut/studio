@@ -52,7 +52,9 @@ Every PR, however urgent, gets one fresh reviewer crew session before `queue add
 2. `studio plan`, `studio launch <review-id>`, then `studio collect <review-id>`: the reviewer opens no PR; its
    report carries `verdict` and `reviews: <owner/repo>#<n>`; collect moves the review item to `merged` and
    prints the verdict.
-3. `verdict: approve` → `studio queue add <owner/repo>#<n>`. Output `skipped: [...]` lists optional analyzers
+3. `verdict: approve` → `studio queue add <owner/repo>#<n>`. `collect` stores the approved head on the builder
+   item; `queue add` and the merge refuse any other head except the queue's own branch update, so a later push
+   needs a new review. A launch refuses a pull request from a fork. Output `skipped: [...]` lists optional analyzers
    that could not run: collect already refused any skipped diff review, spec check or security, so the approval
    stands. Queue it, name the skip in your status line, and fetch a missing source with `studio setup sources`.
    `changes_requested` → builder item `blocked` with the findings as notes, `blocked → ready`, relaunch, then a

@@ -27610,6 +27610,8 @@ var workItemSchema = external_exports.strictObject({
   plan: external_exports.string().optional(),
   pr: external_exports.number().int().positive().optional(),
   branch: external_exports.string().optional(),
+  // Set by `collect` from an approving review; a request for changes clears it.
+  approvedHead: external_exports.string().regex(/^[0-9a-f]{40,64}$/i, "not a commit").optional(),
   crew: external_exports.string().optional(),
   notes: external_exports.array(external_exports.string()).optional(),
   // Drives the review tier, the analyzers and the skills (capabilities/INDEX.yaml).
@@ -27708,6 +27710,7 @@ var KEY_ORDER = [
   "plan",
   "pr",
   "branch",
+  "approvedHead",
   "crew",
   "notes",
   "risk",
@@ -30152,6 +30155,8 @@ var RISK_FOR_LARGE = ["auth", "security", "data", "migration"];
 var MODEL_ALIAS = { standard: "sonnet", capable: "opus" };
 var GH_TIMEOUT_MS = 6e4;
 var prSchema = external_exports.object({
+  headRefOid: external_exports.string().regex(/^[0-9a-f]{40,64}$/i),
+  isCrossRepository: external_exports.boolean(),
   changedFiles: external_exports.number().int().nonnegative(),
   files: external_exports.array(
     external_exports.object({
@@ -30164,17 +30169,27 @@ var prSchema = external_exports.object({
 async function readPrFacts(ports, target) {
   try {
     const r = await ports.gh.run(
-      ["pr", "view", String(target.pr), "--repo", target.repo, "--json", "files,changedFiles"],
+      [
+        "pr",
+        "view",
+        String(target.pr),
+        "--repo",
+        target.repo,
+        "--json",
+        "files,changedFiles,headRefOid,isCrossRepository"
+      ],
       { timeoutMs: GH_TIMEOUT_MS }
     );
     if (r.code !== 0) return void 0;
     const parsed = prSchema.safeParse(JSON.parse(r.stdout));
     if (!parsed.success) return void 0;
-    const { files, changedFiles } = parsed.data;
+    const { files, changedFiles, headRefOid, isCrossRepository } = parsed.data;
     return {
       files: files.map((f) => f.path),
       lines: files.filter((f) => !f.path.toLowerCase().endsWith(".md")).reduce((sum, f) => sum + f.additions + f.deletions, 0),
-      complete: files.length >= changedFiles
+      complete: files.length >= changedFiles,
+      head: headRefOid,
+      crossRepository: isCrossRepository
     };
   } catch {
     return void 0;
@@ -30236,6 +30251,8 @@ var crewCapsSchema = external_exports.strictObject({
   analyzers: external_exports.array(external_exports.string()),
   mandatory: external_exports.array(external_exports.string()),
   reviewsTarget: external_exports.string().optional(),
+  /** The head the tier and the analyzers were chosen for. */
+  headRefOid: external_exports.string().optional(),
   /** Ids launch could not provide, for the lead: they never count as a pass. */
   skipped: external_exports.array(external_exports.string()).optional()
 });
@@ -30261,6 +30278,11 @@ function checkReviewCaps(caps, report) {
     throw new Error(`report reviews another pull request than ${target}`);
   }
   if (report.verdict !== "approve") return { skipped: [], target };
+  if (caps.headRefOid === void 0 || report.headSha?.toLowerCase() !== caps.headRefOid.toLowerCase()) {
+    throw new Error(
+      `the approval is for another head than the review was launched on (${String(caps.headRefOid)}): relaunch the review, nothing moved`
+    );
+  }
   const results = report.analyzers ?? {};
   const skipped = [...caps.skipped ?? []];
   for (const id of caps.analyzers) {
@@ -30633,6 +30655,14 @@ async function resolveForItem(o2) {
     throw new Error(`${item.id}: the pull request is in ${target.repo}, the item in ${item.repo}`);
   }
   const facts = target === void 0 ? void 0 : await readPrFacts(o2.ports, target);
+  if (target !== void 0 && facts === void 0) {
+    throw new Error(`${item.id}: cannot read ${target.repo}#${target.pr}; refusing to launch`);
+  }
+  if (target !== void 0 && facts?.crossRepository !== false) {
+    throw new Error(
+      `${item.id}: ${target.repo}#${target.pr} comes from a fork; a crew never runs a fork's code, review it by hand`
+    );
+  }
   const paths = facts?.complete ? [...facts.files, ...declared] : "unknown";
   const name = target === void 0 ? void 0 : `${target.repo}#${target.pr}`;
   let round;
@@ -30660,7 +30690,8 @@ async function resolveForItem(o2) {
       reasons,
       round,
       ...name === void 0 ? {} : { target: name },
-      ...target === void 0 ? {} : { pr: target.pr }
+      ...target === void 0 ? {} : { pr: target.pr },
+      ...facts === void 0 ? {} : { head: facts.head }
     }
   };
 }
@@ -30825,6 +30856,7 @@ function writeCaps(o2) {
       analyzers: ids,
       mandatory: MANDATORY.filter((m) => ids.includes(m)),
       ...review.target === void 0 ? {} : { reviewsTarget: review.target },
+      ...review.head === void 0 ? {} : { headRefOid: review.head },
       ...skipped.length === 0 ? {} : { skipped: skipped.map((x) => x.id) }
     };
     writeStateFile(stateRoot, capsFile(stateRoot, id), `${JSON.stringify(caps, null, 2)}
@@ -31524,24 +31556,22 @@ function entries(dir) {
   try {
     return readdirSync4(dir);
   } catch (e) {
-    return e.code === "ENOENT" ? null : void 0;
+    const code = e.code;
+    return code === "ENOENT" || code === "ENOTDIR" ? null : void 0;
   }
 }
 function skillInstalled(configDir, name) {
   if (!Array.isArray(entries(configDir))) return void 0;
-  let present2 = false;
   const skills = join16(configDir, "skills");
   const direct = entries(skills);
   if (direct === void 0) return void 0;
   if (direct !== null) {
-    present2 = true;
     if (existsSync3(join16(skills, name, "SKILL.md"))) return true;
   }
   const cache = join16(configDir, "plugins", "cache");
   const top = entries(cache);
   if (top === void 0) return void 0;
   if (top !== null) {
-    present2 = true;
     let dirs = [cache];
     for (let depth = 0; depth < 3; depth++) {
       const next = [];
@@ -31554,7 +31584,12 @@ function skillInstalled(configDir, name) {
     }
     if (dirs.some((d) => existsSync3(join16(d, "skills", name, "SKILL.md")))) return true;
   }
-  return present2 ? false : void 0;
+  return false;
+}
+var CREW_SKILL2 = "studio:studio-crew";
+function studioPluginHint(configDir) {
+  const inDir = `CLAUDE_CONFIG_DIR=${configDir} claude plugin`;
+  return `run ${inDir} marketplace add Besser-Sehen-Landshut/studio, then ${inDir} install studio@studio-marketplace`;
 }
 function firstMissingSkill(configDir, required2) {
   for (const skill of required2) {
@@ -31562,6 +31597,9 @@ function firstMissingSkill(configDir, required2) {
     const name = parts.at(-1) ?? "";
     if (parts.length > 2 || !parts.every((p) => SKILL_NAME.test(p))) {
       return `required skill "${skill.slice(0, 80)}" is not a valid skill name`;
+    }
+    if (skillInstalled(configDir, name) === false && skill === CREW_SKILL2) {
+      return `required skill ${skill} is not installed in the Claude config dir; ${studioPluginHint(configDir)}`;
     }
     if (skillInstalled(configDir, name) === false) {
       return `required skill ${skill} is not installed in the Claude config dir; install it (superpowers is a prerequisite), or list it under skills.denied of the role`;
@@ -31633,7 +31671,7 @@ function writePinnedRules(stateRoot, id, rules) {
 var list = (xs) => xs.length > 0 ? xs.join(", ") : "(none)";
 function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCaps(item, config2)) {
   assertItemId(item.id);
-  const first = ["studio:studio-crew", ...caps.required.filter((s) => s !== "studio:studio-crew")];
+  const first = [CREW_SKILL2, ...caps.required.filter((s) => s !== CREW_SKILL2)];
   const memory = readRoleMemory(projectDir, item.role);
   const solutions = item.role === "builder" || item.role === "designer" ? searchSolutions(projectDir, [item.title, ...item.touches].join(" ")) : [];
   const roleBrief = memory.brief;
@@ -31803,8 +31841,37 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
     // Below the state base, so the sandbox already keeps crews out; this is the second net.
     join16(stateBase, OWNER_DIR)
   ];
+  const configDir = loginDir ?? (env.CLAUDE_CONFIG_DIR || join16(realHome, ".claude"));
+  const skillRoots = unique2([
+    join16(configDir, "skills"),
+    join16(configDir, "plugins", "cache"),
+    join16(configDir, "plugins", "marketplaces")
+  ]);
+  const toolResultGlobs = unique2(
+    [configDir, realOr(configDir)].flatMap(
+      (dir) => [clone2, realOr(clone2)].map(
+        (c3) => `${join16(dir, "projects", c3.replace(/[^A-Za-z0-9]/g, "-"))}/*/tool-results/**`
+      )
+    )
+  );
+  const skillRootWaivedGlobs = loginDir === void 0 ? [] : [...credentialPaths.filter((p) => within(loginDir, p)), loginDir].flatMap((p) => [
+    p,
+    `${p}/**`
+  ]);
+  const readRoots = [
+    join16(stateRoot, "briefs", `${id}.md`),
+    join16(stateRoot, "briefs", `${id}.caps`),
+    join16(stateRoot, "briefs", `${id}.rules`),
+    dirs.homeDir,
+    dirs.tmpDir,
+    ...skillRoots
+  ];
   const ctx = {
     worktree: clone2,
+    readRoots,
+    skillRoots,
+    toolResultGlobs,
+    skillRootWaivedGlobs,
     ownerOnly: config2.ownerOnly,
     deployCommands: config2.deployCommands,
     // Absolute credential locations of the real home, on top of the default globs.
@@ -31825,6 +31892,9 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
     autoMemoryEnabled: false,
     env: {
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+      // Claude Code's own temp files of this run, which the crew reads back, stay in its tmp dir
+      // and out of the /tmp every crew shares (https://code.claude.com/docs/en/env-vars).
+      CLAUDE_CODE_TMPDIR: dirs.tmpDir,
       STUDIO_ROLE: "crew",
       STUDIO_ITEM: id,
       STUDIO_PROJECT: config2.primaryRepo,
@@ -32047,7 +32117,10 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     ...launcher.capabilitiesDir === void 0 ? {} : { dir: launcher.capabilitiesDir }
   });
   readRoleMemory(projectDir, item.role);
-  const missingSkill = firstMissingSkill(claudeConfigDir, forItem.resolved.required);
+  const missingSkill = firstMissingSkill(claudeConfigDir, [
+    CREW_SKILL2,
+    ...forItem.resolved.required
+  ]);
   if (missingSkill) throw new Error(missingSkill);
   const clonePath = join16(stateRoot, "clones", item.id);
   if ((previous?.limit || previous?.block) && existsNoFollow(clonePath) && (cloneBranch(clonePath) !== `studio/${item.id}` || cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))) {
@@ -32794,6 +32867,42 @@ async function readChecks(entry, gh) {
     return { kind: "failed", reason: "no check passed" };
   return { kind: "pass" };
 }
+async function isBranchUpdate(gh, target, approved, head) {
+  try {
+    const c3 = await gh.run(["api", `repos/${target.repo}/commits/${head}`]);
+    if (c3.code !== 0) return false;
+    const commit = JSON.parse(c3.stdout);
+    const [first, second, ...rest] = commit.parents ?? [];
+    if (typeof first?.sha !== "string" || first.sha.toLowerCase() !== approved.toLowerCase() || typeof second?.sha !== "string" || !SHA.test(second.sha) || rest.length > 0 || commit.committer?.login !== "web-flow" || commit.commit?.verification?.verified !== true) {
+      return false;
+    }
+    const v = await gh.run([
+      "pr",
+      "view",
+      String(target.pr),
+      "--repo",
+      target.repo,
+      "--json",
+      "baseRefName"
+    ]);
+    if (v.code !== 0) return false;
+    const base = JSON.parse(v.stdout).baseRefName;
+    if (typeof base !== "string" || base === "") return false;
+    const d = await gh.run(["api", `repos/${target.repo}/compare/${base}...${second.sha}`]);
+    if (d.code !== 0) return false;
+    const { status } = JSON.parse(d.stdout);
+    return status === "behind" || status === "identical";
+  } catch {
+    return false;
+  }
+}
+async function approvalProblem(gh, target, approved, head) {
+  const name = `${target.repo}#${target.pr}`;
+  if (approved === void 0) return `no approval recorded for ${name}: review it first`;
+  if (approved.toLowerCase() === head.toLowerCase()) return void 0;
+  if (await isBranchUpdate(gh, target, approved, head)) return void 0;
+  return `${name} is at ${head}, the approval is for ${approved}: review it again`;
+}
 async function viewPr(entry, gh) {
   const r = await gh.run([
     "pr",
@@ -32952,7 +33061,7 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
         enter("capacity");
         throw new QueueHeld(held2);
       }
-      const refused = opts.mergeAllowed?.(entry);
+      const refused = await opts.mergeAllowed?.(entry, head);
       if (refused !== void 0) return failed(refused);
       const r = await gh.run([
         "pr",
@@ -33626,12 +33735,27 @@ async function runSecretSet(o2) {
   return 0;
 }
 var API_KEY_VARS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
-function superpowersState(owner, env) {
-  const dir = env.CLAUDE_CONFIG_DIR ?? join21(owner.homedir ?? homedir6(), ".claude");
-  const found = skillInstalled(dir, "test-driven-development");
+async function crewConfigDir(command, owner, env, ports) {
+  const fallback = env.CLAUDE_CONFIG_DIR || join21(owner.homedir ?? homedir6(), ".claude");
+  if (command === void 0) return fallback;
+  try {
+    const got = await runCredentialProvider(
+      command,
+      { item: "", role: "", exclude: [] },
+      ports,
+      owner
+    );
+    if (got === void 0) return void 0;
+    return got.configDir === void 0 ? fallback : checkProviderConfigDir(got.configDir, owner);
+  } catch {
+    return void 0;
+  }
+}
+function skillState(dir, name) {
+  const found = dir === void 0 ? void 0 : skillInstalled(dir, name);
   return found === void 0 ? "cannot tell" : found ? "installed" : "not found";
 }
-function runDoctor(o2) {
+async function runDoctor(o2) {
   let config2;
   try {
     config2 = loadConfig(o2.project);
@@ -33654,12 +33778,21 @@ function runDoctor(o2) {
     else crewToken = { status: "missing" };
   }
   const required2 = !(config2?.allowAmbientCredentials ?? false);
+  const configDir = await crewConfigDir(
+    ownerConfig?.crewCredentialCommand,
+    o2.owner,
+    o2.env,
+    o2.ports
+  );
+  const studioCrew = skillState(configDir, CREW_SKILL2.split(":").at(-1) ?? "");
   const report = {
     crewToken: { ...crewToken, required: required2 },
     crewTokenFile: crewTokenFile(o2.owner),
     studioYaml: config2 ? "readable" : "not readable",
     stacks: config2?.stacks ?? null,
-    superpowers: superpowersState(o2.owner, o2.env),
+    // The foundation builders need: feature and fix items require its skills.
+    superpowers: skillState(configDir, "test-driven-development"),
+    studioCrew,
     ownerConfig: ownerConfig ? "readable" : "invalid",
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
@@ -33675,6 +33808,7 @@ function runDoctor(o2) {
       `crew token: ${crewToken.status}${source}${required2 ? "" : " (optional: allow_ambient_credentials)"}`,
       `studio.yaml: ${report.studioYaml}`,
       `superpowers: ${report.superpowers}`,
+      `studio plugin: ${studioCrew}${studioCrew === "not found" && configDir !== void 0 ? ` (${studioPluginHint(configDir)})` : ""}`,
       `stacks: ${report.stacks === null ? "not set: run studio setup stack" : report.stacks.join(", ") || "(none)"}`,
       `owner config: ${report.ownerConfig}`,
       `credential provider: ${provider === null ? "not configured" : `configured ${provider}`}`,
@@ -34238,6 +34372,18 @@ async function runCli(argv, deps) {
             ]
           }));
         }
+        if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0) {
+          const reviewed = next.items.find(
+            (i2) => `${i2.repo}#${i2.pr}` === reviewDone.target && i2.type !== "review"
+          );
+          if (reviewed !== void 0) {
+            next = withItem(
+              next,
+              reviewed.id,
+              ({ approvedHead: _old, ...i2 }) => report.verdict === "approve" ? { ...i2, approvedHead: report.headSha } : i2
+            );
+          }
+        }
         const limitTarget = report.status === "done" && report.verdict === "changes_requested" ? reviewDone.target : void 0;
         let fixLimit = false;
         if (limitTarget !== void 0) {
@@ -34295,6 +34441,15 @@ async function runCli(argv, deps) {
           if (item.status !== "in_review") {
             throw new Error(`${item.id} is ${item.status}, only in_review items can be queued`);
           }
+          const view = await viewPr({ pr, repo }, ports.gh);
+          if (typeof view === "string") throw new Error(view);
+          const problem = await approvalProblem(
+            ports.gh,
+            { repo, pr },
+            item.approvedHead,
+            view.head
+          );
+          if (problem !== void 0) throw new Error(problem);
           const root = await boundStateRoot();
           const pending = enqueue(root, { pr, repo, item: item.id });
           saveBoard(project, transition(board, item.id, "queued", BY, ports.clock.now()));
@@ -34350,7 +34505,7 @@ async function runCli(argv, deps) {
                 stateRoot: root,
                 log,
                 hold,
-                mergeAllowed: (entry) => boardBlocksMerge(project, entry),
+                mergeAllowed: (entry, head) => boardBlocksMerge(project, entry, head, ports),
                 takeNext: () => takeNextPending(root),
                 onDone: (d) => applyQueueResults(project, [d], ports, stderr)
               }
@@ -34501,7 +34656,7 @@ async function runCli(argv, deps) {
         });
       }
       case "doctor": {
-        return runDoctor({ project, owner, env: deps.env, json: json2, stdout });
+        return await runDoctor({ project, owner, env: deps.env, ports, json: json2, stdout });
       }
       case "accounts-clear": {
         if (deps.env.STUDIO_ROLE === "crew" || deps.isTerminal !== true) {
@@ -34762,7 +34917,7 @@ function refuseNativeQueue(config2) {
     );
   }
 }
-function boardBlocksMerge(project, entry) {
+async function boardBlocksMerge(project, entry, head, ports) {
   let board;
   try {
     board = loadBoard(project);
@@ -34773,7 +34928,8 @@ function boardBlocksMerge(project, entry) {
     (i2) => entry.item === void 0 ? i2.repo === entry.repo && i2.pr === entry.pr : i2.id === entry.item
   );
   if (item === void 0) return "the pull request has no board item";
-  return item.status === "queued" ? void 0 : `board item ${item.id} is ${item.status}`;
+  if (item.status !== "queued") return `board item ${item.id} is ${item.status}`;
+  return approvalProblem(ports.gh, entry, item.approvedHead, head);
 }
 var doneMatches = (d, item) => d.item === void 0 ? d.repo === item.repo && d.pr === item.pr : d.item === item.id;
 function reconcileQueued(project, state, ports, stderr) {

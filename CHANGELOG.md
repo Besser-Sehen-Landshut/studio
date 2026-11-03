@@ -39,6 +39,26 @@ Not tagged or published as a GitHub release yet; the maintainers tag after the m
 - `queue run` merges only an item that is `queued` on the board right before the merge.
 - `model` values must look like a model name: they can no longer start with a dash.
 - The brief says `Offered skills` in place of `Allowed skills`. `lessons` in a report are now stored.
+- A review launch refuses a pull request from a fork, or one it cannot read. An approval counts only
+  for the head the review was launched on.
+- `queue add` needs an approval for the current head, and `queue run` checks again before the merge.
+  `collect` stores the approved head on the item that holds the pull request (`approved_head`); only
+  the queue's own branch update counts as the same head. Pull requests approved or queued before this
+  need a new review.
+- A launch refuses when the Studio plugin is not installed in the crew's config dir, before anything
+  is counted; a readable config dir with no skills or plugins now counts as not installed. `studio
+  doctor` shows it with the install command and looks in a credential provider's config dir.
+
+### Fixed
+
+- A stray file such as `.DS_Store` in the plugin cache no longer hides a missing skill.
+
+### Security
+
+- A crew's `Read`, `Glob` and `Grep` reach only its clone, its own brief with `briefs/<id>.caps/` and
+  `briefs/<id>.rules/`, its `HOME` and tmp dir, and in its config dir the skills, plugin cache,
+  marketplaces and saved tool outputs. See `SECURITY.md`.
+- Crew sessions set `CLAUDE_CODE_TMPDIR` to the crew's tmp dir.
 
 ## [0.4.0] - 2026-11-01
 

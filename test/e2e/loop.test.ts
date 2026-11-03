@@ -206,6 +206,18 @@ describe('crew loop with a fake claude', () => {
 
     expect((await json('plan')).assign).toEqual([]);
 
+    // No approval, no queue. The review itself is not part of this loop: its verdict is written here.
+    await expect(run('queue', 'add', 'org/app#1')).rejects.toThrow(/no approval/);
+    const boardFile = join(project, '.studio', 'board.yaml');
+    const approved = git(cloneOf('APP-1'), 'rev-parse', 'HEAD');
+    writeFileSync(
+      boardFile,
+      readFileSync(boardFile, 'utf8').replace(
+        /^(\s*)pr: 1$/m,
+        `$1pr: 1\n$1approved_head: ${approved}`,
+      ),
+    );
+
     await run('queue', 'add', 'org/app#1');
     expect((await json('queue', 'run')).merged).toBe(1);
     expect(await statusOf('APP-1')).toBe('merged');

@@ -70,6 +70,8 @@ interface ItemSpec {
   dod?: string[];
   pr?: number;
   ownerOnly?: boolean;
+  /** Defaults to HEAD for an in_review item with a PR; null records no approval. */
+  approvedHead?: string | null;
   title?: string;
 }
 
@@ -88,6 +90,10 @@ const itemYaml = (s: ItemSpec): string =>
     '    depends_on: []',
     `    dod: [${(s.dod ?? ['tests pass']).map((d) => JSON.stringify(d)).join(', ')}]`,
     ...(s.pr ? [`    pr: ${s.pr}`] : []),
+    ...(s.approvedHead === null ||
+    (s.approvedHead === undefined && (s.status !== 'in_review' || !s.pr))
+      ? []
+      : [`    approved_head: ${s.approvedHead ?? HEAD}`]),
     ...(s.ownerOnly ? ['    owner_only: true'] : []),
     ...(s.notes ? [`    notes: ${JSON.stringify(s.notes)}`] : []),
     '    history: []',
@@ -874,7 +880,7 @@ describe('studio CLI', () => {
   it('R79: the board moves right after each entry, and an entry added mid-run is merged', async () => {
     const fx = makeFx([
       { id: 'APP-1', status: 'in_review', pr: 5 },
-      { id: 'APP-2', status: 'queued', pr: 6 },
+      { id: 'APP-2', status: 'queued', pr: 6, approvedHead: HEAD },
     ]);
     let firstAtSecondMerge: string | undefined;
     let added = false;
@@ -900,7 +906,7 @@ describe('studio CLI', () => {
       { id: 'APP-1', status: 'in_review', pr: 5 },
       { id: 'APP-2', status: 'in_review', pr: 6 },
     ]);
-    const { ports } = fakePorts(fakeGh().gh);
+    const { ports } = fakePorts(passingGh().gh);
     expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
     expect((await cli(fx, ports, 'queue', 'add', 'org/app#6')).code).toBe(0);
     // A run that died after recording both results but before moving the board.
@@ -962,6 +968,106 @@ describe('studio CLI', () => {
     expect(run.err).toMatch(/warning: .*native-queue/);
     expect(calls).toEqual([]);
     expect(statusOf(fx, 'APP-1')?.status).toBe('in_review');
+  });
+
+  describe('the review verdict binds the merge', () => {
+    const headIs = (head: string, extra: (l: string) => GhReply | undefined = () => undefined) =>
+      fakeGh((l) => {
+        if (l.startsWith('pr view 5 --repo org/app --json headRefOid,state,mergeable')) {
+          return {
+            stdout: JSON.stringify({ headRefOid: head, state: 'OPEN', mergeable: 'MERGEABLE' }),
+          };
+        }
+        if (l.startsWith('pr checks 5')) {
+          return { stdout: JSON.stringify([{ name: 'ci', bucket: 'pass' }]) };
+        }
+        if (l.startsWith('pr update-branch') || l.startsWith('pr merge 5')) return {};
+        return extra(l);
+      });
+    const queueWith = (approvedHead: string | null) =>
+      makeFx([{ id: 'APP-1', status: 'in_review', pr: 5, approvedHead }]);
+
+    it('queue add refuses a PR with no approval', async () => {
+      const fx = queueWith(null);
+      const r = await cli(fx, fakePorts(headIs(HEAD).gh).ports, 'queue', 'add', 'org/app#5');
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/no approval/);
+      expect(statusOf(fx, 'APP-1')?.status).toBe('in_review');
+    });
+
+    it('queue add refuses a head pushed after the approval', async () => {
+      const fx = queueWith(HEAD);
+      const { gh } = headIs(OTHER, (l) =>
+        l.startsWith(`api repos/org/app/commits/${OTHER}`)
+          ? { stdout: JSON.stringify({ parents: [{ sha: HEAD }], committer: { login: 'crew' } }) }
+          : undefined,
+      );
+      const r = await cli(fx, fakePorts(gh).ports, 'queue', 'add', 'org/app#5');
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/review it again/);
+    });
+
+    it('queue run refuses a head pushed after queue add, and merges nothing', async () => {
+      const fx = queueWith(HEAD);
+      const added = await cli(fx, fakePorts(headIs(HEAD).gh).ports, 'queue', 'add', 'org/app#5');
+      expect(added.code).toBe(0);
+      const { gh, calls } = headIs(OTHER, (l) =>
+        l.startsWith(`api repos/org/app/commits/${OTHER}`)
+          ? { stdout: JSON.stringify({ parents: [{ sha: HEAD }], committer: { login: 'crew' } }) }
+          : undefined,
+      );
+      await cli(fx, fakePorts(gh).ports, 'queue', 'run');
+      expect(calls.some((c) => c.startsWith('pr merge'))).toBe(false);
+      expect(statusOf(fx, 'APP-1')?.status).toBe('in_review');
+    });
+
+    it("queue run merges the queue's own branch update of the approved head", async () => {
+      const fx = queueWith(HEAD);
+      await cli(fx, fakePorts(headIs(HEAD).gh).ports, 'queue', 'add', 'org/app#5');
+      const base = 'c'.repeat(40);
+      const { gh, calls } = headIs(OTHER, (l) => {
+        if (l.startsWith(`api repos/org/app/commits/${OTHER}`)) {
+          return {
+            stdout: JSON.stringify({
+              parents: [{ sha: HEAD }, { sha: base }],
+              committer: { login: 'web-flow' },
+              commit: { verification: { verified: true } },
+            }),
+          };
+        }
+        if (l.startsWith('pr view 5 --repo org/app --json baseRefName')) {
+          return { stdout: JSON.stringify({ baseRefName: 'main' }) };
+        }
+        if (l.startsWith(`api repos/org/app/compare/main...${base}`)) {
+          return { stdout: JSON.stringify({ status: 'behind' }) };
+        }
+        return undefined;
+      });
+      await cli(fx, fakePorts(gh).ports, 'queue', 'run');
+      expect(calls.some((c) => c.startsWith('pr merge 5'))).toBe(true);
+    });
+
+    const REVIEW = (verdict: string) =>
+      `status: done\nitem: APP-1\nverdict: ${verdict}\nreviews: org/app#9\nhead_sha: ${HEAD}`;
+    const collectReview = async (verdict: string, approvedHead: string | null) => {
+      const fx = makeFx([
+        { id: 'APP-1', status: 'assigned', type: 'review' },
+        { id: 'APP-2', status: 'in_review', pr: 9, approvedHead },
+      ]);
+      writeReviewCaps(fx, 'APP-1');
+      writeReport(fx, 'APP-1', REVIEW(verdict));
+      const r = await cli(fx, fakePorts(reviewGh().gh).ports, 'collect', 'APP-1');
+      expect(r.code).toBe(0);
+      return statusOf(fx, 'APP-2')?.approvedHead;
+    };
+
+    it('an approval stores the head on the item of that pull request', async () => {
+      expect(await collectReview('approve', null)).toBe(HEAD);
+    });
+
+    it('a request for changes takes an earlier approval back', async () => {
+      expect(await collectReview('changes_requested', HEAD)).toBeUndefined();
+    });
   });
 
   it('queue add refuses a PR that is not on the board in review', async () => {

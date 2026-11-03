@@ -44,6 +44,7 @@ import type { Ports } from './ports.js';
 import {
   acquireQueueRunLock,
   appendStateLine,
+  approvalProblem,
   enqueue,
   installSignalRelease,
   loadQueue,
@@ -53,6 +54,7 @@ import {
   runQueue,
   takeNextPending,
   updateQueue,
+  viewPr,
 } from './queue.js';
 import { checkReportHead, readReport, reportName } from './report.js';
 import {
@@ -518,6 +520,17 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ],
           }));
         }
+        // The verdict goes on the item that holds the pull request; `queue add` and the merge read it.
+        if (item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined) {
+          const reviewed = next.items.find(
+            (i) => `${i.repo}#${i.pr}` === reviewDone.target && i.type !== 'review',
+          );
+          if (reviewed !== undefined) {
+            next = withItem(next, reviewed.id, ({ approvedHead: _old, ...i }) =>
+              report.verdict === 'approve' ? { ...i, approvedHead: report.headSha } : i,
+            );
+          }
+        }
         const limitTarget =
           report.status === 'done' && report.verdict === 'changes_requested'
             ? reviewDone.target
@@ -581,6 +594,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           if (item.status !== 'in_review') {
             throw new Error(`${item.id} is ${item.status}, only in_review items can be queued`);
           }
+          // Every pull request goes through a reviewer first (spec, section 5): no type is exempt.
+          const view = await viewPr({ pr, repo }, ports.gh);
+          if (typeof view === 'string') throw new Error(view);
+          const problem = await approvalProblem(
+            ports.gh,
+            { repo, pr },
+            item.approvedHead,
+            view.head,
+          );
+          if (problem !== undefined) throw new Error(problem);
           const root = await boundStateRoot();
           // Merged into queue.json on disk under the queue file lock: safe during a running queue.
           const pending = enqueue(root, { pr, repo, item: item.id });
@@ -641,7 +664,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 stateRoot: root,
                 log,
                 hold,
-                mergeAllowed: (entry) => boardBlocksMerge(project, entry),
+                mergeAllowed: (entry, head) => boardBlocksMerge(project, entry, head, ports),
                 takeNext: () => takeNextPending(root),
                 onDone: (d) => applyQueueResults(project, [d], ports, stderr),
               },
@@ -1105,8 +1128,16 @@ function refuseNativeQueue(config: StudioConfig): void {
   }
 }
 
-/** Why the board forbids this merge; only a readable board with the item `queued` allows it. */
-function boardBlocksMerge(project: string, entry: QueueEntry): string | undefined {
+/**
+ * Why the board forbids this merge; only a readable board with the item `queued` and an approval
+ * covering this head allows it.
+ */
+async function boardBlocksMerge(
+  project: string,
+  entry: QueueEntry,
+  head: string,
+  ports: Ports,
+): Promise<string | undefined> {
   let board: Board;
   try {
     board = loadBoard(project);
@@ -1117,7 +1148,8 @@ function boardBlocksMerge(project: string, entry: QueueEntry): string | undefine
     entry.item === undefined ? i.repo === entry.repo && i.pr === entry.pr : i.id === entry.item,
   );
   if (item === undefined) return 'the pull request has no board item';
-  return item.status === 'queued' ? undefined : `board item ${item.id} is ${item.status}`;
+  if (item.status !== 'queued') return `board item ${item.id} is ${item.status}`;
+  return approvalProblem(ports.gh, entry, item.approvedHead, head);
 }
 
 const doneMatches = (d: QueueDone, item: WorkItem): boolean =>

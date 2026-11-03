@@ -515,6 +515,8 @@ var deny = (reason) => {
   throw new Deny(reason);
 };
 var SUBST = "";
+var isUnder = (roots, p) => roots.some((r) => p === r || p.startsWith(`${r}/`));
+var isClaudeFile = (env, p) => isUnder(env.skillRoots, p) || env.toolResultRes.some((re) => re.test(p));
 function evaluateGuard(input, ctx) {
   try {
     check(input, ctx);
@@ -557,7 +559,8 @@ function commandGlobToRegExp(glob) {
 }
 function isSecretString(env, s) {
   if (basename(s) === ".env.example") return false;
-  return env.secretRes.some((re) => re.test(s));
+  const ownFile = !s.split("/").includes("..") && isClaudeFile(env, s);
+  return (ownFile ? env.hardSecretRes : env.secretRes).some((re) => re.test(s));
 }
 function braceExpand(s, budget = { n: 64 }) {
   const open = s.indexOf("{");
@@ -1640,6 +1643,26 @@ function scanDirForSecrets(env, dir) {
     }
   }
 }
+function checkReadScope(env, tok, base, tool) {
+  if (tok.startsWith("~") || new RegExp("^\\s|\\s$|\\p{Cc}", "u").test(tok)) {
+    deny(`${tool}: unresolvable path: ${JSON.stringify(tok)}`);
+  }
+  const real = resolveReal(tok, base);
+  if (!isInside(env, real) && !isUnder(env.readRoots, real) && !isClaudeFile(env, real)) {
+    deny(`${tool} outside this crew's files: ${tok}`);
+  }
+}
+function checkGlobScope(env, pattern, base, tool) {
+  for (const e of braceExpand(pattern)) {
+    const segs = e.split("/");
+    const first = segs.findIndex((s) => hasMagic(s));
+    if (first >= 0 && segs.slice(first).includes("..")) {
+      deny(`${tool} outside this crew's files: ${e}`);
+    }
+    const prefix = first < 0 ? e : segs.slice(0, first).join("/") || (isAbsolute(e) ? "/" : ".");
+    checkReadScope(env, prefix, base, tool);
+  }
+}
 function checkSearch(env, path, globs, cwd) {
   const given = typeof path === "string" && path !== "" ? path : void 0;
   if (given !== void 0) checkSecretPath(env, given, cwd);
@@ -1679,7 +1702,7 @@ var isSecretExempt = (s) => basename(s) === ".env.example";
 var isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === "string");
 function check(input, ctx) {
   const c = ctx;
-  if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths)) {
+  if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs)) {
     deny("invalid guard context");
   }
   const wt = resolveReal(ctx.worktree, "/");
@@ -1697,7 +1720,11 @@ function check(input, ctx) {
     ownerGlobs: ctx.ownerOnly.map((glob) => ({ glob, re: commandGlobToRegExp(glob) })),
     allowedWorkflows: ctx.crewAllowedWorkflows ?? [],
     allowedRefs: ctx.crewAllowedWorkflowRefs ?? [],
-    protectedReal: protectedPaths.flatMap((p) => [p, resolveReal(p, "/")]).map((p) => p.toLowerCase())
+    protectedReal: protectedPaths.flatMap((p) => [p, resolveReal(p, "/")]).map((p) => p.toLowerCase()),
+    readRoots: (ctx.readRoots ?? []).map((p) => resolveReal(p, "/")),
+    skillRoots: (ctx.skillRoots ?? []).flatMap((p) => [p, resolveReal(p, "/")]),
+    toolResultRes: (ctx.toolResultGlobs ?? []).map(fileGlobToRegExp),
+    hardSecretRes: ctx.secretGlobs.filter((g) => !(ctx.skillRootWaivedGlobs ?? []).includes(g)).map(fileGlobToRegExp)
   };
   const { toolName, toolInput } = input;
   const cwd = resolveReal(input.cwd ?? wt, wt);
@@ -1716,15 +1743,27 @@ function check(input, ctx) {
     if (typeof p !== "string" || p === "") deny(`${toolName} call without ${writeKey}`);
     checkWritePath(env, p, cwd, toolName);
   }
+  if (toolName === "Read") {
+    const p = toolInput.file_path;
+    if (typeof p !== "string" || p === "") deny("Read call without file_path");
+    checkReadScope(env, p, cwd, toolName);
+  }
   if (FILE_TOOLS.has(toolName)) {
     for (const key of ["file_path", "notebook_path"]) {
       const v = toolInput[key];
       if (typeof v === "string" && v !== "") checkSecretPath(env, v, cwd);
     }
-  } else if (toolName === "Grep") {
-    checkSearch(env, toolInput.path, [toolInput.glob], cwd);
-  } else if (toolName === "Glob") {
-    checkSearch(env, toolInput.path, [toolInput.pattern], cwd);
+  } else if (toolName === "Grep" || toolName === "Glob") {
+    const given = typeof toolInput.path === "string" ? toolInput.path : "";
+    checkReadScope(env, given === "" ? "." : given, cwd, toolName);
+    if (toolName === "Grep") {
+      checkSearch(env, toolInput.path, [toolInput.glob], cwd);
+    } else {
+      if (typeof toolInput.pattern === "string") {
+        checkGlobScope(env, toolInput.pattern, resolveReal(given || ".", cwd), toolName);
+      }
+      checkSearch(env, toolInput.path, [toolInput.pattern], cwd);
+    }
   }
 }
 
