@@ -27738,7 +27738,9 @@ var CREDENTIAL_PATHS = [
   ".gnupg",
   ".aws",
   ".docker/config.json",
-  "Library/Keychains"
+  "Library/Keychains",
+  ".cargo/credentials",
+  ".cargo/credentials.toml"
 ];
 var PROTECTED_HOME_PATHS = [...CREDENTIAL_PATHS, ".claude"];
 var pathKey = (p, platform2 = process.platform) => platform2 === "darwin" ? p.toLowerCase() : p;
@@ -32887,7 +32889,13 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
         denyRead,
         allowRead
       },
-      network: { allowedDomains: config2.sandbox.networkAllow, strictAllowlist: true }
+      network: {
+        allowedDomains: config2.sandbox.networkAllow,
+        strictAllowlist: true,
+        // Go tools such as gh verify TLS only through this macOS service; only it is opened, see
+        // SECURITY.md (https://code.claude.com/docs/en/sandboxing).
+        ...(launcher.platform ?? process.platform) === "darwin" ? { allowMachLookup: ["com.apple.trustd.agent"] } : {}
+      }
     }
   };
   const file2 = join18(stateRoot, "settings", `${id}.json`);
@@ -33199,6 +33207,11 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   }
   env.HOME = homeDir;
   env.TMPDIR = tmpDir;
+  env.CARGO_HOME = join18(homeDir, ".cargo");
+  const rustupHome = toolchainPaths.find(
+    (p) => existsSync4(join18(p, "settings.toml")) && existsSync4(join18(p, "toolchains"))
+  );
+  if (rustupHome !== void 0) env.RUSTUP_HOME = rustupHome;
   env.CLAUDE_CONFIG_DIR = claudeConfigDir;
   if (oauthToken !== void 0) env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
   if (ownerConfig.allowApiBilling) {
@@ -34218,7 +34231,7 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
 
 // src/secret-command.ts
 var import_yaml8 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync22 } from "node:fs";
+import { readFileSync as readFileSync22, realpathSync as realpathSync5, statSync as statSync3 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { join as join22 } from "node:path";
 function readPrimaryRepo(project) {
@@ -34298,6 +34311,48 @@ async function gitState(project, ports) {
     return "cannot tell";
   }
 }
+async function checkoutState(project, ports) {
+  try {
+    await ports.git.run(project, ["rev-parse", "--show-toplevel"]);
+  } catch {
+    return "not a git checkout: clone the repository and run studio in that clone";
+  }
+  try {
+    await ports.git.run(project, ["remote", "get-url", "origin"]);
+  } catch {
+    return "no remote origin: add it with git remote add origin <url>";
+  }
+  return "git checkout with origin";
+}
+var CREW_TOOLS = ["cargo", "rustc", "rustup", "node", "pnpm", "npm", "gh", "git"];
+function toolsOutside(env, home, toolchain) {
+  const real = (p) => {
+    try {
+      return realpathSync5(p);
+    } catch {
+      return p;
+    }
+  };
+  const realHome = real(home);
+  const open2 = toolchain.map(real);
+  const out = [];
+  for (const tool of CREW_TOOLS) {
+    for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
+      const file2 = join22(dir, tool);
+      try {
+        if (!statSync3(file2).isFile()) continue;
+      } catch {
+        continue;
+      }
+      const at = real(file2);
+      if (within(at, realHome) && !open2.some((t) => within(at, t) || within(file2, t))) {
+        out.push(`${tool} lies at ${file2}, outside crew_toolchain_paths: crews cannot run it`);
+      }
+      break;
+    }
+  }
+  return out;
+}
 function skillState(dir, name) {
   const found = dir === void 0 ? void 0 : skillInstalled(dir, name);
   return found === void 0 ? "cannot tell" : found ? "installed" : "not found";
@@ -34354,8 +34409,16 @@ async function runDoctor(o2) {
   const configDir = command === void 0 && account !== void 0 ? crewClaudeDir(o2.owner) : await crewConfigDir(command, o2.owner, o2.env, o2.ports);
   const studioCrew = skillState(configDir, CREW_SKILL2.split(":").at(-1) ?? "");
   const git = await gitState(o2.project, o2.ports);
+  const projectCheckout = await checkoutState(o2.project, o2.ports);
+  const toolchain = toolsOutside(
+    o2.env,
+    o2.owner.homedir ?? homedir7(),
+    ownerConfig?.crewToolchainPaths ?? []
+  );
   const report = {
     claudeLogin,
+    projectCheckout,
+    toolchainOutside: toolchain,
     accounts,
     git,
     crewToken: { ...crewToken, required: required2 },
@@ -34377,6 +34440,8 @@ async function runDoctor(o2) {
     const source = crewToken.source ? ` (${crewToken.source})` : "";
     const provider = report.credentialProvider;
     const lines = [
+      `project checkout: ${projectCheckout}`,
+      ...toolchain.map((t) => `toolchain: ${t}`),
       `claude login: ${claudeLogin}`,
       ...accounts.map(
         (a2) => `account ${a2.label}${a2.active ? " (active)" : ""}: added ${a2.addedAt.slice(0, 10)}, ${a2.state}`
@@ -38278,7 +38343,7 @@ var escapeArgument = (rawArgument) => {
 var shouldQuoteArgument = (argument) => argument === "" || argument.endsWith("\\") || quotedCharacterRegExp.test(argument);
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/cwd.js
-import { statSync as statSync3 } from "node:fs";
+import { statSync as statSync4 } from "node:fs";
 import path6 from "node:path";
 import process8 from "node:process";
 var normalizeCwd = (cwd = getDefaultCwd()) => {
@@ -38306,7 +38371,7 @@ var fixCwdError = (originalMessage, cwd) => {
   }
   let cwdStat;
   try {
-    cwdStat = statSync3(cwd);
+    cwdStat = statSync4(cwd);
   } catch (error62) {
     return `The "cwd" option is invalid: ${cwd}.
 ${error62.message}

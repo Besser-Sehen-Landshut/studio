@@ -171,6 +171,8 @@ const CRED_PATHS = [
   '.aws',
   '.docker/config.json',
   'Library/Keychains',
+  '.cargo/credentials',
+  '.cargo/credentials.toml',
   '.config/studio',
   '.config/studio/crew-token',
 ].map((p) => join(FAKE_HOME, p));
@@ -429,7 +431,11 @@ describe('writeBrief', () => {
 
 describe('writeCrewSettings', () => {
   const setup = (
-    launcher: { env?: Record<string, string | undefined>; toolchain?: string[] } = {},
+    launcher: {
+      env?: Record<string, string | undefined>;
+      toolchain?: string[];
+      platform?: NodeJS.Platform;
+    } = {},
   ) => {
     const project = makeProject();
     const state = join(root, `state-${n++}`);
@@ -442,7 +448,7 @@ describe('writeCrewSettings', () => {
       wt,
       config,
       { homeDir, tmpDir, projectDir: project, toolchainPaths: launcher.toolchain ?? [] },
-      { homedir: FAKE_HOME, env: launcher.env ?? {} },
+      { homedir: FAKE_HOME, env: launcher.env ?? {}, platform: launcher.platform ?? 'linux' },
     );
     return {
       project,
@@ -454,6 +460,19 @@ describe('writeCrewSettings', () => {
       s: JSON.parse(readFileSync(file, 'utf8')),
     };
   };
+
+  it('on macOS crew shells may reach exactly the TLS trust service, nothing more', () => {
+    const { s } = setup({ platform: 'darwin' });
+    expect(s.sandbox.network.allowMachLookup).toEqual(['com.apple.trustd.agent']);
+    expect(s.sandbox.network.strictAllowlist).toBe(true);
+    expect(s.sandbox.enableWeakerNetworkIsolation).toBeUndefined();
+    expect(s.sandbox.excludedCommands).toBeUndefined();
+    expect(s.sandbox.allowUnsandboxedCommands).toBe(false);
+  });
+
+  it('elsewhere there is no trust service to open', () => {
+    expect(setup({ platform: 'linux' }).s.sandbox.network.allowMachLookup).toBeUndefined();
+  });
 
   it('env carries STUDIO_ROLE=crew and guard hook path is absolute', () => {
     const { state, file, s, tmpDir } = setup();
@@ -1410,6 +1429,50 @@ describe('crew credentials', () => {
         originUrl: git(project, 'remote', 'get-url', 'origin'),
       }),
     );
+
+  describe('a Rust toolchain from crew_toolchain_paths', () => {
+    const rustup = (f: ReturnType<typeof fx>) => {
+      const dir = join(f.home, '.rustup');
+      mkdirSync(join(dir, 'toolchains', 'stable'), { recursive: true });
+      writeFileSync(join(dir, 'settings.toml'), 'default_toolchain = "stable"\n');
+      mkdirSync(join(f.home, '.cargo', 'bin'), { recursive: true });
+      writeFileSync(join(f.home, '.cargo', 'credentials.toml'), 'x');
+      return dir;
+    };
+    it('cargo finds the toolchain and keeps its own CARGO_HOME in the crew HOME', async () => {
+      const f = fx();
+      const dir = rustup(f);
+      owner(f.ownerDir, `crew_toolchain_paths: [${dir}, ${join(f.home, '.cargo', 'bin')}]\n`);
+      const started: Started[] = [];
+      await launchCrew(f.project, item, config, fakePorts(started), f.launcher);
+      const env = (started[0] as Started).env;
+      expect(env.RUSTUP_HOME).toBe(dir);
+      expect(env.CARGO_HOME).toBe(join(f.state, 'homes', item.id, '.cargo'));
+      const settings = JSON.parse(
+        readFileSync(join(f.state, 'settings', `${item.id}.json`), 'utf8'),
+      );
+      expect(settings.sandbox.filesystem.denyRead).toEqual(
+        expect.arrayContaining([
+          join(f.home, '.cargo', 'credentials'),
+          join(f.home, '.cargo', 'credentials.toml'),
+        ]),
+      );
+    });
+    it('~/.cargo as a whole cannot be opened: it holds the registry credentials', async () => {
+      const f = fx();
+      rustup(f);
+      owner(f.ownerDir, `crew_toolchain_paths: [${join(f.home, '.cargo')}]\n`);
+      await expect(launchCrew(f.project, item, config, fakePorts([]), f.launcher)).rejects.toThrow(
+        /credential location/,
+      );
+    });
+    it('without a rustup dir among the paths, nothing about Rust is set', async () => {
+      const f = fx();
+      const started: Started[] = [];
+      await launchCrew(f.project, item, config, fakePorts(started), f.launcher);
+      expect((started[0] as Started).env.RUSTUP_HOME).toBeUndefined();
+    });
+  });
 
   describe('Claude accounts kept by Studio', () => {
     const ACCOUNT_TOKEN = `fake-value-account-${'q'.repeat(30)}`;

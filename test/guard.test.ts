@@ -664,7 +664,16 @@ describe('round 1 regressions', () => {
   it('I5g2 node runs only --version, --help or a literal relative script path', () => {
     denies([
       'node --test --watch',
-      'node --test a.js b.js',
+      'node --test --test-reporter=dot a.js',
+      'node --test a.js --watch',
+      'node --test a.js ../b.js',
+      'node --test many/[ab]',
+      'node --test ../many/*',
+      'node --test /abs/*.js',
+      'node --test many/{a,../x}',
+      'node --test $X/*.js',
+      'node --test bin/stu*',
+      'node --test bin/{studio,x}',
       'node --test ../a.js',
       'node --test /abs/a.js',
       'node --test $X',
@@ -700,6 +709,10 @@ describe('round 1 regressions', () => {
       'node --test',
       'node --test test/a.test.js',
       'node --test test',
+      'node --test many/a many/b',
+      'node --test many/a*',
+      'node --test many/{a,b}',
+      'node --test "many/a*"',
       'npm run resume',
       'npm run pause',
       'pnpm test',
@@ -789,7 +802,9 @@ describe('round 1 regressions', () => {
     expect(bash('npm init', wt).reason).toContain('by hand');
     expect(bash('npm test --shell-mode', wt).reason).toContain('without');
     expect(bash('node -e 1', wt).reason).toContain('node <relative script>');
-    expect(bash('node --test /abs/a.js', wt).reason).toContain('node --test <relative path>');
+    expect(bash('node --test /abs/a.js', wt).reason).toContain(
+      'node --test <relative paths or patterns>',
+    );
   });
 
   it('I5j package manager commands other than the denylist pass', () => {

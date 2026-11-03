@@ -972,6 +972,42 @@ describe('studio doctor', () => {
     expect(r.out).toMatch(/credential provider: configured .*provider-/);
   });
 
+  describe('the project checkout', () => {
+    it('a git checkout with origin reads fine', async () => {
+      const r = JSON.parse((await cli(makeFx(), makePorts().ports, ['doctor', '--json'])).out);
+      expect(r.projectCheckout).toBe('git checkout with origin');
+    });
+    it('a folder that is not a git checkout says so and what to do', async () => {
+      const fx = makeFx();
+      rmSync(join(fx.project, '.git'), { recursive: true, force: true });
+      const r = await cli(fx, makePorts().ports, ['doctor']);
+      expect(r.out).toMatch(/project checkout: not a git checkout/);
+      expect(r.out).toMatch(/clone/);
+    });
+    it('a checkout without origin says so', async () => {
+      const fx = makeFx();
+      execFileSync('git', ['remote', 'remove', 'origin'], { cwd: fx.project });
+      const r = await cli(fx, makePorts().ports, ['doctor']);
+      expect(r.out).toMatch(/project checkout: no remote origin/);
+    });
+  });
+
+  describe('tools crews run', () => {
+    it('a tool on PATH below the home and outside crew_toolchain_paths is named', async () => {
+      const fx = makeFx();
+      const bin = join(fx.home, '.cargo', 'bin');
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, 'cargo'), '#!/bin/sh\n', { mode: 0o755 });
+      fx.env.PATH = `${bin}:${process.env.PATH}`;
+      const r = await cli(fx, makePorts().ports, ['doctor']);
+      expect(r.out).toMatch(/toolchain: cargo .*outside crew_toolchain_paths/);
+      mkdirSync(fx.ownerDir, { recursive: true });
+      writeFileSync(join(fx.ownerDir, 'config.yaml'), `crew_toolchain_paths: [${bin}]\n`);
+      const ok = await cli(fx, makePorts().ports, ['doctor']);
+      expect(ok.out).not.toMatch(/toolchain: cargo/);
+    });
+  });
+
   describe('the git the merge check needs', () => {
     const withGit = (run: () => string) => {
       const p = makePorts();

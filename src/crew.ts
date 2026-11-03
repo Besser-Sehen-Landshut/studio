@@ -779,7 +779,15 @@ export function writeCrewSettings(
         denyRead,
         allowRead,
       },
-      network: { allowedDomains: config.sandbox.networkAllow, strictAllowlist: true },
+      network: {
+        allowedDomains: config.sandbox.networkAllow,
+        strictAllowlist: true,
+        // Go tools such as gh verify TLS only through this macOS service; only it is opened, see
+        // SECURITY.md (https://code.claude.com/docs/en/sandboxing).
+        ...((launcher.platform ?? process.platform) === 'darwin'
+          ? { allowMachLookup: ['com.apple.trustd.agent'] }
+          : {}),
+      },
     },
   };
   const file = join(stateRoot, 'settings', `${id}.json`);
@@ -1225,6 +1233,13 @@ async function launchCrewLocked(
   }
   env.HOME = homeDir;
   env.TMPDIR = tmpDir;
+  // Rust: the proxies in ~/.cargo/bin look for the toolchains in RUSTUP_HOME, read-only; cargo's own
+  // home with its registry cache lives in the crew HOME, never ~/.cargo with its credentials.
+  env.CARGO_HOME = join(homeDir, '.cargo');
+  const rustupHome = toolchainPaths.find(
+    (p) => existsSync(join(p, 'settings.toml')) && existsSync(join(p, 'toolchains')),
+  );
+  if (rustupHome !== undefined) env.RUSTUP_HOME = rustupHome;
   env.CLAUDE_CONFIG_DIR = claudeConfigDir;
   if (oauthToken !== undefined) env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
   if (ownerConfig.allowApiBilling) {

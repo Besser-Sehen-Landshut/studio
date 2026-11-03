@@ -3,6 +3,25 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.1] - 2026-11-03
+
+Fixes from the first real crew run. Not tagged yet; the maintainers tag after the merge.
+
+### Fixed
+
+- `gh` in a crew on macOS failed TLS verification (`x509: OSStatus -26276`). Crew settings now let
+  sandboxed commands reach exactly the macOS trust service `com.apple.trustd.agent`; see SECURITY.md.
+- `cargo` could not start in a crew. With `~/.cargo/bin` and `~/.rustup` in `crew_toolchain_paths`,
+  crews get `RUSTUP_HOME` and a `CARGO_HOME` in their own `HOME`. `~/.cargo/credentials*` are denied
+  like other credential stores, so `~/.cargo` as a whole cannot be listed.
+- `node --test` takes several paths and plain patterns such as `tooling/guards/*.test.mjs`. A
+  brace pattern with `..` inside, which slipped through before, is refused.
+
+### Added
+
+- `studio doctor` checks that the project folder is a git checkout with `origin`, and names tools on
+  `PATH` below the home that `crew_toolchain_paths` does not cover.
+
 ## [0.6.0] - 2026-11-03
 
 Claude accounts kept by Studio. Not tagged yet; the maintainers tag after the merge.
