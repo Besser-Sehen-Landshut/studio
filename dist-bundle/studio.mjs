@@ -33688,6 +33688,7 @@ async function sendLocked(o2, notify, lock) {
 
 // src/planner.ts
 var BUILD_TYPES2 = ["feature", "fix", "chore"];
+var ONE_BUILD_PER_PLAN = "host load: one build start per plan";
 var ACTIVE2 = ["assigned", "in_progress", "in_review", "queued"];
 function isReady(item) {
   const missing = [];
@@ -33776,19 +33777,29 @@ function planAssignments(board, config2, capacity, running, hold, credentialSlot
   const active = board.items.filter((i2) => ACTIVE2.includes(i2.status));
   const assign = [];
   const deferred = [];
+  let buildStarted = false;
+  const planned = [];
+  const take = (item) => {
+    planned.push(item);
+    roleSlots.set(item.role, slotsFor(item.role) - 1);
+    if (credentialSlots2 !== void 0) credentialSlots2 -= 1;
+  };
   for (const item of eligible) {
     const isBuild = BUILD_TYPES2.includes(item.type);
-    const clash = [...active, ...assign].find((o2) => conflicts(item, o2));
+    const clash = [...active, ...planned].find((o2) => conflicts(item, o2));
     if (hold !== void 0) deferred.push({ id: item.id, reason: hold });
     else if (credentialSlots2 !== void 0 && credentialSlots2 <= 0) {
       deferred.push({ id: item.id, reason: "credential limit" });
     } else if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: "role wip full" });
     else if (isBuild && !capacity.hostOk) deferred.push({ id: item.id, reason: "host load" });
     else if (clash) deferred.push({ id: item.id, reason: `overlaps ${clash.id}` });
-    else {
+    else if (isBuild && buildStarted) {
+      deferred.push({ id: item.id, reason: ONE_BUILD_PER_PLAN });
+      take(item);
+    } else {
       assign.push(item);
-      roleSlots.set(item.role, slotsFor(item.role) - 1);
-      if (credentialSlots2 !== void 0) credentialSlots2 -= 1;
+      take(item);
+      if (isBuild) buildStarted = true;
     }
   }
   return { assign, blocked, deferred };
@@ -35012,7 +35023,8 @@ async function runCli(argv, deps) {
           throw new Error(`${item.id} is ${item.status}, only ready items can be launched`);
         }
         const { plan } = await planNow(config2, board);
-        if (!plan.assign.some((i2) => i2.id === item.id)) {
+        const launchable = plan.assign.some((i2) => i2.id === item.id) || plan.deferred.some((d) => d.id === item.id && d.reason === ONE_BUILD_PER_PLAN);
+        if (!launchable) {
           const why = plan.blocked.find((b) => b.id === item.id)?.reason ?? plan.deferred.find((d) => d.id === item.id)?.reason ?? "not in the current plan";
           throw new Error(`${item.id} is not in the current plan: ${why}`);
         }
@@ -35120,13 +35132,22 @@ async function runCli(argv, deps) {
         if (report.status === "done" && report.pr === void 0 && report.prTitle !== void 0 && !PR_OPTIONAL.includes(item.type)) {
           const config2 = loadConfig(project);
           const token = crewTokenFor(config2, owner);
+          const unchanged = () => {
+            const now2 = findItem(loadBoard(project), item.id);
+            if (now2.status !== item.status || now2.branch !== item.branch) {
+              throw new Error(
+                `${item.id} changed while waiting for CI capacity (now ${now2.status}); no pull request was opened`
+              );
+            }
+          };
           const opened = await openCrewPr(
             ports,
             item,
             report.prTitle,
             report.body,
             token,
-            () => readCapacityTwice(config2, ports)
+            () => readCapacityTwice(config2, ports),
+            unchanged
           );
           if ("held" in opened) {
             const note = prHeldNote(opened.held, config2);
@@ -35179,7 +35200,11 @@ async function runCli(argv, deps) {
             next2 = transition(next2, item.id, "in_review", BY, now);
             if (report.pr !== void 0) {
               const pr = report.pr;
-              next2 = withItem(next2, item.id, (i2) => ({ ...i2, pr, branch }));
+              next2 = withItem(next2, item.id, (i2) => {
+                const notes = (i2.notes ?? []).filter((n2) => !n2.startsWith(PR_HELD));
+                const { notes: _n, ...rest2 } = i2;
+                return { ...rest2, ...notes.length > 0 ? { notes } : {}, pr, branch };
+              });
             } else {
               next2 = transition(next2, item.id, "merged", BY, now);
               const result = [
@@ -35845,7 +35870,7 @@ function prHeldNote(cap, config2) {
   const why = cap.error === void 0 ? "" : `; CI read failed: ${cap.error}`;
   return capNotes([`${PR_HELD}ci capacity (${parts.join(", ")}${why})`])[0];
 }
-async function openCrewPr(ports, item, title, body, token, capacity) {
+async function openCrewPr(ports, item, title, body, token, capacity, unchanged) {
   const head = `studio/${item.id}`;
   const list2 = await ports.gh.run(
     ["pr", "list", "--repo", item.repo, "--head", head, "--state", "open", "--json", "number"],
@@ -35858,6 +35883,7 @@ async function openCrewPr(ports, item, title, body, token, capacity) {
   if (typeof known === "number") return { pr: known };
   const room = await capacity();
   if (!room.ok) return { held: room.capacity };
+  unchanged();
   const text = `${body.replace(/[^\P{Cc}\n\t]/gu, "").slice(0, PR_BODY_MAX)}
 
 ---

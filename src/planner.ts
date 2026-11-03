@@ -28,6 +28,8 @@ export type Plan = {
 };
 
 const BUILD_TYPES: readonly WorkItem['type'][] = ['feature', 'fix', 'chore'];
+/** Deferral of every build after the first in one plan; a launch of that one item may still start it. */
+export const ONE_BUILD_PER_PLAN = 'host load: one build start per plan';
 const ACTIVE: readonly WorkItem['status'][] = ['assigned', 'in_progress', 'in_review', 'queued'];
 
 /** Definition of Ready: title, dod, size, role and repo; features also need a plan. */
@@ -106,7 +108,8 @@ function cycleTainted(items: WorkItem[]): Set<string> {
  * unmerged dependencies). Candidates held back only by role WIP, host load or an overlap go to
  * `deferred`, which callers may ignore. CI runner capacity does not hold a launch: a crew builds
  * and tests in its own clone, and Studio gates CI load where it starts it, when `collect` opens
- * the pull request and in the merge queue. When several blocked reasons apply, the first of this order wins:
+ * the pull request and in the merge queue. A plan starts at most one build item (fix, feature,
+ * chore): the host load is a single, lagging reading. When several blocked reasons apply, the first of this order wins:
  * not ready, dependency cycle, unknown dependency, owner only, role not configured, waiting.
  * With `hold` (no crew credential available) nothing is assigned; every candidate is deferred.
  * `credentialSlots` is how many more crews the credentials allow (per-label limits); at 0 every
@@ -156,20 +159,34 @@ export function planAssignments(
   const active = board.items.filter((i) => ACTIVE.includes(i.status));
   const assign: WorkItem[] = [];
   const deferred: Plan['deferred'] = [];
+  // The host load is read once per plan and lags behind new work, so one reading backs one build
+  // start; the next plan, with a fresh reading, may start the next. A build held back only by this
+  // still takes its WIP, credential and overlap room here, so the items after it get the reason
+  // they would get once it runs.
+  let buildStarted = false;
+  const planned: WorkItem[] = [];
+  const take = (item: WorkItem) => {
+    planned.push(item);
+    roleSlots.set(item.role, slotsFor(item.role) - 1);
+    if (credentialSlots !== undefined) credentialSlots -= 1;
+  };
 
   for (const item of eligible) {
     const isBuild = BUILD_TYPES.includes(item.type);
-    const clash = [...active, ...assign].find((o) => conflicts(item, o));
+    const clash = [...active, ...planned].find((o) => conflicts(item, o));
     if (hold !== undefined) deferred.push({ id: item.id, reason: hold });
     else if (credentialSlots !== undefined && credentialSlots <= 0) {
       deferred.push({ id: item.id, reason: 'credential limit' });
     } else if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: 'role wip full' });
     else if (isBuild && !capacity.hostOk) deferred.push({ id: item.id, reason: 'host load' });
     else if (clash) deferred.push({ id: item.id, reason: `overlaps ${clash.id}` });
-    else {
+    else if (isBuild && buildStarted) {
+      deferred.push({ id: item.id, reason: ONE_BUILD_PER_PLAN });
+      take(item);
+    } else {
       assign.push(item);
-      roleSlots.set(item.role, slotsFor(item.role) - 1);
-      if (credentialSlots !== undefined) credentialSlots -= 1;
+      take(item);
+      if (isBuild) buildStarted = true;
     }
   }
 

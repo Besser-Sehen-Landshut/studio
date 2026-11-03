@@ -54,7 +54,7 @@ import {
   writeStateFile,
 } from './paths.js';
 import { clearPause, PAUSED_LINE, readPause, setPause } from './pause.js';
-import { type Capacity, planAssignments } from './planner.js';
+import { type Capacity, ONE_BUILD_PER_PLAN, planAssignments } from './planner.js';
 import type { Ports } from './ports.js';
 import {
   acquireQueueRunLock,
@@ -392,7 +392,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           throw new Error(`${item.id} is ${item.status}, only ready items can be launched`);
         }
         const { plan } = await planNow(config, board);
-        if (!plan.assign.some((i) => i.id === item.id)) {
+        // One launch is one build start against this plan's host reading: a build the plan put
+        // behind another one's start may be the one started now.
+        const launchable =
+          plan.assign.some((i) => i.id === item.id) ||
+          plan.deferred.some((d) => d.id === item.id && d.reason === ONE_BUILD_PER_PLAN);
+        if (!launchable) {
           const why =
             plan.blocked.find((b) => b.id === item.id)?.reason ??
             plan.deferred.find((d) => d.id === item.id)?.reason ??
@@ -520,8 +525,24 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           const config = loadConfig(project);
           const token = crewTokenFor(config, owner);
           // Opening the pull request is what starts CI: it waits for capacity like a merge does.
-          const opened = await openCrewPr(ports, item, report.prTitle, report.body, token, () =>
-            readCapacityTwice(config, ports),
+          // The capacity wait runs without the board lock: right before `gh pr create`, the item
+          // must still be as collect found it.
+          const unchanged = () => {
+            const now = findItem(loadBoard(project), item.id);
+            if (now.status !== item.status || now.branch !== item.branch) {
+              throw new Error(
+                `${item.id} changed while waiting for CI capacity (now ${now.status}); no pull request was opened`,
+              );
+            }
+          };
+          const opened = await openCrewPr(
+            ports,
+            item,
+            report.prTitle,
+            report.body,
+            token,
+            () => readCapacityTwice(config, ports),
+            unchanged,
           );
           if ('held' in opened) {
             const note = prHeldNote(opened.held, config);
@@ -579,7 +600,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             next = transition(next, item.id, 'in_review', BY, now);
             if (report.pr !== undefined) {
               const pr = report.pr;
-              next = withItem(next, item.id, (i) => ({ ...i, pr, branch }));
+              // A pull request exists now: an earlier hold is over (history keeps the moves).
+              next = withItem(next, item.id, (i) => {
+                const notes = (i.notes ?? []).filter((n) => !n.startsWith(PR_HELD));
+                const { notes: _n, ...rest } = i;
+                return { ...rest, ...(notes.length > 0 ? { notes } : {}), pr, branch };
+              });
             } else {
               // Review and research items open no PR: the result is the report itself.
               next = transition(next, item.id, 'merged', BY, now);
@@ -1342,7 +1368,8 @@ function prHeldNote(cap: Capacity, config: StudioConfig): string {
  * token, outside the sandbox. Title and body are crew text: cleaned, cut and passed as data in a
  * file, never on a command line. An open pull request of that branch is taken instead, without
  * asking `capacity`: it starts no new CI. A new one is opened only when `capacity` holds;
- * otherwise nothing is opened and the read that decided comes back as `held`.
+ * otherwise nothing is opened and the read that decided comes back as `held`. `unchanged` runs
+ * after the capacity wait, right before the create, and throws when the item moved meanwhile.
  */
 async function openCrewPr(
   ports: Ports,
@@ -1351,6 +1378,7 @@ async function openCrewPr(
   body: string,
   token: string,
   capacity: () => Promise<{ ok: boolean; capacity: Capacity }>,
+  unchanged: () => void,
 ): Promise<{ pr: number } | { held: Capacity }> {
   const head = `studio/${item.id}`;
   const list = await ports.gh.run(
@@ -1364,6 +1392,7 @@ async function openCrewPr(
   if (typeof known === 'number') return { pr: known };
   const room = await capacity();
   if (!room.ok) return { held: room.capacity };
+  unchanged();
   const text = `${body.replace(/[^\P{Cc}\n\t]/gu, '').slice(0, PR_BODY_MAX)}\n\n---\nOpened by Studio for ${item.id}; the text above was written by the crew.\n`;
   const dir = mkdtempSync(join(tmpdir(), 'studio-pr-'));
   try {

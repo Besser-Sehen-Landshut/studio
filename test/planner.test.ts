@@ -43,6 +43,8 @@ function mk(id: string, extra: Partial<WorkItem> = {}): WorkItem {
   };
 }
 
+/** A docs item: not a build, so the one-build-per-plan rule leaves it alone. */
+const doc = (id: string, extra: Partial<WorkItem> = {}) => mk(id, { type: 'docs', ...extra });
 const board = (...items: WorkItem[]): Board => ({ items });
 const ids = (r: { assign: WorkItem[] }) => r.assign.map((i) => i.id);
 const wide: StudioConfig = {
@@ -62,15 +64,18 @@ describe('isReady', () => {
 describe('planAssignments', () => {
   it('assigns highest priority first (lower number = higher priority, ties by natural id)', () => {
     const b = board(
-      mk('APP-10', { priority: 2 }),
-      mk('APP-3', { priority: 2 }),
-      mk('APP-2', { priority: 1 }),
+      doc('APP-10', { priority: 2 }),
+      doc('APP-3', { priority: 2 }),
+      doc('APP-2', { priority: 1 }),
     );
     expect(ids(planAssignments(b, wide, okCap, {}))).toEqual(['APP-2', 'APP-3', 'APP-10']);
+    // Among builds, the one start a plan allows goes to the highest priority.
+    const builds = board(mk('APP-10', { priority: 2 }), mk('APP-3', { priority: 1 }));
+    expect(ids(planAssignments(builds, wide, okCap, {}))).toEqual(['APP-3']);
   });
 
   it('respects role wip', () => {
-    const b = board(mk('APP-1'), mk('APP-2'), mk('APP-3'));
+    const b = board(doc('APP-1'), doc('APP-2'), doc('APP-3'));
     expect(ids(planAssignments(b, config, okCap, {}))).toEqual(['APP-1', 'APP-2']);
     expect(ids(planAssignments(b, config, okCap, { builder: 1 }))).toEqual(['APP-1']);
     expect(ids(planAssignments(b, config, okCap, { builder: 5 }))).toEqual([]);
@@ -121,14 +126,14 @@ describe('planAssignments', () => {
   });
 
   it('assigns build items while CI is fully busy, as long as the host is fine', () => {
-    const b = board(mk('APP-1'), mk('APP-2', { type: 'docs' }), mk('APP-3', { type: 'chore' }));
+    const b = board(mk('APP-1'), mk('APP-2', { type: 'docs' }));
     const busy: Capacity = { ...okCap, ciBusy: 8, ok: false, hostOk: true };
     const r = planAssignments(b, wide, busy, {});
-    expect(ids(r)).toEqual(['APP-1', 'APP-2', 'APP-3']);
+    expect(ids(r)).toEqual(['APP-1', 'APP-2']);
     expect(r.deferred).toEqual([]);
     // A CI read error says nothing about the host either.
     const unread: Capacity = { ...busy, error: 'HTTP 401' };
-    expect(ids(planAssignments(b, wide, unread, {}))).toEqual(['APP-1', 'APP-2', 'APP-3']);
+    expect(ids(planAssignments(b, wide, unread, {}))).toEqual(['APP-1', 'APP-2']);
   });
 
   it('defers build items when the host load is too high, still assigns docs/research', () => {
@@ -143,16 +148,30 @@ describe('planAssignments', () => {
     expect(r.deferred).toEqual([{ id: 'APP-1', reason: 'host load' }]);
   });
 
-  it('CI busy count no longer limits how many build items are assigned', () => {
+  it('starts at most one build item per plan: one host load reading backs one start', () => {
+    const b = board(
+      mk('APP-1'),
+      mk('APP-2', { type: 'feature', plan: 'docs/p.md' }),
+      mk('APP-3', { type: 'chore' }),
+      mk('APP-4', { type: 'docs' }),
+    );
+    const r = planAssignments(b, wide, okCap, {});
+    expect(ids(r)).toEqual(['APP-1', 'APP-4']);
+    expect(r.deferred).toEqual([
+      { id: 'APP-2', reason: 'host load: one build start per plan' },
+      { id: 'APP-3', reason: 'host load: one build start per plan' },
+    ]);
+  });
+
+  it('CI busy count is not the build limit: one build starts whatever CI says', () => {
     const b = board(mk('APP-1'), mk('APP-2'));
-    expect(ids(planAssignments(b, config, { ...okCap, ciBusy: 4 }, {}))).toEqual([
-      'APP-1',
-      'APP-2',
-    ]);
-    expect(ids(planAssignments(b, config, { ...okCap, ciBusy: 7, ok: false }, {}))).toEqual([
-      'APP-1',
-      'APP-2',
-    ]);
+    for (const ciBusy of [0, 4, 7]) {
+      const r = planAssignments(b, config, { ...okCap, ciBusy, ok: ciBusy <= 5 }, {});
+      expect(ids(r), String(ciBusy)).toEqual(['APP-1']);
+      expect(r.deferred, String(ciBusy)).toEqual([
+        { id: 'APP-2', reason: 'host load: one build start per plan' },
+      ]);
+    }
   });
 
   it('ownerOnly item is never assigned', () => {
@@ -177,9 +196,9 @@ describe('planAssignments', () => {
     // segment prefix and equality inside the plan
     let r = planAssignments(
       board(
-        mk('APP-1', { touches: ['src/**'] }),
-        mk('APP-2', { touches: ['src/a/b.ts'] }),
-        mk('APP-3', { touches: ['docs/**'] }),
+        doc('APP-1', { touches: ['src/**'] }),
+        doc('APP-2', { touches: ['src/a/b.ts'] }),
+        doc('APP-3', { touches: ['docs/**'] }),
       ),
       wide,
       okCap,
@@ -188,7 +207,7 @@ describe('planAssignments', () => {
     expect(ids(r)).toEqual(['APP-1', 'APP-3']);
     // sibling directory with a shared textual prefix does not overlap
     r = planAssignments(
-      board(mk('APP-1', { touches: ['src/a/**'] }), mk('APP-2', { touches: ['src/ab/**'] })),
+      board(doc('APP-1', { touches: ['src/a/**'] }), doc('APP-2', { touches: ['src/ab/**'] })),
       wide,
       okCap,
       {},
@@ -196,14 +215,17 @@ describe('planAssignments', () => {
     expect(ids(r)).toEqual(['APP-1', 'APP-2']);
     // a glob starting mid-segment is treated conservatively (prefix cut back to the last '/')
     r = planAssignments(
-      board(mk('APP-1', { touches: ['src/foo*'] }), mk('APP-2', { touches: ['src/foobar/x.ts'] })),
+      board(
+        doc('APP-1', { touches: ['src/foo*'] }),
+        doc('APP-2', { touches: ['src/foobar/x.ts'] }),
+      ),
       wide,
       okCap,
       {},
     );
     expect(ids(r)).toEqual(['APP-1']);
     r = planAssignments(
-      board(mk('APP-1', { touches: ['src/a*.ts'] }), mk('APP-2', { touches: ['src/ab.ts'] })),
+      board(doc('APP-1', { touches: ['src/a*.ts'] }), doc('APP-2', { touches: ['src/ab.ts'] })),
       wide,
       okCap,
       {},
@@ -211,7 +233,7 @@ describe('planAssignments', () => {
     expect(ids(r)).toEqual(['APP-1']);
     // empty static prefix overlaps everything
     r = planAssignments(
-      board(mk('APP-1', { touches: ['**/*.ts'] }), mk('APP-2', { touches: ['docs/x.md'] })),
+      board(doc('APP-1', { touches: ['**/*.ts'] }), doc('APP-2', { touches: ['docs/x.md'] })),
       wide,
       okCap,
       {},
@@ -219,7 +241,7 @@ describe('planAssignments', () => {
     expect(ids(r)).toEqual(['APP-1']);
     // conflictsWith is symmetric (listed on one side only)
     r = planAssignments(
-      board(mk('APP-1'), mk('APP-2', { conflictsWith: ['APP-1'] })),
+      board(doc('APP-1'), doc('APP-2', { conflictsWith: ['APP-1'] })),
       wide,
       okCap,
       {},
@@ -228,10 +250,10 @@ describe('planAssignments', () => {
     // against an active board item (R7), by touches and by conflictsWith
     r = planAssignments(
       board(
-        mk('APP-1', { status: 'in_progress', touches: ['src/**'] }),
-        mk('APP-2', { touches: ['src/x.ts'] }),
-        mk('APP-3', { conflictsWith: ['APP-1'] }),
-        mk('APP-4', { touches: ['docs/x.md'] }),
+        doc('APP-1', { status: 'in_progress', touches: ['src/**'] }),
+        doc('APP-2', { touches: ['src/x.ts'] }),
+        doc('APP-3', { conflictsWith: ['APP-1'] }),
+        doc('APP-4', { touches: ['docs/x.md'] }),
       ),
       wide,
       okCap,

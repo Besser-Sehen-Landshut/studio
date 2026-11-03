@@ -17,6 +17,7 @@ import { type CliDeps, runCli } from '../src/cli.js';
 import { loadConfig } from '../src/config.js';
 import { launchCrew } from '../src/crew.js';
 import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
+import { ONE_BUILD_PER_PLAN } from '../src/planner.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import { enqueue, loadQueue, saveQueue } from '../src/queue.js';
 import { newReportName } from '../src/report.js';
@@ -377,8 +378,14 @@ describe('per-credential limits', () => {
     );
     const p = makePorts();
     const plan = JSON.parse((await cli(fx, p.ports, ['plan'])).out);
-    expect(plan.assign).toHaveLength(4);
-    expect(plan.deferred).toEqual([{ id: 'APP-5', reason: 'credential limit' }]);
+    // One build starts per plan; the three behind it still take their label slots.
+    expect(plan.assign).toHaveLength(1);
+    expect(plan.deferred).toEqual([
+      { id: 'APP-2', reason: ONE_BUILD_PER_PLAN },
+      { id: 'APP-3', reason: ONE_BUILD_PER_PLAN },
+      { id: 'APP-4', reason: ONE_BUILD_PER_PLAN },
+      { id: 'APP-5', reason: 'credential limit' },
+    ]);
     expect(calls()).toEqual(['', 'label-a', 'label-a,label-b']);
   });
 
@@ -759,7 +766,9 @@ describe('pause and resume', () => {
     expect(r.code).toBe(0);
     expect(JSON.parse(r.out)).toMatchObject({ paused: false });
     expect(existsSync(pauseFile(fx))).toBe(false);
-    expect(JSON.parse((await cli(fx, p.ports, ['plan'])).out).assign).toHaveLength(2);
+    const plan = JSON.parse((await cli(fx, p.ports, ['plan'])).out);
+    expect(plan.assign).toHaveLength(1);
+    expect(plan.deferred.map((d: { reason: string }) => d.reason)).not.toContain('paused');
     expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
   });
 

@@ -352,6 +352,18 @@ describe('studio CLI', () => {
     expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
   });
 
+  it('plan starts one build; launch may start any build held back only by that', async () => {
+    const fx = makeFx([{ id: 'APP-1' }, { id: 'APP-2' }]);
+    const { gh } = fakeGh();
+    const { ports, started } = fakePorts(gh);
+    const plan = JSON.parse((await cli(fx, ports, 'plan')).out);
+    expect(plan.assign.map((i: { id: string }) => i.id)).toEqual(['APP-1']);
+    expect(plan.deferred).toEqual([{ id: 'APP-2', reason: 'host load: one build start per plan' }]);
+    expect((await cli(fx, ports, 'launch', 'APP-2')).code).toBe(0);
+    expect(started).toHaveLength(1);
+    expect(statusOf(fx, 'APP-2')?.status).toBe('assigned');
+  });
+
   it('launch defers a build item while the host load is too high', async () => {
     const fx = makeFx([{ id: 'APP-1' }]);
     const yaml = join(fx.project, '.studio', 'studio.yaml');
@@ -578,7 +590,8 @@ describe('studio CLI', () => {
           return a;
         };
       };
-      const held = (fx: Fx) => statusOf(fx, 'APP-1')?.notes?.filter((n) => n.startsWith('pr held'));
+      const held = (fx: Fx) =>
+        (statusOf(fx, 'APP-1')?.notes ?? []).filter((n) => n.startsWith('pr held'));
 
       it('busy CI: no pull request is opened, a note says why, and collect fails', async () => {
         const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
@@ -613,6 +626,8 @@ describe('studio CLI', () => {
         expect(r.code).toBe(0);
         expect(calls.filter((c) => c.line.startsWith('pr create'))).toHaveLength(1);
         expect(statusOf(fx, 'APP-1')).toMatchObject({ status: 'in_review', pr: 31 });
+        // The hold is over: its note goes, the item's history keeps what happened.
+        expect(held(fx)).toEqual([]);
         expect((await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1')).code).toBe(1);
         expect(calls.filter((c) => c.line.startsWith('pr create'))).toHaveLength(1);
       });
@@ -646,13 +661,42 @@ describe('studio CLI', () => {
       });
 
       it('an open pull request of the branch is taken without waiting: it adds no CI load', async () => {
-        const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+        const fx = makeFx([
+          {
+            id: 'APP-1',
+            status: 'assigned',
+            notes: ['kept', 'pr held: ci capacity (busy 8 of 8, limit 5)'],
+          },
+        ]);
         withToken(fx);
         writeReport(fx, 'APP-1', REPORT);
         const { gh } = prGh([9]);
         ciReads(gh, '8');
         expect((await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1')).code).toBe(0);
         expect(statusOf(fx, 'APP-1')).toMatchObject({ status: 'in_review', pr: 9 });
+        expect(statusOf(fx, 'APP-1')?.notes).toEqual(['kept']);
+      });
+
+      it('an item that changed during the capacity wait gets no pull request', async () => {
+        const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+        withToken(fx);
+        writeReport(fx, 'APP-1', REPORT);
+        const { gh, calls } = prGh();
+        ciReads(gh, '0');
+        const { ports } = fakePorts(gh);
+        const board = join(fx.project, '.studio', 'board.yaml');
+        ports.clock.sleep = async () => {
+          // The owner drops the item while collect waits between the two capacity reads.
+          writeFileSync(
+            board,
+            readFileSync(board, 'utf8').replace('status: assigned', 'status: dropped'),
+          );
+        };
+        const r = await cli(fx, ports, 'collect', 'APP-1');
+        expect(r.code).toBe(1);
+        expect(r.err).toMatch(/APP-1 changed while waiting for CI capacity/);
+        expect(calls.some((c) => c.line.startsWith('pr create'))).toBe(false);
+        expect(statusOf(fx, 'APP-1')?.status).toBe('dropped');
       });
     });
 
