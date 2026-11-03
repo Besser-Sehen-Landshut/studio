@@ -27612,6 +27612,8 @@ var workItemSchema = external_exports.strictObject({
   branch: external_exports.string().optional(),
   // Set by `collect` from an approving review; a request for changes clears it.
   approvedHead: external_exports.string().regex(/^[0-9a-f]{40,64}$/i, "not a commit").optional(),
+  // The base branch that approval was given for.
+  approvedBase: external_exports.string().min(1).optional(),
   crew: external_exports.string().optional(),
   notes: external_exports.array(external_exports.string()).optional(),
   // Drives the review tier, the analyzers and the skills (capabilities/INDEX.yaml).
@@ -27711,6 +27713,7 @@ var KEY_ORDER = [
   "pr",
   "branch",
   "approvedHead",
+  "approvedBase",
   "crew",
   "notes",
   "risk",
@@ -30156,6 +30159,7 @@ var MODEL_ALIAS = { standard: "sonnet", capable: "opus" };
 var GH_TIMEOUT_MS = 6e4;
 var prSchema = external_exports.object({
   headRefOid: external_exports.string().regex(/^[0-9a-f]{40,64}$/i),
+  baseRefName: external_exports.string().min(1),
   isCrossRepository: external_exports.boolean(),
   changedFiles: external_exports.number().int().nonnegative(),
   files: external_exports.array(
@@ -30176,19 +30180,20 @@ async function readPrFacts(ports, target) {
         "--repo",
         target.repo,
         "--json",
-        "files,changedFiles,headRefOid,isCrossRepository"
+        "files,changedFiles,headRefOid,baseRefName,isCrossRepository"
       ],
       { timeoutMs: GH_TIMEOUT_MS }
     );
     if (r.code !== 0) return void 0;
     const parsed = prSchema.safeParse(JSON.parse(r.stdout));
     if (!parsed.success) return void 0;
-    const { files, changedFiles, headRefOid, isCrossRepository } = parsed.data;
+    const { files, changedFiles, headRefOid, baseRefName, isCrossRepository } = parsed.data;
     return {
       files: files.map((f) => f.path),
       lines: files.filter((f) => !f.path.toLowerCase().endsWith(".md")).reduce((sum, f) => sum + f.additions + f.deletions, 0),
       complete: files.length >= changedFiles,
       head: headRefOid,
+      base: baseRefName,
       crossRepository: isCrossRepository
     };
   } catch {
@@ -30253,6 +30258,8 @@ var crewCapsSchema = external_exports.strictObject({
   reviewsTarget: external_exports.string().optional(),
   /** The head the tier and the analyzers were chosen for. */
   headRefOid: external_exports.string().optional(),
+  /** The base branch the pull request had then; an approval holds only for it. */
+  baseRefName: external_exports.string().optional(),
   /** Ids launch could not provide, for the lead: they never count as a pass. */
   skipped: external_exports.array(external_exports.string()).optional()
 });
@@ -30268,6 +30275,14 @@ function readCrewCaps(stateRoot, id) {
     return void 0;
   }
 }
+function newerReview(stateRoot, id, target, records) {
+  const mine = records[id]?.startedAt;
+  for (const [other, record2] of Object.entries(records)) {
+    if (other === id || readCrewCaps(stateRoot, other)?.reviewsTarget !== target) continue;
+    if (mine === void 0 || !(Date.parse(record2.startedAt) < Date.parse(mine))) return other;
+  }
+  return void 0;
+}
 function checkReviewCaps(caps, report) {
   if (report.status !== "done") return { skipped: [] };
   if (caps?.reviewsTarget === void 0) {
@@ -30278,7 +30293,7 @@ function checkReviewCaps(caps, report) {
     throw new Error(`report reviews another pull request than ${target}`);
   }
   if (report.verdict !== "approve") return { skipped: [], target };
-  if (caps.headRefOid === void 0 || report.headSha?.toLowerCase() !== caps.headRefOid.toLowerCase()) {
+  if (caps.headRefOid === void 0 || caps.baseRefName === void 0 || report.headSha?.toLowerCase() !== caps.headRefOid.toLowerCase()) {
     throw new Error(
       `the approval is for another head than the review was launched on (${String(caps.headRefOid)}): relaunch the review, nothing moved`
     );
@@ -30691,7 +30706,7 @@ async function resolveForItem(o2) {
       round,
       ...name === void 0 ? {} : { target: name },
       ...target === void 0 ? {} : { pr: target.pr },
-      ...facts === void 0 ? {} : { head: facts.head }
+      ...facts === void 0 ? {} : { head: facts.head, base: facts.base }
     }
   };
 }
@@ -30857,6 +30872,7 @@ function writeCaps(o2) {
       mandatory: MANDATORY.filter((m) => ids.includes(m)),
       ...review.target === void 0 ? {} : { reviewsTarget: review.target },
       ...review.head === void 0 ? {} : { headRefOid: review.head },
+      ...review.base === void 0 ? {} : { baseRefName: review.base },
       ...skipped.length === 0 ? {} : { skipped: skipped.map((x) => x.id) }
     };
     writeStateFile(stateRoot, capsFile(stateRoot, id), `${JSON.stringify(caps, null, 2)}
@@ -32150,6 +32166,14 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   const recheck = () => {
     if (!lock.owned()) throw new Error("the launch lock was lost; refusing to launch, try again");
     refuseIfRunning(stateRoot, item, ports);
+    const target = forItem.review?.target;
+    if (target !== void 0) {
+      for (const [other, crew] of Object.entries(readCrewRecords(stateRoot))) {
+        if (other !== item.id && readCrewCaps(stateRoot, other)?.reviewsTarget === target && ports.claude.alive(crew.pid)) {
+          throw new Error(`${other} is still reviewing ${target}; collect or stop it first`);
+        }
+      }
+    }
     const again = readLimits(ownerRoot);
     if (!again.ok) throw new Error(`${join16(ownerRoot, "limits.json")} is unreadable; refusing`);
     const parkedNow = activeParks(again.labels, ports.clock.now());
@@ -32867,15 +32891,31 @@ async function readChecks(entry, gh) {
     return { kind: "failed", reason: "no check passed" };
   return { kind: "pass" };
 }
-async function isBranchUpdate(gh, target, approved, head) {
+async function isBranchUpdate({ gh, git }, checkout, target, approved, head) {
   try {
     const c3 = await gh.run(["api", `repos/${target.repo}/commits/${head}`]);
     if (c3.code !== 0) return false;
     const commit = JSON.parse(c3.stdout);
     const [first, second, ...rest] = commit.parents ?? [];
-    if (typeof first?.sha !== "string" || first.sha.toLowerCase() !== approved.toLowerCase() || typeof second?.sha !== "string" || !SHA.test(second.sha) || rest.length > 0 || commit.committer?.login !== "web-flow" || commit.commit?.verification?.verified !== true) {
+    if (typeof first?.sha !== "string" || first.sha.toLowerCase() !== approved.head.toLowerCase() || typeof second?.sha !== "string" || !SHA.test(second.sha) || rest.length > 0 || commit.committer?.login !== "web-flow" || commit.commit?.verification?.verified !== true) {
       return false;
     }
+    const base = approved.base.split("/").map(encodeURIComponent).join("/");
+    const d = await gh.run(["api", `repos/${target.repo}/compare/${base}...${second.sha}`]);
+    if (d.code !== 0) return false;
+    const { status } = JSON.parse(d.stdout);
+    if (status !== "behind" && status !== "identical") return false;
+    const g = (args) => git.run(checkout.dir, ["--no-replace-objects", ...args]);
+    await g(["fetch", "--no-tags", "--no-write-fetch-head", checkout.remote, head]);
+    const merged = await g(["merge-tree", "--write-tree", approved.head, second.sha]);
+    const tree = await g(["rev-parse", "--verify", `${head}^{tree}`]);
+    return merged.trim() !== "" && merged.trim() === tree.trim();
+  } catch {
+    return false;
+  }
+}
+async function liveBase(gh, target) {
+  try {
     const v = await gh.run([
       "pr",
       "view",
@@ -32885,23 +32925,27 @@ async function isBranchUpdate(gh, target, approved, head) {
       "--json",
       "baseRefName"
     ]);
-    if (v.code !== 0) return false;
-    const base = JSON.parse(v.stdout).baseRefName;
-    if (typeof base !== "string" || base === "") return false;
-    const d = await gh.run(["api", `repos/${target.repo}/compare/${base}...${second.sha}`]);
-    if (d.code !== 0) return false;
-    const { status } = JSON.parse(d.stdout);
-    return status === "behind" || status === "identical";
+    if (v.code !== 0) return void 0;
+    const { baseRefName } = JSON.parse(v.stdout);
+    return typeof baseRefName === "string" && baseRefName !== "" ? baseRefName : void 0;
   } catch {
-    return false;
+    return void 0;
   }
 }
-async function approvalProblem(gh, target, approved, head) {
+async function approvalProblem(ports, checkout, target, approval, head) {
   const name = `${target.repo}#${target.pr}`;
-  if (approved === void 0) return `no approval recorded for ${name}: review it first`;
-  if (approved.toLowerCase() === head.toLowerCase()) return void 0;
-  if (await isBranchUpdate(gh, target, approved, head)) return void 0;
-  return `${name} is at ${head}, the approval is for ${approved}: review it again`;
+  const { head: approvedHead, base } = approval;
+  if (approvedHead === void 0 || base === void 0) {
+    return `no approval recorded for ${name}: review it first`;
+  }
+  const live = await liveBase(ports.gh, target);
+  if (live !== base) {
+    return `${name} has base ${String(live)}, the approval is for ${base}: review it again`;
+  }
+  if (approvedHead.toLowerCase() === head.toLowerCase()) return void 0;
+  const approved = { head: approvedHead, base };
+  if (await isBranchUpdate(ports, checkout, target, approved, head)) return void 0;
+  return `${name} is at ${head}, the approval is for ${approvedHead}: review it again`;
 }
 async function viewPr(entry, gh) {
   const r = await gh.run([
@@ -33056,13 +33100,13 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
         step = "checks";
         continue;
       }
+      const refused = await opts.mergeAllowed?.(entry, head);
+      if (refused !== void 0) return failed(refused);
       const held2 = opts.hold?.();
       if (held2 !== void 0) {
         enter("capacity");
         throw new QueueHeld(held2);
       }
-      const refused = await opts.mergeAllowed?.(entry, head);
-      if (refused !== void 0) return failed(refused);
       const r = await gh.run([
         "pr",
         "merge",
@@ -34372,19 +34416,21 @@ async function runCli(argv, deps) {
             ]
           }));
         }
-        if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0) {
+        const supersededBy = item.type === "review" && report.status === "done" && reviewDone.target !== void 0 ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot())) : void 0;
+        if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0 && supersededBy === void 0) {
           const reviewed = next.items.find(
             (i2) => `${i2.repo}#${i2.pr}` === reviewDone.target && i2.type !== "review"
           );
           if (reviewed !== void 0) {
+            const approvedBase = readCrewCaps(stateRoot(), item.id)?.baseRefName;
             next = withItem(
               next,
               reviewed.id,
-              ({ approvedHead: _old, ...i2 }) => report.verdict === "approve" ? { ...i2, approvedHead: report.headSha } : i2
+              ({ approvedHead: _h, approvedBase: _b, ...i2 }) => report.verdict === "approve" ? { ...i2, approvedHead: report.headSha, approvedBase } : i2
             );
           }
         }
-        const limitTarget = report.status === "done" && report.verdict === "changes_requested" ? reviewDone.target : void 0;
+        const limitTarget = report.status === "done" && report.verdict === "changes_requested" && supersededBy === void 0 ? reviewDone.target : void 0;
         let fixLimit = false;
         if (limitTarget !== void 0) {
           const rounds = reviewRounds(next, limitTarget);
@@ -34421,6 +34467,7 @@ async function runCli(argv, deps) {
           ...report.verdict === void 0 ? {} : { verdict: report.verdict },
           ...report.reviews === void 0 ? {} : { reviews: report.reviews },
           ...reviewDone.skipped.length === 0 ? {} : { skipped: reviewDone.skipped },
+          ...supersededBy === void 0 ? {} : { supersededBy },
           ...fixLimit ? { fixLimit } : {},
           ...lessonsProposed > 0 ? { lessonsProposed } : {}
         });
@@ -34444,9 +34491,10 @@ async function runCli(argv, deps) {
           const view = await viewPr({ pr, repo }, ports.gh);
           if (typeof view === "string") throw new Error(view);
           const problem = await approvalProblem(
-            ports.gh,
+            ports,
+            approvalCheckout(project, config2, repo),
             { repo, pr },
-            item.approvedHead,
+            { head: item.approvedHead, base: item.approvedBase },
             view.head
           );
           if (problem !== void 0) throw new Error(problem);
@@ -34505,7 +34553,7 @@ async function runCli(argv, deps) {
                 stateRoot: root,
                 log,
                 hold,
-                mergeAllowed: (entry, head) => boardBlocksMerge(project, entry, head, ports),
+                mergeAllowed: (entry, head) => boardBlocksMerge(project, config2, entry, head, ports),
                 takeNext: () => takeNextPending(root),
                 onDone: (d) => applyQueueResults(project, [d], ports, stderr)
               }
@@ -34917,7 +34965,7 @@ function refuseNativeQueue(config2) {
     );
   }
 }
-async function boardBlocksMerge(project, entry, head, ports) {
+async function boardBlocksMerge(project, config2, entry, head, ports) {
   let board;
   try {
     board = loadBoard(project);
@@ -34929,7 +34977,16 @@ async function boardBlocksMerge(project, entry, head, ports) {
   );
   if (item === void 0) return "the pull request has no board item";
   if (item.status !== "queued") return `board item ${item.id} is ${item.status}`;
-  return approvalProblem(ports.gh, entry, item.approvedHead, head);
+  return approvalProblem(
+    ports,
+    approvalCheckout(project, config2, entry.repo),
+    entry,
+    { head: item.approvedHead, base: item.approvedBase },
+    head
+  );
+}
+function approvalCheckout(project, config2, repo) {
+  return { dir: project, remote: repo === config2.primaryRepo ? "origin" : githubHttpsUrl(repo) };
 }
 var doneMatches = (d, item) => d.item === void 0 ? d.repo === item.repo && d.pr === item.pr : d.item === item.id;
 function reconcileQueued(project, state, ports, stderr) {

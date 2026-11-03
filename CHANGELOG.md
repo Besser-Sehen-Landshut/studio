@@ -42,9 +42,14 @@ Not tagged or published as a GitHub release yet; the maintainers tag after the m
 - A review launch refuses a pull request from a fork, or one it cannot read. An approval counts only
   for the head the review was launched on.
 - `queue add` needs an approval for the current head, and `queue run` checks again before the merge.
-  `collect` stores the approved head on the item that holds the pull request (`approved_head`); only
-  the queue's own branch update counts as the same head. Pull requests approved or queued before this
-  need a new review.
+  `collect` stores the approved head and base on the item that holds the pull request (`approved_head`,
+  `approved_base`). Another base refuses. Besides the approved head, one commit counts: it only merges
+  the base into that head, GitHub signed it, and its tree equals a local `git merge-tree`. A conflict
+  resolved by hand or a second update needs a new review. Pull requests approved or queued before
+  this need a new review.
+- Only one review of a pull request runs at a time, and `collect` applies only the verdict of the
+  review started last (`supersededBy` names it otherwise).
+- The pause and block check before a merge now runs after the approval check, as its last step.
 - A launch refuses when the Studio plugin is not installed in the crew's config dir, before anything
   is counted; a readable config dir with no skills or plugins now counts as not installed. `studio
   doctor` shows it with the install command and looks in a credential provider's config dir.
@@ -57,7 +62,8 @@ Not tagged or published as a GitHub release yet; the maintainers tag after the m
 
 - A crew's `Read`, `Glob` and `Grep` reach only its clone, its own brief with `briefs/<id>.caps/` and
   `briefs/<id>.rules/`, its `HOME` and tmp dir, and in its config dir the skills, plugin cache,
-  marketplaces and saved tool outputs. See `SECURITY.md`.
+  marketplaces and saved tool outputs. They refuse any `..` segment: write the path without it. A
+  `command` on any tool but Bash is denied. See `SECURITY.md`.
 - Crew sessions set `CLAUDE_CODE_TMPDIR` to the crew's tmp dir.
 
 ## [0.4.0] - 2026-11-01

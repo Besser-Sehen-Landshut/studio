@@ -1647,18 +1647,21 @@ function checkReadScope(env, tok, base, tool) {
   if (tok.startsWith("~") || new RegExp("^\\s|\\s$|\\p{Cc}", "u").test(tok)) {
     deny(`${tool}: unresolvable path: ${JSON.stringify(tok)}`);
   }
+  refuseDotDot(tok, tool);
   const real = resolveReal(tok, base);
-  if (!isInside(env, real) && !isUnder(env.readRoots, real) && !isClaudeFile(env, real)) {
+  if (!isUnder(env.readRoots, real) && !isClaudeFile(env, real)) {
     deny(`${tool} outside this crew's files: ${tok}`);
   }
 }
+function refuseDotDot(tok, tool) {
+  if (tok.split("/").includes("..")) deny(`${tool}: write the path without ..: ${tok}`);
+}
 function checkGlobScope(env, pattern, base, tool) {
+  refuseDotDot(pattern, tool);
   for (const e of braceExpand(pattern)) {
+    refuseDotDot(e, tool);
     const segs = e.split("/");
     const first = segs.findIndex((s) => hasMagic(s));
-    if (first >= 0 && segs.slice(first).includes("..")) {
-      deny(`${tool} outside this crew's files: ${e}`);
-    }
     const prefix = first < 0 ? e : segs.slice(0, first).join("/") || (isAbsolute(e) ? "/" : ".");
     checkReadScope(env, prefix, base, tool);
   }
@@ -1721,7 +1724,7 @@ function check(input, ctx) {
     allowedWorkflows: ctx.crewAllowedWorkflows ?? [],
     allowedRefs: ctx.crewAllowedWorkflowRefs ?? [],
     protectedReal: protectedPaths.flatMap((p) => [p, resolveReal(p, "/")]).map((p) => p.toLowerCase()),
-    readRoots: (ctx.readRoots ?? []).map((p) => resolveReal(p, "/")),
+    readRoots: [ctx.worktree, ...ctx.readRoots ?? []].map((p) => resolveReal(p, "/")),
     skillRoots: (ctx.skillRoots ?? []).flatMap((p) => [p, resolveReal(p, "/")]),
     toolResultRes: (ctx.toolResultGlobs ?? []).map(fileGlobToRegExp),
     hardSecretRes: ctx.secretGlobs.filter((g) => !(ctx.skillRootWaivedGlobs ?? []).includes(g)).map(fileGlobToRegExp)
@@ -1731,12 +1734,13 @@ function check(input, ctx) {
   if (typeof toolName !== "string" || !CREW_TOOLS.has(toolName)) {
     deny(`tool not allowed for crew: ${String(toolName)}`);
   }
-  if (toolName === "Bash" || typeof toolInput.command === "string") {
+  if (toolName === "Bash") {
     const command = toolInput.command;
     if (typeof command !== "string") deny(`${toolName} call without a command`);
     checkBash(env, command, cwd, 0);
     return;
   }
+  if (toolInput.command !== void 0) deny(`${toolName} call with a command`);
   const writeKey = WRITE_TOOLS[toolName];
   if (writeKey !== void 0) {
     const p = toolInput[writeKey];
@@ -1754,14 +1758,17 @@ function check(input, ctx) {
       if (typeof v === "string" && v !== "") checkSecretPath(env, v, cwd);
     }
   } else if (toolName === "Grep" || toolName === "Glob") {
-    const given = typeof toolInput.path === "string" ? toolInput.path : "";
-    checkReadScope(env, given === "" ? "." : given, cwd, toolName);
+    if (toolInput.path !== void 0 && typeof toolInput.path !== "string") {
+      deny(`${toolName} call with a path that is not a string`);
+    }
+    const given = toolInput.path ?? "";
+    const start = given === "" ? "." : given;
+    checkReadScope(env, start, cwd, toolName);
     if (toolName === "Grep") {
       checkSearch(env, toolInput.path, [toolInput.glob], cwd);
     } else {
-      if (typeof toolInput.pattern === "string") {
-        checkGlobScope(env, toolInput.pattern, resolveReal(given || ".", cwd), toolName);
-      }
+      if (typeof toolInput.pattern !== "string") deny("Glob call without a pattern");
+      checkGlobScope(env, toolInput.pattern, resolveReal(start, cwd), toolName);
       checkSearch(env, toolInput.path, [toolInput.pattern], cwd);
     }
   }

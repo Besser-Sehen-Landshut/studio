@@ -120,6 +120,10 @@
             "type": "string",
             "pattern": "^[0-9a-f]{40,64}$"
           },
+          "approved_base": {
+            "type": "string",
+            "minLength": 1
+          },
           "crew": {
             "type": "string"
           },
