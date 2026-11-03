@@ -321,6 +321,50 @@ describe('read tools stay in the crew area', () => {
     });
   });
 
+  describe('Glob patterns the brace expansion may not see through', () => {
+    it.each(['{..}/x', '{a}/../x', '{{..}}/x', '{a}/*', '{/etc}/*', 'a{b/*', '{..,}/x', 'a..b/*'])(
+      '%s is denied',
+      (pattern) => {
+        expect(decide('Glob', { pattern }, wt)).toBe('deny');
+      },
+    );
+    it.each(['*.{ts,tsx}', 'src/**/*.{ts,tsx}', '{src,test}/**/*.ts', '{a,{b,c}}/*.ts'])(
+      '%s still works',
+      (pattern) => {
+        expect(decide('Glob', { pattern }, wt)).toBe('allow');
+      },
+    );
+  });
+
+  describe('the working directory a tool reports', () => {
+    it.each<[string, unknown]>([
+      ['not a string', 1],
+      ['an object', { a: 1 }],
+      ['relative', 'sub'],
+      ['with a dotted segment', '/x/../y'],
+    ])('%s is denied', (_name, cwd) => {
+      for (const [toolName, toolInput] of [
+        ['Read', { file_path: '/nowhere' }],
+        ['Grep', { pattern: 'x' }],
+        ['Glob', { pattern: '*' }],
+      ] as const) {
+        const input = { toolName, toolInput, cwd } as unknown as Parameters<
+          typeof evaluateGuard
+        >[0];
+        const r = evaluateGuard(input, ctx);
+        expect(r.decision, toolName).toBe('deny');
+        expect(r.reason, toolName).toContain('working directory');
+      }
+    });
+    it('a dotted segment in the absolute working directory is denied too', () => {
+      const r = decide('Read', { file_path: 'sub/a.ts' }, `${wt}/sub/..`);
+      expect(r).toBe('deny');
+    });
+    it('none at all counts from the clone', () => {
+      expect(decide('Read', { file_path: 'sub/a.ts' })).toBe('allow');
+    });
+  });
+
   describe('fields that do not fit the tool', () => {
     it.each([
       'Read',

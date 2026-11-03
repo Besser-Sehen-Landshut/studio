@@ -1441,9 +1441,10 @@ function refuseDotDot(tok: string, tool: string): void {
 
 /** A glob stays in scope when the part before its first wildcard does. */
 function checkGlobScope(env: Env, pattern: string, base: string, tool: string): void {
-  refuseDotDot(pattern, tool);
+  // The tool's own brace rules may differ, so the text as a whole counts, also inside braces.
+  if (pattern.includes('..')) deny(`${tool}: write the pattern without ..: ${pattern}`);
   for (const e of braceExpand(pattern)) {
-    refuseDotDot(e, tool);
+    if (e.includes('{')) deny(`${tool}: a brace group needs a comma: ${pattern}`);
     const segs = e.split('/');
     const first = segs.findIndex((s) => hasMagic(s));
     const prefix = first < 0 ? e : segs.slice(0, first).join('/') || (isAbsolute(e) ? '/' : '.');
@@ -1539,6 +1540,13 @@ function check(input: GuardInput, ctx: GuardContext): void {
       .map(fileGlobToRegExp),
   };
   const { toolName, toolInput } = input;
+  const given = input.cwd as unknown;
+  if (
+    given !== undefined &&
+    (typeof given !== 'string' || !isAbsolute(given) || given.split('/').includes('..'))
+  ) {
+    deny('invalid working directory');
+  }
   const cwd = resolveReal(input.cwd ?? wt, wt);
 
   if (typeof toolName !== 'string' || !CREW_TOOLS.has(toolName)) {
