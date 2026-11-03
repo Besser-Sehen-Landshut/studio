@@ -3,6 +3,36 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.4] - 2026-11-03
+
+Not tagged yet; the maintainers tag after the merge.
+
+### Changed
+
+- Launches no longer wait for CI runners. A crew builds and tests in its own clone and puts no load
+  on CI until a pull request exists, so busy runners kept crews idle for nothing. A fix, feature or
+  chore still waits for the host load (`host_load_max`, or the cores with `shared_host`), now with
+  the reason `host load` instead of `ci capacity`. A CI read error no longer holds launches either.
+- A plan assigns at most one build item: the host load is a single, lagging reading. The other
+  ready builds are deferred with `host load: one build start per plan` but still count against
+  role WIP, credential slots and overlaps, so the items after them keep their usual reasons.
+  `studio launch <id>` accepts a build deferred only for that reason, since each launch reads the
+  host anew and starts one build.
+- `collect` checks CI capacity before it opens a crew's pull request, with the merge queue's rule:
+  at or below `merge_max_busy`, twice `check_twice_seconds` apart, a read error counting as busy.
+  Without room it opens nothing, keeps the item's status and branch, notes
+  `pr held: ci capacity (busy N of M, limit L)` and exits 1; a later `collect` opens the pull
+  request once. An open pull request of the branch is still taken at once. Once the item holds a
+  pull request, `pr held:` notes are removed. The board is read again right before
+  `gh pr create`: an item that changed during the capacity wait gets no pull request, and
+  `collect` exits 1.
+- Capacity snapshots (`studio plan`, `state.json`) carry `hostOk`, the host part of `ok`.
+
+### Added
+
+- `studio setup ci` warns about a workflow whose `push` trigger matches crew branches
+  (`studio/<id>`): every crew push would then start CI that no capacity check sees.
+
 ## [0.6.3] - 2026-11-03
 
 Fixes from the second real crew run, a review. Not tagged yet; the maintainers tag after the merge.

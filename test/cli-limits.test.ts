@@ -17,6 +17,7 @@ import { activeLabel, addAccount } from '../src/accounts.js';
 import { loadBoard } from '../src/board.js';
 import { type CliDeps, runCli } from '../src/cli.js';
 import { acquireStateLock, ownerStateRootFor, stateRootFor } from '../src/paths.js';
+import { ONE_BUILD_PER_PLAN } from '../src/planner.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import { newReportName } from '../src/report.js';
 import { prepareCrewDir } from './crew-dir.js';
@@ -51,6 +52,13 @@ deploy_commands: []
 `;
 const itemYaml = (id: string) =>
   `  - { id: ${id}, title: Item ${id}, type: fix, role: builder, repo: org/app, size: S, priority: 1, status: ready, paths: [], touches: [${id.toLowerCase()}/**], depends_on: [], dod: [tests pass], history: [] }`;
+
+type PlanOut = { assign: { id: string }[]; deferred: { id: string; reason: string }[] };
+/** Items a launch would start now: assigned, or held back only because one build starts per plan. */
+const startable = (plan: PlanOut) => [
+  ...plan.assign.map((i) => i.id),
+  ...plan.deferred.filter((d) => d.reason === ONE_BUILD_PER_PLAN).map((d) => d.id),
+];
 
 let n = 0;
 function makeFx(ids: string[] = ['APP-1'], yaml = STUDIO_YAML) {
@@ -524,7 +532,7 @@ describe('usage limits through the CLI', () => {
     p.advance(2 * HOUR);
     provider(fx, tokenLine('label-a'));
     const later = JSON.parse((await cli(fx, p.ports, ['plan'])).out);
-    expect(later.assign.map((i: { id: string }) => i.id)).toContain('APP-3');
+    expect(startable(later)).toContain('APP-3');
     expect(limitsOf(fx)).toEqual({});
   });
 
@@ -542,7 +550,7 @@ describe('usage limits through the CLI', () => {
     expect(state.forOwner.filter((l: { id: string }) => l.id === 'usage-limit')).toHaveLength(1);
     p.advance(2 * HOUR);
     const later = JSON.parse((await cli(fx, p.ports, ['plan'])).out);
-    expect(later.assign.map((i: { id: string }) => i.id)).toEqual(['APP-1', 'APP-2']);
+    expect(startable(later)).toEqual(['APP-1', 'APP-2']);
   });
 
   it('an unreadable limits file holds everything and tells the owner', async () => {

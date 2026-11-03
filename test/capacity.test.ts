@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { capacityHoldsTwice, readCapacity } from '../src/capacity.js';
+import { capacityHoldsTwice, readCapacity, readCapacityTwice } from '../src/capacity.js';
 import { type StudioConfig, studioConfigSchema } from '../src/config.js';
 import type { Clock, Gh, Host } from '../src/ports.js';
 
@@ -62,7 +62,7 @@ describe('readCapacity', () => {
     );
     const cap = await readCapacity(mkConfig(), { gh, host: host(0.5) }, opts);
     expect(gh.calls).toEqual(['/orgs/org/actions/runners']);
-    expect(cap).toEqual({ ciBusy: 2, ciTotal: 8, hostLoad: 0.5, ok: true });
+    expect(cap).toEqual({ ciBusy: 2, ciTotal: 8, hostLoad: 0.5, ok: true, hostOk: true });
   });
 
   it('matches all runners when no name pattern is set', async () => {
@@ -100,7 +100,7 @@ describe('readCapacity', () => {
   it('idle or offline runners that match still count as a good read', async () => {
     const gh = fakeGh(() => tsv([['pool-1', 'offline', false]]));
     const cap = await readCapacity(mkConfig(), { gh, host: host(0) }, opts);
-    expect(cap).toEqual({ ciBusy: 0, ciTotal: 8, hostLoad: 0, ok: true });
+    expect(cap).toEqual({ ciBusy: 0, ciTotal: 8, hostLoad: 0, ok: true, hostOk: true });
   });
 
   it('api error counts as busy (ok=false, ciBusy=total)', async () => {
@@ -139,6 +139,23 @@ describe('readCapacity', () => {
     });
     expect((await readCapacity(cfg, { gh, host: host(4) }, opts)).ok).toBe(true);
     expect((await readCapacity(cfg, { gh, host: host(4.1) }, opts)).ok).toBe(false);
+  });
+
+  it('hostOk follows the host load alone: CI busy or unreadable leaves it true', async () => {
+    const cfg = mkConfig({
+      capacity: { total: 8, mergeMaxBusy: 5, checkTwiceSeconds: 30, hostLoadMax: 4 },
+    });
+    const busy = await readCapacity(cfg, { gh: fakeGh(() => busyRows(8)), host: host(1) }, opts);
+    expect(busy).toMatchObject({ ok: false, hostOk: true });
+    const failing = fakeGh(() => {
+      throw new Error('boom');
+    });
+    const unread = await readCapacity(cfg, { gh: failing, host: host(1) }, opts);
+    expect(unread).toMatchObject({ ok: false, hostOk: true, error: 'boom' });
+    const loaded = await readCapacity(cfg, { gh: fakeGh(() => busyRows(0)), host: host(5) }, opts);
+    expect(loaded).toMatchObject({ ok: false, hostOk: false });
+    const unreadLoaded = await readCapacity(cfg, { gh: failing, host: host(5) }, opts);
+    expect(unreadLoaded).toMatchObject({ ok: false, hostOk: false });
   });
 
   it('busy above mergeMaxBusy → not ok, equal is ok', async () => {
@@ -279,5 +296,20 @@ describe('capacityHoldsTwice', () => {
     expect(await capacityHoldsTwice(mkConfig(), { gh, host: host(0), clock }, opts)).toBe(false);
     expect(sleeps).toEqual([]);
     expect(gh.calls).toHaveLength(1);
+  });
+
+  it('readCapacityTwice also returns the read that decided', async () => {
+    const { clock } = fakeClock();
+    let n = 0;
+    const gh = fakeGh(() => busyRows(++n === 1 ? 1 : 7));
+    const r = await readCapacityTwice(mkConfig(), { gh, host: host(0), clock }, opts);
+    expect(r.ok).toBe(false);
+    expect(r.capacity).toMatchObject({ ciBusy: 7, ok: false });
+    const first = await readCapacityTwice(
+      mkConfig(),
+      { gh: fakeGh(() => busyRows(6)), host: host(0), clock },
+      opts,
+    );
+    expect(first).toMatchObject({ ok: false, capacity: { ciBusy: 6 } });
   });
 });

@@ -13,6 +13,7 @@ import { camelizeKeys, ciSchema, studioConfigSchema } from './config.js';
 import type { Gh } from './ports.js';
 import {
   type CiConfig,
+  crewPushWarnings,
   type Detected,
   detectRunners,
   lintWorkflows,
@@ -211,7 +212,7 @@ export async function runSetupCi(o: SetupCiOptions): Promise<number> {
   const lint = lintWorkflows(wf.files, detection, EXPECTED_GROUP);
   const allNotes = [...notes, ...proposal.notes];
   const errors = [...proposal.errors, ...wf.errors, ...lint.errors];
-  const warnings = lint.warnings;
+  const warnings = [...lint.warnings, ...crewPushWarnings(wf.files)];
 
   let written = false;
   let refused: string | undefined;
