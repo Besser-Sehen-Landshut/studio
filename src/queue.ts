@@ -19,7 +19,7 @@ import {
   type StateLock,
   writeStateFile,
 } from './paths.js';
-import type { Clock, Gh, Host } from './ports.js';
+import type { Clock, Gh, Git, Host } from './ports.js';
 
 export type QueueStep = 'update' | 'checks' | 'capacity' | 'merge';
 export type QueueEntry = { pr: number; repo: string; item?: string };
@@ -340,15 +340,21 @@ async function readChecks(entry: QueueEntry, gh: Gh): Promise<ChecksVerdict> {
 
 type PrView = { head: string; state: 'OPEN' | 'MERGED' | 'CLOSED'; mergeable: string };
 
+export type ApprovalPorts = { gh: Gh; git: Git };
+/** The owner's checkout, and how it reaches the pull request's repository. */
+export type ApprovalCheckout = { dir: string; remote: string };
+
 /**
- * Whether `head` only merges the base into `approved`, as `gh pr update-branch` does: GitHub signed
- * it, the approved head is its first parent, and the other parent is already on the base. A push
- * cannot forge the signature, and the check on the other parent keeps out a merge of another branch.
+ * Whether `head` is nothing but the merge of the base into `approved`: GitHub signed it, the approved
+ * head is its first parent, the other parent is already on the approved base, and its tree is what
+ * merging those two gives here. The signature alone proves little: the API signs a commit with any
+ * tree and any parents. A conflict makes the merge fail, so a hand resolution never passes.
  */
 async function isBranchUpdate(
-  gh: Gh,
+  { gh, git }: ApprovalPorts,
+  checkout: ApprovalCheckout,
   target: { repo: string; pr: number },
-  approved: string,
+  approved: { head: string; base: string },
   head: string,
 ): Promise<boolean> {
   try {
@@ -362,7 +368,7 @@ async function isBranchUpdate(
     const [first, second, ...rest] = commit.parents ?? [];
     if (
       typeof first?.sha !== 'string' ||
-      first.sha.toLowerCase() !== approved.toLowerCase() ||
+      first.sha.toLowerCase() !== approved.head.toLowerCase() ||
       typeof second?.sha !== 'string' ||
       !SHA.test(second.sha) ||
       rest.length > 0 ||
@@ -371,6 +377,23 @@ async function isBranchUpdate(
     ) {
       return false;
     }
+    const base = approved.base.split('/').map(encodeURIComponent).join('/');
+    const d = await gh.run(['api', `repos/${target.repo}/compare/${base}...${second.sha}`]);
+    if (d.code !== 0) return false;
+    const { status } = JSON.parse(d.stdout) as { status?: unknown };
+    if (status !== 'behind' && status !== 'identical') return false;
+    const g = (args: string[]) => git.run(checkout.dir, ['--no-replace-objects', ...args]);
+    await g(['fetch', '--no-tags', '--no-write-fetch-head', checkout.remote, head]);
+    const merged = await g(['merge-tree', '--write-tree', approved.head, second.sha]);
+    const tree = await g(['rev-parse', '--verify', `${head}^{tree}`]);
+    return merged.trim() !== '' && merged.trim() === tree.trim();
+  } catch {
+    return false;
+  }
+}
+
+async function liveBase(gh: Gh, target: { repo: string; pr: number }): Promise<string | undefined> {
+  try {
     const v = await gh.run([
       'pr',
       'view',
@@ -380,33 +403,39 @@ async function isBranchUpdate(
       '--json',
       'baseRefName',
     ]);
-    if (v.code !== 0) return false;
-    const base = (JSON.parse(v.stdout) as { baseRefName?: unknown }).baseRefName;
-    if (typeof base !== 'string' || base === '') return false;
-    const d = await gh.run(['api', `repos/${target.repo}/compare/${base}...${second.sha}`]);
-    if (d.code !== 0) return false;
-    const { status } = JSON.parse(d.stdout) as { status?: unknown };
-    return status === 'behind' || status === 'identical';
+    if (v.code !== 0) return undefined;
+    const { baseRefName } = JSON.parse(v.stdout) as { baseRefName?: unknown };
+    return typeof baseRefName === 'string' && baseRefName !== '' ? baseRefName : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
 /**
- * Why a review verdict does not cover `head`, else undefined. The queue's own branch update changes
- * the head without changing what was reviewed, so that one commit counts as approved too.
+ * Why a review verdict does not cover `head` on the pull request's current base, else undefined.
+ * Besides the approved head itself, only a commit that passes `isBranchUpdate` counts as approved. A
+ * second update on top of that one has another first parent and needs a new review.
  */
 export async function approvalProblem(
-  gh: Gh,
+  ports: ApprovalPorts,
+  checkout: ApprovalCheckout,
   target: { repo: string; pr: number },
-  approved: string | undefined,
+  approval: { head?: string | undefined; base?: string | undefined },
   head: string,
 ): Promise<string | undefined> {
   const name = `${target.repo}#${target.pr}`;
-  if (approved === undefined) return `no approval recorded for ${name}: review it first`;
-  if (approved.toLowerCase() === head.toLowerCase()) return undefined;
-  if (await isBranchUpdate(gh, target, approved, head)) return undefined;
-  return `${name} is at ${head}, the approval is for ${approved}: review it again`;
+  const { head: approvedHead, base } = approval;
+  if (approvedHead === undefined || base === undefined) {
+    return `no approval recorded for ${name}: review it first`;
+  }
+  const live = await liveBase(ports.gh, target);
+  if (live !== base) {
+    return `${name} has base ${String(live)}, the approval is for ${base}: review it again`;
+  }
+  if (approvedHead.toLowerCase() === head.toLowerCase()) return undefined;
+  const approved = { head: approvedHead, base };
+  if (await isBranchUpdate(ports, checkout, target, approved, head)) return undefined;
+  return `${name} is at ${head}, the approval is for ${approvedHead}: review it again`;
 }
 
 /** The PR's head, state and mergeability; a string is the failure reason. */

@@ -56,6 +56,8 @@ export const workItemSchema = z.strictObject({
     .string()
     .regex(/^[0-9a-f]{40,64}$/i, 'not a commit')
     .optional(),
+  // The base branch that approval was given for.
+  approvedBase: z.string().min(1).optional(),
   crew: z.string().optional(),
   notes: z.array(z.string()).optional(),
   // Drives the review tier, the analyzers and the skills (capabilities/INDEX.yaml).
@@ -170,6 +172,7 @@ const KEY_ORDER: readonly (keyof WorkItem)[] = [
   'pr',
   'branch',
   'approvedHead',
+  'approvedBase',
   'crew',
   'notes',
   'risk',

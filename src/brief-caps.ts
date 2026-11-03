@@ -47,6 +47,7 @@ export interface ResolvedForItem {
     target?: string;
     pr?: number;
     head?: string;
+    base?: string;
   };
 }
 
@@ -129,7 +130,7 @@ export async function resolveForItem(o: {
       round,
       ...(name === undefined ? {} : { target: name }),
       ...(target === undefined ? {} : { pr: target.pr }),
-      ...(facts === undefined ? {} : { head: facts.head }),
+      ...(facts === undefined ? {} : { head: facts.head, base: facts.base }),
     },
   };
 }
@@ -337,6 +338,7 @@ export function writeCaps(o: {
       mandatory: MANDATORY.filter((m) => ids.includes(m)),
       ...(review.target === undefined ? {} : { reviewsTarget: review.target }),
       ...(review.head === undefined ? {} : { headRefOid: review.head }),
+      ...(review.base === undefined ? {} : { baseRefName: review.base }),
       ...(skipped.length === 0 ? {} : { skipped: skipped.map((x) => x.id) }),
     };
     writeStateFile(stateRoot, capsFile(stateRoot, id), `${JSON.stringify(caps, null, 2)}\n`);

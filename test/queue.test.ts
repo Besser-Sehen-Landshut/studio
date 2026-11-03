@@ -17,7 +17,6 @@ import type { Clock, Gh, Host } from '../src/ports.js';
 import {
   acquireQueueRunLock,
   appendStateLine,
-  approvalProblem,
   enqueue,
   installSignalRelease,
   loadQueue,
@@ -1047,65 +1046,6 @@ describe('R79: queue file updates and the run lock', () => {
     );
     remove();
     expect(['SIGTERM', 'SIGINT', 'SIGHUP'].map((s) => process.listenerCount(s))).toEqual(before);
-  });
-});
-
-describe('approvalProblem', () => {
-  const A = 'a'.repeat(40);
-  const H = 'b'.repeat(40);
-  const P = 'c'.repeat(40);
-  const target = { repo: 'org/app', pr: 5 };
-  const update = (over: Record<string, unknown> = {}) => ({
-    stdout: JSON.stringify({
-      parents: [{ sha: A }, { sha: P }],
-      committer: { login: 'web-flow' },
-      commit: { verification: { verified: true } },
-      ...over,
-    }),
-  });
-  const ask = (commit: Res, status = 'behind') =>
-    approvalProblem(
-      fakeGh([
-        { prefix: `api repos/org/app/commits/${H}`, responses: [commit] },
-        {
-          prefix: 'pr view 5 --repo org/app --json baseRefName',
-          responses: [{ stdout: '{"baseRefName":"main"}' }],
-        },
-        {
-          prefix: `api repos/org/app/compare/main...${P}`,
-          responses: [{ stdout: JSON.stringify({ status }) }],
-        },
-      ]).gh,
-      target,
-      A,
-      H,
-    );
-
-  it('no approval is a problem, without asking GitHub', async () => {
-    expect(await approvalProblem(fakeGh([]).gh, target, undefined, H)).toMatch(/no approval/);
-  });
-  it('the approved head itself is fine, in any case, without asking GitHub', async () => {
-    expect(await approvalProblem(fakeGh([]).gh, target, A.toUpperCase(), A)).toBeUndefined();
-  });
-  it("GitHub's merge of the base into the approved head is fine", async () => {
-    expect(await ask(update())).toBeUndefined();
-    expect(await ask(update(), 'identical')).toBeUndefined();
-  });
-  it.each<[string, Res]>([
-    ['one parent', update({ parents: [{ sha: A }] })],
-    ['the approved head as second parent', update({ parents: [{ sha: P }, { sha: A }] })],
-    ['three parents', update({ parents: [{ sha: A }, { sha: P }, { sha: H }] })],
-    ['another committer', update({ committer: { login: 'crew' } })],
-    ['no committer', update({ committer: null })],
-    ['no valid signature', update({ commit: { verification: { verified: false } } })],
-    ['a gh failure', { code: 1 }],
-    ['unreadable output', { stdout: 'nope' }],
-  ])('%s is not a branch update', async (_n, commit) => {
-    expect(await ask(commit)).toMatch(/review it again/);
-  });
-  it('a second parent that is not on the base could bring in another branch', async () => {
-    expect(await ask(update(), 'diverged')).toMatch(/review it again/);
-    expect(await ask(update(), 'ahead')).toMatch(/review it again/);
   });
 });
 

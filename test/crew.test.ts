@@ -2028,7 +2028,7 @@ describe('required skills at launch', () => {
 });
 
 describe('capabilities at launch', () => {
-  const PR_HEAD = { headRefOid: 'a'.repeat(40), isCrossRepository: false };
+  const PR_HEAD = { headRefOid: 'a'.repeat(40), baseRefName: 'main', isCrossRepository: false };
   const reviewItem: WorkItem = {
     ...item,
     id: 'APP-20',
@@ -2098,6 +2098,39 @@ describe('capabilities at launch', () => {
     expect(existsSync(join(f.state, 'crew.json'))).toBe(false);
   });
 
+  it('a second review of a pull request refuses while one runs, and starts once it ended', async () => {
+    const f = makeFixture();
+    const started: Started[] = [];
+    let alive = true;
+    const base = portsWithGh(started, () => ({ code: 0, stdout: pr('a.ts') }));
+    const ports: Ports = {
+      ...base,
+      claude: { ...base.claude, alive: () => alive },
+    };
+    await launchCrew(f.project, reviewItem, reviewerConfig, ports, f.launcher);
+    const second: WorkItem = { ...reviewItem, id: 'APP-21' };
+    await expect(launchCrew(f.project, second, reviewerConfig, ports, f.launcher)).rejects.toThrow(
+      /APP-20 is still reviewing org\/app#7/,
+    );
+    expect(started).toHaveLength(1);
+    expect(existsSync(join(f.state, 'clones', 'APP-21'))).toBe(false);
+    alive = false;
+    await launchCrew(f.project, second, reviewerConfig, ports, f.launcher);
+    expect(started).toHaveLength(2);
+  });
+
+  it('a running review of another pull request does not stop this one', async () => {
+    const f = makeFixture();
+    const started: Started[] = [];
+    const base = portsWithGh(started, () => ({ code: 0, stdout: pr('a.ts') }));
+    const ports: Ports = { ...base, claude: { ...base.claude, alive: () => false } };
+    await launchCrew(f.project, reviewItem, reviewerConfig, ports, f.launcher);
+    const alive: Ports = { ...base, claude: { ...base.claude, alive: () => true } };
+    const other: WorkItem = { ...reviewItem, id: 'APP-21', notes: ['review org/app#8'] };
+    await launchCrew(f.project, other, reviewerConfig, alive, f.launcher);
+    expect(started).toHaveLength(2);
+  });
+
   it('the record holds the head launch saw', async () => {
     const f = makeFixture();
     await launchCrew(
@@ -2108,6 +2141,7 @@ describe('capabilities at launch', () => {
       f.launcher,
     );
     expect(capsOf(f, 'APP-20').headRefOid).toBe(PR_HEAD.headRefOid);
+    expect(capsOf(f, 'APP-20').baseRefName).toBe('main');
   });
 
   it('an incomplete file list makes the tier large with security', async () => {

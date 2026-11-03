@@ -13,7 +13,7 @@ import {
   type StudioConfig,
 } from './config.js';
 import { limitHold } from './credentials.js';
-import { crewStateOf, isItemId, launchCrew, resolveModel } from './crew.js';
+import { crewStateOf, githubHttpsUrl, isItemId, launchCrew, resolveModel } from './crew.js';
 import { listFlaky, recordFlaky } from './flaky.js';
 import {
   activeParks,
@@ -61,6 +61,7 @@ import {
   checkReviewCaps,
   MAX_FIX_ATTEMPTS,
   MAX_REVIEW_ROUNDS,
+  newerReview,
   readCrewCaps,
   reviewRounds,
 } from './review.js';
@@ -521,18 +522,32 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           }));
         }
         // The verdict goes on the item that holds the pull request; `queue add` and the merge read it.
-        if (item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined) {
+        const supersededBy =
+          item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined
+            ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot()))
+            : undefined;
+        if (
+          item.type === 'review' &&
+          report.status === 'done' &&
+          reviewDone.target !== undefined &&
+          supersededBy === undefined
+        ) {
           const reviewed = next.items.find(
             (i) => `${i.repo}#${i.pr}` === reviewDone.target && i.type !== 'review',
           );
           if (reviewed !== undefined) {
-            next = withItem(next, reviewed.id, ({ approvedHead: _old, ...i }) =>
-              report.verdict === 'approve' ? { ...i, approvedHead: report.headSha } : i,
+            const approvedBase = readCrewCaps(stateRoot(), item.id)?.baseRefName;
+            next = withItem(next, reviewed.id, ({ approvedHead: _h, approvedBase: _b, ...i }) =>
+              report.verdict === 'approve'
+                ? { ...i, approvedHead: report.headSha, approvedBase }
+                : i,
             );
           }
         }
         const limitTarget =
-          report.status === 'done' && report.verdict === 'changes_requested'
+          report.status === 'done' &&
+          report.verdict === 'changes_requested' &&
+          supersededBy === undefined
             ? reviewDone.target
             : undefined;
         let fixLimit = false;
@@ -573,6 +588,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ...(report.verdict === undefined ? {} : { verdict: report.verdict }),
           ...(report.reviews === undefined ? {} : { reviews: report.reviews }),
           ...(reviewDone.skipped.length === 0 ? {} : { skipped: reviewDone.skipped }),
+          ...(supersededBy === undefined ? {} : { supersededBy }),
           ...(fixLimit ? { fixLimit } : {}),
           ...(lessonsProposed > 0 ? { lessonsProposed } : {}),
         });
@@ -598,9 +614,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           const view = await viewPr({ pr, repo }, ports.gh);
           if (typeof view === 'string') throw new Error(view);
           const problem = await approvalProblem(
-            ports.gh,
+            ports,
+            approvalCheckout(project, config, repo),
             { repo, pr },
-            item.approvedHead,
+            { head: item.approvedHead, base: item.approvedBase },
             view.head,
           );
           if (problem !== undefined) throw new Error(problem);
@@ -664,7 +681,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 stateRoot: root,
                 log,
                 hold,
-                mergeAllowed: (entry, head) => boardBlocksMerge(project, entry, head, ports),
+                mergeAllowed: (entry, head) =>
+                  boardBlocksMerge(project, config, entry, head, ports),
                 takeNext: () => takeNextPending(root),
                 onDone: (d) => applyQueueResults(project, [d], ports, stderr),
               },
@@ -1134,6 +1152,7 @@ function refuseNativeQueue(config: StudioConfig): void {
  */
 async function boardBlocksMerge(
   project: string,
+  config: StudioConfig,
   entry: QueueEntry,
   head: string,
   ports: Ports,
@@ -1149,7 +1168,18 @@ async function boardBlocksMerge(
   );
   if (item === undefined) return 'the pull request has no board item';
   if (item.status !== 'queued') return `board item ${item.id} is ${item.status}`;
-  return approvalProblem(ports.gh, entry, item.approvedHead, head);
+  return approvalProblem(
+    ports,
+    approvalCheckout(project, config, entry.repo),
+    entry,
+    { head: item.approvedHead, base: item.approvedBase },
+    head,
+  );
+}
+
+/** The owner's checkout tracks the primary repo; another repo is reached by its URL. */
+function approvalCheckout(project: string, config: StudioConfig, repo: string) {
+  return { dir: project, remote: repo === config.primaryRepo ? 'origin' : githubHttpsUrl(repo) };
 }
 
 const doneMatches = (d: QueueDone, item: WorkItem): boolean =>

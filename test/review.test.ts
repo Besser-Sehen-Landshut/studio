@@ -57,7 +57,7 @@ describe('reviewTarget', () => {
   );
 });
 
-const PR_HEAD = { headRefOid: 'a'.repeat(40), isCrossRepository: false };
+const PR_HEAD = { headRefOid: 'a'.repeat(40), baseRefName: 'main', isCrossRepository: false };
 
 describe('readPrFacts', () => {
   const target = { repo: 'org/app', pr: 7 };
@@ -75,6 +75,7 @@ describe('readPrFacts', () => {
       lines: 5,
       complete: true,
       head: PR_HEAD.headRefOid,
+      base: 'main',
       crossRepository: false,
     });
   });
@@ -216,6 +217,7 @@ describe('checkReviewCaps', () => {
     mandatory: ['diff-review', 'spec-check', 'security'],
     reviewsTarget: 'org/app#7',
     headRefOid: PR_HEAD.headRefOid,
+    baseRefName: 'main',
   };
   const report = (over = {}) => ({
     status: 'done' as const,

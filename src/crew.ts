@@ -60,7 +60,7 @@ import {
 import { PAUSED_LINE, readPause } from './pause.js';
 import type { Ports } from './ports.js';
 import { newReportName } from './report.js';
-import { renderReviewRoutine } from './review.js';
+import { readCrewCaps, renderReviewRoutine } from './review.js';
 import { readRoleMemory } from './role-memory.js';
 import { searchSolutions } from './solutions.js';
 import { readCrewRecords } from './state.js';
@@ -1106,6 +1106,19 @@ async function launchCrewLocked(
   const recheck = (): void => {
     if (!lock.owned()) throw new Error('the launch lock was lost; refusing to launch, try again');
     refuseIfRunning(stateRoot, item, ports);
+    // Two reviews of one pull request at a time could overwrite each other's verdict.
+    const target = forItem.review?.target;
+    if (target !== undefined) {
+      for (const [other, crew] of Object.entries(readCrewRecords(stateRoot))) {
+        if (
+          other !== item.id &&
+          readCrewCaps(stateRoot, other)?.reviewsTarget === target &&
+          ports.claude.alive(crew.pid)
+        ) {
+          throw new Error(`${other} is still reviewing ${target}; collect or stop it first`);
+        }
+      }
+    }
     const again = readLimits(ownerRoot);
     if (!again.ok) throw new Error(`${join(ownerRoot, 'limits.json')} is unreadable; refusing`);
     const parkedNow = activeParks(again.labels, ports.clock.now());

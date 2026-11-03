@@ -93,7 +93,7 @@ const itemYaml = (s: ItemSpec): string =>
     ...(s.approvedHead === null ||
     (s.approvedHead === undefined && (s.status !== 'in_review' || !s.pr))
       ? []
-      : [`    approved_head: ${s.approvedHead ?? HEAD}`]),
+      : [`    approved_head: ${s.approvedHead ?? HEAD}`, '    approved_base: main']),
     ...(s.ownerOnly ? ['    owner_only: true'] : []),
     ...(s.notes ? [`    notes: ${JSON.stringify(s.notes)}`] : []),
     '    history: []',
@@ -149,7 +149,11 @@ function fakeGh(handler: (line: string) => GhReply | undefined = () => undefined
     async run(args) {
       const line = args.join(' ');
       calls.push(line);
-      const r = handler(line);
+      const r =
+        handler(line) ??
+        (line.endsWith('--json baseRefName')
+          ? { stdout: JSON.stringify({ baseRefName: 'main' }) }
+          : undefined);
       if (!r) throw new Error(`unscripted gh call: ${line}`);
       return { code: r.code ?? 0, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
     },
@@ -218,7 +222,13 @@ const writeReport = (fx: Fx, id: string, front: string) => {
 const writeReviewCaps = (
   fx: Fx,
   id: string,
-  body: unknown = { analyzers: [], mandatory: [], reviewsTarget: 'org/app#9', headRefOid: HEAD },
+  body: unknown = {
+    analyzers: [],
+    mandatory: [],
+    reviewsTarget: 'org/app#9',
+    headRefOid: HEAD,
+    baseRefName: 'main',
+  },
 ) => writeStateFile(fx.state, join(fx.state, 'briefs', `${id}.caps.json`), JSON.stringify(body));
 
 /** A gh that answers the head lookup collect makes for a finished review. */
@@ -483,6 +493,7 @@ describe('studio CLI', () => {
     const { gh } = fakeGh(() => ({
       stdout: JSON.stringify({
         headRefOid: HEAD,
+        baseRefName: 'main',
         headRefName: 'studio/APP-1',
         headRepository: { name: 'app' },
         headRepositoryOwner: { login: 'evil' },
@@ -709,7 +720,12 @@ describe('studio CLI', () => {
       if (l.startsWith('pr update-branch')) return {};
       if (l.startsWith('pr view 5')) {
         return {
-          stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN', mergeable: 'MERGEABLE' }),
+          stdout: JSON.stringify({
+            headRefOid: HEAD,
+            baseRefName: 'main',
+            state: 'OPEN',
+            mergeable: 'MERGEABLE',
+          }),
         };
       }
       if (l.startsWith('pr checks 5'))
@@ -984,6 +1000,8 @@ describe('studio CLI', () => {
         if (l.startsWith('pr update-branch') || l.startsWith('pr merge 5')) return {};
         return extra(l);
       });
+    const REVIEW = (verdict: string, id = 'APP-1') =>
+      `status: done\nitem: ${id}\nverdict: ${verdict}\nreviews: org/app#9\nhead_sha: ${HEAD}`;
     const queueWith = (approvedHead: string | null) =>
       makeFx([{ id: 'APP-1', status: 'in_review', pr: 5, approvedHead }]);
 
@@ -1021,7 +1039,34 @@ describe('studio CLI', () => {
       expect(statusOf(fx, 'APP-1')?.status).toBe('in_review');
     });
 
-    it("queue run merges the queue's own branch update of the approved head", async () => {
+    const retargeted = (l: string): GhReply | undefined =>
+      l.endsWith('--json baseRefName')
+        ? { stdout: JSON.stringify({ baseRefName: 'release' }) }
+        : undefined;
+
+    it('queue add refuses a pull request moved to another base', async () => {
+      const fx = queueWith(HEAD);
+      const r = await cli(
+        fx,
+        fakePorts(headIs(HEAD, retargeted).gh).ports,
+        'queue',
+        'add',
+        'org/app#5',
+      );
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/base release.*review it again/);
+    });
+
+    it('queue run refuses a pull request moved to another base after queue add', async () => {
+      const fx = queueWith(HEAD);
+      await cli(fx, fakePorts(headIs(HEAD).gh).ports, 'queue', 'add', 'org/app#5');
+      const { gh, calls } = headIs(HEAD, retargeted);
+      await cli(fx, fakePorts(gh).ports, 'queue', 'run');
+      expect(calls.some((c) => c.startsWith('pr merge'))).toBe(false);
+      expect(statusOf(fx, 'APP-1')?.status).toBe('in_review');
+    });
+
+    it('queue run merges a commit that passes the whole check on top of the approved head', async () => {
       const fx = queueWith(HEAD);
       await cli(fx, fakePorts(headIs(HEAD).gh).ports, 'queue', 'add', 'org/app#5');
       const base = 'c'.repeat(40);
@@ -1035,20 +1080,107 @@ describe('studio CLI', () => {
             }),
           };
         }
-        if (l.startsWith('pr view 5 --repo org/app --json baseRefName')) {
-          return { stdout: JSON.stringify({ baseRefName: 'main' }) };
-        }
         if (l.startsWith(`api repos/org/app/compare/main...${base}`)) {
           return { stdout: JSON.stringify({ status: 'behind' }) };
         }
         return undefined;
       });
-      await cli(fx, fakePorts(gh).ports, 'queue', 'run');
+      // The tree comparison itself runs with real git in queue-approval.test.ts.
+      const { ports } = fakePorts(gh);
+      const git = ports.git;
+      const sameTree = {
+        run: async (cwd: string, args: string[]) =>
+          args.includes('merge-tree') || args.includes('--verify')
+            ? 'd'.repeat(40)
+            : args.includes('fetch')
+              ? ''
+              : git.run(cwd, args),
+      };
+      await cli(fx, { ...ports, git: sameTree }, 'queue', 'run');
       expect(calls.some((c) => c.startsWith('pr merge 5'))).toBe(true);
     });
 
-    const REVIEW = (verdict: string) =>
-      `status: done\nitem: APP-1\nverdict: ${verdict}\nreviews: org/app#9\nhead_sha: ${HEAD}`;
+    it('an approval also stores the base it was given for', async () => {
+      const fx = makeFx([
+        { id: 'APP-1', status: 'assigned', type: 'review' },
+        { id: 'APP-2', status: 'in_review', pr: 9, approvedHead: null },
+      ]);
+      writeReviewCaps(fx, 'APP-1');
+      writeReport(fx, 'APP-1', REVIEW('approve'));
+      await cli(fx, fakePorts(reviewGh().gh).ports, 'collect', 'APP-1');
+      expect(statusOf(fx, 'APP-2')?.approvedBase).toBe('main');
+    });
+
+    describe('only the review started last counts', () => {
+      const record = (item: string, startedAt: string) => ({
+        name: `crew-${item}`,
+        item,
+        role: 'reviewer',
+        pid: 999999,
+        log: '/x',
+        startedAt,
+      });
+      const collectOlder = async (verdict: string, approvedHead: string | null) => {
+        const fx = makeFx([
+          { id: 'APP-1', status: 'assigned', type: 'review' },
+          { id: 'APP-3', status: 'assigned', type: 'review' },
+          { id: 'APP-2', status: 'in_review', pr: 9, approvedHead },
+        ]);
+        writeReviewCaps(fx, 'APP-1');
+        writeReviewCaps(fx, 'APP-3');
+        writeStateFile(
+          fx.state,
+          join(fx.state, 'crew.json'),
+          JSON.stringify({
+            'APP-1': record('APP-1', '2026-10-30T08:00:00.000Z'),
+            'APP-3': record('APP-3', '2026-10-30T09:00:00.000Z'),
+          }),
+        );
+        const { ports } = fakePorts(reviewGh().gh);
+        const dead = { ...ports, claude: { ...ports.claude, alive: () => false } };
+        writeReport(fx, 'APP-1', REVIEW(verdict));
+        const r = await cli(fx, dead, 'collect', 'APP-1');
+        return { fx, r, dead };
+      };
+
+      it('an older approval changes nothing and says so', async () => {
+        const { fx, r } = await collectOlder('approve', null);
+        expect(r.code).toBe(0);
+        expect(JSON.parse(r.out).supersededBy).toBe('APP-3');
+        expect(statusOf(fx, 'APP-2')?.approvedHead).toBeUndefined();
+        expect(statusOf(fx, 'APP-1')?.status).toBe('merged');
+      });
+      it('an older request for changes takes nothing back either', async () => {
+        const { fx } = await collectOlder('changes_requested', HEAD);
+        expect(statusOf(fx, 'APP-2')?.approvedHead).toBe(HEAD);
+      });
+      it('the newer one counts, in either order', async () => {
+        const { fx, dead } = await collectOlder('changes_requested', null);
+        writeReport(fx, 'APP-3', REVIEW('approve', 'APP-3'));
+        await cli(fx, dead, 'collect', 'APP-3');
+        expect(statusOf(fx, 'APP-2')?.approvedHead).toBe(HEAD);
+      });
+      it('a review with no record of its start counts as older than one that has it', async () => {
+        const fx = makeFx([
+          { id: 'APP-1', status: 'assigned', type: 'review' },
+          { id: 'APP-3', status: 'merged', type: 'review' },
+          { id: 'APP-2', status: 'in_review', pr: 9, approvedHead: null },
+        ]);
+        writeReviewCaps(fx, 'APP-1');
+        writeReviewCaps(fx, 'APP-3');
+        writeStateFile(
+          fx.state,
+          join(fx.state, 'crew.json'),
+          JSON.stringify({ 'APP-3': record('APP-3', '2026-10-30T09:00:00.000Z') }),
+        );
+        const { ports } = fakePorts(reviewGh().gh);
+        writeReport(fx, 'APP-1', REVIEW('approve'));
+        const dead = { ...ports, claude: { ...ports.claude, alive: () => false } };
+        await cli(fx, dead, 'collect', 'APP-1');
+        expect(statusOf(fx, 'APP-2')?.approvedHead).toBeUndefined();
+      });
+    });
+
     const collectReview = async (verdict: string, approvedHead: string | null) => {
       const fx = makeFx([
         { id: 'APP-1', status: 'assigned', type: 'review' },
@@ -1130,6 +1262,7 @@ describe('collect holds a review to what its brief asked', () => {
     mandatory: ['diff-review', 'spec-check', 'security'],
     reviewsTarget: 'org/app#9',
     headRefOid: HEAD,
+    baseRefName: 'main',
   };
   const APPROVE = `status: done\nitem: APP-1\nverdict: approve\nreviews: org/app#9\nhead_sha: ${HEAD}\nmutation_probe: "red: t1"`;
   const FULL = `${APPROVE}\nanalyzers:\n  diff-review: pass\n  spec-check: pass\n  security: findings\n  motion: "skipped: no source"`;
@@ -1401,6 +1534,7 @@ describe('a review can only act on its own pull request', () => {
       mandatory: [],
       reviewsTarget: 'org/app#9',
       headRefOid: HEAD,
+      baseRefName: 'main',
     });
     writeReport(
       fx,
@@ -1540,6 +1674,7 @@ describe('collect reads only the report this run was told to write', () => {
     mandatory: ['diff-review'],
     reviewsTarget: 'org/app#9',
     headRefOid: HEAD,
+    baseRefName: 'main',
   };
   const reports = (fx: Fx) => join(fx.state, 'clones', 'APP-1', '.studio', 'reports');
   const setup = () => {

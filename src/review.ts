@@ -22,11 +22,13 @@ export interface PrFacts {
   complete: boolean;
   /** The commit these facts describe; read in the same call, so they belong together. */
   head: string;
+  base: string;
   crossRepository: boolean;
 }
 
 const prSchema = z.object({
   headRefOid: z.string().regex(/^[0-9a-f]{40,64}$/i),
+  baseRefName: z.string().min(1),
   isCrossRepository: z.boolean(),
   changedFiles: z.number().int().nonnegative(),
   files: z.array(
@@ -52,14 +54,14 @@ export async function readPrFacts(
         '--repo',
         target.repo,
         '--json',
-        'files,changedFiles,headRefOid,isCrossRepository',
+        'files,changedFiles,headRefOid,baseRefName,isCrossRepository',
       ],
       { timeoutMs: GH_TIMEOUT_MS },
     );
     if (r.code !== 0) return undefined;
     const parsed = prSchema.safeParse(JSON.parse(r.stdout));
     if (!parsed.success) return undefined;
-    const { files, changedFiles, headRefOid, isCrossRepository } = parsed.data;
+    const { files, changedFiles, headRefOid, baseRefName, isCrossRepository } = parsed.data;
     return {
       files: files.map((f) => f.path),
       lines: files
@@ -67,6 +69,7 @@ export async function readPrFacts(
         .reduce((sum, f) => sum + f.additions + f.deletions, 0),
       complete: files.length >= changedFiles,
       head: headRefOid,
+      base: baseRefName,
       crossRepository: isCrossRepository,
     };
   } catch {
@@ -165,6 +168,8 @@ export const crewCapsSchema = z.strictObject({
   reviewsTarget: z.string().optional(),
   /** The head the tier and the analyzers were chosen for. */
   headRefOid: z.string().optional(),
+  /** The base branch the pull request had then; an approval holds only for it. */
+  baseRefName: z.string().optional(),
   /** Ids launch could not provide, for the lead: they never count as a pass. */
   skipped: z.array(z.string()).optional(),
 });
@@ -186,6 +191,24 @@ export function readCrewCaps(stateRoot: string, id: string): CrewCaps | undefine
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Another review of `target` started at the same time as this one or later, from their crew records
+ * and launch records; only the one started last counts. A review with no start of its own is older.
+ */
+export function newerReview(
+  stateRoot: string,
+  id: string,
+  target: string,
+  records: Record<string, { startedAt: string }>,
+): string | undefined {
+  const mine = records[id]?.startedAt;
+  for (const [other, record] of Object.entries(records)) {
+    if (other === id || readCrewCaps(stateRoot, other)?.reviewsTarget !== target) continue;
+    if (mine === undefined || !(Date.parse(record.startedAt) < Date.parse(mine))) return other;
+  }
+  return undefined;
 }
 
 type ReviewReport = Pick<
@@ -214,6 +237,7 @@ export function checkReviewCaps(
   // The tier and the analyzers belong to the head at launch: a later push could need more of them.
   if (
     caps.headRefOid === undefined ||
+    caps.baseRefName === undefined ||
     report.headSha?.toLowerCase() !== caps.headRefOid.toLowerCase()
   ) {
     throw new Error(

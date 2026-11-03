@@ -99,6 +99,7 @@ describe('crew loop with a fake claude', () => {
           JSON.stringify({
             headRefOid: git(cloneOf(id), 'rev-parse', 'HEAD'),
             headRefName: `studio/${id}`,
+            baseRefName: 'main',
             isCrossRepository: false,
             headRepository: { name: 'app' },
             headRepositoryOwner: { login: 'org' },
@@ -214,7 +215,7 @@ describe('crew loop with a fake claude', () => {
       boardFile,
       readFileSync(boardFile, 'utf8').replace(
         /^(\s*)pr: 1$/m,
-        `$1pr: 1\n$1approved_head: ${approved}`,
+        `$1pr: 1\n$1approved_head: ${approved}\n$1approved_base: main`,
       ),
     );
 
