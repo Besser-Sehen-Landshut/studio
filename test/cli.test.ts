@@ -1187,6 +1187,217 @@ describe('studio CLI', () => {
       });
     });
 
+    describe('no state needs a hand edit of the board', () => {
+      /** A crew launched, then a process picture at a later moment. */
+      const launched = async (
+        over: { alive?: boolean; identity?: () => string | undefined } = {},
+        spec: { id: string; status?: string; type?: string; notes?: string[] } = { id: 'APP-1' },
+      ) => {
+        const fx = makeFx([spec]);
+        const { ports, stopped } = fakePorts(fakeGh().gh);
+        expect((await cli(fx, ports, 'launch', spec.id)).code).toBe(0);
+        const later = {
+          ...ports,
+          claude: {
+            ...ports.claude,
+            alive: () => over.alive ?? true,
+            identity: async () => (over.identity ?? (() => 'start-4242'))(),
+          },
+        };
+        return { fx, later, stopped };
+      };
+      const LEADER_GONE = { identity: () => undefined };
+      const REUSED = { identity: () => 'start-other' };
+      const REPORT = `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 1`;
+      const prGh = fakeGh(() => ({
+        stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-1', ...OWN }),
+      }));
+      const withPrGh = (later: Ports): Ports => ({ ...later, gh: prGh.gh });
+
+      describe('studio drop', () => {
+        it('drops an item whose crew crashed with no report, and the PR is free again', async () => {
+          const fx = makeFx([
+            { id: 'APP-1', status: 'in_review', pr: 5 },
+            { id: 'APP-9', status: 'assigned', type: 'review', notes: ['review org/app#5'] },
+          ]);
+          const { ports } = fakePorts(headIs(HEAD).gh);
+          const blocked = await cli(fx, ports, 'queue', 'add', 'org/app#5');
+          expect(blocked.err).toContain('studio drop APP-9');
+          const r = await cli(fx, ports, 'drop', 'APP-9');
+          expect(r.code).toBe(0);
+          expect(statusOf(fx, 'APP-9')?.status).toBe('dropped');
+          expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+        });
+        it('refuses while the crew runs, naming stop', async () => {
+          const { fx, later, stopped } = await launched();
+          const r = await cli(fx, later, 'drop', 'APP-1');
+          expect(r.code).toBe(1);
+          expect(r.err).toContain('studio stop APP-1');
+          expect(stopped).toEqual([]);
+          expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+        });
+        it('refuses a crew that cannot be verified, naming the way out', async () => {
+          const { fx, later } = await launched(LEADER_GONE);
+          const r = await cli(fx, later, 'drop', 'APP-1');
+          expect(r.code).toBe(1);
+          expect(r.err).toContain('--release');
+        });
+        it('works when another process holds the pid', async () => {
+          const { fx, later, stopped } = await launched(REUSED);
+          expect((await cli(fx, later, 'drop', 'APP-1')).code).toBe(0);
+          expect(stopped).toEqual([]);
+        });
+        it('works after a stop', async () => {
+          const { fx, later } = await launched({ alive: false });
+          await cli(fx, later, 'stop', 'APP-1');
+          expect((await cli(fx, later, 'drop', 'APP-1')).code).toBe(0);
+        });
+        it('refuses a finished item, a crew session and a wrong call', async () => {
+          const fx = makeFx([{ id: 'APP-1', status: 'merged' }]);
+          const { ports } = fakePorts(fakeGh().gh);
+          expect((await cli(fx, ports, 'drop', 'APP-1')).code).toBe(1);
+          expect((await cli(fx, ports, 'drop')).code).toBe(1);
+          fx.env.STUDIO_ROLE = 'crew';
+          const crew = makeFx([{ id: 'APP-2' }]);
+          crew.env.STUDIO_ROLE = 'crew';
+          expect((await cli(crew, ports, 'drop', 'APP-2')).code).toBe(1);
+          expect(statusOf(crew, 'APP-2')?.status).toBe('ready');
+        });
+        it('refuses while the board is locked', async () => {
+          const fx = makeFx([{ id: 'APP-1' }]);
+          const { ports } = fakePorts(fakeGh().gh);
+          await cli(fx, ports, 'board');
+          mkdirSync(fx.state, { recursive: true });
+          const lock = acquireStateLock(fx.state, 'board.lock', {
+            now: new Date(),
+            heartbeatStaleMs: 60_000,
+          });
+          try {
+            const r = await cli(fx, ports, 'drop', 'APP-1');
+            expect(r.err).toMatch(/board\.lock/);
+          } finally {
+            lock?.release();
+          }
+        }, 15_000);
+      });
+
+      describe('a leader that is gone while its group lives', () => {
+        it('stop refuses, gives no signal and names the way out with the pid', async () => {
+          const { fx, later, stopped } = await launched(LEADER_GONE);
+          const r = await cli(fx, later, 'stop', 'APP-1');
+          expect(r.code).toBe(1);
+          expect(r.err).toContain('--release');
+          expect(r.err).toContain('4242');
+          expect(stopped).toEqual([]);
+        });
+        it('stop --release closes the record with no signal and says what to do by hand', async () => {
+          const { fx, later, stopped } = await launched(LEADER_GONE);
+          const r = await cli(fx, later, 'stop', 'APP-1', '--release');
+          expect(r.code).toBe(0);
+          expect(stopped).toEqual([]);
+          expect(r.err).toContain('pgrep -g 4242');
+          const crew = JSON.parse(readFileSync(join(fx.state, 'crew.json'), 'utf8'));
+          expect(typeof crew['APP-1'].stoppedAt).toBe('string');
+        });
+        it('--release never signals a process it can verify: that is a plain stop', async () => {
+          const { fx, later, stopped } = await launched();
+          const r = await cli(fx, later, 'stop', 'APP-1', '--release');
+          expect(r.code).toBe(0);
+          expect(stopped).toEqual([4242]);
+        });
+        it('collect refuses before a release and names it', async () => {
+          const { fx, later } = await launched(LEADER_GONE);
+          writeReport(fx, 'APP-1', REPORT);
+          const r = await cli(fx, withPrGh(later), 'collect', 'APP-1');
+          expect(r.code).toBe(1);
+          expect(r.err).toContain('--release');
+        });
+        it('collect finishes after a release and repeats the pid and the handgrip', async () => {
+          const { fx, later } = await launched(LEADER_GONE);
+          writeReport(fx, 'APP-1', REPORT);
+          await cli(fx, later, 'stop', 'APP-1', '--release');
+          const r = await cli(fx, withPrGh(later), 'collect', 'APP-1');
+          expect(r.err).toContain('pgrep -g 4242');
+          expect(r.code).toBe(0);
+          expect(statusOf(fx, 'APP-1')?.status).toBe('in_review');
+        });
+        it('drop goes through after a release', async () => {
+          const { fx, later } = await launched(LEADER_GONE);
+          await cli(fx, later, 'stop', 'APP-1', '--release');
+          const r = await cli(fx, later, 'drop', 'APP-1');
+          expect(r.code).toBe(0);
+        });
+      });
+
+      describe('a pid another process holds now', () => {
+        it('collect goes on without a stop, and signals nothing', async () => {
+          const { fx, later, stopped } = await launched(REUSED);
+          writeReport(fx, 'APP-1', REPORT);
+          const r = await cli(fx, withPrGh(later), 'collect', 'APP-1');
+          expect(r.code).toBe(0);
+          expect(stopped).toEqual([]);
+        });
+        it('collect goes on after a stop', async () => {
+          const { fx, later, stopped } = await launched(REUSED);
+          expect((await cli(fx, later, 'stop', 'APP-1')).code).toBe(0);
+          writeReport(fx, 'APP-1', REPORT);
+          expect((await cli(fx, withPrGh(later), 'collect', 'APP-1')).code).toBe(0);
+          expect(stopped).toEqual([]);
+        });
+      });
+
+      it('a crew that was stopped but still lives is still running for collect', async () => {
+        const { fx, later } = await launched();
+        await cli(fx, later, 'stop', 'APP-1');
+        writeReport(fx, 'APP-1', REPORT);
+        const r = await cli(fx, withPrGh(later), 'collect', 'APP-1');
+        expect(r.code).toBe(1);
+        expect(r.err).toMatch(/still running/);
+      });
+    });
+
+    describe('other board writers take the lock', () => {
+      const held = (fx: Fx) =>
+        acquireStateLock(fx.state, 'board.lock', { now: new Date(), heartbeatStaleMs: 60_000 });
+      it('escalate refuses while the board is locked', async () => {
+        const fx = makeFx([{ id: 'APP-1' }]);
+        writeFileSync(
+          join(fx.project, '.studio', 'studio.yaml'),
+          STUDIO_YAML.replace(
+            'builder: { model: sonnet, wip: 2 }',
+            'builder: { model: sonnet, wip: 2, escalate_to: opus }',
+          ),
+        );
+        const { ports } = fakePorts(fakeGh().gh);
+        await cli(fx, ports, 'board');
+        const lock = held(fx);
+        try {
+          const r = await cli(fx, ports, 'escalate', 'APP-1');
+          expect(r.code).toBe(1);
+          expect(r.err).toMatch(/board\.lock/);
+        } finally {
+          lock?.release();
+        }
+        expect((await cli(fx, ports, 'escalate', 'APP-1')).code).toBe(0);
+        expect(statusOf(fx, 'APP-1')?.model).toBe('opus');
+      }, 15_000);
+      it('a queue result waits for the lock; the next run applies what it could not', async () => {
+        const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+        let lock: ReturnType<typeof held>;
+        const { gh } = passingGh((l) => {
+          if (l.startsWith('pr merge 5')) lock = held(fx);
+        });
+        const { ports } = fakePorts(gh);
+        await cli(fx, ports, 'queue', 'add', 'org/app#5');
+        const run = await cli(fx, ports, 'queue', 'run');
+        expect(run.err).toMatch(/board\.lock/);
+        expect(statusOf(fx, 'APP-1')?.status).toBe('queued');
+        lock?.release();
+        await cli(fx, ports, 'queue', 'run');
+        expect(statusOf(fx, 'APP-1')?.status).toBe('merged');
+      }, 15_000);
+    });
+
     describe('the board is read again under its lock', () => {
       it('collect keeps what changed while it waited for GitHub', async () => {
         const fx = makeFx([

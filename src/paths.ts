@@ -390,14 +390,6 @@ function staleReason(
   return age >= heartbeatStaleMs ? `last heartbeat ${minutes(age)} ago` : undefined;
 }
 
-/**
- * Exclusive lock file `<root>/<name>` holding `{pid, startedAt, heartbeat, token}`, created with
- * O_CREAT|O_EXCL|O_NOFOLLOW (an existing entry, a symlink included, is never followed or
- * overwritten). An existing lock is stale only when its pid is not running or its heartbeat is
- * older than `heartbeatStaleMs`; then it is broken (moved aside, checked, removed) and the reason
- * reported through `broke`. Otherwise undefined is returned. Anything at the lock path that is not
- * a regular file is refused. A lock that vanishes between the create and the check is retried.
- */
 const BOARD_LOCK = 'board.lock';
 const BOARD_LOCK_STALE_MS = 30_000;
 
@@ -428,6 +420,14 @@ export async function withBoardLock<T>(
   }
 }
 
+/**
+ * Exclusive lock file `<root>/<name>` holding `{pid, startedAt, heartbeat, token}`, created with
+ * O_CREAT|O_EXCL|O_NOFOLLOW (an existing entry, a symlink included, is never followed or
+ * overwritten). An existing lock is stale only when its pid is not running or its heartbeat is
+ * older than `heartbeatStaleMs`; then it is broken (moved aside, checked, removed) and the reason
+ * reported through `broke`. Otherwise undefined is returned. Anything at the lock path that is not
+ * a regular file is refused. A lock that vanishes between the create and the check is retried.
+ */
 export function acquireStateLock(
   root: string,
   name: string,

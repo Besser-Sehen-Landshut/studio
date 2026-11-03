@@ -3,6 +3,24 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.5.1] - 2026-11-03
+
+No state should need a hand edit of the board before the first real crew run. Not tagged yet; the
+maintainers tag after the merge.
+
+### Added
+
+- `studio drop <id>` ends an item. It refuses while its crew runs and names `studio stop`.
+- `studio stop <id> --release` closes the record of a crew that cannot be verified, with no signal,
+  and prints the pid and what to check by hand. Use it for a process group whose leader ended.
+
+### Changed
+
+- `collect`, a relaunch and `drop` go on when another process holds the crew's pid: that crew is gone.
+  An unverified crew blocks them until it is released. No signal goes to a process without proof.
+- The refusal for an open review names `studio drop`.
+- `escalate` and applying queue results read the board and write it under `board.lock`.
+
 ## [0.5.0] - 2026-11-01
 
 Stage (c): capabilities, tiered review, sources contract, role memory, model per type, more metrics.
@@ -42,8 +60,8 @@ Not tagged or published as a GitHub release yet; the maintainers tag after the m
 - A review launch refuses a pull request from a fork, or one it cannot read. An approval counts only
   for the head the review was launched on.
 - `queue add` needs an approval for the current head, and `queue run` checks again before the merge.
-  `collect` stores the approved head and base on the item that holds the pull request (`approved_head`,
-  `approved_base`). Another base refuses. Besides the approved head, one commit counts: it only merges
+  `collect` stores the approved head and base on the item that holds the pull request
+  (`approved_head`, `approved_base`). Another base refuses. Besides the approved head, one commit counts: it only merges
   the base into that head, GitHub signed it, and its tree equals a local `git merge-tree`. A conflict
   resolved by hand or a second update needs a new review. Pull requests approved or queued before
   this need a new review.

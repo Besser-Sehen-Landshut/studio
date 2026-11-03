@@ -914,13 +914,41 @@ export async function launchCrew(
  * Two crews on one item would share the clone and the report: refuse while one still runs. A
  * crew.json that cannot be read refuses too (fail closed). Returns the item's earlier record.
  */
-function refuseIfRunning(stateRoot: string, item: WorkItem, ports: Ports): CrewRecord | undefined {
+/**
+ * Whether a crew record still holds its item. `running`: its own process, verified. `unverified`:
+ * something lives on that pid that cannot be shown to be this crew, for example a group whose leader
+ * ended, and nobody has released it yet. A pid another process holds now holds nothing.
+ */
+export async function crewHold(
+  rec: CrewRecord,
+  ports: Ports,
+): Promise<'running' | 'unverified' | undefined> {
+  const process = await crewProcess(rec, ports);
+  if (process === 'verified') return 'running';
+  return process === 'unknown' && rec.stoppedAt === undefined ? 'unverified' : undefined;
+}
+
+/** The refusal for an unverified crew: nothing gets a signal, the owner decides. */
+export const unverifiedRefusal = (rec: CrewRecord): string =>
+  `crew ${rec.name} may be still running (pid ${rec.pid}) but cannot be verified, so it gets no signal; check it by hand, then run studio stop ${rec.item} --release`;
+
+/** What the owner does about a process Studio will not signal. */
+export const unverifiedHandgrip = (rec: CrewRecord): string =>
+  `crew ${rec.name} (pid ${rec.pid}) got no signal, because it cannot be verified as that crew. Look with pgrep -g ${rec.pid}; if those processes are this crew's, stop them with kill -- -${rec.pid}.`;
+
+async function refuseIfRunning(
+  stateRoot: string,
+  item: WorkItem,
+  ports: Ports,
+): Promise<CrewRecord | undefined> {
   const previous = readCrewRecords(stateRoot)[item.id];
   if (previous !== undefined) {
     if (!Number.isInteger(previous.pid) || previous.pid <= 0) {
       throw new Error(`crew record for ${item.id} has no valid pid; refusing to launch`);
     }
-    if (ports.claude.alive(previous.pid)) {
+    const hold = await crewHold(previous, ports);
+    if (hold === 'unverified') throw new Error(unverifiedRefusal(previous));
+    if (hold === 'running') {
       throw new Error(
         `crew ${previous.name} for ${item.id} is still running (pid ${previous.pid}); stop it first`,
       );
@@ -997,7 +1025,7 @@ async function launchCrewLocked(
   }
   // Two crews on one item would share the clone and the report: refuse while one still runs.
   // A crew.json that cannot be read refuses too (fail closed).
-  const previous = refuseIfRunning(stateRoot, item, ports);
+  const previous = await refuseIfRunning(stateRoot, item, ports);
   const limits = readLimits(ownerRoot);
   if (!limits.ok) {
     throw new Error(`${join(ownerRoot, 'limits.json')} is unreadable; refusing to launch`);
@@ -1108,7 +1136,7 @@ async function launchCrewLocked(
   /** Everything the pick relied on, read again from the files: the last word before a start. */
   const recheck = async (): Promise<void> => {
     if (!lock.owned()) throw new Error('the launch lock was lost; refusing to launch, try again');
-    refuseIfRunning(stateRoot, item, ports);
+    await refuseIfRunning(stateRoot, item, ports);
     // Two reviews of one pull request at a time could overwrite each other's verdict.
     const target = forItem.review?.target;
     if (target !== undefined) {

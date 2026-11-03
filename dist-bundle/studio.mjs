@@ -32091,13 +32091,22 @@ async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
     }
   }
 }
-function refuseIfRunning(stateRoot, item, ports) {
+async function crewHold(rec, ports) {
+  const process14 = await crewProcess(rec, ports);
+  if (process14 === "verified") return "running";
+  return process14 === "unknown" && rec.stoppedAt === void 0 ? "unverified" : void 0;
+}
+var unverifiedRefusal = (rec) => `crew ${rec.name} may be still running (pid ${rec.pid}) but cannot be verified, so it gets no signal; check it by hand, then run studio stop ${rec.item} --release`;
+var unverifiedHandgrip = (rec) => `crew ${rec.name} (pid ${rec.pid}) got no signal, because it cannot be verified as that crew. Look with pgrep -g ${rec.pid}; if those processes are this crew's, stop them with kill -- -${rec.pid}.`;
+async function refuseIfRunning(stateRoot, item, ports) {
   const previous = readCrewRecords(stateRoot)[item.id];
   if (previous !== void 0) {
     if (!Number.isInteger(previous.pid) || previous.pid <= 0) {
       throw new Error(`crew record for ${item.id} has no valid pid; refusing to launch`);
     }
-    if (ports.claude.alive(previous.pid)) {
+    const hold = await crewHold(previous, ports);
+    if (hold === "unverified") throw new Error(unverifiedRefusal(previous));
+    if (hold === "running") {
       throw new Error(
         `crew ${previous.name} for ${item.id} is still running (pid ${previous.pid}); stop it first`
       );
@@ -32155,7 +32164,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   for (const sub of ["clones", "homes", "tmp"]) {
     assertStatePath(stateRoot, join16(stateRoot, sub, item.id));
   }
-  const previous = refuseIfRunning(stateRoot, item, ports);
+  const previous = await refuseIfRunning(stateRoot, item, ports);
   const limits = readLimits(ownerRoot);
   if (!limits.ok) {
     throw new Error(`${join16(ownerRoot, "limits.json")} is unreadable; refusing to launch`);
@@ -32245,7 +32254,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   held2.lock = lock;
   const recheck = async () => {
     if (!lock.owned()) throw new Error("the launch lock was lost; refusing to launch, try again");
-    refuseIfRunning(stateRoot, item, ports);
+    await refuseIfRunning(stateRoot, item, ports);
     const target = forItem.review?.target;
     if (target !== void 0) {
       const items = existsSync3(boardPath(projectDir)) ? loadBoard(projectDir).items : [];
@@ -33300,7 +33309,7 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
     persist(state);
     if (opts.onDone) {
       try {
-        opts.onDone(done);
+        await opts.onDone(done);
       } catch (err) {
         log(`board update failed for PR ${current.pr}: ${err.message}`);
       }
@@ -34191,7 +34200,8 @@ Commands:
   state                    Refresh state.json in the state root
   pause                    Owner only: nothing new starts or merges until resume
   resume                   Owner only: lift the pause
-  stop <id>                Stop a crew session
+  stop <id> [--release]    Stop a crew session; --release closes the record of one it cannot verify
+  drop <id>                End an item; refuses while its crew runs
   metrics                  Lead time, deploy frequency, change failure rate, time to restore
   deploy record [<sha>]    Record a production deploy
   incident open <id>       Record that a deploy broke something
@@ -34482,10 +34492,16 @@ async function runCli(argv, deps) {
           if (!Number.isInteger(record2.pid) || record2.pid <= 0) {
             throw new Error(`crew record for ${item.id} has no valid pid`);
           }
-          if (ports.claude.alive(record2.pid)) {
+          const hold = await crewHold(record2, ports);
+          if (hold === "unverified") throw new Error(unverifiedRefusal(record2));
+          if (hold === "running") {
             throw new Error(
               `crew ${record2.name} is still running (pid ${record2.pid}); collect after it exited, or stop it first`
             );
+          }
+          if (await crewProcess(record2, ports) === "unknown") {
+            stderr(`warning: ${unverifiedHandgrip(record2)}
+`);
           }
           notBefore = new Date(record2.startedAt);
           if (Number.isNaN(notBefore.getTime())) {
@@ -34690,7 +34706,7 @@ async function runCli(argv, deps) {
           };
           try {
             const state = loadQueue(root);
-            reconcileQueued(project, state, ports, stderr);
+            await reconcileQueued(project, root, state, ports, stderr);
             const before = state.done.length;
             await runQueue(
               state,
@@ -34710,7 +34726,7 @@ async function runCli(argv, deps) {
                 hold,
                 mergeAllowed: (entry, head) => boardBlocksMerge(project, root, config2, entry, head, ports),
                 takeNext: () => takeNextPending(root),
-                onDone: (d) => applyQueueResults(project, [d], ports, stderr)
+                onDone: (d) => applyQueueResults(project, root, [d], ports, stderr)
               }
             );
             const finished7 = state.done.slice(before);
@@ -34811,9 +34827,10 @@ async function runCli(argv, deps) {
         const process14 = await crewProcess(rec, ports);
         if (process14 === "invalid") throw new Error(`crew record for ${id} has no valid pid`);
         if (process14 === "unknown") {
-          throw new Error(
-            `crew ${rec.name} (pid ${rec.pid}) is alive but cannot be verified; not stopping it, check it by hand`
-          );
+          if (values.release !== true) throw new Error(unverifiedRefusal(rec));
+          refuseCrew(deps.env);
+          stderr(`warning: ${unverifiedHandgrip(rec)}
+`);
         }
         if (process14 === "verified") await ports.claude.stop(rec.pid);
         const stoppedAt = ports.clock.now().toISOString();
@@ -34828,6 +34845,23 @@ async function runCli(argv, deps) {
           stoppedAt,
           ...process14 === "verified" ? {} : { processGone: true }
         });
+        return 0;
+      }
+      case "drop": {
+        refuseCrew(deps.env);
+        if (rest.length !== 1) throw new UsageError("drop needs one item id");
+        const id = findItem(loadBoard(project), rest[0]).id;
+        const rec = readCrewRecords(stateRoot())[id];
+        const hold = rec === void 0 ? void 0 : await crewHold(rec, ports);
+        if (hold === "running") {
+          throw new Error(`crew for ${id} is still running; run studio stop ${id} first`);
+        }
+        if (hold === "unverified") throw new Error(unverifiedRefusal(rec));
+        await withBoardLock(stateRoot(), ports.clock.now(), () => {
+          const fresh = loadBoard(project);
+          saveBoard(project, transition(fresh, id, "dropped", BY, ports.clock.now()));
+        });
+        print({ item: id, status: "dropped" });
         return 0;
       }
       case "setup": {
@@ -34959,26 +34993,29 @@ async function runCli(argv, deps) {
       case "escalate": {
         refuseCrew(deps.env);
         if (rest.length !== 1) throw new UsageError("escalate needs one item id");
-        const { config: config2, board } = loadAll();
-        const item = findItem(board, rest[0]);
-        const to = config2.roles[item.role]?.escalateTo;
-        if (to === void 0) {
-          throw new Error(`role ${item.role} has no escalate_to in studio.yaml`);
-        }
-        if (item.status === "merged" || item.status === "dropped") {
-          throw new Error(`${item.id} is ${item.status}, nothing to escalate`);
-        }
-        const role = config2.roles[item.role];
-        if (resolveModel(item, role) === to) throw new Error(`${item.id} already runs on ${to}`);
-        saveBoard(
-          project,
-          withItem(board, item.id, (i2) => ({
-            ...i2,
-            model: to,
-            notes: [...i2.notes ?? [], `model escalated to ${to}`]
-          }))
-        );
-        print({ item: item.id, model: to, status: item.status });
+        const out = await withBoardLock(stateRoot(), ports.clock.now(), () => {
+          const { config: config2, board } = loadAll();
+          const item = findItem(board, rest[0]);
+          const to = config2.roles[item.role]?.escalateTo;
+          if (to === void 0) {
+            throw new Error(`role ${item.role} has no escalate_to in studio.yaml`);
+          }
+          if (item.status === "merged" || item.status === "dropped") {
+            throw new Error(`${item.id} is ${item.status}, nothing to escalate`);
+          }
+          const role = config2.roles[item.role];
+          if (resolveModel(item, role) === to) throw new Error(`${item.id} already runs on ${to}`);
+          saveBoard(
+            project,
+            withItem(board, item.id, (i2) => ({
+              ...i2,
+              model: to,
+              notes: [...i2.notes ?? [], `model escalated to ${to}`]
+            }))
+          );
+          return { item: item.id, model: to, status: item.status };
+        });
+        print(out);
         return 0;
       }
       case "metrics": {
@@ -35076,6 +35113,7 @@ function parseCli(argv) {
         project: { type: "string" },
         json: { type: "boolean" },
         write: { type: "boolean" },
+        release: { type: "boolean" },
         help: { type: "boolean" }
       },
       allowPositionals: true,
@@ -35133,7 +35171,7 @@ function refuseNativeQueue(config2) {
     );
   }
 }
-var openReviewLine = (id, target) => `review ${id} of ${target} is open: collect or drop it first`;
+var openReviewLine = (id, target) => `review ${id} of ${target} is open: run studio collect ${id}, or studio drop ${id} if it ended without a report`;
 async function boardBlocksMerge(project, root, config2, entry, head, ports) {
   let board;
   try {
@@ -35161,7 +35199,7 @@ function approvalCheckout(project, config2, repo) {
   return { dir: project, remote: repo === config2.primaryRepo ? "origin" : githubHttpsUrl(repo) };
 }
 var doneMatches = (d, item) => d.item === void 0 ? d.repo === item.repo && d.pr === item.pr : d.item === item.id;
-function reconcileQueued(project, state, ports, stderr) {
+async function reconcileQueued(project, root, state, ports, stderr) {
   const board = loadBoard(project);
   const waiting = [...state.pending, ...state.current ? [state.current] : []];
   const results = [];
@@ -35175,30 +35213,32 @@ function reconcileQueued(project, state, ports, stderr) {
     const last = state.done.filter((d) => doneMatches(d, item)).at(-1);
     if (last) results.push(last);
   }
-  applyQueueResults(project, results, ports, stderr);
+  await applyQueueResults(project, root, results, ports, stderr);
 }
-function applyQueueResults(project, done, ports, stderr) {
+async function applyQueueResults(project, root, done, ports, stderr) {
   if (done.length === 0) return;
-  let board = loadBoard(project);
   const now = ports.clock.now();
-  for (const d of done) {
-    const item = board.items.find((i2) => doneMatches(d, i2));
-    if (!item) continue;
-    if (item.status !== "queued") {
-      stderr(`warning: ${item.id} is ${item.status}, not queued; board left as is
+  await withBoardLock(root, now, () => {
+    let board = loadBoard(project);
+    for (const d of done) {
+      const item = board.items.find((i2) => doneMatches(d, i2));
+      if (!item) continue;
+      if (item.status !== "queued") {
+        stderr(`warning: ${item.id} is ${item.status}, not queued; board left as is
 `);
-      continue;
+        continue;
+      }
+      if (d.result === "merged") {
+        board = transition(board, item.id, "merged", BY, now);
+      } else {
+        board = withItem(transition(board, item.id, "in_review", BY, now), item.id, (i2) => ({
+          ...i2,
+          notes: [...i2.notes ?? [], `merge failed: ${d.reason ?? "unknown reason"}`]
+        }));
+      }
     }
-    if (d.result === "merged") {
-      board = transition(board, item.id, "merged", BY, now);
-    } else {
-      board = withItem(transition(board, item.id, "in_review", BY, now), item.id, (i2) => ({
-        ...i2,
-        notes: [...i2.notes ?? [], `merge failed: ${d.reason ?? "unknown reason"}`]
-      }));
-    }
-  }
-  saveBoard(project, board);
+    saveBoard(project, board);
+  });
 }
 var MAX_MERGED_TODAY = 200;
 function todayFrom(events, now, timezone) {
