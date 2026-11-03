@@ -32,6 +32,20 @@ const historySchema = z.strictObject({
 /** A value for `--model`: it never starts with a dash. Same rule as in config.ts (a test keeps them equal). */
 export const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
 
+/** What a crew sandbox lacks: a test that needs one of these is not run there, CI runs it. */
+export const NOT_RUN_SERVICES = ['database', 'docker', 'network', 'service'] as const;
+const plainLine = z
+  .string()
+  .min(1)
+  .max(300)
+  .regex(/^[^\p{Cc}]+$/u, 'one line of at most 300 characters');
+export const notRunHereSchema = z.strictObject({
+  command: plainLine,
+  missing: z.enum(NOT_RUN_SERVICES),
+  reason: plainLine,
+});
+export type NotRunHere = z.infer<typeof notRunHereSchema>;
+
 export const workItemSchema = z.strictObject({
   id: z.string().regex(/^[A-Z]+-\d+$/, 'must match ^[A-Z]+-\\d+$'),
   title: z.string().min(1),
@@ -58,6 +72,9 @@ export const workItemSchema = z.strictObject({
     .optional(),
   // The base branch that approval was given for.
   approvedBase: z.string().min(1).optional(),
+  // Set by `collect` from a done report: commands the crew could not run in its sandbox, which CI
+  // must cover. Crew text; a reviewer gets it as data.
+  notRunHere: z.array(notRunHereSchema).max(20).optional(),
   crew: z.string().optional(),
   notes: z.array(z.string()).optional(),
   // Drives the review tier, the analyzers and the skills (capabilities/INDEX.yaml).
@@ -174,6 +191,7 @@ const KEY_ORDER: readonly (keyof WorkItem)[] = [
   'branch',
   'approvedHead',
   'approvedBase',
+  'notRunHere',
   'crew',
   'notes',
   'risk',

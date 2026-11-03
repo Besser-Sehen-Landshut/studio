@@ -536,6 +536,7 @@ export function writeBrief(
           ...(caps.review.pullRequest === undefined
             ? {}
             : { pullRequest: caps.review.pullRequest }),
+          ...(caps.review.notRunHere === undefined ? {} : { notRunHere: caps.review.notRunHere }),
         })),
     '## Working rules',
     '',
@@ -546,19 +547,23 @@ export function writeBrief(
     // Review and research items open no PR and push nothing, so their brief carries no push or PR rule.
     ...(opensPr
       ? [
-          `- Push with an explicit refspec: \`git push -u origin HEAD:refs/heads/studio/${id}\`.`,
+          // No -u: the sandbox cannot write upstream tracking into .git/config, and git then
+          // prints an error after a push that went through.
+          `- Push with an explicit refspec and without \`-u\`: \`git push origin HEAD:refs/heads/studio/${id}\`. Check it with \`git ls-remote origin refs/heads/studio/${id}\`: its SHA must equal \`git rev-parse HEAD\`. An error about upstream tracking or \`.git/config\` after a push that this check confirms is harmless.`,
           ...(caps.prByStudio === true
             ? [
                 `- Do not open the pull request, and do not run gh at all: it cannot verify TLS in this sandbox. Give \`pr_title: "${id}: <summary>"\` in the report and write the pull request text as the report body; Studio opens the pull request from your pushed branch.`,
               ]
             : [
-                `- Open the pull request with \`gh pr create --title "${id}: <summary>" --body-file <file>\`.`,
+                `- Open the pull request with \`gh pr create --head studio/${id} --title "${id}: <summary>" --body-file <file>\`. If the report lists not_run_here commands, the pull request text lists them too.`,
               ]),
         ]
       : []),
     '- Git identity and GitHub authentication are preconfigured; do not change git config or log in.',
     '- Never merge, deploy, force-push, or touch secrets.',
-    "- Run the project's full test command; tests_run is the count from that run. If the command errors or fails, fix it or report status failed — never report a partial count.",
+    '- Tests: run everything this sandbox can run for what you changed: the tests of the package, crate or workspace member you changed, the tests of the Definition of Done, lint and format. Run the full test command too where it can run here. CI runs the full suite on your pushed branch. tests_run is the count those runs printed.',
+    '- A test that ran and failed is a failure, never not_run_here: fix it or report status failed. The same for your own new or changed tests, and for a command that errors for another reason (wrong directory, missing module, red on the unchanged checkout). Never leave out a failing test to get a green count.',
+    '- Only a test that cannot run here because a service is missing (a database, Docker, network outside the allowed hosts, another service the tests need) goes into not_run_here, with the command, the missing service and the error line as reason; status done still holds. Crews get no database and no Docker: do not try to start one.',
     '- If you are blocked: write the report with status blocked and stop. Never wait for an answer.',
     '',
     '## Report contract',
@@ -589,6 +594,7 @@ export function writeBrief(
               : 'pr: <number>',
             'head_sha: <40-hex sha of the pushed head commit>',
             'tests_run: <number of tests that ran>',
+            'not_run_here: []   # or entries { command: <command>, missing: database|docker|network|service, reason: <error line> }',
           ]),
     'lessons: []',
     'questions: []',

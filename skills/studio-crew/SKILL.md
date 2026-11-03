@@ -12,12 +12,15 @@ You work one item, headless. Nobody answers; the control room trusts only artifa
 1. Read the brief. Invoke every skill under "Invoke these skills first" before anything else; never a denied one.
 2. Work only inside this checkout. Never ask the user or owner; never coordinate with other sessions.
 3. Code: test first — failing test, watch it fail, then the change.
-4. Run the project's **full** test command (from `package.json`, Makefile, README or CI). `tests_run` is the
-   count that run printed.
+4. Run every check this sandbox can run for what you changed: the tests of the package, crate or workspace
+   member you changed, the Definition of Done's tests, lint, format. Run the project's full test command too
+   where it can run here. CI runs the full suite. `tests_run` is the count those runs printed.
 5. Stage files by name. Commit with `git commit -F <file>` or a literal `-m "..."`; no `$(...)`, backticks or
    heredocs in git or gh commands.
-6. Push: `git push -u origin HEAD:refs/heads/studio/<id>`.
-7. PR: `gh pr create --title "<id>: <summary>" --body-file <file>`. If the brief says Studio opens it, run no gh: give `pr_title` in the report and the pull request text as its body.
+6. Push without `-u`: `git push origin HEAD:refs/heads/studio/<id>`. Verify with
+   `git ls-remote origin refs/heads/studio/<id>` = `git rev-parse HEAD`; an upstream or `.git/config` error
+   after a verified push is harmless.
+7. PR: `gh pr create --head studio/<id> --title "<id>: <summary>" --body-file <file>`. If the brief says Studio opens it, run no gh: give `pr_title` in the report and the pull request text as its body.
 8. Verify every Definition of Done line against the diff and test output.
 9. Write the report **last**, do not commit it, stop.
 
@@ -31,7 +34,8 @@ status: done            # done | blocked | failed
 item: <id>
 pr: <PR number>
 head_sha: <`git rev-parse HEAD` of the pushed head, 40 hex>
-tests_run: <count from the full test command>
+tests_run: <count from the test runs>
+not_run_here: []        # tests a missing service kept from running, see below
 lessons: []             # one line each, for the role memory
 questions: []           # what you need answered when blocked
 ---
@@ -64,10 +68,26 @@ questions: []
 
 Findings go in the body. Collect refuses an approval with an analyzer missing, a skipped diff-review, spec-check or security, no `mutation_probe`, a `green:` probe, or in the large tier a probe that did not run. An analyzer you cannot run is `skipped: <reason>`; if that is one of the three, the verdict is `changes_requested` or `status: failed`.
 
-## Test command fails or errors
+## A test command fails, errors or cannot run
 
-Wrong directory, missing module, red on the unchanged checkout: investigate, fix it if in scope, else report
-`failed` with the error line. **Never** run a subset and report its count.
+Two cases, never mixed:
+
+- **It ran and failed, or errored for any other reason** (an assertion, your own new or changed test, wrong
+  directory, missing module, red on the unchanged checkout): investigate, fix it if in scope, else report
+  `failed` with the error line. **Never** leave a failing test out to get a green count.
+- **It could not run because a service is missing** (database, Docker, network outside the allowed hosts,
+  another service the tests need): crews get none of these, so do not try to start one. List it, then
+  `status: done` still holds; CI on your pushed branch runs it and is the gate:
+
+```yaml
+not_run_here:
+  - command: cargo test --workspace
+    missing: database          # database | docker | network | service
+    reason: "1370 tests in other crates: DATABASE_URL must be set"
+```
+
+A command that ran some tests and failed others for both reasons counts as failed when any failure is not a
+missing service.
 
 ## Blocked
 
@@ -84,6 +104,9 @@ the checkout.
 | Thought | Reality |
 |---|---|
 | "`npm test` errors, I'll run just my file" | Partial count = false report. Fix or report failed. |
+| "The full suite is red, so status failed" | Red only from a missing database or Docker: `not_run_here`, `done`. |
+| "Red in another crate, not mine: not_run_here" | Only a missing service counts. A test that ran and failed is `failed`. |
+| "`git push` printed an error" | Check `git ls-remote`; if it has your head, the push worked. |
 | "A report can't contain its own commit SHA" | Right — so it is not committed. |
 | "The owner is online, I'll ask" | Blocked = report and stop. |
 | "Urgent, skip test-first" | Pressure changes nothing. |

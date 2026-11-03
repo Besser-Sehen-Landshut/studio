@@ -1180,8 +1180,12 @@ describe('round 2 regressions', () => {
       'git commit -F msg.txt',
       'git push -u origin HEAD:refs/heads/studio/APP-1',
       'git push origin studio/APP-1',
+      // The push and its check as the brief words them.
+      'git push origin HEAD:refs/heads/studio/APP-1',
+      'git ls-remote origin refs/heads/studio/APP-1',
       'git fetch origin && git rebase origin/main',
       'gh pr create --title t --body-file body.md',
+      'gh pr create --head studio/APP-1 --title "APP-1: fix" --body-file body.md',
       'gh pr view 3',
       'gh pr checks 3',
       'gh api repos/org/app/pulls/3',
