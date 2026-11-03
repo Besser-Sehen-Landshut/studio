@@ -3,6 +3,25 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.3] - 2026-11-03
+
+Fixes from the second real crew run, a review. Not tagged yet; the maintainers tag after the merge.
+
+### Added
+
+- A review launch writes the pull request's title and text (as crew text, data only), its checks
+  and its changed files to `briefs/<id>.caps/pull-request/`, read outside the sandbox; the brief
+  names the files.
+- `studio link <id> <repo>#<n>` (owner, terminal) ties a pull request opened by hand to its item,
+  after checking repository, fork and branch.
+
+### Changed
+
+- `collect` takes an approval only while the pull request's checks pass; otherwise it refuses and
+  nothing moves.
+- A review launch refuses when no board item holds the pull request, naming `studio link`, since
+  the approval would have nowhere to go. An unreadable board refuses a review launch too.
+
 ## [0.6.2] - 2026-11-03
 
 Not tagged yet; the maintainers tag after the merge. 0.6.1 was not released: its default opened the

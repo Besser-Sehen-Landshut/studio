@@ -66,6 +66,7 @@ import {
   type QueueDone,
   type QueueEntry,
   type QueueState,
+  readChecks,
   runQueue,
   takeNextPending,
   updateQueue,
@@ -139,6 +140,7 @@ Commands:
   resume                   Owner only: lift the pause
   stop <id> [--release]    Stop a crew session; --release closes the record of one it cannot verify
   drop <id>                End an item; refuses while its crew runs
+  link <id> <repo>#<pr>    Owner only, in a terminal: tie a pull request opened by hand to its item
   metrics                  Lead time, deploy frequency, change failure rate, time to restore
   deploy record [<sha>]    Record a production deploy
   incident open <id>       Record that a deploy broke something
@@ -496,6 +498,17 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           const m = /^(.+)#(\d+)$/.exec(reviewDone.target) as RegExpExecArray;
           const info = await prInfo(ports, m[1] as string, Number(m[2]));
           checkReportHead(report, info.head);
+          // The reviewer could not see CI: an approval counts only while the checks are green.
+          if (report.verdict === 'approve') {
+            const checks = await readChecks({ repo: m[1] as string, pr: Number(m[2]) }, ports.gh);
+            if (checks.kind !== 'pass') {
+              const why =
+                checks.kind === 'pending' ? 'still running' : (checks.reason ?? checks.kind);
+              throw new Error(
+                `the approval counts only with green checks (${why}); collect again once they pass, nothing moved`,
+              );
+            }
+          }
         }
         let branch = `studio/${item.id}`;
         if (
@@ -882,6 +895,39 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           stoppedAt,
           ...(process === 'verified' ? {} : { processGone: true }),
         });
+        return 0;
+      }
+
+      case 'link': {
+        // Owner only: it decides which item a pull request opened by hand belongs to.
+        if (deps.env.STUDIO_ROLE === 'crew' || deps.isTerminal !== true) {
+          throw new Error('link is for the owner and needs a terminal; nothing changed');
+        }
+        const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d{0,9})$/.exec(rest[1] ?? '');
+        if (rest.length !== 2 || !m) throw new UsageError('link needs <id> <repo>#<pr>');
+        const repo = m[1] as string;
+        const pr = Number(m[2]);
+        const item = findItem(loadBoard(project), rest[0]);
+        if (item.type === 'review')
+          throw new Error(`${item.id} is a review; link its builder item`);
+        if (item.repo !== repo) throw new Error(`${item.id} is in ${item.repo}, not ${repo}`);
+        const info = await prInfo(ports, repo, pr);
+        const branch = `studio/${item.id}`;
+        if (info.branch !== branch) {
+          throw new Error(`${repo}#${pr} is on branch ${info.branch}, expected ${branch}`);
+        }
+        await withBoardLock(stateRoot(), ports.clock.now(), () => {
+          const fresh = loadBoard(project);
+          const holder = fresh.items.find(
+            (i) => i.id !== item.id && i.repo === repo && i.pr === pr,
+          );
+          if (holder) throw new Error(`${repo}#${pr} is already held by ${holder.id}`);
+          saveBoard(
+            project,
+            withItem(fresh, item.id, (i) => ({ ...i, pr, branch })),
+          );
+        });
+        print({ item: item.id, pr, branch });
         return 0;
       }
 

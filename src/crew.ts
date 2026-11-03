@@ -533,6 +533,9 @@ export function writeBrief(
           round: caps.review.round,
           ...(caps.review.pr === undefined ? {} : { pr: caps.review.pr }),
           ...(caps.review.base === undefined ? {} : { base: caps.review.base }),
+          ...(caps.review.pullRequest === undefined
+            ? {}
+            : { pullRequest: caps.review.pullRequest }),
         })),
     '## Working rules',
     '',
