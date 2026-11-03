@@ -544,7 +544,13 @@ export function writeBrief(
     ...(opensPr
       ? [
           `- Push with an explicit refspec: \`git push -u origin HEAD:refs/heads/studio/${id}\`.`,
-          `- Open the pull request with \`gh pr create --title "${id}: <summary>" --body-file <file>\`.`,
+          ...(caps.prByStudio === true
+            ? [
+                `- Do not open the pull request, and do not run gh at all: it cannot verify TLS in this sandbox. Give \`pr_title: "${id}: <summary>"\` in the report and write the pull request text as the report body; Studio opens the pull request from your pushed branch.`,
+              ]
+            : [
+                `- Open the pull request with \`gh pr create --title "${id}: <summary>" --body-file <file>\`.`,
+              ]),
         ]
       : []),
     '- Git identity and GitHub authentication are preconfigured; do not change git config or log in.',
@@ -575,7 +581,9 @@ export function writeBrief(
       : item.type === 'research'
         ? []
         : [
-            'pr: <number>',
+            caps.prByStudio === true
+              ? `pr_title: "${id}: <summary, one line, at most 200 characters>"`
+              : 'pr: <number>',
             'head_sha: <40-hex sha of the pushed head commit>',
             'tests_run: <number of tests that ran>',
           ]),
@@ -642,6 +650,8 @@ export function writeCrewSettings(
     toolchainPaths: string[];
     /** Real path of a provider's CLAUDE_CONFIG_DIR. */
     providerConfigDir?: string;
+    /** The owner's opt-in to open the macOS TLS trust service to crew shells. */
+    macosTrustService?: boolean;
   },
   launcher: LauncherEnv = {},
 ): string {
@@ -784,7 +794,7 @@ export function writeCrewSettings(
         strictAllowlist: true,
         // Go tools such as gh verify TLS only through this macOS service; only it is opened, see
         // SECURITY.md (https://code.claude.com/docs/en/sandboxing).
-        ...((launcher.platform ?? process.platform) === 'darwin'
+        ...((launcher.platform ?? process.platform) === 'darwin' && dirs.macosTrustService === true
           ? { allowMachLookup: ['com.apple.trustd.agent'] }
           : {}),
       },
@@ -1210,13 +1220,23 @@ async function launchCrewLocked(
     startedAt: ports.clock.now().toISOString(),
   });
   caps.reportName = newReportName(stateRoot, item.id);
+  // Without the trust service gh cannot verify TLS in the macOS sandbox: Studio opens the PR.
+  caps.prByStudio =
+    (launcher.platform ?? process.platform) === 'darwin' && !ownerConfig.crewAllowMacosTrustService;
   const brief = writeBrief(stateRoot, item, config, projectDir, briefRules, caps);
   const settings = writeCrewSettings(
     stateRoot,
     item,
     wt.path,
     config,
-    { homeDir, tmpDir, projectDir, toolchainPaths, providerConfigDir },
+    {
+      homeDir,
+      tmpDir,
+      projectDir,
+      toolchainPaths,
+      providerConfigDir,
+      macosTrustService: ownerConfig.crewAllowMacosTrustService,
+    },
     owner,
   );
   // No MCP server at all: --strict-mcp-config ignores every other MCP configuration and the only

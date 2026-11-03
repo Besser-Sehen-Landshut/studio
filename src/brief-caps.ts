@@ -185,6 +185,8 @@ export interface BriefCaps {
   knowledge: { ref: string; where: string; fallback?: string }[];
   /** Where in the checkout this run's report goes; a launch draws it anew. */
   reportName?: string;
+  /** The crew cannot run gh (macOS without the trust service): Studio opens its pull request. */
+  prByStudio?: boolean;
   review?: {
     tier: 'small' | 'large';
     reasons: string[];

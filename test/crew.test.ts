@@ -19,6 +19,7 @@ import { dirname as dirnameOf, isAbsolute, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { addAccount, crewClaudeDir } from '../src/accounts.js';
 import type { WorkItem } from '../src/board.js';
+import { plainCaps } from '../src/brief-caps.js';
 import { type RoleConfig, type StudioConfig, studioConfigSchema } from '../src/config.js';
 import {
   crewName,
@@ -281,6 +282,42 @@ describe('prepareCheckout', () => {
   });
 });
 
+describe('who opens the pull request', () => {
+  const brief = (prByStudio: boolean) => {
+    const { project, state } = makeFixture();
+    const caps = { ...plainCaps(item, config), prByStudio };
+    return readFileSync(writeBrief(state, item, config, project, NO_RULES, caps), 'utf8');
+  };
+  it('without gh, the crew pushes and leaves the pull request to Studio', () => {
+    const text = brief(true);
+    expect(text).not.toContain('gh pr create');
+    expect(text).toContain('Do not open the pull request');
+    expect(text).toContain('pr_title:');
+    expect(text).toMatch(/do not run gh/i);
+  });
+  it('with gh, the crew opens it as before', () => {
+    const text = brief(false);
+    expect(text).toContain('gh pr create');
+    expect(text).not.toContain('pr_title:');
+  });
+  it('a launch on macOS without the opt-in leaves it to Studio; with it, to the crew', async () => {
+    const f = makeFixture();
+    const launcher = { ...f.launcher, platform: 'darwin' as const };
+    await launchCrew(f.project, item, config, fakePorts([]), launcher);
+    expect(readFileSync(join(f.state, 'briefs', `${item.id}.md`), 'utf8')).toContain('pr_title:');
+    const g = makeFixture();
+    const ownerDir = join(g.home, '.config', 'studio');
+    mkdirSync(ownerDir, { recursive: true });
+    writeFileSync(join(ownerDir, 'config.yaml'), 'crew_allow_macos_trust_service: true\n');
+    await launchCrew(g.project, item, config, fakePorts([]), { ...g.launcher, platform: 'darwin' });
+    expect(readFileSync(join(g.state, 'briefs', `${item.id}.md`), 'utf8')).toContain(
+      'gh pr create',
+    );
+    const settings = JSON.parse(readFileSync(join(g.state, 'settings', `${item.id}.json`), 'utf8'));
+    expect(settings.sandbox.network.allowMachLookup).toEqual(['com.apple.trustd.agent']);
+  });
+});
+
 describe('writeBrief', () => {
   it('lists required skills of role, the item and the rules', () => {
     const { project, state } = makeFixture();
@@ -435,6 +472,7 @@ describe('writeCrewSettings', () => {
       env?: Record<string, string | undefined>;
       toolchain?: string[];
       platform?: NodeJS.Platform;
+      macosTrustService?: boolean;
     } = {},
   ) => {
     const project = makeProject();
@@ -447,7 +485,13 @@ describe('writeCrewSettings', () => {
       item,
       wt,
       config,
-      { homeDir, tmpDir, projectDir: project, toolchainPaths: launcher.toolchain ?? [] },
+      {
+        homeDir,
+        tmpDir,
+        projectDir: project,
+        toolchainPaths: launcher.toolchain ?? [],
+        macosTrustService: launcher.macosTrustService ?? false,
+      },
       { homedir: FAKE_HOME, env: launcher.env ?? {}, platform: launcher.platform ?? 'linux' },
     );
     return {
@@ -461,16 +505,28 @@ describe('writeCrewSettings', () => {
     };
   };
 
-  it('on macOS crew shells may reach exactly the TLS trust service, nothing more', () => {
+  it('on macOS the TLS trust service stays shut unless the owner opts in', () => {
     const { s } = setup({ platform: 'darwin' });
-    expect(s.sandbox.network.allowMachLookup).toEqual(['com.apple.trustd.agent']);
+    expect(s.sandbox.network.allowMachLookup).toBeUndefined();
     expect(s.sandbox.network.strictAllowlist).toBe(true);
     expect(s.sandbox.enableWeakerNetworkIsolation).toBeUndefined();
     expect(s.sandbox.excludedCommands).toBeUndefined();
+  });
+
+  it('with the opt-in exactly that one service opens, nothing more', () => {
+    const { s } = setup({ platform: 'darwin', macosTrustService: true });
+    expect(s.sandbox.network.allowMachLookup).toEqual(['com.apple.trustd.agent']);
+    expect(s.sandbox.network.strictAllowlist).toBe(true);
     expect(s.sandbox.allowUnsandboxedCommands).toBe(false);
   });
 
   it('elsewhere there is no trust service to open', () => {
+    expect(
+      setup({ platform: 'linux', macosTrustService: true }).s.sandbox.network.allowMachLookup,
+    ).toBeUndefined();
+  });
+
+  it('elsewhere, no trust service by default either', () => {
     expect(setup({ platform: 'linux' }).s.sandbox.network.allowMachLookup).toBeUndefined();
   });
 

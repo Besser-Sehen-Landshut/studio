@@ -2,7 +2,7 @@
 
 Studio is a Claude Code plugin and TypeScript package for running a small software studio of coding-agent sessions from one control room: a lead session plans work from a board and a crew of role-based sessions carries it out, each in its own sandboxed clone.
 
-Status: 0.6.1, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store). See [CHANGELOG.md](CHANGELOG.md).
+Status: 0.6.2, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store). See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -262,6 +262,7 @@ Settings that open reads on the owner's machine are not the repository's call. T
 
 ```yaml
 crew_toolchain_paths: [] # absolute directories a crew may read, e.g. a version manager's install dir
+crew_allow_macos_trust_service: false # true lets crew shells on macOS reach the TLS trust service so gh works; weakens the network boundary, see SECURITY.md
 crew_credential_command: /absolute/path/to/provider # optional, see "Crew credentials and usage limits"
 allow_api_billing: false # true lets crew runs bill the API
 # notify: { channel: my-channel, command: /absolute/path/to/notify } # optional push, see below

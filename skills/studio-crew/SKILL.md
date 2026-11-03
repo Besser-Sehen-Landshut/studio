@@ -17,7 +17,7 @@ You work one item, headless. Nobody answers; the control room trusts only artifa
 5. Stage files by name. Commit with `git commit -F <file>` or a literal `-m "..."`; no `$(...)`, backticks or
    heredocs in git or gh commands.
 6. Push: `git push -u origin HEAD:refs/heads/studio/<id>`.
-7. PR: `gh pr create --title "<id>: <summary>" --body-file <file>`.
+7. PR: `gh pr create --title "<id>: <summary>" --body-file <file>`. If the brief says Studio opens it, run no gh: give `pr_title` in the report and the pull request text as its body.
 8. Verify every Definition of Done line against the diff and test output.
 9. Write the report **last**, do not commit it, stop.
 
@@ -38,7 +38,7 @@ questions: []           # what you need answered when blocked
 ```
 
 Body: what changed; how verified (command and its result line).
-`done` needs `pr`, `head_sha`, and for feature/fix/chore `tests_run > 0`. Committing the report moves the head
+`done` needs `pr` (or `pr_title` when the brief says so), `head_sha`, and for feature/fix/chore `tests_run > 0`. Committing the report moves the head
 and collect rejects it.
 
 **Research items:** open no PR, push nothing; omit `pr`, `head_sha`, `tests_run`. The result goes in the body.

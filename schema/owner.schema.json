@@ -17,6 +17,10 @@
       "default": false,
       "type": "boolean"
     },
+    "crew_allow_macos_trust_service": {
+      "default": false,
+      "type": "boolean"
+    },
     "crew_label_limits": {
       "default": {
         "max_parallel": 2
