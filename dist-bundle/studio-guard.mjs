@@ -1251,6 +1251,22 @@ function writesRemoteRefs(refspec) {
   const prefix = dest.slice(0, star);
   return "refs/remotes/".startsWith(prefix) || "remotes/".startsWith(prefix);
 }
+function checkUploadPack(sub, args, valueFlags) {
+  for (const a of args) {
+    if (a === "--") return;
+    if (a.startsWith("--")) {
+      const name = a.split("=")[0];
+      if (name.length >= 3 && "--upload-pack".startsWith(name)) {
+        deny(`git ${sub} ${name} is not allowed`);
+      }
+    } else if (/^-[^-]/.test(a)) {
+      for (const ch of a.slice(1)) {
+        if (ch === "u") deny(`git ${sub} -u is not allowed (it names an upload-pack program)`);
+        if (valueFlags.includes(ch)) break;
+      }
+    }
+  }
+}
 function checkFetch(rawArgs) {
   const args = rawArgs.flatMap((a) => braceExpand(a));
   for (const a of args) {
@@ -1299,6 +1315,10 @@ function checkGit(env, args, state) {
   if (sub === void 0) return;
   if (unresolvedWord(sub)) deny("unresolved command word (git subcommand)");
   const rest = args.slice(i + 1);
+  const expanded = rest.flatMap((a) => braceExpand(a));
+  if (sub === "fetch" || sub === "pull") checkUploadPack(sub, expanded, "oj");
+  else if (sub === "clone") checkUploadPack(sub, expanded, "obcj");
+  else if (sub === "ls-remote") checkUploadPack(sub, expanded, "o");
   if (sub === "push") checkPush(env, rest);
   else if (sub === "fetch" || sub === "pull") checkFetch(rest);
   else if (sub === "send-pack" || sub === "http-push" || sub === "subtree" || sub === "update-ref" || sub === "replace" || sub === "symbolic-ref") {
@@ -1323,7 +1343,42 @@ function checkInsideDir(env, dir, state, why) {
 }
 var GH_BLOCKED_TOPICS = /* @__PURE__ */ new Set(["release", "secret", "auth", "alias"]);
 var GH_RUN_VALUE_FLAGS = ["--ref", "-r", "-f", "--raw-field", "-F", "--field", ...GH_VALUE_FLAGS];
-function checkGh(env, args) {
+function checkPrCreate(env, args, cwd) {
+  if (env.item === void 0) deny("gh pr create needs the item in the guard context");
+  const heads = [];
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (a === "--") break;
+    if (a === "-R" || a === "--repo" || a.startsWith("--repo=") || /^-R./.test(a)) {
+      deny(
+        "gh pr create with -R/--repo is not allowed: the pull request goes to the clone repository"
+      );
+    }
+    let head;
+    let file;
+    if (a === "--head" || a === "-H") head = args[++k] ?? "";
+    else if (a.startsWith("--head=")) head = a.slice(7);
+    else if (/^-H./.test(a)) head = a.slice(2);
+    else if (a === "--body-file" || a === "-F") file = args[++k] ?? "";
+    else if (a.startsWith("--body-file=")) file = a.slice(12);
+    else if (/^-F./.test(a)) file = a.slice(2);
+    if (head !== void 0) heads.push(head);
+    if (file !== void 0 && file !== "-") {
+      if (unresolved(file) || file.includes("$") || file.startsWith("~") || file === "") {
+        deny("unresolvable gh pr create --body-file");
+      }
+      if (cwd === null && !isAbsolute(file)) deny("relative --body-file after unresolvable cd");
+      if (!isInside(env, resolveReal(file, cwd ?? env.wt))) {
+        deny(`gh pr create --body-file outside the clone: ${file}`);
+      }
+    }
+  }
+  const own = `studio/${env.item}`;
+  if (heads.length !== 1 || heads[0] !== own) {
+    deny(`gh pr create needs --head ${own} (the item's own branch)`);
+  }
+}
+function checkGh(env, args, cwd) {
   const words = [];
   for (let k = 0; k < args.length; k++) {
     const a = args[k];
@@ -1335,6 +1390,7 @@ function checkGh(env, args) {
     if (w !== void 0 && unresolvedWord(w)) deny("unresolved command word (gh subcommand)");
   }
   if (g0 === "pr" && g1 === "merge") deny("gh pr merge is not allowed (merging is owner-only)");
+  if (g0 === "pr" && g1 === "create") checkPrCreate(env, args, cwd);
   if (g0 && GH_BLOCKED_TOPICS.has(g0)) deny(`gh ${g0} is not allowed`);
   if (g0 === "workflow" && g1 === "run") {
     const pos = [];
@@ -1595,7 +1651,7 @@ function checkWords(env, words, state) {
     if (words.some((w) => w.includes(SUBST))) deny(`command substitution in a ${name} command`);
   }
   if (name === "git") checkGit(env, args, state);
-  if (name === "gh") checkGh(env, args);
+  if (name === "gh") checkGh(env, args, state.cwd);
   for (const t of writeTargets(name, args)) checkWritePath(env, t, state.cwd, name);
 }
 var ARITHMETIC_DENIED = "arithmetic ((...)) is not allowed; use test or [ ] for comparisons, or a script";
@@ -1761,7 +1817,7 @@ var isSecretExempt = (s) => basename(s) === ".env.example";
 var isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === "string");
 function check(input, ctx) {
   const c = ctx;
-  if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs)) {
+  if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs) || c.item !== void 0 && (typeof c.item !== "string" || !/^[A-Z]+-\d+$/.test(c.item))) {
     deny("invalid guard context");
   }
   const wt = resolveReal(ctx.worktree, "/");
@@ -1783,7 +1839,8 @@ function check(input, ctx) {
     readRoots: [ctx.worktree, ...ctx.readRoots ?? []].map((p) => resolveReal(p, "/")),
     skillRoots: (ctx.skillRoots ?? []).flatMap((p) => [p, resolveReal(p, "/")]),
     toolResultRes: (ctx.toolResultGlobs ?? []).map(fileGlobToRegExp),
-    hardSecretRes: ctx.secretGlobs.filter((g) => !(ctx.skillRootWaivedGlobs ?? []).includes(g)).map(fileGlobToRegExp)
+    hardSecretRes: ctx.secretGlobs.filter((g) => !(ctx.skillRootWaivedGlobs ?? []).includes(g)).map(fileGlobToRegExp),
+    item: ctx.item
   };
   const { toolName, toolInput } = input;
   const given = input.cwd;

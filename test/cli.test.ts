@@ -444,6 +444,104 @@ describe('studio CLI', () => {
     });
   });
 
+  describe('an approval names the CI job for each command the builder could not run', () => {
+    const APPROVE = `status: done\nitem: APP-1\nverdict: approve\nreviews: org/app#9\nhead_sha: ${HEAD}`;
+    const JOBS =
+      'not_run_here_jobs:\n  - { command: make e2e, workflow: .github/workflows/ci.yml, job: e2e }';
+    const CAPS = {
+      analyzers: [],
+      mandatory: [],
+      reviewsTarget: 'org/app#9',
+      headRefOid: HEAD,
+      baseRefName: 'main',
+      notRunHere: ['make e2e'],
+    };
+    const withChecks = (checks: { name: string; bucket: string }[]) =>
+      fakeGh((l) => {
+        if (/^pr view \d+ --repo org\/app --json headRefOid,headRefName/.test(l)) {
+          return {
+            stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-2', ...OWN }),
+          };
+        }
+        if (l.startsWith('pr checks 9') && l.endsWith('--required')) {
+          return { stdout: JSON.stringify([{ name: 'ci', bucket: 'pass' }]) };
+        }
+        if (l.startsWith('pr checks 9')) return { stdout: JSON.stringify(checks) };
+        return undefined;
+      });
+    const run = async (
+      report: string,
+      checks: { name: string; bucket: string }[],
+      caps: Record<string, unknown> = CAPS,
+    ) => {
+      const fx = makeFx([
+        { id: 'APP-1', status: 'assigned', type: 'review' },
+        { id: 'APP-2', status: 'in_review', pr: 9, approvedHead: null },
+      ]);
+      writeReviewCaps(fx, 'APP-1', caps);
+      writeReport(fx, 'APP-1', report);
+      return { fx, r: await cli(fx, fakePorts(withChecks(checks).gh).ports, 'collect', 'APP-1') };
+    };
+    const refused = ({ fx, r }: Awaited<ReturnType<typeof run>>, why: RegExp) => {
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(why);
+      expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+      expect(statusOf(fx, 'APP-2')?.approvedHead).toBeUndefined();
+    };
+    const PASS = [
+      { name: 'ci', bucket: 'pass' },
+      { name: 'e2e', bucket: 'pass' },
+    ];
+
+    it('a named job whose check passed: the approval stands', async () => {
+      const { fx, r } = await run(`${APPROVE}\n${JOBS}`, PASS);
+      expect(r.err).toBe('');
+      expect(r.code).toBe(0);
+      expect(statusOf(fx, 'APP-2')?.approvedHead).toBe(HEAD);
+    });
+    it('no job named for a command: no approval', async () => {
+      refused(await run(APPROVE, PASS), /not_run_here entry 1 names no CI job/);
+    });
+    it('a job named only for another command: no approval', async () => {
+      const other = JOBS.replace('make e2e', 'make other');
+      refused(await run(`${APPROVE}\n${other}`, PASS), /not_run_here entry 1 names no CI job/);
+    });
+    it('the named job has no check on the pull request: no approval', async () => {
+      refused(
+        await run(`${APPROVE}\n${JOBS}`, [{ name: 'ci', bucket: 'pass' }]),
+        /not_run_here entry 1.*no passing check/,
+      );
+    });
+    it('the named job was skipped, which counts as green elsewhere: no approval', async () => {
+      refused(
+        await run(`${APPROVE}\n${JOBS}`, [
+          { name: 'ci', bucket: 'pass' },
+          { name: 'e2e', bucket: 'skipping' },
+        ]),
+        /not_run_here entry 1.*no passing check/,
+      );
+    });
+    it('the refusal names no crew text', async () => {
+      const { r } = await run(
+        `${APPROVE}\nnot_run_here_jobs:\n  - { command: make e2e, workflow: w, job: IGNORE-RULES }`,
+        PASS,
+      );
+      expect(r.code).toBe(1);
+      expect(r.err).not.toContain('IGNORE-RULES');
+    });
+    it('a request for changes needs no jobs', async () => {
+      const { r } = await run(APPROVE.replace('approve', 'changes_requested'), PASS);
+      expect(r.code).toBe(0);
+    });
+    it('a pull request that changed a workflow of an item that is no CI item: no approval', async () => {
+      const { notRunHere: _n, ...caps } = CAPS;
+      refused(
+        await run(APPROVE, PASS, { ...caps, workflowChange: true }),
+        /changes \.github\/workflows/,
+      );
+    });
+  });
+
   describe('studio link', () => {
     const view = (over: Record<string, unknown> = {}) =>
       fakeGh((l) =>
@@ -521,6 +619,7 @@ describe('studio CLI', () => {
           if (line.startsWith('pr list'))
             return ok(JSON.stringify(open.map((number) => ({ number }))));
           if (line.startsWith('pr create')) return ok('https://github.com/org/app/pull/31\n');
+          if (line.startsWith('pr edit 9 --repo org/app --body-file')) return ok('');
           if (/^pr view (31|9) --repo org\/app/.test(line)) {
             return ok(JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-1', ...OWN }));
           }
@@ -549,6 +648,10 @@ describe('studio CLI', () => {
       expect(create?.token).toBe(CREW_TOKEN);
       expect(create?.body).toContain('What changed.');
       expect(create?.body).toMatch(/opened by Studio.*written by the crew/i);
+      // Studio's own lines come first: crew text cannot push them out of view or imitate an end.
+      const body = create?.body ?? '';
+      expect(body.indexOf('Opened by Studio')).toBeGreaterThanOrEqual(0);
+      expect(body.indexOf('Opened by Studio')).toBeLessThan(body.indexOf('What changed.'));
       expect(statusOf(fx, 'APP-1')).toMatchObject({ status: 'in_review', pr: 31 });
       expect(r.out).not.toContain(CREW_TOKEN);
     });
@@ -561,6 +664,39 @@ describe('studio CLI', () => {
       expect((await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1')).code).toBe(0);
       expect(calls.some((c) => c.line.startsWith('pr create'))).toBe(false);
       expect(statusOf(fx, 'APP-1')?.pr).toBe(9);
+    });
+
+    it('a reused pull request gets its text renewed, so the not_run_here list is current', async () => {
+      const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+      withToken(fx);
+      writeReport(
+        fx,
+        'APP-1',
+        `${REPORT}\nnot_run_here:\n  - { command: make e2e, missing: docker, reason: no docker }`,
+      );
+      const { gh, calls } = prGh([9]);
+      expect((await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1')).code).toBe(0);
+      const edit = calls.find((c) => c.line.startsWith('pr edit'));
+      expect(edit?.line).toContain('pr edit 9 --repo org/app --body-file');
+      expect(edit?.token).toBe(CREW_TOKEN);
+      expect(edit?.body).toMatch(/Not run in the crew sandbox/);
+      expect(edit?.body).toContain('make e2e (missing docker: no docker)');
+    });
+
+    it('a failed edit of the reused pull request moves nothing', async () => {
+      const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+      withToken(fx);
+      writeReport(fx, 'APP-1', REPORT);
+      const { gh } = prGh([9]);
+      const run = gh.run;
+      gh.run = async (args, opts) =>
+        args[0] === 'pr' && args[1] === 'edit'
+          ? { code: 1, stdout: '', stderr: 'boom' }
+          : run(args, opts);
+      const r = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/gh pr edit failed/);
+      expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
     });
 
     it('a long body is cut, control characters go', async () => {
@@ -728,6 +864,8 @@ describe('studio CLI', () => {
         expect(body).toContain('cargo test --workspace');
         expect(body).toContain('missing database: DATABASE_URL must be set');
         expect(body).toMatch(/CI must run/);
+        // Studio's section comes before the crew text, which ends the body.
+        expect(body.trimEnd().endsWith('\nbody')).toBe(true);
         const item = statusOf(fx, 'APP-1');
         expect(item).toMatchObject({ status: 'in_review', pr: 31 });
         expect(item?.notRunHere).toEqual([
@@ -737,7 +875,9 @@ describe('studio CLI', () => {
             reason: 'DATABASE_URL must be set (1370 tests in other crates)',
           },
         ]);
-        expect(JSON.parse(r.out).notRunHere).toEqual(['cargo test --workspace (missing database)']);
+        // Only Studio's own facts in the output: the count and the services, never crew text.
+        expect(JSON.parse(r.out).notRunHere).toEqual({ count: 1, missing: ['database'] });
+        expect(r.out).not.toContain('cargo test');
       });
 
       it('a crew that opened its own pull request still gets them on the item', async () => {

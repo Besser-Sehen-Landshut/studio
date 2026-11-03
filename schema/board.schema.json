@@ -134,7 +134,7 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 300,
-                  "pattern": "^[^\\p{Cc}]+$"
+                  "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
                 },
                 "missing": {
                   "type": "string",
@@ -149,7 +149,7 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 300,
-                  "pattern": "^[^\\p{Cc}]+$"
+                  "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
                 }
               },
               "required": [

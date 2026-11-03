@@ -45,6 +45,8 @@ export interface GuardContext {
   toolResultGlobs?: string[];
   /** Entries of `secretGlobs` that cover a whole login dir. Every other entry always applies. */
   skillRootWaivedGlobs?: string[];
+  /** The crew's item: `gh pr create` is allowed only for its branch `studio/<item>`. */
+  item?: string;
 }
 
 export interface GuardResult {
@@ -88,6 +90,7 @@ interface Env {
   toolResultRes: RegExp[];
   /** The secret rules no read root waives. */
   hardSecretRes: RegExp[];
+  item: string | undefined;
 }
 
 const isUnder = (roots: string[], p: string): boolean =>
@@ -939,6 +942,29 @@ function writesRemoteRefs(refspec: string): boolean {
   return 'refs/remotes/'.startsWith(prefix) || 'remotes/'.startsWith(prefix);
 }
 
+/**
+ * `--upload-pack` (and `-u` of clone, ls-remote and pull) names a program that git runs for the
+ * transfer, like push's `--receive-pack`. `valueFlags` are the short options of the subcommand
+ * that take a value, so `-ou` is the remote name `u`, not `-u`.
+ */
+function checkUploadPack(sub: string, args: string[], valueFlags: string): void {
+  for (const a of args) {
+    if (a === '--') return;
+    if (a.startsWith('--')) {
+      const name = a.split('=')[0] as string;
+      // git accepts unambiguous prefixes of long options
+      if (name.length >= 3 && '--upload-pack'.startsWith(name)) {
+        deny(`git ${sub} ${name} is not allowed`);
+      }
+    } else if (/^-[^-]/.test(a)) {
+      for (const ch of a.slice(1)) {
+        if (ch === 'u') deny(`git ${sub} -u is not allowed (it names an upload-pack program)`);
+        if (valueFlags.includes(ch)) break;
+      }
+    }
+  }
+}
+
 function checkFetch(rawArgs: string[]): void {
   const args = rawArgs.flatMap((a) => braceExpand(a));
   for (const a of args) {
@@ -989,6 +1015,10 @@ function checkGit(env: Env, args: string[], state: State): void {
   if (sub === undefined) return;
   if (unresolvedWord(sub)) deny('unresolved command word (git subcommand)');
   const rest = args.slice(i + 1);
+  const expanded = rest.flatMap((a) => braceExpand(a));
+  if (sub === 'fetch' || sub === 'pull') checkUploadPack(sub, expanded, 'oj');
+  else if (sub === 'clone') checkUploadPack(sub, expanded, 'obcj');
+  else if (sub === 'ls-remote') checkUploadPack(sub, expanded, 'o');
   if (sub === 'push') checkPush(env, rest);
   else if (sub === 'fetch' || sub === 'pull') checkFetch(rest);
   else if (
@@ -1029,7 +1059,47 @@ function checkInsideDir(env: Env, dir: string, state: State, why: string): void 
 const GH_BLOCKED_TOPICS = new Set(['release', 'secret', 'auth', 'alias']);
 const GH_RUN_VALUE_FLAGS = ['--ref', '-r', '-f', '--raw-field', '-F', '--field', ...GH_VALUE_FLAGS];
 
-function checkGh(env: Env, args: string[]): void {
+/**
+ * `gh pr create` from a crew: only for its own branch, in the clone's repository, with a body file
+ * inside the clone. `--head`/`-H` names exactly `studio/<item>`; `-R`/`--repo` are refused.
+ */
+function checkPrCreate(env: Env, args: string[], cwd: string | null): void {
+  if (env.item === undefined) deny('gh pr create needs the item in the guard context');
+  const heads: string[] = [];
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k] as string;
+    if (a === '--') break;
+    if (a === '-R' || a === '--repo' || a.startsWith('--repo=') || /^-R./.test(a)) {
+      deny(
+        'gh pr create with -R/--repo is not allowed: the pull request goes to the clone repository',
+      );
+    }
+    let head: string | undefined;
+    let file: string | undefined;
+    if (a === '--head' || a === '-H') head = args[++k] ?? '';
+    else if (a.startsWith('--head=')) head = a.slice(7);
+    else if (/^-H./.test(a)) head = a.slice(2);
+    else if (a === '--body-file' || a === '-F') file = args[++k] ?? '';
+    else if (a.startsWith('--body-file=')) file = a.slice(12);
+    else if (/^-F./.test(a)) file = a.slice(2);
+    if (head !== undefined) heads.push(head);
+    if (file !== undefined && file !== '-') {
+      if (unresolved(file) || file.includes('$') || file.startsWith('~') || file === '') {
+        deny('unresolvable gh pr create --body-file');
+      }
+      if (cwd === null && !isAbsolute(file)) deny('relative --body-file after unresolvable cd');
+      if (!isInside(env, resolveReal(file, cwd ?? env.wt))) {
+        deny(`gh pr create --body-file outside the clone: ${file}`);
+      }
+    }
+  }
+  const own = `studio/${env.item}`;
+  if (heads.length !== 1 || heads[0] !== own) {
+    deny(`gh pr create needs --head ${own} (the item's own branch)`);
+  }
+}
+
+function checkGh(env: Env, args: string[], cwd: string | null): void {
   const words: string[] = [];
   for (let k = 0; k < args.length; k++) {
     const a = args[k] as string;
@@ -1041,6 +1111,7 @@ function checkGh(env: Env, args: string[]): void {
     if (w !== undefined && unresolvedWord(w)) deny('unresolved command word (gh subcommand)');
   }
   if (g0 === 'pr' && g1 === 'merge') deny('gh pr merge is not allowed (merging is owner-only)');
+  if (g0 === 'pr' && g1 === 'create') checkPrCreate(env, args, cwd);
   if (g0 && GH_BLOCKED_TOPICS.has(g0)) deny(`gh ${g0} is not allowed`);
   if (g0 === 'workflow' && g1 === 'run') {
     const pos: string[] = [];
@@ -1359,7 +1430,7 @@ function checkWords(env: Env, words: string[], state: State): void {
     if (words.some((w) => w.includes(SUBST))) deny(`command substitution in a ${name} command`);
   }
   if (name === 'git') checkGit(env, args, state);
-  if (name === 'gh') checkGh(env, args);
+  if (name === 'gh') checkGh(env, args, state.cwd);
   for (const t of writeTargets(name, args)) checkWritePath(env, t, state.cwd, name);
 }
 
@@ -1582,7 +1653,8 @@ function check(input: GuardInput, ctx: GuardContext): void {
     (c.readRoots !== undefined && !isStringArray(c.readRoots)) ||
     (c.skillRoots !== undefined && !isStringArray(c.skillRoots)) ||
     (c.toolResultGlobs !== undefined && !isStringArray(c.toolResultGlobs)) ||
-    (c.skillRootWaivedGlobs !== undefined && !isStringArray(c.skillRootWaivedGlobs))
+    (c.skillRootWaivedGlobs !== undefined && !isStringArray(c.skillRootWaivedGlobs)) ||
+    (c.item !== undefined && (typeof c.item !== 'string' || !/^[A-Z]+-\d+$/.test(c.item)))
   ) {
     deny('invalid guard context');
   }
@@ -1610,6 +1682,7 @@ function check(input: GuardInput, ctx: GuardContext): void {
     hardSecretRes: ctx.secretGlobs
       .filter((g) => !(ctx.skillRootWaivedGlobs ?? []).includes(g))
       .map(fileGlobToRegExp),
+    item: ctx.item,
   };
   const { toolName, toolInput } = input;
   const given = input.cwd as unknown;

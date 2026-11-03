@@ -537,6 +537,7 @@ export function writeBrief(
             ? {}
             : { pullRequest: caps.review.pullRequest }),
           ...(caps.review.notRunHere === undefined ? {} : { notRunHere: caps.review.notRunHere }),
+          ...(caps.review.ciItem === undefined ? {} : { ciItem: caps.review.ciItem }),
         })),
     '## Working rules',
     '',
@@ -585,6 +586,7 @@ export function writeBrief(
           'analyzers: { <id>: pass|findings|"skipped: <reason>" }',
           'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"',
           'finding_attempts: <highest number of attempts on one finding>',
+          'not_run_here_jobs: []   # or entries { command: <command as listed>, workflow: <workflow file at the base>, job: <check name> }',
         ]
       : item.type === 'research'
         ? []
@@ -758,6 +760,7 @@ export function writeCrewSettings(
     crewAllowedWorkflows: config.crewAllowedWorkflows,
     crewAllowedWorkflowRefs: config.crewAllowedWorkflowRefs,
     protectedPaths,
+    item: id,
   };
   writeStateFile(stateRoot, ctxFile, `${JSON.stringify(ctx, null, 2)}\n`);
   const settings = {

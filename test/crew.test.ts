@@ -689,6 +689,7 @@ describe('writeCrewSettings', () => {
       skillRootWaivedGlobs: [],
       crewAllowedWorkflows: ['ci.yml'],
       crewAllowedWorkflowRefs: ['main'],
+      item: 'APP-12',
       protectedPaths: [
         ctxFile,
         ...['guard', 'settings', 'briefs', 'logs', 'homes', 'tmp'].map((d) => join(state, d)),
@@ -2787,8 +2788,77 @@ describe('capabilities at launch', () => {
     const b = brief(f, 'APP-20');
     expect(b).toContain(file);
     expect(b).toMatch(/could not run some commands in its sandbox/);
-    expect(b).toMatch(/CI/);
+    // The reviewer names, per command, the base workflow and the job that runs it.
+    expect(b).toContain('not_run_here_jobs');
+    expect(b).toMatch(/not_run_here_jobs: \[\] {3}# or entries \{ command: .*workflow: .*job: /);
+    expect(b).toContain('git show origin/main:.github/workflows/<file>');
     expect(b).not.toContain('DATABASE_URL');
+    // collect needs the commands to hold the approval to them.
+    expect(capsOf(f, 'APP-20').notRunHere).toEqual(['cargo test --workspace']);
+  });
+
+  const holderBoard = (f: Fixture, extra: string[] = []) =>
+    writeFileSync(
+      join(f.project, '.studio', 'board.yaml'),
+      [
+        'items:',
+        '  - id: APP-2',
+        '    title: b',
+        '    type: fix',
+        '    role: builder',
+        '    repo: org/app',
+        '    size: S',
+        '    priority: 1',
+        '    status: in_review',
+        '    pr: 7',
+        '    branch: studio/APP-2',
+        ...extra,
+        '',
+      ].join('\n'),
+    );
+
+  it('every review reads CI workflows at the base, never in the pull request head', async () => {
+    const f = makeFixture();
+    await launchCrew(
+      f.project,
+      reviewItem,
+      reviewerConfig,
+      portsWithGh([], () => ({ code: 0, stdout: pr('a.ts') })),
+      f.launcher,
+    );
+    const b = brief(f, 'APP-20');
+    expect(b).toContain('git ls-tree --name-only origin/main .github/workflows/');
+    expect(b).toMatch(/never the checkout's copy/);
+    expect(b).toMatch(/A change under `\.github\/workflows\/` in this pull request is a finding/);
+    expect(capsOf(f, 'APP-20').workflowChange).toBeUndefined();
+  });
+
+  it('a pull request that changes a workflow of an item that is no CI item: the record blocks an approval', async () => {
+    const f = makeFixture();
+    holderBoard(f);
+    await launchCrew(
+      f.project,
+      reviewItem,
+      reviewerConfig,
+      portsWithGh([], () => ({ code: 0, stdout: pr('.github/workflows/ci.yml') })),
+      f.launcher,
+    );
+    expect(capsOf(f, 'APP-20').workflowChange).toBe(true);
+    expect(brief(f, 'APP-20')).toMatch(/blocks the approval/);
+  });
+
+  it('a CI item may change workflows: it declares them in paths or touches', async () => {
+    const f = makeFixture();
+    holderBoard(f, ['    touches: [".github/workflows/**"]']);
+    await launchCrew(
+      f.project,
+      reviewItem,
+      reviewerConfig,
+      portsWithGh([], () => ({ code: 0, stdout: pr('.github/workflows/ci.yml') })),
+      f.launcher,
+    );
+    expect(capsOf(f, 'APP-20').workflowChange).toBeUndefined();
+    expect(brief(f, 'APP-20')).toMatch(/is a CI item/);
   });
 
   it('without such commands there is no file and no line about it', async () => {

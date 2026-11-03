@@ -504,7 +504,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const reviewDone =
           item.type === 'review' && report.status === 'done'
             ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report)
-            : { skipped: [] as string[], target: undefined };
+            : { skipped: [] as string[], target: undefined, ciJobs: undefined };
         // A verdict counts for the commit reviewed: the pull request's head right now.
         if (item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined) {
           const m = /^(.+)#(\d+)$/.exec(reviewDone.target) as RegExpExecArray;
@@ -519,6 +519,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               throw new Error(
                 `the approval counts only with green checks (${why}); collect again once they pass, nothing moved`,
               );
+            }
+            // A skipped check counts as green above, so the job named for a command the builder
+            // could not run must itself have passed on this pull request.
+            for (const [i, job] of (reviewDone.ciJobs ?? []).entries()) {
+              if (!checks.checks.some((c) => c.name === job && c.bucket === 'pass')) {
+                throw new Error(
+                  `the CI job named for not_run_here entry ${i + 1} has no passing check on the pull request (missing or skipped); nothing moved`,
+                );
+              }
             }
           }
         }
@@ -727,9 +736,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ...(supersededBy === undefined ? {} : { supersededBy }),
           ...(fixLimit ? { fixLimit } : {}),
           ...(lessonsProposed > 0 ? { lessonsProposed } : {}),
-          // Crew text, cleaned: what CI must run because the sandbox could not.
+          // What CI must run because the sandbox could not: only the count and the services, which
+          // the schema fixes; the commands are crew text and stay on the item and in the PR body.
           ...(report.status === 'done' && report.notRunHere.length > 0
-            ? { notRunHere: report.notRunHere.map((x) => `${x.command} (missing ${x.missing})`) }
+            ? {
+                notRunHere: {
+                  count: report.notRunHere.length,
+                  missing: [...new Set(report.notRunHere.map((x) => x.missing))],
+                },
+              }
             : {}),
         });
         return 0;
@@ -1385,8 +1400,8 @@ function prHeldNote(cap: Capacity, config: StudioConfig): string {
 /**
  * Opens the pull request of a crew that pushed `studio/<id>` but could not run gh, with the crew
  * token, outside the sandbox. Title and body are crew text: cleaned, cut and passed as data in a
- * file, never on a command line. An open pull request of that branch is taken instead, without
- * asking `capacity`: it starts no new CI. A new one is opened only when `capacity` holds;
+ * file, never on a command line. An open pull request of that branch is taken instead and its
+ * text renewed with `gh pr edit`, without asking `capacity`: it starts no new CI. A new one is opened only when `capacity` holds;
  * otherwise nothing is opened and the read that decided comes back as `held`. `unchanged` runs
  * after the capacity wait, right before the create, and throws when the item moved meanwhile.
  */
@@ -1409,15 +1424,35 @@ async function openCrewPr(
     throw new Error(`cannot list pull requests of ${head} (gh exit ${list.code})`);
   const open = JSON.parse(list.stdout || '[]') as { number?: unknown }[];
   const known = open.find((p) => Number.isInteger(p.number))?.number;
-  if (typeof known === 'number') return { pr: known };
+  // Studio's own lines come first, so crew text can neither push them out of view nor fake an end.
+  const text = `Opened by Studio for ${item.id}; the text below the line was written by the crew.\n${notRunSection(notRunHere)}\n---\n\n${body.replace(/[^\P{Cc}\n\t]/gu, '').slice(0, PR_BODY_MAX)}\n`;
+  const withBody = async <T>(use: (file: string) => Promise<T>): Promise<T> => {
+    const dir = mkdtempSync(join(tmpdir(), 'studio-pr-'));
+    try {
+      const file = join(dir, 'body.md');
+      writeFileSync(file, text, { mode: 0o600 });
+      return await use(file);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  if (typeof known === 'number') {
+    // The open pull request gets this report's text, so its not_run_here list is never stale.
+    return withBody(async (file) => {
+      const r = await ports.gh.run(
+        ['pr', 'edit', String(known), '--repo', item.repo, '--body-file', file],
+        { token },
+      );
+      if (r.code !== 0) {
+        throw new Error(`gh pr edit failed for ${head} (exit ${r.code}); nothing moved`);
+      }
+      return { pr: known };
+    });
+  }
   const room = await capacity();
   if (!room.ok) return { held: room.capacity };
   unchanged();
-  const text = `${body.replace(/[^\P{Cc}\n\t]/gu, '').slice(0, PR_BODY_MAX)}\n\n---\nOpened by Studio for ${item.id}; the text above was written by the crew.\n${notRunSection(notRunHere)}`;
-  const dir = mkdtempSync(join(tmpdir(), 'studio-pr-'));
-  try {
-    const file = join(dir, 'body.md');
-    writeFileSync(file, text, { mode: 0o600 });
+  return withBody(async (file) => {
     const r = await ports.gh.run(
       ['pr', 'create', '--repo', item.repo, '--head', head, '--title', title, '--body-file', file],
       { token },
@@ -1426,9 +1461,7 @@ async function openCrewPr(
     if (r.code !== 0 || !m)
       throw new Error(`gh pr create failed for ${head} (exit ${r.code}); nothing moved`);
     return { pr: Number(m[1]) };
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 }
 /**
  * The pull request section for commands the crew could not run in its sandbox. Each line is crew

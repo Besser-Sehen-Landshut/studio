@@ -286,7 +286,8 @@ function parseChecks(stdout: string): Check[] | undefined {
 
 type ChecksVerdict =
   | { kind: 'pending' }
-  | { kind: 'pass' }
+  /** `checks`: every check read, all of them passed or skipped. */
+  | { kind: 'pass'; checks: Check[] }
   | { kind: 'failed'; reason: string }
   /** No check reported at all: pending during the grace after a head change, else failed. */
   | { kind: 'none'; reason: string };
@@ -335,7 +336,7 @@ export async function readChecks(entry: QueueEntry, gh: Gh): Promise<ChecksVerdi
   // Skipped CI is never green: at least one check must have actually passed.
   if (!evaluated.some((c) => c.bucket === 'pass'))
     return { kind: 'failed', reason: 'no check passed' };
-  return { kind: 'pass' };
+  return { kind: 'pass', checks: evaluated };
 }
 
 type PrView = { head: string; state: 'OPEN' | 'MERGED' | 'CLOSED'; mergeable: string };

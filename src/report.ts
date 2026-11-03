@@ -12,7 +12,7 @@ import {
 import { join, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
-import { type NotRunHere, notRunHereSchema, type WorkItem } from './board.js';
+import { crewLine, type NotRunHere, notRunHereReportSchema, type WorkItem } from './board.js';
 import { assertStatePath, writeStateFile } from './paths.js';
 
 export class ReportError extends Error {
@@ -26,6 +26,9 @@ const BUILD_TYPES: readonly WorkItem['type'][] = ['feature', 'fix', 'chore'];
 const NO_PR_TYPES: readonly WorkItem['type'][] = ['research'];
 const REVIEWS_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9]\d{0,9}$/;
 const SHA_RE = /^[0-9a-f]{40}$/i;
+
+const emptyList = <T extends z.ZodType<unknown[]>>(list: T) =>
+  list.nullish().transform((v) => v ?? []);
 
 const reportSchema = z.object({
   status: z.enum(['done', 'blocked', 'failed']),
@@ -56,10 +59,21 @@ const reportSchema = z.object({
     .nullish(),
   findingAttempts: z.number().int().nonnegative().nullish(),
   // Commands the sandbox cannot run for lack of a service; CI is the authority for them.
-  notRunHere: z.array(notRunHereSchema).max(20).default([]),
-  lessons: z.array(z.string()).default([]),
-  questions: z.array(z.string()).default([]),
+  // An empty YAML value (`key:` alone) is null: it reads as the empty list.
+  notRunHere: emptyList(z.array(notRunHereReportSchema).max(20)),
+  // A reviewer's answer for each such command: the base workflow and the job whose check runs it.
+  notRunHereJobs: emptyList(
+    z.array(z.strictObject({ command: crewLine, workflow: crewLine, job: crewLine })).max(20),
+  ),
+  lessons: emptyList(z.array(z.string())),
+  questions: emptyList(z.array(z.string())),
 });
+
+export interface NotRunHereJob {
+  command: string;
+  workflow: string;
+  job: string;
+}
 
 export interface Report {
   status: 'done' | 'blocked' | 'failed';
@@ -77,6 +91,8 @@ export interface Report {
   findingAttempts?: number;
   /** Commands the crew could not run in its sandbox, each with the missing service: crew text. */
   notRunHere: NotRunHere[];
+  /** A review's CI job for each not_run_here command: crew text, matched against the checks. */
+  notRunHereJobs: NotRunHereJob[];
   lessons: string[];
   questions: string[];
 }
@@ -141,6 +157,7 @@ export function parseReport(text: string, item?: WorkItem): Report {
     ...(d.mutationProbe != null && { mutationProbe: d.mutationProbe }),
     ...(d.findingAttempts != null && { findingAttempts: d.findingAttempts }),
     notRunHere: d.notRunHere,
+    notRunHereJobs: d.notRunHereJobs,
     lessons: d.lessons,
     questions: d.questions,
   };

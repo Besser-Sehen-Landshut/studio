@@ -3,6 +3,38 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.6] - 2026-11-03
+
+From an independent review of 0.6.5: a `not_run_here` command could end up run nowhere while every
+gate passed. Not tagged yet; the maintainers tag after the merge.
+
+### Changed
+
+- The reviewer reads CI workflows at the base (`git show origin/<base>:.github/workflows/<file>`),
+  never in the pull request head, which the crew may have edited. A change under
+  `.github/workflows/` is a finding that blocks the approval unless the item holding the pull
+  request is a CI item: one that declares `.github/workflows/` in its `paths` or `touches`.
+  Launch records such a change in the review record and `collect` refuses the approval.
+- A review report names, for each `not_run_here` command, the workflow at the base and the job that
+  runs it (`not_run_here_jobs: [{ command, workflow, job }]`, `job` being the check name).
+  `collect` refuses an approval when a command has no job, or when that job's check on the pull
+  request is missing or `skipping`: a skipped check that is not required counted as green before.
+- `collect` prints only the count and the missing services of `not_run_here`, no crew text.
+- When `collect` reuses an open pull request of the branch, it renews its text with
+  `gh pr edit --body-file`, so the `not_run_here` list there is never stale.
+- The pull request text Studio writes starts with Studio's attribution and its `not_run_here`
+  section; the crew's text follows below a line.
+- `not_run_here` fields lose format characters (bidi overrides, zero-width); a field that is only
+  such characters refuses the report, and the board refuses them. An empty YAML value
+  (`not_run_here:`, `lessons:`, `questions:`, `not_run_here_jobs:`) reads as an empty list.
+
+### Security
+
+- The guard refuses `--upload-pack` and `-u` for `git ls-remote`, `fetch`, `pull` and `clone`, as
+  `push` refuses `--receive-pack` and `--exec`.
+- `gh pr create` from a crew needs `--head studio/<id>` of its own item and takes no `-R`/`--repo`
+  and no `--body-file` outside the clone. The guard context names the item for this.
+
 ## [0.6.5] - 2026-11-03
 
 From a real crew run: a correct, one-crate fix ended `blocked` because the workspace's full test
