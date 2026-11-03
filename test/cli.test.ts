@@ -59,6 +59,7 @@ merge:
   method: squash
 roles:
   builder: { model: sonnet, wip: 2 }
+  reviewer: { model: opus, wip: 1 }
 owner_only: []
 deploy_commands: []
 `;
@@ -76,6 +77,7 @@ interface ItemSpec {
   title?: string;
   /** Raw YAML lines added to the item. */
   extra?: string[];
+  role?: string;
 }
 
 const itemYaml = (s: ItemSpec): string =>
@@ -83,7 +85,7 @@ const itemYaml = (s: ItemSpec): string =>
     `  - id: ${s.id}`,
     `    title: ${s.title ?? `Item ${s.id}`}`,
     `    type: ${s.type ?? 'fix'}`,
-    '    role: builder',
+    `    role: ${s.role ?? 'builder'}`,
     '    repo: org/app',
     '    size: S',
     '    priority: 1',
@@ -296,6 +298,51 @@ const passingGh = (onLine: (line: string) => void = () => {}) =>
   });
 
 describe('studio CLI', () => {
+  describe('a review waits until the checks of the pull request head have completed', () => {
+    const review = {
+      id: 'APP-1',
+      type: 'review',
+      role: 'reviewer',
+      notes: ['review org/app#7'],
+    };
+    const plan = async (checks: { stdout?: string; stderr?: string; code?: number }) => {
+      const fx = makeFx([review, { id: 'APP-2' }]);
+      const { gh } = fakeGh((l) => (l.startsWith('pr checks 7') ? checks : undefined));
+      const r = await cli(fx, fakePorts(gh).ports, 'plan');
+      expect(r.code).toBe(0);
+      return JSON.parse(r.out);
+    };
+    it('a check still running: deferred with ci pending', async () => {
+      const p = await plan({
+        code: 8,
+        stdout: JSON.stringify([
+          { name: 'ci', bucket: 'pass' },
+          { name: 'e2e', bucket: 'pending' },
+        ]),
+      });
+      expect(p.assign.map((i: { id: string }) => i.id)).toEqual(['APP-2']);
+      expect(p.deferred).toEqual([{ id: 'APP-1', reason: 'ci pending' }]);
+    });
+    it('checks that cannot be read count as pending', async () => {
+      const p = await plan({ code: 1, stdout: '', stderr: 'HTTP 502' });
+      expect(p.deferred).toEqual([{ id: 'APP-1', reason: 'ci pending' }]);
+    });
+    it('all checks completed, red ones too: the review is planned', async () => {
+      const p = await plan({
+        stdout: JSON.stringify([
+          { name: 'ci', bucket: 'pass' },
+          { name: 'lint', bucket: 'fail' },
+          { name: 'docs', bucket: 'skipping' },
+        ]),
+      });
+      expect(p.assign.map((i: { id: string }) => i.id)).toEqual(['APP-1', 'APP-2']);
+    });
+    it('a repository without checks does not wait', async () => {
+      const p = await plan({ code: 1, stdout: '', stderr: 'no checks reported on the branch' });
+      expect(p.assign.map((i: { id: string }) => i.id)).toEqual(['APP-1', 'APP-2']);
+    });
+  });
+
   it('plan prints assignments json', async () => {
     const fx = makeFx([{ id: 'APP-1' }, { id: 'APP-2', dod: [] }]);
     const { gh } = fakeGh();

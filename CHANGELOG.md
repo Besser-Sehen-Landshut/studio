@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.7] - 2026-11-03
+
+From a real run: a reviewer launched while the pull request's CI was still running found nothing
+wrong with the code but asked for changes only because CI was pending, which forced a needless fix
+round. Not tagged yet; the maintainers tag after the merge.
+
+### Changed
+
+- The planner defers a review item with the reason `ci pending` while any check of its pull
+  request head still runs or the checks cannot be read, and a review launch refuses then too. Red
+  or skipped checks do not hold a review; a repository that reports no checks does not wait.
+- The review routine says: if the code is fine and the checks are green, the verdict is `approve`;
+  `changes_requested` only for a change the code needs, and never because checks still run (Studio
+  holds an approval until they pass).
+
 ## [0.6.6] - 2026-11-03
 
 From an independent review and an automated security review of 0.6.5 and of this release's first

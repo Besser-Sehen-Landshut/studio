@@ -93,3 +93,15 @@ An independent review of 0.6.6 found the guard's reading of `gh pr create` flags
 ### With skill (GREEN), 0.6.6
 
 The skill and the brief name `gh pr create --head studio/<id> --base main --title "<id>: <summary>" --body-file <file>`, with the file a relative path in the checkout; the same test allows both. Crews branch from `origin/main`, so the base is `main`.
+
+## Review on running CI: baseline (RED), 0.6.7
+
+Recorded from a real run on 2026-11-03 (Studio 0.6.6), anonymised. A reviewer crew was launched while the pull request's CI was still running. Its analyzers found nothing wrong with the code, yet it returned `changes_requested`, giving the running CI as the only reason. That forced a fix round with nothing to fix.
+
+Scenario F (`scenarios/review-F-run.md` with `scenarios/review-F-routine.md`, the 0.6.6 routine): code fine, both analyzers pass, the probe went red, `checks.txt` shows `e2e: pending`. A fresh agent (sonnet), written answer: `verdict: pending`, a value the report schema does not have, "I won't approve until e2e finishes green". `collect` would refuse that report. A crew held to the schema has only `changes_requested` left, as in the real run.
+
+Misses the routine targets: what to answer when the code is fine, and that running checks are no finding. The launch side changes too: a review now waits (`ci pending`) until the checks have completed.
+
+### With the new routine (GREEN), 0.6.7
+
+Same scenario with `scenarios/review-F-routine2.md` (the 0.6.7 routine, one added rule), sonnet: `verdict: approve`, "the e2e check is still running, which is not a reason for `changes_requested`, so I approve and Studio holds the approval until the checks pass."

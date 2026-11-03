@@ -84,12 +84,14 @@ import {
 import { checkReportHead, readReport, reportName } from './report.js';
 import {
   checkReviewCaps,
+  checksPending,
   MAX_FIX_ATTEMPTS,
   MAX_REVIEW_ROUNDS,
   newerReview,
   openReview,
   readCrewCaps,
   reviewRounds,
+  reviewTarget,
 } from './review.js';
 import {
   acceptLesson,
@@ -324,6 +326,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           if (slots <= 0) line = LABEL_FULL_LINE;
         }
       }
+      // A review waits until the checks of its pull request head have completed.
+      const ciPending = new Set<string>();
+      for (const i of board.items) {
+        const target = i.status === 'ready' && i.type === 'review' ? reviewTarget(i) : undefined;
+        if (target !== undefined && (await checksPending(ports, target))) ciPending.add(i.id);
+      }
       return {
         capacity,
         hold: line,
@@ -335,6 +343,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           runningPerRole(board),
           readPause(stateRoot()).paused ? 'paused' : hold,
           slots,
+          ciPending,
         ),
       };
     };

@@ -203,6 +203,11 @@ describe('renderReviewRoutine', () => {
     expect(t).toMatch(/last and alone/);
     expect(t).toContain('git checkout -- <file>');
   });
+  it('approves code that is fine with green checks; changes only for a change the code needs', () => {
+    expect(text).toMatch(/If the code is fine and the checks are green, the verdict is `approve`/);
+    expect(text).toMatch(/`changes_requested` only for a change the code needs/);
+    expect(text).toMatch(/Checks still running are never a reason for `changes_requested`/);
+  });
   it('holds the fix limit, the probe, the round and refutation', () => {
     expect(text).toContain('3 attempts per finding');
     expect(text).toContain('6 rounds');
