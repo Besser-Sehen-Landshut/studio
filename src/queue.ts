@@ -343,6 +343,8 @@ type PrView = { head: string; state: 'OPEN' | 'MERGED' | 'CLOSED'; mergeable: st
 export type ApprovalPorts = { gh: Gh; git: Git };
 /** The owner's checkout, and how it reaches the pull request's repository. */
 export type ApprovalCheckout = { dir: string; remote: string };
+const GIT_FETCH_MS = 120_000;
+const GIT_LOCAL_MS = 60_000;
 
 /**
  * Whether `head` is nothing but the merge of the base into `approved`: GitHub signed it, the approved
@@ -356,7 +358,7 @@ async function isBranchUpdate(
   target: { repo: string; pr: number },
   approved: { head: string; base: string },
   head: string,
-): Promise<boolean> {
+): Promise<boolean | string> {
   try {
     const c = await gh.run(['api', `repos/${target.repo}/commits/${head}`]);
     if (c.code !== 0) return false;
@@ -382,13 +384,41 @@ async function isBranchUpdate(
     if (d.code !== 0) return false;
     const { status } = JSON.parse(d.stdout) as { status?: unknown };
     if (status !== 'behind' && status !== 'identical') return false;
-    const g = (args: string[]) => git.run(checkout.dir, ['--no-replace-objects', ...args]);
-    await g(['fetch', '--no-tags', '--no-write-fetch-head', checkout.remote, head]);
-    const merged = await g(['merge-tree', '--write-tree', approved.head, second.sha]);
-    const tree = await g(['rev-parse', '--verify', `${head}^{tree}`]);
-    return merged.trim() !== '' && merged.trim() === tree.trim();
+    return await sameTreeAsMerge(git, checkout, approved.head, second.sha, head);
   } catch {
     return false;
+  }
+}
+
+/** True or false for the comparison; a string when git could not make it, which says why. */
+async function sameTreeAsMerge(
+  git: Git,
+  checkout: ApprovalCheckout,
+  first: string,
+  second: string,
+  head: string,
+): Promise<boolean | string> {
+  const g = (args: string[], timeoutMs: number) =>
+    git.run(checkout.dir, ['--no-replace-objects', ...args], { timeoutMs });
+  const said = (e: unknown) => (e as Error).message.replace(/\p{Cc}/gu, ' ').slice(0, 300);
+  try {
+    await g(['fetch', '--no-tags', '--no-write-fetch-head', checkout.remote, head], GIT_FETCH_MS);
+  } catch (e) {
+    return `cannot fetch ${head} to compare its tree: ${said(e)}`;
+  }
+  let merged: string;
+  try {
+    merged = await g(['merge-tree', '--write-tree', first, second], GIT_LOCAL_MS);
+  } catch (e) {
+    // Exit 1 is a conflict: the merge has no clean result, so nothing can match it.
+    if (/failed \(1\):/.test((e as Error).message)) return false;
+    return `git merge-tree failed; git 2.38 or newer is needed (see studio doctor): ${said(e)}`;
+  }
+  try {
+    const tree = await g(['rev-parse', '--verify', `${head}^{tree}`], GIT_LOCAL_MS);
+    return merged.trim() !== '' && merged.trim() === tree.trim();
+  } catch (e) {
+    return `cannot read the tree of ${head}: ${said(e)}`;
   }
 }
 
@@ -434,7 +464,9 @@ export async function approvalProblem(
   }
   if (approvedHead.toLowerCase() === head.toLowerCase()) return undefined;
   const approved = { head: approvedHead, base };
-  if (await isBranchUpdate(ports, checkout, target, approved, head)) return undefined;
+  const update = await isBranchUpdate(ports, checkout, target, approved, head);
+  if (update === true) return undefined;
+  if (typeof update === 'string') return `${name}: ${update}`;
   return `${name} is at ${head}, the approval is for ${approvedHead}: review it again`;
 }
 

@@ -765,6 +765,44 @@ describe('studio doctor', () => {
     expect(r.out).toMatch(/credential provider: configured .*provider-/);
   });
 
+  describe('the git the merge check needs', () => {
+    const withGit = (run: () => string) => {
+      const p = makePorts();
+      return { ...p.ports, git: { run: async () => run() } };
+    };
+    it.each<[string, string]>([
+      ['git version 2.38.0', 'git: 2.38.0'],
+      ['git version 2.54.0 (Apple Git-157)', 'git: 2.54.0'],
+      ['git version 3.0.0', 'git: 3.0.0'],
+    ])('%s is enough', async (version, line) => {
+      const r = await cli(
+        makeFx(),
+        withGit(() => version),
+        ['doctor'],
+      );
+      expect(r.out).toContain(line);
+      expect(r.out).not.toContain('too old');
+    });
+    it('2.37 is too old, and says what it blocks', async () => {
+      const r = await cli(
+        makeFx(),
+        withGit(() => 'git version 2.37.9'),
+        ['doctor'],
+      );
+      expect(r.out).toMatch(/git: 2\.37\.9 \(too old: 2\.38 or newer/);
+    });
+    it('no git reads cannot tell', async () => {
+      const r = await cli(
+        makeFx(),
+        withGit(() => {
+          throw new Error('no git');
+        }),
+        ['doctor'],
+      );
+      expect(r.out).toContain('git: cannot tell');
+    });
+  });
+
   describe('plugins a crew needs', () => {
     const skill = (dir: string, name: string) => {
       mkdirSync(join(dir, 'skills', name), { recursive: true });

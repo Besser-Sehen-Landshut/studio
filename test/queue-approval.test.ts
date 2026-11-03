@@ -196,11 +196,62 @@ describe('approvalProblem: a commit on top of the approved head, with real git',
       /review it again/,
     );
   });
-  it('a head git cannot fetch refuses', async () => {
+  it('a head git cannot fetch refuses and says so, not that a review is due', async () => {
     const gone = 'f'.repeat(40);
-    expect(await ask({ commit: signed([approved, onBase]) }, approval(), gone)).toMatch(
-      /review it again/,
+    const why = await ask({ commit: signed([approved, onBase]) }, approval(), gone);
+    expect(why).toMatch(/cannot fetch/);
+    expect(why).not.toMatch(/review it again/);
+  });
+  const withGit = (run: (args: string[]) => string) =>
+    approvalProblem(
+      {
+        gh: ghFor({ commit: signed([approved, onBase]) }).gh,
+        git: { run: async (_c, a) => run(a) },
+      },
+      checkout(),
+      target,
+      approval(),
+      honest,
     );
+  const failing = (code: number, stderr: string) => {
+    throw new Error(`git x failed (${code}): ${stderr}`);
+  };
+  it('a git too old for merge-tree --write-tree says so, and refuses', async () => {
+    const why = await withGit((a) =>
+      a.includes('merge-tree') ? failing(129, 'usage: git merge-tree') : '',
+    );
+    expect(why).toMatch(/git 2\.38/);
+    expect(why).not.toMatch(/review it again/);
+  });
+  it('a conflict needs a new review', async () => {
+    const why = await withGit((a) => (a.includes('merge-tree') ? failing(1, 'conflict') : ''));
+    expect(why).toMatch(/review it again/);
+  });
+  it('a tree that cannot be read says so, and refuses', async () => {
+    const why = await withGit((a) =>
+      a.includes('--verify') ? failing(128, 'bad object') : a.includes('merge-tree') ? 't' : '',
+    );
+    expect(why).toMatch(/cannot read/);
+  });
+  it('the git steps pass a timeout', async () => {
+    const seen: (number | undefined)[] = [];
+    await approvalProblem(
+      {
+        gh: ghFor({ commit: signed([approved, onBase]) }).gh,
+        git: {
+          run: async (_c, _a, o) => {
+            seen.push(o?.timeoutMs);
+            return 't';
+          },
+        },
+      },
+      checkout(),
+      target,
+      approval(),
+      honest,
+    );
+    expect(seen).toHaveLength(3);
+    expect(seen.every((t) => typeof t === 'number' && t > 0)).toBe(true);
   });
   it.each<[string, Reply]>([
     ['one parent', signed([approved])],

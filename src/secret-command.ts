@@ -110,6 +110,20 @@ async function crewConfigDir(
   }
 }
 
+/** The merge check compares trees with `git merge-tree --write-tree`, new in git 2.38. */
+async function gitState(project: string, ports: Ports): Promise<string> {
+  try {
+    const m = /(\d+)\.(\d+)\.(\d+)/.exec(await ports.git.run(project, ['--version']));
+    if (!m) return 'cannot tell';
+    const enough = Number(m[1]) > 2 || (Number(m[1]) === 2 && Number(m[2]) >= 38);
+    return enough
+      ? (m[0] as string)
+      : `${m[0]} (too old: 2.38 or newer is needed to accept a merged base)`;
+  } catch {
+    return 'cannot tell';
+  }
+}
+
 /** Whether a skill a crew needs is in that config dir. */
 function skillState(dir: string | undefined, name: string): string {
   const found = dir === undefined ? undefined : skillInstalled(dir, name);
@@ -154,7 +168,9 @@ export async function runDoctor(o: {
     o.ports,
   );
   const studioCrew = skillState(configDir, CREW_SKILL.split(':').at(-1) ?? '');
+  const git = await gitState(o.project, o.ports);
   const report = {
+    git,
     crewToken: { ...crewToken, required },
     crewTokenFile: crewTokenFile(o.owner),
     studioYaml: config ? 'readable' : 'not readable',
@@ -176,6 +192,7 @@ export async function runDoctor(o: {
       `crew token: ${crewToken.status}${source}${required ? '' : ' (optional: allow_ambient_credentials)'}`,
       `studio.yaml: ${report.studioYaml}`,
       `superpowers: ${report.superpowers}`,
+      `git: ${git}`,
       `studio plugin: ${studioCrew}${studioCrew === 'not found' && configDir !== undefined ? ` (${studioPluginHint(configDir)})` : ''}`,
       `stacks: ${report.stacks === null ? 'not set: run studio setup stack' : report.stacks.join(', ') || '(none)'}`,
       `owner config: ${report.ownerConfig}`,

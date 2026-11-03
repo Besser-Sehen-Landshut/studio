@@ -42,7 +42,7 @@ export interface Gh {
 
 export interface Git {
   /** Runs `git <args>` in `cwd`, returns stdout. Throws on non-zero exit with stderr in the message. */
-  run(cwd: string, args: string[]): Promise<string>;
+  run(cwd: string, args: string[], opts?: { timeoutMs?: number }): Promise<string>;
 }
 
 export interface Claude {
@@ -135,13 +135,15 @@ export function realPorts(claudeBin = 'claude'): Ports {
   };
 
   const git: Git = {
-    async run(cwd, args) {
+    async run(cwd, args, opts) {
       // No prompt for a moved or removed upstream: a command must fail, not wait for a person.
       const r = await execa('git', args, {
         cwd,
         reject: false,
         env: { GIT_TERMINAL_PROMPT: '0' },
+        ...(opts?.timeoutMs === undefined ? {} : { timeout: opts.timeoutMs }),
       });
+      if (r.timedOut) throw new Error(`git ${args.join(' ')} timed out`);
       if (r.exitCode !== 0) {
         throw new Error(`git ${args.join(' ')} failed (${r.exitCode}): ${r.stderr}`);
       }
