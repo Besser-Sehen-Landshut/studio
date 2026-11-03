@@ -24,7 +24,8 @@ the merge.
 - A review report names, for each `not_run_here` command, the workflow file at the base and the
   job that runs it (`not_run_here_jobs: [{ command, workflow, job }]`). `collect` checks each in
   the owner's checkout at the pull request's base commit (`baseRefOid`, the base its checks ran
-  against): the workflow's `name:` must be unique among the workflow files there; the job must be
+  against) and at its head: the workflow must run on `pull_request`, and its `name:` must be unique
+  among the workflow files there, because `gh pr checks` names a workflow, not its file; the job must be
   in that file (by its `name:`, else its id) with no `if:`, no `continue-on-error` and no `uses:`
   (reusable workflows are refused); a `run:` step without `if:` or `continue-on-error` must start
   a line with the whole command (a heuristic). When the pull request changes that workflow file,
@@ -49,7 +50,9 @@ the merge.
 ### Security
 
 - The guard no longer models gh's or git's option grammar; it allows listed forms only.
-  - gh: `gh pr view`, `checks`, `diff`, `list` and `status`, and exactly `gh pr create --head
+  - gh: `gh pr view`, `checks`, `diff`, `list` and `status`, each with its own exact list of
+    flags (`--json`, `--jq`, and for some `--watch`, `--required`, `--name-only`, `--state`,
+    `--limit`; every flag its own word, no `=`, no clusters, no `--web`), and exactly `gh pr create --head
     studio/<id> --base <item base> --title <text> --body-file <file>` from the clone root, each
     option once in any order, the file a plain relative path whose real path is in the clone. With
     `crew_allowed_workflows` set, also exactly `gh workflow run <listed workflow> --ref <listed

@@ -30,7 +30,14 @@ const jobPassed = (checks: readonly Check[], workflow: string, job: string): boo
   return mine.length > 0 && mine.every((c) => c.bucket === 'pass');
 };
 
-type Workflow = { name: string; jobs: [string, unknown][] };
+type Workflow = { name: string; jobs: [string, unknown][]; onPullRequest: boolean };
+
+/** Whether `on:` names `pull_request` (a string, a list or a map): only then is its check the PR's. */
+function runsOnPullRequest(on: unknown): boolean {
+  if (on === 'pull_request') return true;
+  if (Array.isArray(on)) return on.includes('pull_request');
+  return on !== null && typeof on === 'object' && 'pull_request' in on;
+}
 
 /** The workflow's name as checks report it (its `name:`, else its path) and its jobs. */
 function readWorkflow(text: string, path: string): Workflow | undefined {
@@ -41,11 +48,11 @@ function readWorkflow(text: string, path: string): Workflow | undefined {
     return undefined;
   }
   if (doc === null || typeof doc !== 'object') return undefined;
-  const wf = doc as { name?: unknown; jobs?: unknown };
+  const wf = doc as { name?: unknown; jobs?: unknown; on?: unknown };
   const name = typeof wf.name === 'string' && wf.name.trim() !== '' ? wf.name : path;
   const jobs =
     wf.jobs !== null && typeof wf.jobs === 'object' ? Object.entries(wf.jobs as object) : [];
-  return { name, jobs };
+  return { name, jobs, onPullRequest: runsOnPullRequest(wf.on) };
 }
 
 /**
@@ -87,10 +94,11 @@ function jobProblem(wf: Workflow, job: string, command: string): string | undefi
  * Holds each command the builder could not run to the CI job the reviewer named for it, read in the
  * owner's checkout, never in the crew's clone. `baseOid` is the pull request's base commit as gh
  * reports it (`baseRefOid`, the base the checks ran against). At that commit the file must be a
- * workflow whose name no other workflow file there shares, the job must run the command (see
- * `jobProblem`), and every check of the job in that workflow must have passed on the pull request.
- * When the pull request changes that workflow file, the version at its head, the one that ran,
- * must pass the same test under the same name. Reasons are fixed text: commands and job names are
+ * workflow that runs on `pull_request` and whose name no other workflow file there shares, the job
+ * must run the command (see `jobProblem`), and every check of the job in that workflow must have
+ * passed on the pull request. The version at the pull request head, the one that ran, must pass
+ * the same test under the same name. `gh pr checks` reports a workflow by name, not by file, so
+ * the name has to be unique. Reasons are fixed text: commands and job names are
  * crew text.
  */
 export async function verifyNotRunHereJobs(o: {
@@ -136,53 +144,34 @@ export async function verifyNotRunHereJobs(o: {
       }
     }
     if (!fetched) return fail('the base commit cannot be fetched');
-    const wf = await read(base, named.workflow);
-    if (wf === undefined) return fail('the workflow is not at the base or not valid YAML');
-    // Checks name a workflow by its name only: another file of that name could have run instead.
-    let others: string[];
-    try {
-      others = (await g(['ls-tree', '--name-only', '-z', base, WORKFLOWS_DIR], GIT_LOCAL_MS))
-        .split('\0')
-        .filter((p) => p !== '' && p !== named.workflow && WORKFLOW_FILE.test(p));
-    } catch {
-      return fail('the workflows at the base cannot be listed');
-    }
-    for (const other of others) {
-      const w = await read(base, other);
-      if (w === undefined || w.name === wf.name) {
-        return fail('the workflow name is not unique at the base');
+    // The same test at the base and at the head: the head's version is the one that ran.
+    const at = async (oid: string, where: string): Promise<Workflow | string> => {
+      const w = await read(oid, named.workflow);
+      if (w === undefined) return `the workflow is not at ${where} or not valid YAML`;
+      if (!w.onPullRequest) return `the workflow does not run on pull_request at ${where}`;
+      // Checks name a workflow by its name only: another file of that name could have run instead.
+      let others: string[];
+      try {
+        others = (await g(['ls-tree', '--name-only', '-z', oid, WORKFLOWS_DIR], GIT_LOCAL_MS))
+          .split('\0')
+          .filter((p) => p !== '' && p !== named.workflow && WORKFLOW_FILE.test(p));
+      } catch {
+        return `the workflows at ${where} cannot be listed`;
       }
-    }
-    const atBase = jobProblem(wf, named.job, command);
-    if (atBase !== undefined) return fail(`${atBase} at the base`);
-    let changed: boolean;
-    try {
-      changed =
-        (
-          await g(
-            [
-              'diff',
-              '--name-only',
-              '--no-renames',
-              '-z',
-              `${base}...${o.headOid}`,
-              '--',
-              named.workflow,
-            ],
-            GIT_LOCAL_MS,
-          )
-        ).trim() !== '';
-    } catch {
-      return fail('the change of the workflow cannot be read');
-    }
-    if (changed) {
-      const head = await read(o.headOid, named.workflow);
-      if (head === undefined) return fail('the workflow is gone at the pull request head');
-      if (head.name !== wf.name)
-        return fail('the workflow has another name at the pull request head');
-      const atHead = jobProblem(head, named.job, command);
-      if (atHead !== undefined) return fail(`${atHead} at the pull request head`);
-    }
+      for (const other of others) {
+        const x = await read(oid, other);
+        if (x === undefined || x.name === w.name)
+          return `the workflow name is not unique at ${where}`;
+      }
+      const problem = jobProblem(w, named.job, command);
+      return problem === undefined ? w : `${problem} at ${where}`;
+    };
+    const wf = await at(base, 'the base');
+    if (typeof wf === 'string') return fail(wf);
+    const head = await at(o.headOid, 'the pull request head');
+    if (typeof head === 'string') return fail(head);
+    if (head.name !== wf.name)
+      return fail('the workflow has another name at the pull request head');
     if (!jobPassed(o.checks, wf.name, named.job)) {
       return fail('the job has no passing check on the pull request (missing or skipped)');
     }

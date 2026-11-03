@@ -1206,7 +1206,53 @@ function checkPrCreate(env: Env, args: string[], cwd: string | null): void {
 
 // The gh a crew may run: these reads of pull requests, the one `gh pr create` form and, when the
 // owner lists workflows, `gh workflow run <workflow> --ref <ref>`. Nothing else.
-const GH_PR_READ = new Set(['view', 'checks', 'diff', 'list', 'status']);
+const JSON_FIELDS = /^[A-Za-z]+(,[A-Za-z]+)*$/;
+const JQ = /^[^-]/;
+const COUNT = /^[1-9]\d{0,3}$/;
+const REF_NAME = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/;
+type ReadSpec = { number: boolean; flags: string[]; values: Record<string, RegExp> };
+// What each read may take, flag by flag, each its own word: no clusters, no `=`, no -R, no --web.
+const GH_PR_READ: Record<string, ReadSpec> = {
+  view: { number: true, flags: [], values: { '--json': JSON_FIELDS, '--jq': JQ } },
+  checks: {
+    number: true,
+    flags: ['--watch', '--required', '--fail-fast'],
+    values: { '--json': JSON_FIELDS, '--jq': JQ, '--interval': COUNT },
+  },
+  diff: { number: true, flags: ['--name-only', '--patch'], values: {} },
+  list: {
+    number: false,
+    flags: [],
+    values: {
+      '--json': JSON_FIELDS,
+      '--jq': JQ,
+      '--state': /^(open|closed|merged|all)$/,
+      '--limit': COUNT,
+      '--head': REF_NAME,
+      '--base': REF_NAME,
+    },
+  },
+  status: { number: false, flags: [], values: { '--json': JSON_FIELDS, '--jq': JQ } },
+};
+
+/** A read of a pull request with only the flags its spec lists; anything else is refused. */
+function checkPrRead(sub: string, spec: ReadSpec, rest: string[]): void {
+  let numbers = 0;
+  for (let k = 0; k < rest.length; k++) {
+    const a = rest[k] as string;
+    if (spec.flags.includes(a)) continue;
+    const valid = spec.values[a];
+    if (valid !== undefined) {
+      const v = rest[++k];
+      if (v === undefined || unresolvedWord(v) || !valid.test(v)) {
+        deny(`gh pr ${sub} ${a} needs a plain value`);
+      }
+      continue;
+    }
+    if (spec.number && /^[1-9]\d{0,9}$/.test(a) && numbers++ === 0) continue;
+    deny(`gh pr ${sub} does not take ${a.startsWith('-') ? a.split('=')[0] : 'that argument'}`);
+  }
+}
 
 function checkGh(env: Env, args: string[], cwd: string | null): void {
   const [g0, g1] = args;
@@ -1226,7 +1272,10 @@ function checkGh(env: Env, args: string[], cwd: string | null): void {
   ) {
     deny('gh -R, --repo and --hostname are not allowed: crews work on their own repository');
   }
-  if (g0 === 'pr' && g1 !== undefined && GH_PR_READ.has(g1)) return;
+  if (g0 === 'pr' && g1 !== undefined && Object.hasOwn(GH_PR_READ, g1)) {
+    checkPrRead(g1, GH_PR_READ[g1] as ReadSpec, args.slice(2));
+    return;
+  }
   if (g0 === 'pr' && g1 === 'create') {
     checkPrCreate(env, args, cwd);
     return;

@@ -70,6 +70,57 @@ const bash = (command: string, cwd?: string) =>
 const tool = (toolName: string, toolInput: Record<string, unknown>) =>
   evaluateGuard({ toolName, toolInput }, ctx);
 
+describe('gh pr reads: an exact flag list per command, no clusters', () => {
+  it.each([
+    'gh pr view',
+    'gh pr view 3',
+    'gh pr view 3 --json state,mergeable',
+    "gh pr view 3 --json state --jq '.state'",
+    'gh pr checks 3',
+    'gh pr checks 3 --watch',
+    'gh pr checks 3 --required',
+    'gh pr checks 3 --json name,bucket,workflow',
+    'gh pr diff 3',
+    'gh pr diff 3 --name-only',
+    'gh pr diff 3 --patch',
+    'gh pr list',
+    'gh pr list --state open --limit 20',
+    'gh pr list --head studio/APP-1 --json number',
+    'gh pr status',
+    'gh pr status --json number',
+  ])('allows %s', (cmd) => {
+    expect(bash(cmd, wt).decision).toBe('allow');
+  });
+  it.each([
+    // a cluster that holds R (or anything) later
+    'gh pr view 3 -wR other/repo',
+    'gh pr checks 3 -wR other/repo',
+    'gh pr diff 3 -cR other/repo',
+    'gh pr list -wR other/repo',
+    'gh pr status -cR other/repo',
+    // the web, other repositories, hosts, short forms, = forms, unknown flags
+    'gh pr view 3 --web',
+    'gh pr view 3 -w',
+    'gh pr list --web',
+    'gh pr view 3 --repo other/repo',
+    'gh pr view 3 --hostname example.com',
+    'gh pr view 3 -c',
+    'gh pr view 3 --json=state',
+    'gh pr view 3 --comments --template x',
+    'gh pr checks 3 --interval=1',
+    'gh pr diff 3 --color always',
+    'gh pr list --search x',
+    'gh pr view 3 4',
+    'gh pr view studio/APP-2',
+    'gh pr view 3 --json',
+    'gh pr view 3 --json -R',
+    'gh pr list --state x',
+    'gh pr list --limit lots',
+  ])('denies %s', (cmd) => {
+    expect(bash(cmd, wt).decision).toBe('deny');
+  });
+});
+
 describe('round 3: the probes of the independent review', () => {
   const out = () => join(root, 'elsewhere');
   it.each([

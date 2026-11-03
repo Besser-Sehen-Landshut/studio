@@ -167,6 +167,39 @@ jobs:
     ).toBe(true);
   });
 
+  it('the workflow name must be unique at the pull request head too', async () => {
+    const r = await gate({
+      head: {
+        '.github/workflows/ci.yml': CI,
+        '.github/workflows/copy.yml': CI.replace('pnpm test:e2e --reporter dot', 'echo none'),
+      },
+      checks: [pass('e2e')],
+    });
+    expect(r).toMatchObject({
+      ok: false,
+      why: expect.stringMatching(/not unique at the pull request head/),
+    });
+  });
+
+  it('the workflow must run on pull_request, at the base and at the head', async () => {
+    const on = (trigger: string) => CI.replace('on: pull_request', trigger);
+    for (const [trigger, ok] of [
+      ['on: push', false],
+      ['on: [push, pull_request_target]', false],
+      ['on: workflow_dispatch', false],
+      ['on: [push, pull_request]', true],
+      ['on:\n  pull_request:\n    branches: [main]', true],
+    ] as const) {
+      const base = { '.github/workflows/ci.yml': on(trigger) };
+      expect((await gate({ base, checks: [pass('e2e')] })).ok, trigger).toBe(ok);
+    }
+    const r = await gate({
+      head: { '.github/workflows/ci.yml': on('on: push') },
+      checks: [pass('e2e')],
+    });
+    expect(r).toMatchObject({ ok: false, why: expect.stringMatching(/pull_request.*head/) });
+  });
+
   it('the merge re-check counts matrix instances the same way', () => {
     const jobs = [{ workflow: 'CI', job: 'e2e' }];
     expect(approvedJobsProblem(jobs, [pass('e2e (20)'), pass('e2e (22)')])).toBeUndefined();

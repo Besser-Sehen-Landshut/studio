@@ -1442,7 +1442,49 @@ function checkPrCreate(env, args, cwd) {
     deny(`gh pr create --body-file outside the clone: ${file}`);
   }
 }
-var GH_PR_READ = /* @__PURE__ */ new Set(["view", "checks", "diff", "list", "status"]);
+var JSON_FIELDS = /^[A-Za-z]+(,[A-Za-z]+)*$/;
+var JQ = /^[^-]/;
+var COUNT = /^[1-9]\d{0,3}$/;
+var REF_NAME = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/;
+var GH_PR_READ = {
+  view: { number: true, flags: [], values: { "--json": JSON_FIELDS, "--jq": JQ } },
+  checks: {
+    number: true,
+    flags: ["--watch", "--required", "--fail-fast"],
+    values: { "--json": JSON_FIELDS, "--jq": JQ, "--interval": COUNT }
+  },
+  diff: { number: true, flags: ["--name-only", "--patch"], values: {} },
+  list: {
+    number: false,
+    flags: [],
+    values: {
+      "--json": JSON_FIELDS,
+      "--jq": JQ,
+      "--state": /^(open|closed|merged|all)$/,
+      "--limit": COUNT,
+      "--head": REF_NAME,
+      "--base": REF_NAME
+    }
+  },
+  status: { number: false, flags: [], values: { "--json": JSON_FIELDS, "--jq": JQ } }
+};
+function checkPrRead(sub, spec, rest) {
+  let numbers = 0;
+  for (let k = 0; k < rest.length; k++) {
+    const a = rest[k];
+    if (spec.flags.includes(a)) continue;
+    const valid = spec.values[a];
+    if (valid !== void 0) {
+      const v = rest[++k];
+      if (v === void 0 || unresolvedWord(v) || !valid.test(v)) {
+        deny(`gh pr ${sub} ${a} needs a plain value`);
+      }
+      continue;
+    }
+    if (spec.number && /^[1-9]\d{0,9}$/.test(a) && numbers++ === 0) continue;
+    deny(`gh pr ${sub} does not take ${a.startsWith("-") ? a.split("=")[0] : "that argument"}`);
+  }
+}
 function checkGh(env, args, cwd) {
   const [g0, g1] = args;
   for (const w of [g0, g1]) {
@@ -1453,7 +1495,10 @@ function checkGh(env, args, cwd) {
   )) {
     deny("gh -R, --repo and --hostname are not allowed: crews work on their own repository");
   }
-  if (g0 === "pr" && g1 !== void 0 && GH_PR_READ.has(g1)) return;
+  if (g0 === "pr" && g1 !== void 0 && Object.hasOwn(GH_PR_READ, g1)) {
+    checkPrRead(g1, GH_PR_READ[g1], args.slice(2));
+    return;
+  }
   if (g0 === "pr" && g1 === "create") {
     checkPrCreate(env, args, cwd);
     return;

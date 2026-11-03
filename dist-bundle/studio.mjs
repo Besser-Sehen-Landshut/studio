@@ -31285,6 +31285,11 @@ var jobPassed = (checks, workflow, job) => {
   const mine = instances(checks, workflow, job);
   return mine.length > 0 && mine.every((c3) => c3.bucket === "pass");
 };
+function runsOnPullRequest(on6) {
+  if (on6 === "pull_request") return true;
+  if (Array.isArray(on6)) return on6.includes("pull_request");
+  return on6 !== null && typeof on6 === "object" && "pull_request" in on6;
+}
 function readWorkflow(text, path10) {
   let doc;
   try {
@@ -31296,7 +31301,7 @@ function readWorkflow(text, path10) {
   const wf = doc;
   const name = typeof wf.name === "string" && wf.name.trim() !== "" ? wf.name : path10;
   const jobs = wf.jobs !== null && typeof wf.jobs === "object" ? Object.entries(wf.jobs) : [];
-  return { name, jobs };
+  return { name, jobs, onPullRequest: runsOnPullRequest(wf.on) };
 }
 function jobProblem(wf, job, command) {
   const found = wf.jobs.find(([id, j]) => {
@@ -31354,47 +31359,30 @@ async function verifyNotRunHereJobs(o2) {
       }
     }
     if (!fetched) return fail2("the base commit cannot be fetched");
-    const wf = await read3(base, named.workflow);
-    if (wf === void 0) return fail2("the workflow is not at the base or not valid YAML");
-    let others;
-    try {
-      others = (await g(["ls-tree", "--name-only", "-z", base, WORKFLOWS_DIR], GIT_LOCAL_MS)).split("\0").filter((p) => p !== "" && p !== named.workflow && WORKFLOW_FILE.test(p));
-    } catch {
-      return fail2("the workflows at the base cannot be listed");
-    }
-    for (const other of others) {
-      const w = await read3(base, other);
-      if (w === void 0 || w.name === wf.name) {
-        return fail2("the workflow name is not unique at the base");
+    const at = async (oid, where) => {
+      const w = await read3(oid, named.workflow);
+      if (w === void 0) return `the workflow is not at ${where} or not valid YAML`;
+      if (!w.onPullRequest) return `the workflow does not run on pull_request at ${where}`;
+      let others;
+      try {
+        others = (await g(["ls-tree", "--name-only", "-z", oid, WORKFLOWS_DIR], GIT_LOCAL_MS)).split("\0").filter((p) => p !== "" && p !== named.workflow && WORKFLOW_FILE.test(p));
+      } catch {
+        return `the workflows at ${where} cannot be listed`;
       }
-    }
-    const atBase = jobProblem(wf, named.job, command);
-    if (atBase !== void 0) return fail2(`${atBase} at the base`);
-    let changed;
-    try {
-      changed = (await g(
-        [
-          "diff",
-          "--name-only",
-          "--no-renames",
-          "-z",
-          `${base}...${o2.headOid}`,
-          "--",
-          named.workflow
-        ],
-        GIT_LOCAL_MS
-      )).trim() !== "";
-    } catch {
-      return fail2("the change of the workflow cannot be read");
-    }
-    if (changed) {
-      const head = await read3(o2.headOid, named.workflow);
-      if (head === void 0) return fail2("the workflow is gone at the pull request head");
-      if (head.name !== wf.name)
-        return fail2("the workflow has another name at the pull request head");
-      const atHead = jobProblem(head, named.job, command);
-      if (atHead !== void 0) return fail2(`${atHead} at the pull request head`);
-    }
+      for (const other of others) {
+        const x = await read3(oid, other);
+        if (x === void 0 || x.name === w.name)
+          return `the workflow name is not unique at ${where}`;
+      }
+      const problem = jobProblem(w, named.job, command);
+      return problem === void 0 ? w : `${problem} at ${where}`;
+    };
+    const wf = await at(base, "the base");
+    if (typeof wf === "string") return fail2(wf);
+    const head = await at(o2.headOid, "the pull request head");
+    if (typeof head === "string") return fail2(head);
+    if (head.name !== wf.name)
+      return fail2("the workflow has another name at the pull request head");
     if (!jobPassed(o2.checks, wf.name, named.job)) {
       return fail2("the job has no passing check on the pull request (missing or skipped)");
     }
