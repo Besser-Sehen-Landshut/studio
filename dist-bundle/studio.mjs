@@ -7844,7 +7844,8 @@ var require_shell_quote = __commonJS({
 import { homedir as homedir8 } from "node:os";
 
 // src/cli.ts
-import { existsSync as existsSync6 } from "node:fs";
+import { existsSync as existsSync6, mkdtempSync, rmSync as rmSync5, writeFileSync as writeFileSync9 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname as dirname10, join as join24, resolve as resolve5 } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -27913,6 +27914,9 @@ var ownerConfigSchema = external_exports.strictObject({
   // Opt-in: let crew runs bill the API. An API key would otherwise take precedence over the
   // subscription login, so the variables and settings for it are refused by default.
   allowApiBilling: external_exports.boolean().default(false),
+  // Opens the macOS TLS trust service to crew shells so gh can run; weakens the network
+  // boundary (SECURITY.md). Off: Studio opens a crew's pull request itself.
+  crewAllowMacosTrustService: external_exports.boolean().default(false),
   crewLabelLimits: crewLabelLimitsSchema,
   // Push notifications: an absolute executable that gets each message in its environment (see
   // README). It lives here, not in studio.yaml, because it runs on the owner's machine.
@@ -28691,6 +28695,8 @@ var reportSchema = external_exports.object({
   status: external_exports.enum(["done", "blocked", "failed"]),
   item: external_exports.string().optional(),
   pr: external_exports.number().int().positive().nullish(),
+  // Where a crew cannot open its pull request, it names the title and Studio opens it.
+  prTitle: external_exports.string().min(1).max(200).regex(/^[^\p{Cc}]+$/u).nullish(),
   headSha: external_exports.string().nullish(),
   testsRun: external_exports.number().int().nonnegative().nullish(),
   verdict: external_exports.enum(["approve", "changes_requested"]).nullish(),
@@ -28749,6 +28755,8 @@ function parseReport(text, item) {
     status: d.status,
     ...d.item !== void 0 && { item: d.item },
     ...d.pr != null && { pr: d.pr },
+    ...d.prTitle != null && { prTitle: d.prTitle },
+    body: text.slice(m[0].length).trim(),
     ...d.headSha != null && { headSha: d.headSha },
     ...d.testsRun != null && { testsRun: d.testsRun },
     ...d.verdict != null && { verdict: d.verdict },
@@ -32714,7 +32722,11 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
     // Review and research items open no PR and push nothing, so their brief carries no push or PR rule.
     ...opensPr ? [
       `- Push with an explicit refspec: \`git push -u origin HEAD:refs/heads/studio/${id}\`.`,
-      `- Open the pull request with \`gh pr create --title "${id}: <summary>" --body-file <file>\`.`
+      ...caps.prByStudio === true ? [
+        `- Do not open the pull request, and do not run gh at all: it cannot verify TLS in this sandbox. Give \`pr_title: "${id}: <summary>"\` in the report and write the pull request text as the report body; Studio opens the pull request from your pushed branch.`
+      ] : [
+        `- Open the pull request with \`gh pr create --title "${id}: <summary>" --body-file <file>\`.`
+      ]
     ] : [],
     "- Git identity and GitHub authentication are preconfigured; do not change git config or log in.",
     "- Never merge, deploy, force-push, or touch secrets.",
@@ -32738,7 +32750,7 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
       'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"',
       "finding_attempts: <highest number of attempts on one finding>"
     ] : item.type === "research" ? [] : [
-      "pr: <number>",
+      caps.prByStudio === true ? `pr_title: "${id}: <summary, one line, at most 200 characters>"` : "pr: <number>",
       "head_sha: <40-hex sha of the pushed head commit>",
       "tests_run: <number of tests that ran>"
     ],
@@ -32894,7 +32906,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
         strictAllowlist: true,
         // Go tools such as gh verify TLS only through this macOS service; only it is opened, see
         // SECURITY.md (https://code.claude.com/docs/en/sandboxing).
-        ...(launcher.platform ?? process.platform) === "darwin" ? { allowMachLookup: ["com.apple.trustd.agent"] } : {}
+        ...(launcher.platform ?? process.platform) === "darwin" && dirs.macosTrustService === true ? { allowMachLookup: ["com.apple.trustd.agent"] } : {}
       }
     }
   };
@@ -33187,13 +33199,21 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     startedAt: ports.clock.now().toISOString()
   });
   caps.reportName = newReportName(stateRoot, item.id);
+  caps.prByStudio = (launcher.platform ?? process.platform) === "darwin" && !ownerConfig.crewAllowMacosTrustService;
   const brief = writeBrief(stateRoot, item, config2, projectDir, briefRules, caps);
   const settings = writeCrewSettings(
     stateRoot,
     item,
     wt.path,
     config2,
-    { homeDir, tmpDir, projectDir, toolchainPaths, providerConfigDir },
+    {
+      homeDir,
+      tmpDir,
+      projectDir,
+      toolchainPaths,
+      providerConfigDir,
+      macosTrustService: ownerConfig.crewAllowMacosTrustService
+    },
     owner
   );
   const mcpConfig = join18(stateRoot, "settings", `${item.id}.mcp.json`);
@@ -34973,7 +34993,7 @@ async function runCli(argv, deps) {
         if (fileName === void 0) {
           throw new Error(`no report name was drawn for ${item.id}: relaunch it, nothing moved`);
         }
-        const report = readReport(clone2, item.id, item, { notBefore, fileName });
+        let report = readReport(clone2, item.id, item, { notBefore, fileName });
         const reviewDone = item.type === "review" && report.status === "done" ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report) : { skipped: [], target: void 0 };
         if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0) {
           const m = /^(.+)#(\d+)$/.exec(reviewDone.target);
@@ -34981,6 +35001,11 @@ async function runCli(argv, deps) {
           checkReportHead(report, info.head);
         }
         let branch = `studio/${item.id}`;
+        if (report.status === "done" && report.pr === void 0 && report.prTitle !== void 0 && !PR_OPTIONAL.includes(item.type)) {
+          const token = crewTokenFor(loadConfig(project), owner);
+          const pr = await openCrewPr(ports, item, report.prTitle, report.body, token);
+          report = { ...report, pr };
+        }
         if (report.pr !== void 0) {
           const holder = board.items.find(
             (i2) => i2.id !== item.id && i2.repo === item.repo && i2.pr === report.pr
@@ -35626,6 +35651,48 @@ async function prInfo(ports, repo, pr) {
   return { head, branch };
 }
 var PR_OPTIONAL = ["review", "research"];
+var PR_BODY_MAX = 2e4;
+function crewTokenFor(config2, owner) {
+  const fromEnv = config2.crewToken ? owner.env?.[config2.crewToken.env] : void 0;
+  if (fromEnv) return fromEnv;
+  const file2 = readCrewTokenFile(owner);
+  if (file2.kind === "ok") return file2.token;
+  throw new Error(
+    "opening the pull request needs the crew token (studio secret set crew-token); nothing moved"
+  );
+}
+async function openCrewPr(ports, item, title, body, token) {
+  const head = `studio/${item.id}`;
+  const list2 = await ports.gh.run(
+    ["pr", "list", "--repo", item.repo, "--head", head, "--state", "open", "--json", "number"],
+    { token }
+  );
+  if (list2.code !== 0)
+    throw new Error(`cannot list pull requests of ${head} (gh exit ${list2.code})`);
+  const open2 = JSON.parse(list2.stdout || "[]");
+  const known = open2.find((p) => Number.isInteger(p.number))?.number;
+  if (typeof known === "number") return known;
+  const text = `${body.replace(/[^\P{Cc}\n\t]/gu, "").slice(0, PR_BODY_MAX)}
+
+---
+Opened by Studio for ${item.id}; the text above was written by the crew.
+`;
+  const dir = mkdtempSync(join24(tmpdir(), "studio-pr-"));
+  try {
+    const file2 = join24(dir, "body.md");
+    writeFileSync9(file2, text, { mode: 384 });
+    const r = await ports.gh.run(
+      ["pr", "create", "--repo", item.repo, "--head", head, "--title", title, "--body-file", file2],
+      { token }
+    );
+    const m = /\/pull\/(\d+)\s*$/.exec(r.stdout);
+    if (r.code !== 0 || !m)
+      throw new Error(`gh pr create failed for ${head} (exit ${r.code}); nothing moved`);
+    return Number(m[1]);
+  } finally {
+    rmSync5(dir, { recursive: true, force: true });
+  }
+}
 var MAX_NOTES = 10;
 var MAX_NOTE_CHARS = 500;
 function capNotes(notes) {
@@ -40707,7 +40774,7 @@ var throwOnSerializableInput = (optionName, invalidItem) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-sync.js
-import { writeFileSync as writeFileSync9, appendFileSync } from "node:fs";
+import { writeFileSync as writeFileSync10, appendFileSync } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/output.js
 var shouldLogOutput = ({ stdioItems, encoding, verboseInfo, fdNumber }) => fdNumber !== "all" && isFullVerbose(verboseInfo, fdNumber) && !BINARY_ENCODINGS.has(encoding) && isFdVerbose(fdNumber) && (stdioItems.some(({ type, value }) => type === "native" && PIPED_STDIO_VALUES.has(value)) || stdioItems.every(({ type }) => TRANSFORM_TYPES.has(type)));
@@ -40841,7 +40908,7 @@ var writeToFiles = (chunks, stdioItems, outputFiles) => {
     if (append || outputFiles.has(path10)) {
       appendFileSync(path10, contents);
     } else {
-      writeFileSync9(path10, contents);
+      writeFileSync10(path10, contents);
     }
     outputFiles.add(path10);
   }
@@ -43681,7 +43748,9 @@ function realPorts(claudeBin = "claude") {
     async run(args, opts) {
       const r = await execa("gh", args, {
         reject: false,
-        ...opts?.timeoutMs === void 0 ? {} : { timeout: opts.timeoutMs }
+        ...opts?.timeoutMs === void 0 ? {} : { timeout: opts.timeoutMs },
+        // A given token wins over the owner's gh login for this one call.
+        ...opts?.token === void 0 ? {} : { env: { GH_TOKEN: opts.token, GH_HOST: "github.com" } }
       });
       return { code: r.exitCode ?? 1, stdout: r.stdout, stderr: r.stderr };
     }

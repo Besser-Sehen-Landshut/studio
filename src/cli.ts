@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runAccount } from './account-command.js';
@@ -10,10 +11,11 @@ import {
   loadConfig,
   loadOwnerConfig,
   type OwnerConfig,
+  type OwnerEnv,
   type RoleConfig,
   type StudioConfig,
 } from './config.js';
-import { limitHold } from './credentials.js';
+import { limitHold, readCrewTokenFile } from './credentials.js';
 import {
   type CrewRecord,
   crewHold,
@@ -484,7 +486,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (fileName === undefined) {
           throw new Error(`no report name was drawn for ${item.id}: relaunch it, nothing moved`);
         }
-        const report = readReport(clone, item.id, item, { notBefore, fileName });
+        let report = readReport(clone, item.id, item, { notBefore, fileName });
         const reviewDone =
           item.type === 'review' && report.status === 'done'
             ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report)
@@ -496,6 +498,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           checkReportHead(report, info.head);
         }
         let branch = `studio/${item.id}`;
+        if (
+          report.status === 'done' &&
+          report.pr === undefined &&
+          report.prTitle !== undefined &&
+          !PR_OPTIONAL.includes(item.type)
+        ) {
+          const token = crewTokenFor(loadConfig(project), owner);
+          const pr = await openCrewPr(ports, item, report.prTitle, report.body, token);
+          report = { ...report, pr };
+        }
         if (report.pr !== undefined) {
           const holder = board.items.find(
             (i) => i.id !== item.id && i.repo === item.repo && i.pr === report.pr,
@@ -1230,6 +1242,58 @@ async function prInfo(
 }
 
 const PR_OPTIONAL: readonly WorkItem['type'][] = ['review', 'research'];
+const PR_BODY_MAX = 20_000;
+
+/** The least-privilege crew token, as a launch reads it; Studio opens a crew's PR only with it. */
+function crewTokenFor(config: StudioConfig, owner: OwnerEnv): string {
+  const fromEnv = config.crewToken ? owner.env?.[config.crewToken.env] : undefined;
+  if (fromEnv) return fromEnv;
+  const file = readCrewTokenFile(owner);
+  if (file.kind === 'ok') return file.token;
+  throw new Error(
+    'opening the pull request needs the crew token (studio secret set crew-token); nothing moved',
+  );
+}
+
+/**
+ * Opens the pull request of a crew that pushed `studio/<id>` but could not run gh, with the crew
+ * token, outside the sandbox. Title and body are crew text: cleaned, cut and passed as data in a
+ * file, never on a command line. An open pull request of that branch is taken instead.
+ */
+async function openCrewPr(
+  ports: Ports,
+  item: WorkItem,
+  title: string,
+  body: string,
+  token: string,
+): Promise<number> {
+  const head = `studio/${item.id}`;
+  const list = await ports.gh.run(
+    ['pr', 'list', '--repo', item.repo, '--head', head, '--state', 'open', '--json', 'number'],
+    { token },
+  );
+  if (list.code !== 0)
+    throw new Error(`cannot list pull requests of ${head} (gh exit ${list.code})`);
+  const open = JSON.parse(list.stdout || '[]') as { number?: unknown }[];
+  const known = open.find((p) => Number.isInteger(p.number))?.number;
+  if (typeof known === 'number') return known;
+  const text = `${body.replace(/[^\P{Cc}\n\t]/gu, '').slice(0, PR_BODY_MAX)}\n\n---\nOpened by Studio for ${item.id}; the text above was written by the crew.\n`;
+  const dir = mkdtempSync(join(tmpdir(), 'studio-pr-'));
+  try {
+    const file = join(dir, 'body.md');
+    writeFileSync(file, text, { mode: 0o600 });
+    const r = await ports.gh.run(
+      ['pr', 'create', '--repo', item.repo, '--head', head, '--title', title, '--body-file', file],
+      { token },
+    );
+    const m = /\/pull\/(\d+)\s*$/.exec(r.stdout);
+    if (r.code !== 0 || !m)
+      throw new Error(`gh pr create failed for ${head} (exit ${r.code}); nothing moved`);
+    return Number(m[1]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 const MAX_NOTES = 10;
 const MAX_NOTE_CHARS = 500;
 

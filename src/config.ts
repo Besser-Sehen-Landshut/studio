@@ -259,6 +259,9 @@ export const ownerConfigSchema = z.strictObject({
   // Opt-in: let crew runs bill the API. An API key would otherwise take precedence over the
   // subscription login, so the variables and settings for it are refused by default.
   allowApiBilling: z.boolean().default(false),
+  // Opens the macOS TLS trust service to crew shells so gh can run; weakens the network
+  // boundary (SECURITY.md). Off: Studio opens a crew's pull request itself.
+  crewAllowMacosTrustService: z.boolean().default(false),
   crewLabelLimits: crewLabelLimitsSchema,
   // Push notifications: an absolute executable that gets each message in its environment (see
   // README). It lives here, not in studio.yaml, because it runs on the owner's machine.

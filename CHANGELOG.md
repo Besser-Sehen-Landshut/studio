@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.2] - 2026-11-03
+
+Not tagged yet; the maintainers tag after the merge. 0.6.1 was not released: its default opened the
+macOS trust service.
+
+### Changed
+
+- The macOS TLS trust service stays shut for crews unless the owner sets
+  `crew_allow_macos_trust_service: true`, which weakens the network boundary (SECURITY.md). Without
+  it, crews on macOS run no `gh`: they push, give `pr_title` in the report and the pull request text
+  as its body, and `collect` opens the pull request with the crew token. CI checks, workflow runs
+  and `gh api` are not available to such crews.
+- `node --test` refuses a pattern segment that starts with a dot and holds a wildcard (`.*`, `.?`),
+  since a shell may let it match `..`.
+
 ## [0.6.1] - 2026-11-03
 
 Fixes from the first real crew run. Not tagged yet; the maintainers tag after the merge.

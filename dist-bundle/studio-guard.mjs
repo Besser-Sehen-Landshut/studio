@@ -1467,6 +1467,11 @@ function checkNodePath(path) {
   const plain = plainGlob(path);
   if ("why" in plain) deny(`node --test: ${plain.why}: ${path}; ${NODE_ALTERNATIVE}`);
   for (const e of plain.expansions) {
+    if (e.split("/").some((s) => s.startsWith(".") && /[*?]/.test(s))) {
+      deny(
+        `node --test: a segment starting with a dot takes no wildcard: ${path}; ${NODE_ALTERNATIVE}`
+      );
+    }
     const last = fileGlobToRegExp(e.slice(e.lastIndexOf("/") + 1));
     if (STUDIO_NAMES.some((n) => last.test(n))) deny(CREW_NO_STUDIO);
   }

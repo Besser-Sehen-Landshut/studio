@@ -34,6 +34,28 @@ const item = (type: WorkItem['type']): WorkItem => ({
 
 const doc = (front: string) => `---\n${front}\n---\n\nBody text.\n`;
 
+describe('a report that leaves the pull request to Studio', () => {
+  it('pr_title instead of pr is a done report; the body is the pull request text', () => {
+    const r = parseReport(
+      `---\nstatus: done\nitem: APP-1\npr_title: "APP-1: fix it"\nhead_sha: ${SHA}\ntests_run: 3\n---\n\nWhat changed.\n`,
+      item('fix'),
+    );
+    expect(r.pr).toBeUndefined();
+    expect(r.prTitle).toBe('APP-1: fix it');
+    expect(r.body).toBe('What changed.');
+  });
+  it('a title over 200 characters or with a line break refuses', () => {
+    for (const t of ['x'.repeat(201), 'a\\nb']) {
+      expect(() =>
+        parseReport(
+          `---\nstatus: done\npr_title: "${t}"\nhead_sha: ${SHA}\ntests_run: 3\n---\n`,
+          item('fix'),
+        ),
+      ).toThrow(/pr_title|prTitle/);
+    }
+  });
+});
+
 describe('parseReport', () => {
   it('rejects done without testsRun for build types', () => {
     const text = doc(`status: done\nitem: APP-1\npr: 4\nhead_sha: ${SHA}\ntests_run: 0`);

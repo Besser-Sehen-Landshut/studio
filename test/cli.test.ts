@@ -338,6 +338,102 @@ describe('studio CLI', () => {
     expect(statusOf(fx, 'APP-2')?.status).toBe('ready');
   });
 
+  describe('collect opens the pull request a crew could not', () => {
+    const CREW_TOKEN = 'fake-value-crew-gh-token-55aa';
+    const REPORT = `status: done\nitem: APP-1\npr_title: "APP-1: fix it"\nhead_sha: ${HEAD}\ntests_run: 3`;
+    const withToken = (fx: Fx) => {
+      const dir = join(fx.home, '.config', 'studio');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'crew-token'), `${CREW_TOKEN}\n`, { mode: 0o600 });
+    };
+    /** gh that records calls, their GH_TOKEN and the body file, and answers like GitHub. */
+    const prGh = (open: number[] = []) => {
+      const calls: { line: string; token?: string; body?: string }[] = [];
+      const gh: Gh = {
+        api: async () => '0',
+        run: async (args, opts) => {
+          const line = args.join(' ');
+          const at = args.indexOf('--body-file');
+          calls.push({
+            line,
+            ...(opts?.token === undefined ? {} : { token: opts.token }),
+            ...(at < 0 ? {} : { body: readFileSync(args[at + 1] as string, 'utf8') }),
+          });
+          const ok = (stdout: string) => ({ code: 0, stdout, stderr: '' });
+          if (line.startsWith('pr list'))
+            return ok(JSON.stringify(open.map((number) => ({ number }))));
+          if (line.startsWith('pr create')) return ok('https://github.com/org/app/pull/31\n');
+          if (/^pr view (31|9) --repo org\/app/.test(line)) {
+            return ok(JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-1', ...OWN }));
+          }
+          return { code: 1, stdout: '', stderr: `unscripted: ${line}` };
+        },
+      };
+      return { gh, calls };
+    };
+
+    it('opens it with the crew token, the title and the body as data, and moves on', async () => {
+      const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+      withToken(fx);
+      mkdirSync(join(fx.state, 'clones', 'APP-1', '.studio', 'reports'), { recursive: true });
+      const dir = join(fx.state, 'clones', 'APP-1', '.studio', 'reports');
+      writeFileSync(
+        join(dir, newReportName(fx.state, 'APP-1')),
+        `---\n${REPORT}\n---\n\nWhat changed.\n`,
+      );
+      const { gh, calls } = prGh();
+      const r = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+      expect(r.err).toBe('');
+      expect(r.code).toBe(0);
+      const create = calls.find((c) => c.line.startsWith('pr create'));
+      expect(create?.line).toContain('--repo org/app --head studio/APP-1');
+      expect(create?.line).toContain('--title APP-1: fix it');
+      expect(create?.token).toBe(CREW_TOKEN);
+      expect(create?.body).toContain('What changed.');
+      expect(create?.body).toMatch(/opened by Studio.*written by the crew/i);
+      expect(statusOf(fx, 'APP-1')).toMatchObject({ status: 'in_review', pr: 31 });
+      expect(r.out).not.toContain(CREW_TOKEN);
+    });
+
+    it('an open pull request of that branch is taken, not a second one', async () => {
+      const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+      withToken(fx);
+      writeReport(fx, 'APP-1', REPORT);
+      const { gh, calls } = prGh([9]);
+      expect((await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1')).code).toBe(0);
+      expect(calls.some((c) => c.line.startsWith('pr create'))).toBe(false);
+      expect(statusOf(fx, 'APP-1')?.pr).toBe(9);
+    });
+
+    it('a long body is cut, control characters go', async () => {
+      const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+      withToken(fx);
+      const dir = join(fx.state, 'clones', 'APP-1', '.studio', 'reports');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, newReportName(fx.state, 'APP-1')),
+        `---\n${REPORT}\n---\n\nA\u0007B${'x'.repeat(30_000)}\n`,
+      );
+      const { gh, calls } = prGh();
+      await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+      const body = calls.find((c) => c.line.startsWith('pr create'))?.body ?? '';
+      expect(body.length).toBeLessThan(21_000);
+      expect(body).not.toContain('\u0007');
+      expect(body).toContain('AB');
+    });
+
+    it('without a crew token nothing is opened and nothing moves', async () => {
+      const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+      writeReport(fx, 'APP-1', REPORT);
+      const { gh, calls } = prGh();
+      const r = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/crew token/);
+      expect(calls.some((c) => c.line.startsWith('pr create'))).toBe(false);
+      expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+    });
+  });
+
   it('collect done → in_review with pr', async () => {
     const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
     writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 12`);

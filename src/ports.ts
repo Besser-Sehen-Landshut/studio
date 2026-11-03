@@ -36,7 +36,7 @@ export interface Gh {
    */
   run(
     args: string[],
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; token?: string },
   ): Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
@@ -142,6 +142,10 @@ export function realPorts(claudeBin = 'claude'): Ports {
       const r = await execa('gh', args, {
         reject: false,
         ...(opts?.timeoutMs === undefined ? {} : { timeout: opts.timeoutMs }),
+        // A given token wins over the owner's gh login for this one call.
+        ...(opts?.token === undefined
+          ? {}
+          : { env: { GH_TOKEN: opts.token, GH_HOST: 'github.com' } }),
       });
       return { code: r.exitCode ?? 1, stdout: r.stdout, stderr: r.stderr };
     },

@@ -31,6 +31,13 @@ const reportSchema = z.object({
   status: z.enum(['done', 'blocked', 'failed']),
   item: z.string().optional(),
   pr: z.number().int().positive().nullish(),
+  // Where a crew cannot open its pull request, it names the title and Studio opens it.
+  prTitle: z
+    .string()
+    .min(1)
+    .max(200)
+    .regex(/^[^\p{Cc}]+$/u)
+    .nullish(),
   headSha: z.string().nullish(),
   testsRun: z.number().int().nonnegative().nullish(),
   verdict: z.enum(['approve', 'changes_requested']).nullish(),
@@ -56,6 +63,9 @@ export interface Report {
   status: 'done' | 'blocked' | 'failed';
   item?: string;
   pr?: number;
+  prTitle?: string;
+  /** The report body after the frontmatter, trimmed: crew text, data only. */
+  body: string;
   headSha?: string;
   testsRun?: number;
   verdict?: 'approve' | 'changes_requested';
@@ -117,6 +127,8 @@ export function parseReport(text: string, item?: WorkItem): Report {
     status: d.status,
     ...(d.item !== undefined && { item: d.item }),
     ...(d.pr != null && { pr: d.pr }),
+    ...(d.prTitle != null && { prTitle: d.prTitle }),
+    body: text.slice(m[0].length).trim(),
     ...(d.headSha != null && { headSha: d.headSha }),
     ...(d.testsRun != null && { testsRun: d.testsRun }),
     ...(d.verdict != null && { verdict: d.verdict }),

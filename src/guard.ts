@@ -1197,8 +1197,14 @@ function checkNodePath(path: string): void {
   }
   const plain = plainGlob(path);
   if ('why' in plain) deny(`node --test: ${plain.why}: ${path}; ${NODE_ALTERNATIVE}`);
-  // A pattern that could name the studio binary is refused whether or not it matches now.
+  // A pattern that could name the studio binary is refused whether or not it matches now. A shell may
+  // let `.*` or `.?` match `..`, so a segment starting with a dot takes no wildcard.
   for (const e of (plain as { expansions: string[] }).expansions) {
+    if (e.split('/').some((s) => s.startsWith('.') && /[*?]/.test(s))) {
+      deny(
+        `node --test: a segment starting with a dot takes no wildcard: ${path}; ${NODE_ALTERNATIVE}`,
+      );
+    }
     const last = fileGlobToRegExp(e.slice(e.lastIndexOf('/') + 1));
     if (STUDIO_NAMES.some((n) => last.test(n))) deny(CREW_NO_STUDIO);
   }
