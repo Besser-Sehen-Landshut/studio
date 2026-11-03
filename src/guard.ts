@@ -39,8 +39,12 @@ export interface GuardContext {
   protectedPaths?: string[];
   /** Files and directories the read tools may reach, besides the worktree. Nothing else is. */
   readRoots?: string[];
-  /** Read roots of Claude Code's own files; a secret glob over a login dir does not cover them. */
+  /** Read roots of Claude Code's own files, where `skillRootWaivedGlobs` give way. */
   skillRoots?: string[];
+  /** Path globs of the saved tool outputs of this run, readable like a skill root. */
+  toolResultGlobs?: string[];
+  /** Entries of `secretGlobs` that cover a whole login dir. Every other entry always applies. */
+  skillRootWaivedGlobs?: string[];
 }
 
 export interface GuardResult {
@@ -81,10 +85,17 @@ interface Env {
   protectedReal: string[];
   readRoots: string[];
   skillRoots: string[];
+  toolResultRes: RegExp[];
+  /** The secret rules no read root waives. */
+  hardSecretRes: RegExp[];
 }
 
 const isUnder = (roots: string[], p: string): boolean =>
   roots.some((r) => p === r || p.startsWith(`${r}/`));
+
+/** Skill files and saved tool outputs in a config dir: not the login beside them. */
+const isClaudeFile = (env: Env, p: string): boolean =>
+  isUnder(env.skillRoots, p) || env.toolResultRes.some((re) => re.test(p));
 
 export function evaluateGuard(input: GuardInput, ctx: GuardContext): GuardResult {
   try {
@@ -134,8 +145,8 @@ function commandGlobToRegExp(glob: string): RegExp {
 
 function isSecretString(env: Env, s: string): boolean {
   if (basename(s) === '.env.example') return false;
-  if (isUnder(env.skillRoots, s) && !s.split('/').includes('..')) return false;
-  return env.secretRes.some((re) => re.test(s));
+  const ownFile = !s.split('/').includes('..') && isClaudeFile(env, s);
+  return (ownFile ? env.hardSecretRes : env.secretRes).some((re) => re.test(s));
 }
 
 /** Expands simple comma brace lists (`{a,b}`); ranges are left alone. */
@@ -1408,9 +1419,12 @@ function scanDirForSecrets(env: Env, dir: string): void {
 
 /** The one rule for read tools: the worktree and the listed roots, on the real path; nothing else. */
 function checkReadScope(env: Env, tok: string, base: string, tool: string): void {
-  if (tok === '~' || tok.startsWith('~/')) deny(`${tool}: unresolvable path: ${tok}`);
+  // A tool may trim or expand these where this check would not: refuse rather than guess.
+  if (tok.startsWith('~') || /^\s|\s$|\p{Cc}/u.test(tok)) {
+    deny(`${tool}: unresolvable path: ${JSON.stringify(tok)}`);
+  }
   const real = resolveReal(tok, base);
-  if (!isInside(env, real) && !isUnder(env.readRoots, real)) {
+  if (!isInside(env, real) && !isUnder(env.readRoots, real) && !isClaudeFile(env, real)) {
     deny(`${tool} outside this crew's files: ${tok}`);
   }
 }
@@ -1484,7 +1498,9 @@ function check(input: GuardInput, ctx: GuardContext): void {
     (c.crewAllowedWorkflowRefs !== undefined && !isStringArray(c.crewAllowedWorkflowRefs)) ||
     (c.protectedPaths !== undefined && !isStringArray(c.protectedPaths)) ||
     (c.readRoots !== undefined && !isStringArray(c.readRoots)) ||
-    (c.skillRoots !== undefined && !isStringArray(c.skillRoots))
+    (c.skillRoots !== undefined && !isStringArray(c.skillRoots)) ||
+    (c.toolResultGlobs !== undefined && !isStringArray(c.toolResultGlobs)) ||
+    (c.skillRootWaivedGlobs !== undefined && !isStringArray(c.skillRootWaivedGlobs))
   ) {
     deny('invalid guard context');
   }
@@ -1508,6 +1524,10 @@ function check(input: GuardInput, ctx: GuardContext): void {
       .map((p) => p.toLowerCase()),
     readRoots: (ctx.readRoots ?? []).map((p) => resolveReal(p, '/')),
     skillRoots: (ctx.skillRoots ?? []).flatMap((p) => [p, resolveReal(p, '/')]),
+    toolResultRes: (ctx.toolResultGlobs ?? []).map(fileGlobToRegExp),
+    hardSecretRes: ctx.secretGlobs
+      .filter((g) => !(ctx.skillRootWaivedGlobs ?? []).includes(g))
+      .map(fileGlobToRegExp),
   };
   const { toolName, toolInput } = input;
   const cwd = resolveReal(input.cwd ?? wt, wt);

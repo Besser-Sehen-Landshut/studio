@@ -20,7 +20,7 @@ import {
   resolveModel,
   writeCaps,
 } from './brief-caps.js';
-import { loadOwnerConfig, type OwnerEnv, type StudioConfig } from './config.js';
+import { loadOwnerConfig, type OwnerEnv, type StudioConfig, within } from './config.js';
 import {
   allParkedLine,
   apiBillingProblem,
@@ -684,16 +684,31 @@ export function writeCrewSettings(
     join(stateBase, OWNER_DIR),
   ];
   // The crew's file tools read only this, on top of the clone: the sandbox does not cover them.
-  // `projects/<clone>` is where Claude Code saves a tool output too long to show, and tells the
-  // crew to read it. `plugins/data` stays out: plugins keep their own state there.
+  // `plugins/data` stays out: plugins keep their own state there.
   const configDir = loginDir ?? (env.CLAUDE_CONFIG_DIR || join(realHome, '.claude'));
   const skillRoots = unique([
     join(configDir, 'skills'),
     join(configDir, 'plugins', 'cache'),
     join(configDir, 'plugins', 'marketplaces'),
-    join(configDir, 'projects', clone.replace(/[^A-Za-z0-9]/g, '-')),
-    join(configDir, 'projects', realOr(clone).replace(/[^A-Za-z0-9]/g, '-')),
   ]);
+  // Where Claude Code saves a tool output too long to show, and tells the crew to read it. The
+  // transcripts beside it stay out.
+  const toolResultGlobs = unique(
+    [configDir, realOr(configDir)].flatMap((dir) =>
+      [clone, realOr(clone)].map(
+        (c) => `${join(dir, 'projects', c.replace(/[^A-Za-z0-9]/g, '-'))}/*/tool-results/**`,
+      ),
+    ),
+  );
+  // A rule over a whole directory that holds the login gives way for those files alone. Rules for
+  // a file, such as the crew token or a default secret name, always apply.
+  const skillRootWaivedGlobs =
+    loginDir === undefined
+      ? []
+      : [...credentialPaths.filter((p) => within(loginDir, p)), loginDir].flatMap((p) => [
+          p,
+          `${p}/**`,
+        ]);
   const readRoots = [
     join(stateRoot, 'briefs', `${id}.md`),
     join(stateRoot, 'briefs', `${id}.caps`),
@@ -706,6 +721,8 @@ export function writeCrewSettings(
     worktree: clone,
     readRoots,
     skillRoots,
+    toolResultGlobs,
+    skillRootWaivedGlobs,
     ownerOnly: config.ownerOnly,
     deployCommands: config.deployCommands,
     // Absolute credential locations of the real home, on top of the default globs.

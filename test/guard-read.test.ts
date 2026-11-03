@@ -40,6 +40,7 @@ beforeAll(() => {
     secretGlobs: [...DEFAULT_SECRET_GLOBS, login, `${login}/**`],
     readRoots: [brief, caps, home, tmp, plugins],
     skillRoots: [plugins],
+    skillRootWaivedGlobs: [login, `${login}/**`],
   };
 });
 
@@ -77,6 +78,109 @@ describe('read tools stay in the crew area', () => {
     ['a link out of the clone', () => join(wt, 'link', 'a.ts')],
   ])('Read of %s is denied', (_name, file) => {
     expect(read(file())).toBe('deny');
+  });
+
+  describe('secret rules inside the read roots', () => {
+    const owner = () => join(root, 'owner');
+    const hardened = (): GuardContext => {
+      const skills = join(owner(), 'accounts', 'a', 'plugins', 'cache');
+      return {
+        ...ctx,
+        secretGlobs: [
+          ...DEFAULT_SECRET_GLOBS,
+          owner(),
+          `${owner()}/**`,
+          join(owner(), 'crew-token'),
+        ],
+        readRoots: [skills],
+        skillRoots: [skills],
+        skillRootWaivedGlobs: [owner(), `${owner()}/**`],
+      };
+    };
+    const at = (file_path: string) =>
+      evaluateGuard({ toolName: 'Read', toolInput: { file_path } }, hardened()).decision;
+    const skills = () => join(owner(), 'accounts', 'a', 'plugins', 'cache');
+
+    it('only the waived directory rule gives way to a skill file', () => {
+      expect(at(join(skills(), 'm', 'p', '1', 'skills', 's', 'SKILL.md'))).toBe('allow');
+    });
+    it.each(['.env', 'cert.pem', 'id_rsa', 'credentials.json', '.npmrc'])(
+      'the default rule for %s still applies in a plugin',
+      (name) => {
+        expect(at(join(skills(), 'm', name))).toBe('deny');
+      },
+    );
+    it('with no waived list, a secret glob over the login applies to its plugins too', () => {
+      const none: GuardContext = { ...hardened(), skillRootWaivedGlobs: undefined };
+      const r = evaluateGuard(
+        { toolName: 'Read', toolInput: { file_path: join(skills(), 'SKILL.md') } },
+        none,
+      );
+      expect(r.decision).toBe('deny');
+    });
+    it('a waived list that is not a list is an invalid context', () => {
+      const bad = { ...ctx, skillRootWaivedGlobs: 'x' } as unknown as GuardContext;
+      const r = evaluateGuard({ toolName: 'Read', toolInput: { file_path: brief } }, bad);
+      expect(r.reason).toContain('invalid');
+    });
+  });
+
+  describe('saved tool outputs', () => {
+    const projects = () => join(login, 'projects', 'clone');
+    const withResults = (): GuardContext => ({
+      ...ctx,
+      toolResultGlobs: [`${projects()}/*/tool-results/**`],
+      skillRootWaivedGlobs: [login, `${login}/**`],
+    });
+    const at = (file_path: string) =>
+      evaluateGuard({ toolName: 'Read', toolInput: { file_path } }, withResults()).decision;
+
+    it('a saved output is readable', () => {
+      expect(at(join(projects(), 'session', 'tool-results', 'out.txt'))).toBe('allow');
+    });
+    it.each(['session.jsonl', 'session/subagents/a.jsonl', 'memory/MEMORY.md'])(
+      'the transcript or file %s is not',
+      (rel) => {
+        expect(at(join(projects(), rel))).toBe('deny');
+      },
+    );
+    it('a dotted way out of a saved output is not', () => {
+      expect(at(`${projects()}/session/tool-results/../../session.jsonl`)).toBe('deny');
+    });
+    it('a secret name among them stays denied', () => {
+      expect(at(join(projects(), 'session', 'tool-results', '.env'))).toBe('deny');
+    });
+  });
+
+  describe('paths a tool may read differently', () => {
+    it.each([
+      ' /etc/hosts',
+      '/etc/hosts ',
+      '\t/etc/hosts',
+      '\n/etc/hosts',
+      ' ~/x',
+      '~root/x',
+      '~+/x',
+      'sub/a\u0000.ts',
+      'sub/a\n.ts',
+      'sub/a.ts ',
+      ' sub/a.ts',
+      ' /etc/hosts',
+    ])('Read of %j is denied, also when it would land in the clone', (p) => {
+      expect(read(p, wt)).toBe('deny');
+    });
+    it('a space inside a name is fine', () => {
+      expect(read('sub/my file.ts', wt)).toBe('allow');
+    });
+    it.each([
+      ['Grep', { pattern: 'x', path: ' /etc' }],
+      ['Glob', { pattern: '*', path: ' /etc' }],
+      ['Glob', { pattern: ' /etc/*' }],
+      ['Glob', { pattern: ' ~/*' }],
+      ['Glob', { pattern: '{sub, /etc}/*' }],
+    ])('%s %j is denied', (name, input) => {
+      expect(decide(name, input, wt)).toBe('deny');
+    });
   });
 
   it('a relative path counts from the working directory', () => {

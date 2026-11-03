@@ -594,6 +594,8 @@ describe('writeCrewSettings', () => {
       secretGlobs: [...DEFAULT_SECRET_GLOBS, ...CRED_PATHS.flatMap((p) => [p, `${p}/**`])],
       readRoots: expect.any(Array),
       skillRoots: expect.any(Array),
+      toolResultGlobs: expect.any(Array),
+      skillRootWaivedGlobs: [],
       crewAllowedWorkflows: ['ci.yml'],
       crewAllowedWorkflowRefs: ['main'],
       protectedPaths: [
@@ -1677,6 +1679,9 @@ describe('crew credentials', () => {
         expect(decide(file), file).toBe('allow');
       }
       for (const file of [
+        join(login, 'projects', munged, 'session.jsonl'),
+        join(login, 'plugins', 'cache', 'm', '.env'),
+        join(ownerDir, 'crew-token'),
         join(briefs, 'APP-13.md'),
         join(briefs, 'APP-13.rules', 'AGENTS.md'),
         join(briefs, 'APP-13.caps', 'x.md'),
