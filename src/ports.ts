@@ -100,6 +100,7 @@ export interface PluginCli {
     args: string[],
     env: Record<string, string>,
     cwd: string,
+    opts?: { timeoutMs?: number },
   ): Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
@@ -294,14 +295,14 @@ export function realPorts(claudeBin = 'claude'): Ports {
     },
   };
   const plugins: PluginCli = {
-    async run(args, env, cwd) {
+    async run(args, env, cwd, opts) {
       const r = await execa(claudeBin, args, {
         cwd,
         env,
         extendEnv: false,
         reject: false,
         stdin: 'ignore',
-        timeout: PLUGIN_TIMEOUT_MS,
+        timeout: opts?.timeoutMs ?? PLUGIN_TIMEOUT_MS,
       });
       return {
         code: r.timedOut ? 124 : (r.exitCode ?? 1),

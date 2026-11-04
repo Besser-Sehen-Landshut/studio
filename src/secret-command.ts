@@ -130,6 +130,10 @@ async function gitState(project: string, ports: Ports): Promise<string> {
   }
 }
 
+const CHECKOUT_OK = 'git checkout with origin';
+/** A version doctor found new enough: digits only, no note after it. */
+const GIT_OK = /^\d+\.\d+\.\d+$/;
+
 /** A launch needs the project folder to be a git checkout with `origin`. */
 async function checkoutState(project: string, ports: Ports): Promise<string> {
   try {
@@ -142,7 +146,7 @@ async function checkoutState(project: string, ports: Ports): Promise<string> {
   } catch {
     return 'no remote origin: add it with git remote add origin <url>';
   }
-  return 'git checkout with origin';
+  return CHECKOUT_OK;
 }
 
 const CREW_TOOLS = ['cargo', 'rustc', 'rustup', 'node', 'pnpm', 'npm', 'gh', 'git'];
@@ -190,15 +194,15 @@ function skillState(dir: string | undefined, name: string): string {
   return found === undefined ? 'cannot tell' : found ? 'installed' : 'not found';
 }
 
-/** `studio doctor`: what is set and what is missing, never a value. */
-export async function runDoctor(o: {
+export type DoctorReport = Awaited<ReturnType<typeof doctorReport>>;
+
+/** What `studio doctor` finds, without printing; `studio init` reads the same checks. */
+export async function doctorReport(o: {
   project: string;
   owner: OwnerEnv;
   env: Record<string, string | undefined>;
   ports: Ports;
-  json: boolean;
-  stdout(s: string): void;
-}): Promise<number> {
+}) {
   let config: StudioConfig | undefined;
   try {
     config = loadConfig(o.project);
@@ -279,6 +283,27 @@ export async function runDoctor(o: {
     notify: ownerConfig?.notify ? 'configured' : 'not configured',
     apiKeyVarsInEnvironment: API_KEY_VARS.filter((k) => o.env[k]),
   };
+  return {
+    report,
+    required,
+    gitOk: GIT_OK.test(git),
+    checkoutOk: projectCheckout === CHECKOUT_OK,
+    configDir,
+  };
+}
+
+/** `studio doctor`: what is set and what is missing, never a value. */
+export async function runDoctor(o: {
+  project: string;
+  owner: OwnerEnv;
+  env: Record<string, string | undefined>;
+  ports: Ports;
+  json: boolean;
+  stdout(s: string): void;
+}): Promise<number> {
+  const { report, required, configDir } = await doctorReport(o);
+  const { crewToken, accounts, git, projectCheckout, studioCrew, claudeLogin } = report;
+  const toolchain = report.toolchainOutside;
   if (o.json) o.stdout(`${JSON.stringify(report, null, 2)}\n`);
   else {
     const source = crewToken.source ? ` (${crewToken.source})` : '';

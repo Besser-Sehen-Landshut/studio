@@ -3,6 +3,51 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.9.0] - 2026-11-04
+
+Setting up a project meant writing `.studio/studio.yaml` and `board.yaml` by hand, running
+`setup ci` and `setup stack`, storing a crew token, installing the plugin and knowing the lead
+loop. An owner who has never seen Studio now runs one guided command in his project and gets a
+plain list of what is missing and what to do next. Not tagged yet; the maintainers tag after the
+merge.
+
+### Added
+
+- `studio init [--write]`: checks the prerequisites (git 2.38 or newer, `gh` installed and logged
+  in, the `claude` CLI, Node.js 24 or newer, a platform with Claude Code's sandbox, `origin` on
+  GitHub) with a fix for each failure, and warns, with the command to run, when the crew token, a
+  stored Claude account or the `superpowers` plugin is missing, or when `.gitignore` ignores
+  `.studio/`. It proposes `.studio/studio.yaml`: `primary_repo` and `repos` from `origin`, the
+  `ci:` block of `setup ci` (GitHub-hosted with a warning when there is no usable proposal), the
+  stacks of `setup stack`, a builder and a reviewer, `sandbox.network_allow` for GitHub and the
+  package registries of the manifests found, and one component per manifest folder below `apps`,
+  `packages`, `services`, `crates` and `libs` plus `tooling` (none for a single-package
+  repository). Without `--write` nothing is written and the exit code is 0; with `--write` it
+  writes `studio.yaml` and an empty, commented `board.yaml` only when no check failed (else exit
+  1), after loading both with Studio's own loaders, and never overwrites either file. It ends with
+  the next steps. `--json` prints the same data.
+- `init` details: each `gh` call has 15 s and `claude --version` 10 s; the login check asks
+  about github.com only. Runners that cannot be read are a `ci` warning, the first next step and a
+  comment in `studio.yaml`. Both files are parsed in memory by the real loaders, so a dry run
+  writes no file anywhere. `--write` refuses a `.studio` that is a link or a file and removes what
+  it wrote when a later write fails. `network_allow` also gets Docker Hub for a `docker` stack.
+  Next steps leave out what the checks found done.
+- `studio add "<title>"`: appends a ready builder item with the next free id, `--type` (default
+  `fix`; a `feature` needs `--plan`), `--repo`, `--path` (relative, no `..`), `--dod`,
+  `--component` and `--plan`, checked against the board schema and the config, under the board
+  lock. It names what the planner still needs (`missing`), warns when an item has no path, and
+  notes a CI item.
+- `init` and `add` refuse under `STUDIO_ROLE=crew`.
+- README: a quick start at the top (install, `init`, `init --write`, next steps, `add`, the lead).
+  The former quick start is now "Writing the files by hand".
+
+### Changed
+
+- `setup ci` and `doctor` keep their output; their detection and checks are functions that `init`
+  calls too. Runner and visibility reads take an optional timeout, and `claude` plugin runs an
+  optional timeout of their own.
+- `setup stack` also reads one level of `libs`, the same folders `init` proposes components from.
+
 ## [0.8.0] - 2026-11-04
 
 From a real run: on every pull request the lead did two things by hand that a person using Studio

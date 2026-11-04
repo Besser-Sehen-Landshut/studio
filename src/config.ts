@@ -249,6 +249,11 @@ export function loadConfig(projectDir: string): StudioConfig {
   } catch (e) {
     throw new ConfigError(file, `cannot read file (${(e as Error).message})`);
   }
+  return parseConfig(text, file);
+}
+
+/** What `loadConfig` does with the text of `file`, without reading it: also for text in memory. */
+export function parseConfig(text: string, file: string): StudioConfig {
   let raw: unknown;
   try {
     raw = parseYaml(text);

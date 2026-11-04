@@ -48,7 +48,8 @@ describe('README quick start', () => {
   });
 
   it('names the crew model authentication as a prerequisite', () => {
-    const pre = readme.slice(readme.indexOf('## Prerequisites'), readme.indexOf('## Quick start'));
+    const at = readme.indexOf('## Prerequisites');
+    const pre = readme.slice(at, readme.indexOf('\n## ', at + 1));
     expect(pre).toContain('CLAUDE_CODE_OAUTH_TOKEN');
     expect(pre).toContain('ANTHROPIC_API_KEY');
     expect(pre).toContain('CLAUDE_CONFIG_DIR');
@@ -87,9 +88,34 @@ describe('README quick start', () => {
     expect(readme).toMatch(/notify: \{ channel, command \}/);
     expect(readme).toContain('`blocks.json` in the owner root');
     expect(readme).toContain('.legacy-');
-    expect(readme).toMatch(/Status: 0\.8\.0/);
+    expect(readme).toMatch(/Status: 0\.9\.0/);
     expect(readme).not.toMatch(/crews cannot write the state base/);
     expect(readme).not.toMatch(/blocks?[^.]{0,40}per project/i);
+  });
+});
+
+describe('README quick start at the top', () => {
+  it('is the first section and goes install, init, init --write, next steps, add, lead', () => {
+    const at = readme.indexOf('## Quick start');
+    expect(at).toBeGreaterThan(0);
+    expect(readme.indexOf('\n## ')).toBe(at - 1);
+    const quick = readme.slice(at, readme.indexOf('\n## ', at + 1));
+    const steps = [
+      '/plugin install studio@studio-marketplace',
+      '`studio init`',
+      '`studio init --write`',
+      'studio secret set crew-token',
+      'studio account add <label>',
+      '`/studio`',
+      '`studio add ',
+      'run the Studio lead loop',
+    ];
+    let from = 0;
+    for (const step of steps) {
+      const i = quick.indexOf(step, from);
+      expect(i, step).toBeGreaterThanOrEqual(from);
+      from = i;
+    }
   });
 });
 

@@ -9,10 +9,12 @@ export type CapacityOptions = {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+/** `work`, or a rejection naming `what` after `ms`; the timer never keeps the process alive. */
+export function withTimeout<T>(work: Promise<T>, ms: number, what = 'CI read'): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`CI read timed out after ${ms} ms`)), ms);
+    timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms} ms`)), ms);
+    timer.unref?.();
   });
   return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
 }

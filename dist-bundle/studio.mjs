@@ -1510,7 +1510,7 @@ var require_stringify = __commonJS({
         props.push(doc.directives.tagString(tag));
       return props.join(" ");
     }
-    function stringify2(item, ctx, onComment, onChompKeep) {
+    function stringify3(item, ctx, onComment, onChompKeep) {
       if (identity3.isPair(item))
         return item.toString(ctx, onComment, onChompKeep);
       if (identity3.isAlias(item)) {
@@ -1539,7 +1539,7 @@ var require_stringify = __commonJS({
 ${ctx.indent}${str}`;
     }
     exports.createStringifyContext = createStringifyContext;
-    exports.stringify = stringify2;
+    exports.stringify = stringify3;
   }
 });
 
@@ -1549,7 +1549,7 @@ var require_stringifyPair = __commonJS({
     "use strict";
     var identity3 = require_identity();
     var Scalar = require_Scalar();
-    var stringify2 = require_stringify();
+    var stringify3 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyPair({ key, value }, ctx, onComment, onChompKeep) {
       const { allNullValues, doc, indent, indentStep, options: { commentString, indentSeq, simpleKeys } } = ctx;
@@ -1571,7 +1571,7 @@ var require_stringifyPair = __commonJS({
       });
       let keyCommentDone = false;
       let chompKeep = false;
-      let str = stringify2.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
+      let str = stringify3.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
       if (!explicitKey && !ctx.inFlow && str.length > 1024) {
         if (simpleKeys)
           throw new Error("With simple keys, single line scalar must not span more than 1024 characters");
@@ -1623,7 +1623,7 @@ ${indent}:`;
         ctx.indent = ctx.indent.substring(2);
       }
       let valueCommentDone = false;
-      const valueStr = stringify2.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
+      const valueStr = stringify3.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
       let ws = " ";
       if (keyComment || vsb || vcb) {
         ws = vsb ? "\n" : "";
@@ -1764,7 +1764,7 @@ var require_addPairToJSMap = __commonJS({
     "use strict";
     var log = require_log();
     var merge2 = require_merge();
-    var stringify2 = require_stringify();
+    var stringify3 = require_stringify();
     var identity3 = require_identity();
     var toJS = require_toJS();
     function addPairToJSMap(ctx, map2, { key, value }) {
@@ -1800,7 +1800,7 @@ var require_addPairToJSMap = __commonJS({
       if (typeof jsKey !== "object")
         return String(jsKey);
       if (identity3.isNode(key) && ctx?.doc) {
-        const strCtx = stringify2.createStringifyContext(ctx.doc, {});
+        const strCtx = stringify3.createStringifyContext(ctx.doc, {});
         strCtx.anchors = /* @__PURE__ */ new Set();
         for (const node2 of ctx.anchors.keys())
           strCtx.anchors.add(node2.anchor);
@@ -1867,12 +1867,12 @@ var require_stringifyCollection = __commonJS({
   "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
     "use strict";
     var identity3 = require_identity();
-    var stringify2 = require_stringify();
+    var stringify3 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyCollection(collection, ctx, options) {
       const flow = ctx.inFlow ?? collection.flow;
-      const stringify3 = flow ? stringifyFlowCollection : stringifyBlockCollection;
-      return stringify3(collection, ctx, options);
+      const stringify4 = flow ? stringifyFlowCollection : stringifyBlockCollection;
+      return stringify4(collection, ctx, options);
     }
     function stringifyBlockCollection({ comment, items }, ctx, { blockItemPrefix, flowChars, itemIndent, onChompKeep, onComment }) {
       const { indent, options: { commentString } } = ctx;
@@ -1897,7 +1897,7 @@ var require_stringifyCollection = __commonJS({
           }
         }
         chompKeep = false;
-        let str2 = stringify2.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
+        let str2 = stringify3.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
         if (comment2)
           str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
@@ -1964,7 +1964,7 @@ ${indent}${line2}` : "\n";
         }
         if (comment)
           reqNewline = true;
-        let str = stringify2.stringify(item, itemCtx, () => comment = null);
+        let str = stringify3.stringify(item, itemCtx, () => comment = null);
         reqNewline || (reqNewline = lines.length > linesAtValue || str.includes("\n"));
         if (i2 < items.length - 1) {
           str += ",";
@@ -3325,7 +3325,7 @@ var require_stringifyDocument = __commonJS({
   "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
     "use strict";
     var identity3 = require_identity();
-    var stringify2 = require_stringify();
+    var stringify3 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyDocument(doc, options) {
       const lines = [];
@@ -3340,7 +3340,7 @@ var require_stringifyDocument = __commonJS({
       }
       if (hasDirectives)
         lines.push("---");
-      const ctx = stringify2.createStringifyContext(doc, options);
+      const ctx = stringify3.createStringifyContext(doc, options);
       const { commentString } = ctx.options;
       if (doc.commentBefore) {
         if (lines.length !== 1)
@@ -3362,7 +3362,7 @@ var require_stringifyDocument = __commonJS({
           contentComment = doc.contents.comment;
         }
         const onChompKeep = contentComment ? void 0 : () => chompKeep = true;
-        let body = stringify2.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
+        let body = stringify3.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
         if (contentComment)
           body += stringifyComment.lineComment(body, "", commentString(contentComment));
         if ((body[0] === "|" || body[0] === ">") && lines[lines.length - 1] === "---") {
@@ -3370,7 +3370,7 @@ var require_stringifyDocument = __commonJS({
         } else
           lines.push(body);
       } else {
-        lines.push(stringify2.stringify(doc.contents, ctx));
+        lines.push(stringify3.stringify(doc.contents, ctx));
       }
       if (doc.directives?.docEnd) {
         if (doc.comment) {
@@ -5506,7 +5506,7 @@ var require_cst_scalar = __commonJS({
 var require_cst_stringify = __commonJS({
   "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
     "use strict";
-    var stringify2 = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
+    var stringify3 = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
     function stringifyToken(token) {
       switch (token.type) {
         case "block-scalar": {
@@ -5559,7 +5559,7 @@ var require_cst_stringify = __commonJS({
         res += stringifyToken(value);
       return res;
     }
-    exports.stringify = stringify2;
+    exports.stringify = stringify3;
   }
 });
 
@@ -7289,7 +7289,7 @@ var require_public_api = __commonJS({
       }
       return doc.toJS(Object.assign({ reviver: _reviver }, options));
     }
-    function stringify2(value, replacer, options) {
+    function stringify3(value, replacer, options) {
       let _replacer = null;
       if (typeof replacer === "function" || Array.isArray(replacer)) {
         _replacer = replacer;
@@ -7314,7 +7314,7 @@ var require_public_api = __commonJS({
     exports.parse = parse4;
     exports.parseAllDocuments = parseAllDocuments;
     exports.parseDocument = parseDocument4;
-    exports.stringify = stringify2;
+    exports.stringify = stringify3;
   }
 });
 
@@ -7844,9 +7844,9 @@ var require_shell_quote = __commonJS({
 import { homedir as homedir8 } from "node:os";
 
 // src/cli.ts
-import { existsSync as existsSync6, mkdtempSync, rmSync as rmSync5, writeFileSync as writeFileSync9 } from "node:fs";
+import { existsSync as existsSync6, mkdtempSync, rmSync as rmSync6, writeFileSync as writeFileSync10 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname as dirname10, join as join25, resolve as resolve5 } from "node:path";
+import { dirname as dirname10, join as join26, resolve as resolve5 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/account-command.ts
@@ -27904,9 +27904,9 @@ function dotted(path10) {
 }
 function describeIssue(issue2) {
   const base = dotted(issue2.path);
-  const join26 = (leaf) => base ? `${base}.${leaf}` : leaf;
+  const join27 = (leaf) => base ? `${base}.${leaf}` : leaf;
   if (issue2.code === "unrecognized_keys") {
-    return issue2.keys.map((k) => `${join26(snake(k))}: unknown key`);
+    return issue2.keys.map((k) => `${join27(snake(k))}: unknown key`);
   }
   return [`${base || "(root)"}: ${issue2.message}`];
 }
@@ -27919,6 +27919,9 @@ function loadConfig(projectDir) {
   } catch (e) {
     throw new ConfigError(file2, `cannot read file (${e.message})`);
   }
+  return parseConfig(text, file2);
+}
+function parseConfig(text, file2) {
   let raw;
   try {
     raw = (0, import_yaml.parse)(text);
@@ -28155,9 +28158,9 @@ function dotted2(path10) {
 }
 function describeIssue2(issue2) {
   const base = dotted2(issue2.path);
-  const join26 = (leaf) => base ? `${base}.${leaf}` : leaf;
+  const join27 = (leaf) => base ? `${base}.${leaf}` : leaf;
   if (issue2.code === "unrecognized_keys") {
-    return issue2.keys.map((k) => `${join26(snake2(k))}: unknown key`);
+    return issue2.keys.map((k) => `${join27(snake2(k))}: unknown key`);
   }
   return [`${base || "(root)"}: ${issue2.message}`];
 }
@@ -28171,6 +28174,9 @@ function loadBoard(dir, config2) {
   } catch (e) {
     throw new BoardError(file2, `cannot read file (${e.message})`);
   }
+  return parseBoard(text, file2, config2);
+}
+function parseBoard(text, file2, config2) {
   let raw;
   try {
     raw = (0, import_yaml2.parse)(text);
@@ -29962,10 +29968,117 @@ import {
 } from "node:fs";
 import { join as join8 } from "node:path";
 
+// src/capacity.ts
+var DEFAULT_TIMEOUT_MS = 3e4;
+function withTimeout(work, ms, what = "CI read") {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms} ms`)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
+var RUNNER_JQ = ".runners[] | [.name, .status, .busy] | @tsv";
+var RUNNER_LINE = /^(\S+)\t(\S+)\t(true|false)$/;
+async function selfHostedBusy(config2, gh, timeoutMs) {
+  const org = config2.primaryRepo.split("/")[0];
+  const pattern = config2.ci.runnerNamePattern;
+  const re = pattern === void 0 ? void 0 : new RegExp(pattern);
+  const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ, { timeoutMs });
+  let busy = 0;
+  let matching = 0;
+  for (const line2 of out.split("\n")) {
+    if (line2.trim() === "") continue;
+    const m = RUNNER_LINE.exec(line2);
+    if (!m) throw new Error(`unparsable runner line: ${line2}`);
+    const [, name = "", status, isBusy] = m;
+    if (re !== void 0 && !re.test(name)) continue;
+    matching++;
+    if (status === "online" && isBusy === "true") busy++;
+  }
+  if (matching === 0) {
+    throw new Error(
+      pattern === void 0 ? `no organisation runner found for ${org}; capacity reads organisation runners only` : `no organisation runner of ${org} matches ${pattern}; capacity reads organisation runners only`
+    );
+  }
+  return busy;
+}
+async function runCount(config2, gh, status, timeoutMs) {
+  const out = await gh.api(
+    `/repos/${config2.primaryRepo}/actions/runs?status=${status}&per_page=1`,
+    ".total_count",
+    { paginate: false, timeoutMs }
+  );
+  const first = out.split("\n")[0]?.trim() ?? "";
+  if (!/^\d+$/.test(first)) throw new Error(`unparsable run count: ${first}`);
+  return Number(first);
+}
+async function githubHostedBusy(config2, gh, timeoutMs) {
+  const running = await runCount(config2, gh, "in_progress", timeoutMs);
+  const queued = await runCount(config2, gh, "queued", timeoutMs);
+  return running + queued;
+}
+function hostLoadOk(config2, host, hostLoad) {
+  const { hostLoadMax } = config2.ci.capacity;
+  if (hostLoadMax !== void 0) return hostLoad <= hostLoadMax;
+  if (config2.ci.sharedHost === true) {
+    const cores = host.cpuCount();
+    return Number.isFinite(cores) && cores > 0 && hostLoad <= cores;
+  }
+  return true;
+}
+async function readCapacity(config2, ports, options = {}) {
+  const { total, mergeMaxBusy } = config2.ci.capacity;
+  const { githubHostedLimit } = config2.ci;
+  const hostLoad = ports.host.loadAvg1();
+  const hostOk = hostLoadOk(config2, ports.host, hostLoad);
+  const mode = config2.ci.runners;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let selfBusy = 0;
+  let hostedBusy = 0;
+  try {
+    const read3 = async () => {
+      if (mode === "self-hosted" || mode === "both") {
+        selfBusy = await selfHostedBusy(config2, ports.gh, timeoutMs);
+      }
+      if (mode === "github-hosted" || mode === "both") {
+        hostedBusy = await githubHostedBusy(config2, ports.gh, timeoutMs);
+      }
+    };
+    await withTimeout(read3(), timeoutMs);
+  } catch (err) {
+    const error62 = (err instanceof Error ? err.message : String(err)).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
+    return { ciBusy: total, ciTotal: total, hostLoad, ok: false, hostOk, error: error62 };
+  }
+  const ciBusy = Math.min(total, mode === "github-hosted" ? hostedBusy : selfBusy);
+  let ok = ciBusy <= mergeMaxBusy;
+  const out = { ciBusy, ciTotal: total, hostLoad, ok, hostOk };
+  if (mode === "both") {
+    out.githubHostedBusy = hostedBusy;
+    if (githubHostedLimit === void 0) out.warning = GITHUB_HOSTED_UNLIMITED;
+    else {
+      out.githubHostedLimit = githubHostedLimit;
+      ok = ok && hostedBusy <= githubHostedLimit;
+    }
+  }
+  out.ok = ok && hostOk;
+  return out;
+}
+async function readCapacityTwice(config2, ports, options = {}) {
+  const first = await readCapacity(config2, ports, options);
+  if (!first.ok) return { ok: false, capacity: first };
+  await ports.clock.sleep(config2.ci.capacity.checkTwiceSeconds * 1e3);
+  const second = await readCapacity(config2, ports, options);
+  return { ok: second.ok, capacity: second };
+}
+async function capacityHoldsTwice(config2, ports, options = {}) {
+  return (await readCapacityTwice(config2, ports, options)).ok;
+}
+
 // src/setup-ci.ts
 var import_yaml4 = __toESM(require_dist(), 1);
-var RUNNER_JQ = '.runners[] | [.name, .status, .busy, ([.labels[].name] | join(","))] | @tsv';
-var RUNNER_LINE = /^(\S+)\t(online|offline)\t(true|false)\t([^\t]*)$/;
+var RUNNER_JQ2 = '.runners[] | [.name, .status, .busy, ([.labels[].name] | join(","))] | @tsv';
+var RUNNER_LINE2 = /^(\S+)\t(online|offline)\t(true|false)\t([^\t]*)$/;
 var SAFE_NAME = /^[A-Za-z0-9_.-]+$/;
 var DEFAULT_GITHUB_HOSTED_TOTAL = 20;
 var DEFAULT_CHECK_TWICE_SECONDS = 30;
@@ -29974,7 +30087,7 @@ function parseRunners(out) {
   const runners = [];
   for (const line2 of out.split("\n")) {
     if (line2.trim() === "") continue;
-    const m = RUNNER_LINE.exec(line2);
+    const m = RUNNER_LINE2.exec(line2);
     if (!m) throw new Error("unparsable runner line");
     const [, name = "", status, busy, labels = ""] = m;
     runners.push({
@@ -29989,20 +30102,21 @@ function parseRunners(out) {
 function errorText(err) {
   return (err instanceof Error ? err.message : String(err)).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
 }
-async function read(gh, path10) {
+async function read(gh, path10, timeoutMs) {
   try {
-    return { ok: true, runners: parseRunners(await gh.api(path10, RUNNER_JQ)) };
+    const out = timeoutMs === void 0 ? await gh.api(path10, RUNNER_JQ2) : await withTimeout(gh.api(path10, RUNNER_JQ2, { timeoutMs }), timeoutMs, "runner read");
+    return { ok: true, runners: parseRunners(out) };
   } catch (err) {
     return { ok: false, error: errorText(err) };
   }
 }
-async function detectRunners(owner, repo, ports) {
+async function detectRunners(owner, repo, ports, timeoutMs) {
   if (!SAFE_NAME.test(owner) || !SAFE_NAME.test(repo) || owner === "." || owner === ".." || repo === "." || repo === "..") {
     return { source: "unknown", runners: [], error: "invalid repository name" };
   }
-  const org = await read(ports.gh, `/orgs/${owner}/actions/runners`);
+  const org = await read(ports.gh, `/orgs/${owner}/actions/runners`, timeoutMs);
   if (org.ok && org.runners.length > 0) return { source: "org", runners: org.runners };
-  const rep = await read(ports.gh, `/repos/${owner}/${repo}/actions/runners`);
+  const rep = await read(ports.gh, `/repos/${owner}/${repo}/actions/runners`, timeoutMs);
   if (rep.ok && rep.runners.length > 0) return { source: "repo", runners: rep.runners };
   if (org.ok && rep.ok) return { source: "none", runners: [] };
   const errors = [
@@ -30382,9 +30496,14 @@ function readWorkflows(project) {
   }
   return { files, errors, notes };
 }
-async function readVisibility(gh, repo) {
+async function readVisibility(gh, repo, timeoutMs) {
   try {
-    const out = (await gh.api(`/repos/${repo}`, ".visibility", { paginate: false })).trim();
+    const call = timeoutMs === void 0 ? gh.api(`/repos/${repo}`, ".visibility", { paginate: false }) : withTimeout(
+      gh.api(`/repos/${repo}`, ".visibility", { paginate: false, timeoutMs }),
+      timeoutMs,
+      "visibility read"
+    );
+    const out = (await call).trim();
     return { visibility: out === "private" || out === "internal" ? "private" : "public" };
   } catch {
     return {
@@ -30431,6 +30550,25 @@ function describeDetection(d) {
   if (d.error) lines.push(`  error: ${d.error}`);
   return lines;
 }
+async function detectCi(project, primary, ports, current, timeoutMs) {
+  const [owner = "", name = ""] = primary.split("/");
+  const notes = [];
+  const vis = await readVisibility(ports.gh, primary, timeoutMs);
+  if (vis.note) notes.push(vis.note);
+  const wf = readWorkflows(project);
+  notes.push(...wf.notes);
+  const detection = await detectRunners(owner, name, ports, timeoutMs);
+  const proposal = proposeCi(detection, vis.visibility, current, workflowRunnerUsage(wf.files));
+  const lint = lintWorkflows(wf.files, detection, EXPECTED_GROUP);
+  return {
+    detection,
+    proposal,
+    visibility: vis.visibility,
+    notes: [...notes, ...proposal.notes],
+    errors: [...proposal.errors, ...wf.errors, ...lint.errors],
+    warnings: [...lint.warnings, ...crewPushWarnings(wf.files)]
+  };
+}
 async function runSetupCi(o2) {
   const file2 = join8(o2.project, ".studio", "studio.yaml");
   let text;
@@ -30444,7 +30582,6 @@ async function runSetupCi(o2) {
   const doc = (0, import_yaml5.parseDocument)(text);
   if (doc.errors.length > 0) throw new Error(".studio/studio.yaml is not valid YAML");
   const primary = assertPrimaryRepo(doc.get("primary_repo"));
-  const [owner = "", name = ""] = primary.split("/");
   const notes = [];
   let current;
   if (doc.has("ci")) {
@@ -30452,16 +30589,9 @@ async function runSetupCi(o2) {
     if (parsed.success) current = parsed.data;
     else notes.push("the existing ci block is invalid and was ignored for the proposal");
   }
-  const vis = await readVisibility(o2.ports.gh, primary);
-  if (vis.note) notes.push(vis.note);
-  const wf = readWorkflows(o2.project);
-  notes.push(...wf.notes);
-  const detection = await detectRunners(owner, name, o2.ports);
-  const proposal = proposeCi(detection, vis.visibility, current, workflowRunnerUsage(wf.files));
-  const lint = lintWorkflows(wf.files, detection, EXPECTED_GROUP);
-  const allNotes = [...notes, ...proposal.notes];
-  const errors = [...proposal.errors, ...wf.errors, ...lint.errors];
-  const warnings = [...lint.warnings, ...crewPushWarnings(wf.files)];
+  const found = await detectCi(o2.project, primary, o2.ports, current);
+  const { detection, proposal, errors, warnings } = found;
+  const allNotes = [...notes, ...found.notes];
   let written = false;
   let refused;
   if (o2.write) {
@@ -31056,6 +31186,36 @@ async function runAccount(o2) {
   );
 }
 
+// src/init.ts
+var import_yaml10 = __toESM(require_dist(), 1);
+import { lstatSync as lstatSync17, mkdirSync as mkdirSync6, readdirSync as readdirSync9, rmdirSync, rmSync as rmSync5, writeFileSync as writeFileSync9 } from "node:fs";
+import { join as join21 } from "node:path";
+
+// src/secret-command.ts
+var import_yaml8 = __toESM(require_dist(), 1);
+import { readFileSync as readFileSync19, realpathSync as realpathSync5, statSync as statSync3 } from "node:fs";
+import { homedir as homedir6 } from "node:os";
+import { join as join19 } from "node:path";
+
+// src/crew.ts
+import {
+  chmodSync as chmodSync5,
+  existsSync as existsSync4,
+  lstatSync as lstatSync15,
+  readdirSync as readdirSync7,
+  readFileSync as readFileSync18,
+  realpathSync as realpathSync4,
+  unlinkSync as unlinkSync5,
+  writeFileSync as writeFileSync8
+} from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { basename as basename4, dirname as dirname8, join as join18, resolve as resolve4, sep as sep5 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+
+// src/brief-caps.ts
+import { lstatSync as lstatSync10, readFileSync as readFileSync14 } from "node:fs";
+import { join as join13 } from "node:path";
+
 // src/capabilities.ts
 var import_yaml6 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync11 } from "node:fs";
@@ -31248,333 +31408,6 @@ function itemTriggers(item) {
     ...item.history.some((h2) => h2.to === "in_review") ? ["rework"] : []
   ]);
 }
-
-// src/capacity.ts
-var DEFAULT_TIMEOUT_MS = 3e4;
-function withTimeout(work, ms) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`CI read timed out after ${ms} ms`)), ms);
-  });
-  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
-}
-var RUNNER_JQ2 = ".runners[] | [.name, .status, .busy] | @tsv";
-var RUNNER_LINE2 = /^(\S+)\t(\S+)\t(true|false)$/;
-async function selfHostedBusy(config2, gh, timeoutMs) {
-  const org = config2.primaryRepo.split("/")[0];
-  const pattern = config2.ci.runnerNamePattern;
-  const re = pattern === void 0 ? void 0 : new RegExp(pattern);
-  const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ2, { timeoutMs });
-  let busy = 0;
-  let matching = 0;
-  for (const line2 of out.split("\n")) {
-    if (line2.trim() === "") continue;
-    const m = RUNNER_LINE2.exec(line2);
-    if (!m) throw new Error(`unparsable runner line: ${line2}`);
-    const [, name = "", status, isBusy] = m;
-    if (re !== void 0 && !re.test(name)) continue;
-    matching++;
-    if (status === "online" && isBusy === "true") busy++;
-  }
-  if (matching === 0) {
-    throw new Error(
-      pattern === void 0 ? `no organisation runner found for ${org}; capacity reads organisation runners only` : `no organisation runner of ${org} matches ${pattern}; capacity reads organisation runners only`
-    );
-  }
-  return busy;
-}
-async function runCount(config2, gh, status, timeoutMs) {
-  const out = await gh.api(
-    `/repos/${config2.primaryRepo}/actions/runs?status=${status}&per_page=1`,
-    ".total_count",
-    { paginate: false, timeoutMs }
-  );
-  const first = out.split("\n")[0]?.trim() ?? "";
-  if (!/^\d+$/.test(first)) throw new Error(`unparsable run count: ${first}`);
-  return Number(first);
-}
-async function githubHostedBusy(config2, gh, timeoutMs) {
-  const running = await runCount(config2, gh, "in_progress", timeoutMs);
-  const queued = await runCount(config2, gh, "queued", timeoutMs);
-  return running + queued;
-}
-function hostLoadOk(config2, host, hostLoad) {
-  const { hostLoadMax } = config2.ci.capacity;
-  if (hostLoadMax !== void 0) return hostLoad <= hostLoadMax;
-  if (config2.ci.sharedHost === true) {
-    const cores = host.cpuCount();
-    return Number.isFinite(cores) && cores > 0 && hostLoad <= cores;
-  }
-  return true;
-}
-async function readCapacity(config2, ports, options = {}) {
-  const { total, mergeMaxBusy } = config2.ci.capacity;
-  const { githubHostedLimit } = config2.ci;
-  const hostLoad = ports.host.loadAvg1();
-  const hostOk = hostLoadOk(config2, ports.host, hostLoad);
-  const mode = config2.ci.runners;
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  let selfBusy = 0;
-  let hostedBusy = 0;
-  try {
-    const read3 = async () => {
-      if (mode === "self-hosted" || mode === "both") {
-        selfBusy = await selfHostedBusy(config2, ports.gh, timeoutMs);
-      }
-      if (mode === "github-hosted" || mode === "both") {
-        hostedBusy = await githubHostedBusy(config2, ports.gh, timeoutMs);
-      }
-    };
-    await withTimeout(read3(), timeoutMs);
-  } catch (err) {
-    const error62 = (err instanceof Error ? err.message : String(err)).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
-    return { ciBusy: total, ciTotal: total, hostLoad, ok: false, hostOk, error: error62 };
-  }
-  const ciBusy = Math.min(total, mode === "github-hosted" ? hostedBusy : selfBusy);
-  let ok = ciBusy <= mergeMaxBusy;
-  const out = { ciBusy, ciTotal: total, hostLoad, ok, hostOk };
-  if (mode === "both") {
-    out.githubHostedBusy = hostedBusy;
-    if (githubHostedLimit === void 0) out.warning = GITHUB_HOSTED_UNLIMITED;
-    else {
-      out.githubHostedLimit = githubHostedLimit;
-      ok = ok && hostedBusy <= githubHostedLimit;
-    }
-  }
-  out.ok = ok && hostOk;
-  return out;
-}
-async function readCapacityTwice(config2, ports, options = {}) {
-  const first = await readCapacity(config2, ports, options);
-  if (!first.ok) return { ok: false, capacity: first };
-  await ports.clock.sleep(config2.ci.capacity.checkTwiceSeconds * 1e3);
-  const second = await readCapacity(config2, ports, options);
-  return { ok: second.ok, capacity: second };
-}
-async function capacityHoldsTwice(config2, ports, options = {}) {
-  return (await readCapacityTwice(config2, ports, options)).ok;
-}
-
-// src/ci-jobs.ts
-var import_yaml7 = __toESM(require_dist(), 1);
-var GIT_FETCH_MS = 12e4;
-var GIT_LOCAL_MS = 6e4;
-var WORKFLOWS_DIR = ".github/workflows/";
-var WORKFLOW_FILE = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/;
-var SHA = /^[0-9a-f]{40,64}$/i;
-var MAX_JOBS = 20;
-var instances = (checks, workflow, job) => {
-  const mine = [];
-  for (const c3 of checks) {
-    if (c3.workflow === void 0 || c3.workflow !== workflow) continue;
-    if (c3.name === job) {
-      mine.push(c3);
-      continue;
-    }
-    if (!c3.name.startsWith(`${job} `)) continue;
-    const rest = c3.name.slice(job.length);
-    if (rest.length > 3 && rest.startsWith(" (") && rest.endsWith(")")) mine.push(c3);
-    else return "ambiguous";
-  }
-  return mine;
-};
-var jobProblem = (checks, workflow, job) => {
-  const mine = instances(checks, workflow, job);
-  if (mine === "ambiguous") return "ambiguous";
-  return mine.length > 0 && mine.every((c3) => c3.bucket === "pass") ? void 0 : "not passed";
-};
-function runsOn(on6, event) {
-  if (on6 === event) return true;
-  if (Array.isArray(on6)) return on6.includes(event);
-  return on6 !== null && typeof on6 === "object" && event in on6;
-}
-function readWorkflow(text, path10) {
-  let doc;
-  try {
-    doc = (0, import_yaml7.parse)(text);
-  } catch {
-    return void 0;
-  }
-  if (doc === null || typeof doc !== "object") return void 0;
-  const wf = doc;
-  const name = typeof wf.name === "string" && wf.name.trim() !== "" ? wf.name : path10;
-  const jobs = wf.jobs !== null && typeof wf.jobs === "object" ? Object.entries(wf.jobs) : [];
-  return {
-    name,
-    jobs,
-    onPullRequest: runsOn(wf.on, "pull_request"),
-    onWorkflowCall: runsOn(wf.on, "workflow_call")
-  };
-}
-var isJob = (j) => j !== null && typeof j === "object" && !Array.isArray(j);
-var checkName = (id, j) => typeof j.name === "string" ? j.name : id;
-var guarded = (j) => "continue-on-error" in j;
-var localCall = (j, path10) => j.uses === `./${path10}`;
-var remoteCall = (j, path10) => typeof j.uses === "string" && !j.uses.startsWith("./") && j.uses.includes(`/${path10}@`);
-function findJob(files, path10, job, where) {
-  const w = files.get(path10);
-  if (w === void 0) return `the workflow is not at ${where} or not valid YAML`;
-  const unique3 = (wf, own2) => [...files].every(([p, x]) => p === own2 || x !== void 0 && x.name !== wf.name);
-  const found = w.jobs.find(([id, j]) => isJob(j) && checkName(id, j) === job);
-  if (found === void 0) return `the job is not in the workflow at ${where}`;
-  const [, called] = found;
-  if (guarded(called)) return `the job has continue-on-error at ${where}`;
-  if (w.onPullRequest) {
-    if (typeof called.uses === "string") {
-      return called.uses.startsWith("./") ? `the job calls a reusable workflow: name the called workflow file and its job (at ${where})` : `the job calls a remote reusable workflow, which the gate cannot follow (at ${where})`;
-    }
-    if (!unique3(w, path10)) return `the workflow name is not unique at ${where}`;
-    return { targets: [{ workflow: w.name, job }], def: JSON.stringify([called]) };
-  }
-  if (!w.onWorkflowCall) return `the workflow does not run on pull_request at ${where}`;
-  if ("uses" in called) {
-    return `the called job calls a reusable workflow itself: one level only (at ${where})`;
-  }
-  const targets = [];
-  const callers = [];
-  let remote = false;
-  let nested = false;
-  for (const [p, x] of files) {
-    for (const [id, j] of x?.jobs ?? []) {
-      if (!isJob(j) || x === void 0) continue;
-      if (remoteCall(j, path10) && x.onPullRequest) remote = true;
-      if (!localCall(j, path10)) continue;
-      if (!x.onPullRequest) {
-        nested = true;
-        continue;
-      }
-      if (guarded(j)) return `a calling job has continue-on-error at ${where}`;
-      if (!unique3(x, p)) return `the workflow name is not unique at ${where}`;
-      targets.push({ workflow: x.name, job: `${checkName(id, j)} / ${job}` });
-      callers.push(j);
-    }
-  }
-  if (targets.length === 0) {
-    if (remote) {
-      return `a pull_request workflow calls it only as a remote reusable workflow, which the gate cannot follow (at ${where})`;
-    }
-    if (nested) {
-      return `the workflow is called only through another reusable workflow: one level only (at ${where})`;
-    }
-    return `no pull_request workflow calls the workflow at ${where}`;
-  }
-  return { targets, def: JSON.stringify([called, ...callers]) };
-}
-async function verifyNotRunHereJobs(o2) {
-  const g = (args, timeoutMs) => o2.git.run(o2.checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
-  const trees = /* @__PURE__ */ new Map();
-  const workflowsAt = async (oid) => {
-    if (trees.has(oid)) return trees.get(oid);
-    let files;
-    try {
-      const paths = (await g(["ls-tree", "--name-only", "-z", oid, WORKFLOWS_DIR], GIT_LOCAL_MS)).split("\0").filter((p) => p !== "" && WORKFLOW_FILE.test(p));
-      files = /* @__PURE__ */ new Map();
-      for (const p of paths) {
-        let text;
-        try {
-          text = await g(["cat-file", "blob", `${oid}:${p}`], GIT_LOCAL_MS);
-        } catch {
-          text = void 0;
-        }
-        files.set(p, text === void 0 ? void 0 : readWorkflow(text, p));
-      }
-    } catch {
-      files = void 0;
-    }
-    trees.set(oid, files);
-    return files;
-  };
-  let fetched;
-  const jobs = [];
-  const covered = [];
-  for (const [i2, command] of o2.commands.entries()) {
-    const fail2 = (why) => ({ ok: false, entry: i2 + 1, why });
-    const named = o2.entries.find((e) => e.command.trim() === command.trim());
-    if (named === void 0) return fail2("no CI job named for it");
-    if (named.covers === void 0 || named.covers.trim() === "") {
-      return fail2("no covers text says why the named job covers the command");
-    }
-    const base = o2.baseOid;
-    if (base === void 0 || !SHA.test(base) || !SHA.test(o2.headOid)) {
-      return fail2("the base commit is unknown");
-    }
-    if (!WORKFLOW_FILE.test(named.workflow)) {
-      return fail2("the workflow is no file in .github/workflows");
-    }
-    if (fetched === void 0) {
-      try {
-        await g(
-          ["fetch", "--no-tags", "--no-write-fetch-head", o2.checkout.remote, base, o2.headOid],
-          GIT_FETCH_MS
-        );
-        fetched = true;
-      } catch {
-        fetched = false;
-      }
-    }
-    if (!fetched) return fail2("the base commit cannot be fetched");
-    const at = async (oid, where) => {
-      const files = await workflowsAt(oid);
-      if (files === void 0) return `the workflows at ${where} cannot be listed`;
-      return findJob(files, named.workflow, named.job, where);
-    };
-    const atBase = await at(base, "the base");
-    if (typeof atBase === "string") return fail2(atBase);
-    const atHead = await at(o2.headOid, "the pull request head");
-    if (typeof atHead === "string") return fail2(atHead);
-    const key = (f) => JSON.stringify(f.targets);
-    if (key(atHead) !== key(atBase)) {
-      return fail2("the workflow names or callers differ at the pull request head");
-    }
-    if (!o2.ciItem && atHead.def !== atBase.def) {
-      return fail2("the job definition changed at the pull request head and the item is no CI item");
-    }
-    for (const t of atBase.targets) {
-      const problem = jobProblem(o2.checks, t.workflow, t.job);
-      if (problem === "ambiguous") {
-        return fail2("a check of the workflow has a name like the job that does not parse as it");
-      }
-      if (problem !== void 0) {
-        return fail2("the job has no passing check on the pull request (missing or skipped)");
-      }
-      if (!jobs.some((j) => j.workflow === t.workflow && j.job === t.job)) jobs.push(t);
-      covered.push({ entry: i2 + 1, ...t, covers: named.covers });
-    }
-    if (jobs.length > MAX_JOBS) return fail2(`more than ${MAX_JOBS} CI jobs in all`);
-  }
-  return { ok: true, jobs, covered };
-}
-function approvedJobsProblem(jobs, checks) {
-  for (const [i2, j] of jobs.entries()) {
-    const problem = jobProblem(checks, j.workflow, j.job);
-    if (problem === "ambiguous") {
-      return `approved CI job ${i2 + 1} has a check whose name does not parse as the job: review it again`;
-    }
-    if (problem !== void 0) {
-      return `approved CI job ${i2 + 1} has no passing check on the pull request now: review it again`;
-    }
-  }
-  return void 0;
-}
-
-// src/crew.ts
-import {
-  chmodSync as chmodSync5,
-  existsSync as existsSync4,
-  lstatSync as lstatSync15,
-  readdirSync as readdirSync7,
-  readFileSync as readFileSync18,
-  realpathSync as realpathSync4,
-  unlinkSync as unlinkSync5,
-  writeFileSync as writeFileSync8
-} from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { basename as basename4, dirname as dirname8, join as join18, resolve as resolve4, sep as sep5 } from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-
-// src/brief-caps.ts
-import { lstatSync as lstatSync10, readFileSync as readFileSync14 } from "node:fs";
-import { join as join13 } from "node:path";
 
 // src/review.ts
 import { lstatSync as lstatSync8, readdirSync as readdirSync4, readFileSync as readFileSync12 } from "node:fs";
@@ -31860,7 +31693,7 @@ function checkReviewCaps(caps, report) {
 }
 
 // src/sources.ts
-var import_yaml8 = __toESM(require_dist(), 1);
+var import_yaml7 = __toESM(require_dist(), 1);
 import { createHash as createHash2 } from "node:crypto";
 import { lstatSync as lstatSync9, readdirSync as readdirSync5, readFileSync as readFileSync13, renameSync as renameSync7 } from "node:fs";
 import { join as join12 } from "node:path";
@@ -31903,7 +31736,7 @@ function loadSources(dir = capabilitiesDir()) {
   const file2 = join12(dir, "SOURCES.yaml");
   let raw;
   try {
-    raw = (0, import_yaml8.parse)(readFileSync13(file2, "utf8"));
+    raw = (0, import_yaml7.parse)(readFileSync13(file2, "utf8"));
   } catch (e) {
     throw new SourcesError(`${file2}: cannot read (${e.message.split("\n")[0]})`);
   }
@@ -32182,22 +32015,22 @@ var isGithubPath = (p) => {
   return lower === ".github" || lower.startsWith(".github/");
 };
 var isCiItem = (i2) => [...i2.paths, ...i2.touches].some(isGithubPath);
-var GIT_FETCH_MS2 = 12e4;
-var GIT_LOCAL_MS2 = 6e4;
+var GIT_FETCH_MS = 12e4;
+var GIT_LOCAL_MS = 6e4;
 async function changesGithub(ports, checkout, base, head, allowed) {
   const g = (args, timeoutMs) => ports.git.run(checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
   try {
     await g(
       ["fetch", "--no-tags", "--no-write-fetch-head", checkout.remote, head, base],
-      GIT_FETCH_MS2
+      GIT_FETCH_MS
     );
     const diff = await g(
       ["diff", "--name-only", "--no-renames", "-z", `${base}...${head}`],
-      GIT_LOCAL_MS2
+      GIT_LOCAL_MS
     );
     const outside = (p) => isGithubPath(p) && !(p.startsWith(".github/") && allowed.some((glob) => globProblem(glob) === void 0 && matchGlob(glob, p)));
     if (diff.split("\0").some((p) => p !== "" && outside(p))) return true;
-    const tree = await g(["ls-tree", "-r", "-z", "--full-tree", head], GIT_LOCAL_MS2);
+    const tree = await g(["ls-tree", "-r", "-z", "--full-tree", head], GIT_LOCAL_MS);
     return tree.split("\0").some((line2) => {
       const tab = line2.indexOf("	");
       return tab > 0 && line2.startsWith("120000 ") && isGithubPath(line2.slice(tab + 1));
@@ -33929,9 +33762,1340 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   return { name, pid, log };
 }
 
+// src/secret-command.ts
+function readPrimaryRepo(project) {
+  const file2 = join19(project, ".studio", "studio.yaml");
+  let raw;
+  try {
+    raw = (0, import_yaml8.parse)(readFileSync19(file2, "utf8"));
+  } catch {
+    throw new Error("cannot read .studio/studio.yaml");
+  }
+  return assertPrimaryRepo(raw?.primary_repo);
+}
+async function checkToken(token, repo, ports) {
+  const call = async (path10) => {
+    try {
+      return await ports.credentials.ghWithToken(token, ["api", path10]);
+    } catch {
+      return { code: 1, stdout: "", stderr: "" };
+    }
+  };
+  const info = await call(`/repos/${repo}`);
+  if (info.code !== 0) return "repository read (or GitHub is not reachable)";
+  let push;
+  try {
+    push = JSON.parse(info.stdout).permissions?.push;
+  } catch {
+    return "repository read (unexpected answer)";
+  }
+  if (push !== true) return "contents write";
+  const pulls = await call(`/repos/${repo}/pulls?per_page=1`);
+  return pulls.code === 0 ? void 0 : "pull requests read";
+}
+async function runSecretSet(o2) {
+  const repo = readPrimaryRepo(o2.project);
+  const input2 = o2.readSecret ? await o2.readSecret("Crew token (input hidden): ") : void 0;
+  if (input2 === void 0) {
+    throw new Error("studio secret set needs a terminal for hidden input; nothing written");
+  }
+  const token = input2.replace(/\s+/g, "");
+  if (token === "") throw new Error("empty value; nothing written");
+  if (!validToken(token)) throw new Error("the value holds control characters; nothing written");
+  const failing = await checkToken(token, repo, o2.ports);
+  if (failing !== void 0) {
+    o2.stdout(`failing permission: ${failing}
+`);
+    return 1;
+  }
+  installCrewToken(token, o2.owner);
+  o2.stdout(`valid for ${repo}
+`);
+  return 0;
+}
+var API_KEY_VARS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+async function crewConfigDir(command, owner, env, ports) {
+  const fallback = env.CLAUDE_CONFIG_DIR || join19(owner.homedir ?? homedir6(), ".claude");
+  if (command === void 0) return fallback;
+  try {
+    const got = await runCredentialProvider(
+      command,
+      { item: "", role: "", exclude: [] },
+      ports,
+      owner
+    );
+    if (got === void 0) return void 0;
+    return got.configDir === void 0 ? crewClaudeDir(owner) : checkProviderConfigDir(got.configDir, owner);
+  } catch {
+    return void 0;
+  }
+}
+async function gitState(project, ports) {
+  try {
+    const m = /(\d+)\.(\d+)\.(\d+)/.exec(await ports.git.run(project, ["--version"]));
+    if (!m) return "cannot tell";
+    const enough = Number(m[1]) > 2 || Number(m[1]) === 2 && Number(m[2]) >= 38;
+    return enough ? m[0] : `${m[0]} (too old: 2.38 or newer is needed to accept a merged base)`;
+  } catch {
+    return "cannot tell";
+  }
+}
+var CHECKOUT_OK = "git checkout with origin";
+var GIT_OK = /^\d+\.\d+\.\d+$/;
+async function checkoutState(project, ports) {
+  try {
+    await ports.git.run(project, ["rev-parse", "--show-toplevel"]);
+  } catch {
+    return "not a git checkout: clone the repository and run studio in that clone";
+  }
+  try {
+    await ports.git.run(project, ["remote", "get-url", "origin"]);
+  } catch {
+    return "no remote origin: add it with git remote add origin <url>";
+  }
+  return CHECKOUT_OK;
+}
+var CREW_TOOLS = ["cargo", "rustc", "rustup", "node", "pnpm", "npm", "gh", "git"];
+function toolsOutside(env, home, toolchain) {
+  const real = (p) => {
+    try {
+      return realpathSync5(p);
+    } catch {
+      return p;
+    }
+  };
+  const realHome = real(home);
+  const open2 = toolchain.map(real);
+  const out = [];
+  for (const tool of CREW_TOOLS) {
+    for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
+      const file2 = join19(dir, tool);
+      try {
+        if (!statSync3(file2).isFile()) continue;
+      } catch {
+        continue;
+      }
+      const at = real(file2);
+      if (within(at, realHome) && !open2.some((t) => within(at, t) || within(file2, t))) {
+        out.push(`${tool} lies at ${file2}, outside crew_toolchain_paths: crews cannot run it`);
+      }
+      break;
+    }
+  }
+  return out;
+}
+function skillState(dir, name) {
+  const found = dir === void 0 ? void 0 : skillInstalled(dir, name);
+  return found === void 0 ? "cannot tell" : found ? "installed" : "not found";
+}
+async function doctorReport(o2) {
+  let config2;
+  try {
+    config2 = loadConfig(o2.project);
+  } catch {
+    config2 = void 0;
+  }
+  let ownerConfig;
+  try {
+    ownerConfig = loadOwnerConfig(o2.owner);
+  } catch {
+    ownerConfig = void 0;
+  }
+  const envName = config2?.crewToken?.env;
+  let crewToken;
+  if (envName && o2.env[envName]) crewToken = { status: "set", source: `env ${envName}` };
+  else {
+    const file2 = readCrewTokenFile(o2.owner);
+    if (file2.kind === "ok") crewToken = { status: "set", source: "file" };
+    else if (file2.kind === "bad") crewToken = { status: "invalid", source: "file" };
+    else crewToken = { status: "missing" };
+  }
+  const required2 = !(config2?.allowAmbientCredentials ?? false);
+  const command = ownerConfig?.crewCredentialCommand;
+  let accounts = [];
+  let accountProblem;
+  let account;
+  try {
+    accounts = accountRows({
+      owner: o2.owner,
+      ownerRoot: ownerStateRootFor(o2.owner),
+      ports: o2.ports
+    });
+    account = builtInAccount(o2.owner, o2.ports.clock.now())?.label;
+  } catch (e) {
+    accountProblem = e.message;
+  }
+  let claudeLogin;
+  if (command !== void 0) {
+    claudeLogin = `credential provider${accounts.length > 0 ? " (it comes before the accounts)" : ""}`;
+  } else if (accountProblem !== void 0) {
+    claudeLogin = `accounts, but a launch refuses: ${accountProblem}`;
+  } else if (account !== void 0) {
+    claudeLogin = `account ${account}`;
+  } else if (o2.env.CLAUDE_CODE_OAUTH_TOKEN) {
+    claudeLogin = "CLAUDE_CODE_OAUTH_TOKEN from the environment";
+  } else {
+    claudeLogin = "main login (~/.claude or CLAUDE_CONFIG_DIR)";
+  }
+  const configDir = command === void 0 && account !== void 0 ? crewClaudeDir(o2.owner) : await crewConfigDir(command, o2.owner, o2.env, o2.ports);
+  const studioCrew = skillState(configDir, CREW_SKILL2.split(":").at(-1) ?? "");
+  const git = await gitState(o2.project, o2.ports);
+  const projectCheckout = await checkoutState(o2.project, o2.ports);
+  const toolchain = toolsOutside(
+    o2.env,
+    o2.owner.homedir ?? homedir6(),
+    ownerConfig?.crewToolchainPaths ?? []
+  );
+  const report = {
+    claudeLogin,
+    projectCheckout,
+    toolchainOutside: toolchain,
+    accounts,
+    git,
+    crewToken: { ...crewToken, required: required2 },
+    crewTokenFile: crewTokenFile(o2.owner),
+    studioYaml: config2 ? "readable" : "not readable",
+    stacks: config2?.stacks ?? null,
+    // The foundation builders need: feature and fix items require its skills.
+    superpowers: skillState(configDir, "test-driven-development"),
+    studioCrew,
+    ownerConfig: ownerConfig ? "readable" : "invalid",
+    credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
+    allowApiBilling: ownerConfig?.allowApiBilling ?? false,
+    notify: ownerConfig?.notify ? "configured" : "not configured",
+    apiKeyVarsInEnvironment: API_KEY_VARS.filter((k) => o2.env[k])
+  };
+  return {
+    report,
+    required: required2,
+    gitOk: GIT_OK.test(git),
+    checkoutOk: projectCheckout === CHECKOUT_OK,
+    configDir
+  };
+}
+async function runDoctor(o2) {
+  const { report, required: required2, configDir } = await doctorReport(o2);
+  const { crewToken, accounts, git, projectCheckout, studioCrew, claudeLogin } = report;
+  const toolchain = report.toolchainOutside;
+  if (o2.json) o2.stdout(`${JSON.stringify(report, null, 2)}
+`);
+  else {
+    const source = crewToken.source ? ` (${crewToken.source})` : "";
+    const provider = report.credentialProvider;
+    const lines = [
+      `project checkout: ${projectCheckout}`,
+      ...toolchain.map((t) => `toolchain: ${t}`),
+      `claude login: ${claudeLogin}`,
+      ...accounts.map(
+        (a2) => `account ${a2.label}${a2.active ? " (active)" : ""}: added ${a2.addedAt.slice(0, 10)}, ${a2.state}`
+      ),
+      ...accounts.flatMap((a2) => expiryLine(a2) ?? []),
+      `crew token: ${crewToken.status}${source}${required2 ? "" : " (optional: allow_ambient_credentials)"}`,
+      `studio.yaml: ${report.studioYaml}`,
+      `superpowers: ${report.superpowers}`,
+      `git: ${git}`,
+      `studio plugin: ${studioCrew}${studioCrew === "not found" && configDir !== void 0 ? ` (${studioPluginHint(configDir)})` : ""}`,
+      `stacks: ${report.stacks === null ? "not set: run studio setup stack" : report.stacks.join(", ") || "(none)"}`,
+      `owner config: ${report.ownerConfig}`,
+      `credential provider: ${provider === null ? "not configured" : `configured ${provider}`}`,
+      `notify: ${report.notify}`,
+      `allow_api_billing: ${report.allowApiBilling ? "on" : "off"}`,
+      `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(", ") || "none"}`
+    ];
+    o2.stdout(`${lines.map(safe).join("\n")}
+`);
+  }
+  return required2 && crewToken.status !== "set" ? 1 : 0;
+}
+
+// src/stack.ts
+var import_yaml9 = __toESM(require_dist(), 1);
+import { lstatSync as lstatSync16, readdirSync as readdirSync8, readFileSync as readFileSync20 } from "node:fs";
+import { join as join20 } from "node:path";
+var MAX_FILE_BYTES2 = 1024 * 1024;
+var MAX_ENTRIES = 200;
+var MONOREPO_DIRS = ["apps", "packages", "services", "crates", "libs"];
+var OTHER_WEB = ["nextjs", "shadcn", "svelte"];
+var DEP_STACKS = {
+  next: "nextjs",
+  pg: "postgres",
+  postgres: "postgres",
+  "react-native": "expo",
+  expo: "expo",
+  svelte: "svelte",
+  "better-auth": "better-auth",
+  stripe: "stripe",
+  fastify: "fastify",
+  ai: "ai-sdk",
+  "@playwright/test": "playwright",
+  playwright: "playwright",
+  tailwindcss: "tailwind"
+};
+function isRealDir(path10) {
+  try {
+    return lstatSync16(path10).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function readSmall(path10, notes, name) {
+  try {
+    const st = lstatSync16(path10);
+    if (!st.isFile()) return void 0;
+    if (st.size > MAX_FILE_BYTES2) {
+      notes.push(`${name}: larger than 1 MiB, not read`);
+      return void 0;
+    }
+    return readFileSync20(path10, "utf8");
+  } catch {
+    notes.push(`${name}: cannot be read`);
+    return void 0;
+  }
+}
+var isFileEntry = (dir, name) => {
+  try {
+    return lstatSync16(join20(dir, name)).isFile();
+  } catch {
+    return false;
+  }
+};
+function depStacks(text, notes, name) {
+  let raw;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    notes.push(`${name}: not valid JSON`);
+    return [];
+  }
+  if (raw === null || typeof raw !== "object") return [];
+  const out = [];
+  for (const key of ["dependencies", "devDependencies", "peerDependencies"]) {
+    const deps = raw[key];
+    if (deps === null || typeof deps !== "object" || Array.isArray(deps)) continue;
+    for (const dep of Object.keys(deps)) {
+      const stack = DEP_STACKS[dep];
+      if (stack !== void 0) out.push(stack);
+    }
+  }
+  return out;
+}
+function scanDir(dir, label, found, notes) {
+  let names;
+  try {
+    names = readdirSync8(dir).slice(0, MAX_ENTRIES * 5);
+  } catch {
+    notes.push(`${label || "."}: cannot be read`);
+    return;
+  }
+  const file2 = (n2) => isFileEntry(dir, n2);
+  const read3 = (n2) => readSmall(join20(dir, n2), notes, label ? `${label}/${n2}` : n2);
+  const some = (re) => names.some((n2) => re.test(n2) && file2(n2));
+  const pkg = names.includes("package.json") && file2("package.json") ? read3("package.json") : void 0;
+  if (pkg !== void 0) {
+    for (const s of depStacks(pkg, notes, label ? `${label}/package.json` : "package.json")) {
+      found.add(s);
+    }
+  }
+  if (some(/^next\.config\./)) found.add("nextjs");
+  if (some(/^components\.json$/)) found.add("shadcn");
+  if (isRealDir(join20(dir, "migrations"))) found.add("postgres");
+  if (some(/^(Podfile|Package\.swift)$/) || names.some((n2) => n2.endsWith(".xcodeproj"))) {
+    found.add("ios");
+  }
+  for (const n2 of names.filter((x) => x.endsWith(".csproj") && file2(x))) {
+    if (/WinUI|WindowsAppSDK/i.test(read3(n2) ?? "")) found.add("winui");
+  }
+  if (some(/^Cargo\.toml$/)) found.add("rust");
+  if (isRealDir(join20(dir, "src-tauri"))) {
+    found.add("tauri");
+    found.add("rust");
+  }
+  if (some(/^(build\.gradle.*|AndroidManifest\.xml)$/)) found.add("android");
+  if (some(/^app\.json$/) && /"expo"\s*:/.test(read3("app.json") ?? "")) found.add("expo");
+  if (some(/^svelte\.config\./)) found.add("svelte");
+  if (some(/^(astro\.config\..*|vite\.config\..*|index\.html)$/)) found.add("web");
+  if (some(/^Dockerfile/) || some(/^(docker-)?compose.*\.ya?ml$/)) found.add("docker");
+  if (some(/^wp-config\.php$/) || isRealDir(join20(dir, "wp-content"))) found.add("wordpress");
+  if (some(/^style\.css$/) && /Theme Name:/.test(read3("style.css") ?? "")) found.add("wordpress");
+  for (const n2 of names.filter((x) => x.endsWith(".php") && file2(x))) {
+    if (/Plugin Name:/.test(read3(n2) ?? "")) found.add("wordpress");
+  }
+}
+function detectStacks(dir) {
+  const found = /* @__PURE__ */ new Set();
+  const notes = [];
+  scanDir(dir, "", found, notes);
+  if (isRealDir(join20(dir, ".github", "workflows"))) found.add("gha");
+  for (const group of MONOREPO_DIRS) {
+    const base = join20(dir, group);
+    if (!isRealDir(base)) continue;
+    for (const name of readdirSync8(base).slice(0, MAX_ENTRIES)) {
+      if (name.startsWith(".") || name === "node_modules") continue;
+      if (isRealDir(join20(base, name))) scanDir(join20(base, name), `${group}/${name}`, found, notes);
+    }
+  }
+  if (OTHER_WEB.some((s) => found.has(s))) found.delete("web");
+  return { stacks: [...found].sort(), notes };
+}
+function runSetupStack(o2) {
+  const file2 = join20(o2.project, ".studio", "studio.yaml");
+  let text;
+  try {
+    text = readFileSync20(file2, "utf8");
+  } catch (e) {
+    throw new Error(
+      `cannot read .studio/studio.yaml (${e.code ?? "error"})`
+    );
+  }
+  const doc = (0, import_yaml9.parseDocument)(text);
+  if (doc.errors.length > 0) throw new Error(".studio/studio.yaml is not valid YAML");
+  const { stacks, notes } = detectStacks(o2.project);
+  let stored = [];
+  try {
+    stored = loadConfig(o2.project).stacks ?? [];
+  } catch {
+    stored = [];
+  }
+  const added = stacks.filter((s) => !stored.includes(s));
+  const removed = stored.filter((s) => !stacks.includes(s));
+  let written = false;
+  if (o2.write) {
+    doc.set("stacks", stacks);
+    const check2 = studioConfigSchema.safeParse(camelizeKeys(doc.toJS()));
+    if (!check2.success)
+      throw new Error("the resulting studio.yaml would be invalid, nothing written");
+    writeAtomic(file2, doc.toString({ lineWidth: 0 }));
+    written = true;
+  }
+  if (o2.json) {
+    o2.stdout(`${JSON.stringify({ stacks, added, removed, notes, written }, null, 2)}
+`);
+  } else {
+    const lines = [
+      `Stacks: ${stacks.join(", ") || "(none)"}`,
+      ...added.length > 0 ? [`Added: ${added.join(", ")}`] : [],
+      ...removed.length > 0 ? [`Removed: ${removed.join(", ")}`] : [],
+      ...notes.map((n2) => `Note: ${n2}`),
+      ...written ? ["written: .studio/studio.yaml"] : []
+    ];
+    o2.stdout(`${lines.map(safe).join("\n")}
+`);
+  }
+  return 0;
+}
+
+// src/init.ts
+var MIN_NODE_MAJOR = 24;
+var GH_TIMEOUT_MS2 = 15e3;
+var CLAUDE_TIMEOUT_MS = 1e4;
+var MANIFESTS = ["package.json", "Cargo.toml", "go.mod", "pyproject.toml"];
+var TOOLING_DIRS = [".github", "tooling", "scripts"];
+var MAX_ENTRIES2 = 200;
+var PLAIN_NAME = /^[A-Za-z0-9._-]{1,100}$/;
+var COMPONENT_ID_MAX = 32;
+var REGISTRY_HOSTS = {
+  "package.json": ["registry.npmjs.org"],
+  "Cargo.toml": ["crates.io", "index.crates.io", "static.crates.io"],
+  "go.mod": ["proxy.golang.org", "sum.golang.org"],
+  "pyproject.toml": ["pypi.org", "files.pythonhosted.org"]
+};
+var STACK_HOSTS = {
+  docker: ["registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com"],
+  rust: ["crates.io", "index.crates.io", "static.crates.io"]
+};
+var PLUGIN_INSTALL = [
+  "/plugin marketplace add Besser-Sehen-Landshut/studio",
+  "/plugin install studio@studio-marketplace"
+];
+var SUPERPOWERS_INSTALL = "/plugin marketplace add obra/superpowers-marketplace, then /plugin install superpowers@superpowers-marketplace";
+var isRealDir2 = (path10) => {
+  try {
+    return lstatSync17(path10).isDirectory();
+  } catch {
+    return false;
+  }
+};
+var isRealFile = (path10) => {
+  try {
+    return lstatSync17(path10).isFile();
+  } catch {
+    return false;
+  }
+};
+var exists3 = (path10) => {
+  try {
+    lstatSync17(path10);
+    return true;
+  } catch {
+    return false;
+  }
+};
+function githubRepoOf(url2) {
+  const m = /^(?:https:\/\/(?:[^@/]+@)?github\.com\/|ssh:\/\/git@github\.com(?::\d+)?\/|git@github\.com:)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(
+    url2.trim()
+  );
+  if (!m) return void 0;
+  const [, owner = "", name = ""] = m;
+  if ([owner, name].some((p) => p === "." || p === "..")) return void 0;
+  return `${owner}/${name}`;
+}
+function componentId2(name, root, taken) {
+  let base = name.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  if (!/^[a-z]/.test(base)) base = `${root.replace(/s$/, "")}-${base}`.replace(/-$/, "");
+  base = base.slice(0, COMPONENT_ID_MAX).replace(/-$/, "");
+  let id = base;
+  for (let i2 = 2; taken.has(id); i2++) {
+    const suffix = `-${i2}`;
+    id = `${base.slice(0, COMPONENT_ID_MAX - suffix.length).replace(/-$/, "")}${suffix}`;
+  }
+  taken.add(id);
+  return id;
+}
+function proposeComponents(project, repo) {
+  const components = [];
+  const manifests = new Set(MANIFESTS.filter((m) => isRealFile(join21(project, m))));
+  const notes = [];
+  const taken = /* @__PURE__ */ new Set();
+  for (const root of MONOREPO_DIRS) {
+    const base = join21(project, root);
+    if (!isRealDir2(base)) continue;
+    let names;
+    try {
+      names = readdirSync9(base).sort().slice(0, MAX_ENTRIES2);
+    } catch {
+      notes.push(`${root}: cannot be read`);
+      continue;
+    }
+    for (const name of names) {
+      if (name.startsWith(".") || name === "node_modules" || !isRealDir2(join21(base, name))) continue;
+      const found = MANIFESTS.filter((m) => isRealFile(join21(base, name, m)));
+      if (found.length === 0) continue;
+      if (!PLAIN_NAME.test(name)) {
+        notes.push(`${root}/${safe(name)}: name needs quoting in a glob, add it by hand`);
+        continue;
+      }
+      for (const m of found) manifests.add(m);
+      components.push({
+        id: componentId2(name, root, taken),
+        name,
+        repo,
+        paths: [`${root}/${name}/**`]
+      });
+    }
+  }
+  const tooling = TOOLING_DIRS.filter((d) => isRealDir2(join21(project, d)));
+  if (components.length > 0 && tooling.length > 0) {
+    components.push({
+      id: componentId2("tooling", "tooling", taken),
+      name: "Tooling",
+      repo,
+      paths: tooling.map((d) => `${d}/**`)
+    });
+  }
+  for (const c3 of components) {
+    for (const g of c3.paths) {
+      const problem = globProblem(g);
+      if (problem !== void 0) throw new Error(`component ${c3.id}: ${problem}`);
+    }
+  }
+  return { components, manifests: [...manifests], notes };
+}
+var BOARD_TEXT = (prefix, repo) => `# The Studio board: one entry per work item, in the order you like.
+# Add one with: studio add "<title>" --type fix --dod "<what done means>"
+# The lead (skill studio:studio-lead, running studio tick) moves items from ready to merged.
+#
+# Fields of an item:
+#   id        PREFIX-<n>, unique
+#   title     one line
+#   type      feature | fix | chore | docs | research (review items are added by Studio)
+#   role      builder (reviewer for reviews)
+#   repo      owner/name, one of repos in studio.yaml
+#   size      S | M | L
+#   priority  a lower number goes first
+#   status    ready for new work
+#   paths     globs of the files the item is about; touches: globs it changes
+#   dod       the Definition of Done, at least one line
+#   plan      a plan file; a feature needs one before it is planned
+#
+# Example:
+# items:
+#   - id: ${prefix}-1
+#     title: Add a health endpoint
+#     type: fix
+#     role: builder
+#     repo: ${repo}
+#     size: S
+#     priority: 1
+#     status: ready
+#     paths: ["src/health/**"]
+#     touches: ["src/health/**"]
+#     depends_on: []
+#     dod: ["GET /health returns 200", "test added"]
+#     history: []
+items: []
+`;
+function prefixOf(repo) {
+  const letters = (repo.split("/").at(-1) ?? "").toUpperCase().replace(/[^A-Z]/g, "");
+  return letters.slice(0, 8) || "ITEM";
+}
+async function bounded(work, ms, what) {
+  try {
+    return await withTimeout(work(), ms, what);
+  } catch (e) {
+    return { code: 1, why: e.message };
+  }
+}
+async function prerequisites(o2) {
+  const checks = [];
+  const ghMs = o2.timeouts?.ghMs ?? GH_TIMEOUT_MS2;
+  const claudeMs = o2.timeouts?.claudeMs ?? CLAUDE_TIMEOUT_MS;
+  const doctor = await doctorReport(o2);
+  const r = doctor.report;
+  checks.push(
+    doctor.gitOk ? { name: "git", status: "pass", detail: r.git } : { name: "git", status: "fail", detail: r.git, fix: "install git 2.38 or newer" }
+  );
+  const gh = (args) => () => o2.ports.gh.run(args, { timeoutMs: ghMs });
+  const ghVersion = await bounded(gh(["--version"]), ghMs, "gh --version");
+  if (ghVersion.code !== 0) {
+    checks.push({
+      name: "gh",
+      status: "fail",
+      detail: ghVersion.why ?? "not found",
+      fix: "install the GitHub CLI (https://cli.github.com), then gh auth login"
+    });
+  } else {
+    const auth = await bounded(
+      gh(["auth", "status", "--hostname", "github.com"]),
+      ghMs,
+      "gh auth status"
+    );
+    checks.push(
+      auth.code === 0 ? { name: "gh", status: "pass", detail: "logged in to github.com" } : {
+        name: "gh",
+        status: "fail",
+        detail: auth.why ?? "not logged in to github.com",
+        fix: "gh auth login --hostname github.com"
+      }
+    );
+  }
+  const env = { PATH: o2.env.PATH ?? "", HOME: o2.owner.homedir ?? "" };
+  const plugins = o2.ports.plugins;
+  const claude = plugins ? await bounded(
+    () => plugins.run(["--version"], env, o2.project, { timeoutMs: claudeMs }),
+    claudeMs,
+    "claude --version"
+  ) : { code: 1 };
+  checks.push(
+    claude.code === 0 ? { name: "claude", status: "pass", detail: "Claude Code CLI found" } : {
+      name: "claude",
+      status: "fail",
+      detail: claude.why ?? "the claude CLI does not run",
+      fix: "install Claude Code (https://code.claude.com) so that claude is on PATH"
+    }
+  );
+  const node2 = o2.nodeVersion ?? process.versions.node;
+  const major = Number(node2.split(".")[0]);
+  checks.push(
+    major >= MIN_NODE_MAJOR ? { name: "node", status: "pass", detail: node2 } : {
+      name: "node",
+      status: "fail",
+      detail: `${node2} (too old)`,
+      fix: `install Node.js ${MIN_NODE_MAJOR} or newer`
+    }
+  );
+  const platform2 = o2.platform ?? process.platform;
+  checks.push(
+    platform2 === "darwin" || platform2 === "linux" ? { name: "sandbox", status: "pass", detail: `supported on ${platform2}` } : {
+      name: "sandbox",
+      status: "fail",
+      detail: `Claude Code's sandbox does not run on ${platform2}`,
+      fix: "run the control room on macOS, Linux or WSL2"
+    }
+  );
+  checks.push(
+    r.crewToken.status === "set" ? { name: "crew token", status: "pass", detail: `set (${r.crewToken.source})` } : {
+      name: "crew token",
+      status: "warn",
+      detail: r.crewToken.status,
+      fix: "after init --write, in a terminal: studio secret set crew-token (a least-privilege token, see README)"
+    }
+  );
+  const loginReady = r.credentialProvider !== null || r.accounts.length > 0;
+  checks.push(
+    loginReady ? { name: "claude account", status: "pass", detail: r.claudeLogin } : {
+      name: "claude account",
+      status: "warn",
+      detail: `none stored; crews would use ${r.claudeLogin}`,
+      fix: "in a terminal: claude setup-token, then studio account add <label>"
+    }
+  );
+  if (r.superpowers === "not found") {
+    checks.push({
+      name: "superpowers",
+      status: "warn",
+      detail: "not installed: feature and fix items need its skills",
+      fix: `in Claude Code: ${SUPERPOWERS_INSTALL}`
+    });
+  }
+  return checks;
+}
+var DEFAULT_ROLES = { builder: { model: "sonnet", wip: 2 }, reviewer: { model: "opus", wip: 1 } };
+var CI_UNREAD_COMMENT = "# runners could not be read; run studio setup ci";
+var STUDIO_FILES = [".studio/studio.yaml", ".studio/board.yaml"];
+async function isIgnored(o2, file2) {
+  try {
+    await o2.ports.git.run(o2.project, ["check-ignore", "-q", "--", file2]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function nextSteps(prefix, written, checks) {
+  const open2 = (name) => checks.some((c3) => c3.name === name && c3.status !== "pass");
+  return [
+    ...open2("ci") ? [
+      "Studio could not read your CI runners: run studio setup ci (with --write) to fix the ci: block."
+    ] : [],
+    ...written ? [] : ["Run studio init --write to write the two files."],
+    "Commit .studio/studio.yaml and .studio/board.yaml.",
+    ...open2("crew token") ? ["In a terminal, store the crew token: studio secret set crew-token"] : [],
+    ...open2("claude account") ? [
+      "In a terminal, add a Claude account for the crews: claude setup-token, then studio account add <label>"
+    ] : [],
+    ...open2("superpowers") ? [`In Claude Code, install superpowers: ${SUPERPOWERS_INSTALL}`] : [],
+    `In Claude Code, install the Studio plugin if it is not yet: ${PLUGIN_INSTALL.join(", then ")}; then restart Claude Code in this folder. The board comes with the plugin.`,
+    "Open the board pane with /studio.",
+    `Add a first item: studio add "Add a health endpoint" --type fix --dod "GET /health returns 200" (it gets the id ${prefix}-1)`,
+    "In a Claude Code session in this folder say: run the Studio lead loop (skill studio:studio-lead). It runs studio tick every few minutes."
+  ];
+}
+function writeBoth(o2, dir, files) {
+  const write = o2.writeFile ?? ((path10, text) => writeFileSync9(path10, text, { flag: "wx" }));
+  const madeDir = !exists3(dir);
+  if (madeDir) mkdirSync6(dir);
+  if (!isRealDir2(dir)) throw new Error(".studio is not a directory: nothing written");
+  const done = [];
+  try {
+    for (const [path10, text] of files) {
+      write(path10, text);
+      done.push(path10);
+    }
+  } catch (e) {
+    for (const path10 of done) rmSync5(path10, { force: true });
+    if (madeDir) rmdirSync(dir);
+    throw e;
+  }
+}
+async function runInit(o2) {
+  const dotStudio = join21(o2.project, ".studio");
+  if (exists3(dotStudio) && !isRealDir2(dotStudio)) {
+    throw new Error(
+      ".studio is not a directory (a link or a file): nothing written; remove it first"
+    );
+  }
+  const present2 = STUDIO_FILES.filter((f) => exists3(join21(o2.project, f)));
+  if (present2.length > 0) {
+    throw new Error(
+      `${present2.join(" and ")} already exists: Studio is set up here, nothing written; edit the file by hand, or use studio setup ci, studio setup stack and studio doctor`
+    );
+  }
+  const checks = await prerequisites(o2);
+  const warnings = [];
+  let origin;
+  try {
+    origin = (await o2.ports.git.run(o2.project, ["remote", "get-url", "origin"])).trim();
+  } catch {
+    origin = void 0;
+  }
+  const primary = origin === void 0 ? void 0 : githubRepoOf(origin);
+  if (origin === void 0) {
+    checks.push({
+      name: "repository",
+      status: "fail",
+      detail: "not a git checkout with a remote origin",
+      fix: "run studio init in a clone of the GitHub repository (git remote add origin <url>)"
+    });
+  } else if (primary === void 0) {
+    checks.push({
+      name: "repository",
+      status: "fail",
+      detail: "origin is not a GitHub repository",
+      fix: "Studio works with GitHub: set origin to https://github.com/<owner>/<name>.git"
+    });
+  } else checks.push({ name: "repository", status: "pass", detail: primary });
+  const ignored = (await Promise.all(STUDIO_FILES.map(async (f) => await isIgnored(o2, f) ? f : void 0))).filter((f) => f !== void 0);
+  checks.push(
+    ignored.length === 0 ? { name: "gitignore", status: "pass", detail: ".studio/ is not ignored" } : {
+      name: "gitignore",
+      status: "warn",
+      detail: `${ignored.join(", ")} ignored by git, but they belong in the repository`,
+      fix: "remove .studio from .gitignore (runtime state lives outside the repository)"
+    }
+  );
+  const repo = primary ?? "owner/name";
+  const prefix = prefixOf(repo);
+  const ghMs = o2.timeouts?.ghMs ?? GH_TIMEOUT_MS2;
+  const ci = primary === void 0 ? void 0 : await detectCi(o2.project, primary, o2.ports, void 0, ghMs);
+  let ciBlock = ci?.proposal.ci;
+  let ciUnread = false;
+  if (ci !== void 0) {
+    warnings.push(...ci.errors.map((e) => `ci: ${e}`), ...ci.warnings.map((w) => `ci: ${w}`));
+    if (ciBlock === void 0 || ci.proposal.errors.length > 0) {
+      ciBlock = proposeCi({ source: "none", runners: [] }, ci.visibility).ci;
+      ciUnread = ci.detection.source === "unknown";
+      checks.push({
+        name: "ci",
+        status: "warn",
+        detail: ciUnread ? `runners could not be read (${ci.detection.error ?? "unknown error"}): GitHub-hosted for now` : `no usable proposal (${ci.proposal.errors.join("; ")}): GitHub-hosted for now`,
+        fix: "studio setup ci"
+      });
+    } else checks.push({ name: "ci", status: "pass", detail: `runners: ${ciBlock.runners}` });
+  }
+  const stacks = detectStacks(o2.project);
+  const found = proposeComponents(o2.project, repo);
+  warnings.push(...found.notes.map((n2) => `components: ${n2}`));
+  const networkAllow = [
+    "github.com",
+    "api.github.com",
+    .../* @__PURE__ */ new Set([
+      ...found.manifests.flatMap((m) => REGISTRY_HOSTS[m] ?? []),
+      ...stacks.stacks.flatMap((st) => STACK_HOSTS[st] ?? [])
+    ])
+  ];
+  const config2 = {
+    studio: 1,
+    primary_repo: repo,
+    repos: [repo],
+    ci: snakeKeys(ciBlock ?? {}),
+    merge: { strategy: "studio-queue", contract_paths: [] },
+    roles: o2.roles ?? DEFAULT_ROLES,
+    stacks: stacks.stacks,
+    sandbox: { network_allow: networkAllow },
+    owner_only: [],
+    deploy_commands: [],
+    crew_allowed_workflows: [],
+    crew_allowed_workflow_refs: [],
+    review_bases: [],
+    ...found.components.length === 0 ? {} : { components: snakeKeys(found.components) }
+  };
+  let body = (0, import_yaml10.stringify)(config2, { lineWidth: 0 });
+  if (ciUnread) body = body.replace(/^ci:/m, `${CI_UNREAD_COMMENT}
+ci:`);
+  const configText = `# Studio project settings, written by studio init. See the Studio README for every key.
+${body}`;
+  const boardText = BOARD_TEXT(prefix, repo);
+  if (primary !== void 0) {
+    try {
+      const file2 = join21(dotStudio, "studio.yaml");
+      parseBoard(boardText, boardPath(o2.project), parseConfig(configText, file2));
+      checks.push({ name: "proposal", status: "pass", detail: "both files load" });
+    } catch (e) {
+      checks.push({
+        name: "proposal",
+        status: "fail",
+        detail: `the proposed files would not load: ${e.message}`,
+        fix: "report this as a Studio bug; write the files by hand meanwhile (README)"
+      });
+    }
+  }
+  const failed = checks.filter((c3) => c3.status === "fail");
+  const written = [];
+  let refused;
+  if (o2.write) {
+    if (failed.length > 0 || ciBlock === void 0) {
+      refused = `nothing written: fix ${failed.map((c3) => c3.name).join(", ") || "the checks"} first`;
+    } else {
+      writeBoth(o2, dotStudio, [
+        [join21(dotStudio, "studio.yaml"), configText],
+        [boardPath(o2.project), boardText]
+      ]);
+      written.push(...STUDIO_FILES);
+    }
+  }
+  const steps = nextSteps(prefix, written.length > 0, checks);
+  if (o2.json) {
+    o2.stdout(
+      `${JSON.stringify(
+        {
+          checks,
+          config: config2,
+          board: { items: [] },
+          stacks: stacks.stacks,
+          warnings: [...warnings, ...stacks.notes.map((n2) => `stack: ${n2}`)],
+          written,
+          ...refused === void 0 ? {} : { refused },
+          nextSteps: steps
+        },
+        null,
+        2
+      )}
+`
+    );
+  } else {
+    const width = Math.max(...checks.map((c3) => c3.name.length));
+    const lines = ["Checks:"];
+    for (const c3 of checks) {
+      const mark = c3.status === "fail" ? "FAIL" : c3.status;
+      lines.push(`  ${mark.padEnd(4)}  ${c3.name.padEnd(width)}  ${c3.detail}`);
+      if (c3.fix !== void 0 && c3.status !== "pass")
+        lines.push(`        ${"".padEnd(width)}  fix: ${c3.fix}`);
+    }
+    const allWarnings = [...warnings, ...stacks.notes.map((n2) => `stack: ${n2}`)];
+    if (allWarnings.length > 0) lines.push("Warnings:", ...allWarnings.map((w) => `  - ${w}`));
+    lines.push(
+      "",
+      ".studio/studio.yaml:",
+      ...configText.trimEnd().split("\n").map((l) => `  ${l}`)
+    );
+    lines.push("", ".studio/board.yaml: an empty board (items: []) with a commented example", "");
+    if (refused !== void 0) lines.push(refused);
+    else if (written.length > 0) lines.push(`written: ${written.join(", ")}`);
+    else lines.push("dry run: nothing written; run studio init --write to write these files");
+    lines.push("", "Next steps:", ...steps.map((s, i2) => `  ${i2 + 1}. ${s}`));
+    o2.stdout(`${lines.map(safe).join("\n")}
+`);
+  }
+  return refused === void 0 ? 0 : 1;
+}
+
+// src/planner.ts
+var BUILD_TYPES2 = ["feature", "fix", "chore"];
+var ONE_BUILD_PER_PLAN = "host load: one build start per plan";
+var ACTIVE2 = ["assigned", "in_progress", "in_review", "queued"];
+var COMPONENT_ACTIVE = ["assigned", "in_progress"];
+function isReady(item) {
+  const missing = [];
+  if (!item.title?.trim()) missing.push("title");
+  if (!item.dod?.some((d) => d.trim())) missing.push("dod");
+  if (!item.size) missing.push("size");
+  if (!item.role) missing.push("role");
+  if (!item.repo?.trim()) missing.push("repo");
+  if (item.type === "feature" && !item.plan?.trim()) missing.push("plan");
+  return { ok: missing.length === 0, missing };
+}
+function compareIds(a2, b) {
+  const pa = /^(.*?)(\d+)$/.exec(a2);
+  const pb = /^(.*?)(\d+)$/.exec(b);
+  if (pa && pb && pa[1] === pb[1]) return Number(pa[2]) - Number(pb[2]);
+  return a2 < b ? -1 : a2 > b ? 1 : 0;
+}
+function conflicts(a2, b) {
+  if (a2.conflictsWith?.includes(b.id) || b.conflictsWith?.includes(a2.id)) return true;
+  return a2.touches.some((ta) => b.touches.some((tb) => touchesOverlap(ta, tb)));
+}
+function cycleTainted(items) {
+  const deps = new Map(items.map((i2) => [i2.id, i2.dependsOn]));
+  const reach = (start) => {
+    const seen = /* @__PURE__ */ new Set();
+    const stack = [...deps.get(start) ?? []];
+    while (stack.length > 0) {
+      const n2 = stack.pop();
+      if (seen.has(n2)) continue;
+      seen.add(n2);
+      for (const d of deps.get(n2) ?? []) if (!seen.has(d)) stack.push(d);
+    }
+    return seen;
+  };
+  const reachable = new Map(items.map((i2) => [i2.id, reach(i2.id)]));
+  const onCycle = new Set(items.filter((i2) => reachable.get(i2.id)?.has(i2.id)).map((i2) => i2.id));
+  const tainted = /* @__PURE__ */ new Set();
+  for (const i2 of items) {
+    if (onCycle.has(i2.id) || [...reachable.get(i2.id) ?? []].some((n2) => onCycle.has(n2))) {
+      tainted.add(i2.id);
+    }
+  }
+  return tainted;
+}
+var CI_PENDING = "ci pending";
+function planAssignments(board, config2, capacity, running, hold, credentialSlots2, ciPending) {
+  const byId = new Map(board.items.map((i2) => [i2.id, i2]));
+  const tainted = cycleTainted(board.items);
+  const blocked = [];
+  const eligible = [];
+  const candidates = board.items.filter((i2) => i2.status === "ready").sort((a2, b) => a2.priority - b.priority || compareIds(a2.id, b.id));
+  for (const item of candidates) {
+    const ready = isReady(item);
+    const unknown2 = item.dependsOn.find((d) => !byId.has(d));
+    const waiting = item.dependsOn.filter((d) => byId.get(d)?.status !== "merged");
+    let reason;
+    if (!ready.ok) reason = `not ready: missing ${ready.missing.join(", ")}`;
+    else if (tainted.has(item.id)) reason = "dependency cycle";
+    else if (unknown2 !== void 0) reason = `unknown dependency ${unknown2}`;
+    else if (item.ownerOnly) reason = "owner only";
+    else if (!config2.roles[item.role]) reason = "role not configured";
+    else if (waiting.length > 0) reason = `waiting on ${waiting.join(", ")}`;
+    if (reason) blocked.push({ id: item.id, reason });
+    else eligible.push(item);
+  }
+  const roleSlots = /* @__PURE__ */ new Map();
+  const slotsFor = (role) => {
+    if (!roleSlots.has(role)) {
+      const wip = config2.roles[role]?.wip ?? 0;
+      roleSlots.set(role, Math.max(0, wip - (running[role] ?? 0)));
+    }
+    return roleSlots.get(role);
+  };
+  const componentSlots = /* @__PURE__ */ new Map();
+  for (const c3 of config2.components ?? []) {
+    if (c3.wip !== void 0) componentSlots.set(c3.id, c3.wip);
+  }
+  const componentsByItem = /* @__PURE__ */ new Map();
+  const componentsFor = (item) => {
+    if (!componentsByItem.has(item.id)) componentsByItem.set(item.id, componentsOf(item, config2));
+    return componentsByItem.get(item.id);
+  };
+  const useComponents = (item) => {
+    if (componentSlots.size === 0) return;
+    for (const c3 of componentsFor(item)) {
+      const left = componentSlots.get(c3);
+      if (left !== void 0) componentSlots.set(c3, left - 1);
+    }
+  };
+  for (const i2 of board.items) if (COMPONENT_ACTIVE.includes(i2.status)) useComponents(i2);
+  const fullComponent = (item) => componentSlots.size === 0 ? void 0 : componentsFor(item).find((c3) => (componentSlots.get(c3) ?? 1) <= 0);
+  const active = board.items.filter((i2) => ACTIVE2.includes(i2.status));
+  const assign = [];
+  const deferred = [];
+  let buildStarted = false;
+  const planned = [];
+  const take = (item) => {
+    planned.push(item);
+    roleSlots.set(item.role, slotsFor(item.role) - 1);
+    useComponents(item);
+    if (credentialSlots2 !== void 0) credentialSlots2 -= 1;
+  };
+  for (const item of eligible) {
+    const isBuild = BUILD_TYPES2.includes(item.type);
+    const clash = [...active, ...planned].find((o2) => conflicts(item, o2));
+    const full = fullComponent(item);
+    if (hold !== void 0) deferred.push({ id: item.id, reason: hold });
+    else if (ciPending?.has(item.id)) deferred.push({ id: item.id, reason: CI_PENDING });
+    else if (credentialSlots2 !== void 0 && credentialSlots2 <= 0) {
+      deferred.push({ id: item.id, reason: "credential limit" });
+    } else if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: "role wip full" });
+    else if (full !== void 0) {
+      deferred.push({ id: item.id, reason: `component ${full} wip full` });
+    } else if (isBuild && !capacity.hostOk) deferred.push({ id: item.id, reason: "host load" });
+    else if (clash) deferred.push({ id: item.id, reason: `overlaps ${clash.id}` });
+    else if (isBuild && buildStarted) {
+      deferred.push({ id: item.id, reason: ONE_BUILD_PER_PLAN });
+      take(item);
+    } else {
+      assign.push(item);
+      take(item);
+      if (isBuild) buildStarted = true;
+    }
+  }
+  return { assign, blocked, deferred };
+}
+
+// src/add-item.ts
+var ADD_TYPES = ["fix", "feature", "chore", "docs", "research"];
+var ONE_LINE = /^[^\p{Cc}\p{Cf}]{1,300}$/u;
+function boardPrefix(board, repo) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const i2 of board.items) {
+    const p = i2.id.slice(0, i2.id.indexOf("-"));
+    counts.set(p, (counts.get(p) ?? 0) + 1);
+  }
+  let best;
+  for (const [p, c3] of counts) if (best === void 0 || c3 > (counts.get(best) ?? 0)) best = p;
+  return best ?? prefixOf(repo);
+}
+async function addItem(o2) {
+  const title = o2.title?.trim();
+  if (title === void 0 || title === "")
+    throw new Error('add needs a title: studio add "<title>"');
+  if (!ONE_LINE.test(title))
+    throw new Error("the title must be one line of at most 300 characters");
+  const type = o2.type ?? "fix";
+  if (!ADD_TYPES.includes(type)) throw new Error(`--type must be one of ${ADD_TYPES.join(", ")}`);
+  if (type === "feature" && o2.plan === void 0) {
+    throw new Error(
+      "a feature needs a plan before it is planned: add --plan <file>, or use --type fix"
+    );
+  }
+  if (o2.dod.length === 0) {
+    throw new Error('add needs at least one --dod "<line>": what done means for this item');
+  }
+  for (const line2 of o2.dod) {
+    if (!ONE_LINE.test(line2.trim())) throw new Error("each --dod must be one line");
+  }
+  for (const g of o2.paths) {
+    const problem = globProblem(g) ?? (g.startsWith("/") || /^[A-Za-z]:/.test(g) ? "must be relative to the repository" : void 0) ?? (g.split(/[\\/]/).includes("..") ? "must not hold a .. segment" : void 0);
+    if (problem !== void 0) throw new Error(`--path ${JSON.stringify(g)}: ${problem}`);
+  }
+  if (o2.plan !== void 0 && !ONE_LINE.test(o2.plan)) throw new Error("--plan must be one line");
+  return await o2.locked(() => {
+    const config2 = loadConfig(o2.project);
+    const board = loadBoard(o2.project, config2);
+    const repo = o2.repo ?? config2.primaryRepo;
+    if (repo !== config2.primaryRepo && !config2.repos.includes(repo)) {
+      throw new Error(`--repo ${repo} is neither primary_repo nor one of repos in studio.yaml`);
+    }
+    if (o2.component !== void 0) {
+      const known = (config2.components ?? []).map((c3) => c3.id);
+      if (!known.includes(o2.component)) {
+        throw new Error(
+          `unknown component ${o2.component}${known.length > 0 ? ` (known: ${known.join(", ")})` : ": studio.yaml has no components"}`
+        );
+      }
+    }
+    const prefix = boardPrefix(board, repo);
+    const numbers = board.items.filter((i2) => i2.id.startsWith(`${prefix}-`)).map((i2) => Number(i2.id.slice(prefix.length + 1)));
+    const id = `${prefix}-${Math.max(0, ...numbers) + 1}`;
+    const priority = Math.max(0, ...board.items.map((i2) => i2.priority)) + 1;
+    const parsed = workItemSchema.safeParse({
+      id,
+      title,
+      type,
+      role: "builder",
+      repo,
+      size: "S",
+      priority,
+      status: "ready",
+      // The paths are its scope, and as touches they keep two items on the same files apart.
+      paths: o2.paths,
+      touches: o2.paths,
+      ...o2.component === void 0 ? {} : { component: o2.component },
+      dependsOn: [],
+      dod: o2.dod.map((d) => d.trim()),
+      ...o2.plan === void 0 ? {} : { plan: o2.plan },
+      history: []
+    });
+    if (!parsed.success) {
+      throw new Error(
+        `the item would be invalid: ${parsed.error.issues.map((i2) => i2.message).join("; ")}`
+      );
+    }
+    const item = parsed.data;
+    saveBoard(o2.project, { ...board, items: [...board.items, item] });
+    const { missing } = isReady(item);
+    const warnings = [];
+    if (item.paths.length === 0) {
+      warnings.push(
+        "no --path: the item conflicts with no other item, so it may run beside work on the same files"
+      );
+      if (o2.component === void 0) warnings.push("no --path: the item belongs to no component");
+    }
+    const notes = item.paths.some((g) => g === ".github" || g.startsWith(".github/")) ? ["a path below .github/: this is a CI item, its review may approve workflow changes"] : [];
+    return {
+      item: id,
+      type,
+      status: item.status,
+      repo,
+      ...missing.length > 0 ? { missing } : {},
+      ...warnings.length > 0 ? { warnings } : {},
+      ...notes.length > 0 ? { notes } : {}
+    };
+  });
+}
+
+// src/ci-jobs.ts
+var import_yaml11 = __toESM(require_dist(), 1);
+var GIT_FETCH_MS2 = 12e4;
+var GIT_LOCAL_MS2 = 6e4;
+var WORKFLOWS_DIR = ".github/workflows/";
+var WORKFLOW_FILE = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/;
+var SHA = /^[0-9a-f]{40,64}$/i;
+var MAX_JOBS = 20;
+var instances = (checks, workflow, job) => {
+  const mine = [];
+  for (const c3 of checks) {
+    if (c3.workflow === void 0 || c3.workflow !== workflow) continue;
+    if (c3.name === job) {
+      mine.push(c3);
+      continue;
+    }
+    if (!c3.name.startsWith(`${job} `)) continue;
+    const rest = c3.name.slice(job.length);
+    if (rest.length > 3 && rest.startsWith(" (") && rest.endsWith(")")) mine.push(c3);
+    else return "ambiguous";
+  }
+  return mine;
+};
+var jobProblem = (checks, workflow, job) => {
+  const mine = instances(checks, workflow, job);
+  if (mine === "ambiguous") return "ambiguous";
+  return mine.length > 0 && mine.every((c3) => c3.bucket === "pass") ? void 0 : "not passed";
+};
+function runsOn(on6, event) {
+  if (on6 === event) return true;
+  if (Array.isArray(on6)) return on6.includes(event);
+  return on6 !== null && typeof on6 === "object" && event in on6;
+}
+function readWorkflow(text, path10) {
+  let doc;
+  try {
+    doc = (0, import_yaml11.parse)(text);
+  } catch {
+    return void 0;
+  }
+  if (doc === null || typeof doc !== "object") return void 0;
+  const wf = doc;
+  const name = typeof wf.name === "string" && wf.name.trim() !== "" ? wf.name : path10;
+  const jobs = wf.jobs !== null && typeof wf.jobs === "object" ? Object.entries(wf.jobs) : [];
+  return {
+    name,
+    jobs,
+    onPullRequest: runsOn(wf.on, "pull_request"),
+    onWorkflowCall: runsOn(wf.on, "workflow_call")
+  };
+}
+var isJob = (j) => j !== null && typeof j === "object" && !Array.isArray(j);
+var checkName = (id, j) => typeof j.name === "string" ? j.name : id;
+var guarded = (j) => "continue-on-error" in j;
+var localCall = (j, path10) => j.uses === `./${path10}`;
+var remoteCall = (j, path10) => typeof j.uses === "string" && !j.uses.startsWith("./") && j.uses.includes(`/${path10}@`);
+function findJob(files, path10, job, where) {
+  const w = files.get(path10);
+  if (w === void 0) return `the workflow is not at ${where} or not valid YAML`;
+  const unique3 = (wf, own2) => [...files].every(([p, x]) => p === own2 || x !== void 0 && x.name !== wf.name);
+  const found = w.jobs.find(([id, j]) => isJob(j) && checkName(id, j) === job);
+  if (found === void 0) return `the job is not in the workflow at ${where}`;
+  const [, called] = found;
+  if (guarded(called)) return `the job has continue-on-error at ${where}`;
+  if (w.onPullRequest) {
+    if (typeof called.uses === "string") {
+      return called.uses.startsWith("./") ? `the job calls a reusable workflow: name the called workflow file and its job (at ${where})` : `the job calls a remote reusable workflow, which the gate cannot follow (at ${where})`;
+    }
+    if (!unique3(w, path10)) return `the workflow name is not unique at ${where}`;
+    return { targets: [{ workflow: w.name, job }], def: JSON.stringify([called]) };
+  }
+  if (!w.onWorkflowCall) return `the workflow does not run on pull_request at ${where}`;
+  if ("uses" in called) {
+    return `the called job calls a reusable workflow itself: one level only (at ${where})`;
+  }
+  const targets = [];
+  const callers = [];
+  let remote = false;
+  let nested = false;
+  for (const [p, x] of files) {
+    for (const [id, j] of x?.jobs ?? []) {
+      if (!isJob(j) || x === void 0) continue;
+      if (remoteCall(j, path10) && x.onPullRequest) remote = true;
+      if (!localCall(j, path10)) continue;
+      if (!x.onPullRequest) {
+        nested = true;
+        continue;
+      }
+      if (guarded(j)) return `a calling job has continue-on-error at ${where}`;
+      if (!unique3(x, p)) return `the workflow name is not unique at ${where}`;
+      targets.push({ workflow: x.name, job: `${checkName(id, j)} / ${job}` });
+      callers.push(j);
+    }
+  }
+  if (targets.length === 0) {
+    if (remote) {
+      return `a pull_request workflow calls it only as a remote reusable workflow, which the gate cannot follow (at ${where})`;
+    }
+    if (nested) {
+      return `the workflow is called only through another reusable workflow: one level only (at ${where})`;
+    }
+    return `no pull_request workflow calls the workflow at ${where}`;
+  }
+  return { targets, def: JSON.stringify([called, ...callers]) };
+}
+async function verifyNotRunHereJobs(o2) {
+  const g = (args, timeoutMs) => o2.git.run(o2.checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
+  const trees = /* @__PURE__ */ new Map();
+  const workflowsAt = async (oid) => {
+    if (trees.has(oid)) return trees.get(oid);
+    let files;
+    try {
+      const paths = (await g(["ls-tree", "--name-only", "-z", oid, WORKFLOWS_DIR], GIT_LOCAL_MS2)).split("\0").filter((p) => p !== "" && WORKFLOW_FILE.test(p));
+      files = /* @__PURE__ */ new Map();
+      for (const p of paths) {
+        let text;
+        try {
+          text = await g(["cat-file", "blob", `${oid}:${p}`], GIT_LOCAL_MS2);
+        } catch {
+          text = void 0;
+        }
+        files.set(p, text === void 0 ? void 0 : readWorkflow(text, p));
+      }
+    } catch {
+      files = void 0;
+    }
+    trees.set(oid, files);
+    return files;
+  };
+  let fetched;
+  const jobs = [];
+  const covered = [];
+  for (const [i2, command] of o2.commands.entries()) {
+    const fail2 = (why) => ({ ok: false, entry: i2 + 1, why });
+    const named = o2.entries.find((e) => e.command.trim() === command.trim());
+    if (named === void 0) return fail2("no CI job named for it");
+    if (named.covers === void 0 || named.covers.trim() === "") {
+      return fail2("no covers text says why the named job covers the command");
+    }
+    const base = o2.baseOid;
+    if (base === void 0 || !SHA.test(base) || !SHA.test(o2.headOid)) {
+      return fail2("the base commit is unknown");
+    }
+    if (!WORKFLOW_FILE.test(named.workflow)) {
+      return fail2("the workflow is no file in .github/workflows");
+    }
+    if (fetched === void 0) {
+      try {
+        await g(
+          ["fetch", "--no-tags", "--no-write-fetch-head", o2.checkout.remote, base, o2.headOid],
+          GIT_FETCH_MS2
+        );
+        fetched = true;
+      } catch {
+        fetched = false;
+      }
+    }
+    if (!fetched) return fail2("the base commit cannot be fetched");
+    const at = async (oid, where) => {
+      const files = await workflowsAt(oid);
+      if (files === void 0) return `the workflows at ${where} cannot be listed`;
+      return findJob(files, named.workflow, named.job, where);
+    };
+    const atBase = await at(base, "the base");
+    if (typeof atBase === "string") return fail2(atBase);
+    const atHead = await at(o2.headOid, "the pull request head");
+    if (typeof atHead === "string") return fail2(atHead);
+    const key = (f) => JSON.stringify(f.targets);
+    if (key(atHead) !== key(atBase)) {
+      return fail2("the workflow names or callers differ at the pull request head");
+    }
+    if (!o2.ciItem && atHead.def !== atBase.def) {
+      return fail2("the job definition changed at the pull request head and the item is no CI item");
+    }
+    for (const t of atBase.targets) {
+      const problem = jobProblem(o2.checks, t.workflow, t.job);
+      if (problem === "ambiguous") {
+        return fail2("a check of the workflow has a name like the job that does not parse as it");
+      }
+      if (problem !== void 0) {
+        return fail2("the job has no passing check on the pull request (missing or skipped)");
+      }
+      if (!jobs.some((j) => j.workflow === t.workflow && j.job === t.job)) jobs.push(t);
+      covered.push({ entry: i2 + 1, ...t, covers: named.covers });
+    }
+    if (jobs.length > MAX_JOBS) return fail2(`more than ${MAX_JOBS} CI jobs in all`);
+  }
+  return { ok: true, jobs, covered };
+}
+function approvedJobsProblem(jobs, checks) {
+  for (const [i2, j] of jobs.entries()) {
+    const problem = jobProblem(checks, j.workflow, j.job);
+    if (problem === "ambiguous") {
+      return `approved CI job ${i2 + 1} has a check whose name does not parse as the job: review it again`;
+    }
+    if (problem !== void 0) {
+      return `approved CI job ${i2 + 1} has no passing check on the pull request now: review it again`;
+    }
+  }
+  return void 0;
+}
+
 // src/flaky.ts
-import { readFileSync as readFileSync19 } from "node:fs";
-import { join as join19 } from "node:path";
+import { readFileSync as readFileSync21 } from "node:fs";
+import { join as join22 } from "node:path";
 var MAX_FLAKY = 500;
 var MAX_NAME = 200;
 var entrySchema = external_exports.object({
@@ -33940,13 +35104,13 @@ var entrySchema = external_exports.object({
   lastSha: external_exports.string(),
   lastAt: external_exports.string()
 });
-var fileOf = (stateRoot) => join19(stateRoot, "flaky.json");
+var fileOf = (stateRoot) => join22(stateRoot, "flaky.json");
 function read2(stateRoot) {
   const file2 = fileOf(stateRoot);
   assertStatePath(stateRoot, file2);
   let text;
   try {
-    text = readFileSync19(file2, "utf8");
+    text = readFileSync21(file2, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw new Error("flaky.json cannot be read");
@@ -34059,9 +35223,9 @@ async function readMainBuild(config2, ports) {
 }
 
 // src/notify.ts
-import { lstatSync as lstatSync16, readFileSync as readFileSync20 } from "node:fs";
-import { homedir as homedir6 } from "node:os";
-import { join as join20 } from "node:path";
+import { lstatSync as lstatSync18, readFileSync as readFileSync22 } from "node:fs";
+import { homedir as homedir7 } from "node:os";
+import { join as join23 } from "node:path";
 var MAX_SENDS_PER_RUN = 20;
 var MAX_TEXT2 = 500;
 var LOCK_STALE_MS3 = 2 * 6e4;
@@ -34087,12 +35251,12 @@ function messagesOf(projectKey, snapshot) {
 }
 function readNotified(file2) {
   try {
-    if (!lstatSync16(file2).isFile()) return { ok: false };
+    if (!lstatSync18(file2).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, keys: [] } : { ok: false };
   }
   try {
-    const raw = JSON.parse(readFileSync20(file2, "utf8"));
+    const raw = JSON.parse(readFileSync22(file2, "utf8"));
     if (!Array.isArray(raw) || !raw.every((k) => typeof k === "string")) return { ok: false };
     return { ok: true, keys: raw };
   } catch {
@@ -34114,7 +35278,7 @@ async function sendNotifications(o2) {
   }
 }
 async function sendLocked(o2, notify, lock) {
-  const file2 = join20(o2.ownerRoot, "notified.json");
+  const file2 = join23(o2.ownerRoot, "notified.json");
   const read3 = readNotified(file2);
   if (!read3.ok) return ["notify: notified.json is unreadable; nothing sent"];
   try {
@@ -34138,7 +35302,7 @@ async function sendLocked(o2, notify, lock) {
     if (sends >= MAX_SENDS_PER_RUN) break;
     sends++;
     const env = {
-      HOME: o2.owner.homedir ?? homedir6(),
+      HOME: o2.owner.homedir ?? homedir7(),
       STUDIO_NOTIFY_CHANNEL: notify.channel,
       STUDIO_NOTIFY_KIND: m.kind,
       STUDIO_NOTIFY_ID: cleanText(m.id),
@@ -34179,21 +35343,21 @@ async function sendLocked(o2, notify, lock) {
 }
 
 // src/overview.ts
-import { lstatSync as lstatSync18, readFileSync as readFileSync22 } from "node:fs";
-import { basename as basename5, isAbsolute as isAbsolute5, join as join22 } from "node:path";
+import { lstatSync as lstatSync20, readFileSync as readFileSync24 } from "node:fs";
+import { basename as basename5, isAbsolute as isAbsolute5, join as join25 } from "node:path";
 
 // src/queue.ts
 import {
   closeSync as closeSync5,
   constants as constants4,
   existsSync as existsSync5,
-  lstatSync as lstatSync17,
+  lstatSync as lstatSync19,
   openSync as openSync5,
-  readFileSync as readFileSync21,
+  readFileSync as readFileSync23,
   writeSync as writeSync2
 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { dirname as dirname9, join as join21 } from "node:path";
+import { dirname as dirname9, join as join24 } from "node:path";
 var QueueHeld = class extends Error {
   constructor(line2) {
     super(line2);
@@ -34226,16 +35390,16 @@ var stateSchema = external_exports.strictObject({
     })
   )
 });
-var queueFile = (stateRoot) => join21(stateRoot, "queue.json");
+var queueFile = (stateRoot) => join24(stateRoot, "queue.json");
 function loadQueue(stateRoot) {
   const file2 = queueFile(stateRoot);
   assertStatePath(stateRoot, file2);
   if (!existsSync5(file2)) return { pending: [], done: [] };
-  if (lstatSync17(file2).isSymbolicLink())
+  if (lstatSync19(file2).isSymbolicLink())
     throw new Error(`refusing to read ${file2}: it is a symlink`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync21(file2, "utf8"));
+    raw = JSON.parse(readFileSync23(file2, "utf8"));
   } catch {
     throw new Error(`queue file ${file2} is not valid JSON`);
   }
@@ -34322,14 +35486,14 @@ function installSignalRelease(lock) {
   };
 }
 function appendStateLine(stateRoot, name, line2) {
-  const file2 = join21(stateRoot, name);
+  const file2 = join24(stateRoot, name);
   assertStatePath(stateRoot, file2);
   let torn = false;
   if (existsSync5(file2)) {
-    if (lstatSync17(file2).isSymbolicLink()) {
+    if (lstatSync19(file2).isSymbolicLink()) {
       throw new Error(`refusing to use ${file2}: it is a symlink`);
     }
-    const prev = readFileSync21(file2, "utf8");
+    const prev = readFileSync23(file2, "utf8");
     torn = prev !== "" && !prev.endsWith("\n");
   } else {
     ensureStateDir(stateRoot, dirname9(file2));
@@ -34765,16 +35929,16 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
 var line = (e) => (e instanceof Error ? e.message : String(e)).replace(/[\p{Cc}\p{Cf}]/gu, " ");
 var INCONSISTENT_ROOT = "inconsistent state root: its marker names a project whose state root is another one";
 function markerProject(root) {
-  const file2 = join22(root, "marker.json");
+  const file2 = join25(root, "marker.json");
   try {
-    if (!lstatSync18(file2).isFile()) throw new Error(`${file2} is not a plain file`);
+    if (!lstatSync20(file2).isFile()) throw new Error(`${file2} is not a plain file`);
   } catch (e) {
     if (e.code === "ENOENT") return void 0;
     throw e;
   }
   let raw;
   try {
-    raw = JSON.parse(readFileSync22(file2, "utf8"));
+    raw = JSON.parse(readFileSync24(file2, "utf8"));
   } catch {
     throw new Error(`state root marker ${file2} is unreadable`);
   }
@@ -34788,7 +35952,7 @@ function itemCounts(project) {
   const file2 = boardPath(project);
   let plain = true;
   try {
-    plain = lstatSync18(file2).isFile();
+    plain = lstatSync20(file2).isFile();
   } catch {
   }
   if (!plain) throw new Error(`${file2}: board.yaml is not a plain file`);
@@ -34865,553 +36029,13 @@ function formatOverview(list2) {
   ]);
 }
 
-// src/planner.ts
-var BUILD_TYPES2 = ["feature", "fix", "chore"];
-var ONE_BUILD_PER_PLAN = "host load: one build start per plan";
-var ACTIVE2 = ["assigned", "in_progress", "in_review", "queued"];
-var COMPONENT_ACTIVE = ["assigned", "in_progress"];
-function isReady(item) {
-  const missing = [];
-  if (!item.title?.trim()) missing.push("title");
-  if (!item.dod?.some((d) => d.trim())) missing.push("dod");
-  if (!item.size) missing.push("size");
-  if (!item.role) missing.push("role");
-  if (!item.repo?.trim()) missing.push("repo");
-  if (item.type === "feature" && !item.plan?.trim()) missing.push("plan");
-  return { ok: missing.length === 0, missing };
-}
-function compareIds(a2, b) {
-  const pa = /^(.*?)(\d+)$/.exec(a2);
-  const pb = /^(.*?)(\d+)$/.exec(b);
-  if (pa && pb && pa[1] === pb[1]) return Number(pa[2]) - Number(pb[2]);
-  return a2 < b ? -1 : a2 > b ? 1 : 0;
-}
-function conflicts(a2, b) {
-  if (a2.conflictsWith?.includes(b.id) || b.conflictsWith?.includes(a2.id)) return true;
-  return a2.touches.some((ta) => b.touches.some((tb) => touchesOverlap(ta, tb)));
-}
-function cycleTainted(items) {
-  const deps = new Map(items.map((i2) => [i2.id, i2.dependsOn]));
-  const reach = (start) => {
-    const seen = /* @__PURE__ */ new Set();
-    const stack = [...deps.get(start) ?? []];
-    while (stack.length > 0) {
-      const n2 = stack.pop();
-      if (seen.has(n2)) continue;
-      seen.add(n2);
-      for (const d of deps.get(n2) ?? []) if (!seen.has(d)) stack.push(d);
-    }
-    return seen;
-  };
-  const reachable = new Map(items.map((i2) => [i2.id, reach(i2.id)]));
-  const onCycle = new Set(items.filter((i2) => reachable.get(i2.id)?.has(i2.id)).map((i2) => i2.id));
-  const tainted = /* @__PURE__ */ new Set();
-  for (const i2 of items) {
-    if (onCycle.has(i2.id) || [...reachable.get(i2.id) ?? []].some((n2) => onCycle.has(n2))) {
-      tainted.add(i2.id);
-    }
-  }
-  return tainted;
-}
-var CI_PENDING = "ci pending";
-function planAssignments(board, config2, capacity, running, hold, credentialSlots2, ciPending) {
-  const byId = new Map(board.items.map((i2) => [i2.id, i2]));
-  const tainted = cycleTainted(board.items);
-  const blocked = [];
-  const eligible = [];
-  const candidates = board.items.filter((i2) => i2.status === "ready").sort((a2, b) => a2.priority - b.priority || compareIds(a2.id, b.id));
-  for (const item of candidates) {
-    const ready = isReady(item);
-    const unknown2 = item.dependsOn.find((d) => !byId.has(d));
-    const waiting = item.dependsOn.filter((d) => byId.get(d)?.status !== "merged");
-    let reason;
-    if (!ready.ok) reason = `not ready: missing ${ready.missing.join(", ")}`;
-    else if (tainted.has(item.id)) reason = "dependency cycle";
-    else if (unknown2 !== void 0) reason = `unknown dependency ${unknown2}`;
-    else if (item.ownerOnly) reason = "owner only";
-    else if (!config2.roles[item.role]) reason = "role not configured";
-    else if (waiting.length > 0) reason = `waiting on ${waiting.join(", ")}`;
-    if (reason) blocked.push({ id: item.id, reason });
-    else eligible.push(item);
-  }
-  const roleSlots = /* @__PURE__ */ new Map();
-  const slotsFor = (role) => {
-    if (!roleSlots.has(role)) {
-      const wip = config2.roles[role]?.wip ?? 0;
-      roleSlots.set(role, Math.max(0, wip - (running[role] ?? 0)));
-    }
-    return roleSlots.get(role);
-  };
-  const componentSlots = /* @__PURE__ */ new Map();
-  for (const c3 of config2.components ?? []) {
-    if (c3.wip !== void 0) componentSlots.set(c3.id, c3.wip);
-  }
-  const componentsByItem = /* @__PURE__ */ new Map();
-  const componentsFor = (item) => {
-    if (!componentsByItem.has(item.id)) componentsByItem.set(item.id, componentsOf(item, config2));
-    return componentsByItem.get(item.id);
-  };
-  const useComponents = (item) => {
-    if (componentSlots.size === 0) return;
-    for (const c3 of componentsFor(item)) {
-      const left = componentSlots.get(c3);
-      if (left !== void 0) componentSlots.set(c3, left - 1);
-    }
-  };
-  for (const i2 of board.items) if (COMPONENT_ACTIVE.includes(i2.status)) useComponents(i2);
-  const fullComponent = (item) => componentSlots.size === 0 ? void 0 : componentsFor(item).find((c3) => (componentSlots.get(c3) ?? 1) <= 0);
-  const active = board.items.filter((i2) => ACTIVE2.includes(i2.status));
-  const assign = [];
-  const deferred = [];
-  let buildStarted = false;
-  const planned = [];
-  const take = (item) => {
-    planned.push(item);
-    roleSlots.set(item.role, slotsFor(item.role) - 1);
-    useComponents(item);
-    if (credentialSlots2 !== void 0) credentialSlots2 -= 1;
-  };
-  for (const item of eligible) {
-    const isBuild = BUILD_TYPES2.includes(item.type);
-    const clash = [...active, ...planned].find((o2) => conflicts(item, o2));
-    const full = fullComponent(item);
-    if (hold !== void 0) deferred.push({ id: item.id, reason: hold });
-    else if (ciPending?.has(item.id)) deferred.push({ id: item.id, reason: CI_PENDING });
-    else if (credentialSlots2 !== void 0 && credentialSlots2 <= 0) {
-      deferred.push({ id: item.id, reason: "credential limit" });
-    } else if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: "role wip full" });
-    else if (full !== void 0) {
-      deferred.push({ id: item.id, reason: `component ${full} wip full` });
-    } else if (isBuild && !capacity.hostOk) deferred.push({ id: item.id, reason: "host load" });
-    else if (clash) deferred.push({ id: item.id, reason: `overlaps ${clash.id}` });
-    else if (isBuild && buildStarted) {
-      deferred.push({ id: item.id, reason: ONE_BUILD_PER_PLAN });
-      take(item);
-    } else {
-      assign.push(item);
-      take(item);
-      if (isBuild) buildStarted = true;
-    }
-  }
-  return { assign, blocked, deferred };
-}
-
-// src/secret-command.ts
-var import_yaml9 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync23, realpathSync as realpathSync5, statSync as statSync3 } from "node:fs";
-import { homedir as homedir7 } from "node:os";
-import { join as join23 } from "node:path";
-function readPrimaryRepo(project) {
-  const file2 = join23(project, ".studio", "studio.yaml");
-  let raw;
-  try {
-    raw = (0, import_yaml9.parse)(readFileSync23(file2, "utf8"));
-  } catch {
-    throw new Error("cannot read .studio/studio.yaml");
-  }
-  return assertPrimaryRepo(raw?.primary_repo);
-}
-async function checkToken(token, repo, ports) {
-  const call = async (path10) => {
-    try {
-      return await ports.credentials.ghWithToken(token, ["api", path10]);
-    } catch {
-      return { code: 1, stdout: "", stderr: "" };
-    }
-  };
-  const info = await call(`/repos/${repo}`);
-  if (info.code !== 0) return "repository read (or GitHub is not reachable)";
-  let push;
-  try {
-    push = JSON.parse(info.stdout).permissions?.push;
-  } catch {
-    return "repository read (unexpected answer)";
-  }
-  if (push !== true) return "contents write";
-  const pulls = await call(`/repos/${repo}/pulls?per_page=1`);
-  return pulls.code === 0 ? void 0 : "pull requests read";
-}
-async function runSecretSet(o2) {
-  const repo = readPrimaryRepo(o2.project);
-  const input2 = o2.readSecret ? await o2.readSecret("Crew token (input hidden): ") : void 0;
-  if (input2 === void 0) {
-    throw new Error("studio secret set needs a terminal for hidden input; nothing written");
-  }
-  const token = input2.replace(/\s+/g, "");
-  if (token === "") throw new Error("empty value; nothing written");
-  if (!validToken(token)) throw new Error("the value holds control characters; nothing written");
-  const failing = await checkToken(token, repo, o2.ports);
-  if (failing !== void 0) {
-    o2.stdout(`failing permission: ${failing}
-`);
-    return 1;
-  }
-  installCrewToken(token, o2.owner);
-  o2.stdout(`valid for ${repo}
-`);
-  return 0;
-}
-var API_KEY_VARS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
-async function crewConfigDir(command, owner, env, ports) {
-  const fallback = env.CLAUDE_CONFIG_DIR || join23(owner.homedir ?? homedir7(), ".claude");
-  if (command === void 0) return fallback;
-  try {
-    const got = await runCredentialProvider(
-      command,
-      { item: "", role: "", exclude: [] },
-      ports,
-      owner
-    );
-    if (got === void 0) return void 0;
-    return got.configDir === void 0 ? crewClaudeDir(owner) : checkProviderConfigDir(got.configDir, owner);
-  } catch {
-    return void 0;
-  }
-}
-async function gitState(project, ports) {
-  try {
-    const m = /(\d+)\.(\d+)\.(\d+)/.exec(await ports.git.run(project, ["--version"]));
-    if (!m) return "cannot tell";
-    const enough = Number(m[1]) > 2 || Number(m[1]) === 2 && Number(m[2]) >= 38;
-    return enough ? m[0] : `${m[0]} (too old: 2.38 or newer is needed to accept a merged base)`;
-  } catch {
-    return "cannot tell";
-  }
-}
-async function checkoutState(project, ports) {
-  try {
-    await ports.git.run(project, ["rev-parse", "--show-toplevel"]);
-  } catch {
-    return "not a git checkout: clone the repository and run studio in that clone";
-  }
-  try {
-    await ports.git.run(project, ["remote", "get-url", "origin"]);
-  } catch {
-    return "no remote origin: add it with git remote add origin <url>";
-  }
-  return "git checkout with origin";
-}
-var CREW_TOOLS = ["cargo", "rustc", "rustup", "node", "pnpm", "npm", "gh", "git"];
-function toolsOutside(env, home, toolchain) {
-  const real = (p) => {
-    try {
-      return realpathSync5(p);
-    } catch {
-      return p;
-    }
-  };
-  const realHome = real(home);
-  const open2 = toolchain.map(real);
-  const out = [];
-  for (const tool of CREW_TOOLS) {
-    for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
-      const file2 = join23(dir, tool);
-      try {
-        if (!statSync3(file2).isFile()) continue;
-      } catch {
-        continue;
-      }
-      const at = real(file2);
-      if (within(at, realHome) && !open2.some((t) => within(at, t) || within(file2, t))) {
-        out.push(`${tool} lies at ${file2}, outside crew_toolchain_paths: crews cannot run it`);
-      }
-      break;
-    }
-  }
-  return out;
-}
-function skillState(dir, name) {
-  const found = dir === void 0 ? void 0 : skillInstalled(dir, name);
-  return found === void 0 ? "cannot tell" : found ? "installed" : "not found";
-}
-async function runDoctor(o2) {
-  let config2;
-  try {
-    config2 = loadConfig(o2.project);
-  } catch {
-    config2 = void 0;
-  }
-  let ownerConfig;
-  try {
-    ownerConfig = loadOwnerConfig(o2.owner);
-  } catch {
-    ownerConfig = void 0;
-  }
-  const envName = config2?.crewToken?.env;
-  let crewToken;
-  if (envName && o2.env[envName]) crewToken = { status: "set", source: `env ${envName}` };
-  else {
-    const file2 = readCrewTokenFile(o2.owner);
-    if (file2.kind === "ok") crewToken = { status: "set", source: "file" };
-    else if (file2.kind === "bad") crewToken = { status: "invalid", source: "file" };
-    else crewToken = { status: "missing" };
-  }
-  const required2 = !(config2?.allowAmbientCredentials ?? false);
-  const command = ownerConfig?.crewCredentialCommand;
-  let accounts = [];
-  let accountProblem;
-  let account;
-  try {
-    accounts = accountRows({
-      owner: o2.owner,
-      ownerRoot: ownerStateRootFor(o2.owner),
-      ports: o2.ports
-    });
-    account = builtInAccount(o2.owner, o2.ports.clock.now())?.label;
-  } catch (e) {
-    accountProblem = e.message;
-  }
-  let claudeLogin;
-  if (command !== void 0) {
-    claudeLogin = `credential provider${accounts.length > 0 ? " (it comes before the accounts)" : ""}`;
-  } else if (accountProblem !== void 0) {
-    claudeLogin = `accounts, but a launch refuses: ${accountProblem}`;
-  } else if (account !== void 0) {
-    claudeLogin = `account ${account}`;
-  } else if (o2.env.CLAUDE_CODE_OAUTH_TOKEN) {
-    claudeLogin = "CLAUDE_CODE_OAUTH_TOKEN from the environment";
-  } else {
-    claudeLogin = "main login (~/.claude or CLAUDE_CONFIG_DIR)";
-  }
-  const configDir = command === void 0 && account !== void 0 ? crewClaudeDir(o2.owner) : await crewConfigDir(command, o2.owner, o2.env, o2.ports);
-  const studioCrew = skillState(configDir, CREW_SKILL2.split(":").at(-1) ?? "");
-  const git = await gitState(o2.project, o2.ports);
-  const projectCheckout = await checkoutState(o2.project, o2.ports);
-  const toolchain = toolsOutside(
-    o2.env,
-    o2.owner.homedir ?? homedir7(),
-    ownerConfig?.crewToolchainPaths ?? []
-  );
-  const report = {
-    claudeLogin,
-    projectCheckout,
-    toolchainOutside: toolchain,
-    accounts,
-    git,
-    crewToken: { ...crewToken, required: required2 },
-    crewTokenFile: crewTokenFile(o2.owner),
-    studioYaml: config2 ? "readable" : "not readable",
-    stacks: config2?.stacks ?? null,
-    // The foundation builders need: feature and fix items require its skills.
-    superpowers: skillState(configDir, "test-driven-development"),
-    studioCrew,
-    ownerConfig: ownerConfig ? "readable" : "invalid",
-    credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
-    allowApiBilling: ownerConfig?.allowApiBilling ?? false,
-    notify: ownerConfig?.notify ? "configured" : "not configured",
-    apiKeyVarsInEnvironment: API_KEY_VARS.filter((k) => o2.env[k])
-  };
-  if (o2.json) o2.stdout(`${JSON.stringify(report, null, 2)}
-`);
-  else {
-    const source = crewToken.source ? ` (${crewToken.source})` : "";
-    const provider = report.credentialProvider;
-    const lines = [
-      `project checkout: ${projectCheckout}`,
-      ...toolchain.map((t) => `toolchain: ${t}`),
-      `claude login: ${claudeLogin}`,
-      ...accounts.map(
-        (a2) => `account ${a2.label}${a2.active ? " (active)" : ""}: added ${a2.addedAt.slice(0, 10)}, ${a2.state}`
-      ),
-      ...accounts.flatMap((a2) => expiryLine(a2) ?? []),
-      `crew token: ${crewToken.status}${source}${required2 ? "" : " (optional: allow_ambient_credentials)"}`,
-      `studio.yaml: ${report.studioYaml}`,
-      `superpowers: ${report.superpowers}`,
-      `git: ${git}`,
-      `studio plugin: ${studioCrew}${studioCrew === "not found" && configDir !== void 0 ? ` (${studioPluginHint(configDir)})` : ""}`,
-      `stacks: ${report.stacks === null ? "not set: run studio setup stack" : report.stacks.join(", ") || "(none)"}`,
-      `owner config: ${report.ownerConfig}`,
-      `credential provider: ${provider === null ? "not configured" : `configured ${provider}`}`,
-      `notify: ${report.notify}`,
-      `allow_api_billing: ${report.allowApiBilling ? "on" : "off"}`,
-      `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(", ") || "none"}`
-    ];
-    o2.stdout(`${lines.map(safe).join("\n")}
-`);
-  }
-  return required2 && crewToken.status !== "set" ? 1 : 0;
-}
-
-// src/stack.ts
-var import_yaml10 = __toESM(require_dist(), 1);
-import { lstatSync as lstatSync19, readdirSync as readdirSync8, readFileSync as readFileSync24 } from "node:fs";
-import { join as join24 } from "node:path";
-var MAX_FILE_BYTES2 = 1024 * 1024;
-var MAX_ENTRIES = 200;
-var MONOREPO_DIRS = ["apps", "packages", "crates", "services"];
-var OTHER_WEB = ["nextjs", "shadcn", "svelte"];
-var DEP_STACKS = {
-  next: "nextjs",
-  pg: "postgres",
-  postgres: "postgres",
-  "react-native": "expo",
-  expo: "expo",
-  svelte: "svelte",
-  "better-auth": "better-auth",
-  stripe: "stripe",
-  fastify: "fastify",
-  ai: "ai-sdk",
-  "@playwright/test": "playwright",
-  playwright: "playwright",
-  tailwindcss: "tailwind"
-};
-function isRealDir(path10) {
-  try {
-    return lstatSync19(path10).isDirectory();
-  } catch {
-    return false;
-  }
-}
-function readSmall(path10, notes, name) {
-  try {
-    const st = lstatSync19(path10);
-    if (!st.isFile()) return void 0;
-    if (st.size > MAX_FILE_BYTES2) {
-      notes.push(`${name}: larger than 1 MiB, not read`);
-      return void 0;
-    }
-    return readFileSync24(path10, "utf8");
-  } catch {
-    notes.push(`${name}: cannot be read`);
-    return void 0;
-  }
-}
-var isFileEntry = (dir, name) => {
-  try {
-    return lstatSync19(join24(dir, name)).isFile();
-  } catch {
-    return false;
-  }
-};
-function depStacks(text, notes, name) {
-  let raw;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    notes.push(`${name}: not valid JSON`);
-    return [];
-  }
-  if (raw === null || typeof raw !== "object") return [];
-  const out = [];
-  for (const key of ["dependencies", "devDependencies", "peerDependencies"]) {
-    const deps = raw[key];
-    if (deps === null || typeof deps !== "object" || Array.isArray(deps)) continue;
-    for (const dep of Object.keys(deps)) {
-      const stack = DEP_STACKS[dep];
-      if (stack !== void 0) out.push(stack);
-    }
-  }
-  return out;
-}
-function scanDir(dir, label, found, notes) {
-  let names;
-  try {
-    names = readdirSync8(dir).slice(0, MAX_ENTRIES * 5);
-  } catch {
-    notes.push(`${label || "."}: cannot be read`);
-    return;
-  }
-  const file2 = (n2) => isFileEntry(dir, n2);
-  const read3 = (n2) => readSmall(join24(dir, n2), notes, label ? `${label}/${n2}` : n2);
-  const some = (re) => names.some((n2) => re.test(n2) && file2(n2));
-  const pkg = names.includes("package.json") && file2("package.json") ? read3("package.json") : void 0;
-  if (pkg !== void 0) {
-    for (const s of depStacks(pkg, notes, label ? `${label}/package.json` : "package.json")) {
-      found.add(s);
-    }
-  }
-  if (some(/^next\.config\./)) found.add("nextjs");
-  if (some(/^components\.json$/)) found.add("shadcn");
-  if (isRealDir(join24(dir, "migrations"))) found.add("postgres");
-  if (some(/^(Podfile|Package\.swift)$/) || names.some((n2) => n2.endsWith(".xcodeproj"))) {
-    found.add("ios");
-  }
-  for (const n2 of names.filter((x) => x.endsWith(".csproj") && file2(x))) {
-    if (/WinUI|WindowsAppSDK/i.test(read3(n2) ?? "")) found.add("winui");
-  }
-  if (some(/^Cargo\.toml$/)) found.add("rust");
-  if (isRealDir(join24(dir, "src-tauri"))) {
-    found.add("tauri");
-    found.add("rust");
-  }
-  if (some(/^(build\.gradle.*|AndroidManifest\.xml)$/)) found.add("android");
-  if (some(/^app\.json$/) && /"expo"\s*:/.test(read3("app.json") ?? "")) found.add("expo");
-  if (some(/^svelte\.config\./)) found.add("svelte");
-  if (some(/^(astro\.config\..*|vite\.config\..*|index\.html)$/)) found.add("web");
-  if (some(/^Dockerfile/) || some(/^(docker-)?compose.*\.ya?ml$/)) found.add("docker");
-  if (some(/^wp-config\.php$/) || isRealDir(join24(dir, "wp-content"))) found.add("wordpress");
-  if (some(/^style\.css$/) && /Theme Name:/.test(read3("style.css") ?? "")) found.add("wordpress");
-  for (const n2 of names.filter((x) => x.endsWith(".php") && file2(x))) {
-    if (/Plugin Name:/.test(read3(n2) ?? "")) found.add("wordpress");
-  }
-}
-function detectStacks(dir) {
-  const found = /* @__PURE__ */ new Set();
-  const notes = [];
-  scanDir(dir, "", found, notes);
-  if (isRealDir(join24(dir, ".github", "workflows"))) found.add("gha");
-  for (const group of MONOREPO_DIRS) {
-    const base = join24(dir, group);
-    if (!isRealDir(base)) continue;
-    for (const name of readdirSync8(base).slice(0, MAX_ENTRIES)) {
-      if (name.startsWith(".") || name === "node_modules") continue;
-      if (isRealDir(join24(base, name))) scanDir(join24(base, name), `${group}/${name}`, found, notes);
-    }
-  }
-  if (OTHER_WEB.some((s) => found.has(s))) found.delete("web");
-  return { stacks: [...found].sort(), notes };
-}
-function runSetupStack(o2) {
-  const file2 = join24(o2.project, ".studio", "studio.yaml");
-  let text;
-  try {
-    text = readFileSync24(file2, "utf8");
-  } catch (e) {
-    throw new Error(
-      `cannot read .studio/studio.yaml (${e.code ?? "error"})`
-    );
-  }
-  const doc = (0, import_yaml10.parseDocument)(text);
-  if (doc.errors.length > 0) throw new Error(".studio/studio.yaml is not valid YAML");
-  const { stacks, notes } = detectStacks(o2.project);
-  let stored = [];
-  try {
-    stored = loadConfig(o2.project).stacks ?? [];
-  } catch {
-    stored = [];
-  }
-  const added = stacks.filter((s) => !stored.includes(s));
-  const removed = stored.filter((s) => !stacks.includes(s));
-  let written = false;
-  if (o2.write) {
-    doc.set("stacks", stacks);
-    const check2 = studioConfigSchema.safeParse(camelizeKeys(doc.toJS()));
-    if (!check2.success)
-      throw new Error("the resulting studio.yaml would be invalid, nothing written");
-    writeAtomic(file2, doc.toString({ lineWidth: 0 }));
-    written = true;
-  }
-  if (o2.json) {
-    o2.stdout(`${JSON.stringify({ stacks, added, removed, notes, written }, null, 2)}
-`);
-  } else {
-    const lines = [
-      `Stacks: ${stacks.join(", ") || "(none)"}`,
-      ...added.length > 0 ? [`Added: ${added.join(", ")}`] : [],
-      ...removed.length > 0 ? [`Removed: ${removed.join(", ")}`] : [],
-      ...notes.map((n2) => `Note: ${n2}`),
-      ...written ? ["written: .studio/studio.yaml"] : []
-    ];
-    o2.stdout(`${lines.map(safe).join("\n")}
-`);
-  }
-  return 0;
-}
-
 // src/cli.ts
 var USAGE = `Usage: studio [--project <dir>] [--json] <command>
 
 Commands:
+  init [--write]           Check the prerequisites and propose .studio/ for this project; --write writes it
+  add "<title>" --dod <l>  Add a ready builder item [--type fix|feature|chore|docs|research]
+                           [--repo <owner/name>] [--path <glob>]... [--dod <line>]... [--component <id>] [--plan <file>]
   board [--component <id>] Show the board, or the items of one component
   plan                     Dry-run the planner (JSON)
   launch <id>              Start a crew session for a planned item
@@ -35548,8 +36172,12 @@ async function runCli(argv, deps) {
 `);
       return { config: config2, board: loadBoard(project, config2) };
     };
-    if (values.component !== void 0 && cmd !== "board") {
-      throw new UsageError("--component works with board only");
+    if (values.component !== void 0 && cmd !== "board" && cmd !== "add") {
+      throw new UsageError("--component works with board and add only");
+    }
+    const addOnly = [values.type, values.repo, values.path, values.dod, values.plan];
+    if (cmd !== "add" && addOnly.some((v) => v !== void 0)) {
+      throw new UsageError("--type, --repo, --path, --dod and --plan work with add only");
     }
     const componentField = (config2, item) => config2?.components === void 0 ? {} : { components: item === void 0 ? [] : componentsOf(item, config2) };
     const componentCell = (ids) => ids === void 0 || ids.length === 0 ? "-" : ids.join(",");
@@ -35815,7 +36443,7 @@ async function runCli(argv, deps) {
           throw new Error(`crew record for ${item.id} has no valid startedAt`);
         }
       }
-      const clone2 = join25(stateRoot(), "clones", item.id);
+      const clone2 = join26(stateRoot(), "clones", item.id);
       const fileName = reportName(stateRoot(), item.id);
       if (fileName === void 0) {
         throw new ReportError(
@@ -36299,6 +36927,38 @@ async function runCli(argv, deps) {
       return out;
     };
     switch (cmd) {
+      case "init": {
+        refuseCrew(deps.env);
+        if (rest.length !== 0) throw new UsageError("init takes no arguments, only --write");
+        return await runInit({
+          project,
+          ports,
+          owner,
+          env: deps.env,
+          json: json2,
+          write: values.write === true,
+          stdout
+        });
+      }
+      case "add": {
+        refuseCrew(deps.env);
+        if (rest.length > 1)
+          throw new UsageError('add takes one title; quote it: studio add "<title>"');
+        print(
+          await addItem({
+            project,
+            title: rest[0],
+            ...values.type === void 0 ? {} : { type: values.type },
+            ...values.repo === void 0 ? {} : { repo: values.repo },
+            paths: values.path ?? [],
+            dod: values.dod ?? [],
+            ...values.component === void 0 ? {} : { component: values.component },
+            ...values.plan === void 0 ? {} : { plan: values.plan },
+            locked: (fn) => withBoardLock(stateRoot(), ports.clock.now(), fn)
+          })
+        );
+        return 0;
+      }
       case "board": {
         const { config: config2, board } = loadAll();
         const only = values.component;
@@ -36490,7 +37150,7 @@ async function runCli(argv, deps) {
             hasReport: (item) => {
               if (!isItemId(item)) return false;
               const name = reportName(root, item);
-              return name !== void 0 && existsSync6(join25(root, "clones", item, ".studio", "reports", name));
+              return name !== void 0 && existsSync6(join26(root, "clones", item, ".studio", "reports", name));
             }
           }
         );
@@ -36552,7 +37212,7 @@ async function runCli(argv, deps) {
         const stoppedAt = ports.clock.now().toISOString();
         const latest = readCrewRecords(root);
         latest[id] = { ...latest[id] ?? rec, stoppedAt };
-        writeStateFile(root, join25(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
+        writeStateFile(root, join26(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
 `);
         let requeued;
         if (values.requeue === true) {
@@ -36901,6 +37561,11 @@ function parseCli(argv) {
         release: { type: "boolean" },
         requeue: { type: "boolean" },
         component: { type: "string" },
+        type: { type: "string" },
+        repo: { type: "string" },
+        path: { type: "string", multiple: true },
+        dod: { type: "string", multiple: true },
+        plan: { type: "string" },
         help: { type: "boolean" }
       },
       allowPositionals: true,
@@ -36981,13 +37646,13 @@ ${notRunSection(notRunHere)}
 ${body.replace(new RegExp("[^\\P{Cc}\\n\\t]|\\p{Cf}", "gu"), "").slice(0, PR_BODY_MAX)}
 `;
   const withBody = async (use) => {
-    const dir = mkdtempSync(join25(tmpdir(), "studio-pr-"));
+    const dir = mkdtempSync(join26(tmpdir(), "studio-pr-"));
     try {
-      const file2 = join25(dir, "body.md");
-      writeFileSync9(file2, text, { mode: 384 });
+      const file2 = join26(dir, "body.md");
+      writeFileSync10(file2, text, { mode: 384 });
       return await use(file2);
     } finally {
-      rmSync5(dir, { recursive: true, force: true });
+      rmSync6(dir, { recursive: true, force: true });
     }
   };
   const room = await capacity();
@@ -42130,7 +42795,7 @@ var throwOnSerializableInput = (optionName, invalidItem) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-sync.js
-import { writeFileSync as writeFileSync10, appendFileSync } from "node:fs";
+import { writeFileSync as writeFileSync11, appendFileSync } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/output.js
 var shouldLogOutput = ({ stdioItems, encoding, verboseInfo, fdNumber }) => fdNumber !== "all" && isFullVerbose(verboseInfo, fdNumber) && !BINARY_ENCODINGS.has(encoding) && isFdVerbose(fdNumber) && (stdioItems.some(({ type, value }) => type === "native" && PIPED_STDIO_VALUES.has(value)) || stdioItems.every(({ type }) => TRANSFORM_TYPES.has(type)));
@@ -42264,7 +42929,7 @@ var writeToFiles = (chunks, stdioItems, outputFiles) => {
     if (append || outputFiles.has(path10)) {
       appendFileSync(path10, contents);
     } else {
-      writeFileSync10(path10, contents);
+      writeFileSync11(path10, contents);
     }
     outputFiles.add(path10);
   }
@@ -45241,14 +45906,14 @@ function realPorts(claudeBin = "claude") {
     }
   };
   const plugins = {
-    async run(args, env, cwd) {
+    async run(args, env, cwd, opts) {
       const r = await execa(claudeBin, args, {
         cwd,
         env,
         extendEnv: false,
         reject: false,
         stdin: "ignore",
-        timeout: PLUGIN_TIMEOUT_MS
+        timeout: opts?.timeoutMs ?? PLUGIN_TIMEOUT_MS
       });
       return {
         code: r.timedOut ? 124 : r.exitCode ?? 1,
