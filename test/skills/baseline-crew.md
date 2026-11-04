@@ -105,3 +105,13 @@ Misses the routine targets: what to answer when the code is fine, and that runni
 ### With the new routine (GREEN), 0.6.7
 
 Same scenario with `scenarios/review-F-routine2.md` (the 0.6.7 routine, one added rule), sonnet: `verdict: approve`, "the e2e check is still running, which is not a reason for `changes_requested`, so I approve and Studio holds the approval until the checks pass."
+
+## Job gate in a monorepo: baseline (RED), 0.6.8
+
+Recorded from the first real run of the 0.6.6 job gate on 2026-11-04 (Studio 0.6.7), anonymised. A reviewer crew approved a correct pull request in a monorepo. The builder's `not_run_here` held `cargo test --workspace --no-fail-fast` and a `pnpm --filter <pkg> test`. Following the 0.6.7 routine, the reviewer named the jobs that cover them: `core-server-tests` in `core-server.yml` and `packages` in `packages.yml`. Both files are `on: workflow_call` only; `ci.yml` (`on: pull_request, push`) calls them with `jobs.<id>.uses: ./.github/workflows/<file>.yml`, and their checks appear as `<caller job> / <called job>` (with ` (<leg>)` for a matrix or shard leg). `collect` refused: "not_run_here entry 1: the workflow does not run on pull_request at the base". Neither command appears in any `run:` step either (they run through `cargo nextest` and `pnpm turbo run lint test`), so the run-step test would have refused too.
+
+The reviewer did what the routine asked and named the right jobs; neither the routine nor the gate could accept them. Misses the routine targets: that the reviewer names the job in the file that defines it, also when a pull_request workflow calls that file, and that it states for each entry why the job covers the command (`covers`), because a task runner hides the command from any text check. The gate changes with it: reusable workflows one level deep, no run-step test, `covers` required.
+
+### With the new routine (GREEN), 0.6.8
+
+Scenario G (`scenarios/review-G-run.md`: the 0.6.8 routine paragraph, the same workflow shape with a shard matrix, all checks green), a fresh agent (sonnet), written answer: two entries naming the called files and jobs (`core-server.yml` / `core-server-tests`, `packages.yml` / `packages`), not the caller, each with a `covers` line that traces the command through the task runner (`cargo nextest run --workspace --no-fail-fast` with a database service; `pnpm turbo run lint test` running `test` in every package) and names what it did not verify (doctests, the mock server). The new gate accepts both entries (`test/ci-jobs.test.ts`, "a called job with matrix legs").

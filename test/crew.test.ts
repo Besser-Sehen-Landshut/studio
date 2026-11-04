@@ -2919,6 +2919,7 @@ describe('capabilities at launch', () => {
         /A change under `\.github\/` \(workflows, actions\) in this pull request is a finding/,
       );
       expect(capsOf(f, 'APP-20').workflowChange).toBeUndefined();
+      expect(capsOf(f, 'APP-20').ciItem).toBeUndefined();
     });
     it.each<[string, Record<string, Entry>]>([
       [
@@ -2975,6 +2976,8 @@ describe('capabilities at launch', () => {
       await launch(f, facts(prHead(f, { '.github/workflows/ci.yml': 'on: push\n' })));
       expect(capsOf(f, 'APP-20').workflowChange).toBeUndefined();
       expect(brief(f, 'APP-20')).toMatch(/is a CI item/);
+      // collect lets the job gate accept a changed job definition only for a CI item
+      expect(capsOf(f, 'APP-20').ciItem).toBe(true);
     });
   });
 

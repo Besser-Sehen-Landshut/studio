@@ -496,8 +496,13 @@ describe('studio CLI', () => {
 
   describe('an approval names the CI job for each command the builder could not run', () => {
     const APPROVE = `status: done\nitem: APP-1\nverdict: approve\nreviews: org/app#9\nhead_sha: ${HEAD}`;
-    const entry = (command: string, workflow: string, job: string) =>
-      `not_run_here_jobs:\n  - { command: ${command}, workflow: ${workflow}, job: ${job} }`;
+    const entry = (
+      command: string,
+      workflow: string,
+      job: string,
+      covers: string | null = 'its make step runs the e2e suite',
+    ) =>
+      `not_run_here_jobs:\n  - { command: ${command}, workflow: ${workflow}, job: ${job}${covers === null ? '' : `, covers: ${covers}`} }`;
     const JOBS = entry('make e2e', '.github/workflows/ci.yml', 'e2e');
     const CAPS = {
       analyzers: [],
@@ -525,7 +530,7 @@ describe('studio CLI', () => {
       '      - run: pnpm lint',
     ].join('\n');
     /** Puts the workflow on main in the owner checkout and its origin; returns the base commit. */
-    const baseWithWorkflow = (fx: Fx, text = CI_YML) => {
+    const baseWithWorkflow = (fx: Fx, text = CI_YML, headText?: string) => {
       mkdirSync(join(fx.project, '.github', 'workflows'), { recursive: true });
       writeFileSync(join(fx.project, '.github', 'workflows', 'ci.yml'), `${text}\n`);
       git(fx.project, 'add', '.github/workflows/ci.yml');
@@ -536,6 +541,10 @@ describe('studio CLI', () => {
       git(fx.project, 'checkout', '-q', '-b', 'studio/APP-2');
       writeFileSync(join(fx.project, 'change.txt'), 'x\n');
       git(fx.project, 'add', 'change.txt');
+      if (headText !== undefined) {
+        writeFileSync(join(fx.project, '.github', 'workflows', 'ci.yml'), `${headText}\n`);
+        git(fx.project, 'add', '.github/workflows/ci.yml');
+      }
       git(fx.project, 'commit', '-q', '-m', 'change');
       git(fx.project, 'push', '-q', 'origin', 'studio/APP-2');
       const head = git(fx.project, 'rev-parse', 'HEAD').trim();
@@ -566,12 +575,13 @@ describe('studio CLI', () => {
       checks: Check[],
       caps: Record<string, unknown> = CAPS,
       text?: string,
+      headText?: string,
     ) => {
       const fx = makeFx([
         { id: 'APP-1', status: 'assigned', type: 'review' },
         { id: 'APP-2', status: 'in_review', pr: 9, approvedHead: null },
       ]);
-      const { base, head } = baseWithWorkflow(fx, text);
+      const { base, head } = baseWithWorkflow(fx, text, headText);
       writeReviewCaps(fx, 'APP-1', { ...caps, headRefOid: head });
       writeReport(fx, 'APP-1', report.replaceAll(HEAD, head));
       const r = await cli(
@@ -605,6 +615,35 @@ describe('studio CLI', () => {
       expect(r.code).toBe(0);
       expect(statusOf(fx, 'APP-2')?.approvedHead).toMatch(/^[0-9a-f]{40}$/);
       expect(statusOf(fx, 'APP-2')?.approvedJobs).toEqual([{ workflow: 'CI', job: 'e2e' }]);
+      // the reviewer's reason reaches the lead, as data beside the job it is about
+      expect(JSON.parse(r.out).notRunHereJobs).toEqual([
+        { entry: 1, workflow: 'CI', job: 'e2e', covers: 'its make step runs the e2e suite' },
+      ]);
+    });
+    it('an entry without covers text: to the lead, with the entry and the rule in the note', async () => {
+      const r = await run(
+        `${APPROVE}\n${entry('make e2e', '.github/workflows/ci.yml', 'e2e', null)}`,
+        PASS,
+      );
+      toLead(r, /entry 1: no covers text/);
+      expect(statusOf(r.fx, 'APP-1')?.notes).toContain(
+        'approval refused: not_run_here entry 1: no covers text says why the named job covers the command',
+      );
+    });
+    it('covers text loses format characters and is held to one plain line', async () => {
+      const { fx, r } = await run(
+        `${APPROVE}\n${entry('make e2e', '.github/workflows/ci.yml', 'e2e', '"runs​ make e2e‮"')}`,
+        PASS,
+      );
+      expect(r.code).toBe(0);
+      expect(JSON.parse(r.out).notRunHereJobs[0].covers).toBe('runs make e2e');
+      expect(statusOf(fx, 'APP-2')?.approvedHead).toMatch(/^[0-9a-f]{40}$/);
+      const long = await run(
+        `${APPROVE}\n${entry('make e2e', '.github/workflows/ci.yml', 'e2e', 'x'.repeat(301))}`,
+        PASS,
+      );
+      expect(long.r.code).toBe(1);
+      expect(long.r.err).toMatch(/notRunHereJobs\.0\.covers/);
     });
     it('a job named by its name: rather than its id', async () => {
       const { r } = await run(
@@ -664,14 +703,12 @@ describe('studio CLI', () => {
         /entry 1/,
       );
     });
-    it('a job whose run steps do not hold the command: to the lead', async () => {
-      toLead(
-        await run(`${APPROVE}\n${entry('make e2e', '.github/workflows/ci.yml', 'Lint')}`, [
-          ...PASS,
-          { name: 'Lint', bucket: 'pass', workflow: 'CI' },
-        ]),
-        /entry 1/,
+    it('a job whose run steps do not name the command: the covers text is the reviewer judgement', async () => {
+      const { r } = await run(
+        `${APPROVE}\n${entry('make e2e', '.github/workflows/ci.yml', 'Lint')}`,
+        [...PASS, { name: 'Lint', bucket: 'pass', workflow: 'CI' }],
       );
+      expect(r.code).toBe(0);
     });
     it('a workflow file the base does not have: to the lead', async () => {
       toLead(
@@ -686,6 +723,58 @@ describe('studio CLI', () => {
       );
       expect(r.code).toBe(1);
       expect(r.err).not.toContain('IGNORE-RULES');
+    });
+    it('a job changed at the head counts only for a CI item, as launch recorded it', async () => {
+      const changed = CI_YML.replace('make build', 'make build --quiet');
+      toLead(
+        await run(`${APPROVE}\n${JOBS}`, PASS, CAPS, undefined, changed),
+        /entry 1: the job definition changed/,
+      );
+      const { r } = await run(
+        `${APPROVE}\n${JOBS}`,
+        PASS,
+        { ...CAPS, ciItem: true },
+        undefined,
+        changed,
+      );
+      expect(r.code).toBe(0);
+    });
+    it('a job of a reusable workflow that a pull_request workflow calls: approved by its check', async () => {
+      const caller = [
+        'name: CI',
+        'on: [pull_request]',
+        'jobs:',
+        '  suite:',
+        '    uses: ./.github/workflows/ci.yml',
+      ].join('\n');
+      const called = CI_YML.replace('on: [pull_request]', 'on: workflow_call').replace(
+        'name: CI',
+        'name: Suite',
+      );
+      const fx = makeFx([
+        { id: 'APP-1', status: 'assigned', type: 'review' },
+        { id: 'APP-2', status: 'in_review', pr: 9, approvedHead: null },
+      ]);
+      mkdirSync(join(fx.project, '.github', 'workflows'), { recursive: true });
+      writeFileSync(join(fx.project, '.github', 'workflows', 'main.yml'), `${caller}\n`);
+      git(fx.project, 'add', '.github/workflows/main.yml');
+      const { base, head } = baseWithWorkflow(fx, called);
+      writeReviewCaps(fx, 'APP-1', { ...CAPS, headRefOid: head });
+      writeReport(fx, 'APP-1', `${APPROVE}\n${JOBS}`.replaceAll(HEAD, head));
+      const checks = [
+        { name: 'ci', bucket: 'pass', workflow: 'CI' },
+        { name: 'suite / e2e (1)', bucket: 'pass', workflow: 'CI' },
+        { name: 'suite / e2e (2)', bucket: 'pass', workflow: 'CI' },
+      ];
+      const r = await cli(
+        fx,
+        fakePorts(withChecks(checks, base, head).gh).ports,
+        'collect',
+        'APP-1',
+      );
+      expect(r.err).toBe('');
+      expect(r.code).toBe(0);
+      expect(statusOf(fx, 'APP-2')?.approvedJobs).toEqual([{ workflow: 'CI', job: 'suite / e2e' }]);
     });
     it('a request for changes needs no jobs', async () => {
       const { r } = await run(APPROVE.replace('approve', 'changes_requested'), PASS);

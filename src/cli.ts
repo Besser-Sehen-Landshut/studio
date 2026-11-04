@@ -14,7 +14,7 @@ import {
 } from './board.js';
 import { capabilitiesDir } from './capabilities.js';
 import { readCapacity, readCapacityTwice } from './capacity.js';
-import { approvedJobsProblem, verifyNotRunHereJobs } from './ci-jobs.js';
+import { approvedJobsProblem, type CoveredJob, verifyNotRunHereJobs } from './ci-jobs.js';
 import {
   configWarnings,
   loadConfig,
@@ -517,6 +517,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report)
             : { skipped: [] as string[], target: undefined, notRunHere: undefined };
         let approvedJobs: ApprovedJob[] = [];
+        let covered: CoveredJob[] = [];
         // A verdict counts for the commit reviewed: the pull request's head right now.
         if (item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined) {
           const m = /^(.+)#(\d+)$/.exec(reviewDone.target) as RegExpExecArray;
@@ -542,6 +543,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 checkout: approvalCheckout(project, config, m[1] as string),
                 baseOid: info.baseOid,
                 headOid: info.head,
+                ciItem: reviewDone.ciItem === true,
                 commands: reviewDone.notRunHere,
                 entries: report.notRunHereJobs,
                 checks: checks.checks,
@@ -564,6 +566,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 return 1;
               }
               approvedJobs = gate.jobs;
+              covered = gate.covered;
             }
           }
         }
@@ -790,6 +793,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 },
               }
             : {}),
+          // Each approved job with the reviewer's reason why it covers its command: reviewer text,
+          // one plain line each, data for the lead. The gate proved only that the job ran and passed.
+          ...(covered.length === 0 || supersededBy !== undefined
+            ? {}
+            : { notRunHereJobs: covered }),
         });
         return 0;
       }

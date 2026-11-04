@@ -61,9 +61,19 @@ const reportSchema = z.object({
   // Commands the sandbox cannot run for lack of a service; CI is the authority for them.
   // An empty YAML value (`key:` alone) is null: it reads as the empty list.
   notRunHere: emptyList(z.array(notRunHereReportSchema).max(20)),
-  // A reviewer's answer for each such command: the base workflow and the job whose check runs it.
+  // A reviewer's answer for each such command: the base workflow and the job whose check runs
+  // it, and why that job covers the command (`covers`; the job gate refuses an entry without it).
   notRunHereJobs: emptyList(
-    z.array(z.strictObject({ command: crewLine, workflow: crewLine, job: crewLine })).max(20),
+    z
+      .array(
+        z.strictObject({
+          command: crewLine,
+          workflow: crewLine,
+          job: crewLine,
+          covers: crewLine.nullish(),
+        }),
+      )
+      .max(20),
   ),
   lessons: emptyList(z.array(z.string())),
   questions: emptyList(z.array(z.string())),
@@ -73,6 +83,8 @@ export interface NotRunHereJob {
   command: string;
   workflow: string;
   job: string;
+  /** The reviewer's reason why the job covers the command: crew text, shown to the lead as data. */
+  covers?: string;
 }
 
 export interface Report {
@@ -157,7 +169,9 @@ export function parseReport(text: string, item?: WorkItem): Report {
     ...(d.mutationProbe != null && { mutationProbe: d.mutationProbe }),
     ...(d.findingAttempts != null && { findingAttempts: d.findingAttempts }),
     notRunHere: d.notRunHere,
-    notRunHereJobs: d.notRunHereJobs,
+    notRunHereJobs: d.notRunHereJobs.map(({ covers, ...j }) =>
+      covers == null ? j : { ...j, covers },
+    ),
     lessons: d.lessons,
     questions: d.questions,
   };

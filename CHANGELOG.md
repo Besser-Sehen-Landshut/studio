@@ -3,6 +3,48 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.8] - 2026-11-04
+
+From the first real run of the 0.6.6 job gate: a reviewer named the right jobs for a monorepo's
+`not_run_here` commands, and `collect` refused them, because those jobs live in reusable workflows
+that `ci.yml` calls, and because the commands run through task runners (`cargo nextest`,
+`pnpm turbo`), so no `run:` step names them. The gate could never pass in such repositories. Not
+tagged yet; the maintainers tag after the merge.
+
+### Changed
+
+- Reusable workflows: a named workflow file that is only `workflow_call` counts when, at the base
+  and at the head, a `pull_request` workflow calls it from a job with
+  `uses: ./.github/workflows/<file>`. Its checks are then `<caller job> / <job>` in the caller's
+  workflow, with an optional ` (<leg>)` for a matrix leg; every instance of every calling job must
+  pass and at least one must exist. The calling job may not have `if:` or `continue-on-error`,
+  and the caller workflow's name must be unique. One level only: a job that calls a further
+  reusable workflow, a file called only through another reusable workflow, and a remote
+  `uses: <owner>/<repo>/...@<ref>` are refused with their own reason.
+- The run-step test is gone: it could not work with task runners and gave false assurance. Each
+  `not_run_here_jobs` entry now needs `covers`, one plain line from the reviewer on why the job
+  covers the command (format characters stripped, at most 300 characters); an entry without it
+  refuses the approval. `collect` prints each approved job with its `covers` text for the lead
+  (`notRunHereJobs`). The hard gate: the job holds at the base and at the head under the same check
+  names, its definition (with its calling jobs) is unchanged between them unless the item is a CI
+  item, and all its checks on the pull request head passed. A launch records whether the item is a
+  CI item (`ciItem` in the launch record), and `collect` reads it from there.
+- A refusal's board note names the entry and the rule in fixed text, as before; the reasons now
+  name the new rules (`no covers text`, `the job definition changed`, `callers differ`,
+  `one level only`, `remote reusable workflow`).
+- The review routine and the report template ask for the file that defines the job, its name and
+  `covers`, and say that a task runner may run the command.
+
+### Security
+
+- Check matching fails closed (found by an automated security review of this release's draft): a
+  check is the job when its name is `<job>` or `<job> (<leg>)`, the leg being everything inside
+  the outer parentheses, so a leg may hold a slash. A check of the same workflow whose name starts
+  with `<job>` and a space but does not parse that way (`<job> (1) / x`, `<job> / x`, `<job> (1`)
+  refuses the approval and the merge re-check; the draft dropped such checks, so a failing one
+  could fall out of "every instance passed". Names that continue without a space (`<job>-slow`)
+  are other jobs.
+
 ## [0.6.7] - 2026-11-03
 
 From a real run: a reviewer launched while the pull request's CI was still running found nothing

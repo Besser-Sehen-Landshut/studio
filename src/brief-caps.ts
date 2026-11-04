@@ -516,6 +516,7 @@ export function writeCaps(o: {
         ? {}
         : { notRunHere: review.notRunHere.map((x) => x.command) }),
       ...(review.workflowChange === true ? { workflowChange: true as const } : {}),
+      ...(review.ciItem === true ? { ciItem: true as const } : {}),
     };
     writeStateFile(stateRoot, capsFile(stateRoot, id), `${JSON.stringify(caps, null, 2)}\n`);
   }

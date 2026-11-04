@@ -589,7 +589,7 @@ export function writeBrief(
           'analyzers: { <id>: pass|findings|"skipped: <reason>" }',
           'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"',
           'finding_attempts: <highest number of attempts on one finding>',
-          'not_run_here_jobs: []   # or entries { command: <command as listed>, workflow: <workflow file at the base>, job: <check name> }',
+          'not_run_here_jobs: []   # or entries { command: <command as listed>, workflow: <file at the base that defines the job>, job: <job name>, covers: <one line: why this job covers the command> }',
         ]
       : item.type === 'research'
         ? []
