@@ -38,4 +38,4 @@ Bundle drift check (what CI runs): `pnpm bundle`, then `git status --porcelain -
 - `CHANGELOG.md`: release notes; add an entry for user-visible changes.
 - `src/`: source; `dist-bundle/`: committed bundles; `schema/`: generated JSON Schemas.
 - `capabilities/`: trigger matrix, sources list, analyzers, design and knowledge files; loaded per row, never whole.
-- `skills/`: the lead and crew skills; `test/`: tests, fixtures, skill baselines.
+- `skills/`: the lead and crew skills and the owner commands `init` and `add` (`/studio:init`, `/studio:add`); `test/`: tests, fixtures, skill baselines.

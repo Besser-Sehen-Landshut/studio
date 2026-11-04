@@ -3,6 +3,41 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.10.0] - 2026-11-04
+
+A new owner needed two `/plugin` commands, then three separate hidden-input commands in a terminal
+(`studio secret set crew-token`, `claude setup-token`, `studio account add <label>`), and a `studio`
+command in that terminal that the plugin did not provide. Now: install the plugin, run `studio setup`
+once in a terminal, then `/studio:init` in Claude Code. Not tagged yet; the maintainers tag after the
+merge.
+
+### Added
+
+- `studio setup [--link]`: the owner's one-time setup, in a terminal only (refused without one and
+  under `STUDIO_ROLE=crew`). Numbered steps, each skipped when done: `gh` installed and logged in
+  (else the fix and a stop); the crew token, explained with the permissions it needs, through the
+  existing `secret set crew-token` (checked against `primary_repo`, else `origin`'s GitHub
+  repository, else one it asks for); a Claude account for crews through the existing `account add`,
+  after asking to run `claude setup-token` in another tab, label `main` unless another is typed;
+  `studio` in the terminal. It ends with "run /studio:init". No token is echoed.
+- `--link`: links `~/.local/bin/studio` to the plugin's `bin/studio` after a yes, when
+  `~/.local/bin` is on `PATH`; otherwise it prints the `ln -s` line. It never edits shell files and
+  never replaces a `studio` that is not a link to Studio; it offers to replace a link to an earlier
+  Studio version, since the plugin's folder changes with each version.
+- `/studio:init` (skill `studio:init`, only on request): runs `studio init`, explains the checks and
+  the proposal in plain words, writes with `--write` only after a yes, asks before committing, and
+  adds a first item from the owner's own words.
+- `/studio:add` (skill `studio:add`): turns work described in plain words into `studio add` with
+  type, paths and DoD, and tells the owner the id and what `missing` says.
+
+### Changed
+
+- `init`: a missing crew token or Claude account is one next step, "run studio setup once", with the
+  `node <plugin>/bin/studio setup --link` line for a terminal without `studio`; the first item can be
+  added with `/studio:add`.
+- `setup` without a subcommand is the guided setup; before, it was a usage error.
+- README: the quick start follows the new path.
+
 ## [0.9.1] - 2026-11-04
 
 ### Changed

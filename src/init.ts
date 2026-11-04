@@ -219,6 +219,34 @@ async function bounded(
   }
 }
 
+/** `gh` installed and logged in to github.com; `studio setup` asks the same. */
+export async function ghCheck(ports: Ports, ghMs = GH_TIMEOUT_MS): Promise<Check> {
+  const gh = (args: string[]) => () => ports.gh.run(args, { timeoutMs: ghMs });
+  const ghVersion = await bounded(gh(['--version']), ghMs, 'gh --version');
+  if (ghVersion.code !== 0) {
+    return {
+      name: 'gh',
+      status: 'fail',
+      detail: ghVersion.why ?? 'not found',
+      fix: 'install the GitHub CLI (https://cli.github.com), then gh auth login',
+    };
+  }
+  // Only github.com: a stale login to another host must not fail a healthy one.
+  const auth = await bounded(
+    gh(['auth', 'status', '--hostname', 'github.com']),
+    ghMs,
+    'gh auth status',
+  );
+  return auth.code === 0
+    ? { name: 'gh', status: 'pass', detail: 'logged in to github.com' }
+    : {
+        name: 'gh',
+        status: 'fail',
+        detail: auth.why ?? 'not logged in to github.com',
+        fix: 'gh auth login --hostname github.com',
+      };
+}
+
 async function prerequisites(o: InitOptions): Promise<Check[]> {
   const checks: Check[] = [];
   const ghMs = o.timeouts?.ghMs ?? GH_TIMEOUT_MS;
@@ -230,33 +258,7 @@ async function prerequisites(o: InitOptions): Promise<Check[]> {
       ? { name: 'git', status: 'pass', detail: r.git }
       : { name: 'git', status: 'fail', detail: r.git, fix: 'install git 2.38 or newer' },
   );
-  const gh = (args: string[]) => () => o.ports.gh.run(args, { timeoutMs: ghMs });
-  const ghVersion = await bounded(gh(['--version']), ghMs, 'gh --version');
-  if (ghVersion.code !== 0) {
-    checks.push({
-      name: 'gh',
-      status: 'fail',
-      detail: ghVersion.why ?? 'not found',
-      fix: 'install the GitHub CLI (https://cli.github.com), then gh auth login',
-    });
-  } else {
-    // Only github.com: a stale login to another host must not fail a healthy one.
-    const auth = await bounded(
-      gh(['auth', 'status', '--hostname', 'github.com']),
-      ghMs,
-      'gh auth status',
-    );
-    checks.push(
-      auth.code === 0
-        ? { name: 'gh', status: 'pass', detail: 'logged in to github.com' }
-        : {
-            name: 'gh',
-            status: 'fail',
-            detail: auth.why ?? 'not logged in to github.com',
-            fix: 'gh auth login --hostname github.com',
-          },
-    );
-  }
+  checks.push(await ghCheck(o.ports, ghMs));
   const env = { PATH: o.env.PATH ?? '', HOME: o.owner.homedir ?? '' };
   const plugins = o.ports.plugins;
   const claude = plugins
@@ -306,7 +308,7 @@ async function prerequisites(o: InitOptions): Promise<Check[]> {
           name: 'crew token',
           status: 'warn',
           detail: r.crewToken.status,
-          fix: 'after init --write, in a terminal: studio secret set crew-token (a least-privilege token, see README)',
+          fix: 'in your own terminal: studio setup (or studio secret set crew-token; a least-privilege token, see README)',
         },
   );
   const loginReady = r.credentialProvider !== null || r.accounts.length > 0;
@@ -317,7 +319,7 @@ async function prerequisites(o: InitOptions): Promise<Check[]> {
           name: 'claude account',
           status: 'warn',
           detail: `none stored; crews would use ${r.claudeLogin}`,
-          fix: 'in a terminal: claude setup-token, then studio account add <label>',
+          fix: 'in your own terminal: studio setup (or claude setup-token, then studio account add <label>)',
         },
   );
   if (r.superpowers === 'not found') {
@@ -348,6 +350,8 @@ export type InitOptions = {
   writeFile?: (path: string, text: string) => void;
   /** The roles the proposal holds; default a builder and a reviewer. */
   roles?: Record<string, unknown>;
+  /** The plugin's `bin/studio`, named for a terminal where `studio` is not on PATH. */
+  launcher?: string;
 };
 
 const DEFAULT_ROLES = { builder: { model: 'sonnet', wip: 2 }, reviewer: { model: 'opus', wip: 1 } };
@@ -366,8 +370,17 @@ async function isIgnored(o: InitOptions, file: string): Promise<boolean> {
 }
 
 /** The steps still to do: what a check found done is left out. */
-function nextSteps(prefix: string, written: boolean, checks: Check[]): string[] {
+function nextSteps(
+  prefix: string,
+  written: boolean,
+  checks: Check[],
+  launcher: string | undefined,
+): string[] {
   const open = (name: string) => checks.some((c) => c.name === name && c.status !== 'pass');
+  const notFound =
+    launcher === undefined
+      ? ''
+      : ` If studio is not found there: node '${launcher.replace(/'/g, `'\\''`)}' setup --link`;
   return [
     ...(open('ci')
       ? [
@@ -376,18 +389,15 @@ function nextSteps(prefix: string, written: boolean, checks: Check[]): string[] 
       : []),
     ...(written ? [] : ['Run studio init --write to write the two files.']),
     'Commit .studio/studio.yaml and .studio/board.yaml.',
-    ...(open('crew token')
-      ? ['In a terminal, store the crew token: studio secret set crew-token']
-      : []),
-    ...(open('claude account')
+    ...(open('crew token') || open('claude account')
       ? [
-          'In a terminal, add a Claude account for the crews: claude setup-token, then studio account add <label>',
+          `In your own terminal, run studio setup once: it stores the crew token and a Claude account for the crews, one guided step each.${notFound}`,
         ]
       : []),
     ...(open('superpowers') ? [`In Claude Code, install superpowers: ${SUPERPOWERS_INSTALL}`] : []),
     `In Claude Code, install the Studio plugin if it is not yet: ${PLUGIN_INSTALL.join(', then ')}; then restart Claude Code in this folder. The board comes with the plugin.`,
     'Open the board pane with /studio.',
-    `Add a first item: studio add "Add a health endpoint" --type fix --dod "GET /health returns 200" (it gets the id ${prefix}-1)`,
+    `Add a first item: in Claude Code run /studio:add and say what you need, or run studio add "Add a health endpoint" --type fix --dod "GET /health returns 200" (it gets the id ${prefix}-1)`,
     'In a Claude Code session in this folder say: run the Studio lead loop (skill studio:studio-lead). It runs studio tick every few minutes.',
   ];
 }
@@ -557,7 +567,7 @@ export async function runInit(o: InitOptions): Promise<number> {
       written.push(...STUDIO_FILES);
     }
   }
-  const steps = nextSteps(prefix, written.length > 0, checks);
+  const steps = nextSteps(prefix, written.length > 0, checks, o.launcher);
 
   if (o.json) {
     o.stdout(

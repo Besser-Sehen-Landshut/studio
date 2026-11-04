@@ -129,3 +129,36 @@ owner who asks for work in plain words. The only way to add an item it described
 edit that 0.8.0 removed, and `studio add` (0.9.0) was not named, so a lead would hand-edit `board.yaml` or
 ask the owner for YAML. The new line in "Definition of Ready gaps" names `studio add` with component, path
 and DoD, then show and tick.
+
+# Baseline (RED): first setup and adding work, 0.10.0
+
+Run on 2026-11-04 with one sonnet agent per scenario, without the new skills `studio:init` and `studio:add`
+(`scenarios/init-scenario.md`, `scenarios/add-scenario.md`). The owner has never used Studio and does not read
+YAML.
+
+Init, misses:
+
+- Wrote without asking: "I run `studio init --write`. It is harmless and can be undone with `git revert`."
+- Committed without asking: "I commit both files (`git add .studio/studio.yaml .studio/board.yaml`, then
+  `git commit`)."
+- Sent the owner to three separate hidden-input commands (`studio secret set crew-token`,
+  `claude setup-token`, `studio account add <label>`), the path `studio setup` (0.10.0) replaces.
+- Offered the example item as the first item ("`studio add "Add a health endpoint" ...`. It gets the id
+  SHOP-1") instead of asking for the owner's own work.
+- Good: explained the checks and the proposal in plain words, did not run the hidden-input commands itself.
+
+Add: weak baseline, stated plainly. The agent did it right: `studio add` with `--type fix`,
+`--path "src/checkout/**"`, two DoD lines including a test, no hand edit of `board.yaml`, nothing started.
+The skill exists so the owner has a command to type (`/studio:add`) and so `studio:init` can hand over to it;
+it adds the rule for a `feature` without a plan and naming `missing` to the owner.
+
+## With `studio:init` and `studio:add` (GREEN), 2026-11-04
+
+Same scenarios, one sonnet agent each, with the skill loaded. Init: "I ask: 'Shall I write these two
+files?' I wait for a yes. Only then do I run `studio init --write`"; "I ask whether to commit. If you say yes,
+I commit only `.studio/studio.yaml` and `.studio/board.yaml`, each by name"; "I ask you to run `studio setup`
+once in your own terminal. That covers the crew token and the Claude account"; "I ask what the first piece of
+work is, in your words. I do not use the 'health endpoint' example." Add: the same command as the baseline,
+plus the `missing` line to the owner and "I start no loop and no crew".
+
+Not exercised: a real `/studio:init` in a Claude Code session with the installed plugin.

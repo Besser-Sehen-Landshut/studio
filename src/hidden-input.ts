@@ -1,3 +1,5 @@
+import { createInterface } from 'node:readline';
+
 const MAX_CHARS = 64 * 1024;
 
 /** The part of a terminal stream this reader needs (`process.stdin` fits). */
@@ -44,5 +46,34 @@ export function readHiddenLine(
       }
     };
     input.on('data', onData);
+  });
+}
+
+/**
+ * One visible line from a terminal, for plain answers (a label, yes or no), never for a secret.
+ * Undefined when the input is no terminal or the user aborts (Ctrl-C, Ctrl-D).
+ */
+export function readVisibleLine(
+  prompt: string,
+  input: NodeJS.ReadableStream & { isTTY?: boolean },
+  output: NodeJS.WritableStream,
+): Promise<string | undefined> {
+  if (!input.isTTY) return Promise.resolve(undefined);
+  const rl = createInterface({ input, output, terminal: true });
+  return new Promise((resolve) => {
+    let answered = false;
+    const finish = (value: string | undefined) => {
+      if (answered) return;
+      answered = true;
+      rl.close();
+      input.pause();
+      resolve(value);
+    };
+    rl.on('close', () => finish(undefined));
+    rl.on('SIGINT', () => {
+      output.write('\n');
+      finish(undefined);
+    });
+    rl.question(prompt, (answer) => finish(answer));
   });
 }

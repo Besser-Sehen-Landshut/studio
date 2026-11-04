@@ -25,7 +25,7 @@ import { ownerStateRootFor } from './paths.js';
 import type { Ports } from './ports.js';
 import { assertPrimaryRepo, safe } from './setup-ci-command.js';
 
-function readPrimaryRepo(project: string): string {
+export function readPrimaryRepo(project: string): string {
   const file = join(project, '.studio', 'studio.yaml');
   let raw: unknown;
   try {
@@ -69,8 +69,10 @@ export async function runSecretSet(o: {
   owner: OwnerEnv;
   readSecret?: (prompt: string) => Promise<string | undefined>;
   stdout(s: string): void;
+  /** The repository to check the token against; default `primary_repo` of studio.yaml. */
+  repo?: string;
 }): Promise<number> {
-  const repo = readPrimaryRepo(o.project);
+  const repo = o.repo === undefined ? readPrimaryRepo(o.project) : assertPrimaryRepo(o.repo);
   const input = o.readSecret ? await o.readSecret('Crew token (input hidden): ') : undefined;
   if (input === undefined) {
     throw new Error('studio secret set needs a terminal for hidden input; nothing written');
