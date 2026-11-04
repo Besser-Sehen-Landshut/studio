@@ -98,7 +98,9 @@ function readWorkflow(text: string, path: string): Workflow | undefined {
 const isJob = (j: unknown): j is Job => j !== null && typeof j === 'object' && !Array.isArray(j);
 /** The name a check reports for a job: its `name:`, else its id. */
 const checkName = (id: string, j: Job): string => (typeof j.name === 'string' ? j.name : id);
-const guarded = (j: Job): boolean => 'if' in j || 'continue-on-error' in j;
+// `if:` may stay: a job it skips reports a skipped check, which never passes. `continue-on-error`
+// may not: it lets a failing job end the run green.
+const guarded = (j: Job): boolean => 'continue-on-error' in j;
 const localCall = (j: Job, path: string): boolean => j.uses === `./${path}`;
 /** A `uses:` naming this file of another repository: `<owner>/<repo>/<path>@<ref>`. */
 const remoteCall = (j: Job, path: string): boolean =>
@@ -128,7 +130,7 @@ function findJob(
   const found = w.jobs.find(([id, j]) => isJob(j) && checkName(id, j) === job);
   if (found === undefined) return `the job is not in the workflow at ${where}`;
   const [, called] = found as [string, Job];
-  if (guarded(called)) return `the job has an if or continue-on-error at ${where}`;
+  if (guarded(called)) return `the job has continue-on-error at ${where}`;
   if (w.onPullRequest) {
     if (typeof called.uses === 'string') {
       return called.uses.startsWith('./')
@@ -155,7 +157,7 @@ function findJob(
         nested = true;
         continue;
       }
-      if (guarded(j)) return `a calling job has an if or continue-on-error at ${where}`;
+      if (guarded(j)) return `a calling job has continue-on-error at ${where}`;
       if (!unique(x, p)) return `the workflow name is not unique at ${where}`;
       targets.push({ workflow: x.name, job: `${checkName(id, j)} / ${job}` });
       callers.push(j);

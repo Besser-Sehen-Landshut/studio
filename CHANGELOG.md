@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.9] - 2026-11-04
+
+From the first real run of the 0.6.8 gate: the reviewer approved, and `collect` refused the report
+because two `covers` lines were longer than 300 characters. The reviewer also warned that the
+gate would refuse every job in the repository, because each calling job in `ci.yml` has an
+`if:` on a changes job. Not tagged yet; the maintainers tag after the merge.
+
+### Changed
+
+- The job gate allows `if:` on the named job and on its calling jobs. A job that an `if:` skips
+  reports a skipped check, and a skipped check never counts as passed, at collect or in the merge
+  queue. `continue-on-error` is still refused.
+- `covers` may be up to 600 characters (it was 300, like every crew line). The review brief and the
+  report template now name the limit.
+
 ## [0.6.8] - 2026-11-04
 
 From the first real run of the 0.6.6 job gate: a reviewer named the right jobs for a monorepo's

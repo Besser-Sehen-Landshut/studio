@@ -639,11 +639,17 @@ describe('studio CLI', () => {
       expect(JSON.parse(r.out).notRunHereJobs[0].covers).toBe('runs make e2e');
       expect(statusOf(fx, 'APP-2')?.approvedHead).toMatch(/^[0-9a-f]{40}$/);
       const long = await run(
-        `${APPROVE}\n${entry('make e2e', '.github/workflows/ci.yml', 'e2e', 'x'.repeat(301))}`,
+        `${APPROVE}\n${entry('make e2e', '.github/workflows/ci.yml', 'e2e', 'x'.repeat(601))}`,
         PASS,
       );
       expect(long.r.code).toBe(1);
       expect(long.r.err).toMatch(/notRunHereJobs\.0\.covers/);
+      // a real reviewer's covers line for a matrix job of a reusable workflow ran to ~330
+      const roomy = await run(
+        `${APPROVE}\n${entry('make e2e', '.github/workflows/ci.yml', 'e2e', 'x'.repeat(600))}`,
+        PASS,
+      );
+      expect(roomy.r.code).toBe(0);
     });
     it('a job named by its name: rather than its id', async () => {
       const { r } = await run(

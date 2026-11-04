@@ -123,14 +123,21 @@ describe('the job gate', () => {
     expect(r).toMatchObject({ ok: false, why: expect.stringMatching(/name is not unique/) });
   });
 
-  it('refuses a job with continue-on-error or an if', async () => {
-    for (const yml of [
-      CI.replace('  e2e:\n', '  e2e:\n    continue-on-error: true\n'),
-      CI.replace('  e2e:\n', "  e2e:\n    if: github.actor == 'x'\n"),
-    ]) {
-      const r = await gate({ base: { '.github/workflows/ci.yml': yml }, checks: [pass('e2e')] });
-      expect(r, yml).toMatchObject({ ok: false, why: expect.stringMatching(/if or continue/) });
-    }
+  it('refuses a job with continue-on-error', async () => {
+    const yml = CI.replace('  e2e:\n', '  e2e:\n    continue-on-error: true\n');
+    const r = await gate({ base: { '.github/workflows/ci.yml': yml }, checks: [pass('e2e')] });
+    expect(r).toMatchObject({ ok: false, why: expect.stringMatching(/has continue-on-error/) });
+  });
+
+  it('a job with an if: counts when its check passed, never when the if skipped it', async () => {
+    const yml = CI.replace('  e2e:\n', "  e2e:\n    if: github.actor == 'x'\n");
+    const base = { '.github/workflows/ci.yml': yml };
+    expect((await gate({ base, checks: [pass('e2e')] })).ok).toBe(true);
+    const skipped: Check = { name: 'e2e', bucket: 'skipping', workflow: 'CI' };
+    expect(await gate({ base, checks: [skipped] })).toMatchObject({
+      ok: false,
+      why: expect.stringMatching(/no passing check/),
+    });
   });
 
   it('a matrix job: every instance `<job> (<leg>)` must pass, at least one must exist', async () => {
@@ -212,7 +219,7 @@ jobs:
   });
 
   it('a CI item that changed the workflow: the head version must pass the same rules', async () => {
-    const guarded = CI.replace('  e2e:\n', "  e2e:\n    if: github.actor == 'x'\n");
+    const guarded = CI.replace('  e2e:\n', '  e2e:\n    continue-on-error: true\n');
     const r = await gate({
       head: { '.github/workflows/ci.yml': guarded },
       changed: ['.github/workflows/ci.yml'],
@@ -386,18 +393,22 @@ jobs:
     ).toBe(false);
   });
 
-  it('refuses a caller job with an if or continue-on-error', async () => {
-    for (const rule of ["    if: github.event_name == 'push'\n", '    continue-on-error: true\n']) {
-      const caller = CALLER.replace(
+  it('refuses a caller with continue-on-error; one with an if: counts only when it ran', async () => {
+    const withRule = (rule: string) =>
+      CALLER.replace(
         '    uses: ./.github/workflows/core-server.yml\n',
         `    uses: ./.github/workflows/core-server.yml\n${rule}`,
       );
-      const r = await core({ base: { ...TREE, '.github/workflows/ci.yml': caller } });
-      expect(r, rule).toMatchObject({
-        ok: false,
-        why: expect.stringMatching(/calling job has an if or continue-on-error at the base/),
-      });
-    }
+    const ci = (rule: string) => ({ ...TREE, '.github/workflows/ci.yml': withRule(rule) });
+    expect(await core({ base: ci('    continue-on-error: true\n') })).toMatchObject({
+      ok: false,
+      why: expect.stringMatching(/calling job has continue-on-error at the base/),
+    });
+    // the usual monorepo shape: every caller in ci.yml is gated on a changes job
+    const gated = ci("    if: needs.changes.outputs.core == 'true'\n");
+    expect((await core({ base: gated })).ok).toBe(true);
+    const skipped: Check = { name: 'core-server', bucket: 'skipping', workflow: 'CI' };
+    expect((await core({ base: gated, checks: [skipped] })).ok).toBe(false);
   });
 
   it('refuses a workflow only a remote uses calls, or a named job with a remote uses', async () => {

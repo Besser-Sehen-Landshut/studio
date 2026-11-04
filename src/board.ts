@@ -36,11 +36,13 @@ export const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
 export const NOT_RUN_SERVICES = ['database', 'docker', 'network', 'service'] as const;
 // No control characters, and no format characters (bidi overrides, zero-width): those make a line
 // read differently from what it holds.
-const plainLine = z
-  .string()
-  .min(1)
-  .max(300)
-  .regex(/^[^\p{Cc}\p{Cf}]+$/u, 'one line of at most 300 characters');
+const plainLineOf = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .regex(/^[^\p{Cc}\p{Cf}]+$/u, `one line of at most ${max} characters`);
+const plainLine = plainLineOf(300);
 export const notRunHereSchema = z.strictObject({
   command: plainLine,
   missing: z.enum(NOT_RUN_SERVICES),
@@ -53,6 +55,11 @@ export const crewLine = z
   .string()
   .transform((s) => s.replace(/\p{Cf}/gu, ''))
   .pipe(plainLine);
+/** A reviewer's `covers` text: a crew line with room for the job, its callers and its legs. */
+export const crewCovers = z
+  .string()
+  .transform((s) => s.replace(/\p{Cf}/gu, ''))
+  .pipe(plainLineOf(600));
 /** A report's entry: like `notRunHereSchema`, with format characters stripped from the crew text. */
 export const notRunHereReportSchema = z.strictObject({
   command: crewLine,
