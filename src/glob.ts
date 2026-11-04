@@ -167,3 +167,26 @@ export function matchGlob(glob: string, path: string): boolean {
 export function hostilePath(path: string): boolean {
   return path.length > MAX_PATH_LENGTH || CONTROL.test(path);
 }
+
+/** The literal part of a glob before its first wildcard, cut back to a whole path segment. */
+export function staticPrefix(glob: string): string {
+  const i = glob.search(/[*?[{]/);
+  let head = i === -1 ? glob : glob.slice(0, i);
+  // A glob starting mid-segment (`src/foo*`) cuts the prefix back to the last '/' (`src`).
+  if (i > 0 && glob[i - 1] !== '/') head = head.slice(0, head.lastIndexOf('/') + 1);
+  let end = head.length;
+  while (end > 0 && head[end - 1] === '/') end--;
+  return head.slice(0, end);
+}
+
+/**
+ * Two touches (paths or globs) overlap if equal, or one static prefix equals / is a path-segment
+ * prefix of the other; a bare directory `d` so stands for `d/**`. Empty prefix overlaps everything.
+ */
+export function touchesOverlap(a: string, b: string): boolean {
+  if (a === b) return true;
+  const pa = staticPrefix(a);
+  const pb = staticPrefix(b);
+  if (pa === '' || pb === '') return true;
+  return pa === pb || pb.startsWith(`${pa}/`) || pa.startsWith(`${pb}/`);
+}

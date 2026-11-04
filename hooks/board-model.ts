@@ -12,6 +12,8 @@ export interface BoardCrew {
   since?: string;
   stoppedAt?: string;
   label?: string;
+  /** Ids of the item's components; absent when the project configures none. */
+  components?: string[];
 }
 
 export interface BoardState {
@@ -32,6 +34,8 @@ export interface BoardState {
   perDay: { day: string; merged: number; deployed: number }[];
   medianLeadTimeHours: number | null;
   updatedAt?: string;
+  /** Configured components in config order; absent (or empty) without any. */
+  components?: { id: string; name: string }[];
 }
 
 export type BoardRead =
@@ -106,6 +110,7 @@ function parseCrew(raw: unknown): BoardCrew | undefined {
   }
   const pr = num(o.pr);
   if (pr !== undefined) row.pr = pr;
+  if (Array.isArray(o.components)) row.components = o.components.flatMap((c) => str(c) ?? []);
   return row;
 }
 
@@ -178,6 +183,12 @@ function toState(root: Obj): BoardState {
     medianLeadTimeHours: median ?? null,
   };
   if (updatedAt !== undefined) state.updatedAt = updatedAt;
+  const components = list(root.components).flatMap((r) => {
+    const id = str(obj(r)?.id);
+    const name = str(obj(r)?.name);
+    return id === undefined || name === undefined ? [] : [{ id, name }];
+  });
+  if (components.length > 0) state.components = components;
   return state;
 }
 
@@ -296,11 +307,43 @@ function runtimeOf(c: BoardCrew, nowMs: number): string {
 const MAX_CREW_ROWS = 50;
 const MAX_OWNER_LINES = 20;
 
+const CROSS_CUTTING = 'cross-cutting';
+const NO_COMPONENT = 'no component';
+
+type Group = { key: string; heading: string };
+
+/**
+ * Crew rows by component when the project has components: one group per component in config
+ * order, then work on several components, then work on none. Keys of the last two are no ids.
+ */
+function grouped(rows: BoardCrew[], state: BoardState): { crew: BoardCrew; group?: Group }[] {
+  const components = state.components ?? [];
+  if (components.length === 0) return rows.map((crew) => ({ crew }));
+  const names = new Map(components.map((c) => [c.id, c.name]));
+  const order = [...components.map((c) => c.id), '#cross', '#none'];
+  const groupOf = (c: BoardCrew): Group => {
+    const ids = c.components ?? [];
+    if (ids.length > 1) return { key: '#cross', heading: CROSS_CUTTING };
+    const name = names.get(ids[0] ?? '');
+    return name === undefined
+      ? { key: '#none', heading: NO_COMPONENT }
+      : { key: ids[0] as string, heading: name };
+  };
+  return rows
+    .map((crew) => ({ crew, group: groupOf(crew) }))
+    .sort((a, b) => order.indexOf(a.group.key) - order.indexOf(b.group.key));
+}
+
 function crewLines(state: BoardState, columns: number, nowMs: number): Line[] {
   const rows = state.crew.length > 10 ? state.crew.filter((c) => c.state !== 'done') : state.crew;
   if (rows.length === 0) return [{ text: 'No crew running.', tone: 'dim' }];
   const out: Line[] = [];
-  for (const c of rows.slice(0, MAX_CREW_ROWS)) {
+  let shown: string | undefined;
+  for (const { crew: c, group } of grouped(rows, state).slice(0, MAX_CREW_ROWS)) {
+    if (group !== undefined && group.key !== shown) {
+      out.push({ text: group.heading, tone: 'head' });
+      shown = group.key;
+    }
     const look = LOOK[c.state];
     const pr = c.pr === undefined ? '' : `#${c.pr}`;
     const runtime = runtimeOf(c, nowMs);

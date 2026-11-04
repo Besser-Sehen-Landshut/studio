@@ -1,5 +1,6 @@
-import type { Board, WorkItem } from './board.js';
+import { type Board, componentsOf, type WorkItem } from './board.js';
 import type { StudioConfig } from './config.js';
+import { touchesOverlap } from './glob.js';
 
 /** CI capacity snapshot (produced by the capacity module). */
 export type Capacity = {
@@ -31,6 +32,8 @@ const BUILD_TYPES: readonly WorkItem['type'][] = ['feature', 'fix', 'chore'];
 /** Deferral of every build after the first in one plan; a launch of that one item may still start it. */
 export const ONE_BUILD_PER_PLAN = 'host load: one build start per plan';
 const ACTIVE: readonly WorkItem['status'][] = ['assigned', 'in_progress', 'in_review', 'queued'];
+/** What counts against a component's `wip`, as against a role's. */
+const COMPONENT_ACTIVE: readonly WorkItem['status'][] = ['assigned', 'in_progress'];
 
 /** Definition of Ready: title, dod, size, role and repo; features also need a plan. */
 export function isReady(item: WorkItem): { ok: boolean; missing: string[] } {
@@ -50,23 +53,6 @@ function compareIds(a: string, b: string): number {
   const pb = /^(.*?)(\d+)$/.exec(b);
   if (pa && pb && pa[1] === pb[1]) return Number(pa[2]) - Number(pb[2]);
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-function staticPrefix(glob: string): string {
-  const i = glob.search(/[*?[{]/);
-  let head = i === -1 ? glob : glob.slice(0, i);
-  // A glob starting mid-segment (`src/foo*`) cuts the prefix back to the last '/' (`src`).
-  if (i > 0 && glob[i - 1] !== '/') head = head.slice(0, head.lastIndexOf('/') + 1);
-  return head.replace(/\/+$/, '');
-}
-
-/** Two touches overlap if equal, or one static prefix equals / is a path-segment prefix of the other. Empty prefix overlaps everything. */
-function touchesOverlap(a: string, b: string): boolean {
-  if (a === b) return true;
-  const pa = staticPrefix(a);
-  const pb = staticPrefix(b);
-  if (pa === '' || pb === '') return true;
-  return pa === pb || pb.startsWith(`${pa}/`) || pa.startsWith(`${pb}/`);
 }
 
 function conflicts(a: WorkItem, b: WorkItem): boolean {
@@ -105,8 +91,9 @@ function cycleTainted(items: WorkItem[]): Set<string> {
  * Priority: LOWER number = higher priority (P1 before P2); ties by natural id order.
  * Only `ready` items are candidates. `blocked` lists candidates that cannot run for a non-limit
  * reason (not ready, cycle, unknown dependency, role not configured, owner only, waiting on
- * unmerged dependencies). Candidates held back only by role WIP, host load or an overlap go to
- * `deferred`, which callers may ignore. CI runner capacity does not hold a launch: a crew builds
+ * unmerged dependencies). Candidates held back only by role WIP, component WIP, host load or an
+ * overlap go to `deferred`, which callers may ignore. An item counts against the `wip` of every
+ * component it belongs to (`componentsOf`). CI runner capacity does not hold a launch: a crew builds
  * and tests in its own clone, and Studio gates CI load where it starts it, when `collect` opens
  * the pull request and in the merge queue. A plan starts at most one build item (fix, feature,
  * chore): the host load is a single, lagging reading. When several blocked reasons apply, the first of this order wins:
@@ -161,6 +148,29 @@ export function planAssignments(
     return roleSlots.get(role) as number;
   };
 
+  // Room per component with a wip: its limit less its items in assigned or in_progress.
+  const componentSlots = new Map<string, number>();
+  for (const c of config.components ?? []) {
+    if (c.wip !== undefined) componentSlots.set(c.id, c.wip);
+  }
+  const componentsByItem = new Map<string, string[]>();
+  const componentsFor = (item: WorkItem): string[] => {
+    if (!componentsByItem.has(item.id)) componentsByItem.set(item.id, componentsOf(item, config));
+    return componentsByItem.get(item.id) as string[];
+  };
+  const useComponents = (item: WorkItem) => {
+    if (componentSlots.size === 0) return;
+    for (const c of componentsFor(item)) {
+      const left = componentSlots.get(c);
+      if (left !== undefined) componentSlots.set(c, left - 1);
+    }
+  };
+  for (const i of board.items) if (COMPONENT_ACTIVE.includes(i.status)) useComponents(i);
+  const fullComponent = (item: WorkItem): string | undefined =>
+    componentSlots.size === 0
+      ? undefined
+      : componentsFor(item).find((c) => (componentSlots.get(c) ?? 1) <= 0);
+
   const active = board.items.filter((i) => ACTIVE.includes(i.status));
   const assign: WorkItem[] = [];
   const deferred: Plan['deferred'] = [];
@@ -173,18 +183,22 @@ export function planAssignments(
   const take = (item: WorkItem) => {
     planned.push(item);
     roleSlots.set(item.role, slotsFor(item.role) - 1);
+    useComponents(item);
     if (credentialSlots !== undefined) credentialSlots -= 1;
   };
 
   for (const item of eligible) {
     const isBuild = BUILD_TYPES.includes(item.type);
     const clash = [...active, ...planned].find((o) => conflicts(item, o));
+    const full = fullComponent(item);
     if (hold !== undefined) deferred.push({ id: item.id, reason: hold });
     else if (ciPending?.has(item.id)) deferred.push({ id: item.id, reason: CI_PENDING });
     else if (credentialSlots !== undefined && credentialSlots <= 0) {
       deferred.push({ id: item.id, reason: 'credential limit' });
     } else if (slotsFor(item.role) <= 0) deferred.push({ id: item.id, reason: 'role wip full' });
-    else if (isBuild && !capacity.hostOk) deferred.push({ id: item.id, reason: 'host load' });
+    else if (full !== undefined) {
+      deferred.push({ id: item.id, reason: `component ${full} wip full` });
+    } else if (isBuild && !capacity.hostOk) deferred.push({ id: item.id, reason: 'host load' });
     else if (clash) deferred.push({ id: item.id, reason: `overlaps ${clash.id}` });
     else if (isBuild && buildStarted) {
       deferred.push({ id: item.id, reason: ONE_BUILD_PER_PLAN });

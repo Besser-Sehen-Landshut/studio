@@ -67,6 +67,11 @@ const modelName = z.string().regex(MODEL_NAME_RE, 'not a model name');
 
 const ITEM_TYPES = ['feature', 'fix', 'chore', 'docs', 'research', 'review', 'release'] as const;
 
+const globSchema = z.string().superRefine((g, ctx) => {
+  const problem = globProblem(g);
+  if (problem !== undefined) ctx.addIssue({ code: 'custom', message: problem });
+});
+
 const roleSkillsSchema = z.strictObject({
   required: strList,
   allowed: strList,
@@ -75,14 +80,7 @@ const roleSkillsSchema = z.strictObject({
   when: z
     .array(
       z.strictObject({
-        paths: z
-          .array(
-            z.string().superRefine((g, ctx) => {
-              const problem = globProblem(g);
-              if (problem !== undefined) ctx.addIssue({ code: 'custom', message: problem });
-            }),
-          )
-          .optional(),
+        paths: z.array(globSchema).optional(),
         itemTypes: z.array(z.enum(ITEM_TYPES)).optional(),
         required: z.array(z.string()).optional(),
         allowed: z.array(z.string()).optional(),
@@ -122,43 +120,84 @@ export const ciSchema = z.strictObject({
   rhythm: z.strictObject({ buildWindow: z.string(), timezone: z.string() }).optional(),
 });
 
-export const studioConfigSchema = z.strictObject({
-  studio: z.literal(1),
-  primaryRepo: z.string().min(1),
-  repos: z.array(z.string().min(1)).min(1),
-  notify: z
-    .strictObject({
-      channel: z.string().min(1),
-      ownerOnly: z.boolean(),
-      irreversibleAnnounce: z.boolean(),
-    })
-    .optional(),
-  ci: ciSchema,
-  merge: z.strictObject({
-    strategy: z.enum(['studio-queue', 'native-queue']),
-    contractPaths: strList,
-    method: z.enum(['merge', 'squash', 'rebase']).default('merge'),
-  }),
-  // Partial record keyed by role template name; at least one role must be configured.
-  roles: z
-    .partialRecord(z.enum(ROLE_TEMPLATES), roleSchema)
-    .refine((r) => Object.keys(r).length > 0, 'at least one role is required'),
-  // Detected from manifest files and stored by `studio setup stack`.
-  stacks: z.array(z.string().min(1)).optional(),
-  sandbox: z.strictObject({ networkAllow: strList }).default({ networkAllow: [] }),
-  // Name of the env var that holds the least-privilege token (never the token itself).
-  crewToken: z.strictObject({ env: z.string().min(1) }).optional(),
-  // Opt-in: let a crew run start without the least-privilege token (default: refuse).
-  allowAmbientCredentials: z.boolean().default(false),
-  ownerOnly: strList,
-  deployCommands: strList,
-  // Workflows (file name or name) a crew session may start with `gh workflow run`.
-  crewAllowedWorkflows: strList,
-  // Refs a crew session may pass to `gh workflow run --ref`; empty = default branch only.
-  crewAllowedWorkflowRefs: strList,
-  // Base branches a pull request may be reviewed against; empty = default branch only.
-  reviewBases: strList,
+/** A component id. Same rule as in board.ts (a test keeps them equal). */
+export const COMPONENT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+
+// A part of the product developed and released on its own: an API server, a desktop app, a web
+// app in a second repo. Items belong to one or several (cross-cutting work).
+const componentSchema = z.strictObject({
+  id: z.string().regex(COMPONENT_ID_RE, 'must match ^[a-z][a-z0-9-]{0,31}$'),
+  name: z
+    .string()
+    .min(1)
+    .max(100)
+    .regex(/^[^\p{Cc}\p{Cf}]+$/u, 'one line of at most 100 characters'),
+  repo: z.string().min(1),
+  paths: z.array(globSchema).min(1),
+  // Most items of this component in assigned or in_progress at once, on top of role wip.
+  wip: z.number().int().positive().optional(),
 });
+export type ComponentConfig = z.infer<typeof componentSchema>;
+
+export const studioConfigSchema = z
+  .strictObject({
+    studio: z.literal(1),
+    primaryRepo: z.string().min(1),
+    repos: z.array(z.string().min(1)).min(1),
+    notify: z
+      .strictObject({
+        channel: z.string().min(1),
+        ownerOnly: z.boolean(),
+        irreversibleAnnounce: z.boolean(),
+      })
+      .optional(),
+    ci: ciSchema,
+    merge: z.strictObject({
+      strategy: z.enum(['studio-queue', 'native-queue']),
+      contractPaths: strList,
+      method: z.enum(['merge', 'squash', 'rebase']).default('merge'),
+    }),
+    // Partial record keyed by role template name; at least one role must be configured.
+    roles: z
+      .partialRecord(z.enum(ROLE_TEMPLATES), roleSchema)
+      .refine((r) => Object.keys(r).length > 0, 'at least one role is required'),
+    // Detected from manifest files and stored by `studio setup stack`.
+    stacks: z.array(z.string().min(1)).optional(),
+    sandbox: z.strictObject({ networkAllow: strList }).default({ networkAllow: [] }),
+    // Name of the env var that holds the least-privilege token (never the token itself).
+    crewToken: z.strictObject({ env: z.string().min(1) }).optional(),
+    // Opt-in: let a crew run start without the least-privilege token (default: refuse).
+    allowAmbientCredentials: z.boolean().default(false),
+    ownerOnly: strList,
+    deployCommands: strList,
+    // Workflows (file name or name) a crew session may start with `gh workflow run`.
+    crewAllowedWorkflows: strList,
+    // Refs a crew session may pass to `gh workflow run --ref`; empty = default branch only.
+    crewAllowedWorkflowRefs: strList,
+    // Base branches a pull request may be reviewed against; empty = default branch only.
+    reviewBases: strList,
+    components: z.array(componentSchema).min(1).optional(),
+  })
+  .superRefine((cfg, ctx) => {
+    const seen = new Set<string>();
+    for (const [i, c] of (cfg.components ?? []).entries()) {
+      if (seen.has(c.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['components', i, 'id'],
+          message: `duplicate component id ${c.id}`,
+        });
+      }
+      seen.add(c.id);
+      if (!cfg.repos.includes(c.repo)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['components', i, 'repo'],
+          message: 'must be one of repos',
+        });
+      }
+    }
+  });
 
 export type StudioConfig = z.infer<typeof studioConfigSchema>;
 

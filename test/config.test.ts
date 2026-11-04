@@ -312,3 +312,54 @@ describe('model settings', () => {
     expect(() => load(`{ model: ok, wip: 1, types: { docs: "${m}" } }`)).toThrow();
   });
 });
+
+describe('components', () => {
+  const TWO_REPOS = MINIMAL.replace('repos: [org/app]', 'repos: [org/app, org/web]');
+  const withComponents = (block: string) => `${TWO_REPOS}components:\n${block}`;
+  const API = '  - { id: api, name: API server, repo: org/app, paths: ["server/**"], wip: 1 }\n';
+  const one = (fields: string) =>
+    `  - { id: api, name: x, repo: org/app, paths: ["a/**"]${fields} }\n`;
+
+  it('leaves them out when the block is absent', () => {
+    expect(loadConfig(project(MINIMAL)).components).toBeUndefined();
+  });
+
+  it('reads id, name, repo, paths and wip', () => {
+    const cfg = loadConfig(
+      project(
+        withComponents(`${API}  - { id: web, name: Web app, repo: org/web, paths: ["**"] }\n`),
+      ),
+    );
+    expect(cfg.components).toEqual([
+      { id: 'api', name: 'API server', repo: 'org/app', paths: ['server/**'], wip: 1 },
+      { id: 'web', name: 'Web app', repo: 'org/web', paths: ['**'] },
+    ]);
+  });
+
+  it.each([
+    ['a capitalised id', one('').replace('id: api', 'id: Api'), /components\.0\.id/],
+    [
+      'an id of 33 characters',
+      one('').replace('id: api', `id: ${'a'.repeat(33)}`),
+      /components\.0\.id/,
+    ],
+    [
+      'a repo outside repos',
+      one('').replace('org/app', 'org/other'),
+      /components\.0\.repo: must be one of repos/,
+    ],
+    ['empty paths', one('').replace('["a/**"]', '[]'), /components\.0\.paths/],
+    ['a refused glob', one('').replace('a/**', 'a/{b,{c}}'), /nested braces/],
+    ['a zero wip', one(', wip: 0'), /components\.0\.wip/],
+    [
+      'a name with a line break',
+      one('').replace('name: x', 'name: "a\\nb"'),
+      /components\.0\.name/,
+    ],
+    ['an unknown key', one(', owner: me'), /components\.0\.owner: unknown key/],
+    ['a duplicate id', `${API}${API}`, /components\.1\.id: duplicate component id api/],
+    ['an empty list', ' []\n', /components: /],
+  ])('refuses %s', (_, block, message) => {
+    expect(() => loadConfig(project(withComponents(block)))).toThrow(message);
+  });
+});

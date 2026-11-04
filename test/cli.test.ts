@@ -114,7 +114,7 @@ interface Fx {
   owner: string;
 }
 
-function makeFx(items: ItemSpec[]): Fx {
+function makeFx(items: ItemSpec[], studioYaml: string = STUDIO_YAML): Fx {
   const base = join(root, `p${n++}`);
   mkdirSync(base);
   const home = join(base, 'home');
@@ -129,7 +129,7 @@ function makeFx(items: ItemSpec[]): Fx {
   git(project, 'commit', '-q', '-m', 'init');
   git(project, 'push', '-q', 'origin', 'main');
   mkdirSync(join(project, '.studio'));
-  writeFileSync(join(project, '.studio', 'studio.yaml'), STUDIO_YAML);
+  writeFileSync(join(project, '.studio', 'studio.yaml'), studioYaml);
   writeFileSync(
     join(project, '.studio', 'board.yaml'),
     `items:\n${items.map(itemYaml).join('\n')}\n`,
@@ -3097,5 +3097,180 @@ describe('collect reads only the report this run was told to write', () => {
     const r = await collect(fx);
     expect(r.code).toBe(1);
     expect(r.err).toContain('head_sha');
+  });
+});
+
+describe('components in the CLI', () => {
+  // APP-n touches app-n/**: APP-1 and APP-2 are api, APP-3 desktop, APP-4 both, APP-5 none.
+  const COMPONENTS_YAML = `${STUDIO_YAML.replace('wip: 2', 'wip: 5')}components:
+  - { id: api, name: API server, repo: org/app, paths: ["app-1/**", "app-2/**", "app-4/**"], wip: 1 }
+  - { id: desktop, name: Desktop app, repo: org/app, paths: ["app-3/**", "app-4/**"] }
+`;
+  const docs = (id: string): ItemSpec => ({ id, type: 'docs' });
+  const fxWith = (items: ItemSpec[] = ['APP-1', 'APP-2', 'APP-3', 'APP-4', 'APP-5'].map(docs)) =>
+    makeFx(items, COMPONENTS_YAML);
+  const quiet = () => fakePorts(fakeGh().gh).ports;
+
+  it('board shows a component column and filters by component', async () => {
+    const fx = fxWith();
+    const ports = quiet();
+    const t = await cli(fx, ports, 'board');
+    expect(t.out.split('\n')[0]).toMatch(
+      /^ID\s+STATUS\s+ROLE\s+TYPE\s+PRIORITY\s+COMPONENT\s+TITLE$/,
+    );
+    expect(t.out).toMatch(/APP-1\s+ready\s+builder\s+docs\s+1\s+api\s+Item APP-1/);
+    expect(t.out).toMatch(/APP-4\s+.*\s+api,desktop\s+Item APP-4/);
+    expect(t.out).toMatch(/APP-5\s+.*\s+-\s+Item APP-5/);
+    const f = await cli(fx, ports, 'board', '--component', 'desktop');
+    expect(f.out).toContain('APP-3');
+    expect(f.out).toContain('APP-4');
+    expect(f.out).not.toContain('APP-1');
+    const j = await cli(fx, ports, 'board', '--json', '--component', 'api');
+    expect(
+      JSON.parse(j.out).map((i: { id: string; components: string[] }) => [i.id, i.components]),
+    ).toEqual([
+      ['APP-1', ['api']],
+      ['APP-2', ['api']],
+      ['APP-4', ['api', 'desktop']],
+    ]);
+  });
+
+  it('board refuses an unknown component and --component on other commands', async () => {
+    const fx = fxWith();
+    const ports = quiet();
+    const r = await cli(fx, ports, 'board', '--component', 'mobile');
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('unknown component mobile');
+    expect((await cli(fx, ports, 'status', '--component', 'api')).code).toBe(1);
+  });
+
+  it('refuses a board item naming an unknown component', async () => {
+    const fx = makeFx([{ id: 'APP-1', extra: ['    component: mobile'] }], COMPONENTS_YAML);
+    const r = await cli(fx, quiet(), 'board');
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('APP-1: unknown component mobile');
+  });
+
+  it('board without components has no component column and refuses --component', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    const ports = quiet();
+    const t = await cli(fx, ports, 'board');
+    expect(t.out).not.toContain('COMPONENT');
+    expect(JSON.parse((await cli(fx, ports, 'board', '--json')).out)[0]).not.toHaveProperty(
+      'components',
+    );
+    expect((await cli(fx, ports, 'board', '--component', 'api')).code).toBe(1);
+  });
+
+  it('plan names the components of each assigned item and holds a full component', async () => {
+    // Two crews at once per credential label by default, so four items here, not five.
+    const fx = fxWith(['APP-1', 'APP-2', 'APP-4', 'APP-5'].map(docs));
+    const r = await cli(fx, quiet(), 'plan');
+    expect(r.code).toBe(0);
+    const plan = JSON.parse(r.out);
+    expect(
+      plan.assign.map((a: { id: string; components: string[] }) => [a.id, a.components]),
+    ).toEqual([
+      ['APP-1', ['api']],
+      ['APP-5', []],
+    ]);
+    expect(plan.deferred).toEqual([
+      { id: 'APP-2', reason: 'component api wip full' },
+      { id: 'APP-4', reason: 'component api wip full' },
+    ]);
+  });
+
+  it('plan output is unchanged without components', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    const plan = JSON.parse((await cli(fx, quiet(), 'plan')).out);
+    expect(Object.keys(plan.assign[0])).toEqual(['id', 'title', 'role', 'solutions']);
+  });
+
+  it('status shows the component of each crew', async () => {
+    const fx = fxWith([docs('APP-4')]);
+    const ports = quiet();
+    expect((await cli(fx, ports, 'launch', 'APP-4')).code).toBe(0);
+    const t = await cli(fx, ports, 'status');
+    expect(t.out.split('\n')[0]).toMatch(/^ITEM\s+NAME\s+ROLE\s+PID\s+ALIVE\s+STATUS\s+COMPONENT$/);
+    expect(t.out).toMatch(/APP-4\s+.*\s+assigned\s+api,desktop/);
+    const j = JSON.parse((await cli(fx, ports, 'status', '--json')).out);
+    expect(j[0]).toMatchObject({ item: 'APP-4', components: ['api', 'desktop'] });
+  });
+
+  it('status stays silent about a config it cannot read, as before components', async () => {
+    const fx = fxWith([docs('APP-1')]);
+    const ports = quiet();
+    expect((await cli(fx, ports, 'launch', 'APP-1')).code).toBe(0);
+    writeFileSync(join(fx.project, '.studio', 'studio.yaml'), 'studio: [broken\n');
+    const r = await cli(fx, ports, 'status');
+    expect(r.code).toBe(0);
+    expect(r.err).toBe('');
+    expect(r.out.split('\n')[0]).toMatch(/^ITEM\s+NAME\s+ROLE\s+PID\s+ALIVE\s+STATUS$/);
+    expect(r.out).toContain('APP-1');
+  });
+
+  it('status without components keeps its columns', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    const ports = quiet();
+    expect((await cli(fx, ports, 'launch', 'APP-1')).code).toBe(0);
+    const t = await cli(fx, ports, 'status');
+    expect(t.out.split('\n')[0]).toMatch(/^ITEM\s+NAME\s+ROLE\s+PID\s+ALIVE\s+STATUS$/);
+    expect(JSON.parse((await cli(fx, ports, 'status', '--json')).out)[0]).not.toHaveProperty(
+      'components',
+    );
+  });
+
+  it('state gives the pane the components and those of each crew', async () => {
+    const fx = fxWith([docs('APP-1')]);
+    const ports = quiet();
+    expect((await cli(fx, ports, 'launch', 'APP-1')).code).toBe(0);
+    expect((await cli(fx, ports, 'state')).code).toBe(0);
+    const snap = JSON.parse(readFileSync(join(fx.state, 'state.json'), 'utf8'));
+    expect(snap.components).toEqual([
+      { id: 'api', name: 'API server' },
+      { id: 'desktop', name: 'Desktop app' },
+    ]);
+    expect(snap.crew[0]).toMatchObject({ item: 'APP-1', components: ['api'] });
+  });
+});
+
+describe('studio overview', () => {
+  it('lists the projects of the state base and writes nothing', async () => {
+    const fx = makeFx([{ id: 'APP-1' }, { id: 'APP-2', status: 'merged' }]);
+    const ports = fakePorts(fakeGh().gh).ports;
+    expect((await cli(fx, ports, 'launch', 'APP-1')).code).toBe(0);
+    const base = join(fx.state, '..');
+    const before = execFileSync('ls', ['-laR', base], { encoding: 'utf8' });
+    const owner = { isTerminal: true };
+    const j = await cliWith(fx, ports, owner, 'overview', '--json');
+    expect(j.code).toBe(0);
+    expect(JSON.parse(j.out)).toEqual([
+      expect.objectContaining({
+        name: 'clone',
+        items: { assigned: 1, merged: 1 },
+        crews: 1,
+        queued: 0,
+        problems: [],
+      }),
+    ]);
+    const t = await cliWith(fx, ports, owner, 'overview');
+    expect(t.out).toMatch(/clone\s+assigned 1, merged 1\s+1\s+0/);
+    expect(execFileSync('ls', ['-laR', base], { encoding: 'utf8' })).toBe(before);
+  });
+
+  it('is for the owner in a terminal, not for crew sessions', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    const ports = fakePorts(fakeGh().gh).ports;
+    const crew = { ...fx, env: { ...fx.env, STUDIO_ROLE: 'crew' } };
+    for (const [who, isTerminal] of [
+      [fx, false],
+      [crew, true],
+      [crew, false],
+    ] as const) {
+      const r = await cliWith(who, ports, { isTerminal }, 'overview');
+      expect(r.code).toBe(1);
+      expect(r.out).toBe('');
+      expect(r.err).toContain('overview is for the owner and needs a terminal');
+    }
   });
 });

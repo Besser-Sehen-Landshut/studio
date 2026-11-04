@@ -3,6 +3,34 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.7.0] - 2026-11-04
+
+Components: a product often has several parts that are developed and released on their own (an
+API server, a desktop app, an agent, a web app in a second repository). Until now a project had
+`repos:` and items had `repo` and `paths`, but the owner could not see or steer work per part, and
+nothing kept one part from taking all crews. Not tagged yet; the maintainers tag after the merge.
+
+### Added
+
+- `components:` in `studio.yaml`: `id`, `name`, `repo` (one of `repos`), `paths` (globs) and an
+  optional `wip`. Without it everything behaves as before.
+- Board items may name `component` or `components` (cross-cutting work); an id the config does not
+  know refuses the board, except on merged and dropped items. An item that names none belongs to
+  every component of its repo whose globs match or overlap one of its `paths` or `touches`, by the
+  same prefix rule as the planner's touch overlap (a bare directory stands for everything below it).
+  An item with neither belongs to no component unless it names one.
+- The planner holds a component at its `wip` (items in `assigned` or `in_progress`), on top of role
+  WIP; a cross-cutting item counts against each of its components, and a held item gets the reason
+  `component <id> wip full`.
+- `studio board --component <id>`; `board` and `status` show a component column and `plan` names
+  the components of each assigned item, all only when components are configured.
+- `state.json` carries the components and those of each crew; the pane groups the crew under a
+  heading per component, with "cross-cutting" and "no component" last.
+- `studio overview`: every project state root of this owner with items per status, running crews
+  and queued merges. It reads only (no reconcile, no migration of the owner state), reports a state
+  root it cannot read in full and goes on, skips a root whose marker names another root's project,
+  reads no linked `board.yaml`, strips control characters, and needs the owner in a terminal.
+
 ## [0.6.12] - 2026-11-04
 
 From the same real run: the fourth review approved the pull request, and `queue add` still

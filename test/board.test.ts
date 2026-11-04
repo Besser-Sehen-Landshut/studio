@@ -3,15 +3,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  COMPONENT_ID_RE as BOARD_COMPONENT_ID_RE,
   BOARD_ROLES,
   BoardError,
+  componentsOf,
   isLegalMove,
   loadBoard,
   saveBoard,
   TransitionError,
   transition,
+  type WorkItem,
 } from '../src/board.js';
-import { ROLE_TEMPLATES } from '../src/config.js';
+import {
+  COMPONENT_ID_RE,
+  ROLE_TEMPLATES,
+  type StudioConfig,
+  studioConfigSchema,
+} from '../src/config.js';
 
 const fixture = join(import.meta.dirname, 'fixtures', 'basic');
 const dirs: string[] = [];
@@ -236,5 +244,171 @@ describe('not_run_here on the board', () => {
       `items:\n${item('APP-1', '    not_run_here:\n      - { command: make e2e, missing: docker, reason: x }\n')}`,
     );
     expect(loadBoard(p).items[0]?.notRunHere).toHaveLength(1);
+  });
+});
+
+const baseConfig = {
+  studio: 1,
+  primaryRepo: 'org/app',
+  repos: ['org/app', 'org/web'],
+  ci: {
+    provider: 'github',
+    runners: 'github-hosted',
+    runnerLabels: [],
+    capacity: { total: 8, mergeMaxBusy: 5, checkTwiceSeconds: 30 },
+  },
+  merge: { strategy: 'studio-queue', contractPaths: [] },
+  roles: { builder: { model: 'm', wip: 2 } },
+};
+const withComponents: StudioConfig = studioConfigSchema.parse({
+  ...baseConfig,
+  components: [
+    { id: 'api', name: 'API server', repo: 'org/app', paths: ['server/**', 'shared/**'] },
+    { id: 'desktop', name: 'Desktop app', repo: 'org/app', paths: ['desktop/**', 'shared/**'] },
+    { id: 'web', name: 'Web app', repo: 'org/web', paths: ['**'] },
+  ],
+});
+const noComponents: StudioConfig = studioConfigSchema.parse(baseConfig);
+
+const work = (extra: Partial<WorkItem> = {}): WorkItem => ({
+  id: 'APP-1',
+  title: 't',
+  type: 'fix',
+  role: 'builder',
+  repo: 'org/app',
+  size: 'S',
+  priority: 1,
+  status: 'ready',
+  paths: [],
+  touches: [],
+  dependsOn: [],
+  dod: [],
+  history: [],
+  ...extra,
+});
+
+describe('componentsOf', () => {
+  it('keeps the id rule in sync with config', () => {
+    expect(BOARD_COMPONENT_ID_RE.source).toBe(COMPONENT_ID_RE.source);
+  });
+
+  it('infers a single component from a path in its repo', () => {
+    expect(componentsOf(work({ paths: ['server/main.rs'] }), withComponents)).toEqual(['api']);
+  });
+
+  it('infers from touches as well, and from globs in them', () => {
+    expect(componentsOf(work({ touches: ['desktop/src/**'] }), withComponents)).toEqual([
+      'desktop',
+    ]);
+  });
+
+  it('infers several components for cross-cutting work, in config order', () => {
+    expect(
+      componentsOf(work({ paths: ['desktop/a.ts'], touches: ['server/b.rs'] }), withComponents),
+    ).toEqual(['api', 'desktop']);
+    expect(componentsOf(work({ paths: ['shared/types.ts'] }), withComponents)).toEqual([
+      'api',
+      'desktop',
+    ]);
+  });
+
+  it('treats a bare directory in touches as everything below it', () => {
+    expect(componentsOf(work({ touches: ['server'] }), withComponents)).toEqual(['api']);
+    expect(componentsOf(work({ touches: ['server/'] }), withComponents)).toEqual(['api']);
+  });
+
+  it('matches a touch glob that overlaps a component glob, either way round', () => {
+    const narrow: StudioConfig = studioConfigSchema.parse({
+      ...baseConfig,
+      components: [{ id: 'api', name: 'API server', repo: 'org/app', paths: ['server/src/**'] }],
+    });
+    // Broader than the component: it may touch the component's files.
+    expect(componentsOf(work({ touches: ['server/**'] }), narrow)).toEqual(['api']);
+    expect(componentsOf(work({ touches: ['server'] }), narrow)).toEqual(['api']);
+    // A wildcard segment inside the component.
+    expect(componentsOf(work({ touches: ['server/*/x'] }), withComponents)).toEqual(['api']);
+    // A glob without a static prefix may touch anything in its repo.
+    expect(componentsOf(work({ touches: ['**/*.ts'] }), withComponents)).toEqual([
+      'api',
+      'desktop',
+    ]);
+    // Next to the component, not in it.
+    expect(componentsOf(work({ touches: ['serverless/**'] }), withComponents)).toEqual([]);
+    expect(componentsOf(work({ touches: ['server-old'] }), narrow)).toEqual([]);
+  });
+
+  it('returns nothing when no path matches', () => {
+    expect(componentsOf(work({ paths: ['docs/readme.md'] }), withComponents)).toEqual([]);
+    expect(componentsOf(work(), withComponents)).toEqual([]);
+  });
+
+  it('matches only components of the item repo', () => {
+    expect(componentsOf(work({ repo: 'org/web', paths: ['server/x'] }), withComponents)).toEqual([
+      'web',
+    ]);
+    expect(componentsOf(work({ repo: 'org/other', paths: ['server/x'] }), withComponents)).toEqual(
+      [],
+    );
+  });
+
+  it('takes the components an item names over inference', () => {
+    expect(componentsOf(work({ component: 'web', paths: ['server/x'] }), withComponents)).toEqual([
+      'web',
+    ]);
+    expect(
+      componentsOf(work({ components: ['desktop', 'api', 'desktop'] }), withComponents),
+    ).toEqual(['desktop', 'api']);
+  });
+
+  it('is empty without components in the config', () => {
+    expect(componentsOf(work({ paths: ['server/x'], component: 'api' }), noComponents)).toEqual([]);
+  });
+});
+
+describe('components on the board', () => {
+  it('loads and saves component and components', () => {
+    const p = project(
+      `items:\n${item('APP-1', '    component: api\n')}\n${item('APP-2', '    components: [api, web]\n')}`,
+    );
+    const board = loadBoard(p, withComponents);
+    expect(board.items[0]?.component).toBe('api');
+    expect(board.items[1]?.components).toEqual(['api', 'web']);
+    saveBoard(p, board);
+    expect(readFileSync(join(p, '.studio', 'board.yaml'), 'utf8')).toMatch(
+      /component: api[\s\S]*components:\n\s+- api\n\s+- web/,
+    );
+  });
+
+  it('refuses an unknown component id against the config', () => {
+    const p = project(`items:\n${item('APP-1', '    component: mobile\n')}`);
+    expect(() => loadBoard(p, withComponents)).toThrow(/APP-1: unknown component mobile/);
+    expect(() => loadBoard(p, noComponents)).toThrow(/APP-1: unknown component mobile/);
+    // Without a config the board alone cannot tell.
+    expect(loadBoard(p).items[0]?.component).toBe('mobile');
+  });
+
+  it('lets merged and dropped items keep a component id the config no longer has', () => {
+    const p = project(
+      `items:\n${item('APP-1', '    component: mobile\n').replace('status: ready', 'status: merged')}\n${item('APP-2', '    components: [api, mobile]\n').replace('status: ready', 'status: dropped')}`,
+    );
+    expect(loadBoard(p, withComponents).items.map((i) => i.status)).toEqual(['merged', 'dropped']);
+    const open = project(
+      `items:\n${item('APP-1', '    component: mobile\n').replace('status: ready', 'status: in_review')}`,
+    );
+    expect(() => loadBoard(open, withComponents)).toThrow(/APP-1: unknown component mobile/);
+  });
+
+  it('refuses an unknown id in components', () => {
+    const p = project(`items:\n${item('APP-1', '    components: [api, mobile]\n')}`);
+    expect(() => loadBoard(p, withComponents)).toThrow(/APP-1: unknown component mobile/);
+  });
+
+  it('refuses component and components together, and a malformed id', () => {
+    const both = project(`items:\n${item('APP-1', '    component: api\n    components: [web]\n')}`);
+    expect(() => loadBoard(both)).toThrow(/APP-1: set component or components, not both/);
+    const bad = project(`items:\n${item('APP-1', '    component: API\n')}`);
+    expect(() => loadBoard(bad)).toThrow(BoardError);
+    const empty = project(`items:\n${item('APP-1', '    components: []\n')}`);
+    expect(() => loadBoard(empty)).toThrow(BoardError);
   });
 });
