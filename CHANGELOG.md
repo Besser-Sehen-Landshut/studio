@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.7.2] - 2026-11-04
+
+From a real run: a crew ended without a usable report. Its item stayed `assigned`, `collect`
+could not move it, and `launch` takes only `ready` items, so the lead had to drop the item and
+add a copy. Not tagged yet; the maintainers tag after the merge.
+
+### Added
+
+- `studio stop <id> --requeue` stops the crew, or closes its record if it has ended, and puts an
+  `assigned` or `in_progress` item back to `ready` with a note. `launch` then takes it again.
+
 ## [0.7.1] - 2026-11-04
 
 From a real run: a builder crew stopped at once, reporting "Operation not permitted" when it

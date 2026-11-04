@@ -2069,6 +2069,22 @@ describe('studio CLI', () => {
         expect((await cli(fx, later, 'stop', 'APP-1')).code).toBe(0);
         expect(stopped).toEqual([4242]);
       });
+      it('--requeue puts the item back to ready, so launch takes it again', async () => {
+        // the real case: a crew ended without a usable report and its item stayed assigned
+        const { fx, later } = await launched(() => 'start-4242', false);
+        expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+        const r = await cli(fx, later, 'stop', 'APP-1', '--requeue');
+        expect(r.code).toBe(0);
+        expect(JSON.parse(r.out).status).toBe('ready');
+        expect(statusOf(fx, 'APP-1')?.status).toBe('ready');
+        expect(statusOf(fx, 'APP-1')?.notes?.some((n) => /back to ready/.test(n))).toBe(true);
+        expect((await cli(fx, later, 'launch', 'APP-1')).code).toBe(0);
+      });
+      it('without --requeue the item stays assigned', async () => {
+        const { fx, later } = await launched(() => 'start-4242', false);
+        expect((await cli(fx, later, 'stop', 'APP-1')).code).toBe(0);
+        expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+      });
     });
 
     describe('an open review blocks the queue, whatever the board says about approval', () => {

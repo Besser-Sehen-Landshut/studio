@@ -35415,7 +35415,7 @@ Commands:
   state                    Refresh state.json in the state root
   pause                    Owner only: nothing new starts or merges until resume
   resume                   Owner only: lift the pause
-  stop <id> [--release]    Stop a crew session; --release closes the record of one it cannot verify
+  stop <id> [--release] [--requeue]  Stop a crew session; --release closes the record of one it cannot verify, --requeue puts its item back to ready
   drop <id>                End an item; refuses while its crew runs
   link <id> <repo>#<pr>    Owner only, in a terminal: tie a pull request opened by hand to its item
   metrics                  Lead time, deploy frequency, change failure rate, time to restore
@@ -36247,12 +36247,35 @@ async function runCli(argv, deps) {
         latest[id] = { ...latest[id] ?? rec, stoppedAt };
         writeStateFile(root, join25(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
 `);
+        let requeued = false;
+        if (values.requeue === true) {
+          refuseCrew(deps.env);
+          await withBoardLock(root, ports.clock.now(), () => {
+            const fresh = loadBoard(project);
+            const now = findItem(fresh, id);
+            if (now.status !== "assigned" && now.status !== "in_progress") {
+              throw new Error(
+                `${id} is ${now.status}; only an assigned or in_progress item goes back to ready`
+              );
+            }
+            const moved = transition(fresh, id, "ready", BY, ports.clock.now());
+            saveBoard(
+              project,
+              withItem(moved, id, (i2) => ({
+                ...i2,
+                notes: [...i2.notes ?? [], `crew stopped at ${stoppedAt}; back to ready`]
+              }))
+            );
+          });
+          requeued = true;
+        }
         print({
           item: id,
           name: rec.name,
           pid: rec.pid,
           stoppedAt,
-          ...process14 === "verified" ? {} : { processGone: true }
+          ...process14 === "verified" ? {} : { processGone: true },
+          ...requeued ? { status: "ready" } : {}
         });
         return 0;
       }
@@ -36568,6 +36591,7 @@ function parseCli(argv) {
         json: { type: "boolean" },
         write: { type: "boolean" },
         release: { type: "boolean" },
+        requeue: { type: "boolean" },
         component: { type: "string" },
         help: { type: "boolean" }
       },
