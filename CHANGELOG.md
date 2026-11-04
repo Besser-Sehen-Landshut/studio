@@ -35,6 +35,16 @@ tagged yet; the maintainers tag after the merge.
 - The review routine and the report template ask for the file that defines the job, its name and
   `covers`, and say that a task runner may run the command.
 
+### Security
+
+- Check matching fails closed (found by an automated security review of this release's draft): a
+  check is the job when its name is `<job>` or `<job> (<leg>)`, the leg being everything inside
+  the outer parentheses, so a leg may hold a slash. A check of the same workflow whose name starts
+  with `<job>` and a space but does not parse that way (`<job> (1) / x`, `<job> / x`, `<job> (1`)
+  refuses the approval and the merge re-check; the draft dropped such checks, so a failing one
+  could fall out of "every instance passed". Names that continue without a space (`<job>-slow`)
+  are other jobs.
+
 ## [0.6.7] - 2026-11-03
 
 From a real run: a reviewer launched while the pull request's CI was still running found nothing

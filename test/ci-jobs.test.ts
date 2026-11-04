@@ -152,6 +152,39 @@ describe('the job gate', () => {
     expect((await gate({ base, checks: [pass('e2e (20) / x')] })).ok).toBe(false);
   });
 
+  it('a lookalike check that does not parse as the job refuses, never drops out', async () => {
+    const legs = [pass('e2e (20)'), pass('e2e (22)')];
+    for (const name of ['e2e (20) / x', 'e2e / x', 'e2e (20', 'e2e extra', 'e2e ()']) {
+      // the lookalike failed: dropping it would let the gate pass on the two green legs
+      const failed: Check = { name, bucket: 'fail', workflow: 'CI' };
+      expect(await gate({ checks: [...legs, failed] }), name).toMatchObject({
+        ok: false,
+        why: expect.stringMatching(/does not parse/),
+      });
+      expect(approvedJobsProblem([{ workflow: 'CI', job: 'e2e' }], [...legs, failed])).toMatch(
+        /does not parse/,
+      );
+    }
+    // another job whose name merely starts with the same letters is another job
+    expect((await gate({ checks: [...legs, { ...pass('e2e-slow'), bucket: 'fail' }] })).ok).toBe(
+      true,
+    );
+    // a lookalike in another workflow does not touch this one
+    expect(
+      (await gate({ checks: [...legs, { ...pass('e2e / x', 'Other'), bucket: 'fail' }] })).ok,
+    ).toBe(true);
+  });
+
+  it('a leg holding ` / ` or parentheses is a leg: everything inside the outer parentheses', async () => {
+    const legs = [pass('e2e (linux / x64)'), pass('e2e (node (22))')];
+    expect((await gate({ checks: legs })).ok).toBe(true);
+    const failing: Check = { name: 'e2e (linux / arm64)', bucket: 'fail', workflow: 'CI' };
+    expect(await gate({ checks: [...legs, failing] })).toMatchObject({
+      ok: false,
+      why: expect.stringMatching(/no passing check/),
+    });
+  });
+
   it('refuses a job that calls a reusable workflow: the called file and its job are named', async () => {
     const reusable = `name: CI
 on: pull_request
@@ -307,6 +340,29 @@ jobs:
       checks: [pass('Packages / packages')],
     });
     expect(r).toMatchObject({ ok: true, jobs: [{ workflow: 'CI', job: 'Packages / packages' }] });
+  });
+
+  it('a reusable job: a failing lookalike of `<caller> / <job>` refuses, a leg with ` / ` counts', async () => {
+    const legs = [
+      pass('core-server / core-server-tests (1)'),
+      pass('core-server / core-server-tests (2)'),
+    ];
+    for (const name of [
+      'core-server / core-server-tests / extra',
+      'core-server / core-server-tests (3',
+    ]) {
+      const r = await core({ checks: [...legs, { name, bucket: 'fail', workflow: 'CI' }] });
+      expect(r, name).toMatchObject({ ok: false, why: expect.stringMatching(/does not parse/) });
+    }
+    const slashLeg: Check = {
+      name: 'core-server / core-server-tests (a / b)',
+      bucket: 'fail',
+      workflow: 'CI',
+    };
+    expect(await core({ checks: [...legs, slashLeg] })).toMatchObject({
+      ok: false,
+      why: expect.stringMatching(/no passing check/),
+    });
   });
 
   it('a skipped, cancelled or missing leg is not a pass', async () => {

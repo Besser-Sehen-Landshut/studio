@@ -31289,12 +31289,25 @@ var WORKFLOWS_DIR = ".github/workflows/";
 var WORKFLOW_FILE = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/;
 var SHA = /^[0-9a-f]{40,64}$/i;
 var MAX_JOBS = 20;
-var instances = (checks, workflow, job) => checks.filter(
-  (c3) => c3.workflow !== void 0 && c3.workflow === workflow && (c3.name === job || c3.name.startsWith(`${job} (`) && c3.name.endsWith(")") && !c3.name.slice(job.length).includes(" / "))
-);
-var jobPassed = (checks, workflow, job) => {
+var instances = (checks, workflow, job) => {
+  const mine = [];
+  for (const c3 of checks) {
+    if (c3.workflow === void 0 || c3.workflow !== workflow) continue;
+    if (c3.name === job) {
+      mine.push(c3);
+      continue;
+    }
+    if (!c3.name.startsWith(`${job} `)) continue;
+    const rest = c3.name.slice(job.length);
+    if (rest.length > 3 && rest.startsWith(" (") && rest.endsWith(")")) mine.push(c3);
+    else return "ambiguous";
+  }
+  return mine;
+};
+var jobProblem = (checks, workflow, job) => {
   const mine = instances(checks, workflow, job);
-  return mine.length > 0 && mine.every((c3) => c3.bucket === "pass");
+  if (mine === "ambiguous") return "ambiguous";
+  return mine.length > 0 && mine.every((c3) => c3.bucket === "pass") ? void 0 : "not passed";
 };
 function runsOn(on6, event) {
   if (on6 === event) return true;
@@ -31443,7 +31456,11 @@ async function verifyNotRunHereJobs(o2) {
       return fail2("the job definition changed at the pull request head and the item is no CI item");
     }
     for (const t of atBase.targets) {
-      if (!jobPassed(o2.checks, t.workflow, t.job)) {
+      const problem = jobProblem(o2.checks, t.workflow, t.job);
+      if (problem === "ambiguous") {
+        return fail2("a check of the workflow has a name like the job that does not parse as it");
+      }
+      if (problem !== void 0) {
         return fail2("the job has no passing check on the pull request (missing or skipped)");
       }
       if (!jobs.some((j) => j.workflow === t.workflow && j.job === t.job)) jobs.push(t);
@@ -31455,7 +31472,11 @@ async function verifyNotRunHereJobs(o2) {
 }
 function approvedJobsProblem(jobs, checks) {
   for (const [i2, j] of jobs.entries()) {
-    if (!jobPassed(checks, j.workflow, j.job)) {
+    const problem = jobProblem(checks, j.workflow, j.job);
+    if (problem === "ambiguous") {
+      return `approved CI job ${i2 + 1} has a check whose name does not parse as the job: review it again`;
+    }
+    if (problem !== void 0) {
       return `approved CI job ${i2 + 1} has no passing check on the pull request now: review it again`;
     }
   }

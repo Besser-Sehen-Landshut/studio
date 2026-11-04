@@ -20,26 +20,43 @@ export type JobGate =
   | { ok: false; entry: number; why: string };
 
 /**
- * The checks of `job` in `workflow`: the job itself, or each instance of a matrix job, which
- * GitHub names `<job> (<leg>)`. For a job of a reusable workflow `job` is `<caller> / <called>`.
- * A leg holding ` / ` is a reusable call from a caller of that name, not a leg. Commit statuses
- * have no workflow and never count.
+ * The checks of `job` in `workflow`: `job` itself, or `job (<leg>)` for a matrix leg, the leg
+ * being everything inside the outer parentheses (it may hold ` / ` or parentheses). For a job of a
+ * reusable workflow `job` is `<caller> / <called>`. A check of that workflow whose name starts
+ * with `job` and a space but does not parse this way (`job (1) / x`, `job / x`, `job (1`) is
+ * ambiguous: the gate refuses rather than drop it, so a failing check can never fall out of
+ * "every instance passed". Names that go on without a space (`job-slow`) are other jobs. Commit
+ * statuses have no workflow and never count.
  */
-const instances = (checks: readonly Check[], workflow: string, job: string): Check[] =>
-  checks.filter(
-    (c) =>
-      c.workflow !== undefined &&
-      c.workflow === workflow &&
-      (c.name === job ||
-        (c.name.startsWith(`${job} (`) &&
-          c.name.endsWith(')') &&
-          !c.name.slice(job.length).includes(' / '))),
-  );
+const instances = (
+  checks: readonly Check[],
+  workflow: string,
+  job: string,
+): Check[] | 'ambiguous' => {
+  const mine: Check[] = [];
+  for (const c of checks) {
+    if (c.workflow === undefined || c.workflow !== workflow) continue;
+    if (c.name === job) {
+      mine.push(c);
+      continue;
+    }
+    if (!c.name.startsWith(`${job} `)) continue;
+    const rest = c.name.slice(job.length);
+    if (rest.length > 3 && rest.startsWith(' (') && rest.endsWith(')')) mine.push(c);
+    else return 'ambiguous';
+  }
+  return mine;
+};
 
-/** At least one instance of the job ran, and every one of them passed. */
-const jobPassed = (checks: readonly Check[], workflow: string, job: string): boolean => {
+/** Why the job's checks do not show it passed; undefined when at least one ran and all passed. */
+const jobProblem = (
+  checks: readonly Check[],
+  workflow: string,
+  job: string,
+): 'ambiguous' | 'not passed' | undefined => {
   const mine = instances(checks, workflow, job);
-  return mine.length > 0 && mine.every((c) => c.bucket === 'pass');
+  if (mine === 'ambiguous') return 'ambiguous';
+  return mine.length > 0 && mine.every((c) => c.bucket === 'pass') ? undefined : 'not passed';
 };
 
 type Job = Record<string, unknown>;
@@ -250,7 +267,11 @@ export async function verifyNotRunHereJobs(o: {
       return fail('the job definition changed at the pull request head and the item is no CI item');
     }
     for (const t of atBase.targets) {
-      if (!jobPassed(o.checks, t.workflow, t.job)) {
+      const problem = jobProblem(o.checks, t.workflow, t.job);
+      if (problem === 'ambiguous') {
+        return fail('a check of the workflow has a name like the job that does not parse as it');
+      }
+      if (problem !== undefined) {
         return fail('the job has no passing check on the pull request (missing or skipped)');
       }
       if (!jobs.some((j) => j.workflow === t.workflow && j.job === t.job)) jobs.push(t);
@@ -267,7 +288,11 @@ export function approvedJobsProblem(
   checks: readonly Check[],
 ): string | undefined {
   for (const [i, j] of jobs.entries()) {
-    if (!jobPassed(checks, j.workflow, j.job)) {
+    const problem = jobProblem(checks, j.workflow, j.job);
+    if (problem === 'ambiguous') {
+      return `approved CI job ${i + 1} has a check whose name does not parse as the job: review it again`;
+    }
+    if (problem !== undefined) {
       return `approved CI job ${i + 1} has no passing check on the pull request now: review it again`;
     }
   }
