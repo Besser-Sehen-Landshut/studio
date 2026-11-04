@@ -312,6 +312,31 @@ describe('componentsOf', () => {
     ]);
   });
 
+  it('treats a bare directory in touches as everything below it', () => {
+    expect(componentsOf(work({ touches: ['server'] }), withComponents)).toEqual(['api']);
+    expect(componentsOf(work({ touches: ['server/'] }), withComponents)).toEqual(['api']);
+  });
+
+  it('matches a touch glob that overlaps a component glob, either way round', () => {
+    const narrow: StudioConfig = studioConfigSchema.parse({
+      ...baseConfig,
+      components: [{ id: 'api', name: 'API server', repo: 'org/app', paths: ['server/src/**'] }],
+    });
+    // Broader than the component: it may touch the component's files.
+    expect(componentsOf(work({ touches: ['server/**'] }), narrow)).toEqual(['api']);
+    expect(componentsOf(work({ touches: ['server'] }), narrow)).toEqual(['api']);
+    // A wildcard segment inside the component.
+    expect(componentsOf(work({ touches: ['server/*/x'] }), withComponents)).toEqual(['api']);
+    // A glob without a static prefix may touch anything in its repo.
+    expect(componentsOf(work({ touches: ['**/*.ts'] }), withComponents)).toEqual([
+      'api',
+      'desktop',
+    ]);
+    // Next to the component, not in it.
+    expect(componentsOf(work({ touches: ['serverless/**'] }), withComponents)).toEqual([]);
+    expect(componentsOf(work({ touches: ['server-old'] }), narrow)).toEqual([]);
+  });
+
   it('returns nothing when no path matches', () => {
     expect(componentsOf(work({ paths: ['docs/readme.md'] }), withComponents)).toEqual([]);
     expect(componentsOf(work(), withComponents)).toEqual([]);
@@ -360,6 +385,17 @@ describe('components on the board', () => {
     expect(() => loadBoard(p, noComponents)).toThrow(/APP-1: unknown component mobile/);
     // Without a config the board alone cannot tell.
     expect(loadBoard(p).items[0]?.component).toBe('mobile');
+  });
+
+  it('lets merged and dropped items keep a component id the config no longer has', () => {
+    const p = project(
+      `items:\n${item('APP-1', '    component: mobile\n').replace('status: ready', 'status: merged')}\n${item('APP-2', '    components: [api, mobile]\n').replace('status: ready', 'status: dropped')}`,
+    );
+    expect(loadBoard(p, withComponents).items.map((i) => i.status)).toEqual(['merged', 'dropped']);
+    const open = project(
+      `items:\n${item('APP-1', '    component: mobile\n').replace('status: ready', 'status: in_review')}`,
+    );
+    expect(() => loadBoard(open, withComponents)).toThrow(/APP-1: unknown component mobile/);
   });
 
   it('refuses an unknown id in components', () => {

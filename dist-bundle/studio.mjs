@@ -27727,6 +27727,21 @@ function matchGlob(glob, path10) {
 function hostilePath(path10) {
   return path10.length > MAX_PATH_LENGTH || CONTROL.test(path10);
 }
+function staticPrefix(glob) {
+  const i2 = glob.search(/[*?[{]/);
+  let head = i2 === -1 ? glob : glob.slice(0, i2);
+  if (i2 > 0 && glob[i2 - 1] !== "/") head = head.slice(0, head.lastIndexOf("/") + 1);
+  let end = head.length;
+  while (end > 0 && head[end - 1] === "/") end--;
+  return head.slice(0, end);
+}
+function touchesOverlap(a2, b) {
+  if (a2 === b) return true;
+  const pa = staticPrefix(a2);
+  const pb = staticPrefix(b);
+  if (pa === "" || pb === "") return true;
+  return pa === pb || pb.startsWith(`${pa}/`) || pa.startsWith(`${pb}/`);
+}
 
 // src/config.ts
 var ROLE_TEMPLATES = ["builder", "reviewer", "designer", "researcher", "release"];
@@ -27846,7 +27861,7 @@ var studioConfigSchema = external_exports.strictObject({
   crewAllowedWorkflowRefs: strList,
   // Base branches a pull request may be reviewed against; empty = default branch only.
   reviewBases: strList,
-  components: external_exports.array(componentSchema).optional()
+  components: external_exports.array(componentSchema).min(1).optional()
 }).superRefine((cfg, ctx) => {
   const seen = /* @__PURE__ */ new Set();
   for (const [i2, c3] of (cfg.components ?? []).entries()) {
@@ -28182,7 +28197,7 @@ function loadBoard(dir, config2) {
     if (it.component !== void 0 && it.components !== void 0) {
       throw new BoardError(file2, `${it.id}: set component or components, not both`);
     }
-    if (config2 !== void 0) {
+    if (config2 !== void 0 && it.status !== "merged" && it.status !== "dropped") {
       const known = new Set((config2.components ?? []).map((c3) => c3.id));
       const unknown2 = namedComponents(it).find((c3) => !known.has(c3));
       if (unknown2 !== void 0) {
@@ -28199,7 +28214,9 @@ function componentsOf(item, config2) {
   const named = namedComponents(item);
   if (named.length > 0) return [...new Set(named)];
   const paths = [...item.paths, ...item.touches];
-  return components.filter((c3) => c3.repo === item.repo && paths.some((p) => c3.paths.some((g) => matchGlob(g, p)))).map((c3) => c3.id);
+  return components.filter(
+    (c3) => c3.repo === item.repo && paths.some((p) => c3.paths.some((g) => matchGlob(g, p) || touchesOverlap(g, p)))
+  ).map((c3) => c3.id);
 }
 var KEY_ORDER = [
   "id",
@@ -34733,7 +34750,8 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
 }
 
 // src/overview.ts
-var line = (e) => (e instanceof Error ? e.message : String(e)).replace(new RegExp("\\p{Cc}", "gu"), " ");
+var line = (e) => (e instanceof Error ? e.message : String(e)).replace(/[\p{Cc}\p{Cf}]/gu, " ");
+var INCONSISTENT_ROOT = "inconsistent state root: its marker names a project whose state root is another one";
 function markerProject(root) {
   const file2 = join22(root, "marker.json");
   try {
@@ -34754,13 +34772,25 @@ function markerProject(root) {
   }
   return p;
 }
+function itemCounts(project) {
+  const file2 = boardPath(project);
+  let plain = true;
+  try {
+    plain = lstatSync18(file2).isFile();
+  } catch {
+  }
+  if (!plain) throw new Error(`${file2}: board.yaml is not a plain file`);
+  const counts = {};
+  const board = loadBoard(project);
+  for (const s of ITEM_STATUSES) {
+    const n2 = board.items.filter((i2) => i2.status === s).length;
+    if (n2 > 0) counts[s] = n2;
+  }
+  return counts;
+}
 function readOne(root, alive) {
   const problems = [];
-  const out = {
-    name: basename5(root).replace(/^[0-9a-f]{16}-?/, "") || basename5(root),
-    stateRoot: root,
-    problems
-  };
+  const out = { name: line(basename5(root)), stateRoot: root, problems };
   let project;
   try {
     project = markerProject(root);
@@ -34768,17 +34798,15 @@ function readOne(root, alive) {
   } catch (e) {
     problems.push(line(e));
   }
+  if (project !== void 0 && stateDirName(project) !== basename5(root)) {
+    problems.push(INCONSISTENT_ROOT);
+    return out;
+  }
   if (project !== void 0) {
     out.project = project;
-    out.name = basename5(project) || out.name;
+    out.name = line(basename5(project)) || out.name;
     try {
-      const counts = {};
-      const board = loadBoard(project);
-      for (const s of ITEM_STATUSES) {
-        const n2 = board.items.filter((i2) => i2.status === s).length;
-        if (n2 > 0) counts[s] = n2;
-      }
-      out.items = counts;
+      out.items = itemCounts(project);
     } catch (e) {
       problems.push(line(e));
     }
@@ -34845,19 +34873,6 @@ function compareIds(a2, b) {
   const pb = /^(.*?)(\d+)$/.exec(b);
   if (pa && pb && pa[1] === pb[1]) return Number(pa[2]) - Number(pb[2]);
   return a2 < b ? -1 : a2 > b ? 1 : 0;
-}
-function staticPrefix(glob) {
-  const i2 = glob.search(/[*?[{]/);
-  let head = i2 === -1 ? glob : glob.slice(0, i2);
-  if (i2 > 0 && glob[i2 - 1] !== "/") head = head.slice(0, head.lastIndexOf("/") + 1);
-  return head.replace(/\/+$/, "");
-}
-function touchesOverlap(a2, b) {
-  if (a2 === b) return true;
-  const pa = staticPrefix(a2);
-  const pb = staticPrefix(b);
-  if (pa === "" || pb === "") return true;
-  return pa === pb || pb.startsWith(`${pa}/`) || pa.startsWith(`${pb}/`);
 }
 function conflicts(a2, b) {
   if (a2.conflictsWith?.includes(b.id) || b.conflictsWith?.includes(a2.id)) return true;
@@ -35389,7 +35404,7 @@ Commands:
   plan                     Dry-run the planner (JSON)
   launch <id>              Start a crew session for a planned item
   status                   Crew sessions and their board status
-  overview                 Owner only: every project of this owner, read only
+  overview                 Owner only, in a terminal: every project of this owner, read only
   collect <id>             Read a crew report and move the item
   queue add <repo>#<pr>    Put a reviewed PR into the merge queue
   queue run                Merge the queued PRs, one at a time
@@ -35680,9 +35695,8 @@ async function runCli(argv, deps) {
         let config2;
         try {
           config2 = loadConfig(project);
-        } catch (e) {
-          stderr(`warning: ${e.message}
-`);
+        } catch {
+          config2 = void 0;
         }
         const board = loadBoard(project, config2);
         const root = stateRoot();
@@ -35730,7 +35744,10 @@ async function runCli(argv, deps) {
         return 0;
       }
       case "overview": {
-        refuseCrew(deps.env);
+        if (deps.env.STUDIO_ROLE === "crew" || deps.isTerminal !== true) {
+          stderr("studio: overview is for the owner and needs a terminal; nothing read\n");
+          return 1;
+        }
         if (rest.length > 0) throw new UsageError("overview takes no arguments");
         const list2 = readOverview(stateBaseFor(owner), (pid) => ports.claude.alive(pid));
         if (json2) print(list2);

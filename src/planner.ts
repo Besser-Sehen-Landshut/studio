@@ -1,5 +1,6 @@
 import { type Board, componentsOf, type WorkItem } from './board.js';
 import type { StudioConfig } from './config.js';
+import { touchesOverlap } from './glob.js';
 
 /** CI capacity snapshot (produced by the capacity module). */
 export type Capacity = {
@@ -52,23 +53,6 @@ function compareIds(a: string, b: string): number {
   const pb = /^(.*?)(\d+)$/.exec(b);
   if (pa && pb && pa[1] === pb[1]) return Number(pa[2]) - Number(pb[2]);
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-function staticPrefix(glob: string): string {
-  const i = glob.search(/[*?[{]/);
-  let head = i === -1 ? glob : glob.slice(0, i);
-  // A glob starting mid-segment (`src/foo*`) cuts the prefix back to the last '/' (`src`).
-  if (i > 0 && glob[i - 1] !== '/') head = head.slice(0, head.lastIndexOf('/') + 1);
-  return head.replace(/\/+$/, '');
-}
-
-/** Two touches overlap if equal, or one static prefix equals / is a path-segment prefix of the other. Empty prefix overlaps everything. */
-function touchesOverlap(a: string, b: string): boolean {
-  if (a === b) return true;
-  const pa = staticPrefix(a);
-  const pb = staticPrefix(b);
-  if (pa === '' || pb === '') return true;
-  return pa === pb || pb.startsWith(`${pa}/`) || pa.startsWith(`${pb}/`);
 }
 
 function conflicts(a: WorkItem, b: WorkItem): boolean {

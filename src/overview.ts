@@ -1,7 +1,7 @@
 import { lstatSync, readFileSync } from 'node:fs';
 import { basename, isAbsolute, join } from 'node:path';
-import { ITEM_STATUSES, type ItemStatus, loadBoard } from './board.js';
-import { OWNER_DIR, projectStateRoots } from './paths.js';
+import { boardPath, ITEM_STATUSES, type ItemStatus, loadBoard } from './board.js';
+import { OWNER_DIR, projectStateRoots, stateDirName } from './paths.js';
 import { loadQueue } from './queue.js';
 import { readCrewRecords } from './state.js';
 
@@ -20,9 +20,12 @@ export interface ProjectOverview {
   problems: string[];
 }
 
-/** A problem as one line: control characters out, so a file cannot draw on the terminal. */
+/** One line without control or format characters, so no file or name can draw on the terminal. */
 const line = (e: unknown): string =>
-  (e instanceof Error ? e.message : String(e)).replace(/\p{Cc}/gu, ' ');
+  (e instanceof Error ? e.message : String(e)).replace(/[\p{Cc}\p{Cf}]/gu, ' ');
+
+export const INCONSISTENT_ROOT =
+  'inconsistent state root: its marker names a project whose state root is another one';
 
 function markerProject(root: string): string | undefined {
   const file = join(root, 'marker.json');
@@ -45,13 +48,28 @@ function markerProject(root: string): string | undefined {
   return p;
 }
 
+/** Reads the project's board, refusing a board.yaml that is a link or no plain file. */
+function itemCounts(project: string): Partial<Record<ItemStatus, number>> {
+  const file = boardPath(project);
+  let plain = true;
+  try {
+    plain = lstatSync(file).isFile();
+  } catch {
+    // Missing: loadBoard says so.
+  }
+  if (!plain) throw new Error(`${file}: board.yaml is not a plain file`);
+  const counts: Partial<Record<ItemStatus, number>> = {};
+  const board = loadBoard(project);
+  for (const s of ITEM_STATUSES) {
+    const n = board.items.filter((i) => i.status === s).length;
+    if (n > 0) counts[s] = n;
+  }
+  return counts;
+}
+
 function readOne(root: string, alive: (pid: number) => boolean): ProjectOverview {
   const problems: string[] = [];
-  const out: ProjectOverview = {
-    name: basename(root).replace(/^[0-9a-f]{16}-?/, '') || basename(root),
-    stateRoot: root,
-    problems,
-  };
+  const out: ProjectOverview = { name: line(basename(root)), stateRoot: root, problems };
   let project: string | undefined;
   try {
     project = markerProject(root);
@@ -59,17 +77,16 @@ function readOne(root: string, alive: (pid: number) => boolean): ProjectOverview
   } catch (e) {
     problems.push(line(e));
   }
+  // A marker copied into another root, or edited, names a project this root does not belong to.
+  if (project !== undefined && stateDirName(project) !== basename(root)) {
+    problems.push(INCONSISTENT_ROOT);
+    return out;
+  }
   if (project !== undefined) {
     out.project = project;
-    out.name = basename(project) || out.name;
+    out.name = line(basename(project)) || out.name;
     try {
-      const counts: Partial<Record<ItemStatus, number>> = {};
-      const board = loadBoard(project);
-      for (const s of ITEM_STATUSES) {
-        const n = board.items.filter((i) => i.status === s).length;
-        if (n > 0) counts[s] = n;
-      }
-      out.items = counts;
+      out.items = itemCounts(project);
     } catch (e) {
       problems.push(line(e));
     }

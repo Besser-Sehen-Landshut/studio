@@ -146,7 +146,7 @@ Commands:
   plan                     Dry-run the planner (JSON)
   launch <id>              Start a crew session for a planned item
   status                   Crew sessions and their board status
-  overview                 Owner only: every project of this owner, read only
+  overview                 Owner only, in a terminal: every project of this owner, read only
   collect <id>             Read a crew report and move the item
   queue add <repo>#<pr>    Put a reviewed PR into the merge queue
   queue run                Merge the queued PRs, one at a time
@@ -474,12 +474,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
       case 'status': {
         await reconcile();
-        // The heartbeat runs this: a config that cannot be read costs the component column only.
+        // Status never needed the config: one that cannot be read costs the component column
+        // only, silently, so the heartbeat's output stays as it was.
         let config: StudioConfig | undefined;
         try {
           config = loadConfig(project);
-        } catch (e) {
-          stderr(`warning: ${(e as Error).message}\n`);
+        } catch {
+          config = undefined;
         }
         const board = loadBoard(project, config);
         const root = stateRoot();
@@ -529,7 +530,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
       case 'overview': {
         // Read only across projects: no reconcile, no migration of the owner state, no state root.
-        refuseCrew(deps.env);
+        // It shows every project of the owner, so, like pause, it needs the owner in a terminal.
+        if (deps.env.STUDIO_ROLE === 'crew' || deps.isTerminal !== true) {
+          stderr('studio: overview is for the owner and needs a terminal; nothing read\n');
+          return 1;
+        }
         if (rest.length > 0) throw new UsageError('overview takes no arguments');
         const list = readOverview(stateBaseFor(owner), (pid) => ports.claude.alive(pid));
         if (json) print(list);

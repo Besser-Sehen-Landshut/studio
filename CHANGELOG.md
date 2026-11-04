@@ -15,8 +15,10 @@ nothing kept one part from taking all crews. Not tagged yet; the maintainers tag
 - `components:` in `studio.yaml`: `id`, `name`, `repo` (one of `repos`), `paths` (globs) and an
   optional `wip`. Without it everything behaves as before.
 - Board items may name `component` or `components` (cross-cutting work); an id the config does not
-  know refuses the board. An item that names none belongs to every component of its repo whose
-  globs match one of its `paths` or `touches`.
+  know refuses the board, except on merged and dropped items. An item that names none belongs to
+  every component of its repo whose globs match or overlap one of its `paths` or `touches`, by the
+  same prefix rule as the planner's touch overlap (a bare directory stands for everything below it).
+  An item with neither belongs to no component unless it names one.
 - The planner holds a component at its `wip` (items in `assigned` or `in_progress`), on top of role
   WIP; a cross-cutting item counts against each of its components, and a held item gets the reason
   `component <id> wip full`.
@@ -26,7 +28,8 @@ nothing kept one part from taking all crews. Not tagged yet; the maintainers tag
   heading per component, with "cross-cutting" and "no component" last.
 - `studio overview`: every project state root of this owner with items per status, running crews
   and queued merges. It reads only (no reconcile, no migration of the owner state), reports a state
-  root it cannot read in full and goes on, and refuses crew sessions.
+  root it cannot read in full and goes on, skips a root whose marker names another root's project,
+  reads no linked `board.yaml`, strips control characters, and needs the owner in a terminal.
 
 ## [0.6.12] - 2026-11-04
 

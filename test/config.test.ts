@@ -358,6 +358,7 @@ describe('components', () => {
     ],
     ['an unknown key', one(', owner: me'), /components\.0\.owner: unknown key/],
     ['a duplicate id', `${API}${API}`, /components\.1\.id: duplicate component id api/],
+    ['an empty list', ' []\n', /components: /],
   ])('refuses %s', (_, block, message) => {
     expect(() => loadConfig(project(withComponents(block)))).toThrow(message);
   });

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { Document, isMap, isSeq, parseDocument, parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import type { StudioConfig } from './config.js';
-import { matchGlob } from './glob.js';
+import { matchGlob, touchesOverlap } from './glob.js';
 
 export const ITEM_STATUSES = [
   'ready',
@@ -210,7 +210,8 @@ export function loadBoard(dir: string, config?: StudioConfig): Board {
     if (it.component !== undefined && it.components !== undefined) {
       throw new BoardError(file, `${it.id}: set component or components, not both`);
     }
-    if (config !== undefined) {
+    // A merged or dropped item keeps the id it had as history, even after the component went.
+    if (config !== undefined && it.status !== 'merged' && it.status !== 'dropped') {
       const known = new Set((config.components ?? []).map((c) => c.id));
       const unknown = namedComponents(it).find((c) => !known.has(c));
       if (unknown !== undefined) {
@@ -226,8 +227,11 @@ const namedComponents = (item: WorkItem): string[] =>
 
 /**
  * The components an item belongs to, in config order for inferred ones. Named ones win; otherwise
- * every component of the item's repo one of whose globs matches one of its paths or touches. More
- * than one means cross-cutting work; none, or a config without components, gives [].
+ * every component of the item's repo one of whose globs matches or may overlap one of its paths or
+ * touches: a bare directory stands for everything below it, and two globs overlap as the planner's
+ * touches do (static prefixes), so a broad touch counts against the component rather than past it.
+ * More than one means cross-cutting work; none (also an item without paths and touches), or a
+ * config without components, gives [].
  */
 export function componentsOf(item: WorkItem, config: StudioConfig): string[] {
   const components = config.components ?? [];
@@ -236,7 +240,11 @@ export function componentsOf(item: WorkItem, config: StudioConfig): string[] {
   if (named.length > 0) return [...new Set(named)];
   const paths = [...item.paths, ...item.touches];
   return components
-    .filter((c) => c.repo === item.repo && paths.some((p) => c.paths.some((g) => matchGlob(g, p))))
+    .filter(
+      (c) =>
+        c.repo === item.repo &&
+        paths.some((p) => c.paths.some((g) => matchGlob(g, p) || touchesOverlap(g, p))),
+    )
     .map((c) => c.id);
 }
 

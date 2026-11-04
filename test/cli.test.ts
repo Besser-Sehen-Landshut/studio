@@ -3197,6 +3197,18 @@ describe('components in the CLI', () => {
     expect(j[0]).toMatchObject({ item: 'APP-4', components: ['api', 'desktop'] });
   });
 
+  it('status stays silent about a config it cannot read, as before components', async () => {
+    const fx = fxWith([docs('APP-1')]);
+    const ports = quiet();
+    expect((await cli(fx, ports, 'launch', 'APP-1')).code).toBe(0);
+    writeFileSync(join(fx.project, '.studio', 'studio.yaml'), 'studio: [broken\n');
+    const r = await cli(fx, ports, 'status');
+    expect(r.code).toBe(0);
+    expect(r.err).toBe('');
+    expect(r.out.split('\n')[0]).toMatch(/^ITEM\s+NAME\s+ROLE\s+PID\s+ALIVE\s+STATUS$/);
+    expect(r.out).toContain('APP-1');
+  });
+
   it('status without components keeps its columns', async () => {
     const fx = makeFx([{ id: 'APP-1' }]);
     const ports = quiet();
@@ -3229,7 +3241,8 @@ describe('studio overview', () => {
     expect((await cli(fx, ports, 'launch', 'APP-1')).code).toBe(0);
     const base = join(fx.state, '..');
     const before = execFileSync('ls', ['-laR', base], { encoding: 'utf8' });
-    const j = await cli(fx, ports, 'overview', '--json');
+    const owner = { isTerminal: true };
+    const j = await cliWith(fx, ports, owner, 'overview', '--json');
     expect(j.code).toBe(0);
     expect(JSON.parse(j.out)).toEqual([
       expect.objectContaining({
@@ -3240,19 +3253,24 @@ describe('studio overview', () => {
         problems: [],
       }),
     ]);
-    const t = await cli(fx, ports, 'overview');
+    const t = await cliWith(fx, ports, owner, 'overview');
     expect(t.out).toMatch(/clone\s+assigned 1, merged 1\s+1\s+0/);
     expect(execFileSync('ls', ['-laR', base], { encoding: 'utf8' })).toBe(before);
   });
 
-  it('is not for crew sessions', async () => {
+  it('is for the owner in a terminal, not for crew sessions', async () => {
     const fx = makeFx([{ id: 'APP-1' }]);
-    const r = await cli(
-      { ...fx, env: { ...fx.env, STUDIO_ROLE: 'crew' } },
-      fakePorts(fakeGh().gh).ports,
-      'overview',
-    );
-    expect(r.code).toBe(1);
-    expect(r.err).toContain('not for crew sessions');
+    const ports = fakePorts(fakeGh().gh).ports;
+    const crew = { ...fx, env: { ...fx.env, STUDIO_ROLE: 'crew' } };
+    for (const [who, isTerminal] of [
+      [fx, false],
+      [crew, true],
+      [crew, false],
+    ] as const) {
+      const r = await cliWith(who, ports, { isTerminal }, 'overview');
+      expect(r.code).toBe(1);
+      expect(r.out).toBe('');
+      expect(r.err).toContain('overview is for the owner and needs a terminal');
+    }
   });
 });

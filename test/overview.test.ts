@@ -6,12 +6,14 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { formatOverview, readOverview } from '../src/overview.js';
+import { stateDirName } from '../src/paths.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-overview-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -48,10 +50,13 @@ const crew = (records: Record<string, { pid: number; stoppedAt?: string }>) =>
     ),
   );
 
+/** The state root of a project, named as paths.ts derives it. */
+const rootOf = (dir: string, files: Record<string, string>) =>
+  stateRoot(stateDirName(dir), { 'marker.json': marker(dir), ...files });
+
 const api = project('api', ['ready', 'ready', 'in_progress', 'assigned', 'merged']);
 const web = project('web', ['in_review']);
-stateRoot('0123456789abcdef-api', {
-  'marker.json': marker(api),
+const apiRoot = rootOf(api, {
   'crew.json': crew({
     'APP-3': { pid: 11 },
     'APP-4': { pid: 12 },
@@ -63,12 +68,22 @@ stateRoot('0123456789abcdef-api', {
     done: [],
   }),
 });
-stateRoot('fedcba9876543210-web', {
-  'marker.json': marker(web),
-  'queue.json': '{ not json',
-});
-stateRoot('1111111111111111-gone', { 'marker.json': marker(join(root, 'gone')) });
+const webRoot = rootOf(web, { 'queue.json': '{ not json' });
+rootOf(join(root, 'gone'), {});
 stateRoot('2222222222222222-bare', {});
+// A root whose marker names a project that does not hash to this root's name.
+stateRoot('3333333333333333-copied', { 'marker.json': marker(api) });
+// A board.yaml that is a link to some other file, whose content must not show.
+const linked = project('linked', []);
+const secret = join(root, 'secret.txt');
+writeFileSync(secret, 'token: abc\u001b[2J\n: : :\n');
+rmSync(join(linked, '.studio', 'board.yaml'));
+symlinkSync(secret, join(linked, '.studio', 'board.yaml'));
+rootOf(linked, {});
+// A project whose name and board error hold terminal escapes.
+const evil = project('ev\u001b[2Jil', []);
+writeFileSync(join(evil, '.studio', 'board.yaml'), 'items: []\n"x\\e[2J": 1\n');
+rootOf(evil, {});
 stateRoot('owner', { 'usage.json': '{}' });
 stateRoot('not-a-project', {});
 
@@ -88,10 +103,18 @@ function tree(dir: string): string[] {
 describe('readOverview', () => {
   it('lists every project state root with item counts, running crews and queued merges', () => {
     const list = readOverview(base, alive);
-    expect(list.map((p) => p.name)).toEqual(['api', 'bare', 'gone', 'web']);
-    expect(list[0]).toEqual({
+    expect(list.map((p) => p.name)).toEqual([
+      '2222222222222222-bare',
+      '3333333333333333-copied',
+      'api',
+      'ev [2Jil',
+      'gone',
+      'linked',
+      'web',
+    ]);
+    expect(list.find((p) => p.name === 'api')).toEqual({
       name: 'api',
-      stateRoot: join(base, '0123456789abcdef-api'),
+      stateRoot: apiRoot,
       project: api,
       items: { ready: 2, assigned: 1, in_progress: 1, merged: 1 },
       crews: 1,
@@ -102,14 +125,43 @@ describe('readOverview', () => {
 
   it('reports a broken or partial state root and goes on', () => {
     const byName = Object.fromEntries(readOverview(base, alive).map((p) => [p.name, p]));
+    const bare = byName['2222222222222222-bare'];
     expect(byName.web).toMatchObject({ items: { in_review: 1 }, crews: 0 });
     expect(byName.web?.queued).toBeUndefined();
     expect(byName.web?.problems.join()).toMatch(/queue file .* is not valid JSON/);
     expect(byName.gone?.items).toBeUndefined();
     expect(byName.gone?.problems.join()).toMatch(/board/);
-    expect(byName.bare?.project).toBeUndefined();
-    expect(byName.bare?.problems).toEqual(['no marker.json: the project is unknown']);
-    expect(byName.bare).toMatchObject({ crews: 0, queued: 0 });
+    expect(bare?.project).toBeUndefined();
+    expect(bare?.problems).toEqual(['no marker.json: the project is unknown']);
+    expect(bare).toMatchObject({ crews: 0, queued: 0 });
+    expect(webRoot).toBe(byName.web?.stateRoot);
+  });
+
+  it('skips a root whose marker names a project of another root', () => {
+    const copied = readOverview(base, alive).find((p) => p.name === '3333333333333333-copied');
+    expect(copied).toEqual({
+      name: '3333333333333333-copied',
+      stateRoot: join(base, '3333333333333333-copied'),
+      problems: [
+        'inconsistent state root: its marker names a project whose state root is another one',
+      ],
+    });
+  });
+
+  it('reads no board.yaml that is a link, and shows nothing of where it points', () => {
+    const p = readOverview(base, alive).find((x) => x.name === 'linked');
+    expect(p?.items).toBeUndefined();
+    expect(p?.problems.join()).toMatch(/board\.yaml is not a plain file/);
+    expect(JSON.stringify(p)).not.toMatch(/token|abc/);
+  });
+
+  it('strips control characters from the project name and the board error', () => {
+    const list = readOverview(base, alive);
+    const p = list.find((x) => x.project === evil);
+    expect(p?.name).toBe('ev [2Jil');
+    expect(p?.problems.join()).toMatch(/unknown key/);
+    expect(JSON.stringify(list)).not.toContain('\u001b');
+    expect(formatOverview(list)).not.toContain('\u001b');
   });
 
   it('skips the owner dir and names that are no project root', () => {
@@ -136,11 +188,9 @@ describe('readOverview', () => {
   });
 
   it('keeps file content out of the problems', () => {
-    writeFileSync(join(base, 'fedcba9876543210-web', 'crew.json'), '"secret\u001b[2J"');
+    writeFileSync(join(webRoot, 'crew.json'), '"secret\u001b[2J"');
     const web = readOverview(base, alive).find((p) => p.name === 'web');
     expect(web?.problems.join()).not.toContain('secret');
-    expect(readFileSync(join(base, 'fedcba9876543210-web', 'crew.json'), 'utf8')).toContain(
-      'secret',
-    );
+    expect(readFileSync(join(webRoot, 'crew.json'), 'utf8')).toContain('secret');
   });
 });

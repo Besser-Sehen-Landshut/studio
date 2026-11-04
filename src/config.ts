@@ -176,7 +176,7 @@ export const studioConfigSchema = z
     crewAllowedWorkflowRefs: strList,
     // Base branches a pull request may be reviewed against; empty = default branch only.
     reviewBases: strList,
-    components: z.array(componentSchema).optional(),
+    components: z.array(componentSchema).min(1).optional(),
   })
   .superRefine((cfg, ctx) => {
     const seen = new Set<string>();
