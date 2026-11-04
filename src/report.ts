@@ -12,7 +12,13 @@ import {
 import { join, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
-import { crewCovers, crewLine, type NotRunHere, notRunHereReportSchema, type WorkItem } from './board.js';
+import {
+  crewCovers,
+  crewLine,
+  type NotRunHere,
+  notRunHereReportSchema,
+  type WorkItem,
+} from './board.js';
 import { assertStatePath, writeStateFile } from './paths.js';
 
 export class ReportError extends Error {
