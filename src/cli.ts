@@ -187,6 +187,8 @@ Commands:
 class UsageError extends Error {}
 
 const BY = 'studio';
+/** The note `stop --requeue` leaves; a second requeue finds it and keeps the item blocked. */
+const REQUEUE_NOTE = 'requeued: crew stopped without a usable report';
 const SHORT_SHA = /^[0-9a-f]{7,64}$/i;
 const INCIDENT_ID = /^[A-Za-z0-9._-]{1,64}$/;
 
@@ -1116,8 +1118,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         latest[id] = { ...(latest[id] ?? rec), stoppedAt };
         writeStateFile(root, join(root, 'crew.json'), `${JSON.stringify(latest, null, 2)}\n`);
         // A crew that ended without a usable report leaves its item assigned, and launch takes
-        // only ready items: --requeue hands the item back so it can be launched again.
-        let requeued = false;
+        // only ready items. --requeue gives the item its one relaunch, through blocked as the lead
+        // routine says; an item that was requeued before stays blocked: a second miss is a decision.
+        let requeued: 'ready' | 'blocked' | undefined;
         if (values.requeue === true) {
           refuseCrew(deps.env);
           await withBoardLock(root, ports.clock.now(), () => {
@@ -1125,19 +1128,22 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             const now = findItem(fresh, id);
             if (now.status !== 'assigned' && now.status !== 'in_progress') {
               throw new Error(
-                `${id} is ${now.status}; only an assigned or in_progress item goes back to ready`,
+                `${id} is ${now.status}; only an assigned or in_progress item can be requeued`,
               );
             }
-            const moved = transition(fresh, id, 'ready', BY, ports.clock.now());
+            const second = (now.notes ?? []).some((n) => n.startsWith(REQUEUE_NOTE));
+            const at = ports.clock.now();
+            let moved = transition(fresh, id, 'blocked', BY, at);
+            if (!second) moved = transition(moved, id, 'ready', BY, at);
+            const note = second
+              ? `crew stopped at ${stoppedAt}; requeued before, so it stays blocked`
+              : `${REQUEUE_NOTE} at ${stoppedAt}; back to ready for its one relaunch`;
             saveBoard(
               project,
-              withItem(moved, id, (i) => ({
-                ...i,
-                notes: [...(i.notes ?? []), `crew stopped at ${stoppedAt}; back to ready`],
-              })),
+              withItem(moved, id, (i) => ({ ...i, notes: [...(i.notes ?? []), note] })),
             );
+            requeued = second ? 'blocked' : 'ready';
           });
-          requeued = true;
         }
         print({
           item: id,
@@ -1145,7 +1151,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           pid: rec.pid,
           stoppedAt,
           ...(process === 'verified' ? {} : { processGone: true }),
-          ...(requeued ? { status: 'ready' } : {}),
+          ...(requeued === undefined ? {} : { status: requeued }),
         });
         return 0;
       }

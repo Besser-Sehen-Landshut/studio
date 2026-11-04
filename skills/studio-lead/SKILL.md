@@ -39,9 +39,9 @@ while sleep 120; do s=$(studio status 2>&1); [ "$s" = "$p" ] || echo "$s"; p=$s;
 
 - Only what `studio collect` accepts counts.
 - Collect rejects a fix/feature/chore with `tests_run: 0`; so do you.
-- Rejected report or crew exited without one: set the item `blocked` with a note (never straight to `ready`;
-  `assigned → ready` is illegal). For the one relaunch: `blocked → ready`, `studio plan`, `studio launch`.
-  Second miss: it stays `blocked`. Never write a report yourself.
+- Rejected report or crew exited without one: `studio stop <id> --requeue`. It closes the crew record and
+  gives the item its one relaunch through `blocked → ready`; then `studio plan`, `studio launch`. A second
+  `--requeue` on that item keeps it `blocked`: decide anew. Never write a report yourself.
 
 ## Review: one fresh reviewer per PR, before the queue
 
