@@ -28734,9 +28734,17 @@ var reportSchema = external_exports.object({
   // Commands the sandbox cannot run for lack of a service; CI is the authority for them.
   // An empty YAML value (`key:` alone) is null: it reads as the empty list.
   notRunHere: emptyList(external_exports.array(notRunHereReportSchema).max(20)),
-  // A reviewer's answer for each such command: the base workflow and the job whose check runs it.
+  // A reviewer's answer for each such command: the base workflow and the job whose check runs
+  // it, and why that job covers the command (`covers`; the job gate refuses an entry without it).
   notRunHereJobs: emptyList(
-    external_exports.array(external_exports.strictObject({ command: crewLine, workflow: crewLine, job: crewLine })).max(20)
+    external_exports.array(
+      external_exports.strictObject({
+        command: crewLine,
+        workflow: crewLine,
+        job: crewLine,
+        covers: crewLine.nullish()
+      })
+    ).max(20)
   ),
   lessons: emptyList(external_exports.array(external_exports.string())),
   questions: emptyList(external_exports.array(external_exports.string()))
@@ -28795,7 +28803,9 @@ function parseReport(text, item) {
     ...d.mutationProbe != null && { mutationProbe: d.mutationProbe },
     ...d.findingAttempts != null && { findingAttempts: d.findingAttempts },
     notRunHere: d.notRunHere,
-    notRunHereJobs: d.notRunHereJobs,
+    notRunHereJobs: d.notRunHereJobs.map(
+      ({ covers, ...j }) => covers == null ? j : { ...j, covers }
+    ),
     lessons: d.lessons,
     questions: d.questions
   };
@@ -31278,17 +31288,18 @@ var GIT_LOCAL_MS = 6e4;
 var WORKFLOWS_DIR = ".github/workflows/";
 var WORKFLOW_FILE = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/;
 var SHA = /^[0-9a-f]{40,64}$/i;
+var MAX_JOBS = 20;
 var instances = (checks, workflow, job) => checks.filter(
-  (c3) => c3.workflow !== void 0 && c3.workflow === workflow && (c3.name === job || c3.name.startsWith(`${job} (`) && c3.name.endsWith(")"))
+  (c3) => c3.workflow !== void 0 && c3.workflow === workflow && (c3.name === job || c3.name.startsWith(`${job} (`) && c3.name.endsWith(")") && !c3.name.slice(job.length).includes(" / "))
 );
 var jobPassed = (checks, workflow, job) => {
   const mine = instances(checks, workflow, job);
   return mine.length > 0 && mine.every((c3) => c3.bucket === "pass");
 };
-function runsOnPullRequest(on6) {
-  if (on6 === "pull_request") return true;
-  if (Array.isArray(on6)) return on6.includes("pull_request");
-  return on6 !== null && typeof on6 === "object" && "pull_request" in on6;
+function runsOn(on6, event) {
+  if (on6 === event) return true;
+  if (Array.isArray(on6)) return on6.includes(event);
+  return on6 !== null && typeof on6 === "object" && event in on6;
 }
 function readWorkflow(text, path10) {
   let doc;
@@ -31301,45 +31312,101 @@ function readWorkflow(text, path10) {
   const wf = doc;
   const name = typeof wf.name === "string" && wf.name.trim() !== "" ? wf.name : path10;
   const jobs = wf.jobs !== null && typeof wf.jobs === "object" ? Object.entries(wf.jobs) : [];
-  return { name, jobs, onPullRequest: runsOnPullRequest(wf.on) };
+  return {
+    name,
+    jobs,
+    onPullRequest: runsOn(wf.on, "pull_request"),
+    onWorkflowCall: runsOn(wf.on, "workflow_call")
+  };
 }
-function jobProblem(wf, job, command) {
-  const found = wf.jobs.find(([id, j]) => {
-    const name = j?.name;
-    return (typeof name === "string" ? name : id) === job;
-  })?.[1];
-  if (found === void 0 || found === null || typeof found !== "object") {
-    return "the job is not in the workflow";
+var isJob = (j) => j !== null && typeof j === "object" && !Array.isArray(j);
+var checkName = (id, j) => typeof j.name === "string" ? j.name : id;
+var guarded = (j) => "if" in j || "continue-on-error" in j;
+var localCall = (j, path10) => j.uses === `./${path10}`;
+var remoteCall = (j, path10) => typeof j.uses === "string" && !j.uses.startsWith("./") && j.uses.includes(`/${path10}@`);
+function findJob(files, path10, job, where) {
+  const w = files.get(path10);
+  if (w === void 0) return `the workflow is not at ${where} or not valid YAML`;
+  const unique3 = (wf, own2) => [...files].every(([p, x]) => p === own2 || x !== void 0 && x.name !== wf.name);
+  const found = w.jobs.find(([id, j]) => isJob(j) && checkName(id, j) === job);
+  if (found === void 0) return `the job is not in the workflow at ${where}`;
+  const [, called] = found;
+  if (guarded(called)) return `the job has an if or continue-on-error at ${where}`;
+  if (w.onPullRequest) {
+    if (typeof called.uses === "string") {
+      return called.uses.startsWith("./") ? `the job calls a reusable workflow: name the called workflow file and its job (at ${where})` : `the job calls a remote reusable workflow, which the gate cannot follow (at ${where})`;
+    }
+    if (!unique3(w, path10)) return `the workflow name is not unique at ${where}`;
+    return { targets: [{ workflow: w.name, job }], def: JSON.stringify([called]) };
   }
-  if ("uses" in found) return "the job calls a reusable workflow, which the gate cannot follow";
-  if ("if" in found || "continue-on-error" in found) {
-    return "the job has an if or continue-on-error";
+  if (!w.onWorkflowCall) return `the workflow does not run on pull_request at ${where}`;
+  if ("uses" in called) {
+    return `the called job calls a reusable workflow itself: one level only (at ${where})`;
   }
-  const cmd = command.trim();
-  const runs = (Array.isArray(found.steps) ? found.steps : []).filter(
-    (s) => s !== null && typeof s === "object" && !("if" in s) && !("continue-on-error" in s)
-  ).map((s) => s.run).filter((r) => typeof r === "string");
-  const starts = (line) => line === cmd || line.startsWith(cmd) && /[\s;&|]/.test(line[cmd.length]);
-  if (!runs.some((r) => r.split("\n").some((l) => starts(l.trim())))) {
-    return "no run step of the job starts a line with the command";
+  const targets = [];
+  const callers = [];
+  let remote = false;
+  let nested = false;
+  for (const [p, x] of files) {
+    for (const [id, j] of x?.jobs ?? []) {
+      if (!isJob(j) || x === void 0) continue;
+      if (remoteCall(j, path10) && x.onPullRequest) remote = true;
+      if (!localCall(j, path10)) continue;
+      if (!x.onPullRequest) {
+        nested = true;
+        continue;
+      }
+      if (guarded(j)) return `a calling job has an if or continue-on-error at ${where}`;
+      if (!unique3(x, p)) return `the workflow name is not unique at ${where}`;
+      targets.push({ workflow: x.name, job: `${checkName(id, j)} / ${job}` });
+      callers.push(j);
+    }
   }
-  return void 0;
+  if (targets.length === 0) {
+    if (remote) {
+      return `a pull_request workflow calls it only as a remote reusable workflow, which the gate cannot follow (at ${where})`;
+    }
+    if (nested) {
+      return `the workflow is called only through another reusable workflow: one level only (at ${where})`;
+    }
+    return `no pull_request workflow calls the workflow at ${where}`;
+  }
+  return { targets, def: JSON.stringify([called, ...callers]) };
 }
 async function verifyNotRunHereJobs(o2) {
   const g = (args, timeoutMs) => o2.git.run(o2.checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
-  const read3 = async (oid, path10) => {
+  const trees = /* @__PURE__ */ new Map();
+  const workflowsAt = async (oid) => {
+    if (trees.has(oid)) return trees.get(oid);
+    let files;
     try {
-      return readWorkflow(await g(["cat-file", "blob", `${oid}:${path10}`], GIT_LOCAL_MS), path10);
+      const paths = (await g(["ls-tree", "--name-only", "-z", oid, WORKFLOWS_DIR], GIT_LOCAL_MS)).split("\0").filter((p) => p !== "" && WORKFLOW_FILE.test(p));
+      files = /* @__PURE__ */ new Map();
+      for (const p of paths) {
+        let text;
+        try {
+          text = await g(["cat-file", "blob", `${oid}:${p}`], GIT_LOCAL_MS);
+        } catch {
+          text = void 0;
+        }
+        files.set(p, text === void 0 ? void 0 : readWorkflow(text, p));
+      }
     } catch {
-      return void 0;
+      files = void 0;
     }
+    trees.set(oid, files);
+    return files;
   };
   let fetched;
   const jobs = [];
+  const covered = [];
   for (const [i2, command] of o2.commands.entries()) {
     const fail2 = (why) => ({ ok: false, entry: i2 + 1, why });
     const named = o2.entries.find((e) => e.command.trim() === command.trim());
     if (named === void 0) return fail2("no CI job named for it");
+    if (named.covers === void 0 || named.covers.trim() === "") {
+      return fail2("no covers text says why the named job covers the command");
+    }
     const base = o2.baseOid;
     if (base === void 0 || !SHA.test(base) || !SHA.test(o2.headOid)) {
       return fail2("the base commit is unknown");
@@ -31360,35 +31427,31 @@ async function verifyNotRunHereJobs(o2) {
     }
     if (!fetched) return fail2("the base commit cannot be fetched");
     const at = async (oid, where) => {
-      const w = await read3(oid, named.workflow);
-      if (w === void 0) return `the workflow is not at ${where} or not valid YAML`;
-      if (!w.onPullRequest) return `the workflow does not run on pull_request at ${where}`;
-      let others;
-      try {
-        others = (await g(["ls-tree", "--name-only", "-z", oid, WORKFLOWS_DIR], GIT_LOCAL_MS)).split("\0").filter((p) => p !== "" && p !== named.workflow && WORKFLOW_FILE.test(p));
-      } catch {
-        return `the workflows at ${where} cannot be listed`;
-      }
-      for (const other of others) {
-        const x = await read3(oid, other);
-        if (x === void 0 || x.name === w.name)
-          return `the workflow name is not unique at ${where}`;
-      }
-      const problem = jobProblem(w, named.job, command);
-      return problem === void 0 ? w : `${problem} at ${where}`;
+      const files = await workflowsAt(oid);
+      if (files === void 0) return `the workflows at ${where} cannot be listed`;
+      return findJob(files, named.workflow, named.job, where);
     };
-    const wf = await at(base, "the base");
-    if (typeof wf === "string") return fail2(wf);
-    const head = await at(o2.headOid, "the pull request head");
-    if (typeof head === "string") return fail2(head);
-    if (head.name !== wf.name)
-      return fail2("the workflow has another name at the pull request head");
-    if (!jobPassed(o2.checks, wf.name, named.job)) {
-      return fail2("the job has no passing check on the pull request (missing or skipped)");
+    const atBase = await at(base, "the base");
+    if (typeof atBase === "string") return fail2(atBase);
+    const atHead = await at(o2.headOid, "the pull request head");
+    if (typeof atHead === "string") return fail2(atHead);
+    const key = (f) => JSON.stringify(f.targets);
+    if (key(atHead) !== key(atBase)) {
+      return fail2("the workflow names or callers differ at the pull request head");
     }
-    jobs.push({ workflow: wf.name, job: named.job });
+    if (!o2.ciItem && atHead.def !== atBase.def) {
+      return fail2("the job definition changed at the pull request head and the item is no CI item");
+    }
+    for (const t of atBase.targets) {
+      if (!jobPassed(o2.checks, t.workflow, t.job)) {
+        return fail2("the job has no passing check on the pull request (missing or skipped)");
+      }
+      if (!jobs.some((j) => j.workflow === t.workflow && j.job === t.job)) jobs.push(t);
+      covered.push({ entry: i2 + 1, ...t, covers: named.covers });
+    }
+    if (jobs.length > MAX_JOBS) return fail2(`more than ${MAX_JOBS} CI jobs in all`);
   }
-  return { ok: true, jobs };
+  return { ok: true, jobs, covered };
 }
 function approvedJobsProblem(jobs, checks) {
   for (const [i2, j] of jobs.entries()) {
@@ -31569,7 +31632,7 @@ function renderReviewRoutine(r) {
       ""
     ],
     ...r.notRunHere === void 0 ? [] : [
-      `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: for each command, find the workflow at the base and the job in it that runs the command, and list it in \`not_run_here_jobs\` with the command as listed, the workflow file path at the base (\`.github/workflows/<file>\`) and the job's \`name:\`, or its id when it has none${r.pullRequest === void 0 ? "" : ` (the check names are in \`${r.pullRequest.checks}\`)`}. A command no base workflow runs is a finding. Studio checks at the base, and at the head when the pull request changes that file, that the job is in it with no \`if:\`, no \`continue-on-error\` and no reusable workflow (\`uses:\`), that a \`run:\` step without \`if:\` starts a line with the whole command, and that the workflow name is unique; it refuses an approval unless every check of that job (each matrix leg \`<job> (<leg>)\`) passed on this pull request.`,
+      `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: for each command, find the job at the base that runs it, also through a task runner (turbo, nextest, make), and list it in \`not_run_here_jobs\` with the command as listed, the workflow file at the base that defines the job (\`.github/workflows/<file>\`), the job's \`name:\`, or its id when it has none, and \`covers\`: one line on why that job covers the command. A job of a reusable workflow (\`on: workflow_call\`) counts when a \`pull_request\` workflow calls its file with \`uses: ./.github/workflows/<file>\` from a job: name the called file and its job, not the caller; its checks are \`<caller job> / <job>\`${r.pullRequest === void 0 ? "" : ` (the check names are in \`${r.pullRequest.checks}\`)`}. A command no base job runs is a finding. Studio checks at the base and at the head that the job, and a calling job, have no \`if:\` and no \`continue-on-error\`, that the job calls no further reusable workflow, that its definition is unchanged unless this is a CI item, and that the workflow name with the checks is unique; it refuses an approval unless every check of that job (each matrix leg \`(<leg>)\`) passed on this pull request. Whether the job covers the command is your judgement: Studio shows your \`covers\` line to the lead and does not test it.`,
       ""
     ],
     `Run each analyzer below as one subagent with the model named there, read-only except for the spec check's probe; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,
@@ -31604,7 +31667,9 @@ var crewCapsSchema = external_exports.strictObject({
   /** Commands the builder could not run; an approval names the CI job for each. */
   notRunHere: external_exports.array(external_exports.string()).optional(),
   /** The pull request changes `.github/` (or that could not be read) and its item is no CI item. */
-  workflowChange: external_exports.literal(true).optional()
+  workflowChange: external_exports.literal(true).optional(),
+  /** The item holding the pull request declares paths below `.github/`: its jobs may change. */
+  ciItem: external_exports.literal(true).optional()
 });
 var capsFile = (stateRoot, id) => join11(stateRoot, "briefs", `${id}.caps.json`);
 function readCrewCaps(stateRoot, id) {
@@ -31691,7 +31756,12 @@ function checkReviewCaps(caps, report) {
     );
   }
   const notRunHere = caps.notRunHere ?? [];
-  return { skipped, target, ...notRunHere.length === 0 ? {} : { notRunHere } };
+  return {
+    skipped,
+    target,
+    ...notRunHere.length === 0 ? {} : { notRunHere },
+    ...caps.ciItem === true ? { ciItem: true } : {}
+  };
 }
 
 // src/sources.ts
@@ -32358,7 +32428,8 @@ ${review.notRunHere.map((x) => clean3(`${x.command} (missing ${x.missing}: ${x.r
       ...o2.startedAt === void 0 ? {} : { startedAt: o2.startedAt },
       ...skipped.length === 0 ? {} : { skipped: skipped.map((x) => x.id) },
       ...review.notRunHere === void 0 ? {} : { notRunHere: review.notRunHere.map((x) => x.command) },
-      ...review.workflowChange === true ? { workflowChange: true } : {}
+      ...review.workflowChange === true ? { workflowChange: true } : {},
+      ...review.ciItem === true ? { ciItem: true } : {}
     };
     writeStateFile(stateRoot, capsFile(stateRoot, id), `${JSON.stringify(caps, null, 2)}
 `);
@@ -33154,7 +33225,7 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
       'analyzers: { <id>: pass|findings|"skipped: <reason>" }',
       'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"',
       "finding_attempts: <highest number of attempts on one finding>",
-      "not_run_here_jobs: []   # or entries { command: <command as listed>, workflow: <workflow file at the base>, job: <check name> }"
+      "not_run_here_jobs: []   # or entries { command: <command as listed>, workflow: <file at the base that defines the job>, job: <job name>, covers: <one line: why this job covers the command> }"
     ] : item.type === "research" ? [] : [
       caps.prByStudio === true ? `pr_title: "${id}: <summary, one line, at most 200 characters>"` : "pr: <number>",
       "head_sha: <40-hex sha of the pushed head commit>",
@@ -35440,6 +35511,7 @@ async function runCli(argv, deps) {
         let report = readReport(clone2, item.id, item, { notBefore, fileName });
         const reviewDone = item.type === "review" && report.status === "done" ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report) : { skipped: [], target: void 0, notRunHere: void 0 };
         let approvedJobs = [];
+        let covered = [];
         if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0) {
           const m = /^(.+)#(\d+)$/.exec(reviewDone.target);
           const info = await prInfo(ports, m[1], Number(m[2]));
@@ -35459,6 +35531,7 @@ async function runCli(argv, deps) {
                 checkout: approvalCheckout(project, config2, m[1]),
                 baseOid: info.baseOid,
                 headOid: info.head,
+                ciItem: reviewDone.ciItem === true,
                 commands: reviewDone.notRunHere,
                 entries: report.notRunHereJobs,
                 checks: checks.checks
@@ -35482,6 +35555,7 @@ async function runCli(argv, deps) {
                 return 1;
               }
               approvedJobs = gate.jobs;
+              covered = gate.covered;
             }
           }
         }
@@ -35660,7 +35734,10 @@ async function runCli(argv, deps) {
               count: report.notRunHere.length,
               missing: [...new Set(report.notRunHere.map((x) => x.missing))]
             }
-          } : {}
+          } : {},
+          // Each approved job with the reviewer's reason why it covers its command: reviewer text,
+          // one plain line each, data for the lead. The gate proved only that the job ran and passed.
+          ...covered.length === 0 || supersededBy !== void 0 ? {} : { notRunHereJobs: covered }
         });
         return 0;
       }

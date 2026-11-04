@@ -256,7 +256,7 @@ export function renderReviewRoutine(r: {
     ...(r.notRunHere === undefined
       ? []
       : [
-          `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: for each command, find the workflow at the base and the job in it that runs the command, and list it in \`not_run_here_jobs\` with the command as listed, the workflow file path at the base (\`.github/workflows/<file>\`) and the job's \`name:\`, or its id when it has none${r.pullRequest === undefined ? '' : ` (the check names are in \`${r.pullRequest.checks}\`)`}. A command no base workflow runs is a finding. Studio checks at the base, and at the head when the pull request changes that file, that the job is in it with no \`if:\`, no \`continue-on-error\` and no reusable workflow (\`uses:\`), that a \`run:\` step without \`if:\` starts a line with the whole command, and that the workflow name is unique; it refuses an approval unless every check of that job (each matrix leg \`<job> (<leg>)\`) passed on this pull request.`,
+          `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: for each command, find the job at the base that runs it, also through a task runner (turbo, nextest, make), and list it in \`not_run_here_jobs\` with the command as listed, the workflow file at the base that defines the job (\`.github/workflows/<file>\`), the job's \`name:\`, or its id when it has none, and \`covers\`: one line on why that job covers the command. A job of a reusable workflow (\`on: workflow_call\`) counts when a \`pull_request\` workflow calls its file with \`uses: ./.github/workflows/<file>\` from a job: name the called file and its job, not the caller; its checks are \`<caller job> / <job>\`${r.pullRequest === undefined ? '' : ` (the check names are in \`${r.pullRequest.checks}\`)`}. A command no base job runs is a finding. Studio checks at the base and at the head that the job, and a calling job, have no \`if:\` and no \`continue-on-error\`, that the job calls no further reusable workflow, that its definition is unchanged unless this is a CI item, and that the workflow name with the checks is unique; it refuses an approval unless every check of that job (each matrix leg \`(<leg>)\`) passed on this pull request. Whether the job covers the command is your judgement: Studio shows your \`covers\` line to the lead and does not test it.`,
           '',
         ]),
     `Run each analyzer below as one subagent with the model named there, read-only except for the spec check's probe; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,
@@ -293,6 +293,8 @@ export const crewCapsSchema = z.strictObject({
   notRunHere: z.array(z.string()).optional(),
   /** The pull request changes `.github/` (or that could not be read) and its item is no CI item. */
   workflowChange: z.literal(true).optional(),
+  /** The item holding the pull request declares paths below `.github/`: its jobs may change. */
+  ciItem: z.literal(true).optional(),
 });
 
 /** What a reviewer owes, written beside the brief at launch, out of the crew's reach. */
@@ -378,7 +380,7 @@ type ReviewReport = Pick<
 export function checkReviewCaps(
   caps: CrewCaps | undefined,
   report: ReviewReport,
-): { skipped: string[]; target?: string; notRunHere?: string[] } {
+): { skipped: string[]; target?: string; notRunHere?: string[]; ciItem?: boolean } {
   if (report.status !== 'done') return { skipped: [] };
   if (caps?.reviewsTarget === undefined) {
     throw new Error('no record of what this review is about: relaunch the review, nothing moved');
@@ -430,5 +432,10 @@ export function checkReviewCaps(
   }
   // Each command the builder could not run needs the CI job that runs it; collect checks them.
   const notRunHere = caps.notRunHere ?? [];
-  return { skipped, target, ...(notRunHere.length === 0 ? {} : { notRunHere }) };
+  return {
+    skipped,
+    target,
+    ...(notRunHere.length === 0 ? {} : { notRunHere }),
+    ...(caps.ciItem === true ? { ciItem: true } : {}),
+  };
 }
