@@ -3,6 +3,22 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.10] - 2026-11-04
+
+From the same real review run, after 0.6.9: the gate refused the approval with "no CI job named
+for it". The list Studio wrote for the reviewer (`pull-request/not-run-here.txt`) put each
+command and its reason on one line, `<command> (missing <service>: <reason>)`, and the brief said
+to copy the command "as listed". The reviewer copied the whole line, so no entry matched. Not
+tagged yet; the maintainers tag after the merge.
+
+### Changed
+
+- `not-run-here.txt` lists each distinct command once, on its own `command:` line. The missing
+  services and reasons are indented below it, and a command the builder listed several times
+  appears once.
+- The brief asks for the command exactly as on its `command:` line, with nothing appended,
+  because the gate matches it character for character.
+
 ## [0.6.9] - 2026-11-04
 
 From the first real run of the 0.6.8 gate: the reviewer approved, and `collect` refused the report
