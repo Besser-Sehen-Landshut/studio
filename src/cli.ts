@@ -728,6 +728,30 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                     : i,
               );
             }
+            // An approval answers every earlier review of the same pull request: one that ended
+            // blocked or never ran would otherwise hold `queue add` until it is dropped by hand.
+            // A review with a running crew stays; its own collect finds this one newer.
+            if (report.verdict === 'approve') {
+              const target = reviewDone.target;
+              for (const older of next.items) {
+                if (
+                  older.id === item.id ||
+                  older.type !== 'review' ||
+                  ['assigned', 'in_progress', 'merged', 'dropped'].includes(older.status)
+                ) {
+                  continue;
+                }
+                const note = reviewTarget(older);
+                const named = note !== undefined && `${note.repo}#${note.pr}` === target;
+                if (!named && readCrewCaps(stateRoot(), older.id)?.reviewsTarget !== target)
+                  continue;
+                next = transition(next, older.id, 'dropped', BY, now);
+                next = withItem(next, older.id, (i) => ({
+                  ...i,
+                  notes: [...(i.notes ?? []), `superseded by ${item.id}, which approved ${target}`],
+                }));
+              }
+            }
           }
           const limitTarget =
             report.status === 'done' &&

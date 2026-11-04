@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.12] - 2026-11-04
+
+From the same real run: the fourth review approved the pull request, and `queue add` still
+refused it, because two earlier reviews of the same pull request had ended blocked and so still
+counted as open. The lead had to drop them by hand. Not tagged yet; the maintainers tag after the
+merge.
+
+### Changed
+
+- When `collect` stores an approval, it drops every earlier review of the same pull request that
+  has no running crew (blocked, ready or planned), with the note "superseded by <id>". A review
+  whose crew still runs stays as it was. The fix-round count is unchanged, because dropped reviews
+  still count.
+
 ## [0.6.11] - 2026-11-04
 
 From the first merge-queue run on a real pull request. The queue brought the approved pull request

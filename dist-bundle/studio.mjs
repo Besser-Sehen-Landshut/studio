@@ -35722,6 +35722,23 @@ async function runCli(argv, deps) {
                 } : i2
               );
             }
+            if (report.verdict === "approve") {
+              const target = reviewDone.target;
+              for (const older of next2.items) {
+                if (older.id === item.id || older.type !== "review" || ["assigned", "in_progress", "merged", "dropped"].includes(older.status)) {
+                  continue;
+                }
+                const note = reviewTarget(older);
+                const named = note !== void 0 && `${note.repo}#${note.pr}` === target;
+                if (!named && readCrewCaps(stateRoot(), older.id)?.reviewsTarget !== target)
+                  continue;
+                next2 = transition(next2, older.id, "dropped", BY, now);
+                next2 = withItem(next2, older.id, (i2) => ({
+                  ...i2,
+                  notes: [...i2.notes ?? [], `superseded by ${item.id}, which approved ${target}`]
+                }));
+              }
+            }
           }
           const limitTarget = report.status === "done" && report.verdict === "changes_requested" && supersededBy2 === void 0 ? reviewDone.target : void 0;
           let fixLimit2 = false;

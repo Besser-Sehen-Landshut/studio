@@ -492,6 +492,45 @@ describe('studio CLI', () => {
       expect(r.code).toBe(0);
       expect(statusOf(fx, 'APP-2')?.approvedHead).toBe(HEAD);
     });
+    it('an approval drops earlier reviews of the pull request that are not running', async () => {
+      // the real case: two earlier reviews ended blocked and held `queue add` until dropped by hand
+      const fx = makeFx([
+        { id: 'APP-0', status: 'blocked', type: 'review' },
+        { id: 'APP-1', status: 'assigned', type: 'review' },
+        { id: 'APP-2', status: 'in_review', pr: 9, approvedHead: null },
+        { id: 'APP-3', status: 'assigned', type: 'review' },
+        { id: 'APP-4', status: 'blocked', type: 'review' },
+      ]);
+      // launched in this order; APP-1 is the newest, so nothing supersedes its approval
+      const caps = (startedAt: string) => ({
+        analyzers: [],
+        mandatory: [],
+        reviewsTarget: 'org/app#9',
+        headRefOid: HEAD,
+        baseRefName: 'main',
+        startedAt,
+      });
+      writeReviewCaps(fx, 'APP-0', caps('2026-11-04T01:00:00.000Z'));
+      writeReviewCaps(fx, 'APP-3', caps('2026-11-04T02:00:00.000Z'));
+      writeReviewCaps(fx, 'APP-1', caps('2026-11-04T03:00:00.000Z'));
+      writeReviewCaps(fx, 'APP-4', {
+        analyzers: [],
+        mandatory: [],
+        reviewsTarget: 'org/app#10',
+        headRefOid: HEAD,
+        baseRefName: 'main',
+      });
+      writeReport(fx, 'APP-1', APPROVE);
+      const r = await cli(fx, fakePorts(withChecks('pass').gh).ports, 'collect', 'APP-1');
+      expect(r.code).toBe(0);
+      expect(statusOf(fx, 'APP-0')?.status).toBe('dropped');
+      expect(statusOf(fx, 'APP-0')?.notes).toContain(
+        'superseded by APP-1, which approved org/app#9',
+      );
+      // a review whose crew still runs stays; one of another pull request is not touched
+      expect(statusOf(fx, 'APP-3')?.status).toBe('assigned');
+      expect(statusOf(fx, 'APP-4')?.status).toBe('blocked');
+    });
   });
 
   describe('an approval names the CI job for each command the builder could not run', () => {
