@@ -217,7 +217,7 @@ describe('studio setup stack', () => {
       cwd: root,
     });
     expect(code).toBe(1);
-    expect(err).toContain('setup needs a subcommand');
+    expect(err).toContain('setup takes:');
   });
 
   it('doctor names the stacks or says how to set them', async () => {

@@ -163,7 +163,7 @@ describe('studio init', () => {
     ]) {
       expect(r.out).toMatch(new RegExp(`(pass|FAIL|warn) +${check}`));
     }
-    expect(r.out).toContain('studio secret set crew-token');
+    expect(r.out).toContain('In your own terminal, run studio setup once');
     expect(r.out).toContain('studio account add <label>');
     expect(r.out).toContain('primary_repo: org/app');
     expect(r.out).toContain('Next steps');
@@ -184,7 +184,7 @@ describe('studio init', () => {
     expect(out.config.stacks).toEqual(expect.arrayContaining(['gha', 'rust']));
     expect(out.checks.find((c: { name: string }) => c.name === 'crew token')).toMatchObject({
       status: 'warn',
-      fix: expect.stringContaining('studio secret set crew-token'),
+      fix: expect.stringContaining('studio setup'),
     });
     expect(out.nextSteps.length).toBeGreaterThan(3);
   });
@@ -307,6 +307,26 @@ describe('studio add', () => {
     expect((await cli(fx, 'init', '--write')).code).toBe(0);
     return fx;
   }
+
+  it('takes the form the add skill builds: --opt=value and the title after --', async () => {
+    const fx = await ready();
+    const r = await cli(
+      fx,
+      'add',
+      '--type=fix',
+      '--path=src/checkout/**',
+      "--dod=- it's fixed; $(no) `subst`",
+      '--',
+      "-Checkout crashes when the cart's empty",
+    );
+    expect(r.code).toBe(0);
+    const board = loadBoard(fx.dir, loadConfig(fx.dir));
+    expect(board.items[0]).toMatchObject({
+      title: "-Checkout crashes when the cart's empty",
+      dod: ["- it's fixed; $(no) `subst`"],
+      paths: ['src/checkout/**'],
+    });
+  });
 
   it('appends a ready builder item with the next id from the repo name', async () => {
     const fx = await ready();
@@ -564,7 +584,18 @@ describe('studio init, robustness', () => {
     const steps = r.out.nextSteps.join('\n');
     expect(steps).not.toContain('studio secret set crew-token');
     expect(steps).not.toContain('studio account add');
+    expect(steps).not.toContain('studio setup');
     expect(steps).toContain('/studio');
+  });
+
+  it('names studio setup once, with the launcher for a terminal without studio', async () => {
+    const fx = fixture();
+    const launcher = '/plugins/studio/0.10.0/bin/studio';
+    const r = await run(fx, { launcher });
+    const steps: string[] = r.out.nextSteps;
+    expect(steps.filter((s) => s.includes('studio setup'))).toHaveLength(1);
+    expect(steps.join('\n')).toContain(`node '${launcher}' setup --link`);
+    expect(steps.join('\n')).toContain('/studio:add');
   });
 
   it('adds the hosts docker needs to network_allow', async () => {

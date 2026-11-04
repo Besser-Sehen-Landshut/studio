@@ -108,6 +108,7 @@ import {
   pruneLesson,
 } from './role-memory.js';
 import { runDoctor, runSecretSet } from './secret-command.js';
+import { runSetup } from './setup.js';
 import { runSetupCi } from './setup-ci-command.js';
 import { searchSolutions } from './solutions.js';
 import { applySource, checkSources, loadSources, setupSources } from './sources.js';
@@ -141,6 +142,10 @@ export interface CliDeps {
   readSecret?: (prompt: string) => Promise<string | undefined>;
   /** Stdin and stdout are a terminal; missing means there is none. */
   isTerminal?: boolean;
+  /** A visible line from the terminal (`studio setup`); undefined on abort or without one. */
+  readLine?: (prompt: string) => Promise<string | undefined>;
+  /** The absolute path of the plugin's `bin/studio`, for `setup --link` and init's next steps. */
+  launcher?: string;
 }
 
 const USAGE = `Usage: studio [--project <dir>] [--json] <command>
@@ -180,6 +185,8 @@ Commands:
   sources list             Third-party sources and their licences
   sources check            Judge upstream updates: fits, unclear or conflict; adopts nothing
   sources apply <id>       Adopt a candidate that fits
+  setup [--link]           Owner only, in a terminal: gh, crew token and Claude account, one guided
+                           step each, skipped when done; --link puts studio on your terminal's PATH
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
   setup stack [--write]    Detect the project's stacks from its manifest files
   secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
@@ -351,6 +358,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     const addOnly = [values.type, values.repo, values.path, values.dod, values.plan];
     if (cmd !== 'add' && addOnly.some((v) => v !== undefined)) {
       throw new UsageError('--type, --repo, --path, --dod and --plan work with add only');
+    }
+    if (values.link !== undefined && cmd !== 'setup') {
+      throw new UsageError('--link works with setup only');
     }
     /** The item's components, as a field for JSON output; nothing when none are configured. */
     const componentField = (config: StudioConfig | undefined, item: WorkItem | undefined) =>
@@ -1247,6 +1257,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           json,
           write: values.write === true,
           stdout,
+          ...(deps.launcher === undefined ? {} : { launcher: deps.launcher }),
         });
       }
 
@@ -1636,6 +1647,24 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'setup': {
+        if (values.link === true && rest.length > 0) {
+          throw new UsageError('--link belongs to studio setup without a subcommand');
+        }
+        if (rest.length === 0) {
+          return await runSetup({
+            project,
+            ports,
+            owner,
+            env: deps.env,
+            isTerminal: deps.isTerminal === true,
+            ...(deps.readSecret === undefined ? {} : { readSecret: deps.readSecret }),
+            ...(deps.readLine === undefined ? {} : { readLine: deps.readLine }),
+            link: values.link === true,
+            ...(deps.launcher === undefined ? {} : { launcher: deps.launcher }),
+            stdout,
+            stderr,
+          });
+        }
         if (rest[0] === 'sources') {
           refuseCrew(deps.env);
           const results = await setupSources({
@@ -1652,7 +1681,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
         if (rest[0] !== 'ci' || rest.length !== 1) {
           throw new UsageError(
-            'setup needs a subcommand: ci [--write] | stack [--write] | sources [<id>...]',
+            'setup takes: [--link] | ci [--write] | stack [--write] | sources [<id>...]',
           );
         }
         return await runSetupCi({
@@ -1931,6 +1960,7 @@ function parseCli(argv: string[]) {
         dod: { type: 'string', multiple: true },
         plan: { type: 'string' },
         help: { type: 'boolean' },
+        link: { type: 'boolean' },
       },
       allowPositionals: true,
       strict: true,

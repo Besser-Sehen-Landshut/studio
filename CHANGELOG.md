@@ -3,6 +3,50 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.10.0] - 2026-11-04
+
+A new owner needed two `/plugin` commands, then three separate hidden-input commands in a terminal
+(`studio secret set crew-token`, `claude setup-token`, `studio account add <label>`), and a `studio`
+command in that terminal that the plugin did not provide. Now: install the plugin, run `studio setup`
+once in a terminal, then `/studio:init` in Claude Code. Not tagged yet; the maintainers tag after the
+merge.
+
+### Added
+
+- `studio setup [--link]`: the owner's one-time setup, in a terminal only (refused without one and
+  under `STUDIO_ROLE=crew`). Numbered steps, each skipped when done: `gh` installed and logged in
+  (else the fix and a stop); the crew token, explained with the permissions it needs, through the
+  existing `secret set crew-token` (checked against `primary_repo`, else `origin`'s GitHub
+  repository, else one it asks for); a Claude account for crews through the existing `account add`,
+  after asking to run `claude setup-token` in another tab, label `main` unless another is typed;
+  `studio` in the terminal. It ends with "run /studio:init". No token is echoed.
+- `--link`: after a yes, writes `~/.local/bin/studio` when `~/.local/bin` is on `PATH`: a shim
+  (a regular file with the marker line `# studio-shim v1`, written through a temporary file and a
+  rename) plus the launcher's path in the owner config dir. The shim uses that path while its
+  plugin folder has no `.orphaned_at`, else finds the enabled `studio@…` plugin with
+  `claude plugin list --json` (`readFromFolder`, else `installPath`) and rewrites the cache, so it
+  survives plugin updates. Without `claude` on `PATH` it says so. It never edits shell files and
+  replaces only a file with exactly that marker.
+- The label prompt of the account step comes first and is visible; a label that starts with
+  `sk-ant` or is longer than 32 characters is refused before the hidden token prompt, and so is a
+  token typed at the visible repository prompt.
+- `/studio:init` (skill `studio:init`, only on request): runs `studio init`, explains the checks and
+  the proposal in plain words, writes with `--write` only after a yes, commits the two files only
+  after an explicit yes (on the default branch it suggests a branch first), never pushes, and adds a
+  first item from the owner's own words.
+- `/studio:add` (skill `studio:add`): turns work described in plain words into an item, shows title,
+  type, component, paths and DoD and waits for a yes, then runs `studio add` with every value in
+  single quotes (`--name='value'`, the title after `--`), and tells the owner the id and what
+  `missing` says.
+
+### Changed
+
+- `init`: a missing crew token or Claude account is one next step, "run studio setup once", with the
+  `node <plugin>/bin/studio setup --link` line for a terminal without `studio`; the first item can be
+  added with `/studio:add`.
+- `setup` without a subcommand is the guided setup; before, it was a usage error.
+- README: the quick start follows the new path.
+
 ## [0.9.1] - 2026-11-04
 
 ### Changed

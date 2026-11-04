@@ -7841,12 +7841,14 @@ var require_shell_quote = __commonJS({
 });
 
 // src/main.ts
-import { homedir as homedir8 } from "node:os";
+import { realpathSync as realpathSync6 } from "node:fs";
+import { homedir as homedir9 } from "node:os";
+import { fileURLToPath as fileURLToPath6 } from "node:url";
 
 // src/cli.ts
-import { existsSync as existsSync6, mkdtempSync, rmSync as rmSync6, writeFileSync as writeFileSync10 } from "node:fs";
+import { existsSync as existsSync6, mkdtempSync, rmSync as rmSync7, writeFileSync as writeFileSync11 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname as dirname10, join as join26, resolve as resolve5 } from "node:path";
+import { dirname as dirname11, join as join27, resolve as resolve6 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/account-command.ts
@@ -12944,7 +12946,7 @@ var recursive = /* @__PURE__ */ new WeakMap();
 var NONE = 0;
 var ASSUMED = 1;
 var PROVEN = 2;
-function isRecursive(inst, stack, resolve6) {
+function isRecursive(inst, stack, resolve7) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -12954,7 +12956,7 @@ function isRecursive(inst, stack, resolve6) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve6);
+      const answer = isRecursive(child, stack, resolve7);
       if (answer > result)
         result = answer;
     }
@@ -12965,7 +12967,7 @@ function isRecursive(inst, stack, resolve6) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve6) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve7) : NONE;
       if (child > answer)
         answer = child;
     }
@@ -13029,7 +13031,7 @@ function isRecursive(inst, stack, resolve6) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve6 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve7 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -27904,9 +27906,9 @@ function dotted(path10) {
 }
 function describeIssue(issue2) {
   const base = dotted(issue2.path);
-  const join27 = (leaf) => base ? `${base}.${leaf}` : leaf;
+  const join28 = (leaf) => base ? `${base}.${leaf}` : leaf;
   if (issue2.code === "unrecognized_keys") {
-    return issue2.keys.map((k) => `${join27(snake(k))}: unknown key`);
+    return issue2.keys.map((k) => `${join28(snake(k))}: unknown key`);
   }
   return [`${base || "(root)"}: ${issue2.message}`];
 }
@@ -28158,9 +28160,9 @@ function dotted2(path10) {
 }
 function describeIssue2(issue2) {
   const base = dotted2(issue2.path);
-  const join27 = (leaf) => base ? `${base}.${leaf}` : leaf;
+  const join28 = (leaf) => base ? `${base}.${leaf}` : leaf;
   if (issue2.code === "unrecognized_keys") {
-    return issue2.keys.map((k) => `${join27(snake2(k))}: unknown key`);
+    return issue2.keys.map((k) => `${join28(snake2(k))}: unknown key`);
   }
   return [`${base || "(root)"}: ${issue2.message}`];
 }
@@ -28571,18 +28573,18 @@ function ensureStateDir(root, dir) {
   for (const seg of segmentsBelow(root, dir)) {
     cur = join3(cur, seg);
     assertStatePath(root, cur);
-    const link = isLink(cur);
-    if (link) throw new Error(`refusing to use ${cur}: it is a symlink`);
-    if (link === void 0) mkdirSync(cur, { mode: 448 });
+    const link2 = isLink(cur);
+    if (link2) throw new Error(`refusing to use ${cur}: it is a symlink`);
+    if (link2 === void 0) mkdirSync(cur, { mode: 448 });
     chmodSync(cur, 448);
   }
   return cur;
 }
 function removeStateEntry(root, target) {
   assertStatePath(root, target);
-  const link = isLink(target);
-  if (link) unlinkSync(target);
-  else if (link === false) rmSync2(target, { recursive: true, force: true });
+  const link2 = isLink(target);
+  if (link2) unlinkSync(target);
+  else if (link2 === false) rmSync2(target, { recursive: true, force: true });
 }
 var tmpCounter = 0;
 function writeStateFile(root, file2, content) {
@@ -32525,8 +32527,8 @@ function migrateFile(ownerRoot, roots, file2, now, problems) {
   try {
     for (const root of here) {
       const legacy = join14(root, file2.name);
-      const link = lstatSync11(legacy).isSymbolicLink();
-      const merged = link ? "legacy-unreadable" : file2.merge(ownerRoot, legacy);
+      const link2 = lstatSync11(legacy).isSymbolicLink();
+      const merged = link2 ? "legacy-unreadable" : file2.merge(ownerRoot, legacy);
       if (merged === "merged") removeStateEntry(root, legacy);
       else if (merged === "legacy-unreadable") keepUnreadable(ownerRoot, root, file2.name);
       else {
@@ -32824,9 +32826,9 @@ var GUARD_BIN = resolve4(
   "bin",
   "studio-guard.mjs"
 );
-function guardHookCommand(bin) {
-  if (/["$`\\\n]/.test(bin)) throw new Error(`unsafe guard path: ${JSON.stringify(bin)}`);
-  return `node "${bin}" || exit 2`;
+function guardHookCommand(bin2) {
+  if (/["$`\\\n]/.test(bin2)) throw new Error(`unsafe guard path: ${JSON.stringify(bin2)}`);
+  return `node "${bin2}" || exit 2`;
 }
 var ITEM_ID_RE = /^[A-Z]+-\d+$/;
 var isItemId = (id) => ITEM_ID_RE.test(id);
@@ -33209,16 +33211,16 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
   writeStateFile(stateRoot, file2, lines.join("\n"));
   return file2;
 }
-function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}) {
+function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {}) {
   assertItemId(item.id);
   const id = item.id;
-  const realHome = launcher.homedir ?? homedir5();
-  const env = launcher.env ?? process.env;
+  const realHome = launcher2.homedir ?? homedir5();
+  const env = launcher2.env ?? process.env;
   const { all: credentialPaths, extra: extraSecret } = credentialLocations(realHome, env);
   const toolchain = canonicalToolchainPaths(dirs.toolchainPaths, {
     home: realHome,
     env,
-    platform: launcher.platform,
+    platform: launcher2.platform,
     projectDir: dirs.projectDir,
     stateRoot,
     extraCredentialPaths: extraSecret
@@ -33335,7 +33337,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
         strictAllowlist: true,
         // Go tools such as gh verify TLS only through this macOS service; only it is opened, see
         // SECURITY.md (https://code.claude.com/docs/en/sandboxing).
-        ...(launcher.platform ?? process.platform) === "darwin" && dirs.macosTrustService === true ? { allowMachLookup: ["com.apple.trustd.agent"] } : {}
+        ...(launcher2.platform ?? process.platform) === "darwin" && dirs.macosTrustService === true ? { allowMachLookup: ["com.apple.trustd.agent"] } : {}
       }
     }
   };
@@ -33387,17 +33389,17 @@ function crewStateOf(rec, status, alive, hasReport2) {
   if (status === "in_review" || status === "queued") return "waiting";
   return hasReport2 ? "waiting" : "crashed";
 }
-async function launchCrew(projectDir, item, config2, ports, launcher = {}) {
+async function launchCrew(projectDir, item, config2, ports, launcher2 = {}) {
   const turn = launchChain;
   let done = () => {
   };
-  launchChain = new Promise((resolve6) => {
-    done = resolve6;
+  launchChain = new Promise((resolve7) => {
+    done = resolve7;
   });
   await turn;
   const held2 = {};
   try {
-    return await launchCrewLocked(projectDir, item, config2, ports, launcher, held2);
+    return await launchCrewLocked(projectDir, item, config2, ports, launcher2, held2);
   } finally {
     try {
       held2.lock?.release();
@@ -33438,21 +33440,21 @@ async function refuseIfRunning(stateRoot, item, ports) {
   return previous;
 }
 var launchChain = Promise.resolve();
-async function launchCrewLocked(projectDir, item, config2, ports, launcher, held2) {
+async function launchCrewLocked(projectDir, item, config2, ports, launcher2, held2) {
   assertItemId(item.id);
-  const penv = launcher.env ?? process.env;
+  const penv = launcher2.env ?? process.env;
   const role = config2.roles[item.role];
   if (!role) throw new Error(`role ${item.role} is not configured`);
   if (item.repo !== config2.primaryRepo && !config2.repos.includes(item.repo)) {
     throw new Error(`repo ${item.repo} is not configured (primary_repo/repos in studio.yaml)`);
   }
   githubHttpsUrl(item.repo);
-  const home = launcher.homedir ?? homedir5();
+  const home = launcher2.homedir ?? homedir5();
   const owner = {
     homedir: home,
     env: penv,
-    platform: launcher.platform,
-    uid: launcher.uid
+    platform: launcher2.platform,
+    uid: launcher2.uid
   };
   let token;
   if (config2.crewToken) token = penv[config2.crewToken.env] || void 0;
@@ -33479,7 +33481,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
   canonicalToolchainPaths(toolchainPaths, {
     home,
     env: penv,
-    platform: launcher.platform,
+    platform: launcher2.platform,
     projectDir,
     stateRoot,
     extraCredentialPaths: credentialLocations(home, penv).extra
@@ -33548,7 +33550,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     config: config2,
     ports,
     readBoard: () => loadBoard(projectDir),
-    ...launcher.capabilitiesDir === void 0 ? {} : { dir: launcher.capabilitiesDir },
+    ...launcher2.capabilitiesDir === void 0 ? {} : { dir: launcher2.capabilitiesDir },
     checkout: {
       dir: projectDir,
       remote: item.repo === config2.primaryRepo ? "origin" : githubHttpsUrl(item.repo)
@@ -33627,12 +33629,12 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     ownerRoot,
     id: item.id,
     forItem,
-    ...launcher.capabilitiesDir === void 0 ? {} : { dir: launcher.capabilitiesDir },
+    ...launcher2.capabilitiesDir === void 0 ? {} : { dir: launcher2.capabilitiesDir },
     isInstalled: (skill) => skillInstalled(claudeConfigDir, skill.split(":").at(-1) ?? ""),
     startedAt: ports.clock.now().toISOString()
   });
   caps.reportName = newReportName(stateRoot, item.id);
-  caps.prByStudio = (launcher.platform ?? process.platform) === "darwin" && !ownerConfig.crewAllowMacosTrustService;
+  caps.prByStudio = (launcher2.platform ?? process.platform) === "darwin" && !ownerConfig.crewAllowMacosTrustService;
   const brief = writeBrief(stateRoot, item, config2, projectDir, briefRules, caps);
   const settings = writeCrewSettings(
     stateRoot,
@@ -33794,7 +33796,7 @@ async function checkToken(token, repo, ports) {
   return pulls.code === 0 ? void 0 : "pull requests read";
 }
 async function runSecretSet(o2) {
-  const repo = readPrimaryRepo(o2.project);
+  const repo = o2.repo === void 0 ? readPrimaryRepo(o2.project) : assertPrimaryRepo(o2.repo);
   const input2 = o2.readSecret ? await o2.readSecret("Crew token (input hidden): ") : void 0;
   if (input2 === void 0) {
     throw new Error("studio secret set needs a terminal for hidden input; nothing written");
@@ -34345,6 +34347,29 @@ async function bounded(work, ms, what) {
     return { code: 1, why: e.message };
   }
 }
+async function ghCheck(ports, ghMs = GH_TIMEOUT_MS2) {
+  const gh = (args) => () => ports.gh.run(args, { timeoutMs: ghMs });
+  const ghVersion = await bounded(gh(["--version"]), ghMs, "gh --version");
+  if (ghVersion.code !== 0) {
+    return {
+      name: "gh",
+      status: "fail",
+      detail: ghVersion.why ?? "not found",
+      fix: "install the GitHub CLI (https://cli.github.com), then gh auth login"
+    };
+  }
+  const auth = await bounded(
+    gh(["auth", "status", "--hostname", "github.com"]),
+    ghMs,
+    "gh auth status"
+  );
+  return auth.code === 0 ? { name: "gh", status: "pass", detail: "logged in to github.com" } : {
+    name: "gh",
+    status: "fail",
+    detail: auth.why ?? "not logged in to github.com",
+    fix: "gh auth login --hostname github.com"
+  };
+}
 async function prerequisites(o2) {
   const checks = [];
   const ghMs = o2.timeouts?.ghMs ?? GH_TIMEOUT_MS2;
@@ -34354,30 +34379,7 @@ async function prerequisites(o2) {
   checks.push(
     doctor.gitOk ? { name: "git", status: "pass", detail: r.git } : { name: "git", status: "fail", detail: r.git, fix: "install git 2.38 or newer" }
   );
-  const gh = (args) => () => o2.ports.gh.run(args, { timeoutMs: ghMs });
-  const ghVersion = await bounded(gh(["--version"]), ghMs, "gh --version");
-  if (ghVersion.code !== 0) {
-    checks.push({
-      name: "gh",
-      status: "fail",
-      detail: ghVersion.why ?? "not found",
-      fix: "install the GitHub CLI (https://cli.github.com), then gh auth login"
-    });
-  } else {
-    const auth = await bounded(
-      gh(["auth", "status", "--hostname", "github.com"]),
-      ghMs,
-      "gh auth status"
-    );
-    checks.push(
-      auth.code === 0 ? { name: "gh", status: "pass", detail: "logged in to github.com" } : {
-        name: "gh",
-        status: "fail",
-        detail: auth.why ?? "not logged in to github.com",
-        fix: "gh auth login --hostname github.com"
-      }
-    );
-  }
+  checks.push(await ghCheck(o2.ports, ghMs));
   const env = { PATH: o2.env.PATH ?? "", HOME: o2.owner.homedir ?? "" };
   const plugins = o2.ports.plugins;
   const claude = plugins ? await bounded(
@@ -34417,7 +34419,7 @@ async function prerequisites(o2) {
       name: "crew token",
       status: "warn",
       detail: r.crewToken.status,
-      fix: "after init --write, in a terminal: studio secret set crew-token (a least-privilege token, see README)"
+      fix: "in your own terminal: studio setup (or studio secret set crew-token; a least-privilege token, see README)"
     }
   );
   const loginReady = r.credentialProvider !== null || r.accounts.length > 0;
@@ -34426,7 +34428,7 @@ async function prerequisites(o2) {
       name: "claude account",
       status: "warn",
       detail: `none stored; crews would use ${r.claudeLogin}`,
-      fix: "in a terminal: claude setup-token, then studio account add <label>"
+      fix: "in your own terminal: studio setup (or claude setup-token, then studio account add <label>)"
     }
   );
   if (r.superpowers === "not found") {
@@ -34450,22 +34452,22 @@ async function isIgnored(o2, file2) {
     return false;
   }
 }
-function nextSteps(prefix, written, checks) {
+function nextSteps(prefix, written, checks, launcher2) {
   const open2 = (name) => checks.some((c3) => c3.name === name && c3.status !== "pass");
+  const notFound = launcher2 === void 0 ? "" : ` If studio is not found there: node '${launcher2.replace(/'/g, `'\\''`)}' setup --link`;
   return [
     ...open2("ci") ? [
       "Studio could not read your CI runners: run studio setup ci (with --write) to fix the ci: block."
     ] : [],
     ...written ? [] : ["Run studio init --write to write the two files."],
     "Commit .studio/studio.yaml and .studio/board.yaml.",
-    ...open2("crew token") ? ["In a terminal, store the crew token: studio secret set crew-token"] : [],
-    ...open2("claude account") ? [
-      "In a terminal, add a Claude account for the crews: claude setup-token, then studio account add <label>"
+    ...open2("crew token") || open2("claude account") ? [
+      `In your own terminal, run studio setup once: it stores the crew token and a Claude account for the crews, one guided step each.${notFound}`
     ] : [],
     ...open2("superpowers") ? [`In Claude Code, install superpowers: ${SUPERPOWERS_INSTALL}`] : [],
     `In Claude Code, install the Studio plugin if it is not yet: ${PLUGIN_INSTALL.join(", then ")}; then restart Claude Code in this folder. The board comes with the plugin.`,
     "Open the board pane with /studio.",
-    `Add a first item: studio add "Add a health endpoint" --type fix --dod "GET /health returns 200" (it gets the id ${prefix}-1)`,
+    `Add a first item: in Claude Code run /studio:add and say what you need, or run studio add "Add a health endpoint" --type fix --dod "GET /health returns 200" (it gets the id ${prefix}-1)`,
     "In a Claude Code session in this folder say: run the Studio lead loop (skill studio:studio-lead). It runs studio tick every few minutes."
   ];
 }
@@ -34612,7 +34614,7 @@ ${body}`;
       written.push(...STUDIO_FILES);
     }
   }
-  const steps = nextSteps(prefix, written.length > 0, checks);
+  const steps = nextSteps(prefix, written.length > 0, checks, o2.launcher);
   if (o2.json) {
     o2.stdout(
       `${JSON.stringify(
@@ -36029,6 +36031,289 @@ function formatOverview(list2) {
   ]);
 }
 
+// src/setup.ts
+import {
+  chmodSync as chmodSync6,
+  lstatSync as lstatSync21,
+  mkdirSync as mkdirSync7,
+  readFileSync as readFileSync25,
+  renameSync as renameSync10,
+  rmSync as rmSync6,
+  statSync as statSync4,
+  writeFileSync as writeFileSync10
+} from "node:fs";
+import { homedir as homedir8 } from "node:os";
+import { dirname as dirname10, join as join26, resolve as resolve5 } from "node:path";
+var DEFAULT_LABEL2 = "main";
+var MAX_LABEL = 32;
+var TOKEN_TEXT = [
+  "   Crews push their branches and open pull requests with a GitHub token of their own, never",
+  "   with your gh login. Create a fine-grained token on GitHub (Settings, Developer settings,",
+  "   Personal access tokens), limited to this project's repositories, with",
+  "   contents and pull requests read/write and nothing else (no administration, no workflows).",
+  "   Studio checks it once against the repository and stores it with mode 0600; it is never shown.",
+  "   The token goes only into the hidden prompt."
+];
+var ACCOUNT_TEXT = [
+  "   Crews run Claude Code with a token of their own, so your own login stays yours. In another",
+  "   terminal tab run: claude setup-token",
+  "   It prints a token valid for one year (it needs a Pro, Max, Ultra, Team or Enterprise plan).",
+  `   First you type a short label for this account (visible; Enter keeps ${DEFAULT_LABEL2}).`,
+  "   Then you paste the token at the second prompt (hidden)."
+];
+var LOOKS_LIKE_TOKEN = /^(sk-ant|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)/;
+var SHIM_MARKER = "# studio-shim v1";
+var PICK = [
+  'let s="";process.stdin.on("data",d=>{s+=d}).on("end",()=>{',
+  'const fs=require("fs"),p=require("path");let a;',
+  'try{a=JSON.parse(s)}catch{const l=s.trim().split("\\n").pop()||"";try{a=JSON.parse(l)}catch{process.exit(1)}}',
+  "for(const e of Array.isArray(a)?a:[]){",
+  'if(!e||typeof e.id!=="string"||!e.id.startsWith("studio@")||e.enabled!==true)continue;',
+  'const r=typeof e.readFromFolder==="string"?e.readFromFolder:e.installPath;',
+  'if(typeof r!=="string")continue;const b=p.join(r,"bin","studio");',
+  'if(fs.existsSync(b)&&!fs.existsSync(p.join(r,".orphaned_at"))){console.log(b);return}}',
+  "process.exit(1)})"
+].join("");
+var SHIM = `#!/bin/sh
+${SHIM_MARKER}
+# Written by studio setup --link. Runs the Studio plugin's CLI and finds the plugin again after an
+# update. Studio replaces this file only while the line above is unchanged.
+case "\${XDG_CONFIG_HOME:-}" in /*) dir="$XDG_CONFIG_HOME/studio" ;; *) dir="$HOME/.config/studio" ;; esac
+cache="$dir/launcher"
+launcher=""
+if [ -f "$cache" ]; then
+  launcher=$(cat "$cache")
+  root=$(dirname "$(dirname "$launcher")")
+  if [ ! -f "$launcher" ] || [ -e "$root/.orphaned_at" ]; then launcher=""; fi
+fi
+if [ -z "$launcher" ]; then
+  if ! command -v claude >/dev/null 2>&1; then
+    echo "studio: the claude CLI is not on PATH; it is needed to find the Studio plugin. Install Claude Code, or run node <plugin>/bin/studio" >&2
+    exit 127
+  fi
+  launcher=$(claude plugin list --json 2>/dev/null | node -e '${PICK}') || launcher=""
+  if [ -z "$launcher" ]; then
+    echo "studio: no enabled studio plugin in claude plugin list; in Claude Code: /plugin install studio@studio-marketplace" >&2
+    exit 1
+  fi
+  { mkdir -p "$dir" && tmp=$(mktemp "$dir/.launcher.XXXXXX") && printf '%s\\n' "$launcher" > "$tmp" && mv -f "$tmp" "$cache"; } 2>/dev/null || true
+fi
+exec node "$launcher" "$@"
+`;
+var SHIM_NOTE = "   The shim finds the plugin again after an update; no need to run --link again.";
+var shQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
+function studioOnPath(env) {
+  for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
+    const file2 = join26(dir, "studio");
+    try {
+      const st = statSync4(file2);
+      if (st.isFile() && (st.mode & 73) !== 0) return file2;
+    } catch {
+    }
+  }
+  return void 0;
+}
+var yes = (answer) => /^(|y|yes)$/i.test(answer.trim());
+function writeAtomic2(file2, text, mode) {
+  const tmp = join26(dirname10(file2), `.studio-${process.pid}-${Date.now()}.tmp`);
+  try {
+    writeFileSync10(tmp, text, { flag: "wx", mode });
+    chmodSync6(tmp, mode);
+    renameSync10(tmp, file2);
+  } catch (e) {
+    rmSync6(tmp, { force: true });
+    throw e;
+  }
+}
+async function tokenRepo(o2) {
+  try {
+    return readPrimaryRepo(o2.project);
+  } catch {
+  }
+  try {
+    const origin = await o2.ports.git.run(o2.project, ["remote", "get-url", "origin"]);
+    const repo2 = githubRepoOf(origin);
+    if (repo2 !== void 0) return repo2;
+  } catch {
+  }
+  o2.stdout(
+    "   No GitHub repository found here. The next prompt is visible; the token comes after.\n"
+  );
+  const answer = await o2.readLine?.("   Repository the crews work on, as owner/name (visible): ");
+  if (answer === void 0) return void 0;
+  const repo = answer.trim();
+  if (LOOKS_LIKE_TOKEN.test(repo) || repo.length > 100) {
+    o2.stdout("   that looks like a token \u2014 it was not stored; enter owner/name\n");
+    return void 0;
+  }
+  try {
+    return assertPrimaryRepo(repo);
+  } catch {
+    o2.stdout("   that is not owner/name; nothing stored\n");
+    return void 0;
+  }
+}
+async function accountLabel(o2) {
+  const answer = await o2.readLine?.(
+    `   Short label for this account, visible (Enter keeps ${DEFAULT_LABEL2}) [${DEFAULT_LABEL2}]: `
+  );
+  if (answer === void 0) return void 0;
+  const label = answer.trim() === "" ? DEFAULT_LABEL2 : answer.trim();
+  if (LOOKS_LIKE_TOKEN.test(label) || label.length > MAX_LABEL) {
+    o2.stdout("   that looks like a token \u2014 it was not stored; enter a short label\n");
+    return void 0;
+  }
+  if (!validLabel(label) || label.startsWith(".")) {
+    o2.stdout(
+      "   a label has letters, digits, dot, dash or underscore and does not start with a dot; nothing stored\n"
+    );
+    return void 0;
+  }
+  return label;
+}
+async function link(o2, home) {
+  const say = (s) => o2.stdout(`${safe(s)}
+`);
+  if (o2.launcher === void 0) {
+    say("4. studio in your terminal: cannot tell where the plugin is; nothing written");
+    return 0;
+  }
+  const launcher2 = o2.launcher;
+  const localBin = join26(home, ".local", "bin");
+  const onPath = (o2.env.PATH ?? "").split(":").some((d) => d !== "" && resolve5(d) === resolve5(localBin));
+  if (!onPath) {
+    say("4. studio in your terminal: ~/.local/bin is not on your PATH.");
+    say("   Studio does not edit shell files. Add ~/.local/bin to PATH in your shell's startup");
+    say("   file, open a new terminal and run studio setup --link again.");
+    say(`   Until then: node ${shQuote(launcher2)} <command>`);
+    return 0;
+  }
+  const target = join26(localBin, "studio");
+  let current;
+  try {
+    current = lstatSync21(target).isFile() ? readFileSync25(target, "utf8") : "";
+  } catch {
+    current = void 0;
+  }
+  const cache = join26(ownerConfigDir(o2.owner), "launcher");
+  const writeCache = () => {
+    mkdirSync7(dirname10(cache), { recursive: true, mode: 448 });
+    writeAtomic2(cache, `${launcher2}
+`, 384);
+  };
+  if (current === SHIM) {
+    writeCache();
+    say(`4. studio in your terminal: done (${target})`);
+    say(SHIM_NOTE);
+    return 0;
+  }
+  let prompt;
+  if (current === void 0) prompt = `   Write the Studio shim ${target}? [Y/n] `;
+  else if (current.split("\n")[1] === SHIM_MARKER) {
+    prompt = `   Update the Studio shim ${target}? [Y/n] `;
+  } else {
+    say(`4. studio in your terminal: ${target} is not a Studio shim; nothing changed.`);
+    say("   Move it away and run studio setup --link again, or keep it.");
+    return 1;
+  }
+  say("4. studio in your terminal:");
+  const answer = await o2.readLine?.(safe(prompt));
+  if (answer === void 0 || !yes(answer)) {
+    say(`   nothing written; until you do: node ${shQuote(launcher2)} <command>`);
+    return 0;
+  }
+  mkdirSync7(localBin, { recursive: true });
+  writeCache();
+  writeAtomic2(target, SHIM, 493);
+  say(`   wrote ${target}`);
+  say(SHIM_NOTE);
+  return 0;
+}
+async function runSetup(o2) {
+  if (o2.env.STUDIO_ROLE === "crew") throw new Error("this command is not for crew sessions");
+  if (!o2.isTerminal || o2.readSecret === void 0 || o2.readLine === void 0) {
+    throw new Error(
+      "studio setup needs your own terminal (it asks for tokens with hidden input); run it there, not inside Claude Code. Nothing changed"
+    );
+  }
+  const say = (s) => o2.stdout(`${safe(s)}
+`);
+  const home = o2.owner.homedir ?? homedir8();
+  const gh = await ghCheck(o2.ports);
+  if (gh.status !== "pass") {
+    say(`1. GitHub CLI: ${gh.detail}`);
+    say(`   Fix: ${gh.fix ?? "gh auth login"}, then run studio setup again.`);
+    return 1;
+  }
+  say(`1. GitHub CLI: done (${gh.detail})`);
+  const { report } = await doctorReport(o2);
+  if (report.crewToken.status === "set") {
+    say(`2. Crew token: done (${report.crewToken.source ?? "set"})`);
+  } else {
+    say(
+      `2. Crew token: ${report.crewToken.status === "invalid" ? "the stored file is not usable" : "missing"}`
+    );
+    for (const l of TOKEN_TEXT) say(l);
+    const repo = await tokenRepo(o2);
+    if (repo === void 0) return 1;
+    const code = await runSecretSet({
+      project: o2.project,
+      ports: o2.ports,
+      owner: o2.owner,
+      readSecret: o2.readSecret,
+      stdout: (s) => o2.stdout(`   ${s}`),
+      repo
+    });
+    if (code !== 0) {
+      say("   Nothing stored. Fix the token on GitHub, then run studio setup again.");
+      return code;
+    }
+  }
+  if (report.claudeLogin.startsWith("accounts, but")) {
+    say(`3. Claude account for crews: ${report.claudeLogin}`);
+    say("   Run studio account list and studio doctor to see what is wrong.");
+    return 1;
+  }
+  if (report.credentialProvider !== null || report.accounts.length > 0) {
+    say(`3. Claude account for crews: done (${report.claudeLogin})`);
+  } else {
+    say("3. Claude account for crews: none stored");
+    for (const l of ACCOUNT_TEXT) say(l);
+    const label = await accountLabel(o2);
+    if (label === void 0) return 1;
+    const code = await runAccount({
+      args: ["add", label],
+      owner: o2.owner,
+      ownerRoot: ownerStateRootFor(o2.owner),
+      ports: o2.ports,
+      env: o2.env,
+      json: false,
+      isTerminal: true,
+      readSecret: o2.readSecret,
+      stdout: (s) => o2.stdout(`   ${s}`),
+      stderr: o2.stderr
+    });
+    if (code !== 0) return code;
+  }
+  if (o2.link) {
+    const code = await link(o2, home);
+    if (code !== 0) return code;
+  } else {
+    const found = studioOnPath(o2.env);
+    if (found !== void 0) say(`4. studio in your terminal: done (${found})`);
+    else {
+      say("4. studio in your terminal: not on your PATH (Claude Code finds it on its own).");
+      say("   To use studio in any terminal: studio setup --link");
+      if (o2.launcher !== void 0) {
+        say(`   (until then: node ${shQuote(o2.launcher)} <command>)`);
+      }
+    }
+  }
+  say("");
+  say("Done. Now open your project in Claude Code and run /studio:init.");
+  return 0;
+}
+
 // src/cli.ts
 var USAGE = `Usage: studio [--project <dir>] [--json] <command>
 
@@ -36067,6 +36352,8 @@ Commands:
   sources list             Third-party sources and their licences
   sources check            Judge upstream updates: fits, unclear or conflict; adopts nothing
   sources apply <id>       Adopt a candidate that fits
+  setup [--link]           Owner only, in a terminal: gh, crew token and Claude account, one guided
+                           step each, skipped when done; --link puts studio on your terminal's PATH
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
   setup stack [--write]    Detect the project's stacks from its manifest files
   secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
@@ -36161,7 +36448,7 @@ async function runCli(argv, deps) {
       return 0;
     }
     const [cmd, ...rest] = positionals;
-    const project = resolve5(deps.cwd, values.project ?? ".");
+    const project = resolve6(deps.cwd, values.project ?? ".");
     const json2 = values.json === true;
     const print = (v) => stdout(`${JSON.stringify(v, null, 2)}
 `);
@@ -36178,6 +36465,9 @@ async function runCli(argv, deps) {
     const addOnly = [values.type, values.repo, values.path, values.dod, values.plan];
     if (cmd !== "add" && addOnly.some((v) => v !== void 0)) {
       throw new UsageError("--type, --repo, --path, --dod and --plan work with add only");
+    }
+    if (values.link !== void 0 && cmd !== "setup") {
+      throw new UsageError("--link works with setup only");
     }
     const componentField = (config2, item) => config2?.components === void 0 ? {} : { components: item === void 0 ? [] : componentsOf(item, config2) };
     const componentCell = (ids) => ids === void 0 || ids.length === 0 ? "-" : ids.join(",");
@@ -36319,7 +36609,7 @@ async function runCli(argv, deps) {
       const { config: config2 } = loadAll();
       refuseNativeQueue(config2);
       const root = await boundStateRoot();
-      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname10(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
+      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname11(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
       const blockedNow = queueHold();
       if (blockedNow !== void 0) throw new HeldError(blockedNow);
       let heldLine;
@@ -36443,7 +36733,7 @@ async function runCli(argv, deps) {
           throw new Error(`crew record for ${item.id} has no valid startedAt`);
         }
       }
-      const clone2 = join26(stateRoot(), "clones", item.id);
+      const clone2 = join27(stateRoot(), "clones", item.id);
       const fileName = reportName(stateRoot(), item.id);
       if (fileName === void 0) {
         throw new ReportError(
@@ -36937,7 +37227,8 @@ async function runCli(argv, deps) {
           env: deps.env,
           json: json2,
           write: values.write === true,
-          stdout
+          stdout,
+          ...deps.launcher === void 0 ? {} : { launcher: deps.launcher }
         });
       }
       case "add": {
@@ -37150,7 +37441,7 @@ async function runCli(argv, deps) {
             hasReport: (item) => {
               if (!isItemId(item)) return false;
               const name = reportName(root, item);
-              return name !== void 0 && existsSync6(join26(root, "clones", item, ".studio", "reports", name));
+              return name !== void 0 && existsSync6(join27(root, "clones", item, ".studio", "reports", name));
             }
           }
         );
@@ -37212,7 +37503,7 @@ async function runCli(argv, deps) {
         const stoppedAt = ports.clock.now().toISOString();
         const latest = readCrewRecords(root);
         latest[id] = { ...latest[id] ?? rec, stoppedAt };
-        writeStateFile(root, join26(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
+        writeStateFile(root, join27(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
 `);
         let requeued;
         if (values.requeue === true) {
@@ -37296,6 +37587,24 @@ async function runCli(argv, deps) {
         return 0;
       }
       case "setup": {
+        if (values.link === true && rest.length > 0) {
+          throw new UsageError("--link belongs to studio setup without a subcommand");
+        }
+        if (rest.length === 0) {
+          return await runSetup({
+            project,
+            ports,
+            owner,
+            env: deps.env,
+            isTerminal: deps.isTerminal === true,
+            ...deps.readSecret === void 0 ? {} : { readSecret: deps.readSecret },
+            ...deps.readLine === void 0 ? {} : { readLine: deps.readLine },
+            link: values.link === true,
+            ...deps.launcher === void 0 ? {} : { launcher: deps.launcher },
+            stdout,
+            stderr
+          });
+        }
         if (rest[0] === "sources") {
           refuseCrew(deps.env);
           const results = await setupSources({
@@ -37312,7 +37621,7 @@ async function runCli(argv, deps) {
         }
         if (rest[0] !== "ci" || rest.length !== 1) {
           throw new UsageError(
-            "setup needs a subcommand: ci [--write] | stack [--write] | sources [<id>...]"
+            "setup takes: [--link] | ci [--write] | stack [--write] | sources [<id>...]"
           );
         }
         return await runSetupCi({
@@ -37566,7 +37875,8 @@ function parseCli(argv) {
         path: { type: "string", multiple: true },
         dod: { type: "string", multiple: true },
         plan: { type: "string" },
-        help: { type: "boolean" }
+        help: { type: "boolean" },
+        link: { type: "boolean" }
       },
       allowPositionals: true,
       strict: true
@@ -37646,13 +37956,13 @@ ${notRunSection(notRunHere)}
 ${body.replace(new RegExp("[^\\P{Cc}\\n\\t]|\\p{Cf}", "gu"), "").slice(0, PR_BODY_MAX)}
 `;
   const withBody = async (use) => {
-    const dir = mkdtempSync(join26(tmpdir(), "studio-pr-"));
+    const dir = mkdtempSync(join27(tmpdir(), "studio-pr-"));
     try {
-      const file2 = join26(dir, "body.md");
-      writeFileSync10(file2, text, { mode: 384 });
+      const file2 = join27(dir, "body.md");
+      writeFileSync11(file2, text, { mode: 384 });
       return await use(file2);
     } finally {
-      rmSync6(dir, { recursive: true, force: true });
+      rmSync7(dir, { recursive: true, force: true });
     }
   };
   const room = await capacity();
@@ -37907,6 +38217,7 @@ function buildSnapshot(root, ownerRoot, board, capacity, queue, now, hold, limit
 }
 
 // src/hidden-input.ts
+import { createInterface } from "node:readline";
 var MAX_CHARS = 64 * 1024;
 function readHiddenLine(prompt, input2, write) {
   if (!input2.isTTY || !input2.setRawMode) return Promise.resolve(void 0);
@@ -37914,14 +38225,14 @@ function readHiddenLine(prompt, input2, write) {
   input2.setRawMode(true);
   input2.setEncoding("utf8");
   input2.resume();
-  return new Promise((resolve6) => {
+  return new Promise((resolve7) => {
     let value = "";
     const done = (result) => {
       input2.removeListener("data", onData);
       input2.setRawMode?.(false);
       input2.pause();
       write("\n");
-      resolve6(result);
+      resolve7(result);
     };
     const onData = (chunk) => {
       for (const ch of chunk) {
@@ -37935,10 +38246,30 @@ function readHiddenLine(prompt, input2, write) {
     input2.on("data", onData);
   });
 }
+function readVisibleLine(prompt, input2, output2) {
+  if (!input2.isTTY) return Promise.resolve(void 0);
+  const rl = createInterface({ input: input2, output: output2, terminal: true });
+  return new Promise((resolve7) => {
+    let answered = false;
+    const finish = (value) => {
+      if (answered) return;
+      answered = true;
+      rl.close();
+      input2.pause();
+      resolve7(value);
+    };
+    rl.on("close", () => finish(void 0));
+    rl.on("SIGINT", () => {
+      output2.write("\n");
+      finish(void 0);
+    });
+    rl.question(prompt, (answer) => finish(answer));
+  });
+}
 
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync7, openSync as openSync7, readFileSync as readFileSync27 } from "node:fs";
+import { closeSync as closeSync7, openSync as openSync7, readFileSync as readFileSync28 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -39603,8 +39934,8 @@ var disconnect = (anyProcess) => {
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/deferred.js
 var createDeferred = () => {
   const methods = {};
-  const promise2 = new Promise((resolve6, reject) => {
-    Object.assign(methods, { resolve: resolve6, reject });
+  const promise2 = new Promise((resolve7, reject) => {
+    Object.assign(methods, { resolve: resolve7, reject });
   });
   return Object.assign(promise2, methods);
 };
@@ -40431,7 +40762,7 @@ var escapeArgument = (rawArgument) => {
 var shouldQuoteArgument = (argument) => argument === "" || argument.endsWith("\\") || quotedCharacterRegExp.test(argument);
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/cwd.js
-import { statSync as statSync4 } from "node:fs";
+import { statSync as statSync5 } from "node:fs";
 import path6 from "node:path";
 import process8 from "node:process";
 var normalizeCwd = (cwd = getDefaultCwd()) => {
@@ -40459,7 +40790,7 @@ var fixCwdError = (originalMessage, cwd) => {
   }
   let cwdStat;
   try {
-    cwdStat = statSync4(cwd);
+    cwdStat = statSync5(cwd);
   } catch (error62) {
     return `The "cwd" option is invalid: ${cwd}.
 ${error62.message}
@@ -41634,7 +41965,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync26 } from "node:fs";
+import { readFileSync as readFileSync27 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value, optionName) => {
@@ -41990,7 +42321,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync25 } from "node:fs";
+import { readFileSync as readFileSync26 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -42104,7 +42435,7 @@ var getTargetFd = ({ value, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync25(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync26(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value, fdNumber) => {
   if (value === "inherit") {
@@ -42498,8 +42829,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync26(value))] }),
-    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync26(file2))] }),
+    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync27(value))] }),
+    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync27(file2))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value }) => ({ contents: () => [...value] }),
     string: ({ value }) => ({ contents: [value] }),
@@ -42795,7 +43126,7 @@ var throwOnSerializableInput = (optionName, invalidItem) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-sync.js
-import { writeFileSync as writeFileSync11, appendFileSync } from "node:fs";
+import { writeFileSync as writeFileSync12, appendFileSync } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/output.js
 var shouldLogOutput = ({ stdioItems, encoding, verboseInfo, fdNumber }) => fdNumber !== "all" && isFullVerbose(verboseInfo, fdNumber) && !BINARY_ENCODINGS.has(encoding) && isFdVerbose(fdNumber) && (stdioItems.some(({ type, value }) => type === "native" && PIPED_STDIO_VALUES.has(value)) || stdioItems.every(({ type }) => TRANSFORM_TYPES.has(type)));
@@ -42929,7 +43260,7 @@ var writeToFiles = (chunks, stdioItems, outputFiles) => {
     if (append || outputFiles.has(path10)) {
       appendFileSync(path10, contents);
     } else {
-      writeFileSync11(path10, contents);
+      writeFileSync12(path10, contents);
     }
     outputFiles.add(path10);
   }
@@ -44160,11 +44491,11 @@ var addConcurrentStream = (concurrentStreams, stream, waitName) => {
   const promises = weakMap.get(stream);
   const promise2 = createDeferred();
   promises.push(promise2);
-  const resolve6 = promise2.resolve.bind(promise2);
-  return { resolve: resolve6, promises };
+  const resolve7 = promise2.resolve.bind(promise2);
+  return { resolve: resolve7, promises };
 };
-var waitForConcurrentStreams = async ({ resolve: resolve6, promises }, subprocess) => {
-  resolve6();
+var waitForConcurrentStreams = async ({ resolve: resolve7, promises }, subprocess) => {
+  resolve7();
   const [isSubprocessExit] = await Promise.race([
     Promise.allSettled([true, subprocess]),
     Promise.all([false, ...promises])
@@ -45750,7 +46081,7 @@ var PLUGIN_TIMEOUT_MS = 3e5;
 var STOP_GRACE_MS = 5e3;
 var STOP_POLL_MS = 100;
 var IDENTITY_TIMEOUT_MS = 5e3;
-var sleep = (ms) => new Promise((resolve6) => setTimeout(resolve6, ms));
+var sleep = (ms) => new Promise((resolve7) => setTimeout(resolve7, ms));
 function realPorts(claudeBin = "claude") {
   const clock = { now: () => /* @__PURE__ */ new Date(), sleep };
   const gh = {
@@ -45822,9 +46153,9 @@ function realPorts(claudeBin = "claude") {
           detached: true,
           stdio: ["pipe", fd, fd]
         });
-        const pid = await new Promise((resolve6, reject) => {
+        const pid = await new Promise((resolve7, reject) => {
           child.once("error", reject);
-          child.once("spawn", () => resolve6(child.pid));
+          child.once("spawn", () => resolve7(child.pid));
         });
         child.stdin?.on("error", () => {
         });
@@ -45840,7 +46171,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync27(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync28(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }
@@ -45882,8 +46213,8 @@ function realPorts(claudeBin = "claude") {
         forceKillAfterDelay: 1e3
       });
       let timer;
-      const late = new Promise((resolve6) => {
-        timer = setTimeout(() => resolve6({ code: 1, stdout: "" }), opts.timeoutMs + 2e3);
+      const late = new Promise((resolve7) => {
+        timer = setTimeout(() => resolve7({ code: 1, stdout: "" }), opts.timeoutMs + 2e3);
         timer.unref();
       });
       const run2 = child.then((r) => ({
@@ -45926,13 +46257,23 @@ function realPorts(claudeBin = "claude") {
 }
 
 // src/main.ts
+function launcher() {
+  try {
+    return realpathSync6(fileURLToPath6(new URL("../bin/studio", import.meta.url)));
+  } catch {
+    return void 0;
+  }
+}
+var bin = launcher();
 process.exitCode = await runCli(process.argv.slice(2), {
   ports: realPorts(),
   stdout: (s) => process.stdout.write(s),
   stderr: (s) => process.stderr.write(s),
   env: process.env,
-  homedir: homedir8(),
+  homedir: homedir9(),
   cwd: process.cwd(),
   isTerminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
-  readSecret: (prompt) => readHiddenLine(prompt, process.stdin, (s) => process.stderr.write(s))
+  readSecret: (prompt) => readHiddenLine(prompt, process.stdin, (s) => process.stderr.write(s)),
+  readLine: (prompt) => readVisibleLine(prompt, process.stdin, process.stderr),
+  ...bin === void 0 ? {} : { launcher: bin }
 });

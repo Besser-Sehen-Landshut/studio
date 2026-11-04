@@ -89,6 +89,42 @@ describe('self-contained plugin bundle', () => {
     expect(r.stdout).toContain('Usage: studio');
   });
 
+  it('bin/studio setup refuses without a terminal and asks nothing', () => {
+    const home = mkdtempSync(join(tmpdir(), 'studio-bundle-home-'));
+    try {
+      const r = spawnSync(process.execPath, [join(plugin, 'bin', 'studio'), 'setup', '--link'], {
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH ?? '', HOME: home },
+        input: '',
+      });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/needs your own terminal/);
+      expect(r.stdout).toBe('');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('ships /studio:init (on request only) and /studio:add as skills', () => {
+    const front = (name: string) => {
+      const text = readFileSync(join(repo, 'skills', name, 'SKILL.md'), 'utf8');
+      return /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1] ?? '';
+    };
+    expect(front('init')).toMatch(/^name: init$/m);
+    expect(front('init')).toMatch(/^disable-model-invocation: true$/m);
+    expect(front('add')).toMatch(/^name: add$/m);
+    const init = readFileSync(join(repo, 'skills', 'init', 'SKILL.md'), 'utf8');
+    expect(init).toContain('studio init --write');
+    expect(init).toContain('studio setup');
+    expect(init).toContain('Never push');
+    const add = readFileSync(join(repo, 'skills', 'add', 'SKILL.md'), 'utf8');
+    expect(add).toContain('Shall I add this?');
+    // The example command quotes every word singly, with the title after --.
+    const example = /```bash\n\s*(studio add [^\n]*)\n/.exec(add)?.[1] ?? '';
+    expect(example).toMatch(/ -- '/);
+    expect(example).not.toContain('"');
+  });
+
   it('bin/studio-guard.mjs decides from the bundle without node_modules', () => {
     const wt = join(plugin, 'wt');
     mkdirSync(wt);

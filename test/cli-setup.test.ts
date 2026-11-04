@@ -181,13 +181,19 @@ describe('studio setup ci', () => {
     }
   });
 
-  it('an unknown or missing setup subcommand is a usage error', async () => {
+  it('an unknown setup subcommand is a usage error', async () => {
     const fx = fixture();
-    for (const argv of [['setup', 'nope'], ['setup']]) {
-      const r = await cli(fx, ...argv);
-      expect(r.code).toBe(1);
-      expect(r.err).toMatch(/Usage/);
-    }
+    const r = await cli(fx, 'setup', 'nope');
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/Usage/);
+    expect(fx.calls).toEqual([]);
+  });
+
+  it('setup without a subcommand is the guided setup, which needs a terminal', async () => {
+    const fx = fixture();
+    const r = await cli(fx, 'setup');
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/needs your own terminal/);
     expect(fx.calls).toEqual([]);
   });
 

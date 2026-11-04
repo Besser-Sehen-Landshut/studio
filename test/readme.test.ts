@@ -88,26 +88,28 @@ describe('README quick start', () => {
     expect(readme).toMatch(/notify: \{ channel, command \}/);
     expect(readme).toContain('`blocks.json` in the owner root');
     expect(readme).toContain('.legacy-');
-    expect(readme).toMatch(/Status: 0\.9\.1/);
+    expect(readme).toMatch(/Status: 0\.10\.0/);
     expect(readme).not.toMatch(/crews cannot write the state base/);
     expect(readme).not.toMatch(/blocks?[^.]{0,40}per project/i);
   });
 });
 
 describe('README quick start at the top', () => {
-  it('is the first section and goes install, init, init --write, next steps, add, lead', () => {
+  it('is the first section and goes install, setup, /studio:init, add, board, lead', () => {
     const at = readme.indexOf('## Quick start');
     expect(at).toBeGreaterThan(0);
     expect(readme.indexOf('\n## ')).toBe(at - 1);
     const quick = readme.slice(at, readme.indexOf('\n## ', at + 1));
     const steps = [
       '/plugin install studio@studio-marketplace',
+      '`studio setup --link`',
+      'claude setup-token',
+      '`/studio:init`',
       '`studio init`',
       '`studio init --write`',
-      'studio secret set crew-token',
-      'studio account add <label>',
-      '`/studio`',
+      '`/studio:add ',
       '`studio add ',
+      '`/studio`',
       'run the Studio lead loop',
     ];
     let from = 0;
