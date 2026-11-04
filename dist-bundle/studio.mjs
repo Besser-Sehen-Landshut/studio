@@ -32595,6 +32595,14 @@ var PULL_FLAGS = /* @__PURE__ */ new Set([
   "--no-stat"
 ]);
 
+// src/held.ts
+var HeldError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "HeldError";
+  }
+};
+
 // src/owner-state.ts
 import { lstatSync as lstatSync11, renameSync as renameSync8 } from "node:fs";
 import { basename as basename3, dirname as dirname6, join as join14 } from "node:path";
@@ -33742,7 +33750,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     now: ports.clock.now(),
     heartbeatStaleMs: LAUNCH_LOCK_STALE_MS
   });
-  if (!lock) throw new Error("another launch is in progress (launch.lock); try again");
+  if (!lock) throw new HeldError("another launch is in progress (launch.lock); try again");
   held2.lock = lock;
   const recheck = async () => {
     if (!lock.owned()) throw new Error("the launch lock was lost; refusing to launch, try again");
@@ -34289,7 +34297,7 @@ function acquireQueueRunLock(stateRoot, now, log) {
     now,
     heartbeatStaleMs: RUN_LOCK_HEARTBEAT_STALE_MS
   });
-  if (!lock) throw new Error(`queue already running (lock ${RUN_LOCK} in the state root)`);
+  if (!lock) throw new HeldError(`queue already running (lock ${RUN_LOCK} in the state root)`);
   if (lock.broke !== void 0) {
     log(`note: broke a stale queue lock (${lock.broke}); a previous run did not finish`);
   }
@@ -35685,7 +35693,7 @@ async function runCli(argv, deps) {
       const root = await boundStateRoot();
       const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname10(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
       const blockedNow = queueHold();
-      if (blockedNow !== void 0) throw new Error(blockedNow);
+      if (blockedNow !== void 0) throw new HeldError(blockedNow);
       let heldLine;
       const hold = () => {
         const line2 = queueHold();
@@ -35747,7 +35755,7 @@ async function runCli(argv, deps) {
     };
     const launch = async (id) => {
       if (await reconcile()) {
-        throw new Error(
+        throw new HeldError(
           "another Studio process is reconciling account blocks; refusing to launch, try again"
         );
       }
@@ -35760,7 +35768,7 @@ async function runCli(argv, deps) {
       const launchable = plan.assign.some((i2) => i2.id === item.id) || plan.deferred.some((d) => d.id === item.id && d.reason === ONE_BUILD_PER_PLAN);
       if (!launchable) {
         const why = plan.blocked.find((b) => b.id === item.id)?.reason ?? plan.deferred.find((d) => d.id === item.id)?.reason ?? "not in the current plan";
-        throw new Error(`${item.id} is not in the current plan: ${why}`);
+        throw new HeldError(`${item.id} is not in the current plan: ${why}`);
       }
       const res = await launchCrew(project, item, config2, ports, owner);
       await withBoardLock(stateRoot(), ports.clock.now(), () => {
@@ -36080,6 +36088,7 @@ async function runCli(argv, deps) {
     const tick = async () => {
       const out = {
         collected: [],
+        reviews: [],
         launched: [],
         queued: [],
         merged: [],
@@ -36093,22 +36102,46 @@ async function runCli(argv, deps) {
           out.needsLead.push({ item, reason });
         }
       };
-      const root = await boundStateRoot();
-      const lock = acquireStateLock(root, TICK_LOCK, {
-        now: ports.clock.now(),
-        heartbeatStaleMs: TICK_LOCK_STALE_MS
-      });
+      let root;
+      let lock;
+      try {
+        root = await boundStateRoot();
+        lock = acquireStateLock(root, TICK_LOCK, {
+          now: ports.clock.now(),
+          heartbeatStaleMs: TICK_LOCK_STALE_MS
+        });
+      } catch (e) {
+        out.errors.push({ phase: "start", error: why(e) });
+        return out;
+      }
       if (!lock) {
         out.held.push({ item: "tick", reason: "another tick is running" });
         return out;
       }
-      try {
+      const held2 = lock;
+      const beat = () => held2.heartbeat(ports.clock.now());
+      const phase = async (name, body) => {
+        if (!held2.owned()) {
+          out.errors.push({ phase: name, error: "the tick lock was lost; the tick stopped here" });
+          return false;
+        }
+        beat();
+        try {
+          await body();
+        } catch (e) {
+          out.errors.push({ phase: name, error: why(e) });
+        }
+        return true;
+      };
+      const fresh = /* @__PURE__ */ new Set();
+      const collectEnded = async () => {
         const records = readCrewRecords(root);
         for (const item of loadAll().board.items) {
           if (item.status !== "assigned" && item.status !== "in_progress") continue;
           const rec = records[item.id];
           const heldPr = (item.notes ?? []).some((n2) => n2.startsWith(PR_HELD));
           if (rec === void 0 && !heldPr) continue;
+          beat();
           try {
             if (rec !== void 0) {
               const hold = await crewHold(rec, ports);
@@ -36119,36 +36152,73 @@ async function runCli(argv, deps) {
               }
             }
             const r = await collect(item.id);
-            if (r.kind === "moved") out.collected.push(r.out);
-            else if (r.kind !== "refused") out.held.push({ item: item.id, reason: r.line });
+            if (r.kind === "moved") {
+              out.collected.push(r.out);
+              if (typeof r.out.review === "string") fresh.add(r.out.review);
+            } else if (r.kind !== "refused") {
+              out.held.push({ item: item.id, reason: r.line });
+              if (r.line.includes(CI_READ_FAILED))
+                out.errors.push({ item: item.id, error: r.line });
+            }
           } catch (e) {
             if (e instanceof ReportError) {
               lead(item.id, `${why(e)}; studio stop ${item.id} --requeue for its one relaunch`);
             } else out.errors.push({ item: item.id, error: why(e) });
           }
         }
-        try {
-          const { config: config2, board: board2 } = loadAll();
-          const { plan } = await planNow(config2, board2);
-          for (const a2 of plan.assign) {
-            try {
-              const res = await launch(a2.id);
-              out.launched.push({ item: a2.id, name: res.name, pid: res.pid });
-            } catch (e) {
-              const line2 = why(e);
-              if (/launch\.lock|not in the current plan|reconciling account blocks/.test(line2)) {
-                out.held.push({ item: a2.id, reason: line2 });
-              } else out.errors.push({ item: a2.id, error: line2 });
-            }
+      };
+      const reviewMissing = async () => {
+        const board = loadBoard(project);
+        for (const b of board.items) {
+          if (PR_OPTIONAL.includes(b.type) || b.status !== "in_review" || b.pr === void 0) {
+            continue;
           }
-          for (const d of plan.deferred) out.held.push({ item: d.id, reason: d.reason });
-          for (const b of plan.blocked) {
-            if (b.reason.startsWith("waiting on ")) out.held.push({ item: b.id, reason: b.reason });
-            else lead(b.id, b.reason);
+          const target = `${b.repo}#${b.pr}`;
+          if (b.approvedHead !== void 0 || board.items.some((i2) => isOpenReviewOf(i2, target))) {
+            continue;
           }
-        } catch (e) {
-          out.errors.push({ item: "plan", error: why(e) });
+          if (latestReview(board, target)?.notes?.includes("verdict: changes_requested")) continue;
+          beat();
+          try {
+            const id = await withBoardLock(root, ports.clock.now(), () => {
+              const now = loadBoard(project);
+              const builder = findItem(now, b.id);
+              if (builder.status !== "in_review" || builder.pr !== b.pr) return void 0;
+              if (builder.approvedHead !== void 0) return void 0;
+              const added = withReviewItem(now, builder, b.pr);
+              if (added.id !== void 0) saveBoard(project, added.board);
+              return added.id;
+            });
+            if (id !== void 0) out.reviews.push({ item: b.id, review: id });
+          } catch (e) {
+            out.errors.push({ item: b.id, error: why(e) });
+          }
         }
+      };
+      const launchPlanned = async () => {
+        const { config: config2, board } = loadAll();
+        const { plan } = await planNow(config2, board);
+        for (const a2 of plan.assign) {
+          if (fresh.has(a2.id)) {
+            out.held.push({ item: a2.id, reason: "pull request opened in this tick: next tick" });
+            continue;
+          }
+          beat();
+          try {
+            const res = await launch(a2.id);
+            out.launched.push({ item: a2.id, name: res.name, pid: res.pid });
+          } catch (e) {
+            if (e instanceof HeldError) out.held.push({ item: a2.id, reason: why(e) });
+            else out.errors.push({ item: a2.id, error: why(e) });
+          }
+        }
+        for (const d of plan.deferred) out.held.push({ item: d.id, reason: d.reason });
+        for (const b of plan.blocked) {
+          if (b.reason.startsWith("waiting on ")) out.held.push({ item: b.id, reason: b.reason });
+          else lead(b.id, b.reason);
+        }
+      };
+      const queueApproved = async () => {
         const board = loadBoard(project);
         for (const b of board.items) {
           if (b.type === "review" || b.status !== "in_review" || b.pr === void 0) continue;
@@ -36175,6 +36245,7 @@ async function runCli(argv, deps) {
             );
             continue;
           }
+          beat();
           try {
             const q = await queueAdd(target);
             out.queued.push({ item: q.queued, pr: q.pr, repo: q.repo });
@@ -36182,14 +36253,32 @@ async function runCli(argv, deps) {
             lead(b.id, why(e));
           }
         }
+      };
+      const sweep = async () => {
         for (const i2 of loadBoard(project).items) {
           if (i2.status === "blocked") lead(i2.id, `blocked: ${(i2.notes ?? []).at(-1) ?? "no note"}`);
         }
+      };
+      try {
+        for (const [name, body] of [
+          ["collect", collectEnded],
+          ["review", reviewMissing],
+          ["launch", launchPlanned],
+          ["queue add", queueApproved],
+          ["sweep", sweep]
+        ]) {
+          if (!await phase(name, body)) return out;
+        }
       } finally {
-        lock.release();
+        held2.release();
       }
       try {
-        if (loadQueue(root).pending.length > 0) {
+        const q = loadQueue(root);
+        const inQueue = (i2) => [...q.pending, ...q.current === void 0 ? [] : [q.current]].some(
+          (e) => e.item === void 0 ? e.repo === i2.repo && e.pr === i2.pr : e.item === i2.id
+        );
+        const stray = loadBoard(project).items.some((i2) => i2.status === "queued" && !inQueue(i2));
+        if (q.pending.length > 0 || q.current !== void 0 || stray) {
           const r = await queueRun();
           for (const d of r.done) {
             if (d.result === "merged") {
@@ -36204,10 +36293,8 @@ async function runCli(argv, deps) {
           if (r.held !== void 0) out.held.push({ item: "queue", reason: r.held });
         }
       } catch (e) {
-        const line2 = why(e);
-        if (/^queue already running/.test(line2) || [PAUSED_LINE, LEGACY_LINE].includes(line2) || line2 === blockHold(ownerRoot())) {
-          out.held.push({ item: "queue", reason: line2 });
-        } else out.errors.push({ item: "queue", error: line2 });
+        if (e instanceof HeldError) out.held.push({ item: "queue", reason: why(e) });
+        else out.errors.push({ phase: "queue run", error: why(e) });
       }
       return out;
     };
@@ -36864,13 +36951,14 @@ function crewTokenFor(config2, owner) {
   );
 }
 var PR_HELD = "pr held: ";
+var CI_READ_FAILED = "CI read failed:";
 function prHeldNote(cap, config2) {
   const parts = [`busy ${cap.ciBusy} of ${cap.ciTotal}, limit ${config2.ci.capacity.mergeMaxBusy}`];
   if (cap.githubHostedBusy !== void 0 && cap.githubHostedLimit !== void 0) {
     parts.push(`github-hosted ${cap.githubHostedBusy}, limit ${cap.githubHostedLimit}`);
   }
   if (!cap.hostOk) parts.push(`host load ${cap.hostLoad.toFixed(2)}`);
-  const why = cap.error === void 0 ? "" : `; CI read failed: ${cap.error}`;
+  const why = cap.error === void 0 ? "" : `; ${CI_READ_FAILED} ${cap.error}`;
   return capNotes([`${PR_HELD}ci capacity (${parts.join(", ")}${why})`])[0];
 }
 async function openCrewPr(ports, item, title, body, notRunHere, token, capacity, unchanged) {

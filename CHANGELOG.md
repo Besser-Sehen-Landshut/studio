@@ -23,11 +23,19 @@ maintainers tag after the merge.
   round the next collect adds a new one.
 - `studio tick`: one lead heartbeat, idempotent, for the lead only (refused under
   `STUDIO_ROLE=crew`). It collects every item whose crew has ended and every pull request held for
-  CI capacity, launches what the plan assigns under every gate of `launch`, queues each builder
-  whose approval is stored (not again after a merge that failed after that approval), and runs
-  the queue in the same process when it holds pull requests and no run is active. It prints one
-  JSON object with `collected`, `launched`, `queued`, `merged`, `held`, `needsLead` and `errors`;
-  one item's failure is recorded and the others go on. A second tick while one runs does nothing.
+  CI capacity, adds a review item for a builder in review that has neither an open review nor a
+  verdict, launches what the plan assigns under every gate of `launch` (a review whose pull
+  request it opened in the same tick waits for the next one), queues each builder whose approval
+  is stored (not again after a merge that failed after that approval), and runs the queue in the
+  same process when it holds pull requests, an entry a killed run left current, or a queued item
+  the queue no longer holds, and no run is active. It prints one JSON object with `collected`,
+  `reviews`, `launched`, `queued`, `merged`, `held`, `needsLead` and `errors`, always, also when a
+  whole phase fails; one item's or phase's failure is recorded and the others go on. A pull request
+  held because the CI read failed is also an error. A second tick while one runs does nothing; a
+  tick that lost its lock stops before the next phase.
+- Refusals that only mean "not now" (launch lock busy, item not in the current plan, account
+  blocks being reconciled, queue already running, a queue hold) are a typed `HeldError`; their
+  messages are unchanged.
 
 ### Changed
 

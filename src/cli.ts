@@ -38,6 +38,7 @@ import {
   unverifiedRefusal,
 } from './crew.js';
 import { listFlaky, recordFlaky } from './flaky.js';
+import { HeldError } from './held.js';
 import {
   activeParks,
   blockHold,
@@ -258,12 +259,15 @@ function latestReview(board: Board, target: string): WorkItem | undefined {
 /** What one `tick` did and what it leaves to the lead. */
 interface Tick {
   collected: Record<string, unknown>[];
+  /** Review items added for pull requests in review that had neither a review nor a verdict. */
+  reviews: { item: string; review: string }[];
   launched: { item: string; name: string; pid: number }[];
   queued: { item: string; pr: number; repo: string }[];
   merged: { item?: string; pr: number; repo: string }[];
   held: { item: string; reason: string }[];
   needsLead: { item: string; reason: string }[];
-  errors: { item: string; error: string }[];
+  /** Per item (`item`), or a phase that failed or did not run (`phase`). */
+  errors: { item?: string; phase?: string; error: string }[];
 }
 
 /** One tick at a time; a tick whose holder died is taken over after this long. */
@@ -506,7 +510,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         (readPause(root).paused ? PAUSED_LINE : undefined) ??
         (pendingLegacyState(dirname(ownerRoot())).length > 0 ? LEGACY_LINE : undefined);
       const blockedNow = queueHold();
-      if (blockedNow !== undefined) throw new Error(blockedNow);
+      if (blockedNow !== undefined) throw new HeldError(blockedNow);
       let heldLine: string | undefined;
       const hold = () => {
         const line = queueHold();
@@ -571,7 +575,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     /** Starts the crew of a planned item and moves it to `assigned`: the body of `launch`. */
     const launch = async (id: string | undefined) => {
       if (await reconcile()) {
-        throw new Error(
+        throw new HeldError(
           'another Studio process is reconciling account blocks; refusing to launch, try again',
         );
       }
@@ -591,7 +595,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           plan.blocked.find((b) => b.id === item.id)?.reason ??
           plan.deferred.find((d) => d.id === item.id)?.reason ??
           'not in the current plan';
-        throw new Error(`${item.id} is not in the current plan: ${why}`);
+        throw new HeldError(`${item.id} is not in the current plan: ${why}`);
       }
       const res = await launchCrew(project, item, config, ports, owner);
       // The launch took a while: re-read the board and move the item on the fresh copy.
@@ -978,13 +982,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     };
 
     /**
-     * One lead heartbeat: collect what ended, try held pull requests again, launch what the plan
-     * assigns, queue approved pull requests and run the queue. Each item's failure is recorded and
-     * the rest goes on; what needs a decision is listed, never decided here.
+     * One lead heartbeat: collect what ended, try held pull requests again, give a pull request
+     * without a review its review item, launch what the plan assigns, queue approved pull requests
+     * and run the queue. Each item's failure, and each phase's, is recorded and the rest goes on;
+     * what needs a decision is listed, never decided here.
      */
     const tick = async (): Promise<Tick> => {
       const out: Tick = {
         collected: [],
+        reviews: [],
         launched: [],
         queued: [],
         merged: [],
@@ -998,23 +1004,50 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           out.needsLead.push({ item, reason });
         }
       };
-      const root = await boundStateRoot();
-      const lock = acquireStateLock(root, TICK_LOCK, {
-        now: ports.clock.now(),
-        heartbeatStaleMs: TICK_LOCK_STALE_MS,
-      });
+      let root: string;
+      let lock: ReturnType<typeof acquireStateLock>;
+      try {
+        root = await boundStateRoot();
+        lock = acquireStateLock(root, TICK_LOCK, {
+          now: ports.clock.now(),
+          heartbeatStaleMs: TICK_LOCK_STALE_MS,
+        });
+      } catch (e) {
+        out.errors.push({ phase: 'start', error: why(e) });
+        return out;
+      }
       if (!lock) {
         out.held.push({ item: 'tick', reason: 'another tick is running' });
         return out;
       }
-      try {
-        // (a) Crews that ended, and (b) pull requests held for CI capacity: collect again.
+      const held = lock;
+      const beat = () => held.heartbeat(ports.clock.now());
+      /** Runs one phase while the tick still holds its lock; false once the lock is lost. */
+      const phase = async (name: string, body: () => Promise<void>): Promise<boolean> => {
+        if (!held.owned()) {
+          out.errors.push({ phase: name, error: 'the tick lock was lost; the tick stopped here' });
+          return false;
+        }
+        beat();
+        try {
+          await body();
+        } catch (e) {
+          out.errors.push({ phase: name, error: why(e) });
+        }
+        return true;
+      };
+      // Reviews of pull requests opened in this tick: their checks may not be reported yet.
+      const fresh = new Set<string>();
+
+      // (a) Crews that ended, and (b) pull requests held for CI capacity: collect again.
+      const collectEnded = async () => {
         const records = readCrewRecords(root);
         for (const item of loadAll().board.items) {
           if (item.status !== 'assigned' && item.status !== 'in_progress') continue;
           const rec = records[item.id];
           const heldPr = (item.notes ?? []).some((n) => n.startsWith(PR_HELD));
           if (rec === undefined && !heldPr) continue;
+          beat();
           try {
             if (rec !== undefined) {
               const hold = await crewHold(rec, ports);
@@ -1024,40 +1057,82 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 continue;
               }
             }
-            // A fix limit or a refused approval leaves an item blocked: the sweep below lists it.
+            // A fix limit or a refused approval leaves an item blocked: the sweep lists it.
             const r = await collect(item.id);
-            if (r.kind === 'moved') out.collected.push(r.out);
-            else if (r.kind !== 'refused') out.held.push({ item: item.id, reason: r.line });
+            if (r.kind === 'moved') {
+              out.collected.push(r.out);
+              if (typeof r.out.review === 'string') fresh.add(r.out.review);
+            } else if (r.kind !== 'refused') {
+              out.held.push({ item: item.id, reason: r.line });
+              // A CI read that keeps failing would otherwise hold the item quietly for ever.
+              if (r.line.includes(CI_READ_FAILED))
+                out.errors.push({ item: item.id, error: r.line });
+            }
           } catch (e) {
             if (e instanceof ReportError) {
               lead(item.id, `${why(e)}; studio stop ${item.id} --requeue for its one relaunch`);
             } else out.errors.push({ item: item.id, error: why(e) });
           }
         }
-        // (c) The plan, launched under every gate `launch` keeps.
-        try {
-          const { config, board } = loadAll();
-          const { plan } = await planNow(config, board);
-          for (const a of plan.assign) {
-            try {
-              const res = await launch(a.id);
-              out.launched.push({ item: a.id, name: res.name, pid: res.pid });
-            } catch (e) {
-              const line = why(e);
-              if (/launch\.lock|not in the current plan|reconciling account blocks/.test(line)) {
-                out.held.push({ item: a.id, reason: line });
-              } else out.errors.push({ item: a.id, error: line });
-            }
+      };
+
+      // A builder in review with neither a review nor a verdict (its review was dropped): a new one.
+      const reviewMissing = async () => {
+        const board = loadBoard(project);
+        for (const b of board.items) {
+          if (PR_OPTIONAL.includes(b.type) || b.status !== 'in_review' || b.pr === undefined) {
+            continue;
           }
-          for (const d of plan.deferred) out.held.push({ item: d.id, reason: d.reason });
-          for (const b of plan.blocked) {
-            if (b.reason.startsWith('waiting on ')) out.held.push({ item: b.id, reason: b.reason });
-            else lead(b.id, b.reason);
+          const target = `${b.repo}#${b.pr}`;
+          if (b.approvedHead !== undefined || board.items.some((i) => isOpenReviewOf(i, target))) {
+            continue;
           }
-        } catch (e) {
-          out.errors.push({ item: 'plan', error: why(e) });
+          if (latestReview(board, target)?.notes?.includes('verdict: changes_requested')) continue;
+          beat();
+          try {
+            const id = await withBoardLock(root, ports.clock.now(), () => {
+              const now = loadBoard(project);
+              const builder = findItem(now, b.id);
+              if (builder.status !== 'in_review' || builder.pr !== b.pr) return undefined;
+              if (builder.approvedHead !== undefined) return undefined;
+              const added = withReviewItem(now, builder, b.pr as number);
+              if (added.id !== undefined) saveBoard(project, added.board);
+              return added.id;
+            });
+            if (id !== undefined) out.reviews.push({ item: b.id, review: id });
+          } catch (e) {
+            out.errors.push({ item: b.id, error: why(e) });
+          }
         }
-        // (d) Approved pull requests into the queue, unless a merge failed after the approval.
+      };
+
+      // (c) The plan, launched under every gate `launch` keeps.
+      const launchPlanned = async () => {
+        const { config, board } = loadAll();
+        const { plan } = await planNow(config, board);
+        for (const a of plan.assign) {
+          if (fresh.has(a.id)) {
+            out.held.push({ item: a.id, reason: 'pull request opened in this tick: next tick' });
+            continue;
+          }
+          beat();
+          try {
+            const res = await launch(a.id);
+            out.launched.push({ item: a.id, name: res.name, pid: res.pid });
+          } catch (e) {
+            if (e instanceof HeldError) out.held.push({ item: a.id, reason: why(e) });
+            else out.errors.push({ item: a.id, error: why(e) });
+          }
+        }
+        for (const d of plan.deferred) out.held.push({ item: d.id, reason: d.reason });
+        for (const b of plan.blocked) {
+          if (b.reason.startsWith('waiting on ')) out.held.push({ item: b.id, reason: b.reason });
+          else lead(b.id, b.reason);
+        }
+      };
+
+      // (d) Approved pull requests into the queue, unless a merge failed after the approval.
+      const queueApproved = async () => {
         const board = loadBoard(project);
         for (const b of board.items) {
           if (b.type === 'review' || b.status !== 'in_review' || b.pr === undefined) continue;
@@ -1090,6 +1165,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             );
             continue;
           }
+          beat();
           try {
             const q = await queueAdd(target);
             out.queued.push({ item: q.queued, pr: q.pr, repo: q.repo });
@@ -1097,15 +1173,39 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             lead(b.id, why(e));
           }
         }
+      };
+
+      const sweep = async () => {
         for (const i of loadBoard(project).items) {
           if (i.status === 'blocked') lead(i.id, `blocked: ${(i.notes ?? []).at(-1) ?? 'no note'}`);
         }
-      } finally {
-        lock.release();
-      }
-      // (e) The queue, in this process; the tick lock is free meanwhile, the queue has its own.
+      };
+
       try {
-        if (loadQueue(root).pending.length > 0) {
+        for (const [name, body] of [
+          ['collect', collectEnded],
+          ['review', reviewMissing],
+          ['launch', launchPlanned],
+          ['queue add', queueApproved],
+          ['sweep', sweep],
+        ] as const) {
+          if (!(await phase(name, body))) return out;
+        }
+      } finally {
+        held.release();
+      }
+
+      // (e) The queue, in this process; the tick lock is free meanwhile, the queue has its own. It
+      // also runs to resume an entry a killed run left as `current`, and so that a queued item the
+      // queue no longer holds gets its recorded result.
+      try {
+        const q = loadQueue(root);
+        const inQueue = (i: WorkItem) =>
+          [...q.pending, ...(q.current === undefined ? [] : [q.current])].some((e) =>
+            e.item === undefined ? e.repo === i.repo && e.pr === i.pr : e.item === i.id,
+          );
+        const stray = loadBoard(project).items.some((i) => i.status === 'queued' && !inQueue(i));
+        if (q.pending.length > 0 || q.current !== undefined || stray) {
           const r = await queueRun();
           for (const d of r.done) {
             if (d.result === 'merged') {
@@ -1120,14 +1220,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           if (r.held !== undefined) out.held.push({ item: 'queue', reason: r.held });
         }
       } catch (e) {
-        const line = why(e);
-        if (
-          /^queue already running/.test(line) ||
-          [PAUSED_LINE, LEGACY_LINE].includes(line) ||
-          line === blockHold(ownerRoot())
-        ) {
-          out.held.push({ item: 'queue', reason: line });
-        } else out.errors.push({ item: 'queue', error: line });
+        if (e instanceof HeldError) out.held.push({ item: 'queue', reason: why(e) });
+        else out.errors.push({ phase: 'queue run', error: why(e) });
       }
       return out;
     };
@@ -1858,6 +1952,8 @@ function crewTokenFor(config: StudioConfig, owner: OwnerEnv): string {
 }
 
 const PR_HELD = 'pr held: ';
+/** In a held note: the CI read itself failed, so the hold may never end by itself. */
+const CI_READ_FAILED = 'CI read failed:';
 
 /** The board note for a pull request `collect` did not open for lack of CI capacity. */
 function prHeldNote(cap: Capacity, config: StudioConfig): string {
@@ -1866,7 +1962,7 @@ function prHeldNote(cap: Capacity, config: StudioConfig): string {
     parts.push(`github-hosted ${cap.githubHostedBusy}, limit ${cap.githubHostedLimit}`);
   }
   if (!cap.hostOk) parts.push(`host load ${cap.hostLoad.toFixed(2)}`);
-  const why = cap.error === undefined ? '' : `; CI read failed: ${cap.error}`;
+  const why = cap.error === undefined ? '' : `; ${CI_READ_FAILED} ${cap.error}`;
   return capNotes([`${PR_HELD}ci capacity (${parts.join(', ')}${why})`])[0] as string;
 }
 

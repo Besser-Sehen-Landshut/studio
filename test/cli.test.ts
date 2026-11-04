@@ -3554,15 +3554,22 @@ describe('studio tick', () => {
     expect(s.created).toBe(0);
     expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
 
-    // 3: CI has room: the pull request opens, the review item comes with it and is launched.
+    // 3: CI has room: the pull request opens and the review item comes with it. Its checks may
+    // not be reported yet, so the review waits for the next tick.
     s.busy = '0';
     const t3 = await tick(fx, ports);
     expect(t3.json.errors).toEqual([]);
     expect(t3.json.collected).toEqual([
       expect.objectContaining({ item: 'APP-1', status: 'in_review', pr: 31, review: 'APP-2' }),
     ]);
-    expect(ids(t3.json.launched)).toEqual(['APP-2']);
+    expect(t3.json.launched).toEqual([]);
+    expect(t3.json.held).toEqual([
+      { item: 'APP-2', reason: expect.stringMatching(/opened in this tick/) },
+    ]);
     expect(s.created).toBe(1);
+    const t3b = await tick(fx, ports);
+    expect(t3b.json.errors).toEqual([]);
+    expect(ids(t3b.json.launched)).toEqual(['APP-2']);
     expect(statusOf(fx, 'APP-2')).toMatchObject({ status: 'assigned', type: 'review' });
 
     // 4: the reviewer approves; the tick collects it, queues the pull request and merges it.
@@ -3589,6 +3596,7 @@ describe('studio tick', () => {
     const t5 = await tick(fx, ports);
     expect(t5.json).toEqual({
       collected: [],
+      reviews: [],
       launched: [],
       queued: [],
       merged: [],
@@ -3638,11 +3646,8 @@ describe('studio tick', () => {
     expect(t.json.needsLead).toEqual([
       expect.objectContaining({ item: 'APP-1', reason: expect.stringMatching(/report/) }),
     ]);
-    // The new review APP-5 fails to launch too (this GitHub cannot show its pull request), and
-    // APP-4 starts all the same.
     expect(t.json.errors).toEqual([
       { item: 'APP-2', error: expect.stringMatching(/cannot read org\/app#7/) },
-      { item: 'APP-5', error: expect.stringMatching(/cannot read org\/app#8/) },
     ]);
     expect(t.json.collected).toEqual([
       expect.objectContaining({ item: 'APP-3', status: 'in_review', review: 'APP-5' }),
@@ -3737,6 +3742,191 @@ describe('studio tick', () => {
       lock?.release();
     }
     expect(ids((await tick(fx, ports)).json.launched)).toEqual(['APP-1']);
+  });
+
+  it('resumes a queue run that was killed with its entry current', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'queued', pr: 5, approvedHead: HEAD }]);
+    bind(fx);
+    saveQueue(fx.state, {
+      pending: [],
+      current: { pr: 5, repo: 'org/app', item: 'APP-1', step: 'update' },
+      done: [],
+    });
+    const t = await tick(fx, fakePorts(passingGh().gh).ports);
+    expect(t.json.errors).toEqual([]);
+    expect(t.json.merged).toEqual([{ item: 'APP-1', pr: 5, repo: 'org/app' }]);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('merged');
+  });
+
+  it('applies a result a killed run recorded but did not put on the board', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'queued', pr: 5, approvedHead: HEAD }]);
+    bind(fx);
+    saveQueue(fx.state, {
+      pending: [],
+      done: [
+        { pr: 5, repo: 'org/app', item: 'APP-1', result: 'merged', at: '2026-10-30T09:00:00Z' },
+      ],
+    });
+    const t = await tick(fx, fakePorts(passingGh().gh).ports);
+    expect(t.json.errors).toEqual([]);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('merged');
+  });
+
+  it('a launch lock that is busy holds; one that is tampered with is an error', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    bind(fx);
+    const { ports, started } = fakePorts(fakeGh().gh);
+    const busy = acquireStateLock(fx.owner, 'launch.lock', {
+      now: new Date(),
+      heartbeatStaleMs: 60_000,
+    });
+    try {
+      const t = await tick(fx, ports);
+      expect(t.code).toBe(0);
+      expect(t.json.held).toEqual([
+        { item: 'APP-1', reason: expect.stringMatching(/launch\.lock/) },
+      ]);
+      expect(t.json.errors).toEqual([]);
+    } finally {
+      busy?.release();
+    }
+    mkdirSync(join(fx.owner, 'launch.lock'));
+    const t = await tick(fx, ports);
+    expect(t.code).toBe(1);
+    expect(t.json.held).toEqual([]);
+    expect(t.json.errors).toEqual([
+      { item: 'APP-1', error: expect.stringMatching(/launch\.lock: it is not a regular file/) },
+    ]);
+    expect(started).toEqual([]);
+  });
+
+  it('a board that breaks after the collect still prints what was collected', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+    bind(fx);
+    writeStateFile(
+      fx.state,
+      join(fx.state, 'crew.json'),
+      JSON.stringify({ 'APP-1': record('APP-1') }),
+    );
+    writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 2`);
+    const { gh } = fakeGh((l) =>
+      l.startsWith('pr view 7')
+        ? { stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-1', ...OWN }) }
+        : undefined,
+    );
+    // The first CI read comes with the plan: from then on the board cannot be read.
+    gh.api = async () => {
+      writeFileSync(join(fx.project, '.studio', 'board.yaml'), 'items: [');
+      return '0';
+    };
+    const t = await tick(fx, fakePorts(gh).ports);
+    expect(t.code).toBe(1);
+    expect(t.json.collected).toEqual([
+      expect.objectContaining({ item: 'APP-1', status: 'in_review', review: 'APP-2' }),
+    ]);
+    expect(t.json.errors.map((e: { phase?: string }) => e.phase)).toEqual([
+      'queue add',
+      'sweep',
+      'queue run',
+    ]);
+  });
+
+  it('keeps its lock fresh per item and stops at the next phase once the lock is lost', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'assigned' },
+      { id: 'APP-2', status: 'assigned' },
+      { id: 'APP-3' },
+    ]);
+    bind(fx);
+    writeStateFile(
+      fx.state,
+      join(fx.state, 'crew.json'),
+      JSON.stringify({ 'APP-1': record('APP-1'), 'APP-2': record('APP-2') }),
+    );
+    writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 2`);
+    writeReport(fx, 'APP-2', `status: done\nitem: APP-2\npr: 8\nhead_sha: ${HEAD}\ntests_run: 2`);
+    let now = Date.parse('2026-10-31T10:00:00Z');
+    let beatSeen: string | undefined;
+    const lockFile = join(fx.state, 'tick.lock');
+    const { gh } = fakeGh((l) => {
+      const m = /^pr view (7|8) /.exec(l);
+      if (!m) return undefined;
+      if (m[1] === '7') now += 20 * 60_000;
+      else {
+        beatSeen = JSON.parse(readFileSync(lockFile, 'utf8')).heartbeat;
+        rmSync(lockFile);
+      }
+      const id = m[1] === '7' ? 'APP-1' : 'APP-2';
+      return { stdout: JSON.stringify({ headRefOid: HEAD, headRefName: `studio/${id}`, ...OWN }) };
+    });
+    const { ports, started } = fakePorts(gh);
+    ports.clock.now = () => new Date(now);
+    const t = await tick(fx, ports);
+    expect(beatSeen).toBe(new Date(now).toISOString());
+    expect(ids(t.json.collected)).toEqual(['APP-1', 'APP-2']);
+    expect(t.json.errors).toEqual([
+      { phase: 'review', error: expect.stringMatching(/tick lock was lost/) },
+    ]);
+    expect(started).toEqual([]);
+    expect(statusOf(fx, 'APP-3')?.status).toBe('ready');
+  });
+
+  it('a pull request in review whose review was dropped gets a new review item, once', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'in_review', pr: 9, approvedHead: null },
+      {
+        id: 'APP-2',
+        status: 'dropped',
+        type: 'review',
+        role: 'reviewer',
+        notes: ['review org/app#9'],
+      },
+    ]);
+    // Its checks still run, so the new review waits in the plan.
+    const { gh } = fakeGh((l) =>
+      l.startsWith('pr checks 9')
+        ? { code: 8, stdout: JSON.stringify([{ name: 'ci', bucket: 'pending' }]) }
+        : undefined,
+    );
+    const { ports } = fakePorts(gh);
+    const t = await tick(fx, ports);
+    expect(t.json.errors).toEqual([]);
+    expect(t.json.reviews).toEqual([{ item: 'APP-1', review: 'APP-3' }]);
+    expect(statusOf(fx, 'APP-3')).toMatchObject({
+      status: 'ready',
+      type: 'review',
+      notes: ['review org/app#9'],
+    });
+    expect(t.json.held).toEqual([{ item: 'APP-3', reason: 'ci pending' }]);
+    expect((await tick(fx, ports)).json.reviews).toEqual([]);
+  });
+
+  it('a CI read that fails is an error as well as a hold', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+    bind(fx);
+    withToken(fx);
+    writeStateFile(
+      fx.state,
+      join(fx.state, 'crew.json'),
+      JSON.stringify({ 'APP-1': record('APP-1') }),
+    );
+    writeReport(
+      fx,
+      'APP-1',
+      `status: done\nitem: APP-1\npr_title: "APP-1: fix it"\nhead_sha: ${HEAD}\ntests_run: 3`,
+    );
+    const { gh } = fakeGh((l) => (l.startsWith('pr list') ? { stdout: '[]' } : undefined));
+    gh.api = async () => {
+      throw new Error('HTTP 502');
+    };
+    const t = await tick(fx, fakePorts(gh).ports);
+    expect(t.code).toBe(1);
+    expect(t.json.held).toEqual([
+      { item: 'APP-1', reason: expect.stringMatching(/CI read failed: HTTP 502/) },
+    ]);
+    expect(t.json.errors).toEqual([
+      { item: 'APP-1', error: expect.stringMatching(/CI read failed: HTTP 502/) },
+    ]);
   });
 
   it('is not for crew sessions and changes nothing there', async () => {

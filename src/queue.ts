@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { capacityHoldsTwice } from './capacity.js';
 import type { StudioConfig } from './config.js';
+import { HeldError } from './held.js';
 import {
   acquireStateLock,
   assertStatePath,
@@ -200,7 +201,7 @@ export function acquireQueueRunLock(
     now,
     heartbeatStaleMs: RUN_LOCK_HEARTBEAT_STALE_MS,
   });
-  if (!lock) throw new Error(`queue already running (lock ${RUN_LOCK} in the state root)`);
+  if (!lock) throw new HeldError(`queue already running (lock ${RUN_LOCK} in the state root)`);
   if (lock.broke !== undefined) {
     log(`note: broke a stale queue lock (${lock.broke}); a previous run did not finish`);
   }
