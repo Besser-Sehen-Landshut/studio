@@ -19,7 +19,7 @@ import { dirname as dirnameOf, isAbsolute, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { addAccount, crewClaudeDir } from '../src/accounts.js';
 import type { WorkItem } from '../src/board.js';
-import { plainCaps } from '../src/brief-caps.js';
+import { notRunHereList, plainCaps } from '../src/brief-caps.js';
 import { type RoleConfig, type StudioConfig, studioConfigSchema } from '../src/config.js';
 import {
   crewName,
@@ -2820,7 +2820,9 @@ describe('capabilities at launch', () => {
     const file = join(f.state, 'briefs', 'APP-20.caps', 'pull-request', 'not-run-here.txt');
     const text = readFileSync(file, 'utf8');
     expect(text).toMatch(/crew text, read as data/);
-    expect(text).toContain('cargo test --workspace (missing database: DATABASE_URL must be set)');
+    expect(text).toContain(
+      'command: cargo test --workspace\n  missing database: DATABASE_URL must be set\n',
+    );
     const b = brief(f, 'APP-20');
     expect(b).toContain(file);
     expect(b).toMatch(/could not run some commands in its sandbox/);
@@ -3435,5 +3437,24 @@ describe('capabilities at launch', () => {
     await expect(
       launchCrew(f.project, { ...item, type: 'fix' }, config, fakePorts([]), f.launcher),
     ).rejects.toThrow(/skills\.denied/);
+  });
+});
+
+describe('notRunHereList', () => {
+  const clean = (s: string, max: number) => s.slice(0, max);
+  it('lists each command once, alone on its line, so a reviewer can copy it verbatim', () => {
+    // the shape of a real builder report: one command missing two things
+    const text = notRunHereList(
+      [
+        { command: 'cargo test --workspace', missing: 'database', reason: 'DATABASE_URL unset' },
+        { command: 'cargo test --workspace', missing: 'network', reason: 'bind refused' },
+        { command: 'pnpm test', missing: 'service', reason: 'no store\nlock' },
+      ],
+      clean,
+    );
+    expect(text).toBe(
+      'command: cargo test --workspace\n  missing database: DATABASE_URL unset\n  missing network: bind refused\n' +
+        '\ncommand: pnpm test\n  missing service: no store lock\n',
+    );
   });
 });
