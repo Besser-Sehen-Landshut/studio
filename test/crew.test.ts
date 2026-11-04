@@ -21,9 +21,6 @@ import { addAccount, crewClaudeDir } from '../src/accounts.js';
 import type { WorkItem } from '../src/board.js';
 import { notRunHereList, plainCaps } from '../src/brief-caps.js';
 
-/** What a crew's sandbox lets it read of the state root: its own brief, caps and rules. */
-const ownBrief = (stateRoot: string, id: string) =>
-  ['md', 'caps', 'rules'].map((ext) => join(stateRoot, 'briefs', `${id}.${ext}`));
 import { type RoleConfig, type StudioConfig, studioConfigSchema } from '../src/config.js';
 import {
   crewName,
@@ -44,6 +41,10 @@ import { type Ports, realPorts } from '../src/ports.js';
 import { reportName } from '../src/report.js';
 import { readUsage } from '../src/usage.js';
 import { prepareCrewDir } from './crew-dir.js';
+
+/** What a crew's sandbox lets it read of the state root: its own brief, caps and rules. */
+const ownBrief = (stateRoot: string, id: string) =>
+  ['md', 'caps', 'rules'].map((ext) => join(stateRoot, 'briefs', `${id}.${ext}`));
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-crew-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
