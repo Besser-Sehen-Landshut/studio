@@ -29,7 +29,8 @@ export const STACK_IDS = [
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_ENTRIES = 200;
-const MONOREPO_DIRS = ['apps', 'packages', 'crates', 'services'];
+/** Folders whose direct children are the parts of a monorepo; `init` proposes components there. */
+export const MONOREPO_DIRS = ['apps', 'packages', 'services', 'crates', 'libs'];
 const OTHER_WEB = ['nextjs', 'shadcn', 'svelte'];
 
 const DEP_STACKS: Record<string, string> = {

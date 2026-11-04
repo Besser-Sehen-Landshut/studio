@@ -1,4 +1,5 @@
 import { parse } from 'yaml';
+import { withTimeout } from './capacity.js';
 import type { StudioConfig } from './config.js';
 import { matchGlob } from './glob.js';
 import type { Gh } from './ports.js';
@@ -47,9 +48,13 @@ function errorText(err: unknown): string {
 
 type Read = { ok: true; runners: DetectedRunner[] } | { ok: false; error: string };
 
-async function read(gh: Gh, path: string): Promise<Read> {
+async function read(gh: Gh, path: string, timeoutMs?: number): Promise<Read> {
   try {
-    return { ok: true, runners: parseRunners(await gh.api(path, RUNNER_JQ)) };
+    const out =
+      timeoutMs === undefined
+        ? await gh.api(path, RUNNER_JQ)
+        : await withTimeout(gh.api(path, RUNNER_JQ, { timeoutMs }), timeoutMs, 'runner read');
+    return { ok: true, runners: parseRunners(out) };
   } catch (err) {
     return { ok: false, error: errorText(err) };
   }
@@ -64,6 +69,7 @@ export async function detectRunners(
   owner: string,
   repo: string,
   ports: { gh: Gh },
+  timeoutMs?: number,
 ): Promise<Detected> {
   if (
     !SAFE_NAME.test(owner) ||
@@ -75,9 +81,9 @@ export async function detectRunners(
   ) {
     return { source: 'unknown', runners: [], error: 'invalid repository name' };
   }
-  const org = await read(ports.gh, `/orgs/${owner}/actions/runners`);
+  const org = await read(ports.gh, `/orgs/${owner}/actions/runners`, timeoutMs);
   if (org.ok && org.runners.length > 0) return { source: 'org', runners: org.runners };
-  const rep = await read(ports.gh, `/repos/${owner}/${repo}/actions/runners`);
+  const rep = await read(ports.gh, `/repos/${owner}/${repo}/actions/runners`, timeoutMs);
   if (rep.ok && rep.runners.length > 0) return { source: 'repo', runners: rep.runners };
   if (org.ok && rep.ok) return { source: 'none', runners: [] };
   const errors = [

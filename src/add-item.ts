@@ -43,8 +43,13 @@ export async function addItem(o: AddOptions): Promise<Record<string, unknown>> {
     throw new Error('add needs a title: studio add "<title>"');
   if (!ONE_LINE.test(title))
     throw new Error('the title must be one line of at most 300 characters');
-  const type = (o.type ?? 'feature') as AddType;
+  const type = (o.type ?? 'fix') as AddType;
   if (!ADD_TYPES.includes(type)) throw new Error(`--type must be one of ${ADD_TYPES.join(', ')}`);
+  if (type === 'feature' && o.plan === undefined) {
+    throw new Error(
+      'a feature needs a plan before it is planned: add --plan <file>, or use --type fix',
+    );
+  }
   if (o.dod.length === 0) {
     throw new Error('add needs at least one --dod "<line>": what done means for this item');
   }
@@ -52,7 +57,12 @@ export async function addItem(o: AddOptions): Promise<Record<string, unknown>> {
     if (!ONE_LINE.test(line.trim())) throw new Error('each --dod must be one line');
   }
   for (const g of o.paths) {
-    const problem = globProblem(g);
+    const problem =
+      globProblem(g) ??
+      (g.startsWith('/') || /^[A-Za-z]:/.test(g)
+        ? 'must be relative to the repository'
+        : undefined) ??
+      (g.split(/[\\/]/).includes('..') ? 'must not hold a .. segment' : undefined);
     if (problem !== undefined) throw new Error(`--path ${JSON.stringify(g)}: ${problem}`);
   }
   if (o.plan !== undefined && !ONE_LINE.test(o.plan)) throw new Error('--plan must be one line');
@@ -104,12 +114,24 @@ export async function addItem(o: AddOptions): Promise<Record<string, unknown>> {
     const item: WorkItem = parsed.data;
     saveBoard(o.project, { ...board, items: [...board.items, item] });
     const { missing } = isReady(item);
+    const warnings: string[] = [];
+    if (item.paths.length === 0) {
+      warnings.push(
+        'no --path: the item conflicts with no other item, so it may run beside work on the same files',
+      );
+      if (o.component === undefined) warnings.push('no --path: the item belongs to no component');
+    }
+    const notes = item.paths.some((g) => g === '.github' || g.startsWith('.github/'))
+      ? ['a path below .github/: this is a CI item, its review may approve workflow changes']
+      : [];
     return {
       item: id,
       type,
       status: item.status,
       repo,
       ...(missing.length > 0 ? { missing } : {}),
+      ...(warnings.length > 0 ? { warnings } : {}),
+      ...(notes.length > 0 ? { notes } : {}),
     };
   });
 }

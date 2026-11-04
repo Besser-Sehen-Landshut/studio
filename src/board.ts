@@ -184,6 +184,11 @@ export function loadBoard(dir: string, config?: StudioConfig): Board {
   } catch (e) {
     throw new BoardError(file, `cannot read file (${(e as Error).message})`);
   }
+  return parseBoard(text, file, config);
+}
+
+/** What `loadBoard` does with the text of `file`, without reading it: also for text in memory. */
+export function parseBoard(text: string, file: string, config?: StudioConfig): Board {
   let raw: unknown;
   try {
     raw = parseYaml(text);

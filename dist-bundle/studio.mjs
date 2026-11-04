@@ -7844,8 +7844,8 @@ var require_shell_quote = __commonJS({
 import { homedir as homedir8 } from "node:os";
 
 // src/cli.ts
-import { existsSync as existsSync6, mkdtempSync as mkdtempSync2, rmSync as rmSync6, writeFileSync as writeFileSync10 } from "node:fs";
-import { tmpdir as tmpdir2 } from "node:os";
+import { existsSync as existsSync6, mkdtempSync, rmSync as rmSync6, writeFileSync as writeFileSync10 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname as dirname10, join as join26, resolve as resolve5 } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -27919,6 +27919,9 @@ function loadConfig(projectDir) {
   } catch (e) {
     throw new ConfigError(file2, `cannot read file (${e.message})`);
   }
+  return parseConfig(text, file2);
+}
+function parseConfig(text, file2) {
   let raw;
   try {
     raw = (0, import_yaml.parse)(text);
@@ -28171,6 +28174,9 @@ function loadBoard(dir, config2) {
   } catch (e) {
     throw new BoardError(file2, `cannot read file (${e.message})`);
   }
+  return parseBoard(text, file2, config2);
+}
+function parseBoard(text, file2, config2) {
   let raw;
   try {
     raw = (0, import_yaml2.parse)(text);
@@ -29962,10 +29968,117 @@ import {
 } from "node:fs";
 import { join as join8 } from "node:path";
 
+// src/capacity.ts
+var DEFAULT_TIMEOUT_MS = 3e4;
+function withTimeout(work, ms, what = "CI read") {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms} ms`)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
+var RUNNER_JQ = ".runners[] | [.name, .status, .busy] | @tsv";
+var RUNNER_LINE = /^(\S+)\t(\S+)\t(true|false)$/;
+async function selfHostedBusy(config2, gh, timeoutMs) {
+  const org = config2.primaryRepo.split("/")[0];
+  const pattern = config2.ci.runnerNamePattern;
+  const re = pattern === void 0 ? void 0 : new RegExp(pattern);
+  const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ, { timeoutMs });
+  let busy = 0;
+  let matching = 0;
+  for (const line2 of out.split("\n")) {
+    if (line2.trim() === "") continue;
+    const m = RUNNER_LINE.exec(line2);
+    if (!m) throw new Error(`unparsable runner line: ${line2}`);
+    const [, name = "", status, isBusy] = m;
+    if (re !== void 0 && !re.test(name)) continue;
+    matching++;
+    if (status === "online" && isBusy === "true") busy++;
+  }
+  if (matching === 0) {
+    throw new Error(
+      pattern === void 0 ? `no organisation runner found for ${org}; capacity reads organisation runners only` : `no organisation runner of ${org} matches ${pattern}; capacity reads organisation runners only`
+    );
+  }
+  return busy;
+}
+async function runCount(config2, gh, status, timeoutMs) {
+  const out = await gh.api(
+    `/repos/${config2.primaryRepo}/actions/runs?status=${status}&per_page=1`,
+    ".total_count",
+    { paginate: false, timeoutMs }
+  );
+  const first = out.split("\n")[0]?.trim() ?? "";
+  if (!/^\d+$/.test(first)) throw new Error(`unparsable run count: ${first}`);
+  return Number(first);
+}
+async function githubHostedBusy(config2, gh, timeoutMs) {
+  const running = await runCount(config2, gh, "in_progress", timeoutMs);
+  const queued = await runCount(config2, gh, "queued", timeoutMs);
+  return running + queued;
+}
+function hostLoadOk(config2, host, hostLoad) {
+  const { hostLoadMax } = config2.ci.capacity;
+  if (hostLoadMax !== void 0) return hostLoad <= hostLoadMax;
+  if (config2.ci.sharedHost === true) {
+    const cores = host.cpuCount();
+    return Number.isFinite(cores) && cores > 0 && hostLoad <= cores;
+  }
+  return true;
+}
+async function readCapacity(config2, ports, options = {}) {
+  const { total, mergeMaxBusy } = config2.ci.capacity;
+  const { githubHostedLimit } = config2.ci;
+  const hostLoad = ports.host.loadAvg1();
+  const hostOk = hostLoadOk(config2, ports.host, hostLoad);
+  const mode = config2.ci.runners;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let selfBusy = 0;
+  let hostedBusy = 0;
+  try {
+    const read3 = async () => {
+      if (mode === "self-hosted" || mode === "both") {
+        selfBusy = await selfHostedBusy(config2, ports.gh, timeoutMs);
+      }
+      if (mode === "github-hosted" || mode === "both") {
+        hostedBusy = await githubHostedBusy(config2, ports.gh, timeoutMs);
+      }
+    };
+    await withTimeout(read3(), timeoutMs);
+  } catch (err) {
+    const error62 = (err instanceof Error ? err.message : String(err)).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
+    return { ciBusy: total, ciTotal: total, hostLoad, ok: false, hostOk, error: error62 };
+  }
+  const ciBusy = Math.min(total, mode === "github-hosted" ? hostedBusy : selfBusy);
+  let ok = ciBusy <= mergeMaxBusy;
+  const out = { ciBusy, ciTotal: total, hostLoad, ok, hostOk };
+  if (mode === "both") {
+    out.githubHostedBusy = hostedBusy;
+    if (githubHostedLimit === void 0) out.warning = GITHUB_HOSTED_UNLIMITED;
+    else {
+      out.githubHostedLimit = githubHostedLimit;
+      ok = ok && hostedBusy <= githubHostedLimit;
+    }
+  }
+  out.ok = ok && hostOk;
+  return out;
+}
+async function readCapacityTwice(config2, ports, options = {}) {
+  const first = await readCapacity(config2, ports, options);
+  if (!first.ok) return { ok: false, capacity: first };
+  await ports.clock.sleep(config2.ci.capacity.checkTwiceSeconds * 1e3);
+  const second = await readCapacity(config2, ports, options);
+  return { ok: second.ok, capacity: second };
+}
+async function capacityHoldsTwice(config2, ports, options = {}) {
+  return (await readCapacityTwice(config2, ports, options)).ok;
+}
+
 // src/setup-ci.ts
 var import_yaml4 = __toESM(require_dist(), 1);
-var RUNNER_JQ = '.runners[] | [.name, .status, .busy, ([.labels[].name] | join(","))] | @tsv';
-var RUNNER_LINE = /^(\S+)\t(online|offline)\t(true|false)\t([^\t]*)$/;
+var RUNNER_JQ2 = '.runners[] | [.name, .status, .busy, ([.labels[].name] | join(","))] | @tsv';
+var RUNNER_LINE2 = /^(\S+)\t(online|offline)\t(true|false)\t([^\t]*)$/;
 var SAFE_NAME = /^[A-Za-z0-9_.-]+$/;
 var DEFAULT_GITHUB_HOSTED_TOTAL = 20;
 var DEFAULT_CHECK_TWICE_SECONDS = 30;
@@ -29974,7 +30087,7 @@ function parseRunners(out) {
   const runners = [];
   for (const line2 of out.split("\n")) {
     if (line2.trim() === "") continue;
-    const m = RUNNER_LINE.exec(line2);
+    const m = RUNNER_LINE2.exec(line2);
     if (!m) throw new Error("unparsable runner line");
     const [, name = "", status, busy, labels = ""] = m;
     runners.push({
@@ -29989,20 +30102,21 @@ function parseRunners(out) {
 function errorText(err) {
   return (err instanceof Error ? err.message : String(err)).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
 }
-async function read(gh, path10) {
+async function read(gh, path10, timeoutMs) {
   try {
-    return { ok: true, runners: parseRunners(await gh.api(path10, RUNNER_JQ)) };
+    const out = timeoutMs === void 0 ? await gh.api(path10, RUNNER_JQ2) : await withTimeout(gh.api(path10, RUNNER_JQ2, { timeoutMs }), timeoutMs, "runner read");
+    return { ok: true, runners: parseRunners(out) };
   } catch (err) {
     return { ok: false, error: errorText(err) };
   }
 }
-async function detectRunners(owner, repo, ports) {
+async function detectRunners(owner, repo, ports, timeoutMs) {
   if (!SAFE_NAME.test(owner) || !SAFE_NAME.test(repo) || owner === "." || owner === ".." || repo === "." || repo === "..") {
     return { source: "unknown", runners: [], error: "invalid repository name" };
   }
-  const org = await read(ports.gh, `/orgs/${owner}/actions/runners`);
+  const org = await read(ports.gh, `/orgs/${owner}/actions/runners`, timeoutMs);
   if (org.ok && org.runners.length > 0) return { source: "org", runners: org.runners };
-  const rep = await read(ports.gh, `/repos/${owner}/${repo}/actions/runners`);
+  const rep = await read(ports.gh, `/repos/${owner}/${repo}/actions/runners`, timeoutMs);
   if (rep.ok && rep.runners.length > 0) return { source: "repo", runners: rep.runners };
   if (org.ok && rep.ok) return { source: "none", runners: [] };
   const errors = [
@@ -30382,9 +30496,14 @@ function readWorkflows(project) {
   }
   return { files, errors, notes };
 }
-async function readVisibility(gh, repo) {
+async function readVisibility(gh, repo, timeoutMs) {
   try {
-    const out = (await gh.api(`/repos/${repo}`, ".visibility", { paginate: false })).trim();
+    const call = timeoutMs === void 0 ? gh.api(`/repos/${repo}`, ".visibility", { paginate: false }) : withTimeout(
+      gh.api(`/repos/${repo}`, ".visibility", { paginate: false, timeoutMs }),
+      timeoutMs,
+      "visibility read"
+    );
+    const out = (await call).trim();
     return { visibility: out === "private" || out === "internal" ? "private" : "public" };
   } catch {
     return {
@@ -30431,14 +30550,14 @@ function describeDetection(d) {
   if (d.error) lines.push(`  error: ${d.error}`);
   return lines;
 }
-async function detectCi(project, primary, ports, current) {
+async function detectCi(project, primary, ports, current, timeoutMs) {
   const [owner = "", name = ""] = primary.split("/");
   const notes = [];
-  const vis = await readVisibility(ports.gh, primary);
+  const vis = await readVisibility(ports.gh, primary, timeoutMs);
   if (vis.note) notes.push(vis.note);
   const wf = readWorkflows(project);
   notes.push(...wf.notes);
-  const detection = await detectRunners(owner, name, ports);
+  const detection = await detectRunners(owner, name, ports, timeoutMs);
   const proposal = proposeCi(detection, vis.visibility, current, workflowRunnerUsage(wf.files));
   const lint = lintWorkflows(wf.files, detection, EXPECTED_GROUP);
   return {
@@ -31069,8 +31188,7 @@ async function runAccount(o2) {
 
 // src/init.ts
 var import_yaml10 = __toESM(require_dist(), 1);
-import { lstatSync as lstatSync17, mkdirSync as mkdirSync6, mkdtempSync, readdirSync as readdirSync9, rmSync as rmSync5, writeFileSync as writeFileSync9 } from "node:fs";
-import { tmpdir } from "node:os";
+import { lstatSync as lstatSync17, mkdirSync as mkdirSync6, readdirSync as readdirSync9, rmdirSync, rmSync as rmSync5, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join21 } from "node:path";
 
 // src/secret-command.ts
@@ -33896,7 +34014,7 @@ import { lstatSync as lstatSync16, readdirSync as readdirSync8, readFileSync as 
 import { join as join20 } from "node:path";
 var MAX_FILE_BYTES2 = 1024 * 1024;
 var MAX_ENTRIES = 200;
-var MONOREPO_DIRS = ["apps", "packages", "crates", "services"];
+var MONOREPO_DIRS = ["apps", "packages", "services", "crates", "libs"];
 var OTHER_WEB = ["nextjs", "shadcn", "svelte"];
 var DEP_STACKS = {
   next: "nextjs",
@@ -34068,7 +34186,8 @@ function runSetupStack(o2) {
 
 // src/init.ts
 var MIN_NODE_MAJOR = 24;
-var COMPONENT_ROOTS = ["apps", "packages", "services", "crates", "libs"];
+var GH_TIMEOUT_MS2 = 15e3;
+var CLAUDE_TIMEOUT_MS = 1e4;
 var MANIFESTS = ["package.json", "Cargo.toml", "go.mod", "pyproject.toml"];
 var TOOLING_DIRS = [".github", "tooling", "scripts"];
 var MAX_ENTRIES2 = 200;
@@ -34079,6 +34198,10 @@ var REGISTRY_HOSTS = {
   "Cargo.toml": ["crates.io", "index.crates.io", "static.crates.io"],
   "go.mod": ["proxy.golang.org", "sum.golang.org"],
   "pyproject.toml": ["pypi.org", "files.pythonhosted.org"]
+};
+var STACK_HOSTS = {
+  docker: ["registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com"],
+  rust: ["crates.io", "index.crates.io", "static.crates.io"]
 };
 var PLUGIN_INSTALL = [
   "/plugin marketplace add Besser-Sehen-Landshut/studio",
@@ -34133,7 +34256,7 @@ function proposeComponents(project, repo) {
   const manifests = new Set(MANIFESTS.filter((m) => isRealFile(join21(project, m))));
   const notes = [];
   const taken = /* @__PURE__ */ new Set();
-  for (const root of COMPONENT_ROOTS) {
+  for (const root of MONOREPO_DIRS) {
     const base = join21(project, root);
     if (!isRealDir2(base)) continue;
     let names;
@@ -34215,34 +34338,58 @@ function prefixOf(repo) {
   const letters = (repo.split("/").at(-1) ?? "").toUpperCase().replace(/[^A-Z]/g, "");
   return letters.slice(0, 8) || "ITEM";
 }
+async function bounded(work, ms, what) {
+  try {
+    return await withTimeout(work(), ms, what);
+  } catch (e) {
+    return { code: 1, why: e.message };
+  }
+}
 async function prerequisites(o2) {
   const checks = [];
+  const ghMs = o2.timeouts?.ghMs ?? GH_TIMEOUT_MS2;
+  const claudeMs = o2.timeouts?.claudeMs ?? CLAUDE_TIMEOUT_MS;
   const doctor = await doctorReport(o2);
   const r = doctor.report;
   checks.push(
     doctor.gitOk ? { name: "git", status: "pass", detail: r.git } : { name: "git", status: "fail", detail: r.git, fix: "install git 2.38 or newer" }
   );
-  const ghVersion = await o2.ports.gh.run(["--version"]).catch(() => ({ code: 1 }));
+  const gh = (args) => () => o2.ports.gh.run(args, { timeoutMs: ghMs });
+  const ghVersion = await bounded(gh(["--version"]), ghMs, "gh --version");
   if (ghVersion.code !== 0) {
     checks.push({
       name: "gh",
       status: "fail",
-      detail: "not found",
+      detail: ghVersion.why ?? "not found",
       fix: "install the GitHub CLI (https://cli.github.com), then gh auth login"
     });
   } else {
-    const auth = await o2.ports.gh.run(["auth", "status"]).catch(() => ({ code: 1 }));
+    const auth = await bounded(
+      gh(["auth", "status", "--hostname", "github.com"]),
+      ghMs,
+      "gh auth status"
+    );
     checks.push(
-      auth.code === 0 ? { name: "gh", status: "pass", detail: "logged in" } : { name: "gh", status: "fail", detail: "not logged in", fix: "gh auth login" }
+      auth.code === 0 ? { name: "gh", status: "pass", detail: "logged in to github.com" } : {
+        name: "gh",
+        status: "fail",
+        detail: auth.why ?? "not logged in to github.com",
+        fix: "gh auth login --hostname github.com"
+      }
     );
   }
   const env = { PATH: o2.env.PATH ?? "", HOME: o2.owner.homedir ?? "" };
-  const claude = o2.ports.plugins ? await o2.ports.plugins.run(["--version"], env, o2.project).catch(() => ({ code: 1 })) : { code: 1 };
+  const plugins = o2.ports.plugins;
+  const claude = plugins ? await bounded(
+    () => plugins.run(["--version"], env, o2.project, { timeoutMs: claudeMs }),
+    claudeMs,
+    "claude --version"
+  ) : { code: 1 };
   checks.push(
     claude.code === 0 ? { name: "claude", status: "pass", detail: "Claude Code CLI found" } : {
       name: "claude",
       status: "fail",
-      detail: "the claude CLI does not run",
+      detail: claude.why ?? "the claude CLI does not run",
       fix: "install Claude Code (https://code.claude.com) so that claude is on PATH"
     }
   );
@@ -34292,6 +34439,8 @@ async function prerequisites(o2) {
   }
   return checks;
 }
+var DEFAULT_ROLES = { builder: { model: "sonnet", wip: 2 }, reviewer: { model: "opus", wip: 1 } };
+var CI_UNREAD_COMMENT = "# runners could not be read; run studio setup ci";
 var STUDIO_FILES = [".studio/studio.yaml", ".studio/board.yaml"];
 async function isIgnored(o2, file2) {
   try {
@@ -34301,19 +34450,49 @@ async function isIgnored(o2, file2) {
     return false;
   }
 }
-function nextSteps(prefix, written) {
+function nextSteps(prefix, written, checks) {
+  const open2 = (name) => checks.some((c3) => c3.name === name && c3.status !== "pass");
   return [
+    ...open2("ci") ? [
+      "Studio could not read your CI runners: run studio setup ci (with --write) to fix the ci: block."
+    ] : [],
     ...written ? [] : ["Run studio init --write to write the two files."],
     "Commit .studio/studio.yaml and .studio/board.yaml.",
-    "In a terminal, store the crew token: studio secret set crew-token",
-    "In a terminal, add a Claude account for the crews: claude setup-token, then studio account add <label>",
+    ...open2("crew token") ? ["In a terminal, store the crew token: studio secret set crew-token"] : [],
+    ...open2("claude account") ? [
+      "In a terminal, add a Claude account for the crews: claude setup-token, then studio account add <label>"
+    ] : [],
+    ...open2("superpowers") ? [`In Claude Code, install superpowers: ${SUPERPOWERS_INSTALL}`] : [],
     `In Claude Code, install the Studio plugin if it is not yet: ${PLUGIN_INSTALL.join(", then ")}; then restart Claude Code in this folder. The board comes with the plugin.`,
     "Open the board pane with /studio.",
     `Add a first item: studio add "Add a health endpoint" --type fix --dod "GET /health returns 200" (it gets the id ${prefix}-1)`,
     "In a Claude Code session in this folder say: run the Studio lead loop (skill studio:studio-lead). It runs studio tick every few minutes."
   ];
 }
+function writeBoth(o2, dir, files) {
+  const write = o2.writeFile ?? ((path10, text) => writeFileSync9(path10, text, { flag: "wx" }));
+  const madeDir = !exists3(dir);
+  if (madeDir) mkdirSync6(dir);
+  if (!isRealDir2(dir)) throw new Error(".studio is not a directory: nothing written");
+  const done = [];
+  try {
+    for (const [path10, text] of files) {
+      write(path10, text);
+      done.push(path10);
+    }
+  } catch (e) {
+    for (const path10 of done) rmSync5(path10, { force: true });
+    if (madeDir) rmdirSync(dir);
+    throw e;
+  }
+}
 async function runInit(o2) {
+  const dotStudio = join21(o2.project, ".studio");
+  if (exists3(dotStudio) && !isRealDir2(dotStudio)) {
+    throw new Error(
+      ".studio is not a directory (a link or a file): nothing written; remove it first"
+    );
+  }
   const present2 = STUDIO_FILES.filter((f) => exists3(join21(o2.project, f)));
   if (present2.length > 0) {
     throw new Error(
@@ -34355,14 +34534,22 @@ async function runInit(o2) {
   );
   const repo = primary ?? "owner/name";
   const prefix = prefixOf(repo);
-  const ci = primary === void 0 ? void 0 : await detectCi(o2.project, primary, o2.ports);
+  const ghMs = o2.timeouts?.ghMs ?? GH_TIMEOUT_MS2;
+  const ci = primary === void 0 ? void 0 : await detectCi(o2.project, primary, o2.ports, void 0, ghMs);
   let ciBlock = ci?.proposal.ci;
+  let ciUnread = false;
   if (ci !== void 0) {
     warnings.push(...ci.errors.map((e) => `ci: ${e}`), ...ci.warnings.map((w) => `ci: ${w}`));
     if (ciBlock === void 0 || ci.proposal.errors.length > 0) {
       ciBlock = proposeCi({ source: "none", runners: [] }, ci.visibility).ci;
-      warnings.push("ci: no usable proposal, GitHub-hosted runners for now; run studio setup ci");
-    }
+      ciUnread = ci.detection.source === "unknown";
+      checks.push({
+        name: "ci",
+        status: "warn",
+        detail: ciUnread ? `runners could not be read (${ci.detection.error ?? "unknown error"}): GitHub-hosted for now` : `no usable proposal (${ci.proposal.errors.join("; ")}): GitHub-hosted for now`,
+        fix: "studio setup ci"
+      });
+    } else checks.push({ name: "ci", status: "pass", detail: `runners: ${ciBlock.runners}` });
   }
   const stacks = detectStacks(o2.project);
   const found = proposeComponents(o2.project, repo);
@@ -34370,7 +34557,10 @@ async function runInit(o2) {
   const networkAllow = [
     "github.com",
     "api.github.com",
-    ...new Set(found.manifests.flatMap((m) => REGISTRY_HOSTS[m] ?? []))
+    .../* @__PURE__ */ new Set([
+      ...found.manifests.flatMap((m) => REGISTRY_HOSTS[m] ?? []),
+      ...stacks.stacks.flatMap((st) => STACK_HOSTS[st] ?? [])
+    ])
   ];
   const config2 = {
     studio: 1,
@@ -34378,7 +34568,7 @@ async function runInit(o2) {
     repos: [repo],
     ci: snakeKeys(ciBlock ?? {}),
     merge: { strategy: "studio-queue", contract_paths: [] },
-    roles: { builder: { model: "sonnet", wip: 2 }, reviewer: { model: "opus", wip: 1 } },
+    roles: o2.roles ?? DEFAULT_ROLES,
     stacks: stacks.stacks,
     sandbox: { network_allow: networkAllow },
     owner_only: [],
@@ -34388,35 +34578,41 @@ async function runInit(o2) {
     review_bases: [],
     ...found.components.length === 0 ? {} : { components: snakeKeys(found.components) }
   };
+  let body = (0, import_yaml10.stringify)(config2, { lineWidth: 0 });
+  if (ciUnread) body = body.replace(/^ci:/m, `${CI_UNREAD_COMMENT}
+ci:`);
   const configText = `# Studio project settings, written by studio init. See the Studio README for every key.
-${(0, import_yaml10.stringify)(config2, { lineWidth: 0 })}`;
+${body}`;
   const boardText = BOARD_TEXT(prefix, repo);
+  if (primary !== void 0) {
+    try {
+      const file2 = join21(dotStudio, "studio.yaml");
+      parseBoard(boardText, boardPath(o2.project), parseConfig(configText, file2));
+      checks.push({ name: "proposal", status: "pass", detail: "both files load" });
+    } catch (e) {
+      checks.push({
+        name: "proposal",
+        status: "fail",
+        detail: `the proposed files would not load: ${e.message}`,
+        fix: "report this as a Studio bug; write the files by hand meanwhile (README)"
+      });
+    }
+  }
   const failed = checks.filter((c3) => c3.status === "fail");
   const written = [];
   let refused;
-  if (failed.length === 0 && ciBlock !== void 0) {
-    const scratch = mkdtempSync(join21(tmpdir(), "studio-init-"));
-    try {
-      mkdirSync6(join21(scratch, ".studio"));
-      writeFileSync9(join21(scratch, ".studio", "studio.yaml"), configText);
-      writeFileSync9(boardPath(scratch), boardText);
-      loadBoard(scratch, loadConfig(scratch));
-    } finally {
-      rmSync5(scratch, { recursive: true, force: true });
-    }
-  }
   if (o2.write) {
     if (failed.length > 0 || ciBlock === void 0) {
       refused = `nothing written: fix ${failed.map((c3) => c3.name).join(", ") || "the checks"} first`;
     } else {
-      mkdirSync6(join21(o2.project, ".studio"), { recursive: true });
-      writeFileSync9(join21(o2.project, ".studio", "studio.yaml"), configText, { flag: "wx" });
-      written.push(".studio/studio.yaml");
-      writeFileSync9(boardPath(o2.project), boardText, { flag: "wx" });
-      written.push(".studio/board.yaml");
+      writeBoth(o2, dotStudio, [
+        [join21(dotStudio, "studio.yaml"), configText],
+        [boardPath(o2.project), boardText]
+      ]);
+      written.push(...STUDIO_FILES);
     }
   }
-  const steps = nextSteps(prefix, written.length > 0);
+  const steps = nextSteps(prefix, written.length > 0, checks);
   if (o2.json) {
     o2.stdout(
       `${JSON.stringify(
@@ -34612,8 +34808,13 @@ async function addItem(o2) {
     throw new Error('add needs a title: studio add "<title>"');
   if (!ONE_LINE.test(title))
     throw new Error("the title must be one line of at most 300 characters");
-  const type = o2.type ?? "feature";
+  const type = o2.type ?? "fix";
   if (!ADD_TYPES.includes(type)) throw new Error(`--type must be one of ${ADD_TYPES.join(", ")}`);
+  if (type === "feature" && o2.plan === void 0) {
+    throw new Error(
+      "a feature needs a plan before it is planned: add --plan <file>, or use --type fix"
+    );
+  }
   if (o2.dod.length === 0) {
     throw new Error('add needs at least one --dod "<line>": what done means for this item');
   }
@@ -34621,7 +34822,7 @@ async function addItem(o2) {
     if (!ONE_LINE.test(line2.trim())) throw new Error("each --dod must be one line");
   }
   for (const g of o2.paths) {
-    const problem = globProblem(g);
+    const problem = globProblem(g) ?? (g.startsWith("/") || /^[A-Za-z]:/.test(g) ? "must be relative to the repository" : void 0) ?? (g.split(/[\\/]/).includes("..") ? "must not hold a .. segment" : void 0);
     if (problem !== void 0) throw new Error(`--path ${JSON.stringify(g)}: ${problem}`);
   }
   if (o2.plan !== void 0 && !ONE_LINE.test(o2.plan)) throw new Error("--plan must be one line");
@@ -34670,120 +34871,24 @@ async function addItem(o2) {
     const item = parsed.data;
     saveBoard(o2.project, { ...board, items: [...board.items, item] });
     const { missing } = isReady(item);
+    const warnings = [];
+    if (item.paths.length === 0) {
+      warnings.push(
+        "no --path: the item conflicts with no other item, so it may run beside work on the same files"
+      );
+      if (o2.component === void 0) warnings.push("no --path: the item belongs to no component");
+    }
+    const notes = item.paths.some((g) => g === ".github" || g.startsWith(".github/")) ? ["a path below .github/: this is a CI item, its review may approve workflow changes"] : [];
     return {
       item: id,
       type,
       status: item.status,
       repo,
-      ...missing.length > 0 ? { missing } : {}
+      ...missing.length > 0 ? { missing } : {},
+      ...warnings.length > 0 ? { warnings } : {},
+      ...notes.length > 0 ? { notes } : {}
     };
   });
-}
-
-// src/capacity.ts
-var DEFAULT_TIMEOUT_MS = 3e4;
-function withTimeout(work, ms) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`CI read timed out after ${ms} ms`)), ms);
-  });
-  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
-}
-var RUNNER_JQ2 = ".runners[] | [.name, .status, .busy] | @tsv";
-var RUNNER_LINE2 = /^(\S+)\t(\S+)\t(true|false)$/;
-async function selfHostedBusy(config2, gh, timeoutMs) {
-  const org = config2.primaryRepo.split("/")[0];
-  const pattern = config2.ci.runnerNamePattern;
-  const re = pattern === void 0 ? void 0 : new RegExp(pattern);
-  const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ2, { timeoutMs });
-  let busy = 0;
-  let matching = 0;
-  for (const line2 of out.split("\n")) {
-    if (line2.trim() === "") continue;
-    const m = RUNNER_LINE2.exec(line2);
-    if (!m) throw new Error(`unparsable runner line: ${line2}`);
-    const [, name = "", status, isBusy] = m;
-    if (re !== void 0 && !re.test(name)) continue;
-    matching++;
-    if (status === "online" && isBusy === "true") busy++;
-  }
-  if (matching === 0) {
-    throw new Error(
-      pattern === void 0 ? `no organisation runner found for ${org}; capacity reads organisation runners only` : `no organisation runner of ${org} matches ${pattern}; capacity reads organisation runners only`
-    );
-  }
-  return busy;
-}
-async function runCount(config2, gh, status, timeoutMs) {
-  const out = await gh.api(
-    `/repos/${config2.primaryRepo}/actions/runs?status=${status}&per_page=1`,
-    ".total_count",
-    { paginate: false, timeoutMs }
-  );
-  const first = out.split("\n")[0]?.trim() ?? "";
-  if (!/^\d+$/.test(first)) throw new Error(`unparsable run count: ${first}`);
-  return Number(first);
-}
-async function githubHostedBusy(config2, gh, timeoutMs) {
-  const running = await runCount(config2, gh, "in_progress", timeoutMs);
-  const queued = await runCount(config2, gh, "queued", timeoutMs);
-  return running + queued;
-}
-function hostLoadOk(config2, host, hostLoad) {
-  const { hostLoadMax } = config2.ci.capacity;
-  if (hostLoadMax !== void 0) return hostLoad <= hostLoadMax;
-  if (config2.ci.sharedHost === true) {
-    const cores = host.cpuCount();
-    return Number.isFinite(cores) && cores > 0 && hostLoad <= cores;
-  }
-  return true;
-}
-async function readCapacity(config2, ports, options = {}) {
-  const { total, mergeMaxBusy } = config2.ci.capacity;
-  const { githubHostedLimit } = config2.ci;
-  const hostLoad = ports.host.loadAvg1();
-  const hostOk = hostLoadOk(config2, ports.host, hostLoad);
-  const mode = config2.ci.runners;
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  let selfBusy = 0;
-  let hostedBusy = 0;
-  try {
-    const read3 = async () => {
-      if (mode === "self-hosted" || mode === "both") {
-        selfBusy = await selfHostedBusy(config2, ports.gh, timeoutMs);
-      }
-      if (mode === "github-hosted" || mode === "both") {
-        hostedBusy = await githubHostedBusy(config2, ports.gh, timeoutMs);
-      }
-    };
-    await withTimeout(read3(), timeoutMs);
-  } catch (err) {
-    const error62 = (err instanceof Error ? err.message : String(err)).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
-    return { ciBusy: total, ciTotal: total, hostLoad, ok: false, hostOk, error: error62 };
-  }
-  const ciBusy = Math.min(total, mode === "github-hosted" ? hostedBusy : selfBusy);
-  let ok = ciBusy <= mergeMaxBusy;
-  const out = { ciBusy, ciTotal: total, hostLoad, ok, hostOk };
-  if (mode === "both") {
-    out.githubHostedBusy = hostedBusy;
-    if (githubHostedLimit === void 0) out.warning = GITHUB_HOSTED_UNLIMITED;
-    else {
-      out.githubHostedLimit = githubHostedLimit;
-      ok = ok && hostedBusy <= githubHostedLimit;
-    }
-  }
-  out.ok = ok && hostOk;
-  return out;
-}
-async function readCapacityTwice(config2, ports, options = {}) {
-  const first = await readCapacity(config2, ports, options);
-  if (!first.ok) return { ok: false, capacity: first };
-  await ports.clock.sleep(config2.ci.capacity.checkTwiceSeconds * 1e3);
-  const second = await readCapacity(config2, ports, options);
-  return { ok: second.ok, capacity: second };
-}
-async function capacityHoldsTwice(config2, ports, options = {}) {
-  return (await readCapacityTwice(config2, ports, options)).ok;
 }
 
 // src/ci-jobs.ts
@@ -37541,7 +37646,7 @@ ${notRunSection(notRunHere)}
 ${body.replace(new RegExp("[^\\P{Cc}\\n\\t]|\\p{Cf}", "gu"), "").slice(0, PR_BODY_MAX)}
 `;
   const withBody = async (use) => {
-    const dir = mkdtempSync2(join26(tmpdir2(), "studio-pr-"));
+    const dir = mkdtempSync(join26(tmpdir(), "studio-pr-"));
     try {
       const file2 = join26(dir, "body.md");
       writeFileSync10(file2, text, { mode: 384 });
@@ -45801,14 +45906,14 @@ function realPorts(claudeBin = "claude") {
     }
   };
   const plugins = {
-    async run(args, env, cwd) {
+    async run(args, env, cwd, opts) {
       const r = await execa(claudeBin, args, {
         cwd,
         env,
         extendEnv: false,
         reject: false,
         stdin: "ignore",
-        timeout: PLUGIN_TIMEOUT_MS
+        timeout: opts?.timeoutMs ?? PLUGIN_TIMEOUT_MS
       });
       return {
         code: r.timedOut ? 124 : r.exitCode ?? 1,

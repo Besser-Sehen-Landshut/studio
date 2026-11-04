@@ -1,14 +1,14 @@
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { lstatSync, mkdirSync, readdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stringify } from 'yaml';
-import { boardPath, loadBoard } from './board.js';
-import { type ComponentConfig, globProblem, loadConfig, type OwnerEnv } from './config.js';
+import { boardPath, parseBoard } from './board.js';
+import { withTimeout } from './capacity.js';
+import { type ComponentConfig, globProblem, type OwnerEnv, parseConfig } from './config.js';
 import type { Ports } from './ports.js';
 import { doctorReport } from './secret-command.js';
 import { proposeCi } from './setup-ci.js';
 import { detectCi, safe, snakeKeys } from './setup-ci-command.js';
-import { detectStacks } from './stack.js';
+import { detectStacks, MONOREPO_DIRS } from './stack.js';
 
 /** One line of the prerequisites list: a failure blocks `--write`, a warning never does. */
 export type Check = {
@@ -19,8 +19,8 @@ export type Check = {
 };
 
 const MIN_NODE_MAJOR = 24;
-/** Folders whose direct children are the parts of a monorepo. */
-const COMPONENT_ROOTS = ['apps', 'packages', 'services', 'crates', 'libs'];
+const GH_TIMEOUT_MS = 15_000;
+const CLAUDE_TIMEOUT_MS = 10_000;
 const MANIFESTS = ['package.json', 'Cargo.toml', 'go.mod', 'pyproject.toml'];
 const TOOLING_DIRS = ['.github', 'tooling', 'scripts'];
 const MAX_ENTRIES = 200;
@@ -34,6 +34,12 @@ const REGISTRY_HOSTS: Record<string, string[]> = {
   'Cargo.toml': ['crates.io', 'index.crates.io', 'static.crates.io'],
   'go.mod': ['proxy.golang.org', 'sum.golang.org'],
   'pyproject.toml': ['pypi.org', 'files.pythonhosted.org'],
+};
+
+/** Hosts the detected stacks commonly need, where that is clear. */
+const STACK_HOSTS: Record<string, string[]> = {
+  docker: ['registry-1.docker.io', 'auth.docker.io', 'production.cloudflare.docker.com'],
+  rust: ['crates.io', 'index.crates.io', 'static.crates.io'],
 };
 
 const PLUGIN_INSTALL = [
@@ -111,7 +117,7 @@ export function proposeComponents(
   const manifests = new Set(MANIFESTS.filter((m) => isRealFile(join(project, m))));
   const notes: string[] = [];
   const taken = new Set<string>();
-  for (const root of COMPONENT_ROOTS) {
+  for (const root of MONOREPO_DIRS) {
     const base = join(project, root);
     if (!isRealDir(base)) continue;
     let names: string[];
@@ -200,8 +206,23 @@ export function prefixOf(repo: string): string {
   return letters.slice(0, 8) || 'ITEM';
 }
 
+/** A port call under a timeout: a hang or a throw becomes a non-zero code with the reason. */
+async function bounded(
+  work: () => Promise<{ code: number }>,
+  ms: number,
+  what: string,
+): Promise<{ code: number; why?: string }> {
+  try {
+    return await withTimeout(work(), ms, what);
+  } catch (e) {
+    return { code: 1, why: (e as Error).message };
+  }
+}
+
 async function prerequisites(o: InitOptions): Promise<Check[]> {
   const checks: Check[] = [];
+  const ghMs = o.timeouts?.ghMs ?? GH_TIMEOUT_MS;
+  const claudeMs = o.timeouts?.claudeMs ?? CLAUDE_TIMEOUT_MS;
   const doctor = await doctorReport(o);
   const r = doctor.report;
   checks.push(
@@ -209,25 +230,41 @@ async function prerequisites(o: InitOptions): Promise<Check[]> {
       ? { name: 'git', status: 'pass', detail: r.git }
       : { name: 'git', status: 'fail', detail: r.git, fix: 'install git 2.38 or newer' },
   );
-  const ghVersion = await o.ports.gh.run(['--version']).catch(() => ({ code: 1 }));
+  const gh = (args: string[]) => () => o.ports.gh.run(args, { timeoutMs: ghMs });
+  const ghVersion = await bounded(gh(['--version']), ghMs, 'gh --version');
   if (ghVersion.code !== 0) {
     checks.push({
       name: 'gh',
       status: 'fail',
-      detail: 'not found',
+      detail: ghVersion.why ?? 'not found',
       fix: 'install the GitHub CLI (https://cli.github.com), then gh auth login',
     });
   } else {
-    const auth = await o.ports.gh.run(['auth', 'status']).catch(() => ({ code: 1 }));
+    // Only github.com: a stale login to another host must not fail a healthy one.
+    const auth = await bounded(
+      gh(['auth', 'status', '--hostname', 'github.com']),
+      ghMs,
+      'gh auth status',
+    );
     checks.push(
       auth.code === 0
-        ? { name: 'gh', status: 'pass', detail: 'logged in' }
-        : { name: 'gh', status: 'fail', detail: 'not logged in', fix: 'gh auth login' },
+        ? { name: 'gh', status: 'pass', detail: 'logged in to github.com' }
+        : {
+            name: 'gh',
+            status: 'fail',
+            detail: auth.why ?? 'not logged in to github.com',
+            fix: 'gh auth login --hostname github.com',
+          },
     );
   }
   const env = { PATH: o.env.PATH ?? '', HOME: o.owner.homedir ?? '' };
-  const claude = o.ports.plugins
-    ? await o.ports.plugins.run(['--version'], env, o.project).catch(() => ({ code: 1 }))
+  const plugins = o.ports.plugins;
+  const claude = plugins
+    ? await bounded(
+        () => plugins.run(['--version'], env, o.project, { timeoutMs: claudeMs }),
+        claudeMs,
+        'claude --version',
+      )
     : { code: 1 };
   checks.push(
     claude.code === 0
@@ -235,7 +272,7 @@ async function prerequisites(o: InitOptions): Promise<Check[]> {
       : {
           name: 'claude',
           status: 'fail',
-          detail: 'the claude CLI does not run',
+          detail: claude.why ?? 'the claude CLI does not run',
           fix: 'install Claude Code (https://code.claude.com) so that claude is on PATH',
         },
   );
@@ -305,7 +342,16 @@ export type InitOptions = {
   /** Injectable for tests; default the running Node.js and platform. */
   nodeVersion?: string;
   platform?: NodeJS.Platform;
+  /** Per call: gh 15 s, claude 10 s by default. */
+  timeouts?: { ghMs?: number; claudeMs?: number };
+  /** Creates one file and never overwrites; injectable so tests can fail a write. */
+  writeFile?: (path: string, text: string) => void;
+  /** The roles the proposal holds; default a builder and a reviewer. */
+  roles?: Record<string, unknown>;
 };
+
+const DEFAULT_ROLES = { builder: { model: 'sonnet', wip: 2 }, reviewer: { model: 'opus', wip: 1 } };
+const CI_UNREAD_COMMENT = '# runners could not be read; run studio setup ci';
 
 /** The files a project's `.studio/` holds that `init` writes, relative to the project. */
 const STUDIO_FILES = ['.studio/studio.yaml', '.studio/board.yaml'];
@@ -319,12 +365,26 @@ async function isIgnored(o: InitOptions, file: string): Promise<boolean> {
   }
 }
 
-function nextSteps(prefix: string, written: boolean): string[] {
+/** The steps still to do: what a check found done is left out. */
+function nextSteps(prefix: string, written: boolean, checks: Check[]): string[] {
+  const open = (name: string) => checks.some((c) => c.name === name && c.status !== 'pass');
   return [
+    ...(open('ci')
+      ? [
+          'Studio could not read your CI runners: run studio setup ci (with --write) to fix the ci: block.',
+        ]
+      : []),
     ...(written ? [] : ['Run studio init --write to write the two files.']),
     'Commit .studio/studio.yaml and .studio/board.yaml.',
-    'In a terminal, store the crew token: studio secret set crew-token',
-    'In a terminal, add a Claude account for the crews: claude setup-token, then studio account add <label>',
+    ...(open('crew token')
+      ? ['In a terminal, store the crew token: studio secret set crew-token']
+      : []),
+    ...(open('claude account')
+      ? [
+          'In a terminal, add a Claude account for the crews: claude setup-token, then studio account add <label>',
+        ]
+      : []),
+    ...(open('superpowers') ? [`In Claude Code, install superpowers: ${SUPERPOWERS_INSTALL}`] : []),
     `In Claude Code, install the Studio plugin if it is not yet: ${PLUGIN_INSTALL.join(', then ')}; then restart Claude Code in this folder. The board comes with the plugin.`,
     'Open the board pane with /studio.',
     `Add a first item: studio add "Add a health endpoint" --type fix --dod "GET /health returns 200" (it gets the id ${prefix}-1)`,
@@ -332,8 +392,37 @@ function nextSteps(prefix: string, written: boolean): string[] {
   ];
 }
 
+/**
+ * Creates `.studio` when missing and each file exclusively (`wx`). When a write fails, the files
+ * this call created are removed again, and so is a `.studio` it created, so nothing half is left.
+ */
+function writeBoth(o: InitOptions, dir: string, files: [string, string][]): void {
+  const write = o.writeFile ?? ((path, text) => writeFileSync(path, text, { flag: 'wx' }));
+  const madeDir = !exists(dir);
+  if (madeDir) mkdirSync(dir);
+  // Checked again after the mkdir: a link put there meanwhile is refused, never written through.
+  if (!isRealDir(dir)) throw new Error('.studio is not a directory: nothing written');
+  const done: string[] = [];
+  try {
+    for (const [path, text] of files) {
+      write(path, text);
+      done.push(path);
+    }
+  } catch (e) {
+    for (const path of done) rmSync(path, { force: true });
+    if (madeDir) rmdirSync(dir);
+    throw e;
+  }
+}
+
 /** `studio init [--write]`: checks, proposes and (with --write) writes `.studio/`. */
 export async function runInit(o: InitOptions): Promise<number> {
+  const dotStudio = join(o.project, '.studio');
+  if (exists(dotStudio) && !isRealDir(dotStudio)) {
+    throw new Error(
+      '.studio is not a directory (a link or a file): nothing written; remove it first',
+    );
+  }
   const present = STUDIO_FILES.filter((f) => exists(join(o.project, f)));
   if (present.length > 0) {
     throw new Error(
@@ -382,16 +471,29 @@ export async function runInit(o: InitOptions): Promise<number> {
 
   const repo = primary ?? 'owner/name';
   const prefix = prefixOf(repo);
-  const ci = primary === undefined ? undefined : await detectCi(o.project, primary, o.ports);
+  const ghMs = o.timeouts?.ghMs ?? GH_TIMEOUT_MS;
+  const ci =
+    primary === undefined
+      ? undefined
+      : await detectCi(o.project, primary, o.ports, undefined, ghMs);
   let ciBlock = ci?.proposal.ci;
+  let ciUnread = false;
   if (ci !== undefined) {
     warnings.push(...ci.errors.map((e) => `ci: ${e}`), ...ci.warnings.map((w) => `ci: ${w}`));
     if (ciBlock === undefined || ci.proposal.errors.length > 0) {
       // No usable proposal (runners unreadable, self-hosted on a public repository): start on
       // GitHub-hosted runners, which needs no runner of its own; setup ci can change it later.
       ciBlock = proposeCi({ source: 'none', runners: [] }, ci.visibility).ci;
-      warnings.push('ci: no usable proposal, GitHub-hosted runners for now; run studio setup ci');
-    }
+      ciUnread = ci.detection.source === 'unknown';
+      checks.push({
+        name: 'ci',
+        status: 'warn',
+        detail: ciUnread
+          ? `runners could not be read (${ci.detection.error ?? 'unknown error'}): GitHub-hosted for now`
+          : `no usable proposal (${ci.proposal.errors.join('; ')}): GitHub-hosted for now`,
+        fix: 'studio setup ci',
+      });
+    } else checks.push({ name: 'ci', status: 'pass', detail: `runners: ${ciBlock.runners}` });
   }
   const stacks = detectStacks(o.project);
   const found = proposeComponents(o.project, repo);
@@ -399,7 +501,10 @@ export async function runInit(o: InitOptions): Promise<number> {
   const networkAllow = [
     'github.com',
     'api.github.com',
-    ...new Set(found.manifests.flatMap((m) => REGISTRY_HOSTS[m] ?? [])),
+    ...new Set([
+      ...found.manifests.flatMap((m) => REGISTRY_HOSTS[m] ?? []),
+      ...stacks.stacks.flatMap((st) => STACK_HOSTS[st] ?? []),
+    ]),
   ];
   const config = {
     studio: 1,
@@ -407,7 +512,7 @@ export async function runInit(o: InitOptions): Promise<number> {
     repos: [repo],
     ci: snakeKeys(ciBlock ?? {}),
     merge: { strategy: 'studio-queue', contract_paths: [] },
-    roles: { builder: { model: 'sonnet', wip: 2 }, reviewer: { model: 'opus', wip: 1 } },
+    roles: o.roles ?? DEFAULT_ROLES,
     stacks: stacks.stacks,
     sandbox: { network_allow: networkAllow },
     owner_only: [],
@@ -417,37 +522,42 @@ export async function runInit(o: InitOptions): Promise<number> {
     review_bases: [],
     ...(found.components.length === 0 ? {} : { components: snakeKeys(found.components) }),
   };
-  const configText = `# Studio project settings, written by studio init. See the Studio README for every key.\n${stringify(config, { lineWidth: 0 })}`;
+  let body = stringify(config, { lineWidth: 0 });
+  if (ciUnread) body = body.replace(/^ci:/m, `${CI_UNREAD_COMMENT}\nci:`);
+  const configText = `# Studio project settings, written by studio init. See the Studio README for every key.\n${body}`;
   const boardText = BOARD_TEXT(prefix, repo);
+
+  // Proof before writing, in memory: the loaders' own parsing of both texts.
+  if (primary !== undefined) {
+    try {
+      const file = join(dotStudio, 'studio.yaml');
+      parseBoard(boardText, boardPath(o.project), parseConfig(configText, file));
+      checks.push({ name: 'proposal', status: 'pass', detail: 'both files load' });
+    } catch (e) {
+      checks.push({
+        name: 'proposal',
+        status: 'fail',
+        detail: `the proposed files would not load: ${(e as Error).message}`,
+        fix: 'report this as a Studio bug; write the files by hand meanwhile (README)',
+      });
+    }
+  }
 
   const failed = checks.filter((c) => c.status === 'fail');
   const written: string[] = [];
   let refused: string | undefined;
-  if (failed.length === 0 && ciBlock !== undefined) {
-    // Proof before writing: the real loaders read both files from a scratch copy.
-    const scratch = mkdtempSync(join(tmpdir(), 'studio-init-'));
-    try {
-      mkdirSync(join(scratch, '.studio'));
-      writeFileSync(join(scratch, '.studio', 'studio.yaml'), configText);
-      writeFileSync(boardPath(scratch), boardText);
-      loadBoard(scratch, loadConfig(scratch));
-    } finally {
-      rmSync(scratch, { recursive: true, force: true });
-    }
-  }
   if (o.write) {
     if (failed.length > 0 || ciBlock === undefined) {
       refused = `nothing written: fix ${failed.map((c) => c.name).join(', ') || 'the checks'} first`;
     } else {
-      mkdirSync(join(o.project, '.studio'), { recursive: true });
-      // `wx`: a file that appeared meanwhile is never overwritten.
-      writeFileSync(join(o.project, '.studio', 'studio.yaml'), configText, { flag: 'wx' });
-      written.push('.studio/studio.yaml');
-      writeFileSync(boardPath(o.project), boardText, { flag: 'wx' });
-      written.push('.studio/board.yaml');
+      writeBoth(o, dotStudio, [
+        [join(dotStudio, 'studio.yaml'), configText],
+        [boardPath(o.project), boardText],
+      ]);
+      written.push(...STUDIO_FILES);
     }
   }
-  const steps = nextSteps(prefix, written.length > 0);
+  const steps = nextSteps(prefix, written.length > 0, checks);
 
   if (o.json) {
     o.stdout(

@@ -9,6 +9,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { type Document, isMap, isScalar, parseDocument, stringify } from 'yaml';
+import { withTimeout } from './capacity.js';
 import { camelizeKeys, ciSchema, studioConfigSchema } from './config.js';
 import type { Gh } from './ports.js';
 import {
@@ -122,9 +123,18 @@ function readWorkflows(project: string): {
 async function readVisibility(
   gh: Gh,
   repo: string,
+  timeoutMs?: number,
 ): Promise<{ visibility: 'public' | 'private'; note?: string }> {
   try {
-    const out = (await gh.api(`/repos/${repo}`, '.visibility', { paginate: false })).trim();
+    const call =
+      timeoutMs === undefined
+        ? gh.api(`/repos/${repo}`, '.visibility', { paginate: false })
+        : withTimeout(
+            gh.api(`/repos/${repo}`, '.visibility', { paginate: false, timeoutMs }),
+            timeoutMs,
+            'visibility read',
+          );
+    const out = (await call).trim();
     return { visibility: out === 'private' || out === 'internal' ? 'private' : 'public' };
   } catch {
     return {
@@ -199,14 +209,15 @@ export async function detectCi(
   primary: string,
   ports: { gh: Gh },
   current?: CiConfig,
+  timeoutMs?: number,
 ): Promise<CiFound> {
   const [owner = '', name = ''] = primary.split('/');
   const notes: string[] = [];
-  const vis = await readVisibility(ports.gh, primary);
+  const vis = await readVisibility(ports.gh, primary, timeoutMs);
   if (vis.note) notes.push(vis.note);
   const wf = readWorkflows(project);
   notes.push(...wf.notes);
-  const detection = await detectRunners(owner, name, ports);
+  const detection = await detectRunners(owner, name, ports, timeoutMs);
   const proposal = proposeCi(detection, vis.visibility, current, workflowRunnerUsage(wf.files));
   const lint = lintWorkflows(wf.files, detection, EXPECTED_GROUP);
   return {
