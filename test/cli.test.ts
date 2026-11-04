@@ -2078,7 +2078,19 @@ describe('studio CLI', () => {
         expect(JSON.parse(r.out).status).toBe('ready');
         expect(statusOf(fx, 'APP-1')?.status).toBe('ready');
         expect(statusOf(fx, 'APP-1')?.notes?.some((n) => /back to ready/.test(n))).toBe(true);
+        // the one relaunch goes through blocked, as the lead routine says
+        const moves = (statusOf(fx, 'APP-1')?.history ?? []).map((h) => `${h.from}>${h.to}`);
+        expect(moves.slice(-2)).toEqual(['assigned>blocked', 'blocked>ready']);
         expect((await cli(fx, later, 'launch', 'APP-1')).code).toBe(0);
+      });
+      it('a second --requeue keeps the item blocked: a second miss is a decision', async () => {
+        const { fx, later } = await launched(() => 'start-4242', false);
+        expect((await cli(fx, later, 'stop', 'APP-1', '--requeue')).code).toBe(0);
+        expect((await cli(fx, later, 'launch', 'APP-1')).code).toBe(0);
+        const r = await cli(fx, later, 'stop', 'APP-1', '--requeue');
+        expect(r.code).toBe(0);
+        expect(JSON.parse(r.out).status).toBe('blocked');
+        expect(statusOf(fx, 'APP-1')?.status).toBe('blocked');
       });
       it('without --requeue the item stays assigned', async () => {
         const { fx, later } = await launched(() => 'start-4242', false);

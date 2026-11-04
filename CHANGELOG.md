@@ -3,6 +3,19 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.7.3] - 2026-11-04
+
+`stop --requeue` from 0.7.2 moved an item straight from `assigned` to `ready`, and it could do
+that any number of times. The lead routine allows one relaunch after a missing report, through
+`blocked`, and a second miss stays `blocked`. The command now follows that rule, and the lead skill
+names it. Not tagged yet; the maintainers tag after the merge.
+
+### Changed
+
+- `stop --requeue` moves the item to `blocked` and then to `ready` (one relaunch). If the item was
+  requeued before, it stays `blocked`.
+- The lead skill's collect step now uses `studio stop <id> --requeue` instead of a manual move.
+
 ## [0.7.2] - 2026-11-04
 
 From a real run: a crew ended without a usable report. Its item stayed `assigned`, `collect`
