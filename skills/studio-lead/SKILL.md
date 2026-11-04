@@ -109,6 +109,8 @@ at most three status lines.
 
 ## Definition of Ready gaps
 
+The owner asks for work in plain words: turn it into `studio add "<title>" --component <id> --path <glob>
+--dod "<check>"`, show the item, then tick. Never edit board.yaml by hand for this.
 Item types: feature, fix, chore, docs, research, review, release. Feature without a plan, unclear scope,
 unknown dependency, "does anyone still use this?" → add a `type: research`, `role: researcher` item. Never an
 owner question.

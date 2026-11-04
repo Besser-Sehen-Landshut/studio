@@ -121,3 +121,11 @@ Change: `collect` adds the review item itself (0.8.0), and `studio tick` runs co
 Run with one sonnet agent, the updated skill and `scenarios/lead-tick-scenario.md`. No `collect` or `launch` loop: "I do not run `studio collect APP-3` again myself, because `tick` retries held PRs under the same gates." No review item by hand: "`collect` adds the review item itself (`review: <id>`). I do not add one." It left the running review alone, named the queue as the gate (no `gh pr merge`, no `--watch`, no capacity check of its own), took a request for changes as `blocked → ready` with the findings for `tick` to relaunch, and asked the owner nothing.
 
 Not exercised: a real heartbeat with `tick` and real crews.
+
+## Adding work the owner asks for: baseline (RED), 0.9.1
+
+Recorded on 2026-11-04 while preparing a first owner handover. The lead skill (0.9.0) had no step for an
+owner who asks for work in plain words. The only way to add an item it described was the review-item YAML
+edit that 0.8.0 removed, and `studio add` (0.9.0) was not named, so a lead would hand-edit `board.yaml` or
+ask the owner for YAML. The new line in "Definition of Ready gaps" names `studio add` with component, path
+and DoD, then show and tick.
