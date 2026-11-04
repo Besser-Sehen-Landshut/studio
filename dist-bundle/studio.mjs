@@ -34454,13 +34454,15 @@ async function readChecks(entry, gh) {
 }
 var GIT_FETCH_MS3 = 12e4;
 var GIT_LOCAL_MS3 = 6e4;
-async function isBranchUpdate({ gh, git }, checkout, target, approved, head) {
+var MAX_BRANCH_UPDATES = 5;
+async function isBranchUpdate(ports, checkout, target, approved, head, depth = 1) {
+  const { gh, git } = ports;
   try {
     const c3 = await gh.run(["api", `repos/${target.repo}/commits/${head}`]);
     if (c3.code !== 0) return false;
     const commit = JSON.parse(c3.stdout);
     const [first, second, ...rest] = commit.parents ?? [];
-    if (typeof first?.sha !== "string" || first.sha.toLowerCase() !== approved.head.toLowerCase() || typeof second?.sha !== "string" || !SHA2.test(second.sha) || rest.length > 0 || commit.committer?.login !== "web-flow" || commit.commit?.verification?.verified !== true) {
+    if (typeof first?.sha !== "string" || !SHA2.test(first.sha) || typeof second?.sha !== "string" || !SHA2.test(second.sha) || rest.length > 0 || commit.committer?.login !== "web-flow" || commit.commit?.verification?.verified !== true) {
       return false;
     }
     const base = approved.base.split("/").map(encodeURIComponent).join("/");
@@ -34468,7 +34470,11 @@ async function isBranchUpdate({ gh, git }, checkout, target, approved, head) {
     if (d.code !== 0) return false;
     const { status } = JSON.parse(d.stdout);
     if (status !== "behind" && status !== "identical") return false;
-    return await sameTreeAsMerge(git, checkout, approved.head, second.sha, head);
+    const same2 = await sameTreeAsMerge(git, checkout, first.sha, second.sha, head);
+    if (same2 !== true) return same2;
+    if (first.sha.toLowerCase() === approved.head.toLowerCase()) return true;
+    if (depth >= MAX_BRANCH_UPDATES) return false;
+    return await isBranchUpdate(ports, checkout, target, approved, first.sha, depth + 1);
   } catch {
     return false;
   }

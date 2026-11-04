@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.6.11] - 2026-11-04
+
+From the first merge-queue run on a real pull request. The queue brought the approved pull request
+up to date and waited for its checks. One check failed under runner load, so the queue stopped
+without merging, as intended. After that test was fixed on main, a second run updated the branch
+again, and the queue then refused: "the approval is for <the reviewed head>: review it again". Only
+one branch update counted as covered by an approval, so every red run after an update needed a new
+review, even though nothing but the base had changed. Not tagged yet; the maintainers tag after
+the merge.
+
+### Changed
+
+- An approval covers up to five branch updates in a row on top of the reviewed head. Each one is
+  checked as before: GitHub signed it, its first parent is the commit before it, its other parent is
+  on the approved base, and its tree is exactly the clean merge of the two. One link that fails
+  refuses the whole chain, so the chain holds no change that was not reviewed, apart from the base.
+
 ## [0.6.10] - 2026-11-04
 
 From the same real review run, after 0.6.9: the gate refused the approval with "no CI job named

@@ -360,19 +360,27 @@ export type ApprovalCheckout = { dir: string; remote: string };
 const GIT_FETCH_MS = 120_000;
 const GIT_LOCAL_MS = 60_000;
 
+/** How many branch updates in a row may stand on an approved head: the queue updates once per run. */
+export const MAX_BRANCH_UPDATES = 5;
+
 /**
- * Whether `head` is nothing but the merge of the base into `approved`: GitHub signed it, the approved
- * head is its first parent, the other parent is already on the approved base, and its tree is what
- * merging those two gives here. The signature alone proves little: the API signs a commit with any
- * tree and any parents. A conflict makes the merge fail, so a hand resolution never passes.
+ * Whether `head` is nothing but merges of the base into `approved`, one or more in a row: each
+ * commit on the way is a branch update of its first parent, the last one's first parent being the
+ * approved head. A branch update: GitHub signed it, the other parent is already on the approved
+ * base, and its tree is what merging those two gives here. The signature alone proves little: the
+ * API signs a commit with any tree and any parents. A conflict makes the merge fail, so a hand
+ * resolution never passes. Every link is checked the same way, so a chain holds no change the
+ * approved head did not, beyond the base.
  */
 async function isBranchUpdate(
-  { gh, git }: ApprovalPorts,
+  ports: ApprovalPorts,
   checkout: ApprovalCheckout,
   target: { repo: string; pr: number },
   approved: { head: string; base: string },
   head: string,
+  depth = 1,
 ): Promise<boolean | string> {
+  const { gh, git } = ports;
   try {
     const c = await gh.run(['api', `repos/${target.repo}/commits/${head}`]);
     if (c.code !== 0) return false;
@@ -384,7 +392,7 @@ async function isBranchUpdate(
     const [first, second, ...rest] = commit.parents ?? [];
     if (
       typeof first?.sha !== 'string' ||
-      first.sha.toLowerCase() !== approved.head.toLowerCase() ||
+      !SHA.test(first.sha) ||
       typeof second?.sha !== 'string' ||
       !SHA.test(second.sha) ||
       rest.length > 0 ||
@@ -398,7 +406,11 @@ async function isBranchUpdate(
     if (d.code !== 0) return false;
     const { status } = JSON.parse(d.stdout) as { status?: unknown };
     if (status !== 'behind' && status !== 'identical') return false;
-    return await sameTreeAsMerge(git, checkout, approved.head, second.sha, head);
+    const same = await sameTreeAsMerge(git, checkout, first.sha, second.sha, head);
+    if (same !== true) return same;
+    if (first.sha.toLowerCase() === approved.head.toLowerCase()) return true;
+    if (depth >= MAX_BRANCH_UPDATES) return false;
+    return await isBranchUpdate(ports, checkout, target, approved, first.sha, depth + 1);
   } catch {
     return false;
   }
@@ -457,8 +469,8 @@ async function liveBase(gh: Gh, target: { repo: string; pr: number }): Promise<s
 
 /**
  * Why a review verdict does not cover `head` on the pull request's current base, else undefined.
- * Besides the approved head itself, only a commit that passes `isBranchUpdate` counts as approved. A
- * second update on top of that one has another first parent and needs a new review.
+ * Besides the approved head itself, only a commit that passes `isBranchUpdate` counts as approved:
+ * up to MAX_BRANCH_UPDATES clean merges of the base in a row, each checked on its own.
  */
 export async function approvalProblem(
   ports: ApprovalPorts,
