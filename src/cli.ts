@@ -6,6 +6,7 @@ import { runAccount } from './account-command.js';
 import {
   type ApprovedJob,
   type Board,
+  componentsOf,
   loadBoard,
   type NotRunHere,
   saveBoard,
@@ -52,11 +53,13 @@ import {
 } from './limits.js';
 import { readMainBuild } from './main-build.js';
 import { sendNotifications } from './notify.js';
+import { formatOverview, readOverview } from './overview.js';
 import { migrateOwnerState, pendingLegacyState } from './owner-state.js';
 import {
   checkStateMarker,
   ownerStateRootFor,
   projectRealpath,
+  stateBaseFor,
   stateDirName,
   stateRootFor,
   withBoardLock,
@@ -139,10 +142,11 @@ export interface CliDeps {
 const USAGE = `Usage: studio [--project <dir>] [--json] <command>
 
 Commands:
-  board                    Show the board
+  board [--component <id>] Show the board, or the items of one component
   plan                     Dry-run the planner (JSON)
   launch <id>              Start a crew session for a planned item
   status                   Crew sessions and their board status
+  overview                 Owner only: every project of this owner, read only
   collect <id>             Read a crew report and move the item
   queue add <repo>#<pr>    Put a reviewed PR into the merge queue
   queue run                Merge the queued PRs, one at a time
@@ -240,8 +244,18 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     const loadAll = () => {
       const config = loadConfig(project);
       for (const w of configWarnings(config)) stderr(`warning: ${w}\n`);
-      return { config, board: loadBoard(project) };
+      return { config, board: loadBoard(project, config) };
     };
+    if (values.component !== undefined && cmd !== 'board') {
+      throw new UsageError('--component works with board only');
+    }
+    /** The item's components, as a field for JSON output; nothing when none are configured. */
+    const componentField = (config: StudioConfig | undefined, item: WorkItem | undefined) =>
+      config?.components === undefined
+        ? {}
+        : { components: item === undefined ? [] : componentsOf(item, config) };
+    const componentCell = (ids: string[] | undefined) =>
+      ids === undefined || ids.length === 0 ? '-' : ids.join(',');
     const stateRoot = () => stateRootFor(project, owner);
     let migrated = false;
     /** The owner-wide state; the first use in a process merges what old versions left behind. */
@@ -350,18 +364,35 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
     switch (cmd) {
       case 'board': {
-        const { board } = loadAll();
-        if (json) print(board.items);
+        const { config, board } = loadAll();
+        const only = values.component;
+        if (only !== undefined && !(config.components ?? []).some((c) => c.id === only)) {
+          throw new Error(`unknown component ${only}`);
+        }
+        const items = board.items
+          .map((i) => ({ item: i, ...componentField(config, i) }))
+          .filter((r) => only === undefined || r.components?.includes(only));
+        if (json) print(items.map(({ item, ...rest }) => ({ ...item, ...rest })));
         else {
+          const withComponents = config.components !== undefined;
           stdout(
             table([
-              ['ID', 'STATUS', 'ROLE', 'TYPE', 'PRIORITY', 'TITLE'],
-              ...board.items.map((i) => [
+              [
+                'ID',
+                'STATUS',
+                'ROLE',
+                'TYPE',
+                'PRIORITY',
+                ...(withComponents ? ['COMPONENT'] : []),
+                'TITLE',
+              ],
+              ...items.map(({ item: i, components }) => [
                 i.id,
                 i.status,
                 i.role,
                 i.type,
                 String(i.priority),
+                ...(withComponents ? [componentCell(components)] : []),
                 i.title,
               ]),
             ]),
@@ -389,6 +420,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             title: i.title,
             role: i.role,
             solutions: solutionsFor(i),
+            ...componentField(config, i),
           })),
           ...(solutionsError === undefined ? {} : { solutionsError }),
           blocked: plan.blocked,
@@ -442,24 +474,44 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
       case 'status': {
         await reconcile();
-        const board = loadBoard(project);
+        // The heartbeat runs this: a config that cannot be read costs the component column only.
+        let config: StudioConfig | undefined;
+        try {
+          config = loadConfig(project);
+        } catch (e) {
+          stderr(`warning: ${(e as Error).message}\n`);
+        }
+        const board = loadBoard(project, config);
         const root = stateRoot();
-        const rows = Object.values(readCrewRecords(root)).map((r) => ({
-          name: r.name,
-          item: r.item,
-          role: r.role,
-          pid: r.pid,
-          alive: ports.claude.alive(r.pid),
-          status: board.items.find((i) => i.id === r.item)?.status ?? 'unknown',
-          startedAt: r.startedAt,
-          ...(r.label === undefined ? {} : { label: r.label }),
-          ...(r.stoppedAt === undefined ? {} : { stoppedAt: r.stoppedAt }),
-        }));
+        const rows = Object.values(readCrewRecords(root)).map((r) => {
+          const item = board.items.find((i) => i.id === r.item);
+          return {
+            name: r.name,
+            item: r.item,
+            role: r.role,
+            pid: r.pid,
+            alive: ports.claude.alive(r.pid),
+            status: item?.status ?? 'unknown',
+            startedAt: r.startedAt,
+            ...(r.label === undefined ? {} : { label: r.label }),
+            ...(r.stoppedAt === undefined ? {} : { stoppedAt: r.stoppedAt }),
+            ...componentField(config, item),
+          };
+        });
         if (json) print(rows);
         else {
+          const withComponents = config?.components !== undefined;
           stdout(
             table([
-              ['ITEM', 'NAME', 'ROLE', 'PID', 'ALIVE', 'STATUS'],
+              [
+                'ITEM',
+                'NAME',
+                'ROLE',
+                'PID',
+                'ALIVE',
+                'STATUS',
+                ...(withComponents ? ['COMPONENT'] : []),
+              ],
               ...rows.map((r) => [
                 r.item,
                 r.name,
@@ -467,10 +519,21 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 String(r.pid),
                 r.alive ? 'yes' : 'no',
                 r.status,
+                ...(withComponents ? [componentCell(r.components)] : []),
               ]),
             ]),
           );
         }
+        return 0;
+      }
+
+      case 'overview': {
+        // Read only across projects: no reconcile, no migration of the owner state, no state root.
+        refuseCrew(deps.env);
+        if (rest.length > 0) throw new UsageError('overview takes no arguments');
+        const list = readOverview(stateBaseFor(owner), (pid) => ports.claude.alive(pid));
+        if (json) print(list);
+        else stdout(formatOverview(list));
         return 0;
       }
 
@@ -1396,6 +1459,7 @@ function parseCli(argv: string[]) {
         json: { type: 'boolean' },
         write: { type: 'boolean' },
         release: { type: 'boolean' },
+        component: { type: 'string' },
         help: { type: 'boolean' },
       },
       allowPositionals: true,
@@ -1791,6 +1855,7 @@ function buildSnapshot(
           at: now.toISOString(),
         },
       ];
+  const components = extra.config.components?.map((c) => ({ id: c.id, name: c.name }));
   const crew: CrewSnapshot[] = Object.values(readCrewRecords(root)).map((r) => {
     const item = board.items.find((i) => i.id === r.item);
     const status = item?.status ?? 'unknown';
@@ -1805,6 +1870,9 @@ function buildSnapshot(
       ...(item === undefined ? {} : { title: item.title, repo: item.repo }),
       state: crewStateOf(r, status, extra.alive(r.pid), extra.hasReport(r.item)),
       ...(r.stoppedAt === undefined ? {} : { stoppedAt: r.stoppedAt }),
+      ...(components === undefined
+        ? {}
+        : { components: item === undefined ? [] : componentsOf(item, extra.config) }),
     };
   });
   const events = readMetricEvents(root);
@@ -1849,6 +1917,7 @@ function buildSnapshot(
     ...(Object.keys(limits).length > 0 ? { limits } : {}),
     ...(labelUsage === undefined ? {} : { labelUsage }),
     ...(notifications.length > 0 ? { notifications } : {}),
+    ...(components === undefined ? {} : { components }),
     updatedAt: now.toISOString(),
     metrics: computeMetrics(events),
   };

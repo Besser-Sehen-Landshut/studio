@@ -277,3 +277,110 @@ describe('planAssignments', () => {
     expect(ids(r)).toEqual(['APP-4']);
   });
 });
+
+describe('component wip', () => {
+  const comps: StudioConfig = studioConfigSchema.parse({
+    ...wide,
+    components: [
+      { id: 'api', name: 'API server', repo: 'org/app', paths: ['server/**'], wip: 1 },
+      { id: 'desktop', name: 'Desktop app', repo: 'org/app', paths: ['desktop/**'], wip: 2 },
+      { id: 'agent', name: 'Agent', repo: 'org/app', paths: ['agent/**'] },
+    ],
+  });
+  const api = (id: string, extra: Partial<WorkItem> = {}) =>
+    doc(id, { paths: ['server/x.rs'], ...extra });
+  const desktop = (id: string, extra: Partial<WorkItem> = {}) =>
+    doc(id, { paths: ['desktop/x.ts'], ...extra });
+
+  it('assigns no more items of a component than its wip, naming it', () => {
+    const r = planAssignments(
+      board(api('APP-1'), api('APP-2'), desktop('APP-3')),
+      comps,
+      okCap,
+      {},
+    );
+    expect(ids(r)).toEqual(['APP-1', 'APP-3']);
+    expect(r.deferred).toEqual([{ id: 'APP-2', reason: 'component api wip full' }]);
+  });
+
+  it('counts assigned and in_progress items of the board, not later states', () => {
+    let r = planAssignments(
+      board(api('APP-1', { status: 'in_progress' }), api('APP-2')),
+      comps,
+      okCap,
+      {},
+    );
+    expect(ids(r)).toEqual([]);
+    expect(r.deferred).toEqual([{ id: 'APP-2', reason: 'component api wip full' }]);
+    r = planAssignments(
+      board(api('APP-1', { status: 'in_review' }), api('APP-2')),
+      comps,
+      okCap,
+      {},
+    );
+    expect(ids(r)).toEqual(['APP-2']);
+  });
+
+  it('counts a cross-cutting item against every component it belongs to', () => {
+    const r = planAssignments(
+      board(
+        doc('APP-1', { paths: ['server/a.rs', 'desktop/a.ts'] }),
+        api('APP-2'),
+        desktop('APP-3'),
+        desktop('APP-4'),
+      ),
+      comps,
+      okCap,
+      {},
+    );
+    expect(ids(r)).toEqual(['APP-1', 'APP-3']);
+    expect(r.deferred).toEqual([
+      { id: 'APP-2', reason: 'component api wip full' },
+      { id: 'APP-4', reason: 'component desktop wip full' },
+    ]);
+  });
+
+  it('defers a cross-cutting item when any of its components is full', () => {
+    const r = planAssignments(
+      board(api('APP-1', { status: 'assigned' }), doc('APP-2', { components: ['desktop', 'api'] })),
+      comps,
+      okCap,
+      {},
+    );
+    expect(r.deferred).toEqual([{ id: 'APP-2', reason: 'component api wip full' }]);
+  });
+
+  it('leaves components without wip and items without a component unlimited', () => {
+    const agent = (id: string) => doc(id, { paths: ['agent/x.go'] });
+    const r = planAssignments(
+      board(agent('APP-1'), agent('APP-2'), agent('APP-3'), doc('APP-4'), doc('APP-5')),
+      comps,
+      okCap,
+      {},
+    );
+    expect(ids(r)).toEqual(['APP-1', 'APP-2', 'APP-3', 'APP-4', 'APP-5']);
+  });
+
+  it('checks role wip first', () => {
+    const r = planAssignments(
+      board(api('APP-1'), api('APP-2')),
+      { ...comps, roles: config.roles },
+      okCap,
+      {
+        builder: 2,
+      },
+    );
+    expect(r.deferred).toEqual([
+      { id: 'APP-1', reason: 'role wip full' },
+      { id: 'APP-2', reason: 'role wip full' },
+    ]);
+  });
+
+  it('plans exactly as before without components', () => {
+    const items = board(api('APP-1'), api('APP-2'), desktop('APP-3'), mk('APP-4'), mk('APP-5'));
+    const before = planAssignments(items, wide, okCap, {});
+    const { components: _, ...without } = comps;
+    expect(planAssignments(items, without, okCap, {})).toEqual(before);
+    expect(ids(before)).toEqual(['APP-1', 'APP-2', 'APP-3', 'APP-4']);
+  });
+});

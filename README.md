@@ -2,7 +2,7 @@
 
 Studio is a Claude Code plugin and TypeScript package for running a small software studio of coding-agent sessions from one control room: a lead session plans work from a board and a crew of role-based sessions carries it out, each in its own sandboxed clone.
 
-Status: 0.6.12, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store). See [CHANGELOG.md](CHANGELOG.md).
+Status: 0.7.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store), plus components (work per part of the product, with their own WIP limit) and an owner-wide overview. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -82,10 +82,11 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 
 | Command                                                                                                         | Purpose                                                                                                                     |
 | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `board`                                                                                                         | Show the board                                                                                                              |
+| `board [--component <id>]`                                                                                      | Show the board; with components, a component column, and only the items of one component                                    |
 | `plan`                                                                                                          | Dry-run the planner (JSON incl. capacity and its read error)                                                                |
 | `launch <id>`                                                                                                   | Start a crew session for a planned item                                                                                     |
-| `status`                                                                                                        | Crew sessions and their board status                                                                                        |
+| `status`                                                                                                        | Crew sessions and their board status (and component, when configured)                                                       |
+| `overview`                                                                                                      | Owner only, read only: every project of this owner with item counts, running crews, queued merges                           |
 | `collect <id>`                                                                                                  | Verify a crew report and PR head, move the item                                                                             |
 | `queue add <repo>#<pr>`                                                                                         | Put an approved PR into the merge queue (needs an approval for its head)                                                    |
 | `queue run`                                                                                                     | Merge queued PRs one at a time (exact head SHA, checks green)                                                               |
@@ -121,7 +122,7 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 
 In the owner's interactive Claude Code session in a Studio project, the plugin shows what Studio is doing. It only displays: it writes no file and starts no process. Crew sessions (`STUDIO_ROLE=crew`), `claude -p` and folders without `.studio/studio.yaml` get none of it.
 
-- **Pane.** "Studio board": the crew with a state per item (`working`, `waiting`, `blocked`, `stopped`, `crashed`, `done`), CI use, the lines for you, merges and deploys today, and the state of the push builds on `main`. A `state.json` that is missing, unreadable or the wrong shape gives a calm message, never an error.
+- **Pane.** "Studio board": the crew with a state per item (`working`, `waiting`, `blocked`, `stopped`, `crashed`, `done`), grouped under a heading per component when the project has components (see "Components"), CI use, the lines for you, merges and deploys today, and the state of the push builds on `main`. A `state.json` that is missing, unreadable or the wrong shape gives a calm message, never an error.
 - **Status line.** `● N working · N waiting · N queued · CI x/y · for you: n`, with `· paused` while paused.
 - **Toasts.** One toast per refresh, only for lines that are new since the last one shown: a line for you, an account block, a red build on `main` and a crew that crashed and was not healed. A `usage-limit` line toasts once while it stands. Titles have control characters stripped.
 - **Commands.** `/studio` opens the pane and always places it. `/studio status` prints the status line text. `/studio pause` and `/studio resume` only print the terminal command to run, because pausing needs a terminal (`studio pause`, `studio resume`).
@@ -129,6 +130,26 @@ In the owner's interactive Claude Code session in a Studio project, the plugin s
 - **Keeping it fresh.** Only `studio state` writes `state.json`. The lead's heartbeat (`studio status` and `studio state` every 120 s, see the lead skill) refreshes it and also reads crew logs, so an account block stops crews at most one heartbeat (120 s) after the event. Without a running lead nothing refreshes the board and nothing stops crews: a project with no lead is swept for a block only when another project reconciles.
 
 `pnpm test:mod` runs the mod's tests with `claude plugin test`; it needs the `claude` CLI and is not part of CI.
+
+## Components
+
+A product often has parts that are developed and released on their own: an API server, a desktop app, an agent, a web app in a second repository. A project (one control room, one `.studio/`) lists them under `components:` in `studio.yaml`; projects that have nothing to do with each other stay separate control rooms. Without `components:` nothing changes.
+
+```yaml
+repos: [org/app, org/web]
+components:
+  - { id: api, name: API server, repo: org/app, paths: ["server/**", "shared/**"], wip: 2 }
+  - { id: desktop, name: Desktop app, repo: org/app, paths: ["desktop/**", "shared/**"], wip: 1 }
+  - { id: agent, name: Agent, repo: org/app, paths: ["agent/**"] }
+  - { id: web, name: Web app, repo: org/web, paths: ["**"] }
+```
+
+- **Fields.** `id` (`^[a-z][a-z0-9-]{0,31}$`, unique), `name` (one line), `repo` (one of `repos`), `paths` (globs, at least one, same rules as `skills.when`) and an optional `wip`.
+- **Which component an item belongs to.** A board item may name one with `component: api`, or several with `components: [api, desktop]` for cross-cutting work; not both. An id the config does not know refuses the board. An item that names none belongs to every component whose `repo` is the item's repo and one of whose `paths` globs matches one of the item's `paths` or `touches`. In the example, an item touching `shared/**` is cross-cutting (api and desktop); one touching only `docs/**` belongs to none.
+- **WIP.** `wip` is the most items of that component in `assigned` or `in_progress` at once, on top of the role's `wip`. A cross-cutting item counts against each of its components. `plan` defers an item over the limit with the reason `component <id> wip full`, so no component takes all crews.
+- **Where it shows.** `studio board` and `studio status` get a component column, `studio board --component <id>` lists one component's items, `studio plan` names the components of each assigned item, and the pane groups the crew by component (cross-cutting work under "cross-cutting", the rest under "no component").
+
+`studio overview` lists every project of this owner from the state base (one line per state root, the owner root left out): its name, items per status, running crews and queued merges. It reads only, writes nothing, and reports a state root it cannot read in full in its last column, with what it could read. It refuses under `STUDIO_ROLE=crew`.
 
 ## Capabilities
 

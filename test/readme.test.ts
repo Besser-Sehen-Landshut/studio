@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { loadBoard } from '../src/board.js';
+import { componentsOf, loadBoard } from '../src/board.js';
 import { loadConfig } from '../src/config.js';
 import { planAssignments } from '../src/planner.js';
 
@@ -87,8 +87,30 @@ describe('README quick start', () => {
     expect(readme).toMatch(/notify: \{ channel, command \}/);
     expect(readme).toContain('`blocks.json` in the owner root');
     expect(readme).toContain('.legacy-');
-    expect(readme).toMatch(/Status: 0\.6\.12/);
+    expect(readme).toMatch(/Status: 0\.7\.0/);
     expect(readme).not.toMatch(/crews cannot write the state base/);
     expect(readme).not.toMatch(/blocks?[^.]{0,40}per project/i);
+  });
+});
+
+describe('README components', () => {
+  it('has an example that loads on top of the quick start and infers as described', () => {
+    const at = readme.indexOf('## Components');
+    const m = /```yaml\n([\s\S]*?)```/.exec(readme.slice(at));
+    const example = (m as RegExpExecArray)[1] as string;
+    const quick = block('.studio/studio.yaml').replace(/^repos: .*\n/m, '');
+    const d = mkdtempSync(join(tmpdir(), 'studio-readme-components-'));
+    try {
+      mkdirSync(join(d, '.studio'));
+      writeFileSync(join(d, '.studio', 'studio.yaml'), `${quick}${example}`);
+      const config = loadConfig(d);
+      expect(config.components?.map((c) => c.id)).toEqual(['api', 'desktop', 'agent', 'web']);
+      const item = loadBoard(dir).items[0];
+      if (item === undefined) throw new Error('no item');
+      expect(componentsOf({ ...item, touches: ['shared/**'] }, config)).toEqual(['api', 'desktop']);
+      expect(componentsOf({ ...item, touches: ['docs/**'] }, config)).toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
   });
 });

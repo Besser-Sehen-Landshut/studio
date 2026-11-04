@@ -50,6 +50,8 @@ export interface CrewSnapshot {
   state: CrewState;
   stoppedAt?: string;
   repo?: string;
+  /** The item's components (`componentsOf`); absent when the project configures none. */
+  components?: string[];
 }
 
 export interface MergedToday {
@@ -86,6 +88,8 @@ export interface StateSnapshot {
   labelUsage?: { day: string; labels: Record<string, { running: number; runsToday: number }> };
   /** One entry per account block, for whatever shows the owner this state; absent without a block. */
   notifications?: Notification[];
+  /** The configured components in config order, for the pane's grouping; absent without any. */
+  components?: { id: string; name: string }[];
   updatedAt: string;
   metrics: Metrics;
 }

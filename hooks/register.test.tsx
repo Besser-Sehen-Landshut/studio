@@ -342,6 +342,36 @@ test('tones map to the theme and to dim', async ($, on) => {
   await ui.unmount();
 });
 
+test('crew rows stand under a bold heading per component, cross-cutting work under its own', async ($, on) => {
+  world(on, {
+    files: withState({
+      ...OK_STATE,
+      components: [
+        { id: 'api', name: 'API server' },
+        { id: 'desktop', name: 'Desktop app' },
+      ],
+      crew: [
+        { role: 'dev', item: 'APP-1', state: 'working', components: ['desktop'] },
+        { role: 'dev', item: 'APP-2', state: 'working', components: ['api', 'desktop'] },
+        { role: 'dev', item: 'APP-3', state: 'working', components: ['api'] },
+      ],
+    }),
+  });
+  await $.session.start(start);
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  const texts = (await ui.findAll({ type: 'Text' })).map((t) => t.text ?? '');
+  const at = (pattern: RegExp) => texts.findIndex((t) => pattern.test(t));
+  expect(at(/^API server$/)).toBeLessThan(at(/APP-3/));
+  expect(at(/APP-3/)).toBeLessThan(at(/^Desktop app$/));
+  expect(at(/^Desktop app$/)).toBeLessThan(at(/APP-1/));
+  expect(at(/APP-1/)).toBeLessThan(at(/^cross-cutting$/));
+  expect(at(/^cross-cutting$/)).toBeLessThan(at(/APP-2/));
+  expect((await ui.find({ type: 'Text', text: /^API server$/ }))?.props).toMatchObject({
+    weight: 'bold',
+  });
+  await ui.unmount();
+});
+
 test('a narrow pane draws within its width', async ($, on) => {
   world(on, { files: withState() });
   await $.session.start(start);

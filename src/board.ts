@@ -2,6 +2,8 @@ import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Document, isMap, isSeq, parseDocument, parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import type { StudioConfig } from './config.js';
+import { matchGlob } from './glob.js';
 
 export const ITEM_STATUSES = [
   'ready',
@@ -15,8 +17,8 @@ export const ITEM_STATUSES = [
 ] as const;
 export type ItemStatus = (typeof ITEM_STATUSES)[number];
 
-// Same list as ROLE_TEMPLATES in config.ts (a test keeps them equal). Duplicated because
-// scripts/gen-schema.ts loads this file through node's type stripping, which cannot resolve '.js' imports.
+// Same list as ROLE_TEMPLATES in config.ts (a test keeps them equal). Duplicated so that this file
+// takes only types from config.ts.
 export const BOARD_ROLES = ['builder', 'reviewer', 'designer', 'researcher', 'release'] as const;
 
 const statusSchema = z.enum(ITEM_STATUSES);
@@ -31,6 +33,10 @@ const historySchema = z.strictObject({
 
 /** A value for `--model`: it never starts with a dash. Same rule as in config.ts (a test keeps them equal). */
 export const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
+
+/** A component id. Same rule as in config.ts (a test keeps them equal). */
+export const COMPONENT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+const componentId = z.string().regex(COMPONENT_ID_RE, 'must match ^[a-z][a-z0-9-]{0,31}$');
 
 /** What a crew sandbox lacks: a test that needs one of these is not run there, CI runs it. */
 export const NOT_RUN_SERVICES = ['database', 'docker', 'network', 'service'] as const;
@@ -83,6 +89,10 @@ export const workItemSchema = z.strictObject({
   paths: strList,
   touches: strList,
   conflictsWith: z.array(z.string()).optional(),
+  // The component this item belongs to, or several for cross-cutting work; when neither is set,
+  // `componentsOf` infers them from the repo and the paths.
+  component: componentId.optional(),
+  components: z.array(componentId).min(1).optional(),
   dependsOn: strList,
   dod: strList,
   flag: z.string().optional(),
@@ -162,7 +172,11 @@ function describeIssue(issue: z.core.$ZodIssue): string[] {
 export const boardPath = (dir: string): string => join(dir, '.studio', 'board.yaml');
 const boardFile = boardPath;
 
-export function loadBoard(dir: string): Board {
+/**
+ * Reads the board. With `config`, the component ids items name must be components of it; without,
+ * only their form is checked.
+ */
+export function loadBoard(dir: string, config?: StudioConfig): Board {
   const file = boardFile(dir);
   let text: string;
   try {
@@ -193,8 +207,37 @@ export function loadBoard(dir: string): Board {
     for (const c of it.conflictsWith ?? []) {
       if (!ids.has(c)) throw new BoardError(file, `${it.id}: conflicts_with unknown id ${c}`);
     }
+    if (it.component !== undefined && it.components !== undefined) {
+      throw new BoardError(file, `${it.id}: set component or components, not both`);
+    }
+    if (config !== undefined) {
+      const known = new Set((config.components ?? []).map((c) => c.id));
+      const unknown = namedComponents(it).find((c) => !known.has(c));
+      if (unknown !== undefined) {
+        throw new BoardError(file, `${it.id}: unknown component ${unknown}`);
+      }
+    }
   }
   return board;
+}
+
+const namedComponents = (item: WorkItem): string[] =>
+  item.components ?? (item.component === undefined ? [] : [item.component]);
+
+/**
+ * The components an item belongs to, in config order for inferred ones. Named ones win; otherwise
+ * every component of the item's repo one of whose globs matches one of its paths or touches. More
+ * than one means cross-cutting work; none, or a config without components, gives [].
+ */
+export function componentsOf(item: WorkItem, config: StudioConfig): string[] {
+  const components = config.components ?? [];
+  if (components.length === 0) return [];
+  const named = namedComponents(item);
+  if (named.length > 0) return [...new Set(named)];
+  const paths = [...item.paths, ...item.touches];
+  return components
+    .filter((c) => c.repo === item.repo && paths.some((p) => c.paths.some((g) => matchGlob(g, p))))
+    .map((c) => c.id);
 }
 
 // Stable key order for saved items.
@@ -210,6 +253,8 @@ const KEY_ORDER: readonly (keyof WorkItem)[] = [
   'paths',
   'touches',
   'conflictsWith',
+  'component',
+  'components',
   'dependsOn',
   'dod',
   'flag',

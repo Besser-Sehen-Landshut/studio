@@ -464,3 +464,82 @@ describe('hardening', () => {
     expect(texts).toContain('  … 10 more');
   });
 });
+
+describe('components in the pane', () => {
+  const COMPONENTS = [
+    { id: 'api', name: 'API server' },
+    { id: 'desktop', name: 'Desktop app' },
+  ];
+  const crewOf = (item: string, components?: unknown) => ({
+    role: 'builder',
+    item,
+    state: 'working',
+    ...(components === undefined ? {} : { components }),
+  });
+  const lines = (over: Record<string, unknown>, columns = 120) =>
+    boardLines({ kind: 'ok', state: ok(over) }, { columns, nowMs: NOW, paused: false });
+  /** The lines from the Crew heading up to the Merge queue heading. */
+  const crewPart = (over: Record<string, unknown>, columns = 120) => {
+    const all = lines(over, columns);
+    const from = all.findIndex((l) => l.text === 'Crew');
+    const to = all.findIndex((l) => l.text === 'Merge queue');
+    return all.slice(from + 1, to);
+  };
+
+  it('reads the component list and the components of each crew', () => {
+    const s = ok({
+      components: [...COMPONENTS, { id: 'x' }, 'nope'],
+      crew: [crewOf('APP-1', ['api']), crewOf('APP-2', ['api', 7]), crewOf('APP-3')],
+    });
+    expect(s.components).toEqual(COMPONENTS);
+    expect(s.crew.map((c) => c.components)).toEqual([['api'], ['api'], undefined]);
+  });
+
+  it('groups crew rows under a heading per component, in config order', () => {
+    const part = crewPart({
+      components: COMPONENTS,
+      crew: [
+        crewOf('APP-1', ['desktop']),
+        crewOf('APP-2', ['api']),
+        crewOf('APP-3', ['api', 'desktop']),
+        crewOf('APP-4', []),
+        crewOf('APP-5', ['desktop']),
+      ],
+    });
+    const shape = part.map((l) => (l.tone === 'head' ? `# ${l.text}` : /APP-\d/.exec(l.text)?.[0]));
+    expect(shape).toEqual([
+      '# API server',
+      'APP-2',
+      '# Desktop app',
+      'APP-1',
+      'APP-5',
+      '# cross-cutting',
+      'APP-3',
+      '# no component',
+      'APP-4',
+    ]);
+  });
+
+  it('groups narrow rows too, both lines under the heading', () => {
+    const part = crewPart(
+      { components: COMPONENTS, crew: [{ ...crewOf('APP-1', ['api']), title: 'T' }] },
+      50,
+    );
+    expect(part.map((l) => l.text)).toEqual(['API server', '● working builder APP-1', '  T']);
+  });
+
+  it('shows the plain list without components', () => {
+    const part = crewPart({ crew: [crewOf('APP-1', ['api']), crewOf('APP-2')] });
+    expect(part.every((l) => l.tone !== 'head')).toBe(true);
+    expect(part).toHaveLength(2);
+  });
+
+  it('keeps the cap of 50 crew rows across groups', () => {
+    const crew = Array.from({ length: 60 }, (_, i) =>
+      crewOf(`APP-${i}`, [i % 2 ? 'api' : 'desktop']),
+    );
+    const texts = crewPart({ components: COMPONENTS, crew }).map((l) => l.text);
+    expect(texts.filter((t) => t.includes('APP-'))).toHaveLength(50);
+    expect(texts).toContain('… 10 more');
+  });
+});
