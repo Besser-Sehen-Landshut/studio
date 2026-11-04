@@ -28024,13 +28024,15 @@ var historySchema = external_exports.strictObject({
 });
 var MODEL_NAME_RE2 = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
 var NOT_RUN_SERVICES = ["database", "docker", "network", "service"];
-var plainLine = external_exports.string().min(1).max(300).regex(/^[^\p{Cc}\p{Cf}]+$/u, "one line of at most 300 characters");
+var plainLineOf = (max) => external_exports.string().min(1).max(max).regex(/^[^\p{Cc}\p{Cf}]+$/u, `one line of at most ${max} characters`);
+var plainLine = plainLineOf(300);
 var notRunHereSchema = external_exports.strictObject({
   command: plainLine,
   missing: external_exports.enum(NOT_RUN_SERVICES),
   reason: plainLine
 });
 var crewLine = external_exports.string().transform((s) => s.replace(new RegExp("\\p{Cf}", "gu"), "")).pipe(plainLine);
+var crewCovers = external_exports.string().transform((s) => s.replace(new RegExp("\\p{Cf}", "gu"), "")).pipe(plainLineOf(600));
 var notRunHereReportSchema = external_exports.strictObject({
   command: crewLine,
   missing: external_exports.enum(NOT_RUN_SERVICES),
@@ -28742,7 +28744,7 @@ var reportSchema = external_exports.object({
         command: crewLine,
         workflow: crewLine,
         job: crewLine,
-        covers: crewLine.nullish()
+        covers: crewCovers.nullish()
       })
     ).max(20)
   ),
@@ -31334,7 +31336,7 @@ function readWorkflow(text, path10) {
 }
 var isJob = (j) => j !== null && typeof j === "object" && !Array.isArray(j);
 var checkName = (id, j) => typeof j.name === "string" ? j.name : id;
-var guarded = (j) => "if" in j || "continue-on-error" in j;
+var guarded = (j) => "continue-on-error" in j;
 var localCall = (j, path10) => j.uses === `./${path10}`;
 var remoteCall = (j, path10) => typeof j.uses === "string" && !j.uses.startsWith("./") && j.uses.includes(`/${path10}@`);
 function findJob(files, path10, job, where) {
@@ -31344,7 +31346,7 @@ function findJob(files, path10, job, where) {
   const found = w.jobs.find(([id, j]) => isJob(j) && checkName(id, j) === job);
   if (found === void 0) return `the job is not in the workflow at ${where}`;
   const [, called] = found;
-  if (guarded(called)) return `the job has an if or continue-on-error at ${where}`;
+  if (guarded(called)) return `the job has continue-on-error at ${where}`;
   if (w.onPullRequest) {
     if (typeof called.uses === "string") {
       return called.uses.startsWith("./") ? `the job calls a reusable workflow: name the called workflow file and its job (at ${where})` : `the job calls a remote reusable workflow, which the gate cannot follow (at ${where})`;
@@ -31369,7 +31371,7 @@ function findJob(files, path10, job, where) {
         nested = true;
         continue;
       }
-      if (guarded(j)) return `a calling job has an if or continue-on-error at ${where}`;
+      if (guarded(j)) return `a calling job has continue-on-error at ${where}`;
       if (!unique3(x, p)) return `the workflow name is not unique at ${where}`;
       targets.push({ workflow: x.name, job: `${checkName(id, j)} / ${job}` });
       callers.push(j);
@@ -31653,7 +31655,7 @@ function renderReviewRoutine(r) {
       ""
     ],
     ...r.notRunHere === void 0 ? [] : [
-      `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: for each command, find the job at the base that runs it, also through a task runner (turbo, nextest, make), and list it in \`not_run_here_jobs\` with the command as listed, the workflow file at the base that defines the job (\`.github/workflows/<file>\`), the job's \`name:\`, or its id when it has none, and \`covers\`: one line on why that job covers the command. A job of a reusable workflow (\`on: workflow_call\`) counts when a \`pull_request\` workflow calls its file with \`uses: ./.github/workflows/<file>\` from a job: name the called file and its job, not the caller; its checks are \`<caller job> / <job>\`${r.pullRequest === void 0 ? "" : ` (the check names are in \`${r.pullRequest.checks}\`)`}. A command no base job runs is a finding. Studio checks at the base and at the head that the job, and a calling job, have no \`if:\` and no \`continue-on-error\`, that the job calls no further reusable workflow, that its definition is unchanged unless this is a CI item, and that the workflow name with the checks is unique; it refuses an approval unless every check of that job (each matrix leg \`(<leg>)\`) passed on this pull request. Whether the job covers the command is your judgement: Studio shows your \`covers\` line to the lead and does not test it.`,
+      `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: for each command, find the job at the base that runs it, also through a task runner (turbo, nextest, make), and list it in \`not_run_here_jobs\` with the command as listed, the workflow file at the base that defines the job (\`.github/workflows/<file>\`), the job's \`name:\`, or its id when it has none, and \`covers\`: one line of at most 600 characters on why that job covers the command. A job of a reusable workflow (\`on: workflow_call\`) counts when a \`pull_request\` workflow calls its file with \`uses: ./.github/workflows/<file>\` from a job: name the called file and its job, not the caller; its checks are \`<caller job> / <job>\`${r.pullRequest === void 0 ? "" : ` (the check names are in \`${r.pullRequest.checks}\`)`}. A command no base job runs is a finding. Studio checks at the base and at the head that neither the job nor a calling job has \`continue-on-error\` (an \`if:\` is fine: a skipped job never passes), that the job calls no further reusable workflow, that its definition is unchanged unless this is a CI item, and that the workflow name with the checks is unique; it refuses an approval unless every check of that job (each matrix leg \`(<leg>)\`) passed on this pull request. Whether the job covers the command is your judgement: Studio shows your \`covers\` line to the lead and does not test it.`,
       ""
     ],
     `Run each analyzer below as one subagent with the model named there, read-only except for the spec check's probe; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,
@@ -33246,7 +33248,7 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
       'analyzers: { <id>: pass|findings|"skipped: <reason>" }',
       'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"',
       "finding_attempts: <highest number of attempts on one finding>",
-      "not_run_here_jobs: []   # or entries { command: <command as listed>, workflow: <file at the base that defines the job>, job: <job name>, covers: <one line: why this job covers the command> }"
+      "not_run_here_jobs: []   # or entries { command: <command as listed>, workflow: <file at the base that defines the job>, job: <job name>, covers: <one line, at most 600 characters: why this job covers the command> }"
     ] : item.type === "research" ? [] : [
       caps.prByStudio === true ? `pr_title: "${id}: <summary, one line, at most 200 characters>"` : "pr: <number>",
       "head_sha: <40-hex sha of the pushed head commit>",
