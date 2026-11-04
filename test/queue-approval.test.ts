@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Gh } from '../src/ports.js';
 import { realPorts } from '../src/ports.js';
-import { approvalProblem } from '../src/queue.js';
+import { approvalProblem, MAX_BRANCH_UPDATES } from '../src/queue.js';
 
 const GIT_ENV = {
   ...process.env,
@@ -26,6 +26,8 @@ let evil: string;
 let conflictSide: string;
 let conflictOnBase: string;
 let conflictResolved: string;
+let honest2: string;
+let evilChain: string;
 
 const commitFile = (dir: string, file: string, text: string): string => {
   writeFileSync(join(dir, file), text);
@@ -75,9 +77,19 @@ beforeAll(() => {
     git(work, 'commit', '-q', '--no-edit');
   }
   conflictResolved = git(work, 'rev-parse', 'HEAD');
+  // A second update-branch on top of the first, after main moved again (to conflictOnBase).
+  git(work, 'checkout', '-q', '--detach', honest);
+  git(work, 'merge', '-q', '--no-edit', 'main');
+  honest2 = git(work, 'rev-parse', 'HEAD');
+  // The same second update, standing on the tree that was never reviewed.
+  git(work, 'checkout', '-q', '--detach', evil);
+  git(work, 'merge', '-q', '--no-edit', 'main');
+  evilChain = git(work, 'rev-parse', 'HEAD');
   git(work, 'push', '-q', 'origin', `${honest}:refs/heads/pr`);
   git(work, 'push', '-q', 'origin', `${evil}:refs/heads/evil`);
   git(work, 'push', '-q', 'origin', `${conflictResolved}:refs/heads/side`);
+  git(work, 'push', '-q', 'origin', `${honest2}:refs/heads/pr2`);
+  git(work, 'push', '-q', 'origin', `${evilChain}:refs/heads/evil2`);
   project = join(root, 'project');
   git(root, 'clone', '-q', '--no-checkout', '--single-branch', '--branch', 'main', origin, project);
 });
@@ -98,7 +110,13 @@ const signed = (parents: string[], over: Record<string, unknown> = {}): Reply =>
 });
 
 /** A gh that says what the scripted commit is, what the live base is and how far the parent is. */
-const ghFor = (o: { head?: string; commit?: Reply; base?: Reply | string; status?: string }) => {
+const ghFor = (o: {
+  head?: string;
+  commit?: Reply;
+  commits?: Record<string, Reply>;
+  base?: Reply | string;
+  status?: string;
+}) => {
   const calls: string[] = [];
   const gh: Gh = {
     api: async () => '',
@@ -110,7 +128,10 @@ const ghFor = (o: { head?: string; commit?: Reply; base?: Reply | string; status
         const b = o.base ?? 'main';
         return reply(typeof b === 'string' ? { stdout: JSON.stringify({ baseRefName: b }) } : b);
       }
-      if (line.startsWith('api repos/org/app/commits/')) return reply(o.commit ?? { code: 1 });
+      if (line.startsWith('api repos/org/app/commits/')) {
+        const sha = line.slice('api repos/org/app/commits/'.length);
+        return reply(o.commits?.[sha] ?? o.commit ?? { code: 1 });
+      }
       if (line.startsWith('api repos/org/app/compare/')) {
         return reply({ stdout: JSON.stringify({ status: o.status ?? 'behind' }) });
       }
@@ -191,9 +212,40 @@ describe('approvalProblem: a commit on top of the approved head, with real git',
       await ask({ commit: signed([conflictSide, conflictOnBase]) }, a, conflictResolved),
     ).toMatch(/review it again/);
   });
-  it('a chain of two updates refuses: the first parent is not the approved head', async () => {
-    expect(await ask({ commit: signed([honest, onBase]) }, approval(), honest)).toMatch(
-      /review it again/,
+  it('two updates in a row pass: the queue updated, the checks failed, it updated again', async () => {
+    const commits = {
+      [honest2]: signed([honest, conflictOnBase]),
+      [honest]: signed([approved, onBase]),
+    };
+    expect(await ask({ commits }, approval(), honest2)).toBeUndefined();
+  });
+  it('a chain refuses when any link is not a clean update, here the first one', async () => {
+    const commits = {
+      [evilChain]: signed([evil, conflictOnBase]),
+      [evil]: signed([approved, onBase]),
+    };
+    expect(await ask({ commits }, approval(), evilChain)).toMatch(/review it again/);
+  });
+  it('a chain refuses when a link is not signed by GitHub', async () => {
+    const commits = {
+      [honest2]: signed([honest, conflictOnBase]),
+      [honest]: signed([approved, onBase], { committer: { login: 'crew' } }),
+    };
+    expect(await ask({ commits }, approval(), honest2)).toMatch(/review it again/);
+  });
+  it('a chain that never reaches the approved head stops after MAX_BRANCH_UPDATES links', async () => {
+    // a commit that names itself as first parent: the walk must stop, not loop
+    const { gh, calls } = ghFor({ commits: { [honest]: signed([honest, onBase]) } });
+    const why = await approvalProblem(
+      { gh, git: realPorts().git },
+      checkout(),
+      target,
+      approval(),
+      honest,
+    );
+    expect(why).toMatch(/review it again/);
+    expect(calls.filter((c) => c.startsWith('api repos/org/app/commits/'))).toHaveLength(
+      MAX_BRANCH_UPDATES,
     );
   });
   it('a head git cannot fetch refuses and says so, not that a review is due', async () => {
