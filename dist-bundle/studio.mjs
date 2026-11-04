@@ -7846,9 +7846,9 @@ import { homedir as homedir9 } from "node:os";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
 // src/cli.ts
-import { existsSync as existsSync6, mkdtempSync, rmSync as rmSync6, writeFileSync as writeFileSync10 } from "node:fs";
+import { existsSync as existsSync6, mkdtempSync, rmSync as rmSync7, writeFileSync as writeFileSync11 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname as dirname10, join as join27, resolve as resolve6 } from "node:path";
+import { dirname as dirname11, join as join27, resolve as resolve6 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/account-command.ts
@@ -36032,24 +36032,75 @@ function formatOverview(list2) {
 }
 
 // src/setup.ts
-import { lstatSync as lstatSync21, mkdirSync as mkdirSync7, readlinkSync, statSync as statSync4, symlinkSync, unlinkSync as unlinkSync6 } from "node:fs";
+import {
+  chmodSync as chmodSync6,
+  lstatSync as lstatSync21,
+  mkdirSync as mkdirSync7,
+  readFileSync as readFileSync25,
+  renameSync as renameSync10,
+  rmSync as rmSync6,
+  statSync as statSync4,
+  writeFileSync as writeFileSync10
+} from "node:fs";
 import { homedir as homedir8 } from "node:os";
-import { join as join26, resolve as resolve5 } from "node:path";
+import { dirname as dirname10, join as join26, resolve as resolve5 } from "node:path";
 var DEFAULT_LABEL2 = "main";
+var MAX_LABEL = 32;
 var TOKEN_TEXT = [
   "   Crews push their branches and open pull requests with a GitHub token of their own, never",
   "   with your gh login. Create a fine-grained token on GitHub (Settings, Developer settings,",
   "   Personal access tokens), limited to this project's repositories, with",
   "   contents and pull requests read/write and nothing else (no administration, no workflows).",
-  "   Studio checks it once against the repository and stores it with mode 0600; it is never shown."
+  "   Studio checks it once against the repository and stores it with mode 0600; it is never shown.",
+  "   The token goes only into the hidden prompt."
 ];
 var ACCOUNT_TEXT = [
   "   Crews run Claude Code with a token of their own, so your own login stays yours. In another",
   "   terminal tab run: claude setup-token",
   "   It prints a token valid for one year (it needs a Pro, Max, Ultra, Team or Enterprise plan).",
-  "   Paste it below; the input is hidden."
+  `   First you type a short label for this account (visible; Enter keeps ${DEFAULT_LABEL2}).`,
+  "   Then you paste the token at the second prompt (hidden)."
 ];
-var RELINK_NOTE = "   The plugin's folder changes with each version: after an update, run studio setup --link again.";
+var LOOKS_LIKE_TOKEN = /^(sk-ant|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)/;
+var SHIM_MARKER = "# studio-shim v1";
+var PICK = [
+  'let s="";process.stdin.on("data",d=>{s+=d}).on("end",()=>{',
+  'const fs=require("fs"),p=require("path");let a;',
+  'try{a=JSON.parse(s)}catch{const l=s.trim().split("\\n").pop()||"";try{a=JSON.parse(l)}catch{process.exit(1)}}',
+  "for(const e of Array.isArray(a)?a:[]){",
+  'if(!e||typeof e.id!=="string"||!e.id.startsWith("studio@")||e.enabled!==true)continue;',
+  'const r=typeof e.readFromFolder==="string"?e.readFromFolder:e.installPath;',
+  'if(typeof r!=="string")continue;const b=p.join(r,"bin","studio");',
+  'if(fs.existsSync(b)&&!fs.existsSync(p.join(r,".orphaned_at"))){console.log(b);return}}',
+  "process.exit(1)})"
+].join("");
+var SHIM = `#!/bin/sh
+${SHIM_MARKER}
+# Written by studio setup --link. Runs the Studio plugin's CLI and finds the plugin again after an
+# update. Studio replaces this file only while the line above is unchanged.
+case "\${XDG_CONFIG_HOME:-}" in /*) dir="$XDG_CONFIG_HOME/studio" ;; *) dir="$HOME/.config/studio" ;; esac
+cache="$dir/launcher"
+launcher=""
+if [ -f "$cache" ]; then
+  launcher=$(cat "$cache")
+  root=$(dirname "$(dirname "$launcher")")
+  if [ ! -f "$launcher" ] || [ -e "$root/.orphaned_at" ]; then launcher=""; fi
+fi
+if [ -z "$launcher" ]; then
+  if ! command -v claude >/dev/null 2>&1; then
+    echo "studio: the claude CLI is not on PATH; it is needed to find the Studio plugin. Install Claude Code, or run node <plugin>/bin/studio" >&2
+    exit 127
+  fi
+  launcher=$(claude plugin list --json 2>/dev/null | node -e '${PICK}') || launcher=""
+  if [ -z "$launcher" ]; then
+    echo "studio: no enabled studio plugin in claude plugin list; in Claude Code: /plugin install studio@studio-marketplace" >&2
+    exit 1
+  fi
+  { mkdir -p "$dir" && tmp=$(mktemp "$dir/.launcher.XXXXXX") && printf '%s\\n' "$launcher" > "$tmp" && mv -f "$tmp" "$cache"; } 2>/dev/null || true
+fi
+exec node "$launcher" "$@"
+`;
+var SHIM_NOTE = "   The shim finds the plugin again after an update; no need to run --link again.";
 var shQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 function studioOnPath(env) {
   for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
@@ -36063,6 +36114,17 @@ function studioOnPath(env) {
   return void 0;
 }
 var yes = (answer) => /^(|y|yes)$/i.test(answer.trim());
+function writeAtomic2(file2, text, mode) {
+  const tmp = join26(dirname10(file2), `.studio-${process.pid}-${Date.now()}.tmp`);
+  try {
+    writeFileSync10(tmp, text, { flag: "wx", mode });
+    chmodSync6(tmp, mode);
+    renameSync10(tmp, file2);
+  } catch (e) {
+    rmSync6(tmp, { force: true });
+    throw e;
+  }
+}
 async function tokenRepo(o2) {
   try {
     return readPrimaryRepo(o2.project);
@@ -36070,72 +36132,102 @@ async function tokenRepo(o2) {
   }
   try {
     const origin = await o2.ports.git.run(o2.project, ["remote", "get-url", "origin"]);
-    const repo = githubRepoOf(origin);
-    if (repo !== void 0) return repo;
+    const repo2 = githubRepoOf(origin);
+    if (repo2 !== void 0) return repo2;
   } catch {
   }
-  const answer = await o2.readLine?.("   Repository the crews work on (owner/name): ");
+  o2.stdout(
+    "   No GitHub repository found here. The next prompt is visible; the token comes after.\n"
+  );
+  const answer = await o2.readLine?.("   Repository the crews work on, as owner/name (visible): ");
   if (answer === void 0) return void 0;
+  const repo = answer.trim();
+  if (LOOKS_LIKE_TOKEN.test(repo) || repo.length > 100) {
+    o2.stdout("   that looks like a token \u2014 it was not stored; enter owner/name\n");
+    return void 0;
+  }
   try {
-    return assertPrimaryRepo(answer.trim());
+    return assertPrimaryRepo(repo);
   } catch {
     o2.stdout("   that is not owner/name; nothing stored\n");
     return void 0;
   }
 }
+async function accountLabel(o2) {
+  const answer = await o2.readLine?.(
+    `   Short label for this account, visible (Enter keeps ${DEFAULT_LABEL2}) [${DEFAULT_LABEL2}]: `
+  );
+  if (answer === void 0) return void 0;
+  const label = answer.trim() === "" ? DEFAULT_LABEL2 : answer.trim();
+  if (LOOKS_LIKE_TOKEN.test(label) || label.length > MAX_LABEL) {
+    o2.stdout("   that looks like a token \u2014 it was not stored; enter a short label\n");
+    return void 0;
+  }
+  if (!validLabel(label) || label.startsWith(".")) {
+    o2.stdout(
+      "   a label has letters, digits, dot, dash or underscore and does not start with a dot; nothing stored\n"
+    );
+    return void 0;
+  }
+  return label;
+}
 async function link(o2, home) {
   const say = (s) => o2.stdout(`${safe(s)}
 `);
   if (o2.launcher === void 0) {
-    say("4. studio in your terminal: cannot tell where the plugin is; nothing linked");
-    return;
+    say("4. studio in your terminal: cannot tell where the plugin is; nothing written");
+    return 0;
   }
   const launcher2 = o2.launcher;
   const localBin = join26(home, ".local", "bin");
   const onPath = (o2.env.PATH ?? "").split(":").some((d) => d !== "" && resolve5(d) === resolve5(localBin));
-  const line2 = (dir) => `ln -s ${shQuote(launcher2)} ${shQuote(join26(dir, "studio"))}`;
   if (!onPath) {
     say("4. studio in your terminal: ~/.local/bin is not on your PATH.");
-    say("   Studio does not edit shell files. Link it into a folder that is on your PATH:");
-    say(`     mkdir -p ${shQuote(localBin)} && ${line2(localBin)}`);
-    say("   and add ~/.local/bin to PATH in your shell's startup file, or use any folder on PATH.");
-    say(RELINK_NOTE);
-    return;
+    say("   Studio does not edit shell files. Add ~/.local/bin to PATH in your shell's startup");
+    say("   file, open a new terminal and run studio setup --link again.");
+    say(`   Until then: node ${shQuote(launcher2)} <command>`);
+    return 0;
   }
   const target = join26(localBin, "studio");
   let current;
-  let isLink3 = false;
   try {
-    isLink3 = lstatSync21(target).isSymbolicLink();
-    current = isLink3 ? readlinkSync(target) : "";
+    current = lstatSync21(target).isFile() ? readFileSync25(target, "utf8") : "";
   } catch {
     current = void 0;
   }
-  if (current === launcher2) {
+  const cache = join26(ownerConfigDir(o2.owner), "launcher");
+  const writeCache = () => {
+    mkdirSync7(dirname10(cache), { recursive: true, mode: 448 });
+    writeAtomic2(cache, `${launcher2}
+`, 384);
+  };
+  if (current === SHIM) {
+    writeCache();
     say(`4. studio in your terminal: done (${target})`);
-    say(RELINK_NOTE);
-    return;
+    say(SHIM_NOTE);
+    return 0;
   }
   let prompt;
-  if (current === void 0) prompt = `   Create the link ${target} -> ${launcher2}? [Y/n] `;
-  else if (isLink3 && /\/bin\/studio$/.test(current)) {
-    prompt = `   ${target} links to an earlier Studio (${current}). Replace it? [Y/n] `;
+  if (current === void 0) prompt = `   Write the Studio shim ${target}? [Y/n] `;
+  else if (current.split("\n")[1] === SHIM_MARKER) {
+    prompt = `   Update the Studio shim ${target}? [Y/n] `;
   } else {
-    say(`4. studio in your terminal: ${target} exists and is not a Studio link; nothing changed.`);
-    say(`   To link it elsewhere on your PATH: ${line2("<folder>")}`);
-    return;
+    say(`4. studio in your terminal: ${target} is not a Studio shim; nothing changed.`);
+    say("   Move it away and run studio setup --link again, or keep it.");
+    return 1;
   }
   say("4. studio in your terminal:");
   const answer = await o2.readLine?.(safe(prompt));
   if (answer === void 0 || !yes(answer)) {
-    say(`   nothing linked; to do it yourself: ${line2(localBin)}`);
-    return;
+    say(`   nothing written; until you do: node ${shQuote(launcher2)} <command>`);
+    return 0;
   }
   mkdirSync7(localBin, { recursive: true });
-  if (current !== void 0) unlinkSync6(target);
-  symlinkSync(launcher2, target);
-  say(`   linked ${target}`);
-  say(RELINK_NOTE);
+  writeCache();
+  writeAtomic2(target, SHIM, 493);
+  say(`   wrote ${target}`);
+  say(SHIM_NOTE);
+  return 0;
 }
 async function runSetup(o2) {
   if (o2.env.STUDIO_ROLE === "crew") throw new Error("this command is not for crew sessions");
@@ -36187,9 +36279,8 @@ async function runSetup(o2) {
   } else {
     say("3. Claude account for crews: none stored");
     for (const l of ACCOUNT_TEXT) say(l);
-    const answer = await o2.readLine(`   Label for this account [${DEFAULT_LABEL2}]: `);
-    if (answer === void 0) return 1;
-    const label = answer.trim() === "" ? DEFAULT_LABEL2 : answer.trim();
+    const label = await accountLabel(o2);
+    if (label === void 0) return 1;
     const code = await runAccount({
       args: ["add", label],
       owner: o2.owner,
@@ -36204,8 +36295,10 @@ async function runSetup(o2) {
     });
     if (code !== 0) return code;
   }
-  if (o2.link) await link(o2, home);
-  else {
+  if (o2.link) {
+    const code = await link(o2, home);
+    if (code !== 0) return code;
+  } else {
     const found = studioOnPath(o2.env);
     if (found !== void 0) say(`4. studio in your terminal: done (${found})`);
     else {
@@ -36516,7 +36609,7 @@ async function runCli(argv, deps) {
       const { config: config2 } = loadAll();
       refuseNativeQueue(config2);
       const root = await boundStateRoot();
-      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname10(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
+      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname11(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
       const blockedNow = queueHold();
       if (blockedNow !== void 0) throw new HeldError(blockedNow);
       let heldLine;
@@ -37866,10 +37959,10 @@ ${body.replace(new RegExp("[^\\P{Cc}\\n\\t]|\\p{Cf}", "gu"), "").slice(0, PR_BOD
     const dir = mkdtempSync(join27(tmpdir(), "studio-pr-"));
     try {
       const file2 = join27(dir, "body.md");
-      writeFileSync10(file2, text, { mode: 384 });
+      writeFileSync11(file2, text, { mode: 384 });
       return await use(file2);
     } finally {
-      rmSync6(dir, { recursive: true, force: true });
+      rmSync7(dir, { recursive: true, force: true });
     }
   };
   const room = await capacity();
@@ -38176,7 +38269,7 @@ function readVisibleLine(prompt, input2, output2) {
 
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync7, openSync as openSync7, readFileSync as readFileSync27 } from "node:fs";
+import { closeSync as closeSync7, openSync as openSync7, readFileSync as readFileSync28 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -41872,7 +41965,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync26 } from "node:fs";
+import { readFileSync as readFileSync27 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value, optionName) => {
@@ -42228,7 +42321,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync25 } from "node:fs";
+import { readFileSync as readFileSync26 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -42342,7 +42435,7 @@ var getTargetFd = ({ value, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync25(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync26(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value, fdNumber) => {
   if (value === "inherit") {
@@ -42736,8 +42829,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync26(value))] }),
-    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync26(file2))] }),
+    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync27(value))] }),
+    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync27(file2))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value }) => ({ contents: () => [...value] }),
     string: ({ value }) => ({ contents: [value] }),
@@ -43033,7 +43126,7 @@ var throwOnSerializableInput = (optionName, invalidItem) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-sync.js
-import { writeFileSync as writeFileSync11, appendFileSync } from "node:fs";
+import { writeFileSync as writeFileSync12, appendFileSync } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/output.js
 var shouldLogOutput = ({ stdioItems, encoding, verboseInfo, fdNumber }) => fdNumber !== "all" && isFullVerbose(verboseInfo, fdNumber) && !BINARY_ENCODINGS.has(encoding) && isFdVerbose(fdNumber) && (stdioItems.some(({ type, value }) => type === "native" && PIPED_STDIO_VALUES.has(value)) || stdioItems.every(({ type }) => TRANSFORM_TYPES.has(type)));
@@ -43167,7 +43260,7 @@ var writeToFiles = (chunks, stdioItems, outputFiles) => {
     if (append || outputFiles.has(path10)) {
       appendFileSync(path10, contents);
     } else {
-      writeFileSync11(path10, contents);
+      writeFileSync12(path10, contents);
     }
     outputFiles.add(path10);
   }
@@ -46078,7 +46171,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync27(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync28(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }

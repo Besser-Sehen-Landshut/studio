@@ -20,7 +20,8 @@ If `studio` is not found, use `node "${CLAUDE_PLUGIN_ROOT}/bin/studio"` for each
    is there. Writing the files does not wait for this.
 4. Ask: "Shall I write these two files?" Only after a yes run `studio init --write`. Never write or
    edit the files yourself.
-5. Show the remaining next steps in plain words. Ask before committing; commit only
-   `.studio/studio.yaml` and `.studio/board.yaml`, by name.
+5. Show the remaining next steps in plain words. Commit only after an explicit yes to "Shall I
+   commit the two files?", and only `.studio/studio.yaml` and `.studio/board.yaml`, by name. On the
+   default branch (`main`), ask first and suggest a branch (`git switch -c studio-setup`). Never push.
 6. Ask what the first piece of work is, in the owner's words, not the example item. Add it with
    the `studio:add` skill.

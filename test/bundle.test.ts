@@ -116,6 +116,13 @@ describe('self-contained plugin bundle', () => {
     const init = readFileSync(join(repo, 'skills', 'init', 'SKILL.md'), 'utf8');
     expect(init).toContain('studio init --write');
     expect(init).toContain('studio setup');
+    expect(init).toContain('Never push');
+    const add = readFileSync(join(repo, 'skills', 'add', 'SKILL.md'), 'utf8');
+    expect(add).toContain('Shall I add this?');
+    // The example command quotes every word singly, with the title after --.
+    const example = /```bash\n\s*(studio add [^\n]*)\n/.exec(add)?.[1] ?? '';
+    expect(example).toMatch(/ -- '/);
+    expect(example).not.toContain('"');
   });
 
   it('bin/studio-guard.mjs decides from the bundle without node_modules', () => {

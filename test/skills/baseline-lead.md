@@ -162,3 +162,25 @@ work is, in your words. I do not use the 'health endpoint' example." Add: the sa
 plus the `missing` line to the owner and "I start no loop and no crew".
 
 Not exercised: a real `/studio:init` in a Claude Code session with the installed plugin.
+
+## Review of the first version, 2026-11-04
+
+An independent review of the first `studio:add` and `studio:init` found:
+
+- `studio:add` ran `studio add` without showing the item first, and its own template put the
+  owner's words in double quotes (`studio add "<title>" ...`), where `$(...)` and backquotes still
+  expand.
+- `studio:init` said "ask before committing" but not that it never pushes, nor what to do on the
+  default branch.
+
+RED, `scenarios/add-quoting-scenario.md` (owner text with `"`, `$(price)` and an apostrophe), one
+sonnet agent with the first `studio:add`: it asked nothing and ran the command at once. It quoted
+singly this time ("so the shell can't expand `$(price)`"), but by its own choice: the skill's
+template showed double quotes and the next run may follow it.
+
+GREEN, same scenario, the new `studio:add`: "I show the owner the title, type, component, path and
+DoD, and ask 'Shall I add this?'", then
+`studio add --type='fix' --path='src/checkout/**' --dod=... -- 'Checkout crashes when the cart'\''s empty'`
+with every value single-quoted and the title after `--`. `scenarios/init-scenario.md` on `main`
+with the new `studio:init`: "I ask: 'Shall I commit the two files?' ... We're on `main`, so I first
+suggest a branch (`git switch -c studio-setup`) and ask before creating it ... I never push."

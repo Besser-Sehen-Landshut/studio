@@ -308,6 +308,26 @@ describe('studio add', () => {
     return fx;
   }
 
+  it('takes the form the add skill builds: --opt=value and the title after --', async () => {
+    const fx = await ready();
+    const r = await cli(
+      fx,
+      'add',
+      '--type=fix',
+      '--path=src/checkout/**',
+      "--dod=- it's fixed; $(no) `subst`",
+      '--',
+      "-Checkout crashes when the cart's empty",
+    );
+    expect(r.code).toBe(0);
+    const board = loadBoard(fx.dir, loadConfig(fx.dir));
+    expect(board.items[0]).toMatchObject({
+      title: "-Checkout crashes when the cart's empty",
+      dod: ["- it's fixed; $(no) `subst`"],
+      paths: ['src/checkout/**'],
+    });
+  });
+
   it('appends a ready builder item with the next id from the repo name', async () => {
     const fx = await ready();
     const r = await cli(fx, 'add', 'Fix the login', '--dod', 'test added');

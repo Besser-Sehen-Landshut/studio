@@ -1,12 +1,12 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
-  readlinkSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -18,6 +18,7 @@ import { addAccount, listAccounts } from '../src/accounts.js';
 import { runCli } from '../src/cli.js';
 import { installCrewToken, readCrewTokenFile } from '../src/credentials.js';
 import { type Ports, realPorts } from '../src/ports.js';
+import { SHIM_MARKER } from '../src/setup.js';
 
 const root = mkdtempSync(join(tmpdir(), 'studio-setup-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -37,6 +38,10 @@ type Opts = {
   /** `~/.local/bin` is on PATH. */
   localBinOnPath?: boolean;
 };
+
+/** A fake plugin launcher that prints its version and arguments. */
+const launcherScript = (version: string) =>
+  `#!/usr/bin/env node\nconsole.log(${JSON.stringify(`launcher ${version}`)}, JSON.stringify(process.argv.slice(2)));\n`;
 
 let n = 0;
 function fixture(o: Opts = {}) {
@@ -61,7 +66,7 @@ function fixture(o: Opts = {}) {
   const plugin = join(base, 'plugin', '0.10.0');
   mkdirSync(join(plugin, 'bin'), { recursive: true });
   const launcher = join(plugin, 'bin', 'studio');
-  writeFileSync(launcher, '#!/usr/bin/env node\n');
+  writeFileSync(launcher, launcherScript('0.10.0'));
   chmodSync(launcher, 0o755);
   const pathDirs = [join(base, 'sysbin')];
   mkdirSync(pathDirs[0] as string);
@@ -208,10 +213,9 @@ describe('studio setup', () => {
     installCrewToken(CREW_VALUE, fx.owner);
     const r = await setup(fx, [], { lines: [''], secrets: [ACCOUNT_VALUE] });
     expect(r.code).toBe(0);
-    expect(r.asked).toEqual([
-      'line:    Label for this account [main]: ',
-      'secret: Token from claude setup-token (hidden): ',
-    ]);
+    expect(r.asked).toHaveLength(2);
+    expect(r.asked[0]).toMatch(/^line: .*label.*\[main\]/);
+    expect(r.asked[1]).toBe('secret: Token from claude setup-token (hidden): ');
     expect(r.out).toContain('claude setup-token');
     expect(r.out).toContain('account main stored and active');
     expect(listAccounts(fx.owner).map((a) => a.label)).toEqual(['main']);
@@ -278,6 +282,54 @@ describe('studio setup', () => {
     expect(r.err).toMatch(/not for crew sessions/);
   });
 
+  it('says the visible label prompt comes first, then the hidden token prompt', async () => {
+    const fx = fixture({ studioOnPath: true });
+    installCrewToken(CREW_VALUE, fx.owner);
+    const r = await setup(fx, [], { lines: [''], secrets: [ACCOUNT_VALUE] });
+    expect(r.out).toMatch(/First .*label.*visible/);
+    expect(r.out).toMatch(/Then .*token.*hidden/);
+    expect(r.asked[0]).toMatch(/visible/);
+  });
+
+  it('rejects a label that looks like a token before the hidden prompt', async () => {
+    for (const label of ['sk-ant-oat01-abcdef', 'a'.repeat(33), 'a b']) {
+      const fx = fixture({ studioOnPath: true });
+      installCrewToken(CREW_VALUE, fx.owner);
+      const r = await setup(fx, [], { lines: [label], secrets: [ACCOUNT_VALUE] });
+      expect(r.code, label).toBe(1);
+      expect(
+        r.asked.filter((a) => a.startsWith('secret')),
+        label,
+      ).toEqual([]);
+      expect(listAccounts(fx.owner), label).toEqual([]);
+      if (label !== 'a b') expect(r.all, label).not.toContain(label);
+    }
+    const fx = fixture({ studioOnPath: true });
+    installCrewToken(CREW_VALUE, fx.owner);
+    const r = await setup(fx, [], { lines: ['sk-ant-oat01-abcdef'] });
+    expect(r.out).toContain('that looks like a token — it was not stored; enter a short label');
+  });
+
+  it('rejects a token typed at the visible repository prompt', async () => {
+    for (const answer of [
+      'sk-ant-oat01-abcdef',
+      'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+      'github_pat_11abc',
+    ]) {
+      const fx = fixture({ studioOnPath: true, origin: null });
+      addAccount(fx.owner, 'main', ACCOUNT_VALUE, new Date('2026-11-01T00:00:00Z'));
+      const r = await setup(fx, [], { lines: [answer], secrets: [CREW_VALUE] });
+      expect(r.code, answer).toBe(1);
+      expect(r.asked[0], answer).toMatch(/visible/);
+      expect(
+        r.asked.filter((a) => a.startsWith('secret')),
+        answer,
+      ).toEqual([]);
+      expect(r.out).toContain('that looks like a token — it was not stored; enter owner/name');
+      expect(r.all).not.toContain(answer);
+    }
+  });
+
   it('names --link when studio is not on PATH', async () => {
     const fx = fixture();
     installCrewToken(CREW_VALUE, fx.owner);
@@ -296,66 +348,166 @@ describe('studio setup --link', () => {
     addAccount(fx.owner, 'main', ACCOUNT_VALUE, new Date('2026-11-01T00:00:00Z'));
     return fx;
   };
+  const shimFile = (fx: Fx) => join(fx.localBin, 'studio');
+  const cacheFile = (fx: Fx) => join(fx.home, 'config', 'studio', 'launcher');
 
-  it('links ~/.local/bin/studio to the launcher after a yes', async () => {
+  /** Runs the shim with only node, a fake `claude` (when `list` is given) and the system bins. */
+  const runShim = (fx: Fx, args: string[], list?: unknown[]) => {
+    const bin = mkdtempSync(join(fx.base, 'bin-'));
+    symlinkSync(process.execPath, join(bin, 'node'));
+    if (list !== undefined) {
+      writeFileSync(join(bin, 'list.json'), JSON.stringify(list));
+      writeFileSync(
+        join(bin, 'claude'),
+        `#!/bin/sh\n[ "$*" = "plugin list --json" ] || exit 2\ncat '${join(bin, 'list.json')}'\n`,
+      );
+      chmodSync(join(bin, 'claude'), 0o755);
+    }
+    return spawnSync('/bin/sh', [shimFile(fx), ...args], {
+      encoding: 'utf8',
+      env: {
+        PATH: `${bin}:/usr/bin:/bin`,
+        HOME: fx.home,
+        XDG_CONFIG_HOME: join(fx.home, 'config'),
+      },
+    });
+  };
+  /** A newer plugin version next to the fixture's, as an update leaves it. */
+  const update = (fx: Fx) => {
+    const root = join(fx.base, 'plugin', '0.10.1');
+    mkdirSync(join(root, 'bin'), { recursive: true });
+    writeFileSync(join(root, 'bin', 'studio'), launcherScript('0.10.1'));
+    writeFileSync(join(fx.base, 'plugin', '0.10.0', '.orphaned_at'), '1\n');
+    return root;
+  };
+
+  it('writes a regular shim with the marker and the launcher cache after a yes', async () => {
     const fx = ready({ localBinOnPath: true });
     const r = await setup(fx, ['--link'], { lines: [''] });
     expect(r.code).toBe(0);
     expect(r.asked).toHaveLength(1);
     expect(r.asked[0]).toMatch(/\[Y\/n\]/);
-    expect(readlinkSync(join(fx.localBin, 'studio'))).toBe(fx.launcher);
-    expect(r.out).toMatch(/after an update, run studio setup --link again/);
+    const st = lstatSync(shimFile(fx));
+    expect(st.isFile()).toBe(true);
+    expect(st.mode & 0o111).not.toBe(0);
+    expect(readFileSync(shimFile(fx), 'utf8').split('\n')[1]).toBe(SHIM_MARKER);
+    expect(readFileSync(cacheFile(fx), 'utf8').trim()).toBe(fx.launcher);
+    expect(r.out).toMatch(/finds the plugin again after an update/);
+    const run = runShim(fx, ['board', '--json']);
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain('launcher 0.10.0 ["board","--json"]');
   });
 
-  it('links nothing after a no and prints the line instead', async () => {
+  it('writes nothing after a no', async () => {
     const fx = ready({ localBinOnPath: true });
     const r = await setup(fx, ['--link'], { lines: ['n'] });
     expect(r.code).toBe(0);
-    expect(existsSync(join(fx.localBin, 'studio'))).toBe(false);
-    expect(r.out).toContain(`ln -s '${fx.launcher}'`);
+    expect(existsSync(shimFile(fx))).toBe(false);
+    expect(r.out).toMatch(/nothing written/);
   });
 
-  it('is done when the link already points at the launcher', async () => {
+  it('is done when the shim is current, and updates an older shim of its own', async () => {
     const fx = ready({ localBinOnPath: true });
-    mkdirSync(fx.localBin, { recursive: true });
-    symlinkSync(fx.launcher, join(fx.localBin, 'studio'));
-    const r = await setup(fx, ['--link']);
-    expect(r.code).toBe(0);
-    expect(r.asked).toEqual([]);
-    expect(r.out).toMatch(/4\. studio in your terminal: done/);
-  });
-
-  it('offers to replace a link to an earlier Studio version', async () => {
-    const fx = ready({ localBinOnPath: true });
-    mkdirSync(fx.localBin, { recursive: true });
-    const old = join(fx.base, 'plugin', '0.9.1', 'bin', 'studio');
-    symlinkSync(old, join(fx.localBin, 'studio'));
+    await setup(fx, ['--link'], { lines: [''] });
+    const again = await setup(fx, ['--link']);
+    expect(again.asked).toEqual([]);
+    expect(again.out).toMatch(/4\. studio in your terminal: done/);
+    writeFileSync(shimFile(fx), `#!/bin/sh\n${SHIM_MARKER}\necho old\n`);
     const r = await setup(fx, ['--link'], { lines: ['y'] });
     expect(r.code).toBe(0);
-    expect(r.asked[0]).toMatch(/earlier Studio/);
-    expect(readlinkSync(join(fx.localBin, 'studio'))).toBe(fx.launcher);
+    expect(r.asked[0]).toMatch(/Update/);
+    expect(readFileSync(shimFile(fx), 'utf8')).not.toContain('echo old');
+    expect(readdirSync(fx.localBin)).toEqual(['studio']);
   });
 
-  it('never touches a studio that is not a Studio link', async () => {
+  it('never replaces a file without the exact marker, nor a link', async () => {
+    for (const content of [
+      'mine\n',
+      `#!/bin/sh\n${SHIM_MARKER}x\n`,
+      `#!/bin/sh\n# studio-shim v2\n`,
+    ]) {
+      const fx = ready({ localBinOnPath: true });
+      mkdirSync(fx.localBin, { recursive: true });
+      writeFileSync(shimFile(fx), content);
+      const r = await setup(fx, ['--link'], { lines: ['y'] });
+      expect(r.code, content).toBe(1);
+      expect(r.asked, content).toEqual([]);
+      expect(readFileSync(shimFile(fx), 'utf8')).toBe(content);
+      expect(r.out).toMatch(/not a Studio shim; nothing changed/);
+    }
     const fx = ready({ localBinOnPath: true });
     mkdirSync(fx.localBin, { recursive: true });
-    writeFileSync(join(fx.localBin, 'studio'), 'mine\n');
+    symlinkSync(fx.launcher, shimFile(fx));
     const r = await setup(fx, ['--link'], { lines: ['y'] });
-    expect(r.code).toBe(0);
-    expect(r.asked).toEqual([]);
-    expect(readFileSync(join(fx.localBin, 'studio'), 'utf8')).toBe('mine\n');
-    expect(lstatSync(join(fx.localBin, 'studio')).isSymbolicLink()).toBe(false);
-    expect(r.out).toMatch(/not a Studio link/);
+    expect(r.code).toBe(1);
+    expect(lstatSync(shimFile(fx)).isSymbolicLink()).toBe(true);
   });
 
-  it('prints the ln line and edits no shell file when ~/.local/bin is not on PATH', async () => {
+  it('re-resolves a cache whose plugin folder is orphaned, and rewrites the cache', async () => {
+    const fx = ready({ localBinOnPath: true });
+    await setup(fx, ['--link'], { lines: [''] });
+    const root = update(fx);
+    const run = runShim(
+      fx,
+      ['status'],
+      [
+        { id: 'other@x', enabled: true, installPath: fx.base, version: '1', scope: 'user' },
+        { id: 'studio@m', enabled: false, installPath: fx.base, version: '0.9', scope: 'user' },
+        { id: 'studio@m', enabled: true, installPath: root, version: '0.10.1', scope: 'user' },
+      ],
+    );
+    expect(run.stderr).toBe('');
+    expect(run.stdout).toContain('launcher 0.10.1 ["status"]');
+    expect(readFileSync(cacheFile(fx), 'utf8').trim()).toBe(join(root, 'bin', 'studio'));
+  });
+
+  it('prefers readFromFolder for a plugin loaded in place', async () => {
+    const fx = ready({ localBinOnPath: true });
+    await setup(fx, ['--link'], { lines: [''] });
+    const root = update(fx);
+    const run = runShim(
+      fx,
+      [],
+      [
+        {
+          id: 'studio@m',
+          enabled: true,
+          installPath: fx.base,
+          readFromFolder: root,
+          scope: 'user',
+        },
+      ],
+    );
+    expect(run.stdout).toContain('launcher 0.10.1');
+  });
+
+  it('says clearly when claude is missing and the cache cannot be used', async () => {
+    const fx = ready({ localBinOnPath: true });
+    await setup(fx, ['--link'], { lines: [''] });
+    update(fx);
+    const run = runShim(fx, ['status']);
+    expect(run.status).not.toBe(0);
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toMatch(/claude CLI is not on PATH/);
+  });
+
+  it('says so when no enabled studio plugin is listed', async () => {
+    const fx = ready({ localBinOnPath: true });
+    await setup(fx, ['--link'], { lines: [''] });
+    update(fx);
+    const run = runShim(fx, [], [{ id: 'studio@m', enabled: false, installPath: fx.base }]);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toMatch(/no enabled studio plugin/);
+  });
+
+  it('edits no shell file when ~/.local/bin is not on PATH', async () => {
     const fx = ready();
     const r = await setup(fx, ['--link']);
     expect(r.code).toBe(0);
     expect(r.asked).toEqual([]);
     expect(existsSync(join(fx.home, '.local'))).toBe(false);
-    expect(r.out).toContain(`ln -s '${fx.launcher}'`);
-    expect(r.out).toMatch(/does not edit shell/);
+    expect(r.out).toMatch(/does not edit shell files/);
+    expect(r.out).toContain(`node '${fx.launcher}'`);
   });
 
   it('is a usage error after a subcommand', async () => {

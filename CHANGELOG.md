@@ -20,15 +20,24 @@ merge.
   repository, else one it asks for); a Claude account for crews through the existing `account add`,
   after asking to run `claude setup-token` in another tab, label `main` unless another is typed;
   `studio` in the terminal. It ends with "run /studio:init". No token is echoed.
-- `--link`: links `~/.local/bin/studio` to the plugin's `bin/studio` after a yes, when
-  `~/.local/bin` is on `PATH`; otherwise it prints the `ln -s` line. It never edits shell files and
-  never replaces a `studio` that is not a link to Studio; it offers to replace a link to an earlier
-  Studio version, since the plugin's folder changes with each version.
+- `--link`: after a yes, writes `~/.local/bin/studio` when `~/.local/bin` is on `PATH`: a shim
+  (a regular file with the marker line `# studio-shim v1`, written through a temporary file and a
+  rename) plus the launcher's path in the owner config dir. The shim uses that path while its
+  plugin folder has no `.orphaned_at`, else finds the enabled `studio@…` plugin with
+  `claude plugin list --json` (`readFromFolder`, else `installPath`) and rewrites the cache, so it
+  survives plugin updates. Without `claude` on `PATH` it says so. It never edits shell files and
+  replaces only a file with exactly that marker.
+- The label prompt of the account step comes first and is visible; a label that starts with
+  `sk-ant` or is longer than 32 characters is refused before the hidden token prompt, and so is a
+  token typed at the visible repository prompt.
 - `/studio:init` (skill `studio:init`, only on request): runs `studio init`, explains the checks and
-  the proposal in plain words, writes with `--write` only after a yes, asks before committing, and
-  adds a first item from the owner's own words.
-- `/studio:add` (skill `studio:add`): turns work described in plain words into `studio add` with
-  type, paths and DoD, and tells the owner the id and what `missing` says.
+  the proposal in plain words, writes with `--write` only after a yes, commits the two files only
+  after an explicit yes (on the default branch it suggests a branch first), never pushes, and adds a
+  first item from the owner's own words.
+- `/studio:add` (skill `studio:add`): turns work described in plain words into an item, shows title,
+  type, component, paths and DoD and waits for a yes, then runs `studio add` with every value in
+  single quotes (`--name='value'`, the title after `--`), and tells the owner the id and what
+  `missing` says.
 
 ### Changed
 
