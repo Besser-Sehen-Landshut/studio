@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runAccount } from './account-command.js';
+import { addItem } from './add-item.js';
 import {
   type ApprovedJob,
   type Board,
@@ -39,6 +40,7 @@ import {
 } from './crew.js';
 import { listFlaky, recordFlaky } from './flaky.js';
 import { HeldError } from './held.js';
+import { runInit } from './init.js';
 import {
   activeParks,
   blockHold,
@@ -144,6 +146,9 @@ export interface CliDeps {
 const USAGE = `Usage: studio [--project <dir>] [--json] <command>
 
 Commands:
+  init [--write]           Check the prerequisites and propose .studio/ for this project; --write writes it
+  add "<title>" --dod <l>  Add a ready builder item [--type fix|feature|chore|docs|research]
+                           [--repo <owner/name>] [--path <glob>]... [--dod <line>]... [--component <id>] [--plan <file>]
   board [--component <id>] Show the board, or the items of one component
   plan                     Dry-run the planner (JSON)
   launch <id>              Start a crew session for a planned item
@@ -340,8 +345,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       for (const w of configWarnings(config)) stderr(`warning: ${w}\n`);
       return { config, board: loadBoard(project, config) };
     };
-    if (values.component !== undefined && cmd !== 'board') {
-      throw new UsageError('--component works with board only');
+    if (values.component !== undefined && cmd !== 'board' && cmd !== 'add') {
+      throw new UsageError('--component works with board and add only');
+    }
+    const addOnly = [values.type, values.repo, values.path, values.dod, values.plan];
+    if (cmd !== 'add' && addOnly.some((v) => v !== undefined)) {
+      throw new UsageError('--type, --repo, --path, --dod and --plan work with add only');
     }
     /** The item's components, as a field for JSON output; nothing when none are configured. */
     const componentField = (config: StudioConfig | undefined, item: WorkItem | undefined) =>
@@ -1227,6 +1236,40 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     };
 
     switch (cmd) {
+      case 'init': {
+        refuseCrew(deps.env);
+        if (rest.length !== 0) throw new UsageError('init takes no arguments, only --write');
+        return await runInit({
+          project,
+          ports,
+          owner,
+          env: deps.env,
+          json,
+          write: values.write === true,
+          stdout,
+        });
+      }
+
+      case 'add': {
+        refuseCrew(deps.env);
+        if (rest.length > 1)
+          throw new UsageError('add takes one title; quote it: studio add "<title>"');
+        print(
+          await addItem({
+            project,
+            title: rest[0],
+            ...(values.type === undefined ? {} : { type: values.type }),
+            ...(values.repo === undefined ? {} : { repo: values.repo }),
+            paths: values.path ?? [],
+            dod: values.dod ?? [],
+            ...(values.component === undefined ? {} : { component: values.component }),
+            ...(values.plan === undefined ? {} : { plan: values.plan }),
+            locked: (fn) => withBoardLock(stateRoot(), ports.clock.now(), fn),
+          }),
+        );
+        return 0;
+      }
+
       case 'board': {
         const { config, board } = loadAll();
         const only = values.component;
@@ -1882,6 +1925,11 @@ function parseCli(argv: string[]) {
         release: { type: 'boolean' },
         requeue: { type: 'boolean' },
         component: { type: 'string' },
+        type: { type: 'string' },
+        repo: { type: 'string' },
+        path: { type: 'string', multiple: true },
+        dod: { type: 'string', multiple: true },
+        plan: { type: 'string' },
         help: { type: 'boolean' },
       },
       allowPositionals: true,

@@ -42,7 +42,7 @@ export const safe = (text: unknown): string => String(text).replace(/[\p{Cc}\p{C
 const snake = (key: string): string => key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 
 /** snake_case keys, undefined values dropped: the shape of the yaml file. */
-function snakeKeys(value: unknown): unknown {
+export function snakeKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(snakeKeys);
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
@@ -180,6 +180,45 @@ function describeDetection(d: Detected): string[] {
   return lines;
 }
 
+export type CiFound = {
+  detection: Detected;
+  proposal: ReturnType<typeof proposeCi>;
+  /** The visibility as read; a failed read counts as public. */
+  visibility: 'public' | 'private';
+  notes: string[];
+  errors: string[];
+  warnings: string[];
+};
+
+/**
+ * What `setup ci` finds for `primary` (`owner/name`): runners, the proposed `ci:` block and the
+ * workflow lint. Reads only; `studio init` uses the same detection.
+ */
+export async function detectCi(
+  project: string,
+  primary: string,
+  ports: { gh: Gh },
+  current?: CiConfig,
+): Promise<CiFound> {
+  const [owner = '', name = ''] = primary.split('/');
+  const notes: string[] = [];
+  const vis = await readVisibility(ports.gh, primary);
+  if (vis.note) notes.push(vis.note);
+  const wf = readWorkflows(project);
+  notes.push(...wf.notes);
+  const detection = await detectRunners(owner, name, ports);
+  const proposal = proposeCi(detection, vis.visibility, current, workflowRunnerUsage(wf.files));
+  const lint = lintWorkflows(wf.files, detection, EXPECTED_GROUP);
+  return {
+    detection,
+    proposal,
+    visibility: vis.visibility,
+    notes: [...notes, ...proposal.notes],
+    errors: [...proposal.errors, ...wf.errors, ...lint.errors],
+    warnings: [...lint.warnings, ...crewPushWarnings(wf.files)],
+  };
+}
+
 export async function runSetupCi(o: SetupCiOptions): Promise<number> {
   const file = join(o.project, '.studio', 'studio.yaml');
   let text: string;
@@ -193,7 +232,6 @@ export async function runSetupCi(o: SetupCiOptions): Promise<number> {
   const doc = parseDocument(text);
   if (doc.errors.length > 0) throw new Error('.studio/studio.yaml is not valid YAML');
   const primary = assertPrimaryRepo(doc.get('primary_repo'));
-  const [owner = '', name = ''] = primary.split('/');
 
   const notes: string[] = [];
   let current: CiConfig | undefined;
@@ -202,17 +240,9 @@ export async function runSetupCi(o: SetupCiOptions): Promise<number> {
     if (parsed.success) current = parsed.data;
     else notes.push('the existing ci block is invalid and was ignored for the proposal');
   }
-  const vis = await readVisibility(o.ports.gh, primary);
-  if (vis.note) notes.push(vis.note);
-  const wf = readWorkflows(o.project);
-  notes.push(...wf.notes);
-
-  const detection = await detectRunners(owner, name, o.ports);
-  const proposal = proposeCi(detection, vis.visibility, current, workflowRunnerUsage(wf.files));
-  const lint = lintWorkflows(wf.files, detection, EXPECTED_GROUP);
-  const allNotes = [...notes, ...proposal.notes];
-  const errors = [...proposal.errors, ...wf.errors, ...lint.errors];
-  const warnings = [...lint.warnings, ...crewPushWarnings(wf.files)];
+  const found = await detectCi(o.project, primary, o.ports, current);
+  const { detection, proposal, errors, warnings } = found;
+  const allNotes = [...notes, ...found.notes];
 
   let written = false;
   let refused: string | undefined;

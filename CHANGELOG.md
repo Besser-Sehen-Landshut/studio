@@ -3,6 +3,41 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.9.0] - 2026-11-04
+
+Setting up a project meant writing `.studio/studio.yaml` and `board.yaml` by hand, running
+`setup ci` and `setup stack`, storing a crew token, installing the plugin and knowing the lead
+loop. An owner who has never seen Studio now runs one guided command in his project and gets a
+plain list of what is missing and what to do next. Not tagged yet; the maintainers tag after the
+merge.
+
+### Added
+
+- `studio init [--write]`: checks the prerequisites (git 2.38 or newer, `gh` installed and logged
+  in, the `claude` CLI, Node.js 24 or newer, a platform with Claude Code's sandbox, `origin` on
+  GitHub) with a fix for each failure, and warns, with the command to run, when the crew token, a
+  stored Claude account or the `superpowers` plugin is missing, or when `.gitignore` ignores
+  `.studio/`. It proposes `.studio/studio.yaml`: `primary_repo` and `repos` from `origin`, the
+  `ci:` block of `setup ci` (GitHub-hosted with a warning when there is no usable proposal), the
+  stacks of `setup stack`, a builder and a reviewer, `sandbox.network_allow` for GitHub and the
+  package registries of the manifests found, and one component per manifest folder below `apps`,
+  `packages`, `services`, `crates` and `libs` plus `tooling` (none for a single-package
+  repository). Without `--write` nothing is written and the exit code is 0; with `--write` it
+  writes `studio.yaml` and an empty, commented `board.yaml` only when no check failed (else exit
+  1), after loading both with Studio's own loaders, and never overwrites either file. It ends with
+  the next steps. `--json` prints the same data.
+- `studio add "<title>"`: appends a ready builder item with the next free id, `--type`, `--repo`,
+  `--path`, `--dod`, `--component` and `--plan`, checked against the board schema and the config,
+  under the board lock. It names what the planner still needs (`missing`).
+- `init` and `add` refuse under `STUDIO_ROLE=crew`.
+- README: a quick start at the top (install, `init`, `init --write`, next steps, `add`, the lead).
+  The former quick start is now "Writing the files by hand".
+
+### Changed
+
+- `setup ci` and `doctor` keep their output; their detection and checks are functions that `init`
+  calls too.
+
 ## [0.8.0] - 2026-11-04
 
 From a real run: on every pull request the lead did two things by hand that a person using Studio
