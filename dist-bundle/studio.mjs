@@ -33390,7 +33390,11 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher = {}
     dirs.tmpDir,
     dirs.homeDir,
     ...toolchain,
-    ...loginDir === void 0 ? [] : ["skills", "plugins/cache", "plugins/marketplaces"].map((p) => join18(loginDir, p))
+    ...loginDir === void 0 ? [] : ["skills", "plugins/cache", "plugins/marketplaces"].map((p) => join18(loginDir, p)),
+    // The crew's own brief, caps and rules: the guard lets them be read, and a sandboxed read
+    // (a shell command, or a file tool under the sandbox) must reach them too, or the crew
+    // starts without its task. Nothing else of the state root comes back.
+    ...["md", "caps", "rules"].map((ext) => join18(stateRoot, "briefs", `${id}.${ext}`))
   ];
   const ctxFile = join18(stateRoot, "guard", `${id}.json`);
   const protectedPaths = [

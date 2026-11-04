@@ -20,6 +20,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { addAccount, crewClaudeDir } from '../src/accounts.js';
 import type { WorkItem } from '../src/board.js';
 import { notRunHereList, plainCaps } from '../src/brief-caps.js';
+
 import { type RoleConfig, type StudioConfig, studioConfigSchema } from '../src/config.js';
 import {
   crewName,
@@ -40,6 +41,10 @@ import { type Ports, realPorts } from '../src/ports.js';
 import { reportName } from '../src/report.js';
 import { readUsage } from '../src/usage.js';
 import { prepareCrewDir } from './crew-dir.js';
+
+/** What a crew's sandbox lets it read of the state root: its own brief, caps and rules. */
+const ownBrief = (stateRoot: string, id: string) =>
+  ['md', 'caps', 'rules'].map((ext) => join(stateRoot, 'briefs', `${id}.${ext}`));
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-crew-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -600,7 +605,7 @@ describe('writeCrewSettings', () => {
   });
 
   it('enables the sandbox limited to worktree and allowlist', () => {
-    const { wt, tmpDir, homeDir, s } = setup();
+    const { wt, tmpDir, homeDir, state, s } = setup();
     expect(s.sandbox).toEqual({
       enabled: true,
       failIfUnavailable: true,
@@ -609,7 +614,8 @@ describe('writeCrewSettings', () => {
         allowWrite: [wt, tmpDir, homeDir],
         // root is already a real path, so the state base appears once
         denyRead: [FAKE_HOME, ...CRED_PATHS, root],
-        allowRead: [wt, tmpDir, homeDir],
+        // the crew's own brief, caps and rules come back last, so the crew can read its task
+        allowRead: [wt, tmpDir, homeDir, ...ownBrief(state, 'APP-12')],
       },
       network: { allowedDomains: ['github.com', 'api.github.com'], strictAllowlist: true },
     });
@@ -639,7 +645,13 @@ describe('writeCrewSettings', () => {
         XDG_CONFIG_HOME: '/xdg',
       },
     });
-    expect(s.sandbox.filesystem.allowRead).toEqual([wt, tmpDir, homeDir, realpathSync(tool)]);
+    expect(s.sandbox.filesystem.allowRead).toEqual([
+      wt,
+      tmpDir,
+      homeDir,
+      realpathSync(tool),
+      ...ownBrief(state, 'APP-12'),
+    ]);
     const deny = s.sandbox.filesystem.denyRead;
     expect(deny).toContain(FAKE_HOME);
     expect(deny).toEqual(
@@ -963,7 +975,7 @@ describe('launchCrew', () => {
       expect.arrayContaining([join(xdgLink, 'studio'), join(realXdg, 'studio')]),
     );
     const own = ['clones', 'tmp', 'homes'].map((d) => join(state, d, 'APP-12'));
-    expect(fs.allowRead).toEqual([own[0], own[1], own[2]]);
+    expect(fs.allowRead).toEqual([own[0], own[1], own[2], ...ownBrief(state, 'APP-12')]);
     expect(fs.allowWrite).toEqual([own[0], own[1], own[2]]);
   });
 
@@ -1297,7 +1309,7 @@ describe('toolchain paths at launch (owner config)', () => {
     ownerConfig(f.home, [viaLink]);
     await launchCrew(f.project, item, config, fakePorts([]), f.launcher);
     const s = JSON.parse(readFileSync(join(f.state, 'settings', 'APP-12.json'), 'utf8'));
-    expect(s.sandbox.filesystem.allowRead.slice(3)).toEqual([realpathSync(real)]);
+    expect(s.sandbox.filesystem.allowRead.slice(3, 4)).toEqual([realpathSync(real)]);
     expect(s.sandbox.filesystem.allowRead).not.toContain(viaLink);
   });
 

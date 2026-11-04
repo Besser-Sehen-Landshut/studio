@@ -3,6 +3,19 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.7.1] - 2026-11-04
+
+From a real run: a builder crew stopped at once, reporting "Operation not permitted" when it
+tried to read its own brief. The guard allows a crew to read its brief, caps and rules, but the
+sandbox's `allowRead` list let back only the clone, the crew's tmp dir, its HOME and the
+toolchain. The whole state base is denied, so a sandboxed read of the brief failed. Not tagged
+yet; the maintainers tag after the merge.
+
+### Fixed
+
+- `allowRead` also holds the crew's own `briefs/<id>.md`, `briefs/<id>.caps` and
+  `briefs/<id>.rules`. Nothing else of the state root comes back.
+
 ## [0.7.0] - 2026-11-04
 
 Components: a product often has several parts that are developed and released on their own (an
