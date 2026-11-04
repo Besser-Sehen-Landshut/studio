@@ -3,6 +3,14 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.9.1] - 2026-11-04
+
+### Changed
+
+- The lead skill turns a request the owner makes in plain words into `studio add`, shows the item and
+  ticks. Before, it had no step for this, and the only documented way to add work was editing
+  `board.yaml` by hand. Not tagged yet; the maintainers tag after the merge.
+
 ## [0.9.0] - 2026-11-04
 
 Setting up a project meant writing `.studio/studio.yaml` and `board.yaml` by hand, running
