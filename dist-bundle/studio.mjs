@@ -32595,6 +32595,14 @@ var PULL_FLAGS = /* @__PURE__ */ new Set([
   "--no-stat"
 ]);
 
+// src/held.ts
+var HeldError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "HeldError";
+  }
+};
+
 // src/owner-state.ts
 import { lstatSync as lstatSync11, renameSync as renameSync8 } from "node:fs";
 import { basename as basename3, dirname as dirname6, join as join14 } from "node:path";
@@ -33742,7 +33750,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher, held
     now: ports.clock.now(),
     heartbeatStaleMs: LAUNCH_LOCK_STALE_MS
   });
-  if (!lock) throw new Error("another launch is in progress (launch.lock); try again");
+  if (!lock) throw new HeldError("another launch is in progress (launch.lock); try again");
   held2.lock = lock;
   const recheck = async () => {
     if (!lock.owned()) throw new Error("the launch lock was lost; refusing to launch, try again");
@@ -34289,7 +34297,7 @@ function acquireQueueRunLock(stateRoot, now, log) {
     now,
     heartbeatStaleMs: RUN_LOCK_HEARTBEAT_STALE_MS
   });
-  if (!lock) throw new Error(`queue already running (lock ${RUN_LOCK} in the state root)`);
+  if (!lock) throw new HeldError(`queue already running (lock ${RUN_LOCK} in the state root)`);
   if (lock.broke !== void 0) {
     log(`note: broke a stale queue lock (${lock.broke}); a previous run did not finish`);
   }
@@ -35410,6 +35418,7 @@ Commands:
   status                   Crew sessions and their board status
   overview                 Owner only, in a terminal: every project of this owner, read only
   collect <id>             Read a crew report and move the item
+  tick                     One lead heartbeat: collect, launch, queue and merge what is due (JSON)
   queue add <repo>#<pr>    Put a reviewed PR into the merge queue
   queue run                Merge the queued PRs, one at a time
   state                    Refresh state.json in the state root
@@ -35468,6 +35477,48 @@ function findItem(board, id) {
 }
 function withItem(board, id, fn) {
   return { ...board, items: board.items.map((i2) => i2.id === id ? fn(i2) : i2) };
+}
+function isOpenReviewOf(item, target) {
+  if (item.type !== "review" || item.status === "merged" || item.status === "dropped") return false;
+  const t = reviewTarget(item);
+  return t !== void 0 && `${t.repo}#${t.pr}` === target;
+}
+function latestReview(board, target) {
+  const at = (i2) => Date.parse(i2.history.at(-1)?.at ?? "") || 0;
+  return board.items.filter(
+    (i2) => i2.type === "review" && i2.status === "merged" && (i2.notes ?? []).includes(`reviews: ${target}`) && (i2.notes ?? []).some((n2) => n2.startsWith("verdict: "))
+  ).reduce(
+    (last, i2) => last === void 0 || at(i2) >= at(last) ? i2 : last,
+    void 0
+  );
+}
+var TICK_LOCK = "tick.lock";
+var TICK_LOCK_STALE_MS = 15 * 6e4;
+function withReviewItem(board, builder, pr) {
+  const target = `${builder.repo}#${pr}`;
+  if (board.items.some((i2) => isOpenReviewOf(i2, target))) return { board };
+  const prefix = builder.id.slice(0, builder.id.indexOf("-") + 1);
+  const taken = board.items.filter((i2) => i2.id.startsWith(prefix)).map((i2) => Number(i2.id.slice(prefix.length)));
+  const id = `${prefix}${Math.max(0, ...taken) + 1}`;
+  const review = {
+    id,
+    title: `Review of ${builder.id} (PR #${pr})`,
+    type: "review",
+    role: "reviewer",
+    repo: builder.repo,
+    size: builder.size,
+    priority: builder.priority,
+    status: "ready",
+    paths: [...builder.paths],
+    touches: [],
+    ...builder.component === void 0 ? {} : { component: builder.component },
+    ...builder.components === void 0 ? {} : { components: [...builder.components] },
+    dependsOn: [],
+    dod: [...builder.dod],
+    notes: [`review ${target}`],
+    history: []
+  };
+  return { board: { ...board, items: [...board.items, review] }, id };
 }
 function runningPerRole(board) {
   const running = {};
@@ -35598,6 +35649,655 @@ async function runCli(argv, deps) {
         )
       };
     };
+    const queueAdd = async (arg) => {
+      const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/.exec(arg ?? "");
+      if (!m) throw new UsageError("queue add needs <repo>#<pr>, e.g. org/app#12");
+      const repo = m[1];
+      const pr = Number(m[2]);
+      const { config: config2, board } = loadAll();
+      refuseNativeQueue(config2);
+      if (!config2.repos.includes(repo)) throw new Error(`repository ${repo} is not configured`);
+      const item = board.items.find((i2) => i2.pr === pr && i2.repo === repo);
+      if (!item) throw new Error(`no board item has PR ${repo}#${pr}`);
+      if (item.status !== "in_review") {
+        throw new Error(`${item.id} is ${item.status}, only in_review items can be queued`);
+      }
+      const view = await viewPr({ pr, repo }, ports.gh);
+      if (typeof view === "string") throw new Error(view);
+      const problem = await approvalProblem(
+        ports,
+        approvalCheckout(project, config2, repo),
+        { repo, pr },
+        { head: item.approvedHead, base: item.approvedBase },
+        view.head
+      );
+      if (problem !== void 0) throw new Error(problem);
+      const root = await boundStateRoot();
+      const pending = await withBoardLock(stateRoot(), ports.clock.now(), () => {
+        const fresh = loadBoard(project);
+        const now = findItem(fresh, item.id);
+        if (now.status !== "in_review" || now.approvedHead !== item.approvedHead) {
+          throw new Error(`${item.id} changed while it was checked; try again`);
+        }
+        const open2 = openReview(stateRoot(), fresh, `${repo}#${pr}`);
+        if (open2 !== void 0) throw new Error(openReviewLine(open2, `${repo}#${pr}`));
+        const added = enqueue(root, { pr, repo, item: item.id });
+        saveBoard(project, transition(fresh, item.id, "queued", BY, ports.clock.now()));
+        return added;
+      });
+      return { queued: item.id, pr, repo, pending };
+    };
+    const queueRun = async () => {
+      const { config: config2 } = loadAll();
+      refuseNativeQueue(config2);
+      const root = await boundStateRoot();
+      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname10(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
+      const blockedNow = queueHold();
+      if (blockedNow !== void 0) throw new HeldError(blockedNow);
+      let heldLine;
+      const hold = () => {
+        const line2 = queueHold();
+        if (line2 !== void 0) heldLine = line2;
+        return line2;
+      };
+      const log = (m) => stderr(`${m}
+`);
+      const lock = acquireQueueRunLock(root, ports.clock.now(), log);
+      const removeSignals = installSignalRelease(lock);
+      const beat = () => lock.heartbeat(ports.clock.now());
+      const runPorts = {
+        ...ports,
+        clock: {
+          now: () => ports.clock.now(),
+          sleep: async (ms) => {
+            beat();
+            await ports.clock.sleep(ms);
+            beat();
+          }
+        }
+      };
+      try {
+        const state = loadQueue(root);
+        await reconcileQueued(project, root, state, ports, stderr);
+        const before = state.done.length;
+        await runQueue(
+          state,
+          config2,
+          runPorts,
+          // The runner owns `current` and `done`; `pending` stays whatever is on disk.
+          (q) => {
+            beat();
+            updateQueue(root, (disk) => {
+              disk.current = q.current;
+              disk.done = q.done;
+            });
+          },
+          {
+            stateRoot: root,
+            log,
+            hold,
+            mergeAllowed: (entry, head) => boardBlocksMerge(project, root, config2, entry, head, ports),
+            takeNext: () => takeNextPending(root),
+            onDone: (d) => applyQueueResults(project, root, [d], ports, stderr)
+          }
+        );
+        const finished7 = state.done.slice(before);
+        return {
+          ...heldLine === void 0 ? {} : { held: heldLine },
+          merged: finished7.filter((d) => d.result === "merged").length,
+          failed: finished7.filter((d) => d.result === "failed").length,
+          done: finished7
+        };
+      } finally {
+        removeSignals();
+        lock.release();
+      }
+    };
+    const launch = async (id) => {
+      if (await reconcile()) {
+        throw new HeldError(
+          "another Studio process is reconciling account blocks; refusing to launch, try again"
+        );
+      }
+      const { config: config2, board } = loadAll();
+      const item = findItem(board, id);
+      if (item.status !== "ready") {
+        throw new Error(`${item.id} is ${item.status}, only ready items can be launched`);
+      }
+      const { plan } = await planNow(config2, board);
+      const launchable = plan.assign.some((i2) => i2.id === item.id) || plan.deferred.some((d) => d.id === item.id && d.reason === ONE_BUILD_PER_PLAN);
+      if (!launchable) {
+        const why = plan.blocked.find((b) => b.id === item.id)?.reason ?? plan.deferred.find((d) => d.id === item.id)?.reason ?? "not in the current plan";
+        throw new HeldError(`${item.id} is not in the current plan: ${why}`);
+      }
+      const res = await launchCrew(project, item, config2, ports, owner);
+      await withBoardLock(stateRoot(), ports.clock.now(), () => {
+        const fresh = loadBoard(project);
+        if (findItem(fresh, item.id).status !== "ready") {
+          throw new Error(`${item.id} changed while launching; crew ${res.name} is running`);
+        }
+        const moved = withItem(
+          transition(fresh, item.id, "assigned", BY, ports.clock.now()),
+          item.id,
+          (i2) => ({ ...i2, crew: res.name })
+        );
+        saveBoard(project, moved);
+      });
+      return res;
+    };
+    const collect = async (id) => {
+      const { board } = loadAll();
+      const item = findItem(board, id);
+      if (item.status !== "assigned" && item.status !== "in_progress") {
+        throw new Error(
+          `${item.id} is ${item.status}, only assigned or in_progress items can be collected`
+        );
+      }
+      const record2 = readCrewRecords(stateRoot())[item.id];
+      let notBefore;
+      if (record2 !== void 0) {
+        if (!Number.isInteger(record2.pid) || record2.pid <= 0) {
+          throw new Error(`crew record for ${item.id} has no valid pid`);
+        }
+        const hold = await crewHold(record2, ports);
+        if (hold === "unverified") throw new Error(unverifiedRefusal(record2));
+        if (hold === "running") {
+          throw new Error(
+            `crew ${record2.name} is still running (pid ${record2.pid}); collect after it exited, or stop it first`
+          );
+        }
+        if (await crewProcess(record2, ports) === "unknown") {
+          stderr(`warning: ${unverifiedHandgrip(record2)}
+`);
+        }
+        notBefore = new Date(record2.startedAt);
+        if (Number.isNaN(notBefore.getTime())) {
+          throw new Error(`crew record for ${item.id} has no valid startedAt`);
+        }
+      }
+      const clone2 = join25(stateRoot(), "clones", item.id);
+      const fileName = reportName(stateRoot(), item.id);
+      if (fileName === void 0) {
+        throw new ReportError(
+          `no report name was drawn for ${item.id}: relaunch it, nothing moved`
+        );
+      }
+      let report = readReport(clone2, item.id, item, { notBefore, fileName });
+      const reviewCaps = () => {
+        try {
+          return checkReviewCaps(readCrewCaps(stateRoot(), item.id), report);
+        } catch (e) {
+          throw new ReportError(e.message);
+        }
+      };
+      const reviewDone = item.type === "review" && report.status === "done" ? reviewCaps() : { skipped: [], target: void 0, notRunHere: void 0 };
+      let approvedJobs = [];
+      let covered = [];
+      if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0) {
+        const m = /^(.+)#(\d+)$/.exec(reviewDone.target);
+        const info = await prInfo(ports, m[1], Number(m[2]));
+        checkReportHead(report, info.head);
+        if (report.verdict === "approve") {
+          const checks = await readChecks({ repo: m[1], pr: Number(m[2]) }, ports.gh);
+          if (checks.kind !== "pass") {
+            const why = checks.kind === "pending" ? "still running" : checks.reason ?? checks.kind;
+            return {
+              kind: "waiting",
+              line: `the approval counts only with green checks (${why}); collect again once they pass, nothing moved`
+            };
+          }
+          if (reviewDone.notRunHere !== void 0) {
+            const config2 = loadConfig(project);
+            const gate = await verifyNotRunHereJobs({
+              git: ports.git,
+              checkout: approvalCheckout(project, config2, m[1]),
+              baseOid: info.baseOid,
+              headOid: info.head,
+              ciItem: reviewDone.ciItem === true,
+              commands: reviewDone.notRunHere,
+              entries: report.notRunHereJobs,
+              checks: checks.checks
+            });
+            if (!gate.ok) {
+              const note = `approval refused: not_run_here entry ${gate.entry}: ${gate.why}`;
+              await withBoardLock(stateRoot(), ports.clock.now(), () => {
+                const fresh = loadBoard(project);
+                if (findItem(fresh, item.id).status !== item.status) {
+                  throw new Error(`${item.id} changed while it was collected; nothing moved`);
+                }
+                let next2 = transition(fresh, item.id, "blocked", BY, ports.clock.now());
+                next2 = withItem(next2, item.id, (i2) => ({
+                  ...i2,
+                  notes: [...i2.notes ?? [], note]
+                }));
+                saveBoard(project, next2);
+              });
+              return {
+                kind: "refused",
+                line: `${item.id}: ${note}; no approval, ${item.id} is blocked for the lead`
+              };
+            }
+            approvedJobs = gate.jobs;
+            covered = gate.covered;
+          }
+        }
+      }
+      let branch = `studio/${item.id}`;
+      if (report.status === "done" && report.pr === void 0 && report.prTitle !== void 0 && !PR_OPTIONAL.includes(item.type)) {
+        const config2 = loadConfig(project);
+        const token = crewTokenFor(config2, owner);
+        const unchanged = () => {
+          const now2 = findItem(loadBoard(project), item.id);
+          if (now2.status !== item.status || now2.branch !== item.branch) {
+            throw new Error(
+              `${item.id} changed while waiting for CI capacity (now ${now2.status}); no pull request was opened`
+            );
+          }
+        };
+        const opened = await openCrewPr(
+          ports,
+          item,
+          report.prTitle,
+          report.body,
+          report.notRunHere,
+          token,
+          () => readCapacityTwice(config2, ports),
+          unchanged
+        );
+        if ("held" in opened) {
+          const note = prHeldNote(opened.held, config2);
+          await withBoardLock(stateRoot(), ports.clock.now(), () => {
+            const fresh = loadBoard(project);
+            if (findItem(fresh, item.id).status !== item.status) {
+              throw new Error(`${item.id} changed while it was collected; nothing moved`);
+            }
+            const held2 = withItem(fresh, item.id, (i2) => ({
+              ...i2,
+              notes: [...(i2.notes ?? []).filter((n2) => !n2.startsWith(PR_HELD)), note]
+            }));
+            saveBoard(project, held2);
+          });
+          return {
+            kind: "held",
+            line: `${item.id}: ${note}; the pull request was not opened and branch studio/${item.id} stays as it is. Run studio collect ${item.id} again once CI has room.`
+          };
+        }
+        report = { ...report, pr: opened.pr };
+      }
+      if (report.pr !== void 0) {
+        const holder = board.items.find(
+          (i2) => i2.id !== item.id && i2.repo === item.repo && i2.pr === report.pr
+        );
+        if (holder) throw new Error(`PR ${report.pr} is already held by ${holder.id}`);
+        const info = await prInfo(ports, item.repo, report.pr);
+        if (info.branch !== `studio/${item.id}`) {
+          throw new Error(
+            `PR ${report.pr} is on branch ${info.branch}, expected studio/${item.id}`
+          );
+        }
+        branch = info.branch;
+        checkReportHead(report, info.head);
+      } else if (report.status === "done" && !PR_OPTIONAL.includes(item.type)) {
+        throw new ReportError(`done report for ${item.id} names no pr`);
+      }
+      const now = ports.clock.now();
+      let review;
+      const { next, fixLimit, supersededBy } = await withBoardLock(stateRoot(), now, () => {
+        const fresh = loadBoard(project);
+        if (findItem(fresh, item.id).status !== item.status) {
+          throw new Error(`${item.id} changed while it was collected; nothing moved`);
+        }
+        const supersededBy2 = item.type === "review" && report.status === "done" && reviewDone.target !== void 0 ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot())) : void 0;
+        let next2 = fresh;
+        if (report.status === "done") {
+          if (item.status === "assigned") next2 = transition(next2, item.id, "in_progress", BY, now);
+          next2 = transition(next2, item.id, "in_review", BY, now);
+          if (report.pr !== void 0) {
+            const pr = report.pr;
+            next2 = withItem(next2, item.id, (i2) => {
+              const notes = (i2.notes ?? []).filter((n2) => !n2.startsWith(PR_HELD));
+              const { notes: _n, notRunHere: _r, ...rest2 } = i2;
+              return {
+                ...rest2,
+                ...notes.length > 0 ? { notes } : {},
+                ...report.notRunHere.length > 0 ? { notRunHere: report.notRunHere } : {},
+                pr,
+                branch
+              };
+            });
+            if (!PR_OPTIONAL.includes(item.type)) {
+              const added = withReviewItem(next2, findItem(next2, item.id), pr);
+              next2 = added.board;
+              review = added.id;
+            }
+          } else {
+            next2 = transition(next2, item.id, "merged", BY, now);
+            const result = [
+              ...supersededBy2 !== void 0 ? [`superseded by ${supersededBy2}`] : report.verdict ? [`verdict: ${report.verdict}`] : [],
+              ...report.reviews ? [`reviews: ${report.reviews}`] : []
+            ];
+            if (result.length > 0) {
+              next2 = withItem(next2, item.id, (i2) => ({
+                ...i2,
+                notes: [...i2.notes ?? [], ...capNotes(result)]
+              }));
+            }
+          }
+        } else {
+          next2 = transition(next2, item.id, "blocked", BY, now);
+          const notes = report.status === "failed" ? ["crew run failed", ...report.questions.map((q) => `question: ${q}`)] : report.questions.map((q) => `question: ${q}`);
+          next2 = withItem(next2, item.id, (i2) => ({
+            ...i2,
+            notes: [
+              ...i2.notes ?? [],
+              ...capNotes(notes.length ? notes : ["crew reported blocked"])
+            ]
+          }));
+        }
+        if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0 && supersededBy2 === void 0) {
+          const reviewed = next2.items.find(
+            (i2) => `${i2.repo}#${i2.pr}` === reviewDone.target && i2.type !== "review"
+          );
+          if (reviewed !== void 0) {
+            const approvedBase = readCrewCaps(stateRoot(), item.id)?.baseRefName;
+            next2 = withItem(
+              next2,
+              reviewed.id,
+              ({ approvedHead: _h, approvedBase: _b, approvedJobs: _j, ...i2 }) => report.verdict === "approve" ? {
+                ...i2,
+                approvedHead: report.headSha,
+                approvedBase,
+                ...approvedJobs.length === 0 ? {} : { approvedJobs }
+              } : i2
+            );
+          }
+          if (report.verdict === "approve") {
+            const target = reviewDone.target;
+            for (const older of next2.items) {
+              if (older.id === item.id || older.type !== "review" || ["assigned", "in_progress", "merged", "dropped"].includes(older.status)) {
+                continue;
+              }
+              const note = reviewTarget(older);
+              const named = note !== void 0 && `${note.repo}#${note.pr}` === target;
+              if (!named && readCrewCaps(stateRoot(), older.id)?.reviewsTarget !== target) continue;
+              next2 = transition(next2, older.id, "dropped", BY, now);
+              next2 = withItem(next2, older.id, (i2) => ({
+                ...i2,
+                notes: [...i2.notes ?? [], `superseded by ${item.id}, which approved ${target}`]
+              }));
+            }
+          }
+        }
+        const limitTarget = report.status === "done" && report.verdict === "changes_requested" && supersededBy2 === void 0 ? reviewDone.target : void 0;
+        let fixLimit2 = false;
+        if (limitTarget !== void 0) {
+          const rounds = reviewRounds(next2, limitTarget);
+          fixLimit2 = rounds >= MAX_REVIEW_ROUNDS || (report.findingAttempts ?? 0) >= MAX_FIX_ATTEMPTS;
+          const builder = next2.items.find(
+            (i2) => `${i2.repo}#${i2.pr}` === limitTarget && i2.type !== "review"
+          );
+          if (fixLimit2 && builder && builder.status !== "merged" && builder.status !== "dropped") {
+            if (builder.status !== "blocked") {
+              next2 = transition(next2, builder.id, "blocked", BY, now);
+            }
+            next2 = withItem(next2, builder.id, (i2) => ({
+              ...i2,
+              notes: [
+                ...i2.notes ?? [],
+                `fix limit reached: ${rounds} review rounds, attempts on one finding ${report.findingAttempts ?? "unknown"}`
+              ]
+            }));
+          }
+        }
+        saveBoard(project, next2);
+        return { next: next2, fixLimit: fixLimit2, supersededBy: supersededBy2 };
+      });
+      let lessonsProposed = 0;
+      try {
+        lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now);
+      } catch (e) {
+        stderr(`error: lessons: ${e.message.replace(new RegExp("\\p{Cc}", "gu"), " ")}
+`);
+      }
+      const out = {
+        item: item.id,
+        report: report.status,
+        status: findItem(next, item.id).status,
+        ...report.pr === void 0 ? {} : { pr: report.pr },
+        ...review === void 0 ? {} : { review },
+        ...report.verdict === void 0 ? {} : { verdict: report.verdict },
+        ...report.reviews === void 0 ? {} : { reviews: report.reviews },
+        ...reviewDone.skipped.length === 0 ? {} : { skipped: reviewDone.skipped },
+        ...supersededBy === void 0 ? {} : { supersededBy },
+        ...fixLimit ? { fixLimit } : {},
+        ...lessonsProposed > 0 ? { lessonsProposed } : {},
+        // What CI must run because the sandbox could not: only the count and the services, which
+        // the schema fixes; the commands are crew text and stay on the item and in the PR body.
+        ...report.status === "done" && report.notRunHere.length > 0 ? {
+          notRunHere: {
+            count: report.notRunHere.length,
+            missing: [...new Set(report.notRunHere.map((x) => x.missing))]
+          }
+        } : {},
+        // Each approved job with the reviewer's reason why it covers its command: reviewer text,
+        // one plain line each, data for the lead. The gate proved only that the job ran and passed.
+        ...covered.length === 0 || supersededBy !== void 0 ? {} : { notRunHereJobs: covered }
+      };
+      return { kind: "moved", out };
+    };
+    const tick = async () => {
+      const out = {
+        collected: [],
+        reviews: [],
+        launched: [],
+        queued: [],
+        merged: [],
+        held: [],
+        needsLead: [],
+        errors: []
+      };
+      const why = (e) => e.message.replace(new RegExp("\\p{Cc}", "gu"), " ");
+      const lead = (item, reason) => {
+        if (!out.needsLead.some((n2) => n2.item === item && n2.reason === reason)) {
+          out.needsLead.push({ item, reason });
+        }
+      };
+      let root;
+      let lock;
+      try {
+        root = await boundStateRoot();
+        lock = acquireStateLock(root, TICK_LOCK, {
+          now: ports.clock.now(),
+          heartbeatStaleMs: TICK_LOCK_STALE_MS
+        });
+      } catch (e) {
+        out.errors.push({ phase: "start", error: why(e) });
+        return out;
+      }
+      if (!lock) {
+        out.held.push({ item: "tick", reason: "another tick is running" });
+        return out;
+      }
+      const held2 = lock;
+      const beat = () => held2.heartbeat(ports.clock.now());
+      const phase = async (name, body) => {
+        if (!held2.owned()) {
+          out.errors.push({ phase: name, error: "the tick lock was lost; the tick stopped here" });
+          return false;
+        }
+        beat();
+        try {
+          await body();
+        } catch (e) {
+          out.errors.push({ phase: name, error: why(e) });
+        }
+        return true;
+      };
+      const fresh = /* @__PURE__ */ new Set();
+      const collectEnded = async () => {
+        const records = readCrewRecords(root);
+        for (const item of loadAll().board.items) {
+          if (item.status !== "assigned" && item.status !== "in_progress") continue;
+          const rec = records[item.id];
+          const heldPr = (item.notes ?? []).some((n2) => n2.startsWith(PR_HELD));
+          if (rec === void 0 && !heldPr) continue;
+          beat();
+          try {
+            if (rec !== void 0) {
+              const hold = await crewHold(rec, ports);
+              if (hold === "running") continue;
+              if (hold === "unverified") {
+                lead(item.id, unverifiedRefusal(rec));
+                continue;
+              }
+            }
+            const r = await collect(item.id);
+            if (r.kind === "moved") {
+              out.collected.push(r.out);
+              if (typeof r.out.review === "string") fresh.add(r.out.review);
+            } else if (r.kind !== "refused") {
+              out.held.push({ item: item.id, reason: r.line });
+              if (r.line.includes(CI_READ_FAILED))
+                out.errors.push({ item: item.id, error: r.line });
+            }
+          } catch (e) {
+            if (e instanceof ReportError) {
+              lead(item.id, `${why(e)}; studio stop ${item.id} --requeue for its one relaunch`);
+            } else out.errors.push({ item: item.id, error: why(e) });
+          }
+        }
+      };
+      const reviewMissing = async () => {
+        const board = loadBoard(project);
+        for (const b of board.items) {
+          if (PR_OPTIONAL.includes(b.type) || b.status !== "in_review" || b.pr === void 0) {
+            continue;
+          }
+          const target = `${b.repo}#${b.pr}`;
+          if (b.approvedHead !== void 0 || board.items.some((i2) => isOpenReviewOf(i2, target))) {
+            continue;
+          }
+          if (latestReview(board, target)?.notes?.includes("verdict: changes_requested")) continue;
+          beat();
+          try {
+            const id = await withBoardLock(root, ports.clock.now(), () => {
+              const now = loadBoard(project);
+              const builder = findItem(now, b.id);
+              if (builder.status !== "in_review" || builder.pr !== b.pr) return void 0;
+              if (builder.approvedHead !== void 0) return void 0;
+              const added = withReviewItem(now, builder, b.pr);
+              if (added.id !== void 0) saveBoard(project, added.board);
+              return added.id;
+            });
+            if (id !== void 0) out.reviews.push({ item: b.id, review: id });
+          } catch (e) {
+            out.errors.push({ item: b.id, error: why(e) });
+          }
+        }
+      };
+      const launchPlanned = async () => {
+        const { config: config2, board } = loadAll();
+        const { plan } = await planNow(config2, board);
+        for (const a2 of plan.assign) {
+          if (fresh.has(a2.id)) {
+            out.held.push({ item: a2.id, reason: "pull request opened in this tick: next tick" });
+            continue;
+          }
+          beat();
+          try {
+            const res = await launch(a2.id);
+            out.launched.push({ item: a2.id, name: res.name, pid: res.pid });
+          } catch (e) {
+            if (e instanceof HeldError) out.held.push({ item: a2.id, reason: why(e) });
+            else out.errors.push({ item: a2.id, error: why(e) });
+          }
+        }
+        for (const d of plan.deferred) out.held.push({ item: d.id, reason: d.reason });
+        for (const b of plan.blocked) {
+          if (b.reason.startsWith("waiting on ")) out.held.push({ item: b.id, reason: b.reason });
+          else lead(b.id, b.reason);
+        }
+      };
+      const queueApproved = async () => {
+        const board = loadBoard(project);
+        for (const b of board.items) {
+          if (b.type === "review" || b.status !== "in_review" || b.pr === void 0) continue;
+          const target = `${b.repo}#${b.pr}`;
+          const latest = latestReview(board, target);
+          if (b.approvedHead === void 0) {
+            if (latest?.notes?.includes("verdict: changes_requested") && !board.items.some((i2) => isOpenReviewOf(i2, target))) {
+              lead(
+                b.id,
+                `changes requested by ${latest.id}: blocked \u2192 ready with the findings, then the fix round`
+              );
+            }
+            continue;
+          }
+          const failedAt = b.history.findLast(
+            (h2) => h2.from === "queued" && h2.to === "in_review"
+          )?.at;
+          const approvedAt = latest?.history.at(-1)?.at;
+          if (failedAt !== void 0 && (approvedAt === void 0 || Date.parse(failedAt) >= Date.parse(approvedAt))) {
+            const note = (b.notes ?? []).findLast((n2) => n2.startsWith("merge failed:"));
+            lead(
+              b.id,
+              `${note ?? "merge failed"}; fix it through a crew and a review, or re-run the same SHA`
+            );
+            continue;
+          }
+          beat();
+          try {
+            const q = await queueAdd(target);
+            out.queued.push({ item: q.queued, pr: q.pr, repo: q.repo });
+          } catch (e) {
+            lead(b.id, why(e));
+          }
+        }
+      };
+      const sweep = async () => {
+        for (const i2 of loadBoard(project).items) {
+          if (i2.status === "blocked") lead(i2.id, `blocked: ${(i2.notes ?? []).at(-1) ?? "no note"}`);
+        }
+      };
+      try {
+        for (const [name, body] of [
+          ["collect", collectEnded],
+          ["review", reviewMissing],
+          ["launch", launchPlanned],
+          ["queue add", queueApproved],
+          ["sweep", sweep]
+        ]) {
+          if (!await phase(name, body)) return out;
+        }
+      } finally {
+        held2.release();
+      }
+      try {
+        const q = loadQueue(root);
+        const inQueue = (i2) => [...q.pending, ...q.current === void 0 ? [] : [q.current]].some(
+          (e) => e.item === void 0 ? e.repo === i2.repo && e.pr === i2.pr : e.item === i2.id
+        );
+        const stray = loadBoard(project).items.some((i2) => i2.status === "queued" && !inQueue(i2));
+        if (q.pending.length > 0 || q.current !== void 0 || stray) {
+          const r = await queueRun();
+          for (const d of r.done) {
+            if (d.result === "merged") {
+              out.merged.push({
+                ...d.item === void 0 ? {} : { item: d.item },
+                pr: d.pr,
+                repo: d.repo
+              });
+            } else
+              lead(d.item ?? `${d.repo}#${d.pr}`, `merge failed: ${d.reason ?? "unknown reason"}`);
+          }
+          if (r.held !== void 0) out.held.push({ item: "queue", reason: r.held });
+        }
+      } catch (e) {
+        if (e instanceof HeldError) out.held.push({ item: "queue", reason: why(e) });
+        else out.errors.push({ phase: "queue run", error: why(e) });
+      }
+      return out;
+    };
     switch (cmd) {
       case "board": {
         const { config: config2, board } = loadAll();
@@ -35663,37 +36363,15 @@ async function runCli(argv, deps) {
         return 0;
       }
       case "launch": {
-        if (await reconcile()) {
-          throw new Error(
-            "another Studio process is reconciling account blocks; refusing to launch, try again"
-          );
-        }
-        const { config: config2, board } = loadAll();
-        const item = findItem(board, rest[0]);
-        if (item.status !== "ready") {
-          throw new Error(`${item.id} is ${item.status}, only ready items can be launched`);
-        }
-        const { plan } = await planNow(config2, board);
-        const launchable = plan.assign.some((i2) => i2.id === item.id) || plan.deferred.some((d) => d.id === item.id && d.reason === ONE_BUILD_PER_PLAN);
-        if (!launchable) {
-          const why = plan.blocked.find((b) => b.id === item.id)?.reason ?? plan.deferred.find((d) => d.id === item.id)?.reason ?? "not in the current plan";
-          throw new Error(`${item.id} is not in the current plan: ${why}`);
-        }
-        const res = await launchCrew(project, item, config2, ports, owner);
-        await withBoardLock(stateRoot(), ports.clock.now(), () => {
-          const fresh = loadBoard(project);
-          if (findItem(fresh, item.id).status !== "ready") {
-            throw new Error(`${item.id} changed while launching; crew ${res.name} is running`);
-          }
-          const moved = withItem(
-            transition(fresh, item.id, "assigned", BY, ports.clock.now()),
-            item.id,
-            (i2) => ({ ...i2, crew: res.name })
-          );
-          saveBoard(project, moved);
-        });
-        print(res);
+        print(await launch(rest[0]));
         return 0;
+      }
+      case "tick": {
+        refuseCrew(deps.env);
+        if (rest.length > 0) throw new UsageError("tick takes no arguments");
+        const out = await tick();
+        print(out);
+        return out.errors.length === 0 ? 0 : 1;
       }
       case "status": {
         await reconcile();
@@ -35760,398 +36438,26 @@ async function runCli(argv, deps) {
         return 0;
       }
       case "collect": {
-        const { board } = loadAll();
-        const item = findItem(board, rest[0]);
-        if (item.status !== "assigned" && item.status !== "in_progress") {
-          throw new Error(
-            `${item.id} is ${item.status}, only assigned or in_progress items can be collected`
-          );
+        const r = await collect(rest[0]);
+        if (r.kind === "moved") {
+          print(r.out);
+          return 0;
         }
-        const record2 = readCrewRecords(stateRoot())[item.id];
-        let notBefore;
-        if (record2 !== void 0) {
-          if (!Number.isInteger(record2.pid) || record2.pid <= 0) {
-            throw new Error(`crew record for ${item.id} has no valid pid`);
-          }
-          const hold = await crewHold(record2, ports);
-          if (hold === "unverified") throw new Error(unverifiedRefusal(record2));
-          if (hold === "running") {
-            throw new Error(
-              `crew ${record2.name} is still running (pid ${record2.pid}); collect after it exited, or stop it first`
-            );
-          }
-          if (await crewProcess(record2, ports) === "unknown") {
-            stderr(`warning: ${unverifiedHandgrip(record2)}
+        stderr(r.kind === "waiting" ? `studio: ${r.line}
+` : `${r.line}
 `);
-          }
-          notBefore = new Date(record2.startedAt);
-          if (Number.isNaN(notBefore.getTime())) {
-            throw new Error(`crew record for ${item.id} has no valid startedAt`);
-          }
-        }
-        const clone2 = join25(stateRoot(), "clones", item.id);
-        const fileName = reportName(stateRoot(), item.id);
-        if (fileName === void 0) {
-          throw new Error(`no report name was drawn for ${item.id}: relaunch it, nothing moved`);
-        }
-        let report = readReport(clone2, item.id, item, { notBefore, fileName });
-        const reviewDone = item.type === "review" && report.status === "done" ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report) : { skipped: [], target: void 0, notRunHere: void 0 };
-        let approvedJobs = [];
-        let covered = [];
-        if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0) {
-          const m = /^(.+)#(\d+)$/.exec(reviewDone.target);
-          const info = await prInfo(ports, m[1], Number(m[2]));
-          checkReportHead(report, info.head);
-          if (report.verdict === "approve") {
-            const checks = await readChecks({ repo: m[1], pr: Number(m[2]) }, ports.gh);
-            if (checks.kind !== "pass") {
-              const why = checks.kind === "pending" ? "still running" : checks.reason ?? checks.kind;
-              throw new Error(
-                `the approval counts only with green checks (${why}); collect again once they pass, nothing moved`
-              );
-            }
-            if (reviewDone.notRunHere !== void 0) {
-              const config2 = loadConfig(project);
-              const gate = await verifyNotRunHereJobs({
-                git: ports.git,
-                checkout: approvalCheckout(project, config2, m[1]),
-                baseOid: info.baseOid,
-                headOid: info.head,
-                ciItem: reviewDone.ciItem === true,
-                commands: reviewDone.notRunHere,
-                entries: report.notRunHereJobs,
-                checks: checks.checks
-              });
-              if (!gate.ok) {
-                const note = `approval refused: not_run_here entry ${gate.entry}: ${gate.why}`;
-                await withBoardLock(stateRoot(), ports.clock.now(), () => {
-                  const fresh = loadBoard(project);
-                  if (findItem(fresh, item.id).status !== item.status) {
-                    throw new Error(`${item.id} changed while it was collected; nothing moved`);
-                  }
-                  let next2 = transition(fresh, item.id, "blocked", BY, ports.clock.now());
-                  next2 = withItem(next2, item.id, (i2) => ({
-                    ...i2,
-                    notes: [...i2.notes ?? [], note]
-                  }));
-                  saveBoard(project, next2);
-                });
-                stderr(`${item.id}: ${note}; no approval, ${item.id} is blocked for the lead
-`);
-                return 1;
-              }
-              approvedJobs = gate.jobs;
-              covered = gate.covered;
-            }
-          }
-        }
-        let branch = `studio/${item.id}`;
-        if (report.status === "done" && report.pr === void 0 && report.prTitle !== void 0 && !PR_OPTIONAL.includes(item.type)) {
-          const config2 = loadConfig(project);
-          const token = crewTokenFor(config2, owner);
-          const unchanged = () => {
-            const now2 = findItem(loadBoard(project), item.id);
-            if (now2.status !== item.status || now2.branch !== item.branch) {
-              throw new Error(
-                `${item.id} changed while waiting for CI capacity (now ${now2.status}); no pull request was opened`
-              );
-            }
-          };
-          const opened = await openCrewPr(
-            ports,
-            item,
-            report.prTitle,
-            report.body,
-            report.notRunHere,
-            token,
-            () => readCapacityTwice(config2, ports),
-            unchanged
-          );
-          if ("held" in opened) {
-            const note = prHeldNote(opened.held, config2);
-            await withBoardLock(stateRoot(), ports.clock.now(), () => {
-              const fresh = loadBoard(project);
-              if (findItem(fresh, item.id).status !== item.status) {
-                throw new Error(`${item.id} changed while it was collected; nothing moved`);
-              }
-              const held2 = withItem(fresh, item.id, (i2) => ({
-                ...i2,
-                notes: [...(i2.notes ?? []).filter((n2) => !n2.startsWith(PR_HELD)), note]
-              }));
-              saveBoard(project, held2);
-            });
-            stderr(
-              `${item.id}: ${note}; the pull request was not opened and branch studio/${item.id} stays as it is. Run studio collect ${item.id} again once CI has room.
-`
-            );
-            return 1;
-          }
-          report = { ...report, pr: opened.pr };
-        }
-        if (report.pr !== void 0) {
-          const holder = board.items.find(
-            (i2) => i2.id !== item.id && i2.repo === item.repo && i2.pr === report.pr
-          );
-          if (holder) throw new Error(`PR ${report.pr} is already held by ${holder.id}`);
-          const info = await prInfo(ports, item.repo, report.pr);
-          if (info.branch !== `studio/${item.id}`) {
-            throw new Error(
-              `PR ${report.pr} is on branch ${info.branch}, expected studio/${item.id}`
-            );
-          }
-          branch = info.branch;
-          checkReportHead(report, info.head);
-        } else if (report.status === "done" && !PR_OPTIONAL.includes(item.type)) {
-          throw new Error(`done report for ${item.id} names no pr`);
-        }
-        const now = ports.clock.now();
-        const { next, fixLimit, supersededBy } = await withBoardLock(stateRoot(), now, () => {
-          const fresh = loadBoard(project);
-          if (findItem(fresh, item.id).status !== item.status) {
-            throw new Error(`${item.id} changed while it was collected; nothing moved`);
-          }
-          const supersededBy2 = item.type === "review" && report.status === "done" && reviewDone.target !== void 0 ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot())) : void 0;
-          let next2 = fresh;
-          if (report.status === "done") {
-            if (item.status === "assigned")
-              next2 = transition(next2, item.id, "in_progress", BY, now);
-            next2 = transition(next2, item.id, "in_review", BY, now);
-            if (report.pr !== void 0) {
-              const pr = report.pr;
-              next2 = withItem(next2, item.id, (i2) => {
-                const notes = (i2.notes ?? []).filter((n2) => !n2.startsWith(PR_HELD));
-                const { notes: _n, notRunHere: _r, ...rest2 } = i2;
-                return {
-                  ...rest2,
-                  ...notes.length > 0 ? { notes } : {},
-                  ...report.notRunHere.length > 0 ? { notRunHere: report.notRunHere } : {},
-                  pr,
-                  branch
-                };
-              });
-            } else {
-              next2 = transition(next2, item.id, "merged", BY, now);
-              const result = [
-                ...supersededBy2 !== void 0 ? [`superseded by ${supersededBy2}`] : report.verdict ? [`verdict: ${report.verdict}`] : [],
-                ...report.reviews ? [`reviews: ${report.reviews}`] : []
-              ];
-              if (result.length > 0) {
-                next2 = withItem(next2, item.id, (i2) => ({
-                  ...i2,
-                  notes: [...i2.notes ?? [], ...capNotes(result)]
-                }));
-              }
-            }
-          } else {
-            next2 = transition(next2, item.id, "blocked", BY, now);
-            const notes = report.status === "failed" ? ["crew run failed", ...report.questions.map((q) => `question: ${q}`)] : report.questions.map((q) => `question: ${q}`);
-            next2 = withItem(next2, item.id, (i2) => ({
-              ...i2,
-              notes: [
-                ...i2.notes ?? [],
-                ...capNotes(notes.length ? notes : ["crew reported blocked"])
-              ]
-            }));
-          }
-          if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0 && supersededBy2 === void 0) {
-            const reviewed = next2.items.find(
-              (i2) => `${i2.repo}#${i2.pr}` === reviewDone.target && i2.type !== "review"
-            );
-            if (reviewed !== void 0) {
-              const approvedBase = readCrewCaps(stateRoot(), item.id)?.baseRefName;
-              next2 = withItem(
-                next2,
-                reviewed.id,
-                ({ approvedHead: _h, approvedBase: _b, approvedJobs: _j, ...i2 }) => report.verdict === "approve" ? {
-                  ...i2,
-                  approvedHead: report.headSha,
-                  approvedBase,
-                  ...approvedJobs.length === 0 ? {} : { approvedJobs }
-                } : i2
-              );
-            }
-            if (report.verdict === "approve") {
-              const target = reviewDone.target;
-              for (const older of next2.items) {
-                if (older.id === item.id || older.type !== "review" || ["assigned", "in_progress", "merged", "dropped"].includes(older.status)) {
-                  continue;
-                }
-                const note = reviewTarget(older);
-                const named = note !== void 0 && `${note.repo}#${note.pr}` === target;
-                if (!named && readCrewCaps(stateRoot(), older.id)?.reviewsTarget !== target)
-                  continue;
-                next2 = transition(next2, older.id, "dropped", BY, now);
-                next2 = withItem(next2, older.id, (i2) => ({
-                  ...i2,
-                  notes: [...i2.notes ?? [], `superseded by ${item.id}, which approved ${target}`]
-                }));
-              }
-            }
-          }
-          const limitTarget = report.status === "done" && report.verdict === "changes_requested" && supersededBy2 === void 0 ? reviewDone.target : void 0;
-          let fixLimit2 = false;
-          if (limitTarget !== void 0) {
-            const rounds = reviewRounds(next2, limitTarget);
-            fixLimit2 = rounds >= MAX_REVIEW_ROUNDS || (report.findingAttempts ?? 0) >= MAX_FIX_ATTEMPTS;
-            const builder = next2.items.find(
-              (i2) => `${i2.repo}#${i2.pr}` === limitTarget && i2.type !== "review"
-            );
-            if (fixLimit2 && builder && builder.status !== "merged" && builder.status !== "dropped") {
-              if (builder.status !== "blocked") {
-                next2 = transition(next2, builder.id, "blocked", BY, now);
-              }
-              next2 = withItem(next2, builder.id, (i2) => ({
-                ...i2,
-                notes: [
-                  ...i2.notes ?? [],
-                  `fix limit reached: ${rounds} review rounds, attempts on one finding ${report.findingAttempts ?? "unknown"}`
-                ]
-              }));
-            }
-          }
-          saveBoard(project, next2);
-          return { next: next2, fixLimit: fixLimit2, supersededBy: supersededBy2 };
-        });
-        let lessonsProposed = 0;
-        try {
-          lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now);
-        } catch (e) {
-          stderr(`error: lessons: ${e.message.replace(new RegExp("\\p{Cc}", "gu"), " ")}
-`);
-        }
-        print({
-          item: item.id,
-          report: report.status,
-          status: findItem(next, item.id).status,
-          ...report.pr === void 0 ? {} : { pr: report.pr },
-          ...report.verdict === void 0 ? {} : { verdict: report.verdict },
-          ...report.reviews === void 0 ? {} : { reviews: report.reviews },
-          ...reviewDone.skipped.length === 0 ? {} : { skipped: reviewDone.skipped },
-          ...supersededBy === void 0 ? {} : { supersededBy },
-          ...fixLimit ? { fixLimit } : {},
-          ...lessonsProposed > 0 ? { lessonsProposed } : {},
-          // What CI must run because the sandbox could not: only the count and the services, which
-          // the schema fixes; the commands are crew text and stay on the item and in the PR body.
-          ...report.status === "done" && report.notRunHere.length > 0 ? {
-            notRunHere: {
-              count: report.notRunHere.length,
-              missing: [...new Set(report.notRunHere.map((x) => x.missing))]
-            }
-          } : {},
-          // Each approved job with the reviewer's reason why it covers its command: reviewer text,
-          // one plain line each, data for the lead. The gate proved only that the job ran and passed.
-          ...covered.length === 0 || supersededBy !== void 0 ? {} : { notRunHereJobs: covered }
-        });
-        return 0;
+        return 1;
       }
       case "queue": {
         const [sub, arg] = rest;
         if (sub === "add") {
-          const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/.exec(arg ?? "");
-          if (!m) throw new UsageError("queue add needs <repo>#<pr>, e.g. org/app#12");
-          const repo = m[1];
-          const pr = Number(m[2]);
-          const { config: config2, board } = loadAll();
-          refuseNativeQueue(config2);
-          if (!config2.repos.includes(repo)) throw new Error(`repository ${repo} is not configured`);
-          const item = board.items.find((i2) => i2.pr === pr && i2.repo === repo);
-          if (!item) throw new Error(`no board item has PR ${repo}#${pr}`);
-          if (item.status !== "in_review") {
-            throw new Error(`${item.id} is ${item.status}, only in_review items can be queued`);
-          }
-          const view = await viewPr({ pr, repo }, ports.gh);
-          if (typeof view === "string") throw new Error(view);
-          const problem = await approvalProblem(
-            ports,
-            approvalCheckout(project, config2, repo),
-            { repo, pr },
-            { head: item.approvedHead, base: item.approvedBase },
-            view.head
-          );
-          if (problem !== void 0) throw new Error(problem);
-          const root = await boundStateRoot();
-          const pending = await withBoardLock(stateRoot(), ports.clock.now(), () => {
-            const fresh = loadBoard(project);
-            const now = findItem(fresh, item.id);
-            if (now.status !== "in_review" || now.approvedHead !== item.approvedHead) {
-              throw new Error(`${item.id} changed while it was checked; try again`);
-            }
-            const open2 = openReview(stateRoot(), fresh, `${repo}#${pr}`);
-            if (open2 !== void 0) throw new Error(openReviewLine(open2, `${repo}#${pr}`));
-            const added = enqueue(root, { pr, repo, item: item.id });
-            saveBoard(project, transition(fresh, item.id, "queued", BY, ports.clock.now()));
-            return added;
-          });
-          print({ queued: item.id, pr, repo, pending });
+          print(await queueAdd(arg));
           return 0;
         }
         if (sub === "run") {
-          const { config: config2 } = loadAll();
-          refuseNativeQueue(config2);
-          const root = await boundStateRoot();
-          const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname10(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
-          const blockedNow = queueHold();
-          if (blockedNow !== void 0) throw new Error(blockedNow);
-          let heldLine;
-          const hold = () => {
-            const line2 = queueHold();
-            if (line2 !== void 0) heldLine = line2;
-            return line2;
-          };
-          const log = (m) => stderr(`${m}
-`);
-          const lock = acquireQueueRunLock(root, ports.clock.now(), log);
-          const removeSignals = installSignalRelease(lock);
-          const beat = () => lock.heartbeat(ports.clock.now());
-          const runPorts = {
-            ...ports,
-            clock: {
-              now: () => ports.clock.now(),
-              sleep: async (ms) => {
-                beat();
-                await ports.clock.sleep(ms);
-                beat();
-              }
-            }
-          };
-          try {
-            const state = loadQueue(root);
-            await reconcileQueued(project, root, state, ports, stderr);
-            const before = state.done.length;
-            await runQueue(
-              state,
-              config2,
-              runPorts,
-              // The runner owns `current` and `done`; `pending` stays whatever is on disk.
-              (q) => {
-                beat();
-                updateQueue(root, (disk) => {
-                  disk.current = q.current;
-                  disk.done = q.done;
-                });
-              },
-              {
-                stateRoot: root,
-                log,
-                hold,
-                mergeAllowed: (entry, head) => boardBlocksMerge(project, root, config2, entry, head, ports),
-                takeNext: () => takeNextPending(root),
-                onDone: (d) => applyQueueResults(project, root, [d], ports, stderr)
-              }
-            );
-            const finished7 = state.done.slice(before);
-            print({
-              ...heldLine === void 0 ? {} : { held: heldLine },
-              merged: finished7.filter((d) => d.result === "merged").length,
-              failed: finished7.filter((d) => d.result === "failed").length,
-              done: finished7
-            });
-            if (heldLine !== void 0) return 1;
-          } finally {
-            removeSignals();
-            lock.release();
-          }
-          return 0;
+          const r = await queueRun();
+          print(r);
+          return r.held === void 0 ? 0 : 1;
         }
         throw new UsageError("queue needs a subcommand: add <repo>#<pr> | run");
       }
@@ -36645,13 +36951,14 @@ function crewTokenFor(config2, owner) {
   );
 }
 var PR_HELD = "pr held: ";
+var CI_READ_FAILED = "CI read failed:";
 function prHeldNote(cap, config2) {
   const parts = [`busy ${cap.ciBusy} of ${cap.ciTotal}, limit ${config2.ci.capacity.mergeMaxBusy}`];
   if (cap.githubHostedBusy !== void 0 && cap.githubHostedLimit !== void 0) {
     parts.push(`github-hosted ${cap.githubHostedBusy}, limit ${cap.githubHostedLimit}`);
   }
   if (!cap.hostOk) parts.push(`host load ${cap.hostLoad.toFixed(2)}`);
-  const why = cap.error === void 0 ? "" : `; CI read failed: ${cap.error}`;
+  const why = cap.error === void 0 ? "" : `; ${CI_READ_FAILED} ${cap.error}`;
   return capNotes([`${PR_HELD}ci capacity (${parts.join(", ")}${why})`])[0];
 }
 async function openCrewPr(ports, item, title, body, notRunHere, token, capacity, unchanged) {

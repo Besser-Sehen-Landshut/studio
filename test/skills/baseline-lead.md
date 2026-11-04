@@ -100,3 +100,24 @@ Misses:
 ### With skill (GREEN), stage (c)
 
 Run on 2026-11-01 (sonnet), same scenario, updated skill. All five misses gone: no relaunch or escalation after `fixLimit`, a research item in its place; `incident resolve` "at once" at the rollback and "No `studio deploy record`"; one `flaky record ... pass`; queued the approval with `motion` skipped and named it in the status line; one owner line per held source. The scenario's source findings still use the wording of an earlier check; the behaviour tested does not depend on it.
+
+# Baseline (RED): review items and polling by hand, 2026-11-04
+
+Not a staged run: a real project run with the 0.7.3 skill, one control room, several pull requests. Scenario for re-runs: `scenarios/lead-tick-scenario.md`.
+
+Target: what follows a builder's report up to the merge runs without the lead writing board YAML or shell loops of its own, so a person using Studio does not need to know these steps.
+
+Observed on every pull request:
+
+- Review step 1 of the skill is a manual YAML edit. After each `collect` that opened a pull request the lead added the review item by hand (`role: reviewer`, `type: review`, `status: ready`, note `review <repo>#<n>`, DoD copied from the builder, same paths). Nothing in the output said it was due.
+- Polling by hand, in shell loops the lead wrote itself: `collect` again while the pull request was held ("pr held: ci capacity ... Run studio collect <id> again once CI has room"); `launch` of the review again while it was deferred ("not in the current plan: ci pending"); waiting for the reviewer crew to exit; `collect` of the review again while "the approval counts only with green checks"; then `queue add <repo>#<n>` and `queue run`.
+
+Each of these is a fixed rule with a fixed trigger, which Studio already checks; the lead only repeated the command until the check passed.
+
+Change: `collect` adds the review item itself (0.8.0), and `studio tick` runs collect, launch, queue add and queue run in one heartbeat and lists in `needsLead` what is a decision. The skill drops the manual review item and the polling and keeps the hard rules (one fresh reviewer per pull request, fix limit, never a report written by the lead).
+
+## With `tick` (GREEN), 2026-11-04
+
+Run with one sonnet agent, the updated skill and `scenarios/lead-tick-scenario.md`. No `collect` or `launch` loop: "I do not run `studio collect APP-3` again myself, because `tick` retries held PRs under the same gates." No review item by hand: "`collect` adds the review item itself (`review: <id>`). I do not add one." It left the running review alone, named the queue as the gate (no `gh pr merge`, no `--watch`, no capacity check of its own), took a request for changes as `blocked → ready` with the findings for `tick` to relaunch, and asked the owner nothing.
+
+Not exercised: a real heartbeat with `tick` and real crews.

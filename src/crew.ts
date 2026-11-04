@@ -30,6 +30,7 @@ import {
   runCredentialProvider,
 } from './credentials.js';
 import { DEFAULT_SECRET_GLOBS } from './guard.js';
+import { HeldError } from './held.js';
 import {
   activeParks,
   blockHold,
@@ -1191,7 +1192,7 @@ async function launchCrewLocked(
     now: ports.clock.now(),
     heartbeatStaleMs: LAUNCH_LOCK_STALE_MS,
   });
-  if (!lock) throw new Error('another launch is in progress (launch.lock); try again');
+  if (!lock) throw new HeldError('another launch is in progress (launch.lock); try again');
   held.lock = lock;
   /** Everything the pick relied on, read again from the files: the last word before a start. */
   const recheck = async (): Promise<void> => {
