@@ -3,6 +3,40 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.8.0] - 2026-11-04
+
+From a real run: on every pull request the lead did two things by hand that a person using Studio
+would not know to do. After `collect` opened a builder's pull request, it added the review item to
+the board itself. Then it polled in shell loops of its own: `collect` again while the pull request
+was held for CI capacity, `launch` of the review again while it waited for checks ("ci pending"),
+`collect` of the review again while "the approval counts only with green checks", then `queue add`
+and `queue run`. Each step has a fixed trigger that Studio already checks. Not tagged yet; the
+maintainers tag after the merge.
+
+### Added
+
+- `collect` adds the review item when it opens or reuses a builder's pull request and the item
+  moves to `in_review`, unless a review naming that pull request is still open (neither merged nor
+  dropped): the next free id with the builder's prefix, title `Review of <id> (PR #<n>)`,
+  `role: reviewer`, `type: review`, `status: ready`, the builder's repo, paths, DoD and named
+  components, and the note `review <repo>#<n>`. The output names it (`review: <id>`). After a fix
+  round the next collect adds a new one.
+- `studio tick`: one lead heartbeat, idempotent, for the lead only (refused under
+  `STUDIO_ROLE=crew`). It collects every item whose crew has ended and every pull request held for
+  CI capacity, launches what the plan assigns under every gate of `launch`, queues each builder
+  whose approval is stored (not again after a merge that failed after that approval), and runs
+  the queue in the same process when it holds pull requests and no run is active. It prints one
+  JSON object with `collected`, `launched`, `queued`, `merged`, `held`, `needsLead` and `errors`;
+  one item's failure is recorded and the others go on. A second tick while one runs does nothing.
+
+### Changed
+
+- `collect`, `launch`, `queue add` and `queue run` are functions `tick` calls; their output and
+  exit codes are as before.
+- The lead skill runs `studio tick` in a second heartbeat loop and acts on `needsLead`; the manual
+  review item and the polling are gone. The hard rules stay: one fresh reviewer per pull request,
+  the fix limit, never a report written by the lead.
+
 ## [0.7.3] - 2026-11-04
 
 `stop --requeue` from 0.7.2 moved an item straight from `assigned` to `ready`, and it could do

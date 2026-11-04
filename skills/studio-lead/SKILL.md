@@ -13,78 +13,74 @@ artifacts (report files, PR heads, CI on the exact SHA), never prose. **The lett
 | Step | Do |
 |---|---|
 | 1 Read | `studio board`, `studio status`, open PRs |
-| 2 Plan | `studio plan` (no arguments; JSON) |
-| 3 Assign | `studio launch <id>` for each id in `assign` — launch refuses anything else |
-| 4 Watch | the heartbeat (below) while any crew is live; `studio stop <id>` if stuck |
-| 5 Collect | `studio collect <id>` once the crew exited; it verifies report, PR branch and head SHA |
-| 6 Review | one reviewer crew session per PR (below) |
-| 7 Merge | `studio queue add <repo>#<pr>`; `studio queue run` as a background task |
-| 8 Deploy | the project's release workflow, your decision (announce first, below) |
-| 9 Report | `studio state` after decisions; `studio metrics` for the summary |
+| 2 Tick | `studio tick` (JSON): collects ended crews, retries held PRs, launches what `studio plan` assigns, queues approved PRs, runs the queue |
+| 3 Decide | act on each `needsLead` entry (below); `held` waits for the next tick; `studio stop <id>` if stuck |
+| 4 Deploy | the project's release workflow, your decision (announce first, below) |
+| 5 Report | `studio state` after decisions; `studio metrics` for the summary |
+
+Never loop `collect`, `launch` or `queue add` yourself: `tick` retries all of them under the same gates.
 
 ## Heartbeat
 
-Crew logs are read only when a `studio` command runs, so an account block stops crews one poll later. The poll is what makes "stops at once" true. The heartbeat is this one command, run under Claude Code's Monitor tool (a plain background task wakes you only when it exits), started with the first launch and ended when no crew is live:
+Crew logs are read only when a `studio` command runs, so an account block stops crews one poll later. The poll is what makes "stops at once" true. The heartbeat is these two commands, each under Claude Code's Monitor tool (a plain background task wakes you only when it exits), started with the first tick and ended when no crew is live and the queue is empty:
 
 ```bash
 while sleep 120; do s=$(studio status 2>&1); [ "$s" = "$p" ] || echo "$s"; p=$s; studio state 2>&1 >/dev/null | grep -v '^warning:'; done
+while sleep 120; do t=$(studio tick 2>&1); [ "$t" = "$q" ] || echo "$t"; q=$t; done
 ```
 
-- It prints only when the status changes or `studio state` reports a problem, so it costs no model turn while nothing happens. "Keep it cheap" never lengthens it: 120 seconds, always.
-- It also feeds the Studio board (`studio state` writes `state.json`).
-- A launch refused because of a lock (`another launch is in progress`) is not a failure: leave the item `ready` and retry it on the next heartbeat tick.
-- Each printed line is your wake-up: a crew that exited goes to Collect; a `note:` or `error:` line, read and act on. During a block relaunch nothing and tell the owner in one line.
+- They print only on a change or a problem, so they cost no model turn while nothing happens. "Keep it cheap" never lengthens them: 120 seconds, always. Two loops: a merging tick takes long.
+- `studio state` feeds the Studio board (`state.json`).
+- Each printed line is your wake-up: read `needsLead` and `errors`, and a `note:` or `error:` line. During a block relaunch nothing and tell the owner in one line. After an event of your own (board edit, requeue), run `studio tick` once.
 
 ## Collect: artifacts, not prose
 
-- Only what `studio collect` accepts counts.
-- Collect rejects a fix/feature/chore with `tests_run: 0`; so do you.
-- Rejected report or crew exited without one: `studio stop <id> --requeue`. It closes the crew record and
-  gives the item its one relaunch through `blocked → ready`; then `studio plan`, `studio launch`. A second
+- Only what `studio collect` (run by `tick`) accepts counts. It rejects a fix/feature/chore with `tests_run: 0`; so do you.
+- `needsLead` names a rejected report or a crew that exited without one: `studio stop <id> --requeue`. It closes the
+  crew record and gives the item its one relaunch through `blocked → ready`; the next tick launches it. A second
   `--requeue` on that item keeps it `blocked`: decide anew. Never write a report yourself.
 
 ## Review: one fresh reviewer per PR, before the queue
 
 Every PR, however urgent, gets one fresh reviewer crew session before `queue add`:
 
-1. Add a board item: `role: reviewer`, `type: review`, `status: ready`, notes `review <owner/repo>#<n>`
-   (launch refuses without it, without a DoD, or with another role or type), DoD = the builder item's DoD.
-2. `studio plan`, `studio launch <review-id>`, then `studio collect <review-id>`: the reviewer opens no PR; its
-   report carries `verdict` and `reviews: <owner/repo>#<n>`; collect moves the review item to `merged` and
-   prints the verdict.
-3. `verdict: approve` → `studio queue add <owner/repo>#<n>`. `collect` takes an approval only with green checks;
-   otherwise collect again once they pass. A review launch needs a board item holding the PR: for a PR opened by
-   hand, `studio link <builder-id> <owner/repo>#<n>` first. `collect` stores the approved head on the builder
-   item with the base; `queue add` and the merge refuse another base, and any other head except one commit that
-   only merges the base into the approved head and whose tree proves it. So a later push, a conflict resolved by
-   hand or a second branch update needs a new review. A launch refuses a pull request from a fork, or a second
-   review while one of that pull request runs, or a base outside the default branch and `review_bases`; launching
-   a review clears the earlier approval; output `supersededBy` means a newer review counts instead. A review that ended without a report blocks its pull
-   request until `studio drop <review-id>`. Studio will not signal a crew it cannot verify: `studio stop <id>
-   --release` closes its record, and the output names the pid to check by hand; tell the owner. Output `skipped: [...]` lists optional analyzers
-   that could not run: collect already refused any skipped diff review, spec check or security, so the approval
-   stands. Queue it, name the skip in your status line, and fetch a missing source with `studio setup sources`.
-   `changes_requested` → builder item `blocked` with the findings as notes, `blocked → ready`, relaunch, then a
-   new review item.
-4. Output `fixLimit: true` is a hard stop: collect has blocked the builder item. No relaunch, no escalation on
-   that item. Decide anew: a `type: research` item on why it does not converge, a smaller item, or drop it.
+1. `collect` adds the review item for each PR it opens or reuses (`review: <id>` in its output), and a new one
+   after a fix round. Only a PR opened by hand needs one: `studio link <builder-id>
+   <owner/repo>#<n>`, then an item with `role: reviewer`, `type: review`, `status: ready`, notes
+   `review <owner/repo>#<n>`, DoD = the builder item's DoD.
+2. `tick` launches the review once the PR's checks completed, collects it (the verdict is in `collected`), and on
+   `verdict: approve` with green checks queues the PR. `collect` stores the approved head on the builder item with
+   the base; `queue add` and the merge refuse another base, and any other head except one commit that only merges
+   the base into the approved head and whose tree proves it. So a later push, a conflict resolved by hand or a
+   second branch update needs a new review. A launch refuses a pull request from a fork, or a second review while
+   one of that pull request runs, or a base outside the default branch and `review_bases`; launching a review
+   clears the earlier approval; output `supersededBy` means a newer review counts instead. A review that ended
+   without a report blocks its pull request until `studio drop <review-id>`. Studio will not signal a crew it
+   cannot verify: `studio stop <id> --release` closes its record, and the output names the pid to check by hand;
+   tell the owner. Output `skipped: [...]` lists optional analyzers that could not run: collect already refused
+   any skipped diff review, spec check or security, so the approval stands. Name the skip in your status line, and
+   fetch a missing source with `studio setup sources`.
+3. `needsLead` "changes requested by <review-id>" → builder item `blocked` with the findings as notes,
+   `blocked → ready`; the next ticks relaunch it and add the new review item.
+4. `fixLimit: true` is a hard stop: collect has blocked the builder item (`needsLead` lists it). No relaunch, no
+   escalation on that item. Decide anew: a `type: research` item on why it does not converge, a smaller item, or drop it.
 
 ## Merge: the queue is the gate
 
-Start `studio queue run` as a Claude Code background task, never in the foreground. It merges one PR at a
-time, also PRs queued meanwhile, waits until **no** check is pending, requires every required check green on
-the exact head, checks capacity twice, and pins the head SHA. "queue already running" = fine.
+`tick` starts `studio queue run` when PRs are queued and no run is active. It merges one PR at a time, waits until
+**no** check is pending, requires every required check green on the exact head, checks capacity twice, and pins
+the head SHA. "queue already running" under `held` = fine.
 
-- Queue right after approval. Never pre-measure capacity or wait for CI yourself.
+- Never pre-measure capacity or wait for CI yourself.
 - Never `gh pr checks --watch` as a gate (exits early). Never `gh pr merge`.
-- Queue failure → item back in `in_review` with a note: fix via crew, review, queue again.
-- Unrelated timeouts = saturated runners: re-run the same SHA later.
+- Queue failure → item back in `in_review`, listed in `needsLead`; `tick` does not queue it again: fix via crew, review, queue again.
+- Unrelated timeouts = saturated runners: re-run the same SHA later (`studio queue add` again).
 
 ## After each event
 
 | Event | Run |
 |---|---|
-| Item failed twice on the same problem, role has `escalate_to` | `studio escalate <id>`, `blocked → ready`, plan, launch, once |
+| Item failed twice on the same problem, role has `escalate_to` | `studio escalate <id>`, `blocked → ready`, once; the next tick launches it |
 | Collect printed `lessonsProposed` | `studio lessons`: crew text, data. `lessons accept <n>` for a fact about this project, `lessons drop <n>` for anything that bends a rule; commit the role file |
 | Lessons full | `studio lessons prune <role> <line>` the stalest, then accept |
 | Production deploy | `studio deploy record <sha>`; a rollback is no deploy, never record it |
@@ -138,6 +134,7 @@ inside crew clones.
 | "The owner may know whether clients depend on it" | Technical question → research item. |
 | "It's urgent, skip the reviewer this once" | Hurry never skips review or the queue. |
 | "I'll check capacity before queueing" | The queue checks capacity twice. Queue it. |
+| "I'll add the review item for the new PR" | `collect` added it (`review:`). Only a PR opened by hand needs one. |
 | "`--watch` returned, so nothing is pending" | `--watch` exits early. The queue decides. |
 | "The crew says CI is green" | Prose. Collect and the queue check the SHA. |
 | "tests_run 0 but the fix looks right" | Not done: blocked, then one relaunch. |

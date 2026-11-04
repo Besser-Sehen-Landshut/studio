@@ -56,6 +56,7 @@ import { sendNotifications } from './notify.js';
 import { formatOverview, readOverview } from './overview.js';
 import { migrateOwnerState, pendingLegacyState } from './owner-state.js';
 import {
+  acquireStateLock,
   checkStateMarker,
   ownerStateRootFor,
   projectRealpath,
@@ -84,7 +85,7 @@ import {
   updateQueue,
   viewPr,
 } from './queue.js';
-import { checkReportHead, readReport, reportName } from './report.js';
+import { checkReportHead, ReportError, readReport, reportName } from './report.js';
 import {
   checkReviewCaps,
   checksPending,
@@ -148,6 +149,7 @@ Commands:
   status                   Crew sessions and their board status
   overview                 Owner only, in a terminal: every project of this owner, read only
   collect <id>             Read a crew report and move the item
+  tick                     One lead heartbeat: collect, launch, queue and merge what is due (JSON)
   queue add <repo>#<pr>    Put a reviewed PR into the merge queue
   queue run                Merge the queued PRs, one at a time
   state                    Refresh state.json in the state root
@@ -218,6 +220,92 @@ function findItem(board: Board, id: string | undefined): WorkItem {
 
 function withItem(board: Board, id: string, fn: (item: WorkItem) => WorkItem): Board {
   return { ...board, items: board.items.map((i) => (i.id === id ? fn(i) : i)) };
+}
+
+/**
+ * What `collect` came to: the item moved (with the output), or nothing moved because the pull
+ * request is held for CI capacity, an approval waits for green checks, or the job gate refused an
+ * approval (the review item is blocked).
+ */
+type Collected =
+  | { kind: 'moved'; out: Record<string, unknown> & { status: WorkItem['status'] } }
+  | { kind: 'held' | 'waiting' | 'refused'; line: string };
+
+/** A review item naming `target` (`<repo>#<pr>`) that is neither merged nor dropped. */
+function isOpenReviewOf(item: WorkItem, target: string): boolean {
+  if (item.type !== 'review' || item.status === 'merged' || item.status === 'dropped') return false;
+  const t = reviewTarget(item);
+  return t !== undefined && `${t.repo}#${t.pr}` === target;
+}
+
+/** The finished review of `target` with a verdict that moved last, if any. */
+function latestReview(board: Board, target: string): WorkItem | undefined {
+  const at = (i: WorkItem) => Date.parse(i.history.at(-1)?.at ?? '') || 0;
+  return board.items
+    .filter(
+      (i) =>
+        i.type === 'review' &&
+        i.status === 'merged' &&
+        (i.notes ?? []).includes(`reviews: ${target}`) &&
+        (i.notes ?? []).some((n) => n.startsWith('verdict: ')),
+    )
+    .reduce<WorkItem | undefined>(
+      (last, i) => (last === undefined || at(i) >= at(last) ? i : last),
+      undefined,
+    );
+}
+
+/** What one `tick` did and what it leaves to the lead. */
+interface Tick {
+  collected: Record<string, unknown>[];
+  launched: { item: string; name: string; pid: number }[];
+  queued: { item: string; pr: number; repo: string }[];
+  merged: { item?: string; pr: number; repo: string }[];
+  held: { item: string; reason: string }[];
+  needsLead: { item: string; reason: string }[];
+  errors: { item: string; error: string }[];
+}
+
+/** One tick at a time; a tick whose holder died is taken over after this long. */
+const TICK_LOCK = 'tick.lock';
+const TICK_LOCK_STALE_MS = 15 * 60_000;
+
+/**
+ * Adds the review item for a builder's pull request, unless a review naming it is still open
+ * (neither merged nor dropped). The id is the next free number of the builder's prefix; DoD, paths
+ * and named components are the builder's. Returns the new id, if any.
+ */
+function withReviewItem(
+  board: Board,
+  builder: WorkItem,
+  pr: number,
+): { board: Board; id?: string } {
+  const target = `${builder.repo}#${pr}`;
+  if (board.items.some((i) => isOpenReviewOf(i, target))) return { board };
+  const prefix = builder.id.slice(0, builder.id.indexOf('-') + 1);
+  const taken = board.items
+    .filter((i) => i.id.startsWith(prefix))
+    .map((i) => Number(i.id.slice(prefix.length)));
+  const id = `${prefix}${Math.max(0, ...taken) + 1}`;
+  const review: WorkItem = {
+    id,
+    title: `Review of ${builder.id} (PR #${pr})`,
+    type: 'review',
+    role: 'reviewer',
+    repo: builder.repo,
+    size: builder.size,
+    priority: builder.priority,
+    status: 'ready',
+    paths: [...builder.paths],
+    touches: [],
+    ...(builder.component === undefined ? {} : { component: builder.component }),
+    ...(builder.components === undefined ? {} : { components: [...builder.components] }),
+    dependsOn: [],
+    dod: [...builder.dod],
+    notes: [`review ${target}`],
+    history: [],
+  };
+  return { board: { ...board, items: [...board.items, review] }, id };
 }
 
 function runningPerRole(board: Board): Record<string, number> {
@@ -364,6 +452,686 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       };
     };
 
+    /** Puts an approved pull request into the merge queue: the body of `queue add`. */
+    const queueAdd = async (arg: string | undefined) => {
+      const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/.exec(arg ?? '');
+      if (!m) throw new UsageError('queue add needs <repo>#<pr>, e.g. org/app#12');
+      const repo = m[1] as string;
+      const pr = Number(m[2]);
+      const { config, board } = loadAll();
+      refuseNativeQueue(config);
+      if (!config.repos.includes(repo)) throw new Error(`repository ${repo} is not configured`);
+      const item = board.items.find((i) => i.pr === pr && i.repo === repo);
+      if (!item) throw new Error(`no board item has PR ${repo}#${pr}`);
+      if (item.status !== 'in_review') {
+        throw new Error(`${item.id} is ${item.status}, only in_review items can be queued`);
+      }
+      // Every pull request goes through a reviewer first (spec, section 5): no type is exempt.
+      const view = await viewPr({ pr, repo }, ports.gh);
+      if (typeof view === 'string') throw new Error(view);
+      const problem = await approvalProblem(
+        ports,
+        approvalCheckout(project, config, repo),
+        { repo, pr },
+        { head: item.approvedHead, base: item.approvedBase },
+        view.head,
+      );
+      if (problem !== undefined) throw new Error(problem);
+      const root = await boundStateRoot();
+      const pending = await withBoardLock(stateRoot(), ports.clock.now(), () => {
+        // What the checks above read may have moved while they went to GitHub.
+        const fresh = loadBoard(project);
+        const now = findItem(fresh, item.id);
+        if (now.status !== 'in_review' || now.approvedHead !== item.approvedHead) {
+          throw new Error(`${item.id} changed while it was checked; try again`);
+        }
+        const open = openReview(stateRoot(), fresh, `${repo}#${pr}`);
+        if (open !== undefined) throw new Error(openReviewLine(open, `${repo}#${pr}`));
+        // Merged into queue.json on disk under the queue file lock: safe during a running queue.
+        const added = enqueue(root, { pr, repo, item: item.id });
+        saveBoard(project, transition(fresh, item.id, 'queued', BY, ports.clock.now()));
+        return added;
+      });
+      return { queued: item.id, pr, repo, pending };
+    };
+
+    /** Merges the queued pull requests, one at a time: the body of `queue run`. */
+    const queueRun = async () => {
+      const { config } = loadAll();
+      refuseNativeQueue(config);
+      const root = await boundStateRoot();
+      /** An account block, a pause, or old state files that were not merged into the owner root. */
+      const queueHold = (): string | undefined =>
+        blockHold(ownerRoot()) ??
+        (readPause(root).paused ? PAUSED_LINE : undefined) ??
+        (pendingLegacyState(dirname(ownerRoot())).length > 0 ? LEGACY_LINE : undefined);
+      const blockedNow = queueHold();
+      if (blockedNow !== undefined) throw new Error(blockedNow);
+      let heldLine: string | undefined;
+      const hold = () => {
+        const line = queueHold();
+        if (line !== undefined) heldLine = line;
+        return line;
+      };
+      const log = (m: string) => stderr(`${m}\n`);
+      const lock = acquireQueueRunLock(root, ports.clock.now(), log);
+      const removeSignals = installSignalRelease(lock);
+      const beat = () => lock.heartbeat(ports.clock.now());
+      // Every poll and every wait of the queue goes through this clock: each one is a heartbeat.
+      const runPorts: Ports = {
+        ...ports,
+        clock: {
+          now: () => ports.clock.now(),
+          sleep: async (ms) => {
+            beat();
+            await ports.clock.sleep(ms);
+            beat();
+          },
+        },
+      };
+      try {
+        const state = loadQueue(root);
+        await reconcileQueued(project, root, state, ports, stderr);
+        const before = state.done.length;
+        await runQueue(
+          state,
+          config,
+          runPorts,
+          // The runner owns `current` and `done`; `pending` stays whatever is on disk.
+          (q) => {
+            beat();
+            updateQueue(root, (disk) => {
+              disk.current = q.current;
+              disk.done = q.done;
+            });
+          },
+          {
+            stateRoot: root,
+            log,
+            hold,
+            mergeAllowed: (entry, head) =>
+              boardBlocksMerge(project, root, config, entry, head, ports),
+            takeNext: () => takeNextPending(root),
+            onDone: (d) => applyQueueResults(project, root, [d], ports, stderr),
+          },
+        );
+        const finished = state.done.slice(before);
+        return {
+          ...(heldLine === undefined ? {} : { held: heldLine }),
+          merged: finished.filter((d) => d.result === 'merged').length,
+          failed: finished.filter((d) => d.result === 'failed').length,
+          done: finished,
+        };
+      } finally {
+        removeSignals();
+        lock.release();
+      }
+    };
+
+    /** Starts the crew of a planned item and moves it to `assigned`: the body of `launch`. */
+    const launch = async (id: string | undefined) => {
+      if (await reconcile()) {
+        throw new Error(
+          'another Studio process is reconciling account blocks; refusing to launch, try again',
+        );
+      }
+      const { config, board } = loadAll();
+      const item = findItem(board, id);
+      if (item.status !== 'ready') {
+        throw new Error(`${item.id} is ${item.status}, only ready items can be launched`);
+      }
+      const { plan } = await planNow(config, board);
+      // One launch is one build start against this plan's host reading: a build the plan put
+      // behind another one's start may be the one started now.
+      const launchable =
+        plan.assign.some((i) => i.id === item.id) ||
+        plan.deferred.some((d) => d.id === item.id && d.reason === ONE_BUILD_PER_PLAN);
+      if (!launchable) {
+        const why =
+          plan.blocked.find((b) => b.id === item.id)?.reason ??
+          plan.deferred.find((d) => d.id === item.id)?.reason ??
+          'not in the current plan';
+        throw new Error(`${item.id} is not in the current plan: ${why}`);
+      }
+      const res = await launchCrew(project, item, config, ports, owner);
+      // The launch took a while: re-read the board and move the item on the fresh copy.
+      await withBoardLock(stateRoot(), ports.clock.now(), () => {
+        const fresh = loadBoard(project);
+        if (findItem(fresh, item.id).status !== 'ready') {
+          throw new Error(`${item.id} changed while launching; crew ${res.name} is running`);
+        }
+        const moved = withItem(
+          transition(fresh, item.id, 'assigned', BY, ports.clock.now()),
+          item.id,
+          (i) => ({ ...i, crew: res.name }),
+        );
+        saveBoard(project, moved);
+      });
+      return res;
+    };
+
+    /** Reads a finished crew report, verifies it and moves the item: the body of `collect`. */
+    const collect = async (id: string | undefined): Promise<Collected> => {
+      const { board } = loadAll();
+      const item = findItem(board, id);
+      if (item.status !== 'assigned' && item.status !== 'in_progress') {
+        throw new Error(
+          `${item.id} is ${item.status}, only assigned or in_progress items can be collected`,
+        );
+      }
+      // A running crew may still rewrite its report; an earlier run's report is not this one.
+      const record = readCrewRecords(stateRoot())[item.id];
+      let notBefore: Date | undefined;
+      if (record !== undefined) {
+        if (!Number.isInteger(record.pid) || record.pid <= 0) {
+          throw new Error(`crew record for ${item.id} has no valid pid`);
+        }
+        const hold = await crewHold(record, ports);
+        if (hold === 'unverified') throw new Error(unverifiedRefusal(record));
+        if (hold === 'running') {
+          throw new Error(
+            `crew ${record.name} is still running (pid ${record.pid}); collect after it exited, or stop it first`,
+          );
+        }
+        if ((await crewProcess(record, ports)) === 'unknown') {
+          stderr(`warning: ${unverifiedHandgrip(record)}\n`);
+        }
+        notBefore = new Date(record.startedAt);
+        if (Number.isNaN(notBefore.getTime())) {
+          throw new Error(`crew record for ${item.id} has no valid startedAt`);
+        }
+      }
+      // Reading files only: git never runs inside a crew clone.
+      const clone = join(stateRoot(), 'clones', item.id);
+      // The report is read exactly once; everything below verifies and stores that one result.
+      const fileName = reportName(stateRoot(), item.id);
+      if (fileName === undefined) {
+        throw new ReportError(
+          `no report name was drawn for ${item.id}: relaunch it, nothing moved`,
+        );
+      }
+      let report = readReport(clone, item.id, item, { notBefore, fileName });
+      // A review report that does not hold to its brief is a rejected report, like one that
+      // cannot be read: `tick` hands both to the lead.
+      const reviewCaps = () => {
+        try {
+          return checkReviewCaps(readCrewCaps(stateRoot(), item.id), report);
+        } catch (e) {
+          throw new ReportError((e as Error).message);
+        }
+      };
+      const reviewDone =
+        item.type === 'review' && report.status === 'done'
+          ? reviewCaps()
+          : { skipped: [] as string[], target: undefined, notRunHere: undefined };
+      let approvedJobs: ApprovedJob[] = [];
+      let covered: CoveredJob[] = [];
+      // A verdict counts for the commit reviewed: the pull request's head right now.
+      if (item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined) {
+        const m = /^(.+)#(\d+)$/.exec(reviewDone.target) as RegExpExecArray;
+        const info = await prInfo(ports, m[1] as string, Number(m[2]));
+        checkReportHead(report, info.head);
+        // The reviewer could not see CI: an approval counts only while the checks are green.
+        if (report.verdict === 'approve') {
+          const checks = await readChecks({ repo: m[1] as string, pr: Number(m[2]) }, ports.gh);
+          if (checks.kind !== 'pass') {
+            const why =
+              checks.kind === 'pending' ? 'still running' : (checks.reason ?? checks.kind);
+            return {
+              kind: 'waiting',
+              line: `the approval counts only with green checks (${why}); collect again once they pass, nothing moved`,
+            };
+          }
+          // A skipped check counts as green above, so each command the builder could not run
+          // needs a job of a base workflow that runs it and passed here. A refusal goes to the
+          // lead: the review item is blocked with a note, the approval is not stored.
+          if (reviewDone.notRunHere !== undefined) {
+            const config = loadConfig(project);
+            const gate = await verifyNotRunHereJobs({
+              git: ports.git,
+              checkout: approvalCheckout(project, config, m[1] as string),
+              baseOid: info.baseOid,
+              headOid: info.head,
+              ciItem: reviewDone.ciItem === true,
+              commands: reviewDone.notRunHere,
+              entries: report.notRunHereJobs,
+              checks: checks.checks,
+            });
+            if (!gate.ok) {
+              const note = `approval refused: not_run_here entry ${gate.entry}: ${gate.why}`;
+              await withBoardLock(stateRoot(), ports.clock.now(), () => {
+                const fresh = loadBoard(project);
+                if (findItem(fresh, item.id).status !== item.status) {
+                  throw new Error(`${item.id} changed while it was collected; nothing moved`);
+                }
+                let next = transition(fresh, item.id, 'blocked', BY, ports.clock.now());
+                next = withItem(next, item.id, (i) => ({
+                  ...i,
+                  notes: [...(i.notes ?? []), note],
+                }));
+                saveBoard(project, next);
+              });
+              return {
+                kind: 'refused',
+                line: `${item.id}: ${note}; no approval, ${item.id} is blocked for the lead`,
+              };
+            }
+            approvedJobs = gate.jobs;
+            covered = gate.covered;
+          }
+        }
+      }
+      let branch = `studio/${item.id}`;
+      if (
+        report.status === 'done' &&
+        report.pr === undefined &&
+        report.prTitle !== undefined &&
+        !PR_OPTIONAL.includes(item.type)
+      ) {
+        const config = loadConfig(project);
+        const token = crewTokenFor(config, owner);
+        // Opening the pull request is what starts CI: it waits for capacity like a merge does.
+        // The capacity wait runs without the board lock: right before `gh pr create`, the item
+        // must still be as collect found it.
+        const unchanged = () => {
+          const now = findItem(loadBoard(project), item.id);
+          if (now.status !== item.status || now.branch !== item.branch) {
+            throw new Error(
+              `${item.id} changed while waiting for CI capacity (now ${now.status}); no pull request was opened`,
+            );
+          }
+        };
+        const opened = await openCrewPr(
+          ports,
+          item,
+          report.prTitle,
+          report.body,
+          report.notRunHere,
+          token,
+          () => readCapacityTwice(config, ports),
+          unchanged,
+        );
+        if ('held' in opened) {
+          const note = prHeldNote(opened.held, config);
+          await withBoardLock(stateRoot(), ports.clock.now(), () => {
+            const fresh = loadBoard(project);
+            if (findItem(fresh, item.id).status !== item.status) {
+              throw new Error(`${item.id} changed while it was collected; nothing moved`);
+            }
+            // Only the latest hold is kept, so repeated collects do not pile up notes.
+            const held = withItem(fresh, item.id, (i) => ({
+              ...i,
+              notes: [...(i.notes ?? []).filter((n) => !n.startsWith(PR_HELD)), note],
+            }));
+            saveBoard(project, held);
+          });
+          return {
+            kind: 'held',
+            line: `${item.id}: ${note}; the pull request was not opened and branch studio/${item.id} stays as it is. Run studio collect ${item.id} again once CI has room.`,
+          };
+        }
+        report = { ...report, pr: opened.pr };
+      }
+      if (report.pr !== undefined) {
+        const holder = board.items.find(
+          (i) => i.id !== item.id && i.repo === item.repo && i.pr === report.pr,
+        );
+        if (holder) throw new Error(`PR ${report.pr} is already held by ${holder.id}`);
+        const info = await prInfo(ports, item.repo, report.pr);
+        if (info.branch !== `studio/${item.id}`) {
+          throw new Error(
+            `PR ${report.pr} is on branch ${info.branch}, expected studio/${item.id}`,
+          );
+        }
+        branch = info.branch;
+        checkReportHead(report, info.head);
+      } else if (report.status === 'done' && !PR_OPTIONAL.includes(item.type)) {
+        throw new ReportError(`done report for ${item.id} names no pr`);
+      }
+      const now = ports.clock.now();
+      // Under the lock from reading the board again to saving it: a launch clearing an approval
+      // cannot slip in, and what moved while GitHub was asked stays.
+      let review: string | undefined;
+      const { next, fixLimit, supersededBy } = await withBoardLock(stateRoot(), now, () => {
+        const fresh = loadBoard(project);
+        if (findItem(fresh, item.id).status !== item.status) {
+          throw new Error(`${item.id} changed while it was collected; nothing moved`);
+        }
+        const supersededBy =
+          item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined
+            ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot()))
+            : undefined;
+        let next = fresh;
+        if (report.status === 'done') {
+          if (item.status === 'assigned') next = transition(next, item.id, 'in_progress', BY, now);
+          next = transition(next, item.id, 'in_review', BY, now);
+          if (report.pr !== undefined) {
+            const pr = report.pr;
+            // A pull request exists now: an earlier hold is over (history keeps the moves).
+            // What CI must cover is the latest report's list; an earlier one is replaced.
+            next = withItem(next, item.id, (i) => {
+              const notes = (i.notes ?? []).filter((n) => !n.startsWith(PR_HELD));
+              const { notes: _n, notRunHere: _r, ...rest } = i;
+              return {
+                ...rest,
+                ...(notes.length > 0 ? { notes } : {}),
+                ...(report.notRunHere.length > 0 ? { notRunHere: report.notRunHere } : {}),
+                pr,
+                branch,
+              };
+            });
+            // Every pull request gets one fresh reviewer: the review item comes with it, and a
+            // new one after a fix round, once the earlier review has finished.
+            if (!PR_OPTIONAL.includes(item.type)) {
+              const added = withReviewItem(next, findItem(next, item.id), pr);
+              next = added.board;
+              review = added.id;
+            }
+          } else {
+            // Review and research items open no PR: the result is the report itself.
+            next = transition(next, item.id, 'merged', BY, now);
+            // A superseded verdict is no round: the verdict note is what `reviewRounds` counts.
+            const result = [
+              ...(supersededBy !== undefined
+                ? [`superseded by ${supersededBy}`]
+                : report.verdict
+                  ? [`verdict: ${report.verdict}`]
+                  : []),
+              ...(report.reviews ? [`reviews: ${report.reviews}`] : []),
+            ];
+            if (result.length > 0) {
+              next = withItem(next, item.id, (i) => ({
+                ...i,
+                notes: [...(i.notes ?? []), ...capNotes(result)],
+              }));
+            }
+          }
+        } else {
+          next = transition(next, item.id, 'blocked', BY, now);
+          const notes =
+            report.status === 'failed'
+              ? ['crew run failed', ...report.questions.map((q) => `question: ${q}`)]
+              : report.questions.map((q) => `question: ${q}`);
+          next = withItem(next, item.id, (i) => ({
+            ...i,
+            notes: [
+              ...(i.notes ?? []),
+              ...capNotes(notes.length ? notes : ['crew reported blocked']),
+            ],
+          }));
+        }
+        // The verdict goes on the item that holds the pull request; `queue add` and the merge read it.
+        if (
+          item.type === 'review' &&
+          report.status === 'done' &&
+          reviewDone.target !== undefined &&
+          supersededBy === undefined
+        ) {
+          const reviewed = next.items.find(
+            (i) => `${i.repo}#${i.pr}` === reviewDone.target && i.type !== 'review',
+          );
+          if (reviewed !== undefined) {
+            const approvedBase = readCrewCaps(stateRoot(), item.id)?.baseRefName;
+            next = withItem(
+              next,
+              reviewed.id,
+              ({ approvedHead: _h, approvedBase: _b, approvedJobs: _j, ...i }) =>
+                report.verdict === 'approve'
+                  ? {
+                      ...i,
+                      approvedHead: report.headSha,
+                      approvedBase,
+                      ...(approvedJobs.length === 0 ? {} : { approvedJobs }),
+                    }
+                  : i,
+            );
+          }
+          // An approval answers every earlier review of the same pull request: one that ended
+          // blocked or never ran would otherwise hold `queue add` until it is dropped by hand.
+          // A review with a running crew stays; its own collect finds this one newer.
+          if (report.verdict === 'approve') {
+            const target = reviewDone.target;
+            for (const older of next.items) {
+              if (
+                older.id === item.id ||
+                older.type !== 'review' ||
+                ['assigned', 'in_progress', 'merged', 'dropped'].includes(older.status)
+              ) {
+                continue;
+              }
+              const note = reviewTarget(older);
+              const named = note !== undefined && `${note.repo}#${note.pr}` === target;
+              if (!named && readCrewCaps(stateRoot(), older.id)?.reviewsTarget !== target) continue;
+              next = transition(next, older.id, 'dropped', BY, now);
+              next = withItem(next, older.id, (i) => ({
+                ...i,
+                notes: [...(i.notes ?? []), `superseded by ${item.id}, which approved ${target}`],
+              }));
+            }
+          }
+        }
+        const limitTarget =
+          report.status === 'done' &&
+          report.verdict === 'changes_requested' &&
+          supersededBy === undefined
+            ? reviewDone.target
+            : undefined;
+        let fixLimit = false;
+        if (limitTarget !== undefined) {
+          const rounds = reviewRounds(next, limitTarget);
+          fixLimit =
+            rounds >= MAX_REVIEW_ROUNDS || (report.findingAttempts ?? 0) >= MAX_FIX_ATTEMPTS;
+          const builder = next.items.find(
+            (i) => `${i.repo}#${i.pr}` === limitTarget && i.type !== 'review',
+          );
+          if (fixLimit && builder && builder.status !== 'merged' && builder.status !== 'dropped') {
+            if (builder.status !== 'blocked') {
+              next = transition(next, builder.id, 'blocked', BY, now);
+            }
+            next = withItem(next, builder.id, (i) => ({
+              ...i,
+              notes: [
+                ...(i.notes ?? []),
+                `fix limit reached: ${rounds} review rounds, attempts on one finding ${report.findingAttempts ?? 'unknown'}`,
+              ],
+            }));
+          }
+        }
+        saveBoard(project, next);
+        return { next, fixLimit, supersededBy };
+      });
+      // Proposals only: a lesson reaches a role file through `lessons accept`. The item has moved
+      // already, so a problem here must not read as a failed collect.
+      let lessonsProposed = 0;
+      try {
+        lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now);
+      } catch (e) {
+        stderr(`error: lessons: ${(e as Error).message.replace(/\p{Cc}/gu, ' ')}\n`);
+      }
+      const out = {
+        item: item.id,
+        report: report.status,
+        status: findItem(next, item.id).status,
+        ...(report.pr === undefined ? {} : { pr: report.pr }),
+        ...(review === undefined ? {} : { review }),
+        ...(report.verdict === undefined ? {} : { verdict: report.verdict }),
+        ...(report.reviews === undefined ? {} : { reviews: report.reviews }),
+        ...(reviewDone.skipped.length === 0 ? {} : { skipped: reviewDone.skipped }),
+        ...(supersededBy === undefined ? {} : { supersededBy }),
+        ...(fixLimit ? { fixLimit } : {}),
+        ...(lessonsProposed > 0 ? { lessonsProposed } : {}),
+        // What CI must run because the sandbox could not: only the count and the services, which
+        // the schema fixes; the commands are crew text and stay on the item and in the PR body.
+        ...(report.status === 'done' && report.notRunHere.length > 0
+          ? {
+              notRunHere: {
+                count: report.notRunHere.length,
+                missing: [...new Set(report.notRunHere.map((x) => x.missing))],
+              },
+            }
+          : {}),
+        // Each approved job with the reviewer's reason why it covers its command: reviewer text,
+        // one plain line each, data for the lead. The gate proved only that the job ran and passed.
+        ...(covered.length === 0 || supersededBy !== undefined ? {} : { notRunHereJobs: covered }),
+      };
+      return { kind: 'moved', out };
+    };
+
+    /**
+     * One lead heartbeat: collect what ended, try held pull requests again, launch what the plan
+     * assigns, queue approved pull requests and run the queue. Each item's failure is recorded and
+     * the rest goes on; what needs a decision is listed, never decided here.
+     */
+    const tick = async (): Promise<Tick> => {
+      const out: Tick = {
+        collected: [],
+        launched: [],
+        queued: [],
+        merged: [],
+        held: [],
+        needsLead: [],
+        errors: [],
+      };
+      const why = (e: unknown) => (e as Error).message.replace(/\p{Cc}/gu, ' ');
+      const lead = (item: string, reason: string) => {
+        if (!out.needsLead.some((n) => n.item === item && n.reason === reason)) {
+          out.needsLead.push({ item, reason });
+        }
+      };
+      const root = await boundStateRoot();
+      const lock = acquireStateLock(root, TICK_LOCK, {
+        now: ports.clock.now(),
+        heartbeatStaleMs: TICK_LOCK_STALE_MS,
+      });
+      if (!lock) {
+        out.held.push({ item: 'tick', reason: 'another tick is running' });
+        return out;
+      }
+      try {
+        // (a) Crews that ended, and (b) pull requests held for CI capacity: collect again.
+        const records = readCrewRecords(root);
+        for (const item of loadAll().board.items) {
+          if (item.status !== 'assigned' && item.status !== 'in_progress') continue;
+          const rec = records[item.id];
+          const heldPr = (item.notes ?? []).some((n) => n.startsWith(PR_HELD));
+          if (rec === undefined && !heldPr) continue;
+          try {
+            if (rec !== undefined) {
+              const hold = await crewHold(rec, ports);
+              if (hold === 'running') continue;
+              if (hold === 'unverified') {
+                lead(item.id, unverifiedRefusal(rec));
+                continue;
+              }
+            }
+            // A fix limit or a refused approval leaves an item blocked: the sweep below lists it.
+            const r = await collect(item.id);
+            if (r.kind === 'moved') out.collected.push(r.out);
+            else if (r.kind !== 'refused') out.held.push({ item: item.id, reason: r.line });
+          } catch (e) {
+            if (e instanceof ReportError) {
+              lead(item.id, `${why(e)}; studio stop ${item.id} --requeue for its one relaunch`);
+            } else out.errors.push({ item: item.id, error: why(e) });
+          }
+        }
+        // (c) The plan, launched under every gate `launch` keeps.
+        try {
+          const { config, board } = loadAll();
+          const { plan } = await planNow(config, board);
+          for (const a of plan.assign) {
+            try {
+              const res = await launch(a.id);
+              out.launched.push({ item: a.id, name: res.name, pid: res.pid });
+            } catch (e) {
+              const line = why(e);
+              if (/launch\.lock|not in the current plan|reconciling account blocks/.test(line)) {
+                out.held.push({ item: a.id, reason: line });
+              } else out.errors.push({ item: a.id, error: line });
+            }
+          }
+          for (const d of plan.deferred) out.held.push({ item: d.id, reason: d.reason });
+          for (const b of plan.blocked) {
+            if (b.reason.startsWith('waiting on ')) out.held.push({ item: b.id, reason: b.reason });
+            else lead(b.id, b.reason);
+          }
+        } catch (e) {
+          out.errors.push({ item: 'plan', error: why(e) });
+        }
+        // (d) Approved pull requests into the queue, unless a merge failed after the approval.
+        const board = loadBoard(project);
+        for (const b of board.items) {
+          if (b.type === 'review' || b.status !== 'in_review' || b.pr === undefined) continue;
+          const target = `${b.repo}#${b.pr}`;
+          const latest = latestReview(board, target);
+          if (b.approvedHead === undefined) {
+            if (
+              latest?.notes?.includes('verdict: changes_requested') &&
+              !board.items.some((i) => isOpenReviewOf(i, target))
+            ) {
+              lead(
+                b.id,
+                `changes requested by ${latest.id}: blocked → ready with the findings, then the fix round`,
+              );
+            }
+            continue;
+          }
+          const failedAt = b.history.findLast(
+            (h) => h.from === 'queued' && h.to === 'in_review',
+          )?.at;
+          const approvedAt = latest?.history.at(-1)?.at;
+          if (
+            failedAt !== undefined &&
+            (approvedAt === undefined || Date.parse(failedAt) >= Date.parse(approvedAt))
+          ) {
+            const note = (b.notes ?? []).findLast((n) => n.startsWith('merge failed:'));
+            lead(
+              b.id,
+              `${note ?? 'merge failed'}; fix it through a crew and a review, or re-run the same SHA`,
+            );
+            continue;
+          }
+          try {
+            const q = await queueAdd(target);
+            out.queued.push({ item: q.queued, pr: q.pr, repo: q.repo });
+          } catch (e) {
+            lead(b.id, why(e));
+          }
+        }
+        for (const i of loadBoard(project).items) {
+          if (i.status === 'blocked') lead(i.id, `blocked: ${(i.notes ?? []).at(-1) ?? 'no note'}`);
+        }
+      } finally {
+        lock.release();
+      }
+      // (e) The queue, in this process; the tick lock is free meanwhile, the queue has its own.
+      try {
+        if (loadQueue(root).pending.length > 0) {
+          const r = await queueRun();
+          for (const d of r.done) {
+            if (d.result === 'merged') {
+              out.merged.push({
+                ...(d.item === undefined ? {} : { item: d.item }),
+                pr: d.pr,
+                repo: d.repo,
+              });
+            } else
+              lead(d.item ?? `${d.repo}#${d.pr}`, `merge failed: ${d.reason ?? 'unknown reason'}`);
+          }
+          if (r.held !== undefined) out.held.push({ item: 'queue', reason: r.held });
+        }
+      } catch (e) {
+        const line = why(e);
+        if (
+          /^queue already running/.test(line) ||
+          [PAUSED_LINE, LEGACY_LINE].includes(line) ||
+          line === blockHold(ownerRoot())
+        ) {
+          out.held.push({ item: 'queue', reason: line });
+        } else out.errors.push({ item: 'queue', error: line });
+      }
+      return out;
+    };
+
     switch (cmd) {
       case 'board': {
         const { config, board } = loadAll();
@@ -433,45 +1201,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'launch': {
-        if (await reconcile()) {
-          throw new Error(
-            'another Studio process is reconciling account blocks; refusing to launch, try again',
-          );
-        }
-        const { config, board } = loadAll();
-        const item = findItem(board, rest[0]);
-        if (item.status !== 'ready') {
-          throw new Error(`${item.id} is ${item.status}, only ready items can be launched`);
-        }
-        const { plan } = await planNow(config, board);
-        // One launch is one build start against this plan's host reading: a build the plan put
-        // behind another one's start may be the one started now.
-        const launchable =
-          plan.assign.some((i) => i.id === item.id) ||
-          plan.deferred.some((d) => d.id === item.id && d.reason === ONE_BUILD_PER_PLAN);
-        if (!launchable) {
-          const why =
-            plan.blocked.find((b) => b.id === item.id)?.reason ??
-            plan.deferred.find((d) => d.id === item.id)?.reason ??
-            'not in the current plan';
-          throw new Error(`${item.id} is not in the current plan: ${why}`);
-        }
-        const res = await launchCrew(project, item, config, ports, owner);
-        // The launch took a while: re-read the board and move the item on the fresh copy.
-        await withBoardLock(stateRoot(), ports.clock.now(), () => {
-          const fresh = loadBoard(project);
-          if (findItem(fresh, item.id).status !== 'ready') {
-            throw new Error(`${item.id} changed while launching; crew ${res.name} is running`);
-          }
-          const moved = withItem(
-            transition(fresh, item.id, 'assigned', BY, ports.clock.now()),
-            item.id,
-            (i) => ({ ...i, crew: res.name }),
-          );
-          saveBoard(project, moved);
-        });
-        print(res);
+        print(await launch(rest[0]));
         return 0;
+      }
+
+      case 'tick': {
+        refuseCrew(deps.env);
+        if (rest.length > 0) throw new UsageError('tick takes no arguments');
+        const out = await tick();
+        print(out);
+        return out.errors.length === 0 ? 0 : 1;
       }
 
       case 'status': {
@@ -545,473 +1284,25 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'collect': {
-        const { board } = loadAll();
-        const item = findItem(board, rest[0]);
-        if (item.status !== 'assigned' && item.status !== 'in_progress') {
-          throw new Error(
-            `${item.id} is ${item.status}, only assigned or in_progress items can be collected`,
-          );
+        const r = await collect(rest[0]);
+        if (r.kind === 'moved') {
+          print(r.out);
+          return 0;
         }
-        // A running crew may still rewrite its report; an earlier run's report is not this one.
-        const record = readCrewRecords(stateRoot())[item.id];
-        let notBefore: Date | undefined;
-        if (record !== undefined) {
-          if (!Number.isInteger(record.pid) || record.pid <= 0) {
-            throw new Error(`crew record for ${item.id} has no valid pid`);
-          }
-          const hold = await crewHold(record, ports);
-          if (hold === 'unverified') throw new Error(unverifiedRefusal(record));
-          if (hold === 'running') {
-            throw new Error(
-              `crew ${record.name} is still running (pid ${record.pid}); collect after it exited, or stop it first`,
-            );
-          }
-          if ((await crewProcess(record, ports)) === 'unknown') {
-            stderr(`warning: ${unverifiedHandgrip(record)}\n`);
-          }
-          notBefore = new Date(record.startedAt);
-          if (Number.isNaN(notBefore.getTime())) {
-            throw new Error(`crew record for ${item.id} has no valid startedAt`);
-          }
-        }
-        // Reading files only: git never runs inside a crew clone.
-        const clone = join(stateRoot(), 'clones', item.id);
-        // The report is read exactly once; everything below verifies and stores that one result.
-        const fileName = reportName(stateRoot(), item.id);
-        if (fileName === undefined) {
-          throw new Error(`no report name was drawn for ${item.id}: relaunch it, nothing moved`);
-        }
-        let report = readReport(clone, item.id, item, { notBefore, fileName });
-        const reviewDone =
-          item.type === 'review' && report.status === 'done'
-            ? checkReviewCaps(readCrewCaps(stateRoot(), item.id), report)
-            : { skipped: [] as string[], target: undefined, notRunHere: undefined };
-        let approvedJobs: ApprovedJob[] = [];
-        let covered: CoveredJob[] = [];
-        // A verdict counts for the commit reviewed: the pull request's head right now.
-        if (item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined) {
-          const m = /^(.+)#(\d+)$/.exec(reviewDone.target) as RegExpExecArray;
-          const info = await prInfo(ports, m[1] as string, Number(m[2]));
-          checkReportHead(report, info.head);
-          // The reviewer could not see CI: an approval counts only while the checks are green.
-          if (report.verdict === 'approve') {
-            const checks = await readChecks({ repo: m[1] as string, pr: Number(m[2]) }, ports.gh);
-            if (checks.kind !== 'pass') {
-              const why =
-                checks.kind === 'pending' ? 'still running' : (checks.reason ?? checks.kind);
-              throw new Error(
-                `the approval counts only with green checks (${why}); collect again once they pass, nothing moved`,
-              );
-            }
-            // A skipped check counts as green above, so each command the builder could not run
-            // needs a job of a base workflow that runs it and passed here. A refusal goes to the
-            // lead: the review item is blocked with a note, the approval is not stored.
-            if (reviewDone.notRunHere !== undefined) {
-              const config = loadConfig(project);
-              const gate = await verifyNotRunHereJobs({
-                git: ports.git,
-                checkout: approvalCheckout(project, config, m[1] as string),
-                baseOid: info.baseOid,
-                headOid: info.head,
-                ciItem: reviewDone.ciItem === true,
-                commands: reviewDone.notRunHere,
-                entries: report.notRunHereJobs,
-                checks: checks.checks,
-              });
-              if (!gate.ok) {
-                const note = `approval refused: not_run_here entry ${gate.entry}: ${gate.why}`;
-                await withBoardLock(stateRoot(), ports.clock.now(), () => {
-                  const fresh = loadBoard(project);
-                  if (findItem(fresh, item.id).status !== item.status) {
-                    throw new Error(`${item.id} changed while it was collected; nothing moved`);
-                  }
-                  let next = transition(fresh, item.id, 'blocked', BY, ports.clock.now());
-                  next = withItem(next, item.id, (i) => ({
-                    ...i,
-                    notes: [...(i.notes ?? []), note],
-                  }));
-                  saveBoard(project, next);
-                });
-                stderr(`${item.id}: ${note}; no approval, ${item.id} is blocked for the lead\n`);
-                return 1;
-              }
-              approvedJobs = gate.jobs;
-              covered = gate.covered;
-            }
-          }
-        }
-        let branch = `studio/${item.id}`;
-        if (
-          report.status === 'done' &&
-          report.pr === undefined &&
-          report.prTitle !== undefined &&
-          !PR_OPTIONAL.includes(item.type)
-        ) {
-          const config = loadConfig(project);
-          const token = crewTokenFor(config, owner);
-          // Opening the pull request is what starts CI: it waits for capacity like a merge does.
-          // The capacity wait runs without the board lock: right before `gh pr create`, the item
-          // must still be as collect found it.
-          const unchanged = () => {
-            const now = findItem(loadBoard(project), item.id);
-            if (now.status !== item.status || now.branch !== item.branch) {
-              throw new Error(
-                `${item.id} changed while waiting for CI capacity (now ${now.status}); no pull request was opened`,
-              );
-            }
-          };
-          const opened = await openCrewPr(
-            ports,
-            item,
-            report.prTitle,
-            report.body,
-            report.notRunHere,
-            token,
-            () => readCapacityTwice(config, ports),
-            unchanged,
-          );
-          if ('held' in opened) {
-            const note = prHeldNote(opened.held, config);
-            await withBoardLock(stateRoot(), ports.clock.now(), () => {
-              const fresh = loadBoard(project);
-              if (findItem(fresh, item.id).status !== item.status) {
-                throw new Error(`${item.id} changed while it was collected; nothing moved`);
-              }
-              // Only the latest hold is kept, so repeated collects do not pile up notes.
-              const held = withItem(fresh, item.id, (i) => ({
-                ...i,
-                notes: [...(i.notes ?? []).filter((n) => !n.startsWith(PR_HELD)), note],
-              }));
-              saveBoard(project, held);
-            });
-            stderr(
-              `${item.id}: ${note}; the pull request was not opened and branch studio/${item.id} stays as it is. Run studio collect ${item.id} again once CI has room.\n`,
-            );
-            return 1;
-          }
-          report = { ...report, pr: opened.pr };
-        }
-        if (report.pr !== undefined) {
-          const holder = board.items.find(
-            (i) => i.id !== item.id && i.repo === item.repo && i.pr === report.pr,
-          );
-          if (holder) throw new Error(`PR ${report.pr} is already held by ${holder.id}`);
-          const info = await prInfo(ports, item.repo, report.pr);
-          if (info.branch !== `studio/${item.id}`) {
-            throw new Error(
-              `PR ${report.pr} is on branch ${info.branch}, expected studio/${item.id}`,
-            );
-          }
-          branch = info.branch;
-          checkReportHead(report, info.head);
-        } else if (report.status === 'done' && !PR_OPTIONAL.includes(item.type)) {
-          throw new Error(`done report for ${item.id} names no pr`);
-        }
-        const now = ports.clock.now();
-        // Under the lock from reading the board again to saving it: a launch clearing an approval
-        // cannot slip in, and what moved while GitHub was asked stays.
-        const { next, fixLimit, supersededBy } = await withBoardLock(stateRoot(), now, () => {
-          const fresh = loadBoard(project);
-          if (findItem(fresh, item.id).status !== item.status) {
-            throw new Error(`${item.id} changed while it was collected; nothing moved`);
-          }
-          const supersededBy =
-            item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined
-              ? newerReview(stateRoot(), item.id, reviewDone.target, readCrewRecords(stateRoot()))
-              : undefined;
-          let next = fresh;
-          if (report.status === 'done') {
-            if (item.status === 'assigned')
-              next = transition(next, item.id, 'in_progress', BY, now);
-            next = transition(next, item.id, 'in_review', BY, now);
-            if (report.pr !== undefined) {
-              const pr = report.pr;
-              // A pull request exists now: an earlier hold is over (history keeps the moves).
-              // What CI must cover is the latest report's list; an earlier one is replaced.
-              next = withItem(next, item.id, (i) => {
-                const notes = (i.notes ?? []).filter((n) => !n.startsWith(PR_HELD));
-                const { notes: _n, notRunHere: _r, ...rest } = i;
-                return {
-                  ...rest,
-                  ...(notes.length > 0 ? { notes } : {}),
-                  ...(report.notRunHere.length > 0 ? { notRunHere: report.notRunHere } : {}),
-                  pr,
-                  branch,
-                };
-              });
-            } else {
-              // Review and research items open no PR: the result is the report itself.
-              next = transition(next, item.id, 'merged', BY, now);
-              // A superseded verdict is no round: the verdict note is what `reviewRounds` counts.
-              const result = [
-                ...(supersededBy !== undefined
-                  ? [`superseded by ${supersededBy}`]
-                  : report.verdict
-                    ? [`verdict: ${report.verdict}`]
-                    : []),
-                ...(report.reviews ? [`reviews: ${report.reviews}`] : []),
-              ];
-              if (result.length > 0) {
-                next = withItem(next, item.id, (i) => ({
-                  ...i,
-                  notes: [...(i.notes ?? []), ...capNotes(result)],
-                }));
-              }
-            }
-          } else {
-            next = transition(next, item.id, 'blocked', BY, now);
-            const notes =
-              report.status === 'failed'
-                ? ['crew run failed', ...report.questions.map((q) => `question: ${q}`)]
-                : report.questions.map((q) => `question: ${q}`);
-            next = withItem(next, item.id, (i) => ({
-              ...i,
-              notes: [
-                ...(i.notes ?? []),
-                ...capNotes(notes.length ? notes : ['crew reported blocked']),
-              ],
-            }));
-          }
-          // The verdict goes on the item that holds the pull request; `queue add` and the merge read it.
-          if (
-            item.type === 'review' &&
-            report.status === 'done' &&
-            reviewDone.target !== undefined &&
-            supersededBy === undefined
-          ) {
-            const reviewed = next.items.find(
-              (i) => `${i.repo}#${i.pr}` === reviewDone.target && i.type !== 'review',
-            );
-            if (reviewed !== undefined) {
-              const approvedBase = readCrewCaps(stateRoot(), item.id)?.baseRefName;
-              next = withItem(
-                next,
-                reviewed.id,
-                ({ approvedHead: _h, approvedBase: _b, approvedJobs: _j, ...i }) =>
-                  report.verdict === 'approve'
-                    ? {
-                        ...i,
-                        approvedHead: report.headSha,
-                        approvedBase,
-                        ...(approvedJobs.length === 0 ? {} : { approvedJobs }),
-                      }
-                    : i,
-              );
-            }
-            // An approval answers every earlier review of the same pull request: one that ended
-            // blocked or never ran would otherwise hold `queue add` until it is dropped by hand.
-            // A review with a running crew stays; its own collect finds this one newer.
-            if (report.verdict === 'approve') {
-              const target = reviewDone.target;
-              for (const older of next.items) {
-                if (
-                  older.id === item.id ||
-                  older.type !== 'review' ||
-                  ['assigned', 'in_progress', 'merged', 'dropped'].includes(older.status)
-                ) {
-                  continue;
-                }
-                const note = reviewTarget(older);
-                const named = note !== undefined && `${note.repo}#${note.pr}` === target;
-                if (!named && readCrewCaps(stateRoot(), older.id)?.reviewsTarget !== target)
-                  continue;
-                next = transition(next, older.id, 'dropped', BY, now);
-                next = withItem(next, older.id, (i) => ({
-                  ...i,
-                  notes: [...(i.notes ?? []), `superseded by ${item.id}, which approved ${target}`],
-                }));
-              }
-            }
-          }
-          const limitTarget =
-            report.status === 'done' &&
-            report.verdict === 'changes_requested' &&
-            supersededBy === undefined
-              ? reviewDone.target
-              : undefined;
-          let fixLimit = false;
-          if (limitTarget !== undefined) {
-            const rounds = reviewRounds(next, limitTarget);
-            fixLimit =
-              rounds >= MAX_REVIEW_ROUNDS || (report.findingAttempts ?? 0) >= MAX_FIX_ATTEMPTS;
-            const builder = next.items.find(
-              (i) => `${i.repo}#${i.pr}` === limitTarget && i.type !== 'review',
-            );
-            if (
-              fixLimit &&
-              builder &&
-              builder.status !== 'merged' &&
-              builder.status !== 'dropped'
-            ) {
-              if (builder.status !== 'blocked') {
-                next = transition(next, builder.id, 'blocked', BY, now);
-              }
-              next = withItem(next, builder.id, (i) => ({
-                ...i,
-                notes: [
-                  ...(i.notes ?? []),
-                  `fix limit reached: ${rounds} review rounds, attempts on one finding ${report.findingAttempts ?? 'unknown'}`,
-                ],
-              }));
-            }
-          }
-          saveBoard(project, next);
-          return { next, fixLimit, supersededBy };
-        });
-        // Proposals only: a lesson reaches a role file through `lessons accept`. The item has moved
-        // already, so a problem here must not read as a failed collect.
-        let lessonsProposed = 0;
-        try {
-          lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now);
-        } catch (e) {
-          stderr(`error: lessons: ${(e as Error).message.replace(/\p{Cc}/gu, ' ')}\n`);
-        }
-        print({
-          item: item.id,
-          report: report.status,
-          status: findItem(next, item.id).status,
-          ...(report.pr === undefined ? {} : { pr: report.pr }),
-          ...(report.verdict === undefined ? {} : { verdict: report.verdict }),
-          ...(report.reviews === undefined ? {} : { reviews: report.reviews }),
-          ...(reviewDone.skipped.length === 0 ? {} : { skipped: reviewDone.skipped }),
-          ...(supersededBy === undefined ? {} : { supersededBy }),
-          ...(fixLimit ? { fixLimit } : {}),
-          ...(lessonsProposed > 0 ? { lessonsProposed } : {}),
-          // What CI must run because the sandbox could not: only the count and the services, which
-          // the schema fixes; the commands are crew text and stay on the item and in the PR body.
-          ...(report.status === 'done' && report.notRunHere.length > 0
-            ? {
-                notRunHere: {
-                  count: report.notRunHere.length,
-                  missing: [...new Set(report.notRunHere.map((x) => x.missing))],
-                },
-              }
-            : {}),
-          // Each approved job with the reviewer's reason why it covers its command: reviewer text,
-          // one plain line each, data for the lead. The gate proved only that the job ran and passed.
-          ...(covered.length === 0 || supersededBy !== undefined
-            ? {}
-            : { notRunHereJobs: covered }),
-        });
-        return 0;
+        stderr(r.kind === 'waiting' ? `studio: ${r.line}\n` : `${r.line}\n`);
+        return 1;
       }
 
       case 'queue': {
         const [sub, arg] = rest;
         if (sub === 'add') {
-          const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/.exec(arg ?? '');
-          if (!m) throw new UsageError('queue add needs <repo>#<pr>, e.g. org/app#12');
-          const repo = m[1] as string;
-          const pr = Number(m[2]);
-          const { config, board } = loadAll();
-          refuseNativeQueue(config);
-          if (!config.repos.includes(repo)) throw new Error(`repository ${repo} is not configured`);
-          const item = board.items.find((i) => i.pr === pr && i.repo === repo);
-          if (!item) throw new Error(`no board item has PR ${repo}#${pr}`);
-          if (item.status !== 'in_review') {
-            throw new Error(`${item.id} is ${item.status}, only in_review items can be queued`);
-          }
-          // Every pull request goes through a reviewer first (spec, section 5): no type is exempt.
-          const view = await viewPr({ pr, repo }, ports.gh);
-          if (typeof view === 'string') throw new Error(view);
-          const problem = await approvalProblem(
-            ports,
-            approvalCheckout(project, config, repo),
-            { repo, pr },
-            { head: item.approvedHead, base: item.approvedBase },
-            view.head,
-          );
-          if (problem !== undefined) throw new Error(problem);
-          const root = await boundStateRoot();
-          const pending = await withBoardLock(stateRoot(), ports.clock.now(), () => {
-            // What the checks above read may have moved while they went to GitHub.
-            const fresh = loadBoard(project);
-            const now = findItem(fresh, item.id);
-            if (now.status !== 'in_review' || now.approvedHead !== item.approvedHead) {
-              throw new Error(`${item.id} changed while it was checked; try again`);
-            }
-            const open = openReview(stateRoot(), fresh, `${repo}#${pr}`);
-            if (open !== undefined) throw new Error(openReviewLine(open, `${repo}#${pr}`));
-            // Merged into queue.json on disk under the queue file lock: safe during a running queue.
-            const added = enqueue(root, { pr, repo, item: item.id });
-            saveBoard(project, transition(fresh, item.id, 'queued', BY, ports.clock.now()));
-            return added;
-          });
-          print({ queued: item.id, pr, repo, pending });
+          print(await queueAdd(arg));
           return 0;
         }
         if (sub === 'run') {
-          const { config } = loadAll();
-          refuseNativeQueue(config);
-          const root = await boundStateRoot();
-          /** An account block, a pause, or old state files that were not merged into the owner root. */
-          const queueHold = (): string | undefined =>
-            blockHold(ownerRoot()) ??
-            (readPause(root).paused ? PAUSED_LINE : undefined) ??
-            (pendingLegacyState(dirname(ownerRoot())).length > 0 ? LEGACY_LINE : undefined);
-          const blockedNow = queueHold();
-          if (blockedNow !== undefined) throw new Error(blockedNow);
-          let heldLine: string | undefined;
-          const hold = () => {
-            const line = queueHold();
-            if (line !== undefined) heldLine = line;
-            return line;
-          };
-          const log = (m: string) => stderr(`${m}\n`);
-          const lock = acquireQueueRunLock(root, ports.clock.now(), log);
-          const removeSignals = installSignalRelease(lock);
-          const beat = () => lock.heartbeat(ports.clock.now());
-          // Every poll and every wait of the queue goes through this clock: each one is a heartbeat.
-          const runPorts: Ports = {
-            ...ports,
-            clock: {
-              now: () => ports.clock.now(),
-              sleep: async (ms) => {
-                beat();
-                await ports.clock.sleep(ms);
-                beat();
-              },
-            },
-          };
-          try {
-            const state = loadQueue(root);
-            await reconcileQueued(project, root, state, ports, stderr);
-            const before = state.done.length;
-            await runQueue(
-              state,
-              config,
-              runPorts,
-              // The runner owns `current` and `done`; `pending` stays whatever is on disk.
-              (q) => {
-                beat();
-                updateQueue(root, (disk) => {
-                  disk.current = q.current;
-                  disk.done = q.done;
-                });
-              },
-              {
-                stateRoot: root,
-                log,
-                hold,
-                mergeAllowed: (entry, head) =>
-                  boardBlocksMerge(project, root, config, entry, head, ports),
-                takeNext: () => takeNextPending(root),
-                onDone: (d) => applyQueueResults(project, root, [d], ports, stderr),
-              },
-            );
-            const finished = state.done.slice(before);
-            print({
-              ...(heldLine === undefined ? {} : { held: heldLine }),
-              merged: finished.filter((d) => d.result === 'merged').length,
-              failed: finished.filter((d) => d.result === 'failed').length,
-              done: finished,
-            });
-            if (heldLine !== undefined) return 1;
-          } finally {
-            removeSignals();
-            lock.release();
-          }
-          return 0;
+          const r = await queueRun();
+          print(r);
+          return r.held === undefined ? 0 : 1;
         }
         throw new UsageError('queue needs a subcommand: add <repo>#<pr> | run');
       }

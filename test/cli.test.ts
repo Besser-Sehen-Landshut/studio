@@ -15,7 +15,14 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { loadBoard } from '../src/board.js';
 import { runCli } from '../src/cli.js';
-import { acquireStateLock, ownerStateRootFor, stateRootFor, writeStateFile } from '../src/paths.js';
+import {
+  acquireStateLock,
+  checkStateMarker,
+  ownerStateRootFor,
+  projectRealpath,
+  stateRootFor,
+  writeStateFile,
+} from '../src/paths.js';
 import type { Claude, Gh, Ports } from '../src/ports.js';
 import { realPorts } from '../src/ports.js';
 import { acquireQueueRunLock, enqueue, loadQueue, saveQueue } from '../src/queue.js';
@@ -78,6 +85,8 @@ interface ItemSpec {
   /** Raw YAML lines added to the item. */
   extra?: string[];
   role?: string;
+  /** Raw YAML for the history; none by default. */
+  history?: string;
 }
 
 const itemYaml = (s: ItemSpec): string =>
@@ -102,7 +111,7 @@ const itemYaml = (s: ItemSpec): string =>
     ...(s.ownerOnly ? ['    owner_only: true'] : []),
     ...(s.notes ? [`    notes: ${JSON.stringify(s.notes)}`] : []),
     ...(s.extra ?? []),
-    '    history: []',
+    `    history: ${s.history ?? '[]'}`,
   ].join('\n');
 
 let n = 0;
@@ -3300,5 +3309,444 @@ describe('studio overview', () => {
       expect(r.out).toBe('');
       expect(r.err).toContain('overview is for the owner and needs a terminal');
     }
+  });
+});
+
+describe('collect adds the review item for a pull request', () => {
+  const view = (pr: number, id = 'APP-1') =>
+    fakeGh((l) =>
+      l.startsWith(`pr view ${pr} --repo org/app`)
+        ? { stdout: JSON.stringify({ headRefOid: HEAD, headRefName: `studio/${id}`, ...OWN }) }
+        : undefined,
+    );
+  const done = (id: string, pr: number) =>
+    `status: done\nitem: ${id}\npr: ${pr}\nhead_sha: ${HEAD}\ntests_run: 4`;
+  const reviewsOf = (fx: Fx) => loadBoard(fx.project).items.filter((i) => i.type === 'review');
+  const review = (id: string, status: string, notes: string[]): ItemSpec => ({
+    id,
+    status,
+    type: 'review',
+    role: 'reviewer',
+    notes,
+  });
+
+  it('a builder that opens its pull request gets one ready review item with its DoD', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'assigned', dod: ['GET /health returns 200', 'test added'] },
+      { id: 'APP-7', status: 'merged' },
+      { id: 'WEB-30', status: 'ready' },
+    ]);
+    writeReport(fx, 'APP-1', done('APP-1', 7));
+    const r = await cli(fx, fakePorts(view(7).gh).ports, 'collect', 'APP-1');
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out)).toMatchObject({
+      item: 'APP-1',
+      status: 'in_review',
+      review: 'APP-8',
+    });
+    const added = statusOf(fx, 'APP-8');
+    expect(added).toMatchObject({
+      title: 'Review of APP-1 (PR #7)',
+      type: 'review',
+      role: 'reviewer',
+      repo: 'org/app',
+      status: 'ready',
+      paths: [],
+      touches: [],
+      dependsOn: [],
+      dod: ['GET /health returns 200', 'test added'],
+      notes: ['review org/app#7'],
+      history: [],
+    });
+    expect(added?.component).toBeUndefined();
+  });
+
+  it('a second collect while that review is open adds none', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'assigned' },
+      review('APP-2', 'ready', ['review org/app#7']),
+    ]);
+    writeReport(fx, 'APP-1', done('APP-1', 7));
+    const r = await cli(fx, fakePorts(view(7).gh).ports, 'collect', 'APP-1');
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out).review).toBeUndefined();
+    expect(reviewsOf(fx).map((i) => i.id)).toEqual(['APP-2']);
+  });
+
+  it('after a fix round a new review item follows the finished one', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'assigned' },
+      review('APP-2', 'merged', [
+        'review org/app#7',
+        'verdict: changes_requested',
+        'reviews: org/app#7',
+      ]),
+      review('APP-3', 'dropped', ['review org/app#7']),
+    ]);
+    writeReport(fx, 'APP-1', done('APP-1', 7));
+    const r = await cli(fx, fakePorts(view(7).gh).ports, 'collect', 'APP-1');
+    expect(JSON.parse(r.out).review).toBe('APP-4');
+    expect(statusOf(fx, 'APP-4')).toMatchObject({ status: 'ready', notes: ['review org/app#7'] });
+  });
+
+  it('copies paths and named components; a review of another pull request does not count', async () => {
+    const yaml = `${STUDIO_YAML}components:\n  - { id: api, name: API server, repo: org/app, paths: ["server/**"] }\n`;
+    const fx = makeFx(
+      [
+        { id: 'APP-1', status: 'assigned', extra: ['    component: api'] },
+        review('APP-5', 'ready', ['review org/app#6']),
+      ],
+      yaml,
+    );
+    const board = join(fx.project, '.studio', 'board.yaml');
+    writeFileSync(board, readFileSync(board, 'utf8').replace('paths: []', 'paths: ["server/**"]'));
+    writeReport(fx, 'APP-1', done('APP-1', 7));
+    const r = await cli(fx, fakePorts(view(7).gh).ports, 'collect', 'APP-1');
+    expect(JSON.parse(r.out).review).toBe('APP-6');
+    expect(statusOf(fx, 'APP-6')).toMatchObject({
+      paths: ['server/**'],
+      component: 'api',
+      touches: [],
+    });
+  });
+
+  it('a research item opens no pull request and gets no review', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned', type: 'research', role: 'researcher' }]);
+    writeReport(fx, 'APP-1', `status: done\nitem: APP-1\nhead_sha: ${HEAD}`);
+    const r = await cli(fx, fakePorts(fakeGh().gh).ports, 'collect', 'APP-1');
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out).review).toBeUndefined();
+    expect(reviewsOf(fx)).toEqual([]);
+  });
+});
+
+describe('studio tick', () => {
+  const CREW_TOKEN = 'fake-value-crew-gh-token-77bb';
+  const withToken = (fx: Fx) => {
+    const dir = join(fx.home, '.config', 'studio');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'crew-token'), `${CREW_TOKEN}\n`, { mode: 0o600 });
+  };
+  const tick = async (fx: Fx, ports: Ports) => {
+    const r = await cli(fx, ports, 'tick');
+    return { ...r, json: JSON.parse(r.out || '{}') };
+  };
+  const ids = (list: { item?: string }[]) => list.map((e) => e.item);
+  /** Crews that live until the test lets them end; each start gets its own pid. */
+  const crews = (ports: Ports) => {
+    const live = new Set<number>();
+    let next = 5000;
+    ports.claude = {
+      start: async () => {
+        live.add(next);
+        return { pid: next++ };
+      },
+      alive: (pid) => live.has(pid),
+      identity: async (pid) => `start-${pid}`,
+      stop: async (pid) => {
+        live.delete(pid);
+      },
+    };
+    return { exitAll: () => live.clear() };
+  };
+  /** Binds the state root to the project, as the first launch does. */
+  const bind = (fx: Fx) =>
+    checkStateMarker(fx.state, {
+      projectRealpath: projectRealpath(fx.project),
+      originUrl: git(fx.project, 'remote', 'get-url', 'origin'),
+    });
+  const record = (item: string, role = 'builder') => ({
+    name: `crew-${item}`,
+    item,
+    role,
+    pid: 999999,
+    log: '/x',
+    startedAt: '2026-10-30T08:00:00.000Z',
+  });
+
+  it('carries an item from ready to merged over several ticks', async () => {
+    const fx = makeFx([{ id: 'APP-1', dod: ['the fix holds'] }]);
+    withToken(fx);
+    // The builder's branch as a real commit, so the review launch can read its change.
+    const base = git(fx.project, 'rev-parse', 'HEAD');
+    git(fx.project, 'checkout', '-q', '-b', 'studio/APP-1');
+    mkdirSync(join(fx.project, 'app-1'));
+    writeFileSync(join(fx.project, 'app-1', 'fix.ts'), 'export const x = 1;\n');
+    git(fx.project, 'add', 'app-1/fix.ts');
+    git(fx.project, 'commit', '-q', '-m', 'fix');
+    const head = git(fx.project, 'rev-parse', 'HEAD');
+    git(fx.project, 'push', '-q', 'origin', 'studio/APP-1');
+    git(fx.project, 'checkout', '-q', 'main');
+    // One pull request of studio/APP-1 on a GitHub that answers like gh.
+    const s = { busy: '8', open: false, created: 0, merged: 0 };
+    const view = { headRefOid: head, headRefName: 'studio/APP-1', ...OWN, baseRefOid: base };
+    const gh: Gh = {
+      api: async () => s.busy,
+      run: async (args) => {
+        const line = args.join(' ');
+        const ok = (v: unknown) => ({
+          code: 0,
+          stdout: typeof v === 'string' ? v : JSON.stringify(v),
+          stderr: '',
+        });
+        if (line.startsWith('pr list')) return ok(s.open ? [{ number: 31 }] : []);
+        if (line.startsWith('pr create')) {
+          s.open = true;
+          s.created++;
+          return ok('https://github.com/org/app/pull/31\n');
+        }
+        if (line.startsWith('pr checks 31')) return ok([{ name: 'ci', bucket: 'pass' }]);
+        if (line.startsWith('repo view org/app')) return ok({ defaultBranchRef: { name: 'main' } });
+        if (line.endsWith('--json baseRefName')) return ok({ baseRefName: 'main' });
+        if (line.startsWith('pr view 31 --repo org/app --json files')) {
+          return ok({
+            ...view,
+            baseRefName: 'main',
+            title: 'APP-1: fix it',
+            body: '',
+            changedFiles: 1,
+            files: [{ path: 'app-1/fix.ts', additions: 1, deletions: 0 }],
+          });
+        }
+        if (line.startsWith('pr view 31 --repo org/app --json headRefOid,state,mergeable')) {
+          return ok({ headRefOid: head, state: 'OPEN', mergeable: 'MERGEABLE' });
+        }
+        if (line.includes('--json mergeCommit'))
+          return ok({ mergeCommit: { oid: 'c'.repeat(40) } });
+        if (line.includes('--json commits')) return ok('2026-10-30T08:00:00Z\n');
+        if (line.startsWith('pr view 31 --repo org/app')) return ok(view);
+        if (line.startsWith('pr update-branch 31')) return ok('');
+        if (line.startsWith('pr merge 31')) {
+          s.merged++;
+          return ok('');
+        }
+        return { code: 1, stdout: '', stderr: `unscripted: ${line}` };
+      },
+    };
+    const { ports } = fakePorts(gh);
+    const { exitAll } = crews(ports);
+
+    // 1: the planner assigns APP-1 and its crew starts.
+    const t1 = await tick(fx, ports);
+    expect(t1.json.errors).toEqual([]);
+    expect(t1.code).toBe(0);
+    expect(ids(t1.json.launched)).toEqual(['APP-1']);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+    // Again while the crew works: nothing to do, nothing twice.
+    const again = await tick(fx, ports);
+    expect(again.json).toMatchObject({ collected: [], launched: [], queued: [], merged: [] });
+
+    // 2: the crew ended with a report; CI is full, so the pull request is held.
+    exitAll();
+    writeReport(
+      fx,
+      'APP-1',
+      `status: done\nitem: APP-1\npr_title: "APP-1: fix it"\nhead_sha: ${head}\ntests_run: 3`,
+    );
+    const t2 = await tick(fx, ports);
+    expect(t2.json.errors).toEqual([]);
+    expect(t2.json.collected).toEqual([]);
+    expect(t2.json.held).toEqual([
+      expect.objectContaining({ item: 'APP-1', reason: expect.stringMatching(/ci capacity/) }),
+    ]);
+    expect(s.created).toBe(0);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+
+    // 3: CI has room: the pull request opens, the review item comes with it and is launched.
+    s.busy = '0';
+    const t3 = await tick(fx, ports);
+    expect(t3.json.errors).toEqual([]);
+    expect(t3.json.collected).toEqual([
+      expect.objectContaining({ item: 'APP-1', status: 'in_review', pr: 31, review: 'APP-2' }),
+    ]);
+    expect(ids(t3.json.launched)).toEqual(['APP-2']);
+    expect(s.created).toBe(1);
+    expect(statusOf(fx, 'APP-2')).toMatchObject({ status: 'assigned', type: 'review' });
+
+    // 4: the reviewer approves; the tick collects it, queues the pull request and merges it.
+    exitAll();
+    const caps = JSON.parse(readFileSync(join(fx.state, 'briefs', 'APP-2.caps.json'), 'utf8'));
+    const results = (caps.analyzers as string[]).map((a) => `${a}: pass`).join(', ');
+    writeReport(
+      fx,
+      'APP-2',
+      `status: done\nitem: APP-2\nverdict: approve\nreviews: org/app#31\nhead_sha: ${head}\nmutation_probe: "red: t"\nanalyzers: { ${results} }`,
+    );
+    const t4 = await tick(fx, ports);
+    expect(t4.json.errors).toEqual([]);
+    expect(t4.json.needsLead).toEqual([]);
+    expect(t4.json.collected).toEqual([
+      expect.objectContaining({ item: 'APP-2', status: 'merged', verdict: 'approve' }),
+    ]);
+    expect(t4.json.queued).toEqual([{ item: 'APP-1', pr: 31, repo: 'org/app' }]);
+    expect(t4.json.merged).toEqual([{ item: 'APP-1', pr: 31, repo: 'org/app' }]);
+    expect(s.merged).toBe(1);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('merged');
+
+    // 5: nothing is left; a further tick changes nothing.
+    const t5 = await tick(fx, ports);
+    expect(t5.json).toEqual({
+      collected: [],
+      launched: [],
+      queued: [],
+      merged: [],
+      held: [],
+      needsLead: [],
+      errors: [],
+    });
+  }, 30_000);
+
+  it('one bad item does not stop the others', async () => {
+    const fx = makeFx(
+      [
+        { id: 'APP-1', status: 'assigned' },
+        { id: 'APP-2', status: 'assigned' },
+        { id: 'APP-3', status: 'assigned' },
+        { id: 'APP-4' },
+        // Room for four builders: the three that ended still count until they move.
+      ],
+      STUDIO_YAML.replace(
+        'builder: { model: sonnet, wip: 2 }',
+        'builder: { model: sonnet, wip: 4 }',
+      ),
+    );
+    bind(fx);
+    writeStateFile(
+      fx.state,
+      join(fx.state, 'crew.json'),
+      JSON.stringify({
+        'APP-1': record('APP-1'),
+        'APP-2': record('APP-2'),
+        'APP-3': record('APP-3'),
+      }),
+    );
+    // APP-1 left a report that cannot be read; GitHub fails for APP-2's pull request.
+    writeReport(fx, 'APP-1', 'status: [done');
+    writeReport(fx, 'APP-2', `status: done\nitem: APP-2\npr: 7\nhead_sha: ${HEAD}\ntests_run: 2`);
+    writeReport(fx, 'APP-3', `status: done\nitem: APP-3\npr: 8\nhead_sha: ${HEAD}\ntests_run: 2`);
+    const { gh } = fakeGh((l) =>
+      l.startsWith('pr view 7')
+        ? { code: 1, stderr: 'HTTP 502' }
+        : l.startsWith('pr view 8')
+          ? { stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-3', ...OWN }) }
+          : undefined,
+    );
+    const t = await tick(fx, fakePorts(gh).ports);
+    expect(t.code).toBe(1);
+    expect(t.json.needsLead).toEqual([
+      expect.objectContaining({ item: 'APP-1', reason: expect.stringMatching(/report/) }),
+    ]);
+    // The new review APP-5 fails to launch too (this GitHub cannot show its pull request), and
+    // APP-4 starts all the same.
+    expect(t.json.errors).toEqual([
+      { item: 'APP-2', error: expect.stringMatching(/cannot read org\/app#7/) },
+      { item: 'APP-5', error: expect.stringMatching(/cannot read org\/app#8/) },
+    ]);
+    expect(t.json.collected).toEqual([
+      expect.objectContaining({ item: 'APP-3', status: 'in_review', review: 'APP-5' }),
+    ]);
+    expect(ids(t.json.launched)).toEqual(['APP-4']);
+    expect(statusOf(fx, 'APP-5')?.status).toBe('ready');
+    expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+    expect(statusOf(fx, 'APP-2')?.status).toBe('assigned');
+  });
+
+  it('a request for changes and the fix limit go to the lead; nothing is queued', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'in_review', pr: 9, approvedHead: null },
+      {
+        id: 'APP-2',
+        status: 'merged',
+        type: 'review',
+        role: 'reviewer',
+        notes: ['review org/app#9', 'verdict: changes_requested', 'reviews: org/app#9'],
+      },
+      { id: 'APP-3', status: 'blocked', notes: ['fix limit reached: 6 review rounds'] },
+    ]);
+    const t = await tick(fx, fakePorts(fakeGh().gh).ports);
+    expect(t.code).toBe(0);
+    expect(t.json.queued).toEqual([]);
+    expect(t.json.needsLead).toEqual([
+      { item: 'APP-1', reason: expect.stringMatching(/changes requested by APP-2/) },
+      { item: 'APP-3', reason: 'blocked: fix limit reached: 6 review rounds' },
+    ]);
+  });
+
+  it('a merge that failed after the approval is not queued again', async () => {
+    const at = (t: string, from: string, to: string) =>
+      `{ at: "${t}", from: ${from}, to: ${to}, by: studio }`;
+    const fx = makeFx([
+      {
+        id: 'APP-1',
+        status: 'in_review',
+        pr: 5,
+        notes: ['merge failed: checks red'],
+        history: `[${at('2026-10-30T10:00:00.000Z', 'in_review', 'queued')}, ${at('2026-10-30T11:00:00.000Z', 'queued', 'in_review')}]`,
+      },
+      {
+        id: 'APP-2',
+        status: 'merged',
+        type: 'review',
+        role: 'reviewer',
+        notes: ['review org/app#5', 'verdict: approve', 'reviews: org/app#5'],
+        history: `[${at('2026-10-30T09:00:00.000Z', 'in_review', 'merged')}]`,
+      },
+    ]);
+    const t = await tick(fx, fakePorts(passingGh().gh).ports);
+    expect(t.json.queued).toEqual([]);
+    expect(t.json.needsLead).toEqual([
+      { item: 'APP-1', reason: expect.stringMatching(/merge failed: checks red/) },
+    ]);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('in_review');
+  });
+
+  it('a running queue is left alone: the item is queued and the run skipped', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const { ports } = fakePorts(passingGh().gh);
+    bind(fx);
+    const lock = acquireQueueRunLock(fx.state, new Date(), () => {});
+    try {
+      const t = await tick(fx, ports);
+      expect(t.json.queued).toEqual([{ item: 'APP-1', pr: 5, repo: 'org/app' }]);
+      expect(t.json.merged).toEqual([]);
+      expect(t.json.held).toEqual([
+        { item: 'queue', reason: expect.stringMatching(/queue already running/) },
+      ]);
+      expect(statusOf(fx, 'APP-1')?.status).toBe('queued');
+    } finally {
+      lock.release();
+    }
+  });
+
+  it('a second tick while one runs does nothing', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    bind(fx);
+    const { ports, started } = fakePorts(fakeGh().gh);
+    const lock = acquireStateLock(fx.state, 'tick.lock', {
+      now: new Date(),
+      heartbeatStaleMs: 60_000,
+    });
+    try {
+      const t = await tick(fx, ports);
+      expect(t.code).toBe(0);
+      expect(t.json.held).toEqual([{ item: 'tick', reason: 'another tick is running' }]);
+      expect(started).toEqual([]);
+    } finally {
+      lock?.release();
+    }
+    expect(ids((await tick(fx, ports)).json.launched)).toEqual(['APP-1']);
+  });
+
+  it('is not for crew sessions and changes nothing there', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    fx.env.STUDIO_ROLE = 'crew';
+    const { ports, started } = fakePorts(fakeGh().gh);
+    const r = await cli(fx, ports, 'tick');
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('not for crew sessions');
+    expect(started).toEqual([]);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('ready');
   });
 });
