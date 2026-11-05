@@ -27,6 +27,7 @@ import {
   RUN_LOCK,
   RUN_LOCK_HEARTBEAT_STALE_MS,
 } from './queue.js';
+import { RELEASES_LOCK, RELEASES_LOCK_STALE_MS } from './release.js';
 import { reportName } from './report.js';
 import { LESSONS_LOCK, LESSONS_LOCK_STALE_MS } from './role-memory.js';
 import { readCrewRecords } from './state.js';
@@ -46,6 +47,7 @@ const LOCKS: readonly { where: 'project' | 'owner'; name: string; staleMs: numbe
   { where: 'project', name: LESSONS_LOCK, staleMs: LESSONS_LOCK_STALE_MS },
   { where: 'project', name: COSTS_LOCK, staleMs: COSTS_LOCK_STALE_MS },
   { where: 'project', name: EXCEPTIONS_LOCK, staleMs: EXCEPTIONS_LOCK_STALE_MS },
+  { where: 'project', name: RELEASES_LOCK, staleMs: RELEASES_LOCK_STALE_MS },
   { where: 'owner', name: LAUNCH_LOCK, staleMs: LAUNCH_LOCK_STALE_MS },
   { where: 'owner', name: 'limits.lock', staleMs: LIMITS_LOCK_STALE_MS },
   { where: 'owner', name: 'blocks.lock', staleMs: LIMITS_LOCK_STALE_MS },

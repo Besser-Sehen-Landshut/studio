@@ -125,6 +125,134 @@ export const ciSchema = z.strictObject({
 /** A component id. Same rule as in board.ts (a test keeps them equal). */
 export const COMPONENT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
+/** A CI job name, one plain line. */
+const ciLine = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[^\p{Cc}\p{Cf}]+$/u, 'one line of at most 200 characters');
+
+/** A workflow by its file: `.github/workflows/<file>.yml`. */
+const workflowFile = z
+  .string()
+  .regex(
+    /^\.github\/workflows\/[A-Za-z0-9._-]{1,100}\.ya?ml$/,
+    'must be the workflow file, .github/workflows/<file>.yml',
+  );
+
+/** A CI job by its workflow file and its job name, as `acceptance.suites` names one. */
+const workflowJob = z.strictObject({
+  workflow: workflowFile,
+  job: ciLine.pipe(
+    z.string().regex(/^[A-Za-z0-9 ._()/:-]+$/, 'letters, digits, spaces and . _ - ( ) / : only'),
+  ),
+});
+
+/** One plain line of at most `max` characters: no control or format characters. */
+const oneLine = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .regex(/^[^\p{Cc}\p{Cf}]+$/u, `one line of at most ${max} characters`);
+
+/** An approver id: it names the approval in `studio release approve`. `owner` is Studio's own. */
+export const APPROVER_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+
+/** Why a release block with a command is refused: only a named workflow runs a release. */
+export const NO_RELEASE_COMMANDS =
+  'a release runs only a named workflow file (release.workflow); commands and skills are not supported: 0.17 showed how hard sandboxing them is';
+
+const RELEASE_COMMAND_KEYS = ['command', 'commands', 'run', 'script', 'skill', 'steps'];
+
+/**
+ * `release:` of a component: how `studio release <component>` ships it. The release path is one
+ * workflow file on the default branch, started with `gh workflow run` and the release commit as
+ * input `sha`; the checks after the deploy are named jobs, by workflow file. Studio never runs a
+ * command of its own for a release, and never runs the way back.
+ */
+const releaseRuleSchema = z
+  .looseObject({
+    // Needs `on: workflow_dispatch` with an input `sha`: the commit to deploy.
+    workflow: workflowFile,
+    // Jobs that must pass after the deploy: in the release workflow's own run, or in another
+    // workflow that Studio starts once the release run passed (input `sha` as well).
+    postChecks: z.array(workflowJob).min(1).max(20),
+    // Migration files of the component, read and classified for the note.
+    migrations: z.array(globSchema).max(20).default([]),
+    // Files that declare configuration (`.env.example` style): only names reach the note.
+    config: z.array(globSchema).max(20).default([]),
+    // The way back, shown when a check is red and in the note; never run by Studio.
+    rollback: z.union([
+      z.strictObject({ text: oneLine(300) }),
+      z.strictObject({ workflow: workflowFile }),
+    ]),
+    // Third parties whose approval a release needs, e.g. for a part an external partner owns.
+    approvers: z
+      .array(
+        z.strictObject({
+          id: z
+            .string()
+            .regex(APPROVER_ID_RE, 'must match ^[a-z][a-z0-9-]{0,31}$')
+            .refine((id) => id !== 'owner', 'owner is the owner approval itself'),
+          // Who approves, as the lead knows them: one line, shown to the lead and owner only.
+          who: oneLine(100),
+          // What they approve, one line.
+          for: oneLine(200).optional(),
+          // Needed only when the release changes one of these paths; always without.
+          paths: z.array(globSchema).min(1).max(20).optional(),
+        }),
+      )
+      .max(10)
+      .default([]),
+    // How long after the trigger the release run and its checks may take before Studio stops.
+    timeoutMinutes: z.number().int().min(5).max(1440).default(60),
+  })
+  .superRefine((r, ctx) => {
+    const known = [
+      'workflow',
+      'postChecks',
+      'migrations',
+      'config',
+      'rollback',
+      'approvers',
+      'timeoutMinutes',
+    ];
+    for (const key of Object.keys(r).filter((k) => !known.includes(k))) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [key],
+        message: RELEASE_COMMAND_KEYS.includes(key) ? NO_RELEASE_COMMANDS : 'unknown key',
+      });
+    }
+    const ids = new Set<string>();
+    for (const [i, a] of r.approvers.entries()) {
+      if (ids.has(a.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['approvers', i, 'id'],
+          message: `duplicate approver ${a.id}`,
+        });
+      }
+      ids.add(a.id);
+    }
+  })
+  .transform(
+    ({ workflow, postChecks, migrations, config, rollback, approvers, timeoutMinutes }) => ({
+      workflow,
+      postChecks,
+      migrations,
+      config,
+      rollback,
+      approvers,
+      timeoutMinutes,
+    }),
+  );
+export type ReleaseRule = z.infer<typeof releaseRuleSchema>;
+
+/** Words `studio release` takes as subcommands: no component with a release may be named so. */
+export const RELEASE_SUBCOMMANDS = ['list', 'show', 'approve', 'cancel'];
+
 // A part of the product developed and released on its own: an API server, a desktop app, a web
 // app in a second repo. Items belong to one or several (cross-cutting work).
 const componentSchema = z.strictObject({
@@ -138,6 +266,8 @@ const componentSchema = z.strictObject({
   paths: z.array(globSchema).min(1),
   // Most items of this component in assigned or in_progress at once, on top of role wip.
   wip: z.number().int().positive().optional(),
+  // How `studio release <id>` ships this component (src/release.ts).
+  release: releaseRuleSchema.optional(),
 });
 export type ComponentConfig = z.infer<typeof componentSchema>;
 
@@ -146,13 +276,6 @@ const repoName = z
   .string()
   .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, 'must be owner/repo (letters, digits, . _ -)')
   .refine((r) => r.split('/').every((p) => p !== '.' && p !== '..'), 'must be owner/repo');
-
-/** A CI job name, one plain line. */
-const ciLine = z
-  .string()
-  .min(1)
-  .max(200)
-  .regex(/^[^\p{Cc}\p{Cf}]+$/u, 'one line of at most 200 characters');
 
 /**
  * `acceptance:` in studio.yaml: the CI jobs that are the full suites of an epic's acceptance (E2E,
@@ -179,19 +302,6 @@ const acceptanceSchema = z.strictObject({
     )
     // `[]`: a repository without CI says so; the acceptance then is the review alone.
     .max(20),
-});
-
-/** A CI job by its workflow file and its job name, as `acceptance.suites` names one. */
-const workflowJob = z.strictObject({
-  workflow: z
-    .string()
-    .regex(
-      /^\.github\/workflows\/[A-Za-z0-9._-]{1,100}\.ya?ml$/,
-      'must be the workflow file, .github/workflows/<file>.yml',
-    ),
-  job: ciLine.pipe(
-    z.string().regex(/^[A-Za-z0-9 ._()/:-]+$/, 'letters, digits, spaces and . _ - ( ) / : only'),
-  ),
 });
 
 /** An evidence rule id: it names the rule in logs, lead lines and `studio exceptions grant`. */
@@ -337,6 +447,32 @@ export const studioConfigSchema = z
         });
       }
       seen.add(c.id);
+      if (c.release !== undefined && RELEASE_SUBCOMMANDS.includes(c.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['components', i, 'id'],
+          message: `${c.id} is a word of studio release; a component with a release needs another id`,
+        });
+      }
+      // A deploy is never a crew's: no workflow Studio starts for a release may be one a crew may
+      // start (by file or by file name, as crew_allowed_workflows lists them).
+      const started = [
+        ...(c.release === undefined ? [] : [c.release.workflow]),
+        ...(c.release?.postChecks ?? []).map((p) => p.workflow),
+        ...(c.release !== undefined && 'workflow' in c.release.rollback
+          ? [c.release.rollback.workflow]
+          : []),
+      ];
+      for (const file of started) {
+        const name = file.slice('.github/workflows/'.length);
+        if (cfg.crewAllowedWorkflows.some((w) => w === file || w === name)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['crew_allowed_workflows'],
+            message: `${name} is a release workflow of component ${c.id}: a crew may never start it`,
+          });
+        }
+      }
       if (!cfg.repos.includes(c.repo)) {
         ctx.addIssue({
           code: 'custom',

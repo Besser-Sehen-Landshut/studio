@@ -67,6 +67,18 @@ export interface BoardState {
   mergedToday?: { pr: number; item?: string; epic?: string }[];
   /** Exceptions by evidence of the last days, newest first. */
   exceptions?: { rule: string; pr: string; item?: string; head: string; by: string }[];
+  /** Open releases and those that ended in the last days, newest first. */
+  releases?: BoardRelease[];
+}
+
+export interface BoardRelease {
+  id: string;
+  component: string;
+  /** announced, approvals, triggered, checking, done, failed or stopped. */
+  status: string;
+  sha: string;
+  /** Approvals it waits for: `owner` and approver ids. */
+  pending?: string[];
 }
 
 export type Stage = 'ready' | 'building' | 'pr_held' | 'review' | 'queued' | 'blocked';
@@ -338,6 +350,22 @@ function toState(root: Obj): BoardState {
     return [{ rule, pr, head, by, ...(item === undefined ? {} : { item }) }];
   });
   if (exceptions.length > 0) state.exceptions = exceptions;
+  const releases = list(root.releases).flatMap((r) => {
+    const o = obj(r);
+    const id = str(o?.id);
+    const component = str(o?.component);
+    const status = str(o?.status);
+    const sha = str(o?.sha);
+    if (id === undefined || component === undefined || status === undefined || sha === undefined) {
+      return [];
+    }
+    const pending = list(o?.pending).flatMap((p) => {
+      const v = str(p);
+      return v === undefined ? [] : [v];
+    });
+    return [{ id, component, status, sha, ...(pending.length === 0 ? {} : { pending }) }];
+  });
+  if (releases.length > 0) state.releases = releases;
   return state;
 }
 
@@ -415,6 +443,9 @@ interface Strings {
   headForYou: (n: number) => string;
   headForLead: (n: number) => string;
   headExceptions: (n: number) => string;
+  headReleases: (n: number) => string;
+  /** A release's status in words. */
+  releaseStatus: (status: string, pending: string[]) => string;
   /** Who decided an exception: the evidence, the lead or the owner. */
   exceptionBy: (by: string) => string;
   leadTimeLine: (median: string, deploys: number) => string;
@@ -502,6 +533,23 @@ const EN: Strings = {
   headForYou: (n) => `For you (${n})`,
   headForLead: (n) => `For the lead (${n})`,
   headExceptions: (n) => `Exceptions by evidence (${n})`,
+  headReleases: (n) => `Releases (${n})`,
+  releaseStatus: (s, p) =>
+    s === 'announced'
+      ? 'announced, ready to trigger'
+      : s === 'approvals'
+        ? `waits for approval: ${p.join(', ')}`
+        : s === 'triggered'
+          ? 'deploying'
+          : s === 'checking'
+            ? 'deployed, checks running'
+            : s === 'done'
+              ? 'done'
+              : s === 'failed'
+                ? 'stopped: a check is red'
+                : s === 'stopped'
+                  ? 'cancelled'
+                  : s,
   exceptionBy: (by) => (by === 'evidence' ? 'evidence' : by === 'owner' ? 'owner' : 'lead'),
   leadTimeLine: (m, d) => `Lead time (median) ${m} · deploys today ${d}`,
   headDays: 'Last 7 days (merged/deployed)',
@@ -544,6 +592,8 @@ const EN: Strings = {
     if (code === 'question') return 'crew has a question';
     if (code === 'evidence') return 'guard hit without evidence – decide';
     if (code === 'blocked') return 'blocked';
+    if (code === 'release_approval') return 'release approval needed';
+    if (code === 'release_failed') return 'release stopped: a check is red';
     return 'needs a decision';
   },
   wait: (w) => {
@@ -646,6 +696,23 @@ const DE: Strings = {
   headForYou: (n) => `Zur Entscheidung (${n})`,
   headForLead: (n) => `Für die Steuerung (${n})`,
   headExceptions: (n) => `Ausnahmen per Beweis (${n})`,
+  headReleases: (n) => `Releases (${n})`,
+  releaseStatus: (s, p) =>
+    s === 'announced'
+      ? 'angekündigt, bereit zum Auslösen'
+      : s === 'approvals'
+        ? `wartet auf Freigabe: ${p.join(', ')}`
+        : s === 'triggered'
+          ? 'wird ausgeliefert'
+          : s === 'checking'
+            ? 'ausgeliefert, Prüfungen laufen'
+            : s === 'done'
+              ? 'fertig'
+              : s === 'failed'
+                ? 'angehalten: eine Prüfung ist rot'
+                : s === 'stopped'
+                  ? 'abgebrochen'
+                  : s,
   exceptionBy: (by) => (by === 'evidence' ? 'Beweis' : by === 'owner' ? 'Inhaber' : 'Steuerung'),
   leadTimeLine: (m, d) => `Durchlaufzeit (Median) ${m} · Deploys heute ${d}`,
   headDays: 'Letzte 7 Tage (gemergt/ausgeliefert)',
@@ -688,6 +755,8 @@ const DE: Strings = {
     if (code === 'question') return 'Crew hat eine Frage';
     if (code === 'evidence') return 'Prüfungstreffer ohne Beweis – entscheiden';
     if (code === 'blocked') return 'blockiert';
+    if (code === 'release_approval') return 'Release-Freigabe nötig';
+    if (code === 'release_failed') return 'Release angehalten: eine Prüfung ist rot';
     return 'Entscheidung nötig';
   },
   wait: (w) => {
@@ -1154,6 +1223,21 @@ export function boardLines(
     for (const e of exceptions.slice(0, MAX_OWNER_LINES)) {
       out.push({
         text: `  ${e.item ?? e.pr} ${e.rule} · ${e.head.slice(0, 7)} · ${t.exceptionBy(e.by)}`,
+      });
+    }
+  }
+  // Releases: what is on its way out, what waits for an approval, and what a red check stopped.
+  const releases = s.releases ?? [];
+  if (releases.length > 0) {
+    out.push({ text: t.headReleases(releases.length), tone: 'head' });
+    for (const r of releases.slice(0, MAX_OWNER_LINES)) {
+      out.push({
+        text: `  ${r.id} ${r.sha.slice(0, 7)} · ${t.releaseStatus(r.status, r.pending ?? [])}`,
+        ...(r.status === 'failed'
+          ? { tone: 'err' as const }
+          : r.status === 'approvals'
+            ? { tone: 'you' as const }
+            : {}),
       });
     }
   }

@@ -581,7 +581,51 @@ describe('judging a failed guard by a built-in proof', () => {
     expect(await judge(r)).toEqual({ kind: 'none' });
     expect(await evidenceChange(ctxFor(r, fakeGh(r).gh), r.base, r.head)).toEqual({
       problem: 'the pull request changes evidence: in studio.yaml',
+      area: 'evidence',
     });
+  });
+
+  it("a pull request that changes a component's release block gets no approval either", async () => {
+    const release = `components:
+  - id: api
+    name: API
+    repo: org/app
+    paths: ["migrations/**"]
+    release:
+      workflow: .github/workflows/ci.yml
+      post_checks: [{ workflow: .github/workflows/ci.yml, job: test }]
+      rollback: { text: redeploy the previous commit }
+      approvers: [{ id: partner, who: the partner }]
+`;
+    const r = makeRepo({
+      rules: `${RULE}${release}`,
+      change: (dir) => {
+        writeFileSync(
+          join(dir, '.studio/studio.yaml'),
+          studioYaml(
+            `${RULE}${release.replace('      approvers: [{ id: partner, who: the partner }]\n', '')}`,
+          ),
+        );
+      },
+    });
+    expect(await evidenceChange(ctxFor(r, fakeGh(r).gh), r.base, r.head)).toEqual({
+      problem: "the pull request changes a component's release: in studio.yaml",
+      area: 'release',
+    });
+    // Moving the same block elsewhere in the file changes nothing.
+    const same = makeRepo({
+      rules: `${RULE}${release}`,
+      change: (dir) => {
+        writeFileSync(
+          join(dir, '.studio/studio.yaml'),
+          studioYaml(`${RULE}${release}`).replace(
+            'deploy_commands: []\n',
+            'deploy_commands: []\n# a comment\n',
+          ),
+        );
+      },
+    });
+    expect(await evidenceChange(ctxFor(same, fakeGh(same).gh), same.base, same.head)).toEqual({});
   });
 
   it('a pull request that changes the guard job gets no exception', async () => {

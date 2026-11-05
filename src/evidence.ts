@@ -250,24 +250,40 @@ async function rulesAt(ctx: EvidenceContext, oid: string): Promise<EvidenceRule[
   }
 }
 
-/** The raw `evidence:` block of studio.yaml at `oid`, as JSON; null without one. */
-async function rawEvidenceAt(ctx: EvidenceContext, oid: string): Promise<string> {
+/**
+ * The raw `evidence:` block of studio.yaml at `oid`, and every component's `release:` block, as
+ * JSON; null without one.
+ */
+async function rawOwnerBlocksAt(
+  ctx: EvidenceContext,
+  oid: string,
+): Promise<{ evidence: string; release: string }> {
   let text: string;
   try {
     text = await g(ctx, ['cat-file', 'blob', `${oid}:${STUDIO_CONFIG}`]);
   } catch {
-    return 'null';
+    return { evidence: 'null', release: 'null' };
   }
   let raw: unknown;
   try {
     raw = parseYaml(text);
   } catch {
     // A file that does not parse loads no rules; as a change it counts like any other.
-    return `unparsable:${digest(text)}`;
+    return { evidence: `unparsable:${digest(text)}`, release: `unparsable:${digest(text)}` };
   }
-  const v =
-    raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>).evidence : null;
-  return JSON.stringify(v ?? null);
+  const o = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  // Releases by component id, in id order: moving a component in the list changes nothing.
+  const releases = (Array.isArray(o.components) ? o.components : [])
+    .map((c: unknown) => {
+      const r = c !== null && typeof c === 'object' ? (c as Record<string, unknown>) : {};
+      return [JSON.stringify(r.id ?? null), JSON.stringify(r.release ?? null)] as const;
+    })
+    .filter(([, rel]) => rel !== 'null')
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return {
+    evidence: JSON.stringify(o.evidence ?? null),
+    release: JSON.stringify(releases),
+  };
 }
 
 async function fetchBoth(ctx: EvidenceContext, base: string, head: string): Promise<boolean> {
@@ -568,22 +584,34 @@ export async function judgeFailedChecks(
 }
 
 /**
- * Why Studio gives a pull request no approval for touching the evidence: it changes the
- * `evidence:` block of studio.yaml. Evidence is the owner's: a crew's pull request never changes
- * what proves a later one. `unreadable` when the comparison could not be made; collect waits then.
+ * Why Studio gives a pull request no approval for touching what is the owner's in studio.yaml:
+ * the `evidence:` block (a crew's pull request never changes what proves a later one) or a
+ * component's `release:` block (its workflow, checks and third-party approvers). `unreadable`
+ * when the comparison could not be made; collect waits then.
  */
 export async function evidenceChange(
   ctx: EvidenceContext,
   baseOid: string | undefined,
   head: string,
-): Promise<{ problem?: string; unreadable?: true }> {
+): Promise<{ problem?: string; area?: 'evidence' | 'release'; unreadable?: true }> {
   if (baseOid === undefined || !SHA.test(baseOid) || !SHA.test(head)) return { unreadable: true };
   if (!(await fetchBoth(ctx, baseOid, head))) return { unreadable: true };
   const files = await changedFiles(ctx, baseOid, head);
   if (files === undefined) return { unreadable: true };
   if (files.some((f) => f.toLowerCase() === STUDIO_CONFIG)) {
-    const [atBase, atHead] = [await rawEvidenceAt(ctx, baseOid), await rawEvidenceAt(ctx, head)];
-    if (atBase !== atHead) return { problem: 'the pull request changes evidence: in studio.yaml' };
+    const [atBase, atHead] = [
+      await rawOwnerBlocksAt(ctx, baseOid),
+      await rawOwnerBlocksAt(ctx, head),
+    ];
+    if (atBase.evidence !== atHead.evidence) {
+      return { problem: 'the pull request changes evidence: in studio.yaml', area: 'evidence' };
+    }
+    if (atBase.release !== atHead.release) {
+      return {
+        problem: "the pull request changes a component's release: in studio.yaml",
+        area: 'release',
+      };
+    }
   }
   return {};
 }

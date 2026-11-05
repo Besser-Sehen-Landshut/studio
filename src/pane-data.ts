@@ -59,6 +59,8 @@ export type DecisionCode =
   | 'question'
   | 'evidence'
   | 'blocked'
+  | 'release_approval'
+  | 'release_failed'
   | 'other';
 
 export interface LeadDecision {
@@ -241,6 +243,13 @@ function classify(item: string, reason: string): LeadDecision {
       evidence[1] === undefined ? 'guard hit without evidence' : 'guard hit: the owner decides',
       `show ${item}`,
     );
+  }
+  // A release (src/release.ts): an approval it waits for, or a deploy a red check stopped.
+  if (r.startsWith('release approval')) {
+    return of('release_approval', 'release approval needed', 'show the releases');
+  }
+  if (r.startsWith('release failed')) {
+    return of('release_failed', 'release stopped: a check is red', 'show the way back');
   }
   if (r.startsWith('merge failed')) {
     return of('merge_failed', 'merge failed', `show why ${item} did not merge`);

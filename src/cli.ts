@@ -137,6 +137,26 @@ import {
   viewPr,
 } from './queue.js';
 import { type Finding, recoverProject, TICK_LOCK, TICK_LOCK_STALE_MS } from './recover.js';
+import {
+  advanceRelease,
+  announce,
+  approvalLines,
+  BEFORE_TRIGGER,
+  draftRelease,
+  failedLine,
+  isOpen,
+  RELEASE_ID_RE,
+  type Release,
+  type ReleaseContext,
+  readReleases,
+  recordApproval,
+  releaseRow,
+  renderNote,
+  replaceRelease,
+  stopRelease,
+  triggerRelease,
+  withReleases,
+} from './release.js';
 import { checkReportHead, ReportError, readReport, reportName } from './report.js';
 import {
   checkReviewCaps,
@@ -244,6 +264,17 @@ Commands:
   exceptions grant <repo>#<pr> <rule> --reason "<line>"
                            The lead's decision for a guard hit no evidence explained, for this head;
                            an owner_only rule or item takes the owner's, in a terminal
+  release <component> [--dry-run] [--since <commit>]
+                           The release gate: draft the note and log the announcement; run it again
+                           to trigger the release workflow once approvals are in, then it follows
+                           the checks after the deploy. --since names production's commit, first
+                           release only; --dry-run prints the note and changes nothing
+  release list             Releases with status, commit and what they wait for
+  release show <id>        A release's note
+  release approve <id> <approver> --said "<words>" [--by "<who>"] [--at <time>]
+                           Record an approval: a third party's, relayed by the lead with who said
+                           it and when; the owner's (approver owner) only in a terminal
+  release cancel <id> --reason "<line>"  Stop a release before its trigger
   setup sources [<id>...]  Fetch the referenced third-party sources (nothing runs)
   lessons [list]           Lessons crews proposed for the role memory, with age, item and evidence
   lessons accept <n>       Move a proposed lesson into its role file
@@ -406,6 +437,8 @@ interface Tick {
   lessonsJudged?: { item: string; role: string; accepted: number; dropped: number }[];
   /** Failed guard checks an exception by evidence covered in this tick; absent without any. */
   exceptions?: { rule: string; pr: string; item?: string; head: string; by: string }[];
+  /** Open releases and those that ended in the last day; absent without any. */
+  releases?: (ReturnType<typeof releaseRow> & { next?: string })[];
 }
 
 /**
@@ -513,11 +546,22 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     if (values.security !== undefined && cmd !== 'skills') {
       throw new UsageError('--security works with skills check only');
     }
-    if (values.reason !== undefined && cmd !== 'lessons' && cmd !== 'exceptions') {
-      throw new UsageError('--reason works with lessons drop and exceptions grant only');
+    if (
+      values.reason !== undefined &&
+      cmd !== 'lessons' &&
+      cmd !== 'exceptions' &&
+      cmd !== 'release'
+    ) {
+      throw new UsageError(
+        '--reason works with lessons drop, exceptions grant and release cancel only',
+      );
     }
-    if (values['dry-run'] !== undefined && cmd !== 'recover') {
-      throw new UsageError('--dry-run works with recover only');
+    if (values['dry-run'] !== undefined && cmd !== 'recover' && cmd !== 'release') {
+      throw new UsageError('--dry-run works with recover and release only');
+    }
+    const releaseOnly = [values.since, values.by, values.said, values.at];
+    if (cmd !== 'release' && releaseOnly.some((v) => v !== undefined)) {
+      throw new UsageError('--since, --by, --said and --at work with release only');
     }
     /** The item's components, as a field for JSON output; nothing when none are configured. */
     const componentField = (config: StudioConfig | undefined, item: WorkItem | undefined) =>
@@ -757,6 +801,18 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       git: ports.git,
       checkout: approvalCheckout(project, config, repo),
       stateRoot: root,
+      now: () => ports.clock.now(),
+    });
+
+    /** The release gate of a component, read in the owner's checkout. */
+    const releaseCtx = (config: StudioConfig, board: Board, root: string): ReleaseContext => ({
+      project,
+      stateRoot: root,
+      config,
+      board,
+      gh: ports.gh,
+      git: ports.git,
+      checkout: (repo) => approvalCheckout(project, config, repo),
       now: () => ports.clock.now(),
     });
 
@@ -1092,7 +1148,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             };
           }
           if (change.problem !== undefined) {
-            const note = `approval refused: ${change.problem}; evidence is the owner's: the owner reviews and merges such a change himself`;
+            const note = `approval refused: ${change.problem}; ${change.area === 'release' ? 'the release rules are' : 'evidence is'} the owner's: the owner reviews and merges such a change himself`;
             await withBoardLock(stateRoot(), ports.clock.now(), () => {
               const fresh = loadBoard(project);
               if (findItem(fresh, item.id).status !== item.status) {
@@ -1750,6 +1806,58 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (open.length > 0) out.lessonsReview = open;
       };
 
+      // Releases: follow triggered ones on GitHub, list what waits for approvals. Never triggers:
+      // that is the lead's `studio release <component>`.
+      const releasesPhase = async () => {
+        let recs: Release[];
+        try {
+          recs = readReleases(root);
+        } catch (e) {
+          lead('releases', why(e));
+          return;
+        }
+        const now = ports.clock.now().getTime();
+        const recent = (r: Release) =>
+          r.finishedAt !== undefined && now - Date.parse(r.finishedAt) < 86_400_000;
+        if (!recs.some((r) => isOpen(r) || recent(r))) return;
+        const config = loadConfig(project);
+        const ctx = releaseCtx(config, loadBoard(project), root);
+        const after = recs.some((r) => r.status === 'triggered' || r.status === 'checking')
+          ? await withReleases(ctx, async (all, save) => {
+              let cur = all;
+              const saveOne = (rec: Release) => {
+                cur = replaceRelease(cur, rec);
+                save(cur);
+              };
+              for (const r of all) {
+                if (r.status !== 'triggered' && r.status !== 'checking') continue;
+                beat();
+                const a = await advanceRelease(ctx, r, { save: saveOne });
+                if (a.lead !== undefined && a.rec.status !== 'failed') lead(r.id, a.lead);
+                if (a.waiting !== undefined) out.held.push({ item: r.id, reason: a.waiting });
+              }
+              return cur;
+            }).catch((e: unknown) => {
+              out.held.push({ item: 'releases', reason: why(e) });
+              return recs;
+            })
+          : recs;
+        const rows: NonNullable<Tick['releases']> = [];
+        for (const r of after) {
+          if (!isOpen(r) && !recent(r)) continue;
+          for (const l of approvalLines(r)) lead(l.item, l.reason);
+          // A red release stays a decision for a day: the way back is the lead's or the owner's.
+          if (r.status === 'failed' && recent(r)) lead(r.id, failedLine(r));
+          rows.push({
+            ...releaseRow(r),
+            ...(r.status === 'announced'
+              ? { next: `studio release ${r.component} triggers it` }
+              : {}),
+          });
+        }
+        if (rows.length > 0) out.releases = rows;
+      };
+
       try {
         for (const [name, body] of [
           ['recover', recoverPhase],
@@ -1759,6 +1867,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ['launch', launchPlanned],
           ['queue add', queueApproved],
           ['sweep', sweep],
+          ['releases', releasesPhase],
           ['skills check', skillsMonthly],
           ['lessons', lessonsWeekly],
         ] as const) {
@@ -1857,7 +1966,24 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ownerRoot: ownerRoot(),
           projectKey,
           project: config.primaryRepo.split('/').at(-1) ?? config.primaryRepo,
-          decisions: decisionsOf({ projectKey, needsLead, board, ownerRoot: ownerRoot() }),
+          decisions: [
+            ...decisionsOf({ projectKey, needsLead, board, ownerRoot: ownerRoot() }),
+            // Each release announced and not yet triggered: one push, the fixed phrase and its id.
+            ...(() => {
+              try {
+                return readReleases(stateRoot())
+                  .filter((r) => BEFORE_TRIGGER.includes(r.status))
+                  .map((r) => ({
+                    key: `${projectKey}:${r.id}:release_announced:${r.announcement.at}`,
+                    item: r.id,
+                    kind: 'release_announced' as const,
+                    urgent: false,
+                  }));
+              } catch {
+                return [];
+              }
+            })(),
+          ],
           ownerConfig,
           owner,
           http: ports.http,
@@ -1985,6 +2111,30 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                   r.acceptance === undefined ? '-' : `${r.acceptance.item} ${r.acceptance.status}`,
                   r.title,
                 ]),
+              ])}`,
+            );
+          }
+          // Open releases, below everything: what is on its way out and what it waits for.
+          let releases: Release[] = [];
+          try {
+            releases = readReleases(stateRoot()).filter(
+              (r) => isOpen(r) && (only === undefined || r.component === only),
+            );
+          } catch (e) {
+            stderr(`warning: ${(e as Error).message}\n`);
+          }
+          if (epic === undefined && releases.length > 0) {
+            stdout(
+              `\n${table([
+                ['RELEASE', 'STATUS', 'SHA', 'WAITS FOR'],
+                ...releases
+                  .map(releaseRow)
+                  .map((r) => [
+                    r.id,
+                    r.status,
+                    r.sha,
+                    r.pending?.join(', ') ?? (r.status === 'announced' ? 'the lead' : 'GitHub'),
+                  ]),
               ])}`,
             );
           }
@@ -2962,6 +3112,240 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         return 0;
       }
 
+      case 'release': {
+        const [sub, ...args] = rest;
+        const dryRun = values['dry-run'] === true;
+        const only = (allowed: string[]) => {
+          const used = (
+            [
+              ['--since', values.since],
+              ['--by', values.by],
+              ['--said', values.said],
+              ['--at', values.at],
+              ['--reason', values.reason],
+              ['--dry-run', values['dry-run']],
+            ] as const
+          ).filter(([flag, v]) => v !== undefined && !allowed.includes(flag));
+          if (used.length > 0) {
+            throw new UsageError(
+              `this release command does not take ${used.map(([f]) => f).join(', ')}`,
+            );
+          }
+        };
+        if (sub === undefined) {
+          throw new UsageError(
+            'release needs: <component> [--dry-run] [--since <commit>] | list | show <id> | approve <id> <approver> --said "<words>" | cancel <id> --reason "<line>"',
+          );
+        }
+        const findRelease = (all: Release[], id: string | undefined): Release => {
+          if (id === undefined || !RELEASE_ID_RE.test(id)) {
+            throw new UsageError('release needs a release id, e.g. api-3');
+          }
+          const r = all.find((x) => x.id === id);
+          if (r === undefined) throw new Error(`unknown release ${id}`);
+          return r;
+        };
+        if (sub === 'list') {
+          only([]);
+          if (args.length > 0) throw new UsageError('release list takes no arguments');
+          const rows = readReleases(stateRoot()).map(releaseRow).reverse();
+          if (json) print(rows);
+          else {
+            stdout(
+              table([
+                ['RELEASE', 'COMPONENT', 'STATUS', 'SHA', 'AT', 'WAITS FOR'],
+                ...rows.map((r) => [
+                  r.id,
+                  r.component,
+                  r.status,
+                  r.sha,
+                  r.at,
+                  r.pending?.join(', ') ?? r.reason ?? '-',
+                ]),
+              ]),
+            );
+          }
+          return 0;
+        }
+        if (sub === 'show') {
+          only([]);
+          if (args.length !== 1) throw new UsageError('release show needs one release id');
+          const r = findRelease(readReleases(stateRoot()), args[0]);
+          if (json) print(r);
+          else stdout(renderNote(r.note, r.id));
+          return 0;
+        }
+        // Everything below changes owner state: never a crew's.
+        refuseCrew(deps.env);
+        // The owner in a terminal acts as the owner; the lead (no terminal) as the lead.
+        const by = deps.isTerminal === true ? 'owner' : 'lead';
+        const clock = { now: () => ports.clock.now() };
+        if (sub === 'approve') {
+          only(['--by', '--said', '--at']);
+          const [id, approver] = args;
+          if (args.length !== 2 || approver === undefined) {
+            throw new UsageError(
+              'release approve needs <id> <approver> --said "<words>" [--by "<who said it>"] [--at <time>]',
+            );
+          }
+          if (values.said === undefined) {
+            throw new UsageError('release approve needs --said "<their words, verbatim>"');
+          }
+          const said = values.said;
+          const root = await boundStateRoot();
+          const r = await withReleases({ stateRoot: root, ...clock }, (all, save) => {
+            const done = recordApproval({ stateRoot: root, ...clock }, findRelease(all, id), {
+              approver,
+              by,
+              said,
+              ...(values.by === undefined ? {} : { who: values.by }),
+              ...(values.at === undefined ? {} : { at: values.at }),
+            });
+            if (!done.existing) save(replaceRelease(all, done.rec));
+            return done;
+          });
+          print({
+            release: r.rec.id,
+            approved: approver,
+            status: r.rec.status,
+            ...(r.existing ? { existing: true } : {}),
+            pending: releaseRow(r.rec).pending ?? [],
+          });
+          return 0;
+        }
+        if (sub === 'cancel') {
+          only(['--reason']);
+          if (args.length !== 1) throw new UsageError('release cancel needs one release id');
+          if (values.reason === undefined) {
+            throw new UsageError('release cancel needs --reason "<one line>"');
+          }
+          const reason = values.reason;
+          const root = await boundStateRoot();
+          const rec = await withReleases({ stateRoot: root, ...clock }, (all, save) => {
+            const stopped = stopRelease(
+              { stateRoot: root, ...clock },
+              findRelease(all, args[0]),
+              by,
+              reason,
+            );
+            save(replaceRelease(all, stopped));
+            return stopped;
+          });
+          print({ release: rec.id, status: rec.status, reason: rec.reason });
+          return 0;
+        }
+        // studio release <component>
+        only(['--since', '--dry-run']);
+        if (args.length > 0) throw new UsageError('release <component> takes no more arguments');
+        const { config, board } = loadAll();
+        const comp = (config.components ?? []).find((c) => c.id === sub);
+        if (comp === undefined) throw new Error(`unknown component ${sub}`);
+        const shown = (rec: Release) => ({
+          release: rec.id,
+          component: rec.component,
+          status: rec.status,
+          sha: rec.sha,
+          since: rec.since,
+          announce: rec.announcement.text,
+          announcedAt: rec.announcement.at,
+          ...(BEFORE_TRIGGER.includes(rec.status)
+            ? { pending: releaseRow(rec).pending ?? [] }
+            : {}),
+          ...(rec.trigger?.run === undefined ? {} : { run: rec.trigger.run }),
+          ...(rec.checks.length === 0
+            ? {}
+            : { checks: rec.checks.map((c) => ({ name: c.name, state: c.state })) }),
+          ...(rec.reason === undefined ? {} : { reason: rec.reason }),
+          note: renderNote(rec.note, rec.id),
+        });
+        if (dryRun) {
+          const root = stateRoot();
+          const all = readReleases(root);
+          const open = all.find((r) => r.component === comp.id && isOpen(r));
+          if (open !== undefined) {
+            print({ dryRun: true, ...shown(open) });
+            return 0;
+          }
+          const d = await draftRelease(releaseCtx(config, board, root), all, comp.id, values.since);
+          print({
+            dryRun: true,
+            release: d.id,
+            component: comp.id,
+            status: 'draft',
+            sha: d.note.sha,
+            since: d.note.since,
+            announce: d.announcement,
+            needs: d.needs,
+            note: renderNote(d.note, d.id),
+          });
+          return 0;
+        }
+        const root = await boundStateRoot();
+        const ctx = releaseCtx(config, board, root);
+        const result = await withReleases(ctx, async (all, save, beat) => {
+          let cur = all;
+          const saveOne = (rec: Release) => {
+            cur = replaceRelease(cur, rec);
+            save(cur);
+          };
+          const open = all.find((r) => r.component === comp.id && isOpen(r));
+          if (open === undefined) {
+            const d = await draftRelease(ctx, all, comp.id, values.since);
+            const rec = announce(ctx, d);
+            save([...all, rec]);
+            return {
+              ...shown(rec),
+              next:
+                rec.status === 'approvals'
+                  ? 'tell the owner the announcement; the approvals in needsLead come first, then studio release again'
+                  : `tell the owner the announcement, then run studio release ${comp.id} again to trigger it`,
+              ...(rec.status === 'approvals' ? { needsLead: approvalLines(rec) } : {}),
+            };
+          }
+          if (values.since !== undefined) {
+            throw new UsageError(`--since is for a new release; ${open.id} is ${open.status}`);
+          }
+          if (open.status === 'triggered' || open.status === 'checking') {
+            const a = await advanceRelease(ctx, open, { save: saveOne });
+            return {
+              ...shown(a.rec),
+              ...(a.waiting === undefined ? {} : { waiting: a.waiting }),
+              ...(a.lead === undefined ? {} : { needsLead: [{ item: open.id, reason: a.lead }] }),
+            };
+          }
+          if (open.status === 'approvals') {
+            return { ...shown(open), needsLead: approvalLines(open) };
+          }
+          const t = await triggerRelease(ctx, open, {
+            by,
+            paused: readPause(root).paused,
+            capacity: async () => {
+              const c = await readCapacityTwice(config, ports);
+              return {
+                ok: c.ok,
+                line: `held: ${prHeldNote(c.capacity, config).slice(PR_HELD.length)}; run studio release ${comp.id} again later`,
+              };
+            },
+            save: saveOne,
+            beat,
+          });
+          if (t.kind === 'held') return { ...shown(open), held: t.line };
+          if (t.kind === 'refused') throw new Error(t.line);
+          return {
+            ...shown(t.rec),
+            ...(t.rec.status === 'failed'
+              ? { needsLead: [{ item: open.id, reason: failedLine(t.rec) }] }
+              : {}),
+            next:
+              t.rec.status === 'failed'
+                ? 'the release did not start; tell the owner in one line'
+                : 'tick follows the release run and the checks after the deploy',
+          };
+        });
+        print(result);
+        return 0;
+      }
+
       case 'solutions': {
         const [sub, ...words] = rest;
         if (sub !== 'search' || words.length === 0) {
@@ -3015,6 +3399,10 @@ function parseCli(argv: string[]) {
         security: { type: 'string', multiple: true },
         reason: { type: 'string' },
         'dry-run': { type: 'boolean' },
+        since: { type: 'string' },
+        by: { type: 'string' },
+        said: { type: 'string' },
+        at: { type: 'string' },
       },
       allowPositionals: true,
       strict: true,
@@ -3564,6 +3952,21 @@ function buildSnapshot(
     ...(() => {
       const exceptions = recentExceptions(root, board, now);
       return exceptions.length === 0 ? {} : { exceptions };
+    })(),
+    ...(() => {
+      // An unreadable releases file shows nothing here; the tick names it to the lead.
+      let all: Release[];
+      try {
+        all = readReleases(root);
+      } catch {
+        return {};
+      }
+      const since = now.getTime() - 7 * 86_400_000;
+      const releases = all
+        .filter((r) => isOpen(r) || Date.parse(r.finishedAt ?? '') >= since)
+        .map(releaseRow)
+        .reverse();
+      return releases.length === 0 ? {} : { releases };
     })(),
     wip: {
       building: roleWip((r) => r !== 'reviewer'),

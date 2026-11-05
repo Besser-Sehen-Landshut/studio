@@ -3,6 +3,72 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.18.0] - 2026-11-05
+
+A release was the lead running the project's deploy workflow by hand: no note said what went out, a destructive
+migration went with one announcement line and no approval, a part a third party owns needed their word with no
+place to record it, and nothing watched the checks after the deploy. Now `studio release <component>` drafts the
+note, logs the announcement, collects the owner's and third parties' approvals through the lead, starts one named
+workflow once, and stops on a red check with the way back shown. Not tagged yet; the maintainers tag after the
+merge.
+
+### Added
+
+- `release:` per component in `studio.yaml`: `workflow` (a file below `.github/workflows/`, with
+  `on: workflow_dispatch` and an input `sha`), `post_checks` (jobs by workflow file, at least one), `migrations`
+  and `config` (globs), `rollback` (`text` or `workflow`), `approvers` (`id`, `who`, optional `for` and `paths`)
+  and `timeout_minutes` (default 60). A block with `command`, `run`, `script`, `skill` or `steps` is refused, so
+  is a release, post-check or rollback workflow that `crew_allowed_workflows` lists, and a component with a
+  release named `list`, `show`, `approve` or `cancel`.
+- `studio release <component> [--dry-run] [--since <commit>]`: the first call drafts the note from the
+  commits since production's (the last release that deployed; `--since` for the first) and logs a one-sentence
+  announcement (what is deployed and what cannot be undone); the next call triggers, once the approvals are in;
+  later calls follow the run. `--dry-run` prints the draft and writes nothing.
+- The note: the component's merged board items in the range grouped by epic, migrations in natural order with
+  kind (`additive`, `destructive`, `backfill`, `unclear`) and risk, configuration names added or removed in the
+  `config` files (never values), the way back, the post-deploy checks and the approvals needed.
+- Migration kinds from the SQL tokenizer of 0.17 and statement shapes, no parser: only `additive` is low risk;
+  anything else needs the owner, also a non-SQL file, a changed or deleted migration, and a migration-looking
+  file outside `migrations`.
+- Approvals: `studio release approve <id> owner --said "<words>"`, owner only, in a terminal, for migrations that
+  are not clearly additive; `studio release approve <id> <approver> --by "<who said it>" --said "<words>" --at
+  <time>` for a third party, recorded by the lead from what the owner relays (Studio contacts no one). An
+  approval binds to one release; its time may not lie before the announcement or in the future; text shaped like a
+  credential is refused.
+- The trigger: `gh workflow run <id> --ref <default branch> -f sha=<release commit>`, after checking that the
+  commit is still on the default branch, that the workflow files are those of the release commit and declare
+  the input, that the migrations read as they did when announced, that Studio is not paused, and that CI is
+  within `merge_max_busy` (two reads). Recorded before gh runs: a trigger without a known run is looked up (the
+  one dispatch since the trigger), never repeated.
+- After the deploy: the release run, then each post check (a job of the release run, or of another workflow
+  Studio starts once, recorded first). A failed or missing job, a run of another workflow or event, and no result
+  within `timeout_minutes` stop the release (`failed`) with the way back in `needsLead` for a day; Studio runs
+  nothing back. A passed release run is a `deployed` metrics event with its release.
+- `studio release list`, `studio release show <id>`, `studio release cancel <id> --reason "<line>"` (before the
+  trigger only). `tick` follows triggered releases (it never triggers), lists `releases`, and puts `release
+  approval: ...`, `release failed: ...` and `release unknown: ...` lines into `needsLead`; it pushes a fixed phrase
+  for each announced release and each approval or red release to the owner's phone. `studio board` lists open
+  releases, `state.json` and the pane's details view those of the last seven days, with the status in words
+  (English and German).
+- `releases.json` (under `releases.lock`, which `recover` checks) and the log `releases.jsonl` in the state root;
+  both are among the files crews must not write.
+
+### Changed
+
+- A pull request that changes a component's `release:` block gets no approval from Studio, like one that changes
+  `evidence:` (`approval refused: ...; the release rules are the owner's: ...`).
+- The lead skill: a Release section (send the announcement word for word, approval lines are owner lines, never
+  approve a migration or contact a third party, the second `studio release` call triggers and `tick` never does,
+  never `gh workflow run` or `deploy record` a release, the way back after `release failed` is the lead's). A
+  destructive migration in a release is the owner's now; outside a release it stays the lead's.
+- `--dry-run` works with `release` too; `--reason` with `release cancel`.
+
+### Not exercised
+
+- A real release workflow on GitHub: `gh workflow run` printing the run's URL, the dispatch lookup, a real
+  post-deploy job, a real rollback. A lead session running a release over hours. The note across hundreds of
+  commits.
+
 ## [0.17.0] - 2026-11-05
 
 A guard job in CI (a migration guard, a floor guard) that flagged a harmless change stopped the pull request

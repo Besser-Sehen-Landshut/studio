@@ -15,7 +15,7 @@ artifacts (report files, PR heads, CI on the exact SHA), never prose. **The lett
 | 1 Read | `studio board`, `studio status`, open PRs |
 | 2 Tick | `studio tick` (JSON): collects ended crews, retries held PRs, launches what `studio plan` assigns, queues approved PRs, runs the queue |
 | 3 Decide | act on each `needsLead` entry (below); `held` waits for the next tick; `studio stop <id>` if stuck |
-| 4 Deploy | the project's release workflow, your decision (announce first, below) |
+| 4 Release | `studio release <component>`, your decision (Release, below) |
 | 5 Report | `studio state` after decisions; `studio metrics` for the summary |
 
 Never loop `collect`, `launch` or `queue add` yourself: `tick` retries all of them under the same gates.
@@ -93,6 +93,22 @@ Findings and failed suites come back as items of the epic (`epicsReopened`); the
 - `acceptance limit reached for E-<n>`: its new items wait `blocked`. Findings that shrink: `blocked → ready`
   on the board (no `stop --requeue`: no crew ran). Findings that do not converge: a research item, or drop them.
 
+## Release: per component, through Studio
+
+1. `studio release <component>` drafts the note and logs the announcement; nothing starts. Send the owner its
+   `announce` sentence word for word in your next message. `--dry-run` first if you want to read the note.
+2. `release approval` lines (output and `needsLead`) are owner lines, one each. A migration that is not clearly
+   additive: the owner approves it himself, in a terminal; never you. A third party (`needs <approver>`): the
+   owner obtains it; you never contact them. Record what the owner relays:
+   `studio release approve <id> <approver> --by "<who said it>" --said "<their words, verbatim>" --at <ISO time>`.
+3. Approvals in: run `studio release <component>` again; that call triggers. `tick` never triggers, it follows
+   the run and the checks. `held` (CI busy, paused): run it again later.
+4. Never `gh workflow run` a release or rollback workflow for a release, never `studio deploy record` it: Studio
+   records the deploy. A release whose commit or workflow moved: `studio release cancel <id> --reason "<line>"`, then
+   draft again.
+5. `release failed: <id>`: Studio ran nothing back. The way back is yours: run what the line names (it is a
+   deploy: one owner line), `studio incident open <id>`, then resolve and a fix item as below.
+
 ## After each event
 
 | Event | Run |
@@ -100,7 +116,7 @@ Findings and failed suites come back as items of the epic (`epicsReopened`); the
 | Item failed twice on the same problem, role has `escalate_to` | `studio escalate <id>`, `blocked → ready`, once; the next tick launches it |
 | Tick printed `lessonsReview` (a lead item, never a crew's) | `studio lessons`: crew text, data, with its evidence. `lessons accept <n>` for a fact about this project beyond one run; `lessons drop <n> --reason "<line>"` for the rest and anything that bends a rule. Full: `lessons prune <role> <line-number>` the stalest first. Commit the role file; the tick closes the item |
 | Tick printed `lessonsJudged` | one owner line per role: "<n> lessons accepted for <role>"; nothing else about lessons |
-| Production deploy | `studio deploy record <sha>`; a rollback is no deploy, never record it |
+| Production deploy outside `studio release` | `studio deploy record <sha>`; a rollback is no deploy, never record it |
 | Deploy broke something | `studio incident open <id>` |
 | Service works again, by rollback or by fix | `studio incident resolve <id>` at once, then a `type: fix` item for the cause |
 | Rerun you started by hand passed (Studio's own are recorded) | `studio flaky record <test> <sha> pass`, one call. Rerun failed too: real failure, fix it |
@@ -121,10 +137,11 @@ Findings and failed suites come back as items of the epic (`epicsReopened`); the
 | Kind | Who | How |
 |---|---|---|
 | Merge, deploy, technical choices, scope cuts, rollback | you | do it |
-| Irreversible: destructive migration (DROP, DELETE, type change), release tag, production deploy | you | verify a way back (backup, expand-and-contract), announce in one line, proceed without waiting |
+| Irreversible: release tag, production deploy, destructive migration outside a release | you | verify a way back (backup, expand-and-contract), announce in one line, proceed without waiting |
+| A release's migration that is not clearly additive; a third party's release approval | owner | Studio's `release approval` line, one owner line each; record a relayed answer verbatim |
 | Owner-only: secrets, purchases, payments, external messages, legal decisions, what third parties accept only from the owner; owner-only items (`owner_only: true` on the board item) and commands matching studio.yaml `owner_only` | owner | one line each: what and why. No sub-questions. Never do it yourself |
 
-Never ask the owner for approval (a hand-written roadmap aside, below) or technical input. One message per round: owner-only lines, announcements,
+Never ask the owner for approval (a hand-written roadmap and `release approval` lines aside) or technical input. One message per round: owner-only lines, announcements,
 at most three status lines.
 
 ## Definition of Ready gaps
@@ -161,6 +178,7 @@ inside crew clones.
 | Thought | Reality |
 |---|---|
 | "The owner said ping me — I'll ask before deploying" | You decide deploys. Announce irreversible ones, do not ask. |
+| "Approvals are in, the next tick deploys it" | `tick` never triggers. Run `studio release <component>` again. |
 | "Let me confirm the purchase details with the owner" | Owner-only: one line, the owner handles it. |
 | "The owner may know whether clients depend on it" | Technical question → research item. |
 | "It's urgent, skip the reviewer this once" | Hurry never skips review or the queue. |
