@@ -104,6 +104,26 @@ export interface PluginCli {
   ): Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
+/** Runs build and copy tools for the build cache (`cp`, `cargo`, `pnpm`); never with a token. */
+export interface Exec {
+  /**
+   * Runs `cmd <args>` without a shell and with exactly `env`. Output goes to `log` (appended) when
+   * given, else is returned cut to its last 64 KiB. A timeout kills the process group and returns
+   * code 124; a start failure returns 127. Never throws.
+   */
+  run(
+    cmd: string,
+    args: string[],
+    opts: { cwd: string; env: Record<string, string>; timeoutMs: number; log?: string },
+  ): Promise<{ code: number; stdout: string; stderr: string }>;
+  /** Starts `cmd <args>` detached with its output appended to `log`; returns its pid. */
+  detach(
+    cmd: string,
+    args: string[],
+    opts: { cwd: string; env: Record<string, string>; log: string },
+  ): Promise<{ pid: number }>;
+}
+
 export interface Ports {
   gh: Gh;
   credentials: Credentials;
@@ -113,6 +133,8 @@ export interface Ports {
   host: Host;
   /** Optional so test doubles need not run a real `claude`; a missing one refuses. */
   plugins?: PluginCli;
+  /** Optional like `plugins`: without it the build cache is off. */
+  exec?: Exec;
 }
 
 const PLUGIN_TIMEOUT_MS = 300_000;
@@ -312,5 +334,70 @@ export function realPorts(claudeBin = 'claude'): Ports {
     },
   };
 
-  return { gh, git, claude, clock, host, credentials, plugins };
+  const OUTPUT_TAIL = 64 * 1024;
+  const exec: Exec = {
+    run(cmd, args, opts) {
+      return new Promise((resolve) => {
+        const fd = opts.log === undefined ? undefined : openSync(opts.log, 'a');
+        const out = { stdout: '', stderr: '' };
+        const keep = (k: 'stdout' | 'stderr') => (b: Buffer) => {
+          out[k] = (out[k] + b.toString('utf8')).slice(-OUTPUT_TAIL);
+        };
+        let child: ReturnType<typeof spawn>;
+        try {
+          child = spawn(cmd, args, {
+            cwd: opts.cwd,
+            env: opts.env,
+            detached: true,
+            stdio: ['ignore', fd ?? 'pipe', fd ?? 'pipe'],
+          });
+        } catch (e) {
+          if (fd !== undefined) closeSync(fd);
+          resolve({ code: 127, stdout: '', stderr: (e as Error).message });
+          return;
+        }
+        child.stdout?.on('data', keep('stdout'));
+        child.stderr?.on('data', keep('stderr'));
+        let timedOut = false;
+        const timer = setTimeout(() => {
+          timedOut = true;
+          if (child.pid !== undefined) signal(child.pid, 'SIGKILL');
+        }, opts.timeoutMs);
+        let settled = false;
+        const done = (code: number) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (fd !== undefined) closeSync(fd);
+          resolve({ code: timedOut ? 124 : code, ...out });
+        };
+        child.once('error', (e) => {
+          out.stderr = e.message;
+          done(127);
+        });
+        child.once('close', (code) => done(code ?? 1));
+      });
+    },
+    async detach(cmd, args, opts) {
+      const fd = openSync(opts.log, 'a');
+      try {
+        const child = spawn(cmd, args, {
+          cwd: opts.cwd,
+          env: opts.env,
+          detached: true,
+          stdio: ['ignore', fd, fd],
+        });
+        const pid = await new Promise<number>((resolve, reject) => {
+          child.once('error', reject);
+          child.once('spawn', () => resolve(child.pid as number));
+        });
+        child.unref();
+        return { pid };
+      } finally {
+        closeSync(fd);
+      }
+    },
+  };
+
+  return { gh, git, claude, clock, host, credentials, plugins, exec };
 }

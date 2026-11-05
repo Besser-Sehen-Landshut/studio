@@ -3,6 +3,40 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.14.0] - 2026-11-05
+
+What crews cost was invisible, and nothing kept a busy day from running up. Every crew also started from
+a fresh clone and HOME and built everything from scratch. Now each item shows its runs, tokens and cost, a
+daily cap per project and per owner stops new launches, and a shared, crew-read-only build cache seeds
+each crew's target dir, cargo registry and pnpm store. Not tagged yet; the maintainers tag after the merge.
+
+### Added
+
+- Costs per item: `collect` reads the `result` events of the crew logs (`total_cost_usd`, tokens from
+  `modelUsage`, else `usage`) and stores `usage: { runs, tokens_in, tokens_out, tokens_cache, cost_usd }` on the
+  item, with the reviews of its pull request counted for the builder item. Recomputed from the logs, never
+  added twice.
+- `studio metrics` prints `costs` (today, per item, per epic); `studio epic list` has a `COST` column
+  (`costUsd` in JSON); the pane's footer shows `today $n`; `state.json` has `today.costUsd`.
+- Daily cost cap: `limits.daily_cost_usd` in `studio.yaml` (one project) and in the owner config (all
+  projects). Ended runs go into `costs.json` in the state root on the owner's local day; once the cap is
+  reached every ready item is deferred with `daily cost cap reached ($x of $y)`, `tick` lists it under
+  `held`, running crews finish, and the next day starts from zero.
+- Build cache: `studio cache refresh` builds seeds from `origin/main` in an owner-side clone
+  (`cache-build/`) with a timeout and publishes them in one swap; `studio cache status` shows size and age.
+  A launch copies the seeds copy-on-write into the crew's fresh clone and HOME (`cp -c` on macOS,
+  `cp --reflink=always` on Linux) and sets `PNPM_CONFIG_STORE_DIR`; the cache is in the sandbox's
+  `allowRead`, never in `allowWrite`, and guard-protected. `cache.max_gb` (default 20) bounds all caches;
+  `tick` cleans up the least recently used once a day and starts a refresh in the background once a week
+  for a cache that exists.
+- An optional `exec` port for build and copy tools.
+
+### Left out
+
+- A pnpm store shared read-only between crews and hard-link seeding: pnpm writes to its store and links
+  its files into `node_modules`, so a crew could change files other crews use.
+- File systems without copy-on-write: each crew would get a full copy, so `cache refresh` refuses there.
+
 ## [0.12.2] - 2026-11-05
 
 Every Studio update moves the pinned version of the `studio` plugin, and until `setup-plugins` ran,

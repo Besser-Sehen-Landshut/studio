@@ -32,7 +32,16 @@ import {
 } from './config.js';
 
 /** Entries of the state root that a crew session must never write (besides its own clone). */
-export const STATE_PROTECTED_DIRS = ['guard', 'settings', 'briefs', 'logs', 'homes', 'tmp'];
+export const STATE_PROTECTED_DIRS = [
+  'guard',
+  'settings',
+  'briefs',
+  'logs',
+  'homes',
+  'tmp',
+  'cache',
+  'cache-build',
+];
 export const STATE_FILES = [
   'crew.json',
   'queue.json',
@@ -51,6 +60,8 @@ export const STATE_FILES = [
   'pause.json',
   'skills-check.json',
   'tick.json',
+  'costs.json',
+  'cache.lock',
 ];
 
 /** `$XDG_STATE_HOME/studio`, else `<home>/.local/state/studio`: the parent of every state root. */

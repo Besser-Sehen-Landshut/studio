@@ -725,7 +725,9 @@ describe('writeCrewSettings', () => {
       base: 'main',
       protectedPaths: [
         ctxFile,
-        ...['guard', 'settings', 'briefs', 'logs', 'homes', 'tmp'].map((d) => join(state, d)),
+        ...['guard', 'settings', 'briefs', 'logs', 'homes', 'tmp', 'cache', 'cache-build'].map(
+          (d) => join(state, d),
+        ),
         ...[
           'crew.json',
           'queue.json',
@@ -744,6 +746,8 @@ describe('writeCrewSettings', () => {
           'pause.json',
           'skills-check.json',
           'tick.json',
+          'costs.json',
+          'cache.lock',
         ].map((f) => join(state, f)),
         join(dirnameOf(state), 'owner'),
       ],

@@ -140,6 +140,11 @@ const componentSchema = z.strictObject({
 });
 export type ComponentConfig = z.infer<typeof componentSchema>;
 
+/** `limits:` in studio.yaml and in the owner config. */
+const dailyLimitsSchema = z.strictObject({
+  dailyCostUsd: z.number().positive().optional(),
+});
+
 export const studioConfigSchema = z
   .strictObject({
     studio: z.literal(1),
@@ -181,6 +186,8 @@ export const studioConfigSchema = z
     // Plugins crews need, each at one exact version, over the defaults (src/plugins.ts).
     // `studio account setup-plugins` installs them; a launch refuses another installed version.
     plugins: z.array(pluginPinSchema).optional(),
+    // Spending brake: once the ended crew runs of the local day cost this much, nothing new starts.
+    limits: dailyLimitsSchema.optional(),
   })
   .superRefine((cfg, ctx) => {
     const seen = new Set<string>();
@@ -322,6 +329,22 @@ export const ownerConfigSchema = z.strictObject({
       command: z.string().min(1),
     })
     .optional(),
+  // The same daily cost cap as in studio.yaml, over all projects of the owner together.
+  limits: dailyLimitsSchema.optional(),
+  // The shared build cache (`studio cache`): all projects' caches together stay below `max_gb`.
+  // Defaults: 20 GB, a refresh of at most 60 minutes (`cacheLimits`).
+  cache: z
+    .strictObject({
+      maxGb: z.number().positive().optional(),
+      refreshTimeoutMin: z.number().int().positive().optional(),
+    })
+    .optional(),
+});
+
+/** The build cache's limits from the owner config, with their defaults. */
+export const cacheLimits = (c: { cache?: OwnerConfig['cache'] }) => ({
+  maxGb: c.cache?.maxGb ?? 20,
+  refreshTimeoutMin: c.cache?.refreshTimeoutMin ?? 60,
 });
 
 export type OwnerConfig = z.infer<typeof ownerConfigSchema>;

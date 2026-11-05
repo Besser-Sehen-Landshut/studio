@@ -427,6 +427,16 @@
         ],
         "additionalProperties": false
       }
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "daily_cost_usd": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
     }
   },
   "required": [

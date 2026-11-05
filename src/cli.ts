@@ -17,6 +17,7 @@ import {
   type WorkItem,
 } from './board.js';
 import { readSkillsMissing } from './brief-caps.js';
+import { type CacheTick, cacheStatus, cacheTick, refreshCache } from './cache.js';
 import { capabilitiesDir } from './capabilities.js';
 import { readCapacity, readCapacityTwice } from './capacity.js';
 import { approvedJobsProblem, type CoveredJob, verifyNotRunHereJobs } from './ci-jobs.js';
@@ -29,6 +30,7 @@ import {
   type RoleConfig,
   type StudioConfig,
 } from './config.js';
+import { costHold, costReport, costToday, recordEndedRuns, usd, withItemUsage } from './costs.js';
 import { limitHold, readCrewTokenFile } from './credentials.js';
 import {
   type CrewRecord,
@@ -216,6 +218,8 @@ Commands:
                            Pinned plugins against their marketplaces and sources against upstream;
                            one board item per update. Monthly (tick runs it); --now runs it at once,
                            --security marks a plugin or source update as security-relevant (priority 0)
+  cache refresh            Build the shared build cache from main in an owner-side clone (not for crews)
+  cache status             Size and age of the build cache
   setup [--link]           Owner only, in a terminal: gh, crew token and Claude account, one guided
                            step each, skipped when done; --link puts studio on your terminal's PATH
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
@@ -336,6 +340,8 @@ interface Tick {
   epicsReady?: { epic: string; title: string }[];
   /** The monthly skills check, when this tick ran it: new update items and what failed. */
   skillsCheck?: { added: string[]; raised: string[]; problems: string[] };
+  /** What the build cache's upkeep did; absent when nothing was due. */
+  cache?: CacheTick;
 }
 
 /** One tick at a time; a tick whose holder died is taken over after this long. */
@@ -511,11 +517,34 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         return (e as Error).message.replace(/\p{Cc}/gu, ' ');
       }
     };
+    /**
+     * The daily cost caps: first the runs that ended since the last look go into the ledger, so a
+     * run's cost counts once it is known. Running crews are left to finish.
+     */
+    const dailyCostHold = (config: StudioConfig, ownerConfig: OwnerConfig): string | undefined => {
+      try {
+        // A state root is never created here; an unreadable ledger is costHold's to report.
+        if (existsSync(stateRoot())) {
+          recordEndedRuns(stateRoot(), ports, ownerConfig.crewLabelLimits.timezone);
+        }
+      } catch {
+        // Unreadable crew records: the label limits refuse those already; the ledger keeps its runs.
+      }
+      return costHold({
+        stateRoot: stateRoot(),
+        stateBase: dirname(ownerRoot()),
+        config,
+        ownerConfig,
+        now: ports.clock.now(),
+      });
+    };
     /** `skipLabelCount`: `state` goes on without the per-label room when crew records are unreadable. */
     const planNow = async (config: StudioConfig, board: Board, skipLabelCount = false) => {
       const capacity = await readCapacity(config, ports);
       const ownerConfig = loadOwnerConfig(owner);
-      let hold = await limitHold(ownerRoot(), ownerConfig, ports, owner);
+      let hold =
+        (await limitHold(ownerRoot(), ownerConfig, ports, owner)) ??
+        dailyCostHold(config, ownerConfig);
       // Room under the per-label limits; asked only while nothing else holds (no provider call
       // during a block).
       let slots: number | undefined;
@@ -1042,6 +1071,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             }));
           }
         }
+        // Runs, tokens and cost from the logs, on the item they count for (a review: its builder).
+        next = withItemUsage(next, stateRoot(), item.id);
         saveBoard(project, next);
         return { next, fixLimit, supersededBy };
       });
@@ -1091,6 +1122,39 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
      * and run the queue. Each item's failure, and each phase's, is recorded and the rest goes on;
      * what needs a decision is listed, never decided here.
      */
+    /** The build cache's part of a tick; a refresh runs as its own process, never in the tick. */
+    const upkeepCache = (root: string) => {
+      const exec = ports.exec;
+      const launcher = deps.launcher;
+      return cacheTick({
+        stateRoot: root,
+        stateBase: dirname(ownerRoot()),
+        ownerRoot: ownerRoot(),
+        ownerConfig: loadOwnerConfig(owner),
+        now: ports.clock.now(),
+        ...(exec === undefined || launcher === undefined
+          ? {}
+          : {
+              start: async (log: string) =>
+                (
+                  await exec.detach(
+                    process.execPath,
+                    [launcher, '--project', project, 'cache', 'refresh'],
+                    {
+                      cwd: project,
+                      env: Object.fromEntries(
+                        Object.entries(deps.env).filter(
+                          (e): e is [string, string] => e[1] !== undefined,
+                        ),
+                      ),
+                      log,
+                    },
+                  )
+                ).pid,
+            }),
+      });
+    };
+
     /** `skills check` itself, for the command and for the monthly run in `tick`. */
     const skillsCheck = async (security: readonly string[]) => {
       const root = await boundStateRoot();
@@ -1304,6 +1368,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       };
 
       // (g) At most once in 30 days per project: new plugin versions and changed sources as items.
+      // (h) The build cache: the daily size cleanup, and the weekly refresh in the background.
+      const cacheUpkeep = async () => {
+        const r = await upkeepCache(root);
+        if (r !== undefined) out.cache = r;
+      };
+
       const skillsMonthly = async () => {
         if (!skillsCheckDue(root, ports.clock.now()).due) return;
         const r = await skillsCheck([]);
@@ -1322,6 +1392,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ['queue add', queueApproved],
           ['sweep', sweep],
           ['skills check', skillsMonthly],
+          ['cache', cacheUpkeep],
         ] as const) {
           if (!(await phase(name, body))) return out;
         }
@@ -1487,7 +1558,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
         if (sub === 'list') {
           if (args.length !== 0) throw new UsageError('epic list takes no arguments');
-          const rows = epicRows(loadAll().board);
+          const board = loadAll().board;
+          const costs = new Map(costReport(board).epics.map((e) => [e.epic, e.costUsd]));
+          const rows = epicRows(board).map((r) => ({ ...r, costUsd: costs.get(r.id) ?? 0 }));
           if (json) print(rows);
           else {
             const counts = (c: (typeof rows)[number]['counts']) => {
@@ -1498,12 +1571,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             };
             stdout(
               table([
-                ['ID', 'STATUS', 'PROGRESS', 'ITEMS', 'TITLE'],
+                ['ID', 'STATUS', 'PROGRESS', 'ITEMS', 'COST', 'TITLE'],
                 ...rows.map((r) => [
                   r.id,
                   r.status,
                   `${r.progress.merged}/${r.progress.total}`,
                   counts(r.counts),
+                  usd(r.costUsd),
                   r.title,
                 ]),
               ]),
@@ -2051,6 +2125,33 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         return 0;
       }
 
+      case 'cache': {
+        const [sub] = rest;
+        if (rest.length !== 1 || (sub !== 'refresh' && sub !== 'status')) {
+          throw new UsageError('cache needs: refresh | status');
+        }
+        const ownerConfig = loadOwnerConfig(owner);
+        if (sub === 'status') {
+          print(cacheStatus(stateRoot(), ownerConfig, ports.clock.now()));
+          return 0;
+        }
+        refuseCrew(deps.env);
+        const root = await boundStateRoot();
+        print(
+          await refreshCache({
+            stateRoot: root,
+            ownerRoot: ownerRoot(),
+            originUrl: (await ports.git.run(project, ['remote', 'get-url', 'origin'])).trim(),
+            ownerConfig,
+            ports,
+            platform: process.platform,
+            env: deps.env,
+            home: deps.homedir,
+          }),
+        );
+        return 0;
+      }
+
       case 'skills': {
         if (rest[0] !== 'check' || rest.length !== 1) {
           throw new UsageError('skills needs: check [--now] [--security <name>]...');
@@ -2186,6 +2287,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'metrics': {
+        /** Cost per item and epic from the board, and today's from the ledger. */
+        const costsOf = (board: Board) => {
+          const zone = loadOwnerConfig(owner).crewLabelLimits.timezone;
+          const now = ports.clock.now();
+          return {
+            today: { day: dayKey(now, zone), costUsd: costToday(stateRoot(), now, zone) ?? null },
+            ...costReport(board),
+          };
+        };
         let flaky: unknown;
         try {
           const entries = listFlaky(stateRoot());
@@ -2198,10 +2308,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           print({
             ...computeMetrics(readMetricEvents(stateRoot())),
             flakyError: (e as Error).message.replace(/\p{Cc}/gu, ' '),
+            costs: costsOf(loadBoard(project)),
           });
           return 0;
         }
-        print({ ...computeMetrics(readMetricEvents(stateRoot())), flaky });
+        print({
+          ...computeMetrics(readMetricEvents(stateRoot())),
+          flaky,
+          costs: costsOf(loadBoard(project)),
+        });
         return 0;
       }
 
@@ -2751,6 +2866,8 @@ function buildSnapshot(
   // One zone for the day and the pause time: the owner's, else the system's.
   const timezone = resolveZone(extra.ownerConfig.crewLabelLimits.timezone);
   const tickRecord = readTickRecord(root);
+  // Ended crew runs of today, from the ledger the planner keeps.
+  const costNow = costToday(root, now, timezone);
   const items = paneItems(board, queue, ci, {
     ...(tickRecord === undefined ? {} : { tick: tickRecord }),
     ...(components === undefined
@@ -2767,7 +2884,10 @@ function buildSnapshot(
     queue,
     capacity,
     ci,
-    today: todayFrom(events, now, timezone, (id) => board.items.find((i) => i.id === id)?.epic),
+    today: {
+      ...todayFrom(events, now, timezone, (id) => board.items.find((i) => i.id === id)?.epic),
+      ...(costNow === undefined || costNow === 0 ? {} : { costUsd: costNow }),
+    },
     ...(usageDays === undefined ? {} : { usageDays }),
     mainBuild: extra.mainBuild,
     counts: {
