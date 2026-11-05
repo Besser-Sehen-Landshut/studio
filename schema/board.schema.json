@@ -235,6 +235,12 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:[\\]-]*$"
           },
+          "finding": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+          },
           "epic": {
             "type": "string",
             "pattern": "^E-[1-9]\\d*$"
@@ -400,6 +406,28 @@
               "maxLength": 300,
               "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
             }
+          },
+          "accepted": {
+            "type": "object",
+            "properties": {
+              "item": {
+                "type": "string",
+                "pattern": "^[A-Z]+-\\d+$"
+              },
+              "sha": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40,64}$"
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "item",
+              "sha",
+              "at"
+            ],
+            "additionalProperties": false
           },
           "history": {
             "default": [],

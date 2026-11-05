@@ -1,6 +1,7 @@
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Board, NotRunHere, WorkItem } from './board.js';
+import { type AcceptanceFacts, acceptanceDataFiles, readAcceptanceFacts } from './acceptance.js';
+import { acceptanceOf, type Board, type NotRunHere, type WorkItem } from './board.js';
 import {
   type AnalyzerRef,
   type ChangedPaths,
@@ -97,6 +98,8 @@ export interface ResolvedForItem {
     securityWhy?: string;
     /** The item holding the pull request is a fix: its probe must run. */
     fixItem?: boolean;
+    /** An epic's acceptance instead of a pull request: main, its suites and the epic's PRs. */
+    acceptance?: AcceptanceFacts;
   };
 }
 
@@ -193,6 +196,36 @@ export async function resolveForItem(o: {
         ...base,
         triggers: itemTriggers(item),
       }),
+    };
+  }
+  if (acceptanceOf(item) !== undefined) {
+    const facts = await readAcceptanceFacts({
+      item,
+      board: o.readBoard(),
+      config,
+      gh: o.ports.gh,
+      defaultBranch: (repo) => readDefaultBranch(o.ports, repo),
+    });
+    const files = [...new Set(facts.pullRequests.flatMap((p) => p.files))];
+    const known = facts.pullRequests.every((p) => p.merge !== undefined) && files.length > 0;
+    const paths: ChangedPaths = known ? [...files, ...declared] : 'unknown';
+    const triggers = [...new Set([...itemTriggers(item), 'epic-end'])];
+    const resolved = resolveSkills(item, item.role, stack, paths, phase, {
+      ...base,
+      triggers,
+      tier: 'large',
+    });
+    return {
+      resolved,
+      review: {
+        tier: 'large',
+        reasons: [`the acceptance of ${facts.epic}: ${facts.pullRequests.length} pull requests`],
+        round: 0,
+        securityWhy: 'full scan at epic end',
+        head: facts.sha,
+        base: facts.base,
+        acceptance: facts,
+      },
     };
   }
   const target = reviewTarget(item);
@@ -440,6 +473,8 @@ export interface BriefCaps {
     pullRequest?: { description: string; checks: string; files: string };
     notRunHere?: string;
     ciItem?: boolean;
+    /** An acceptance: the epic, main as pinned, and the data files with suites and PRs. */
+    acceptance?: { epic: string; base: string; sha: string; suites: string; pullRequests: string };
   };
 }
 
@@ -663,13 +698,39 @@ export function writeCaps(o: {
           }),
       ...(review.ciItem === undefined ? {} : { ciItem: review.ciItem }),
     };
+    const accept = review.acceptance;
+    if (accept !== undefined) {
+      // Each pull request had its own probe; the acceptance owes none.
+      delete reviewOut.probeRequired;
+      for (const a of analyzers) {
+        if (a.id === 'diff-review') a.why = "the combined diff of the epic's pull requests";
+        if (a.id === 'spec-check') a.why = 'the acceptance criteria against main';
+      }
+      const data = acceptanceDataFiles(accept);
+      reviewOut.acceptance = {
+        epic: accept.epic,
+        base: accept.base,
+        sha: accept.sha,
+        suites: copy('acceptance/suites.txt', data.suites),
+        pullRequests: copy('acceptance/pull-requests.txt', data.pullRequests),
+      };
+    }
     const ids = analyzers.map((a) => a.id);
     const caps: CrewCaps = {
       tier: review.tier,
       analyzers: ids,
       mandatory: gate.mandatory.map((m) => m.id),
       ...(gate.onFinding.length === 0 ? {} : { onFinding: gate.onFinding }),
-      ...(gate.probeRequired === undefined ? {} : { probeRequired: true as const }),
+      ...(gate.probeRequired === undefined || accept !== undefined
+        ? {}
+        : { probeRequired: true as const }),
+      ...(accept === undefined
+        ? {}
+        : {
+            acceptsEpic: accept.epic,
+            epicState: accept.state,
+            suites: accept.suites.map((x) => ({ name: x.name, state: x.state })),
+          }),
       ...(review.target === undefined ? {} : { reviewsTarget: review.target }),
       ...(review.head === undefined ? {} : { headRefOid: review.head }),
       ...(review.base === undefined ? {} : { baseRefName: review.base }),

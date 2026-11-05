@@ -579,9 +579,39 @@ describe('epics in the pane', () => {
       'E-1 Pay by invoice 1/3',
       '  ● working builder APP-1',
       '  ● working builder APP-3',
-      'E-2 Reports 2/2 · accepting',
+      'E-2 Reports 2/2 · in acceptance',
     ]);
     expect(all[from + 4]?.tone).toBe('ok');
+  });
+
+  it('names the stage: in acceptance with its item, reopened, done', () => {
+    const all = lines({
+      epics: [
+        {
+          id: 'E-1',
+          title: 'Pay by invoice',
+          status: 'open',
+          stage: 'reopened',
+          merged: 2,
+          total: 4,
+        },
+        {
+          id: 'E-2',
+          title: 'Reports',
+          status: 'accepting',
+          stage: 'accepting',
+          merged: 2,
+          total: 2,
+          acceptance: 'APP-9',
+        },
+        { id: 'E-3', title: 'Search', status: 'done', stage: 'done', merged: 3, total: 3 },
+      ],
+      crew: [],
+    });
+    const texts = all.map((l) => l.text);
+    expect(texts).toContain('E-1 Pay by invoice 2/4 · reopened');
+    expect(texts).toContain('E-2 Reports 2/2 · in acceptance APP-9');
+    expect(texts).toContain('E-3 Search 3/3 · done');
   });
 
   it('is unchanged without epics', () => {

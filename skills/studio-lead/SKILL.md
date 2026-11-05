@@ -73,6 +73,26 @@ pinned head SHA, once **no** check is pending and every required check is green.
 - Queue failure → item back in `in_review`, listed in `needsLead`; `tick` does not queue it again: fix via crew, review, queue again.
 - A failed check outside the PR gets one rerun on the same SHA from Studio (`reruns`), which also fills the flaky ledger and adds the cause item (`flakyItems`). Never rerun, `flaky record` or add that item yourself.
 
+## Acceptance: per epic, Studio's
+
+Once an epic's items are all merged, `tick` adds its acceptance item (`epicsReady` names it), waits for the full
+suites on main (`held`), and a reviewer crew checks the epic's combined diff against its acceptance lines.
+Findings and failed suites come back as items of the epic (`epicsReopened`); the next acceptance follows by itself.
+
+- Never run the suites, review the epic, add its findings or mark it done yourself. Never stop, requeue or drop
+  an acceptance that waits: Studio retries it, and drops it itself when the epic moves on.
+- `epicsDone`: one owner line, "<E-n> <title> is done". Nothing to the owner for `epicsReady`, a wait or a reopen.
+- What it checks: the suites in `acceptance: { suites: [{ workflow: .github/workflows/<file>.yml, job: <job> }] }`
+  of studio.yaml (by file, never display name); without that block every workflow that ran on the pinned main
+  commit, and a commit with no run is never green. `acceptance: { suites: [] }` only for a repository whose CI
+  does not run on main: the review is then the whole acceptance.
+- An acceptance line in `needsLead` (a suite that cannot start, no CI run on main): fix the cause through an
+  item, e.g. a CI item with `--path ".github/workflows/<file>"` that adds `workflow_dispatch`, or the
+  `acceptance:` block of studio.yaml as above. The ticks after its merge pick the acceptance up again.
+- `define acceptance first` (an imported epic): `studio epic edit E-<n> --acceptance "<check>"...` from its goal.
+- `acceptance limit reached for E-<n>`: its new items wait `blocked`. Findings that shrink: `blocked → ready`
+  on the board (no `stop --requeue`: no crew ran). Findings that do not converge: a research item, or drop them.
+
 ## After each event
 
 | Event | Run |
@@ -116,7 +136,7 @@ A larger request (several pieces, one goal) is an epic: `studio epic add "<title
 hand, `studio roadmap --write` renders it. Hand-written: `studio roadmap import ROADMAP.md` (dry run), the same
 with `--write`, then `studio epic edit E-<n> --acceptance "<check>"...` for each imported epic. Replacing the
 hand-written file is the owner's: with `skipped` empty, show `studio roadmap | diff ROADMAP.md -`, ask in one
-line; `studio roadmap --write --force` only after a yes. `epicsReady`: one status line.
+line; `studio roadmap --write --force` only after a yes. When an epic is done, see Acceptance.
 Feature without a plan, unclear scope,
 unknown dependency, "does anyone still use this?" → add a `type: research`, `role: researcher` item. Never an
 owner question.

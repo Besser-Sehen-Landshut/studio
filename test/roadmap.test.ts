@@ -72,7 +72,7 @@ describe('studio roadmap renders the board', () => {
         '  - Acceptance:',
         '    - first check',
         '    - second check',
-        '- [~] E-2 — Invoices (1/1)',
+        '- [~] E-2 — Invoices (1/1) · in acceptance',
         '  - Goal: Goal of E-2',
         '  - Acceptance:',
         '    - first check',

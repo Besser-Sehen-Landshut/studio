@@ -22,8 +22,12 @@ export interface BoardEpic {
   id: string;
   title: string;
   status: string;
+  /** open, reopened, accepting or done; absent from an older Studio. */
+  stage?: string;
   merged: number;
   total: number;
+  /** The acceptance item that runs, or the last one. */
+  acceptance?: string;
 }
 
 export interface BoardState {
@@ -259,13 +263,25 @@ function toState(root: Obj): BoardState {
     const status = str(o?.status);
     const merged = num(o?.merged);
     const total = num(o?.total);
+    const stage = str(o?.stage);
+    const acceptance = str(o?.acceptance);
     return id === undefined ||
       title === undefined ||
       status === undefined ||
       merged === undefined ||
       total === undefined
       ? []
-      : [{ id, title, status, merged, total }];
+      : [
+          {
+            id,
+            title,
+            status,
+            ...(stage === undefined ? {} : { stage }),
+            merged,
+            total,
+            ...(acceptance === undefined ? {} : { acceptance }),
+          },
+        ];
   });
   if (epics.length > 0) state.epics = epics;
   const project = str(root.project);
@@ -372,6 +388,8 @@ interface Strings {
   noComponent: string;
   noCrew: string;
   accepting: string;
+  reopened: string;
+  epicDone: string;
   now: string;
   next: string;
   queueEmpty: string;
@@ -453,7 +471,9 @@ const EN: Strings = {
   crossCutting: 'cross-cutting',
   noComponent: 'no component',
   noCrew: 'No crew running.',
-  accepting: 'accepting',
+  accepting: 'in acceptance',
+  reopened: 'reopened',
+  epicDone: 'done',
   now: 'now',
   next: 'next',
   queueEmpty: 'Queue is empty.',
@@ -592,6 +612,8 @@ const DE: Strings = {
   noComponent: 'ohne Komponente',
   noCrew: 'Keine Crew aktiv.',
   accepting: 'in Abnahme',
+  reopened: 'wieder offen',
+  epicDone: 'fertig',
   now: 'jetzt',
   next: 'danach',
   queueEmpty: 'Warteschlange ist leer.',
@@ -984,15 +1006,26 @@ function crewLines(state: BoardState, columns: number, nowMs: number, t: Strings
 
 const MAX_EPICS = 10;
 
+/** The stage of an epic in words, with its acceptance item; undefined while plainly open. */
+function stageWord(e: BoardEpic, t: Strings): string | undefined {
+  const stage = e.stage ?? e.status;
+  const item = e.acceptance === undefined ? '' : ` ${e.acceptance}`;
+  if (stage === 'accepting') return `${t.accepting}${item}`;
+  if (stage === 'done') return t.epicDone;
+  if (stage === 'reopened') return t.reopened;
+  return undefined;
+}
+
 /** Each epic with merged of total, and under it the crew rows working on its items. */
 function epicLines(state: BoardState, t: Strings): Line[] {
   const epics = state.epics ?? [];
   const out: Line[] = [];
   for (const e of epics.slice(0, MAX_EPICS)) {
-    const accepting = e.status === 'accepting';
+    const word = stageWord(e, t);
+    const ok = e.status === 'accepting' || e.status === 'done';
     out.push({
-      text: `${e.id} ${e.title} ${e.merged}/${e.total}${accepting ? ` · ${t.accepting}` : ''}`,
-      ...(accepting ? { tone: 'ok' as const } : {}),
+      text: `${e.id} ${e.title} ${e.merged}/${e.total}${word === undefined ? '' : ` · ${word}`}`,
+      ...(ok ? { tone: 'ok' as const } : {}),
     });
     for (const c of state.crew.filter((c) => c.epic === e.id && c.state !== 'done')) {
       out.push({ text: `  ${crewWord(c, t)} ${c.role} ${c.item}`, tone: LOOK[c.state].tone });
@@ -1390,7 +1423,8 @@ function listBody(f: Frame, decisions: Decision[], items: BoardItem[]): Line[] {
   const epics = (s.epics ?? []).filter((e) => e.total > 0);
   const known = new Set(epics.map((e) => e.id));
   for (const e of epics) {
-    const right = `${bar(e.merged, e.total, 5)} ${e.merged}/${e.total}`;
+    const word = stageWord(e, t);
+    const right = `${word === undefined ? '' : `${word} `}${bar(e.merged, e.total, 5)} ${e.merged}/${e.total}`;
     section(
       { text: spread(`${e.id} ${e.title}`, right, columns), tone: 'head' },
       rows.filter((r) => r.item.epic === e.id),

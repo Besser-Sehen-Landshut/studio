@@ -146,6 +146,40 @@ const repoName = z
   .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, 'must be owner/repo (letters, digits, . _ -)')
   .refine((r) => r.split('/').every((p) => p !== '.' && p !== '..'), 'must be owner/repo');
 
+/** A CI job name, one plain line. */
+const ciLine = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[^\p{Cc}\p{Cf}]+$/u, 'one line of at most 200 characters');
+
+/**
+ * `acceptance:` in studio.yaml: the CI jobs that are the full suites of an epic's acceptance (E2E,
+ * browser), which no crew sandbox can run. Without it, every workflow run on the main commit counts.
+ */
+const acceptanceSchema = z.strictObject({
+  suites: z
+    .array(
+      z.strictObject({
+        // The workflow by its file, never its display name: two workflows can share a name.
+        workflow: z
+          .string()
+          .regex(
+            /^\.github\/workflows\/[A-Za-z0-9._-]{1,100}\.ya?ml$/,
+            'must be the workflow file, .github/workflows/<file>.yml',
+          ),
+        // Quoted as data into item titles: letters, digits, spaces and . _ - ( ) / : only.
+        job: ciLine.pipe(
+          z
+            .string()
+            .regex(/^[A-Za-z0-9 ._()/:-]+$/, 'letters, digits, spaces and . _ - ( ) / : only'),
+        ),
+      }),
+    )
+    // `[]`: a repository without CI says so; the acceptance then is the review alone.
+    .max(20),
+});
+
 /** `limits:` in studio.yaml and in the owner config. */
 const dailyLimitsSchema = z.strictObject({
   dailyCostUsd: z.number().positive().optional(),
@@ -194,6 +228,8 @@ export const studioConfigSchema = z
     plugins: z.array(pluginPinSchema).optional(),
     // Spending brake: once the ended crew runs of the local day cost this much, nothing new starts.
     limits: dailyLimitsSchema.optional(),
+    // The full suites an epic's acceptance waits for on main (src/acceptance.ts).
+    acceptance: acceptanceSchema.optional(),
   })
   .superRefine((cfg, ctx) => {
     const seen = new Set<string>();

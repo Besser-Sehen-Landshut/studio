@@ -15,6 +15,8 @@ import { z } from 'zod';
 import {
   crewCovers,
   crewLine,
+  crewReason,
+  EPIC_ID_RE,
   type NotRunHere,
   notRunHereReportSchema,
   type WorkItem,
@@ -51,6 +53,10 @@ const reportSchema = z.object({
   testsRun: z.number().int().nonnegative().nullish(),
   verdict: z.enum(['approve', 'changes_requested']).nullish(),
   reviews: z.string().regex(REVIEWS_RE).nullish(),
+  // An acceptance names the epic it accepted, and each finding as one line: crew text. A finding
+  // over the limit is cut, not refused: a crew cannot repair its report once it has exited.
+  accepts: z.string().regex(EPIC_ID_RE).nullish(),
+  findings: emptyList(z.array(crewReason).max(20)),
   // Results per analyzer; a missing source reads `skipped: <reason>`, never a pass.
   analyzers: z
     .record(
@@ -104,6 +110,10 @@ export interface Report {
   testsRun?: number;
   verdict?: 'approve' | 'changes_requested';
   reviews?: string;
+  /** The epic an acceptance checked. */
+  accepts?: string;
+  /** An acceptance's findings, one line each: crew text, each becomes an item in the epic. */
+  findings?: string[];
   analyzers?: Record<string, string>;
   mutationProbe?: string;
   findingAttempts?: number;
@@ -171,6 +181,8 @@ export function parseReport(text: string, item?: WorkItem): Report {
     ...(d.testsRun != null && { testsRun: d.testsRun }),
     ...(d.verdict != null && { verdict: d.verdict }),
     ...(d.reviews != null && { reviews: d.reviews }),
+    ...(d.accepts != null && { accepts: d.accepts }),
+    ...(d.findings.length > 0 && { findings: d.findings }),
     ...(d.analyzers != null && { analyzers: d.analyzers }),
     ...(d.mutationProbe != null && { mutationProbe: d.mutationProbe }),
     ...(d.findingAttempts != null && { findingAttempts: d.findingAttempts }),

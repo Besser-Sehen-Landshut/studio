@@ -1,12 +1,17 @@
 import {
+  acceptanceOf,
   type Board,
   type Epic,
   type EpicProgress,
+  type EpicStage,
   epicProgress,
   epicSchema,
+  epicStage,
   loadBoard,
   saveBoard,
   settleEpics,
+  transition,
+  type WorkItem,
 } from './board.js';
 import { loadConfig } from './config.js';
 
@@ -96,20 +101,33 @@ export type EpicRow = {
   id: string;
   title: string;
   status: Epic['status'];
+  /** open, reopened, accepting (in acceptance), done or dropped. */
+  stage: EpicStage;
   progress: { merged: number; total: number };
   counts: EpicProgress['counts'];
+  /** The acceptance item that runs, or the last one; absent before the first. */
+  acceptance?: { item: string; status: string };
 };
+
+/** The epic's open acceptance item, else its newest one. */
+export function currentAcceptance(board: Board, epicId: string): WorkItem | undefined {
+  const all = board.items.filter((i) => acceptanceOf(i) === epicId);
+  return all.find((i) => i.status !== 'merged' && i.status !== 'dropped') ?? all.at(-1);
+}
 
 /** Every epic in id order, with its items by status and merged of total. */
 export function epicRows(board: Board): EpicRow[] {
   return [...(board.epics ?? [])].sort(byEpicId).map((e) => {
     const p = epicProgress(board, e.id);
+    const a = currentAcceptance(board, e.id);
     return {
       id: e.id,
       title: e.title,
       status: e.status,
+      stage: epicStage(e),
       progress: { merged: p.merged, total: p.total },
       counts: p.counts,
+      ...(a === undefined ? {} : { acceptance: { item: a.id, status: a.status } }),
     };
   });
 }
@@ -175,8 +193,13 @@ export function dropEpic(board: Board, id: string, by: string, now: Date): Board
   if (epic.status === 'dropped' || epic.status === 'done') {
     throw new Error(`${id} is ${epic.status} already`);
   }
+  // The acceptance checks the epic and is no piece of it: it goes with the epic.
   const open = board.items.filter(
-    (i) => i.epic === id && i.status !== 'merged' && i.status !== 'dropped',
+    (i) =>
+      i.epic === id &&
+      i.status !== 'merged' &&
+      i.status !== 'dropped' &&
+      acceptanceOf(i) === undefined,
   );
   if (open.length > 0) {
     throw new Error(
@@ -184,6 +207,13 @@ export function dropEpic(board: Board, id: string, by: string, now: Date): Board
     );
   }
   const entry = { at: now.toISOString(), from: epic.status, to: 'dropped' as const, by };
+  for (const a of board.items) {
+    if (acceptanceOf(a) !== id || a.status === 'merged' || a.status === 'dropped') continue;
+    if (a.status === 'assigned' || a.status === 'in_progress') {
+      throw new Error(`${a.id}, the acceptance of ${id}, is running: stop it first`);
+    }
+    board = transition(board, a.id, 'dropped', by, now);
+  }
   return {
     ...board,
     epics: (board.epics ?? []).map((e) =>

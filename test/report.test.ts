@@ -418,15 +418,19 @@ describe('commands a crew could not run in its sandbox', () => {
     );
   });
 
-  it('refuses a control character in command or reason', () => {
-    for (const entry of [
-      '{ command: "a\\u0007b", missing: database, reason: x }',
-      '{ command: a, missing: database, reason: "x\\ny" }',
-    ]) {
-      expect(() => parseReport(done(`not_run_here:\n  - ${entry}`), item('fix'))).toThrow(
-        /bad field notRunHere/,
-      );
-    }
+  it('refuses a control character in a command; one in a reason becomes a space', () => {
+    expect(() =>
+      parseReport(
+        done('not_run_here:\n  - { command: "a\\u0007b", missing: database, reason: x }'),
+        item('fix'),
+      ),
+    ).toThrow(/bad field notRunHere/);
+    // Nothing matches against a reason: a line break in it never rejects the whole report.
+    const r = parseReport(
+      done('not_run_here:\n  - { command: a, missing: database, reason: "x\\ny" }'),
+      item('fix'),
+    );
+    expect(r.notRunHere[0]?.reason).toBe('x y');
   });
 
   it('a failed report stays failed with the list', () => {
