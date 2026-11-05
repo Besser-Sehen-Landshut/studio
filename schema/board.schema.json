@@ -97,6 +97,10 @@
               "pattern": "^[a-z][a-z0-9-]{0,31}$"
             }
           },
+          "runs_on": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
           "depends_on": {
             "default": [],
             "type": "array",

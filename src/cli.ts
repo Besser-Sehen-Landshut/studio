@@ -1,5 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
@@ -22,7 +21,6 @@ import {
   EPIC_STAGE_WORDS,
   ITEM_STATUSES,
   loadBoard,
-  type NotRunHere,
   saveBoard,
   transition,
   type WorkItem,
@@ -44,6 +42,7 @@ import {
   type OwnerEnv,
   type RoleConfig,
   type StudioConfig,
+  WORKER_LABEL_RE,
 } from './config.js';
 import { costHold, costReport, costToday, recordEndedRuns, usd, withItemUsage } from './costs.js';
 import { limitHold, readCrewTokenFile } from './credentials.js';
@@ -119,6 +118,7 @@ import { clearPause, PAUSED_LINE, readPause, setPause } from './pause.js';
 import { type Capacity, ONE_BUILD_PER_PLAN, planAssignments } from './planner.js';
 import { type PluginPin, pinnedPlugins, unallowedPlugins } from './plugins.js';
 import type { Ports } from './ports.js';
+import { openCrewPr } from './pull-request.js';
 import { decisionsOf, pushDecisions, readNotifySecret } from './push.js';
 import {
   acquireQueueRunLock,
@@ -160,7 +160,15 @@ import {
   triggerRelease,
   withReleases,
 } from './release.js';
-import { checkReportHead, ReportError, readReport, reportName } from './report.js';
+import {
+  checkReportHead,
+  MAX_REPORT_BYTES,
+  parseReport,
+  type Report,
+  ReportError,
+  readReport,
+  reportName,
+} from './report.js';
 import {
   checkReviewCaps,
   checksPending,
@@ -206,6 +214,20 @@ import {
   readUsage,
   runningPerLabel,
 } from './usage.js';
+import { workerStep } from './worker.js';
+import { parseClaim } from './worker-claim.js';
+import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
+import { ghHub, type WorkerHub } from './worker-hub.js';
+import {
+  closeOffer,
+  followClaim,
+  openOffer,
+  readWorkers,
+  recordWorkerRun,
+  updateWorkers,
+  WORKER_WAIT,
+  workerCrewName,
+} from './worker-lead.js';
 
 export interface CliDeps {
   ports: Ports;
@@ -222,6 +244,8 @@ export interface CliDeps {
   readLine?: (prompt: string) => Promise<string | undefined>;
   /** The absolute path of the plugin's `bin/studio`, for `setup --link` and init's next steps. */
   launcher?: string;
+  /** What `studio worker` can enforce on this machine; read from the system when missing. */
+  workerPlatform?: WorkerPlatform;
 }
 
 const USAGE = `Usage: studio [--project <dir>] [--json] <command>
@@ -244,7 +268,10 @@ Commands:
   roadmap import <file> [--write]  Turn "- [ ] Phase <n> — <title>" lines into epics (dry run without --write)
   plan                     Dry-run the planner (JSON)
   launch <id>              Start a crew session for a planned item
-  status                   Crew sessions and their board status
+  status                   Crew sessions and their board status, items on workers included
+  worker --label <label> [--once]
+                           Serve offered items of this label on this machine: claim one, run its
+                           crew, open its pull request, hand the report back (see README, Workers)
   overview                 Owner only, in a terminal: every project of this owner, read only
   collect <id>             Read a crew report and move the item
   tick                     One lead heartbeat: collect, launch, queue and merge what is due (JSON)
@@ -409,6 +436,8 @@ interface Tick {
   /** Review items added for pull requests in review that had neither a review nor a verdict. */
   reviews: { item: string; review: string }[];
   launched: { item: string; name: string; pid: number }[];
+  /** Items offered to workers of their label in this tick (an issue each); absent without any. */
+  offered?: { item: string; label: string; offer: number }[];
   queued: { item: string; pr: number; repo: string }[];
   merged: { item?: string; pr: number; repo: string }[];
   held: { item: string; reason: string }[];
@@ -489,9 +518,33 @@ function withReviewItem(
   return { board: { ...board, items: [...board.items, review] }, id };
 }
 
+/** One row of `studio status`: a local crew, or an item on a worker (no pid here). */
+interface StatusRow {
+  name: string;
+  item: string;
+  role: string;
+  pid: number;
+  alive: boolean;
+  status: string;
+  startedAt: string;
+  label?: string;
+  stoppedAt?: string;
+  components?: string[];
+  worker?: {
+    label: string;
+    offer: number;
+    claim: string;
+    login?: string;
+    attempt?: number;
+    heartbeatAt?: string;
+  };
+}
+
 function runningPerRole(board: Board): Record<string, number> {
   const running: Record<string, number> = {};
   for (const i of board.items) {
+    // An item on a worker uses no local crew: it does not count against the role's wip.
+    if (i.runsOn !== undefined) continue;
     if (ACTIVE_FOR_WIP.includes(i.status)) running[i.role] = (running[i.role] ?? 0) + 1;
   }
   return running;
@@ -577,6 +630,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         '--since, --by, --said, --at, --deployed and --not-deployed work with release only',
       );
     }
+    if ((values.label !== undefined || values.once !== undefined) && cmd !== 'worker') {
+      throw new UsageError('--label and --once work with worker only');
+    }
     /** The item's components, as a field for JSON output; nothing when none are configured. */
     const componentField = (config: StudioConfig | undefined, item: WorkItem | undefined) =>
       config?.components === undefined
@@ -594,6 +650,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         for (const line of migrateOwnerState(root, ports.clock.now())) stderr(`error: ${line}\n`);
       }
       return root;
+    };
+    /** GitHub as the lead sees it for workers: the machine's own gh login. */
+    const leadHub = (): WorkerHub => ports.hub?.() ?? ghHub(ports.gh);
+    let leadLogin: string | undefined;
+    const leadLoginOf = async (): Promise<string> => {
+      leadLogin ??= await leadHub().login();
+      return leadLogin;
     };
     /** Binds the state root to this project before the first write (launch does the same). */
     const boundStateRoot = async () => {
@@ -685,9 +748,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     const planNow = async (config: StudioConfig, board: Board, skipLabelCount = false) => {
       const capacity = await readCapacity(config, ports);
       const ownerConfig = loadOwnerConfig(owner);
-      let hold =
-        (await limitHold(ownerRoot(), ownerConfig, ports, owner)) ??
-        (await dailyCostHold(config, ownerConfig));
+      const limited = await limitHold(ownerRoot(), ownerConfig, ports, owner);
+      const cost = await dailyCostHold(config, ownerConfig);
+      let hold = limited ?? cost;
+      // Offers to workers use no local credential: only a pause, a block or the cost cap hold them.
+      const offerHold = readPause(stateRoot()).paused ? 'paused' : (blockHold(ownerRoot()) ?? cost);
       // Room under the per-label limits; asked only while nothing else holds (no provider call
       // during a block).
       let slots: number | undefined;
@@ -733,6 +798,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           readPause(stateRoot()).paused ? 'paused' : hold,
           slots,
           ciPending,
+          offerHold,
         ),
       };
     };
@@ -1025,6 +1091,46 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
     };
 
+    /**
+     * Offers a planned item with `runs_on` to the workers of its label: the offer (an issue on the
+     * primary repository) first, then its record, then the board, so a tick cut short anywhere
+     * finds the open offer again instead of opening a second one.
+     */
+    const offerItem = async (config: StudioConfig, item: WorkItem) => {
+      const label = item.runsOn as string;
+      const root = await boundStateRoot();
+      if ((loadOwnerConfig(owner).workers?.accept[label] ?? []).length === 0) {
+        throw new HeldError(
+          `${WORKER_WAIT}no worker is accepted for the label ${label} (workers.accept in the owner config)`,
+        );
+      }
+      const now = ports.clock.now();
+      const offer = await openOffer({
+        hub: leadHub(),
+        repo: config.primaryRepo,
+        item,
+        lead: await leadLoginOf(),
+        now,
+      });
+      updateWorkers(root, (s) => {
+        s.items[item.id] = { label, offer, offeredAt: now.toISOString() };
+      });
+      await withBoardLock(root, ports.clock.now(), () => {
+        const fresh = loadBoard(project);
+        if (findItem(fresh, item.id).status !== 'ready') {
+          throw new Error(`${item.id} changed while it was offered (#${offer} stays open)`);
+        }
+        saveBoard(
+          project,
+          withItem(transition(fresh, item.id, 'assigned', BY, ports.clock.now()), item.id, (i) => ({
+            ...i,
+            crew: workerCrewName(label),
+          })),
+        );
+      });
+      return { item: item.id, label, offer };
+    };
+
     /** Starts the crew of a planned item and moves it to `assigned`: the body of `launch`. */
     const launch = async (id: string | undefined) => {
       if (await reconcile()) {
@@ -1034,6 +1140,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
       const { config, board } = loadAll();
       const item = findItem(board, id);
+      if (item.runsOn !== undefined) {
+        throw new Error(
+          `${item.id} runs on a worker with the label ${item.runsOn}: tick offers it there, nothing launches it here`,
+        );
+      }
       if (item.status !== 'ready') {
         throw new Error(`${item.id} is ${item.status}, only ready items can be launched`);
       }
@@ -1070,6 +1181,52 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       return res;
     };
 
+    /**
+     * The report a worker handed back on the claim of `item`: only a `done` claim of an accepted
+     * worker for this item's offer counts. The report is parsed with the same schema as a local
+     * crew's; the pull request is the one the claim names, never one the report names.
+     */
+    const workerReport = async (
+      item: WorkItem,
+    ): Promise<{ report: Report; worker: string; sha: string }> => {
+      const config = loadConfig(project);
+      const record = readWorkers(stateRoot()).items[item.id];
+      if (record === undefined) {
+        throw new ReportError(`${item.id} runs on a worker but has no offer record`);
+      }
+      const read = await leadHub().readClaim(config.primaryRepo, item.id);
+      const claim = read === undefined ? undefined : parseClaim(read.message);
+      if (read === undefined || claim === undefined || claim.item !== item.id) {
+        throw new Error(`${item.id}: no claim with a report yet; nothing moved`);
+      }
+      if (claim.state !== 'done') {
+        throw new Error(
+          `${item.id}: the claim of ${claim.worker} is ${claim.state}; nothing moved`,
+        );
+      }
+      const accepted = loadOwnerConfig(owner).workers?.accept[record.label] ?? [];
+      if (
+        !accepted.includes(claim.worker) ||
+        claim.label !== record.label ||
+        claim.offer !== record.offer
+      ) {
+        throw new ReportError(
+          `the claim of ${item.id} is not from a worker accepted for ${record.label} on offer #${record.offer}`,
+        );
+      }
+      const text = await leadHub().claimFile(config.primaryRepo, read.sha, 'report.md');
+      if (text === undefined) throw new ReportError('the done claim carries no report');
+      if (Buffer.byteLength(text) > MAX_REPORT_BYTES) {
+        throw new ReportError('report file is missing or not a safe regular file');
+      }
+      const { pr: _crewPr, ...parsed } = parseReport(text, item);
+      return {
+        report: claim.pr === undefined ? parsed : { ...parsed, pr: claim.pr },
+        worker: claim.worker,
+        sha: read.sha,
+      };
+    };
+
     /** Reads a finished crew report, verifies it and moves the item: the body of `collect`. */
     const collect = async (id: string | undefined): Promise<Collected> => {
       const { board } = loadAll();
@@ -1079,38 +1236,48 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           `${item.id} is ${item.status}, only assigned or in_progress items can be collected`,
         );
       }
-      // A running crew may still rewrite its report; an earlier run's report is not this one.
-      const record = readCrewRecords(stateRoot())[item.id];
-      let notBefore: Date | undefined;
-      if (record !== undefined) {
-        if (!Number.isInteger(record.pid) || record.pid <= 0) {
-          throw new Error(`crew record for ${item.id} has no valid pid`);
+      // An item on a worker hands its report back on its claim: no crew record or clone here.
+      let report: Report;
+      let fileName: string | undefined;
+      let fromWorker: { worker: string; sha: string } | undefined;
+      if (item.runsOn !== undefined) {
+        const got = await workerReport(item);
+        report = got.report;
+        fromWorker = { worker: got.worker, sha: got.sha };
+      } else {
+        // A running crew may still rewrite its report; an earlier run's report is not this one.
+        const record = readCrewRecords(stateRoot())[item.id];
+        let notBefore: Date | undefined;
+        if (record !== undefined) {
+          if (!Number.isInteger(record.pid) || record.pid <= 0) {
+            throw new Error(`crew record for ${item.id} has no valid pid`);
+          }
+          const hold = await crewHold(record, ports);
+          if (hold === 'unverified') throw new Error(unverifiedRefusal(record));
+          if (hold === 'running') {
+            throw new Error(
+              `crew ${record.name} is still running (pid ${record.pid}); collect after it exited, or stop it first`,
+            );
+          }
+          if ((await crewProcess(record, ports)) === 'unknown') {
+            stderr(`warning: ${unverifiedHandgrip(record)}\n`);
+          }
+          notBefore = new Date(record.startedAt);
+          if (Number.isNaN(notBefore.getTime())) {
+            throw new Error(`crew record for ${item.id} has no valid startedAt`);
+          }
         }
-        const hold = await crewHold(record, ports);
-        if (hold === 'unverified') throw new Error(unverifiedRefusal(record));
-        if (hold === 'running') {
-          throw new Error(
-            `crew ${record.name} is still running (pid ${record.pid}); collect after it exited, or stop it first`,
+        // Reading files only: git never runs inside a crew clone.
+        const clone = join(stateRoot(), 'clones', item.id);
+        // The report is read exactly once; everything below verifies and stores that one result.
+        fileName = reportName(stateRoot(), item.id);
+        if (fileName === undefined) {
+          throw new ReportError(
+            `no report name was drawn for ${item.id}: relaunch it, nothing moved`,
           );
         }
-        if ((await crewProcess(record, ports)) === 'unknown') {
-          stderr(`warning: ${unverifiedHandgrip(record)}\n`);
-        }
-        notBefore = new Date(record.startedAt);
-        if (Number.isNaN(notBefore.getTime())) {
-          throw new Error(`crew record for ${item.id} has no valid startedAt`);
-        }
+        report = readReport(clone, item.id, item, { notBefore, fileName });
       }
-      // Reading files only: git never runs inside a crew clone.
-      const clone = join(stateRoot(), 'clones', item.id);
-      // The report is read exactly once; everything below verifies and stores that one result.
-      const fileName = reportName(stateRoot(), item.id);
-      if (fileName === undefined) {
-        throw new ReportError(
-          `no report name was drawn for ${item.id}: relaunch it, nothing moved`,
-        );
-      }
-      let report = readReport(clone, item.id, item, { notBefore, fileName });
       // A review report that does not hold to its brief is a rejected report, like one that
       // cannot be read: `tick` hands both to the lead.
       const reviewCaps = () => {
@@ -1272,7 +1439,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         report.status === 'done' &&
         report.pr === undefined &&
         report.prTitle !== undefined &&
-        !PR_OPTIONAL.includes(item.type)
+        !PR_OPTIONAL.includes(item.type) &&
+        // A worker opens its own pull request: the lead never opens one for it.
+        fromWorker === undefined
       ) {
         const config = loadConfig(project);
         const token = crewTokenFor(config, owner);
@@ -1331,6 +1500,25 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
         branch = info.branch;
         checkReportHead(report, info.head);
+        // The pull request of a worker item counts only when the worker that claimed it opened it.
+        // A fix round goes on in the item's own pull request, which an earlier accepted worker of
+        // the same label may have opened.
+        if (fromWorker !== undefined) {
+          const facts = await leadHub().pullRequest(item.repo, report.pr);
+          if (facts === undefined) throw new Error(`cannot read ${item.repo}#${report.pr}`);
+          const accepted = (loadOwnerConfig(owner).workers?.accept[item.runsOn ?? ''] ?? []).map(
+            (l) => l.toLowerCase(),
+          );
+          const author = facts.author.toLowerCase();
+          const ok =
+            author === fromWorker.worker.toLowerCase() ||
+            (item.pr === report.pr && accepted.includes(author));
+          if (!ok) {
+            throw new ReportError(
+              `PR ${report.pr} was opened by ${facts.author.replace(/[^A-Za-z0-9-[\]/]/g, '?')}, not by ${fromWorker.worker}, who claimed ${item.id}`,
+            );
+          }
+        }
       } else if (report.status === 'done' && !PR_OPTIONAL.includes(item.type)) {
         throw new ReportError(`done report for ${item.id} names no pr`);
       }
@@ -1343,7 +1531,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         // The evidence the lessons review weighs: this run's report and its pull request.
         const pr = report.pr !== undefined ? `${item.repo}#${report.pr}` : reviewDone.target;
         lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now, {
-          report: `clones/${item.id}/.studio/reports/${fileName}`,
+          report:
+            fromWorker === undefined
+              ? `clones/${item.id}/.studio/reports/${fileName}`
+              : `refs/studio/claims/${item.id}@${fromWorker.sha}`,
           ...(pr === undefined ? {} : { pr }),
         });
       } catch (e) {
@@ -1687,6 +1878,113 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
       };
 
+      // Items on workers: follow each claim; collect a report handed back, as for a local crew.
+      const followWorkers = async () => {
+        const { config, board } = loadAll();
+        const onWorkers = board.items.filter(
+          (i) => i.runsOn !== undefined && (i.status === 'assigned' || i.status === 'in_progress'),
+        );
+        if (onWorkers.length === 0) return;
+        const ownerConfig = loadOwnerConfig(owner);
+        const records = readWorkers(root).items;
+        for (const item of onWorkers) {
+          beat();
+          try {
+            const record = records[item.id];
+            if (record === undefined) {
+              lead(
+                item.id,
+                `${item.id} runs on a worker but has no offer record: studio stop ${item.id} --requeue offers it again, or drop it`,
+              );
+              continue;
+            }
+            const now = ports.clock.now();
+            const { follow, seen } = await followClaim({
+              hub: leadHub(),
+              repo: config.primaryRepo,
+              item,
+              record,
+              ownerConfig,
+              now,
+            });
+            if (seen !== undefined) {
+              updateWorkers(root, (s) => {
+                const r = s.items[item.id];
+                if (r !== undefined)
+                  s.items[item.id] = { ...r, claim: seen, checkedAt: now.toISOString() };
+              });
+            }
+            if (follow.kind === 'lead') {
+              lead(item.id, follow.line);
+              continue;
+            }
+            if (follow.kind === 'waiting') {
+              if (follow.claimed && item.status === 'assigned') {
+                await withBoardLock(root, now, () => {
+                  const fresh = loadBoard(project);
+                  if (findItem(fresh, item.id).status !== 'assigned') return;
+                  saveBoard(project, transition(fresh, item.id, 'in_progress', BY, now));
+                });
+              }
+              out.held.push({ item: item.id, reason: follow.line });
+              continue;
+            }
+            // The run ended: its usage counts first, so the collect below sums it on the item.
+            await recordWorkerRun({
+              stateRoot: root,
+              item: item.id,
+              claim: follow.claim,
+              at: seen?.at ?? now.toISOString(),
+              now,
+              timezone: ownerConfig.crewLabelLimits.timezone,
+            });
+            if (follow.kind === 'released') {
+              const note = `worker ${follow.claim.worker} released it: ${follow.reason}`;
+              await withBoardLock(root, now, () => {
+                const fresh = loadBoard(project);
+                const cur = findItem(fresh, item.id);
+                if (cur.status !== 'assigned' && cur.status !== 'in_progress') return;
+                let next = transition(fresh, item.id, 'blocked', BY, now);
+                next = withItem(next, item.id, (i) => ({
+                  ...i,
+                  notes: [...(i.notes ?? []), ...capNotes([note])],
+                }));
+                next = withItemUsage(next, root, item.id);
+                saveBoard(project, next);
+              });
+              for (const e of await closeOffer({
+                hub: leadHub(),
+                repo: config.primaryRepo,
+                stateRoot: root,
+                item: item.id,
+                why: 'the worker released it',
+              })) {
+                out.errors.push({ item: item.id, error: e });
+              }
+              continue;
+            }
+            const r = await collect(item.id);
+            if (r.kind === 'moved') {
+              out.collected.push(r.out);
+              if (typeof r.out.review === 'string') fresh.add(r.out.review);
+              for (const e of await closeOffer({
+                hub: leadHub(),
+                repo: config.primaryRepo,
+                stateRoot: root,
+                item: item.id,
+                why: 'its report was collected',
+              })) {
+                out.errors.push({ item: item.id, error: e });
+              }
+            } else if (r.kind !== 'refused') out.held.push({ item: item.id, reason: r.line });
+          } catch (e) {
+            if (e instanceof ReportError) {
+              lead(item.id, `${why(e)}; studio stop ${item.id} --requeue offers it once more`);
+            } else out.errors.push({ item: item.id, error: why(e) });
+          }
+        }
+      };
+
       // A builder in review with neither a review nor a verdict (its review was dropped): a new one.
       const reviewMissing = async () => {
         const board = loadBoard(project);
@@ -1763,6 +2061,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           } catch (e) {
             if (e instanceof HeldError) out.held.push({ item: a.id, reason: why(e) });
             else out.errors.push({ item: a.id, error: why(e) });
+          }
+        }
+        for (const o of plan.offer) {
+          beat();
+          try {
+            const r = await offerItem(config, o);
+            out.offered = [...(out.offered ?? []), r];
+          } catch (e) {
+            if (e instanceof HeldError) out.held.push({ item: o.id, reason: why(e) });
+            else out.errors.push({ item: o.id, error: why(e) });
           }
         }
         for (const d of plan.deferred) out.held.push({ item: d.id, reason: d.reason });
@@ -1944,6 +2252,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ['recover', recoverPhase],
           ['collect', collectEnded],
           ['review', reviewMissing],
+          ['workers', followWorkers],
           ['acceptance', acceptancePhase],
           ['launch', launchPlanned],
           ['queue add', queueApproved],
@@ -2059,7 +2368,76 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
     };
 
+    /**
+     * `stop --requeue`: an item whose crew ended without a usable report gets its one relaunch,
+     * through blocked as the lead routine says; one requeued before stays blocked.
+     */
+    const requeueItem = (id: string, stoppedAt: string): Promise<'ready' | 'blocked'> =>
+      withBoardLock(stateRoot(), ports.clock.now(), () => {
+        const fresh = loadBoard(project);
+        const now = findItem(fresh, id);
+        if (now.status !== 'assigned' && now.status !== 'in_progress') {
+          throw new Error(
+            `${id} is ${now.status}; only an assigned or in_progress item can be requeued`,
+          );
+        }
+        const second = (now.notes ?? []).some((n) => n.startsWith(REQUEUE_NOTE));
+        const at = ports.clock.now();
+        let moved = transition(fresh, id, 'blocked', BY, at);
+        if (!second) moved = transition(moved, id, 'ready', BY, at);
+        const note = second
+          ? `crew stopped at ${stoppedAt}; requeued before, so it stays blocked`
+          : `${REQUEUE_NOTE} at ${stoppedAt}; back to ready for its one relaunch`;
+        saveBoard(
+          project,
+          withItem(moved, id, (i) => ({ ...i, notes: [...(i.notes ?? []), note] })),
+        );
+        return second ? 'blocked' : 'ready';
+      });
+
     switch (cmd) {
+      case 'worker': {
+        refuseCrew(deps.env);
+        if (rest.length > 0)
+          throw new UsageError('worker takes no arguments, only --label and --once');
+        const label = values.label;
+        if (label === undefined || !WORKER_LABEL_RE.test(label)) {
+          throw new UsageError('worker needs --label <label> (^[a-z][a-z0-9-]{0,31}$)');
+        }
+        // The worker's own identity: the crew token of this machine, never the owner's gh login.
+        const token = workerToken(loadConfig(project), owner);
+        const hub = ports.hub?.(token) ?? ghHub(ports.gh, token);
+        const ctx = {
+          project,
+          label,
+          ports,
+          hub,
+          token,
+          owner,
+          platform: deps.workerPlatform ?? detectPlatform(),
+          log: (line: string) => stderr(`${line.replace(/\p{Cc}/gu, ' ')}\n`),
+        };
+        for (;;) {
+          let kind: string;
+          try {
+            const r = await workerStep(ctx);
+            kind = r.kind;
+            stdout(`${JSON.stringify({ at: ports.clock.now().toISOString(), ...r })}\n`);
+          } catch (e) {
+            kind = 'error';
+            stdout(
+              `${JSON.stringify({ at: ports.clock.now().toISOString(), kind, line: (e as Error).message.replace(/\p{Cc}/gu, ' ') })}\n`,
+            );
+          }
+          // Fail closed: what this machine cannot enforce stops the worker, it never waits it out.
+          if (kind === 'refused') return 1;
+          if (values.once === true) return kind === 'error' ? 1 : 0;
+          await ports.clock.sleep(
+            kind === 'idle' || kind === 'held' || kind === 'error' ? 60_000 : 20_000,
+          );
+        }
+      }
+
       case 'init': {
         refuseCrew(deps.env);
         if (rest.length !== 0) throw new UsageError('init takes no arguments, only --write');
@@ -2396,6 +2774,18 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ...componentField(config, i),
           })),
           ...(solutionsError === undefined ? {} : { solutionsError }),
+          // Items to offer to workers of their label; absent without any.
+          ...(plan.offer.length === 0
+            ? {}
+            : {
+                offer: plan.offer.map((i) => ({
+                  id: i.id,
+                  title: i.title,
+                  role: i.role,
+                  runsOn: i.runsOn,
+                  ...componentField(config, i),
+                })),
+              }),
           blocked: plan.blocked,
           deferred: plan.deferred,
           capacity,
@@ -2446,7 +2836,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
         const board = loadBoard(project, config);
         const root = stateRoot();
-        const rows = Object.values(readCrewRecords(root)).map((r) => {
+        const rows: StatusRow[] = Object.values(readCrewRecords(root)).map((r) => {
           const item = board.items.find((i) => i.id === r.item);
           return {
             name: r.name,
@@ -2461,6 +2851,40 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ...componentField(config, item),
           };
         });
+        // Items on workers, as the last tick saw their claims: no pid here, the worker has it.
+        let offers: ReturnType<typeof readWorkers>['items'] = {};
+        try {
+          offers = readWorkers(root).items;
+        } catch (e) {
+          stderr(`error: ${(e as Error).message}\n`);
+        }
+        for (const [id, w] of Object.entries(offers)) {
+          const item = board.items.find((i) => i.id === id);
+          const live =
+            w.claim !== undefined && (w.claim.state === 'claimed' || w.claim.state === 'alive');
+          rows.push({
+            name: workerCrewName(w.label),
+            item: id,
+            role: item?.role ?? 'unknown',
+            pid: 0,
+            alive: live,
+            status: item?.status ?? 'unknown',
+            startedAt: w.offeredAt,
+            ...componentField(config, item),
+            worker: {
+              label: w.label,
+              offer: w.offer,
+              ...(w.claim === undefined
+                ? { claim: 'none' }
+                : {
+                    login: w.claim.worker,
+                    claim: w.claim.state,
+                    attempt: w.claim.attempt,
+                    heartbeatAt: w.claim.at,
+                  }),
+            },
+          });
+        }
         if (json) print(rows);
         else {
           const withComponents = config?.components !== undefined;
@@ -2477,9 +2901,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               ],
               ...rows.map((r) => [
                 r.item,
-                r.name,
+                r.worker?.login === undefined ? r.name : `${r.name} (${r.worker.login})`,
                 r.role,
-                String(r.pid),
+                r.pid === 0 ? '-' : String(r.pid),
                 r.alive ? 'yes' : 'no',
                 r.status,
                 ...(withComponents ? [componentCell(r.components)] : []),
@@ -2615,8 +3039,29 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
       case 'stop': {
         const board = loadBoard(project);
-        const id = findItem(board, rest[0]).id;
+        const target = findItem(board, rest[0]);
+        const id = target.id;
         const root = stateRoot();
+        // An item on a worker has no crew here: withdrawing its offer stops the worker's crew.
+        if (target.runsOn !== undefined) {
+          if (values.requeue !== true) {
+            throw new Error(
+              `${id} runs on a worker: studio stop ${id} --requeue withdraws the offer (the worker stops its crew) and offers it once more; studio drop ${id} ends it`,
+            );
+          }
+          refuseCrew(deps.env);
+          const errors = await closeOffer({
+            hub: leadHub(),
+            repo: loadConfig(project).primaryRepo,
+            stateRoot: await boundStateRoot(),
+            item: id,
+            why: 'the lead withdrew it',
+          });
+          if (errors.length > 0) throw new Error(`${errors.join('; ')}; nothing moved`);
+          const stoppedAt = ports.clock.now().toISOString();
+          print({ item: id, withdrawn: true, status: await requeueItem(id, stoppedAt) });
+          return 0;
+        }
         const records = readCrewRecords(root);
         const rec = records[id];
         if (!rec) throw new Error(`no crew record for ${id}`);
@@ -2640,27 +3085,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         let requeued: 'ready' | 'blocked' | undefined;
         if (values.requeue === true) {
           refuseCrew(deps.env);
-          await withBoardLock(root, ports.clock.now(), () => {
-            const fresh = loadBoard(project);
-            const now = findItem(fresh, id);
-            if (now.status !== 'assigned' && now.status !== 'in_progress') {
-              throw new Error(
-                `${id} is ${now.status}; only an assigned or in_progress item can be requeued`,
-              );
-            }
-            const second = (now.notes ?? []).some((n) => n.startsWith(REQUEUE_NOTE));
-            const at = ports.clock.now();
-            let moved = transition(fresh, id, 'blocked', BY, at);
-            if (!second) moved = transition(moved, id, 'ready', BY, at);
-            const note = second
-              ? `crew stopped at ${stoppedAt}; requeued before, so it stays blocked`
-              : `${REQUEUE_NOTE} at ${stoppedAt}; back to ready for its one relaunch`;
-            saveBoard(
-              project,
-              withItem(moved, id, (i) => ({ ...i, notes: [...(i.notes ?? []), note] })),
-            );
-            requeued = second ? 'blocked' : 'ready';
-          });
+          requeued = await requeueItem(id, stoppedAt);
         }
         print({
           item: id,
@@ -2716,6 +3141,25 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           throw new Error(`crew for ${id} is still running; run studio stop ${id} first`);
         }
         if (hold === 'unverified') throw new Error(unverifiedRefusal(rec as CrewRecord));
+        // An offer to workers is withdrawn first: the worker stops its crew when it sees it closed.
+        if (findItem(loadBoard(project), id).runsOn !== undefined) {
+          let offered = false;
+          try {
+            offered = readWorkers(stateRoot()).items[id] !== undefined;
+          } catch {
+            offered = true;
+          }
+          if (offered) {
+            const errors = await closeOffer({
+              hub: leadHub(),
+              repo: loadConfig(project).primaryRepo,
+              stateRoot: await boundStateRoot(),
+              item: id,
+              why: 'the item was dropped',
+            });
+            if (errors.length > 0) throw new Error(`${errors.join('; ')}; nothing dropped`);
+          }
+        }
         await withBoardLock(stateRoot(), ports.clock.now(), () => {
           const fresh = loadBoard(project);
           saveBoard(project, transition(fresh, id, 'dropped', BY, ports.clock.now()));
@@ -3516,6 +3960,8 @@ function parseCli(argv: string[]) {
         by: { type: 'string' },
         said: { type: 'string' },
         at: { type: 'string' },
+        label: { type: 'string' },
+        once: { type: 'boolean' },
       },
       allowPositionals: true,
       strict: true,
@@ -3606,8 +4052,6 @@ function exceptionsOrNone(root: string): ExceptionEntry[] {
     return [];
   }
 }
-const PR_BODY_MAX = 20_000;
-
 /** The least-privilege crew token, as a launch reads it; Studio opens a crew's PR only with it. */
 function crewTokenFor(config: StudioConfig, owner: OwnerEnv): string {
   const fromEnv = config.crewToken ? owner.env?.[config.crewToken.env] : undefined;
@@ -3616,6 +4060,17 @@ function crewTokenFor(config: StudioConfig, owner: OwnerEnv): string {
   if (file.kind === 'ok') return file.token;
   throw new Error(
     'opening the pull request needs the crew token (studio secret set crew-token); nothing moved',
+  );
+}
+
+/** The worker machine's own GitHub token: the crew token of this machine, as a launch reads it. */
+function workerToken(config: StudioConfig, owner: OwnerEnv): string {
+  const fromEnv = config.crewToken ? owner.env?.[config.crewToken.env] : undefined;
+  if (fromEnv) return fromEnv;
+  const file = readCrewTokenFile(owner);
+  if (file.kind === 'ok') return file.token;
+  throw new Error(
+    "a worker needs its own GitHub token on this machine: studio secret set crew-token (a token of the worker identity, never the lead's)",
   );
 }
 
@@ -3631,100 +4086,6 @@ function prHeldNote(cap: Capacity, config: StudioConfig): string {
   if (!cap.hostOk) parts.push(`host load ${cap.hostLoad.toFixed(2)}`);
   const why = cap.error === undefined ? '' : `; ${CI_READ_FAILED} ${cap.error}`;
   return capNotes([`${PR_HELD}ci capacity (${parts.join(', ')}${why})`])[0] as string;
-}
-
-/**
- * Opens the pull request of a crew that pushed `studio/<id>` but could not run gh, with the crew
- * token, outside the sandbox. Title and body are crew text: cleaned, cut and passed as data in a
- * file, never on a command line. An open pull request of that branch is taken instead and its
- * text renewed with `gh pr edit`; both wait for `capacity`. A new one is opened only when `capacity` holds;
- * otherwise nothing is opened and the read that decided comes back as `held`. `unchanged` runs
- * after the capacity wait, right before the create, and throws when the item moved meanwhile.
- */
-async function openCrewPr(
-  ports: Ports,
-  item: WorkItem,
-  title: string,
-  body: string,
-  notRunHere: readonly NotRunHere[],
-  token: string,
-  capacity: () => Promise<{ ok: boolean; capacity: Capacity }>,
-  unchanged: () => void,
-): Promise<{ pr: number } | { held: Capacity }> {
-  const head = `studio/${item.id}`;
-  const list = await ports.gh.run(
-    ['pr', 'list', '--repo', item.repo, '--head', head, '--state', 'open', '--json', 'number'],
-    { token },
-  );
-  if (list.code !== 0)
-    throw new Error(`cannot list pull requests of ${head} (gh exit ${list.code})`);
-  const open = JSON.parse(list.stdout || '[]') as { number?: unknown }[];
-  const known = open.find((p) => Number.isInteger(p.number))?.number;
-  // Crew text loses control and format characters (bidi overrides, zero-width).
-  const plainTitle = title.replace(/[\p{Cc}\p{Cf}]/gu, '').trim();
-  if (plainTitle === '')
-    throw new Error(`the pull request title for ${head} is empty; nothing moved`);
-  // Studio's own lines come first, so crew text can neither push them out of view nor fake an end.
-  const text = `Opened by Studio for ${item.id}; the text below the line was written by the crew.\n${notRunSection(notRunHere)}\n---\n\n${body.replace(/[^\P{Cc}\n\t]|\p{Cf}/gu, '').slice(0, PR_BODY_MAX)}\n`;
-  const withBody = async <T>(use: (file: string) => Promise<T>): Promise<T> => {
-    const dir = mkdtempSync(join(tmpdir(), 'studio-pr-'));
-    try {
-      const file = join(dir, 'body.md');
-      writeFileSync(file, text, { mode: 0o600 });
-      return await use(file);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  };
-  // Opening and editing both wait for CI capacity: an edit can start workflows too.
-  const room = await capacity();
-  if (!room.ok) return { held: room.capacity };
-  unchanged();
-  if (typeof known === 'number') {
-    // The open pull request gets this report's text, so its not_run_here list is never stale.
-    return withBody(async (file) => {
-      const r = await ports.gh.run(
-        ['pr', 'edit', String(known), '--repo', item.repo, '--body-file', file],
-        { token },
-      );
-      if (r.code !== 0) {
-        throw new Error(`gh pr edit failed for ${head} (exit ${r.code}); nothing moved`);
-      }
-      return { pr: known };
-    });
-  }
-  return withBody(async (file) => {
-    const r = await ports.gh.run(
-      [
-        'pr',
-        'create',
-        '--repo',
-        item.repo,
-        '--head',
-        head,
-        '--title',
-        plainTitle,
-        '--body-file',
-        file,
-      ],
-      { token },
-    );
-    const m = /\/pull\/(\d+)\s*$/.exec(r.stdout);
-    if (r.code !== 0 || !m)
-      throw new Error(`gh pr create failed for ${head} (exit ${r.code}); nothing moved`);
-    return { pr: Number(m[1]) };
-  });
-}
-/**
- * The pull request section for commands the crew could not run in its sandbox. Each line is crew
- * text, already one plain line by the report schema; fences are cut so it stays in its block.
- */
-function notRunSection(list: readonly NotRunHere[]): string {
-  if (list.length === 0) return '';
-  const lines = list.map((x) =>
-    `${x.command} (missing ${x.missing}: ${x.reason})`.replace(/`{3,}/g, ''),
-  );
-  return `\n## Not run in the crew sandbox\n\nThe crew could not run these commands, because its sandbox lacks the service named (crew text). CI must run them; an approval counts only with green checks.\n\n\`\`\`text\n${lines.join('\n')}\n\`\`\`\n`;
 }
 
 const MAX_NOTES = 10;

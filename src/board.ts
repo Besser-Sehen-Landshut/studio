@@ -114,6 +114,12 @@ export const workItemSchema = z.strictObject({
   // `componentsOf` infers them from the repo and the paths.
   component: componentId.optional(),
   components: z.array(componentId).min(1).optional(),
+  // A worker label: no local crew runs this item; workers with that label are offered it
+  // (src/worker-lead.ts). Same rule as WORKER_LABEL_RE in config.ts (a test keeps them equal).
+  runsOn: z
+    .string()
+    .regex(/^[a-z][a-z0-9-]{0,31}$/, 'must match ^[a-z][a-z0-9-]{0,31}$')
+    .optional(),
   dependsOn: strList,
   dod: strList,
   flag: z.string().optional(),
@@ -386,6 +392,7 @@ const KEY_ORDER: readonly (keyof WorkItem)[] = [
   'conflictsWith',
   'component',
   'components',
+  'runsOn',
   'dependsOn',
   'dod',
   'flag',

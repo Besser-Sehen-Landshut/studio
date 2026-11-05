@@ -3,6 +3,7 @@ import { closeSync, openSync, readFileSync } from 'node:fs';
 import { availableParallelism, loadavg } from 'node:os';
 import { execa } from 'execa';
 import { parseLinuxStartTime } from './paths.js';
+import type { WorkerHub } from './worker-hub.js';
 
 export { parseLinuxStartTime } from './paths.js';
 
@@ -116,6 +117,11 @@ export interface Ports {
   plugins?: PluginCli;
   /** Optional so test doubles never reach the network; a missing one sends nothing. */
   http?: Http;
+  /**
+   * GitHub for workers on other machines (src/worker-hub.ts); missing means `gh`, with the given
+   * token or the machine's login. A seam for tests.
+   */
+  hub?: (token?: string) => WorkerHub;
 }
 
 const HTTP_TIMEOUT_MS = 15_000;

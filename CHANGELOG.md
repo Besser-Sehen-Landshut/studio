@@ -3,6 +3,70 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.19.0] - 2026-11-05
+
+Some work needs another machine: real hardware, an installed program to analyse, another operating system.
+Until now the lead steered such a session by message. Now an item names a worker label (`runs_on`), the lead
+offers it on GitHub, and `studio worker --label <label>` on that machine claims it atomically, runs its crew
+under the same rules as a local crew plus a deny list of places and ports, opens the pull request with its own
+identity and hands the report back on the claim. The lead collects, reviews, queues and merges as before.
+Nothing but GitHub is shared between the machines. Not tagged yet; the maintainers tag after the merge.
+
+### Added
+
+- `runs_on: <label>` on a board item (`feature`, `fix`, `chore`, `docs` or `research` of a builder, designer
+  or researcher). `plan` lists such items under `offer`; `launch` refuses them. Offers take no role WIP, no
+  credential slot and no host load; dependencies, overlaps, component WIP, a pause, an account block and the
+  daily cost cap hold them.
+- `tick` offers each planned one as an issue `Studio offer <id> for <label>` (label `studio-offer`, the item's
+  board fields as one JSON block), moves it to `assigned` with the crew `worker:<label>`, follows its claim
+  (`in_progress` while claimed, `held` with `worker: ...`), collects a `done` claim through the same `collect`
+  and blocks the item on a `released` one; `tick` prints `offered`. The offer record lives in `workers.json`.
+- Claims: `refs/studio/claims/<id>` on the primary repository, created through the GitHub API (one creator
+  wins), moved only as a fast-forward from the commit the worker wrote last (heartbeat every third of the
+  lease, default 30 minutes), taken over after the lease plus two minutes by another worker of the label,
+  once (attempt 2, from the pushed `studio/<id>`); a second expiry goes to the lead.
+- `studio worker --label <label> [--once]`: claims one offer at a time, launches the crew with `launch`'s code
+  (brief, rules and `studio.yaml` from a fresh `origin/main`, sandbox, guard, skill allowlist, its own Claude
+  account and limits), opens or renews the pull request with the worker's own token, and writes the claim
+  `done` with `report.md` and `usage.json`, or `released` with a fixed reason. Its state is `worker.json`;
+  after a restart it goes on with the item it holds.
+- Before every claim the worker checks that it can enforce its rules and refuses otherwise: a sandbox
+  (macOS, Linux, WSL2 with interop off; native Windows and WSL1 refuse), an owner config `workers.self` naming
+  the lead, a token that is not the lead's, every pinned plugin installed at its pin (stricter than a local
+  launch: a plugin that is not installed refuses), no account block, no pause, and a deny list the sandbox can
+  hold.
+- Deny lists: `workers.<label>.deny` (`paths`, `ports`) in `studio.yaml`, joined with `workers.self.deny` of
+  the worker's owner config. Paths go into the sandbox's `denyRead` and `denyWrite` and the guard's secret
+  paths; a Windows drive path holds only under WSL2, as the whole drive. With ports denied, a
+  `sandbox.network_allow` entry that could reach the machine (IP literal or `localhost` without a port, `*`,
+  single-label or local names) refuses; the guard denies commands that name a denied port.
+- `workers.accept` in the owner config on the lead's machine: the logins whose claims count, per label.
+- The lead's checks: an accepted worker, the claim's offer, the pull request from `studio/<id>` of the item's
+  repository with the report's head, opened by the claiming worker (in a fix round of the item's own pull
+  request, by another accepted worker of the label).
+- A report or pull request text that looks like a credential, or holds the worker's own tokens, is never
+  published: the claim is `released`.
+- Costs: a worker's run counts once, on the item (`usage`, from `workers.json`) and in the day's ledger, with
+  the usage the worker reported.
+- `studio status` lists offers as `worker:<label>` rows (`--json`: a `worker` object with label, offer, login,
+  claim state, attempt and last heartbeat); the pane shows the wait code `worker` in English and German.
+- `studio stop <id> --requeue` on an item on a worker withdraws the offer (the worker stops its crew) and gives
+  the item its one relaunch; `studio drop` withdraws it too.
+
+### Changed
+
+- `openCrewPr` moved to `src/pull-request.ts`, used by `collect` and the worker alike.
+- The lessons evidence may name a report on a claim (`refs/studio/claims/<id>@<sha>`).
+- `recover` leaves items on workers to `tick`: they have no crew record by design.
+
+### Not covered yet
+
+- No Windows programs, builds or device tools on a worker: they would run outside the sandbox. They stay on
+  the CI's Windows runner.
+- Not run against GitHub or on a real Windows machine: the GitHub calls are tested against a fake with the
+  same create and fast-forward rules, the WSL detection against sample files.
+
 ## [0.18.0] - 2026-11-05
 
 A release was the lead running the project's deploy workflow by hand: no note said what went out, a destructive

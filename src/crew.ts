@@ -166,8 +166,13 @@ export async function prepareCheckout(
   projectDir: string,
   item: WorkItem,
   ports: Ports,
+  /** The remote branch the item branch starts from: `main`, or `studio/<id>` to go on with it. */
+  from: string = ITEM_BASE,
 ): Promise<{ path: string; branch: string }> {
   assertItemId(item.id);
+  if (from !== ITEM_BASE && from !== `studio/${item.id}`) {
+    throw new Error(`invalid start branch for ${item.id}: ${JSON.stringify(from)}`);
+  }
   const clones = ensureStateDir(stateRoot, join(stateRoot, 'clones'));
   const path = join(clones, item.id);
   const branch = `studio/${item.id}`;
@@ -183,7 +188,7 @@ export async function prepareCheckout(
   chmodSync(path, 0o700);
   // Still a fresh clone no crew has run in, so git may run here (rule D4).
   await ports.git.run(path, ['remote', 'set-url', 'origin', crewOrigin]);
-  await ports.git.run(path, ['checkout', '-b', branch, `origin/${ITEM_BASE}`]);
+  await ports.git.run(path, ['checkout', '-b', branch, `origin/${from}`]);
   return { path, branch };
 }
 
@@ -736,6 +741,8 @@ export function writeCrewSettings(
     macosTrustService?: boolean;
     /** `Skill(<name>)` deny rules: every installed skill the brief does not name. */
     skillDeny?: readonly string[];
+    /** A worker machine's deny list (src/worker-deny.ts): places and ports its crews never touch. */
+    deny?: { paths: readonly string[]; ports: readonly number[] };
   },
   launcher: LauncherEnv = {},
 ): string {
@@ -758,7 +765,8 @@ export function writeCrewSettings(
   // The state base (parent of every state root: other projects, other items, settings, logs) is
   // denied too, literal and real spelling, so an XDG_STATE_HOME outside the home is covered.
   const stateBase = dirname(stateRoot);
-  const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase)]);
+  const denied = [...(dirs.deny?.paths ?? [])];
+  const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase), ...denied]);
   const loginDir = dirs.providerConfigDir;
   // Of a login dir only what skills need: it also holds the transcripts, `.claude.json` and shell
   // snapshots of other crews. Claude Code itself runs outside the sandbox and reaches the rest.
@@ -833,12 +841,14 @@ export function writeCrewSettings(
       ...DEFAULT_SECRET_GLOBS,
       ...credentialPaths.flatMap((p) => [p, `${p}/**`]),
       ...(loginDir === undefined ? [] : [loginDir, `${loginDir}/**`]),
+      ...denied.flatMap((p) => [p, `${p}/**`]),
     ],
     crewAllowedWorkflows: config.crewAllowedWorkflows,
     crewAllowedWorkflowRefs: config.crewAllowedWorkflowRefs,
     protectedPaths,
     item: id,
     base: ITEM_BASE,
+    ...((dirs.deny?.ports ?? []).length > 0 ? { deniedPorts: [...(dirs.deny?.ports ?? [])] } : {}),
   };
   writeStateFile(stateRoot, ctxFile, `${JSON.stringify(ctx, null, 2)}\n`);
   const settings = {
@@ -882,6 +892,8 @@ export function writeCrewSettings(
       allowUnsandboxedCommands: false,
       filesystem: {
         allowWrite: [clone, dirs.tmpDir, dirs.homeDir],
+        // A worker's denied places are out for writes too, whatever else allows them.
+        ...(denied.length > 0 ? { denyWrite: denied } : {}),
         denyRead,
         allowRead,
       },
@@ -983,12 +995,24 @@ export function crewStateOf(
   return hasReport ? 'waiting' : 'crashed';
 }
 
+/**
+ * What a launch on a worker machine adds (src/worker.ts): the deny list the sandbox and the guard
+ * enforce, and the branch to start from. Studio opens the pull request there, with the worker's
+ * identity, so the crew never runs gh.
+ */
+export interface WorkerLaunch {
+  deny: { paths: readonly string[]; ports: readonly number[] };
+  /** `studio/<id>` when an earlier run pushed it (a fix round, a taken-over claim); else main. */
+  from?: string;
+}
+
 export async function launchCrew(
   projectDir: string,
   item: WorkItem,
   config: StudioConfig,
   ports: Ports,
   launcher: LauncherEnv = {},
+  worker?: WorkerLaunch,
 ): Promise<{ name: string; pid: number; log: string }> {
   // Launches of one process wait for each other; launches of different processes are serialised
   // by the launch lock, taken inside once the state root is known and always released here.
@@ -1000,7 +1024,7 @@ export async function launchCrew(
   await turn;
   const held: { lock?: StateLock } = {};
   try {
-    return await launchCrewLocked(projectDir, item, config, ports, launcher, held);
+    return await launchCrewLocked(projectDir, item, config, ports, launcher, held, worker);
   } finally {
     try {
       held.lock?.release();
@@ -1078,8 +1102,17 @@ async function launchCrewLocked(
   ports: Ports,
   launcher: LauncherEnv,
   held: { lock?: StateLock },
+  worker?: WorkerLaunch,
 ): Promise<{ name: string; pid: number; log: string }> {
   assertItemId(item.id);
+  // A local launch never takes an item that runs elsewhere; a worker launch only takes one.
+  if ((item.runsOn !== undefined) !== (worker !== undefined)) {
+    throw new Error(
+      item.runsOn !== undefined
+        ? `${item.id} runs on a worker with the label ${item.runsOn}; it is offered there, not launched here`
+        : `${item.id} names no runs_on label; a worker launches only items offered to it`,
+    );
+  }
   const penv = launcher.env ?? process.env;
   const role = config.roles[item.role];
   if (!role) throw new Error(`role ${item.role} is not configured`);
@@ -1296,7 +1329,7 @@ async function launchCrewLocked(
   await recheck();
   // The clone can take minutes: beat before and after it, so the lock never looks silent.
   lock.heartbeat(ports.clock.now());
-  const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
+  const wt = await prepareCheckout(stateRoot, projectDir, item, ports, worker?.from);
   lock.heartbeat(ports.clock.now());
   removeOldReport(stateRoot, wt.path, item.id);
   // Isolated HOME, recreated from scratch on every launch: only a git identity and a credential
@@ -1325,8 +1358,11 @@ async function launchCrewLocked(
   });
   caps.reportName = newReportName(stateRoot, item.id);
   // Without the trust service gh cannot verify TLS in the macOS sandbox: Studio opens the PR.
+  // On a worker Studio opens it too: with the worker's identity, which the lead checks.
   caps.prByStudio =
-    (launcher.platform ?? process.platform) === 'darwin' && !ownerConfig.crewAllowMacosTrustService;
+    worker !== undefined ||
+    ((launcher.platform ?? process.platform) === 'darwin' &&
+      !ownerConfig.crewAllowMacosTrustService);
   const brief = writeBrief(stateRoot, item, config, projectDir, briefRules, caps);
   const settings = writeCrewSettings(
     stateRoot,
@@ -1346,6 +1382,7 @@ async function launchCrewLocked(
         caps.denied,
         BUNDLED_SKILLS,
       ),
+      ...(worker === undefined ? {} : { deny: worker.deny }),
     },
     owner,
   );

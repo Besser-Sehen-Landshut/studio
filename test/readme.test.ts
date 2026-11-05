@@ -166,3 +166,32 @@ describe('README components', () => {
     }
   });
 });
+
+describe('README workers on other machines', () => {
+  const section = () => {
+    const at = readme.indexOf('## Workers on other machines');
+    expect(at).toBeGreaterThan(0);
+    return readme.slice(at, readme.indexOf('\n## ', at + 1));
+  };
+  it('names the label, the command, the claim ref and the trust settings', () => {
+    const s = section();
+    for (const phrase of [
+      'runs_on',
+      'studio worker --label <label>',
+      'refs/studio/claims/<id>',
+      'workers.accept',
+      'workers.self',
+      'denyWrite',
+      'WSL2',
+      '`force: false`',
+    ]) {
+      expect(s).toContain(phrase);
+    }
+    expect(readme).toContain('| `worker --label <label> [--once]`');
+  });
+  it('says plainly that native Windows has no sandbox and that interop must be off', () => {
+    const s = section();
+    expect(s).toMatch(/on native Windows it runs commands unsandboxed/);
+    expect(s).toMatch(/interop is on or cannot be told off/);
+  });
+});

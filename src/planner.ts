@@ -2,6 +2,7 @@ import { type Board, componentsOf, type WorkItem } from './board.js';
 import type { StudioConfig } from './config.js';
 import { touchesOverlap } from './glob.js';
 import { isLessonsReview, LEAD_WORK } from './lessons-review.js';
+import { workerItemProblem } from './worker-claim.js';
 
 /** CI capacity snapshot (produced by the capacity module). */
 export type Capacity = {
@@ -23,6 +24,12 @@ export type Capacity = {
 
 export type Plan = {
   assign: WorkItem[];
+  /**
+   * Items with `runs_on` to offer to workers of their label (src/worker-lead.ts). They use no local
+   * crew: no role WIP, no credential slot, no host load; overlaps, dependencies, component WIP,
+   * holds and the daily cost cap apply as for any item.
+   */
+  offer: WorkItem[];
   /** Candidates that cannot be assigned for a reason other than plain limits. */
   blocked: { id: string; reason: string }[];
   /** Candidates that are fine but wait for WIP, host load or an overlap to clear. Informational. */
@@ -115,6 +122,11 @@ export function planAssignments(
   credentialSlots?: number,
   /** Review items whose pull request head still has checks running: they wait (`ci pending`). */
   ciPending?: ReadonlySet<string>,
+  /**
+   * What holds offers to workers, which use no local credential: a pause, an account block, the
+   * daily cost cap. Defaults to `hold`.
+   */
+  offerHold: string | undefined = hold,
 ): Plan {
   const byId = new Map(board.items.map((i) => [i.id, i]));
   const tainted = cycleTainted(board.items);
@@ -141,7 +153,9 @@ export function planAssignments(
     else if (unknown !== undefined) reason = `unknown dependency ${unknown}`;
     else if (item.ownerOnly) reason = 'owner only';
     else if (!config.roles[item.role]) reason = 'role not configured';
-    else if (waiting.length > 0) reason = `waiting on ${waiting.join(', ')}`;
+    else if (item.runsOn !== undefined && workerItemProblem(item) !== undefined) {
+      reason = workerItemProblem(item);
+    } else if (waiting.length > 0) reason = `waiting on ${waiting.join(', ')}`;
     if (reason) blocked.push({ id: item.id, reason });
     else eligible.push(item);
   }
@@ -180,6 +194,7 @@ export function planAssignments(
 
   const active = board.items.filter((i) => ACTIVE.includes(i.status));
   const assign: WorkItem[] = [];
+  const offer: WorkItem[] = [];
   const deferred: Plan['deferred'] = [];
   // The host load is read once per plan and lags behind new work, so one reading backs one build
   // start; the next plan, with a fresh reading, may start the next. A build held back only by this
@@ -198,6 +213,18 @@ export function planAssignments(
     const isBuild = BUILD_TYPES.includes(item.type);
     const clash = [...active, ...planned].find((o) => conflicts(item, o));
     const full = fullComponent(item);
+    if (item.runsOn !== undefined) {
+      if (offerHold !== undefined) deferred.push({ id: item.id, reason: offerHold });
+      else if (full !== undefined) {
+        deferred.push({ id: item.id, reason: `component ${full} wip full` });
+      } else if (clash) deferred.push({ id: item.id, reason: `overlaps ${clash.id}` });
+      else {
+        offer.push(item);
+        planned.push(item);
+        useComponents(item);
+      }
+      continue;
+    }
     if (hold !== undefined) deferred.push({ id: item.id, reason: hold });
     else if (ciPending?.has(item.id)) deferred.push({ id: item.id, reason: CI_PENDING });
     else if (credentialSlots !== undefined && credentialSlots <= 0) {
@@ -217,5 +244,5 @@ export function planAssignments(
     }
   }
 
-  return { assign, blocked, deferred: [...deferred, ...leadWork] };
+  return { assign, offer, blocked, deferred: [...deferred, ...leadWork] };
 }

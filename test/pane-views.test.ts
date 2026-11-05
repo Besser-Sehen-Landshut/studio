@@ -199,6 +199,7 @@ describe('the work list', () => {
       { code: 'updating', text: 'x' },
       { code: 'merging', text: 'x' },
       { code: 'held', text: 'wip builder 2/2' },
+      { code: 'worker', text: 'on win-bot (windows), heartbeat 2 min ago' },
       { code: 'unknown', text: 'kept as it is' },
     ];
     const items = waits.map((wait, i) => ({
@@ -218,6 +219,7 @@ describe('the work list', () => {
       '    queue: updating the branch',
       '    queue: merging',
       '    queue: held: wip builder 2/2',
+      '    queue: worker: on win-bot (windows), heartbeat 2 min ago',
       '    queue: kept as it is',
     ]);
     expect(reasons('de')).toEqual([
@@ -228,6 +230,7 @@ describe('the work list', () => {
       '    Warteschlange: Zweig wird aktualisiert',
       '    Warteschlange: wird gemergt',
       '    Warteschlange: zurückgestellt: wip builder 2/2',
+      '    Warteschlange: Arbeiter: on win-bot (windows), heartbeat 2 min ago',
       '    Warteschlange: kept as it is',
     ]);
   });

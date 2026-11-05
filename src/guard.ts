@@ -49,6 +49,11 @@ export interface GuardContext {
   item?: string;
   /** The branch the item's pull request targets: `gh pr create --base` must name it. */
   base?: string;
+  /**
+   * Ports a worker machine denies (src/worker-deny.ts): a Bash command that names one is refused.
+   * A convenience like the rest of the guard: the sandbox's network rules are the boundary.
+   */
+  deniedPorts?: number[];
 }
 
 export interface GuardResult {
@@ -67,6 +72,19 @@ export const DEFAULT_SECRET_GLOBS: string[] = [
   '**/.netrc',
   '**/credentials*',
 ];
+
+/** Where a command names a denied port a denied port in a command: `:5432`, `--port 5432`, `-p5432`, `port=5432`. */
+export function namedDeniedPort(cmd: string, ports: readonly number[]): number | undefined {
+  for (const port of ports) {
+    const p = String(port);
+    const re = new RegExp(
+      `(?::${p}(?![0-9]))|(?:(?:^|[\\s'"])(?:--port|-p|-P)(?:[\\s=]+|)${p}(?![0-9]))|(?:\\bport\\s*=\\s*${p}(?![0-9]))`,
+      'i',
+    );
+    if (re.test(cmd)) return port;
+  }
+  return undefined;
+}
 
 /** Caps for glob expansion and directory walks; exceeding one denies (never truncates). */
 export const GUARD_LIMITS = { glob: 1000, walk: 50000 };
@@ -1781,7 +1799,12 @@ function check(input: GuardInput, ctx: GuardContext): void {
     (c.toolResultGlobs !== undefined && !isStringArray(c.toolResultGlobs)) ||
     (c.skillRootWaivedGlobs !== undefined && !isStringArray(c.skillRootWaivedGlobs)) ||
     (c.item !== undefined && (typeof c.item !== 'string' || !/^[A-Z]+-\d+$/.test(c.item))) ||
-    (c.base !== undefined && (typeof c.base !== 'string' || !/^[A-Za-z0-9._/-]+$/.test(c.base)))
+    (c.base !== undefined && (typeof c.base !== 'string' || !/^[A-Za-z0-9._/-]+$/.test(c.base))) ||
+    (c.deniedPorts !== undefined &&
+      !(
+        Array.isArray(c.deniedPorts) &&
+        c.deniedPorts.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535)
+      ))
   ) {
     deny('invalid guard context');
   }
@@ -1828,6 +1851,8 @@ function check(input: GuardInput, ctx: GuardContext): void {
   if (toolName === 'Bash') {
     const command = toolInput.command;
     if (typeof command !== 'string') deny(`${toolName} call without a command`);
+    const port = namedDeniedPort(command as string, ctx.deniedPorts ?? []);
+    if (port !== undefined) deny(`port ${port} is denied on this worker machine`);
     checkBash(env, command as string, cwd, 0);
     return;
   }

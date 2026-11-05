@@ -59,7 +59,9 @@ type LessonsFile = z.infer<typeof fileSchema>;
 /** How many verdicts the file keeps; the oldest go first. */
 const MAX_JUDGED = 500;
 const PR_REF = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}#[1-9]\d{0,9}$/;
-const REPORT_REF = /^clones\/[A-Z]+-\d+\/\.studio\/reports\/[A-Za-z0-9._-]{1,100}$/;
+// A report in a crew clone, or one a worker handed back on its claim (src/worker.ts).
+const REPORT_REF =
+  /^(?:clones\/[A-Z]+-\d+\/\.studio\/reports\/[A-Za-z0-9._-]{1,100}|refs\/studio\/claims\/[A-Z]+-\d+@[0-9a-f]{12,40})$/;
 
 /** Only references of the shapes Studio writes; anything else is left out. */
 function cleanEvidence(e: Evidence | undefined): Evidence | undefined {

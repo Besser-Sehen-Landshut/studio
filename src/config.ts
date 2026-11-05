@@ -386,6 +386,37 @@ export const evidenceRuleSchema = z
   }));
 export type EvidenceRule = z.infer<typeof evidenceRuleSchema>;
 
+/** A worker label: `runs_on` of an item names one, `studio worker --label` serves one. */
+export const WORKER_LABEL_RE = /^[a-z][a-z0-9-]{0,31}$/;
+const workerLabel = z.string().regex(WORKER_LABEL_RE, 'must match ^[a-z][a-z0-9-]{0,31}$');
+
+/** A GitHub login: letters, digits and single dashes, at most 39 characters. */
+export const GITHUB_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+const githubLogin = z.string().regex(GITHUB_LOGIN_RE, 'not a GitHub login');
+
+/**
+ * A place a worker's crews must never read or write: an absolute POSIX path, or a Windows drive
+ * path (`D:\data`, `D:/data`), which only a worker inside WSL2 can enforce (src/worker-deny.ts).
+ * Network paths (`\\server\share`) and relative paths are refused here.
+ */
+const denyPath = z
+  .string()
+  .min(2)
+  .max(500)
+  .regex(/^[^\p{Cc}\p{Cf}]+$/u, 'one line of at most 500 characters')
+  .refine(
+    (p) => (p.startsWith('/') && !p.startsWith('//')) || /^[A-Za-z]:[\\/]/.test(p),
+    'must be an absolute path (/srv/data) or a Windows drive path (D:\\data); network paths are not supported',
+  );
+
+/** What a worker's crews must never touch: places, and ports on the worker machine. */
+export const workerDenySchema = z.strictObject({
+  paths: z.array(denyPath).max(50).default([]),
+  ports: z.array(z.number().int().min(1).max(65535)).max(50).default([]),
+});
+export type WorkerDeny = z.infer<typeof workerDenySchema>;
+const NO_DENY = { paths: [], ports: [] };
+
 /** `limits:` in studio.yaml and in the owner config. */
 const dailyLimitsSchema = z.strictObject({
   dailyCostUsd: z.number().positive().optional(),
@@ -438,6 +469,11 @@ export const studioConfigSchema = z
     acceptance: acceptanceSchema.optional(),
     // Exceptions by evidence: guard jobs whose hits a command can prove false alarms.
     evidence: z.array(evidenceRuleSchema).max(20).optional(),
+    // Workers on other machines, per label (`runs_on` of an item): what their crews must never
+    // touch. The worker adds its own list from its owner config; neither can lift the other's.
+    workers: z
+      .record(workerLabel, z.strictObject({ deny: workerDenySchema.default(NO_DENY) }))
+      .optional(),
   })
   .superRefine((cfg, ctx) => {
     const ids = new Set<string>();
@@ -696,6 +732,22 @@ export const ownerConfigSchema = z.strictObject({
     .optional(),
   // The same daily cost cap as in studio.yaml, over all projects of the owner together.
   limits: dailyLimitsSchema.optional(),
+  // Workers on other machines (src/worker.ts, src/worker-lead.ts). On the lead's machine,
+  // `accept` names the GitHub logins whose claims count, per label; on a worker machine, `self`
+  // names the lead whose offers it takes and what its crews must never touch.
+  workers: z
+    .strictObject({
+      accept: z.record(workerLabel, z.array(githubLogin).min(1).max(20)).default({}),
+      self: z
+        .strictObject({
+          lead: githubLogin,
+          deny: workerDenySchema.default(NO_DENY),
+          // How long a claim holds without a heartbeat before another worker may take it over.
+          leaseMinutes: z.number().int().min(10).max(240).default(30),
+        })
+        .optional(),
+    })
+    .optional(),
 });
 
 export type OwnerConfig = z.infer<typeof ownerConfigSchema>;

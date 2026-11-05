@@ -8,6 +8,9 @@ import { assertStatePath, writeStateFile } from './paths.js';
 import type { QueueState } from './queue.js';
 import { reviewTarget } from './review.js';
 
+/** The prefix of `tick`'s hold for an item on a worker (same as in src/worker-lead.ts). */
+const WORKER_WAIT = 'worker: ';
+
 /** The board note of a pull request `collect` held for CI capacity. */
 export const PR_HELD = 'pr held: ';
 
@@ -25,7 +28,9 @@ export type WaitCode =
   | 'updating'
   | 'merging'
   | 'held'
-  | 'blocked';
+  | 'blocked'
+  /** The item runs on a worker machine: offered, claimed, or its claim expired. */
+  | 'worker';
 
 export interface PaneWait {
   code: WaitCode;
@@ -173,7 +178,12 @@ function waitOf(
     return undefined;
   }
   const held = tick?.held.find((h) => h.item === item.id);
-  return held === undefined ? undefined : { code: 'held', text: line(held.reason) };
+  if (held === undefined) return undefined;
+  // `tick` holds an item on a worker with what its claim says (src/worker-lead.ts).
+  if (held.reason.startsWith(WORKER_WAIT)) {
+    return { code: 'worker', text: line(held.reason.slice(WORKER_WAIT.length)) };
+  }
+  return { code: 'held', text: line(held.reason) };
 }
 
 /** Every item that is not merged or dropped, reviews aside (their builder shows the stage). */

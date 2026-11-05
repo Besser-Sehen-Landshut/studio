@@ -14,6 +14,7 @@ import type { Ports } from './ports.js';
 import { readCrewCaps, reviewTarget } from './review.js';
 import { readCrewRecords } from './state.js';
 import { dayKey, USAGE_DAYS_KEPT } from './usage.js';
+import { readWorkers } from './worker-state.js';
 
 /**
  * What crews cost, read from their stream-json logs. Claude Code ends each `-p` run with one
@@ -206,6 +207,21 @@ function readLog(stateRoot: string, id: string, from = 0): string {
 export const logUsage = (stateRoot: string, id: string): RunUsage =>
   usageFromLog(readLog(stateRoot, id));
 
+/** Usage of the runs in an item's log from byte `from` on: one run, as a worker reports it. */
+export const runUsageSince = (stateRoot: string, id: string, from: number): RunUsage =>
+  usageFromLog(readLog(stateRoot, id, Math.max(0, from)));
+
+/** Usage of every run of an item on a worker machine, as the workers reported it. */
+export function workerUsage(stateRoot: string, id: string): RunUsage {
+  let runs: RunUsage[];
+  try {
+    runs = (readWorkers(stateRoot).runs[id] ?? []).map((r) => r.usage);
+  } catch {
+    return emptyUsage();
+  }
+  return runs.reduce<RunUsage>((sum, u) => addUsage(sum, u), emptyUsage());
+}
+
 /** The `<repo>#<pr>` a review item reviews: its note, else its launch record. */
 function reviewedTarget(stateRoot: string, item: WorkItem): string | undefined {
   if (item.type !== 'review') return undefined;
@@ -224,7 +240,7 @@ export function attributedItem(stateRoot: string, board: Board, item: WorkItem):
 
 /** Usage of an item: its own log and the logs of every review of its pull request. */
 export function itemUsage(stateRoot: string, board: Board, item: WorkItem): RunUsage {
-  let total = logUsage(stateRoot, item.id);
+  let total = addUsage(logUsage(stateRoot, item.id), workerUsage(stateRoot, item.id));
   if (item.type === 'review' || item.pr === undefined) return total;
   const target = `${item.repo}#${item.pr}`;
   for (const r of board.items) {
@@ -382,6 +398,41 @@ export async function recordEndedRuns(
     const runs: Ledger = Object.create(null);
     for (const [key, r] of Object.entries(again.runs)) if (r.day >= cutoff) runs[key] = r;
     for (const [key, r] of Object.entries(fresh)) if (!Object.hasOwn(runs, key)) runs[key] = r;
+    writeStateFile(stateRoot, ledgerFile(stateRoot), `${JSON.stringify({ runs }, null, 2)}\n`);
+    return true;
+  } finally {
+    lock.release();
+  }
+}
+
+/**
+ * Enters one ended run that did not run here (a worker's, src/worker-lead.ts) into the ledger,
+ * once, under `key` (`<item>@<time>`), on today's local day. Returns false when the ledger is
+ * unreadable or locked; the caller tries again on the next tick.
+ */
+export async function recordLedgerRun(
+  stateRoot: string,
+  key: string,
+  item: string,
+  usage: RunUsage,
+  now: Date,
+  timezone?: string,
+): Promise<boolean> {
+  if (!KEY_RE.test(key)) throw new Error(`invalid ledger key ${JSON.stringify(key)}`);
+  const lock = await costsLock(stateRoot, now);
+  if (lock === undefined) return false;
+  try {
+    const read = readLedger(stateRoot);
+    if (!read.ok) return false;
+    if (Object.hasOwn(read.runs, key)) return true;
+    const runs: Ledger = Object.create(null);
+    for (const [k, r] of Object.entries(read.runs)) runs[k] = r;
+    runs[key] = {
+      day: dayKey(now, timezone),
+      item,
+      costUsd: roundUsd(usage.costUsd),
+      ...(usage.estimated ? { estimated: true as const } : {}),
+    };
     writeStateFile(stateRoot, ledgerFile(stateRoot), `${JSON.stringify({ runs }, null, 2)}\n`);
     return true;
   } finally {
