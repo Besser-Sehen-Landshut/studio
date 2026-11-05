@@ -277,6 +277,8 @@ async function rawOwnerBlocksAt(
 ): Promise<{
   evidence: string;
   release: string;
+  /** The `research:` block: which directory a researcher's REA reaches. Always the owner's. */
+  research: string;
   /** The whole config minus CREW_CONFIG_KEYS, camelized: owner-owned while a release exists. */
   whole: string;
   workflows: string[];
@@ -292,6 +294,7 @@ async function rawOwnerBlocksAt(
     return {
       evidence: 'null',
       release: 'null',
+      research: 'null',
       whole: 'null',
       workflows: [],
       guarded: [],
@@ -305,7 +308,15 @@ async function rawOwnerBlocksAt(
     // A file that does not parse loads no rules; as a change it counts like any other.
     const u = `unparsable:${digest(text)}`;
     // Unparsable counts as having a release: the guard errs towards the owner.
-    return { evidence: u, release: u, whole: u, workflows: [], guarded: [], released: true };
+    return {
+      evidence: u,
+      release: u,
+      research: u,
+      whole: u,
+      workflows: [],
+      guarded: [],
+      released: true,
+    };
   }
   const twice = bothSpellings(raw);
   const obj = (v: unknown): Record<string, unknown> =>
@@ -339,6 +350,7 @@ async function rawOwnerBlocksAt(
   return {
     evidence: canonical(o.evidence ?? null),
     release: canonical(entries),
+    research: canonical(o.research ?? null),
     whole: canonical(rest),
     workflows: [...workflows],
     guarded: [...guarded],
@@ -646,15 +658,16 @@ export async function judgeFailedChecks(
 
 /**
  * Why Studio gives a pull request no approval for touching what is the owner's in studio.yaml:
- * the `evidence:` block (a crew's pull request never changes what proves a later one) or a
- * component's `release:` block (its workflow, checks and third-party approvers). `unreadable`
- * when the comparison could not be made; collect waits then.
+ * the `evidence:` block (a crew's pull request never changes what proves a later one), the
+ * `research:` block (which directory a researcher's REA tools reach) or a component's `release:`
+ * block (its workflow, checks and third-party approvers). `unreadable` when the comparison could
+ * not be made; collect waits then.
  */
 export async function evidenceChange(
   ctx: EvidenceContext,
   baseOid: string | undefined,
   head: string,
-): Promise<{ problem?: string; area?: 'evidence' | 'release'; unreadable?: true }> {
+): Promise<{ problem?: string; area?: 'evidence' | 'release' | 'research'; unreadable?: true }> {
   if (baseOid === undefined || !SHA.test(baseOid) || !SHA.test(head)) return { unreadable: true };
   if (!(await fetchBoth(ctx, baseOid, head))) return { unreadable: true };
   const files = await changedFiles(ctx, baseOid, head);
@@ -672,6 +685,9 @@ export async function evidenceChange(
     }
     if (atBase.evidence !== atHead.evidence) {
       return { problem: 'the pull request changes evidence: in studio.yaml', area: 'evidence' };
+    }
+    if (atBase.research !== atHead.research) {
+      return { problem: 'the pull request changes research: in studio.yaml', area: 'research' };
     }
     if (atBase.release !== atHead.release) {
       return {
@@ -805,3 +821,87 @@ export async function grantException(
 /** Whether a lead line is about evidence the lead decides on alone: never pushed to the owner. */
 export const leadOnly = (reason: string): boolean =>
   /^(?:blocked: |merge failed: )?evidence: /.test(reason);
+
+/** One file's lines a pull request adds, with their line numbers at the head. */
+export interface AddedFile {
+  path: string;
+  /** Not plain text: a link, a submodule, a binary or a file too large to read. */
+  odd?: 'link' | 'submodule' | 'binary' | 'large' | 'unreadable';
+  lines: { line: number; text: string }[];
+}
+
+/**
+ * What a pull request adds, read in the owner's checkout over `base...head` (never in a crew clone):
+ * the added lines of each file, and the files that are no plain text. Undefined when the commits
+ * cannot be fetched or the diff cannot be read; the caller waits then.
+ */
+export async function addedInPullRequest(
+  ctx: EvidenceContext,
+  base: string | undefined,
+  head: string,
+): Promise<AddedFile[] | undefined> {
+  if (base === undefined || !SHA.test(base) || !SHA.test(head)) return undefined;
+  if (!(await fetchBoth(ctx, base, head))) return undefined;
+  let raw: RawChange[] | undefined;
+  let numstat: string;
+  let patch: string;
+  try {
+    raw = parseRaw(await g(ctx, [...DIFF, '--raw', '--no-abbrev', '-z', `${base}...${head}`]));
+    numstat = await g(ctx, [...DIFF, '--numstat', '-z', `${base}...${head}`]);
+    patch = await g(ctx, [...DIFF, '--unified=0', `${base}...${head}`]);
+  } catch {
+    return undefined;
+  }
+  if (raw === undefined) return undefined;
+  const files = new Map<string, AddedFile>();
+  const counted = new Map<string, number>();
+  for (const c of raw) {
+    if (c.status === 'D') continue;
+    const f: AddedFile = { path: c.path, lines: [] };
+    if (c.dstMode === '120000') f.odd = 'link';
+    else if (c.dstMode === '160000') f.odd = 'submodule';
+    files.set(c.path, f);
+  }
+  // `--numstat -z`: `<added>\t<deleted>\t<path>\0`; a binary file shows `-` for both counts.
+  for (const entry of numstat.split('\0')) {
+    const m = /^(-|\d+)\t(-|\d+)\t(.+)$/s.exec(entry);
+    if (m === null) continue;
+    const f = files.get(m[3] as string);
+    if (f === undefined || f.odd !== undefined) continue;
+    if (m[1] === '-') f.odd = 'binary';
+    else if (Number(m[1]) > MAX_ADDED_LINES) f.odd = 'large';
+    else counted.set(f.path, Number(m[1]));
+  }
+  let current: AddedFile | undefined;
+  let at = 0;
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      current = undefined;
+      continue;
+    }
+    if (line.startsWith('+++ ')) {
+      const p = line.slice(4);
+      current = p.startsWith('b/') ? files.get(p.slice(2)) : undefined;
+      continue;
+    }
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (hunk !== null) {
+      at = Number(hunk[1]);
+      continue;
+    }
+    if (current === undefined || current.odd !== undefined) continue;
+    if (line.startsWith('+')) {
+      current.lines.push({ line: at, text: line.slice(1) });
+      at++;
+    }
+  }
+  // A file whose added lines were not all read (a path git quoted, a header it shaped otherwise)
+  // fails closed rather than pass unread.
+  for (const f of files.values()) {
+    if (f.odd === undefined && f.lines.length !== (counted.get(f.path) ?? -1)) f.odd = 'unreadable';
+  }
+  return [...files.values()];
+}
+
+/** A file adding more lines than this is not read line by line: it fails the privacy check. */
+const MAX_ADDED_LINES = 20_000;

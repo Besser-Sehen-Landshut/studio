@@ -5,9 +5,9 @@ import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { globProblem } from './glob.js';
-import { allowedPluginSchema, pluginPinSchema, VERSION_RE } from './plugins.js';
+import { allowedPluginSchema, pluginPinSchema } from './plugins.js';
 import { ONLY_SQL, PROOF_LANGUAGES, type ProofLanguage } from './proofs.js';
-import { reaEnvKeyOk } from './rea.js';
+import { REA_VERSION_RE, reaEnvKeyOk } from './rea.js';
 
 export { globProblem };
 
@@ -513,8 +513,7 @@ export const studioConfigSchema = z
           .min(1)
           .max(500)
           .refine((p) => isAbsolute(p) && !/\p{Cc}/u.test(p), 'must be an absolute path'),
-        // The server's npm version; the default is pinned in Studio. Exact, never a range.
-        reaVersion: z.string().regex(VERSION_RE, 'must be one exact version').optional(),
+        // The server's version is the owner's (owner config `rea_version`), never the repository's.
       })
       .optional(),
   })
@@ -751,6 +750,10 @@ export const ownerConfigSchema = z.strictObject({
     )
     .max(20)
     .default([]),
+  // The rea-agents version researcher crews run (`studio research install` installs it). Exact
+  // x.y.z only, never a range, tag or prerelease; the default is pinned in Studio. It lives here,
+  // because it runs third-party code with the owner's privileges.
+  reaVersion: z.string().regex(REA_VERSION_RE, 'must be one exact version (x.y.z)').optional(),
   // Environment for the REA server (where its analysis engines are): these names only, short
   // values. Never a secret.
   reaEnv: z

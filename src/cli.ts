@@ -59,6 +59,7 @@ import {
 } from './crew.js';
 import { addEpic, dropEpic, editEpic, epicRows, findEpic, settleAndSave } from './epics.js';
 import {
+  addedInPullRequest,
   type EvidenceContext,
   type ExceptionEntry,
   evidenceChange,
@@ -118,7 +119,7 @@ import { clearPause, PAUSED_LINE, readPause, setPause } from './pause.js';
 import { type Capacity, ONE_BUILD_PER_PLAN, planAssignments } from './planner.js';
 import { type PluginPin, pinnedPlugins, unallowedPlugins } from './plugins.js';
 import type { Ports } from './ports.js';
-import { privacyHits, privacyHitsInDir, privacyLine } from './privacy.js';
+import { privacyHits, privacyHitsInAdded, privacyLine } from './privacy.js';
 import { openCrewPr } from './pull-request.js';
 import { decisionsOf, pushDecisions, readNotifySecret } from './push.js';
 import {
@@ -137,7 +138,8 @@ import {
   updateQueue,
   viewPr,
 } from './queue.js';
-import { REA_DOCS_DIR } from './rea.js';
+import { REA_CLASS_NAMES, REA_DEFAULT_VERSION, type ReaClass, reaClassOf } from './rea.js';
+import { installRea, readReaAllow, removeReaRun, updateReaAllow } from './rea-install.js';
 import { type Finding, recoverProject, TICK_LOCK, TICK_LOCK_STALE_MS } from './recover.js';
 import {
   advanceRelease,
@@ -345,6 +347,14 @@ Commands:
   account remove <label>   Owner only, in a terminal: remove a stored account
   account setup-plugins    Install the plugins crews need into the crew config dir
   accounts-clear <label>   Owner only, in a terminal: clear a label's account block
+  research allow <id> <class>...
+                           Owner only, in a terminal: open REA tool classes (annotate, debug,
+                           observe, device, export) for one researcher item, from its next launch
+  research revoke <id> [<class>...]
+                           Owner only, in a terminal: close them again (all without a class)
+  research list            The REA classes the owner opened, per item
+  research install         Owner only, in a terminal: install the pinned rea-agents (owner config
+                           rea_version) into the owner state, checked against the registry's integrity
 `;
 
 class UsageError extends Error {}
@@ -1302,6 +1312,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             throw new Error(`crew record for ${item.id} has no valid startedAt`);
           }
         }
+        // The crew has ended: its REA server's folder, with the copies REA made, goes.
+        removeReaRun(stateRoot(), item.id);
         // Reading files only: git never runs inside a crew clone.
         const clone = join(stateRoot(), 'clones', item.id);
         // The report is read exactly once; everything below verifies and stores that one result.
@@ -1313,10 +1325,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
         report = readReport(clone, item.id, item, { notBefore, fileName });
       }
-      // A researcher's result is structure, never content (src/rea.ts): the report and the
-      // findings it wrote below docs/research are checked, and one hit fails the report closed.
-      // `tick` hands it to the lead like any rejected report; the hit's kind and line are shown,
-      // never the text.
+      // A researcher's result is structure, never content (src/rea.ts): the report is checked
+      // here, and what its pull request adds below, once the pull request is known. One hit fails
+      // the report closed; `tick` hands it to the lead like any rejected report. The hit's kind and
+      // line are shown, never the text.
       if (item.role === 'researcher') {
         const text = [
           report.body,
@@ -1324,12 +1336,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ...report.questions,
           ...report.lessons,
         ].join('\n');
-        const hits = [
-          ...privacyHits(text, 'report'),
-          ...(fileName === undefined
-            ? []
-            : privacyHitsInDir(join(stateRoot(), 'clones', item.id, REA_DOCS_DIR), REA_DOCS_DIR)),
-        ];
+        const hits = privacyHits(text, 'report');
         if (hits.length > 0) throw new ReportError(privacyLine(hits));
       }
       // A review report that does not hold to its brief is a rejected report, like one that
@@ -1434,7 +1441,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             };
           }
           if (change.problem !== undefined) {
-            const note = `approval refused: ${change.problem}; ${change.area === 'release' ? 'the release rules are' : 'evidence is'} the owner's: the owner reviews and merges such a change himself`;
+            const note = `approval refused: ${change.problem}; ${change.area === 'release' ? 'the release rules are' : change.area === 'research' ? 'the research block is' : 'evidence is'} the owner's: the owner reviews and merges such a change himself`;
             await withBoardLock(stateRoot(), ports.clock.now(), () => {
               const fresh = loadBoard(project);
               if (findItem(fresh, item.id).status !== item.status) {
@@ -1554,6 +1561,23 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
         branch = info.branch;
         checkReportHead(report, info.head);
+        // What a researcher pushed is checked as it left: the pull request's diff, read in the
+        // owner's checkout over base...head, never the crew's clone (which may differ from it).
+        if (item.role === 'researcher') {
+          const added = await addedInPullRequest(
+            evidenceCtx(loadConfig(project), item.repo, stateRoot()),
+            info.baseOid,
+            info.head,
+          );
+          if (added === undefined) {
+            return {
+              kind: 'waiting',
+              line: `${item.id}: the privacy check of pull request ${report.pr} cannot read its diff now (git); collect again, nothing moved`,
+            };
+          }
+          const hits = privacyHitsInAdded(added);
+          if (hits.length > 0) throw new ReportError(privacyLine(hits));
+        }
         // The pull request of a worker item counts only when the worker that claimed it opened it
         // (GitHub's author, which no client can set).
         if (fromWorker !== undefined) {
@@ -3184,6 +3208,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         updateCrewRecords(root, (all) => {
           all[id] = { ...(all[id] ?? rec), stoppedAt };
         });
+        // The crew and its REA server are gone: so is the server's folder with REA's copies. Not
+        // for a crew that cannot be verified, whose server may still be using it.
+        if (process !== 'unknown') removeReaRun(root, id);
         // A crew that ended without a usable report leaves its item assigned, and launch takes
         // only ready items. --requeue gives the item its one relaunch, through blocked as the lead
         // routine says; an item that was requeued before stays blocked: a second miss is a decision.
@@ -3363,6 +3390,61 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           stdout,
           stderr,
         });
+      }
+
+      case 'research': {
+        const sub = rest[0];
+        if (sub === 'list' && rest.length === 1) {
+          print({ allowed: readReaAllow(stateRoot()), classes: [...REA_CLASS_NAMES] });
+          return 0;
+        }
+        // Opening a class lets a crew start programs, devices or captures through REA with the
+        // owner's privileges; installing runs third-party code as the owner. Both are the owner's,
+        // in a terminal, like pause: a crew has neither the terminal nor another role.
+        if (deps.env.STUDIO_ROLE === 'crew' || deps.isTerminal !== true) {
+          stderr('studio: research is for the owner and needs a terminal; nothing changed\n');
+          return 1;
+        }
+        if (sub === 'install' && rest.length === 1) {
+          if (ports.npm === undefined)
+            throw new Error('npm is not available here; nothing installed');
+          const version = loadOwnerConfig(owner).reaVersion ?? REA_DEFAULT_VERSION;
+          const got = await installRea({
+            ownerRoot: ownerRoot(),
+            version,
+            npm: ports.npm,
+            path: deps.env.PATH ?? '/usr/bin:/bin',
+            now: ports.clock.now(),
+          });
+          print({ installed: `rea-agents@${version}`, integrity: got.integrity });
+          return 0;
+        }
+        if ((sub === 'allow' && rest.length >= 3) || (sub === 'revoke' && rest.length >= 2)) {
+          const id = findItem(loadBoard(project), rest[1]).id;
+          const named = rest
+            .slice(2)
+            .flatMap((c) => c.split(','))
+            .filter((c) => c !== '');
+          const classes: ReaClass[] = [];
+          for (const c of named) {
+            const cls = reaClassOf(c);
+            if (cls === undefined) {
+              throw new UsageError(`unknown class ${c}; classes: ${REA_CLASS_NAMES.join(', ')}`);
+            }
+            classes.push(cls);
+          }
+          const root = await boundStateRoot();
+          const open =
+            sub === 'allow'
+              ? updateReaAllow(root, id, { add: classes })
+              : updateReaAllow(root, id, { remove: classes.length === 0 ? 'all' : classes });
+          // A running crew keeps what it was launched with: the classes count from its next launch.
+          print({ item: id, open, from: 'the next launch of the item' });
+          return 0;
+        }
+        throw new UsageError(
+          'research needs: allow <id> <class>... | revoke <id> [<class>...] | list | install',
+        );
       }
 
       case 'accounts-clear': {

@@ -1,6 +1,3 @@
-import { closeSync, constants, lstatSync, openSync, readdirSync, readSync } from 'node:fs';
-import { join } from 'node:path';
-
 /**
  * A privacy check for what a researcher with REA hands in: the result is structure, never content.
  * The check is a set of heuristics and fails closed: one hit and the report goes to the lead, who
@@ -106,68 +103,38 @@ function luhn(d: string): boolean {
   return sum % 10 === 0;
 }
 
-const MAX_FILES = 200;
-const MAX_FILE_BYTES = 256 * 1024;
-
-/** Text files below `dir` (no links), bounded; a file that is too big or not text is itself a hit. */
-export function privacyHitsInDir(dir: string, label: string): PrivacyHit[] {
+/**
+ * The lines a pull request adds, file by file (src/evidence.ts `addedInPullRequest`, read in the
+ * owner's checkout over `base...head`). A file that is no plain text (a link, a submodule, a binary
+ * or a very large file, or one whose lines could not all be read) is itself a hit. Line numbers are
+ * those of the file at the head.
+ */
+export function privacyHitsInAdded(
+  files: readonly {
+    path: string;
+    odd?: string;
+    lines: readonly { line: number; text: string }[];
+  }[],
+): PrivacyHit[] {
   const hits: PrivacyHit[] = [];
-  let seen = 0;
-  const walk = (d: string, rel: string) => {
-    let names: string[];
-    try {
-      names = readdirSync(d);
-    } catch {
-      return;
-    }
-    for (const name of names.sort()) {
-      const at = join(d, name);
-      const shown = `${label}/${rel}${name}`;
-      let st: ReturnType<typeof lstatSync>;
-      try {
-        st = lstatSync(at);
-      } catch {
-        continue;
-      }
-      if (st.isSymbolicLink()) {
-        hits.push({ kind: 'link in the findings directory', line: 0, file: shown });
-      } else if (st.isDirectory()) {
-        walk(at, `${rel}${name}/`);
-      } else if (st.isFile()) {
-        if (++seen > MAX_FILES) {
-          hits.push({ kind: 'too many files', line: 0, file: label });
-          return;
-        }
-        if (st.size > MAX_FILE_BYTES) {
-          hits.push({ kind: 'file larger than 256 KiB', line: 0, file: shown });
-          continue;
-        }
-        const text = readText(at, st.size);
-        if (text === undefined || text.includes('\0')) {
-          hits.push({ kind: 'file that is not text', line: 0, file: shown });
-        } else hits.push(...privacyHits(text, shown));
-      } else hits.push({ kind: 'special file', line: 0, file: shown });
-    }
+  const odd: Record<string, string> = {
+    link: 'link in the pull request',
+    submodule: 'submodule in the pull request',
+    binary: 'file that is not text',
+    large: 'file too large to check',
+    unreadable: 'file whose lines could not be read',
   };
-  walk(dir, '');
-  return hits;
-}
-
-function readText(file: string, size: number): string | undefined {
-  let fd: number | undefined;
-  try {
-    fd = openSync(
-      file,
-      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
-    );
-    const buf = Buffer.alloc(size);
-    const n = readSync(fd, buf, 0, size, 0);
-    return buf.toString('utf8', 0, n);
-  } catch {
-    return undefined;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
+  for (const f of files) {
+    if (f.odd !== undefined) {
+      hits.push({ kind: odd[f.odd] ?? 'file that could not be checked', line: 0, file: f.path });
+      continue;
+    }
+    // Checked as one text, so runs of delimited rows across added lines are seen; the hit's line is
+    // mapped back to the file's own numbering.
+    const found = privacyHits(f.lines.map((l) => l.text).join('\n'), f.path);
+    for (const h of found) hits.push({ ...h, line: f.lines[h.line - 1]?.line ?? h.line });
   }
+  return hits;
 }
 
 /** The line a ReportError shows: kinds and places, never what matched. */

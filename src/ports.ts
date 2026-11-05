@@ -122,6 +122,11 @@ export interface Ports {
   /** Optional so test doubles never reach the network; a missing one sends nothing. */
   http?: Http;
   /**
+   * Runs `npm <args>` with exactly `env` (nothing inherited) in `cwd`: only `studio research
+   * install` uses it. Optional so test doubles need not run npm; a missing one refuses.
+   */
+  npm?: PluginCli;
+  /**
    * GitHub for workers on other machines (src/worker-hub.ts); missing means `gh`, with the given
    * token or the machine's login. A seam for tests.
    */
@@ -345,9 +350,10 @@ export function realPorts(claudeBin = 'claude'): Ports {
       return { code: r.exitCode ?? 1, stdout: String(r.stdout), stderr: String(r.stderr) };
     },
   };
-  const plugins: PluginCli = {
-    async run(args, env, cwd, opts) {
-      const r = await execa(claudeBin, args, {
+  const runWith =
+    (bin: string): PluginCli['run'] =>
+    async (args, env, cwd, opts) => {
+      const r = await execa(bin, args, {
         cwd,
         env,
         extendEnv: false,
@@ -360,8 +366,9 @@ export function realPorts(claudeBin = 'claude'): Ports {
         stdout: String(r.stdout ?? ''),
         stderr: String(r.stderr ?? ''),
       };
-    },
-  };
+    };
+  const plugins: PluginCli = { run: runWith(claudeBin) };
+  const npm: PluginCli = { run: runWith('npm') };
 
-  return { gh, git, claude, clock, host, credentials, plugins, http: realHttp };
+  return { gh, git, claude, clock, host, credentials, plugins, npm, http: realHttp };
 }

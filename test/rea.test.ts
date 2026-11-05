@@ -1,5 +1,6 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -13,14 +14,18 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { WorkItem } from '../src/board.js';
 import { resolveSkills } from '../src/capabilities.js';
-import { studioConfigSchema } from '../src/config.js';
-import { launchCrew, writeCrewSettings } from '../src/crew.js';
-import { DEFAULT_SECRET_GLOBS, evaluateGuard, type GuardContext } from '../src/guard.js';
-import { stateRootFor } from '../src/paths.js';
-import { type Ports, realPorts } from '../src/ports.js';
-import { privacyHits, privacyHitsInDir, privacyLine } from '../src/privacy.js';
+import { ownerConfigSchema, studioConfigSchema } from '../src/config.js';
+import { launchCrew, REA_SERVER_BIN, writeCrewSettings } from '../src/crew.js';
 import {
-  itemReaClasses,
+  DEFAULT_SECRET_GLOBS,
+  evaluateGuard,
+  type GuardContext,
+  isWriteKey,
+} from '../src/guard.js';
+import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
+import { type Ports, realPorts } from '../src/ports.js';
+import { privacyHits, privacyHitsInAdded, privacyLine } from '../src/privacy.js';
+import {
   REA_CLASS_NAMES,
   REA_CLASSES,
   REA_KNOWN_TOOLS,
@@ -33,8 +38,19 @@ import {
   reaToolName,
   renderReaBrief,
 } from '../src/rea.js';
+import {
+  installRea,
+  itemReaClasses,
+  prepareReaRun,
+  readReaAllow,
+  removeReaRun,
+  updateReaAllow,
+  verifyReaInstall,
+  writeReaSpec,
+} from '../src/rea-install.js';
 import { REA_TOOL_SCHEMAS } from '../src/rea-schemas.js';
 import { reaState } from '../src/secret-command.js';
+import { fakeReaInstall, REA_TEST_INTEGRITY } from './rea-fixture.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-rea-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -88,22 +104,35 @@ describe('the REA tool allowlist', () => {
     expect(reaDenyRules(REA_CLASS_NAMES)).toEqual([]);
   });
 
-  it('reads classes from an item note and ignores a typo', () => {
-    expect(itemReaClasses(['rea-allow: debug, observe', 'other'])).toEqual(['debug', 'observe']);
-    expect(itemReaClasses(['rea-allow: dbug'])).toEqual([]);
-    expect(itemReaClasses(['question: rea-allow: debug'])).toEqual([]);
-    expect(itemReaClasses(undefined)).toEqual([]);
+  it('keeps the classes the owner opened in the state root, per item; a typo or a bad file opens nothing', () => {
+    const st = join(root, 'allow-state');
+    expect(itemReaClasses(st, 'APP-5')).toEqual([]);
+    expect(updateReaAllow(st, 'APP-5', { add: ['observe', 'debug'] })).toEqual([
+      'debug',
+      'observe',
+    ]);
+    expect(itemReaClasses(st, 'APP-5')).toEqual(['debug', 'observe']);
+    expect(itemReaClasses(st, 'APP-6')).toEqual([]);
+    expect(updateReaAllow(st, 'APP-5', { remove: ['debug'] })).toEqual(['observe']);
+    expect(updateReaAllow(st, 'APP-5', { remove: 'all' })).toEqual([]);
+    expect(readReaAllow(st)).toEqual({});
+    writeFileSync(join(st, 'rea-allow.json'), '{"APP-5": ["dbug", "debug"], "x": ["debug"]}');
+    expect(readReaAllow(st)).toEqual({ 'APP-5': ['debug'] });
+    writeFileSync(join(st, 'rea-allow.json'), 'not json');
+    expect(itemReaClasses(st, 'APP-5')).toEqual([]);
   });
 
-  it('registers the server at an exact version with a fixed npm cache', () => {
-    const s = reaMcpServer('6.7.0', { JAVA_HOME: '/x' }, '/cache') as {
-      command: string;
-      args: string[];
-      env: Record<string, string>;
-    };
-    expect(s.command).toBe('npx');
-    expect(s.args).toEqual(['-y', 'rea-agents@6.7.0', 'mcp']);
-    expect(s.env).toMatchObject({ JAVA_HOME: '/x', npm_config_cache: '/cache' });
+  it('starts the server through the wrapper with Node by absolute path, never npx', () => {
+    const s = reaMcpServer({
+      node: '/opt/node/bin/node',
+      wrapper: REA_SERVER_BIN,
+      spec: '/s/x.json',
+    });
+    expect(s.command).toBe('/opt/node/bin/node');
+    expect(s.args).toEqual([REA_SERVER_BIN, '/s/x.json']);
+    expect(REA_SERVER_BIN).toMatch(/^\/.*\/bin\/studio-rea-server\.mjs$/);
+    expect(JSON.stringify(s)).not.toContain('npx');
+    expect(s.env).toEqual({ NODE_OPTIONS: '', NODE_PATH: '' });
   });
 });
 
@@ -164,13 +193,59 @@ describe('the guard for a researcher', () => {
   const bash = (command: string, c = ctx) =>
     evaluateGuard({ toolName: 'Bash', toolInput: { command } }, c);
 
-  it('allows a static tool on a path in the analysis directory or the checkout', () => {
+  it('allows a static tool on an absolute path in the analysis directory, never the checkout', () => {
     expect(mcp('open_binary', { path: join(art, 'target.bin') }).decision).toBe('allow');
     expect(mcp('search_strings', { pattern: '/api/v1' }).decision).toBe('allow');
     expect(
+      mcp('analyze_javascript_application', {
+        input_path: art,
+        source_paths: [join(art, 'main.js')],
+      }).decision,
+    ).toBe('allow');
+    expect(mcp('open_binary', { path: join(wt, 'x.bin') }).decision).toBe('deny');
+    expect(mcp('open_binary', { path: join(wt, 'link-to-art', 'target.bin') }).decision).toBe(
+      'deny',
+    );
+    expect(
       mcp('analyze_javascript_application', { input_path: art, source_paths: ['main.js'] })
         .decision,
+    ).toBe('deny');
+  });
+
+  it('refuses a symlinked folder inside the analysis directory that points outside it', () => {
+    // The crew cannot write the analysis directory (sandbox denyWrite), so a link there is the
+    // owner's and stays as checked; one that leads out is refused on its real path.
+    mkdirSync(join(art, 'pkg'), { recursive: true });
+    symlinkSync(other, join(art, 'pkg', 'lib'));
+    writeFileSync(join(other, 'secret.db'), 'x');
+    expect(mcp('open_binary', { path: join(art, 'pkg', 'lib', 'secret.db') }).decision).toBe(
+      'deny',
+    );
+    expect(
+      mcp('inspect_sqlite_database', { path: join(art, 'pkg', 'lib', 'secret.db') }).decision,
+    ).toBe('deny');
+  });
+
+  it('refuses the debugger context of a recorded crash unless the debug class is open', () => {
+    const p = join(art, 'crash.ips');
+    expect(mcp('inspect_recorded_crash', { path: p }).decision).toBe('allow');
+    expect(
+      mcp('inspect_recorded_crash', { path: p, include_debugger_context: false }).decision,
     ).toBe('allow');
+    expect(
+      mcp('inspect_recorded_crash', { path: p, include_debugger_context: true }).decision,
+    ).toBe('deny');
+    const open = { ...ctx, ...reaGuard(art, ['debug']) };
+    expect(
+      mcp('inspect_recorded_crash', { path: p, include_debugger_context: true }, open).decision,
+    ).toBe('allow');
+  });
+
+  it('refuses every git push of a research item, and only of one', () => {
+    const research = { ...ctx, noPush: true };
+    expect(bash('git push origin HEAD:refs/heads/studio/APP-5', research).decision).toBe('deny');
+    expect(bash('git -C . push origin studio/APP-5', research).decision).toBe('deny');
+    expect(bash('git push origin HEAD:refs/heads/studio/APP-5').decision).toBe('allow');
   });
 
   it('denies a path outside, through .., through a link out, or in a URL form', () => {
@@ -311,22 +386,31 @@ describe('the privacy check', () => {
     expect(line).toContain('email address (report:2)');
     expect(line).not.toContain('anna');
   });
-  it('checks a directory, refusing links and big or binary files', () => {
-    const d = join(root, 'docs-research');
-    mkdirSync(d, { recursive: true });
-    writeFileSync(join(d, 'ok.md'), 'structure only\n');
-    expect(privacyHitsInDir(d, 'docs/research')).toEqual([]);
-    writeFileSync(join(d, 'bin.md'), Buffer.from([0, 1, 2]));
-    symlinkSync(root, join(d, 'ln'));
-    writeFileSync(join(d, 'mail.md'), 'a@real-domain.org');
-    const kinds2 = privacyHitsInDir(d, 'docs/research').map((h) => h.kind);
-    expect(kinds2).toEqual(
+  it('checks the lines a pull request adds, with their own line numbers, and refuses odd files', () => {
+    expect(
+      privacyHitsInAdded([{ path: 'docs/research/a.md', lines: [{ line: 3, text: 'structure' }] }]),
+    ).toEqual([]);
+    const hits = privacyHitsInAdded([
+      {
+        path: 'docs/research/a.md',
+        lines: [
+          { line: 7, text: 'fine' },
+          { line: 9, text: 'mail a@real-domain.org' },
+        ],
+      },
+      { path: 'docs/research/b.bin', odd: 'binary', lines: [] },
+      { path: 'docs/research/ln', odd: 'link', lines: [] },
+      { path: 'x.md', odd: 'unreadable', lines: [] },
+    ]);
+    expect(hits).toEqual(
       expect.arrayContaining([
-        'file that is not text',
-        'link in the findings directory',
-        'email address',
+        { kind: 'email address', line: 9, file: 'docs/research/a.md' },
+        { kind: 'file that is not text', line: 0, file: 'docs/research/b.bin' },
+        { kind: 'link in the pull request', line: 0, file: 'docs/research/ln' },
+        { kind: 'file whose lines could not be read', line: 0, file: 'x.md' },
       ]),
     );
+    expect(privacyLine(hits)).not.toContain('real-domain');
   });
 });
 
@@ -353,7 +437,7 @@ describe('the brief for a researcher', () => {
       opensPr: true,
     }).join('\n');
     expect(docs).toContain('docs/research/APP-5-');
-    expect(docs).toContain('allows by name: debug');
+    expect(docs).toContain('opened for this item: debug');
   });
 });
 
@@ -402,7 +486,9 @@ describe('launch of a researcher with REA', () => {
     history: [],
   };
 
-  function setup(opts: { roots?: string[]; artifacts?: string; skill?: boolean } = {}) {
+  function setup(
+    opts: { roots?: string[]; artifacts?: string; skill?: boolean; installed?: boolean } = {},
+  ) {
     const dir = join(root, `l${n++}`);
     const home = join(dir, 'home');
     mkdirSync(home, { recursive: true });
@@ -424,14 +510,22 @@ describe('launch of a researcher with REA', () => {
       join(home, '.config', 'studio', 'config.yaml'),
       `research_roots: ${JSON.stringify(roots)}\nrea_env:\n  JAVA_HOME: /opt/jdk\n`,
     );
+    const env = { PATH: process.env.PATH ?? '/usr/bin:/bin', CREW_TOKEN: 'crew-token-value' };
+    const ownerRoot = ownerStateRootFor({ homedir: home, env });
+    const entry =
+      opts.installed === false ? undefined : fakeReaInstall(join(ownerRoot, 'rea', '6.7.0'));
     const claude = join(home, '.claude');
     const skills = ['studio-crew', ...(opts.skill === false ? [] : ['reverse-engineer-anything'])];
     for (const s of skills) {
       mkdirSync(join(claude, 'skills', s), { recursive: true });
       writeFileSync(join(claude, 'skills', s, 'SKILL.md'), '---\nname: x\n---\n');
     }
-    const launcher = { homedir: home, env: { PATH: process.env.PATH } };
-    const config = { ...base, research: { artifacts: opts.artifacts ?? artifacts } };
+    const launcher = { homedir: home, env };
+    const config = {
+      ...base,
+      crewToken: { env: 'CREW_TOKEN' },
+      research: { artifacts: opts.artifacts ?? artifacts },
+    };
     const started: { args: string[]; env: Record<string, string> }[] = [];
     const ports: Ports = {
       ...realPorts(),
@@ -453,6 +547,7 @@ describe('launch of a researcher with REA', () => {
       started,
       state: stateRootFor(project, launcher),
       artifacts: realpathSync(artifacts),
+      entry,
     };
   }
 
@@ -461,9 +556,33 @@ describe('launch of a researcher with REA', () => {
     await launchCrew(f.project, research, f.config, f.ports, f.launcher);
     const mcp = JSON.parse(readFileSync(join(f.state, 'settings', 'APP-5.mcp.json'), 'utf8'));
     expect(Object.keys(mcp.mcpServers)).toEqual(['rea']);
-    expect(mcp.mcpServers.rea.args).toEqual(['-y', 'rea-agents@6.7.0', 'mcp']);
-    expect(mcp.mcpServers.rea.env.JAVA_HOME).toBe('/opt/jdk');
+    const spec = join(f.state, 'settings', 'APP-5.rea.json');
+    expect(mcp.mcpServers.rea).toEqual({
+      type: 'stdio',
+      command: process.execPath,
+      args: [REA_SERVER_BIN, spec],
+      env: { NODE_OPTIONS: '', NODE_PATH: '' },
+    });
+    // The spec names the integrity-checked install, the run's own folder and the engine variables
+    // only: nothing of the crew's environment, no token.
+    const run = join(f.state, 'rea', 'APP-5');
+    const specJson = JSON.parse(readFileSync(spec, 'utf8'));
+    expect(specJson.entry).toBe(f.entry);
+    expect(specJson.env).toEqual({ JAVA_HOME: '/opt/jdk' });
+    expect(specJson.run).toEqual({
+      home: join(run, 'home'),
+      tmp: join(run, 'tmp'),
+      cache: join(run, 'cache'),
+      config: join(run, 'config'),
+      data: join(run, 'data'),
+      state: join(run, 'state'),
+      cwd: join(run, 'cwd'),
+    });
+    expect(readFileSync(spec, 'utf8')).not.toContain('crew-token-value');
     const s = JSON.parse(readFileSync(join(f.state, 'settings', 'APP-5.json'), 'utf8'));
+    expect(s.sandbox.filesystem.denyRead).toContain(run);
+    expect(s.sandbox.filesystem.denyWrite).toContain(run);
+    expect(s.sandbox.filesystem.allowWrite).not.toContain(run);
     expect(s.permissions.deny).toContain('mcp__rea__start_frida_session');
     expect(s.permissions.deny).not.toContain('mcp__rea__search_strings');
     expect(s.permissions.deny).not.toContain('mcp__*');
@@ -476,25 +595,50 @@ describe('launch of a researcher with REA', () => {
     expect(ctx.artifacts).toBe(f.artifacts);
     expect(ctx.mcpAllow).toContain('mcp__rea__search_strings');
     expect(ctx.mcpAllow).not.toContain('mcp__rea__start_frida_session');
+    expect(ctx.secretGlobs).toEqual(expect.arrayContaining([run, `${run}/**`]));
+    expect(ctx.noPush).toBe(true);
+    // A research item pushes nothing: no token that could push reaches it.
+    expect(f.started[0]?.env.GH_TOKEN).toBeUndefined();
+    expect(JSON.stringify(f.started[0]?.env)).not.toContain('crew-token-value');
     const brief = readFileSync(join(f.state, 'briefs', 'APP-5.md'), 'utf8');
     expect(brief).toContain('## Reverse engineering (REA)');
     expect(brief).toContain('reverse-engineer-anything');
   });
 
-  it('adds the classes an item names, and nothing else', async () => {
-    const f = setup();
+  it('adds the classes the owner opened, and never one a board note names', async () => {
+    const noted = setup();
     await launchCrew(
-      f.project,
-      { ...research, notes: ['rea-allow: observe'] },
-      f.config,
-      f.ports,
-      f.launcher,
+      noted.project,
+      { ...research, notes: ['rea-allow: observe, debug, device'] },
+      noted.config,
+      noted.ports,
+      noted.launcher,
     );
+    const plain = JSON.parse(readFileSync(join(noted.state, 'guard', 'APP-5.json'), 'utf8'));
+    expect(plain.mcpAllow).not.toContain('mcp__rea__capture_web_screenshot');
+    expect(plain.reaClasses).toEqual([]);
+
+    // `studio research allow` writes into the bound state root; a first launch binds it here.
+    const f = setup();
+    await launchCrew(f.project, research, f.config, f.ports, f.launcher);
+    updateReaAllow(f.state, 'APP-5', { add: ['observe'] });
+    await launchCrew(f.project, research, f.config, f.ports, f.launcher);
     const ctx = JSON.parse(readFileSync(join(f.state, 'guard', 'APP-5.json'), 'utf8'));
     expect(ctx.mcpAllow).toContain('mcp__rea__capture_web_screenshot');
     expect(ctx.mcpAllow).not.toContain('mcp__rea__start_frida_session');
+    expect(ctx.reaClasses).toEqual(['observe']);
     expect(ctx.blockedCommands).toContain('adb');
     expect(ctx.blockedCommands).not.toContain('tcpdump');
+  });
+
+  it('gives a builder its push token and no REA folder', async () => {
+    const f = setup();
+    const builder = { ...research, id: 'APP-7', type: 'chore' as const, role: 'builder' as const };
+    await launchCrew(f.project, builder, f.config, f.ports, f.launcher);
+    expect(f.started[0]?.env.GH_TOKEN).toBe('crew-token-value');
+    const ctx = JSON.parse(readFileSync(join(f.state, 'guard', 'APP-7.json'), 'utf8'));
+    expect(ctx.noPush).toBeUndefined();
+    expect(() => readFileSync(join(f.state, 'settings', 'APP-7.rea.json'))).toThrow();
   });
 
   it('gives a builder no server and denies the skill, whatever studio.yaml names', async () => {
@@ -545,12 +689,49 @@ describe('launch of a researcher with REA', () => {
     const noSkill = setup({ skill: false });
     await expect(
       launchCrew(noSkill.project, research, noSkill.config, noSkill.ports, noSkill.launcher),
-    ).rejects.toThrow(/REA skill is not installed/);
+    ).rejects.toThrow(/REA skill is not installed.*node .*rea\.mjs setup/);
     expect(noSkill.started).toHaveLength(0);
+
+    const notInstalled = setup({ installed: false });
+    await expect(
+      launchCrew(
+        notInstalled.project,
+        research,
+        notInstalled.config,
+        notInstalled.ports,
+        notInstalled.launcher,
+      ),
+    ).rejects.toThrow(/not installed; run studio research install/);
+    expect(notInstalled.started).toHaveLength(0);
   });
 });
 
 describe('studio doctor on REA', () => {
+  it('takes no REA version from studio.yaml: the repository cannot pin the code the owner runs', () => {
+    const cfg = {
+      studio: 1,
+      primaryRepo: 'org/app',
+      repos: ['org/app'],
+      ci: {
+        provider: 'github',
+        runners: 'github-hosted',
+        runnerLabels: [],
+        capacity: { total: 8, mergeMaxBusy: 5, checkTwiceSeconds: 30 },
+      },
+      merge: { strategy: 'studio-queue', contractPaths: [] },
+      roles: {
+        researcher: { model: 'sonnet', wip: 1, skills: { required: [], allowed: [], denied: [] } },
+      },
+    };
+    expect(studioConfigSchema.safeParse({ ...cfg, research: { artifacts: '/a' } }).success).toBe(
+      true,
+    );
+    expect(
+      studioConfigSchema.safeParse({ ...cfg, research: { artifacts: '/a', reaVersion: '6.7.0' } })
+        .success,
+    ).toBe(false);
+  });
+
   it('shows nothing when nothing asks for REA', () => {
     expect(reaState(undefined, undefined, undefined)).toBeNull();
   });
@@ -569,11 +750,14 @@ describe('studio doctor on REA', () => {
       roles: {
         researcher: { model: 'sonnet', wip: 1, skills: { required: [], allowed: [], denied: [] } },
       },
-      research: { artifacts: join(root, 'does-not-exist'), reaVersion: '6.8.0' },
+      research: { artifacts: join(root, 'does-not-exist') },
     });
-    const s = reaState(cfg, undefined, undefined);
+    const owner = ownerConfigSchema.parse({ researchRoots: [root], reaVersion: '6.8.0' });
+    const s = reaState(cfg, owner, undefined, join(root, 'no-owner-state'));
     expect(s?.server).toBe('rea-agents@6.8.0');
-    expect(s?.pinnedBy).toBe('studio.yaml');
+    expect(s?.pinnedBy).toBe('owner config');
+    expect(s?.installed).toMatch(/^no: not installed; run studio research install/);
+    expect(reaState(cfg, undefined, undefined)?.pinnedBy).toBe('Studio default');
     expect(s?.analysisDirectory).toMatch(/refused/);
     expect(JSON.stringify(s)).not.toContain(root);
   });
@@ -600,11 +784,12 @@ describe('the guard reads values, not key names, and resolves every path', () =>
   };
   const mcp = (tool: string, input: Record<string, unknown>) =>
     evaluateGuard({ toolName: reaToolName(tool), toolInput: input }, ctx);
-  const bash = (command: string, cwd?: string) =>
-    evaluateGuard({ toolName: 'Bash', toolInput: { command }, ...(cwd ? { cwd } : {}) }, ctx);
 
-  it('resolves relative paths, through links', () => {
-    expect(mcp('open_binary', { path: 'sub/x' }).decision).toBe('allow');
+  it('refuses relative paths, and resolves absolute ones through links', () => {
+    expect(mcp('open_binary', { path: join(art, 'sub', 'x') }).decision).toBe('allow');
+    // Relative: the guard and the server would resolve it against different directories.
+    expect(mcp('open_binary', { path: 'sub/x' }).decision).toBe('deny');
+    expect(mcp('open_binary', { path: 'x.bin' }).decision).toBe('deny');
     expect(mcp('open_binary', { path: 'out/x' }).decision).toBe('deny');
     expect(mcp('open_binary', { path: '../other/x' }).decision).toBe('deny');
     expect(mcp('open_binary', { path: join(art, 'sub', 'out', 'x') }).decision).toBe('deny');
@@ -633,7 +818,7 @@ describe('the guard reads values, not key names, and resolves every path', () =>
     let checked = 0;
     for (const tool of REA_STATIC_TOOLS) {
       for (const key of REA_TOOL_SCHEMAS[tool]?.keys ?? []) {
-        if (skipped.has(key) || /snapshot|output|export|save|dest|overwrite|write/i.test(key)) {
+        if (skipped.has(key) || isWriteKey(key)) {
           continue;
         }
         checked++;
@@ -663,19 +848,60 @@ describe('the guard reads values, not key names, and resolves every path', () =>
     expect(Object.keys(REA_TOOL_SCHEMAS).sort()).toEqual([...REA_KNOWN_TOOLS].sort());
   });
 
-  it('fails write keys closed, whatever the value type', () => {
-    expect(mcp('close_binary', { overwrite: 1 }).decision).toBe('deny');
+  it('fails write keys closed for strings and flags, whatever their spelling', () => {
     expect(mcp('close_binary', { overwrite: 'false' }).decision).toBe('deny');
+    expect(mcp('close_binary', { overwrite: true }).decision).toBe('deny');
     expect(mcp('close_binary', { overwrite: false }).decision).toBe('allow');
     expect(mcp('close_binary', { snapshot_path: '' }).decision).toBe('allow');
   });
 
-  it('confines every string under a path argument, even one that does not look like a place', () => {
-    expect(mcp('open_binary', { path: 'plain' }).decision).toBe('allow');
+  it('judges write keys by the words of their name: export names, levels and sizes are no writes', () => {
+    for (const k of [
+      'snapshot_path',
+      'overwrite',
+      'output_directory',
+      'output',
+      'export_path',
+      'save',
+      'dest',
+      'destination',
+      'writeTo',
+    ]) {
+      expect(isWriteKey(k), k).toBe(true);
+    }
+    for (const k of [
+      'left_export_name',
+      'right_export_name',
+      'rewrite_level',
+      'destination_scope',
+      'max_output_bytes',
+      'max_output_files',
+      'output_bytes',
+    ]) {
+      expect(isWriteKey(k), k).toBe(false);
+    }
+    const f = join(art, 'a.js');
     expect(
-      mcp('analyze_javascript_application', { input_path: art, source_paths: ['a', 'b/c'] })
-        .decision,
+      mcp('compare_javascript_export_shapes', {
+        left_module_path: f,
+        right_module_path: f,
+        left_export_name: 'default',
+        right_export_name: 'run',
+      }).decision,
     ).toBe('allow');
+  });
+
+  it('confines every string under a path argument, even one that does not look like a place', () => {
+    expect(mcp('open_binary', { path: 'plain' }).decision).toBe('deny');
+    expect(
+      mcp('analyze_javascript_application', {
+        input_path: art,
+        source_paths: [join(art, 'a'), join(art, 'b', 'c')],
+      }).decision,
+    ).toBe('allow');
+    expect(
+      mcp('analyze_javascript_application', { input_path: art, source_paths: ['a'] }).decision,
+    ).toBe('deny');
     expect(
       mcp('analyze_javascript_application', { input_path: art, source_paths: ['a', '../b'] })
         .decision,
@@ -717,6 +943,7 @@ describe('the sandbox of a researcher', () => {
       },
     });
     const state = join(dir, 'state', 'proj');
+    const runDir = join(state, 'rea', 'APP-5');
     mkdirSync(state, { recursive: true });
     const item = {
       id: 'APP-5',
@@ -743,14 +970,211 @@ describe('the sandbox of a researcher', () => {
         tmpDir: join(dir, 't'),
         projectDir: join(dir, 'p'),
         toolchainPaths: [],
-        rea: { artifacts: art, classes: [] },
+        rea: { artifacts: art, classes: [], runDir },
       },
       { homedir: join(dir, 'home'), env: {} },
     );
     const fs = JSON.parse(readFileSync(file, 'utf8')).sandbox.filesystem;
-    expect(fs.denyRead).toContain(art);
-    expect(fs.denyWrite).toContain(art);
-    expect(fs.allowRead).not.toContain(art);
-    expect(fs.allowWrite).not.toContain(art);
+    for (const p of [art, runDir]) {
+      expect(fs.denyRead).toContain(p);
+      expect(fs.denyWrite).toContain(p);
+      expect(fs.allowRead).not.toContain(p);
+      expect(fs.allowWrite).not.toContain(p);
+    }
+    // The guard keeps the crew's file tools out of the server's folder too.
+    const ctx: GuardContext = JSON.parse(readFileSync(join(state, 'guard', 'APP-5.json'), 'utf8'));
+    expect(
+      evaluateGuard(
+        { toolName: 'Read', toolInput: { file_path: join(runDir, 'tmp', 'app.apk') } },
+        ctx,
+      ).decision,
+    ).toBe('deny');
+  });
+});
+
+describe('the REA install', () => {
+  const fakeNpm = (o: { registry?: string; locked?: string; resolved?: string; code?: number }) => {
+    const calls: { args: string[]; env: Record<string, string>; cwd: string }[] = [];
+    const npm = {
+      async run(args: string[], env: Record<string, string>, cwd: string) {
+        calls.push({ args, env, cwd });
+        if (args[0] === 'view') {
+          return { code: 0, stdout: JSON.stringify(o.registry ?? REA_TEST_INTEGRITY), stderr: '' };
+        }
+        if (o.code !== undefined) return { code: o.code, stdout: '', stderr: '' };
+        fakeReaInstall(cwd, { integrity: o.locked ?? REA_TEST_INTEGRITY });
+        if (o.resolved !== undefined) {
+          const lock = JSON.parse(readFileSync(join(cwd, 'package-lock.json'), 'utf8'));
+          lock.packages['node_modules/rea-agents'].resolved = o.resolved;
+          writeFileSync(join(cwd, 'package-lock.json'), JSON.stringify(lock));
+        }
+        return { code: 0, stdout: '', stderr: '' };
+      },
+    };
+    return { npm, calls };
+  };
+  const now = new Date('2026-11-05T10:00:00Z');
+
+  it('installs the pinned version into the owner state with npm config and tokens kept out', async () => {
+    const owner = join(root, 'inst-ok');
+    const { npm, calls } = fakeNpm({});
+    const got = await installRea({
+      ownerRoot: owner,
+      version: '6.7.0',
+      npm,
+      path: '/usr/bin',
+      now,
+    });
+    expect(got).toEqual({ dir: join(owner, 'rea', '6.7.0'), integrity: REA_TEST_INTEGRITY });
+    expect(calls.map((c) => c.args[0])).toEqual(['view', 'install']);
+    for (const c of calls) {
+      expect(c.env.npm_config_userconfig).toBe('/dev/null');
+      expect(c.env.npm_config_globalconfig).toBe('/dev/null');
+      expect(Object.keys(c.env).some((k) => /TOKEN|AUTH/i.test(k))).toBe(false);
+      expect(c.cwd.startsWith(join(owner, 'rea'))).toBe(true);
+    }
+    expect(calls[0]?.args).toEqual(['view', 'rea-agents@6.7.0', 'dist.integrity', '--json']);
+    const record = JSON.parse(readFileSync(join(got.dir, 'studio-rea.json'), 'utf8'));
+    expect(record).toMatchObject({ version: '6.7.0', integrity: REA_TEST_INTEGRITY });
+    expect(verifyReaInstall(owner, '6.7.0').entry).toBe(
+      join(got.dir, 'node_modules', 'rea-agents', 'scripts', 'rea.mjs'),
+    );
+  });
+
+  it('refuses a tarball whose integrity is not the registry’s, or from another place, and keeps the old install', async () => {
+    const owner = join(root, 'inst-bad');
+    await installRea({ ownerRoot: owner, version: '6.7.0', npm: fakeNpm({}).npm, path: '', now });
+    const other = `sha512-${'B'.repeat(86)}==`;
+    await expect(
+      installRea({
+        ownerRoot: owner,
+        version: '6.7.0',
+        npm: fakeNpm({ locked: other }).npm,
+        path: '',
+        now,
+      }),
+    ).rejects.toThrow(/integrity is not the one the registry reported/);
+    await expect(
+      installRea({
+        ownerRoot: owner,
+        version: '6.7.0',
+        npm: fakeNpm({ resolved: 'https://evil.example/rea-agents-6.7.0.tgz' }).npm,
+        path: '',
+        now,
+      }),
+    ).rejects.toThrow(/other than the npm registry/);
+    await expect(
+      installRea({
+        ownerRoot: owner,
+        version: '6.7.0',
+        npm: fakeNpm({ code: 1 }).npm,
+        path: '',
+        now,
+      }),
+    ).rejects.toThrow(/npm install failed/);
+    expect(verifyReaInstall(owner, '6.7.0').integrity).toBe(REA_TEST_INTEGRITY);
+    await expect(
+      installRea({ ownerRoot: owner, version: '^6.7.0', npm: fakeNpm({}).npm, path: '', now }),
+    ).rejects.toThrow(/not exact/);
+  });
+
+  it('refuses at launch an install that is missing, altered, linked or writable by others', () => {
+    const owner = join(root, 'inst-verify');
+    const dir = join(owner, 'rea', '6.7.0');
+    expect(() => verifyReaInstall(owner, '6.7.0')).toThrow(/not installed/);
+    fakeReaInstall(dir, { recordIntegrity: `sha512-${'C'.repeat(86)}==` });
+    expect(() => verifyReaInstall(owner, '6.7.0')).toThrow(/does not match the install record/);
+    fakeReaInstall(dir);
+    expect(() => verifyReaInstall(owner, '6.8.0')).toThrow(/not installed/);
+    const entry = join(dir, 'node_modules', 'rea-agents', 'scripts', 'rea.mjs');
+    chmodSync(entry, 0o666);
+    expect(() => verifyReaInstall(owner, '6.7.0')).toThrow(/writable by group or others/);
+    chmodSync(entry, 0o644);
+    rmSync(entry);
+    symlinkSync(join(root, 'elsewhere.mjs'), entry);
+    expect(() => verifyReaInstall(owner, '6.7.0')).toThrow(/symbolic link/);
+    rmSync(entry);
+    writeFileSync(entry, '');
+    expect(() => verifyReaInstall(owner, '6.7.0', 12345)).toThrow(/belongs to another user/);
+  });
+});
+
+describe('the REA server wrapper', () => {
+  it('starts the installed server in a neutral folder with a clean environment, whatever the clone holds', () => {
+    const dir = join(root, 'wrap');
+    const state = join(dir, 'state');
+    const clone = join(dir, 'clone');
+    // What a crew could plant in its clone: a fake package and an npmrc. None of it may count.
+    mkdirSync(join(clone, 'node_modules', 'rea-agents'), { recursive: true });
+    writeFileSync(join(clone, '.npmrc'), 'registry=https://evil.example/\n');
+    writeFileSync(join(clone, 'node_modules', 'rea-agents', 'index.js'), 'throw 1;\n');
+    const entry = fakeReaInstall(join(dir, 'owner', 'rea', '6.7.0'), {
+      entryScript:
+        'process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), env: process.env }));\n',
+    });
+    const run = prepareReaRun(state, 'APP-5');
+    const spec = writeReaSpec(state, 'APP-5', {
+      entry,
+      run,
+      path: process.env.PATH ?? '/usr/bin:/bin',
+      env: { JAVA_HOME: '/opt/jdk' },
+    });
+    const out = execFileSync(process.execPath, [REA_SERVER_BIN, spec], {
+      cwd: clone,
+      env: {
+        PATH: process.env.PATH,
+        GH_TOKEN: 'gh-secret',
+        CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret',
+        ANTHROPIC_API_KEY: 'api-secret',
+        HOME: join(dir, 'crew-home'),
+        TMPDIR: join(dir, 'crew-tmp'),
+        npm_config_registry: 'https://evil.example/',
+      },
+      encoding: 'utf8',
+    });
+    const got = JSON.parse(out) as { argv: string[]; cwd: string; env: Record<string, string> };
+    expect(got.argv).toEqual(['mcp']);
+    expect(realpathSync(got.cwd)).toBe(realpathSync(run.cwd));
+    expect(got.env.HOME).toBe(run.home);
+    expect(got.env.TMPDIR).toBe(run.tmp);
+    expect(got.env.XDG_CACHE_HOME).toBe(run.cache);
+    expect(got.env.XDG_CONFIG_HOME).toBe(run.config);
+    expect(got.env.XDG_DATA_HOME).toBe(run.data);
+    expect(got.env.XDG_STATE_HOME).toBe(run.state);
+    expect(got.env.npm_config_userconfig).toBe('/dev/null');
+    expect(got.env.JAVA_HOME).toBe('/opt/jdk');
+    expect(got.env.npm_config_registry).toBeUndefined();
+    expect(out).not.toMatch(/gh-secret|oauth-secret|api-secret|crew-home|crew-tmp/);
+  });
+
+  it('refuses a spec that is not the owner’s plain file, or that names a variable REA does not read', () => {
+    const dir = join(root, 'wrap-bad');
+    const state = join(dir, 'state');
+    const entry = fakeReaInstall(join(dir, 'owner', 'rea', '6.7.0'));
+    const run = prepareReaRun(state, 'APP-5');
+    const spec = writeReaSpec(state, 'APP-5', { entry, run, path: '/usr/bin', env: {} });
+    const runWrapper = (file: string) =>
+      spawnSync(process.execPath, [REA_SERVER_BIN, file], { encoding: 'utf8', env: {} });
+    chmodSync(spec, 0o666);
+    expect(runWrapper(spec).status).toBe(2);
+    chmodSync(spec, 0o600);
+    const link = join(dir, 'link.json');
+    symlinkSync(spec, link);
+    expect(runWrapper(link).stderr).toMatch(/symbolic link/);
+    const raw = JSON.parse(readFileSync(spec, 'utf8'));
+    writeFileSync(spec, JSON.stringify({ ...raw, env: { GH_TOKEN: 'x' } }));
+    expect(runWrapper(spec).stderr).toMatch(/env GH_TOKEN is refused/);
+    expect(runWrapper('relative.json').status).toBe(2);
+  });
+
+  it('removes the per-run folder with what REA copied into it', () => {
+    const state = join(root, 'run-clean');
+    const run = prepareReaRun(state, 'APP-5');
+    writeFileSync(join(run.tmp, 'app.apk'), 'x');
+    expect(prepareReaRun(state, 'APP-5').tmp).toBe(run.tmp);
+    expect(() => readFileSync(join(run.tmp, 'app.apk'))).toThrow();
+    writeFileSync(join(run.tmp, 'app.apk'), 'x');
+    removeReaRun(state, 'APP-5');
+    expect(() => readFileSync(join(run.tmp, 'app.apk'))).toThrow();
   });
 });

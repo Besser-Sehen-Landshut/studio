@@ -75,7 +75,6 @@ import {
 } from './plugins.js';
 import type { Ports } from './ports.js';
 import {
-  itemReaClasses,
   REA_DEFAULT_VERSION,
   REA_SERVER,
   REA_SKILL,
@@ -86,6 +85,13 @@ import {
   reaSetupHint,
   renderReaBrief,
 } from './rea.js';
+import {
+  itemReaClasses,
+  prepareReaRun,
+  reaRunDirs,
+  verifyReaInstall,
+  writeReaSpec,
+} from './rea-install.js';
 import { newReportName } from './report.js';
 import { readCrewCaps, renderReviewRoutine } from './review.js';
 import { readRoleMemory } from './role-memory.js';
@@ -109,6 +115,14 @@ export const GUARD_BIN = resolve(
   '..',
   'bin',
   'studio-guard.mjs',
+);
+
+/** The wrapper Claude Code starts for a researcher's REA server (bin/studio-rea-server.mjs). */
+export const REA_SERVER_BIN = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'bin',
+  'studio-rea-server.mjs',
 );
 
 /**
@@ -369,7 +383,8 @@ export interface ReaPlan {
   version: string;
   classes: ReaClass[];
   env: Record<string, string>;
-  cacheDir: string;
+  /** The installed package's command, checked against its install record. */
+  entry: string;
 }
 
 /**
@@ -386,6 +401,7 @@ export function planRea(o: {
   stateRoot: string;
   projectDir: string;
   configDir: string;
+  ownerRoot: string;
   worker: boolean;
 }): ReaPlan | undefined {
   const research = o.config.research;
@@ -426,17 +442,21 @@ export function planRea(o: {
     return within(pathKey(real, platform), pathKey(root, platform));
   });
   if (!below) fail('is not below a research_roots entry of the owner config');
+  // The version is the owner's (owner config `rea_version`), never the repository's.
+  const version = o.ownerConfig.reaVersion ?? REA_DEFAULT_VERSION;
+  const install = verifyReaInstall(o.ownerRoot, version, o.owner.uid ?? process.getuid?.());
   if (skillInstalled(o.configDir, REA_SKILL) === false) {
     throw new Error(
-      `${o.item.id}: the REA skill is not installed in ${o.configDir}; ${reaSetupHint(o.configDir, research.reaVersion ?? REA_DEFAULT_VERSION)}`,
+      `${o.item.id}: the REA skill is not installed in ${o.configDir}; ${reaSetupHint(o.configDir, install.entry)}`,
     );
   }
   return {
     artifacts: real,
-    version: research.reaVersion ?? REA_DEFAULT_VERSION,
-    classes: itemReaClasses(o.item.notes),
+    version,
+    // Opened by the owner only (studio research allow), never by a note on the board.
+    classes: itemReaClasses(o.stateRoot, o.item.id),
     env: { ...o.ownerConfig.reaEnv },
-    cacheDir: join(o.configDir, 'studio-rea-npm-cache'),
+    entry: install.entry,
   };
 }
 
@@ -857,8 +877,11 @@ export function writeCrewSettings(
     macosTrustService?: boolean;
     /** `Skill(<name>)` deny rules: every installed skill the brief does not name. */
     skillDeny?: readonly string[];
-    /** A researcher's REA (src/rea.ts): its one analysis directory and the tool classes allowed. */
-    rea?: { artifacts: string; classes: readonly ReaClass[] };
+    /**
+     * A researcher's REA (src/rea.ts): its one analysis directory, the tool classes the owner opened
+     * and the server's per-run folder (its HOME, TMPDIR, XDG dirs), which the crew never touches.
+     */
+    rea?: { artifacts: string; classes: readonly ReaClass[]; runDir: string };
     /** A worker machine's deny list (src/worker-deny.ts): places and ports its crews never touch. */
     deny?: { paths: readonly string[]; ports: readonly number[]; allowRead?: readonly string[] };
   },
@@ -884,16 +907,21 @@ export function writeCrewSettings(
   // denied too, literal and real spelling, so an XDG_STATE_HOME outside the home is covered.
   const stateBase = dirname(stateRoot);
   const denied = [...(dirs.deny?.paths ?? [])];
-  const artifacts = dirs.rea?.artifacts;
   // A researcher's analysis directory is out for every shell process, read and write: only the
-  // REA tools, which run in the MCP server outside this sandbox, reach it.
+  // REA tools, which run in the MCP server outside this sandbox, reach it. So is the server's
+  // per-run folder, where REA puts copies of what it analyses (it lies in the state base, which is
+  // denied anyway; named here as well).
+  const reaDenied =
+    dirs.rea === undefined
+      ? []
+      : unique([dirs.rea.artifacts, dirs.rea.runDir, realOr(dirs.rea.runDir)]);
   const denyRead = unique([
     realHome,
     ...credentialPaths,
     stateBase,
     realOr(stateBase),
     ...denied,
-    ...(artifacts === undefined ? [] : [artifacts]),
+    ...reaDenied,
   ]);
   const loginDir = dirs.providerConfigDir;
   // Of a login dir only what skills need: it also holds the transcripts, `.claude.json` and shell
@@ -972,12 +1000,17 @@ export function writeCrewSettings(
       ...credentialPaths.flatMap((p) => [p, `${p}/**`]),
       ...(loginDir === undefined ? [] : [loginDir, `${loginDir}/**`]),
       ...denied.flatMap((p) => [p, `${p}/**`]),
+      ...(dirs.rea === undefined
+        ? []
+        : unique([dirs.rea.runDir, realOr(dirs.rea.runDir)]).flatMap((p) => [p, `${p}/**`])),
     ],
     crewAllowedWorkflows: config.crewAllowedWorkflows,
     crewAllowedWorkflowRefs: config.crewAllowedWorkflowRefs,
     protectedPaths,
     item: id,
     base: ITEM_BASE,
+    // A research item opens no pull request and pushes nothing: the guard refuses every push.
+    ...(item.type === 'research' ? { noPush: true } : {}),
     ...((dirs.deny?.ports ?? []).length > 0 ? { deniedPorts: [...(dirs.deny?.ports ?? [])] } : {}),
     ...(dirs.rea === undefined ? {} : reaGuard(dirs.rea.artifacts, dirs.rea.classes)),
   };
@@ -1033,8 +1066,8 @@ export function writeCrewSettings(
       filesystem: {
         allowWrite: [clone, dirs.tmpDir, dirs.homeDir],
         // A worker's denied places are out for writes too, whatever else allows them.
-        ...(denied.length + (artifacts === undefined ? 0 : 1) > 0
-          ? { denyWrite: [...denied, ...(artifacts === undefined ? [] : [artifacts])] }
+        ...(denied.length + reaDenied.length > 0
+          ? { denyWrite: unique([...denied, ...reaDenied]) }
           : {}),
         denyRead,
         allowRead,
@@ -1412,6 +1445,7 @@ async function launchCrewLocked(
     stateRoot,
     projectDir,
     configDir: claudeConfigDir,
+    ownerRoot,
     worker: worker !== undefined,
   });
   // The REA skill goes with the REA server: without a plan it is denied, not offered.
@@ -1566,20 +1600,40 @@ async function launchCrewLocked(
         caps.denied,
         BUNDLED_SKILLS,
       ),
-      ...(rea === undefined ? {} : { rea: { artifacts: rea.artifacts, classes: rea.classes } }),
+      ...(rea === undefined
+        ? {}
+        : {
+            rea: {
+              artifacts: rea.artifacts,
+              classes: rea.classes,
+              runDir: reaRunDirs(stateRoot, item.id).root,
+            },
+          }),
       ...(worker === undefined ? {} : { deny: worker.deny }),
     },
     owner,
   );
   // No MCP server, except REA for a researcher: --strict-mcp-config ignores every other MCP
   // configuration and the only one given is this (https://code.claude.com/docs/en/cli-reference).
+  // The server's own folder is fresh for every run; collect and stop remove it.
   const mcpConfig = join(stateRoot, 'settings', `${item.id}.mcp.json`);
+  let reaServer: ReturnType<typeof reaMcpServer> | undefined;
+  if (rea !== undefined) {
+    const run = prepareReaRun(stateRoot, item.id);
+    const spec = writeReaSpec(stateRoot, item.id, {
+      entry: rea.entry,
+      run,
+      path: penv.PATH ?? '/usr/bin:/bin',
+      ...(penv.LANG === undefined ? {} : { lang: penv.LANG }),
+      env: rea.env,
+    });
+    reaServer = reaMcpServer({ node: process.execPath, wrapper: REA_SERVER_BIN, spec });
+  }
   writeStateFile(
     stateRoot,
     mcpConfig,
     `${JSON.stringify({
-      mcpServers:
-        rea === undefined ? {} : { [REA_SERVER]: reaMcpServer(rea.version, rea.env, rea.cacheDir) },
+      mcpServers: reaServer === undefined ? {} : { [REA_SERVER]: reaServer },
     })}\n`,
   );
   const settingsEnv = (
@@ -1608,7 +1662,8 @@ async function launchCrewLocked(
     }
   }
   Object.assign(env, settingsEnv);
-  if (token) env.GH_TOKEN = token;
+  // A research item pushes nothing, so it gets no token that could push.
+  if (token && item.type !== 'research') env.GH_TOKEN = token;
   const log = join(stateRoot, 'logs', `${item.id}.jsonl`);
   ensureStateDir(stateRoot, dirname(log));
   const logStart = fileSize(log);

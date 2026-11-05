@@ -36,6 +36,7 @@ import {
   REA_STATIC_TOOLS,
   reaSetupHint,
 } from './rea.js';
+import { verifyReaInstall } from './rea-install.js';
 import { assertPrimaryRepo, safe } from './setup-ci-command.js';
 
 export function readPrimaryRepo(project: string): string {
@@ -229,18 +230,31 @@ function skillState(dir: string | undefined, name: string): string {
 
 /**
  * REA for the researcher (src/rea.ts), as far as the owner can check it: which server version
- * crews run, whether the project's analysis directory is one the owner allows, the skill in the
- * crew config dir, and whether the server registered there is the pinned one. Names and states,
- * never a path or a value. Null when nothing asks for REA.
+ * crews run and whether it is installed and matches its recorded integrity, whether the project's
+ * analysis directory is one the owner allows, the skill in the crew config dir, and whether the
+ * server registered there is the pinned one. Names and states, never a path or a value. Null when
+ * nothing asks for REA.
  */
 export function reaState(
   config: StudioConfig | undefined,
   ownerConfig: OwnerConfig | undefined,
   configDir: string | undefined,
+  ownerRoot?: string,
 ) {
   const roots = ownerConfig?.researchRoots ?? [];
   if (config?.research === undefined && roots.length === 0) return null;
-  const version = config?.research?.reaVersion ?? REA_DEFAULT_VERSION;
+  const version = ownerConfig?.reaVersion ?? REA_DEFAULT_VERSION;
+  let installed = 'cannot tell';
+  let entry: string | undefined;
+  if (ownerRoot !== undefined) {
+    try {
+      const got = verifyReaInstall(ownerRoot, version);
+      entry = got.entry;
+      installed = `yes (${got.integrity.slice(0, 19)}...)`;
+    } catch (e) {
+      installed = `no: ${(e as Error).message.replace(/^[^:]*: /, '').replace(/; .*$/, '')}; run studio research install`;
+    }
+  }
   let artifacts: string;
   if (config?.research === undefined) artifacts = 'not set in studio.yaml (research.artifacts)';
   else if (roots.length === 0) artifacts = 'refused: no research_roots in the owner config';
@@ -287,7 +301,8 @@ export function reaState(
   }
   return {
     server: `${REA_PACKAGE}@${version}`,
-    pinnedBy: config?.research?.reaVersion === undefined ? 'Studio default' : 'studio.yaml',
+    pinnedBy: ownerConfig?.reaVersion === undefined ? 'Studio default' : 'owner config',
+    installed,
     analysisDirectory: artifacts,
     skill: skillState(configDir, REA_SKILL),
     registeredInCrewConfig: registered,
@@ -295,7 +310,7 @@ export function reaState(
     staticTools: REA_STATIC_TOOLS.length,
     deniedByDefault: REA_KNOWN_TOOLS.length - REA_STATIC_TOOLS.length,
     classes: [...REA_CLASS_NAMES],
-    setup: configDir === undefined ? null : reaSetupHint(configDir, version),
+    setup: configDir === undefined ? null : reaSetupHint(configDir, entry),
   };
 }
 
@@ -403,7 +418,7 @@ export async function doctorReport(o: {
     ownerConfig: ownerConfig ? 'readable' : 'invalid',
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
-    rea: reaState(config, ownerConfig, configDir),
+    rea: reaState(config, ownerConfig, configDir, ownerStateRootFor(o.owner)),
     notify: ownerConfig?.notify?.command ? 'configured' : 'not configured',
     notifications: notificationsState(o.owner),
     apiKeyVarsInEnvironment: API_KEY_VARS.filter((k) => o.env[k]),
@@ -464,7 +479,7 @@ export async function runDoctor(o: {
       ...(report.rea === null
         ? []
         : [
-            `rea: ${report.rea.server} (${report.rea.pinnedBy}); analysis directory ${report.rea.analysisDirectory}`,
+            `rea: ${report.rea.server} (${report.rea.pinnedBy}), installed: ${report.rea.installed}; analysis directory ${report.rea.analysisDirectory}`,
             `rea skill in the crew config dir: ${report.rea.skill}; server registered there: ${report.rea.registeredInCrewConfig}`,
             `rea tools: ${report.rea.staticTools} static allowed, ${report.rea.deniedByDefault} known ones denied unless an item allows their class (${report.rea.classes.join(', ')}); engine variables set: ${report.rea.engineEnvironment.join(', ') || 'none'}`,
             ...(report.rea.skill === 'installed' || report.rea.setup === null

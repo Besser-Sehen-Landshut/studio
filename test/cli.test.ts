@@ -28,6 +28,7 @@ import {
 import type { Claude, Gh, Ports } from '../src/ports.js';
 import { realPorts } from '../src/ports.js';
 import { acquireQueueRunLock, enqueue, loadQueue, saveQueue } from '../src/queue.js';
+import { readReaAllow } from '../src/rea-install.js';
 import { newReportName, reportName } from '../src/report.js';
 import { reviewRounds } from '../src/review.js';
 import { computeMetrics, type StateSnapshot, writeState } from '../src/state.js';
@@ -3528,19 +3529,129 @@ describe('collect adds the review item for a pull request', () => {
       expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
     });
 
-    it('checks the findings below docs/research of the clone too', async () => {
+    /** A docs item of a researcher whose pushed branch adds `text` below docs/research. */
+    const pushedDocs = (text: string) => {
+      const fx = makeFx([{ id: 'APP-1', status: 'assigned', type: 'docs', role: 'researcher' }]);
+      const base = git(fx.project, 'rev-parse', 'HEAD');
+      git(fx.project, 'checkout', '-q', '-b', 'studio/APP-1');
+      mkdirSync(join(fx.project, 'docs', 'research'), { recursive: true });
+      writeFileSync(join(fx.project, 'docs', 'research', 'APP-1-sync.md'), text);
+      git(fx.project, 'add', 'docs');
+      git(fx.project, 'commit', '-q', '-m', 'findings');
+      git(fx.project, 'push', '-q', 'origin', 'studio/APP-1');
+      const head = git(fx.project, 'rev-parse', 'HEAD');
+      git(fx.project, 'checkout', '-q', 'main');
+      writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${head}\ntests_run: 1`);
+      const { gh } = fakeGh((l) =>
+        l.startsWith('pr view 7 --repo org/app')
+          ? {
+              stdout: JSON.stringify({
+                headRefOid: head,
+                headRefName: 'studio/APP-1',
+                baseRefOid: base,
+                ...OWN,
+              }),
+            }
+          : undefined,
+      );
+      return { fx, gh };
+    };
+
+    it('checks what the pull request adds, read in the owner checkout, not the clone', async () => {
+      const { fx, gh } = pushedDocs('# Sync\n\nlast_name: Meier\n');
+      // The clone holds a clean copy: what counts is what was pushed.
+      const docs = join(fx.state, 'clones', 'APP-1', 'docs', 'research');
+      mkdirSync(docs, { recursive: true });
+      writeFileSync(join(docs, 'APP-1-sync.md'), 'structure only\n');
+      const r = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+      expect(r.code).not.toBe(0);
+      expect(r.err).toContain('personal field with a value');
+      expect(r.err).toContain('docs/research/APP-1-sync.md:3');
+      expect(r.err).not.toContain('Meier');
+      expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+    });
+
+    it('moves a researcher pull request whose diff is structure only', async () => {
+      const { fx, gh } = pushedDocs('# Sync\n\nThe table has the columns id and name.\n');
+      // A dirty clone does not matter either: it never left the machine.
+      const docs = join(fx.state, 'clones', 'APP-1', 'docs', 'research');
+      mkdirSync(docs, { recursive: true });
+      writeFileSync(join(docs, 'scratch.md'), 'last_name: Meier\n');
+      const r = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+      expect(r.err).toBe('');
+      expect(statusOf(fx, 'APP-1')?.status).toBe('in_review');
+    });
+
+    it('opens REA classes only by the owner in a terminal, kept outside the board and the repo', async () => {
+      const fx = makeFx([{ id: 'APP-1', status: 'ready', type: 'research', role: 'researcher' }]);
+      const { ports } = fakePorts(fakeGh().gh);
+      // Bind the state root first, as any earlier studio command would.
+      await cli(fx, ports, 'state');
+      const noTerm = await cliWith(
+        fx,
+        ports,
+        { isTerminal: false },
+        'research',
+        'allow',
+        'APP-1',
+        'debug',
+      );
+      expect(noTerm.code).toBe(1);
+      expect(noTerm.err).toContain('is for the owner and needs a terminal');
+      const crew = await runCli(['--project', fx.project, 'research', 'allow', 'APP-1', 'debug'], {
+        ports,
+        stdout: () => {},
+        stderr: () => {},
+        env: { ...fx.env, STUDIO_ROLE: 'crew' },
+        homedir: fx.home,
+        cwd: fx.project,
+        isTerminal: true,
+      });
+      expect(crew).toBe(1);
+      expect(readReaAllow(fx.state)).toEqual({});
+      const typo = await cliWith(
+        fx,
+        ports,
+        { isTerminal: true },
+        'research',
+        'allow',
+        'APP-1',
+        'dbug',
+      );
+      expect(typo.code).not.toBe(0);
+      expect(readReaAllow(fx.state)).toEqual({});
+      const ok = await cliWith(
+        fx,
+        ports,
+        { isTerminal: true },
+        'research',
+        'allow',
+        'APP-1',
+        'debug,observe',
+      );
+      expect(ok.code).toBe(0);
+      expect(JSON.parse(ok.out).open).toEqual(['debug', 'observe']);
+      expect(readReaAllow(fx.state)).toEqual({ 'APP-1': ['debug', 'observe'] });
+      // Nothing of it lands on the board.
+      expect(statusOf(fx, 'APP-1')?.notes).toBeUndefined();
+      const list = await cli(fx, ports, 'research', 'list');
+      expect(JSON.parse(list.out).allowed).toEqual({ 'APP-1': ['debug', 'observe'] });
+      await cliWith(fx, ports, { isTerminal: true }, 'research', 'revoke', 'APP-1', 'debug');
+      expect(readReaAllow(fx.state)).toEqual({ 'APP-1': ['observe'] });
+      await cliWith(fx, ports, { isTerminal: true }, 'research', 'revoke', 'APP-1');
+      expect(readReaAllow(fx.state)).toEqual({});
+    });
+
+    it('removes the REA server folder of the ended run', async () => {
       const fx = makeFx([
         { id: 'APP-1', status: 'assigned', type: 'research', role: 'researcher' },
       ]);
       reportWith(fx, 'APP-1', 'Structure only.');
-      const docs = join(fx.state, 'clones', 'APP-1', 'docs', 'research');
-      mkdirSync(docs, { recursive: true });
-      writeFileSync(join(docs, 'APP-1-sync.md'), 'last_name: Meier\n');
-      const r = await collectIt(fx);
-      expect(r.err).toContain('personal field with a value');
-      expect(r.err).toContain('docs/research/APP-1-sync.md:1');
-      expect(r.err).not.toContain('Meier');
-      expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+      const run = join(fx.state, 'rea', 'APP-1', 'tmp');
+      mkdirSync(run, { recursive: true });
+      writeFileSync(join(run, 'app.apk'), 'x');
+      await collectIt(fx);
+      expect(existsSync(join(fx.state, 'rea', 'APP-1'))).toBe(false);
     });
 
     it('does not apply to other roles', async () => {

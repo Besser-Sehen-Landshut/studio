@@ -76,6 +76,10 @@
         "maxLength": 500
       }
     },
+    "rea_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
     "rea_env": {
       "default": {},
       "type": "object",

@@ -11,33 +11,56 @@ the skill and the server stay denied to every other role. Not tagged yet; the ma
 
 ### Added
 
-- `research.artifacts` in `studio.yaml` (and optional `research.rea_version`): the one analysis directory a
-  researcher's tools may read. Owner config: `research_roots` (the artifacts must lie below one; empty means
-  no project can use REA) and `rea_env` (`GHIDRA_INSTALL_DIR`, `JAVA_HOME`, `REA_*` for the server). The path
-  is checked like a toolchain path on its real path and may not be in the clone or the state root.
-- A researcher with REA gets one MCP server, `rea-agents` at an exact pinned version (default 6.7.0), written
-  into its MCP config at launch with a fixed npm cache; every other crew keeps an empty list. The skill
-  `reverse-engineer-anything` is offered to the researcher only (new matrix row) and denied by name to all other
-  roles, whatever `studio.yaml` or a row says; a researcher without a configured directory is denied it too.
+- `research.artifacts` in `studio.yaml`: the one analysis directory a researcher's tools may read. Owner
+  config: `research_roots` (the artifacts must lie below one; empty means no project can use REA),
+  `rea_version` (the exact `x.y.z` of `rea-agents` crews run; default 6.7.0) and `rea_env`
+  (`GHIDRA_INSTALL_DIR`, `JAVA_HOME`, `REA_*` for the server). The path is checked like a toolchain path on
+  its real path and may not be in the clone or the state root. The whole `research:` block of `studio.yaml`
+  is the owner's for Studio's approval: a pull request that adds, changes or removes it gets none.
+- `studio research install` (owner only, in a terminal): installs the pinned `rea-agents` once into the owner
+  state, never with `npx` and never in a crew's clone. It takes the tarball's `dist.integrity` from the npm
+  registry, runs npm without user or global config and without tokens, accepts the install only when the
+  lockfile names the registry tarball with that integrity, and records it. A launch refuses unless the record,
+  the lockfile and the installed package match the pin and nothing on the way is a link or writable by others.
+- A researcher with REA gets one MCP server: Node by its absolute path running `bin/studio-rea-server.mjs`
+  (shipped with Studio) on a spec file in the state root. The wrapper changes to an empty directory Studio
+  owns and starts the installed package with a clean environment: `PATH`, `HOME`, `TMPDIR` and `XDG_*` in
+  the run's own folder, npm config `/dev/null`, the `rea_env` names; no crew token or other crew variable.
+  That folder, where REA copies what it analyses, is denied to the crew's shell and file tools and removed by
+  `collect` and `stop`. Every other crew keeps an empty MCP list. The skill `reverse-engineer-anything` is
+  offered to the researcher only (new matrix row) and denied by name to all other roles, whatever
+  `studio.yaml` or a row says; a researcher without a configured directory is denied it too.
 - A tool allowlist, enforced by the guard (default deny, exact tool names) and mirrored by deny rules in the
   settings: static, read-only tools only. The classes `annotate`, `debug`, `observe`, `device` and `export`
-  stay denied unless the board item carries a lead-written note `rea-allow: <class>`; the shell tools of a
-  class (`gdb`, `frida`, `adb`, `tcpdump`, ...) follow the same note. Arguments are checked: paths inside the
-  analysis directory or the clone (by value, relative paths and links resolved, whatever the argument is called), only the argument names a tool's schema lists, no write arguments, databases by schema only.
+  stay denied unless the owner opens them for one item with `studio research allow <item> <class>` (in a
+  terminal, refused for crews; `research revoke` and `research list` beside it), kept in the project's state
+  root, never on the board; the shell tools of a class (`gdb`, `frida`, `adb`, `tcpdump`, ...) follow the
+  same grant. Arguments are checked: only the argument names a tool's schema lists; every path argument and
+  every path-like value absolute, in the analysis directory as written and on its real path (never the
+  clone, never relative); write arguments by the words of their name (`left_export_name` and number limits
+  are none); databases by schema only; `inspect_recorded_crash` with `include_debugger_context` only with
+  `debug`.
+- `scripts/gen-rea-schemas.mjs` generates `src/rea-schemas.ts` from the pinned server's tool list, type-aware:
+  only string arguments name a place or hold free text.
 - Bash never touches the analysis directory: it is in the sandbox's `denyRead` and `denyWrite` for every shell
   process, Read, Grep and Glob are refused by the guard, and a command naming it gets an early refusal. Only
   the REA tools, which run in the MCP server outside that sandbox, reach it.
-- A privacy check at `collect` for researcher reports and everything under `docs/research/` of the clone
-  (emails, phone-like numbers, personal fields, rows, card and account numbers, credentials, binary or
-  oversized files): one hit rejects the report and hands it to the lead with kinds and lines, never the text.
-- The brief of such a researcher: the scope, the classes allowed, target content as data (injection attempts
+- A privacy check at `collect` for researcher reports and, for a researcher's pull request, for everything
+  its diff adds over `base...head`, read in the owner's checkout (emails, phone-like numbers, personal fields,
+  rows, card and account numbers, credentials; binary, very large, linked or unreadable files): one hit
+  rejects the report and hands it to the lead with kinds and lines, never the text.
+- The brief of such a researcher: the scope, the classes opened, target content as data (injection attempts
   are reported by kind), the result as structure and where findings go (`docs/research/<id>-<slug>.md`).
-- `studio doctor` shows the REA pin and who set it, whether the analysis directory is allowed, the skill in the
-  crew config dir, the server registered there, the engine variables set (names only) and the setup command.
+- `studio doctor` shows the REA pin and who set it, whether it is installed with its integrity, whether the
+  analysis directory is allowed, the skill in the crew config dir, the server registered there, the engine
+  variables set (names only) and the setup command.
 
 ### Changed
 
-- The guard context may carry `mcpAllow`, `artifacts` and `blockedCommands`; a crew without them is unchanged.
+- A `type: research` item pushes nothing: the guard refuses every `git push` of it, and its crew gets no
+  GitHub token.
+- The guard context may carry `mcpAllow`, `artifacts`, `reaClasses`, `blockedCommands` and `noPush`; a crew
+  without them is unchanged.
 - Items that run on a worker get no REA yet.
 
 ## [0.19.0] - 2026-11-05
