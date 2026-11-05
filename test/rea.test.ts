@@ -33,6 +33,7 @@ import {
   reaToolName,
   renderReaBrief,
 } from '../src/rea.js';
+import { REA_TOOL_KEYS } from '../src/rea-schemas.js';
 import { reaState } from '../src/secret-command.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-rea-')));
@@ -165,7 +166,7 @@ describe('the guard for a researcher', () => {
 
   it('allows a static tool on a path in the analysis directory or the checkout', () => {
     expect(mcp('open_binary', { path: join(art, 'target.bin') }).decision).toBe('allow');
-    expect(mcp('search_strings', { query: '/api/v1' }).decision).toBe('allow');
+    expect(mcp('search_strings', { pattern: '/api/v1' }).decision).toBe('allow');
     expect(
       mcp('analyze_javascript_application', { input_path: art, source_paths: ['main.js'] })
         .decision,
@@ -572,5 +573,162 @@ describe('studio doctor on REA', () => {
     expect(s?.pinnedBy).toBe('studio.yaml');
     expect(s?.analysisDirectory).toMatch(/refused/);
     expect(JSON.stringify(s)).not.toContain(root);
+  });
+});
+
+describe('the guard reads values, not key names, and resolves every path', () => {
+  const dir = join(root, 'v');
+  const art = join(dir, 'art');
+  const wt = join(dir, 'wt');
+  const other = join(dir, 'other');
+  mkdirSync(join(art, 'sub'), { recursive: true });
+  mkdirSync(join(wt, 'sub'), { recursive: true });
+  mkdirSync(other, { recursive: true });
+  symlinkSync(other, join(wt, 'out'));
+  symlinkSync(other, join(art, 'sub', 'out'));
+  const ctx: GuardContext = {
+    worktree: wt,
+    ownerOnly: [],
+    deployCommands: [],
+    secretGlobs: DEFAULT_SECRET_GLOBS,
+    item: 'APP-5',
+    base: 'main',
+    ...reaGuard(art, []),
+  };
+  const mcp = (tool: string, input: Record<string, unknown>) =>
+    evaluateGuard({ toolName: reaToolName(tool), toolInput: input }, ctx);
+  const bash = (command: string, cwd?: string) =>
+    evaluateGuard({ toolName: 'Bash', toolInput: { command }, ...(cwd ? { cwd } : {}) }, ctx);
+
+  it('resolves relative paths, through links', () => {
+    expect(mcp('open_binary', { path: 'sub/x' }).decision).toBe('allow');
+    expect(mcp('open_binary', { path: 'out/x' }).decision).toBe('deny');
+    expect(mcp('open_binary', { path: '../other/x' }).decision).toBe('deny');
+    expect(mcp('open_binary', { path: join(art, 'sub', 'out', 'x') }).decision).toBe('deny');
+    expect(mcp('open_binary', { path: './out' }).decision).toBe('deny');
+    expect(mcp('open_binary', { path: join(other, 'x') }).decision).toBe('deny');
+  });
+
+  it('treats any argument of every static tool as a place when its value looks like one', () => {
+    const skipped = new Set([
+      'query',
+      'pattern',
+      'name',
+      'names',
+      'symbols',
+      'selector',
+      'class_name',
+      'method_name',
+      'type_names',
+      'mask',
+      'key',
+      'filter',
+      'filters',
+      'display_filter',
+      'decoder',
+    ]);
+    let checked = 0;
+    for (const tool of REA_STATIC_TOOLS) {
+      for (const key of REA_TOOL_KEYS[tool] ?? []) {
+        if (skipped.has(key) || /snapshot|output|export|save|dest|overwrite|write/i.test(key)) {
+          continue;
+        }
+        checked++;
+        expect(mcp(tool, { [key]: join(other, 'x') }).decision, `${tool}.${key}`).toBe('deny');
+        expect(mcp(tool, { [key]: 'out/x' }).decision, `${tool}.${key} via a link`).toBe('deny');
+        expect(mcp(tool, { [key]: `${art}/../other/x` }).decision, `${tool}.${key} ..`).toBe(
+          'deny',
+        );
+        expect(mcp(tool, { [key]: 'C:\\x\\y' }).decision, `${tool}.${key} windows`).toBe('deny');
+      }
+    }
+    expect(checked).toBeGreaterThan(100);
+  });
+
+  it('refuses an argument its schema does not list, and every write key', () => {
+    expect(mcp('open_binary', { path: join(art, 'x'), extra: 'a' }).decision).toBe('deny');
+    expect(
+      mcp('open_binary', { path: join(art, 'x'), snapshot_path: join(art, 's') }).decision,
+    ).toBe('deny');
+    expect(mcp('close_binary', { overwrite: true }).decision).toBe('deny');
+    expect(mcp('close_binary', { snapshot_path: join(wt, 's.json') }).decision).toBe('deny');
+    expect(mcp('open_binary', { path: join(art, 'x') }).decision).toBe('allow');
+  });
+
+  it('keeps a schema for every known tool and for no other', () => {
+    for (const t of REA_KNOWN_TOOLS) expect(REA_TOOL_KEYS[t], t).toBeDefined();
+    expect(Object.keys(REA_TOOL_KEYS).sort()).toEqual([...REA_KNOWN_TOOLS].sort());
+  });
+
+  it('lets only read-only inspectors take a place in the analysis directory', () => {
+    const f = join(art, 'target.bin');
+    const z = join(art, 'a.zip');
+    const t = join(art, 'a.tar');
+    for (const c of [
+      `strings ${f}`,
+      `file ${f}`,
+      `xxd ${f}`,
+      `hexdump -C ${f}`,
+      `od -x ${f}`,
+      `otool -L ${f}`,
+      `objdump -d ${f}`,
+      `readelf -h ${f}`,
+      `nm ${f}`,
+      `sha256sum ${f}`,
+      `shasum -a 256 ${f}`,
+      `ls -l ${art}`,
+      `stat ${f}`,
+      `wc -c ${f}`,
+      `head -c 64 ${f}`,
+      `tail -c 64 ${f}`,
+      `cat ${f}`,
+      `unzip -l ${z}`,
+      `tar -tf ${t}`,
+      `tar tzf ${t}`,
+      `/usr/bin/strings ${f}`,
+    ]) {
+      expect(bash(c).decision, c).toBe('allow');
+    }
+    for (const c of [
+      `python3.12 ${f}`,
+      `node22 ${f}`,
+      `python ${f}`,
+      `make -f ${f}`,
+      `gmake -C ${art}`,
+      `awk -f ${f} x`,
+      `busybox sh ${f}`,
+      `osascript ${f}`,
+      `ruby ${f}`,
+      `env ${f}`,
+      `xargs ${f}`,
+      `grep x ${f}`,
+      `unzip ${z}`,
+      `unzip -d out ${z}`,
+      `tar -xf ${t}`,
+      `tar xf ${t}`,
+      `tar -tf ${t} -C out`,
+      `tar --to-command=sh -tf ${t}`,
+      `/tmp/evil/cat ${f}`,
+      `${f}`,
+      `cd ${art}`,
+      `sed -n p ${f}`,
+      `cp ${f} .`,
+    ]) {
+      expect(bash(c).decision, c).toBe('deny');
+    }
+  });
+
+  it('applies the same rule to a command that runs inside the directory', () => {
+    expect(bash('ls', art).decision).toBe('allow');
+    expect(bash('./run', art).decision).toBe('deny');
+    expect(bash('python3 x.py', art).decision).toBe('deny');
+  });
+
+  it('refuses a runner later in a command line that touched the directory', () => {
+    const f = join(art, 'target.bin');
+    expect(bash(`strings ${f} | python3 -`).decision).toBe('deny');
+    expect(bash(`cat ${f} | node22`).decision).toBe('deny');
+    expect(bash(`cat ${f} | head -3`).decision).toBe('allow');
+    expect(bash('python3 tool.py').decision).toBe('allow');
   });
 });

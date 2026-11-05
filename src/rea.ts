@@ -11,6 +11,8 @@
  * tool is also denied by name in the settings.
  */
 
+import { REA_TOOL_KEYS } from './rea-schemas.js';
+
 /** The package whose MCP server is run; the name is fixed, only the version is pinned. */
 export const REA_PACKAGE = 'rea-agents';
 /** The version crews run unless `research.rea_version` in studio.yaml pins another. */
@@ -61,7 +63,7 @@ project_managed_application_graph read_bytes read_function_instructions
 resolve_containing_procedure resolve_native_call_targets search_android_classes search_bytes
 search_procedures search_strings trace_android_references trace_application_feature
 trace_dylib_resolution trace_feature trace_javascript_semantics trace_native_ui_action
-trace_native_values verify_managed_native_boundaries verify_reconstruction
+trace_native_values trace_call_path verify_managed_native_boundaries verify_reconstruction
 verify_unknown_resolution xrefs
 `);
 
@@ -168,14 +170,24 @@ export const REA_BLOCKED_COMMANDS: Readonly<Record<ReaClass, readonly string[]>>
 /** What the guard context carries for a researcher with REA; undefined fields are not set. */
 export interface ReaGuard {
   mcpAllow: string[];
+  mcpKeys: Record<string, string[]>;
   artifacts: string;
   blockedCommands: string[];
 }
 
 export function reaGuard(artifacts: string, classes: readonly ReaClass[]): ReaGuard {
   const open = new Set(classes);
+  const mcpAllow = reaAllowedTools(classes);
+  const prefix = reaToolName('');
   return {
-    mcpAllow: reaAllowedTools(classes),
+    mcpAllow,
+    // A tool without a known schema gets no entry, and the guard denies it.
+    mcpKeys: Object.fromEntries(
+      mcpAllow.flatMap((t) => {
+        const keys = REA_TOOL_KEYS[t.slice(prefix.length)];
+        return keys === undefined ? [] : [[t, [...keys]]];
+      }),
+    ),
     artifacts,
     blockedCommands: REA_CLASS_NAMES.filter((c) => !open.has(c)).flatMap(
       (c) => REA_BLOCKED_COMMANDS[c] as string[],

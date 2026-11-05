@@ -23,9 +23,9 @@ the skill and the server stay denied to every other role. Not tagged yet; the ma
   settings: static, read-only tools only. The classes `annotate`, `debug`, `observe`, `device` and `export`
   stay denied unless the board item carries a lead-written note `rea-allow: <class>`; the shell tools of a
   class (`gdb`, `frida`, `adb`, `tcpdump`, ...) follow the same note. Arguments are checked: paths inside the
-  analysis directory or the clone, no write arguments, databases by schema only.
+  analysis directory or the clone (by value, relative paths and links resolved, whatever the argument is called), only the argument names a tool's schema lists, no write arguments, databases by schema only.
 - The sandbox lets the researcher read the analysis directory and denies writes to it; the guard refuses to
-  start programs or scripts from it, to copy, unpack or redirect its content, and to stage it in git.
+  give it to anything but a read-only inspector (`strings`, `file`, `xxd`, `hexdump`, `od`, `otool`, `objdump`, `readelf`, `nm`, `sha256sum`, `shasum`, `ls`, `stat`, `wc`, `head`, `tail`, `cat`, `unzip -l`, `tar -t`), to run an interpreter after a command that read it, to redirect its content, and to stage it in git.
 - A privacy check at `collect` for researcher reports and everything under `docs/research/` of the clone
   (emails, phone-like numbers, personal fields, rows, card and account numbers, credentials, binary or
   oversized files): one hit rejects the report and hands it to the lead with kinds and lines, never the text.
