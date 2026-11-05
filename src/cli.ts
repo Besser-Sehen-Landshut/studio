@@ -75,7 +75,7 @@ import {
 } from './paths.js';
 import { clearPause, PAUSED_LINE, readPause, setPause } from './pause.js';
 import { type Capacity, ONE_BUILD_PER_PLAN, planAssignments } from './planner.js';
-import { type PluginPin, pinnedPlugins } from './plugins.js';
+import { type PluginPin, pinnedPlugins, unallowedPlugins } from './plugins.js';
 import type { Ports } from './ports.js';
 import {
   acquireQueueRunLock,
@@ -234,7 +234,9 @@ const LEGACY_LINE =
 
 const ACTIVE_FOR_WIP: readonly WorkItem['status'][] = ['assigned', 'in_progress'];
 
-function table(rows: string[][]): string {
+/** A plain-text table; control characters in a cell (escape sequences, newlines) become spaces. */
+function table(cells: string[][]): string {
+  const rows = cells.map((r) => r.map((cell) => cell.replace(/[\p{Cc}\p{Cf}]/gu, ' ')));
   const widths = rows[0]?.map((_, c) => Math.max(...rows.map((r) => (r[c] ?? '').length))) ?? [];
   return `${rows
     .map((r) =>
@@ -246,13 +248,23 @@ function table(rows: string[][]): string {
     .join('\n')}\n`;
 }
 
-/** The pinned plugins of the project: `plugins:` in studio.yaml over the defaults. */
-function projectPins(project: string): PluginPin[] {
+/**
+ * The pinned plugins of the project: versions from studio.yaml over the defaults, extra plugins
+ * only as the owner config allows them. A marketplace swap in studio.yaml throws; without a
+ * readable studio.yaml the defaults hold.
+ */
+function projectPins(project: string, owner: OwnerEnv): { pins: PluginPin[]; unallowed: string[] } {
+  const allowed = loadOwnerConfig(owner).allowedPlugins;
+  let configured: PluginPin[] | undefined;
   try {
-    return pinnedPlugins(loadConfig(project).plugins);
+    configured = loadConfig(project).plugins;
   } catch {
-    return pinnedPlugins();
+    configured = undefined;
   }
+  return {
+    pins: pinnedPlugins(configured, allowed),
+    unallowed: unallowedPlugins(configured, allowed),
+  };
 }
 
 function findItem(board: Board, id: string | undefined): WorkItem {
@@ -1074,6 +1086,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         ownerRoot: ownerRoot(),
         config: loadConfig(project),
         index: loadSources(),
+        allowed: loadOwnerConfig(owner).allowedPlugins,
         ports,
         owner,
         env: deps.env,
@@ -1989,7 +2002,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           json,
           isTerminal: deps.isTerminal === true,
           ...(deps.readSecret === undefined ? {} : { readSecret: deps.readSecret }),
-          pins: projectPins(project),
+          pins: () => projectPins(project, owner),
           stdout,
           stderr,
         });
@@ -2033,10 +2046,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               ...r.sources.map((x) => [`source ${x.id}`, '-', x.verdict]),
             ]),
           );
-          for (const a of r.added) stdout(`added ${a.item} (${a.key}, priority ${a.priority})\n`);
-          for (const p of r.present) stdout(`already on the board: ${p.item} (${p.key})\n`);
-          for (const id of r.raised) stdout(`raised to priority 0: ${id}\n`);
-          for (const id of r.notUsed) stdout(`not used: source ${id} (licence unknown)\n`);
+          // Keys hold versions from marketplaces: checked, and stripped of controls once more.
+          const say = (t: string) => stdout(`${t.replace(/[\p{Cc}\p{Cf}]/gu, ' ')}\n`);
+          for (const a of r.added) say(`added ${a.item} (${a.key}, priority ${a.priority})`);
+          for (const p of r.present) say(`already on the board: ${p.item} (${p.key})`);
+          for (const id of r.raised) say(`raised to priority 0: ${id}`);
+          for (const id of r.notUsed) say(`not used: source ${id} (licence unknown)`);
           for (const p of r.problems) stderr(`warning: ${p.replace(/\p{Cc}/gu, ' ')}\n`);
         }
         return 0;

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 
@@ -7,16 +7,39 @@ export const STUDIO_VERSION = '0.12.0';
 
 const HTTPS_GIT = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\.git)?$/;
 
+/** One exact version, as pins, marketplaces and the CLI must give it; anything else is dropped. */
+export const VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
+const PLUGIN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 /** One plugin crews need, at a fixed version: `name@marketplace`, never a version range. */
 export const pluginPinSchema = z.strictObject({
-  name: z
-    .string()
-    .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/, 'must be name@marketplace'),
-  version: z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/, 'must be one exact version'),
-  // Where the marketplace comes from; only needed for one `setup-plugins` must add.
+  name: z.string().regex(PLUGIN_ID_RE, 'must be name@marketplace'),
+  version: z.string().regex(VERSION_RE, 'must be one exact version'),
+  // Must match the default's or the owner's marketplace: a project cannot bring its own.
   marketplace: z.string().regex(HTTPS_GIT, 'must be a GitHub https URL').optional(),
 });
 export type PluginPin = z.infer<typeof pluginPinSchema>;
+
+/**
+ * A plugin and marketplace the owner allows beyond the defaults, in the owner config
+ * (`allowed_plugins`), outside every repository: a project's studio.yaml can pin it, never add it.
+ */
+export const allowedPluginSchema = z.strictObject({
+  name: z.string().regex(PLUGIN_ID_RE, 'must be name@marketplace'),
+  marketplace: z.string().regex(HTTPS_GIT, 'must be a GitHub https URL'),
+});
+export type AllowedPlugin = z.infer<typeof allowedPluginSchema>;
+
+/** A project config that tries to change where a plugin comes from. */
+export class PluginTrustError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PluginTrustError';
+  }
+}
+
+/** Shown in place of a version that is no plain version: the text itself never is. */
+export const INVALID_VERSION = '(not a plain version)';
 
 /** What Studio needs in a crew config dir when `plugins:` in studio.yaml names nothing else. */
 export const DEFAULT_PLUGINS: readonly PluginPin[] = [
@@ -32,14 +55,48 @@ export const DEFAULT_PLUGINS: readonly PluginPin[] = [
   },
 ];
 
-/** The defaults with the configured pins over them, by name; extra pins are added. */
-export function pinnedPlugins(configured: readonly PluginPin[] = []): PluginPin[] {
+/**
+ * The defaults with the project's versions over them. studio.yaml is repository content: it may
+ * pin a version, never change a marketplace (that throws), and an extra plugin counts only when
+ * the owner config allows it, with the owner's marketplace; one that is not allowed is left out.
+ */
+export function pinnedPlugins(
+  configured: readonly PluginPin[] = [],
+  allowed: readonly AllowedPlugin[] = [],
+): PluginPin[] {
+  const swap = (name: string, want: string | undefined, got: string | undefined) => {
+    if (got !== undefined && got !== want) {
+      throw new PluginTrustError(
+        `studio.yaml may not change the marketplace of ${name}; a marketplace comes from the defaults or from allowed_plugins in the owner config`,
+      );
+    }
+  };
   const out: PluginPin[] = DEFAULT_PLUGINS.map((d) => {
     const own = configured.find((c) => c.name === d.name);
-    return own === undefined ? { ...d } : { ...d, ...own };
+    swap(d.name, d.marketplace, own?.marketplace);
+    return own === undefined ? { ...d } : { ...d, version: own.version };
   });
-  for (const c of configured) if (!out.some((o) => o.name === c.name)) out.push({ ...c });
+  for (const c of configured) {
+    if (out.some((o) => o.name === c.name)) continue;
+    const owner = allowed.find((a) => a.name === c.name);
+    if (owner === undefined) continue;
+    swap(c.name, owner.marketplace, c.marketplace);
+    out.push({ name: c.name, version: c.version, marketplace: owner.marketplace });
+  }
   return out;
+}
+
+/** Extra plugins studio.yaml names that the owner config does not allow: never installed. */
+export function unallowedPlugins(
+  configured: readonly PluginPin[] = [],
+  allowed: readonly AllowedPlugin[] = [],
+): string[] {
+  return configured
+    .filter(
+      (c) =>
+        !DEFAULT_PLUGINS.some((d) => d.name === c.name) && !allowed.some((a) => a.name === c.name),
+    )
+    .map((c) => c.name);
 }
 
 /** What `studio account setup-plugins` runs: each marketplace once, then each plugin. */
@@ -51,8 +108,11 @@ export function pluginCommands(pins: readonly PluginPin[]): string[][] {
   ];
 }
 
+/** A version from outside Studio: kept only when it is a plain version. */
 const asVersion = (v: unknown): string | undefined =>
-  typeof v === 'string' && v !== '' && v.length <= 64 ? v : undefined;
+  typeof v === 'string' && VERSION_RE.test(v) ? v : undefined;
+const recorded = (v: unknown): string | undefined =>
+  v === undefined || v === null ? undefined : (asVersion(v) ?? INVALID_VERSION);
 
 /**
  * The version Claude Code recorded for each installed plugin in
@@ -71,16 +131,46 @@ export function installedVersions(configDir: string): Map<string, string> | unde
   const plugins = (raw as { plugins?: unknown } | null)?.plugins;
   if (plugins === null || typeof plugins !== 'object' || Array.isArray(plugins)) return undefined;
   const out = new Map<string, string>();
-  for (const [id, entry] of Object.entries(plugins as Record<string, unknown>)) {
-    const list = (Array.isArray(entry) ? entry : [entry]) as {
-      scope?: unknown;
-      version?: unknown;
-    }[];
-    const pick = list.find((e) => e?.scope === 'user') ?? list[0];
-    const v = asVersion(pick?.version);
+  for (const { id, entry } of pluginEntries(plugins as Record<string, unknown>)) {
+    const v = recorded(entry.version);
     if (v !== undefined) out.set(id, v);
   }
   return out;
+}
+
+type Entry = { scope?: unknown; version?: unknown; installPath?: unknown };
+
+/** One entry per plugin id: the user scope wins. */
+function pluginEntries(plugins: Record<string, unknown>): { id: string; entry: Entry }[] {
+  const out: { id: string; entry: Entry }[] = [];
+  for (const [id, raw] of Object.entries(plugins)) {
+    const list = (Array.isArray(raw) ? raw : [raw]) as (Entry | null)[];
+    const entry = list.find((e) => e?.scope === 'user') ?? list[0];
+    if (entry !== null && typeof entry === 'object') out.push({ id, entry });
+  }
+  return out;
+}
+
+/** Where each installed plugin lives, from `installed_plugins.json` (`installPath`). */
+function installPaths(configDir: string): { plugin: string; dir: string }[] {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(join(configDir, 'plugins', 'installed_plugins.json'), 'utf8'));
+  } catch {
+    return [];
+  }
+  const plugins = (raw as { plugins?: unknown } | null)?.plugins;
+  if (plugins === null || typeof plugins !== 'object' || Array.isArray(plugins)) return [];
+  return pluginEntries(plugins as Record<string, unknown>).flatMap(({ id, entry }) =>
+    typeof entry.installPath === 'string' && entry.installPath !== ''
+      ? [
+          {
+            plugin: id.slice(0, id.indexOf('@') < 0 ? id.length : id.indexOf('@')),
+            dir: entry.installPath,
+          },
+        ]
+      : [],
+  );
 }
 
 /** Why a launch must not start: a pinned plugin is installed at another version. */
@@ -108,8 +198,8 @@ export function listedVersions(stdout: string): Map<string, string> | undefined 
   if (!Array.isArray(list)) return undefined;
   const out = new Map<string, string>();
   for (const e of list as { id?: unknown; version?: unknown }[]) {
-    const v = asVersion(e?.version);
-    if (typeof e?.id === 'string' && v !== undefined) out.set(e.id, v);
+    const v = recorded(e?.version);
+    if (typeof e?.id === 'string' && PLUGIN_ID_RE.test(e.id) && v !== undefined) out.set(e.id, v);
   }
   return out;
 }
@@ -118,12 +208,17 @@ const ADVISORY = /\b(security|vulnerab\w*|CVE-\d{4}-\d+|GHSA-[\w-]+|advisory)\b/
 
 /**
  * What the marketplaces offer, from `claude plugin list --json --available` (`available[]` with
- * `pluginId` and the entry's `version`, when it declares one). An entry whose text names an
- * advisory, or that says `security: true`, counts as a security update.
+ * `pluginId` and the entry's `version`, when it declares one). Marketplace data is untrusted: an
+ * entry whose id or version is not plain is dropped and named under `dropped` (by its id when that
+ * is plain). An entry whose text names an advisory, or that says `security: true`, counts as a
+ * security update.
  */
-export function availableVersions(
-  stdout: string,
-): Map<string, { version: string; security: boolean }> | undefined {
+export function availableVersions(stdout: string):
+  | {
+      offered: Map<string, { version: string; security: boolean }>;
+      dropped: string[];
+    }
+  | undefined {
   let raw: unknown;
   try {
     raw = JSON.parse(stdout);
@@ -132,16 +227,23 @@ export function availableVersions(
   }
   const list = Array.isArray(raw) ? [] : (raw as { available?: unknown } | null)?.available;
   if (!Array.isArray(list)) return undefined;
-  const out = new Map<string, { version: string; security: boolean }>();
+  const offered = new Map<string, { version: string; security: boolean }>();
+  const dropped: string[] = [];
   for (const e of list as Record<string, unknown>[]) {
-    const v = asVersion(e?.version);
-    if (typeof e?.pluginId !== 'string' || v === undefined) continue;
+    if (e === null || typeof e !== 'object' || e.version === undefined) continue;
+    const id =
+      typeof e.pluginId === 'string' && PLUGIN_ID_RE.test(e.pluginId) ? e.pluginId : undefined;
+    const v = asVersion(e.version);
+    if (id === undefined || v === undefined) {
+      dropped.push(id ?? '(an entry without a plain id)');
+      continue;
+    }
     const text = Object.values(e)
       .filter((x) => typeof x === 'string')
       .join(' ');
-    out.set(e.pluginId, { version: v, security: e.security === true || ADVISORY.test(text) });
+    offered.set(id, { version: v, security: e.security === true || ADVISORY.test(text) });
   }
-  return out;
+  return { offered, dropped };
 }
 
 /**
@@ -164,41 +266,102 @@ export function compareVersions(a: string, b: string): number {
 }
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const MAX_SKILL_BYTES = 256 * 1024;
 
-const names = (dir: string): string[] => {
+const entriesOf = (dir: string): string[] => {
   try {
-    return readdirSync(dir).filter((n) => NAME.test(n));
+    return readdirSync(dir);
   } catch {
     return [];
   }
 };
 
-/** Skills in `dir/skills/<n>/SKILL.md` and commands in `dir/commands/<n>.md`. */
-function skillsIn(dir: string): string[] {
-  return [
-    ...names(join(dir, 'skills')).filter((n) => existsSync(join(dir, 'skills', n, 'SKILL.md'))),
-    ...names(join(dir, 'commands'))
-      .filter((n) => n.endsWith('.md'))
-      .map((n) => n.slice(0, -3))
-      .filter((n) => NAME.test(n)),
-  ];
+const isDir = (p: string): boolean => {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+/** The `name:` of a SKILL.md front matter, unquoted; undefined when there is none. */
+export function frontmatterName(file: string): string | undefined {
+  let text: string;
+  try {
+    if (statSync(file).size > MAX_SKILL_BYTES) return undefined;
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
+  }
+  const head = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1];
+  const m = head === undefined ? null : /^name:[ \t]*(.*?)[ \t]*$/m.exec(head);
+  if (m === null) return undefined;
+  return (m[1] ?? '').replace(/^(["'])(.*)\1$/, '$2');
+}
+
+interface Found {
+  names: Set<string>;
+  /** Where a skill sits whose name cannot become a `Skill(...)` rule. */
+  invalid: string[];
 }
 
 /**
- * Every skill a crew could invoke from this config dir: user skills by name, plugin skills and
- * commands as `<plugin>:<name>` from the plugin cache (`cache/<marketplace>/<plugin>/<version>`).
+ * Skills in `dir/skills/<d>/SKILL.md`, named by their front matter (else the directory), and
+ * commands in `dir/commands/<n>.md`, each with `prefix` (a plugin name and a colon).
  */
-export function installedSkills(configDir: string): string[] {
-  const out = new Set(skillsIn(configDir));
+function collect(dir: string, prefix: string, found: Found): void {
+  const add = (name: string, where: string) => {
+    if (NAME.test(name)) found.names.add(`${prefix}${name}`);
+    else found.invalid.push(where);
+  };
+  const skills = join(dir, 'skills');
+  for (const d of entriesOf(skills)) {
+    const file = join(skills, d, 'SKILL.md');
+    if (!isDir(join(skills, d)) || !existsSync(file)) continue;
+    const name = frontmatterName(file);
+    add(name ?? d, join(skills, d));
+    // The directory name is a second way in; deny it too where it is one.
+    if (name !== undefined && name !== d && NAME.test(d)) found.names.add(`${prefix}${d}`);
+  }
+  const commands = join(dir, 'commands');
+  for (const f of entriesOf(commands)) {
+    if (f.endsWith('.md')) add(f.slice(0, -3), join(commands, f));
+  }
+}
+
+/**
+ * Every skill a crew could invoke from this config dir: user skills, and plugin skills and
+ * commands as `<plugin>:<name>`, from the install paths `installed_plugins.json` records and from
+ * the plugin cache (`cache/<marketplace>/<plugin>/<version>`). `invalid` names every one whose name
+ * no deny rule can hold: a launch refuses then, rather than leave it open.
+ */
+export function installedSkills(configDir: string): { names: string[]; invalid: string[] } {
+  const found: Found = { names: new Set(), invalid: [] };
+  collect(configDir, '', found);
+  const roots: { plugin: string; dir: string }[] = [...installPaths(configDir)];
   const cache = join(configDir, 'plugins', 'cache');
-  for (const market of names(cache)) {
-    for (const plugin of names(join(cache, market))) {
-      for (const version of names(join(cache, market, plugin))) {
-        for (const s of skillsIn(join(cache, market, plugin, version))) out.add(`${plugin}:${s}`);
+  for (const market of entriesOf(cache)) {
+    if (!isDir(join(cache, market))) continue;
+    for (const plugin of entriesOf(join(cache, market))) {
+      if (!isDir(join(cache, market, plugin))) continue;
+      for (const version of entriesOf(join(cache, market, plugin))) {
+        const dir = join(cache, market, plugin, version);
+        if (isDir(dir)) roots.push({ plugin, dir });
       }
     }
   }
-  return [...out];
+  for (const r of roots) {
+    const sub: Found = { names: new Set(), invalid: [] };
+    collect(r.dir, '', sub);
+    if (sub.names.size === 0 && sub.invalid.length === 0) continue;
+    if (!NAME.test(r.plugin)) {
+      found.invalid.push(r.dir);
+      continue;
+    }
+    for (const n of sub.names) found.names.add(`${r.plugin}:${n}`);
+    found.invalid.push(...sub.invalid);
+  }
+  return { names: [...found.names], invalid: [...new Set(found.invalid)] };
 }
 
 const last = (s: string): string => s.slice(s.lastIndexOf(':') + 1);
@@ -225,7 +388,18 @@ export function skillDenyRules(
   denied: readonly string[],
 ): string[] {
   const out = new Set<string>();
-  for (const s of installedSkills(configDir)) if (!named(s, allowed)) out.add(s);
+  const { names, invalid } = installedSkills(configDir);
+  if (invalid.length > 0) throw new Error(undeniableLine(configDir, invalid));
+  for (const s of names) if (!named(s, allowed)) out.add(s);
   for (const d of denied) if (plain(d)) out.add(d);
   return [...out].map((s) => `Skill(${s})`);
+}
+
+/** Why a launch refuses: installed skills no deny rule can name could be invoked unseen. */
+export function undeniableLine(configDir: string, invalid: readonly string[]): string {
+  const shown = invalid
+    .slice(0, 5)
+    .map((p) => JSON.stringify(p.replace(/[\p{Cc}\p{Cf}]/gu, '?').slice(0, 200)))
+    .join(', ');
+  return `installed skills in ${configDir} have names a deny rule cannot hold (${shown}${invalid.length > 5 ? `, ${invalid.length - 5} more` : ''}); a crew could invoke them outside its brief: rename them to letters, digits, dot, dash and underscore, or remove them, then launch again`;
 }

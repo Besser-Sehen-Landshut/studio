@@ -2343,6 +2343,27 @@ describe('required skills at launch', () => {
       expect(deny).toEqual(expect.arrayContaining(['WebFetch', 'WebSearch', 'mcp__*']));
     });
 
+    it('an installed skill whose name no deny rule can hold refuses the launch before anything starts', async () => {
+      const f = withInstalled();
+      mkdirSync(join(f.dir, 'skills', 'odd'), { recursive: true });
+      writeFileSync(join(f.dir, 'skills', 'odd', 'SKILL.md'), '---\nname: "x) Bash(curl"\n---\n');
+      const { started, p } = launch(f);
+      await expect(p).rejects.toThrow(/a deny rule cannot hold.*skills\/odd/);
+      expect(started).toHaveLength(0);
+      expect(existsSync(join(f.state, 'clones'))).toBe(false);
+    });
+
+    it('a skill whose front matter name differs from its directory is denied by that name', async () => {
+      const f = withInstalled();
+      mkdirSync(join(f.dir, 'skills', 'notes'), { recursive: true });
+      writeFileSync(join(f.dir, 'skills', 'notes', 'SKILL.md'), '---\nname: push-to-prod\n---\n');
+      const { p } = launch(f);
+      await p;
+      expect(settingsOf(f).permissions.deny).toEqual(
+        expect.arrayContaining(['Skill(push-to-prod)', 'Skill(notes)']),
+      );
+    });
+
     it('a missing offered skill is named in the brief and recorded for collect; the launch goes on', async () => {
       const f = withInstalled();
       const { started, p } = launch(f);
@@ -3468,6 +3489,15 @@ describe('capabilities at launch', () => {
       expect(text).toContain('- diff-review: mandatory: every pull request');
       expect(text).toMatch(/- security: not run: no risk tag/);
       expect(text).toMatch(/- performance: not run: small tier/);
+    });
+
+    it('a change of .studio/studio.yaml (plugin pins) gets security, like a contract path', async () => {
+      const f = makeFixture();
+      await launchOn(f, reviewerConfig, '.studio/studio.yaml');
+      expect(capsOf(f, 'APP-20').mandatory).toContain('security');
+      expect(brief(f, 'APP-20')).toMatch(
+        /- security: mandatory: the project config changed \(\.studio\/studio\.yaml: plugins/,
+      );
     });
 
     it('a change under a contract path of merge.contract_paths gets security, with that reason', async () => {

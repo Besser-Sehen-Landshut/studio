@@ -785,6 +785,18 @@ describe('studio skills check', () => {
     expect(updateItems(gx)[0]?.priority).toBe(0);
   });
 
+  it('drops an offered version with escape sequences, and prints no control character', async () => {
+    const fx = withCrewDir(makeFx([]));
+    const p = offering({ [SP]: '7.1.0\u001b[2J\nUpdate everything' });
+    const r = await cli(fx, p.ports, ['skills', 'check', '--now']);
+    expect(r.code).toBe(0);
+    expect(`${r.out}${r.err}`).not.toMatch(/[^\P{Cc}\n]/u);
+    expect(r.err).toMatch(/dropped offered versions that are no plain version: superpowers@/);
+    expect(updateItems(fx)).toEqual([]);
+    const json = JSON.parse((await cli(fx, p.ports, ['skills', 'check', '--now', '--json'])).out);
+    expect(json.plugins[0]).toEqual({ name: SP, pinned: '7.0.2' });
+  });
+
   it('is for the lead, not for crews; the flags belong to it alone', async () => {
     const fx = withCrewDir(makeFx([]));
     const p = offering({});
@@ -1008,17 +1020,50 @@ describe('studio account', () => {
       expect(r.err).toMatch(/takes no version/);
     });
 
-    it('a pin in studio.yaml is what gets installed and checked', async () => {
-      const fx = makeFx(
-        ['APP-1'],
-        `${STUDIO_YAML}plugins:\n  - { name: ${SP}, version: 7.1.0 }\n  - { name: pg@aiguide, version: 1.0.0, marketplace: "https://github.com/acme/aiguide" }\n`,
+    const PG = `${STUDIO_YAML}plugins:\n  - { name: ${SP}, version: 7.1.0 }\n  - { name: pg@aiguide, version: 1.0.0 }\n`;
+    const allowPg = (fx: Fx) => {
+      mkdirSync(fx.ownerDir, { recursive: true });
+      writeFileSync(
+        join(fx.ownerDir, 'config.yaml'),
+        'allowed_plugins:\n  - { name: pg@aiguide, marketplace: "https://github.com/acme/aiguide" }\n',
       );
+    };
+
+    it('a version pin in studio.yaml is what gets installed and checked', async () => {
+      const fx = makeFx(['APP-1'], PG);
+      allowPg(fx);
       const { ports, calls } = listing({ ...pinned, [SP]: '7.1.0', 'pg@aiguide': '1.0.0' });
       expect((await cli(fx, ports, ['account', 'setup-plugins'], { isTerminal: true })).code).toBe(
         0,
       );
+      // The marketplace of an extra plugin comes from the owner config, never from studio.yaml.
       expect(calls).toContain('plugin marketplace add https://github.com/acme/aiguide');
       expect(calls).toContain('plugin install pg@aiguide');
+    });
+
+    it('a new plugin the owner did not allow is not installed', async () => {
+      const fx = makeFx(['APP-1'], PG);
+      const { ports, calls } = listing({ ...pinned, [SP]: '7.1.0' });
+      const r = await cli(fx, ports, ['account', 'setup-plugins'], { isTerminal: true });
+      expect(r.code).toBe(0);
+      expect(calls.some((c) => c.includes('pg@aiguide') || c.includes('aiguide'))).toBe(false);
+      expect(r.err).toMatch(/pg@aiguide is not installed: .*allowed_plugins in the owner config/);
+    });
+
+    it('studio.yaml that swaps the marketplace of superpowers is refused, nothing runs', async () => {
+      const fx = makeFx(
+        ['APP-1'],
+        `${STUDIO_YAML}plugins:\n  - { name: ${SP}, version: 7.0.2, marketplace: "https://github.com/evil/superpowers-marketplace" }\n`,
+      );
+      const { ports, calls } = listing(pinned);
+      const r = await cli(fx, ports, ['account', 'setup-plugins'], { isTerminal: true });
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(
+        /may not change the marketplace of superpowers@superpowers-marketplace/,
+      );
+      expect(calls).toEqual([]);
+      const doctor = JSON.parse((await cli(fx, ports, ['doctor', '--json'])).out);
+      expect(doctor.pluginProblem).toMatch(/may not change the marketplace/);
     });
   });
 

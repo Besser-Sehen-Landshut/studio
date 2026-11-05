@@ -6,14 +6,17 @@ import {
   availableVersions,
   compareVersions,
   DEFAULT_PLUGINS,
+  INVALID_VERSION,
   installedSkills,
   installedVersions,
   listedVersions,
+  PluginTrustError,
   pinMismatch,
   pinnedPlugins,
   pluginCommands,
   STUDIO_VERSION,
   skillDenyRules,
+  unallowedPlugins,
 } from '../src/plugins.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-plugins-')));
@@ -24,7 +27,7 @@ const dir = () => {
   mkdirSync(d);
   return d;
 };
-const put = (file: string, text = '---\nname: x\n---\n') => {
+const put = (file: string, text = '---\ndescription: x\n---\n') => {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, text);
 };
@@ -50,18 +53,54 @@ describe('pinned plugins', () => {
     expect(DEFAULT_PLUGINS.find((p) => p.name.startsWith('studio@'))?.version).toBe(STUDIO_VERSION);
     for (const p of DEFAULT_PLUGINS) expect(p.version).toMatch(/^\d+\.\d+\.\d+$/);
   });
-  it('a configured pin replaces the default of the same name; others are added', () => {
-    const pins = pinnedPlugins([
+  it('a configured pin sets the version of a default; an extra counts only as the owner allows it', () => {
+    const configured = [
       { name: 'superpowers@superpowers-marketplace', version: '7.1.0' },
       { name: 'pg@aiguide', version: '1.2.3' },
-    ]);
-    expect(pins.map((p) => `${p.name} ${p.version}`)).toEqual([
+    ];
+    expect(pinnedPlugins(configured).map((p) => `${p.name} ${p.version}`)).toEqual([
       'superpowers@superpowers-marketplace 7.1.0',
       `studio@studio-marketplace ${STUDIO_VERSION}`,
-      'pg@aiguide 1.2.3',
     ]);
-    // The marketplace of a default stays when the pin names none.
-    expect(pins[0]?.marketplace).toMatch(/^https:\/\//);
+    expect(unallowedPlugins(configured)).toEqual(['pg@aiguide']);
+    const owner = [{ name: 'pg@aiguide', marketplace: 'https://github.com/acme/aiguide' }];
+    const pins = pinnedPlugins(configured, owner);
+    expect(pins.at(-1)).toEqual({
+      name: 'pg@aiguide',
+      version: '1.2.3',
+      marketplace: 'https://github.com/acme/aiguide',
+    });
+    expect(unallowedPlugins(configured, owner)).toEqual([]);
+    // The marketplace of a default stays.
+    expect(pins[0]?.marketplace).toBe('https://github.com/obra/superpowers-marketplace.git');
+  });
+  it('studio.yaml cannot swap the marketplace of a default or of an allowed plugin', () => {
+    expect(() =>
+      pinnedPlugins([
+        {
+          name: 'superpowers@superpowers-marketplace',
+          version: '7.0.2',
+          marketplace: 'https://github.com/evil/superpowers-marketplace',
+        },
+      ]),
+    ).toThrow(PluginTrustError);
+    const owner = [{ name: 'pg@aiguide', marketplace: 'https://github.com/acme/aiguide' }];
+    expect(() =>
+      pinnedPlugins(
+        [{ name: 'pg@aiguide', version: '1.0.0', marketplace: 'https://github.com/evil/aiguide' }],
+        owner,
+      ),
+    ).toThrow(/may not change the marketplace of pg@aiguide/);
+    // Naming the same marketplace is fine.
+    expect(
+      pinnedPlugins([
+        {
+          name: 'superpowers@superpowers-marketplace',
+          version: '7.0.2',
+          marketplace: 'https://github.com/obra/superpowers-marketplace.git',
+        },
+      ]),
+    ).toHaveLength(2);
   });
   it('setup commands add each marketplace once over HTTPS, then install each plugin', () => {
     const cmds = pluginCommands(DEFAULT_PLUGINS);
@@ -132,15 +171,38 @@ describe('installed versions', () => {
         { pluginId: 'other@m', description: 'no version' },
       ],
     });
-    const a = availableVersions(out);
+    const a = availableVersions(out)?.offered;
     expect(a?.get('superpowers@superpowers-marketplace')).toEqual({
       version: '7.1.0',
       security: false,
     });
     expect(a?.get('studio@studio-marketplace')).toEqual({ version: '0.12.1', security: true });
     expect(a?.has('other@m')).toBe(false);
-    expect(availableVersions('[]')?.size).toBe(0);
+    expect(availableVersions('[]')?.offered.size).toBe(0);
     expect(availableVersions('nope')).toBeUndefined();
+  });
+  it('a version or id with escape sequences or newlines is dropped and named, never kept', () => {
+    const out = JSON.stringify({
+      available: [
+        { pluginId: 'superpowers@superpowers-marketplace', version: '7.1.0\u001b[2J\nrm -rf' },
+        { pluginId: 'evil@m\u001b[31m', version: '1.0.0' },
+        { pluginId: 'ok@m', version: '1.0.0' },
+      ],
+    });
+    const a = availableVersions(out);
+    expect([...(a?.offered.keys() ?? [])]).toEqual(['ok@m']);
+    expect(a?.dropped).toEqual([
+      'superpowers@superpowers-marketplace',
+      '(an entry without a plain id)',
+    ]);
+    const listed = listedVersions(
+      JSON.stringify([{ id: 'superpowers@superpowers-marketplace', version: '7\n\u001b[0m' }]),
+    );
+    expect(listed?.get('superpowers@superpowers-marketplace')).toBe(INVALID_VERSION);
+    const d = dir();
+    installed(d, { 'superpowers@superpowers-marketplace': { version: '7.0.2\u001b]0;x\u0007' } });
+    expect(installedVersions(d)?.get('superpowers@superpowers-marketplace')).toBe(INVALID_VERSION);
+    expect(pinMismatch(d, DEFAULT_PLUGINS)).not.toMatch(/\p{Cc}/u);
   });
   it('compares versions by number, a text version only for equality', () => {
     expect(compareVersions('7.10.0', '7.9.1')).toBeGreaterThan(0);
@@ -155,8 +217,7 @@ describe('installed skills and the deny list', () => {
   const setup = () => {
     const d = dir();
     put(join(d, 'skills', 'ux-ui-design', 'SKILL.md'));
-    put(join(d, 'skills', 'my-own', 'SKILL.md'));
-    put(join(d, 'skills', 'bad name(x)', 'SKILL.md'));
+    put(join(d, 'skills', 'my-own', 'SKILL.md'), '---\nname: my-own\n---\n');
     const cache = join(d, 'plugins', 'cache', 'superpowers-marketplace', 'superpowers', '7.0.2');
     put(join(cache, 'skills', 'test-driven-development', 'SKILL.md'));
     put(join(cache, 'skills', 'brainstorming', 'SKILL.md'));
@@ -168,7 +229,7 @@ describe('installed skills and the deny list', () => {
     return d;
   };
   it('lists user skills by name and plugin skills and commands with their plugin', () => {
-    expect(installedSkills(setup()).sort()).toEqual([
+    expect(installedSkills(setup()).names.sort()).toEqual([
       'my-own',
       'studio:studio-crew',
       'studio:studio-lead',
@@ -178,7 +239,37 @@ describe('installed skills and the deny list', () => {
       'superpowers:write-plan',
       'ux-ui-design',
     ]);
-    expect(installedSkills(dir())).toEqual([]);
+    expect(installedSkills(dir())).toEqual({ names: [], invalid: [] });
+  });
+  it('a skill is named by its front matter; the directory name is denied too', () => {
+    const d = setup();
+    put(
+      join(d, 'skills', 'harmless-dir', 'SKILL.md'),
+      '---\nname: "deploy-prod"\ndescription: x\n---\n',
+    );
+    const { names } = installedSkills(d);
+    expect(names).toContain('deploy-prod');
+    expect(names).toContain('harmless-dir');
+    const rules = skillDenyRules(d, ['studio:studio-crew', 'harmless-dir'], []);
+    expect(rules).toContain('Skill(deploy-prod)');
+  });
+  it('plugin skills are found where installed_plugins.json says, not only in the cache', () => {
+    const d = setup();
+    const elsewhere = join(d, 'plugins', 'local', 'tools');
+    put(join(elsewhere, 'skills', 'wipe', 'SKILL.md'), '---\nname: wipe-disk\n---\n');
+    installed(d, { 'tools@local': [{ scope: 'user', version: '1.0.0', installPath: elsewhere }] });
+    expect(installedSkills(d).names).toContain('tools:wipe-disk');
+    expect(skillDenyRules(d, ['studio:studio-crew'], [])).toContain('Skill(tools:wipe-disk)');
+  });
+  it.each([
+    ['a directory with spaces and parentheses', 'bad name(x)', '---\nname: x y\n---\n'],
+    ['a front matter name a rule cannot hold', 'fine', '---\nname: "a) Bash(rm -rf"\n---\n'],
+    ['a hidden directory', '.hidden', '---\n---\n'],
+  ])('an installed skill with %s refuses: fail closed, never skipped', (_, dirName, text) => {
+    const d = setup();
+    put(join(d, 'skills', dirName, 'SKILL.md'), text);
+    expect(installedSkills(d).invalid).toEqual([join(d, 'skills', dirName)]);
+    expect(() => skillDenyRules(d, [], [])).toThrow(/a deny rule cannot hold/);
   });
   it('denies every installed skill the matrix does not name, and the denied ones', () => {
     const rules = skillDenyRules(

@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { globProblem } from './glob.js';
-import { pluginPinSchema } from './plugins.js';
+import { allowedPluginSchema, pluginPinSchema } from './plugins.js';
 
 export { globProblem };
 
@@ -311,6 +311,9 @@ export const ownerConfigSchema = z.strictObject({
   // boundary (SECURITY.md). Off: Studio opens a crew's pull request itself.
   crewAllowMacosTrustService: z.boolean().default(false),
   crewLabelLimits: crewLabelLimitsSchema,
+  // Plugins and their marketplaces beyond Studio's defaults that a project's studio.yaml may pin.
+  // They live here, outside every repository: a project cannot bring a marketplace of its own.
+  allowedPlugins: z.array(allowedPluginSchema).default([]),
   // Push notifications: an absolute executable that gets each message in its environment (see
   // README). It lives here, not in studio.yaml, because it runs on the owner's machine.
   notify: z

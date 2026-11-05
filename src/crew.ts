@@ -63,7 +63,13 @@ import {
   writeStateFile,
 } from './paths.js';
 import { PAUSED_LINE, readPause } from './pause.js';
-import { pinMismatch, pinnedPlugins, skillDenyRules } from './plugins.js';
+import {
+  installedSkills,
+  pinMismatch,
+  pinnedPlugins,
+  skillDenyRules,
+  undeniableLine,
+} from './plugins.js';
 import type { Ports } from './ports.js';
 import { newReportName } from './report.js';
 import { readCrewCaps, renderReviewRoutine } from './review.js';
@@ -1173,8 +1179,14 @@ async function launchCrewLocked(
   ]);
   if (missingSkill) throw new Error(missingSkill);
   // The plugins crews run with are pinned: another installed version refuses, before anything.
-  const pinOff = pinMismatch(claudeConfigDir, pinnedPlugins(config.plugins));
+  const pinOff = pinMismatch(
+    claudeConfigDir,
+    pinnedPlugins(config.plugins, ownerConfig.allowedPlugins),
+  );
   if (pinOff) throw new Error(pinOff);
+  // A skill no deny rule can name would stay open to the crew: refuse before anything starts.
+  const undeniable = installedSkills(claudeConfigDir).invalid;
+  if (undeniable.length > 0) throw new Error(undeniableLine(claudeConfigDir, undeniable));
   const clonePath = join(stateRoot, 'clones', item.id);
   // A run stopped at a limit or a block keeps its work: never let prepareCheckout replace that clone.
   if (

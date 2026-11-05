@@ -86,6 +86,8 @@ const isGithubPath = (p: string): boolean => {
  */
 const isCiItem = (i: WorkItem): boolean => [...i.paths, ...i.touches].some(isGithubPath);
 const GIT_FETCH_MS = 120_000;
+/** The project config in the repository; a change to it always gets the security analyzer. */
+const STUDIO_CONFIG = '.studio/studio.yaml';
 const GIT_LOCAL_MS = 60_000;
 
 /**
@@ -251,10 +253,13 @@ export async function resolveForItem(o: {
       : config.merge.contractPaths.filter(
           (g) => globProblem(g) !== undefined || (facts?.files ?? []).some((f) => matchGlob(g, f)),
         );
+  // The project config holds the plugin pins, the sandbox and the roles: a change is one of trust.
+  const configChange =
+    paths !== 'unknown' && (facts?.files ?? []).some((f) => f.toLowerCase() === STUDIO_CONFIG);
   const triggers = [
     ...itemTriggers(item),
     ...(round > 0 ? ['after-fix'] : []),
-    ...(contractHits.length > 0 ? ['contract-change'] : []),
+    ...(contractHits.length > 0 || configChange ? ['contract-change'] : []),
   ];
   const first = resolveSkills(item, item.role, stack, paths, phase, { ...base, triggers });
   const { tier, reasons } = reviewTier(
@@ -268,7 +273,7 @@ export async function resolveForItem(o: {
     tier,
   });
   const securityWhy = resolved.analyzers.some((a) => a.id === 'security')
-    ? securityReason(item, paths, contractHits, triggers)
+    ? securityReason(item, paths, contractHits, triggers, configChange)
     : undefined;
   return {
     resolved,
@@ -304,8 +309,12 @@ function securityReason(
   paths: ChangedPaths,
   contractHits: readonly string[],
   triggers: readonly string[],
+  configChange: boolean,
 ): string {
   const why: string[] = [];
+  if (configChange) {
+    why.push(`the project config changed (${STUDIO_CONFIG}: plugins, sandbox, roles)`);
+  }
   const risky = (item.risk ?? []).filter((r) =>
     ['auth', 'security', 'data', 'migration'].includes(r),
   );

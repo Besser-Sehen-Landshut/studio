@@ -5,7 +5,13 @@ import { boardPrefix } from './add-item.js';
 import { type Board, loadBoard, saveBoard, type WorkItem, workItemSchema } from './board.js';
 import type { OwnerEnv, StudioConfig } from './config.js';
 import { assertStatePath, writeStateFile } from './paths.js';
-import { availableVersions, compareVersions, type PluginPin, pinnedPlugins } from './plugins.js';
+import {
+  type AllowedPlugin,
+  availableVersions,
+  compareVersions,
+  type PluginPin,
+  pinnedPlugins,
+} from './plugins.js';
 import type { Ports } from './ports.js';
 import { type CheckResult, checkSources, notUsed, type SourcesFile } from './sources.js';
 
@@ -214,6 +220,8 @@ export async function runSkillsCheck(o: {
   ownerRoot: string;
   config: StudioConfig;
   index: SourcesFile;
+  /** `allowed_plugins` of the owner config. */
+  allowed: readonly AllowedPlugin[];
   ports: Ports;
   owner: OwnerEnv;
   env: Record<string, string | undefined>;
@@ -222,7 +230,7 @@ export async function runSkillsCheck(o: {
 }): Promise<SkillsCheckResult> {
   const now = o.ports.clock.now();
   const problems: string[] = [];
-  const pins = pinnedPlugins(o.config.plugins);
+  const pins = pinnedPlugins(o.config.plugins, o.allowed);
   let offered: ReadonlyMap<string, { version: string; security: boolean }> = new Map();
   const { dir, runEnv } = pluginEnv(o.owner, o.env);
   if (o.ports.plugins === undefined) problems.push('plugins: no claude command available');
@@ -246,7 +254,14 @@ export async function runSkillsCheck(o: {
       );
       const got = r.code === 0 ? availableVersions(r.stdout) : undefined;
       if (got === undefined) problems.push('plugins: the offered versions cannot be read');
-      else offered = got;
+      else {
+        offered = got.offered;
+        if (got.dropped.length > 0) {
+          problems.push(
+            `plugins: dropped offered versions that are no plain version: ${got.dropped.slice(0, 10).join(', ')}`,
+          );
+        }
+      }
     } catch (e) {
       problems.push(`plugins: ${(e as Error).message.replace(/\p{Cc}/gu, ' ').slice(0, 200)}`);
     }

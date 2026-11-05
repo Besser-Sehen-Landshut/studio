@@ -229,6 +229,7 @@ describe('owner config', () => {
       allowApiBilling: false,
       crewAllowMacosTrustService: false,
       crewLabelLimits: { maxParallel: 2 },
+      allowedPlugins: [],
     });
   });
 
@@ -241,6 +242,7 @@ describe('owner config', () => {
       allowApiBilling: false,
       crewAllowMacosTrustService: false,
       crewLabelLimits: { maxParallel: 2 },
+      allowedPlugins: [],
     });
   });
 

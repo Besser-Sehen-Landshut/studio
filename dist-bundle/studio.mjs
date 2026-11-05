@@ -11899,7 +11899,7 @@ function handleIntersectionResults(result, left, right) {
   const unrecKeys = /* @__PURE__ */ new Map();
   let unrecIssue;
   const keyIssues = /* @__PURE__ */ new Map();
-  const collect = (iss, side) => {
+  const collect2 = (iss, side) => {
     let keys2;
     if (iss.code === "unrecognized_keys" && !iss.path?.length) {
       unrecIssue ?? (unrecIssue = iss);
@@ -11920,11 +11920,11 @@ function handleIntersectionResults(result, left, right) {
     return true;
   };
   for (const iss of left.issues) {
-    if (!collect(iss, "l"))
+    if (!collect2(iss, "l"))
       result.issues.push(iss);
   }
   for (const iss of right.issues) {
-    if (!collect(iss, "r"))
+    if (!collect2(iss, "r"))
       result.issues.push(iss);
   }
   const bothKeys = [...unrecKeys].filter(([, f]) => f.l && f.r).map(([k]) => k);
@@ -24534,12 +24534,12 @@ function rewriteKeyNames(ctx) {
   const rewrites = /* @__PURE__ */ new Map();
   for (const record2 of pendingRecords.get(ctx) ?? []) {
     const seen = ctx.seen.get(record2);
-    const names2 = (seen?.def ?? seen?.schema)?.propertyNames;
-    if (!names2 || names2 === true || rewrites.has(names2))
+    const names = (seen?.def ?? seen?.schema)?.propertyNames;
+    if (!names || names === true || rewrites.has(names))
       continue;
-    const rewritten = stringifyKeyNames(bySchema, names2, /* @__PURE__ */ new Set());
-    if (rewritten !== names2)
-      rewrites.set(names2, rewritten);
+    const rewritten = stringifyKeyNames(bySchema, names, /* @__PURE__ */ new Set());
+    if (rewritten !== names)
+      rewrites.set(names, rewritten);
   }
   if (!rewrites.size)
     return;
@@ -27746,16 +27746,29 @@ function touchesOverlap(a2, b) {
 }
 
 // src/plugins.ts
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 var STUDIO_VERSION = "0.12.0";
 var HTTPS_GIT = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\.git)?$/;
+var VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
+var PLUGIN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/;
 var pluginPinSchema = external_exports.strictObject({
-  name: external_exports.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/, "must be name@marketplace"),
-  version: external_exports.string().regex(/^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/, "must be one exact version"),
-  // Where the marketplace comes from; only needed for one `setup-plugins` must add.
+  name: external_exports.string().regex(PLUGIN_ID_RE, "must be name@marketplace"),
+  version: external_exports.string().regex(VERSION_RE, "must be one exact version"),
+  // Must match the default's or the owner's marketplace: a project cannot bring its own.
   marketplace: external_exports.string().regex(HTTPS_GIT, "must be a GitHub https URL").optional()
 });
+var allowedPluginSchema = external_exports.strictObject({
+  name: external_exports.string().regex(PLUGIN_ID_RE, "must be name@marketplace"),
+  marketplace: external_exports.string().regex(HTTPS_GIT, "must be a GitHub https URL")
+});
+var PluginTrustError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "PluginTrustError";
+  }
+};
+var INVALID_VERSION = "(not a plain version)";
 var DEFAULT_PLUGINS = [
   {
     name: "superpowers@superpowers-marketplace",
@@ -27768,13 +27781,32 @@ var DEFAULT_PLUGINS = [
     marketplace: "https://github.com/Besser-Sehen-Landshut/studio.git"
   }
 ];
-function pinnedPlugins(configured = []) {
+function pinnedPlugins(configured = [], allowed = []) {
+  const swap = (name, want, got) => {
+    if (got !== void 0 && got !== want) {
+      throw new PluginTrustError(
+        `studio.yaml may not change the marketplace of ${name}; a marketplace comes from the defaults or from allowed_plugins in the owner config`
+      );
+    }
+  };
   const out = DEFAULT_PLUGINS.map((d) => {
     const own2 = configured.find((c3) => c3.name === d.name);
-    return own2 === void 0 ? { ...d } : { ...d, ...own2 };
+    swap(d.name, d.marketplace, own2?.marketplace);
+    return own2 === void 0 ? { ...d } : { ...d, version: own2.version };
   });
-  for (const c3 of configured) if (!out.some((o2) => o2.name === c3.name)) out.push({ ...c3 });
+  for (const c3 of configured) {
+    if (out.some((o2) => o2.name === c3.name)) continue;
+    const owner = allowed.find((a2) => a2.name === c3.name);
+    if (owner === void 0) continue;
+    swap(c3.name, owner.marketplace, c3.marketplace);
+    out.push({ name: c3.name, version: c3.version, marketplace: owner.marketplace });
+  }
   return out;
+}
+function unallowedPlugins(configured = [], allowed = []) {
+  return configured.filter(
+    (c3) => !DEFAULT_PLUGINS.some((d) => d.name === c3.name) && !allowed.some((a2) => a2.name === c3.name)
+  ).map((c3) => c3.name);
 }
 function pluginCommands(pins) {
   const markets = [...new Set(pins.flatMap((p) => p.marketplace ?? []))];
@@ -27783,7 +27815,8 @@ function pluginCommands(pins) {
     ...pins.map((p) => ["plugin", "install", p.name])
   ];
 }
-var asVersion = (v) => typeof v === "string" && v !== "" && v.length <= 64 ? v : void 0;
+var asVersion = (v) => typeof v === "string" && VERSION_RE.test(v) ? v : void 0;
+var recorded = (v) => v === void 0 || v === null ? void 0 : asVersion(v) ?? INVALID_VERSION;
 function installedVersions(configDir) {
   let raw;
   try {
@@ -27794,13 +27827,38 @@ function installedVersions(configDir) {
   const plugins = raw?.plugins;
   if (plugins === null || typeof plugins !== "object" || Array.isArray(plugins)) return void 0;
   const out = /* @__PURE__ */ new Map();
-  for (const [id, entry] of Object.entries(plugins)) {
-    const list2 = Array.isArray(entry) ? entry : [entry];
-    const pick3 = list2.find((e) => e?.scope === "user") ?? list2[0];
-    const v = asVersion(pick3?.version);
+  for (const { id, entry } of pluginEntries(plugins)) {
+    const v = recorded(entry.version);
     if (v !== void 0) out.set(id, v);
   }
   return out;
+}
+function pluginEntries(plugins) {
+  const out = [];
+  for (const [id, raw] of Object.entries(plugins)) {
+    const list2 = Array.isArray(raw) ? raw : [raw];
+    const entry = list2.find((e) => e?.scope === "user") ?? list2[0];
+    if (entry !== null && typeof entry === "object") out.push({ id, entry });
+  }
+  return out;
+}
+function installPaths(configDir) {
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(join(configDir, "plugins", "installed_plugins.json"), "utf8"));
+  } catch {
+    return [];
+  }
+  const plugins = raw?.plugins;
+  if (plugins === null || typeof plugins !== "object" || Array.isArray(plugins)) return [];
+  return pluginEntries(plugins).flatMap(
+    ({ id, entry }) => typeof entry.installPath === "string" && entry.installPath !== "" ? [
+      {
+        plugin: id.slice(0, id.indexOf("@") < 0 ? id.length : id.indexOf("@")),
+        dir: entry.installPath
+      }
+    ] : []
+  );
 }
 function pinMismatch(configDir, pins) {
   const have = installedVersions(configDir);
@@ -27824,8 +27882,8 @@ function listedVersions(stdout) {
   if (!Array.isArray(list2)) return void 0;
   const out = /* @__PURE__ */ new Map();
   for (const e of list2) {
-    const v = asVersion(e?.version);
-    if (typeof e?.id === "string" && v !== void 0) out.set(e.id, v);
+    const v = recorded(e?.version);
+    if (typeof e?.id === "string" && PLUGIN_ID_RE.test(e.id) && v !== void 0) out.set(e.id, v);
   }
   return out;
 }
@@ -27839,14 +27897,20 @@ function availableVersions(stdout) {
   }
   const list2 = Array.isArray(raw) ? [] : raw?.available;
   if (!Array.isArray(list2)) return void 0;
-  const out = /* @__PURE__ */ new Map();
+  const offered = /* @__PURE__ */ new Map();
+  const dropped = [];
   for (const e of list2) {
-    const v = asVersion(e?.version);
-    if (typeof e?.pluginId !== "string" || v === void 0) continue;
+    if (e === null || typeof e !== "object" || e.version === void 0) continue;
+    const id = typeof e.pluginId === "string" && PLUGIN_ID_RE.test(e.pluginId) ? e.pluginId : void 0;
+    const v = asVersion(e.version);
+    if (id === void 0 || v === void 0) {
+      dropped.push(id ?? "(an entry without a plain id)");
+      continue;
+    }
     const text = Object.values(e).filter((x) => typeof x === "string").join(" ");
-    out.set(e.pluginId, { version: v, security: e.security === true || ADVISORY.test(text) });
+    offered.set(id, { version: v, security: e.security === true || ADVISORY.test(text) });
   }
-  return out;
+  return { offered, dropped };
 }
 function compareVersions(a2, b) {
   const num = /^\d+(\.\d+)*$/;
@@ -27863,30 +27927,79 @@ function compareVersions(a2, b) {
   return a2 === b ? 0 : 1;
 }
 var NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-var names = (dir) => {
+var MAX_SKILL_BYTES = 256 * 1024;
+var entriesOf = (dir) => {
   try {
-    return readdirSync(dir).filter((n2) => NAME.test(n2));
+    return readdirSync(dir);
   } catch {
     return [];
   }
 };
-function skillsIn(dir) {
-  return [
-    ...names(join(dir, "skills")).filter((n2) => existsSync(join(dir, "skills", n2, "SKILL.md"))),
-    ...names(join(dir, "commands")).filter((n2) => n2.endsWith(".md")).map((n2) => n2.slice(0, -3)).filter((n2) => NAME.test(n2))
-  ];
+var isDir = (p) => {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+function frontmatterName(file2) {
+  let text;
+  try {
+    if (statSync(file2).size > MAX_SKILL_BYTES) return void 0;
+    text = readFileSync(file2, "utf8");
+  } catch {
+    return void 0;
+  }
+  const head = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1];
+  const m = head === void 0 ? null : /^name:[ \t]*(.*?)[ \t]*$/m.exec(head);
+  if (m === null) return void 0;
+  return (m[1] ?? "").replace(/^(["'])(.*)\1$/, "$2");
+}
+function collect(dir, prefix, found) {
+  const add = (name, where) => {
+    if (NAME.test(name)) found.names.add(`${prefix}${name}`);
+    else found.invalid.push(where);
+  };
+  const skills = join(dir, "skills");
+  for (const d of entriesOf(skills)) {
+    const file2 = join(skills, d, "SKILL.md");
+    if (!isDir(join(skills, d)) || !existsSync(file2)) continue;
+    const name = frontmatterName(file2);
+    add(name ?? d, join(skills, d));
+    if (name !== void 0 && name !== d && NAME.test(d)) found.names.add(`${prefix}${d}`);
+  }
+  const commands = join(dir, "commands");
+  for (const f of entriesOf(commands)) {
+    if (f.endsWith(".md")) add(f.slice(0, -3), join(commands, f));
+  }
 }
 function installedSkills(configDir) {
-  const out = new Set(skillsIn(configDir));
+  const found = { names: /* @__PURE__ */ new Set(), invalid: [] };
+  collect(configDir, "", found);
+  const roots = [...installPaths(configDir)];
   const cache = join(configDir, "plugins", "cache");
-  for (const market of names(cache)) {
-    for (const plugin of names(join(cache, market))) {
-      for (const version2 of names(join(cache, market, plugin))) {
-        for (const s of skillsIn(join(cache, market, plugin, version2))) out.add(`${plugin}:${s}`);
+  for (const market of entriesOf(cache)) {
+    if (!isDir(join(cache, market))) continue;
+    for (const plugin of entriesOf(join(cache, market))) {
+      if (!isDir(join(cache, market, plugin))) continue;
+      for (const version2 of entriesOf(join(cache, market, plugin))) {
+        const dir = join(cache, market, plugin, version2);
+        if (isDir(dir)) roots.push({ plugin, dir });
       }
     }
   }
-  return [...out];
+  for (const r of roots) {
+    const sub = { names: /* @__PURE__ */ new Set(), invalid: [] };
+    collect(r.dir, "", sub);
+    if (sub.names.size === 0 && sub.invalid.length === 0) continue;
+    if (!NAME.test(r.plugin)) {
+      found.invalid.push(r.dir);
+      continue;
+    }
+    for (const n2 of sub.names) found.names.add(`${r.plugin}:${n2}`);
+    found.invalid.push(...sub.invalid);
+  }
+  return { names: [...found.names], invalid: [...new Set(found.invalid)] };
 }
 var last = (s) => s.slice(s.lastIndexOf(":") + 1);
 var plain = (s) => s.split(":").length <= 2 && s.split(":").every((p) => NAME.test(p));
@@ -27897,9 +28010,15 @@ function named(skill, allowed) {
 }
 function skillDenyRules(configDir, allowed, denied) {
   const out = /* @__PURE__ */ new Set();
-  for (const s of installedSkills(configDir)) if (!named(s, allowed)) out.add(s);
+  const { names, invalid } = installedSkills(configDir);
+  if (invalid.length > 0) throw new Error(undeniableLine(configDir, invalid));
+  for (const s of names) if (!named(s, allowed)) out.add(s);
   for (const d of denied) if (plain(d)) out.add(d);
   return [...out].map((s) => `Skill(${s})`);
+}
+function undeniableLine(configDir, invalid) {
+  const shown = invalid.slice(0, 5).map((p) => JSON.stringify(p.replace(/[\p{Cc}\p{Cf}]/gu, "?").slice(0, 200))).join(", ");
+  return `installed skills in ${configDir} have names a deny rule cannot hold (${shown}${invalid.length > 5 ? `, ${invalid.length - 5} more` : ""}); a crew could invoke them outside its brief: rename them to letters, digits, dot, dash and underscore, or remove them, then launch again`;
 }
 
 // src/config.ts
@@ -28126,6 +28245,9 @@ var ownerConfigSchema = external_exports.strictObject({
   // boundary (SECURITY.md). Off: Studio opens a crew's pull request itself.
   crewAllowMacosTrustService: external_exports.boolean().default(false),
   crewLabelLimits: crewLabelLimitsSchema,
+  // Plugins and their marketplaces beyond Studio's defaults that a project's studio.yaml may pin.
+  // They live here, outside every repository: a project cannot bring a marketplace of its own.
+  allowedPlugins: external_exports.array(allowedPluginSchema).default([]),
   // Push notifications: an absolute executable that gets each message in its environment (see
   // README). It lives here, not in studio.yaml, because it runs on the owner's machine.
   notify: external_exports.strictObject({
@@ -30155,15 +30277,15 @@ function addAccount(o2, label, token, now) {
   if (activeLabel(o2) === void 0) setActiveLabel(o2, label);
 }
 function listAccountNames(o2) {
-  let names2;
+  let names;
   try {
-    names2 = readdirSync3(accountsDir(o2));
+    names = readdirSync3(accountsDir(o2));
   } catch (e) {
     const code = e.code;
     if (code === "ENOENT") return [];
     throw new Error(`${accountsDir(o2)} cannot be read (${String(code)})`);
   }
-  return names2.filter((n2) => n2.endsWith(".json")).map((n2) => n2.slice(0, -".json".length)).sort();
+  return names.filter((n2) => n2.endsWith(".json")).map((n2) => n2.slice(0, -".json".length)).sort();
 }
 function listAccounts(o2) {
   return listAccountNames(o2).map((label) => {
@@ -30228,7 +30350,7 @@ import {
   readdirSync as readdirSync4,
   readFileSync as readFileSync9,
   renameSync as renameSync5,
-  statSync,
+  statSync as statSync2,
   unlinkSync as unlinkSync3,
   writeFileSync as writeFileSync5
 } from "node:fs";
@@ -30407,19 +30529,19 @@ function groupSelfHosted(runners) {
   );
 }
 var escapeRegex2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-function commonPrefix(names2) {
-  let prefix = names2[0] ?? "";
-  for (const n2 of names2) {
+function commonPrefix(names) {
+  let prefix = names[0] ?? "";
+  for (const n2 of names) {
     let i2 = 0;
     while (i2 < prefix.length && i2 < n2.length && prefix[i2] === n2[i2]) i2++;
     prefix = prefix.slice(0, i2);
   }
   return prefix;
 }
-function namePattern(names2) {
-  const prefix = commonPrefix(names2).replace(/[0-9]+$/, "");
+function namePattern(names) {
+  const prefix = commonPrefix(names).replace(/[0-9]+$/, "");
   if (prefix === "") return void 0;
-  const digitNext = names2.every((n2) => /^[0-9]/.test(n2.slice(prefix.length)));
+  const digitNext = names.every((n2) => /^[0-9]/.test(n2.slice(prefix.length)));
   return `^${escapeRegex2(prefix)}${digitNext ? "[0-9]" : ""}`;
 }
 var mergeMaxBusyFor = (total) => Math.max(1, Math.round(total * 0.625));
@@ -30741,16 +30863,16 @@ function readWorkflows(project) {
   const files = [];
   const errors = [];
   const notes = [];
-  let names2;
+  let names;
   try {
-    names2 = readdirSync4(dir);
+    names = readdirSync4(dir);
   } catch (e) {
     if (e.code === "ENOENT") {
       notes.push(`no workflows found: ${rel} does not exist`);
     } else errors.push(`cannot read ${rel}: ${e.code ?? "error"}`);
     return { files, errors, notes };
   }
-  const yaml = names2.filter((n2) => n2.endsWith(".yml") || n2.endsWith(".yaml")).sort();
+  const yaml = names.filter((n2) => n2.endsWith(".yml") || n2.endsWith(".yaml")).sort();
   if (yaml.length === 0) notes.push(`no workflows found in ${rel}`);
   for (const name of yaml) {
     const path10 = `${rel}/${name}`;
@@ -30796,7 +30918,7 @@ function applyCi(doc, ci) {
 function writeAtomic(file2, text) {
   const tmp = `${file2}.${process.pid}.${randomBytes5(4).toString("hex")}.tmp`;
   try {
-    writeFileSync5(tmp, text, { flag: "wx", mode: statSync(file2).mode & 511 });
+    writeFileSync5(tmp, text, { flag: "wx", mode: statSync2(file2).mode & 511 });
     renameSync5(tmp, file2);
   } catch (e) {
     try {
@@ -30913,7 +31035,7 @@ import {
   readFileSync as readFileSync10,
   realpathSync as realpathSync3,
   renameSync as renameSync6,
-  statSync as statSync2,
+  statSync as statSync3,
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync6
 } from "node:fs";
@@ -30985,7 +31107,7 @@ function checkProviderConfigDir(dir, owner) {
   try {
     real = realpathSync3(dir);
     ownerReal = realpathSync3(ownerConfigDir(owner));
-    st = statSync2(real);
+    st = statSync3(real);
   } catch {
     return fail("config dir must be an existing directory");
   }
@@ -30999,7 +31121,7 @@ function checkProviderConfigDir(dir, owner) {
 function readSettings(file2) {
   let text;
   try {
-    if (!statSync2(file2).isFile()) return { problem: `${file2} is not a regular file` };
+    if (!statSync3(file2).isFile()) return { problem: `${file2} is not a regular file` };
     text = readFileSync10(file2, "utf8");
   } catch (e) {
     return e.code === "ENOENT" ? {} : { problem: `${file2} cannot be read` };
@@ -31338,6 +31460,7 @@ function expiryLine(row) {
   const when = row.expiry === "expired" ? "expired" : "expires";
   return `account ${row.label}: token ${when} ${row.expiresAt.slice(0, 10)}; run claude setup-token, then studio account add ${row.label}`;
 }
+var unallowedLine = (name) => `${name} is not installed: studio.yaml names it, but allowed_plugins in the owner config does not; the owner adds it there with its marketplace`;
 function pluginEnv(owner, env) {
   const dir = crewClaudeDir(owner);
   const runEnv = {
@@ -31408,7 +31531,15 @@ async function runAccount(o2) {
     o2.stdout(`account ${label} stored${activeLabel(o2.owner) === label ? " and active" : ""}
 `);
     if (!first) return 0;
-    const failed = await setupPlugins(o2.owner, o2.ports, o2.env, o2.pins);
+    let failed;
+    try {
+      const p = o2.pins?.();
+      failed = await setupPlugins(o2.owner, o2.ports, o2.env, p?.pins);
+      for (const name of p?.unallowed ?? []) o2.stderr(`warning: ${unallowedLine(name)}
+`);
+    } catch (e) {
+      failed = e.message;
+    }
     if (failed === void 0) return 0;
     o2.stderr(
       `error: plugin setup: ${failed}; the token is stored, run studio account setup-plugins
@@ -31451,11 +31582,14 @@ async function runAccount(o2) {
   }
   if (sub === "setup-plugins" && label === void 0) {
     ownerOnly();
+    const p = o2.pins?.();
+    for (const name of p?.unallowed ?? []) o2.stderr(`warning: ${unallowedLine(name)}
+`);
     const failed = await setupPlugins(
       o2.owner,
       o2.ports,
       o2.env,
-      o2.pins,
+      p?.pins,
       (l) => o2.stdout(`${safe(l)}
 `)
     );
@@ -31497,7 +31631,7 @@ import { join as join22 } from "node:path";
 
 // src/secret-command.ts
 var import_yaml8 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync20, realpathSync as realpathSync5, statSync as statSync3 } from "node:fs";
+import { readFileSync as readFileSync20, realpathSync as realpathSync5, statSync as statSync4 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import { join as join20 } from "node:path";
 
@@ -32402,6 +32536,7 @@ var isGithubPath = (p) => {
 };
 var isCiItem = (i2) => [...i2.paths, ...i2.touches].some(isGithubPath);
 var GIT_FETCH_MS = 12e4;
+var STUDIO_CONFIG = ".studio/studio.yaml";
 var GIT_LOCAL_MS = 6e4;
 async function changesGithub(ports, checkout, base, head, allowed) {
   const g = (args, timeoutMs) => ports.git.run(checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
@@ -32515,10 +32650,11 @@ async function resolveForItem(o2) {
   const contractHits = paths === "unknown" ? [] : config2.merge.contractPaths.filter(
     (g) => globProblem(g) !== void 0 || (facts?.files ?? []).some((f) => matchGlob(g, f))
   );
+  const configChange = paths !== "unknown" && (facts?.files ?? []).some((f) => f.toLowerCase() === STUDIO_CONFIG);
   const triggers2 = [
     ...itemTriggers(item),
     ...round > 0 ? ["after-fix"] : [],
-    ...contractHits.length > 0 ? ["contract-change"] : []
+    ...contractHits.length > 0 || configChange ? ["contract-change"] : []
   ];
   const first = resolveSkills(item, item.role, stack, paths, phase, { ...base, triggers: triggers2 });
   const { tier, reasons } = reviewTier(
@@ -32531,7 +32667,7 @@ async function resolveForItem(o2) {
     triggers: triggers2,
     tier
   });
-  const securityWhy = resolved.analyzers.some((a2) => a2.id === "security") ? securityReason(item, paths, contractHits, triggers2) : void 0;
+  const securityWhy = resolved.analyzers.some((a2) => a2.id === "security") ? securityReason(item, paths, contractHits, triggers2, configChange) : void 0;
   return {
     resolved,
     review: {
@@ -32557,8 +32693,11 @@ async function resolveForItem(o2) {
     }
   };
 }
-function securityReason(item, paths, contractHits, triggers2) {
+function securityReason(item, paths, contractHits, triggers2, configChange) {
   const why = [];
+  if (configChange) {
+    why.push(`the project config changed (${STUDIO_CONFIG}: plugins, sandbox, roles)`);
+  }
   const risky = (item.risk ?? []).filter(
     (r) => ["auth", "security", "data", "migration"].includes(r)
   );
@@ -33430,9 +33569,9 @@ function skillInstalled(configDir, name) {
     for (let depth = 0; depth < 3; depth++) {
       const next = [];
       for (const d of dirs) {
-        const names2 = entries(d);
-        if (names2 === void 0) return void 0;
-        next.push(...(names2 ?? []).map((n2) => join19(d, n2)));
+        const names = entries(d);
+        if (names === void 0) return void 0;
+        next.push(...(names ?? []).map((n2) => join19(d, n2)));
       }
       dirs = next;
     }
@@ -34035,8 +34174,13 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
     ...forItem.resolved.required
   ]);
   if (missingSkill) throw new Error(missingSkill);
-  const pinOff = pinMismatch(claudeConfigDir, pinnedPlugins(config2.plugins));
+  const pinOff = pinMismatch(
+    claudeConfigDir,
+    pinnedPlugins(config2.plugins, ownerConfig.allowedPlugins)
+  );
   if (pinOff) throw new Error(pinOff);
+  const undeniable = installedSkills(claudeConfigDir).invalid;
+  if (undeniable.length > 0) throw new Error(undeniableLine(claudeConfigDir, undeniable));
   const clonePath = join19(stateRoot, "clones", item.id);
   if ((previous?.limit || previous?.block) && existsNoFollow(clonePath) && (cloneBranch(clonePath) !== `studio/${item.id}` || cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))) {
     throw new Error(
@@ -34353,7 +34497,7 @@ function toolsOutside(env, home, toolchain) {
     for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
       const file2 = join20(dir, tool);
       try {
-        if (!statSync3(file2).isFile()) continue;
+        if (!statSync4(file2).isFile()) continue;
       } catch {
         continue;
       }
@@ -34422,11 +34566,19 @@ async function doctorReport(o2) {
   const configDir = command === void 0 && account !== void 0 ? crewClaudeDir(o2.owner) : await crewConfigDir(command, o2.owner, o2.env, o2.ports);
   const studioCrew = skillState(configDir, CREW_SKILL2.split(":").at(-1) ?? "");
   const have = configDir === void 0 ? void 0 : installedVersions(configDir);
-  const plugins = pinnedPlugins(config2?.plugins).map((p) => ({
+  let pinProblem2;
+  let pins = [];
+  try {
+    pins = pinnedPlugins(config2?.plugins, ownerConfig?.allowedPlugins ?? []);
+  } catch (e) {
+    pinProblem2 = e.message;
+  }
+  const plugins = pins.map((p) => ({
     name: p.name,
     pinned: p.version,
     installed: have === void 0 ? "unknown" : have.get(p.name) ?? "not installed"
   }));
+  const pluginsNotAllowed = unallowedPlugins(config2?.plugins, ownerConfig?.allowedPlugins ?? []);
   const git = await gitState(o2.project, o2.ports);
   const projectCheckout = await checkoutState(o2.project, o2.ports);
   const toolchain = toolsOutside(
@@ -34448,6 +34600,8 @@ async function doctorReport(o2) {
     superpowers: skillState(configDir, "test-driven-development"),
     studioCrew,
     plugins,
+    ...pinProblem2 === void 0 ? {} : { pluginProblem: pinProblem2 },
+    pluginsNotAllowed,
     ownerConfig: ownerConfig ? "readable" : "invalid",
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
@@ -34484,6 +34638,10 @@ async function runDoctor(o2) {
       `superpowers: ${report.superpowers}`,
       `git: ${git}`,
       `studio plugin: ${studioCrew}${studioCrew === "not found" && configDir !== void 0 ? ` (${studioPluginHint(configDir)})` : ""}`,
+      ...report.pluginProblem === void 0 ? [] : [`plugins: ${report.pluginProblem}`],
+      ...report.pluginsNotAllowed.map(
+        (n2) => `plugin ${n2}: not in allowed_plugins of the owner config, never installed`
+      ),
       ...report.plugins.map(
         (p) => `plugin ${p.name}: pinned ${p.pinned}, installed ${p.installed}${p.installed !== p.pinned && p.installed !== "unknown" ? " (a launch refuses: run studio account setup-plugins)" : ""}`
       ),
@@ -34572,17 +34730,17 @@ function depStacks(text, notes, name) {
   return out;
 }
 function scanDir(dir, label, found, notes) {
-  let names2;
+  let names;
   try {
-    names2 = readdirSync9(dir).slice(0, MAX_ENTRIES * 5);
+    names = readdirSync9(dir).slice(0, MAX_ENTRIES * 5);
   } catch {
     notes.push(`${label || "."}: cannot be read`);
     return;
   }
   const file2 = (n2) => isFileEntry(dir, n2);
   const read3 = (n2) => readSmall(join21(dir, n2), notes, label ? `${label}/${n2}` : n2);
-  const some = (re) => names2.some((n2) => re.test(n2) && file2(n2));
-  const pkg = names2.includes("package.json") && file2("package.json") ? read3("package.json") : void 0;
+  const some = (re) => names.some((n2) => re.test(n2) && file2(n2));
+  const pkg = names.includes("package.json") && file2("package.json") ? read3("package.json") : void 0;
   if (pkg !== void 0) {
     for (const s of depStacks(pkg, notes, label ? `${label}/package.json` : "package.json")) {
       found.add(s);
@@ -34591,10 +34749,10 @@ function scanDir(dir, label, found, notes) {
   if (some(/^next\.config\./)) found.add("nextjs");
   if (some(/^components\.json$/)) found.add("shadcn");
   if (isRealDir(join21(dir, "migrations"))) found.add("postgres");
-  if (some(/^(Podfile|Package\.swift)$/) || names2.some((n2) => n2.endsWith(".xcodeproj"))) {
+  if (some(/^(Podfile|Package\.swift)$/) || names.some((n2) => n2.endsWith(".xcodeproj"))) {
     found.add("ios");
   }
-  for (const n2 of names2.filter((x) => x.endsWith(".csproj") && file2(x))) {
+  for (const n2 of names.filter((x) => x.endsWith(".csproj") && file2(x))) {
     if (/WinUI|WindowsAppSDK/i.test(read3(n2) ?? "")) found.add("winui");
   }
   if (some(/^Cargo\.toml$/)) found.add("rust");
@@ -34609,7 +34767,7 @@ function scanDir(dir, label, found, notes) {
   if (some(/^Dockerfile/) || some(/^(docker-)?compose.*\.ya?ml$/)) found.add("docker");
   if (some(/^wp-config\.php$/) || isRealDir(join21(dir, "wp-content"))) found.add("wordpress");
   if (some(/^style\.css$/) && /Theme Name:/.test(read3("style.css") ?? "")) found.add("wordpress");
-  for (const n2 of names2.filter((x) => x.endsWith(".php") && file2(x))) {
+  for (const n2 of names.filter((x) => x.endsWith(".php") && file2(x))) {
     if (/Plugin Name:/.test(read3(n2) ?? "")) found.add("wordpress");
   }
 }
@@ -34751,14 +34909,14 @@ function proposeComponents(project, repo) {
   for (const root of MONOREPO_DIRS) {
     const base = join22(project, root);
     if (!isRealDir2(base)) continue;
-    let names2;
+    let names;
     try {
-      names2 = readdirSync10(base).sort().slice(0, MAX_ENTRIES2);
+      names = readdirSync10(base).sort().slice(0, MAX_ENTRIES2);
     } catch {
       notes.push(`${root}: cannot be read`);
       continue;
     }
-    for (const name of names2) {
+    for (const name of names) {
       if (name.startsWith(".") || name === "node_modules" || !isRealDir2(join22(base, name))) continue;
       const found = MANIFESTS.filter((m) => isRealFile(join22(base, name, m)));
       if (found.length === 0) continue;
@@ -36941,7 +37099,7 @@ import {
   readFileSync as readFileSync27,
   renameSync as renameSync11,
   rmSync as rmSync7,
-  statSync as statSync4,
+  statSync as statSync5,
   writeFileSync as writeFileSync11
 } from "node:fs";
 import { homedir as homedir8 } from "node:os";
@@ -37008,7 +37166,7 @@ function studioOnPath(env) {
   for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
     const file2 = join28(dir, "studio");
     try {
-      const st = statSync4(file2);
+      const st = statSync5(file2);
       if (st.isFile() && (st.mode & 73) !== 0) return file2;
     } catch {
     }
@@ -37341,7 +37499,7 @@ function addUpdateItems(o2) {
 async function runSkillsCheck(o2) {
   const now = o2.ports.clock.now();
   const problems = [];
-  const pins = pinnedPlugins(o2.config.plugins);
+  const pins = pinnedPlugins(o2.config.plugins, o2.allowed);
   let offered = /* @__PURE__ */ new Map();
   const { dir, runEnv } = pluginEnv(o2.owner, o2.env);
   if (o2.ports.plugins === void 0) problems.push("plugins: no claude command available");
@@ -37365,7 +37523,14 @@ async function runSkillsCheck(o2) {
       );
       const got = r.code === 0 ? availableVersions(r.stdout) : void 0;
       if (got === void 0) problems.push("plugins: the offered versions cannot be read");
-      else offered = got;
+      else {
+        offered = got.offered;
+        if (got.dropped.length > 0) {
+          problems.push(
+            `plugins: dropped offered versions that are no plain version: ${got.dropped.slice(0, 10).join(", ")}`
+          );
+        }
+      }
     } catch (e) {
       problems.push(`plugins: ${e.message.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 200)}`);
     }
@@ -37486,19 +37651,26 @@ var SHORT_SHA = /^[0-9a-f]{7,64}$/i;
 var INCIDENT_ID = /^[A-Za-z0-9._-]{1,64}$/;
 var LEGACY_LINE = "old project state files are not migrated yet: no merge until they are (run any studio command again)";
 var ACTIVE_FOR_WIP = ["assigned", "in_progress"];
-function table2(rows) {
+function table2(cells) {
+  const rows = cells.map((r) => r.map((cell) => cell.replace(/[\p{Cc}\p{Cf}]/gu, " ")));
   const widths = rows[0]?.map((_, c3) => Math.max(...rows.map((r) => (r[c3] ?? "").length))) ?? [];
   return `${rows.map(
     (r) => r.map((cell, c3) => c3 === r.length - 1 ? cell : cell.padEnd(widths[c3] ?? 0)).join("  ").trimEnd()
   ).join("\n")}
 `;
 }
-function projectPins(project) {
+function projectPins(project, owner) {
+  const allowed = loadOwnerConfig(owner).allowedPlugins;
+  let configured;
   try {
-    return pinnedPlugins(loadConfig(project).plugins);
+    configured = loadConfig(project).plugins;
   } catch {
-    return pinnedPlugins();
+    configured = void 0;
   }
+  return {
+    pins: pinnedPlugins(configured, allowed),
+    unallowed: unallowedPlugins(configured, allowed)
+  };
 }
 function findItem(board, id) {
   if (!id) throw new UsageError("missing item id");
@@ -37844,7 +38016,7 @@ async function runCli(argv, deps) {
       });
       return res;
     };
-    const collect = async (id) => {
+    const collect2 = async (id) => {
       const { board } = loadAll();
       const item = findItem(board, id);
       if (item.status !== "assigned" && item.status !== "in_progress") {
@@ -38155,6 +38327,7 @@ async function runCli(argv, deps) {
         ownerRoot: ownerRoot(),
         config: loadConfig(project),
         index: loadSources(),
+        allowed: loadOwnerConfig(owner).allowedPlugins,
         ports,
         owner,
         env: deps.env,
@@ -38228,7 +38401,7 @@ async function runCli(argv, deps) {
                 continue;
               }
             }
-            const r = await collect(item.id);
+            const r = await collect2(item.id);
             if (r.kind === "moved") {
               out.collected.push(r.out);
               if (typeof r.out.review === "string") fresh.add(r.out.review);
@@ -38723,7 +38896,7 @@ async function runCli(argv, deps) {
         return 0;
       }
       case "collect": {
-        const r = await collect(rest[0]);
+        const r = await collect2(rest[0]);
         if (r.kind === "moved") {
           print(r.out);
           return 0;
@@ -38992,7 +39165,7 @@ async function runCli(argv, deps) {
           json: json2,
           isTerminal: deps.isTerminal === true,
           ...deps.readSecret === void 0 ? {} : { readSecret: deps.readSecret },
-          pins: projectPins(project),
+          pins: () => projectPins(project, owner),
           stdout,
           stderr
         });
@@ -39032,14 +39205,12 @@ async function runCli(argv, deps) {
               ...r.sources.map((x) => [`source ${x.id}`, "-", x.verdict])
             ])
           );
-          for (const a2 of r.added) stdout(`added ${a2.item} (${a2.key}, priority ${a2.priority})
+          const say = (t) => stdout(`${t.replace(/[\p{Cc}\p{Cf}]/gu, " ")}
 `);
-          for (const p of r.present) stdout(`already on the board: ${p.item} (${p.key})
-`);
-          for (const id of r.raised) stdout(`raised to priority 0: ${id}
-`);
-          for (const id of r.notUsed) stdout(`not used: source ${id} (licence unknown)
-`);
+          for (const a2 of r.added) say(`added ${a2.item} (${a2.key}, priority ${a2.priority})`);
+          for (const p of r.present) say(`already on the board: ${p.item} (${p.key})`);
+          for (const id of r.raised) say(`raised to priority 0: ${id}`);
+          for (const id of r.notUsed) say(`not used: source ${id} (licence unknown)`);
           for (const p of r.problems) stderr(`warning: ${p.replace(new RegExp("\\p{Cc}", "gu"), " ")}
 `);
         }
@@ -42143,7 +42314,7 @@ var escapeArgument = (rawArgument) => {
 var shouldQuoteArgument = (argument) => argument === "" || argument.endsWith("\\") || quotedCharacterRegExp.test(argument);
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/cwd.js
-import { statSync as statSync5 } from "node:fs";
+import { statSync as statSync6 } from "node:fs";
 import path6 from "node:path";
 import process8 from "node:process";
 var normalizeCwd = (cwd = getDefaultCwd()) => {
@@ -42171,7 +42342,7 @@ var fixCwdError = (originalMessage, cwd) => {
   }
   let cwdStat;
   try {
-    cwdStat = statSync5(cwd);
+    cwdStat = statSync6(cwd);
   } catch (error62) {
     return `The "cwd" option is invalid: ${cwd}.
 ${error62.message}

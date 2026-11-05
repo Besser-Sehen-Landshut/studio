@@ -71,6 +71,10 @@ export function expiryLine(row: AccountRow): string | undefined {
   return `account ${row.label}: token ${when} ${row.expiresAt.slice(0, 10)}; run claude setup-token, then studio account add ${row.label}`;
 }
 
+/** A plugin studio.yaml names that the owner has not allowed: never installed. */
+export const unallowedLine = (name: string): string =>
+  `${name} is not installed: studio.yaml names it, but allowed_plugins in the owner config does not; the owner adds it there with its marketplace`;
+
 /** The environment plugin commands run with: the crew config dir, no token. */
 export function pluginEnv(
   owner: OwnerEnv,
@@ -146,8 +150,8 @@ export async function runAccount(o: {
   env: Record<string, string | undefined>;
   json: boolean;
   isTerminal: boolean;
-  /** The pinned plugins: studio.yaml's `plugins:` over the defaults. */
-  pins?: readonly PluginPin[];
+  /** The pinned plugins (studio.yaml over the defaults, extras as the owner allows); may throw. */
+  pins?: () => { pins: readonly PluginPin[]; unallowed: readonly string[] };
   readSecret?: (prompt: string) => Promise<string | undefined>;
   stdout(s: string): void;
   stderr(s: string): void;
@@ -175,7 +179,14 @@ export async function runAccount(o: {
     o.stdout(`account ${label} stored${activeLabel(o.owner) === label ? ' and active' : ''}\n`);
     // The first account sets up the crew config dir; later ones leave it to setup-plugins.
     if (!first) return 0;
-    const failed = await setupPlugins(o.owner, o.ports, o.env, o.pins);
+    let failed: string | undefined;
+    try {
+      const p = o.pins?.();
+      failed = await setupPlugins(o.owner, o.ports, o.env, p?.pins);
+      for (const name of p?.unallowed ?? []) o.stderr(`warning: ${unallowedLine(name)}\n`);
+    } catch (e) {
+      failed = (e as Error).message;
+    }
     if (failed === undefined) return 0;
     o.stderr(
       `error: plugin setup: ${failed}; the token is stored, run studio account setup-plugins\n`,
@@ -216,7 +227,9 @@ export async function runAccount(o: {
   }
   if (sub === 'setup-plugins' && label === undefined) {
     ownerOnly();
-    const failed = await setupPlugins(o.owner, o.ports, o.env, o.pins, (l) =>
+    const p = o.pins?.();
+    for (const name of p?.unallowed ?? []) o.stderr(`warning: ${unallowedLine(name)}\n`);
+    const failed = await setupPlugins(o.owner, o.ports, o.env, p?.pins, (l) =>
       o.stdout(`${safe(l)}\n`),
     );
     if (failed !== undefined) throw new Error(`plugin setup: ${failed}`);

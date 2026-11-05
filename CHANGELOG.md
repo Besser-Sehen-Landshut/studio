@@ -43,6 +43,18 @@ the maintainers tag after the merge.
 - `watch:` for vendored sources in `SOURCES.yaml`: the upstream files vendored content adapts (the `ehmo`
   platform files) are fetched, pinned and judged by `setup sources` and `sources check`; none reaches a crew.
 
+### Security
+
+- studio.yaml can only pin versions: a project config that changes the marketplace of a default plugin is
+  refused, and an extra plugin is installed only when `allowed_plugins` in the owner config names it with its
+  marketplace. A change of `.studio/studio.yaml` in a pull request always gets the security analyzer.
+- The skill deny list fails closed: skills are named by their `SKILL.md` front matter (the directory name is
+  denied too), plugin skills are found at the install paths of `installed_plugins.json` as well as in the
+  cache, and an installed skill whose name no `Skill(...)` rule can hold refuses the launch.
+- Versions from marketplaces and the CLI are checked against the pin pattern before they reach a title, note,
+  Definition of Done or output; others are dropped and named under `problems`. Table output replaces control
+  characters.
+
 ### Changed
 
 - Upgrading: a launch now refuses while the crew config dir holds `studio` or `superpowers` at a version

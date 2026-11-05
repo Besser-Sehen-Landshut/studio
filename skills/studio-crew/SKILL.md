@@ -66,7 +66,7 @@ questions: []
 ---
 ```
 
-Findings go in the body. Collect refuses an approval with an analyzer missing, a skipped diff-review, spec-check or security, no `mutation_probe`, a `green:` probe, or in the large tier a probe that did not run. An analyzer you cannot run is `skipped: <reason>`; if that is one of the three, the verdict is `changes_requested` or `status: failed`.
+Findings go in the body. Collect refuses an approval with an analyzer missing, an owed one skipped, no `mutation_probe`, a `green:` probe, or a probe that did not run in the large tier, for a fix or in a fix round. Owed (the brief's depth lines name them): diff-review, spec-check, security when listed, performance in the large tier, similar-bugs in a fix round or when diff-review reports `findings`. An analyzer you cannot run is `skipped: <reason>`; if it is owed, the verdict is `changes_requested` or `status: failed`.
 
 ## A test command fails, errors or cannot run
 

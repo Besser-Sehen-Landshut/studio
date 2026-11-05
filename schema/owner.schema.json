@@ -44,6 +44,28 @@
       },
       "additionalProperties": false
     },
+    "allowed_plugins": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "marketplace": {
+            "type": "string",
+            "pattern": "^https:\\/\\/github\\.com\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+(\\.git)?$"
+          }
+        },
+        "required": [
+          "name",
+          "marketplace"
+        ],
+        "additionalProperties": false
+      }
+    },
     "notify": {
       "type": "object",
       "properties": {
