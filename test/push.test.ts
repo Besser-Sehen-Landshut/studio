@@ -172,10 +172,7 @@ describe('pushDecisions', () => {
   });
 
   it('waits through quiet hours on the owner clock and sends the bundle after them', async () => {
-    const s = setup({
-      notify: { quiet: '22:00-07:00' },
-      crewLabelLimits: { timezone: 'Europe/Berlin' },
-    });
+    const s = setup({ notify: { quiet: '22:00-07:00', timezone: 'Europe/Berlin' } });
     installNotifySecret({ transport: 'ntfy', topic: TOPIC }, s.owner);
     // 23:30 in Berlin (UTC+1 in November).
     const r = await push(s, [d('APP-1')], at('2026-11-05T22:30:00Z'));
@@ -309,6 +306,34 @@ describe('decisionsOf', () => {
         urgent: true,
       },
     ]);
+  });
+});
+
+describe('review fixes', () => {
+  it('quiet hours use notify.timezone, never the crew limits zone', async () => {
+    // 23:30 UTC: quiet in UTC, but 08:30 in Tokyo.
+    const s = setup({
+      notify: { quiet: '22:00-07:00' },
+      crewLabelLimits: { timezone: 'Asia/Tokyo' },
+    });
+    installNotifySecret({ transport: 'ntfy', topic: TOPIC }, s.owner);
+    const sys = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const t = new Date('2026-11-05T23:30:00Z');
+    const expected = inQuietHours('22:00-07:00', t, sys) ? 'quiet' : undefined;
+    expect((await push(s, [d('APP-1')], t)).deferred).toBe(expected);
+    const tokyo = setup({ notify: { quiet: '22:00-07:00', timezone: 'Asia/Tokyo' } });
+    installNotifySecret({ transport: 'ntfy', topic: TOPIC }, tokyo.owner);
+    expect((await push(tokyo, [d('APP-1')], t)).sent).toBe(1);
+    expect(() => ownerConfigSchema.parse({ notify: { timezone: 'Mars/Base' } })).toThrow();
+  });
+
+  it('a project name that is not a plain name becomes ?', async () => {
+    for (const bad of ['app\nInjected line', 'https://evil.example/x', '']) {
+      const s = setup();
+      installNotifySecret({ transport: 'ntfy', topic: TOPIC }, s.owner);
+      await push(s, [d('APP-1')], at('2026-11-05T10:00:00Z'), 'proj-a', bad);
+      expect(s.sent[0]?.message).toBe('Blocked: APP-1 in ?');
+    }
   });
 });
 

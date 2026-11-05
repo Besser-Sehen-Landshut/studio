@@ -101,13 +101,13 @@ describe('unrelatedFailure', () => {
 });
 
 type Check = { name: string; bucket: string; workflow?: string; link?: string };
-const link = (run: number, job: number) =>
-  `https://github.com/org/app/actions/runs/${run}/job/${job}`;
-const failing = (run = 100, job = 1000, name = 'desktop-tests'): Check => ({
+const link = (run: number, job: number, repo = 'org/app') =>
+  `https://github.com/${repo}/actions/runs/${run}/job/${job}`;
+const failing = (run = 100, job = 1000, name = 'desktop-tests', repo = 'org/app'): Check => ({
   name,
   bucket: 'fail',
   workflow: 'CI',
-  link: link(run, job),
+  link: link(run, job, repo),
 });
 
 /** A gh whose checks and changed files the test sets per PR. */
@@ -115,7 +115,7 @@ function fakeGh() {
   const calls: string[] = [];
   const checks = new Map<number, Check[]>();
   const files = new Map<number, string[]>();
-  const rerun = { code: 0 };
+  const rerun = { code: 0, stderr: '' };
   const gh: Gh = {
     async api(path) {
       calls.push(`api ${path}`);
@@ -133,7 +133,7 @@ function fakeGh() {
         return { code: 0, stdout: JSON.stringify(rows), stderr: '' };
       }
       if (args[0] === 'run' && args[1] === 'rerun')
-        return { code: rerun.code, stdout: '', stderr: '' };
+        return { code: rerun.code, stdout: '', stderr: rerun.stderr };
       throw new Error(`unscripted gh ${line}`);
     },
   };
@@ -193,7 +193,7 @@ describe('ciFailurePolicy', () => {
     expect(await s.p.failed(ref(5), H1)).toBe('wait');
     s.p.passed(ref(5), H1);
     expect(listFlaky(s.root)).toEqual([
-      expect.objectContaining({ test: 'CI / desktop-tests', count: 1, lastSha: H1 }),
+      expect.objectContaining({ test: 'org/app: CI / desktop-tests', count: 1, lastSha: H1 }),
     ]);
     expect(s.reruns()).toHaveLength(1);
   });
@@ -264,6 +264,7 @@ describe('ciFailurePolicy', () => {
       s.g.checks.set(pr, [failing(run, run * 10)]);
       s.g.files.set(pr, ['api/src/lib.rs']);
       expect(await s.p.failed(ref(pr), head)).toBe('rerun');
+      s.p.passed(ref(pr), head);
       s.clock.advance(24 * 60 * 60_000);
     }
     const items = s.board().items;
@@ -289,11 +290,85 @@ describe('ciFailurePolicy', () => {
     s.g.checks.set(5, [failing(100, 1000)]);
     s.g.files.set(5, ['api/src/lib.rs']);
     await s.p.failed(ref(5), H1);
+    s.p.passed(ref(5), H1);
     s.clock.advance(15 * 24 * 60 * 60_000);
     s.g.checks.set(6, [failing(200, 2000)]);
     s.g.files.set(6, ['api/src/lib.rs']);
     expect(await s.p.failed(ref(6), H2)).toBe('rerun');
     expect(s.board().items).toEqual([]);
+  });
+
+  it('a fast failure next to a slow pending sibling waits, then reruns once after completion', async () => {
+    const s = policy();
+    const slow: Check = {
+      name: 'api-tests (a)',
+      bucket: 'pending',
+      workflow: 'CI',
+      link: link(100, 1001),
+    };
+    s.g.checks.set(5, [failing(100, 1000), slow]);
+    s.g.files.set(5, ['api/src/lib.rs']);
+    expect(await s.p.failed(ref(5), H1)).toBe('wait');
+    expect(await s.p.failed(ref(5), H1)).toBe('wait');
+    expect(s.reruns()).toEqual([]);
+    expect(() => readFileSync(join(s.root, RERUNS_FILE), 'utf8')).toThrow();
+    s.g.checks.set(5, [failing(100, 1000), { ...slow, bucket: 'pass' }]);
+    expect(await s.p.failed(ref(5), H1)).toBe('rerun');
+    expect(s.reruns()).toEqual(['run rerun 100 --failed --repo org/app']);
+  });
+
+  it('a rerun GitHub refuses for now (still running, 403, 422) spends no allowance', async () => {
+    const s = policy();
+    s.g.checks.set(5, [failing()]);
+    s.g.files.set(5, ['api/src/lib.rs']);
+    for (const stderr of [
+      'run 100 cannot be rerun; This workflow is already running',
+      'HTTP 403: Forbidden',
+      'HTTP 422: Unprocessable Entity',
+    ]) {
+      s.g.rerun.code = 1;
+      s.g.rerun.stderr = stderr;
+      expect(await s.p.failed(ref(5), H1)).toBe('wait');
+    }
+    expect(JSON.parse(readFileSync(join(s.root, RERUNS_FILE), 'utf8'))).toEqual([]);
+    s.g.rerun.code = 0;
+    expect(await s.p.failed(ref(5), H1)).toBe('rerun');
+    expect(s.reruns()).toHaveLength(4);
+    expect(s.events.reruns).toHaveLength(1);
+  });
+
+  it('an earlier job that was red again after its rerun does not count toward the item', async () => {
+    const s = policy();
+    s.g.checks.set(5, [failing(100, 1000)]);
+    s.g.files.set(5, ['api/src/lib.rs']);
+    expect(await s.p.failed(ref(5), H1)).toBe('rerun');
+    s.g.checks.set(5, [failing(100, 1001)]);
+    expect(await s.p.failed(ref(5), H1)).toBe('fail');
+    s.clock.advance(24 * 60 * 60_000);
+    s.g.checks.set(6, [failing(200, 2000)]);
+    s.g.files.set(6, ['api/src/lib.rs']);
+    expect(await s.p.failed(ref(6), H2)).toBe('rerun');
+    expect(s.board().items).toEqual([]);
+  });
+
+  it('the same job name in two repositories is two jobs: ledger and item per repository', async () => {
+    const s = policy();
+    const web = (pr: number) => ({ repo: 'org/web', pr, item: `WEB-${pr}` });
+    s.g.checks.set(5, [failing(100, 1000)]);
+    s.g.files.set(5, ['api/src/lib.rs']);
+    expect(await s.p.failed(ref(5), H1)).toBe('rerun');
+    s.p.passed(ref(5), H1);
+    s.clock.advance(60 * 60_000);
+    s.g.checks.set(8, [failing(300, 3000, 'desktop-tests', 'org/web')]);
+    s.g.files.set(8, ['api/src/lib.rs']);
+    expect(await s.p.failed(web(8), H2)).toBe('rerun');
+    s.p.passed(web(8), H2);
+    expect(s.board().items).toEqual([]);
+    expect(
+      listFlaky(s.root)
+        .map((e) => e.test)
+        .sort(),
+    ).toEqual(['org/app: CI / desktop-tests', 'org/web: CI / desktop-tests']);
   });
 
   it('a failed rerun call fails the entry and keeps the commit from another try', async () => {
@@ -401,7 +476,7 @@ describe('mergeOne with the policy', () => {
     expect(result.result).toBe('merged');
     expect(s.reruns()).toEqual(['run rerun 100 --failed --repo org/app']);
     expect(listFlaky(s.root)).toEqual([
-      expect.objectContaining({ test: 'CI / desktop-tests', count: 1 }),
+      expect.objectContaining({ test: 'org/app: CI / desktop-tests', count: 1 }),
     ]);
   });
 

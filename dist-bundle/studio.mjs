@@ -28176,10 +28176,11 @@ var componentSchema = external_exports.strictObject({
   // Most items of this component in assigned or in_progress at once, on top of role wip.
   wip: external_exports.number().int().positive().optional()
 });
+var repoName = external_exports.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "must be owner/repo (letters, digits, . _ -)").refine((r) => r.split("/").every((p) => p !== "." && p !== ".."), "must be owner/repo");
 var studioConfigSchema = external_exports.strictObject({
   studio: external_exports.literal(1),
-  primaryRepo: external_exports.string().min(1),
-  repos: external_exports.array(external_exports.string().min(1)).min(1),
+  primaryRepo: repoName,
+  repos: external_exports.array(repoName).min(1),
   notify: external_exports.strictObject({
     channel: external_exports.string().min(1),
     ownerOnly: external_exports.boolean(),
@@ -28335,6 +28336,8 @@ var ownerConfigSchema = external_exports.strictObject({
     command: external_exports.string().min(1).optional(),
     // Local hours (the owner's zone) in which a push that is not urgent waits, e.g. 22:00-07:00.
     quiet: external_exports.string().regex(QUIET_RE, "must be HH:MM-HH:MM").refine((q) => q.slice(0, 5) !== q.slice(6), "start and end must differ").optional(),
+    // The zone of the quiet hours (IANA); default the system zone.
+    timezone: external_exports.string().refine(validTimeZone, { message: "not a known IANA time zone" }).optional(),
     // The language of the push text; default from the locale (LC_ALL, LC_MESSAGES, LANG).
     language: external_exports.enum(["en", "de"]).optional(),
     // The ntfy server for self-hosters; default https://ntfy.sh.
@@ -34795,6 +34798,7 @@ function decisionsOf(o2) {
   }
   return out;
 }
+var PROJECT_RE = /^[A-Za-z0-9._-]{1,64}$/;
 var PHRASES = {
   en: {
     fix_limit: "Fix limit reached",
@@ -34923,7 +34927,7 @@ async function pushLocked(o2) {
     if (fresh.length === 0) return { sent: 0, errors: save() };
     const urgent = fresh.some((d) => d.urgent);
     if (!urgent) {
-      const zone = resolveZone(o2.ownerConfig.crewLabelLimits.timezone);
+      const zone = resolveZone(o2.ownerConfig.notify?.timezone);
       if (inQuietHours(o2.ownerConfig.notify?.quiet, o2.now, zone)) {
         return { sent: 0, deferred: "quiet", errors: save() };
       }
@@ -34934,7 +34938,7 @@ async function pushLocked(o2) {
     }
     const lang = pushLanguage(o2.ownerConfig, o2.owner.env ?? process.env);
     const reply = await sendPush(http, stored.secret, o2.ownerConfig, {
-      text: pushText(fresh, o2.project, lang),
+      text: pushText(fresh, PROJECT_RE.test(o2.project) ? o2.project : "?", lang),
       urgent
     });
     if (!reply.ok) {
@@ -36635,10 +36639,12 @@ async function failedChecks(gh, ref) {
     `^https://github\\.com/${ref.repo.replace(/[.]/g, "\\.")}/actions/runs/(\\d+)/job/(\\d+)$`
   );
   const out = [];
+  let pending = false;
   for (const c3 of raw) {
     if (c3 === null || typeof c3 !== "object") return void 0;
     const { name, bucket, workflow, link: url2 } = c3;
     if (bucket === "cancel") return void 0;
+    if (bucket === "pending") pending = true;
     if (bucket !== "fail") continue;
     if (typeof name !== "string" || typeof url2 !== "string") return void 0;
     const m = link2.exec(url2);
@@ -36650,8 +36656,9 @@ async function failedChecks(gh, ref) {
       job: Number(m[2])
     });
   }
-  return out.length === 0 ? void 0 : out;
+  return out.length === 0 ? void 0 : { failed: out, pending };
 }
+var NOT_YET = /already running|in progress|still running|\b(403|422)\b/i;
 async function changedFiles(gh, ref) {
   try {
     const out = await gh.api(
@@ -36683,7 +36690,9 @@ var testName = (c3) => [...`${c3.workflow ?? "?"} / ${c3.name}`.replace(/[\p{Cc}
 function withFlakyItem(board, test, repo, runs) {
   const note = `${FLAKY_NOTE}${test}`;
   const open2 = (i2) => i2.status !== "merged" && i2.status !== "dropped";
-  if (board.items.some((i2) => open2(i2) && (i2.notes ?? []).includes(note))) return { board };
+  if (board.items.some((i2) => open2(i2) && i2.repo === repo && (i2.notes ?? []).includes(note))) {
+    return { board };
+  }
   const prefix = boardPrefix(board, repo);
   const numbers = board.items.filter((i2) => i2.id.startsWith(`${prefix}-`)).map((i2) => Number(i2.id.slice(prefix.length + 1)));
   const id = `${prefix}-${Math.max(0, ...numbers) + 1}`;
@@ -36713,20 +36722,14 @@ function withFlakyItem(board, test, repo, runs) {
 function ciFailurePolicy(o2) {
   const placed = /* @__PURE__ */ new Map();
   const say = (e) => e.message.replace(new RegExp("\\p{Cc}", "gu"), " ");
-  const unrelated = async (ref, head) => {
+  const unrelated = async (ref, head, checks) => {
     const key = `${ref.repo}@${head}`;
     if (placed.has(key)) return placed.get(key);
-    let result;
-    const checks = await failedChecks(o2.gh, ref);
-    if (checks !== void 0) {
-      const files = await o2.workflowsAt(ref.repo, head);
-      const changed = await changedFiles(o2.gh, ref);
-      const paths = o2.itemPaths(ref);
-      const all = files !== void 0 && checks.every(
-        (c3) => unrelatedFailure({ area: jobArea(files, c3), changed, itemPaths: paths })
-      );
-      result = all ? checks : void 0;
-    }
+    const files = await o2.workflowsAt(ref.repo, head);
+    const changed = await changedFiles(o2.gh, ref);
+    const paths = o2.itemPaths(ref);
+    const all = files !== void 0 && checks.every((c3) => unrelatedFailure({ area: jobArea(files, c3), changed, itemPaths: paths }));
+    const result = all ? checks : void 0;
     placed.set(key, result);
     return result;
   };
@@ -36739,22 +36742,26 @@ function ciFailurePolicy(o2) {
       return { entries: entries2, result: mine };
     });
     if (settled !== void 0 && outcome === "pass") {
-      for (const t of settled.tests) recordFlaky(o2.stateRoot, t, head, "pass", now);
+      for (const t of settled.tests) {
+        recordFlaky(o2.stateRoot, `${ref.repo}: ${t}`, head, "pass", now);
+      }
     }
   };
   return {
     async failed(ref, head) {
       try {
         const known = readLedger(o2.stateRoot).find((e) => e.repo === ref.repo && e.sha === head);
+        if (known?.outcome !== void 0) return "fail";
+        const current = await failedChecks(o2.gh, ref);
+        if (current?.pending === true) return "wait";
         if (known !== void 0) {
-          if (known.outcome !== void 0) return "fail";
-          const now = await failedChecks(o2.gh, ref);
-          const stale = now?.every((c3) => known.jobs.includes(c3.job)) === true;
+          const stale = current?.failed.every((c3) => known.jobs.includes(c3.job)) === true;
           if (stale && o2.now().getTime() - Date.parse(known.at) < RERUN_SETTLE_MS) return "wait";
           settle2(ref, head, "fail");
           return "fail";
         }
-        const checks = await unrelated(ref, head);
+        if (current === void 0) return "fail";
+        const checks = await unrelated(ref, head, current.failed);
         if (checks === void 0) return "fail";
         if (!await o2.capacityFree()) return "wait";
         const tests = [...new Set(checks.map(testName))];
@@ -36777,15 +36784,26 @@ function ciFailurePolicy(o2) {
           return { entries: [...entries2, entry], result: entries2 };
         });
         if (earlier === void 0) return "wait";
+        let started = 0;
         for (const run2 of runs) {
           const r = await o2.gh.run(["run", "rerun", String(run2), "--failed", "--repo", ref.repo], {
             timeoutMs: GH_MS
           });
-          if (r.code !== 0) {
-            o2.log(`error: rerun of run ${run2} failed (gh exit ${r.code}); a real failure now`);
-            settle2(ref, head, "fail");
-            return "fail";
+          if (r.code === 0) {
+            started++;
+            continue;
           }
+          if (started === 0 && NOT_YET.test(r.stderr)) {
+            withLedger(o2.stateRoot, o2.now(), (entries2) => ({
+              entries: entries2.filter((e) => !(e.repo === ref.repo && e.sha === head)),
+              result: true
+            }));
+            return "wait";
+          }
+          if (started > 0) break;
+          o2.log(`error: rerun of run ${run2} failed (gh exit ${r.code}); a real failure now`);
+          settle2(ref, head, "fail");
+          return "fail";
         }
         o2.events.reruns.push({
           ...ref.item === void 0 ? {} : { item: ref.item },
@@ -36797,7 +36815,7 @@ function ciFailurePolicy(o2) {
         });
         for (const test of tests) {
           const before = earlier.filter(
-            (e) => e.tests.includes(test) && at2.getTime() - Date.parse(e.at) <= FLAKY_WINDOW_MS
+            (e) => e.repo === ref.repo && e.outcome === "pass" && e.tests.includes(test) && at2.getTime() - Date.parse(e.at) <= FLAKY_WINDOW_MS
           );
           if (before.length === 0) continue;
           try {

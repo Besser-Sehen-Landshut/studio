@@ -20,13 +20,15 @@ maintainers tag after the merge.
 - `tick` pushes each new `needsLead` entry and every account block: one line, a fixed phrase in English or
   German (`notify.language`, else the locale), the item id and the project name, never crew text. Each
   decision is pushed once; at most one push per project in 10 minutes, the rest bundled; quiet hours
-  (`notify.quiet: "22:00-07:00"`, owner clock) hold pushes back, except an account block, which is
+  (`notify.quiet: "22:00-07:00"` in `notify.timezone`, else the system zone) hold pushes back, except an account block, which is
   urgent. A failed push is a `notify:` line under `errors` and is retried; it does not change the exit code.
 - A failed check outside the pull request (the job runs in a directory of its own that the pull request
   and the item do not touch) gets one rerun of its failed jobs on the same commit
-  (`gh run rerun <run> --failed`), once CI is under the merge capacity. The queue and `collect` wait for
-  it. A pass goes into the flaky ledger; a second such failure of the same job within 14 days adds one
-  item `Find the cause of flaky <job>`. Never more than one rerun per commit (`ci-reruns.json`).
+  (`gh run rerun <run> --failed`), once no check of the pull request still runs and CI is under the merge
+  capacity. The queue and `collect` wait for it. A pass goes into the flaky ledger (per repository); a
+  failure of the same job in the same repository within 14 days of a rerun that passed adds one item
+  `Find the cause of flaky <job>`. Never more than one rerun per commit (`ci-reruns.json`); a rerun
+  GitHub refuses for now (still running, 403, 422) does not use it up.
   Anything Studio cannot place counts as related and fails as before.
 - `tick` prints `reruns` and `flakyItems`; `queue run` prints them when there are any.
 
@@ -34,7 +36,8 @@ maintainers tag after the merge.
 
 - The lead skill: pushes and flaky reruns are Studio's; the lead acts on `needsLead` as before and no
   longer records Studio's own reruns in the ledger.
-- The owner config's `notify` block takes `quiet`, `language` and `ntfy_server`; `channel` and `command`
+- `primary_repo` and `repos` in `studio.yaml` must be `owner/repo`.
+- The owner config's `notify` block takes `quiet`, `timezone`, `language` and `ntfy_server`; `channel` and `command`
   (the notify command of `studio state`, unchanged) are optional now, but go together.
 
 ## [0.12.2] - 2026-11-05

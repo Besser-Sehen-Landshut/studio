@@ -140,11 +140,17 @@ const componentSchema = z.strictObject({
 });
 export type ComponentConfig = z.infer<typeof componentSchema>;
 
+/** A GitHub repository as `owner/repo`: it reaches commands, URLs and push texts. */
+const repoName = z
+  .string()
+  .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, 'must be owner/repo (letters, digits, . _ -)')
+  .refine((r) => r.split('/').every((p) => p !== '.' && p !== '..'), 'must be owner/repo');
+
 export const studioConfigSchema = z
   .strictObject({
     studio: z.literal(1),
-    primaryRepo: z.string().min(1),
-    repos: z.array(z.string().min(1)).min(1),
+    primaryRepo: repoName,
+    repos: z.array(repoName).min(1),
     notify: z
       .strictObject({
         channel: z.string().min(1),
@@ -351,6 +357,11 @@ export const ownerConfigSchema = z.strictObject({
         .string()
         .regex(QUIET_RE, 'must be HH:MM-HH:MM')
         .refine((q) => q.slice(0, 5) !== q.slice(6), 'start and end must differ')
+        .optional(),
+      // The zone of the quiet hours (IANA); default the system zone.
+      timezone: z
+        .string()
+        .refine(validTimeZone, { message: 'not a known IANA time zone' })
         .optional(),
       // The language of the push text; default from the locale (LC_ALL, LC_MESSAGES, LANG).
       language: z.enum(['en', 'de']).optional(),

@@ -151,6 +151,9 @@ export function decisionsOf(o: {
 
 export type Lang = 'en' | 'de';
 
+/** A project name a push may carry; anything else is shown as `?`. */
+const PROJECT_RE = /^[A-Za-z0-9._-]{1,64}$/;
+
 const PHRASES: Record<Lang, Record<PushKind, string>> = {
   en: {
     fix_limit: 'Fix limit reached',
@@ -325,7 +328,7 @@ async function pushLocked(o: Parameters<typeof pushDecisions>[0]): Promise<PushR
     if (fresh.length === 0) return { sent: 0, errors: save() };
     const urgent = fresh.some((d) => d.urgent);
     if (!urgent) {
-      const zone = resolveZone(o.ownerConfig.crewLabelLimits.timezone);
+      const zone = resolveZone(o.ownerConfig.notify?.timezone);
       if (inQuietHours(o.ownerConfig.notify?.quiet, o.now, zone)) {
         return { sent: 0, deferred: 'quiet', errors: save() };
       }
@@ -336,7 +339,7 @@ async function pushLocked(o: Parameters<typeof pushDecisions>[0]): Promise<PushR
     }
     const lang = pushLanguage(o.ownerConfig, o.owner.env ?? process.env);
     const reply = await sendPush(http, stored.secret, o.ownerConfig, {
-      text: pushText(fresh, o.project, lang),
+      text: pushText(fresh, PROJECT_RE.test(o.project) ? o.project : '?', lang),
       urgent,
     });
     if (!reply.ok) {

@@ -106,10 +106,14 @@ export type FailedCheck = { name: string; workflow?: string; run: number; job: n
 
 /**
  * The failed checks of the pull request with their run and job ids, from
- * `gh pr checks --json name,bucket,workflow,link`. Undefined when any is not clearly a failed
- * Actions job of this repository: a cancelled check, a commit status, a link of another form.
+ * `gh pr checks --json name,bucket,workflow,link`, and whether any check still runs. Undefined
+ * when a failed one is not clearly a failed Actions job of this repository (a commit status, a link
+ * of another form), a check was cancelled, or none failed.
  */
-export async function failedChecks(gh: Gh, ref: PrRef): Promise<FailedCheck[] | undefined> {
+export async function failedChecks(
+  gh: Gh,
+  ref: PrRef,
+): Promise<{ failed: FailedCheck[]; pending: boolean } | undefined> {
   const r = await gh.run(
     ['pr', 'checks', String(ref.pr), '--repo', ref.repo, '--json', 'name,bucket,workflow,link'],
     { timeoutMs: GH_MS },
@@ -125,10 +129,12 @@ export async function failedChecks(gh: Gh, ref: PrRef): Promise<FailedCheck[] | 
     `^https://github\\.com/${ref.repo.replace(/[.]/g, '\\.')}/actions/runs/(\\d+)/job/(\\d+)$`,
   );
   const out: FailedCheck[] = [];
+  let pending = false;
   for (const c of raw) {
     if (c === null || typeof c !== 'object') return undefined;
     const { name, bucket, workflow, link: url } = c as Record<string, unknown>;
     if (bucket === 'cancel') return undefined;
+    if (bucket === 'pending') pending = true;
     if (bucket !== 'fail') continue;
     if (typeof name !== 'string' || typeof url !== 'string') return undefined;
     const m = link.exec(url);
@@ -140,8 +146,11 @@ export async function failedChecks(gh: Gh, ref: PrRef): Promise<FailedCheck[] | 
       job: Number(m[2]),
     });
   }
-  return out.length === 0 ? undefined : out;
+  return out.length === 0 ? undefined : { failed: out, pending };
 }
+
+/** A rerun refused for now (the run still runs, or GitHub says not yet): no allowance spent. */
+const NOT_YET = /already running|in progress|still running|\b(403|422)\b/i;
 
 /** The pull request's changed files; undefined when unknown or too many to be sure. */
 async function changedFiles(gh: Gh, ref: PrRef): Promise<string[] | undefined> {
@@ -202,7 +211,9 @@ export function withFlakyItem(
 ): { board: Board; id?: string } {
   const note = `${FLAKY_NOTE}${test}`;
   const open = (i: WorkItem) => i.status !== 'merged' && i.status !== 'dropped';
-  if (board.items.some((i) => open(i) && (i.notes ?? []).includes(note))) return { board };
+  if (board.items.some((i) => open(i) && i.repo === repo && (i.notes ?? []).includes(note))) {
+    return { board };
+  }
   const prefix = boardPrefix(board, repo);
   const numbers = board.items
     .filter((i) => i.id.startsWith(`${prefix}-`))
@@ -260,22 +271,21 @@ export function ciFailurePolicy(o: {
   const placed = new Map<string, FailedCheck[] | undefined>();
   const say = (e: unknown) => (e as Error).message.replace(/\p{Cc}/gu, ' ');
 
-  const unrelated = async (ref: PrRef, head: string): Promise<FailedCheck[] | undefined> => {
+  /** `checks`: the failed ones, read while nothing of the head runs any more. */
+  const unrelated = async (
+    ref: PrRef,
+    head: string,
+    checks: FailedCheck[],
+  ): Promise<FailedCheck[] | undefined> => {
     const key = `${ref.repo}@${head}`;
     if (placed.has(key)) return placed.get(key);
-    let result: FailedCheck[] | undefined;
-    const checks = await failedChecks(o.gh, ref);
-    if (checks !== undefined) {
-      const files = await o.workflowsAt(ref.repo, head);
-      const changed = await changedFiles(o.gh, ref);
-      const paths = o.itemPaths(ref);
-      const all =
-        files !== undefined &&
-        checks.every((c) =>
-          unrelatedFailure({ area: jobArea(files, c), changed, itemPaths: paths }),
-        );
-      result = all ? checks : undefined;
-    }
+    const files = await o.workflowsAt(ref.repo, head);
+    const changed = await changedFiles(o.gh, ref);
+    const paths = o.itemPaths(ref);
+    const all =
+      files !== undefined &&
+      checks.every((c) => unrelatedFailure({ area: jobArea(files, c), changed, itemPaths: paths }));
+    const result = all ? checks : undefined;
     placed.set(key, result);
     return result;
   };
@@ -290,7 +300,9 @@ export function ciFailurePolicy(o: {
     });
     // A rerun that passed proves the job flaky; one that failed again is a real failure.
     if (settled !== undefined && outcome === 'pass') {
-      for (const t of settled.tests) recordFlaky(o.stateRoot, t, head, 'pass', now);
+      for (const t of settled.tests) {
+        recordFlaky(o.stateRoot, `${ref.repo}: ${t}`, head, 'pass', now);
+      }
     }
   };
 
@@ -298,16 +310,19 @@ export function ciFailurePolicy(o: {
     async failed(ref, head) {
       try {
         const known = readLedger(o.stateRoot).find((e) => e.repo === ref.repo && e.sha === head);
+        if (known?.outcome !== undefined) return 'fail';
+        const current = await failedChecks(o.gh, ref);
+        // A sibling job still runs: nothing is judged, recorded or rerun until the runs completed.
+        if (current?.pending === true) return 'wait';
         if (known !== undefined) {
-          if (known.outcome !== undefined) return 'fail';
           // Right after the rerun the old attempt's failed jobs may still show: wait for them.
-          const now = await failedChecks(o.gh, ref);
-          const stale = now?.every((c) => known.jobs.includes(c.job)) === true;
+          const stale = current?.failed.every((c) => known.jobs.includes(c.job)) === true;
           if (stale && o.now().getTime() - Date.parse(known.at) < RERUN_SETTLE_MS) return 'wait';
           settle(ref, head, 'fail');
           return 'fail';
         }
-        const checks = await unrelated(ref, head);
+        if (current === undefined) return 'fail';
+        const checks = await unrelated(ref, head, current.failed);
         if (checks === undefined) return 'fail';
         if (!(await o.capacityFree())) return 'wait';
         const tests = [...new Set(checks.map(testName))];
@@ -331,15 +346,27 @@ export function ciFailurePolicy(o: {
           return { entries: [...entries, entry], result: entries };
         });
         if (earlier === undefined) return 'wait'; // another process got there first
+        let started = 0;
         for (const run of runs) {
           const r = await o.gh.run(['run', 'rerun', String(run), '--failed', '--repo', ref.repo], {
             timeoutMs: GH_MS,
           });
-          if (r.code !== 0) {
-            o.log(`error: rerun of run ${run} failed (gh exit ${r.code}); a real failure now`);
-            settle(ref, head, 'fail');
-            return 'fail';
+          if (r.code === 0) {
+            started++;
+            continue;
           }
+          if (started === 0 && NOT_YET.test(r.stderr)) {
+            // Not now: give the allowance back, the next poll tries again.
+            withLedger(o.stateRoot, o.now(), (entries) => ({
+              entries: entries.filter((e) => !(e.repo === ref.repo && e.sha === head)),
+              result: true,
+            }));
+            return 'wait';
+          }
+          if (started > 0) break; // what started counts; the rest fails on its own
+          o.log(`error: rerun of run ${run} failed (gh exit ${r.code}); a real failure now`);
+          settle(ref, head, 'fail');
+          return 'fail';
         }
         o.events.reruns.push({
           ...(ref.item === undefined ? {} : { item: ref.item }),
@@ -350,8 +377,13 @@ export function ciFailurePolicy(o: {
           runs,
         });
         for (const test of tests) {
+          // Only reruns that passed prove the job flaky; red again was a real failure.
           const before = earlier.filter(
-            (e) => e.tests.includes(test) && at.getTime() - Date.parse(e.at) <= FLAKY_WINDOW_MS,
+            (e) =>
+              e.repo === ref.repo &&
+              e.outcome === 'pass' &&
+              e.tests.includes(test) &&
+              at.getTime() - Date.parse(e.at) <= FLAKY_WINDOW_MS,
           );
           if (before.length === 0) continue;
           try {
