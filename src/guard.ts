@@ -1726,7 +1726,10 @@ function checkMcp(env: Env, tool: string, input: Record<string, unknown>, cwd: s
       deny(`${tool}: ${key} asks the tool to write; a researcher's tools only read`);
     }
     if (typeof v !== 'string' || v === '') return;
-    if (known.paths.has(top)) return confine(v, key);
+    if (known.paths.has(top)) {
+      confine(v, key);
+      return;
+    }
     if (depth === 1 && known.text.has(key)) {
       if (/\p{Cc}/u.test(v)) deny(`${tool}: control character in ${key}`);
       return;
