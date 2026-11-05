@@ -10,6 +10,7 @@ import {
   loadBoard,
   saveBoard,
   settleEpics,
+  transition,
   type WorkItem,
 } from './board.js';
 import { loadConfig } from './config.js';
@@ -192,8 +193,13 @@ export function dropEpic(board: Board, id: string, by: string, now: Date): Board
   if (epic.status === 'dropped' || epic.status === 'done') {
     throw new Error(`${id} is ${epic.status} already`);
   }
+  // The acceptance checks the epic and is no piece of it: it goes with the epic.
   const open = board.items.filter(
-    (i) => i.epic === id && i.status !== 'merged' && i.status !== 'dropped',
+    (i) =>
+      i.epic === id &&
+      i.status !== 'merged' &&
+      i.status !== 'dropped' &&
+      acceptanceOf(i) === undefined,
   );
   if (open.length > 0) {
     throw new Error(
@@ -201,6 +207,13 @@ export function dropEpic(board: Board, id: string, by: string, now: Date): Board
     );
   }
   const entry = { at: now.toISOString(), from: epic.status, to: 'dropped' as const, by };
+  for (const a of board.items) {
+    if (acceptanceOf(a) !== id || a.status === 'merged' || a.status === 'dropped') continue;
+    if (a.status === 'assigned' || a.status === 'in_progress') {
+      throw new Error(`${a.id}, the acceptance of ${id}, is running: stop it first`);
+    }
+    board = transition(board, a.id, 'dropped', by, now);
+  }
   return {
     ...board,
     epics: (board.epics ?? []).map((e) =>

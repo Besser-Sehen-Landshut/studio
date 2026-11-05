@@ -450,9 +450,7 @@
             "properties": {
               "workflow": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 200,
-                "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+                "pattern": "^\\.github\\/workflows\\/[A-Za-z0-9._-]{1,100}\\.ya?ml$"
               },
               "job": {
                 "type": "string",

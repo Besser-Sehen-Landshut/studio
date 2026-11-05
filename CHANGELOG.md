@@ -18,8 +18,10 @@ epic done only when the acceptance is green. Not tagged yet; the maintainers tag
   notes `acceptance E-<n>` and `acceptance-state: <hash>`). One per epic state: never a second while one is
   open or one finished for the same items; a dropped one is replaced. It does not count in the epic's
   progress and does not reopen it. One that has not started is dropped when its epic moves on.
-- `acceptance: { suites: [{ workflow, job }] }` in `studio.yaml`: the full suites. Without it every workflow
-  run on the main commit counts. Before the launch phase `tick` reads them on the head of the default
+- `acceptance: { suites: [{ workflow, job }] }` in `studio.yaml`: the full suites, each workflow by its file
+  (`.github/workflows/<file>.yml`) and found by GitHub's id, never by display name. Every run on the commit
+  counts and a red one wins; a file listed for two workflows fails closed. Without it every workflow run on
+  the main commit counts, by file, except one skipped there. Before the launch phase `tick` reads them on the head of the default
   branch, waits on that commit until all completed (`held`), then pins it (`acceptance-main: <sha>`); the
   planner defers the item until then (`ci pending`). A configured suite with no run there is started once
   with `gh workflow run` after 10 minutes, recorded in `acceptance-runs.json` before gh runs; a suite
@@ -30,9 +32,12 @@ epic done only when the acceptance is green. Not tagged yet; the maintainers tag
   over the combined diff, no mutation probe owed) and its own report shape: `verdict`, `accepts: E-<n>`,
   `head_sha`, `analyzers`, `findings`.
 - `collect` of an acceptance holds the report to its launch record (epic, state, main, suites) and, in the
-  same board save as the item's move, adds one `fix` item per finding (`E-<n>: <finding>`, note
-  `finding of <id>`) and per failed suite (`E-<n>: make <suite> pass on main`, note `suite: <suite>`),
-  which reopens the epic, or marks the epic `done` with `accepted: { item, sha, at }`. It prints
+  same board save as the item's move, adds one `fix` item per finding (`E-<n>: acceptance finding <k> of
+  <id>`, a fixed Definition of Done, note `finding of <id>`; the finding text is kept in the new item field
+  `finding` and reaches the builder only as a data file) and per failed suite (a configured name quoted,
+  any other name as data), which reopens the epic, or marks the epic `done` with
+  `accepted: { item, sha, at }`. From the third round that asked for changes, new items wait `blocked` for
+  the lead. `epic drop` takes a waiting acceptance along. It prints
   `acceptance: { epic, result, findings }`; `tick` prints `epicsDone`, `epicsReopened` and `acceptance`
   (items added, dropped, pinned, suites started), and `epicsReady` names the acceptance item.
 - Epic stages: `open`, `in acceptance`, `done`, `reopened` (open again after accepting). `studio board`

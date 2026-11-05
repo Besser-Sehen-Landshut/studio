@@ -7,7 +7,7 @@ import {
   ACCEPTANCE_NOTE,
   acceptanceOf,
   type Board,
-  crewLine,
+  crewReason,
   type Epic,
   loadBoard,
   saveBoard,
@@ -33,6 +33,8 @@ export const FINDING_NOTE = 'finding of ';
 export const SUITE_NOTE = 'suite: ';
 /** How long a main commit may show no run of a suite before Studio starts it (CI starts late). */
 export const SUITE_GRACE_MS = 10 * 60_000;
+/** Acceptance rounds of one epic that may ask for changes before its new work waits for the lead. */
+export const MAX_ACCEPTANCE_ROUNDS = 3;
 /** How long a started suite may show no run before the lead hears of it. */
 export const DISPATCH_WAIT_MS = 30 * 60_000;
 const GH_MS = 60_000;
@@ -204,9 +206,12 @@ export function settleAcceptances(
 
 export type SuiteState = 'pass' | 'fail' | 'pending' | 'missing';
 export interface Suite {
-  /** `<workflow> / <job>` for a configured suite, the workflow name otherwise. */
+  /** `<workflow file> / <job>` for a configured suite, the workflow file otherwise. */
   name: string;
+  /** The workflow file (`.github/workflows/<file>`), or `workflow <id>` for a path not shown. */
   workflow: string;
+  /** GitHub's id of that workflow; absent when the repository has no workflow at that path. */
+  workflowId?: number;
   job?: string;
   state: SuiteState;
 }
@@ -214,11 +219,12 @@ export interface Suite {
 const runSchema = z.array(
   z.object({
     databaseId: z.number().int(),
-    workflowName: z.string(),
+    workflowDatabaseId: z.number().int(),
     status: z.string(),
     conclusion: z.string().nullish(),
   }),
 );
+const workflowsSchema = z.array(z.object({ id: z.number().int(), path: z.string() }));
 const jobsSchema = z.object({
   jobs: z.array(
     z.object({ name: z.string(), status: z.string(), conclusion: z.string().nullish() }),
@@ -227,13 +233,36 @@ const jobsSchema = z.object({
 
 /** Cancelled or skipped is no result: the suite did not run there (a later push cancelled it). */
 const NO_RESULT = new Set(['cancelled', 'skipped', 'stale']);
+/** A workflow path as it may stand in a line: no spaces, quotes or control characters. */
+const SAFE_PATH = /^[A-Za-z0-9._/-]{1,200}$/;
 
 const clean = (s: string): string => s.replace(/[\p{Cc}\p{Cf}]/gu, ' ').slice(0, 200);
 
 /**
- * The full suites on one commit. Configured suites (`acceptance.suites`) by workflow and job, each
- * leg of a matrix (`<job> (<leg>)`) included; without them every workflow that ran on the commit,
- * newest run each. Undefined when GitHub cannot be read: never green.
+ * Several results for one suite on one commit (two runs of its workflow, matrix legs): a failure
+ * wins over everything, so a green run can never hide a red one; then a running one; then a pass.
+ */
+function worst(states: readonly SuiteState[]): SuiteState {
+  for (const s of ['fail', 'pending', 'pass'] as const) if (states.includes(s)) return s;
+  return 'missing';
+}
+
+const runState = (status: string, conclusion: string | null | undefined): SuiteState =>
+  status !== 'completed'
+    ? 'pending'
+    : conclusion === 'success'
+      ? 'pass'
+      : NO_RESULT.has(conclusion ?? '')
+        ? 'missing'
+        : 'fail';
+
+/**
+ * The full suites on one commit. A workflow is known by its file and GitHub's id for it, never by
+ * its display name, which two workflows can share and a change can rename. Configured suites
+ * (`acceptance.suites`) by file and job, each leg of a matrix (`<job> (<leg>)`) included; without
+ * them every workflow that ran on the commit. Every run of a workflow on the commit counts (a red
+ * one fails the suite, see `worst`); a file GitHub lists twice fails closed. Undefined when GitHub
+ * cannot be read: never green.
  */
 export async function readSuites(
   gh: Gh,
@@ -242,6 +271,14 @@ export async function readSuites(
   config: StudioConfig,
 ): Promise<Suite[] | undefined> {
   try {
+    const w = await gh.run(
+      ['workflow', 'list', '--repo', repo, '--all', '--limit', '500', '--json', 'id,path'],
+      { timeoutMs: GH_MS },
+    );
+    if (w.code !== 0) return undefined;
+    const workflows = workflowsSchema.safeParse(JSON.parse(w.stdout));
+    if (!workflows.success) return undefined;
+    const pathOf = new Map(workflows.data.map((x) => [x.id, x.path]));
     const r = await gh.run(
       [
         'run',
@@ -251,62 +288,77 @@ export async function readSuites(
         '--commit',
         sha,
         '--limit',
-        '100',
+        '200',
         '--json',
-        'databaseId,workflowName,status,conclusion',
+        'databaseId,workflowDatabaseId,status,conclusion',
       ],
       { timeoutMs: GH_MS },
     );
     if (r.code !== 0) return undefined;
     const runs = runSchema.safeParse(JSON.parse(r.stdout));
     if (!runs.success) return undefined;
-    // gh lists the newest run first.
-    const newest = new Map<string, (typeof runs.data)[number]>();
-    for (const run of runs.data)
-      if (!newest.has(run.workflowName)) newest.set(run.workflowName, run);
+    const runsOf = new Map<number, (typeof runs.data)[number][]>();
+    for (const run of runs.data) {
+      runsOf.set(run.workflowDatabaseId, [...(runsOf.get(run.workflowDatabaseId) ?? []), run]);
+    }
     const configured = config.acceptance?.suites;
     if (configured === undefined) {
-      return [...newest.values()]
-        .sort((a, b) => a.workflowName.localeCompare(b.workflowName))
-        .map((run) => ({
-          name: clean(run.workflowName),
-          workflow: clean(run.workflowName),
-          state:
-            run.status !== 'completed'
-              ? 'pending'
-              : run.conclusion === 'success'
-                ? 'pass'
-                : NO_RESULT.has(run.conclusion ?? '')
-                  ? 'missing'
-                  : 'fail',
-        }));
+      return (
+        [...runsOf]
+          // A workflow whose every run was skipped there (a path filter) is no suite of that commit.
+          .filter(
+            ([, list]) =>
+              !list.every((run) => run.status === 'completed' && run.conclusion === 'skipped'),
+          )
+          .map(([id, list]) => {
+            const path = pathOf.get(id);
+            const name = path !== undefined && SAFE_PATH.test(path) ? path : `workflow ${id}`;
+            return {
+              name,
+              workflow: name,
+              workflowId: id,
+              state: worst(list.map((run) => runState(run.status, run.conclusion))),
+            };
+          })
+          .sort((a, b) => a.name.localeCompare(b.name))
+      );
     }
     const out: Suite[] = [];
     const jobsOf = new Map<number, z.infer<typeof jobsSchema>['jobs'] | undefined>();
     for (const s of configured) {
       const name = `${s.workflow} / ${s.job}`;
-      const run = newest.get(s.workflow);
-      if (run === undefined) {
-        out.push({ name, workflow: s.workflow, job: s.job, state: 'missing' });
+      const ids = workflows.data.filter((x) => x.path === s.workflow).map((x) => x.id);
+      // One file is one workflow; two cannot be told apart and never pass.
+      if (ids.length > 1) return undefined;
+      const id = ids[0];
+      const list = id === undefined ? [] : (runsOf.get(id) ?? []);
+      const base = {
+        name,
+        workflow: s.workflow,
+        job: s.job,
+        ...(id === undefined ? {} : { workflowId: id }),
+      };
+      if (list.length === 0) {
+        out.push({ ...base, state: 'missing' });
         continue;
       }
-      if (!jobsOf.has(run.databaseId)) {
-        const v = await gh.run(
-          ['run', 'view', String(run.databaseId), '--repo', repo, '--json', 'jobs'],
-          { timeoutMs: GH_MS },
-        );
-        const parsed = v.code === 0 ? jobsSchema.safeParse(JSON.parse(v.stdout)) : undefined;
-        jobsOf.set(run.databaseId, parsed?.success ? parsed.data.jobs : undefined);
+      const states: SuiteState[] = [];
+      for (const run of list) {
+        if (!jobsOf.has(run.databaseId)) {
+          const v = await gh.run(
+            ['run', 'view', String(run.databaseId), '--repo', repo, '--json', 'jobs'],
+            { timeoutMs: GH_MS },
+          );
+          const parsed = v.code === 0 ? jobsSchema.safeParse(JSON.parse(v.stdout)) : undefined;
+          jobsOf.set(run.databaseId, parsed?.success ? parsed.data.jobs : undefined);
+        }
+        const jobs = jobsOf.get(run.databaseId);
+        if (jobs === undefined) return undefined;
+        const legs = jobs.filter((j) => j.name === s.job || j.name.startsWith(`${s.job} (`));
+        if (legs.length === 0) states.push(run.status === 'completed' ? 'missing' : 'pending');
+        else states.push(worst(legs.map((j) => runState(j.status, j.conclusion))));
       }
-      const jobs = jobsOf.get(run.databaseId);
-      if (jobs === undefined) return undefined;
-      const legs = jobs.filter((j) => j.name === s.job || j.name.startsWith(`${s.job} (`));
-      let state: SuiteState;
-      if (legs.length === 0) state = run.status === 'completed' ? 'missing' : 'pending';
-      else if (legs.some((j) => j.status !== 'completed')) state = 'pending';
-      else if (legs.some((j) => NO_RESULT.has(j.conclusion ?? ''))) state = 'missing';
-      else state = legs.every((j) => j.conclusion === 'success') ? 'pass' : 'fail';
-      out.push({ name, workflow: s.workflow, job: s.job, state });
+      out.push({ ...base, state: worst(states) });
     }
     return out;
   } catch {
@@ -346,15 +398,18 @@ const runsSchema = z.record(
 );
 type Runs = z.infer<typeof runsSchema>;
 
-function readRuns(stateRoot: string): Runs {
+/** The record; undefined when it exists but cannot be read: then nothing is started. */
+function readRuns(stateRoot: string): Runs | undefined {
   const file = join(stateRoot, RUNS_FILE);
   try {
     assertStatePath(stateRoot, file);
-    if (!lstatSync(file).isFile()) return {};
+    const st = lstatSync(file, { throwIfNoEntry: false });
+    if (st === undefined) return {};
+    if (!st.isFile()) return undefined;
     const parsed = runsSchema.safeParse(JSON.parse(readFileSync(file, 'utf8')));
-    return parsed.success ? parsed.data : {};
+    return parsed.success ? parsed.data : undefined;
   } catch {
-    return {};
+    return undefined;
   }
 }
 
@@ -414,7 +469,20 @@ export async function prepareAcceptances(o: {
   });
   out.added = moves.added;
   out.dropped = moves.dropped;
-  const runs = readRuns(o.stateRoot);
+  const read = readRuns(o.stateRoot);
+  if (read === undefined) {
+    // Losing the record could start a suite twice: hold every acceptance until it is repaired.
+    for (const i of loadBoard(o.project).items) {
+      if (i.status === 'ready' && acceptanceOf(i) !== undefined && pinnedMain(i) === undefined) {
+        out.lead.push({
+          item: i.id,
+          reason: `${RUNS_FILE} in the state root is unreadable: check which suites were started, then remove it`,
+        });
+      }
+    }
+    return out;
+  }
+  const runs = read;
   const recorded = JSON.stringify(runs);
   const board = loadBoard(o.project);
   const waitingFor = board.items.filter(
@@ -520,7 +588,15 @@ export async function prepareAcceptances(o: {
       });
       continue;
     }
-    for (const workflow of [...new Set(missing.map((s) => s.workflow))]) {
+    const byWorkflow = new Map(missing.map((s) => [s.workflow, s.workflowId]));
+    for (const [workflow, workflowId] of byWorkflow) {
+      if (workflowId === undefined) {
+        out.lead.push({
+          item: item.id,
+          reason: `acceptance of ${epic}: ${workflow} is no workflow of ${item.repo}; fix acceptance.suites in studio.yaml`,
+        });
+        continue;
+      }
       const done = rec.started[workflow];
       if (done !== undefined) {
         const since = o.now().getTime() - Date.parse(done.at);
@@ -542,7 +618,8 @@ export async function prepareAcceptances(o: {
       rec.started[workflow] = { at };
       writeRuns(o.stateRoot, runs);
       const r = await o.gh.run(
-        ['workflow', 'run', workflow, '--repo', item.repo, '--ref', branch],
+        // By GitHub's id: a display name can belong to two workflows.
+        ['workflow', 'run', String(workflowId), '--repo', item.repo, '--ref', branch],
         { timeoutMs: GH_MS },
       );
       if (r.code !== 0) {
@@ -846,11 +923,22 @@ export function applyAcceptance(
   acceptance: WorkItem,
   done: AcceptanceDone,
   now: Date,
+  config: StudioConfig,
 ): { board: Board; outcome: AcceptanceResult } {
   let next = board;
   const added: string[] = [];
   const prefix = acceptance.id.slice(0, acceptance.id.indexOf('-'));
-  const addItem = (title: string, dod: string[], notes: string[]) => {
+  // Rounds that asked for changes, this one included: past the limit the lead releases the work.
+  const rounds = acceptancesOf(board, done.epic).filter((i) =>
+    (i.notes ?? []).includes('verdict: changes_requested'),
+  ).length;
+  const held = rounds >= MAX_ACCEPTANCE_ROUNDS;
+  // A fix of a finding is no CI item: `.github/` globs of the epic do not pass on to it.
+  const paths = acceptance.paths.filter((g) => !g.toLowerCase().startsWith('.github'));
+  // Title, DoD and notes are Studio's words only. What a crew wrote (a finding) or what the
+  // repository names (a workflow outside acceptance.suites) goes into `finding`, which a builder
+  // gets as a data file, never as an instruction.
+  const addItem = (title: string, dod: string[], notes: string[], finding: string | undefined) => {
     const id = nextId(next, prefix);
     const parsed = workItemSchema.safeParse({
       id,
@@ -860,13 +948,22 @@ export function applyAcceptance(
       repo: acceptance.repo,
       size: 'M',
       priority: acceptance.priority,
-      status: 'ready',
-      paths: [...acceptance.paths],
+      status: held ? 'blocked' : 'ready',
+      paths,
       touches: [],
       ...(acceptance.components === undefined ? {} : { components: [...acceptance.components] }),
       dependsOn: [],
       dod,
-      notes: [`${FINDING_NOTE}${acceptance.id}`, ...notes],
+      notes: [
+        `${FINDING_NOTE}${acceptance.id}`,
+        ...notes,
+        ...(held
+          ? [
+              `acceptance limit reached: ${rounds} rounds asked for changes; the lead decides (ready to go on, or drop)`,
+            ]
+          : []),
+      ],
+      ...(finding === undefined ? {} : { finding }),
       epic: done.epic,
       history: [],
     });
@@ -874,24 +971,49 @@ export function applyAcceptance(
     next = { ...next, items: [...next.items, parsed.data] };
     added.push(id);
   };
-  for (const f of done.findings) {
-    const line = crewLine.safeParse(f);
-    const text = line.success ? line.data : cut(f.replace(/[\p{Cc}\p{Cf}]/gu, ' '), 300);
-    addItem(`${done.epic}: ${text}`, [`Fixed on main: ${text}`, 'A test shows it'], []);
+  for (const [k, f] of done.findings.entries()) {
+    const line = crewReason.safeParse(f);
+    addItem(
+      `${done.epic}: acceptance finding ${k + 1} of ${acceptance.id}`,
+      [
+        'Fix the finding recorded in the acceptance report (the data file of this brief); a test shows it',
+      ],
+      [],
+      line.success ? line.data : 'the finding could not be stored; read the acceptance report',
+    );
   }
-  for (const suite of done.failedSuites) {
+  const configured = new Set(
+    (config.acceptance?.suites ?? []).map((x) => `${x.workflow} / ${x.job}`),
+  );
+  for (const [k, suite] of done.failedSuites.entries()) {
+    const key = `${SUITE_NOTE}${createHash('sha256').update(suite).digest('hex').slice(0, 12)}`;
     const already = next.items.some(
-      (i) => open(i) && i.epic === done.epic && (i.notes ?? []).includes(`${SUITE_NOTE}${suite}`),
+      (i) => open(i) && i.epic === done.epic && (i.notes ?? []).includes(key),
     );
     if (already) continue;
-    addItem(
-      `${done.epic}: make ${suite} pass on main`,
-      [
-        `${suite} passes on main (it failed at ${done.sha.slice(0, 12)})`,
-        'The cause is fixed, not the test silenced',
-      ],
-      [`${SUITE_NOTE}${suite}`],
-    );
+    const at = done.sha.slice(0, 12);
+    if (configured.has(suite)) {
+      // A name from studio.yaml, quoted.
+      addItem(
+        `${done.epic}: make the suite "${suite}" pass on main`,
+        [
+          `The suite "${suite}" passes on main (it failed at ${at})`,
+          'The cause is fixed, not the test silenced',
+        ],
+        [key],
+        undefined,
+      );
+    } else {
+      addItem(
+        `${done.epic}: failed suite ${k + 1} of ${acceptance.id}`,
+        [
+          `The failed suite named in the data file of this brief passes on main (it failed at ${at})`,
+          'The cause is fixed, not the test silenced',
+        ],
+        [key],
+        `failed suite on main: ${suite}`,
+      );
+    }
   }
   const epic = (next.epics ?? []).find((e) => e.id === done.epic);
   if (added.length > 0) {

@@ -1161,7 +1161,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             }
             // In the same save: the findings become items of the epic, or the epic is done.
             if (acceptanceDone !== undefined) {
-              const applied = applyAcceptance(next, findItem(next, item.id), acceptanceDone, now);
+              const applied = applyAcceptance(
+                next,
+                findItem(next, item.id),
+                acceptanceDone,
+                now,
+                loadConfig(project),
+              );
               next = applied.board;
               acceptance = applied.outcome;
             }

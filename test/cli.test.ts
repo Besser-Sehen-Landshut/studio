@@ -4536,12 +4536,17 @@ describe('epics in the CLI', () => {
         findings: ['APP-3', 'APP-4'],
       });
       expect(statusOf(fx, 'APP-3')).toMatchObject({
-        title: 'E-1: The order and the mail disagree on the invoice number',
+        title: 'E-1: acceptance finding 1 of APP-2',
         status: 'ready',
         epic: 'E-1',
         notes: ['finding of APP-2'],
+        finding: 'The order and the mail disagree on the invoice number',
       });
-      expect(statusOf(fx, 'APP-4')?.title).toBe('E-1: make E2E pass on main');
+      // No acceptance.suites in this project: the suite's name stays data.
+      expect(statusOf(fx, 'APP-4')).toMatchObject({
+        title: 'E-1: failed suite 1 of APP-2',
+        finding: 'failed suite on main: E2E',
+      });
       expect(epicOf(fx, 'E-1')?.status).toBe('open');
       const board = await cli(fx, quiet(), 'board');
       expect(board.out).toMatch(/E-1\s+reopened\s+1\/3\s+APP-2 merged\s+Epic E-1/);
@@ -4575,10 +4580,13 @@ describe('epics in the CLI', () => {
         if (l.startsWith('repo view org/app')) {
           return { stdout: JSON.stringify({ defaultBranchRef: { name: 'main' } }) };
         }
+        if (l.startsWith('workflow list')) {
+          return { stdout: JSON.stringify([{ id: 10, path: '.github/workflows/ci.yml' }]) };
+        }
         if (l.startsWith(`run list --repo org/app --commit ${HEAD}`)) {
           return {
             stdout: JSON.stringify([
-              { databaseId: 1, workflowName: 'CI', status: 'completed', conclusion: 'success' },
+              { databaseId: 1, workflowDatabaseId: 10, status: 'completed', conclusion: 'success' },
             ]),
           };
         }

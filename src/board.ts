@@ -137,6 +137,9 @@ export const workItemSchema = z.strictObject({
   triggers: z.array(z.enum(['epic-end', 'release'])).optional(),
   // Set by `studio escalate`; wins over the role's model.
   model: z.string().regex(MODEL_NAME_RE, 'not a model name').optional(),
+  // Set by an acceptance: what its reviewer crew found (or a failed suite the repository names).
+  // Crew text: the builder gets it as a data file, never in its title or Definition of Done.
+  finding: plainLine.optional(),
   // The epic this item is a piece of (`epics:` on the same board).
   epic: z.string().regex(EPIC_ID_RE, 'must match ^E-\\d+$').optional(),
   // Set by `collect` from the crew logs: every run of this item and of the reviews of its pull
@@ -395,6 +398,7 @@ const KEY_ORDER: readonly (keyof WorkItem)[] = [
   'risk',
   'triggers',
   'model',
+  'finding',
   'epic',
   'usage',
   'history',
