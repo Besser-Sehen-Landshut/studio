@@ -57,6 +57,7 @@ export type DecisionCode =
   | 'changes_requested'
   | 'merge_failed'
   | 'question'
+  | 'evidence'
   | 'blocked'
   | 'other';
 
@@ -230,6 +231,15 @@ function classify(item: string, reason: string): LeadDecision {
       'changes_requested',
       by === undefined ? 'changes requested' : `changes requested by ${by}`,
       `start the fix round for ${item}`,
+    );
+  }
+  // A guard hit no evidence explained (src/evidence.ts), in collect, a merge or a block.
+  const evidence = /^(?:blocked: |merge failed: )?evidence( \(owner\))?: /.exec(r);
+  if (evidence !== null) {
+    return of(
+      'evidence',
+      evidence[1] === undefined ? 'guard hit without evidence' : 'guard hit: the owner decides',
+      `show ${item}`,
     );
   }
   if (r.startsWith('merge failed')) {

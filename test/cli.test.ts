@@ -45,7 +45,21 @@ const GIT_ENV = {
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim();
 
-const HEAD = 'a'.repeat(40);
+/**
+ * A pull request base and head that exist as commits: an approval reads the diff between them in
+ * the owner's checkout (the evidence gate). Every fixture's origin gets them under refs/studio-test/.
+ */
+const TEMPLATE = join(root, 'template');
+mkdirSync(TEMPLATE);
+git(TEMPLATE, 'init', '-q', '-b', 'pr');
+writeFileSync(join(TEMPLATE, 'base.txt'), 'base\n');
+git(TEMPLATE, 'add', 'base.txt');
+git(TEMPLATE, 'commit', '-q', '-m', 'base');
+const BASE = git(TEMPLATE, 'rev-parse', 'HEAD');
+writeFileSync(join(TEMPLATE, 'change.txt'), 'change\n');
+git(TEMPLATE, 'add', 'change.txt');
+git(TEMPLATE, 'commit', '-q', '-m', 'change');
+const HEAD = git(TEMPLATE, 'rev-parse', 'HEAD');
 const OTHER = 'b'.repeat(40);
 const OWN = {
   headRepository: { name: 'app' },
@@ -132,6 +146,14 @@ function makeFx(items: ItemSpec[], studioYaml: string = STUDIO_YAML): Fx {
   mkdirSync(home);
   const origin = join(base, 'origin.git');
   git(base, 'init', '-q', '--bare', '-b', 'main', origin);
+  git(
+    TEMPLATE,
+    'push',
+    '-q',
+    origin,
+    `${BASE}:refs/studio-test/base`,
+    `${HEAD}:refs/studio-test/head`,
+  );
   const project = join(base, 'clone');
   git(base, 'clone', '-q', origin, project);
   git(project, 'checkout', '-q', '-b', 'main');
@@ -156,6 +178,20 @@ function makeFx(items: ItemSpec[], studioYaml: string = STUDIO_YAML): Fx {
 }
 
 type GhReply = { code?: number; stdout?: string; stderr?: string };
+
+/** A pull request view of the approved head names its base, as GitHub does: BASE unless set. */
+function withBase(line: string, stdout: string): string {
+  if (!/--json headRefOid,headRefName/.test(line)) return stdout;
+  try {
+    const v = JSON.parse(stdout) as Record<string, unknown>;
+    if (v === null || typeof v !== 'object' || 'baseRefOid' in v || v.headRefOid !== HEAD) {
+      return stdout;
+    }
+    return JSON.stringify({ ...v, baseRefOid: BASE });
+  } catch {
+    return stdout;
+  }
+}
 function fakeGh(handler: (line: string) => GhReply | undefined = () => undefined) {
   const calls: string[] = [];
   const gh: Gh = {
@@ -174,7 +210,7 @@ function fakeGh(handler: (line: string) => GhReply | undefined = () => undefined
             ? { stdout: JSON.stringify([{ name: 'ci', bucket: 'pass' }]) }
             : undefined);
       if (!r) throw new Error(`unscripted gh call: ${line}`);
-      return { code: r.code ?? 0, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+      return { code: r.code ?? 0, stdout: withBase(line, r.stdout ?? ''), stderr: r.stderr ?? '' };
     },
   };
   return { gh, calls };

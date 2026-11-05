@@ -63,6 +63,9 @@ export const STATE_FILES = [
   'tick.lock',
   'board.lock',
   'crew.lock',
+  'exceptions.jsonl',
+  'exceptions.lock',
+  'evidence-retries.json',
 ];
 
 /** `$XDG_STATE_HOME/studio`, else `<home>/.local/state/studio`: the parent of every state root. */

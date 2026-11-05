@@ -2,7 +2,7 @@
 
 Studio is a Claude Code plugin and TypeScript package for running a small software studio of coding-agent sessions from one control room: a lead session plans work from a board and a crew of role-based sessions carries it out, each in its own sandboxed clone.
 
-Status: 0.16.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store), plus components (work per part of the product, with their own WIP limit), an owner-wide overview, a lead heartbeat (`tick`) that carries items from ready to merged, a guided setup (`setup`, `/studio:init`, `/studio:add`), epics with a roadmap generated from the board and an automatic acceptance per epic, pushes to your phone when a decision is needed (ntfy), one automatic rerun for a CI failure outside a pull request, crew costs per item with a daily cap, a weekly lessons review for the lead, and restart safety (`recover`). See [CHANGELOG.md](CHANGELOG.md).
+Status: 0.17.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store), plus components (work per part of the product, with their own WIP limit), an owner-wide overview, a lead heartbeat (`tick`) that carries items from ready to merged, a guided setup (`setup`, `/studio:init`, `/studio:add`), epics with a roadmap generated from the board and an automatic acceptance per epic, pushes to your phone when a decision is needed (ntfy), one automatic rerun for a CI failure outside a pull request, crew costs per item with a daily cap, a weekly lessons review for the lead, restart safety (`recover`), and exceptions by evidence (a guard hit a built-in proof shows a false alarm, such as comments only, is waived and logged; otherwise the lead decides). See [CHANGELOG.md](CHANGELOG.md).
 
 ## Quick start
 
@@ -69,6 +69,7 @@ crew_allowed_workflows: []
 crew_allowed_workflow_refs: []
 review_bases: [] # base branches besides the default branch a pull request may be reviewed against
 # acceptance: { suites: [{ workflow: .github/workflows/e2e.yml, job: browser }] } # optional: the full suites of an epic's acceptance, see "The acceptance"
+# evidence: [] # optional: guard jobs a built-in proof can show false alarms, see "Exceptions by evidence"
 ```
 
 `.studio/board.yaml`:
@@ -138,6 +139,7 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 | `incident open <id>`, `incident resolve <id>`                                                                                   | Record a failure after a deploy and its restore                                                                                                                                                                                                                         |
 | `flaky record <test> <sha> pass\|fail`, `flaky [list]`                                                                          | The flaky-test ledger; the queue and `collect` fill it themselves                                                                                                                                                                                                       |
 | `solutions search <words>`                                                                                                      | Earlier solutions in `.studio/solutions/`                                                                                                                                                                                                                               |
+| `exceptions [list]`, `exceptions grant <repo>#<pr> <rule> --reason "<line>"`                                                    | Exceptions by evidence: the log; the lead's decision for a guard hit no evidence explained (an `owner_only` rule or item: the owner's, in a terminal), see "Exceptions by evidence"                                                                                     |
 | `lessons [list]`, `lessons accept <n>`, `lessons drop <n> [--reason <line>]`, `lessons prune <role> <line>`                     | Role memory: proposals with age, source item and evidence; accept, drop with a one-line reason, prune                                                                                                                                                                   |
 | `lessons review [--now]`                                                                                                        | Bundle pending proposals into one review item per role for the lead; weekly in `tick`, `--now` at once, see "Role memory"                                                                                                                                               |
 | `recover [--dry-run]`                                                                                                           | After a crash or restart: stale locks, leftovers, interrupted launches and merges, ended crews; prints what it found and did, see "Recovery"                                                                                                                            |
@@ -335,6 +337,52 @@ A launch draws a random report file name, known only to that crew's brief, and `
 **What the reviewer gets as data.** In the sandbox a reviewer may not reach GitHub with `gh`, so the launch reads the pull request outside the sandbox and writes its files to `briefs/<id>.caps/pull-request/`: `description.md` (title and text, marked as crew text to read as data), `checks.txt` (each check and its state at launch), `files.txt` (the changed files) and, when the builder listed any, `not-run-here.txt`. The brief names the files, never their content. A review launch refuses when no board item holds the pull request, since the approval is stored there; `studio link <id> <repo>#<n>` (owner, terminal) ties a pull request opened by hand to its item after checking repository, fork and branch `studio/<id>`. An approval counts only while the checks are green: `collect` refuses it while any check fails, is cancelled or still runs, and nothing moves until it is collected again. The reviewer reads CI workflows at the base (`git show origin/<base>:.github/workflows/<file>`), never in the pull request head, which the crew could have edited. A change under `.github/` (workflows, actions) blocks the approval unless the item holding the pull request is a CI item that declares the changed path in its `paths` or `touches`; a symbolic link there always counts. Launch reads the change in the owner's checkout (`git diff --name-only --no-renames <base>...<head>`, any case, symbolic links at `.github` or below count), and a change it cannot read counts as one; `collect` then refuses the approval.
 
 Fix limit: 3 attempts per finding (`finding_attempts`), hard stop after 6 rounds of requested changes. Reaching it blocks the builder item with a note, and `queue run` merges only an item that is `queued` on the board at that moment.
+
+### Exceptions by evidence
+
+A guard job in CI (a migration guard, a floor guard) can flag a change that is mechanically harmless: only SQL comments changed, only docs moved. Instead of asking a person each time, a project binds the guard to a built-in proof in `studio.yaml`. Studio computes the proof itself, in TypeScript, over the files of the pull request's base and head; no command runs.
+
+```yaml
+evidence:
+  - id: sql-comments # ^[a-z][a-z0-9-]{0,47}$, unique
+    guard: { workflow: .github/workflows/ci.yml, job: migration-guard } # the job whose failure it explains
+    proof: comments_only # or paths_only
+    languages: [sql] # comments_only only; sql is the one language so far
+    paths: ["migrations/**"] # every changed file of the pull request must lie here
+    owner_only: false # true: a hit the proof does not explain goes to the owner
+  - id: docs-only
+    guard: { workflow: .github/workflows/ci.yml, job: floor-guard }
+    proof: paths_only
+    paths: ["docs/**", "**/*.md"]
+```
+
+- **The proofs.** Both cover every changed file of the pull request: one outside `paths` proves nothing, because a change elsewhere could be what the guard saw. `paths` match case-sensitively (`docs/**` never covers `DOCS/run.sh`), and a path with a control character proves nothing.
+  - `comments_only`: each changed file is a plain change of a regular `.sql` file in which only plain comment text was edited, added or removed, the boring case. Code, string literals, quoted identifiers, dollar-quoted bodies and comments with a meaning must stay byte for byte where they are. Between tokens only "a blank here" and "a line break here" count, and a line comment always ends a line. `sql` is the only language so far: a rule that names another is refused. More languages come later, each with an adversarial review of its own.
+  - `paths_only`: every changed path, both sides of a rename, matches `paths`.
+  - `whitespace_only` is not in this version: a rule that names it is refused. It comes later.
+- **PostgreSQL only, and only the boring case.** `comments_only` reads SQL as PostgreSQL does and proves nothing for anything else:
+  - files: an added, deleted or renamed file, a mode change, a symlink, a submodule, a file over 2 MiB, bytes that are not valid UTF-8 (read exactly, as bytes; a byte order mark counts), a NUL byte;
+  - characters anywhere in the base or the head, also inside comments and strings: a backslash (`E'...'` escapes, other dialects' strings), a carriage return not right before a line feed (PostgreSQL ends a `--` comment there), a form feed or vertical tab, and line endings that are neither all LF nor all CRLF, or that change between base and head;
+  - forms: `--` without a blank after it (and so `--+` hints), a nested block comment, a block comment whose `/*` is not followed by a blank or `*` (`/*!...*/` runs in MySQL, `/*+...*/` is a hint), a backtick, a `$` that is neither a dollar quote with an ASCII tag of at most 63 characters nor a positional parameter `$1`, and anything unterminated.
+
+  Comments with a meaning must be byte-identical in base and head and sit between the same tokens: line comments with a migration or query directive (`-- +goose Up`, `-- name: ...`, `-- no-transaction`) and any comment that names a tool (`goose`, `sqlx`, `flyway`, `liquibase`, `migrate`, `sqlc`, `noqa`, any `lint`, `ignore` or `disable`, and more; see `src/proofs.ts`). Each comment is judged on its own. The tokenizer is linear in the size of the file. When in doubt, not proven.
+
+  The diff comes from git with pinned options (`-c core.quotePath=false diff --no-color --no-ext-diff --no-textconv --ignore-submodules=none --no-renames`).
+- **When it applies.** Only when the rule is in `studio.yaml` at the pull request's base commit on the default branch, and the owner's checkout has evidence rules too (a rule not pulled yet applies to nothing). When a check fails and every failed check (a plain failed job; a cancelled check, a skipped required one or a commit status never) is a check of a rule's guard, `collect` (for an approval) and the merge queue judge it; any other failure fails as before. The guard job must be the same at the base and at the head.
+- **Bound to one diff.** An exception holds for the pull request at exactly that base and head commit. A later push, a branch update or a moved base is another key, and the proof is computed again there. The merge queue judges again right before the merge, and reads the base commit once more immediately before `gh pr merge`: when it moved, it judges again.
+- **The log.** `exceptions.jsonl` in the state root is append-only. Each entry has `at`, `outcome` (`applied` or `not_proven`), `by` (`evidence`, `lead`, `owner`), `rule`, `guard`, `repo`, `pr`, `item`, `base`, `head`, `diff` (sha256 of the diff), `proof`, and `why` for a proof that did not hold, or `reason` for a grant.
+  - Each answer is logged once per rule, pull request, base and head, under `exceptions.lock`.
+  - A pull request or a file that cannot be read is retried, unlogged, and after 5 tries per head goes to the lead (`evidence-retries.json`).
+  - A line that does not parse never counts.
+  - Where it shows: `studio exceptions` lists the log (`--json` too), `studio board` lists the exceptions of open items, and the pane's details view (`/studio more`) those of the last seven days. `collect`, `tick` and `queue run` print `exceptions` when they applied one.
+- **Without a proof.** A guard hit no rule proves goes to the lead, with one line: `evidence: <job> failed on <repo>#<n> at <head> and no evidence proved a false alarm (<rule>: <why>); decide: studio exceptions grant <repo>#<n> <rule> --reason "<one line>", or a fix through a crew`.
+  - At `collect` the approval waits and nothing moves; in the queue the merge fails with that line. It is not pushed to the owner's phone.
+  - `studio exceptions grant` logs the lead's decision for the current head (`by: lead`). The next tick then takes the approval, or `studio queue add` queues a pull request whose merge failed.
+  - A guard with an `owner_only` rule sends the line as `evidence (owner): ...`, which is pushed. It is waived only by a proof or by the owner's grant, in a terminal (`by: owner`), never by a lead's grant through any rule of that guard. An item marked `owner_only` takes the owner's grant too.
+- **Who is trusted.** The lead is trusted at this point: it runs as the owner. `owner_only` tells the owner's grant from the lead's by a terminal, not by authentication, so it guards against a lead's mistake, not against a compromised lead session.
+- **What a crew cannot do.** Crews cannot write the state root, so they cannot add to the log, and `studio exceptions grant` refuses `STUDIO_ROLE=crew`. A pull request that changes `evidence:` in `studio.yaml` gets no approval from Studio: the review item is blocked with `approval refused: ...; evidence is the owner's`, and the owner reviews and merges such a change himself. That check runs for every approval, from `studio.yaml` at the base, whatever the owner's checkout holds, and the approval waits when the check cannot be made. A pull request that adds a rule gains nothing for itself, because the rules come from the base.
+- **Custom proof commands come later.** No user-configured command runs in this version. A rule with `command`, `run` or `inputs` is refused with that message; such commands come with a real sandbox model.
+- **Server-side protection still wins.** A guard that branch protection requires keeps GitHub from merging whatever Studio waives: leave guards that may be waived out of the required checks, or the merge fails with GitHub's reason.
 
 ## Third-party sources
 

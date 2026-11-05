@@ -192,11 +192,6 @@ rows:
     mode: review
     load: subagent
     model: standard
-  - id: pr-toolkit
-    ref: skill:pr-review-toolkit:review-pr
-    when: { roles: [reviewer], tiers: [large] }
-    mode: offered
-    load: invoke
   - id: second-opinion-security
     ref: skill:security-review
     when: { roles: [reviewer], risks: [auth, security] }

@@ -620,3 +620,25 @@ describe('epics in the pane', () => {
     expect(with0.some((l) => l.text === 'Epics')).toBe(false);
   });
 });
+
+describe('exceptions by evidence in the details view', () => {
+  const exceptions = [
+    { rule: 'sql-comments', pr: 'org/app#9', item: 'APP-2', head: 'abcdef123456', by: 'evidence' },
+    { rule: 'sql-comments', pr: 'org/app#10', head: '123456abcdef', by: 'lead' },
+  ];
+  const text = (state: BoardState, lang?: 'de') =>
+    boardLines(
+      { kind: 'ok', state },
+      { columns: 100, nowMs: NOW, paused: false, ...(lang ? { lang } : {}) },
+    ).map((l) => l.text);
+  it('one line each: item or pull request, rule, head, who decided', () => {
+    const t = text(ok({ exceptions }));
+    expect(t).toContain('Exceptions by evidence (2)');
+    expect(t).toContain('  APP-2 sql-comments · abcdef1 · evidence');
+    expect(t).toContain('  org/app#10 sql-comments · 123456a · lead');
+    expect(text(ok({ exceptions }), 'de')).toContain(
+      '  org/app#10 sql-comments · 123456a · Steuerung',
+    );
+    expect(text(ok()).some((l) => l.startsWith('Exceptions'))).toBe(false);
+  });
+});

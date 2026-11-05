@@ -59,6 +59,14 @@ import {
   unverifiedRefusal,
 } from './crew.js';
 import { addEpic, dropEpic, editEpic, epicRows, findEpic, settleAndSave } from './epics.js';
+import {
+  type EvidenceContext,
+  type ExceptionEntry,
+  evidenceChange,
+  grantException,
+  judgeFailedChecks,
+  readExceptions,
+} from './evidence.js';
 import { listFlaky, recordFlaky } from './flaky.js';
 import {
   type CiEvents,
@@ -232,6 +240,10 @@ Commands:
   flaky record <t> <s> pass|fail  Record a test that failed once, with its rerun
   flaky [list]             The flaky-test ledger, worst first
   solutions search <words> Earlier solutions in .studio/solutions
+  exceptions [list]        Exceptions by evidence: applied and not proven, with head and diff digest
+  exceptions grant <repo>#<pr> <rule> --reason "<line>"
+                           The lead's decision for a guard hit no evidence explained, for this head;
+                           an owner_only rule or item takes the owner's, in a terminal
   setup sources [<id>...]  Fetch the referenced third-party sources (nothing runs)
   lessons [list]           Lessons crews proposed for the role memory, with age, item and evidence
   lessons accept <n>       Move a proposed lesson into its role file
@@ -327,7 +339,9 @@ function withItem(board: Board, id: string, fn: (item: WorkItem) => WorkItem): B
  */
 type Collected =
   | { kind: 'moved'; out: Record<string, unknown> & { status: WorkItem['status'] } }
-  | { kind: 'held' | 'waiting' | 'refused'; line: string };
+  /** `lead`: what waits needs the lead's decision (a guard hit no evidence explained). */
+  | { kind: 'waiting'; line: string; lead?: { item: string; reason: string } }
+  | { kind: 'held' | 'refused'; line: string };
 
 /** A review item naming `target` (`<repo>#<pr>`) that is neither merged nor dropped. */
 function isOpenReviewOf(item: WorkItem, target: string): boolean {
@@ -390,6 +404,8 @@ interface Tick {
   lessonsReview?: { item: string; role: string; pending: number }[];
   /** Lessons review items closed in this tick: one line each for the owner. */
   lessonsJudged?: { item: string; role: string; accepted: number; dropped: number }[];
+  /** Failed guard checks an exception by evidence covered in this tick; absent without any. */
+  exceptions?: { rule: string; pr: string; item?: string; head: string; by: string }[];
 }
 
 /**
@@ -497,8 +513,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     if (values.security !== undefined && cmd !== 'skills') {
       throw new UsageError('--security works with skills check only');
     }
-    if (values.reason !== undefined && cmd !== 'lessons') {
-      throw new UsageError('--reason works with lessons drop only');
+    if (values.reason !== undefined && cmd !== 'lessons' && cmd !== 'exceptions') {
+      throw new UsageError('--reason works with lessons drop and exceptions grant only');
     }
     if (values['dry-run'] !== undefined && cmd !== 'recover') {
       throw new UsageError('--dry-run works with recover only');
@@ -665,6 +681,26 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
     /** Reruns and flaky items of this process, for the output of `tick` and `queue run`. */
     const ciEvents: CiEvents = { reruns: [], flakyItems: [] };
+    /** Exceptions by evidence this process applied or found logged, for `tick` and `queue run`. */
+    const exceptionsApplied: ExceptionEntry[] = [];
+    /** One line per exception for the output: ids, SHAs and digests, never command output. */
+    const appliedOut = () => {
+      const seen = new Set<string>();
+      return exceptionsApplied.flatMap((e) => {
+        const key = `${e.rule}|${e.repo}#${e.pr}|${e.head}`;
+        if (seen.has(key)) return [];
+        seen.add(key);
+        return [
+          {
+            rule: e.rule,
+            pr: `${e.repo}#${e.pr}`,
+            ...(e.item === undefined ? {} : { item: e.item }),
+            head: e.head,
+            by: e.by,
+          },
+        ];
+      });
+    };
     /** Failed checks outside a pull request: one rerun per commit, the flaky ledger, the item. */
     const ciPolicy = (config: StudioConfig, root: string): CiPolicy =>
       ciFailurePolicy({
@@ -714,6 +750,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         events: ciEvents,
         log: (m) => stderr(`${m}\n`),
       });
+
+    /** Exceptions by evidence for a pull request of `repo`, judged in the owner's checkout. */
+    const evidenceCtx = (config: StudioConfig, repo: string, root: string): EvidenceContext => ({
+      gh: ports.gh,
+      git: ports.git,
+      checkout: approvalCheckout(project, config, repo),
+      stateRoot: root,
+      now: () => ports.clock.now(),
+    });
 
     /** Puts an approved pull request into the merge queue: the body of `queue add`. */
     const queueAdd = async (arg: string | undefined) => {
@@ -819,8 +864,27 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             stateRoot: root,
             log,
             hold,
-            mergeAllowed: (entry, head) =>
-              boardBlocksMerge(project, root, config, entry, head, ports),
+            mergeAllowed: (entry, head, waived) =>
+              boardBlocksMerge(project, root, config, entry, head, ports, waived),
+            evidence: async (entry, head, failed) => {
+              // Without rules in the owner's config none apply: a failure fails as before.
+              if ((config.evidence ?? []).length === 0) return { kind: 'none' as const };
+              const v = await judgeFailedChecks(
+                evidenceCtx(config, entry.repo, root),
+                entry,
+                head,
+                failed,
+              );
+              for (const e of v.kind === 'waived' ? v.applied : []) exceptionsApplied.push(e);
+              // The merge fails on this line: after a grant the pull request needs queueing again.
+              if (v.kind === 'lead') {
+                return {
+                  ...v,
+                  reason: `${v.reason}; after a grant: studio queue add ${entry.repo}#${entry.pr}`,
+                };
+              }
+              return v;
+            },
             onChecksFailed: (entry, head) => policy.failed(entry, head),
             onChecksPassed: (entry, head) => policy.passed(entry, head),
             takeNext: () => takeNextPending(root),
@@ -951,6 +1015,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           : { skipped: [] as string[], target: undefined, notRunHere: undefined };
       let approvedJobs: ApprovedJob[] = [];
       let covered: CoveredJob[] = [];
+      let applied: ExceptionEntry[] = [];
       // A verdict counts for the commit reviewed: the pull request's head right now.
       if (item.type === 'review' && report.status === 'done' && reviewDone.target !== undefined) {
         const m = /^(.+)#(\d+)$/.exec(reviewDone.target) as RegExpExecArray;
@@ -963,8 +1028,38 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             (i) => i.repo === ref.repo && i.pr === ref.pr && i.type !== 'review',
           );
           if (holder !== undefined) ref.item = holder.id;
-          const checks = await readChecks(ref, ports.gh);
+          let checks = await readChecks(ref, ports.gh);
           const policy = ciPolicy(loadConfig(project), stateRoot());
+          // A guard job that failed may be a false alarm the evidence on main proves: then its
+          // checks count as waived for this head. Without that proof the lead decides.
+          if (
+            checks.kind === 'failed' &&
+            checks.failed !== undefined &&
+            (loadConfig(project).evidence ?? []).length > 0
+          ) {
+            const ev = await judgeFailedChecks(
+              evidenceCtx(loadConfig(project), ref.repo, stateRoot()),
+              ref,
+              info.head,
+              checks.failed,
+            );
+            if (ev.kind === 'waived') {
+              applied = ev.applied;
+              exceptionsApplied.push(...ev.applied);
+              checks = await readChecks(ref, ports.gh, ev.waived);
+            } else if (ev.kind === 'wait') {
+              return {
+                kind: 'waiting',
+                line: `the approval counts only with green checks (${ev.reason}); collect again once they pass, nothing moved`,
+              };
+            } else if (ev.kind === 'lead') {
+              return {
+                kind: 'waiting',
+                line: `the approval counts only with green checks (${checks.reason}); ${ev.reason}; nothing moved`,
+                lead: { item: holder?.id ?? reviewDone.target, reason: ev.reason },
+              };
+            }
+          }
           if (checks.kind !== 'pass') {
             let why = checks.kind === 'pending' ? 'still running' : (checks.reason ?? checks.kind);
             if (checks.kind === 'failed') {
@@ -981,6 +1076,37 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             };
           }
           policy.passed(ref, info.head);
+          // What proves a later pull request a false alarm is the owner's: a crew's pull request
+          // that changes the evidence rules or their inputs gets no approval from Studio.
+          // Always, from the rules at the base: the owner's working tree may be stale or empty.
+          // A comparison that cannot be made holds the approval (fails closed).
+          const change = await evidenceChange(
+            evidenceCtx(loadConfig(project), ref.repo, stateRoot()),
+            info.baseOid,
+            info.head,
+          );
+          if (change.unreadable === true) {
+            return {
+              kind: 'waiting',
+              line: `the approval waits: whether ${reviewDone.target} changes the evidence rules cannot be read now (git); collect again, nothing moved`,
+            };
+          }
+          if (change.problem !== undefined) {
+            const note = `approval refused: ${change.problem}; evidence is the owner's: the owner reviews and merges such a change himself`;
+            await withBoardLock(stateRoot(), ports.clock.now(), () => {
+              const fresh = loadBoard(project);
+              if (findItem(fresh, item.id).status !== item.status) {
+                throw new Error(`${item.id} changed while it was collected; nothing moved`);
+              }
+              let next = transition(fresh, item.id, 'blocked', BY, ports.clock.now());
+              next = withItem(next, item.id, (i) => ({ ...i, notes: [...(i.notes ?? []), note] }));
+              saveBoard(project, next);
+            });
+            return {
+              kind: 'refused',
+              line: `${item.id}: ${note}; no approval, ${item.id} is blocked for the owner`,
+            };
+          }
           // A skipped check counts as green above, so each command the builder could not run
           // needs a job of a base workflow that runs it and passed here. A refusal goes to the
           // lead: the review item is blocked with a note, the approval is not stored.
@@ -1284,6 +1410,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         ...(fixLimit ? { fixLimit } : {}),
         ...(acceptance === undefined ? {} : { acceptance }),
         ...(lessonsProposed > 0 ? { lessonsProposed } : {}),
+        // Failed guard checks an exception by evidence covered for the approved head: ids only.
+        ...(applied.length === 0
+          ? {}
+          : { exceptions: applied.map((e) => ({ rule: e.rule, by: e.by, head: e.head })) }),
         // What CI must run because the sandbox could not: only the count and the services, which
         // the schema fixes; the commands are crew text and stay on the item and in the PR body.
         ...(report.status === 'done' && report.notRunHere.length > 0
@@ -1422,6 +1552,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               }
             } else if (r.kind !== 'refused') {
               out.held.push({ item: item.id, reason: r.line });
+              // A guard hit no evidence explained: the lead decides, the approval waits for it.
+              if (r.kind === 'waiting' && r.lead !== undefined) lead(r.lead.item, r.lead.reason);
               // A CI read that keeps failing would otherwise hold the item quietly for ever.
               if (r.line.includes(CI_READ_FAILED))
                 out.errors.push({ item: item.id, error: r.line });
@@ -1704,6 +1836,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         // A board that cannot be read is reported by the phases before; no second line for it.
         if (!(e instanceof BoardError)) out.errors.push({ phase: 'epics', error: why(e) });
       }
+      const exceptions = appliedOut();
+      if (exceptions.length > 0) out.exceptions = exceptions;
       return out;
     };
 
@@ -1816,6 +1950,30 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           const epicList = epicRows(board).filter(
             (r) => r.stage !== 'dropped' && (epic === undefined || r.id === epic),
           );
+          // Exceptions by evidence on the items shown that are still open: what was waived, by whom.
+          const open = new Map(
+            items
+              .filter((r) => r.item.status !== 'merged' && r.item.status !== 'dropped')
+              .map((r) => [`${r.item.repo}#${r.item.pr}`, r.item.id] as const),
+          );
+          const waivedRows = exceptionsOrNone(stateRoot()).filter(
+            (e) => e.outcome === 'applied' && open.has(`${e.repo}#${e.pr}`),
+          );
+          if (waivedRows.length > 0) {
+            stdout(
+              `\n${table([
+                ['EXCEPTION', 'ITEM', 'PR', 'HEAD', 'BY', 'AT'],
+                ...waivedRows.map((e) => [
+                  e.rule,
+                  open.get(`${e.repo}#${e.pr}`) ?? '-',
+                  `${e.repo}#${e.pr}`,
+                  e.head.slice(0, 12),
+                  e.by,
+                  e.at,
+                ]),
+              ])}`,
+            );
+          }
           if (withEpics && only === undefined && epicList.length > 0) {
             stdout(
               `\n${table([
@@ -2154,6 +2312,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ...r,
             ...(ciEvents.reruns.length === 0 ? {} : { reruns: ciEvents.reruns }),
             ...(ciEvents.flakyItems.length === 0 ? {} : { flakyItems: ciEvents.flakyItems }),
+            ...(appliedOut().length === 0 ? {} : { exceptions: appliedOut() }),
           });
           return r.held === undefined ? 0 : 1;
         }
@@ -2728,6 +2887,81 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         return 0;
       }
 
+      case 'exceptions': {
+        const [sub = 'list', target, rule] = rest;
+        if (values.reason !== undefined && sub !== 'grant') {
+          throw new UsageError('--reason works with exceptions grant only');
+        }
+        if (sub === 'list' && rest.length <= 1) {
+          const entries = readExceptions(stateRoot());
+          if (json) print(entries);
+          else {
+            stdout(
+              table([
+                ['AT', 'OUTCOME', 'BY', 'RULE', 'PR', 'ITEM', 'HEAD', 'DIFF', 'WHY'],
+                ...entries.map((e) => [
+                  e.at,
+                  e.outcome,
+                  e.by,
+                  e.rule,
+                  `${e.repo}#${e.pr}`,
+                  e.item ?? '-',
+                  e.head.slice(0, 12),
+                  e.diff.slice(0, 19),
+                  e.why ?? e.reason ?? '-',
+                ]),
+              ]),
+            );
+          }
+          return 0;
+        }
+        refuseCrew(deps.env);
+        const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d{0,9})$/.exec(target ?? '');
+        if (sub !== 'grant' || rest.length !== 3 || !m || rule === undefined) {
+          throw new UsageError(
+            'exceptions needs: list | grant <repo>#<pr> <rule> --reason "<one line>"',
+          );
+        }
+        if (values.reason === undefined) {
+          throw new UsageError('exceptions grant needs --reason "<one line>"');
+        }
+        const { config, board } = loadAll();
+        const ref: { repo: string; pr: number; item?: string } = {
+          repo: m[1] as string,
+          pr: Number(m[2]),
+        };
+        if (!config.repos.includes(ref.repo)) {
+          throw new Error(`repository ${ref.repo} is not configured`);
+        }
+        const holder = board.items.find(
+          (i) => i.repo === ref.repo && i.pr === ref.pr && i.type !== 'review',
+        );
+        if (holder !== undefined) ref.item = holder.id;
+        // The owner in a terminal grants as the owner; the lead (no terminal) as the lead.
+        const by = deps.isTerminal === true ? 'owner' : 'lead';
+        if (holder?.ownerOnly === true && by !== 'owner') {
+          throw new Error(
+            `${holder.id} is owner_only: the owner grants its exception, in a terminal; nothing changed`,
+          );
+        }
+        const root = await boundStateRoot();
+        const r = await grantException(
+          evidenceCtx(config, ref.repo, root),
+          ref,
+          rule,
+          by,
+          values.reason,
+        );
+        print({
+          granted: r.entry.rule,
+          pr: `${r.entry.repo}#${r.entry.pr}`,
+          head: r.entry.head,
+          by: r.entry.by,
+          ...(r.existing ? { existing: true } : {}),
+        });
+        return 0;
+      }
+
       case 'solutions': {
         const [sub, ...words] = rest;
         if (sub !== 'search' || words.length === 0) {
@@ -2836,6 +3070,41 @@ async function prInfo(
 }
 
 const PR_OPTIONAL: readonly WorkItem['type'][] = ['review', 'research'];
+
+/** Applied exceptions of the last seven days for the pane, newest first, ids and SHAs only. */
+function recentExceptions(
+  root: string,
+  board: Board,
+  now: Date,
+): NonNullable<StateSnapshot['exceptions']> {
+  const since = now.getTime() - 7 * 86_400_000;
+  return exceptionsOrNone(root)
+    .filter((e) => e.outcome === 'applied' && Date.parse(e.at) >= since)
+    .reverse()
+    .slice(0, 10)
+    .map((e) => {
+      const item =
+        e.item ??
+        board.items.find((i) => i.repo === e.repo && i.pr === e.pr && i.type !== 'review')?.id;
+      return {
+        rule: e.rule,
+        pr: `${e.repo}#${e.pr}`,
+        ...(item === undefined ? {} : { item }),
+        head: e.head.slice(0, 12),
+        by: e.by,
+        at: e.at,
+      };
+    });
+}
+
+/** The exceptions log for a display; one that cannot be read shows nothing. */
+function exceptionsOrNone(root: string): ExceptionEntry[] {
+  try {
+    return readExceptions(root);
+  } catch {
+    return [];
+  }
+}
 const PR_BODY_MAX = 20_000;
 
 /** The least-privilege crew token, as a launch reads it; Studio opens a crew's PR only with it. */
@@ -2998,6 +3267,8 @@ async function boardBlocksMerge(
   entry: QueueEntry,
   head: string,
   ports: Ports,
+  /** Failed checks an exception by evidence covers on this head. */
+  waived?: ReadonlySet<string>,
 ): Promise<string | undefined> {
   let board: Board;
   try {
@@ -3022,7 +3293,7 @@ async function boardBlocksMerge(
   );
   if (problem !== undefined || (item.approvedJobs ?? []).length === 0) return problem;
   // The jobs the approval named for commands the builder could not run must still have passed.
-  const checks = await readChecks(entry, ports.gh);
+  const checks = await readChecks(entry, ports.gh, waived);
   if (checks.kind !== 'pass') return 'the checks are not green';
   return approvedJobsProblem(item.approvedJobs ?? [], checks.checks);
 }
@@ -3290,6 +3561,10 @@ function buildSnapshot(
     project: extra.config.primaryRepo.split('/').at(-1) ?? extra.config.primaryRepo,
     items,
     ...(tickRecord === undefined ? {} : { needsLead: leadDecisions(tickRecord, board) }),
+    ...(() => {
+      const exceptions = recentExceptions(root, board, now);
+      return exceptions.length === 0 ? {} : { exceptions };
+    })(),
     wip: {
       building: roleWip((r) => r !== 'reviewer'),
       review: roleWip((r) => r === 'reviewer'),

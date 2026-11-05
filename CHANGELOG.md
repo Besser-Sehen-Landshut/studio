@@ -3,6 +3,81 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.17.0] - 2026-11-05
+
+A guard job in CI (a migration guard, a floor guard) that flagged a harmless change stopped the pull request
+until a person waved it through, even when the change was mechanically "only comments". Now a project binds
+such a guard to a built-in proof in `studio.yaml`; when the proof holds on exactly that diff, the failed
+checks count as waived and the exception is logged with its evidence. Without a proof the lead decides; only
+an `owner_only` rule goes to the owner. Not tagged yet; the maintainers tag after the merge.
+
+### Added
+
+- `evidence:` in `studio.yaml`: rules with `id`, `guard` (the CI job by workflow file and job name),
+  `proof`, `paths`, `languages` (for `comments_only`) and `owner_only`. The proofs, computed by Studio in
+  TypeScript, with no command run:
+  - `comments_only`: every changed file lies under `paths` and is a `.sql` file in which only plain
+    comment text was edited, added or removed. PostgreSQL only; `sql` is the only language so far, and a
+    rule naming another is refused.
+  - `paths_only`: every changed path, both sides of a rename, matches `paths` (case-sensitively).
+- A conservative SQL tokenizer, PostgreSQL only, linear in the file size, over the exact bytes of base and
+  head: strings with doubled quotes, quoted identifiers, dollar quoting with ASCII tags, positional
+  parameters, line and block comments. Not proven: invalid UTF-8, a backslash, a lone carriage return, a
+  form feed or vertical tab, mixed or changed line endings, `--` without a blank after it, nested block
+  comments, executable comments and hints (`/*!`, `/*+`, any `/*` not followed by a blank or `*`), a
+  backtick, a `$` that is no clean tag or parameter, anything unterminated. A line comment always ends a
+  line, so code is never joined across one. Comments with a meaning (migration and query directives, tool
+  names) must be byte-identical and in the same place, each judged on its own. An added, deleted or
+  renamed file, a mode change, a symlink, a submodule, a binary file and a path with a control character
+  prove nothing. The diff comes from git with pinned options.
+- Rules count only from `studio.yaml` at the pull request's base commit on the default branch (and only
+  while the owner's checkout has rules at all). A failure applies to them only when every failed check is a
+  plain failed job of a rule's guard, and the guard must be the same at base and head.
+- `exceptions.jsonl` in the state root: an append-only log of each proof's result (`applied` or
+  `not_proven`) and of grants, with rule, guard, pull request, item, base, head, a digest of the diff, the
+  proof and why, or the grant's reason; logged once per rule, pull request, base and head under
+  `exceptions.lock`. An unreadable pull request or file is retried, unlogged, and after 5 tries per head
+  (`evidence-retries.json`) goes to the lead. `recover` breaks a stale `exceptions.lock`.
+- `collect` of an approval and the merge queue use it: waived checks count neither as failed nor as passed.
+  The queue judges again right before the merge and reads the base commit once more immediately before it
+  merges; a moved base is judged again. `collect`, `tick` and `queue run` print `exceptions`; `studio
+  board` lists those of open items, the pane's details view those of the last seven days (`Exceptions by
+  evidence`, in German `Ausnahmen per Beweis`).
+- Without a proof, one line for the lead (`evidence: <job> failed on <repo>#<n> at <head> and no evidence
+  proved a false alarm (<rule>: <why>); decide: ...`): the approval waits, or the merge fails. These lines
+  are not pushed to the owner's phone; the pane shows them as `guard hit without evidence – decide`. A guard
+  with an `owner_only` rule makes it `evidence (owner): ...`, which is pushed.
+- `studio exceptions [list]` and `studio exceptions grant <repo>#<pr> <rule> --reason "<line>"`: the lead's
+  decision, bound to the current head and base (`by: lead`). A guard with an `owner_only` rule, through any
+  of its rules, and an `owner_only` item take the owner's, in a terminal (`by: owner`). Refused under
+  `STUDIO_ROLE=crew`. The lead is trusted here: `owner_only` guards against its mistakes, not against a
+  compromised lead.
+- A pull request that changes `evidence:` in `studio.yaml` gets no approval: the review item is blocked,
+  the owner reviews and merges such a change himself. Checked for every approval from `studio.yaml` at the
+  base; the approval waits when that cannot be read.
+- The review routine names the guard jobs Studio judges by evidence: a failure of one alone is no finding.
+
+### Removed
+
+- The reviewer's offered skill `pr-review-toolkit:review-pr`. It is a command of Anthropic's official
+  marketplace (Apache-2.0) that no crew config dir installed, so every large review reported it under
+  `skillsMissing`. Installing it would add a third marketplace to every crew for a workflow that runs
+  `gh pr view` (the reviewer may not run gh) and starts its own agents without an explicit model, and that
+  duplicates the gate's own analyzers.
+
+### Not in this version
+
+- `whitespace_only`: a rule that names it is refused. It comes later.
+- `comments_only` for other languages than SQL. They come later, each with an adversarial review of its
+  own.
+- Custom proof commands. A rule with `command`, `run` or `inputs` is refused: they come later, with a real
+  sandbox model.
+
+### Not exercised
+
+- A real guard job on GitHub, a real lead deciding on a hit, and a guard that branch protection requires
+  (GitHub then refuses the merge whatever Studio waives).
+
 ## [0.16.0] - 2026-11-05
 
 An epic whose items were all merged sat in `accepting` until someone looked: nothing ran the E2E and

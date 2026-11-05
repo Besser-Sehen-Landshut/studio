@@ -5,6 +5,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { globProblem } from './glob.js';
 import { allowedPluginSchema, pluginPinSchema } from './plugins.js';
+import { ONLY_SQL, PROOF_LANGUAGES, type ProofLanguage } from './proofs.js';
 
 export { globProblem };
 
@@ -180,6 +181,87 @@ const acceptanceSchema = z.strictObject({
     .max(20),
 });
 
+/** A CI job by its workflow file and its job name, as `acceptance.suites` names one. */
+const workflowJob = z.strictObject({
+  workflow: z
+    .string()
+    .regex(
+      /^\.github\/workflows\/[A-Za-z0-9._-]{1,100}\.ya?ml$/,
+      'must be the workflow file, .github/workflows/<file>.yml',
+    ),
+  job: ciLine.pipe(
+    z.string().regex(/^[A-Za-z0-9 ._()/:-]+$/, 'letters, digits, spaces and . _ - ( ) / : only'),
+  ),
+});
+
+/** An evidence rule id: it names the rule in logs, lead lines and `studio exceptions grant`. */
+export const EVIDENCE_ID_RE = /^[a-z][a-z0-9-]{0,47}$/;
+
+/** Why a rule with a command is refused: no user-configured command runs in this version. */
+export const NO_COMMANDS =
+  'evidence rules take a built-in proof (comments_only, paths_only); custom proof commands come later, with a real sandbox';
+
+/** Keys of the command rules an earlier draft had; refused with NO_COMMANDS. */
+const COMMAND_KEYS = ['command', 'run', 'inputs', 'timeoutSeconds', 'job'];
+
+/**
+ * `evidence:` in studio.yaml: a guard job whose failure a built-in proof can show a false alarm on
+ * exactly one diff. Studio computes the proof itself (src/proofs.ts), no command runs, and it reads
+ * these rules only from studio.yaml at the pull request's base on the default branch
+ * (src/evidence.ts).
+ */
+export const evidenceRuleSchema = z
+  .looseObject({
+    id: z.string().regex(EVIDENCE_ID_RE, 'must match ^[a-z][a-z0-9-]{0,47}$'),
+    // The CI job that reports the hit, e.g. a migration guard.
+    guard: workflowJob,
+    // Every changed file of the pull request must lie under `paths`. comments_only: each one is a
+    // .sql file that changes plain comments only. paths_only: that is all.
+    proof: z.enum(['comments_only', 'whitespace_only', 'paths_only']),
+    paths: z.array(globSchema).min(1).max(50),
+    // comments_only: the languages it reads (sql only so far); any other file proves nothing.
+    languages: z
+      .array(
+        z
+          .string()
+          .refine(
+            (l): l is ProofLanguage => (PROOF_LANGUAGES as readonly string[]).includes(l),
+            ONLY_SQL,
+          ),
+      )
+      .min(1)
+      .optional(),
+
+    // A hit the proof does not explain goes to the owner, not the lead.
+    ownerOnly: z.boolean().default(false),
+  })
+  .superRefine((r, ctx) => {
+    const issue = (path: string, message: string) =>
+      ctx.addIssue({ code: 'custom', path: [path], message });
+    const known = ['id', 'guard', 'proof', 'paths', 'languages', 'ownerOnly'];
+    for (const key of Object.keys(r).filter((k) => !known.includes(k))) {
+      issue(key, COMMAND_KEYS.includes(key) ? NO_COMMANDS : 'unknown key');
+    }
+    if (r.proof === 'whitespace_only') {
+      issue('proof', 'whitespace_only is not in this version: it comes later');
+    }
+    if (r.proof === 'comments_only' && r.languages === undefined) {
+      issue('languages', 'comments_only needs the languages it reads');
+    }
+    if (r.proof !== 'comments_only' && r.languages !== undefined) {
+      issue('languages', 'only comments_only reads languages');
+    }
+  })
+  .transform(({ id, guard, proof, paths, languages, ownerOnly }) => ({
+    id,
+    guard,
+    proof,
+    paths,
+    ...(languages === undefined ? {} : { languages }),
+    ownerOnly,
+  }));
+export type EvidenceRule = z.infer<typeof evidenceRuleSchema>;
+
 /** `limits:` in studio.yaml and in the owner config. */
 const dailyLimitsSchema = z.strictObject({
   dailyCostUsd: z.number().positive().optional(),
@@ -230,8 +312,21 @@ export const studioConfigSchema = z
     limits: dailyLimitsSchema.optional(),
     // The full suites an epic's acceptance waits for on main (src/acceptance.ts).
     acceptance: acceptanceSchema.optional(),
+    // Exceptions by evidence: guard jobs whose hits a command can prove false alarms.
+    evidence: z.array(evidenceRuleSchema).max(20).optional(),
   })
   .superRefine((cfg, ctx) => {
+    const ids = new Set<string>();
+    for (const [i, r] of (cfg.evidence ?? []).entries()) {
+      if (ids.has(r.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence', i, 'id'],
+          message: `duplicate evidence id ${r.id}`,
+        });
+      }
+      ids.add(r.id);
+    }
     const seen = new Set<string>();
     for (const [i, c] of (cfg.components ?? []).entries()) {
       if (seen.has(c.id)) {

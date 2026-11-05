@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { loadBoard, saveBoard, transition, type WorkItem } from './board.js';
 import { COSTS_LOCK, COSTS_LOCK_STALE_MS } from './costs.js';
 import { crewHold, isItemId } from './crew.js';
+import { EXCEPTIONS_LOCK, EXCEPTIONS_LOCK_STALE_MS } from './evidence.js';
 import { RERUNS_LOCK, RERUNS_LOCK_STALE_MS } from './flaky-ci.js';
 import { LOCK_STALE_MS as LIMITS_LOCK_STALE_MS } from './limits.js';
 import { NOTIFY_LOCK, LOCK_STALE_MS as NOTIFY_LOCK_STALE_MS } from './notify.js';
@@ -44,6 +45,7 @@ const LOCKS: readonly { where: 'project' | 'owner'; name: string; staleMs: numbe
   { where: 'project', name: RERUNS_LOCK, staleMs: RERUNS_LOCK_STALE_MS },
   { where: 'project', name: LESSONS_LOCK, staleMs: LESSONS_LOCK_STALE_MS },
   { where: 'project', name: COSTS_LOCK, staleMs: COSTS_LOCK_STALE_MS },
+  { where: 'project', name: EXCEPTIONS_LOCK, staleMs: EXCEPTIONS_LOCK_STALE_MS },
   { where: 'owner', name: LAUNCH_LOCK, staleMs: LAUNCH_LOCK_STALE_MS },
   { where: 'owner', name: 'limits.lock', staleMs: LIMITS_LOCK_STALE_MS },
   { where: 'owner', name: 'blocks.lock', staleMs: LIMITS_LOCK_STALE_MS },

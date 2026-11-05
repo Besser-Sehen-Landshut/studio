@@ -591,6 +591,9 @@ export function writeBrief(
               : { pullRequest: caps.review.pullRequest }),
             ...(caps.review.notRunHere === undefined ? {} : { notRunHere: caps.review.notRunHere }),
             ...(caps.review.ciItem === undefined ? {} : { ciItem: caps.review.ciItem }),
+            ...(caps.review.evidenceGuards === undefined
+              ? {}
+              : { evidenceGuards: caps.review.evidenceGuards }),
           })),
     '## Working rules',
     '',

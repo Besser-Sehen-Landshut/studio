@@ -62,10 +62,21 @@ export type QueueOptions = {
   onChecksFailed?: (entry: QueueEntry, head: string) => Promise<'rerun' | 'wait' | 'fail'>;
   /** Every check on `head` passed. */
   onChecksPassed?: (entry: QueueEntry, head: string) => void;
+  /**
+   * Plain failed jobs on `head`: whether an exception by evidence covers them. Asked before
+   * `onChecksFailed`; `lead` fails the entry with its reason, `wait` keeps polling.
+   */
+  evidence?: (
+    entry: QueueEntry,
+    head: string,
+    failed: readonly Check[],
+  ) => Promise<EvidenceOutcome>;
   /** Why this entry must not merge, read right before `gh pr merge`; a reason fails the entry. */
   mergeAllowed?: (
     entry: QueueEntry,
     head: string,
+    /** Failed checks an exception by evidence covers on this head. */
+    waived?: ReadonlySet<string>,
   ) => string | undefined | Promise<string | undefined>;
 };
 
@@ -297,15 +308,43 @@ function parseChecks(stdout: string): Check[] | undefined {
   return out;
 }
 
-type ChecksVerdict =
+export type ChecksVerdict =
   | { kind: 'pending' }
-  /** `checks`: every check read, all of them passed or skipped. */
+  /** `checks`: every check read, all of them passed or skipped (or failed and waived). */
   | { kind: 'pass'; checks: Check[] }
-  | { kind: 'failed'; reason: string }
+  /**
+   * `failed`: set only when every failure is a plain failed job of a workflow (no cancel, no
+   * required skip, no commit status), the ones an evidence rule may explain; `checks`: all read.
+   */
+  | { kind: 'failed'; reason: string; failed?: Check[]; checks?: Check[] }
   /** No check reported at all: pending during the grace after a head change, else failed. */
   | { kind: 'none'; reason: string };
 
-export async function readChecks(entry: QueueEntry, gh: Gh): Promise<ChecksVerdict> {
+/** How a failed check is named in a set of waived ones: its workflow and its name. */
+export const checkKey = (c: Pick<Check, 'name' | 'workflow'>): string =>
+  `${c.workflow ?? ''}\u0000${c.name}`;
+
+/**
+ * What an evidence rule says about the failed checks of one head (src/evidence.ts): `none` when
+ * a failure is bound to no rule (as before), `waived` with the checks an exception covers, `wait`
+ * while the evidence still runs, `lead` with a one-line reason when it proved nothing.
+ */
+export type EvidenceOutcome =
+  | { kind: 'none' }
+  /** `base`: the base commit the waiver was judged on, checked again right before the merge. */
+  | { kind: 'waived'; waived: ReadonlySet<string>; base?: string }
+  | { kind: 'wait'; reason: string }
+  | { kind: 'lead'; reason: string };
+
+/**
+ * The checks of a pull request. `waived` names failed checks an exception by evidence covers for
+ * this head: they count neither as failed nor as passed.
+ */
+export async function readChecks(
+  entry: QueueEntry,
+  gh: Gh,
+  waived?: ReadonlySet<string>,
+): Promise<ChecksVerdict> {
   const base = [
     'pr',
     'checks',
@@ -344,14 +383,29 @@ export async function readChecks(entry: QueueEntry, gh: Gh): Promise<ChecksVerdi
     }
   }
   // Conclusive failures win over pending: no point in waiting for a run that cannot pass.
+  const isWaived = (c: Check) =>
+    c.bucket === 'fail' && c.workflow !== undefined && waived?.has(checkKey(c)) === true;
+  let first: string | undefined;
+  let plain = true;
+  const failed: Check[] = [];
   for (const c of evaluated) {
+    if (isWaived(c)) continue;
     if (c.bucket === 'fail' || c.bucket === 'cancel') {
       const what = c.bucket === 'fail' ? 'failed' : 'was cancelled';
-      return { kind: 'failed', reason: `check ${c.name} ${what}` };
+      first ??= `check ${c.name} ${what}`;
+      if (c.bucket === 'fail' && c.workflow !== undefined) failed.push(c);
+      else plain = false;
+    } else if (c.bucket === 'skipping' && requiredNames.has(c.name)) {
+      first ??= `required check ${c.name} was skipped`;
+      plain = false;
     }
-    if (c.bucket === 'skipping' && requiredNames.has(c.name)) {
-      return { kind: 'failed', reason: `required check ${c.name} was skipped` };
-    }
+  }
+  if (first !== undefined) {
+    return {
+      kind: 'failed',
+      reason: first,
+      ...(plain ? { failed, checks: evaluated } : {}),
+    };
   }
   if (evaluated.some((c) => c.bucket === 'pending')) return { kind: 'pending' };
   // Skipped CI is never green: at least one check must have actually passed.
@@ -536,6 +590,26 @@ export async function viewPr(entry: QueueEntry, gh: Gh): Promise<PrView | string
   };
 }
 
+/** The pull request's base commit as GitHub reports it now; undefined on any failure. */
+async function baseOidOf(entry: QueueEntry, gh: Gh): Promise<string | undefined> {
+  const r = await gh.run([
+    'pr',
+    'view',
+    String(entry.pr),
+    '--repo',
+    entry.repo,
+    '--json',
+    'baseRefOid',
+  ]);
+  if (r.code !== 0) return undefined;
+  try {
+    const oid = (JSON.parse(r.stdout) as { baseRefOid?: unknown } | null)?.baseRefOid;
+    return typeof oid === 'string' && /^[0-9a-f]{40,64}$/i.test(oid) ? oid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function mergeShaOf(entry: QueueEntry, gh: Gh): Promise<string | undefined> {
   const r = await gh.run([
     'pr',
@@ -604,6 +678,29 @@ export async function mergeOne(
   };
   const moved = `head moved ${MAX_ATTEMPTS} times`;
 
+  // Failed checks an exception by evidence covers, for the one head they were judged on.
+  const waived = new Map<string, ReadonlySet<string>>();
+  /** The base each waiver was judged on, by head. */
+  const waivedBase = new Map<string, string>();
+  /** The checks of `head`, with the failures an exception by evidence covers taken out. */
+  const judged = async (
+    head: string,
+  ): Promise<ChecksVerdict | { kind: 'evidence'; reason: string }> => {
+    const verdict = await readChecks(entry, gh, waived.get(head));
+    if (verdict.kind !== 'failed' || verdict.failed === undefined || !opts.evidence) {
+      return verdict;
+    }
+    const ev = await opts.evidence(entry, head, verdict.failed);
+    if (ev.kind === 'none') return verdict;
+    if (ev.kind === 'wait') return { kind: 'pending' };
+    if (ev.kind === 'lead') return { kind: 'evidence', reason: ev.reason };
+    const all = new Set([...(waived.get(head) ?? []), ...ev.waived]);
+    waived.set(head, all);
+    if (ev.base === undefined) waivedBase.delete(head);
+    else waivedBase.set(head, ev.base);
+    return readChecks(entry, gh, all);
+  };
+
   let attempts = 1;
   let rechecks = 0;
   let step: QueueStep = entry.step;
@@ -627,7 +724,9 @@ export async function mergeOne(
       if (before.state === 'MERGED') return merged();
       if (before.state === 'CLOSED') return failed('pull request is closed');
       for (;;) {
-        const verdict = await readChecks(entry, gh);
+        const verdict = await judged(before.head);
+        // The evidence proved nothing: the lead decides, a rerun would not change the diff.
+        if (verdict.kind === 'evidence') return failed(verdict.reason);
         if (verdict.kind === 'failed') {
           // A failure outside the pull request may get its one rerun on this head: then wait.
           const act = (await opts.onChecksFailed?.(entry, before.head)) ?? 'fail';
@@ -685,13 +784,16 @@ export async function mergeOne(
         continue;
       }
       // CI may have changed while we waited for capacity: verify once more right before merging.
-      const again = await readChecks(entry, gh);
+      // The base may have moved since a waiver was judged: judge again, never from the cache.
+      waived.delete(head);
+      const again = await judged(head);
+      if (again.kind === 'evidence') return failed(again.reason);
       if (again.kind !== 'pass') {
         if (++rechecks > MAX_ATTEMPTS) return failed(`checks changed ${MAX_ATTEMPTS} times`);
         step = 'checks';
         continue;
       }
-      const refused = await opts.mergeAllowed?.(entry, head);
+      const refused = await opts.mergeAllowed?.(entry, head, waived.get(head));
       if (refused !== undefined) return failed(refused);
       // Last, because the check above goes to the network: a pause may have arrived meanwhile.
       const held = opts.hold?.();
@@ -699,6 +801,23 @@ export async function mergeOne(
         // Resume at capacity: the head or the capacity may differ by then.
         enter('capacity');
         throw new QueueHeld(held);
+      }
+      // A waiver holds for one base: read it once more right before the merge, and judge again
+      // when it moved (or cannot be read).
+      if (waived.has(head)) {
+        const judgedOn = waivedBase.get(head);
+        const live = await baseOidOf(entry, gh);
+        if (
+          judgedOn === undefined ||
+          live === undefined ||
+          live.toLowerCase() !== judgedOn.toLowerCase()
+        ) {
+          waived.delete(head);
+          waivedBase.delete(head);
+          if (++rechecks > MAX_ATTEMPTS) return failed(`checks changed ${MAX_ATTEMPTS} times`);
+          step = 'checks';
+          continue;
+        }
       }
       const r = await gh.run([
         'pr',

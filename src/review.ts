@@ -53,7 +53,7 @@ const prSchema = z.object({
 
 /** What the pull request changes and where its head lives; undefined on any failure. */
 export async function readPrFacts(
-  ports: Ports,
+  ports: Pick<Ports, 'gh'>,
   target: { repo: string; pr: number },
 ): Promise<PrFacts | undefined> {
   try {
@@ -102,7 +102,7 @@ export async function readPrFacts(
 
 /** The checks of a pull request as `name: state` lines; undefined when they cannot be read. */
 export async function readCheckLines(
-  ports: Ports,
+  ports: Pick<Ports, 'gh'>,
   target: { repo: string; pr: number },
 ): Promise<string[] | undefined> {
   try {
@@ -127,7 +127,7 @@ export async function readCheckLines(
  * cannot be read. A repository that reports no checks at all has nothing to wait for.
  */
 export async function checksPending(
-  ports: Ports,
+  ports: Pick<Ports, 'gh'>,
   target: { repo: string; pr: number },
 ): Promise<boolean> {
   try {
@@ -146,7 +146,10 @@ export async function checksPending(
 }
 
 /** The repository's default branch; undefined on any failure. */
-export async function readDefaultBranch(ports: Ports, repo: string): Promise<string | undefined> {
+export async function readDefaultBranch(
+  ports: Pick<Ports, 'gh'>,
+  repo: string,
+): Promise<string | undefined> {
   try {
     const r = await ports.gh.run(['repo', 'view', repo, '--json', 'defaultBranchRef'], {
       timeoutMs: GH_TIMEOUT_MS,
@@ -307,6 +310,8 @@ export function renderReviewRoutine(r: {
   notRunHere?: string;
   /** The item holding the pull request declares `.github/`: it may change it. */
   ciItem?: boolean;
+  /** Guard jobs whose failures Studio judges by the evidence rules on the base. */
+  evidenceGuards?: readonly string[];
 }): string[] {
   return [
     '## Review routine',
@@ -336,6 +341,12 @@ export function renderReviewRoutine(r: {
       ? []
       : [
           `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: for each command, find the job at the base that runs it, also through a task runner (turbo, nextest, make), and list it in \`not_run_here_jobs\` with the command exactly as on its \`command:\` line (nothing appended: the gate matches it character for character), the workflow file at the base that defines the job (\`.github/workflows/<file>\`), the job's \`name:\`, or its id when it has none, and \`covers\`: one line of at most 600 characters on why that job covers the command. A job of a reusable workflow (\`on: workflow_call\`) counts when a \`pull_request\` workflow calls its file with \`uses: ./.github/workflows/<file>\` from a job: name the called file and its job, not the caller; its checks are \`<caller job> / <job>\`${r.pullRequest === undefined ? '' : ` (the check names are in \`${r.pullRequest.checks}\`)`}. A command no base job runs is a finding. Studio checks at the base and at the head that neither the job nor a calling job has \`continue-on-error\` (an \`if:\` is fine: a skipped job never passes), that the job calls no further reusable workflow, that its definition is unchanged unless this is a CI item, and that the workflow name with the checks is unique; it refuses an approval unless every check of that job (each matrix leg \`(<leg>)\`) passed on this pull request. Whether the job covers the command is your judgement: Studio shows your \`covers\` line to the lead and does not test it.`,
+          '',
+        ]),
+    ...(r.evidenceGuards === undefined || r.evidenceGuards.length === 0
+      ? []
+      : [
+          `Studio judges a failed check of these guard jobs itself, by the evidence studio.yaml on the base binds to them: ${r.evidenceGuards.map((g) => `\`${g}\``).join(', ')}. Such a failure alone is no finding and no reason for \`changes_requested\`: review the change itself, and name a real problem the guard points at as a finding.`,
           '',
         ]),
     `Run each analyzer below as one subagent with the model named there, read-only except for the spec check's probe; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,
@@ -394,6 +405,8 @@ export const crewCapsSchema = z.strictObject({
   notRunHere: z.array(z.string()).optional(),
   /** The pull request changes `.github/` (or that could not be read) and its item is no CI item. */
   workflowChange: z.literal(true).optional(),
+  /** The pull request may change .studio/studio.yaml: collect checks its evidence rules. */
+  configChange: z.literal(true).optional(),
   /** The item holding the pull request declares paths below `.github/`: its jobs may change. */
   ciItem: z.literal(true).optional(),
   /** An acceptance: the epic it checks, as the board held it at launch (`headRefOid` is main). */
@@ -489,7 +502,13 @@ type ReviewReport = Pick<
 export function checkReviewCaps(
   caps: CrewCaps | undefined,
   report: ReviewReport,
-): { skipped: string[]; target?: string; notRunHere?: string[]; ciItem?: boolean } {
+): {
+  skipped: string[];
+  target?: string;
+  notRunHere?: string[];
+  ciItem?: boolean;
+  configChange?: boolean;
+} {
   if (report.status !== 'done') return { skipped: [] };
   if (caps?.reviewsTarget === undefined) {
     throw new Error('no record of what this review is about: relaunch the review, nothing moved');
@@ -560,5 +579,6 @@ export function checkReviewCaps(
     target,
     ...(notRunHere.length === 0 ? {} : { notRunHere }),
     ...(caps.ciItem === true ? { ciItem: true } : {}),
+    ...(caps.configChange === true ? { configChange: true } : {}),
   };
 }

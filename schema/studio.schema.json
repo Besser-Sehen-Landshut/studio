@@ -470,6 +470,73 @@
         "suites"
       ],
       "additionalProperties": false
+    },
+    "evidence": {
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,47}$"
+          },
+          "guard": {
+            "type": "object",
+            "properties": {
+              "workflow": {
+                "type": "string",
+                "pattern": "^\\.github\\/workflows\\/[A-Za-z0-9._-]{1,100}\\.ya?ml$"
+              },
+              "job": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+              }
+            },
+            "required": [
+              "workflow",
+              "job"
+            ],
+            "additionalProperties": false
+          },
+          "proof": {
+            "type": "string",
+            "enum": [
+              "comments_only",
+              "whitespace_only",
+              "paths_only"
+            ]
+          },
+          "paths": {
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "languages": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "owner_only": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "guard",
+          "proof",
+          "paths"
+        ],
+        "additionalProperties": {}
+      }
     }
   },
   "required": [
