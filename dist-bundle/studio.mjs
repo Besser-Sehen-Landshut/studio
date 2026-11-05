@@ -43962,6 +43962,7 @@ import { dirname as dirname12, join as join42 } from "node:path";
 
 // src/worker-deny.ts
 import { existsSync as existsSync12, readFileSync as readFileSync38, realpathSync as realpathSync7 } from "node:fs";
+import { isIP } from "node:net";
 import { isAbsolute as isAbsolute7, join as join41, posix } from "node:path";
 var readText = (file3) => {
   try {
@@ -44049,19 +44050,37 @@ var realOr2 = (p) => {
     return p;
   }
 };
+function normalizeHost(host) {
+  let h2 = host.toLowerCase();
+  if (h2 === "*") return { host: "*", wildcard: true, ip: 0 };
+  const wildcard = h2.startsWith("*.");
+  if (wildcard) h2 = h2.slice(2);
+  if (h2.endsWith(".")) h2 = h2.slice(0, -1);
+  if (h2 === "" || h2.endsWith(".")) return void 0;
+  const forUrl = h2.includes(":") && !h2.startsWith("[") ? `[${h2}]` : h2;
+  let parsed;
+  try {
+    parsed = new URL(`http://${forUrl}/`).hostname;
+  } catch {
+    return void 0;
+  }
+  if (parsed === "") return void 0;
+  const bare = parsed.startsWith("[") && parsed.endsWith("]") ? parsed.slice(1, -1) : parsed;
+  const ip = isIP(bare);
+  return { host: bare, wildcard, ip: ip === 4 ? 4 : ip === 6 ? 6 : 0 };
+}
 function localName(host) {
-  const h2 = host.toLowerCase();
+  const n2 = normalizeHost(host);
+  if (n2 === void 0) return true;
+  const h2 = n2.host;
   if (h2 === "*" || h2 === "localhost" || h2.endsWith(".localhost")) return true;
-  if (!h2.replace(/^\*\./, "").includes(".")) return true;
+  if (n2.ip !== 0) return false;
+  if (!h2.includes(".")) return true;
   return /\.(local|lan|internal|intranet|home\.arpa|localdomain)$/.test(h2);
 }
 function ipLiteral(host) {
-  if (/^\[[0-9A-Fa-f:.]+\]$/.test(host) || host.includes(":") && /^[0-9A-Fa-f:.]+$/.test(host)) {
-    return true;
-  }
-  const parts = host.split(".");
-  if (parts.length < 1 || parts.length > 4) return false;
-  return parts.every((p) => /^(0[xX][0-9A-Fa-f]+|0[0-7]*|[1-9]\d*)$/.test(p));
+  const n2 = normalizeHost(host);
+  return n2 !== void 0 && !n2.wildcard && n2.ip !== 0;
 }
 function hostPort(entry) {
   const v6 = /^(\[[^\]]+\])(?::(\d+))?$/.exec(entry);
@@ -44161,6 +44180,9 @@ function enforceDeny(o2) {
   if (ports.length > 0) {
     for (const entry of o2.networkAllow) {
       const { host, port } = hostPort(entry);
+      if (normalizeHost(host) === void 0) {
+        return { refused: `network_allow entry ${entry} cannot be read as a host` };
+      }
       if (port !== void 0 && ports.includes(port)) {
         return { refused: `network_allow entry ${entry} opens denied port ${port}` };
       }

@@ -11,6 +11,7 @@ import {
   ipLiteral,
   mergeDeny,
   namedDeniedPort,
+  normalizeHost,
   sandboxProblem,
   type WorkerPlatform,
 } from '../src/worker-deny.js';
@@ -351,5 +352,74 @@ describe('IP addresses in every spelling', () => {
         entry,
       ).toEqual({ refused: expect.stringMatching(/may reach this machine/) });
     }
+  });
+});
+
+describe('hosts are normalised before they are judged', () => {
+  const lo = ['127', '0', '0', '1'].join('.');
+  const spellings = [
+    'localhost.',
+    'LOCALHOST',
+    '127.1',
+    '0x7f.1',
+    '2130706433',
+    `[::ffff:${lo}]`,
+    `${lo}.`,
+    'LocalHost.',
+  ];
+  it('lowercases, drops one trailing dot and normalises IP spellings as a URL parser does', () => {
+    expect(normalizeHost('localhost.')).toEqual({ host: 'localhost', wildcard: false, ip: 0 });
+    expect(normalizeHost('LOCALHOST')).toEqual({ host: 'localhost', wildcard: false, ip: 0 });
+    for (const h of ['127.1', '0x7f.1', '2130706433', `${lo}.`]) {
+      expect(normalizeHost(h), h).toEqual({ host: lo, wildcard: false, ip: 4 });
+    }
+    expect(normalizeHost(`[::ffff:${lo}]`)).toEqual({
+      host: '::ffff:7f00:1',
+      wildcard: false,
+      ip: 6,
+    });
+    expect(normalizeHost('*.NpmJS.org.')).toEqual({ host: 'npmjs.org', wildcard: true, ip: 0 });
+    for (const bad of ['a..', 'exa mple.com', '[nope]', '.'])
+      expect(normalizeHost(bad), bad).toBeUndefined();
+  });
+  it('every such spelling, without a port, refuses when ports are denied', () => {
+    for (const entry of spellings) {
+      expect(
+        enforceDeny({
+          deny: { paths: [], ports: [5432] },
+          platform: linux,
+          networkAllow: ['github.com', entry],
+          keep,
+        }),
+        entry,
+      ).toEqual({ refused: expect.stringMatching(/may reach this machine/) });
+    }
+  });
+  it('a denied port is found behind any of them, and a host that does not parse refuses', () => {
+    expect(
+      enforceDeny({
+        deny: { paths: [], ports: [5432] },
+        platform: linux,
+        networkAllow: ['LOCALHOST.:5432'],
+        keep,
+      }),
+    ).toEqual({ refused: expect.stringMatching(/opens denied port 5432/) });
+    expect(
+      enforceDeny({
+        deny: { paths: [], ports: [5432] },
+        platform: linux,
+        networkAllow: ['exa mple.com'],
+        keep,
+      }),
+    ).toEqual({ refused: expect.stringMatching(/cannot be read as a host/) });
+    // Named hosts with a dot and no local suffix stay allowed, in any case and with a trailing dot.
+    expect(
+      enforceDeny({
+        deny: { paths: [], ports: [5432] },
+        platform: linux,
+        networkAllow: ['GitHub.com.', '*.npmjs.org'],
+        keep,
+      }),
+    ).toMatchObject({ ports: [5432] });
   });
 });

@@ -3,6 +3,7 @@
 // worker only claims work where that sandbox exists and every deny entry maps onto it; anything
 // else refuses with a line that says why (fail closed).
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { isAbsolute, join, posix } from 'node:path';
 import { pathKey, type WorkerDeny, within } from './config.js';
 
@@ -164,26 +165,53 @@ const realOr = (p: string): string => {
   }
 };
 
+/**
+ * A host as a resolver will see it: lowercased, one trailing dot dropped, then WHATWG URL host
+ * normalisation, which turns every IPv4 spelling (`0x7f.1`, `2130706433`, `127.1`) into dotted
+ * form and IPv6 into its compressed form. A leading `*.` wildcard is kept aside. `undefined` when
+ * the host does not parse: such an entry is refused.
+ */
+export function normalizeHost(
+  host: string,
+): { host: string; wildcard: boolean; ip: 0 | 4 | 6 } | undefined {
+  let h = host.toLowerCase();
+  if (h === '*') return { host: '*', wildcard: true, ip: 0 };
+  const wildcard = h.startsWith('*.');
+  if (wildcard) h = h.slice(2);
+  if (h.endsWith('.')) h = h.slice(0, -1);
+  if (h === '' || h.endsWith('.')) return undefined;
+  // A bare IPv6 address needs brackets in a URL.
+  const forUrl = h.includes(':') && !h.startsWith('[') ? `[${h}]` : h;
+  let parsed: string;
+  try {
+    parsed = new URL(`http://${forUrl}/`).hostname;
+  } catch {
+    return undefined;
+  }
+  if (parsed === '') return undefined;
+  const bare = parsed.startsWith('[') && parsed.endsWith(']') ? parsed.slice(1, -1) : parsed;
+  const ip = isIP(bare);
+  return { host: bare, wildcard, ip: ip === 4 ? 4 : ip === 6 ? 6 : 0 };
+}
+
 /** Names that can resolve to this machine or the local network: the proxy would reach their ports. */
 function localName(host: string): boolean {
-  const h = host.toLowerCase();
+  const n = normalizeHost(host);
+  if (n === undefined) return true;
+  const h = n.host;
   if (h === '*' || h === 'localhost' || h.endsWith('.localhost')) return true;
-  if (!h.replace(/^\*\./, '').includes('.')) return true;
+  if (n.ip !== 0) return false;
+  if (!h.includes('.')) return true;
   return /\.(local|lan|internal|intranet|home\.arpa|localdomain)$/.test(h);
 }
 
 /**
- * Whether a host is an IP address in any spelling a resolver takes: IPv6 (bracketed or bare,
- * mapped forms included) and IPv4 as 1 to 4 parts of decimal, octal (`0177`) or hex (`0x7f`)
- * numbers, so `2130706433`, `0x7f000001` and `127.1` all count.
+ * Whether a host is an IP address in any spelling a resolver takes, after `normalizeHost`: IPv4
+ * in dotted, short, integer, octal or hex form, IPv6 bracketed or bare, mapped forms included.
  */
 export function ipLiteral(host: string): boolean {
-  if (/^\[[0-9A-Fa-f:.]+\]$/.test(host) || (host.includes(':') && /^[0-9A-Fa-f:.]+$/.test(host))) {
-    return true;
-  }
-  const parts = host.split('.');
-  if (parts.length < 1 || parts.length > 4) return false;
-  return parts.every((p) => /^(0[xX][0-9A-Fa-f]+|0[0-7]*|[1-9]\d*)$/.test(p));
+  const n = normalizeHost(host);
+  return n !== undefined && !n.wildcard && n.ip !== 0;
 }
 
 /** Splits a `network_allow` entry into host and port (`[::1]:443`, `example.org:8080`). */
@@ -317,6 +345,9 @@ export function enforceDeny(o: {
   if (ports.length > 0) {
     for (const entry of o.networkAllow) {
       const { host, port } = hostPort(entry);
+      if (normalizeHost(host) === undefined) {
+        return { refused: `network_allow entry ${entry} cannot be read as a host` };
+      }
       if (port !== undefined && ports.includes(port)) {
         return { refused: `network_allow entry ${entry} opens denied port ${port}` };
       }
