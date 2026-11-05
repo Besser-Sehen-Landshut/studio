@@ -4181,11 +4181,11 @@ describe('epics in the CLI', () => {
     withEpics(fx, [epicYaml('E-1'), epicYaml('E-2')]);
     const ports = quiet();
     const t = await cli(fx, ports, 'epic', 'list');
-    expect(t.out.split('\n')[0]).toMatch(/^ID\s+STATUS\s+PROGRESS\s+ITEMS\s+TITLE$/);
+    expect(t.out.split('\n')[0]).toMatch(/^ID\s+STATUS\s+PROGRESS\s+ITEMS\s+COST\s+TITLE$/);
     expect(t.out).toMatch(
-      /E-1\s+open\s+1\/3\s+ready 1, in_review 1, merged 1, dropped 1\s+Epic E-1/,
+      /E-1\s+open\s+1\/3\s+ready 1, in_review 1, merged 1, dropped 1\s+\$0\.00\s+Epic E-1/,
     );
-    expect(t.out).toMatch(/E-2\s+open\s+0\/0\s+-\s+Epic E-2/);
+    expect(t.out).toMatch(/E-2\s+open\s+0\/0\s+-\s+\$0\.00\s+Epic E-2/);
     const j = JSON.parse((await cli(fx, ports, 'epic', 'list', '--json')).out);
     expect(j[0]).toEqual({
       id: 'E-1',
@@ -4193,6 +4193,7 @@ describe('epics in the CLI', () => {
       status: 'open',
       progress: { merged: 1, total: 3 },
       counts: { merged: 1, in_review: 1, ready: 1, dropped: 1 },
+      costUsd: 0,
     });
     const show = await cli(fx, ports, 'epic', 'show', 'E-1');
     expect(show.out).toContain('E-1  open  1/3  Epic E-1');

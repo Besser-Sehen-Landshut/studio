@@ -33,7 +33,8 @@ export interface BoardState {
     pending: { pr: number; repo: string; item?: string }[];
   };
   ci: { busy: number; total: number; mergeMaxBusy: number; ok: boolean };
-  today: { merged: number[]; deployed: number };
+  /** `costUsd`: what this project's ended crew runs cost today; absent when unknown. */
+  today: { merged: number[]; deployed: number; costUsd?: number };
   /** Ascending by day. */
   usageDays: { day: string; labels: { label: string; runs: number }[] }[];
   mainBuild: { status: string; sha?: string };
@@ -211,6 +212,7 @@ function toState(root: Obj): BoardState {
     today: {
       merged: list(today?.merged).flatMap((m) => num(obj(m)?.pr) ?? []),
       deployed: num(today?.deployed) ?? 0,
+      ...(num(today?.costUsd) === undefined ? {} : { costUsd: num(today?.costUsd) as number }),
     },
     usageDays: entries(root.usageDays)
       .map(([day, labels]) => ({
@@ -402,6 +404,8 @@ interface Strings {
   doneToday: (n: number) => string;
   withoutEpic: string;
   leadTime: (h: string) => string;
+  /** The cost of today's crew runs, one value. */
+  costToday: (usd: string) => string;
   /** A fixed phrase per decision code: the reason itself may be crew text and is never shown. */
   decision: (code: string) => string;
   wait: (w: BoardWait) => string;
@@ -494,6 +498,7 @@ const EN: Strings = {
   doneToday: (n) => `✓ ${n} done today`,
   withoutEpic: 'Without epic',
   leadTime: (h) => `lead time ${h}`,
+  costToday: (usd) => `today ${usd}`,
   decision: (code) => {
     if (code === 'fix_limit') return 'fix limit reached – decide';
     if (code === 'changes_requested') return 'changes requested';
@@ -632,6 +637,7 @@ const DE: Strings = {
   doneToday: (n) => `✓ ${n} heute fertig`,
   withoutEpic: 'Ohne Vorhaben',
   leadTime: (h) => `Ø Durchlauf ${h}`,
+  costToday: (usd) => `heute ${usd}`,
   decision: (code) => {
     if (code === 'fix_limit') return 'Fix-Limit erreicht – entscheiden';
     if (code === 'changes_requested') return 'Änderungen angefordert';
@@ -1268,6 +1274,8 @@ function footerLines(s: BoardState, t: Strings, columns: number): Line[] {
   const ci = `CI ${ciBar(s, 8)} ${s.ci.ok ? s.ci.busy : '?'}/${s.ci.total}`;
   const parts = [ci];
   if (s.medianLeadTimeHours !== null) parts.push(t.leadTime(t.hours(s.medianLeadTimeHours)));
+  const cost = s.today.costUsd;
+  if (cost !== undefined && cost > 0) parts.push(t.costToday(`$${cost.toFixed(2)}`));
   parts.push('/studio more');
   return pack(parts, ' · ', columns).map((text) => ({ text, tone: 'dim' }));
 }

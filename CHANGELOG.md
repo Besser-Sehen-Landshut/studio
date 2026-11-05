@@ -42,6 +42,30 @@ tagged yet; the maintainers tag after the merge.
 
 - A real reboot with live crews, and a real lead session working a lessons review item.
 
+## [0.14.0] - 2026-11-05
+
+What crews cost was invisible, and nothing kept a busy day from running up. Now each item shows its runs,
+tokens and cost, and a daily cap per project and per owner stops new launches once it is reached. Not
+tagged yet; the maintainers tag after the merge.
+
+### Added
+
+- Costs per item: `collect` reads the `result` events of the crew logs (`total_cost_usd`, else the sum of
+  `modelUsage[*].costUSD`; tokens from `modelUsage`, else `usage`) and stores
+  `usage: { runs, tokens_in, tokens_out, tokens_cache, cost_usd }` on the item, with the reviews of its pull
+  request counted for the builder item. Recomputed from the logs, never added twice.
+- `studio metrics` prints `costs` (today, per item, per epic); `studio epic list` has a `COST` column
+  (`costUsd` in JSON); the pane's footer shows `today $n`; `state.json` has `today.costUsd`.
+- Daily cost cap: `limits.daily_cost_usd` in `studio.yaml` (one project) and in the owner config (all
+  projects). Ended runs go into `costs.json` in the state root on the owner's local day; once the cap is
+  reached every ready item is deferred with `daily cost cap reached ($x of $y)`, `tick` lists it under
+  `held`, running crews finish, and the next day starts from zero. Under an owner cap every project's
+  ended runs are entered first, also of a project without a tick. A run counts as ended only by its
+  process identity, a launch records the item's previous run before it replaces the crew record, and
+  `accounts-clear` records runs before it moves their log start. Writers take `costs.lock`.
+- A run without a `result` event is estimated from its assistant usage (by model family, unknown
+  models at the highest rates) and marked `estimated` on the item and in the ledger.
+
 ## [0.13.0] - 2026-11-05
 
 Decisions waited until someone looked at the board, and a flaky test anywhere in the repository failed
