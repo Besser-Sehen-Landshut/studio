@@ -347,7 +347,7 @@ evidence:
   - id: sql-comments # ^[a-z][a-z0-9-]{0,47}$, unique
     guard: { workflow: .github/workflows/ci.yml, job: migration-guard } # the job whose failure it explains
     proof: comments_only # or whitespace_only, paths_only
-    languages: [sql] # comments_only only: sql, rust, ts, js, sh, yaml, toml, python
+    languages: [sql] # comments_only only; sql is the one language so far
     paths: ["migrations/**"] # the files the guard watches
     owner_only: false # true: a hit the proof does not explain goes to the owner
   - id: docs-only
@@ -357,26 +357,10 @@ evidence:
 ```
 
 - **The proofs.** Every proof refuses a changed path with a control character.
-  - `comments_only`: at least one changed file lies under `paths`, and each of them is a plain change of a regular text file in one of `languages` whose code is the same once comments are taken out and whitespace is normalized. String literals stay byte for byte. Whitespace keeps the meaning its language gives it: a line break in JavaScript, TypeScript, Python, YAML, TOML and shell, and the indentation after it in Python, YAML, TOML and shell. A comment that spans lines counts as a line break.
-  - `whitespace_only`: the same, for any text file under `paths`, and only line endings, whitespace at the end of a line and blank lines at the end of the file may differ.
+  - `comments_only`: at least one changed file lies under `paths`, and each of them is a plain change of a regular `.sql` file whose code is the same once plain comments are taken out and whitespace is collapsed. String literals, quoted identifiers and dollar-quoted bodies stay byte for byte. `sql` is the only language so far: a rule that names another is refused. More languages come later, each with an adversarial review of its own.
+  - `whitespace_only`: any text file under `paths`; only line endings, whitespace at the end of a line and blank lines at the end of the file may differ.
   - `paths_only`: every changed path, both sides of a rename, matches `paths`.
-- **Erring towards "not proven".** An added, deleted or renamed file, a mode change, a symlink, a submodule, a binary file, a file over 2 MiB and a file in no listed language prove nothing. The tokenizers are small and conservative, and whatever one cannot classify for sure proves nothing:
-  - SQL: `--` without a blank after it (MySQL reads it as two minus signs), a backslash in a string, and a nested block comment.
-  - JavaScript and TypeScript: a slash that may start a regular expression, a backslash outside a string, and a template literal with a substitution.
-  - Python: an f-string.
-  - YAML: a block scalar.
-  - Shell: a here-document, an `$'...'` string and an escaped blank.
-  - Any language: an unterminated string or comment.
-  - Comments with a meaning count as code, so adding, removing or changing one is never "comments only":
-    - SQL: a block comment whose `/*` is not followed by a blank or `*` (`/*!...*/` runs in MySQL, `/*+...*/` is a hint) is not proven at all, and line comments with a migration or query directive (`-- +goose Up`, `--+` hints, `-- name: ...`, `-- no-transaction`) are code.
-    - Line 1 `#!` (an interpreter line) is code everywhere.
-    - Python: a coding declaration in line 1 or 2 is code.
-    - Rust: doc comments (`///`, `//!`, `/**`, `/*!`) are code, because their code blocks run as doctests; attributes `#[...]` and `#![...]` are code anyway.
-    - JavaScript and TypeScript: `//#`, `//@`, `///` pragmas and JSDoc tags (`@type`, `@ts-ignore`, `@jsx`) are code.
-    - Any language: a comment that names a tool directive (`eslint`, `biome`, `prettier`, `shellcheck`, `yaml-language-server`, `noqa`, `type: ignore`, `pragma`, `#:schema`, any `lint`, `ignore` or `disable`, and more; see `src/proofs.ts`) is code.
-
-    When in doubt, not proven: these proofs exist for the boring cases.
-  - JSX files (`.tsx`, `.jsx`) are in no language: they are never proven.
+- **Erring towards "not proven".** An added, deleted or renamed file, a mode change, a symlink, a submodule, a binary file, a file over 2 MiB and a file that is no `.sql` file prove nothing. The SQL tokenizer is small and conservative, and whatever it cannot classify for sure proves nothing: `--` without a blank after it (MySQL reads two minus signs), a backslash in a string or outside one (MySQL escapes, `E'...'`), a nested block comment (PostgreSQL nests them, MySQL does not), a block comment whose `/*` is not followed by a blank or `*` (`/*!...*/` runs in MySQL, `/*+...*/` is a hint), and anything unterminated. Comments with a meaning count as code, so adding, removing or changing one is never "comments only": line comments with a migration or query directive (`-- +goose Up`, `--+` hints, `-- name: ...`, `-- no-transaction`) and any comment that names a tool (`goose`, `sqlx`, `flyway`, `liquibase`, `migrate`, `sqlc`, `noqa`, any `lint`, `ignore` or `disable`, and more; see `src/proofs.ts`). Each comment is judged on its own. When in doubt, not proven: these proofs exist for the boring cases.
 
   The diff comes from git with pinned options (`-c core.quotePath=false diff --no-color --no-ext-diff --no-textconv --ignore-submodules=none --no-renames`).
 - **When it applies.** Only when the rule is in `studio.yaml` at the pull request's base commit on the default branch, and the owner's checkout has evidence rules too (a rule not pulled yet applies to nothing). When a check fails and every failed check (a plain failed job; a cancelled check, a skipped required one or a commit status never) is a check of a rule's guard, `collect` (for an approval) and the merge queue judge it; any other failure fails as before. The guard job must be the same at the base and at the head.

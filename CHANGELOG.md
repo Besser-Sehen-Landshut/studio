@@ -16,17 +16,18 @@ an `owner_only` rule goes to the owner. Not tagged yet; the maintainers tag afte
 - `evidence:` in `studio.yaml`: rules with `id`, `guard` (the CI job by workflow file and job name),
   `proof`, `paths`, `languages` (for `comments_only`) and `owner_only`. The proofs, computed by Studio in
   TypeScript, with no command run:
-  - `comments_only`: every changed file under `paths` changes only comments and whitespace, in `sql`,
-    `rust`, `ts`, `js`, `sh`, `yaml`, `toml` or `python`.
+  - `comments_only`: every changed `.sql` file under `paths` changes only plain comments and whitespace.
+    `sql` is the only language so far; a rule naming another is refused.
   - `whitespace_only`: every changed file under `paths` changes only line endings, trailing blanks and
     blank lines at the end of the file.
   - `paths_only`: every changed path, both sides of a rename, matches `paths`.
-- Conservative tokenizers per language: strings, block and line comments, nested Rust comments, SQL dollar
-  quoting. Comments with a meaning count as code: interpreter lines, Python coding lines, Rust doc comments
-  (doctests), JS/TS pragmas and JSDoc tags, SQL migration directives and hints, and any comment naming a tool
-  directive (linters, type checkers, schemas). SQL `/*!...*/` and `/*+...*/` prove nothing, nor do JSX files. What one cannot classify for sure proves nothing, and so does an added, deleted or renamed file,
-  a mode change, a symlink, a submodule, a binary file and a path with a control character. The diff comes
-  from git with pinned options.
+- A conservative SQL tokenizer: strings with doubled quotes, quoted identifiers, dollar quoting, line and
+  block comments. Not proven: `--` without a blank after it, backslashes, nested block comments, executable
+  comments and hints (`/*!`, `/*+`, any `/*` not followed by a blank or `*`), anything unterminated. Comments
+  with a meaning (migration and query directives, tool names) count as code, each judged on its own. What it
+  cannot classify for sure proves nothing, and so does an added, deleted or renamed file, a mode change, a
+  symlink, a submodule, a binary file and a path with a control character. The diff comes from git with
+  pinned options.
 - Rules count only from `studio.yaml` at the pull request's base commit on the default branch (and only
   while the owner's checkout has rules at all). A failure applies to them only when every failed check is a
   plain failed job of a rule's guard, and the guard must be the same at base and head.
@@ -64,6 +65,8 @@ an `owner_only` rule goes to the owner. Not tagged yet; the maintainers tag afte
 
 ### Not in this version
 
+- `comments_only` for other languages than SQL. They come later, each with an adversarial review of its
+  own.
 - Custom proof commands. A rule with `command`, `run` or `inputs` is refused: they come later, with a real
   sandbox model.
 

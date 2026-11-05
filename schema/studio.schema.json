@@ -521,17 +521,7 @@
             "minItems": 1,
             "type": "array",
             "items": {
-              "type": "string",
-              "enum": [
-                "sql",
-                "rust",
-                "ts",
-                "js",
-                "sh",
-                "yaml",
-                "toml",
-                "python"
-              ]
+              "type": "string"
             }
           },
           "owner_only": {

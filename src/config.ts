@@ -5,7 +5,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { globProblem } from './glob.js';
 import { allowedPluginSchema, pluginPinSchema } from './plugins.js';
-import { PROOF_LANGUAGES } from './proofs.js';
+import { ONLY_SQL, PROOF_LANGUAGES, type ProofLanguage } from './proofs.js';
 
 export { globProblem };
 
@@ -219,8 +219,19 @@ export const evidenceRuleSchema = z
     // only that. paths_only: every changed file matches `paths`.
     proof: z.enum(['comments_only', 'whitespace_only', 'paths_only']),
     paths: z.array(globSchema).min(1).max(50),
-    // comments_only: the languages it reads; a changed file of any other kind proves nothing.
-    languages: z.array(z.enum(PROOF_LANGUAGES)).min(1).optional(),
+    // comments_only: the languages it reads (sql only so far); any other file proves nothing.
+    languages: z
+      .array(
+        z
+          .string()
+          .refine(
+            (l): l is ProofLanguage => (PROOF_LANGUAGES as readonly string[]).includes(l),
+            ONLY_SQL,
+          ),
+      )
+      .min(1)
+      .optional(),
+
     // A hit the proof does not explain goes to the owner, not the lead.
     ownerOnly: z.boolean().default(false),
   })

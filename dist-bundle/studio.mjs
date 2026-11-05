@@ -28545,20 +28545,10 @@ function undeniableLine(configDir, invalid) {
 }
 
 // src/proofs.ts
-var PROOF_LANGUAGES = ["sql", "rust", "ts", "js", "sh", "yaml", "toml", "python"];
-var EXTENSIONS = {
-  sql: [".sql"],
-  rust: [".rs"],
-  ts: [".ts", ".mts", ".cts"],
-  js: [".js", ".mjs", ".cjs"],
-  sh: [".sh", ".bash"],
-  yaml: [".yml", ".yaml"],
-  toml: [".toml"],
-  python: [".py"]
-};
+var PROOF_LANGUAGES = ["sql"];
+var ONLY_SQL = "comments_only reads sql only so far; more languages come later, each with its own adversarial review";
 function languageOf(path10, allowed) {
-  const lower = path10.toLowerCase();
-  return allowed.find((l) => EXTENSIONS[l].some((ext) => lower.endsWith(ext)));
+  return allowed.includes("sql") && path10.toLowerCase().endsWith(".sql") ? "sql" : void 0;
 }
 var Unclassifiable = class extends Error {
 };
@@ -28567,174 +28557,40 @@ var no = (why) => {
 };
 var isWs = (c3) => c3 === " " || c3 === "	" || c3 === "\n" || c3 === "\r" || c3 === "\f" || c3 === "\v";
 var isIdent = (c3) => c3 !== void 0 && /[A-Za-z0-9_$]/.test(c3);
+var DIRECTIVE = /goose|sqlx|flyway|liquibase|changeset|rollback|precondition|migrate|no-transaction|sqlc|sqlfluff|squawk|noqa|lint|ignore|disable|enable|pragma/i;
+function meaningful(t) {
+  if (DIRECTIVE.test(t)) return true;
+  return /^--\s*(?:[+!@$#:%]|[A-Za-z_-]+\s*:)/.test(t);
+}
 var Out = class {
-  constructor(lang) {
-    this.lang = lang;
-  }
-  lang;
   segs = [];
-  line = 1;
   push(kind, text) {
-    const own2 = kind === "comment" && meaningful(text, this.lang, this.line) ? "code" : kind;
-    for (const ch of text) if (ch === "\n") this.line++;
+    if (kind === "comment") {
+      this.segs.push({ kind, text, ...meaningful(text) ? { meaningful: true } : {} });
+      return;
+    }
     const last = this.segs.at(-1);
-    if (last !== void 0 && last.kind === own2 && (own2 === "ws" || own2 === "code")) {
+    if (last !== void 0 && last.kind === kind && (kind === "ws" || kind === "code")) {
       last.text += text;
-    } else this.segs.push({ kind: own2, text });
+    } else this.segs.push({ kind, text });
   }
 };
-function quoted(s, i2, quote, o2) {
-  let j = i2 + quote.length;
+function quoted(s, i2, quote) {
+  let j = i2 + 1;
   for (; ; ) {
     if (j >= s.length) return no("an unterminated string");
-    const c3 = s[j];
-    if (o2.escapes && c3 === "\\") {
-      j += 2;
-      continue;
-    }
-    if (s.startsWith(quote, j)) {
-      if (o2.doubled === true && s.startsWith(quote, j + quote.length)) {
-        j += quote.length * 2;
+    if (s[j] === quote) {
+      if (s[j + 1] === quote) {
+        j += 2;
         continue;
       }
-      return j + quote.length;
+      return j + 1;
     }
-    if (!o2.multiline && c3 === "\n") return no("a line break in a one-line string");
     j++;
   }
 }
-function prevCode(out) {
-  for (let k = out.segs.length - 1; k >= 0; k--) {
-    const seg = out.segs[k];
-    if (seg.kind === "ws" || seg.kind === "comment") continue;
-    if (seg.kind === "string") return { char: '"', word: "" };
-    const t = seg.text.replace(/\s+$/, "");
-    if (t === "") continue;
-    const word = /[A-Za-z0-9_$]+$/.exec(t)?.[0] ?? "";
-    return { char: t.at(-1), word };
-  }
-  return { char: void 0, word: "" };
-}
-var REGEX_AFTER = /* @__PURE__ */ new Set([
-  "return",
-  "typeof",
-  "instanceof",
-  "in",
-  "of",
-  "new",
-  "delete",
-  "void",
-  "throw",
-  "case",
-  "do",
-  "else",
-  "yield",
-  "await"
-]);
-function tokenizeJs(s, lang) {
-  const out = new Out(lang);
-  let i2 = 0;
-  while (i2 < s.length) {
-    const c3 = s[i2];
-    if (isWs(c3)) {
-      out.push("ws", c3);
-      i2++;
-    } else if (s.startsWith("//", i2)) {
-      const end = s.indexOf("\n", i2);
-      const stop = end === -1 ? s.length : end;
-      out.push("comment", s.slice(i2, stop));
-      i2 = stop;
-    } else if (s.startsWith("/*", i2)) {
-      const end = s.indexOf("*/", i2 + 2);
-      if (end === -1) no("an unterminated block comment");
-      out.push("comment", s.slice(i2, end + 2));
-      i2 = end + 2;
-    } else if (c3 === '"' || c3 === "'") {
-      const end = quoted(s, i2, c3, { escapes: true, multiline: false });
-      out.push("string", s.slice(i2, end));
-      i2 = end;
-    } else if (c3 === "`") {
-      const end = quoted(s, i2, "`", { escapes: true, multiline: true });
-      const text = s.slice(i2, end);
-      if (text.includes("${")) no("a template literal with a substitution");
-      out.push("string", text);
-      i2 = end;
-    } else if (c3 === "/") {
-      const prev = prevCode(out);
-      const division = prev.char !== void 0 && (isIdent(prev.char) || prev.char === "]") && !REGEX_AFTER.has(prev.word);
-      if (!division) no("a slash that may start a regular expression");
-      out.push("code", c3);
-      i2++;
-    } else if (c3 === "\\") {
-      no("a backslash outside a string");
-    } else {
-      out.push("code", c3);
-      i2++;
-    }
-  }
-  return out.segs;
-}
-function tokenizeRust(s, lang) {
-  const out = new Out(lang);
-  let i2 = 0;
-  while (i2 < s.length) {
-    const c3 = s[i2];
-    if (isWs(c3)) {
-      out.push("ws", c3);
-      i2++;
-    } else if (s.startsWith("//", i2)) {
-      const end = s.indexOf("\n", i2);
-      const stop = end === -1 ? s.length : end;
-      out.push("comment", s.slice(i2, stop));
-      i2 = stop;
-    } else if (s.startsWith("/*", i2)) {
-      let depth = 0;
-      let j = i2;
-      for (; ; ) {
-        if (j >= s.length) no("an unterminated block comment");
-        if (s.startsWith("/*", j)) {
-          depth++;
-          j += 2;
-        } else if (s.startsWith("*/", j)) {
-          depth--;
-          j += 2;
-          if (depth === 0) break;
-        } else j++;
-      }
-      out.push("comment", s.slice(i2, j));
-      i2 = j;
-    } else if (/^(?:b|c)?r#*"/.test(s.slice(i2, i2 + 260)) && !isIdent(s[i2 - 1])) {
-      const m = /^((?:b|c)?r)(#*)"/.exec(s.slice(i2, i2 + 260));
-      const close = `"${m[2]}`;
-      const end = s.indexOf(close, i2 + m[0].length);
-      if (end === -1) no("an unterminated raw string");
-      out.push("string", s.slice(i2, end + close.length));
-      i2 = end + close.length;
-    } else if (c3 === '"' || (c3 === "b" || c3 === "c") && s[i2 + 1] === '"' && !isIdent(s[i2 - 1])) {
-      const start = c3 === '"' ? i2 : i2 + 1;
-      const end = quoted(s, start, '"', { escapes: true, multiline: true });
-      out.push("string", s.slice(i2, end));
-      i2 = end;
-    } else if (c3 === "'") {
-      const m = /^'(?:\\(?:u\{[0-9A-Fa-f]{1,6}\}|x[0-9A-Fa-f]{2}|.)|[^\\'\n])'/u.exec(
-        s.slice(i2, i2 + 16)
-      );
-      if (m !== null) {
-        out.push("string", m[0]);
-        i2 += m[0].length;
-      } else if (/^'[A-Za-z_]/.test(s.slice(i2, i2 + 2))) {
-        out.push("code", c3);
-        i2++;
-      } else no("a quote that is neither a char literal nor a lifetime");
-    } else {
-      out.push("code", c3);
-      i2++;
-    }
-  }
-  return out.segs;
-}
-function tokenizeSql(s, lang) {
-  const out = new Out(lang);
+function tokenizeSql(s) {
+  const out = new Out();
   let i2 = 0;
   while (i2 < s.length) {
     const c3 = s[i2];
@@ -28743,7 +28599,7 @@ function tokenizeSql(s, lang) {
       i2++;
     } else if (s.startsWith("--", i2)) {
       const next = s[i2 + 2];
-      if (next !== void 0 && !isWs(next)) no("-- without a space after it");
+      if (next !== void 0 && !isWs(next)) no("-- without a blank after it");
       const end = s.indexOf("\n", i2);
       const stop = end === -1 ? s.length : end;
       out.push("comment", s.slice(i2, stop));
@@ -28757,13 +28613,13 @@ function tokenizeSql(s, lang) {
       out.push("comment", s.slice(i2, end + 2));
       i2 = end + 2;
     } else if (c3 === "'") {
-      const end = quoted(s, i2, "'", { escapes: false, doubled: true, multiline: true });
+      const end = quoted(s, i2, "'");
       const text = s.slice(i2, end);
       if (text.includes("\\")) no("a backslash in a string");
       out.push("string", text);
       i2 = end;
     } else if (c3 === '"' || c3 === "`") {
-      const end = quoted(s, i2, c3, { escapes: false, doubled: true, multiline: true });
+      const end = quoted(s, i2, c3);
       out.push("string", s.slice(i2, end));
       i2 = end;
     } else if (c3 === "$" && !isIdent(s[i2 - 1])) {
@@ -28786,203 +28642,26 @@ function tokenizeSql(s, lang) {
   }
   return out.segs;
 }
-function tokenizePython(s, lang) {
-  const out = new Out(lang);
-  let i2 = 0;
-  while (i2 < s.length) {
-    const c3 = s[i2];
-    if (isWs(c3)) {
-      out.push("ws", c3);
-      i2++;
-    } else if (c3 === "#") {
-      const end = s.indexOf("\n", i2);
-      const stop = end === -1 ? s.length : end;
-      out.push("comment", s.slice(i2, stop));
-      i2 = stop;
-    } else if (c3 === '"' || c3 === "'" || /^[A-Za-z]{1,2}["']/.test(s.slice(i2, i2 + 3)) && !isIdent(s[i2 - 1])) {
-      const prefix = /^[A-Za-z]{0,2}/.exec(s.slice(i2, i2 + 2))?.[0] ?? "";
-      const at2 = i2 + (c3 === '"' || c3 === "'" ? 0 : prefix.length);
-      const pre = s.slice(i2, at2).toLowerCase();
-      if (!/^(?:|r|u|b|br|rb)$/.test(pre)) no("an f-string or an unknown string prefix");
-      const q = s[at2];
-      const triple = s.startsWith(q.repeat(3), at2);
-      const end = quoted(s, at2, triple ? q.repeat(3) : q, { escapes: true, multiline: triple });
-      out.push("string", s.slice(i2, end));
-      i2 = end;
-    } else {
-      out.push("code", c3);
-      i2++;
-    }
-  }
-  return out.segs;
-}
-function tokenizeToml(s, lang) {
-  const out = new Out(lang);
-  let i2 = 0;
-  while (i2 < s.length) {
-    const c3 = s[i2];
-    if (isWs(c3)) {
-      out.push("ws", c3);
-      i2++;
-    } else if (c3 === "#") {
-      const end = s.indexOf("\n", i2);
-      const stop = end === -1 ? s.length : end;
-      out.push("comment", s.slice(i2, stop));
-      i2 = stop;
-    } else if (c3 === '"' || c3 === "'") {
-      const triple = s.startsWith(c3.repeat(3), i2);
-      const end = quoted(s, i2, triple ? c3.repeat(3) : c3, {
-        escapes: c3 === '"',
-        multiline: triple
-      });
-      out.push("string", s.slice(i2, end));
-      i2 = end;
-    } else {
-      out.push("code", c3);
-      i2++;
-    }
-  }
-  return out.segs;
-}
-function tokenizeYaml(s, lang) {
-  const out = new Out(lang);
-  let i2 = 0;
-  while (i2 < s.length) {
-    const c3 = s[i2];
-    const before = s[i2 - 1];
-    let k = i2 - 1;
-    while (s[k] === " " || s[k] === "	") k--;
-    const atToken = k < 0 || s[k] === "\n" || ":-[{,?".includes(s[k]);
-    if (isWs(c3)) {
-      out.push("ws", c3);
-      i2++;
-    } else if (c3 === "#" && (before === void 0 || isWs(before))) {
-      const end = s.indexOf("\n", i2);
-      const stop = end === -1 ? s.length : end;
-      out.push("comment", s.slice(i2, stop));
-      i2 = stop;
-    } else if ((c3 === '"' || c3 === "'") && atToken) {
-      const end = quoted(s, i2, c3, {
-        escapes: c3 === '"',
-        doubled: c3 === "'",
-        multiline: true
-      });
-      out.push("string", s.slice(i2, end));
-      i2 = end;
-    } else if (c3 === "|" || c3 === ">") {
-      no("a block scalar indicator");
-    } else {
-      out.push("code", c3);
-      i2++;
-    }
-  }
-  return out.segs;
-}
-function tokenizeSh(s, lang) {
-  const out = new Out(lang);
-  let i2 = 0;
-  while (i2 < s.length) {
-    const c3 = s[i2];
-    const before = s[i2 - 1];
-    if (isWs(c3)) {
-      out.push("ws", c3);
-      i2++;
-    } else if (c3 === "#" && (before === void 0 || isWs(before) || ";|&()".includes(before))) {
-      const end = s.indexOf("\n", i2);
-      const stop = end === -1 ? s.length : end;
-      out.push("comment", s.slice(i2, stop));
-      i2 = stop;
-    } else if (c3 === "'") {
-      if (before === "$") no("an ANSI-C $'...' string");
-      const end = s.indexOf("'", i2 + 1);
-      if (end === -1) no("an unterminated string");
-      out.push("string", s.slice(i2, end + 1));
-      i2 = end + 1;
-    } else if (c3 === '"') {
-      const end = quoted(s, i2, '"', { escapes: true, multiline: true });
-      out.push("string", s.slice(i2, end));
-      i2 = end;
-    } else if (c3 === "\\") {
-      const next = s[i2 + 1];
-      if (next === " " || next === "	" || next === void 0) no("an escaped blank");
-      out.push("code", s.slice(i2, i2 + 2));
-      i2 += 2;
-    } else if (s.startsWith("<<", i2)) {
-      no("a here-document");
-    } else {
-      out.push("code", c3);
-      i2++;
-    }
-  }
-  return out.segs;
-}
-var TOKENIZERS = {
-  sql: tokenizeSql,
-  rust: tokenizeRust,
-  ts: tokenizeJs,
-  js: tokenizeJs,
-  sh: tokenizeSh,
-  yaml: tokenizeYaml,
-  toml: tokenizeToml,
-  python: tokenizePython
-};
-var BREAKS = {
-  sql: "none",
-  rust: "none",
-  ts: "line",
-  js: "line",
-  sh: "indent",
-  yaml: "indent",
-  toml: "indent",
-  python: "indent"
-};
-var DIRECTIVE = /@ts-|<reference|sourcemappingurl|sourceurl|@jsx|eslint|biome|prettier|jshint|jscs|istanbul|\bc8\b|v8 ignore|@flow|@license|@preserve|__pure__|__no_side_effects__|webpack|vite-ignore|shellcheck|yaml-language-server|yamllint|\$schema|#:schema|taplo|tombi|renovate|noqa|nosec|pragma|pylint|mypy|pyright|ruff|isort|type:\s*ignore|\btype:|fmt:|pyre-|flake8|yapf|coverage|codespell|cspell|spell-checker|trunk-ignore|checkov|semgrep|tfsec|kics|hadolint|gitleaks|lint|ignore|disable|enable|no-transaction|goose|sqlx|flyway|liquibase|changeset|rollback|precondition|migrate/i;
-function meaningful(t, language, line3) {
-  if (DIRECTIVE.test(t)) return true;
-  if (line3 === 1 && t.startsWith("#!")) return true;
-  switch (language) {
-    case "python":
-      return line3 <= 2 && /coding[:=]/.test(t);
-    case "js":
-    case "ts":
-      return /@[A-Za-z_]/.test(t) || /^\/\/[#@/]/.test(t);
-    case "rust":
-      return /^\/\/[/!]/.test(t) || /^\/\*[*!]/.test(t);
-    case "sql":
-      return /^--\s*(?:[+!@$#:%]|[A-Za-z_-]+\s*:)/.test(t);
-    default:
-      return false;
-  }
-}
-function codeOf(text, language) {
+function codeOf(text, _language) {
   let segs;
   try {
-    segs = TOKENIZERS[language](text, language);
+    segs = tokenizeSql(text);
   } catch (e) {
     if (e instanceof Unclassifiable) return void 0;
     throw e;
   }
-  const mode = BREAKS[language];
   const parts = [];
-  let gap;
-  const flush = () => {
-    if (gap === void 0) return;
-    if (mode !== "none" && gap.includes("\n")) {
-      const indent = mode === "indent" ? /[ \t]*$/.exec(gap)?.[0] ?? "" : "";
-      parts.push(`
-${indent}`);
-    } else parts.push(" ");
-    gap = void 0;
-  };
+  let gap = false;
   for (const seg of segs) {
-    if (seg.kind === "ws") gap = (gap ?? "") + seg.text;
-    else if (seg.kind === "comment") gap = (gap ?? "") + (seg.text.includes("\n") ? "\n" : " ");
-    else {
-      flush();
-      parts.push(seg.text);
+    if (seg.kind === "ws" || seg.kind === "comment" && seg.meaningful !== true) {
+      gap = true;
+      continue;
     }
+    if (gap && parts.length > 0) parts.push(" ");
+    gap = false;
+    parts.push(seg.text);
   }
-  return parts.join("").trim();
+  return parts.join("");
 }
 function commentsOnly(base, head, language) {
   const a2 = codeOf(base, language);
@@ -29117,8 +28796,13 @@ var evidenceRuleSchema = external_exports.looseObject({
   // only that. paths_only: every changed file matches `paths`.
   proof: external_exports.enum(["comments_only", "whitespace_only", "paths_only"]),
   paths: external_exports.array(globSchema).min(1).max(50),
-  // comments_only: the languages it reads; a changed file of any other kind proves nothing.
-  languages: external_exports.array(external_exports.enum(PROOF_LANGUAGES)).min(1).optional(),
+  // comments_only: the languages it reads (sql only so far); any other file proves nothing.
+  languages: external_exports.array(
+    external_exports.string().refine(
+      (l) => PROOF_LANGUAGES.includes(l),
+      ONLY_SQL
+    )
+  ).min(1).optional(),
   // A hit the proof does not explain goes to the owner, not the lead.
   ownerOnly: external_exports.boolean().default(false)
 }).superRefine((r, ctx) => {
