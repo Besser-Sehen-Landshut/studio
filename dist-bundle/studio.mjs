@@ -56,7 +56,7 @@ var require_identity = __commonJS({
     var isMap4 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === MAP;
     var isPair = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === PAIR;
     var isScalar3 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === SCALAR;
-    var isSeq3 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === SEQ;
+    var isSeq2 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === SEQ;
     function isCollection(node2) {
       if (node2 && typeof node2 === "object")
         switch (node2[NODE_TYPE]) {
@@ -93,7 +93,7 @@ var require_identity = __commonJS({
     exports.isNode = isNode;
     exports.isPair = isPair;
     exports.isScalar = isScalar3;
-    exports.isSeq = isSeq3;
+    exports.isSeq = isSeq2;
   }
 });
 
@@ -105,7 +105,7 @@ var require_visit = __commonJS({
     var BREAK = /* @__PURE__ */ Symbol("break visit");
     var SKIP = /* @__PURE__ */ Symbol("skip children");
     var REMOVE = /* @__PURE__ */ Symbol("remove node");
-    function visit2(node2, visitor) {
+    function visit3(node2, visitor) {
       const visitor_ = initVisitor(visitor);
       if (identity3.isDocument(node2)) {
         const cd = visit_(null, node2.contents, visitor_, Object.freeze([node2]));
@@ -114,9 +114,9 @@ var require_visit = __commonJS({
       } else
         visit_(null, node2, visitor_, Object.freeze([]));
     }
-    visit2.BREAK = BREAK;
-    visit2.SKIP = SKIP;
-    visit2.REMOVE = REMOVE;
+    visit3.BREAK = BREAK;
+    visit3.SKIP = SKIP;
+    visit3.REMOVE = REMOVE;
     function visit_(key, node2, visitor, path10) {
       const ctrl = callVisitor(key, node2, visitor, path10);
       if (identity3.isNode(ctrl) || identity3.isPair(ctrl)) {
@@ -250,7 +250,7 @@ var require_visit = __commonJS({
         throw new Error(`Cannot replace node with ${pt} parent`);
       }
     }
-    exports.visit = visit2;
+    exports.visit = visit3;
     exports.visitAsync = visitAsync;
   }
 });
@@ -260,7 +260,7 @@ var require_directives = __commonJS({
   "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/directives.js"(exports) {
     "use strict";
     var identity3 = require_identity();
-    var visit2 = require_visit();
+    var visit3 = require_visit();
     var escapeChars = {
       "!": "%21",
       ",": "%2C",
@@ -404,7 +404,7 @@ var require_directives = __commonJS({
         let tagNames;
         if (doc && tagEntries.length > 0 && identity3.isNode(doc.contents)) {
           const tags = {};
-          visit2.visit(doc.contents, (_key, node2) => {
+          visit3.visit(doc.contents, (_key, node2) => {
             if (identity3.isNode(node2) && node2.tag)
               tags[node2.tag] = true;
           });
@@ -431,7 +431,7 @@ var require_anchors = __commonJS({
   "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/anchors.js"(exports) {
     "use strict";
     var identity3 = require_identity();
-    var visit2 = require_visit();
+    var visit3 = require_visit();
     function anchorIsValid(anchor2) {
       if (/[\x00-\x19\s,[\]{}]/.test(anchor2)) {
         const sa = JSON.stringify(anchor2);
@@ -442,7 +442,7 @@ var require_anchors = __commonJS({
     }
     function anchorNames(root) {
       const anchors = /* @__PURE__ */ new Set();
-      visit2.visit(root, {
+      visit3.visit(root, {
         Value(_key, node2) {
           if (node2.anchor)
             anchors.add(node2.anchor);
@@ -622,7 +622,7 @@ var require_Alias = __commonJS({
   "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Alias.js"(exports) {
     "use strict";
     var anchors = require_anchors();
-    var visit2 = require_visit();
+    var visit3 = require_visit();
     var identity3 = require_identity();
     var Node = require_Node();
     var toJS = require_toJS();
@@ -648,7 +648,7 @@ var require_Alias = __commonJS({
           nodes = ctx.aliasResolveCache;
         } else {
           nodes = [];
-          visit2.visit(doc, {
+          visit3.visit(doc, {
             Node: (_key, node2) => {
               if (identity3.isAlias(node2) || identity3.hasAnchor(node2))
                 nodes.push(node2);
@@ -5570,15 +5570,15 @@ var require_cst_visit = __commonJS({
     var BREAK = /* @__PURE__ */ Symbol("break visit");
     var SKIP = /* @__PURE__ */ Symbol("skip children");
     var REMOVE = /* @__PURE__ */ Symbol("remove item");
-    function visit2(cst, visitor) {
+    function visit3(cst, visitor) {
       if ("type" in cst && cst.type === "document")
         cst = { start: cst.start, value: cst.value };
       _visit(Object.freeze([]), cst, visitor);
     }
-    visit2.BREAK = BREAK;
-    visit2.SKIP = SKIP;
-    visit2.REMOVE = REMOVE;
-    visit2.itemAtPath = (cst, path10) => {
+    visit3.BREAK = BREAK;
+    visit3.SKIP = SKIP;
+    visit3.REMOVE = REMOVE;
+    visit3.itemAtPath = (cst, path10) => {
       let item = cst;
       for (const [field, index] of path10) {
         const tok = item?.[field];
@@ -5589,8 +5589,8 @@ var require_cst_visit = __commonJS({
       }
       return item;
     };
-    visit2.parentCollection = (cst, path10) => {
-      const parent = visit2.itemAtPath(cst, path10.slice(0, -1));
+    visit3.parentCollection = (cst, path10) => {
+      const parent = visit3.itemAtPath(cst, path10.slice(0, -1));
       const field = path10[path10.length - 1][0];
       const coll = parent?.[field];
       if (coll && "items" in coll)
@@ -5621,7 +5621,7 @@ var require_cst_visit = __commonJS({
       }
       return typeof ctrl === "function" ? ctrl(item, path10) : ctrl;
     }
-    exports.visit = visit2;
+    exports.visit = visit3;
   }
 });
 
@@ -7337,7 +7337,7 @@ var require_dist = __commonJS({
     var lineCounter = require_line_counter();
     var parser = require_parser();
     var publicApi = require_public_api();
-    var visit2 = require_visit();
+    var visit3 = require_visit();
     exports.Composer = composer.Composer;
     exports.Document = Document2.Document;
     exports.Schema = Schema.Schema;
@@ -7365,8 +7365,8 @@ var require_dist = __commonJS({
     exports.parseAllDocuments = publicApi.parseAllDocuments;
     exports.parseDocument = publicApi.parseDocument;
     exports.stringify = publicApi.stringify;
-    exports.visit = visit2.visit;
-    exports.visitAsync = visit2.visitAsync;
+    exports.visit = visit3.visit;
+    exports.visitAsync = visit3.visitAsync;
   }
 });
 
@@ -27944,18 +27944,25 @@ var isDir = (p) => {
   }
 };
 function strictFlat(map2) {
-  const plainNode = (n2) => (0, import_yaml.isScalar)(n2) && n2.anchor === void 0 && n2.tag === void 0;
   for (const pair of map2.items) {
     const key = pair.key;
-    if (!plainNode(key) || typeof key.value !== "string") return false;
-    if (key.value === "<<") return false;
-    const value = pair.value;
-    if (value === null || plainNode(value)) continue;
-    if ((0, import_yaml.isAlias)(value)) return false;
-    if (!(0, import_yaml.isSeq)(value) || value.anchor !== void 0 || value.tag !== void 0) return false;
-    if (!value.items.every(plainNode)) return false;
+    if (!(0, import_yaml.isScalar)(key) || typeof key.value !== "string") return false;
   }
-  return true;
+  let clean4 = true;
+  (0, import_yaml.visit)(map2, {
+    Node(_, node2) {
+      if ((0, import_yaml.isAlias)(node2)) clean4 = false;
+      else if (node2.anchor !== void 0 || node2.tag !== void 0) {
+        clean4 = false;
+      }
+      return clean4 ? void 0 : import_yaml.visit.BREAK;
+    },
+    Pair(_, pair) {
+      if ((0, import_yaml.isScalar)(pair.key) && pair.key.value === "<<") clean4 = false;
+      return clean4 ? void 0 : import_yaml.visit.BREAK;
+    }
+  });
+  return clean4;
 }
 function frontmatterName(file2) {
   let text;
@@ -34341,13 +34348,15 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
   const briefRules = writePinnedRules(stateRoot, item.id, pinned);
+  const installedNames = new Set(installedSkills(claudeConfigDir).names);
   const caps = writeCaps({
     stateRoot,
     ownerRoot,
     id: item.id,
     forItem,
     ...launcher2.capabilitiesDir === void 0 ? {} : { dir: launcher2.capabilitiesDir },
-    isInstalled: (skill) => skillInstalled(claudeConfigDir, skill.split(":").at(-1) ?? ""),
+    // Exactly as the deny list names skills: a plugin skill by `<plugin>:<name>`, a user skill bare.
+    isInstalled: (skill) => skillInstalled(claudeConfigDir, skill.split(":").at(-1) ?? "") === void 0 ? void 0 : installedNames.has(skill),
     startedAt: ports.clock.now().toISOString()
   });
   caps.reportName = newReportName(stateRoot, item.id);

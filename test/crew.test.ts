@@ -2378,12 +2378,20 @@ describe('required skills at launch', () => {
       await p;
       expect(started).toHaveLength(1);
       const brief = readFileSync(join(f.state, 'briefs', 'APP-12.md'), 'utf8');
-      // x:ok is offered by the role and installed only as a user skill `ok`: present.
-      expect(brief).toMatch(/Offered skills: .*x:ok/);
+      // x:ok is offered by the role; a user skill `ok` is another skill, so x:ok is missing.
+      expect(brief).toMatch(/Offered but not installed[^\n]*x:ok/);
+      // Installed as the skill `ok` of plugin `x`, it is offered, and never denied.
+      put(join(f.dir, 'plugins', 'cache', 'm', 'x', '1.0.0', 'skills', 'ok', 'SKILL.md'));
+      const present = launch(f);
+      await present.p;
+      expect(readFileSync(join(f.state, 'briefs', 'APP-12.md'), 'utf8')).toMatch(
+        /Offered skills: .*x:ok/,
+      );
       expect(
         JSON.parse(readFileSync(join(f.state, 'briefs', 'APP-12.skills.json'), 'utf8')),
       ).toEqual({ missing: [] });
-      rmSync(join(f.dir, 'skills', 'ok'), { recursive: true });
+      expect(settingsOf(f).permissions.deny).not.toContain('Skill(x:ok)');
+      rmSync(join(f.dir, 'plugins', 'cache', 'm'), { recursive: true });
       const again = launch(f);
       await again.p;
       const second = readFileSync(join(f.state, 'briefs', 'APP-12.md'), 'utf8');

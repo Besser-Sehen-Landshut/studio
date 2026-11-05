@@ -1269,13 +1269,18 @@ async function launchCrewLocked(
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
   const briefRules = writePinnedRules(stateRoot, item.id, pinned);
+  const installedNames = new Set(installedSkills(claudeConfigDir).names);
   const caps = writeCaps({
     stateRoot,
     ownerRoot,
     id: item.id,
     forItem,
     ...(launcher.capabilitiesDir === undefined ? {} : { dir: launcher.capabilitiesDir }),
-    isInstalled: (skill) => skillInstalled(claudeConfigDir, skill.split(':').at(-1) ?? ''),
+    // Exactly as the deny list names skills: a plugin skill by `<plugin>:<name>`, a user skill bare.
+    isInstalled: (skill) =>
+      skillInstalled(claudeConfigDir, skill.split(':').at(-1) ?? '') === undefined
+        ? undefined
+        : installedNames.has(skill),
     startedAt: ports.clock.now().toISOString(),
   });
   caps.reportName = newReportName(stateRoot, item.id);

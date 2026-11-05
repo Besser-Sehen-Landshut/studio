@@ -6,6 +6,9 @@
 #         findings) | run (a script).
 # source: id in SOURCES.yaml. A source that is not fetched reads `skipped: <reason>`, never a pass.
 # model:  standard | capable, for the subagent the reviewer dispatches.
+# skill:  a plugin skill is written `skill:<plugin>:<name>`; a bare name is a user skill
+#         (`skills/<name>/SKILL.md`) or one bundled with Claude Code. Crews are denied every other
+#         installed skill by its exact name, so the plugin prefix decides.
 version: 1
 rows:
   # Process skills

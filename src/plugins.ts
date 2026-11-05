@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { isAlias, isMap, isScalar, isSeq, parseDocument, type Scalar, type YAMLMap } from 'yaml';
+import { isAlias, isMap, isScalar, parseDocument, visit, type YAMLMap } from 'yaml';
 import { z } from 'zod';
 
 /** This plugin's own version; a test keeps it equal to package.json and plugin.json. */
@@ -300,23 +300,33 @@ export type FrontmatterName =
  * unreadable or oversized file) is `invalid`.
  */
 /**
- * Front matter must be a strict subset of YAML: a flat map with plain string keys and values that
- * are scalars or lists of scalars, without anchors, aliases, tags or merge keys (`<<`).
+ * Front matter must be a strict subset of YAML: a map with plain string keys at the top, and no
+ * anchor, alias, tag or merge key (`<<`) anywhere in it. Values of other keys may nest (a
+ * `metadata:` block, a list); `name` is checked on its own.
  */
 function strictFlat(map: YAMLMap): boolean {
-  const plainNode = (n: unknown): boolean =>
-    isScalar(n) && n.anchor === undefined && n.tag === undefined;
   for (const pair of map.items) {
     const key = pair.key;
-    if (!plainNode(key) || typeof (key as Scalar).value !== 'string') return false;
-    if ((key as Scalar).value === '<<') return false;
-    const value = pair.value;
-    if (value === null || plainNode(value)) continue;
-    if (isAlias(value)) return false;
-    if (!isSeq(value) || value.anchor !== undefined || value.tag !== undefined) return false;
-    if (!value.items.every(plainNode)) return false;
+    if (!isScalar(key) || typeof key.value !== 'string') return false;
   }
-  return true;
+  let clean = true;
+  visit(map, {
+    Node(_, node) {
+      if (isAlias(node)) clean = false;
+      else if (
+        (node as { anchor?: unknown }).anchor !== undefined ||
+        (node as { tag?: unknown }).tag !== undefined
+      ) {
+        clean = false;
+      }
+      return clean ? undefined : visit.BREAK;
+    },
+    Pair(_, pair) {
+      if (isScalar(pair.key) && pair.key.value === '<<') clean = false;
+      return clean ? undefined : visit.BREAK;
+    },
+  });
+  return clean;
 }
 
 export function frontmatterName(file: string): FrontmatterName {

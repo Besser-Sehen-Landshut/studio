@@ -11,6 +11,9 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import type { WorkItem } from '../src/board.js';
+import { BUNDLED_SKILLS } from '../src/brief-caps.js';
+import { loadCapabilities, resolveSkills } from '../src/capabilities.js';
 import {
   availableVersions,
   compareVersions,
@@ -222,6 +225,120 @@ describe('installed versions', () => {
   });
 });
 
+describe('the matrix names skills the deny list can tell apart', () => {
+  // Skills the matrix names without a plugin: user skills (`skills/<name>/SKILL.md`), as they are
+  // published and installed, and the legacy aliases on the denied list.
+  const USER_SKILLS = [
+    'apple-design',
+    'next-best-practices',
+    'playwright-cli',
+    'rust-best-practices',
+    'rust-testing',
+    'shadcn',
+    'swift-concurrency-pro',
+    'swift-testing-pro',
+    'swiftui-pro',
+    'tauri-code-signing',
+    'tauri-macos-distribution',
+    'tauri-v2',
+    'tauri-windows-distribution',
+    'ux-ui-design',
+    'vibepolish',
+    'winui-pro',
+    'bug-prospector',
+    'dead-code-scanner',
+    'performance-check',
+    'review-changes',
+    'scan-similar-bugs',
+    'security-audit',
+    'ui-scan',
+    'ui-ux-pro-max',
+  ];
+  const index = loadCapabilities();
+  const refs = [
+    ...index.rows.flatMap((r) => [...(Array.isArray(r.ref) ? r.ref : [r.ref]), r.fallback ?? '']),
+    ...index.denied,
+  ]
+    .filter((r) => r.startsWith('skill:'))
+    .map((r) => r.slice('skill:'.length));
+
+  it('every skill reference is bundled, a known user skill, or plugin:name', () => {
+    for (const s of refs) {
+      const ok =
+        BUNDLED_SKILLS.includes(s) ||
+        USER_SKILLS.includes(s) ||
+        /^[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*$/.test(s);
+      expect(ok, s).toBe(true);
+    }
+  });
+
+  it('a skill a brief names is never on its deny list', () => {
+    const d = dir();
+    for (const s of new Set([...refs, 'studio:studio-crew'])) {
+      if (BUNDLED_SKILLS.includes(s)) continue;
+      const [plugin, name] = s.includes(':') ? s.split(':') : [undefined, s];
+      const root =
+        plugin === undefined ? d : join(d, 'plugins', 'cache', 'm', plugin as string, '1.0.0');
+      put(join(root, 'skills', name as string, 'SKILL.md'), `---\nname: ${name}\n---\n`);
+    }
+    const ROLES = ['lead', 'builder', 'reviewer', 'designer', 'researcher', 'release'];
+    const TYPES = ['feature', 'fix', 'chore', 'docs', 'research', 'review', 'release'] as const;
+    const RISKS = [[], ['ui'], ['landing'], ['auth'], ['security'], ['data'], ['migration']];
+    const stacks = [...new Set(index.rows.flatMap((r) => r.when.stacks ?? []))];
+    let checked = 0;
+    for (const role of ROLES) {
+      for (const type of TYPES) {
+        for (const risk of RISKS) {
+          for (const tier of ['small', 'large'] as const) {
+            for (const triggers of [[], ['rework', 'after-fix', 'epic-end', 'release']]) {
+              const item = {
+                id: 'APP-1',
+                title: 't',
+                type,
+                role,
+                repo: 'org/app',
+                size: 'S',
+                priority: 1,
+                status: 'ready',
+                paths: [],
+                touches: [],
+                dependsOn: [],
+                dod: ['d'],
+                history: [],
+                risk,
+              } as unknown as WorkItem;
+              {
+                const phase =
+                  role === 'reviewer'
+                    ? 'review'
+                    : role === 'designer' || role === 'lead'
+                      ? 'design'
+                      : 'build';
+                const r = resolveSkills(item, role, stacks, 'unknown', phase, {
+                  index,
+                  triggers,
+                  tier,
+                });
+                const named = [
+                  'studio:studio-crew',
+                  ...r.required,
+                  ...r.optionalRequired,
+                  ...r.offered,
+                ];
+                const deny = skillDenyRules(d, named, r.denied, BUNDLED_SKILLS);
+                for (const s of named)
+                  expect(deny, `${role} ${type} ${s}`).not.toContain(`Skill(${s})`);
+                checked += named.length;
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(1000);
+  }, 60_000);
+});
+
 describe('installed skills and the deny list', () => {
   const setup = () => {
     const d = dir();
@@ -316,6 +433,16 @@ describe('installed skills and the deny list', () => {
       chmodSync(join(d, 'commands', 'inner'), 0o700);
     }
   });
+  it('a metadata block and nested lists read fine; name stays the plain top-level string', () => {
+    const d = setup();
+    put(
+      join(d, 'skills', 'meta', 'SKILL.md'),
+      '---\nname: meta-skill\ndescription: x\nmetadata:\n  author: someone\n  tags: [a, b]\n  nested:\n    level: 2\n---\n',
+    );
+    const { names, invalid } = installedSkills(d);
+    expect(invalid).toEqual([]);
+    expect(names).toContain('meta-skill');
+  });
   it('ordinary front matter with a description and a tool list reads fine', () => {
     const d = setup();
     put(
@@ -359,7 +486,18 @@ describe('installed skills and the deny list', () => {
     ['an anchor on name', 'anchored', '---\nname: &n harmless\n---\n'],
     ['a tagged name', 'tagged', '---\nname: !!str deploy-prod\n---\n'],
     ['a tagged value elsewhere', 'tagged2', '---\nname: harmless\nx: !custom y\n---\n'],
-    ['a nested map', 'nested', '---\nname: harmless\nmeta: {a: 1}\n---\n'],
+    ['a nested map as the name', 'nestedname', '---\nname: {a: 1}\n---\n'],
+    [
+      'an anchor inside a nested block',
+      'nestedanchor',
+      '---\nname: harmless\nmetadata:\n  a: &x 1\n  b: *x\n---\n',
+    ],
+    [
+      'a merge key inside a nested block',
+      'nestedmerge',
+      '---\nname: harmless\nmetadata:\n  <<: {a: 1}\n---\n',
+    ],
+    ['a tag inside a list', 'nestedtag', '---\nname: harmless\ntools: [!!str Read]\n---\n'],
     ['an oversized file', 'big', `---\nname: harmless\n---\n${'x'.repeat(300 * 1024)}`],
   ])('an installed skill with %s refuses: fail closed, never skipped', (_, dirName, text) => {
     const d = setup();
