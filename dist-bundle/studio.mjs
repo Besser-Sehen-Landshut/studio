@@ -45600,22 +45600,16 @@ async function followClaim(o2) {
   });
   if (!proof.ok) {
     if (proof.grace === true) {
-      const first = record2.claim?.sha === read3.sha && !Number.isNaN(Date.parse(record2.claim.at)) ? record2.claim.at : o2.now.toISOString();
-      if (o2.now.getTime() - Date.parse(first) <= COMMENT_GRACE_MS) {
+      const g3 = record2.grace?.attempt === claim2.attempt ? record2.grace : void 0;
+      const since = g3 !== void 0 && !Number.isNaN(Date.parse(g3.since)) ? g3.since : o2.now.toISOString();
+      if (o2.now.getTime() - Date.parse(since) <= COMMENT_GRACE_MS) {
         return {
           follow: {
             kind: "waiting",
             claimed: false,
             line: `${WORKER_WAIT2}${claim2.worker}'s ${claim2.state} commit awaits its comment`
           },
-          seen: {
-            sha: read3.sha,
-            worker: claim2.worker,
-            attempt: claim2.attempt,
-            state: claim2.state,
-            at: first,
-            unproven: true
-          },
+          grace: { attempt: claim2.attempt, since },
           warnings: proof.warnings
         };
       }
@@ -47058,7 +47052,7 @@ async function runCli(argv, deps) {
               continue;
             }
             const now = ports.clock.now();
-            const { follow, seen, warnings } = await followClaim({
+            const { follow, seen, grace, warnings } = await followClaim({
               hub: leadHub(),
               repo: config2.primaryRepo,
               item,
@@ -47066,11 +47060,17 @@ async function runCli(argv, deps) {
               ownerConfig,
               now
             });
-            if (seen !== void 0) {
+            if (seen !== void 0 || grace !== void 0) {
               updateWorkers(root, (s) => {
                 const r2 = s.items[item.id];
-                if (r2 !== void 0)
-                  s.items[item.id] = { ...r2, claim: seen, checkedAt: now.toISOString() };
+                if (r2 !== void 0) {
+                  s.items[item.id] = {
+                    ...r2,
+                    ...seen === void 0 ? {} : { claim: seen },
+                    ...grace === void 0 ? {} : { grace },
+                    checkedAt: now.toISOString()
+                  };
+                }
               });
             }
             for (const w of warnings ?? []) lead(item.id, `${item.id}: ${w}`);

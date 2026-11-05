@@ -32,8 +32,6 @@ export interface SeenClaim {
   at: string;
   /** The commit that started this attempt, once proven: the next walk stops at this tip. */
   anchor?: string;
-  /** Seen, but its comment was not there yet: the lead waits a short grace for it. */
-  unproven?: true;
   pr?: number;
 }
 
@@ -51,6 +49,8 @@ export interface OfferRecord {
   nonce?: string;
   offeredAt: string;
   claim?: SeenClaim;
+  /** The one grace window for a late claim comment, per attempt; a new tip does not restart it. */
+  grace?: { attempt: number; since: string };
   /** When the lead last looked at the claim. */
   checkedAt?: string;
 }

@@ -1657,4 +1657,26 @@ describe('workers on other machines', () => {
     expect(w.github.refs.get('APP-1')).not.toBe(before);
     expect(claimOf(w)).toMatchObject({ state: 'done' });
   });
+
+  it('a stream of new unannounced tips reaches the lead after a single grace window', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    w.github.plant('APP-1', claimMsg('claimed'));
+    expect(JSON.parse((await run(w.lead, lead, ['tick'])).out).needsLead).toEqual([]);
+    // A new tip every minute must not restart the window.
+    for (let i = 0; i < 2; i++) {
+      w.now.t += 60_000;
+      w.github.plant('APP-1', claimMsg('alive'));
+      const t = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+      expect(t.needsLead).toEqual([]);
+    }
+    w.now.t += 60_000;
+    w.github.plant('APP-1', claimMsg('alive'));
+    const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(/no claim comment on #30 proves who claimed it/),
+    });
+  });
 });

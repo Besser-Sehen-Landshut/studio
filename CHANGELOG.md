@@ -88,7 +88,7 @@ Nothing but GitHub is shared between the machines. Not tagged yet; the maintaine
     backoff on later passes (looking for its own comment first) until the comment exists.
   - Giving up a takeover resets the ref to the previous attempt's tip, only while it still is the worker's own
     commit, so the attempt count is not used up. The lead gives a claim commit about 2 minutes for its comment
-    (ref written, comment not there yet; done written, not announced yet) before it goes to `needsLead`.
+    (ref written, comment not there yet; done written, not announced yet) before it goes to `needsLead`; that is one window per item and attempt, counted from the first unproven tip, so new tips never restart it, and it never replaces what the lead proved before.
   - The whole brief comes from one `origin/main` commit: the project rules and the crew's start use the SHA the
     worker pinned.
   - The worker tells the lead by numeric id (`workers.self.lead_id`), compares logins without case, reads the

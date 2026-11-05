@@ -1937,7 +1937,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               continue;
             }
             const now = ports.clock.now();
-            const { follow, seen, warnings } = await followClaim({
+            const { follow, seen, grace, warnings } = await followClaim({
               hub: leadHub(),
               repo: config.primaryRepo,
               item,
@@ -1945,11 +1945,17 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               ownerConfig,
               now,
             });
-            if (seen !== undefined) {
+            if (seen !== undefined || grace !== undefined) {
               updateWorkers(root, (s) => {
                 const r = s.items[item.id];
-                if (r !== undefined)
-                  s.items[item.id] = { ...r, claim: seen, checkedAt: now.toISOString() };
+                if (r !== undefined) {
+                  s.items[item.id] = {
+                    ...r,
+                    ...(seen === undefined ? {} : { claim: seen }),
+                    ...(grace === undefined ? {} : { grace }),
+                    checkedAt: now.toISOString(),
+                  };
+                }
               });
             }
             // Claim comments that do not count, from others or edited: the lead hears of each.
