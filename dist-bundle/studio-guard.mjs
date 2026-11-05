@@ -1786,6 +1786,12 @@ function isWriteKey(key) {
   const last = words.at(-1) ?? "";
   return words.some((w) => WRITE_VERB.has(w)) && (WRITE_PLACE.has(last) || WRITE_VERB.has(last));
 }
+var PLACE_LAST = /* @__PURE__ */ new Set(["path", "paths", "root", "roots", "directory", "executable", "tty"]);
+var PLACE_ANY = /* @__PURE__ */ new Set(["file", "files", "dir"]);
+function isPlaceKey(key) {
+  const words = key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w !== "");
+  return PLACE_LAST.has(words.at(-1) ?? "") || words.some((w) => PLACE_ANY.has(w));
+}
 var MCP_LIMITS = { depth: 6, values: 500 };
 var looksLikePath = (v) => /[\\/]/.test(v) || /^[A-Za-z]:/.test(v) || v.startsWith("~") || v === "." || v === ".." || /^file:/i.test(v);
 function checkMcp(env, tool, input, cwd) {
@@ -1825,11 +1831,15 @@ function checkMcp(env, tool, input, cwd) {
       for (const [k, x] of Object.entries(v)) walk(x, k, top, depth + 1);
       return;
     }
-    if (isWriteKey(key) && v !== void 0 && v !== null && v !== false && v !== "" && typeof v !== "number") {
+    if (isWriteKey(key) && v !== void 0 && v !== null && v !== false && v !== "") {
       deny(`${tool}: ${key} asks the tool to write; a researcher's tools only read`);
     }
     if (typeof v !== "string" || v === "") return;
     if (known.paths.has(top)) {
+      confine(v, key);
+      return;
+    }
+    if (depth > 1 && isPlaceKey(key)) {
       confine(v, key);
       return;
     }

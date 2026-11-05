@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -20,6 +21,7 @@ import {
   DEFAULT_SECRET_GLOBS,
   evaluateGuard,
   type GuardContext,
+  isPlaceKey,
   isWriteKey,
 } from '../src/guard.js';
 import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
@@ -381,6 +383,14 @@ describe('the privacy check', () => {
     expect(kinds('-----BEGIN RSA PRIVATE KEY-----')).toContain('credential or key');
     expect(kinds('ghp_abcdefghijklmnopqrstuvwxyz0123456789')).toContain('credential or key');
   });
+  it('fails a line too long to check, instead of reading only its start', () => {
+    const long = `${'a'.repeat(4000)} mail a@real-domain.org`;
+    expect(privacyHits(`ok\n${long}`, 'r')).toEqual([
+      { kind: 'line too long to check', line: 2, file: 'r' },
+    ]);
+    expect(privacyHits('a'.repeat(4000), 'r')).toEqual([]);
+  });
+
   it('shows the kind and the line, never the text', () => {
     const line = privacyLine(privacyHits('x\nmail anna.k@mail-provider.de', 'report'));
     expect(line).toContain('email address (report:2)');
@@ -848,7 +858,10 @@ describe('the guard reads values, not key names, and resolves every path', () =>
     expect(Object.keys(REA_TOOL_SCHEMAS).sort()).toEqual([...REA_KNOWN_TOOLS].sort());
   });
 
-  it('fails write keys closed for strings and flags, whatever their spelling', () => {
+  it('fails write keys closed, whatever the value type; only a limit takes a number', () => {
+    expect(mcp('close_binary', { overwrite: 1 }).decision).toBe('deny');
+    expect(mcp('close_binary', { overwrite: 0 }).decision).toBe('deny');
+    expect(mcp('close_binary', { snapshot_path: 7 }).decision).toBe('deny');
     expect(mcp('close_binary', { overwrite: 'false' }).decision).toBe('deny');
     expect(mcp('close_binary', { overwrite: true }).decision).toBe('deny');
     expect(mcp('close_binary', { overwrite: false }).decision).toBe('allow');
@@ -889,6 +902,13 @@ describe('the guard reads values, not key names, and resolves every path', () =>
         right_export_name: 'run',
       }).decision,
     ).toBe('allow');
+    // A limit takes its number, even where the tool writes (the export class opened).
+    const exp = { ...ctx, ...reaGuard(art, ['export']) };
+    const fw = (input: Record<string, unknown>) =>
+      evaluateGuard({ toolName: reaToolName('extract_firmware'), toolInput: input }, exp).decision;
+    expect(fw({ path: join(art, 'fw.bin'), max_output_files: 10, max_output_bytes: 1000 })).toBe(
+      'allow',
+    );
   });
 
   it('confines every string under a path argument, even one that does not look like a place', () => {
@@ -909,6 +929,36 @@ describe('the guard reads values, not key names, and resolves every path', () =>
     expect(
       mcp('analyze_javascript_application', { input_path: art, source_paths: ['out'] }).decision,
     ).toBe('deny');
+  });
+
+  it('confines a nested argument named like a place even when its value is a bare name', () => {
+    // rea-agents 6.7.0 resolves `local_path` with path.resolve, against its working directory; a
+    // bare name must not reach it, and nor may one in a reference or manifest entry.
+    const subject = (local_path: string) => ({
+      subject: { name: 'app', local_path, format: 'apk' },
+    });
+    expect(
+      mcp('compare_artifacts', {
+        left: subject(join(art, 'a.apk')),
+        right: subject(join(art, 'b.apk')),
+      }).decision,
+    ).toBe('allow');
+    for (const bad of ['secret.db', join(other, 'x.apk'), join(wt, 'x.apk')]) {
+      expect(
+        mcp('compare_artifacts', { left: subject(bad), right: subject(join(art, 'b.apk')) })
+          .decision,
+        bad,
+      ).toBe('deny');
+    }
+    expect(
+      mcp('compare_source_to_bundle', {
+        reference: { entries: [{ path: 'src/index.ts', kind: 'file' }] },
+      }).decision,
+    ).toBe('deny');
+    expect(isPlaceKey('local_path')).toBe(true);
+    expect(isPlaceKey('manifestPath')).toBe(true);
+    expect(isPlaceKey('format')).toBe(false);
+    expect(isPlaceKey('evidence_id')).toBe(false);
   });
 
   it('exempts free text only at the top level of a tool that names it', () => {
@@ -993,7 +1043,14 @@ describe('the sandbox of a researcher', () => {
 });
 
 describe('the REA install', () => {
-  const fakeNpm = (o: { registry?: string; locked?: string; resolved?: string; code?: number }) => {
+  const fakeNpm = (o: {
+    registry?: string;
+    locked?: string;
+    resolved?: string;
+    code?: number;
+    entry?: string;
+    frida?: boolean;
+  }) => {
     const calls: { args: string[]; env: Record<string, string>; cwd: string }[] = [];
     const npm = {
       async run(args: string[], env: Record<string, string>, cwd: string) {
@@ -1002,7 +1059,11 @@ describe('the REA install', () => {
           return { code: 0, stdout: JSON.stringify(o.registry ?? REA_TEST_INTEGRITY), stderr: '' };
         }
         if (o.code !== undefined) return { code: o.code, stdout: '', stderr: '' };
-        fakeReaInstall(cwd, { integrity: o.locked ?? REA_TEST_INTEGRITY });
+        fakeReaInstall(cwd, {
+          integrity: o.locked ?? REA_TEST_INTEGRITY,
+          ...(o.entry === undefined ? {} : { entryScript: o.entry }),
+        });
+        if (o.frida === true) mkdirSync(join(cwd, 'node_modules', 'frida'), { recursive: true });
         if (o.resolved !== undefined) {
           const lock = JSON.parse(readFileSync(join(cwd, 'package-lock.json'), 'utf8'));
           lock.packages['node_modules/rea-agents'].resolved = o.resolved;
@@ -1034,6 +1095,8 @@ describe('the REA install', () => {
       expect(c.cwd.startsWith(join(owner, 'rea'))).toBe(true);
     }
     expect(calls[0]?.args).toEqual(['view', 'rea-agents@6.7.0', 'dist.integrity', '--json']);
+    // No install script runs and no optional (native) dependency comes along.
+    expect(calls[1]?.args).toEqual(expect.arrayContaining(['--ignore-scripts', '--omit=optional']));
     const record = JSON.parse(readFileSync(join(got.dir, 'studio-rea.json'), 'utf8'));
     expect(record).toMatchObject({ version: '6.7.0', integrity: REA_TEST_INTEGRITY });
     expect(verifyReaInstall(owner, '6.7.0').entry).toBe(
@@ -1076,6 +1139,43 @@ describe('the REA install', () => {
     await expect(
       installRea({ ownerRoot: owner, version: '^6.7.0', npm: fakeNpm({}).npm, path: '', now }),
     ).rejects.toThrow(/not exact/);
+  });
+
+  it('keeps the earlier install until the new one is verified, and restores it otherwise', async () => {
+    const owner = join(root, 'inst-swap');
+    const dir = join(owner, 'rea', '6.7.0');
+    const entry = join(dir, 'node_modules', 'rea-agents', 'scripts', 'rea.mjs');
+    await installRea({
+      ownerRoot: owner,
+      version: '6.7.0',
+      npm: fakeNpm({ entry: '// first\n' }).npm,
+      path: '',
+      now,
+    });
+    // Lockfile and integrity fine, but an optional native part came along: verification fails.
+    await expect(
+      installRea({
+        ownerRoot: owner,
+        version: '6.7.0',
+        npm: fakeNpm({ entry: '// second\n', frida: true }).npm,
+        path: '',
+        now,
+      }),
+    ).rejects.toThrow(/optional native dependency frida/);
+    expect(readFileSync(entry, 'utf8')).toBe('// first\n');
+    expect(verifyReaInstall(owner, '6.7.0').entry).toBe(entry);
+    expect(() => lstatSync(`${dir}.previous`)).toThrow();
+    expect(() => lstatSync(`${dir}.staging`)).toThrow();
+    // A good one replaces it, and nothing of the earlier one is left beside it.
+    await installRea({
+      ownerRoot: owner,
+      version: '6.7.0',
+      npm: fakeNpm({ entry: '// third\n' }).npm,
+      path: '',
+      now,
+    });
+    expect(readFileSync(entry, 'utf8')).toBe('// third\n');
+    expect(() => lstatSync(`${dir}.previous`)).toThrow();
   });
 
   it('refuses at launch an install that is missing, altered, linked or writable by others', () => {

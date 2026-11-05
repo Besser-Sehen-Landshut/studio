@@ -905,3 +905,23 @@ export async function addedInPullRequest(
 
 /** A file adding more lines than this is not read line by line: it fails the privacy check. */
 const MAX_ADDED_LINES = 20_000;
+
+/**
+ * The commit a branch of the pull request's repository points to now, read with `ls-remote` in the
+ * owner's checkout (never a crew clone); undefined when it cannot be read or does not exist.
+ */
+export async function remoteTip(ctx: EvidenceContext, branch: string): Promise<string | undefined> {
+  if (!/^[A-Za-z0-9._/-]{1,200}$/.test(branch) || branch.includes('..')) return undefined;
+  try {
+    const out = await g(
+      ctx,
+      ['ls-remote', '--', ctx.checkout.remote, `refs/heads/${branch}`],
+      GIT_FETCH_MS,
+    );
+    const line = out.split('\n').find((l) => l.endsWith(`\trefs/heads/${branch}`));
+    const sha = line?.split('\t')[0];
+    return sha !== undefined && SHA.test(sha) ? sha : undefined;
+  } catch {
+    return undefined;
+  }
+}

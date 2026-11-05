@@ -49,8 +49,17 @@ function npmEnv(ownerRoot: string, home: string, path: string): Record<string, s
 
 /**
  * Installs the pinned version into the owner state root and records the registry's integrity hash.
- * A staging directory is filled first and moved into place only when npm's lockfile names the same
- * tarball and integrity the registry reported; anything else leaves the earlier install untouched.
+ * A staging directory is filled first and used only when npm's lockfile names the same tarball and
+ * integrity the registry reported. Then the earlier install is moved aside, the new one into place
+ * and verified as a launch would; only then is the earlier one deleted. If that verification fails,
+ * the earlier install comes back. Anything that fails before leaves the earlier install untouched.
+ *
+ * No install script runs (`--ignore-scripts`) and no optional dependency is installed
+ * (`--omit=optional`): of rea-agents 6.7.0 only `frida` (optional, debug class) has an install
+ * script, which downloads a native binary nothing pins, and the prebuilt `@lydell/node-pty`
+ * binaries (optional, used only by process capture, observe class) come the same way. The static
+ * tools load neither: both are imported lazily by the tools that need them. The debug and observe
+ * tools that need them fail until a later, separate opt-in installs them with a pinned binary hash.
  */
 export async function installRea(o: {
   ownerRoot: string;
@@ -87,7 +96,15 @@ export async function installRea(o: {
       `${JSON.stringify({ private: true, dependencies: { [REA_PACKAGE]: o.version } }, null, 2)}\n`,
     );
     const install = await o.npm.run(
-      ['install', '--save-exact', '--package-lock=true', '--no-audit', '--no-fund'],
+      [
+        'install',
+        '--save-exact',
+        '--package-lock=true',
+        '--ignore-scripts',
+        '--omit=optional',
+        '--no-audit',
+        '--no-fund',
+      ],
       env,
       staging,
       { timeoutMs: NPM_TIMEOUT_MS },
@@ -107,10 +124,21 @@ export async function installRea(o: {
       `${JSON.stringify({ package: REA_PACKAGE, version: o.version, integrity, installedAt: o.now.toISOString() }, null, 2)}\n`,
     );
     removeStateEntry(o.ownerRoot, join(staging, '.home'));
-    removeStateEntry(o.ownerRoot, dir);
+    // Swap: the earlier install aside, the new one in, verified as a launch would; back on failure.
+    const previous = `${dir}.previous`;
+    removeStateEntry(o.ownerRoot, previous);
     assertStatePath(o.ownerRoot, dir);
+    const hadPrevious = existsNoFollow(dir);
+    if (hadPrevious) renameSync(dir, previous);
     renameSync(staging, dir);
-    verifyReaInstall(o.ownerRoot, o.version);
+    try {
+      verifyReaInstall(o.ownerRoot, o.version);
+    } catch (e) {
+      removeStateEntry(o.ownerRoot, dir);
+      if (hadPrevious) renameSync(previous, dir);
+      throw e;
+    }
+    removeStateEntry(o.ownerRoot, previous);
     return { dir, integrity };
   } finally {
     removeStateEntry(o.ownerRoot, staging);
@@ -127,6 +155,15 @@ function lockedPackage(dir: string): {
   };
   return lock.packages?.[`node_modules/${REA_PACKAGE}`] ?? {};
 }
+
+const existsNoFollow = (p: string): boolean => {
+  try {
+    lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 /** A file or directory of the install: no link, owned by this user, writable by nobody else. */
 function ownedPlain(path: string, kind: 'file' | 'dir', uid: number | undefined): void {
@@ -179,6 +216,10 @@ export function verifyReaInstall(
       locked.resolved !== REGISTRY_TARBALL(version)
     ) {
       throw new Error('the lockfile does not match the install record');
+    }
+    // Installed without optional dependencies: a native part there was not pinned by Studio.
+    if (existsNoFollow(join(dir, 'node_modules', 'frida'))) {
+      throw new Error('the install holds the optional native dependency frida');
     }
     const pkgDir = join(dir, 'node_modules', REA_PACKAGE);
     ownedPlain(join(dir, 'node_modules'), 'dir', uid);

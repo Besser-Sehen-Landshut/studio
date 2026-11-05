@@ -19,8 +19,11 @@ the skill and the server stay denied to every other role. Not tagged yet; the ma
   is the owner's for Studio's approval: a pull request that adds, changes or removes it gets none.
 - `studio research install` (owner only, in a terminal): installs the pinned `rea-agents` once into the owner
   state, never with `npx` and never in a crew's clone. It takes the tarball's `dist.integrity` from the npm
-  registry, runs npm without user or global config and without tokens, accepts the install only when the
-  lockfile names the registry tarball with that integrity, and records it. A launch refuses unless the record,
+  registry, runs npm without user or global config, tokens, install scripts or optional dependencies,
+  accepts the install only when the lockfile names the registry tarball with that integrity, and records it;
+  the earlier install is restored if the new one fails the launch check. Frida and the prebuilt
+  pseudo-terminal binaries are left out (optional): the static tools do not need them, the debug and
+  process-capture tools that do wait for a later opt-in with a pinned binary hash. A launch refuses unless the record,
   the lockfile and the installed package match the pin and nothing on the way is a link or writable by others.
 - A researcher with REA gets one MCP server: Node by its absolute path running `bin/studio-rea-server.mjs`
   (shipped with Studio) on a spec file in the state root. The wrapper changes to an empty directory Studio
@@ -37,18 +40,21 @@ the skill and the server stay denied to every other role. Not tagged yet; the ma
   root, never on the board; the shell tools of a class (`gdb`, `frida`, `adb`, `tcpdump`, ...) follow the
   same grant. Arguments are checked: only the argument names a tool's schema lists; every path argument and
   every path-like value absolute, in the analysis directory as written and on its real path (never the
-  clone, never relative); write arguments by the words of their name (`left_export_name` and number limits
-  are none); databases by schema only; `inspect_recorded_crash` with `include_debugger_context` only with
+  clone, never relative), and so is every nested argument named like a place, whatever its value; write
+  arguments by the words of their name (`left_export_name` is none), any value but unset, null, false or
+  empty refused, numbers only for limits; databases by schema only; `inspect_recorded_crash` with `include_debugger_context` only with
   `debug`.
 - `scripts/gen-rea-schemas.mjs` generates `src/rea-schemas.ts` from the pinned server's tool list, type-aware:
   only string arguments name a place or hold free text.
 - Bash never touches the analysis directory: it is in the sandbox's `denyRead` and `denyWrite` for every shell
   process, Read, Grep and Glob are refused by the guard, and a command naming it gets an early refusal. Only
   the REA tools, which run in the MCP server outside that sandbox, reach it.
-- A privacy check at `collect` for researcher reports and, for a researcher's pull request, for everything
-  its diff adds over `base...head`, read in the owner's checkout (emails, phone-like numbers, personal fields,
-  rows, card and account numbers, credentials; binary, very large, linked or unreadable files): one hit
-  rejects the report and hands it to the lead with kinds and lines, never the text.
+- A privacy check at `collect` for every crew field of a researcher's report (pull request title and
+  `not_run_here` lines included) and for everything its branch adds over `base...head`, read in the owner's
+  checkout (emails, phone-like numbers, personal fields, rows, card and account numbers, credentials;
+  binary, very large, linked or unreadable files, lines over 4,000 characters): one hit rejects the report
+  and hands it to the lead with kinds and lines, never the text. Studio checks the pushed branch before it
+  opens a researcher's pull request, opens none on a hit and closes one that exists.
 - The brief of such a researcher: the scope, the classes opened, target content as data (injection attempts
   are reported by kind), the result as structure and where findings go (`docs/research/<id>-<slug>.md`).
 - `studio doctor` shows the REA pin and who set it, whether it is installed with its integrity, whether the

@@ -3530,7 +3530,7 @@ describe('collect adds the review item for a pull request', () => {
     });
 
     /** A docs item of a researcher whose pushed branch adds `text` below docs/research. */
-    const pushedDocs = (text: string) => {
+    const pushedDocs = (text: string, o: { pr?: boolean; push?: boolean } = {}) => {
       const fx = makeFx([{ id: 'APP-1', status: 'assigned', type: 'docs', role: 'researcher' }]);
       const base = git(fx.project, 'rev-parse', 'HEAD');
       git(fx.project, 'checkout', '-q', '-b', 'studio/APP-1');
@@ -3538,11 +3538,17 @@ describe('collect adds the review item for a pull request', () => {
       writeFileSync(join(fx.project, 'docs', 'research', 'APP-1-sync.md'), text);
       git(fx.project, 'add', 'docs');
       git(fx.project, 'commit', '-q', '-m', 'findings');
-      git(fx.project, 'push', '-q', 'origin', 'studio/APP-1');
+      if (o.push !== false) git(fx.project, 'push', '-q', 'origin', 'studio/APP-1');
       const head = git(fx.project, 'rev-parse', 'HEAD');
       git(fx.project, 'checkout', '-q', 'main');
-      writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${head}\ntests_run: 1`);
-      const { gh } = fakeGh((l) =>
+      writeReport(
+        fx,
+        'APP-1',
+        o.pr === false
+          ? `status: done\nitem: APP-1\npr_title: "APP-1: findings"\nhead_sha: ${head}\ntests_run: 1`
+          : `status: done\nitem: APP-1\npr: 7\nhead_sha: ${head}\ntests_run: 1`,
+      );
+      const { gh, calls } = fakeGh((l) =>
         l.startsWith('pr view 7 --repo org/app')
           ? {
               stdout: JSON.stringify({
@@ -3552,13 +3558,17 @@ describe('collect adds the review item for a pull request', () => {
                 ...OWN,
               }),
             }
-          : undefined,
+          : l.startsWith('pr list --repo org/app --head studio/APP-1')
+            ? { stdout: JSON.stringify([{ number: 7, isCrossRepository: false }]) }
+            : l.startsWith('pr close ')
+              ? {}
+              : undefined,
       );
-      return { fx, gh };
+      return { fx, gh, calls };
     };
 
     it('checks what the pull request adds, read in the owner checkout, not the clone', async () => {
-      const { fx, gh } = pushedDocs('# Sync\n\nlast_name: Meier\n');
+      const { fx, gh, calls } = pushedDocs('# Sync\n\nlast_name: Meier\n');
       // The clone holds a clean copy: what counts is what was pushed.
       const docs = join(fx.state, 'clones', 'APP-1', 'docs', 'research');
       mkdirSync(docs, { recursive: true });
@@ -3569,6 +3579,59 @@ describe('collect adds the review item for a pull request', () => {
       expect(r.err).toContain('docs/research/APP-1-sync.md:3');
       expect(r.err).not.toContain('Meier');
       expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+      // The pull request that carries it is closed, with Studio's fixed text only.
+      const close = calls.find((c) => c.startsWith('pr close 7 --repo org/app'));
+      expect(close).toBeDefined();
+      expect(close).not.toMatch(/Meier|personal/);
+    });
+
+    it('checks the pushed branch before opening a pull request, and opens none on a hit', async () => {
+      const { fx, gh, calls } = pushedDocs('# Sync\n\nlast_name: Meier\n', { pr: false });
+      const r = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+      expect(r.code).not.toBe(0);
+      expect(r.err).toContain('personal field with a value');
+      expect(calls.some((c) => c.startsWith('pr create'))).toBe(false);
+      // One left open from an earlier run is closed.
+      expect(calls.some((c) => c.startsWith('pr close 7'))).toBe(true);
+      expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+    });
+
+    it('waits, opening nothing, while the pushed branch cannot be read', async () => {
+      const { fx, gh, calls } = pushedDocs('structure only\n', { pr: false, push: false });
+      const r = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+      expect(`${r.out}${r.err}`).toContain('cannot read the pushed branch');
+      expect(calls.some((c) => c.startsWith('pr create'))).toBe(false);
+      expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+    });
+
+    it('checks every crew field of the report: the pull request title and the not_run_here lines too', async () => {
+      const fx = makeFx([
+        { id: 'APP-1', status: 'assigned', type: 'research', role: 'researcher' },
+      ]);
+      const dir = join(fx.state, 'clones', 'APP-1', '.studio', 'reports');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, newReportName(fx.state, 'APP-1')),
+        '---\nstatus: done\nitem: APP-1\npr_title: "APP-1: rows of anna.k@mail-provider.de"\n---\n\nStructure only.\n',
+      );
+      const r = await collectIt(fx);
+      expect(r.code).not.toBe(0);
+      expect(r.err).toContain('email address');
+      expect(r.err).not.toContain('anna.k');
+
+      const fx2 = makeFx([
+        { id: 'APP-1', status: 'assigned', type: 'research', role: 'researcher' },
+      ]);
+      const dir2 = join(fx2.state, 'clones', 'APP-1', '.studio', 'reports');
+      mkdirSync(dir2, { recursive: true });
+      writeFileSync(
+        join(dir2, newReportName(fx2.state, 'APP-1')),
+        '---\nstatus: done\nitem: APP-1\nnot_run_here:\n  - { command: "psql -U bert.h@mail-provider.de", missing: database, reason: no database }\n---\n\nStructure only.\n',
+      );
+      const r2 = await collectIt(fx2);
+      expect(r2.code).not.toBe(0);
+      expect(r2.err).toContain('email address');
+      expect(r2.err).not.toContain('bert.h');
     });
 
     it('moves a researcher pull request whose diff is structure only', async () => {

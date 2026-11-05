@@ -48,8 +48,13 @@ export function privacyHits(text: string, file: string): PrivacyHit[] {
     (l) => (l.match(/\t/g)?.length ?? 0) * 100 + (l.match(/,/g)?.length ?? 0),
   );
   lines.forEach((raw, i) => {
-    const l = raw.slice(0, LINE_LIMIT);
     const n = i + 1;
+    // A line too long to check is a hit itself: nothing past the limit goes unread.
+    if (raw.length > LINE_LIMIT) {
+      add('line too long to check', n);
+      return;
+    }
+    const l = raw;
     for (const m of l.matchAll(EMAIL)) {
       const domain = m[0].slice(m[0].lastIndexOf('@') + 1);
       if (!RESERVED_DOMAIN.test(domain)) add('email address', n);

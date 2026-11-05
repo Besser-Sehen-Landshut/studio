@@ -51,6 +51,7 @@ import {
   crewHold,
   crewStateOf,
   githubHttpsUrl,
+  ITEM_BASE,
   isItemId,
   launchCrew,
   resolveModel,
@@ -66,6 +67,7 @@ import {
   grantException,
   judgeFailedChecks,
   readExceptions,
+  remoteTip,
 } from './evidence.js';
 import { listFlaky, recordFlaky } from './flaky.js';
 import {
@@ -1272,6 +1274,55 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       };
     };
 
+    /** The open pull requests of an item's branch in its own repository (never a fork's). */
+    const openPrsOf = async (item: WorkItem): Promise<number[]> => {
+      const r = await ports.gh.run([
+        'pr',
+        'list',
+        '--repo',
+        item.repo,
+        '--head',
+        `studio/${item.id}`,
+        '--state',
+        'open',
+        '--json',
+        'number,isCrossRepository',
+      ]);
+      if (r.code !== 0) return [];
+      try {
+        return (JSON.parse(r.stdout || '[]') as { number?: unknown; isCrossRepository?: unknown }[])
+          .filter((p) => Number.isInteger(p.number) && p.isCrossRepository === false)
+          .map((p) => p.number as number);
+      } catch {
+        return [];
+      }
+    };
+
+    /**
+     * Closes pull requests whose researcher findings failed the privacy check. The comment is
+     * Studio's fixed text: no kind, line or content of the hit reaches GitHub.
+     */
+    const closeResearchPrs = async (item: WorkItem, prs: readonly number[]): Promise<number[]> => {
+      const closed: number[] = [];
+      for (const pr of new Set(prs)) {
+        const r = await ports.gh.run([
+          'pr',
+          'close',
+          String(pr),
+          '--repo',
+          item.repo,
+          '--comment',
+          'Closed by Studio: the findings did not pass the privacy check. The lead has the details.',
+        ]);
+        if (r.code === 0) closed.push(pr);
+        else
+          stderr(
+            `warning: could not close ${item.repo}#${pr} (gh exit ${r.code}); close it by hand\n`,
+          );
+      }
+      return closed;
+    };
+
     /** Reads a finished crew report, verifies it and moves the item: the body of `collect`. */
     const collect = async (id: string | undefined): Promise<Collected> => {
       const { board } = loadAll();
@@ -1330,11 +1381,18 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       // the report closed; `tick` hands it to the lead like any rejected report. The hit's kind and
       // line are shown, never the text.
       if (item.role === 'researcher') {
+        // Every field of the report is crew text: the pull request title and the not_run_here
+        // entries reach GitHub, analyzer and probe lines reach the board.
         const text = [
           report.body,
+          report.prTitle ?? '',
           ...(report.findings ?? []),
           ...report.questions,
           ...report.lessons,
+          ...crewStrings(report.notRunHere),
+          ...crewStrings(report.notRunHereJobs),
+          ...crewStrings(report.analyzers),
+          report.mutationProbe ?? '',
         ].join('\n');
         const hits = privacyHits(text, 'report');
         if (hits.length > 0) throw new ReportError(privacyLine(hits));
@@ -1495,6 +1553,34 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           }
         }
       }
+      /**
+       * A researcher's pushed findings, checked as they left: the diff over base...head, read in
+       * the owner's checkout, never the crew's clone (which may differ from it). With a hit, every
+       * open pull request of the item's branch is closed and the report is rejected; undefined
+       * when the diff cannot be read now (collect waits).
+       */
+      const researchDiffGate = async (
+        base: string | undefined,
+        head: string | undefined,
+        prs: readonly number[],
+      ): Promise<'ok' | undefined> => {
+        const added =
+          head === undefined
+            ? undefined
+            : await addedInPullRequest(
+                evidenceCtx(loadConfig(project), item.repo, stateRoot()),
+                base,
+                head,
+              );
+        if (added === undefined) return undefined;
+        const hits = privacyHitsInAdded(added);
+        if (hits.length === 0) return 'ok';
+        const closed = await closeResearchPrs(item, prs);
+        throw new ReportError(
+          `${privacyLine(hits)}${closed.length > 0 ? `; closed pull request ${closed.map((n) => `#${n}`).join(', ')}` : ''}`,
+        );
+      };
+
       let branch = `studio/${item.id}`;
       if (
         report.status === 'done' &&
@@ -1504,6 +1590,21 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         // A worker opens its own pull request: the lead never opens one for it.
         fromWorker === undefined
       ) {
+        // A researcher's branch is checked before any pull request is opened for it.
+        if (item.role === 'researcher') {
+          const ctx = evidenceCtx(loadConfig(project), item.repo, stateRoot());
+          const gate = await researchDiffGate(
+            await remoteTip(ctx, ITEM_BASE),
+            await remoteTip(ctx, `studio/${item.id}`),
+            await openPrsOf(item),
+          );
+          if (gate === undefined) {
+            return {
+              kind: 'waiting',
+              line: `${item.id}: the privacy check cannot read the pushed branch studio/${item.id} now (git); collect again, no pull request was opened`,
+            };
+          }
+        }
         const config = loadConfig(project);
         const token = crewTokenFor(config, owner);
         // Opening the pull request is what starts CI: it waits for capacity like a merge does.
@@ -1564,19 +1665,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         // What a researcher pushed is checked as it left: the pull request's diff, read in the
         // owner's checkout over base...head, never the crew's clone (which may differ from it).
         if (item.role === 'researcher') {
-          const added = await addedInPullRequest(
-            evidenceCtx(loadConfig(project), item.repo, stateRoot()),
-            info.baseOid,
-            info.head,
-          );
-          if (added === undefined) {
+          const gate = await researchDiffGate(info.baseOid, info.head, [report.pr]);
+          if (gate === undefined) {
             return {
               kind: 'waiting',
               line: `${item.id}: the privacy check of pull request ${report.pr} cannot read its diff now (git); collect again, nothing moved`,
             };
           }
-          const hits = privacyHitsInAdded(added);
-          if (hits.length > 0) throw new ReportError(privacyLine(hits));
         }
         // The pull request of a worker item counts only when the worker that claimed it opened it
         // (GitHub's author, which no client can set).
@@ -4668,4 +4763,14 @@ function buildSnapshot(
     updatedAt: now.toISOString(),
     metrics: computeMetrics(events),
   };
+}
+
+/** Every string in a value of crew text (a report field), for the privacy check. */
+function crewStrings(v: unknown): string[] {
+  if (typeof v === 'string') return [v];
+  if (Array.isArray(v)) return v.flatMap(crewStrings);
+  if (v !== null && typeof v === 'object') {
+    return Object.entries(v).flatMap(([k, x]) => [k, ...crewStrings(x)]);
+  }
+  return [];
 }

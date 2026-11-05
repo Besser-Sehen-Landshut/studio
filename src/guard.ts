@@ -1679,7 +1679,7 @@ function checkResearchCommand(env: Env, name: string): void {
  * every tool, whatever it is. `snapshot`, `save` and `overwrite` anywhere in the name; `output`,
  * `dest`, `destination`, `export` and `write` only for a name that ends in a place (`output_directory`,
  * `export_path`) or is that word alone. So `left_export_name`, `rewrite_level` or
- * `destination_scope` are not write arguments, and neither is a number (`max_output_bytes`).
+ * `destination_scope` are not write arguments, and neither is a limit (`max_output_bytes`).
  */
 const WRITE_ALWAYS = new Set(['snapshot', 'snapshots', 'save', 'overwrite']);
 const WRITE_VERB = new Set(['output', 'outputs', 'dest', 'destination', 'export', 'write']);
@@ -1695,6 +1695,17 @@ export function isWriteKey(key: string): boolean {
   if (words.some((w) => WRITE_ALWAYS.has(w))) return true;
   const last = words.at(-1) ?? '';
   return words.some((w) => WRITE_VERB.has(w)) && (WRITE_PLACE.has(last) || WRITE_VERB.has(last));
+}
+/** A name that names a place on disk, as scripts/gen-rea-schemas.mjs classifies top-level ones. */
+const PLACE_LAST = new Set(['path', 'paths', 'root', 'roots', 'directory', 'executable', 'tty']);
+const PLACE_ANY = new Set(['file', 'files', 'dir']);
+export function isPlaceKey(key: string): boolean {
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w !== '');
+  return PLACE_LAST.has(words.at(-1) ?? '') || words.some((w) => PLACE_ANY.has(w));
 }
 const MCP_LIMITS = { depth: 6, values: 500 };
 const looksLikePath = (v: string): boolean =>
@@ -1714,8 +1725,8 @@ const looksLikePath = (v: string): boolean =>
  * resolve against another directory in the server than here. The analysis directory is not
  * writable by the crew (sandbox `denyWrite`), so its links stay as they were checked. The one
  * exception is the free-text arguments the schema names, at the top level of that tool only. A
- * write argument (isWriteKey) is refused unless it is undefined, null, false, an empty string or a
- * number.
+ * write argument (isWriteKey) is refused unless it is undefined, null, false or an empty string;
+ * a limit (`max_*`, `min_*`, `limit_*`) is no write argument, so its number passes.
  */
 function checkMcp(env: Env, tool: string, input: Record<string, unknown>, cwd: string): void {
   const artifacts = env.artifacts;
@@ -1756,18 +1767,18 @@ function checkMcp(env: Env, tool: string, input: Record<string, unknown>, cwd: s
       for (const [k, x] of Object.entries(v)) walk(x, k, top, depth + 1);
       return;
     }
-    if (
-      isWriteKey(key) &&
-      v !== undefined &&
-      v !== null &&
-      v !== false &&
-      v !== '' &&
-      typeof v !== 'number'
-    ) {
+    if (isWriteKey(key) && v !== undefined && v !== null && v !== false && v !== '') {
       deny(`${tool}: ${key} asks the tool to write; a researcher's tools only read`);
     }
     if (typeof v !== 'string' || v === '') return;
     if (known.paths.has(top)) {
+      confine(v, key);
+      return;
+    }
+    // A nested argument named like a place (`left.subject.local_path`, `reference.entries[].path`,
+    // `manifest.root`) is one, whatever its value looks like: REA resolves a bare name against its
+    // own working directory or a root of its own, never against what the guard sees.
+    if (depth > 1 && isPlaceKey(key)) {
       confine(v, key);
       return;
     }

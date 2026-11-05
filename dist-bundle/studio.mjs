@@ -35362,7 +35362,15 @@ async function installRea(o2) {
 `
     );
     const install = await o2.npm.run(
-      ["install", "--save-exact", "--package-lock=true", "--no-audit", "--no-fund"],
+      [
+        "install",
+        "--save-exact",
+        "--package-lock=true",
+        "--ignore-scripts",
+        "--omit=optional",
+        "--no-audit",
+        "--no-fund"
+      ],
       env,
       staging,
       { timeoutMs: NPM_TIMEOUT_MS }
@@ -35383,10 +35391,20 @@ async function installRea(o2) {
 `
     );
     removeStateEntry(o2.ownerRoot, join19(staging, ".home"));
-    removeStateEntry(o2.ownerRoot, dir);
+    const previous = `${dir}.previous`;
+    removeStateEntry(o2.ownerRoot, previous);
     assertStatePath(o2.ownerRoot, dir);
+    const hadPrevious = existsNoFollow(dir);
+    if (hadPrevious) renameSync9(dir, previous);
     renameSync9(staging, dir);
-    verifyReaInstall(o2.ownerRoot, o2.version);
+    try {
+      verifyReaInstall(o2.ownerRoot, o2.version);
+    } catch (e) {
+      removeStateEntry(o2.ownerRoot, dir);
+      if (hadPrevious) renameSync9(previous, dir);
+      throw e;
+    }
+    removeStateEntry(o2.ownerRoot, previous);
     return { dir, integrity };
   } finally {
     removeStateEntry(o2.ownerRoot, staging);
@@ -35396,6 +35414,14 @@ function lockedPackage(dir) {
   const lock = JSON.parse(readFileSync19(join19(dir, "package-lock.json"), "utf8"));
   return lock.packages?.[`node_modules/${REA_PACKAGE}`] ?? {};
 }
+var existsNoFollow = (p) => {
+  try {
+    lstatSync16(p);
+    return true;
+  } catch {
+    return false;
+  }
+};
 function ownedPlain(path10, kind, uid) {
   const st = lstatSync16(path10);
   if (st.isSymbolicLink()) throw new Error(`${path10} is a symbolic link`);
@@ -35421,6 +35447,9 @@ function verifyReaInstall(ownerRoot, version2, uid = process.getuid?.()) {
     const locked = lockedPackage(dir);
     if (locked.version !== version2 || locked.integrity !== record2.integrity || locked.resolved !== REGISTRY_TARBALL(version2)) {
       throw new Error("the lockfile does not match the install record");
+    }
+    if (existsNoFollow(join19(dir, "node_modules", "frida"))) {
+      throw new Error("the install holds the optional native dependency frida");
     }
     const pkgDir = join19(dir, "node_modules", REA_PACKAGE);
     ownedPlain(join19(dir, "node_modules"), "dir", uid);
@@ -35970,7 +35999,7 @@ function removeOldReport(stateRoot, clone2, id) {
     if (!st.isDirectory()) return;
   }
 }
-function existsNoFollow(p) {
+function existsNoFollow2(p) {
   try {
     lstatSync19(p);
     return true;
@@ -36790,7 +36819,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   const undeniable = installedSkills(claudeConfigDir).invalid;
   if (undeniable.length > 0) throw new Error(undeniableLine(claudeConfigDir, undeniable));
   const clonePath = join22(stateRoot, "clones", item.id);
-  if ((previous?.limit || previous?.block) && existsNoFollow(clonePath) && (cloneBranch(clonePath) !== `studio/${item.id}` || cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))) {
+  if ((previous?.limit || previous?.block) && existsNoFollow2(clonePath) && (cloneBranch(clonePath) !== `studio/${item.id}` || cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))) {
     throw new Error(
       `the clone of ${item.id} left its branch after ${previous.limit ? "a usage limit" : "an account block"}; refusing to replace it (inspect it, then remove ${clonePath} to start over)`
     );
@@ -37014,7 +37043,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
     ...tokenConfigDir === void 0 ? {} : { tokenConfigDir },
     logStart
   };
-  const hadFile = existsNoFollow(crewFile);
+  const hadFile = existsNoFollow2(crewFile);
   let before;
   await updateCrewFile(stateRoot, (all) => {
     before = all[item.id];
@@ -38588,6 +38617,21 @@ async function addedInPullRequest(ctx, base, head) {
   return [...files.values()];
 }
 var MAX_ADDED_LINES = 2e4;
+async function remoteTip(ctx, branch) {
+  if (!/^[A-Za-z0-9._/-]{1,200}$/.test(branch) || branch.includes("..")) return void 0;
+  try {
+    const out = await g(
+      ctx,
+      ["ls-remote", "--", ctx.checkout.remote, `refs/heads/${branch}`],
+      GIT_FETCH_MS4
+    );
+    const line4 = out.split("\n").find((l) => l.endsWith(`	refs/heads/${branch}`));
+    const sha = line4?.split("	")[0];
+    return sha !== void 0 && SHA3.test(sha) ? sha : void 0;
+  } catch {
+    return void 0;
+  }
+}
 
 // src/pane-data.ts
 import { lstatSync as lstatSync22, readFileSync as readFileSync25 } from "node:fs";
@@ -42497,8 +42541,12 @@ function privacyHits(text, file3) {
     (l) => (l.match(/\t/g)?.length ?? 0) * 100 + (l.match(/,/g)?.length ?? 0)
   );
   lines.forEach((raw, i2) => {
-    const l = raw.slice(0, LINE_LIMIT);
     const n2 = i2 + 1;
+    if (raw.length > LINE_LIMIT) {
+      add("line too long to check", n2);
+      return;
+    }
+    const l = raw;
     for (const m of l.matchAll(EMAIL)) {
       const domain2 = m[0].slice(m[0].lastIndexOf("@") + 1);
       if (!RESERVED_DOMAIN.test(domain2)) add("email address", n2);
@@ -47895,6 +47943,47 @@ async function runCli(argv, deps) {
         sha: read3.sha
       };
     };
+    const openPrsOf = async (item) => {
+      const r = await ports.gh.run([
+        "pr",
+        "list",
+        "--repo",
+        item.repo,
+        "--head",
+        `studio/${item.id}`,
+        "--state",
+        "open",
+        "--json",
+        "number,isCrossRepository"
+      ]);
+      if (r.code !== 0) return [];
+      try {
+        return JSON.parse(r.stdout || "[]").filter((p) => Number.isInteger(p.number) && p.isCrossRepository === false).map((p) => p.number);
+      } catch {
+        return [];
+      }
+    };
+    const closeResearchPrs = async (item, prs) => {
+      const closed = [];
+      for (const pr of new Set(prs)) {
+        const r = await ports.gh.run([
+          "pr",
+          "close",
+          String(pr),
+          "--repo",
+          item.repo,
+          "--comment",
+          "Closed by Studio: the findings did not pass the privacy check. The lead has the details."
+        ]);
+        if (r.code === 0) closed.push(pr);
+        else
+          stderr(
+            `warning: could not close ${item.repo}#${pr} (gh exit ${r.code}); close it by hand
+`
+          );
+      }
+      return closed;
+    };
     const collect2 = async (id) => {
       const { board } = loadAll();
       const item = findItem(board, id);
@@ -47946,9 +48035,14 @@ async function runCli(argv, deps) {
       if (item.role === "researcher") {
         const text = [
           report.body,
+          report.prTitle ?? "",
           ...report.findings ?? [],
           ...report.questions,
-          ...report.lessons
+          ...report.lessons,
+          ...crewStrings(report.notRunHere),
+          ...crewStrings(report.notRunHereJobs),
+          ...crewStrings(report.analyzers),
+          report.mutationProbe ?? ""
         ].join("\n");
         const hits = privacyHits(text, "report");
         if (hits.length > 0) throw new ReportError(privacyLine(hits));
@@ -48088,9 +48182,37 @@ async function runCli(argv, deps) {
           }
         }
       }
+      const researchDiffGate = async (base, head, prs) => {
+        const added = head === void 0 ? void 0 : await addedInPullRequest(
+          evidenceCtx(loadConfig(project), item.repo, stateRoot()),
+          base,
+          head
+        );
+        if (added === void 0) return void 0;
+        const hits = privacyHitsInAdded(added);
+        if (hits.length === 0) return "ok";
+        const closed = await closeResearchPrs(item, prs);
+        throw new ReportError(
+          `${privacyLine(hits)}${closed.length > 0 ? `; closed pull request ${closed.map((n2) => `#${n2}`).join(", ")}` : ""}`
+        );
+      };
       let branch = `studio/${item.id}`;
       if (report.status === "done" && report.pr === void 0 && report.prTitle !== void 0 && !PR_OPTIONAL.includes(item.type) && // A worker opens its own pull request: the lead never opens one for it.
       fromWorker === void 0) {
+        if (item.role === "researcher") {
+          const ctx = evidenceCtx(loadConfig(project), item.repo, stateRoot());
+          const gate = await researchDiffGate(
+            await remoteTip(ctx, ITEM_BASE),
+            await remoteTip(ctx, `studio/${item.id}`),
+            await openPrsOf(item)
+          );
+          if (gate === void 0) {
+            return {
+              kind: "waiting",
+              line: `${item.id}: the privacy check cannot read the pushed branch studio/${item.id} now (git); collect again, no pull request was opened`
+            };
+          }
+        }
         const config2 = loadConfig(project);
         const token = crewTokenFor(config2, owner);
         const unchanged = () => {
@@ -48145,19 +48267,13 @@ async function runCli(argv, deps) {
         branch = info.branch;
         checkReportHead(report, info.head);
         if (item.role === "researcher") {
-          const added = await addedInPullRequest(
-            evidenceCtx(loadConfig(project), item.repo, stateRoot()),
-            info.baseOid,
-            info.head
-          );
-          if (added === void 0) {
+          const gate = await researchDiffGate(info.baseOid, info.head, [report.pr]);
+          if (gate === void 0) {
             return {
               kind: "waiting",
               line: `${item.id}: the privacy check of pull request ${report.pr} cannot read its diff now (git); collect again, nothing moved`
             };
           }
-          const hits = privacyHitsInAdded(added);
-          if (hits.length > 0) throw new ReportError(privacyLine(hits));
         }
         if (fromWorker !== void 0) {
           const facts = await leadHub().pullRequest(item.repo, report.pr);
@@ -50825,6 +50941,14 @@ function buildSnapshot(root, ownerRoot, board, capacity, queue, now, hold, limit
     updatedAt: now.toISOString(),
     metrics: computeMetrics(events)
   };
+}
+function crewStrings(v) {
+  if (typeof v === "string") return [v];
+  if (Array.isArray(v)) return v.flatMap(crewStrings);
+  if (v !== null && typeof v === "object") {
+    return Object.entries(v).flatMap(([k, x]) => [k, ...crewStrings(x)]);
+  }
+  return [];
 }
 
 // src/hidden-input.ts
