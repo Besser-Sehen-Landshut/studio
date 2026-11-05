@@ -1,5 +1,6 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -17,15 +18,18 @@ import { parseConfig, type StudioConfig, studioConfigSchema } from '../src/confi
 import {
   type EvidenceContext,
   EXCEPTIONS_FILE,
+  effectiveInputs,
   evidenceChange,
   grantException,
   judgeFailedChecks,
   leadOnly,
+  MAX_RETRIES,
   readExceptions,
+  recordException,
 } from '../src/evidence.js';
 import { classifyDecision } from '../src/pane-data.js';
 import { checkStateMarker, projectRealpath, stateRootFor, writeStateFile } from '../src/paths.js';
-import type { Claude, EvidenceRunner, Gh, Ports } from '../src/ports.js';
+import type { Claude, EvidenceRun, EvidenceRunner, Gh, Ports } from '../src/ports.js';
 import { realEvidence, realPorts } from '../src/ports.js';
 import { decisionsOf } from '../src/push.js';
 import { type Check, checkKey, mergeOne, readChecks } from '../src/queue.js';
@@ -34,6 +38,9 @@ import { renderReviewRoutine } from '../src/review.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-evidence-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+/** Whether this machine can run evidence commands sandboxed (Seatbelt, or bubblewrap in CI). */
+const sandboxed = (await realEvidence.unavailable()) === undefined;
 
 const GIT_ENV = {
   ...process.env,
@@ -56,13 +63,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: node scripts/migration-guard.mjs
-  evidence-sql:
-    runs-on: ubuntu-latest
-    steps:
-      - run: node scripts/evidence/sql-comments-only.mjs
 `;
 
-/** The evidence: every changed line of a .sql file is a SQL comment. */
+/** The evidence: every changed line of a .sql file is a SQL comment; the proof carries the nonce. */
 const SCRIPT = `import { readFileSync } from 'node:fs';
 const diff = readFileSync(process.env.STUDIO_EVIDENCE_DIFF, 'utf8');
 let file = '';
@@ -73,21 +76,18 @@ for (const line of diff.split('\\n')) {
   const body = line.slice(1).trim();
   if (!file.endsWith('.sql') || (body !== '' && !body.startsWith('--'))) process.exit(1);
 }
-console.log('evidence: only SQL comments changed');
+console.log('evidence: only SQL comments changed ' + process.env.STUDIO_EVIDENCE_NONCE);
 `;
 
-const RULE_LOCAL = `  - id: sql-comments
+const RULE = `  - id: sql-comments
     guard: { workflow: .github/workflows/ci.yml, job: migration-guard }
     command: [node, scripts/evidence/sql-comments-only.mjs]
     proof: "evidence: only SQL comments changed"
     inputs: ["scripts/evidence/**"]
 `;
-const RULE_CI = `  - id: sql-comments-ci
-    guard: { workflow: .github/workflows/ci.yml, job: migration-guard }
-    run: ci
-    job: { workflow: .github/workflows/ci.yml, job: evidence-sql }
-    inputs: ["scripts/evidence/**"]
-`;
+/** A rule whose command is inline code: argv words with spaces name no file. */
+const inline = (id: string, code: string, extra = '') =>
+  `  - id: ${id}\n    guard: { workflow: .github/workflows/ci.yml, job: migration-guard }\n    command: [node, -e, ${JSON.stringify(code)}]\n    proof: ok\n    inputs: ["scripts/evidence/**"]\n${extra}`;
 
 const studioYaml = (rules: string) => `studio: 1
 primary_repo: org/app
@@ -153,7 +153,7 @@ interface Repo {
  * An owner checkout with main (studio.yaml with `rules`, CI, the evidence script, a migration) and
  * a pull request head on studio/APP-2 that applies `change` to the tree.
  */
-function makeRepo(o: { rules?: string; change: (dir: string) => void; board?: string }): Repo {
+function makeRepo(o: { rules?: string; change: (dir: string) => void }): Repo {
   const base = join(root, `r${n++}`);
   mkdirSync(base);
   const home = join(base, 'home');
@@ -167,12 +167,13 @@ function makeRepo(o: { rules?: string; change: (dir: string) => void; board?: st
     mkdirSync(dirname(join(project, path)), { recursive: true });
     writeFileSync(join(project, path), text);
   };
-  write('.studio/studio.yaml', studioYaml(o.rules ?? RULE_LOCAL));
-  write('.studio/board.yaml', o.board ?? BOARD);
+  write('.studio/studio.yaml', studioYaml(o.rules ?? RULE));
+  write('.studio/board.yaml', BOARD);
   write('.github/workflows/ci.yml', CI);
   write('scripts/evidence/sql-comments-only.mjs', SCRIPT);
   write('scripts/migration-guard.mjs', 'process.exit(1);\n');
   write('migrations/001.sql', 'CREATE TABLE a (id int);\n');
+  write('package.json', '{"name":"app"}\n');
   git(project, 'add', '-A');
   git(project, 'commit', '-q', '-m', 'base');
   git(project, 'push', '-q', 'origin', 'main');
@@ -251,12 +252,44 @@ function fakeGh(
   return { gh, calls };
 }
 
-/** The real runner, counted. */
-function countingRunner(inner: EvidenceRunner = realEvidence) {
-  const runs: string[][] = [];
+/**
+ * A runner without a sandbox, for the logic: the command runs as it would inside, with the same
+ * environment and run dir. The sandbox itself is tested on its own below.
+ */
+const plainRunner: EvidenceRunner = {
+  unavailable: async () => undefined,
+  extract: realEvidence.extract,
+  run: (argv, opts) =>
+    new Promise<EvidenceRun>((done) => {
+      const child = spawn(argv[0] as string, argv.slice(1), {
+        cwd: opts.cwd,
+        env: opts.env,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      let out = '';
+      child.stdout.on('data', (b: Buffer) => {
+        out += b.toString('utf8');
+      });
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        done({ kind: 'failed', why: `timed out after ${opts.timeoutMs / 1000} s` });
+      }, opts.timeoutMs);
+      child.on('error', (e) => done({ kind: 'failed', why: e.message }));
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        done({ kind: 'exited', code: code ?? 1, stdout: out, tooLarge: false });
+      });
+    }),
+};
+
+/** A runner, counted; the sandboxed one where this machine has a sandbox. */
+function countingRunner(inner: EvidenceRunner = plainRunner) {
+  const runs: { argv: string[]; hidden: readonly string[]; writable: string }[] = [];
   const runner: EvidenceRunner = {
+    unavailable: inner.unavailable,
+    extract: inner.extract,
     run: async (argv, opts) => {
-      runs.push([...argv]);
+      runs.push({ argv: [...argv], hidden: opts.hidden, writable: opts.writable });
       return inner.run(argv, opts);
     },
   };
@@ -271,43 +304,83 @@ const ctxFor = (r: Repo, gh: Gh, runner?: EvidenceRunner): EvidenceContext => ({
   stateRoot: r.state,
   now: () => new Date('2026-11-05T10:00:00Z'),
   ...(process.env.PATH === undefined ? {} : { path: process.env.PATH }),
+  hidden: [join(r.home, '.ssh')],
 });
 
 const ref = { repo: 'org/app', pr: 9, item: 'APP-2' };
 const guardFail: Check = { name: 'migration-guard', bucket: 'fail', workflow: 'CI' };
 const testPass: Check = { name: 'test', bucket: 'pass', workflow: 'CI' };
+const judge = (r: Repo, runner: EvidenceRunner | undefined = plainRunner, gh = fakeGh(r).gh) =>
+  judgeFailedChecks(ctxFor(r, gh, runner), ref, r.head, [guardFail]);
 
 describe('evidence rules in studio.yaml', () => {
   const load = (rules: string) => parseConfig(studioYaml(rules), 'studio.yaml');
-  it('a local rule needs a command and the proof line; a ci rule a job and inputs', () => {
-    expect(load(RULE_LOCAL).evidence?.[0]).toMatchObject({
+  const rule = (lines: string) =>
+    `  - id: x\n    guard: { workflow: .github/workflows/ci.yml, job: g }\n${lines}`;
+  it('a rule needs a command, the proof line and inputs that cover what the command names', () => {
+    expect(load(RULE).evidence?.[0]).toMatchObject({
       id: 'sql-comments',
       run: 'local',
       timeoutSeconds: 60,
       ownerOnly: false,
     });
-    expect(load(RULE_CI).evidence?.[0]?.run).toBe('ci');
+    expect(() => load(rule('    command: [node, a.mjs]\n    inputs: ["a.mjs"]\n'))).toThrow(
+      /proof/,
+    );
+    expect(() => load(rule('    command: [node, a.mjs]\n    proof: p\n'))).toThrow(/inputs/);
     expect(() =>
       load(
-        `  - id: x\n    guard: { workflow: .github/workflows/ci.yml, job: g }\n    command: [node, a.mjs]\n`,
+        rule(
+          '    command: [node, scripts/x.mjs, data/cfg.json]\n    proof: p\n    inputs: ["scripts/**"]\n',
+        ),
       ),
-    ).toThrow(/proof: run local needs the proof line/);
+    ).toThrow(/inputs: data\/cfg\.json in command is not covered by inputs/);
     expect(() =>
-      load(
-        `  - id: x\n    guard: { workflow: .github/workflows/ci.yml, job: g }\n    run: ci\n    job: { workflow: .github/workflows/ci.yml, job: e }\n`,
-      ),
-    ).toThrow(/inputs: run ci needs inputs/);
+      load(rule('    command: [node, /etc/x.mjs]\n    proof: p\n    inputs: ["scripts/**"]\n')),
+    ).toThrow(/an absolute path is no repository file/);
     expect(() =>
-      load(
-        `  - id: x\n    guard: { workflow: .github/workflows/ci.yml, job: g }\n    command: [--x]\n    proof: p\n`,
-      ),
-    ).toThrow(/must not start with -/);
-    expect(() => load(`${RULE_LOCAL}${RULE_LOCAL}`)).toThrow(/duplicate evidence id sql-comments/);
+      load(rule('    command: [node, ../x.mjs]\n    proof: p\n    inputs: ["**"]\n')),
+    ).toThrow(/no \.\. in a path/);
+    expect(() => load(rule('    command: [--x]\n    proof: p\n    inputs: ["a"]\n'))).toThrow(
+      /must not start with -/,
+    );
+    // an absolute program is fine: it is no repository file
+    expect(
+      load(rule('    command: [/usr/bin/env, node, s/a.mjs]\n    proof: p\n    inputs: ["s/**"]\n'))
+        .evidence,
+    ).toHaveLength(1);
+    expect(() => load(`${RULE}${RULE}`)).toThrow(/duplicate evidence id sql-comments/);
+  });
+  it('run: ci is refused in this version, with why', () => {
     expect(() =>
-      load(
-        `  - id: Bad\n    guard: { workflow: ci.yml, job: g }\n    command: [a]\n    proof: p\n`,
-      ),
-    ).toThrow(/evidence\.0\.id/);
+      load(rule('    run: ci\n    command: [node, s/a.mjs]\n    proof: p\n    inputs: ["s/**"]\n')),
+    ).toThrow(/run: ci is not supported: an evidence job runs the pull request head/);
+    expect(() =>
+      load(rule('    run: ci\n    job: { workflow: .github/workflows/ci.yml, job: e }\n')),
+    ).toThrow(/job: unknown key/);
+  });
+  it('the effective inputs add the script directory and the root manifests and lockfiles', () => {
+    const r = load(RULE).evidence?.[0];
+    if (r === undefined) throw new Error('no rule');
+    const inputs = effectiveInputs(r);
+    expect(inputs).toEqual(
+      expect.arrayContaining([
+        'scripts/evidence/**',
+        'package.json',
+        'pnpm-lock.yaml',
+        'package-lock.json',
+        'yarn.lock',
+        '.npmrc',
+        'Cargo.toml',
+        'Cargo.lock',
+        'pyproject.toml',
+        'requirements*.txt',
+      ]),
+    );
+    const atRoot = load(
+      rule('    command: [node, check.mjs]\n    proof: p\n    inputs: ["check.mjs"]\n'),
+    ).evidence?.[0];
+    expect(atRoot === undefined ? [] : effectiveInputs(atRoot)).toContain('check.mjs');
   });
 });
 
@@ -370,16 +443,11 @@ describe('judging a failed guard by its evidence', () => {
   it('only SQL comments changed: the exception applies and is logged with its evidence', async () => {
     const r = makeRepo({ change: commentOnly });
     const { runner, runs } = countingRunner();
-    const v = await judgeFailedChecks(
-      ctxFor(r, fakeGh(r).gh, runner),
-      ref,
-      r.head,
-      [guardFail],
-      [guardFail, testPass],
-    );
+    const v = await judge(r, runner);
     expect(v.kind).toBe('waived');
     if (v.kind !== 'waived') return;
     expect([...v.waived]).toEqual([checkKey(guardFail)]);
+    expect(v.base).toBe(r.base);
     const log = readExceptions(r.state);
     expect(log).toHaveLength(1);
     expect(log[0]).toMatchObject({
@@ -398,18 +466,13 @@ describe('judging a failed guard by its evidence', () => {
     });
     expect(log[0]?.diff).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(log[0]?.output).toMatch(/^sha256:[0-9a-f]{64}$/);
-    // the checkout of the base is gone, and so is its worktree entry
+    // the run had a dir of its own, hid the state root, and is gone; no worktree was made
+    expect(runs[0]?.hidden).toEqual([join(r.home, '.ssh'), r.state]);
+    expect(runs[0]?.writable.startsWith(join(r.state, 'evidence'))).toBe(true);
     expect(readdirSync(join(r.state, 'evidence'))).toEqual([]);
     expect(git(r.project, 'worktree', 'list').split('\n')).toHaveLength(1);
     // the same head again: the log answers, the command does not run twice
-    const again = await judgeFailedChecks(
-      ctxFor(r, fakeGh(r).gh, runner),
-      ref,
-      r.head,
-      [guardFail],
-      [],
-    );
-    expect(again.kind).toBe('waived');
+    expect((await judge(r, runner)).kind).toBe('waived');
     expect(runs).toHaveLength(1);
     expect(readExceptions(r.state)).toHaveLength(1);
   });
@@ -417,13 +480,7 @@ describe('judging a failed guard by its evidence', () => {
   it('a real change: not proven, logged once, the lead decides; no push to the owner', async () => {
     const r = makeRepo({ change: codeChange });
     const { runner, runs } = countingRunner();
-    const v = await judgeFailedChecks(
-      ctxFor(r, fakeGh(r).gh, runner),
-      ref,
-      r.head,
-      [guardFail],
-      [],
-    );
+    const v = await judge(r, runner);
     expect(v.kind).toBe('lead');
     if (v.kind !== 'lead') return;
     expect(v.owner).toBe(false);
@@ -442,26 +499,60 @@ describe('judging a failed guard by its evidence', () => {
       }),
     ).toEqual([]);
     expect(readExceptions(r.state)).toMatchObject([{ outcome: 'not_proven', why: 'exit code 1' }]);
-    const again = await judgeFailedChecks(
-      ctxFor(r, fakeGh(r).gh, runner),
-      ref,
-      r.head,
-      [guardFail],
-      [],
-    );
-    expect(again).toEqual(v);
+    expect(await judge(r, runner)).toEqual(v);
     expect(runs).toHaveLength(1);
   });
 
+  it('the proof needs the nonce of the run: the proof text from the diff proves nothing', async () => {
+    // the head adds the proof text to the migration, and the command prints the diff
+    const r = makeRepo({
+      rules: `  - id: echo\n    guard: { workflow: .github/workflows/ci.yml, job: migration-guard }\n    command: [cat, scripts/evidence/diff-link]\n    proof: ok\n    inputs: ["scripts/evidence/**"]\n`,
+      change: (dir) => writeFileSync(join(dir, 'migrations/001.sql'), 'ok\nok 0123\n'),
+    });
+    const { runner } = countingRunner({
+      ...plainRunner,
+      run: (_argv, opts) =>
+        plainRunner.run(['sh', '-c', 'cat "$STUDIO_EVIDENCE_DIFF" | sed "s/^+//"'], opts),
+    });
+    expect(await judge(r, runner)).toMatchObject({ kind: 'lead' });
+    expect(readExceptions(r.state)).toMatchObject([
+      { outcome: 'not_proven', why: 'its output lacks the proof line with the nonce' },
+    ]);
+  });
+
+  it('the changed paths come NUL-separated; a path with a control character proves nothing', async () => {
+    const r = makeRepo({
+      rules: inline(
+        'paths',
+        "const f=require('fs').readFileSync(process.env.STUDIO_EVIDENCE_FILES,'utf8');console.log(JSON.stringify(f.split('\\u0000')));console.log('ok '+process.env.STUDIO_EVIDENCE_NONCE)",
+      ),
+      change: (dir) => writeFileSync(join(dir, 'migrations/two words.sql'), '-- x\n'),
+    });
+    let out = '';
+    const { runner } = countingRunner({
+      ...plainRunner,
+      run: async (argv, opts) => {
+        const res = await plainRunner.run(argv, opts);
+        if (res.kind === 'exited') out = res.stdout;
+        return res;
+      },
+    });
+    expect((await judge(r, runner)).kind).toBe('waived');
+    expect(JSON.parse(out.split('\n')[0] as string)).toEqual(['migrations/two words.sql', '']);
+    const hostile = makeRepo({
+      change: (dir) => writeFileSync(join(dir, 'migrations/a\u0001b.sql'), '-- x\n'),
+    });
+    const counted = countingRunner();
+    expect(await judge(hostile, counted.runner)).toMatchObject({ kind: 'lead' });
+    expect(counted.runs).toEqual([]);
+    expect(readExceptions(hostile.state)).toMatchObject([
+      { outcome: 'not_proven', why: 'a changed path has a control character' },
+    ]);
+  });
+
   it('an owner_only rule sends the decision to the owner, and that one is pushed', async () => {
-    const r = makeRepo({ rules: `${RULE_LOCAL}    owner_only: true\n`, change: codeChange });
-    const v = await judgeFailedChecks(
-      ctxFor(r, fakeGh(r).gh, realEvidence),
-      ref,
-      r.head,
-      [guardFail],
-      [],
-    );
+    const r = makeRepo({ rules: `${RULE}    owner_only: true\n`, change: codeChange });
+    const v = await judge(r);
     expect(v).toMatchObject({ kind: 'lead', owner: true });
     if (v.kind !== 'lead') return;
     expect(v.reason).toMatch(
@@ -483,57 +574,50 @@ describe('judging a failed guard by its evidence', () => {
     const lint: Check = { name: 'test', bucket: 'fail', workflow: 'CI' };
     const { runner, runs } = countingRunner();
     expect(
-      await judgeFailedChecks(ctxFor(r, fakeGh(r).gh, runner), ref, r.head, [guardFail, lint], []),
+      await judgeFailedChecks(ctxFor(r, fakeGh(r).gh, runner), ref, r.head, [guardFail, lint]),
     ).toEqual({ kind: 'none' });
     expect(runs).toEqual([]);
   });
 
   it('rules come only from studio.yaml at the base: one the pull request adds counts for nothing', async () => {
-    // the head brings a rule that proves anything for the test job
     const r = makeRepo({
       rules: '',
       change: (dir) => {
         writeFileSync(
           join(dir, '.studio/studio.yaml'),
-          studioYaml(
-            `  - id: anything\n    guard: { workflow: .github/workflows/ci.yml, job: migration-guard }\n    command: [node, -e, "console.log('ok')"]\n    proof: ok\n`,
-          ),
+          studioYaml(inline('anything', "console.log('ok '+process.env.STUDIO_EVIDENCE_NONCE)")),
         );
         commentOnly(dir);
       },
     });
     const { runner, runs } = countingRunner();
-    expect(
-      await judgeFailedChecks(ctxFor(r, fakeGh(r).gh, runner), ref, r.head, [guardFail], []),
-    ).toEqual({ kind: 'none' });
+    expect(await judge(r, runner)).toEqual({ kind: 'none' });
     expect(runs).toEqual([]);
-    // and the pull request gets no approval for it
     expect(await evidenceChange(ctxFor(r, fakeGh(r).gh), r.base, r.head)).toEqual({
       problem: 'the pull request changes evidence: in studio.yaml',
     });
   });
 
-  it('the command and its script run from the base: a changed script is never run, and blocks', async () => {
+  it.each([
+    ['its script', 'scripts/evidence/sql-comments-only.mjs'],
+    ['a file beside its script', 'scripts/evidence/helper.mjs'],
+    ['a root manifest', 'package.json'],
+    ['a lockfile', 'pnpm-lock.yaml'],
+    ['.npmrc', '.npmrc'],
+  ])('a pull request that changes %s gets no exception and no approval', async (_what, path) => {
     const r = makeRepo({
       change: (dir) => {
-        writeFileSync(
-          join(dir, 'scripts/evidence/sql-comments-only.mjs'),
-          "console.log('evidence: only SQL comments changed');\n",
-        );
-        codeChange(dir);
+        mkdirSync(dirname(join(dir, path)), { recursive: true });
+        writeFileSync(join(dir, path), "console.log('changed')\n");
+        commentOnly(dir);
       },
     });
     const { runner, runs } = countingRunner();
-    const v = await judgeFailedChecks(
-      ctxFor(r, fakeGh(r).gh, runner),
-      ref,
-      r.head,
-      [guardFail],
-      [],
-    );
+    const v = await judge(r, runner);
     expect(v).toMatchObject({ kind: 'lead' });
-    if (v.kind === 'lead')
+    if (v.kind === 'lead') {
       expect(v.reason).toMatch(/the pull request changes an input of the evidence/);
+    }
     expect(runs).toEqual([]);
     expect(await evidenceChange(ctxFor(r, fakeGh(r).gh), r.base, r.head)).toEqual({
       problem: 'the pull request changes an input of evidence rule sql-comments',
@@ -550,80 +634,73 @@ describe('judging a failed guard by its evidence', () => {
         commentOnly(dir);
       },
     });
-    const v = await judgeFailedChecks(
-      ctxFor(r, fakeGh(r).gh, realEvidence),
-      ref,
-      r.head,
-      [guardFail],
-      [],
-    );
+    const v = await judge(r);
     expect(v).toMatchObject({ kind: 'lead' });
-    if (v.kind === 'lead')
+    if (v.kind === 'lead') {
       expect(v.reason).toMatch(/sql-comments: the guard job changed in this pull request/);
+    }
   });
 
   it('a later push is another head: the exception does not carry over', async () => {
     const r = makeRepo({ change: commentOnly });
     const { runner, runs } = countingRunner();
-    await judgeFailedChecks(ctxFor(r, fakeGh(r).gh, runner), ref, r.head, [guardFail], []);
+    await judge(r, runner);
     git(r.project, 'checkout', '-q', 'studio/APP-2');
     codeChange(r.project);
     git(r.project, 'commit', '-q', '-am', 'more');
     git(r.project, 'push', '-q', 'origin', 'studio/APP-2');
     const later = { ...r, head: git(r.project, 'rev-parse', 'HEAD') };
     git(r.project, 'checkout', '-q', 'main');
-    const v = await judgeFailedChecks(
-      ctxFor(later, fakeGh(later).gh, runner),
-      ref,
-      later.head,
-      [guardFail],
-      [],
-    );
-    expect(v.kind).toBe('lead');
+    expect((await judge(later, runner)).kind).toBe('lead');
     expect(runs).toHaveLength(2);
   });
 
-  it('a command that runs too long proves nothing', async () => {
-    const r = makeRepo({
-      rules: `  - id: slow\n    guard: { workflow: .github/workflows/ci.yml, job: migration-guard }\n    command: [node, -e, "setTimeout(() => {}, 10000)"]\n    proof: never\n    timeout_seconds: 1\n`,
-      change: commentOnly,
-    });
-    const v = await judgeFailedChecks(
-      ctxFor(r, fakeGh(r).gh, realEvidence),
-      ref,
-      r.head,
-      [guardFail],
-      [],
+  it('a timeout or a start failure is retried, not logged; the lead hears after the limit', async () => {
+    const r = makeRepo({ change: commentOnly });
+    const failing: EvidenceRunner = {
+      ...plainRunner,
+      run: async () => ({ kind: 'failed', why: 'timed out after 60 s' }),
+    };
+    for (let i = 1; i < MAX_RETRIES; i++) {
+      expect(await judge(r, failing)).toEqual({
+        kind: 'wait',
+        reason: 'evidence: timed out after 60 s; tried again',
+      });
+    }
+    const last = await judge(r, failing);
+    expect(last).toMatchObject({ kind: 'lead', owner: false });
+    if (last.kind === 'lead') expect(last.reason).toMatch(/after 5 tries: timed out after 60 s/);
+    expect(readExceptions(r.state)).toEqual([]);
+    expect(readdirSync(join(r.state, 'evidence'))).toEqual([]);
+  });
+
+  it('an unreadable pull request is retried too, then goes to the lead', async () => {
+    const r = makeRepo({ change: commentOnly });
+    const { gh } = fakeGh(r, (l) =>
+      l.startsWith('pr view 9 --repo org/app --json files,') ? { code: 1 } : undefined,
     );
-    expect(v).toMatchObject({ kind: 'lead' });
-    expect(readExceptions(r.state)).toMatchObject([
-      { outcome: 'not_proven', why: 'timed out after 1 s' },
-    ]);
-  }, 20_000);
+    for (let i = 1; i < MAX_RETRIES; i++)
+      expect((await judge(r, plainRunner, gh)).kind).toBe('wait');
+    expect(await judge(r, plainRunner, gh)).toMatchObject({ kind: 'lead' });
+  });
 
   it('exit 0 without the proof line proves nothing; the environment holds no owner variable', async () => {
     const r = makeRepo({
-      rules: `  - id: env\n    guard: { workflow: .github/workflows/ci.yml, job: migration-guard }\n    command: [node, -e, "console.log(Object.keys(process.env).sort().join(','))"]\n    proof: never\n`,
+      rules: inline('env', "console.log(Object.keys(process.env).sort().join(','))"),
       change: commentOnly,
     });
     let seen = '';
     const runner: EvidenceRunner = {
+      ...plainRunner,
       run: async (argv, opts) => {
-        const out = await realEvidence.run(argv, opts);
-        seen = out.stdout;
+        const out = await plainRunner.run(argv, opts);
+        if (out.kind === 'exited') seen = out.stdout;
         return out;
       },
     };
     process.env.STUDIO_TEST_SECRET = 'x';
     try {
-      const v = await judgeFailedChecks(
-        ctxFor(r, fakeGh(r).gh, runner),
-        ref,
-        r.head,
-        [guardFail],
-        [],
-      );
-      expect(v).toMatchObject({ kind: 'lead' });
+      expect(await judge(r, runner)).toMatchObject({ kind: 'lead' });
     } finally {
       delete process.env.STUDIO_TEST_SECRET;
     }
@@ -641,12 +718,12 @@ describe('judging a failed guard by its evidence', () => {
       'STUDIO_EVIDENCE_DIFF',
       'STUDIO_EVIDENCE_FILES',
       'STUDIO_EVIDENCE_HEAD',
+      'STUDIO_EVIDENCE_NONCE',
       'STUDIO_EVIDENCE_PR',
       'STUDIO_EVIDENCE_REPO',
       'STUDIO_EVIDENCE_RULE',
       'TMPDIR',
     ]);
-    expect(readExceptions(r.state)).toMatchObject([{ why: 'its output lacks the proof line' }]);
   });
 
   it('a pull request against another branch than the default gets no exception', async () => {
@@ -656,81 +733,23 @@ describe('judging a failed guard by its evidence', () => {
         ? { stdout: JSON.stringify({ defaultBranchRef: { name: 'trunk' } }) }
         : undefined,
     );
-    expect(
-      await judgeFailedChecks(ctxFor(r, gh, realEvidence), ref, r.head, [guardFail], []),
-    ).toEqual({
-      kind: 'none',
-    });
+    expect(await judge(r, plainRunner, gh)).toEqual({ kind: 'none' });
   });
 
-  it('without a command runner nothing is proven, and nothing is logged', async () => {
+  it('without a runner, or without a sandbox, nothing is proven and nothing is logged', async () => {
     const r = makeRepo({ change: commentOnly });
-    const v = await judgeFailedChecks(ctxFor(r, fakeGh(r).gh), ref, r.head, [guardFail], []);
-    expect(v).toMatchObject({ kind: 'lead' });
-    if (v.kind === 'lead') expect(v.reason).toMatch(/sql-comments: no command runner/);
+    const none = await judgeFailedChecks(ctxFor(r, fakeGh(r).gh), ref, r.head, [guardFail]);
+    expect(none).toMatchObject({ kind: 'lead' });
+    if (none.kind === 'lead') expect(none.reason).toMatch(/sql-comments: no command runner/);
+    const noSandbox = await judge(r, {
+      ...plainRunner,
+      unavailable: async () => 'no sandbox for evidence commands on plan9',
+    });
+    expect(noSandbox).toMatchObject({ kind: 'lead' });
+    if (noSandbox.kind === 'lead') {
+      expect(noSandbox.reason).toMatch(/no sandbox: no sandbox for evidence commands on plan9/);
+    }
     expect(readExceptions(r.state)).toEqual([]);
-  });
-
-  describe('run: ci', () => {
-    const evidenceJob = (bucket: string): Check => ({
-      name: 'evidence-sql',
-      bucket,
-      workflow: 'CI',
-    });
-    it('the evidence job passed on this head: the exception applies', async () => {
-      const r = makeRepo({ rules: RULE_CI, change: commentOnly });
-      const v = await judgeFailedChecks(
-        ctxFor(r, fakeGh(r).gh),
-        ref,
-        r.head,
-        [guardFail],
-        [guardFail, evidenceJob('pass')],
-      );
-      expect(v.kind).toBe('waived');
-      expect(readExceptions(r.state)).toMatchObject([
-        { outcome: 'applied', run: 'ci', by: 'evidence' },
-      ]);
-    });
-    it('still running: wait; failed: the lead decides', async () => {
-      const r = makeRepo({ rules: RULE_CI, change: commentOnly });
-      expect(
-        await judgeFailedChecks(
-          ctxFor(r, fakeGh(r).gh),
-          ref,
-          r.head,
-          [guardFail],
-          [evidenceJob('pending')],
-        ),
-      ).toEqual({ kind: 'wait', reason: 'waiting for the evidence job evidence-sql' });
-      const v = await judgeFailedChecks(
-        ctxFor(r, fakeGh(r).gh),
-        ref,
-        r.head,
-        [guardFail],
-        [evidenceJob('fail')],
-      );
-      expect(v).toMatchObject({ kind: 'lead' });
-      if (v.kind === 'lead')
-        expect(v.reason).toMatch(/sql-comments-ci: the evidence job did not pass/);
-    });
-    it('a pull request that changes .github/ gets no exception from a CI rule', async () => {
-      const r = makeRepo({
-        rules: RULE_CI,
-        change: (dir) => {
-          writeFileSync(join(dir, '.github/workflows/other.yml'), 'name: O\non: push\njobs: {}\n');
-          commentOnly(dir);
-        },
-      });
-      const v = await judgeFailedChecks(
-        ctxFor(r, fakeGh(r).gh),
-        ref,
-        r.head,
-        [guardFail],
-        [evidenceJob('pass')],
-      );
-      expect(v).toMatchObject({ kind: 'lead' });
-      if (v.kind === 'lead') expect(v.reason).toMatch(/the pull request changes \.github\//);
-    });
   });
 
   describe('a grant by the lead or the owner', () => {
@@ -751,21 +770,13 @@ describe('judging a failed guard by its evidence', () => {
         base: r.base,
         reason: 'the drop is planned, backup taken',
       });
-      const again = await grantException(
-        ctxFor(r, fakeGh(r).gh),
-        ref,
-        'sql-comments',
-        'lead',
-        'again',
-      );
+      const again = await grantException(ctxFor(r, fakeGh(r).gh), ref, 'sql-comments', 'lead', 'x');
       expect(again.existing).toBe(true);
       expect(readExceptions(r.state)).toHaveLength(1);
-      // the guard's failure now counts as waived for this head
-      const v = await judgeFailedChecks(ctxFor(r, fakeGh(r).gh), ref, r.head, [guardFail], []);
-      expect(v.kind).toBe('waived');
+      expect((await judge(r)).kind).toBe('waived');
     });
     it('an owner_only rule takes the owner only; an unknown rule nothing', async () => {
-      const r = makeRepo({ rules: `${RULE_LOCAL}    owner_only: true\n`, change: codeChange });
+      const r = makeRepo({ rules: `${RULE}    owner_only: true\n`, change: codeChange });
       await expect(
         grantException(ctxFor(r, fakeGh(r).gh), ref, 'sql-comments', 'lead', 'x'),
       ).rejects.toThrow(/owner_only: the owner grants it, in a terminal/);
@@ -775,6 +786,34 @@ describe('judging a failed guard by its evidence', () => {
       expect(
         (await grantException(ctxFor(r, fakeGh(r).gh), ref, 'sql-comments', 'owner', 'x')).entry.by,
       ).toBe('owner');
+      expect((await judge(r)).kind).toBe('waived');
+    });
+    it('a lead grant through a sibling rule cannot waive a guard with an owner_only rule', async () => {
+      const sibling = inline('plain', 'process.exit(1)');
+      const r = makeRepo({ rules: `${RULE}    owner_only: true\n${sibling}`, change: codeChange });
+      await expect(
+        grantException(ctxFor(r, fakeGh(r).gh), ref, 'plain', 'lead', 'x'),
+      ).rejects.toThrow(/evidence rule sql-comments on the same guard is owner_only/);
+      // a lead entry in the log (an older Studio, or one written by hand) does not hold either
+      recordException(r.state, {
+        v: 1,
+        at: '2026-11-05T09:00:00.000Z',
+        outcome: 'applied',
+        by: 'lead',
+        rule: 'plain',
+        guard: '.github/workflows/ci.yml / migration-guard',
+        repo: 'org/app',
+        pr: 9,
+        base: r.base,
+        head: r.head,
+        diff: 'sha256:0',
+        reason: 'x',
+      });
+      const v = await judge(r);
+      expect(v).toMatchObject({ kind: 'lead', owner: true });
+      if (v.kind === 'lead') {
+        expect(v.reason).toMatch(/^evidence \(owner\): /);
+      }
     });
   });
 
@@ -786,8 +825,62 @@ describe('judging a failed guard by its evidence', () => {
       `${JSON.stringify({ outcome: 'applied', rule: 'sql-comments', repo: 'org/app', pr: 9 })}\n{"torn`,
     );
     expect(readExceptions(r.state)).toEqual([]);
-    const v = await judgeFailedChecks(ctxFor(r, fakeGh(r).gh), ref, r.head, [guardFail], []);
-    expect(v.kind).toBe('lead');
+    expect((await judge(r)).kind).toBe('lead');
+  });
+});
+
+describe.runIf(sandboxed)('the sandbox of an evidence command', () => {
+  const run = async (code: string, extra: { hidden?: string[] } = {}) => {
+    const dir = mkdtempSync(join(root, 'run-'));
+    const out = await realEvidence.run(['node', '-e', code], {
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: dir },
+      timeoutMs: 10_000,
+      maxBytes: 1024 * 1024,
+      writable: dir,
+      hidden: extra.hidden ?? [],
+    });
+    return { dir, out };
+  };
+  it('writes only in its run dir, reads no hidden path, reaches no network', async () => {
+    const secret = mkdtempSync(join(root, 'secret-'));
+    writeFileSync(join(secret, 'token'), 'x');
+    const outside = join(root, `outside-${process.pid}`);
+    const { dir, out } = await run(
+      `const fs=require('fs');const t=(n,f)=>{try{f();console.log(n,'yes')}catch{console.log(n,'no')}};
+       t('write-run',()=>fs.writeFileSync(process.env.HOME+'/a','x'));
+       t('write-outside',()=>fs.writeFileSync(${JSON.stringify(outside)},'x'));
+       t('read-hidden',()=>fs.readFileSync(${JSON.stringify(join(secret, 'token'))}));
+       require('net').connect(443,'example.com').on('error',()=>console.log('net no')).on('connect',()=>{console.log('net yes');process.exit()});`,
+      { hidden: [secret] },
+    );
+    expect(out.kind).toBe('exited');
+    const text = out.kind === 'exited' ? out.stdout : '';
+    expect(text).toContain('write-run yes');
+    expect(text).toContain('write-outside no');
+    expect(text).toContain('read-hidden no');
+    expect(text).toContain('net no');
+    expect(existsSync(outside)).toBe(false);
+    expect(existsSync(join(dir, 'a'))).toBe(true);
+  });
+  it('a timeout kills the whole process group', async () => {
+    const dir = mkdtempSync(join(root, 'run-'));
+    const out = await realEvidence.run(['sh', '-c', 'sleep 30 & echo $! > "$HOME/pid"; sleep 30'], {
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: dir },
+      timeoutMs: 1000,
+      maxBytes: 1024,
+      writable: dir,
+      hidden: [],
+    });
+    expect(out).toEqual({ kind: 'failed', why: 'timed out after 1 s' });
+    const pid = Number(readFileSync(join(dir, 'pid'), 'utf8'));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(() => process.kill(pid, 0)).toThrow();
+  });
+  it('the real script proves comments only, sandboxed, in an extract of the base', async () => {
+    const r = makeRepo({ change: commentOnly });
+    expect((await judge(r, realEvidence)).kind).toBe('waived');
   });
 });
 
@@ -855,25 +948,48 @@ describe('the merge queue with evidence', () => {
       host: { loadAvg1: () => 0, cpuCount: () => 4 },
     };
   };
-  it('a waived guard merges; the merge gate sees the same waiver', async () => {
+  const waived = { kind: 'waived' as const, waived: new Set([checkKey(guardFail)]) };
+  it('a waived guard merges; it is judged again right before the merge, never from the cache', async () => {
     const g = gh();
     const allowed: (ReadonlySet<string> | undefined)[] = [];
+    let judged = 0;
     const out = await mergeOne(
       { repo: 'org/app', pr: 9, step: 'checks' },
       config,
       ports(g.gh),
       () => {},
       {
-        evidence: async () => ({ kind: 'waived', waived: new Set([checkKey(guardFail)]) }),
-        mergeAllowed: (_e, _h, waived) => {
-          allowed.push(waived);
+        evidence: async () => {
+          judged++;
+          return waived;
+        },
+        mergeAllowed: (_e, _h, w) => {
+          allowed.push(w);
           return undefined;
         },
       },
     );
     expect(out.result).toBe('merged');
     expect(g.merged).toHaveLength(1);
+    expect(judged).toBe(2);
     expect([...(allowed[0] ?? [])]).toEqual([checkKey(guardFail)]);
+  });
+  it('a base that moved before the merge: judged again, and no evidence there stops the merge', async () => {
+    const g = gh();
+    let judged = 0;
+    const out = await mergeOne(
+      { repo: 'org/app', pr: 9, step: 'checks' },
+      config,
+      ports(g.gh),
+      () => {},
+      {
+        // the second judgement reads another base, where no exception is logged
+        evidence: async () =>
+          ++judged === 1 ? waived : { kind: 'lead', reason: 'evidence: on the new base' },
+      },
+    );
+    expect(out).toEqual({ result: 'failed', reason: 'evidence: on the new base' });
+    expect(g.merged).toEqual([]);
   });
   it('evidence that proved nothing fails the entry with the lead line, without a rerun', async () => {
     const g = gh();
@@ -923,12 +1039,12 @@ describe('studio collect and studio exceptions', () => {
     );
     return r;
   };
-  const checksGh = (r: Repo) =>
+  const checksGh = (r: Repo, checks: Check[] = [guardFail, testPass]) =>
     fakeGh(r, (l) =>
       l.startsWith('pr checks 9') && l.includes('--required')
         ? { code: 1, stderr: 'no required checks reported' }
         : l.startsWith('pr checks 9')
-          ? { code: 1, stdout: JSON.stringify([guardFail, testPass]) }
+          ? { code: 1, stdout: JSON.stringify(checks) }
           : undefined,
     );
   const portsFor = (gh: Gh, runner?: EvidenceRunner): Ports => {
@@ -969,12 +1085,24 @@ describe('studio collect and studio exceptions', () => {
 
   it('an approval with a guard the evidence explains is stored, with the exception', async () => {
     const r = setup(commentOnly);
-    const res = await cli(r, portsFor(checksGh(r).gh, realEvidence), false, 'collect', 'APP-1');
+    const { runner, runs } = countingRunner();
+    const res = await cli(r, portsFor(checksGh(r).gh, runner), false, 'collect', 'APP-1');
     expect(res.err).toBe('');
     expect(res.code).toBe(0);
     expect(JSON.parse(res.out).exceptions).toEqual([
       { rule: 'sql-comments', by: 'evidence', head: r.head },
     ]);
+    // the run may not read credentials, the owner config or any state root
+    expect(runs[0]?.hidden).toEqual(
+      expect.arrayContaining([
+        join(r.home, '.ssh'),
+        join(r.home, '.config/gh'),
+        join(r.home, '.claude'),
+        join(r.home, '.config', 'studio'),
+        join(r.home, '.local', 'state', 'studio'),
+        r.state,
+      ]),
+    );
     expect(loadBoard(r.project).items.find((i) => i.id === 'APP-2')?.approvedHead).toBe(r.head);
     const list = await cli(r, portsFor(checksGh(r).gh), false, 'exceptions');
     expect(list.out).toMatch(/applied\s+evidence\s+sql-comments\s+org\/app#9\s+APP-2/);
@@ -986,7 +1114,7 @@ describe('studio collect and studio exceptions', () => {
 
   it('a guard the evidence does not explain: nothing moves, the lead decides and can grant', async () => {
     const r = setup(codeChange);
-    const ports = portsFor(checksGh(r).gh, realEvidence);
+    const ports = portsFor(checksGh(r).gh, plainRunner);
     const res = await cli(r, ports, false, 'collect', 'APP-1');
     expect(res.code).toBe(1);
     expect(res.err).toMatch(/no evidence proved a false alarm \(sql-comments: exit code 1\)/);
@@ -1034,21 +1162,49 @@ describe('studio collect and studio exceptions', () => {
     const r = setup((dir) => {
       writeFileSync(join(dir, 'scripts/evidence/sql-comments-only.mjs'), 'process.exit(0);\n');
     });
-    const gh = fakeGh(r, (l) =>
-      l.startsWith('pr checks 9') && l.includes('--required')
-        ? { code: 1, stderr: 'no required checks reported' }
-        : l.startsWith('pr checks 9')
-          ? { stdout: JSON.stringify([testPass]) }
-          : undefined,
-    ).gh;
-    const res = await cli(r, portsFor(gh), false, 'collect', 'APP-1');
+    const res = await cli(r, portsFor(checksGh(r, [testPass]).gh), false, 'collect', 'APP-1');
     expect(res.code).toBe(1);
     expect(res.err).toMatch(
       /changes an input of evidence rule sql-comments; evidence is the owner's/,
     );
-    const review = loadBoard(r.project).items.find((i) => i.id === 'APP-1');
-    expect(review?.status).toBe('blocked');
+    expect(loadBoard(r.project).items.find((i) => i.id === 'APP-1')?.status).toBe('blocked');
     expect(loadBoard(r.project).items.find((i) => i.id === 'APP-2')?.approvedHead).toBeUndefined();
-    expect(readFileSync(join(r.project, '.studio/studio.yaml'), 'utf8')).toMatch(/sql-comments/);
+  });
+
+  it('the check reads the rules at the base, also when the owner checkout has none', async () => {
+    const r = setup((dir) => {
+      writeFileSync(join(dir, 'scripts/evidence/sql-comments-only.mjs'), 'process.exit(0);\n');
+    });
+    // a stale or empty local checkout: no evidence rules in the working tree
+    writeFileSync(join(r.project, '.studio/studio.yaml'), studioYaml(''));
+    const res = await cli(r, portsFor(checksGh(r, [testPass]).gh), false, 'collect', 'APP-1');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/changes an input of evidence rule sql-comments/);
+    expect(loadBoard(r.project).items.find((i) => i.id === 'APP-2')?.approvedHead).toBeUndefined();
+  });
+
+  it('when the comparison cannot be made, the approval waits (fails closed)', async () => {
+    const r = setup(commentOnly);
+    const { gh } = fakeGh(r, (l) =>
+      l.startsWith('pr view 9 --repo org/app --json headRefOid,headRefName')
+        ? {
+            stdout: JSON.stringify({
+              headRefOid: r.head,
+              headRefName: 'studio/APP-2',
+              headRepository: { name: 'app' },
+              headRepositoryOwner: { login: 'org' },
+              isCrossRepository: false,
+            }),
+          }
+        : l.startsWith('pr checks 9') && l.includes('--required')
+          ? { code: 1, stderr: 'no required checks reported' }
+          : l.startsWith('pr checks 9')
+            ? { stdout: JSON.stringify([testPass]) }
+            : undefined,
+    );
+    const res = await cli(r, portsFor(gh), false, 'collect', 'APP-1');
+    expect(res.code).toBe(1);
+    expect(res.err).toMatch(/whether org\/app#9 changes the evidence rules cannot be read now/);
+    expect(loadBoard(r.project).items.find((i) => i.id === 'APP-2')?.approvedHead).toBeUndefined();
   });
 });

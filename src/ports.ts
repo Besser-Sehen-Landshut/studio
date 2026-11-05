@@ -2,8 +2,10 @@ import { spawn } from 'node:child_process';
 import { closeSync, openSync, readFileSync } from 'node:fs';
 import { availableParallelism, loadavg } from 'node:os';
 import { execa } from 'execa';
+import { realEvidence } from './evidence-sandbox.js';
 import { parseLinuxStartTime } from './paths.js';
 
+export { realEvidence } from './evidence-sandbox.js';
 export { parseLinuxStartTime } from './paths.js';
 
 export interface Gh {
@@ -100,16 +102,32 @@ export interface PluginCli {
   ): Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
+/** What an evidence command run gives back; `failed` is an infrastructure error, worth a retry. */
+export type EvidenceRun =
+  | { kind: 'exited'; code: number; stdout: string; tooLarge: boolean }
+  | { kind: 'failed'; why: string };
+
 /**
- * Runs an evidence command from studio.yaml on the default branch (src/evidence.ts): no shell,
- * exactly `env`, stdin closed, stderr dropped. A timeout or a stdout above `maxBytes` comes back
- * as `timedOut` or a non-zero code, never as an exception.
+ * Runs an evidence command from studio.yaml on the default branch (src/evidence.ts), sandboxed: no
+ * shell, no network, exactly `env`, stdin closed, stderr dropped, writes only below `writable`, no
+ * reads of `hidden`, in a process group of its own that a timeout kills. Never throws.
  */
 export interface EvidenceRunner {
+  /** Undefined when commands can run sandboxed here, else why not (the platform has no sandbox). */
+  unavailable(): Promise<string | undefined>;
+  /** Unpacks a tar archive into `dest`. Throws on failure. */
+  extract(tarFile: string, dest: string): Promise<void>;
   run(
     argv: readonly string[],
-    opts: { cwd: string; env: Record<string, string>; timeoutMs: number; maxBytes: number },
-  ): Promise<{ code: number; stdout: string; timedOut: boolean }>;
+    opts: {
+      cwd: string;
+      env: Record<string, string>;
+      timeoutMs: number;
+      maxBytes: number;
+      writable: string;
+      hidden: readonly string[];
+    },
+  ): Promise<EvidenceRun>;
 }
 
 export interface Ports {
@@ -128,45 +146,6 @@ export interface Ports {
 }
 
 const HTTP_TIMEOUT_MS = 15_000;
-
-export const realEvidence: EvidenceRunner = {
-  async run(argv, opts) {
-    const [file, ...args] = argv;
-    if (file === undefined) return { code: 1, stdout: '', timedOut: false };
-    const child = execa(file, args, {
-      cwd: opts.cwd,
-      env: opts.env,
-      extendEnv: false,
-      shell: false,
-      reject: false,
-      stdin: 'ignore',
-      stderr: 'ignore',
-      timeout: opts.timeoutMs,
-      maxBuffer: opts.maxBytes,
-      forceKillAfterDelay: 1000,
-      stripFinalNewline: false,
-    });
-    // A grandchild holding stdout open must not outlive the timeout: that counts as a timeout.
-    let timer: NodeJS.Timeout | undefined;
-    const late = new Promise<{ code: number; stdout: string; timedOut: boolean }>((done) => {
-      timer = setTimeout(
-        () => done({ code: 1, stdout: '', timedOut: true }),
-        opts.timeoutMs + 2000,
-      );
-      timer.unref();
-    });
-    const run = child.then((r) => ({
-      code: r.timedOut ? 124 : r.failed ? r.exitCode || 1 : 0,
-      stdout: r.failed ? '' : String(r.stdout ?? ''),
-      timedOut: r.timedOut === true,
-    }));
-    try {
-      return await Promise.race([run, late]);
-    } finally {
-      clearTimeout(timer);
-    }
-  },
-};
 
 /**
  * POSTs to an https URL. Only the status comes back, never the body (it may echo a key); no

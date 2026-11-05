@@ -1,12 +1,18 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { findJob, jobInstances, readWorkflowsAt, type Workflows } from './ci-jobs.js';
-import { EVIDENCE_ID_RE, type EvidenceRule, parseConfig } from './config.js';
-import { matchGlob } from './glob.js';
-import { acquireStateLock, ensureStateDir, removeStateEntry, type StateLock } from './paths.js';
+import { commandPaths, EVIDENCE_ID_RE, type EvidenceRule, parseConfig } from './config.js';
+import { hostilePath, matchGlob } from './glob.js';
+import {
+  acquireStateLock,
+  ensureStateDir,
+  removeStateEntry,
+  type StateLock,
+  writeStateFile,
+} from './paths.js';
 import type { EvidenceRunner, Gh, Git } from './ports.js';
 import { appendStateLine, type Check, checkKey } from './queue.js';
 import { readDefaultBranch, readPrFacts } from './review.js';
@@ -18,32 +24,77 @@ import { readDefaultBranch, readPrFacts } from './review.js';
  * waived for that head, and the exception is logged with its evidence. Without evidence the lead
  * decides; a rule marked `owner_only` sends that decision to the owner.
  *
- * What keeps a pull request from approving itself: the rules, and for `run: local` the command
- * and its scripts, come only from the commit the pull request is based on, on the default branch,
- * never from the working tree or the pull request; the command runs outside every crew sandbox,
- * in a checkout of that base, and reads the diff as a file. The log lives in the state root,
- * which crews cannot write, and only Studio and `studio exceptions grant` (refused to crews)
- * append to it. A pull request that changes the rules or a file they name as `inputs` gets no
- * exception from those rules and no approval from Studio.
+ * What keeps a pull request from approving itself: the rules, the command and every file it
+ * depends on come only from the commit the pull request is based on, on the default branch, never
+ * from the working tree or the pull request. The command runs in an extract of that base (`git
+ * archive`, no link to the owner's repository) inside a sandbox with no network, writes only in
+ * its run dir and cannot read credentials or Studio's state (src/evidence-sandbox.ts). It reads
+ * the pull request only as data, the diff and the changed paths as files, and proves a false alarm
+ * only with a line that holds a nonce drawn for that run. The log lives in the state root, which
+ * crews cannot write; only Studio and `studio exceptions grant` (refused to crews) append to it. A
+ * pull request that changes the rules or any input of them (named in `inputs`, the command's
+ * script directory, the root manifests and lockfiles) gets no exception and no approval.
  */
 
 export const EXCEPTIONS_FILE = 'exceptions.jsonl';
 export const EXCEPTIONS_LOCK = 'exceptions.lock';
 export const EXCEPTIONS_LOCK_STALE_MS = 30_000;
-/** Where a local evidence run gets its checkout of the base and the diff files. */
+/** Where a local evidence run gets its extract of the base and the diff files. */
 export const EVIDENCE_DIR = 'evidence';
+/** Retryable failures per pull request head, so a lasting one reaches the lead. */
+export const RETRIES_FILE = 'evidence-retries.json';
+/** How many retryable failures (unreadable pull request, timeout, start failure) before the lead. */
+export const MAX_RETRIES = 5;
 /** A lead line about evidence: the lead decides, it is not pushed to the owner's phone. */
 export const LEAD_PREFIX = 'evidence: ';
 /** A lead line about evidence of an `owner_only` rule: the owner decides. */
 export const OWNER_PREFIX = 'evidence (owner): ';
 
+/**
+ * Root files every evidence command may depend on without naming them: the manifests and
+ * lockfiles that decide which tools and packages run.
+ */
+export const IMPLICIT_INPUTS: readonly string[] = [
+  'package.json',
+  'pnpm-lock.yaml',
+  'pnpm-workspace.yaml',
+  'package-lock.json',
+  'npm-shrinkwrap.json',
+  'yarn.lock',
+  '.npmrc',
+  '.yarnrc',
+  '.yarnrc.yml',
+  'Cargo.toml',
+  'Cargo.lock',
+  'pyproject.toml',
+  'poetry.lock',
+  'uv.lock',
+  'Pipfile',
+  'Pipfile.lock',
+  'requirements*.txt',
+  'setup.py',
+  'setup.cfg',
+];
+
 const STUDIO_CONFIG = '.studio/studio.yaml';
 const SHA = /^[0-9a-f]{40,64}$/i;
 const GIT_FETCH_MS = 120_000;
 const GIT_LOCAL_MS = 60_000;
-const GIT_CHECKOUT_MS = 300_000;
+const GIT_ARCHIVE_MS = 300_000;
 const MAX_STDOUT = 1024 * 1024;
 const LOCK_WAIT_MS = 5000;
+const RETRIES_KEEP_MS = 24 * 60 * 60_000;
+/** Pinned diff options: no colour, no external diff or text conversion, submodules shown. */
+const DIFF = [
+  '-c',
+  'core.quotePath=false',
+  'diff',
+  '--no-color',
+  '--no-ext-diff',
+  '--no-textconv',
+  '--ignore-submodules=none',
+  '--no-renames',
+];
 
 const entrySchema = z.object({
   v: z.literal(1),
@@ -62,9 +113,9 @@ const entrySchema = z.object({
   head: z.string().regex(SHA),
   /** sha256 of `git diff base...head`: what the evidence judged. */
   diff: z.string(),
-  run: z.enum(['local', 'ci']).optional(),
+  run: z.literal('local').optional(),
   command: z.array(z.string()).optional(),
-  /** sha256 of the command's stdout, or of the evidence job's checks. */
+  /** sha256 of the command's stdout. */
   output: z.string().optional(),
   proof: z.string().optional(),
   /** Why the evidence proved nothing: Studio's own text. */
@@ -87,6 +138,8 @@ export interface EvidenceContext {
   now: () => Date;
   /** PATH for the evidence command; the rest of the owner's environment never reaches it. */
   path?: string;
+  /** What the command may not read: credential locations, the Claude config, Studio's state. */
+  hidden?: readonly string[];
 }
 
 const digest = (text: string): string =>
@@ -102,6 +155,25 @@ const sameKey = (
   e.pr === k.pr &&
   e.base.toLowerCase() === k.base.toLowerCase() &&
   e.head.toLowerCase() === k.head.toLowerCase();
+
+/**
+ * Every file a rule depends on, as globs: its `inputs`, the directory of each repository file its
+ * command names (the script and what lies beside it; a file at the root alone), and the root
+ * manifests and lockfiles.
+ */
+export function effectiveInputs(r: EvidenceRule): string[] {
+  const dirs = commandPaths(r.command)
+    .filter((w) => !w.startsWith('/'))
+    .map((w) => {
+      const p = w.replace(/^\.\//, '');
+      const d = posix.dirname(p);
+      return d === '.' ? p : `${d}/**`;
+    });
+  return [...new Set([...r.inputs, ...dirs, ...IMPLICIT_INPUTS])];
+}
+
+const touchesInputs = (files: readonly string[], r: EvidenceRule): boolean =>
+  files.some((f) => effectiveInputs(r).some((glob) => matchGlob(glob, f)));
 
 /** Every valid line of the log; a line that does not parse never counts as an exception. */
 export function readExceptions(stateRoot: string): ExceptionEntry[] {
@@ -129,8 +201,9 @@ function sleepSync(ms: number): void {
 
 /**
  * Appends `entry` under the log's lock, unless the log already holds the answer for its key (rule,
- * pull request, base and head): an applied exception, or for a `not_proven` entry any entry. So a
- * second process, or a run after a crash, never logs the same result twice. Returns what counts.
+ * pull request, base and head): an applied exception (a lead's grant only for another lead's), or
+ * for a `not_proven` entry an earlier `not_proven` one. So a second process, or a run after a
+ * crash, never logs the same result twice. Returns what counts.
  */
 export function recordException(stateRoot: string, entry: ExceptionEntry): ExceptionEntry {
   const until = Date.now() + LOCK_WAIT_MS;
@@ -146,14 +219,50 @@ export function recordException(stateRoot: string, entry: ExceptionEntry): Excep
   }
   try {
     const known = readExceptions(stateRoot).filter((e) => sameKey(e, entry));
-    const applied = known.find((e) => e.outcome === 'applied');
+    // A lead's grant answers only another lead's: the evidence's own result and an owner's grant
+    // are logged beside it, so a guard that needs them can find them.
+    const answers = (e: ExceptionEntry) => e.by !== 'lead' || entry.by === 'lead';
+    const applied = known.find((e) => e.outcome === 'applied' && answers(e));
     if (applied !== undefined) return applied;
-    if (entry.outcome === 'not_proven' && known.length > 0) return known[0] as ExceptionEntry;
+    const tried = known.find((e) => e.outcome === 'not_proven');
+    if (entry.outcome === 'not_proven' && tried !== undefined) return tried;
     appendStateLine(stateRoot, EXCEPTIONS_FILE, JSON.stringify(entry));
     return entry;
   } finally {
     lock.release();
   }
+}
+
+/**
+ * Counts a retryable failure for one pull request head; true while it may still be retried.
+ * Best effort: a file that cannot be read starts the count again.
+ */
+function retryAllowed(stateRoot: string, key: string, now: Date): boolean {
+  const file = join(stateRoot, RETRIES_FILE);
+  let counts: Record<string, { n: number; at: string }> = {};
+  try {
+    if (existsSync(file) && !lstatSync(file).isSymbolicLink()) {
+      const raw = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+      if (raw !== null && typeof raw === 'object') {
+        counts = raw as Record<string, { n: number; at: string }>;
+      }
+    }
+  } catch {
+    counts = {};
+  }
+  const kept = Object.fromEntries(
+    Object.entries(counts).filter(
+      ([, v]) => typeof v?.n === 'number' && now.getTime() - Date.parse(v.at) < RETRIES_KEEP_MS,
+    ),
+  );
+  const n = (kept[key]?.n ?? 0) + 1;
+  kept[key] = { n, at: now.toISOString() };
+  try {
+    writeStateFile(stateRoot, file, `${JSON.stringify(kept)}\n`);
+  } catch {
+    // a count that cannot be stored holds nothing back
+  }
+  return n < MAX_RETRIES;
 }
 
 /** What Studio read about a pull request to judge evidence on it. */
@@ -233,7 +342,7 @@ async function changedFiles(
   head: string,
 ): Promise<string[] | undefined> {
   try {
-    const out = await g(ctx, ['diff', '--name-only', '--no-renames', '-z', `${base}...${head}`]);
+    const out = await g(ctx, [...DIFF, '--name-only', '-z', `${base}...${head}`]);
     return out.split('\0').filter((p) => p !== '');
   } catch {
     return undefined;
@@ -260,14 +369,7 @@ async function prepare(ctx: EvidenceContext, ref: PrRef, head: string): Promise<
   const files = await changedFiles(ctx, base, head);
   let diff: string | undefined;
   try {
-    diff = await g(ctx, [
-      'diff',
-      '--no-ext-diff',
-      '--no-textconv',
-      '--no-renames',
-      '--binary',
-      `${base}...${head}`,
-    ]);
+    diff = await g(ctx, [...DIFF, '--binary', `${base}...${head}`]);
   } catch {
     diff = undefined;
   }
@@ -306,20 +408,17 @@ function guardChanged(p: Prepared, r: EvidenceRule): string | undefined {
   return undefined;
 }
 
-const touchesInputs = (p: Prepared, r: EvidenceRule): boolean =>
-  p.files.some((f) => r.inputs.some((glob) => matchGlob(glob, f)));
-
-const isGithubPath = (f: string): boolean => {
-  const lower = f.toLowerCase();
-  return lower === '.github' || lower.startsWith('.github/');
-};
-
 type Attempt =
   | { kind: 'proven'; entry: ExceptionEntry }
-  | { kind: 'wait'; why: string }
+  /** An infrastructure error: not logged, tried again up to MAX_RETRIES times. */
+  | { kind: 'retry'; why: string }
   | { kind: 'no'; why: string };
 
-/** Runs the command of a local rule in a checkout of the base, with the diff as a file. */
+/**
+ * Runs the command of a rule, sandboxed, in an extract of the base with the diff as files. Only
+ * what the command itself answered is logged; a timeout, a start failure or a broken extract is
+ * an infrastructure error and is tried again.
+ */
 async function runLocal(
   ctx: EvidenceContext,
   p: Prepared,
@@ -332,38 +431,54 @@ async function runLocal(
   );
   // The same command on the same diff gives the same answer: it never runs twice.
   if (known !== undefined) return { kind: 'no', why: known.why ?? 'it proved nothing' };
+  const notProven = (why: string): Attempt => {
+    const entry = recordException(ctx.stateRoot, {
+      ...base,
+      outcome: 'not_proven',
+      by: 'evidence',
+      run: 'local',
+      command: r.command,
+      proof: r.proof,
+      why,
+    });
+    return entry.outcome === 'applied'
+      ? { kind: 'proven', entry }
+      : { kind: 'no', why: entry.why ?? why };
+  };
+  // A path no reviewer can read at a glance proves nothing, whatever a script makes of it.
+  if (p.files.some(hostilePath)) return notProven('a changed path has a control character');
   if (ctx.runner === undefined) return { kind: 'no', why: 'no command runner' };
-  const command = r.command ?? [];
-  const name = createHash('sha256')
+  const unavailable = await ctx.runner.unavailable();
+  if (unavailable !== undefined) return { kind: 'no', why: `no sandbox: ${unavailable}` };
+  const key = createHash('sha256')
     .update(`${r.id}\0${ref.repo}#${ref.pr}\0${p.base}\0${p.head}`)
     .digest('hex')
     .slice(0, 16);
-  const dir = join(ctx.stateRoot, EVIDENCE_DIR, name);
+  // A dir of its own for each run: two processes never share one.
+  const dir = join(ctx.stateRoot, EVIDENCE_DIR, `${key}-${randomBytes(6).toString('hex')}`);
   const tree = join(dir, 'tree');
   const home = join(dir, 'home');
-  // What a crash left of an earlier run of the same key goes first.
-  removeStateEntry(ctx.stateRoot, dir);
-  await g(ctx, ['worktree', 'prune']).catch(() => '');
-  ensureStateDir(ctx.stateRoot, home);
-  let added = false;
   try {
+    ensureStateDir(ctx.stateRoot, tree);
+    ensureStateDir(ctx.stateRoot, home);
+    const tar = join(dir, 'base.tar');
     try {
-      // Hooks off: nothing of the repository runs but the command itself.
-      await g(
-        ctx,
-        ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--detach', '--force', tree, p.base],
-        GIT_CHECKOUT_MS,
-      );
-      added = true;
+      // An extract, not a worktree: nothing links the run to the owner's repository.
+      await g(ctx, ['archive', '--format=tar', '-o', tar, p.base], GIT_ARCHIVE_MS);
+      await ctx.runner.extract(tar, tree);
     } catch {
-      return { kind: 'no', why: 'the base cannot be checked out' };
+      return { kind: 'retry', why: 'the base cannot be extracted' };
     }
+    removeStateEntry(ctx.stateRoot, tar);
     const diffFile = join(dir, 'diff.patch');
     const filesFile = join(dir, 'files.txt');
     writeFileSync(diffFile, p.diff === '' || p.diff.endsWith('\n') ? p.diff : `${p.diff}\n`, {
       mode: 0o600,
     });
-    writeFileSync(filesFile, p.files.map((f) => `${f}\n`).join(''), { mode: 0o600 });
+    // NUL-separated: a path may hold anything but NUL.
+    writeFileSync(filesFile, p.files.map((f) => `${f}\0`).join(''), { mode: 0o600 });
+    // Drawn for this run only: a line in the diff cannot hold it, so cannot fake the proof.
+    const nonce = randomBytes(16).toString('hex');
     const env: Record<string, string> = {
       PATH: ctx.path ?? '/usr/local/bin:/usr/bin:/bin',
       HOME: home,
@@ -377,89 +492,50 @@ async function runLocal(
       STUDIO_EVIDENCE_HEAD: p.head,
       STUDIO_EVIDENCE_DIFF: diffFile,
       STUDIO_EVIDENCE_FILES: filesFile,
+      STUDIO_EVIDENCE_NONCE: nonce,
     };
-    const result = await ctx.runner.run(command, {
+    const result = await ctx.runner.run(r.command, {
       cwd: tree,
       env,
       timeoutMs: r.timeoutSeconds * 1000,
       maxBytes: MAX_STDOUT,
+      writable: dir,
+      hidden: [...(ctx.hidden ?? []), ctx.stateRoot],
     });
-    const proven =
-      !result.timedOut &&
-      result.code === 0 &&
-      result.stdout.split(/\r?\n/).some((line) => line === r.proof);
-    const why = proven
-      ? undefined
-      : result.timedOut
-        ? `timed out after ${r.timeoutSeconds} s`
-        : result.code !== 0
-          ? `exit code ${result.code}`
-          : 'its output lacks the proof line';
+    if (result.kind === 'failed') return { kind: 'retry', why: result.why };
+    const proofLine = `${r.proof} ${nonce}`;
+    const why = result.tooLarge
+      ? 'its output is over 1 MiB'
+      : result.code !== 0
+        ? `exit code ${result.code}`
+        : result.stdout.split(/\r?\n/).some((line) => line === proofLine)
+          ? undefined
+          : 'its output lacks the proof line with the nonce';
+    if (why !== undefined) return notProven(why);
     const entry = recordException(ctx.stateRoot, {
       ...base,
-      outcome: proven ? 'applied' : 'not_proven',
+      outcome: 'applied',
       by: 'evidence',
       run: 'local',
-      command,
+      command: r.command,
       output: digest(result.stdout),
-      ...(r.proof === undefined ? {} : { proof: r.proof }),
-      ...(why === undefined ? {} : { why }),
+      proof: r.proof,
     });
-    return entry.outcome === 'applied'
-      ? { kind: 'proven', entry }
-      : { kind: 'no', why: entry.why ?? 'it proved nothing' };
+    return { kind: 'proven', entry };
+  } catch (e) {
+    return { kind: 'retry', why: `the run dir failed: ${(e as Error).message.slice(0, 200)}` };
   } finally {
-    if (added) await g(ctx, ['worktree', 'remove', '--force', tree]).catch(() => '');
-    removeStateEntry(ctx.stateRoot, dir);
-  }
-}
-
-/** A CI rule: its evidence job on this head, unchanged from the base, must have passed. */
-function judgeCi(
-  ctx: EvidenceContext,
-  p: Prepared,
-  r: EvidenceRule,
-  checks: readonly Check[],
-  base: Omit<ExceptionEntry, 'outcome' | 'by'>,
-): Attempt {
-  const job = r.job as NonNullable<EvidenceRule['job']>;
-  // The job runs the pull request head: no part of CI may differ from the base.
-  if (p.files.some(isGithubPath)) return { kind: 'no', why: 'the pull request changes .github/' };
-  const atBase = findJob(p.baseWorkflows, job.workflow, job.job, 'the base');
-  const atHead = findJob(p.headWorkflows, job.workflow, job.job, 'the head');
-  if (typeof atBase === 'string') return { kind: 'no', why: `the evidence job: ${atBase}` };
-  if (typeof atHead === 'string' || JSON.stringify(atBase) !== JSON.stringify(atHead)) {
-    return { kind: 'no', why: 'the evidence job changed in this pull request' };
-  }
-  const mine: Check[] = [];
-  for (const t of atBase.targets) {
-    const found = jobInstances(checks, t.workflow, t.job);
-    if (found === 'ambiguous') {
-      return { kind: 'no', why: 'a check has a name like the evidence job that does not parse' };
+    try {
+      removeStateEntry(ctx.stateRoot, dir);
+    } catch {
+      // recover removes what is left after an hour
     }
-    mine.push(...found);
   }
-  if (mine.length === 0) return { kind: 'no', why: 'the evidence job reported no check' };
-  if (mine.some((c) => c.bucket === 'pending')) {
-    return { kind: 'wait', why: `waiting for the evidence job ${job.job}` };
-  }
-  if (!mine.every((c) => c.bucket === 'pass')) {
-    return { kind: 'no', why: 'the evidence job did not pass' };
-  }
-  const seen = mine.map((c) => `${c.workflow ?? ''} / ${c.name}: ${c.bucket}`).sort();
-  const entry = recordException(ctx.stateRoot, {
-    ...base,
-    outcome: 'applied',
-    by: 'evidence',
-    run: 'ci',
-    output: digest(seen.join('\n')),
-  });
-  return { kind: 'proven', entry };
 }
 
 export type EvidenceVerdict =
   | { kind: 'none' }
-  | { kind: 'waived'; waived: ReadonlySet<string>; applied: ExceptionEntry[] }
+  | { kind: 'waived'; waived: ReadonlySet<string>; applied: ExceptionEntry[]; base: string }
   | { kind: 'wait'; reason: string }
   | { kind: 'lead'; reason: string; owner: boolean };
 
@@ -481,27 +557,30 @@ function leadLine(ref: PrRef, head: string, rules: EvidenceRule[], whys: string[
  * Whether exceptions by evidence cover every plain failed check of `head`. `none` as soon as one
  * failed check belongs to no rule's guard, so a failure nothing explains fails as before. Each
  * guard is covered by a logged exception for this exact base and head, or by one of its rules
- * proving it now (logged before it counts). The first guard no rule covers goes to the lead.
+ * proving it now (logged before it counts). A guard with an `owner_only` rule takes the evidence
+ * or the owner's grant only. The first guard no rule covers goes to the lead. A failure to read
+ * or to run is retried (`wait`) up to MAX_RETRIES times per head, then goes to the lead.
  */
 export async function judgeFailedChecks(
   ctx: EvidenceContext,
   ref: PrRef,
   head: string,
   failed: readonly Check[],
-  checks: readonly Check[],
 ): Promise<EvidenceVerdict> {
   if (failed.length === 0) return { kind: 'none' };
+  const retryKey = `${ref.repo}#${ref.pr}@${head.toLowerCase()}`;
+  const retry = (why: string): EvidenceVerdict =>
+    retryAllowed(ctx.stateRoot, retryKey, ctx.now())
+      ? { kind: 'wait', reason: `evidence: ${why}; tried again` }
+      : {
+          kind: 'lead',
+          reason: `${LEAD_PREFIX}cannot judge the failed checks of ${ref.repo}#${ref.pr} after ${MAX_RETRIES} tries: ${why}`,
+          owner: false,
+        };
   const prep = await prepare(ctx, ref, head);
   if (prep.kind === 'none') return { kind: 'none' };
   if (prep.kind === 'moved') return { kind: 'wait', reason: 'the head moved; judged again' };
-  if (prep.kind === 'unreadable') {
-    // Whether a rule applies is unknown: the failure stands, and the lead hears why.
-    return {
-      kind: 'lead',
-      reason: `${LEAD_PREFIX}cannot judge the failed checks of ${ref.repo}#${ref.pr}: ${prep.why}`,
-      owner: false,
-    };
-  }
+  if (prep.kind === 'unreadable') return retry(prep.why);
   const p = prep.p;
   const groups = new Map<string, { rules: EvidenceRule[]; checks: Check[] }>();
   for (const c of failed) {
@@ -518,7 +597,7 @@ export async function judgeFailedChecks(
   const log = readExceptions(ctx.stateRoot);
   const waived = new Set<string>();
   const applied: ExceptionEntry[] = [];
-  let wait: string | undefined;
+  let retryWhy: string | undefined;
   for (const group of groups.values()) {
     const keyOf = (r: EvidenceRule) => ({
       rule: r.id,
@@ -527,19 +606,22 @@ export async function judgeFailedChecks(
       base: p.base,
       head: p.head,
     });
-    const logged = log.find(
-      (e) => e.outcome === 'applied' && group.rules.some((r) => sameKey(e, keyOf(r))),
+    // A guard with an owner_only rule is waived only by evidence or by the owner, never by the
+    // lead's grant through any of its rules.
+    const ownerGuard = group.rules.some((r) => r.ownerOnly);
+    const holds = (e: ExceptionEntry) => !ownerGuard || e.by !== 'lead';
+    let proof: ExceptionEntry | undefined = log.find(
+      (e) => e.outcome === 'applied' && holds(e) && group.rules.some((r) => sameKey(e, keyOf(r))),
     );
-    let proof: ExceptionEntry | undefined = logged;
     const whys: string[] = [];
-    let waiting: string | undefined;
+    let again: string | undefined;
     for (const r of proof === undefined ? group.rules : []) {
       const changed = guardChanged(p, r);
       if (changed !== undefined) {
         whys.push(changed);
         continue;
       }
-      if (touchesInputs(p, r)) {
+      if (touchesInputs(p.files, r)) {
         whys.push('the pull request changes an input of the evidence');
         continue;
       }
@@ -551,39 +633,42 @@ export async function judgeFailedChecks(
         guard: guardName(r),
         diff: digest(p.diff),
       };
-      const attempt =
-        r.run === 'ci' ? judgeCi(ctx, p, r, checks, base) : await runLocal(ctx, p, r, ref, base);
-      if (attempt.kind === 'proven') {
+      const attempt = await runLocal(ctx, p, r, ref, base);
+      if (attempt.kind === 'proven' && holds(attempt.entry)) {
         proof = attempt.entry;
         break;
       }
-      if (attempt.kind === 'wait') waiting ??= attempt.why;
-      else whys.push(attempt.why);
+      if (attempt.kind === 'proven') {
+        whys.push('a lead grant does not hold for a guard with an owner_only rule');
+      } else if (attempt.kind === 'retry') {
+        again ??= attempt.why;
+      } else whys.push(attempt.why);
     }
     if (proof !== undefined) {
       applied.push(proof);
       for (const c of group.checks) waived.add(checkKey(c));
       continue;
     }
-    if (waiting !== undefined) {
-      wait ??= waiting;
+    if (again !== undefined) {
+      retryWhy ??= again;
       continue;
     }
     return {
       kind: 'lead',
       reason: leadLine(ref, p.head, group.rules, whys),
-      owner: group.rules.some((r) => r.ownerOnly),
+      owner: ownerGuard,
     };
   }
-  if (wait !== undefined) return { kind: 'wait', reason: wait };
-  return { kind: 'waived', waived, applied };
+  if (retryWhy !== undefined) return retry(retryWhy);
+  return { kind: 'waived', waived, applied, base: p.base };
 }
 
 /**
  * Why Studio gives a pull request no approval for touching the evidence: it changes the
- * `evidence:` block of studio.yaml, or a file a rule at the base names as `inputs`. Evidence is the
- * owner's: a crew's pull request never changes what proves a later one. `unreadable` when the
- * comparison could not be made; collect waits then.
+ * `evidence:` block of studio.yaml, or an input of a rule at the base (its `inputs`, its command's
+ * script directory, the root manifests and lockfiles). Evidence is the owner's: a crew's pull
+ * request never changes what proves a later one. `unreadable` when the comparison could not be
+ * made; collect waits then.
  */
 export async function evidenceChange(
   ctx: EvidenceContext,
@@ -599,7 +684,7 @@ export async function evidenceChange(
     if (atBase !== atHead) return { problem: 'the pull request changes evidence: in studio.yaml' };
   }
   const rules = await rulesAt(ctx, baseOid);
-  const touched = rules.filter((r) => files.some((f) => r.inputs.some((x) => matchGlob(x, f))));
+  const touched = rules.filter((r) => touchesInputs(files, r));
   if (touched.length > 0) {
     return {
       problem: `the pull request changes an input of evidence rule ${touched.map((r) => r.id).join(', ')}`,
@@ -611,8 +696,8 @@ export async function evidenceChange(
 /**
  * A lead's or the owner's decision for a guard hit no evidence explained, logged like an exception
  * the evidence proved: bound to the pull request's current base and head, so a later push needs a
- * new one. The rule must be in studio.yaml at the base on the default branch; an `owner_only` rule
- * takes the owner's grant only.
+ * new one. The rule must be in studio.yaml at the base on the default branch. A guard with an
+ * `owner_only` rule, through whichever of its rules, takes the owner's grant only.
  */
 export async function grantException(
   ctx: EvidenceContext,
@@ -637,8 +722,18 @@ export async function grantException(
       `no evidence rule ${ruleId} in studio.yaml at the base of ${ref.repo}#${ref.pr}`,
     );
   }
-  if (rule.ownerOnly && by !== 'owner') {
-    throw new Error(`evidence rule ${ruleId} is owner_only: the owner grants it, in a terminal`);
+  // A grant waives the guard, not only the rule: any owner_only rule on the same guard makes it
+  // the owner's, or a lead grant through a sibling rule would bypass it.
+  const ownerRule = prep.p.rules.find(
+    (r) =>
+      r.ownerOnly && r.guard.workflow === rule.guard.workflow && r.guard.job === rule.guard.job,
+  );
+  if (ownerRule !== undefined && by !== 'owner') {
+    throw new Error(
+      ownerRule.id === ruleId
+        ? `evidence rule ${ruleId} is owner_only: the owner grants it, in a terminal`
+        : `evidence rule ${ownerRule.id} on the same guard is owner_only: the owner grants it, in a terminal`,
+    );
   }
   const line = reason
     .replace(/[\p{Cc}\p{Cf}]/gu, ' ')

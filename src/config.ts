@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
-import { globProblem } from './glob.js';
+import { globProblem, matchGlob } from './glob.js';
 import { allowedPluginSchema, pluginPinSchema } from './plugins.js';
 
 export { globProblem };
@@ -208,44 +208,62 @@ export const EVIDENCE_ID_RE = /^[a-z][a-z0-9-]{0,47}$/;
  * on exactly one diff. Studio reads these rules only from studio.yaml at the pull request's base on
  * the default branch, never from the working tree or the pull request (src/evidence.ts).
  */
+/** Why `run: ci` is refused: the job would run the pull request head, which can prove anything. */
+export const RUN_CI_REFUSED =
+  'run: ci is not supported: an evidence job runs the pull request head, whose code can prove anything; it comes later with a checkout of the base';
+
+/**
+ * The words of an evidence command that name files of the repository: every word after the program
+ * that does not start with `-`, has no whitespace and holds a `/` or a file extension, and the
+ * program itself when it holds a `/`. Their contents decide what the command does.
+ */
+export function commandPaths(command: readonly string[]): string[] {
+  return command.filter((w, i) =>
+    i === 0
+      ? w.includes('/')
+      : !w.startsWith('-') && !/\s/.test(w) && (w.includes('/') || /\.[A-Za-z0-9]{1,8}$/.test(w)),
+  );
+}
+
 export const evidenceRuleSchema = z
   .strictObject({
     id: z.string().regex(EVIDENCE_ID_RE, 'must match ^[a-z][a-z0-9-]{0,47}$'),
     // The CI job that reports the hit, e.g. a migration guard.
     guard: workflowJob,
-    // local: Studio runs `command` itself, in a checkout of the base, with the diff as a file.
-    // ci: a named CI job on the pull request head is the evidence; it passes or it does not.
+    // local: Studio runs `command` itself, sandboxed, in an extract of the base, with the diff as a
+    // file. `ci` is refused (RUN_CI_REFUSED).
     run: z.enum(['local', 'ci']).default('local'),
-    command: z.array(argWord).min(1).max(32).optional(),
-    // The line the command must print on stdout, besides exit code 0.
+    command: z.array(argWord).min(1).max(32),
+    // The line the command must print on stdout, followed by a space and the run's nonce.
     proof: z
       .string()
       .min(1)
       .max(200)
-      .regex(/^[^\p{Cc}\p{Cf}]+$/u, 'one line of at most 200 characters')
-      .optional(),
+      .regex(/^[^\p{Cc}\p{Cf}]+$/u, 'one line of at most 200 characters'),
     timeoutSeconds: z.number().int().min(1).max(600).default(60),
-    job: workflowJob.optional(),
-    // Files the evidence depends on (its script, its config): a pull request that changes one gets
-    // no exception from this rule, and no approval from Studio (src/evidence.ts).
-    inputs: z.array(globSchema).max(50).default([]),
+    // Files the evidence depends on (its script, its config): a pull request that changes one, or
+    // one Studio adds (src/evidence.ts), gets no exception and no approval from Studio.
+    inputs: z
+      .array(globSchema)
+      .min(1, 'needs the files the command reads, its script among them')
+      .max(50),
     // A hit the evidence does not explain goes to the owner, not the lead.
     ownerOnly: z.boolean().default(false),
   })
   .superRefine((r, ctx) => {
     const issue = (path: string, message: string) =>
       ctx.addIssue({ code: 'custom', path: [path], message });
-    if (r.run === 'local') {
-      if (r.command === undefined) issue('command', 'run local needs a command');
-      else if ((r.command[0] ?? '').startsWith('-')) issue('command', 'must not start with -');
-      if (r.proof === undefined) issue('proof', 'run local needs the proof line');
-      if (r.job !== undefined) issue('job', 'only run ci names a job');
-    } else {
-      if (r.job === undefined) issue('job', 'run ci needs the evidence job');
-      if (r.command !== undefined) issue('command', 'run ci takes no command: the job is it');
-      if (r.proof !== undefined) issue('proof', 'run ci takes no proof line: the job passes');
-      if (r.inputs.length === 0) {
-        issue('inputs', 'run ci needs inputs: the job runs the pull request head and its scripts');
+    if (r.run === 'ci') issue('run', RUN_CI_REFUSED);
+    if ((r.command[0] ?? '').startsWith('-')) issue('command', 'must not start with -');
+    for (const [i, w] of commandPaths(r.command).entries()) {
+      const program = i === 0 && r.command[0] === w;
+      if (w.split('/').includes('..')) issue('command', `${w}: no .. in a path`);
+      else if (isAbsolute(w)) {
+        if (!program) issue('command', `${w}: an absolute path is no repository file`);
+      } else if (
+        !r.inputs.some((g) => globProblem(g) === undefined && matchGlob(g, w.replace(/^\.\//, '')))
+      ) {
+        issue('inputs', `${w} in command is not covered by inputs`);
       }
     }
   });

@@ -760,6 +760,7 @@ describe('writeCrewSettings', () => {
           'crew.lock',
           'exceptions.jsonl',
           'exceptions.lock',
+          'evidence-retries.json',
         ].map((f) => join(state, f)),
         join(dirnameOf(state), 'owner'),
       ],

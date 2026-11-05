@@ -70,7 +70,6 @@ export type QueueOptions = {
     entry: QueueEntry,
     head: string,
     failed: readonly Check[],
-    checks: readonly Check[],
   ) => Promise<EvidenceOutcome>;
   /** Why this entry must not merge, read right before `gh pr merge`; a reason fails the entry. */
   mergeAllowed?: (
@@ -668,7 +667,7 @@ export async function mergeOne(
     if (verdict.kind !== 'failed' || verdict.failed === undefined || !opts.evidence) {
       return verdict;
     }
-    const ev = await opts.evidence(entry, head, verdict.failed, verdict.checks ?? []);
+    const ev = await opts.evidence(entry, head, verdict.failed);
     if (ev.kind === 'none') return verdict;
     if (ev.kind === 'wait') return { kind: 'pending' };
     if (ev.kind === 'lead') return { kind: 'evidence', reason: ev.reason };
@@ -760,7 +759,10 @@ export async function mergeOne(
         continue;
       }
       // CI may have changed while we waited for capacity: verify once more right before merging.
-      const again = await readChecks(entry, gh, waived.get(head));
+      // The base may have moved since a waiver was judged: judge again, never from the cache.
+      waived.delete(head);
+      const again = await judged(head);
+      if (again.kind === 'evidence') return failed(again.reason);
       if (again.kind !== 'pass') {
         if (++rechecks > MAX_ATTEMPTS) return failed(`checks changed ${MAX_ATTEMPTS} times`);
         step = 'checks';

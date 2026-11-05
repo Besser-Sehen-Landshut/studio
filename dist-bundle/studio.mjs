@@ -4003,10 +4003,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep7, value } = collItem;
+        const { start, key, sep: sep8, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep7?.[0],
+          next: key ?? sep8?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -4020,7 +4020,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep7) {
+          if (!keyProps.anchor && !keyProps.tag && !sep8) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map2.comment)
@@ -4044,7 +4044,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map2.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep7 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep8 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -4060,7 +4060,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep7, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep8, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -4151,7 +4151,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep7 = "";
+        let sep8 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -4165,13 +4165,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep7 + cb;
-              sep7 = "";
+                comment += sep8 + cb;
+              sep8 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep7 += source;
+                sep8 += source;
               hasSpace = true;
               break;
             default:
@@ -4214,18 +4214,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i2 = 0; i2 < fc.items.length; ++i2) {
         const collItem = fc.items[i2];
-        const { start, key, sep: sep7, value } = collItem;
+        const { start, key, sep: sep8, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep7?.[0],
+          next: key ?? sep8?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep7 && !value) {
+          if (!props.anchor && !props.tag && !sep8 && !value) {
             if (i2 === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i2 < fc.items.length - 1)
@@ -4279,8 +4279,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap4 && !sep7 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep7, null, props, onError);
+        if (!isMap4 && !sep8 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep8, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -4292,7 +4292,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep7 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep8 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -4303,8 +4303,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap4 && !props.found && ctx.options.strict) {
-              if (sep7)
-                for (const st of sep7) {
+              if (sep8)
+                for (const st of sep8) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -4321,7 +4321,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep7, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep8, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -4501,7 +4501,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i2 + 1;
       }
       let value = "";
-      let sep7 = "";
+      let sep8 = "";
       let prevMoreIndented = false;
       for (let i2 = 0; i2 < contentStart; ++i2)
         value += lines[i2][0].slice(trimIndent) + "\n";
@@ -4518,24 +4518,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep7 + indent.slice(trimIndent) + content;
-          sep7 = "\n";
+          value += sep8 + indent.slice(trimIndent) + content;
+          sep8 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep7 === " ")
-            sep7 = "\n";
-          else if (!prevMoreIndented && sep7 === "\n")
-            sep7 = "\n\n";
-          value += sep7 + indent.slice(trimIndent) + content;
-          sep7 = "\n";
+          if (sep8 === " ")
+            sep8 = "\n";
+          else if (!prevMoreIndented && sep8 === "\n")
+            sep8 = "\n\n";
+          value += sep8 + indent.slice(trimIndent) + content;
+          sep8 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep7 === "\n")
+          if (sep8 === "\n")
             value += "\n";
           else
-            sep7 = "\n";
+            sep8 = "\n";
         } else {
-          value += sep7 + content;
-          sep7 = " ";
+          value += sep8 + content;
+          sep8 = " ";
           prevMoreIndented = false;
         }
       }
@@ -4718,25 +4718,25 @@ var require_resolve_flow_scalar = __commonJS({
         trimBoth = /^[ \t]+|[ \t]+$/g;
       }
       let res = match[1].replace(trimEnd, "");
-      let sep7 = " ";
+      let sep8 = " ";
       let pos = line3.lastIndex;
       while (match = line3.exec(source)) {
         const lm = match[1].replace(trimBoth, "");
         if (lm === "") {
-          if (sep7 === "\n")
-            res += sep7;
+          if (sep8 === "\n")
+            res += sep8;
           else
-            sep7 = "\n";
+            sep8 = "\n";
         } else {
-          res += sep7 + lm;
-          sep7 = " ";
+          res += sep8 + lm;
+          sep8 = " ";
         }
         pos = line3.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep7 + (match?.[1] ?? "");
+      return res + sep8 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -5546,14 +5546,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep7, value }) {
+    function stringifyItem({ start, key, sep: sep8, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep7)
-        for (const st of sep7)
+      if (sep8)
+        for (const st of sep8)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -6720,18 +6720,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep7;
+          let sep8;
           if (scalar.end) {
-            sep7 = scalar.end;
-            sep7.push(this.sourceToken);
+            sep8 = scalar.end;
+            sep8.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep7 = [this.sourceToken];
+            sep8 = [this.sourceToken];
           const map2 = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep7 }]
+            items: [{ start, key: scalar, sep: sep8 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map2;
@@ -6884,15 +6884,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep7 = it.sep;
-                  sep7.push(this.sourceToken);
+                  const sep8 = it.sep;
+                  sep8.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep7 }]
+                    items: [{ start: start2, key, sep: sep8 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -7086,13 +7086,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep7 = fc.end.splice(1, fc.end.length);
-            sep7.push(this.sourceToken);
+            const sep8 = fc.end.splice(1, fc.end.length);
+            sep8.push(this.sourceToken);
             const map2 = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep7 }]
+              items: [{ start, key: fc, sep: sep8 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map2;
@@ -7841,7 +7841,7 @@ var require_shell_quote = __commonJS({
 });
 
 // src/main.ts
-import { realpathSync as realpathSync7 } from "node:fs";
+import { realpathSync as realpathSync8 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
@@ -12923,7 +12923,7 @@ var recursive = /* @__PURE__ */ new WeakMap();
 var NONE = 0;
 var ASSUMED = 1;
 var PROVEN = 2;
-function isRecursive(inst, stack, resolve8) {
+function isRecursive(inst, stack, resolve9) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -12933,7 +12933,7 @@ function isRecursive(inst, stack, resolve8) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve8);
+      const answer = isRecursive(child, stack, resolve9);
       if (answer > result)
         result = answer;
     }
@@ -12944,7 +12944,7 @@ function isRecursive(inst, stack, resolve8) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve8) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve9) : NONE;
       if (child > answer)
         answer = child;
     }
@@ -13008,7 +13008,7 @@ function isRecursive(inst, stack, resolve8) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve8 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve9 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -28658,36 +28658,39 @@ var workflowJob = external_exports.strictObject({
 });
 var argWord = external_exports.string().min(1).max(500).regex(/^[^\p{Cc}\p{Cf}]+$/u, "one plain line of at most 500 characters");
 var EVIDENCE_ID_RE = /^[a-z][a-z0-9-]{0,47}$/;
+var RUN_CI_REFUSED = "run: ci is not supported: an evidence job runs the pull request head, whose code can prove anything; it comes later with a checkout of the base";
+function commandPaths(command) {
+  return command.filter(
+    (w, i2) => i2 === 0 ? w.includes("/") : !w.startsWith("-") && !/\s/.test(w) && (w.includes("/") || /\.[A-Za-z0-9]{1,8}$/.test(w))
+  );
+}
 var evidenceRuleSchema = external_exports.strictObject({
   id: external_exports.string().regex(EVIDENCE_ID_RE, "must match ^[a-z][a-z0-9-]{0,47}$"),
   // The CI job that reports the hit, e.g. a migration guard.
   guard: workflowJob,
-  // local: Studio runs `command` itself, in a checkout of the base, with the diff as a file.
-  // ci: a named CI job on the pull request head is the evidence; it passes or it does not.
+  // local: Studio runs `command` itself, sandboxed, in an extract of the base, with the diff as a
+  // file. `ci` is refused (RUN_CI_REFUSED).
   run: external_exports.enum(["local", "ci"]).default("local"),
-  command: external_exports.array(argWord).min(1).max(32).optional(),
-  // The line the command must print on stdout, besides exit code 0.
-  proof: external_exports.string().min(1).max(200).regex(/^[^\p{Cc}\p{Cf}]+$/u, "one line of at most 200 characters").optional(),
+  command: external_exports.array(argWord).min(1).max(32),
+  // The line the command must print on stdout, followed by a space and the run's nonce.
+  proof: external_exports.string().min(1).max(200).regex(/^[^\p{Cc}\p{Cf}]+$/u, "one line of at most 200 characters"),
   timeoutSeconds: external_exports.number().int().min(1).max(600).default(60),
-  job: workflowJob.optional(),
-  // Files the evidence depends on (its script, its config): a pull request that changes one gets
-  // no exception from this rule, and no approval from Studio (src/evidence.ts).
-  inputs: external_exports.array(globSchema).max(50).default([]),
+  // Files the evidence depends on (its script, its config): a pull request that changes one, or
+  // one Studio adds (src/evidence.ts), gets no exception and no approval from Studio.
+  inputs: external_exports.array(globSchema).min(1, "needs the files the command reads, its script among them").max(50),
   // A hit the evidence does not explain goes to the owner, not the lead.
   ownerOnly: external_exports.boolean().default(false)
 }).superRefine((r, ctx) => {
   const issue2 = (path10, message) => ctx.addIssue({ code: "custom", path: [path10], message });
-  if (r.run === "local") {
-    if (r.command === void 0) issue2("command", "run local needs a command");
-    else if ((r.command[0] ?? "").startsWith("-")) issue2("command", "must not start with -");
-    if (r.proof === void 0) issue2("proof", "run local needs the proof line");
-    if (r.job !== void 0) issue2("job", "only run ci names a job");
-  } else {
-    if (r.job === void 0) issue2("job", "run ci needs the evidence job");
-    if (r.command !== void 0) issue2("command", "run ci takes no command: the job is it");
-    if (r.proof !== void 0) issue2("proof", "run ci takes no proof line: the job passes");
-    if (r.inputs.length === 0) {
-      issue2("inputs", "run ci needs inputs: the job runs the pull request head and its scripts");
+  if (r.run === "ci") issue2("run", RUN_CI_REFUSED);
+  if ((r.command[0] ?? "").startsWith("-")) issue2("command", "must not start with -");
+  for (const [i2, w] of commandPaths(r.command).entries()) {
+    const program = i2 === 0 && r.command[0] === w;
+    if (w.split("/").includes("..")) issue2("command", `${w}: no .. in a path`);
+    else if (isAbsolute(w)) {
+      if (!program) issue2("command", `${w}: an absolute path is no repository file`);
+    } else if (!r.inputs.some((g2) => globProblem(g2) === void 0 && matchGlob(g2, w.replace(/^\.\//, "")))) {
+      issue2("inputs", `${w} in command is not covered by inputs`);
     }
   }
 });
@@ -29159,7 +29162,8 @@ var STATE_FILES = [
   "board.lock",
   "crew.lock",
   "exceptions.jsonl",
-  "exceptions.lock"
+  "exceptions.lock",
+  "evidence-retries.json"
 ];
 function stateBaseFor(opts = {}) {
   const env = opts.env ?? process.env;
@@ -34956,8 +34960,8 @@ async function launchCrew(projectDir, item, config2, ports, launcher2 = {}) {
   const turn = launchChain;
   let done = () => {
   };
-  launchChain = new Promise((resolve8) => {
-    done = resolve8;
+  launchChain = new Promise((resolve9) => {
+    done = resolve9;
   });
   await turn;
   const held2 = {};
@@ -35365,15 +35369,15 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
 }
 
 // src/push.ts
-import { randomBytes as randomBytes8 } from "node:crypto";
+import { randomBytes as randomBytes9 } from "node:crypto";
 import { lstatSync as lstatSync21, readFileSync as readFileSync24 } from "node:fs";
 import { join as join24 } from "node:path";
 
 // src/evidence.ts
 var import_yaml10 = __toESM(require_dist(), 1);
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash3, randomBytes as randomBytes8 } from "node:crypto";
 import { existsSync as existsSync7, lstatSync as lstatSync19, readFileSync as readFileSync22, writeFileSync as writeFileSync9 } from "node:fs";
-import { join as join22 } from "node:path";
+import { join as join22, posix } from "node:path";
 
 // src/ci-jobs.ts
 var import_yaml9 = __toESM(require_dist(), 1);
@@ -36036,7 +36040,7 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
     if (verdict.kind !== "failed" || verdict.failed === void 0 || !opts.evidence) {
       return verdict;
     }
-    const ev = await opts.evidence(entry, head, verdict.failed, verdict.checks ?? []);
+    const ev = await opts.evidence(entry, head, verdict.failed);
     if (ev.kind === "none") return verdict;
     if (ev.kind === "wait") return { kind: "pending" };
     if (ev.kind === "lead") return { kind: "evidence", reason: ev.reason };
@@ -36123,7 +36127,9 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
         step = "checks";
         continue;
       }
-      const again = await readChecks(entry, gh, waived.get(head));
+      waived.delete(head);
+      const again = await judged(head);
+      if (again.kind === "evidence") return failed(again.reason);
       if (again.kind !== "pass") {
         if (++rechecks > MAX_ATTEMPTS) return failed(`checks changed ${MAX_ATTEMPTS} times`);
         step = "checks";
@@ -36239,15 +36245,49 @@ var EXCEPTIONS_FILE = "exceptions.jsonl";
 var EXCEPTIONS_LOCK = "exceptions.lock";
 var EXCEPTIONS_LOCK_STALE_MS = 3e4;
 var EVIDENCE_DIR = "evidence";
+var RETRIES_FILE = "evidence-retries.json";
+var MAX_RETRIES = 5;
 var LEAD_PREFIX = "evidence: ";
 var OWNER_PREFIX = "evidence (owner): ";
+var IMPLICIT_INPUTS = [
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "yarn.lock",
+  ".npmrc",
+  ".yarnrc",
+  ".yarnrc.yml",
+  "Cargo.toml",
+  "Cargo.lock",
+  "pyproject.toml",
+  "poetry.lock",
+  "uv.lock",
+  "Pipfile",
+  "Pipfile.lock",
+  "requirements*.txt",
+  "setup.py",
+  "setup.cfg"
+];
 var STUDIO_CONFIG2 = ".studio/studio.yaml";
 var SHA3 = /^[0-9a-f]{40,64}$/i;
 var GIT_FETCH_MS4 = 12e4;
 var GIT_LOCAL_MS4 = 6e4;
-var GIT_CHECKOUT_MS = 3e5;
+var GIT_ARCHIVE_MS = 3e5;
 var MAX_STDOUT = 1024 * 1024;
 var LOCK_WAIT_MS = 5e3;
+var RETRIES_KEEP_MS = 24 * 60 * 6e4;
+var DIFF = [
+  "-c",
+  "core.quotePath=false",
+  "diff",
+  "--no-color",
+  "--no-ext-diff",
+  "--no-textconv",
+  "--ignore-submodules=none",
+  "--no-renames"
+];
 var entrySchema2 = external_exports.object({
   v: external_exports.literal(1),
   at: external_exports.string(),
@@ -36265,9 +36305,9 @@ var entrySchema2 = external_exports.object({
   head: external_exports.string().regex(SHA3),
   /** sha256 of `git diff base...head`: what the evidence judged. */
   diff: external_exports.string(),
-  run: external_exports.enum(["local", "ci"]).optional(),
+  run: external_exports.literal("local").optional(),
   command: external_exports.array(external_exports.string()).optional(),
-  /** sha256 of the command's stdout, or of the evidence job's checks. */
+  /** sha256 of the command's stdout. */
   output: external_exports.string().optional(),
   proof: external_exports.string().optional(),
   /** Why the evidence proved nothing: Studio's own text. */
@@ -36279,6 +36319,15 @@ var digest = (text) => `sha256:${createHash3("sha256").update(text).digest("hex"
 var short = (sha) => sha.slice(0, 12);
 var guardName = (r) => `${r.guard.workflow} / ${r.guard.job}`;
 var sameKey = (e, k) => e.rule === k.rule && e.repo === k.repo && e.pr === k.pr && e.base.toLowerCase() === k.base.toLowerCase() && e.head.toLowerCase() === k.head.toLowerCase();
+function effectiveInputs(r) {
+  const dirs = commandPaths(r.command).filter((w) => !w.startsWith("/")).map((w) => {
+    const p = w.replace(/^\.\//, "");
+    const d = posix.dirname(p);
+    return d === "." ? p : `${d}/**`;
+  });
+  return [.../* @__PURE__ */ new Set([...r.inputs, ...dirs, ...IMPLICIT_INPUTS])];
+}
+var touchesInputs = (files, r) => files.some((f) => effectiveInputs(r).some((glob) => matchGlob(glob, f)));
 function readExceptions(stateRoot) {
   const file2 = join22(stateRoot, EXCEPTIONS_FILE);
   if (!existsSync7(file2)) return [];
@@ -36313,14 +36362,43 @@ function recordException(stateRoot, entry) {
   }
   try {
     const known = readExceptions(stateRoot).filter((e) => sameKey(e, entry));
-    const applied = known.find((e) => e.outcome === "applied");
+    const answers = (e) => e.by !== "lead" || entry.by === "lead";
+    const applied = known.find((e) => e.outcome === "applied" && answers(e));
     if (applied !== void 0) return applied;
-    if (entry.outcome === "not_proven" && known.length > 0) return known[0];
+    const tried = known.find((e) => e.outcome === "not_proven");
+    if (entry.outcome === "not_proven" && tried !== void 0) return tried;
     appendStateLine(stateRoot, EXCEPTIONS_FILE, JSON.stringify(entry));
     return entry;
   } finally {
     lock.release();
   }
+}
+function retryAllowed(stateRoot, key, now) {
+  const file2 = join22(stateRoot, RETRIES_FILE);
+  let counts = {};
+  try {
+    if (existsSync7(file2) && !lstatSync19(file2).isSymbolicLink()) {
+      const raw = JSON.parse(readFileSync22(file2, "utf8"));
+      if (raw !== null && typeof raw === "object") {
+        counts = raw;
+      }
+    }
+  } catch {
+    counts = {};
+  }
+  const kept = Object.fromEntries(
+    Object.entries(counts).filter(
+      ([, v]) => typeof v?.n === "number" && now.getTime() - Date.parse(v.at) < RETRIES_KEEP_MS
+    )
+  );
+  const n2 = (kept[key]?.n ?? 0) + 1;
+  kept[key] = { n: n2, at: now.toISOString() };
+  try {
+    writeStateFile(stateRoot, file2, `${JSON.stringify(kept)}
+`);
+  } catch {
+  }
+  return n2 < MAX_RETRIES;
 }
 var g = (ctx, args, timeoutMs = GIT_LOCAL_MS4) => ctx.git.run(ctx.checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
 async function rulesAt(ctx, oid) {
@@ -36366,7 +36444,7 @@ async function fetchBoth(ctx, base, head) {
 }
 async function changedFiles(ctx, base, head) {
   try {
-    const out = await g(ctx, ["diff", "--name-only", "--no-renames", "-z", `${base}...${head}`]);
+    const out = await g(ctx, [...DIFF, "--name-only", "-z", `${base}...${head}`]);
     return out.split("\0").filter((p) => p !== "");
   } catch {
     return void 0;
@@ -36391,14 +36469,7 @@ async function prepare(ctx, ref, head) {
   const files = await changedFiles(ctx, base, head);
   let diff;
   try {
-    diff = await g(ctx, [
-      "diff",
-      "--no-ext-diff",
-      "--no-textconv",
-      "--no-renames",
-      "--binary",
-      `${base}...${head}`
-    ]);
+    diff = await g(ctx, [...DIFF, "--binary", `${base}...${head}`]);
   } catch {
     diff = void 0;
   }
@@ -36432,45 +36503,50 @@ function guardChanged(p, r) {
   }
   return void 0;
 }
-var touchesInputs = (p, r) => p.files.some((f) => r.inputs.some((glob) => matchGlob(glob, f)));
-var isGithubPath2 = (f) => {
-  const lower = f.toLowerCase();
-  return lower === ".github" || lower.startsWith(".github/");
-};
 async function runLocal(ctx, p, r, ref, base) {
   const known = readExceptions(ctx.stateRoot).find(
     (e) => e.outcome === "not_proven" && sameKey(e, base)
   );
   if (known !== void 0) return { kind: "no", why: known.why ?? "it proved nothing" };
+  const notProven = (why) => {
+    const entry = recordException(ctx.stateRoot, {
+      ...base,
+      outcome: "not_proven",
+      by: "evidence",
+      run: "local",
+      command: r.command,
+      proof: r.proof,
+      why
+    });
+    return entry.outcome === "applied" ? { kind: "proven", entry } : { kind: "no", why: entry.why ?? why };
+  };
+  if (p.files.some(hostilePath)) return notProven("a changed path has a control character");
   if (ctx.runner === void 0) return { kind: "no", why: "no command runner" };
-  const command = r.command ?? [];
-  const name = createHash3("sha256").update(`${r.id}\0${ref.repo}#${ref.pr}\0${p.base}\0${p.head}`).digest("hex").slice(0, 16);
-  const dir = join22(ctx.stateRoot, EVIDENCE_DIR, name);
+  const unavailable = await ctx.runner.unavailable();
+  if (unavailable !== void 0) return { kind: "no", why: `no sandbox: ${unavailable}` };
+  const key = createHash3("sha256").update(`${r.id}\0${ref.repo}#${ref.pr}\0${p.base}\0${p.head}`).digest("hex").slice(0, 16);
+  const dir = join22(ctx.stateRoot, EVIDENCE_DIR, `${key}-${randomBytes8(6).toString("hex")}`);
   const tree = join22(dir, "tree");
   const home = join22(dir, "home");
-  removeStateEntry(ctx.stateRoot, dir);
-  await g(ctx, ["worktree", "prune"]).catch(() => "");
-  ensureStateDir(ctx.stateRoot, home);
-  let added = false;
   try {
+    ensureStateDir(ctx.stateRoot, tree);
+    ensureStateDir(ctx.stateRoot, home);
+    const tar = join22(dir, "base.tar");
     try {
-      await g(
-        ctx,
-        ["-c", "core.hooksPath=/dev/null", "worktree", "add", "--detach", "--force", tree, p.base],
-        GIT_CHECKOUT_MS
-      );
-      added = true;
+      await g(ctx, ["archive", "--format=tar", "-o", tar, p.base], GIT_ARCHIVE_MS);
+      await ctx.runner.extract(tar, tree);
     } catch {
-      return { kind: "no", why: "the base cannot be checked out" };
+      return { kind: "retry", why: "the base cannot be extracted" };
     }
+    removeStateEntry(ctx.stateRoot, tar);
     const diffFile = join22(dir, "diff.patch");
     const filesFile = join22(dir, "files.txt");
     writeFileSync9(diffFile, p.diff === "" || p.diff.endsWith("\n") ? p.diff : `${p.diff}
 `, {
       mode: 384
     });
-    writeFileSync9(filesFile, p.files.map((f) => `${f}
-`).join(""), { mode: 384 });
+    writeFileSync9(filesFile, p.files.map((f) => `${f}\0`).join(""), { mode: 384 });
+    const nonce = randomBytes8(16).toString("hex");
     const env = {
       PATH: ctx.path ?? "/usr/local/bin:/usr/bin:/bin",
       HOME: home,
@@ -36483,65 +36559,39 @@ async function runLocal(ctx, p, r, ref, base) {
       STUDIO_EVIDENCE_BASE: p.base,
       STUDIO_EVIDENCE_HEAD: p.head,
       STUDIO_EVIDENCE_DIFF: diffFile,
-      STUDIO_EVIDENCE_FILES: filesFile
+      STUDIO_EVIDENCE_FILES: filesFile,
+      STUDIO_EVIDENCE_NONCE: nonce
     };
-    const result = await ctx.runner.run(command, {
+    const result = await ctx.runner.run(r.command, {
       cwd: tree,
       env,
       timeoutMs: r.timeoutSeconds * 1e3,
-      maxBytes: MAX_STDOUT
+      maxBytes: MAX_STDOUT,
+      writable: dir,
+      hidden: [...ctx.hidden ?? [], ctx.stateRoot]
     });
-    const proven = !result.timedOut && result.code === 0 && result.stdout.split(/\r?\n/).some((line3) => line3 === r.proof);
-    const why = proven ? void 0 : result.timedOut ? `timed out after ${r.timeoutSeconds} s` : result.code !== 0 ? `exit code ${result.code}` : "its output lacks the proof line";
+    if (result.kind === "failed") return { kind: "retry", why: result.why };
+    const proofLine = `${r.proof} ${nonce}`;
+    const why = result.tooLarge ? "its output is over 1 MiB" : result.code !== 0 ? `exit code ${result.code}` : result.stdout.split(/\r?\n/).some((line3) => line3 === proofLine) ? void 0 : "its output lacks the proof line with the nonce";
+    if (why !== void 0) return notProven(why);
     const entry = recordException(ctx.stateRoot, {
       ...base,
-      outcome: proven ? "applied" : "not_proven",
+      outcome: "applied",
       by: "evidence",
       run: "local",
-      command,
+      command: r.command,
       output: digest(result.stdout),
-      ...r.proof === void 0 ? {} : { proof: r.proof },
-      ...why === void 0 ? {} : { why }
+      proof: r.proof
     });
-    return entry.outcome === "applied" ? { kind: "proven", entry } : { kind: "no", why: entry.why ?? "it proved nothing" };
+    return { kind: "proven", entry };
+  } catch (e) {
+    return { kind: "retry", why: `the run dir failed: ${e.message.slice(0, 200)}` };
   } finally {
-    if (added) await g(ctx, ["worktree", "remove", "--force", tree]).catch(() => "");
-    removeStateEntry(ctx.stateRoot, dir);
-  }
-}
-function judgeCi(ctx, p, r, checks, base) {
-  const job = r.job;
-  if (p.files.some(isGithubPath2)) return { kind: "no", why: "the pull request changes .github/" };
-  const atBase = findJob(p.baseWorkflows, job.workflow, job.job, "the base");
-  const atHead = findJob(p.headWorkflows, job.workflow, job.job, "the head");
-  if (typeof atBase === "string") return { kind: "no", why: `the evidence job: ${atBase}` };
-  if (typeof atHead === "string" || JSON.stringify(atBase) !== JSON.stringify(atHead)) {
-    return { kind: "no", why: "the evidence job changed in this pull request" };
-  }
-  const mine = [];
-  for (const t of atBase.targets) {
-    const found = jobInstances(checks, t.workflow, t.job);
-    if (found === "ambiguous") {
-      return { kind: "no", why: "a check has a name like the evidence job that does not parse" };
+    try {
+      removeStateEntry(ctx.stateRoot, dir);
+    } catch {
     }
-    mine.push(...found);
   }
-  if (mine.length === 0) return { kind: "no", why: "the evidence job reported no check" };
-  if (mine.some((c3) => c3.bucket === "pending")) {
-    return { kind: "wait", why: `waiting for the evidence job ${job.job}` };
-  }
-  if (!mine.every((c3) => c3.bucket === "pass")) {
-    return { kind: "no", why: "the evidence job did not pass" };
-  }
-  const seen = mine.map((c3) => `${c3.workflow ?? ""} / ${c3.name}: ${c3.bucket}`).sort();
-  const entry = recordException(ctx.stateRoot, {
-    ...base,
-    outcome: "applied",
-    by: "evidence",
-    run: "ci",
-    output: digest(seen.join("\n"))
-  });
-  return { kind: "proven", entry };
 }
 function leadLine(ref, head, rules, whys) {
   const owner = rules.some((r) => r.ownerOnly);
@@ -36551,18 +36601,18 @@ function leadLine(ref, head, rules, whys) {
   const grant = `studio exceptions grant ${target} ${first.id} --reason "<one line>"`;
   return `${owner ? OWNER_PREFIX : LEAD_PREFIX}${first.guard.job} failed on ${target} at ${short(head)} and no evidence proved a false alarm (${first.id}: ${whys[0] ?? "it proved nothing"}${more}); ${owner ? `the owner decides, in a terminal: ${grant}, or a fix through a crew` : `decide: ${grant}, or a fix through a crew`}`;
 }
-async function judgeFailedChecks(ctx, ref, head, failed, checks) {
+async function judgeFailedChecks(ctx, ref, head, failed) {
   if (failed.length === 0) return { kind: "none" };
+  const retryKey = `${ref.repo}#${ref.pr}@${head.toLowerCase()}`;
+  const retry = (why) => retryAllowed(ctx.stateRoot, retryKey, ctx.now()) ? { kind: "wait", reason: `evidence: ${why}; tried again` } : {
+    kind: "lead",
+    reason: `${LEAD_PREFIX}cannot judge the failed checks of ${ref.repo}#${ref.pr} after ${MAX_RETRIES} tries: ${why}`,
+    owner: false
+  };
   const prep = await prepare(ctx, ref, head);
   if (prep.kind === "none") return { kind: "none" };
   if (prep.kind === "moved") return { kind: "wait", reason: "the head moved; judged again" };
-  if (prep.kind === "unreadable") {
-    return {
-      kind: "lead",
-      reason: `${LEAD_PREFIX}cannot judge the failed checks of ${ref.repo}#${ref.pr}: ${prep.why}`,
-      owner: false
-    };
-  }
+  if (prep.kind === "unreadable") return retry(prep.why);
   const p = prep.p;
   const groups = /* @__PURE__ */ new Map();
   for (const c3 of failed) {
@@ -36579,7 +36629,7 @@ async function judgeFailedChecks(ctx, ref, head, failed, checks) {
   const log = readExceptions(ctx.stateRoot);
   const waived = /* @__PURE__ */ new Set();
   const applied = [];
-  let wait;
+  let retryWhy;
   for (const group of groups.values()) {
     const keyOf = (r) => ({
       rule: r.id,
@@ -36588,19 +36638,20 @@ async function judgeFailedChecks(ctx, ref, head, failed, checks) {
       base: p.base,
       head: p.head
     });
-    const logged = log.find(
-      (e) => e.outcome === "applied" && group.rules.some((r) => sameKey(e, keyOf(r)))
+    const ownerGuard = group.rules.some((r) => r.ownerOnly);
+    const holds = (e) => !ownerGuard || e.by !== "lead";
+    let proof = log.find(
+      (e) => e.outcome === "applied" && holds(e) && group.rules.some((r) => sameKey(e, keyOf(r)))
     );
-    let proof = logged;
     const whys = [];
-    let waiting;
+    let again;
     for (const r of proof === void 0 ? group.rules : []) {
       const changed = guardChanged(p, r);
       if (changed !== void 0) {
         whys.push(changed);
         continue;
       }
-      if (touchesInputs(p, r)) {
+      if (touchesInputs(p.files, r)) {
         whys.push("the pull request changes an input of the evidence");
         continue;
       }
@@ -36612,31 +36663,34 @@ async function judgeFailedChecks(ctx, ref, head, failed, checks) {
         guard: guardName(r),
         diff: digest(p.diff)
       };
-      const attempt = r.run === "ci" ? judgeCi(ctx, p, r, checks, base) : await runLocal(ctx, p, r, ref, base);
-      if (attempt.kind === "proven") {
+      const attempt = await runLocal(ctx, p, r, ref, base);
+      if (attempt.kind === "proven" && holds(attempt.entry)) {
         proof = attempt.entry;
         break;
       }
-      if (attempt.kind === "wait") waiting ??= attempt.why;
-      else whys.push(attempt.why);
+      if (attempt.kind === "proven") {
+        whys.push("a lead grant does not hold for a guard with an owner_only rule");
+      } else if (attempt.kind === "retry") {
+        again ??= attempt.why;
+      } else whys.push(attempt.why);
     }
     if (proof !== void 0) {
       applied.push(proof);
       for (const c3 of group.checks) waived.add(checkKey(c3));
       continue;
     }
-    if (waiting !== void 0) {
-      wait ??= waiting;
+    if (again !== void 0) {
+      retryWhy ??= again;
       continue;
     }
     return {
       kind: "lead",
       reason: leadLine(ref, p.head, group.rules, whys),
-      owner: group.rules.some((r) => r.ownerOnly)
+      owner: ownerGuard
     };
   }
-  if (wait !== void 0) return { kind: "wait", reason: wait };
-  return { kind: "waived", waived, applied };
+  if (retryWhy !== void 0) return retry(retryWhy);
+  return { kind: "waived", waived, applied, base: p.base };
 }
 async function evidenceChange(ctx, baseOid, head) {
   if (baseOid === void 0 || !SHA3.test(baseOid) || !SHA3.test(head)) return { unreadable: true };
@@ -36648,7 +36702,7 @@ async function evidenceChange(ctx, baseOid, head) {
     if (atBase !== atHead) return { problem: "the pull request changes evidence: in studio.yaml" };
   }
   const rules = await rulesAt(ctx, baseOid);
-  const touched = rules.filter((r) => files.some((f) => r.inputs.some((x) => matchGlob(x, f))));
+  const touched = rules.filter((r) => touchesInputs(files, r));
   if (touched.length > 0) {
     return {
       problem: `the pull request changes an input of evidence rule ${touched.map((r) => r.id).join(", ")}`
@@ -36673,8 +36727,13 @@ async function grantException(ctx, ref, ruleId, by, reason) {
       `no evidence rule ${ruleId} in studio.yaml at the base of ${ref.repo}#${ref.pr}`
     );
   }
-  if (rule.ownerOnly && by !== "owner") {
-    throw new Error(`evidence rule ${ruleId} is owner_only: the owner grants it, in a terminal`);
+  const ownerRule = prep.p.rules.find(
+    (r) => r.ownerOnly && r.guard.workflow === rule.guard.workflow && r.guard.job === rule.guard.job
+  );
+  if (ownerRule !== void 0 && by !== "owner") {
+    throw new Error(
+      ownerRule.id === ruleId ? `evidence rule ${ruleId} is owner_only: the owner grants it, in a terminal` : `evidence rule ${ownerRule.id} on the same guard is owner_only: the owner grants it, in a terminal`
+    );
   }
   const line3 = reason.replace(/[\p{Cc}\p{Cf}]/gu, " ").trim().slice(0, 200);
   if (line3 === "") throw new Error('a grant needs --reason "<one line>"');
@@ -36905,7 +36964,7 @@ var KEEP_MS = 30 * 24 * 60 * 6e4;
 var MAX_KEYS = 2e3;
 var DEFAULT_NTFY_SERVER = "https://ntfy.sh";
 var TOPIC_RE = /^studio-[A-Za-z0-9_-]{24}$/;
-var newNtfyTopic = () => `studio-${randomBytes8(18).toString("base64url")}`;
+var newNtfyTopic = () => `studio-${randomBytes9(18).toString("base64url")}`;
 function readNotifySecret(owner) {
   const file2 = notifySecretFile(owner);
   const read3 = readOwnerSecret(file2, owner);
@@ -41573,7 +41632,14 @@ async function runCli(argv, deps) {
       checkout: approvalCheckout(project, config2, repo),
       stateRoot: root,
       now: () => ports.clock.now(),
-      ...deps.env.PATH === void 0 ? {} : { path: deps.env.PATH }
+      ...deps.env.PATH === void 0 ? {} : { path: deps.env.PATH },
+      // What the sandboxed command may not read: the same credential and config locations a
+      // crew is kept from, the owner config (crew token, push topic) and every state root.
+      hidden: [
+        ...PROTECTED_HOME_PATHS.map((p) => join38(deps.homedir, p)),
+        ownerConfigDir(owner),
+        stateBaseFor(owner)
+      ]
     });
     const queueAdd = async (arg) => {
       const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/.exec(arg ?? "");
@@ -41669,14 +41735,13 @@ async function runCli(argv, deps) {
             log,
             hold,
             mergeAllowed: (entry, head, waived) => boardBlocksMerge(project, root, config2, entry, head, ports, waived),
-            evidence: async (entry, head, failed, checks) => {
+            evidence: async (entry, head, failed) => {
               if ((config2.evidence ?? []).length === 0) return { kind: "none" };
               const v = await judgeFailedChecks(
                 evidenceCtx(config2, entry.repo, root),
                 entry,
                 head,
-                failed,
-                checks
+                failed
               );
               for (const e of v.kind === "waived" ? v.applied : []) exceptionsApplied.push(e);
               if (v.kind === "lead") {
@@ -41814,8 +41879,7 @@ async function runCli(argv, deps) {
               evidenceCtx(loadConfig(project), ref.repo, stateRoot()),
               ref,
               info.head,
-              checks.failed,
-              checks.checks ?? []
+              checks.failed
             );
             if (ev.kind === "waived") {
               applied = ev.applied;
@@ -41850,12 +41914,11 @@ async function runCli(argv, deps) {
             };
           }
           policy.passed(ref, info.head);
-          const ownConfig = loadConfig(project);
-          const change = (ownConfig.evidence ?? []).length > 0 || reviewDone.configChange === true ? await evidenceChange(
-            evidenceCtx(ownConfig, ref.repo, stateRoot()),
+          const change = await evidenceChange(
+            evidenceCtx(loadConfig(project), ref.repo, stateRoot()),
             info.baseOid,
             info.head
-          ) : {};
+          );
           if (change.unreadable === true) {
             return {
               kind: "waiting",
@@ -44003,14 +44066,14 @@ function readHiddenLine(prompt, input2, write) {
   input2.setRawMode(true);
   input2.setEncoding("utf8");
   input2.resume();
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     let value = "";
     const done = (result) => {
       input2.removeListener("data", onData);
       input2.setRawMode?.(false);
       input2.pause();
       write("\n");
-      resolve8(result);
+      resolve9(result);
     };
     const onData = (chunk) => {
       for (const ch of chunk) {
@@ -44027,14 +44090,14 @@ function readHiddenLine(prompt, input2, write) {
 function readVisibleLine(prompt, input2, output2) {
   if (!input2.isTTY) return Promise.resolve(void 0);
   const rl = createInterface({ input: input2, output: output2, terminal: true });
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     let answered = false;
     const finish = (value) => {
       if (answered) return;
       answered = true;
       rl.close();
       input2.pause();
-      resolve8(value);
+      resolve9(value);
     };
     rl.on("close", () => finish(void 0));
     rl.on("SIGINT", () => {
@@ -44046,7 +44109,7 @@ function readVisibleLine(prompt, input2, output2) {
 }
 
 // src/ports.ts
-import { spawn as spawn2 } from "node:child_process";
+import { spawn as spawn3 } from "node:child_process";
 import { closeSync as closeSync8, openSync as openSync8, readFileSync as readFileSync38 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
@@ -45712,8 +45775,8 @@ var disconnect = (anyProcess) => {
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/deferred.js
 var createDeferred = () => {
   const methods = {};
-  const promise2 = new Promise((resolve8, reject) => {
-    Object.assign(methods, { resolve: resolve8, reject });
+  const promise2 = new Promise((resolve9, reject) => {
+    Object.assign(methods, { resolve: resolve9, reject });
   });
   return Object.assign(promise2, methods);
 };
@@ -50269,11 +50332,11 @@ var addConcurrentStream = (concurrentStreams, stream, waitName) => {
   const promises = weakMap.get(stream);
   const promise2 = createDeferred();
   promises.push(promise2);
-  const resolve8 = promise2.resolve.bind(promise2);
-  return { resolve: resolve8, promises };
+  const resolve9 = promise2.resolve.bind(promise2);
+  return { resolve: resolve9, promises };
 };
-var waitForConcurrentStreams = async ({ resolve: resolve8, promises }, subprocess) => {
-  resolve8();
+var waitForConcurrentStreams = async ({ resolve: resolve9, promises }, subprocess) => {
+  resolve9();
   const [isSubprocessExit] = await Promise.race([
     Promise.allSettled([true, subprocess]),
     Promise.all([false, ...promises])
@@ -51847,45 +51910,194 @@ var {
   getCancelSignal: getCancelSignal2
 } = getIpcExport();
 
-// src/ports.ts
-var HTTP_TIMEOUT_MS = 15e3;
+// src/evidence-sandbox.ts
+import { spawn as spawn2 } from "node:child_process";
+import { existsSync as existsSync12, lstatSync as lstatSync32, realpathSync as realpathSync7 } from "node:fs";
+import { dirname as dirname13, join as join39, resolve as resolve8, sep as sep7 } from "node:path";
+var PROBE_MS = 1e4;
+var KILL_GRACE_MS = 2e3;
+var SANDBOX_EXEC = "/usr/bin/sandbox-exec";
+function realOr2(p) {
+  const abs = resolve8(p);
+  if (existsSync12(abs)) return realpathSync7(abs);
+  const parent = dirname13(abs);
+  return parent === abs ? abs : join39(realOr2(parent), abs.slice(parent.length + 1));
+}
+var within2 = (child, parent) => child === parent || child.startsWith(parent.endsWith(sep7) ? parent : parent + sep7);
+var quotable = (p) => !/["\\\p{Cc}]/u.test(p);
+function seatbeltProfile(writable, hidden2) {
+  const w = realOr2(writable);
+  const all = [w, ...hidden2.map(realOr2)];
+  if (!all.every(quotable)) return void 0;
+  const q = (p) => `"${p}"`;
+  const ancestors = all.slice(1).filter((h2) => within2(w, h2));
+  const others = all.slice(1).filter((h2) => !within2(w, h2));
+  return [
+    "(version 1)",
+    "(allow default)",
+    "(deny network*)",
+    "(deny file-write*)",
+    `(allow file-write* (subpath ${q(w)}) (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))`,
+    ...others.length === 0 ? [] : [`(deny file-read* ${others.map((h2) => `(subpath ${q(h2)})`).join(" ")})`],
+    ...ancestors.length === 0 ? [] : [`(deny file-read-data ${ancestors.map((h2) => `(subpath ${q(h2)})`).join(" ")})`],
+    `(allow file-read* file-read-data (subpath ${q(w)}))`,
+    '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd") (global-name "com.apple.securityd.xpc") (global-name "com.apple.security.agent"))',
+    ""
+  ].join("\n");
+}
+function bwrapArgs(cwd, writable, hidden2) {
+  const w = resolve8(writable);
+  const masks = hidden2.flatMap((h2) => {
+    const p = resolve8(h2);
+    let dir;
+    try {
+      dir = lstatSync32(p).isDirectory();
+    } catch {
+      return [];
+    }
+    return dir ? ["--tmpfs", p] : ["--ro-bind", "/dev/null", p];
+  });
+  return [
+    "--die-with-parent",
+    "--new-session",
+    "--unshare-net",
+    "--unshare-pid",
+    "--ro-bind",
+    "/",
+    "/",
+    "--dev",
+    "/dev",
+    "--proc",
+    "/proc",
+    ...masks,
+    // After the masks: the run dir lies inside the hidden state.
+    "--bind",
+    w,
+    w,
+    "--chdir",
+    resolve8(cwd),
+    "--"
+  ];
+}
+async function probe(file2, args) {
+  try {
+    const r = await execa(file2, args, { reject: false, stdin: "ignore", timeout: PROBE_MS });
+    return r.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+var availability;
+function sandboxUnavailable() {
+  availability ??= (async () => {
+    if (process.platform === "darwin") {
+      return await probe(SANDBOX_EXEC, ["-p", "(version 1)(allow default)", "/usr/bin/true"]) ? void 0 : "sandbox-exec does not run here";
+    }
+    if (process.platform === "linux") {
+      return await probe("bwrap", [
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--unshare-net",
+        "true"
+      ]) ? void 0 : "bwrap (bubblewrap) is missing or cannot create a namespace here";
+    }
+    return `no sandbox for evidence commands on ${process.platform}`;
+  })();
+  return availability;
+}
+function runGroup(file2, args, opts) {
+  return new Promise((done) => {
+    let settled = false;
+    const finish = (r) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(hard);
+      done(r);
+    };
+    let child;
+    try {
+      child = spawn2(file2, args, {
+        cwd: opts.cwd,
+        env: opts.env,
+        detached: true,
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+    } catch (e) {
+      finish({ kind: "failed", why: `cannot start: ${e.message}` });
+      return;
+    }
+    const killGroup = () => {
+      try {
+        if (child.pid !== void 0) process.kill(-child.pid, "SIGKILL");
+      } catch {
+      }
+    };
+    const chunks = [];
+    let size = 0;
+    let tooLarge = false;
+    child.stdout?.on("data", (b) => {
+      size += b.length;
+      if (size > opts.maxBytes) {
+        tooLarge = true;
+        killGroup();
+        return;
+      }
+      chunks.push(b);
+    });
+    const timer = setTimeout(() => {
+      killGroup();
+      finish({ kind: "failed", why: `timed out after ${Math.round(opts.timeoutMs / 1e3)} s` });
+    }, opts.timeoutMs);
+    const hard = setTimeout(
+      () => finish({ kind: "failed", why: "did not end" }),
+      opts.timeoutMs + KILL_GRACE_MS
+    );
+    timer.unref();
+    hard.unref();
+    child.on("error", (e) => finish({ kind: "failed", why: `cannot start: ${e.message}` }));
+    child.on("close", (code, signal) => {
+      killGroup();
+      finish({
+        kind: "exited",
+        code: code ?? (signal === null ? 1 : 128),
+        stdout: Buffer.concat(chunks).toString("utf8"),
+        tooLarge
+      });
+    });
+  });
+}
 var realEvidence = {
+  unavailable: sandboxUnavailable,
+  async extract(tarFile, dest) {
+    await execa("tar", ["-xf", tarFile, "-C", dest], { stdin: "ignore", timeout: 3e5 });
+  },
   async run(argv, opts) {
-    const [file2, ...args] = argv;
-    if (file2 === void 0) return { code: 1, stdout: "", timedOut: false };
-    const child = execa(file2, args, {
+    const why = await sandboxUnavailable();
+    if (why !== void 0) return { kind: "failed", why };
+    if (argv.length === 0) return { kind: "failed", why: "no command" };
+    const o2 = {
       cwd: opts.cwd,
       env: opts.env,
-      extendEnv: false,
-      shell: false,
-      reject: false,
-      stdin: "ignore",
-      stderr: "ignore",
-      timeout: opts.timeoutMs,
-      maxBuffer: opts.maxBytes,
-      forceKillAfterDelay: 1e3,
-      stripFinalNewline: false
-    });
-    let timer;
-    const late = new Promise((done) => {
-      timer = setTimeout(
-        () => done({ code: 1, stdout: "", timedOut: true }),
-        opts.timeoutMs + 2e3
-      );
-      timer.unref();
-    });
-    const run2 = child.then((r) => ({
-      code: r.timedOut ? 124 : r.failed ? r.exitCode || 1 : 0,
-      stdout: r.failed ? "" : String(r.stdout ?? ""),
-      timedOut: r.timedOut === true
-    }));
-    try {
-      return await Promise.race([run2, late]);
-    } finally {
-      clearTimeout(timer);
+      timeoutMs: opts.timeoutMs,
+      maxBytes: opts.maxBytes
+    };
+    if (process.platform === "darwin") {
+      const profile = seatbeltProfile(opts.writable, opts.hidden);
+      if (profile === void 0) {
+        return { kind: "failed", why: "a path cannot be written into the sandbox profile" };
+      }
+      return runGroup(SANDBOX_EXEC, ["-p", profile, ...argv], o2);
     }
+    return runGroup("bwrap", [...bwrapArgs(opts.cwd, opts.writable, opts.hidden), ...argv], o2);
   }
 };
+
+// src/ports.ts
+var HTTP_TIMEOUT_MS = 15e3;
 var realHttp = {
   async post(url2, body, headers) {
     if (!url2.startsWith("https://")) return { ok: false };
@@ -51908,7 +52120,7 @@ var PLUGIN_TIMEOUT_MS2 = 3e5;
 var STOP_GRACE_MS = 5e3;
 var STOP_POLL_MS = 100;
 var IDENTITY_TIMEOUT_MS = 5e3;
-var sleep = (ms) => new Promise((resolve8) => setTimeout(resolve8, ms));
+var sleep = (ms) => new Promise((resolve9) => setTimeout(resolve9, ms));
 function realPorts(claudeBin = "claude") {
   const clock = { now: () => /* @__PURE__ */ new Date(), sleep };
   const gh = {
@@ -51949,7 +52161,7 @@ function realPorts(claudeBin = "claude") {
       return r.stdout;
     }
   };
-  const probe = (target) => {
+  const probe2 = (target) => {
     try {
       process.kill(target, 0);
       return true;
@@ -51957,13 +52169,13 @@ function realPorts(claudeBin = "claude") {
       return e.code === "EPERM";
     }
   };
-  const posix = process.platform !== "win32";
-  const alive = (pid) => posix && probe(-pid) || probe(pid);
+  const posix2 = process.platform !== "win32";
+  const alive = (pid) => posix2 && probe2(-pid) || probe2(pid);
   const signal = (pid, sig) => {
     try {
-      process.kill(posix ? -pid : pid, sig);
+      process.kill(posix2 ? -pid : pid, sig);
     } catch (e) {
-      if (!posix || e.code !== "ESRCH") return;
+      if (!posix2 || e.code !== "ESRCH") return;
       try {
         process.kill(pid, sig);
       } catch {
@@ -51974,15 +52186,15 @@ function realPorts(claudeBin = "claude") {
     async start(cwd, args, prompt, logPath, env) {
       const fd = openSync8(logPath, "a");
       try {
-        const child = spawn2(claudeBin, args, {
+        const child = spawn3(claudeBin, args, {
           cwd,
           env,
           detached: true,
           stdio: ["pipe", fd, fd]
         });
-        const pid = await new Promise((resolve8, reject) => {
+        const pid = await new Promise((resolve9, reject) => {
           child.once("error", reject);
-          child.once("spawn", () => resolve8(child.pid));
+          child.once("spawn", () => resolve9(child.pid));
         });
         child.stdin?.on("error", () => {
         });
@@ -52040,8 +52252,8 @@ function realPorts(claudeBin = "claude") {
         forceKillAfterDelay: 1e3
       });
       let timer;
-      const late = new Promise((resolve8) => {
-        timer = setTimeout(() => resolve8({ code: 1, stdout: "" }), opts.timeoutMs + 2e3);
+      const late = new Promise((resolve9) => {
+        timer = setTimeout(() => resolve9({ code: 1, stdout: "" }), opts.timeoutMs + 2e3);
         timer.unref();
       });
       const run2 = child.then((r) => ({
@@ -52096,7 +52308,7 @@ function realPorts(claudeBin = "claude") {
 // src/main.ts
 function launcher() {
   try {
-    return realpathSync7(fileURLToPath6(new URL("../bin/studio", import.meta.url)));
+    return realpathSync8(fileURLToPath6(new URL("../bin/studio", import.meta.url)));
   } catch {
     return void 0;
   }

@@ -42,6 +42,8 @@ import {
   loadOwnerConfig,
   type OwnerConfig,
   type OwnerEnv,
+  ownerConfigDir,
+  PROTECTED_HOME_PATHS,
   type RoleConfig,
   type StudioConfig,
 } from './config.js';
@@ -760,6 +762,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       stateRoot: root,
       now: () => ports.clock.now(),
       ...(deps.env.PATH === undefined ? {} : { path: deps.env.PATH }),
+      // What the sandboxed command may not read: the same credential and config locations a
+      // crew is kept from, the owner config (crew token, push topic) and every state root.
+      hidden: [
+        ...PROTECTED_HOME_PATHS.map((p) => join(deps.homedir, p)),
+        ownerConfigDir(owner),
+        stateBaseFor(owner),
+      ],
     });
 
     /** Puts an approved pull request into the merge queue: the body of `queue add`. */
@@ -868,7 +877,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             hold,
             mergeAllowed: (entry, head, waived) =>
               boardBlocksMerge(project, root, config, entry, head, ports, waived),
-            evidence: async (entry, head, failed, checks) => {
+            evidence: async (entry, head, failed) => {
               // Without rules in the owner's config none apply: a failure fails as before.
               if ((config.evidence ?? []).length === 0) return { kind: 'none' as const };
               const v = await judgeFailedChecks(
@@ -876,7 +885,6 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 entry,
                 head,
                 failed,
-                checks,
               );
               for (const e of v.kind === 'waived' ? v.applied : []) exceptionsApplied.push(e);
               // The merge fails on this line: after a grant the pull request needs queueing again.
@@ -1045,7 +1053,6 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               ref,
               info.head,
               checks.failed,
-              checks.checks ?? [],
             );
             if (ev.kind === 'waived') {
               applied = ev.applied;
@@ -1082,17 +1089,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           policy.passed(ref, info.head);
           // What proves a later pull request a false alarm is the owner's: a crew's pull request
           // that changes the evidence rules or their inputs gets no approval from Studio.
-          // Read when it can matter: rules in the owner's config, or a pull request that may touch
-          // studio.yaml (as launch saw its files). The rules that count are those on the base.
-          const ownConfig = loadConfig(project);
-          const change =
-            (ownConfig.evidence ?? []).length > 0 || reviewDone.configChange === true
-              ? await evidenceChange(
-                  evidenceCtx(ownConfig, ref.repo, stateRoot()),
-                  info.baseOid,
-                  info.head,
-                )
-              : {};
+          // Always, from the rules at the base: the owner's working tree may be stale or empty.
+          // A comparison that cannot be made holds the approval (fails closed).
+          const change = await evidenceChange(
+            evidenceCtx(loadConfig(project), ref.repo, stateRoot()),
+            info.baseOid,
+            info.head,
+          );
           if (change.unreadable === true) {
             return {
               kind: 'waiting',
