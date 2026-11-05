@@ -45,8 +45,11 @@ Nothing but GitHub is shared between the machines. Not tagged yet; the maintaine
 - `workers.accept` in the owner config on the lead's machine: the logins whose claims count, per label.
 - The lead's checks: the claim ref is only the lock. Each claim (and each takeover) is proven by one comment on
   the offer, `studio-claim <claim commit> <offer nonce>`; the first unedited one for the commit that started the
-  attempt must come from the account the claim names, accepted for the label. Nothing in a commit (content,
-  author, committer, signature) counts. Claims without it, comments of others and edited ones go to the lead.
+  attempt must come from the account the claim names, accepted for the label; every later state change (`done`,
+  `released`) is announced the same way, naming its exact commit, and only heartbeats may stay unannounced.
+  Comments of accounts that are not accepted are warnings and never decide or block. Nothing in a commit
+  (content, author, committer, signature) counts. Unproven claims, unannounced state changes and edited
+  comments go to the lead.
   The pull request must come from `studio/<id>` of the item's repository with the report's head, opened by the
   claiming worker. The worker token needs Issues: Read and write for the comment.
 - Two tokens on a worker: `worker-token` (`studio secret set worker-token`) for claims, pull requests and pushes,

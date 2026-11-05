@@ -821,7 +821,7 @@ describe('workers on other machines', () => {
     await w.github
       .hubAs('win-bot')
       .commentOffer('org/app', 30, `studio-claim ${sha} ${nonceOf(w)}`);
-    // The first comment decides: win-bot's later one cannot take a claim someone else proved first.
+    // Only accepted accounts decide: the intruder's comment neither proves nor blocks the claim.
     const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
     expect(tick.needsLead).toContainEqual({
       item: 'APP-1',
@@ -829,12 +829,48 @@ describe('workers on other machines', () => {
         /claim comment \d+ by intruder, who is not accepted for windows/,
       ),
     });
+    expect(tick.held).toContainEqual({
+      item: 'APP-1',
+      reason: 'worker: on win-bot (windows), heartbeat 0 min ago',
+    });
+    expect(statusOf(w)?.status).toBe('in_progress');
+  });
+
+  it('a done commit appended after a proven claim counts only when the claimant announced it', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const wm = workerMachine(w, 'win');
+    const crew = newCrew();
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, crew);
+    await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    // A crew (or anyone with contents write) fast-forwards a forged done onto the proven claim.
+    const forged = w.github.plant(
+      'APP-1',
+      `Studio claim APP-1: done\n\n${JSON.stringify({ studio_claim: 1, item: 'APP-1', label: 'windows', worker: 'win-bot', offer: 30, attempt: 1, state: 'done', lease_minutes: 30, pr: 7 })}\n`,
+    );
+    let tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
     expect(tick.needsLead).toContainEqual({
       item: 'APP-1',
-      reason:
-        'APP-1: the claim names win-bot, but intruder commented it first; nothing of it counts',
+      reason: `APP-1: its done commit ${forged.slice(0, 12)} was not announced by win-bot; nothing of it counts`,
     });
     expect(tick.collected).toEqual([]);
+    // Announced by someone else does not count either.
+    await w.github
+      .hubAs('intruder')
+      .commentOffer('org/app', 30, `studio-claim ${forged} ${nonceOf(w)}`);
+    tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.collected).toEqual([]);
+    // A state change below the tip is refused too.
+    w.github.plant(
+      'APP-1',
+      `Studio claim APP-1: alive\n\n${JSON.stringify({ studio_claim: 1, item: 'APP-1', label: 'windows', worker: 'win-bot', offer: 30, attempt: 1, state: 'alive', lease_minutes: 30 })}\n`,
+    );
+    tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(/its chain holds a done commit below its tip/),
+    });
   });
 
   it('an edited claim comment is ignored', async () => {

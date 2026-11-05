@@ -78,6 +78,8 @@ export interface Current {
   claimedAt: string;
   /** Whether a crew was started for this claim. */
   launched: boolean;
+  /** The offer's nonce: every claim comment names it. */
+  nonce?: string;
 }
 
 export interface WorkerState {
@@ -383,6 +385,7 @@ async function claimNext(
       lastBeat: c.ports.clock.now().toISOString(),
       claimedAt: c.ports.clock.now().toISOString(),
       launched: false,
+      nonce: offer.nonce,
     };
     saveWorkerState(stateRoot, { ...state, current });
     // The ref is only the lock. Who claimed is proven by this comment: GitHub sets its author from
@@ -470,6 +473,25 @@ const claimOf = (label: string, cur: Current, state: Claim['state']): Claim => (
   leaseMinutes: cur.leaseMinutes,
 });
 
+/**
+ * Names a state-changing claim commit (`done`, `released`) in a comment, as the claim itself was:
+ * the lead counts such a tip only when the proven claimant announced it. Tried twice.
+ */
+async function announce(c: WorkerContext, repo: string, cur: Current, sha: string): Promise<void> {
+  if (cur.nonce === undefined) {
+    c.log(`${cur.item.id}: no nonce on record; the lead will not count ${sha.slice(0, 12)}`);
+    return;
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await c.hub.commentOffer(repo, cur.offer, claimComment(sha, cur.nonce));
+      return;
+    } catch (e) {
+      c.log(`${cur.item.id}: announcing ${sha.slice(0, 12)} failed: ${(e as Error).message}`);
+    }
+  }
+}
+
 /** Gives the item up: a `released` claim with a reason in Studio's words; clears `current`. */
 async function release(
   c: WorkerContext,
@@ -487,6 +509,7 @@ async function release(
   };
   const wrote = await writeClaim(c, repo, claim, cur.claimSha);
   if (!wrote.ok) c.log(`${cur.item.id}: the claim moved meanwhile; not released`);
+  else await announce(c, repo, cur, wrote.sha);
   saveWorkerState(stateRoot, { label: state.label });
 }
 
@@ -661,6 +684,7 @@ async function finish(
       ? {}
       : { 'usage.json': `${JSON.stringify(usageField(usage), null, 2)}\n` }),
   });
+  if (wrote.ok) await announce(c, repo, cur, wrote.sha);
   saveWorkerState(stateRoot, { label: state.label });
   if (!wrote.ok) {
     return {

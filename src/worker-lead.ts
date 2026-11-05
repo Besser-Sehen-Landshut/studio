@@ -83,6 +83,13 @@ export async function proveClaim(o: {
   const warnings: string[] = [];
   const nonce = record.nonce;
   if (nonce === undefined) return { ok: false, line: 'its offer has no nonce on record', warnings };
+  if (!o.accepted.some((a) => lower(a) === lower(claim.worker))) {
+    return {
+      ok: false,
+      line: `claimed by ${claim.worker}, who is not accepted for the label ${record.label} (workers.accept in the owner config)`,
+      warnings,
+    };
+  }
   // Back to the start of this attempt.
   let cur: ClaimCommit | undefined = o.tip;
   let anchor: string | undefined;
@@ -104,6 +111,14 @@ export async function proveClaim(o: {
     if (c.state === 'claimed') {
       anchor = cur.sha;
       break;
+    }
+    // Below the tip only heartbeats: a state change that is not the tip is no claim of ours.
+    if (cur.sha !== o.tip.sha && c.state !== 'alive') {
+      return {
+        ok: false,
+        line: `its chain holds a ${c.state} commit below its tip (${cur.sha.slice(0, 12)})`,
+        warnings,
+      };
     }
     const parent: string | undefined = cur.parents[0];
     cur = parent === undefined ? undefined : await o.hub.claimCommit(o.repo, parent);
@@ -130,9 +145,11 @@ export async function proveClaim(o: {
     else if (c.nonce !== nonce)
       warnings.push(`claim comment ${c.id} by ${who} names another offer`);
   }
-  const valid = comments.filter(
-    (c) => c.updatedAt === c.createdAt && c.nonce === nonce && c.sha === anchor,
+  // Only unedited comments of accepted accounts for this offer decide; anyone else's is a warning.
+  const counted = comments.filter(
+    (c) => c.updatedAt === c.createdAt && c.nonce === nonce && accepted.includes(lower(c.login)),
   );
+  const valid = counted.filter((c) => c.sha === anchor);
   const first = valid[0];
   if (first === undefined) {
     return {
@@ -159,6 +176,20 @@ export async function proveClaim(o: {
       line: `claimed by ${claim.worker}, who is not accepted for the label ${record.label} (workers.accept in the owner config)`,
       warnings,
     };
+  }
+  // A heartbeat changes nothing and may stay unannounced; any other state at the tip counts only
+  // when the proven claimant named that very commit in a comment of its own.
+  if (o.tip.sha !== anchor && claim.state !== 'alive') {
+    const announced = counted.some(
+      (c) => c.sha === o.tip.sha && lower(c.login) === lower(first.login),
+    );
+    if (!announced) {
+      return {
+        ok: false,
+        line: `its ${claim.state} commit ${o.tip.sha.slice(0, 12)} was not announced by ${claim.worker}`,
+        warnings,
+      };
+    }
   }
   return { ok: true, anchor, warnings };
 }

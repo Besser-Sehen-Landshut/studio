@@ -44296,7 +44296,8 @@ async function claimNext(c3, stateRoot, state, ready) {
       worker: login,
       lastBeat: c3.ports.clock.now().toISOString(),
       claimedAt: c3.ports.clock.now().toISOString(),
-      launched: false
+      launched: false,
+      nonce: offer.nonce
     };
     saveWorkerState(stateRoot, { ...state, current });
     try {
@@ -44369,6 +44370,20 @@ var claimOf = (label, cur, state) => ({
   state,
   leaseMinutes: cur.leaseMinutes
 });
+async function announce2(c3, repo, cur, sha) {
+  if (cur.nonce === void 0) {
+    c3.log(`${cur.item.id}: no nonce on record; the lead will not count ${sha.slice(0, 12)}`);
+    return;
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await c3.hub.commentOffer(repo, cur.offer, claimComment(sha, cur.nonce));
+      return;
+    } catch (e) {
+      c3.log(`${cur.item.id}: announcing ${sha.slice(0, 12)} failed: ${e.message}`);
+    }
+  }
+}
 async function release(c3, stateRoot, state, cur, repo, reason, usage) {
   const claim2 = {
     ...claimOf(state.label, cur, "released"),
@@ -44377,6 +44392,7 @@ async function release(c3, stateRoot, state, cur, repo, reason, usage) {
   };
   const wrote = await writeClaim(c3, repo, claim2, cur.claimSha);
   if (!wrote.ok) c3.log(`${cur.item.id}: the claim moved meanwhile; not released`);
+  else await announce2(c3, repo, cur, wrote.sha);
   saveWorkerState(stateRoot, { label: state.label });
 }
 var usageField = (u2) => ({
@@ -44527,6 +44543,7 @@ async function finish(c3, stateRoot, state, cur, repo, rec) {
     ...usage.runs === 0 ? {} : { "usage.json": `${JSON.stringify(usageField(usage), null, 2)}
 ` }
   });
+  if (wrote.ok) await announce2(c3, repo, cur, wrote.sha);
   saveWorkerState(stateRoot, { label: state.label });
   if (!wrote.ok) {
     return {
@@ -44969,6 +44986,13 @@ async function proveClaim(o2) {
   const warnings = [];
   const nonce = record2.nonce;
   if (nonce === void 0) return { ok: false, line: "its offer has no nonce on record", warnings };
+  if (!o2.accepted.some((a2) => lower(a2) === lower(claim2.worker))) {
+    return {
+      ok: false,
+      line: `claimed by ${claim2.worker}, who is not accepted for the label ${record2.label} (workers.accept in the owner config)`,
+      warnings
+    };
+  }
   let cur = o2.tip;
   let anchor2;
   for (let i2 = 0; i2 < MAX_CHAIN && cur !== void 0; i2++) {
@@ -44983,6 +45007,13 @@ async function proveClaim(o2) {
     if (c3.state === "claimed") {
       anchor2 = cur.sha;
       break;
+    }
+    if (cur.sha !== o2.tip.sha && c3.state !== "alive") {
+      return {
+        ok: false,
+        line: `its chain holds a ${c3.state} commit below its tip (${cur.sha.slice(0, 12)})`,
+        warnings
+      };
     }
     const parent = cur.parents[0];
     cur = parent === void 0 ? void 0 : await o2.hub.claimCommit(o2.repo, parent);
@@ -45009,9 +45040,10 @@ async function proveClaim(o2) {
     else if (c3.nonce !== nonce)
       warnings.push(`claim comment ${c3.id} by ${who} names another offer`);
   }
-  const valid = comments.filter(
-    (c3) => c3.updatedAt === c3.createdAt && c3.nonce === nonce && c3.sha === anchor2
+  const counted2 = comments.filter(
+    (c3) => c3.updatedAt === c3.createdAt && c3.nonce === nonce && accepted.includes(lower(c3.login))
   );
+  const valid = counted2.filter((c3) => c3.sha === anchor2);
   const first = valid[0];
   if (first === void 0) {
     return {
@@ -45038,6 +45070,18 @@ async function proveClaim(o2) {
       line: `claimed by ${claim2.worker}, who is not accepted for the label ${record2.label} (workers.accept in the owner config)`,
       warnings
     };
+  }
+  if (o2.tip.sha !== anchor2 && claim2.state !== "alive") {
+    const announced = counted2.some(
+      (c3) => c3.sha === o2.tip.sha && lower(c3.login) === lower(first.login)
+    );
+    if (!announced) {
+      return {
+        ok: false,
+        line: `its ${claim2.state} commit ${o2.tip.sha.slice(0, 12)} was not announced by ${claim2.worker}`,
+        warnings
+      };
+    }
   }
   return { ok: true, anchor: anchor2, warnings };
 }
