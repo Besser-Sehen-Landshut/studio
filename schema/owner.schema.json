@@ -93,24 +93,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "cache": {
-      "type": "object",
-      "properties": {
-        "max_gb": {
-          "type": "number",
-          "exclusiveMinimum": 0
-        },
-        "refresh_timeout_min": {
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
-        },
-        "auto_refresh": {
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false
     }
   },
   "additionalProperties": false

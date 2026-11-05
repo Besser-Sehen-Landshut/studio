@@ -437,15 +437,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "cache": {
-      "type": "object",
-      "properties": {
-        "auto_refresh": {
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false
     }
   },
   "required": [

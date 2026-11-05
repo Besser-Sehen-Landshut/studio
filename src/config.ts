@@ -188,8 +188,6 @@ export const studioConfigSchema = z
     plugins: z.array(pluginPinSchema).optional(),
     // Spending brake: once the ended crew runs of the local day cost this much, nothing new starts.
     limits: dailyLimitsSchema.optional(),
-    // The weekly refresh of the build cache in `tick` runs only with this and the owner's opt-in.
-    cache: z.strictObject({ autoRefresh: z.boolean().optional() }).optional(),
   })
   .superRefine((cfg, ctx) => {
     const seen = new Set<string>();
@@ -333,22 +331,6 @@ export const ownerConfigSchema = z.strictObject({
     .optional(),
   // The same daily cost cap as in studio.yaml, over all projects of the owner together.
   limits: dailyLimitsSchema.optional(),
-  // The shared build cache (`studio cache`): all projects' caches together stay below `max_gb`.
-  // Defaults: 20 GB, a refresh of at most 60 minutes (`cacheLimits`).
-  cache: z
-    .strictObject({
-      maxGb: z.number().positive().optional(),
-      refreshTimeoutMin: z.number().int().positive().optional(),
-      // The owner's half of the opt-in to the weekly refresh (studio.yaml has the other).
-      autoRefresh: z.boolean().optional(),
-    })
-    .optional(),
-});
-
-/** The build cache's limits from the owner config, with their defaults. */
-export const cacheLimits = (c: { cache?: OwnerConfig['cache'] }) => ({
-  maxGb: c.cache?.maxGb ?? 20,
-  refreshTimeoutMin: c.cache?.refreshTimeoutMin ?? 60,
 });
 
 export type OwnerConfig = z.infer<typeof ownerConfigSchema>;

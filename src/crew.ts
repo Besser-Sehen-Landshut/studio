@@ -22,7 +22,6 @@ import {
   resolveModel,
   writeCaps,
 } from './brief-caps.js';
-import { seedCrew } from './cache.js';
 import { loadOwnerConfig, type OwnerEnv, type StudioConfig, within } from './config.js';
 import {
   allParkedLine,
@@ -59,7 +58,6 @@ import {
   STATE_FILES,
   STATE_PROTECTED_DIRS,
   type StateLock,
-  sandboxDenyRead,
   stateRootFor,
   withBoardLock,
   writeStateFile,
@@ -690,8 +688,6 @@ export function writeCrewSettings(
     macosTrustService?: boolean;
     /** `Skill(<name>)` deny rules: every installed skill the brief does not name. */
     skillDeny?: readonly string[];
-    /** The project's build cache: readable, never writable (the launch copied the seeds). */
-    cacheDir?: string;
   },
   launcher: LauncherEnv = {},
 ): string {
@@ -714,7 +710,7 @@ export function writeCrewSettings(
   // The state base (parent of every state root: other projects, other items, settings, logs) is
   // denied too, literal and real spelling, so an XDG_STATE_HOME outside the home is covered.
   const stateBase = dirname(stateRoot);
-  const denyRead = sandboxDenyRead(stateRoot, realHome, env);
+  const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase)]);
   const loginDir = dirs.providerConfigDir;
   // Of a login dir only what skills need: it also holds the transcripts, `.claude.json` and shell
   // snapshots of other crews. Claude Code itself runs outside the sandbox and reaches the rest.
@@ -730,8 +726,6 @@ export function writeCrewSettings(
     // (a shell command, or a file tool under the sandbox) must reach them too, or the crew
     // starts without its task. Nothing else of the state root comes back.
     ...['md', 'caps', 'rules'].map((ext) => join(stateRoot, 'briefs', `${id}.${ext}`)),
-    // Read-only: allowWrite below never names it, and the guard protects it.
-    ...(dirs.cacheDir === undefined ? [] : [dirs.cacheDir]),
   ];
   const ctxFile = join(stateRoot, 'guard', `${id}.json`);
   // The clone lives inside the state root, so the root itself cannot be protected (the guard
@@ -1276,15 +1270,6 @@ async function launchCrewLocked(
   const tmpDir = join(stateRoot, 'tmp', item.id);
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
-  // The build cache's seeds, copied (copy-on-write) into the crew's own clone and HOME.
-  const seed = await seedCrew({
-    stateRoot,
-    clone: wt.path,
-    homeDir,
-    freshClone: !reused,
-    ports,
-    platform: launcher.platform ?? process.platform,
-  });
   const briefRules = writePinnedRules(stateRoot, item.id, pinned);
   const installedNames = new Set(installedSkills(claudeConfigDir).names);
   const caps = writeCaps({
@@ -1317,7 +1302,6 @@ async function launchCrewLocked(
       toolchainPaths,
       providerConfigDir,
       macosTrustService: ownerConfig.crewAllowMacosTrustService,
-      ...(seed.cacheDir === undefined ? {} : { cacheDir: seed.cacheDir }),
       skillDeny: skillDenyRules(
         claudeConfigDir,
         [CREW_SKILL, ...caps.required, ...caps.whenAvailable, ...caps.offered],
@@ -1356,7 +1340,7 @@ async function launchCrewLocked(
       if (v) env[k] = v;
     }
   }
-  Object.assign(env, seed.env, settingsEnv);
+  Object.assign(env, settingsEnv);
   if (token) env.GH_TOKEN = token;
   const log = join(stateRoot, 'logs', `${item.id}.jsonl`);
   ensureStateDir(stateRoot, dirname(log));

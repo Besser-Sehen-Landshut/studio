@@ -32,16 +32,7 @@ import {
 } from './config.js';
 
 /** Entries of the state root that a crew session must never write (besides its own clone). */
-export const STATE_PROTECTED_DIRS = [
-  'guard',
-  'settings',
-  'briefs',
-  'logs',
-  'homes',
-  'tmp',
-  'cache',
-  'cache-build',
-];
+export const STATE_PROTECTED_DIRS = ['guard', 'settings', 'briefs', 'logs', 'homes', 'tmp'];
 export const STATE_FILES = [
   'crew.json',
   'queue.json',
@@ -61,7 +52,6 @@ export const STATE_FILES = [
   'skills-check.json',
   'tick.json',
   'costs.json',
-  'cache.lock',
 ];
 
 /** `$XDG_STATE_HOME/studio`, else `<home>/.local/state/studio`: the parent of every state root. */
@@ -148,7 +138,7 @@ export function stateDirName(projectReal: string): string {
 }
 
 /** `p` with its longest existing prefix replaced by that prefix's real path. */
-export function realish(p: string): string {
+function realish(p: string): string {
   const abs = resolve(p);
   let cur = abs;
   const rest: string[] = [];
@@ -605,18 +595,4 @@ export function credentialLocations(
   const realDir = realish(ownerDir);
   if (realDir !== ownerDir) extra.push(realDir, join(realDir, basename(crewTokenFile(owner))));
   return { all: [...CREDENTIAL_PATHS.map((p) => join(home, p)), ...extra], extra };
-}
-
-/**
- * What a sandbox on the owner's machine denies to read: the whole real home, every credential
- * location (also outside the home) and the state base, in literal and real spelling. Crews and the
- * cache refresh build their sandboxes from it; each lets back in only its own paths.
- */
-export function sandboxDenyRead(
-  stateRoot: string,
-  home: string,
-  env: Record<string, string | undefined>,
-): string[] {
-  const stateBase = dirname(stateRoot);
-  return [...new Set([home, ...credentialLocations(home, env).all, stateBase, realish(stateBase)])];
 }

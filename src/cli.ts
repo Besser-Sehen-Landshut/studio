@@ -17,7 +17,6 @@ import {
   type WorkItem,
 } from './board.js';
 import { readSkillsMissing } from './brief-caps.js';
-import { type CacheTick, cacheStatus, cacheTick, refreshCache } from './cache.js';
 import { capabilitiesDir } from './capabilities.js';
 import { readCapacity, readCapacityTwice } from './capacity.js';
 import { approvedJobsProblem, type CoveredJob, verifyNotRunHereJobs } from './ci-jobs.js';
@@ -218,10 +217,6 @@ Commands:
                            Pinned plugins against their marketplaces and sources against upstream;
                            one board item per update. Monthly (tick runs it); --now runs it at once,
                            --security marks a plugin or source update as security-relevant (priority 0)
-  cache refresh [--trust-repo-config]
-                           Build the shared build cache from main in an owner-side clone, sandboxed
-                           (not for crews); --trust-repo-config accepts main's .cargo/config and toolchain path
-  cache status             Size and age of the build cache
   setup [--link]           Owner only, in a terminal: gh, crew token and Claude account, one guided
                            step each, skipped when done; --link puts studio on your terminal's PATH
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
@@ -342,8 +337,6 @@ interface Tick {
   epicsReady?: { epic: string; title: string }[];
   /** The monthly skills check, when this tick ran it: new update items and what failed. */
   skillsCheck?: { added: string[]; raised: string[]; problems: string[] };
-  /** What the build cache's upkeep did; absent when nothing was due. */
-  cache?: CacheTick;
 }
 
 /** One tick at a time; a tick whose holder died is taken over after this long. */
@@ -448,9 +441,6 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     }
     if (values.link !== undefined && cmd !== 'setup') {
       throw new UsageError('--link works with setup only');
-    }
-    if (values['trust-repo-config'] !== undefined && !(cmd === 'cache' && rest[0] === 'refresh')) {
-      throw new UsageError('--trust-repo-config works with cache refresh only');
     }
     if ((values.now !== undefined || values.security !== undefined) && cmd !== 'skills') {
       throw new UsageError('--now and --security work with skills check only');
@@ -1127,43 +1117,6 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
      * and run the queue. Each item's failure, and each phase's, is recorded and the rest goes on;
      * what needs a decision is listed, never decided here.
      */
-    /** The build cache's part of a tick; a refresh runs as its own process, never in the tick. */
-    const upkeepCache = (root: string) => {
-      const exec = ports.exec;
-      const launcher = deps.launcher;
-      const ownerConfig = loadOwnerConfig(owner);
-      return cacheTick({
-        autoRefresh:
-          loadConfig(project).cache?.autoRefresh === true &&
-          ownerConfig.cache?.autoRefresh === true,
-        stateRoot: root,
-        stateBase: dirname(ownerRoot()),
-        ownerRoot: ownerRoot(),
-        ownerConfig,
-        now: ports.clock.now(),
-        ...(exec === undefined || launcher === undefined
-          ? {}
-          : {
-              start: async (log: string) =>
-                (
-                  await exec.detach(
-                    process.execPath,
-                    [launcher, '--project', project, 'cache', 'refresh'],
-                    {
-                      cwd: project,
-                      env: Object.fromEntries(
-                        Object.entries(deps.env).filter(
-                          (e): e is [string, string] => e[1] !== undefined,
-                        ),
-                      ),
-                      log,
-                    },
-                  )
-                ).pid,
-            }),
-      });
-    };
-
     /** `skills check` itself, for the command and for the monthly run in `tick`. */
     const skillsCheck = async (security: readonly string[]) => {
       const root = await boundStateRoot();
@@ -1377,12 +1330,6 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       };
 
       // (g) At most once in 30 days per project: new plugin versions and changed sources as items.
-      // (h) The build cache: the daily size cleanup, and the weekly refresh in the background.
-      const cacheUpkeep = async () => {
-        const r = await upkeepCache(root);
-        if (r !== undefined) out.cache = r;
-      };
-
       const skillsMonthly = async () => {
         if (!skillsCheckDue(root, ports.clock.now()).due) return;
         const r = await skillsCheck([]);
@@ -1401,7 +1348,6 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ['queue add', queueApproved],
           ['sweep', sweep],
           ['skills check', skillsMonthly],
-          ['cache', cacheUpkeep],
         ] as const) {
           if (!(await phase(name, body))) return out;
         }
@@ -2134,34 +2080,6 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         return 0;
       }
 
-      case 'cache': {
-        const [sub] = rest;
-        if (rest.length !== 1 || (sub !== 'refresh' && sub !== 'status')) {
-          throw new UsageError('cache needs: refresh [--trust-repo-config] | status');
-        }
-        const ownerConfig = loadOwnerConfig(owner);
-        if (sub === 'status') {
-          print(cacheStatus(stateRoot(), ownerConfig, ports.clock.now()));
-          return 0;
-        }
-        refuseCrew(deps.env);
-        const root = await boundStateRoot();
-        print(
-          await refreshCache({
-            stateRoot: root,
-            ownerRoot: ownerRoot(),
-            originUrl: (await ports.git.run(project, ['remote', 'get-url', 'origin'])).trim(),
-            ownerConfig,
-            ports,
-            platform: process.platform,
-            env: deps.env,
-            home: deps.homedir,
-            trustRepoConfig: values['trust-repo-config'] === true,
-          }),
-        );
-        return 0;
-      }
-
       case 'skills': {
         if (rest[0] !== 'check' || rest.length !== 1) {
           throw new UsageError('skills needs: check [--now] [--security <name>]...');
@@ -2436,7 +2354,6 @@ function parseCli(argv: string[]) {
         link: { type: 'boolean' },
         now: { type: 'boolean' },
         security: { type: 'string', multiple: true },
-        'trust-repo-config': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: true,
