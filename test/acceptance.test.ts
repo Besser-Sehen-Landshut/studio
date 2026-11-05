@@ -947,31 +947,86 @@ describe('limits and edges', () => {
     expect(r.board.items.at(-1)?.paths).toEqual(['src/a/**']);
   });
 
-  it(`after ${MAX_ACCEPTANCE_ROUNDS} rounds that asked for changes, new findings wait blocked for the lead`, () => {
-    const b = accepted();
-    const earlier = (id: string) =>
-      workItemSchema.parse({
-        ...(b.items.at(-1) as WorkItem),
-        id,
-        status: 'merged',
-        notes: ['acceptance E-1', 'verdict: changes_requested'],
+  describe(`after ${MAX_ACCEPTANCE_ROUNDS} rounds that found work, new work waits blocked for the lead`, () => {
+    /** Two earlier rounds that left a merged item each, then the current acceptance. */
+    const history = () => {
+      const b = accepted();
+      const current = b.items.at(-1) as WorkItem;
+      const fromRound = (id: string, source: string) =>
+        piece(id, 'merged', { notes: [`finding of ${source}`] });
+      return {
+        current,
+        board: {
+          ...b,
+          items: [...b.items, fromRound('APP-8', 'APP-6'), fromRound('APP-9', 'APP-7')],
+        },
+      };
+    };
+    const verdicts = {
+      'changes requested': {
+        verdict: 'changes_requested' as const,
+        findings: ['x'],
+        failedSuites: [],
+      },
+      'an approval with a failed suite': {
+        verdict: 'approve' as const,
+        findings: [],
+        failedSuites: ['.github/workflows/e2e.yml / browser'],
+      },
+      // A report without a verdict counts as changes requested (checkAcceptanceReport).
+      'no verdict': {
+        verdict: 'changes_requested' as const,
+        findings: [],
+        failedSuites: ['.github/workflows/docs.yml'],
+      },
+    };
+    for (const [name, v] of Object.entries(verdicts)) {
+      it(name, () => {
+        const { board, current } = history();
+        const r = applyAcceptance(
+          board,
+          current,
+          { epic: 'E-1', state: epicState(board, 'E-1'), sha: MAIN, ...v },
+          NOW,
+          SUITES,
+        );
+        const item = r.board.items.at(-1) as WorkItem;
+        expect(r.outcome.result).toBe('reopened');
+        expect(item.status).toBe('blocked');
+        expect(item.notes?.at(-1)).toMatch(/^acceptance limit reached: 3 rounds found work/);
+        expect(r.board.epics?.[0]?.status).toBe('open');
       });
-    const current = {
-      ...(b.items.at(-1) as WorkItem),
-      notes: [...((b.items.at(-1) as WorkItem).notes ?? []), 'verdict: changes_requested'],
-    };
-    const below = { ...b, items: [...b.items.slice(0, -1), earlier('APP-8'), current] };
-    expect(
-      applyAcceptance(below, current, findingDone(below), NOW, SUITES).board.items.at(-1)?.status,
-    ).toBe('ready');
-    const at = {
-      ...b,
-      items: [...b.items.slice(0, -1), earlier('APP-8'), earlier('APP-9'), current],
-    };
-    const r = applyAcceptance(at, current, findingDone(at), NOW, SUITES);
-    const item = r.board.items.at(-1) as WorkItem;
-    expect(item.status).toBe('blocked');
-    expect(item.notes?.at(-1)).toMatch(/^acceptance limit reached: 3 rounds asked for changes/);
+    }
+
+    it('below the limit the work is ready', () => {
+      const b = accepted();
+      const current = b.items.at(-1) as WorkItem;
+      const one = {
+        ...b,
+        items: [...b.items, piece('APP-8', 'merged', { notes: ['finding of APP-6'] })],
+      };
+      const r = applyAcceptance(
+        one,
+        current,
+        {
+          epic: 'E-1',
+          state: epicState(one, 'E-1'),
+          sha: MAIN,
+          verdict: 'approve',
+          findings: [],
+          failedSuites: ['.github/workflows/e2e.yml / browser'],
+        },
+        NOW,
+        SUITES,
+      );
+      expect(r.board.items.at(-1)?.status).toBe('ready');
+    });
+
+    it('a missing verdict is read as changes requested', () => {
+      const caps2: CrewCaps = { ...caps, analyzers: [], mandatory: [] };
+      const { verdict: _v, ...noVerdict } = report({ findings: ['x'] });
+      expect(checkAcceptanceReport(caps2, noVerdict)?.verdict).toBe('changes_requested');
+    });
   });
 
   it('an unreadable record of started suites starts nothing and goes to the lead', async () => {

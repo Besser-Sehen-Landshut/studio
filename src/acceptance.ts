@@ -33,7 +33,7 @@ export const FINDING_NOTE = 'finding of ';
 export const SUITE_NOTE = 'suite: ';
 /** How long a main commit may show no run of a suite before Studio starts it (CI starts late). */
 export const SUITE_GRACE_MS = 10 * 60_000;
-/** Acceptance rounds of one epic that may ask for changes before its new work waits for the lead. */
+/** Acceptance rounds of one epic that may find work before its new work waits for the lead. */
 export const MAX_ACCEPTANCE_ROUNDS = 3;
 /** How long a started suite may show no run before the lead hears of it. */
 export const DISPATCH_WAIT_MS = 30 * 60_000;
@@ -928,10 +928,17 @@ export function applyAcceptance(
   let next = board;
   const added: string[] = [];
   const prefix = acceptance.id.slice(0, acceptance.id.indexOf('-'));
-  // Rounds that asked for changes, this one included: past the limit the lead releases the work.
-  const rounds = acceptancesOf(board, done.epic).filter((i) =>
-    (i.notes ?? []).includes('verdict: changes_requested'),
-  ).length;
+  // Rounds that created work, counted from the work itself whatever the verdict was (changes
+  // requested, an approval with a failed suite): each earlier acceptance of the epic that some item
+  // names as its source, plus this one. Past the limit the lead releases the work.
+  const sources = new Set(
+    board.items
+      .filter((i) => i.epic === done.epic)
+      .flatMap((i) => (i.notes ?? []).filter((n) => n.startsWith(FINDING_NOTE)))
+      .map((n) => n.slice(FINDING_NOTE.length))
+      .filter((id) => id !== acceptance.id),
+  );
+  const rounds = sources.size + 1;
   const held = rounds >= MAX_ACCEPTANCE_ROUNDS;
   // A fix of a finding is no CI item: `.github/` globs of the epic do not pass on to it.
   const paths = acceptance.paths.filter((g) => !g.toLowerCase().startsWith('.github'));
@@ -959,7 +966,7 @@ export function applyAcceptance(
         ...notes,
         ...(held
           ? [
-              `acceptance limit reached: ${rounds} rounds asked for changes; the lead decides (ready to go on, or drop)`,
+              `acceptance limit reached: ${rounds} rounds found work; the lead decides (ready to go on, or drop)`,
             ]
           : []),
       ],

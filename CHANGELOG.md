@@ -36,7 +36,7 @@ epic done only when the acceptance is green. Not tagged yet; the maintainers tag
   <id>`, a fixed Definition of Done, note `finding of <id>`; the finding text is kept in the new item field
   `finding` and reaches the builder only as a data file) and per failed suite (a configured name quoted,
   any other name as data), which reopens the epic, or marks the epic `done` with
-  `accepted: { item, sha, at }`. From the third round that asked for changes, new items wait `blocked` for
+  `accepted: { item, sha, at }`. From the third round that found work (whatever the verdict), new items wait `blocked` for
   the lead. `epic drop` takes a waiting acceptance along. It prints
   `acceptance: { epic, result, findings }`; `tick` prints `epicsDone`, `epicsReopened` and `acceptance`
   (items added, dropped, pinned, suites started), and `epicsReady` names the acceptance item.
