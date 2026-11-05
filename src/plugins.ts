@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { isMap, isScalar, parseDocument } from 'yaml';
 import { z } from 'zod';
 
 /** This plugin's own version; a test keeps it equal to package.json and plugin.json. */
@@ -285,18 +286,45 @@ const isDir = (p: string): boolean => {
 };
 
 /** The `name:` of a SKILL.md front matter, unquoted; undefined when there is none. */
-export function frontmatterName(file: string): string | undefined {
+export type FrontmatterName =
+  | { kind: 'none' }
+  | { kind: 'name'; name: string }
+  /** Anything Studio cannot read for sure: the skill is refused, never guessed. */
+  | { kind: 'invalid' };
+
+/**
+ * The `name` of a SKILL.md front matter, read with the YAML parser: after an optional byte order
+ * mark, a first line of exactly `---`, a closing line of exactly `---`, unique keys, and `name` a
+ * plain string. No front matter at all is `none` (the directory names the skill); everything
+ * ambiguous (no closing line, a header that does not parse, two `name` keys, a list or number, an
+ * unreadable or oversized file) is `invalid`.
+ */
+export function frontmatterName(file: string): FrontmatterName {
   let text: string;
   try {
-    if (statSync(file).size > MAX_SKILL_BYTES) return undefined;
+    if (statSync(file).size > MAX_SKILL_BYTES) return { kind: 'invalid' };
     text = readFileSync(file, 'utf8');
   } catch {
-    return undefined;
+    return { kind: 'invalid' };
   }
-  const head = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1];
-  const m = head === undefined ? null : /^name:[ \t]*(.*?)[ \t]*$/m.exec(head);
-  if (m === null) return undefined;
-  return (m[1] ?? '').replace(/^(["'])(.*)\1$/, '$2');
+  if (text.startsWith('\uFEFF')) text = text.slice(1);
+  const lines = text.split('\n').map((l) => l.replace(/\r$/, ''));
+  if (!(lines[0] ?? '').startsWith('---')) return { kind: 'none' };
+  if (lines[0] !== '---') return { kind: 'invalid' };
+  const end = lines.indexOf('---', 1);
+  if (end < 0) return { kind: 'invalid' };
+  const doc = parseDocument(lines.slice(1, end).join('\n'), { uniqueKeys: true });
+  if (doc.errors.length > 0) return { kind: 'invalid' };
+  const contents = doc.contents;
+  if (contents === null) return { kind: 'none' };
+  if (!isMap(contents)) return { kind: 'invalid' };
+  const names = contents.items.filter((i) => isScalar(i.key) && i.key.value === 'name');
+  if (names.length === 0) return { kind: 'none' };
+  const value = names[0]?.value;
+  if (names.length > 1 || !isScalar(value) || typeof value.value !== 'string') {
+    return { kind: 'invalid' };
+  }
+  return { kind: 'name', name: value.value };
 }
 
 interface Found {
@@ -318,14 +346,61 @@ function collect(dir: string, prefix: string, found: Found): void {
   for (const d of entriesOf(skills)) {
     const file = join(skills, d, 'SKILL.md');
     if (!isDir(join(skills, d)) || !existsSync(file)) continue;
-    const name = frontmatterName(file);
-    add(name ?? d, join(skills, d));
-    // The directory name is a second way in; deny it too where it is one.
-    if (name !== undefined && name !== d && NAME.test(d)) found.names.add(`${prefix}${d}`);
+    const where = join(skills, d);
+    const front = frontmatterName(file);
+    if (front.kind === 'invalid') {
+      found.invalid.push(where);
+      continue;
+    }
+    add(front.kind === 'name' ? front.name : d, where);
+    // The directory name is a second way in: deny it too, and refuse one no rule can hold.
+    if (front.kind === 'name' && front.name !== d) add(d, where);
   }
-  const commands = join(dir, 'commands');
-  for (const f of entriesOf(commands)) {
-    if (f.endsWith('.md')) add(f.slice(0, -3), join(commands, f));
+  walkCommands(join(dir, 'commands'), [], prefix, found);
+}
+
+const MAX_COMMAND_DEPTH = 8;
+
+/**
+ * Commands below `commands/`, named as Claude Code names them: the path below `commands/` with
+ * each `/` as `:`, then the file name without `.md` (`commands/db/migrate.md` is `db:migrate`,
+ * https://code.claude.com/docs/en/skills and /plugins/components). Which name a `Skill(...)` rule
+ * matches for a nested one is not documented, so the bare file name is denied as well. Anything
+ * Studio cannot map is `invalid`: a link, another extension, a directory it cannot read, one too
+ * deep. Only `.DS_Store`, which macOS writes into every folder, is passed over.
+ */
+function walkCommands(dir: string, path: string[], prefix: string, found: Found): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (path.length === 0 && (code === 'ENOENT' || code === 'ENOTDIR')) return;
+    found.invalid.push(dir);
+    return;
+  }
+  for (const entry of entries) {
+    if (entry === '.DS_Store') continue;
+    const at = join(dir, entry);
+    let st: ReturnType<typeof lstatSync>;
+    try {
+      st = lstatSync(at);
+    } catch {
+      found.invalid.push(at);
+      continue;
+    }
+    if (st.isDirectory()) {
+      if (!NAME.test(entry) || path.length + 1 >= MAX_COMMAND_DEPTH) found.invalid.push(at);
+      else walkCommands(at, [...path, entry], prefix, found);
+      continue;
+    }
+    const stem = entry.endsWith('.md') ? entry.slice(0, -3) : undefined;
+    if (!st.isFile() || stem === undefined || !NAME.test(stem)) {
+      found.invalid.push(at);
+      continue;
+    }
+    found.names.add(`${prefix}${[...path, stem].join(':')}`);
+    if (path.length > 0) found.names.add(`${prefix}${stem}`);
   }
 }
 

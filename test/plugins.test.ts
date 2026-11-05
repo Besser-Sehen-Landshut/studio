@@ -1,4 +1,13 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -253,6 +262,66 @@ describe('installed skills and the deny list', () => {
     const rules = skillDenyRules(d, ['studio:studio-crew', 'harmless-dir'], []);
     expect(rules).toContain('Skill(deploy-prod)');
   });
+  it('a byte order mark before the front matter does not hide the name', () => {
+    const d = setup();
+    put(join(d, 'skills', 'bom', 'SKILL.md'), '﻿---\r\nname: deploy-prod\r\n---\r\nbody\n');
+    const { names, invalid } = installedSkills(d);
+    expect(invalid).toEqual([]);
+    expect(names).toEqual(expect.arrayContaining(['deploy-prod', 'bom']));
+  });
+  it('a nested command gets the namespaced name, and its bare name is denied too', () => {
+    const d = setup();
+    put(join(d, 'commands', 'ops', 'deploy.md'), '# deploy\n');
+    const sp = join(d, 'plugins', 'cache', 'superpowers-marketplace', 'superpowers', '7.0.2');
+    put(join(sp, 'commands', 'db', 'migrate.md'), '# migrate\n');
+    put(join(sp, 'commands', '.DS_Store'), 'x');
+    const { names, invalid } = installedSkills(d);
+    expect(invalid).toEqual([]);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'ops:deploy',
+        'deploy',
+        'superpowers:db:migrate',
+        'superpowers:migrate',
+      ]),
+    );
+    const rules = skillDenyRules(d, ['studio:studio-crew'], []);
+    expect(rules).toEqual(
+      expect.arrayContaining(['Skill(ops:deploy)', 'Skill(superpowers:db:migrate)']),
+    );
+  });
+  it.each([
+    ['a file with another extension', (d: string) => put(join(d, 'commands', 'run.sh'), 'x')],
+    [
+      'a link',
+      (d: string) => {
+        mkdirSync(join(d, 'commands'), { recursive: true });
+        symlinkSync(join(d, 'commands'), join(d, 'commands', 'loop'));
+      },
+    ],
+    ['a directory a rule cannot name', (d: string) => put(join(d, 'commands', 'a b', 'x.md'), 'x')],
+  ])('a command entry Studio cannot map refuses: %s', (_, make) => {
+    const d = setup();
+    make(d);
+    expect(installedSkills(d).invalid).toHaveLength(1);
+    expect(() => skillDenyRules(d, [], [])).toThrow(/a deny rule cannot hold/);
+  });
+  it('an unreadable commands directory refuses', () => {
+    const d = setup();
+    put(join(d, 'commands', 'inner', 'x.md'), 'x');
+    chmodSync(join(d, 'commands', 'inner'), 0o000);
+    try {
+      expect(installedSkills(d).invalid).toEqual([join(d, 'commands', 'inner')]);
+    } finally {
+      chmodSync(join(d, 'commands', 'inner'), 0o700);
+    }
+  });
+  it('a SKILL.md without front matter is named by its directory', () => {
+    const d = setup();
+    put(join(d, 'skills', 'plain', 'SKILL.md'), '# Just text\n');
+    expect(installedSkills(d)).toMatchObject({ invalid: [] });
+    expect(installedSkills(d).names).toContain('plain');
+  });
   it('plugin skills are found where installed_plugins.json says, not only in the cache', () => {
     const d = setup();
     const elsewhere = join(d, 'plugins', 'local', 'tools');
@@ -265,6 +334,17 @@ describe('installed skills and the deny list', () => {
     ['a directory with spaces and parentheses', 'bad name(x)', '---\nname: x y\n---\n'],
     ['a front matter name a rule cannot hold', 'fine', '---\nname: "a) Bash(rm -rf"\n---\n'],
     ['a hidden directory', '.hidden', '---\n---\n'],
+    [
+      'a fine front matter name in a directory a rule cannot hold',
+      'bad dir(x)',
+      '---\nname: ok-name\n---\n',
+    ],
+    ['two name keys', 'dup', '---\nname: harmless\nname: deploy-prod\n---\n'],
+    ['a name that is a list', 'listed', '---\nname: [a]\n---\n'],
+    ['a name that is a number', 'numbered', '---\nname: 42\n---\n'],
+    ['no closing delimiter', 'open', '---\nname: harmless\n# body\n'],
+    ['a header that is no YAML', 'broken', '---\nname: "unterminated\n---\n'],
+    ['a delimiter with trailing text', 'trailing', '--- x\nname: harmless\n---\n'],
   ])('an installed skill with %s refuses: fail closed, never skipped', (_, dirName, text) => {
     const d = setup();
     put(join(d, 'skills', dirName, 'SKILL.md'), text);
