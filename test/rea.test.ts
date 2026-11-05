@@ -14,7 +14,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import type { WorkItem } from '../src/board.js';
 import { resolveSkills } from '../src/capabilities.js';
 import { studioConfigSchema } from '../src/config.js';
-import { launchCrew } from '../src/crew.js';
+import { launchCrew, writeCrewSettings } from '../src/crew.js';
 import { DEFAULT_SECRET_GLOBS, evaluateGuard, type GuardContext } from '../src/guard.js';
 import { stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
@@ -33,7 +33,7 @@ import {
   reaToolName,
   renderReaBrief,
 } from '../src/rea.js';
-import { REA_TOOL_KEYS } from '../src/rea-schemas.js';
+import { REA_TOOL_SCHEMAS } from '../src/rea-schemas.js';
 import { reaState } from '../src/secret-command.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-rea-')));
@@ -221,33 +221,35 @@ describe('the guard for a researcher', () => {
     expect(mcp('search_strings', {}, plain).decision).toBe('deny');
   });
 
-  it('lets the read tools read the analysis directory, and nothing writes there', () => {
-    expect(
-      evaluateGuard({ toolName: 'Read', toolInput: { file_path: join(art, 'target.bin') } }, ctx)
-        .decision,
-    ).toBe('allow');
+  it('keeps the analysis directory out of the read tools, the writers and the shell', () => {
+    const f = join(art, 'target.bin');
+    for (const tool of ['Read', 'Grep', 'Glob']) {
+      const input = tool === 'Read' ? { file_path: f } : { path: art, pattern: '*' };
+      expect(evaluateGuard({ toolName: tool, toolInput: input }, ctx).decision, tool).toBe('deny');
+    }
     expect(
       evaluateGuard(
         { toolName: 'Write', toolInput: { file_path: join(art, 'n.txt'), content: 'x' } },
         ctx,
       ).decision,
     ).toBe('deny');
-    expect(bash(`touch ${join(art, 'n.txt')}`).decision).toBe('deny');
-  });
-
-  it('never starts a program of the analysis directory, or a script from it', () => {
-    expect(bash(`${join(art, 'target.bin')} --help`).decision).toBe('deny');
-    expect(bash(`python3 ${join(art, 'run.py')}`).decision).toBe('deny');
-    expect(bash(`bash ${join(art, 'run.sh')}`).decision).toBe('deny');
-    expect(bash(`strings ${join(art, 'target.bin')} | head`).decision).toBe('allow');
+    for (const c of [
+      `strings ${f}`,
+      `cat ${f} | head`,
+      `cp ${f} .`,
+      `python3 ${join(art, 'run.py')}`,
+      `ls ${art}`,
+      `cat < ${f}`,
+      `echo $(cat ${f})`,
+      `git add ${f}`,
+      `touch ${join(art, 'n.txt')}`,
+    ]) {
+      expect(bash(c).decision, c).toBe('deny');
+    }
+    expect(
+      evaluateGuard({ toolName: 'Bash', toolInput: { command: 'ls' }, cwd: art }, ctx).decision,
+    ).toBe('deny');
     expect(bash('ls').decision).toBe('allow');
-  });
-
-  it('never copies out of the analysis directory, nor stages it', () => {
-    expect(bash(`cp ${join(art, 'target.bin')} .`).decision).toBe('deny');
-    expect(bash(`strings ${join(art, 'target.bin')} > out.txt`).decision).toBe('deny');
-    expect(bash(`git add ${join(art, 'target.bin')}`).decision).toBe('deny');
-    expect(bash('git add link-to-art/target.bin').decision).toBe('deny');
     expect(bash('git add notes.md').decision).toBe('allow');
   });
 
@@ -466,7 +468,8 @@ describe('launch of a researcher with REA', () => {
     expect(s.permissions.deny).not.toContain('mcp__rea__search_strings');
     expect(s.permissions.deny).not.toContain('mcp__*');
     expect(s.permissions.deny).not.toContain('Skill(reverse-engineer-anything)');
-    expect(s.sandbox.filesystem.allowRead).toContain(f.artifacts);
+    expect(s.sandbox.filesystem.denyRead).toContain(f.artifacts);
+    expect(s.sandbox.filesystem.allowRead).not.toContain(f.artifacts);
     expect(s.sandbox.filesystem.denyWrite).toContain(f.artifacts);
     expect(s.sandbox.filesystem.allowWrite).not.toContain(f.artifacts);
     const ctx = JSON.parse(readFileSync(join(f.state, 'guard', 'APP-5.json'), 'utf8'));
@@ -629,7 +632,7 @@ describe('the guard reads values, not key names, and resolves every path', () =>
     ]);
     let checked = 0;
     for (const tool of REA_STATIC_TOOLS) {
-      for (const key of REA_TOOL_KEYS[tool] ?? []) {
+      for (const key of REA_TOOL_SCHEMAS[tool]?.keys ?? []) {
         if (skipped.has(key) || /snapshot|output|export|save|dest|overwrite|write/i.test(key)) {
           continue;
         }
@@ -656,79 +659,98 @@ describe('the guard reads values, not key names, and resolves every path', () =>
   });
 
   it('keeps a schema for every known tool and for no other', () => {
-    for (const t of REA_KNOWN_TOOLS) expect(REA_TOOL_KEYS[t], t).toBeDefined();
-    expect(Object.keys(REA_TOOL_KEYS).sort()).toEqual([...REA_KNOWN_TOOLS].sort());
+    for (const t of REA_KNOWN_TOOLS) expect(REA_TOOL_SCHEMAS[t], t).toBeDefined();
+    expect(Object.keys(REA_TOOL_SCHEMAS).sort()).toEqual([...REA_KNOWN_TOOLS].sort());
   });
 
-  it('lets only read-only inspectors take a place in the analysis directory', () => {
-    const f = join(art, 'target.bin');
-    const z = join(art, 'a.zip');
-    const t = join(art, 'a.tar');
-    for (const c of [
-      `strings ${f}`,
-      `file ${f}`,
-      `xxd ${f}`,
-      `hexdump -C ${f}`,
-      `od -x ${f}`,
-      `otool -L ${f}`,
-      `objdump -d ${f}`,
-      `readelf -h ${f}`,
-      `nm ${f}`,
-      `sha256sum ${f}`,
-      `shasum -a 256 ${f}`,
-      `ls -l ${art}`,
-      `stat ${f}`,
-      `wc -c ${f}`,
-      `head -c 64 ${f}`,
-      `tail -c 64 ${f}`,
-      `cat ${f}`,
-      `unzip -l ${z}`,
-      `tar -tf ${t}`,
-      `tar tzf ${t}`,
-      `/usr/bin/strings ${f}`,
-    ]) {
-      expect(bash(c).decision, c).toBe('allow');
-    }
-    for (const c of [
-      `python3.12 ${f}`,
-      `node22 ${f}`,
-      `python ${f}`,
-      `make -f ${f}`,
-      `gmake -C ${art}`,
-      `awk -f ${f} x`,
-      `busybox sh ${f}`,
-      `osascript ${f}`,
-      `ruby ${f}`,
-      `env ${f}`,
-      `xargs ${f}`,
-      `grep x ${f}`,
-      `unzip ${z}`,
-      `unzip -d out ${z}`,
-      `tar -xf ${t}`,
-      `tar xf ${t}`,
-      `tar -tf ${t} -C out`,
-      `tar --to-command=sh -tf ${t}`,
-      `/tmp/evil/cat ${f}`,
-      `${f}`,
-      `cd ${art}`,
-      `sed -n p ${f}`,
-      `cp ${f} .`,
-    ]) {
-      expect(bash(c).decision, c).toBe('deny');
-    }
+  it('fails write keys closed, whatever the value type', () => {
+    expect(mcp('close_binary', { overwrite: 1 }).decision).toBe('deny');
+    expect(mcp('close_binary', { overwrite: 'false' }).decision).toBe('deny');
+    expect(mcp('close_binary', { overwrite: false }).decision).toBe('allow');
+    expect(mcp('close_binary', { snapshot_path: '' }).decision).toBe('allow');
   });
 
-  it('applies the same rule to a command that runs inside the directory', () => {
-    expect(bash('ls', art).decision).toBe('allow');
-    expect(bash('./run', art).decision).toBe('deny');
-    expect(bash('python3 x.py', art).decision).toBe('deny');
+  it('confines every string under a path argument, even one that does not look like a place', () => {
+    expect(mcp('open_binary', { path: 'plain' }).decision).toBe('allow');
+    expect(
+      mcp('analyze_javascript_application', { input_path: art, source_paths: ['a', 'b/c'] })
+        .decision,
+    ).toBe('allow');
+    expect(
+      mcp('analyze_javascript_application', { input_path: art, source_paths: ['a', '../b'] })
+        .decision,
+    ).toBe('deny');
+    expect(
+      mcp('analyze_javascript_application', { input_path: art, source_paths: ['out'] }).decision,
+    ).toBe('deny');
   });
 
-  it('refuses a runner later in a command line that touched the directory', () => {
-    const f = join(art, 'target.bin');
-    expect(bash(`strings ${f} | python3 -`).decision).toBe('deny');
-    expect(bash(`cat ${f} | node22`).decision).toBe('deny');
-    expect(bash(`cat ${f} | head -3`).decision).toBe('allow');
-    expect(bash('python3 tool.py').decision).toBe('allow');
+  it('exempts free text only at the top level of a tool that names it', () => {
+    expect(mcp('search_strings', { pattern: '/etc/passwd' }).decision).toBe('allow');
+    expect(mcp('search_strings', { pattern: { pattern: '/etc/passwd' } }).decision).toBe('deny');
+    expect(mcp('open_binary', { path: join(art, 'x'), provider_id: '/etc/x' }).decision).toBe(
+      'deny',
+    );
+  });
+});
+
+describe('the sandbox of a researcher', () => {
+  it('denies the analysis directory to every shell process and allows it nowhere', async () => {
+    const dir = join(root, 'sb');
+    const art = join(dir, 'art');
+    const wt = join(dir, 'wt');
+    mkdirSync(art, { recursive: true });
+    mkdirSync(wt, { recursive: true });
+    const cfg = studioConfigSchema.parse({
+      studio: 1,
+      primaryRepo: 'org/app',
+      repos: ['org/app'],
+      ci: {
+        provider: 'github',
+        runners: 'github-hosted',
+        runnerLabels: [],
+        capacity: { total: 8, mergeMaxBusy: 5, checkTwiceSeconds: 30 },
+      },
+      merge: { strategy: 'studio-queue', contractPaths: [] },
+      roles: {
+        researcher: { model: 'sonnet', wip: 1, skills: { required: [], allowed: [], denied: [] } },
+      },
+    });
+    const state = join(dir, 'state', 'proj');
+    mkdirSync(state, { recursive: true });
+    const item = {
+      id: 'APP-5',
+      title: 't',
+      type: 'research',
+      role: 'researcher',
+      repo: 'org/app',
+      size: 'S',
+      priority: 1,
+      status: 'assigned',
+      paths: [],
+      touches: [],
+      dependsOn: [],
+      dod: ['x'],
+      history: [],
+    } as WorkItem;
+    const file = writeCrewSettings(
+      state,
+      item,
+      wt,
+      cfg,
+      {
+        homeDir: join(dir, 'h'),
+        tmpDir: join(dir, 't'),
+        projectDir: join(dir, 'p'),
+        toolchainPaths: [],
+        rea: { artifacts: art, classes: [] },
+      },
+      { homedir: join(dir, 'home'), env: {} },
+    );
+    const fs = JSON.parse(readFileSync(file, 'utf8')).sandbox.filesystem;
+    expect(fs.denyRead).toContain(art);
+    expect(fs.denyWrite).toContain(art);
+    expect(fs.allowRead).not.toContain(art);
+    expect(fs.allowWrite).not.toContain(art);
   });
 });

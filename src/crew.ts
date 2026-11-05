@@ -885,7 +885,16 @@ export function writeCrewSettings(
   const stateBase = dirname(stateRoot);
   const denied = [...(dirs.deny?.paths ?? [])];
   const artifacts = dirs.rea?.artifacts;
-  const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase), ...denied]);
+  // A researcher's analysis directory is out for every shell process, read and write: only the
+  // REA tools, which run in the MCP server outside this sandbox, reach it.
+  const denyRead = unique([
+    realHome,
+    ...credentialPaths,
+    stateBase,
+    realOr(stateBase),
+    ...denied,
+    ...(artifacts === undefined ? [] : [artifacts]),
+  ]);
   const loginDir = dirs.providerConfigDir;
   // Of a login dir only what skills need: it also holds the transcripts, `.claude.json` and shell
   // snapshots of other crews. Claude Code itself runs outside the sandbox and reaches the rest.
@@ -903,8 +912,6 @@ export function writeCrewSettings(
     ...['md', 'caps', 'rules'].map((ext) => join(stateRoot, 'briefs', `${id}.${ext}`)),
     // Places a worker's owner opened inside its denied Windows mounts, for reads only.
     ...(dirs.deny?.allowRead ?? []),
-    // A researcher's analysis directory: read-only (denyWrite below).
-    ...(artifacts === undefined ? [] : [artifacts]),
   ];
   const ctxFile = join(stateRoot, 'guard', `${id}.json`);
   // The clone lives inside the state root, so the root itself cannot be protected (the guard

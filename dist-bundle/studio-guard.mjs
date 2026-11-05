@@ -1391,13 +1391,6 @@ function checkGit(env, args, state) {
     deny(`git ${sub} runs from the clone root only, without -C, --git-dir or --work-tree`);
   }
   if (sub === "init") deny("git init is not allowed (no repository inside the clone)");
-  if (env.artifacts !== void 0 && (sub === "add" || sub === "mv" || sub === "update-index")) {
-    for (const a of rest.flatMap((x) => braceExpand(x))) {
-      if (!a.startsWith("-") && underArtifacts(env, a, state.cwd ?? env.wt)) {
-        deny(`git ${sub} of the analysis directory is not allowed: artifacts never enter git`);
-      }
-    }
-  }
   if (sub === "push") checkPush(env, rest);
   else if (sub === "fetch" || sub === "pull") checkFetchPull(sub, rest);
   else if (sub === "ls-remote") checkLsRemote(rest);
@@ -1572,13 +1565,6 @@ function checkSegment(env, seg, state) {
   for (const w of seg.writes) checkWritePath(env, w, state.cwd, "redirection");
   for (const r of seg.reads) checkSecretToken(env, r, base);
   for (const w of seg.writes) checkSecretToken(env, w, base);
-  if (env.artifacts !== void 0 && seg.writes.length > 0) {
-    for (const w of [...seg.reads, ...seg.words]) {
-      if (underArtifacts(env, w, base)) {
-        deny("output of a command on the analysis directory may not be written to a file");
-      }
-    }
-  }
   checkWords(env, seg.words, state);
 }
 var VAR_BUILTINS = /* @__PURE__ */ new Set([
@@ -1709,7 +1695,7 @@ function checkWords(env, words, state) {
   const name = basename(cmdWord);
   const args = words.slice(at + 1);
   if (env.artifacts !== void 0 || env.blockedCommands.size > 0) {
-    checkResearchCommand(env, name, cmdWord, args, base, state);
+    checkResearchCommand(env, name);
   }
   if (name === "sudo" || name === "su" || name === "doas") {
     deny(`privilege escalation (${name}) is not allowed`);
@@ -1770,204 +1756,72 @@ function checkBash(env, cmd, cwd, depth) {
     for (const seg of toSegments(line)) checkSegment(env, seg, state);
   }
 }
-function underArtifacts(env, word, base) {
-  if (env.artifacts === void 0 || word === "" || word.length > 4096) return false;
-  const eq = word.indexOf("=");
-  for (const v of eq > 0 ? [word, word.slice(eq + 1)] : [word]) {
-    for (const e of braceExpand(v)) {
-      if (e === "" || e.includes(SUBST) || e.startsWith("-") || /\s/.test(e)) continue;
-      if (e.startsWith("~") || e.includes("$")) continue;
-      if (isUnder([env.artifacts], resolveReal(e, base))) return true;
-    }
+function refuseArtifactsInBash(env, command, cwd) {
+  const artifacts = env.artifacts;
+  if (artifacts === void 0) return;
+  if (isUnder([artifacts], cwd)) deny("a researcher works outside the analysis directory");
+  const raw = env.artifactsGiven ?? artifacts;
+  if (command.includes(artifacts) || command.includes(raw)) {
+    deny(
+      "the analysis directory is reachable through the REA tools only (search_strings, inspect_artifact, ...), not from a shell"
+    );
   }
-  return false;
 }
-var READ_ONLY_INSPECTORS = /* @__PURE__ */ new Set([
-  "strings",
-  "file",
-  "xxd",
-  "hexdump",
-  "od",
-  "otool",
-  "objdump",
-  "readelf",
-  "nm",
-  "sha256sum",
-  "shasum",
-  "ls",
-  "stat",
-  "wc",
-  "head",
-  "tail",
-  "cat"
-]);
-var SYSTEM_BIN = /^\/(usr\/)?(local\/)?s?bin\/|^\/opt\/homebrew\/bin\//;
-var RUNNERS = /* @__PURE__ */ new Set([
-  "sh",
-  "bash",
-  "zsh",
-  "dash",
-  "ksh",
-  "fish",
-  "csh",
-  "tcsh",
-  "busybox",
-  "toybox",
-  "python",
-  "pypy",
-  "node",
-  "nodejs",
-  "deno",
-  "bun",
-  "ruby",
-  "perl",
-  "php",
-  "lua",
-  "luajit",
-  "tclsh",
-  "wish",
-  "expect",
-  "awk",
-  "gawk",
-  "mawk",
-  "nawk",
-  "make",
-  "gmake",
-  "cmake",
-  "ninja",
-  "java",
-  "javaw",
-  "dotnet",
-  "mono",
-  "wine",
-  "wine64",
-  "powershell",
-  "pwsh",
-  "cmd",
-  "osascript",
-  "env",
-  "xargs",
-  "exec",
-  "nohup",
-  "time",
-  "timeout",
-  "script",
-  "open",
-  "arch",
-  "qemu",
-  "ld",
-  "lldb",
-  "gdb",
-  "frida",
-  "swift",
-  "swiftc",
-  "cargo",
-  "go",
-  "rustc",
-  "gcc",
-  "cc",
-  "clang",
-  "sudo"
-]);
-var runnerName = (n) => n.toLowerCase().replace(/[-_.]?v?\d+([.-]\d+)*$/, "").replace(/^qemu-.*/, "qemu");
-function listingOnly(name, args) {
-  if (name === "unzip") {
-    const flags = args.filter((a) => a.startsWith("-"));
-    return flags.every((a) => /^-[lvqZ1]+$/.test(a)) && flags.some((a) => /^-[lvqZ1]*[lZ][lvqZ1]*$/.test(a));
-  }
-  if (name === "tar") {
-    const mode = args[0] ?? "";
-    const old = /^[tvfzjJ]+$/.test(mode) && mode.includes("t");
-    const rest = old ? args.slice(1) : args;
-    const short = rest.filter((a) => a.startsWith("-") && !a.startsWith("--"));
-    const long = rest.filter((a) => a.startsWith("--"));
-    if (long.some((a) => !/^--(list|verbose|gzip|bzip2|xz)$/.test(a))) return false;
-    if (short.some((a) => !/^-[tvfzjJ]+$/.test(a))) return false;
-    return old || short.some((a) => a.includes("t")) || long.includes("--list");
-  }
-  return false;
-}
-function checkResearchCommand(env, name, cmdWord, args, base, state) {
-  if (env.blockedCommands.has(name) || env.blockedCommands.has(runnerName(name))) {
+function checkResearchCommand(env, name) {
+  if (env.blockedCommands.has(name) || env.blockedCommands.has(name.replace(/[-_.]?v?\d+([.-]\d+)*$/, ""))) {
     deny(
       `${name} starts or watches a program or device: the item does not allow that class (rea-allow)`
     );
   }
-  const artifacts = env.artifacts;
-  if (artifacts === void 0) return;
-  const touches = underArtifacts(env, cmdWord, base) || args.some((a) => underArtifacts(env, a, base)) || isUnder([artifacts], base);
-  if (!touches) {
-    if (state.artifacts === true && RUNNERS.has(runnerName(name))) {
-      deny(
-        `${name} after a command on the analysis directory in the same command line: its input may come from there`
-      );
-    }
-    return;
-  }
-  state.artifacts = true;
-  const bare = cmdWord === name || SYSTEM_BIN.test(cmdWord);
-  if (bare && (READ_ONLY_INSPECTORS.has(name) || listingOnly(name, args))) return;
-  deny(
-    `${name} may not be given the analysis directory: only read-only inspectors (strings, file, xxd, hexdump, od, otool, objdump, readelf, nm, sha256sum, shasum, ls, stat, wc, head, tail, cat, unzip -l, tar -t) may`
-  );
 }
-var MCP_TEXT_KEYS = /* @__PURE__ */ new Set([
-  "query",
-  "pattern",
-  "name",
-  "names",
-  "symbols",
-  "selector",
-  "class_name",
-  "method_name",
-  "type_names",
-  "mask",
-  "key",
-  "filter",
-  "filters",
-  "display_filter",
-  "decoder"
-]);
 var MCP_WRITE_KEY = /(snapshot|output|export|save|dest|overwrite|write)/i;
 var MCP_LIMITS = { depth: 6, values: 500 };
 var looksLikePath = (v) => /[\\/]/.test(v) || /^[A-Za-z]:/.test(v) || v.startsWith("~") || v.startsWith(".") || /^file:/i.test(v);
 function checkMcp(env, tool, input, cwd) {
   const artifacts = env.artifacts;
   if (artifacts === void 0) deny(`${tool}: no analysis directory is configured`);
-  const keys = env.mcpKeys.get(tool);
-  if (keys === void 0) deny(`${tool}: no input schema is known for this tool`);
+  const schema = env.mcpKeys.get(tool);
+  if (schema === void 0) deny(`${tool}: no input schema is known for this tool`);
+  const known = schema;
   for (const k of Object.keys(input)) {
-    if (!keys.has(k)) deny(`${tool}: unknown argument ${k.slice(0, 40)}`);
+    if (!known.keys.has(k)) deny(`${tool}: unknown argument ${k.slice(0, 40)}`);
   }
   let seen = 0;
-  const walk = (v, key, depth) => {
+  const confine = (v, key) => {
+    if (new RegExp("\\p{Cc}", "u").test(v)) deny(`${tool}: control character in ${key}`);
+    if (/^file:/i.test(v) || v.startsWith("~")) deny(`${tool}: ${key} must be a plain path`);
+    if (/\\/.test(v) || /^[A-Za-z]:/.test(v))
+      deny(`${tool}: ${key}: Windows paths are not supported`);
+    if (v.split("/").includes("..")) deny(`${tool}: write ${key} without ..`);
+    if (!isUnder([artifacts, env.wt], resolveReal(v, cwd))) {
+      deny(`${tool}: ${key} is outside the analysis directory`);
+    }
+  };
+  const walk = (v, key, top, depth) => {
     if (++seen > MCP_LIMITS.values || depth > MCP_LIMITS.depth) {
       deny(`${tool}: input too large to check`);
     }
     if (Array.isArray(v)) {
-      for (const x of v) walk(x, key, depth + 1);
+      for (const x of v) walk(x, key, top, depth + 1);
       return;
     }
     if (v !== null && typeof v === "object") {
-      for (const [k, x] of Object.entries(v)) walk(x, k, depth + 1);
+      for (const [k, x] of Object.entries(v)) walk(x, k, top, depth + 1);
       return;
     }
-    if (MCP_WRITE_KEY.test(key) && (typeof v === "string" ? v !== "" : v === true)) {
+    if (MCP_WRITE_KEY.test(key) && !/^max_/.test(key) && v !== void 0 && v !== null && v !== false && v !== "") {
       deny(`${tool}: ${key} asks the tool to write; a researcher's tools only read`);
     }
-    if (typeof v !== "string") return;
-    if (new RegExp("\\p{Cc}", "u").test(v)) deny(`${tool}: control character in ${key}`);
-    if (/^file:/i.test(v) || v.startsWith("~")) deny(`${tool}: ${key} must be a plain path`);
-    if (MCP_TEXT_KEYS.has(key) || !looksLikePath(v)) return;
-    if (/\\/.test(v) || /^[A-Za-z]:/.test(v))
-      deny(`${tool}: ${key}: Windows paths are not supported`);
-    if (v.split("/").includes("..")) deny(`${tool}: write ${key} without ..`);
-    const real = resolveReal(v, cwd);
-    if (!isUnder([artifacts, env.wt], real)) {
-      deny(`${tool}: ${key} is outside the analysis directory`);
+    if (typeof v !== "string" || v === "") return;
+    if (known.paths.has(top)) return confine(v, key);
+    if (depth === 1 && known.text.has(key)) {
+      if (new RegExp("\\p{Cc}", "u").test(v)) deny(`${tool}: control character in ${key}`);
+      return;
     }
+    if (new RegExp("\\p{Cc}", "u").test(v)) deny(`${tool}: control character in ${key}`);
+    if (looksLikePath(v)) confine(v, key);
   };
-  walk(input, "", 0);
+  for (const [k, v] of Object.entries(input)) walk(v, k, k, 1);
   if (tool.endsWith("__inspect_sqlite_database")) {
     for (const k of ["table", "columns", "row_limit"]) {
       if (input[k] !== void 0) deny(`${tool}: rows are content; ask for the schema (no ${k})`);
@@ -2124,7 +1978,9 @@ var isSecretExempt = (s) => basename(s) === ".env.example";
 var isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === "string");
 function check(input, ctx) {
   const c = ctx;
-  if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs) || c.item !== void 0 && (typeof c.item !== "string" || !/^[A-Z]+-\d+$/.test(c.item)) || c.base !== void 0 && (typeof c.base !== "string" || !/^[A-Za-z0-9._/-]+$/.test(c.base)) || c.mcpAllow !== void 0 && !isStringArray(c.mcpAllow) || c.blockedCommands !== void 0 && !isStringArray(c.blockedCommands) || c.mcpKeys !== void 0 && !(c.mcpKeys !== null && typeof c.mcpKeys === "object" && Object.values(c.mcpKeys).every(isStringArray)) || c.artifacts !== void 0 && (typeof c.artifacts !== "string" || !isAbsolute(c.artifacts) || c.artifacts === "/") || c.deniedPorts !== void 0 && !(Array.isArray(c.deniedPorts) && c.deniedPorts.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535))) {
+  if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs) || c.item !== void 0 && (typeof c.item !== "string" || !/^[A-Z]+-\d+$/.test(c.item)) || c.base !== void 0 && (typeof c.base !== "string" || !/^[A-Za-z0-9._/-]+$/.test(c.base)) || c.mcpAllow !== void 0 && !isStringArray(c.mcpAllow) || c.blockedCommands !== void 0 && !isStringArray(c.blockedCommands) || c.mcpKeys !== void 0 && !(c.mcpKeys !== null && typeof c.mcpKeys === "object" && Object.values(c.mcpKeys).every(
+    (e) => isStringArray(e.keys) && isStringArray(e.paths) && isStringArray(e.text)
+  )) || c.artifacts !== void 0 && (typeof c.artifacts !== "string" || !isAbsolute(c.artifacts) || c.artifacts === "/") || c.deniedPorts !== void 0 && !(Array.isArray(c.deniedPorts) && c.deniedPorts.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535))) {
     deny("invalid guard context");
   }
   const wt = resolveReal(ctx.worktree, "/");
@@ -2143,11 +1999,7 @@ function check(input, ctx) {
     allowedWorkflows: ctx.crewAllowedWorkflows ?? [],
     allowedRefs: ctx.crewAllowedWorkflowRefs ?? [],
     protectedReal: protectedPaths.flatMap((p) => [p, resolveReal(p, "/")]).map((p) => p.toLowerCase()),
-    readRoots: [
-      ctx.worktree,
-      ...ctx.readRoots ?? [],
-      ...ctx.artifacts === void 0 ? [] : [ctx.artifacts]
-    ].map((p) => resolveReal(p, "/")),
+    readRoots: [ctx.worktree, ...ctx.readRoots ?? []].map((p) => resolveReal(p, "/")),
     skillRoots: (ctx.skillRoots ?? []).flatMap((p) => [p, resolveReal(p, "/")]),
     toolResultRes: (ctx.toolResultGlobs ?? []).map(fileGlobToRegExp),
     hardSecretRes: ctx.secretGlobs.filter((g) => !(ctx.skillRootWaivedGlobs ?? []).includes(g)).map(fileGlobToRegExp),
@@ -2155,8 +2007,14 @@ function check(input, ctx) {
     base: ctx.base,
     mcpAllow: new Set(ctx.mcpAllow ?? []),
     artifacts: ctx.artifacts === void 0 ? void 0 : resolveReal(ctx.artifacts, "/"),
+    artifactsGiven: ctx.artifacts,
     blockedCommands: new Set(ctx.blockedCommands ?? []),
-    mcpKeys: new Map(Object.entries(ctx.mcpKeys ?? {}).map(([k, v]) => [k, new Set(v)]))
+    mcpKeys: new Map(
+      Object.entries(ctx.mcpKeys ?? {}).map(([k, v]) => [
+        k,
+        { keys: new Set(v.keys), paths: new Set(v.paths), text: new Set(v.text) }
+      ])
+    )
   };
   const { toolName, toolInput } = input;
   const given = input.cwd;
@@ -2176,6 +2034,7 @@ function check(input, ctx) {
     if (typeof command !== "string") deny(`${toolName} call without a command`);
     const port = namedDeniedPort(command, ctx.deniedPorts ?? []);
     if (port !== void 0) deny(`port ${port} is denied on this worker machine`);
+    refuseArtifactsInBash(env, command, cwd);
     checkBash(env, command, cwd, 0);
     return;
   }
