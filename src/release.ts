@@ -12,8 +12,15 @@ import {
   type ReleaseRule,
   type StudioConfig,
 } from './config.js';
-import { matchGlob, staticPrefix } from './glob.js';
-import { classifySql, type MigrationKind, naturalCompare, needsOwner } from './migrations.js';
+import { matchGlob } from './glob.js';
+import {
+  classifySql,
+  MIGRATION_RISKS,
+  type MigrationKind,
+  type MigrationRisk,
+  naturalCompare,
+  needsOwner,
+} from './migrations.js';
 import { acquireStateLock, assertStatePath, writeStateFile } from './paths.js';
 import type { Gh, Git } from './ports.js';
 import { appendStateLine } from './queue.js';
@@ -99,6 +106,8 @@ const migrationSchema = z.strictObject({
   kind: z.enum(['additive', 'backfill', 'unclear', 'destructive']),
   why: line(300),
   owner: z.boolean(),
+  /** What it may do to the running system: lock a table, fail on existing rows. */
+  risks: z.array(z.enum(MIGRATION_RISKS)).optional(),
 });
 export type NoteMigration = z.infer<typeof migrationSchema>;
 
@@ -128,6 +137,8 @@ const noteSchema = z.strictObject({
   wayBack: z.array(line(600)),
   postChecks: z.array(line(400)),
   approvers: z.array(z.strictObject({ id: z.string(), who: line(100), for: line(200).optional() })),
+  /** Files that look like a schema change outside `release.migrations`: the owner should look. */
+  warnings: z.array(line(600)).default([]),
 });
 export type ReleaseNote = z.infer<typeof noteSchema>;
 
@@ -183,6 +194,8 @@ const releaseSchema = z.strictObject({
       by: z.enum(['lead', 'owner']),
       head: z.string().regex(SHA),
       workflowId: z.number().int(),
+      /** The newest run id of the workflow before the dispatch: only a later run can be its run. */
+      floor: z.number().int().nonnegative(),
       run: z.number().int().optional(),
       refused: line(300).optional(),
     })
@@ -196,14 +209,26 @@ const releaseSchema = z.strictObject({
         workflowId: z.number().int(),
         /** The branch head checked right before the start: its run must be of this head. */
         head: z.string().regex(SHA).optional(),
+        floor: z.number().int().nonnegative().optional(),
         run: z.number().int().optional(),
         refused: line(300).optional(),
       }),
     )
     .default({}),
   checks: z.array(checkSchema).default([]),
+  /** How the announcement reached the owner: pushed, or no notifications set up (recorded so). */
+  notify: z.strictObject({ state: z.enum(['sent', 'not_configured']), at: z.string() }).optional(),
   /** Set once the release run passed: the commit runs in production. */
   deployedAt: z.string().optional(),
+  /** A release whose deploy Studio could not tell, settled by the lead or the owner after checking. */
+  resolved: z
+    .strictObject({
+      deployed: z.boolean(),
+      by: z.enum(['lead', 'owner']),
+      reason: line(300),
+      at: z.string(),
+    })
+    .optional(),
   finishedAt: z.string().optional(),
   reason: line(600).optional(),
 });
@@ -478,9 +503,6 @@ function idsOf(list: Listed[]): Map<string, number> {
   return ids;
 }
 
-const workflowIds = async (gh: Gh, repo: string): Promise<Map<string, number>> =>
-  idsOf(await listWorkflows(gh, repo));
-
 /**
  * The workflows a `crew_allowed_workflows` entry can start, resolved the way `gh workflow run`
  * resolves its argument: by id, by file (name or path) or by display name, ignoring case. Erring
@@ -541,14 +563,15 @@ function runFromOutput(repo: string, text: string): number | undefined {
 
 /**
  * The run a dispatch started when gh did not name it: the one `workflow_dispatch` run of that
- * workflow on the branch created since the dispatch. None or several: undefined (never a guess).
+ * workflow on the branch whose id is above the newest one before the dispatch (`floor`). None or
+ * several: undefined (never a guess).
  */
 async function findDispatchedRun(
   gh: Gh,
   repo: string,
   workflowId: number,
   branch: string,
-  since: string,
+  floor: number,
 ): Promise<{ run?: number; several?: true }> {
   try {
     const r = await gh.run(
@@ -566,18 +589,16 @@ async function findDispatchedRun(
         '--limit',
         '20',
         '--json',
-        'databaseId,createdAt',
+        'databaseId',
       ],
       { timeoutMs: GH_MS },
     );
     if (r.code !== 0) return {};
     const parsed = z
-      .array(z.object({ databaseId: z.number().int(), createdAt: z.string() }))
+      .array(z.object({ databaseId: z.number().int() }))
       .safeParse(JSON.parse(r.stdout));
     if (!parsed.success) return {};
-    // A minute of clock difference between this machine and GitHub.
-    const from = Date.parse(since) - 60_000;
-    const hits = parsed.data.filter((x) => Date.parse(x.createdAt) >= from);
+    const hits = parsed.data.filter((x) => x.databaseId > floor);
     if (hits.length > 1) return { several: true };
     return hits.length === 1 ? { run: (hits[0] as { databaseId: number }).databaseId } : {};
   } catch {
@@ -608,6 +629,24 @@ async function dispatchProblem(
     return `${file} is named ${clean(name, 100)}, which crew_allowed_workflows lists: a crew may never start a release workflow`;
   }
   const on = (raw as { on?: unknown } | null)?.on;
+  if (o.input) {
+    // Started by Studio only: any other trigger (push, schedule, workflow_call) deploys without it.
+    const triggers =
+      typeof on === 'string'
+        ? [on]
+        : Array.isArray(on)
+          ? on
+          : on !== null && typeof on === 'object'
+            ? Object.keys(on)
+            : [];
+    const other = triggers.filter((t) => t !== 'workflow_dispatch');
+    if (triggers.length === 0 || other.length > 0) {
+      return `${file} may only run on workflow_dispatch${other.length > 0 ? `, not on ${other.map((t) => clean(String(t), 40)).join(', ')}` : ''}`;
+    }
+    if (!/\binputs\.sha\b/.test(text)) {
+      return `${file} does not use inputs.${SHA_INPUT}: it would deploy something other than the release commit`;
+    }
+  }
   const dispatch =
     on !== null && typeof on === 'object' && !Array.isArray(on)
       ? (on as Record<string, unknown>).workflow_dispatch
@@ -701,21 +740,23 @@ export async function buildNote(
   // Changes by epic: merged items of the component whose merge commit lies in the range.
   const sinceAt =
     Date.parse((await g(ctx.git, co, ['show', '-s', '--format=%cI', o.since])).trim()) || 0;
-  const candidates = ctx.board.items
-    .filter(
-      (i) =>
-        i.status === 'merged' &&
-        i.type !== 'review' &&
-        i.pr !== undefined &&
-        i.repo === o.component.repo &&
-        componentsOf(i, o.config).includes(o.component.id) &&
-        // Merged around or after the commit production ran; one with no merge time is checked too.
-        (mergedAt(i) === 0 || mergedAt(i) >= sinceAt - 86_400_000),
-    )
-    .slice(0, MAX_ITEMS);
+  const candidates = ctx.board.items.filter(
+    (i) =>
+      i.status === 'merged' &&
+      i.type !== 'review' &&
+      i.pr !== undefined &&
+      i.repo === o.component.repo &&
+      componentsOf(i, o.config).includes(o.component.id) &&
+      // Merged around or after the commit production ran; one with no merge time is checked too.
+      (mergedAt(i) === 0 || mergedAt(i) >= sinceAt - 86_400_000),
+  );
   const placed: WorkItem[] = [];
   const unplaced: ReleaseNote['unplaced'] = [];
-  for (const item of candidates) {
+  // Never dropped silently: what Studio does not read is listed as not placed.
+  for (const item of candidates.slice(MAX_ITEMS)) {
+    unplaced.push({ id: item.id, why: `more than ${MAX_ITEMS} items: not read` });
+  }
+  for (const item of candidates.slice(0, MAX_ITEMS)) {
     let merge: string | undefined;
     try {
       const r = await ctx.gh.run(
@@ -747,54 +788,11 @@ export async function buildNote(
         .sort((a, b) => naturalCompare(a.id, b.id))
         .map((i) => ({ id: i.id, title: clean(i.title, 200), pr: i.pr as number })),
     }));
-  // Migrations in order: configured ones, and anything below the component that looks like one.
-  // A path segment with `migrat`, or any SQL file of the component: no SQL change ships unread.
-  const looksLike = (p: string) =>
-    p.toLowerCase().endsWith('.sql') || p.split('/').some((seg) => /migrat/i.test(seg));
-  const isMigration = (c: Change) =>
-    o.rule.migrations.some((m) => matchGlob(m, c.path)) ||
-    (looksLike(c.path) && o.component.paths.some((p) => matchGlob(p, c.path)));
-  const migrationChanges = changes
-    .filter(isMigration)
-    .sort((a, b) => naturalCompare(a.path, b.path));
-  const migrations: NoteMigration[] = [];
-  for (const [n, c] of migrationChanges.entries()) {
-    const configured = o.rule.migrations.some((m) => matchGlob(m, c.path));
-    const base = { path: clean(c.path, 500) };
-    let kind: MigrationKind;
-    let why: string;
-    if (n >= MAX_MIGRATIONS) {
-      kind = 'unclear';
-      why = `more than ${MAX_MIGRATIONS} migrations: not read`;
-    } else if (c.status === 'D') {
-      kind = 'unclear';
-      why = 'a migration file was deleted';
-    } else if (c.status !== 'A') {
-      kind = 'unclear';
-      why = 'an existing migration changed: it may have run already';
-    } else if (!c.path.toLowerCase().endsWith('.sql')) {
-      kind = 'unclear';
-      why = 'not SQL: Studio reads .sql migrations only';
-    } else {
-      const bytes = await bytesAt(ctx.git, co, o.sha, c.path);
-      if (bytes === 'missing' || bytes === 'large') {
-        kind = 'unclear';
-        why = bytes === 'large' ? 'too large to read' : 'cannot be read';
-      } else {
-        const r = classifySql(bytes);
-        kind = r.kind;
-        why = clean(r.why, 300);
-      }
-    }
-    if (!configured) why = clean(`not under release.migrations; ${why}`, 300);
-    migrations.push({
-      ...base,
-      change: c.status === 'A' ? 'added' : c.status === 'D' ? 'deleted' : 'changed',
-      kind,
-      why,
-      owner: needsOwner(kind),
-    });
-  }
+  const migrations = await readMigrations(ctx, o, changes);
+  const warnings = changes
+    .filter((c) => looksLikeSchema(c.path) && !o.rule.migrations.some((m) => matchGlob(m, c.path)))
+    .map((c) => `${quote(c.path)} looks like a schema change but is not under release.migrations`)
+    .slice(0, 50);
   // New configuration by name: what the configured files declare at the release, not before.
   const configFiles = changes.filter((c) => o.rule.config.some((p) => matchGlob(p, c.path)));
   const added = new Set<string>();
@@ -840,8 +838,88 @@ export async function buildNote(
     ),
     postChecks: o.rule.postChecks.map((p) => `${p.workflow} / ${p.job}`),
     approvers,
+    warnings,
   };
 }
+
+/** A path that looks like a schema or a migration in any tool's layout. */
+const looksLikeSchema = (p: string): boolean =>
+  /\.sql$|(^|\/)schema\.(prisma|rb)$|(^|\/)alembic(\/|$)|migrat|\.ddl$/i.test(p);
+
+/**
+ * The migrations of `since..sha` in order, with kind, risk and why: configured ones, and anything
+ * below the component that looks like one (a path segment with `migrat`, or any SQL file).
+ */
+async function readMigrations(
+  ctx: Pick<ReleaseContext, 'git' | 'checkout'>,
+  o: { component: ComponentConfig; rule: ReleaseRule; sha: string },
+  changes: Change[],
+): Promise<NoteMigration[]> {
+  const co = ctx.checkout(o.component.repo);
+  const looksLike = (p: string) =>
+    p.toLowerCase().endsWith('.sql') || p.split('/').some((seg) => /migrat/i.test(seg));
+  const isMigration = (c: Change) =>
+    o.rule.migrations.some((m) => matchGlob(m, c.path)) ||
+    (looksLike(c.path) && o.component.paths.some((p) => matchGlob(p, c.path)));
+  const migrationChanges = changes
+    .filter(isMigration)
+    .sort((a, b) => naturalCompare(a.path, b.path));
+  const migrations: NoteMigration[] = [];
+  for (const [n, c] of migrationChanges.entries()) {
+    const configured = o.rule.migrations.some((m) => matchGlob(m, c.path));
+    let kind: MigrationKind;
+    let why: string;
+    let risks: MigrationRisk[] | undefined;
+    if (n >= MAX_MIGRATIONS) {
+      kind = 'unclear';
+      why = `more than ${MAX_MIGRATIONS} migrations: not read`;
+    } else if (c.status === 'D') {
+      kind = 'unclear';
+      why = 'a migration file was deleted';
+    } else if (c.status !== 'A') {
+      kind = 'unclear';
+      why = 'an existing migration changed: it may have run already';
+    } else if (!c.path.toLowerCase().endsWith('.sql')) {
+      kind = 'unclear';
+      why = 'not SQL: Studio reads .sql migrations only';
+    } else {
+      const bytes = await bytesAt(ctx.git, co, o.sha, c.path);
+      if (bytes === 'missing' || bytes === 'large') {
+        kind = 'unclear';
+        why = bytes === 'large' ? 'too large to read' : 'cannot be read';
+      } else {
+        const r = classifySql(bytes);
+        kind = r.kind;
+        why = clean(r.why, 300);
+        risks = r.risks;
+      }
+    }
+    if (!configured) why = clean(`not under release.migrations; ${why}`, 300);
+    migrations.push({
+      path: clean(c.path, 500),
+      change: c.status === 'A' ? 'added' : c.status === 'D' ? 'deleted' : 'changed',
+      kind,
+      why,
+      owner: needsOwner(kind),
+      ...(risks === undefined || risks.length === 0 ? {} : { risks }),
+    });
+  }
+  return migrations;
+}
+
+/** Only the migrations of a release, read again: what the trigger compares with the approval. */
+export async function migrationsOf(
+  ctx: Pick<ReleaseContext, 'git' | 'checkout'>,
+  o: { component: ComponentConfig; rule: ReleaseRule; since: string; sha: string },
+): Promise<NoteMigration[]> {
+  const co = ctx.checkout(o.component.repo);
+  return readMigrations(ctx, o, await changesBetween(ctx.git, co, o.since, o.sha));
+}
+
+const RISK_WORDS: Record<MigrationRisk, string> = {
+  lock: 'locks a table while it runs',
+  fails_on_data: 'can fail on existing rows',
+};
 
 /** The note as Markdown: for the lead, the pull request of a release, the owner. */
 export function renderNote(n: ReleaseNote, id?: string): string {
@@ -863,9 +941,10 @@ export function renderNote(n: ReleaseNote, id?: string): string {
   if (n.migrations.length === 0) out.push('None.');
   for (const m of n.migrations) {
     out.push(
-      `- ${m.path} (${m.change}): ${m.kind}, ${m.owner ? 'needs the owner' : 'low risk'}; ${m.why}`,
+      `- ${m.path} (${m.change}): ${m.kind}, ${m.owner ? 'needs the owner' : 'low risk'}; ${m.why}${(m.risks ?? []).length === 0 ? '' : `; risk: ${(m.risks ?? []).map((r) => RISK_WORDS[r]).join(', ')}`}`,
     );
   }
+  if (n.warnings.length > 0) out.push('', '## Warnings', '', ...n.warnings.map((w) => `- ${w}`));
   out.push('', '## New configuration (names only)', '');
   if (n.config.files.length === 0) out.push('No configuration file changed.');
   else {
@@ -897,8 +976,13 @@ export function announcementOf(n: ReleaseNote, id: string, workflow: string): st
       : n.migrations.length > 0
         ? `${n.migrations.length} migration${n.migrations.length === 1 ? '' : 's'} run and stay applied, and the deploy cannot be taken back, only followed by another`
         : 'the deploy cannot be taken back, only followed by another';
+  const risky = n.migrations.filter((m) => (m.risks ?? []).length > 0);
+  const risks =
+    risky.length === 0
+      ? ''
+      : `; while it runs, ${risky.map((m) => `${m.path} ${(m.risks ?? []).map((r) => RISK_WORDS[r]).join(' and ')}`).join(', ')}`;
   return clean(
-    `Release ${id} deploys ${n.component.name} at ${short(n.sha)} (${n.commits} commits) to production through ${workflow}; once it runs, ${undone}.`,
+    `Release ${id} deploys ${n.component.name} at ${short(n.sha)} (${n.commits} commits) to production through ${workflow}; once it runs, ${undone}${risks}.`,
     1000,
   );
 }
@@ -923,6 +1007,60 @@ export const lastDeployed = (releases: Release[], component: string): Release | 
     .filter((r) => r.component === component && r.deployedAt !== undefined)
     .sort((a, b) => Date.parse(b.deployedAt ?? '') - Date.parse(a.deployedAt ?? ''))[0];
 
+/**
+ * A release that failed after its trigger without Studio knowing whether it deployed: its run
+ * was never found, never confirmed, or completed red (a red deploy may have deployed part).
+ * Settled only by `studio release resolve`.
+ */
+export const possiblyDeployed = (r: Release): boolean =>
+  r.status === 'failed' &&
+  r.trigger !== undefined &&
+  r.trigger.refused === undefined &&
+  r.deployedAt === undefined &&
+  r.resolved === undefined;
+
+/**
+ * Settles a release whose deploy Studio could not tell: `deployed` after the lead or the owner
+ * checked production. A deployed one counts as what production runs from then on.
+ */
+export function resolveRelease(
+  ctx: Pick<ReleaseContext, 'stateRoot' | 'now'>,
+  rec: Release,
+  o: { deployed: boolean; by: 'lead' | 'owner'; reason: string },
+): Release {
+  if (!possiblyDeployed(rec)) {
+    throw new Error(
+      `${rec.id} needs no resolve: it is ${rec.status}${rec.deployedAt === undefined ? '' : ', deployed'}`,
+    );
+  }
+  const reason = verbatim(o.reason, 300, '--reason');
+  const at = ctx.now().toISOString();
+  log(ctx.stateRoot, ctx.now(), {
+    event: 'resolved',
+    release: rec.id,
+    deployed: o.deployed,
+    by: o.by,
+    reason,
+  });
+  return {
+    ...rec,
+    resolved: { deployed: o.deployed, by: o.by, reason, at },
+    ...(o.deployed ? { deployedAt: at } : {}),
+  };
+}
+
+/** One line kept exactly as given: refused when too long or not one plain line, never cut. */
+function verbatim(text: string, max: number, flag: string): string {
+  if (text.trim() === '') throw new Error(`${flag} needs text`);
+  if ([...text].length > max)
+    throw new Error(`${flag} is longer than ${max} characters; nothing recorded`);
+  if (/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(text)) {
+    throw new Error(`${flag} must be one plain line, as said; nothing recorded`);
+  }
+  if (looksSecret(text)) throw new Error(`${flag} looks like a credential; nothing recorded`);
+  return text;
+}
+
 const nextId = (releases: Release[], component: string): string => {
   const prefix = `${component}-`;
   const taken = releases
@@ -945,6 +1083,15 @@ export async function draftRelease(
   if (branch === undefined) throw new Error(`cannot read the default branch of ${repo}`);
   const sha = await resolveRef(ctx.gh, repo, branch);
   if (sha === undefined) throw new Error(`cannot read the head of ${branch} in ${repo}`);
+  // A release whose deploy is unknown must be settled first: drafting on would build on a guess.
+  const latest = releases
+    .filter((r) => r.component === componentId)
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+  if (latest !== undefined && possiblyDeployed(latest)) {
+    throw new Error(
+      `${latest.id} failed and it is unknown whether it deployed: check production, then studio release resolve ${latest.id} --deployed or --not-deployed --reason "<line>"`,
+    );
+  }
   const previous = lastDeployed(releases, componentId);
   let since: string;
   if (sinceRef !== undefined) {
@@ -1095,11 +1242,8 @@ export function recordApproval(
   if (!BEFORE_TRIGGER.includes(rec.status)) {
     throw new Error(`${rec.id} is ${rec.status}: approvals count only before the trigger`);
   }
-  const said = clean(o.said, 500);
-  if (said === '') throw new Error('an approval needs --said "<their words, verbatim>"');
-  if (looksSecret(o.said) || (o.who !== undefined && looksSecret(o.who))) {
-    throw new Error('the approval text looks like a credential; nothing recorded');
-  }
+  // Verbatim: refused when too long or more than one line, never cut or collapsed.
+  const said = verbatim(o.said, 500, '--said');
   const now = ctx.now();
   let who: string;
   if (o.approver === 'owner') {
@@ -1109,7 +1253,7 @@ export function recordApproval(
       );
     }
     if (rec.needs.owner.length === 0) throw new Error(`${rec.id} needs no owner approval`);
-    if (o.who !== undefined && clean(o.who, 100) !== 'owner') {
+    if (o.who !== undefined && o.who !== 'owner') {
       throw new Error('--by is for a third party; the owner approves as the owner');
     }
     who = 'owner';
@@ -1119,8 +1263,10 @@ export function recordApproval(
         `${rec.id} needs no approval from ${clean(o.approver, 40)} (it needs: ${pendingApprovals(rec).join(', ') || 'nothing'})`,
       );
     }
-    who = clean(o.who ?? '', 100);
-    if (who === '') throw new Error('a third-party approval needs --by "<who said it>"');
+    if (o.who === undefined || o.who.trim() === '') {
+      throw new Error('a third-party approval needs --by "<who said it>"');
+    }
+    who = verbatim(o.who, 100, '--by');
   }
   let at = now.toISOString();
   if (o.at !== undefined) {
@@ -1179,39 +1325,67 @@ export type TriggerResult =
   | { kind: 'held'; line: string }
   | { kind: 'refused'; line: string };
 
+/** Run states that mean a run of the workflow is still on its way. */
+const ACTIVE_RUN = new Set(['queued', 'in_progress', 'waiting', 'pending', 'requested']);
+
 /**
- * Starts the release workflow once. The capacity rule first, then every check of what would run,
- * then the branch head read once more (it must still be the head the checks saw), then the record
- * (status `triggered`) written, then `gh workflow run`. A crash after the write leaves a trigger
- * without a run, which `advance` looks for and never starts again; `advance` also holds the run
- * to the checked head.
+ * The newest run id of a workflow (the floor a dispatched run must lie above) and whether any run
+ * of it is still queued or running. Undefined when GitHub cannot be read: nothing starts then.
  */
-export async function triggerRelease(
+async function runsOfWorkflow(
+  gh: Gh,
+  repo: string,
+  workflowId: number,
+): Promise<{ floor: number; active: boolean } | undefined> {
+  try {
+    const r = await gh.run(
+      [
+        'run',
+        'list',
+        '--repo',
+        repo,
+        '--workflow',
+        String(workflowId),
+        '--limit',
+        '50',
+        '--json',
+        'databaseId,status',
+      ],
+      { timeoutMs: GH_MS },
+    );
+    if (r.code !== 0) return undefined;
+    const parsed = z
+      .array(z.object({ databaseId: z.number().int(), status: z.string() }))
+      .safeParse(JSON.parse(r.stdout));
+    if (!parsed.success) return undefined;
+    return {
+      floor: Math.max(0, ...parsed.data.map((x) => x.databaseId)),
+      active: parsed.data.some((x) => ACTIVE_RUN.has(x.status)),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+type StartCheck =
+  | { kind: 'ok'; head: string; ids: Map<string, number>; floors: Map<string, number> }
+  | { kind: 'held' | 'refused'; line: string };
+
+/**
+ * Everything that must hold right before Studio starts one of a release's workflows, the release
+ * workflow at the trigger or a post-check after the deploy: the release commit on the branch, each
+ * started file (and the rollback) byte for byte the pinned one at the release commit and the head,
+ * dispatch-only with the `sha` input used, `.github` and the guarded paths as pinned, no
+ * `crew_allowed_workflows` entry (at the release commit, at the head and in the live config) that
+ * reaches any of the release's workflows, no run of a started workflow still on its way, and the
+ * head read once more at the end.
+ */
+async function checkStart(
   ctx: ReleaseContext,
   rec: Release,
-  o: {
-    by: 'lead' | 'owner';
-    paused: boolean;
-    capacity: () => Promise<{ ok: boolean; line: string }>;
-    save: (rec: Release) => void;
-    beat: () => void;
-  },
-): Promise<TriggerResult> {
-  if (rec.status !== 'announced') {
-    return { kind: 'refused', line: `${rec.id} is ${rec.status}, not ready to trigger` };
-  }
-  const pending = pendingApprovals(rec);
-  if (pending.length > 0) {
-    return { kind: 'held', line: `${rec.id} waits for approvals: ${pending.join(', ')}` };
-  }
-  if (o.paused) {
-    return { kind: 'held', line: 'paused: no release starts until the owner runs studio resume' };
-  }
-  // Capacity first: its two reads take a while, and every check below must still hold after it.
-  o.beat();
-  const cap = await o.capacity();
-  if (!cap.ok) return { kind: 'held', line: cap.line };
-  o.beat();
+  files: readonly string[],
+  beat: () => void,
+): Promise<StartCheck> {
   const redraft = `studio release cancel ${rec.id} --reason "<line>", then draft again`;
   const branch = await readDefault(ctx.gh, rec.repo);
   if (branch === undefined)
@@ -1229,44 +1403,26 @@ export async function triggerRelease(
   if (!(await isAncestor(ctx.git, co, rec.sha, head))) {
     return { kind: 'refused', line: `${short(rec.sha)} is no longer on ${branch}: ${redraft}` };
   }
-  // The rules and the note come from the release commit; they cannot have changed, but the
-  // migrations an owner approved must be the ones that ship.
-  const { component, rule, config } = await ruleAt(ctx.git, co, rec.sha, rec.component);
+  const { rule, config } = await ruleAt(ctx.git, co, rec.sha, rec.component);
   if (rule.workflow !== rec.workflow) {
     return { kind: 'refused', line: `${rec.id}: the release workflow differs from its record` };
   }
-  // Read again, not taken from the record: what an owner approved is what ships, also after a
-  // Studio update that reads migrations differently or a record changed by hand.
-  const fresh = await buildNote(ctx, {
-    component,
-    rule,
-    config,
-    branch,
-    since: rec.since,
-    sha: rec.sha,
-  });
-  if (
-    migrationsDigest(fresh) !== rec.migrationsDigest ||
-    migrationsDigest(rec.note) !== rec.migrationsDigest
-  ) {
-    return {
-      kind: 'refused',
-      line: `${rec.id}: its migrations read differently now than when it was announced: ${redraft}`,
-    };
+  // Every copy of the crew list counts: the release commit's, the head's, the live config's.
+  let atHead: StudioConfig;
+  try {
+    atHead = (await ruleAt(ctx.git, co, head, rec.component)).config;
+  } catch (e) {
+    return { kind: 'refused', line: `${rec.id}: at ${short(head)}: ${(e as Error).message}` };
   }
-  const approvers = new Set(rec.needs.approvers);
-  const missing = fresh.approvers.filter((a) => !approvers.has(a.id));
-  if (missing.length > 0) {
-    return {
-      kind: 'refused',
-      line: `${rec.id} needs ${missing.map((a) => a.id).join(', ')} now: ${redraft}`,
-    };
-  }
-  // GitHub runs the workflow file at the branch head: it must be the one pinned in the record
-  // when the release was announced (and approved), and the one at the release commit.
-  const started = [rule.workflow, ...rule.postChecks.map((p) => p.workflow)];
+  const crewAllowed = [
+    ...new Set([
+      ...config.crewAllowedWorkflows,
+      ...atHead.crewAllowedWorkflows,
+      ...ctx.config.crewAllowedWorkflows,
+    ]),
+  ];
   const rollback = 'workflow' in rule.rollback ? [rule.rollback.workflow] : [];
-  for (const file of new Set(started)) {
+  for (const file of new Set([...files, ...rollback])) {
     const [a, b] = [
       await blobAt(ctx.git, co, rec.sha, file),
       await blobAt(ctx.git, co, head, file),
@@ -1275,31 +1431,22 @@ export async function triggerRelease(
       return { kind: 'refused', line: `${file} changed since ${rec.id} was announced: ${redraft}` };
     }
     const problem = await dispatchProblem(ctx.git, co, rec.sha, file, {
-      crewAllowed: config.crewAllowedWorkflows,
-      input: true,
-    });
-    if (problem !== undefined) return { kind: 'refused', line: `${rec.id}: ${problem}` };
-  }
-  for (const file of rollback) {
-    const [a, b] = [
-      await blobAt(ctx.git, co, rec.sha, file),
-      await blobAt(ctx.git, co, head, file),
-    ];
-    if (a === undefined || a !== b || rec.workflowBlobs[file] !== a) {
-      return { kind: 'refused', line: `${file} changed since ${rec.id} was announced: ${redraft}` };
-    }
-    const problem = await dispatchProblem(ctx.git, co, rec.sha, file, {
-      crewAllowed: config.crewAllowedWorkflows,
-      input: false,
+      crewAllowed,
+      input: !rollback.includes(file) || files.includes(file),
     });
     if (problem !== undefined) return { kind: 'refused', line: `${rec.id}: ${problem}` };
   }
   // Everything the workflows run: `.github` (workflows, actions) and the guarded paths.
-  const [pinAtSha, pinAtHead] = [
-    await guardPinAt(ctx.git, co, rec.sha, rule.guardedPaths),
-    await guardPinAt(ctx.git, co, head, rule.guardedPaths),
-  ];
-  if (pinAtSha !== rec.guardPin || pinAtHead !== rec.guardPin) {
+  let pins: [string, string];
+  try {
+    pins = [
+      await guardPinAt(ctx.git, co, rec.sha, rule.guardedPaths),
+      await guardPinAt(ctx.git, co, head, rule.guardedPaths),
+    ];
+  } catch (e) {
+    return { kind: 'refused', line: `${rec.id}: ${(e as Error).message}` };
+  }
+  if (pins[0] !== rec.guardPin || pins[1] !== rec.guardPin) {
     return {
       kind: 'refused',
       line: `.github or a guarded path changed since ${rec.id} was announced: ${redraft}`,
@@ -1313,8 +1460,8 @@ export async function triggerRelease(
   }
   // An entry of crew_allowed_workflows reaches a workflow the way gh resolves it: a deploy, its
   // checks and its way back are never a crew's.
-  const guarded = new Set([...started, ...rollback]);
-  for (const entry of config.crewAllowedWorkflows) {
+  const guarded = new Set([rule.workflow, ...rule.postChecks.map((p) => p.workflow), ...rollback]);
+  for (const entry of crewAllowed) {
     const hit = crewReach(entry, list).find((w) => guarded.has(w.path));
     if (hit !== undefined) {
       return {
@@ -1324,23 +1471,28 @@ export async function triggerRelease(
     }
   }
   const ids = idsOf(list);
-  const workflowId = ids.get(rule.workflow);
-  if (workflowId === undefined) {
-    return {
-      kind: 'refused',
-      line: `${rule.workflow} is no workflow of ${rec.repo} GitHub can tell apart (missing or listed twice)`,
-    };
-  }
-  for (const p of rule.postChecks) {
-    if (!ids.has(p.workflow)) {
+  const floors = new Map<string, number>();
+  for (const file of files) {
+    const id = ids.get(file);
+    if (id === undefined) {
       return {
         kind: 'refused',
-        line: `${p.workflow} is no workflow of ${rec.repo} GitHub can tell apart`,
+        line: `${file} is no workflow of ${rec.repo} GitHub can tell apart (missing or listed twice)`,
       };
     }
+    // A run still on its way may be an earlier start of this release, or another deploy.
+    const runs = await runsOfWorkflow(ctx.gh, rec.repo, id);
+    if (runs === undefined) return { kind: 'held', line: `cannot read the runs of ${file}` };
+    if (runs.active) {
+      return {
+        kind: 'held',
+        line: `${file} has a run that is queued or running; ${rec.id} waits until it ended`,
+      };
+    }
+    floors.set(file, runs.floor);
   }
   // The head once more, right before the dispatch: GitHub runs the file of the head it sees then.
-  o.beat();
+  beat();
   const again = await resolveRef(ctx.gh, rec.repo, branch);
   if (again !== head) {
     return {
@@ -1348,12 +1500,101 @@ export async function triggerRelease(
       line: `${branch} moved while ${rec.id} was checked; run studio release ${rec.component} again`,
     };
   }
+  return { kind: 'ok', head, ids, floors };
+}
+
+/** How long after the announcement a trigger may come without a tick in between. */
+export const ANNOUNCE_WAIT_MS = 5 * 60_000;
+
+/**
+ * Starts the release workflow once. The announcement must have reached the owner (or Studio
+ * recorded that no notification is set up) and a tick or 5 minutes must have passed since; the
+ * capacity rule first, then the migrations and approvers read again, then `checkStart`, then the
+ * record (status `triggered`, with the newest run id of the workflow before the start) written,
+ * then `gh workflow run`. A crash after the write leaves a trigger without a run, which `advance`
+ * looks for above that id and never starts again; `advance` also holds the run to the checked head.
+ */
+export async function triggerRelease(
+  ctx: ReleaseContext,
+  rec: Release,
+  o: {
+    by: 'lead' | 'owner';
+    paused: boolean;
+    capacity: () => Promise<{ ok: boolean; line: string }>;
+    save: (rec: Release) => void;
+    beat: () => void;
+    /** When the last tick ran: the announcement must have stood through one. */
+    lastTickAt?: string;
+  },
+): Promise<TriggerResult> {
+  if (rec.status !== 'announced') {
+    return { kind: 'refused', line: `${rec.id} is ${rec.status}, not ready to trigger` };
+  }
+  const pending = pendingApprovals(rec);
+  if (pending.length > 0) {
+    return { kind: 'held', line: `${rec.id} waits for approvals: ${pending.join(', ')}` };
+  }
+  if (rec.notify === undefined) {
+    return {
+      kind: 'held',
+      line: `${rec.id}: the announcement has not reached the owner yet; the next tick sends it again`,
+    };
+  }
+  const since = Date.parse(rec.notify.at);
+  const ticked = o.lastTickAt !== undefined && Date.parse(o.lastTickAt) > since;
+  if (!ticked && ctx.now().getTime() - since < ANNOUNCE_WAIT_MS) {
+    return {
+      kind: 'held',
+      line: `${rec.id} was announced at ${rec.notify.at}; it triggers after the next tick or 5 minutes`,
+    };
+  }
+  if (o.paused) {
+    return { kind: 'held', line: 'paused: no release starts until the owner runs studio resume' };
+  }
+  // Capacity first: its two reads take a while, and every check below must still hold after it.
+  o.beat();
+  const cap = await o.capacity();
+  if (!cap.ok) return { kind: 'held', line: cap.line };
+  o.beat();
+  const redraft = `studio release cancel ${rec.id} --reason "<line>", then draft again`;
+  const co = ctx.checkout(rec.repo);
+  await fetchCommits(ctx.git, co, [rec.sha, rec.since]);
+  const { component, rule } = await ruleAt(ctx.git, co, rec.sha, rec.component);
+  // Read again, not taken from the record: what an owner approved is what ships, also after a
+  // Studio update that reads migrations differently or a record changed by hand.
+  const migrations = await migrationsOf(ctx, { component, rule, since: rec.since, sha: rec.sha });
+  if (
+    digest(JSON.stringify(migrations)) !== rec.migrationsDigest ||
+    migrationsDigest(rec.note) !== rec.migrationsDigest
+  ) {
+    return {
+      kind: 'refused',
+      line: `${rec.id}: its migrations read differently now than when it was announced: ${redraft}`,
+    };
+  }
+  const changes = await changesBetween(ctx.git, co, rec.since, rec.sha);
+  const touched = (globs: string[]) => changes.some((c) => globs.some((p) => matchGlob(p, c.path)));
+  const missing = rule.approvers.filter(
+    (a) => (a.paths === undefined || touched(a.paths)) && !rec.needs.approvers.includes(a.id),
+  );
+  if (missing.length > 0) {
+    return {
+      kind: 'refused',
+      line: `${rec.id} needs ${missing.map((a) => a.id).join(', ')} now: ${redraft}`,
+    };
+  }
+  const started = [...new Set([rule.workflow, ...rule.postChecks.map((p) => p.workflow)])];
+  const check = await checkStart(ctx, rec, started, o.beat);
+  if (check.kind !== 'ok') return check;
+  const { head } = check;
+  const workflowId = check.ids.get(rule.workflow) as number;
+  const floor = check.floors.get(rule.workflow) as number;
   // Recorded first: a crash right after this never starts the workflow a second time.
   const at = ctx.now().toISOString();
   let next: Release = {
     ...rec,
     status: 'triggered',
-    trigger: { at, by: o.by, head, workflowId },
+    trigger: { at, by: o.by, head, workflowId, floor },
     checks: rule.postChecks.map((p) => ({
       name: `${p.workflow} / ${p.job}`,
       workflow: p.workflow,
@@ -1377,7 +1618,7 @@ export async function triggerRelease(
       '--repo',
       rec.repo,
       '--ref',
-      branch,
+      rec.branch,
       '-f',
       `${SHA_INPUT}=${rec.sha}`,
     ],
@@ -1405,15 +1646,21 @@ export async function triggerRelease(
     return { kind: 'triggered', rec: next };
   }
   const run = runFromOutput(rec.repo, `${r.stdout}\n${r.stderr}`);
-  if (run !== undefined) {
+  if (run !== undefined && run > floor) {
     next = { ...next, trigger: { ...(next.trigger as NonNullable<Release['trigger']>), run } };
     o.save(next);
   }
   return { kind: 'triggered', rec: next };
 }
 
-/** A dispatch GitHub answered with a client error: it did not start anything. */
-const refusedByGitHub = (stderr: string): boolean => /\bHTTP 4\d\d\b/.test(stderr);
+/**
+ * A dispatch GitHub answered with a client error, in the exact shape gh prints it on its first
+ * line: then it did not start anything. Any other failure may have started it.
+ */
+const refusedByGitHub = (stderr: string): boolean =>
+  /^(?:could not create workflow dispatch event: )?HTTP (?:400|403|404|422): \S/.test(
+    stderr.split('\n')[0] ?? '',
+  );
 
 // --- After the trigger: the run and the checks -------------------------------------------------
 
@@ -1448,7 +1695,7 @@ export interface Advance {
  * the trigger: `gate` (pause and capacity) holds, and the workflow file at the head is the pinned one.
  */
 export async function advanceRelease(
-  ctx: Pick<ReleaseContext, 'gh' | 'git' | 'checkout' | 'stateRoot' | 'now'>,
+  ctx: ReleaseContext,
   rec: Release,
   o: {
     save: (rec: Release) => void;
@@ -1471,7 +1718,7 @@ export async function advanceRelease(
       rec.repo,
       trigger.workflowId,
       rec.branch,
-      trigger.at,
+      trigger.floor,
     );
     if (found.several === true) {
       if (late) {
@@ -1567,31 +1814,19 @@ export async function advanceRelease(
         checks.push({ ...c, state: 'pending' });
         continue;
       }
-      const head = await resolveRef(ctx.gh, rec.repo, rec.branch);
-      if (head === undefined) {
-        checks.push({ ...c, state: 'pending' });
+      // The trigger's own checks, for this file: pins, links, crew reach, no run on its way, head.
+      const check = await checkStart(ctx, rec, [c.workflow], o.beat ?? (() => {}));
+      if (check.kind !== 'ok') {
+        if (check.kind === 'held') hold = check.line;
+        else whys.push(check.line);
+        checks.push({ ...c, state: check.kind === 'held' ? 'pending' : 'missing' });
         continue;
       }
-      const co = ctx.checkout(rec.repo);
-      let blob: string | undefined;
-      try {
-        await fetchCommits(ctx.git, co, [head]);
-        blob = await blobAt(ctx.git, co, head, c.workflow);
-      } catch {
-        blob = undefined;
-      }
-      if (blob === undefined || blob !== rec.workflowBlobs[c.workflow]) {
-        whys.push(`${c.workflow} changed on ${rec.branch} since ${rec.id} was announced`);
-        checks.push({ ...c, state: 'missing' });
-        continue;
-      }
-      const workflowId = await workflowIdOf(ctx.gh, rec.repo, c.workflow);
-      if (workflowId === undefined) {
-        checks.push({ ...c, state: 'missing' });
-        continue;
-      }
+      const head = check.head;
+      const workflowId = check.ids.get(c.workflow) as number;
+      const floor = check.floors.get(c.workflow) as number;
       // Recorded first, as the trigger: started once, whatever happens next.
-      started = { at: ctx.now().toISOString(), workflowId, head };
+      started = { at: ctx.now().toISOString(), workflowId, head, floor };
       next = { ...next, started: { ...next.started, [c.workflow]: started } };
       o.save(next);
       const r = await ctx.gh.run(
@@ -1618,7 +1853,7 @@ export async function advanceRelease(
         }
       } else {
         const id = runFromOutput(rec.repo, `${r.stdout}\n${r.stderr}`);
-        if (id !== undefined) started = { ...started, run: id };
+        if (id !== undefined && id > floor) started = { ...started, run: id };
       }
       next = { ...next, started: { ...next.started, [c.workflow]: started } };
       o.save(next);
@@ -1634,7 +1869,7 @@ export async function advanceRelease(
         rec.repo,
         started.workflowId,
         rec.branch,
-        started.at,
+        started.floor ?? Number.MAX_SAFE_INTEGER,
       );
       if (found.several === true) {
         lead = `release unknown: ${rec.id}: several runs of ${c.workflow} since Studio started it; check them on GitHub`;
@@ -1699,14 +1934,6 @@ export async function advanceRelease(
   return { rec: next };
 }
 
-async function workflowIdOf(gh: Gh, repo: string, file: string): Promise<number | undefined> {
-  try {
-    return (await workflowIds(gh, repo)).get(file);
-  } catch {
-    return undefined;
-  }
-}
-
 function fail(
   ctx: Pick<ReleaseContext, 'stateRoot' | 'now'>,
   rec: Release,
@@ -1731,7 +1958,13 @@ function fail(
  */
 export const failedLine = (r: Release, rollbackOk = true): string =>
   clean(
-    `release failed: ${r.id}: ${r.reason ?? 'red'}; ${r.deployedAt === undefined ? 'the deploy did not finish' : `${short(r.sha)} is deployed`}; Studio runs nothing back; the way back: ${rollbackOk ? r.note.wayBack.join('; ') : rollbackChangedLine(r)}`,
+    `release failed: ${r.id}: ${r.reason ?? 'red'}; ${
+      r.deployedAt !== undefined
+        ? `${short(r.sha)} is deployed`
+        : r.trigger?.refused !== undefined || r.resolved?.deployed === false
+          ? 'nothing was deployed'
+          : `unknown whether ${short(r.sha)} is deployed: check production, then studio release resolve ${r.id} --deployed or --not-deployed --reason "<line>"`
+    }; Studio runs nothing back; the way back: ${rollbackOk ? r.note.wayBack.join('; ') : rollbackChangedLine(r)}`,
     1500,
   );
 
@@ -1783,11 +2016,12 @@ export async function guardPinAt(
       const tab = e.indexOf('\t');
       return { meta: e.slice(0, tab), mode: e.slice(0, 6), path: e.slice(tab + 1) };
     });
-  // A link (or a submodule) points somewhere the pin does not reach: refused, not followed.
+  // A link (or a submodule) points somewhere the pin does not reach, and a wildcard glob can reach
+  // a link anywhere: while a release is drafted or triggered, the repository holds none.
   for (const e of entries) {
-    if ((e.mode === '120000' || e.mode === '160000') && pinCovers(e.path, guarded)) {
+    if (e.mode === '120000' || e.mode === '160000') {
       throw new Error(
-        `${JSON.stringify(e.path.slice(0, 200))} at ${short(sha)} is a ${e.mode === '120000' ? 'symbolic link' : 'submodule'} in .github or a guarded path: a release cannot pin what it points to; replace it with the files themselves`,
+        `${JSON.stringify(e.path.slice(0, 200))} at ${short(sha)} is a ${e.mode === '120000' ? 'symbolic link' : 'submodule'}: a release cannot pin what it points to, so the repository may hold no symbolic links or submodules while it releases`,
       );
     }
   }
@@ -1804,20 +2038,6 @@ export async function guardPinAt(
     .sort()
     .join('\n');
   return `github:${tree} guarded:${digest(files)}`;
-}
-
-/**
- * Whether `path` lies in what a release pins: `.github` (or is it), a file a guarded glob matches,
- * or a directory on the way to one (a link there would redirect the whole glob).
- */
-export function pinCovers(path: string, guarded: readonly string[]): boolean {
-  const p = path.toLowerCase();
-  if (p === '.github' || p.startsWith('.github/')) return true;
-  return guarded.some((glob) => {
-    if (matchGlob(glob, path)) return true;
-    const prefix = staticPrefix(glob).toLowerCase();
-    return prefix === p || prefix.startsWith(`${p}/`);
-  });
 }
 
 /** What a release waits for from the lead or the owner, as needsLead lines. */

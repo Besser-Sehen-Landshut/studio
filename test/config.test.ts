@@ -51,6 +51,19 @@ describe('loadConfig', () => {
     expect(configWarnings(cfg).join('\n')).toMatch(/notify.*no effect.*owner config/);
   });
 
+  it('refuses a key written in two spellings, which camelizing would merge', () => {
+    expect(() =>
+      loadConfig(
+        project(`${MINIMAL}crew_allowed_workflows: []\ncrewAllowedWorkflows: [deploy.yml]\n`),
+      ),
+    ).toThrow(/crewAllowedWorkflows: the same key is written in two spellings; keep one/);
+    expect(() =>
+      loadConfig(
+        project(MINIMAL.replace('merge_max_busy: 1', 'merge_max_busy: 1, mergeMaxBusy: 2')),
+      ),
+    ).toThrow(/ci\.capacity\.mergeMaxBusy: the same key is written in two spellings/);
+  });
+
   it('refuses a primary_repo or repo that is not owner/repo', () => {
     for (const bad of [
       '"org/app\\nInjected"',

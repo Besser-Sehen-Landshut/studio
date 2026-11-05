@@ -119,7 +119,7 @@ import { clearPause, PAUSED_LINE, readPause, setPause } from './pause.js';
 import { type Capacity, ONE_BUILD_PER_PLAN, planAssignments } from './planner.js';
 import { type PluginPin, pinnedPlugins, unallowedPlugins } from './plugins.js';
 import type { Ports } from './ports.js';
-import { decisionsOf, pushDecisions } from './push.js';
+import { decisionsOf, pushDecisions, readNotifySecret } from './push.js';
 import {
   acquireQueueRunLock,
   appendStateLine,
@@ -153,6 +153,7 @@ import {
   releaseRow,
   renderNote,
   replaceRelease,
+  resolveRelease,
   rollbackChangedLine,
   rollbackPinHolds,
   stopRelease,
@@ -276,6 +277,8 @@ Commands:
   release approve <id> <approver> --said "<words>" [--by "<who>"] [--at <time>]
                            Record an approval: a third party's, relayed by the lead with who said
                            it and when; the owner's (approver owner) only in a terminal
+  release resolve <id> --deployed|--not-deployed --reason "<line>"
+                           Settle a failed release whose deploy is unknown, after checking production
   release cancel <id> --reason "<line>"  Stop a release before its trigger
   setup sources [<id>...]  Fetch the referenced third-party sources (nothing runs)
   lessons [list]           Lessons crews proposed for the role memory, with age, item and evidence
@@ -561,9 +564,18 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     if (values['dry-run'] !== undefined && cmd !== 'recover' && cmd !== 'release') {
       throw new UsageError('--dry-run works with recover and release only');
     }
-    const releaseOnly = [values.since, values.by, values.said, values.at];
+    const releaseOnly = [
+      values.since,
+      values.by,
+      values.said,
+      values.at,
+      values.deployed,
+      values['not-deployed'],
+    ];
     if (cmd !== 'release' && releaseOnly.some((v) => v !== undefined)) {
-      throw new UsageError('--since, --by, --said and --at work with release only');
+      throw new UsageError(
+        '--since, --by, --said, --at, --deployed and --not-deployed work with release only',
+      );
     }
     /** The item's components, as a field for JSON output; nothing when none are configured. */
     const componentField = (config: StudioConfig | undefined, item: WorkItem | undefined) =>
@@ -829,6 +841,45 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ? undefined
           : `held: ${prHeldNote(c.capacity, config).slice(PR_HELD.length)}; run studio release ${component} again later`;
       };
+
+    /**
+     * Pushes a release's announcement to the owner's phone at once (urgent: no quiet hours, no
+     * throttle). `not_configured` when the owner set up no notifications, recorded so; undefined
+     * when the push did not go out, so the next tick tries again.
+     */
+    const pushAnnouncement = async (rec: Release): Promise<Release['notify']> => {
+      const at = ports.clock.now().toISOString();
+      try {
+        const secret = readNotifySecret(owner);
+        if (secret.kind === 'absent') return { state: 'not_configured', at };
+        if (secret.kind === 'bad') return undefined;
+        const config = loadConfig(project);
+        const projectKey = stateDirName(projectRealpath(project));
+        const r = await pushDecisions({
+          ownerRoot: ownerRoot(),
+          projectKey,
+          project: config.primaryRepo.split('/').at(-1) ?? config.primaryRepo,
+          decisions: [
+            {
+              key: `${projectKey}:${rec.id}:release_announced:${rec.announcement.at}`,
+              item: rec.id,
+              kind: 'release_announced',
+              urgent: true,
+            },
+          ],
+          ownerConfig: loadOwnerConfig(owner),
+          owner,
+          http: ports.http,
+          now: ports.clock.now(),
+        });
+        // Nothing sent and nothing wrong: it went out before (a run that stopped after the send).
+        return r.sent > 0 || (r.errors.length === 0 && r.deferred === undefined)
+          ? { state: 'sent', at }
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    };
 
     /** Puts an approved pull request into the merge queue: the body of `queue add`. */
     const queueAdd = async (arg: string | undefined) => {
@@ -1836,7 +1887,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (!recs.some((r) => isOpen(r) || recent(r))) return;
         const config = loadConfig(project);
         const ctx = releaseCtx(config, loadBoard(project), root);
-        const after = recs.some((r) => r.status === 'triggered' || r.status === 'checking')
+        const unsent = (r: Release) => BEFORE_TRIGGER.includes(r.status) && r.notify === undefined;
+        const after = recs.some(
+          (r) => r.status === 'triggered' || r.status === 'checking' || unsent(r),
+        )
           ? await withReleases(ctx, async (all, save, relBeat) => {
               let cur = all;
               const saveOne = (rec: Release) => {
@@ -1844,6 +1898,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 save(cur);
               };
               for (const r of all) {
+                if (!unsent(r)) continue;
+                const notify = await pushAnnouncement(r);
+                if (notify !== undefined) saveOne({ ...r, notify });
+              }
+              for (const r of cur) {
                 if (r.status !== 'triggered' && r.status !== 'checking') continue;
                 beat();
                 relBeat();
@@ -1988,24 +2047,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ownerRoot: ownerRoot(),
           projectKey,
           project: config.primaryRepo.split('/').at(-1) ?? config.primaryRepo,
-          decisions: [
-            ...decisionsOf({ projectKey, needsLead, board, ownerRoot: ownerRoot() }),
-            // Each release announced and not yet triggered: one push, the fixed phrase and its id.
-            ...(() => {
-              try {
-                return readReleases(stateRoot())
-                  .filter((r) => BEFORE_TRIGGER.includes(r.status))
-                  .map((r) => ({
-                    key: `${projectKey}:${r.id}:release_announced:${r.announcement.at}`,
-                    item: r.id,
-                    kind: 'release_announced' as const,
-                    urgent: false,
-                  }));
-              } catch {
-                return [];
-              }
-            })(),
-          ],
+          decisions: decisionsOf({ projectKey, needsLead, board, ownerRoot: ownerRoot() }),
           ownerConfig,
           owner,
           http: ports.http,
@@ -3146,6 +3188,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               ['--at', values.at],
               ['--reason', values.reason],
               ['--dry-run', values['dry-run']],
+              ['--deployed', values.deployed],
+              ['--not-deployed', values['not-deployed']],
             ] as const
           ).filter(([flag, v]) => v !== undefined && !allowed.includes(flag));
           if (used.length > 0) {
@@ -3241,6 +3285,29 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           });
           return 0;
         }
+        if (sub === 'resolve') {
+          only(['--reason', '--deployed', '--not-deployed']);
+          const deployed = values.deployed === true;
+          const notDeployed = values['not-deployed'] === true;
+          if (args.length !== 1 || deployed === notDeployed || values.reason === undefined) {
+            throw new UsageError(
+              'release resolve needs <id> --deployed or --not-deployed --reason "<what you checked>"',
+            );
+          }
+          const reason = values.reason;
+          const root = await boundStateRoot();
+          const rec = await withReleases({ stateRoot: root, ...clock }, (all, save) => {
+            const done = resolveRelease({ stateRoot: root, ...clock }, findRelease(all, args[0]), {
+              deployed,
+              by,
+              reason,
+            });
+            save(replaceRelease(all, done));
+            return done;
+          });
+          print({ release: rec.id, resolved: rec.resolved });
+          return 0;
+        }
         if (sub === 'cancel') {
           only(['--reason']);
           if (args.length !== 1) throw new UsageError('release cancel needs one release id');
@@ -3319,9 +3386,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           const open = all.find((r) => r.component === comp.id && isOpen(r));
           if (open === undefined) {
             const d = await draftRelease(ctx, all, comp.id, values.since);
-            const rec = announce(ctx, d);
+            let rec = announce(ctx, d);
             save([...all, rec]);
+            // The announcement reaches the owner from Studio itself, not only through the lead.
+            const notify = await pushAnnouncement(rec);
+            if (notify !== undefined) {
+              rec = { ...rec, notify };
+              save([...all, rec]);
+            }
             return {
+              notified: notify?.state ?? 'not yet: the next tick sends it again',
               ...shown(rec),
               next:
                 rec.status === 'approvals'
@@ -3355,6 +3429,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           const t = await triggerRelease(ctx, open, {
             by,
             paused: readPause(root).paused,
+            ...(() => {
+              const at = readTickRecord(root)?.at;
+              return at === undefined ? {} : { lastTickAt: at };
+            })(),
             capacity: async () => {
               const held = await releaseGate(config, root, comp.id)();
               return { ok: held === undefined, line: held ?? '' };
@@ -3432,6 +3510,8 @@ function parseCli(argv: string[]) {
         security: { type: 'string', multiple: true },
         reason: { type: 'string' },
         'dry-run': { type: 'boolean' },
+        deployed: { type: 'boolean' },
+        'not-deployed': { type: 'boolean' },
         since: { type: 'string' },
         by: { type: 'string' },
         said: { type: 'string' },

@@ -17,11 +17,44 @@ import { type SqlToken, sqlStatements } from './proofs.js';
 export const MIGRATION_KINDS = ['additive', 'backfill', 'unclear', 'destructive'] as const;
 export type MigrationKind = (typeof MIGRATION_KINDS)[number];
 
+/** What a migration may do to a running system beyond its kind. */
+export const MIGRATION_RISKS = ['lock', 'fails_on_data'] as const;
+export type MigrationRisk = (typeof MIGRATION_RISKS)[number];
+
 export interface Classified {
   kind: MigrationKind;
   /** Studio's own words: the statement shape that decided, never file text. */
   why: string;
+  /** `lock`: it blocks writes while it runs; `fails_on_data`: existing rows can make it fail. */
+  risks?: MigrationRisk[];
 }
+
+const risky = (shape: string, risk: MigrationRisk): Classified => ({
+  kind: 'unclear',
+  why: `${shape} is not clearly additive (${risk === 'lock' ? 'it locks the table' : 'existing rows can make it fail'})`,
+  risks: [risk],
+});
+
+/** Words that cannot be a column name after `ADD [COLUMN]`: they start another action. */
+const NOT_A_COLUMN = new Set([
+  'NOT',
+  'NULL',
+  'CONSTRAINT',
+  'PRIMARY',
+  'UNIQUE',
+  'CHECK',
+  'FOREIGN',
+  'REFERENCES',
+  'EXCLUDE',
+  'COLUMN',
+  'DEFAULT',
+  'IF',
+  'GENERATED',
+  'VALUE',
+  'INDEX',
+]);
+/** Column types that fill every existing row from a sequence. */
+const SERIALS = new Set(['SERIAL', 'BIGSERIAL', 'SMALLSERIAL', 'SERIAL4', 'SERIAL8', 'SERIAL2']);
 
 /** Severity order: a later kind wins over an earlier one. */
 const RANK: Record<MigrationKind, number> = {
@@ -213,7 +246,8 @@ function createTable(s: SqlToken[], w: (i: number) => string | undefined): Class
  */
 function createIndex(s: SqlToken[], w: (i: number) => string | undefined): Classified {
   let i = w(1) === 'UNIQUE' ? 3 : 2;
-  if (w(i) === 'CONCURRENTLY') i++;
+  const concurrently = w(i) === 'CONCURRENTLY';
+  if (concurrently) i++;
   if (w(i) === 'IF' && w(i + 1) === 'NOT' && w(i + 2) === 'EXISTS') i += 3;
   if (w(i) !== 'ON') {
     const j = afterName(s, i);
@@ -239,8 +273,10 @@ function createIndex(s: SqlToken[], w: (i: number) => string | undefined): Class
     end = columns(end + 2);
     if (end === -1) return unclear('CREATE INDEX with an INCLUDE expression');
   }
+  if (end === s.length - 1 && !concurrently)
+    return risky('CREATE INDEX without CONCURRENTLY', 'lock');
   return end === s.length - 1
-    ? { kind: 'additive', why: 'CREATE INDEX' }
+    ? { kind: 'additive', why: 'CREATE INDEX CONCURRENTLY' }
     : unclear('CREATE INDEX with a predicate or options');
 }
 
@@ -250,15 +286,15 @@ export function classifyStatement(s: SqlToken[]): Classified {
   const first = w(0);
   if (first === undefined)
     return { kind: 'unclear', why: 'a statement that starts with no keyword' };
-  if (first === 'BEGIN' || first === 'COMMIT' || first === 'END') {
-    return s.length <= 2 && (s.length === 1 || w(1) === 'TRANSACTION' || w(1) === 'WORK')
-      ? { kind: 'additive', why: 'a transaction bracket' }
-      : unclear(first);
-  }
-  if (first === 'START') {
-    return w(1) === 'TRANSACTION' && s.length === 2
-      ? { kind: 'additive', why: 'a transaction bracket' }
-      : unclear('START');
+  if (
+    first === 'BEGIN' ||
+    first === 'COMMIT' ||
+    first === 'END' ||
+    first === 'START' ||
+    first === 'ROLLBACK'
+  ) {
+    // The runner wraps a migration in its own transaction; one in the file changes what applies.
+    return { kind: 'unclear', why: `${first}: a transaction statement in the file` };
   }
   if (first === 'SET') {
     const at = w(1) === 'LOCAL' || w(1) === 'SESSION' ? 2 : 1;
@@ -341,9 +377,17 @@ export function classifyStatement(s: SqlToken[]): Classified {
               k + 3 === s.length));
         if (ok) return { kind: 'additive', why: 'ALTER TYPE ADD VALUE' };
       }
-      return destructive === undefined || destructive.text === 'TYPE'
+      // The object word itself is TYPE: look past it for what the statement does.
+      const lossy = s.slice(2).find((t) => t.kind === 'word' && ALTER_DESTRUCTIVE.has(t.text));
+      return lossy === undefined
         ? unclear('ALTER TYPE')
-        : { kind: 'destructive', why: `ALTER TYPE with ${destructive.text}` };
+        : {
+            kind: 'destructive',
+            why:
+              lossy.text === 'RENAME'
+                ? 'ALTER TYPE with RENAME: lossy, code that uses the old name breaks'
+                : `ALTER TYPE with ${lossy.text}`,
+          };
     }
     if (destructive !== undefined) {
       return { kind: 'destructive', why: `ALTER ${object ?? ''} with ${destructive.text}` };
@@ -368,9 +412,22 @@ export function classifyStatement(s: SqlToken[]): Classified {
         if (isP(s[end], ')')) depth--;
         end++;
       }
-      if (!isNameLike(s[k]) || end - k < 2) return unclear('ALTER TABLE ADD without a column');
+      const col = s[k];
+      const named = col?.kind === 'name' || (col?.kind === 'word' && !NOT_A_COLUMN.has(col.text));
+      if (!named || end - k < 2) return unclear('ALTER TABLE ADD without a column name');
       const why = plainColumns(s, k + 1, end, false);
       if (why !== undefined) return unclear(`ALTER TABLE ADD with ${why}`);
+      const words = s
+        .slice(k + 1, end)
+        .filter((t) => t.kind === 'word')
+        .map((t) => t.text);
+      if (words.some((x) => SERIALS.has(x) || x === 'IDENTITY')) {
+        return risky('ALTER TABLE ADD of a serial or identity column', 'lock');
+      }
+      const notNull = words.some((x, n) => x === 'NOT' && words[n + 1] === 'NULL');
+      if (notNull && !words.includes('DEFAULT')) {
+        return risky('ALTER TABLE ADD COLUMN NOT NULL without a default', 'fails_on_data');
+      }
       k = end + 1;
     }
     return { kind: 'additive', why: 'ALTER TABLE ADD COLUMN' };
@@ -392,10 +449,25 @@ export function classifySql(bytes: Uint8Array | string): Classified {
   if (typeof read === 'string') return { kind: 'unclear', why: `cannot be read for sure: ${read}` };
   if (read.statements.length === 0) return { kind: 'unclear', why: 'no statement found' };
   const all = read.statements.map(classifyStatement);
+  const risks = [...new Set(all.flatMap((c) => c.risks ?? []))].sort();
+  const withRisks = (c: Classified): Classified => (risks.length === 0 ? c : { ...c, risks });
+  // A directive tells the runner how to apply the file (no transaction, a goose section): unclear.
+  const directive = read.directives[0];
+  if (directive !== undefined) {
+    const kind = worstKind(['unclear', ...all.map((c) => c.kind)]);
+    const named = directive
+      .replace(/[^\x20-\x7e]/g, ' ')
+      .trim()
+      .slice(0, 60);
+    return withRisks({
+      kind,
+      why: `a directive comment (${JSON.stringify(named)}) changes how the file runs`,
+    });
+  }
   const kind = worstKind(all.map((c) => c.kind));
   if (kind === 'additive') return { kind, why: 'every statement adds something new' };
   const whys = [...new Set(all.filter((c) => c.kind === kind).map((c) => c.why))];
-  return { kind, why: whys.slice(0, 3).join('; ') };
+  return withRisks({ kind, why: whys.slice(0, 3).join('; ') });
 }
 
 /** Paths in natural order: `2_x.sql` before `10_x.sql`, the way migration tools number them. */

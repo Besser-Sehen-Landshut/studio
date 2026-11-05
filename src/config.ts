@@ -520,6 +520,32 @@ export function camelizeKeys(value: unknown): unknown {
   return value;
 }
 
+/**
+ * A key written in two spellings in one object (`crew_allowed_workflows` and
+ * `crewAllowedWorkflows`): after camelizing, one would silently win. Returns the dotted path of
+ * the first such key, or undefined.
+ */
+export function bothSpellings(value: unknown, at = ''): string | undefined {
+  if (Array.isArray(value)) {
+    for (const [i, v] of value.entries()) {
+      const hit = bothSpellings(v, `${at}[${i}]`);
+      if (hit !== undefined) return hit;
+    }
+    return undefined;
+  }
+  if (value === null || typeof value !== 'object') return undefined;
+  const seen = new Map<string, string>();
+  for (const [k, v] of Object.entries(value)) {
+    const c = camel(k);
+    const other = seen.get(c);
+    if (other !== undefined && other !== k) return `${at === '' ? '' : `${at}.`}${k}`;
+    seen.set(c, k);
+    const hit = bothSpellings(v, at === '' ? k : `${at}.${k}`);
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
+}
+
 const snake = (key: string): string => key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 
 function dotted(path: readonly PropertyKey[]): string {
@@ -560,6 +586,10 @@ export function parseConfig(text: string, file: string): StudioConfig {
   }
   if (raw !== null && typeof raw === 'object' && 'crew_toolchain_paths' in raw) {
     throw new ConfigError(file, OWNER_CONFIG_HINT);
+  }
+  const twice = bothSpellings(raw);
+  if (twice !== undefined) {
+    throw new ConfigError(file, `${twice}: the same key is written in two spellings; keep one`);
   }
   const result = studioConfigSchema.safeParse(camelizeKeys(raw));
   if (!result.success) {

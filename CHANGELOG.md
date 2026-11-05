@@ -73,6 +73,21 @@ merge.
   submodule inside that scope refuses a draft or trigger. The announced record pins the tree
   of `.github` and the guarded files; the trigger refuses when either changed at the release commit or the
   head. The owner must list such scripts; Studio does not find them.
+- From the adversarial review: all of `studio.yaml` but `stacks` is owner-owned while a release exists
+  (compared camelized; a key in two spellings is refused when the config loads); a release run must have an id
+  above the workflow's newest run before the dispatch, and nothing starts while a run of it is queued or
+  running; a release that failed with an unknown outcome blocks the next draft until `studio release resolve
+  <id> --deployed|--not-deployed --reason "<line>"`; a workflow Studio starts may run on `workflow_dispatch`
+  only and must use `inputs.sha`; post-check starts run the trigger's checks; `crew_allowed_workflows` counts
+  from the release commit, the head and the live config; the release command pushes the announcement itself
+  (urgent), records `notify`, and the trigger waits a tick or 5 minutes after it; migrations: an index without
+  `CONCURRENTLY`, a `NOT NULL` column without default and a serial or identity column are `unclear` with a
+  `lock` or `fails_on_data` risk shown in the note and the announcement, directive comments, transaction
+  statements, non-ASCII whitespace and a keyword as column name make a file `unclear`, `ALTER TYPE ... RENAME`
+  is called lossy; approvals are kept verbatim (refused when too long or multi-line, never cut); items beyond
+  200 are listed as not placed; schema-looking files outside `release.migrations` are warned about; only gh's
+  exact refusal shape fails a dispatch as not deployed; the repository may hold no symbolic links or
+  submodules while it releases.
 - The rollback workflow is pinned like the started ones: the trigger refuses another, and the pin is checked
   again before the way back is shown (`needsLead`, `release show`); a changed one is not offered.
 - The lead skill: a Release section (send the announcement word for word, approval lines are owner lines, never

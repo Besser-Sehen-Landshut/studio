@@ -15,8 +15,7 @@ describe('migration kinds: only what is clearly additive runs without the owner'
       "ALTER TYPE order_state ADD VALUE 'refunded';",
       'CREATE SEQUENCE invoice_no;',
       "COMMENT ON TABLE orders IS 'one row per order';",
-      'BEGIN;\nCREATE TABLE a (id int);\nCOMMIT;',
-      "SET lock_timeout = '5s';\nCREATE INDEX a_b ON a (b);",
+      "SET lock_timeout = '5s';\nCREATE INDEX CONCURRENTLY a_b ON a (b);",
       '-- drop table orders; is only a comment\nCREATE TABLE a (id int);',
       "CREATE TABLE notes (body text DEFAULT 'DROP TABLE x; DELETE FROM y');",
     ]) {
@@ -167,5 +166,61 @@ describe('migration kinds: nothing destructive or data-changing passes as additi
     ]) {
       expect(kind(sql), sql).toBe('additive');
     }
+  });
+});
+
+describe('migration risks, directives and column names (adversarial review)', () => {
+  it('a plain index locks the table; a NOT NULL column without default can fail; a serial fills rows', () => {
+    for (const [sql, risk] of [
+      ['CREATE INDEX i ON orders (ref);', 'lock'],
+      ['CREATE UNIQUE INDEX i ON orders (ref);', 'lock'],
+      ['ALTER TABLE orders ADD COLUMN c int NOT NULL;', 'fails_on_data'],
+      ['ALTER TABLE orders ADD COLUMN n bigserial;', 'lock'],
+      ['ALTER TABLE orders ADD COLUMN n serial;', 'lock'],
+    ] as const) {
+      expect(classifySql(sql), sql).toMatchObject({ kind: 'unclear', risks: [risk] });
+    }
+    expect(kind('CREATE INDEX CONCURRENTLY i ON orders (ref);')).toBe('additive');
+    expect(kind('ALTER TABLE orders ADD COLUMN c int NOT NULL DEFAULT 0;')).toBe('additive');
+  });
+
+  it('after ADD [COLUMN] a keyword is no column name', () => {
+    for (const sql of [
+      'ALTER TABLE orders ADD NOT NULL ref;',
+      'ALTER TABLE orders ADD CONSTRAINT c NOT NULL ref;',
+      'ALTER TABLE orders ADD COLUMN NOT NULL;',
+      'ALTER TABLE orders ADD PRIMARY KEY (id);',
+      'ALTER TABLE orders ADD UNIQUE (ref);',
+    ]) {
+      expect(kind(sql), sql).toBe('unclear');
+    }
+  });
+
+  it('a directive comment or a transaction statement makes the file unclear, naming it', () => {
+    expect(classifySql('-- no-transaction\nCREATE TABLE a (id int);')).toEqual({
+      kind: 'unclear',
+      why: 'a directive comment ("-- no-transaction") changes how the file runs',
+    });
+    expect(classifySql('-- +goose NO TRANSACTION\nCREATE TABLE a (id int);').why).toContain(
+      '"-- +goose NO TRANSACTION"',
+    );
+    expect(classifySql('CREATE TABLE a (id int);\nCOMMIT;\nCREATE TABLE b (id int);').why).toBe(
+      'COMMIT: a transaction statement in the file',
+    );
+    expect(kind('BEGIN;\nCREATE TABLE a (id int);\nCOMMIT;')).toBe('unclear');
+  });
+
+  it('refuses whitespace that is not ASCII', () => {
+    expect(classifySql('CREATE TABLE a (id int);')).toEqual({
+      kind: 'unclear',
+      why: 'cannot be read for sure: whitespace that is not ASCII',
+    });
+  });
+
+  it('calls a renamed type lossy', () => {
+    expect(classifySql("ALTER TYPE state RENAME VALUE 'a' TO 'b';")).toEqual({
+      kind: 'destructive',
+      why: 'ALTER TYPE with RENAME: lossy, code that uses the old name breaks',
+    });
   });
 });
