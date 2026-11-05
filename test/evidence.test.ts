@@ -581,8 +581,221 @@ describe('judging a failed guard by a built-in proof', () => {
     expect(await judge(r)).toEqual({ kind: 'none' });
     expect(await evidenceChange(ctxFor(r, fakeGh(r).gh), r.base, r.head)).toEqual({
       problem: 'the pull request changes evidence: in studio.yaml',
+      area: 'evidence',
     });
   });
+
+  it("a pull request that changes a component's release block gets no approval either", async () => {
+    const release = `components:
+  - id: api
+    name: API
+    repo: org/app
+    paths: ["migrations/**"]
+    release:
+      workflow: .github/workflows/ci.yml
+      post_checks: [{ workflow: .github/workflows/ci.yml, job: test }]
+      rollback: { text: redeploy the previous commit }
+      approvers: [{ id: partner, who: the partner }]
+`;
+    const r = makeRepo({
+      rules: `${RULE}${release}`,
+      change: (dir) => {
+        writeFileSync(
+          join(dir, '.studio/studio.yaml'),
+          studioYaml(
+            `${RULE}${release.replace('      approvers: [{ id: partner, who: the partner }]\n', '')}`,
+          ),
+        );
+      },
+    });
+    expect(await evidenceChange(ctxFor(r, fakeGh(r).gh), r.base, r.head)).toEqual({
+      problem: "the pull request changes a component's release: in studio.yaml",
+      area: 'release',
+    });
+    // Moving the same block elsewhere in the file changes nothing.
+    const same = makeRepo({
+      rules: `${RULE}${release}`,
+      change: (dir) => {
+        writeFileSync(
+          join(dir, '.studio/studio.yaml'),
+          studioYaml(`${RULE}${release}`).replace(
+            'deploy_commands: []\n',
+            'deploy_commands: []\n# a comment\n',
+          ),
+        );
+      },
+    });
+    expect(await evidenceChange(ctxFor(same, fakeGh(same).gh), same.base, same.head)).toEqual({});
+  });
+
+  it('a release keeps its whole component, its workflows and the crew workflow list the owner’s', async () => {
+    const release = `components:
+  - id: api
+    name: API
+    repo: org/app
+    paths: ["migrations/**"]
+    release:
+      workflow: .github/workflows/ci.yml
+      post_checks: [{ workflow: .github/workflows/ci.yml, job: test }]
+      rollback: { text: redeploy the previous commit }
+`;
+    const yaml = (r: string) => studioYaml(`${RULE}${r}`);
+    const changeOf = async (change: (dir: string) => void) => {
+      const r = makeRepo({ rules: `${RULE}${release}`, change });
+      return evidenceChange(ctxFor(r, fakeGh(r).gh), r.base, r.head);
+    };
+    // The component's paths decide what the note lists and which approvals it needs.
+    expect(
+      await changeOf((dir) =>
+        writeFileSync(
+          join(dir, '.studio/studio.yaml'),
+          yaml(release.replace('paths: ["migrations/**"]', 'paths: ["docs/**"]')),
+        ),
+      ),
+    ).toEqual({
+      problem: "the pull request changes a component's release: in studio.yaml",
+      area: 'release',
+    });
+    // A crew workflow list could reach the deploy by name.
+    expect(
+      await changeOf((dir) =>
+        writeFileSync(
+          join(dir, '.studio/studio.yaml'),
+          yaml(release).replace(
+            'deploy_commands: []\n',
+            'deploy_commands: []\ncrew_allowed_workflows: [ci]\n',
+          ),
+        ),
+      ),
+    ).toMatchObject({ area: 'release' });
+    // The release workflow's content.
+    expect(
+      await changeOf((dir) =>
+        writeFileSync(join(dir, '.github/workflows/ci.yml'), `${CI}# deploy elsewhere\n`),
+      ),
+    ).toEqual({
+      problem:
+        'the pull request changes ".github/workflows/ci.yml", a workflow a component\'s release starts',
+      area: 'release',
+    });
+    // Anything else stays the crew's.
+    expect(
+      await changeOf((dir) => writeFileSync(join(dir, 'docs/guide.md'), '# Guide, longer\n')),
+    ).toEqual({});
+  });
+
+  it('with a release, all workflows, actions and guarded paths are the owner’s', async () => {
+    const release = `components:
+  - id: api
+    name: API
+    repo: org/app
+    paths: ["migrations/**"]
+    release:
+      workflow: .github/workflows/ci.yml
+      post_checks: [{ workflow: .github/workflows/ci.yml, job: test }]
+      rollback: { text: redeploy the previous commit }
+      guarded_paths: ["scripts/deploy/**"]
+`;
+    const changeOf = async (rules: string, path: string) => {
+      const r = makeRepo({
+        rules,
+        change: (dir) => {
+          mkdirSync(dirname(join(dir, path)), { recursive: true });
+          writeFileSync(join(dir, path), 'x: 1\n');
+        },
+      });
+      return evidenceChange(ctxFor(r, fakeGh(r).gh), r.base, r.head);
+    };
+    expect(await changeOf(`${RULE}${release}`, '.github/workflows/other.yml')).toEqual({
+      problem:
+        'the pull request changes ".github/workflows/other.yml"; with a release, .github is the owner\'s',
+      area: 'release',
+    });
+    expect(await changeOf(`${RULE}${release}`, '.github/actions/setup/action.yml')).toMatchObject({
+      area: 'release',
+    });
+    expect(await changeOf(`${RULE}${release}`, 'scripts/deploy/run.sh')).toEqual({
+      problem: 'the pull request changes "scripts/deploy/run.sh", a guarded path of a release',
+      area: 'release',
+    });
+    // All of .github, the scope of the pin, not only workflows and actions.
+    expect(await changeOf(`${RULE}${release}`, '.github/CODEOWNERS')).toMatchObject({
+      area: 'release',
+    });
+    // A link on the way to a guarded path redirects it.
+    const linked = makeRepo({
+      rules: `${RULE}${release}`,
+      change: (dir) => symlinkSync('/tmp', join(dir, 'scripts/deploy')),
+    });
+    expect(
+      await evidenceChange(ctxFor(linked, fakeGh(linked).gh), linked.base, linked.head),
+    ).toEqual({
+      problem:
+        'the pull request adds a link or submodule at "scripts/deploy"; with a release the repository holds none',
+      area: 'release',
+    });
+    // A link anywhere, also where only a wildcard glob could reach: the repository holds none.
+    const anywhere = makeRepo({
+      rules: `${RULE}${release.replace('"scripts/deploy/**"', '"scripts/*/deploy/**"')}`,
+      change: (dir) => symlinkSync('/tmp', join(dir, 'docs/x')),
+    });
+    expect(
+      await evidenceChange(ctxFor(anywhere, fakeGh(anywhere).gh), anywhere.base, anywhere.head),
+    ).toMatchObject({ area: 'release' });
+    // Without any release, a workflow change is no owner matter here.
+    expect(await changeOf(RULE, '.github/workflows/other.yml')).toEqual({});
+    expect(await changeOf(`${RULE}${release}`, 'scripts/other.sh')).toEqual({});
+    // Seven repositories with git: seconds under a full parallel run.
+  }, 30_000);
+
+  it('with a release, all of studio.yaml is the owner’s, in any spelling, but stacks', async () => {
+    const release = `components:
+  - id: api
+    name: API
+    repo: org/app
+    paths: ["migrations/**"]
+    release:
+      workflow: .github/workflows/ci.yml
+      post_checks: [{ workflow: .github/workflows/ci.yml, job: test }]
+      rollback: { text: redeploy the previous commit }
+`;
+    const base = studioYaml(`${RULE}${release}`);
+    const changeOf = async (to: string) => {
+      const r = makeRepo({
+        rules: `${RULE}${release}`,
+        change: (dir) => writeFileSync(join(dir, '.studio/studio.yaml'), to),
+      });
+      return evidenceChange(ctxFor(r, fakeGh(r).gh), r.base, r.head);
+    };
+    // The camelCase spelling of a key beside the snake_case one.
+    expect(
+      await changeOf(
+        base.replace(
+          'deploy_commands: []\n',
+          'deploy_commands: []\ncrewAllowedWorkflows: ["Deploy API"]\n',
+        ),
+      ),
+    ).toMatchObject({ area: 'release' });
+    expect(
+      await changeOf(
+        base.replace(
+          'deploy_commands: []\n',
+          'deploy_commands: []\ncrew_allowed_workflows: []\ncrewAllowedWorkflows: ["Deploy API"]\n',
+        ),
+      ),
+    ).toEqual({
+      problem: 'the pull request writes "crewAllowedWorkflows" in two spellings in studio.yaml',
+      area: 'release',
+    });
+    // Any other key: the owner's while a release exists.
+    expect(await changeOf(base.replace('owner_only: []', 'owner_only: ["x"]'))).toEqual({
+      problem:
+        "the pull request changes studio.yaml beyond stacks; with a release it is the owner's",
+      area: 'release',
+    });
+    // stacks is the crew's.
+    expect(await changeOf(`${base}stacks: [node]\n`)).toEqual({});
+  }, 30_000);
 
   it('a pull request that changes the guard job gets no exception', async () => {
     const r = makeRepo({

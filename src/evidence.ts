@@ -4,8 +4,14 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { findJob, jobInstances, readWorkflowsAt, type Workflows } from './ci-jobs.js';
-import { EVIDENCE_ID_RE, type EvidenceRule, parseConfig } from './config.js';
-import { hostilePath, matchGlobExact } from './glob.js';
+import {
+  bothSpellings,
+  camelizeKeys,
+  EVIDENCE_ID_RE,
+  type EvidenceRule,
+  parseConfig,
+} from './config.js';
+import { hostilePath, matchGlob, matchGlobExact } from './glob.js';
 import { acquireStateLock, type StateLock, writeStateFile } from './paths.js';
 import type { Gh, Git } from './ports.js';
 import { commentsOnlyWhy, languageOf } from './proofs.js';
@@ -250,24 +256,95 @@ async function rulesAt(ctx: EvidenceContext, oid: string): Promise<EvidenceRule[
   }
 }
 
-/** The raw `evidence:` block of studio.yaml at `oid`, as JSON; null without one. */
-async function rawEvidenceAt(ctx: EvidenceContext, oid: string): Promise<string> {
+/**
+ * The raw `evidence:` block of studio.yaml at `oid`, and every component's `release:` block, as
+ * JSON; null without one.
+ */
+/** Keys of studio.yaml a crew's pull request may change while a release exists; all else is the owner's. */
+export const CREW_CONFIG_KEYS = ['stacks'];
+
+/** JSON with object keys sorted at every level: two equal configs give the same text. */
+const canonical = (v: unknown): string =>
+  JSON.stringify(v, (_k, x: unknown) =>
+    x !== null && typeof x === 'object' && !Array.isArray(x)
+      ? Object.fromEntries(Object.entries(x as object).sort(([a], [b]) => (a < b ? -1 : 1)))
+      : x,
+  );
+
+async function rawOwnerBlocksAt(
+  ctx: EvidenceContext,
+  oid: string,
+): Promise<{
+  evidence: string;
+  release: string;
+  /** The whole config minus CREW_CONFIG_KEYS, camelized: owner-owned while a release exists. */
+  whole: string;
+  workflows: string[];
+  guarded: string[];
+  released: boolean;
+  /** A key written in two spellings, which camelizing would merge. */
+  twice?: string;
+}> {
   let text: string;
   try {
     text = await g(ctx, ['cat-file', 'blob', `${oid}:${STUDIO_CONFIG}`]);
   } catch {
-    return 'null';
+    return {
+      evidence: 'null',
+      release: 'null',
+      whole: 'null',
+      workflows: [],
+      guarded: [],
+      released: false,
+    };
   }
   let raw: unknown;
   try {
     raw = parseYaml(text);
   } catch {
     // A file that does not parse loads no rules; as a change it counts like any other.
-    return `unparsable:${digest(text)}`;
+    const u = `unparsable:${digest(text)}`;
+    // Unparsable counts as having a release: the guard errs towards the owner.
+    return { evidence: u, release: u, whole: u, workflows: [], guarded: [], released: true };
   }
-  const v =
-    raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>).evidence : null;
-  return JSON.stringify(v ?? null);
+  const twice = bothSpellings(raw);
+  const obj = (v: unknown): Record<string, unknown> =>
+    v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  // Camelized as Studio reads it: `crewAllowedWorkflows` beside `crew_allowed_workflows` is the same key.
+  const o = obj(camelizeKeys(raw));
+  // A component with a release is the owner's whole: its id, repo and paths decide what ships and
+  // who must approve it. By id, in id order: moving a component in the list changes nothing.
+  const released = (Array.isArray(o.components) ? o.components : [])
+    .map(obj)
+    .filter((c) => c.release !== undefined && c.release !== null);
+  const entries = released
+    .map((c) => [JSON.stringify(c.id ?? null), canonical(c)] as const)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  // The workflows a release starts or names: their content is the owner's like the block.
+  const workflows = new Set<string>();
+  const guarded = new Set<string>();
+  for (const c of released) {
+    const r = obj(c.release);
+    const add = (v: unknown) => {
+      if (typeof v === 'string') workflows.add(v);
+    };
+    add(r.workflow);
+    for (const pc of Array.isArray(r.postChecks) ? r.postChecks : []) add(obj(pc).workflow);
+    add(obj(r.rollback).workflow);
+    for (const p of Array.isArray(r.guardedPaths) ? r.guardedPaths : []) {
+      if (typeof p === 'string') guarded.add(p);
+    }
+  }
+  const rest = Object.fromEntries(Object.entries(o).filter(([k]) => !CREW_CONFIG_KEYS.includes(k)));
+  return {
+    evidence: canonical(o.evidence ?? null),
+    release: canonical(entries),
+    whole: canonical(rest),
+    workflows: [...workflows],
+    guarded: [...guarded],
+    released: released.length > 0,
+    ...(twice === undefined ? {} : { twice }),
+  };
 }
 
 async function fetchBoth(ctx: EvidenceContext, base: string, head: string): Promise<boolean> {
@@ -568,22 +645,93 @@ export async function judgeFailedChecks(
 }
 
 /**
- * Why Studio gives a pull request no approval for touching the evidence: it changes the
- * `evidence:` block of studio.yaml. Evidence is the owner's: a crew's pull request never changes
- * what proves a later one. `unreadable` when the comparison could not be made; collect waits then.
+ * Why Studio gives a pull request no approval for touching what is the owner's in studio.yaml:
+ * the `evidence:` block (a crew's pull request never changes what proves a later one) or a
+ * component's `release:` block (its workflow, checks and third-party approvers). `unreadable`
+ * when the comparison could not be made; collect waits then.
  */
 export async function evidenceChange(
   ctx: EvidenceContext,
   baseOid: string | undefined,
   head: string,
-): Promise<{ problem?: string; unreadable?: true }> {
+): Promise<{ problem?: string; area?: 'evidence' | 'release'; unreadable?: true }> {
   if (baseOid === undefined || !SHA.test(baseOid) || !SHA.test(head)) return { unreadable: true };
   if (!(await fetchBoth(ctx, baseOid, head))) return { unreadable: true };
   const files = await changedFiles(ctx, baseOid, head);
   if (files === undefined) return { unreadable: true };
+  const [atBase, atHead] = [
+    await rawOwnerBlocksAt(ctx, baseOid),
+    await rawOwnerBlocksAt(ctx, head),
+  ];
   if (files.some((f) => f.toLowerCase() === STUDIO_CONFIG)) {
-    const [atBase, atHead] = [await rawEvidenceAt(ctx, baseOid), await rawEvidenceAt(ctx, head)];
-    if (atBase !== atHead) return { problem: 'the pull request changes evidence: in studio.yaml' };
+    if (atHead.twice !== undefined) {
+      return {
+        problem: `the pull request writes ${quotePath(atHead.twice)} in two spellings in studio.yaml`,
+        area: atBase.released || atHead.released ? 'release' : 'evidence',
+      };
+    }
+    if (atBase.evidence !== atHead.evidence) {
+      return { problem: 'the pull request changes evidence: in studio.yaml', area: 'evidence' };
+    }
+    if (atBase.release !== atHead.release) {
+      return {
+        problem: "the pull request changes a component's release: in studio.yaml",
+        area: 'release',
+      };
+    }
+    // While a release exists, all of studio.yaml is the owner's but the few keys a crew may set.
+    if ((atBase.released || atHead.released) && atBase.whole !== atHead.whole) {
+      return {
+        problem: `the pull request changes studio.yaml beyond ${CREW_CONFIG_KEYS.join(', ')}; with a release it is the owner's`,
+        area: 'release',
+      };
+    }
+  }
+  // A workflow a release starts or names, at the base or the head: its content is the owner's.
+  const guarded = new Set([...atBase.workflows, ...atHead.workflows].map((w) => w.toLowerCase()));
+  const hit = files.find((f) => guarded.has(f.toLowerCase()));
+  if (hit !== undefined) {
+    return {
+      problem: `the pull request changes ${quotePath(hit)}, a workflow a component's release starts`,
+      area: 'release',
+    };
+  }
+  // Once anything is released, all of .github is the owner's, the scope the release pins (a
+  // release workflow may call any workflow, action or file there), and so are the scripts a
+  // component lists as guarded_paths, with every directory on the way to them.
+  if (atBase.released || atHead.released) {
+    const ci = files.find((f) => /^\.github(?:\/|$)/i.test(f));
+    if (ci !== undefined) {
+      return {
+        problem: `the pull request changes ${quotePath(ci)}; with a release, .github is the owner's`,
+        area: 'release',
+      };
+    }
+    const globs = [...atBase.guarded, ...atHead.guarded];
+    const script = files.find((f) => globs.some((p) => matchGlob(p, f)));
+    if (script !== undefined) {
+      return {
+        problem: `the pull request changes ${quotePath(script)}, a guarded path of a release`,
+        area: 'release',
+      };
+    }
+    // A link or submodule anywhere can redirect what a release runs: never added by a crew.
+    let changes: RawChange[] | undefined;
+    try {
+      changes = parseRaw(
+        await g(ctx, [...DIFF, '--raw', '--no-abbrev', '-z', `${baseOid}...${head}`]),
+      );
+    } catch {
+      changes = undefined;
+    }
+    if (changes === undefined) return { unreadable: true };
+    const link = changes.find((c) => c.dstMode === '120000' || c.dstMode === '160000');
+    if (link !== undefined) {
+      return {
+        problem: `the pull request adds a link or submodule at ${quotePath(link.path)}; with a release the repository holds none`,
+        area: 'release',
+      };
+    }
   }
   return {};
 }

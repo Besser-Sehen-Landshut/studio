@@ -3,6 +3,105 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.18.0] - 2026-11-05
+
+A release was the lead running the project's deploy workflow by hand: no note said what went out, a destructive
+migration went with one announcement line and no approval, a part a third party owns needed their word with no
+place to record it, and nothing watched the checks after the deploy. Now `studio release <component>` drafts the
+note, logs the announcement, collects the owner's and third parties' approvals through the lead, starts one named
+workflow once, and stops on a red check with the way back shown. Not tagged yet; the maintainers tag after the
+merge.
+
+### Added
+
+- `release:` per component in `studio.yaml`: `workflow` (a file below `.github/workflows/`, with
+  `on: workflow_dispatch` and an input `sha`), `post_checks` (jobs by workflow file, at least one), `migrations`
+  and `config` (globs), `rollback` (`text` or `workflow`), `approvers` (`id`, `who`, optional `for` and `paths`)
+  and `timeout_minutes` (default 60). A block with `command`, `run`, `script`, `skill` or `steps` is refused, so
+  is a release, post-check or rollback workflow that `crew_allowed_workflows` lists, and a component with a
+  release named `list`, `show`, `approve` or `cancel`.
+- `studio release <component> [--dry-run] [--since <commit>]`: the first call drafts the note from the
+  commits since production's (the last release that deployed; `--since` for the first) and logs a one-sentence
+  announcement (what is deployed and what cannot be undone); the next call triggers, once the approvals are in;
+  later calls follow the run. `--dry-run` prints the draft and writes nothing.
+- The note: the component's merged board items in the range grouped by epic, migrations in natural order with
+  kind (`additive`, `destructive`, `backfill`, `unclear`) and risk, configuration names added or removed in the
+  `config` files (never values), the way back, the post-deploy checks and the approvals needed.
+- Migration kinds from the SQL tokenizer of 0.17 and an allow-list of exact statement shapes, no parser: only
+  `additive` is low risk, and only a statement that matches a shape from its first token to its last is (plain
+  `CREATE TABLE` columns with literal defaults, `CREATE INDEX` on columns, `ALTER TABLE ... ADD COLUMN`, enums,
+  schemas, sequences, `ALTER TYPE ... ADD VALUE`, `COMMENT ON`). A query, copy, partition, computed or
+  non-literal default, call shape, trigger, rule, function or `DO` block is `unclear`; anything not additive
+  needs the owner, also a non-SQL file, a changed or deleted migration, and any other `.sql` or
+  migration-looking file of the component outside `migrations`.
+- Approvals: `studio release approve <id> owner --said "<words>"`, owner only, in a terminal, for migrations that
+  are not clearly additive; `studio release approve <id> <approver> --by "<who said it>" --said "<words>" --at
+  <time>` for a third party, recorded by the lead from what the owner relays (Studio contacts no one). An
+  approval binds to one release; its time may not lie before the announcement or in the future; text shaped like a
+  credential is refused.
+- The trigger: `gh workflow run <id> --ref <default branch> -f sha=<release commit>`. First Studio must not be
+  paused and CI must be within `merge_max_busy` (two reads); then the commit must still be on the default
+  branch, the workflow files at the head must be the blobs pinned in the announced record and declare the
+  input, the migrations must read as they did when announced, and no `crew_allowed_workflows` entry may resolve
+  (by id, file or display name, as gh does) to the release, a post-check or the rollback workflow; then the head
+  is read once more and must not have moved. Recorded before gh runs: a trigger without a known run is looked
+  up (the one dispatch since the trigger), never repeated. Only an HTTP 4xx from GitHub fails it as "nothing was
+  deployed"; a timeout stays triggered and is looked up. The release run must be of the checked head.
+- After the deploy: the release run, then each post check (a job of the release run, or of another workflow
+  Studio starts once, recorded first, under the pause and capacity rules, with the pinned file, its run held to
+  the head it was started at). Several candidate runs fail closed at the timeout. A failed or missing job, a run of another workflow or event, and no result
+  within `timeout_minutes` stop the release (`failed`) with the way back in `needsLead` for a day; Studio runs
+  nothing back. A passed release run is a `deployed` metrics event with its release.
+- `studio release list`, `studio release show <id>`, `studio release cancel <id> --reason "<line>"` (before the
+  trigger only). `tick` follows triggered releases (it never triggers), lists `releases`, and puts `release
+  approval: ...`, `release failed: ...` and `release unknown: ...` lines into `needsLead`; it pushes a fixed phrase
+  for each announced release and each approval or red release to the owner's phone. `studio board` lists open
+  releases, `state.json` and the pane's details view those of the last seven days, with the status in words
+  (English and German).
+- `releases.json` (under `releases.lock`, which `recover` checks) and the log `releases.jsonl` in the state root;
+  both are among the files crews must not write.
+
+### Changed
+
+- A pull request that changes a component with a `release:` block (its whole entry), a workflow such a release
+  starts or names, or `crew_allowed_workflows` while a release exists gets no approval from Studio, like one
+  that changes `evidence:` (`approval refused: ...; the release rules are the owner's: ...`).
+- Approver `paths` are matched against every change of the release, not only the component's.
+- `release.guarded_paths`: files outside `.github` the release workflows run (deploy scripts). Once any
+  component has a release, everything below `.github/` and the guarded paths are owner-owned: a pull request
+  that changes one, or adds a link or submodule there or on the way there, gets no approval. A link or
+  submodule inside that scope refuses a draft or trigger. The announced record pins the tree
+  of `.github` and the guarded files; the trigger refuses when either changed at the release commit or the
+  head. The owner must list such scripts; Studio does not find them.
+- From the adversarial review: all of `studio.yaml` but `stacks` is owner-owned while a release exists
+  (compared camelized; a key in two spellings is refused when the config loads); a release run must have an id
+  above the workflow's newest run before the dispatch, and nothing starts while a run of it is queued or
+  running; a release that failed with an unknown outcome blocks the next draft until `studio release resolve
+  <id> --deployed|--not-deployed --reason "<line>"`; a workflow Studio starts may run on `workflow_dispatch`
+  only and must use `inputs.sha`; post-check starts run the trigger's checks; `crew_allowed_workflows` counts
+  from the release commit, the head and the live config; the release command pushes the announcement itself
+  (urgent), records `notify`, and the trigger waits a tick or 5 minutes after it; migrations: an index without
+  `CONCURRENTLY`, a `NOT NULL` column without default and a serial or identity column are `unclear` with a
+  `lock` or `fails_on_data` risk shown in the note and the announcement, directive comments, transaction
+  statements, non-ASCII whitespace and a keyword as column name make a file `unclear`, `ALTER TYPE ... RENAME`
+  is called lossy; approvals are kept verbatim (refused when too long or multi-line, never cut); items beyond
+  200 are listed as not placed; schema-looking files outside `release.migrations` are warned about; only gh's
+  exact refusal shape fails a dispatch as not deployed; the repository may hold no symbolic links or
+  submodules while it releases.
+- The rollback workflow is pinned like the started ones: the trigger refuses another, and the pin is checked
+  again before the way back is shown (`needsLead`, `release show`); a changed one is not offered.
+- The lead skill: a Release section (send the announcement word for word, approval lines are owner lines, never
+  approve a migration or contact a third party, the second `studio release` call triggers and `tick` never does,
+  never `gh workflow run` or `deploy record` a release, the way back after `release failed` is the lead's). A
+  destructive migration in a release is the owner's now; outside a release it stays the lead's.
+- `--dry-run` works with `release` too; `--reason` with `release cancel`.
+
+### Not exercised
+
+- A real release workflow on GitHub: `gh workflow run` printing the run's URL, the dispatch lookup, a real
+  post-deploy job, a real rollback. A lead session running a release over hours. The note across hundreds of
+  commits.
+
 ## [0.17.0] - 2026-11-05
 
 A guard job in CI (a migration guard, a floor guard) that flagged a harmless change stopped the pull request

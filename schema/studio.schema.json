@@ -392,6 +392,147 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991
+          },
+          "release": {
+            "type": "object",
+            "properties": {
+              "workflow": {
+                "type": "string",
+                "pattern": "^\\.github\\/workflows\\/[A-Za-z0-9._-]{1,100}\\.ya?ml$"
+              },
+              "post_checks": {
+                "minItems": 1,
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "workflow": {
+                      "type": "string",
+                      "pattern": "^\\.github\\/workflows\\/[A-Za-z0-9._-]{1,100}\\.ya?ml$"
+                    },
+                    "job": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+                    }
+                  },
+                  "required": [
+                    "workflow",
+                    "job"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "migrations": {
+                "default": [],
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "config": {
+                "default": [],
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "rollback": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300,
+                        "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "workflow": {
+                        "type": "string",
+                        "pattern": "^\\.github\\/workflows\\/[A-Za-z0-9._-]{1,100}\\.ya?ml$"
+                      }
+                    },
+                    "required": [
+                      "workflow"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "approvers": {
+                "default": [],
+                "maxItems": 10,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                    },
+                    "who": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 100,
+                      "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+                    },
+                    "for": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+                    },
+                    "paths": {
+                      "minItems": 1,
+                      "maxItems": 20,
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "who"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "timeout_minutes": {
+                "default": 60,
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 1440
+              },
+              "guarded_paths": {
+                "default": [],
+                "maxItems": 50,
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "workflow",
+              "post_checks",
+              "rollback"
+            ],
+            "additionalProperties": {}
           }
         },
         "required": [

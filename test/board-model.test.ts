@@ -642,3 +642,36 @@ describe('exceptions by evidence in the details view', () => {
     expect(text(ok()).some((l) => l.startsWith('Exceptions'))).toBe(false);
   });
 });
+
+describe('releases in the details view', () => {
+  const releases = [
+    {
+      id: 'api-2',
+      component: 'api',
+      status: 'approvals',
+      sha: 'abcdef1',
+      pending: ['owner', 'partner'],
+    },
+    { id: 'api-1', component: 'api', status: 'failed', sha: '1234567' },
+    { id: 'web-1', component: 'web', status: 'checking', sha: '7654321', extra: 'x' },
+  ];
+  const view = (state: BoardState, lang?: 'de') =>
+    boardLines(
+      { kind: 'ok', state },
+      { columns: 100, nowMs: NOW, paused: false, ...(lang ? { lang } : {}) },
+    );
+  it('one line each: id, commit, status in words; red in red, an approval for you', () => {
+    const l = view(ok({ releases }));
+    expect(l).toContainEqual({ text: 'Releases (3)', tone: 'head' });
+    expect(l).toContainEqual({
+      text: '  api-2 abcdef1 · waits for approval: owner, partner',
+      tone: 'you',
+    });
+    expect(l).toContainEqual({ text: '  api-1 1234567 · stopped: a check is red', tone: 'err' });
+    expect(l).toContainEqual({ text: '  web-1 7654321 · deployed, checks running' });
+    expect(view(ok({ releases }), 'de').map((x) => x.text)).toContain(
+      '  api-1 1234567 · angehalten: eine Prüfung ist rot',
+    );
+    expect(view(ok()).some((x) => x.text.startsWith('Releases'))).toBe(false);
+  });
+});

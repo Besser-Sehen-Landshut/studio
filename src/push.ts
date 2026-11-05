@@ -101,6 +101,8 @@ export type PushKind =
   | 'blocked'
   | 'account_block'
   | 'release_approval'
+  | 'release_failed'
+  | 'release_announced'
   | 'other';
 
 export interface Decision {
@@ -136,7 +138,9 @@ export function decisionsOf(o: {
     const item = safeId(n.item);
     const kind: PushKind = n.reason.startsWith('release approval')
       ? 'release_approval'
-      : classifyDecision(n.reason);
+      : n.reason.startsWith('release failed')
+        ? 'release_failed'
+        : classifyDecision(n.reason);
     const since = o.board?.items.find((i) => i.id === n.item)?.history.at(-1)?.at ?? '';
     const key = `${o.projectKey}:${item}:${kind}:${since}`;
     if (out.some((d) => d.key === key)) continue;
@@ -169,6 +173,8 @@ const PHRASES: Record<Lang, Record<PushKind, string>> = {
     blocked: 'Blocked',
     account_block: 'Account blocked',
     release_approval: 'Release approval needed',
+    release_failed: 'Release stopped, a check is red',
+    release_announced: 'Release announced, it cannot be undone once triggered',
     other: 'Decision needed',
   },
   de: {
@@ -180,6 +186,8 @@ const PHRASES: Record<Lang, Record<PushKind, string>> = {
     blocked: 'Blockiert',
     account_block: 'Konto gesperrt',
     release_approval: 'Release-Freigabe nötig',
+    release_failed: 'Release angehalten, eine Prüfung ist rot',
+    release_announced: 'Release angekündigt, nach dem Auslösen nicht umkehrbar',
     other: 'Entscheidung nötig',
   },
 };

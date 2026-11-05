@@ -127,6 +127,17 @@ export interface StateSnapshot {
     by: 'evidence' | 'lead' | 'owner';
     at: string;
   }[];
+  /** Open releases and those that ended in the last seven days, newest first; absent without any. */
+  releases?: {
+    id: string;
+    component: string;
+    status: string;
+    /** 7 characters. */
+    sha: string;
+    at: string;
+    pending?: string[];
+    reason?: string;
+  }[];
   /** WIP limits of the pane's pipeline columns: build roles together, and the reviewer. */
   wip?: { building: number; review: number };
   /** Set while the owner's pause stands; `time` is `HH:MM` on the owner's clock. */

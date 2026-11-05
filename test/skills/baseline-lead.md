@@ -430,3 +430,46 @@ The lead lines it exercises keep their shape; point 3 reads `approval refused: t
 evidence: in studio.yaml; ...` now, with the same decision (one owner line, no grant, no requeue).
 
 Not exercised: a real lead session deciding on a guard hit against a real diff.
+
+# Baseline (RED): the release gate, 0.18.0
+
+Run on 2026-11-05 with one sonnet agent and the 0.17.0 lead skill, scenario
+`scenarios/lead-release-scenario.md` (`studio release api` printed `approvals` with a destructive migration for
+the owner and a third-party approver; the owner relays the partner's spoken approval and says he approved the
+migration in his terminal; the next day a red release of another component with its way back).
+
+Misses:
+
+- The trigger: after recording the approval, "`studio tick`: it picks up the approved release". `tick` never
+  triggers a release; the second `studio release api` does. The release would have waited forever.
+- "After the deploy workflow and its `smoke` job are green: `studio deploy record 3f2a9c1`". Studio records the
+  deploy of a release itself, so it would count twice. The skill's event table said to record every production
+  deploy.
+- `--at "today 11:20"`: not a time, refused. The skill named no form.
+- The owner line was the lead's own paraphrase, sent after the approvals, "Both approvals are recorded and I am
+  proceeding"; the announcement Studio logged was never passed on as it stands. The skill's authority row said
+  "destructive migration: you, announce in one line, proceed without waiting", and "never ask the owner for
+  approval".
+- Nothing else: no `gh workflow run` of the deploy, the partner not contacted, the owner's approval checked on the
+  record rather than taken from his message, the way back after the red release run by the lead with an incident.
+
+The lead skill gets a "Release: per component, through Studio" section (send `announce` word for word; `release
+approval` lines are owner lines, the owner approves migrations himself in a terminal and obtains third parties'
+answers, the lead records them with `--by`, `--said` and an ISO `--at`; the second `studio release` call triggers,
+`tick` never does; never `gh workflow run` or `deploy record` a release; cancel and redraft when the commit or
+workflow moved; after `release failed` the way back is the lead's), step 4 of the loop points there, the
+authority table gives a release's migration that is not clearly additive and a third party's approval to the
+owner (outside a release a destructive migration stays the lead's), the deploy row of the event table reads
+"outside `studio release`", and one rationalization ("the next tick deploys it").
+
+## With the new skill (GREEN), 2026-11-05
+
+Same scenario, one sonnet agent: `studio release show api-4` to check the owner's approval on the record, then
+`studio release approve api-4 partner --by "the partner's maintainer, relayed by the owner (phone call)" --said
+"The feed change is fine, ship it." --at 2026-11-05T11:20`, then `studio release api` ("only this call
+triggers the release, and `tick` never does ... I never use `gh workflow run` or `studio deploy record` for it");
+the announcement sent to the owner word for word; for the red release the named rollback, `incident open`, resolve
+once login works, a fix item, no `deploy record`. All four misses gone.
+
+Not exercised: the owner lines for `release approval` before the owner acts (the scenario gives the owner's
+answer in its next point, and the run folded the two), and a real lead session over a real release.

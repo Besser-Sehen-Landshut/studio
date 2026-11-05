@@ -246,3 +246,54 @@ export function commentsOnly(
 ): boolean {
   return commentsOnlyWhy(base, head) === undefined;
 }
+
+/** A token of SQL code: a bare word (upper-cased), a quoted name, a literal or one character. */
+export type SqlToken = { kind: 'word' | 'name' | 'literal' | 'punct'; text: string };
+
+/**
+ * The statements of a SQL text as tokens, comments left out; why not when the text cannot be read
+ * for sure (the same rules as `comments_only`). Bare words are upper-cased; string literals and
+ * dollar-quoted bodies are one `literal` token each, so a word inside them is never read as code.
+ * A `;` ends a statement; empty statements are dropped.
+ */
+export function sqlStatements(
+  bytes: Uint8Array | string,
+): { statements: SqlToken[][]; directives: string[] } | string {
+  const plain = plainText(bytes);
+  if (typeof plain === 'string') return plain;
+  // Whitespace PostgreSQL does not read as such, or a tool might: nothing is proven with it.
+  if (/[\u0085\u00A0\u1680\u2000-\u200B\u2028\u2029\u202F\u205F\u3000\uFEFF]/u.test(plain.text)) {
+    return 'whitespace that is not ASCII';
+  }
+  let segs: Seg[];
+  try {
+    segs = tokenizeSql(plain.text);
+  } catch (e) {
+    if (e instanceof Unclassifiable) return e.message;
+    throw e;
+  }
+  const statements: SqlToken[][] = [];
+  // Comments with a meaning to a tool (a migration runner's directive): they change how it runs.
+  const directives: string[] = [];
+  let cur: SqlToken[] = [];
+  const end = () => {
+    if (cur.length > 0) statements.push(cur);
+    cur = [];
+  };
+  for (const seg of segs) {
+    if (seg.kind === 'comment' && seg.meaningful === true) directives.push(seg.text);
+    if (seg.kind === 'ws' || seg.kind === 'comment') continue;
+    if (seg.kind === 'string') {
+      cur.push({ kind: seg.text.startsWith('"') ? 'name' : 'literal', text: seg.text });
+      continue;
+    }
+    for (const m of seg.text.matchAll(/[A-Za-z_][A-Za-z0-9_$]*|[0-9]+|[^A-Za-z0-9_\s]/g)) {
+      const t = m[0];
+      if (t === ';') end();
+      else if (/^[A-Za-z_]/.test(t)) cur.push({ kind: 'word', text: t.toUpperCase() });
+      else cur.push({ kind: 'punct', text: t });
+    }
+  }
+  end();
+  return { statements, directives };
+}

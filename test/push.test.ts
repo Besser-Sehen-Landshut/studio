@@ -259,6 +259,7 @@ describe('decisionsOf', () => {
       { item: 'APP-5', reason: 'merge failed: check ci failed' },
       { item: 'APP-6', reason: 'changes requested by APP-7: blocked → ready ...' },
       { item: 'APP-8', reason: 'release approval needed for api' },
+      { item: 'api-1', reason: 'release failed: api-1: smoke failed after the deploy' },
       { item: 'evil\nid', reason: 'anything' },
     ];
     const out = decisionsOf({
@@ -273,6 +274,7 @@ describe('decisionsOf', () => {
       ['APP-5', 'merge_failed'],
       ['APP-6', 'changes_requested'],
       ['APP-8', 'release_approval'],
+      ['api-1', 'release_failed'],
       ['?', 'other'],
     ]);
     expect(out[0]?.key).toBe('pk:APP-3:fix_limit:2026-11-05T09:00:00.000Z');
