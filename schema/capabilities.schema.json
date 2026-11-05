@@ -104,7 +104,8 @@
                     "rework",
                     "after-fix",
                     "epic-end",
-                    "release"
+                    "release",
+                    "contract-change"
                   ]
                 }
               },

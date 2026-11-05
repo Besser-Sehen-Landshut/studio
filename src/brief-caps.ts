@@ -13,12 +13,13 @@ import {
 } from './capabilities.js';
 import type { RoleConfig, StudioConfig } from './config.js';
 import { globProblem, matchGlob } from './glob.js';
-import { removeStateEntry, writeStateFile } from './paths.js';
+import { assertStatePath, removeStateEntry, writeStateFile } from './paths.js';
 import type { Ports } from './ports.js';
 import {
   type CrewCaps,
   capsFile,
   checksPending,
+  gateRules,
   type RoutineAnalyzer,
   readCheckLines,
   readDefaultBranch,
@@ -28,11 +29,42 @@ import {
   reviewTier,
   usableBaseName,
 } from './review.js';
-import { loadSources, pinProblem } from './sources.js';
+import { loadSources, pinProblem, UNKNOWN_LICENCE } from './sources.js';
 
 const MAX_COPY_BYTES = 256 * 1024;
-const MANDATORY = ['diff-review', 'spec-check', 'security'];
+/** Analyzers the gate can owe: a launch refuses when the plugin lacks one of their files. */
+const MANDATORY = ['diff-review', 'spec-check', 'security', 'similar-bugs', 'performance'];
 const NO_SKILLS = { required: [], allowed: [], denied: [] };
+/**
+ * Skills that ship inside Claude Code itself, not on disk: the entries tagged "Skill" in the
+ * commands reference (https://code.claude.com/docs/en/commands; the skills page names some under
+ * "Bundled skills", https://code.claude.com/docs/en/skills#bundled-skills), checked 2026-11-05,
+ * plus `security-review`, which the matrix offers. They are never reported missing; a crew gets a
+ * deny rule for each one its brief does not name.
+ */
+export const BUNDLED_SKILLS: readonly string[] = [
+  'artifact-capabilities',
+  'artifact-diagramming',
+  'batch',
+  'claude-api',
+  'claude-in-chrome',
+  'code-review',
+  'dataviz',
+  'debug',
+  'design',
+  'design-sync',
+  'doctor',
+  'fewer-permission-prompts',
+  'loop',
+  'run',
+  'run-skill-generator',
+  'security-review',
+  'simplify',
+  'slides',
+  'update-config',
+  'verify',
+  'workflow-authoring',
+];
 
 /** The item's own model, else the one for its type, else the role's. */
 export function resolveModel(item: WorkItem, role: RoleConfig): string {
@@ -61,6 +93,10 @@ export interface ResolvedForItem {
     ciItem?: boolean;
     /** The pull request changes `.github/`, or the change could not be read (fails closed). */
     workflowChange?: boolean;
+    /** Why security runs, for the brief; never a changed file's name. */
+    securityWhy?: string;
+    /** The item holding the pull request is a fix: its probe must run. */
+    fixItem?: boolean;
   };
 }
 
@@ -75,6 +111,8 @@ const isGithubPath = (p: string): boolean => {
  */
 const isCiItem = (i: WorkItem): boolean => [...i.paths, ...i.touches].some(isGithubPath);
 const GIT_FETCH_MS = 120_000;
+/** The project config in the repository; a change to it always gets the security analyzer. */
+const STUDIO_CONFIG = '.studio/studio.yaml';
 const GIT_LOCAL_MS = 60_000;
 
 /**
@@ -191,14 +229,18 @@ export async function resolveForItem(o: {
   }
   // The approval is stored on the item that holds the pull request: without one it would be lost.
   let notRunHere: NotRunHere[] | undefined;
+  let fixItem = false;
   let ciItem = false;
   let ciGlobs: string[] = [];
+  // The review is judged with the risk and triggers of the item it reviews, on top of its own.
+  let subject: WorkItem = item;
   if (target !== undefined) {
     const name = `${target.repo}#${target.pr}`;
     const holder = o
       .readBoard()
       .items.find((i) => i.type !== 'review' && i.repo === target.repo && i.pr === target.pr);
     notRunHere = holder?.notRunHere;
+    fixItem = holder?.type === 'fix';
     ciItem = holder !== undefined && isCiItem(holder);
     ciGlobs = holder === undefined ? [] : [...holder.paths, ...holder.touches].filter(isGithubPath);
     if (!holder) {
@@ -206,6 +248,13 @@ export async function resolveForItem(o: {
         `${item.id}: no board item holds ${name}; tie it to its item with studio link <id> ${name}`,
       );
     }
+    const risk = [...new Set([...(item.risk ?? []), ...(holder.risk ?? [])])];
+    const own = [...new Set([...(item.triggers ?? []), ...(holder.triggers ?? [])])];
+    subject = {
+      ...item,
+      ...(risk.length === 0 ? {} : { risk }),
+      ...(own.length === 0 ? {} : { triggers: own }),
+    };
   }
   // A reviewer on running CI cannot tell its result and would ask for a needless round.
   if (target !== undefined && (await checksPending(o.ports, target))) {
@@ -231,24 +280,43 @@ export async function resolveForItem(o: {
     // An unreadable board must not hide earlier rounds: the scan runs once too often at worst.
     round = 1;
   }
-  const triggers = [...itemTriggers(item), ...(round > 0 ? ['after-fix'] : [])];
-  const first = resolveSkills(item, item.role, stack, paths, phase, { ...base, triggers });
+  // A change under a contract or migration path of the config always gets security.
+  const contractHits =
+    paths === 'unknown'
+      ? []
+      : config.merge.contractPaths.filter(
+          (g) => globProblem(g) !== undefined || (facts?.files ?? []).some((f) => matchGlob(g, f)),
+        );
+  // The project config holds the plugin pins, the sandbox and the roles: a change is one of trust.
+  const configChange =
+    paths !== 'unknown' && (facts?.files ?? []).some((f) => f.toLowerCase() === STUDIO_CONFIG);
+  const triggers = [
+    ...itemTriggers(subject),
+    ...(round > 0 ? ['after-fix'] : []),
+    ...(contractHits.length > 0 || configChange ? ['contract-change'] : []),
+  ];
+  const first = resolveSkills(subject, item.role, stack, paths, phase, { ...base, triggers });
   const { tier, reasons } = reviewTier(
-    item,
+    subject,
     facts,
     first.analyzers.some((a) => a.id === 'security'),
   );
-  const resolved = resolveSkills(item, item.role, stack, paths, phase, {
+  const resolved = resolveSkills(subject, item.role, stack, paths, phase, {
     ...base,
     triggers,
     tier,
   });
+  const securityWhy = resolved.analyzers.some((a) => a.id === 'security')
+    ? securityReason(subject, paths, contractHits, triggers, configChange)
+    : undefined;
   return {
     resolved,
     review: {
       tier,
       reasons,
       round,
+      ...(securityWhy === undefined ? {} : { securityWhy }),
+      ...(fixItem ? { fixItem: true } : {}),
       ...(name === undefined ? {} : { target: name }),
       ...(target === undefined ? {} : { pr: target.pr }),
       ...(facts === undefined ? {} : { head: facts.head, base: facts.base }),
@@ -267,6 +335,39 @@ export async function resolveForItem(o: {
       ...(workflowChange ? { workflowChange: true } : {}),
     },
   };
+}
+
+/** Why security runs, in the brief's words: risk tags, contract globs, never a changed file. */
+function securityReason(
+  item: WorkItem,
+  paths: ChangedPaths,
+  contractHits: readonly string[],
+  triggers: readonly string[],
+  configChange: boolean,
+): string {
+  const why: string[] = [];
+  if (configChange) {
+    why.push(`the project config changed (${STUDIO_CONFIG}: plugins, sandbox, roles)`);
+  }
+  const risky = (item.risk ?? []).filter((r) =>
+    ['auth', 'security', 'data', 'migration'].includes(r),
+  );
+  if (risky.length > 0) why.push(`risk tag ${risky.join(', ')}`);
+  if (paths === 'unknown') why.push('the changed files could not be read completely');
+  if (contractHits.length > 0) {
+    why.push(
+      `a contract or migration path changed (merge.contract_paths: ${contractHits.slice(0, 5).join(', ')})`,
+    );
+  }
+  if (triggers.includes('epic-end') || triggers.includes('release')) {
+    why.push('full scan at epic end or release');
+  }
+  if (why.length === 0) {
+    why.push(
+      'a changed path matches the security rules (auth, sessions, permissions, routes, migrations, uploads, workflows)',
+    );
+  }
+  return why.join('; ');
 }
 
 /**
@@ -317,6 +418,8 @@ export interface BriefCaps {
   required: string[];
   whenAvailable: string[];
   offered: string[];
+  /** Offered skills that are definitely not installed: named in the brief and in collect. */
+  skillsMissing?: string[];
   denied: string[];
   skipped: { id: string; reason: string }[];
   knowledge: { ref: string; where: string; fallback?: string }[];
@@ -332,6 +435,8 @@ export interface BriefCaps {
     base?: string;
     contract: string;
     analyzers: RoutineAnalyzer[];
+    notRun?: { id: string; why: string }[];
+    probeRequired?: string;
     pullRequest?: { description: string; checks: string; files: string };
     notRunHere?: string;
     ciItem?: boolean;
@@ -381,16 +486,21 @@ export function writeCaps(o: {
   const capsDir = join(stateRoot, 'briefs', `${id}.caps`);
   removeStateEntry(stateRoot, capsDir);
   removeStateEntry(stateRoot, capsFile(stateRoot, id));
+  removeStateEntry(stateRoot, skillsFile(stateRoot, id));
   const skipped: { id: string; reason: string }[] = [];
   const copy = (rel: string, text: string): string => {
     const file = join(capsDir, ...rel.split('/'));
     writeStateFile(stateRoot, file, text);
     return file;
   };
+  const sourceList = loadSources(shipped).sources;
   const sourceReads = (source: string): string[] | undefined => {
-    const entry = loadSources(shipped).sources.find((s) => s.id === source);
+    const entry = sourceList.find((s) => s.id === source);
     return entry?.reads.filter((r) => r !== 'LICENSE');
   };
+  /** A source nobody could clear the licence of is not used, fetched or not. */
+  const licenceUnknown = (source: string): boolean =>
+    sourceList.find((s) => s.id === source)?.license === UNKNOWN_LICENCE;
   const sourceRoot = (source: string) => join(o.ownerRoot, 'sources', source);
 
   const clean = (s: string, max: number) => s.replace(/[^\P{Cc}\n\t]/gu, '').slice(0, max);
@@ -426,6 +536,10 @@ export function writeCaps(o: {
     if (kind === 'source') {
       const source = rest.slice(0, rest.indexOf('/'));
       const rel = rest.slice(source.length + 1);
+      if (licenceUnknown(source)) {
+        skipped.push({ id: k.rowId, reason: 'licence unknown' });
+        continue;
+      }
       try {
         lstatSync(sourceRoot(source));
       } catch {
@@ -457,6 +571,10 @@ export function writeCaps(o: {
         throw new Error(`analyzer ${a.id} is missing from the plugin; refusing to launch`);
       }
       skipped.push({ id: a.id, reason: `shipped file: ${got.why}` });
+      return false;
+    }
+    if (a.source !== undefined && licenceUnknown(a.source)) {
+      skipped.push({ id: a.id, reason: 'licence unknown' });
       return false;
     }
     if (a.source !== undefined) {
@@ -496,11 +614,32 @@ export function writeCaps(o: {
     if (o.isInstalled(skill) === false) skipped.push({ id: skill, reason: 'skill not installed' });
     else whenAvailable.push(skill);
   }
+  // A bundled skill of Claude Code is not on disk: it counts as present.
+  const absent = (skill: string) =>
+    !BUNDLED_SKILLS.includes(skill) && o.isInstalled(skill) === false;
+  const skillsMissing = resolved.offered.filter(absent);
+  writeStateFile(
+    stateRoot,
+    skillsFile(stateRoot, id),
+    `${JSON.stringify({ missing: skillsMissing })}\n`,
+  );
 
   let reviewOut: BriefCaps['review'];
   if (review !== undefined) {
     const contract = readBelow(join(shipped, 'analyzers'), 'CONTRACT.md');
     if ('why' in contract) throw new Error('the analyzer contract is missing from the plugin');
+    const gate = gateRules({
+      ids: analyzers.map((a) => a.id),
+      tier: review.tier,
+      ...(review.securityWhy === undefined ? {} : { securityWhy: review.securityWhy }),
+      afterFix: review.round > 0,
+      fixItem: review.fixItem === true,
+    });
+    for (const a of analyzers) {
+      const owed = gate.mandatory.find((m) => m.id === a.id);
+      if (owed !== undefined) a.why = owed.why;
+      else if (gate.onFinding.includes(a.id)) a.onFinding = true;
+    }
     reviewOut = {
       tier: review.tier,
       reasons: review.reasons,
@@ -509,6 +648,8 @@ export function writeCaps(o: {
       ...(review.base === undefined ? {} : { base: review.base }),
       contract: copy('analyzers/CONTRACT.md', contract.text),
       analyzers,
+      notRun: gate.notRun,
+      ...(gate.probeRequired === undefined ? {} : { probeRequired: gate.probeRequired }),
       ...(review.pullRequest === undefined
         ? {}
         : { pullRequest: pullRequestData(review.pullRequest) }),
@@ -526,7 +667,9 @@ export function writeCaps(o: {
     const caps: CrewCaps = {
       tier: review.tier,
       analyzers: ids,
-      mandatory: MANDATORY.filter((m) => ids.includes(m)),
+      mandatory: gate.mandatory.map((m) => m.id),
+      ...(gate.onFinding.length === 0 ? {} : { onFinding: gate.onFinding }),
+      ...(gate.probeRequired === undefined ? {} : { probeRequired: true as const }),
       ...(review.target === undefined ? {} : { reviewsTarget: review.target }),
       ...(review.head === undefined ? {} : { headRefOid: review.head }),
       ...(review.base === undefined ? {} : { baseRefName: review.base }),
@@ -543,10 +686,30 @@ export function writeCaps(o: {
   return {
     required: resolved.required,
     whenAvailable,
-    offered: resolved.offered,
+    offered: resolved.offered.filter((s) => !absent(s)),
+    ...(skillsMissing.length === 0 ? {} : { skillsMissing }),
     denied: resolved.denied,
     skipped,
     knowledge,
     ...(reviewOut === undefined ? {} : { review: reviewOut }),
   };
+}
+
+/** Where a launch records the offered skills that were missing, for collect. */
+export const skillsFile = (stateRoot: string, id: string): string =>
+  join(stateRoot, 'briefs', `${id}.skills.json`);
+
+/** The offered skills a launch found missing; empty when the record is absent or malformed. */
+export function readSkillsMissing(stateRoot: string, id: string): string[] {
+  const file = skillsFile(stateRoot, id);
+  try {
+    assertStatePath(stateRoot, file);
+    if (!lstatSync(file).isFile()) return [];
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as { missing?: unknown };
+    return Array.isArray(raw.missing)
+      ? raw.missing.filter((m): m is string => typeof m === 'string').slice(0, 50)
+      : [];
+  } catch {
+    return [];
+  }
 }

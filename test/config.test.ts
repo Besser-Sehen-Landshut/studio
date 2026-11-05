@@ -229,6 +229,7 @@ describe('owner config', () => {
       allowApiBilling: false,
       crewAllowMacosTrustService: false,
       crewLabelLimits: { maxParallel: 2 },
+      allowedPlugins: [],
     });
   });
 
@@ -241,6 +242,7 @@ describe('owner config', () => {
       allowApiBilling: false,
       crewAllowMacosTrustService: false,
       crewLabelLimits: { maxParallel: 2 },
+      allowedPlugins: [],
     });
   });
 
@@ -361,5 +363,26 @@ describe('components', () => {
     ['an empty list', ' []\n', /components: /],
   ])('refuses %s', (_, block, message) => {
     expect(() => loadConfig(project(withComponents(block)))).toThrow(message);
+  });
+});
+
+describe('plugins: pinned versions', () => {
+  it('reads name@marketplace with one exact version', () => {
+    const c = loadConfig(
+      project(
+        `${MINIMAL}plugins:\n  - { name: superpowers@superpowers-marketplace, version: 7.1.0 }\n`,
+      ),
+    );
+    expect(c.plugins).toEqual([{ name: 'superpowers@superpowers-marketplace', version: '7.1.0' }]);
+  });
+  it('is optional: no list means the defaults', () => {
+    expect(loadConfig(project(MINIMAL)).plugins).toBeUndefined();
+  });
+  it.each([
+    '{ name: superpowers, version: 7.1.0 }',
+    '{ name: superpowers@m, version: "^7.1.0" }',
+    '{ name: superpowers@m, version: 7.1.0, marketplace: "http://example.com/x" }',
+  ])('refuses %s', (entry) => {
+    expect(() => loadConfig(project(`${MINIMAL}plugins:\n  - ${entry}\n`))).toThrow(ConfigError);
   });
 });

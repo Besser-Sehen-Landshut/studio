@@ -16,6 +16,7 @@ import {
 import { join } from 'node:path';
 import { type OwnerEnv, ownerConfigDir } from './config.js';
 import { validLabel } from './limits.js';
+import { DEFAULT_PLUGINS, pluginCommands } from './plugins.js';
 
 /**
  * Claude accounts for crews, kept by Studio: one long-lived token per label from
@@ -37,13 +38,11 @@ export const TOKEN_LIFETIME_DAYS = 365;
 export const EXPIRY_WARNING_DAYS = 30;
 const DAY_MS = 86_400_000;
 
-/** What `studio account setup-plugins` runs with CLAUDE_CONFIG_DIR set to the crew config dir. */
-export const PLUGIN_COMMANDS: readonly (readonly string[])[] = [
-  ['plugin', 'marketplace', 'add', 'https://github.com/obra/superpowers-marketplace.git'],
-  ['plugin', 'marketplace', 'add', 'https://github.com/Besser-Sehen-Landshut/studio.git'],
-  ['plugin', 'install', 'superpowers@superpowers-marketplace'],
-  ['plugin', 'install', 'studio@studio-marketplace'],
-];
+/**
+ * What `studio account setup-plugins` runs with CLAUDE_CONFIG_DIR set to the crew config dir, for
+ * the default pins; `pluginCommands` gives the list for the configured ones.
+ */
+export const PLUGIN_COMMANDS: readonly (readonly string[])[] = pluginCommands(DEFAULT_PLUGINS);
 
 /**
  * The format is not documented, and there is no documented way to check a token without a model

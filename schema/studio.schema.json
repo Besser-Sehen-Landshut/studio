@@ -402,6 +402,31 @@
         ],
         "additionalProperties": false
       }
+    },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$"
+          },
+          "marketplace": {
+            "type": "string",
+            "pattern": "^https:\\/\\/github\\.com\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+(\\.git)?$"
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [

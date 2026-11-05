@@ -12,7 +12,7 @@ export { expandBraces, globProblem, matchGlob };
 export const PHASES = ['design', 'build', 'review'] as const;
 export type Phase = (typeof PHASES)[number];
 
-export const TRIGGERS = ['rework', 'after-fix', 'epic-end', 'release'] as const;
+export const TRIGGERS = ['rework', 'after-fix', 'epic-end', 'release', 'contract-change'] as const;
 const ROLES = ['lead', 'builder', 'reviewer', 'designer', 'researcher', 'release'] as const;
 const ITEM_TYPES = ['feature', 'fix', 'chore', 'docs', 'research', 'review', 'release'] as const;
 const RISKS = ['ui', 'landing', 'auth', 'security', 'data', 'migration'] as const;

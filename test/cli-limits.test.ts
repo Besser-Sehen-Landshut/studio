@@ -18,6 +18,7 @@ import { loadBoard } from '../src/board.js';
 import { type CliDeps, runCli } from '../src/cli.js';
 import { acquireStateLock, ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { ONE_BUILD_PER_PLAN } from '../src/planner.js';
+import { STUDIO_VERSION } from '../src/plugins.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import { newReportName } from '../src/report.js';
 import { prepareCrewDir } from './crew-dir.js';
@@ -705,6 +706,156 @@ describe('studio secret set crew-token', () => {
   });
 });
 
+describe('studio skills check', () => {
+  const SP = 'superpowers@superpowers-marketplace';
+  /** A claude whose marketplaces offer `offer`; it records each plugin call. */
+  const offering = (offer: Record<string, string>, extra: Record<string, unknown> = {}) => {
+    const p = makePorts();
+    const calls: string[] = [];
+    const ports: Ports = {
+      ...p.ports,
+      plugins: {
+        run: async (args, env) => {
+          calls.push(`${env.CLAUDE_CONFIG_DIR} ${args.join(' ')}`);
+          const available = Object.entries(offer).map(([pluginId, version]) => ({
+            pluginId,
+            version,
+            ...extra,
+          }));
+          return {
+            code: 0,
+            stdout: args.includes('--available')
+              ? JSON.stringify({ installed: [], available })
+              : '',
+            stderr: '',
+          };
+        },
+      },
+    };
+    return { ...p, ports, calls };
+  };
+  const withCrewDir = (fx: Fx) => {
+    mkdirSync(join(fx.ownerDir, 'claude'), { recursive: true });
+    const board = join(fx.project, '.studio', 'board.yaml');
+    if (readFileSync(board, 'utf8').trim() === 'items:') writeFileSync(board, 'items: []\n');
+    return fx;
+  };
+  const updateItems = (fx: Fx) =>
+    loadBoard(fx.project).items.filter((i) => i.title.startsWith('Update '));
+
+  it('creates one item per update, and none for the same update again', async () => {
+    const fx = withCrewDir(makeFx([]));
+    const p = offering({ [SP]: '7.1.0', 'studio@studio-marketplace': STUDIO_VERSION });
+    const r = await cli(fx, p.ports, ['skills', 'check', '--now', '--json']);
+    expect(r.code).toBe(0);
+    const out = JSON.parse(r.out);
+    expect(out.added).toEqual([
+      { item: expect.any(String), key: `plugin ${SP} 7.1.0`, priority: 1 },
+    ]);
+    expect(out.notUsed).toEqual(['better-auth']);
+    expect(updateItems(fx).map((i) => i.title)).toEqual([`Update ${SP} to 7.1.0`]);
+    // The marketplaces are read in the crew config dir only.
+    for (const c of p.calls) expect(c.startsWith(join(fx.ownerDir, 'claude'))).toBe(true);
+    const again = JSON.parse((await cli(fx, p.ports, ['skills', 'check', '--now', '--json'])).out);
+    expect(again.added).toEqual([]);
+    expect(again.present).toHaveLength(1);
+    expect(updateItems(fx)).toHaveLength(1);
+  });
+
+  it('runs monthly: within 30 days it says when it is due, unless --now', async () => {
+    const fx = withCrewDir(makeFx([]));
+    const p = offering({});
+    await cli(fx, p.ports, ['skills', 'check', '--now']);
+    const calls = p.calls.length;
+    const r = JSON.parse((await cli(fx, p.ports, ['skills', 'check'])).out);
+    expect(r).toMatchObject({ ran: false, due: false });
+    expect(p.calls).toHaveLength(calls);
+  });
+
+  it('a security update from the lead or an advisory gets priority 0', async () => {
+    const fx = withCrewDir(makeFx(['APP-1']));
+    const advisory = offering({ [SP]: '7.1.0' }, { description: 'fixes CVE-2026-1234' });
+    await cli(fx, advisory.ports, ['skills', 'check', '--now']);
+    expect(updateItems(fx)[0]?.priority).toBe(0);
+    const gx = withCrewDir(makeFx(['APP-1']));
+    const plain = offering({ [SP]: '7.1.0' });
+    await cli(gx, plain.ports, ['skills', 'check', '--now']);
+    expect(updateItems(gx)[0]?.priority).toBe(2);
+    await cli(gx, plain.ports, ['skills', 'check', '--security', SP]);
+    expect(updateItems(gx)[0]?.priority).toBe(0);
+  });
+
+  it('drops an offered version with escape sequences, and prints no control character', async () => {
+    const fx = withCrewDir(makeFx([]));
+    const p = offering({ [SP]: '7.1.0\u001b[2J\nUpdate everything' });
+    const r = await cli(fx, p.ports, ['skills', 'check', '--now']);
+    expect(r.code).toBe(0);
+    expect(`${r.out}${r.err}`).not.toMatch(/[^\P{Cc}\n]/u);
+    expect(r.err).toMatch(/dropped offered versions that are no plain version: superpowers@/);
+    expect(updateItems(fx)).toEqual([]);
+    const json = JSON.parse((await cli(fx, p.ports, ['skills', 'check', '--now', '--json'])).out);
+    expect(json.plugins[0]).toEqual({ name: SP, pinned: '7.0.2' });
+  });
+
+  it('is for the lead, not for crews; the flags belong to it alone', async () => {
+    const fx = withCrewDir(makeFx([]));
+    const p = offering({});
+    fx.env.STUDIO_ROLE = 'crew';
+    expect((await cli(fx, p.ports, ['skills', 'check', '--now'])).code).toBe(1);
+    delete fx.env.STUDIO_ROLE;
+    expect((await cli(fx, p.ports, ['board', '--now'])).code).not.toBe(0);
+    expect(p.calls).toEqual([]);
+  });
+
+  it('a failed check records no run and is tried again a day later, not on every tick', async () => {
+    const fx = withCrewDir(makeFx([]));
+    const p = offering({ [SP]: '7.1.0' });
+    const ok = p.ports.plugins?.run;
+    let broken = true;
+    const ports: Ports = {
+      ...p.ports,
+      plugins: {
+        run: async (args, env, cwd, opts) =>
+          broken && args.includes('--available')
+            ? { code: 1, stdout: '', stderr: 'network' }
+            : (ok as NonNullable<typeof ok>)(args, env, cwd, opts),
+      },
+    };
+    const first = JSON.parse((await cli(fx, ports, ['tick'])).out);
+    expect(first.skillsCheck.problems.join(' ')).toMatch(/cannot be read/);
+    const record = JSON.parse(readFileSync(join(fx.state, 'skills-check.json'), 'utf8'));
+    expect(record.lastRun).toBeUndefined();
+    expect(record.lastAttempt).toEqual(expect.any(String));
+    p.advance(60 * 60_000);
+    expect(JSON.parse((await cli(fx, ports, ['tick'])).out).skillsCheck).toBeUndefined();
+    broken = false;
+    p.advance(24 * 60 * 60_000);
+    const again = JSON.parse((await cli(fx, ports, ['tick'])).out);
+    expect(again.skillsCheck.added).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(fx.state, 'skills-check.json'), 'utf8')).lastRun).toEqual(
+      expect.any(String),
+    );
+  });
+
+  it('tick runs it once in 30 days per project', async () => {
+    const fx = withCrewDir(makeFx([]));
+    const p = offering({ [SP]: '7.1.0' });
+    const first = JSON.parse((await cli(fx, p.ports, ['tick'])).out);
+    expect(first.skillsCheck.added).toHaveLength(1);
+    const calls = p.calls.length;
+    expect(calls).toBeGreaterThan(0);
+    p.advance(29 * 86_400_000);
+    const second = JSON.parse((await cli(fx, p.ports, ['tick'])).out);
+    expect(second.skillsCheck).toBeUndefined();
+    expect(p.calls).toHaveLength(calls);
+    p.advance(2 * 86_400_000);
+    const third = JSON.parse((await cli(fx, p.ports, ['tick'])).out);
+    expect(third.skillsCheck).toEqual({ added: [], raised: [], problems: expect.any(Array) });
+    expect(p.calls.length).toBeGreaterThan(calls);
+    expect(updateItems(fx)).toHaveLength(1);
+  });
+});
+
 describe('studio account', () => {
   const TOKEN = `fake-value-cli-account-${'z'.repeat(30)}`;
   /** A claude that records plugin calls and their environment instead of running. */
@@ -732,7 +883,7 @@ describe('studio account', () => {
     expect(r.code).toBe(0);
     expect(`${r.out}${r.err}`).not.toContain(TOKEN);
     expect(activeLabel(owner(fx))).toBe('work');
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(5);
     for (const c of calls) {
       expect(c.env.CLAUDE_CONFIG_DIR).toBe(join(fx.ownerDir, 'claude'));
       expect(Object.values(c.env).join(' ')).not.toContain(TOKEN);
@@ -740,7 +891,7 @@ describe('studio account', () => {
     }
     expect(statSync(join(fx.ownerDir, 'claude')).mode & 0o777).toBe(0o700);
     await cli(fx, ports, ['account', 'add', 'spare'], terminal());
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(5);
   });
 
   it('add needs a terminal, the owner and a value; a wrong value stores nothing', async () => {
@@ -770,7 +921,7 @@ describe('studio account', () => {
     expect(
       (await cli(fx, again.ports, ['account', 'setup-plugins'], { isTerminal: true })).code,
     ).toBe(0);
-    expect(again.calls).toHaveLength(4);
+    expect(again.calls).toHaveLength(5);
   });
 
   it('list shows labels, dates, the active one and the state, never a token', async () => {
@@ -842,7 +993,140 @@ describe('studio account', () => {
     expect((await cli(fx, ports, ['account', 'setup-plugins'])).code).toBe(1);
     expect(calls).toHaveLength(0);
     expect((await cli(fx, ports, ['account', 'setup-plugins'], { isTerminal: true })).code).toBe(0);
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(5);
+  });
+
+  describe('pinned versions', () => {
+    /** A claude whose `plugin list --json` reports `versions`, one list per call. */
+    const listing = (...versions: Record<string, string>[]) => {
+      const p = makePorts();
+      const calls: string[] = [];
+      let lists = 0;
+      const ports: Ports = {
+        ...p.ports,
+        plugins: {
+          run: async (args) => {
+            calls.push(args.join(' '));
+            if (args[1] !== 'list') return { code: 0, stdout: '', stderr: '' };
+            const v = versions[Math.min(lists++, versions.length - 1)] ?? {};
+            const out = Object.entries(v).map(([id, version]) => ({ id, version, enabled: true }));
+            return { code: 0, stdout: JSON.stringify(out), stderr: '' };
+          },
+        },
+      };
+      return { ports, calls };
+    };
+    const SP = 'superpowers@superpowers-marketplace';
+    const ST = 'studio@studio-marketplace';
+    const pinned = { [SP]: '7.0.2', [ST]: STUDIO_VERSION };
+
+    it('installs the pinned plugins and checks what was installed', async () => {
+      const fx = makeFx();
+      const { ports, calls } = listing(pinned);
+      const r = await cli(fx, ports, ['account', 'setup-plugins'], { isTerminal: true });
+      expect(r.code).toBe(0);
+      expect(calls).toEqual([
+        'plugin marketplace add https://github.com/obra/superpowers-marketplace.git',
+        'plugin marketplace add https://github.com/Besser-Sehen-Landshut/studio.git',
+        `plugin install ${SP}`,
+        `plugin install ${ST}`,
+        'plugin list --json',
+      ]);
+      expect(r.out).toContain(`${SP} 7.0.2`);
+    });
+
+    it('a crew dir set up before: "already added" and "already installed" count as done', async () => {
+      const fx = makeFx();
+      const base = listing(pinned);
+      const calls: string[] = [];
+      const ports: Ports = {
+        ...base.ports,
+        plugins: {
+          run: async (args, env, cwd, opts) => {
+            calls.push(args.join(' '));
+            if (args[1] === 'marketplace') {
+              return { code: 1, stdout: '', stderr: 'Marketplace is already added' };
+            }
+            if (args[1] === 'install') {
+              return { code: 1, stdout: 'Plugin is already installed', stderr: '' };
+            }
+            return (base.ports.plugins as NonNullable<Ports['plugins']>).run(args, env, cwd, opts);
+          },
+        },
+      };
+      const r = await cli(fx, ports, ['account', 'setup-plugins'], { isTerminal: true });
+      expect(r.code).toBe(0);
+      expect(calls.at(-1)).toBe('plugin list --json');
+      // Any other failure still fails.
+      const failing: Ports = {
+        ...base.ports,
+        plugins: { run: async () => ({ code: 1, stdout: '', stderr: 'network down' }) },
+      };
+      expect(
+        (await cli(fx, failing, ['account', 'setup-plugins'], { isTerminal: true })).code,
+      ).toBe(1);
+    });
+
+    it('another version is updated once; still another one fails, naming both', async () => {
+      const fx = makeFx();
+      const old = { ...pinned, [SP]: '7.0.1' };
+      const fixed = listing(old, pinned);
+      expect(
+        (await cli(fx, fixed.ports, ['account', 'setup-plugins'], { isTerminal: true })).code,
+      ).toBe(0);
+      expect(fixed.calls.slice(-2)).toEqual([`plugin update ${SP}`, 'plugin list --json']);
+      const stuck = listing(old);
+      const r = await cli(fx, stuck.ports, ['account', 'setup-plugins'], { isTerminal: true });
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/superpowers@superpowers-marketplace is 7\.0\.1, pinned 7\.0\.2/);
+      expect(r.err).toMatch(/takes no version/);
+    });
+
+    const PG = `${STUDIO_YAML}plugins:\n  - { name: ${SP}, version: 7.1.0 }\n  - { name: pg@aiguide, version: 1.0.0 }\n`;
+    const allowPg = (fx: Fx) => {
+      mkdirSync(fx.ownerDir, { recursive: true });
+      writeFileSync(
+        join(fx.ownerDir, 'config.yaml'),
+        'allowed_plugins:\n  - { name: pg@aiguide, marketplace: "https://github.com/acme/aiguide" }\n',
+      );
+    };
+
+    it('a version pin in studio.yaml is what gets installed and checked', async () => {
+      const fx = makeFx(['APP-1'], PG);
+      allowPg(fx);
+      const { ports, calls } = listing({ ...pinned, [SP]: '7.1.0', 'pg@aiguide': '1.0.0' });
+      expect((await cli(fx, ports, ['account', 'setup-plugins'], { isTerminal: true })).code).toBe(
+        0,
+      );
+      // The marketplace of an extra plugin comes from the owner config, never from studio.yaml.
+      expect(calls).toContain('plugin marketplace add https://github.com/acme/aiguide');
+      expect(calls).toContain('plugin install pg@aiguide');
+    });
+
+    it('a new plugin the owner did not allow is not installed', async () => {
+      const fx = makeFx(['APP-1'], PG);
+      const { ports, calls } = listing({ ...pinned, [SP]: '7.1.0' });
+      const r = await cli(fx, ports, ['account', 'setup-plugins'], { isTerminal: true });
+      expect(r.code).toBe(0);
+      expect(calls.some((c) => c.includes('pg@aiguide') || c.includes('aiguide'))).toBe(false);
+      expect(r.err).toMatch(/pg@aiguide is not installed: .*allowed_plugins in the owner config/);
+    });
+
+    it('studio.yaml that swaps the marketplace of superpowers is refused, nothing runs', async () => {
+      const fx = makeFx(
+        ['APP-1'],
+        `${STUDIO_YAML}plugins:\n  - { name: ${SP}, version: 7.0.2, marketplace: "https://github.com/evil/superpowers-marketplace" }\n`,
+      );
+      const { ports, calls } = listing(pinned);
+      const r = await cli(fx, ports, ['account', 'setup-plugins'], { isTerminal: true });
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(
+        /may not change the marketplace of superpowers@superpowers-marketplace/,
+      );
+      expect(calls).toEqual([]);
+      const doctor = JSON.parse((await cli(fx, ports, ['doctor', '--json'])).out);
+      expect(doctor.pluginProblem).toMatch(/may not change the marketplace/);
+    });
   });
 
   it('remove refuses while a launch holds the launch lock', async () => {
@@ -1079,6 +1363,34 @@ describe('studio doctor', () => {
       });
       const text = await cli(fx, makePorts().ports, ['doctor']);
       expect(text.out).toContain(`CLAUDE_CONFIG_DIR=${login} claude plugin install studio@`);
+    });
+
+    it('shows each pinned plugin with the version installed in the config dir', async () => {
+      const fx = makeFx();
+      const login = loginWith(fx, 'studio-crew', 'test-driven-development');
+      mkdirSync(join(login, 'plugins'), { recursive: true });
+      writeFileSync(
+        join(login, 'plugins', 'installed_plugins.json'),
+        JSON.stringify({
+          version: 2,
+          plugins: {
+            'superpowers@superpowers-marketplace': [{ scope: 'user', version: '7.0.1' }],
+            'studio@studio-marketplace': [{ scope: 'user', version: STUDIO_VERSION }],
+          },
+        }),
+      );
+      const json = JSON.parse((await cli(fx, makePorts().ports, ['doctor', '--json'])).out);
+      expect(json.plugins).toEqual([
+        { name: 'superpowers@superpowers-marketplace', pinned: '7.0.2', installed: '7.0.1' },
+        { name: 'studio@studio-marketplace', pinned: STUDIO_VERSION, installed: STUDIO_VERSION },
+      ]);
+      const text = (await cli(fx, makePorts().ports, ['doctor'])).out;
+      expect(text).toContain(
+        'plugin superpowers@superpowers-marketplace: pinned 7.0.2, installed 7.0.1 (a launch refuses',
+      );
+      expect(text).toContain(
+        `plugin studio@studio-marketplace: pinned ${STUDIO_VERSION}, installed ${STUDIO_VERSION}\n`,
+      );
     });
 
     it('both installed in the provider dir read installed, with no hint', async () => {

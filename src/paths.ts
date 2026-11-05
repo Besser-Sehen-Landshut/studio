@@ -49,6 +49,7 @@ export const STATE_FILES = [
   'usage.json',
   'launch.lock',
   'pause.json',
+  'skills-check.json',
   'tick.json',
 ];
 

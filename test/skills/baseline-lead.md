@@ -242,3 +242,34 @@ again: epic, items with `--epic`, import dry run then `--write`, `studio epic ed
 `studio roadmap | diff ROADMAP.md -` and ask one line ... `--force` only after a yes."
 
 Not exercised: a real lead session against a project with a hand-written roadmap.
+
+# Baseline (RED): skills, pins and the gate, 0.12.0
+
+Run on 2026-11-05 with one sonnet agent and the 0.11.0 lead skill, scenario `scenarios/lead-skills-scenario.md`
+(update items from the monthly check, a launch refused for a pinned version, `skillsMissing`, an approval
+refused for a skipped `similar-bugs`, a forwarded advisory, a `sources check` with fits, unclear and conflict).
+The CLI messages carried most of it: `studio account setup-plugins` for the pin, `stop --requeue` for the
+refused approval, `skills check --now --security` for the advisory.
+
+Misses:
+
+- "`studio account doctor`": an invented subcommand; the skill names neither `doctor` nor `setup-plugins`.
+- For the skipped `similar-bugs`: "`studio setup sources` fetches any missing source first, so the relaunch
+  doesn't skip again". The similar-bug scan needs no source; it was skipped although diff review had findings.
+- `--security superpowers`: the name the check matches is `superpowers@superpowers-marketplace`.
+- "Held source `ehmo` (unclear) ... Not applied" as an owner line, although "APP-31 already covers the ehmo
+  review through the crew": the update item is the way for an unclear source, the owner line is noise.
+
+The lead skill gets a "Skills and sources" section in place of "Sources" and the weekly row; the length
+stays about the same: the cuts are three rationalization rows the Merge section already says ("check capacity
+before queueing", "`--watch` returned", "merge directly").
+
+## With the new skill (GREEN), 2026-11-05
+
+Same scenario, one sonnet agent. `studio account setup-plugins`, then `studio doctor` for the pin; the
+missing offered skill "is one status line, not an action"; for the refused approval "`studio stop APP-29
+--requeue` ... No source fixes it"; `studio skills check --security superpowers@superpowers-marketplace`;
+"ehmo `unclear`: it already has its update item, APP-31 ... No owner line and no apply", one owner line
+for the licence conflict of stripe. All four misses gone.
+
+Not exercised: a real monthly check against live marketplaces, and a crew working an update item.

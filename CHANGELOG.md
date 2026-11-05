@@ -3,6 +3,74 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.12.0] - 2026-11-05
+
+Gates at the end of a phase found critical problems in pull requests that had been merged already. Now
+every pull request gets the full gate before the merge, its depth set by size and risk and stated in the
+brief. Crews get only the skills the capability matrix names, the plugins they run with are pinned, and
+new plugin versions and changed sources become board items instead of arriving unnoticed. Not tagged yet;
+the maintainers tag after the merge.
+
+### Added
+
+- The gate per pull request: the review brief names each mandatory analyzer with one line on why, and each
+  gate analyzer it leaves out with why. Diff review and spec check always; security as before and for any
+  changed file under a glob of `merge.contract_paths`; the similar-bug scan after a fix round, and in the
+  first round whenever diff review reports `findings`; performance in the large tier. The mutation probe must
+  run in the large tier, for an item of type `fix` and in a fix round. A small docs-only pull request gets no
+  security analyzer.
+- `collect` refuses an approval while an owed analyzer has no result or reads `skipped:`, and names all of
+  them in one line (`approval refused: no result for …; mandatory analyzer skipped: …`). The launch record
+  holds `onFinding` and `probeRequired` for that.
+- Crew settings deny every installed skill the brief does not name (`permissions.deny` with `Skill(<name>)`,
+  from the user skills and the plugin cache of the crew's config dir), and the denied list. Claude Code has
+  no skill allowlist that holds under `bypassPermissions`, so the list is built from what is installed.
+- A missing offered skill no longer goes unnoticed: the brief names it under "Offered but not installed" and
+  `collect` prints `skillsMissing`. A missing required skill still refuses the launch.
+- `plugins:` in `studio.yaml`: each plugin crews need at one exact version (`name@marketplace`, `version`,
+  optional `marketplace` URL), over the defaults `superpowers@superpowers-marketplace` 7.0.2 and
+  `studio@studio-marketplace` at Studio's own version. `studio account setup-plugins` installs them, reads the
+  installed versions, updates once and fails naming both versions when one still differs (`claude plugin
+  install` takes no version). A launch refuses while a pinned plugin is installed at another version
+  (`installed_plugins.json` of the config dir). `studio doctor` shows pinned and installed.
+- `studio skills check [--now] [--security <name>]...`: pins against what the marketplaces offer, sources
+  against upstream (`sources check`). Each update is one `chore` item for a builder (`Update <name> to
+  <version>`, `Review upstream change in <source>`) whose Definition of Done compares the change, runs the
+  scenarios in `test/skills/`, proposes the adaptation of Studio's rules and adopts only after a green review.
+  Idempotent by the note `skills-update: …`. Advisories (`security`, `CVE-`, `GHSA-`, `security: true`) and
+  `--security <name>` give priority 0. `tick` runs it at most once in 30 days per project and prints
+  `skillsCheck`.
+- `watch:` for vendored sources in `SOURCES.yaml`: the upstream files vendored content adapts (the `ehmo`
+  platform files) are fetched, pinned and judged by `setup sources` and `sources check`; none reaches a crew.
+
+### Security
+
+- studio.yaml can only pin versions: a project config that changes the marketplace of a default plugin is
+  refused, and an extra plugin is installed only when `allowed_plugins` in the owner config names it with its
+  marketplace. A change of `.studio/studio.yaml` in a pull request always gets the security analyzer.
+- The skill deny list fails closed: skills are named by their `SKILL.md` front matter (the directory name is
+  denied too), plugin skills are found at the install paths of `installed_plugins.json` as well as in the
+  cache, and an installed skill whose name no `Skill(...)` rule can hold refuses the launch.
+- Versions from marketplaces and the CLI are checked against the pin pattern before they reach a title, note,
+  Definition of Done or output; others are dropped and named under `problems`. Table output replaces control
+  characters.
+
+### Changed
+
+- Upgrading: run `studio account setup-plugins` once after updating. A launch now refuses while the crew
+  config dir holds `studio` or `superpowers` at a version other than the pin (an older `studio` after this
+  update, say); `setup-plugins` works on a crew dir set up before (an "already added" or "already installed"
+  answer counts as done). A pin newer than what the marketplace offers blocks launches until the marketplace
+  offers that version or the pin is lowered. Extra plugins pinned in studio.yaml need an `allowed_plugins`
+  entry in the owner config, or they are no longer installed.
+- A source of unknown licence is not used: `better-auth` is neither fetched nor checked (`notUsed`), and its
+  row reads `skipped: licence unknown`, also when a copy sits fetched below the owner root.
+- The similar-bug scan is listed for every review; its analyzer file takes diff review's findings in a first
+  round.
+- The lead skill: a "Skills and sources" section (update items, advisories, pins, `skillsMissing`, refused
+  approvals) in place of "Sources"; `sources check` with `unclear` goes to its update item without an owner
+  line, a licence `conflict` still gets one.
+
 ## [0.11.1] - 2026-11-05
 
 The board pane showed the crew, the queue and the CI figures, but not what needed the owner, what

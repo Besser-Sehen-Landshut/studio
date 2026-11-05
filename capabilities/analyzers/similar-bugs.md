@@ -1,11 +1,12 @@
 # Similar bugs
 
-**Question:** A reviewed item just had defects fixed. Where else in the codebase does the same mistake
-exist?
+**Question:** A reviewed item just had defects fixed, or diff review just found some. Where else in
+the codebase does the same mistake exist?
 
 Input, in addition to the contract: the list of fixes made in this item, each with the file, the
-defect and the fix — for a refactor also the code it moved (old and new place). Without
-either there is nothing to do — return "no findings".
+defect and the fix — for a refactor also the code it moved (old and new place). In a first review
+round there are no fixes yet: the input is then the findings diff review reported for this change,
+each with its file and line. Without either there is nothing to do — return "no findings".
 
 ## Procedure
 

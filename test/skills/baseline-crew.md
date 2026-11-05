@@ -125,3 +125,11 @@ Misses the routine targets: the brief names the length limit, and it no longer f
 ## Copying the command from the list: baseline (RED), 0.6.10
 
 Same run, collected again under 0.6.9: "approval refused: not_run_here entry 1: no CI job named for it". Studio's own list for the reviewer wrote `cargo test --workspace --no-fail-fast (missing database: <reason>)` on one line, and the brief said "with the command as listed". The reviewer copied the line with the reason, as it was told, and the gate matches commands exactly. Studio's fault, not the reviewer's. The list now gives each command alone on a `command:` line, and the brief says to copy that line with nothing appended (`test/crew.test.ts`, "notRunHereList").
+
+## Owed analyzers beyond the three: baseline (RED), 0.12.0
+
+Scenario H (`scenarios/review-H-run.md`): large tier, round 1, diff review reports two notes, the similar-bug and performance subagents time out, the analyzer list without the depth lines. One sonnet agent with the 0.11.0 crew skill: `verdict: approve` with both `skipped`, "The skipped similar-bugs, performance and accessibility analyzers are not among the three that force `changes_requested`". 0.12.0 collect refuses that approval: performance is owed in the large tier, similar-bugs when diff review reports findings. The skill named only diff review, spec check and security as unskippable.
+
+### With the new skill (GREEN), 0.12.0
+
+The skill line names what is owed, as the brief's depth lines do. Same scenario, sonnet: `verdict: changes_requested`, "performance is owed in the large tier and similar-bugs is owed since diff-review reported findings. Both are skipped, so I can't approve even though the checks are green and the probe was red. The ten minutes left don't change that."

@@ -31,6 +31,8 @@ export const sourceSchema = z
     vendored: z.boolean(),
     notice: z.string().optional(),
     reads: z.array(z.string().refine(safeRelative, 'must stay inside the source')),
+    // Upstream files that vendored content adapts: watched for changes, never copied to a crew.
+    watch: z.array(z.string().refine(safeRelative, 'must stay inside the source')).optional(),
   })
   .superRefine((s, ctx) => {
     if (s.kind === 'git' && s.url === undefined) {
@@ -51,6 +53,19 @@ export const sourcesSchema = z.strictObject({
 });
 
 export type Source = z.infer<typeof sourceSchema>;
+
+/** A licence nobody could tell: such a source is not used until it is cleared. */
+export const UNKNOWN_LICENCE = 'unknown';
+
+/** What Studio hashes and judges of a source: what a crew may read, and what it watches. */
+const tracked = (source: Source): string[] => [...source.reads, ...(source.watch ?? [])];
+
+/**
+ * Git sources whose licence is unknown: never fetched, checked or copied beside a brief. A plugin
+ * the owner installs is the owner's choice and is not listed.
+ */
+export const notUsed = (index: SourcesFile): string[] =>
+  index.sources.filter((s) => s.kind === 'git' && s.license === UNKNOWN_LICENCE).map((s) => s.id);
 export type SourcesFile = z.infer<typeof sourcesSchema>;
 
 export class SourcesError extends Error {
@@ -128,7 +143,7 @@ function licenseFiles(dir: string): string[] {
 /** The hashes to record: the files the contract reads, and the licence files at the root. */
 export function hashTree(dir: string, source: Source): Hashes {
   const hashes: Hashes = {};
-  for (const rel of [...source.reads, ...licenseFiles(dir)]) {
+  for (const rel of [...tracked(source), ...licenseFiles(dir)]) {
     const hash = hashOf(dir, rel);
     if (hash !== undefined) hashes[rel] = hash;
   }
@@ -145,15 +160,17 @@ export function compareToPin(
   const unclear: Finding[] = [];
   const licenses = new Set(licenseFiles(dir));
   for (const name of Object.keys(pin)) if (isLicenseName(name)) licenses.add(name);
-  for (const rel of source.reads) if (isLicenseName(rel)) licenses.add(rel);
+  for (const rel of tracked(source)) if (isLicenseName(rel)) licenses.add(rel);
   for (const name of licenses) {
     const now = hashOf(dir, name);
     if (now === undefined) {
       if (pin[name] !== undefined) conflict.push({ kind: 'license-missing', detail: clean(name) });
-      else if (source.reads.includes(name)) unclear.push({ kind: 'missing', detail: clean(name) });
+      else if (tracked(source).includes(name)) {
+        unclear.push({ kind: 'missing', detail: clean(name) });
+      }
     } else if (now !== pin[name]) conflict.push({ kind: 'license-changed', detail: clean(name) });
   }
-  for (const rel of source.reads) {
+  for (const rel of tracked(source)) {
     if (licenses.has(rel)) continue;
     const now = hashOf(dir, rel);
     const was = pin[rel];
@@ -243,14 +260,24 @@ async function fetchTo(
   }
 }
 
+/**
+ * The git sources Studio fetches and watches: referenced ones, and vendored ones with a watch
+ * list (their upstream, for changes to adapt). A source of unknown licence is never among them.
+ */
 function pick(index: SourcesFile, only: readonly string[] | undefined): Source[] {
   for (const id of only ?? []) {
-    if (!index.sources.some((s) => s.id === id && s.kind === 'git')) {
-      throw new SourcesError(`unknown source ${clean(id)}`);
+    const s = index.sources.find((x) => x.id === id && x.kind === 'git');
+    if (s === undefined) throw new SourcesError(`unknown source ${clean(id)}`);
+    if (s.license === UNKNOWN_LICENCE) {
+      throw new SourcesError(`source ${clean(id)}: licence unknown, not used until it is cleared`);
     }
   }
   return index.sources.filter(
-    (s) => s.kind === 'git' && !s.vendored && (only === undefined || only.includes(s.id)),
+    (s) =>
+      s.kind === 'git' &&
+      s.license !== UNKNOWN_LICENCE &&
+      (!s.vendored || (s.watch ?? []).length > 0) &&
+      (only === undefined || only.includes(s.id)),
   );
 }
 

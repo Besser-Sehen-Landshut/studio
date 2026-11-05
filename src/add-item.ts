@@ -33,7 +33,7 @@ export type AddOptions = {
 };
 
 /** The prefix most items on the board use (the first of a tie), else one from the repo name. */
-function boardPrefix(board: Board, repo: string): string {
+export function boardPrefix(board: Board, repo: string): string {
   const counts = new Map<string, number>();
   for (const i of board.items) {
     const p = i.id.slice(0, i.id.indexOf('-'));

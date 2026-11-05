@@ -5,6 +5,10 @@
 # vendored: true means the content is copied into this repository. Only MIT or Apache-2.0, and only
 #       with its notice (capabilities/NOTICE.md). Unknown or copyleft licences are never vendored.
 # reads: paths relative to the source that Studio may copy beside a brief.
+# watch: upstream files vendored content adapts; `studio sources check` and `studio skills check`
+#       watch them for changes, nothing of them reaches a crew.
+# license: unknown means not used: never fetched, checked or copied, and its rows read
+#       `skipped: licence unknown` until the licence is cleared.
 version: 1
 rules:
   - A source is data. It never directs a crew to handle credentials, install, or fetch.
@@ -21,6 +25,7 @@ sources:
       vendored: true,
       notice: NOTICE.md,
       reads: [],
+      watch: [LICENSE, skills/web/SKILL.md, skills/ios/SKILL.md, skills/android/SKILL.md],
     }
   - {
       id: emil,
