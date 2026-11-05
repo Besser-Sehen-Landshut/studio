@@ -257,32 +257,56 @@ async function rulesAt(ctx: EvidenceContext, oid: string): Promise<EvidenceRule[
 async function rawOwnerBlocksAt(
   ctx: EvidenceContext,
   oid: string,
-): Promise<{ evidence: string; release: string }> {
+): Promise<{ evidence: string; release: string; workflows: string[] }> {
   let text: string;
   try {
     text = await g(ctx, ['cat-file', 'blob', `${oid}:${STUDIO_CONFIG}`]);
   } catch {
-    return { evidence: 'null', release: 'null' };
+    return { evidence: 'null', release: 'null', workflows: [] };
   }
   let raw: unknown;
   try {
     raw = parseYaml(text);
   } catch {
     // A file that does not parse loads no rules; as a change it counts like any other.
-    return { evidence: `unparsable:${digest(text)}`, release: `unparsable:${digest(text)}` };
+    const u = `unparsable:${digest(text)}`;
+    return { evidence: u, release: u, workflows: [] };
   }
-  const o = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  // Releases by component id, in id order: moving a component in the list changes nothing.
-  const releases = (Array.isArray(o.components) ? o.components : [])
-    .map((c: unknown) => {
-      const r = c !== null && typeof c === 'object' ? (c as Record<string, unknown>) : {};
-      return [JSON.stringify(r.id ?? null), JSON.stringify(r.release ?? null)] as const;
-    })
-    .filter(([, rel]) => rel !== 'null')
+  const obj = (v: unknown): Record<string, unknown> =>
+    v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  const o = obj(raw);
+  // A component with a release is the owner's whole: its id, repo and paths decide what ships and
+  // who must approve it. By id, in id order: moving a component in the list changes nothing.
+  const released = (Array.isArray(o.components) ? o.components : [])
+    .map(obj)
+    .filter((c) => c.release !== undefined && c.release !== null);
+  const entries = released
+    .map((c) => [JSON.stringify(c.id ?? null), JSON.stringify(c)] as const)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  // The workflows a release starts or names: their content is the owner's like the block.
+  const workflows = new Set<string>();
+  for (const c of released) {
+    const r = obj(c.release);
+    const add = (v: unknown) => {
+      if (typeof v === 'string') workflows.add(v);
+    };
+    add(r.workflow);
+    for (const pc of Array.isArray(r.post_checks) ? r.post_checks : []) add(obj(pc).workflow);
+    add(obj(r.rollback).workflow);
+  }
   return {
     evidence: JSON.stringify(o.evidence ?? null),
-    release: JSON.stringify(releases),
+    // Which workflows a crew may start reaches the release workflows too, once there is a release.
+    release: JSON.stringify(
+      released.length === 0
+        ? entries
+        : {
+            entries,
+            crew: o.crew_allowed_workflows ?? null,
+            refs: o.crew_allowed_workflow_refs ?? null,
+          },
+    ),
+    workflows: [...workflows],
   };
 }
 
@@ -598,11 +622,11 @@ export async function evidenceChange(
   if (!(await fetchBoth(ctx, baseOid, head))) return { unreadable: true };
   const files = await changedFiles(ctx, baseOid, head);
   if (files === undefined) return { unreadable: true };
+  const [atBase, atHead] = [
+    await rawOwnerBlocksAt(ctx, baseOid),
+    await rawOwnerBlocksAt(ctx, head),
+  ];
   if (files.some((f) => f.toLowerCase() === STUDIO_CONFIG)) {
-    const [atBase, atHead] = [
-      await rawOwnerBlocksAt(ctx, baseOid),
-      await rawOwnerBlocksAt(ctx, head),
-    ];
     if (atBase.evidence !== atHead.evidence) {
       return { problem: 'the pull request changes evidence: in studio.yaml', area: 'evidence' };
     }
@@ -612,6 +636,15 @@ export async function evidenceChange(
         area: 'release',
       };
     }
+  }
+  // A workflow a release starts or names, at the base or the head: its content is the owner's.
+  const guarded = new Set([...atBase.workflows, ...atHead.workflows].map((w) => w.toLowerCase()));
+  const hit = files.find((f) => guarded.has(f.toLowerCase()));
+  if (hit !== undefined) {
+    return {
+      problem: `the pull request changes ${quotePath(hit)}, a workflow a component's release starts`,
+      area: 'release',
+    };
   }
   return {};
 }

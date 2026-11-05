@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { runCli } from '../src/cli.js';
 import { parseConfig } from '../src/config.js';
 import { classifyDecision } from '../src/pane-data.js';
@@ -18,6 +18,9 @@ import { checkStateMarker, projectRealpath, stateRootFor } from '../src/paths.js
 import type { Gh, Ports } from '../src/ports.js';
 import { realPorts } from '../src/ports.js';
 import { RELEASES_FILE, RELEASES_LOG, readReleases } from '../src/release.js';
+
+// Each test builds real repositories with git; under a full parallel run that takes seconds.
+vi.setConfig({ testTimeout: 30_000 });
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-release-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -123,6 +126,10 @@ function makeFx(
   };
   write('.studio/studio.yaml', studioYaml(o.release, o.extra));
   write('.github/workflows/deploy.yml', o.deploy ?? DEPLOY);
+  write(
+    '.github/workflows/rollback.yml',
+    'name: rollback\non: { workflow_dispatch: { inputs: { sha: { required: true } } } }\njobs: { back: { runs-on: ubuntu-latest, steps: [{ run: echo back }] } }\n',
+  );
   write('server/app.ts', 'export const v = 1;\n');
   write('server/.env.example', 'DATABASE_URL=postgres://example\n');
   write('server/migrations/0001_init.sql', 'CREATE TABLE a (id int);\n');
@@ -194,15 +201,22 @@ type Reply = { code?: number; stdout?: string; stderr?: string };
 /** A GitHub that knows the repository, its workflows and the runs the test scripts. */
 function fakeGh(
   fx: Fx,
-  o: { busy?: number; runs?: Record<string | number, unknown>; dispatch?: Reply } = {},
+  o: {
+    busy?: number;
+    runs?: Record<string | number, unknown>;
+    dispatch?: Reply;
+    /** The head of main on the n-th read, when it moves while Studio checks. */
+    head?: (n: number) => string;
+  } = {},
 ) {
+  let heads = 0;
   const calls: string[] = [];
   const runs: Record<string | number, unknown> = o.runs ?? {};
   const dispatches: { line: string; recorded: string | undefined }[] = [];
   const gh: Gh = {
     async api(path) {
       calls.push(`api ${path}`);
-      if (path === 'repos/org/app/commits/main') return `${fx.head}\n`;
+      if (path === 'repos/org/app/commits/main') return `${o.head?.(++heads) ?? fx.head}\n`;
       if (path === `repos/org/app/commits/${fx.c0}`) return `${fx.c0}\n`;
       if (path === 'repos/org/app/commits/v1') return `${fx.c0}\n`;
       if (path.includes('/actions/runs?status=')) return `${o.busy ?? 0}\n`;
@@ -225,9 +239,10 @@ function fakeGh(
         return {
           code: 0,
           stdout: JSON.stringify([
-            { id: 11, path: '.github/workflows/deploy.yml' },
-            { id: 12, path: '.github/workflows/smoke.yml' },
-            { id: 13, path: '.github/workflows/rollback.yml' },
+            { id: 11, path: '.github/workflows/deploy.yml', name: 'deploy' },
+            { id: 12, path: '.github/workflows/smoke.yml', name: 'Smoke' },
+            { id: 13, path: '.github/workflows/rollback.yml', name: 'Rollback API' },
+            { id: 14, path: '.github/workflows/ci.yml', name: 'CI' },
           ]),
           stderr: '',
         };
@@ -249,7 +264,7 @@ function fakeGh(
         const r = runs[Number(view[1])];
         return r === undefined
           ? { code: 1, stdout: '', stderr: 'not found' }
-          : { code: 0, stdout: JSON.stringify(r), stderr: '' };
+          : { code: 0, stdout: JSON.stringify({ headSha: fx.head, ...(r as object) }), stderr: '' };
       }
       if (line.startsWith('run list --repo org/app --workflow')) {
         return { code: 0, stdout: JSON.stringify(runs.list ?? []), stderr: '' };
@@ -400,6 +415,7 @@ describe('studio release: announce, trigger once, follow the checks', () => {
     });
 
     const t = await cli(fx, p.ports, ['release', 'api']);
+
     expect(t.code).toBe(0);
     expect(t.json).toMatchObject({ release: 'api-1', status: 'triggered', run: 900 });
     expect(g.dispatches.map((d) => d.line)).toEqual([
@@ -605,7 +621,7 @@ describe('studio release: what holds the trigger back', () => {
     const r = await cli(fx, p.ports, ['release', 'api']);
     expect(r.code).toBe(1);
     expect(r.err).toMatch(
-      /\.github\/workflows\/deploy\.yml changed on main since [0-9a-f]{7}: studio release cancel api-1/,
+      /\.github\/workflows\/deploy\.yml changed since api-1 was announced: studio release cancel api-1/,
     );
     expect(g.dispatches).toEqual([]);
     expect(readReleases(fx.state)[0]).toMatchObject({ status: 'announced', sha: oldHead });
@@ -908,5 +924,196 @@ describe('release: a crew never starts a deploy', () => {
       /\.github\/workflows\/deploy\.yml is named deploy, which crew_allowed_workflows lists: a crew may never start a release workflow/,
     );
     expect(g.dispatches).toEqual([]);
+  });
+});
+
+describe('release: the security review of 0.18.0', () => {
+  it('refuses a crew_allowed_workflows entry that gh would resolve to a release workflow', async () => {
+    // By id, by display name in another case, and the way back: each reaches a guarded workflow.
+    for (const [entry, reached] of [
+      ['11', '.github/workflows/deploy.yml'],
+      ['DEPLOY', '.github/workflows/deploy.yml'],
+      ['rollback api', '.github/workflows/rollback.yml'],
+    ] as const) {
+      const fx = makeFx({ extra: `crew_allowed_workflows: ["${entry}"]\n` });
+      const g = fakeGh(fx);
+      const p = fakePorts(g.gh);
+      await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+      const r = await cli(fx, p.ports, ['release', 'api']);
+      expect(r.err, entry).toContain(
+        `crew_allowed_workflows entry ${entry} reaches ${reached}: a crew may never start a release workflow`,
+      );
+      expect(g.dispatches).toEqual([]);
+    }
+    // An entry that reaches only another workflow is fine.
+    const fx = makeFx({ extra: 'crew_allowed_workflows: [ci]\n' });
+    const g = fakeGh(fx);
+    const p = fakePorts(g.gh);
+    await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    expect((await cli(fx, p.ports, ['release', 'api'])).json.status).toBe('triggered');
+  });
+
+  it('checks the rollback workflow’s display name against crew_allowed_workflows too', async () => {
+    const fx = makeFx({ extra: 'crew_allowed_workflows: [rollback]\n' });
+    const g = fakeGh(fx);
+    const p = fakePorts(g.gh);
+    await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    const r = await cli(fx, p.ports, ['release', 'api']);
+    expect(r.err).toMatch(
+      /\.github\/workflows\/rollback\.yml is named rollback, which crew_allowed_workflows lists/,
+    );
+  });
+
+  it('pins the workflow blobs in the announced record and refuses another at the trigger', async () => {
+    const fx = makeFx();
+    const g = fakeGh(fx);
+    const p = fakePorts(g.gh);
+    await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    const file = join(fx.state, RELEASES_FILE);
+    const data = JSON.parse(readFileSync(file, 'utf8'));
+    expect(Object.keys(data.releases[0].workflowBlobs).sort()).toEqual([
+      '.github/workflows/deploy.yml',
+      '.github/workflows/rollback.yml',
+    ]);
+    data.releases[0].workflowBlobs['.github/workflows/deploy.yml'] = 'f'.repeat(40);
+    writeFileSync(file, JSON.stringify(data));
+    const r = await cli(fx, p.ports, ['release', 'api']);
+    expect(r.err).toMatch(/deploy\.yml changed since api-1 was announced/);
+    expect(g.dispatches).toEqual([]);
+  });
+
+  it('reads capacity before anything else, so a busy CI holds without reading the workflows', async () => {
+    const fx = makeFx();
+    const g = fakeGh(fx, { busy: 3 });
+    const p = fakePorts(g.gh);
+    await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    const before = g.calls.length;
+    expect((await cli(fx, p.ports, ['release', 'api'])).json.held).toMatch(/^held: ci capacity/);
+    expect(g.calls.slice(before).filter((c) => c.startsWith('workflow list'))).toEqual([]);
+  });
+
+  it('refuses when main moves between the checks and the dispatch', async () => {
+    const fx = makeFx();
+    // The draft reads main once; the trigger reads it twice: checked, then right before dispatch.
+    const g = fakeGh(fx, { head: (n) => (n >= 3 ? 'c'.repeat(40) : fx.head) });
+    const p = fakePorts(g.gh);
+    await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    const r = await cli(fx, p.ports, ['release', 'api']);
+    expect(r.json).toMatchObject({ status: 'announced' });
+    expect(r.json.held).toBe('main moved while api-1 was checked; run studio release api again');
+    expect(g.dispatches).toEqual([]);
+  });
+
+  it('a run of another head than the checked one fails closed and is not counted as deployed', async () => {
+    const fx = makeFx();
+    const g = fakeGh(fx);
+    const p = fakePorts(g.gh);
+    await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    await cli(fx, p.ports, ['release', 'api']);
+    g.runs[900] = {
+      ...run('completed', 'success', [['smoke', 'completed', 'success']]),
+      headSha: 'd'.repeat(40),
+    };
+    const r = await cli(fx, p.ports, ['release', 'api']);
+    expect(r.json.status).toBe('failed');
+    expect(r.json.reason).toMatch(/ran at ddddddd, not at the checked head/);
+    expect(existsSync(join(fx.state, 'metrics.jsonl'))).toBe(false);
+  });
+
+  it('an ambiguous dispatch exit (a timeout) stays triggered and is looked up, never repeated', async () => {
+    const fx = makeFx();
+    const g = fakeGh(fx, { dispatch: { code: 1, stderr: 'context deadline exceeded' } });
+    const p = fakePorts(g.gh);
+    await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    const t = await cli(fx, p.ports, ['release', 'api']);
+    expect(t.json.status).toBe('triggered');
+    g.runs.list = [{ databaseId: 900, createdAt: '2026-11-05T10:00:31Z' }];
+    g.runs[900] = run('completed', 'success', [['smoke', 'completed', 'success']]);
+    expect((await cli(fx, p.ports, ['release', 'api'])).json.status).toBe('done');
+    expect(g.dispatches).toHaveLength(1);
+  });
+
+  it('several candidate runs fail closed once the timeout passed, so the release can end', async () => {
+    const fx = makeFx();
+    const g = fakeGh(fx, { dispatch: { stdout: '' } });
+    const p = fakePorts(g.gh);
+    await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    await cli(fx, p.ports, ['release', 'api']);
+    g.runs.list = [
+      { databaseId: 900, createdAt: '2026-11-05T10:00:31Z' },
+      { databaseId: 905, createdAt: '2026-11-05T10:00:40Z' },
+    ];
+    p.advance(61 * 60_000);
+    const r = await cli(fx, p.ports, ['release', 'api']);
+    expect(r.json.status).toBe('failed');
+    expect(r.json.reason).toMatch(/several runs of .* check them on GitHub/);
+  });
+
+  it('starts a post check in another workflow only under the capacity rule and with the pinned file', async () => {
+    const release = RELEASE_BLOCK.replace(
+      '        - { workflow: .github/workflows/deploy.yml, job: smoke }',
+      '        - { workflow: .github/workflows/smoke.yml, job: prod }',
+    );
+    const fx = makeFx({ release });
+    writeFileSync(join(fx.project, '.github/workflows/smoke.yml'), DEPLOY);
+    git(fx.project, 'add', '.github/workflows/smoke.yml');
+    git(fx.project, 'commit', '-q', '-m', 'smoke');
+    fx.head = git(fx.project, 'rev-parse', 'HEAD');
+    git(fx.project, 'push', '-q', 'origin', 'main');
+    const opts = { busy: 0 };
+    const g = fakeGh(fx, opts);
+    const p = fakePorts(g.gh);
+    await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    await cli(fx, p.ports, ['release', 'api']);
+    g.runs[900] = run('completed', 'success', [['deploy', 'completed', 'success']]);
+    // The release run is of the head the trigger checked, whatever main does afterwards.
+    g.runs[900] = { ...(g.runs[900] as object), headSha: fx.head };
+    opts.busy = 3;
+    const busy = await cli(fx, p.ports, ['release', 'api']);
+    expect(busy.json.status).toBe('checking');
+    expect(busy.json.waiting).toMatch(/waiting for .*smoke\.yml \/ prod \(held: ci capacity/);
+    expect(g.dispatches).toHaveLength(1);
+    // The file changed on main meanwhile: the check is never started with it.
+    opts.busy = 0;
+    writeFileSync(join(fx.project, '.github/workflows/smoke.yml'), `${DEPLOY}# changed\n`);
+    git(fx.project, 'add', '.github/workflows/smoke.yml');
+    git(fx.project, 'commit', '-q', '-m', 'change smoke');
+    fx.head = git(fx.project, 'rev-parse', 'HEAD');
+    git(fx.project, 'push', '-q', 'origin', 'main');
+    const changed = await cli(fx, p.ports, ['release', 'api']);
+    expect(changed.json.status).toBe('failed');
+    expect(changed.json.reason).toMatch(/smoke\.yml changed on main since api-1 was announced/);
+    expect(g.dispatches).toHaveLength(1);
+  });
+
+  it('asks a third party whose paths lie outside the component', async () => {
+    const release = RELEASE_BLOCK.replace(
+      'paths: ["server/partner/**"]',
+      'paths: ["shared/feed/**"]',
+    );
+    const fx = makeFx({ release });
+    mkdirSync(join(fx.project, 'shared/feed'), { recursive: true });
+    writeFileSync(join(fx.project, 'shared/feed/x.ts'), 'export const x = 1;\n');
+    git(fx.project, 'add', 'shared/feed/x.ts');
+    git(fx.project, 'commit', '-q', '-m', 'feed');
+    fx.head = git(fx.project, 'rev-parse', 'HEAD');
+    git(fx.project, 'push', '-q', 'origin', 'main');
+    const p = fakePorts(fakeGh(fx).gh);
+    const a = await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    expect(a.json).toMatchObject({ status: 'approvals', pending: ['partner'] });
+  });
+
+  it('counts every changed SQL file of the component as a migration, also outside migrations', async () => {
+    const fx = makeFx();
+    mkdirSync(join(fx.project, 'server/db'), { recursive: true });
+    writeFileSync(join(fx.project, 'server/db/schema.sql'), 'DROP TABLE customers;\n');
+    git(fx.project, 'add', 'server/db/schema.sql');
+    git(fx.project, 'commit', '-q', '-m', 'schema');
+    fx.head = git(fx.project, 'rev-parse', 'HEAD');
+    git(fx.project, 'push', '-q', 'origin', 'main');
+    const p = fakePorts(fakeGh(fx).gh);
+    const a = await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    expect(a.json).toMatchObject({ status: 'approvals', pending: ['owner'] });
+    expect(a.json.note).toContain('- server/db/schema.sql (added): destructive, needs the owner');
   });
 });

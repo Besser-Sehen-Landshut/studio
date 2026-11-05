@@ -36713,22 +36713,40 @@ async function rawOwnerBlocksAt(ctx, oid) {
   try {
     text = await g(ctx, ["cat-file", "blob", `${oid}:${STUDIO_CONFIG2}`]);
   } catch {
-    return { evidence: "null", release: "null" };
+    return { evidence: "null", release: "null", workflows: [] };
   }
   let raw;
   try {
     raw = (0, import_yaml10.parse)(text);
   } catch {
-    return { evidence: `unparsable:${digest(text)}`, release: `unparsable:${digest(text)}` };
+    const u2 = `unparsable:${digest(text)}`;
+    return { evidence: u2, release: u2, workflows: [] };
   }
-  const o2 = raw !== null && typeof raw === "object" ? raw : {};
-  const releases = (Array.isArray(o2.components) ? o2.components : []).map((c3) => {
-    const r = c3 !== null && typeof c3 === "object" ? c3 : {};
-    return [JSON.stringify(r.id ?? null), JSON.stringify(r.release ?? null)];
-  }).filter(([, rel]) => rel !== "null").sort(([a2], [b]) => a2 < b ? -1 : a2 > b ? 1 : 0);
+  const obj = (v) => v !== null && typeof v === "object" && !Array.isArray(v) ? v : {};
+  const o2 = obj(raw);
+  const released = (Array.isArray(o2.components) ? o2.components : []).map(obj).filter((c3) => c3.release !== void 0 && c3.release !== null);
+  const entries2 = released.map((c3) => [JSON.stringify(c3.id ?? null), JSON.stringify(c3)]).sort(([a2], [b]) => a2 < b ? -1 : a2 > b ? 1 : 0);
+  const workflows = /* @__PURE__ */ new Set();
+  for (const c3 of released) {
+    const r = obj(c3.release);
+    const add = (v) => {
+      if (typeof v === "string") workflows.add(v);
+    };
+    add(r.workflow);
+    for (const pc of Array.isArray(r.post_checks) ? r.post_checks : []) add(obj(pc).workflow);
+    add(obj(r.rollback).workflow);
+  }
   return {
     evidence: JSON.stringify(o2.evidence ?? null),
-    release: JSON.stringify(releases)
+    // Which workflows a crew may start reaches the release workflows too, once there is a release.
+    release: JSON.stringify(
+      released.length === 0 ? entries2 : {
+        entries: entries2,
+        crew: o2.crew_allowed_workflows ?? null,
+        refs: o2.crew_allowed_workflow_refs ?? null
+      }
+    ),
+    workflows: [...workflows]
   };
 }
 async function fetchBoth(ctx, base, head) {
@@ -36974,11 +36992,11 @@ async function evidenceChange(ctx, baseOid, head) {
   if (!await fetchBoth(ctx, baseOid, head)) return { unreadable: true };
   const files = await changedFiles(ctx, baseOid, head);
   if (files === void 0) return { unreadable: true };
+  const [atBase, atHead] = [
+    await rawOwnerBlocksAt(ctx, baseOid),
+    await rawOwnerBlocksAt(ctx, head)
+  ];
   if (files.some((f) => f.toLowerCase() === STUDIO_CONFIG2)) {
-    const [atBase, atHead] = [
-      await rawOwnerBlocksAt(ctx, baseOid),
-      await rawOwnerBlocksAt(ctx, head)
-    ];
     if (atBase.evidence !== atHead.evidence) {
       return { problem: "the pull request changes evidence: in studio.yaml", area: "evidence" };
     }
@@ -36988,6 +37006,14 @@ async function evidenceChange(ctx, baseOid, head) {
         area: "release"
       };
     }
+  }
+  const guarded2 = new Set([...atBase.workflows, ...atHead.workflows].map((w) => w.toLowerCase()));
+  const hit = files.find((f) => guarded2.has(f.toLowerCase()));
+  if (hit !== void 0) {
+    return {
+      problem: `the pull request changes ${quotePath(hit)}, a workflow a component's release starts`,
+      area: "release"
+    };
   }
   return {};
 }
@@ -40635,36 +40661,6 @@ var worstKind = (kinds) => kinds.reduce((a2, b) => RANK[b] > RANK[a2] ? b : a2, 
 var needsOwner = (kind) => kind !== "additive";
 var word = (t) => t?.kind === "word" ? t.text : void 0;
 var ALTER_DESTRUCTIVE = /* @__PURE__ */ new Set(["DROP", "RENAME", "TYPE"]);
-var ALTER_UNCLEAR = /* @__PURE__ */ new Set([
-  "ALTER",
-  "SET",
-  "RESET",
-  "OWNER",
-  "DISABLE",
-  "ENABLE",
-  "ATTACH",
-  "DETACH",
-  "INHERIT",
-  "CLUSTER",
-  "REPLICA",
-  "VALIDATE",
-  "USING"
-]);
-var CONSTRAINTS = /* @__PURE__ */ new Set([
-  "CONSTRAINT",
-  "PRIMARY",
-  "UNIQUE",
-  "CHECK",
-  "FOREIGN",
-  "REFERENCES",
-  "EXCLUDE"
-]);
-var CREATE_ADDITIVE = /* @__PURE__ */ new Set(["TABLE", "INDEX", "SEQUENCE", "SCHEMA", "TYPE", "VIEW"]);
-var SETTINGS = /* @__PURE__ */ new Set([
-  "LOCK_TIMEOUT",
-  "STATEMENT_TIMEOUT",
-  "IDLE_IN_TRANSACTION_SESSION_TIMEOUT"
-]);
 function afterName(s, i2) {
   let j = i2;
   for (; ; ) {
@@ -40678,21 +40674,172 @@ function afterName(s, i2) {
     return j;
   }
 }
+var SETTINGS = /* @__PURE__ */ new Set([
+  "LOCK_TIMEOUT",
+  "STATEMENT_TIMEOUT",
+  "IDLE_IN_TRANSACTION_SESSION_TIMEOUT"
+]);
+var SIZED_TYPES = /* @__PURE__ */ new Set([
+  "NUMERIC",
+  "DECIMAL",
+  "VARCHAR",
+  "CHAR",
+  "CHARACTER",
+  "VARYING",
+  "TIMESTAMP",
+  "TIMESTAMPTZ",
+  "TIME",
+  "TIMETZ",
+  "INTERVAL",
+  "BIT",
+  "VARBIT",
+  "FLOAT"
+]);
+var NOT_PLAIN = /* @__PURE__ */ new Set([
+  "AS",
+  "SELECT",
+  "WITH",
+  "PARTITION",
+  "OF",
+  "INHERITS",
+  "LIKE",
+  "GENERATED",
+  "CHECK",
+  "EXCLUDE",
+  "USING",
+  "EXECUTE",
+  "TABLESPACE",
+  "WITHOUT"
+]);
+var CONSTRAINTS = /* @__PURE__ */ new Set([
+  "CONSTRAINT",
+  "PRIMARY",
+  "UNIQUE",
+  "CHECK",
+  "FOREIGN",
+  "REFERENCES",
+  "EXCLUDE"
+]);
+var isP = (t, text) => t?.kind === "punct" && t.text === text;
+var isNumber = (t) => t?.kind === "punct" && /^[0-9]+$/.test(t.text);
+var isNameLike = (t) => t !== void 0 && (t.kind === "word" || t.kind === "name");
+function closing(s, open4) {
+  let depth = 0;
+  for (let i2 = open4; i2 < s.length; i2++) {
+    if (isP(s[i2], "(")) depth++;
+    else if (isP(s[i2], ")")) {
+      depth--;
+      if (depth === 0) return i2;
+    }
+  }
+  return -1;
+}
+function literalAt(s, i2) {
+  const t = s[i2];
+  if (t?.kind === "literal" && t.text.startsWith("'")) return 1;
+  if (isNumber(t)) return isP(s[i2 + 1], ".") && isNumber(s[i2 + 2]) ? 3 : 1;
+  if (isP(t, "-") && isNumber(s[i2 + 1])) return isP(s[i2 + 2], ".") && isNumber(s[i2 + 3]) ? 4 : 2;
+  if (t?.kind === "word" && (t.text === "TRUE" || t.text === "FALSE" || t.text === "NULL"))
+    return 1;
+  return 0;
+}
+function plainColumns(s, from, to, table3) {
+  for (let i2 = from; i2 < to; i2++) {
+    const t = s[i2];
+    if (t.kind === "word") {
+      if (NOT_PLAIN.has(t.text)) return t.text;
+      if (!table3 && CONSTRAINTS.has(t.text)) return t.text;
+      if (t.text === "DEFAULT") {
+        const n2 = literalAt(s, i2 + 1);
+        if (n2 === 0) return "a DEFAULT that is no literal";
+        i2 += n2;
+      }
+      continue;
+    }
+    if (t.kind === "name") continue;
+    if (t.kind === "literal") return "a literal outside DEFAULT";
+    if (t.text === "," || /^[0-9]+$/.test(t.text) || t.text === ".") continue;
+    if (t.text !== "(") return `"${t.text}"`;
+    const end = closing(s, i2);
+    if (end === -1 || end > to) return "an unclosed parenthesis";
+    const inner = s.slice(i2 + 1, end);
+    if (inner.some((x) => isP(x, "("))) return "nested parentheses";
+    const prev = s[i2 - 1];
+    const sized = prev?.kind === "word" && SIZED_TYPES.has(prev.text);
+    const numbers = inner.every((x) => isNumber(x) || isP(x, ","));
+    let k = i2 - 1;
+    while (isNameLike(s[k]) && isP(s[k - 1], ".")) k -= 2;
+    const referenced = isNameLike(s[k]) && s[k - 1]?.kind === "word" && s[k - 1]?.text === "REFERENCES";
+    const keyed = prev?.kind === "word" && (prev.text === "KEY" || prev.text === "UNIQUE");
+    const names = inner.every((x) => isNameLike(x) || isP(x, ","));
+    if (sized && numbers && inner.length > 0) {
+      i2 = end;
+      continue;
+    }
+    if (table3 && (keyed || referenced) && names && inner.length > 0) {
+      i2 = end;
+      continue;
+    }
+    return "a call or expression in parentheses";
+  }
+  return void 0;
+}
+function createTable(s, w) {
+  let i2 = 2;
+  if (w(i2) === "IF" && w(i2 + 1) === "NOT" && w(i2 + 2) === "EXISTS") i2 += 3;
+  const j = afterName(s, i2);
+  if (j === -1 || !isP(s[j], "(")) return unclear("CREATE TABLE without a plain column list");
+  const end = closing(s, j);
+  if (end !== s.length - 1) return unclear("CREATE TABLE with more than a column list");
+  const why = plainColumns(s, j + 1, end, true);
+  return why === void 0 ? { kind: "additive", why: "CREATE TABLE" } : unclear(`CREATE TABLE with ${why}`);
+}
+function createIndex(s, w) {
+  let i2 = w(1) === "UNIQUE" ? 3 : 2;
+  if (w(i2) === "CONCURRENTLY") i2++;
+  if (w(i2) === "IF" && w(i2 + 1) === "NOT" && w(i2 + 2) === "EXISTS") i2 += 3;
+  if (w(i2) !== "ON") {
+    const j2 = afterName(s, i2);
+    if (j2 === -1) return unclear("CREATE INDEX");
+    i2 = j2;
+  }
+  if (w(i2) !== "ON") return unclear("CREATE INDEX");
+  i2++;
+  if (w(i2) === "ONLY") i2++;
+  const j = afterName(s, i2);
+  if (j === -1 || !isP(s[j], "(")) return unclear("CREATE INDEX without a plain column list");
+  const columns = (open4) => {
+    const end2 = closing(s, open4);
+    if (end2 === -1) return -1;
+    const inner = s.slice(open4 + 1, end2);
+    return inner.length > 0 && inner.every((x) => isNameLike(x) || isP(x, ",") || isP(x, ".")) ? end2 : -1;
+  };
+  let end = columns(j);
+  if (end === -1) return unclear("CREATE INDEX on an expression");
+  if (w(end + 1) === "INCLUDE" && isP(s[end + 2], "(")) {
+    end = columns(end + 2);
+    if (end === -1) return unclear("CREATE INDEX with an INCLUDE expression");
+  }
+  return end === s.length - 1 ? { kind: "additive", why: "CREATE INDEX" } : unclear("CREATE INDEX with a predicate or options");
+}
 function classifyStatement(s) {
   const w = (i2) => word(s[i2]);
   const first = w(0);
   if (first === void 0)
     return { kind: "unclear", why: "a statement that starts with no keyword" };
   if (first === "BEGIN" || first === "COMMIT" || first === "END") {
-    return s.length <= 2 ? { kind: "additive", why: "a transaction bracket" } : unclear(first);
+    return s.length <= 2 && (s.length === 1 || w(1) === "TRANSACTION" || w(1) === "WORK") ? { kind: "additive", why: "a transaction bracket" } : unclear(first);
   }
-  if (first === "START" && w(1) === "TRANSACTION") {
-    return { kind: "additive", why: "a transaction bracket" };
+  if (first === "START") {
+    return w(1) === "TRANSACTION" && s.length === 2 ? { kind: "additive", why: "a transaction bracket" } : unclear("START");
   }
   if (first === "SET") {
     const at2 = w(1) === "LOCAL" || w(1) === "SESSION" ? 2 : 1;
     const name = w(at2);
-    return name !== void 0 && SETTINGS.has(name) && s.length <= at2 + 4 ? { kind: "additive", why: `SET ${name}` } : unclear("SET");
+    let v = at2 + 1;
+    if (isP(s[v], "=") || w(v) === "TO") v++;
+    const n2 = literalAt(s, v);
+    return name !== void 0 && SETTINGS.has(name) && n2 > 0 && v + n2 === s.length ? { kind: "additive", why: `SET ${name}` } : unclear("SET");
   }
   if (first === "DROP" || first === "TRUNCATE" || first === "DELETE") {
     return { kind: "destructive", why: first };
@@ -40700,25 +40847,45 @@ function classifyStatement(s) {
   if (first === "UPDATE" || first === "INSERT" || first === "COPY" || first === "MERGE") {
     return { kind: "backfill", why: first };
   }
-  if (first === "COMMENT" && w(1) === "ON") return { kind: "additive", why: "COMMENT ON" };
+  if (first === "COMMENT") {
+    const is = s.findIndex((t) => t.kind === "word" && t.text === "IS");
+    const between = s.slice(2, is);
+    const ok = w(1) === "ON" && is > 2 && between.every((t) => isNameLike(t) || isP(t, ".")) && literalAt(s, is + 1) === 1 && is + 2 === s.length;
+    return ok ? { kind: "additive", why: "COMMENT ON" } : unclear("COMMENT");
+  }
   if (first === "CREATE") {
-    let i2 = 1;
-    if (w(i2) === "OR") return { kind: "unclear", why: "CREATE OR REPLACE" };
-    if (w(i2) === "UNIQUE") i2++;
-    if (w(i2) === "TEMP" || w(i2) === "TEMPORARY" || w(i2) === "UNLOGGED") i2++;
-    const object2 = w(i2);
-    if (object2 !== void 0 && CREATE_ADDITIVE.has(object2)) {
-      return { kind: "additive", why: `CREATE ${object2}` };
+    if (w(1) === "TABLE") return createTable(s, w);
+    if (w(1) === "INDEX" || w(1) === "UNIQUE" && w(2) === "INDEX") return createIndex(s, w);
+    if (w(1) === "SEQUENCE") {
+      const rest = s.slice(2);
+      return rest.every(
+        (t) => t.kind === "word" || t.kind === "name" || isNumber(t) || isP(t, ".") || isP(t, "-")
+      ) && !rest.some((t) => t.kind === "word" && (t.text === "AS" || t.text === "OWNED")) ? { kind: "additive", why: "CREATE SEQUENCE" } : unclear("CREATE SEQUENCE with options");
     }
-    return unclear(`CREATE ${object2 ?? ""}`.trim());
+    if (w(1) === "SCHEMA") {
+      let i2 = 2;
+      if (w(i2) === "IF" && w(i2 + 1) === "NOT" && w(i2 + 2) === "EXISTS") i2 += 3;
+      return isNameLike(s[i2]) && i2 + 1 === s.length ? { kind: "additive", why: "CREATE SCHEMA" } : unclear("CREATE SCHEMA with more than a name");
+    }
+    if (w(1) === "TYPE") {
+      const j = afterName(s, 2);
+      const end = j === -1 ? -1 : closing(s, j + 2);
+      const inner = end === -1 ? [] : s.slice(j + 3, end);
+      return j !== -1 && w(j) === "AS" && w(j + 1) === "ENUM" && isP(s[j + 2], "(") && end === s.length - 1 && inner.every((t) => t.kind === "literal" && t.text.startsWith("'") || isP(t, ",")) ? { kind: "additive", why: "CREATE TYPE AS ENUM" } : unclear("CREATE TYPE that is no plain enum");
+    }
+    return unclear(`CREATE ${w(1) ?? ""}`.trim());
   }
   if (first === "ALTER") {
     const object2 = w(1);
     const destructive = s.slice(1).find((t) => t.kind === "word" && ALTER_DESTRUCTIVE.has(t.text));
     if (object2 === "TYPE") {
       const j2 = afterName(s, 2);
-      if (j2 !== -1 && w(j2) === "ADD" && w(j2 + 1) === "VALUE" && destructiveAfter(s, j2) === void 0) {
-        return { kind: "additive", why: "ALTER TYPE ADD VALUE" };
+      if (j2 !== -1 && w(j2) === "ADD" && w(j2 + 1) === "VALUE") {
+        let k2 = j2 + 2;
+        if (w(k2) === "IF" && w(k2 + 1) === "NOT" && w(k2 + 2) === "EXISTS") k2 += 3;
+        const label = (x) => s[x]?.kind === "literal" && s[x]?.text.startsWith("'");
+        const ok = label(k2) && (k2 + 1 === s.length || (w(k2 + 1) === "BEFORE" || w(k2 + 1) === "AFTER") && label(k2 + 2) && k2 + 3 === s.length);
+        if (ok) return { kind: "additive", why: "ALTER TYPE ADD VALUE" };
       }
       return destructive === void 0 || destructive.text === "TYPE" ? unclear("ALTER TYPE") : { kind: "destructive", why: `ALTER TYPE with ${destructive.text}` };
     }
@@ -40731,14 +40898,28 @@ function classifyStatement(s) {
     if (w(i2) === "ONLY") i2++;
     const j = afterName(s, i2);
     if (j === -1 || w(j) !== "ADD") return unclear("ALTER TABLE");
-    const rule = s.slice(j).find((t) => t.kind === "word" && CONSTRAINTS.has(t.text));
-    if (rule !== void 0) return unclear(`ALTER TABLE ADD with ${rule.text}`);
-    const other = s.slice(j).find((t) => t.kind === "word" && ALTER_UNCLEAR.has(t.text));
-    return other === void 0 ? { kind: "additive", why: "ALTER TABLE ADD" } : unclear(`ALTER TABLE ADD with ${other.text}`);
+    let k = j;
+    while (k < s.length) {
+      if (w(k) !== "ADD") return unclear("ALTER TABLE with an action other than ADD");
+      k++;
+      if (w(k) === "COLUMN") k++;
+      if (w(k) === "IF" && w(k + 1) === "NOT" && w(k + 2) === "EXISTS") k += 3;
+      let end = k;
+      let depth = 0;
+      while (end < s.length && !(depth === 0 && isP(s[end], ","))) {
+        if (isP(s[end], "(")) depth++;
+        if (isP(s[end], ")")) depth--;
+        end++;
+      }
+      if (!isNameLike(s[k]) || end - k < 2) return unclear("ALTER TABLE ADD without a column");
+      const why = plainColumns(s, k + 1, end, false);
+      if (why !== void 0) return unclear(`ALTER TABLE ADD with ${why}`);
+      k = end + 1;
+    }
+    return { kind: "additive", why: "ALTER TABLE ADD COLUMN" };
   }
   return unclear(first);
 }
-var destructiveAfter = (s, from) => s.slice(from).find((t) => t.kind === "word" && ALTER_DESTRUCTIVE.has(t.text));
 var unclear = (shape) => ({
   kind: "unclear",
   why: `${shape} is not clearly additive`
@@ -40875,6 +41056,9 @@ var releaseSchema = external_exports.strictObject({
   note: noteSchema,
   /** sha256 of the note's migrations: what an owner approval binds to. */
   migrationsDigest: external_exports.string(),
+  /** The blob of each workflow the release starts or names (release, post checks, rollback) at
+   * the release commit, pinned when it was announced: the trigger refuses another. */
+  workflowBlobs: external_exports.record(external_exports.string(), external_exports.string().regex(/^[0-9a-f]{40,64}$/)),
   needs: external_exports.strictObject({ owner: external_exports.array(external_exports.string()), approvers: external_exports.array(external_exports.string()) }),
   announcement: external_exports.strictObject({ at: external_exports.string(), text: line3(1e3) }),
   approvals: external_exports.array(approvalSchema).default([]),
@@ -40892,6 +41076,8 @@ var releaseSchema = external_exports.strictObject({
     external_exports.strictObject({
       at: external_exports.string(),
       workflowId: external_exports.number().int(),
+      /** The branch head checked right before the start: its run must be of this head. */
+      head: external_exports.string().regex(SHA4).optional(),
       run: external_exports.number().int().optional(),
       refused: line3(300).optional()
     })
@@ -41055,22 +41241,33 @@ async function resolveRef2(gh, repo, ref) {
     return void 0;
   }
 }
-async function workflowIds(gh, repo) {
+async function listWorkflows(gh, repo) {
   const r = await gh.run(
-    ["workflow", "list", "--repo", repo, "--all", "--limit", "500", "--json", "id,path"],
+    ["workflow", "list", "--repo", repo, "--all", "--limit", "500", "--json", "id,path,name"],
     { timeoutMs: GH_MS3 }
   );
   if (r.code !== 0) throw new Error(`cannot list the workflows of ${repo}`);
-  const parsed = external_exports.array(external_exports.object({ id: external_exports.number().int(), path: external_exports.string() })).safeParse(JSON.parse(r.stdout));
+  const parsed = external_exports.array(external_exports.object({ id: external_exports.number().int(), path: external_exports.string(), name: external_exports.string().default("") })).safeParse(JSON.parse(r.stdout));
   if (!parsed.success) throw new Error(`cannot read the workflows of ${repo}`);
+  return parsed.data;
+}
+function idsOf(list2) {
   const ids = /* @__PURE__ */ new Map();
   const twice = /* @__PURE__ */ new Set();
-  for (const w of parsed.data) {
+  for (const w of list2) {
     if (ids.has(w.path)) twice.add(w.path);
     ids.set(w.path, w.id);
   }
   for (const p of twice) ids.delete(p);
   return ids;
+}
+var workflowIds = async (gh, repo) => idsOf(await listWorkflows(gh, repo));
+function crewReach(entry, list2) {
+  const e = entry.trim().toLowerCase();
+  return list2.filter((w) => {
+    const file2 = w.path.split("/").at(-1)?.toLowerCase() ?? "";
+    return e === String(w.id) || e === file2 || e === w.path.toLowerCase() || e === w.name.toLowerCase();
+  });
 }
 var runSchema2 = external_exports.object({
   databaseId: external_exports.number().int().optional(),
@@ -41079,6 +41276,7 @@ var runSchema2 = external_exports.object({
   event: external_exports.string().optional(),
   workflowDatabaseId: external_exports.number().int().optional(),
   headBranch: external_exports.string().optional(),
+  headSha: external_exports.string().optional(),
   jobs: external_exports.array(external_exports.object({ name: external_exports.string(), status: external_exports.string(), conclusion: external_exports.string().nullish() })).default([])
 });
 async function viewRun(gh, repo, run2) {
@@ -41091,7 +41289,7 @@ async function viewRun(gh, repo, run2) {
         "--repo",
         repo,
         "--json",
-        "databaseId,status,conclusion,event,workflowDatabaseId,headBranch,jobs"
+        "databaseId,status,conclusion,event,workflowDatabaseId,headBranch,headSha,jobs"
       ],
       { timeoutMs: GH_MS3 }
     );
@@ -41139,7 +41337,8 @@ async function findDispatchedRun(gh, repo, workflowId, branch, since) {
     return {};
   }
 }
-async function dispatchProblem(git, co, sha, file2, crewAllowed) {
+async function dispatchProblem(git, co, sha, file2, o2) {
+  const crewAllowed = o2.crewAllowed;
   const text = await readAt(git, co, sha, file2);
   if (text === void 0) return `${file2} is not in ${short2(sha)}`;
   let raw;
@@ -41155,7 +41354,7 @@ async function dispatchProblem(git, co, sha, file2, crewAllowed) {
   const on6 = raw?.on;
   const dispatch = on6 !== null && typeof on6 === "object" && !Array.isArray(on6) ? on6.workflow_dispatch : void 0;
   const inputs = dispatch !== null && typeof dispatch === "object" ? dispatch.inputs : void 0;
-  if (inputs === null || typeof inputs !== "object" || !Object.hasOwn(inputs, SHA_INPUT)) {
+  if (o2.input && (inputs === null || typeof inputs !== "object" || !Object.hasOwn(inputs, SHA_INPUT))) {
     return `${file2} needs on: workflow_dispatch with an input ${SHA_INPUT} (the commit to deploy)`;
   }
   return void 0;
@@ -41231,7 +41430,7 @@ async function buildNote(ctx, o2) {
     ),
     items: items.sort((a2, b) => naturalCompare(a2.id, b.id)).map((i2) => ({ id: i2.id, title: clean5(i2.title, 200), pr: i2.pr }))
   }));
-  const looksLike = (p) => p.split("/").some((seg) => /migrat/i.test(seg));
+  const looksLike = (p) => p.toLowerCase().endsWith(".sql") || p.split("/").some((seg) => /migrat/i.test(seg));
   const isMigration = (c3) => o2.rule.migrations.some((m) => matchGlob(m, c3.path)) || looksLike(c3.path) && o2.component.paths.some((p) => matchGlob(p, c3.path));
   const migrationChanges = changes.filter(isMigration).sort((a2, b) => naturalCompare(a2.path, b.path));
   const migrations = [];
@@ -41281,7 +41480,7 @@ async function buildNote(ctx, o2) {
     for (const n2 of after2) if (!before.has(n2)) added.add(n2);
     for (const n2 of before) if (!after2.has(n2)) removed.add(n2);
   }
-  const touched = (globs) => mine.some((c3) => globs.some((p) => matchGlob(p, c3.path)));
+  const touched = (globs) => changes.some((c3) => globs.some((p) => matchGlob(p, c3.path)));
   const approvers = o2.rule.approvers.filter((a2) => a2.paths === void 0 || touched(a2.paths)).map((a2) => ({
     id: a2.id,
     who: clean5(a2.who, 100),
@@ -41419,9 +41618,21 @@ async function draftRelease(ctx, releases, componentId3, sinceRef) {
   if (note.files === 0) {
     throw new Error(`nothing to release: no file of ${componentId3} changed since ${short2(since)}`);
   }
+  const workflowBlobs = {};
+  const named2 = [
+    rule.workflow,
+    ...rule.postChecks.map((p) => p.workflow),
+    ..."workflow" in rule.rollback ? [rule.rollback.workflow] : []
+  ];
+  for (const file2 of new Set(named2)) {
+    const oid = await blobAt(ctx.git, co, sha, file2);
+    if (oid === void 0) throw new Error(`${file2} is not in ${short2(sha)}`);
+    workflowBlobs[file2] = oid;
+  }
   const id = nextId2(releases, componentId3);
   return {
     id,
+    workflowBlobs,
     component,
     rule,
     note,
@@ -41449,6 +41660,7 @@ function announce(ctx, d) {
     timeoutMinutes: d.rule.timeoutMinutes,
     note: d.note,
     migrationsDigest: migrationsDigest(d.note),
+    workflowBlobs: d.workflowBlobs,
     needs: d.needs,
     announcement: { at: at2, text: d.announcement },
     approvals: [],
@@ -41562,18 +41774,20 @@ async function triggerRelease(ctx, rec, o2) {
     return { kind: "held", line: `${rec.id} waits for approvals: ${pending.join(", ")}` };
   }
   if (o2.paused) {
-    return {
-      kind: "held",
-      line: "paused: no release starts until the owner runs studio resume"
-    };
+    return { kind: "held", line: "paused: no release starts until the owner runs studio resume" };
   }
+  o2.beat();
+  const cap = await o2.capacity();
+  if (!cap.ok) return { kind: "held", line: cap.line };
+  o2.beat();
+  const redraft = `studio release cancel ${rec.id} --reason "<line>", then draft again`;
   const branch = await readDefault(ctx.gh, rec.repo);
   if (branch === void 0)
     return { kind: "held", line: `cannot read the default branch of ${rec.repo}` };
   if (branch !== rec.branch) {
     return {
       kind: "refused",
-      line: `the default branch of ${rec.repo} is ${branch} now, not ${rec.branch}: studio release cancel ${rec.id} --reason "<line>", then draft again`
+      line: `the default branch of ${rec.repo} is ${branch} now, not ${rec.branch}: ${redraft}`
     };
   }
   const head = await resolveRef2(ctx.gh, rec.repo, branch);
@@ -41581,10 +41795,7 @@ async function triggerRelease(ctx, rec, o2) {
   const co = ctx.checkout(rec.repo);
   await fetchCommits(ctx.git, co, [rec.sha, head]);
   if (!await isAncestor(ctx.git, co, rec.sha, head)) {
-    return {
-      kind: "refused",
-      line: `${short2(rec.sha)} is no longer on ${branch}: studio release cancel ${rec.id} --reason "<line>", then draft again`
-    };
+    return { kind: "refused", line: `${short2(rec.sha)} is no longer on ${branch}: ${redraft}` };
   }
   const { component, rule, config: config2 } = await ruleAt(ctx.git, co, rec.sha, rec.component);
   if (rule.workflow !== rec.workflow) {
@@ -41601,7 +41812,7 @@ async function triggerRelease(ctx, rec, o2) {
   if (migrationsDigest(fresh) !== rec.migrationsDigest || migrationsDigest(rec.note) !== rec.migrationsDigest) {
     return {
       kind: "refused",
-      line: `${rec.id}: its migrations read differently now than when it was announced: studio release cancel ${rec.id} --reason "<line>", then draft again`
+      line: `${rec.id}: its migrations read differently now than when it was announced: ${redraft}`
     };
   }
   const approvers = new Set(rec.needs.approvers);
@@ -41609,30 +41820,49 @@ async function triggerRelease(ctx, rec, o2) {
   if (missing.length > 0) {
     return {
       kind: "refused",
-      line: `${rec.id} needs ${missing.map((a2) => a2.id).join(", ")} now: studio release cancel ${rec.id} --reason "<line>", then draft again`
+      line: `${rec.id} needs ${missing.map((a2) => a2.id).join(", ")} now: ${redraft}`
     };
   }
-  const files = [rule.workflow, ...rule.postChecks.map((p) => p.workflow)];
-  for (const file2 of new Set(files)) {
+  const started = [rule.workflow, ...rule.postChecks.map((p) => p.workflow)];
+  const rollback = "workflow" in rule.rollback ? [rule.rollback.workflow] : [];
+  for (const file2 of new Set(started)) {
     const [a2, b] = [
       await blobAt(ctx.git, co, rec.sha, file2),
       await blobAt(ctx.git, co, head, file2)
     ];
-    if (a2 === void 0 || a2 !== b) {
-      return {
-        kind: "refused",
-        line: `${file2} changed on ${branch} since ${short2(rec.sha)}: studio release cancel ${rec.id} --reason "<line>", then draft again`
-      };
+    if (a2 === void 0 || a2 !== b || rec.workflowBlobs[file2] !== a2) {
+      return { kind: "refused", line: `${file2} changed since ${rec.id} was announced: ${redraft}` };
     }
-    const problem = await dispatchProblem(ctx.git, co, rec.sha, file2, config2.crewAllowedWorkflows);
+    const problem = await dispatchProblem(ctx.git, co, rec.sha, file2, {
+      crewAllowed: config2.crewAllowedWorkflows,
+      input: true
+    });
     if (problem !== void 0) return { kind: "refused", line: `${rec.id}: ${problem}` };
   }
-  let ids;
+  for (const file2 of rollback) {
+    const problem = await dispatchProblem(ctx.git, co, rec.sha, file2, {
+      crewAllowed: config2.crewAllowedWorkflows,
+      input: false
+    });
+    if (problem !== void 0) return { kind: "refused", line: `${rec.id}: ${problem}` };
+  }
+  let list2;
   try {
-    ids = await workflowIds(ctx.gh, rec.repo);
+    list2 = await listWorkflows(ctx.gh, rec.repo);
   } catch (e) {
     return { kind: "held", line: e.message };
   }
+  const guarded2 = /* @__PURE__ */ new Set([...started, ...rollback]);
+  for (const entry of config2.crewAllowedWorkflows) {
+    const hit = crewReach(entry, list2).find((w) => guarded2.has(w.path));
+    if (hit !== void 0) {
+      return {
+        kind: "refused",
+        line: `${rec.id}: crew_allowed_workflows entry ${clean5(entry, 100)} reaches ${hit.path}: a crew may never start a release workflow`
+      };
+    }
+  }
+  const ids = idsOf(list2);
   const workflowId = ids.get(rule.workflow);
   if (workflowId === void 0) {
     return {
@@ -41649,9 +41879,13 @@ async function triggerRelease(ctx, rec, o2) {
     }
   }
   o2.beat();
-  const cap = await o2.capacity();
-  if (!cap.ok) return { kind: "held", line: cap.line };
-  o2.beat();
+  const again = await resolveRef2(ctx.gh, rec.repo, branch);
+  if (again !== head) {
+    return {
+      kind: "held",
+      line: `${branch} moved while ${rec.id} was checked; run studio release ${rec.component} again`
+    };
+  }
   const at2 = ctx.now().toISOString();
   let next = {
     ...rec,
@@ -41688,18 +41922,20 @@ async function triggerRelease(ctx, rec, o2) {
   );
   if (r.code !== 0) {
     const why = clean5(r.stderr.split("\n")[0] ?? "", 300) || `gh exit ${r.code}`;
-    next = {
-      ...next,
-      status: "failed",
-      trigger: { ...next.trigger, refused: why },
-      finishedAt: ctx.now().toISOString(),
-      reason: clean5(
-        `the release workflow could not be started (${why}); nothing was deployed`,
-        600
-      )
-    };
-    o2.save(next);
-    log(ctx.stateRoot, ctx.now(), { event: "failed", release: rec.id, reason: next.reason });
+    if (refusedByGitHub(r.stderr)) {
+      next = {
+        ...next,
+        status: "failed",
+        trigger: { ...next.trigger, refused: why },
+        finishedAt: ctx.now().toISOString(),
+        reason: clean5(
+          `the release workflow could not be started (${why}); nothing was deployed`,
+          600
+        )
+      };
+      o2.save(next);
+      log(ctx.stateRoot, ctx.now(), { event: "failed", release: rec.id, reason: next.reason });
+    }
     return { kind: "triggered", rec: next };
   }
   const run2 = runFromOutput(rec.repo, `${r.stdout}
@@ -41710,6 +41946,7 @@ ${r.stderr}`);
   }
   return { kind: "triggered", rec: next };
 }
+var refusedByGitHub = (stderr) => /\bHTTP 4\d\d\b/.test(stderr);
 var jobState = (run2, job) => {
   const legs = run2.jobs.filter((j) => j.name === job || j.name.startsWith(`${job} (`));
   if (legs.length === 0) return run2.status === "completed" ? "missing" : "pending";
@@ -41737,6 +41974,14 @@ async function advanceRelease(ctx, rec, o2) {
       trigger.at
     );
     if (found.several === true) {
+      if (late) {
+        return fail2(
+          ctx,
+          rec,
+          o2,
+          `several runs of ${rec.workflow} started since the trigger and none can be told to be this release's; check them on GitHub`
+        );
+      }
       return {
         rec,
         lead: `release unknown: ${rec.id}: several runs of ${rec.workflow} started since the trigger; Studio does not guess which one deploys ${short2(rec.sha)}; check them on GitHub, nothing is started again`
@@ -41760,6 +42005,14 @@ async function advanceRelease(ctx, rec, o2) {
   }
   if (view.workflowDatabaseId !== void 0 && view.workflowDatabaseId !== trigger.workflowId || view.event !== void 0 && view.event !== "workflow_dispatch") {
     return fail2(ctx, next, o2, `run ${run2} is not a dispatch of ${rec.workflow}`);
+  }
+  if (view.headSha?.toLowerCase() !== trigger.head.toLowerCase()) {
+    return fail2(
+      ctx,
+      next,
+      o2,
+      `the release run ${run2} ran at ${view.headSha === void 0 ? "an unknown commit" : short2(view.headSha)}, not at the checked head ${short2(trigger.head)}`
+    );
   }
   if (view.status !== "completed") {
     if (late)
@@ -41790,21 +42043,46 @@ async function advanceRelease(ctx, rec, o2) {
     log(ctx.stateRoot, now, { event: "deployed", release: rec.id, run: run2 });
   }
   const checks = [];
+  const whys = [];
   let lead;
+  let hold;
   for (const c3 of next.checks) {
+    o2.beat?.();
     if (c3.workflow === rec.workflow) {
       checks.push({ ...c3, state: jobState(view, c3.job), run: run2 });
       continue;
     }
     let started = next.started[c3.workflow];
     if (started === void 0) {
-      const at2 = ctx.now().toISOString();
+      hold = hold ?? await o2.gate();
+      if (hold !== void 0) {
+        checks.push({ ...c3, state: "pending" });
+        continue;
+      }
+      const head = await resolveRef2(ctx.gh, rec.repo, rec.branch);
+      if (head === void 0) {
+        checks.push({ ...c3, state: "pending" });
+        continue;
+      }
+      const co = ctx.checkout(rec.repo);
+      let blob;
+      try {
+        await fetchCommits(ctx.git, co, [head]);
+        blob = await blobAt(ctx.git, co, head, c3.workflow);
+      } catch {
+        blob = void 0;
+      }
+      if (blob === void 0 || blob !== rec.workflowBlobs[c3.workflow]) {
+        whys.push(`${c3.workflow} changed on ${rec.branch} since ${rec.id} was announced`);
+        checks.push({ ...c3, state: "missing" });
+        continue;
+      }
       const workflowId = await workflowIdOf(ctx.gh, rec.repo, c3.workflow);
       if (workflowId === void 0) {
         checks.push({ ...c3, state: "missing" });
         continue;
       }
-      started = { at: at2, workflowId };
+      started = { at: ctx.now().toISOString(), workflowId, head };
       next = { ...next, started: { ...next.started, [c3.workflow]: started } };
       o2.save(next);
       const r = await ctx.gh.run(
@@ -41822,10 +42100,12 @@ async function advanceRelease(ctx, rec, o2) {
         { timeoutMs: GH_MS3 }
       );
       if (r.code !== 0) {
-        started = {
-          ...started,
-          refused: clean5(r.stderr.split("\n")[0] ?? "", 300) || `gh exit ${r.code}`
-        };
+        if (refusedByGitHub(r.stderr)) {
+          started = {
+            ...started,
+            refused: clean5(r.stderr.split("\n")[0] ?? "", 300) || `gh exit ${r.code}`
+          };
+        }
       } else {
         const id = runFromOutput(rec.repo, `${r.stdout}
 ${r.stderr}`);
@@ -41862,10 +42142,12 @@ ${r.stderr}`);
       continue;
     }
     const v = await viewRun(ctx.gh, rec.repo, checkRun);
+    const wrong = v !== void 0 && (v.workflowDatabaseId !== void 0 && v.workflowDatabaseId !== started.workflowId || started.head === void 0 || v.headSha?.toLowerCase() !== started.head.toLowerCase());
+    if (wrong) whys.push(`run ${checkRun} of ${c3.workflow} is not the one Studio started`);
     checks.push({
       ...c3,
       run: checkRun,
-      state: v === void 0 || v.workflowDatabaseId !== void 0 && v.workflowDatabaseId !== started.workflowId ? v === void 0 ? "pending" : "missing" : jobState(v, c3.job)
+      state: v === void 0 ? "pending" : wrong ? "missing" : jobState(v, c3.job)
     });
   }
   next = { ...next, checks };
@@ -41875,7 +42157,10 @@ ${r.stderr}`);
       ctx,
       next,
       o2,
-      `${red2.map((c3) => `${c3.name} ${c3.state === "fail" ? "failed" : "gave no result"}`).join(", ")} after the deploy`
+      [
+        `${red2.map((c3) => `${c3.name} ${c3.state === "fail" ? "failed" : "gave no result"}`).join(", ")} after the deploy`,
+        ...whys
+      ].join("; ")
     );
   }
   const pending = checks.filter((c3) => c3.state === "pending");
@@ -41891,7 +42176,7 @@ ${r.stderr}`);
     o2.save(next);
     return {
       rec: next,
-      waiting: `${rec.id}: deployed, waiting for ${pending.map((c3) => c3.name).join(", ")}`,
+      waiting: `${rec.id}: deployed, waiting for ${pending.map((c3) => c3.name).join(", ")}${hold === void 0 ? "" : ` (${hold})`}`,
       ...lead === void 0 ? {} : { lead }
     };
   }
@@ -43259,6 +43544,12 @@ async function runCli(argv, deps) {
       checkout: (repo) => approvalCheckout(project, config2, repo),
       now: () => ports.clock.now()
     });
+    const releaseGate = (config2, root, component2) => async () => {
+      if (readPause(root).paused)
+        return "paused: nothing starts until the owner runs studio resume";
+      const c3 = await readCapacityTwice(config2, ports);
+      return c3.ok ? void 0 : `held: ${prHeldNote(c3.capacity, config2).slice(PR_HELD.length)}; run studio release ${component2} again later`;
+    };
     const queueAdd = async (arg) => {
       const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/.exec(arg ?? "");
       if (!m) throw new UsageError("queue add needs <repo>#<pr>, e.g. org/app#12");
@@ -44108,7 +44399,7 @@ async function runCli(argv, deps) {
         if (!recs.some((r) => isOpen(r) || recent(r))) return;
         const config2 = loadConfig(project);
         const ctx = releaseCtx(config2, loadBoard(project), root);
-        const after2 = recs.some((r) => r.status === "triggered" || r.status === "checking") ? await withReleases(ctx, async (all, save) => {
+        const after2 = recs.some((r) => r.status === "triggered" || r.status === "checking") ? await withReleases(ctx, async (all, save, relBeat) => {
           let cur = all;
           const saveOne = (rec) => {
             cur = replaceRelease(cur, rec);
@@ -44117,7 +44408,15 @@ async function runCli(argv, deps) {
           for (const r of all) {
             if (r.status !== "triggered" && r.status !== "checking") continue;
             beat();
-            const a2 = await advanceRelease(ctx, r, { save: saveOne });
+            relBeat();
+            const a2 = await advanceRelease(ctx, r, {
+              save: saveOne,
+              gate: releaseGate(config2, root, r.component),
+              beat: () => {
+                beat();
+                relBeat();
+              }
+            });
             if (a2.lead !== void 0 && a2.rec.status !== "failed") lead(r.id, a2.lead);
             if (a2.waiting !== void 0) out.held.push({ item: r.id, reason: a2.waiting });
           }
@@ -45475,7 +45774,11 @@ ${table2([
             throw new UsageError(`--since is for a new release; ${open4.id} is ${open4.status}`);
           }
           if (open4.status === "triggered" || open4.status === "checking") {
-            const a2 = await advanceRelease(ctx, open4, { save: saveOne });
+            const a2 = await advanceRelease(ctx, open4, {
+              save: saveOne,
+              gate: releaseGate(config2, root, comp.id),
+              beat
+            });
             return {
               ...shown(a2.rec),
               ...a2.waiting === void 0 ? {} : { waiting: a2.waiting },
@@ -45489,11 +45792,8 @@ ${table2([
             by,
             paused: readPause(root).paused,
             capacity: async () => {
-              const c3 = await readCapacityTwice(config2, ports);
-              return {
-                ok: c3.ok,
-                line: `held: ${prHeldNote(c3.capacity, config2).slice(PR_HELD.length)}; run studio release ${comp.id} again later`
-              };
+              const held2 = await releaseGate(config2, root, comp.id)();
+              return { ok: held2 === void 0, line: held2 ?? "" };
             },
             save: saveOne,
             beat

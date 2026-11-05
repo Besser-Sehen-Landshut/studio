@@ -816,6 +816,18 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       now: () => ports.clock.now(),
     });
 
+    /** What holds a release workflow back: the owner's pause, then the merge capacity rule. */
+    const releaseGate =
+      (config: StudioConfig, root: string, component: string) =>
+      async (): Promise<string | undefined> => {
+        if (readPause(root).paused)
+          return 'paused: nothing starts until the owner runs studio resume';
+        const c = await readCapacityTwice(config, ports);
+        return c.ok
+          ? undefined
+          : `held: ${prHeldNote(c.capacity, config).slice(PR_HELD.length)}; run studio release ${component} again later`;
+      };
+
     /** Puts an approved pull request into the merge queue: the body of `queue add`. */
     const queueAdd = async (arg: string | undefined) => {
       const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/.exec(arg ?? '');
@@ -1823,7 +1835,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const config = loadConfig(project);
         const ctx = releaseCtx(config, loadBoard(project), root);
         const after = recs.some((r) => r.status === 'triggered' || r.status === 'checking')
-          ? await withReleases(ctx, async (all, save) => {
+          ? await withReleases(ctx, async (all, save, relBeat) => {
               let cur = all;
               const saveOne = (rec: Release) => {
                 cur = replaceRelease(cur, rec);
@@ -1832,7 +1844,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               for (const r of all) {
                 if (r.status !== 'triggered' && r.status !== 'checking') continue;
                 beat();
-                const a = await advanceRelease(ctx, r, { save: saveOne });
+                relBeat();
+                const a = await advanceRelease(ctx, r, {
+                  save: saveOne,
+                  gate: releaseGate(config, root, r.component),
+                  beat: () => {
+                    beat();
+                    relBeat();
+                  },
+                });
                 if (a.lead !== undefined && a.rec.status !== 'failed') lead(r.id, a.lead);
                 if (a.waiting !== undefined) out.held.push({ item: r.id, reason: a.waiting });
               }
@@ -3306,7 +3326,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             throw new UsageError(`--since is for a new release; ${open.id} is ${open.status}`);
           }
           if (open.status === 'triggered' || open.status === 'checking') {
-            const a = await advanceRelease(ctx, open, { save: saveOne });
+            const a = await advanceRelease(ctx, open, {
+              save: saveOne,
+              gate: releaseGate(config, root, comp.id),
+              beat,
+            });
             return {
               ...shown(a.rec),
               ...(a.waiting === undefined ? {} : { waiting: a.waiting }),
@@ -3320,11 +3344,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             by,
             paused: readPause(root).paused,
             capacity: async () => {
-              const c = await readCapacityTwice(config, ports);
-              return {
-                ok: c.ok,
-                line: `held: ${prHeldNote(c.capacity, config).slice(PR_HELD.length)}; run studio release ${comp.id} again later`,
-              };
+              const held = await releaseGate(config, root, comp.id)();
+              return { ok: held === undefined, line: held ?? '' };
             },
             save: saveOne,
             beat,

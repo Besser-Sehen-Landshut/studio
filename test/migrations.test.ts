@@ -98,3 +98,74 @@ describe('migration order', () => {
     ]);
   });
 });
+
+describe('migration kinds: nothing destructive or data-changing passes as additive', () => {
+  it('reads CREATE with a query, a copy, a partition, a computed value or a call as unclear', () => {
+    for (const sql of [
+      'CREATE TABLE x AS SELECT * FROM customers;',
+      'CREATE TABLE x AS WITH d AS (DELETE FROM customers RETURNING *) SELECT * FROM d;',
+      'CREATE TABLE x AS TABLE customers;',
+      'CREATE TABLE x (LIKE customers INCLUDING ALL);',
+      'CREATE TABLE x PARTITION OF orders FOR VALUES IN (1);',
+      'CREATE TABLE x (id int) PARTITION BY RANGE (id);',
+      'CREATE TABLE x (id int) INHERITS (orders);',
+      'CREATE TABLE x OF some_type;',
+      'CREATE TABLE x (id int) WITH (fillfactor = 70);',
+      'CREATE TABLE x (id int DEFAULT wipe_customers());',
+      "CREATE TABLE x (id int DEFAULT nextval('s'));",
+      'CREATE TABLE x (id int GENERATED ALWAYS AS (purge()) STORED);',
+      'CREATE TABLE x (id int CHECK (purge() > 0));',
+      "CREATE TABLE x (id int DEFAULT 'a'::text);",
+      'CREATE TABLE x (id int, total numeric(purge()));',
+      'CREATE TEMP TABLE x (id int);',
+      'CREATE TRIGGER t AFTER INSERT ON orders FOR EACH ROW EXECUTE FUNCTION wipe();',
+      'CREATE RULE r AS ON INSERT TO orders DO INSTEAD DELETE FROM customers;',
+      'CREATE FUNCTION wipe() RETURNS void LANGUAGE sql AS $$ DELETE FROM customers $$;',
+      'CREATE OR REPLACE FUNCTION f() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql;',
+      'CREATE PROCEDURE p() LANGUAGE sql AS $$ TRUNCATE customers $$;',
+      'CREATE VIEW v AS SELECT purge();',
+      'CREATE MATERIALIZED VIEW v AS SELECT purge();',
+      'CREATE INDEX i ON orders (purge(id));',
+      'CREATE INDEX i ON orders ((lower(ref)));',
+      'CREATE INDEX i ON orders (ref) WHERE purge();',
+      'CREATE INDEX i ON orders USING gin (ref);',
+      'CREATE SCHEMA s CREATE TABLE t (id int);',
+      'CREATE TYPE t AS (a int);',
+      'CREATE SEQUENCE s OWNED BY orders.id;',
+      'DO $$ BEGIN DELETE FROM customers; END $$;',
+      "COMMENT ON FUNCTION f(int) IS 'x';",
+    ]) {
+      expect(kind(sql), sql).toBe('unclear');
+    }
+  });
+
+  it('reads ALTER ... ADD COLUMN with a non-literal default or a generated value as unclear', () => {
+    for (const sql of [
+      'ALTER TABLE orders ADD COLUMN c int DEFAULT f();',
+      'ALTER TABLE orders ADD COLUMN c timestamptz DEFAULT now();',
+      'ALTER TABLE orders ADD COLUMN c int DEFAULT (SELECT max(id) FROM customers);',
+      'ALTER TABLE orders ADD COLUMN c int GENERATED ALWAYS AS (purge()) STORED;',
+      'ALTER TABLE orders ADD COLUMN c int, ADD COLUMN d int DEFAULT purge();',
+      "ALTER TABLE orders ADD COLUMN c text DEFAULT 'x'::text;",
+      'ALTER TABLE orders ADD COLUMN c int USING purge();',
+      'ALTER TABLE orders ADD c int, ENABLE TRIGGER t;',
+    ]) {
+      expect(kind(sql), sql).toBe('unclear');
+    }
+  });
+
+  it('keeps the plain shapes additive', () => {
+    for (const sql of [
+      "ALTER TABLE orders ADD COLUMN c int NOT NULL DEFAULT 0, ADD COLUMN d text DEFAULT 'x';",
+      'ALTER TABLE orders ADD COLUMN c numeric(10, 2) DEFAULT -1.5;',
+      "CREATE TABLE x (id bigint PRIMARY KEY, c varchar(20) NOT NULL DEFAULT 'a', o bigint REFERENCES app.orders (id) ON DELETE CASCADE, UNIQUE (c));",
+      'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON ONLY app.orders (ref DESC NULLS LAST, id) INCLUDE (total);',
+      "CREATE TYPE state AS ENUM ('open', 'paid');",
+      'CREATE SCHEMA IF NOT EXISTS app;',
+      'CREATE SEQUENCE s START 1 INCREMENT 1;',
+      "ALTER TYPE state ADD VALUE IF NOT EXISTS 'refunded' AFTER 'paid';",
+    ]) {
+      expect(kind(sql), sql).toBe('additive');
+    }
+  });
+});

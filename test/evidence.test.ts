@@ -628,6 +628,62 @@ describe('judging a failed guard by a built-in proof', () => {
     expect(await evidenceChange(ctxFor(same, fakeGh(same).gh), same.base, same.head)).toEqual({});
   });
 
+  it('a release keeps its whole component, its workflows and the crew workflow list the owner’s', async () => {
+    const release = `components:
+  - id: api
+    name: API
+    repo: org/app
+    paths: ["migrations/**"]
+    release:
+      workflow: .github/workflows/ci.yml
+      post_checks: [{ workflow: .github/workflows/ci.yml, job: test }]
+      rollback: { text: redeploy the previous commit }
+`;
+    const yaml = (r: string) => studioYaml(`${RULE}${r}`);
+    const changeOf = async (change: (dir: string) => void) => {
+      const r = makeRepo({ rules: `${RULE}${release}`, change });
+      return evidenceChange(ctxFor(r, fakeGh(r).gh), r.base, r.head);
+    };
+    // The component's paths decide what the note lists and which approvals it needs.
+    expect(
+      await changeOf((dir) =>
+        writeFileSync(
+          join(dir, '.studio/studio.yaml'),
+          yaml(release.replace('paths: ["migrations/**"]', 'paths: ["docs/**"]')),
+        ),
+      ),
+    ).toEqual({
+      problem: "the pull request changes a component's release: in studio.yaml",
+      area: 'release',
+    });
+    // A crew workflow list could reach the deploy by name.
+    expect(
+      await changeOf((dir) =>
+        writeFileSync(
+          join(dir, '.studio/studio.yaml'),
+          yaml(release).replace(
+            'deploy_commands: []\n',
+            'deploy_commands: []\ncrew_allowed_workflows: [ci]\n',
+          ),
+        ),
+      ),
+    ).toMatchObject({ area: 'release' });
+    // The release workflow's content.
+    expect(
+      await changeOf((dir) =>
+        writeFileSync(join(dir, '.github/workflows/ci.yml'), `${CI}# deploy elsewhere\n`),
+      ),
+    ).toEqual({
+      problem:
+        'the pull request changes ".github/workflows/ci.yml", a workflow a component\'s release starts',
+      area: 'release',
+    });
+    // Anything else stays the crew's.
+    expect(
+      await changeOf((dir) => writeFileSync(join(dir, 'docs/guide.md'), '# Guide, longer\n')),
+    ).toEqual({});
+  });
+
   it('a pull request that changes the guard job gets no exception', async () => {
     const r = makeRepo({
       change: (dir) => {

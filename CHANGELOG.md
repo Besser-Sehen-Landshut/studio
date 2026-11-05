@@ -27,21 +27,29 @@ merge.
 - The note: the component's merged board items in the range grouped by epic, migrations in natural order with
   kind (`additive`, `destructive`, `backfill`, `unclear`) and risk, configuration names added or removed in the
   `config` files (never values), the way back, the post-deploy checks and the approvals needed.
-- Migration kinds from the SQL tokenizer of 0.17 and statement shapes, no parser: only `additive` is low risk;
-  anything else needs the owner, also a non-SQL file, a changed or deleted migration, and a migration-looking
-  file outside `migrations`.
+- Migration kinds from the SQL tokenizer of 0.17 and an allow-list of exact statement shapes, no parser: only
+  `additive` is low risk, and only a statement that matches a shape from its first token to its last is (plain
+  `CREATE TABLE` columns with literal defaults, `CREATE INDEX` on columns, `ALTER TABLE ... ADD COLUMN`, enums,
+  schemas, sequences, `ALTER TYPE ... ADD VALUE`, `COMMENT ON`). A query, copy, partition, computed or
+  non-literal default, call shape, trigger, rule, function or `DO` block is `unclear`; anything not additive
+  needs the owner, also a non-SQL file, a changed or deleted migration, and any other `.sql` or
+  migration-looking file of the component outside `migrations`.
 - Approvals: `studio release approve <id> owner --said "<words>"`, owner only, in a terminal, for migrations that
   are not clearly additive; `studio release approve <id> <approver> --by "<who said it>" --said "<words>" --at
   <time>` for a third party, recorded by the lead from what the owner relays (Studio contacts no one). An
   approval binds to one release; its time may not lie before the announcement or in the future; text shaped like a
   credential is refused.
-- The trigger: `gh workflow run <id> --ref <default branch> -f sha=<release commit>`, after checking that the
-  commit is still on the default branch, that the workflow files are those of the release commit and declare
-  the input, that the migrations read as they did when announced, that Studio is not paused, and that CI is
-  within `merge_max_busy` (two reads). Recorded before gh runs: a trigger without a known run is looked up (the
-  one dispatch since the trigger), never repeated.
+- The trigger: `gh workflow run <id> --ref <default branch> -f sha=<release commit>`. First Studio must not be
+  paused and CI must be within `merge_max_busy` (two reads); then the commit must still be on the default
+  branch, the workflow files at the head must be the blobs pinned in the announced record and declare the
+  input, the migrations must read as they did when announced, and no `crew_allowed_workflows` entry may resolve
+  (by id, file or display name, as gh does) to the release, a post-check or the rollback workflow; then the head
+  is read once more and must not have moved. Recorded before gh runs: a trigger without a known run is looked
+  up (the one dispatch since the trigger), never repeated. Only an HTTP 4xx from GitHub fails it as "nothing was
+  deployed"; a timeout stays triggered and is looked up. The release run must be of the checked head.
 - After the deploy: the release run, then each post check (a job of the release run, or of another workflow
-  Studio starts once, recorded first). A failed or missing job, a run of another workflow or event, and no result
+  Studio starts once, recorded first, under the pause and capacity rules, with the pinned file, its run held to
+  the head it was started at). Several candidate runs fail closed at the timeout. A failed or missing job, a run of another workflow or event, and no result
   within `timeout_minutes` stop the release (`failed`) with the way back in `needsLead` for a day; Studio runs
   nothing back. A passed release run is a `deployed` metrics event with its release.
 - `studio release list`, `studio release show <id>`, `studio release cancel <id> --reason "<line>"` (before the
@@ -55,8 +63,10 @@ merge.
 
 ### Changed
 
-- A pull request that changes a component's `release:` block gets no approval from Studio, like one that changes
-  `evidence:` (`approval refused: ...; the release rules are the owner's: ...`).
+- A pull request that changes a component with a `release:` block (its whole entry), a workflow such a release
+  starts or names, or `crew_allowed_workflows` while a release exists gets no approval from Studio, like one
+  that changes `evidence:` (`approval refused: ...; the release rules are the owner's: ...`).
+- Approver `paths` are matched against every change of the release, not only the component's.
 - The lead skill: a Release section (send the announcement word for word, approval lines are owner lines, never
   approve a migration or contact a third party, the second `studio release` call triggers and `tick` never does,
   never `gh workflow run` or `deploy record` a release, the way back after `release failed` is the lead's). A
