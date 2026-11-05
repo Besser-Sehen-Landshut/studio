@@ -27749,7 +27749,7 @@ function touchesOverlap(a2, b) {
 var import_yaml = __toESM(require_dist(), 1);
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-var STUDIO_VERSION = "0.12.0";
+var STUDIO_VERSION = "0.12.1";
 var HTTPS_GIT = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\.git)?$/;
 var VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
 var PLUGIN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -28436,10 +28436,15 @@ var notRunHereSchema = external_exports.strictObject({
 });
 var crewLine = external_exports.string().transform((s) => s.replace(new RegExp("\\p{Cf}", "gu"), "")).pipe(plainLine);
 var crewCovers = external_exports.string().transform((s) => s.replace(new RegExp("\\p{Cf}", "gu"), "")).pipe(plainLineOf(600));
+var crewReason = external_exports.string().transform((s) => {
+  const line3 = s.replace(new RegExp("\\p{Cf}", "gu"), "");
+  const chars = [...line3];
+  return chars.length <= 300 ? line3 : `${chars.slice(0, 299).join("")}\u2026`;
+}).pipe(plainLine);
 var notRunHereReportSchema = external_exports.strictObject({
   command: crewLine,
   missing: external_exports.enum(NOT_RUN_SERVICES),
-  reason: crewLine
+  reason: crewReason
 });
 var approvedJobSchema = external_exports.strictObject({ workflow: plainLine, job: plainLine });
 var workItemSchema = external_exports.strictObject({

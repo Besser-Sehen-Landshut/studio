@@ -71,11 +71,23 @@ export const crewCovers = z
   .string()
   .transform((s) => s.replace(/\p{Cf}/gu, ''))
   .pipe(plainLineOf(600));
+/**
+ * Crew explanation text that nothing matches against: an over-long line is cut to the limit with
+ * "…" instead of failing the whole report, which a crew cannot repair once it has exited.
+ */
+export const crewReason = z
+  .string()
+  .transform((s) => {
+    const line = s.replace(/\p{Cf}/gu, '');
+    const chars = [...line];
+    return chars.length <= 300 ? line : `${chars.slice(0, 299).join('')}…`;
+  })
+  .pipe(plainLine);
 /** A report's entry: like `notRunHereSchema`, with format characters stripped from the crew text. */
 export const notRunHereReportSchema = z.strictObject({
   command: crewLine,
   missing: z.enum(NOT_RUN_SERVICES),
-  reason: crewLine,
+  reason: crewReason,
 });
 
 /** A CI job by its workflow name and its check name, as `gh pr checks` reports them. */
