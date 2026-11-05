@@ -30,6 +30,8 @@ export interface SeenClaim {
    * Leases run from here, never from the commit's dates, which the writer could set.
    */
   at: string;
+  /** The commit that started this attempt, once proven: the next walk stops at this tip. */
+  anchor?: string;
   pr?: number;
 }
 

@@ -7846,8 +7846,8 @@ import { homedir as homedir10 } from "node:os";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
 // src/cli.ts
-import { existsSync as existsSync13 } from "node:fs";
-import { dirname as dirname12, join as join44, resolve as resolve7 } from "node:path";
+import { existsSync as existsSync14 } from "node:fs";
+import { dirname as dirname13, join as join44, resolve as resolve7 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/acceptance.ts
@@ -28549,8 +28549,8 @@ function skillDenyRules(configDir, allowed, denied, bundled = []) {
   return [...out].map((s) => `Skill(${s})`);
 }
 function undeniableLine(configDir, invalid) {
-  const shown = invalid.slice(0, 5).map((p) => JSON.stringify(p.replace(/[\p{Cc}\p{Cf}]/gu, "?").slice(0, 200))).join(", ");
-  return `installed skills in ${configDir} have names a deny rule cannot hold (${shown}${invalid.length > 5 ? `, ${invalid.length - 5} more` : ""}); a crew could invoke them outside its brief: rename them to letters, digits, dot, dash and underscore, or remove them, then launch again`;
+  const shown2 = invalid.slice(0, 5).map((p) => JSON.stringify(p.replace(/[\p{Cc}\p{Cf}]/gu, "?").slice(0, 200))).join(", ");
+  return `installed skills in ${configDir} have names a deny rule cannot hold (${shown2}${invalid.length > 5 ? `, ${invalid.length - 5} more` : ""}); a crew could invoke them outside its brief: rename them to letters, digits, dot, dash and underscore, or remove them, then launch again`;
 }
 
 // src/proofs.ts
@@ -29253,10 +29253,17 @@ var ownerConfigSchema = external_exports.strictObject({
   // `accept` names the GitHub logins whose claims count, per label; on a worker machine, `self`
   // names the lead whose offers it takes and what its crews must never touch.
   workers: external_exports.strictObject({
-    accept: external_exports.record(workerLabel, external_exports.array(githubLogin).min(1).max(20)).default({}),
+    // Each with the numeric account id (`gh api users/<login> --jq .id`): a login can be
+    // renamed and taken by someone else, the id stays.
+    accept: external_exports.record(
+      workerLabel,
+      external_exports.array(external_exports.strictObject({ login: githubLogin, id: external_exports.number().int().positive() })).min(1).max(20)
+    ).default({}),
     self: external_exports.strictObject({
       lead: githubLogin,
       deny: workerDenySchema.default(NO_DENY),
+      // On WSL2 every Windows file system is denied to crews; these places are opened for reads.
+      allowRead: external_exports.array(denyPath).max(50).default([]),
       // How long a claim holds without a heartbeat before another worker may take it over.
       leaseMinutes: external_exports.number().int().min(10).max(240).default(30)
     }).optional()
@@ -31506,13 +31513,13 @@ function lintWorkflows(files, detect, expectedGroup) {
       else if (r.kind === "unverifiable") warnings.push(`${where}: cannot verify, ${r.why}`);
       else if (r.kind === "set") {
         if (r.group) warnings.push(`${where}: cannot verify runner group membership`);
-        const shown2 = r.labels.map(clean).join(", ");
+        const shown3 = r.labels.map(clean).join(", ");
         const want = r.labels.map((l) => l.toLowerCase());
         if (detect.source === "unknown") {
-          warnings.push(`${where}: cannot verify runs-on [${shown2}], runners are unknown`);
+          warnings.push(`${where}: cannot verify runs-on [${shown3}], runners are unknown`);
         } else if (!online.some((have) => want.every((l) => have.has(l)))) {
           errors.push(
-            `${where}: runs-on [${shown2}] matches no online runner; it would wait forever`
+            `${where}: runs-on [${shown3}] matches no online runner; it would wait forever`
           );
         }
       }
@@ -31523,20 +31530,20 @@ function lintWorkflows(files, detect, expectedGroup) {
       const problem = lintConcurrency(p.doc, expectedGroup);
       if (problem) errors.push(`${path10}: ${problem}`);
     }
-    const shown = concurrencyGroup(p.doc);
-    const group = shown?.toLowerCase();
-    if (shown !== void 0 && group !== void 0 && !/github\.(workflow|run_id)/.test(group)) {
-      const entry = byGroup.get(group) ?? { shown, paths: [], cancelling: false };
+    const shown2 = concurrencyGroup(p.doc);
+    const group = shown2?.toLowerCase();
+    if (shown2 !== void 0 && group !== void 0 && !/github\.(workflow|run_id)/.test(group)) {
+      const entry = byGroup.get(group) ?? { shown: shown2, paths: [], cancelling: false };
       entry.paths.push(path10);
       const c3 = p.doc.concurrency;
       if (pushAndPr && isRecord(c3) && c3["cancel-in-progress"] === true) entry.cancelling = true;
       byGroup.set(group, entry);
     }
   }
-  for (const { shown, paths, cancelling } of byGroup.values()) {
+  for (const { shown: shown2, paths, cancelling } of byGroup.values()) {
     if (paths.length > 1 && cancelling) {
       errors.push(
-        `${paths.join(" and ")} share the concurrency group ${clean(shown)}; groups are repo-wide, so they would cancel each other`
+        `${paths.join(" and ")} share the concurrency group ${clean(shown2)}; groups are repo-wide, so they would cancel each other`
       );
     }
   }
@@ -35295,7 +35302,9 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
     // The crew's own brief, caps and rules: the guard lets them be read, and a sandboxed read
     // (a shell command, or a file tool under the sandbox) must reach them too, or the crew
     // starts without its task. Nothing else of the state root comes back.
-    ...["md", "caps", "rules"].map((ext) => join21(stateRoot, "briefs", `${id}.${ext}`))
+    ...["md", "caps", "rules"].map((ext) => join21(stateRoot, "briefs", `${id}.${ext}`)),
+    // Places a worker's owner opened inside its denied Windows mounts, for reads only.
+    ...dirs.deny?.allowRead ?? []
   ];
   const ctxFile = join21(stateRoot, "guard", `${id}.json`);
   const protectedPaths = [
@@ -35617,7 +35626,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
       remote: item.repo === config2.primaryRepo ? "origin" : githubHttpsUrl(item.repo)
     }
   });
-  readRoleMemory(projectDir, item.role);
+  readRoleMemory(worker?.contentDir ?? projectDir, item.role);
   const missingSkill = firstMissingSkill(claudeConfigDir, [
     CREW_SKILL2,
     ...forItem.resolved.required
@@ -35708,7 +35717,14 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   caps.reportName = newReportName(stateRoot, item.id);
   caps.pushByStudio = worker?.noToken === true;
   caps.prByStudio = worker !== void 0 || (launcher2.platform ?? process.platform) === "darwin" && !ownerConfig.crewAllowMacosTrustService;
-  const brief = writeBrief(stateRoot, item, config2, projectDir, briefRules, caps);
+  const brief = writeBrief(
+    stateRoot,
+    item,
+    config2,
+    worker?.contentDir ?? projectDir,
+    briefRules,
+    caps
+  );
   const settings = writeCrewSettings(
     stateRoot,
     item,
@@ -41137,25 +41153,42 @@ import { mkdtempSync, rmSync as rmSync7, writeFileSync as writeFileSync11 } from
 import { tmpdir } from "node:os";
 import { join as join36 } from "node:path";
 var PR_BODY_MAX = 2e4;
-async function openCrewPr(ports, item, title, body, notRunHere, token, capacity, unchanged) {
-  const head = `studio/${item.id}`;
-  const list2 = await ports.gh.run(
-    ["pr", "list", "--repo", item.repo, "--head", head, "--state", "open", "--json", "number"],
-    { token }
-  );
-  if (list2.code !== 0)
-    throw new Error(`cannot list pull requests of ${head} (gh exit ${list2.code})`);
-  const open4 = JSON.parse(list2.stdout || "[]");
-  const known = open4.find((p) => Number.isInteger(p.number))?.number;
-  const plainTitle = title.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
-  if (plainTitle === "")
-    throw new Error(`the pull request title for ${head} is empty; nothing moved`);
-  const text = `Opened by Studio for ${item.id}; the text below the line was written by the crew.
+function crewPrText(item, body, notRunHere) {
+  return `Opened by Studio for ${item.id}; the text below the line was written by the crew.
 ${notRunSection(notRunHere)}
 ---
 
 ${body.replace(new RegExp("[^\\P{Cc}\\n\\t]|\\p{Cf}", "gu"), "").slice(0, PR_BODY_MAX)}
 `;
+}
+var crewPrTitle = (title) => title.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
+async function openCrewPr(ports, item, title, body, notRunHere, token, capacity, unchanged) {
+  const head = `studio/${item.id}`;
+  const list2 = await ports.gh.run(
+    [
+      "pr",
+      "list",
+      "--repo",
+      item.repo,
+      "--head",
+      head,
+      "--state",
+      "open",
+      "--json",
+      "number,isCrossRepository"
+    ],
+    { token }
+  );
+  if (list2.code !== 0)
+    throw new Error(`cannot list pull requests of ${head} (gh exit ${list2.code})`);
+  const open4 = JSON.parse(list2.stdout || "[]");
+  const known = open4.find(
+    (p) => Number.isInteger(p.number) && p.isCrossRepository === false
+  )?.number;
+  const plainTitle = title.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
+  if (plainTitle === "")
+    throw new Error(`the pull request title for ${head} is empty; nothing moved`);
+  const text = crewPrText(item, body, notRunHere);
   const withBody = async (use) => {
     const dir = mkdtempSync(join36(tmpdir(), "studio-pr-"));
     try {
@@ -43923,12 +43956,12 @@ async function runSkillsCheck(o2) {
 }
 
 // src/worker.ts
-import { existsSync as existsSync12, lstatSync as lstatSync34, readFileSync as readFileSync39 } from "node:fs";
+import { existsSync as existsSync13, lstatSync as lstatSync34, readdirSync as readdirSync12, readFileSync as readFileSync39 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
-import { join as join42 } from "node:path";
+import { dirname as dirname12, join as join42 } from "node:path";
 
 // src/worker-deny.ts
-import { readFileSync as readFileSync38, realpathSync as realpathSync7 } from "node:fs";
+import { existsSync as existsSync12, readFileSync as readFileSync38, realpathSync as realpathSync7 } from "node:fs";
 import { isAbsolute as isAbsolute7, join as join41, posix } from "node:path";
 var readText = (file3) => {
   try {
@@ -43954,11 +43987,29 @@ function automountRoot(conf) {
   }
   return "/mnt/";
 }
-function detectPlatform(platform2 = process.platform, read3 = readText) {
+function windowsMountsOf(mountinfo) {
+  const out = [];
+  for (const line4 of (mountinfo ?? "").split("\n")) {
+    const [left, right] = line4.split(" - ");
+    if (left === void 0 || right === void 0) continue;
+    const point = left.split(" ")[4];
+    const type = right.split(" ")[0];
+    if (point === void 0 || type === void 0) continue;
+    if (!/^(drvfs|9p|virtiofs)$/.test(type)) continue;
+    const p = point.replace(
+      /\\([0-7]{3})/g,
+      (_, o2) => String.fromCharCode(Number.parseInt(o2, 8))
+    );
+    if (p.startsWith("/") && p !== "/" && !out.includes(p)) out.push(p);
+  }
+  return out;
+}
+function detectPlatform(platform2 = process.platform, read3 = readText, env = process.env, exists4 = existsSync12) {
   if (platform2 !== "linux") return { platform: platform2, wsl: "none", automountRoot: "/mnt/" };
   const release2 = read3("/proc/sys/kernel/osrelease") ?? "";
-  if (!/microsoft/i.test(release2)) return { platform: platform2, wsl: "none", automountRoot: "/mnt/" };
-  const wsl = /WSL2|microsoft-standard/i.test(release2) ? "wsl2" : "wsl1";
+  const signs = /microsoft/i.test(release2) || read3("/proc/sys/fs/binfmt_misc/WSLInterop") !== void 0 || read3("/proc/sys/fs/binfmt_misc/WSLInterop-late") !== void 0 || (env.WSL_DISTRO_NAME ?? "") !== "" || exists4("/run/WSL");
+  if (!signs) return { platform: platform2, wsl: "none", automountRoot: "/mnt/" };
+  const wsl = /WSL2|microsoft-standard/i.test(release2) ? "wsl2" : /microsoft/i.test(release2) ? "wsl1" : "unknown";
   const entry = read3("/proc/sys/fs/binfmt_misc/WSLInterop") ?? read3("/proc/sys/fs/binfmt_misc/WSLInterop-late");
   const status = read3("/proc/sys/fs/binfmt_misc/status");
   let interop;
@@ -43968,7 +44019,8 @@ function detectPlatform(platform2 = process.platform, read3 = readText) {
     platform: platform2,
     wsl,
     ...interop === void 0 ? {} : { interop },
-    automountRoot: automountRoot(read3("/etc/wsl.conf"))
+    automountRoot: automountRoot(read3("/etc/wsl.conf")),
+    windowsMounts: windowsMountsOf(read3("/proc/self/mountinfo"))
   };
 }
 function sandboxProblem(p) {
@@ -43977,6 +44029,9 @@ function sandboxProblem(p) {
   }
   if (p.platform !== "linux" && p.platform !== "darwin") {
     return `${p.platform} has no sandbox for crew commands; a worker runs on macOS, Linux or WSL2`;
+  }
+  if (p.wsl === "unknown") {
+    return "this looks like WSL, but its version cannot be told; a worker runs only in WSL2 with interop off";
   }
   if (p.wsl === "wsl1") {
     return "WSL1 has no sandbox for crew commands; convert the distribution to WSL2 (wsl --set-version <distro> 2)";
@@ -44000,7 +44055,14 @@ function localName(host) {
   if (!h2.replace(/^\*\./, "").includes(".")) return true;
   return /\.(local|lan|internal|intranet|home\.arpa|localdomain)$/.test(h2);
 }
-var ipLiteral = (host) => /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || /^\[[0-9A-Fa-f:.]+\]$/.test(host);
+function ipLiteral(host) {
+  if (/^\[[0-9A-Fa-f:.]+\]$/.test(host) || host.includes(":") && /^[0-9A-Fa-f:.]+$/.test(host)) {
+    return true;
+  }
+  const parts = host.split(".");
+  if (parts.length < 1 || parts.length > 4) return false;
+  return parts.every((p) => /^(0[xX][0-9A-Fa-f]+|0[0-7]*|[1-9]\d*)$/.test(p));
+}
 function hostPort(entry) {
   const v6 = /^(\[[^\]]+\])(?::(\d+))?$/.exec(entry);
   if (v6) return { host: v6[1], ...v6[2] ? { port: Number(v6[2]) } : {} };
@@ -44013,6 +44075,7 @@ function enforceDeny(o2) {
   const key = (p) => pathKey(p, o2.platform.platform);
   const wsl = o2.platform.wsl === "wsl2";
   const root = o2.platform.automountRoot;
+  const explicit = [];
   for (const entry of o2.deny.paths) {
     const drive = WINDOWS_DRIVE.exec(entry);
     let target;
@@ -44045,6 +44108,7 @@ function enforceDeny(o2) {
       }
     }
     if (target === "/") return { refused: `deny path ${entry} denies everything` };
+    explicit.push(target);
     for (const spelling of [target, realOr2(target)]) {
       const k = key(spelling);
       const hit = o2.keep.find((p) => within(key(p), k) || within(k, key(p)));
@@ -44055,6 +44119,43 @@ function enforceDeny(o2) {
       }
       if (!paths.includes(spelling)) paths.push(spelling);
     }
+  }
+  const allowRead = [];
+  if (wsl) {
+    const defaults = [root.replace(/\/+$/, ""), ...o2.platform.windowsMounts ?? []];
+    for (const d of defaults) {
+      if (d === "" || d === "/") continue;
+      const hit = o2.keep.find((p) => within(key(p), key(d)));
+      if (hit !== void 0) {
+        return {
+          refused: `${hit} lies on a Windows file system (${d}); keep the worker's checkout, state and toolchains in the Linux file system`
+        };
+      }
+      if (!paths.includes(d)) paths.push(d);
+    }
+    for (const entry of o2.allowRead ?? []) {
+      const drive = WINDOWS_DRIVE.exec(entry);
+      const target = drive ? `${root}${drive[1].toLowerCase()}/${entry.slice(3).replace(/\\/g, "/")}`.replace(
+        /\/+$/,
+        ""
+      ) : posix.normalize(entry).replace(/\/+$/, "");
+      if (!isAbsolute7(target) || !defaults.some((d) => within(target, d))) {
+        return {
+          refused: `allow_read ${entry} does not lie on a Windows file system of this machine`
+        };
+      }
+      const denied = explicit.find((d) => within(target, d) || within(d, target));
+      if (denied !== void 0) {
+        return {
+          refused: `allow_read ${entry} lies inside the denied ${denied}; the deny list wins`
+        };
+      }
+      if (!allowRead.includes(target)) allowRead.push(target);
+    }
+  } else if ((o2.allowRead ?? []).length > 0) {
+    return {
+      refused: "allow_read opens places on Windows file systems and only holds inside WSL2"
+    };
   }
   const ports = [...new Set(o2.deny.ports)].sort((a2, b) => a2 - b);
   if (ports.length > 0) {
@@ -44070,7 +44171,7 @@ function enforceDeny(o2) {
       }
     }
   }
-  return { paths, ports, notes };
+  return { paths, ports, allowRead, notes };
 }
 function mergeDeny(...lists) {
   const paths = [];
@@ -44086,10 +44187,11 @@ function mergeDeny(...lists) {
 var WORKER_FILE = "worker.json";
 var WORKER_LOCK = "worker.lock";
 var WORKER_LOCK_STALE_MS = 30 * 6e4;
+var MAX_OWN_BEATS = 20;
 function readWorkerState(stateRoot, label) {
   const file3 = join42(stateRoot, WORKER_FILE);
   assertStatePath(stateRoot, file3);
-  if (!existsSync12(file3)) return { label };
+  if (!existsSync13(file3)) return { label };
   if (!lstatSync34(file3).isFile()) throw new Error(`${file3} is not a plain file`);
   let raw;
   try {
@@ -44136,17 +44238,40 @@ async function mainConfig(c3) {
   } catch {
     throw new Error("cannot fetch origin main in the worker checkout");
   }
-  const text = await c3.ports.git.run(c3.project, [
-    "--no-replace-objects",
-    "show",
-    "refs/remotes/origin/main:.studio/studio.yaml"
-  ]);
-  return parseConfig(text, "origin/main:.studio/studio.yaml");
+  const g3 = (args) => c3.ports.git.run(c3.project, ["--no-replace-objects", ...args]);
+  const sha = (await g3(["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"])).trim();
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error("origin/main is not a commit SHA");
+  const text = await g3(["show", `${sha}:.studio/studio.yaml`]);
+  return { config: parseConfig(text, `origin/main:.studio/studio.yaml`), sha };
+}
+var CONTENT_PATH = /^\.studio\/(roles|solutions)\/[A-Za-z0-9._-]{1,100}\.md$/;
+async function pinnedContent(c3, stateRoot, sha) {
+  const base = join42(stateRoot, "pinned");
+  const dir = join42(base, sha);
+  if (existsSync13(join42(dir, ".complete"))) return dir;
+  ensureStateDir(stateRoot, base);
+  for (const old of readdirSync12(base)) removeStateEntry(stateRoot, join42(base, old));
+  const g3 = (args) => c3.ports.git.run(c3.project, ["--no-replace-objects", ...args]);
+  const tree = await g3(["ls-tree", "-r", sha, "--", ".studio/roles", ".studio/solutions"]);
+  ensureStateDir(stateRoot, dir);
+  let n2 = 0;
+  for (const line4 of tree.split("\n")) {
+    const m = /^100644 blob ([0-9a-f]{40})\t(.+)$/.exec(line4);
+    if (!m || !CONTENT_PATH.test(m[2]) || n2++ >= 500) continue;
+    const text = await g3(["cat-file", "blob", m[1]]);
+    const file3 = join42(dir, m[2]);
+    ensureStateDir(stateRoot, dirname12(file3));
+    writeStateFile(stateRoot, file3, `${text}
+`);
+  }
+  writeStateFile(stateRoot, join42(dir, ".complete"), `${sha}
+`);
+  return dir;
 }
 function crewConfigDir2(owner) {
   const env = owner.env ?? process.env;
   const stored = crewClaudeDir(owner);
-  if (existsSync12(stored)) return stored;
+  if (existsSync13(stored)) return stored;
   return env.CLAUDE_CONFIG_DIR || join42(owner.homedir ?? homedir9(), ".claude");
 }
 function strictPinProblem(configDir, pins) {
@@ -44165,10 +44290,10 @@ function strictPinProblem(configDir, pins) {
   }
   return void 0;
 }
-var NO_CAPACITY = { ciBusy: 0, ciTotal: 0, hostLoad: 0, ok: true, hostOk: true };
 var opensPr = (item) => item.type !== "research" && item.type !== "review";
 async function readiness(c3, stateRoot) {
-  const problem = sandboxProblem(c3.platform);
+  const platform2 = c3.platform();
+  const problem = sandboxProblem(platform2);
   if (problem !== void 0) return { ok: false, kind: "refused", line: problem };
   const ownerConfig = loadOwnerConfig(c3.owner);
   const self = ownerConfig.workers?.self;
@@ -44179,20 +44304,22 @@ async function readiness(c3, stateRoot) {
       line: "no workers.self in the owner config: name the lead whose offers this machine takes (workers: { self: { lead: <login> } })"
     };
   }
-  const config2 = await mainConfig(c3);
-  const login = await c3.hub.login();
-  if (login.toLowerCase() === self.lead.toLowerCase()) {
+  const { config: config2, sha } = await mainConfig(c3);
+  const me = await c3.hub.user();
+  if (me.login.toLowerCase() === self.lead.toLowerCase()) {
     return {
       ok: false,
       kind: "refused",
       line: "this machine's GitHub token is the lead's own identity; a worker needs a token of its own, so its claims and pull requests can be told apart"
     };
   }
+  const stateBase = dirname12(stateRoot);
   const deny = enforceDeny({
     deny: mergeDeny(config2.workers?.[c3.label]?.deny, self.deny),
-    platform: c3.platform,
+    platform: platform2,
     networkAllow: config2.sandbox.networkAllow,
-    keep: [c3.project, stateRoot, ...ownerConfig.crewToolchainPaths]
+    keep: [c3.project, stateRoot, stateBase, ...ownerConfig.crewToolchainPaths],
+    allowRead: self.allowRead
   });
   if ("refused" in deny) return { ok: false, kind: "refused", line: deny.refused };
   const pins = strictPinProblem(
@@ -44200,12 +44327,27 @@ async function readiness(c3, stateRoot) {
     pinnedPlugins(config2.plugins, ownerConfig.allowedPlugins)
   );
   if (pins !== void 0) return { ok: false, kind: "refused", line: pins };
-  const block = blockHold(ownerStateRootFor(c3.owner));
+  const ownerRoot = ownerStateRootFor(c3.owner);
+  const block = blockHold(ownerRoot);
   if (block !== void 0) return { ok: false, kind: "held", line: block };
+  const limited = await limitHold(ownerRoot, ownerConfig, c3.ports, c3.owner);
+  if (limited !== void 0) return { ok: false, kind: "held", line: limited };
+  const slots = await credentialSlots({ ownerRoot, ownerConfig, ports: c3.ports, owner: c3.owner });
+  if (slots.hold !== void 0) return { ok: false, kind: "held", line: slots.hold };
+  if (slots.slots <= 0) {
+    return { ok: false, kind: "held", line: "credential limit: no label of this machine has room" };
+  }
+  if (existsSync13(ownerRoot) && inspectStateLock(ownerRoot, LAUNCH_LOCK, {
+    now: c3.ports.clock.now(),
+    heartbeatStaleMs: LAUNCH_LOCK_STALE_MS
+  }).state === "held") {
+    return { ok: false, kind: "held", line: "another launch is in progress on this machine" };
+  }
   if (readPause(stateRoot).paused) {
     return { ok: false, kind: "held", line: "paused on this machine: nothing is claimed" };
   }
-  return { ok: true, config: config2, deny, login, leaseMinutes: self.leaseMinutes };
+  const contentDir = await pinnedContent(c3, stateRoot, sha);
+  return { ok: true, config: config2, contentDir, deny, me, leaseMinutes: self.leaseMinutes };
 }
 async function workerStep(c3) {
   const stateRoot = stateRootFor(c3.project, c3.owner);
@@ -44218,11 +44360,11 @@ async function workerStep(c3) {
   if (!lock) return { kind: "held", line: "another worker process runs for this checkout" };
   try {
     const state = readWorkerState(stateRoot, c3.label);
-    const ready = await readiness(c3, stateRoot);
     if (state.current !== void 0) {
-      const repo = ready.ok ? ready.config.primaryRepo : await primaryRepoOf(c3);
+      const repo = state.current.primaryRepo ?? (await mainConfig(c3)).config.primaryRepo;
       return await followCurrent(c3, stateRoot, state, state.current, repo);
     }
+    const ready = await readiness(c3, stateRoot);
     if (!ready.ok) return { kind: ready.kind, line: ready.line };
     const notes = ready.deny.notes;
     const r = await claimNext(c3, stateRoot, state, ready);
@@ -44231,11 +44373,17 @@ async function workerStep(c3) {
     lock.release();
   }
 }
-async function primaryRepoOf(c3) {
-  return (await mainConfig(c3)).primaryRepo;
+async function giveUp(c3, stateRoot, repo, cur) {
+  try {
+    const tip = await c3.hub.readClaim(repo, cur.item.id);
+    if (tip?.sha === cur.claimSha) await c3.hub.deleteClaim(repo, cur.item.id);
+  } catch (e) {
+    c3.log(`${cur.item.id}: could not remove its own claim: ${e.message}`);
+  }
+  saveWorkerState(stateRoot, { label: c3.label });
 }
 async function claimNext(c3, stateRoot, state, ready) {
-  const { config: config2, login } = ready;
+  const { config: config2, me } = ready;
   const repo = config2.primaryRepo;
   const lead = loadOwnerConfig(c3.owner).workers?.self?.lead;
   const now = c3.ports.clock.now();
@@ -44246,11 +44394,7 @@ async function claimNext(c3, stateRoot, state, ready) {
     seen[id] = { sha, at: at2 };
     return at2;
   };
-  const keepSeen = () => saveWorkerState(stateRoot, {
-    label: c3.label,
-    ...state.current === void 0 ? {} : { current: state.current },
-    seen
-  });
+  const keepSeen = () => saveWorkerState(stateRoot, { label: c3.label, seen });
   for (const issue2 of await c3.hub.listOffers(repo)) {
     if (issue2.author !== lead) continue;
     if (issue2.edited && issue2.editor !== lead) {
@@ -44277,7 +44421,7 @@ async function claimNext(c3, stateRoot, state, ready) {
       studioClaim: 1,
       item: item.id,
       label: c3.label,
-      worker: login,
+      worker: me.login,
       offer: issue2.number,
       attempt,
       state: "claimed",
@@ -44293,52 +44437,45 @@ async function claimNext(c3, stateRoot, state, ready) {
       claimSha: wrote.sha,
       attempt,
       leaseMinutes: ready.leaseMinutes,
-      worker: login,
-      lastBeat: c3.ports.clock.now().toISOString(),
-      claimedAt: c3.ports.clock.now().toISOString(),
+      worker: me.login,
+      lastBeat: now.toISOString(),
+      claimedAt: now.toISOString(),
       launched: false,
-      nonce: offer.nonce
+      nonce: offer.nonce,
+      primaryRepo: repo
     };
-    saveWorkerState(stateRoot, { ...state, current });
+    saveWorkerState(stateRoot, { label: c3.label, current });
+    const fresh = await c3.hub.offer(repo, issue2.number);
+    if (fresh === void 0 || !fresh.open) {
+      await giveUp(c3, stateRoot, repo, current);
+      return { kind: "idle", line: `${item.id}: the offer was closed as it was claimed; let go` };
+    }
     try {
       await c3.hub.commentOffer(repo, issue2.number, claimComment(wrote.sha, offer.nonce));
     } catch (e) {
       c3.log(`${item.id}: the claim comment failed: ${e.message}`);
-      await release(
-        c3,
-        stateRoot,
-        { label: c3.label },
-        current,
-        repo,
-        "the worker could not post its claim comment"
-      );
-      return {
-        kind: "released",
-        item: item.id,
-        line: `${item.id}: the claim comment failed; released`
-      };
+      await giveUp(c3, stateRoot, repo, current);
+      return { kind: "held", item: item.id, line: `${item.id}: the claim comment failed; let go` };
     }
     const from = await c3.hub.branchHead(item.repo, `studio/${item.id}`) === void 0 ? ITEM_BASE : `studio/${item.id}`;
     try {
       await launchCrew(c3.project, item, config2, c3.ports, c3.owner, {
         deny: ready.deny,
         from,
+        contentDir: ready.contentDir,
         ...c3.crewPushes ? {} : { noToken: true }
       });
     } catch (e) {
-      c3.log(`launch of ${item.id} refused: ${e.message}`);
-      await release(
-        c3,
-        stateRoot,
-        { label: c3.label },
-        current,
-        repo,
-        "the worker could not start a crew; the reason is in the worker output"
-      );
+      await giveUp(c3, stateRoot, repo, current);
+      const why = e.message;
+      if (e instanceof HeldError) {
+        return { kind: "held", item: item.id, line: `${item.id}: not now (${why}); let go` };
+      }
+      c3.log(`launch of ${item.id} refused: ${why}`);
       return {
-        kind: "released",
+        kind: "refused",
         item: item.id,
-        line: `${item.id}: the crew did not start; released`
+        line: `${item.id}: the crew could not start on this machine; let go, fix it and start the worker again`
       };
     }
     saveWorkerState(stateRoot, { label: c3.label, current: { ...current, launched: true } });
@@ -44408,10 +44545,32 @@ async function stopCrew(c3, stateRoot, id) {
   if (rec === void 0) return;
   if (await crewHold(rec, c3.ports) === "running") await c3.ports.claude.stop(rec.pid);
 }
-async function followCurrent(c3, stateRoot, state, cur, repo) {
-  const id = cur.item.id;
-  const read3 = await c3.hub.readClaim(repo, id);
-  if (read3 === void 0 || read3.sha !== cur.claimSha) {
+async function ownBeats(c3, repo, cur, tip) {
+  let at2 = tip;
+  for (let i2 = 0; i2 < MAX_OWN_BEATS && at2 !== void 0; i2++) {
+    if (at2.sha === cur.claimSha) return true;
+    const cl = parseClaim(at2.message);
+    if (cl === void 0 || cl.state !== "alive" || cl.worker !== cur.worker || cl.attempt !== cur.attempt || cl.offer !== cur.offer) {
+      return false;
+    }
+    const parent = at2.parents[0];
+    at2 = parent === void 0 ? void 0 : await c3.hub.claimCommit(repo, parent);
+  }
+  return false;
+}
+async function stillMine(c3, stateRoot, state, cur, repo) {
+  const read3 = await c3.hub.readClaim(repo, cur.item.id);
+  if (read3 === void 0) return void 0;
+  if (read3.sha === cur.claimSha) return cur;
+  if (!await ownBeats(c3, repo, cur, read3)) return void 0;
+  const adopted = { ...cur, claimSha: read3.sha };
+  saveWorkerState(stateRoot, { label: state.label, current: adopted });
+  return adopted;
+}
+async function followCurrent(c3, stateRoot, state, held2, repo) {
+  const id = held2.item.id;
+  const cur = await stillMine(c3, stateRoot, state, held2, repo);
+  if (cur === void 0) {
     await stopCrew(c3, stateRoot, id);
     saveWorkerState(stateRoot, { label: state.label });
     return {
@@ -44460,8 +44619,8 @@ async function followCurrent(c3, stateRoot, state, cur, repo) {
   }
   const launched = cur.launched || rec !== void 0 && Date.parse(rec.startedAt) >= Date.parse(cur.claimedAt ?? cur.lastBeat);
   if (!launched || rec === void 0) {
-    await release(c3, stateRoot, state, cur, repo, "the worker stopped before a crew ran");
-    return { kind: "released", item: id, line: `${id}: no crew ran for the claim; released` };
+    await giveUp(c3, stateRoot, repo, cur);
+    return { kind: "held", item: id, line: `${id}: no crew ran for the claim; let go` };
   }
   return finish(c3, stateRoot, state, cur, repo, rec);
 }
@@ -44491,10 +44650,18 @@ async function finish(c3, stateRoot, state, cur, repo, rec) {
   }
   const known = [
     c3.token,
+    ...c3.secrets ?? [],
     ...c3.owner.env?.CLAUDE_CODE_OAUTH_TOKEN ? [c3.owner.env.CLAUDE_CODE_OAUTH_TOKEN] : []
   ];
   if (looksSecret(text, known)) {
     return releaseWith("the report looks like it holds a credential; it stays on the worker");
+  }
+  if ((await c3.hub.readClaim(repo, id))?.sha !== cur.claimSha) {
+    saveWorkerState(stateRoot, { label: state.label });
+    return { kind: "lost", item: id, line: `${id}: the claim moved before the report went out` };
+  }
+  if (!(await c3.hub.offer(repo, cur.offer))?.open) {
+    return releaseWith("the offer was withdrawn");
   }
   let pr;
   if (report.status === "done" && opensPr(cur.item)) {
@@ -44514,19 +44681,9 @@ async function finish(c3, stateRoot, state, cur, repo, rec) {
       }
     }
     try {
-      const opened = await openCrewPr(
-        c3.ports,
-        cur.item,
-        report.prTitle ?? `${id}: ${cur.item.title}`,
-        report.body,
-        report.notRunHere,
-        c3.token,
-        async () => ({ ok: true, capacity: NO_CAPACITY }),
-        () => {
-        }
-      );
-      if (!("pr" in opened)) return releaseWith("the pull request was not opened");
-      pr = opened.pr;
+      const opened = await openPullRequest(c3, cur.item, report);
+      if (typeof opened === "string") return releaseWith(opened);
+      pr = opened;
     } catch (e) {
       c3.log(`${id}: ${e.message}`);
       return releaseWith("the pull request could not be opened");
@@ -44558,38 +44715,60 @@ async function finish(c3, stateRoot, state, cur, repo, rec) {
     line: `${id}: report ${report.status} handed back${pr === void 0 ? "" : ` with pull request #${pr}`}`
   };
 }
+async function openPullRequest(c3, item, report) {
+  const me = await c3.hub.user();
+  const branch = `studio/${item.id}`;
+  const open4 = (await c3.hub.openPullRequests(item.repo, branch)).filter(
+    (p) => p.headRepo?.toLowerCase() === item.repo.toLowerCase() && p.branch === branch
+  );
+  if (open4.some((p) => p.authorId !== me.id)) {
+    return "a pull request of another account is open for the branch";
+  }
+  const body = crewPrText(item, report.body, report.notRunHere);
+  const mine = open4[0];
+  if (mine !== void 0) {
+    await c3.hub.editPullRequestBody(item.repo, mine.number, body);
+    return mine.number;
+  }
+  const title = crewPrTitle(report.prTitle ?? `${item.id}: ${item.title}`);
+  if (title === "") return "the pull request title is empty";
+  return c3.hub.createPullRequest(item.repo, { head: branch, base: ITEM_BASE, title, body });
+}
 async function pushForCrew(c3, stateRoot, item, head) {
   const id = item.id;
   const branch = `refs/heads/studio/${id}`;
-  const dir = join42(stateRoot, "push", id);
+  const parent = join42(stateRoot, "push");
+  const dir = join42(parent, id);
+  ensureStateDir(stateRoot, parent);
   removeStateEntry(stateRoot, dir);
-  ensureStateDir(stateRoot, dir);
-  const timeoutMs = 3e5;
-  const git = (args, env) => c3.ports.git.run(dir, args, { timeoutMs, ...env === void 0 ? {} : { env } });
+  const timeoutMs = 6e5;
+  const auth = [
+    "-c",
+    "credential.helper=",
+    "-c",
+    'credential.helper=!f() { echo username=x-access-token; echo "password=$STUDIO_PUSH_TOKEN"; }; f'
+  ];
+  const env = { STUDIO_PUSH_TOKEN: c3.token };
+  const url2 = c3.pushUrl?.(item.repo) ?? githubHttpsUrl(item.repo);
+  const git = (cwd, args, withToken = false) => c3.ports.git.run(cwd, args, { timeoutMs, ...withToken ? { env } : {} });
   try {
-    await git(["init", "--bare", "-q"]);
-    await git([
+    await git(parent, [...auth, "clone", "-q", "--bare", "--filter=blob:none", url2, dir], true);
+    await git(dir, [
       "-c",
       "protocol.file.allow=always",
       "fetch",
+      "-q",
       "--no-tags",
       "--no-write-fetch-head",
       join42(stateRoot, "clones", id),
       `+${branch}:${branch}`
     ]);
-    const got = (await git(["--no-replace-objects", "rev-parse", "--verify", `${branch}^{commit}`])).trim();
-    if (got.toLowerCase() !== head.toLowerCase())
+    const got = (await git(dir, ["--no-replace-objects", "rev-parse", "--verify", `${branch}^{commit}`])).trim();
+    if (got.toLowerCase() !== head.toLowerCase()) {
       return "the branch in the clone differs from the report";
-    const auth = [
-      "-c",
-      "credential.helper=",
-      "-c",
-      'credential.helper=!f() { echo username=x-access-token; echo "password=$STUDIO_PUSH_TOKEN"; }; f'
-    ];
-    const env = { STUDIO_PUSH_TOKEN: c3.token };
-    const url2 = c3.pushUrl?.(item.repo) ?? githubHttpsUrl(item.repo);
-    await git([...auth, "push", url2, `${branch}:${branch}`], env);
-    const remote = (await git([...auth, "ls-remote", url2, branch], env)).split(/\s/)[0] ?? "";
+    }
+    await git(dir, [...auth, "push", "-q", url2, `${branch}:${branch}`], true);
+    const remote = (await git(dir, [...auth, "ls-remote", url2, branch], true)).split(/\s/)[0] ?? "";
     if (remote.toLowerCase() !== head.toLowerCase()) {
       return "the pushed branch head differs from the report";
     }
@@ -44636,33 +44815,99 @@ var OFFER_LABEL = "studio-offer";
 var CLAIM_PREFIX = "refs/studio/claims/";
 var TIMEOUT_MS = 6e4;
 var MAX_FILE = 1024 * 1024;
+var MAX_COMMENT_PAGES = 100;
+var MAX_OFFER_PAGES = 20;
 function httpStatus(stderr) {
   const m = /\(HTTP (\d{3})\)/.exec(stderr) ?? /HTTP (\d{3})/.exec(stderr);
   return m ? Number(m[1]) : void 0;
 }
 var HubError = class extends Error {
   status;
-  constructor(what, code, status) {
+  constructor(what, status) {
     super(
-      `GitHub: ${what} failed (gh exit ${code}${status === void 0 ? "" : `, HTTP ${status}`})`
+      `GitHub: ${what} failed${status === void 0 || status === 0 ? "" : ` (HTTP ${status})`}`
     );
     this.name = "HubError";
     this.status = status;
   }
 };
+function ghTransport(gh, token) {
+  return {
+    async request(method, path10, body) {
+      const run2 = (extra) => gh.run(["api", "-X", method, path10, ...extra], {
+        timeoutMs: TIMEOUT_MS,
+        ...token === void 0 ? {} : { token }
+      });
+      let r;
+      if (body === void 0) r = await run2([]);
+      else {
+        const dir = mkdtempSync2(join43(tmpdir2(), "studio-hub-"));
+        try {
+          const file3 = join43(dir, "body.json");
+          writeFileSync13(file3, JSON.stringify(body), { mode: 384 });
+          r = await run2(["--input", file3]);
+        } finally {
+          rmSync9(dir, { recursive: true, force: true });
+        }
+      }
+      if (r.code !== 0) return { status: httpStatus(r.stderr) ?? 0, json: null };
+      try {
+        return { status: 200, json: r.stdout.trim() === "" ? null : JSON.parse(r.stdout) };
+      } catch {
+        return { status: 0, json: null };
+      }
+    }
+  };
+}
+function fetchTransport(token, doFetch = fetch) {
+  return {
+    async request(method, path10, body) {
+      try {
+        const r = await doFetch(`https://api.github.com/${path10}`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "studio-worker",
+            ...body === void 0 ? {} : { "Content-Type": "application/json" }
+          },
+          ...body === void 0 ? {} : { body: JSON.stringify(body) },
+          redirect: "error",
+          signal: AbortSignal.timeout(TIMEOUT_MS)
+        });
+        const text = await r.text();
+        let json2 = null;
+        try {
+          json2 = text.trim() === "" ? null : JSON.parse(text);
+        } catch {
+          json2 = null;
+        }
+        return { status: r.status, json: json2 };
+      } catch {
+        return { status: 0, json: null };
+      }
+    }
+  };
+}
 var REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 var ITEM_RE2 = /^[A-Z]+-\d+$/;
 var SHA_RE3 = /^[0-9a-f]{40,64}$/;
+var BRANCH_RE = /^studio\/[A-Z]+-\d+$/;
 function assertRepo(repo) {
   if (!REPO_RE.test(repo)) throw new Error(`invalid repository: ${JSON.stringify(repo)}`);
 }
 function assertItem(item) {
   if (!ITEM_RE2.test(item)) throw new Error(`invalid item id: ${JSON.stringify(item)}`);
 }
-var ISSUES_QUERY = `query($owner: String!, $name: String!, $label: String!) {
+function assertBranch(branch) {
+  if (!BRANCH_RE.test(branch)) throw new Error("invalid branch");
+}
+var ISSUES_QUERY = `query($owner: String!, $name: String!, $label: String!, $after: String) {
   repository(owner: $owner, name: $name) {
-    issues(first: 50, states: OPEN, labels: [$label], orderBy: {field: CREATED_AT, direction: ASC}) {
+    issues(first: 50, after: $after, states: OPEN, labels: [$label], orderBy: {field: CREATED_AT, direction: ASC}) {
       nodes { number title body state author { login } editor { login } lastEditedAt }
+      pageInfo { hasNextPage endCursor }
     }
   }
 }`;
@@ -44685,53 +44930,39 @@ function issueOf(n2) {
     open: n2.state === "OPEN"
   };
 }
-function ghHub(gh, token) {
-  const run2 = (args) => gh.run(args, { timeoutMs: TIMEOUT_MS, ...token === void 0 ? {} : { token } });
-  const api = async (what, method, path10, body) => {
-    const call = async (extra) => {
-      const r = await run2(["api", "-X", method, path10, ...extra]);
-      if (r.code !== 0) return { ok: false, status: httpStatus(r.stderr), code: r.code };
-      let json2 = null;
-      try {
-        json2 = r.stdout.trim() === "" ? null : JSON.parse(r.stdout);
-      } catch {
-        throw new HubError(`${what} (unreadable answer)`, 0, void 0);
-      }
-      return { ok: true, json: json2 };
-    };
-    if (body === void 0) return call([]);
-    const dir = mkdtempSync2(join43(tmpdir2(), "studio-hub-"));
-    try {
-      const file3 = join43(dir, "body.json");
-      writeFileSync13(file3, JSON.stringify(body), { mode: 384 });
-      return await call(["--input", file3]);
-    } finally {
-      rmSync9(dir, { recursive: true, force: true });
-    }
+function pullOf(j) {
+  if (!j || typeof j.number !== "number" || typeof j.user?.login !== "string" || typeof j.user.id !== "number" || typeof j.head?.ref !== "string" || typeof j.head.sha !== "string" || typeof j.base?.ref !== "string") {
+    return void 0;
+  }
+  const headRepo = j.head.repo?.full_name;
+  return {
+    number: j.number,
+    author: j.user.login,
+    authorId: j.user.id,
+    branch: j.head.ref,
+    head: j.head.sha,
+    base: j.base.ref,
+    ...typeof headRepo === "string" ? { headRepo } : {},
+    state: typeof j.state === "string" ? j.state.toUpperCase() : "UNKNOWN"
   };
+}
+function makeHub(t) {
   const must = async (what, method, path10, body) => {
-    const r = await api(what, method, path10, body);
-    if (!r.ok) throw new HubError(what, r.code, r.status);
+    const r = await t.request(method, path10, body);
+    if (r.status < 200 || r.status > 299) throw new HubError(what, r.status);
     return r.json;
   };
-  const graphql = async (what, query, vars) => {
-    const r = await run2(["api", "graphql", "-f", `query=${query}`, ...vars]);
-    if (r.code !== 0) throw new HubError(what, r.code, httpStatus(r.stderr));
-    try {
-      return JSON.parse(r.stdout);
-    } catch {
-      throw new HubError(`${what} (unreadable answer)`, 0, void 0);
-    }
+  const graphql = async (what, query, variables) => {
+    const j = await must(what, "POST", "graphql", { query, variables });
+    return j ?? {};
   };
   const commitOf = async (sha, repo) => {
-    const r = await api("reading a claim commit", "GET", `repos/${repo}/git/commits/${sha}`);
-    if (!r.ok) {
-      if (r.status === 404) return void 0;
-      throw new HubError("reading a claim commit", r.code, r.status);
-    }
+    const r = await t.request("GET", `repos/${repo}/git/commits/${sha}`);
+    if (r.status === 404) return void 0;
+    if (r.status < 200 || r.status > 299) throw new HubError("reading a claim commit", r.status);
     const c3 = r.json;
     if (typeof c3?.message !== "string" || typeof c3.committer?.date !== "string") {
-      throw new HubError("reading a claim commit (incomplete)", 0, void 0);
+      throw new HubError("reading a claim commit (incomplete)", void 0);
     }
     return {
       sha,
@@ -44745,12 +44976,17 @@ function ghHub(gh, token) {
     const [owner, name] = repo.split("/");
     return { owner, name };
   };
+  const user = async () => {
+    const j = await must("reading the account", "GET", "user");
+    if (typeof j?.login !== "string" || typeof j.id !== "number") {
+      throw new HubError("reading the account", void 0);
+    }
+    return { login: j.login, id: j.id };
+  };
   return {
+    user,
     async login() {
-      const j = await must("reading the login", "GET", "user");
-      const login = j?.login;
-      if (typeof login !== "string") throw new HubError("reading the login", 0, void 0);
-      return login;
+      return (await user()).login;
     },
     async openOffer(repo, title, body, labels) {
       assertRepo(repo);
@@ -44761,8 +44997,11 @@ function ghHub(gh, token) {
       });
       const n2 = j?.number;
       if (typeof n2 !== "number" || !Number.isInteger(n2) || n2 <= 0) {
-        throw new HubError("opening an offer (no issue number)", 0, void 0);
+        throw new HubError("opening an offer (no issue number)", void 0);
       }
+      await must("locking an offer", "PUT", `repos/${repo}/issues/${n2}/lock`, {
+        lock_reason: "resolved"
+      });
       return n2;
     },
     async closeOffer(repo, n2, comment) {
@@ -44774,49 +45013,43 @@ function ghHub(gh, token) {
     },
     async listOffers(repo) {
       const { owner, name } = split2(repo);
-      const j = await graphql("listing offers", ISSUES_QUERY, [
-        "-f",
-        `owner=${owner}`,
-        "-f",
-        `name=${name}`,
-        "-f",
-        `label=${OFFER_LABEL}`
-      ]);
-      return (j.data?.repository?.issues?.nodes ?? []).flatMap((n2) => {
-        const o2 = issueOf(n2);
-        return o2 === void 0 ? [] : [o2];
-      });
+      const out = [];
+      let after2 = null;
+      for (let page = 0; page < MAX_OFFER_PAGES; page++) {
+        const j = await graphql("listing offers", ISSUES_QUERY, {
+          owner,
+          name,
+          label: OFFER_LABEL,
+          after: after2
+        });
+        const issues = j.data?.repository?.issues;
+        for (const n2 of issues?.nodes ?? []) {
+          const o2 = issueOf(n2);
+          if (o2 !== void 0) out.push(o2);
+        }
+        const next = issues?.pageInfo;
+        if (next?.hasNextPage !== true || typeof next.endCursor !== "string") break;
+        after2 = next.endCursor;
+      }
+      return out;
     },
     async offer(repo, n2) {
       const { owner, name } = split2(repo);
-      const j = await graphql("reading an offer", ISSUE_QUERY, [
-        "-f",
-        `owner=${owner}`,
-        "-f",
-        `name=${name}`,
-        "-F",
-        `number=${n2}`
-      ]);
+      const j = await graphql("reading an offer", ISSUE_QUERY, { owner, name, number: n2 });
       return issueOf(j.data?.repository?.issue);
     },
     async readClaim(repo, item) {
       assertRepo(repo);
       assertItem(item);
-      const ref = await api(
-        "reading a claim",
-        "GET",
-        `repos/${repo}/git/ref/studio/claims/${item}`
-      );
-      if (!ref.ok) {
-        if (ref.status === 404) return void 0;
-        throw new HubError("reading a claim", ref.code, ref.status);
-      }
+      const ref = await t.request("GET", `repos/${repo}/git/ref/studio/claims/${item}`);
+      if (ref.status === 404) return void 0;
+      if (ref.status < 200 || ref.status > 299) throw new HubError("reading a claim", ref.status);
       const sha = ref.json?.object?.sha;
       if (typeof sha !== "string" || !SHA_RE3.test(sha)) {
-        throw new HubError("reading a claim (no commit)", 0, void 0);
+        throw new HubError("reading a claim (no commit)", void 0);
       }
       const c3 = await commitOf(sha, repo);
-      if (c3 === void 0) throw new HubError("reading a claim commit (missing)", 0, 404);
+      if (c3 === void 0) throw new HubError("reading a claim commit (missing)", 404);
       return c3;
     },
     async claimCommit(repo, sha) {
@@ -44830,8 +45063,8 @@ function ghHub(gh, token) {
     },
     async offerComments(repo, n2) {
       assertRepo(repo);
-      const out = [];
-      for (let page = 1; page <= 30; page++) {
+      const comments = [];
+      for (let page = 1; page <= MAX_COMMENT_PAGES; page++) {
         const j = await must(
           "reading offer comments",
           "GET",
@@ -44840,19 +45073,21 @@ function ghHub(gh, token) {
         const list2 = Array.isArray(j) ? j : [];
         for (const raw of list2) {
           const c3 = raw;
-          if (typeof c3.id === "number" && typeof c3.user?.login === "string" && typeof c3.body === "string" && typeof c3.created_at === "string" && typeof c3.updated_at === "string") {
-            out.push({
+          if (typeof c3.id === "number" && typeof c3.user?.login === "string" && typeof c3.user.id === "number" && typeof c3.body === "string" && typeof c3.created_at === "string" && typeof c3.updated_at === "string") {
+            comments.push({
               id: c3.id,
               login: c3.user.login,
+              userId: c3.user.id,
+              association: typeof c3.author_association === "string" ? c3.author_association : "NONE",
               body: c3.body,
               createdAt: c3.created_at,
               updatedAt: c3.updated_at
             });
           }
         }
-        if (list2.length < 100) break;
+        if (list2.length < 100) return { comments, complete: true };
       }
-      return out;
+      return { comments, complete: false };
     },
     async writeClaim(repo, item, o2) {
       assertRepo(repo);
@@ -44866,7 +45101,7 @@ function ghHub(gh, token) {
         }))
       });
       const treeSha = tree?.sha;
-      if (typeof treeSha !== "string") throw new HubError("writing a claim tree", 0, void 0);
+      if (typeof treeSha !== "string") throw new HubError("writing a claim tree", void 0);
       const commit = await must("writing a claim commit", "POST", `repos/${repo}/git/commits`, {
         message: o2.message,
         tree: treeSha,
@@ -44874,31 +45109,25 @@ function ghHub(gh, token) {
       });
       const sha = commit?.sha;
       if (typeof sha !== "string" || !SHA_RE3.test(sha)) {
-        throw new HubError("writing a claim commit", 0, void 0);
+        throw new HubError("writing a claim commit", void 0);
       }
-      const moved = o2.parent === void 0 ? await api("creating a claim", "POST", `repos/${repo}/git/refs`, {
+      const moved = o2.parent === void 0 ? await t.request("POST", `repos/${repo}/git/refs`, {
         ref: `${CLAIM_PREFIX}${item}`,
         sha
-      }) : await api("moving a claim", "PATCH", `repos/${repo}/git/refs/studio/claims/${item}`, {
+      }) : await t.request("PATCH", `repos/${repo}/git/refs/studio/claims/${item}`, {
         sha,
         force: false
       });
-      if (moved.ok) return { ok: true, sha };
+      if (moved.status >= 200 && moved.status <= 299) return { ok: true, sha };
       if (moved.status === 422) return { ok: false };
-      throw new HubError("writing a claim", moved.code, moved.status);
+      throw new HubError("writing a claim", moved.status);
     },
     async claimFile(repo, sha, path10) {
       assertRepo(repo);
       if (!SHA_RE3.test(sha) || !/^[a-z.-]{1,40}$/.test(path10)) throw new Error("invalid claim file");
-      const r = await api(
-        "reading a claim file",
-        "GET",
-        `repos/${repo}/contents/${path10}?ref=${sha}`
-      );
-      if (!r.ok) {
-        if (r.status === 404) return void 0;
-        throw new HubError("reading a claim file", r.code, r.status);
-      }
+      const r = await t.request("GET", `repos/${repo}/contents/${path10}?ref=${sha}`);
+      if (r.status === 404) return void 0;
+      if (r.status < 200 || r.status > 299) throw new HubError("reading a claim file", r.status);
       const j = r.json;
       if (typeof j?.content !== "string" || j.encoding !== "base64") return void 0;
       if (typeof j.size === "number" && j.size > MAX_FILE) return void 0;
@@ -44907,63 +45136,67 @@ function ghHub(gh, token) {
     async deleteClaim(repo, item) {
       assertRepo(repo);
       assertItem(item);
-      const r = await api(
-        "removing a claim",
-        "DELETE",
-        `repos/${repo}/git/refs/studio/claims/${item}`
-      );
-      if (!r.ok && r.status !== 404 && r.status !== 422) {
-        throw new HubError("removing a claim", r.code, r.status);
+      const r = await t.request("DELETE", `repos/${repo}/git/refs/studio/claims/${item}`);
+      if ((r.status < 200 || r.status > 299) && r.status !== 404 && r.status !== 422) {
+        throw new HubError("removing a claim", r.status);
       }
     },
     async branchHead(repo, branch) {
       assertRepo(repo);
-      if (!/^studio\/[A-Z]+-\d+$/.test(branch)) throw new Error("invalid branch");
-      const r = await api("reading a branch", "GET", `repos/${repo}/git/ref/heads/${branch}`);
-      if (!r.ok) {
-        if (r.status === 404) return void 0;
-        throw new HubError("reading a branch", r.code, r.status);
-      }
+      assertBranch(branch);
+      const r = await t.request("GET", `repos/${repo}/git/ref/heads/${branch}`);
+      if (r.status === 404) return void 0;
+      if (r.status < 200 || r.status > 299) throw new HubError("reading a branch", r.status);
       const sha = r.json?.object?.sha;
       return typeof sha === "string" && SHA_RE3.test(sha) ? sha : void 0;
     },
     async pullRequest(repo, pr) {
       assertRepo(repo);
-      const r = await run2([
-        "pr",
-        "view",
-        String(pr),
-        "--repo",
-        repo,
-        "--json",
-        "number,author,headRefName,headRefOid,baseRefName,isCrossRepository,state"
-      ]);
-      if (r.code !== 0) return void 0;
-      try {
-        const j = JSON.parse(r.stdout);
-        if (typeof j.number !== "number" || typeof j.author?.login !== "string" || typeof j.headRefName !== "string" || typeof j.headRefOid !== "string" || typeof j.baseRefName !== "string") {
-          return void 0;
-        }
-        return {
-          number: j.number,
-          author: j.author.login,
-          branch: j.headRefName,
-          head: j.headRefOid,
-          base: j.baseRefName,
-          crossRepository: j.isCrossRepository !== false,
-          state: typeof j.state === "string" ? j.state : "UNKNOWN"
-        };
-      } catch {
-        return void 0;
-      }
+      const r = await t.request("GET", `repos/${repo}/pulls/${pr}`);
+      if (r.status < 200 || r.status > 299) return void 0;
+      return pullOf(r.json);
+    },
+    async openPullRequests(repo, branch) {
+      const { owner } = split2(repo);
+      assertBranch(branch);
+      const j = await must(
+        "listing pull requests",
+        "GET",
+        `repos/${repo}/pulls?state=open&per_page=100&head=${encodeURIComponent(`${owner}:${branch}`)}`
+      );
+      return (Array.isArray(j) ? j : []).flatMap((p) => {
+        const f = pullOf(p);
+        return f === void 0 ? [] : [f];
+      });
+    },
+    async createPullRequest(repo, o2) {
+      assertRepo(repo);
+      assertBranch(o2.head);
+      const j = await must("opening a pull request", "POST", `repos/${repo}/pulls`, o2);
+      const n2 = j?.number;
+      if (typeof n2 !== "number") throw new HubError("opening a pull request", void 0);
+      return n2;
+    },
+    async editPullRequestBody(repo, pr, body) {
+      assertRepo(repo);
+      await must("renewing a pull request", "PATCH", `repos/${repo}/pulls/${pr}`, { body });
     }
   };
 }
+var ghHub = (gh, token) => makeHub(ghTransport(gh, token));
+var fetchHub = (token, doFetch) => makeHub(fetchTransport(token, doFetch));
 
 // src/worker-lead.ts
 import { randomBytes as randomBytes9 } from "node:crypto";
 var WORKER_WAIT2 = "worker: ";
 var workerCrewName = (label) => `worker:${label}`;
+var COMMENTERS = ["OWNER", "MEMBER", "COLLABORATOR"];
+var shown = (login) => login.replace(/[^A-Za-z0-9-[\]]/g, "?");
+function acceptProblem(accepted, crew, label) {
+  if (crew === void 0) return void 0;
+  const same2 = accepted.find((a2) => a2.id === crew.id);
+  return same2 === void 0 ? void 0 : `workers.accept for ${label} lists ${shown(same2.login)}, the account of the lead's crew token: a crew could claim as that worker; give the worker an account of its own`;
+}
 async function openOffer(o2) {
   const label = o2.item.runsOn;
   if (label === void 0) throw new Error(`${o2.item.id} names no runs_on label`);
@@ -44986,13 +45219,15 @@ async function proveClaim(o2) {
   const warnings = [];
   const nonce = record2.nonce;
   if (nonce === void 0) return { ok: false, line: "its offer has no nonce on record", warnings };
-  if (!o2.accepted.some((a2) => lower(a2) === lower(claim2.worker))) {
+  const worker = o2.accepted.find((a2) => lower(a2.login) === lower(claim2.worker));
+  if (worker === void 0) {
     return {
       ok: false,
       line: `claimed by ${claim2.worker}, who is not accepted for the label ${record2.label} (workers.accept in the owner config)`,
       warnings
     };
   }
+  const cache = record2.claim?.anchor !== void 0 && record2.claim.attempt === claim2.attempt ? { tip: record2.claim.sha, anchor: record2.claim.anchor } : void 0;
   let cur = o2.tip;
   let anchor2;
   for (let i2 = 0; i2 < MAX_CHAIN && cur !== void 0; i2++) {
@@ -45015,6 +45250,10 @@ async function proveClaim(o2) {
         warnings
       };
     }
+    if (cache !== void 0 && cur.sha !== o2.tip.sha && cur.sha === cache.tip) {
+      anchor2 = cache.anchor;
+      break;
+    }
     const parent = cur.parents[0];
     cur = parent === void 0 ? void 0 : await o2.hub.claimCommit(o2.repo, parent);
   }
@@ -45025,24 +45264,33 @@ async function proveClaim(o2) {
       warnings
     };
   }
-  const comments = (await o2.hub.offerComments(o2.repo, record2.offer)).flatMap((c3) => {
+  const read3 = await o2.hub.offerComments(o2.repo, record2.offer);
+  if (!read3.complete) {
+    return {
+      ok: false,
+      line: `#${record2.offer} has more comments than Studio reads; who claimed it cannot be told`,
+      warnings
+    };
+  }
+  const comments = read3.comments.flatMap((c3) => {
     const p = parseClaimComment(c3.body);
     return p === void 0 ? [] : [{ ...c3, ...p }];
   });
   comments.sort((a2, b) => Date.parse(a2.createdAt) - Date.parse(b.createdAt) || a2.id - b.id);
-  const accepted = o2.accepted.map(lower);
-  for (const c3 of comments) {
-    const who = c3.login.replace(/[^A-Za-z0-9-[\]]/g, "?");
-    if (c3.updatedAt !== c3.createdAt)
+  const ids = new Set(o2.accepted.map((a2) => a2.id));
+  const counted2 = comments.filter((c3) => {
+    const who = shown(c3.login);
+    if (c3.updatedAt !== c3.createdAt) {
       warnings.push(`claim comment ${c3.id} by ${who} was edited and does not count`);
-    else if (!accepted.includes(lower(c3.login)))
+    } else if (!COMMENTERS.includes(c3.association)) {
+      warnings.push(`claim comment ${c3.id} by ${who}, who has no write access, does not count`);
+    } else if (!ids.has(c3.userId)) {
       warnings.push(`claim comment ${c3.id} by ${who}, who is not accepted for ${record2.label}`);
-    else if (c3.nonce !== nonce)
+    } else if (c3.nonce !== nonce) {
       warnings.push(`claim comment ${c3.id} by ${who} names another offer`);
-  }
-  const counted2 = comments.filter(
-    (c3) => c3.updatedAt === c3.createdAt && c3.nonce === nonce && accepted.includes(lower(c3.login))
-  );
+    } else return true;
+    return false;
+  });
   const valid = counted2.filter((c3) => c3.sha === anchor2);
   const first = valid[0];
   if (first === void 0) {
@@ -45054,28 +45302,18 @@ async function proveClaim(o2) {
   }
   for (const later of valid.slice(1)) {
     warnings.push(
-      `claim comment ${later.id} by ${later.login.replace(/[^A-Za-z0-9-[\]]/g, "?")} names a commit already claimed`
+      `claim comment ${later.id} by ${shown(later.login)} names a commit already claimed`
     );
   }
-  if (lower(first.login) !== lower(claim2.worker)) {
+  if (first.userId !== worker.id) {
     return {
       ok: false,
-      line: `the claim names ${claim2.worker}, but ${first.login.replace(/[^A-Za-z0-9-[\]]/g, "?")} commented it first`,
-      warnings
-    };
-  }
-  if (!accepted.includes(lower(first.login))) {
-    return {
-      ok: false,
-      line: `claimed by ${claim2.worker}, who is not accepted for the label ${record2.label} (workers.accept in the owner config)`,
+      line: `the claim names ${claim2.worker}, but ${shown(first.login)} commented it first`,
       warnings
     };
   }
   if (o2.tip.sha !== anchor2 && claim2.state !== "alive") {
-    const announced = counted2.some(
-      (c3) => c3.sha === o2.tip.sha && lower(c3.login) === lower(first.login)
-    );
-    if (!announced) {
+    if (!counted2.some((c3) => c3.sha === o2.tip.sha && c3.userId === worker.id)) {
       return {
         ok: false,
         line: `its ${claim2.state} commit ${o2.tip.sha.slice(0, 12)} was not announced by ${claim2.worker}`,
@@ -45083,8 +45321,9 @@ async function proveClaim(o2) {
       };
     }
   }
-  return { ok: true, anchor: anchor2, warnings };
+  return { ok: true, anchor: anchor2, worker, warnings };
 }
+var acceptedFor = (ownerConfig, label) => ownerConfig.workers?.accept[label] ?? [];
 async function followClaim(o2) {
   const { item, record: record2 } = o2;
   const read3 = await o2.hub.readClaim(o2.repo, item.id);
@@ -45128,7 +45367,7 @@ async function followClaim(o2) {
     record: record2,
     tip: read3,
     claim: claim2,
-    accepted: o2.ownerConfig.workers?.accept[record2.label] ?? []
+    accepted: acceptedFor(o2.ownerConfig, record2.label)
   });
   if (!proof.ok) {
     return {
@@ -45144,10 +45383,11 @@ async function followClaim(o2) {
     attempt: claim2.attempt,
     state: claim2.state,
     at: at2,
+    anchor: proof.anchor,
     ...claim2.pr === void 0 ? {} : { pr: claim2.pr }
   };
   if (claim2.state === "done") {
-    return { follow: { kind: "done", claim: claim2, sha: read3.sha }, seen, warnings };
+    return { follow: { kind: "done", claim: claim2, sha: read3.sha, worker: proof.worker }, seen, warnings };
   }
   if (claim2.state === "released") {
     return {
@@ -45155,7 +45395,8 @@ async function followClaim(o2) {
         kind: "released",
         claim: claim2,
         sha: read3.sha,
-        reason: claim2.reason ?? "no reason given"
+        reason: claim2.reason ?? "no reason given",
+        worker: proof.worker
       },
       seen,
       warnings
@@ -45169,7 +45410,8 @@ async function followClaim(o2) {
           kind: "lead",
           line: `the claim of ${item.id} by ${claim2.worker} expired (no heartbeat for ${ago} min) after ${claim2.attempt} attempts; look at the worker, then studio stop ${item.id} --requeue or drop it`
         },
-        seen
+        seen,
+        warnings
       };
     }
     return {
@@ -45193,17 +45435,20 @@ async function followClaim(o2) {
   };
 }
 async function recordWorkerRun(o2) {
-  const usage = toRunUsage(o2.claim.usage);
-  if (usage === void 0) return;
+  const reported = toRunUsage(o2.claim.usage);
+  if (reported === void 0) return { ok: true };
   const key = `${o2.item}@${new Date(Date.parse(o2.at)).toISOString()}`;
-  const added = updateWorkers(o2.stateRoot, (s) => {
+  if ((readWorkers(o2.stateRoot).runs[o2.item] ?? []).some((r) => r.key === key)) return { ok: true };
+  const counted2 = o2.cap !== void 0 && reported.costUsd > o2.cap ? { ...reported, costUsd: o2.cap } : reported;
+  if (!await recordLedgerRun(o2.stateRoot, key, o2.item, counted2, o2.now, o2.timezone)) {
+    return { ok: false };
+  }
+  updateWorkers(o2.stateRoot, (s) => {
     const runs = s.runs[o2.item] ?? [];
-    if (runs.some((r) => r.key === key)) return false;
-    s.runs[o2.item] = [...runs, { key, worker: o2.claim.worker, usage }];
-    return true;
+    if (runs.some((r) => r.key === key)) return;
+    s.runs[o2.item] = [...runs, { key, worker: o2.claim.worker, usage: counted2 }];
   });
-  if (!added) return;
-  await recordLedgerRun(o2.stateRoot, key, o2.item, usage, o2.now, o2.timezone);
+  return counted2 === reported ? { ok: true } : { ok: true, clamped: { reported: reported.costUsd, counted: counted2.costUsd } };
 }
 async function closeOffer(o2) {
   const errors = [];
@@ -45505,6 +45750,14 @@ async function runCli(argv, deps) {
       return root;
     };
     const leadHub = () => ports.hub?.() ?? ghHub(ports.gh);
+    let crewUserRead;
+    const leadCrewUser = async (config2) => {
+      if (crewUserRead === void 0) {
+        const token = crewTokenValue(config2, owner);
+        crewUserRead = token === void 0 ? {} : { user: await (ports.hub?.(token) ?? ghHub(ports.gh, token)).user() };
+      }
+      return crewUserRead.user;
+    };
     let leadLogin;
     const leadLoginOf = async () => {
       leadLogin ??= await leadHub().login();
@@ -45555,11 +45808,11 @@ async function runCli(argv, deps) {
       }
     };
     const dailyCostHold = async (config2, ownerConfig) => {
-      const roots = ownerConfig.limits?.dailyCostUsd === void 0 ? [stateRoot()] : [.../* @__PURE__ */ new Set([stateRoot(), ...projectStateRoots(dirname12(ownerRoot()))])];
+      const roots = ownerConfig.limits?.dailyCostUsd === void 0 ? [stateRoot()] : [.../* @__PURE__ */ new Set([stateRoot(), ...projectStateRoots(dirname13(ownerRoot()))])];
       await recordAllEnded(roots, ownerConfig);
       return costHold({
         stateRoot: stateRoot(),
-        stateBase: dirname12(ownerRoot()),
+        stateBase: dirname13(ownerRoot()),
         config: config2,
         ownerConfig,
         now: ports.clock.now()
@@ -45568,7 +45821,7 @@ async function runCli(argv, deps) {
     const recordAllEnded = async (roots, ownerConfig) => {
       for (const root of roots) {
         try {
-          if (existsSync13(root)) {
+          if (existsSync14(root)) {
             await recordEndedRuns(root, ports, ownerConfig.crewLabelLimits.timezone);
           }
         } catch {
@@ -45782,7 +46035,7 @@ async function runCli(argv, deps) {
       const { config: config2 } = loadAll();
       refuseNativeQueue(config2);
       const root = await boundStateRoot();
-      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname12(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
+      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname13(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
       const blockedNow = queueHold();
       if (blockedNow !== void 0) throw new HeldError(blockedNow);
       let heldLine;
@@ -45872,11 +46125,17 @@ async function runCli(argv, deps) {
     const offerItem = async (config2, item) => {
       const label = item.runsOn;
       const root = await boundStateRoot();
-      if ((loadOwnerConfig(owner).workers?.accept[label] ?? []).length === 0) {
+      if (acceptedFor(loadOwnerConfig(owner), label).length === 0) {
         throw new HeldError(
           `${WORKER_WAIT2}no worker is accepted for the label ${label} (workers.accept in the owner config)`
         );
       }
+      const shared = acceptProblem(
+        acceptedFor(loadOwnerConfig(owner), label),
+        await leadCrewUser(config2),
+        label
+      );
+      if (shared !== void 0) throw new Error(shared);
       const now = ports.clock.now();
       const { offer, nonce } = await openOffer({
         hub: leadHub(),
@@ -45969,7 +46228,7 @@ async function runCli(argv, deps) {
         record: record2,
         tip: read3,
         claim: claim2,
-        accepted: loadOwnerConfig(owner).workers?.accept[record2.label] ?? []
+        accepted: acceptedFor(loadOwnerConfig(owner), record2.label)
       });
       if (!proof.ok) {
         throw new ReportError(`the claim of ${item.id} counts for nothing: ${proof.line}`);
@@ -45983,6 +46242,7 @@ async function runCli(argv, deps) {
       return {
         report: claim2.pr === void 0 ? parsed : { ...parsed, pr: claim2.pr },
         worker: claim2.worker,
+        workerId: proof.worker.id,
         sha: read3.sha
       };
     };
@@ -46000,7 +46260,7 @@ async function runCli(argv, deps) {
       if (item.runsOn !== void 0) {
         const got = await workerReport(item);
         report = got.report;
-        fromWorker = { worker: got.worker, sha: got.sha };
+        fromWorker = { worker: got.worker, workerId: got.workerId, sha: got.sha };
       } else {
         const record2 = readCrewRecords(stateRoot())[item.id];
         let notBefore;
@@ -46227,7 +46487,7 @@ async function runCli(argv, deps) {
         if (fromWorker !== void 0) {
           const facts = await leadHub().pullRequest(item.repo, report.pr);
           if (facts === void 0) throw new Error(`cannot read ${item.repo}#${report.pr}`);
-          if (facts.author.toLowerCase() !== fromWorker.worker.toLowerCase()) {
+          if (facts.authorId !== fromWorker.workerId || facts.headRepo?.toLowerCase() !== item.repo.toLowerCase()) {
             throw new ReportError(
               `PR ${report.pr} was opened by ${facts.author.replace(/[^A-Za-z0-9-[\]/]/g, "?")}, not by ${fromWorker.worker}, who claimed ${item.id}`
             );
@@ -46530,10 +46790,16 @@ async function runCli(argv, deps) {
         if (onWorkers.length === 0) return;
         const ownerConfig = loadOwnerConfig(owner);
         const records = readWorkers(root).items;
+        const crewUser = await leadCrewUser(config2);
         for (const item of onWorkers) {
           beat();
           try {
             const record2 = records[item.id];
+            const shared = record2 === void 0 ? void 0 : acceptProblem(acceptedFor(ownerConfig, record2.label), crewUser, record2.label);
+            if (shared !== void 0) {
+              lead(item.id, shared);
+              continue;
+            }
             if (record2 === void 0) {
               lead(
                 item.id,
@@ -46573,14 +46839,31 @@ async function runCli(argv, deps) {
               out.held.push({ item: item.id, reason: follow.line });
               continue;
             }
-            await recordWorkerRun({
+            const caps = [config2.limits?.dailyCostUsd, ownerConfig.limits?.dailyCostUsd].filter(
+              (c3) => c3 !== void 0
+            );
+            const counted2 = await recordWorkerRun({
               stateRoot: root,
               item: item.id,
               claim: follow.claim,
               at: seen?.at ?? now.toISOString(),
               now,
-              timezone: ownerConfig.crewLabelLimits.timezone
+              timezone: ownerConfig.crewLabelLimits.timezone,
+              ...caps.length === 0 ? {} : { cap: Math.min(...caps) }
             });
+            if (!counted2.ok) {
+              out.held.push({
+                item: item.id,
+                reason: `${WORKER_WAIT2}the cost ledger did not take the run yet; collected next tick`
+              });
+              continue;
+            }
+            if (counted2.clamped !== void 0) {
+              lead(
+                item.id,
+                `${item.id}: ${follow.claim.worker} reported ${usd(counted2.clamped.reported)} for one run; counted as ${usd(counted2.clamped.counted)}, the daily cap`
+              );
+            }
             if (follow.kind === "released") {
               const note = `worker ${follow.claim.worker} released it: ${follow.reason}`;
               await withBoardLock(root, now, () => {
@@ -46985,17 +47268,29 @@ async function runCli(argv, deps) {
           throw new UsageError("worker needs --label <label> (^[a-z][a-z0-9-]{0,31}$)");
         }
         const token = workerToken(loadConfig(project), owner);
-        const hub = ports.hub?.(token) ?? ghHub(ports.gh, token);
+        const hub = ports.hub?.(token) ?? fetchHub(token);
+        const crewToken = crewTokenValue(loadConfig(project), owner);
+        if (crewToken !== void 0) {
+          const crewHub = ports.hub?.(crewToken) ?? fetchHub(crewToken);
+          const [mine, crews] = await Promise.all([hub.user(), crewHub.user()]);
+          if (mine.id === crews.id) {
+            stderr(
+              "studio: the worker token and the crew token belong to the same account: a crew could act as the worker; give the worker an account of its own\n"
+            );
+            return 1;
+          }
+        }
         const ctx = {
           project,
           label,
           ports,
           hub,
           token,
-          crewPushes: crewTokenPresent(loadConfig(project), owner),
+          secrets: crewToken === void 0 ? [] : [crewToken],
+          crewPushes: crewToken !== void 0,
           ...deps.workerPushUrl === void 0 ? {} : { pushUrl: deps.workerPushUrl },
           owner,
-          platform: deps.workerPlatform ?? detectPlatform(),
+          platform: () => deps.workerPlatform ?? detectPlatform(),
           log: (line4) => stderr(`${line4.replace(new RegExp("\\p{Cc}", "gu"), " ")}
 `)
         };
@@ -47533,7 +47828,7 @@ ${table2([
             hasReport: (item) => {
               if (!isItemId(item)) return false;
               const name = reportName(root, item);
-              return name !== void 0 && existsSync13(join44(root, "clones", item, ".studio", "reports", name));
+              return name !== void 0 && existsSync14(join44(root, "clones", item, ".studio", "reports", name));
             }
           }
         );
@@ -47790,7 +48085,7 @@ ${table2([
           throw new UsageError("accounts-clear needs exactly one valid label");
         }
         await boundStateRoot();
-        await recordAllEnded(projectStateRoots(dirname12(ownerRoot())), loadOwnerConfig(owner));
+        await recordAllEnded(projectStateRoots(dirname13(ownerRoot())), loadOwnerConfig(owner));
         const r = clearBlocks(ownerRoot(), label, ports.clock.now());
         print({ label, ...r });
         return 0;
@@ -48275,7 +48570,7 @@ warning: ${rollbackChangedLine(r)}
         const { config: config2, board } = loadAll();
         const comp = (config2.components ?? []).find((c3) => c3.id === sub);
         if (comp === void 0) throw new Error(`unknown component ${sub}`);
-        const shown = (rec) => ({
+        const shown2 = (rec) => ({
           release: rec.id,
           component: rec.component,
           status: rec.status,
@@ -48294,7 +48589,7 @@ warning: ${rollbackChangedLine(r)}
           const all = readReleases(root2);
           const open4 = all.find((r) => r.component === comp.id && isOpen(r));
           if (open4 !== void 0) {
-            print({ dryRun: true, ...shown(open4) });
+            print({ dryRun: true, ...shown2(open4) });
             return 0;
           }
           const d = await draftRelease(releaseCtx(config2, board, root2), all, comp.id, values.since);
@@ -48331,7 +48626,7 @@ warning: ${rollbackChangedLine(r)}
             }
             return {
               notified: notify?.state ?? "not yet: the next tick sends it again",
-              ...shown(rec),
+              ...shown2(rec),
               next: rec.status === "approvals" ? "tell the owner the announcement; the approvals in needsLead come first, then studio release again" : `tell the owner the announcement, then run studio release ${comp.id} again to trigger it`,
               ...rec.status === "approvals" ? { needsLead: approvalLines(rec) } : {}
             };
@@ -48346,13 +48641,13 @@ warning: ${rollbackChangedLine(r)}
               beat
             });
             return {
-              ...shown(a2.rec),
+              ...shown2(a2.rec),
               ...a2.waiting === void 0 ? {} : { waiting: a2.waiting },
               ...a2.rec.status === "failed" ? { needsLead: [{ item: open4.id, reason: await failedLead(ctx, a2.rec) }] } : a2.lead === void 0 ? {} : { needsLead: [{ item: open4.id, reason: a2.lead }] }
             };
           }
           if (open4.status === "approvals") {
-            return { ...shown(open4), needsLead: approvalLines(open4) };
+            return { ...shown2(open4), needsLead: approvalLines(open4) };
           }
           const t = await triggerRelease(ctx, open4, {
             by,
@@ -48368,10 +48663,10 @@ warning: ${rollbackChangedLine(r)}
             save: saveOne,
             beat
           });
-          if (t.kind === "held") return { ...shown(open4), held: t.line };
+          if (t.kind === "held") return { ...shown2(open4), held: t.line };
           if (t.kind === "refused") throw new Error(t.line);
           return {
-            ...shown(t.rec),
+            ...shown2(t.rec),
             ...t.rec.status === "failed" ? { needsLead: [{ item: open4.id, reason: await failedLead(ctx, t.rec) }] } : {},
             next: t.rec.status === "failed" ? "the release did not start; tell the owner in one line" : "tick follows the release run and the checks after the deploy"
           };
@@ -48526,9 +48821,11 @@ function workerToken(config2, owner) {
   }
   return file3.token;
 }
-function crewTokenPresent(config2, owner) {
-  if (config2.crewToken && owner.env?.[config2.crewToken.env]) return true;
-  return readCrewTokenFile(owner).kind === "ok";
+function crewTokenValue(config2, owner) {
+  const fromEnv = config2.crewToken ? owner.env?.[config2.crewToken.env] : void 0;
+  if (fromEnv) return fromEnv;
+  const file3 = readCrewTokenFile(owner);
+  return file3.kind === "ok" ? file3.token : void 0;
 }
 var CI_READ_FAILED = "CI read failed:";
 function prHeldNote(cap, config2) {

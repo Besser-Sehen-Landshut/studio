@@ -40,13 +40,19 @@ describe('worker settings', () => {
   });
   it('the owner config holds the accepted logins and this machine as a worker', () => {
     const o = ownerConfigSchema.parse({
-      workers: { accept: { windows: ['win-bot'] }, self: { lead: 'lead-user' } },
+      workers: { accept: { windows: [{ login: 'win-bot', id: 42 }] }, self: { lead: 'lead-user' } },
     });
     expect(o.workers).toEqual({
-      accept: { windows: ['win-bot'] },
-      self: { lead: 'lead-user', deny: { paths: [], ports: [] }, leaseMinutes: 30 },
+      accept: { windows: [{ login: 'win-bot', id: 42 }] },
+      self: { lead: 'lead-user', deny: { paths: [], ports: [] }, allowRead: [], leaseMinutes: 30 },
     });
-    expect(() => ownerConfigSchema.parse({ workers: { accept: { windows: ['-bad'] } } })).toThrow();
+    // A login alone is not enough: the numeric id stays when a login is renamed and reused.
+    expect(() =>
+      ownerConfigSchema.parse({ workers: { accept: { windows: ['win-bot'] } } }),
+    ).toThrow();
+    expect(() =>
+      ownerConfigSchema.parse({ workers: { accept: { windows: [{ login: '-bad', id: 1 }] } } }),
+    ).toThrow();
     expect(() =>
       ownerConfigSchema.parse({ workers: { self: { lead: 'x', leaseMinutes: 5 } } }),
     ).toThrow();

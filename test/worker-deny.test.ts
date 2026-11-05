@@ -8,6 +8,7 @@ import {
   detectPlatform,
   enforceDeny,
   hostPort,
+  ipLiteral,
   mergeDeny,
   namedDeniedPort,
   sandboxProblem,
@@ -44,7 +45,13 @@ describe('detectPlatform', () => {
         '/etc/wsl.conf': '[automount]\nroot = /win/\n',
       }),
     );
-    expect(p).toEqual({ platform: 'linux', wsl: 'wsl2', interop: true, automountRoot: '/win/' });
+    expect(p).toEqual({
+      platform: 'linux',
+      wsl: 'wsl2',
+      interop: true,
+      automountRoot: '/win/',
+      windowsMounts: [],
+    });
   });
   it('interop is off without its binfmt entry; unknown when binfmt_misc cannot be read', () => {
     const release = { '/proc/sys/kernel/osrelease': '5.15.90-microsoft-standard-WSL2' };
@@ -101,20 +108,20 @@ describe('enforceDeny', () => {
     const real = join(root, 'data');
     mkdirSync(real);
     const r = run([`${real}/`]);
-    expect(r).toEqual({ paths: [real], ports: [], notes: [] });
+    expect(r).toEqual({ paths: [real], ports: [], allowRead: [], notes: [] });
   });
   it('a Windows drive path holds only inside WSL2, as the whole drive', () => {
     expect(run(['D:\\data'])).toEqual({
       refused: expect.stringMatching(/Windows path: only a worker inside WSL2/),
     });
     const r = run(['D:\\data', 'd:/other', 'C:\\ProgramData\\Backup'], [], wsl2);
-    expect(r).toMatchObject({ paths: ['/mnt/d', '/mnt/c'] });
+    expect(r).toMatchObject({ paths: ['/mnt/d', '/mnt/c', '/mnt'] });
     expect('notes' in r && r.notes.join('\n')).toMatch(
       /whole drive \/mnt\/d is denied.*ignore case/,
     );
   });
   it('a path below the automount root is a Windows drive as well', () => {
-    expect(run(['/mnt/e/Data'], [], wsl2)).toMatchObject({ paths: ['/mnt/e'] });
+    expect(run(['/mnt/e/Data'], [], wsl2)).toMatchObject({ paths: ['/mnt/e', '/mnt'] });
     expect(run(['/mnt/e/Data'], [], linux)).toMatchObject({ paths: ['/mnt/e/Data'] });
   });
   it('refuses a deny entry over the worker checkout or state, and /', () => {
@@ -138,6 +145,7 @@ describe('enforceDeny', () => {
     expect(run([], [5432], linux, ['github.com', `${lo}:3000`, '*.npmjs.org'])).toEqual({
       paths: [],
       ports: [5432],
+      allowRead: [],
       notes: [],
     });
     // Without denied ports the network list is the sandbox's business, as for local crews.
@@ -230,6 +238,118 @@ describe('a crew never writes claim refs', () => {
       'gh api repos/org/app/git/refs',
     ]) {
       expect(bash(c).decision).toBe('deny');
+    }
+  });
+});
+
+describe('WSL2: Windows file systems are denied by default', () => {
+  const mountinfo = [
+    '36 25 0:31 / /mnt/c rw,noatime - 9p C:\\134 rw,aname=drvfs',
+    '37 25 0:32 / /mnt/e rw,noatime - drvfs E:\\134 rw',
+    '38 25 0:33 / /data/win\\040share rw - virtiofs share rw',
+    '24 1 8:32 / / rw - ext4 /dev/sdc rw',
+  ].join('\n');
+  const release = { '/proc/sys/kernel/osrelease': '5.15.90-microsoft-standard-WSL2' };
+  it('reads every drvfs, 9p and virtiofs mount from mountinfo', () => {
+    const p = detectPlatform(
+      'linux',
+      files({
+        ...release,
+        '/proc/self/mountinfo': mountinfo,
+        '/proc/sys/fs/binfmt_misc/status': 'enabled',
+      }),
+      {},
+      () => false,
+    );
+    expect(p.windowsMounts).toEqual(['/mnt/c', '/mnt/e', '/data/win share']);
+  });
+  it('tells WSL by other signs too, and refuses when its version cannot be told', () => {
+    const cases: [
+      Record<string, string>,
+      (f: string) => boolean,
+      (f: string) => string | undefined,
+    ][] = [
+      [{ WSL_DISTRO_NAME: 'Ubuntu' }, () => false, files({})],
+      [{}, (f) => f === '/run/WSL', files({})],
+      [{}, () => false, files({ '/proc/sys/fs/binfmt_misc/WSLInterop-late': 'enabled' })],
+    ];
+    for (const [env, exists, read] of cases) {
+      const p = detectPlatform('linux', read, env, exists);
+      expect(p.wsl).toBe('unknown');
+      expect(sandboxProblem(p)).toMatch(/version cannot be told/);
+    }
+    expect(detectPlatform('linux', files({}), {}, () => false).wsl).toBe('none');
+  });
+  it('denies the automount root and every Windows mount; opens single places for reads', () => {
+    const p: WorkerPlatform = { ...wsl2, windowsMounts: ['/mnt/c', '/data/share'] };
+    const r = enforceDeny({
+      deny: { paths: [], ports: [] },
+      platform: p,
+      networkAllow: [],
+      keep,
+      allowRead: ['C:\\analysis\\files', '/data/share/in'],
+    });
+    expect(r).toMatchObject({
+      paths: ['/mnt', '/mnt/c', '/data/share'],
+      allowRead: ['/mnt/c/analysis/files', '/data/share/in'],
+    });
+  });
+  it('an opened place inside a denied path, or off the Windows mounts, refuses', () => {
+    const run = (deny: string[], allowRead: string[], platform = wsl2) =>
+      enforceDeny({
+        deny: { paths: deny, ports: [] },
+        platform,
+        networkAllow: [],
+        keep,
+        allowRead,
+      });
+    expect(run(['D:\\data'], ['D:\\other'])).toEqual({
+      refused: expect.stringMatching(/lies inside the denied \/mnt\/d; the deny list wins/),
+    });
+    expect(run([], ['/srv/elsewhere'])).toEqual({
+      refused: expect.stringMatching(/does not lie on a Windows file system/),
+    });
+    expect(run([], ['/mnt/c/x'], linux)).toEqual({
+      refused: expect.stringMatching(/only holds inside WSL2/),
+    });
+  });
+  it('a worker checkout on a Windows drive refuses', () => {
+    expect(
+      enforceDeny({
+        deny: { paths: [], ports: [] },
+        platform: wsl2,
+        networkAllow: [],
+        keep: ['/mnt/c/work/project'],
+      }),
+    ).toEqual({ refused: expect.stringMatching(/lies on a Windows file system/) });
+  });
+});
+
+describe('IP addresses in every spelling', () => {
+  it('counts decimal, octal, hex, short, integer and IPv6 forms as addresses', () => {
+    for (const h of ['2130706433', '0x7f000001', '0177.0.0.1', '127.1', '[::ffff:7f00:1]', '::1']) {
+      expect(ipLiteral(h), h).toBe(true);
+    }
+    for (const h of ['github.com', 'registry.npmjs.org', '1x.example']) {
+      expect(ipLiteral(h), h).toBe(false);
+    }
+  });
+  it('such a spelling without a port refuses when ports are denied', () => {
+    for (const entry of [
+      '2130706433',
+      '0x7f000001',
+      '0177.0.0.1',
+      `[::ffff:${['127', '0', '0', '1'].join('.')}]`,
+    ]) {
+      expect(
+        enforceDeny({
+          deny: { paths: [], ports: [5432] },
+          platform: linux,
+          networkAllow: [entry],
+          keep,
+        }),
+        entry,
+      ).toEqual({ refused: expect.stringMatching(/may reach this machine/) });
     }
   });
 });

@@ -1,7 +1,8 @@
 // The GitHub side of workers on other machines: offers are issues the lead opens, claims are refs
 // below `refs/studio/claims/` whose commits carry the claim and, at the end, the report. Nothing
-// else is shared between the machines. Every call goes through `gh`, with the caller's identity:
-// the owner's login on the lead's machine, the worker's own token on a worker machine.
+// else is shared between the machines. The calls go through a transport: `gh` with the owner's
+// login on the lead's machine, or in-process `fetch` with the worker's own token on a worker
+// machine, so that token never sits in the environment of a child process while a crew runs.
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +12,12 @@ import type { Gh } from './ports.js';
 export const OFFER_LABEL = 'studio-offer';
 /** Where a claim lives: one ref per item, outside branches and tags, so it starts no workflow. */
 export const CLAIM_PREFIX = 'refs/studio/claims/';
+
+/** A GitHub account: the numeric id stays when a login is renamed or reused. */
+export interface GitHubUser {
+  login: string;
+  id: number;
+}
 
 /** An offer as GitHub shows it: who opened it and whether anyone edited it since. */
 export interface OfferIssue {
@@ -41,8 +48,11 @@ export interface ClaimCommit {
 /** A comment on an offer, as GitHub shows it: its author is the account that posted it. */
 export interface OfferComment {
   id: number;
-  /** `user.login`, set by GitHub from the token that posted it; no client can set it. */
+  /** `user.login` and `user.id`, set by GitHub from the token that posted it. */
   login: string;
+  userId: number;
+  /** `author_association`: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ... */
+  association: string;
   body: string;
   createdAt: string;
   updatedAt: string;
@@ -51,20 +61,24 @@ export interface OfferComment {
 export interface PullRequestFacts {
   number: number;
   author: string;
+  authorId: number;
   branch: string;
   head: string;
   base: string;
-  crossRepository: boolean;
+  /** `owner/name` of the head repository; undefined when GitHub names none (a deleted fork). */
+  headRepo?: string;
   state: string;
 }
 
 export interface WorkerHub {
-  /** The login of the identity this hub acts as. */
+  /** The account this hub acts as. */
+  user(): Promise<GitHubUser>;
   login(): Promise<string>;
+  /** Opens the offer and locks it, so only collaborators can comment on it. */
   openOffer(repo: string, title: string, body: string, labels: string[]): Promise<number>;
   /** Comments (Studio's own words) and closes. */
   closeOffer(repo: string, n: number, comment: string): Promise<void>;
-  /** Open issues with the offer label, oldest first. */
+  /** Open issues with the offer label, oldest first, every page. */
   listOffers(repo: string): Promise<OfferIssue[]>;
   offer(repo: string, n: number): Promise<OfferIssue | undefined>;
   readClaim(repo: string, item: string): Promise<ClaimCommit | undefined>;
@@ -72,8 +86,8 @@ export interface WorkerHub {
   claimCommit(repo: string, sha: string): Promise<ClaimCommit | undefined>;
   /** Posts a comment on an offer, as this identity. */
   commentOffer(repo: string, n: number, body: string): Promise<void>;
-  /** Every comment of an offer, oldest first. */
-  offerComments(repo: string, n: number): Promise<OfferComment[]>;
+  /** Every comment of an offer, oldest first; `complete: false` when the page cap was reached. */
+  offerComments(repo: string, n: number): Promise<{ comments: OfferComment[]; complete: boolean }>;
   /**
    * Makes a commit with `files` and points the claim ref at it. Without `parent` the ref is
    * created and fails when it exists; with `parent` it moves only as a fast-forward from it, so a
@@ -90,10 +104,25 @@ export interface WorkerHub {
   /** The head of a branch; undefined when it does not exist. */
   branchHead(repo: string, branch: string): Promise<string | undefined>;
   pullRequest(repo: string, pr: number): Promise<PullRequestFacts | undefined>;
+  /** Open pull requests whose head is `branch` of the repository itself. */
+  openPullRequests(repo: string, branch: string): Promise<PullRequestFacts[]>;
+  createPullRequest(
+    repo: string,
+    o: { head: string; base: string; title: string; body: string },
+  ): Promise<number>;
+  editPullRequestBody(repo: string, pr: number, body: string): Promise<void>;
+}
+
+/** One HTTP exchange with the GitHub API; `status` 0 when there was no answer. */
+export interface Transport {
+  request(method: string, path: string, body?: unknown): Promise<{ status: number; json: unknown }>;
 }
 
 const TIMEOUT_MS = 60_000;
 const MAX_FILE = 1024 * 1024;
+/** Comment pages read at most; a claim beyond them is never decided, the lead is asked. */
+export const MAX_COMMENT_PAGES = 100;
+const MAX_OFFER_PAGES = 20;
 
 /** The HTTP status `gh api` names on a failed request, e.g. `(HTTP 422)`. */
 export function httpStatus(stderr: string): number | undefined {
@@ -103,19 +132,87 @@ export function httpStatus(stderr: string): number | undefined {
 
 export class HubError extends Error {
   readonly status: number | undefined;
-  constructor(what: string, code: number, status: number | undefined) {
+  constructor(what: string, status: number | undefined) {
     // Fixed text only: GitHub's answer may quote what was sent.
     super(
-      `GitHub: ${what} failed (gh exit ${code}${status === undefined ? '' : `, HTTP ${status}`})`,
+      `GitHub: ${what} failed${status === undefined || status === 0 ? '' : ` (HTTP ${status})`}`,
     );
     this.name = 'HubError';
     this.status = status;
   }
 }
 
+/** `gh api` as the transport, with `token` for every call when given. Bodies go through a file. */
+export function ghTransport(gh: Gh, token?: string): Transport {
+  return {
+    async request(method, path, body) {
+      const run = (extra: string[]) =>
+        gh.run(['api', '-X', method, path, ...extra], {
+          timeoutMs: TIMEOUT_MS,
+          ...(token === undefined ? {} : { token }),
+        });
+      let r: Awaited<ReturnType<typeof run>>;
+      if (body === undefined) r = await run([]);
+      else {
+        const dir = mkdtempSync(join(tmpdir(), 'studio-hub-'));
+        try {
+          const file = join(dir, 'body.json');
+          writeFileSync(file, JSON.stringify(body), { mode: 0o600 });
+          r = await run(['--input', file]);
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+      if (r.code !== 0) return { status: httpStatus(r.stderr) ?? 0, json: null };
+      try {
+        return { status: 200, json: r.stdout.trim() === '' ? null : JSON.parse(r.stdout) };
+      } catch {
+        return { status: 0, json: null };
+      }
+    },
+  };
+}
+
+/**
+ * In-process HTTPS to api.github.com with `token`: no child process ever gets it. No redirect is
+ * followed, so the token never goes to another host.
+ */
+export function fetchTransport(token: string, doFetch: typeof fetch = fetch): Transport {
+  return {
+    async request(method, path, body) {
+      try {
+        const r = await doFetch(`https://api.github.com/${path}`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+            'User-Agent': 'studio-worker',
+            ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          redirect: 'error',
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+        const text = await r.text();
+        let json: unknown = null;
+        try {
+          json = text.trim() === '' ? null : JSON.parse(text);
+        } catch {
+          json = null;
+        }
+        return { status: r.status, json };
+      } catch {
+        return { status: 0, json: null };
+      }
+    },
+  };
+}
+
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const ITEM_RE = /^[A-Z]+-\d+$/;
 const SHA_RE = /^[0-9a-f]{40,64}$/;
+const BRANCH_RE = /^studio\/[A-Z]+-\d+$/;
 
 function assertRepo(repo: string): void {
   if (!REPO_RE.test(repo)) throw new Error(`invalid repository: ${JSON.stringify(repo)}`);
@@ -123,11 +220,15 @@ function assertRepo(repo: string): void {
 function assertItem(item: string): void {
   if (!ITEM_RE.test(item)) throw new Error(`invalid item id: ${JSON.stringify(item)}`);
 }
+function assertBranch(branch: string): void {
+  if (!BRANCH_RE.test(branch)) throw new Error('invalid branch');
+}
 
-const ISSUES_QUERY = `query($owner: String!, $name: String!, $label: String!) {
+const ISSUES_QUERY = `query($owner: String!, $name: String!, $label: String!, $after: String) {
   repository(owner: $owner, name: $name) {
-    issues(first: 50, states: OPEN, labels: [$label], orderBy: {field: CREATED_AT, direction: ASC}) {
+    issues(first: 50, after: $after, states: OPEN, labels: [$label], orderBy: {field: CREATED_AT, direction: ASC}) {
       nodes { number title body state author { login } editor { login } lastEditedAt }
+      pageInfo { hasNextPage endCursor }
     }
   }
 }`;
@@ -162,72 +263,72 @@ function issueOf(n: IssueNode | null | undefined): OfferIssue | undefined {
   };
 }
 
-/**
- * The hub on `gh`. With `token`, every call runs as that identity (GH_TOKEN for that call only);
- * without, as the gh login of the machine. Request bodies go through a 0600 file, never argv.
- */
-export function ghHub(gh: Gh, token?: string): WorkerHub {
-  const run = (args: string[]) =>
-    gh.run(args, { timeoutMs: TIMEOUT_MS, ...(token === undefined ? {} : { token }) });
-  const api = async (
-    what: string,
-    method: string,
-    path: string,
-    body?: unknown,
-  ): Promise<
-    { ok: true; json: unknown } | { ok: false; status: number | undefined; code: number }
-  > => {
-    const call = async (extra: string[]) => {
-      const r = await run(['api', '-X', method, path, ...extra]);
-      if (r.code !== 0) return { ok: false as const, status: httpStatus(r.stderr), code: r.code };
-      let json: unknown = null;
-      try {
-        json = r.stdout.trim() === '' ? null : JSON.parse(r.stdout);
-      } catch {
-        throw new HubError(`${what} (unreadable answer)`, 0, undefined);
-      }
-      return { ok: true as const, json };
-    };
-    if (body === undefined) return call([]);
-    const dir = mkdtempSync(join(tmpdir(), 'studio-hub-'));
-    try {
-      const file = join(dir, 'body.json');
-      writeFileSync(file, JSON.stringify(body), { mode: 0o600 });
-      return await call(['--input', file]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+type RestPull = {
+  number?: unknown;
+  user?: { login?: unknown; id?: unknown } | null;
+  head?: { ref?: unknown; sha?: unknown; repo?: { full_name?: unknown } | null } | null;
+  base?: { ref?: unknown } | null;
+  state?: unknown;
+};
+
+function pullOf(j: RestPull | null | undefined): PullRequestFacts | undefined {
+  if (
+    !j ||
+    typeof j.number !== 'number' ||
+    typeof j.user?.login !== 'string' ||
+    typeof j.user.id !== 'number' ||
+    typeof j.head?.ref !== 'string' ||
+    typeof j.head.sha !== 'string' ||
+    typeof j.base?.ref !== 'string'
+  ) {
+    return undefined;
+  }
+  const headRepo = j.head.repo?.full_name;
+  return {
+    number: j.number,
+    author: j.user.login,
+    authorId: j.user.id,
+    branch: j.head.ref,
+    head: j.head.sha,
+    base: j.base.ref,
+    ...(typeof headRepo === 'string' ? { headRepo } : {}),
+    state: typeof j.state === 'string' ? j.state.toUpperCase() : 'UNKNOWN',
   };
+}
+
+/** The worker hub over a transport. */
+export function makeHub(t: Transport): WorkerHub {
   const must = async (what: string, method: string, path: string, body?: unknown) => {
-    const r = await api(what, method, path, body);
-    if (!r.ok) throw new HubError(what, r.code, r.status);
+    const r = await t.request(method, path, body);
+    if (r.status < 200 || r.status > 299) throw new HubError(what, r.status);
     return r.json as Record<string, unknown> | null;
   };
-  const graphql = async (what: string, query: string, vars: string[]) => {
-    const r = await run(['api', 'graphql', '-f', `query=${query}`, ...vars]);
-    if (r.code !== 0) throw new HubError(what, r.code, httpStatus(r.stderr));
-    try {
-      return JSON.parse(r.stdout) as {
-        data?: { repository?: { issues?: { nodes?: IssueNode[] }; issue?: IssueNode | null } };
+  const graphql = async (what: string, query: string, variables: Record<string, unknown>) => {
+    const j = (await must(what, 'POST', 'graphql', { query, variables })) as {
+      data?: {
+        repository?: {
+          issues?: {
+            nodes?: IssueNode[];
+            pageInfo?: { hasNextPage?: unknown; endCursor?: unknown };
+          };
+          issue?: IssueNode | null;
+        };
       };
-    } catch {
-      throw new HubError(`${what} (unreadable answer)`, 0, undefined);
-    }
+    } | null;
+    return j ?? {};
   };
   /** A commit by its SHA (git/commits); undefined on 404. */
   const commitOf = async (sha: string, repo: string): Promise<ClaimCommit | undefined> => {
-    const r = await api('reading a claim commit', 'GET', `repos/${repo}/git/commits/${sha}`);
-    if (!r.ok) {
-      if (r.status === 404) return undefined;
-      throw new HubError('reading a claim commit', r.code, r.status);
-    }
+    const r = await t.request('GET', `repos/${repo}/git/commits/${sha}`);
+    if (r.status === 404) return undefined;
+    if (r.status < 200 || r.status > 299) throw new HubError('reading a claim commit', r.status);
     const c = r.json as {
       message?: unknown;
       committer?: { date?: unknown };
       parents?: { sha?: unknown }[];
     } | null;
     if (typeof c?.message !== 'string' || typeof c.committer?.date !== 'string') {
-      throw new HubError('reading a claim commit (incomplete)', 0, undefined);
+      throw new HubError('reading a claim commit (incomplete)', undefined);
     }
     return {
       sha,
@@ -241,12 +342,17 @@ export function ghHub(gh: Gh, token?: string): WorkerHub {
     const [owner, name] = repo.split('/') as [string, string];
     return { owner, name };
   };
+  const user = async (): Promise<GitHubUser> => {
+    const j = await must('reading the account', 'GET', 'user');
+    if (typeof j?.login !== 'string' || typeof j.id !== 'number') {
+      throw new HubError('reading the account', undefined);
+    }
+    return { login: j.login, id: j.id };
+  };
   return {
+    user,
     async login() {
-      const j = await must('reading the login', 'GET', 'user');
-      const login = j?.login;
-      if (typeof login !== 'string') throw new HubError('reading the login', 0, undefined);
-      return login;
+      return (await user()).login;
     },
     async openOffer(repo, title, body, labels) {
       assertRepo(repo);
@@ -257,8 +363,12 @@ export function ghHub(gh: Gh, token?: string): WorkerHub {
       });
       const n = j?.number;
       if (typeof n !== 'number' || !Number.isInteger(n) || n <= 0) {
-        throw new HubError('opening an offer (no issue number)', 0, undefined);
+        throw new HubError('opening an offer (no issue number)', undefined);
       }
+      // Locked at once: from here only collaborators can comment, so no one floods the claims.
+      await must('locking an offer', 'PUT', `repos/${repo}/issues/${n}/lock`, {
+        lock_reason: 'resolved',
+      });
       return n;
     },
     async closeOffer(repo, n, comment) {
@@ -270,49 +380,43 @@ export function ghHub(gh: Gh, token?: string): WorkerHub {
     },
     async listOffers(repo) {
       const { owner, name } = split(repo);
-      const j = await graphql('listing offers', ISSUES_QUERY, [
-        '-f',
-        `owner=${owner}`,
-        '-f',
-        `name=${name}`,
-        '-f',
-        `label=${OFFER_LABEL}`,
-      ]);
-      return (j.data?.repository?.issues?.nodes ?? []).flatMap((n) => {
-        const o = issueOf(n);
-        return o === undefined ? [] : [o];
-      });
+      const out: OfferIssue[] = [];
+      let after: string | null = null;
+      for (let page = 0; page < MAX_OFFER_PAGES; page++) {
+        const j = await graphql('listing offers', ISSUES_QUERY, {
+          owner,
+          name,
+          label: OFFER_LABEL,
+          after,
+        });
+        const issues = j.data?.repository?.issues;
+        for (const n of issues?.nodes ?? []) {
+          const o = issueOf(n);
+          if (o !== undefined) out.push(o);
+        }
+        const next = issues?.pageInfo;
+        if (next?.hasNextPage !== true || typeof next.endCursor !== 'string') break;
+        after = next.endCursor;
+      }
+      return out;
     },
     async offer(repo, n) {
       const { owner, name } = split(repo);
-      const j = await graphql('reading an offer', ISSUE_QUERY, [
-        '-f',
-        `owner=${owner}`,
-        '-f',
-        `name=${name}`,
-        '-F',
-        `number=${n}`,
-      ]);
+      const j = await graphql('reading an offer', ISSUE_QUERY, { owner, name, number: n });
       return issueOf(j.data?.repository?.issue);
     },
     async readClaim(repo, item) {
       assertRepo(repo);
       assertItem(item);
-      const ref = await api(
-        'reading a claim',
-        'GET',
-        `repos/${repo}/git/ref/studio/claims/${item}`,
-      );
-      if (!ref.ok) {
-        if (ref.status === 404) return undefined;
-        throw new HubError('reading a claim', ref.code, ref.status);
-      }
+      const ref = await t.request('GET', `repos/${repo}/git/ref/studio/claims/${item}`);
+      if (ref.status === 404) return undefined;
+      if (ref.status < 200 || ref.status > 299) throw new HubError('reading a claim', ref.status);
       const sha = (ref.json as { object?: { sha?: unknown } } | null)?.object?.sha;
       if (typeof sha !== 'string' || !SHA_RE.test(sha)) {
-        throw new HubError('reading a claim (no commit)', 0, undefined);
+        throw new HubError('reading a claim (no commit)', undefined);
       }
       const c = await commitOf(sha, repo);
-      if (c === undefined) throw new HubError('reading a claim commit (missing)', 0, 404);
+      if (c === undefined) throw new HubError('reading a claim commit (missing)', 404);
       return c;
     },
     async claimCommit(repo, sha) {
@@ -326,8 +430,8 @@ export function ghHub(gh: Gh, token?: string): WorkerHub {
     },
     async offerComments(repo, n) {
       assertRepo(repo);
-      const out: OfferComment[] = [];
-      for (let page = 1; page <= 30; page++) {
+      const comments: OfferComment[] = [];
+      for (let page = 1; page <= MAX_COMMENT_PAGES; page++) {
         const j = await must(
           'reading offer comments',
           'GET',
@@ -337,7 +441,8 @@ export function ghHub(gh: Gh, token?: string): WorkerHub {
         for (const raw of list) {
           const c = raw as {
             id?: unknown;
-            user?: { login?: unknown } | null;
+            user?: { login?: unknown; id?: unknown } | null;
+            author_association?: unknown;
             body?: unknown;
             created_at?: unknown;
             updated_at?: unknown;
@@ -345,22 +450,25 @@ export function ghHub(gh: Gh, token?: string): WorkerHub {
           if (
             typeof c.id === 'number' &&
             typeof c.user?.login === 'string' &&
+            typeof c.user.id === 'number' &&
             typeof c.body === 'string' &&
             typeof c.created_at === 'string' &&
             typeof c.updated_at === 'string'
           ) {
-            out.push({
+            comments.push({
               id: c.id,
               login: c.user.login,
+              userId: c.user.id,
+              association: typeof c.author_association === 'string' ? c.author_association : 'NONE',
               body: c.body,
               createdAt: c.created_at,
               updatedAt: c.updated_at,
             });
           }
         }
-        if (list.length < 100) break;
+        if (list.length < 100) return { comments, complete: true };
       }
-      return out;
+      return { comments, complete: false };
     },
     async writeClaim(repo, item, o) {
       assertRepo(repo);
@@ -374,8 +482,7 @@ export function ghHub(gh: Gh, token?: string): WorkerHub {
         })),
       });
       const treeSha = tree?.sha;
-      if (typeof treeSha !== 'string') throw new HubError('writing a claim tree', 0, undefined);
-      // No author or committer: GitHub sets both from this identity, with its own clock.
+      if (typeof treeSha !== 'string') throw new HubError('writing a claim tree', undefined);
       const commit = await must('writing a claim commit', 'POST', `repos/${repo}/git/commits`, {
         message: o.message,
         tree: treeSha,
@@ -383,35 +490,29 @@ export function ghHub(gh: Gh, token?: string): WorkerHub {
       });
       const sha = commit?.sha;
       if (typeof sha !== 'string' || !SHA_RE.test(sha)) {
-        throw new HubError('writing a claim commit', 0, undefined);
+        throw new HubError('writing a claim commit', undefined);
       }
       const moved =
         o.parent === undefined
-          ? await api('creating a claim', 'POST', `repos/${repo}/git/refs`, {
+          ? await t.request('POST', `repos/${repo}/git/refs`, {
               ref: `${CLAIM_PREFIX}${item}`,
               sha,
             })
-          : await api('moving a claim', 'PATCH', `repos/${repo}/git/refs/studio/claims/${item}`, {
+          : await t.request('PATCH', `repos/${repo}/git/refs/studio/claims/${item}`, {
               sha,
               force: false,
             });
-      if (moved.ok) return { ok: true, sha };
+      if (moved.status >= 200 && moved.status <= 299) return { ok: true, sha };
       // 422: the ref exists (create) or the move is no fast-forward (update): someone else won.
       if (moved.status === 422) return { ok: false };
-      throw new HubError('writing a claim', moved.code, moved.status);
+      throw new HubError('writing a claim', moved.status);
     },
     async claimFile(repo, sha, path) {
       assertRepo(repo);
       if (!SHA_RE.test(sha) || !/^[a-z.-]{1,40}$/.test(path)) throw new Error('invalid claim file');
-      const r = await api(
-        'reading a claim file',
-        'GET',
-        `repos/${repo}/contents/${path}?ref=${sha}`,
-      );
-      if (!r.ok) {
-        if (r.status === 404) return undefined;
-        throw new HubError('reading a claim file', r.code, r.status);
-      }
+      const r = await t.request('GET', `repos/${repo}/contents/${path}?ref=${sha}`);
+      if (r.status === 404) return undefined;
+      if (r.status < 200 || r.status > 299) throw new HubError('reading a claim file', r.status);
       const j = r.json as { content?: unknown; encoding?: unknown; size?: unknown } | null;
       if (typeof j?.content !== 'string' || j.encoding !== 'base64') return undefined;
       if (typeof j.size === 'number' && j.size > MAX_FILE) return undefined;
@@ -420,69 +521,57 @@ export function ghHub(gh: Gh, token?: string): WorkerHub {
     async deleteClaim(repo, item) {
       assertRepo(repo);
       assertItem(item);
-      const r = await api(
-        'removing a claim',
-        'DELETE',
-        `repos/${repo}/git/refs/studio/claims/${item}`,
-      );
-      if (!r.ok && r.status !== 404 && r.status !== 422) {
-        throw new HubError('removing a claim', r.code, r.status);
+      const r = await t.request('DELETE', `repos/${repo}/git/refs/studio/claims/${item}`);
+      if ((r.status < 200 || r.status > 299) && r.status !== 404 && r.status !== 422) {
+        throw new HubError('removing a claim', r.status);
       }
     },
     async branchHead(repo, branch) {
       assertRepo(repo);
-      if (!/^studio\/[A-Z]+-\d+$/.test(branch)) throw new Error('invalid branch');
-      const r = await api('reading a branch', 'GET', `repos/${repo}/git/ref/heads/${branch}`);
-      if (!r.ok) {
-        if (r.status === 404) return undefined;
-        throw new HubError('reading a branch', r.code, r.status);
-      }
+      assertBranch(branch);
+      const r = await t.request('GET', `repos/${repo}/git/ref/heads/${branch}`);
+      if (r.status === 404) return undefined;
+      if (r.status < 200 || r.status > 299) throw new HubError('reading a branch', r.status);
       const sha = (r.json as { object?: { sha?: unknown } } | null)?.object?.sha;
       return typeof sha === 'string' && SHA_RE.test(sha) ? sha : undefined;
     },
     async pullRequest(repo, pr) {
       assertRepo(repo);
-      const r = await run([
-        'pr',
-        'view',
-        String(pr),
-        '--repo',
-        repo,
-        '--json',
-        'number,author,headRefName,headRefOid,baseRefName,isCrossRepository,state',
-      ]);
-      if (r.code !== 0) return undefined;
-      try {
-        const j = JSON.parse(r.stdout) as {
-          number?: unknown;
-          author?: { login?: unknown } | null;
-          headRefName?: unknown;
-          headRefOid?: unknown;
-          baseRefName?: unknown;
-          isCrossRepository?: unknown;
-          state?: unknown;
-        };
-        if (
-          typeof j.number !== 'number' ||
-          typeof j.author?.login !== 'string' ||
-          typeof j.headRefName !== 'string' ||
-          typeof j.headRefOid !== 'string' ||
-          typeof j.baseRefName !== 'string'
-        ) {
-          return undefined;
-        }
-        return {
-          number: j.number,
-          author: j.author.login,
-          branch: j.headRefName,
-          head: j.headRefOid,
-          base: j.baseRefName,
-          crossRepository: j.isCrossRepository !== false,
-          state: typeof j.state === 'string' ? j.state : 'UNKNOWN',
-        };
-      } catch {
-        return undefined;
-      }
+      const r = await t.request('GET', `repos/${repo}/pulls/${pr}`);
+      if (r.status < 200 || r.status > 299) return undefined;
+      return pullOf(r.json as RestPull);
+    },
+    async openPullRequests(repo, branch) {
+      const { owner } = split(repo);
+      assertBranch(branch);
+      const j = await must(
+        'listing pull requests',
+        'GET',
+        `repos/${repo}/pulls?state=open&per_page=100&head=${encodeURIComponent(`${owner}:${branch}`)}`,
+      );
+      return (Array.isArray(j) ? (j as RestPull[]) : []).flatMap((p) => {
+        const f = pullOf(p);
+        return f === undefined ? [] : [f];
+      });
+    },
+    async createPullRequest(repo, o) {
+      assertRepo(repo);
+      assertBranch(o.head);
+      const j = await must('opening a pull request', 'POST', `repos/${repo}/pulls`, o);
+      const n = j?.number;
+      if (typeof n !== 'number') throw new HubError('opening a pull request', undefined);
+      return n;
+    },
+    async editPullRequestBody(repo, pr, body) {
+      assertRepo(repo);
+      await must('renewing a pull request', 'PATCH', `repos/${repo}/pulls/${pr}`, { body });
     },
   };
 }
+
+/** The hub on `gh`: the lead's own login, or `token` for every call. */
+export const ghHub = (gh: Gh, token?: string): WorkerHub => makeHub(ghTransport(gh, token));
+
+/** The hub a worker uses: in-process HTTPS with its own token. */
+export const fetchHub = (token: string, doFetch?: typeof fetch): WorkerHub =>
+  makeHub(fetchTransport(token, doFetch));

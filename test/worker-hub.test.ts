@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Gh } from '../src/ports.js';
-import { ghHub, httpStatus } from '../src/worker-hub.js';
+import { fetchHub, ghHub, httpStatus } from '../src/worker-hub.js';
 
 type Reply = { code?: number; stdout?: string; stderr?: string };
 
@@ -121,7 +121,8 @@ describe('ghHub', () => {
     const page = (from: number, count: number) =>
       Array.from({ length: count }, (_, i) => ({
         id: from + i,
-        user: { login: 'win-bot' },
+        user: { login: 'win-bot', id: 7 },
+        author_association: 'COLLABORATOR',
         body: `c${from + i}`,
         created_at: '2026-11-05T10:00:00Z',
         updated_at: '2026-11-05T10:00:00Z',
@@ -143,10 +144,13 @@ describe('ghHub', () => {
     ]);
     expect(calls[0]?.body).toEqual({ body: 'studio-claim x y' });
     const all = await hub.offerComments('org/app', 30);
-    expect(all).toHaveLength(102);
-    expect(all[101]).toEqual({
+    expect(all.complete).toBe(true);
+    expect(all.comments).toHaveLength(102);
+    expect(all.comments[101]).toEqual({
       id: 102,
       login: 'win-bot',
+      userId: 7,
+      association: 'COLLABORATOR',
       body: 'c102',
       createdAt: '2026-11-05T10:00:00Z',
       updatedAt: '2026-11-05T10:00:00Z',
@@ -186,17 +190,10 @@ describe('ghHub', () => {
         open: true,
       },
     ]);
-    expect(calls[0]?.args).toEqual(
-      expect.arrayContaining([
-        'graphql',
-        '-f',
-        'owner=org',
-        '-f',
-        'name=app',
-        '-f',
-        'label=studio-offer',
-      ]),
-    );
+    expect(calls[0]?.args.slice(0, 4)).toEqual(['api', '-X', 'POST', 'graphql']);
+    expect(calls[0]?.body).toMatchObject({
+      variables: { owner: 'org', name: 'app', label: 'studio-offer', after: null },
+    });
   });
 
   it('refuses names that would leave the paths it builds', async () => {
@@ -206,5 +203,114 @@ describe('ghHub', () => {
     await expect(hub.readClaim('org/../app', 'APP-1')).rejects.toThrow(/invalid repository/);
     await expect(hub.branchHead('org/app', 'main')).rejects.toThrow(/invalid branch/);
     await expect(hub.claimFile('org/app', SHA, '../x')).rejects.toThrow(/invalid claim file/);
+  });
+
+  it('locks an offer right after opening it', async () => {
+    const { gh, calls } = recordingGh((args) =>
+      args[3] === 'repos/org/app/issues' ? { stdout: JSON.stringify({ number: 30 }) } : {},
+    );
+    expect(await ghHub(gh).openOffer('org/app', 't', 'b', ['studio-offer'])).toBe(30);
+    expect(calls.map((c) => c.args.slice(0, 4).join(' '))).toEqual([
+      'api -X POST repos/org/app/issues',
+      'api -X PUT repos/org/app/issues/30/lock',
+    ]);
+  });
+
+  it('pages through every open offer', async () => {
+    const node = (n: number) => ({
+      number: n,
+      title: `t${n}`,
+      body: 'b',
+      state: 'OPEN',
+      author: { login: 'lead-user' },
+      editor: null,
+      lastEditedAt: null,
+    });
+    const { gh, calls } = recordingGh((_args, body) => {
+      const after = (body as { variables: { after: string | null } }).variables.after;
+      return {
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              issues:
+                after === null
+                  ? { nodes: [node(1)], pageInfo: { hasNextPage: true, endCursor: 'c1' } }
+                  : { nodes: [node(2)], pageInfo: { hasNextPage: false, endCursor: null } },
+            },
+          },
+        }),
+      };
+    });
+    expect((await ghHub(gh).listOffers('org/app')).map((o) => o.number)).toEqual([1, 2]);
+    expect(calls).toHaveLength(2);
+  });
+
+  it('says when an offer has more comment pages than it reads', async () => {
+    const full = Array.from({ length: 100 }, (_, i) => ({
+      id: i,
+      user: { login: 'x', id: 1 },
+      body: 'b',
+      created_at: 't',
+      updated_at: 't',
+    }));
+    const { gh } = recordingGh(() => ({ stdout: JSON.stringify(full) }));
+    const r = await ghHub(gh).offerComments('org/app', 30);
+    expect(r.complete).toBe(false);
+  });
+});
+
+describe('fetchHub: the worker talks to GitHub in-process', () => {
+  it('sends the token as a header to api.github.com only, never follows a redirect', async () => {
+    const seen: { url: string; init: RequestInit }[] = [];
+    const fake = (async (url: string | URL, init?: RequestInit) => {
+      seen.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ login: 'win-bot', id: 7 }), { status: 200 });
+    }) as typeof fetch;
+    expect(await fetchHub('tok-1', fake).user()).toEqual({ login: 'win-bot', id: 7 });
+    const first = seen[0];
+    if (first === undefined) throw new Error('no request');
+    expect(first.url).toBe('https://api.github.com/user');
+    expect((first.init.headers as Record<string, string>).Authorization).toBe('Bearer tok-1');
+    expect(first.init.redirect).toBe('error');
+  });
+
+  it('reads a status: 422 on a taken claim, a failed request as no answer', async () => {
+    const answers = [
+      new Response(JSON.stringify({ sha: TREE }), { status: 201 }),
+      new Response(JSON.stringify({ sha: COMMIT }), { status: 201 }),
+      new Response('{"message":"Reference already exists"}', { status: 422 }),
+    ];
+    const fake = (async () => answers.shift() as Response) as unknown as typeof fetch;
+    expect(
+      await fetchHub('t', fake).writeClaim('org/app', 'APP-1', { message: 'm', files: {} }),
+    ).toEqual({ ok: false });
+    const down = (async () => {
+      throw new Error('offline');
+    }) as unknown as typeof fetch;
+    await expect(fetchHub('t', down).user()).rejects.toThrow(/reading the account failed/);
+  });
+
+  it('opens a pull request in-process, and lists open ones by the head of the repository', async () => {
+    const seen: string[] = [];
+    const fake = (async (url: string | URL, init?: RequestInit) => {
+      seen.push(`${init?.method} ${String(url)}`);
+      return String(url).includes('/pulls?')
+        ? new Response('[]', { status: 200 })
+        : new Response(JSON.stringify({ number: 9 }), { status: 201 });
+    }) as typeof fetch;
+    const hub = fetchHub('t', fake);
+    expect(await hub.openPullRequests('org/app', 'studio/APP-1')).toEqual([]);
+    expect(
+      await hub.createPullRequest('org/app', {
+        head: 'studio/APP-1',
+        base: 'main',
+        title: 't',
+        body: 'b',
+      }),
+    ).toBe(9);
+    expect(seen).toEqual([
+      'GET https://api.github.com/repos/org/app/pulls?state=open&per_page=100&head=org%3Astudio%2FAPP-1',
+      'POST https://api.github.com/repos/org/app/pulls',
+    ]);
   });
 });

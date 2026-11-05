@@ -737,11 +737,23 @@ export const ownerConfigSchema = z.strictObject({
   // names the lead whose offers it takes and what its crews must never touch.
   workers: z
     .strictObject({
-      accept: z.record(workerLabel, z.array(githubLogin).min(1).max(20)).default({}),
+      // Each with the numeric account id (`gh api users/<login> --jq .id`): a login can be
+      // renamed and taken by someone else, the id stays.
+      accept: z
+        .record(
+          workerLabel,
+          z
+            .array(z.strictObject({ login: githubLogin, id: z.number().int().positive() }))
+            .min(1)
+            .max(20),
+        )
+        .default({}),
       self: z
         .strictObject({
           lead: githubLogin,
           deny: workerDenySchema.default(NO_DENY),
+          // On WSL2 every Windows file system is denied to crews; these places are opened for reads.
+          allowRead: z.array(denyPath).max(50).default([]),
           // How long a claim holds without a heartbeat before another worker may take it over.
           leaseMinutes: z.number().int().min(10).max(240).default(30),
         })

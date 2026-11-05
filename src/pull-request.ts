@@ -17,6 +17,21 @@ const PR_BODY_MAX = 20_000;
  * otherwise nothing is opened and the read that decided comes back as `held`. `unchanged` runs
  * after the capacity wait, right before the create, and throws when the item moved meanwhile.
  */
+/**
+ * The pull request text of a crew: Studio's own lines first, so crew text can neither push them
+ * out of view nor fake an end; the crew's body below, cleaned and cut.
+ */
+export function crewPrText(
+  item: WorkItem,
+  body: string,
+  notRunHere: readonly NotRunHere[],
+): string {
+  return `Opened by Studio for ${item.id}; the text below the line was written by the crew.\n${notRunSection(notRunHere)}\n---\n\n${body.replace(/[^\P{Cc}\n\t]|\p{Cf}/gu, '').slice(0, PR_BODY_MAX)}\n`;
+}
+
+/** A crew's pull request title, one plain line; empty means none. */
+export const crewPrTitle = (title: string): string => title.replace(/[\p{Cc}\p{Cf}]/gu, '').trim();
+
 export async function openCrewPr(
   ports: Ports,
   item: WorkItem,
@@ -29,19 +44,35 @@ export async function openCrewPr(
 ): Promise<{ pr: number } | { held: Capacity }> {
   const head = `studio/${item.id}`;
   const list = await ports.gh.run(
-    ['pr', 'list', '--repo', item.repo, '--head', head, '--state', 'open', '--json', 'number'],
+    [
+      'pr',
+      'list',
+      '--repo',
+      item.repo,
+      '--head',
+      head,
+      '--state',
+      'open',
+      '--json',
+      'number,isCrossRepository',
+    ],
     { token },
   );
   if (list.code !== 0)
     throw new Error(`cannot list pull requests of ${head} (gh exit ${list.code})`);
-  const open = JSON.parse(list.stdout || '[]') as { number?: unknown }[];
-  const known = open.find((p) => Number.isInteger(p.number))?.number;
+  const open = JSON.parse(list.stdout || '[]') as {
+    number?: unknown;
+    isCrossRepository?: unknown;
+  }[];
+  // A fork can name its branch studio/<id> as well: only a branch of the repository itself counts.
+  const known = open.find(
+    (p) => Number.isInteger(p.number) && p.isCrossRepository === false,
+  )?.number;
   // Crew text loses control and format characters (bidi overrides, zero-width).
   const plainTitle = title.replace(/[\p{Cc}\p{Cf}]/gu, '').trim();
   if (plainTitle === '')
     throw new Error(`the pull request title for ${head} is empty; nothing moved`);
-  // Studio's own lines come first, so crew text can neither push them out of view nor fake an end.
-  const text = `Opened by Studio for ${item.id}; the text below the line was written by the crew.\n${notRunSection(notRunHere)}\n---\n\n${body.replace(/[^\P{Cc}\n\t]|\p{Cf}/gu, '').slice(0, PR_BODY_MAX)}\n`;
+  const text = crewPrText(item, body, notRunHere);
   const withBody = async <T>(use: (file: string) => Promise<T>): Promise<T> => {
     const dir = mkdtempSync(join(tmpdir(), 'studio-pr-'));
     try {

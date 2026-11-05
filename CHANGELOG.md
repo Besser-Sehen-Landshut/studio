@@ -19,7 +19,7 @@ Nothing but GitHub is shared between the machines. Not tagged yet; the maintaine
   credential slot and no host load; dependencies, overlaps, component WIP, a pause, an account block and the
   daily cost cap hold them.
 - `tick` offers each planned one as an issue `Studio offer <id> for <label>` (label `studio-offer`, the item's
-  board fields as one JSON block), moves it to `assigned` with the crew `worker:<label>`, follows its claim
+  board fields and a nonce as one JSON block, locked at once so only collaborators can comment), moves it to `assigned` with the crew `worker:<label>`, follows its claim
   (`in_progress` while claimed, `held` with `worker: ...`), collects a `done` claim through the same `collect`
   and blocks the item on a `released` one; `tick` prints `offered`. The offer record lives in `workers.json`.
 - Claims: `refs/studio/claims/<id>` on the primary repository, created through the GitHub API (one creator
@@ -28,39 +28,52 @@ Nothing but GitHub is shared between the machines. Not tagged yet; the maintaine
   worker first saw that claim commit, on its own clock, never from commit dates) by another worker of the label,
   once (attempt 2, from the pushed `studio/<id>`); a second expiry goes to the lead.
 - `studio worker --label <label> [--once]`: claims one offer at a time, launches the crew with `launch`'s code
-  (brief, rules and `studio.yaml` from a fresh `origin/main`, sandbox, guard, skill allowlist, its own Claude
-  account and limits), opens or renews the pull request with the worker's own token, and writes the claim
-  `done` with `report.md` and `usage.json`, or `released` with a fixed reason. Its state is `worker.json`;
-  after a restart it goes on with the item it holds.
+  (the brief entirely from a fresh `origin/main`: rules, `studio.yaml`, role text, lessons and solutions;
+  sandbox, guard, skill allowlist, its own Claude account and limits), opens or renews its own pull request
+  in-process with the worker's token (never one of another account or a fork), and writes the claim `done`
+  with `report.md` and `usage.json`, or `released` with a fixed reason. Its state is `worker.json`; after a
+  restart it first goes on with the item it holds (its own heartbeats on top of what it saved count as its
+  own), then checks for new claims. A claim it cannot start (comment failed, offer closed, launch refused)
+  is removed again, never `released`; a launch held back tries again later.
 - Before every claim the worker checks that it can enforce its rules and refuses otherwise: a sandbox
-  (macOS, Linux, WSL2 with interop off; native Windows and WSL1 refuse), an owner config `workers.self` naming
-  the lead, a token that is not the lead's, every pinned plugin installed at its pin (stricter than a local
-  launch: a plugin that is not installed refuses), no account block, no pause, and a deny list the sandbox can
-  hold.
+  (macOS, Linux, WSL2 with interop off, read again each time; native Windows, WSL1 and an unclear WSL version
+  refuse), an owner config `workers.self` naming the lead, a token that is not the lead's, every pinned plugin
+  installed at its pin (stricter than a local launch: a plugin that is not installed refuses), no account
+  block, a credential neither parked nor at its limit, no launch in progress, no pause, and a deny list the
+  sandbox can hold.
 - Deny lists: `workers.<label>.deny` (`paths`, `ports`) in `studio.yaml`, joined with `workers.self.deny` of
   the worker's owner config. Paths go into the sandbox's `denyRead` and `denyWrite` and the guard's secret
-  paths; a Windows drive path holds only under WSL2, as the whole drive. With ports denied, a
-  `sandbox.network_allow` entry that could reach the machine (IP literal or `localhost` without a port, `*`,
-  single-label or local names) refuses; the guard denies commands that name a denied port.
-- `workers.accept` in the owner config on the lead's machine: the logins whose claims count, per label.
+  paths; a Windows drive path holds only under WSL2, as the whole drive. On WSL2 the automount root and every
+  drvfs, 9p or virtiofs mount are denied by default; `workers.self.allow_read` opens single places for reads.
+  With ports denied, a `sandbox.network_allow` entry that could reach the machine (an IP address in any
+  spelling, `localhost` without a port, `*`, single-label or local names) refuses; the guard denies commands
+  that name a denied port.
+- `workers.accept` in the owner config on the lead's machine: the accounts whose claims count, per label, each
+  as `{ login, id }`; the numeric id is what is compared, since a login can be reused. An accepted account
+  that is the lead's own crew token account refuses the offer.
 - The lead's checks: the claim ref is only the lock. Each claim (and each takeover) is proven by one comment on
   the offer, `studio-claim <claim commit> <offer nonce>`; the first unedited one for the commit that started the
   attempt must come from the account the claim names, accepted for the label; every later state change (`done`,
   `released`) is announced the same way, naming its exact commit, and only heartbeats may stay unannounced.
-  Comments of accounts that are not accepted are warnings and never decide or block. Nothing in a commit
+  Only unedited comments by OWNER, MEMBER or COLLABORATOR accounts with an accepted id count; others are
+  warnings and never decide or block, and an offer with more comment pages than Studio reads decides nothing.
+  The chain walk stops at the tip the lead proved before. Nothing in a commit
   (content, author, committer, signature) counts. Unproven claims, unannounced state changes and edited
   comments go to the lead.
   The pull request must come from `studio/<id>` of the item's repository with the report's head, opened by the
-  claiming worker. The worker token needs Issues: Read and write for the comment.
+  claiming worker's account id. The worker token needs Issues: Read and write for the comments.
 - Two tokens on a worker: `worker-token` (`studio secret set worker-token`) for claims, pull requests and pushes,
-  never handed to a crew and refused when it equals the crew token; the crew gets at most the crew token. Without
-  one, the crew commits only and the worker pushes `studio/<id>` from a fresh repository after it ended.
+  used in-process (HTTPS from Node, not `gh`), never handed to a crew, refused when it equals the crew token or
+  its account is the crew token's (`GET /user`); the crew gets at most the crew token. Without one, the crew
+  commits only and the worker pushes `studio/<id>` from a fresh blob-less clone after it ended.
 - The guard refuses crew pushes to `refs/studio/*`, also as a short name git would resolve there.
-- README: how to restrict `refs/studio/claims/*` with a ruleset (not checked live).
+- README: a ruleset for `refs/studio/claims/*`, marked untested and not a control; anyone with contents write can
+  deny a claim, not forge one.
 - A report or pull request text that looks like a credential, or holds the worker's own tokens, is never
   published: the claim is `released`.
-- Costs: a worker's run counts once, on the item (`usage`, from `workers.json`) and in the day's ledger, with
-  the usage the worker reported.
+- Costs: a worker's run counts once, first in the day's ledger and then on the item (`usage`, from
+  `workers.json`); while the ledger does not take it the item waits. One run counts for at most the lowest
+  daily cap.
 - `studio status` lists offers as `worker:<label>` rows (`--json`: a `worker` object with label, offer, login,
   claim state, attempt and last heartbeat); the pane shows the wait code `worker` in English and German.
 - `studio stop <id> --requeue` on an item on a worker withdraws the offer (the worker stops its crew) and gives
@@ -68,7 +81,7 @@ Nothing but GitHub is shared between the machines. Not tagged yet; the maintaine
 
 ### Changed
 
-- `openCrewPr` moved to `src/pull-request.ts`, used by `collect` and the worker alike.
+- `openCrewPr` moved to `src/pull-request.ts`; it no longer reuses a pull request from a fork.
 - The lessons evidence may name a report on a claim (`refs/studio/claims/<id>@<sha>`).
 - `recover` leaves items on workers to `tick`: they have no crew record by design.
 

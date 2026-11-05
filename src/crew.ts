@@ -746,7 +746,7 @@ export function writeCrewSettings(
     /** `Skill(<name>)` deny rules: every installed skill the brief does not name. */
     skillDeny?: readonly string[];
     /** A worker machine's deny list (src/worker-deny.ts): places and ports its crews never touch. */
-    deny?: { paths: readonly string[]; ports: readonly number[] };
+    deny?: { paths: readonly string[]; ports: readonly number[]; allowRead?: readonly string[] };
   },
   launcher: LauncherEnv = {},
 ): string {
@@ -786,6 +786,8 @@ export function writeCrewSettings(
     // (a shell command, or a file tool under the sandbox) must reach them too, or the crew
     // starts without its task. Nothing else of the state root comes back.
     ...['md', 'caps', 'rules'].map((ext) => join(stateRoot, 'briefs', `${id}.${ext}`)),
+    // Places a worker's owner opened inside its denied Windows mounts, for reads only.
+    ...(dirs.deny?.allowRead ?? []),
   ];
   const ctxFile = join(stateRoot, 'guard', `${id}.json`);
   // The clone lives inside the state root, so the root itself cannot be protected (the guard
@@ -1005,7 +1007,7 @@ export function crewStateOf(
  * identity, so the crew never runs gh.
  */
 export interface WorkerLaunch {
-  deny: { paths: readonly string[]; ports: readonly number[] };
+  deny: { paths: readonly string[]; ports: readonly number[]; allowRead?: readonly string[] };
   /** `studio/<id>` when an earlier run pushed it (a fix round, a taken-over claim); else main. */
   from?: string;
   /**
@@ -1013,6 +1015,11 @@ export interface WorkerLaunch {
    * worker pushes its branch with its own token after the crew ended.
    */
   noToken?: boolean;
+  /**
+   * A directory holding `.studio/roles` and `.studio/solutions` as the pinned `origin/main` has
+   * them: the role text and the lessons of the brief come from there, never the working tree.
+   */
+  contentDir?: string;
 }
 
 export async function launchCrew(
@@ -1255,7 +1262,7 @@ async function launchCrewLocked(
       remote: item.repo === config.primaryRepo ? 'origin' : githubHttpsUrl(item.repo),
     },
   });
-  readRoleMemory(projectDir, item.role);
+  readRoleMemory(worker?.contentDir ?? projectDir, item.role);
   const missingSkill = firstMissingSkill(claudeConfigDir, [
     CREW_SKILL,
     ...forItem.resolved.required,
@@ -1373,7 +1380,14 @@ async function launchCrewLocked(
     worker !== undefined ||
     ((launcher.platform ?? process.platform) === 'darwin' &&
       !ownerConfig.crewAllowMacosTrustService);
-  const brief = writeBrief(stateRoot, item, config, projectDir, briefRules, caps);
+  const brief = writeBrief(
+    stateRoot,
+    item,
+    config,
+    worker?.contentDir ?? projectDir,
+    briefRules,
+    caps,
+  );
   const settings = writeCrewSettings(
     stateRoot,
     item,

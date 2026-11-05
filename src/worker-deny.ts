@@ -2,7 +2,7 @@
 // lead does: Claude Code's sandbox is the boundary, Studio's guard is a convenience on top. So a
 // worker only claims work where that sandbox exists and every deny entry maps onto it; anything
 // else refuses with a line that says why (fail closed).
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { pathKey, type WorkerDeny, within } from './config.js';
 
@@ -11,8 +11,11 @@ export { namedDeniedPort } from './guard.js';
 /** The facts about the machine that decide what a worker can enforce. */
 export interface WorkerPlatform {
   platform: NodeJS.Platform;
-  /** Linux under the Windows Subsystem for Linux, and which version; `none` elsewhere. */
-  wsl: 'none' | 'wsl1' | 'wsl2';
+  /**
+   * Linux under the Windows Subsystem for Linux, and which version; `none` elsewhere, `unknown`
+   * when signs of WSL are there but the version cannot be told.
+   */
+  wsl: 'none' | 'wsl1' | 'wsl2' | 'unknown';
   /**
    * WSL interop (starting Windows programs from Linux): true when on, false when off, undefined
    * when it cannot be told. Only read under WSL.
@@ -20,6 +23,8 @@ export interface WorkerPlatform {
   interop?: boolean;
   /** Where WSL mounts the Windows drives (`[automount] root` of /etc/wsl.conf); `/mnt/` by default. */
   automountRoot: string;
+  /** Mount points of Windows file systems (drvfs, 9p, virtiofs) from /proc/self/mountinfo. */
+  windowsMounts?: string[];
 }
 
 type ReadText = (file: string) => string | undefined;
@@ -51,16 +56,48 @@ export function automountRoot(conf: string | undefined): string {
   return '/mnt/';
 }
 
-/** Reads the platform facts; `read` and `platform` are seams for tests. */
+/** Mount points of Windows file systems in a mountinfo text (field 5; the type after ` - `). */
+export function windowsMountsOf(mountinfo: string | undefined): string[] {
+  const out: string[] = [];
+  for (const line of (mountinfo ?? '').split('\n')) {
+    const [left, right] = line.split(' - ');
+    if (left === undefined || right === undefined) continue;
+    const point = left.split(' ')[4];
+    const type = right.split(' ')[0];
+    if (point === undefined || type === undefined) continue;
+    if (!/^(drvfs|9p|virtiofs)$/.test(type)) continue;
+    // mountinfo escapes space, tab, newline and backslash as octal.
+    const p = point.replace(/\\([0-7]{3})/g, (_, o: string) =>
+      String.fromCharCode(Number.parseInt(o, 8)),
+    );
+    if (p.startsWith('/') && p !== '/' && !out.includes(p)) out.push(p);
+  }
+  return out;
+}
+
+/** Reads the platform facts; `platform`, `read`, `env` and `exists` are seams for tests. */
 export function detectPlatform(
   platform: NodeJS.Platform = process.platform,
   read: ReadText = readText,
+  env: Record<string, string | undefined> = process.env,
+  exists: (p: string) => boolean = existsSync,
 ): WorkerPlatform {
   if (platform !== 'linux') return { platform, wsl: 'none', automountRoot: '/mnt/' };
   const release = read('/proc/sys/kernel/osrelease') ?? '';
-  if (!/microsoft/i.test(release)) return { platform, wsl: 'none', automountRoot: '/mnt/' };
+  // Any sign of WSL counts: the kernel name, the interop entries, the distro variable, /run/WSL.
+  const signs =
+    /microsoft/i.test(release) ||
+    read('/proc/sys/fs/binfmt_misc/WSLInterop') !== undefined ||
+    read('/proc/sys/fs/binfmt_misc/WSLInterop-late') !== undefined ||
+    (env.WSL_DISTRO_NAME ?? '') !== '' ||
+    exists('/run/WSL');
+  if (!signs) return { platform, wsl: 'none', automountRoot: '/mnt/' };
   // WSL2 kernels name themselves `...-microsoft-standard-WSL2`; WSL1 reports `...-Microsoft`.
-  const wsl = /WSL2|microsoft-standard/i.test(release) ? 'wsl2' : 'wsl1';
+  const wsl = /WSL2|microsoft-standard/i.test(release)
+    ? 'wsl2'
+    : /microsoft/i.test(release)
+      ? 'wsl1'
+      : 'unknown';
   // binfmt_misc holds the WSLInterop entry while interop is on; its first line says enabled.
   const entry =
     read('/proc/sys/fs/binfmt_misc/WSLInterop') ?? read('/proc/sys/fs/binfmt_misc/WSLInterop-late');
@@ -73,6 +110,7 @@ export function detectPlatform(
     wsl,
     ...(interop === undefined ? {} : { interop }),
     automountRoot: automountRoot(read('/etc/wsl.conf')),
+    windowsMounts: windowsMountsOf(read('/proc/self/mountinfo')),
   };
 }
 
@@ -89,6 +127,9 @@ export function sandboxProblem(p: WorkerPlatform): string | undefined {
   }
   if (p.platform !== 'linux' && p.platform !== 'darwin') {
     return `${p.platform} has no sandbox for crew commands; a worker runs on macOS, Linux or WSL2`;
+  }
+  if (p.wsl === 'unknown') {
+    return 'this looks like WSL, but its version cannot be told; a worker runs only in WSL2 with interop off';
   }
   if (p.wsl === 'wsl1') {
     return 'WSL1 has no sandbox for crew commands; convert the distribution to WSL2 (wsl --set-version <distro> 2)';
@@ -107,6 +148,8 @@ export interface EnforcedDeny {
   paths: string[];
   /** Ports on the worker machine: the guard refuses commands that name them. */
   ports: number[];
+  /** Places inside a denied Windows mount the owner opened for reads (`workers.self.allow_read`). */
+  allowRead: string[];
   /** One line per entry that is enforced more widely than written, for the worker's output. */
   notes: string[];
 }
@@ -129,9 +172,19 @@ function localName(host: string): boolean {
   return /\.(local|lan|internal|intranet|home\.arpa|localdomain)$/.test(h);
 }
 
-/** An IPv4 literal or a bracketed IPv6 literal. */
-const ipLiteral = (host: string): boolean =>
-  /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || /^\[[0-9A-Fa-f:.]+\]$/.test(host);
+/**
+ * Whether a host is an IP address in any spelling a resolver takes: IPv6 (bracketed or bare,
+ * mapped forms included) and IPv4 as 1 to 4 parts of decimal, octal (`0177`) or hex (`0x7f`)
+ * numbers, so `2130706433`, `0x7f000001` and `127.1` all count.
+ */
+export function ipLiteral(host: string): boolean {
+  if (/^\[[0-9A-Fa-f:.]+\]$/.test(host) || (host.includes(':') && /^[0-9A-Fa-f:.]+$/.test(host))) {
+    return true;
+  }
+  const parts = host.split('.');
+  if (parts.length < 1 || parts.length > 4) return false;
+  return parts.every((p) => /^(0[xX][0-9A-Fa-f]+|0[0-7]*|[1-9]\d*)$/.test(p));
+}
 
 /** Splits a `network_allow` entry into host and port (`[::1]:443`, `example.org:8080`). */
 export function hostPort(entry: string): { host: string; port?: number } {
@@ -163,12 +216,15 @@ export function enforceDeny(o: {
   networkAllow: readonly string[];
   /** The worker's checkout, state root and toolchain paths: a deny entry must not cover them. */
   keep: readonly string[];
+  /** Places on Windows mounts the owner opens for reads, one by one (`workers.self.allow_read`). */
+  allowRead?: readonly string[];
 }): EnforcedDeny | { refused: string } {
   const paths: string[] = [];
   const notes: string[] = [];
   const key = (p: string) => pathKey(p, o.platform.platform);
   const wsl = o.platform.wsl === 'wsl2';
   const root = o.platform.automountRoot;
+  const explicit: string[] = [];
   for (const entry of o.deny.paths) {
     const drive = WINDOWS_DRIVE.exec(entry);
     let target: string;
@@ -204,6 +260,7 @@ export function enforceDeny(o: {
       }
     }
     if (target === '/') return { refused: `deny path ${entry} denies everything` };
+    explicit.push(target);
     for (const spelling of [target, realOr(target)]) {
       const k = key(spelling);
       const hit = o.keep.find((p) => within(key(p), k) || within(k, key(p)));
@@ -214,6 +271,47 @@ export function enforceDeny(o: {
       }
       if (!paths.includes(spelling)) paths.push(spelling);
     }
+  }
+  // On WSL2 every Windows file system is denied by default: the automount root and each drvfs,
+  // 9p or virtiofs mount. The owner opens single places for reads; writes stay denied.
+  const allowRead: string[] = [];
+  if (wsl) {
+    const defaults = [root.replace(/\/+$/, ''), ...(o.platform.windowsMounts ?? [])];
+    for (const d of defaults) {
+      if (d === '' || d === '/') continue;
+      const hit = o.keep.find((p) => within(key(p), key(d)));
+      if (hit !== undefined) {
+        return {
+          refused: `${hit} lies on a Windows file system (${d}); keep the worker's checkout, state and toolchains in the Linux file system`,
+        };
+      }
+      if (!paths.includes(d)) paths.push(d);
+    }
+    for (const entry of o.allowRead ?? []) {
+      const drive = WINDOWS_DRIVE.exec(entry);
+      const target = drive
+        ? `${root}${(drive[1] as string).toLowerCase()}/${entry.slice(3).replace(/\\/g, '/')}`.replace(
+            /\/+$/,
+            '',
+          )
+        : posix.normalize(entry).replace(/\/+$/, '');
+      if (!isAbsolute(target) || !defaults.some((d) => within(target, d))) {
+        return {
+          refused: `allow_read ${entry} does not lie on a Windows file system of this machine`,
+        };
+      }
+      const denied = explicit.find((d) => within(target, d) || within(d, target));
+      if (denied !== undefined) {
+        return {
+          refused: `allow_read ${entry} lies inside the denied ${denied}; the deny list wins`,
+        };
+      }
+      if (!allowRead.includes(target)) allowRead.push(target);
+    }
+  } else if ((o.allowRead ?? []).length > 0) {
+    return {
+      refused: 'allow_read opens places on Windows file systems and only holds inside WSL2',
+    };
   }
   const ports = [...new Set(o.deny.ports)].sort((a, b) => a - b);
   if (ports.length > 0) {
@@ -229,7 +327,7 @@ export function enforceDeny(o: {
       }
     }
   }
-  return { paths, ports, notes };
+  return { paths, ports, allowRead, notes };
 }
 
 /** The union of the repository's and the machine's deny lists: neither can lift the other's. */

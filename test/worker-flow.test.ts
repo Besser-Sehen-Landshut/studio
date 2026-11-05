@@ -18,14 +18,16 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { loadBoard } from '../src/board.js';
 import { runCli } from '../src/cli.js';
-import { stateRootFor } from '../src/paths.js';
+import { acquireStateLock, ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { pinnedPlugins } from '../src/plugins.js';
 import type { Claude, Gh, Ports } from '../src/ports.js';
 import { realPorts } from '../src/ports.js';
 import { reportName } from '../src/report.js';
+import { LAUNCH_LOCK } from '../src/usage.js';
 import { parseClaim } from '../src/worker-claim.js';
 import type { WorkerPlatform } from '../src/worker-deny.js';
-import { fakeGitHub } from './worker-fake.js';
+import type { WorkerHub } from '../src/worker-hub.js';
+import { fakeGitHub, idOf } from './worker-fake.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-workers-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -125,7 +127,7 @@ interface World {
   github: ReturnType<typeof fakeGitHub>;
 }
 
-function world(items: string[] = [ITEM]): World {
+function world(items: string[] = [ITEM], extraYaml = ''): World {
   const base = join(root, `w${n++}`);
   mkdirSync(base);
   const origin = join(base, 'origin.git');
@@ -136,15 +138,24 @@ function world(items: string[] = [ITEM]): World {
   const denied = join(base, 'backups');
   mkdirSync(denied);
   mkdirSync(join(project, '.studio'));
-  writeFileSync(join(project, '.studio', 'studio.yaml'), studioYaml(denied));
+  writeFileSync(join(project, '.studio', 'studio.yaml'), studioYaml(denied) + extraYaml);
   writeFileSync(join(project, '.studio', 'board.yaml'), `items:\n${items.join('\n')}\n`);
+  mkdirSync(join(project, '.studio', 'roles'));
+  writeFileSync(join(project, '.studio', 'roles', 'builder.md'), 'Role text from main.\n');
   writeFileSync(join(project, 'README.md'), 'x\n');
-  git(project, 'add', 'README.md', '.studio/studio.yaml', '.studio/board.yaml');
+  git(
+    project,
+    'add',
+    'README.md',
+    '.studio/studio.yaml',
+    '.studio/board.yaml',
+    '.studio/roles/builder.md',
+  );
   git(project, 'commit', '-q', '-m', 'init');
   git(project, 'push', '-q', 'origin', 'main');
   const home = join(base, 'lead-home');
   mkdirSync(home);
-  writeOwnerConfig(home, 'workers:\n  accept:\n    windows: [win-bot, win-bot2]\n');
+  writeOwnerConfig(home, acceptYaml('win-bot', 'win-bot2'));
   const env = { PATH: process.env.PATH };
   const now = { t: Date.parse('2026-10-31T10:00:00Z') };
   currentOrigin = origin;
@@ -248,7 +259,11 @@ function machinePorts(w: World, login: string, gh: Gh, crew: Crew): Ports {
       },
     },
     host: { loadAvg1: () => 0, cpuCount: () => 4 },
-    hub: (token?: string) => w.github.hubAs(token === undefined ? 'lead-user' : login),
+    // The worker token acts as the worker's account, a crew token as an account of its own.
+    hub: (token?: string) =>
+      w.github.hubAs(
+        token === undefined ? 'lead-user' : token.startsWith(CREW_TOKEN) ? `${login}-crew` : login,
+      ),
   };
 }
 
@@ -287,23 +302,11 @@ const leadGh = (head = HEAD) =>
   );
 
 /** A worker's gh: no open pull request of the branch yet; `pr create` opens #7 as `author`. */
-const workerGh = (w: World, author: string) =>
-  fakeGh((l) => {
-    if (l.startsWith('pr list --repo org/app --head studio/APP-1')) return { stdout: '[]' };
-    if (l.startsWith('pr create --repo org/app --head studio/APP-1')) {
-      w.github.prs.set(7, {
-        number: 7,
-        author,
-        branch: 'studio/APP-1',
-        head: HEAD,
-        base: 'main',
-        crossRepository: false,
-        state: 'OPEN',
-      });
-      return { stdout: 'https://github.com/org/app/pull/7\n' };
-    }
-    return undefined;
-  });
+const workerGh = (_w: World, _author: string) => fakeGh(() => undefined);
+
+/** The `workers.accept` lines of an owner config: each login with the id the fake gives it. */
+const acceptYaml = (...logins: string[]) =>
+  `workers:\n  accept:\n    windows: [${logins.map((l) => `{ login: ${l}, id: ${idOf(l)} }`).join(', ')}]\n`;
 
 /** What the crew leaves: a report under the name only its brief knows, a log, a pushed branch. */
 function crewFinishes(w: World, m: Machine, crew: Crew, report = defaultReport()): void {
@@ -544,11 +547,14 @@ describe('workers on other machines', () => {
     await run(w.lead, lead, ['tick']);
     const wm = workerMachine(w, 'win');
     const crew = newCrew();
-    // The pull request shows another author than the claim names.
-    const wp = machinePorts(w, 'win-bot', workerGh(w, 'someone-else').gh, crew);
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, crew);
     await run(wm, wp, ['worker', '--label', 'windows', '--once']);
     crewFinishes(w, wm, crew);
     await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    // GitHub shows another account as the pull request's author than the claim names.
+    const pr = w.github.prs.get(7);
+    if (pr === undefined) throw new Error('no pull request');
+    w.github.prs.set(7, { ...pr, author: 'someone-else', authorId: idOf('someone-else') });
     const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
     expect(tick.needsLead).toContainEqual({
       item: 'APP-1',
@@ -560,9 +566,31 @@ describe('workers on other machines', () => {
     expect(statusOf(w)?.pr).toBeUndefined();
   });
 
+  it('a worker never renews a pull request of another account for its branch', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const wm = workerMachine(w, 'win');
+    const crew = newCrew();
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, crew);
+    await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    await w.github.hubAs('someone-else').createPullRequest('org/app', {
+      head: 'studio/APP-1',
+      base: 'main',
+      title: 't',
+      body: 'b',
+    });
+    crewFinishes(w, wm, crew);
+    const s = await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    expect(lastLine(s.out)).toMatchObject({
+      kind: 'released',
+      line: 'APP-1: a pull request of another account is open for the branch; released',
+    });
+  });
+
   it('a claim of a worker the owner did not accept counts for nothing', async () => {
     const w = world();
-    writeOwnerConfig(w.lead.home, 'workers:\n  accept:\n    windows: [win-bot2]\n');
+    writeOwnerConfig(w.lead.home, acceptYaml('win-bot2'));
     const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
     await run(w.lead, lead, ['tick']);
     const wm = workerMachine(w, 'win');
@@ -776,14 +804,12 @@ describe('workers on other machines', () => {
       line: 'APP-1: claimed (attempt 1) and its crew started from studio/APP-1',
     });
     crewFinishes(w, b, crewB);
+    // The open pull request is win-bot's: win-bot2 never takes it over, it gives the round back.
     expect(
       lastLine((await run(b, pb, ['worker', '--label', 'windows', '--once'])).out),
-    ).toMatchObject({ kind: 'done', line: 'APP-1: report done handed back with pull request #7' });
-    // The pull request was opened by win-bot; the claim is win-bot2's: it counts for nothing.
-    const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
-    expect(tick.needsLead).toContainEqual({
-      item: 'APP-1',
-      reason: expect.stringMatching(/PR 7 was opened by win-bot, not by win-bot2/),
+    ).toMatchObject({
+      kind: 'released',
+      line: 'APP-1: a pull request of another account is open for the branch; released',
     });
   });
 
@@ -927,9 +953,20 @@ describe('workers on other machines', () => {
 
   it('a worker without a crew token: the crew gets no token, the worker pushes its branch', async () => {
     const w = world();
+    // A real partial clone, as from GitHub: the origin serves blob filters over file://.
+    git(w.base, '--git-dir', w.origin, 'config', 'uploadpack.allowFilter', 'true');
+    currentOrigin = `file://${w.origin}`;
+    // History holds a blob that no checkout has: a blob-less clone never fetches it.
+    writeFileSync(join(w.lead.project, 'old.txt'), 'only in history\n');
+    git(w.lead.project, 'add', 'old.txt');
+    git(w.lead.project, 'commit', '-q', '-m', 'old');
+    git(w.lead.project, 'rm', '-q', 'old.txt');
+    git(w.lead.project, 'commit', '-q', '-m', 'gone');
+    git(w.lead.project, 'push', '-q', 'origin', 'main');
     const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
     await run(w.lead, lead, ['tick']);
     const wm = workerMachine(w, 'win', { crewToken: false });
+    git(wm.project, 'remote', 'set-url', 'origin', currentOrigin);
     const crew = newCrew();
     const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, crew);
     await run(wm, wp, ['worker', '--label', 'windows', '--once']);
@@ -940,6 +977,11 @@ describe('workers on other machines', () => {
     expect(brief).not.toContain('git push origin');
     // The crew commits in its clone; the worker pushes that commit with its own token.
     const clone = join(wm.state, 'clones', 'APP-1');
+    // The crew's clone is blob-less: it lacks the blobs of history it did not check out.
+    expect(git(clone, 'config', '--get', 'remote.origin.promisor')).toBe('true');
+    expect(git(clone, 'rev-list', '--objects', '--missing=print', 'HEAD')).toMatch(
+      /^\?[0-9a-f]{40}$/m,
+    );
     writeFileSync(join(clone, 'log.txt'), 'parsed\n');
     git(clone, 'add', 'log.txt');
     git(clone, 'commit', '-q', '-m', 'parse the log');
@@ -961,5 +1003,333 @@ describe('workers on other machines', () => {
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/the worker token equals the crew token/);
     expect(w.github.refs.size).toBe(0);
+  });
+
+  // ---- The independent review of 29b3b19 ------------------------------------------------------
+
+  /** A worker that has claimed APP-1 and runs its crew. */
+  const claimedWorld = async (o: { extraYaml?: string } = {}) => {
+    const w = world([ITEM], o.extraYaml ?? '');
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const wm = workerMachine(w, 'win');
+    const crew = newCrew();
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, crew);
+    expect(lastLine((await run(wm, wp, ['worker', '--label', 'windows', '--once'])).out).kind).toBe(
+      'claimed',
+    );
+    return { w, lead, wm, crew, wp };
+  };
+
+  it('crew and worker tokens of one account: the worker refuses to start', async () => {
+    const w = world();
+    const wm = workerMachine(w, 'win');
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    // Both tokens act as the same GitHub account.
+    wp.hub = (token?: string) => w.github.hubAs(token === undefined ? 'lead-user' : 'win-bot');
+    const r = await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/the worker token and the crew token belong to the same account/);
+    expect(w.github.refs.size).toBe(0);
+  });
+
+  it('the lead refuses to offer to an accepted account that is its own crew token account', async () => {
+    const w = world();
+    writeOwnerConfig(
+      w.lead.home,
+      `workers:\n  accept:\n    windows: [{ login: lead-user-crew, id: ${idOf('lead-user-crew')} }]\n`,
+    );
+    writeFileSync(join(ownerDir(w.lead.home), 'crew-token'), `${CREW_TOKEN}-lead\n`);
+    chmodSync(join(ownerDir(w.lead.home), 'crew-token'), 0o600);
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.errors).toContainEqual({
+      item: 'APP-1',
+      error: expect.stringMatching(/the account of the lead's crew token/),
+    });
+    expect(w.github.issues.size).toBe(0);
+  });
+
+  it('a worker whose credential is parked or whose launch lock is held claims nothing', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const wm = workerMachine(w, 'win');
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    const ownerRoot = ownerStateRootFor({ env: wm.env, homedir: wm.home });
+    mkdirSync(ownerRoot, { recursive: true });
+    const lock = acquireStateLock(ownerRoot, LAUNCH_LOCK, {
+      now: new Date(w.now.t),
+      heartbeatStaleMs: 600_000,
+    });
+    expect(
+      lastLine((await run(wm, wp, ['worker', '--label', 'windows', '--once'])).out),
+    ).toMatchObject({ kind: 'held', line: 'another launch is in progress on this machine' });
+    lock?.release();
+    writeFileSync(
+      join(ownerRoot, 'limits.json'),
+      JSON.stringify({
+        default: { parkedUntil: new Date(w.now.t + 3_600_000).toISOString(), kind: 'session' },
+      }),
+    );
+    expect(lastLine((await run(wm, wp, ['worker', '--label', 'windows', '--once'])).out).kind).toBe(
+      'held',
+    );
+    expect(w.github.refs.size).toBe(0);
+  });
+
+  it('a launch that is held after the claim was won takes the claim back, the offer stays', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const wm = workerMachine(w, 'win');
+    const crew = newCrew();
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, crew);
+    const ownerRoot = ownerStateRootFor({ env: wm.env, homedir: wm.home });
+    let lock: ReturnType<typeof acquireStateLock>;
+    const base = wp.hub as (t?: string) => WorkerHub;
+    wp.hub = (t?: string) => {
+      const h = base(t);
+      return {
+        ...h,
+        // Another launch starts right between the claim and this worker's launch.
+        async commentOffer(repo, n, body) {
+          await h.commentOffer(repo, n, body);
+          mkdirSync(ownerRoot, { recursive: true });
+          lock = acquireStateLock(ownerRoot, LAUNCH_LOCK, {
+            now: new Date(w.now.t),
+            heartbeatStaleMs: 600_000,
+          });
+        },
+      };
+    };
+    const s = await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    lock?.release();
+    expect(lastLine(s.out)).toMatchObject({ kind: 'held', item: 'APP-1' });
+    expect(w.github.refs.has('APP-1')).toBe(false);
+    expect(w.github.issues.get(30)?.open).toBe(true);
+    expect(crew.started).toHaveLength(0);
+  });
+
+  it('a claim comment that fails takes the claim back', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    // A worker without write access cannot comment on the locked offer.
+    w.github.outsiders.add('win-bot');
+    const wm = workerMachine(w, 'win');
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    const s = await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    expect(lastLine(s.out)).toMatchObject({
+      kind: 'held',
+      line: 'APP-1: the claim comment failed; let go',
+    });
+    expect(w.github.refs.has('APP-1')).toBe(false);
+  });
+
+  it('the brief takes role text from origin/main, never from the worker working tree', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const wm = workerMachine(w, 'win');
+    writeFileSync(
+      join(wm.project, '.studio', 'roles', 'builder.md'),
+      'Role text of the working tree.\n',
+    );
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    const brief = readFileSync(join(wm.state, 'briefs', 'APP-1.md'), 'utf8');
+    expect(brief).toContain('Role text from main.');
+    expect(brief).not.toContain('working tree.');
+  });
+
+  it('claim comments by accounts without write access neither prove nor block', async () => {
+    const { w, lead } = await claimedWorld();
+    const sha = w.github.refs.get('APP-1') as string;
+    // A comment from before the lock, by an account without write access, naming the claim first.
+    const at = new Date(w.now.t - 60_000).toISOString();
+    w.github.comments.get(30)?.unshift({
+      id: 1,
+      login: 'win-bot',
+      userId: idOf('win-bot'),
+      association: 'NONE',
+      body: `studio-claim ${sha} ${nonceOf(w)}`,
+      createdAt: at,
+      updatedAt: at,
+    });
+    const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: 'APP-1: claim comment 1 by win-bot, who has no write access, does not count',
+    });
+    expect(tick.held).toContainEqual({
+      item: 'APP-1',
+      reason: 'worker: on win-bot (windows), heartbeat 0 min ago',
+    });
+  });
+
+  it('an offer with more comments than Studio reads decides nothing', async () => {
+    const { w, lead } = await claimedWorld();
+    w.github.cut.add(30);
+    const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(/#30 has more comments than Studio reads/),
+    });
+  });
+
+  it('a login reused by another account is not the accepted worker', async () => {
+    const { w, lead } = await claimedWorld();
+    // The owner pinned win-bot's account id; the account now named win-bot is another one.
+    writeOwnerConfig(
+      w.lead.home,
+      'workers:\n  accept:\n    windows: [{ login: win-bot, id: 1 }]\n',
+    );
+    const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(/no claim comment on #30 proves who claimed it/),
+    });
+  });
+
+  it('a ledger that does not take the run keeps the item for the next tick, nothing lost', async () => {
+    const { w, lead, wm, crew, wp } = await claimedWorld();
+    crewFinishes(w, wm, crew);
+    await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    writeFileSync(join(w.lead.state, 'costs.json'), 'not json');
+    const t1 = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(t1.held).toContainEqual({
+      item: 'APP-1',
+      reason: 'worker: the cost ledger did not take the run yet; collected next tick',
+    });
+    expect(statusOf(w)?.status).not.toBe('in_review');
+    rmSync(join(w.lead.state, 'costs.json'));
+    const t2 = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(t2.collected).toEqual([expect.objectContaining({ item: 'APP-1', status: 'in_review' })]);
+    expect(statusOf(w)?.usage?.costUsd).toBe(0.42);
+  });
+
+  it('a single run counts for at most the daily cap', async () => {
+    const { w, lead, wm, crew, wp } = await claimedWorld({
+      extraYaml: 'limits: { daily_cost_usd: 0.1 }\n',
+    });
+    crewFinishes(w, wm, crew);
+    await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: 'APP-1: win-bot reported $0.42 for one run; counted as $0.10, the daily cap',
+    });
+    const ledger = JSON.parse(readFileSync(join(w.lead.state, 'costs.json'), 'utf8'));
+    expect(Object.values(ledger.runs)).toContainEqual(expect.objectContaining({ costUsd: 0.1 }));
+  });
+
+  it('a failing check for new claims never costs the held item its heartbeat', async () => {
+    const { w, wm, wp } = await claimedWorld();
+    // Pause on the worker: no new claim, but the crew it holds goes on and is beaten.
+    writeFileSync(join(wm.state, 'pause.json'), '{}');
+    w.now.t += 11 * 60_000;
+    expect(
+      lastLine((await run(wm, wp, ['worker', '--label', 'windows', '--once'])).out),
+    ).toMatchObject({ kind: 'working', line: 'APP-1: the crew is working; heartbeat sent' });
+  });
+
+  it('after a restart, heartbeats of its own on top of the saved claim keep the crew', async () => {
+    const { w, wm, crew, wp } = await claimedWorld();
+    const file = join(wm.state, 'worker.json');
+    const before = JSON.parse(readFileSync(file, 'utf8')).current.claimSha;
+    w.now.t += 11 * 60_000;
+    await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    // As if the worker died after the heartbeat but before saving it.
+    const saved = JSON.parse(readFileSync(file, 'utf8'));
+    saved.current.claimSha = before;
+    writeFileSync(file, JSON.stringify(saved));
+    const s = await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    expect(lastLine(s.out)).toMatchObject({ kind: 'working' });
+    expect(crew.stopped).toEqual([]);
+  });
+
+  it('the lead walks a claim chain only down to the tip it proved before', async () => {
+    const { w, lead, wm, wp } = await claimedWorld();
+    let walked = 0;
+    const base = lead.hub as (t?: string) => WorkerHub;
+    lead.hub = (t?: string) => {
+      const h = base(t);
+      return {
+        ...h,
+        async claimCommit(repo, sha) {
+          walked++;
+          return h.claimCommit(repo, sha);
+        },
+      };
+    };
+    for (let i = 0; i < 3; i++) {
+      await run(w.lead, lead, ['tick']);
+      w.now.t += 11 * 60_000;
+      await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    }
+    walked = 0;
+    await run(w.lead, lead, ['tick']);
+    expect(walked).toBe(1);
+  });
+
+  it('an offer closed right as it was claimed: the worker takes its claim back', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const wm = workerMachine(w, 'win');
+    const crew = newCrew();
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, crew);
+    const base = wp.hub as (t?: string) => WorkerHub;
+    wp.hub = (t?: string) => {
+      const h = base(t);
+      return {
+        ...h,
+        async writeClaim(repo, item, o) {
+          const r = await h.writeClaim(repo, item, o);
+          const issue = w.github.issues.get(30);
+          if (issue) issue.open = false;
+          return r;
+        },
+      };
+    };
+    const s = await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    expect(lastLine(s.out)).toMatchObject({ kind: 'idle' });
+    expect(w.github.refs.has('APP-1')).toBe(false);
+    expect(crew.started).toHaveLength(0);
+  });
+
+  it('a claim moved just before the report goes out: nothing is pushed or opened', async () => {
+    const { w, wm, crew, wp } = await claimedWorld();
+    crewFinishes(w, wm, crew);
+    let reads = 0;
+    const base = wp.hub as (t?: string) => WorkerHub;
+    wp.hub = (t?: string) => {
+      const h = base(t);
+      return {
+        ...h,
+        async readClaim(repo, item) {
+          // The second read in this pass, right before the pull request, finds the claim gone.
+          return ++reads >= 2 ? undefined : h.readClaim(repo, item);
+        },
+      };
+    };
+    const s = await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    expect(lastLine(s.out)).toMatchObject({
+      kind: 'lost',
+      line: 'APP-1: the claim moved before the report went out',
+    });
+    expect(w.github.prs.size).toBe(0);
+  });
+
+  it('a report holding the crew token stays on the worker', async () => {
+    const { w, wm, crew, wp } = await claimedWorld();
+    crewFinishes(w, wm, crew, defaultReport().replace('a test covers it', `${CREW_TOKEN}-win`));
+    expect(
+      lastLine((await run(wm, wp, ['worker', '--label', 'windows', '--once'])).out),
+    ).toMatchObject({
+      kind: 'released',
+      line: expect.stringMatching(/looks like it holds a credential/),
+    });
   });
 });

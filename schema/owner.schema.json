@@ -122,8 +122,23 @@
             "maxItems": 20,
             "type": "array",
             "items": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$"
+              "type": "object",
+              "properties": {
+                "login": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$"
+                },
+                "id": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "login",
+                "id"
+              ],
+              "additionalProperties": false
             }
           }
         },
@@ -164,6 +179,17 @@
                 }
               },
               "additionalProperties": false
+            },
+            "allow_read": {
+              "default": [],
+              "maxItems": 50,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 500,
+                "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+              }
             },
             "lease_minutes": {
               "default": 30,

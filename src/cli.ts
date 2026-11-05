@@ -217,8 +217,10 @@ import {
 import { workerStep } from './worker.js';
 import { parseClaim } from './worker-claim.js';
 import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
-import { ghHub, type WorkerHub } from './worker-hub.js';
+import { fetchHub, type GitHubUser, ghHub, type WorkerHub } from './worker-hub.js';
 import {
+  acceptedFor,
+  acceptProblem,
   closeOffer,
   followClaim,
   openOffer,
@@ -656,6 +658,18 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     };
     /** GitHub as the lead sees it for workers: the machine's own gh login. */
     const leadHub = (): WorkerHub => ports.hub?.() ?? ghHub(ports.gh);
+    let crewUserRead: { user?: GitHubUser } | undefined;
+    /** The account of this machine's crew token, once per process; undefined without a token. */
+    const leadCrewUser = async (config: StudioConfig): Promise<GitHubUser | undefined> => {
+      if (crewUserRead === undefined) {
+        const token = crewTokenValue(config, owner);
+        crewUserRead =
+          token === undefined
+            ? {}
+            : { user: await (ports.hub?.(token) ?? ghHub(ports.gh, token)).user() };
+      }
+      return crewUserRead.user;
+    };
     let leadLogin: string | undefined;
     const leadLoginOf = async (): Promise<string> => {
       leadLogin ??= await leadHub().login();
@@ -1102,11 +1116,17 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     const offerItem = async (config: StudioConfig, item: WorkItem) => {
       const label = item.runsOn as string;
       const root = await boundStateRoot();
-      if ((loadOwnerConfig(owner).workers?.accept[label] ?? []).length === 0) {
+      if (acceptedFor(loadOwnerConfig(owner), label).length === 0) {
         throw new HeldError(
           `${WORKER_WAIT}no worker is accepted for the label ${label} (workers.accept in the owner config)`,
         );
       }
+      const shared = acceptProblem(
+        acceptedFor(loadOwnerConfig(owner), label),
+        await leadCrewUser(config),
+        label,
+      );
+      if (shared !== undefined) throw new Error(shared);
       const now = ports.clock.now();
       const { offer, nonce } = await openOffer({
         hub: leadHub(),
@@ -1191,7 +1211,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
      */
     const workerReport = async (
       item: WorkItem,
-    ): Promise<{ report: Report; worker: string; sha: string }> => {
+    ): Promise<{ report: Report; worker: string; workerId: number; sha: string }> => {
       const config = loadConfig(project);
       const record = readWorkers(stateRoot()).items[item.id];
       if (record === undefined) {
@@ -1219,7 +1239,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         record,
         tip: read,
         claim,
-        accepted: loadOwnerConfig(owner).workers?.accept[record.label] ?? [],
+        accepted: acceptedFor(loadOwnerConfig(owner), record.label),
       });
       if (!proof.ok) {
         throw new ReportError(`the claim of ${item.id} counts for nothing: ${proof.line}`);
@@ -1233,6 +1253,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       return {
         report: claim.pr === undefined ? parsed : { ...parsed, pr: claim.pr },
         worker: claim.worker,
+        workerId: proof.worker.id,
         sha: read.sha,
       };
     };
@@ -1249,11 +1270,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       // An item on a worker hands its report back on its claim: no crew record or clone here.
       let report: Report;
       let fileName: string | undefined;
-      let fromWorker: { worker: string; sha: string } | undefined;
+      let fromWorker: { worker: string; workerId: number; sha: string } | undefined;
       if (item.runsOn !== undefined) {
         const got = await workerReport(item);
         report = got.report;
-        fromWorker = { worker: got.worker, sha: got.sha };
+        fromWorker = { worker: got.worker, workerId: got.workerId, sha: got.sha };
       } else {
         // A running crew may still rewrite its report; an earlier run's report is not this one.
         const record = readCrewRecords(stateRoot())[item.id];
@@ -1515,7 +1536,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (fromWorker !== undefined) {
           const facts = await leadHub().pullRequest(item.repo, report.pr);
           if (facts === undefined) throw new Error(`cannot read ${item.repo}#${report.pr}`);
-          if (facts.author.toLowerCase() !== fromWorker.worker.toLowerCase()) {
+          // By the numeric account id: a login can be renamed and reused, the id cannot.
+          if (
+            facts.authorId !== fromWorker.workerId ||
+            facts.headRepo?.toLowerCase() !== item.repo.toLowerCase()
+          ) {
             throw new ReportError(
               `PR ${report.pr} was opened by ${facts.author.replace(/[^A-Za-z0-9-[\]/]/g, '?')}, not by ${fromWorker.worker}, who claimed ${item.id}`,
             );
@@ -1889,10 +1914,19 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (onWorkers.length === 0) return;
         const ownerConfig = loadOwnerConfig(owner);
         const records = readWorkers(root).items;
+        const crewUser = await leadCrewUser(config);
         for (const item of onWorkers) {
           beat();
           try {
             const record = records[item.id];
+            const shared =
+              record === undefined
+                ? undefined
+                : acceptProblem(acceptedFor(ownerConfig, record.label), crewUser, record.label);
+            if (shared !== undefined) {
+              lead(item.id, shared);
+              continue;
+            }
             if (record === undefined) {
               lead(
                 item.id,
@@ -1933,15 +1967,33 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               out.held.push({ item: item.id, reason: follow.line });
               continue;
             }
-            // The run ended: its usage counts first, so the collect below sums it on the item.
-            await recordWorkerRun({
+            // The run ended: its usage counts first, so the collect below sums it on the item; a
+            // ledger that does not take it yet keeps the item for the next tick.
+            const caps = [config.limits?.dailyCostUsd, ownerConfig.limits?.dailyCostUsd].filter(
+              (c): c is number => c !== undefined,
+            );
+            const counted = await recordWorkerRun({
               stateRoot: root,
               item: item.id,
               claim: follow.claim,
               at: seen?.at ?? now.toISOString(),
               now,
               timezone: ownerConfig.crewLabelLimits.timezone,
+              ...(caps.length === 0 ? {} : { cap: Math.min(...caps) }),
             });
+            if (!counted.ok) {
+              out.held.push({
+                item: item.id,
+                reason: `${WORKER_WAIT}the cost ledger did not take the run yet; collected next tick`,
+              });
+              continue;
+            }
+            if (counted.clamped !== undefined) {
+              lead(
+                item.id,
+                `${item.id}: ${follow.claim.worker} reported ${usd(counted.clamped.reported)} for one run; counted as ${usd(counted.clamped.counted)}, the daily cap`,
+              );
+            }
             if (follow.kind === 'released') {
               const note = `worker ${follow.claim.worker} released it: ${follow.reason}`;
               await withBoardLock(root, now, () => {
@@ -2408,19 +2460,32 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (label === undefined || !WORKER_LABEL_RE.test(label)) {
           throw new UsageError('worker needs --label <label> (^[a-z][a-z0-9-]{0,31}$)');
         }
-        // The worker's own identity: the crew token of this machine, never the owner's gh login.
+        // The worker's own identity: its worker token, never the owner's login, never a crew's.
         const token = workerToken(loadConfig(project), owner);
-        const hub = ports.hub?.(token) ?? ghHub(ports.gh, token);
+        // In-process HTTPS: the worker token never sits in a child process's environment.
+        const hub = ports.hub?.(token) ?? fetchHub(token);
+        const crewToken = crewTokenValue(loadConfig(project), owner);
+        if (crewToken !== undefined) {
+          const crewHub = ports.hub?.(crewToken) ?? fetchHub(crewToken);
+          const [mine, crews] = await Promise.all([hub.user(), crewHub.user()]);
+          if (mine.id === crews.id) {
+            stderr(
+              'studio: the worker token and the crew token belong to the same account: a crew could act as the worker; give the worker an account of its own\n',
+            );
+            return 1;
+          }
+        }
         const ctx = {
           project,
           label,
           ports,
           hub,
           token,
-          crewPushes: crewTokenPresent(loadConfig(project), owner),
+          secrets: crewToken === undefined ? [] : [crewToken],
+          crewPushes: crewToken !== undefined,
           ...(deps.workerPushUrl === undefined ? {} : { pushUrl: deps.workerPushUrl }),
           owner,
-          platform: deps.workerPlatform ?? detectPlatform(),
+          platform: () => deps.workerPlatform ?? detectPlatform(),
           log: (line: string) => stderr(`${line.replace(/\p{Cc}/gu, ' ')}\n`),
         };
         for (;;) {
@@ -4098,10 +4163,12 @@ function workerToken(config: StudioConfig, owner: OwnerEnv): string {
   return file.token;
 }
 
-/** Whether a crew on this worker gets a token of its own to push `studio/<id>`. */
-function crewTokenPresent(config: StudioConfig, owner: OwnerEnv): boolean {
-  if (config.crewToken && owner.env?.[config.crewToken.env]) return true;
-  return readCrewTokenFile(owner).kind === 'ok';
+/** The crew token of this machine, as a launch reads it; undefined without one. */
+function crewTokenValue(config: StudioConfig, owner: OwnerEnv): string | undefined {
+  const fromEnv = config.crewToken ? owner.env?.[config.crewToken.env] : undefined;
+  if (fromEnv) return fromEnv;
+  const file = readCrewTokenFile(owner);
+  return file.kind === 'ok' ? file.token : undefined;
 }
 
 /** In a held note: the CI read itself failed, so the hold may never end by itself. */
