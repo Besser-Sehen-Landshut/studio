@@ -18,6 +18,7 @@ import { addAccount, listAccounts } from '../src/accounts.js';
 import { runCli } from '../src/cli.js';
 import { installCrewToken, readCrewTokenFile } from '../src/credentials.js';
 import { type Ports, realPorts } from '../src/ports.js';
+import { installNotifySecret, newNtfyTopic, readNotifySecret } from '../src/push.js';
 import { SHIM_MARKER } from '../src/setup.js';
 
 const root = mkdtempSync(join(tmpdir(), 'studio-setup-'));
@@ -37,6 +38,10 @@ type Opts = {
   studioOnPath?: boolean;
   /** `~/.local/bin` is on PATH. */
   localBinOnPath?: boolean;
+  /** Notifications are set up already; default true, so the other steps' tests ask nothing more. */
+  notified?: boolean;
+  /** What the fake ntfy server answers; default 200. */
+  httpReply?: { ok: boolean; status?: number };
 };
 
 /** A fake plugin launcher that prints its version and arguments. */
@@ -84,9 +89,16 @@ function fixture(o: Opts = {}) {
   const owner = { env, homedir: home };
   const tokens: string[] = [];
   const pluginRuns: string[][] = [];
+  const posts: { url: string; body: string; headers: Record<string, string> }[] = [];
   const real = realPorts();
   const ports: Ports = {
     ...real,
+    http: {
+      async post(url, body, headers) {
+        posts.push({ url, body, headers });
+        return o.httpReply ?? { ok: true, status: 200 };
+      },
+    },
     gh: {
       api: async () => '',
       async run(args) {
@@ -113,7 +125,9 @@ function fixture(o: Opts = {}) {
       },
     },
   };
-  return { base, project, home, env, owner, ports, launcher, localBin, tokens, pluginRuns };
+  if (o.notified !== false)
+    installNotifySecret({ transport: 'ntfy', topic: newNtfyTopic() }, owner);
+  return { base, project, home, env, owner, ports, launcher, localBin, tokens, pluginRuns, posts };
 }
 type Fx = ReturnType<typeof fixture>;
 
@@ -515,5 +529,107 @@ describe('studio setup --link', () => {
     const r = await setup(fx, ['ci', '--link']);
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/--link/);
+  });
+});
+
+describe('studio setup: notifications', () => {
+  const ready = () => {
+    const fx = fixture({ studioOnPath: true, notified: false });
+    installCrewToken(CREW_VALUE, fx.owner);
+    addAccount(fx.owner, 'main', ACCOUNT_VALUE, new Date('2026-11-01T00:00:00Z'));
+    return fx;
+  };
+
+  it('offers ntfy, shows the link once, sends a test push and stores the topic after it', async () => {
+    const fx = ready();
+    const r = await setup(fx, [], { lines: ['', ''] });
+    expect(r.code).toBe(0);
+    expect(r.asked).toEqual([
+      'line:    ntfy or none? [ntfy/none] (Enter: ntfy): ',
+      'line:    Press Enter once you subscribed (type skip to stop): ',
+    ]);
+    const stored = readNotifySecret(fx.owner);
+    if (stored.kind !== 'ok') throw new Error('not stored');
+    const link = `https://ntfy.sh/${stored.secret.topic}`;
+    expect(r.out).toContain('Install the ntfy app and open this link:');
+    // Shown exactly once, and only in the owner's terminal.
+    expect(r.out.split(stored.secret.topic)).toHaveLength(2);
+    expect(r.out).toContain(link);
+    expect(r.out).toContain('test push sent');
+    expect(fx.posts).toEqual([
+      {
+        url: link,
+        body: 'Test: Studio reaches you here',
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          Title: 'Studio',
+          Priority: 'default',
+        },
+      },
+    ]);
+    // doctor names the transport, never the topic.
+    let doctor = '';
+    await runCli(['--project', fx.project, 'doctor'], {
+      ports: fx.ports,
+      stdout: (s) => {
+        doctor += s;
+      },
+      stderr: (s) => {
+        doctor += s;
+      },
+      env: fx.env,
+      homedir: fx.home,
+      cwd: fx.project,
+    });
+    expect(doctor).toContain('notifications: ntfy');
+    expect(doctor).not.toContain(stored.secret.topic);
+  });
+
+  it('stores nothing when the test push fails, and says why without the topic', async () => {
+    const fx = fixture({
+      studioOnPath: true,
+      notified: false,
+      httpReply: { ok: false, status: 429 },
+    });
+    installCrewToken(CREW_VALUE, fx.owner);
+    addAccount(fx.owner, 'main', ACCOUNT_VALUE, new Date('2026-11-01T00:00:00Z'));
+    const r = await setup(fx, [], { lines: ['ntfy', ''] });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('test push failed: ntfy answered 429; nothing stored');
+    expect(readNotifySecret(fx.owner)).toEqual({ kind: 'absent' });
+    const topic = /ntfy\.sh\/(studio-\S+)/.exec(r.out)?.[1] as string;
+    expect(r.out.split(topic)).toHaveLength(2);
+  });
+
+  it('none and an aborted prompt skip the step', async () => {
+    for (const lines of [['none'], []]) {
+      const fx = ready();
+      const r = await setup(fx, [], { lines });
+      expect(r.code).toBe(0);
+      expect(r.out).toContain('later: studio setup --notifications');
+      expect(fx.posts).toEqual([]);
+      expect(readNotifySecret(fx.owner)).toEqual({ kind: 'absent' });
+    }
+  });
+
+  it('--notifications runs only that step, also when it is set up, with the self-hosted server', async () => {
+    const fx = fixture({ notified: true });
+    const cfg = join(fx.home, 'config', 'studio');
+    mkdirSync(cfg, { recursive: true });
+    writeFileSync(join(cfg, 'config.yaml'), 'notify:\n  ntfy_server: https://ntfy.example.org\n');
+    const before = readNotifySecret(fx.owner);
+    const r = await setup(fx, ['--notifications'], { lines: ['ntfy', ''] });
+    expect(r.code).toBe(0);
+    expect(r.out).not.toMatch(/GitHub CLI/);
+    expect(fx.posts[0]?.url).toMatch(/^https:\/\/ntfy\.example\.org\/studio-/);
+    const after = readNotifySecret(fx.owner);
+    expect(after).not.toEqual(before);
+  });
+
+  it('refuses a crew session and a missing terminal', async () => {
+    const fx = ready();
+    expect((await setup(fx, ['--notifications'], { role: 'crew' })).code).not.toBe(0);
+    expect((await setup(fx, ['--notifications'], { terminal: false })).code).not.toBe(0);
+    expect(fx.posts).toEqual([]);
   });
 });

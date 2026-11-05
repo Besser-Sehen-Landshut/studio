@@ -183,6 +183,21 @@ export type CrewTokenRead =
 /** The `crew-token` file: plain, ours, mode 0600 or narrower. The result never holds a bad value. */
 export function readCrewTokenFile(owner: OwnerEnv): CrewTokenRead {
   const file = crewTokenFile(owner);
+  const read = readOwnerSecret(file, owner);
+  if (read.kind !== 'ok') return read;
+  const token = read.text.trim();
+  if (!validToken(token)) return { kind: 'bad', why: `${file} holds no valid token` };
+  return { kind: 'ok', token };
+}
+
+/**
+ * A secret file of the owner: plain, ours, mode 0600 or narrower. `why` names the file, never what
+ * it holds.
+ */
+export function readOwnerSecret(
+  file: string,
+  owner: OwnerEnv,
+): { kind: 'absent' } | { kind: 'ok'; text: string } | { kind: 'bad'; why: string } {
   let st: ReturnType<typeof lstatSync>;
   try {
     st = lstatSync(file);
@@ -195,19 +210,23 @@ export function readCrewTokenFile(owner: OwnerEnv): CrewTokenRead {
   if ((st.mode & 0o777 & ~0o600) !== 0) {
     return { kind: 'bad', why: `${file} has a mode wider than 0600` };
   }
-  let token: string;
   try {
-    token = readFileSync(file, 'utf8').trim();
+    return { kind: 'ok', text: readFileSync(file, 'utf8') };
   } catch {
     return { kind: 'bad', why: `${file} cannot be read` };
   }
-  if (!validToken(token)) return { kind: 'bad', why: `${file} holds no valid token` };
-  return { kind: 'ok', token };
 }
 
 /** Temp file + rename, mode 0600, parent 0700. A symlink at the target is replaced, not followed. */
 export function installCrewToken(token: string, owner: OwnerEnv): void {
-  const file = crewTokenFile(owner);
+  writeOwnerSecret(crewTokenFile(owner), `${token}\n`);
+}
+
+/**
+ * A secret file in the owner config dir: temp file + rename, mode 0600, parent 0700. A symlink at
+ * the target is replaced, not followed; a symlinked parent is refused.
+ */
+export function writeOwnerSecret(file: string, content: string): void {
   const parent = dirname(file);
   mkdirSync(dirname(parent), { recursive: true, mode: 0o700 });
   try {
@@ -221,7 +240,7 @@ export function installCrewToken(token: string, owner: OwnerEnv): void {
   chmodSync(parent, 0o700);
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   try {
-    writeFileSync(tmp, `${token}\n`, { flag: 'wx', mode: 0o600 });
+    writeFileSync(tmp, content, { flag: 'wx', mode: 0o600 });
     renameSync(tmp, file);
   } catch (e) {
     try {

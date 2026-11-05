@@ -74,6 +74,16 @@ function readNotified(file: string): Notified {
   }
 }
 
+type NotifyCommand = { channel: string; command: string };
+
+/** The notify command and its channel; undefined when the owner config names none. */
+const commandOf = (c: OwnerConfig): NotifyCommand | undefined => {
+  const n = c.notify;
+  return n?.command === undefined || n.channel === undefined
+    ? undefined
+    : { channel: n.channel, command: n.command };
+};
+
 /**
  * Hands each owner line and account-block notification that was not sent yet to the owner's notify
  * command. Returns error lines (fixed text, never command output or message text).
@@ -87,7 +97,7 @@ export async function sendNotifications(o: {
   ports: Ports;
   owner: OwnerEnv;
 }): Promise<string[]> {
-  const notify = o.ownerConfig.notify;
+  const notify = commandOf(o.ownerConfig);
   if (notify === undefined) return [];
   const lock = acquireStateLock(o.ownerRoot, 'notify.lock', {
     now: new Date(),
@@ -103,7 +113,7 @@ export async function sendNotifications(o: {
 
 async function sendLocked(
   o: Parameters<typeof sendNotifications>[0],
-  notify: NonNullable<OwnerConfig['notify']>,
+  notify: NotifyCommand,
   lock: StateLock,
 ): Promise<string[]> {
   const file = join(o.ownerRoot, 'notified.json');

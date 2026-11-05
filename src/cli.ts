@@ -18,8 +18,13 @@ import {
 } from './board.js';
 import { readSkillsMissing } from './brief-caps.js';
 import { capabilitiesDir } from './capabilities.js';
-import { readCapacity, readCapacityTwice } from './capacity.js';
-import { approvedJobsProblem, type CoveredJob, verifyNotRunHereJobs } from './ci-jobs.js';
+import { capacityHoldsTwice, readCapacity, readCapacityTwice } from './capacity.js';
+import {
+  approvedJobsProblem,
+  type CoveredJob,
+  readWorkflowsAt,
+  verifyNotRunHereJobs,
+} from './ci-jobs.js';
 import {
   configWarnings,
   loadConfig,
@@ -43,6 +48,13 @@ import {
 } from './crew.js';
 import { addEpic, dropEpic, editEpic, epicRows, findEpic, settleAndSave } from './epics.js';
 import { listFlaky, recordFlaky } from './flaky.js';
+import {
+  type CiEvents,
+  type CiPolicy,
+  ciFailurePolicy,
+  type PrRef,
+  withFlakyItem,
+} from './flaky-ci.js';
 import { HeldError } from './held.js';
 import { runInit } from './init.js';
 import {
@@ -86,6 +98,7 @@ import { clearPause, PAUSED_LINE, readPause, setPause } from './pause.js';
 import { type Capacity, ONE_BUILD_PER_PLAN, planAssignments } from './planner.js';
 import { type PluginPin, pinnedPlugins, unallowedPlugins } from './plugins.js';
 import type { Ports } from './ports.js';
+import { decisionsOf, pushDecisions } from './push.js';
 import {
   acquireQueueRunLock,
   appendStateLine,
@@ -216,8 +229,9 @@ Commands:
                            Pinned plugins against their marketplaces and sources against upstream;
                            one board item per update. Monthly (tick runs it); --now runs it at once,
                            --security marks a plugin or source update as security-relevant (priority 0)
-  setup [--link]           Owner only, in a terminal: gh, crew token and Claude account, one guided
-                           step each, skipped when done; --link puts studio on your terminal's PATH
+  setup [--link]           Owner only, in a terminal: gh, crew token, Claude account and phone
+                           notifications, one guided step each, skipped when done; --link puts
+                           studio on your terminal's PATH; --notifications runs only that step again
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
   setup stack [--write]    Detect the project's stacks from its manifest files
   secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
@@ -330,6 +344,10 @@ interface Tick {
   merged: { item?: string; pr: number; repo: string }[];
   held: { item: string; reason: string }[];
   needsLead: { item: string; reason: string }[];
+  /** Failed jobs outside a pull request that were run once more on the same commit. */
+  reruns: CiEvents['reruns'];
+  /** Items added to find the cause of a job that failed like that a second time in 14 days. */
+  flakyItems: CiEvents['flakyItems'];
   /** Per item (`item`), or a phase that failed or did not run (`phase`). */
   errors: { item?: string; phase?: string; error: string }[];
   /** Epics whose items are all merged (status `accepting`), waiting for their acceptance; absent without one. */
@@ -438,8 +456,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     if ((values.out !== undefined || values.force !== undefined) && cmd !== 'roadmap') {
       throw new UsageError('--out and --force work with roadmap only');
     }
-    if (values.link !== undefined && cmd !== 'setup') {
-      throw new UsageError('--link works with setup only');
+    if ((values.link !== undefined || values.notifications !== undefined) && cmd !== 'setup') {
+      throw new UsageError('--link and --notifications work with setup only');
     }
     if ((values.now !== undefined || values.security !== undefined) && cmd !== 'skills') {
       throw new UsageError('--now and --security work with skills check only');
@@ -557,6 +575,58 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       };
     };
 
+    /** Reruns and flaky items of this process, for the output of `tick` and `queue run`. */
+    const ciEvents: CiEvents = { reruns: [], flakyItems: [] };
+    /** Failed checks outside a pull request: one rerun per commit, the flaky ledger, the item. */
+    const ciPolicy = (config: StudioConfig, root: string): CiPolicy =>
+      ciFailurePolicy({
+        stateRoot: root,
+        gh: ports.gh,
+        async workflowsAt(repo, sha) {
+          const co = approvalCheckout(project, config, repo);
+          try {
+            await ports.git.run(
+              co.dir,
+              [
+                '--no-replace-objects',
+                'fetch',
+                '--no-tags',
+                '--no-write-fetch-head',
+                co.remote,
+                sha,
+              ],
+              { timeoutMs: 120_000 },
+            );
+            return await readWorkflowsAt(ports.git, co.dir, sha);
+          } catch {
+            return undefined;
+          }
+        },
+        async capacityFree() {
+          try {
+            return await capacityHoldsTwice(config, ports);
+          } catch {
+            return false; // unknown capacity counts as busy
+          }
+        },
+        now: () => ports.clock.now(),
+        itemPaths(ref: PrRef) {
+          const board = loadBoard(project);
+          const item =
+            board.items.find((i) => ref.item !== undefined && i.id === ref.item) ??
+            board.items.find((i) => i.repo === ref.repo && i.pr === ref.pr && i.type !== 'review');
+          return item?.paths ?? [];
+        },
+        addFlakyItem: (test, repo, runs) =>
+          withBoardLock(root, ports.clock.now(), () => {
+            const added = withFlakyItem(loadBoard(project), test, repo, runs);
+            if (added.id !== undefined) saveBoard(project, added.board);
+            return added.id;
+          }),
+        events: ciEvents,
+        log: (m) => stderr(`${m}\n`),
+      });
+
     /** Puts an approved pull request into the merge queue: the body of `queue add`. */
     const queueAdd = async (arg: string | undefined) => {
       const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/.exec(arg ?? '');
@@ -619,6 +689,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         return line;
       };
       const log = (m: string) => stderr(`${m}\n`);
+      const policy = ciPolicy(config, root);
       const lock = acquireQueueRunLock(root, ports.clock.now(), log);
       const removeSignals = installSignalRelease(lock);
       const beat = () => lock.heartbeat(ports.clock.now());
@@ -656,6 +727,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             hold,
             mergeAllowed: (entry, head) =>
               boardBlocksMerge(project, root, config, entry, head, ports),
+            onChecksFailed: (entry, head) => policy.failed(entry, head),
+            onChecksPassed: (entry, head) => policy.passed(entry, head),
             takeNext: () => takeNextPending(root),
             onDone: (d) => applyQueueResults(project, root, [d], ports, stderr),
           },
@@ -778,15 +851,29 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         checkReportHead(report, info.head);
         // The reviewer could not see CI: an approval counts only while the checks are green.
         if (report.verdict === 'approve') {
-          const checks = await readChecks({ repo: m[1] as string, pr: Number(m[2]) }, ports.gh);
+          const ref: PrRef = { repo: m[1] as string, pr: Number(m[2]) };
+          const holder = board.items.find(
+            (i) => i.repo === ref.repo && i.pr === ref.pr && i.type !== 'review',
+          );
+          if (holder !== undefined) ref.item = holder.id;
+          const checks = await readChecks(ref, ports.gh);
+          const policy = ciPolicy(loadConfig(project), stateRoot());
           if (checks.kind !== 'pass') {
-            const why =
-              checks.kind === 'pending' ? 'still running' : (checks.reason ?? checks.kind);
+            let why = checks.kind === 'pending' ? 'still running' : (checks.reason ?? checks.kind);
+            if (checks.kind === 'failed') {
+              const act = await policy.failed(ref, info.head);
+              if (act === 'rerun') {
+                why = `${why}; outside this pull request, its failed jobs run once more on the same commit`;
+              } else if (act === 'wait') {
+                why = `${why}; outside this pull request, waiting for its one rerun`;
+              }
+            }
             return {
               kind: 'waiting',
               line: `the approval counts only with green checks (${why}); collect again once they pass, nothing moved`,
             };
           }
+          policy.passed(ref, info.head);
           // A skipped check counts as green above, so each command the builder could not run
           // needs a job of a base workflow that runs it and passed here. A refusal goes to the
           // lead: the review item is blocked with a note, the approval is not stored.
@@ -1118,6 +1205,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         merged: [],
         held: [],
         needsLead: [],
+        // The same arrays the policy fills, in collect and in the queue run alike.
+        reruns: ciEvents.reruns,
+        flakyItems: ciEvents.flakyItems,
         errors: [],
       };
       const why = (e: unknown) => (e as Error).message.replace(/\p{Cc}/gu, ' ');
@@ -1380,6 +1470,34 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (!(e instanceof BoardError)) out.errors.push({ phase: 'epics', error: why(e) });
       }
       return out;
+    };
+
+    /** The tick's decisions, and the owner's account blocks, as Pushover messages. */
+    const pushTick = async (needsLead: Tick['needsLead']): Promise<string[]> => {
+      try {
+        const ownerConfig = loadOwnerConfig(owner);
+        const config = loadConfig(project);
+        let board: Board | undefined;
+        try {
+          board = loadBoard(project, config);
+        } catch {
+          board = undefined; // keys without the time then; the phases reported the board
+        }
+        const projectKey = stateDirName(projectRealpath(project));
+        const r = await pushDecisions({
+          ownerRoot: ownerRoot(),
+          projectKey,
+          project: config.primaryRepo.split('/').at(-1) ?? config.primaryRepo,
+          decisions: decisionsOf({ projectKey, needsLead, board, ownerRoot: ownerRoot() }),
+          ownerConfig,
+          owner,
+          http: ports.http,
+          now: ports.clock.now(),
+        });
+        return r.errors;
+      } catch {
+        return ['notify: the push could not be prepared; retried next tick'];
+      }
     };
 
     switch (cmd) {
@@ -1664,8 +1782,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             stderr(`error: tick record: ${(e as Error).message.replace(/\p{Cc}/gu, ' ')}\n`);
           }
         }
+        // Pushes to the owner's phone; a failed one is listed but never fails the tick.
+        const failed = out.errors.length > 0;
+        if (!out.held.some((h) => h.item === 'tick')) {
+          for (const error of await pushTick(out.needsLead)) out.errors.push({ error });
+        }
         print(out);
-        return out.errors.length === 0 ? 0 : 1;
+        return failed ? 1 : 0;
       }
 
       case 'status': {
@@ -1756,7 +1879,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
         if (sub === 'run') {
           const r = await queueRun();
-          print(r);
+          print({
+            ...r,
+            ...(ciEvents.reruns.length === 0 ? {} : { reruns: ciEvents.reruns }),
+            ...(ciEvents.flakyItems.length === 0 ? {} : { flakyItems: ciEvents.flakyItems }),
+          });
           return r.held === undefined ? 0 : 1;
         }
         throw new UsageError('queue needs a subcommand: add <repo>#<pr> | run');
@@ -1954,8 +2081,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'setup': {
-        if (values.link === true && rest.length > 0) {
-          throw new UsageError('--link belongs to studio setup without a subcommand');
+        if ((values.link === true || values.notifications === true) && rest.length > 0) {
+          throw new UsageError(
+            '--link and --notifications belong to studio setup without a subcommand',
+          );
         }
         if (rest.length === 0) {
           return await runSetup({
@@ -1967,6 +2096,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ...(deps.readSecret === undefined ? {} : { readSecret: deps.readSecret }),
             ...(deps.readLine === undefined ? {} : { readLine: deps.readLine }),
             link: values.link === true,
+            notifications: values.notifications === true,
             ...(deps.launcher === undefined ? {} : { launcher: deps.launcher }),
             stdout,
             stderr,
@@ -2309,6 +2439,7 @@ function parseCli(argv: string[]) {
         plan: { type: 'string' },
         help: { type: 'boolean' },
         link: { type: 'boolean' },
+        notifications: { type: 'boolean' },
         now: { type: 'boolean' },
         security: { type: 'string', multiple: true },
       },

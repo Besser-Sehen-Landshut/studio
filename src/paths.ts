@@ -51,6 +51,9 @@ export const STATE_FILES = [
   'pause.json',
   'skills-check.json',
   'tick.json',
+  'flaky.json',
+  'ci-reruns.json',
+  'ci-reruns.lock',
 ];
 
 /** `$XDG_STATE_HOME/studio`, else `<home>/.local/state/studio`: the parent of every state root. */

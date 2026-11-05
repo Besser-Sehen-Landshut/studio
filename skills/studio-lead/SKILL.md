@@ -31,6 +31,7 @@ while sleep 120; do t=$(studio tick 2>&1); [ "$t" = "$q" ] || echo "$t"; q=$t; d
 
 - They print only on a change or a problem, so they cost no model turn while nothing happens. "Keep it cheap" never lengthens them: 120 seconds, always. Two loops: a merging tick takes long.
 - Each printed line is your wake-up: read `needsLead` and `errors`, and a `note:` or `error:` line. During a block relaunch nothing and tell the owner in one line. After an event of your own (board edit, requeue), run `studio tick` once.
+- `tick` pushes each new `needsLead` entry to the owner's phone itself: still act on every entry; a push is no owner line. A `notify:` error is retried by the next tick; only one that repeats is a status line (`studio setup --notifications`, owner's).
 
 ## Collect: artifacts, not prose
 
@@ -70,7 +71,7 @@ pinned head SHA, once **no** check is pending and every required check is green.
 - Never pre-measure capacity or wait for CI yourself.
 - Never `gh pr checks --watch` as a gate (exits early). Never `gh pr merge`.
 - Queue failure → item back in `in_review`, listed in `needsLead`; `tick` does not queue it again: fix via crew, review, queue again.
-- Unrelated timeouts = saturated runners: re-run the same SHA later (`studio queue add` again).
+- A failed check outside the PR gets one rerun on the same SHA from Studio (`reruns`), which also fills the flaky ledger and adds the cause item (`flakyItems`). Never rerun, `flaky record` or add that item yourself.
 
 ## After each event
 
@@ -82,8 +83,7 @@ pinned head SHA, once **no** check is pending and every required check is green.
 | Production deploy | `studio deploy record <sha>`; a rollback is no deploy, never record it |
 | Deploy broke something | `studio incident open <id>` |
 | Service works again, by rollback or by fix | `studio incident resolve <id>` at once, then a `type: fix` item for the cause |
-| Test failed, rerun on the same SHA passed | `studio flaky record <test> <sha> pass`, one call. Rerun failed too: real failure, fix it |
-| `studio metrics` shows repeat flaky tests | one `type: fix` item for the worst |
+| Rerun you started by hand passed (Studio's own are recorded) | `studio flaky record <test> <sha> pass`, one call. Rerun failed too: real failure, fix it |
 | Planning an item | `studio plan` lists `solutions`; read those, `studio solutions search <words>` for more; add `.studio/solutions/<topic>.md` when a hard problem is solved |
 | Manifest or stack changed | `studio setup stack --write`; commit |
 | Before a release | `studio skills check --now` |

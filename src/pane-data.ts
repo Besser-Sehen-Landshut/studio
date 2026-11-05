@@ -242,6 +242,9 @@ function classify(item: string, reason: string): LeadDecision {
   return of('other', 'needs a decision', `show ${item}`);
 }
 
+/** The code of a lead reason alone: Studio's own phrase at its start, never the crew text. */
+export const classifyDecision = (reason: string): DecisionCode => classify('', reason).code;
+
 /**
  * The latest tick's lead list, one entry per item, without items that are done by now or that
  * moved after the tick (their entry is out of date; the next tick lists them again if need be).

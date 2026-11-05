@@ -24,6 +24,7 @@ import { CREW_SKILL, skillInstalled, studioPluginHint } from './crew.js';
 import { ownerStateRootFor } from './paths.js';
 import { installedVersions, pinnedPlugins, unallowedPlugins } from './plugins.js';
 import type { Ports } from './ports.js';
+import { readNotifySecret } from './push.js';
 import { assertPrimaryRepo, safe } from './setup-ci-command.js';
 
 export function readPrimaryRepo(project: string): string {
@@ -191,6 +192,12 @@ function toolsOutside(
   return out;
 }
 
+/** The stored push transport by name: never the topic. */
+function notificationsState(owner: OwnerEnv): 'ntfy' | 'none' | 'invalid' {
+  const read = readNotifySecret(owner);
+  return read.kind === 'ok' ? read.secret.transport : read.kind === 'absent' ? 'none' : 'invalid';
+}
+
 /** Whether a skill a crew needs is in that config dir. */
 function skillState(dir: string | undefined, name: string): string {
   const found = dir === undefined ? undefined : skillInstalled(dir, name);
@@ -301,7 +308,8 @@ export async function doctorReport(o: {
     ownerConfig: ownerConfig ? 'readable' : 'invalid',
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
-    notify: ownerConfig?.notify ? 'configured' : 'not configured',
+    notify: ownerConfig?.notify?.command ? 'configured' : 'not configured',
+    notifications: notificationsState(o.owner),
     apiKeyVarsInEnvironment: API_KEY_VARS.filter((k) => o.env[k]),
   };
   return {
@@ -355,6 +363,7 @@ export async function runDoctor(o: {
       `owner config: ${report.ownerConfig}`,
       `credential provider: ${provider === null ? 'not configured' : `configured ${provider}`}`,
       `notify: ${report.notify}`,
+      `notifications: ${report.notifications}`,
       `allow_api_billing: ${report.allowApiBilling ? 'on' : 'off'}`,
       `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(', ') || 'none'}`,
     ];
