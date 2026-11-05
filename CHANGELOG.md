@@ -22,7 +22,9 @@ an `owner_only` rule goes to the owner. Not tagged yet; the maintainers tag afte
     blank lines at the end of the file.
   - `paths_only`: every changed path, both sides of a rename, matches `paths`.
 - Conservative tokenizers per language: strings, block and line comments, nested Rust comments, SQL dollar
-  quoting. What one cannot classify for sure proves nothing, and so does an added, deleted or renamed file,
+  quoting. Comments with a meaning count as code: interpreter lines, Python coding lines, Rust doc comments
+  (doctests), JS/TS pragmas and JSDoc tags, SQL migration directives and hints, and any comment naming a tool
+  directive (linters, type checkers, schemas). SQL `/*!...*/` and `/*+...*/` prove nothing, nor do JSX files. What one cannot classify for sure proves nothing, and so does an added, deleted or renamed file,
   a mode change, a symlink, a submodule, a binary file and a path with a control character. The diff comes
   from git with pinned options.
 - Rules count only from `studio.yaml` at the pull request's base commit on the default branch (and only

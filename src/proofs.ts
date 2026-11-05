@@ -16,8 +16,8 @@ export type ProofLanguage = (typeof PROOF_LANGUAGES)[number];
 const EXTENSIONS: Record<ProofLanguage, readonly string[]> = {
   sql: ['.sql'],
   rust: ['.rs'],
-  ts: ['.ts', '.mts', '.cts', '.tsx'],
-  js: ['.js', '.mjs', '.cjs', '.jsx'],
+  ts: ['.ts', '.mts', '.cts'],
+  js: ['.js', '.mjs', '.cjs'],
   sh: ['.sh', '.bash'],
   yaml: ['.yml', '.yaml'],
   toml: ['.toml'],
@@ -245,6 +245,10 @@ function tokenizeSql(s: string): Seg[] {
       if (end === -1) no('an unterminated block comment');
       // PostgreSQL nests block comments, MySQL does not: an inner opener is ambiguous.
       if (s.slice(i + 2, end).includes('/*')) no('a nested block comment');
+      // `/*!...*/` runs in MySQL, `/*+...*/` is an optimizer hint: only `/*` followed by a blank
+      // or `*` is a plain comment.
+      const first = s[i + 2];
+      if (first !== '*' && !isWs(first)) no('a block comment that may be executable or a hint');
       out.push('comment', s.slice(i, end + 2));
       i = end + 2;
     } else if (c === "'") {
@@ -448,6 +452,40 @@ const BREAKS: Record<ProofLanguage, 'none' | 'line' | 'indent'> = {
   python: 'indent',
 };
 
+/**
+ * Words that make a comment a directive to some tool: a type checker, a linter, a formatter, a
+ * bundler, a schema, a migration runner. Such a comment counts as code, so adding, removing or
+ * changing one is never "comments only". Matched case-insensitively anywhere in the comment: a
+ * prose comment that holds one of them counts as code too, which errs the safe way.
+ */
+const DIRECTIVE =
+  /@ts-|<reference|sourcemappingurl|sourceurl|@jsx|eslint|biome|prettier|jshint|jscs|istanbul|\bc8\b|v8 ignore|@flow|@license|@preserve|__pure__|__no_side_effects__|webpack|vite-ignore|shellcheck|yaml-language-server|yamllint|\$schema|#:schema|taplo|tombi|renovate|noqa|nosec|pragma|pylint|mypy|pyright|ruff|isort|type:\s*ignore|\btype:|fmt:|pyre-|flake8|yapf|coverage|codespell|cspell|spell-checker|trunk-ignore|checkov|semgrep|tfsec|kics|hadolint|gitleaks|lint|ignore|disable|enable|no-transaction|goose|sqlx|flyway|liquibase|changeset|rollback|precondition|migrate/i;
+
+/** Line comments whose form gives them meaning in a language, whatever their words. */
+function meaningful(seg: Seg, language: ProofLanguage, line: number): boolean {
+  const t = seg.text;
+  if (DIRECTIVE.test(t)) return true;
+  // An interpreter line: line 1, `#!`.
+  if (line === 1 && t.startsWith('#!')) return true;
+  switch (language) {
+    case 'python':
+      // PEP 263: a coding declaration in line 1 or 2 decides how the file is read.
+      return line <= 2 && /coding[:=]/.test(t);
+    case 'js':
+    case 'ts':
+      // JSDoc tags type JavaScript under checkJs, `//#`, `//@` and `///` are pragmas.
+      return /@[A-Za-z_]/.test(t) || /^\/\/[#@/]/.test(t);
+    case 'rust':
+      // Doc comments are docs, and their code blocks run as doctests.
+      return /^\/\/[/!]/.test(t) || /^\/\*[*!]/.test(t);
+    case 'sql':
+      // `-- +goose Up`, `--+ INDEX(...)` (an Oracle hint), `-- name: ...` (sqlc) and the like.
+      return /^--\s*(?:[+!@$#:%]|[A-Za-z_-]+\s*:)/.test(t);
+    default:
+      return false;
+  }
+}
+
 /** The code of a file with comments out and whitespace normalized; undefined when unsure. */
 export function codeOf(text: string, language: ProofLanguage): string | undefined {
   let segs: Seg[];
@@ -456,6 +494,12 @@ export function codeOf(text: string, language: ProofLanguage): string | undefine
   } catch (e) {
     if (e instanceof Unclassifiable) return undefined;
     throw e;
+  }
+  // A comment with a meaning is code: it is compared like code.
+  let line = 1;
+  for (const seg of segs) {
+    if (seg.kind === 'comment' && meaningful(seg, language, line)) seg.kind = 'code';
+    for (const ch of seg.text) if (ch === '\n') line++;
   }
   const mode = BREAKS[language];
   const parts: string[] = [];

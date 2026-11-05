@@ -17,7 +17,7 @@ describe('languages by extension', () => {
   it('only the listed languages count', () => {
     expect(languageOf('migrations/001.SQL', ['sql'])).toBe('sql');
     expect(languageOf('src/a.rs', ['sql'])).toBeUndefined();
-    expect(languageOf('a.tsx', ['ts'])).toBe('ts');
+    expect(languageOf('a.mts', ['ts'])).toBe('ts');
     expect(languageOf('ci.yml', ['yaml', 'toml'])).toBe('yaml');
     expect(languageOf('README', [...PROOF_LANGUAGES])).toBeUndefined();
   });
@@ -138,6 +138,94 @@ describe('comments_only per language', () => {
     no('sh', 'echo 1 # a\n', 'echo 2 # b\n');
     no('yaml', 'a: 1 # a\n', 'a: 2 # b\n');
     no('toml', 'a = 1 # a\n', 'a = 2 # b\n');
+  });
+});
+
+describe('comments with a meaning are code', () => {
+  it('sql: executable comments and optimizer hints are never proven', () => {
+    expect(codeOf('SELECT 1 /*! , 2 */;', 'sql')).toBeUndefined();
+    expect(codeOf('SELECT /*+ INDEX(a i) */ * FROM a;', 'sql')).toBeUndefined();
+    expect(codeOf('SELECT /*M!100000 1 */;', 'sql')).toBeUndefined();
+    no('sql', 'SELECT 1;', 'SELECT 1 /*!50000 , 2 */;');
+    no('sql', 'SELECT * FROM a;', 'SELECT /*+ FULL(a) */ * FROM a;');
+    // a plain block comment still is one
+    yes('sql', 'SELECT 1;', 'SELECT 1; /* plain */ /** doc */');
+  });
+  it('sql: migration and query directives in line comments', () => {
+    for (const d of [
+      '-- +goose Up',
+      '-- +migrate Down',
+      '--+ INDEX(a i)',
+      '-- no-transaction',
+      '-- name: GetUser :one',
+      '-- sqlx: offline',
+    ]) {
+      no('sql', 'SELECT 1;\n', `${d}\nSELECT 1;\n`);
+    }
+  });
+  it('a shebang in line 1 is code', () => {
+    no('sh', '#!/bin/sh\necho a\n', '#!/bin/bash\necho a\n');
+    no('python', '#!/usr/bin/env python3\nx = 1\n', '#!/usr/bin/env python2\nx = 1\n');
+    no('python', 'x = 1\n', '#!/usr/bin/env python3\nx = 1\n');
+    // a `#!` further down is a comment like any other
+    yes('sh', 'echo a\n', 'echo a\n#! not an interpreter line\n');
+  });
+  it('python: a coding line in line 1 or 2, and checker directives, are code', () => {
+    no('python', 'x = 1\n', '# -*- coding: latin-1 -*-\nx = 1\n');
+    no(
+      'python',
+      '#!/usr/bin/env python3\nx = 1\n',
+      '#!/usr/bin/env python3\n# coding=utf-8\nx = 1\n',
+    );
+    for (const d of [
+      '# type: ignore',
+      '# noqa: E501',
+      '# pragma: no cover',
+      '# pylint: disable=all',
+      '# mypy: ignore-errors',
+      '# fmt: off',
+      '# nosec',
+    ]) {
+      no('python', 'x = f(1)\n', `x = f(1)  ${d}\n`);
+    }
+  });
+  it('rust: attributes are code; doc comments are code, they hold doctests', () => {
+    no('rust', 'fn a() {}', '#[inline]\nfn a() {}');
+    no('rust', '#![allow(dead_code)]\nfn a() {}', '#![deny(dead_code)]\nfn a() {}');
+    no('rust', 'fn a() {}', '/// ```\n/// assert!(false);\n/// ```\nfn a() {}');
+    no('rust', 'fn a() {}', '//! crate docs\nfn a() {}');
+    no('rust', 'fn a() {}', '/** docs */ fn a() {}');
+    yes('rust', 'fn a() {}', '// plain\nfn a() {}');
+  });
+  it('ts and js: type checker, linter, bundler and source map pragmas are code', () => {
+    for (const d of [
+      '// @ts-ignore',
+      '// @ts-expect-error',
+      '// @ts-nocheck',
+      '/// <reference types="node" />',
+      '//# sourceMappingURL=a.js.map',
+      '/* @jsx h */',
+      '// eslint-disable-next-line',
+      '/* eslint-disable */',
+      '// biome-ignore lint: x',
+      '// prettier-ignore',
+      '/** @type {number} */',
+      '/* istanbul ignore next */',
+    ]) {
+      no('ts', 'const a = f(1);\n', `${d}\nconst a = f(1);\n`);
+      no('js', 'const a = f(1);\n', `${d}\nconst a = f(1);\n`);
+    }
+    no('js', 'const a = f(1);', 'const a = /*#__PURE__*/ f(1);');
+  });
+  it('shell, yaml and toml: tool directives are code', () => {
+    no('sh', 'echo $a\n', '# shellcheck disable=SC2086\necho $a\n');
+    no('yaml', 'a: 1\n', '# yaml-language-server: $schema=./s.json\na: 1\n');
+    no('yaml', 'a: 1\n', 'a: 1 # yamllint disable-line\n');
+    no('toml', 'a = 1\n', '#:schema ./s.json\na = 1\n');
+  });
+  it('jsx files are never read: .tsx and .jsx are in no language', () => {
+    expect(languageOf('a.tsx', ['ts', 'js'])).toBeUndefined();
+    expect(languageOf('a.jsx', ['ts', 'js'])).toBeUndefined();
   });
 });
 

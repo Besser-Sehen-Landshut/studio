@@ -367,6 +367,16 @@ evidence:
   - YAML: a block scalar.
   - Shell: a here-document, an `$'...'` string and an escaped blank.
   - Any language: an unterminated string or comment.
+  - Comments with a meaning count as code, so adding, removing or changing one is never "comments only":
+    - SQL: a block comment whose `/*` is not followed by a blank or `*` (`/*!...*/` runs in MySQL, `/*+...*/` is a hint) is not proven at all, and line comments with a migration or query directive (`-- +goose Up`, `--+` hints, `-- name: ...`, `-- no-transaction`) are code.
+    - Line 1 `#!` (an interpreter line) is code everywhere.
+    - Python: a coding declaration in line 1 or 2 is code.
+    - Rust: doc comments (`///`, `//!`, `/**`, `/*!`) are code, because their code blocks run as doctests; attributes `#[...]` and `#![...]` are code anyway.
+    - JavaScript and TypeScript: `//#`, `//@`, `///` pragmas and JSDoc tags (`@type`, `@ts-ignore`, `@jsx`) are code.
+    - Any language: a comment that names a tool directive (`eslint`, `biome`, `prettier`, `shellcheck`, `yaml-language-server`, `noqa`, `type: ignore`, `pragma`, `#:schema`, any `lint`, `ignore` or `disable`, and more; see `src/proofs.ts`) is code.
+
+    When in doubt, not proven: these proofs exist for the boring cases.
+  - JSX files (`.tsx`, `.jsx`) are in no language: they are never proven.
 
   The diff comes from git with pinned options (`-c core.quotePath=false diff --no-color --no-ext-diff --no-textconv --ignore-submodules=none --no-renames`).
 - **When it applies.** Only when the rule is in `studio.yaml` at the pull request's base commit on the default branch, and the owner's checkout has evidence rules too (a rule not pulled yet applies to nothing). When a check fails and every failed check (a plain failed job; a cancelled check, a skipped required one or a commit status never) is a check of a rule's guard, `collect` (for an approval) and the merge queue judge it; any other failure fails as before. The guard job must be the same at the base and at the head.

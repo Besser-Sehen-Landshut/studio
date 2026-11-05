@@ -28549,8 +28549,8 @@ var PROOF_LANGUAGES = ["sql", "rust", "ts", "js", "sh", "yaml", "toml", "python"
 var EXTENSIONS = {
   sql: [".sql"],
   rust: [".rs"],
-  ts: [".ts", ".mts", ".cts", ".tsx"],
-  js: [".js", ".mjs", ".cjs", ".jsx"],
+  ts: [".ts", ".mts", ".cts"],
+  js: [".js", ".mjs", ".cjs"],
   sh: [".sh", ".bash"],
   yaml: [".yml", ".yaml"],
   toml: [".toml"],
@@ -28744,6 +28744,8 @@ function tokenizeSql(s) {
       const end = s.indexOf("*/", i2 + 2);
       if (end === -1) no("an unterminated block comment");
       if (s.slice(i2 + 2, end).includes("/*")) no("a nested block comment");
+      const first = s[i2 + 2];
+      if (first !== "*" && !isWs(first)) no("a block comment that may be executable or a hint");
       out.push("comment", s.slice(i2, end + 2));
       i2 = end + 2;
     } else if (c3 === "'") {
@@ -28926,6 +28928,25 @@ var BREAKS = {
   toml: "indent",
   python: "indent"
 };
+var DIRECTIVE = /@ts-|<reference|sourcemappingurl|sourceurl|@jsx|eslint|biome|prettier|jshint|jscs|istanbul|\bc8\b|v8 ignore|@flow|@license|@preserve|__pure__|__no_side_effects__|webpack|vite-ignore|shellcheck|yaml-language-server|yamllint|\$schema|#:schema|taplo|tombi|renovate|noqa|nosec|pragma|pylint|mypy|pyright|ruff|isort|type:\s*ignore|\btype:|fmt:|pyre-|flake8|yapf|coverage|codespell|cspell|spell-checker|trunk-ignore|checkov|semgrep|tfsec|kics|hadolint|gitleaks|lint|ignore|disable|enable|no-transaction|goose|sqlx|flyway|liquibase|changeset|rollback|precondition|migrate/i;
+function meaningful(seg, language, line3) {
+  const t = seg.text;
+  if (DIRECTIVE.test(t)) return true;
+  if (line3 === 1 && t.startsWith("#!")) return true;
+  switch (language) {
+    case "python":
+      return line3 <= 2 && /coding[:=]/.test(t);
+    case "js":
+    case "ts":
+      return /@[A-Za-z_]/.test(t) || /^\/\/[#@/]/.test(t);
+    case "rust":
+      return /^\/\/[/!]/.test(t) || /^\/\*[*!]/.test(t);
+    case "sql":
+      return /^--\s*(?:[+!@$#:%]|[A-Za-z_-]+\s*:)/.test(t);
+    default:
+      return false;
+  }
+}
 function codeOf(text, language) {
   let segs;
   try {
@@ -28933,6 +28954,11 @@ function codeOf(text, language) {
   } catch (e) {
     if (e instanceof Unclassifiable) return void 0;
     throw e;
+  }
+  let line3 = 1;
+  for (const seg of segs) {
+    if (seg.kind === "comment" && meaningful(seg, language, line3)) seg.kind = "code";
+    for (const ch of seg.text) if (ch === "\n") line3++;
   }
   const mode = BREAKS[language];
   const parts = [];
