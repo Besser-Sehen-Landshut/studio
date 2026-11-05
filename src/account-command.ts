@@ -231,7 +231,9 @@ export async function runAccount(o: {
     return 0;
   }
   if (sub === 'setup-plugins' && label === undefined) {
-    ownerOnly();
+    // No terminal needed: it handles no secret, installs only the pinned default plugins and the
+    // owner-config allowlist, and the lead must re-run it whenever a Studio update moves the pins.
+    // Crews are refused above.
     const p = o.pins?.();
     for (const name of p?.unallowed ?? []) o.stderr(`warning: ${unallowedLine(name)}\n`);
     const failed = await setupPlugins(o.owner, o.ports, o.env, p?.pins, (l) =>

@@ -1,6 +1,6 @@
 {
   "name": "studio",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "author": { "name": "Studio contributors" },
   "description": "Run a software studio of coding-agent sessions from one control room",
   "types": "./types/index.d.ts"

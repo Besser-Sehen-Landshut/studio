@@ -27749,7 +27749,7 @@ function touchesOverlap(a2, b) {
 var import_yaml = __toESM(require_dist(), 1);
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-var STUDIO_VERSION = "0.12.1";
+var STUDIO_VERSION = "0.12.2";
 var HTTPS_GIT = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\.git)?$/;
 var VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
 var PLUGIN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -31658,7 +31658,6 @@ async function runAccount(o2) {
     return 0;
   }
   if (sub === "setup-plugins" && label === void 0) {
-    ownerOnly();
     const p = o2.pins?.();
     for (const name of p?.unallowed ?? []) o2.stderr(`warning: ${unallowedLine(name)}
 `);

@@ -37,7 +37,7 @@ while sleep 120; do t=$(studio tick 2>&1); [ "$t" = "$q" ] || echo "$t"; q=$t; d
 - Only what `studio collect` (run by `tick`) accepts counts. It rejects a fix/feature/chore with `tests_run: 0`; so do you.
 - `needsLead` names a rejected report or a crew that exited without one: `studio stop <id> --requeue`. It gives
   the item its one relaunch (`blocked → ready`); the next tick launches it. A second
-  `--requeue` on that item keeps it `blocked`: decide anew. Never write a report yourself.
+  `--requeue` on that item keeps it `blocked`: decide anew. Never write a report yourself. A launch refused with "run studio account setup-plugins" (a Studio update moved a pin): run it yourself, then tick.
 
 ## Review: one fresh reviewer per PR, before the queue
 
