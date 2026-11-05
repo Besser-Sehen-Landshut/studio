@@ -271,7 +271,7 @@ export async function followClaim(o: {
   follow: Follow;
   seen?: SeenClaim;
   /** The grace window of an unproven tip: kept in the offer record, never reset by a new tip. */
-  grace?: { attempt: number; since: string };
+  grace?: { since: string };
   warnings?: string[];
 }> {
   const { item, record } = o;
@@ -319,10 +319,12 @@ export async function followClaim(o: {
     accepted: acceptedFor(o.ownerConfig, record.label),
   });
   if (!proof.ok) {
-    // A comment may just be late: one grace window per item and attempt, counted from the first
-    // time the lead saw an unproven tip of that attempt. A new tip never restarts it.
-    if (proof.grace === true) {
-      const g = record.grace?.attempt === claim.attempt ? record.grace : undefined;
+    // A comment may just be late: one grace window per offer, counted from the first unproven tip
+    // and reset only by a proven claim. Neither a new tip nor its attempt number restarts it, and
+    // an attempt number that goes down against the one recorded gets no grace at all.
+    const regress = record.claim !== undefined && claim.attempt < record.claim.attempt;
+    if (proof.grace === true && !regress) {
+      const g = record.grace;
       const since =
         g !== undefined && !Number.isNaN(Date.parse(g.since)) ? g.since : o.now.toISOString();
       if (o.now.getTime() - Date.parse(since) <= COMMENT_GRACE_MS) {
@@ -332,7 +334,7 @@ export async function followClaim(o: {
             claimed: false,
             line: `${WORKER_WAIT}${claim.worker}'s ${claim.state} commit awaits its comment`,
           },
-          grace: { attempt: claim.attempt, since },
+          grace: { since },
           warnings: proof.warnings,
         };
       }

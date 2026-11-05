@@ -45599,8 +45599,9 @@ async function followClaim(o2) {
     accepted: acceptedFor(o2.ownerConfig, record2.label)
   });
   if (!proof.ok) {
-    if (proof.grace === true) {
-      const g3 = record2.grace?.attempt === claim2.attempt ? record2.grace : void 0;
+    const regress = record2.claim !== void 0 && claim2.attempt < record2.claim.attempt;
+    if (proof.grace === true && !regress) {
+      const g3 = record2.grace;
       const since = g3 !== void 0 && !Number.isNaN(Date.parse(g3.since)) ? g3.since : o2.now.toISOString();
       if (o2.now.getTime() - Date.parse(since) <= COMMENT_GRACE_MS) {
         return {
@@ -45609,7 +45610,7 @@ async function followClaim(o2) {
             claimed: false,
             line: `${WORKER_WAIT2}${claim2.worker}'s ${claim2.state} commit awaits its comment`
           },
-          grace: { attempt: claim2.attempt, since },
+          grace: { since },
           warnings: proof.warnings
         };
       }
@@ -47064,8 +47065,9 @@ async function runCli(argv, deps) {
               updateWorkers(root, (s) => {
                 const r2 = s.items[item.id];
                 if (r2 !== void 0) {
+                  const { grace: _old, ...rest2 } = r2;
                   s.items[item.id] = {
-                    ...r2,
+                    ...seen === void 0 ? r2 : rest2,
                     ...seen === void 0 ? {} : { claim: seen },
                     ...grace === void 0 ? {} : { grace },
                     checkedAt: now.toISOString()

@@ -49,8 +49,8 @@ export interface OfferRecord {
   nonce?: string;
   offeredAt: string;
   claim?: SeenClaim;
-  /** The one grace window for a late claim comment, per attempt; a new tip does not restart it. */
-  grace?: { attempt: number; since: string };
+  /** The one grace window for a late claim comment, per offer, reset only by a proven claim. */
+  grace?: { since: string };
   /** When the lead last looked at the claim. */
   checkedAt?: string;
 }

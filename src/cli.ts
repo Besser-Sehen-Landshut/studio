@@ -1949,8 +1949,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               updateWorkers(root, (s) => {
                 const r = s.items[item.id];
                 if (r !== undefined) {
+                  // A proven claim (seen) ends the window; an unproven tip starts or keeps it.
+                  const { grace: _old, ...rest } = r;
                   s.items[item.id] = {
-                    ...r,
+                    ...(seen === undefined ? r : rest),
                     ...(seen === undefined ? {} : { claim: seen }),
                     ...(grace === undefined ? {} : { grace }),
                     checkedAt: now.toISOString(),

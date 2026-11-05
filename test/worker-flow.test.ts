@@ -828,8 +828,8 @@ describe('workers on other machines', () => {
     });
   });
 
-  const claimMsg = (state: string, worker = 'win-bot') =>
-    `Studio claim APP-1: ${state}\n\n${JSON.stringify({ studio_claim: 1, item: 'APP-1', label: 'windows', worker, offer: 30, attempt: 1, state, lease_minutes: 30 })}\n`;
+  const claimMsg = (state: string, worker = 'win-bot', attempt = 1) =>
+    `Studio claim APP-1: ${state}\n\n${JSON.stringify({ studio_claim: 1, item: 'APP-1', label: 'windows', worker, offer: 30, attempt, state, lease_minutes: 30 })}\n`;
   const nonceOf = (w: World): string =>
     JSON.parse(readFileSync(join(w.lead.state, 'workers.json'), 'utf8')).items['APP-1'].nonce;
 
@@ -1673,6 +1673,27 @@ describe('workers on other machines', () => {
     }
     w.now.t += 60_000;
     w.github.plant('APP-1', claimMsg('alive'));
+    const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(/no claim comment on #30 proves who claimed it/),
+    });
+  });
+
+  it('changing the attempt number of new tips does not restart the grace window', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    w.github.plant('APP-1', claimMsg('claimed', 'win-bot', 1));
+    expect(JSON.parse((await run(w.lead, lead, ['tick'])).out).needsLead).toEqual([]);
+    // Attempt numbers that alternate or rise are the writer's choice: the window runs on.
+    for (const attempt of [2, 1]) {
+      w.now.t += 60_000;
+      w.github.plant('APP-1', claimMsg('claimed', 'win-bot', attempt));
+      expect(JSON.parse((await run(w.lead, lead, ['tick'])).out).needsLead).toEqual([]);
+    }
+    w.now.t += 60_000;
+    w.github.plant('APP-1', claimMsg('claimed', 'win-bot', 2));
     const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
     expect(tick.needsLead).toContainEqual({
       item: 'APP-1',
