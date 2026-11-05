@@ -101,7 +101,9 @@ describe('README quick start', () => {
     expect(readme).toMatch(/notify: \{ channel, command \}/);
     expect(readme).toContain('`blocks.json` in the owner root');
     expect(readme).toContain('.legacy-');
-    expect(readme).toMatch(/Status: 0\.13\.0/);
+    expect(readme).toMatch(/Status: 0\.15\.0/);
+    expect(readme).toContain('## Recovery after a crash or restart');
+    expect(readme).toContain('**Lessons review.**');
     expect(readme).toContain('### Push notifications');
     expect(readme).toContain('studio setup --notifications');
     expect(readme).toContain('### Flaky tests');

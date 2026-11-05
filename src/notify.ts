@@ -10,7 +10,8 @@ import type { StateSnapshot } from './state.js';
 /** Most messages one run sends; the rest follows on the next run. */
 export const MAX_SENDS_PER_RUN = 20;
 const MAX_TEXT = 500;
-const LOCK_STALE_MS = 2 * 60_000;
+export const NOTIFY_LOCK = 'notify.lock';
+export const LOCK_STALE_MS = 2 * 60_000;
 
 type Kind = 'owner-item' | 'usage-limit' | 'account-block';
 
@@ -99,7 +100,7 @@ export async function sendNotifications(o: {
 }): Promise<string[]> {
   const notify = commandOf(o.ownerConfig);
   if (notify === undefined) return [];
-  const lock = acquireStateLock(o.ownerRoot, 'notify.lock', {
+  const lock = acquireStateLock(o.ownerRoot, NOTIFY_LOCK, {
     now: new Date(),
     heartbeatStaleMs: LOCK_STALE_MS,
   });

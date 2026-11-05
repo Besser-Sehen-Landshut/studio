@@ -2,22 +2,9 @@ import { spawn } from 'node:child_process';
 import { closeSync, openSync, readFileSync } from 'node:fs';
 import { availableParallelism, loadavg } from 'node:os';
 import { execa } from 'execa';
+import { parseLinuxStartTime } from './paths.js';
 
-/**
- * Field 22 (`starttime`, clock ticks since boot) of a `/proc/<pid>/stat` line. The comm field can
- * hold spaces and parens, so fields are counted after the last `)`. Anything malformed is unknown.
- */
-export function parseLinuxStartTime(stat: string): string | undefined {
-  const close = stat.lastIndexOf(')');
-  if (close < 0) return undefined;
-  // Field 3 (state) is the first token after the comm; starttime is field 22, so index 19.
-  const fields = stat
-    .slice(close + 1)
-    .trim()
-    .split(/\s+/);
-  const start = fields[19];
-  return start !== undefined && /^\d+$/.test(start) ? start : undefined;
-}
+export { parseLinuxStartTime } from './paths.js';
 
 export interface Gh {
   /**

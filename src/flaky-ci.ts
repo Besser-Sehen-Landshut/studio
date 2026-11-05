@@ -14,7 +14,8 @@ import { acquireStateLock, assertStatePath, writeStateFile } from './paths.js';
 import type { Gh } from './ports.js';
 
 export const RERUNS_FILE = 'ci-reruns.json';
-const RERUNS_LOCK = 'ci-reruns.lock';
+export const RERUNS_LOCK = 'ci-reruns.lock';
+export const RERUNS_LOCK_STALE_MS = 60_000;
 const DAY_MS = 24 * 60 * 60_000;
 /** A second failure of the same job within this time asks for its cause. */
 export const FLAKY_WINDOW_MS = 14 * DAY_MS;
@@ -90,7 +91,10 @@ function withLedger<T>(
   now: Date,
   fn: (entries: RerunEntry[]) => { entries?: RerunEntry[]; result: T },
 ): T | undefined {
-  const lock = acquireStateLock(stateRoot, RERUNS_LOCK, { now, heartbeatStaleMs: 60_000 });
+  const lock = acquireStateLock(stateRoot, RERUNS_LOCK, {
+    now,
+    heartbeatStaleMs: RERUNS_LOCK_STALE_MS,
+  });
   if (!lock) return undefined;
   try {
     const r = fn(readLedger(stateRoot));

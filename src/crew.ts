@@ -1397,9 +1397,41 @@ async function launchCrewLocked(
     env,
   );
   const name = crewName(item);
+  const crewFile = join(stateRoot, 'crew.json');
+  const record: CrewRecord = {
+    name,
+    item: item.id,
+    role: item.role,
+    pid,
+    log,
+    startedAt: ports.clock.now().toISOString(),
+    label,
+    ...(tokenConfigDir === undefined ? {} : { tokenConfigDir }),
+    logStart,
+  };
+  // The pid goes on disk at once: a lead killed from here on leaves a record, so the next tick
+  // finds the crew instead of starting a second one. Without an identity yet the record is
+  // unverified, which never gets a signal.
+  const hadFile = existsNoFollow(crewFile);
+  let before: CrewRecord | undefined;
+  await updateCrewFile(stateRoot, crewFile, (all) => {
+    before = all[item.id];
+    all[item.id] = record;
+  });
+  /** A launch refused after the start: crew.json goes back to what it was. */
+  const undoRecord = () =>
+    updateCrewFile(stateRoot, crewFile, (all) => {
+      if (before === undefined) delete all[item.id];
+      else all[item.id] = before;
+    }).then(() => {
+      if (!hadFile && Object.keys(readCrewFile(crewFile)).length === 0) {
+        removeStateEntry(stateRoot, crewFile);
+      }
+    });
   const identity = await ports.claude.identity(pid);
   if (identity === undefined) {
     if (!ports.claude.alive(pid)) {
+      await undoRecord();
       throw new Error(
         `the new crew for ${item.id} exited right after start; see its log ${log}; refusing to launch`,
       );
@@ -1410,29 +1442,19 @@ async function launchCrewLocked(
       try {
         await ports.claude.stop(pid);
       } catch {
+        // The record stays, unverified: nothing relaunches the item until the owner released it.
         throw new Error(
           `cannot read the process identity of the new crew for ${item.id}, and stopping pid ${pid} failed; check it by hand`,
         );
       }
     }
+    await undoRecord();
     throw new Error(
       `cannot read the process identity of the new crew for ${item.id}; stopped it and refusing to launch`,
     );
   }
-  const record: CrewRecord = {
-    name,
-    item: item.id,
-    role: item.role,
-    pid,
-    identity,
-    log,
-    startedAt: ports.clock.now().toISOString(),
-    label,
-    ...(tokenConfigDir === undefined ? {} : { tokenConfigDir }),
-    logStart,
-  };
-  await updateCrewFile(stateRoot, join(stateRoot, 'crew.json'), (all) => {
-    all[item.id] = record;
+  await updateCrewFile(stateRoot, crewFile, (all) => {
+    all[item.id] = { ...record, identity };
   });
   return { name, pid, log };
 }

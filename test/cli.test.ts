@@ -3929,6 +3929,7 @@ describe('studio tick', () => {
       'queue add',
       'sweep',
       'skills check',
+      'lessons',
       'queue run',
     ]);
   });

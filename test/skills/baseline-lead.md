@@ -310,3 +310,35 @@ item itself, so I don't add another"; the fix limit got a research item and one 
 gone.
 
 Not exercised: a real lead session receiving pushes, and a rerun on live CI.
+
+# Baseline (RED): restart and the weekly lessons review, 0.15.0
+
+Run on 2026-11-05 with one sonnet agent and the 0.13.0 lead skill, scenario
+`scenarios/lead-restart-lessons-scenario.md` (a night restart with two crews `ALIVE no` and a queued item,
+then a tick with `lessonsReview` for a lead item, three proposals, a full Lessons section). The scenario's
+command list names `recover` and `lessons review`; the skill names neither.
+
+Misses:
+
+- "`studio recover` ... closes the dead crew records and restores consistent state": a guess. Recover
+  closes no record; it finishes interrupted launches, breaks stale locks and hands ended crews to collect or
+  to the lead. The order was right only by chance (dry run, recover, loops, tick).
+- "`studio lessons prune builder "<text of the stalest line>"`": prune takes a line number.
+- Two owner lines, a restart narrative and the rejected lessons in prose, where the owner asked for what was
+  learned, not details: one line per role, the count accepted.
+- Nothing else: 8 and 9 were dropped with a reason, 7 accepted after a prune, the role file committed, no
+  report written by hand, no crew relaunched by hand.
+
+The lead skill gets one paragraph under "State on disk" (after a restart: `studio recover`, act on its
+`needsLead`, then the heartbeat with `tick`), and the two lessons rows become one row for `lessonsReview`
+and `lessonsJudged` (prune by line number, drop with a reason, one owner line per role).
+
+## With the new skill (GREEN), 2026-11-05
+
+Same scenario, one sonnet agent: `studio recover` first ("breaks stale locks and finishes cut-short launches
+and merges. I don't relaunch, stop or merge anything by hand"), then its `needsLead`, then `tick` and the
+two loops; `lessons prune builder <line-number of the stalest line>` before `accept 7`, 8 and 9 dropped with
+a reason, the role file committed, a tick to close the item; one owner line, "1 lesson accepted for
+builder.", nothing about the restart. All three misses gone.
+
+Not exercised: a real restart with a live lead session, and the lead working a review item over a week.

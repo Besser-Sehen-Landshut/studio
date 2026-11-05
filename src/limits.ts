@@ -42,7 +42,7 @@ const HOUR_MS = 3_600_000;
 const MAX_PARK_MS = 8 * 24 * HOUR_MS;
 const TAIL_BYTES = 256 * 1024;
 const HEAD_BYTES = 1024 * 1024;
-const LOCK_STALE_MS = 5 * 60_000;
+export const LOCK_STALE_MS = 5 * 60_000;
 const MAX_RESET_CHARS = 100;
 
 /** `You've hit your <words> limit`: "limit" alone, or up to five words before it. */

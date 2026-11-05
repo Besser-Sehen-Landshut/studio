@@ -29,8 +29,8 @@ import {
  * moves what an old version left there into the owner root.
  */
 
-const MIGRATE_LOCK = 'migrate.lock';
-const LOCK_STALE_MS = 5 * 60_000;
+export const MIGRATE_LOCK = 'migrate.lock';
+export const LOCK_STALE_MS = 5 * 60_000;
 
 /** Merged, or why not: the old file cannot be interpreted, or the owner file cannot. */
 type MergeResult = 'merged' | 'legacy-unreadable' | 'owner-unreadable';
