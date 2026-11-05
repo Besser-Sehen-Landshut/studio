@@ -16,18 +16,20 @@ an `owner_only` rule goes to the owner. Not tagged yet; the maintainers tag afte
 - `evidence:` in `studio.yaml`: rules with `id`, `guard` (the CI job by workflow file and job name),
   `proof`, `paths`, `languages` (for `comments_only`) and `owner_only`. The proofs, computed by Studio in
   TypeScript, with no command run:
-  - `comments_only`: every changed `.sql` file under `paths` changes only plain comments and whitespace.
-    `sql` is the only language so far; a rule naming another is refused.
-  - `whitespace_only`: every changed file under `paths` changes only line endings, trailing blanks and
-    blank lines at the end of the file.
-  - `paths_only`: every changed path, both sides of a rename, matches `paths`.
-- A conservative SQL tokenizer: strings with doubled quotes, quoted identifiers, dollar quoting, line and
-  block comments. Not proven: `--` without a blank after it, backslashes, nested block comments, executable
-  comments and hints (`/*!`, `/*+`, any `/*` not followed by a blank or `*`), anything unterminated. Comments
-  with a meaning (migration and query directives, tool names) count as code, each judged on its own. What it
-  cannot classify for sure proves nothing, and so does an added, deleted or renamed file, a mode change, a
-  symlink, a submodule, a binary file and a path with a control character. The diff comes from git with
-  pinned options.
+  - `comments_only`: every changed file lies under `paths` and is a `.sql` file in which only plain
+    comment text was edited, added or removed. PostgreSQL only; `sql` is the only language so far, and a
+    rule naming another is refused.
+  - `paths_only`: every changed path, both sides of a rename, matches `paths` (case-sensitively).
+- A conservative SQL tokenizer, PostgreSQL only, linear in the file size, over the exact bytes of base and
+  head: strings with doubled quotes, quoted identifiers, dollar quoting with ASCII tags, positional
+  parameters, line and block comments. Not proven: invalid UTF-8, a backslash, a lone carriage return, a
+  form feed or vertical tab, mixed or changed line endings, `--` without a blank after it, nested block
+  comments, executable comments and hints (`/*!`, `/*+`, any `/*` not followed by a blank or `*`), a
+  backtick, a `$` that is no clean tag or parameter, anything unterminated. A line comment always ends a
+  line, so code is never joined across one. Comments with a meaning (migration and query directives, tool
+  names) must be byte-identical and in the same place, each judged on its own. An added, deleted or
+  renamed file, a mode change, a symlink, a submodule, a binary file and a path with a control character
+  prove nothing. The diff comes from git with pinned options.
 - Rules count only from `studio.yaml` at the pull request's base commit on the default branch (and only
   while the owner's checkout has rules at all). A failure applies to them only when every failed check is a
   plain failed job of a rule's guard, and the guard must be the same at base and head.
@@ -65,6 +67,7 @@ an `owner_only` rule goes to the owner. Not tagged yet; the maintainers tag afte
 
 ### Not in this version
 
+- `whitespace_only`: a rule that names it is refused. It comes later.
 - `comments_only` for other languages than SQL. They come later, each with an adversarial review of its
   own.
 - Custom proof commands. A rule with `command`, `run` or `inputs` is refused: they come later, with a real

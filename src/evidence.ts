@@ -5,17 +5,17 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { findJob, jobInstances, readWorkflowsAt, type Workflows } from './ci-jobs.js';
 import { EVIDENCE_ID_RE, type EvidenceRule, parseConfig } from './config.js';
-import { hostilePath, matchGlob } from './glob.js';
+import { hostilePath, matchGlobExact } from './glob.js';
 import { acquireStateLock, type StateLock, writeStateFile } from './paths.js';
 import type { Gh, Git } from './ports.js';
-import { commentsOnly, languageOf, whitespaceOnly } from './proofs.js';
+import { commentsOnlyWhy, languageOf } from './proofs.js';
 import { appendStateLine, type Check, checkKey } from './queue.js';
 import { readDefaultBranch, readPrFacts } from './review.js';
 
 /**
  * Exceptions by evidence. A project binds a guard job (a CI job such as a migration guard) to a
- * built-in proof in studio.yaml (`evidence:`): `comments_only`, `whitespace_only` or
- * `paths_only`. When the guard fails on a pull request and the proof holds on exactly that diff,
+ * built-in proof in studio.yaml (`evidence:`): `comments_only` (SQL) or `paths_only`, each over
+ * every changed file of the pull request. When the guard fails and the proof holds on exactly that diff,
  * the failed checks count as waived for that head, and the exception is logged with its evidence.
  * Without a proof the lead decides; a rule marked `owner_only` sends that decision to the owner.
  *
@@ -391,16 +391,15 @@ async function prove(ctx: EvidenceContext, p: Prepared, r: EvidenceRule): Promis
   // A path no reviewer can read at a glance proves nothing, whatever its content.
   const hostile = p.files.find(hostilePath);
   if (hostile !== undefined) return { kind: 'no', why: 'a changed path has a control character' };
-  const inScope = (f: string) => r.paths.some((glob) => matchGlob(glob, f));
-  if (r.proof === 'paths_only') {
-    const outside = p.files.find((f) => !inScope(f));
-    return outside === undefined
-      ? { kind: 'proven' }
-      : { kind: 'no', why: `${quotePath(outside)} is outside the paths` };
-  }
-  const scoped = p.changes.filter((c) => inScope(c.path));
-  if (scoped.length === 0) return { kind: 'no', why: 'no changed file is under the paths' };
-  for (const c of scoped) {
+  // Every proof covers the whole pull request: a change elsewhere could be what the guard saw.
+  // Paths match case-sensitively: `docs/**` never covers `DOCS/run.sh`.
+  const outside = p.files.find((f) => !r.paths.some((glob) => matchGlobExact(glob, f)));
+  if (outside !== undefined)
+    return { kind: 'no', why: `${quotePath(outside)} is outside the paths` };
+  if (r.proof === 'paths_only') return { kind: 'proven' };
+  if (r.proof !== 'comments_only') return { kind: 'no', why: `${r.proof} is not in this version` };
+  if (p.changes.length === 0) return { kind: 'no', why: 'no file changed' };
+  for (const c of p.changes) {
     const name = quotePath(c.path);
     if (c.status === 'A' || c.status === 'D') {
       return { kind: 'no', why: `${name} is ${c.status === 'A' ? 'added' : 'deleted'}` };
@@ -408,36 +407,25 @@ async function prove(ctx: EvidenceContext, p: Prepared, r: EvidenceRule): Promis
     if (c.status !== 'M') return { kind: 'no', why: `${name} is not a plain change` };
     if (c.srcMode !== c.dstMode) return { kind: 'no', why: `${name} changes its mode` };
     if (!REGULAR.test(c.srcMode)) return { kind: 'no', why: `${name} is no regular file` };
-    const language =
-      r.proof === 'comments_only' ? languageOf(c.path, r.languages ?? []) : undefined;
-    if (r.proof === 'comments_only' && language === undefined) {
+    if (languageOf(c.path, r.languages ?? []) === undefined) {
       return { kind: 'no', why: `${name} is in none of the languages` };
     }
-    let before: string;
-    let after: string;
+    let before: Uint8Array;
+    let after: Uint8Array;
     try {
       const size = async (sha: string) => Number(await g(ctx, ['cat-file', '-s', sha]));
       if ((await size(c.src)) > MAX_BLOB || (await size(c.dst)) > MAX_BLOB) {
         return { kind: 'no', why: `${name} is too large to read` };
       }
-      before = await g(ctx, ['cat-file', 'blob', c.src]);
-      after = await g(ctx, ['cat-file', 'blob', c.dst]);
+      if (ctx.git.blob === undefined) throw new Error('no blob reader');
+      // The exact bytes: nothing decoded with loss, no final line break stripped.
+      before = await ctx.git.blob(ctx.checkout.dir, c.src, { timeoutMs: GIT_LOCAL_MS });
+      after = await ctx.git.blob(ctx.checkout.dir, c.dst, { timeoutMs: GIT_LOCAL_MS });
     } catch {
       return { kind: 'retry', why: `${name} cannot be read` };
     }
-    if (before.includes('\0') || after.includes('\0')) {
-      return { kind: 'no', why: `${name} is binary` };
-    }
-    const holds =
-      language === undefined
-        ? whitespaceOnly(before, after)
-        : commentsOnly(before, after, language);
-    if (!holds) {
-      return {
-        kind: 'no',
-        why: `${name} changes more than ${r.proof === 'comments_only' ? 'comments and whitespace' : 'whitespace'}, or cannot be read for sure`,
-      };
-    }
+    const why = commentsOnlyWhy(before, after);
+    if (why !== undefined) return { kind: 'no', why: `${name}: ${why}` };
   }
   return { kind: 'proven' };
 }

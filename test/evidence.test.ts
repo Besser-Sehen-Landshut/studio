@@ -27,6 +27,7 @@ import {
   readExceptions,
   recordException,
 } from '../src/evidence.js';
+import { matchGlobExact } from '../src/glob.js';
 import { classifyDecision } from '../src/pane-data.js';
 import { checkStateMarker, projectRealpath, stateRootFor, writeStateFile } from '../src/paths.js';
 import type { Claude, Gh, Ports } from '../src/ports.js';
@@ -73,12 +74,6 @@ const DOCS_RULE = `  - id: docs-only
     proof: paths_only
     paths: ["docs/**", "**/*.md"]
 `;
-const WS_RULE = `  - id: blanks
-    guard: { workflow: .github/workflows/ci.yml, job: migration-guard }
-    proof: whitespace_only
-    paths: ["migrations/**"]
-`;
-
 const studioYaml = (rules: string) => `studio: 1
 primary_repo: org/app
 repos: [org/app]
@@ -275,6 +270,9 @@ describe('evidence rules in studio.yaml', () => {
       ownerOnly: false,
     });
     expect(load(DOCS_RULE).evidence?.[0]?.proof).toBe('paths_only');
+    expect(() => load(rule('    proof: whitespace_only\n    paths: ["a/**"]\n'))).toThrow(
+      /proof: whitespace_only is not in this version: it comes later/,
+    );
     expect(() => load(rule('    proof: comments_only\n    paths: ["a/**"]\n'))).toThrow(
       /languages: comments_only needs the languages it reads/,
     );
@@ -302,7 +300,7 @@ describe('evidence rules in studio.yaml', () => {
       '    proof: paths_only\n    paths: ["a"]\n    inputs: ["a"]\n',
     ]) {
       expect(() => load(rule(lines))).toThrow(
-        /built-in proof \(comments_only, whitespace_only, paths_only\); custom proof commands come later, with a real sandbox/,
+        /built-in proof \(comments_only, paths_only\); custom proof commands come later, with a real sandbox/,
       );
     }
   });
@@ -393,7 +391,7 @@ describe('judging a failed guard by a built-in proof', () => {
     if (v.kind !== 'lead') return;
     expect(v.owner).toBe(false);
     expect(v.reason).toBe(
-      `evidence: migration-guard failed on org/app#9 at ${r.head.slice(0, 12)} and no evidence proved a false alarm (sql-comments: "migrations/001.sql" changes more than comments and whitespace, or cannot be read for sure); decide: studio exceptions grant org/app#9 sql-comments --reason "<one line>", or a fix through a crew`,
+      `evidence: migration-guard failed on org/app#9 at ${r.head.slice(0, 12)} and no evidence proved a false alarm (sql-comments: "migrations/001.sql": it changes more than plain comments); decide: studio exceptions grant org/app#9 sql-comments --reason "<one line>", or a fix through a crew`,
     );
     expect(leadOnly(v.reason)).toBe(true);
     expect(leadOnly(`merge failed: ${v.reason}`)).toBe(true);
@@ -417,7 +415,7 @@ describe('judging a failed guard by a built-in proof', () => {
     const sql = "SELECT '-- a';\nCREATE FUNCTION f() AS $$ SELECT 1 -- x\n$$;\n";
     for (const head of [sql.replace("'-- a'", "'-- b'"), sql.replace('-- x', '-- y')]) {
       const r = makeRepo({ sql, change: (dir) => migration(dir, head) });
-      expect(await whyOf(r)).toMatch(/changes more than comments/);
+      expect(await whyOf(r)).toMatch(/changes more than plain comments/);
     }
     const comment = makeRepo({ sql, change: (dir) => migration(dir, `-- why\n${sql}`) });
     expect((await judge(comment)).kind).toBe('waived');
@@ -454,7 +452,7 @@ describe('judging a failed guard by a built-in proof', () => {
     [
       'a binary file',
       (d: string) => writeFileSync(join(d, 'migrations/001.sql'), Buffer.from([0x43, 0, 0x41])),
-      /is binary/,
+      /binary/,
     ],
     [
       'a file in no listed language',
@@ -466,9 +464,38 @@ describe('judging a failed guard by a built-in proof', () => {
     expect(await whyOf(r)).toMatch(why);
   });
 
-  it('comments_only: a change only outside the paths proves nothing', async () => {
-    const r = makeRepo({ change: (d) => writeFileSync(join(d, 'docs/guide.md'), '# Guide 2\n') });
-    expect(await whyOf(r)).toMatch(/no changed file is under the paths/);
+  it('every proof covers every changed file: one outside the paths proves nothing', async () => {
+    const elsewhere = makeRepo({
+      change: (d) => {
+        commentOnly(d);
+        writeFileSync(join(d, 'scripts/migration-guard.mjs'), 'process.exit(0);\n');
+      },
+    });
+    expect(await whyOf(elsewhere)).toMatch(/"scripts\/migration-guard.mjs" is outside the paths/);
+    const docsOnly = makeRepo({
+      change: (d) => writeFileSync(join(d, 'docs/guide.md'), '# Guide 2\n'),
+    });
+    expect(await whyOf(docsOnly)).toMatch(/"docs\/guide.md" is outside the paths/);
+  });
+
+  it('comments_only reads the exact bytes: invalid UTF-8, a lone CR or a backslash proves nothing', async () => {
+    const cases: [string, Buffer, RegExp][] = [
+      [
+        'invalid UTF-8',
+        Buffer.from([0x2d, 0x2d, 0x20, 0xff, 0x0a, ...Buffer.from('CREATE TABLE a (id int);\n')]),
+        /not valid UTF-8/,
+      ],
+      [
+        'a lone CR',
+        Buffer.from('-- a\rDROP TABLE a;\nCREATE TABLE a (id int);\n'),
+        /carriage return without a line feed/,
+      ],
+      ['a backslash', Buffer.from('-- a \\\nCREATE TABLE a (id int);\n'), /a backslash/],
+    ];
+    for (const [, bytes, why] of cases) {
+      const r = makeRepo({ change: (d) => writeFileSync(join(d, 'migrations/001.sql'), bytes) });
+      expect(await whyOf(r)).toMatch(why);
+    }
   });
 
   it('paths_only: a docs-only change is waived; a file outside, or a rename out, is not', async () => {
@@ -495,17 +522,21 @@ describe('judging a failed guard by a built-in proof', () => {
     expect(await whyOf(r)).toMatch(/a changed path has a control character/);
   });
 
-  it('whitespace_only: trailing blanks and line endings pass, indentation does not', async () => {
-    const ok = makeRepo({
-      rules: WS_RULE,
-      change: (d) => migration(d, 'CREATE TABLE a (id int);   \r\n'),
+  it('paths_only matches case-sensitively: docs/** never covers DOCS/run.sh', async () => {
+    expect(matchGlobExact('docs/**', 'DOCS/run.sh')).toBe(false);
+    expect(matchGlobExact('docs/**', 'docs/run.sh')).toBe(true);
+    // a glob over the limits matches nothing here
+    expect(matchGlobExact('{a,b}{c,d}{e,f}{g,h}{i,j}{k,l}{m,n}', 'acegikm')).toBe(false);
+    // a directory that does not exist yet, so a case-insensitive file system cannot fold it
+    const rule = DOCS_RULE.replace('["docs/**", "**/*.md"]', '["notes/**"]');
+    const r = makeRepo({
+      rules: rule,
+      change: (d) => {
+        mkdirSync(join(d, 'NOTES'));
+        writeFileSync(join(d, 'NOTES/run.sh'), 'rm -rf /\n');
+      },
     });
-    expect((await judge(ok)).kind).toBe('waived');
-    const indent = makeRepo({
-      rules: WS_RULE,
-      change: (d) => migration(d, '  CREATE TABLE a (id int);\n'),
-    });
-    expect(await whyOf(indent)).toMatch(/changes more than whitespace/);
+    expect(await whyOf(r)).toMatch(/"NOTES\/run.sh" is outside the paths/);
   });
 
   it('an owner_only rule sends the decision to the owner, and that one is pushed', async () => {

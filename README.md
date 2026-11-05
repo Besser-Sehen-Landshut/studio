@@ -346,9 +346,9 @@ A guard job in CI (a migration guard, a floor guard) can flag a change that is m
 evidence:
   - id: sql-comments # ^[a-z][a-z0-9-]{0,47}$, unique
     guard: { workflow: .github/workflows/ci.yml, job: migration-guard } # the job whose failure it explains
-    proof: comments_only # or whitespace_only, paths_only
+    proof: comments_only # or paths_only
     languages: [sql] # comments_only only; sql is the one language so far
-    paths: ["migrations/**"] # the files the guard watches
+    paths: ["migrations/**"] # every changed file of the pull request must lie here
     owner_only: false # true: a hit the proof does not explain goes to the owner
   - id: docs-only
     guard: { workflow: .github/workflows/ci.yml, job: floor-guard }
@@ -356,11 +356,16 @@ evidence:
     paths: ["docs/**", "**/*.md"]
 ```
 
-- **The proofs.** Every proof refuses a changed path with a control character.
-  - `comments_only`: at least one changed file lies under `paths`, and each of them is a plain change of a regular `.sql` file whose code is the same once plain comments are taken out and whitespace is collapsed. String literals, quoted identifiers and dollar-quoted bodies stay byte for byte. `sql` is the only language so far: a rule that names another is refused. More languages come later, each with an adversarial review of its own.
-  - `whitespace_only`: any text file under `paths`; only line endings, whitespace at the end of a line and blank lines at the end of the file may differ.
+- **The proofs.** Both cover every changed file of the pull request: one outside `paths` proves nothing, because a change elsewhere could be what the guard saw. `paths` match case-sensitively (`docs/**` never covers `DOCS/run.sh`), and a path with a control character proves nothing.
+  - `comments_only`: each changed file is a plain change of a regular `.sql` file in which only plain comment text was edited, added or removed, the boring case. Code, string literals, quoted identifiers, dollar-quoted bodies and comments with a meaning must stay byte for byte where they are. Between tokens only "a blank here" and "a line break here" count, and a line comment always ends a line. `sql` is the only language so far: a rule that names another is refused. More languages come later, each with an adversarial review of its own.
   - `paths_only`: every changed path, both sides of a rename, matches `paths`.
-- **Erring towards "not proven".** An added, deleted or renamed file, a mode change, a symlink, a submodule, a binary file, a file over 2 MiB and a file that is no `.sql` file prove nothing. The SQL tokenizer is small and conservative, and whatever it cannot classify for sure proves nothing: `--` without a blank after it (MySQL reads two minus signs), a backslash in a string or outside one (MySQL escapes, `E'...'`), a nested block comment (PostgreSQL nests them, MySQL does not), a block comment whose `/*` is not followed by a blank or `*` (`/*!...*/` runs in MySQL, `/*+...*/` is a hint), and anything unterminated. Comments with a meaning count as code, so adding, removing or changing one is never "comments only": line comments with a migration or query directive (`-- +goose Up`, `--+` hints, `-- name: ...`, `-- no-transaction`) and any comment that names a tool (`goose`, `sqlx`, `flyway`, `liquibase`, `migrate`, `sqlc`, `noqa`, any `lint`, `ignore` or `disable`, and more; see `src/proofs.ts`). Each comment is judged on its own. When in doubt, not proven: these proofs exist for the boring cases.
+  - `whitespace_only` is not in this version: a rule that names it is refused. It comes later.
+- **PostgreSQL only, and only the boring case.** `comments_only` reads SQL as PostgreSQL does and proves nothing for anything else:
+  - files: an added, deleted or renamed file, a mode change, a symlink, a submodule, a file over 2 MiB, bytes that are not valid UTF-8 (read exactly, as bytes; a byte order mark counts), a NUL byte;
+  - characters anywhere in the base or the head, also inside comments and strings: a backslash (`E'...'` escapes, other dialects' strings), a carriage return not right before a line feed (PostgreSQL ends a `--` comment there), a form feed or vertical tab, and line endings that are neither all LF nor all CRLF, or that change between base and head;
+  - forms: `--` without a blank after it (and so `--+` hints), a nested block comment, a block comment whose `/*` is not followed by a blank or `*` (`/*!...*/` runs in MySQL, `/*+...*/` is a hint), a backtick, a `$` that is neither a dollar quote with an ASCII tag of at most 63 characters nor a positional parameter `$1`, and anything unterminated.
+
+  Comments with a meaning must be byte-identical in base and head and sit between the same tokens: line comments with a migration or query directive (`-- +goose Up`, `-- name: ...`, `-- no-transaction`) and any comment that names a tool (`goose`, `sqlx`, `flyway`, `liquibase`, `migrate`, `sqlc`, `noqa`, any `lint`, `ignore` or `disable`, and more; see `src/proofs.ts`). Each comment is judged on its own. The tokenizer is linear in the size of the file. When in doubt, not proven.
 
   The diff comes from git with pinned options (`-c core.quotePath=false diff --no-color --no-ext-diff --no-textconv --ignore-submodules=none --no-renames`).
 - **When it applies.** Only when the rule is in `studio.yaml` at the pull request's base commit on the default branch, and the owner's checkout has evidence rules too (a rule not pulled yet applies to nothing). When a check fails and every failed check (a plain failed job; a cancelled check, a skipped required one or a commit status never) is a check of a rule's guard, `collect` (for an approval) and the merge queue judge it; any other failure fails as before. The guard job must be the same at the base and at the head.

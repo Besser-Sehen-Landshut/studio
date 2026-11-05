@@ -11470,8 +11470,8 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
   const _normalized = cached(() => normalizeDef(def));
   const memo2 = globalConfig.memoizer;
   const generateFastpass = (shape) => {
-    const normalized = _normalized.value;
-    const syms = normalized.symbolKeys;
+    const normalized2 = _normalized.value;
+    const syms = normalized2.symbolKeys;
     const doc = new Doc(["payload", "ctx"], { shape, inst, memo: memo2, syms });
     const parseStr = (k) => `shape[${k}]._zod.run({ value: input[${k}], issues: [] }, ctx)`;
     const prefixStr = (id, k) => `
@@ -11489,11 +11489,11 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
     doc.write(`const input = payload.value;`);
     const ids = /* @__PURE__ */ Object.create(null);
     let counter = 0;
-    for (const key of normalized.allKeys) {
+    for (const key of normalized2.allKeys) {
       ids[key] = `key_${counter++}`;
     }
     doc.write(memo2 ? `const newResult = memo.alloc(inst, payload, {}, ctx);` : `const newResult = {};`);
-    for (const key of normalized.allKeys) {
+    for (const key of normalized2.allKeys) {
       if (key === "__proto__")
         continue;
       const id = ids[key];
@@ -27332,23 +27332,23 @@ function fromJSONSchema(schema, params) {
   if (typeof schema === "boolean") {
     return schema ? z.any() : z.never();
   }
-  let normalized;
+  let normalized2;
   try {
-    normalized = JSON.parse(JSON.stringify(schema));
+    normalized2 = JSON.parse(JSON.stringify(schema));
   } catch {
     throw new Error("fromJSONSchema input is not valid JSON (possibly cyclic); use $defs/$ref for recursive schemas");
   }
-  const version2 = detectVersion(normalized, params?.defaultTarget);
-  const defs = normalized.$defs || normalized.definitions || {};
+  const version2 = detectVersion(normalized2, params?.defaultTarget);
+  const defs = normalized2.$defs || normalized2.definitions || {};
   const ctx = {
     version: version2,
     defs,
     refs: /* @__PURE__ */ new Map(),
     processing: /* @__PURE__ */ new Set(),
-    rootSchema: normalized,
+    rootSchema: normalized2,
     registry: params?.registry ?? globalRegistry
   };
-  return convertSchema(normalized, ctx);
+  return convertSchema(normalized2, ctx);
 }
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/visit.js
@@ -27643,7 +27643,7 @@ function expandBraces(glob) {
   }
   return [...new Set(done)];
 }
-function tokenize(glob) {
+function tokenize(glob, exactCase = false) {
   const out = [];
   for (let i2 = 0; i2 < glob.length; i2++) {
     const c3 = glob[i2];
@@ -27657,7 +27657,7 @@ function tokenize(glob) {
       }
     } else if (c3 === "*") out.push({ k: "star" });
     else if (c3 === "?") out.push({ k: "one" });
-    else out.push({ k: "char", c: c3.toLowerCase() });
+    else out.push({ k: "char", c: exactCase ? c3 : c3.toLowerCase() });
   }
   return out;
 }
@@ -27725,6 +27725,12 @@ function touchesOverlap(a2, b) {
   const pb = staticPrefix(b);
   if (pa === "" || pb === "") return true;
   return pa === pb || pb.startsWith(`${pa}/`) || pa.startsWith(`${pb}/`);
+}
+function matchGlobExact(glob, path10) {
+  if (globProblem(glob) !== void 0) return false;
+  const globs = expandBraces(normalize(glob));
+  if (globs === void 0) return false;
+  return globs.some((g2) => run(tokenize(g2, true), path10));
 }
 
 // src/board.ts
@@ -28555,7 +28561,6 @@ var Unclassifiable = class extends Error {
 var no = (why) => {
   throw new Unclassifiable(why);
 };
-var isWs = (c3) => c3 === " " || c3 === "	" || c3 === "\n" || c3 === "\r" || c3 === "\f" || c3 === "\v";
 var isIdent = (c3) => c3 !== void 0 && /[A-Za-z0-9_$]/.test(c3);
 var DIRECTIVE = /goose|sqlx|flyway|liquibase|changeset|rollback|precondition|migrate|no-transaction|sqlc|sqlfluff|squawk|noqa|lint|ignore|disable|enable|pragma/i;
 function meaningful(t) {
@@ -28578,28 +28583,47 @@ var Out = class {
 function quoted(s, i2, quote) {
   let j = i2 + 1;
   for (; ; ) {
-    if (j >= s.length) return no("an unterminated string");
-    if (s[j] === quote) {
-      if (s[j + 1] === quote) {
-        j += 2;
-        continue;
-      }
-      return j + 1;
+    const k = s.indexOf(quote, j);
+    if (k === -1) return no("an unterminated string");
+    if (s[k + 1] === quote) {
+      j = k + 2;
+      continue;
     }
-    j++;
+    return k + 1;
   }
+}
+function plainText(bytes) {
+  let raw;
+  if (typeof bytes === "string") raw = bytes;
+  else {
+    try {
+      raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    } catch {
+      return "not valid UTF-8";
+    }
+  }
+  if (raw.includes("\0")) return "binary";
+  if (raw.includes("\\")) return "a backslash";
+  if (/[\f\v]/.test(raw)) return "a form feed or vertical tab";
+  if (/\r(?!\n)/.test(raw)) return "a carriage return without a line feed";
+  const lf = (raw.match(/\n/g) ?? []).length;
+  const crlf = (raw.match(/\r\n/g) ?? []).length;
+  if (crlf > 0 && crlf !== lf) return "mixed line endings";
+  return { text: raw.replace(/\r\n/g, "\n"), crlf: lf === 0 ? void 0 : crlf > 0 };
 }
 function tokenizeSql(s) {
   const out = new Out();
   let i2 = 0;
   while (i2 < s.length) {
     const c3 = s[i2];
-    if (isWs(c3)) {
+    if (c3 === " " || c3 === "	" || c3 === "\n") {
       out.push("ws", c3);
       i2++;
     } else if (s.startsWith("--", i2)) {
       const next = s[i2 + 2];
-      if (next !== void 0 && !isWs(next)) no("-- without a blank after it");
+      if (next !== void 0 && next !== " " && next !== "	" && next !== "\n") {
+        no("-- without a blank after it");
+      }
       const end = s.indexOf("\n", i2);
       const stop = end === -1 ? s.length : end;
       out.push("comment", s.slice(i2, stop));
@@ -28607,34 +28631,36 @@ function tokenizeSql(s) {
     } else if (s.startsWith("/*", i2)) {
       const end = s.indexOf("*/", i2 + 2);
       if (end === -1) no("an unterminated block comment");
-      if (s.slice(i2 + 2, end).includes("/*")) no("a nested block comment");
+      const inner = s.indexOf("/*", i2 + 2);
+      if (inner !== -1 && inner < end) no("a nested block comment");
       const first = s[i2 + 2];
-      if (first !== "*" && !isWs(first)) no("a block comment that may be executable or a hint");
+      if (first !== "*" && first !== " " && first !== "	" && first !== "\n") {
+        no("a block comment that may be executable or a hint");
+      }
       out.push("comment", s.slice(i2, end + 2));
       i2 = end + 2;
-    } else if (c3 === "'") {
-      const end = quoted(s, i2, "'");
-      const text = s.slice(i2, end);
-      if (text.includes("\\")) no("a backslash in a string");
-      out.push("string", text);
-      i2 = end;
-    } else if (c3 === '"' || c3 === "`") {
+    } else if (c3 === "'" || c3 === '"') {
       const end = quoted(s, i2, c3);
       out.push("string", s.slice(i2, end));
       i2 = end;
-    } else if (c3 === "$" && !isIdent(s[i2 - 1])) {
-      const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(s.slice(i2, i2 + 70));
-      if (m === null) {
-        out.push("code", c3);
-        i2++;
+    } else if (c3 === "`") {
+      no("a backtick");
+    } else if (c3 === "$") {
+      if (isIdent(s[i2 - 1])) no("a $ inside a name");
+      const param = /^\$[0-9]+/.exec(s.slice(i2, i2 + 12));
+      if (param !== null) {
+        if (isIdent(s[i2 + param[0].length])) no("a parameter glued to a name");
+        out.push("code", param[0]);
+        i2 += param[0].length;
         continue;
       }
-      const end = s.indexOf(m[0], i2 + m[0].length);
+      const tag = /^\$(?:[A-Za-z_][A-Za-z0-9_]{0,62})?\$/.exec(s.slice(i2, i2 + 66));
+      if (tag === null) no("a $ that is neither a dollar quote nor a parameter");
+      const open4 = tag[0];
+      const end = s.indexOf(open4, i2 + open4.length);
       if (end === -1) no("an unterminated dollar quote");
-      out.push("string", s.slice(i2, end + m[0].length));
-      i2 = end + m[0].length;
-    } else if (c3 === "\\") {
-      no("a backslash outside a string");
+      out.push("string", s.slice(i2, end + open4.length));
+      i2 = end + open4.length;
     } else {
       out.push("code", c3);
       i2++;
@@ -28642,7 +28668,7 @@ function tokenizeSql(s) {
   }
   return out.segs;
 }
-function codeOf(text, _language) {
+function normalized(text) {
   let segs;
   try {
     segs = tokenizeSql(text);
@@ -28651,26 +28677,38 @@ function codeOf(text, _language) {
     throw e;
   }
   const parts = [];
-  let gap = false;
+  let gap = "none";
+  const widen = (to) => {
+    if (gap !== "line") gap = to;
+  };
   for (const seg of segs) {
-    if (seg.kind === "ws" || seg.kind === "comment" && seg.meaningful !== true) {
-      gap = true;
+    if (seg.kind === "ws") {
+      widen(seg.text.includes("\n") ? "line" : "blank");
       continue;
     }
-    if (gap && parts.length > 0) parts.push(" ");
-    gap = false;
+    const line3 = seg.kind === "comment" && seg.text.startsWith("--");
+    if (seg.kind === "comment" && seg.meaningful !== true) {
+      widen(line3 || seg.text.includes("\n") ? "line" : "blank");
+      continue;
+    }
+    if (parts.length > 0 && gap !== "none") parts.push(gap === "line" ? "\n" : " ");
     parts.push(seg.text);
+    gap = line3 ? "line" : "none";
   }
   return parts.join("");
 }
-function commentsOnly(base, head, language) {
-  const a2 = codeOf(base, language);
-  const b = codeOf(head, language);
-  return a2 !== void 0 && b !== void 0 && a2 === b;
-}
-function whitespaceOnly(base, head) {
-  const norm = (t) => t.split(/\r?\n/).map((l) => l.replace(/[ \t\r]+$/, "")).join("\n").replace(/\n+$/, "");
-  return norm(base) === norm(head);
+function commentsOnlyWhy(base, head) {
+  const a2 = plainText(base);
+  const b = plainText(head);
+  if (typeof a2 === "string") return `the base has ${a2}`;
+  if (typeof b === "string") return `the head has ${b}`;
+  if (a2.crlf !== void 0 && b.crlf !== void 0 && a2.crlf !== b.crlf) {
+    return "its line endings changed";
+  }
+  const ca = normalized(a2.text);
+  const cb = normalized(b.text);
+  if (ca === void 0 || cb === void 0) return "it cannot be read for sure";
+  return ca === cb ? void 0 : "it changes more than plain comments";
 }
 
 // src/config.ts
@@ -28786,14 +28824,14 @@ var workflowJob = external_exports.strictObject({
   )
 });
 var EVIDENCE_ID_RE = /^[a-z][a-z0-9-]{0,47}$/;
-var NO_COMMANDS = "evidence rules take a built-in proof (comments_only, whitespace_only, paths_only); custom proof commands come later, with a real sandbox";
+var NO_COMMANDS = "evidence rules take a built-in proof (comments_only, paths_only); custom proof commands come later, with a real sandbox";
 var COMMAND_KEYS = ["command", "run", "inputs", "timeoutSeconds", "job"];
 var evidenceRuleSchema = external_exports.looseObject({
   id: external_exports.string().regex(EVIDENCE_ID_RE, "must match ^[a-z][a-z0-9-]{0,47}$"),
   // The CI job that reports the hit, e.g. a migration guard.
   guard: workflowJob,
-  // comments_only and whitespace_only: every changed file under `paths` (at least one) changes
-  // only that. paths_only: every changed file matches `paths`.
+  // Every changed file of the pull request must lie under `paths`. comments_only: each one is a
+  // .sql file that changes plain comments only. paths_only: that is all.
   proof: external_exports.enum(["comments_only", "whitespace_only", "paths_only"]),
   paths: external_exports.array(globSchema).min(1).max(50),
   // comments_only: the languages it reads (sql only so far); any other file proves nothing.
@@ -28810,6 +28848,9 @@ var evidenceRuleSchema = external_exports.looseObject({
   const known = ["id", "guard", "proof", "paths", "languages", "ownerOnly"];
   for (const key of Object.keys(r).filter((k) => !known.includes(k))) {
     issue2(key, COMMAND_KEYS.includes(key) ? NO_COMMANDS : "unknown key");
+  }
+  if (r.proof === "whitespace_only") {
+    issue2("proof", "whitespace_only is not in this version: it comes later");
   }
   if (r.proof === "comments_only" && r.languages === void 0) {
     issue2("languages", "comments_only needs the languages it reads");
@@ -36649,14 +36690,13 @@ var REGULAR = /^100(644|755)$/;
 async function prove(ctx, p, r) {
   const hostile = p.files.find(hostilePath);
   if (hostile !== void 0) return { kind: "no", why: "a changed path has a control character" };
-  const inScope = (f) => r.paths.some((glob) => matchGlob(glob, f));
-  if (r.proof === "paths_only") {
-    const outside = p.files.find((f) => !inScope(f));
-    return outside === void 0 ? { kind: "proven" } : { kind: "no", why: `${quotePath(outside)} is outside the paths` };
-  }
-  const scoped = p.changes.filter((c3) => inScope(c3.path));
-  if (scoped.length === 0) return { kind: "no", why: "no changed file is under the paths" };
-  for (const c3 of scoped) {
+  const outside = p.files.find((f) => !r.paths.some((glob) => matchGlobExact(glob, f)));
+  if (outside !== void 0)
+    return { kind: "no", why: `${quotePath(outside)} is outside the paths` };
+  if (r.proof === "paths_only") return { kind: "proven" };
+  if (r.proof !== "comments_only") return { kind: "no", why: `${r.proof} is not in this version` };
+  if (p.changes.length === 0) return { kind: "no", why: "no file changed" };
+  for (const c3 of p.changes) {
     const name = quotePath(c3.path);
     if (c3.status === "A" || c3.status === "D") {
       return { kind: "no", why: `${name} is ${c3.status === "A" ? "added" : "deleted"}` };
@@ -36664,8 +36704,7 @@ async function prove(ctx, p, r) {
     if (c3.status !== "M") return { kind: "no", why: `${name} is not a plain change` };
     if (c3.srcMode !== c3.dstMode) return { kind: "no", why: `${name} changes its mode` };
     if (!REGULAR.test(c3.srcMode)) return { kind: "no", why: `${name} is no regular file` };
-    const language = r.proof === "comments_only" ? languageOf(c3.path, r.languages ?? []) : void 0;
-    if (r.proof === "comments_only" && language === void 0) {
+    if (languageOf(c3.path, r.languages ?? []) === void 0) {
       return { kind: "no", why: `${name} is in none of the languages` };
     }
     let before;
@@ -36675,21 +36714,14 @@ async function prove(ctx, p, r) {
       if (await size(c3.src) > MAX_BLOB || await size(c3.dst) > MAX_BLOB) {
         return { kind: "no", why: `${name} is too large to read` };
       }
-      before = await g(ctx, ["cat-file", "blob", c3.src]);
-      after2 = await g(ctx, ["cat-file", "blob", c3.dst]);
+      if (ctx.git.blob === void 0) throw new Error("no blob reader");
+      before = await ctx.git.blob(ctx.checkout.dir, c3.src, { timeoutMs: GIT_LOCAL_MS4 });
+      after2 = await ctx.git.blob(ctx.checkout.dir, c3.dst, { timeoutMs: GIT_LOCAL_MS4 });
     } catch {
       return { kind: "retry", why: `${name} cannot be read` };
     }
-    if (before.includes("\0") || after2.includes("\0")) {
-      return { kind: "no", why: `${name} is binary` };
-    }
-    const holds = language === void 0 ? whitespaceOnly(before, after2) : commentsOnly(before, after2, language);
-    if (!holds) {
-      return {
-        kind: "no",
-        why: `${name} changes more than ${r.proof === "comments_only" ? "comments and whitespace" : "whitespace"}, or cannot be read for sure`
-      };
-    }
+    const why = commentsOnlyWhy(before, after2);
+    if (why !== void 0) return { kind: "no", why: `${name}: ${why}` };
   }
   return { kind: "proven" };
 }
@@ -52033,6 +52065,19 @@ function realPorts(claudeBin = "claude") {
       if (r.exitCode !== 0) {
         throw new Error(`git ${args.join(" ")} failed (${r.exitCode}): ${r.stderr}`);
       }
+      return r.stdout;
+    },
+    async blob(cwd, oid, opts) {
+      const r = await execa("git", ["--no-replace-objects", "cat-file", "blob", oid], {
+        cwd,
+        reject: false,
+        encoding: "buffer",
+        stripFinalNewline: false,
+        env: { GIT_TERMINAL_PROMPT: "0" },
+        ...opts?.timeoutMs === void 0 ? {} : { timeout: opts.timeoutMs }
+      });
+      if (r.timedOut) throw new Error(`git cat-file blob ${oid} timed out`);
+      if (r.exitCode !== 0) throw new Error(`git cat-file blob ${oid} failed (${r.exitCode})`);
       return r.stdout;
     }
   };

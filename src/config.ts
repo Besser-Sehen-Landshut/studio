@@ -199,7 +199,7 @@ export const EVIDENCE_ID_RE = /^[a-z][a-z0-9-]{0,47}$/;
 
 /** Why a rule with a command is refused: no user-configured command runs in this version. */
 export const NO_COMMANDS =
-  'evidence rules take a built-in proof (comments_only, whitespace_only, paths_only); custom proof commands come later, with a real sandbox';
+  'evidence rules take a built-in proof (comments_only, paths_only); custom proof commands come later, with a real sandbox';
 
 /** Keys of the command rules an earlier draft had; refused with NO_COMMANDS. */
 const COMMAND_KEYS = ['command', 'run', 'inputs', 'timeoutSeconds', 'job'];
@@ -215,8 +215,8 @@ export const evidenceRuleSchema = z
     id: z.string().regex(EVIDENCE_ID_RE, 'must match ^[a-z][a-z0-9-]{0,47}$'),
     // The CI job that reports the hit, e.g. a migration guard.
     guard: workflowJob,
-    // comments_only and whitespace_only: every changed file under `paths` (at least one) changes
-    // only that. paths_only: every changed file matches `paths`.
+    // Every changed file of the pull request must lie under `paths`. comments_only: each one is a
+    // .sql file that changes plain comments only. paths_only: that is all.
     proof: z.enum(['comments_only', 'whitespace_only', 'paths_only']),
     paths: z.array(globSchema).min(1).max(50),
     // comments_only: the languages it reads (sql only so far); any other file proves nothing.
@@ -241,6 +241,9 @@ export const evidenceRuleSchema = z
     const known = ['id', 'guard', 'proof', 'paths', 'languages', 'ownerOnly'];
     for (const key of Object.keys(r).filter((k) => !known.includes(k))) {
       issue(key, COMMAND_KEYS.includes(key) ? NO_COMMANDS : 'unknown key');
+    }
+    if (r.proof === 'whitespace_only') {
+      issue('proof', 'whitespace_only is not in this version: it comes later');
     }
     if (r.proof === 'comments_only' && r.languages === undefined) {
       issue('languages', 'comments_only needs the languages it reads');

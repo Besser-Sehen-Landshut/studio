@@ -89,7 +89,7 @@ type Token =
   | { k: 'any' } // ** at the end of a segment: anything
   | { k: 'dirs' }; // **/ zero or more whole segments
 
-function tokenize(glob: string): Token[] {
+function tokenize(glob: string, exactCase = false): Token[] {
   const out: Token[] = [];
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i] as string;
@@ -103,7 +103,7 @@ function tokenize(glob: string): Token[] {
       }
     } else if (c === '*') out.push({ k: 'star' });
     else if (c === '?') out.push({ k: 'one' });
-    else out.push({ k: 'char', c: c.toLowerCase() });
+    else out.push({ k: 'char', c: exactCase ? c : c.toLowerCase() });
   }
   return out;
 }
@@ -189,4 +189,15 @@ export function touchesOverlap(a: string, b: string): boolean {
   const pb = staticPrefix(b);
   if (pa === '' || pb === '') return true;
   return pa === pb || pb.startsWith(`${pa}/`) || pa.startsWith(`${pb}/`);
+}
+
+/**
+ * `matchGlob` for an exemption: case-sensitive, so `docs/**` never covers `DOCS/run.sh`, and a
+ * glob over the limits matches nothing, so it fails closed the other way.
+ */
+export function matchGlobExact(glob: string, path: string): boolean {
+  if (globProblem(glob) !== undefined) return false;
+  const globs = expandBraces(normalize(glob));
+  if (globs === undefined) return false;
+  return globs.some((g) => run(tokenize(g, true), path));
 }
