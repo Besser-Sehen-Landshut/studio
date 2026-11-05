@@ -148,6 +148,8 @@ export const workItemSchema = z.strictObject({
       tokensOut: z.number().nonnegative(),
       tokensCache: z.number().nonnegative().optional(),
       costUsd: z.number().nonnegative(),
+      // A run without a result: its cost is estimated from its assistant usage.
+      estimated: z.boolean().optional(),
     })
     .optional(),
   history: z.array(historySchema).default([]),

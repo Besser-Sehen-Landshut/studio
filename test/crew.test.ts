@@ -748,6 +748,7 @@ describe('writeCrewSettings', () => {
           'ci-reruns.json',
           'ci-reruns.lock',
           'costs.json',
+          'costs.lock',
         ].map((f) => join(state, f)),
         join(dirnameOf(state), 'owner'),
       ],

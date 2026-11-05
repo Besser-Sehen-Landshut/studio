@@ -20,7 +20,12 @@ tagged yet; the maintainers tag after the merge.
 - Daily cost cap: `limits.daily_cost_usd` in `studio.yaml` (one project) and in the owner config (all
   projects). Ended runs go into `costs.json` in the state root on the owner's local day; once the cap is
   reached every ready item is deferred with `daily cost cap reached ($x of $y)`, `tick` lists it under
-  `held`, running crews finish, and the next day starts from zero.
+  `held`, running crews finish, and the next day starts from zero. Under an owner cap every project's
+  ended runs are entered first, also of a project without a tick. A run counts as ended only by its
+  process identity, a launch records the item's previous run before it replaces the crew record, and
+  `accounts-clear` records runs before it moves their log start. Writers take `costs.lock`.
+- A run without a `result` event is estimated from its assistant usage (by model family, unknown
+  models at the highest rates) and marked `estimated` on the item and in the ledger.
 
 ## [0.13.0] - 2026-11-05
 

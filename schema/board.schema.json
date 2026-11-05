@@ -262,6 +262,9 @@
               "cost_usd": {
                 "type": "number",
                 "minimum": 0
+              },
+              "estimated": {
+                "type": "boolean"
               }
             },
             "required": [

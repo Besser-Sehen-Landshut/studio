@@ -3,9 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { type Board, loadBoard, parseBoard, saveBoard, type WorkItem } from '../src/board.js';
 import { type CliDeps, runCli } from '../src/cli.js';
-import { ownerConfigSchema, studioConfigSchema } from '../src/config.js';
+import { camelizeKeys, ownerConfigSchema, studioConfigSchema } from '../src/config.js';
 import {
   costHold,
   costReport,
@@ -15,7 +16,9 @@ import {
   usageFromLog,
   withItemUsage,
 } from '../src/costs.js';
+import { launchCrew } from '../src/crew.js';
 import {
+  acquireStateLock,
   checkStateMarker,
   ownerStateRootFor,
   projectRealpath,
@@ -112,6 +115,52 @@ const stateDir = () => {
 const log = (state: string, id: string, ...lines: string[]) =>
   writeFileSync(join(state, 'logs', `${id}.jsonl`), `${lines.join('\n')}\n`, { flag: 'a' });
 
+/**
+ * A run killed before its result: two assistant messages, the first streamed as two events with
+ * the same id and usage (counted once), on a sonnet model ($2 in, $10 out, $0.20 cache read and
+ * $2.50 cache write per million tokens).
+ */
+const assistant = (id: string, model: string, usage: Record<string, number>) =>
+  JSON.stringify({ type: 'assistant', message: { id, model, usage, content: [] } });
+const partialRun = [
+  assistant('m1', 'claude-sonnet-5-5', { input_tokens: 1000, output_tokens: 100 }),
+  assistant('m1', 'claude-sonnet-5-5', { input_tokens: 1000, output_tokens: 200 }),
+  assistant('m2', 'claude-sonnet-5-5', {
+    input_tokens: 10,
+    output_tokens: 300,
+    cache_read_input_tokens: 50_000,
+    cache_creation_input_tokens: 2000,
+  }),
+];
+const PARTIAL_USD = (1010 * 2 + 500 * 10 + 50_000 * 0.2 + 2000 * 2.5) / 1e6;
+
+describe('estimates for a run that has no result', () => {
+  it('counts the last usage per assistant message, priced by model family', () => {
+    const u = usageFromLog([init, ...partialRun].join('\n'));
+    expect(u).toMatchObject({
+      runs: 1,
+      tokensIn: 1010,
+      tokensOut: 500,
+      tokensCache: 52_000,
+      estimated: true,
+    });
+    expect(u.costUsd).toBeCloseTo(PARTIAL_USD, 9);
+  });
+
+  it('takes the result where there is one, and estimates only the run without', () => {
+    const u = usageFromLog([init, result(1.5), init, ...partialRun].join('\n'));
+    expect(u.runs).toBe(2);
+    expect(u.estimated).toBe(true);
+    expect(u.costUsd).toBeCloseTo(1.5 + PARTIAL_USD, 9);
+    expect(usageFromLog([init, result(1.5)].join('\n')).estimated).toBeUndefined();
+  });
+
+  it('prices a model it does not know at the highest rates, so the cap errs high', () => {
+    const line = assistant('m1', 'some-future-model', { input_tokens: 1e6, output_tokens: 0 });
+    expect(usageFromLog([init, line].join('\n')).costUsd).toBe(10);
+  });
+});
+
 describe('withItemUsage', () => {
   it('puts a review run on the builder item it reviews, and recomputes instead of adding', () => {
     const state = stateDir();
@@ -173,11 +222,20 @@ function clockPorts(start: string) {
   return { ports, live, set: (iso: string) => (t = Date.parse(iso)) };
 }
 
-const crewRecord = (item: string, pid: number, startedAt: string, logStart = 0) => ({
+/** A crew record; its stored identity matches what `clockPorts` reports for the pid. */
+const crewRecord = (
+  item: string,
+  pid: number,
+  startedAt: string,
+  logStart = 0,
+  identity = `start-${pid}`,
+) => ({
   name: `crew-${item}`,
   item,
   role: 'builder',
+  label: 'default',
   pid,
+  identity,
   log: '/x',
   startedAt,
   logStart,
@@ -190,7 +248,7 @@ const writeRecords = (state: string, recs: ReturnType<typeof crewRecord>[]) =>
   );
 
 describe('the daily ledger', () => {
-  it('enters an ended run once, from its log start, on the local day it is seen', () => {
+  it('enters an ended run once, from its log start, on the local day it is seen', async () => {
     const state = stateDir();
     const clock = clockPorts('2026-11-05T10:00:00Z');
     log(state, 'APP-1', init, result(9));
@@ -198,12 +256,12 @@ describe('the daily ledger', () => {
     log(state, 'APP-1', init, result(1.25));
     writeRecords(state, [crewRecord('APP-1', 7, '2026-11-05T09:00:00.000Z', start)]);
     clock.live.add(7);
-    expect(recordEndedRuns(state, clock.ports, 'UTC')).toBe(true);
+    expect(await recordEndedRuns(state, clock.ports, 'UTC')).toBe(true);
     // Still running: not entered.
     expect(costToday(state, clock.ports.clock.now(), 'UTC')).toBe(0);
     clock.live.delete(7);
-    recordEndedRuns(state, clock.ports, 'UTC');
-    recordEndedRuns(state, clock.ports, 'UTC');
+    await recordEndedRuns(state, clock.ports, 'UTC');
+    await recordEndedRuns(state, clock.ports, 'UTC');
     expect(costToday(state, clock.ports.clock.now(), 'UTC')).toBe(1.25);
     const read = readLedger(state);
     expect(read.ok && Object.keys(read.runs)).toEqual(['APP-1@2026-11-05T09:00:00.000Z']);
@@ -212,14 +270,76 @@ describe('the daily ledger', () => {
     expect(costToday(state, clock.ports.clock.now(), 'UTC')).toBe(0);
   });
 
-  it('counts the day in the owner zone', () => {
+  it('counts the day in the owner zone', async () => {
     const state = stateDir();
     const clock = clockPorts('2026-11-05T23:30:00Z');
     log(state, 'APP-1', init, result(2));
     writeRecords(state, [crewRecord('APP-1', 7, '2026-11-05T23:00:00.000Z')]);
-    recordEndedRuns(state, clock.ports, 'Europe/Berlin');
+    await recordEndedRuns(state, clock.ports, 'Europe/Berlin');
     const read = readLedger(state);
     expect(read.ok && Object.values(read.runs)[0]?.day).toBe('2026-11-06');
+  });
+
+  it('a run has ended once its pid belongs to another process, not only when the pid is free', async () => {
+    const state = stateDir();
+    const clock = clockPorts('2026-11-05T10:00:00Z');
+    log(state, 'APP-1', init, result(1));
+    log(state, 'APP-2', init, result(2));
+    // APP-1: pid 7 lives with the identity stored at launch. APP-2: pid 8 lives, but another
+    // process holds it now (the crew ended and the pid was reused).
+    writeRecords(state, [
+      crewRecord('APP-1', 7, '2026-11-05T09:00:00.000Z'),
+      crewRecord('APP-2', 8, '2026-11-05T09:00:00.000Z', 0, 'start-8-earlier'),
+    ]);
+    clock.live.add(7);
+    clock.live.add(8);
+    await recordEndedRuns(state, clock.ports, 'UTC');
+    const read = readLedger(state);
+    expect(read.ok && Object.keys(read.runs)).toEqual(['APP-2@2026-11-05T09:00:00.000Z']);
+  });
+
+  it('a second writer waits for costs.lock and merges with what is on disk', async () => {
+    const state = stateDir();
+    const clock = clockPorts('2026-11-05T10:00:00Z');
+    log(state, 'APP-1', init, result(1));
+    writeRecords(state, [crewRecord('APP-1', 7, '2026-11-05T09:00:00.000Z')]);
+    const other = acquireStateLock(state, 'costs.lock', {
+      now: new Date(),
+      heartbeatStaleMs: 60_000,
+    });
+    expect(other).toBeDefined();
+    const pending = recordEndedRuns(state, clock.ports, 'UTC');
+    // The holder writes its own entry while the second writer waits.
+    await new Promise((r) => setTimeout(r, 50));
+    writeStateFile(
+      state,
+      join(state, 'costs.json'),
+      JSON.stringify({
+        runs: {
+          'WEB-3@2026-11-05T08:00:00.000Z': { day: '2026-11-05', item: 'WEB-3', costUsd: 4 },
+        },
+      }),
+    );
+    other?.release();
+    expect(await pending).toBe(true);
+    const read = readLedger(state);
+    expect(read.ok && Object.keys(read.runs).sort()).toEqual([
+      'APP-1@2026-11-05T09:00:00.000Z',
+      'WEB-3@2026-11-05T08:00:00.000Z',
+    ]);
+    expect(costToday(state, clock.ports.clock.now(), 'UTC')).toBe(5);
+  });
+
+  it('a run without a result is estimated from its assistant usage and marked so', async () => {
+    const state = stateDir();
+    const clock = clockPorts('2026-11-05T10:00:00Z');
+    log(state, 'APP-1', init, ...partialRun);
+    writeRecords(state, [crewRecord('APP-1', 7, '2026-11-05T09:00:00.000Z')]);
+    await recordEndedRuns(state, clock.ports, 'UTC');
+    const read = readLedger(state);
+    const entry = read.ok ? Object.values(read.runs)[0] : undefined;
+    expect(entry?.estimated).toBe(true);
+    expect(entry?.costUsd).toBeCloseTo(PARTIAL_USD, 6);
   });
 
   it('fails closed only while a cap is set', () => {
@@ -449,6 +569,42 @@ describe('the daily cost cap in the planner', () => {
     ]);
   });
 
+  it('the owner cap counts a project that had no plan or tick since its run ended', async () => {
+    const fx = makeFx([itemYaml('APP-1')]);
+    writeFileSync(
+      join(fx.ownerDir, 'config.yaml'),
+      'crew_label_limits: { timezone: UTC }\nlimits: { daily_cost_usd: 2 }\n',
+    );
+    // The idle project: an ended run in its log and crew records, nothing in its ledger.
+    const idle = join(fx.home, '.local', 'state', 'studio', 'fedcba9876543210-idle');
+    mkdirSync(join(idle, 'logs'), { recursive: true });
+    log(idle, 'WEB-1', init, result(2.5));
+    writeRecords(idle, [crewRecord('WEB-1', 99, '2026-11-05T07:00:00.000Z')]);
+    const clock = clockPorts('2026-11-05T12:00:00Z');
+    const plan = JSON.parse((await cli(fx, clock.ports, ['plan'])).out);
+    expect(plan.deferred).toEqual([
+      { id: 'APP-1', reason: 'owner daily cost cap reached ($2.50 of $2.00)' },
+    ]);
+  });
+
+  it('accounts-clear records a run before it moves the log start past it', async () => {
+    const fx = makeFx([itemYaml('APP-1')]);
+    const clock = clockPorts('2026-11-05T12:00:00Z');
+    spent(fx, 3);
+    writeStateFile(
+      fx.owner,
+      join(fx.owner, 'blocks.json'),
+      JSON.stringify([{ label: 'default', reason: 'auth_failed', at: '2026-11-05T11:00:00.000Z' }]),
+    );
+    const r = await cli(fx, clock.ports, ['accounts-clear', 'default'], { isTerminal: true });
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+    const records = JSON.parse(readFileSync(join(fx.state, 'crew.json'), 'utf8'));
+    expect(records['APP-9'].logStart).toBeGreaterThan(0);
+    await cli(fx, clock.ports, ['plan']);
+    expect(costToday(fx.state, clock.ports.clock.now(), 'UTC')).toBe(3);
+  });
+
   it('tick lists the cap under held', async () => {
     const fx = makeFx([itemYaml('APP-1')], studioYaml('limits: { daily_cost_usd: 1 }\n'));
     const clock = clockPorts('2026-11-05T12:00:00Z');
@@ -532,6 +688,33 @@ describe('costs on the board and in the reports', () => {
     expect(state.today.costUsd).toBe(0.4);
   });
 });
+
+describe('a relaunch', () => {
+  it('records the previous run of the item before its crew record is replaced', async () => {
+    const fx = makeFx([itemYaml('APP-1')]);
+    const clock = clockPorts('2026-11-05T12:00:00Z');
+    checkStateMarker(fx.state, {
+      projectRealpath: projectRealpath(fx.project),
+      originUrl: git(fx.project, 'remote', 'get-url', 'origin'),
+    });
+    mkdirSync(join(fx.state, 'logs'), { recursive: true });
+    log(fx.state, 'APP-1', init, result(0.8));
+    writeRecords(fx.state, [crewRecord('APP-1', 77, '2026-11-05T08:00:00.000Z')]);
+    const board = loadBoard(fx.project);
+    const item = board.items[0] as WorkItem;
+    await launchCrew(fx.project, item, studioConfigSchema.parse(parseYamlConfig(fx)), clock.ports, {
+      homedir: fx.home,
+      env: fx.env,
+    });
+    const records = JSON.parse(readFileSync(join(fx.state, 'crew.json'), 'utf8'));
+    expect(records['APP-1'].startedAt).not.toBe('2026-11-05T08:00:00.000Z');
+    const read = readLedger(fx.state);
+    expect(read.ok && read.runs['APP-1@2026-11-05T08:00:00.000Z']?.costUsd).toBe(0.8);
+  });
+});
+
+const parseYamlConfig = (fx: Fx) =>
+  camelizeKeys(parseYaml(readFileSync(join(fx.project, '.studio', 'studio.yaml'), 'utf8')));
 
 const EPIC = `epics:
   - { id: E-1, title: First epic, status: open, goal: A goal, acceptance: [it works], history: [] }

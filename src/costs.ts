@@ -2,7 +2,14 @@ import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync } fro
 import { join } from 'node:path';
 import type { Board, WorkItem } from './board.js';
 import type { OwnerConfig, StudioConfig } from './config.js';
-import { assertStatePath, projectStateRoots, writeStateFile } from './paths.js';
+import { crewProcess } from './limits.js';
+import {
+  acquireStateLock,
+  assertStatePath,
+  projectStateRoots,
+  type StateLock,
+  writeStateFile,
+} from './paths.js';
 import type { Ports } from './ports.js';
 import { readCrewCaps, reviewTarget } from './review.js';
 import { readCrewRecords } from './state.js';
@@ -12,6 +19,7 @@ import { dayKey, USAGE_DAYS_KEPT } from './usage.js';
  * What crews cost, read from their stream-json logs. Claude Code ends each `-p` run with one
  * `result` event that carries `total_cost_usd`, `usage` (the main model's tokens) and `modelUsage`
  * (per model, with `costUSD`). Fields are taken as present and summed; anything else is skipped.
+ * A run that ended without a result (killed, crashed) is estimated from its `assistant` events.
  */
 export interface RunUsage {
   runs: number;
@@ -20,9 +28,12 @@ export interface RunUsage {
   /** Cache reads and cache writes together. */
   tokensCache: number;
   costUsd: number;
+  /** Set when a run had no result and its cost is an estimate from its assistant usage. */
+  estimated?: true;
 }
 
 export const COSTS_FILE = 'costs.json';
+export const COSTS_LOCK = 'costs.lock';
 /** Longest log Studio reads for costs; a larger one is read from its end. */
 const MAX_LOG_BYTES = 64 * 1024 * 1024;
 
@@ -66,16 +77,50 @@ function resultUsage(ev: Record<string, unknown>): Omit<RunUsage, 'runs'> {
 }
 
 /**
- * Pure. Sums the `result` events of a stream-json text. A run is a `system`/`init` event (a run
- * killed at a limit has no result); without any, each result counts as one run.
+ * Dollars per million tokens for an estimate only, by model family (input, output, cache read,
+ * cache write at 1.25 times input), at the first-party API prices of November 2026. A run with a
+ * result always uses the cost Claude Code reported. An unknown model gets the highest rates, so an
+ * estimate errs high under a cap.
+ */
+const PRICES: [RegExp, [number, number, number, number]][] = [
+  [/haiku/i, [0.1, 0.5, 0.01, 0.125]],
+  [/sonnet/i, [2, 10, 0.2, 2.5]],
+  [/opus/i, [4, 20, 0.2, 5]],
+];
+const HIGHEST: [number, number, number, number] = [10, 50, 1, 12.5];
+
+/** The estimated cost of one assistant message's usage. */
+function estimate(model: string, u: Record<string, unknown>): number {
+  const [inp, out, read, write] = PRICES.find(([re]) => re.test(model))?.[1] ?? HIGHEST;
+  return (
+    (amount(u.input_tokens) * inp +
+      amount(u.output_tokens) * out +
+      amount(u.cache_read_input_tokens) * read +
+      amount(u.cache_creation_input_tokens) * write) /
+    1e6
+  );
+}
+
+interface Segment {
+  init: boolean;
+  results: Omit<RunUsage, 'runs'>[];
+  /** The last usage per assistant message id: a message streams as several events. */
+  assistants: Map<string, { model: string; usage: Record<string, unknown> }>;
+}
+
+/**
+ * Pure. Sums a stream-json text run by run; a run starts at a `system`/`init` event (without any,
+ * each result counts as one run). A run's `result` events give its tokens and cost. A run without
+ * one is estimated from the last usage of each of its assistant messages and marked `estimated`.
  */
 export function usageFromLog(text: string): RunUsage {
-  const out = emptyUsage();
-  let inits = 0;
-  let results = 0;
+  const segments: Segment[] = [];
+  let cur: Segment = { init: false, results: [], assistants: new Map() };
   for (const line of text.split('\n')) {
-    // Most lines are tool traffic: only these two kinds are parsed.
-    if (!line.includes('"result"') && !line.includes('"init"')) continue;
+    // Most lines are tool output: only these kinds are parsed.
+    if (!line.includes('"result"') && !line.includes('"init"') && !line.includes('"usage"')) {
+      continue;
+    }
     let ev: unknown;
     try {
       ev = JSON.parse(line);
@@ -83,16 +128,41 @@ export function usageFromLog(text: string): RunUsage {
       continue;
     }
     if (!isObject(ev)) continue;
-    if (ev.type === 'system' && ev.subtype === 'init') inits++;
-    if (ev.type !== 'result') continue;
-    results++;
-    const u = resultUsage(ev);
-    out.tokensIn += u.tokensIn;
-    out.tokensOut += u.tokensOut;
-    out.tokensCache += u.tokensCache;
-    out.costUsd += u.costUsd;
+    if (ev.type === 'system' && ev.subtype === 'init') {
+      segments.push(cur);
+      cur = { init: true, results: [], assistants: new Map() };
+    } else if (ev.type === 'result') {
+      cur.results.push(resultUsage(ev));
+    } else if (ev.type === 'assistant' && isObject(ev.message) && isObject(ev.message.usage)) {
+      const id = typeof ev.message.id === 'string' ? ev.message.id : `#${cur.assistants.size}`;
+      const model = typeof ev.message.model === 'string' ? ev.message.model : '';
+      cur.assistants.set(id, { model, usage: ev.message.usage });
+    }
   }
-  out.runs = Math.max(inits, results);
+  segments.push(cur);
+  const out = emptyUsage();
+  for (const seg of segments) {
+    if (seg.results.length > 0) {
+      out.runs += seg.init ? Math.max(1, seg.results.length) : seg.results.length;
+      for (const r of seg.results) {
+        out.tokensIn += r.tokensIn;
+        out.tokensOut += r.tokensOut;
+        out.tokensCache += r.tokensCache;
+        out.costUsd += r.costUsd;
+      }
+      continue;
+    }
+    if (seg.init || seg.assistants.size > 0) out.runs++;
+    if (seg.assistants.size === 0) continue;
+    for (const { model, usage } of seg.assistants.values()) {
+      out.tokensIn += amount(usage.input_tokens);
+      out.tokensOut += amount(usage.output_tokens);
+      out.tokensCache +=
+        amount(usage.cache_read_input_tokens) + amount(usage.cache_creation_input_tokens);
+      out.costUsd += estimate(model, usage);
+    }
+    out.estimated = true;
+  }
   return out;
 }
 
@@ -103,6 +173,7 @@ export function addUsage(a: RunUsage, b: RunUsage): RunUsage {
     tokensOut: a.tokensOut + b.tokensOut,
     tokensCache: a.tokensCache + b.tokensCache,
     costUsd: a.costUsd + b.costUsd,
+    ...(a.estimated || b.estimated ? { estimated: true as const } : {}),
   };
 }
 
@@ -182,6 +253,7 @@ export function withItemUsage(board: Board, stateRoot: string, id: string): Boar
     tokensOut: u.tokensOut,
     tokensCache: u.tokensCache,
     costUsd: roundUsd(u.costUsd),
+    ...(u.estimated ? { estimated: true } : {}),
   };
   return {
     ...board,
@@ -199,6 +271,8 @@ interface LedgerRun {
   day: string;
   item: string;
   costUsd: number;
+  /** The run had no result: the cost is estimated from its assistant usage. */
+  estimated?: true;
 }
 /** `<stateRoot>/costs.json`: runs keyed `<item>@<startedAt>`, kept for eight days. */
 export type Ledger = Record<string, LedgerRun>;
@@ -233,46 +307,82 @@ export function readLedger(stateRoot: string): LedgerRead {
     if (typeof r.costUsd !== 'number' || !Number.isFinite(r.costUsd) || r.costUsd < 0) {
       return { ok: false };
     }
-    runs[key] = { day: r.day, item: r.item, costUsd: r.costUsd };
+    if (r.estimated !== undefined && r.estimated !== true) return { ok: false };
+    runs[key] = {
+      day: r.day,
+      item: r.item,
+      costUsd: r.costUsd,
+      ...(r.estimated === true ? { estimated: true as const } : {}),
+    };
   }
   return { ok: true, runs };
 }
 
 const DAY_MS = 86_400_000;
 
+/** `costs.lock`, waited for up to five seconds; undefined when another writer keeps it. */
+async function costsLock(stateRoot: string, now: Date): Promise<StateLock | undefined> {
+  const until = Date.now() + 5000;
+  for (;;) {
+    const lock = acquireStateLock(stateRoot, COSTS_LOCK, { now, heartbeatStaleMs: 30_000 });
+    if (lock) return lock;
+    if (Date.now() >= until) return undefined;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
 /**
  * Enters every crew run of this project that has ended and is not in the ledger yet, with the cost
- * of its part of the log (`logStart` on), on today's local day. Runs started more than eight days
- * ago are left out, so a pruned entry never comes back. Returns false when the ledger is unreadable.
+ * of its part of the log (`logStart` on), on today's local day. A run has ended when its process is
+ * gone or its pid now belongs to another process (the identity stored at launch, as crewHold uses);
+ * a live process Studio cannot verify counts as running. Runs started more than eight days ago are
+ * left out, so a pruned entry never comes back. The read, merge and write run under `costs.lock`,
+ * on the file as it is then. Returns false when the ledger is unreadable or the lock stays held.
  */
-export function recordEndedRuns(stateRoot: string, ports: Ports, timezone?: string): boolean {
-  const read = readLedger(stateRoot);
-  if (!read.ok) return false;
+export async function recordEndedRuns(
+  stateRoot: string,
+  ports: Ports,
+  timezone?: string,
+): Promise<boolean> {
+  const first = readLedger(stateRoot);
+  if (!first.ok) return false;
   const now = ports.clock.now();
   const today = dayKey(now, timezone);
   const cutoff = dayKey(new Date(now.getTime() - (USAGE_DAYS_KEPT - 1) * DAY_MS), timezone);
-  const runs: Ledger = Object.create(null);
-  let changed = false;
-  for (const [key, r] of Object.entries(read.runs)) {
-    if (r.day >= cutoff) runs[key] = r;
-    else changed = true;
-  }
+  const fresh: Ledger = Object.create(null);
   for (const rec of Object.values(readCrewRecords(stateRoot))) {
     const started = Date.parse(rec.startedAt);
     if (Number.isNaN(started) || now.getTime() - started > USAGE_DAYS_KEPT * DAY_MS) continue;
     const key = `${rec.item}@${rec.startedAt}`;
-    if (!KEY_RE.test(key) || Object.hasOwn(runs, key)) continue;
-    // A live run has no result yet; a record without a usable pid is treated as live.
-    if (!Number.isInteger(rec.pid) || rec.pid <= 0 || ports.claude.alive(rec.pid)) continue;
+    if (!KEY_RE.test(key) || Object.hasOwn(first.runs, key)) continue;
+    // A live run has no result yet; an invalid pid or an unverifiable process counts as live.
+    const process = await crewProcess(rec, ports);
+    if (process !== 'dead' && process !== 'gone') continue;
     const from = typeof rec.logStart === 'number' && rec.logStart >= 0 ? rec.logStart : 0;
     const u = usageFromLog(readLog(stateRoot, rec.item, from));
-    runs[key] = { day: today, item: rec.item, costUsd: roundUsd(u.costUsd) };
-    changed = true;
+    fresh[key] = {
+      day: today,
+      item: rec.item,
+      costUsd: roundUsd(u.costUsd),
+      ...(u.estimated ? { estimated: true as const } : {}),
+    };
   }
-  if (changed) {
+  const stale = Object.values(first.runs).some((r) => r.day < cutoff);
+  if (Object.keys(fresh).length === 0 && !stale) return true;
+  const lock = await costsLock(stateRoot, now);
+  if (lock === undefined) return false;
+  try {
+    // Another writer may have written since the first read: merge with the file as it is now.
+    const again = readLedger(stateRoot);
+    if (!again.ok) return false;
+    const runs: Ledger = Object.create(null);
+    for (const [key, r] of Object.entries(again.runs)) if (r.day >= cutoff) runs[key] = r;
+    for (const [key, r] of Object.entries(fresh)) if (!Object.hasOwn(runs, key)) runs[key] = r;
     writeStateFile(stateRoot, ledgerFile(stateRoot), `${JSON.stringify({ runs }, null, 2)}\n`);
+    return true;
+  } finally {
+    lock.release();
   }
-  return true;
 }
 
 /** Cost of this project's ended runs on the local day of `now`; undefined when unreadable. */
@@ -344,6 +454,7 @@ export function costReport(board: Board): {
             tokensOut: i.usage.tokensOut,
             tokensCache: i.usage.tokensCache ?? 0,
             costUsd: i.usage.costUsd,
+            ...(i.usage.estimated === true ? { estimated: true as const } : {}),
           },
         ],
   );

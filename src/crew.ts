@@ -23,6 +23,7 @@ import {
   writeCaps,
 } from './brief-caps.js';
 import { loadOwnerConfig, type OwnerEnv, type StudioConfig, within } from './config.js';
+import { recordEndedRuns } from './costs.js';
 import {
   allParkedLine,
   apiBillingProblem,
@@ -1367,6 +1368,12 @@ async function launchCrewLocked(
         }),
       });
     });
+  }
+  // The item's previous run goes into the cost ledger before its crew record is replaced below.
+  try {
+    await recordEndedRuns(stateRoot, ports, ownerConfig.crewLabelLimits.timezone);
+  } catch {
+    // Costs must not refuse a launch; an unrecorded run stays in its log.
   }
   // Counted before the start, so a start that fails still counts as a run.
   recordRun(ownerRoot, label, ports.clock.now(), ownerConfig.crewLabelLimits.timezone);

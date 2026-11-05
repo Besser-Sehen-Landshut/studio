@@ -89,6 +89,7 @@ import {
   checkStateMarker,
   ownerStateRootFor,
   projectRealpath,
+  projectStateRoots,
   stateBaseFor,
   stateDirName,
   stateRootFor,
@@ -534,15 +535,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
      * The daily cost caps: first the runs that ended since the last look go into the ledger, so a
      * run's cost counts once it is known. Running crews are left to finish.
      */
-    const dailyCostHold = (config: StudioConfig, ownerConfig: OwnerConfig): string | undefined => {
-      try {
-        // A state root is never created here; an unreadable ledger is costHold's to report.
-        if (existsSync(stateRoot())) {
-          recordEndedRuns(stateRoot(), ports, ownerConfig.crewLabelLimits.timezone);
-        }
-      } catch {
-        // Unreadable crew records: the label limits refuse those already; the ledger keeps its runs.
-      }
+    const dailyCostHold = async (
+      config: StudioConfig,
+      ownerConfig: OwnerConfig,
+    ): Promise<string | undefined> => {
+      // Under the owner cap every project's ended runs count, also one that had no plan since.
+      const roots =
+        ownerConfig.limits?.dailyCostUsd === undefined
+          ? [stateRoot()]
+          : [...new Set([stateRoot(), ...projectStateRoots(dirname(ownerRoot()))])];
+      await recordAllEnded(roots, ownerConfig);
       return costHold({
         stateRoot: stateRoot(),
         stateBase: dirname(ownerRoot()),
@@ -551,13 +553,28 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         now: ports.clock.now(),
       });
     };
+    /**
+     * Enters the ended runs of these state roots into their ledgers. A state root is never created
+     * here; an unreadable ledger is costHold's to report, unreadable crew records the label limits'.
+     */
+    const recordAllEnded = async (roots: string[], ownerConfig: OwnerConfig): Promise<void> => {
+      for (const root of roots) {
+        try {
+          if (existsSync(root)) {
+            await recordEndedRuns(root, ports, ownerConfig.crewLabelLimits.timezone);
+          }
+        } catch {
+          // The ledger keeps the runs it has; the next plan tries again.
+        }
+      }
+    };
     /** `skipLabelCount`: `state` goes on without the per-label room when crew records are unreadable. */
     const planNow = async (config: StudioConfig, board: Board, skipLabelCount = false) => {
       const capacity = await readCapacity(config, ports);
       const ownerConfig = loadOwnerConfig(owner);
       let hold =
         (await limitHold(ownerRoot(), ownerConfig, ports, owner)) ??
-        dailyCostHold(config, ownerConfig);
+        (await dailyCostHold(config, ownerConfig));
       // Room under the per-label limits; asked only while nothing else holds (no provider call
       // during a block).
       let slots: number | undefined;
@@ -2205,6 +2222,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           throw new UsageError('accounts-clear needs exactly one valid label');
         }
         await boundStateRoot();
+        // The clear moves the log start of that label's crews past their runs: record them first.
+        await recordAllEnded(projectStateRoots(dirname(ownerRoot())), loadOwnerConfig(owner));
         const r = clearBlocks(ownerRoot(), label, ports.clock.now());
         print({ label, ...r });
         return 0;
