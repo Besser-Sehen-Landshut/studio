@@ -95,7 +95,6 @@ import {
   stateDirName,
   stateRootFor,
   withBoardLock,
-  writeStateFile,
 } from './paths.js';
 import { clearPause, PAUSED_LINE, readPause, setPause } from './pause.js';
 import { type Capacity, ONE_BUILD_PER_PLAN, planAssignments } from './planner.js';
@@ -153,6 +152,7 @@ import {
   readCrewRecords,
   readMetricEvents,
   type StateSnapshot,
+  updateCrewRecords,
   writeState,
 } from './state.js';
 import {
@@ -749,7 +749,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       const policy = ciPolicy(config, root);
       const lock = acquireQueueRunLock(root, ports.clock.now(), log);
       const removeSignals = installSignalRelease(lock);
-      const beat = () => lock.heartbeat(ports.clock.now());
+      // A run whose lock another run took over stops at once: two runs must never merge side by side.
+      const beat = () => {
+        if (!lock.owned()) {
+          throw new Error('the queue lock was taken over by another run; this run stopped');
+        }
+        lock.heartbeat(ports.clock.now());
+      };
       // Every poll and every wait of the queue goes through this clock: each one is a heartbeat.
       const runPorts: Ports = {
         ...ports,
@@ -832,7 +838,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       // The launch took a while: re-read the board and move the item on the fresh copy.
       await withBoardLock(stateRoot(), ports.clock.now(), () => {
         const fresh = loadBoard(project);
-        if (findItem(fresh, item.id).status !== 'ready') {
+        const now = findItem(fresh, item.id);
+        // A restart check in another process may have done this move already: that is success.
+        if (now.status === 'assigned' && now.crew === res.name) return;
+        if (now.status !== 'ready') {
           throw new Error(`${item.id} changed while launching; crew ${res.name} is running`);
         }
         const moved = withItem(
@@ -1038,6 +1047,20 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         throw new ReportError(`done report for ${item.id} names no pr`);
       }
       const now = ports.clock.now();
+      // Proposals only: a lesson reaches a role file through `lessons accept`. They are stored
+      // before the item moves, so a crash after the move cannot lose them; a collect that runs again
+      // proposes the same lines, which are merged by text. A problem here never fails the collect.
+      let lessonsProposed = 0;
+      try {
+        // The evidence the lessons review weighs: this run's report and its pull request.
+        const pr = report.pr !== undefined ? `${item.repo}#${report.pr}` : reviewDone.target;
+        lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now, {
+          report: `clones/${item.id}/.studio/reports/${fileName}`,
+          ...(pr === undefined ? {} : { pr }),
+        });
+      } catch (e) {
+        stderr(`error: lessons: ${(e as Error).message.replace(/\p{Cc}/gu, ' ')}\n`);
+      }
       // Under the lock from reading the board again to saving it: a launch clearing an approval
       // cannot slip in, and what moved while GitHub was asked stays.
       let review: string | undefined;
@@ -1191,20 +1214,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         saveBoard(project, next);
         return { next, fixLimit, supersededBy };
       });
-      // Proposals only: a lesson reaches a role file through `lessons accept`. The item has moved
-      // already, so a problem here must not read as a failed collect.
       const skillsMissing = readSkillsMissing(stateRoot(), item.id);
-      let lessonsProposed = 0;
-      try {
-        // The evidence the lessons review weighs: this run's report and its pull request.
-        const pr = report.pr !== undefined ? `${item.repo}#${report.pr}` : reviewDone.target;
-        lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now, {
-          report: `clones/${item.id}/.studio/reports/${fileName}`,
-          ...(pr === undefined ? {} : { pr }),
-        });
-      } catch (e) {
-        stderr(`error: lessons: ${(e as Error).message.replace(/\p{Cc}/gu, ' ')}\n`);
-      }
       const out = {
         item: item.id,
         report: report.status,
@@ -2094,9 +2104,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
         if (process === 'verified') await ports.claude.stop(rec.pid);
         const stoppedAt = ports.clock.now().toISOString();
-        const latest = readCrewRecords(root);
-        latest[id] = { ...(latest[id] ?? rec), stoppedAt };
-        writeStateFile(root, join(root, 'crew.json'), `${JSON.stringify(latest, null, 2)}\n`);
+        updateCrewRecords(root, (all) => {
+          all[id] = { ...(all[id] ?? rec), stoppedAt };
+        });
         // A crew that ended without a usable report leaves its item assigned, and launch takes
         // only ready items. --requeue gives the item its one relaunch, through blocked as the lead
         // routine says; an item that was requeued before stays blocked: a second miss is a decision.

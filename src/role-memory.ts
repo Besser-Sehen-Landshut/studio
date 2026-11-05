@@ -72,8 +72,8 @@ function cleanEvidence(e: Evidence | undefined): Evidence | undefined {
 }
 
 const lessonsFile = (stateRoot: string) => join(stateRoot, 'lessons.json');
-const LESSONS_LOCK = 'lessons.lock';
-const LESSONS_LOCK_STALE_MS = 30_000;
+export const LESSONS_LOCK = 'lessons.lock';
+export const LESSONS_LOCK_STALE_MS = 30_000;
 
 function readFile(stateRoot: string): LessonsFile {
   const file = lessonsFile(stateRoot);

@@ -30,7 +30,21 @@ tagged yet; the maintainers tag after the merge.
 ### Changed
 
 - Locks record the holder's process start time: a lock whose pid now belongs to another process (after a
-  reboot) is stale at once instead of after its heartbeat timeout. Locks without it are judged as before.
+  reboot) is stale at once. A live holder whose start time matches is never broken, however long it was
+  silent; one that cannot be verified is taken over only after a very long silence (four times its limit,
+  at least an hour). `recover` reports a quiet live holder (`silent <n> min, holder alive`).
+- A queue run whose lock was taken over stops before its next step; a launch beats its lock around the
+  clone.
+- `crew.json` is changed only under `crew.lock` (launch, stop, usage limits, account blocks), and an
+  unreadable file is never replaced.
+- The interrupted-launch repair waits while a launch holds the launch lock and while a record without its
+  start time is younger than 2 minutes; a launch whose item was already moved to its crew succeeds.
+- An item in review that the merge queue already holds is moved to `queued` (a `queue add` that stopped
+  between the queue entry and the board).
+- `collect` stores lessons before it moves the item. The hint for an item without a crew record checks
+  its log first.
+- `costs.lock` is among the locks `recover` checks; the state files crews must not write include the
+  lessons files, `tick.lock`, `board.lock` and `crew.lock`.
 - `launch` writes the crew record with its pid right after the start and adds the start time once read, so
   a lead killed in between leaves a record (unverified, never signalled) instead of a crew nobody knows of.
   A `ready` item with a crew started for it is moved to `assigned` by the next tick, never started again.

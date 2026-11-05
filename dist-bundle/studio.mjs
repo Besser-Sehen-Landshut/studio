@@ -28911,7 +28911,13 @@ var STATE_FILES = [
   "ci-reruns.json",
   "ci-reruns.lock",
   "costs.json",
-  "costs.lock"
+  "costs.lock",
+  "lessons.json",
+  "lessons.lock",
+  "lessons-review.json",
+  "tick.lock",
+  "board.lock",
+  "crew.lock"
 ];
 function stateBaseFor(opts = {}) {
   const env = opts.env ?? process.env;
@@ -29166,18 +29172,24 @@ function staleReason(body, mtimeMs, now, heartbeatStaleMs, identityOf = processI
     const age2 = now.getTime() - mtimeMs;
     return age2 >= heartbeatStaleMs ? `unreadable lock, ${minutes(age2)} old` : void 0;
   }
-  if (typeof body.pid === "number" && Number.isInteger(body.pid) && body.pid > 0) {
-    if (!pidAlive(body.pid)) return `holder pid ${body.pid} is not running`;
-    if (typeof body.identity === "string") {
-      const current = identityOf(body.pid);
-      if (current !== void 0 && current !== body.identity) {
-        return `holder pid ${body.pid} is another process now`;
-      }
-    }
-  }
   const beat = typeof body.heartbeat === "string" ? Date.parse(body.heartbeat) : Number.NaN;
   const age = now.getTime() - (Number.isNaN(beat) ? mtimeMs : beat);
+  if (typeof body.pid === "number" && Number.isInteger(body.pid) && body.pid > 0) {
+    if (!pidAlive(body.pid)) return `holder pid ${body.pid} is not running`;
+    const current = typeof body.identity === "string" ? identityOf(body.pid) : void 0;
+    if (current !== void 0) {
+      return current === body.identity ? void 0 : `holder pid ${body.pid} is another process now`;
+    }
+    const veryOld = Math.max(VERY_OLD_FACTOR * heartbeatStaleMs, VERY_OLD_MIN_MS);
+    return age >= veryOld ? `holder pid ${body.pid} cannot be verified and was silent ${minutes(age)}` : void 0;
+  }
   return age >= heartbeatStaleMs ? `last heartbeat ${minutes(age)} ago` : void 0;
+}
+var VERY_OLD_FACTOR = 4;
+var VERY_OLD_MIN_MS = 60 * 6e4;
+function silentMs(body, mtimeMs, now) {
+  const beat = typeof body?.heartbeat === "string" ? Date.parse(body.heartbeat) : Number.NaN;
+  return Math.max(0, now.getTime() - (Number.isNaN(beat) ? mtimeMs : beat));
 }
 var BOARD_LOCK = "board.lock";
 var BOARD_LOCK_STALE_MS = 3e4;
@@ -29288,12 +29300,13 @@ function inspectStateLock(root, name, opts) {
     if (err.code === "ENOENT") return { state: "free" };
     throw err;
   }
-  if (!st.isFile()) return { state: "held" };
+  if (!st.isFile()) return { state: "held", silentMs: 0 };
   const body = readLockBody(file2);
   const reason = staleReason(body, st.mtimeMs, opts.now, opts.heartbeatStaleMs, opts.identityOf);
   if (reason !== void 0) return { state: "stale", reason };
   const pid = body?.pid;
-  return typeof pid === "number" && Number.isInteger(pid) ? { state: "held", pid } : { state: "held" };
+  const silent = silentMs(body, st.mtimeMs, opts.now);
+  return typeof pid === "number" && Number.isInteger(pid) ? { state: "held", pid, silentMs: silent } : { state: "held", silentMs: silent };
 }
 function keys(p, platform2) {
   const out = [pathKey(resolve2(p), platform2)];
@@ -29586,6 +29599,37 @@ function readCrewRecords(stateRoot) {
     throw new Error(`crew file ${file2} is not a JSON object`);
   }
   return raw;
+}
+var CREW_LOCK = "crew.lock";
+var CREW_LOCK_STALE_MS = 3e4;
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function updateCrewRecords(stateRoot, mutate, opts = {}) {
+  const until = Date.now() + (opts.timeoutMs ?? 5e3);
+  for (; ; ) {
+    const lock = acquireStateLock(stateRoot, CREW_LOCK, {
+      now: /* @__PURE__ */ new Date(),
+      heartbeatStaleMs: CREW_LOCK_STALE_MS
+    });
+    if (lock) {
+      try {
+        const all = readCrewRecords(stateRoot);
+        const result = mutate(all);
+        writeStateFile(
+          stateRoot,
+          join6(stateRoot, "crew.json"),
+          `${JSON.stringify(all, null, 2)}
+`
+        );
+        return result;
+      } finally {
+        lock.release();
+      }
+    }
+    if (Date.now() >= until) throw new Error(`crew.json is locked (${CREW_LOCK}); try again`);
+    sleepSync(25);
+  }
 }
 function readMetricEvents(stateRoot) {
   const file2 = join6(stateRoot, "metrics.jsonl");
@@ -29988,18 +30032,17 @@ async function reconcileLimits(o2) {
       }
       if (process14 === "verified") await ports.claude.stop(rec.pid);
       const sessionId = sessionIdSince(stateRoot, id, rec.logStart ?? 0);
-      const latest = readCrewRecords(stateRoot);
-      latest[id] = {
-        ...latest[id] ?? rec,
-        stoppedAt: now.toISOString(),
-        limit: {
-          at: now.toISOString(),
-          kind: hit.kind,
-          ...sessionId === void 0 ? {} : { sessionId }
-        }
-      };
-      writeStateFile(stateRoot, crewFile, `${JSON.stringify(latest, null, 2)}
-`);
+      updateCrewRecords(stateRoot, (latest) => {
+        latest[id] = {
+          ...latest[id] ?? rec,
+          stoppedAt: now.toISOString(),
+          limit: {
+            at: now.toISOString(),
+            kind: hit.kind,
+            ...sessionId === void 0 ? {} : { sessionId }
+          }
+        };
+      });
       backToReady(
         project,
         id,
@@ -30197,7 +30240,6 @@ function boardOfRoot(root) {
 }
 async function stopCrewsOf(o2) {
   const { root, board, other, ownerRoot, ports, lock, at: at2, result } = o2;
-  const crewFile = join7(root, "crew.json");
   const where = other ? ` in ${root}` : "";
   const statusOf = (id) => board?.items.find((i2) => i2.id === id)?.status;
   const records = Object.fromEntries(
@@ -30252,10 +30294,9 @@ async function stopCrewsOf(o2) {
       }
       if (hit === void 0 && process14 === "dead") continue;
       if (hit === void 0 && process14 === "gone") {
-        const latest2 = readCrewRecords(root);
-        latest2[id] = { ...latest2[id] ?? rec, stoppedAt: at2, processGone: at2 };
-        writeStateFile(root, crewFile, `${JSON.stringify(latest2, null, 2)}
-`);
+        updateCrewRecords(root, (latest) => {
+          latest[id] = { ...latest[id] ?? rec, stoppedAt: at2, processGone: at2 };
+        });
         continue;
       }
       if (process14 === "verified") {
@@ -30274,14 +30315,13 @@ async function stopCrewsOf(o2) {
         });
       }
       if (!read3.ok && hit !== void 0) continue;
-      const latest = readCrewRecords(root);
-      latest[id] = {
-        ...latest[id] ?? rec,
-        stoppedAt: at2,
-        block: { at: at2, reason: hit?.reason ?? firstReason }
-      };
-      writeStateFile(root, crewFile, `${JSON.stringify(latest, null, 2)}
-`);
+      updateCrewRecords(root, (latest) => {
+        latest[id] = {
+          ...latest[id] ?? rec,
+          stoppedAt: at2,
+          block: { at: at2, reason: hit?.reason ?? firstReason }
+        };
+      });
     }
   }
 }
@@ -30346,19 +30386,19 @@ function clearBlocks(ownerRoot, label, now) {
       records: readCrewRecords(root)
     }));
     for (const { root, records } of roots) {
-      let moved = false;
+      const moves = {};
       for (const [id, rec] of Object.entries(records)) {
         if ((rec.label ?? DEFAULT_LABEL) !== label) continue;
         const end = logEnd(root, id);
-        if (end !== void 0 && end !== rec.logStart) {
-          records[id] = { ...rec, logStart: end };
-          moved = true;
-        }
+        if (end !== void 0 && end !== rec.logStart) moves[id] = end;
       }
-      if (moved) {
-        const crewFile = join7(root, "crew.json");
-        writeStateFile(root, crewFile, `${JSON.stringify(records, null, 2)}
-`);
+      if (Object.keys(moves).length > 0) {
+        updateCrewRecords(root, (all) => {
+          for (const [id, end] of Object.entries(moves)) {
+            const now2 = all[id];
+            if (now2 !== void 0) all[id] = { ...now2, logStart: end };
+          }
+        });
       }
     }
     if (removed > 0) writeBlocks(ownerRoot, kept);
@@ -33224,6 +33264,7 @@ import { closeSync as closeSync5, fstatSync as fstatSync4, lstatSync as lstatSyn
 import { join as join15 } from "node:path";
 var COSTS_FILE = "costs.json";
 var COSTS_LOCK = "costs.lock";
+var COSTS_LOCK_STALE_MS = 3e4;
 var MAX_LOG_BYTES = 64 * 1024 * 1024;
 var emptyUsage = () => ({
   runs: 0,
@@ -33425,7 +33466,10 @@ var DAY_MS2 = 864e5;
 async function costsLock(stateRoot, now) {
   const until = Date.now() + 5e3;
   for (; ; ) {
-    const lock = acquireStateLock(stateRoot, COSTS_LOCK, { now, heartbeatStaleMs: 3e4 });
+    const lock = acquireStateLock(stateRoot, COSTS_LOCK, {
+      now,
+      heartbeatStaleMs: COSTS_LOCK_STALE_MS
+    });
     if (lock) return lock;
     if (Date.now() >= until) return void 0;
     await new Promise((r) => setTimeout(r, 25));
@@ -33826,7 +33870,7 @@ function readFile(stateRoot) {
 }
 var writeFile_ = (stateRoot, data) => writeStateFile(stateRoot, lessonsFile(stateRoot), `${JSON.stringify(data, null, 2)}
 `);
-function sleepSync(ms) {
+function sleepSync2(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 function updateFile(stateRoot, fn) {
@@ -33844,7 +33888,7 @@ function updateFile(stateRoot, fn) {
       }
     }
     if (Date.now() >= until) throw new Error(`lessons.json is locked (${LESSONS_LOCK}); try again`);
-    sleepSync(25);
+    sleepSync2(25);
   }
 }
 function judge(data, entry) {
@@ -34650,21 +34694,9 @@ var GITCONFIG = `[user]
 `;
 var BASE_ENV = ["PATH", "LANG", "TERM", "USER"];
 var API_BILLING_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
-function readCrewFile(file2) {
-  try {
-    return JSON.parse(readFileSync20(file2, "utf8"));
-  } catch {
-    return {};
-  }
-}
 var crewFileChain = Promise.resolve();
-function updateCrewFile(stateRoot, file2, mutate) {
-  const run2 = crewFileChain.then(() => {
-    const all = readCrewFile(file2);
-    mutate(all);
-    writeStateFile(stateRoot, file2, `${JSON.stringify(all, null, 2)}
-`);
-  });
+function updateCrewFile(stateRoot, mutate) {
+  const run2 = crewFileChain.then(() => updateCrewRecords(stateRoot, mutate));
   crewFileChain = run2.catch(() => {
   });
   return run2;
@@ -34916,7 +34948,9 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
     if (!(locked.remaining(label) > 0)) refuseFull();
   };
   await recheck();
+  lock.heartbeat(ports.clock.now());
   const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
+  lock.heartbeat(ports.clock.now());
   removeOldReport(stateRoot, wt.path, item.id);
   const homeDir = join20(stateRoot, "homes", item.id);
   removeStateEntry(stateRoot, homeDir);
@@ -35054,15 +35088,15 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   };
   const hadFile = existsNoFollow(crewFile);
   let before;
-  await updateCrewFile(stateRoot, crewFile, (all) => {
+  await updateCrewFile(stateRoot, (all) => {
     before = all[item.id];
     all[item.id] = record2;
   });
-  const undoRecord = () => updateCrewFile(stateRoot, crewFile, (all) => {
+  const undoRecord = () => updateCrewFile(stateRoot, (all) => {
     if (before === void 0) delete all[item.id];
     else all[item.id] = before;
   }).then(() => {
-    if (!hadFile && Object.keys(readCrewFile(crewFile)).length === 0) {
+    if (!hadFile && Object.keys(readCrewRecords(stateRoot)).length === 0) {
       removeStateEntry(stateRoot, crewFile);
     }
   });
@@ -35088,7 +35122,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
       `cannot read the process identity of the new crew for ${item.id}; stopped it and refusing to launch`
     );
   }
-  await updateCrewFile(stateRoot, crewFile, (all) => {
+  await updateCrewFile(stateRoot, (all) => {
     all[item.id] = { ...record2, identity: identity3 };
   });
   return { name, pid, log };
@@ -37832,7 +37866,7 @@ var FILE_LOCK = "queue.json.lock";
 var RUN_LOCK = "queue.run.lock";
 var FILE_LOCK_STALE_MS = 3e4;
 var RUN_LOCK_HEARTBEAT_STALE_MS = 15 * 60 * 1e3;
-function sleepSync2(ms) {
+function sleepSync3(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 function updateQueue(stateRoot, mutate, opts = {}) {
@@ -37845,7 +37879,7 @@ function updateQueue(stateRoot, mutate, opts = {}) {
     });
     if (lock) break;
     if (Date.now() >= until) throw new Error(`queue file is locked (${FILE_LOCK}); try again`);
-    sleepSync2(25);
+    sleepSync3(25);
   }
   try {
     const q = loadQueue(stateRoot);
@@ -38458,15 +38492,14 @@ import { existsSync as existsSync7, lstatSync as lstatSync26, readdirSync as rea
 import { join as join32 } from "node:path";
 var TICK_LOCK = "tick.lock";
 var TICK_LOCK_STALE_MS = 15 * 6e4;
-var LESSONS_LOCK2 = "lessons.lock";
-var LESSONS_LOCK_STALE_MS2 = 3e4;
 var LOCKS = [
   { where: "project", name: TICK_LOCK, staleMs: TICK_LOCK_STALE_MS },
   { where: "project", name: RUN_LOCK, staleMs: RUN_LOCK_HEARTBEAT_STALE_MS },
   { where: "project", name: FILE_LOCK, staleMs: FILE_LOCK_STALE_MS },
   { where: "project", name: BOARD_LOCK, staleMs: BOARD_LOCK_STALE_MS },
   { where: "project", name: RERUNS_LOCK, staleMs: RERUNS_LOCK_STALE_MS },
-  { where: "project", name: LESSONS_LOCK2, staleMs: LESSONS_LOCK_STALE_MS2 },
+  { where: "project", name: LESSONS_LOCK, staleMs: LESSONS_LOCK_STALE_MS },
+  { where: "project", name: COSTS_LOCK, staleMs: COSTS_LOCK_STALE_MS },
   { where: "owner", name: LAUNCH_LOCK, staleMs: LAUNCH_LOCK_STALE_MS },
   { where: "owner", name: "limits.lock", staleMs: LOCK_STALE_MS },
   { where: "owner", name: "blocks.lock", staleMs: LOCK_STALE_MS },
@@ -38476,11 +38509,22 @@ var LOCKS = [
 ];
 var ASIDE = /^.+\.lock\.[0-9a-f]{8}\.stale$/;
 var TMP = /^.+\.(\d+)\.\d+\.[0-9a-f]{8}\.tmp$/;
+var LAUNCH_GRACE_MS = 2 * 6e4;
 var ASIDE_GRACE_MS = 6e4;
 function readySince(item) {
   const at2 = item.history.findLast((h2) => h2.to === "ready")?.at;
   const t = at2 === void 0 ? Number.NaN : Date.parse(at2);
   return Number.isNaN(t) ? Number.NEGATIVE_INFINITY : t;
+}
+var LOG_QUIET_MS = 30 * 6e4;
+function logWrittenAgo(stateRoot, item, now) {
+  if (!isItemId(item)) return void 0;
+  try {
+    const st = lstatSync26(join32(stateRoot, "logs", `${item}.jsonl`));
+    return st.isFile() ? Math.max(0, now.getTime() - st.mtimeMs) : void 0;
+  } catch {
+    return void 0;
+  }
 }
 function hasReport2(stateRoot, item) {
   if (!isItemId(item)) return false;
@@ -38503,7 +38547,12 @@ async function recoverProject(o2) {
       if (seen.state === "free") continue;
       if (seen.state === "held") {
         const by = seen.pid === void 0 ? "" : ` by pid ${seen.pid}`;
-        out.findings.push({ check: "lock", subject: l.name, found: `held${by}, alive` });
+        const silent = seen.silentMs >= l.staleMs ? `, silent ${Math.round(seen.silentMs / 6e4)} min` : "";
+        out.findings.push({
+          check: "lock",
+          subject: l.name,
+          found: `held${by}${silent}, holder alive`
+        });
         continue;
       }
       const finding = { check: "lock", subject: l.name, found: `stale: ${seen.reason}` };
@@ -38554,12 +38603,29 @@ async function recoverProject(o2) {
   if (!existsSync7(o2.stateRoot)) return out;
   const records = readCrewRecords(o2.stateRoot);
   const board = loadBoard(o2.project);
-  const interrupted = board.items.filter((i2) => {
+  const launching = existsSync7(o2.ownerRoot) && inspectStateLock(o2.ownerRoot, LAUNCH_LOCK, {
+    now: o2.now,
+    heartbeatStaleMs: LAUNCH_LOCK_STALE_MS
+  }).state === "held";
+  const interrupted = launching ? [] : board.items.filter((i2) => {
     const rec = records[i2.id];
     if (i2.status !== "ready" || rec === void 0 || rec.stoppedAt !== void 0) return false;
     const started = Date.parse(rec.startedAt);
-    return !Number.isNaN(started) && started >= readySince(i2);
+    if (Number.isNaN(started) || started < readySince(i2)) return false;
+    return rec.identity !== void 0 || o2.now.getTime() - started >= LAUNCH_GRACE_MS;
   });
+  if (launching) {
+    for (const i2 of board.items) {
+      const rec = records[i2.id];
+      if (i2.status === "ready" && rec !== void 0 && rec.stoppedAt === void 0) {
+        out.findings.push({
+          check: "launch",
+          subject: i2.id,
+          found: "a launch holds the launch lock: left to it"
+        });
+      }
+    }
+  }
   for (const item of interrupted) {
     const rec = records[item.id];
     if (rec === void 0) continue;
@@ -38590,8 +38656,14 @@ async function recoverProject(o2) {
     const rec = records[item.id];
     if (rec === void 0) {
       if ((item.notes ?? []).some((n2) => n2.startsWith(PR_HELD))) continue;
-      const reason = `${item.id} is ${item.status} but has no crew record: nothing runs for it; drop it, or add it again`;
-      out.findings.push({ check: "crew", subject: item.id, found: "no crew record" });
+      const written = logWrittenAgo(o2.stateRoot, item.id, o2.now);
+      const recent = written !== void 0 && written < LOG_QUIET_MS;
+      const reason = recent ? `${item.id} is ${item.status} but has no crew record, and its log was written ${Math.round(written / 6e4)} min ago: a crew may still run for it; check by hand (logs/${item.id}.jsonl, its clone) before dropping it` : `${item.id} is ${item.status} but has no crew record: nothing runs for it; drop it, or add it again`;
+      out.findings.push({
+        check: "crew",
+        subject: item.id,
+        found: recent ? "no crew record, log written lately" : "no crew record"
+      });
       lead(item.id, reason);
       continue;
     }
@@ -38643,6 +38715,28 @@ async function recoverProject(o2) {
       });
     }
     const waiting = [...queue.pending, ...c3 === void 0 ? [] : [c3]];
+    for (const item of board.items) {
+      if (item.status !== "in_review" || item.pr === void 0 || item.type === "review") continue;
+      const inQueue = waiting.some(
+        (e) => e.item === void 0 ? e.repo === item.repo && e.pr === item.pr : e.item === item.id
+      );
+      if (!inQueue) continue;
+      const finding = {
+        check: "queue",
+        subject: item.id,
+        found: "in the merge queue, but the board still says in_review"
+      };
+      if (!o2.dryRun) {
+        const moved = await withBoardLock(o2.stateRoot, o2.now, () => {
+          const fresh = loadBoard(o2.project);
+          if (fresh.items.find((i2) => i2.id === item.id)?.status !== "in_review") return false;
+          saveBoard(o2.project, transition(fresh, item.id, "queued", "studio", o2.now));
+          return true;
+        });
+        if (moved) finding.did = "moved it to queued";
+      }
+      out.findings.push(finding);
+    }
     for (const item of board.items) {
       if (item.status !== "queued") continue;
       const holds = (e) => e.item === void 0 ? e.repo === item.repo && e.pr === item.pr : e.item === item.id;
@@ -39951,7 +40045,12 @@ async function runCli(argv, deps) {
       const policy = ciPolicy(config2, root);
       const lock = acquireQueueRunLock(root, ports.clock.now(), log);
       const removeSignals = installSignalRelease(lock);
-      const beat = () => lock.heartbeat(ports.clock.now());
+      const beat = () => {
+        if (!lock.owned()) {
+          throw new Error("the queue lock was taken over by another run; this run stopped");
+        }
+        lock.heartbeat(ports.clock.now());
+      };
       const runPorts = {
         ...ports,
         clock: {
@@ -40022,7 +40121,9 @@ async function runCli(argv, deps) {
       const res = await launchCrew(project, item, config2, ports, owner);
       await withBoardLock(stateRoot(), ports.clock.now(), () => {
         const fresh = loadBoard(project);
-        if (findItem(fresh, item.id).status !== "ready") {
+        const now = findItem(fresh, item.id);
+        if (now.status === "assigned" && now.crew === res.name) return;
+        if (now.status !== "ready") {
           throw new Error(`${item.id} changed while launching; crew ${res.name} is running`);
         }
         const moved = withItem(
@@ -40205,6 +40306,17 @@ async function runCli(argv, deps) {
         throw new ReportError(`done report for ${item.id} names no pr`);
       }
       const now = ports.clock.now();
+      let lessonsProposed = 0;
+      try {
+        const pr = report.pr !== void 0 ? `${item.repo}#${report.pr}` : reviewDone.target;
+        lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now, {
+          report: `clones/${item.id}/.studio/reports/${fileName}`,
+          ...pr === void 0 ? {} : { pr }
+        });
+      } catch (e) {
+        stderr(`error: lessons: ${e.message.replace(new RegExp("\\p{Cc}", "gu"), " ")}
+`);
+      }
       let review;
       const { next, fixLimit, supersededBy } = await withBoardLock(stateRoot(), now, () => {
         const fresh = loadBoard(project);
@@ -40318,17 +40430,6 @@ async function runCli(argv, deps) {
         return { next: next2, fixLimit: fixLimit2, supersededBy: supersededBy2 };
       });
       const skillsMissing = readSkillsMissing(stateRoot(), item.id);
-      let lessonsProposed = 0;
-      try {
-        const pr = report.pr !== void 0 ? `${item.repo}#${report.pr}` : reviewDone.target;
-        lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now, {
-          report: `clones/${item.id}/.studio/reports/${fileName}`,
-          ...pr === void 0 ? {} : { pr }
-        });
-      } catch (e) {
-        stderr(`error: lessons: ${e.message.replace(new RegExp("\\p{Cc}", "gu"), " ")}
-`);
-      }
       const out = {
         item: item.id,
         report: report.status,
@@ -41132,10 +41233,9 @@ async function runCli(argv, deps) {
         }
         if (process14 === "verified") await ports.claude.stop(rec.pid);
         const stoppedAt = ports.clock.now().toISOString();
-        const latest = readCrewRecords(root);
-        latest[id] = { ...latest[id] ?? rec, stoppedAt };
-        writeStateFile(root, join36(root, "crew.json"), `${JSON.stringify(latest, null, 2)}
-`);
+        updateCrewRecords(root, (all) => {
+          all[id] = { ...all[id] ?? rec, stoppedAt };
+        });
         let requeued;
         if (values.requeue === true) {
           refuseCrew(deps.env);

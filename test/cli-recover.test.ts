@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -7,17 +8,19 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { loadBoard } from '../src/board.js';
+import { loadBoard, saveBoard, transition } from '../src/board.js';
 import { runCli } from '../src/cli.js';
 import {
   acquireStateLock,
   checkStateMarker,
   ownerStateRootFor,
+  processIdentity,
   projectRealpath,
   stateRootFor,
   writeStateFile,
@@ -27,6 +30,7 @@ import { realPorts } from '../src/ports.js';
 import { loadQueue, saveQueue } from '../src/queue.js';
 import { newReportName } from '../src/report.js';
 import { listLessons } from '../src/role-memory.js';
+import { updateCrewRecords } from '../src/state.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-recover-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -495,7 +499,13 @@ describe('studio recover', () => {
   it('finds and breaks stale locks of every kind, keeps live ones, and a dry run changes nothing', async () => {
     const fx = makeFx([]);
     const p = fakePorts(fakeGh().gh);
-    for (const name of ['ci-reruns.lock', 'queue.run.lock', 'queue.json.lock', 'board.lock']) {
+    for (const name of [
+      'ci-reruns.lock',
+      'queue.run.lock',
+      'queue.json.lock',
+      'board.lock',
+      'costs.lock',
+    ]) {
       deadLock(fx.state, name);
     }
     for (const name of ['launch.lock', 'push.lock']) deadLock(fx.owner, name);
@@ -510,9 +520,9 @@ describe('studio recover', () => {
         heartbeat: t,
       }),
     );
-    // A live holder.
+    // A live holder, silent for 20 minutes: reported, never broken.
     const live = acquireStateLock(fx.state, 'tick.lock', {
-      now: new Date(),
+      now: new Date(Date.now() - 20 * 60_000),
       heartbeatStaleMs: 60_000,
     });
     // Leftovers of a cut-short lock break and of a cut-short write.
@@ -536,6 +546,7 @@ describe('studio recover', () => {
     expect(stale.map((f: { subject: string }) => f.subject).sort()).toEqual([
       'board.lock',
       'ci-reruns.lock',
+      'costs.lock',
       'launch.lock',
       'limits.lock',
       'push.lock',
@@ -545,7 +556,7 @@ describe('studio recover', () => {
     expect(dry.json.findings).toContainEqual({
       check: 'lock',
       subject: 'tick.lock',
-      found: `held by pid ${process.pid}, alive`,
+      found: `held by pid ${process.pid}, silent 22 min, holder alive`,
     });
     expect(dry.json.findings.some((f: { did?: string }) => f.did !== undefined)).toBe(false);
     expect(readdirSync(fx.state).sort()).toEqual(before);
@@ -559,6 +570,7 @@ describe('studio recover', () => {
       'board.lock',
       'board.lock.0badc0de.stale',
       'ci-reruns.lock',
+      'costs.lock',
       'launch.lock',
       'limits.lock',
       'push.lock',
@@ -722,5 +734,261 @@ describe('the lessons review in the tick', () => {
     );
     expect((await cli(fx, p.ports, 'lessons', 'list', '--now')).err).toMatch(/--now works with/);
     expect((await cli(fx, p.ports, 'board', '--reason', 'x')).code).toBe(1);
+  });
+});
+
+describe('races and gaps found in review', () => {
+  const queueGh = (s: { merges: number }, onChecks: () => void = () => {}) =>
+    fakeGh((l) => {
+      if (l.startsWith('pr update-branch')) return {};
+      if (l.startsWith('pr view 5 --repo org/app --json headRefOid,state,mergeable')) {
+        return {
+          stdout: JSON.stringify({
+            headRefOid: HEAD,
+            state: s.merges > 0 ? 'MERGED' : 'OPEN',
+            mergeable: 'MERGEABLE',
+          }),
+        };
+      }
+      if (l.startsWith('pr checks')) {
+        onChecks();
+        return { stdout: JSON.stringify([{ name: 'ci', bucket: 'pass' }]) };
+      }
+      if (l.startsWith('pr merge')) {
+        s.merges++;
+        return {};
+      }
+      if (l.includes('--json mergeCommit')) {
+        return { stdout: JSON.stringify({ mergeCommit: { oid: 'c'.repeat(40) } }) };
+      }
+      if (l.includes('--json commits')) return { stdout: '2026-11-05T08:00:00Z\n' };
+      return undefined;
+    });
+
+  it('a queue run whose lock another run took over stops before it merges', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'queued', pr: 5, approvedHead: HEAD }]);
+    const s = { merges: 0 };
+    const { gh } = queueGh(s, () => {
+      const t = new Date().toISOString();
+      writeFileSync(
+        join(fx.state, 'queue.run.lock'),
+        JSON.stringify({
+          pid: process.pid,
+          identity: processIdentity(process.pid),
+          startedAt: t,
+          heartbeat: t,
+          token: 'another run',
+        }),
+      );
+    });
+    saveQueue(fx.state, {
+      pending: [],
+      current: { pr: 5, repo: 'org/app', item: 'APP-1', step: 'checks' },
+      done: [],
+    });
+    const t = await tick(fx, fakePorts(gh).ports);
+    expect(t.json.errors).toEqual([
+      { phase: 'queue run', error: expect.stringMatching(/taken over by another run/) },
+    ]);
+    expect(s.merges).toBe(0);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('queued');
+  });
+
+  it('launch beats its lock before and after the clone', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    const p = fakePorts(fakeGh().gh);
+    // Each reading of the clock is a second later, so a heartbeat shows as a new time.
+    let t = Date.parse('2026-11-05T10:00:00Z');
+    p.ports.clock.now = () => {
+      t += 1000;
+      return new Date(t);
+    };
+    const seen: { startedAt: string; heartbeat: string }[] = [];
+    const real = p.ports.git.run.bind(p.ports.git);
+    p.ports.git = {
+      run: async (cwd, args, opts) => {
+        if (args[0] === 'clone') {
+          seen.push(JSON.parse(readFileSync(join(fx.owner, 'launch.lock'), 'utf8')));
+        }
+        return real(cwd, args, opts);
+      },
+    };
+    expect((await cli(fx, p.ports, 'launch', 'APP-1')).code).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(Date.parse(seen[0]?.heartbeat ?? '')).toBeGreaterThan(
+      Date.parse(seen[0]?.startedAt ?? ''),
+    );
+  });
+
+  it('the restart check leaves a launch alone while any launch holds the launch lock', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    const p = fakePorts(fakeGh().gh);
+    p.live.add(4711);
+    writeRecords(fx, { 'APP-1': record('APP-1', 4711) });
+    mkdirSync(fx.owner, { recursive: true });
+    const launching = acquireStateLock(fx.owner, 'launch.lock', {
+      now: new Date(),
+      heartbeatStaleMs: 60_000,
+    });
+    const dry = await cli(fx, p.ports, 'recover', '--dry-run');
+    expect(dry.json.findings).toContainEqual({
+      check: 'launch',
+      subject: 'APP-1',
+      found: 'a launch holds the launch lock: left to it',
+    });
+    const t1 = await tick(fx, p.ports);
+    expect(t1.json.recovered).toBeUndefined();
+    expect(statusOf(fx, 'APP-1')?.status).toBe('ready');
+    expect(p.started).toEqual([]);
+    launching?.release();
+    const t2 = await tick(fx, p.ports);
+    expect(t2.json.recovered).toEqual([
+      expect.objectContaining({ check: 'launch', subject: 'APP-1', did: expect.any(String) }),
+    ]);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+  });
+
+  it('a young record without its start time is a launch still writing it: left alone for 2 minutes', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    const p = fakePorts(fakeGh().gh);
+    p.live.add(4711);
+    const { identity: _i, ...bare } = record('APP-1', 4711, '2026-11-05T09:59:30.000Z');
+    writeRecords(fx, { 'APP-1': bare });
+    const young = await cli(fx, p.ports, 'recover');
+    expect(young.json.findings.filter((f: { check: string }) => f.check === 'launch')).toEqual([]);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('ready');
+    p.advance(3 * 60_000);
+    const later = await cli(fx, p.ports, 'recover');
+    expect(later.json.findings).toContainEqual(
+      expect.objectContaining({ check: 'launch', subject: 'APP-1', did: expect.any(String) }),
+    );
+    expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+  });
+
+  it('a launch whose item another process already moved to its crew counts as done', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    const p = fakePorts(fakeGh().gh);
+    const identity = p.ports.claude.identity;
+    // Between the record and the board move a restart check elsewhere did the move.
+    p.ports.claude.identity = async (pid) => {
+      const board = loadBoard(fx.project);
+      const moved = transition(board, 'APP-1', 'assigned', 'studio', new Date());
+      saveBoard(fx.project, {
+        ...moved,
+        items: moved.items.map((i) =>
+          i.id === 'APP-1' ? { ...i, crew: 'studio-builder-app-1' } : i,
+        ),
+      });
+      return identity(pid);
+    };
+    const r = await cli(fx, p.ports, 'launch', 'APP-1');
+    expect(r.err).not.toMatch(/changed while launching/);
+    expect(r.code).toBe(0);
+    expect(statusOf(fx, 'APP-1')).toMatchObject({
+      status: 'assigned',
+      crew: 'studio-builder-app-1',
+    });
+  });
+
+  it('crew.json changes only under its lock, and an unreadable file is never replaced', () => {
+    const fx = makeFx([]);
+    writeRecords(fx, { 'APP-1': record('APP-1', 1) });
+    const held = acquireStateLock(fx.state, 'crew.lock', {
+      now: new Date(),
+      heartbeatStaleMs: 60_000,
+    });
+    expect(() =>
+      updateCrewRecords(
+        fx.state,
+        (all) => {
+          delete all['APP-1'];
+        },
+        { timeoutMs: 50 },
+      ),
+    ).toThrow(/crew.json is locked/);
+    held?.release();
+    expect(Object.keys(records(fx))).toEqual(['APP-1']);
+    updateCrewRecords(fx.state, (all) => {
+      all['APP-2'] = record('APP-2', 2);
+    });
+    expect(Object.keys(records(fx))).toEqual(['APP-1', 'APP-2']);
+    writeFileSync(join(fx.state, 'crew.json'), '{ torn');
+    expect(() => updateCrewRecords(fx.state, () => {})).toThrow(/not valid JSON/);
+    expect(readFileSync(join(fx.state, 'crew.json'), 'utf8')).toBe('{ torn');
+  });
+
+  it('no crew record: a log written lately means look first, an old one means drop it', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+    const p = fakePorts(fakeGh().gh);
+    p.setNow(Date.now());
+    mkdirSync(join(fx.state, 'logs'), { recursive: true });
+    const log = join(fx.state, 'logs', 'APP-1.jsonl');
+    writeFileSync(log, '{}\n');
+    const fresh = await cli(fx, p.ports, 'recover');
+    expect(fresh.json.needsLead).toEqual([
+      {
+        item: 'APP-1',
+        reason: expect.stringMatching(/a crew may still run for it; check by hand/),
+      },
+    ]);
+    const old = new Date(Date.now() - 2 * 3600_000);
+    utimesSync(log, old, old);
+    const stale = await cli(fx, p.ports, 'recover');
+    expect(stale.json.needsLead).toEqual([
+      { item: 'APP-1', reason: expect.stringMatching(/nothing runs for it; drop it/) },
+    ]);
+  });
+
+  it('queue add that died between the queue entry and the board move: the item is queued and merged', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5, approvedHead: HEAD }]);
+    const s = { merges: 0 };
+    const { gh } = queueGh(s);
+    saveQueue(fx.state, { pending: [{ pr: 5, repo: 'org/app', item: 'APP-1' }], done: [] });
+    const t1 = await tick(fx, fakePorts(gh).ports);
+    expect(t1.json.recovered).toEqual([
+      {
+        check: 'queue',
+        subject: 'APP-1',
+        found: 'in the merge queue, but the board still says in_review',
+        did: 'moved it to queued',
+      },
+    ]);
+    expect(t1.json.errors).toEqual([]);
+    expect(t1.json.merged).toEqual([{ item: 'APP-1', pr: 5, repo: 'org/app' }]);
+    expect(s.merges).toBe(1);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('merged');
+    const t2 = await tick(fx, fakePorts(gh).ports);
+    expect(changes(t2.json)).toEqual(QUIET);
+  });
+
+  it('lessons are stored before the board moves, so a failed move loses none', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+    const { gh } = fakeGh((l) =>
+      l.startsWith('pr view 7')
+        ? { stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-1', ...OWN }) }
+        : undefined,
+    );
+    writeRecords(fx, { 'APP-1': record('APP-1', deadPid()) });
+    writeReport(
+      fx,
+      'APP-1',
+      `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 2\nlessons: ["build before test"]`,
+    );
+    // The board cannot be written: the move fails after the report was read.
+    const studio = join(fx.project, '.studio');
+    chmodSync(studio, 0o555);
+    let r: Awaited<ReturnType<typeof cli>>;
+    try {
+      r = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+    } finally {
+      chmodSync(studio, 0o755);
+    }
+    expect(r.code).toBe(1);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+    expect(listLessons(fx.state).map((l) => l.text)).toEqual(['build before test']);
+    // The collect that runs again moves the item and proposes nothing twice.
+    const again = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+    expect(again.code).toBe(0);
+    expect(listLessons(fx.state)).toHaveLength(1);
   });
 });

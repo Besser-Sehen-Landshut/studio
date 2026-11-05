@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadBoard, saveBoard, transition, type WorkItem } from './board.js';
+import { COSTS_LOCK, COSTS_LOCK_STALE_MS } from './costs.js';
 import { crewHold, isItemId } from './crew.js';
 import { RERUNS_LOCK, RERUNS_LOCK_STALE_MS } from './flaky-ci.js';
 import { LOCK_STALE_MS as LIMITS_LOCK_STALE_MS } from './limits.js';
@@ -26,14 +27,13 @@ import {
   RUN_LOCK_HEARTBEAT_STALE_MS,
 } from './queue.js';
 import { reportName } from './report.js';
+import { LESSONS_LOCK, LESSONS_LOCK_STALE_MS } from './role-memory.js';
 import { readCrewRecords } from './state.js';
 import { LAUNCH_LOCK, LAUNCH_LOCK_STALE_MS } from './usage.js';
 
 /** One tick at a time; a tick whose holder died is taken over after this long. */
 export const TICK_LOCK = 'tick.lock';
 export const TICK_LOCK_STALE_MS = 15 * 60_000;
-const LESSONS_LOCK = 'lessons.lock';
-const LESSONS_LOCK_STALE_MS = 30_000;
 
 /** Every lock Studio takes, where it lives and when its holder counts as gone. */
 const LOCKS: readonly { where: 'project' | 'owner'; name: string; staleMs: number }[] = [
@@ -43,6 +43,7 @@ const LOCKS: readonly { where: 'project' | 'owner'; name: string; staleMs: numbe
   { where: 'project', name: BOARD_LOCK, staleMs: BOARD_LOCK_STALE_MS },
   { where: 'project', name: RERUNS_LOCK, staleMs: RERUNS_LOCK_STALE_MS },
   { where: 'project', name: LESSONS_LOCK, staleMs: LESSONS_LOCK_STALE_MS },
+  { where: 'project', name: COSTS_LOCK, staleMs: COSTS_LOCK_STALE_MS },
   { where: 'owner', name: LAUNCH_LOCK, staleMs: LAUNCH_LOCK_STALE_MS },
   { where: 'owner', name: 'limits.lock', staleMs: LIMITS_LOCK_STALE_MS },
   { where: 'owner', name: 'blocks.lock', staleMs: LIMITS_LOCK_STALE_MS },
@@ -85,6 +86,8 @@ export interface RecoverOptions {
 /** Leftovers of a write or a lock break that a crash cut short, at the top of a state root. */
 const ASIDE = /^.+\.lock\.[0-9a-f]{8}\.stale$/;
 const TMP = /^.+\.(\d+)\.\d+\.[0-9a-f]{8}\.tmp$/;
+/** A record without a start time this young may belong to a launch that is still writing it. */
+const LAUNCH_GRACE_MS = 2 * 60_000;
 /** An aside younger than this may belong to a breaker that is between its rename and its check. */
 const ASIDE_GRACE_MS = 60_000;
 
@@ -93,6 +96,20 @@ function readySince(item: WorkItem): number {
   const at = item.history.findLast((h) => h.to === 'ready')?.at;
   const t = at === undefined ? Number.NaN : Date.parse(at);
   return Number.isNaN(t) ? Number.NEGATIVE_INFINITY : t;
+}
+
+/** A log written within this long may belong to a crew that still runs. */
+const LOG_QUIET_MS = 30 * 60_000;
+
+/** How long ago the item's crew log was last written; undefined without one. */
+function logWrittenAgo(stateRoot: string, item: string, now: Date): number | undefined {
+  if (!isItemId(item)) return undefined;
+  try {
+    const st = lstatSync(join(stateRoot, 'logs', `${item}.jsonl`));
+    return st.isFile() ? Math.max(0, now.getTime() - st.mtimeMs) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function hasReport(stateRoot: string, item: string): boolean {
@@ -126,7 +143,14 @@ export async function recoverProject(o: RecoverOptions): Promise<Recovery> {
       if (seen.state === 'free') continue;
       if (seen.state === 'held') {
         const by = seen.pid === undefined ? '' : ` by pid ${seen.pid}`;
-        out.findings.push({ check: 'lock', subject: l.name, found: `held${by}, alive` });
+        // A live holder is never broken; a long silence is only reported.
+        const silent =
+          seen.silentMs >= l.staleMs ? `, silent ${Math.round(seen.silentMs / 60_000)} min` : '';
+        out.findings.push({
+          check: 'lock',
+          subject: l.name,
+          found: `held${by}${silent}, holder alive`,
+        });
         continue;
       }
       const finding: Finding = { check: 'lock', subject: l.name, found: `stale: ${seen.reason}` };
@@ -183,12 +207,35 @@ export async function recoverProject(o: RecoverOptions): Promise<Recovery> {
   // A launch the lead's process did not finish: the crew record is on disk (its pid was written
   // right after the start) but the item is still `ready`. Starting it again would put a second crew
   // into the same clone, so the item moves to `assigned` with that crew, as the launch would have.
-  const interrupted = board.items.filter((i) => {
-    const rec = records[i.id];
-    if (i.status !== 'ready' || rec === undefined || rec.stoppedAt !== undefined) return false;
-    const started = Date.parse(rec.startedAt);
-    return !Number.isNaN(started) && started >= readySince(i);
-  });
+  // A launch still under way is not cut short: while any launch holds the launch lock, and while
+  // a record has no start time yet and is young, the launching process does the move itself.
+  const launching =
+    existsSync(o.ownerRoot) &&
+    inspectStateLock(o.ownerRoot, LAUNCH_LOCK, {
+      now: o.now,
+      heartbeatStaleMs: LAUNCH_LOCK_STALE_MS,
+    }).state === 'held';
+  const interrupted = launching
+    ? []
+    : board.items.filter((i) => {
+        const rec = records[i.id];
+        if (i.status !== 'ready' || rec === undefined || rec.stoppedAt !== undefined) return false;
+        const started = Date.parse(rec.startedAt);
+        if (Number.isNaN(started) || started < readySince(i)) return false;
+        return rec.identity !== undefined || o.now.getTime() - started >= LAUNCH_GRACE_MS;
+      });
+  if (launching) {
+    for (const i of board.items) {
+      const rec = records[i.id];
+      if (i.status === 'ready' && rec !== undefined && rec.stoppedAt === undefined) {
+        out.findings.push({
+          check: 'launch',
+          subject: i.id,
+          found: 'a launch holds the launch lock: left to it',
+        });
+      }
+    }
+  }
   for (const item of interrupted) {
     const rec = records[item.id];
     if (rec === undefined) continue;
@@ -221,8 +268,17 @@ export async function recoverProject(o: RecoverOptions): Promise<Recovery> {
     if (rec === undefined) {
       // A pull request held for CI capacity has no crew left by design.
       if ((item.notes ?? []).some((n) => n.startsWith(PR_HELD))) continue;
-      const reason = `${item.id} is ${item.status} but has no crew record: nothing runs for it; drop it, or add it again`;
-      out.findings.push({ check: 'crew', subject: item.id, found: 'no crew record' });
+      // A log written lately may be a crew that runs without its record: look before dropping.
+      const written = logWrittenAgo(o.stateRoot, item.id, o.now);
+      const recent = written !== undefined && written < LOG_QUIET_MS;
+      const reason = recent
+        ? `${item.id} is ${item.status} but has no crew record, and its log was written ${Math.round(written / 60_000)} min ago: a crew may still run for it; check by hand (logs/${item.id}.jsonl, its clone) before dropping it`
+        : `${item.id} is ${item.status} but has no crew record: nothing runs for it; drop it, or add it again`;
+      out.findings.push({
+        check: 'crew',
+        subject: item.id,
+        found: recent ? 'no crew record, log written lately' : 'no crew record',
+      });
       lead(item.id, reason);
       continue;
     }
@@ -278,6 +334,30 @@ export async function recoverProject(o: RecoverOptions): Promise<Recovery> {
       });
     }
     const waiting = [...queue.pending, ...(c === undefined ? [] : [c])];
+    // `queue add` wrote the entry, then died before the board said `queued`: finish that move, or
+    // the merge result would find the item in review and leave the board as it is.
+    for (const item of board.items) {
+      if (item.status !== 'in_review' || item.pr === undefined || item.type === 'review') continue;
+      const inQueue = waiting.some((e) =>
+        e.item === undefined ? e.repo === item.repo && e.pr === item.pr : e.item === item.id,
+      );
+      if (!inQueue) continue;
+      const finding: Finding = {
+        check: 'queue',
+        subject: item.id,
+        found: 'in the merge queue, but the board still says in_review',
+      };
+      if (!o.dryRun) {
+        const moved = await withBoardLock(o.stateRoot, o.now, () => {
+          const fresh = loadBoard(o.project);
+          if (fresh.items.find((i) => i.id === item.id)?.status !== 'in_review') return false;
+          saveBoard(o.project, transition(fresh, item.id, 'queued', 'studio', o.now));
+          return true;
+        });
+        if (moved) finding.did = 'moved it to queued';
+      }
+      out.findings.push(finding);
+    }
     for (const item of board.items) {
       if (item.status !== 'queued') continue;
       const holds = (e: { item?: string; repo: string; pr: number }) =>

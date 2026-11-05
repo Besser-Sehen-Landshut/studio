@@ -57,6 +57,12 @@ export const STATE_FILES = [
   'ci-reruns.lock',
   'costs.json',
   'costs.lock',
+  'lessons.json',
+  'lessons.lock',
+  'lessons-review.json',
+  'tick.lock',
+  'board.lock',
+  'crew.lock',
 ];
 
 /** `$XDG_STATE_HOME/studio`, else `<home>/.local/state/studio`: the parent of every state root. */
@@ -442,19 +448,36 @@ function staleReason(
     const age = now.getTime() - mtimeMs;
     return age >= heartbeatStaleMs ? `unreadable lock, ${minutes(age)} old` : undefined;
   }
-  if (typeof body.pid === 'number' && Number.isInteger(body.pid) && body.pid > 0) {
-    if (!pidAlive(body.pid)) return `holder pid ${body.pid} is not running`;
-    // After a reboot the pid may be another process's: only a reading that differs counts.
-    if (typeof body.identity === 'string') {
-      const current = identityOf(body.pid);
-      if (current !== undefined && current !== body.identity) {
-        return `holder pid ${body.pid} is another process now`;
-      }
-    }
-  }
   const beat = typeof body.heartbeat === 'string' ? Date.parse(body.heartbeat) : Number.NaN;
   const age = now.getTime() - (Number.isNaN(beat) ? mtimeMs : beat);
+  if (typeof body.pid === 'number' && Number.isInteger(body.pid) && body.pid > 0) {
+    if (!pidAlive(body.pid)) return `holder pid ${body.pid} is not running`;
+    // A live holder whose start time matches is never broken, however long it has been silent: a
+    // slow step is no dead one. After a reboot the pid may be another process's: a reading that
+    // differs breaks it at once. Without a reading (none recorded, or none possible now) only a
+    // very old lock is taken over.
+    const current = typeof body.identity === 'string' ? identityOf(body.pid) : undefined;
+    if (current !== undefined) {
+      return current === body.identity
+        ? undefined
+        : `holder pid ${body.pid} is another process now`;
+    }
+    const veryOld = Math.max(VERY_OLD_FACTOR * heartbeatStaleMs, VERY_OLD_MIN_MS);
+    return age >= veryOld
+      ? `holder pid ${body.pid} cannot be verified and was silent ${minutes(age)}`
+      : undefined;
+  }
   return age >= heartbeatStaleMs ? `last heartbeat ${minutes(age)} ago` : undefined;
+}
+
+/** How long a lock of a live pid that cannot be verified must be silent before it is taken over. */
+const VERY_OLD_FACTOR = 4;
+const VERY_OLD_MIN_MS = 60 * 60_000;
+
+/** How long the holder of a lock has been silent (no heartbeat), from its body or its mtime. */
+function silentMs(body: LockBody | undefined, mtimeMs: number, now: Date): number {
+  const beat = typeof body?.heartbeat === 'string' ? Date.parse(body.heartbeat) : Number.NaN;
+  return Math.max(0, now.getTime() - (Number.isNaN(beat) ? mtimeMs : beat));
 }
 
 export const BOARD_LOCK = 'board.lock';
@@ -490,8 +513,10 @@ export async function withBoardLock<T>(
 /**
  * Exclusive lock file `<root>/<name>` holding `{pid, startedAt, heartbeat, token}`, created with
  * O_CREAT|O_EXCL|O_NOFOLLOW (an existing entry, a symlink included, is never followed or
- * overwritten). An existing lock is stale only when its pid is not running or its heartbeat is
- * older than `heartbeatStaleMs`; then it is broken (moved aside, checked, removed) and the reason
+ * overwritten). An existing lock is stale when its pid is not running, when that pid is another
+ * process now (its start time differs from the recorded one), when a live pid cannot be verified
+ * and the lock was silent for very long, or, without a pid, when its heartbeat is older than
+ * `heartbeatStaleMs`. A live, verified holder is never stale. A stale lock is broken (moved aside, checked, removed) and the reason
  * reported through `broke`. Otherwise undefined is returned. Anything at the lock path that is not
  * a regular file is refused. A lock that vanishes between the create and the check is retried.
  */
@@ -589,7 +614,7 @@ export function acquireStateLock(
 
 export type LockState =
   | { state: 'free' }
-  | { state: 'held'; pid?: number }
+  | { state: 'held'; pid?: number; silentMs: number }
   | { state: 'stale'; reason: string };
 
 /**
@@ -610,14 +635,15 @@ export function inspectStateLock(
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'free' };
     throw err;
   }
-  if (!st.isFile()) return { state: 'held' };
+  if (!st.isFile()) return { state: 'held', silentMs: 0 };
   const body = readLockBody(file);
   const reason = staleReason(body, st.mtimeMs, opts.now, opts.heartbeatStaleMs, opts.identityOf);
   if (reason !== undefined) return { state: 'stale', reason };
   const pid = body?.pid;
+  const silent = silentMs(body, st.mtimeMs, opts.now);
   return typeof pid === 'number' && Number.isInteger(pid)
-    ? { state: 'held', pid }
-    : { state: 'held' };
+    ? { state: 'held', pid, silentMs: silent }
+    : { state: 'held', silentMs: silent };
 }
 
 /** Literal and (when it exists) real variant of a path, case-folded for comparison. */
