@@ -20,20 +20,25 @@ maintainers tag after the merge.
 - The status rule: an open epic whose items are all merged (at least one, dropped ones aside) moves to
   `accepting` on every item move (collect, merge queue, drop), and back to `open` when new work joins it.
   `studio tick` applies the rule to a board edited by hand too and lists accepting epics under the new key
-  `epicsReady`. No command sets `done` yet; the acceptance comes in a later version.
+  `epicsReady`, which is left out while none is accepting. No command sets `done` yet; the acceptance comes in a later version.
 - `studio epic add "<title>" --goal "<text>" --acceptance "<line>"... [--component <id>]...` (refused under
   `STUDIO_ROLE=crew`, under the board lock, prints the new id), `studio epic list` (items by status and
-  merged of total), `studio epic show <id>`, `studio epic drop <id>` (refused while the epic has open items).
+  merged of total), `studio epic show <id>`, `studio epic edit <id> [--title] [--goal] [--acceptance]...` (refused under
+  `STUDIO_ROLE=crew`, under the board lock), `studio epic drop <id>` (refused while the epic has open items).
 - `studio add --epic <id>` attaches the new item (an open or accepting epic only); `studio board --epic <id>`
   lists one epic's items, and `studio board` gets an epic column when the board has epics.
 - `studio roadmap [--write] [--out <file>] [--force]`: renders a deterministic markdown roadmap from the
   board (a header saying it is generated, one line per epic with `[ ]`, `[~]` or `[x]` and merged of total,
   its goal and acceptance, then the open items in no epic). `--write` writes `ROADMAP.md` inside the project
   through a temporary file and a rename, and refuses a file without the generated header unless `--force`;
-  it is refused under `STUDIO_ROLE=crew`.
+  it is refused under `STUDIO_ROLE=crew`. The target is checked by its real path (no linked folder leading
+  out, no link as the target), never below `.studio/` or `.git/`, and `--force` takes only a `.md` file.
 - `studio roadmap import <file> [--write]`: one epic per `- [ ] Phase <n> — <title>` line (also `[~]`, `[x]`,
   `–`, `-` or `:` after the number, bold markers, trailing `@claim:` tags) not imported yet, recorded as
-  `imported_from: "<file>#Phase <n>"`, so a second import adds nothing. A dry run without `--write`; no
+  `imported_from: "<file>#Phase <n>"`, so a second import adds nothing. A `[~]` phase stays open with the
+  note `in progress at import (claim: <session>)` and renders as `[~]` until it has items. The file must be
+  a regular file inside the project, at most 1 MB and 500 phases; a line over 2000 characters, a phase number
+  that is none, or a phase that would make an invalid epic is listed under `skipped` and the rest goes on. A dry run without `--write`; no
   items are created.
 - The Studio board pane lists open and accepting epics with merged of total above the crew working on their
   items; `state.json` carries `epics` and each crew's `epic`. Without epics the pane is unchanged.
@@ -41,7 +46,8 @@ maintainers tag after the merge.
 ### Changed
 
 - The lead skill turns a larger request into an epic with its pieces as items, and renders `ROADMAP.md`
-  with `studio roadmap --write` instead of editing it; `/studio:add` offers a fitting open epic.
+  with `studio roadmap --write` instead of editing it; it replaces a hand-written file only after showing
+  the diff, with nothing skipped and the owner's yes; `/studio:add` offers a fitting open epic.
 
 ## [0.10.0] - 2026-11-04
 

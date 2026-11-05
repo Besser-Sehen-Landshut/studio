@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -7,6 +15,7 @@ import {
   parsePhases,
   planImport,
   ROADMAP_HEADER,
+  readImportFile,
   renderRoadmap,
   writeRoadmap,
 } from '../src/roadmap.js';
@@ -154,21 +163,143 @@ Some prose that is no phase.
 
 describe('roadmap import', () => {
   it('reads phase lines with mixed separators, boxes, bold and trailing tags', () => {
-    expect(parsePhases(HAND_WRITTEN)).toEqual([
-      { phase: '1', box: 'x', title: 'Foundation', goal: 'database and login' },
-      { phase: '2', box: '~', title: 'Checkout redesign', goal: 'Checkout redesign' },
-      { phase: '3', box: ' ', title: 'Invoices', goal: 'customers pay by invoice' },
-      { phase: '4', box: ' ', title: 'Reports', goal: 'Reports' },
-      { phase: '4b', box: ' ', title: 'Exports', goal: 'Exports' },
-      { phase: '5', box: ' ', title: 'Phase 5', goal: 'Phase 5' },
-      { phase: '3', box: ' ', title: 'the same number again', goal: 'the same number again' },
-      { phase: '6', box: ' ', title: 'nested is fine', goal: 'nested is fine' },
+    const { phases, skipped } = parsePhases(HAND_WRITTEN);
+    expect(skipped).toEqual([]);
+    expect(phases).toEqual([
+      { line: 5, phase: '1', box: 'x', title: 'Foundation', goal: 'database and login' },
+      {
+        line: 6,
+        phase: '2',
+        box: '~',
+        title: 'Checkout redesign',
+        goal: 'Checkout redesign',
+        claim: 'session-a',
+      },
+      {
+        line: 7,
+        phase: '3',
+        box: ' ',
+        title: 'Invoices',
+        goal: 'customers pay by invoice',
+        claim: 'session-b',
+      },
+      { line: 8, phase: '4', box: ' ', title: 'Reports', goal: 'Reports' },
+      { line: 9, phase: '4b', box: ' ', title: 'Exports', goal: 'Exports' },
+      { line: 10, phase: '5', box: ' ', title: 'Phase 5', goal: 'Phase 5' },
+      {
+        line: 11,
+        phase: '3',
+        box: ' ',
+        title: 'the same number again',
+        goal: 'the same number again',
+      },
+      { line: 13, phase: '6', box: ' ', title: 'nested is fine', goal: 'nested is fine' },
     ]);
   });
 
+  it('keeps an in-progress phase open with a note, and renders it [~] until it has items', () => {
+    const board: Board = { items: [] };
+    const plan = planImport(
+      board,
+      'ROADMAP.md',
+      parsePhases('- [~] Phase 2 – Checkout @claim:session-a\n- [~] Phase 3 — Search\n').phases,
+    );
+    expect(plan.create.map((e) => [e.status, e.notes])).toEqual([
+      ['open', ['in progress at import (claim: session-a)']],
+      ['open', ['in progress at import']],
+    ]);
+    const after: Board = { items: [], epics: plan.create };
+    expect(renderRoadmap(after)).toContain('- [~] E-1 — Checkout (0/0)');
+    const withItem = parseBoard(
+      `items:\n${it_('APP-1', 'ready', ', epic: E-1')}\nepics:\n  - { id: E-1, title: Checkout, status: open, goal: g, acceptance: [a], notes: ["in progress at import"] }\n`,
+      'b',
+    );
+    expect(renderRoadmap(withItem)).toContain('- [ ] E-1 — Checkout (0/1)');
+  });
+
+  it('a line that is too long, or a phase number that is not one, is skipped, not fatal', () => {
+    const spaces = ' '.repeat(100_000);
+    const text = [
+      `- [ ] Phase 1 —${spaces}x`,
+      `- [ ]${spaces}Phase${spaces}2${spaces}—${spaces}`,
+      '- [ ] Phase 12345678901234567890 — huge',
+      '- [ ] Phase 7 — fine',
+    ].join('\n');
+    const t0 = performance.now();
+    const { phases, skipped } = parsePhases(text);
+    expect(performance.now() - t0).toBeLessThan(200);
+    expect(phases.map((p) => p.phase)).toEqual(['7']);
+    expect(skipped).toEqual([
+      { line: 1, reason: 'longer than 2000 characters' },
+      { line: 2, reason: 'longer than 2000 characters' },
+      { line: 3, reason: 'not a phase number: 12345678901234567890' },
+    ]);
+  });
+
+  it('refuses more than 500 phases', () => {
+    const many = Array.from({ length: 501 }, (_, i) => `- [ ] Phase ${i + 1} — p`).join('\n');
+    expect(() => parsePhases(many)).toThrow(/more than 500 phases/);
+  });
+
+  it('an epic that would be invalid is skipped with the reason', () => {
+    const long = `${'d/'.repeat(150)}ROADMAP.md`;
+    const plan = planImport({ items: [] }, long, parsePhases('- [ ] Phase 1 — x\n').phases);
+    expect(plan.create).toEqual([]);
+    expect(plan.skipped).toEqual([
+      { phase: '1', line: 1, reason: expect.stringMatching(/^invalid: imported_from/) },
+    ]);
+  });
+
+  it('reads the file only inside the project, no link, at most 1 MB', () => {
+    const dir = tmp();
+    const outside = tmp();
+    writeFileSync(join(dir, 'ROADMAP.md'), '- [ ] Phase 1 — x\n');
+    expect(readImportFile(dir, 'ROADMAP.md')).toEqual({
+      source: 'ROADMAP.md',
+      text: '- [ ] Phase 1 — x\n',
+    });
+    writeFileSync(join(outside, 'other.md'), 'x');
+    symlinkSync(join(outside, 'other.md'), join(dir, 'link.md'));
+    expect(() => readImportFile(dir, 'link.md')).toThrow(/link/);
+    symlinkSync(outside, join(dir, 'away'));
+    expect(() => readImportFile(dir, 'away/other.md')).toThrow(/inside the project/);
+    writeFileSync(join(dir, 'big.md'), 'x'.repeat(1024 * 1024 + 1));
+    expect(() => readImportFile(dir, 'big.md')).toThrow(/larger than 1 MB/);
+  });
+});
+
+describe('roadmap --write targets', () => {
+  it('refuses a target through a link that leaves the project, or a link itself', () => {
+    const dir = tmp();
+    const outside = tmp();
+    symlinkSync(outside, join(dir, 'away'));
+    expect(() => writeRoadmap(dir, 'away/ROADMAP.md', ROADMAP_HEADER, false)).toThrow(
+      /inside the project/,
+    );
+    expect(readdirSync(outside)).toEqual([]);
+    writeFileSync(join(outside, 'x.md'), `${ROADMAP_HEADER}\n`);
+    symlinkSync(join(outside, 'x.md'), join(dir, 'ROADMAP.md'));
+    expect(() => writeRoadmap(dir, 'ROADMAP.md', ROADMAP_HEADER, true)).toThrow(/link/);
+  });
+
+  it('refuses .studio/ and .git/, and --force for a file that is not .md', () => {
+    const dir = tmp();
+    mkdirSync(join(dir, '.studio'));
+    mkdirSync(join(dir, '.git'));
+    expect(() => writeRoadmap(dir, '.studio/ROADMAP.md', ROADMAP_HEADER, false)).toThrow(
+      /\.studio/,
+    );
+    expect(() => writeRoadmap(dir, '.git/ROADMAP.md', ROADMAP_HEADER, false)).toThrow(/\.git/);
+    writeFileSync(join(dir, 'package.json'), '{}');
+    expect(() => writeRoadmap(dir, 'package.json', ROADMAP_HEADER, true)).toThrow(/\.md/);
+    expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe('{}');
+  });
+});
+
+describe('roadmap import plans', () => {
   it('plans one epic per phase, open or done from the box, and is idempotent', () => {
     const board = parseBoard(`items: []\nepics:\n${ep('E-1', 'open', 'Existing')}\n`, 'b');
-    const plan = planImport(board, 'ROADMAP.md', parsePhases(HAND_WRITTEN));
+    const plan = planImport(board, 'ROADMAP.md', parsePhases(HAND_WRITTEN).phases);
     expect(plan.create.map((e) => [e.id, e.status, e.title, e.importedFrom])).toEqual([
       ['E-2', 'done', 'Foundation', 'ROADMAP.md#Phase 1'],
       ['E-3', 'open', 'Checkout redesign', 'ROADMAP.md#Phase 2'],
@@ -180,10 +311,10 @@ describe('roadmap import', () => {
     ]);
     expect(plan.create[0]?.acceptance).toEqual(['imported from ROADMAP: define acceptance']);
     expect(plan.skipped).toEqual([
-      { phase: '3', reason: 'the phase number comes twice in the file' },
+      { phase: '3', line: 11, reason: 'the phase number comes twice in the file' },
     ]);
     const after: Board = { ...board, epics: [...(board.epics ?? []), ...plan.create] };
-    const again = planImport(after, 'ROADMAP.md', parsePhases(HAND_WRITTEN));
+    const again = planImport(after, 'ROADMAP.md', parsePhases(HAND_WRITTEN).phases);
     expect(again.create).toEqual([]);
     expect(again.skipped.filter((s) => s.reason === 'imported already')).toHaveLength(7);
   });

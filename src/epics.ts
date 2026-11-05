@@ -114,6 +114,61 @@ export function epicRows(board: Board): EpicRow[] {
   });
 }
 
+export type EpicEdit = { title?: string; goal?: string; acceptance?: string[] };
+
+/**
+ * `epic edit`: replaces the title, the goal or the whole acceptance list (e.g. after an import).
+ * Refused for a dropped epic. Pure; returns the board and the fields that changed.
+ */
+export function editEpic(
+  board: Board,
+  id: string,
+  edit: EpicEdit,
+): { board: Board; changed: string[] } {
+  const epic = findEpic(board, id);
+  if (epic.status === 'dropped') throw new Error(`${id} is dropped`);
+  const changed: string[] = [];
+  const next = structuredClone(epic);
+  if (edit.title !== undefined) {
+    const title = edit.title.trim();
+    if (!ONE_LINE.test(title)) {
+      throw new Error('--title must be one line of at most 300 characters');
+    }
+    next.title = title;
+    changed.push('title');
+  }
+  if (edit.goal !== undefined) {
+    const goal = edit.goal.trim();
+    if (!GOAL.test(goal)) throw new Error('--goal must be one line of at most 2000 characters');
+    next.goal = goal;
+    changed.push('goal');
+  }
+  if (edit.acceptance !== undefined) {
+    const lines = edit.acceptance.map((a) => a.trim());
+    if (lines.length === 0 || lines.some((a) => !ONE_LINE.test(a))) {
+      throw new Error('each --acceptance must be one line of at most 300 characters');
+    }
+    next.acceptance = lines;
+    changed.push('acceptance');
+  }
+  if (changed.length === 0) {
+    throw new Error('epic edit needs --title, --goal or --acceptance');
+  }
+  const parsed = epicSchema.safeParse(next);
+  if (!parsed.success) {
+    throw new Error(
+      `the epic would be invalid: ${parsed.error.issues.map((i) => i.message).join('; ')}`,
+    );
+  }
+  return {
+    board: {
+      ...board,
+      epics: (board.epics ?? []).map((e) => (e.id === id ? parsed.data : e)),
+    },
+    changed,
+  };
+}
+
 /** `epic drop`: refused while the epic has an item that is neither merged nor dropped. Pure. */
 export function dropEpic(board: Board, id: string, by: string, now: Date): Board {
   const epic = findEpic(board, id);

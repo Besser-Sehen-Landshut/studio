@@ -54,9 +54,8 @@ Every PR, however urgent, gets one fresh reviewer crew session before `queue add
    second branch update needs a new review. Launching a review clears the earlier approval; output `supersededBy` means a newer review counts instead. A review that ended
    without a report blocks its pull request until `studio drop <review-id>`. Studio will not signal a crew it
    cannot verify: `studio stop <id> --release` closes its record, and the output names the pid to check by hand;
-   tell the owner. Output `skipped: [...]` lists optional analyzers that could not run: collect already refused
-   any skipped diff review, spec check or security, so the approval stands. Name the skip in your status line, and
-   fetch a missing source with `studio setup sources`.
+   tell the owner. Output `skipped: [...]`: optional analyzers that could not run; the approval stands. Name
+   the skip in your status line; `studio setup sources` fetches a missing source.
 3. `needsLead` "changes requested by <review-id>" → builder item `blocked` with the findings as notes,
    `blocked → ready`; the next ticks relaunch it and add the new review item.
 4. `fixLimit: true` is a hard stop: collect has blocked the builder item (`needsLead` lists it). No relaunch, no
@@ -91,7 +90,7 @@ pinned head SHA, once **no** check is pending and every required check is green.
 
 ## Sources
 
-`fits` → `studio sources apply <id>`. `unclear` or `conflict` is held, whatever it says: never apply, and give the owner one line per held source with the changed files. Those lines belong in the round even when the owner says not to ask about routine.
+`fits` → `studio sources apply <id>`. `unclear` or `conflict` is held: never apply, and give the owner one line per held source with the changed files. Those lines belong in the round even when the owner says not to ask about routine.
 
 ## Authority
 
@@ -101,7 +100,7 @@ pinned head SHA, once **no** check is pending and every required check is green.
 | Irreversible: destructive migration (DROP, DELETE, type change), release tag, production deploy | you | verify a way back (backup, expand-and-contract), announce in one line, proceed without waiting |
 | Owner-only: secrets, purchases, payments, external messages, legal decisions, what third parties accept only from the owner; owner-only items (`owner_only: true` on the board item) and commands matching studio.yaml `owner_only` | owner | one line each: what and why. No sub-questions. Never do it yourself |
 
-Never ask the owner for approval or technical input. One message per round: owner-only lines, announcements,
+Never ask the owner for approval (a hand-written roadmap aside, below) or technical input. One message per round: owner-only lines, announcements,
 at most three status lines.
 
 ## Definition of Ready gaps
@@ -111,8 +110,10 @@ Work asked for in plain words: `studio add "<title>" --component <id> --path <gl
 A larger request (several pieces, one goal) is an epic: `studio epic add "<title>" --goal "<text>" --acceptance
 "<check>"...`, then each piece `studio add ... --epic E-<n>`. The board is the truth: never edit ROADMAP.md by
 hand, `studio roadmap --write` renders it. Hand-written: `studio roadmap import ROADMAP.md` (dry run), the same
-with `--write`, then `studio roadmap --write --force`. `epicsReady`: one status line.
-Item types: feature, fix, chore, docs, research, review, release. Feature without a plan, unclear scope,
+with `--write`, then `studio epic edit E-<n> --acceptance "<check>"...` for each imported epic. Replacing the
+hand-written file is the owner's: with `skipped` empty, show `studio roadmap | diff ROADMAP.md -`, ask in one
+line; `studio roadmap --write --force` only after a yes. `epicsReady`: one status line.
+Feature without a plan, unclear scope,
 unknown dependency, "does anyone still use this?" → add a `type: research`, `role: researcher` item. Never an
 owner question.
 
@@ -148,6 +149,5 @@ inside crew clones.
 | "`fixLimit`, but a stronger model might do it" | Hard stop. Escalate only before the limit. |
 | "Resolve the incident once a fixed release is out" | Restored means working again: resolve at the rollback. |
 | "Record the rollback as a deploy" | It hides the failed deploy in the rate. |
-| "Record the fail, then the pass" | One call, with the rerun's result. |
 | "A skipped check is never green, so no queue" | Collect refused the mandatory ones. An approved optional skip goes on, named. |
 | "Nothing needs you, I noted the held source on the board" | Held sources get an owner line. |

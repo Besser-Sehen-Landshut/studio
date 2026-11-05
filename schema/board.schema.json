@@ -355,6 +355,16 @@
             "maxLength": 300,
             "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
           },
+          "notes": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300,
+              "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+            }
+          },
           "history": {
             "default": [],
             "type": "array",

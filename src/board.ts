@@ -147,6 +147,8 @@ export const epicSchema = z.strictObject({
   components: z.array(componentId).min(1).optional(),
   // `studio roadmap import`: `<file>#Phase <n>`, so a second import skips it.
   importedFrom: plainLine.optional(),
+  // Plain lines about the epic, e.g. what the import found (`in progress at import`).
+  notes: z.array(plainLine).max(20).optional(),
   history: z
     .array(
       z.strictObject({
@@ -357,6 +359,7 @@ const EPIC_KEY_ORDER: readonly (keyof Epic)[] = [
   'acceptance',
   'components',
   'importedFrom',
+  'notes',
   'history',
 ];
 

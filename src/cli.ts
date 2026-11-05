@@ -1,12 +1,13 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runAccount } from './account-command.js';
 import { addItem } from './add-item.js';
 import {
   type ApprovedJob,
   type Board,
+  BoardError,
   componentsOf,
   ITEM_STATUSES,
   loadBoard,
@@ -39,7 +40,7 @@ import {
   unverifiedHandgrip,
   unverifiedRefusal,
 } from './crew.js';
-import { addEpic, dropEpic, epicRows, findEpic, settleAndSave } from './epics.js';
+import { addEpic, dropEpic, editEpic, epicRows, findEpic, settleAndSave } from './epics.js';
 import { listFlaky, recordFlaky } from './flaky.js';
 import { HeldError } from './held.js';
 import { runInit } from './init.js';
@@ -102,7 +103,7 @@ import {
   reviewRounds,
   reviewTarget,
 } from './review.js';
-import { parsePhases, planImport, projectFile, renderRoadmap, writeRoadmap } from './roadmap.js';
+import { parsePhases, planImport, readImportFile, renderRoadmap, writeRoadmap } from './roadmap.js';
 import {
   acceptLesson,
   dropLesson,
@@ -163,6 +164,8 @@ Commands:
                            Add an open epic with the next free id (E-<n>)
   epic list                Epics with their items by status and merged of total
   epic show <id>           One epic: goal, acceptance, items
+  epic edit <id> [--title <t>] [--goal <text>] [--acceptance <line>...]
+                           Replace an epic's title, goal or acceptance lines
   epic drop <id>           End an epic; refused while it has open items
   roadmap [--write] [--out <file>] [--force]
                            Render the roadmap from the board; --write writes ROADMAP.md
@@ -292,8 +295,8 @@ interface Tick {
   needsLead: { item: string; reason: string }[];
   /** Per item (`item`), or a phase that failed or did not run (`phase`). */
   errors: { item?: string; phase?: string; error: string }[];
-  /** Epics whose items are all merged (status `accepting`): they wait for their acceptance. */
-  epicsReady: { epic: string; title: string }[];
+  /** Epics whose items are all merged (status `accepting`), waiting for their acceptance; absent without one. */
+  epicsReady?: { epic: string; title: string }[];
 }
 
 /** One tick at a time; a tick whose holder died is taken over after this long. */
@@ -378,8 +381,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     if (cmd !== 'add' && addOnly.some((v) => v !== undefined)) {
       throw new UsageError('--type, --repo, --path, --dod and --plan work with add only');
     }
-    if (!epicAdd && (values.goal !== undefined || values.acceptance !== undefined)) {
-      throw new UsageError('--goal and --acceptance work with epic add only');
+    const epicEdit = cmd === 'epic' && rest[0] === 'edit';
+    if (!epicEdit && values.title !== undefined) {
+      throw new UsageError('--title works with epic edit only');
+    }
+    if (!epicAdd && !epicEdit && (values.goal !== undefined || values.acceptance !== undefined)) {
+      throw new UsageError('--goal and --acceptance work with epic add and epic edit only');
     }
     if (values.epic !== undefined && cmd !== 'board' && cmd !== 'add') {
       throw new UsageError('--epic works with board and add only');
@@ -1044,7 +1051,6 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         held: [],
         needsLead: [],
         errors: [],
-        epicsReady: [],
       };
       const why = (e: unknown) => (e as Error).message.replace(/\p{Cc}/gu, ' ');
       const lead = (item: string, reason: string) => {
@@ -1284,11 +1290,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             return loadBoard(project);
           });
         }
-        for (const e of now.epics ?? []) {
-          if (e.status === 'accepting') out.epicsReady.push({ epic: e.id, title: e.title });
-        }
+        const ready = (now.epics ?? [])
+          .filter((e) => e.status === 'accepting')
+          .map((e) => ({ epic: e.id, title: e.title }));
+        // Only when there is one: a tick without accepting epics prints what it printed before.
+        if (ready.length > 0) out.epicsReady = ready;
       } catch (e) {
-        out.errors.push({ phase: 'epics', error: why(e) });
+        // A board that cannot be read is reported by the phases before; no second line for it.
+        if (!(e instanceof BoardError)) out.errors.push({ phase: 'epics', error: why(e) });
       }
       return out;
     };
@@ -1461,7 +1470,23 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           print({ epic: id, status: 'dropped' });
           return 0;
         }
-        throw new UsageError('epic needs add, list, show or drop');
+        if (sub === 'edit') {
+          refuseCrew(deps.env);
+          if (args.length !== 1) throw new UsageError('epic edit needs one epic id');
+          const id = args[0] as string;
+          const changed = await withBoardLock(stateRoot(), ports.clock.now(), () => {
+            const r = editEpic(loadBoard(project, loadConfig(project)), id, {
+              ...(values.title === undefined ? {} : { title: values.title }),
+              ...(values.goal === undefined ? {} : { goal: values.goal }),
+              ...(values.acceptance === undefined ? {} : { acceptance: values.acceptance }),
+            });
+            saveBoard(project, r.board);
+            return r.changed;
+          });
+          print({ epic: id, changed });
+          return 0;
+        }
+        throw new UsageError('epic needs add, list, show, edit or drop');
       }
 
       case 'roadmap': {
@@ -1471,10 +1496,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             throw new UsageError('roadmap import takes only --write');
           }
           if (values.write === true) refuseCrew(deps.env);
-          const full = projectFile(project, rest[1] as string);
-          const source = relative(project, full).split(sep).join('/');
-          const phases = parsePhases(readFileSync(full, 'utf8'));
-          const apply = (board: Board) => planImport(board, source, phases);
+          const { source, text } = readImportFile(project, rest[1] as string);
+          const parsed = parsePhases(text);
+          // Lines the parser skipped come first, then what the plan skipped.
+          const apply = (board: Board) => {
+            const p = planImport(board, source, parsed.phases);
+            return { ...p, skipped: [...parsed.skipped, ...p.skipped] };
+          };
           if (values.write !== true) {
             print({ ...apply(loadAll().board), written: false });
             return 0;
@@ -2142,6 +2170,7 @@ function parseCli(argv: string[]) {
         component: { type: 'string', multiple: true },
         epic: { type: 'string' },
         goal: { type: 'string' },
+        title: { type: 'string' },
         acceptance: { type: 'string', multiple: true },
         out: { type: 'string' },
         force: { type: 'boolean' },

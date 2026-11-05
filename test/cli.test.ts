@@ -3603,7 +3603,6 @@ describe('studio tick', () => {
       held: [],
       needsLead: [],
       errors: [],
-      epicsReady: [],
     });
   }, 30_000);
 
@@ -3829,7 +3828,6 @@ describe('studio tick', () => {
       'queue add',
       'sweep',
       'queue run',
-      'epics',
     ]);
   });
 
@@ -4016,7 +4014,7 @@ describe('epics in the CLI', () => {
     );
     expect(unknown.err).toMatch(/unknown component web/);
     const stray = await cli(fx, ports, 'board', '--goal', 'g');
-    expect(stray.err).toMatch(/--goal and --acceptance work with epic add only/);
+    expect(stray.err).toMatch(/--goal and --acceptance work with epic add and epic edit only/);
     expect(loadBoard(fx.project).epics).toBeUndefined();
   });
 
@@ -4028,6 +4026,7 @@ describe('epics in the CLI', () => {
     for (const argv of [
       ['epic', 'add', 'T', '--goal', 'g', '--acceptance', 'a'],
       ['epic', 'drop', 'E-1'],
+      ['epic', 'edit', 'E-1', '--title', 'T'],
       ['roadmap', '--write'],
       ['roadmap', 'import', 'ROADMAP.md', '--write'],
     ]) {
@@ -4128,6 +4127,53 @@ describe('epics in the CLI', () => {
     expect(t.out.split('\n')[0]).toMatch(/^ID\s+STATUS\s+ROLE\s+TYPE\s+PRIORITY\s+TITLE$/);
   });
 
+  it('epic edit replaces title, goal or the acceptance lines, under the lock', async () => {
+    const fx = makeFx([]);
+    withEpics(fx, [epicYaml('E-1'), epicYaml('E-2', 'dropped')]);
+    const ports = quiet();
+    const r = await cli(
+      fx,
+      ports,
+      'epic',
+      'edit',
+      'E-1',
+      '--acceptance',
+      'an invoice order reaches the backend',
+      '--acceptance',
+      'the invoice is sent',
+    );
+    expect(r.err).toBe('');
+    expect(JSON.parse(r.out)).toEqual({ epic: 'E-1', changed: ['acceptance'] });
+    expect(epicOf(fx, 'E-1')).toMatchObject({
+      title: 'Epic E-1',
+      goal: 'The goal',
+      acceptance: ['an invoice order reaches the backend', 'the invoice is sent'],
+    });
+    const t = await cli(
+      fx,
+      ports,
+      'epic',
+      'edit',
+      'E-1',
+      '--title',
+      'Pay by invoice',
+      '--goal',
+      'G',
+    );
+    expect(JSON.parse(t.out).changed).toEqual(['title', 'goal']);
+    expect(epicOf(fx, 'E-1')).toMatchObject({ title: 'Pay by invoice', goal: 'G' });
+    expect((await cli(fx, ports, 'epic', 'edit', 'E-1')).err).toMatch(
+      /--title, --goal or --acceptance/,
+    );
+    expect((await cli(fx, ports, 'epic', 'edit', 'E-1', '--goal', 'a\u0007b')).err).toMatch(
+      /--goal must be one line/,
+    );
+    expect((await cli(fx, ports, 'epic', 'edit', 'E-2', '--title', 'x')).err).toMatch(
+      /E-2 is dropped/,
+    );
+    expect((await cli(fx, ports, 'board', '--title', 'x')).err).toMatch(/--title/);
+  });
+
   it('epic drop is refused while the epic has open items', async () => {
     const fx = makeFx([
       { id: 'APP-1', extra: inEpic },
@@ -4217,6 +4263,14 @@ describe('epics in the CLI', () => {
       const r = await cli(fx, quiet(), 'tick');
       expect(JSON.parse(r.out).epicsReady).toEqual([{ epic: 'E-1', title: 'Epic E-1' }]);
       expect(epicOf(fx, 'E-1')?.status).toBe('accepting');
+    });
+
+    it('has no epicsReady key while no epic is accepting', async () => {
+      const fx = makeFx([{ id: 'APP-1', status: 'merged' }]);
+      withEpics(fx, [epicYaml('E-1')]);
+      bind(fx);
+      const r = await cli(fx, quiet(), 'tick');
+      expect(JSON.parse(r.out)).not.toHaveProperty('epicsReady');
     });
   });
 

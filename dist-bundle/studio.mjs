@@ -4003,10 +4003,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep8, value } = collItem;
+        const { start, key, sep: sep7, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep8?.[0],
+          next: key ?? sep7?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -4020,7 +4020,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep8) {
+          if (!keyProps.anchor && !keyProps.tag && !sep7) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map2.comment)
@@ -4044,7 +4044,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map2.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep8 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep7 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -4060,7 +4060,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep8, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep7, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -4151,7 +4151,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep8 = "";
+        let sep7 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -4165,13 +4165,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep8 + cb;
-              sep8 = "";
+                comment += sep7 + cb;
+              sep7 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep8 += source;
+                sep7 += source;
               hasSpace = true;
               break;
             default:
@@ -4214,18 +4214,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i2 = 0; i2 < fc.items.length; ++i2) {
         const collItem = fc.items[i2];
-        const { start, key, sep: sep8, value } = collItem;
+        const { start, key, sep: sep7, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep8?.[0],
+          next: key ?? sep7?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep8 && !value) {
+          if (!props.anchor && !props.tag && !sep7 && !value) {
             if (i2 === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i2 < fc.items.length - 1)
@@ -4279,8 +4279,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap3 && !sep8 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep8, null, props, onError);
+        if (!isMap3 && !sep7 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep7, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -4292,7 +4292,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep8 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep7 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -4303,8 +4303,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap3 && !props.found && ctx.options.strict) {
-              if (sep8)
-                for (const st of sep8) {
+              if (sep7)
+                for (const st of sep7) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -4321,7 +4321,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep8, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep7, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -4501,7 +4501,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i2 + 1;
       }
       let value = "";
-      let sep8 = "";
+      let sep7 = "";
       let prevMoreIndented = false;
       for (let i2 = 0; i2 < contentStart; ++i2)
         value += lines[i2][0].slice(trimIndent) + "\n";
@@ -4518,24 +4518,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep8 + indent.slice(trimIndent) + content;
-          sep8 = "\n";
+          value += sep7 + indent.slice(trimIndent) + content;
+          sep7 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep8 === " ")
-            sep8 = "\n";
-          else if (!prevMoreIndented && sep8 === "\n")
-            sep8 = "\n\n";
-          value += sep8 + indent.slice(trimIndent) + content;
-          sep8 = "\n";
+          if (sep7 === " ")
+            sep7 = "\n";
+          else if (!prevMoreIndented && sep7 === "\n")
+            sep7 = "\n\n";
+          value += sep7 + indent.slice(trimIndent) + content;
+          sep7 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep8 === "\n")
+          if (sep7 === "\n")
             value += "\n";
           else
-            sep8 = "\n";
+            sep7 = "\n";
         } else {
-          value += sep8 + content;
-          sep8 = " ";
+          value += sep7 + content;
+          sep7 = " ";
           prevMoreIndented = false;
         }
       }
@@ -4718,25 +4718,25 @@ var require_resolve_flow_scalar = __commonJS({
         trimBoth = /^[ \t]+|[ \t]+$/g;
       }
       let res = match[1].replace(trimEnd, "");
-      let sep8 = " ";
+      let sep7 = " ";
       let pos = line2.lastIndex;
       while (match = line2.exec(source)) {
         const lm = match[1].replace(trimBoth, "");
         if (lm === "") {
-          if (sep8 === "\n")
-            res += sep8;
+          if (sep7 === "\n")
+            res += sep7;
           else
-            sep8 = "\n";
+            sep7 = "\n";
         } else {
-          res += sep8 + lm;
-          sep8 = " ";
+          res += sep7 + lm;
+          sep7 = " ";
         }
         pos = line2.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep8 + (match?.[1] ?? "");
+      return res + sep7 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -5546,14 +5546,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep8, value }) {
+    function stringifyItem({ start, key, sep: sep7, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep8)
-        for (const st of sep8)
+      if (sep7)
+        for (const st of sep7)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -6720,18 +6720,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep8;
+          let sep7;
           if (scalar.end) {
-            sep8 = scalar.end;
-            sep8.push(this.sourceToken);
+            sep7 = scalar.end;
+            sep7.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep8 = [this.sourceToken];
+            sep7 = [this.sourceToken];
           const map2 = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep8 }]
+            items: [{ start, key: scalar, sep: sep7 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map2;
@@ -6884,15 +6884,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep8 = it.sep;
-                  sep8.push(this.sourceToken);
+                  const sep7 = it.sep;
+                  sep7.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep8 }]
+                    items: [{ start: start2, key, sep: sep7 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -7086,13 +7086,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep8 = fc.end.splice(1, fc.end.length);
-            sep8.push(this.sourceToken);
+            const sep7 = fc.end.splice(1, fc.end.length);
+            sep7.push(this.sourceToken);
             const map2 = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep8 }]
+              items: [{ start, key: fc, sep: sep7 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map2;
@@ -7841,14 +7841,14 @@ var require_shell_quote = __commonJS({
 });
 
 // src/main.ts
-import { realpathSync as realpathSync6 } from "node:fs";
+import { realpathSync as realpathSync7 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
 // src/cli.ts
-import { existsSync as existsSync6, mkdtempSync, readFileSync as readFileSync27, rmSync as rmSync8, writeFileSync as writeFileSync12 } from "node:fs";
+import { existsSync as existsSync7, mkdtempSync, rmSync as rmSync8, writeFileSync as writeFileSync12 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname as dirname11, join as join28, relative as relative3, resolve as resolve7, sep as sep7 } from "node:path";
+import { dirname as dirname12, join as join28, resolve as resolve7 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/account-command.ts
@@ -28146,6 +28146,8 @@ var epicSchema = external_exports.strictObject({
   components: external_exports.array(componentId).min(1).optional(),
   // `studio roadmap import`: `<file>#Phase <n>`, so a second import skips it.
   importedFrom: plainLine.optional(),
+  // Plain lines about the epic, e.g. what the import found (`in progress at import`).
+  notes: external_exports.array(plainLine).max(20).optional(),
   history: external_exports.array(
     external_exports.strictObject({
       at: external_exports.string(),
@@ -28313,6 +28315,7 @@ var EPIC_KEY_ORDER = [
   "acceptance",
   "components",
   "importedFrom",
+  "notes",
   "history"
 ];
 function orderedEpic(epic) {
@@ -35287,6 +35290,50 @@ function epicRows(board) {
     };
   });
 }
+function editEpic(board, id, edit) {
+  const epic = findEpic(board, id);
+  if (epic.status === "dropped") throw new Error(`${id} is dropped`);
+  const changed = [];
+  const next = structuredClone(epic);
+  if (edit.title !== void 0) {
+    const title = edit.title.trim();
+    if (!ONE_LINE2.test(title)) {
+      throw new Error("--title must be one line of at most 300 characters");
+    }
+    next.title = title;
+    changed.push("title");
+  }
+  if (edit.goal !== void 0) {
+    const goal = edit.goal.trim();
+    if (!GOAL.test(goal)) throw new Error("--goal must be one line of at most 2000 characters");
+    next.goal = goal;
+    changed.push("goal");
+  }
+  if (edit.acceptance !== void 0) {
+    const lines = edit.acceptance.map((a2) => a2.trim());
+    if (lines.length === 0 || lines.some((a2) => !ONE_LINE2.test(a2))) {
+      throw new Error("each --acceptance must be one line of at most 300 characters");
+    }
+    next.acceptance = lines;
+    changed.push("acceptance");
+  }
+  if (changed.length === 0) {
+    throw new Error("epic edit needs --title, --goal or --acceptance");
+  }
+  const parsed = epicSchema.safeParse(next);
+  if (!parsed.success) {
+    throw new Error(
+      `the epic would be invalid: ${parsed.error.issues.map((i2) => i2.message).join("; ")}`
+    );
+  }
+  return {
+    board: {
+      ...board,
+      epics: (board.epics ?? []).map((e) => e.id === id ? parsed.data : e)
+    },
+    changed
+  };
+}
 function dropEpic(board, id, by, now) {
   const epic = findEpic(board, id);
   if (epic.status === "dropped" || epic.status === "done") {
@@ -36251,9 +36298,18 @@ function formatOverview(list2) {
 }
 
 // src/roadmap.ts
-import { readFileSync as readFileSync25, renameSync as renameSync10, rmSync as rmSync6, writeFileSync as writeFileSync10 } from "node:fs";
-import { isAbsolute as isAbsolute6, join as join26, relative as relative2, resolve as resolve5, sep as sep6 } from "node:path";
+import {
+  existsSync as existsSync6,
+  lstatSync as lstatSync21,
+  readFileSync as readFileSync25,
+  realpathSync as realpathSync6,
+  renameSync as renameSync10,
+  rmSync as rmSync6,
+  writeFileSync as writeFileSync10
+} from "node:fs";
+import { dirname as dirname10, isAbsolute as isAbsolute6, join as join26, relative as relative2, resolve as resolve5, sep as sep6 } from "node:path";
 var ROADMAP_HEADER = "<!-- generated by studio roadmap; edit the board, not this file -->";
+var IN_PROGRESS_NOTE = "in progress at import";
 var ACTIVE3 = ["assigned", "in_progress", "in_review", "queued"];
 function compareIds2(a2, b) {
   const pa = /^(.*?)(\d+)$/.exec(a2);
@@ -36264,7 +36320,11 @@ function compareIds2(a2, b) {
 function epicBox(board, epic) {
   if (epic.status === "done") return "[x]";
   if (epic.status === "accepting") return "[~]";
-  return board.items.some((i2) => i2.epic === epic.id && ACTIVE3.includes(i2.status)) ? "[~]" : "[ ]";
+  const items = board.items.filter((i2) => i2.epic === epic.id);
+  if (items.length === 0 && (epic.notes ?? []).some((n2) => n2.startsWith(IN_PROGRESS_NOTE))) {
+    return "[~]";
+  }
+  return items.some((i2) => ACTIVE3.includes(i2.status)) ? "[~]" : "[ ]";
 }
 var itemBox = (i2) => i2.status === "merged" ? "[x]" : ACTIVE3.includes(i2.status) ? "[~]" : "[ ]";
 function renderRoadmap(board) {
@@ -36294,15 +36354,37 @@ function projectFile(project, file2) {
   if (file2 === "" || isAbsolute6(file2) || /^[A-Za-z]:/.test(file2)) {
     throw new Error(`${JSON.stringify(file2)}: give a path relative to the project`);
   }
-  const full = resolve5(project, file2);
-  const rel = relative2(project, full);
-  if (rel === "" || rel.startsWith("..") || rel.split(sep6).includes("..")) {
+  if (file2.split(/[\\/]/).includes("..")) {
     throw new Error(`${JSON.stringify(file2)}: must stay inside the project`);
   }
-  return full;
+  const root = realpathSync6(project);
+  const wanted = resolve5(root, file2);
+  let dir = dirname10(wanted);
+  while (!existsSync6(dir)) dir = dirname10(dir);
+  const realDir = realpathSync6(dir);
+  const full = join26(realDir, relative2(dir, wanted));
+  const rel = relative2(root, full);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep6}`) || isAbsolute6(rel)) {
+    throw new Error(`${JSON.stringify(file2)}: must stay inside the project`);
+  }
+  let link2 = false;
+  try {
+    link2 = lstatSync21(full).isSymbolicLink();
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+  if (link2) throw new Error(`${JSON.stringify(file2)}: is a link; give the file itself`);
+  return { full, rel: rel.split(sep6).join("/") };
 }
 function writeRoadmap(project, out, text, force) {
-  const file2 = projectFile(project, out);
+  const { full: file2, rel } = projectFile(project, out);
+  const parts = rel.split("/");
+  if (parts[0] === ".studio" || parts.includes(".git")) {
+    throw new Error(`--out ${out}: the roadmap goes neither below .studio/ nor below .git/`);
+  }
+  if (force && !rel.toLowerCase().endsWith(".md")) {
+    throw new Error(`--force overwrites only a .md file, not ${out}`);
+  }
   let old;
   try {
     old = readFileSync25(file2, "utf8");
@@ -36315,7 +36397,7 @@ function writeRoadmap(project, out, text, force) {
     );
   }
   if (old === text) return { written: out, changed: false };
-  const tmp = join26(file2, "..", `.${process.pid}.${Date.now()}.roadmap.tmp`);
+  const tmp = join26(dirname10(file2), `.${process.pid}.${Date.now()}.roadmap.tmp`);
   try {
     writeFileSync10(tmp, text, { flag: "wx" });
     renameSync10(tmp, file2);
@@ -36325,43 +36407,106 @@ function writeRoadmap(project, out, text, force) {
   }
   return { written: out, changed: true };
 }
-var LINE = /^\s*[-*+]\s+\[([ xX~])\]\s+(.*)$/;
-var PHASE = /^phase\s+(\d+(?:\.\d+)*[a-z]?)(?=$|[\s:—–-])\s*(?:[—–:-]+\s*)?(.*)$/i;
-var SPLIT = /\s+[—–-]\s+|:\s+/;
-var clean3 = (s) => s.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
+var IMPORT_MAX_BYTES = 1024 * 1024;
+var IMPORT_MAX_LINE = 2e3;
+var IMPORT_MAX_PHASES = 500;
+function readImportFile(project, file2) {
+  const { full, rel } = projectFile(project, file2);
+  const st = lstatSync21(full);
+  if (!st.isFile()) throw new Error(`${JSON.stringify(file2)}: not a regular file`);
+  if (st.size > IMPORT_MAX_BYTES) throw new Error(`${JSON.stringify(file2)}: larger than 1 MB`);
+  return { source: rel, text: readFileSync25(full, "utf8") };
+}
+var CHECKBOX_START = /^[ \t]{0,40}[-*+][ \t]{1,8}\[[ xX~]\]/;
+var CHECKBOX = /^[ \t]{0,40}[-*+][ \t]{1,8}\[([ xX~])\][ \t]+(.*)$/;
+var PHASE_NUMBER = /^\d{1,6}(?:\.\d{1,3}){0,3}[a-z]?$/i;
+var SEPARATOR = /^[—–:-]{1,3}$/;
+var clean3 = (s) => s.replace(/[\p{Cc}\p{Cf}]/gu, " ");
 var capped = (s, n2) => {
   const cps = [...s];
   return cps.length <= n2 ? s : `${cps.slice(0, n2 - 1).join("")}\u2026`;
 };
-function parsePhases(text) {
-  const out = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const line2 = LINE.exec(raw);
-    if (!line2) continue;
-    const body = clean3(line2[2].replace(/\*\*|__/g, ""));
-    const m = PHASE.exec(body);
-    if (!m) continue;
-    let rest = m[2].replace(/\s*<!--.*?-->\s*/g, " ").trim();
-    for (; ; ) {
-      const next = rest.replace(/\s*(?:^|\s)@[\w.-]+(?::\S*)?$/, "").trim();
-      if (next === rest) break;
-      rest = next;
-    }
-    rest = rest.replace(/[\s—–:-]+$/, "");
-    const phase = m[1];
-    const cut = SPLIT.exec(rest);
-    const title = cut ? rest.slice(0, cut.index).trim() : rest;
-    const after2 = cut ? rest.slice(cut.index + cut[0].length).trim() : "";
-    const name = title === "" ? `Phase ${phase}` : title;
-    out.push({
-      phase,
-      box: line2[1].toLowerCase(),
-      title: capped(name, 300),
-      goal: capped(after2 === "" ? name : after2, 2e3)
-    });
+function withoutComments(s) {
+  let out = "";
+  let at = 0;
+  for (; ; ) {
+    const open2 = s.indexOf("<!--", at);
+    if (open2 < 0) return out + s.slice(at);
+    const close = s.indexOf("-->", open2 + 4);
+    out += `${s.slice(at, open2)} `;
+    if (close < 0) return out;
+    at = close + 3;
   }
-  return out;
 }
+function parsePhases(text) {
+  const phases = [];
+  const skipped = [];
+  const lines = text.split("\n");
+  for (let i2 = 0; i2 < lines.length; i2++) {
+    const raw = lines[i2].replace(/\r$/, "");
+    const line2 = i2 + 1;
+    if (raw.length > IMPORT_MAX_LINE) {
+      if (CHECKBOX_START.test(raw.slice(0, 64))) {
+        skipped.push({ line: line2, reason: `longer than ${IMPORT_MAX_LINE} characters` });
+      }
+      continue;
+    }
+    const m = CHECKBOX.exec(raw);
+    if (!m) continue;
+    const body = withoutComments(
+      clean3(m[2]).replaceAll("**", "").replaceAll("__", "")
+    );
+    const tokens = body.split(" ").filter((t) => t !== "");
+    if (tokens[0]?.toLowerCase() !== "phase" || tokens[1] === void 0) continue;
+    let num = tokens[1];
+    while (num.length > 0 && "\u2014\u2013:-".includes(num.at(-1))) num = num.slice(0, -1);
+    if (!PHASE_NUMBER.test(num)) {
+      if (/^\d/.test(num)) skipped.push({ line: line2, reason: `not a phase number: ${capped(num, 40)}` });
+      continue;
+    }
+    const rest = tokens.slice(2);
+    let claim2;
+    while (rest.length > 0 && rest.at(-1).startsWith("@")) {
+      const tag = rest.pop();
+      if (claim2 === void 0 && tag.toLowerCase().startsWith("@claim:")) {
+        const who = tag.slice(7).replace(/[^\w.-]/g, "");
+        if (who !== "") claim2 = capped(who, 64);
+      }
+    }
+    while (rest.length > 0 && SEPARATOR.test(rest[0])) rest.shift();
+    while (rest.length > 0 && SEPARATOR.test(rest.at(-1))) rest.pop();
+    let title = rest;
+    let after2 = [];
+    for (let j = 0; j < rest.length; j++) {
+      const t = rest[j];
+      if (j > 0 && SEPARATOR.test(t) && t !== ":") {
+        title = rest.slice(0, j);
+        after2 = rest.slice(j + 1);
+        break;
+      }
+      if (t.endsWith(":") && t.length > 1) {
+        title = [...rest.slice(0, j), t.slice(0, -1)];
+        after2 = rest.slice(j + 1);
+        break;
+      }
+    }
+    const name = title.length === 0 ? `Phase ${num}` : title.join(" ");
+    const goal = after2.join(" ");
+    phases.push({
+      line: line2,
+      phase: num,
+      box: m[1].toLowerCase(),
+      title: capped(name, 300),
+      goal: capped(goal === "" ? name : goal, 2e3),
+      ...claim2 === void 0 ? {} : { claim: claim2 }
+    });
+    if (phases.length > IMPORT_MAX_PHASES) {
+      throw new Error(`more than ${IMPORT_MAX_PHASES} phases: split the file, nothing imported`);
+    }
+  }
+  return { phases, skipped };
+}
+var snake4 = (key) => key.replace(/[A-Z]/g, (c3) => `_${c3.toLowerCase()}`);
 function planImport(board, source, phases) {
   const seen = new Set((board.epics ?? []).flatMap((e) => e.importedFrom ?? []));
   const inFile = /* @__PURE__ */ new Set();
@@ -36370,26 +36515,38 @@ function planImport(board, source, phases) {
   let next = Number(nextEpicId(board).slice(2));
   for (const p of phases) {
     const from = `${source}#Phase ${p.phase}`;
+    const skip = (reason) => skipped.push({ phase: p.phase, line: p.line, reason });
     if (inFile.has(p.phase)) {
-      skipped.push({ phase: p.phase, reason: "the phase number comes twice in the file" });
+      skip("the phase number comes twice in the file");
       continue;
     }
     inFile.add(p.phase);
     if (seen.has(from)) {
-      skipped.push({ phase: p.phase, reason: "imported already" });
+      skip("imported already");
       continue;
     }
-    create.push(
-      epicSchema.parse({
-        id: `E-${next++}`,
-        title: p.title,
-        status: p.box === "x" ? "done" : "open",
-        goal: p.goal,
-        acceptance: ["imported from ROADMAP: define acceptance"],
-        importedFrom: from,
-        history: []
-      })
-    );
+    const parsed = epicSchema.safeParse({
+      id: `E-${next}`,
+      title: p.title,
+      status: p.box === "x" ? "done" : "open",
+      goal: p.goal,
+      acceptance: ["imported from ROADMAP: define acceptance"],
+      importedFrom: from,
+      ...p.box === "~" ? {
+        notes: [
+          p.claim === void 0 ? IN_PROGRESS_NOTE : `${IN_PROGRESS_NOTE} (claim: ${p.claim})`
+        ]
+      } : {},
+      history: []
+    });
+    if (!parsed.success) {
+      const issue2 = parsed.error.issues[0];
+      const where = issue2?.path.map((k) => snake4(String(k))).join(".") ?? "";
+      skip(`invalid: ${where}: ${issue2?.message ?? "unknown"}`);
+      continue;
+    }
+    next++;
+    create.push(parsed.data);
   }
   return { file: source, create, skipped };
 }
@@ -36397,7 +36554,7 @@ function planImport(board, source, phases) {
 // src/setup.ts
 import {
   chmodSync as chmodSync6,
-  lstatSync as lstatSync21,
+  lstatSync as lstatSync22,
   mkdirSync as mkdirSync7,
   readFileSync as readFileSync26,
   renameSync as renameSync11,
@@ -36406,7 +36563,7 @@ import {
   writeFileSync as writeFileSync11
 } from "node:fs";
 import { homedir as homedir8 } from "node:os";
-import { dirname as dirname10, join as join27, resolve as resolve6 } from "node:path";
+import { dirname as dirname11, join as join27, resolve as resolve6 } from "node:path";
 var DEFAULT_LABEL2 = "main";
 var MAX_LABEL = 32;
 var TOKEN_TEXT = [
@@ -36478,7 +36635,7 @@ function studioOnPath(env) {
 }
 var yes = (answer) => /^(|y|yes)$/i.test(answer.trim());
 function writeAtomic2(file2, text, mode) {
-  const tmp = join27(dirname10(file2), `.studio-${process.pid}-${Date.now()}.tmp`);
+  const tmp = join27(dirname11(file2), `.studio-${process.pid}-${Date.now()}.tmp`);
   try {
     writeFileSync11(tmp, text, { flag: "wx", mode });
     chmodSync6(tmp, mode);
@@ -36554,13 +36711,13 @@ async function link(o2, home) {
   const target = join27(localBin, "studio");
   let current;
   try {
-    current = lstatSync21(target).isFile() ? readFileSync26(target, "utf8") : "";
+    current = lstatSync22(target).isFile() ? readFileSync26(target, "utf8") : "";
   } catch {
     current = void 0;
   }
   const cache = join27(ownerConfigDir(o2.owner), "launcher");
   const writeCache = () => {
-    mkdirSync7(dirname10(cache), { recursive: true, mode: 448 });
+    mkdirSync7(dirname11(cache), { recursive: true, mode: 448 });
     writeAtomic2(cache, `${launcher2}
 `, 384);
   };
@@ -36690,6 +36847,8 @@ Commands:
                            Add an open epic with the next free id (E-<n>)
   epic list                Epics with their items by status and merged of total
   epic show <id>           One epic: goal, acceptance, items
+  epic edit <id> [--title <t>] [--goal <text>] [--acceptance <line>...]
+                           Replace an epic's title, goal or acceptance lines
   epic drop <id>           End an epic; refused while it has open items
   roadmap [--write] [--out <file>] [--force]
                            Render the roadmap from the board; --write writes ROADMAP.md
@@ -36843,8 +37002,12 @@ async function runCli(argv, deps) {
     if (cmd !== "add" && addOnly.some((v) => v !== void 0)) {
       throw new UsageError("--type, --repo, --path, --dod and --plan work with add only");
     }
-    if (!epicAdd && (values.goal !== void 0 || values.acceptance !== void 0)) {
-      throw new UsageError("--goal and --acceptance work with epic add only");
+    const epicEdit = cmd === "epic" && rest[0] === "edit";
+    if (!epicEdit && values.title !== void 0) {
+      throw new UsageError("--title works with epic edit only");
+    }
+    if (!epicAdd && !epicEdit && (values.goal !== void 0 || values.acceptance !== void 0)) {
+      throw new UsageError("--goal and --acceptance work with epic add and epic edit only");
     }
     if (values.epic !== void 0 && cmd !== "board" && cmd !== "add") {
       throw new UsageError("--epic works with board and add only");
@@ -36995,7 +37158,7 @@ async function runCli(argv, deps) {
       const { config: config2 } = loadAll();
       refuseNativeQueue(config2);
       const root = await boundStateRoot();
-      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname11(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
+      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname12(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
       const blockedNow = queueHold();
       if (blockedNow !== void 0) throw new HeldError(blockedNow);
       let heldLine;
@@ -37398,8 +37561,7 @@ async function runCli(argv, deps) {
         merged: [],
         held: [],
         needsLead: [],
-        errors: [],
-        epicsReady: []
+        errors: []
       };
       const why = (e) => e.message.replace(new RegExp("\\p{Cc}", "gu"), " ");
       const lead = (item, reason) => {
@@ -37611,11 +37773,10 @@ async function runCli(argv, deps) {
             return loadBoard(project);
           });
         }
-        for (const e of now.epics ?? []) {
-          if (e.status === "accepting") out.epicsReady.push({ epic: e.id, title: e.title });
-        }
+        const ready = (now.epics ?? []).filter((e) => e.status === "accepting").map((e) => ({ epic: e.id, title: e.title }));
+        if (ready.length > 0) out.epicsReady = ready;
       } catch (e) {
-        out.errors.push({ phase: "epics", error: why(e) });
+        if (!(e instanceof BoardError)) out.errors.push({ phase: "epics", error: why(e) });
       }
       return out;
     };
@@ -37778,7 +37939,23 @@ async function runCli(argv, deps) {
           print({ epic: id, status: "dropped" });
           return 0;
         }
-        throw new UsageError("epic needs add, list, show or drop");
+        if (sub === "edit") {
+          refuseCrew(deps.env);
+          if (args.length !== 1) throw new UsageError("epic edit needs one epic id");
+          const id = args[0];
+          const changed = await withBoardLock(stateRoot(), ports.clock.now(), () => {
+            const r = editEpic(loadBoard(project, loadConfig(project)), id, {
+              ...values.title === void 0 ? {} : { title: values.title },
+              ...values.goal === void 0 ? {} : { goal: values.goal },
+              ...values.acceptance === void 0 ? {} : { acceptance: values.acceptance }
+            });
+            saveBoard(project, r.board);
+            return r.changed;
+          });
+          print({ epic: id, changed });
+          return 0;
+        }
+        throw new UsageError("epic needs add, list, show, edit or drop");
       }
       case "roadmap": {
         if (rest[0] === "import") {
@@ -37787,10 +37964,12 @@ async function runCli(argv, deps) {
             throw new UsageError("roadmap import takes only --write");
           }
           if (values.write === true) refuseCrew(deps.env);
-          const full = projectFile(project, rest[1]);
-          const source = relative3(project, full).split(sep7).join("/");
-          const phases = parsePhases(readFileSync27(full, "utf8"));
-          const apply = (board) => planImport(board, source, phases);
+          const { source, text: text2 } = readImportFile(project, rest[1]);
+          const parsed = parsePhases(text2);
+          const apply = (board) => {
+            const p = planImport(board, source, parsed.phases);
+            return { ...p, skipped: [...parsed.skipped, ...p.skipped] };
+          };
           if (values.write !== true) {
             print({ ...apply(loadAll().board), written: false });
             return 0;
@@ -37976,7 +38155,7 @@ async function runCli(argv, deps) {
             hasReport: (item) => {
               if (!isItemId(item)) return false;
               const name = reportName(root, item);
-              return name !== void 0 && existsSync6(join28(root, "clones", item, ".studio", "reports", name));
+              return name !== void 0 && existsSync7(join28(root, "clones", item, ".studio", "reports", name));
             }
           }
         );
@@ -38407,6 +38586,7 @@ function parseCli(argv) {
         component: { type: "string", multiple: true },
         epic: { type: "string" },
         goal: { type: "string" },
+        title: { type: "string" },
         acceptance: { type: "string", multiple: true },
         out: { type: "string" },
         force: { type: "boolean" },
@@ -38812,7 +38992,7 @@ function readVisibleLine(prompt, input2, output2) {
 
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync7, openSync as openSync7, readFileSync as readFileSync30 } from "node:fs";
+import { closeSync as closeSync7, openSync as openSync7, readFileSync as readFileSync29 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -42508,7 +42688,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync29 } from "node:fs";
+import { readFileSync as readFileSync28 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value, optionName) => {
@@ -42864,7 +43044,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync28 } from "node:fs";
+import { readFileSync as readFileSync27 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -42978,7 +43158,7 @@ var getTargetFd = ({ value, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync28(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync27(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value, fdNumber) => {
   if (value === "inherit") {
@@ -43372,8 +43552,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync29(value))] }),
-    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync29(file2))] }),
+    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync28(value))] }),
+    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync28(file2))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value }) => ({ contents: () => [...value] }),
     string: ({ value }) => ({ contents: [value] }),
@@ -46714,7 +46894,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync30(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync29(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }
@@ -46802,7 +46982,7 @@ function realPorts(claudeBin = "claude") {
 // src/main.ts
 function launcher() {
   try {
-    return realpathSync6(fileURLToPath6(new URL("../bin/studio", import.meta.url)));
+    return realpathSync7(fileURLToPath6(new URL("../bin/studio", import.meta.url)));
   } catch {
     return void 0;
   }
