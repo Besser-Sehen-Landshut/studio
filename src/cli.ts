@@ -67,6 +67,7 @@ import {
   PR_HELD,
   paneItems,
   readTickRecord,
+  resolveZone,
   writeTickRecord,
 } from './pane-data.js';
 import {
@@ -1579,11 +1580,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         refuseCrew(deps.env);
         if (rest.length > 0) throw new UsageError('tick takes no arguments');
         const out = await tick();
-        // The pane's lead list: kept unless the tick never ran (no root, or another tick held it).
-        if (
-          !out.held.some((h) => h.item === 'tick') &&
-          !out.errors.some((e) => e.phase === 'start')
-        ) {
+        // The pane's lead list, from complete ticks only: a tick that did not run (another tick
+        // held it), lost its lock or had a phase fail keeps the last good record.
+        if (!out.held.some((h) => h.item === 'tick') && !out.errors.some((e) => e.phase)) {
           try {
             writeTickRecord(await boundStateRoot(), {
               at: ports.clock.now().toISOString(),
@@ -2641,7 +2640,8 @@ function buildSnapshot(
     mergeMaxBusy: extra.config.ci.capacity.mergeMaxBusy,
     ok: capacity.ok,
   };
-  const timezone = extra.ownerConfig.crewLabelLimits.timezone;
+  // One zone for the day and the pause time: the owner's, else the system's.
+  const timezone = resolveZone(extra.ownerConfig.crewLabelLimits.timezone);
   const tickRecord = readTickRecord(root);
   const items = paneItems(board, queue, ci, {
     ...(tickRecord === undefined ? {} : { tick: tickRecord }),

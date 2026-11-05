@@ -587,10 +587,10 @@ export function writeBrief(
           'verdict: approve|changes_requested',
           'reviews: <repo>#<pr>',
           'head_sha: <40-hex sha of the pull request head you reviewed>',
-          'analyzers: { <id>: pass|findings|"skipped: <reason>" }',
-          'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"',
+          'analyzers: { <id>: pass|findings|"skipped: <reason, at most 300 characters>" }',
+          'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"   # the text after the colon at most 300 characters',
           'finding_attempts: <highest number of attempts on one finding>',
-          'not_run_here_jobs: []   # or entries { command: <command as listed>, workflow: <file at the base that defines the job>, job: <job name>, covers: <one line, at most 600 characters: why this job covers the command> }',
+          'not_run_here_jobs: []   # or entries { command: <command as listed, one line, at most 300 characters>, workflow: <file at the base that defines the job, at most 300 characters>, job: <job name, at most 300 characters>, covers: <one line, at most 600 characters: why this job covers the command> }',
         ]
       : item.type === 'research'
         ? []
@@ -600,12 +600,14 @@ export function writeBrief(
               : 'pr: <number>',
             'head_sha: <40-hex sha of the pushed head commit>',
             'tests_run: <number of tests that ran>',
-            'not_run_here: []   # or entries { command: <command>, missing: database|docker|network|service, reason: <error line> }',
+            'not_run_here: []   # or entries { command: <command, one line, at most 300 characters>, missing: database|docker|network|service, reason: <error line, one line, at most 300 characters> }',
           ]),
     'lessons: []',
     'questions: []',
     '---',
     '```',
+    '',
+    'Each one-line field holds no line break and stays within its limit (at most 300 characters unless the field says otherwise); one field over its limit rejects the whole report, so shorten an error line to its first line rather than paste a log.',
     '',
     ...(item.type === 'review'
       ? [

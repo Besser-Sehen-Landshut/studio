@@ -34,13 +34,23 @@ merge.
   with a code), `needsLead` (the latest tick's lead list with a code, a short reason and a next step
   to say), `wip`, `project`, `pause` (with the time on the owner's clock), and the item and epic of
   each merge of today.
-- `studio tick` keeps its lead list and holds in `tick.json` in the state root, unless the tick did
-  not run (another tick held the lock, or no state root).
+- `studio tick` keeps its lead list and holds in `tick.json` in the state root (a protected state
+  file for crews), only from a complete tick: one that did not run, lost its lock or had a phase
+  fail keeps the last good record. An item that moved after that tick drops out of the list.
+- The crew report template states the limit of each one-line field in plain words (`<error line,
+  one line, at most 300 characters>`, and the same for the commands, workflows, jobs and skip
+  reasons), and that one field over its limit rejects the whole report.
 
 ### Changed
 
-- Every state in the pane has a sign and a word; a title is cut with "…", never the id, the sign or
-  the stage. Long lines in the work list wrap instead of being cut.
+- Every state in the pane has a sign and a word; a title is cut with "…" by terminal cells (wide
+  characters and emoji count two), never the id, the sign or the stage; the pipeline draws the work
+  list when an id does not fit its column. Long lines in the work list wrap instead of being cut.
+- Crew text never reaches the "Decision needed" block: each lead decision shows a fixed phrase for
+  its kind (`crew has a question`, `needs a decision`, ...), the full line only under "For the
+  lead" in `/studio more`. A hint line starts with `→` two cells in and nothing else does.
+- The pause time and "today" use one zone: the owner's `crew_label_limits.timezone`, else the system
+  zone (the pause time was told in UTC before).
 - A `state.json` without `items`, written by an earlier Studio, draws the detailed view as before.
 
 ## [0.11.0] - 2026-11-05

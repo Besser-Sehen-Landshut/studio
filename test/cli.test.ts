@@ -3699,6 +3699,7 @@ describe('studio tick', () => {
         item: 'APP-1',
         code: 'fix_limit',
         reason: 'fix limit reached: 6 review rounds',
+        detail: 'blocked: fix limit reached: 6 review rounds',
         next: { say: 'show APP-1' },
       },
     ]);
@@ -3706,6 +3707,23 @@ describe('studio tick', () => {
       ['APP-1', 'blocked'],
       ['APP-2', expect.any(String)],
     ]);
+  });
+
+  it('a tick with a failed phase keeps the last good lead list', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'blocked', notes: ['needs a key'] }]);
+    bind(fx);
+    const good = {
+      at: '2026-10-30T08:00:00.000Z',
+      needsLead: [{ item: 'APP-9', reason: 'old' }],
+      held: [],
+    };
+    writeStateFile(fx.state, join(fx.state, 'tick.json'), JSON.stringify(good));
+    writeStateFile(fx.state, join(fx.state, 'queue.json'), '{ not json');
+    const t = await tick(fx, fakePorts(fakeGh().gh).ports);
+    expect(t.json.errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ phase: expect.any(String) })]),
+    );
+    expect(JSON.parse(readFileSync(join(fx.state, 'tick.json'), 'utf8'))).toEqual(good);
   });
 
   it('a tick another tick holds leaves the lead list as it was', async () => {
@@ -4284,6 +4302,31 @@ describe('epics in the CLI', () => {
     ]);
     expect(snap).not.toHaveProperty('pause');
     expect(snap).not.toHaveProperty('needsLead');
+  });
+
+  it('without a configured zone, the pause time and today both use the system zone', async () => {
+    const before = process.env.TZ;
+    process.env.TZ = 'Pacific/Kiritimati';
+    try {
+      const fx = makeFx([{ id: 'APP-1' }]);
+      const ports = quiet();
+      expect((await cli(fx, ports, 'pause')).code).toBe(0);
+      expect((await cli(fx, ports, 'state')).code).toBe(0);
+      const snap = JSON.parse(readFileSync(join(fx.state, 'state.json'), 'utf8'));
+      const zoned = (iso: string, o: Intl.DateTimeFormatOptions) =>
+        new Intl.DateTimeFormat('en-CA', { timeZone: 'Pacific/Kiritimati', ...o }).format(
+          new Date(iso),
+        );
+      expect(snap.pause.time).toBe(
+        zoned(snap.pause.at, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }),
+      );
+      expect(snap.today.day).toBe(
+        zoned(snap.updatedAt, { year: 'numeric', month: '2-digit', day: '2-digit' }),
+      );
+    } finally {
+      if (before === undefined) delete process.env.TZ;
+      else process.env.TZ = before;
+    }
   });
 
   it('state carries the pause with its clock time', async () => {

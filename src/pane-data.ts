@@ -52,13 +52,21 @@ export interface PaneItem {
   wait?: PaneWait;
 }
 
-export type DecisionCode = 'fix_limit' | 'changes_requested' | 'merge_failed' | 'blocked' | 'other';
+export type DecisionCode =
+  | 'fix_limit'
+  | 'changes_requested'
+  | 'merge_failed'
+  | 'question'
+  | 'blocked'
+  | 'other';
 
 export interface LeadDecision {
   item: string;
   code: DecisionCode;
-  /** One short English line. */
+  /** One short English line of Studio's own words, never crew text. */
   reason: string;
+  /** The lead's full line, which may hold crew text: for the detailed view only. */
+  detail: string;
   /** What the owner can say to the lead next, in English. */
   next: { say: string };
 }
@@ -197,55 +205,57 @@ export function paneItems(
   return out;
 }
 
-/** The first clause of a lead reason: up to the first `;`. */
-const clause = (s: string): string => line(s.split(';')[0]?.trim() ?? s);
-
+/**
+ * The lead reason as a code and a short English reason that holds no crew text: questions, notes
+ * and report errors can be crew text, so only Studio's own phrases are kept; the full line is the
+ * detail, shown in the detailed view alone.
+ */
 function classify(item: string, reason: string): LeadDecision {
   const r = reason.trim();
+  const detail = line(r);
+  const of = (code: DecisionCode, short: string, say: string): LeadDecision => ({
+    item,
+    code,
+    reason: short,
+    detail,
+    next: { say },
+  });
   if (r.startsWith('blocked: fix limit reached')) {
-    return {
-      item,
-      code: 'fix_limit',
-      reason: clause(r.slice('blocked: '.length)),
-      next: { say: `show ${item}` },
-    };
+    const rounds = /^blocked: (fix limit reached: \d+ review rounds)/.exec(r)?.[1];
+    return of('fix_limit', rounds ?? 'fix limit reached', `show ${item}`);
   }
   if (r.startsWith('changes requested')) {
-    return {
-      item,
-      code: 'changes_requested',
-      reason: line(r.split(':')[0] ?? r),
-      next: { say: `start the fix round for ${item}` },
-    };
+    const by = /^changes requested by ([A-Z]+-\d+)/.exec(r)?.[1];
+    return of(
+      'changes_requested',
+      by === undefined ? 'changes requested' : `changes requested by ${by}`,
+      `start the fix round for ${item}`,
+    );
   }
   if (r.startsWith('merge failed')) {
-    return {
-      item,
-      code: 'merge_failed',
-      reason: clause(r),
-      next: { say: `show why ${item} did not merge` },
-    };
+    return of('merge_failed', 'merge failed', `show why ${item} did not merge`);
   }
-  if (r.startsWith('blocked: ')) {
-    return {
-      item,
-      code: 'blocked',
-      reason: clause(r.slice('blocked: '.length)),
-      next: { say: `show ${item}` },
-    };
+  if (r.startsWith('blocked: question:')) {
+    return of('question', 'crew has a question', `show ${item}`);
   }
-  return { item, code: 'other', reason: clause(r), next: { say: `show ${item}` } };
+  if (r.startsWith('blocked: ')) return of('blocked', 'blocked', `show ${item}`);
+  return of('other', 'needs a decision', `show ${item}`);
 }
 
-/** The latest tick's lead list, one entry per item, without items that are done by now. */
+/**
+ * The latest tick's lead list, one entry per item, without items that are done by now or that
+ * moved after the tick (their entry is out of date; the next tick lists them again if need be).
+ */
 export function leadDecisions(tick: TickRecord | undefined, board: Board): LeadDecision[] {
   if (tick === undefined) return [];
-  const done = new Set(
-    board.items.filter((i) => i.status === 'merged' || i.status === 'dropped').map((i) => i.id),
-  );
+  const tickAt = Date.parse(tick.at);
   const out: LeadDecision[] = [];
   for (const n of tick.needsLead) {
-    if (done.has(n.item) || out.some((d) => d.item === n.item)) continue;
+    if (out.some((d) => d.item === n.item)) continue;
+    const onBoard = board.items.find((i) => i.id === n.item);
+    if (onBoard?.status === 'merged' || onBoard?.status === 'dropped') continue;
+    const moved = Date.parse(onBoard?.history.at(-1)?.at ?? '');
+    if (!Number.isNaN(tickAt) && !Number.isNaN(moved) && moved > tickAt) continue;
     out.push(classify(line(n.item), n.reason));
   }
   return out;
@@ -284,7 +294,12 @@ export function writeTickRecord(root: string, rec: TickRecord): void {
   writeStateFile(root, join(root, TICK_FILE), `${JSON.stringify(rec, null, 2)}\n`);
 }
 
-/** `HH:MM` of `iso` in `timezone` (UTC when it is unset or unknown). */
+/** The configured zone, else the system's: what the day and the pause time are both told in. */
+export function resolveZone(timezone: string | undefined): string {
+  return timezone ?? new Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+/** `HH:MM` of `iso` in `timezone` (the system zone when it is unset or unknown). */
 export function clockTime(iso: string, timezone: string | undefined): string {
   const at = new Date(iso);
   const format = (timeZone: string | undefined) =>
@@ -295,8 +310,8 @@ export function clockTime(iso: string, timezone: string | undefined): string {
       hourCycle: 'h23',
     }).format(at);
   try {
-    return format(timezone ?? 'UTC');
+    return format(resolveZone(timezone));
   } catch {
-    return format('UTC');
+    return format(undefined);
   }
 }

@@ -86,7 +86,10 @@ export interface BoardDecision {
   /** An item id, or another key (`account-block`, `main-build`) that is not shown. */
   item: string;
   code: string;
+  /** Not shown: the pane words each code itself, so crew text never reaches the block. */
   reason: string;
+  /** The lead's full line, possibly crew text: the detailed view alone shows it. */
+  detail?: string;
   next?: { say?: string; type?: string };
 }
 
@@ -273,12 +276,15 @@ function toState(root: Obj): BoardState {
       const reason = str(o?.reason);
       if (item === undefined || reason === undefined) return [];
       const say = str(obj(o?.next)?.say);
+      const detail = str(o?.detail);
       return [
         {
           item,
           code: str(o?.code) ?? 'other',
           reason,
-          ...(say === undefined ? {} : { next: { say } }),
+          ...(detail === undefined ? {} : { detail }),
+          // Only a plain phrase is offered to say; anything else falls back to `show <id>`.
+          ...(say === undefined || !SAY.test(say) ? {} : { next: { say } }),
         },
       ];
     });
@@ -303,6 +309,9 @@ function toState(root: Obj): BoardState {
   if (mergedToday.some((m) => m.item !== undefined)) state.mergedToday = mergedToday;
   return state;
 }
+
+/** A next step the pane offers: lower-case words and item ids, nothing else. */
+const SAY = /^[a-z]+(?: (?:[a-z]+|[A-Z]+-\d+))*$/;
 
 const STAGES: readonly Stage[] = ['ready', 'building', 'pr_held', 'review', 'queued', 'blocked'];
 
@@ -371,6 +380,7 @@ interface Strings {
   headCrew: string;
   headQueue: string;
   headForYou: (n: number) => string;
+  headForLead: (n: number) => string;
   leadTimeLine: (median: string, deploys: number) => string;
   headDays: string;
   headUsage: string;
@@ -392,7 +402,8 @@ interface Strings {
   doneToday: (n: number) => string;
   withoutEpic: string;
   leadTime: (h: string) => string;
-  decision: (code: string, reason: string) => string;
+  /** A fixed phrase per decision code: the reason itself may be crew text and is never shown. */
+  decision: (code: string) => string;
   wait: (w: BoardWait) => string;
   waitShort: (w: BoardWait) => string;
   column: { ready: string; building: string; review: string; queue: string; today: string };
@@ -449,6 +460,7 @@ const EN: Strings = {
   headCrew: 'Crew',
   headQueue: 'Merge queue',
   headForYou: (n) => `For you (${n})`,
+  headForLead: (n) => `For the lead (${n})`,
   leadTimeLine: (m, d) => `Lead time (median) ${m} · deploys today ${d}`,
   headDays: 'Last 7 days (merged/deployed)',
   headUsage: 'Usage (runs)',
@@ -482,11 +494,13 @@ const EN: Strings = {
   doneToday: (n) => `✓ ${n} done today`,
   withoutEpic: 'Without epic',
   leadTime: (h) => `lead time ${h}`,
-  decision: (code, reason) => {
+  decision: (code) => {
     if (code === 'fix_limit') return 'fix limit reached – decide';
     if (code === 'changes_requested') return 'changes requested';
-    if (code === 'blocked') return `blocked: ${reason}`;
-    return reason;
+    if (code === 'merge_failed') return 'merge failed';
+    if (code === 'question') return 'crew has a question';
+    if (code === 'blocked') return 'blocked';
+    return 'needs a decision';
   },
   wait: (w) => {
     switch (w.code) {
@@ -584,6 +598,7 @@ const DE: Strings = {
   headCrew: 'Crew',
   headQueue: 'Merge-Warteschlange',
   headForYou: (n) => `Zur Entscheidung (${n})`,
+  headForLead: (n) => `Für die Steuerung (${n})`,
   leadTimeLine: (m, d) => `Durchlaufzeit (Median) ${m} · Deploys heute ${d}`,
   headDays: 'Letzte 7 Tage (gemergt/ausgeliefert)',
   headUsage: 'Nutzung (Läufe)',
@@ -617,15 +632,13 @@ const DE: Strings = {
   doneToday: (n) => `✓ ${n} heute fertig`,
   withoutEpic: 'Ohne Vorhaben',
   leadTime: (h) => `Ø Durchlauf ${h}`,
-  decision: (code, reason) => {
+  decision: (code) => {
     if (code === 'fix_limit') return 'Fix-Limit erreicht – entscheiden';
     if (code === 'changes_requested') return 'Änderungen angefordert';
-    if (code === 'merge_failed') {
-      const detail = reason.replace(/^merge failed:?\s*/, '');
-      return detail === '' ? 'Merge fehlgeschlagen' : `Merge fehlgeschlagen: ${detail}`;
-    }
-    if (code === 'blocked') return `blockiert: ${reason}`;
-    return reason;
+    if (code === 'merge_failed') return 'Merge fehlgeschlagen';
+    if (code === 'question') return 'Crew hat eine Frage';
+    if (code === 'blocked') return 'blockiert';
+    return 'Entscheidung nötig';
   },
   wait: (w) => {
     switch (w.code) {
@@ -765,13 +778,51 @@ const LOOK: Record<CrewState, { glyph: string; tone: NonNullable<Line['tone']> }
   done: { glyph: '✓', tone: 'dim' },
 };
 
-const width = (s: string): number => [...s].length;
+const ZERO_WIDTH = /^(?:\p{Mn}|\p{Me}|[\u200b-\u200f]|[\ufe00-\ufe0f])$/u;
+const EMOJI = /^\p{Emoji_Presentation}$/u;
 
-/** Cuts to `n` code points, marking the cut with an ellipsis. */
+/** Cells one code point takes in a terminal: East Asian wide and full-width ones and emoji take two. */
+function cells(cp: number, ch: string): number {
+  if (ZERO_WIDTH.test(ch)) return 0;
+  if (EMOJI.test(ch)) return 2;
+  return (cp >= 0x1100 && cp <= 0x115f) ||
+    (cp >= 0x2e80 && cp <= 0x303e) ||
+    (cp >= 0x3041 && cp <= 0x33ff) ||
+    (cp >= 0x3400 && cp <= 0x4dbf) ||
+    (cp >= 0x4e00 && cp <= 0x9fff) ||
+    (cp >= 0xa000 && cp <= 0xa4cf) ||
+    (cp >= 0xac00 && cp <= 0xd7a3) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xfe30 && cp <= 0xfe4f) ||
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    (cp >= 0x20000 && cp <= 0x3fffd)
+    ? 2
+    : 1;
+}
+
+/** The terminal cells `s` takes. */
+export function cellWidth(s: string): number {
+  let n = 0;
+  for (const ch of s) n += cells(ch.codePointAt(0) as number, ch);
+  return n;
+}
+
+const width = cellWidth;
+
+/** Cuts to `n` cells, marking the cut with an ellipsis. */
 function cut(s: string, n: number): string {
-  const cps = [...s];
-  if (cps.length <= n) return s;
-  return n <= 1 ? '…'.slice(0, Math.max(n, 0)) : `${cps.slice(0, n - 1).join('')}…`;
+  if (width(s) <= n) return s;
+  if (n <= 1) return '…'.slice(0, Math.max(n, 0));
+  let out = '';
+  let used = 0;
+  for (const ch of s) {
+    const w = cells(ch.codePointAt(0) as number, ch);
+    if (used + w > n - 1) break;
+    out += ch;
+    used += w;
+  }
+  return `${out}…`;
 }
 
 function pad(s: string, n: number): string {
@@ -1024,6 +1075,17 @@ export function boardLines(
   for (const n of s.notifications) {
     out.push({ text: `  ${t.accountBlocked(n.label, n.reason)}`, tone: 'err' });
   }
+  // The lead's full lines: they may hold crew text, so only this view shows them, as data.
+  const lead = s.needsLead ?? [];
+  if (lead.length > 0) {
+    out.push({ text: t.headForLead(lead.length), tone: 'head' });
+    for (const d of lead.slice(0, MAX_OWNER_LINES)) {
+      out.push({ text: `  ${d.item} ${d.detail ?? d.reason}` });
+    }
+    if (lead.length > MAX_OWNER_LINES) {
+      out.push({ text: `  ${t.more(lead.length - MAX_OWNER_LINES)}`, tone: 'dim' });
+    }
+  }
   const median = s.medianLeadTimeHours === null ? '–' : t.hours(s.medianLeadTimeHours);
   out.push({ text: t.leadTimeLine(median, s.today.deployed) });
   const days = s.perDay.slice(-7);
@@ -1091,6 +1153,20 @@ const RANK: Record<RowState, number> = {
 
 const ITEM_ID = /^[A-Z]+-\d+$/;
 
+/**
+ * A hint starts with `→` two cells in, and only a hint does: wrapped decision text goes on four
+ * cells in, a wrapped hint six, so no text can pass for a hint by its look.
+ */
+const HINT_INDENT = '  ';
+const TEXT_INDENT = '    ';
+
+function hintLines(next: string, columns: number): Line[] {
+  return wrap(next.replace(/^→\s*/, ''), columns, '      ', `${HINT_INDENT}→ `).map((text) => ({
+    text,
+    tone: 'dim',
+  }));
+}
+
 interface Decision {
   /** Shown before the reason when it is an item id. */
   id?: string;
@@ -1108,8 +1184,12 @@ function decisionsOf(s: BoardState, t: Strings): Decision[] {
     const id = ITEM_ID.test(d.item) ? d.item : undefined;
     out.push({
       ...(id === undefined ? {} : { id }),
-      text: t.decision(d.code, d.reason),
-      ...(d.next?.say === undefined ? {} : { next: t.say(d.next.say) }),
+      text: t.decision(d.code),
+      ...(d.next?.say !== undefined
+        ? { next: t.say(d.next.say) }
+        : id === undefined
+          ? {}
+          : { next: t.say(`show ${id}`) }),
     });
   }
   for (const f of s.forOwner) {
@@ -1275,11 +1355,9 @@ function listBody(f: Frame, decisions: Decision[], items: BoardItem[]): Line[] {
     out.push({ text: '' }, { text: pad(t.decisionHead, columns), tone: 'you' });
     for (const d of decisions.slice(0, MAX_OWNER_LINES)) {
       const head = d.id === undefined ? '! ' : `! ${d.id} `;
-      for (const text of wrap(`${head}${d.text}`, columns, '  ', ''))
+      for (const text of wrap(`${head}${d.text}`, columns, TEXT_INDENT, ''))
         out.push({ text, tone: 'err' });
-      if (d.next !== undefined) {
-        for (const text of wrap(d.next, columns, '    ', '  ')) out.push({ text, tone: 'dim' });
-      }
+      if (d.next !== undefined) out.push(...hintLines(d.next, columns));
     }
     if (decisions.length > MAX_OWNER_LINES) {
       out.push({ text: t.more(decisions.length - MAX_OWNER_LINES), tone: 'dim' });
@@ -1368,6 +1446,13 @@ function pipelineBody(f: Frame, decisions: Decision[], items: BoardItem[]): Line
   const gap = 2;
   if (5 * w + 4 * gap > columns) return undefined;
   const colW = Math.floor((columns - 4 * gap) / 5);
+  // A card's sign and id are never cut: an id too long for its column means the work list.
+  const longest = Math.max(
+    0,
+    ...rows.map((r) => 2 + width(r.item.id)),
+    ...todayIds.map((id) => 2 + width(id)),
+  );
+  if (longest > colW) return undefined;
   const built: Column[] = cols.map((c) => {
     const lines: string[] = [];
     if (c.rows !== undefined) {
@@ -1390,10 +1475,8 @@ function pipelineBody(f: Frame, decisions: Decision[], items: BoardItem[]): Line
     const d = decisions[0] as Decision;
     const more = decisions.length > 1 ? ` (+${decisions.length - 1})` : '';
     const head = `! ${d.id === undefined ? '' : `${d.id} `}${d.text}${more}`;
-    for (const text of wrap(head, columns, '  ', '')) out.push({ text, tone: 'you' });
-    if (d.next !== undefined) {
-      for (const text of wrap(d.next, columns, '    ', '  ')) out.push({ text, tone: 'dim' });
-    }
+    for (const text of wrap(head, columns, TEXT_INDENT, '')) out.push({ text, tone: 'you' });
+    if (d.next !== undefined) out.push(...hintLines(d.next, columns));
   }
   out.push({ text: '' });
   out.push({ text: join(built.map((c) => c.header)), tone: 'head' });
@@ -1407,7 +1490,7 @@ function pipelineBody(f: Frame, decisions: Decision[], items: BoardItem[]): Line
   if (blocked.length > 0) {
     out.push({ text: '' }, { text: `■ ${t.blocked} ${blocked.length}`, tone: 'err' });
     for (const r of blocked.slice(0, MAX_ROWS)) {
-      const reason = decisions.find((d) => d.id === r.item.id)?.text ?? r.item.wait?.text ?? '';
+      const reason = decisions.find((d) => d.id === r.item.id)?.text ?? t.word.blocked;
       const code = epicCode(r.item.epic);
       const text = `${r.item.id} ${reason}${code === '' ? '' : ` (${code})`}`;
       for (const l of wrap(text, columns, '    ', '  ')) out.push({ text: l, tone: 'err' });

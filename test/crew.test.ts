@@ -377,6 +377,26 @@ describe('writeBrief', () => {
     expect(build).not.toContain('verdict:');
   });
 
+  it('the report template names the limit of every one-line field in plain words', () => {
+    const { project, state } = makeFixture();
+    const build = readFileSync(writeBrief(state, item, config, project, NO_RULES), 'utf8');
+    expect(build).toMatch(
+      /not_run_here: \[\] {3}# or entries \{ command: <command, one line, at most 300 characters>, missing: database\|docker\|network\|service, reason: <error line, one line, at most 300 characters> \}/,
+    );
+    expect(build).toMatch(
+      /at most 300 characters[^\n]*rejects the whole report|whole report is rejected/,
+    );
+    const review = readFileSync(
+      writeBrief(state, { ...item, type: 'review' }, config, project, NO_RULES),
+      'utf8',
+    );
+    expect(review).toMatch(
+      /not_run_here_jobs: .*command: <command as listed, one line, at most 300 characters>, workflow: <[^>]*at most 300 characters>, job: <[^>]*at most 300 characters>, covers: <one line, at most 600 characters/,
+    );
+    expect(review).toMatch(/analyzers: .*skipped: <reason, at most 300 characters>/);
+    expect(review).toMatch(/mutation_probe: .*at most 300 characters/);
+  });
+
   it('research brief asks for no pr and no verdict', () => {
     const { project, state } = makeFixture();
     const text = readFileSync(
@@ -722,6 +742,7 @@ describe('writeCrewSettings', () => {
           'usage.json',
           'launch.lock',
           'pause.json',
+          'tick.json',
         ].map((f) => join(state, f)),
         join(dirnameOf(state), 'owner'),
       ],

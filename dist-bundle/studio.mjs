@@ -28504,7 +28504,8 @@ var STATE_FILES = [
   "blocks.lock",
   "usage.json",
   "launch.lock",
-  "pause.json"
+  "pause.json",
+  "tick.json"
 ];
 function stateBaseFor(opts = {}) {
   const env = opts.env ?? process.env;
@@ -33277,20 +33278,22 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
       "verdict: approve|changes_requested",
       "reviews: <repo>#<pr>",
       "head_sha: <40-hex sha of the pull request head you reviewed>",
-      'analyzers: { <id>: pass|findings|"skipped: <reason>" }',
-      'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"',
+      'analyzers: { <id>: pass|findings|"skipped: <reason, at most 300 characters>" }',
+      'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"   # the text after the colon at most 300 characters',
       "finding_attempts: <highest number of attempts on one finding>",
-      "not_run_here_jobs: []   # or entries { command: <command as listed>, workflow: <file at the base that defines the job>, job: <job name>, covers: <one line, at most 600 characters: why this job covers the command> }"
+      "not_run_here_jobs: []   # or entries { command: <command as listed, one line, at most 300 characters>, workflow: <file at the base that defines the job, at most 300 characters>, job: <job name, at most 300 characters>, covers: <one line, at most 600 characters: why this job covers the command> }"
     ] : item.type === "research" ? [] : [
       caps.prByStudio === true ? `pr_title: "${id}: <summary, one line, at most 200 characters>"` : "pr: <number>",
       "head_sha: <40-hex sha of the pushed head commit>",
       "tests_run: <number of tests that ran>",
-      "not_run_here: []   # or entries { command: <command>, missing: database|docker|network|service, reason: <error line> }"
+      "not_run_here: []   # or entries { command: <command, one line, at most 300 characters>, missing: database|docker|network|service, reason: <error line, one line, at most 300 characters> }"
     ],
     "lessons: []",
     "questions: []",
     "---",
     "```",
+    "",
+    "Each one-line field holds no line break and stays within its limit (at most 300 characters unless the field says otherwise); one field over its limit rejects the whole report, so shorten an error line to its first line rather than paste a log.",
     "",
     ...item.type === "review" ? [
       "A reviewer opens no pull request: omit pr. reviews names the pull request you reviewed.",
@@ -36401,51 +36404,47 @@ function paneItems(board, queue, ci, extra = {}) {
   }
   return out;
 }
-var clause = (s) => line2(s.split(";")[0]?.trim() ?? s);
 function classify(item, reason) {
   const r = reason.trim();
+  const detail = line2(r);
+  const of = (code, short, say) => ({
+    item,
+    code,
+    reason: short,
+    detail,
+    next: { say }
+  });
   if (r.startsWith("blocked: fix limit reached")) {
-    return {
-      item,
-      code: "fix_limit",
-      reason: clause(r.slice("blocked: ".length)),
-      next: { say: `show ${item}` }
-    };
+    const rounds = /^blocked: (fix limit reached: \d+ review rounds)/.exec(r)?.[1];
+    return of("fix_limit", rounds ?? "fix limit reached", `show ${item}`);
   }
   if (r.startsWith("changes requested")) {
-    return {
-      item,
-      code: "changes_requested",
-      reason: line2(r.split(":")[0] ?? r),
-      next: { say: `start the fix round for ${item}` }
-    };
+    const by = /^changes requested by ([A-Z]+-\d+)/.exec(r)?.[1];
+    return of(
+      "changes_requested",
+      by === void 0 ? "changes requested" : `changes requested by ${by}`,
+      `start the fix round for ${item}`
+    );
   }
   if (r.startsWith("merge failed")) {
-    return {
-      item,
-      code: "merge_failed",
-      reason: clause(r),
-      next: { say: `show why ${item} did not merge` }
-    };
+    return of("merge_failed", "merge failed", `show why ${item} did not merge`);
   }
-  if (r.startsWith("blocked: ")) {
-    return {
-      item,
-      code: "blocked",
-      reason: clause(r.slice("blocked: ".length)),
-      next: { say: `show ${item}` }
-    };
+  if (r.startsWith("blocked: question:")) {
+    return of("question", "crew has a question", `show ${item}`);
   }
-  return { item, code: "other", reason: clause(r), next: { say: `show ${item}` } };
+  if (r.startsWith("blocked: ")) return of("blocked", "blocked", `show ${item}`);
+  return of("other", "needs a decision", `show ${item}`);
 }
 function leadDecisions(tick, board) {
   if (tick === void 0) return [];
-  const done = new Set(
-    board.items.filter((i2) => i2.status === "merged" || i2.status === "dropped").map((i2) => i2.id)
-  );
+  const tickAt = Date.parse(tick.at);
   const out = [];
   for (const n2 of tick.needsLead) {
-    if (done.has(n2.item) || out.some((d) => d.item === n2.item)) continue;
+    if (out.some((d) => d.item === n2.item)) continue;
+    const onBoard = board.items.find((i2) => i2.id === n2.item);
+    if (onBoard?.status === "merged" || onBoard?.status === "dropped") continue;
+    const moved = Date.parse(onBoard?.history.at(-1)?.at ?? "");
+    if (!Number.isNaN(tickAt) && !Number.isNaN(moved) && moved > tickAt) continue;
     out.push(classify(line2(n2.item), n2.reason));
   }
   return out;
@@ -36472,6 +36471,9 @@ function writeTickRecord(root, rec) {
   writeStateFile(root, join26(root, TICK_FILE), `${JSON.stringify(rec, null, 2)}
 `);
 }
+function resolveZone(timezone) {
+  return timezone ?? new Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
 function clockTime(iso, timezone) {
   const at = new Date(iso);
   const format2 = (timeZone) => new Intl.DateTimeFormat("en-GB", {
@@ -36481,9 +36483,9 @@ function clockTime(iso, timezone) {
     hourCycle: "h23"
   }).format(at);
   try {
-    return format2(timezone ?? "UTC");
+    return format2(resolveZone(timezone));
   } catch {
-    return format2("UTC");
+    return format2(void 0);
   }
 }
 
@@ -38225,7 +38227,7 @@ async function runCli(argv, deps) {
         refuseCrew(deps.env);
         if (rest.length > 0) throw new UsageError("tick takes no arguments");
         const out = await tick();
-        if (!out.held.some((h2) => h2.item === "tick") && !out.errors.some((e) => e.phase === "start")) {
+        if (!out.held.some((h2) => h2.item === "tick") && !out.errors.some((e) => e.phase)) {
           try {
             writeTickRecord(await boundStateRoot(), {
               at: ports.clock.now().toISOString(),
@@ -39117,7 +39119,7 @@ function buildSnapshot(root, ownerRoot, board, capacity, queue, now, hold, limit
     mergeMaxBusy: extra.config.ci.capacity.mergeMaxBusy,
     ok: capacity.ok
   };
-  const timezone = extra.ownerConfig.crewLabelLimits.timezone;
+  const timezone = resolveZone(extra.ownerConfig.crewLabelLimits.timezone);
   const tickRecord = readTickRecord(root);
   const items = paneItems(board, queue, ci, {
     ...tickRecord === void 0 ? {} : { tick: tickRecord },

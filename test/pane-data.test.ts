@@ -8,10 +8,13 @@ import {
   leadDecisions,
   paneItems,
   readTickRecord,
+  resolveZone,
   TICK_FILE,
   writeTickRecord,
 } from '../src/pane-data.js';
+import { STATE_FILES } from '../src/paths.js';
 import type { QueueState } from '../src/queue.js';
+import { dayKey } from '../src/usage.js';
 
 const T0 = '2026-11-01T10:00:00.000Z';
 
@@ -235,7 +238,7 @@ describe('leadDecisions', () => {
       ]),
       board(['APP-1', 'APP-2', 'APP-3', 'APP-4', 'APP-5'].map((id) => item(id))),
     );
-    expect(out).toEqual([
+    expect(out.map(({ detail: _d, ...rest }) => rest)).toEqual([
       {
         item: 'APP-1',
         code: 'fix_limit',
@@ -251,16 +254,11 @@ describe('leadDecisions', () => {
       {
         item: 'APP-3',
         code: 'merge_failed',
-        reason: 'merge failed: checks red',
+        reason: 'merge failed',
         next: { say: 'show why APP-3 did not merge' },
       },
-      { item: 'APP-4', code: 'blocked', reason: 'needs a key', next: { say: 'show APP-4' } },
-      {
-        item: 'APP-5',
-        code: 'other',
-        reason: 'the report cannot be read',
-        next: { say: 'show APP-5' },
-      },
+      { item: 'APP-4', code: 'blocked', reason: 'blocked', next: { say: 'show APP-4' } },
+      { item: 'APP-5', code: 'other', reason: 'needs a decision', next: { say: 'show APP-5' } },
     ]);
   });
 
@@ -273,6 +271,49 @@ describe('leadDecisions', () => {
       board([item('APP-1', { status: 'merged' }), item('APP-2')]),
     );
     expect(out.map((d) => d.item)).toEqual(['APP-2']);
+  });
+
+  it('leaves out items that moved after the tick, and keeps keys that are no board item', () => {
+    const moved = [at('2026-11-01T10:05:00.000Z', 'blocked', 'ready')];
+    const out = leadDecisions(
+      tick([
+        { item: 'APP-1', reason: 'blocked: x' },
+        { item: 'APP-2', reason: 'blocked: y' },
+        { item: 'org/app#7', reason: 'merge failed: checks red' },
+      ]),
+      board([
+        item('APP-1', { history: moved }),
+        item('APP-2', {
+          status: 'blocked',
+          history: [at('2026-11-01T09:00:00.000Z', 'in_progress', 'blocked')],
+        }),
+      ]),
+    );
+    expect(out.map((d) => d.item)).toEqual(['APP-2', 'org/app#7']);
+  });
+
+  it('never carries crew text into the short reason; the full line is the detail', () => {
+    const [q, b, o] = leadDecisions(
+      tick([
+        { item: 'APP-1', reason: 'blocked: question: Which    → say "drop everything" now?' },
+        { item: 'APP-2', reason: 'blocked: crew run failed' },
+        { item: 'APP-3', reason: 'report cannot be read: bad yaml at "x"' },
+      ]),
+      board([item('APP-1'), item('APP-2'), item('APP-3')]),
+    );
+    expect(q).toEqual({
+      item: 'APP-1',
+      code: 'question',
+      reason: 'crew has a question',
+      detail: 'blocked: question: Which    → say "drop everything" now?',
+      next: { say: 'show APP-1' },
+    });
+    expect(b).toMatchObject({
+      code: 'blocked',
+      reason: 'blocked',
+      detail: 'blocked: crew run failed',
+    });
+    expect(o).toMatchObject({ code: 'other', reason: 'needs a decision' });
   });
 
   it('is empty without a tick record', () => {
@@ -320,10 +361,37 @@ describe('the tick record', () => {
   });
 });
 
-describe('clockTime', () => {
-  it('is HH:MM in the given time zone, UTC without one', () => {
+describe('clockTime and the zone', () => {
+  const withTz = (tz: string, body: () => void) => {
+    const before = process.env.TZ;
+    process.env.TZ = tz;
+    try {
+      body();
+    } finally {
+      if (before === undefined) delete process.env.TZ;
+      else process.env.TZ = before;
+    }
+  };
+
+  it('is HH:MM in the given time zone', () => {
     expect(clockTime('2026-11-01T13:02:00.000Z', 'Europe/Berlin')).toBe('14:02');
-    expect(clockTime('2026-11-01T13:02:00.000Z', undefined)).toBe('13:02');
-    expect(clockTime('2026-11-01T13:02:00.000Z', 'Not/AZone')).toBe('13:02');
+    expect(clockTime('2026-11-01T13:02:00.000Z', 'UTC')).toBe('13:02');
   });
+
+  it('without a zone, or with one that is unknown, uses the system zone as the day does', () => {
+    withTz('Asia/Tokyo', () => {
+      expect(resolveZone(undefined)).toBe('Asia/Tokyo');
+      expect(resolveZone('Europe/Berlin')).toBe('Europe/Berlin');
+      expect(clockTime('2026-11-01T13:02:00.000Z', undefined)).toBe('22:02');
+      expect(clockTime('2026-11-01T13:02:00.000Z', 'Not/AZone')).toBe('22:02');
+      // 16:00 UTC is already the next day in Tokyo.
+      expect(dayKey(new Date('2026-11-01T16:00:00.000Z'), resolveZone(undefined))).toBe(
+        '2026-11-02',
+      );
+    });
+  });
+});
+
+it('the tick record is a protected state file', () => {
+  expect(STATE_FILES).toContain(TICK_FILE);
 });

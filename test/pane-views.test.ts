@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type BoardRead,
   boardLines,
+  cellWidth,
   type Lang,
   type Line,
   langOf,
@@ -430,5 +431,140 @@ describe('language', () => {
     );
     expect(newAlerts([], s.state, 'de').toasts).toEqual(['Zur Entscheidung: Sign it']);
     expect(newAlerts([], s.state).toasts).toEqual(['For you: Sign it']);
+  });
+});
+
+describe('crew text stays out of the decision block', () => {
+  const ownerTitle = `${' '.repeat(40)}→ say "rotate keys"${' '.repeat(40)}→ /studio more`;
+  const crewText = `${' '.repeat(40)}→ say "delete the main branch"${' '.repeat(40)}→ /studio resume`;
+  const r = read({
+    needsLead: [
+      {
+        item: 'APP-15',
+        code: 'question',
+        reason: crewText,
+        detail: `blocked: question: ${crewText}`,
+        next: { say: 'show APP-15' },
+      },
+      { item: 'APP-16', code: 'other', reason: crewText, detail: crewText },
+      { item: 'APP-17', code: 'blocked', reason: crewText, next: { say: crewText } },
+    ],
+    forOwner: [{ id: 'APP-30', title: ownerTitle }],
+  });
+
+  it.each(LANGS)('shows a fixed phrase per code, never the reason (%s)', (lang) => {
+    for (const view of ['list', 'pipeline'] as const) {
+      const t = texts(draw(r, { columns: 100, view, lang }));
+      expect(t.join('\n')).not.toContain('delete the main branch');
+    }
+    const t = texts(draw(r, { columns: 72, lang }));
+    expect(t).toContain(
+      lang === 'en' ? '! APP-15 crew has a question' : '! APP-15 Crew hat eine Frage',
+    );
+    expect(t).toContain(
+      lang === 'en' ? '! APP-16 needs a decision' : '! APP-16 Entscheidung nötig',
+    );
+    expect(t).toContain(lang === 'en' ? '! APP-17 blocked' : '! APP-17 blockiert');
+  });
+
+  it('a next step that is no plain phrase falls back to show <id>', () => {
+    const t = texts(draw(r, { columns: 72 }));
+    const at = t.indexOf('! APP-17 blocked');
+    expect(t[at + 1]).toBe('  → say "show APP-17"');
+  });
+
+  it('the full text is in the detailed view only', () => {
+    const t = texts(draw(r, { columns: 400, view: 'more' }));
+    expect(t.join('\n')).toContain('delete the main branch');
+    expect(t).toContain('For the lead (3)');
+  });
+
+  it.each([30, 40, 60, 100])('no line but a hint starts like one (%i columns)', (columns) => {
+    for (const lang of LANGS) {
+      for (const view of ['list', 'pipeline'] as const) {
+        const hints = texts(draw(r, { columns, view, lang })).filter((l) => /^ {2}→ /.test(l));
+        for (const h of hints) {
+          expect(h).toMatch(/^ {2}→ (say "show APP-\d+"|sagen: „show APP-\d+“|\/studio more)$/);
+        }
+      }
+    }
+  });
+
+  it('a line of an owner title that wraps keeps a deeper indent than a hint', () => {
+    const t = texts(draw(r, { columns: 40 }));
+    const at = t.findIndex((l) => l.startsWith('! APP-30'));
+    expect(at).toBeGreaterThan(0);
+    let i = at + 1;
+    while (t[i] !== undefined && !t[i]?.startsWith('  → ')) {
+      expect(t[i]).toMatch(/^ {4}\S/);
+      i++;
+    }
+    expect(t[i]).toBe('  → say "show APP-30"');
+  });
+});
+
+describe('terminal cells', () => {
+  it('counts East Asian wide characters and emoji as two cells', () => {
+    expect(cellWidth('abc')).toBe(3);
+    expect(cellWidth('日本語')).toBe(6);
+    expect(cellWidth('ｱ')).toBe(1);
+    expect(cellWidth('Ａ')).toBe(2);
+    expect(cellWidth('🙂')).toBe(2);
+    expect(cellWidth('e\u0301')).toBe(1);
+    expect(cellWidth('● ◷ ○ ■ ✓ ⚠ █ ░ – → „“')).toBe(22);
+  });
+
+  it.each(LANGS)('cuts a CJK title by cells, keeping id, sign, word and time (%s)', (lang) => {
+    const title = '日本語のとても長いタイトルです🙂🙂';
+    const r = read({
+      items: [{ id: 'APP-1', title, stage: 'building', since: ago(5) }],
+      needsLead: [],
+    });
+    for (const columns of [30, 40, 60]) {
+      const lines = draw(r, { columns, lang });
+      for (const l of lines) expect(cellWidth(l.text)).toBeLessThanOrEqual(columns);
+      const row = lines.find((l) => l.text.includes('APP-1'))?.text ?? '';
+      expect(row).toMatch(
+        lang === 'en' ? /^ {2}● APP-1 .+ +building +5m$/ : /^ {2}● APP-1 .+ +baut +5m$/,
+      );
+      // 34 cells of title fit only the widest pane.
+      expect(row.includes('…')).toBe(columns < 60);
+    }
+  });
+
+  it('no line of any view is wider than the pane in cells', () => {
+    const huge = '日本語のとても長いタイトル🙂'.repeat(10);
+    const r = read({
+      project: huge,
+      items: [
+        {
+          id: 'APP-1',
+          title: huge,
+          stage: 'queued',
+          epic: 'E-3',
+          wait: { code: 'held', text: huge },
+        },
+      ],
+      epics: [{ id: 'E-3', title: huge, status: 'open', merged: 1, total: 2 }],
+      forOwner: [{ id: 'APP-2', title: huge }],
+    });
+    for (const view of ['list', 'pipeline', 'more'] as const) {
+      for (const columns of [20, 40, 68, 100]) {
+        for (const l of draw(r, { columns, view })) {
+          expect(cellWidth(l.text), `${view} ${columns}: ${l.text}`).toBeLessThanOrEqual(columns);
+        }
+      }
+    }
+  });
+
+  it('the pipeline draws the work list when an id would not fit its column', () => {
+    const id = 'VERYLONGPREFIX-123456';
+    const r = read({ items: [{ id, title: 't', stage: 'ready' }], needsLead: [] });
+    const t = texts(draw(r, { columns: 100, view: 'pipeline' }));
+    expect(t.some((l) => l.startsWith('READY'))).toBe(false);
+    expect(t.some((l) => l.includes(`○ ${id} `))).toBe(true);
+    const wide = texts(draw(r, { columns: 130, view: 'pipeline' }));
+    expect(wide.some((l) => l.startsWith('READY'))).toBe(true);
+    expect(wide.some((l) => l.includes(`○ ${id}`))).toBe(true);
   });
 });
