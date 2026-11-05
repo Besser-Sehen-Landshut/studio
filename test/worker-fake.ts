@@ -76,6 +76,7 @@ export function fakeGitHub(now: () => Date) {
         title,
         body,
         author: login,
+        authorId: idOf(login),
         edited: false,
         open: true,
         labels,
@@ -83,6 +84,11 @@ export function fakeGitHub(now: () => Date) {
       });
       calls.push(`${login} open #${n}`);
       return n;
+    },
+    async lockOffer(_repo, n) {
+      const i = issues.get(n);
+      if (i) i.locked = true;
+      calls.push(`${login} lock #${n}`);
     },
     async closeOffer(_repo, n, comment) {
       const i = issues.get(n);
@@ -127,6 +133,12 @@ export function fakeGitHub(now: () => Date) {
       refs.set(item, sha);
       calls.push(`${login} claim ${item}: ${o.message.split('\n')[0]}`);
       return { ok: true, sha };
+    },
+    async resetClaim(_repo, item, o) {
+      if (refs.get(item) !== o.from) return false;
+      refs.set(item, o.to);
+      calls.push(`${login} reset claim ${item}`);
+      return true;
     },
     async claimFile(_repo, sha, path) {
       return commits.get(sha)?.files[path];

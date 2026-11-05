@@ -32,6 +32,8 @@ export interface SeenClaim {
   at: string;
   /** The commit that started this attempt, once proven: the next walk stops at this tip. */
   anchor?: string;
+  /** Seen, but its comment was not there yet: the lead waits a short grace for it. */
+  unproven?: true;
   pr?: number;
 }
 

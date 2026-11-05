@@ -79,6 +79,22 @@ Nothing but GitHub is shared between the machines. Not tagged yet; the maintaine
   claim state, attempt and last heartbeat); the pane shows the wait code `worker` in English and German.
 - `studio stop <id> --requeue` on an item on a worker withdraws the offer (the worker stops its crew) and gives
   the item its one relaunch; `studio drop` withdraws it too.
+- Verification fixes:
+  - The lead locks an offer it reuses, too, not only one it opens.
+  - Transient launch refusals (account block, pause, parked or full label) are `HeldError`: a worker holds and
+    tries later instead of exiting. An offer let go of after a held launch (5 minutes) or a refused one (an
+    hour) is not claimed, nor commented, again in that time.
+  - A `done` or `released` commit is announced durably: the commit waits in `worker.json`, is tried again with
+    backoff on later passes (looking for its own comment first) until the comment exists.
+  - Giving up a takeover resets the ref to the previous attempt's tip, only while it still is the worker's own
+    commit, so the attempt count is not used up. The lead gives a claim commit about 2 minutes for its comment
+    (ref written, comment not there yet; done written, not announced yet) before it goes to `needsLead`.
+  - The whole brief comes from one `origin/main` commit: the project rules and the crew's start use the SHA the
+    worker pinned.
+  - The worker tells the lead by numeric id (`workers.self.lead_id`), compares logins without case, reads the
+    crew token's name from the pinned `studio.yaml`, keeps the claim beating (and the worker lock fresh)
+    during the push and the pull request, and holds its lock for up to three hours.
+  - WSL interop counts as on when either `WSLInterop` or `WSLInterop-late` is enabled.
 
 ### Changed
 

@@ -168,8 +168,11 @@ export async function prepareCheckout(
   ports: Ports,
   /** The remote branch the item branch starts from: `main`, or `studio/<id>` to go on with it. */
   from: string = ITEM_BASE,
+  /** A commit of `origin/main` to start from instead of its tip: the whole brief comes from one SHA. */
+  pin?: string,
 ): Promise<{ path: string; branch: string }> {
   assertItemId(item.id);
+  if (pin !== undefined && !FULL_SHA.test(pin)) throw new Error('invalid pinned commit');
   if (from !== ITEM_BASE && from !== `studio/${item.id}`) {
     throw new Error(`invalid start branch for ${item.id}: ${JSON.stringify(from)}`);
   }
@@ -188,7 +191,12 @@ export async function prepareCheckout(
   chmodSync(path, 0o700);
   // Still a fresh clone no crew has run in, so git may run here (rule D4).
   await ports.git.run(path, ['remote', 'set-url', 'origin', crewOrigin]);
-  await ports.git.run(path, ['checkout', '-b', branch, `origin/${from}`]);
+  await ports.git.run(path, [
+    'checkout',
+    '-b',
+    branch,
+    pin !== undefined && from === ITEM_BASE ? pin : `origin/${from}`,
+  ]);
   return { path, branch };
 }
 
@@ -390,21 +398,33 @@ export interface BriefRules {
  * plain file (mode 100644, a blob), is larger than 256 KiB or cannot be read exactly refuses.
  * Writes nothing; the caller stores the result with `writePinnedRules`.
  */
-export async function readPinnedRules(projectDir: string, ports: Ports): Promise<PinnedRules> {
-  try {
-    await ports.git.run(projectDir, [
-      'fetch',
-      'origin',
-      '+refs/heads/main:refs/remotes/origin/main',
-    ]);
-  } catch (e) {
-    throw new Error(
-      `refusing to launch: cannot fetch origin main in the project checkout (${(e as Error).message})`,
-    );
+export async function readPinnedRules(
+  projectDir: string,
+  ports: Ports,
+  /** An already pinned `origin/main` commit: nothing is fetched, the rules come from this SHA. */
+  pin?: string,
+): Promise<PinnedRules> {
+  if (pin !== undefined && !FULL_SHA.test(pin)) throw new Error('invalid pinned commit');
+  if (pin === undefined) {
+    try {
+      await ports.git.run(projectDir, [
+        'fetch',
+        'origin',
+        '+refs/heads/main:refs/remotes/origin/main',
+      ]);
+    } catch (e) {
+      throw new Error(
+        `refusing to launch: cannot fetch origin main in the project checkout (${(e as Error).message})`,
+      );
+    }
   }
   const g = (args: string[]) => ports.git.run(projectDir, ['--no-replace-objects', ...args]);
-  const sha = (await g(['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'])).trim();
-  if (!FULL_SHA.test(sha)) throw new Error('refusing to launch: origin/main is not a commit SHA');
+  const sha = (
+    await g(['rev-parse', '--verify', `${pin ?? 'refs/remotes/origin/main'}^{commit}`])
+  ).trim();
+  if (!FULL_SHA.test(sha) || (pin !== undefined && sha !== pin)) {
+    throw new Error('refusing to launch: origin/main is not a commit SHA');
+  }
   const tree = await g(['ls-tree', sha, ...RULE_FILES]);
   const files: PinnedRules['files'] = [];
   for (const line of tree.split('\n').filter((l) => l !== '')) {
@@ -972,12 +992,12 @@ function updateCrewFile(
 
 function refuseIfBlocked(ownerRoot: string): void {
   const line = blockHold(ownerRoot);
-  if (line !== undefined) throw new Error(line);
+  if (line !== undefined) throw new HeldError(line);
 }
 
 /** A pause of the owner refuses a launch; a pause file that cannot be read pauses too. */
 function refuseIfPaused(stateRoot: string): void {
-  if (readPause(stateRoot).paused) throw new Error(PAUSED_LINE);
+  if (readPause(stateRoot).paused) throw new HeldError(PAUSED_LINE);
 }
 
 export type CrewState = 'working' | 'waiting' | 'blocked' | 'stopped' | 'crashed' | 'done';
@@ -1020,6 +1040,11 @@ export interface WorkerLaunch {
    * them: the role text and the lessons of the brief come from there, never the working tree.
    */
   contentDir?: string;
+  /**
+   * The `origin/main` commit the worker pinned: the project rules and the crew's start come from
+   * it, so the whole brief is one SHA.
+   */
+  sha?: string;
 }
 
 export async function launchCrew(
@@ -1196,11 +1221,11 @@ async function launchCrewLocked(
   const usage = labelUsage({ ownerRoot, ownerConfig, ports });
   if (!usage.ok) throw new Error(USAGE_UNREADABLE);
   const refuseFull = (): never => {
-    throw new Error('credential limit: the label is at its configured parallel or daily limit');
+    throw new HeldError('credential limit: the label is at its configured parallel or daily limit');
   };
   // The project rules, read by Studio from the owner's checkout at a verified origin/main SHA. A
   // failed fetch or an odd file refuses here; the crew clone is never asked.
-  const pinned = await readPinnedRules(projectDir, ports);
+  const pinned = await readPinnedRules(projectDir, ports, worker?.sha);
   // The credential, before the first side effect. Provider or not, the value stays in this function
   // and reaches only the environment of the spawned process.
   let label = DEFAULT_LABEL;
@@ -1214,11 +1239,11 @@ async function launchCrewLocked(
     oauthToken = account.token;
     providerConfigDir = checkProviderConfigDir(crewDirOrRefuse(owner), owner);
     const parkedHere = parks[label];
-    if (parkedHere) throw new Error(allParkedLine(parkedHere.parkedUntil));
+    if (parkedHere) throw new HeldError(allParkedLine(parkedHere.parkedUntil));
     if (!(usage.remaining(label) > 0)) refuseFull();
   } else if (command === undefined) {
     if (parks[DEFAULT_LABEL]) {
-      throw new Error(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
+      throw new HeldError(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
     }
     if (!(usage.remaining(DEFAULT_LABEL) > 0)) refuseFull();
   } else {
@@ -1231,8 +1256,8 @@ async function launchCrewLocked(
       owner,
     );
     if (got === undefined) {
-      if (usage.full.length > 0) throw new Error(LABEL_FULL_LINE);
-      if (parked.length > 0) throw new Error(allParkedLine(earliestReset(parks)));
+      if (usage.full.length > 0) throw new HeldError(LABEL_FULL_LINE);
+      if (parked.length > 0) throw new HeldError(allParkedLine(earliestReset(parks)));
       throw new Error('credential provider: returned nothing while no label is parked');
     }
     if (Object.hasOwn(parks, got.label))
@@ -1336,7 +1361,7 @@ async function launchCrewLocked(
     if (!again.ok) throw new Error(`${join(ownerRoot, 'limits.json')} is unreadable; refusing`);
     const parkedNow = activeParks(again.labels, ports.clock.now());
     if (Object.hasOwn(parkedNow, label)) {
-      throw new Error(allParkedLine(parkedNow[label]?.parkedUntil));
+      throw new HeldError(allParkedLine(parkedNow[label]?.parkedUntil));
     }
     const locked = labelUsage({ ownerRoot, ownerConfig, ports });
     if (!locked.ok) throw new Error(USAGE_UNREADABLE);
@@ -1345,7 +1370,7 @@ async function launchCrewLocked(
   await recheck();
   // The clone can take minutes: beat before and after it, so the lock never looks silent.
   lock.heartbeat(ports.clock.now());
-  const wt = await prepareCheckout(stateRoot, projectDir, item, ports, worker?.from);
+  const wt = await prepareCheckout(stateRoot, projectDir, item, ports, worker?.from, worker?.sha);
   lock.heartbeat(ports.clock.now());
   removeOldReport(stateRoot, wt.path, item.id);
   // Isolated HOME, recreated from scratch on every launch: only a git identity and a credential

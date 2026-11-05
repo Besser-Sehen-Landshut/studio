@@ -169,9 +169,9 @@ describe('ghHub', () => {
                   title: 'Studio offer APP-1 for windows',
                   body: 'b',
                   state: 'OPEN',
-                  author: { login: 'lead-user' },
-                  editor: null,
-                  lastEditedAt: null,
+                  author: { login: 'lead-user', databaseId: 77 },
+                  editor: { login: 'Other', databaseId: 78 },
+                  lastEditedAt: '2026-01-01T00:00:00Z',
                 },
                 { number: 'x' },
               ],
@@ -186,7 +186,10 @@ describe('ghHub', () => {
         title: 'Studio offer APP-1 for windows',
         body: 'b',
         author: 'lead-user',
-        edited: false,
+        authorId: 77,
+        editor: 'Other',
+        editorId: 78,
+        edited: true,
         open: true,
       },
     ]);
@@ -216,13 +219,37 @@ describe('ghHub', () => {
     ]);
   });
 
+  it("locks an existing offer, and puts a claim ref back only while it is the caller's own", async () => {
+    const a = 'a'.repeat(40);
+    const b = 'b'.repeat(40);
+    const { gh, calls } = recordingGh((args) =>
+      args[3] === 'repos/org/app/git/ref/studio/claims/APP-1'
+        ? { stdout: JSON.stringify({ object: { sha: a } }) }
+        : {},
+    );
+    const hub = ghHub(gh);
+    await hub.lockOffer('org/app', 30);
+    expect(calls.at(-1)?.args.slice(0, 4).join(' ')).toBe(
+      'api -X PUT repos/org/app/issues/30/lock',
+    );
+    // The ref moved on: nothing is rewound.
+    expect(await hub.resetClaim('org/app', 'APP-1', { from: b, to: a })).toBe(false);
+    expect(calls.some((c) => c.args.includes('PATCH'))).toBe(false);
+    expect(await hub.resetClaim('org/app', 'APP-1', { from: a, to: b })).toBe(true);
+    const patch = calls.at(-1);
+    expect(patch?.args.slice(0, 4).join(' ')).toBe(
+      'api -X PATCH repos/org/app/git/refs/studio/claims/APP-1',
+    );
+    expect(patch?.body).toEqual({ sha: b, force: true });
+  });
+
   it('pages through every open offer', async () => {
     const node = (n: number) => ({
       number: n,
       title: `t${n}`,
       body: 'b',
       state: 'OPEN',
-      author: { login: 'lead-user' },
+      author: { login: 'lead-user', databaseId: 77 },
       editor: null,
       lastEditedAt: null,
     });

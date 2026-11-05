@@ -65,7 +65,7 @@ import type { ClaimCommit, GitHubUser, WorkerHub } from './worker-hub.js';
 export const WORKER_FILE = 'worker.json';
 export const WORKER_LOCK = 'worker.lock';
 /** A step can launch a crew, which clones: the lock stays valid well past that. */
-const WORKER_LOCK_STALE_MS = 30 * 60_000;
+const WORKER_LOCK_STALE_MS = 3 * 60 * 60_000;
 /** How far a restart looks back for heartbeats of its own it wrote but did not save. */
 const MAX_OWN_BEATS = 20;
 
@@ -88,6 +88,26 @@ export interface Current {
   nonce?: string;
   /** Where the offer and the claim live, so following needs no fresh config. */
   primaryRepo?: string;
+  /** The tip before this worker's takeover: giving the claim up puts the ref back there. */
+  prevSha?: string;
+}
+
+/** A `done` or `released` claim commit whose announcing comment is not there yet. */
+export interface PendingAnnounce {
+  item: string;
+  offer: number;
+  sha: string;
+  nonce: string;
+  repo: string;
+  tries: number;
+  /** Not before this time on this machine's clock. */
+  nextAt: string;
+}
+
+/** An offer this worker let go of: it does not claim it again before `until`. */
+export interface SkippedOffer {
+  offer: number;
+  until: string;
 }
 
 export interface WorkerState {
@@ -98,6 +118,10 @@ export interface WorkerState {
    * runs from there, never from a commit date the writer could set.
    */
   seen?: Record<string, { sha: string; at: string }>;
+  /** Claim commits still to be announced; retried with backoff until the comment exists. */
+  pending?: PendingAnnounce;
+  /** Offers let go of after a refused or held launch: no second claim comment for them for now. */
+  skip?: Record<string, SkippedOffer>;
 }
 
 export interface WorkerContext {
@@ -120,6 +144,8 @@ export interface WorkerContext {
   /** Read again before every claim: interop or mounts can change while the worker runs. */
   platform: () => WorkerPlatform;
   log: (line: string) => void;
+  /** Milliseconds between heartbeats during long git calls; a third of the lease by default. */
+  beatMs?: number;
 }
 
 export type StepKind =
@@ -162,24 +188,38 @@ function readWorkerState(stateRoot: string, label: string): WorkerState {
     );
   }
   const seen = s.seen !== null && typeof s.seen === 'object' ? s.seen : undefined;
+  const pending =
+    s.pending !== null && typeof s.pending === 'object' && typeof s.pending.sha === 'string'
+      ? s.pending
+      : undefined;
+  const skip = s.skip !== null && typeof s.skip === 'object' ? s.skip : undefined;
   return {
     label,
     ...(s.current === undefined ? {} : { current: s.current }),
     ...(seen === undefined ? {} : { seen }),
+    ...(pending === undefined ? {} : { pending }),
+    ...(skip === undefined ? {} : { skip }),
   };
 }
 
-/** Writes the state; what was seen of other claims stays unless `s` brings its own. */
+/**
+ * Writes the state. What was seen of other claims, the commit still to be announced and the
+ * offers let go of stay as they are on disk unless `s` names them (an explicit `undefined` clears).
+ */
 function saveWorkerState(stateRoot: string, s: WorkerState): void {
-  let seen = s.seen;
-  if (seen === undefined) {
-    try {
-      seen = readWorkerState(stateRoot, s.label).seen;
-    } catch {
-      seen = undefined;
-    }
+  let disk: WorkerState | undefined;
+  try {
+    disk = readWorkerState(stateRoot, s.label);
+  } catch {
+    disk = undefined;
   }
-  const out = { ...s, ...(seen === undefined ? {} : { seen }) };
+  const out: WorkerState = { ...s };
+  for (const k of ['seen', 'pending', 'skip'] as const) {
+    if (!(k in s)) {
+      const v = disk?.[k];
+      if (v !== undefined) (out as unknown as Record<string, unknown>)[k] = v;
+    } else if (s[k] === undefined) delete out[k];
+  }
   writeStateFile(stateRoot, join(stateRoot, WORKER_FILE), `${JSON.stringify(out, null, 2)}\n`);
 }
 
@@ -188,16 +228,20 @@ function saveWorkerState(stateRoot: string, s: WorkerState): void {
  * a stale or edited working tree.
  */
 async function mainConfig(c: WorkerContext): Promise<{ config: StudioConfig; sha: string }> {
+  return pinnedMain(c.project, c.ports);
+}
+
+/** studio.yaml at a freshly fetched `origin/main` of `project`, and that commit. */
+export async function pinnedMain(
+  project: string,
+  ports: Ports,
+): Promise<{ config: StudioConfig; sha: string }> {
   try {
-    await c.ports.git.run(c.project, [
-      'fetch',
-      'origin',
-      '+refs/heads/main:refs/remotes/origin/main',
-    ]);
+    await ports.git.run(project, ['fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main']);
   } catch {
     throw new Error('cannot fetch origin main in the worker checkout');
   }
-  const g = (args: string[]) => c.ports.git.run(c.project, ['--no-replace-objects', ...args]);
+  const g = (args: string[]) => ports.git.run(project, ['--no-replace-objects', ...args]);
   const sha = (await g(['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'])).trim();
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('origin/main is not a commit SHA');
   const text = await g(['show', `${sha}:.studio/studio.yaml`]);
@@ -273,6 +317,9 @@ interface Ready {
   deny: EnforcedDeny;
   me: GitHubUser;
   leaseMinutes: number;
+  /** The pinned `origin/main` commit the whole brief comes from. */
+  sha: string;
+  leadId: number;
 }
 
 /**
@@ -300,7 +347,7 @@ async function readiness(
   }
   const { config, sha } = await mainConfig(c);
   const me = await c.hub.user();
-  if (me.login.toLowerCase() === self.lead.toLowerCase()) {
+  if (me.id === self.leadId || me.login.toLowerCase() === self.lead.toLowerCase()) {
     return {
       ok: false,
       kind: 'refused',
@@ -344,7 +391,16 @@ async function readiness(
     return { ok: false, kind: 'held', line: 'paused on this machine: nothing is claimed' };
   }
   const contentDir = await pinnedContent(c, stateRoot, sha);
-  return { ok: true, config, contentDir, deny, me, leaseMinutes: self.leaseMinutes };
+  return {
+    ok: true,
+    config,
+    contentDir,
+    deny,
+    me,
+    leaseMinutes: self.leaseMinutes,
+    sha,
+    leadId: self.leadId,
+  };
 }
 
 /**
@@ -363,10 +419,13 @@ export async function workerStep(c: WorkerContext): Promise<StepResult> {
   });
   if (!lock) return { kind: 'held', line: 'another worker process runs for this checkout' };
   try {
+    const touch = () => lock.heartbeat(c.ports.clock.now());
+    // A done or released commit that was not announced yet is announced first, whatever else.
+    await flushPending(c, stateRoot, false);
     const state = readWorkerState(stateRoot, c.label);
     if (state.current !== undefined) {
       const repo = state.current.primaryRepo ?? (await mainConfig(c)).config.primaryRepo;
-      return await followCurrent(c, stateRoot, state, state.current, repo);
+      return await followCurrent(c, stateRoot, state, state.current, repo, touch);
     }
     const ready = await readiness(c, stateRoot);
     if (!ready.ok) return { kind: ready.kind, line: ready.line };
@@ -378,7 +437,12 @@ export async function workerStep(c: WorkerContext): Promise<StepResult> {
   }
 }
 
-/** Takes a claim this worker won back: the ref goes, no `released` is written, the item stays offered. */
+/**
+ * Takes a claim this worker won back; no `released` is written, the item stays offered. A first
+ * attempt's ref is deleted. A takeover only undoes itself: the ref goes back to the tip before it
+ * (and only while it still is this worker's commit), so the first attempt stays as it was and the
+ * attempt count is not used up.
+ */
 async function giveUp(
   c: WorkerContext,
   stateRoot: string,
@@ -386,12 +450,41 @@ async function giveUp(
   cur: Current,
 ): Promise<void> {
   try {
-    const tip = await c.hub.readClaim(repo, cur.item.id);
-    if (tip?.sha === cur.claimSha) await c.hub.deleteClaim(repo, cur.item.id);
+    if (cur.prevSha !== undefined) {
+      const done = await c.hub.resetClaim(repo, cur.item.id, {
+        from: cur.claimSha,
+        to: cur.prevSha,
+      });
+      if (!done) c.log(`${cur.item.id}: the claim moved meanwhile; left as it is`);
+    } else {
+      const tip = await c.hub.readClaim(repo, cur.item.id);
+      if (tip?.sha === cur.claimSha) await c.hub.deleteClaim(repo, cur.item.id);
+    }
   } catch (e) {
     c.log(`${cur.item.id}: could not remove its own claim: ${(e as Error).message}`);
   }
   saveWorkerState(stateRoot, { label: c.label });
+}
+
+/** Offers let go of stay unclaimed for this long: a held launch soon, a refused one for an hour. */
+const SKIP_HELD_MS = 5 * 60_000;
+const SKIP_REFUSED_MS = 60 * 60_000;
+
+function skipOffer(
+  c: WorkerContext,
+  stateRoot: string,
+  state: WorkerState,
+  id: string,
+  offer: number,
+  ms: number,
+): void {
+  const now = c.ports.clock.now();
+  const live = Object.fromEntries(
+    Object.entries(state.skip ?? {}).filter(([, v]) => Date.parse(v.until) > now.getTime()),
+  );
+  live[id] = { offer, until: new Date(now.getTime() + ms).toISOString() };
+  state.skip = live;
+  saveWorkerState(stateRoot, { label: c.label, skip: live });
 }
 
 async function claimNext(
@@ -414,14 +507,25 @@ async function claimNext(
   };
   const keepSeen = () => saveWorkerState(stateRoot, { label: c.label, seen });
   for (const issue of await c.hub.listOffers(repo)) {
-    // Only the lead's own offers count, and only as the lead wrote them.
-    if (issue.author !== lead) continue;
-    if (issue.edited && issue.editor !== lead) {
+    // Only the lead's own offers count, and only as the lead wrote them. The lead is told by its
+    // numeric id; a login can be renamed and reused, and is compared without case where it stays.
+    if (issue.authorId !== ready.leadId) continue;
+    if (issue.edited && issue.editorId !== ready.leadId) {
       c.log(`skipped offer #${issue.number}: edited by someone other than the lead`);
       continue;
     }
     const offer = parseOffer(issue.title, issue.body);
-    if (offer === undefined || offer.label !== c.label || offer.lead !== lead) continue;
+    if (offer === undefined || offer.label !== c.label) continue;
+    if (offer.lead.toLowerCase() !== lead.toLowerCase()) continue;
+    // Let go of a moment ago (a refused or held launch): no second claim comment for it yet.
+    const skipped = state.skip?.[offer.item.id];
+    if (
+      skipped !== undefined &&
+      skipped.offer === issue.number &&
+      Date.parse(skipped.until) > now.getTime()
+    ) {
+      continue;
+    }
     const item = offer.item;
     if (item.repo !== config.primaryRepo && !config.repos.includes(item.repo)) continue;
     const existing = await c.hub.readClaim(repo, item.id);
@@ -463,6 +567,7 @@ async function claimNext(
       launched: false,
       nonce: offer.nonce,
       primaryRepo: repo,
+      ...(parent === undefined ? {} : { prevSha: parent }),
     };
     saveWorkerState(stateRoot, { label: c.label, current });
     // Withdrawn while this worker claimed it: the claim goes again.
@@ -478,6 +583,7 @@ async function claimNext(
     } catch (e) {
       c.log(`${item.id}: the claim comment failed: ${(e as Error).message}`);
       await giveUp(c, stateRoot, repo, current);
+      skipOffer(c, stateRoot, state, item.id, issue.number, SKIP_HELD_MS);
       return { kind: 'held', item: item.id, line: `${item.id}: the claim comment failed; let go` };
     }
     // A fix round or a takeover goes on with what an earlier run pushed.
@@ -490,12 +596,21 @@ async function claimNext(
         deny: ready.deny,
         from,
         contentDir: ready.contentDir,
+        sha: ready.sha,
         ...(c.crewPushes ? {} : { noToken: true }),
       });
     } catch (e) {
       // Nothing ran: the claim goes, the offer stays for this or another worker.
       await giveUp(c, stateRoot, repo, current);
       const why = (e as Error).message;
+      skipOffer(
+        c,
+        stateRoot,
+        state,
+        item.id,
+        issue.number,
+        e instanceof HeldError ? SKIP_HELD_MS : SKIP_REFUSED_MS,
+      );
       if (e instanceof HeldError) {
         return { kind: 'held', item: item.id, line: `${item.id}: not now (${why}); let go` };
       }
@@ -544,22 +659,73 @@ const claimOf = (label: string, cur: Current, state: Claim['state']): Claim => (
   leaseMinutes: cur.leaseMinutes,
 });
 
+/** Backoff between tries to announce a commit: 30 s, doubling, at most 10 minutes. */
+const announceDelayMs = (tries: number): number => Math.min(30_000 * 2 ** tries, 600_000);
+
 /**
  * Names a state-changing claim commit (`done`, `released`) in a comment, as the claim itself was:
- * the lead counts such a tip only when the proven claimant announced it. Tried twice.
+ * the lead counts such a tip only when the proven claimant named it. The commit is stored in
+ * `worker.json` first and tried at once; whatever fails is tried again on later passes with
+ * backoff, until the comment exists.
  */
-async function announce(c: WorkerContext, repo: string, cur: Current, sha: string): Promise<void> {
+async function announce(
+  c: WorkerContext,
+  stateRoot: string,
+  repo: string,
+  cur: Current,
+  sha: string,
+): Promise<void> {
   if (cur.nonce === undefined) {
     c.log(`${cur.item.id}: no nonce on record; the lead will not count ${sha.slice(0, 12)}`);
     return;
   }
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      await c.hub.commentOffer(repo, cur.offer, claimComment(sha, cur.nonce));
-      return;
-    } catch (e) {
-      c.log(`${cur.item.id}: announcing ${sha.slice(0, 12)} failed: ${(e as Error).message}`);
-    }
+  const pending: PendingAnnounce = {
+    item: cur.item.id,
+    offer: cur.offer,
+    sha,
+    nonce: cur.nonce,
+    repo,
+    tries: 0,
+    nextAt: c.ports.clock.now().toISOString(),
+  };
+  saveWorkerState(stateRoot, { label: c.label, pending });
+  await flushPending(c, stateRoot, true);
+}
+
+/** Tries the stored announcement once (when due, or `force`); clears it once the comment exists. */
+async function flushPending(c: WorkerContext, stateRoot: string, force: boolean): Promise<void> {
+  const state = readWorkerState(stateRoot, c.label);
+  const p = state.pending;
+  if (p === undefined) return;
+  const now = c.ports.clock.now();
+  if (!force && now.getTime() < Date.parse(p.nextAt)) return;
+  const text = claimComment(p.sha, p.nonce);
+  try {
+    // An earlier try may have posted it and lost the answer: look before posting again.
+    const exists =
+      p.tries > 0 &&
+      (await (async () => {
+        const me = await c.hub.user();
+        const read = await c.hub.offerComments(p.repo, p.offer);
+        return read.comments.some((x) => x.userId === me.id && x.body === text);
+      })());
+    if (!exists) await c.hub.commentOffer(p.repo, p.offer, text);
+    saveWorkerState(stateRoot, {
+      label: c.label,
+      ...(state.current === undefined ? {} : { current: state.current }),
+      pending: undefined,
+    });
+  } catch (e) {
+    c.log(`${p.item}: announcing ${p.sha.slice(0, 12)} failed: ${(e as Error).message}`);
+    saveWorkerState(stateRoot, {
+      label: c.label,
+      ...(state.current === undefined ? {} : { current: state.current }),
+      pending: {
+        ...p,
+        tries: p.tries + 1,
+        nextAt: new Date(now.getTime() + announceDelayMs(p.tries)).toISOString(),
+      },
+    });
   }
 }
 
@@ -580,7 +746,7 @@ async function release(
   };
   const wrote = await writeClaim(c, repo, claim, cur.claimSha);
   if (!wrote.ok) c.log(`${cur.item.id}: the claim moved meanwhile; not released`);
-  else await announce(c, repo, cur, wrote.sha);
+  else await announce(c, stateRoot, repo, cur, wrote.sha);
   saveWorkerState(stateRoot, { label: state.label });
 }
 
@@ -651,6 +817,7 @@ async function followCurrent(
   state: WorkerState,
   held: Current,
   repo: string,
+  touch: () => void,
 ): Promise<StepResult> {
   const id = held.item.id;
   const cur = await stillMine(c, stateRoot, state, held, repo);
@@ -711,7 +878,63 @@ async function followCurrent(
     await giveUp(c, stateRoot, repo, cur);
     return { kind: 'held', item: id, line: `${id}: no crew ran for the claim; let go` };
   }
-  return finish(c, stateRoot, state, cur, repo, rec);
+  return finish(c, stateRoot, state, cur, repo, rec, touch);
+}
+
+/** The claim was lost while a long call ran: nothing more is written, the crew has ended. */
+function lostDuring(
+  c: WorkerContext,
+  stateRoot: string,
+  state: WorkerState,
+  id: string,
+): StepResult {
+  saveWorkerState(stateRoot, { label: state.label });
+  c.log(`${id}: the heartbeat lost the claim during a long call`);
+  return { kind: 'lost', item: id, line: `${id}: the claim was lost before the report went out` };
+}
+
+/**
+ * Runs `fn` while the claim keeps beating (a heartbeat commit every third of the lease) and the
+ * worker lock stays fresh, so a long git call can never let the lease run out. Returns the
+ * claim as the beats left it; `lost` when a beat found the claim moved.
+ */
+async function withBeats(
+  c: WorkerContext,
+  stateRoot: string,
+  state: WorkerState,
+  cur: Current,
+  repo: string,
+  touch: () => void,
+  fn: () => Promise<void>,
+): Promise<{ cur: Current; lost: boolean }> {
+  let now = cur;
+  let lost = false;
+  let inflight: Promise<void> = Promise.resolve();
+  const every = c.beatMs ?? Math.max(1000, (cur.leaseMinutes * 60_000) / 3);
+  const timer = setInterval(() => {
+    inflight = inflight.then(async () => {
+      if (lost) return;
+      try {
+        touch();
+        const wrote = await writeClaim(c, repo, claimOf(state.label, now, 'alive'), now.claimSha);
+        if (!wrote.ok) {
+          lost = true;
+          return;
+        }
+        now = { ...now, claimSha: wrote.sha, lastBeat: c.ports.clock.now().toISOString() };
+        saveWorkerState(stateRoot, { label: state.label, current: now });
+      } catch (e) {
+        c.log(`${cur.item.id}: heartbeat failed: ${(e as Error).message}`);
+      }
+    });
+  }, every);
+  try {
+    await fn();
+  } finally {
+    clearInterval(timer);
+    await inflight;
+  }
+  return { cur: now, lost };
 }
 
 /** The crew ended: read its report, open its pull request, hand both back on the claim. */
@@ -719,10 +942,13 @@ async function finish(
   c: WorkerContext,
   stateRoot: string,
   state: WorkerState,
-  cur: Current,
+  held: Current,
   repo: string,
   rec: { startedAt: string; logStart?: number; label?: string },
+  touch: () => void,
 ): Promise<StepResult> {
+  // Long git calls beat the claim; `cur` follows the claim commit they wrote.
+  let cur = held;
   const id = cur.item.id;
   const from = typeof rec.logStart === 'number' && rec.logStart >= 0 ? rec.logStart : 0;
   const usage = runUsageSince(stateRoot, id, from);
@@ -768,12 +994,16 @@ async function finish(
     if (!c.crewPushes) {
       // The crew had no token: the worker pushes its branch, with its own identity.
       let problem: string | undefined;
-      try {
-        problem = await pushForCrew(c, stateRoot, cur.item, report.headSha ?? '');
-      } catch (e) {
-        c.log(`${id}: ${(e as Error).message}`);
-        problem = 'the worker could not push the branch';
-      }
+      const beat = await withBeats(c, stateRoot, state, cur, repo, touch, async () => {
+        try {
+          problem = await pushForCrew(c, stateRoot, cur.item, report.headSha ?? '');
+        } catch (e) {
+          c.log(`${id}: ${(e as Error).message}`);
+          problem = 'the worker could not push the branch';
+        }
+      });
+      cur = beat.cur;
+      if (beat.lost) return lostDuring(c, stateRoot, state, id);
       if (problem !== undefined) return releaseWith(problem);
     } else {
       const head = await c.hub.branchHead(cur.item.repo, `studio/${id}`);
@@ -781,14 +1011,20 @@ async function finish(
         return releaseWith('the pushed branch head differs from the report');
       }
     }
-    try {
-      const opened = await openPullRequest(c, cur.item, report);
-      if (typeof opened === 'string') return releaseWith(opened);
-      pr = opened;
-    } catch (e) {
-      c.log(`${id}: ${(e as Error).message}`);
-      return releaseWith('the pull request could not be opened');
-    }
+    let failed: string | undefined;
+    const beat = await withBeats(c, stateRoot, state, cur, repo, touch, async () => {
+      try {
+        const opened = await openPullRequest(c, cur.item, report);
+        if (typeof opened === 'string') failed = opened;
+        else pr = opened;
+      } catch (e) {
+        c.log(`${id}: ${(e as Error).message}`);
+        failed = 'the pull request could not be opened';
+      }
+    });
+    cur = beat.cur;
+    if (beat.lost) return lostDuring(c, stateRoot, state, id);
+    if (failed !== undefined) return releaseWith(failed);
   }
   const claim: Claim = {
     ...claimOf(state.label, cur, 'done'),
@@ -802,7 +1038,7 @@ async function finish(
       ? {}
       : { 'usage.json': `${JSON.stringify(usageField(usage), null, 2)}\n` }),
   });
-  if (wrote.ok) await announce(c, repo, cur, wrote.sha);
+  if (wrote.ok) await announce(c, stateRoot, repo, cur, wrote.sha);
   saveWorkerState(stateRoot, { label: state.label });
   if (!wrote.ok) {
     return {

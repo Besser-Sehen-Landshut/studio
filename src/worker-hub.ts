@@ -26,8 +26,11 @@ export interface OfferIssue {
   body: string;
   /** The login that opened the issue; GitHub sets it, no client can. */
   author: string;
+  /** Its numeric account id: the lead is told by this, a login can be renamed and reused. */
+  authorId: number;
   /** The login of the last edit, when the body was edited after it was opened. */
   editor?: string;
+  editorId?: number;
   edited: boolean;
   open: boolean;
 }
@@ -76,6 +79,8 @@ export interface WorkerHub {
   login(): Promise<string>;
   /** Opens the offer and locks it, so only collaborators can comment on it. */
   openOffer(repo: string, title: string, body: string, labels: string[]): Promise<number>;
+  /** Locks an offer so only collaborators can comment on it; idempotent. */
+  lockOffer(repo: string, n: number): Promise<void>;
   /** Comments (Studio's own words) and closes. */
   closeOffer(repo: string, n: number, comment: string): Promise<void>;
   /** Open issues with the offer label, oldest first, every page. */
@@ -101,6 +106,11 @@ export interface WorkerHub {
   /** A file of a claim commit; undefined when it has none. */
   claimFile(repo: string, sha: string, path: string): Promise<string | undefined>;
   deleteClaim(repo: string, item: string): Promise<void>;
+  /**
+   * Puts the claim ref back from `from` (the commit the caller wrote) to `to` (the tip before it)
+   * when, and only when, it still points at `from`; false when someone moved it meanwhile.
+   */
+  resetClaim(repo: string, item: string, o: { from: string; to: string }): Promise<boolean>;
   /** The head of a branch; undefined when it does not exist. */
   branchHead(repo: string, branch: string): Promise<string | undefined>;
   pullRequest(repo: string, pr: number): Promise<PullRequestFacts | undefined>;
@@ -227,14 +237,14 @@ function assertBranch(branch: string): void {
 const ISSUES_QUERY = `query($owner: String!, $name: String!, $label: String!, $after: String) {
   repository(owner: $owner, name: $name) {
     issues(first: 50, after: $after, states: OPEN, labels: [$label], orderBy: {field: CREATED_AT, direction: ASC}) {
-      nodes { number title body state author { login } editor { login } lastEditedAt }
+      nodes { number title body state author { login ... on User { databaseId } } editor { login ... on User { databaseId } } lastEditedAt }
       pageInfo { hasNextPage endCursor }
     }
   }
 }`;
 const ISSUE_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
-    issue(number: $number) { number title body state author { login } editor { login } lastEditedAt }
+    issue(number: $number) { number title body state author { login ... on User { databaseId } } editor { login ... on User { databaseId } } lastEditedAt }
   }
 }`;
 
@@ -243,21 +253,25 @@ type IssueNode = {
   title?: unknown;
   body?: unknown;
   state?: unknown;
-  author?: { login?: unknown } | null;
-  editor?: { login?: unknown } | null;
+  author?: { login?: unknown; databaseId?: unknown } | null;
+  editor?: { login?: unknown; databaseId?: unknown } | null;
   lastEditedAt?: unknown;
 };
 
 function issueOf(n: IssueNode | null | undefined): OfferIssue | undefined {
   if (!n || typeof n.number !== 'number' || typeof n.title !== 'string') return undefined;
   if (typeof n.body !== 'string' || typeof n.author?.login !== 'string') return undefined;
+  if (typeof n.author.databaseId !== 'number') return undefined;
   const editor = typeof n.editor?.login === 'string' ? n.editor.login : undefined;
+  const editorId = typeof n.editor?.databaseId === 'number' ? n.editor.databaseId : undefined;
   return {
     number: n.number,
     title: n.title,
     body: n.body,
     author: n.author.login,
+    authorId: n.author.databaseId,
     ...(editor === undefined ? {} : { editor }),
+    ...(editorId === undefined ? {} : { editorId }),
     edited: n.lastEditedAt !== null && n.lastEditedAt !== undefined,
     open: n.state === 'OPEN',
   };
@@ -337,6 +351,11 @@ export function makeHub(t: Transport): WorkerHub {
       parents: (c.parents ?? []).flatMap((p) => (typeof p.sha === 'string' ? [p.sha] : [])),
     };
   };
+  const lock = async (repo: string, n: number) => {
+    await must('locking an offer', 'PUT', `repos/${repo}/issues/${n}/lock`, {
+      lock_reason: 'resolved',
+    });
+  };
   const split = (repo: string) => {
     assertRepo(repo);
     const [owner, name] = repo.split('/') as [string, string];
@@ -366,10 +385,12 @@ export function makeHub(t: Transport): WorkerHub {
         throw new HubError('opening an offer (no issue number)', undefined);
       }
       // Locked at once: from here only collaborators can comment, so no one floods the claims.
-      await must('locking an offer', 'PUT', `repos/${repo}/issues/${n}/lock`, {
-        lock_reason: 'resolved',
-      });
+      await lock(repo, n);
       return n;
+    },
+    async lockOffer(repo, n) {
+      assertRepo(repo);
+      await lock(repo, n);
     },
     async closeOffer(repo, n, comment) {
       assertRepo(repo);
@@ -525,6 +546,21 @@ export function makeHub(t: Transport): WorkerHub {
       if ((r.status < 200 || r.status > 299) && r.status !== 404 && r.status !== 422) {
         throw new HubError('removing a claim', r.status);
       }
+    },
+    async resetClaim(repo, item, o) {
+      assertRepo(repo);
+      assertItem(item);
+      if (!SHA_RE.test(o.from) || !SHA_RE.test(o.to)) throw new Error('invalid claim commit');
+      const ref = await t.request('GET', `repos/${repo}/git/ref/studio/claims/${item}`);
+      if (ref.status < 200 || ref.status > 299) throw new HubError('reading a claim', ref.status);
+      const tip = (ref.json as { object?: { sha?: unknown } } | null)?.object?.sha;
+      if (tip !== o.from) return false;
+      // A rewind cannot be a fast-forward; it runs only while the ref still is the caller's own.
+      await must('resetting a claim', 'PATCH', `repos/${repo}/git/refs/studio/claims/${item}`, {
+        sha: o.to,
+        force: true,
+      });
+      return true;
     },
     async branchHead(repo, branch) {
       assertRepo(repo);

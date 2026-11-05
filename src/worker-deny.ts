@@ -99,12 +99,15 @@ export function detectPlatform(
     : /microsoft/i.test(release)
       ? 'wsl1'
       : 'unknown';
-  // binfmt_misc holds the WSLInterop entry while interop is on; its first line says enabled.
-  const entry =
-    read('/proc/sys/fs/binfmt_misc/WSLInterop') ?? read('/proc/sys/fs/binfmt_misc/WSLInterop-late');
+  // binfmt_misc holds a WSLInterop entry while interop is on, and WSLInterop-late beside it when
+  // it was registered late: interop counts as on when either says `enabled` on its first line.
+  const entries = [
+    read('/proc/sys/fs/binfmt_misc/WSLInterop'),
+    read('/proc/sys/fs/binfmt_misc/WSLInterop-late'),
+  ].filter((e): e is string => e !== undefined);
   const status = read('/proc/sys/fs/binfmt_misc/status');
   let interop: boolean | undefined;
-  if (entry !== undefined) interop = /^enabled/m.test(entry);
+  if (entries.length > 0) interop = entries.some((e) => /^enabled/m.test(e));
   else if (status !== undefined) interop = false;
   return {
     platform,

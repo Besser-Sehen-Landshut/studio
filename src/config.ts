@@ -780,6 +780,8 @@ export const ownerConfigSchema = z.strictObject({
       self: z
         .strictObject({
           lead: githubLogin,
+          // The lead's numeric account id: offers are taken by this, never by the login alone.
+          leadId: z.number().int().positive(),
           deny: workerDenySchema.default(NO_DENY),
           // On WSL2 every Windows file system is denied to crews; these places are opened for reads.
           allowRead: z.array(denyPath).max(50).default([]),

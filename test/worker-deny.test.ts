@@ -63,6 +63,25 @@ describe('detectPlatform', () => {
     ).toBe(false);
     expect(detectPlatform('linux', files(release)).interop).toBeUndefined();
   });
+  it('interop is on when either WSLInterop entry is enabled', () => {
+    const release = { '/proc/sys/kernel/osrelease': '5.15.90-microsoft-standard-WSL2' };
+    const interop = (a?: string, b?: string) =>
+      detectPlatform(
+        'linux',
+        files({
+          ...release,
+          ...(a === undefined ? {} : { '/proc/sys/fs/binfmt_misc/WSLInterop': a }),
+          ...(b === undefined ? {} : { '/proc/sys/fs/binfmt_misc/WSLInterop-late': b }),
+        }),
+        {},
+        () => false,
+      ).interop;
+    expect(interop('disabled\n', 'enabled\n')).toBe(true);
+    expect(interop('enabled\n', 'disabled\n')).toBe(true);
+    expect(interop(undefined, 'enabled\n')).toBe(true);
+    expect(interop('disabled\n', 'disabled\n')).toBe(false);
+    expect(interop('disabled\n')).toBe(false);
+  });
   it('macOS and Windows are what they are', () => {
     expect(detectPlatform('darwin', files({})).wsl).toBe('none');
     expect(detectPlatform('win32', files({})).platform).toBe('win32');

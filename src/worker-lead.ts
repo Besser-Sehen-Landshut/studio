@@ -70,9 +70,15 @@ export async function openOffer(o: {
   if (label === undefined) throw new Error(`${o.item.id} names no runs_on label`);
   const title = offerTitle(o.item.id, label);
   const open = await o.hub.listOffers(o.repo);
-  const mine = open.find((i) => i.title === title && i.author === o.lead && !i.edited);
+  const me = await o.hub.user();
+  // The lead is told by its numeric id; the login only decorates the offer.
+  const mine = open.find((i) => i.title === title && i.authorId === me.id && !i.edited);
   const known = mine === undefined ? undefined : parseOffer(mine.title, mine.body);
-  if (mine !== undefined && known !== undefined) return { offer: mine.number, nonce: known.nonce };
+  if (mine !== undefined && known !== undefined) {
+    // An offer an earlier tick opened may have been cut short before its lock: lock it again.
+    await o.hub.lockOffer(o.repo, mine.number);
+    return { offer: mine.number, nonce: known.nonce };
+  }
   const nonce = randomBytes(16).toString('hex');
   const offer = await o.hub.openOffer(o.repo, title, renderOffer(o.item, o.lead, o.now, nonce), [
     OFFER_LABEL,
@@ -86,7 +92,11 @@ const MAX_CHAIN = 500;
 
 type Proof =
   | { ok: true; anchor: string; worker: AcceptedWorker; warnings: string[] }
-  | { ok: false; line: string; warnings: string[] };
+  /** `grace`: the comment may only be late (written ref, comment not there yet). */
+  | { ok: false; line: string; warnings: string[]; grace?: true };
+
+/** How long a claim commit may wait for the comment that proves or announces it. */
+export const COMMENT_GRACE_MS = 2 * 60_000;
 
 /**
  * Who made a claim, proven by GitHub rather than by the claim. The ref is only the lock: the
@@ -201,6 +211,7 @@ export async function proveClaim(o: {
       ok: false,
       line: `no claim comment on #${record.offer} proves who claimed it (${anchor.slice(0, 12)})`,
       warnings,
+      grace: true,
     };
   }
   for (const later of valid.slice(1)) {
@@ -223,6 +234,7 @@ export async function proveClaim(o: {
         ok: false,
         line: `its ${claim.state} commit ${o.tip.sha.slice(0, 12)} was not announced by ${claim.worker}`,
         warnings,
+        grace: true,
       };
     }
   }
@@ -301,6 +313,31 @@ export async function followClaim(o: {
     accepted: acceptedFor(o.ownerConfig, record.label),
   });
   if (!proof.ok) {
+    // A comment may just be late: the first two minutes after the lead saw the commit it waits.
+    if (proof.grace === true) {
+      const first =
+        record.claim?.sha === read.sha && !Number.isNaN(Date.parse(record.claim.at))
+          ? record.claim.at
+          : o.now.toISOString();
+      if (o.now.getTime() - Date.parse(first) <= COMMENT_GRACE_MS) {
+        return {
+          follow: {
+            kind: 'waiting',
+            claimed: false,
+            line: `${WORKER_WAIT}${claim.worker}'s ${claim.state} commit awaits its comment`,
+          },
+          seen: {
+            sha: read.sha,
+            worker: claim.worker,
+            attempt: claim.attempt,
+            state: claim.state,
+            at: first,
+            unproven: true,
+          },
+          warnings: proof.warnings,
+        };
+      }
+    }
     return {
       follow: { kind: 'lead', line: `${item.id}: ${proof.line}; nothing of it counts` },
       warnings: proof.warnings,

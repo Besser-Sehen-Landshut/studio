@@ -214,7 +214,7 @@ import {
   readUsage,
   runningPerLabel,
 } from './usage.js';
-import { workerStep } from './worker.js';
+import { pinnedMain, workerStep } from './worker.js';
 import { parseClaim } from './worker-claim.js';
 import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
 import { fetchHub, type GitHubUser, ghHub, type WorkerHub } from './worker-hub.js';
@@ -249,6 +249,8 @@ export interface CliDeps {
   launcher?: string;
   /** What `studio worker` can enforce on this machine; read from the system when missing. */
   workerPlatform?: WorkerPlatform;
+  /** Heartbeat interval during long git calls of a worker, in milliseconds; tests shorten it. */
+  workerBeatMs?: number;
   /** Test seam: where `studio worker` pushes a crew's branch instead of GitHub. */
   workerPushUrl?: (repo: string) => string;
 }
@@ -2461,10 +2463,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           throw new UsageError('worker needs --label <label> (^[a-z][a-z0-9-]{0,31}$)');
         }
         // The worker's own identity: its worker token, never the owner's login, never a crew's.
-        const token = workerToken(loadConfig(project), owner);
+        // studio.yaml as a fresh origin/main has it, never the working tree: it names the crew token.
+        const pinnedConfig = (await pinnedMain(project, ports)).config;
+        const token = workerToken(pinnedConfig, owner);
         // In-process HTTPS: the worker token never sits in a child process's environment.
         const hub = ports.hub?.(token) ?? fetchHub(token);
-        const crewToken = crewTokenValue(loadConfig(project), owner);
+        const crewToken = crewTokenValue(pinnedConfig, owner);
         if (crewToken !== undefined) {
           const crewHub = ports.hub?.(crewToken) ?? fetchHub(crewToken);
           const [mine, crews] = await Promise.all([hub.user(), crewHub.user()]);
@@ -2486,6 +2490,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ...(deps.workerPushUrl === undefined ? {} : { pushUrl: deps.workerPushUrl }),
           owner,
           platform: () => deps.workerPlatform ?? detectPlatform(),
+          ...(deps.workerBeatMs === undefined ? {} : { beatMs: deps.workerBeatMs }),
           log: (line: string) => stderr(`${line.replace(/\p{Cc}/gu, ' ')}\n`),
         };
         for (;;) {

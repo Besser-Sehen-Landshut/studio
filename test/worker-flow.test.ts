@@ -19,14 +19,16 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { loadBoard } from '../src/board.js';
 import { runCli } from '../src/cli.js';
 import { acquireStateLock, ownerStateRootFor, stateRootFor } from '../src/paths.js';
+import { clearPause, setPause } from '../src/pause.js';
 import { pinnedPlugins } from '../src/plugins.js';
 import type { Claude, Gh, Ports } from '../src/ports.js';
 import { realPorts } from '../src/ports.js';
 import { reportName } from '../src/report.js';
 import { LAUNCH_LOCK } from '../src/usage.js';
-import { parseClaim } from '../src/worker-claim.js';
+import { parseClaim, parseOffer } from '../src/worker-claim.js';
 import type { WorkerPlatform } from '../src/worker-deny.js';
 import type { WorkerHub } from '../src/worker-hub.js';
+import { openOffer } from '../src/worker-lead.js';
 import { fakeGitHub, idOf } from './worker-fake.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-workers-')));
@@ -178,7 +180,10 @@ function workerMachine(w: World, name: string, o: { crewToken?: boolean } = {}):
   git(w.base, 'clone', '-q', w.origin, project);
   const home = join(w.base, `${name}-home`);
   mkdirSync(home);
-  writeOwnerConfig(home, 'workers:\n  self:\n    lead: lead-user\n');
+  writeOwnerConfig(
+    home,
+    `workers:\n  self:\n    lead: lead-user\n    lead_id: ${idOf('lead-user')}\n`,
+  );
   const secret = (file: string, value: string) => {
     writeFileSync(join(ownerDir(home), file), `${value}\n`);
     chmodSync(join(ownerDir(home), file), 0o600);
@@ -270,7 +275,13 @@ function machinePorts(w: World, login: string, gh: Gh, crew: Crew): Ports {
 const newCrew = (): Crew => ({ started: [], stopped: [], running: false });
 
 let currentOrigin = '';
-async function run(m: Machine, ports: Ports, argv: string[], platform = LINUX) {
+async function run(
+  m: Machine,
+  ports: Ports,
+  argv: string[],
+  platform = LINUX,
+  extra: { beatMs?: number } = {},
+) {
   let out = '';
   let err = '';
   const code = await runCli(['--project', m.project, ...argv], {
@@ -285,6 +296,7 @@ async function run(m: Machine, ports: Ports, argv: string[], platform = LINUX) {
     homedir: m.home,
     cwd: m.project,
     workerPlatform: platform,
+    ...(extra.beatMs === undefined ? {} : { workerBeatMs: extra.beatMs }),
     // Pushes a worker makes for a crew without a token go to the fixture's origin.
     workerPushUrl: () => currentOrigin,
   });
@@ -631,13 +643,16 @@ describe('workers on other machines', () => {
     if (issue === undefined) throw new Error('no offer');
     issue.edited = true;
     issue.editor = 'someone-else';
+    issue.editorId = idOf('someone-else');
     const wm = workerMachine(w, 'win');
     const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
     const s = await run(wm, wp, ['worker', '--label', 'windows', '--once']);
     expect(lastLine(s.out)).toMatchObject({ kind: 'idle' });
     expect(s.err).toMatch(/skipped offer #30: edited by someone other than the lead/);
     issue.editor = 'lead-user';
+    issue.editorId = idOf('lead-user');
     issue.author = 'someone-else';
+    issue.authorId = idOf('someone-else');
     expect(lastLine((await run(wm, wp, ['worker', '--label', 'windows', '--once'])).out).kind).toBe(
       'idle',
     );
@@ -825,6 +840,14 @@ describe('workers on other machines', () => {
     // Anyone with contents write can write the ref, naming an accepted worker and that worker's
     // e-mail as author: nothing in the commit counts.
     w.github.plant('APP-1', claimMsg('claimed'));
+    // A comment may just be late: the lead waits a short grace before it asks for help.
+    const early = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(early.needsLead).toEqual([]);
+    expect(early.held).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(/awaits its comment/),
+    });
+    w.now.t += 3 * 60_000;
     const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
     expect(tick.needsLead).toContainEqual({
       item: 'APP-1',
@@ -876,6 +899,10 @@ describe('workers on other machines', () => {
       `Studio claim APP-1: done\n\n${JSON.stringify({ studio_claim: 1, item: 'APP-1', label: 'windows', worker: 'win-bot', offer: 30, attempt: 1, state: 'done', lease_minutes: 30, pr: 7 })}\n`,
     );
     let tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.collected).toEqual([]);
+    expect(tick.needsLead).toEqual([]);
+    w.now.t += 3 * 60_000;
+    tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
     expect(tick.needsLead).toContainEqual({
       item: 'APP-1',
       reason: `APP-1: its done commit ${forged.slice(0, 12)} was not announced by win-bot; nothing of it counts`,
@@ -915,6 +942,16 @@ describe('workers on other machines', () => {
     expect(comment?.body).toMatch(/^studio-claim [0-9a-f]{40} [0-9a-f]{32}$/);
     if (comment === undefined) throw new Error('no claim comment');
     comment.updatedAt = new Date(w.now.t + 1000).toISOString();
+    // A comment may just be late: the lead waits a short grace before it asks for help.
+    const early = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(early.needsLead).not.toContainEqual(
+      expect.objectContaining({ reason: expect.stringMatching(/no claim comment/) }),
+    );
+    expect(early.held).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(/awaits its comment/),
+    });
+    w.now.t += 3 * 60_000;
     const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
     expect(tick.needsLead).toContainEqual({
       item: 'APP-1',
@@ -1185,6 +1222,14 @@ describe('workers on other machines', () => {
       w.lead.home,
       'workers:\n  accept:\n    windows: [{ login: win-bot, id: 1 }]\n',
     );
+    // A comment may just be late: the lead waits a short grace before it asks for help.
+    const early = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+
+    expect(early.held).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(/awaits its comment/),
+    });
+    w.now.t += 3 * 60_000;
     const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
     expect(tick.needsLead).toContainEqual({
       item: 'APP-1',
@@ -1331,5 +1376,285 @@ describe('workers on other machines', () => {
       kind: 'released',
       line: expect.stringMatching(/looks like it holds a credential/),
     });
+  });
+
+  // ---- The verification review of 2fd04ab ------------------------------------------------------
+
+  /** A hub that runs `after` once the claim comment (the first comment of the worker) is posted. */
+  const afterClaimComment = (wp: Ports, after: () => void | Promise<void>) => {
+    const base = wp.hub as (t?: string) => WorkerHub;
+    let done = false;
+    wp.hub = (t?: string) => {
+      const h = base(t);
+      return {
+        ...h,
+        async commentOffer(repo, n, body) {
+          await h.commentOffer(repo, n, body);
+          if (!done) {
+            done = true;
+            await after();
+          }
+        },
+      };
+    };
+  };
+  const claimComments = (w: World) =>
+    (w.github.comments.get(30) ?? []).filter((c) => c.login === 'win-bot').length;
+  const once = ['worker', '--label', 'windows', '--once'];
+
+  it('N1: an offer an earlier tick opened but did not lock is locked when it is reused', async () => {
+    const w = world();
+    const hub = w.github.hubAs('lead-user');
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const issue = w.github.issues.get(30);
+    if (issue === undefined) throw new Error('no offer');
+    issue.locked = false;
+    const offer = parseOffer(issue.title, issue.body);
+    if (offer === undefined) throw new Error('no offer item');
+    const again = await openOffer({
+      hub,
+      repo: 'org/app',
+      item: offer.item,
+      lead: 'lead-user',
+      now: new Date(w.now.t),
+    });
+    expect(again).toEqual({ offer: 30, nonce: offer.nonce });
+    expect(issue.locked).toBe(true);
+    expect(w.github.issues.size).toBe(1);
+  });
+
+  it('N2: a transient refusal at launch is held; the offer is not claimed again at once', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const wm = workerMachine(w, 'win');
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    // A pause arrives right between the claim and the launch.
+    afterClaimComment(wp, () => setPause(wm.state, new Date(w.now.t)));
+    const s = await run(wm, wp, once);
+    expect(s.code).toBe(0);
+    expect(lastLine(s.out)).toMatchObject({ kind: 'held', item: 'APP-1' });
+    expect(w.github.refs.has('APP-1')).toBe(false);
+    expect(claimComments(w)).toBe(1);
+    clearPause(wm.state);
+    // Soon after, the same offer is left alone: no second claim, no second comment.
+    w.now.t += 60_000;
+    expect(lastLine((await run(wm, wp, once)).out).kind).toBe('idle');
+    expect(claimComments(w)).toBe(1);
+    // Later it is tried again.
+    w.now.t += 6 * 60_000;
+    expect(lastLine((await run(wm, wp, once)).out).kind).toBe('claimed');
+    expect(claimComments(w)).toBe(2);
+  });
+
+  it('N2: an item-specific refusal gives the claim up and is not claimed or commented again', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const wm = workerMachine(w, 'win');
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    wp.claude = {
+      ...wp.claude,
+      async start() {
+        throw new Error('cannot start the crew');
+      },
+    };
+    const first = await run(wm, wp, once);
+    expect(lastLine(first.out)).toMatchObject({ kind: 'refused', item: 'APP-1' });
+    expect(w.github.refs.has('APP-1')).toBe(false);
+    expect(claimComments(w)).toBe(1);
+    w.now.t += 10 * 60_000;
+    const second = await run(wm, wp, once);
+    expect(lastLine(second.out).kind).toBe('idle');
+    expect(claimComments(w)).toBe(1);
+    expect(w.github.issues.get(30)?.open).toBe(true);
+  });
+
+  it('N3: a done commit whose comment failed is announced on a later pass, with backoff', async () => {
+    const { w, lead, wm, crew, wp } = await claimedWorld();
+    crewFinishes(w, wm, crew);
+    const base = wp.hub as (t?: string) => WorkerHub;
+    let failing = true;
+    wp.hub = (t?: string) => {
+      const h = base(t);
+      return {
+        ...h,
+        async commentOffer(repo, n, body) {
+          if (failing) throw new Error('network down');
+          await h.commentOffer(repo, n, body);
+        },
+      };
+    };
+    const done = await run(wm, wp, once);
+    expect(lastLine(done.out)).toMatchObject({ kind: 'done' });
+    const stateFile = join(wm.state, 'worker.json');
+    const state = JSON.parse(readFileSync(stateFile, 'utf8'));
+    expect(state.current).toBeUndefined();
+    expect(state.pending).toMatchObject({ item: 'APP-1', tries: 1 });
+    // The lead waits a short grace for the comment instead of asking for help.
+    const early = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(early.needsLead).toEqual([]);
+    expect(early.collected).toEqual([]);
+    // Not due yet: a pass right away does not try again.
+    failing = false;
+    await run(wm, wp, once);
+    expect(JSON.parse(readFileSync(stateFile, 'utf8')).pending.tries).toBe(1);
+    // Due: the comment is posted once and the record goes.
+    w.now.t += 60_000;
+    await run(wm, wp, once);
+    expect(JSON.parse(readFileSync(stateFile, 'utf8')).pending).toBeUndefined();
+    const late = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(late.collected).toEqual([expect.objectContaining({ item: 'APP-1' })]);
+  });
+
+  it('N3: a lead that never gets the comment asks for help after the grace', async () => {
+    const { w, lead, wm, crew, wp } = await claimedWorld();
+    crewFinishes(w, wm, crew);
+    const base = wp.hub as (t?: string) => WorkerHub;
+    wp.hub = (t?: string) => ({
+      ...base(t),
+      async commentOffer() {
+        throw new Error('network down');
+      },
+    });
+    await run(wm, wp, once);
+    await run(w.lead, lead, ['tick']);
+    w.now.t += 3 * 60_000;
+    const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(/was not announced by win-bot/),
+    });
+  });
+
+  it('N4: a takeover that cannot start puts the ref back to the first attempt', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const a = workerMachine(w, 'win');
+    const pa = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    await run(a, pa, once);
+    const first = w.github.refs.get('APP-1');
+    await run(w.lead, lead, ['tick']);
+    const b = workerMachine(w, 'win2');
+    const pb = machinePorts(w, 'win-bot2', workerGh(w, 'win-bot2').gh, newCrew());
+    // The second worker sees the claim now: its lease runs from here, on its own clock.
+    expect(lastLine((await run(b, pb, once)).out).kind).toBe('idle');
+    const c = workerMachine(w, 'win3');
+    const pc = machinePorts(w, 'win-bot3', workerGh(w, 'win-bot3').gh, newCrew());
+    expect(lastLine((await run(c, pc, once)).out).kind).toBe('idle');
+    w.now.t += 33 * 60_000;
+    pb.claude = {
+      ...pb.claude,
+      async start() {
+        throw new Error('cannot start the crew');
+      },
+    };
+    const s = await run(b, pb, once);
+    expect(lastLine(s.out)).toMatchObject({ kind: 'refused' });
+    // The ref is back at attempt 1; the attempt count was not used up.
+    expect(w.github.refs.get('APP-1')).toBe(first);
+    expect(claimOf(w)).toMatchObject({ worker: 'win-bot', attempt: 1 });
+    expect(w.github.calls).toContain('win-bot2 reset claim APP-1');
+    expect(w.github.calls).not.toContain('win-bot2 delete claim APP-1');
+    // Another worker can still make the one takeover.
+    expect(lastLine((await run(c, pc, once)).out)).toMatchObject({
+      kind: 'claimed',
+      line: expect.stringMatching(/attempt 2/),
+    });
+  });
+
+  it('N5: the crew starts from the pinned origin/main commit even when main moves on', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const wm = workerMachine(w, 'win');
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    const pinned = git(w.lead.project, 'rev-parse', 'origin/main');
+    // Main moves on between the worker's fetch and its launch.
+    afterClaimComment(wp, () => {
+      writeFileSync(join(w.lead.project, 'later.txt'), 'later\n');
+      git(w.lead.project, 'add', 'later.txt');
+      git(w.lead.project, 'commit', '-q', '-m', 'later');
+      git(w.lead.project, 'push', '-q', 'origin', 'main');
+    });
+    const s = await run(wm, wp, once);
+    expect(lastLine(s.out).kind).toBe('claimed');
+    const clone = join(wm.state, 'clones', 'APP-1');
+    expect(git(clone, 'rev-parse', 'HEAD')).toBe(pinned);
+    expect(existsSync(join(clone, 'later.txt'))).toBe(false);
+  });
+
+  it('N6: the lead is told by its numeric id, not by its login', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const issue = w.github.issues.get(30);
+    if (issue === undefined) throw new Error('no offer');
+    const wm = workerMachine(w, 'win');
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    // The login was renamed and reused: same login, another account.
+    issue.authorId = idOf('someone-else');
+    expect(lastLine((await run(wm, wp, once)).out).kind).toBe('idle');
+    expect(w.github.refs.size).toBe(0);
+    // The same account under a login of other case is still the lead.
+    issue.authorId = idOf('lead-user');
+    issue.author = 'Lead-User';
+    expect(lastLine((await run(wm, wp, once)).out).kind).toBe('claimed');
+  });
+
+  it("N6: a worker token of the lead's account is refused by id", async () => {
+    const w = world();
+    const wm = workerMachine(w, 'win');
+    writeOwnerConfig(
+      wm.home,
+      `workers:\n  self:\n    lead: renamed-lead\n    lead_id: ${idOf('win-bot')}\n`,
+    );
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    const s = await run(wm, wp, once);
+    expect(lastLine(s.out)).toMatchObject({
+      kind: 'refused',
+      line: expect.stringMatching(/the lead's own identity/),
+    });
+  });
+
+  it('N6: the crew token check reads the pinned config, not the working tree', async () => {
+    const w = world();
+    const wm = workerMachine(w, 'win');
+    // The working tree names an environment variable for the crew token; origin/main does not.
+    const f = join(wm.project, '.studio', 'studio.yaml');
+    writeFileSync(f, `${readFileSync(f, 'utf8')}crew_token: { env: OTHER_CREW_TOKEN }\n`);
+    wm.env.OTHER_CREW_TOKEN = `${CREW_TOKEN}-env`;
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    // Both the file token (read through the pinned config) and the worker token act as win-bot.
+    wp.hub = () => w.github.hubAs('win-bot');
+    const r = await run(wm, wp, once);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/belong to the same account/);
+  });
+
+  it('N6: a long call keeps the claim beating, and the done commit builds on the beats', async () => {
+    const { w, wm, crew, wp } = await claimedWorld();
+    crewFinishes(w, wm, crew);
+    const before = w.github.refs.get('APP-1');
+    // The pull request takes a while: beats run meanwhile, and the done commit builds on them.
+    const base = wp.hub as (t?: string) => WorkerHub;
+    wp.hub = (t?: string) => {
+      const h = base(t);
+      return {
+        ...h,
+        async createPullRequest(repo, o) {
+          await new Promise((r) => setTimeout(r, 150));
+          return h.createPullRequest(repo, o);
+        },
+      };
+    };
+    const s = await run(wm, wp, once, LINUX, { beatMs: 20 });
+    expect(lastLine(s.out)).toMatchObject({ kind: 'done' });
+    const beats = [...w.github.commits.values()].filter((c) => /: alive/.test(c.message));
+    expect(beats.length).toBeGreaterThan(0);
+    expect(w.github.refs.get('APP-1')).not.toBe(before);
+    expect(claimOf(w)).toMatchObject({ state: 'done' });
   });
 });

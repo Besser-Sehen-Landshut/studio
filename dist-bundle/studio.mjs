@@ -29278,6 +29278,8 @@ var ownerConfigSchema = external_exports.strictObject({
     ).default({}),
     self: external_exports.strictObject({
       lead: githubLogin,
+      // The lead's numeric account id: offers are taken by this, never by the login alone.
+      leadId: external_exports.number().int().positive(),
       deny: workerDenySchema.default(NO_DENY),
       // On WSL2 every Windows file system is denied to crews; these places are opened for reads.
       allowRead: external_exports.array(denyPath).max(50).default([]),
@@ -34885,8 +34887,9 @@ function cloneBranch(path10) {
     return void 0;
   }
 }
-async function prepareCheckout(stateRoot, projectDir, item, ports, from = ITEM_BASE) {
+async function prepareCheckout(stateRoot, projectDir, item, ports, from = ITEM_BASE, pin) {
   assertItemId(item.id);
+  if (pin !== void 0 && !FULL_SHA2.test(pin)) throw new Error("invalid pinned commit");
   if (from !== ITEM_BASE && from !== `studio/${item.id}`) {
     throw new Error(`invalid start branch for ${item.id}: ${JSON.stringify(from)}`);
   }
@@ -34902,7 +34905,12 @@ async function prepareCheckout(stateRoot, projectDir, item, ports, from = ITEM_B
   await ports.git.run(clones, ["clone", "--filter=blob:none", url2, path10]);
   chmodSync5(path10, 448);
   await ports.git.run(path10, ["remote", "set-url", "origin", crewOrigin]);
-  await ports.git.run(path10, ["checkout", "-b", branch, `origin/${from}`]);
+  await ports.git.run(path10, [
+    "checkout",
+    "-b",
+    branch,
+    pin !== void 0 && from === ITEM_BASE ? pin : `origin/${from}`
+  ]);
   return { path: path10, branch };
 }
 function isReusableClone(path10, item) {
@@ -35034,21 +35042,26 @@ function firstMissingSkill(configDir, required2) {
 var RULE_FILES = ["AGENTS.md", "CLAUDE.md"];
 var MAX_RULE_BYTES = 256 * 1024;
 var FULL_SHA2 = /^[0-9a-f]{40}$/;
-async function readPinnedRules(projectDir, ports) {
-  try {
-    await ports.git.run(projectDir, [
-      "fetch",
-      "origin",
-      "+refs/heads/main:refs/remotes/origin/main"
-    ]);
-  } catch (e) {
-    throw new Error(
-      `refusing to launch: cannot fetch origin main in the project checkout (${e.message})`
-    );
+async function readPinnedRules(projectDir, ports, pin) {
+  if (pin !== void 0 && !FULL_SHA2.test(pin)) throw new Error("invalid pinned commit");
+  if (pin === void 0) {
+    try {
+      await ports.git.run(projectDir, [
+        "fetch",
+        "origin",
+        "+refs/heads/main:refs/remotes/origin/main"
+      ]);
+    } catch (e) {
+      throw new Error(
+        `refusing to launch: cannot fetch origin main in the project checkout (${e.message})`
+      );
+    }
   }
   const g3 = (args) => ports.git.run(projectDir, ["--no-replace-objects", ...args]);
-  const sha = (await g3(["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"])).trim();
-  if (!FULL_SHA2.test(sha)) throw new Error("refusing to launch: origin/main is not a commit SHA");
+  const sha = (await g3(["rev-parse", "--verify", `${pin ?? "refs/remotes/origin/main"}^{commit}`])).trim();
+  if (!FULL_SHA2.test(sha) || pin !== void 0 && sha !== pin) {
+    throw new Error("refusing to launch: origin/main is not a commit SHA");
+  }
   const tree = await g3(["ls-tree", sha, ...RULE_FILES]);
   const files = [];
   for (const line4 of tree.split("\n").filter((l) => l !== "")) {
@@ -35458,10 +35471,10 @@ function updateCrewFile(stateRoot, mutate) {
 }
 function refuseIfBlocked(ownerRoot) {
   const line4 = blockHold(ownerRoot);
-  if (line4 !== void 0) throw new Error(line4);
+  if (line4 !== void 0) throw new HeldError(line4);
 }
 function refuseIfPaused(stateRoot) {
-  if (readPause(stateRoot).paused) throw new Error(PAUSED_LINE);
+  if (readPause(stateRoot).paused) throw new HeldError(PAUSED_LINE);
 }
 function crewStateOf(rec, status, alive, hasReport3) {
   if (status === "merged" || status === "dropped") return "done";
@@ -35585,9 +35598,9 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   const usage = labelUsage({ ownerRoot, ownerConfig, ports });
   if (!usage.ok) throw new Error(USAGE_UNREADABLE);
   const refuseFull = () => {
-    throw new Error("credential limit: the label is at its configured parallel or daily limit");
+    throw new HeldError("credential limit: the label is at its configured parallel or daily limit");
   };
-  const pinned = await readPinnedRules(projectDir, ports);
+  const pinned = await readPinnedRules(projectDir, ports, worker?.sha);
   let label = DEFAULT_LABEL;
   let oauthToken = penv.CLAUDE_CODE_OAUTH_TOKEN || void 0;
   let providerConfigDir;
@@ -35598,11 +35611,11 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
     oauthToken = account.token;
     providerConfigDir = checkProviderConfigDir(crewDirOrRefuse(owner), owner);
     const parkedHere = parks[label];
-    if (parkedHere) throw new Error(allParkedLine(parkedHere.parkedUntil));
+    if (parkedHere) throw new HeldError(allParkedLine(parkedHere.parkedUntil));
     if (!(usage.remaining(label) > 0)) refuseFull();
   } else if (command === void 0) {
     if (parks[DEFAULT_LABEL]) {
-      throw new Error(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
+      throw new HeldError(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
     }
     if (!(usage.remaining(DEFAULT_LABEL) > 0)) refuseFull();
   } else {
@@ -35615,8 +35628,8 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
       owner
     );
     if (got === void 0) {
-      if (usage.full.length > 0) throw new Error(LABEL_FULL_LINE);
-      if (parked.length > 0) throw new Error(allParkedLine(earliestReset(parks)));
+      if (usage.full.length > 0) throw new HeldError(LABEL_FULL_LINE);
+      if (parked.length > 0) throw new HeldError(allParkedLine(earliestReset(parks)));
       throw new Error("credential provider: returned nothing while no label is parked");
     }
     if (Object.hasOwn(parks, got.label))
@@ -35701,7 +35714,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
     if (!again.ok) throw new Error(`${join21(ownerRoot, "limits.json")} is unreadable; refusing`);
     const parkedNow = activeParks(again.labels, ports.clock.now());
     if (Object.hasOwn(parkedNow, label)) {
-      throw new Error(allParkedLine(parkedNow[label]?.parkedUntil));
+      throw new HeldError(allParkedLine(parkedNow[label]?.parkedUntil));
     }
     const locked = labelUsage({ ownerRoot, ownerConfig, ports });
     if (!locked.ok) throw new Error(USAGE_UNREADABLE);
@@ -35709,7 +35722,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   };
   await recheck();
   lock.heartbeat(ports.clock.now());
-  const wt = await prepareCheckout(stateRoot, projectDir, item, ports, worker?.from);
+  const wt = await prepareCheckout(stateRoot, projectDir, item, ports, worker?.from, worker?.sha);
   lock.heartbeat(ports.clock.now());
   removeOldReport(stateRoot, wt.path, item.id);
   const homeDir = join21(stateRoot, "homes", item.id);
@@ -44028,10 +44041,13 @@ function detectPlatform(platform2 = process.platform, read3 = readText, env = pr
   const signs = /microsoft/i.test(release2) || read3("/proc/sys/fs/binfmt_misc/WSLInterop") !== void 0 || read3("/proc/sys/fs/binfmt_misc/WSLInterop-late") !== void 0 || (env.WSL_DISTRO_NAME ?? "") !== "" || exists4("/run/WSL");
   if (!signs) return { platform: platform2, wsl: "none", automountRoot: "/mnt/" };
   const wsl = /WSL2|microsoft-standard/i.test(release2) ? "wsl2" : /microsoft/i.test(release2) ? "wsl1" : "unknown";
-  const entry = read3("/proc/sys/fs/binfmt_misc/WSLInterop") ?? read3("/proc/sys/fs/binfmt_misc/WSLInterop-late");
+  const entries2 = [
+    read3("/proc/sys/fs/binfmt_misc/WSLInterop"),
+    read3("/proc/sys/fs/binfmt_misc/WSLInterop-late")
+  ].filter((e) => e !== void 0);
   const status = read3("/proc/sys/fs/binfmt_misc/status");
   let interop;
-  if (entry !== void 0) interop = /^enabled/m.test(entry);
+  if (entries2.length > 0) interop = entries2.some((e) => /^enabled/m.test(e));
   else if (status !== void 0) interop = false;
   return {
     platform: platform2,
@@ -44232,7 +44248,7 @@ function mergeDeny(...lists) {
 // src/worker.ts
 var WORKER_FILE = "worker.json";
 var WORKER_LOCK = "worker.lock";
-var WORKER_LOCK_STALE_MS = 30 * 6e4;
+var WORKER_LOCK_STALE_MS = 3 * 60 * 6e4;
 var MAX_OWN_BEATS = 20;
 function readWorkerState(stateRoot, label) {
   const file3 = join42(stateRoot, WORKER_FILE);
@@ -44255,36 +44271,43 @@ function readWorkerState(stateRoot, label) {
     );
   }
   const seen = s.seen !== null && typeof s.seen === "object" ? s.seen : void 0;
+  const pending = s.pending !== null && typeof s.pending === "object" && typeof s.pending.sha === "string" ? s.pending : void 0;
+  const skip = s.skip !== null && typeof s.skip === "object" ? s.skip : void 0;
   return {
     label,
     ...s.current === void 0 ? {} : { current: s.current },
-    ...seen === void 0 ? {} : { seen }
+    ...seen === void 0 ? {} : { seen },
+    ...pending === void 0 ? {} : { pending },
+    ...skip === void 0 ? {} : { skip }
   };
 }
 function saveWorkerState(stateRoot, s) {
-  let seen = s.seen;
-  if (seen === void 0) {
-    try {
-      seen = readWorkerState(stateRoot, s.label).seen;
-    } catch {
-      seen = void 0;
-    }
+  let disk;
+  try {
+    disk = readWorkerState(stateRoot, s.label);
+  } catch {
+    disk = void 0;
   }
-  const out = { ...s, ...seen === void 0 ? {} : { seen } };
+  const out = { ...s };
+  for (const k of ["seen", "pending", "skip"]) {
+    if (!(k in s)) {
+      const v = disk?.[k];
+      if (v !== void 0) out[k] = v;
+    } else if (s[k] === void 0) delete out[k];
+  }
   writeStateFile(stateRoot, join42(stateRoot, WORKER_FILE), `${JSON.stringify(out, null, 2)}
 `);
 }
 async function mainConfig(c3) {
+  return pinnedMain2(c3.project, c3.ports);
+}
+async function pinnedMain2(project, ports) {
   try {
-    await c3.ports.git.run(c3.project, [
-      "fetch",
-      "origin",
-      "+refs/heads/main:refs/remotes/origin/main"
-    ]);
+    await ports.git.run(project, ["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
   } catch {
     throw new Error("cannot fetch origin main in the worker checkout");
   }
-  const g3 = (args) => c3.ports.git.run(c3.project, ["--no-replace-objects", ...args]);
+  const g3 = (args) => ports.git.run(project, ["--no-replace-objects", ...args]);
   const sha = (await g3(["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"])).trim();
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error("origin/main is not a commit SHA");
   const text = await g3(["show", `${sha}:.studio/studio.yaml`]);
@@ -44352,7 +44375,7 @@ async function readiness(c3, stateRoot) {
   }
   const { config: config2, sha } = await mainConfig(c3);
   const me = await c3.hub.user();
-  if (me.login.toLowerCase() === self.lead.toLowerCase()) {
+  if (me.id === self.leadId || me.login.toLowerCase() === self.lead.toLowerCase()) {
     return {
       ok: false,
       kind: "refused",
@@ -44393,7 +44416,16 @@ async function readiness(c3, stateRoot) {
     return { ok: false, kind: "held", line: "paused on this machine: nothing is claimed" };
   }
   const contentDir = await pinnedContent(c3, stateRoot, sha);
-  return { ok: true, config: config2, contentDir, deny, me, leaseMinutes: self.leaseMinutes };
+  return {
+    ok: true,
+    config: config2,
+    contentDir,
+    deny,
+    me,
+    leaseMinutes: self.leaseMinutes,
+    sha,
+    leadId: self.leadId
+  };
 }
 async function workerStep(c3) {
   const stateRoot = stateRootFor(c3.project, c3.owner);
@@ -44405,10 +44437,12 @@ async function workerStep(c3) {
   });
   if (!lock) return { kind: "held", line: "another worker process runs for this checkout" };
   try {
+    const touch = () => lock.heartbeat(c3.ports.clock.now());
+    await flushPending(c3, stateRoot, false);
     const state = readWorkerState(stateRoot, c3.label);
     if (state.current !== void 0) {
       const repo = state.current.primaryRepo ?? (await mainConfig(c3)).config.primaryRepo;
-      return await followCurrent(c3, stateRoot, state, state.current, repo);
+      return await followCurrent(c3, stateRoot, state, state.current, repo, touch);
     }
     const ready = await readiness(c3, stateRoot);
     if (!ready.ok) return { kind: ready.kind, line: ready.line };
@@ -44421,12 +44455,31 @@ async function workerStep(c3) {
 }
 async function giveUp(c3, stateRoot, repo, cur) {
   try {
-    const tip = await c3.hub.readClaim(repo, cur.item.id);
-    if (tip?.sha === cur.claimSha) await c3.hub.deleteClaim(repo, cur.item.id);
+    if (cur.prevSha !== void 0) {
+      const done = await c3.hub.resetClaim(repo, cur.item.id, {
+        from: cur.claimSha,
+        to: cur.prevSha
+      });
+      if (!done) c3.log(`${cur.item.id}: the claim moved meanwhile; left as it is`);
+    } else {
+      const tip = await c3.hub.readClaim(repo, cur.item.id);
+      if (tip?.sha === cur.claimSha) await c3.hub.deleteClaim(repo, cur.item.id);
+    }
   } catch (e) {
     c3.log(`${cur.item.id}: could not remove its own claim: ${e.message}`);
   }
   saveWorkerState(stateRoot, { label: c3.label });
+}
+var SKIP_HELD_MS = 5 * 6e4;
+var SKIP_REFUSED_MS = 60 * 6e4;
+function skipOffer(c3, stateRoot, state, id, offer, ms) {
+  const now = c3.ports.clock.now();
+  const live = Object.fromEntries(
+    Object.entries(state.skip ?? {}).filter(([, v]) => Date.parse(v.until) > now.getTime())
+  );
+  live[id] = { offer, until: new Date(now.getTime() + ms).toISOString() };
+  state.skip = live;
+  saveWorkerState(stateRoot, { label: c3.label, skip: live });
 }
 async function claimNext(c3, stateRoot, state, ready) {
   const { config: config2, me } = ready;
@@ -44442,13 +44495,18 @@ async function claimNext(c3, stateRoot, state, ready) {
   };
   const keepSeen = () => saveWorkerState(stateRoot, { label: c3.label, seen });
   for (const issue2 of await c3.hub.listOffers(repo)) {
-    if (issue2.author !== lead) continue;
-    if (issue2.edited && issue2.editor !== lead) {
+    if (issue2.authorId !== ready.leadId) continue;
+    if (issue2.edited && issue2.editorId !== ready.leadId) {
       c3.log(`skipped offer #${issue2.number}: edited by someone other than the lead`);
       continue;
     }
     const offer = parseOffer(issue2.title, issue2.body);
-    if (offer === void 0 || offer.label !== c3.label || offer.lead !== lead) continue;
+    if (offer === void 0 || offer.label !== c3.label) continue;
+    if (offer.lead.toLowerCase() !== lead.toLowerCase()) continue;
+    const skipped = state.skip?.[offer.item.id];
+    if (skipped !== void 0 && skipped.offer === issue2.number && Date.parse(skipped.until) > now.getTime()) {
+      continue;
+    }
     const item = offer.item;
     if (item.repo !== config2.primaryRepo && !config2.repos.includes(item.repo)) continue;
     const existing = await c3.hub.readClaim(repo, item.id);
@@ -44488,7 +44546,8 @@ async function claimNext(c3, stateRoot, state, ready) {
       claimedAt: now.toISOString(),
       launched: false,
       nonce: offer.nonce,
-      primaryRepo: repo
+      primaryRepo: repo,
+      ...parent === void 0 ? {} : { prevSha: parent }
     };
     saveWorkerState(stateRoot, { label: c3.label, current });
     const fresh = await c3.hub.offer(repo, issue2.number);
@@ -44501,6 +44560,7 @@ async function claimNext(c3, stateRoot, state, ready) {
     } catch (e) {
       c3.log(`${item.id}: the claim comment failed: ${e.message}`);
       await giveUp(c3, stateRoot, repo, current);
+      skipOffer(c3, stateRoot, state, item.id, issue2.number, SKIP_HELD_MS);
       return { kind: "held", item: item.id, line: `${item.id}: the claim comment failed; let go` };
     }
     const from = await c3.hub.branchHead(item.repo, `studio/${item.id}`) === void 0 ? ITEM_BASE : `studio/${item.id}`;
@@ -44509,11 +44569,20 @@ async function claimNext(c3, stateRoot, state, ready) {
         deny: ready.deny,
         from,
         contentDir: ready.contentDir,
+        sha: ready.sha,
         ...c3.crewPushes ? {} : { noToken: true }
       });
     } catch (e) {
       await giveUp(c3, stateRoot, repo, current);
       const why = e.message;
+      skipOffer(
+        c3,
+        stateRoot,
+        state,
+        item.id,
+        issue2.number,
+        e instanceof HeldError ? SKIP_HELD_MS : SKIP_REFUSED_MS
+      );
       if (e instanceof HeldError) {
         return { kind: "held", item: item.id, line: `${item.id}: not now (${why}); let go` };
       }
@@ -44553,18 +44622,54 @@ var claimOf = (label, cur, state) => ({
   state,
   leaseMinutes: cur.leaseMinutes
 });
-async function announce2(c3, repo, cur, sha) {
+var announceDelayMs = (tries) => Math.min(3e4 * 2 ** tries, 6e5);
+async function announce2(c3, stateRoot, repo, cur, sha) {
   if (cur.nonce === void 0) {
     c3.log(`${cur.item.id}: no nonce on record; the lead will not count ${sha.slice(0, 12)}`);
     return;
   }
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      await c3.hub.commentOffer(repo, cur.offer, claimComment(sha, cur.nonce));
-      return;
-    } catch (e) {
-      c3.log(`${cur.item.id}: announcing ${sha.slice(0, 12)} failed: ${e.message}`);
-    }
+  const pending = {
+    item: cur.item.id,
+    offer: cur.offer,
+    sha,
+    nonce: cur.nonce,
+    repo,
+    tries: 0,
+    nextAt: c3.ports.clock.now().toISOString()
+  };
+  saveWorkerState(stateRoot, { label: c3.label, pending });
+  await flushPending(c3, stateRoot, true);
+}
+async function flushPending(c3, stateRoot, force) {
+  const state = readWorkerState(stateRoot, c3.label);
+  const p = state.pending;
+  if (p === void 0) return;
+  const now = c3.ports.clock.now();
+  if (!force && now.getTime() < Date.parse(p.nextAt)) return;
+  const text = claimComment(p.sha, p.nonce);
+  try {
+    const exists4 = p.tries > 0 && await (async () => {
+      const me = await c3.hub.user();
+      const read3 = await c3.hub.offerComments(p.repo, p.offer);
+      return read3.comments.some((x) => x.userId === me.id && x.body === text);
+    })();
+    if (!exists4) await c3.hub.commentOffer(p.repo, p.offer, text);
+    saveWorkerState(stateRoot, {
+      label: c3.label,
+      ...state.current === void 0 ? {} : { current: state.current },
+      pending: void 0
+    });
+  } catch (e) {
+    c3.log(`${p.item}: announcing ${p.sha.slice(0, 12)} failed: ${e.message}`);
+    saveWorkerState(stateRoot, {
+      label: c3.label,
+      ...state.current === void 0 ? {} : { current: state.current },
+      pending: {
+        ...p,
+        tries: p.tries + 1,
+        nextAt: new Date(now.getTime() + announceDelayMs(p.tries)).toISOString()
+      }
+    });
   }
 }
 async function release(c3, stateRoot, state, cur, repo, reason, usage) {
@@ -44575,7 +44680,7 @@ async function release(c3, stateRoot, state, cur, repo, reason, usage) {
   };
   const wrote = await writeClaim(c3, repo, claim2, cur.claimSha);
   if (!wrote.ok) c3.log(`${cur.item.id}: the claim moved meanwhile; not released`);
-  else await announce2(c3, repo, cur, wrote.sha);
+  else await announce2(c3, stateRoot, repo, cur, wrote.sha);
   saveWorkerState(stateRoot, { label: state.label });
 }
 var usageField = (u2) => ({
@@ -44613,7 +44718,7 @@ async function stillMine(c3, stateRoot, state, cur, repo) {
   saveWorkerState(stateRoot, { label: state.label, current: adopted });
   return adopted;
 }
-async function followCurrent(c3, stateRoot, state, held2, repo) {
+async function followCurrent(c3, stateRoot, state, held2, repo, touch) {
   const id = held2.item.id;
   const cur = await stillMine(c3, stateRoot, state, held2, repo);
   if (cur === void 0) {
@@ -44668,9 +44773,45 @@ async function followCurrent(c3, stateRoot, state, held2, repo) {
     await giveUp(c3, stateRoot, repo, cur);
     return { kind: "held", item: id, line: `${id}: no crew ran for the claim; let go` };
   }
-  return finish(c3, stateRoot, state, cur, repo, rec);
+  return finish(c3, stateRoot, state, cur, repo, rec, touch);
 }
-async function finish(c3, stateRoot, state, cur, repo, rec) {
+function lostDuring(c3, stateRoot, state, id) {
+  saveWorkerState(stateRoot, { label: state.label });
+  c3.log(`${id}: the heartbeat lost the claim during a long call`);
+  return { kind: "lost", item: id, line: `${id}: the claim was lost before the report went out` };
+}
+async function withBeats(c3, stateRoot, state, cur, repo, touch, fn) {
+  let now = cur;
+  let lost = false;
+  let inflight = Promise.resolve();
+  const every = c3.beatMs ?? Math.max(1e3, cur.leaseMinutes * 6e4 / 3);
+  const timer = setInterval(() => {
+    inflight = inflight.then(async () => {
+      if (lost) return;
+      try {
+        touch();
+        const wrote = await writeClaim(c3, repo, claimOf(state.label, now, "alive"), now.claimSha);
+        if (!wrote.ok) {
+          lost = true;
+          return;
+        }
+        now = { ...now, claimSha: wrote.sha, lastBeat: c3.ports.clock.now().toISOString() };
+        saveWorkerState(stateRoot, { label: state.label, current: now });
+      } catch (e) {
+        c3.log(`${cur.item.id}: heartbeat failed: ${e.message}`);
+      }
+    });
+  }, every);
+  try {
+    await fn();
+  } finally {
+    clearInterval(timer);
+    await inflight;
+  }
+  return { cur: now, lost };
+}
+async function finish(c3, stateRoot, state, held2, repo, rec, touch) {
+  let cur = held2;
   const id = cur.item.id;
   const from = typeof rec.logStart === "number" && rec.logStart >= 0 ? rec.logStart : 0;
   const usage = runUsageSince(stateRoot, id, from);
@@ -44713,12 +44854,16 @@ async function finish(c3, stateRoot, state, cur, repo, rec) {
   if (report.status === "done" && opensPr(cur.item)) {
     if (!c3.crewPushes) {
       let problem;
-      try {
-        problem = await pushForCrew(c3, stateRoot, cur.item, report.headSha ?? "");
-      } catch (e) {
-        c3.log(`${id}: ${e.message}`);
-        problem = "the worker could not push the branch";
-      }
+      const beat2 = await withBeats(c3, stateRoot, state, cur, repo, touch, async () => {
+        try {
+          problem = await pushForCrew(c3, stateRoot, cur.item, report.headSha ?? "");
+        } catch (e) {
+          c3.log(`${id}: ${e.message}`);
+          problem = "the worker could not push the branch";
+        }
+      });
+      cur = beat2.cur;
+      if (beat2.lost) return lostDuring(c3, stateRoot, state, id);
       if (problem !== void 0) return releaseWith(problem);
     } else {
       const head = await c3.hub.branchHead(cur.item.repo, `studio/${id}`);
@@ -44726,14 +44871,20 @@ async function finish(c3, stateRoot, state, cur, repo, rec) {
         return releaseWith("the pushed branch head differs from the report");
       }
     }
-    try {
-      const opened = await openPullRequest(c3, cur.item, report);
-      if (typeof opened === "string") return releaseWith(opened);
-      pr = opened;
-    } catch (e) {
-      c3.log(`${id}: ${e.message}`);
-      return releaseWith("the pull request could not be opened");
-    }
+    let failed;
+    const beat = await withBeats(c3, stateRoot, state, cur, repo, touch, async () => {
+      try {
+        const opened = await openPullRequest(c3, cur.item, report);
+        if (typeof opened === "string") failed = opened;
+        else pr = opened;
+      } catch (e) {
+        c3.log(`${id}: ${e.message}`);
+        failed = "the pull request could not be opened";
+      }
+    });
+    cur = beat.cur;
+    if (beat.lost) return lostDuring(c3, stateRoot, state, id);
+    if (failed !== void 0) return releaseWith(failed);
   }
   const claim2 = {
     ...claimOf(state.label, cur, "done"),
@@ -44746,7 +44897,7 @@ async function finish(c3, stateRoot, state, cur, repo, rec) {
     ...usage.runs === 0 ? {} : { "usage.json": `${JSON.stringify(usageField(usage), null, 2)}
 ` }
   });
-  if (wrote.ok) await announce2(c3, repo, cur, wrote.sha);
+  if (wrote.ok) await announce2(c3, stateRoot, repo, cur, wrote.sha);
   saveWorkerState(stateRoot, { label: state.label });
   if (!wrote.ok) {
     return {
@@ -44952,26 +45103,30 @@ function assertBranch(branch) {
 var ISSUES_QUERY = `query($owner: String!, $name: String!, $label: String!, $after: String) {
   repository(owner: $owner, name: $name) {
     issues(first: 50, after: $after, states: OPEN, labels: [$label], orderBy: {field: CREATED_AT, direction: ASC}) {
-      nodes { number title body state author { login } editor { login } lastEditedAt }
+      nodes { number title body state author { login ... on User { databaseId } } editor { login ... on User { databaseId } } lastEditedAt }
       pageInfo { hasNextPage endCursor }
     }
   }
 }`;
 var ISSUE_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
-    issue(number: $number) { number title body state author { login } editor { login } lastEditedAt }
+    issue(number: $number) { number title body state author { login ... on User { databaseId } } editor { login ... on User { databaseId } } lastEditedAt }
   }
 }`;
 function issueOf(n2) {
   if (!n2 || typeof n2.number !== "number" || typeof n2.title !== "string") return void 0;
   if (typeof n2.body !== "string" || typeof n2.author?.login !== "string") return void 0;
+  if (typeof n2.author.databaseId !== "number") return void 0;
   const editor = typeof n2.editor?.login === "string" ? n2.editor.login : void 0;
+  const editorId = typeof n2.editor?.databaseId === "number" ? n2.editor.databaseId : void 0;
   return {
     number: n2.number,
     title: n2.title,
     body: n2.body,
     author: n2.author.login,
+    authorId: n2.author.databaseId,
     ...editor === void 0 ? {} : { editor },
+    ...editorId === void 0 ? {} : { editorId },
     edited: n2.lastEditedAt !== null && n2.lastEditedAt !== void 0,
     open: n2.state === "OPEN"
   };
@@ -45017,6 +45172,11 @@ function makeHub(t) {
       parents: (c3.parents ?? []).flatMap((p) => typeof p.sha === "string" ? [p.sha] : [])
     };
   };
+  const lock = async (repo, n2) => {
+    await must("locking an offer", "PUT", `repos/${repo}/issues/${n2}/lock`, {
+      lock_reason: "resolved"
+    });
+  };
   const split2 = (repo) => {
     assertRepo(repo);
     const [owner, name] = repo.split("/");
@@ -45045,10 +45205,12 @@ function makeHub(t) {
       if (typeof n2 !== "number" || !Number.isInteger(n2) || n2 <= 0) {
         throw new HubError("opening an offer (no issue number)", void 0);
       }
-      await must("locking an offer", "PUT", `repos/${repo}/issues/${n2}/lock`, {
-        lock_reason: "resolved"
-      });
+      await lock(repo, n2);
       return n2;
+    },
+    async lockOffer(repo, n2) {
+      assertRepo(repo);
+      await lock(repo, n2);
     },
     async closeOffer(repo, n2, comment) {
       assertRepo(repo);
@@ -45187,6 +45349,20 @@ function makeHub(t) {
         throw new HubError("removing a claim", r.status);
       }
     },
+    async resetClaim(repo, item, o2) {
+      assertRepo(repo);
+      assertItem(item);
+      if (!SHA_RE3.test(o2.from) || !SHA_RE3.test(o2.to)) throw new Error("invalid claim commit");
+      const ref = await t.request("GET", `repos/${repo}/git/ref/studio/claims/${item}`);
+      if (ref.status < 200 || ref.status > 299) throw new HubError("reading a claim", ref.status);
+      const tip = ref.json?.object?.sha;
+      if (tip !== o2.from) return false;
+      await must("resetting a claim", "PATCH", `repos/${repo}/git/refs/studio/claims/${item}`, {
+        sha: o2.to,
+        force: true
+      });
+      return true;
+    },
     async branchHead(repo, branch) {
       assertRepo(repo);
       assertBranch(branch);
@@ -45248,9 +45424,13 @@ async function openOffer(o2) {
   if (label === void 0) throw new Error(`${o2.item.id} names no runs_on label`);
   const title = offerTitle(o2.item.id, label);
   const open4 = await o2.hub.listOffers(o2.repo);
-  const mine = open4.find((i2) => i2.title === title && i2.author === o2.lead && !i2.edited);
+  const me = await o2.hub.user();
+  const mine = open4.find((i2) => i2.title === title && i2.authorId === me.id && !i2.edited);
   const known = mine === void 0 ? void 0 : parseOffer(mine.title, mine.body);
-  if (mine !== void 0 && known !== void 0) return { offer: mine.number, nonce: known.nonce };
+  if (mine !== void 0 && known !== void 0) {
+    await o2.hub.lockOffer(o2.repo, mine.number);
+    return { offer: mine.number, nonce: known.nonce };
+  }
   const nonce = randomBytes9(16).toString("hex");
   const offer = await o2.hub.openOffer(o2.repo, title, renderOffer(o2.item, o2.lead, o2.now, nonce), [
     OFFER_LABEL,
@@ -45259,6 +45439,7 @@ async function openOffer(o2) {
   return { offer, nonce };
 }
 var MAX_CHAIN = 500;
+var COMMENT_GRACE_MS = 2 * 6e4;
 async function proveClaim(o2) {
   const { claim: claim2, record: record2 } = o2;
   const lower = (s) => s.toLowerCase();
@@ -45343,7 +45524,8 @@ async function proveClaim(o2) {
     return {
       ok: false,
       line: `no claim comment on #${record2.offer} proves who claimed it (${anchor2.slice(0, 12)})`,
-      warnings
+      warnings,
+      grace: true
     };
   }
   for (const later of valid.slice(1)) {
@@ -45363,7 +45545,8 @@ async function proveClaim(o2) {
       return {
         ok: false,
         line: `its ${claim2.state} commit ${o2.tip.sha.slice(0, 12)} was not announced by ${claim2.worker}`,
-        warnings
+        warnings,
+        grace: true
       };
     }
   }
@@ -45416,6 +45599,27 @@ async function followClaim(o2) {
     accepted: acceptedFor(o2.ownerConfig, record2.label)
   });
   if (!proof.ok) {
+    if (proof.grace === true) {
+      const first = record2.claim?.sha === read3.sha && !Number.isNaN(Date.parse(record2.claim.at)) ? record2.claim.at : o2.now.toISOString();
+      if (o2.now.getTime() - Date.parse(first) <= COMMENT_GRACE_MS) {
+        return {
+          follow: {
+            kind: "waiting",
+            claimed: false,
+            line: `${WORKER_WAIT2}${claim2.worker}'s ${claim2.state} commit awaits its comment`
+          },
+          seen: {
+            sha: read3.sha,
+            worker: claim2.worker,
+            attempt: claim2.attempt,
+            state: claim2.state,
+            at: first,
+            unproven: true
+          },
+          warnings: proof.warnings
+        };
+      }
+    }
     return {
       follow: { kind: "lead", line: `${item.id}: ${proof.line}; nothing of it counts` },
       warnings: proof.warnings
@@ -47313,9 +47517,10 @@ async function runCli(argv, deps) {
         if (label === void 0 || !WORKER_LABEL_RE.test(label)) {
           throw new UsageError("worker needs --label <label> (^[a-z][a-z0-9-]{0,31}$)");
         }
-        const token = workerToken(loadConfig(project), owner);
+        const pinnedConfig = (await pinnedMain2(project, ports)).config;
+        const token = workerToken(pinnedConfig, owner);
         const hub = ports.hub?.(token) ?? fetchHub(token);
-        const crewToken = crewTokenValue(loadConfig(project), owner);
+        const crewToken = crewTokenValue(pinnedConfig, owner);
         if (crewToken !== void 0) {
           const crewHub = ports.hub?.(crewToken) ?? fetchHub(crewToken);
           const [mine, crews] = await Promise.all([hub.user(), crewHub.user()]);
@@ -47337,6 +47542,7 @@ async function runCli(argv, deps) {
           ...deps.workerPushUrl === void 0 ? {} : { pushUrl: deps.workerPushUrl },
           owner,
           platform: () => deps.workerPlatform ?? detectPlatform(),
+          ...deps.workerBeatMs === void 0 ? {} : { beatMs: deps.workerBeatMs },
           log: (line4) => stderr(`${line4.replace(new RegExp("\\p{Cc}", "gu"), " ")}
 `)
         };
