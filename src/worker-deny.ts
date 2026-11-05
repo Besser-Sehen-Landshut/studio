@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { isAbsolute, join, posix } from 'node:path';
-import { pathKey, type WorkerDeny, within } from './config.js';
+import { pathKey, type WorkerDeny, wildcardOverIp, within } from './config.js';
 
 export { namedDeniedPort } from './guard.js';
 
@@ -341,13 +341,22 @@ export function enforceDeny(o: {
       refused: 'allow_read opens places on Windows file systems and only holds inside WSL2',
     };
   }
+  // A wildcard over an IP address means nothing and would pass as neither a name nor an address.
+  for (const entry of o.networkAllow) {
+    const normal = normalizeHost(hostPort(entry).host);
+    if ((normal?.wildcard === true && normal.ip !== 0) || wildcardOverIp(entry)) {
+      return { refused: `network_allow entry ${entry} is a wildcard over an IP address` };
+    }
+  }
   const ports = [...new Set(o.deny.ports)].sort((a, b) => a - b);
   if (ports.length > 0) {
     for (const entry of o.networkAllow) {
       const { host, port } = hostPort(entry);
-      if (normalizeHost(host) === undefined) {
+      const normal = normalizeHost(host);
+      if (normal === undefined) {
         return { refused: `network_allow entry ${entry} cannot be read as a host` };
       }
+
       if (port !== undefined && ports.includes(port)) {
         return { refused: `network_allow entry ${entry} opens denied port ${port}` };
       }

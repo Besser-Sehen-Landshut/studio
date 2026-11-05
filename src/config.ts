@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -417,6 +418,24 @@ export const workerDenySchema = z.strictObject({
 export type WorkerDeny = z.infer<typeof workerDenySchema>;
 const NO_DENY = { paths: [], ports: [] };
 
+/**
+ * Whether a `network_allow` entry is a wildcard over an IP address (`*.<address>`, any spelling a
+ * URL parser takes, a port or a trailing dot allowed). Such a wildcard means nothing and would slip
+ * past the checks for local hosts, so it is refused.
+ */
+export function wildcardOverIp(entry: string): boolean {
+  const m = /^\*\.(.+?)(?::\d+)?$/.exec(entry.trim().toLowerCase());
+  if (!m) return false;
+  let base = (m[1] as string).replace(/\.$/, '');
+  if (base.includes(':') && !base.startsWith('[')) base = `[${base}]`;
+  try {
+    const host = new URL(`http://${base}/`).hostname.replace(/^\[|\]$/g, '');
+    return isIP(host) !== 0;
+  } catch {
+    return false;
+  }
+}
+
 /** `limits:` in studio.yaml and in the owner config. */
 const dailyLimitsSchema = z.strictObject({
   dailyCostUsd: z.number().positive().optional(),
@@ -446,7 +465,17 @@ export const studioConfigSchema = z
       .refine((r) => Object.keys(r).length > 0, 'at least one role is required'),
     // Detected from manifest files and stored by `studio setup stack`.
     stacks: z.array(z.string().min(1)).optional(),
-    sandbox: z.strictObject({ networkAllow: strList }).default({ networkAllow: [] }),
+    sandbox: z
+      .strictObject({
+        networkAllow: z
+          .array(
+            z
+              .string()
+              .refine((e) => !wildcardOverIp(e), 'a wildcard over an IP address means nothing'),
+          )
+          .default([]),
+      })
+      .default({ networkAllow: [] }),
     // Name of the env var that holds the least-privilege token (never the token itself).
     crewToken: z.strictObject({ env: z.string().min(1) }).optional(),
     // Opt-in: let a crew run start without the least-privilege token (default: refuse).

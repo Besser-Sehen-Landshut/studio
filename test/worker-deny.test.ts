@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { parseConfig, wildcardOverIp } from '../src/config.js';
 import { evaluateGuard } from '../src/guard.js';
 import {
   automountRoot,
@@ -421,5 +422,43 @@ describe('hosts are normalised before they are judged', () => {
         keep,
       }),
     ).toMatchObject({ ports: [5432] });
+  });
+});
+
+describe('a wildcard over an IP address is refused', () => {
+  const lo = ['127', '0', '0', '1'].join('.');
+  const wild = [`*.${lo}`, `*.${lo}.`, '*.0x7f.1', '*.2130706433', '*.[::1]', `*.${lo}:443`];
+  it('in enforceDeny, with ports denied or not', () => {
+    for (const entry of wild) {
+      for (const ports of [[], [5432]]) {
+        expect(
+          enforceDeny({ deny: { paths: [], ports }, platform: linux, networkAllow: [entry], keep }),
+          entry,
+        ).toEqual({ refused: expect.stringMatching(/is a wildcard over an IP address/) });
+      }
+    }
+    expect(
+      enforceDeny({
+        deny: { paths: [], ports: [5432] },
+        platform: linux,
+        networkAllow: ['*.npmjs.org'],
+        keep,
+      }),
+    ).toMatchObject({ ports: [5432] });
+  });
+  it('when studio.yaml is loaded', () => {
+    expect(wildcardOverIp(`*.${lo}`)).toBe(true);
+    expect(wildcardOverIp('*.npmjs.org')).toBe(false);
+    expect(wildcardOverIp(lo)).toBe(false);
+    const yaml = (entry: string) =>
+      `studio: 1\nprimary_repo: org/app\nrepos: [org/app]\nci: { provider: github, runners: github-hosted, runner_labels: [], capacity: { total: 4, merge_max_busy: 3, check_twice_seconds: 30 } }\nmerge: { strategy: studio-queue, contract_paths: [] }\nroles: { builder: { model: sonnet, wip: 1 } }\nsandbox: { network_allow: ["${entry}"] }\n`;
+    for (const entry of wild) {
+      expect(() => parseConfig(yaml(entry), 'studio.yaml'), entry).toThrow(
+        /a wildcard over an IP address means nothing/,
+      );
+    }
+    expect(parseConfig(yaml('*.npmjs.org'), 'studio.yaml').sandbox.networkAllow).toEqual([
+      '*.npmjs.org',
+    ]);
   });
 });

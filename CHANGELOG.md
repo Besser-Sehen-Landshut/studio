@@ -48,7 +48,7 @@ Nothing but GitHub is shared between the machines. Not tagged yet; the maintaine
   With ports denied, a `sandbox.network_allow` entry that could reach the machine (an IP address in any
   spelling, `localhost` without a port, `*`, single-label or local names) refuses, judged after the host is
   normalised (lowercase, one trailing dot dropped, WHATWG URL host parsing); an entry that does not parse
-  refuses too. The guard denies commands that name a denied port.
+  refuses too, and a wildcard over an IP address (`*.<address>`) is refused already when `studio.yaml` loads. The guard denies commands that name a denied port.
 - `workers.accept` in the owner config on the lead's machine: the accounts whose claims count, per label, each
   as `{ login, id }`; the numeric id is what is compared, since a login can be reused. An accepted account
   that is the lead's own crew token account refuses the offer.

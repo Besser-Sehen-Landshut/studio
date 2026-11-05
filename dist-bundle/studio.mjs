@@ -28205,6 +28205,7 @@ var EPIC_STAGE_WORDS = {
 // src/config.ts
 var import_yaml3 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync3 } from "node:fs";
+import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join as join3, resolve, sep } from "node:path";
 
@@ -29009,6 +29010,18 @@ var workerDenySchema = external_exports.strictObject({
   ports: external_exports.array(external_exports.number().int().min(1).max(65535)).max(50).default([])
 });
 var NO_DENY = { paths: [], ports: [] };
+function wildcardOverIp(entry) {
+  const m = /^\*\.(.+?)(?::\d+)?$/.exec(entry.trim().toLowerCase());
+  if (!m) return false;
+  let base = m[1].replace(/\.$/, "");
+  if (base.includes(":") && !base.startsWith("[")) base = `[${base}]`;
+  try {
+    const host = new URL(`http://${base}/`).hostname.replace(/^\[|\]$/g, "");
+    return isIP(host) !== 0;
+  } catch {
+    return false;
+  }
+}
 var dailyLimitsSchema = external_exports.strictObject({
   dailyCostUsd: external_exports.number().positive().optional()
 });
@@ -29031,7 +29044,11 @@ var studioConfigSchema = external_exports.strictObject({
   roles: external_exports.partialRecord(external_exports.enum(ROLE_TEMPLATES), roleSchema).refine((r) => Object.keys(r).length > 0, "at least one role is required"),
   // Detected from manifest files and stored by `studio setup stack`.
   stacks: external_exports.array(external_exports.string().min(1)).optional(),
-  sandbox: external_exports.strictObject({ networkAllow: strList2 }).default({ networkAllow: [] }),
+  sandbox: external_exports.strictObject({
+    networkAllow: external_exports.array(
+      external_exports.string().refine((e) => !wildcardOverIp(e), "a wildcard over an IP address means nothing")
+    ).default([])
+  }).default({ networkAllow: [] }),
   // Name of the env var that holds the least-privilege token (never the token itself).
   crewToken: external_exports.strictObject({ env: external_exports.string().min(1) }).optional(),
   // Opt-in: let a crew run start without the least-privilege token (default: refuse).
@@ -43962,7 +43979,7 @@ import { dirname as dirname12, join as join42 } from "node:path";
 
 // src/worker-deny.ts
 import { existsSync as existsSync12, readFileSync as readFileSync38, realpathSync as realpathSync7 } from "node:fs";
-import { isIP } from "node:net";
+import { isIP as isIP2 } from "node:net";
 import { isAbsolute as isAbsolute7, join as join41, posix } from "node:path";
 var readText = (file3) => {
   try {
@@ -44066,7 +44083,7 @@ function normalizeHost(host) {
   }
   if (parsed === "") return void 0;
   const bare = parsed.startsWith("[") && parsed.endsWith("]") ? parsed.slice(1, -1) : parsed;
-  const ip = isIP(bare);
+  const ip = isIP2(bare);
   return { host: bare, wildcard, ip: ip === 4 ? 4 : ip === 6 ? 6 : 0 };
 }
 function localName(host) {
@@ -44176,11 +44193,18 @@ function enforceDeny(o2) {
       refused: "allow_read opens places on Windows file systems and only holds inside WSL2"
     };
   }
+  for (const entry of o2.networkAllow) {
+    const normal = normalizeHost(hostPort(entry).host);
+    if (normal?.wildcard === true && normal.ip !== 0 || wildcardOverIp(entry)) {
+      return { refused: `network_allow entry ${entry} is a wildcard over an IP address` };
+    }
+  }
   const ports = [...new Set(o2.deny.ports)].sort((a2, b) => a2 - b);
   if (ports.length > 0) {
     for (const entry of o2.networkAllow) {
       const { host, port } = hostPort(entry);
-      if (normalizeHost(host) === void 0) {
+      const normal = normalizeHost(host);
+      if (normal === void 0) {
         return { refused: `network_allow entry ${entry} cannot be read as a host` };
       }
       if (port !== void 0 && ports.includes(port)) {
