@@ -43,6 +43,8 @@ export interface WorkerRun {
 export interface OfferRecord {
   label: string;
   offer: number;
+  /** The random number in the offer that a claim comment must name. */
+  nonce?: string;
   offeredAt: string;
   claim?: SeenClaim;
   /** When the lead last looked at the claim. */

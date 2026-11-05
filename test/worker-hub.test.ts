@@ -92,22 +92,18 @@ describe('ghHub', () => {
     ).rejects.toThrow(/HTTP 500/);
   });
 
-  it('reads a claim: none on 404, else the commit with GitHub date and parents', async () => {
+  it('reads a claim: none on 404, else the commit with its parents, and no identity at all', async () => {
     const none = recordingGh(() => ({ code: 1, stderr: 'gh: Not Found (HTTP 404)' }));
     expect(await ghHub(none.gh).readClaim('org/app', 'APP-1')).toBeUndefined();
     const some = recordingGh((args) =>
       args[3] === 'repos/org/app/git/ref/studio/claims/APP-1'
         ? { stdout: JSON.stringify({ object: { sha: SHA } }) }
-        : args[3] === `repos/org/app/commits/${SHA}`
+        : args[3] === `repos/org/app/git/commits/${SHA}`
           ? {
               stdout: JSON.stringify({
-                commit: {
-                  message: 'Studio claim APP-1: alive\n\n{}',
-                  committer: { date: '2026-11-05T10:00:00Z' },
-                  verification: { verified: true },
-                },
-                author: { login: 'win-bot' },
-                committer: { login: 'Win-Bot' },
+                message: 'Studio claim APP-1: alive\n\n{}',
+                author: { name: 'x', email: 'forged@example.com' },
+                committer: { date: '2026-11-05T10:00:00Z' },
                 parents: [{ sha: COMMIT }],
               }),
             }
@@ -118,31 +114,43 @@ describe('ghHub', () => {
       message: 'Studio claim APP-1: alive\n\n{}',
       committedAt: '2026-11-05T10:00:00Z',
       parents: [COMMIT],
-      login: 'Win-Bot',
-      verified: true,
     });
   });
 
-  it('names no account when author and committer differ, and keeps an unverified commit unverified', async () => {
-    const { gh } = recordingGh((args) =>
-      args[3] === 'repos/org/app/git/ref/studio/claims/APP-1'
-        ? { stdout: JSON.stringify({ object: { sha: SHA } }) }
-        : {
-            stdout: JSON.stringify({
-              commit: {
-                message: 'm',
-                committer: { date: '2026-11-05T10:00:00Z' },
-                verification: { verified: false },
-              },
-              author: { login: 'win-bot' },
-              committer: { login: 'someone-else' },
-              parents: [],
-            }),
-          },
-    );
-    const r = await ghHub(gh).readClaim('org/app', 'APP-1');
-    expect(r?.login).toBeUndefined();
-    expect(r?.verified).toBe(false);
+  it('posts a claim comment as a body, and reads comments with their GitHub author, page by page', async () => {
+    const page = (from: number, count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        id: from + i,
+        user: { login: 'win-bot' },
+        body: `c${from + i}`,
+        created_at: '2026-11-05T10:00:00Z',
+        updated_at: '2026-11-05T10:00:00Z',
+      }));
+    const { gh, calls } = recordingGh((args) => {
+      const path = args[3] ?? '';
+      if (path.endsWith('page=1')) return { stdout: JSON.stringify(page(1, 100)) };
+      if (path.endsWith('page=2'))
+        return { stdout: JSON.stringify([...page(101, 2), { id: 'bad' }]) };
+      return { stdout: '{}' };
+    });
+    const hub = ghHub(gh, 'tok');
+    await hub.commentOffer('org/app', 30, 'studio-claim x y');
+    expect(calls[0]?.args.slice(0, 4)).toEqual([
+      'api',
+      '-X',
+      'POST',
+      'repos/org/app/issues/30/comments',
+    ]);
+    expect(calls[0]?.body).toEqual({ body: 'studio-claim x y' });
+    const all = await hub.offerComments('org/app', 30);
+    expect(all).toHaveLength(102);
+    expect(all[101]).toEqual({
+      id: 102,
+      login: 'win-bot',
+      body: 'c102',
+      createdAt: '2026-11-05T10:00:00Z',
+      updatedAt: '2026-11-05T10:00:00Z',
+    });
   });
 
   it('lists offers with author and editor through GraphQL, owner and name as strings', async () => {

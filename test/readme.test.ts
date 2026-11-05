@@ -185,6 +185,8 @@ describe('README workers on other machines', () => {
       'WSL2',
       '`force: false`',
       'studio secret set worker-token',
+      'studio-claim <claim commit SHA> <offer nonce>',
+      'Issues: Read and write',
       'refs/studio/claims/**',
       'gh api -X POST repos/OWNER/REPO/rulesets',
     ]) {

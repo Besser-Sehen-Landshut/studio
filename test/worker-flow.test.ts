@@ -787,42 +787,94 @@ describe('workers on other machines', () => {
     });
   });
 
-  it('a claim GitHub does not attribute to the named worker counts for nothing', async () => {
+  const claimMsg = (state: string, worker = 'win-bot') =>
+    `Studio claim APP-1: ${state}\n\n${JSON.stringify({ studio_claim: 1, item: 'APP-1', label: 'windows', worker, offer: 30, attempt: 1, state, lease_minutes: 30 })}\n`;
+  const nonceOf = (w: World): string =>
+    JSON.parse(readFileSync(join(w.lead.state, 'workers.json'), 'utf8')).items['APP-1'].nonce;
+
+  it('a claim commit with a forged author and no claim comment goes to the lead', async () => {
     const w = world();
     const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
     await run(w.lead, lead, ['tick']);
-    const forged = (worker: string) =>
-      `Studio claim APP-1: done\n\n${JSON.stringify({ studio_claim: 1, item: 'APP-1', label: 'windows', worker, offer: 30, attempt: 1, state: 'done', lease_minutes: 30, pr: 7 })}\n`;
-    // Someone with write access names an accepted worker: GitHub attributes the commit to them.
-    w.github.plant('APP-1', forged('win-bot'), { login: 'someone-else', verified: true });
-    let tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    // Anyone with contents write can write the ref, naming an accepted worker and that worker's
+    // e-mail as author: nothing in the commit counts.
+    w.github.plant('APP-1', claimMsg('claimed'));
+    const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(
+        /^APP-1: no claim comment on #30 proves who claimed it \([0-9a-f]{12}\); nothing of it counts$/,
+      ),
+    });
+    expect(statusOf(w)?.status).toBe('assigned');
+  });
+
+  it('a claim comment by a login that is not accepted does not count; the lead hears of it', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const sha = w.github.plant('APP-1', claimMsg('claimed'));
+    w.github.plant('APP-1', claimMsg('alive'));
+    await w.github
+      .hubAs('intruder')
+      .commentOffer('org/app', 30, `studio-claim ${sha} ${nonceOf(w)}`);
+    await w.github
+      .hubAs('win-bot')
+      .commentOffer('org/app', 30, `studio-claim ${sha} ${nonceOf(w)}`);
+    // The first comment decides: win-bot's later one cannot take a claim someone else proved first.
+    const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(
+        /claim comment \d+ by intruder, who is not accepted for windows/,
+      ),
+    });
     expect(tick.needsLead).toContainEqual({
       item: 'APP-1',
       reason:
-        'APP-1: the claim names win-bot, but GitHub attributes its commit to someone-else; nothing of it counts',
-    });
-    // The right account, but a commit GitHub did not verify (custom author or committer).
-    w.github.plant('APP-1', forged('win-bot'), { login: 'win-bot', verified: false });
-    tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
-    expect(tick.needsLead).toContainEqual({
-      item: 'APP-1',
-      reason: expect.stringMatching(/GitHub did not verify its commit/),
+        'APP-1: the claim names win-bot, but intruder commented it first; nothing of it counts',
     });
     expect(tick.collected).toEqual([]);
-    expect(statusOf(w)?.status).toBe('assigned');
+  });
+
+  it('an edited claim comment is ignored', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const wm = workerMachine(w, 'win');
+    await run(wm, machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew()), [
+      'worker',
+      '--label',
+      'windows',
+      '--once',
+    ]);
+    const [comment] = w.github.comments.get(30) ?? [];
+    expect(comment?.login).toBe('win-bot');
+    expect(comment?.body).toMatch(/^studio-claim [0-9a-f]{40} [0-9a-f]{32}$/);
+    if (comment === undefined) throw new Error('no claim comment');
+    comment.updatedAt = new Date(w.now.t + 1000).toISOString();
+    const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(/claim comment \d+ by win-bot was edited and does not count/),
+    });
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(/no claim comment on #30 proves who claimed it/),
+    });
   });
 
   it('a lease runs from when the lead saw the claim, never from the commit date', async () => {
     const w = world();
     const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
     await run(w.lead, lead, ['tick']);
-    // A claim dated a day back, as a writer could set it.
-    const msg = `Studio claim APP-1: claimed\n\n${JSON.stringify({ studio_claim: 1, item: 'APP-1', label: 'windows', worker: 'win-bot', offer: 30, attempt: 1, state: 'claimed', lease_minutes: 30 })}\n`;
-    w.github.plant('APP-1', msg, {
-      login: 'win-bot',
-      verified: true,
+    // A claim dated a day back, as a writer could set it, with its proper comment.
+    const sha = w.github.plant('APP-1', claimMsg('claimed'), {
       at: new Date(w.now.t - 86_400_000).toISOString(),
     });
+    await w.github
+      .hubAs('win-bot')
+      .commentOffer('org/app', 30, `studio-claim ${sha} ${nonceOf(w)}`);
     const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
     expect(tick.held).toContainEqual({
       item: 'APP-1',

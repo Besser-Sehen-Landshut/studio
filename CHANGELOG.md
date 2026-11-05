@@ -43,9 +43,12 @@ Nothing but GitHub is shared between the machines. Not tagged yet; the maintaine
   `sandbox.network_allow` entry that could reach the machine (IP literal or `localhost` without a port, `*`,
   single-label or local names) refuses; the guard denies commands that name a denied port.
 - `workers.accept` in the owner config on the lead's machine: the logins whose claims count, per label.
-- The lead's checks: a claim counts only when GitHub verified its commit and attributes it to the account the
-  claim names, which must be accepted for the label; the claim's offer; the pull request from `studio/<id>` of
-  the item's repository with the report's head, opened by the claiming worker.
+- The lead's checks: the claim ref is only the lock. Each claim (and each takeover) is proven by one comment on
+  the offer, `studio-claim <claim commit> <offer nonce>`; the first unedited one for the commit that started the
+  attempt must come from the account the claim names, accepted for the label. Nothing in a commit (content,
+  author, committer, signature) counts. Claims without it, comments of others and edited ones go to the lead.
+  The pull request must come from `studio/<id>` of the item's repository with the report's head, opened by the
+  claiming worker. The worker token needs Issues: Read and write for the comment.
 - Two tokens on a worker: `worker-token` (`studio secret set worker-token`) for claims, pull requests and pushes,
   never handed to a crew and refused when it equals the crew token; the crew gets at most the crew token. Without
   one, the crew commits only and the worker pushes `studio/<id>` from a fresh repository after it ended.

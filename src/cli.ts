@@ -219,10 +219,10 @@ import { parseClaim } from './worker-claim.js';
 import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
 import { ghHub, type WorkerHub } from './worker-hub.js';
 import {
-  claimIdentityProblem,
   closeOffer,
   followClaim,
   openOffer,
+  proveClaim,
   readWorkers,
   recordWorkerRun,
   updateWorkers,
@@ -1108,7 +1108,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         );
       }
       const now = ports.clock.now();
-      const offer = await openOffer({
+      const { offer, nonce } = await openOffer({
         hub: leadHub(),
         repo: config.primaryRepo,
         item,
@@ -1116,7 +1116,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         now,
       });
       updateWorkers(root, (s) => {
-        s.items[item.id] = { label, offer, offeredAt: now.toISOString() };
+        s.items[item.id] = { label, offer, nonce, offeredAt: now.toISOString() };
       });
       await withBoardLock(root, ports.clock.now(), () => {
         const fresh = loadBoard(project);
@@ -1207,16 +1207,22 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           `${item.id}: the claim of ${claim.worker} is ${claim.state}; nothing moved`,
         );
       }
-      const foreign = claimIdentityProblem(
-        read,
-        claim,
-        loadOwnerConfig(owner).workers?.accept[record.label] ?? [],
-        record.label,
-      );
-      if (foreign !== undefined || claim.label !== record.label || claim.offer !== record.offer) {
+      if (claim.label !== record.label || claim.offer !== record.offer) {
         throw new ReportError(
-          `the claim of ${item.id} counts for nothing: ${foreign ?? `it names offer #${claim.offer}, not #${record.offer}`}`,
+          `the claim of ${item.id} counts for nothing: it names offer #${claim.offer}, not #${record.offer}`,
         );
+      }
+      // Who claimed is proven by the first claim comment on the offer, never by the commits.
+      const proof = await proveClaim({
+        hub: leadHub(),
+        repo: config.primaryRepo,
+        record,
+        tip: read,
+        claim,
+        accepted: loadOwnerConfig(owner).workers?.accept[record.label] ?? [],
+      });
+      if (!proof.ok) {
+        throw new ReportError(`the claim of ${item.id} counts for nothing: ${proof.line}`);
       }
       const text = await leadHub().claimFile(config.primaryRepo, read.sha, 'report.md');
       if (text === undefined) throw new ReportError('the done claim carries no report');
@@ -1895,7 +1901,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               continue;
             }
             const now = ports.clock.now();
-            const { follow, seen } = await followClaim({
+            const { follow, seen, warnings } = await followClaim({
               hub: leadHub(),
               repo: config.primaryRepo,
               item,
@@ -1910,6 +1916,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                   s.items[item.id] = { ...r, claim: seen, checkedAt: now.toISOString() };
               });
             }
+            // Claim comments that do not count, from others or edited: the lead hears of each.
+            for (const w of warnings ?? []) lead(item.id, `${item.id}: ${w}`);
             if (follow.kind === 'lead') {
               lead(item.id, follow.line);
               continue;

@@ -58,11 +58,15 @@ export function workerItemProblem(item: WorkItem): string | undefined {
   return undefined;
 }
 
+/** An offer nonce: 32 hex digits the lead draws per offer. */
+export const NONCE_RE = /^[0-9a-f]{32}$/;
+
 const offerSchema = z.strictObject({
   studioOffer: z.literal(1),
   label: z.string().regex(WORKER_LABEL_RE),
   lead: z.string().regex(GITHUB_LOGIN_RE),
   offeredAt: z.string().refine((s) => !Number.isNaN(Date.parse(s)), 'not a time'),
+  nonce: z.string().regex(NONCE_RE),
   item: z.record(z.string(), z.unknown()),
 });
 
@@ -70,6 +74,8 @@ export interface Offer {
   label: string;
   lead: string;
   offeredAt: string;
+  /** The lead's random number for this offer: a claim comment names it. */
+  nonce: string;
   /** The item as a worker launches it: status `assigned`, no history. */
   item: WorkItem;
 }
@@ -80,7 +86,8 @@ const camel = (k: string): string => k.replace(/_([a-z0-9])/g, (_, c: string) =>
 export const offerTitle = (id: string, label: string): string => `Studio offer ${id} for ${label}`;
 
 /** The issue body of an offer: a line for people and one JSON block for workers. */
-export function renderOffer(item: WorkItem, lead: string, now: Date): string {
+export function renderOffer(item: WorkItem, lead: string, now: Date, nonce: string): string {
+  if (!NONCE_RE.test(nonce)) throw new Error('invalid offer nonce');
   if (item.runsOn === undefined) throw new Error(`${item.id} names no runs_on label`);
   const fields: Record<string, unknown> = {};
   for (const k of OFFER_FIELDS) if (item[k] !== undefined) fields[snake(k)] = item[k];
@@ -89,6 +96,7 @@ export function renderOffer(item: WorkItem, lead: string, now: Date): string {
     label: item.runsOn,
     lead,
     offered_at: now.toISOString(),
+    nonce,
     item: fields,
   };
   return [
@@ -142,8 +150,24 @@ export function parseOffer(title: string, body: string): Offer | undefined {
     label: parsed.data.label,
     lead: parsed.data.lead,
     offeredAt: parsed.data.offeredAt,
+    nonce: parsed.data.nonce,
     item: it,
   };
+}
+
+const CLAIM_COMMENT_RE = /^studio-claim ([0-9a-f]{40}) ([0-9a-f]{32})$/;
+
+/**
+ * The comment a worker posts on the offer when it creates a claim (first or takeover): exactly one
+ * line, the claim commit and the offer's nonce. GitHub sets the comment's author from the token
+ * that posts it, which is what proves who claimed; nothing in the commit can.
+ */
+export const claimComment = (sha: string, nonce: string): string => `studio-claim ${sha} ${nonce}`;
+
+/** The claim commit and nonce of a claim comment; undefined for any other text. */
+export function parseClaimComment(body: string): { sha: string; nonce: string } | undefined {
+  const m = CLAIM_COMMENT_RE.exec(body);
+  return m ? { sha: m[1] as string, nonce: m[2] as string } : undefined;
 }
 
 /** Where a claim stands. `done`: the report is attached; `released`: the worker gave it up. */

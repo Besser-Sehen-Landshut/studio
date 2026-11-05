@@ -25,21 +25,27 @@ export interface OfferIssue {
   open: boolean;
 }
 
-/** The commit a claim ref points to, with GitHub's own view of who made it. */
+/**
+ * A commit of a claim ref. The ref is only the lock: nothing in a commit, neither its content nor
+ * its author, committer or signature, says who wrote it (GitHub matches authors by e-mail, and API
+ * commits of a user token are unsigned). Who claimed is proven by a comment (`OfferComment`).
+ */
 export interface ClaimCommit {
   sha: string;
   message: string;
   /** The committer date in the commit. Writer-supplied: shown, never used for a lease. */
   committedAt: string;
   parents: string[];
-  /**
-   * The GitHub account GitHub attributes the commit to, when author and committer are one
-   * account; undefined otherwise. The claim's own `worker` field is self-declared and only counts
-   * when it equals this.
-   */
-  login?: string;
-  /** Whether GitHub verified the commit's signature (`commit.verification.verified`). */
-  verified: boolean;
+}
+
+/** A comment on an offer, as GitHub shows it: its author is the account that posted it. */
+export interface OfferComment {
+  id: number;
+  /** `user.login`, set by GitHub from the token that posted it; no client can set it. */
+  login: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface PullRequestFacts {
@@ -62,6 +68,12 @@ export interface WorkerHub {
   listOffers(repo: string): Promise<OfferIssue[]>;
   offer(repo: string, n: number): Promise<OfferIssue | undefined>;
   readClaim(repo: string, item: string): Promise<ClaimCommit | undefined>;
+  /** One commit of a claim chain, by its SHA; undefined when GitHub has none. */
+  claimCommit(repo: string, sha: string): Promise<ClaimCommit | undefined>;
+  /** Posts a comment on an offer, as this identity. */
+  commentOffer(repo: string, n: number, body: string): Promise<void>;
+  /** Every comment of an offer, oldest first. */
+  offerComments(repo: string, n: number): Promise<OfferComment[]>;
   /**
    * Makes a commit with `files` and points the claim ref at it. Without `parent` the ref is
    * created and fails when it exists; with `parent` it moves only as a fast-forward from it, so a
@@ -202,6 +214,28 @@ export function ghHub(gh: Gh, token?: string): WorkerHub {
       throw new HubError(`${what} (unreadable answer)`, 0, undefined);
     }
   };
+  /** A commit by its SHA (git/commits); undefined on 404. */
+  const commitOf = async (sha: string, repo: string): Promise<ClaimCommit | undefined> => {
+    const r = await api('reading a claim commit', 'GET', `repos/${repo}/git/commits/${sha}`);
+    if (!r.ok) {
+      if (r.status === 404) return undefined;
+      throw new HubError('reading a claim commit', r.code, r.status);
+    }
+    const c = r.json as {
+      message?: unknown;
+      committer?: { date?: unknown };
+      parents?: { sha?: unknown }[];
+    } | null;
+    if (typeof c?.message !== 'string' || typeof c.committer?.date !== 'string') {
+      throw new HubError('reading a claim commit (incomplete)', 0, undefined);
+    }
+    return {
+      sha,
+      message: c.message,
+      committedAt: c.committer.date,
+      parents: (c.parents ?? []).flatMap((p) => (typeof p.sha === 'string' ? [p.sha] : [])),
+    };
+  };
   const split = (repo: string) => {
     assertRepo(repo);
     const [owner, name] = repo.split('/') as [string, string];
@@ -277,39 +311,56 @@ export function ghHub(gh: Gh, token?: string): WorkerHub {
       if (typeof sha !== 'string' || !SHA_RE.test(sha)) {
         throw new HubError('reading a claim (no commit)', 0, undefined);
       }
-      // The commits endpoint (not git/commits): it adds the accounts GitHub attributes the commit
-      // to and its signature verification.
-      const c = (await must('reading a claim commit', 'GET', `repos/${repo}/commits/${sha}`)) as {
-        commit?: {
-          message?: unknown;
-          committer?: { date?: unknown };
-          verification?: { verified?: unknown };
-        };
-        author?: { login?: unknown } | null;
-        committer?: { login?: unknown } | null;
-        parents?: { sha?: unknown }[];
-      } | null;
-      const message = c?.commit?.message;
-      const date = c?.commit?.committer?.date;
-      if (typeof message !== 'string' || typeof date !== 'string') {
-        throw new HubError('reading a claim commit (incomplete)', 0, undefined);
+      const c = await commitOf(sha, repo);
+      if (c === undefined) throw new HubError('reading a claim commit (missing)', 0, 404);
+      return c;
+    },
+    async claimCommit(repo, sha) {
+      assertRepo(repo);
+      if (!SHA_RE.test(sha)) throw new Error('invalid claim commit');
+      return commitOf(sha, repo);
+    },
+    async commentOffer(repo, n, body) {
+      assertRepo(repo);
+      await must('commenting on an offer', 'POST', `repos/${repo}/issues/${n}/comments`, { body });
+    },
+    async offerComments(repo, n) {
+      assertRepo(repo);
+      const out: OfferComment[] = [];
+      for (let page = 1; page <= 30; page++) {
+        const j = await must(
+          'reading offer comments',
+          'GET',
+          `repos/${repo}/issues/${n}/comments?per_page=100&page=${page}`,
+        );
+        const list = Array.isArray(j) ? (j as unknown[]) : [];
+        for (const raw of list) {
+          const c = raw as {
+            id?: unknown;
+            user?: { login?: unknown } | null;
+            body?: unknown;
+            created_at?: unknown;
+            updated_at?: unknown;
+          };
+          if (
+            typeof c.id === 'number' &&
+            typeof c.user?.login === 'string' &&
+            typeof c.body === 'string' &&
+            typeof c.created_at === 'string' &&
+            typeof c.updated_at === 'string'
+          ) {
+            out.push({
+              id: c.id,
+              login: c.user.login,
+              body: c.body,
+              createdAt: c.created_at,
+              updatedAt: c.updated_at,
+            });
+          }
+        }
+        if (list.length < 100) break;
       }
-      const author = c?.author?.login;
-      const committer = c?.committer?.login;
-      const login =
-        typeof author === 'string' &&
-        typeof committer === 'string' &&
-        author.toLowerCase() === committer.toLowerCase()
-          ? committer
-          : undefined;
-      return {
-        sha,
-        message,
-        committedAt: date,
-        parents: (c?.parents ?? []).flatMap((p) => (typeof p.sha === 'string' ? [p.sha] : [])),
-        ...(login === undefined ? {} : { login }),
-        verified: c?.commit?.verification?.verified === true,
-      };
+      return out;
     },
     async writeClaim(repo, item, o) {
       assertRepo(repo);

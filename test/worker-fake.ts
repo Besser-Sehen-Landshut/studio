@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto';
-import type { ClaimCommit, OfferIssue, PullRequestFacts, WorkerHub } from '../src/worker-hub.js';
+import type {
+  ClaimCommit,
+  OfferComment,
+  OfferIssue,
+  PullRequestFacts,
+  WorkerHub,
+} from '../src/worker-hub.js';
 
 /**
  * GitHub as the lead and workers see it, in memory: issues with their author, claim refs that
@@ -16,10 +22,11 @@ export function fakeGitHub(now: () => Date) {
       files: Record<string, string>;
       parents: string[];
       at: string;
-      login?: string;
-      verified: boolean;
     }
   >();
+  /** Comments per offer, as GitHub keeps them; tests may edit one (`updatedAt`). */
+  const comments = new Map<number, OfferComment[]>();
+  let nextComment = 900;
   const branches = new Map<string, string>();
   const prs = new Map<number, PullRequestFacts>();
   const calls: string[] = [];
@@ -56,9 +63,23 @@ export function fakeGitHub(now: () => Date) {
         message: c.message,
         committedAt: c.at,
         parents: c.parents,
-        ...(c.login === undefined ? {} : { login: c.login }),
-        verified: c.verified,
       };
+    },
+    async claimCommit(_repo, sha) {
+      const c = commits.get(sha);
+      return c === undefined
+        ? undefined
+        : { sha, message: c.message, committedAt: c.at, parents: c.parents };
+    },
+    async commentOffer(_repo, n, body) {
+      const at = now().toISOString();
+      const list = comments.get(n) ?? [];
+      list.push({ id: nextComment++, login, body, createdAt: at, updatedAt: at });
+      comments.set(n, list);
+      calls.push(`${login} comment #${n}: ${body}`);
+    },
+    async offerComments(_repo, n) {
+      return [...(comments.get(n) ?? [])];
     },
     async writeClaim(_repo, item, o) {
       const sha = createHash('sha1').update(`${seq++}:${o.message}`).digest('hex');
@@ -67,8 +88,6 @@ export function fakeGitHub(now: () => Date) {
         files: o.files,
         parents: o.parent === undefined ? [] : [o.parent],
         at: now().toISOString(),
-        login,
-        verified: true,
       });
       const tip = refs.get(item);
       if (o.parent === undefined ? tip !== undefined : tip !== o.parent) return { ok: false };
@@ -91,14 +110,10 @@ export function fakeGitHub(now: () => Date) {
     },
   });
   /**
-   * A claim commit someone wrote straight to the ref, as any account with contents write can:
-   * GitHub attributes it to `login` (undefined: no account) and verifies it or not.
+   * A claim commit someone wrote straight to the ref, as any account with contents write can,
+   * with whatever author e-mail and dates they like: nothing about it says who wrote it.
    */
-  const plant = (
-    item: string,
-    message: string,
-    o: { login?: string; verified: boolean; at?: string },
-  ): string => {
+  const plant = (item: string, message: string, o: { at?: string } = {}): string => {
     const sha = createHash('sha1').update(`${seq++}:planted:${message}`).digest('hex');
     const tip = refs.get(item);
     commits.set(sha, {
@@ -106,11 +121,9 @@ export function fakeGitHub(now: () => Date) {
       files: {},
       parents: tip === undefined ? [] : [tip],
       at: o.at ?? now().toISOString(),
-      ...(o.login === undefined ? {} : { login: o.login }),
-      verified: o.verified,
     });
     refs.set(item, sha);
     return sha;
   };
-  return { hubAs, issues, refs, commits, branches, prs, calls, plant };
+  return { hubAs, issues, refs, commits, branches, prs, calls, plant, comments };
 }

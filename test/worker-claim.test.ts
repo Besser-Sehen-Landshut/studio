@@ -4,11 +4,13 @@ import { workItemSchema } from '../src/board.js';
 import { WORKER_LABEL_RE } from '../src/config.js';
 import {
   type Claim,
+  claimComment,
   claimExpired,
   LEASE_GRACE_MS,
   looksSecret,
   offerTitle,
   parseClaim,
+  parseClaimComment,
   parseOffer,
   renderClaim,
   renderOffer,
@@ -34,13 +36,19 @@ const item: WorkItem = workItemSchema.parse({
 });
 
 const NOW = new Date('2026-11-05T10:00:00Z');
+const NONCE = 'f'.repeat(32);
 
 describe('offers', () => {
   it('round-trip the item fields a brief needs, never status, history or dependencies', () => {
-    const body = renderOffer(item, 'lead-user', NOW);
+    const body = renderOffer(item, 'lead-user', NOW, NONCE);
     expect(body).toContain('Do not edit it');
     const o = parseOffer(offerTitle('APP-4', 'windows'), body);
-    expect(o).toMatchObject({ label: 'windows', lead: 'lead-user', offeredAt: NOW.toISOString() });
+    expect(o).toMatchObject({
+      label: 'windows',
+      lead: 'lead-user',
+      offeredAt: NOW.toISOString(),
+      nonce: NONCE,
+    });
     expect(o?.item).toMatchObject({
       id: 'APP-4',
       title: item.title,
@@ -53,7 +61,7 @@ describe('offers', () => {
     });
   });
   it('refuses a title that does not match, a second block, unknown fields and bad items', () => {
-    const body = renderOffer(item, 'lead-user', NOW);
+    const body = renderOffer(item, 'lead-user', NOW, NONCE);
     expect(parseOffer('Studio offer APP-5 for windows', body)).toBeUndefined();
     expect(parseOffer('Studio offer APP-4 for linux', body)).toBeUndefined();
     expect(parseOffer(offerTitle('APP-4', 'windows'), `${body}\n${body}`)).toBeUndefined();
@@ -140,6 +148,22 @@ describe('claims', () => {
     expect(claimExpired({ ...claim, state: 'alive' }, at, later(3_600_000))).toBe(true);
     expect(claimExpired({ ...claim, state: 'done' }, at, later(86_400_000))).toBe(false);
     expect(claimExpired(claim, 'not a time', NOW)).toBe(true);
+  });
+});
+
+describe('claim comments', () => {
+  it('are exactly one line: the claim commit and the nonce', () => {
+    const sha = 'a'.repeat(40);
+    expect(parseClaimComment(claimComment(sha, NONCE))).toEqual({ sha, nonce: NONCE });
+    for (const body of [
+      `${claimComment(sha, NONCE)}\n`,
+      ` ${claimComment(sha, NONCE)}`,
+      `studio-claim ${'a'.repeat(39)} ${NONCE}`,
+      `studio-claim ${sha} ${NONCE} extra`,
+      `please: ${claimComment(sha, NONCE)}`,
+    ]) {
+      expect(parseClaimComment(body)).toBeUndefined();
+    }
   });
 });
 

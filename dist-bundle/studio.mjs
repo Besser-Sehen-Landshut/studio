@@ -38880,17 +38880,20 @@ function workerItemProblem(item) {
   }
   return void 0;
 }
+var NONCE_RE = /^[0-9a-f]{32}$/;
 var offerSchema = external_exports.strictObject({
   studioOffer: external_exports.literal(1),
   label: external_exports.string().regex(WORKER_LABEL_RE),
   lead: external_exports.string().regex(GITHUB_LOGIN_RE),
   offeredAt: external_exports.string().refine((s) => !Number.isNaN(Date.parse(s)), "not a time"),
+  nonce: external_exports.string().regex(NONCE_RE),
   item: external_exports.record(external_exports.string(), external_exports.unknown())
 });
 var snake4 = (k) => k.replace(/[A-Z]/g, (c3) => `_${c3.toLowerCase()}`);
 var camel5 = (k) => k.replace(/_([a-z0-9])/g, (_, c3) => c3.toUpperCase());
 var offerTitle = (id, label) => `Studio offer ${id} for ${label}`;
-function renderOffer(item, lead, now) {
+function renderOffer(item, lead, now, nonce) {
+  if (!NONCE_RE.test(nonce)) throw new Error("invalid offer nonce");
   if (item.runsOn === void 0) throw new Error(`${item.id} names no runs_on label`);
   const fields = {};
   for (const k of OFFER_FIELDS) if (item[k] !== void 0) fields[snake4(k)] = item[k];
@@ -38899,6 +38902,7 @@ function renderOffer(item, lead, now) {
     label: item.runsOn,
     lead,
     offered_at: now.toISOString(),
+    nonce,
     item: fields
   };
   return [
@@ -38947,8 +38951,15 @@ function parseOffer(title, body) {
     label: parsed.data.label,
     lead: parsed.data.lead,
     offeredAt: parsed.data.offeredAt,
+    nonce: parsed.data.nonce,
     item: it
   };
+}
+var CLAIM_COMMENT_RE = /^studio-claim ([0-9a-f]{40}) ([0-9a-f]{32})$/;
+var claimComment = (sha, nonce) => `studio-claim ${sha} ${nonce}`;
+function parseClaimComment(body) {
+  const m = CLAIM_COMMENT_RE.exec(body);
+  return m ? { sha: m[1], nonce: m[2] } : void 0;
 }
 var CLAIM_STATES = ["claimed", "alive", "done", "released"];
 var usageSchema = external_exports.strictObject({
@@ -44288,6 +44299,24 @@ async function claimNext(c3, stateRoot, state, ready) {
       launched: false
     };
     saveWorkerState(stateRoot, { ...state, current });
+    try {
+      await c3.hub.commentOffer(repo, issue2.number, claimComment(wrote.sha, offer.nonce));
+    } catch (e) {
+      c3.log(`${item.id}: the claim comment failed: ${e.message}`);
+      await release(
+        c3,
+        stateRoot,
+        { label: c3.label },
+        current,
+        repo,
+        "the worker could not post its claim comment"
+      );
+      return {
+        kind: "released",
+        item: item.id,
+        line: `${item.id}: the claim comment failed; released`
+      };
+    }
     const from = await c3.hub.branchHead(item.repo, `studio/${item.id}`) === void 0 ? ITEM_BASE : `studio/${item.id}`;
     try {
       await launchCrew(c3.project, item, config2, c3.ports, c3.owner, {
@@ -44677,6 +44706,23 @@ function ghHub(gh, token) {
       throw new HubError(`${what} (unreadable answer)`, 0, void 0);
     }
   };
+  const commitOf = async (sha, repo) => {
+    const r = await api("reading a claim commit", "GET", `repos/${repo}/git/commits/${sha}`);
+    if (!r.ok) {
+      if (r.status === 404) return void 0;
+      throw new HubError("reading a claim commit", r.code, r.status);
+    }
+    const c3 = r.json;
+    if (typeof c3?.message !== "string" || typeof c3.committer?.date !== "string") {
+      throw new HubError("reading a claim commit (incomplete)", 0, void 0);
+    }
+    return {
+      sha,
+      message: c3.message,
+      committedAt: c3.committer.date,
+      parents: (c3.parents ?? []).flatMap((p) => typeof p.sha === "string" ? [p.sha] : [])
+    };
+  };
   const split2 = (repo) => {
     assertRepo(repo);
     const [owner, name] = repo.split("/");
@@ -44752,23 +44798,44 @@ function ghHub(gh, token) {
       if (typeof sha !== "string" || !SHA_RE3.test(sha)) {
         throw new HubError("reading a claim (no commit)", 0, void 0);
       }
-      const c3 = await must("reading a claim commit", "GET", `repos/${repo}/commits/${sha}`);
-      const message = c3?.commit?.message;
-      const date5 = c3?.commit?.committer?.date;
-      if (typeof message !== "string" || typeof date5 !== "string") {
-        throw new HubError("reading a claim commit (incomplete)", 0, void 0);
+      const c3 = await commitOf(sha, repo);
+      if (c3 === void 0) throw new HubError("reading a claim commit (missing)", 0, 404);
+      return c3;
+    },
+    async claimCommit(repo, sha) {
+      assertRepo(repo);
+      if (!SHA_RE3.test(sha)) throw new Error("invalid claim commit");
+      return commitOf(sha, repo);
+    },
+    async commentOffer(repo, n2, body) {
+      assertRepo(repo);
+      await must("commenting on an offer", "POST", `repos/${repo}/issues/${n2}/comments`, { body });
+    },
+    async offerComments(repo, n2) {
+      assertRepo(repo);
+      const out = [];
+      for (let page = 1; page <= 30; page++) {
+        const j = await must(
+          "reading offer comments",
+          "GET",
+          `repos/${repo}/issues/${n2}/comments?per_page=100&page=${page}`
+        );
+        const list2 = Array.isArray(j) ? j : [];
+        for (const raw of list2) {
+          const c3 = raw;
+          if (typeof c3.id === "number" && typeof c3.user?.login === "string" && typeof c3.body === "string" && typeof c3.created_at === "string" && typeof c3.updated_at === "string") {
+            out.push({
+              id: c3.id,
+              login: c3.user.login,
+              body: c3.body,
+              createdAt: c3.created_at,
+              updatedAt: c3.updated_at
+            });
+          }
+        }
+        if (list2.length < 100) break;
       }
-      const author = c3?.author?.login;
-      const committer = c3?.committer?.login;
-      const login = typeof author === "string" && typeof committer === "string" && author.toLowerCase() === committer.toLowerCase() ? committer : void 0;
-      return {
-        sha,
-        message,
-        committedAt: date5,
-        parents: (c3?.parents ?? []).flatMap((p) => typeof p.sha === "string" ? [p.sha] : []),
-        ...login === void 0 ? {} : { login },
-        verified: c3?.commit?.verification?.verified === true
-      };
+      return out;
     },
     async writeClaim(repo, item, o2) {
       assertRepo(repo);
@@ -44877,6 +44944,7 @@ function ghHub(gh, token) {
 }
 
 // src/worker-lead.ts
+import { randomBytes as randomBytes9 } from "node:crypto";
 var WORKER_WAIT2 = "worker: ";
 var workerCrewName = (label) => `worker:${label}`;
 async function openOffer(o2) {
@@ -44884,12 +44952,94 @@ async function openOffer(o2) {
   if (label === void 0) throw new Error(`${o2.item.id} names no runs_on label`);
   const title = offerTitle(o2.item.id, label);
   const open4 = await o2.hub.listOffers(o2.repo);
-  const mine = open4.find((i2) => i2.title === title && i2.author === o2.lead);
-  if (mine !== void 0) return mine.number;
-  return o2.hub.openOffer(o2.repo, title, renderOffer(o2.item, o2.lead, o2.now), [
+  const mine = open4.find((i2) => i2.title === title && i2.author === o2.lead && !i2.edited);
+  const known = mine === void 0 ? void 0 : parseOffer(mine.title, mine.body);
+  if (mine !== void 0 && known !== void 0) return { offer: mine.number, nonce: known.nonce };
+  const nonce = randomBytes9(16).toString("hex");
+  const offer = await o2.hub.openOffer(o2.repo, title, renderOffer(o2.item, o2.lead, o2.now, nonce), [
     OFFER_LABEL,
     `studio-runs-on:${label}`
   ]);
+  return { offer, nonce };
+}
+var MAX_CHAIN = 500;
+async function proveClaim(o2) {
+  const { claim: claim2, record: record2 } = o2;
+  const lower = (s) => s.toLowerCase();
+  const warnings = [];
+  const nonce = record2.nonce;
+  if (nonce === void 0) return { ok: false, line: "its offer has no nonce on record", warnings };
+  let cur = o2.tip;
+  let anchor2;
+  for (let i2 = 0; i2 < MAX_CHAIN && cur !== void 0; i2++) {
+    const c3 = parseClaim(cur.message);
+    if (c3 === void 0 || c3.item !== claim2.item || c3.offer !== claim2.offer || c3.attempt !== claim2.attempt || lower(c3.worker) !== lower(claim2.worker)) {
+      return {
+        ok: false,
+        line: `its chain holds a commit that is not this claim's (${cur.sha.slice(0, 12)})`,
+        warnings
+      };
+    }
+    if (c3.state === "claimed") {
+      anchor2 = cur.sha;
+      break;
+    }
+    const parent = cur.parents[0];
+    cur = parent === void 0 ? void 0 : await o2.hub.claimCommit(o2.repo, parent);
+  }
+  if (anchor2 === void 0) {
+    return {
+      ok: false,
+      line: "its chain does not lead back to the commit that claimed it",
+      warnings
+    };
+  }
+  const comments = (await o2.hub.offerComments(o2.repo, record2.offer)).flatMap((c3) => {
+    const p = parseClaimComment(c3.body);
+    return p === void 0 ? [] : [{ ...c3, ...p }];
+  });
+  comments.sort((a2, b) => Date.parse(a2.createdAt) - Date.parse(b.createdAt) || a2.id - b.id);
+  const accepted = o2.accepted.map(lower);
+  for (const c3 of comments) {
+    const who = c3.login.replace(/[^A-Za-z0-9-[\]]/g, "?");
+    if (c3.updatedAt !== c3.createdAt)
+      warnings.push(`claim comment ${c3.id} by ${who} was edited and does not count`);
+    else if (!accepted.includes(lower(c3.login)))
+      warnings.push(`claim comment ${c3.id} by ${who}, who is not accepted for ${record2.label}`);
+    else if (c3.nonce !== nonce)
+      warnings.push(`claim comment ${c3.id} by ${who} names another offer`);
+  }
+  const valid = comments.filter(
+    (c3) => c3.updatedAt === c3.createdAt && c3.nonce === nonce && c3.sha === anchor2
+  );
+  const first = valid[0];
+  if (first === void 0) {
+    return {
+      ok: false,
+      line: `no claim comment on #${record2.offer} proves who claimed it (${anchor2.slice(0, 12)})`,
+      warnings
+    };
+  }
+  for (const later of valid.slice(1)) {
+    warnings.push(
+      `claim comment ${later.id} by ${later.login.replace(/[^A-Za-z0-9-[\]]/g, "?")} names a commit already claimed`
+    );
+  }
+  if (lower(first.login) !== lower(claim2.worker)) {
+    return {
+      ok: false,
+      line: `the claim names ${claim2.worker}, but ${first.login.replace(/[^A-Za-z0-9-[\]]/g, "?")} commented it first`,
+      warnings
+    };
+  }
+  if (!accepted.includes(lower(first.login))) {
+    return {
+      ok: false,
+      line: `claimed by ${claim2.worker}, who is not accepted for the label ${record2.label} (workers.accept in the owner config)`,
+      warnings
+    };
+  }
+  return { ok: true, anchor: anchor2, warnings };
 }
 async function followClaim(o2) {
   const { item, record: record2 } = o2;
@@ -44920,15 +45070,6 @@ async function followClaim(o2) {
       }
     };
   }
-  const foreign = claimIdentityProblem(
-    read3,
-    claim2,
-    o2.ownerConfig.workers?.accept[record2.label] ?? [],
-    record2.label
-  );
-  if (foreign !== void 0) {
-    return { follow: { kind: "lead", line: `${item.id}: ${foreign}; nothing of it counts` } };
-  }
   if (claim2.label !== record2.label || claim2.offer !== record2.offer) {
     return {
       follow: {
@@ -44937,6 +45078,21 @@ async function followClaim(o2) {
       }
     };
   }
+  const proof = await proveClaim({
+    hub: o2.hub,
+    repo: o2.repo,
+    record: record2,
+    tip: read3,
+    claim: claim2,
+    accepted: o2.ownerConfig.workers?.accept[record2.label] ?? []
+  });
+  if (!proof.ok) {
+    return {
+      follow: { kind: "lead", line: `${item.id}: ${proof.line}; nothing of it counts` },
+      warnings: proof.warnings
+    };
+  }
+  const warnings = proof.warnings;
   const at2 = record2.claim?.sha === read3.sha && !Number.isNaN(Date.parse(record2.claim.at)) ? record2.claim.at : o2.now.toISOString();
   const seen = {
     sha: read3.sha,
@@ -44946,7 +45102,9 @@ async function followClaim(o2) {
     at: at2,
     ...claim2.pr === void 0 ? {} : { pr: claim2.pr }
   };
-  if (claim2.state === "done") return { follow: { kind: "done", claim: claim2, sha: read3.sha }, seen };
+  if (claim2.state === "done") {
+    return { follow: { kind: "done", claim: claim2, sha: read3.sha }, seen, warnings };
+  }
   if (claim2.state === "released") {
     return {
       follow: {
@@ -44955,7 +45113,8 @@ async function followClaim(o2) {
         sha: read3.sha,
         reason: claim2.reason ?? "no reason given"
       },
-      seen
+      seen,
+      warnings
     };
   }
   const ago = minutesSince(at2, o2.now);
@@ -44975,7 +45134,8 @@ async function followClaim(o2) {
         claimed: true,
         line: `${WORKER_WAIT2}claim of ${claim2.worker} expired (no heartbeat for ${ago} min); another worker of ${record2.label} may take it over`
       },
-      seen
+      seen,
+      warnings
     };
   }
   return {
@@ -44984,22 +45144,9 @@ async function followClaim(o2) {
       claimed: true,
       line: `${WORKER_WAIT2}on ${claim2.worker} (${record2.label}), heartbeat ${ago} min ago`
     },
-    seen
+    seen,
+    warnings
   };
-}
-function claimIdentityProblem(read3, claim2, accepted, label) {
-  const who = claim2.worker.toLowerCase();
-  if (!accepted.some((a2) => a2.toLowerCase() === who)) {
-    return `claimed by ${claim2.worker}, who is not accepted for the label ${label} (workers.accept in the owner config)`;
-  }
-  if (!read3.verified) {
-    return `the claim names ${claim2.worker}, but GitHub did not verify its commit`;
-  }
-  if (read3.login === void 0 || read3.login.toLowerCase() !== who) {
-    const by = read3.login === void 0 ? "no single account" : read3.login.replace(/[^A-Za-z0-9-]/g, "?");
-    return `the claim names ${claim2.worker}, but GitHub attributes its commit to ${by}`;
-  }
-  return void 0;
 }
 async function recordWorkerRun(o2) {
   const usage = toRunUsage(o2.claim.usage);
@@ -45687,7 +45834,7 @@ async function runCli(argv, deps) {
         );
       }
       const now = ports.clock.now();
-      const offer = await openOffer({
+      const { offer, nonce } = await openOffer({
         hub: leadHub(),
         repo: config2.primaryRepo,
         item,
@@ -45695,7 +45842,7 @@ async function runCli(argv, deps) {
         now
       });
       updateWorkers(root, (s) => {
-        s.items[item.id] = { label, offer, offeredAt: now.toISOString() };
+        s.items[item.id] = { label, offer, nonce, offeredAt: now.toISOString() };
       });
       await withBoardLock(root, ports.clock.now(), () => {
         const fresh = loadBoard(project);
@@ -45767,16 +45914,21 @@ async function runCli(argv, deps) {
           `${item.id}: the claim of ${claim2.worker} is ${claim2.state}; nothing moved`
         );
       }
-      const foreign = claimIdentityProblem(
-        read3,
-        claim2,
-        loadOwnerConfig(owner).workers?.accept[record2.label] ?? [],
-        record2.label
-      );
-      if (foreign !== void 0 || claim2.label !== record2.label || claim2.offer !== record2.offer) {
+      if (claim2.label !== record2.label || claim2.offer !== record2.offer) {
         throw new ReportError(
-          `the claim of ${item.id} counts for nothing: ${foreign ?? `it names offer #${claim2.offer}, not #${record2.offer}`}`
+          `the claim of ${item.id} counts for nothing: it names offer #${claim2.offer}, not #${record2.offer}`
         );
+      }
+      const proof = await proveClaim({
+        hub: leadHub(),
+        repo: config2.primaryRepo,
+        record: record2,
+        tip: read3,
+        claim: claim2,
+        accepted: loadOwnerConfig(owner).workers?.accept[record2.label] ?? []
+      });
+      if (!proof.ok) {
+        throw new ReportError(`the claim of ${item.id} counts for nothing: ${proof.line}`);
       }
       const text = await leadHub().claimFile(config2.primaryRepo, read3.sha, "report.md");
       if (text === void 0) throw new ReportError("the done claim carries no report");
@@ -46346,7 +46498,7 @@ async function runCli(argv, deps) {
               continue;
             }
             const now = ports.clock.now();
-            const { follow, seen } = await followClaim({
+            const { follow, seen, warnings } = await followClaim({
               hub: leadHub(),
               repo: config2.primaryRepo,
               item,
@@ -46361,6 +46513,7 @@ async function runCli(argv, deps) {
                   s.items[item.id] = { ...r2, claim: seen, checkedAt: now.toISOString() };
               });
             }
+            for (const w of warnings ?? []) lead(item.id, `${item.id}: ${w}`);
             if (follow.kind === "lead") {
               lead(item.id, follow.line);
               continue;

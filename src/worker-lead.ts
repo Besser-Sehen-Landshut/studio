@@ -2,6 +2,7 @@
 // crew: `tick` offers it (an issue on the primary repository), follows its claim ref, and collects
 // it once the claim carries the report, through the same `collect` as a local crew. What the lead
 // knows about each offer lives in `workers.json` in the state root, changed under `workers.lock`.
+import { randomBytes } from 'node:crypto';
 import type { WorkItem } from './board.js';
 import type { OwnerConfig } from './config.js';
 import { recordLedgerRun } from './costs.js';
@@ -12,6 +13,8 @@ import {
   minutesSince,
   offerTitle,
   parseClaim,
+  parseClaimComment,
+  parseOffer,
   renderOffer,
   toRunUsage,
 } from './worker-claim.js';
@@ -37,17 +40,127 @@ export async function openOffer(o: {
   item: WorkItem;
   lead: string;
   now: Date;
-}): Promise<number> {
+}): Promise<{ offer: number; nonce: string }> {
   const label = o.item.runsOn;
   if (label === undefined) throw new Error(`${o.item.id} names no runs_on label`);
   const title = offerTitle(o.item.id, label);
   const open = await o.hub.listOffers(o.repo);
-  const mine = open.find((i) => i.title === title && i.author === o.lead);
-  if (mine !== undefined) return mine.number;
-  return o.hub.openOffer(o.repo, title, renderOffer(o.item, o.lead, o.now), [
+  const mine = open.find((i) => i.title === title && i.author === o.lead && !i.edited);
+  const known = mine === undefined ? undefined : parseOffer(mine.title, mine.body);
+  if (mine !== undefined && known !== undefined) return { offer: mine.number, nonce: known.nonce };
+  const nonce = randomBytes(16).toString('hex');
+  const offer = await o.hub.openOffer(o.repo, title, renderOffer(o.item, o.lead, o.now, nonce), [
     OFFER_LABEL,
     `studio-runs-on:${label}`,
   ]);
+  return { offer, nonce };
+}
+
+/** Longest claim chain the lead walks back to the commit that started an attempt. */
+const MAX_CHAIN = 500;
+
+/**
+ * Who made a claim, proven by GitHub rather than by the claim. The ref is only the lock: the
+ * lead walks back from its tip to the commit that started this attempt (state `claimed`; every
+ * commit on the way names the same worker, offer and attempt), and takes the first unedited
+ * comment on the offer naming that commit and the offer's nonce. Its author, set by GitHub from
+ * the token that posted it, must be the claim's worker and accepted for the label.
+ * `warnings` are claim comments that do not count: from accounts not accepted, edited ones, a
+ * second claimer of the same commit, another nonce. The lead hears of each.
+ */
+export async function proveClaim(o: {
+  hub: WorkerHub;
+  repo: string;
+  record: OfferRecord;
+  tip: ClaimCommit;
+  claim: Claim;
+  accepted: readonly string[];
+}): Promise<
+  { ok: true; anchor: string; warnings: string[] } | { ok: false; line: string; warnings: string[] }
+> {
+  const { claim, record } = o;
+  const lower = (s: string) => s.toLowerCase();
+  const warnings: string[] = [];
+  const nonce = record.nonce;
+  if (nonce === undefined) return { ok: false, line: 'its offer has no nonce on record', warnings };
+  // Back to the start of this attempt.
+  let cur: ClaimCommit | undefined = o.tip;
+  let anchor: string | undefined;
+  for (let i = 0; i < MAX_CHAIN && cur !== undefined; i++) {
+    const c = parseClaim(cur.message);
+    if (
+      c === undefined ||
+      c.item !== claim.item ||
+      c.offer !== claim.offer ||
+      c.attempt !== claim.attempt ||
+      lower(c.worker) !== lower(claim.worker)
+    ) {
+      return {
+        ok: false,
+        line: `its chain holds a commit that is not this claim's (${cur.sha.slice(0, 12)})`,
+        warnings,
+      };
+    }
+    if (c.state === 'claimed') {
+      anchor = cur.sha;
+      break;
+    }
+    const parent: string | undefined = cur.parents[0];
+    cur = parent === undefined ? undefined : await o.hub.claimCommit(o.repo, parent);
+  }
+  if (anchor === undefined) {
+    return {
+      ok: false,
+      line: 'its chain does not lead back to the commit that claimed it',
+      warnings,
+    };
+  }
+  const comments = (await o.hub.offerComments(o.repo, record.offer)).flatMap((c) => {
+    const p = parseClaimComment(c.body);
+    return p === undefined ? [] : [{ ...c, ...p }];
+  });
+  comments.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id - b.id);
+  const accepted = o.accepted.map(lower);
+  for (const c of comments) {
+    const who = c.login.replace(/[^A-Za-z0-9-[\]]/g, '?');
+    if (c.updatedAt !== c.createdAt)
+      warnings.push(`claim comment ${c.id} by ${who} was edited and does not count`);
+    else if (!accepted.includes(lower(c.login)))
+      warnings.push(`claim comment ${c.id} by ${who}, who is not accepted for ${record.label}`);
+    else if (c.nonce !== nonce)
+      warnings.push(`claim comment ${c.id} by ${who} names another offer`);
+  }
+  const valid = comments.filter(
+    (c) => c.updatedAt === c.createdAt && c.nonce === nonce && c.sha === anchor,
+  );
+  const first = valid[0];
+  if (first === undefined) {
+    return {
+      ok: false,
+      line: `no claim comment on #${record.offer} proves who claimed it (${anchor.slice(0, 12)})`,
+      warnings,
+    };
+  }
+  for (const later of valid.slice(1)) {
+    warnings.push(
+      `claim comment ${later.id} by ${later.login.replace(/[^A-Za-z0-9-[\]]/g, '?')} names a commit already claimed`,
+    );
+  }
+  if (lower(first.login) !== lower(claim.worker)) {
+    return {
+      ok: false,
+      line: `the claim names ${claim.worker}, but ${first.login.replace(/[^A-Za-z0-9-[\]]/g, '?')} commented it first`,
+      warnings,
+    };
+  }
+  if (!accepted.includes(lower(first.login))) {
+    return {
+      ok: false,
+      line: `claimed by ${claim.worker}, who is not accepted for the label ${record.label} (workers.accept in the owner config)`,
+      warnings,
+    };
+  }
+  return { ok: true, anchor, warnings };
 }
 
 /** What `followClaim` found for one item. */
@@ -72,7 +185,7 @@ export async function followClaim(o: {
   record: OfferRecord;
   ownerConfig: OwnerConfig;
   now: Date;
-}): Promise<{ follow: Follow; seen?: SeenClaim }> {
+}): Promise<{ follow: Follow; seen?: SeenClaim; warnings?: string[] }> {
   const { item, record } = o;
   const read = await o.hub.readClaim(o.repo, item.id);
   if (read === undefined) {
@@ -101,15 +214,6 @@ export async function followClaim(o: {
       },
     };
   }
-  const foreign = claimIdentityProblem(
-    read,
-    claim,
-    o.ownerConfig.workers?.accept[record.label] ?? [],
-    record.label,
-  );
-  if (foreign !== undefined) {
-    return { follow: { kind: 'lead', line: `${item.id}: ${foreign}; nothing of it counts` } };
-  }
   if (claim.label !== record.label || claim.offer !== record.offer) {
     return {
       follow: {
@@ -118,6 +222,21 @@ export async function followClaim(o: {
       },
     };
   }
+  const proof = await proveClaim({
+    hub: o.hub,
+    repo: o.repo,
+    record,
+    tip: read,
+    claim,
+    accepted: o.ownerConfig.workers?.accept[record.label] ?? [],
+  });
+  if (!proof.ok) {
+    return {
+      follow: { kind: 'lead', line: `${item.id}: ${proof.line}; nothing of it counts` },
+      warnings: proof.warnings,
+    };
+  }
+  const warnings = proof.warnings;
   // The lead's own clock: the first time it saw this commit is the heartbeat it knows of.
   const at =
     record.claim?.sha === read.sha && !Number.isNaN(Date.parse(record.claim.at))
@@ -131,7 +250,9 @@ export async function followClaim(o: {
     at,
     ...(claim.pr === undefined ? {} : { pr: claim.pr }),
   };
-  if (claim.state === 'done') return { follow: { kind: 'done', claim, sha: read.sha }, seen };
+  if (claim.state === 'done') {
+    return { follow: { kind: 'done', claim, sha: read.sha }, seen, warnings };
+  }
   if (claim.state === 'released') {
     return {
       follow: {
@@ -141,6 +262,7 @@ export async function followClaim(o: {
         reason: claim.reason ?? 'no reason given',
       },
       seen,
+      warnings,
     };
   }
   const ago = minutesSince(at, o.now);
@@ -161,6 +283,7 @@ export async function followClaim(o: {
         line: `${WORKER_WAIT}claim of ${claim.worker} expired (no heartbeat for ${ago} min); another worker of ${record.label} may take it over`,
       },
       seen,
+      warnings,
     };
   }
   return {
@@ -170,33 +293,8 @@ export async function followClaim(o: {
       line: `${WORKER_WAIT}on ${claim.worker} (${record.label}), heartbeat ${ago} min ago`,
     },
     seen,
+    warnings,
   };
-}
-
-/**
- * Why a claim counts for nothing, or undefined. Its `worker` field is written by whoever wrote the
- * commit, so it counts only when GitHub verified the commit and attributes it to that very account,
- * and that account is accepted for the label.
- */
-export function claimIdentityProblem(
-  read: ClaimCommit,
-  claim: Claim,
-  accepted: readonly string[],
-  label: string,
-): string | undefined {
-  const who = claim.worker.toLowerCase();
-  if (!accepted.some((a) => a.toLowerCase() === who)) {
-    return `claimed by ${claim.worker}, who is not accepted for the label ${label} (workers.accept in the owner config)`;
-  }
-  if (!read.verified) {
-    return `the claim names ${claim.worker}, but GitHub did not verify its commit`;
-  }
-  if (read.login === undefined || read.login.toLowerCase() !== who) {
-    const by =
-      read.login === undefined ? 'no single account' : read.login.replace(/[^A-Za-z0-9-]/g, '?');
-    return `the claim names ${claim.worker}, but GitHub attributes its commit to ${by}`;
-  }
-  return undefined;
 }
 
 /**

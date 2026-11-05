@@ -41,6 +41,7 @@ import { parseReport, ReportError, readReportText, reportName } from './report.j
 import { readCrewRecords } from './state.js';
 import {
   type Claim,
+  claimComment,
   claimExpired,
   looksSecret,
   MAX_CLAIM_ATTEMPTS,
@@ -384,6 +385,26 @@ async function claimNext(
       launched: false,
     };
     saveWorkerState(stateRoot, { ...state, current });
+    // The ref is only the lock. Who claimed is proven by this comment: GitHub sets its author from
+    // the worker token. Without it the lead never counts the claim, so give the claim up.
+    try {
+      await c.hub.commentOffer(repo, issue.number, claimComment(wrote.sha, offer.nonce));
+    } catch (e) {
+      c.log(`${item.id}: the claim comment failed: ${(e as Error).message}`);
+      await release(
+        c,
+        stateRoot,
+        { label: c.label },
+        current,
+        repo,
+        'the worker could not post its claim comment',
+      );
+      return {
+        kind: 'released',
+        item: item.id,
+        line: `${item.id}: the claim comment failed; released`,
+      };
+    }
     // A fix round or a takeover goes on with what an earlier run pushed.
     const from =
       (await c.hub.branchHead(item.repo, `studio/${item.id}`)) === undefined
