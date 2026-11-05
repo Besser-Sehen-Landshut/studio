@@ -14,6 +14,16 @@ export interface BoardCrew {
   label?: string;
   /** Ids of the item's components; absent when the project configures none. */
   components?: string[];
+  /** The epic of the item; absent when it has none. */
+  epic?: string;
+}
+
+export interface BoardEpic {
+  id: string;
+  title: string;
+  status: string;
+  merged: number;
+  total: number;
 }
 
 export interface BoardState {
@@ -36,6 +46,8 @@ export interface BoardState {
   updatedAt?: string;
   /** Configured components in config order; absent (or empty) without any. */
   components?: { id: string; name: string }[];
+  /** Open and accepting epics in id order with merged of total; absent without any. */
+  epics?: BoardEpic[];
 }
 
 export type BoardRead =
@@ -111,6 +123,8 @@ function parseCrew(raw: unknown): BoardCrew | undefined {
   const pr = num(o.pr);
   if (pr !== undefined) row.pr = pr;
   if (Array.isArray(o.components)) row.components = o.components.flatMap((c) => str(c) ?? []);
+  const epic = str(o.epic);
+  if (epic !== undefined) row.epic = epic;
   return row;
 }
 
@@ -189,6 +203,22 @@ function toState(root: Obj): BoardState {
     return id === undefined || name === undefined ? [] : [{ id, name }];
   });
   if (components.length > 0) state.components = components;
+  const epics = list(root.epics).flatMap((r) => {
+    const o = obj(r);
+    const id = str(o?.id);
+    const title = str(o?.title);
+    const status = str(o?.status);
+    const merged = num(o?.merged);
+    const total = num(o?.total);
+    return id === undefined ||
+      title === undefined ||
+      status === undefined ||
+      merged === undefined ||
+      total === undefined
+      ? []
+      : [{ id, title, status, merged, total }];
+  });
+  if (epics.length > 0) state.epics = epics;
   return state;
 }
 
@@ -374,6 +404,29 @@ function crewLines(state: BoardState, columns: number, nowMs: number): Line[] {
   return out;
 }
 
+const MAX_EPICS = 10;
+
+/** Each epic with merged of total, and under it the crew rows working on its items. */
+function epicLines(state: BoardState): Line[] {
+  const epics = state.epics ?? [];
+  const out: Line[] = [];
+  for (const e of epics.slice(0, MAX_EPICS)) {
+    const accepting = e.status === 'accepting';
+    out.push({
+      text: `${e.id} ${e.title} ${e.merged}/${e.total}${accepting ? ' · accepting' : ''}`,
+      ...(accepting ? { tone: 'ok' as const } : {}),
+    });
+    for (const c of state.crew.filter((c) => c.epic === e.id && c.state !== 'done')) {
+      const look = LOOK[c.state];
+      out.push({ text: `  ${look.word} ${c.role} ${c.item}`, tone: look.tone });
+    }
+  }
+  if (epics.length > MAX_EPICS) {
+    out.push({ text: `… ${epics.length - MAX_EPICS} more`, tone: 'dim' });
+  }
+  return out;
+}
+
 function queueLines(state: BoardState): Line[] {
   const { current, pending } = state.queue;
   const out: Line[] = [];
@@ -436,6 +489,7 @@ export function boardLines(
     });
   }
   out.push({ text: statusLine(s, o.paused), tone: 'head' });
+  if ((s.epics ?? []).length > 0) out.push({ text: 'Epics', tone: 'head' }, ...epicLines(s));
   out.push({ text: 'Crew', tone: 'head' }, ...crewLines(s, columns, o.nowMs));
   out.push({ text: 'Merge queue', tone: 'head' }, ...queueLines(s));
   out.push(...ciLines(s, columns));

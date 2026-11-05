@@ -5,6 +5,8 @@ import { z } from 'zod';
 import type { StudioConfig } from './config.js';
 import { matchGlob, touchesOverlap } from './glob.js';
 
+const TERMINAL: readonly string[] = ['merged', 'dropped'];
+
 export const ITEM_STATUSES = [
   'ready',
   'assigned',
@@ -37,6 +39,9 @@ export const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
 /** A component id. Same rule as in config.ts (a test keeps them equal). */
 export const COMPONENT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 const componentId = z.string().regex(COMPONENT_ID_RE, 'must match ^[a-z][a-z0-9-]{0,31}$');
+
+/** An epic id: Studio numbers epics `E-1`, `E-2`, ... */
+export const EPIC_ID_RE = /^E-[1-9]\d*$/;
 
 /** What a crew sandbox lacks: a test that needs one of these is not run there, CI runs it. */
 export const NOT_RUN_SERVICES = ['database', 'docker', 'network', 'service'] as const;
@@ -120,12 +125,49 @@ export const workItemSchema = z.strictObject({
   triggers: z.array(z.enum(['epic-end', 'release'])).optional(),
   // Set by `studio escalate`; wins over the role's model.
   model: z.string().regex(MODEL_NAME_RE, 'not a model name').optional(),
+  // The epic this item is a piece of (`epics:` on the same board).
+  epic: z.string().regex(EPIC_ID_RE, 'must match ^E-\\d+$').optional(),
   history: z.array(historySchema).default([]),
 });
 
-export const boardSchema = z.strictObject({ items: z.array(workItemSchema) });
+export const EPIC_STATUSES = ['open', 'accepting', 'done', 'dropped'] as const;
+export type EpicStatus = (typeof EPIC_STATUSES)[number];
+const epicStatusSchema = z.enum(EPIC_STATUSES);
+
+/**
+ * A larger piece of work: a goal, acceptance lines and the items that build it (`item.epic`).
+ * Studio assigns the id. `accepting` means every item is merged; `done` comes with the acceptance.
+ */
+export const epicSchema = z.strictObject({
+  id: z.string().regex(EPIC_ID_RE, 'must match ^E-\\d+$'),
+  title: plainLine,
+  status: epicStatusSchema,
+  goal: plainLineOf(2000),
+  acceptance: z.array(plainLine).min(1),
+  components: z.array(componentId).min(1).optional(),
+  // `studio roadmap import`: `<file>#Phase <n>`, so a second import skips it.
+  importedFrom: plainLine.optional(),
+  // Plain lines about the epic, e.g. what the import found (`in progress at import`).
+  notes: z.array(plainLine).max(20).optional(),
+  history: z
+    .array(
+      z.strictObject({
+        at: z.string(),
+        from: epicStatusSchema,
+        to: epicStatusSchema,
+        by: z.string(),
+      }),
+    )
+    .default([]),
+});
+
+export const boardSchema = z.strictObject({
+  items: z.array(workItemSchema),
+  epics: z.array(epicSchema).optional(),
+});
 
 export type WorkItem = z.infer<typeof workItemSchema>;
+export type Epic = z.infer<typeof epicSchema>;
 export type Board = z.infer<typeof boardSchema>;
 
 export class BoardError extends Error {
@@ -204,6 +246,27 @@ export function parseBoard(text: string, file: string, config?: StudioConfig): B
   for (const it of board.items) {
     if (ids.has(it.id)) throw new BoardError(file, `duplicate id ${it.id}`);
     ids.add(it.id);
+  }
+  const epics = new Map<string, Epic>();
+  const known =
+    config === undefined ? undefined : new Set((config.components ?? []).map((c) => c.id));
+  for (const e of board.epics ?? []) {
+    if (epics.has(e.id)) throw new BoardError(file, `duplicate epic id ${e.id}`);
+    epics.set(e.id, e);
+    // A done or dropped epic keeps the ids it had, like a merged item.
+    if (known !== undefined && (e.status === 'open' || e.status === 'accepting')) {
+      const unknown = (e.components ?? []).find((c) => !known.has(c));
+      if (unknown !== undefined)
+        throw new BoardError(file, `${e.id}: unknown component ${unknown}`);
+    }
+  }
+  for (const it of board.items) {
+    if (it.epic === undefined) continue;
+    const e = epics.get(it.epic);
+    if (e === undefined) throw new BoardError(file, `${it.id}: epic unknown id ${it.epic}`);
+    if (e.status === 'dropped' && !TERMINAL.includes(it.status)) {
+      throw new BoardError(file, `${it.id}: epic ${it.epic} is dropped`);
+    }
   }
   for (const it of board.items) {
     for (const dep of it.dependsOn) {
@@ -284,8 +347,30 @@ const KEY_ORDER: readonly (keyof WorkItem)[] = [
   'risk',
   'triggers',
   'model',
+  'epic',
   'history',
 ];
+
+const EPIC_KEY_ORDER: readonly (keyof Epic)[] = [
+  'id',
+  'title',
+  'status',
+  'goal',
+  'acceptance',
+  'components',
+  'importedFrom',
+  'notes',
+  'history',
+];
+
+function orderedEpic(epic: Epic): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of EPIC_KEY_ORDER) {
+    const v = epic[key];
+    if (v !== undefined) out[snake(key)] = v;
+  }
+  return out;
+}
 
 function orderedItem(item: WorkItem): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -302,7 +387,11 @@ type Commented = { commentBefore?: string | null; comment?: string | null };
 /** Save the board. Comments of an existing file (header, per item, per key) are carried over. */
 export function saveBoard(dir: string, board: Board): void {
   const file = boardFile(dir);
-  const doc = new Document({ items: board.items.map(orderedItem) });
+  // Epics follow the items, so a header comment above `items:` stays where it is.
+  const doc = new Document({
+    items: board.items.map(orderedItem),
+    ...(board.epics === undefined ? {} : { epics: board.epics.map(orderedEpic) }),
+  });
   let old: Document.Parsed | undefined;
   try {
     old = parseDocument(readFileSync(file, 'utf8'));
@@ -325,14 +414,15 @@ export function saveBoard(dir: string, board: Board): void {
       const before = (k?.key as Commented | undefined)?.commentBefore;
       if (nk && before) (nk.key as Commented).commentBefore = before;
     }
-    const oldItems = old.get('items', true);
-    const newItems = doc.get('items', true);
-    if (isSeq(oldItems) && isSeq(newItems)) {
-      newItems.commentBefore = oldItems.commentBefore;
-      newItems.comment = oldItems.comment;
-      for (const oldNode of oldItems.items) {
+    for (const key of ['items', 'epics']) {
+      const oldList = old.get(key, true);
+      const newList = doc.get(key, true);
+      if (!isSeq(oldList) || !isSeq(newList)) continue;
+      newList.commentBefore = oldList.commentBefore;
+      newList.comment = oldList.comment;
+      for (const oldNode of oldList.items) {
         if (!isMap(oldNode)) continue;
-        const target = newItems.items.find((n) => isMap(n) && n.get('id') === oldNode.get('id'));
+        const target = newList.items.find((n) => isMap(n) && n.get('id') === oldNode.get('id'));
         if (!isMap(target)) continue;
         target.commentBefore = oldNode.commentBefore;
         target.comment = oldNode.comment;
@@ -348,6 +438,13 @@ export function saveBoard(dir: string, board: Board): void {
             newVal.comment = oldVal.comment;
         }
       }
+    }
+    if (isMap(old.contents) && isMap(doc.contents)) {
+      // A comment directly above `epics:` is attached to the key, as above `items:`.
+      const k = old.contents.items.find((p) => (p.key as { value?: unknown }).value === 'epics');
+      const nk = doc.contents.items.find((p) => (p.key as { value?: unknown }).value === 'epics');
+      const before = (k?.key as Commented | undefined)?.commentBefore;
+      if (nk && before) (nk.key as Commented).commentBefore = before;
     }
   }
   // Atomic: temp file in the same directory, then rename; the temp file is removed on failure.
@@ -374,8 +471,6 @@ const FORWARD: Readonly<Record<ItemStatus, readonly ItemStatus[]>> = {
   dropped: [],
 };
 
-const TERMINAL: readonly ItemStatus[] = ['merged', 'dropped'];
-
 export function isLegalMove(from: ItemStatus, to: ItemStatus, hasPr: boolean): boolean {
   if (TERMINAL.includes(from)) return false;
   // in_review -> merged is for items that never had a PR (review, research); a PR goes through the queue.
@@ -393,11 +488,66 @@ export function transition(board: Board, id: string, to: ItemStatus, by: string,
     throw new TransitionError(`illegal move for ${id}: ${current.status} -> ${to}`);
   }
   const entry = { at: now.toISOString(), from: current.status, to, by };
-  return {
+  const moved: Board = {
     ...board,
     items: board.items.map((i) => {
       const copy = structuredClone(i);
       return i.id === id ? { ...copy, status: to, history: [...copy.history, entry] } : copy;
     }),
   };
+  return settleEpics(moved, by, now).board;
+}
+
+export type EpicProgress = {
+  merged: number;
+  /** The epic's items except dropped ones. */
+  total: number;
+  counts: Partial<Record<ItemStatus, number>>;
+};
+
+/** How far an epic is: its items by status, and merged of all but the dropped ones. */
+export function epicProgress(board: Board, epicId: string): EpicProgress {
+  const counts: Partial<Record<ItemStatus, number>> = {};
+  let merged = 0;
+  let total = 0;
+  for (const i of board.items) {
+    if (i.epic !== epicId) continue;
+    counts[i.status] = (counts[i.status] ?? 0) + 1;
+    if (i.status !== 'dropped') total++;
+    if (i.status === 'merged') merged++;
+  }
+  return { merged, total, counts };
+}
+
+/**
+ * The status rule of epics. Pure. An open epic whose items are all merged (at least one, dropped
+ * ones aside) moves to `accepting`; an accepting epic that has open work again moves back to
+ * `open`. Done and dropped epics never move here.
+ */
+export function settleEpics(
+  board: Board,
+  by: string,
+  now: Date,
+): { board: Board; moved: { epic: string; from: EpicStatus; to: EpicStatus }[] } {
+  if (board.epics === undefined || board.epics.length === 0) return { board, moved: [] };
+  const moved: { epic: string; from: EpicStatus; to: EpicStatus }[] = [];
+  const epics = board.epics.map((e) => {
+    if (e.status !== 'open' && e.status !== 'accepting') return e;
+    const p = epicProgress(board, e.id);
+    const allMerged = p.total > 0 && p.merged === p.total;
+    const to: EpicStatus | undefined =
+      e.status === 'open' && allMerged
+        ? 'accepting'
+        : e.status === 'accepting' && !allMerged
+          ? 'open'
+          : undefined;
+    if (to === undefined) return e;
+    moved.push({ epic: e.id, from: e.status, to });
+    return {
+      ...structuredClone(e),
+      status: to,
+      history: [...e.history, { at: now.toISOString(), from: e.status, to, by }],
+    };
+  });
+  return moved.length === 0 ? { board, moved } : { board: { ...board, epics }, moved };
 }

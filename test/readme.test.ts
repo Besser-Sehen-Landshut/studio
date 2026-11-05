@@ -2,9 +2,22 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { componentsOf, loadBoard } from '../src/board.js';
+import { componentsOf, epicProgress, loadBoard, parseBoard } from '../src/board.js';
 import { loadConfig } from '../src/config.js';
 import { planAssignments } from '../src/planner.js';
+import { ROADMAP_HEADER } from '../src/roadmap.js';
+
+describe('README epics', () => {
+  it('has a board example that loads, and names the generated header exactly', () => {
+    const at = readme.indexOf('## Epics and the roadmap');
+    expect(at).toBeGreaterThan(0);
+    const m = /```yaml\n([\s\S]*?)```/.exec(readme.slice(at));
+    const board = parseBoard((m as RegExpExecArray)[1] as string, 'README.md');
+    expect(board.items[0]?.epic).toBe('E-1');
+    expect(epicProgress(board, 'E-1')).toMatchObject({ merged: 0, total: 1 });
+    expect(readme.slice(at)).toContain(ROADMAP_HEADER);
+  });
+});
 
 // The README quick start must work as written: copy its files into a project and plan.
 const readme = readFileSync(join(import.meta.dirname, '..', 'README.md'), 'utf8');
@@ -88,7 +101,7 @@ describe('README quick start', () => {
     expect(readme).toMatch(/notify: \{ channel, command \}/);
     expect(readme).toContain('`blocks.json` in the owner root');
     expect(readme).toContain('.legacy-');
-    expect(readme).toMatch(/Status: 0\.10\.0/);
+    expect(readme).toMatch(/Status: 0\.11\.0/);
     expect(readme).not.toMatch(/crews cannot write the state base/);
     expect(readme).not.toMatch(/blocks?[^.]{0,40}per project/i);
   });

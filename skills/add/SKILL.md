@@ -16,7 +16,8 @@ Request: $ARGUMENTS (when empty, ask the owner what needs doing, in one question
      (`src/checkout/**`).
    - DoD: one to three lines a reviewer can check; for a fix, one of them is a test.
    - Component: when `studio.yaml` has components and one fits.
-2. Show the owner title, type, component, paths and DoD, and ask "Shall I add this?". Run nothing
+   - Epic: when `studio epic list` shows an open epic this is a piece of, `--epic='E-<n>'`.
+2. Show the owner title, type, component, epic, paths and DoD, and ask "Shall I add this?". Run nothing
    before a yes; change what they correct.
 3. Build the command from single-quoted words only: every value as `--name='value'`, the title last
    after `--`, and each `'` inside a value written as `'\''`. Never put the owner's text in double

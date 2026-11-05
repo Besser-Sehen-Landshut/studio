@@ -543,3 +543,50 @@ describe('components in the pane', () => {
     expect(texts).toContain('… 10 more');
   });
 });
+
+describe('epics in the pane', () => {
+  const EPICS = [
+    { id: 'E-1', title: 'Pay by invoice', status: 'open', merged: 1, total: 3 },
+    { id: 'E-2', title: 'Reports', status: 'accepting', merged: 2, total: 2 },
+  ];
+  const crewOf = (item: string, epic?: unknown) => ({
+    role: 'builder',
+    item,
+    state: 'working',
+    ...(epic === undefined ? {} : { epic }),
+  });
+  const lines = (over: Record<string, unknown>) =>
+    boardLines({ kind: 'ok', state: ok(over) }, { columns: 120, nowMs: NOW, paused: false });
+
+  it('reads the epics with their progress and the epic of each crew', () => {
+    const s = ok({
+      epics: [...EPICS, { id: 'E-3', title: 'no counts' }, 'nope'],
+      crew: [crewOf('APP-1', 'E-1'), crewOf('APP-2', 7), crewOf('APP-3')],
+    });
+    expect(s.epics).toEqual(EPICS);
+    expect(s.crew.map((c) => c.epic)).toEqual(['E-1', undefined, undefined]);
+  });
+
+  it('shows each epic with its progress above its items, before the crew', () => {
+    const all = lines({
+      epics: EPICS,
+      crew: [crewOf('APP-1', 'E-1'), crewOf('APP-2'), crewOf('APP-3', 'E-1')],
+    });
+    const from = all.findIndex((l) => l.text === 'Epics');
+    const to = all.findIndex((l) => l.text === 'Crew');
+    expect(from).toBeGreaterThan(0);
+    expect(all.slice(from + 1, to).map((l) => l.text)).toEqual([
+      'E-1 Pay by invoice 1/3',
+      '  ● working builder APP-1',
+      '  ● working builder APP-3',
+      'E-2 Reports 2/2 · accepting',
+    ]);
+    expect(all[from + 4]?.tone).toBe('ok');
+  });
+
+  it('is unchanged without epics', () => {
+    const with0 = lines({ epics: [] });
+    expect(with0).toEqual(lines({}));
+    expect(with0.some((l) => l.text === 'Epics')).toBe(false);
+  });
+});

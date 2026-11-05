@@ -1,4 +1,11 @@
-import { type Board, loadBoard, saveBoard, type WorkItem, workItemSchema } from './board.js';
+import {
+  type Board,
+  loadBoard,
+  saveBoard,
+  settleEpics,
+  type WorkItem,
+  workItemSchema,
+} from './board.js';
 import { globProblem, loadConfig } from './config.js';
 import { prefixOf } from './init.js';
 import { isReady } from './planner.js';
@@ -17,6 +24,10 @@ export type AddOptions = {
   dod: string[];
   component?: string;
   plan?: string;
+  /** The epic the item is a piece of; it must be open or accepting. */
+  epic?: string;
+  /** For the epic's history when the new item moves it back to open. */
+  now?: Date;
   /** Runs `fn` under the board lock. */
   locked<T>(fn: () => T): Promise<T>;
 };
@@ -82,6 +93,13 @@ export async function addItem(o: AddOptions): Promise<Record<string, unknown>> {
         );
       }
     }
+    if (o.epic !== undefined) {
+      const epic = (board.epics ?? []).find((e) => e.id === o.epic);
+      if (epic === undefined) throw new Error(`unknown epic ${o.epic}`);
+      if (epic.status === 'done' || epic.status === 'dropped') {
+        throw new Error(`${epic.id} is ${epic.status}: add the item to an open epic`);
+      }
+    }
     const prefix = boardPrefix(board, repo);
     const numbers = board.items
       .filter((i) => i.id.startsWith(`${prefix}-`))
@@ -104,6 +122,7 @@ export async function addItem(o: AddOptions): Promise<Record<string, unknown>> {
       dependsOn: [],
       dod: o.dod.map((d) => d.trim()),
       ...(o.plan === undefined ? {} : { plan: o.plan }),
+      ...(o.epic === undefined ? {} : { epic: o.epic }),
       history: [],
     });
     if (!parsed.success) {
@@ -112,7 +131,11 @@ export async function addItem(o: AddOptions): Promise<Record<string, unknown>> {
       );
     }
     const item: WorkItem = parsed.data;
-    saveBoard(o.project, { ...board, items: [...board.items, item] });
+    // New work in an accepting epic takes it back to open.
+    saveBoard(
+      o.project,
+      settleEpics({ ...board, items: [...board.items, item] }, 'studio', o.now ?? new Date()).board,
+    );
     const { missing } = isReady(item);
     const warnings: string[] = [];
     if (item.paths.length === 0) {
@@ -129,6 +152,7 @@ export async function addItem(o: AddOptions): Promise<Record<string, unknown>> {
       type,
       status: item.status,
       repo,
+      ...(o.epic === undefined ? {} : { epic: o.epic }),
       ...(missing.length > 0 ? { missing } : {}),
       ...(warnings.length > 0 ? { warnings } : {}),
       ...(notes.length > 0 ? { notes } : {}),

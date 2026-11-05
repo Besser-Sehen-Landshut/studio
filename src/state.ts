@@ -52,6 +52,8 @@ export interface CrewSnapshot {
   repo?: string;
   /** The item's components (`componentsOf`); absent when the project configures none. */
   components?: string[];
+  /** The item's epic; absent when it has none. */
+  epic?: string;
 }
 
 export interface MergedToday {
@@ -90,6 +92,8 @@ export interface StateSnapshot {
   notifications?: Notification[];
   /** The configured components in config order, for the pane's grouping; absent without any. */
   components?: { id: string; name: string }[];
+  /** Open and accepting epics in id order, with merged of total, for the pane; absent without any. */
+  epics?: { id: string; title: string; status: string; merged: number; total: number }[];
   updatedAt: string;
   metrics: Metrics;
 }
