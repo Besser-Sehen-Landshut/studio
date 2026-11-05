@@ -140,6 +140,12 @@ const componentSchema = z.strictObject({
 });
 export type ComponentConfig = z.infer<typeof componentSchema>;
 
+/** A GitHub repository as `owner/repo`: it reaches commands, URLs and push texts. */
+const repoName = z
+  .string()
+  .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, 'must be owner/repo (letters, digits, . _ -)')
+  .refine((r) => r.split('/').every((p) => p !== '.' && p !== '..'), 'must be owner/repo');
+
 /** `limits:` in studio.yaml and in the owner config. */
 const dailyLimitsSchema = z.strictObject({
   dailyCostUsd: z.number().positive().optional(),
@@ -148,8 +154,8 @@ const dailyLimitsSchema = z.strictObject({
 export const studioConfigSchema = z
   .strictObject({
     studio: z.literal(1),
-    primaryRepo: z.string().min(1),
-    repos: z.array(z.string().min(1)).min(1),
+    primaryRepo: repoName,
+    repos: z.array(repoName).min(1),
     notify: z
       .strictObject({
         channel: z.string().min(1),
@@ -304,6 +310,28 @@ export const crewLabelLimitsSchema = z
   })
   .default({ maxParallel: 2 });
 
+/** An https base URL: no login, query or fragment, no trailing slash. */
+export function validNtfyServer(v: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return false;
+  }
+  return (
+    u.protocol === 'https:' &&
+    u.username === '' &&
+    u.password === '' &&
+    u.search === '' &&
+    u.hash === '' &&
+    !v.endsWith('/') &&
+    !/[\s\p{Cc}]/u.test(v)
+  );
+}
+
+/** Quiet hours: `HH:MM-HH:MM`, 24-hour clock. */
+export const QUIET_RE = /^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/;
+
 /** Owner-level settings, kept outside every repository. */
 export const ownerConfigSchema = z.strictObject({
   // Absolute directories a crew may read in addition to its clone, tmp dir and HOME (toolchains
@@ -322,12 +350,38 @@ export const ownerConfigSchema = z.strictObject({
   // They live here, outside every repository: a project cannot bring a marketplace of its own.
   allowedPlugins: z.array(allowedPluginSchema).default([]),
   // Push notifications: an absolute executable that gets each message in its environment (see
-  // README). It lives here, not in studio.yaml, because it runs on the owner's machine.
+  // README). It lives here, not in studio.yaml, because it runs on the owner's machine. `quiet`
+  // and `language` shape the Pushover messages of `tick` (keys: `studio secret set pushover`).
   notify: z
     .strictObject({
-      channel: z.string().regex(/^[A-Za-z0-9._-]{1,64}$/, 'must match [A-Za-z0-9._-]{1,64}'),
-      command: z.string().min(1),
+      channel: z
+        .string()
+        .regex(/^[A-Za-z0-9._-]{1,64}$/, 'must match [A-Za-z0-9._-]{1,64}')
+        .optional(),
+      command: z.string().min(1).optional(),
+      // Local hours (the owner's zone) in which a push that is not urgent waits, e.g. 22:00-07:00.
+      quiet: z
+        .string()
+        .regex(QUIET_RE, 'must be HH:MM-HH:MM')
+        .refine((q) => q.slice(0, 5) !== q.slice(6), 'start and end must differ')
+        .optional(),
+      // The zone of the quiet hours (IANA); default the system zone.
+      timezone: z
+        .string()
+        .refine(validTimeZone, { message: 'not a known IANA time zone' })
+        .optional(),
+      // The language of the push text; default from the locale (LC_ALL, LC_MESSAGES, LANG).
+      language: z.enum(['en', 'de']).optional(),
+      // The ntfy server for self-hosters; default https://ntfy.sh.
+      ntfyServer: z
+        .string()
+        .refine(validNtfyServer, 'must be an https URL without query, fragment or login')
+        .optional(),
     })
+    .refine(
+      (n) => (n.channel === undefined) === (n.command === undefined),
+      'channel and command go together',
+    )
     .optional(),
   // The same daily cost cap as in studio.yaml, over all projects of the owner together.
   limits: dailyLimitsSchema.optional(),
@@ -359,6 +413,10 @@ export function ownerConfigFile(opts: OwnerEnv = {}): string {
 
 /** The directory of the owner config. */
 export const ownerConfigDir = (opts: OwnerEnv = {}): string => dirname(ownerConfigFile(opts));
+
+/** Where `studio setup --notifications` keeps the push transport and its secret (key or topic). */
+export const notifySecretFile = (opts: OwnerEnv = {}): string =>
+  join(ownerConfigDir(opts), 'notify-secret');
 
 /** Where `studio secret set crew-token` keeps the least-privilege GitHub token. */
 export const crewTokenFile = (opts: OwnerEnv = {}): string =>

@@ -280,3 +280,33 @@ Recorded on 2026-11-05 after the 0.12.1 patch: `studio doctor` showed `pinned 0.
 (a launch refuses: run studio account setup-plugins)`, and the lead could not run it ("is for the owner
 and needs a terminal"), so every crew waited for the owner. The command now runs without a terminal, and
 the lead skill names it for this case.
+
+# Baseline (RED): phone pushes and Studio's own flaky reruns, 0.13.0
+
+Run on 2026-11-05 with one sonnet agent and the 0.12.2 lead skill, scenario
+`scenarios/lead-notify-flaky-scenario.md` (a tick printed `reruns` for a queued PR, two ticks later the merge
+and `flakyItems` with a new cause item, a fix limit in `needsLead`, a `notify:` error, the owner away and
+asking for phone pushes). The runs used a Pushover wording of points 3 and 4; the scenario now says ntfy,
+the transport that shipped. Nothing in the answers turned on the transport.
+
+Misses:
+
+- "`studio flaky record "CI / desktop-tests" 3f9c1e… pass` ... The skill calls for exactly one record call in
+  that case." Studio records its own reruns in the ledger: the call counts the same flaky pass twice.
+- Nothing else: the cause item was left alone ("a second would be a duplicate"), the fix limit got a research
+  item, the `notify:` error was left to the next tick, and no owner line was sent.
+
+The lead skill now says the rerun, the ledger and the cause item are Studio's (Merge section), keeps
+`flaky record` only for a rerun the lead started by hand, drops the "repeat flaky tests → one fix item" row
+(Studio adds it), and has one heartbeat line: `tick` pushes `needsLead` itself, the lead still acts on each
+entry, a push is no owner line, only a repeating `notify:` error is a status line.
+
+## With the new skill (GREEN), 2026-11-05
+
+Same scenario, one sonnet agent: "Studio did the one rerun on the same SHA itself and records it in the
+flaky ledger. I never rerun, run `flaky record` or add a cause item myself"; for APP-33 "Studio added the cause
+item itself, so I don't add another"; the fix limit got a research item and one tick; the `notify:` error:
+"the next tick retries it ... Only a `notify:` error that repeats becomes a status line". The double count is
+gone.
+
+Not exercised: a real lead session receiving pushes, and a rerun on live CI.

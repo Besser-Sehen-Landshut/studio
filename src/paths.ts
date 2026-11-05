@@ -51,6 +51,9 @@ export const STATE_FILES = [
   'pause.json',
   'skills-check.json',
   'tick.json',
+  'flaky.json',
+  'ci-reruns.json',
+  'ci-reruns.lock',
   'costs.json',
 ];
 

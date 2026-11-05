@@ -55,6 +55,13 @@ export type QueueOptions = {
    * loop and right before `gh pr merge`; a stop keeps `current` and `pending` as they are.
    */
   hold?: () => string | undefined;
+  /**
+   * A check failed on `head`: `rerun` or `wait` keeps polling (a rerun of jobs outside the pull
+   * request, or one waiting for free runners), `fail` fails the entry. Default: fail.
+   */
+  onChecksFailed?: (entry: QueueEntry, head: string) => Promise<'rerun' | 'wait' | 'fail'>;
+  /** Every check on `head` passed. */
+  onChecksPassed?: (entry: QueueEntry, head: string) => void;
   /** Why this entry must not merge, read right before `gh pr merge`; a reason fails the entry. */
   mergeAllowed?: (
     entry: QueueEntry,
@@ -621,11 +628,19 @@ export async function mergeOne(
       if (before.state === 'CLOSED') return failed('pull request is closed');
       for (;;) {
         const verdict = await readChecks(entry, gh);
-        if (verdict.kind === 'failed') return failed(verdict.reason);
-        if (verdict.kind === 'none' && clock.now().getTime() >= graceUntil) {
-          return failed(verdict.reason);
+        if (verdict.kind === 'failed') {
+          // A failure outside the pull request may get its one rerun on this head: then wait.
+          const act = (await opts.onChecksFailed?.(entry, before.head)) ?? 'fail';
+          if (act === 'fail') return failed(verdict.reason);
+        } else {
+          if (verdict.kind === 'none' && clock.now().getTime() >= graceUntil) {
+            return failed(verdict.reason);
+          }
+          if (verdict.kind === 'pass') {
+            opts.onChecksPassed?.(entry, before.head);
+            break;
+          }
         }
-        if (verdict.kind === 'pass') break;
         if (timedOut()) return failed('checks timed out');
         await clock.sleep(pollMs);
         if (timedOut()) return failed('checks timed out');
