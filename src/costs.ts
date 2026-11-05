@@ -34,6 +34,7 @@ export interface RunUsage {
 
 export const COSTS_FILE = 'costs.json';
 export const COSTS_LOCK = 'costs.lock';
+export const COSTS_LOCK_STALE_MS = 30_000;
 /** Longest log Studio reads for costs; a larger one is read from its end. */
 const MAX_LOG_BYTES = 64 * 1024 * 1024;
 
@@ -324,7 +325,10 @@ const DAY_MS = 86_400_000;
 async function costsLock(stateRoot: string, now: Date): Promise<StateLock | undefined> {
   const until = Date.now() + 5000;
   for (;;) {
-    const lock = acquireStateLock(stateRoot, COSTS_LOCK, { now, heartbeatStaleMs: 30_000 });
+    const lock = acquireStateLock(stateRoot, COSTS_LOCK, {
+      now,
+      heartbeatStaleMs: COSTS_LOCK_STALE_MS,
+    });
     if (lock) return lock;
     if (Date.now() >= until) return undefined;
     await new Promise((r) => setTimeout(r, 25));

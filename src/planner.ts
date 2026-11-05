@@ -1,6 +1,7 @@
 import { type Board, componentsOf, type WorkItem } from './board.js';
 import type { StudioConfig } from './config.js';
 import { touchesOverlap } from './glob.js';
+import { isLessonsReview, LEAD_WORK } from './lessons-review.js';
 
 /** CI capacity snapshot (produced by the capacity module). */
 export type Capacity = {
@@ -119,12 +120,18 @@ export function planAssignments(
   const tainted = cycleTainted(board.items);
   const blocked: Plan['blocked'] = [];
   const eligible: WorkItem[] = [];
+  // A lessons review is the lead's own work (`lessons accept` refuses a crew): it never launches.
+  const leadWork: Plan['deferred'] = [];
 
   const candidates = board.items
     .filter((i) => i.status === 'ready')
     .sort((a, b) => a.priority - b.priority || compareIds(a.id, b.id));
 
   for (const item of candidates) {
+    if (isLessonsReview(item)) {
+      leadWork.push({ id: item.id, reason: LEAD_WORK });
+      continue;
+    }
     const ready = isReady(item);
     const unknown = item.dependsOn.find((d) => !byId.has(d));
     const waiting = item.dependsOn.filter((d) => byId.get(d)?.status !== 'merged');
@@ -210,5 +217,5 @@ export function planAssignments(
     }
   }
 
-  return { assign, blocked, deferred };
+  return { assign, blocked, deferred: [...deferred, ...leadWork] };
 }

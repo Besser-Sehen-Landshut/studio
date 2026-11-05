@@ -21,6 +21,8 @@ import {
   checkStateMarker,
   cloneOriginUrl,
   ensureStateDir,
+  inspectStateLock,
+  processIdentity,
   removeStateEntry,
   stateDirName,
   stateRootFor,
@@ -210,13 +212,39 @@ describe('acquireStateLock', () => {
     expect(acquireStateLock(d, 'x.lock', opts())).toBeUndefined();
   });
 
-  it('breaks a live holder whose heartbeat is older than 15 minutes', () => {
+  it('never breaks a live holder whose start time matches, however long it was silent', () => {
+    const d = fresh();
+    const old = new Date(Date.now() - 9 * HOUR).toISOString();
+    const identity = processIdentity(process.pid);
+    writeLock(d, { pid: process.pid, identity, startedAt: old, heartbeat: old });
+    expect(acquireStateLock(d, 'x.lock', opts())).toBeUndefined();
+    expect(inspectStateLock(d, 'x.lock', opts())).toEqual({
+      state: 'held',
+      pid: process.pid,
+      silentMs: expect.any(Number),
+    });
+  });
+
+  it('breaks a live holder it cannot verify only once the lock is very old', () => {
     const d = fresh();
     const old = new Date(Date.now() - 16 * MIN).toISOString();
+    // No start time recorded (an older Studio), or none readable now: 16 minutes is not enough.
     writeLock(d, { pid: process.pid, startedAt: old, heartbeat: old });
+    expect(acquireStateLock(d, 'x.lock', opts())).toBeUndefined();
+    writeLock(d, { pid: process.pid, identity: 'x', startedAt: old, heartbeat: old });
+    expect(acquireStateLock(d, 'x.lock', opts({ identityOf: () => undefined }))).toBeUndefined();
+    const ancient = new Date(Date.now() - 61 * MIN).toISOString();
+    writeLock(d, { pid: process.pid, startedAt: ancient, heartbeat: ancient });
     const a = acquireStateLock(d, 'x.lock', opts());
-    expect(a?.broke).toMatch(/heartbeat/);
+    expect(a?.broke).toMatch(/cannot be verified and was silent 61 min/);
     a?.release();
+  });
+
+  it('a lock without a pid is judged by its heartbeat', () => {
+    const d = fresh();
+    const old = new Date(Date.now() - 16 * MIN).toISOString();
+    writeLock(d, { startedAt: old, heartbeat: old });
+    expect(acquireStateLock(d, 'x.lock', opts())?.broke).toMatch(/heartbeat/);
   });
 
   it('heartbeat() refreshes the lock so it stays held', () => {
@@ -269,6 +297,60 @@ describe('acquireStateLock', () => {
     a?.release();
     a?.heartbeat(now());
     expect(readFileSync(join(d, 'x.lock'), 'utf8')).toContain('someone-else');
+  });
+
+  it('records the identity (start time) of the holding process', () => {
+    const d = fresh();
+    const a = acquireStateLock(d, 'x.lock', opts());
+    const body = JSON.parse(readFileSync(join(d, 'x.lock'), 'utf8'));
+    const own = processIdentity(process.pid);
+    expect(own).toEqual(expect.any(String));
+    expect(body.identity).toBe(own);
+    a?.release();
+  });
+
+  it('breaks a lock whose pid belongs to another process now (a reboot reused it)', () => {
+    const d = fresh();
+    const t = now().toISOString();
+    writeLock(d, {
+      pid: process.pid,
+      identity: 'a process of yesterday',
+      startedAt: t,
+      heartbeat: t,
+    });
+    const a = acquireStateLock(d, 'x.lock', opts());
+    expect(a?.broke).toMatch(/pid \d+ is another process now/);
+    a?.release();
+  });
+
+  it('keeps a live holder whose identity cannot be read right now, or that recorded none', () => {
+    const d = fresh();
+    const t = now().toISOString();
+    writeLock(d, { pid: process.pid, identity: 'x', startedAt: t, heartbeat: t });
+    expect(acquireStateLock(d, 'x.lock', opts({ identityOf: () => undefined }))).toBeUndefined();
+    writeLock(d, { pid: process.pid, startedAt: t, heartbeat: t });
+    expect(acquireStateLock(d, 'x.lock', opts())).toBeUndefined();
+  });
+
+  it('inspectStateLock says free, held or stale and changes nothing', () => {
+    const d = fresh();
+    expect(inspectStateLock(d, 'x.lock', { now: now(), heartbeatStaleMs: 15 * MIN })).toEqual({
+      state: 'free',
+    });
+    const t = now().toISOString();
+    writeLock(d, { pid: process.pid, startedAt: t, heartbeat: t });
+    expect(inspectStateLock(d, 'x.lock', { now: now(), heartbeatStaleMs: 15 * MIN })).toEqual({
+      state: 'held',
+      pid: process.pid,
+      silentMs: expect.any(Number),
+    });
+    const dead = deadPid();
+    writeLock(d, { pid: dead, startedAt: t, heartbeat: t });
+    expect(inspectStateLock(d, 'x.lock', { now: now(), heartbeatStaleMs: 15 * MIN })).toEqual({
+      state: 'stale',
+      reason: `holder pid ${dead} is not running`,
+    });
+    expect(JSON.parse(readFileSync(join(d, 'x.lock'), 'utf8')).pid).toBe(dead);
   });
 
   it('never follows a planted symlink at the lock path', () => {

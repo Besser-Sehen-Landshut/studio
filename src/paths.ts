@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {
   chmodSync,
@@ -56,6 +57,12 @@ export const STATE_FILES = [
   'ci-reruns.lock',
   'costs.json',
   'costs.lock',
+  'lessons.json',
+  'lessons.lock',
+  'lessons-review.json',
+  'tick.lock',
+  'board.lock',
+  'crew.lock',
 ];
 
 /** `$XDG_STATE_HOME/studio`, else `<home>/.local/state/studio`: the parent of every state root. */
@@ -350,6 +357,8 @@ export interface StateLock {
 interface LockBody {
   token?: unknown;
   pid?: unknown;
+  /** The holder's start time (`processIdentity`); a later process on the same pid differs. */
+  identity?: unknown;
   startedAt?: unknown;
   heartbeat?: unknown;
 }
@@ -365,6 +374,55 @@ function readLockBody(file: string): LockBody | undefined {
 }
 
 const tokenOf = (file: string): unknown => readLockBody(file)?.token;
+
+/**
+ * Field 22 (`starttime`, clock ticks since boot) of a `/proc/<pid>/stat` line. The comm field can
+ * hold spaces and parens, so fields are counted after the last `)`. Anything malformed is unknown.
+ */
+export function parseLinuxStartTime(stat: string): string | undefined {
+  const close = stat.lastIndexOf(')');
+  if (close < 0) return undefined;
+  // Field 3 (state) is the first token after the comm; starttime is field 22, so index 19.
+  const fields = stat
+    .slice(close + 1)
+    .trim()
+    .split(/\s+/);
+  const start = fields[19];
+  return start !== undefined && /^\d+$/.test(start) ? start : undefined;
+}
+
+const IDENTITY_CACHE_MS = 5000;
+const identityCache = new Map<number, { at: number; identity: string | undefined }>();
+
+/**
+ * What tells a process from a later one with the same pid: its start time, read synchronously
+ * (`/proc` on Linux, `ps -o lstart=` elsewhere, locale and zone pinned). Undefined when it cannot
+ * be read. A reading is reused for a few seconds, so a lock waited on is not asked every poll.
+ */
+export function processIdentity(pid: number): string | undefined {
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  const cached = identityCache.get(pid);
+  if (cached !== undefined && Date.now() - cached.at < IDENTITY_CACHE_MS) return cached.identity;
+  let identity: string | undefined;
+  if (process.platform === 'linux') {
+    try {
+      identity = parseLinuxStartTime(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+    } catch {
+      identity = undefined;
+    }
+  } else {
+    const r = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+      env: { PATH: process.env.PATH ?? '/bin:/usr/bin', LC_ALL: 'C', TZ: 'UTC' },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 2000,
+    });
+    const text = r.status === 0 ? String(r.stdout).trim() : '';
+    identity = text === '' ? undefined : text;
+  }
+  identityCache.set(pid, { at: Date.now(), identity });
+  return identity;
+}
 
 /** Whether a process with this pid exists (EPERM: exists, owned by someone else). */
 export function pidAlive(pid: number): boolean {
@@ -382,6 +440,7 @@ function staleReason(
   mtimeMs: number,
   now: Date,
   heartbeatStaleMs: number,
+  identityOf: (pid: number) => string | undefined = processIdentity,
 ): string | undefined {
   const minutes = (ms: number) => `${Math.round(ms / 60_000)} min`;
   if (body === undefined) {
@@ -389,16 +448,40 @@ function staleReason(
     const age = now.getTime() - mtimeMs;
     return age >= heartbeatStaleMs ? `unreadable lock, ${minutes(age)} old` : undefined;
   }
-  if (typeof body.pid === 'number' && Number.isInteger(body.pid) && body.pid > 0) {
-    if (!pidAlive(body.pid)) return `holder pid ${body.pid} is not running`;
-  }
   const beat = typeof body.heartbeat === 'string' ? Date.parse(body.heartbeat) : Number.NaN;
   const age = now.getTime() - (Number.isNaN(beat) ? mtimeMs : beat);
+  if (typeof body.pid === 'number' && Number.isInteger(body.pid) && body.pid > 0) {
+    if (!pidAlive(body.pid)) return `holder pid ${body.pid} is not running`;
+    // A live holder whose start time matches is never broken, however long it has been silent: a
+    // slow step is no dead one. After a reboot the pid may be another process's: a reading that
+    // differs breaks it at once. Without a reading (none recorded, or none possible now) only a
+    // very old lock is taken over.
+    const current = typeof body.identity === 'string' ? identityOf(body.pid) : undefined;
+    if (current !== undefined) {
+      return current === body.identity
+        ? undefined
+        : `holder pid ${body.pid} is another process now`;
+    }
+    const veryOld = Math.max(VERY_OLD_FACTOR * heartbeatStaleMs, VERY_OLD_MIN_MS);
+    return age >= veryOld
+      ? `holder pid ${body.pid} cannot be verified and was silent ${minutes(age)}`
+      : undefined;
+  }
   return age >= heartbeatStaleMs ? `last heartbeat ${minutes(age)} ago` : undefined;
 }
 
-const BOARD_LOCK = 'board.lock';
-const BOARD_LOCK_STALE_MS = 30_000;
+/** How long a lock of a live pid that cannot be verified must be silent before it is taken over. */
+const VERY_OLD_FACTOR = 4;
+const VERY_OLD_MIN_MS = 60 * 60_000;
+
+/** How long the holder of a lock has been silent (no heartbeat), from its body or its mtime. */
+function silentMs(body: LockBody | undefined, mtimeMs: number, now: Date): number {
+  const beat = typeof body?.heartbeat === 'string' ? Date.parse(body.heartbeat) : Number.NaN;
+  return Math.max(0, now.getTime() - (Number.isNaN(beat) ? mtimeMs : beat));
+}
+
+export const BOARD_LOCK = 'board.lock';
+export const BOARD_LOCK_STALE_MS = 30_000;
 
 /**
  * Runs `fn`, which must read the board itself and be short, under the project's board lock, so a
@@ -430,8 +513,10 @@ export async function withBoardLock<T>(
 /**
  * Exclusive lock file `<root>/<name>` holding `{pid, startedAt, heartbeat, token}`, created with
  * O_CREAT|O_EXCL|O_NOFOLLOW (an existing entry, a symlink included, is never followed or
- * overwritten). An existing lock is stale only when its pid is not running or its heartbeat is
- * older than `heartbeatStaleMs`; then it is broken (moved aside, checked, removed) and the reason
+ * overwritten). An existing lock is stale when its pid is not running, when that pid is another
+ * process now (its start time differs from the recorded one), when a live pid cannot be verified
+ * and the lock was silent for very long, or, without a pid, when its heartbeat is older than
+ * `heartbeatStaleMs`. A live, verified holder is never stale. A stale lock is broken (moved aside, checked, removed) and the reason
  * reported through `broke`. Otherwise undefined is returned. Anything at the lock path that is not
  * a regular file is refused. A lock that vanishes between the create and the check is retried.
  */
@@ -442,6 +527,8 @@ export function acquireStateLock(
     now: Date;
     heartbeatStaleMs: number;
     lstat?: (p: string) => { isFile(): boolean; mtimeMs: number };
+    /** The start time of a pid; tests pass their own. */
+    identityOf?: (pid: number) => string | undefined;
   },
 ): StateLock | undefined {
   const file = join(root, name);
@@ -450,8 +537,15 @@ export function acquireStateLock(
   const lstat = opts.lstat ?? lstatSync;
   const token = randomBytes(16).toString('hex');
   const startedAt = opts.now.toISOString();
+  const identity = processIdentity(process.pid);
   const body = (beat: Date) =>
-    `${JSON.stringify({ pid: process.pid, startedAt, heartbeat: beat.toISOString(), token })}\n`;
+    `${JSON.stringify({
+      pid: process.pid,
+      ...(identity === undefined ? {} : { identity }),
+      startedAt,
+      heartbeat: beat.toISOString(),
+      token,
+    })}\n`;
   const create = (): boolean => {
     let fd: number;
     try {
@@ -492,7 +586,13 @@ export function acquireStateLock(
     }
     if (!st.isFile()) throw new Error(`refusing lock ${file}: it is not a regular file`);
     const existing = readLockBody(file);
-    const reason = staleReason(existing, st.mtimeMs, opts.now, opts.heartbeatStaleMs);
+    const reason = staleReason(
+      existing,
+      st.mtimeMs,
+      opts.now,
+      opts.heartbeatStaleMs,
+      opts.identityOf,
+    );
     if (reason === undefined) return undefined;
     // Move the stale lock aside first; if what was moved is not the stale file any more (another
     // process broke it and took the lock in between), put it back and report the lock as held.
@@ -510,6 +610,40 @@ export function acquireStateLock(
     return create() ? lock(reason) : undefined;
   }
   return undefined;
+}
+
+export type LockState =
+  | { state: 'free' }
+  | { state: 'held'; pid?: number; silentMs: number }
+  | { state: 'stale'; reason: string };
+
+/**
+ * What `acquireStateLock` would find at `<root>/<name>`, without taking or breaking anything:
+ * free, held by a live holder, or stale (and why). Anything that is not a regular file is held.
+ */
+export function inspectStateLock(
+  root: string,
+  name: string,
+  opts: { now: Date; heartbeatStaleMs: number; identityOf?: (pid: number) => string | undefined },
+): LockState {
+  const file = join(root, name);
+  assertStatePath(root, file);
+  let st: ReturnType<typeof lstatSync>;
+  try {
+    st = lstatSync(file);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'free' };
+    throw err;
+  }
+  if (!st.isFile()) return { state: 'held', silentMs: 0 };
+  const body = readLockBody(file);
+  const reason = staleReason(body, st.mtimeMs, opts.now, opts.heartbeatStaleMs, opts.identityOf);
+  if (reason !== undefined) return { state: 'stale', reason };
+  const pid = body?.pid;
+  const silent = silentMs(body, st.mtimeMs, opts.now);
+  return typeof pid === 'number' && Number.isInteger(pid)
+    ? { state: 'held', pid, silentMs: silent }
+    : { state: 'held', silentMs: silent };
 }
 
 /** Literal and (when it exists) real variant of a path, case-folded for comparison. */

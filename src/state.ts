@@ -5,7 +5,7 @@ import type { CrewRecord, CrewState } from './crew.js';
 import type { Parks } from './limits.js';
 import type { MainBuild } from './main-build.js';
 import type { LeadDecision, PaneItem } from './pane-data.js';
-import { assertStatePath, ensureStateDir } from './paths.js';
+import { acquireStateLock, assertStatePath, ensureStateDir, writeStateFile } from './paths.js';
 import type { Capacity } from './planner.js';
 import type { QueueState } from './queue.js';
 
@@ -171,6 +171,48 @@ export function readCrewRecords(stateRoot: string): Record<string, CrewRecord> {
     throw new Error(`crew file ${file} is not a JSON object`);
   }
   return raw as Record<string, CrewRecord>;
+}
+
+export const CREW_LOCK = 'crew.lock';
+export const CREW_LOCK_STALE_MS = 30_000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Reads, changes and writes `<stateRoot>/crew.json` under `crew.lock`, so a launch, a stop and a
+ * reconcile in different processes never overwrite each other's records. An unreadable file
+ * refuses (it is never replaced by what one writer knows). Waits up to 5 s for the lock.
+ */
+export function updateCrewRecords<T>(
+  stateRoot: string,
+  mutate: (all: Record<string, CrewRecord>) => T,
+  opts: { timeoutMs?: number } = {},
+): T {
+  const until = Date.now() + (opts.timeoutMs ?? 5000);
+  for (;;) {
+    const lock = acquireStateLock(stateRoot, CREW_LOCK, {
+      now: new Date(),
+      heartbeatStaleMs: CREW_LOCK_STALE_MS,
+    });
+    if (lock) {
+      try {
+        const all = readCrewRecords(stateRoot);
+        const result = mutate(all);
+        writeStateFile(
+          stateRoot,
+          join(stateRoot, 'crew.json'),
+          `${JSON.stringify(all, null, 2)}\n`,
+        );
+        return result;
+      } finally {
+        lock.release();
+      }
+    }
+    if (Date.now() >= until) throw new Error(`crew.json is locked (${CREW_LOCK}); try again`);
+    sleepSync(25);
+  }
 }
 
 /** Events of `<stateRoot>/metrics.jsonl`; lines that are not JSON are skipped. */

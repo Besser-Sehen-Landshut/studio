@@ -130,10 +130,10 @@ export function saveQueue(stateRoot: string, q: QueueState): void {
   writeStateFile(stateRoot, queueFile(stateRoot), `${JSON.stringify(q, null, 2)}\n`);
 }
 
-const FILE_LOCK = 'queue.json.lock';
-const RUN_LOCK = 'queue.run.lock';
+export const FILE_LOCK = 'queue.json.lock';
+export const RUN_LOCK = 'queue.run.lock';
 /** A file lock without heartbeat: the critical section is a read and an atomic rename. */
-const FILE_LOCK_STALE_MS = 30_000;
+export const FILE_LOCK_STALE_MS = 30_000;
 /**
  * A `queue run` lock is stale only when its holder is gone (pid not running) or silent: the run
  * refreshes the heartbeat on every persist and every poll, so 15 minutes without one means stuck.

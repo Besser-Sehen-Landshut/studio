@@ -12,7 +12,7 @@ import {
 } from './paths.js';
 import type { Ports } from './ports.js';
 import { reportName } from './report.js';
-import { readCrewRecords } from './state.js';
+import { readCrewRecords, updateCrewRecords } from './state.js';
 
 export type LimitKind = 'session' | 'weekly';
 export interface DetectedLimit {
@@ -42,7 +42,7 @@ const HOUR_MS = 3_600_000;
 const MAX_PARK_MS = 8 * 24 * HOUR_MS;
 const TAIL_BYTES = 256 * 1024;
 const HEAD_BYTES = 1024 * 1024;
-const LOCK_STALE_MS = 5 * 60_000;
+export const LOCK_STALE_MS = 5 * 60_000;
 const MAX_RESET_CHARS = 100;
 
 /** `You've hit your <words> limit`: "limit" alone, or up to five words before it. */
@@ -426,17 +426,17 @@ export async function reconcileLimits(o: {
       }
       if (process === 'verified') await ports.claude.stop(rec.pid);
       const sessionId = sessionIdSince(stateRoot, id, rec.logStart ?? 0);
-      const latest = readCrewRecords(stateRoot);
-      latest[id] = {
-        ...(latest[id] ?? rec),
-        stoppedAt: now.toISOString(),
-        limit: {
-          at: now.toISOString(),
-          kind: hit.kind,
-          ...(sessionId === undefined ? {} : { sessionId }),
-        },
-      };
-      writeStateFile(stateRoot, crewFile, `${JSON.stringify(latest, null, 2)}\n`);
+      updateCrewRecords(stateRoot, (latest) => {
+        latest[id] = {
+          ...(latest[id] ?? rec),
+          stoppedAt: now.toISOString(),
+          limit: {
+            at: now.toISOString(),
+            kind: hit.kind,
+            ...(sessionId === undefined ? {} : { sessionId }),
+          },
+        };
+      });
       backToReady(
         project,
         id,
@@ -747,7 +747,6 @@ async function stopCrewsOf(o: {
   result: BlockReconcileResult;
 }): Promise<void> {
   const { root, board, other, ownerRoot, ports, lock, at, result } = o;
-  const crewFile = join(root, 'crew.json');
   const where = other ? ` in ${root}` : '';
   const statusOf = (id: string) => board?.items.find((i) => i.id === id)?.status;
   const records = Object.fromEntries(
@@ -807,9 +806,9 @@ async function stopCrewsOf(o: {
       }
       if (hit === undefined && process === 'dead') continue;
       if (hit === undefined && process === 'gone') {
-        const latest = readCrewRecords(root);
-        latest[id] = { ...(latest[id] ?? rec), stoppedAt: at, processGone: at };
-        writeStateFile(root, crewFile, `${JSON.stringify(latest, null, 2)}\n`);
+        updateCrewRecords(root, (latest) => {
+          latest[id] = { ...(latest[id] ?? rec), stoppedAt: at, processGone: at };
+        });
         continue;
       }
       if (process === 'verified') {
@@ -829,13 +828,13 @@ async function stopCrewsOf(o: {
         });
       }
       if (!read.ok && hit !== undefined) continue;
-      const latest = readCrewRecords(root);
-      latest[id] = {
-        ...(latest[id] ?? rec),
-        stoppedAt: at,
-        block: { at, reason: hit?.reason ?? firstReason },
-      };
-      writeStateFile(root, crewFile, `${JSON.stringify(latest, null, 2)}\n`);
+      updateCrewRecords(root, (latest) => {
+        latest[id] = {
+          ...(latest[id] ?? rec),
+          stoppedAt: at,
+          block: { at, reason: hit?.reason ?? firstReason },
+        };
+      });
     }
   }
 }
@@ -929,18 +928,19 @@ export function clearBlocks(
     }));
     // Logs first: a crash in between leaves the block in place, never an old event ready to return.
     for (const { root, records } of roots) {
-      let moved = false;
+      const moves: Record<string, number> = {};
       for (const [id, rec] of Object.entries(records)) {
         if ((rec.label ?? DEFAULT_LABEL) !== label) continue;
         const end = logEnd(root, id);
-        if (end !== undefined && end !== rec.logStart) {
-          records[id] = { ...rec, logStart: end };
-          moved = true;
-        }
+        if (end !== undefined && end !== rec.logStart) moves[id] = end;
       }
-      if (moved) {
-        const crewFile = join(root, 'crew.json');
-        writeStateFile(root, crewFile, `${JSON.stringify(records, null, 2)}\n`);
+      if (Object.keys(moves).length > 0) {
+        updateCrewRecords(root, (all) => {
+          for (const [id, end] of Object.entries(moves)) {
+            const now = all[id];
+            if (now !== undefined) all[id] = { ...now, logStart: end };
+          }
+        });
       }
     }
     if (removed > 0) writeBlocks(ownerRoot, kept);

@@ -3,6 +3,59 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.15.0] - 2026-11-05
+
+Lessons crews proposed piled up until someone looked, and after a crash or a restart the control room
+had no explicit way to tell what was cut short. Now the lead reviews proposals in a weekly batch, and the
+next tick (or `studio recover`) picks up the thread without starting or merging anything twice. Not
+tagged yet; the maintainers tag after the merge.
+
+### Added
+
+- The weekly lessons review: once in 7 days `tick` (or `studio lessons review --now`) folds near-identical
+  proposals of a role (same text once case and punctuation are ignored) into the oldest, then adds one
+  board item per role with pending proposals, `Review crew lessons for <role> (<n>)` (`chore`, role
+  `researcher`), naming the proposals by number only. The planner never assigns it (`lead work`, under
+  `held`, no push): `lessons accept` is the lead's. `tick` prints `lessonsReview` for open ones and
+  `lessonsJudged` when it closes one, as merged, once each of its proposals was accepted, dropped or folded.
+- `studio lessons drop <n> --reason "<line>"`; verdicts and reasons are kept in `lessons.json`.
+- A proposal stores the report and the pull request of its run as evidence; `studio lessons` shows each
+  with its age, source item and evidence.
+- `studio recover [--dry-run]`: lists held and stale locks and breaks the stale ones, removes leftovers of a
+  cut-short write or lock break, finishes an interrupted launch on the board, and reports ended crews,
+  items without a crew record, an interrupted queue run and queued items the queue lost. It prints
+  `findings` and `needsLead`; `--dry-run` only reads; a second run does nothing.
+- `tick` runs the restart checks first (`recovered` in its output when something was repaired).
+
+### Changed
+
+- Locks record the holder's process start time: a lock whose pid now belongs to another process (after a
+  reboot) is stale at once. A live holder whose start time matches is never broken, however long it was
+  silent; one that cannot be verified is taken over only after a very long silence (four times its limit,
+  at least an hour). `recover` reports a quiet live holder (`silent <n> min, holder alive`).
+- A queue run whose lock was taken over stops before its next step; a launch beats its lock around the
+  clone.
+- `crew.json` is changed only under `crew.lock` (launch, stop, usage limits, account blocks), and an
+  unreadable file is never replaced.
+- The interrupted-launch repair waits while a launch holds the launch lock and while a record without its
+  start time is younger than 2 minutes; a launch whose item was already moved to its crew succeeds.
+- An item in review that the merge queue already holds is moved to `queued` (a `queue add` that stopped
+  between the queue entry and the board).
+- `collect` stores lessons before it moves the item. The hint for an item without a crew record checks
+  its log first.
+- `costs.lock` is among the locks `recover` checks; the state files crews must not write include the
+  lessons files, `tick.lock`, `board.lock` and `crew.lock`.
+- `launch` writes the crew record with its pid right after the start and adds the start time once read, so
+  a lead killed in between leaves a record (unverified, never signalled) instead of a crew nobody knows of.
+  A `ready` item with a crew started for it is moved to `assigned` by the next tick, never started again.
+- `lessons.json` is changed under its own short lock (`lessons.lock`).
+- The lead skill: after a restart `studio recover`, then the heartbeat; the lessons review is the lead's
+  item, with one owner line per role ("<n> lessons accepted for <role>").
+
+### Not exercised
+
+- A real reboot with live crews, and a real lead session working a lessons review item.
+
 ## [0.14.0] - 2026-11-05
 
 What crews cost was invisible, and nothing kept a busy day from running up. Now each item shows its runs,

@@ -14,8 +14,8 @@ import { acquireStateLock, writeStateFile } from './paths.js';
 import type { Http } from './ports.js';
 
 export const PUSHED_FILE = 'pushed.json';
-const PUSH_LOCK = 'push.lock';
-const LOCK_STALE_MS = 2 * 60_000;
+export const PUSH_LOCK = 'push.lock';
+export const LOCK_STALE_MS = 2 * 60_000;
 /** At most one push per project in this time, urgent ones aside. */
 export const PUSH_INTERVAL_MS = 10 * 60_000;
 /** A sent key that is no longer current is forgotten after this long. */

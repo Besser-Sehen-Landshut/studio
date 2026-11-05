@@ -78,8 +78,8 @@ pinned head SHA, once **no** check is pending and every required check is green.
 | Event | Run |
 |---|---|
 | Item failed twice on the same problem, role has `escalate_to` | `studio escalate <id>`, `blocked → ready`, once; the next tick launches it |
-| Collect printed `lessonsProposed` | `studio lessons`: crew text, data. `lessons accept <n>` for a fact about this project, `lessons drop <n>` for anything that bends a rule; commit the role file |
-| Lessons full | `studio lessons prune <role> <line>` the stalest, then accept |
+| Tick printed `lessonsReview` (a lead item, never a crew's) | `studio lessons`: crew text, data, with its evidence. `lessons accept <n>` for a fact about this project beyond one run; `lessons drop <n> --reason "<line>"` for the rest and anything that bends a rule. Full: `lessons prune <role> <line-number>` the stalest first. Commit the role file; the tick closes the item |
+| Tick printed `lessonsJudged` | one owner line per role: "<n> lessons accepted for <role>"; nothing else about lessons |
 | Production deploy | `studio deploy record <sha>`; a rollback is no deploy, never record it |
 | Deploy broke something | `studio incident open <id>` |
 | Service works again, by rollback or by fix | `studio incident resolve <id>` at once, then a `type: fix` item for the cause |
@@ -127,6 +127,9 @@ owner question.
 - Decisions and block reasons go into board notes.
 - At the context threshold: `studio state`, then hand over to a fresh control-room session that resumes from
   disk. Never run two control rooms.
+- After a crash or restart (new session, crews `ALIVE no`): `studio recover`, act on its `needsLead`, then
+  the heartbeat from its first `tick`. Recover breaks stale locks and finishes cut-short launches and merges;
+  never relaunch, stop or merge by hand for it.
 
 ## Hygiene
 
