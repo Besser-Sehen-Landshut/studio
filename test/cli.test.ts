@@ -3637,6 +3637,8 @@ describe('studio tick', () => {
       merged: [],
       held: [],
       needsLead: [],
+      reruns: [],
+      flakyItems: [],
       errors: [],
     });
   }, 30_000);
@@ -4489,5 +4491,82 @@ describe('epics in the CLI', () => {
       expect(JSON.parse(again.out).create).toEqual([]);
       expect(loadBoard(fx.project).epics).toHaveLength(3);
     });
+  });
+});
+
+/** Files below `dir` whose text contains `needle`. */
+function filesWith(dir: string, needle: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { recursive: true, withFileTypes: true }).flatMap((e) => {
+    if (!e.isFile()) return [];
+    const file = join(e.parentPath, e.name);
+    return readFileSync(file, 'utf8').includes(needle) ? [file] : [];
+  });
+}
+
+describe('studio tick: pushes to the phone', () => {
+  const TOPIC = 'studio-FakeTickTopic00000000123';
+  const withNtfy = (fx: Fx) => {
+    const dir = join(fx.home, '.config', 'studio');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'notify-secret'), JSON.stringify({ transport: 'ntfy', topic: TOPIC }), {
+      mode: 0o600,
+    });
+  };
+  const fakeHttp = (replies: { ok: boolean; status?: number }[] = []) => {
+    const posts: { url: string; body: string }[] = [];
+    return {
+      posts,
+      http: {
+        async post(url: string, body: string) {
+          posts.push({ url, body });
+          return replies.shift() ?? { ok: true, status: 200 };
+        },
+      },
+    };
+  };
+
+  it('pushes a new decision once, as a fixed phrase with id and project, never crew text', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'blocked', notes: ['question: CREW TEXT here?'] }]);
+    withNtfy(fx);
+    const h = fakeHttp();
+    const ports = { ...fakePorts(fakeGh().gh).ports, http: h.http };
+    const t1 = await cli(fx, ports, 'tick');
+    expect(t1.code).toBe(0);
+    expect(h.posts).toEqual([
+      { url: `https://ntfy.sh/${TOPIC}`, body: 'Crew has a question: APP-1 in app' },
+    ]);
+    const t2 = await cli(fx, ports, 'tick');
+    expect(t2.code).toBe(0);
+    expect(h.posts).toHaveLength(1);
+    // Neither the output nor any state file holds the topic.
+    for (const out of [t1.out, t1.err, t2.out, t2.err]) expect(out).not.toContain(TOPIC);
+    expect(filesWith(fx.state, TOPIC)).toEqual([]);
+    expect(filesWith(fx.owner, TOPIC)).toEqual([]);
+  });
+
+  it('a failed push is listed under errors and does not fail the tick', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'blocked', notes: ['crew reported blocked'] }]);
+    withNtfy(fx);
+    const h = fakeHttp([{ ok: false, status: 502 }]);
+    const ports = { ...fakePorts(fakeGh().gh).ports, http: h.http };
+    const t = await cli(fx, ports, 'tick');
+    expect(t.code).toBe(0);
+    expect(JSON.parse(t.out).errors).toEqual([
+      { error: 'notify: ntfy answered 502; retried next tick' },
+    ]);
+    expect(t.out).not.toContain(TOPIC);
+    // Retried on the next tick, which sends it.
+    const t2 = await cli(fx, ports, 'tick');
+    expect(JSON.parse(t2.out).errors).toEqual([]);
+    expect(h.posts).toHaveLength(2);
+  });
+
+  it('pushes nothing without a stored topic', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'blocked', notes: ['crew reported blocked'] }]);
+    const h = fakeHttp();
+    const t = await cli(fx, { ...fakePorts(fakeGh().gh).ports, http: h.http }, 'tick');
+    expect(t.code).toBe(0);
+    expect(h.posts).toEqual([]);
   });
 });

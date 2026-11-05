@@ -101,7 +101,11 @@ describe('README quick start', () => {
     expect(readme).toMatch(/notify: \{ channel, command \}/);
     expect(readme).toContain('`blocks.json` in the owner root');
     expect(readme).toContain('.legacy-');
-    expect(readme).toMatch(/Status: 0\.12\.2/);
+    expect(readme).toMatch(/Status: 0\.13\.0/);
+    expect(readme).toContain('### Push notifications');
+    expect(readme).toContain('studio setup --notifications');
+    expect(readme).toContain('### Flaky tests');
+    expect(readme).toContain('`gh run rerun <run> --failed`');
     for (const command of ['/studio list', '/studio pipeline', '/studio more', '/studio lang']) {
       expect(readme).toContain(command);
     }

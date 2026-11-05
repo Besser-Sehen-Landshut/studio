@@ -94,6 +94,15 @@ export interface Credentials {
   ): Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
+/** Plain HTTPS POSTs for push messages. Never throws; a reply carries only the HTTP status. */
+export interface Http {
+  post(
+    url: string,
+    body: string,
+    headers: Record<string, string>,
+  ): Promise<{ ok: boolean; status?: number }>;
+}
+
 /** Runs `claude <args>` for plugin setup only: no model call, no token in `env`. */
 export interface PluginCli {
   run(
@@ -113,7 +122,34 @@ export interface Ports {
   host: Host;
   /** Optional so test doubles need not run a real `claude`; a missing one refuses. */
   plugins?: PluginCli;
+  /** Optional so test doubles never reach the network; a missing one sends nothing. */
+  http?: Http;
 }
+
+const HTTP_TIMEOUT_MS = 15_000;
+
+/**
+ * POSTs to an https URL. Only the status comes back, never the body (it may echo a key); no
+ * redirect is followed, so a key never goes to another host.
+ */
+export const realHttp: Http = {
+  async post(url, body, headers) {
+    if (!url.startsWith('https://')) return { ok: false };
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        body,
+        headers,
+        redirect: 'error',
+        signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+      });
+      await r.body?.cancel();
+      return { ok: r.ok, status: r.status };
+    } catch {
+      return { ok: false };
+    }
+  },
+};
 
 const PLUGIN_TIMEOUT_MS = 300_000;
 
@@ -312,5 +348,5 @@ export function realPorts(claudeBin = 'claude'): Ports {
     },
   };
 
-  return { gh, git, claude, clock, host, credentials, plugins };
+  return { gh, git, claude, clock, host, credentials, plugins, http: realHttp };
 }

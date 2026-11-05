@@ -3,6 +3,43 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.13.0] - 2026-11-05
+
+Decisions waited until someone looked at the board, and a flaky test anywhere in the repository failed
+an unrelated pull request in the queue until the lead reran it by hand. Now Studio pushes a decision to the
+owner's phone, and a failure outside a pull request gets one rerun on its commit. Not tagged yet; the
+maintainers tag after the merge.
+
+### Added
+
+- Push notifications through ntfy, no account needed. `studio setup` has a fifth step, also on its own as
+  `studio setup --notifications`: ntfy or none. ntfy makes a random topic (144 bits), prints the subscribe
+  link once, sends a test push and stores the topic only after it went out (`notify-secret` in the owner
+  config dir, mode 0600). `notify.ntfy_server` in the owner config points to a self-hosted server.
+  `doctor` shows `notifications: ntfy | none | invalid`, never the topic.
+- `tick` pushes each new `needsLead` entry and every account block: one line, a fixed phrase in English or
+  German (`notify.language`, else the locale), the item id and the project name, never crew text. Each
+  decision is pushed once; at most one push per project in 10 minutes, the rest bundled; quiet hours
+  (`notify.quiet: "22:00-07:00"` in `notify.timezone`, else the system zone) hold pushes back, except an account block, which is
+  urgent. A failed push is a `notify:` line under `errors` and is retried; it does not change the exit code.
+- A failed check outside the pull request (the job runs in a directory of its own that the pull request
+  and the item do not touch) gets one rerun of its failed jobs on the same commit
+  (`gh run rerun <run> --failed`), once no check of the pull request still runs and CI is under the merge
+  capacity. The queue and `collect` wait for it. A pass goes into the flaky ledger (per repository); a
+  failure of the same job in the same repository within 14 days of a rerun that passed adds one item
+  `Find the cause of flaky <job>`. Never more than one rerun per commit (`ci-reruns.json`); a rerun
+  GitHub refuses for now (still running, 403, 422) does not use it up.
+  Anything Studio cannot place counts as related and fails as before.
+- `tick` prints `reruns` and `flakyItems`; `queue run` prints them when there are any.
+
+### Changed
+
+- The lead skill: pushes and flaky reruns are Studio's; the lead acts on `needsLead` as before and no
+  longer records Studio's own reruns in the ledger.
+- `primary_repo` and `repos` in `studio.yaml` must be `owner/repo`.
+- The owner config's `notify` block takes `quiet`, `timezone`, `language` and `ntfy_server`; `channel` and `command`
+  (the notify command of `studio state`, unchanged) are optional now, but go together.
+
 ## [0.12.2] - 2026-11-05
 
 Every Studio update moves the pinned version of the `studio` plugin, and until `setup-plugins` ran,

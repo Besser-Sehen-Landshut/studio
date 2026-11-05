@@ -11,11 +11,22 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { runAccount } from './account-command.js';
-import { type OwnerEnv, ownerConfigDir } from './config.js';
+import { loadOwnerConfig, type OwnerConfig, type OwnerEnv, ownerConfigDir } from './config.js';
 import { ghCheck, githubRepoOf } from './init.js';
 import { validLabel } from './limits.js';
 import { ownerStateRootFor } from './paths.js';
 import type { Ports } from './ports.js';
+import {
+  installNotifySecret,
+  type NotifySecret,
+  newNtfyTopic,
+  pushFailure,
+  pushLanguage,
+  readNotifySecret,
+  sendPush,
+  subscribeLink,
+  testPushText,
+} from './push.js';
 import { doctorReport, readPrimaryRepo, runSecretSet } from './secret-command.js';
 import { assertPrimaryRepo, safe } from './setup-ci-command.js';
 
@@ -30,6 +41,8 @@ export type SetupOptions = {
   readLine?: (prompt: string) => Promise<string | undefined>;
   /** Also put a `studio` shim into a folder on the terminal's PATH. */
   link: boolean;
+  /** Only the notifications step, also when they are set up already. */
+  notifications?: boolean;
   /** The absolute path of the plugin's `bin/studio`; undefined when it cannot be told. */
   launcher?: string;
   stdout(s: string): void;
@@ -255,8 +268,77 @@ async function link(o: SetupOptions, home: string): Promise<number> {
   return 0;
 }
 
+const NOTIFY_TEXT = [
+  '   Studio can push one line to your phone when it needs a decision: a fixed phrase, the item',
+  '   id and the project name, nothing else. It uses ntfy, which needs no account: Studio makes a',
+  '   secret topic, you subscribe to it in the ntfy app.',
+];
+
 /**
- * `studio setup [--link]`: the owner's one-time setup in a terminal. Each step is skipped when it
+ * Step 5: push notifications through ntfy, or none. A new random topic, the subscribe link shown
+ * once, a test push; the topic is stored only once that push went out. 1 when it fails.
+ */
+async function notificationsStep(o: SetupOptions, again: boolean): Promise<number> {
+  const say = (s: string) => o.stdout(`${safe(s)}\n`);
+  let config: OwnerConfig;
+  try {
+    config = loadOwnerConfig(o.owner);
+  } catch {
+    say('5. Notifications: the owner config cannot be read; fix it with studio doctor, then run');
+    say('   studio setup --notifications. Nothing stored.');
+    return 1;
+  }
+  const stored = readNotifySecret(o.owner);
+  if (stored.kind === 'ok' && !again) {
+    say(`5. Notifications: done (${stored.secret.transport})`);
+    return 0;
+  }
+  say(
+    `5. Notifications: ${stored.kind === 'bad' ? 'the stored file is not usable' : stored.kind === 'ok' ? `set up (${stored.secret.transport}), set up again` : 'none'}`,
+  );
+  for (const l of NOTIFY_TEXT) say(l);
+  const answer = await o.readLine?.('   ntfy or none? [ntfy/none] (Enter: ntfy): ');
+  const choice = answer?.trim().toLowerCase();
+  if (choice === undefined || ['none', 'n', 'no', 'skip'].includes(choice)) {
+    say(
+      `   ${stored.kind === 'ok' ? 'unchanged' : 'no notifications'}; later: studio setup --notifications`,
+    );
+    return 0;
+  }
+  if (choice !== '' && choice !== 'ntfy') {
+    say('   answer ntfy or none; nothing stored');
+    return 1;
+  }
+  const http = o.ports.http;
+  if (http === undefined) {
+    say('   no HTTPS client in this process; nothing stored');
+    return 1;
+  }
+  const secret: NotifySecret = { transport: 'ntfy', topic: newNtfyTopic() };
+  // The one place the topic is shown: the owner's own terminal.
+  say('   Install the ntfy app and open this link:');
+  say(`   ${subscribeLink(config, secret)}`);
+  say('   The link is the secret: whoever has it reads your pushes. Studio shows it only here.');
+  const ready = await o.readLine?.('   Press Enter once you subscribed (type skip to stop): ');
+  if (ready === undefined || ready.trim().toLowerCase() === 'skip') {
+    say('   nothing stored; later: studio setup --notifications');
+    return 0;
+  }
+  const reply = await sendPush(http, secret, config, {
+    text: testPushText(pushLanguage(config, o.env)),
+    urgent: false,
+  });
+  if (!reply.ok) {
+    say(`   test push failed: ${pushFailure(reply)}; nothing stored`);
+    return 1;
+  }
+  installNotifySecret(secret, o.owner);
+  say('   test push sent; check your phone. Topic stored.');
+  return 0;
+}
+
+/**
+ * `studio setup [--link] [--notifications]`: the owner's one-time setup in a terminal. Each step is skipped when it
  * is done; secrets go through `secret set crew-token` and `account add`, never through here.
  */
 export async function runSetup(o: SetupOptions): Promise<number> {
@@ -268,6 +350,7 @@ export async function runSetup(o: SetupOptions): Promise<number> {
   }
   const say = (s: string) => o.stdout(`${safe(s)}\n`);
   const home = o.owner.homedir ?? homedir();
+  if (o.notifications === true) return await notificationsStep(o, true);
 
   const gh = await ghCheck(o.ports);
   if (gh.status !== 'pass') {
@@ -342,6 +425,9 @@ export async function runSetup(o: SetupOptions): Promise<number> {
       }
     }
   }
+
+  const notified = await notificationsStep(o, false);
+  if (notified !== 0) return notified;
 
   say('');
   say('Done. Now open your project in Claude Code and run /studio:init.');

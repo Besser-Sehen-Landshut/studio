@@ -65,6 +65,8 @@ type Workflow = {
   jobs: [string, unknown][];
   onPullRequest: boolean;
   onWorkflowCall: boolean;
+  /** `defaults.run.working-directory` of the workflow. */
+  workingDirectory?: unknown;
 };
 
 /** Whether `on:` names `event` (a string, a list or a map). */
@@ -83,7 +85,7 @@ function readWorkflow(text: string, path: string): Workflow | undefined {
     return undefined;
   }
   if (doc === null || typeof doc !== 'object') return undefined;
-  const wf = doc as { name?: unknown; jobs?: unknown; on?: unknown };
+  const wf = doc as { name?: unknown; jobs?: unknown; on?: unknown; defaults?: unknown };
   const name = typeof wf.name === 'string' && wf.name.trim() !== '' ? wf.name : path;
   const jobs =
     wf.jobs !== null && typeof wf.jobs === 'object' ? Object.entries(wf.jobs as object) : [];
@@ -92,7 +94,85 @@ function readWorkflow(text: string, path: string): Workflow | undefined {
     jobs,
     onPullRequest: runsOn(wf.on, 'pull_request'),
     onWorkflowCall: runsOn(wf.on, 'workflow_call'),
+    workingDirectory: workingDirectoryOf(wf.defaults),
   };
+}
+
+/** `defaults.run.working-directory`, unchecked. */
+function workingDirectoryOf(defaults: unknown): unknown {
+  if (defaults === null || typeof defaults !== 'object') return undefined;
+  const run = (defaults as { run?: unknown }).run;
+  if (run === null || typeof run !== 'object') return undefined;
+  return (run as Record<string, unknown>)['working-directory'];
+}
+
+/** A plain relative directory: no expression, no wildcard, no `..`, not the repository root. */
+function plainDir(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const d = v.trim().replace(/^\.\//, '').replace(/\/+$/, '');
+  if (d === '' || d === '.' || d.startsWith('/') || /[$*?[\]{}\\\p{Cc}]/u.test(d)) return undefined;
+  if (d.split('/').some((seg) => seg === '..' || seg === '.' || seg === '')) return undefined;
+  return d;
+}
+
+export type Workflows = ReadonlyMap<string, Workflow | undefined>;
+
+/**
+ * The directory a failed check's job runs its steps in (`defaults.run.working-directory` of the
+ * job, else of the workflow), when the check names exactly one job of a pull_request workflow that
+ * runs its steps there. Undefined whenever that is not certain: a commit status, a workflow name
+ * that is not unique, a reusable workflow, a job whose `name:` is an expression, a step with a
+ * working directory of its own, no working directory at all.
+ */
+export function jobArea(
+  files: Workflows,
+  check: Pick<Check, 'name' | 'workflow'>,
+): string | undefined {
+  if (check.workflow === undefined) return undefined;
+  const named = [...files.values()].filter((w) => w !== undefined && w.name === check.workflow);
+  if (named.length !== 1) return undefined;
+  const w = named[0] as Workflow;
+  if (!w.onPullRequest) return undefined;
+  // A matrix leg reports `job (<leg>)`.
+  const leg = /^(.*) \(.+\)$/.exec(check.name)?.[1];
+  const jobs = w.jobs.filter(
+    ([id, j]) => isJob(j) && (checkName(id, j) === check.name || checkName(id, j) === leg),
+  );
+  if (jobs.length !== 1) return undefined;
+  const job = (jobs[0] as [string, Job])[1];
+  if ('uses' in job) return undefined;
+  const area = plainDir(workingDirectoryOf(job.defaults) ?? w.workingDirectory);
+  if (area === undefined) return undefined;
+  const steps = Array.isArray(job.steps) ? job.steps : [];
+  for (const step of steps) {
+    if (step === null || typeof step !== 'object') return undefined;
+    if ('working-directory' in step) return undefined;
+  }
+  return area;
+}
+
+/** Every workflow file at a commit, parsed (undefined for one that is not valid YAML). */
+export async function readWorkflowsAt(
+  git: Git,
+  dir: string,
+  oid: string,
+): Promise<Map<string, Workflow | undefined>> {
+  const g = (args: string[]) =>
+    git.run(dir, ['--no-replace-objects', ...args], { timeoutMs: GIT_LOCAL_MS });
+  const paths = (await g(['ls-tree', '--name-only', '-z', oid, WORKFLOWS_DIR]))
+    .split('\0')
+    .filter((p) => p !== '' && WORKFLOW_FILE.test(p));
+  const files = new Map<string, Workflow | undefined>();
+  for (const p of paths) {
+    let text: string | undefined;
+    try {
+      text = await g(['cat-file', 'blob', `${oid}:${p}`]);
+    } catch {
+      text = undefined;
+    }
+    files.set(p, text === undefined ? undefined : readWorkflow(text, p));
+  }
+  return files;
 }
 
 const isJob = (j: unknown): j is Job => j !== null && typeof j === 'object' && !Array.isArray(j);
@@ -203,19 +283,7 @@ export async function verifyNotRunHereJobs(o: {
     if (trees.has(oid)) return trees.get(oid);
     let files: Map<string, Workflow | undefined> | undefined;
     try {
-      const paths = (await g(['ls-tree', '--name-only', '-z', oid, WORKFLOWS_DIR], GIT_LOCAL_MS))
-        .split('\0')
-        .filter((p) => p !== '' && WORKFLOW_FILE.test(p));
-      files = new Map();
-      for (const p of paths) {
-        let text: string | undefined;
-        try {
-          text = await g(['cat-file', 'blob', `${oid}:${p}`], GIT_LOCAL_MS);
-        } catch {
-          text = undefined;
-        }
-        files.set(p, text === undefined ? undefined : readWorkflow(text, p));
-      }
+      files = await readWorkflowsAt(o.git, o.checkout.dir, oid);
     } catch {
       files = undefined;
     }

@@ -51,6 +51,21 @@ describe('loadConfig', () => {
     expect(configWarnings(cfg).join('\n')).toMatch(/notify.*no effect.*owner config/);
   });
 
+  it('refuses a primary_repo or repo that is not owner/repo', () => {
+    for (const bad of [
+      '"org/app\\nInjected"',
+      'https://evil.example/org/app',
+      'app',
+      'org/app/x',
+      '../app',
+    ]) {
+      const yaml = MINIMAL.replace('primary_repo: org/app', `primary_repo: ${bad}`);
+      expect(() => loadConfig(project(yaml)), bad).toThrow(/primary_repo/);
+    }
+    const repos = MINIMAL.replace('repos: [org/app]', 'repos: [org/app, "https://x.example/y"]');
+    expect(() => loadConfig(project(repos))).toThrow(/repos/);
+  });
+
   it('loads basic fixture', () => {
     const cfg = loadConfig(fixture);
     expect(cfg.primaryRepo).toBe('org/app');
