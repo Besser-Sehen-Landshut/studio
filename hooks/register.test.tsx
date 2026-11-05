@@ -1,6 +1,6 @@
 // Run with `pnpm test:mod` (claude plugin test on a copy holding only the mod). Not run by vitest.
 import type { On } from 'claude-code';
-import { expect, mock, test } from 'claude-code/testing';
+import { expect, mock, type TestBody, test } from 'claude-code/testing';
 
 const PROJECT = '/work/app';
 // sha256('/work/app') from outside the mod, so a drift from src/paths.ts shows up as a missing file.
@@ -46,6 +46,8 @@ type WorldOptions = {
   cwd?: string;
   /** What the session draws on; default one terminal. */
   surfaces?: ('terminal' | 'app')[];
+  /** Claude Code settings as `$.settings.read` answers them; default none. */
+  settings?: Record<string, unknown>;
 };
 
 /** Stands for the engine: a file system in memory, and a record of everything the mod asked for. */
@@ -72,6 +74,7 @@ function world(on: On, options: WorldOptions = {}) {
   } else {
     mock.store(on, options.store);
   }
+  on('settings.read', () => ({ value: options.settings ?? {} }));
   on('session.start', (_, e) => ({ cwd: e.cwd }));
   on('session.surfaces', () => ({ value: options.surfaces ?? ['terminal'] }));
   on('session.cwd', () => ({ value: options.cwd ?? PROJECT }));
@@ -205,7 +208,7 @@ test('a Studio session registers the command, a 10 s timer and opens the pane', 
   const { clock, files, seen } = world(on, { files: { [YAML]: 'project: app\n' } });
   await $.session.start(start);
   expect(seen.commands).toEqual(['studio']);
-  expect(seen.hints).toEqual(['status | pause | resume']);
+  expect(seen.hints).toEqual(['list | pipeline | more | status | pause | resume | lang']);
   expect(seen.opened).toEqual(['studio-board:Studio board']);
   files.set(STATE, JSON.stringify(OK_STATE));
   await clock.advance(9_999);
@@ -540,7 +543,9 @@ test('anything else answers the usage text', async ($, on) => {
   const { seen } = world(on, { files: withState() });
   await $.session.start(start);
   const { text } = await $.command.run({ ...run, command: 'studio', args: 'stop everything' });
-  expect(text).toBe('Usage: /studio [status | pause | resume]');
+  expect(text).toBe(
+    'Usage: /studio [list | pipeline | more | status | pause | resume | lang de|en|auto]',
+  );
   expect(seen.forbidden).toEqual([]);
 });
 
@@ -550,7 +555,18 @@ test('the mod never writes a file or runs a process', async ($, on) => {
   });
   await $.session.start(start);
   await clock.advance(30_000);
-  for (const args of ['', 'status', 'pause', 'resume', 'junk']) {
+  for (const args of [
+    '',
+    'status',
+    'pause',
+    'resume',
+    'junk',
+    'list',
+    'pipeline',
+    'more',
+    'lang de',
+    'lang auto',
+  ]) {
     await $.command.run({ ...run, command: 'studio', args });
   }
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
@@ -656,4 +672,201 @@ test('a backslash folder with no project of its own does not find its look-alike
   const { seen } = world(on, { files: { '/work/a/.studio/studio.yaml': 'x' } });
   await $.session.start({ ...start, cwd: '/work/a\\b' });
   expect(seen.commands).toEqual([]);
+});
+
+// ---------- the work list, the pipeline and the language ----------
+
+/** A state as `studio state` writes it since the work list: items, a decision, an epic. */
+const LIST_STATE = {
+  ...OK_STATE,
+  project: 'app',
+  crew: [{ role: 'builder', item: 'APP-2', state: 'working', title: 'Second item' }],
+  items: [
+    {
+      id: 'APP-1',
+      title: 'First item',
+      stage: 'blocked',
+      epic: 'E-1',
+      wait: { code: 'blocked', text: 'fix limit reached' },
+    },
+    { id: 'APP-2', title: 'Second item', stage: 'building', epic: 'E-1' },
+    { id: 'APP-3', title: 'Third item', stage: 'ready' },
+  ],
+  needsLead: [
+    { item: 'APP-1', code: 'fix_limit', reason: 'fix limit reached', next: { say: 'show APP-1' } },
+  ],
+  epics: [{ id: 'E-1', title: 'First epic', status: 'open', merged: 1, total: 3 }],
+  wip: { building: 2, review: 1 },
+  updatedAt: '2026-11-01T11:59:00Z',
+};
+
+async function paneTexts($: Parameters<TestBody>[0], columns = 120) {
+  const ui = await $.ui.mount({
+    ...PANE,
+    surface: 'terminal',
+    props: { ...PANE.props, bodyColumns: columns },
+  });
+  // The decision heading is padded to the pane's width, as a highlighted bar.
+  const texts = (await ui.findAll({ type: 'Text' })).map((t) => (t.text ?? '').trimEnd());
+  await ui.unmount();
+  return texts;
+}
+
+test('the work list is the default view', async ($, on) => {
+  world(on, { files: withState(LIST_STATE) });
+  await $.session.start(start);
+  const texts = await paneTexts($);
+  expect(texts[0]).toMatch(/^Studio · app +updated 1 min ago$/);
+  expect(texts).toContain('Decision needed');
+  expect(texts).toContain('! APP-1 fix limit reached – decide');
+  expect(texts).toContain('  → say "show APP-1"');
+  expect(texts.some((t) => /^ {2}● APP-2 Second item +building/.test(t))).toBe(true);
+  expect(texts).toContain('Without epic');
+});
+
+test('the decision heading is drawn highlighted, and running rows in their own colour', async ($, on) => {
+  world(on, { files: withState(LIST_STATE) });
+  await $.session.start(start);
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  expect((await ui.find({ type: 'Text', text: /^Decision needed/ }))?.props).toMatchObject({
+    inverse: true,
+    weight: 'bold',
+  });
+  expect((await ui.find({ type: 'Text', text: /● APP-2/ }))?.props).toMatchObject({
+    color: 'suggestion',
+  });
+  await ui.unmount();
+});
+
+test('/studio pipeline draws the columns, and the work list when the pane is narrow', async ($, on) => {
+  world(on, { files: withState(LIST_STATE) });
+  await $.session.start(start);
+  const { text } = await $.command.run({ ...run, command: 'studio', args: 'pipeline' });
+  expect(text).toBe('Studio board: pipeline (the work list when the pane is narrow).');
+  expect((await paneTexts($)).some((t) => /^READY 1 +BUILDING 1\/2 +REVIEW 0\/1/.test(t))).toBe(
+    true,
+  );
+  const narrow = await paneTexts($, 40);
+  expect(narrow.some((t) => t.startsWith('READY'))).toBe(false);
+  expect(narrow).toContain('Decision needed');
+});
+
+test('/studio more draws the detailed view and /studio list the work list again', async ($, on) => {
+  world(on, { files: withState(LIST_STATE) });
+  await $.session.start(start);
+  const more = await $.command.run({ ...run, command: 'studio', args: 'more' });
+  expect(more.text).toBe('Studio board: details. Back with /studio list.');
+  const detailed = await paneTexts($);
+  expect(detailed).toContain('Merge queue');
+  expect(detailed).not.toContain('Decision needed');
+  const list = await $.command.run({ ...run, command: 'studio', args: ' list ' });
+  expect(list.text).toBe('Studio board: work list.');
+  expect(await paneTexts($)).toContain('Decision needed');
+});
+
+test('a view chosen in an earlier session is drawn from the store', async ($, on) => {
+  world(on, { files: withState(LIST_STATE), store: { view: 'more' } });
+  await $.session.start(start);
+  expect(await paneTexts($)).toContain('Merge queue');
+});
+
+test('a stored view that is no view is the work list', async ($, on) => {
+  world(on, { files: withState(LIST_STATE), store: { view: 'kanban' } });
+  await $.session.start(start);
+  expect(await paneTexts($)).toContain('Decision needed');
+});
+
+test('a state written before the work list draws the detailed view', async ($, on) => {
+  world(on, { files: withState() });
+  await $.session.start(start);
+  const texts = await paneTexts($);
+  expect(texts).toContain('Crew');
+  expect(texts.some((t) => t.includes('APP-1'))).toBe(true);
+});
+
+test('German from the Claude Code language setting', async ($, on) => {
+  const { seen } = world(on, { files: withState(LIST_STATE), settings: { language: 'german' } });
+  await $.session.start(start);
+  const texts = await paneTexts($);
+  expect(texts).toContain('Entscheidung nötig');
+  expect(texts).toContain('Ohne Vorhaben');
+  expect(texts).toContain('  → sagen: „show APP-1“');
+  expect(seen.statuses.at(-1)).toMatch(/^● 1 aktiv · 0 warten/);
+});
+
+test('German from the locale when the setting says nothing', async ($, on) => {
+  world(on, { files: withState(LIST_STATE), env: { HOME: '/home/u', LANG: 'de_DE.UTF-8' } });
+  await $.session.start(start);
+  expect(await paneTexts($)).toContain('Entscheidung nötig');
+});
+
+test('the setting outranks the locale, LC_ALL outranks LANG', async ($, on) => {
+  world(on, {
+    files: withState(LIST_STATE),
+    settings: { language: 'english' },
+    env: { HOME: '/home/u', LANG: 'de_DE.UTF-8' },
+  });
+  await $.session.start(start);
+  expect(await paneTexts($)).toContain('Decision needed');
+});
+
+test('LC_ALL outranks LANG', async ($, on) => {
+  world(on, {
+    files: withState(LIST_STATE),
+    env: { HOME: '/home/u', LC_ALL: 'en_US.UTF-8', LANG: 'de_DE.UTF-8' },
+  });
+  await $.session.start(start);
+  expect(await paneTexts($)).toContain('Decision needed');
+});
+
+test('English without a setting or a locale', async ($, on) => {
+  world(on, { files: withState(LIST_STATE) });
+  await $.session.start(start);
+  expect(await paneTexts($)).toContain('Decision needed');
+});
+
+test('/studio lang de and en override the setting; auto returns to it', async ($, on) => {
+  world(on, { files: withState(LIST_STATE), settings: { language: 'german' } });
+  await $.session.start(start);
+  const en = await $.command.run({ ...run, command: 'studio', args: 'lang en' });
+  expect(en.text).toBe('Studio board: English.');
+  expect(await paneTexts($)).toContain('Decision needed');
+  const de = await $.command.run({ ...run, command: 'studio', args: 'lang de' });
+  expect(de.text).toBe('Studio-Board: Deutsch.');
+  expect(await paneTexts($)).toContain('Entscheidung nötig');
+  await $.command.run({ ...run, command: 'studio', args: 'lang en' });
+  const auto = await $.command.run({ ...run, command: 'studio', args: 'lang auto' });
+  expect(auto.text).toBe('Studio-Board: Deutsch.');
+});
+
+test('a stored language override is used from the start', async ($, on) => {
+  world(on, { files: withState(LIST_STATE), store: { lang: 'de' } });
+  await $.session.start(start);
+  expect(await paneTexts($)).toContain('Entscheidung nötig');
+});
+
+test('an unknown language answers the usage text and changes nothing', async ($, on) => {
+  world(on, { files: withState(LIST_STATE) });
+  await $.session.start(start);
+  const { text } = await $.command.run({ ...run, command: 'studio', args: 'lang fr' });
+  expect(text).toMatch(/^Usage: \/studio/);
+  expect(await paneTexts($)).toContain('Decision needed');
+});
+
+test('a failing store still switches the view for the session', async ($, on) => {
+  world(on, { files: withState(LIST_STATE), storeFails: true });
+  await $.session.start(start);
+  await $.command.run({ ...run, command: 'studio', args: 'more' });
+  expect(await paneTexts($)).toContain('Merge queue');
+});
+
+test('a paused state names the time and the resume command', async ($, on) => {
+  world(on, {
+    files: { ...withState({ ...LIST_STATE, pause: { at: 'x', time: '14:02' } }), [PAUSE]: '{}' },
+  });
+  await $.session.start(start);
+  const texts = await paneTexts($);
+  expect(texts[0]).toMatch(/◷ paused$/);
+  expect(texts).toContain('Paused since 14:02. Nothing starts or merges; running crews finish.');
+  expect(texts).toContain('→ /studio resume');
 });

@@ -101,7 +101,11 @@ describe('README quick start', () => {
     expect(readme).toMatch(/notify: \{ channel, command \}/);
     expect(readme).toContain('`blocks.json` in the owner root');
     expect(readme).toContain('.legacy-');
-    expect(readme).toMatch(/Status: 0\.11\.0/);
+    expect(readme).toMatch(/Status: 0\.11\.1/);
+    for (const command of ['/studio list', '/studio pipeline', '/studio more', '/studio lang']) {
+      expect(readme).toContain(command);
+    }
+    expect(readme).toContain('Decision needed');
     expect(readme).not.toMatch(/crews cannot write the state base/);
     expect(readme).not.toMatch(/blocks?[^.]{0,40}per project/i);
   });

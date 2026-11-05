@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { CrewRecord, CrewState } from './crew.js';
 import type { Parks } from './limits.js';
 import type { MainBuild } from './main-build.js';
+import type { LeadDecision, PaneItem } from './pane-data.js';
 import { assertStatePath, ensureStateDir } from './paths.js';
 import type { Capacity } from './planner.js';
 import type { QueueState } from './queue.js';
@@ -60,6 +61,10 @@ export interface MergedToday {
   pr: number;
   repo: string;
   at: string;
+  /** The board item of the merge, when the event names one. */
+  item?: string;
+  /** That item's epic, when it is on the board and has one. */
+  epic?: string;
 }
 
 export interface Notification {
@@ -94,6 +99,16 @@ export interface StateSnapshot {
   components?: { id: string; name: string }[];
   /** Open and accepting epics in id order, with merged of total, for the pane; absent without any. */
   epics?: { id: string; title: string; status: string; merged: number; total: number }[];
+  /** Folder-free project name for the pane's header: the repository name of `primaryRepo`. */
+  project?: string;
+  /** Every item that is not merged or dropped, reviews aside, with its stage and what it waits for. */
+  items?: PaneItem[];
+  /** The latest tick's lead list, each with a short reason and a next step; absent before a tick. */
+  needsLead?: LeadDecision[];
+  /** WIP limits of the pane's pipeline columns: build roles together, and the reviewer. */
+  wip?: { building: number; review: number };
+  /** Set while the owner's pause stands; `time` is `HH:MM` on the owner's clock. */
+  pause?: { at?: string; time?: string };
   updatedAt: string;
   metrics: Metrics;
 }
