@@ -30,9 +30,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/quote.js
+// ../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/quote.js
 var require_quote = __commonJS({
-  "node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/quote.js"(exports, module) {
+  "../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/quote.js"(exports, module) {
     "use strict";
     var OPS = (
       /** @type {const} */
@@ -124,9 +124,9 @@ var require_quote = __commonJS({
   }
 });
 
-// node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/parse.js
+// ../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/parse.js
 var require_parse = __commonJS({
-  "node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/parse.js"(exports, module) {
+  "../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/parse.js"(exports, module) {
     "use strict";
     var CONTROL = (
       /** @type {const} */
@@ -491,9 +491,9 @@ var require_parse = __commonJS({
   }
 });
 
-// node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/index.js
+// ../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/index.js
 var require_shell_quote = __commonJS({
-  "node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/index.js"(exports) {
+  "../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/index.js"(exports) {
     "use strict";
     exports.quote = require_quote();
     exports.parse = require_parse();
@@ -1391,6 +1391,13 @@ function checkGit(env, args, state) {
     deny(`git ${sub} runs from the clone root only, without -C, --git-dir or --work-tree`);
   }
   if (sub === "init") deny("git init is not allowed (no repository inside the clone)");
+  if (env.artifacts !== void 0 && (sub === "add" || sub === "mv" || sub === "update-index")) {
+    for (const a of rest.flatMap((x) => braceExpand(x))) {
+      if (!a.startsWith("-") && underArtifacts(env, a, state.cwd ?? env.wt)) {
+        deny(`git ${sub} of the analysis directory is not allowed: artifacts never enter git`);
+      }
+    }
+  }
   if (sub === "push") checkPush(env, rest);
   else if (sub === "fetch" || sub === "pull") checkFetchPull(sub, rest);
   else if (sub === "ls-remote") checkLsRemote(rest);
@@ -1565,6 +1572,13 @@ function checkSegment(env, seg, state) {
   for (const w of seg.writes) checkWritePath(env, w, state.cwd, "redirection");
   for (const r of seg.reads) checkSecretToken(env, r, base);
   for (const w of seg.writes) checkSecretToken(env, w, base);
+  if (env.artifacts !== void 0 && seg.writes.length > 0) {
+    for (const w of [...seg.reads, ...seg.words]) {
+      if (underArtifacts(env, w, base)) {
+        deny("output of a command on the analysis directory may not be written to a file");
+      }
+    }
+  }
   checkWords(env, seg.words, state);
 }
 var VAR_BUILTINS = /* @__PURE__ */ new Set([
@@ -1694,6 +1708,9 @@ function checkWords(env, words, state) {
   if (cmdWord !== "{" && cmdWord.includes("{")) deny("brace expansion in command position");
   const name = basename(cmdWord);
   const args = words.slice(at + 1);
+  if (env.artifacts !== void 0 || env.blockedCommands.size > 0) {
+    checkResearchCommand(env, name, cmdWord, args, base);
+  }
   if (name === "sudo" || name === "su" || name === "doas") {
     deny(`privilege escalation (${name}) is not allowed`);
   }
@@ -1751,6 +1768,151 @@ function checkBash(env, cmd, cwd, depth) {
   const state = { cwd };
   for (const line of lines) {
     for (const seg of toSegments(line)) checkSegment(env, seg, state);
+  }
+}
+function underArtifacts(env, word, base) {
+  if (env.artifacts === void 0 || word === "" || word.length > 4096) return false;
+  const eq = word.indexOf("=");
+  for (const v of eq > 0 ? [word, word.slice(eq + 1)] : [word]) {
+    for (const e of braceExpand(v)) {
+      if (e === "" || e.includes(SUBST) || e.startsWith("-") || /\s/.test(e)) continue;
+      if (e.startsWith("~") || e.includes("$")) continue;
+      if (isUnder([env.artifacts], resolveReal(e, base))) return true;
+    }
+  }
+  return false;
+}
+var INTERPRETERS = /* @__PURE__ */ new Set([
+  "sh",
+  "bash",
+  "zsh",
+  "dash",
+  "ksh",
+  "fish",
+  "python",
+  "python3",
+  "node",
+  "nodejs",
+  "deno",
+  "bun",
+  "ruby",
+  "perl",
+  "php",
+  "lua",
+  "java",
+  "javaw",
+  "dotnet",
+  "mono",
+  "wine",
+  "wine64",
+  "powershell",
+  "pwsh",
+  "cmd",
+  "env",
+  "xargs",
+  "exec",
+  "nohup",
+  "time",
+  "timeout",
+  "script",
+  "open",
+  "arch",
+  "qemu",
+  "qemu-aarch64",
+  "qemu-x86_64",
+  "lldb",
+  "gdb",
+  "frida"
+]);
+var COPIERS = /* @__PURE__ */ new Set([
+  "cp",
+  "mv",
+  "ln",
+  "rsync",
+  "install",
+  "ditto",
+  "tar",
+  "unzip",
+  "zip",
+  "7z",
+  "7za",
+  "7zr",
+  "gzip",
+  "gunzip",
+  "bzip2",
+  "xz",
+  "dd",
+  "tee",
+  "split",
+  "csplit",
+  "pax",
+  "cpio",
+  "ar",
+  "curl",
+  "scp",
+  "sftp"
+]);
+function checkResearchCommand(env, name, cmdWord, args, base) {
+  if (env.blockedCommands.has(name)) {
+    deny(
+      `${name} starts or watches a program or device: the item does not allow that class (rea-allow)`
+    );
+  }
+  if (env.artifacts === void 0) return;
+  if (cmdWord.includes("/") && underArtifacts(env, cmdWord, base)) {
+    deny("a program of the analysis directory is never started");
+  }
+  if (INTERPRETERS.has(name) && args.some((a) => underArtifacts(env, a, base))) {
+    deny(`${name} may not run anything from the analysis directory`);
+  }
+  if (COPIERS.has(name) && args.some((a) => underArtifacts(env, a, base))) {
+    deny(
+      `${name} may not copy or unpack from the analysis directory: artifacts never enter the checkout`
+    );
+  }
+}
+var MCP_PATH_KEY = /(^|_)(path|paths|file|files|dir|directory|root|input|archive|bundle|source_map|library|jar|executable|apk|binary|target)(_|$)/i;
+var MCP_WRITE_KEY = /^(snapshot_path|snapshot|output|output_\w+|destination|destination_\w+|dest|dest_\w+|export_\w+|save_\w+|overwrite)$/i;
+var MCP_LIMITS = { depth: 6, values: 500 };
+function checkMcp(env, tool, input, cwd) {
+  const artifacts = env.artifacts;
+  if (artifacts === void 0) deny(`${tool}: no analysis directory is configured`);
+  let seen = 0;
+  const walk = (v, key, depth) => {
+    if (++seen > MCP_LIMITS.values || depth > MCP_LIMITS.depth) {
+      deny(`${tool}: input too large to check`);
+    }
+    if (Array.isArray(v)) {
+      for (const x of v) walk(x, key, depth + 1);
+      return;
+    }
+    if (v !== null && typeof v === "object") {
+      for (const [k, x] of Object.entries(v)) walk(x, k, depth + 1);
+      return;
+    }
+    if (MCP_WRITE_KEY.test(key) && v !== void 0 && v !== false && v !== "" && v !== null) {
+      deny(`${tool}: ${key} asks the tool to write; a researcher's tools only read`);
+    }
+    if (typeof v !== "string") return;
+    if (new RegExp("\\p{Cc}", "u").test(v)) deny(`${tool}: control character in ${key}`);
+    if (/^file:/i.test(v) || v.startsWith("~")) deny(`${tool}: ${key} must be a plain path`);
+    if (!MCP_PATH_KEY.test(key)) return;
+    if (v.split(/[\\/]/).includes("..")) deny(`${tool}: write ${key} without ..`);
+    if (isAbsolute(v) || /^[A-Za-z]:[\\/]/.test(v)) {
+      const real = resolveReal(v, cwd);
+      if (!isUnder([artifacts, env.wt], real)) {
+        deny(`${tool}: ${key} is outside the analysis directory`);
+      }
+    }
+  };
+  walk(input, "", 0);
+  if (tool.endsWith("__inspect_sqlite_database")) {
+    for (const k of ["table", "columns", "row_limit"]) {
+      if (input[k] !== void 0) deny(`${tool}: rows are content; ask for the schema (no ${k})`);
+    }
+    if (input.schema_scope === "selected_table") {
+      deny(`${tool}: schema_scope selected_table samples rows; use inventory or database`);
+    }
   }
 }
 var WRITE_TOOLS = {
@@ -1900,7 +2062,7 @@ var isSecretExempt = (s) => basename(s) === ".env.example";
 var isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === "string");
 function check(input, ctx) {
   const c = ctx;
-  if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs) || c.item !== void 0 && (typeof c.item !== "string" || !/^[A-Z]+-\d+$/.test(c.item)) || c.base !== void 0 && (typeof c.base !== "string" || !/^[A-Za-z0-9._/-]+$/.test(c.base)) || c.deniedPorts !== void 0 && !(Array.isArray(c.deniedPorts) && c.deniedPorts.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535))) {
+  if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs) || c.item !== void 0 && (typeof c.item !== "string" || !/^[A-Z]+-\d+$/.test(c.item)) || c.base !== void 0 && (typeof c.base !== "string" || !/^[A-Za-z0-9._/-]+$/.test(c.base)) || c.mcpAllow !== void 0 && !isStringArray(c.mcpAllow) || c.blockedCommands !== void 0 && !isStringArray(c.blockedCommands) || c.artifacts !== void 0 && (typeof c.artifacts !== "string" || !isAbsolute(c.artifacts) || c.artifacts === "/") || c.deniedPorts !== void 0 && !(Array.isArray(c.deniedPorts) && c.deniedPorts.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535))) {
     deny("invalid guard context");
   }
   const wt = resolveReal(ctx.worktree, "/");
@@ -1919,12 +2081,19 @@ function check(input, ctx) {
     allowedWorkflows: ctx.crewAllowedWorkflows ?? [],
     allowedRefs: ctx.crewAllowedWorkflowRefs ?? [],
     protectedReal: protectedPaths.flatMap((p) => [p, resolveReal(p, "/")]).map((p) => p.toLowerCase()),
-    readRoots: [ctx.worktree, ...ctx.readRoots ?? []].map((p) => resolveReal(p, "/")),
+    readRoots: [
+      ctx.worktree,
+      ...ctx.readRoots ?? [],
+      ...ctx.artifacts === void 0 ? [] : [ctx.artifacts]
+    ].map((p) => resolveReal(p, "/")),
     skillRoots: (ctx.skillRoots ?? []).flatMap((p) => [p, resolveReal(p, "/")]),
     toolResultRes: (ctx.toolResultGlobs ?? []).map(fileGlobToRegExp),
     hardSecretRes: ctx.secretGlobs.filter((g) => !(ctx.skillRootWaivedGlobs ?? []).includes(g)).map(fileGlobToRegExp),
     item: ctx.item,
-    base: ctx.base
+    base: ctx.base,
+    mcpAllow: new Set(ctx.mcpAllow ?? []),
+    artifacts: ctx.artifacts === void 0 ? void 0 : resolveReal(ctx.artifacts, "/"),
+    blockedCommands: new Set(ctx.blockedCommands ?? [])
   };
   const { toolName, toolInput } = input;
   const given = input.cwd;
@@ -1932,6 +2101,10 @@ function check(input, ctx) {
     deny("invalid working directory");
   }
   const cwd = resolveReal(input.cwd ?? wt, wt);
+  if (typeof toolName === "string" && env.mcpAllow.has(toolName)) {
+    checkMcp(env, toolName, toolInput, cwd);
+    return;
+  }
   if (typeof toolName !== "string" || !CREW_TOOLS.has(toolName)) {
     deny(`tool not allowed for crew: ${String(toolName)}`);
   }

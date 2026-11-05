@@ -258,6 +258,8 @@ describe('owner config', () => {
       crewAllowMacosTrustService: false,
       crewLabelLimits: { maxParallel: 2 },
       allowedPlugins: [],
+      researchRoots: [],
+      reaEnv: {},
     });
   });
 
@@ -271,6 +273,8 @@ describe('owner config', () => {
       crewAllowMacosTrustService: false,
       crewLabelLimits: { maxParallel: 2 },
       allowedPlugins: [],
+      researchRoots: [],
+      reaEnv: {},
     });
   });
 

@@ -118,6 +118,7 @@ import { clearPause, PAUSED_LINE, readPause, setPause } from './pause.js';
 import { type Capacity, ONE_BUILD_PER_PLAN, planAssignments } from './planner.js';
 import { type PluginPin, pinnedPlugins, unallowedPlugins } from './plugins.js';
 import type { Ports } from './ports.js';
+import { privacyHits, privacyHitsInDir, privacyLine } from './privacy.js';
 import { openCrewPr } from './pull-request.js';
 import { decisionsOf, pushDecisions, readNotifySecret } from './push.js';
 import {
@@ -136,6 +137,7 @@ import {
   updateQueue,
   viewPr,
 } from './queue.js';
+import { REA_DOCS_DIR } from './rea.js';
 import { type Finding, recoverProject, TICK_LOCK, TICK_LOCK_STALE_MS } from './recover.js';
 import {
   advanceRelease,
@@ -1310,6 +1312,25 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           );
         }
         report = readReport(clone, item.id, item, { notBefore, fileName });
+      }
+      // A researcher's result is structure, never content (src/rea.ts): the report and the
+      // findings it wrote below docs/research are checked, and one hit fails the report closed.
+      // `tick` hands it to the lead like any rejected report; the hit's kind and line are shown,
+      // never the text.
+      if (item.role === 'researcher') {
+        const text = [
+          report.body,
+          ...(report.findings ?? []),
+          ...report.questions,
+          ...report.lessons,
+        ].join('\n');
+        const hits = [
+          ...privacyHits(text, 'report'),
+          ...(fileName === undefined
+            ? []
+            : privacyHitsInDir(join(stateRoot(), 'clones', item.id, REA_DOCS_DIR), REA_DOCS_DIR)),
+        ];
+        if (hits.length > 0) throw new ReportError(privacyLine(hits));
       }
       // A review report that does not hold to its brief is a rejected report, like one that
       // cannot be read: `tick` hands both to the lead.

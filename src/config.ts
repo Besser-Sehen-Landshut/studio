@@ -5,8 +5,9 @@ import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { globProblem } from './glob.js';
-import { allowedPluginSchema, pluginPinSchema } from './plugins.js';
+import { allowedPluginSchema, pluginPinSchema, VERSION_RE } from './plugins.js';
 import { ONLY_SQL, PROOF_LANGUAGES, type ProofLanguage } from './proofs.js';
+import { reaEnvKeyOk } from './rea.js';
 
 export { globProblem };
 
@@ -503,6 +504,19 @@ export const studioConfigSchema = z
     workers: z
       .record(workerLabel, z.strictObject({ deny: workerDenySchema.default(NO_DENY) }))
       .optional(),
+    // Reverse engineering for the researcher role (src/rea.ts). `artifacts` is the one directory
+    // its tools may read; it must lie below a `research_roots` entry of the owner config.
+    research: z
+      .strictObject({
+        artifacts: z
+          .string()
+          .min(1)
+          .max(500)
+          .refine((p) => isAbsolute(p) && !/\p{Cc}/u.test(p), 'must be an absolute path'),
+        // The server's npm version; the default is pinned in Studio. Exact, never a range.
+        reaVersion: z.string().regex(VERSION_RE, 'must be one exact version').optional(),
+      })
+      .optional(),
   })
   .superRefine((cfg, ctx) => {
     const ids = new Set<string>();
@@ -725,6 +739,29 @@ export const ownerConfigSchema = z.strictObject({
   // Plugins and their marketplaces beyond Studio's defaults that a project's studio.yaml may pin.
   // They live here, outside every repository: a project cannot bring a marketplace of its own.
   allowedPlugins: z.array(allowedPluginSchema).default([]),
+  // Absolute directories below which a project's `research.artifacts` may lie. Empty: no project
+  // can give its researcher the REA tools. They live here, outside every repository.
+  researchRoots: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(500)
+        .refine((p) => isAbsolute(p), 'must be absolute'),
+    )
+    .max(20)
+    .default([]),
+  // Environment for the REA server (where its analysis engines are): these names only, short
+  // values. Never a secret.
+  reaEnv: z
+    .record(
+      z.string().refine(reaEnvKeyOk, 'not a name REA reads (GHIDRA_INSTALL_DIR, JAVA_HOME, REA_*)'),
+      z
+        .string()
+        .max(500)
+        .refine((v) => !/\p{Cc}/u.test(v), 'no control characters'),
+    )
+    .default({}),
   // Push notifications: an absolute executable that gets each message in its environment (see
   // README). It lives here, not in studio.yaml, because it runs on the owner's machine. `quiet`
   // and `language` shape the Pushover messages of `tick` (keys: `studio secret set pushover`).

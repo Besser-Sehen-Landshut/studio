@@ -3,6 +3,42 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.20.0] - 2026-11-05
+
+Some questions are answered by a shipped program, not by a source tree. The researcher role can now use REA
+(reverse engineering) for that, read-only and static, and hands in structure, never content. Nobody else can:
+the skill and the server stay denied to every other role. Not tagged yet; the maintainers tag after the merge.
+
+### Added
+
+- `research.artifacts` in `studio.yaml` (and optional `research.rea_version`): the one analysis directory a
+  researcher's tools may read. Owner config: `research_roots` (the artifacts must lie below one; empty means
+  no project can use REA) and `rea_env` (`GHIDRA_INSTALL_DIR`, `JAVA_HOME`, `REA_*` for the server). The path
+  is checked like a toolchain path on its real path and may not be in the clone or the state root.
+- A researcher with REA gets one MCP server, `rea-agents` at an exact pinned version (default 6.7.0), written
+  into its MCP config at launch with a fixed npm cache; every other crew keeps an empty list. The skill
+  `reverse-engineer-anything` is offered to the researcher only (new matrix row) and denied by name to all other
+  roles, whatever `studio.yaml` or a row says; a researcher without a configured directory is denied it too.
+- A tool allowlist, enforced by the guard (default deny, exact tool names) and mirrored by deny rules in the
+  settings: static, read-only tools only. The classes `annotate`, `debug`, `observe`, `device` and `export`
+  stay denied unless the board item carries a lead-written note `rea-allow: <class>`; the shell tools of a
+  class (`gdb`, `frida`, `adb`, `tcpdump`, ...) follow the same note. Arguments are checked: paths inside the
+  analysis directory or the clone, no write arguments, databases by schema only.
+- The sandbox lets the researcher read the analysis directory and denies writes to it; the guard refuses to
+  start programs or scripts from it, to copy, unpack or redirect its content, and to stage it in git.
+- A privacy check at `collect` for researcher reports and everything under `docs/research/` of the clone
+  (emails, phone-like numbers, personal fields, rows, card and account numbers, credentials, binary or
+  oversized files): one hit rejects the report and hands it to the lead with kinds and lines, never the text.
+- The brief of such a researcher: the scope, the classes allowed, target content as data (injection attempts
+  are reported by kind), the result as structure and where findings go (`docs/research/<id>-<slug>.md`).
+- `studio doctor` shows the REA pin and who set it, whether the analysis directory is allowed, the skill in the
+  crew config dir, the server registered there, the engine variables set (names only) and the setup command.
+
+### Changed
+
+- The guard context may carry `mcpAllow`, `artifacts` and `blockedCommands`; a crew without them is unchanged.
+- Items that run on a worker get no REA yet.
+
 ## [0.19.0] - 2026-11-05
 
 Some work needs another machine: real hardware, an installed program to analyse, another operating system.

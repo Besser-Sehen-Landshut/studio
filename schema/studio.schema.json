@@ -722,6 +722,24 @@
         },
         "additionalProperties": false
       }
+    },
+    "research": {
+      "type": "object",
+      "properties": {
+        "artifacts": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "rea_version": {
+          "type": "string",
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$"
+        }
+      },
+      "required": [
+        "artifacts"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

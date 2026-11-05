@@ -5,6 +5,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -23,7 +24,7 @@ import {
   resolveModel,
   writeCaps,
 } from './brief-caps.js';
-import { loadOwnerConfig, type OwnerEnv, type StudioConfig, within } from './config.js';
+import { loadOwnerConfig, type OwnerEnv, pathKey, type StudioConfig, within } from './config.js';
 import { recordEndedRuns } from './costs.js';
 import {
   allParkedLine,
@@ -73,6 +74,18 @@ import {
   undeniableLine,
 } from './plugins.js';
 import type { Ports } from './ports.js';
+import {
+  itemReaClasses,
+  REA_DEFAULT_VERSION,
+  REA_SERVER,
+  REA_SKILL,
+  type ReaClass,
+  reaDenyRules,
+  reaGuard,
+  reaMcpServer,
+  reaSetupHint,
+  renderReaBrief,
+} from './rea.js';
 import { newReportName } from './report.js';
 import { readCrewCaps, renderReviewRoutine } from './review.js';
 import { readRoleMemory } from './role-memory.js';
@@ -349,6 +362,84 @@ export function skillInstalled(configDir: string, name: string): boolean | undef
   return false;
 }
 
+/** What a researcher gets of REA on one launch (src/rea.ts); none for any other role. */
+export interface ReaPlan {
+  /** Real path of the analysis directory. */
+  artifacts: string;
+  version: string;
+  classes: ReaClass[];
+  env: Record<string, string>;
+  cacheDir: string;
+}
+
+/**
+ * REA for this launch, or undefined when the item is not a researcher's, the project names no
+ * analysis directory, or the item runs on a worker (a worker's REA comes later, with its own
+ * directory). A project that names one the owner has not allowed, or one that is no place for it,
+ * refuses: the owner config (`research_roots`) grants, studio.yaml only points.
+ */
+export function planRea(o: {
+  item: WorkItem;
+  config: StudioConfig;
+  ownerConfig: ReturnType<typeof loadOwnerConfig>;
+  owner: LauncherEnv;
+  stateRoot: string;
+  projectDir: string;
+  configDir: string;
+  worker: boolean;
+}): ReaPlan | undefined {
+  const research = o.config.research;
+  if (o.item.role !== 'researcher' || research === undefined || o.worker) return undefined;
+  const fail = (why: string): never => {
+    throw new Error(`${o.item.id}: research.artifacts: ${why}`);
+  };
+  const roots = o.ownerConfig.researchRoots;
+  if (roots.length === 0) {
+    return fail(
+      'the owner config has no research_roots; add the directory that holds the analysis directory (studio.yaml cannot grant itself access)',
+    );
+  }
+  const home = o.owner.homedir ?? homedir();
+  const env = o.owner.env ?? process.env;
+  const platform = o.owner.platform ?? process.platform;
+  let real: string;
+  try {
+    [real] = canonicalToolchainPaths([research.artifacts], {
+      home,
+      env,
+      platform: o.owner.platform,
+      projectDir: o.projectDir,
+      stateRoot: o.stateRoot,
+      extraCredentialPaths: credentialLocations(home, env).extra,
+    }) as [string];
+  } catch (e) {
+    return fail((e as Error).message.replace(/^crew_toolchain_paths: [^:]*: /, ''));
+  }
+  if (!statSync(real).isDirectory()) fail('is not a directory');
+  const below = roots.some((r) => {
+    let root = r;
+    try {
+      root = realpathSync(r);
+    } catch {
+      // a root that does not exist holds nothing
+    }
+    return within(pathKey(real, platform), pathKey(root, platform));
+  });
+  if (!below) fail('is not below a research_roots entry of the owner config');
+  if (skillInstalled(o.configDir, REA_SKILL) === false) {
+    throw new Error(
+      `${o.item.id}: the REA skill is not installed in ${o.configDir}; ${reaSetupHint(o.configDir, research.reaVersion ?? REA_DEFAULT_VERSION)}`,
+    );
+  }
+  return {
+    artifacts: real,
+    version: research.reaVersion ?? REA_DEFAULT_VERSION,
+    classes: itemReaClasses(o.item.notes),
+    env: { ...o.ownerConfig.reaEnv },
+    cacheDir: join(o.configDir, 'studio-rea-npm-cache'),
+  };
+}
+
 /** Every brief makes this the first skill, and a crew without it stops as blocked. */
 export const CREW_SKILL = 'studio:studio-crew';
 
@@ -585,6 +676,7 @@ export function writeBrief(
           '',
         ]
       : []),
+    ...(caps.rea === undefined ? [] : renderReaBrief({ id, ...caps.rea, opensPr })),
     ...(caps.review === undefined
       ? []
       : caps.review.acceptance !== undefined
@@ -765,6 +857,8 @@ export function writeCrewSettings(
     macosTrustService?: boolean;
     /** `Skill(<name>)` deny rules: every installed skill the brief does not name. */
     skillDeny?: readonly string[];
+    /** A researcher's REA (src/rea.ts): its one analysis directory and the tool classes allowed. */
+    rea?: { artifacts: string; classes: readonly ReaClass[] };
     /** A worker machine's deny list (src/worker-deny.ts): places and ports its crews never touch. */
     deny?: { paths: readonly string[]; ports: readonly number[]; allowRead?: readonly string[] };
   },
@@ -790,6 +884,7 @@ export function writeCrewSettings(
   // denied too, literal and real spelling, so an XDG_STATE_HOME outside the home is covered.
   const stateBase = dirname(stateRoot);
   const denied = [...(dirs.deny?.paths ?? [])];
+  const artifacts = dirs.rea?.artifacts;
   const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase), ...denied]);
   const loginDir = dirs.providerConfigDir;
   // Of a login dir only what skills need: it also holds the transcripts, `.claude.json` and shell
@@ -808,6 +903,8 @@ export function writeCrewSettings(
     ...['md', 'caps', 'rules'].map((ext) => join(stateRoot, 'briefs', `${id}.${ext}`)),
     // Places a worker's owner opened inside its denied Windows mounts, for reads only.
     ...(dirs.deny?.allowRead ?? []),
+    // A researcher's analysis directory: read-only (denyWrite below).
+    ...(artifacts === undefined ? [] : [artifacts]),
   ];
   const ctxFile = join(stateRoot, 'guard', `${id}.json`);
   // The clone lives inside the state root, so the root itself cannot be protected (the guard
@@ -875,6 +972,7 @@ export function writeCrewSettings(
     item: id,
     base: ITEM_BASE,
     ...((dirs.deny?.ports ?? []).length > 0 ? { deniedPorts: [...(dirs.deny?.ports ?? [])] } : {}),
+    ...(dirs.rea === undefined ? {} : reaGuard(dirs.rea.artifacts, dirs.rea.classes)),
   };
   writeStateFile(stateRoot, ctxFile, `${JSON.stringify(ctx, null, 2)}\n`);
   const settings = {
@@ -901,7 +999,16 @@ export function writeCrewSettings(
     // Bare names remove the tool, `mcp__*` every MCP tool (https://code.claude.com/docs/en/permissions).
     // Skills outside the brief are denied by name: deny rules hold in bypassPermissions, allow
     // rules do not (https://code.claude.com/docs/en/permission-modes), so there is no allowlist.
-    permissions: { deny: ['WebFetch', 'WebSearch', 'mcp__*', ...(dirs.skillDeny ?? [])] },
+    // A researcher with REA has one MCP server: the REA tools it may not use are denied by name
+    // here, and the guard allows only the listed ones (default deny).
+    permissions: {
+      deny: [
+        'WebFetch',
+        'WebSearch',
+        ...(dirs.rea === undefined ? ['mcp__*'] : reaDenyRules(dirs.rea.classes)),
+        ...(dirs.skillDeny ?? []),
+      ],
+    },
     hooks: {
       PreToolUse: [
         {
@@ -919,7 +1026,9 @@ export function writeCrewSettings(
       filesystem: {
         allowWrite: [clone, dirs.tmpDir, dirs.homeDir],
         // A worker's denied places are out for writes too, whatever else allows them.
-        ...(denied.length > 0 ? { denyWrite: denied } : {}),
+        ...(denied.length + (artifacts === undefined ? 0 : 1) > 0
+          ? { denyWrite: [...denied, ...(artifacts === undefined ? [] : [artifacts])] }
+          : {}),
         denyRead,
         allowRead,
       },
@@ -1288,6 +1397,24 @@ async function launchCrewLocked(
     },
   });
   readRoleMemory(worker?.contentDir ?? projectDir, item.role);
+  const rea = planRea({
+    item,
+    config,
+    ownerConfig,
+    owner,
+    stateRoot,
+    projectDir,
+    configDir: claudeConfigDir,
+    worker: worker !== undefined,
+  });
+  // The REA skill goes with the REA server: without a plan it is denied, not offered.
+  if (rea === undefined) {
+    const skills = forItem.resolved;
+    skills.required = skills.required.filter((x) => x !== REA_SKILL);
+    skills.optionalRequired = skills.optionalRequired.filter((x) => x !== REA_SKILL);
+    skills.offered = skills.offered.filter((x) => x !== REA_SKILL);
+    if (!skills.denied.includes(REA_SKILL)) skills.denied = [...skills.denied, REA_SKILL];
+  }
   const missingSkill = firstMissingSkill(claudeConfigDir, [
     CREW_SKILL,
     ...forItem.resolved.required,
@@ -1401,6 +1528,7 @@ async function launchCrewLocked(
   // Without the trust service gh cannot verify TLS in the macOS sandbox: Studio opens the PR.
   // On a worker Studio opens it too: with the worker's identity, which the lead checks.
   caps.pushByStudio = worker?.noToken === true;
+  if (rea !== undefined) caps.rea = { artifacts: rea.artifacts, classes: rea.classes };
   caps.prByStudio =
     worker !== undefined ||
     ((launcher.platform ?? process.platform) === 'darwin' &&
@@ -1431,14 +1559,22 @@ async function launchCrewLocked(
         caps.denied,
         BUNDLED_SKILLS,
       ),
+      ...(rea === undefined ? {} : { rea: { artifacts: rea.artifacts, classes: rea.classes } }),
       ...(worker === undefined ? {} : { deny: worker.deny }),
     },
     owner,
   );
-  // No MCP server at all: --strict-mcp-config ignores every other MCP configuration and the only
-  // one given is empty (https://code.claude.com/docs/en/cli-reference).
+  // No MCP server, except REA for a researcher: --strict-mcp-config ignores every other MCP
+  // configuration and the only one given is this (https://code.claude.com/docs/en/cli-reference).
   const mcpConfig = join(stateRoot, 'settings', `${item.id}.mcp.json`);
-  writeStateFile(stateRoot, mcpConfig, `${JSON.stringify({ mcpServers: {} })}\n`);
+  writeStateFile(
+    stateRoot,
+    mcpConfig,
+    `${JSON.stringify({
+      mcpServers:
+        rea === undefined ? {} : { [REA_SERVER]: reaMcpServer(rea.version, rea.env, rea.cacheDir) },
+    })}\n`,
+  );
   const settingsEnv = (
     JSON.parse(readFileSync(settings, 'utf8')) as { env: Record<string, string> }
   ).env;

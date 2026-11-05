@@ -3493,6 +3493,63 @@ describe('collect adds the review item for a pull request', () => {
     expect(JSON.parse(r.out).review).toBeUndefined();
     expect(reviewsOf(fx)).toEqual([]);
   });
+
+  describe('the privacy check of a researcher', () => {
+    const reportWith = (fx: Fx, id: string, body: string) => {
+      const dir = join(fx.state, 'clones', id, '.studio', 'reports');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, newReportName(fx.state, id)),
+        `---\nstatus: done\nitem: ${id}\n---\n\n${body}\n`,
+      );
+    };
+    const collectIt = (fx: Fx) => cli(fx, fakePorts(fakeGh().gh).ports, 'collect', 'APP-1');
+
+    it('collects a structure report', async () => {
+      const fx = makeFx([
+        { id: 'APP-1', status: 'assigned', type: 'research', role: 'researcher' },
+      ]);
+      reportWith(fx, 'APP-1', 'Table `customer` has the columns id, first_name, email (all text).');
+      const r = await collectIt(fx);
+      expect(r.err).toBe('');
+      expect(statusOf(fx, 'APP-1')?.status).toBe('merged');
+    });
+
+    it('fails a report with an email address closed, naming the kind and not the text', async () => {
+      const fx = makeFx([
+        { id: 'APP-1', status: 'assigned', type: 'research', role: 'researcher' },
+      ]);
+      reportWith(fx, 'APP-1', 'The first row holds anna.k@mail-provider.de.');
+      const r = await collectIt(fx);
+      expect(r.code).not.toBe(0);
+      expect(r.err).toContain('privacy check failed');
+      expect(r.err).toContain('email address');
+      expect(r.err).not.toContain('anna.k');
+      expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+    });
+
+    it('checks the findings below docs/research of the clone too', async () => {
+      const fx = makeFx([
+        { id: 'APP-1', status: 'assigned', type: 'research', role: 'researcher' },
+      ]);
+      reportWith(fx, 'APP-1', 'Structure only.');
+      const docs = join(fx.state, 'clones', 'APP-1', 'docs', 'research');
+      mkdirSync(docs, { recursive: true });
+      writeFileSync(join(docs, 'APP-1-sync.md'), 'last_name: Meier\n');
+      const r = await collectIt(fx);
+      expect(r.err).toContain('personal field with a value');
+      expect(r.err).toContain('docs/research/APP-1-sync.md:1');
+      expect(r.err).not.toContain('Meier');
+      expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+    });
+
+    it('does not apply to other roles', async () => {
+      const fx = makeFx([{ id: 'APP-1', status: 'assigned', type: 'research', role: 'builder' }]);
+      reportWith(fx, 'APP-1', 'mail anna.k@mail-provider.de');
+      const r = await collectIt(fx);
+      expect(r.err).not.toContain('privacy check');
+    });
+  });
 });
 
 describe('studio tick', () => {
