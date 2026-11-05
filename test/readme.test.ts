@@ -184,6 +184,9 @@ describe('README workers on other machines', () => {
       'denyWrite',
       'WSL2',
       '`force: false`',
+      'studio secret set worker-token',
+      'refs/studio/claims/**',
+      'gh api -X POST repos/OWNER/REPO/rulesets',
     ]) {
       expect(s).toContain(phrase);
     }

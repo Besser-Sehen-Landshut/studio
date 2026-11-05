@@ -11,7 +11,7 @@ import { crewClaudeDir } from './accounts.js';
 import type { WorkItem } from './board.js';
 import { loadOwnerConfig, parseConfig, type StudioConfig } from './config.js';
 import { type RunUsage, runUsageSince } from './costs.js';
-import { crewHold, ITEM_BASE, type LauncherEnv, launchCrew } from './crew.js';
+import { crewHold, githubHttpsUrl, ITEM_BASE, type LauncherEnv, launchCrew } from './crew.js';
 import {
   blockHold,
   parkUntil,
@@ -26,8 +26,10 @@ import {
   acquireStateLock,
   assertStatePath,
   checkStateMarker,
+  ensureStateDir,
   ownerStateRootFor,
   projectRealpath,
+  removeStateEntry,
   stateRootFor,
   writeStateFile,
 } from './paths.js';
@@ -80,6 +82,11 @@ export interface Current {
 export interface WorkerState {
   label: string;
   current?: Current;
+  /**
+   * When this worker first saw each claim commit of another worker, on its own clock: a lease
+   * runs from there, never from a commit date the writer could set.
+   */
+  seen?: Record<string, { sha: string; at: string }>;
 }
 
 export interface WorkerContext {
@@ -87,8 +94,15 @@ export interface WorkerContext {
   label: string;
   ports: Ports;
   hub: WorkerHub;
-  /** The worker's own GitHub token: its claims and pull requests are made with it. */
+  /**
+   * The worker's own GitHub token (`worker-token`): its claims, pull requests and pushes for a
+   * crew. Never handed into a crew session.
+   */
   token: string;
+  /** Whether crews here get a crew token to push `studio/<id>`; without, the worker pushes. */
+  crewPushes: boolean;
+  /** Where the worker pushes a crew's branch; GitHub's HTTPS URL of the repository by default. */
+  pushUrl?: (repo: string) => string;
   owner: LauncherEnv;
   platform: WorkerPlatform;
   log: (line: string) => void;
@@ -133,11 +147,26 @@ function readWorkerState(stateRoot: string, label: string): WorkerState {
       `this worker holds ${s.current.item.id} for the label ${s.label}; run it with --label ${s.label} until that is done`,
     );
   }
-  return { label, ...(s.current === undefined ? {} : { current: s.current }) };
+  const seen = s.seen !== null && typeof s.seen === 'object' ? s.seen : undefined;
+  return {
+    label,
+    ...(s.current === undefined ? {} : { current: s.current }),
+    ...(seen === undefined ? {} : { seen }),
+  };
 }
 
+/** Writes the state; what was seen of other claims stays unless `s` brings its own. */
 function saveWorkerState(stateRoot: string, s: WorkerState): void {
-  writeStateFile(stateRoot, join(stateRoot, WORKER_FILE), `${JSON.stringify(s, null, 2)}\n`);
+  let seen = s.seen;
+  if (seen === undefined) {
+    try {
+      seen = readWorkerState(stateRoot, s.label).seen;
+    } catch {
+      seen = undefined;
+    }
+  }
+  const out = { ...s, ...(seen === undefined ? {} : { seen }) };
+  writeStateFile(stateRoot, join(stateRoot, WORKER_FILE), `${JSON.stringify(out, null, 2)}\n`);
 }
 
 /** studio.yaml as `origin/main` has it: the worker never trusts a stale or edited working tree. */
@@ -290,6 +319,21 @@ async function claimNext(
   const { config, login } = ready;
   const repo = config.primaryRepo;
   const lead = loadOwnerConfig(c.owner).workers?.self?.lead as string;
+  const now = c.ports.clock.now();
+  // First sight of each claim commit, kept only for claims that still exist.
+  const seen: Record<string, { sha: string; at: string }> = {};
+  const firstSeen = (id: string, sha: string): string => {
+    const before = state.seen?.[id];
+    const at = before?.sha === sha ? before.at : now.toISOString();
+    seen[id] = { sha, at };
+    return at;
+  };
+  const keepSeen = () =>
+    saveWorkerState(stateRoot, {
+      label: c.label,
+      ...(state.current === undefined ? {} : { current: state.current }),
+      seen,
+    });
   for (const issue of await c.hub.listOffers(repo)) {
     // Only the lead's own offers count, and only as the lead wrote them.
     if (issue.author !== lead) continue;
@@ -307,8 +351,9 @@ async function claimNext(
     if (existing !== undefined) {
       const held = parseClaim(existing.message);
       // Taken: a live claim, a finished one the lead has not collected, or one of an older offer.
+      const since = firstSeen(item.id, existing.sha);
       if (held === undefined || held.offer !== issue.number) continue;
-      if (!claimExpired(held, existing.committedAt, c.ports.clock.now())) continue;
+      if (!claimExpired(held, since, now)) continue;
       if (held.attempt >= MAX_CLAIM_ATTEMPTS) continue;
       parent = existing.sha;
       attempt = held.attempt + 1;
@@ -325,6 +370,8 @@ async function claimNext(
     };
     const wrote = await writeClaim(c, repo, claim, parent);
     if (!wrote.ok) continue; // another worker was faster
+    delete seen[item.id];
+    keepSeen();
     const current: Current = {
       item,
       offer: issue.number,
@@ -343,7 +390,11 @@ async function claimNext(
         ? ITEM_BASE
         : `studio/${item.id}`;
     try {
-      await launchCrew(c.project, item, config, c.ports, c.owner, { deny: ready.deny, from });
+      await launchCrew(c.project, item, config, c.ports, c.owner, {
+        deny: ready.deny,
+        from,
+        ...(c.crewPushes ? {} : { noToken: true }),
+      });
     } catch (e) {
       c.log(`launch of ${item.id} refused: ${(e as Error).message}`);
       await release(
@@ -367,6 +418,7 @@ async function claimNext(
       line: `${item.id}: claimed (attempt ${attempt}) and its crew started${from === ITEM_BASE ? '' : ` from ${from}`}`,
     };
   }
+  keepSeen();
   return { kind: 'idle', line: `no open offer for ${c.label}` };
 }
 
@@ -542,9 +594,21 @@ async function finish(
   }
   let pr: number | undefined;
   if (report.status === 'done' && opensPr(cur.item)) {
-    const head = await c.hub.branchHead(cur.item.repo, `studio/${id}`);
-    if (head === undefined || head.toLowerCase() !== report.headSha?.toLowerCase()) {
-      return releaseWith('the pushed branch head differs from the report');
+    if (!c.crewPushes) {
+      // The crew had no token: the worker pushes its branch, with its own identity.
+      let problem: string | undefined;
+      try {
+        problem = await pushForCrew(c, stateRoot, cur.item, report.headSha ?? '');
+      } catch (e) {
+        c.log(`${id}: ${(e as Error).message}`);
+        problem = 'the worker could not push the branch';
+      }
+      if (problem !== undefined) return releaseWith(problem);
+    } else {
+      const head = await c.hub.branchHead(cur.item.repo, `studio/${id}`);
+      if (head === undefined || head.toLowerCase() !== report.headSha?.toLowerCase()) {
+        return releaseWith('the pushed branch head differs from the report');
+      }
     }
     try {
       const opened = await openCrewPr(
@@ -589,6 +653,62 @@ async function finish(
     item: id,
     line: `${id}: report ${report.status} handed back${pr === undefined ? '' : ` with pull request #${pr}`}`,
   };
+}
+
+/**
+ * Pushes `studio/<id>` of a crew that had no token. The crew's clone is never a place where git
+ * runs (rule D4): its branch is fetched into a fresh bare repository of the worker, read there as
+ * a remote only (git ignores the hook settings of a repository it fetches from), checked against
+ * the report's head, and pushed from there with the worker token, never forced.
+ */
+async function pushForCrew(
+  c: WorkerContext,
+  stateRoot: string,
+  item: WorkItem,
+  head: string,
+): Promise<string | undefined> {
+  const id = item.id;
+  const branch = `refs/heads/studio/${id}`;
+  const dir = join(stateRoot, 'push', id);
+  removeStateEntry(stateRoot, dir);
+  ensureStateDir(stateRoot, dir);
+  const timeoutMs = 300_000;
+  const git = (args: string[], env?: Record<string, string>) =>
+    c.ports.git.run(dir, args, { timeoutMs, ...(env === undefined ? {} : { env }) });
+  try {
+    await git(['init', '--bare', '-q']);
+    await git([
+      '-c',
+      'protocol.file.allow=always',
+      'fetch',
+      '--no-tags',
+      '--no-write-fetch-head',
+      join(stateRoot, 'clones', id),
+      `+${branch}:${branch}`,
+    ]);
+    const got = (
+      await git(['--no-replace-objects', 'rev-parse', '--verify', `${branch}^{commit}`])
+    ).trim();
+    if (got.toLowerCase() !== head.toLowerCase())
+      return 'the branch in the clone differs from the report';
+    // The token goes through the environment of this one call, never argv or a file.
+    const auth = [
+      '-c',
+      'credential.helper=',
+      '-c',
+      'credential.helper=!f() { echo username=x-access-token; echo "password=$STUDIO_PUSH_TOKEN"; }; f',
+    ];
+    const env = { STUDIO_PUSH_TOKEN: c.token };
+    const url = c.pushUrl?.(item.repo) ?? githubHttpsUrl(item.repo);
+    await git([...auth, 'push', url, `${branch}:${branch}`], env);
+    const remote = (await git([...auth, 'ls-remote', url, branch], env)).split(/\s/)[0] ?? '';
+    if (remote.toLowerCase() !== head.toLowerCase()) {
+      return 'the pushed branch head differs from the report';
+    }
+    return undefined;
+  } finally {
+    removeStateEntry(stateRoot, dir);
+  }
 }
 
 /**

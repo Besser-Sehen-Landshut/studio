@@ -30,9 +30,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/quote.js
+// node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/quote.js
 var require_quote = __commonJS({
-  "../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/quote.js"(exports, module) {
+  "node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/quote.js"(exports, module) {
     "use strict";
     var OPS = (
       /** @type {const} */
@@ -124,9 +124,9 @@ var require_quote = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/parse.js
+// node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/parse.js
 var require_parse = __commonJS({
-  "../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/parse.js"(exports, module) {
+  "node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/parse.js"(exports, module) {
     "use strict";
     var CONTROL = (
       /** @type {const} */
@@ -491,9 +491,9 @@ var require_parse = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/index.js
+// node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/index.js
 var require_shell_quote = __commonJS({
-  "../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/index.js"(exports) {
+  "node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/index.js"(exports) {
     "use strict";
     exports.quote = require_quote();
     exports.parse = require_parse();
@@ -1193,6 +1193,9 @@ function checkRefspec(env, ref) {
     deny(`git push with unclear destination "${ref}"`);
   }
   if (/^refs\/(?!heads\/)/i.test(dest)) deny(`git push to non-branch ref "${dest}"`);
+  if (!/^refs\/heads\//i.test(dest) && dest.includes("/") && (env.item === void 0 || dest.toLowerCase() !== `studio/${env.item}`.toLowerCase())) {
+    deny(`git push to "${dest}": name a branch in full (refs/heads/${dest})`);
+  }
   const norm = dest.replace(/^refs\//, "").replace(/^heads\//, "").toLowerCase();
   if (norm === "main" || norm === "master") deny(`git push to protected branch "${norm}"`);
   if (env.allowedRefs.some((r) => normRef(r) === norm)) {

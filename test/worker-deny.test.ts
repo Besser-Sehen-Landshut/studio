@@ -195,3 +195,41 @@ describe('denied ports in the guard', () => {
     ).toBe('deny');
   });
 });
+
+describe('a crew never writes claim refs', () => {
+  const wt = join(root, 'wt-claims');
+  mkdirSync(wt, { recursive: true });
+  const ctx = {
+    worktree: wt,
+    ownerOnly: [],
+    deployCommands: [],
+    secretGlobs: [],
+    item: 'APP-1',
+    base: 'main',
+  };
+  const bash = (command: string) =>
+    evaluateGuard({ toolName: 'Bash', toolInput: { command }, cwd: wt }, ctx);
+  it('refuses a push to refs/studio/*, in full or as a short name git would match there', () => {
+    expect(bash('git push origin HEAD:refs/studio/claims/APP-1')).toMatchObject({
+      decision: 'deny',
+      reason: expect.stringMatching(/non-branch ref/),
+    });
+    expect(bash('git push origin HEAD:studio/claims/APP-1')).toMatchObject({
+      decision: 'deny',
+      reason: expect.stringMatching(/name a branch in full/),
+    });
+    expect(bash('git push origin HEAD:studio/APP-2')).toMatchObject({ decision: 'deny' });
+  });
+  it('lets the item branch through, short or in full', () => {
+    expect(bash('git push origin HEAD:refs/heads/studio/APP-1').decision).toBe('allow');
+    expect(bash('git push origin HEAD:studio/APP-1').decision).toBe('allow');
+  });
+  it('refuses gh api, which could write any ref', () => {
+    for (const c of [
+      'gh api -X PATCH repos/org/app/git/refs/studio/claims/APP-1',
+      'gh api repos/org/app/git/refs',
+    ]) {
+      expect(bash(c).decision).toBe('deny');
+    }
+  });
+});

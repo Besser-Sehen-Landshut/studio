@@ -45,7 +45,7 @@ import {
   WORKER_LABEL_RE,
 } from './config.js';
 import { costHold, costReport, costToday, recordEndedRuns, usd, withItemUsage } from './costs.js';
-import { limitHold, readCrewTokenFile } from './credentials.js';
+import { limitHold, readCrewTokenFile, readWorkerTokenFile } from './credentials.js';
 import {
   type CrewRecord,
   crewHold,
@@ -219,6 +219,7 @@ import { parseClaim } from './worker-claim.js';
 import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
 import { ghHub, type WorkerHub } from './worker-hub.js';
 import {
+  claimIdentityProblem,
   closeOffer,
   followClaim,
   openOffer,
@@ -246,6 +247,8 @@ export interface CliDeps {
   launcher?: string;
   /** What `studio worker` can enforce on this machine; read from the system when missing. */
   workerPlatform?: WorkerPlatform;
+  /** Test seam: where `studio worker` pushes a crew's branch instead of GitHub. */
+  workerPushUrl?: (repo: string) => string;
 }
 
 const USAGE = `Usage: studio [--project <dir>] [--json] <command>
@@ -1204,14 +1207,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           `${item.id}: the claim of ${claim.worker} is ${claim.state}; nothing moved`,
         );
       }
-      const accepted = loadOwnerConfig(owner).workers?.accept[record.label] ?? [];
-      if (
-        !accepted.includes(claim.worker) ||
-        claim.label !== record.label ||
-        claim.offer !== record.offer
-      ) {
+      const foreign = claimIdentityProblem(
+        read,
+        claim,
+        loadOwnerConfig(owner).workers?.accept[record.label] ?? [],
+        record.label,
+      );
+      if (foreign !== undefined || claim.label !== record.label || claim.offer !== record.offer) {
         throw new ReportError(
-          `the claim of ${item.id} is not from a worker accepted for ${record.label} on offer #${record.offer}`,
+          `the claim of ${item.id} counts for nothing: ${foreign ?? `it names offer #${claim.offer}, not #${record.offer}`}`,
         );
       }
       const text = await leadHub().claimFile(config.primaryRepo, read.sha, 'report.md');
@@ -1500,20 +1504,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
         branch = info.branch;
         checkReportHead(report, info.head);
-        // The pull request of a worker item counts only when the worker that claimed it opened it.
-        // A fix round goes on in the item's own pull request, which an earlier accepted worker of
-        // the same label may have opened.
+        // The pull request of a worker item counts only when the worker that claimed it opened it
+        // (GitHub's author, which no client can set).
         if (fromWorker !== undefined) {
           const facts = await leadHub().pullRequest(item.repo, report.pr);
           if (facts === undefined) throw new Error(`cannot read ${item.repo}#${report.pr}`);
-          const accepted = (loadOwnerConfig(owner).workers?.accept[item.runsOn ?? ''] ?? []).map(
-            (l) => l.toLowerCase(),
-          );
-          const author = facts.author.toLowerCase();
-          const ok =
-            author === fromWorker.worker.toLowerCase() ||
-            (item.pr === report.pr && accepted.includes(author));
-          if (!ok) {
+          if (facts.author.toLowerCase() !== fromWorker.worker.toLowerCase()) {
             throw new ReportError(
               `PR ${report.pr} was opened by ${facts.author.replace(/[^A-Za-z0-9-[\]/]/g, '?')}, not by ${fromWorker.worker}, who claimed ${item.id}`,
             );
@@ -2413,6 +2409,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ports,
           hub,
           token,
+          crewPushes: crewTokenPresent(loadConfig(project), owner),
+          ...(deps.workerPushUrl === undefined ? {} : { pushUrl: deps.workerPushUrl }),
           owner,
           platform: deps.workerPlatform ?? detectPlatform(),
           log: (line: string) => stderr(`${line.replace(/\p{Cc}/gu, ' ')}\n`),
@@ -3220,8 +3218,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
       case 'secret': {
         // Never echo these arguments: a value typed here by mistake must not reach the output.
-        if (rest.length !== 2 || rest[0] !== 'set' || rest[1] !== 'crew-token') {
-          stderr('studio: secret takes exactly: set crew-token (the value is asked for, hidden)\n');
+        if (
+          rest.length !== 2 ||
+          rest[0] !== 'set' ||
+          (rest[1] !== 'crew-token' && rest[1] !== 'worker-token')
+        ) {
+          stderr(
+            'studio: secret takes exactly: set crew-token, or set worker-token (the value is asked for, hidden)\n',
+          );
           return 1;
         }
         return await runSecretSet({
@@ -3230,6 +3234,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           owner,
           readSecret: deps.readSecret,
           stdout,
+          name: rest[1],
         });
       }
 
@@ -4063,15 +4068,32 @@ function crewTokenFor(config: StudioConfig, owner: OwnerEnv): string {
   );
 }
 
-/** The worker machine's own GitHub token: the crew token of this machine, as a launch reads it. */
+/**
+ * The worker machine's own GitHub token (`worker-token`): claims, pull requests and pushes for a
+ * crew. It never reaches a crew session, so it must differ from every crew token of the machine.
+ */
 function workerToken(config: StudioConfig, owner: OwnerEnv): string {
-  const fromEnv = config.crewToken ? owner.env?.[config.crewToken.env] : undefined;
-  if (fromEnv) return fromEnv;
-  const file = readCrewTokenFile(owner);
-  if (file.kind === 'ok') return file.token;
-  throw new Error(
-    "a worker needs its own GitHub token on this machine: studio secret set crew-token (a token of the worker identity, never the lead's)",
-  );
+  const file = readWorkerTokenFile(owner);
+  if (file.kind === 'bad') throw new Error(`refusing the worker token file: ${file.why}`);
+  if (file.kind === 'absent') {
+    throw new Error(
+      "a worker needs its own GitHub token on this machine: studio secret set worker-token (a token of the worker identity, never the lead's, never the crew token)",
+    );
+  }
+  const crewEnv = config.crewToken ? owner.env?.[config.crewToken.env] : undefined;
+  const crewFile = readCrewTokenFile(owner);
+  if (file.token === crewEnv || (crewFile.kind === 'ok' && crewFile.token === file.token)) {
+    throw new Error(
+      'the worker token equals the crew token: a crew would hold the worker identity; give the worker a token of its own (studio secret set worker-token)',
+    );
+  }
+  return file.token;
+}
+
+/** Whether a crew on this worker gets a token of its own to push `studio/<id>`. */
+function crewTokenPresent(config: StudioConfig, owner: OwnerEnv): boolean {
+  if (config.crewToken && owner.env?.[config.crewToken.env]) return true;
+  return readCrewTokenFile(owner).kind === 'ok';
 }
 
 /** In a held note: the CI read itself failed, so the hold may never end by itself. */

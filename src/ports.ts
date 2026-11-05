@@ -30,7 +30,11 @@ export interface Gh {
 
 export interface Git {
   /** Runs `git <args>` in `cwd`, returns stdout. Throws on non-zero exit with stderr in the message. */
-  run(cwd: string, args: string[], opts?: { timeoutMs?: number }): Promise<string>;
+  run(
+    cwd: string,
+    args: string[],
+    opts?: { timeoutMs?: number; env?: Record<string, string> },
+  ): Promise<string>;
   /**
    * The exact bytes of a blob (`git cat-file blob <oid>`), nothing decoded or stripped. Optional
    * so test doubles need not have it; a missing one reads nothing.
@@ -192,7 +196,7 @@ export function realPorts(claudeBin = 'claude'): Ports {
       const r = await execa('git', args, {
         cwd,
         reject: false,
-        env: { GIT_TERMINAL_PROMPT: '0' },
+        env: { GIT_TERMINAL_PROMPT: '0', ...(opts?.env ?? {}) },
         ...(opts?.timeoutMs === undefined ? {} : { timeout: opts.timeoutMs }),
       });
       if (r.timedOut) throw new Error(`git ${args.join(' ')} timed out`);

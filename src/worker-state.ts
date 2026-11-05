@@ -25,7 +25,10 @@ export interface SeenClaim {
   worker: string;
   attempt: number;
   state: Claim['state'];
-  /** GitHub's time of the claim commit: the last heartbeat. */
+  /**
+   * When the lead first saw this claim commit, on its own clock: the last heartbeat it knows of.
+   * Leases run from here, never from the commit's dates, which the writer could set.
+   */
   at: string;
   pr?: number;
 }

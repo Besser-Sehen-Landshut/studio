@@ -40,9 +40,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/identity.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/identity.js
 var require_identity = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/identity.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/identity.js"(exports) {
     "use strict";
     var ALIAS = /* @__PURE__ */ Symbol.for("yaml.alias");
     var DOC = /* @__PURE__ */ Symbol.for("yaml.document");
@@ -97,9 +97,9 @@ var require_identity = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/visit.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/visit.js
 var require_visit = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/visit.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/visit.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var BREAK = /* @__PURE__ */ Symbol("break visit");
@@ -255,9 +255,9 @@ var require_visit = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/directives.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/directives.js
 var require_directives = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/directives.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/directives.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var visit3 = require_visit();
@@ -426,9 +426,9 @@ var require_directives = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/anchors.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/anchors.js
 var require_anchors = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/anchors.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/anchors.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var visit3 = require_visit();
@@ -496,9 +496,9 @@ var require_anchors = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/applyReviver.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/applyReviver.js
 var require_applyReviver = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/applyReviver.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/applyReviver.js"(exports) {
     "use strict";
     function applyReviver(reviver, obj, key, val) {
       if (val && typeof val === "object") {
@@ -546,9 +546,9 @@ var require_applyReviver = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/toJS.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/toJS.js
 var require_toJS = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/toJS.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/toJS.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     function toJS(value, arg, ctx) {
@@ -576,9 +576,9 @@ var require_toJS = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Node.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Node.js
 var require_Node = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Node.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Node.js"(exports) {
     "use strict";
     var applyReviver = require_applyReviver();
     var identity3 = require_identity();
@@ -617,9 +617,9 @@ var require_Node = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Alias.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Alias.js
 var require_Alias = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Alias.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Alias.js"(exports) {
     "use strict";
     var anchors = require_anchors();
     var visit3 = require_visit();
@@ -735,9 +735,9 @@ var require_Alias = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Scalar.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Scalar.js
 var require_Scalar = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Scalar.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Scalar.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Node = require_Node();
@@ -765,9 +765,9 @@ var require_Scalar = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/createNode.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/createNode.js
 var require_createNode = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/createNode.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/createNode.js"(exports) {
     "use strict";
     var Alias = require_Alias();
     var identity3 = require_identity();
@@ -840,9 +840,9 @@ var require_createNode = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Collection.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Collection.js
 var require_Collection = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Collection.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Collection.js"(exports) {
     "use strict";
     var createNode = require_createNode();
     var identity3 = require_identity();
@@ -983,9 +983,9 @@ var require_Collection = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyComment.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyComment.js
 var require_stringifyComment = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyComment.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyComment.js"(exports) {
     "use strict";
     var stringifyComment = (str) => str.replace(/^(?!$)(?: $)?/gm, "#");
     function indentComment(comment, indent) {
@@ -1000,9 +1000,9 @@ var require_stringifyComment = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/foldFlowLines.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/foldFlowLines.js
 var require_foldFlowLines = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/foldFlowLines.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/foldFlowLines.js"(exports) {
     "use strict";
     var FOLD_FLOW = "flow";
     var FOLD_BLOCK = "block";
@@ -1136,9 +1136,9 @@ ${indent}${text.slice(fold + 1, end2)}`;
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyString.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyString.js
 var require_stringifyString = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyString.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyString.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var foldFlowLines = require_foldFlowLines();
@@ -1419,9 +1419,9 @@ ${indent}`);
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringify.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringify.js
 var require_stringify = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringify.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringify.js"(exports) {
     "use strict";
     var anchors = require_anchors();
     var identity3 = require_identity();
@@ -1543,9 +1543,9 @@ ${ctx.indent}${str}`;
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyPair.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyPair.js
 var require_stringifyPair = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyPair.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyPair.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Scalar = require_Scalar();
@@ -1676,9 +1676,9 @@ ${ctx.indent}`;
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/log.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/log.js
 var require_log = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/log.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/log.js"(exports) {
     "use strict";
     var node_process = __require("process");
     function debug(logLevel, ...messages) {
@@ -1698,9 +1698,9 @@ var require_log = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/merge.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/merge.js
 var require_merge = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/merge.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/merge.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Scalar = require_Scalar();
@@ -1758,9 +1758,9 @@ var require_merge = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/addPairToJSMap.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/addPairToJSMap.js
 var require_addPairToJSMap = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/addPairToJSMap.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/addPairToJSMap.js"(exports) {
     "use strict";
     var log2 = require_log();
     var merge2 = require_merge();
@@ -1822,9 +1822,9 @@ var require_addPairToJSMap = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Pair.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Pair.js
 var require_Pair = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Pair.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/Pair.js"(exports) {
     "use strict";
     var createNode = require_createNode();
     var stringifyPair = require_stringifyPair();
@@ -1862,9 +1862,9 @@ var require_Pair = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyCollection.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyCollection.js
 var require_stringifyCollection = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var stringify3 = require_stringify();
@@ -2013,9 +2013,9 @@ ${indent}${end}`;
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/YAMLMap.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/YAMLMap.js
 var require_YAMLMap = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/YAMLMap.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/YAMLMap.js"(exports) {
     "use strict";
     var stringifyCollection = require_stringifyCollection();
     var addPairToJSMap = require_addPairToJSMap();
@@ -2157,9 +2157,9 @@ var require_YAMLMap = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/map.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/map.js
 var require_map = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/map.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/map.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var YAMLMap = require_YAMLMap();
@@ -2179,9 +2179,9 @@ var require_map = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/YAMLSeq.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/YAMLSeq.js
 var require_YAMLSeq = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/YAMLSeq.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/nodes/YAMLSeq.js"(exports) {
     "use strict";
     var createNode = require_createNode();
     var stringifyCollection = require_stringifyCollection();
@@ -2295,9 +2295,9 @@ var require_YAMLSeq = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/seq.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/seq.js
 var require_seq = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/seq.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/seq.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var YAMLSeq = require_YAMLSeq();
@@ -2317,9 +2317,9 @@ var require_seq = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/string.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/string.js
 var require_string = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/string.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/string.js"(exports) {
     "use strict";
     var stringifyString = require_stringifyString();
     var string4 = {
@@ -2336,9 +2336,9 @@ var require_string = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/null.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/null.js
 var require_null = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/null.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/common/null.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var nullTag = {
@@ -2354,9 +2354,9 @@ var require_null = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/bool.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/bool.js
 var require_bool = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/bool.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/bool.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var boolTag = {
@@ -2378,9 +2378,9 @@ var require_bool = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyNumber.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyNumber.js
 var require_stringifyNumber = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyNumber.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyNumber.js"(exports) {
     "use strict";
     function stringifyNumber({ format: format2, minFractionDigits, tag, value }) {
       if (typeof value === "bigint")
@@ -2405,9 +2405,9 @@ var require_stringifyNumber = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/float.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/float.js
 var require_float = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/float.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/float.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var stringifyNumber = require_stringifyNumber();
@@ -2451,9 +2451,9 @@ var require_float = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/int.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/int.js
 var require_int = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/int.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/int.js"(exports) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
@@ -2496,9 +2496,9 @@ var require_int = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/schema.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/schema.js
 var require_schema = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/schema.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/core/schema.js"(exports) {
     "use strict";
     var map2 = require_map();
     var _null4 = require_null();
@@ -2524,9 +2524,9 @@ var require_schema = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/json/schema.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/json/schema.js
 var require_schema2 = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/json/schema.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/json/schema.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var map2 = require_map();
@@ -2591,9 +2591,9 @@ var require_schema2 = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/binary.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/binary.js
 var require_binary = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/binary.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/binary.js"(exports) {
     "use strict";
     var node_buffer = __require("buffer");
     var Scalar = require_Scalar();
@@ -2657,9 +2657,9 @@ var require_binary = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/pairs.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/pairs.js
 var require_pairs = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/pairs.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/pairs.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Pair = require_Pair();
@@ -2735,9 +2735,9 @@ ${cn.comment}` : item.comment;
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/omap.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/omap.js
 var require_omap = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/omap.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/omap.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var toJS = require_toJS();
@@ -2813,9 +2813,9 @@ var require_omap = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/bool.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/bool.js
 var require_bool2 = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/bool.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/bool.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     function boolStringify({ value, source }, ctx) {
@@ -2845,9 +2845,9 @@ var require_bool2 = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/float.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/float.js
 var require_float2 = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/float.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/float.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var stringifyNumber = require_stringifyNumber();
@@ -2894,9 +2894,9 @@ var require_float2 = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/int.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/int.js
 var require_int2 = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/int.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/int.js"(exports) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
@@ -2973,9 +2973,9 @@ var require_int2 = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/set.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/set.js
 var require_set = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/set.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/set.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Pair = require_Pair();
@@ -3062,9 +3062,9 @@ var require_set = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/timestamp.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/timestamp.js
 var require_timestamp = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/timestamp.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/timestamp.js"(exports) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     function parseSexagesimal(str, asBigInt) {
@@ -3150,9 +3150,9 @@ var require_timestamp = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/schema.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/schema.js
 var require_schema3 = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/schema.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/yaml-1.1/schema.js"(exports) {
     "use strict";
     var map2 = require_map();
     var _null4 = require_null();
@@ -3194,9 +3194,9 @@ var require_schema3 = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/tags.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/tags.js
 var require_tags = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/tags.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/tags.js"(exports) {
     "use strict";
     var map2 = require_map();
     var _null4 = require_null();
@@ -3288,9 +3288,9 @@ var require_tags = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/Schema.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/Schema.js
 var require_Schema = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/Schema.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/schema/Schema.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var map2 = require_map();
@@ -3320,9 +3320,9 @@ var require_Schema = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyDocument.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyDocument.js
 var require_stringifyDocument = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var stringify3 = require_stringify();
@@ -3400,9 +3400,9 @@ var require_stringifyDocument = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/Document.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/Document.js
 var require_Document = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/Document.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/doc/Document.js"(exports) {
     "use strict";
     var Alias = require_Alias();
     var Collection = require_Collection();
@@ -3709,9 +3709,9 @@ var require_Document = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/errors.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/errors.js
 var require_errors = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/errors.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/errors.js"(exports) {
     "use strict";
     var YAMLError = class extends Error {
       constructor(name, pos, code, message) {
@@ -3774,9 +3774,9 @@ ${pointer}
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-props.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-props.js
 var require_resolve_props = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-props.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-props.js"(exports) {
     "use strict";
     function resolveProps(tokens, { flow, indicator, next, offset, onError, parentIndent, startOnNewline }) {
       let spaceBefore = false;
@@ -3908,9 +3908,9 @@ var require_resolve_props = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-contains-newline.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-contains-newline.js
 var require_util_contains_newline = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-contains-newline.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-contains-newline.js"(exports) {
     "use strict";
     function containsNewline(key) {
       if (!key)
@@ -3950,9 +3950,9 @@ var require_util_contains_newline = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-flow-indent-check.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-flow-indent-check.js
 var require_util_flow_indent_check = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-flow-indent-check.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-flow-indent-check.js"(exports) {
     "use strict";
     var utilContainsNewline = require_util_contains_newline();
     function flowIndentCheck(indent, fc, onError) {
@@ -3968,9 +3968,9 @@ var require_util_flow_indent_check = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-map-includes.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-map-includes.js
 var require_util_map_includes = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-map-includes.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-map-includes.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     function mapIncludes(ctx, items, search) {
@@ -3984,9 +3984,9 @@ var require_util_map_includes = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-block-map.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-block-map.js
 var require_resolve_block_map = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-block-map.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-block-map.js"(exports) {
     "use strict";
     var Pair = require_Pair();
     var YAMLMap = require_YAMLMap();
@@ -4092,9 +4092,9 @@ var require_resolve_block_map = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-block-seq.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-block-seq.js
 var require_resolve_block_seq = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-block-seq.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-block-seq.js"(exports) {
     "use strict";
     var YAMLSeq = require_YAMLSeq();
     var resolveProps = require_resolve_props();
@@ -4143,9 +4143,9 @@ var require_resolve_block_seq = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-end.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-end.js
 var require_resolve_end = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-end.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-end.js"(exports) {
     "use strict";
     function resolveEnd(end, offset, reqSpace, onError) {
       let comment = "";
@@ -4186,9 +4186,9 @@ var require_resolve_end = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-flow-collection.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-flow-collection.js
 var require_resolve_flow_collection = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-flow-collection.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-flow-collection.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Pair = require_Pair();
@@ -4380,9 +4380,9 @@ var require_resolve_flow_collection = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-collection.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-collection.js
 var require_compose_collection = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-collection.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-collection.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Scalar = require_Scalar();
@@ -4445,9 +4445,9 @@ var require_compose_collection = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-block-scalar.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-block-scalar.js
 var require_resolve_block_scalar = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-block-scalar.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-block-scalar.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     function resolveBlockScalar(ctx, scalar, onError) {
@@ -4628,9 +4628,9 @@ var require_resolve_block_scalar = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-flow-scalar.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-flow-scalar.js
 var require_resolve_flow_scalar = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-flow-scalar.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-flow-scalar.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var resolveEnd = require_resolve_end();
@@ -4849,9 +4849,9 @@ var require_resolve_flow_scalar = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-scalar.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-scalar.js
 var require_compose_scalar = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-scalar.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-scalar.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Scalar = require_Scalar();
@@ -4930,9 +4930,9 @@ var require_compose_scalar = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-empty-scalar-position.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-empty-scalar-position.js
 var require_util_empty_scalar_position = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-empty-scalar-position.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/util-empty-scalar-position.js"(exports) {
     "use strict";
     function emptyScalarPosition(offset, before, pos) {
       if (before) {
@@ -4960,9 +4960,9 @@ var require_util_empty_scalar_position = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-node.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-node.js
 var require_compose_node = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-node.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-node.js"(exports) {
     "use strict";
     var Alias = require_Alias();
     var identity3 = require_identity();
@@ -5066,9 +5066,9 @@ var require_compose_node = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-doc.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-doc.js
 var require_compose_doc = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-doc.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/compose-doc.js"(exports) {
     "use strict";
     var Document2 = require_Document();
     var composeNode = require_compose_node();
@@ -5109,9 +5109,9 @@ var require_compose_doc = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/composer.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/composer.js
 var require_composer = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/composer.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/composer.js"(exports) {
     "use strict";
     var node_process = __require("process");
     var directives = require_directives();
@@ -5317,9 +5317,9 @@ ${end.comment}` : end.comment;
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-scalar.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-scalar.js
 var require_cst_scalar = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-scalar.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-scalar.js"(exports) {
     "use strict";
     var resolveBlockScalar = require_resolve_block_scalar();
     var resolveFlowScalar = require_resolve_flow_scalar();
@@ -5502,9 +5502,9 @@ var require_cst_scalar = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-stringify.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-stringify.js
 var require_cst_stringify = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
     "use strict";
     var stringify3 = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
     function stringifyToken(token) {
@@ -5563,9 +5563,9 @@ var require_cst_stringify = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-visit.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-visit.js
 var require_cst_visit = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-visit.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst-visit.js"(exports) {
     "use strict";
     var BREAK = /* @__PURE__ */ Symbol("break visit");
     var SKIP = /* @__PURE__ */ Symbol("skip children");
@@ -5625,9 +5625,9 @@ var require_cst_visit = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst.js
 var require_cst = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/cst.js"(exports) {
     "use strict";
     var cstScalar = require_cst_scalar();
     var cstStringify = require_cst_stringify();
@@ -5727,9 +5727,9 @@ var require_cst = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/lexer.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/lexer.js
 var require_lexer = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/lexer.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/lexer.js"(exports) {
     "use strict";
     var cst = require_cst();
     function isEmpty(ch) {
@@ -6316,9 +6316,9 @@ var require_lexer = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/line-counter.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/line-counter.js
 var require_line_counter = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/line-counter.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/line-counter.js"(exports) {
     "use strict";
     var LineCounter = class {
       constructor() {
@@ -6347,9 +6347,9 @@ var require_line_counter = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/parser.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/parser.js
 var require_parser = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/parser.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/parse/parser.js"(exports) {
     "use strict";
     var node_process = __require("process");
     var cst = require_cst();
@@ -7221,9 +7221,9 @@ var require_parser = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/public-api.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/public-api.js
 var require_public_api = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/public-api.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/public-api.js"(exports) {
     "use strict";
     var composer = require_composer();
     var Document2 = require_Document();
@@ -7318,9 +7318,9 @@ var require_public_api = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/index.js
+// node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/index.js
 var require_dist = __commonJS({
-  "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/index.js"(exports) {
+  "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/index.js"(exports) {
     "use strict";
     var composer = require_composer();
     var Document2 = require_Document();
@@ -7370,9 +7370,9 @@ var require_dist = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/quote.js
+// node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/quote.js
 var require_quote = __commonJS({
-  "../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/quote.js"(exports, module) {
+  "node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/quote.js"(exports, module) {
     "use strict";
     var OPS = (
       /** @type {const} */
@@ -7464,9 +7464,9 @@ var require_quote = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/parse.js
+// node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/parse.js
 var require_parse = __commonJS({
-  "../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/parse.js"(exports, module) {
+  "node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/parse.js"(exports, module) {
     "use strict";
     var CONTROL2 = (
       /** @type {const} */
@@ -7831,9 +7831,9 @@ var require_parse = __commonJS({
   }
 });
 
-// ../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/index.js
+// node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/index.js
 var require_shell_quote = __commonJS({
-  "../../node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/index.js"(exports) {
+  "node_modules/.pnpm/shell-quote@1.12.0/node_modules/shell-quote/index.js"(exports) {
     "use strict";
     exports.quote = require_quote();
     exports.parse = require_parse();
@@ -7855,7 +7855,7 @@ import { createHash as createHash4 } from "node:crypto";
 import { lstatSync as lstatSync27, readFileSync as readFileSync30 } from "node:fs";
 import { join as join31 } from "node:path";
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/external.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/external.js
 var external_exports = {};
 __export(external_exports, {
   $brand: () => $brand,
@@ -8118,7 +8118,7 @@ __export(external_exports, {
   xor: () => xor
 });
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/index.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/index.js
 var core_exports2 = {};
 __export(core_exports2, {
   $ZodAny: () => $ZodAny,
@@ -8435,7 +8435,7 @@ __export(core_exports2, {
   withParser: () => withParser
 });
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/util.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/util.js
 var util_exports = {};
 __export(util_exports, {
   BIGINT_FORMAT_RANGES: () => BIGINT_FORMAT_RANGES,
@@ -9291,7 +9291,7 @@ function constantCatch(value) {
   return fn;
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/core.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/core.js
 var _a;
 var NEVER = /* @__PURE__ */ Object.freeze({
   status: "aborted"
@@ -9413,7 +9413,7 @@ function config(newConfig) {
   return globalConfig;
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/errors.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/errors.js
 function _getMessage() {
   const internals = this._zod;
   internals.message ?? (internals.message = JSON.stringify(internals.def, jsonStringifyReplacer, 2));
@@ -9605,7 +9605,7 @@ function prettifyError(error62) {
   return lines.join("\n");
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/parse.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/parse.js
 function finalizeParams(callee, params) {
   return { callee: params?.callee ?? callee, Err: params?.Err };
 }
@@ -9765,7 +9765,7 @@ var _safeDecodeAsync = (_Err) => async (schema, value, _ctx) => {
 };
 var safeDecodeAsync = /* @__PURE__ */ _safeDecodeAsync($ZodRealError);
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/regexes.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/regexes.js
 var regexes_exports = {};
 __export(regexes_exports, {
   anyString: () => anyString,
@@ -9937,7 +9937,7 @@ var sha512_hex = /^[0-9a-fA-F]{128}$/;
 var sha512_base64 = /* @__PURE__ */ fixedBase64(86, "==");
 var sha512_base64url = /* @__PURE__ */ fixedBase64url(86);
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/checks.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
   var _a3;
   inst._zod ?? (inst._zod = {});
@@ -10413,7 +10413,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (ins
   };
 });
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/doc.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/doc.js
 var Doc = class {
   constructor(args = [], closed = {}) {
     this.content = [];
@@ -10454,14 +10454,14 @@ ${content.join("\n")}
   }
 };
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/versions.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
   minor: 6,
   patch: 7
 };
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/schemas.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
   var _a3;
   inst ?? (inst = {});
@@ -12903,7 +12903,7 @@ function handleRefineResult(result, payload, input2, inst) {
   }
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/memoizer.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/memoizer.js
 var $ZodCyclicError = class extends Error {
   constructor() {
     super(`Cannot parse a reference cycle that closes through a transform`);
@@ -13180,7 +13180,7 @@ function isBackEdge(ctx, value) {
   return backEdges !== void 0 && isRef(value) && backEdges.has(value);
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/index.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/index.js
 var locales_exports = {};
 __export(locales_exports, {
   ar: () => ar_default,
@@ -13248,7 +13248,7 @@ __export(locales_exports, {
   zhTW: () => zh_TW_default
 });
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ar.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ar.js
 var error = () => {
   const Sizable = {
     string: { unit: "\u062D\u0631\u0641", verb: "\u0623\u0646 \u064A\u062D\u0648\u064A" },
@@ -13360,7 +13360,7 @@ function ar_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/az.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/az.js
 var error2 = () => {
   const Sizable = {
     string: { unit: "simvol", verb: "olmal\u0131d\u0131r" },
@@ -13471,7 +13471,7 @@ function az_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/be.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/be.js
 function getBelarusianPlural(count3, one, few, many) {
   const absCount = Math.abs(count3);
   const lastDigit = absCount % 10;
@@ -13640,7 +13640,7 @@ function be_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/bg.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/bg.js
 var error4 = () => {
   const Sizable = {
     string: { unit: "\u0441\u0438\u043C\u0432\u043E\u043B\u0430", verb: "\u0434\u0430 \u0441\u044A\u0434\u044A\u0440\u0436\u0430" },
@@ -13766,7 +13766,7 @@ function bg_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/bn.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/bn.js
 var error5 = () => {
   const Sizable = {
     string: { unit: "\u0985\u0995\u09CD\u09B7\u09B0", verb: "\u09A5\u09BE\u0995\u09A4\u09C7 \u09B9\u09AC\u09C7" },
@@ -13880,7 +13880,7 @@ function bn_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ca.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ca.js
 var error6 = () => {
   const Sizable = {
     string: { unit: "car\xE0cters", verb: "contenir" },
@@ -13994,7 +13994,7 @@ function ca_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ckb.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ckb.js
 var error7 = () => {
   const Sizable = {
     string: { unit: "\u067E\u06CC\u062A", verb: "\u0628\u06CE\u062A" },
@@ -14127,7 +14127,7 @@ function ckb_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/cs.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/cs.js
 var error8 = () => {
   const Sizable = {
     string: { unit: "znak\u016F", verb: "m\xEDt" },
@@ -14244,7 +14244,7 @@ function cs_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/da.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/da.js
 var error9 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "havde" },
@@ -14365,7 +14365,7 @@ function da_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/de.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/de.js
 var error10 = () => {
   const Sizable = {
     string: { unit: "Zeichen", verb: "zu haben" },
@@ -14479,7 +14479,7 @@ function de_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/el.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/el.js
 var error11 = () => {
   const Sizable = {
     string: { unit: "\u03C7\u03B1\u03C1\u03B1\u03BA\u03C4\u03AE\u03C1\u03B5\u03C2", verb: "\u03BD\u03B1 \u03AD\u03C7\u03B5\u03B9" },
@@ -14592,7 +14592,7 @@ function el_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/en.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/en.js
 var error12 = () => {
   const Sizable = {
     string: { unit: "characters", verb: "to have" },
@@ -14717,7 +14717,7 @@ function en_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/eo.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/eo.js
 var error13 = () => {
   const Sizable = {
     string: { unit: "karaktrojn", verb: "havi" },
@@ -14832,7 +14832,7 @@ function eo_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/es.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/es.js
 var error14 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "tener" },
@@ -14969,7 +14969,7 @@ function es_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fa.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fa.js
 var error15 = () => {
   const Sizable = {
     string: { unit: "\u06A9\u0627\u0631\u0627\u06A9\u062A\u0631", verb: "\u062F\u0627\u0634\u062A\u0647 \u0628\u0627\u0634\u062F" },
@@ -15089,7 +15089,7 @@ function fa_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fi.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fi.js
 var error16 = () => {
   const Sizable = {
     string: { unit: "merkki\xE4", subject: "merkkijonon" },
@@ -15207,7 +15207,7 @@ function fi_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fr.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fr.js
 var error17 = () => {
   const Sizable = {
     string: { unit: "caract\xE8res", verb: "avoir" },
@@ -15337,7 +15337,7 @@ function fr_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fr-CA.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/fr-CA.js
 var error18 = () => {
   const Sizable = {
     string: { unit: "caract\xE8res", verb: "avoir" },
@@ -15450,7 +15450,7 @@ function fr_CA_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/gu.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/gu.js
 var error19 = () => {
   const Sizable = {
     string: { unit: "\u0A85\u0A95\u0ACD\u0AB7\u0AB0", verb: "\u0AB9\u0ACB\u0AB5\u0ABE \u0A9C\u0ACB\u0A88\u0A8F" },
@@ -15564,7 +15564,7 @@ function gu_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/he.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/he.js
 var error20 = () => {
   const TypeNames = {
     string: { label: "\u05DE\u05D7\u05E8\u05D5\u05D6\u05EA", gender: "f" },
@@ -15766,7 +15766,7 @@ function he_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hi.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hi.js
 var error21 = () => {
   const Sizable = {
     string: { unit: "\u0905\u0915\u094D\u0937\u0930", verb: "\u0930\u0916\u0928\u0947 \u0915\u0947 \u0932\u093F\u090F" },
@@ -15878,7 +15878,7 @@ function hi_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hr.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hr.js
 var error22 = () => {
   const Sizable = {
     string: { unit: "znakova", verb: "imati" },
@@ -16005,7 +16005,7 @@ function hr_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hu.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hu.js
 var error23 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "legyen" },
@@ -16119,7 +16119,7 @@ function hu_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hy.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/hy.js
 function getArmenianPlural(count3, one, many) {
   return Math.abs(count3) === 1 ? one : many;
 }
@@ -16278,7 +16278,7 @@ function hy_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/id.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/id.js
 var error25 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "memiliki" },
@@ -16390,7 +16390,7 @@ function id_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/is.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/is.js
 var error26 = () => {
   const Sizable = {
     string: { unit: "stafi", verb: "a\xF0 hafa" },
@@ -16505,7 +16505,7 @@ function is_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/it.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/it.js
 var error27 = () => {
   const Sizable = {
     string: { unit: "caratteri", verb: "avere" },
@@ -16619,7 +16619,7 @@ function it_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ja.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ja.js
 var error28 = () => {
   const Sizable = {
     string: { unit: "\u6587\u5B57", verb: "\u3067\u3042\u308B" },
@@ -16732,7 +16732,7 @@ function ja_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ka.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ka.js
 var error29 = () => {
   const Sizable = {
     string: { unit: "\u10E1\u10D8\u10DB\u10D1\u10DD\u10DA\u10DD", verb: "\u10E3\u10DC\u10D3\u10D0 \u10E8\u10D4\u10D8\u10EA\u10D0\u10D5\u10D3\u10D4\u10E1" },
@@ -16850,7 +16850,7 @@ function ka_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/km.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/km.js
 var error30 = () => {
   const Sizable = {
     string: { unit: "\u178F\u17BD\u17A2\u1780\u17D2\u179F\u179A", verb: "\u1782\u17BD\u179A\u1798\u17B6\u1793" },
@@ -16966,12 +16966,12 @@ function km_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/kh.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/kh.js
 function kh_default() {
   return km_default();
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/kn.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/kn.js
 var error31 = () => {
   const Sizable = {
     string: { unit: "\u0C85\u0C95\u0CCD\u0CB7\u0CB0\u0C97\u0CB3\u0CC1", verb: "\u0CB9\u0CCA\u0C82\u0CA6\u0CB2\u0CC1" },
@@ -17087,7 +17087,7 @@ function kn_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ko.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ko.js
 var error32 = () => {
   const Sizable = {
     string: { unit: "\uBB38\uC790", verb: "to have" },
@@ -17204,7 +17204,7 @@ function ko_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/lt.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/lt.js
 var capitalizeFirstCharacter = (text) => {
   return text.charAt(0).toUpperCase() + text.slice(1);
 };
@@ -17412,7 +17412,7 @@ function lt_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/mk.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/mk.js
 var error34 = () => {
   const Sizable = {
     string: { unit: "\u0437\u043D\u0430\u0446\u0438", verb: "\u0434\u0430 \u0438\u043C\u0430\u0430\u0442" },
@@ -17527,7 +17527,7 @@ function mk_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ms.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ms.js
 var error35 = () => {
   const Sizable = {
     string: { unit: "aksara", verb: "mempunyai" },
@@ -17640,7 +17640,7 @@ function ms_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ne.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ne.js
 var error36 = () => {
   const Sizable = {
     string: { unit: "\u0905\u0915\u094D\u0937\u0930", verb: "\u0939\u0941\u0928\u0941\u092A\u0930\u094D\u091B" },
@@ -17752,7 +17752,7 @@ function ne_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/nl.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/nl.js
 var error37 = () => {
   const Sizable = {
     string: { unit: "tekens", verb: "heeft" },
@@ -17868,7 +17868,7 @@ function nl_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/nn.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/nn.js
 var error38 = () => {
   const Sizable = {
     string: { unit: "teikn", verb: "\xE5 ha" },
@@ -17982,7 +17982,7 @@ function nn_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/no.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/no.js
 var error39 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "\xE5 ha" },
@@ -18096,7 +18096,7 @@ function no_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ota.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ota.js
 var error40 = () => {
   const Sizable = {
     string: { unit: "harf", verb: "olmal\u0131d\u0131r" },
@@ -18211,7 +18211,7 @@ function ota_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ps.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ps.js
 var error41 = () => {
   const Sizable = {
     string: { unit: "\u062A\u0648\u06A9\u064A", verb: "\u0648\u0644\u0631\u064A" },
@@ -18331,7 +18331,7 @@ function ps_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/pl.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/pl.js
 var error42 = () => {
   const Sizable = {
     string: { unit: "znak\xF3w", verb: "mie\u0107" },
@@ -18446,7 +18446,7 @@ function pl_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/pt.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/pt.js
 var error43 = () => {
   const Sizable = {
     string: { unit: "caracteres" },
@@ -18590,7 +18590,7 @@ function pt_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/pt-BR.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/pt-BR.js
 var error44 = () => {
   const Sizable = {
     string: { unit: "caracteres" },
@@ -18735,7 +18735,7 @@ function pt_BR_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ro.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ro.js
 var error45 = () => {
   const Sizable = {
     string: { unit: "caractere", verb: "s\u0103 aib\u0103" },
@@ -18858,7 +18858,7 @@ function ro_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ru.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ru.js
 function getRussianPlural(count3, one, few, many) {
   const absCount = Math.abs(count3);
   const lastDigit = absCount % 10;
@@ -19027,7 +19027,7 @@ function ru_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/sk.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/sk.js
 var error47 = () => {
   const Sizable = {
     string: { unit: "znakov", verb: "ma\u0165" },
@@ -19144,7 +19144,7 @@ function sk_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/sl.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/sl.js
 var error48 = () => {
   const Sizable = {
     string: { unit: "znakov", verb: "imeti" },
@@ -19259,7 +19259,7 @@ function sl_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/sv.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/sv.js
 var error49 = () => {
   const Sizable = {
     string: { unit: "tecken", verb: "att ha" },
@@ -19375,7 +19375,7 @@ function sv_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ta.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ta.js
 var error50 = () => {
   const Sizable = {
     string: { unit: "\u0B8E\u0BB4\u0BC1\u0BA4\u0BCD\u0BA4\u0BC1\u0B95\u0BCD\u0B95\u0BB3\u0BCD", verb: "\u0B95\u0BCA\u0BA3\u0BCD\u0B9F\u0BBF\u0BB0\u0BC1\u0B95\u0BCD\u0B95 \u0BB5\u0BC7\u0BA3\u0BCD\u0B9F\u0BC1\u0BAE\u0BCD" },
@@ -19491,7 +19491,7 @@ function ta_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/tg.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/tg.js
 var error51 = () => {
   const Sizable = {
     string: { unit: "\u0430\u043B\u043E\u043C\u0430\u0442", verb: "\u0434\u043E\u0448\u0442\u0430 \u0431\u043E\u0448\u0430\u0434" },
@@ -19608,7 +19608,7 @@ function tg_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/th.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/th.js
 var error52 = () => {
   const Sizable = {
     string: { unit: "\u0E15\u0E31\u0E27\u0E2D\u0E31\u0E01\u0E29\u0E23", verb: "\u0E04\u0E27\u0E23\u0E21\u0E35" },
@@ -19724,7 +19724,7 @@ function th_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/tk.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/tk.js
 var error53 = () => {
   const Sizable = {
     string: { unit: "simwol", verb: "bolmaly" },
@@ -19832,7 +19832,7 @@ function tk_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/tr.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/tr.js
 var error54 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "olmal\u0131" },
@@ -19943,7 +19943,7 @@ function tr_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/uk.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/uk.js
 var error55 = () => {
   const Sizable = {
     string: { unit: "\u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432", verb: "\u043C\u0430\u0442\u0438\u043C\u0435" },
@@ -20057,12 +20057,12 @@ function uk_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ua.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ua.js
 function ua_default() {
   return uk_default();
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ur.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/ur.js
 var error56 = () => {
   const Sizable = {
     string: { unit: "\u062D\u0631\u0648\u0641", verb: "\u06C1\u0648\u0646\u0627" },
@@ -20178,7 +20178,7 @@ function ur_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/uz.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/uz.js
 var error57 = () => {
   const Sizable = {
     string: { unit: "belgi", verb: "bo\u2018lishi kerak" },
@@ -20292,7 +20292,7 @@ function uz_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/vi.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/vi.js
 var error58 = () => {
   const Sizable = {
     string: { unit: "k\xFD t\u1EF1", verb: "c\xF3" },
@@ -20406,7 +20406,7 @@ function vi_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/zh-CN.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/zh-CN.js
 var error59 = () => {
   const Sizable = {
     string: { unit: "\u5B57\u7B26", verb: "\u5305\u542B" },
@@ -20521,7 +20521,7 @@ function zh_CN_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/zh-TW.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/zh-TW.js
 var error60 = () => {
   const Sizable = {
     string: { unit: "\u5B57\u5143", verb: "\u64C1\u6709" },
@@ -20634,7 +20634,7 @@ function zh_TW_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/yo.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/locales/yo.js
 var error61 = () => {
   const Sizable = {
     string: { unit: "\xE0mi", verb: "n\xED" },
@@ -20747,7 +20747,7 @@ function yo_default() {
   };
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/registries.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/registries.js
 var _a2;
 var $output = /* @__PURE__ */ Symbol("ZodOutput");
 var $input = /* @__PURE__ */ Symbol("ZodInput");
@@ -20797,7 +20797,7 @@ function registry() {
 (_a2 = globalThis).__zod_globalRegistry ?? (_a2.__zod_globalRegistry = registry());
 var globalRegistry = globalThis.__zod_globalRegistry;
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/compile.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/compile.js
 var INVALID = /* @__PURE__ */ Symbol.for("zod.compile.invalid");
 var FALLBACK_FLAG = /* @__PURE__ */ Symbol.for("zod.compile.fallback");
 var ZodCompileAsyncError = class extends Error {
@@ -22407,7 +22407,7 @@ function generateTransformCheck(doc, ctx, schema, accessor) {
   return accessor;
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/api.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/api.js
 function snapshotChecks(def) {
   if (def.checks)
     def.checks = [...def.checks];
@@ -23466,7 +23466,7 @@ function _stringFormat(Class2, format2, fnOrRegex, _params = {}) {
   return inst;
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/to-json-schema.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/to-json-schema.js
 function assignProps(target, ...sources) {
   for (const source of sources) {
     for (const key of Reflect.ownKeys(source)) {
@@ -23996,7 +23996,7 @@ var createStandardJSONSchemaMethod = (schema, io, processors = {}) => (params) =
   return finalize(ctx, schema);
 };
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/json-schema-processors.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/json-schema-processors.js
 var narrowMin = (agg, key, value) => {
   if (agg[key] === void 0 || value > agg[key])
     agg[key] = value;
@@ -24744,7 +24744,7 @@ function toJSONSchema(input2, params) {
   return finalize(ctx, input2);
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/json-schema-generator.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/json-schema-generator.js
 var JSONSchemaGenerator = class {
   /** @deprecated Access via ctx instead */
   get metadataRegistry() {
@@ -24822,10 +24822,10 @@ var JSONSchemaGenerator = class {
   }
 };
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/json-schema.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/json-schema.js
 var json_schema_exports = {};
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/schemas.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/schemas.js
 var schemas_exports2 = {};
 __export(schemas_exports2, {
   ZodAny: () => ZodAny,
@@ -25006,7 +25006,7 @@ __export(schemas_exports2, {
   xor: () => xor
 });
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/checks.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/checks.js
 var checks_exports2 = {};
 __export(checks_exports2, {
   endsWith: () => _endsWith,
@@ -25041,7 +25041,7 @@ __export(checks_exports2, {
   uppercase: () => _uppercase
 });
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/errors.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/errors.js
 var _installedErrorProtos = /* @__PURE__ */ new WeakSet([Object.prototype, Error.prototype]);
 function _lazyMethod(proto, key, make) {
   Object.defineProperty(proto, key, {
@@ -25087,7 +25087,7 @@ var ZodRealError = /* @__PURE__ */ $constructor("ZodError", initializer2, void 0
   Parent: Error
 });
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/parse.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/parse.js
 var parse2 = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync2 = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse2 = /* @__PURE__ */ _safeParse(ZodRealError);
@@ -25101,7 +25101,7 @@ var safeDecode2 = /* @__PURE__ */ _safeDecode(ZodRealError);
 var safeEncodeAsync2 = /* @__PURE__ */ _safeEncodeAsync(ZodRealError);
 var safeDecodeAsync2 = /* @__PURE__ */ _safeDecodeAsync(ZodRealError);
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/schemas.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/schemas.js
 function _ensureDefaultLocale() {
   if (!globalConfig.localeError)
     config(en_default());
@@ -26566,7 +26566,7 @@ function preprocess(fn, schema) {
   });
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/compat.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/compat.js
 var ZodIssueCode = {
   invalid_type: "invalid_type",
   too_big: "too_big",
@@ -26592,7 +26592,7 @@ var ZodFirstPartyTypeKind;
 /* @__PURE__ */ (function(ZodFirstPartyTypeKind2) {
 })(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/iso.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/iso.js
 var iso_exports = {};
 __export(iso_exports, {
   ZodISODate: () => ZodISODate,
@@ -26617,7 +26617,7 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/from-json-schema.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/from-json-schema.js
 var z = {
   ...schemas_exports2,
   ...checks_exports2,
@@ -27350,7 +27350,7 @@ function fromJSONSchema(schema, params) {
   return convertSchema(normalized2, ctx);
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/visit.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/visit.js
 var RESOLVING = /* @__PURE__ */ Symbol("z.visit/resolving");
 function visit(schema, fnOrHandlers) {
   const fn = typeof fnOrHandlers === "function" ? fnOrHandlers : (node2, rewritten) => {
@@ -27505,7 +27505,7 @@ function visit(schema, fnOrHandlers) {
   return run2(schema);
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/deep-partial.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/deep-partial.js
 function deepPartial(schema) {
   return visit(schema, {
     object: (s) => s.partial(),
@@ -27517,7 +27517,7 @@ function deepPartial(schema) {
   });
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/in-out.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/in-out.js
 function withChecks(side, checks) {
   if (!checks?.length)
     return side;
@@ -27547,7 +27547,7 @@ function output(schema) {
   });
 }
 
-// ../../node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/coerce.js
+// node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/coerce.js
 var coerce_exports = {};
 __export(coerce_exports, {
   bigint: () => bigint3,
@@ -29273,6 +29273,7 @@ function ownerConfigFile(opts = {}) {
 }
 var ownerConfigDir = (opts = {}) => dirname(ownerConfigFile(opts));
 var notifySecretFile = (opts = {}) => join3(ownerConfigDir(opts), "notify-secret");
+var workerTokenFile = (opts = {}) => join3(ownerConfigDir(opts), "worker-token");
 var crewTokenFile = (opts = {}) => join3(ownerConfigDir(opts), "crew-token");
 function loadOwnerConfig(opts = {}) {
   const file3 = ownerConfigFile(opts);
@@ -31941,6 +31942,18 @@ function readOwnerSecret(file3, owner) {
 }
 function installCrewToken(token, owner) {
   writeOwnerSecret(crewTokenFile(owner), `${token}
+`);
+}
+function readWorkerTokenFile(owner) {
+  const file3 = workerTokenFile(owner);
+  const read3 = readOwnerSecret(file3, owner);
+  if (read3.kind !== "ok") return read3;
+  const token = read3.text.trim();
+  if (!validToken(token)) return { kind: "bad", why: `${file3} holds no valid token` };
+  return { kind: "ok", token };
+}
+function installWorkerToken(token, owner) {
+  writeOwnerSecret(workerTokenFile(owner), `${token}
 `);
 }
 function writeOwnerSecret(file3, content) {
@@ -35175,7 +35188,7 @@ ${item.finding}
     ...opensPr2 ? [
       // No -u: the sandbox cannot write upstream tracking into .git/config, and git then
       // prints an error after a push that went through.
-      `- Push with an explicit refspec and without \`-u\`: \`git push origin HEAD:refs/heads/studio/${id}\`. Check it with \`git ls-remote origin refs/heads/studio/${id}\`: its SHA must equal \`git rev-parse HEAD\`. An error about upstream tracking or \`.git/config\` after a push that this check confirms is harmless.`,
+      caps.pushByStudio === true ? `- Do not push: you have no GitHub token. Commit your work on \`studio/${id}\`; Studio pushes that branch after you end.` : `- Push with an explicit refspec and without \`-u\`: \`git push origin HEAD:refs/heads/studio/${id}\`. Check it with \`git ls-remote origin refs/heads/studio/${id}\`: its SHA must equal \`git rev-parse HEAD\`. An error about upstream tracking or \`.git/config\` after a push that this check confirms is harmless.`,
       ...caps.prByStudio === true ? [
         `- Do not open the pull request, and do not run gh at all: it cannot verify TLS in this sandbox. Give \`pr_title: "${id}: <summary>"\` in the report and write the pull request text as the report body; Studio opens the pull request from your pushed branch.`
       ] : [
@@ -35191,7 +35204,7 @@ ${item.finding}
     "",
     "## Report contract",
     "",
-    opensPr2 ? `Write \`${reportFile}\` in the checkout as the last step, after pushing; do not commit it. Only that file name counts. head_sha is the SHA of the pushed head (\`git rev-parse HEAD\`).` : `Write \`${reportFile}\` in the checkout as the last step, only that file name counts; do not commit it.${accepting !== void 0 ? ` head_sha is the main commit you checked (${accepting.sha}).` : item.type === "review" ? " head_sha is the SHA of the pull request head you reviewed (`git rev-parse HEAD` after loading it)." : ""}`,
+    opensPr2 ? caps.pushByStudio === true ? `Write \`${reportFile}\` in the checkout as the last step, after your last commit; do not commit it. Only that file name counts. head_sha is the SHA of your last commit (\`git rev-parse HEAD\`).` : `Write \`${reportFile}\` in the checkout as the last step, after pushing; do not commit it. Only that file name counts. head_sha is the SHA of the pushed head (\`git rev-parse HEAD\`).` : `Write \`${reportFile}\` in the checkout as the last step, only that file name counts; do not commit it.${accepting !== void 0 ? ` head_sha is the main commit you checked (${accepting.sha}).` : item.type === "review" ? " head_sha is the SHA of the pull request head you reviewed (`git rev-parse HEAD` after loading it)." : ""}`,
     "It starts with YAML frontmatter:",
     "",
     "```yaml",
@@ -35505,13 +35518,13 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
     uid: launcher2.uid
   };
   let token;
-  if (config2.crewToken) token = penv[config2.crewToken.env] || void 0;
-  if (!token) {
+  if (config2.crewToken && worker?.noToken !== true) token = penv[config2.crewToken.env] || void 0;
+  if (!token && worker?.noToken !== true) {
     const file3 = readCrewTokenFile(owner);
     if (file3.kind === "bad") throw new Error(`refusing the crew token file: ${file3.why}`);
     if (file3.kind === "ok") token = file3.token;
   }
-  if (!token && !config2.allowAmbientCredentials) {
+  if (!token && !config2.allowAmbientCredentials && worker?.noToken !== true) {
     throw new Error(
       config2.crewToken ? `crew token variable ${config2.crewToken.env} is not set and there is no crew-token file; refusing to launch without the least-privilege token (run studio secret set crew-token, or set allow_ambient_credentials: true)` : "crew_token is not configured and there is no crew-token file; refusing to launch without a least-privilege token (run studio secret set crew-token, or set allow_ambient_credentials: true)"
     );
@@ -35693,6 +35706,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
     startedAt: ports.clock.now().toISOString()
   });
   caps.reportName = newReportName(stateRoot, item.id);
+  caps.pushByStudio = worker?.noToken === true;
   caps.prByStudio = worker !== void 0 || (launcher2.platform ?? process.platform) === "darwin" && !ownerConfig.crewAllowMacosTrustService;
   const brief = writeBrief(stateRoot, item, config2, projectDir, briefRules, caps);
   const settings = writeCrewSettings(
@@ -37780,7 +37794,8 @@ async function checkToken(token, repo, ports) {
 }
 async function runSecretSet(o2) {
   const repo = o2.repo === void 0 ? readPrimaryRepo(o2.project) : assertPrimaryRepo(o2.repo);
-  const input2 = o2.readSecret ? await o2.readSecret("Crew token (input hidden): ") : void 0;
+  const worker = o2.name === "worker-token";
+  const input2 = o2.readSecret ? await o2.readSecret(worker ? "Worker token (input hidden): " : "Crew token (input hidden): ") : void 0;
   if (input2 === void 0) {
     throw new Error("studio secret set needs a terminal for hidden input; nothing written");
   }
@@ -37793,7 +37808,13 @@ async function runSecretSet(o2) {
 `);
     return 1;
   }
-  installCrewToken(token, o2.owner);
+  if (worker) {
+    const crew = readCrewTokenFile(o2.owner);
+    if (crew.kind === "ok" && crew.token === token) {
+      throw new Error("the worker token must differ from the crew token; nothing written");
+    }
+    installWorkerToken(token, o2.owner);
+  } else installCrewToken(token, o2.owner);
   o2.stdout(`valid for ${repo}
 `);
   return 0;
@@ -44074,10 +44095,24 @@ function readWorkerState(stateRoot, label) {
       `this worker holds ${s.current.item.id} for the label ${s.label}; run it with --label ${s.label} until that is done`
     );
   }
-  return { label, ...s.current === void 0 ? {} : { current: s.current } };
+  const seen = s.seen !== null && typeof s.seen === "object" ? s.seen : void 0;
+  return {
+    label,
+    ...s.current === void 0 ? {} : { current: s.current },
+    ...seen === void 0 ? {} : { seen }
+  };
 }
 function saveWorkerState(stateRoot, s) {
-  writeStateFile(stateRoot, join42(stateRoot, WORKER_FILE), `${JSON.stringify(s, null, 2)}
+  let seen = s.seen;
+  if (seen === void 0) {
+    try {
+      seen = readWorkerState(stateRoot, s.label).seen;
+    } catch {
+      seen = void 0;
+    }
+  }
+  const out = { ...s, ...seen === void 0 ? {} : { seen } };
+  writeStateFile(stateRoot, join42(stateRoot, WORKER_FILE), `${JSON.stringify(out, null, 2)}
 `);
 }
 async function mainConfig(c3) {
@@ -44192,6 +44227,19 @@ async function claimNext(c3, stateRoot, state, ready) {
   const { config: config2, login } = ready;
   const repo = config2.primaryRepo;
   const lead = loadOwnerConfig(c3.owner).workers?.self?.lead;
+  const now = c3.ports.clock.now();
+  const seen = {};
+  const firstSeen = (id, sha) => {
+    const before = state.seen?.[id];
+    const at2 = before?.sha === sha ? before.at : now.toISOString();
+    seen[id] = { sha, at: at2 };
+    return at2;
+  };
+  const keepSeen = () => saveWorkerState(stateRoot, {
+    label: c3.label,
+    ...state.current === void 0 ? {} : { current: state.current },
+    seen
+  });
   for (const issue2 of await c3.hub.listOffers(repo)) {
     if (issue2.author !== lead) continue;
     if (issue2.edited && issue2.editor !== lead) {
@@ -44207,8 +44255,9 @@ async function claimNext(c3, stateRoot, state, ready) {
     let attempt = 1;
     if (existing !== void 0) {
       const held2 = parseClaim(existing.message);
+      const since = firstSeen(item.id, existing.sha);
       if (held2 === void 0 || held2.offer !== issue2.number) continue;
-      if (!claimExpired(held2, existing.committedAt, c3.ports.clock.now())) continue;
+      if (!claimExpired(held2, since, now)) continue;
       if (held2.attempt >= MAX_CLAIM_ATTEMPTS) continue;
       parent = existing.sha;
       attempt = held2.attempt + 1;
@@ -44225,6 +44274,8 @@ async function claimNext(c3, stateRoot, state, ready) {
     };
     const wrote = await writeClaim(c3, repo, claim2, parent);
     if (!wrote.ok) continue;
+    delete seen[item.id];
+    keepSeen();
     const current = {
       item,
       offer: issue2.number,
@@ -44239,7 +44290,11 @@ async function claimNext(c3, stateRoot, state, ready) {
     saveWorkerState(stateRoot, { ...state, current });
     const from = await c3.hub.branchHead(item.repo, `studio/${item.id}`) === void 0 ? ITEM_BASE : `studio/${item.id}`;
     try {
-      await launchCrew(c3.project, item, config2, c3.ports, c3.owner, { deny: ready.deny, from });
+      await launchCrew(c3.project, item, config2, c3.ports, c3.owner, {
+        deny: ready.deny,
+        from,
+        ...c3.crewPushes ? {} : { noToken: true }
+      });
     } catch (e) {
       c3.log(`launch of ${item.id} refused: ${e.message}`);
       await release(
@@ -44263,6 +44318,7 @@ async function claimNext(c3, stateRoot, state, ready) {
       line: `${item.id}: claimed (attempt ${attempt}) and its crew started${from === ITEM_BASE ? "" : ` from ${from}`}`
     };
   }
+  keepSeen();
   return { kind: "idle", line: `no open offer for ${c3.label}` };
 }
 var claimFile = (claim2) => `${renderClaim(claim2).split("\n\n")[1]?.trim()}
@@ -44397,9 +44453,20 @@ async function finish(c3, stateRoot, state, cur, repo, rec) {
   }
   let pr;
   if (report.status === "done" && opensPr(cur.item)) {
-    const head = await c3.hub.branchHead(cur.item.repo, `studio/${id}`);
-    if (head === void 0 || head.toLowerCase() !== report.headSha?.toLowerCase()) {
-      return releaseWith("the pushed branch head differs from the report");
+    if (!c3.crewPushes) {
+      let problem;
+      try {
+        problem = await pushForCrew(c3, stateRoot, cur.item, report.headSha ?? "");
+      } catch (e) {
+        c3.log(`${id}: ${e.message}`);
+        problem = "the worker could not push the branch";
+      }
+      if (problem !== void 0) return releaseWith(problem);
+    } else {
+      const head = await c3.hub.branchHead(cur.item.repo, `studio/${id}`);
+      if (head === void 0 || head.toLowerCase() !== report.headSha?.toLowerCase()) {
+        return releaseWith("the pushed branch head differs from the report");
+      }
     }
     try {
       const opened = await openCrewPr(
@@ -44444,6 +44511,46 @@ async function finish(c3, stateRoot, state, cur, repo, rec) {
     item: id,
     line: `${id}: report ${report.status} handed back${pr === void 0 ? "" : ` with pull request #${pr}`}`
   };
+}
+async function pushForCrew(c3, stateRoot, item, head) {
+  const id = item.id;
+  const branch = `refs/heads/studio/${id}`;
+  const dir = join42(stateRoot, "push", id);
+  removeStateEntry(stateRoot, dir);
+  ensureStateDir(stateRoot, dir);
+  const timeoutMs = 3e5;
+  const git = (args, env) => c3.ports.git.run(dir, args, { timeoutMs, ...env === void 0 ? {} : { env } });
+  try {
+    await git(["init", "--bare", "-q"]);
+    await git([
+      "-c",
+      "protocol.file.allow=always",
+      "fetch",
+      "--no-tags",
+      "--no-write-fetch-head",
+      join42(stateRoot, "clones", id),
+      `+${branch}:${branch}`
+    ]);
+    const got = (await git(["--no-replace-objects", "rev-parse", "--verify", `${branch}^{commit}`])).trim();
+    if (got.toLowerCase() !== head.toLowerCase())
+      return "the branch in the clone differs from the report";
+    const auth = [
+      "-c",
+      "credential.helper=",
+      "-c",
+      'credential.helper=!f() { echo username=x-access-token; echo "password=$STUDIO_PUSH_TOKEN"; }; f'
+    ];
+    const env = { STUDIO_PUSH_TOKEN: c3.token };
+    const url2 = c3.pushUrl?.(item.repo) ?? githubHttpsUrl(item.repo);
+    await git([...auth, "push", url2, `${branch}:${branch}`], env);
+    const remote = (await git([...auth, "ls-remote", url2, branch], env)).split(/\s/)[0] ?? "";
+    if (remote.toLowerCase() !== head.toLowerCase()) {
+      return "the pushed branch head differs from the report";
+    }
+    return void 0;
+  } finally {
+    removeStateEntry(stateRoot, dir);
+  }
 }
 function noteLimitOrBlock(c3, stateRoot, id, from, label = "default") {
   const ownerRoot = ownerStateRootFor(c3.owner);
@@ -44645,19 +44752,22 @@ function ghHub(gh, token) {
       if (typeof sha !== "string" || !SHA_RE3.test(sha)) {
         throw new HubError("reading a claim (no commit)", 0, void 0);
       }
-      const c3 = await must(
-        "reading a claim commit",
-        "GET",
-        `repos/${repo}/git/commits/${sha}`
-      );
-      if (typeof c3?.message !== "string" || typeof c3.committer?.date !== "string") {
+      const c3 = await must("reading a claim commit", "GET", `repos/${repo}/commits/${sha}`);
+      const message = c3?.commit?.message;
+      const date5 = c3?.commit?.committer?.date;
+      if (typeof message !== "string" || typeof date5 !== "string") {
         throw new HubError("reading a claim commit (incomplete)", 0, void 0);
       }
+      const author = c3?.author?.login;
+      const committer = c3?.committer?.login;
+      const login = typeof author === "string" && typeof committer === "string" && author.toLowerCase() === committer.toLowerCase() ? committer : void 0;
       return {
         sha,
-        message: c3.message,
-        committedAt: c3.committer.date,
-        parents: (c3.parents ?? []).flatMap((p) => typeof p.sha === "string" ? [p.sha] : [])
+        message,
+        committedAt: date5,
+        parents: (c3?.parents ?? []).flatMap((p) => typeof p.sha === "string" ? [p.sha] : []),
+        ...login === void 0 ? {} : { login },
+        verified: c3?.commit?.verification?.verified === true
       };
     },
     async writeClaim(repo, item, o2) {
@@ -44810,14 +44920,14 @@ async function followClaim(o2) {
       }
     };
   }
-  const accepted = o2.ownerConfig.workers?.accept[record2.label] ?? [];
-  if (!accepted.includes(claim2.worker)) {
-    return {
-      follow: {
-        kind: "lead",
-        line: `${item.id} was claimed by ${claim2.worker}, who is not accepted for the label ${record2.label} (workers.accept in the owner config); nothing of it counts`
-      }
-    };
+  const foreign = claimIdentityProblem(
+    read3,
+    claim2,
+    o2.ownerConfig.workers?.accept[record2.label] ?? [],
+    record2.label
+  );
+  if (foreign !== void 0) {
+    return { follow: { kind: "lead", line: `${item.id}: ${foreign}; nothing of it counts` } };
   }
   if (claim2.label !== record2.label || claim2.offer !== record2.offer) {
     return {
@@ -44827,12 +44937,13 @@ async function followClaim(o2) {
       }
     };
   }
+  const at2 = record2.claim?.sha === read3.sha && !Number.isNaN(Date.parse(record2.claim.at)) ? record2.claim.at : o2.now.toISOString();
   const seen = {
     sha: read3.sha,
     worker: claim2.worker,
     attempt: claim2.attempt,
     state: claim2.state,
-    at: read3.committedAt,
+    at: at2,
     ...claim2.pr === void 0 ? {} : { pr: claim2.pr }
   };
   if (claim2.state === "done") return { follow: { kind: "done", claim: claim2, sha: read3.sha }, seen };
@@ -44847,8 +44958,8 @@ async function followClaim(o2) {
       seen
     };
   }
-  const ago = minutesSince(read3.committedAt, o2.now);
-  if (claimExpired(claim2, read3.committedAt, o2.now)) {
+  const ago = minutesSince(at2, o2.now);
+  if (claimExpired(claim2, at2, o2.now)) {
     if (claim2.attempt >= MAX_CLAIM_ATTEMPTS) {
       return {
         follow: {
@@ -44875,6 +44986,20 @@ async function followClaim(o2) {
     },
     seen
   };
+}
+function claimIdentityProblem(read3, claim2, accepted, label) {
+  const who = claim2.worker.toLowerCase();
+  if (!accepted.some((a2) => a2.toLowerCase() === who)) {
+    return `claimed by ${claim2.worker}, who is not accepted for the label ${label} (workers.accept in the owner config)`;
+  }
+  if (!read3.verified) {
+    return `the claim names ${claim2.worker}, but GitHub did not verify its commit`;
+  }
+  if (read3.login === void 0 || read3.login.toLowerCase() !== who) {
+    const by = read3.login === void 0 ? "no single account" : read3.login.replace(/[^A-Za-z0-9-]/g, "?");
+    return `the claim names ${claim2.worker}, but GitHub attributes its commit to ${by}`;
+  }
+  return void 0;
 }
 async function recordWorkerRun(o2) {
   const usage = toRunUsage(o2.claim.usage);
@@ -45642,10 +45767,15 @@ async function runCli(argv, deps) {
           `${item.id}: the claim of ${claim2.worker} is ${claim2.state}; nothing moved`
         );
       }
-      const accepted = loadOwnerConfig(owner).workers?.accept[record2.label] ?? [];
-      if (!accepted.includes(claim2.worker) || claim2.label !== record2.label || claim2.offer !== record2.offer) {
+      const foreign = claimIdentityProblem(
+        read3,
+        claim2,
+        loadOwnerConfig(owner).workers?.accept[record2.label] ?? [],
+        record2.label
+      );
+      if (foreign !== void 0 || claim2.label !== record2.label || claim2.offer !== record2.offer) {
         throw new ReportError(
-          `the claim of ${item.id} is not from a worker accepted for ${record2.label} on offer #${record2.offer}`
+          `the claim of ${item.id} counts for nothing: ${foreign ?? `it names offer #${claim2.offer}, not #${record2.offer}`}`
         );
       }
       const text = await leadHub().claimFile(config2.primaryRepo, read3.sha, "report.md");
@@ -45901,12 +46031,7 @@ async function runCli(argv, deps) {
         if (fromWorker !== void 0) {
           const facts = await leadHub().pullRequest(item.repo, report.pr);
           if (facts === void 0) throw new Error(`cannot read ${item.repo}#${report.pr}`);
-          const accepted = (loadOwnerConfig(owner).workers?.accept[item.runsOn ?? ""] ?? []).map(
-            (l) => l.toLowerCase()
-          );
-          const author = facts.author.toLowerCase();
-          const ok = author === fromWorker.worker.toLowerCase() || item.pr === report.pr && accepted.includes(author);
-          if (!ok) {
+          if (facts.author.toLowerCase() !== fromWorker.worker.toLowerCase()) {
             throw new ReportError(
               `PR ${report.pr} was opened by ${facts.author.replace(/[^A-Za-z0-9-[\]/]/g, "?")}, not by ${fromWorker.worker}, who claimed ${item.id}`
             );
@@ -46670,6 +46795,8 @@ async function runCli(argv, deps) {
           ports,
           hub,
           token,
+          crewPushes: crewTokenPresent(loadConfig(project), owner),
+          ...deps.workerPushUrl === void 0 ? {} : { pushUrl: deps.workerPushUrl },
           owner,
           platform: deps.workerPlatform ?? detectPlatform(),
           log: (line4) => stderr(`${line4.replace(new RegExp("\\p{Cc}", "gu"), " ")}
@@ -47423,8 +47550,10 @@ ${table2([
         });
       }
       case "secret": {
-        if (rest.length !== 2 || rest[0] !== "set" || rest[1] !== "crew-token") {
-          stderr("studio: secret takes exactly: set crew-token (the value is asked for, hidden)\n");
+        if (rest.length !== 2 || rest[0] !== "set" || rest[1] !== "crew-token" && rest[1] !== "worker-token") {
+          stderr(
+            "studio: secret takes exactly: set crew-token, or set worker-token (the value is asked for, hidden)\n"
+          );
           return 1;
         }
         return await runSecretSet({
@@ -47432,7 +47561,8 @@ ${table2([
           ports,
           owner,
           readSecret: deps.readSecret,
-          stdout
+          stdout,
+          name: rest[1]
         });
       }
       case "doctor": {
@@ -48183,13 +48313,25 @@ function crewTokenFor(config2, owner) {
   );
 }
 function workerToken(config2, owner) {
-  const fromEnv = config2.crewToken ? owner.env?.[config2.crewToken.env] : void 0;
-  if (fromEnv) return fromEnv;
-  const file3 = readCrewTokenFile(owner);
-  if (file3.kind === "ok") return file3.token;
-  throw new Error(
-    "a worker needs its own GitHub token on this machine: studio secret set crew-token (a token of the worker identity, never the lead's)"
-  );
+  const file3 = readWorkerTokenFile(owner);
+  if (file3.kind === "bad") throw new Error(`refusing the worker token file: ${file3.why}`);
+  if (file3.kind === "absent") {
+    throw new Error(
+      "a worker needs its own GitHub token on this machine: studio secret set worker-token (a token of the worker identity, never the lead's, never the crew token)"
+    );
+  }
+  const crewEnv = config2.crewToken ? owner.env?.[config2.crewToken.env] : void 0;
+  const crewFile = readCrewTokenFile(owner);
+  if (file3.token === crewEnv || crewFile.kind === "ok" && crewFile.token === file3.token) {
+    throw new Error(
+      "the worker token equals the crew token: a crew would hold the worker identity; give the worker a token of its own (studio secret set worker-token)"
+    );
+  }
+  return file3.token;
+}
+function crewTokenPresent(config2, owner) {
+  if (config2.crewToken && owner.env?.[config2.crewToken.env]) return true;
+  return readCrewTokenFile(owner).kind === "ok";
 }
 var CI_READ_FAILED = "CI read failed:";
 function prHeldNote(cap, config2) {
@@ -48518,7 +48660,7 @@ import { spawn as spawn2 } from "node:child_process";
 import { closeSync as closeSync8, openSync as openSync8, readFileSync as readFileSync42 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
-// ../../node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
+// node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
 function isPlainObject3(value) {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -48527,7 +48669,7 @@ function isPlainObject3(value) {
   return (prototype === null || prototype === Object.prototype || Object.getPrototypeOf(prototype) === null) && !(Symbol.toStringTag in value) && !(Symbol.iterator in value);
 }
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/file-url.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/file-url.js
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 var safeNormalizeFileUrl = (file3, name) => {
   const fileString = normalizeFileUrl(normalizeDenoExecPath(file3));
@@ -48540,7 +48682,7 @@ var normalizeDenoExecPath = (file3) => isDenoExecPath(file3) ? file3.toString() 
 var isDenoExecPath = (file3) => typeof file3 !== "string" && file3 && Object.getPrototypeOf(file3) === String.prototype;
 var normalizeFileUrl = (file3) => file3 instanceof URL ? fileURLToPath3(file3) : file3;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/parameters.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/parameters.js
 var normalizeParameters = (rawFile, rawArguments = [], rawOptions, ...rawExtraArguments) => {
   if (rawExtraArguments.length > 0) {
     throw new TypeError("Execa accepts at most three arguments: file, arguments, options.");
@@ -48567,10 +48709,10 @@ var normalizeParameters = (rawFile, rawArguments = [], rawOptions, ...rawExtraAr
   return [filePath, normalizedArguments, { __proto__: null, ...options }];
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/template.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/template.js
 import { ChildProcess } from "node:child_process";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/escape.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/escape.js
 import { platform } from "node:process";
 import { stripVTControlCharacters } from "node:util";
 var joinCommand = (filePath, rawArguments, shell) => {
@@ -48615,7 +48757,7 @@ var quoteString = (escapedArgument) => {
 };
 var NO_ESCAPE_REGEXP = /^[\w\-./]+$/;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/uint-array.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/uint-array.js
 import { StringDecoder } from "node:string_decoder";
 var { toString: objectToString } = Object.prototype;
 var isArrayBuffer = (value) => objectToString.call(value) === "[object ArrayBuffer]";
@@ -48657,7 +48799,7 @@ var getJoinLength = (uint8Arrays) => {
   return joinLength;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/final-error.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/final-error.js
 var getFinalError = (originalError, message, isSync) => {
   const ErrorClass = isSync ? ExecaSyncError : ExecaError;
   const options = originalError instanceof DiscardedError ? {} : { cause: originalError };
@@ -48691,10 +48833,10 @@ var ExecaSyncError = class extends Error {
 };
 setErrorName(ExecaSyncError, ExecaSyncError.name);
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/type-name.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/type-name.js
 var getTypeName = (value) => value === null ? "null" : typeof value;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/template.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/template.js
 var isTemplateString = (templates) => Array.isArray(templates) && Array.isArray(templates.raw);
 var parseTemplates = (templates, expressions) => {
   let tokens = [];
@@ -48809,13 +48951,13 @@ var getSubprocessResult = (result) => {
   throw new TypeError(`Unexpected "${getTypeName(stdout)}" stdout in template expression`);
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/main-sync.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/main-sync.js
 import { spawnSync as spawnSync2 } from "node:child_process";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/specific.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/specific.js
 import { debuglog } from "node:util";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/standard-stream.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/standard-stream.js
 import process2 from "node:process";
 var isStandardStream = (stream) => STANDARD_STREAMS.includes(stream);
 var STANDARD_STREAMS = [process2.stdin, process2.stdout, process2.stderr];
@@ -48825,7 +48967,7 @@ var allStreamSymbol = /* @__PURE__ */ Symbol("execa.allStream");
 var setAllStream = (stream) => Object.assign(stream, { [allStreamSymbol]: true });
 var isAllStream = (stream) => stream?.[allStreamSymbol] === true;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/options.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/options.js
 var copyOptions = (options = {}) => {
   if (options === null) {
     throw new TypeError("The options must be an object, not `null`.");
@@ -48838,7 +48980,7 @@ var checkBooleanOption = (value, optionName) => {
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/specific.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/specific.js
 var normalizeFdSpecificOptions = (options) => {
   const optionsCopy = { __proto__: null, ...options };
   for (const optionName of FD_SPECIFIC_OPTIONS) {
@@ -48924,7 +49066,7 @@ var DEFAULT_OPTIONS = {
 var FD_SPECIFIC_OPTIONS = ["lines", "buffer", "maxBuffer", "verbose", "stripFinalNewline"];
 var getFdSpecificValue = (optionArray, fdNumber) => fdNumber === "ipc" ? optionArray.at(-1) : optionArray[fdNumber];
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/values.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/values.js
 var isVerbose = ({ verbose }, fdNumber) => getFdVerbose(verbose, fdNumber) !== "none";
 var isFullVerbose = ({ verbose }, fdNumber) => !["none", "short"].includes(getFdVerbose(verbose, fdNumber));
 var getVerboseFunction = ({ verbose }, fdNumber) => {
@@ -48936,13 +49078,13 @@ var getFdGenericVerbose = (verbose) => verbose.find((fdVerbose) => isVerboseFunc
 var isVerboseFunction = (fdVerbose) => typeof fdVerbose === "function";
 var VERBOSE_VALUES = ["none", "short", "full"];
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/log.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/log.js
 import { inspect } from "node:util";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/default.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/default.js
 import process4 from "node:process";
 
-// ../../node_modules/.pnpm/is-unicode-supported@2.1.0/node_modules/is-unicode-supported/index.js
+// node_modules/.pnpm/is-unicode-supported@2.1.0/node_modules/is-unicode-supported/index.js
 import process3 from "node:process";
 function isUnicodeSupported() {
   const { env } = process3;
@@ -48953,7 +49095,7 @@ function isUnicodeSupported() {
   return Boolean(env.WT_SESSION) || Boolean(env.TERMINUS_SUBLIME) || env.ConEmuTask === "{cmd::Cmder}" || TERM_PROGRAM === "Terminus-Sublime" || TERM_PROGRAM === "vscode" || TERM === "xterm-256color" || TERM === "alacritty" || TERM === "rxvt-unicode" || TERM === "rxvt-unicode-256color" || env.TERMINAL_EMULATOR === "JetBrains-JediTerm";
 }
 
-// ../../node_modules/.pnpm/figures@6.1.0/node_modules/figures/index.js
+// node_modules/.pnpm/figures@6.1.0/node_modules/figures/index.js
 var common = {
   circleQuestionMark: "(?)",
   questionMarkPrefix: "(?)",
@@ -49229,7 +49371,7 @@ var figures = shouldUseMain ? mainSymbols : fallbackSymbols;
 var figures_default = figures;
 var replacements = Object.entries(specialMainSymbols);
 
-// ../../node_modules/.pnpm/yoctocolors@2.2.0/node_modules/yoctocolors/base.js
+// node_modules/.pnpm/yoctocolors@2.2.0/node_modules/yoctocolors/base.js
 import tty from "node:tty";
 var hasColors = tty?.WriteStream?.prototype?.hasColors?.() ?? false;
 var format = (open4, close) => {
@@ -49319,7 +49461,7 @@ var underlineMagentaBright = format("58;5;13", 59);
 var underlineCyanBright = format("58;5;14", 59);
 var underlineWhiteBright = format("58;5;15", 59);
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/default.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/default.js
 var hasColors2 = process4.env.FORCE_COLOR !== void 0 || process4.stderr.isTTY === true;
 var identity = (string4) => string4;
 var getColor = (color) => hasColors2 ? color : identity;
@@ -49364,7 +49506,7 @@ var COLORS = {
   duration: () => gray2
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/custom.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/custom.js
 var applyVerboseOnLines = (printedLines, verboseInfo, fdNumber) => {
   const verboseFunction = getVerboseFunction(verboseInfo, fdNumber);
   return printedLines.map(({ verboseLine, verboseObject }) => applyVerboseFunction(verboseLine, verboseObject, verboseFunction)).filter((printedLine) => printedLine !== void 0).map((printedLine) => appendNewline(printedLine)).join("");
@@ -49381,7 +49523,7 @@ var applyVerboseFunction = (verboseLine, verboseObject, verboseFunction) => {
 var appendNewline = (printedLine) => printedLine.endsWith("\n") ? printedLine : `${printedLine}
 `;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/log.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/log.js
 var verboseLog = ({ type, verboseMessage, fdNumber, verboseInfo, result }) => {
   const verboseObject = getVerboseObject({ type, result, verboseInfo });
   const printedLines = getPrintedLines(verboseMessage, verboseObject);
@@ -49413,7 +49555,7 @@ var serializeVerboseMessage = (message) => {
   return escapeLines(messageString);
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/start.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/start.js
 var logCommand = (escapedCommand, verboseInfo) => {
   if (!isVerbose(verboseInfo)) {
     return;
@@ -49425,7 +49567,7 @@ var logCommand = (escapedCommand, verboseInfo) => {
   });
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/info.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/info.js
 var getVerboseInfo = (verbose, escapedCommand, rawOptions) => {
   validateVerbose(verbose);
   const commandId = getCommandId(verbose);
@@ -49453,12 +49595,12 @@ var validateVerbose = (verbose) => {
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/duration.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/duration.js
 import { hrtime } from "node:process";
 var getStartTime = () => hrtime.bigint();
 var getDurationMs = (startTime) => Number(hrtime.bigint() - startTime) / 1e6;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/command.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/command.js
 var handleCommand = (filePath, rawArguments, rawOptions) => {
   const startTime = getStartTime();
   const { command, escapedCommand } = joinCommand(filePath, rawArguments, rawOptions.shell && !rawOptions.node);
@@ -49473,15 +49615,15 @@ var handleCommand = (filePath, rawArguments, rawOptions) => {
   };
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/options.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/options.js
 import path7 from "node:path";
 import process9 from "node:process";
 
-// ../../node_modules/.pnpm/npm-run-path@6.0.0/node_modules/npm-run-path/index.js
+// node_modules/.pnpm/npm-run-path@6.0.0/node_modules/npm-run-path/index.js
 import process5 from "node:process";
 import path2 from "node:path";
 
-// ../../node_modules/.pnpm/path-key@4.0.0/node_modules/path-key/index.js
+// node_modules/.pnpm/path-key@4.0.0/node_modules/path-key/index.js
 function pathKey2(options = {}) {
   const {
     env = process.env,
@@ -49493,7 +49635,7 @@ function pathKey2(options = {}) {
   return Object.keys(env).reverse().find((key) => key.toUpperCase() === "PATH") || "Path";
 }
 
-// ../../node_modules/.pnpm/unicorn-magic@0.3.0/node_modules/unicorn-magic/node.js
+// node_modules/.pnpm/unicorn-magic@0.3.0/node_modules/unicorn-magic/node.js
 import { promisify } from "node:util";
 import { execFile as execFileCallback, execFileSync as execFileSyncOriginal } from "node:child_process";
 import path from "node:path";
@@ -49517,7 +49659,7 @@ function traversePathUp(startPath) {
 }
 var TEN_MEGABYTES_IN_BYTES = 10 * 1024 * 1024;
 
-// ../../node_modules/.pnpm/npm-run-path@6.0.0/node_modules/npm-run-path/index.js
+// node_modules/.pnpm/npm-run-path@6.0.0/node_modules/npm-run-path/index.js
 var npmRunPath = ({
   cwd = process5.cwd(),
   path: pathOption = process5.env[pathKey2()],
@@ -49558,16 +49700,16 @@ var npmRunPathEnv = ({ env = process5.env, ...options } = {}) => {
   return env;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/kill.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/kill.js
 import { setTimeout as setTimeout3 } from "node:timers/promises";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/signal.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/signal.js
 import { constants as constants7 } from "node:os";
 
-// ../../node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/main.js
+// node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/main.js
 import { constants as constants6 } from "node:os";
 
-// ../../node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/realtime.js
+// node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/realtime.js
 var getRealtimeSignals = () => {
   const length = SIGRTMAX - SIGRTMIN + 1;
   return Array.from({ length }, getRealtimeSignal);
@@ -49582,10 +49724,10 @@ var getRealtimeSignal = (value, index) => ({
 var SIGRTMIN = 34;
 var SIGRTMAX = 64;
 
-// ../../node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/signals.js
+// node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/signals.js
 import { constants as constants5 } from "node:os";
 
-// ../../node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/core.js
+// node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/core.js
 var SIGNALS = [
   {
     name: "SIGHUP",
@@ -49858,7 +50000,7 @@ var SIGNALS = [
   }
 ];
 
-// ../../node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/signals.js
+// node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/signals.js
 var getSignals = () => {
   const realtimeSignals = getRealtimeSignals();
   const signals2 = [...SIGNALS, ...realtimeSignals].map(normalizeSignal);
@@ -49880,7 +50022,7 @@ var normalizeSignal = ({
   return { name, number: number4, description, supported, action, forced, standard };
 };
 
-// ../../node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/main.js
+// node_modules/.pnpm/human-signals@8.0.1/node_modules/human-signals/build/src/main.js
 var getSignalsByName = () => {
   const signals2 = getSignals();
   return Object.fromEntries(signals2.map(getSignalByName));
@@ -49931,7 +50073,7 @@ var findSignalByNumber = (number4, signals2) => {
 };
 var signalsByNumber = getSignalsByNumber();
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/signal.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/signal.js
 var normalizeKillSignal = (killSignal) => {
   const optionName = "option `killSignal`";
   if (killSignal === 0) {
@@ -49975,7 +50117,7 @@ var getAvailableSignalNames = () => Object.keys(constants7.signals).sort().map((
 var getAvailableSignalIntegers = () => [...new Set(Object.values(constants7.signals).sort((signalInteger, signalIntegerTwo) => signalInteger - signalIntegerTwo))].join(", ");
 var getSignalDescription = (signal) => signalsByName[signal].description;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/timeout.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/timeout.js
 import { setTimeout as setTimeout2 } from "node:timers/promises";
 var validateTimeout = ({ timeout }) => {
   if (timeout !== void 0) {
@@ -49996,7 +50138,7 @@ var killAfterTimeout = async (kill, timeout, context, { signal }) => {
   throw new DiscardedError();
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/kill.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/kill.js
 var normalizeForceKillAfterDelay = (forceKillAfterDelay) => {
   if (forceKillAfterDelay === false) {
     return forceKillAfterDelay;
@@ -50061,7 +50203,7 @@ var killOnTimeout = async ({ kill, forceKillAfterDelay, context, controllerSigna
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/abort-signal.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/abort-signal.js
 import { once } from "node:events";
 var onAbortedSignal = async (mainSignal, stopSignal) => {
   if (!mainSignal.aborted) {
@@ -50074,7 +50216,7 @@ var validateAbortSignal = (signal, optionName) => {
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/cancel.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/cancel.js
 var validateCancelSignal = ({ cancelSignal }) => {
   validateAbortSignal(cancelSignal, "cancelSignal");
 };
@@ -50091,13 +50233,13 @@ var terminateOnCancel = async (kill, cancelSignal, context, { signal }) => {
   throw cancelSignal.reason;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/graceful.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/graceful.js
 import { scheduler as scheduler2 } from "node:timers/promises";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/send.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/send.js
 import { promisify as promisify2 } from "node:util";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/validation.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/validation.js
 import { inspect as inspect2 } from "node:util";
 var validateIpcMethod = ({ methodName, isSubprocess, ipc, isConnected: isConnected2 }) => {
   validateIpcOption(methodName, isSubprocess, ipc);
@@ -50177,7 +50319,7 @@ var disconnect = (anyProcess) => {
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/deferred.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/deferred.js
 var createDeferred = () => {
   const methods = {};
   const promise2 = new Promise((resolve8, reject) => {
@@ -50186,10 +50328,10 @@ var createDeferred = () => {
   return Object.assign(promise2, methods);
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/strict.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/strict.js
 import { once as once3 } from "node:events";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/max-listeners.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/max-listeners.js
 import { addAbortListener } from "node:events";
 var incrementMaxListeners = (eventEmitter, maxListenersIncrement, signal) => {
   const maxListeners = eventEmitter.getMaxListeners();
@@ -50202,14 +50344,14 @@ var incrementMaxListeners = (eventEmitter, maxListenersIncrement, signal) => {
   });
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/forward.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/forward.js
 import { EventEmitter } from "node:events";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/incoming.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/incoming.js
 import { once as once2 } from "node:events";
 import { scheduler } from "node:timers/promises";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/reference.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/reference.js
 var addReference = (channel, reference) => {
   if (reference) {
     addReferenceCount(channel);
@@ -50241,7 +50383,7 @@ var redoAddedReferences = (channel, isSubprocess) => {
   addReferenceCount(channel);
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/incoming.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/incoming.js
 var onMessage = async ({ anyProcess, channel, isSubprocess, ipcEmitter }, wrappedMessage) => {
   if (handleStrictResponse(wrappedMessage, anyProcess) || isSubprocess && handleAbort(wrappedMessage)) {
     return;
@@ -50284,7 +50426,7 @@ var onDisconnect = async ({ anyProcess, channel, isSubprocess, ipcEmitter, bound
 };
 var INCOMING_MESSAGES = /* @__PURE__ */ new WeakMap();
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/forward.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/forward.js
 var getIpcEmitter = (anyProcess, channel, isSubprocess) => {
   if (IPC_EMITTERS.has(anyProcess)) {
     return IPC_EMITTERS.get(anyProcess);
@@ -50324,7 +50466,7 @@ var isConnected = (anyProcess) => {
   return ipcEmitter === void 0 ? anyProcess.channel !== void 0 && anyProcess.channel !== null : ipcEmitter.connected;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/strict.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/strict.js
 var handleSendStrict = ({ anyProcess, channel, isSubprocess, message, strict }) => {
   if (!strict) {
     return message;
@@ -50413,7 +50555,7 @@ var REQUEST_TYPE = "execa:ipc:request";
 var RESPONSE_TYPE = "execa:ipc:response";
 var isStrictRequest = (wrappedMessage) => wrappedMessage?.type === REQUEST_TYPE && Number.isInteger(wrappedMessage.id) && typeof wrappedMessage.hasListeners === "boolean";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/outgoing.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/outgoing.js
 var startSendMessage = (anyProcess, wrappedMessage, strict) => {
   if (!OUTGOING_MESSAGES.has(anyProcess)) {
     OUTGOING_MESSAGES.set(anyProcess, /* @__PURE__ */ new Set());
@@ -50445,7 +50587,7 @@ var hasMessageListeners = (anyProcess, ipcEmitter) => ipcEmitter.listenerCount("
 var getMinListenerCount = (anyProcess) => getOptions(anyProcess) !== void 0 && !getFdSpecificValue(getOptions(anyProcess).buffer, "ipc") ? 1 : 0;
 var getOptions = (anyProcess) => IPC_SUBPROCESS_OPTIONS.get(anyProcess);
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/send.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/send.js
 var sendMessage = ({ anyProcess, channel, isSubprocess, ipc }, message, options) => {
   const { strict = false } = copyOptions(options);
   checkBooleanOption(strict, "strict");
@@ -50519,7 +50661,7 @@ var getSendMethod = (anyProcess) => {
 };
 var PROCESS_SEND_METHODS = /* @__PURE__ */ new WeakMap();
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/graceful.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/graceful.js
 var sendAbort = (subprocess, message) => {
   const methodName = "cancelSignal";
   validateConnection(methodName, false, subprocess.connected);
@@ -50570,7 +50712,7 @@ var abortOnDisconnect = () => {
 };
 var cancelController = new AbortController();
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/graceful.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/graceful.js
 var validateGracefulCancel = ({ gracefulCancel, cancelSignal, ipc, serialization }) => {
   if (!gracefulCancel) {
     return;
@@ -50628,7 +50770,7 @@ var getReason = ({ reason }) => {
   return error62;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/node.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/node.js
 import { execPath, execArgv } from "node:process";
 import path3 from "node:path";
 var mapNode = ({ options }) => {
@@ -50700,7 +50842,7 @@ var handleNodeOption = (file3, commandArguments, {
   ];
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/ipc-input.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/ipc-input.js
 import { serialize } from "node:v8";
 var validateIpcInputOption = ({ ipcInput, ipc, serialization }) => {
   if (ipcInput === void 0) {
@@ -50744,7 +50886,7 @@ var sendIpcInput = async (subprocess, ipcInput, ipc) => {
   }, ipcInput);
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/encoding-option.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/encoding-option.js
 var validateEncoding = ({ encoding }) => {
   if (ENCODINGS.has(encoding)) {
     return;
@@ -50789,13 +50931,13 @@ var ENCODING_ALIASES = {
 };
 var serializeEncoding = (encoding) => typeof encoding === "string" ? `"${encoding}"` : String(encoding);
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/command-file.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/command-file.js
 import { openSync as openSync7, readSync as readSync4, closeSync as closeSync7 } from "node:fs";
 import { Buffer as Buffer2 } from "node:buffer";
 import path5 from "node:path";
 import process7 from "node:process";
 
-// ../../node_modules/.pnpm/which-command@0.1.0/node_modules/which-command/index.js
+// node_modules/.pnpm/which-command@0.1.0/node_modules/which-command/index.js
 import fs from "node:fs";
 import path4 from "node:path";
 import process6 from "node:process";
@@ -50878,7 +51020,7 @@ function whichCommandSync(command, options = {}) {
   return void 0;
 }
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/command-file.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/command-file.js
 var parseCommandFile = (file3, commandArguments, options) => {
   const parsed = { file: file3, commandArguments: [...commandArguments], options };
   return options.shell || process7.platform !== "win32" ? parsed : escapeWindowsCommand(parsed);
@@ -51007,7 +51149,7 @@ var escapeArgument = (rawArgument) => {
 };
 var shouldQuoteArgument = (argument) => argument === "" || argument.endsWith("\\") || quotedCharacterRegExp.test(argument);
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/cwd.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/cwd.js
 import { statSync as statSync6 } from "node:fs";
 import path6 from "node:path";
 import process8 from "node:process";
@@ -51046,7 +51188,7 @@ ${originalMessage}`;
 ${originalMessage}`;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/options.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/options.js
 var cmdExeRegExp = /^cmd(?:\.exe)?$/i;
 var normalizeOptions = (filePath, rawArguments, rawOptions) => {
   const sanitizedOptions = { __proto__: null, ...rawOptions };
@@ -51147,13 +51289,13 @@ var computeEnv = ({ env: envOption, extendEnv, preferLocal, node: node2, localDi
   return env;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/shell.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/shell.js
 var concatenateShell = (file3, commandArguments, options) => options.shell && commandArguments.length > 0 ? [[file3, ...commandArguments].join(" "), [], options] : [file3, commandArguments, options];
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/all-sync.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/all-sync.js
 import { Buffer as Buffer3 } from "node:buffer";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/split.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/split.js
 var getSplitLinesGenerator = (binary, preserveNewlines, skipped, state) => binary || skipped ? void 0 : initializeSplitLines(preserveNewlines, state);
 var splitLinesSync = (chunk, preserveNewlines, objectMode) => objectMode ? chunk.flatMap((item) => splitLinesItemSync(item, preserveNewlines)) : splitLinesItemSync(chunk, preserveNewlines);
 var splitLinesItemSync = (chunk, preserveNewlines) => {
@@ -51237,7 +51379,7 @@ var LINES_BYTES_INFO = {
   }
 };
 
-// ../../node_modules/.pnpm/strip-final-newline@4.0.0/node_modules/strip-final-newline/index.js
+// node_modules/.pnpm/strip-final-newline@4.0.0/node_modules/strip-final-newline/index.js
 function stripFinalNewline(input2) {
   if (typeof input2 === "string") {
     return stripFinalNewlineString(input2);
@@ -51254,11 +51396,11 @@ var LF_BINARY = LF.codePointAt(0);
 var CR = "\r";
 var CR_BINARY = CR.codePointAt(0);
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/strip-newline.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/strip-newline.js
 var stripNewline = (value, { stripFinalNewline: stripFinalNewline2 }, fdNumber, allFds) => value !== void 0 && !Array.isArray(value) && getStripFinalNewline(stripFinalNewline2, fdNumber, allFds) ? stripFinalNewline(value) : value;
 var getStripFinalNewline = (stripFinalNewline2, fdNumber, allFds) => fdNumber === "all" ? allFds.some((allFd) => stripFinalNewline2[allFd]) : stripFinalNewline2[fdNumber];
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/all-sync.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/all-sync.js
 var getAllSyncFds = ([, stdout, stderr]) => [
   ...stdout === void 0 ? [] : [1],
   ...stderr === void 0 ? [] : [2]
@@ -51289,14 +51431,14 @@ var BASE64_ENCODINGS = /* @__PURE__ */ new Set(["base64", "base64url"]);
 var hasLines = ({ lines }) => Boolean(lines[1] || lines[2]);
 var splitAllLines = (value, allFds, options) => value === void 0 || Array.isArray(value) || !hasLines(options) ? value : splitLinesSync(value, !getStripFinalNewline(options.stripFinalNewline, "all", allFds), false);
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/message.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/message.js
 import { inspect as inspect3 } from "node:util";
 
-// ../../node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/index.js
+// node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/index.js
 import { on } from "node:events";
 import { finished } from "node:stream/promises";
 
-// ../../node_modules/.pnpm/is-stream@4.0.1/node_modules/is-stream/index.js
+// node_modules/.pnpm/is-stream@4.0.1/node_modules/is-stream/index.js
 function isStream(stream, { checkOpen = true } = {}) {
   return stream !== null && typeof stream === "object" && (stream.writable || stream.readable || !checkOpen || stream.writable === void 0 && stream.readable === void 0) && typeof stream.pipe === "function";
 }
@@ -51310,7 +51452,7 @@ function isDuplexStream(stream, options) {
   return isWritableStream(stream, options) && isReadableStream(stream, options);
 }
 
-// ../../node_modules/.pnpm/@sec-ant+readable-stream@0.4.1/node_modules/@sec-ant/readable-stream/dist/ponyfill/asyncIterator.js
+// node_modules/.pnpm/@sec-ant+readable-stream@0.4.1/node_modules/@sec-ant/readable-stream/dist/ponyfill/asyncIterator.js
 var a = Object.getPrototypeOf(
   Object.getPrototypeOf(
     /* istanbul ignore next */
@@ -51398,7 +51540,7 @@ function h({ preventCancel: r = false } = {}) {
   return s[n] = t, s;
 }
 
-// ../../node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/stream.js
+// node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/stream.js
 var getAsyncIterable = (stream) => {
   if (isReadableStream(stream, { checkOpen: false }) && nodeImports.on !== void 0) {
     return getStreamIterable(stream);
@@ -51446,7 +51588,7 @@ var handleStreamEnd = async (stream, controller, state) => {
 };
 var nodeImports = {};
 
-// ../../node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/contents.js
+// node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/contents.js
 var getStreamContents = async (stream, { init, convertChunk, getSize, truncateChunk, addChunk, getFinalChunk, finalize: finalize2 }, { maxBuffer = Number.POSITIVE_INFINITY } = {}) => {
   const asyncIterable = getAsyncIterable(stream);
   const state = init();
@@ -51541,7 +51683,7 @@ var MaxBufferError = class extends Error {
   }
 };
 
-// ../../node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/utils.js
+// node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/utils.js
 var identity2 = (value) => value;
 var noop = () => void 0;
 var getContentsProperty = ({ contents }) => contents;
@@ -51550,7 +51692,7 @@ var throwObjectStream = (chunk) => {
 };
 var getLengthProperty = (convertedChunk) => convertedChunk.length;
 
-// ../../node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/array.js
+// node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/array.js
 async function getStreamAsArray(stream, options) {
   return getStreamContents(stream, arrayMethods, options);
 }
@@ -51577,7 +51719,7 @@ var arrayMethods = {
   finalize: getContentsProperty
 };
 
-// ../../node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/array-buffer.js
+// node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/array-buffer.js
 async function getStreamAsArrayBuffer(stream, options) {
   return getStreamContents(stream, arrayBufferMethods, options);
 }
@@ -51630,7 +51772,7 @@ var arrayBufferMethods = {
   finalize: finalizeArrayBuffer
 };
 
-// ../../node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/string.js
+// node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/string.js
 async function getStreamAsString(stream, options) {
   return getStreamContents(stream, stringMethods, options);
 }
@@ -51659,10 +51801,10 @@ var stringMethods = {
   finalize: getContentsProperty
 };
 
-// ../../node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/index.js
+// node_modules/.pnpm/get-stream@9.0.1/node_modules/get-stream/source/index.js
 Object.assign(nodeImports, { on, finished });
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/max-buffer.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/max-buffer.js
 var handleMaxBuffer = ({ error: error62, stream, readableObjectMode, lines, encoding, fdNumber }) => {
   if (!(error62 instanceof MaxBufferError)) {
     throw error62;
@@ -51728,7 +51870,7 @@ var truncateMaxBufferSync = (result, fdNumber, { maxBuffer, buffer }) => {
   return buffer[fdNumber] && result.length > maxBufferValue ? result.slice(0, maxBufferValue) : result;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/message.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/message.js
 var createMessages = ({
   stdio,
   all,
@@ -51842,7 +51984,7 @@ var serializeMessageItem = (messageItem) => {
   return isUint8Array(messageItem) ? uint8ArrayToString(messageItem) : "";
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/result.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/result.js
 var makeSuccessResult = ({
   command,
   escapedCommand,
@@ -52032,7 +52174,7 @@ var normalizeExitPayload = (rawExitCode, rawSignal) => {
   return { exitCode, signal, signalDescription };
 };
 
-// ../../node_modules/.pnpm/parse-ms@4.0.0/node_modules/parse-ms/index.js
+// node_modules/.pnpm/parse-ms@4.0.0/node_modules/parse-ms/index.js
 var toZeroIfInfinity = (value) => Number.isFinite(value) ? value : 0;
 function parseNumber(milliseconds) {
   return {
@@ -52071,7 +52213,7 @@ function parseMilliseconds(milliseconds) {
   throw new TypeError("Expected a finite number or bigint");
 }
 
-// ../../node_modules/.pnpm/pretty-ms@9.3.1/node_modules/pretty-ms/index.js
+// node_modules/.pnpm/pretty-ms@9.3.1/node_modules/pretty-ms/index.js
 var isZero = (value) => value === 0 || value === 0n;
 var pluralize = (word2, count3) => count3 === 1 || count3 === 1n ? word2 : `${word2}s`;
 var SECOND_ROUNDING_EPSILON = 1e-7;
@@ -52171,7 +52313,7 @@ function prettyMilliseconds(milliseconds, options) {
   return sign + result.join(separator);
 }
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/error.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/error.js
 var logError = (result, verboseInfo) => {
   if (result.failed) {
     verboseLog({
@@ -52183,7 +52325,7 @@ var logError = (result, verboseInfo) => {
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/complete.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/complete.js
 var logResult = (result, verboseInfo) => {
   if (!isVerbose(verboseInfo)) {
     return;
@@ -52201,7 +52343,7 @@ var logDuration = (result, verboseInfo) => {
   });
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/reject.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/reject.js
 var handleResult = (result, verboseInfo, { reject }) => {
   logResult(result, verboseInfo);
   if (reject && result.failed) {
@@ -52210,10 +52352,10 @@ var handleResult = (result, verboseInfo, { reject }) => {
   return result;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
 import { readFileSync as readFileSync41 } from "node:fs";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value, optionName) => {
   if (isAsyncGenerator(value)) {
     return "asyncGenerator";
@@ -52330,7 +52472,7 @@ var TYPE_TO_MESSAGE = {
   uint8Array: "a Uint8Array"
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/object-mode.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/object-mode.js
 var getTransformObjectModes = (objectMode, index, newTransforms, direction) => direction === "output" ? getOutputObjectModes(objectMode, index, newTransforms) : getInputObjectModes(objectMode, index, newTransforms);
 var getOutputObjectModes = (objectMode, index, newTransforms) => {
   const writableObjectMode = index !== 0 && newTransforms[index - 1].value.readableObjectMode;
@@ -52350,7 +52492,7 @@ var getFdObjectMode = (stdioItems, direction) => {
   return direction === "input" ? lastTransform.value.writableObjectMode : lastTransform.value.readableObjectMode;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/normalize.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/normalize.js
 var normalizeTransforms = (stdioItems, optionName, direction, options) => [
   ...stdioItems.filter(({ type }) => !TRANSFORM_TYPES.has(type)),
   ...getTransforms(stdioItems, optionName, direction, options)
@@ -52438,7 +52580,7 @@ var normalizeGenerator = ({ stdioItem, stdioItem: { value }, index, newTransform
 };
 var sortTransforms = (newTransforms, direction) => direction === "input" ? newTransforms.reverse() : newTransforms;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/direction.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/direction.js
 import process10 from "node:process";
 var getStreamDirection = ({ stdioItems, isStdioArray, fdNumber, optionName }) => {
   const directions = stdioItems.map((stdioItem) => getStdioItemDirection(stdioItem, fdNumber, isStdioArray));
@@ -52516,10 +52658,10 @@ var getStandardStreamDirection = (value) => {
 };
 var DEFAULT_DIRECTION = "output";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/array.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/array.js
 var normalizeIpcStdioArray = (stdioArray, ipc) => ipc ? [...stdioArray, "ipc"] : stdioArray;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/stdio-option.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/stdio-option.js
 var normalizeStdioOption = (options, verboseInfo, isSync) => {
   const { stdio, ipc, buffer } = options;
   const stdioArray = getStdioArray(stdio, options).map((stdioOption, fdNumber) => addDefaultValue2(stdioOption, fdNumber));
@@ -52566,11 +52708,11 @@ var isOutputPipeObject = (stdioOption, fdNumber) => isStdioValueObject(stdioOpti
 var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutputFd(fdNumber);
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
 import { readFileSync as readFileSync40 } from "node:fs";
 import tty2 from "node:tty";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
 var getToStream = (destination, to = "stdin") => {
   const isWritable = true;
   const { options, fileDescriptors } = SUBPROCESS_OPTIONS.get(destination);
@@ -52648,7 +52790,7 @@ var serializeOptionValue = (value) => {
   return typeof value === "number" ? `${value}` : "Stream";
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
 var handleNativeStream = ({ stdioItem, stdioItem: { type }, isStdioArray, fdNumber, direction, isSync }) => {
   if (!isStdioArray || type !== "native") {
     return stdioItem;
@@ -52712,7 +52854,7 @@ var getStandardStream = (fdNumber, value, optionName) => {
   return standardStream;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/input-option.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/input-option.js
 var handleInputOptions = ({ input: input2, inputFile }, fdNumber) => fdNumber === 0 ? [
   ...handleInputOption(input2),
   ...handleInputFileOption(inputFile)
@@ -52748,7 +52890,7 @@ var getInputFileType = (inputFile) => {
   throw new Error("The `inputFile` option must be a file path string or a file URL.");
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/duplicate.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/duplicate.js
 import path8 from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 var isFileType = (type) => SPECIAL_DUPLICATE_TYPES_SYNC.has(type);
@@ -52823,7 +52965,7 @@ var throwOnDuplicateStream = (stdioItem, optionName, type) => {
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle.js
 var handleStdio = (addProperties3, options, verboseInfo, isSync) => {
   const stdio = normalizeStdioOption(options, verboseInfo, isSync);
   const initialFileDescriptors = stdio.map((stdioOption, fdNumber) => getFileDescriptor({
@@ -53032,7 +53174,7 @@ var forwardStdio = (stdioItems) => {
   return type === "native" ? value : "pipe";
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
 var handleStdioSync = (options, verboseInfo) => handleStdio(addPropertiesSync, options, verboseInfo, true);
 var forbiddenIfSync = ({ type, optionName }) => {
   throwInvalidSyncValue(optionName, TYPE_TO_MESSAGE[type]);
@@ -53094,11 +53236,11 @@ var addPropertiesSync = {
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/generator.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/generator.js
 import { Transform, getDefaultHighWaterMark } from "node:stream";
 import { Buffer as Buffer6 } from "node:buffer";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/validate.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/validate.js
 import { Buffer as Buffer4 } from "node:buffer";
 var getValidateTransformInput = (writableObjectMode, optionName) => writableObjectMode ? void 0 : validateStringTransformInput.bind(void 0, optionName);
 var validateStringTransformInput = function* (optionName, chunk) {
@@ -53127,7 +53269,7 @@ Instead, \`yield\` should either be called with a value, or not be called at all
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/encoding-transform.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/encoding-transform.js
 import { Buffer as Buffer5 } from "node:buffer";
 import { StringDecoder as StringDecoder2 } from "node:string_decoder";
 var getEncodingTransformGenerator = (binary, encoding, skipped) => {
@@ -53166,7 +53308,7 @@ var stringToBytesGenerator = function* (stringEncoding, chunk) {
   yield typeof chunk === "string" ? bufferToUint8Array(Buffer5.from(chunk, stringEncoding)) : chunk;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/run-async.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/run-async.js
 import { callbackify } from "node:util";
 var pushChunks = callbackify(async (getChunks2, state, getChunksArguments, transformStream) => {
   state.currentIterable = getChunks2(...getChunksArguments);
@@ -53214,7 +53356,7 @@ var identityGenerator = function* (chunk) {
   yield chunk;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/run-sync.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/run-sync.js
 var pushChunksSync = (getChunksSync, getChunksArguments, transformStream, done) => {
   try {
     for (const chunk of getChunksSync(...getChunksArguments)) {
@@ -53266,7 +53408,7 @@ var identityGenerator2 = function* (chunk) {
   yield chunk;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/generator.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/transform/generator.js
 var generatorToStream = ({
   value,
   value: {
@@ -53334,7 +53476,7 @@ var addInternalGenerators = ({ transform: transform2, final, binary, writableObj
   ].filter(Boolean);
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/input-sync.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/input-sync.js
 var addInputOptionsSync = (fileDescriptors, options) => {
   for (const fdNumber of getInputFdNumbers(fileDescriptors)) {
     addInputOptionSync(fileDescriptors, fdNumber, options);
@@ -53371,10 +53513,10 @@ var throwOnSerializableInput = (optionName, invalidItem) => {
   throw new TypeError(`The \`${optionName}\` option is invalid: when passing objects as input, a transform must be used to serialize them to strings or Uint8Arrays: ${invalidItem}.`);
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-sync.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-sync.js
 import { writeFileSync as writeFileSync14, appendFileSync } from "node:fs";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/output.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/output.js
 var shouldLogOutput = ({ stdioItems, encoding, verboseInfo, fdNumber }) => fdNumber !== "all" && isFullVerbose(verboseInfo, fdNumber) && !BINARY_ENCODINGS.has(encoding) && isFdVerbose(fdNumber) && (stdioItems.some(({ type, value }) => type === "native" && PIPED_STDIO_VALUES.has(value)) || stdioItems.every(({ type }) => TRANSFORM_TYPES.has(type)));
 var isFdVerbose = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 var PIPED_STDIO_VALUES = /* @__PURE__ */ new Set(["pipe", "overlapped"]);
@@ -53401,7 +53543,7 @@ var logLine = (line4, fdNumber, verboseInfo) => {
   });
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-sync.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-sync.js
 var transformOutputSync = ({ fileDescriptors, syncResult, options, verboseInfo }) => {
   const output2 = syncResult.output ?? getSpawnFailureOutput(options);
   const outputFiles = /* @__PURE__ */ new Set();
@@ -53512,7 +53654,7 @@ var writeToFiles = (chunks, stdioItems, outputFiles) => {
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/exit-async.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/exit-async.js
 import { once as once4 } from "node:events";
 var waitForExit = async (subprocess, context) => {
   const [exitCode, signal] = await waitForExitOrError(subprocess);
@@ -53546,7 +53688,7 @@ var waitForSuccessfulExit = async (exitPromise) => {
 var isSubprocessErrorExit = (exitCode, signal) => exitCode === void 0 && signal === void 0;
 var isFailedExit = (exitCode, signal) => exitCode !== 0 || signal !== null;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/exit-sync.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/exit-sync.js
 var getExitResultSync = ({ error: error62, status: exitCode, signal, output: output2 }, { maxBuffer, buffer }) => {
   const initialError = getResultError(error62, exitCode, signal);
   const isTimedOut = initialError?.code === "ETIMEDOUT";
@@ -53571,7 +53713,7 @@ var getResultError = (error62, exitCode, signal) => {
   return isFailedExit(exitCode, signal) ? new DiscardedError() : void 0;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/main-sync.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/main-sync.js
 var execaCoreSync = (rawFile, rawArguments, rawOptions) => {
   const { file: file3, commandArguments, command, escapedCommand, startTime, verboseInfo, options, fileDescriptors } = handleSyncArguments(rawFile, rawArguments, rawOptions);
   const result = spawnSubprocessSync({
@@ -53707,14 +53849,14 @@ var getSyncResult = ({ error: error62, exitCode, signal, timedOut, isMaxBuffer, 
   isSync: true
 });
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/main-async.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/main-async.js
 import { setMaxListeners, once as once9 } from "node:events";
 import { spawn } from "node:child_process";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/methods.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/methods.js
 import process11 from "node:process";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/get-one.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/get-one.js
 import { once as once5, on as on2 } from "node:events";
 var internalGetOneMessageOptions = /* @__PURE__ */ Symbol("internalGetOneMessageOptions");
 var getOneMessage = ({ anyProcess, channel, isSubprocess, ipc }, rawOptions) => {
@@ -53789,7 +53931,7 @@ var throwOnStrictError = async (ipcEmitter, isSubprocess, { signal }) => {
   throw getStrictResponseError(error62, isSubprocess);
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/get-each.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/get-each.js
 import { once as once6, on as on3 } from "node:events";
 var internalGetEachMessageOptions = /* @__PURE__ */ Symbol("internalGetEachMessageOptions");
 var getEachMessage = (subprocessInfo, rawOptions) => {
@@ -53887,7 +54029,7 @@ var throwIfStrictError = ({ error: error62 }) => {
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/methods.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/methods.js
 var addIpcMethods = (target, subprocess, { ipc }) => {
   Object.assign(target, getIpcMethods(subprocess, false, ipc, target));
 };
@@ -53927,7 +54069,7 @@ var getIpcMethods = (anyProcess, isSubprocess, ipc, waitProcess = anyProcess) =>
   })
 });
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/early-error.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/early-error.js
 import { ChildProcess as ChildProcess2 } from "node:child_process";
 import { callbackify as callbackify2 } from "node:util";
 import {
@@ -54025,7 +54167,7 @@ var handleDummyPromise = async ({ error: error62, command, escapedCommand, fileD
   return handleResult(earlyError, verboseInfo, options);
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-async.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-async.js
 import { createReadStream, createWriteStream } from "node:fs";
 import { Buffer as Buffer7 } from "node:buffer";
 import { Readable as Readable2, Writable as Writable2, Duplex as Duplex2 } from "node:stream";
@@ -54094,7 +54236,7 @@ var addPropertiesAsync = {
   }
 };
 
-// ../../node_modules/.pnpm/@sindresorhus+merge-streams@4.0.0/node_modules/@sindresorhus/merge-streams/index.js
+// node_modules/.pnpm/@sindresorhus+merge-streams@4.0.0/node_modules/@sindresorhus/merge-streams/index.js
 import { on as on4, once as once7 } from "node:events";
 import { PassThrough as PassThroughStream, getDefaultHighWaterMark as getDefaultHighWaterMark2 } from "node:stream";
 import { finished as finished2 } from "node:stream/promises";
@@ -54311,7 +54453,7 @@ var updateMaxListeners = (passThroughStream, increment2) => {
 var PASSTHROUGH_LISTENERS_COUNT = 2;
 var PASSTHROUGH_LISTENERS_PER_STREAM = 1;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/pipeline.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/pipeline.js
 import { finished as finished3 } from "node:stream/promises";
 var pipeStreams = (source, destination, onDestinationEnd) => {
   source.pipe(destination);
@@ -54352,7 +54494,7 @@ var abortSourceStream = (source) => {
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-async.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-async.js
 var pipeOutputAsync = (subprocess, fileDescriptors, controller) => {
   const pipeGroups = /* @__PURE__ */ new Map();
   for (const [fdNumber, { stdioItems, direction }] of Object.entries(fileDescriptors)) {
@@ -54406,7 +54548,7 @@ var setStandardStreamMaxListeners = (stream, { signal }) => {
 };
 var MAX_LISTENERS_INCREMENT = 2;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/kill-descendants.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/kill-descendants.js
 import process12 from "node:process";
 import { execFile } from "node:child_process";
 import path9 from "node:path/win32";
@@ -54456,10 +54598,10 @@ var isWindowsDriveAbsolutePath = (directory) => {
   return /^[a-z]:[/\\]/i.test(root);
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/cleanup.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/cleanup.js
 import { addAbortListener as addAbortListener2 } from "node:events";
 
-// ../../node_modules/.pnpm/signal-exit@4.1.0/node_modules/signal-exit/dist/mjs/signals.js
+// node_modules/.pnpm/signal-exit@4.1.0/node_modules/signal-exit/dist/mjs/signals.js
 var signals = [];
 signals.push("SIGHUP", "SIGINT", "SIGTERM");
 if (process.platform !== "win32") {
@@ -54483,7 +54625,7 @@ if (process.platform === "linux") {
   signals.push("SIGIO", "SIGPOLL", "SIGPWR", "SIGSTKFLT");
 }
 
-// ../../node_modules/.pnpm/signal-exit@4.1.0/node_modules/signal-exit/dist/mjs/index.js
+// node_modules/.pnpm/signal-exit@4.1.0/node_modules/signal-exit/dist/mjs/index.js
 var processOk = (process14) => !!process14 && typeof process14 === "object" && typeof process14.removeListener === "function" && typeof process14.emit === "function" && typeof process14.reallyExit === "function" && typeof process14.listeners === "function" && typeof process14.kill === "function" && typeof process14.pid === "number" && typeof process14.on === "function";
 var kExitEmitter = /* @__PURE__ */ Symbol.for("signal-exit emitter");
 var global = globalThis;
@@ -54710,7 +54852,7 @@ var {
   unload
 } = signalExitWrap(processOk(process13) ? new SignalExit(process13) : new SignalExitFallback());
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/cleanup.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/cleanup.js
 var cleanupOnExit = (kill, { cleanup, detached }, { signal }) => {
   if (!cleanup || detached) {
     return;
@@ -54723,7 +54865,7 @@ var cleanupOnExit = (kill, { cleanup, detached }, { signal }) => {
   });
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/concurrent.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/concurrent.js
 var initializeConcurrentStreams = () => ({
   readableDestroy: /* @__PURE__ */ new WeakMap(),
   writableFinal: /* @__PURE__ */ new WeakMap(),
@@ -54749,7 +54891,7 @@ var waitForConcurrentStreams = async ({ resolve: resolve8, promises }, subproces
   return !isSubprocessExit;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/iterate.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/iterate.js
 import { on as on5 } from "node:events";
 import { getDefaultHighWaterMark as getDefaultHighWaterMark3 } from "node:stream";
 var iterateOnSubprocessStream = ({ subprocessStdout, subprocess, binary, shouldEncode, encoding, preserveNewlines }) => {
@@ -54842,7 +54984,7 @@ var getGenerators = ({ binary, shouldEncode, encoding, shouldSplit, preserveNewl
   getSplitLinesGenerator(binary, preserveNewlines, !shouldSplit, {})
 ].filter(Boolean);
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/iterable.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/iterable.js
 var createIterable = (subprocess, encoding, options) => {
   const { from, binary: binaryOption = false, preserveNewlines = false } = copyOptions(options);
   checkBooleanOption(binaryOption, "binary");
@@ -54870,14 +55012,14 @@ var iterateOnStdoutData = async function* (onStdoutData, subprocessStdout, subpr
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/readable.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/readable.js
 import { Readable as Readable3 } from "node:stream";
 import { callbackify as callbackify3 } from "node:util";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/shared.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/shared.js
 import { finished as finished5 } from "node:stream/promises";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/wait-stream.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/wait-stream.js
 import { finished as finished4 } from "node:stream/promises";
 var waitForStream = async (stream, fdNumber, streamInfo, {
   isSameDirection,
@@ -54945,7 +55087,7 @@ var isInputFileDescriptor = ({ fileDescriptors }, fdNumber) => fdNumber !== "all
 var isStreamAbort = (error62) => error62?.code === "ERR_STREAM_PREMATURE_CLOSE";
 var isStreamEpipe = (error62) => error62?.code === "EPIPE";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/shared.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/shared.js
 var safeWaitForSubprocessStdin = async (subprocessStdin) => {
   if (subprocessStdin === void 0) {
     return;
@@ -54983,7 +55125,7 @@ var destroyOtherStream = (stream, isOpen2, error62) => {
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/readable.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/readable.js
 var createReadable = ({ subprocess, concurrentStreams, encoding }, options) => {
   const { from, binary: binaryOption = true, preserveNewlines = true } = copyOptions(options);
   checkBooleanOption(binaryOption, "binary");
@@ -55079,13 +55221,13 @@ var destroyOtherReadable = (stream, error62) => {
   destroyOtherStream(stream, stream.readable, error62);
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/web.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/web.js
 import { Readable as Readable4, Writable as Writable3, Duplex as Duplex3 } from "node:stream";
 var createReadableStream = (subprocess, readableOptions) => Readable4.toWeb(subprocess.readable(readableOptions));
 var createWritableStream = (subprocess, writableOptions) => Writable3.toWeb(subprocess.writable(writableOptions));
 var createTransformStream = (subprocess, duplexOptions) => Duplex3.toWeb(subprocess.duplex(duplexOptions));
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/pipe/pipe-arguments.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/pipe/pipe-arguments.js
 var normalizePipeArguments = ({ source, sourcePromise, boundOptions, createNested }, ...pipeArguments) => {
   const startTime = getStartTime();
   const {
@@ -55181,7 +55323,7 @@ var getSourceStream = (source, from) => {
   }
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/pipe/throw.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/pipe/throw.js
 var handlePipeArgumentsError = ({
   sourceStream,
   sourceError,
@@ -55231,7 +55373,7 @@ var createNonCommandError = ({ error: error62, fileDescriptors, sourceOptions, s
 });
 var PIPE_COMMAND_MESSAGE = "source.pipe(destination)";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/pipe/sequence.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/pipe/sequence.js
 var waitForBothSubprocesses = async (subprocessPromises) => {
   const [
     { status: sourceStatus, reason: sourceReason, value: sourceResult = sourceReason },
@@ -55250,7 +55392,7 @@ var waitForBothSubprocesses = async (subprocessPromises) => {
   return destinationResult;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/pipe/streaming.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/pipe/streaming.js
 import { finished as finished6 } from "node:stream/promises";
 var pipeSubprocessStream = (sourceStream, destinationStream, maxListenersController) => {
   const mergedStream = MERGED_STREAMS.has(destinationStream) ? pipeMoreSubprocessStream(sourceStream, destinationStream) : pipeFirstSubprocessStream(sourceStream, destinationStream);
@@ -55309,7 +55451,7 @@ var MERGED_STREAMS = /* @__PURE__ */ new WeakMap();
 var SOURCE_LISTENERS_PER_PIPE = 2;
 var DESTINATION_LISTENERS_PER_PIPE = 1;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/pipe/abort.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/pipe/abort.js
 import { aborted as aborted2 } from "node:util";
 var unpipeOnAbort = (unpipeSignal, unpipeContext) => unpipeSignal === void 0 ? [] : [unpipeOnSignalAbort(unpipeSignal, unpipeContext)];
 var unpipeOnSignalAbort = async (unpipeSignal, { sourceStream, mergedStream, fileDescriptors, sourceOptions, startTime }) => {
@@ -55324,7 +55466,7 @@ var unpipeOnSignalAbort = async (unpipeSignal, { sourceStream, mergedStream, fil
   });
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/pipe/setup.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/pipe/setup.js
 var pipeToSubprocess = (sourceInfo, ...pipeArguments) => {
   if (isPlainObject3(pipeArguments[0])) {
     return pipeToSubprocess.bind(void 0, {
@@ -55511,7 +55653,7 @@ var handlePipePromise = async ({
 };
 var getSubprocessPromises = (sourcePromise, destination, source) => Promise.allSettled([sourcePromise, destination, source]);
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/contents.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/contents.js
 import { setImmediate } from "node:timers/promises";
 var getStreamOutput = async ({ stream, onStreamEnd, fdNumber, encoding, buffer, maxBuffer, lines, allMixed, stripFinalNewline: stripFinalNewline2, allFds, verboseInfo, streamInfo }) => {
   const logPromise = logOutputAsync({
@@ -55600,7 +55742,7 @@ var getBufferedData = async (streamPromise) => {
 };
 var handleBufferedData = (error62) => isArrayBuffer(error62?.bufferedData) ? new Uint8Array(error62.bufferedData) : error62?.bufferedData;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/stdio.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/stdio.js
 var waitForStdioStreams = ({ subprocess, encoding, buffer, maxBuffer, lines, stripFinalNewline: stripFinalNewline2, verboseInfo, streamInfo }) => subprocess.stdio.map((stream, fdNumber) => waitForSubprocessStream({
   stream,
   fdNumber,
@@ -55642,7 +55784,7 @@ var waitForSubprocessStream = async ({ stream, fdNumber, encoding, buffer, maxBu
   return output2;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/all-async.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/all-async.js
 var makeAllStream = ({ stdout, stderr }, { all }) => {
   if (!all) {
     return;
@@ -55691,10 +55833,10 @@ var getAllStream = ({ stdout, stderr }, all, [, bufferStdout, bufferStderr]) => 
 };
 var getAllMixed = ({ stdout, stderr }, all) => all && stdout && stderr && stdout.readableObjectMode !== stderr.readableObjectMode;
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/wait-subprocess.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/wait-subprocess.js
 import { once as once8 } from "node:events";
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/ipc.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/ipc.js
 var shouldLogIpc = (verboseInfo) => isFullVerbose(verboseInfo, "ipc");
 var logIpcOutput = (message, verboseInfo) => {
   const verboseMessage = serializeVerboseMessage(message);
@@ -55706,7 +55848,7 @@ var logIpcOutput = (message, verboseInfo) => {
   });
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/buffer-messages.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/buffer-messages.js
 var waitForIpcOutput = async ({
   subprocess,
   buffer: bufferArray,
@@ -55752,7 +55894,7 @@ var getBufferedIpcOutput = async (ipcOutputPromise, ipcOutput) => {
   return ipcOutput;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/wait-subprocess.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/wait-subprocess.js
 var waitForSubprocessResult = async ({
   subprocess,
   kill,
@@ -55877,7 +56019,7 @@ var throwOnSubprocessError = async (subprocess, { signal }) => {
   throw error62;
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/writable.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/writable.js
 import { Writable as Writable4 } from "node:stream";
 import { callbackify as callbackify4 } from "node:util";
 var createWritable = ({ subprocess, concurrentStreams }, options) => {
@@ -55959,7 +56101,7 @@ var destroyOtherWritable = (stream, error62) => {
   destroyOtherStream(stream, stream.writable, error62);
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/duplex.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/duplex.js
 import { Duplex as Duplex4 } from "node:stream";
 import { callbackify as callbackify5 } from "node:util";
 var createDuplex = ({ subprocess, concurrentStreams, encoding }, options) => {
@@ -56018,7 +56160,7 @@ var onDuplexDestroy = async ({ subprocessStdout, subprocessStdin, subprocess, wa
   ]);
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/add.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/convert/add.js
 var addConvertedStreams = (subprocess, { encoding }) => {
   const concurrentStreams = initializeConcurrentStreams();
   subprocess.readable = createReadable.bind(void 0, { subprocess, concurrentStreams, encoding });
@@ -56031,10 +56173,10 @@ var addConvertedStreams = (subprocess, { encoding }) => {
   subprocess[Symbol.asyncIterator] = createIterable.bind(void 0, subprocess, encoding, {});
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/promise.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/promise.js
 var mergePromise = (promise2, properties) => Object.assign(promise2, properties);
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/main-async.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/main-async.js
 var execaCoreAsync = (rawFile, rawArguments, rawOptions, createNested) => {
   const { file: file3, commandArguments, command, escapedCommand, startTime, verboseInfo, options, fileDescriptors } = handleAsyncArguments(rawFile, rawArguments, rawOptions);
   const { subprocess: nodeChildProcess, promise: promise2, kill, all, convertedStreams } = spawnSubprocessAsync({
@@ -56231,7 +56373,7 @@ var getAsyncResult = ({ errorInfo, exitCode, signal, stdio, all, ipcOutput, cont
   startTime
 });
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/bind.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/bind.js
 var mergeOptions = (boundOptions, options) => {
   const safeBoundOptions = { __proto__: null, ...boundOptions };
   const mergedOptions = Object.fromEntries(Object.entries(options).map(([optionName, optionValue]) => [
@@ -56243,7 +56385,7 @@ var mergeOptions = (boundOptions, options) => {
 var mergeOption = (optionName, boundOptionValue, optionValue) => DEEP_OPTIONS.has(optionName) && isPlainObject3(boundOptionValue) && isPlainObject3(optionValue) ? { ...boundOptionValue, ...optionValue } : optionValue;
 var DEEP_OPTIONS = /* @__PURE__ */ new Set(["env", ...FD_SPECIFIC_OPTIONS]);
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/create.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/create.js
 var createExeca = (mapArguments, boundOptions, deepOptions, setBoundExeca) => {
   const createNested = (mapArguments2, boundOptions2, setBoundExeca2) => createExeca(mapArguments2, boundOptions2, deepOptions, setBoundExeca2);
   const boundExeca = (...execaArguments) => callBoundExeca({
@@ -56292,7 +56434,7 @@ var parseArguments = ({ mapArguments, firstArgument, nextArguments, deepOptions,
   };
 };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/script.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/script.js
 var setScriptSync = (boundExeca, createNested, boundOptions) => {
   boundExeca.sync = createNested(mapScriptSync, boundOptions);
   boundExeca.s = boundExeca.sync;
@@ -56303,7 +56445,7 @@ var getScriptOptions = (options) => ({ options: { __proto__: null, ...options, .
 var getScriptStdinOption = ({ stdin = "inherit", input: input2, inputFile, stdio }) => input2 === void 0 && inputFile === void 0 && stdio === void 0 ? { stdin } : {};
 var deepScriptOptions = { preferLocal: true };
 
-// ../../node_modules/.pnpm/execa@10.2.1/node_modules/execa/index.js
+// node_modules/.pnpm/execa@10.2.1/node_modules/execa/index.js
 var execa = createExeca(() => ({}));
 var execaSync = createExeca(() => ({ isSync: true }));
 var execaNode = createExeca(mapNode);
@@ -56370,7 +56512,7 @@ function realPorts(claudeBin = "claude") {
       const r = await execa("git", args, {
         cwd,
         reject: false,
-        env: { GIT_TERMINAL_PROMPT: "0" },
+        env: { GIT_TERMINAL_PROMPT: "0", ...opts?.env ?? {} },
         ...opts?.timeoutMs === void 0 ? {} : { timeout: opts.timeoutMs }
       });
       if (r.timedOut) throw new Error(`git ${args.join(" ")} timed out`);

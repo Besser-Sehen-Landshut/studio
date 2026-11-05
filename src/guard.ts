@@ -883,6 +883,16 @@ function checkRefspec(env: Env, ref: string): void {
     deny(`git push with unclear destination "${ref}"`);
   }
   if (/^refs\/(?!heads\/)/i.test(dest)) deny(`git push to non-branch ref "${dest}"`);
+  // git matches a short destination against the remote's refs, `refs/<dest>` first: `studio/claims/<id>`
+  // would move the claim ref `refs/studio/claims/<id>`. A short name with a slash is refused, except
+  // the item's own branch.
+  if (
+    !/^refs\/heads\//i.test(dest) &&
+    dest.includes('/') &&
+    (env.item === undefined || dest.toLowerCase() !== `studio/${env.item}`.toLowerCase())
+  ) {
+    deny(`git push to "${dest}": name a branch in full (refs/heads/${dest})`);
+  }
   const norm = dest
     .replace(/^refs\//, '')
     .replace(/^heads\//, '')

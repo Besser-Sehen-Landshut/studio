@@ -11,7 +11,14 @@ export function fakeGitHub(now: () => Date) {
   const refs = new Map<string, string>();
   const commits = new Map<
     string,
-    { message: string; files: Record<string, string>; parents: string[]; at: string }
+    {
+      message: string;
+      files: Record<string, string>;
+      parents: string[];
+      at: string;
+      login?: string;
+      verified: boolean;
+    }
   >();
   const branches = new Map<string, string>();
   const prs = new Map<number, PullRequestFacts>();
@@ -44,7 +51,14 @@ export function fakeGitHub(now: () => Date) {
       if (sha === undefined) return undefined;
       const c = commits.get(sha);
       if (c === undefined) throw new Error('dangling claim');
-      return { sha, message: c.message, committedAt: c.at, parents: c.parents };
+      return {
+        sha,
+        message: c.message,
+        committedAt: c.at,
+        parents: c.parents,
+        ...(c.login === undefined ? {} : { login: c.login }),
+        verified: c.verified,
+      };
     },
     async writeClaim(_repo, item, o) {
       const sha = createHash('sha1').update(`${seq++}:${o.message}`).digest('hex');
@@ -53,6 +67,8 @@ export function fakeGitHub(now: () => Date) {
         files: o.files,
         parents: o.parent === undefined ? [] : [o.parent],
         at: now().toISOString(),
+        login,
+        verified: true,
       });
       const tip = refs.get(item);
       if (o.parent === undefined ? tip !== undefined : tip !== o.parent) return { ok: false };
@@ -74,5 +90,27 @@ export function fakeGitHub(now: () => Date) {
       return prs.get(pr);
     },
   });
-  return { hubAs, issues, refs, commits, branches, prs, calls };
+  /**
+   * A claim commit someone wrote straight to the ref, as any account with contents write can:
+   * GitHub attributes it to `login` (undefined: no account) and verifies it or not.
+   */
+  const plant = (
+    item: string,
+    message: string,
+    o: { login?: string; verified: boolean; at?: string },
+  ): string => {
+    const sha = createHash('sha1').update(`${seq++}:planted:${message}`).digest('hex');
+    const tip = refs.get(item);
+    commits.set(sha, {
+      message,
+      files: {},
+      parents: tip === undefined ? [] : [tip],
+      at: o.at ?? now().toISOString(),
+      ...(o.login === undefined ? {} : { login: o.login }),
+      verified: o.verified,
+    });
+    refs.set(item, sha);
+    return sha;
+  };
+  return { hubAs, issues, refs, commits, branches, prs, calls, plant };
 }

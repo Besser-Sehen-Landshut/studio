@@ -101,6 +101,7 @@ const LOCAL = `  - id: APP-9
 
 let n = 0;
 const WORKER_TOKEN = ['wtok', 'en', '-for-the-worker-0001'].join('');
+const CREW_TOKEN = ['ctok', 'en', '-for-the-crew-0001'].join('');
 const ownerDir = (home: string) => join(home, '.config', 'studio');
 
 function writeOwnerConfig(home: string, yaml: string): void {
@@ -146,6 +147,7 @@ function world(items: string[] = [ITEM]): World {
   writeOwnerConfig(home, 'workers:\n  accept:\n    windows: [win-bot, win-bot2]\n');
   const env = { PATH: process.env.PATH };
   const now = { t: Date.parse('2026-10-31T10:00:00Z') };
+  currentOrigin = origin;
   return {
     base,
     origin,
@@ -156,16 +158,22 @@ function world(items: string[] = [ITEM]): World {
   };
 }
 
-/** A worker machine: its own clone, home, owner config, crew token and pinned plugins. */
-function workerMachine(w: World, name: string): Machine {
+/**
+ * A worker machine: its own clone, home, owner config, worker token, pinned plugins and, unless
+ * `crewToken: false`, a crew token of its own for the crews.
+ */
+function workerMachine(w: World, name: string, o: { crewToken?: boolean } = {}): Machine {
   const project = join(w.base, name);
   git(w.base, 'clone', '-q', w.origin, project);
   const home = join(w.base, `${name}-home`);
   mkdirSync(home);
   writeOwnerConfig(home, 'workers:\n  self:\n    lead: lead-user\n');
-  const token = join(ownerDir(home), 'crew-token');
-  writeFileSync(token, `${WORKER_TOKEN}-${name}\n`);
-  chmodSync(token, 0o600);
+  const secret = (file: string, value: string) => {
+    writeFileSync(join(ownerDir(home), file), `${value}\n`);
+    chmodSync(join(ownerDir(home), file), 0o600);
+  };
+  secret('worker-token', `${WORKER_TOKEN}-${name}`);
+  if (o.crewToken !== false) secret('crew-token', `${CREW_TOKEN}-${name}`);
   const claude = join(home, '.claude');
   for (const s of ['studio-crew', 'test-driven-development', 'systematic-debugging']) {
     mkdirSync(join(claude, 'skills', s), { recursive: true });
@@ -246,6 +254,7 @@ function machinePorts(w: World, login: string, gh: Gh, crew: Crew): Ports {
 
 const newCrew = (): Crew => ({ started: [], stopped: [], running: false });
 
+let currentOrigin = '';
 async function run(m: Machine, ports: Ports, argv: string[], platform = LINUX) {
   let out = '';
   let err = '';
@@ -261,6 +270,8 @@ async function run(m: Machine, ports: Ports, argv: string[], platform = LINUX) {
     homedir: m.home,
     cwd: m.project,
     workerPlatform: platform,
+    // Pushes a worker makes for a crew without a token go to the fixture's origin.
+    workerPushUrl: () => currentOrigin,
   });
   return { code, out, err };
 }
@@ -361,7 +372,9 @@ describe('workers on other machines', () => {
       attempt: 1,
     });
     expect(crew.started).toHaveLength(1);
-    expect(crew.started[0]?.env.GH_TOKEN).toBe(`${WORKER_TOKEN}-win`);
+    // The crew gets the crew token; the worker's own token never reaches it.
+    expect(crew.started[0]?.env.GH_TOKEN).toBe(`${CREW_TOKEN}-win`);
+    expect(JSON.stringify(crew.started[0]?.env)).not.toContain(WORKER_TOKEN);
     const settings = JSON.parse(readFileSync(join(wm.state, 'settings', 'APP-1.json'), 'utf8'));
     expect(settings.sandbox.filesystem.denyWrite).toEqual([w.denied]);
     expect(settings.sandbox.filesystem.denyRead).toContain(w.denied);
@@ -459,6 +472,8 @@ describe('workers on other machines', () => {
       expect.objectContaining({ kind: 'idle' }),
     );
     expect(crewB.started).toHaveLength(0);
+    // The lead sees the claim now: its lease runs from here, on the lead's clock.
+    await run(w.lead, lead, ['tick']);
 
     // Worker A pushed some work, then its machine went away: no heartbeat for longer than the lease.
     git(w.lead.project, 'checkout', '-q', '-b', 'studio/APP-1');
@@ -490,6 +505,7 @@ describe('workers on other machines', () => {
     expect(claimOf(w)?.worker).toBe('win-bot2');
 
     // A second expiry is the lead's decision: no third attempt.
+    await run(w.lead, lead, ['tick']);
     w.now.t += 33 * 60_000;
     const tick2 = JSON.parse((await run(w.lead, lead, ['tick'])).out);
     expect(tick2.needsLead).toContainEqual({
@@ -721,7 +737,7 @@ describe('workers on other machines', () => {
     expect(crew.started).toHaveLength(1);
   });
 
-  it('a fix round by another accepted worker goes on in the pull request the first one opened', async () => {
+  it('a fix round counts only when the claiming worker opened the pull request', async () => {
     const w = world();
     const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
     await run(w.lead, lead, ['tick']);
@@ -763,9 +779,99 @@ describe('workers on other machines', () => {
     expect(
       lastLine((await run(b, pb, ['worker', '--label', 'windows', '--once'])).out),
     ).toMatchObject({ kind: 'done', line: 'APP-1: report done handed back with pull request #7' });
+    // The pull request was opened by win-bot; the claim is win-bot2's: it counts for nothing.
     const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
-    expect(tick.collected).toEqual([
-      expect.objectContaining({ item: 'APP-1', status: 'in_review', pr: 7 }),
-    ]);
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(/PR 7 was opened by win-bot, not by win-bot2/),
+    });
+  });
+
+  it('a claim GitHub does not attribute to the named worker counts for nothing', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const forged = (worker: string) =>
+      `Studio claim APP-1: done\n\n${JSON.stringify({ studio_claim: 1, item: 'APP-1', label: 'windows', worker, offer: 30, attempt: 1, state: 'done', lease_minutes: 30, pr: 7 })}\n`;
+    // Someone with write access names an accepted worker: GitHub attributes the commit to them.
+    w.github.plant('APP-1', forged('win-bot'), { login: 'someone-else', verified: true });
+    let tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason:
+        'APP-1: the claim names win-bot, but GitHub attributes its commit to someone-else; nothing of it counts',
+    });
+    // The right account, but a commit GitHub did not verify (custom author or committer).
+    w.github.plant('APP-1', forged('win-bot'), { login: 'win-bot', verified: false });
+    tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(/GitHub did not verify its commit/),
+    });
+    expect(tick.collected).toEqual([]);
+    expect(statusOf(w)?.status).toBe('assigned');
+  });
+
+  it('a lease runs from when the lead saw the claim, never from the commit date', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    // A claim dated a day back, as a writer could set it.
+    const msg = `Studio claim APP-1: claimed\n\n${JSON.stringify({ studio_claim: 1, item: 'APP-1', label: 'windows', worker: 'win-bot', offer: 30, attempt: 1, state: 'claimed', lease_minutes: 30 })}\n`;
+    w.github.plant('APP-1', msg, {
+      login: 'win-bot',
+      verified: true,
+      at: new Date(w.now.t - 86_400_000).toISOString(),
+    });
+    const tick = JSON.parse((await run(w.lead, lead, ['tick'])).out);
+    expect(tick.held).toContainEqual({
+      item: 'APP-1',
+      reason: 'worker: on win-bot (windows), heartbeat 0 min ago',
+    });
+    // Another worker does not take it over at first sight either.
+    const b = workerMachine(w, 'win2');
+    const pb = machinePorts(w, 'win-bot2', workerGh(w, 'win-bot2').gh, newCrew());
+    expect(lastLine((await run(b, pb, ['worker', '--label', 'windows', '--once'])).out).kind).toBe(
+      'idle',
+    );
+    expect(claimOf(w)?.worker).toBe('win-bot');
+  });
+
+  it('a worker without a crew token: the crew gets no token, the worker pushes its branch', async () => {
+    const w = world();
+    const lead = machinePorts(w, 'lead-user', leadGh().gh, newCrew());
+    await run(w.lead, lead, ['tick']);
+    const wm = workerMachine(w, 'win', { crewToken: false });
+    const crew = newCrew();
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, crew);
+    await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    expect(crew.started[0]?.env.GH_TOKEN).toBeUndefined();
+    expect(JSON.stringify(crew.started[0]?.env)).not.toContain(WORKER_TOKEN);
+    const brief = readFileSync(join(wm.state, 'briefs', 'APP-1.md'), 'utf8');
+    expect(brief).toContain('Do not push: you have no GitHub token');
+    expect(brief).not.toContain('git push origin');
+    // The crew commits in its clone; the worker pushes that commit with its own token.
+    const clone = join(wm.state, 'clones', 'APP-1');
+    writeFileSync(join(clone, 'log.txt'), 'parsed\n');
+    git(clone, 'add', 'log.txt');
+    git(clone, 'commit', '-q', '-m', 'parse the log');
+    const head = git(clone, 'rev-parse', 'HEAD');
+    crewFinishes(w, wm, crew, defaultReport().replace(HEAD, head));
+    w.github.branches.delete('studio/APP-1');
+    const s = await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    expect(lastLine(s.out)).toMatchObject({ kind: 'done' });
+    expect(git(w.base, '--git-dir', w.origin, 'rev-parse', 'refs/heads/studio/APP-1')).toBe(head);
+    expect(existsSync(join(wm.state, 'push', 'APP-1'))).toBe(false);
+  });
+
+  it('a worker token that equals the crew token is refused', async () => {
+    const w = world();
+    const wm = workerMachine(w, 'win');
+    writeFileSync(join(ownerDir(wm.home), 'crew-token'), `${WORKER_TOKEN}-win\n`);
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    const r = await run(wm, wp, ['worker', '--label', 'windows', '--once']);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/the worker token equals the crew token/);
+    expect(w.github.refs.size).toBe(0);
   });
 });

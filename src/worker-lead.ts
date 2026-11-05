@@ -15,7 +15,7 @@ import {
   renderOffer,
   toRunUsage,
 } from './worker-claim.js';
-import { OFFER_LABEL, type WorkerHub } from './worker-hub.js';
+import { type ClaimCommit, OFFER_LABEL, type WorkerHub } from './worker-hub.js';
 import { type OfferRecord, readWorkers, type SeenClaim, updateWorkers } from './worker-state.js';
 
 /** The pane's prefix for an item that runs on a worker: `tick` holds it with this reason. */
@@ -101,14 +101,14 @@ export async function followClaim(o: {
       },
     };
   }
-  const accepted = o.ownerConfig.workers?.accept[record.label] ?? [];
-  if (!accepted.includes(claim.worker)) {
-    return {
-      follow: {
-        kind: 'lead',
-        line: `${item.id} was claimed by ${claim.worker}, who is not accepted for the label ${record.label} (workers.accept in the owner config); nothing of it counts`,
-      },
-    };
+  const foreign = claimIdentityProblem(
+    read,
+    claim,
+    o.ownerConfig.workers?.accept[record.label] ?? [],
+    record.label,
+  );
+  if (foreign !== undefined) {
+    return { follow: { kind: 'lead', line: `${item.id}: ${foreign}; nothing of it counts` } };
   }
   if (claim.label !== record.label || claim.offer !== record.offer) {
     return {
@@ -118,12 +118,17 @@ export async function followClaim(o: {
       },
     };
   }
+  // The lead's own clock: the first time it saw this commit is the heartbeat it knows of.
+  const at =
+    record.claim?.sha === read.sha && !Number.isNaN(Date.parse(record.claim.at))
+      ? record.claim.at
+      : o.now.toISOString();
   const seen: SeenClaim = {
     sha: read.sha,
     worker: claim.worker,
     attempt: claim.attempt,
     state: claim.state,
-    at: read.committedAt,
+    at,
     ...(claim.pr === undefined ? {} : { pr: claim.pr }),
   };
   if (claim.state === 'done') return { follow: { kind: 'done', claim, sha: read.sha }, seen };
@@ -138,8 +143,8 @@ export async function followClaim(o: {
       seen,
     };
   }
-  const ago = minutesSince(read.committedAt, o.now);
-  if (claimExpired(claim, read.committedAt, o.now)) {
+  const ago = minutesSince(at, o.now);
+  if (claimExpired(claim, at, o.now)) {
     if (claim.attempt >= MAX_CLAIM_ATTEMPTS) {
       return {
         follow: {
@@ -166,6 +171,32 @@ export async function followClaim(o: {
     },
     seen,
   };
+}
+
+/**
+ * Why a claim counts for nothing, or undefined. Its `worker` field is written by whoever wrote the
+ * commit, so it counts only when GitHub verified the commit and attributes it to that very account,
+ * and that account is accepted for the label.
+ */
+export function claimIdentityProblem(
+  read: ClaimCommit,
+  claim: Claim,
+  accepted: readonly string[],
+  label: string,
+): string | undefined {
+  const who = claim.worker.toLowerCase();
+  if (!accepted.some((a) => a.toLowerCase() === who)) {
+    return `claimed by ${claim.worker}, who is not accepted for the label ${label} (workers.accept in the owner config)`;
+  }
+  if (!read.verified) {
+    return `the claim names ${claim.worker}, but GitHub did not verify its commit`;
+  }
+  if (read.login === undefined || read.login.toLowerCase() !== who) {
+    const by =
+      read.login === undefined ? 'no single account' : read.login.replace(/[^A-Za-z0-9-]/g, '?');
+    return `the claim names ${claim.worker}, but GitHub attributes its commit to ${by}`;
+  }
+  return undefined;
 }
 
 /**

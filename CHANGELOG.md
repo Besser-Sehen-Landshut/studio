@@ -24,7 +24,8 @@ Nothing but GitHub is shared between the machines. Not tagged yet; the maintaine
   and blocks the item on a `released` one; `tick` prints `offered`. The offer record lives in `workers.json`.
 - Claims: `refs/studio/claims/<id>` on the primary repository, created through the GitHub API (one creator
   wins), moved only as a fast-forward from the commit the worker wrote last (heartbeat every third of the
-  lease, default 30 minutes), taken over after the lease plus two minutes by another worker of the label,
+  lease, default 30 minutes), taken over after the lease plus two minutes (counted from when the lead or the
+  worker first saw that claim commit, on its own clock, never from commit dates) by another worker of the label,
   once (attempt 2, from the pushed `studio/<id>`); a second expiry goes to the lead.
 - `studio worker --label <label> [--once]`: claims one offer at a time, launches the crew with `launch`'s code
   (brief, rules and `studio.yaml` from a fresh `origin/main`, sandbox, guard, skill allowlist, its own Claude
@@ -42,9 +43,14 @@ Nothing but GitHub is shared between the machines. Not tagged yet; the maintaine
   `sandbox.network_allow` entry that could reach the machine (IP literal or `localhost` without a port, `*`,
   single-label or local names) refuses; the guard denies commands that name a denied port.
 - `workers.accept` in the owner config on the lead's machine: the logins whose claims count, per label.
-- The lead's checks: an accepted worker, the claim's offer, the pull request from `studio/<id>` of the item's
-  repository with the report's head, opened by the claiming worker (in a fix round of the item's own pull
-  request, by another accepted worker of the label).
+- The lead's checks: a claim counts only when GitHub verified its commit and attributes it to the account the
+  claim names, which must be accepted for the label; the claim's offer; the pull request from `studio/<id>` of
+  the item's repository with the report's head, opened by the claiming worker.
+- Two tokens on a worker: `worker-token` (`studio secret set worker-token`) for claims, pull requests and pushes,
+  never handed to a crew and refused when it equals the crew token; the crew gets at most the crew token. Without
+  one, the crew commits only and the worker pushes `studio/<id>` from a fresh repository after it ended.
+- The guard refuses crew pushes to `refs/studio/*`, also as a short name git would resolve there.
+- README: how to restrict `refs/studio/claims/*` with a ruleset (not checked live).
 - A report or pull request text that looks like a credential, or holds the worker's own tokens, is never
   published: the claim is `released`.
 - Costs: a worker's run counts once, on the item (`usage`, from `workers.json`) and in the day's ledger, with

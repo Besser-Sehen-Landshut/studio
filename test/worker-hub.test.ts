@@ -98,20 +98,51 @@ describe('ghHub', () => {
     const some = recordingGh((args) =>
       args[3] === 'repos/org/app/git/ref/studio/claims/APP-1'
         ? { stdout: JSON.stringify({ object: { sha: SHA } }) }
-        : {
-            stdout: JSON.stringify({
-              message: 'Studio claim APP-1: alive\n\n{}',
-              committer: { date: '2026-11-05T10:00:00Z' },
-              parents: [{ sha: COMMIT }],
-            }),
-          },
+        : args[3] === `repos/org/app/commits/${SHA}`
+          ? {
+              stdout: JSON.stringify({
+                commit: {
+                  message: 'Studio claim APP-1: alive\n\n{}',
+                  committer: { date: '2026-11-05T10:00:00Z' },
+                  verification: { verified: true },
+                },
+                author: { login: 'win-bot' },
+                committer: { login: 'Win-Bot' },
+                parents: [{ sha: COMMIT }],
+              }),
+            }
+          : { code: 1, stderr: 'unexpected' },
     );
     expect(await ghHub(some.gh).readClaim('org/app', 'APP-1')).toEqual({
       sha: SHA,
       message: 'Studio claim APP-1: alive\n\n{}',
       committedAt: '2026-11-05T10:00:00Z',
       parents: [COMMIT],
+      login: 'Win-Bot',
+      verified: true,
     });
+  });
+
+  it('names no account when author and committer differ, and keeps an unverified commit unverified', async () => {
+    const { gh } = recordingGh((args) =>
+      args[3] === 'repos/org/app/git/ref/studio/claims/APP-1'
+        ? { stdout: JSON.stringify({ object: { sha: SHA } }) }
+        : {
+            stdout: JSON.stringify({
+              commit: {
+                message: 'm',
+                committer: { date: '2026-11-05T10:00:00Z' },
+                verification: { verified: false },
+              },
+              author: { login: 'win-bot' },
+              committer: { login: 'someone-else' },
+              parents: [],
+            }),
+          },
+    );
+    const r = await ghHub(gh).readClaim('org/app', 'APP-1');
+    expect(r?.login).toBeUndefined();
+    expect(r?.verified).toBe(false);
   });
 
   it('lists offers with author and editor through GraphQL, owner and name as strings', async () => {

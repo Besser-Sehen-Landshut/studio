@@ -12,7 +12,13 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, sep } from 'node:path';
-import { crewTokenFile, type OwnerConfig, type OwnerEnv, ownerConfigDir } from './config.js';
+import {
+  crewTokenFile,
+  type OwnerConfig,
+  type OwnerEnv,
+  ownerConfigDir,
+  workerTokenFile,
+} from './config.js';
 import {
   activeParks,
   blockHold,
@@ -220,6 +226,20 @@ export function readOwnerSecret(
 /** Temp file + rename, mode 0600, parent 0700. A symlink at the target is replaced, not followed. */
 export function installCrewToken(token: string, owner: OwnerEnv): void {
   writeOwnerSecret(crewTokenFile(owner), `${token}\n`);
+}
+
+/** The `worker-token` file of a worker machine, checked like the crew token file. */
+export function readWorkerTokenFile(owner: OwnerEnv): CrewTokenRead {
+  const file = workerTokenFile(owner);
+  const read = readOwnerSecret(file, owner);
+  if (read.kind !== 'ok') return read;
+  const token = read.text.trim();
+  if (!validToken(token)) return { kind: 'bad', why: `${file} holds no valid token` };
+  return { kind: 'ok', token };
+}
+
+export function installWorkerToken(token: string, owner: OwnerEnv): void {
+  writeOwnerSecret(workerTokenFile(owner), `${token}\n`);
 }
 
 /**

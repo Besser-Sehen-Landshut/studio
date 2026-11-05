@@ -611,7 +611,9 @@ export function writeBrief(
       ? [
           // No -u: the sandbox cannot write upstream tracking into .git/config, and git then
           // prints an error after a push that went through.
-          `- Push with an explicit refspec and without \`-u\`: \`git push origin HEAD:refs/heads/studio/${id}\`. Check it with \`git ls-remote origin refs/heads/studio/${id}\`: its SHA must equal \`git rev-parse HEAD\`. An error about upstream tracking or \`.git/config\` after a push that this check confirms is harmless.`,
+          caps.pushByStudio === true
+            ? `- Do not push: you have no GitHub token. Commit your work on \`studio/${id}\`; Studio pushes that branch after you end.`
+            : `- Push with an explicit refspec and without \`-u\`: \`git push origin HEAD:refs/heads/studio/${id}\`. Check it with \`git ls-remote origin refs/heads/studio/${id}\`: its SHA must equal \`git rev-parse HEAD\`. An error about upstream tracking or \`.git/config\` after a push that this check confirms is harmless.`,
           ...(caps.prByStudio === true
             ? [
                 `- Do not open the pull request, and do not run gh at all: it cannot verify TLS in this sandbox. Give \`pr_title: "${id}: <summary>"\` in the report and write the pull request text as the report body; Studio opens the pull request from your pushed branch.`,
@@ -631,7 +633,9 @@ export function writeBrief(
     '## Report contract',
     '',
     opensPr
-      ? `Write \`${reportFile}\` in the checkout as the last step, after pushing; do not commit it. Only that file name counts. head_sha is the SHA of the pushed head (\`git rev-parse HEAD\`).`
+      ? caps.pushByStudio === true
+        ? `Write \`${reportFile}\` in the checkout as the last step, after your last commit; do not commit it. Only that file name counts. head_sha is the SHA of your last commit (\`git rev-parse HEAD\`).`
+        : `Write \`${reportFile}\` in the checkout as the last step, after pushing; do not commit it. Only that file name counts. head_sha is the SHA of the pushed head (\`git rev-parse HEAD\`).`
       : `Write \`${reportFile}\` in the checkout as the last step, only that file name counts; do not commit it.${accepting !== undefined ? ` head_sha is the main commit you checked (${accepting.sha}).` : item.type === 'review' ? ' head_sha is the SHA of the pull request head you reviewed (`git rev-parse HEAD` after loading it).' : ''}`,
     'It starts with YAML frontmatter:',
     '',
@@ -1004,6 +1008,11 @@ export interface WorkerLaunch {
   deny: { paths: readonly string[]; ports: readonly number[] };
   /** `studio/<id>` when an earlier run pushed it (a fix round, a taken-over claim); else main. */
   from?: string;
+  /**
+   * No crew token on this machine: the crew gets no GitHub token at all, commits only, and the
+   * worker pushes its branch with its own token after the crew ended.
+   */
+  noToken?: boolean;
 }
 
 export async function launchCrew(
@@ -1130,13 +1139,13 @@ async function launchCrewLocked(
     uid: launcher.uid,
   };
   let token: string | undefined;
-  if (config.crewToken) token = penv[config.crewToken.env] || undefined;
-  if (!token) {
+  if (config.crewToken && worker?.noToken !== true) token = penv[config.crewToken.env] || undefined;
+  if (!token && worker?.noToken !== true) {
     const file = readCrewTokenFile(owner);
     if (file.kind === 'bad') throw new Error(`refusing the crew token file: ${file.why}`);
     if (file.kind === 'ok') token = file.token;
   }
-  if (!token && !config.allowAmbientCredentials) {
+  if (!token && !config.allowAmbientCredentials && worker?.noToken !== true) {
     throw new Error(
       config.crewToken
         ? `crew token variable ${config.crewToken.env} is not set and there is no crew-token file; refusing to launch without the least-privilege token (run studio secret set crew-token, or set allow_ambient_credentials: true)`
@@ -1359,6 +1368,7 @@ async function launchCrewLocked(
   caps.reportName = newReportName(stateRoot, item.id);
   // Without the trust service gh cannot verify TLS in the macOS sandbox: Studio opens the PR.
   // On a worker Studio opens it too: with the worker's identity, which the lead checks.
+  caps.pushByStudio = worker?.noToken === true;
   caps.prByStudio =
     worker !== undefined ||
     ((launcher.platform ?? process.platform) === 'darwin' &&

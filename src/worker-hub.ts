@@ -25,13 +25,21 @@ export interface OfferIssue {
   open: boolean;
 }
 
-/** The commit a claim ref points to. */
+/** The commit a claim ref points to, with GitHub's own view of who made it. */
 export interface ClaimCommit {
   sha: string;
   message: string;
-  /** The committer date GitHub set when the commit was made through the API (its clock, not ours). */
+  /** The committer date in the commit. Writer-supplied: shown, never used for a lease. */
   committedAt: string;
   parents: string[];
+  /**
+   * The GitHub account GitHub attributes the commit to, when author and committer are one
+   * account; undefined otherwise. The claim's own `worker` field is self-declared and only counts
+   * when it equals this.
+   */
+  login?: string;
+  /** Whether GitHub verified the commit's signature (`commit.verification.verified`). */
+  verified: boolean;
 }
 
 export interface PullRequestFacts {
@@ -269,23 +277,38 @@ export function ghHub(gh: Gh, token?: string): WorkerHub {
       if (typeof sha !== 'string' || !SHA_RE.test(sha)) {
         throw new HubError('reading a claim (no commit)', 0, undefined);
       }
-      const c = (await must(
-        'reading a claim commit',
-        'GET',
-        `repos/${repo}/git/commits/${sha}`,
-      )) as {
-        message?: unknown;
-        committer?: { date?: unknown };
+      // The commits endpoint (not git/commits): it adds the accounts GitHub attributes the commit
+      // to and its signature verification.
+      const c = (await must('reading a claim commit', 'GET', `repos/${repo}/commits/${sha}`)) as {
+        commit?: {
+          message?: unknown;
+          committer?: { date?: unknown };
+          verification?: { verified?: unknown };
+        };
+        author?: { login?: unknown } | null;
+        committer?: { login?: unknown } | null;
         parents?: { sha?: unknown }[];
       } | null;
-      if (typeof c?.message !== 'string' || typeof c.committer?.date !== 'string') {
+      const message = c?.commit?.message;
+      const date = c?.commit?.committer?.date;
+      if (typeof message !== 'string' || typeof date !== 'string') {
         throw new HubError('reading a claim commit (incomplete)', 0, undefined);
       }
+      const author = c?.author?.login;
+      const committer = c?.committer?.login;
+      const login =
+        typeof author === 'string' &&
+        typeof committer === 'string' &&
+        author.toLowerCase() === committer.toLowerCase()
+          ? committer
+          : undefined;
       return {
         sha,
-        message: c.message,
-        committedAt: c.committer.date,
-        parents: (c.parents ?? []).flatMap((p) => (typeof p.sha === 'string' ? [p.sha] : [])),
+        message,
+        committedAt: date,
+        parents: (c?.parents ?? []).flatMap((p) => (typeof p.sha === 'string' ? [p.sha] : [])),
+        ...(login === undefined ? {} : { login }),
+        verified: c?.commit?.verification?.verified === true,
       };
     },
     async writeClaim(repo, item, o) {

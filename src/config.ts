@@ -781,6 +781,13 @@ export const ownerConfigDir = (opts: OwnerEnv = {}): string => dirname(ownerConf
 export const notifySecretFile = (opts: OwnerEnv = {}): string =>
   join(ownerConfigDir(opts), 'notify-secret');
 
+/**
+ * Where `studio secret set worker-token` keeps a worker machine's own GitHub token: claims, pull
+ * requests and pushes for a crew, never handed into a crew session.
+ */
+export const workerTokenFile = (opts: OwnerEnv = {}): string =>
+  join(ownerConfigDir(opts), 'worker-token');
+
 /** Where `studio secret set crew-token` keeps the least-privilege GitHub token. */
 export const crewTokenFile = (opts: OwnerEnv = {}): string =>
   join(ownerConfigDir(opts), 'crew-token');
