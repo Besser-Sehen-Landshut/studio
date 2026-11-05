@@ -331,7 +331,8 @@ export const checkKey = (c: Pick<Check, 'name' | 'workflow'>): string =>
  */
 export type EvidenceOutcome =
   | { kind: 'none' }
-  | { kind: 'waived'; waived: ReadonlySet<string> }
+  /** `base`: the base commit the waiver was judged on, checked again right before the merge. */
+  | { kind: 'waived'; waived: ReadonlySet<string>; base?: string }
   | { kind: 'wait'; reason: string }
   | { kind: 'lead'; reason: string };
 
@@ -589,6 +590,26 @@ export async function viewPr(entry: QueueEntry, gh: Gh): Promise<PrView | string
   };
 }
 
+/** The pull request's base commit as GitHub reports it now; undefined on any failure. */
+async function baseOidOf(entry: QueueEntry, gh: Gh): Promise<string | undefined> {
+  const r = await gh.run([
+    'pr',
+    'view',
+    String(entry.pr),
+    '--repo',
+    entry.repo,
+    '--json',
+    'baseRefOid',
+  ]);
+  if (r.code !== 0) return undefined;
+  try {
+    const oid = (JSON.parse(r.stdout) as { baseRefOid?: unknown } | null)?.baseRefOid;
+    return typeof oid === 'string' && /^[0-9a-f]{40,64}$/i.test(oid) ? oid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function mergeShaOf(entry: QueueEntry, gh: Gh): Promise<string | undefined> {
   const r = await gh.run([
     'pr',
@@ -659,6 +680,8 @@ export async function mergeOne(
 
   // Failed checks an exception by evidence covers, for the one head they were judged on.
   const waived = new Map<string, ReadonlySet<string>>();
+  /** The base each waiver was judged on, by head. */
+  const waivedBase = new Map<string, string>();
   /** The checks of `head`, with the failures an exception by evidence covers taken out. */
   const judged = async (
     head: string,
@@ -673,6 +696,8 @@ export async function mergeOne(
     if (ev.kind === 'lead') return { kind: 'evidence', reason: ev.reason };
     const all = new Set([...(waived.get(head) ?? []), ...ev.waived]);
     waived.set(head, all);
+    if (ev.base === undefined) waivedBase.delete(head);
+    else waivedBase.set(head, ev.base);
     return readChecks(entry, gh, all);
   };
 
@@ -776,6 +801,23 @@ export async function mergeOne(
         // Resume at capacity: the head or the capacity may differ by then.
         enter('capacity');
         throw new QueueHeld(held);
+      }
+      // A waiver holds for one base: read it once more right before the merge, and judge again
+      // when it moved (or cannot be read).
+      if (waived.has(head)) {
+        const judgedOn = waivedBase.get(head);
+        const live = await baseOidOf(entry, gh);
+        if (
+          judgedOn === undefined ||
+          live === undefined ||
+          live.toLowerCase() !== judgedOn.toLowerCase()
+        ) {
+          waived.delete(head);
+          waivedBase.delete(head);
+          if (++rechecks > MAX_ATTEMPTS) return failed(`checks changed ${MAX_ATTEMPTS} times`);
+          step = 'checks';
+          continue;
+        }
       }
       const r = await gh.run([
         'pr',

@@ -425,4 +425,8 @@ The lead lines carry their next step (`decide: studio exceptions grant ...`, `th
 skill stays as it is. The one gap the run could not show, queueing a pull request whose merge failed on
 evidence once it is granted, went into that line itself (`after a grant: studio queue add <repo>#<n>`).
 
+The scenario was written for an earlier draft with evidence commands; 0.17.0 ships built-in proofs instead.
+The lead lines it exercises keep their shape; point 3 reads `approval refused: the pull request changes
+evidence: in studio.yaml; ...` now, with the same decision (one owner line, no grant, no requeue).
+
 Not exercised: a real lead session deciding on a guard hit against a real diff.

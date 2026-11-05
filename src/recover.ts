@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { loadBoard, saveBoard, transition, type WorkItem } from './board.js';
 import { COSTS_LOCK, COSTS_LOCK_STALE_MS } from './costs.js';
 import { crewHold, isItemId } from './crew.js';
-import { EVIDENCE_DIR, EXCEPTIONS_LOCK, EXCEPTIONS_LOCK_STALE_MS } from './evidence.js';
+import { EXCEPTIONS_LOCK, EXCEPTIONS_LOCK_STALE_MS } from './evidence.js';
 import { RERUNS_LOCK, RERUNS_LOCK_STALE_MS } from './flaky-ci.js';
 import { LOCK_STALE_MS as LIMITS_LOCK_STALE_MS } from './limits.js';
 import { NOTIFY_LOCK, LOCK_STALE_MS as NOTIFY_LOCK_STALE_MS } from './notify.js';
@@ -92,8 +92,6 @@ const TMP = /^.+\.(\d+)\.\d+\.[0-9a-f]{8}\.tmp$/;
 const LAUNCH_GRACE_MS = 2 * 60_000;
 /** An aside younger than this may belong to a breaker that is between its rename and its check. */
 const ASIDE_GRACE_MS = 60_000;
-/** An evidence run dir older than this belongs to no run: commands have ten minutes at most. */
-const EVIDENCE_GRACE_MS = 60 * 60_000;
 
 /** When the item last became `ready`; minus infinity when its history does not say. */
 function readySince(item: WorkItem): number {
@@ -202,36 +200,6 @@ export async function recoverProject(o: RecoverOptions): Promise<Recovery> {
         out.findings.push(finding);
       }
     }
-    // A local evidence run cut short leaves its checkout of the base behind. After an hour no run
-    // can still use it: the longest command has ten minutes.
-    let runs: string[];
-    try {
-      runs = readdirSync(join(o.stateRoot, EVIDENCE_DIR));
-    } catch {
-      runs = [];
-    }
-    let pruned = false;
-    for (const name of runs) {
-      const dir = join(o.stateRoot, EVIDENCE_DIR, name);
-      try {
-        if (o.now.getTime() - lstatSync(dir).mtimeMs < EVIDENCE_GRACE_MS) continue;
-      } catch {
-        continue;
-      }
-      const finding: Finding = {
-        check: 'leftover',
-        subject: `${EVIDENCE_DIR}/${name}`,
-        found: 'left behind by an interrupted evidence run',
-      };
-      if (!o.dryRun) {
-        removeStateEntry(o.stateRoot, dir);
-        pruned = true;
-        finding.did = 'removed it';
-      }
-      out.findings.push(finding);
-    }
-    // Its worktree entry in the owner's checkout points at nothing now.
-    if (pruned) await o.ports.git.run(o.project, ['worktree', 'prune']).catch(() => '');
   }
 
   if (!existsSync(o.stateRoot)) return out;

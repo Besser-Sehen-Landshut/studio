@@ -33,15 +33,7 @@ import {
 } from './config.js';
 
 /** Entries of the state root that a crew session must never write (besides its own clone). */
-export const STATE_PROTECTED_DIRS = [
-  'guard',
-  'settings',
-  'briefs',
-  'logs',
-  'homes',
-  'tmp',
-  'evidence',
-];
+export const STATE_PROTECTED_DIRS = ['guard', 'settings', 'briefs', 'logs', 'homes', 'tmp'];
 export const STATE_FILES = [
   'crew.json',
   'queue.json',

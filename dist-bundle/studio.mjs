@@ -4003,10 +4003,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep8, value } = collItem;
+        const { start, key, sep: sep7, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep8?.[0],
+          next: key ?? sep7?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -4020,7 +4020,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep8) {
+          if (!keyProps.anchor && !keyProps.tag && !sep7) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map2.comment)
@@ -4044,7 +4044,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map2.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep8 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep7 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -4060,7 +4060,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep8, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep7, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -4151,7 +4151,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep8 = "";
+        let sep7 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -4165,13 +4165,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep8 + cb;
-              sep8 = "";
+                comment += sep7 + cb;
+              sep7 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep8 += source;
+                sep7 += source;
               hasSpace = true;
               break;
             default:
@@ -4214,18 +4214,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i2 = 0; i2 < fc.items.length; ++i2) {
         const collItem = fc.items[i2];
-        const { start, key, sep: sep8, value } = collItem;
+        const { start, key, sep: sep7, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep8?.[0],
+          next: key ?? sep7?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep8 && !value) {
+          if (!props.anchor && !props.tag && !sep7 && !value) {
             if (i2 === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i2 < fc.items.length - 1)
@@ -4279,8 +4279,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap4 && !sep8 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep8, null, props, onError);
+        if (!isMap4 && !sep7 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep7, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -4292,7 +4292,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep8 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep7 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -4303,8 +4303,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap4 && !props.found && ctx.options.strict) {
-              if (sep8)
-                for (const st of sep8) {
+              if (sep7)
+                for (const st of sep7) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -4321,7 +4321,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep8, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep7, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -4501,7 +4501,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i2 + 1;
       }
       let value = "";
-      let sep8 = "";
+      let sep7 = "";
       let prevMoreIndented = false;
       for (let i2 = 0; i2 < contentStart; ++i2)
         value += lines[i2][0].slice(trimIndent) + "\n";
@@ -4518,24 +4518,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep8 + indent.slice(trimIndent) + content;
-          sep8 = "\n";
+          value += sep7 + indent.slice(trimIndent) + content;
+          sep7 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep8 === " ")
-            sep8 = "\n";
-          else if (!prevMoreIndented && sep8 === "\n")
-            sep8 = "\n\n";
-          value += sep8 + indent.slice(trimIndent) + content;
-          sep8 = "\n";
+          if (sep7 === " ")
+            sep7 = "\n";
+          else if (!prevMoreIndented && sep7 === "\n")
+            sep7 = "\n\n";
+          value += sep7 + indent.slice(trimIndent) + content;
+          sep7 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep8 === "\n")
+          if (sep7 === "\n")
             value += "\n";
           else
-            sep8 = "\n";
+            sep7 = "\n";
         } else {
-          value += sep8 + content;
-          sep8 = " ";
+          value += sep7 + content;
+          sep7 = " ";
           prevMoreIndented = false;
         }
       }
@@ -4718,25 +4718,25 @@ var require_resolve_flow_scalar = __commonJS({
         trimBoth = /^[ \t]+|[ \t]+$/g;
       }
       let res = match[1].replace(trimEnd, "");
-      let sep8 = " ";
+      let sep7 = " ";
       let pos = line3.lastIndex;
       while (match = line3.exec(source)) {
         const lm = match[1].replace(trimBoth, "");
         if (lm === "") {
-          if (sep8 === "\n")
-            res += sep8;
+          if (sep7 === "\n")
+            res += sep7;
           else
-            sep8 = "\n";
+            sep7 = "\n";
         } else {
-          res += sep8 + lm;
-          sep8 = " ";
+          res += sep7 + lm;
+          sep7 = " ";
         }
         pos = line3.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep8 + (match?.[1] ?? "");
+      return res + sep7 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -5546,14 +5546,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep8, value }) {
+    function stringifyItem({ start, key, sep: sep7, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep8)
-        for (const st of sep8)
+      if (sep7)
+        for (const st of sep7)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -6720,18 +6720,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep8;
+          let sep7;
           if (scalar.end) {
-            sep8 = scalar.end;
-            sep8.push(this.sourceToken);
+            sep7 = scalar.end;
+            sep7.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep8 = [this.sourceToken];
+            sep7 = [this.sourceToken];
           const map2 = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep8 }]
+            items: [{ start, key: scalar, sep: sep7 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map2;
@@ -6884,15 +6884,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep8 = it.sep;
-                  sep8.push(this.sourceToken);
+                  const sep7 = it.sep;
+                  sep7.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep8 }]
+                    items: [{ start: start2, key, sep: sep7 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -7086,13 +7086,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep8 = fc.end.splice(1, fc.end.length);
-            sep8.push(this.sourceToken);
+            const sep7 = fc.end.splice(1, fc.end.length);
+            sep7.push(this.sourceToken);
             const map2 = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep8 }]
+              items: [{ start, key: fc, sep: sep7 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map2;
@@ -7841,12 +7841,12 @@ var require_shell_quote = __commonJS({
 });
 
 // src/main.ts
-import { realpathSync as realpathSync8 } from "node:fs";
+import { realpathSync as realpathSync7 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
 // src/cli.ts
-import { existsSync as existsSync11, mkdtempSync, rmSync as rmSync8, writeFileSync as writeFileSync13 } from "node:fs";
+import { existsSync as existsSync11, mkdtempSync, rmSync as rmSync8, writeFileSync as writeFileSync12 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname as dirname12, join as join38, resolve as resolve7 } from "node:path";
 import { parseArgs } from "node:util";
@@ -12923,7 +12923,7 @@ var recursive = /* @__PURE__ */ new WeakMap();
 var NONE = 0;
 var ASSUMED = 1;
 var PROVEN = 2;
-function isRecursive(inst, stack, resolve9) {
+function isRecursive(inst, stack, resolve8) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -12933,7 +12933,7 @@ function isRecursive(inst, stack, resolve9) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve9);
+      const answer = isRecursive(child, stack, resolve8);
       if (answer > result)
         result = answer;
     }
@@ -12944,7 +12944,7 @@ function isRecursive(inst, stack, resolve9) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve9) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve8) : NONE;
       if (child > answer)
         answer = child;
     }
@@ -13008,7 +13008,7 @@ function isRecursive(inst, stack, resolve9) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve9 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve8 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -28544,6 +28544,428 @@ function undeniableLine(configDir, invalid) {
   return `installed skills in ${configDir} have names a deny rule cannot hold (${shown}${invalid.length > 5 ? `, ${invalid.length - 5} more` : ""}); a crew could invoke them outside its brief: rename them to letters, digits, dot, dash and underscore, or remove them, then launch again`;
 }
 
+// src/proofs.ts
+var PROOF_LANGUAGES = ["sql", "rust", "ts", "js", "sh", "yaml", "toml", "python"];
+var EXTENSIONS = {
+  sql: [".sql"],
+  rust: [".rs"],
+  ts: [".ts", ".mts", ".cts", ".tsx"],
+  js: [".js", ".mjs", ".cjs", ".jsx"],
+  sh: [".sh", ".bash"],
+  yaml: [".yml", ".yaml"],
+  toml: [".toml"],
+  python: [".py"]
+};
+function languageOf(path10, allowed) {
+  const lower = path10.toLowerCase();
+  return allowed.find((l) => EXTENSIONS[l].some((ext) => lower.endsWith(ext)));
+}
+var Unclassifiable = class extends Error {
+};
+var no = (why) => {
+  throw new Unclassifiable(why);
+};
+var isWs = (c3) => c3 === " " || c3 === "	" || c3 === "\n" || c3 === "\r" || c3 === "\f" || c3 === "\v";
+var isIdent = (c3) => c3 !== void 0 && /[A-Za-z0-9_$]/.test(c3);
+var Out = class {
+  segs = [];
+  push(kind, text) {
+    const last = this.segs.at(-1);
+    if (last !== void 0 && last.kind === kind && kind !== "string") last.text += text;
+    else this.segs.push({ kind, text });
+  }
+};
+function quoted(s, i2, quote, o2) {
+  let j = i2 + quote.length;
+  for (; ; ) {
+    if (j >= s.length) return no("an unterminated string");
+    const c3 = s[j];
+    if (o2.escapes && c3 === "\\") {
+      j += 2;
+      continue;
+    }
+    if (s.startsWith(quote, j)) {
+      if (o2.doubled === true && s.startsWith(quote, j + quote.length)) {
+        j += quote.length * 2;
+        continue;
+      }
+      return j + quote.length;
+    }
+    if (!o2.multiline && c3 === "\n") return no("a line break in a one-line string");
+    j++;
+  }
+}
+function prevCode(out) {
+  for (let k = out.segs.length - 1; k >= 0; k--) {
+    const seg = out.segs[k];
+    if (seg.kind === "ws" || seg.kind === "comment") continue;
+    if (seg.kind === "string") return { char: '"', word: "" };
+    const t = seg.text.replace(/\s+$/, "");
+    if (t === "") continue;
+    const word = /[A-Za-z0-9_$]+$/.exec(t)?.[0] ?? "";
+    return { char: t.at(-1), word };
+  }
+  return { char: void 0, word: "" };
+}
+var REGEX_AFTER = /* @__PURE__ */ new Set([
+  "return",
+  "typeof",
+  "instanceof",
+  "in",
+  "of",
+  "new",
+  "delete",
+  "void",
+  "throw",
+  "case",
+  "do",
+  "else",
+  "yield",
+  "await"
+]);
+function tokenizeJs(s) {
+  const out = new Out();
+  let i2 = 0;
+  while (i2 < s.length) {
+    const c3 = s[i2];
+    if (isWs(c3)) {
+      out.push("ws", c3);
+      i2++;
+    } else if (s.startsWith("//", i2)) {
+      const end = s.indexOf("\n", i2);
+      const stop = end === -1 ? s.length : end;
+      out.push("comment", s.slice(i2, stop));
+      i2 = stop;
+    } else if (s.startsWith("/*", i2)) {
+      const end = s.indexOf("*/", i2 + 2);
+      if (end === -1) no("an unterminated block comment");
+      out.push("comment", s.slice(i2, end + 2));
+      i2 = end + 2;
+    } else if (c3 === '"' || c3 === "'") {
+      const end = quoted(s, i2, c3, { escapes: true, multiline: false });
+      out.push("string", s.slice(i2, end));
+      i2 = end;
+    } else if (c3 === "`") {
+      const end = quoted(s, i2, "`", { escapes: true, multiline: true });
+      const text = s.slice(i2, end);
+      if (text.includes("${")) no("a template literal with a substitution");
+      out.push("string", text);
+      i2 = end;
+    } else if (c3 === "/") {
+      const prev = prevCode(out);
+      const division = prev.char !== void 0 && (isIdent(prev.char) || prev.char === "]") && !REGEX_AFTER.has(prev.word);
+      if (!division) no("a slash that may start a regular expression");
+      out.push("code", c3);
+      i2++;
+    } else if (c3 === "\\") {
+      no("a backslash outside a string");
+    } else {
+      out.push("code", c3);
+      i2++;
+    }
+  }
+  return out.segs;
+}
+function tokenizeRust(s) {
+  const out = new Out();
+  let i2 = 0;
+  while (i2 < s.length) {
+    const c3 = s[i2];
+    if (isWs(c3)) {
+      out.push("ws", c3);
+      i2++;
+    } else if (s.startsWith("//", i2)) {
+      const end = s.indexOf("\n", i2);
+      const stop = end === -1 ? s.length : end;
+      out.push("comment", s.slice(i2, stop));
+      i2 = stop;
+    } else if (s.startsWith("/*", i2)) {
+      let depth = 0;
+      let j = i2;
+      for (; ; ) {
+        if (j >= s.length) no("an unterminated block comment");
+        if (s.startsWith("/*", j)) {
+          depth++;
+          j += 2;
+        } else if (s.startsWith("*/", j)) {
+          depth--;
+          j += 2;
+          if (depth === 0) break;
+        } else j++;
+      }
+      out.push("comment", s.slice(i2, j));
+      i2 = j;
+    } else if (/^(?:b|c)?r#*"/.test(s.slice(i2, i2 + 260)) && !isIdent(s[i2 - 1])) {
+      const m = /^((?:b|c)?r)(#*)"/.exec(s.slice(i2, i2 + 260));
+      const close = `"${m[2]}`;
+      const end = s.indexOf(close, i2 + m[0].length);
+      if (end === -1) no("an unterminated raw string");
+      out.push("string", s.slice(i2, end + close.length));
+      i2 = end + close.length;
+    } else if (c3 === '"' || (c3 === "b" || c3 === "c") && s[i2 + 1] === '"' && !isIdent(s[i2 - 1])) {
+      const start = c3 === '"' ? i2 : i2 + 1;
+      const end = quoted(s, start, '"', { escapes: true, multiline: true });
+      out.push("string", s.slice(i2, end));
+      i2 = end;
+    } else if (c3 === "'") {
+      const m = /^'(?:\\(?:u\{[0-9A-Fa-f]{1,6}\}|x[0-9A-Fa-f]{2}|.)|[^\\'\n])'/u.exec(
+        s.slice(i2, i2 + 16)
+      );
+      if (m !== null) {
+        out.push("string", m[0]);
+        i2 += m[0].length;
+      } else if (/^'[A-Za-z_]/.test(s.slice(i2, i2 + 2))) {
+        out.push("code", c3);
+        i2++;
+      } else no("a quote that is neither a char literal nor a lifetime");
+    } else {
+      out.push("code", c3);
+      i2++;
+    }
+  }
+  return out.segs;
+}
+function tokenizeSql(s) {
+  const out = new Out();
+  let i2 = 0;
+  while (i2 < s.length) {
+    const c3 = s[i2];
+    if (isWs(c3)) {
+      out.push("ws", c3);
+      i2++;
+    } else if (s.startsWith("--", i2)) {
+      const next = s[i2 + 2];
+      if (next !== void 0 && !isWs(next)) no("-- without a space after it");
+      const end = s.indexOf("\n", i2);
+      const stop = end === -1 ? s.length : end;
+      out.push("comment", s.slice(i2, stop));
+      i2 = stop;
+    } else if (s.startsWith("/*", i2)) {
+      const end = s.indexOf("*/", i2 + 2);
+      if (end === -1) no("an unterminated block comment");
+      if (s.slice(i2 + 2, end).includes("/*")) no("a nested block comment");
+      out.push("comment", s.slice(i2, end + 2));
+      i2 = end + 2;
+    } else if (c3 === "'") {
+      const end = quoted(s, i2, "'", { escapes: false, doubled: true, multiline: true });
+      const text = s.slice(i2, end);
+      if (text.includes("\\")) no("a backslash in a string");
+      out.push("string", text);
+      i2 = end;
+    } else if (c3 === '"' || c3 === "`") {
+      const end = quoted(s, i2, c3, { escapes: false, doubled: true, multiline: true });
+      out.push("string", s.slice(i2, end));
+      i2 = end;
+    } else if (c3 === "$" && !isIdent(s[i2 - 1])) {
+      const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(s.slice(i2, i2 + 70));
+      if (m === null) {
+        out.push("code", c3);
+        i2++;
+        continue;
+      }
+      const end = s.indexOf(m[0], i2 + m[0].length);
+      if (end === -1) no("an unterminated dollar quote");
+      out.push("string", s.slice(i2, end + m[0].length));
+      i2 = end + m[0].length;
+    } else if (c3 === "\\") {
+      no("a backslash outside a string");
+    } else {
+      out.push("code", c3);
+      i2++;
+    }
+  }
+  return out.segs;
+}
+function tokenizePython(s) {
+  const out = new Out();
+  let i2 = 0;
+  while (i2 < s.length) {
+    const c3 = s[i2];
+    if (isWs(c3)) {
+      out.push("ws", c3);
+      i2++;
+    } else if (c3 === "#") {
+      const end = s.indexOf("\n", i2);
+      const stop = end === -1 ? s.length : end;
+      out.push("comment", s.slice(i2, stop));
+      i2 = stop;
+    } else if (c3 === '"' || c3 === "'" || /^[A-Za-z]{1,2}["']/.test(s.slice(i2, i2 + 3)) && !isIdent(s[i2 - 1])) {
+      const prefix = /^[A-Za-z]{0,2}/.exec(s.slice(i2, i2 + 2))?.[0] ?? "";
+      const at2 = i2 + (c3 === '"' || c3 === "'" ? 0 : prefix.length);
+      const pre = s.slice(i2, at2).toLowerCase();
+      if (!/^(?:|r|u|b|br|rb)$/.test(pre)) no("an f-string or an unknown string prefix");
+      const q = s[at2];
+      const triple = s.startsWith(q.repeat(3), at2);
+      const end = quoted(s, at2, triple ? q.repeat(3) : q, { escapes: true, multiline: triple });
+      out.push("string", s.slice(i2, end));
+      i2 = end;
+    } else {
+      out.push("code", c3);
+      i2++;
+    }
+  }
+  return out.segs;
+}
+function tokenizeToml(s) {
+  const out = new Out();
+  let i2 = 0;
+  while (i2 < s.length) {
+    const c3 = s[i2];
+    if (isWs(c3)) {
+      out.push("ws", c3);
+      i2++;
+    } else if (c3 === "#") {
+      const end = s.indexOf("\n", i2);
+      const stop = end === -1 ? s.length : end;
+      out.push("comment", s.slice(i2, stop));
+      i2 = stop;
+    } else if (c3 === '"' || c3 === "'") {
+      const triple = s.startsWith(c3.repeat(3), i2);
+      const end = quoted(s, i2, triple ? c3.repeat(3) : c3, {
+        escapes: c3 === '"',
+        multiline: triple
+      });
+      out.push("string", s.slice(i2, end));
+      i2 = end;
+    } else {
+      out.push("code", c3);
+      i2++;
+    }
+  }
+  return out.segs;
+}
+function tokenizeYaml(s) {
+  const out = new Out();
+  let i2 = 0;
+  while (i2 < s.length) {
+    const c3 = s[i2];
+    const before = s[i2 - 1];
+    let k = i2 - 1;
+    while (s[k] === " " || s[k] === "	") k--;
+    const atToken = k < 0 || s[k] === "\n" || ":-[{,?".includes(s[k]);
+    if (isWs(c3)) {
+      out.push("ws", c3);
+      i2++;
+    } else if (c3 === "#" && (before === void 0 || isWs(before))) {
+      const end = s.indexOf("\n", i2);
+      const stop = end === -1 ? s.length : end;
+      out.push("comment", s.slice(i2, stop));
+      i2 = stop;
+    } else if ((c3 === '"' || c3 === "'") && atToken) {
+      const end = quoted(s, i2, c3, {
+        escapes: c3 === '"',
+        doubled: c3 === "'",
+        multiline: true
+      });
+      out.push("string", s.slice(i2, end));
+      i2 = end;
+    } else if (c3 === "|" || c3 === ">") {
+      no("a block scalar indicator");
+    } else {
+      out.push("code", c3);
+      i2++;
+    }
+  }
+  return out.segs;
+}
+function tokenizeSh(s) {
+  const out = new Out();
+  let i2 = 0;
+  while (i2 < s.length) {
+    const c3 = s[i2];
+    const before = s[i2 - 1];
+    if (isWs(c3)) {
+      out.push("ws", c3);
+      i2++;
+    } else if (c3 === "#" && (before === void 0 || isWs(before) || ";|&()".includes(before))) {
+      const end = s.indexOf("\n", i2);
+      const stop = end === -1 ? s.length : end;
+      out.push("comment", s.slice(i2, stop));
+      i2 = stop;
+    } else if (c3 === "'") {
+      if (before === "$") no("an ANSI-C $'...' string");
+      const end = s.indexOf("'", i2 + 1);
+      if (end === -1) no("an unterminated string");
+      out.push("string", s.slice(i2, end + 1));
+      i2 = end + 1;
+    } else if (c3 === '"') {
+      const end = quoted(s, i2, '"', { escapes: true, multiline: true });
+      out.push("string", s.slice(i2, end));
+      i2 = end;
+    } else if (c3 === "\\") {
+      const next = s[i2 + 1];
+      if (next === " " || next === "	" || next === void 0) no("an escaped blank");
+      out.push("code", s.slice(i2, i2 + 2));
+      i2 += 2;
+    } else if (s.startsWith("<<", i2)) {
+      no("a here-document");
+    } else {
+      out.push("code", c3);
+      i2++;
+    }
+  }
+  return out.segs;
+}
+var TOKENIZERS = {
+  sql: tokenizeSql,
+  rust: tokenizeRust,
+  ts: tokenizeJs,
+  js: tokenizeJs,
+  sh: tokenizeSh,
+  yaml: tokenizeYaml,
+  toml: tokenizeToml,
+  python: tokenizePython
+};
+var BREAKS = {
+  sql: "none",
+  rust: "none",
+  ts: "line",
+  js: "line",
+  sh: "indent",
+  yaml: "indent",
+  toml: "indent",
+  python: "indent"
+};
+function codeOf(text, language) {
+  let segs;
+  try {
+    segs = TOKENIZERS[language](text);
+  } catch (e) {
+    if (e instanceof Unclassifiable) return void 0;
+    throw e;
+  }
+  const mode = BREAKS[language];
+  const parts = [];
+  let gap;
+  const flush = () => {
+    if (gap === void 0) return;
+    if (mode !== "none" && gap.includes("\n")) {
+      const indent = mode === "indent" ? /[ \t]*$/.exec(gap)?.[0] ?? "" : "";
+      parts.push(`
+${indent}`);
+    } else parts.push(" ");
+    gap = void 0;
+  };
+  for (const seg of segs) {
+    if (seg.kind === "ws") gap = (gap ?? "") + seg.text;
+    else if (seg.kind === "comment") gap = (gap ?? "") + (seg.text.includes("\n") ? "\n" : " ");
+    else {
+      flush();
+      parts.push(seg.text);
+    }
+  }
+  return parts.join("").trim();
+}
+function commentsOnly(base, head, language) {
+  const a2 = codeOf(base, language);
+  const b = codeOf(head, language);
+  return a2 !== void 0 && b !== void 0 && a2 === b;
+}
+function whitespaceOnly(base, head) {
+  const norm = (t) => t.split(/\r?\n/).map((l) => l.replace(/[ \t\r]+$/, "")).join("\n").replace(/\n+$/, "");
+  return norm(base) === norm(head);
+}
+
 // src/config.ts
 var ROLE_TEMPLATES = ["builder", "reviewer", "designer", "researcher", "release"];
 var strList2 = external_exports.array(external_exports.string()).default([]);
@@ -28656,44 +29078,41 @@ var workflowJob = external_exports.strictObject({
     external_exports.string().regex(/^[A-Za-z0-9 ._()/:-]+$/, "letters, digits, spaces and . _ - ( ) / : only")
   )
 });
-var argWord = external_exports.string().min(1).max(500).regex(/^[^\p{Cc}\p{Cf}]+$/u, "one plain line of at most 500 characters");
 var EVIDENCE_ID_RE = /^[a-z][a-z0-9-]{0,47}$/;
-var RUN_CI_REFUSED = "run: ci is not supported: an evidence job runs the pull request head, whose code can prove anything; it comes later with a checkout of the base";
-function commandPaths(command) {
-  return command.filter(
-    (w, i2) => i2 === 0 ? w.includes("/") : !w.startsWith("-") && !/\s/.test(w) && (w.includes("/") || /\.[A-Za-z0-9]{1,8}$/.test(w))
-  );
-}
-var evidenceRuleSchema = external_exports.strictObject({
+var NO_COMMANDS = "evidence rules take a built-in proof (comments_only, whitespace_only, paths_only); custom proof commands come later, with a real sandbox";
+var COMMAND_KEYS = ["command", "run", "inputs", "timeoutSeconds", "job"];
+var evidenceRuleSchema = external_exports.looseObject({
   id: external_exports.string().regex(EVIDENCE_ID_RE, "must match ^[a-z][a-z0-9-]{0,47}$"),
   // The CI job that reports the hit, e.g. a migration guard.
   guard: workflowJob,
-  // local: Studio runs `command` itself, sandboxed, in an extract of the base, with the diff as a
-  // file. `ci` is refused (RUN_CI_REFUSED).
-  run: external_exports.enum(["local", "ci"]).default("local"),
-  command: external_exports.array(argWord).min(1).max(32),
-  // The line the command must print on stdout, followed by a space and the run's nonce.
-  proof: external_exports.string().min(1).max(200).regex(/^[^\p{Cc}\p{Cf}]+$/u, "one line of at most 200 characters"),
-  timeoutSeconds: external_exports.number().int().min(1).max(600).default(60),
-  // Files the evidence depends on (its script, its config): a pull request that changes one, or
-  // one Studio adds (src/evidence.ts), gets no exception and no approval from Studio.
-  inputs: external_exports.array(globSchema).min(1, "needs the files the command reads, its script among them").max(50),
-  // A hit the evidence does not explain goes to the owner, not the lead.
+  // comments_only and whitespace_only: every changed file under `paths` (at least one) changes
+  // only that. paths_only: every changed file matches `paths`.
+  proof: external_exports.enum(["comments_only", "whitespace_only", "paths_only"]),
+  paths: external_exports.array(globSchema).min(1).max(50),
+  // comments_only: the languages it reads; a changed file of any other kind proves nothing.
+  languages: external_exports.array(external_exports.enum(PROOF_LANGUAGES)).min(1).optional(),
+  // A hit the proof does not explain goes to the owner, not the lead.
   ownerOnly: external_exports.boolean().default(false)
 }).superRefine((r, ctx) => {
   const issue2 = (path10, message) => ctx.addIssue({ code: "custom", path: [path10], message });
-  if (r.run === "ci") issue2("run", RUN_CI_REFUSED);
-  if ((r.command[0] ?? "").startsWith("-")) issue2("command", "must not start with -");
-  for (const [i2, w] of commandPaths(r.command).entries()) {
-    const program = i2 === 0 && r.command[0] === w;
-    if (w.split("/").includes("..")) issue2("command", `${w}: no .. in a path`);
-    else if (isAbsolute(w)) {
-      if (!program) issue2("command", `${w}: an absolute path is no repository file`);
-    } else if (!r.inputs.some((g2) => globProblem(g2) === void 0 && matchGlob(g2, w.replace(/^\.\//, "")))) {
-      issue2("inputs", `${w} in command is not covered by inputs`);
-    }
+  const known = ["id", "guard", "proof", "paths", "languages", "ownerOnly"];
+  for (const key of Object.keys(r).filter((k) => !known.includes(k))) {
+    issue2(key, COMMAND_KEYS.includes(key) ? NO_COMMANDS : "unknown key");
   }
-});
+  if (r.proof === "comments_only" && r.languages === void 0) {
+    issue2("languages", "comments_only needs the languages it reads");
+  }
+  if (r.proof !== "comments_only" && r.languages !== void 0) {
+    issue2("languages", "only comments_only reads languages");
+  }
+}).transform(({ id, guard, proof, paths, languages, ownerOnly }) => ({
+  id,
+  guard,
+  proof,
+  paths,
+  ...languages === void 0 ? {} : { languages },
+  ownerOnly
+}));
 var dailyLimitsSchema = external_exports.strictObject({
   dailyCostUsd: external_exports.number().positive().optional()
 });
@@ -28959,7 +29378,7 @@ function configWarnings(config2) {
 
 // src/init.ts
 var import_yaml13 = __toESM(require_dist(), 1);
-import { lstatSync as lstatSync23, mkdirSync as mkdirSync6, readdirSync as readdirSync10, rmdirSync, rmSync as rmSync5, writeFileSync as writeFileSync10 } from "node:fs";
+import { lstatSync as lstatSync23, mkdirSync as mkdirSync6, readdirSync as readdirSync10, rmdirSync, rmSync as rmSync5, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join27 } from "node:path";
 
 // src/capacity.ts
@@ -29123,15 +29542,7 @@ import {
 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve2, sep as sep2 } from "node:path";
-var STATE_PROTECTED_DIRS = [
-  "guard",
-  "settings",
-  "briefs",
-  "logs",
-  "homes",
-  "tmp",
-  "evidence"
-];
+var STATE_PROTECTED_DIRS = ["guard", "settings", "briefs", "logs", "homes", "tmp"];
 var STATE_FILES = [
   "crew.json",
   "queue.json",
@@ -34960,8 +35371,8 @@ async function launchCrew(projectDir, item, config2, ports, launcher2 = {}) {
   const turn = launchChain;
   let done = () => {
   };
-  launchChain = new Promise((resolve9) => {
-    done = resolve9;
+  launchChain = new Promise((resolve8) => {
+    done = resolve8;
   });
   await turn;
   const held2 = {};
@@ -35369,15 +35780,15 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
 }
 
 // src/push.ts
-import { randomBytes as randomBytes9 } from "node:crypto";
+import { randomBytes as randomBytes8 } from "node:crypto";
 import { lstatSync as lstatSync21, readFileSync as readFileSync24 } from "node:fs";
 import { join as join24 } from "node:path";
 
 // src/evidence.ts
 var import_yaml10 = __toESM(require_dist(), 1);
-import { createHash as createHash3, randomBytes as randomBytes8 } from "node:crypto";
-import { existsSync as existsSync7, lstatSync as lstatSync19, readFileSync as readFileSync22, writeFileSync as writeFileSync9 } from "node:fs";
-import { join as join22, posix } from "node:path";
+import { createHash as createHash3 } from "node:crypto";
+import { existsSync as existsSync7, lstatSync as lstatSync19, readFileSync as readFileSync22 } from "node:fs";
+import { join as join22 } from "node:path";
 
 // src/ci-jobs.ts
 var import_yaml9 = __toESM(require_dist(), 1);
@@ -35988,6 +36399,24 @@ async function viewPr(entry, gh) {
     mergeable: typeof mergeable === "string" ? mergeable : "UNKNOWN"
   };
 }
+async function baseOidOf(entry, gh) {
+  const r = await gh.run([
+    "pr",
+    "view",
+    String(entry.pr),
+    "--repo",
+    entry.repo,
+    "--json",
+    "baseRefOid"
+  ]);
+  if (r.code !== 0) return void 0;
+  try {
+    const oid = JSON.parse(r.stdout)?.baseRefOid;
+    return typeof oid === "string" && /^[0-9a-f]{40,64}$/i.test(oid) ? oid : void 0;
+  } catch {
+    return void 0;
+  }
+}
 async function mergeShaOf(entry, gh) {
   const r = await gh.run([
     "pr",
@@ -36035,6 +36464,7 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
   };
   const moved = `head moved ${MAX_ATTEMPTS} times`;
   const waived = /* @__PURE__ */ new Map();
+  const waivedBase = /* @__PURE__ */ new Map();
   const judged = async (head) => {
     const verdict = await readChecks(entry, gh, waived.get(head));
     if (verdict.kind !== "failed" || verdict.failed === void 0 || !opts.evidence) {
@@ -36046,6 +36476,8 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
     if (ev.kind === "lead") return { kind: "evidence", reason: ev.reason };
     const all = /* @__PURE__ */ new Set([...waived.get(head) ?? [], ...ev.waived]);
     waived.set(head, all);
+    if (ev.base === void 0) waivedBase.delete(head);
+    else waivedBase.set(head, ev.base);
     return readChecks(entry, gh, all);
   };
   let attempts = 1;
@@ -36141,6 +36573,17 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
       if (held2 !== void 0) {
         enter("capacity");
         throw new QueueHeld(held2);
+      }
+      if (waived.has(head)) {
+        const judgedOn = waivedBase.get(head);
+        const live = await baseOidOf(entry, gh);
+        if (judgedOn === void 0 || live === void 0 || live.toLowerCase() !== judgedOn.toLowerCase()) {
+          waived.delete(head);
+          waivedBase.delete(head);
+          if (++rechecks > MAX_ATTEMPTS) return failed(`checks changed ${MAX_ATTEMPTS} times`);
+          step = "checks";
+          continue;
+        }
       }
       const r = await gh.run([
         "pr",
@@ -36244,40 +36687,17 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
 var EXCEPTIONS_FILE = "exceptions.jsonl";
 var EXCEPTIONS_LOCK = "exceptions.lock";
 var EXCEPTIONS_LOCK_STALE_MS = 3e4;
-var EVIDENCE_DIR = "evidence";
 var RETRIES_FILE = "evidence-retries.json";
 var MAX_RETRIES = 5;
 var LEAD_PREFIX = "evidence: ";
 var OWNER_PREFIX = "evidence (owner): ";
-var IMPLICIT_INPUTS = [
-  "package.json",
-  "pnpm-lock.yaml",
-  "pnpm-workspace.yaml",
-  "package-lock.json",
-  "npm-shrinkwrap.json",
-  "yarn.lock",
-  ".npmrc",
-  ".yarnrc",
-  ".yarnrc.yml",
-  "Cargo.toml",
-  "Cargo.lock",
-  "pyproject.toml",
-  "poetry.lock",
-  "uv.lock",
-  "Pipfile",
-  "Pipfile.lock",
-  "requirements*.txt",
-  "setup.py",
-  "setup.cfg"
-];
 var STUDIO_CONFIG2 = ".studio/studio.yaml";
 var SHA3 = /^[0-9a-f]{40,64}$/i;
 var GIT_FETCH_MS4 = 12e4;
 var GIT_LOCAL_MS4 = 6e4;
-var GIT_ARCHIVE_MS = 3e5;
-var MAX_STDOUT = 1024 * 1024;
 var LOCK_WAIT_MS = 5e3;
 var RETRIES_KEEP_MS = 24 * 60 * 6e4;
+var MAX_BLOB = 2 * 1024 * 1024;
 var DIFF = [
   "-c",
   "core.quotePath=false",
@@ -36291,9 +36711,9 @@ var DIFF = [
 var entrySchema2 = external_exports.object({
   v: external_exports.literal(1),
   at: external_exports.string(),
-  /** `applied`: the exception holds for this head; `not_proven`: the command ran and proved nothing. */
+  /** `applied`: the exception holds for this head; `not_proven`: the proof did not hold. */
   outcome: external_exports.enum(["applied", "not_proven"]),
-  /** Who decided: the evidence itself, the lead, or the owner in a terminal. */
+  /** Who decided: the proof itself (`evidence`), the lead, or the owner in a terminal. */
   by: external_exports.enum(["evidence", "lead", "owner"]),
   rule: external_exports.string().regex(EVIDENCE_ID_RE),
   /** The guard job as `<workflow file> / <job>`. */
@@ -36303,14 +36723,11 @@ var entrySchema2 = external_exports.object({
   item: external_exports.string().optional(),
   base: external_exports.string().regex(SHA3),
   head: external_exports.string().regex(SHA3),
-  /** sha256 of `git diff base...head`: what the evidence judged. */
+  /** sha256 of `git diff base...head`: what the proof judged. */
   diff: external_exports.string(),
-  run: external_exports.literal("local").optional(),
-  command: external_exports.array(external_exports.string()).optional(),
-  /** sha256 of the command's stdout. */
-  output: external_exports.string().optional(),
+  /** The built-in proof that was computed. */
   proof: external_exports.string().optional(),
-  /** Why the evidence proved nothing: Studio's own text. */
+  /** Why the proof did not hold: Studio's own text, a path at most quoted. */
   why: external_exports.string().optional(),
   /** A grant: the lead's or the owner's one line. */
   reason: external_exports.string().optional()
@@ -36319,15 +36736,6 @@ var digest = (text) => `sha256:${createHash3("sha256").update(text).digest("hex"
 var short = (sha) => sha.slice(0, 12);
 var guardName = (r) => `${r.guard.workflow} / ${r.guard.job}`;
 var sameKey = (e, k) => e.rule === k.rule && e.repo === k.repo && e.pr === k.pr && e.base.toLowerCase() === k.base.toLowerCase() && e.head.toLowerCase() === k.head.toLowerCase();
-function effectiveInputs(r) {
-  const dirs = commandPaths(r.command).filter((w) => !w.startsWith("/")).map((w) => {
-    const p = w.replace(/^\.\//, "");
-    const d = posix.dirname(p);
-    return d === "." ? p : `${d}/**`;
-  });
-  return [.../* @__PURE__ */ new Set([...r.inputs, ...dirs, ...IMPLICIT_INPUTS])];
-}
-var touchesInputs = (files, r) => files.some((f) => effectiveInputs(r).some((glob) => matchGlob(glob, f)));
 function readExceptions(stateRoot) {
   const file2 = join22(stateRoot, EXCEPTIONS_FILE);
   if (!existsSync7(file2)) return [];
@@ -36450,6 +36858,25 @@ async function changedFiles(ctx, base, head) {
     return void 0;
   }
 }
+function parseRaw(out) {
+  const parts = out.split("\0");
+  const changes = [];
+  for (let i2 = 0; i2 + 1 < parts.length; i2 += 2) {
+    const m = /^:(\d{6}) (\d{6}) ([0-9a-f]{40,64}) ([0-9a-f]{40,64}) ([A-Z])\d*$/.exec(
+      parts[i2]
+    );
+    if (m === null) return void 0;
+    changes.push({
+      srcMode: m[1],
+      dstMode: m[2],
+      src: m[3],
+      dst: m[4],
+      status: m[5],
+      path: parts[i2 + 1]
+    });
+  }
+  return changes;
+}
 async function prepare(ctx, ref, head) {
   const facts = await readPrFacts({ gh: ctx.gh }, ref);
   if (facts === void 0) return { kind: "unreadable", why: "the pull request cannot be read" };
@@ -36468,12 +36895,14 @@ async function prepare(ctx, ref, head) {
   if (rules.length === 0) return { kind: "none" };
   const files = await changedFiles(ctx, base, head);
   let diff;
+  let changes;
   try {
     diff = await g(ctx, [...DIFF, "--binary", `${base}...${head}`]);
+    changes = parseRaw(await g(ctx, [...DIFF, "--raw", "--no-abbrev", "-z", `${base}...${head}`]));
   } catch {
     diff = void 0;
   }
-  if (files === void 0 || diff === void 0) {
+  if (files === void 0 || diff === void 0 || changes === void 0) {
     return { kind: "unreadable", why: "the diff cannot be read" };
   }
   let baseWorkflows;
@@ -36486,7 +36915,7 @@ async function prepare(ctx, ref, head) {
   }
   return {
     kind: "ok",
-    p: { base, head, rules, files, diff, baseWorkflows, headWorkflows }
+    p: { base, head, rules, files, changes, diff, baseWorkflows, headWorkflows }
   };
 }
 var isCheckOf = (check2, target) => {
@@ -36503,95 +36932,54 @@ function guardChanged(p, r) {
   }
   return void 0;
 }
-async function runLocal(ctx, p, r, ref, base) {
-  const known = readExceptions(ctx.stateRoot).find(
-    (e) => e.outcome === "not_proven" && sameKey(e, base)
-  );
-  if (known !== void 0) return { kind: "no", why: known.why ?? "it proved nothing" };
-  const notProven = (why) => {
-    const entry = recordException(ctx.stateRoot, {
-      ...base,
-      outcome: "not_proven",
-      by: "evidence",
-      run: "local",
-      command: r.command,
-      proof: r.proof,
-      why
-    });
-    return entry.outcome === "applied" ? { kind: "proven", entry } : { kind: "no", why: entry.why ?? why };
-  };
-  if (p.files.some(hostilePath)) return notProven("a changed path has a control character");
-  if (ctx.runner === void 0) return { kind: "no", why: "no command runner" };
-  const unavailable = await ctx.runner.unavailable();
-  if (unavailable !== void 0) return { kind: "no", why: `no sandbox: ${unavailable}` };
-  const key = createHash3("sha256").update(`${r.id}\0${ref.repo}#${ref.pr}\0${p.base}\0${p.head}`).digest("hex").slice(0, 16);
-  const dir = join22(ctx.stateRoot, EVIDENCE_DIR, `${key}-${randomBytes8(6).toString("hex")}`);
-  const tree = join22(dir, "tree");
-  const home = join22(dir, "home");
-  try {
-    ensureStateDir(ctx.stateRoot, tree);
-    ensureStateDir(ctx.stateRoot, home);
-    const tar = join22(dir, "base.tar");
-    try {
-      await g(ctx, ["archive", "--format=tar", "-o", tar, p.base], GIT_ARCHIVE_MS);
-      await ctx.runner.extract(tar, tree);
-    } catch {
-      return { kind: "retry", why: "the base cannot be extracted" };
+var quotePath = (p) => JSON.stringify(p.slice(0, 120));
+var REGULAR = /^100(644|755)$/;
+async function prove(ctx, p, r) {
+  const hostile = p.files.find(hostilePath);
+  if (hostile !== void 0) return { kind: "no", why: "a changed path has a control character" };
+  const inScope = (f) => r.paths.some((glob) => matchGlob(glob, f));
+  if (r.proof === "paths_only") {
+    const outside = p.files.find((f) => !inScope(f));
+    return outside === void 0 ? { kind: "proven" } : { kind: "no", why: `${quotePath(outside)} is outside the paths` };
+  }
+  const scoped = p.changes.filter((c3) => inScope(c3.path));
+  if (scoped.length === 0) return { kind: "no", why: "no changed file is under the paths" };
+  for (const c3 of scoped) {
+    const name = quotePath(c3.path);
+    if (c3.status === "A" || c3.status === "D") {
+      return { kind: "no", why: `${name} is ${c3.status === "A" ? "added" : "deleted"}` };
     }
-    removeStateEntry(ctx.stateRoot, tar);
-    const diffFile = join22(dir, "diff.patch");
-    const filesFile = join22(dir, "files.txt");
-    writeFileSync9(diffFile, p.diff === "" || p.diff.endsWith("\n") ? p.diff : `${p.diff}
-`, {
-      mode: 384
-    });
-    writeFileSync9(filesFile, p.files.map((f) => `${f}\0`).join(""), { mode: 384 });
-    const nonce = randomBytes8(16).toString("hex");
-    const env = {
-      PATH: ctx.path ?? "/usr/local/bin:/usr/bin:/bin",
-      HOME: home,
-      TMPDIR: home,
-      LANG: "C.UTF-8",
-      LC_ALL: "C.UTF-8",
-      STUDIO_EVIDENCE_RULE: r.id,
-      STUDIO_EVIDENCE_REPO: ref.repo,
-      STUDIO_EVIDENCE_PR: String(ref.pr),
-      STUDIO_EVIDENCE_BASE: p.base,
-      STUDIO_EVIDENCE_HEAD: p.head,
-      STUDIO_EVIDENCE_DIFF: diffFile,
-      STUDIO_EVIDENCE_FILES: filesFile,
-      STUDIO_EVIDENCE_NONCE: nonce
-    };
-    const result = await ctx.runner.run(r.command, {
-      cwd: tree,
-      env,
-      timeoutMs: r.timeoutSeconds * 1e3,
-      maxBytes: MAX_STDOUT,
-      writable: dir,
-      hidden: [...ctx.hidden ?? [], ctx.stateRoot]
-    });
-    if (result.kind === "failed") return { kind: "retry", why: result.why };
-    const proofLine = `${r.proof} ${nonce}`;
-    const why = result.tooLarge ? "its output is over 1 MiB" : result.code !== 0 ? `exit code ${result.code}` : result.stdout.split(/\r?\n/).some((line3) => line3 === proofLine) ? void 0 : "its output lacks the proof line with the nonce";
-    if (why !== void 0) return notProven(why);
-    const entry = recordException(ctx.stateRoot, {
-      ...base,
-      outcome: "applied",
-      by: "evidence",
-      run: "local",
-      command: r.command,
-      output: digest(result.stdout),
-      proof: r.proof
-    });
-    return { kind: "proven", entry };
-  } catch (e) {
-    return { kind: "retry", why: `the run dir failed: ${e.message.slice(0, 200)}` };
-  } finally {
+    if (c3.status !== "M") return { kind: "no", why: `${name} is not a plain change` };
+    if (c3.srcMode !== c3.dstMode) return { kind: "no", why: `${name} changes its mode` };
+    if (!REGULAR.test(c3.srcMode)) return { kind: "no", why: `${name} is no regular file` };
+    const language = r.proof === "comments_only" ? languageOf(c3.path, r.languages ?? []) : void 0;
+    if (r.proof === "comments_only" && language === void 0) {
+      return { kind: "no", why: `${name} is in none of the languages` };
+    }
+    let before;
+    let after2;
     try {
-      removeStateEntry(ctx.stateRoot, dir);
+      const size = async (sha) => Number(await g(ctx, ["cat-file", "-s", sha]));
+      if (await size(c3.src) > MAX_BLOB || await size(c3.dst) > MAX_BLOB) {
+        return { kind: "no", why: `${name} is too large to read` };
+      }
+      before = await g(ctx, ["cat-file", "blob", c3.src]);
+      after2 = await g(ctx, ["cat-file", "blob", c3.dst]);
     } catch {
+      return { kind: "retry", why: `${name} cannot be read` };
+    }
+    if (before.includes("\0") || after2.includes("\0")) {
+      return { kind: "no", why: `${name} is binary` };
+    }
+    const holds = language === void 0 ? whitespaceOnly(before, after2) : commentsOnly(before, after2, language);
+    if (!holds) {
+      return {
+        kind: "no",
+        why: `${name} changes more than ${r.proof === "comments_only" ? "comments and whitespace" : "whitespace"}, or cannot be read for sure`
+      };
     }
   }
+  return { kind: "proven" };
 }
 function leadLine(ref, head, rules, whys) {
   const owner = rules.some((r) => r.ownerOnly);
@@ -36651,28 +37039,33 @@ async function judgeFailedChecks(ctx, ref, head, failed) {
         whys.push(changed);
         continue;
       }
-      if (touchesInputs(p.files, r)) {
-        whys.push("the pull request changes an input of the evidence");
-        continue;
-      }
       const base = {
         v: 1,
         at: ctx.now().toISOString(),
         ...keyOf(r),
         ...ref.item === void 0 ? {} : { item: ref.item },
         guard: guardName(r),
-        diff: digest(p.diff)
+        diff: digest(p.diff),
+        proof: r.proof
       };
-      const attempt = await runLocal(ctx, p, r, ref, base);
-      if (attempt.kind === "proven" && holds(attempt.entry)) {
-        proof = attempt.entry;
+      const result = await prove(ctx, p, r);
+      if (result.kind === "retry") {
+        again ??= result.why;
+        continue;
+      }
+      const entry = recordException(ctx.stateRoot, {
+        ...base,
+        outcome: result.kind === "proven" ? "applied" : "not_proven",
+        by: "evidence",
+        ...result.kind === "no" ? { why: result.why } : {}
+      });
+      if (entry.outcome === "applied" && holds(entry)) {
+        proof = entry;
         break;
       }
-      if (attempt.kind === "proven") {
-        whys.push("a lead grant does not hold for a guard with an owner_only rule");
-      } else if (attempt.kind === "retry") {
-        again ??= attempt.why;
-      } else whys.push(attempt.why);
+      whys.push(
+        entry.outcome === "applied" ? "a lead grant does not hold for a guard with an owner_only rule" : entry.why ?? "it proved nothing"
+      );
     }
     if (proof !== void 0) {
       applied.push(proof);
@@ -36700,13 +37093,6 @@ async function evidenceChange(ctx, baseOid, head) {
   if (files.some((f) => f.toLowerCase() === STUDIO_CONFIG2)) {
     const [atBase, atHead] = [await rawEvidenceAt(ctx, baseOid), await rawEvidenceAt(ctx, head)];
     if (atBase !== atHead) return { problem: "the pull request changes evidence: in studio.yaml" };
-  }
-  const rules = await rulesAt(ctx, baseOid);
-  const touched = rules.filter((r) => touchesInputs(files, r));
-  if (touched.length > 0) {
-    return {
-      problem: `the pull request changes an input of evidence rule ${touched.map((r) => r.id).join(", ")}`
-    };
   }
   return {};
 }
@@ -36964,7 +37350,7 @@ var KEEP_MS = 30 * 24 * 60 * 6e4;
 var MAX_KEYS = 2e3;
 var DEFAULT_NTFY_SERVER = "https://ntfy.sh";
 var TOPIC_RE = /^studio-[A-Za-z0-9_-]{24}$/;
-var newNtfyTopic = () => `studio-${randomBytes9(18).toString("base64url")}`;
+var newNtfyTopic = () => `studio-${randomBytes8(18).toString("base64url")}`;
 function readNotifySecret(owner) {
   const file2 = notifySecretFile(owner);
   const read3 = readOwnerSecret(file2, owner);
@@ -37918,7 +38304,7 @@ function nextSteps(prefix, written, checks, launcher2) {
   ];
 }
 function writeBoth(o2, dir, files) {
-  const write = o2.writeFile ?? ((path10, text) => writeFileSync10(path10, text, { flag: "wx" }));
+  const write = o2.writeFile ?? ((path10, text) => writeFileSync9(path10, text, { flag: "wx" }));
   const madeDir = !exists3(dir);
   if (madeDir) mkdirSync6(dir);
   if (!isRealDir2(dir)) throw new Error(".studio is not a directory: nothing written");
@@ -38507,7 +38893,7 @@ import {
   realpathSync as realpathSync6,
   renameSync as renameSync10,
   rmSync as rmSync6,
-  writeFileSync as writeFileSync11
+  writeFileSync as writeFileSync10
 } from "node:fs";
 import { dirname as dirname10, isAbsolute as isAbsolute5, join as join29, relative as relative2, resolve as resolve5, sep as sep6 } from "node:path";
 
@@ -38766,7 +39152,7 @@ function writeRoadmap(project, out, text, force) {
   if (old === text) return { written: out, changed: false };
   const tmp = join29(dirname10(file2), `.${process.pid}.${Date.now()}.roadmap.tmp`);
   try {
-    writeFileSync11(tmp, text, { flag: "wx" });
+    writeFileSync10(tmp, text, { flag: "wx" });
     renameSync10(tmp, file2);
   } catch (err) {
     rmSync6(tmp, { force: true });
@@ -40348,7 +40734,6 @@ var ASIDE = /^.+\.lock\.[0-9a-f]{8}\.stale$/;
 var TMP = /^.+\.(\d+)\.\d+\.[0-9a-f]{8}\.tmp$/;
 var LAUNCH_GRACE_MS = 2 * 6e4;
 var ASIDE_GRACE_MS = 6e4;
-var EVIDENCE_GRACE_MS = 60 * 6e4;
 function readySince(item) {
   const at2 = item.history.findLast((h2) => h2.to === "ready")?.at;
   const t = at2 === void 0 ? Number.NaN : Date.parse(at2);
@@ -40437,33 +40822,6 @@ async function recoverProject(o2) {
         out.findings.push(finding);
       }
     }
-    let runs;
-    try {
-      runs = readdirSync11(join35(o2.stateRoot, EVIDENCE_DIR));
-    } catch {
-      runs = [];
-    }
-    let pruned = false;
-    for (const name of runs) {
-      const dir = join35(o2.stateRoot, EVIDENCE_DIR, name);
-      try {
-        if (o2.now.getTime() - lstatSync29(dir).mtimeMs < EVIDENCE_GRACE_MS) continue;
-      } catch {
-        continue;
-      }
-      const finding = {
-        check: "leftover",
-        subject: `${EVIDENCE_DIR}/${name}`,
-        found: "left behind by an interrupted evidence run"
-      };
-      if (!o2.dryRun) {
-        removeStateEntry(o2.stateRoot, dir);
-        pruned = true;
-        finding.did = "removed it";
-      }
-      out.findings.push(finding);
-    }
-    if (pruned) await o2.ports.git.run(o2.project, ["worktree", "prune"]).catch(() => "");
   }
   if (!existsSync9(o2.stateRoot)) return out;
   const records = readCrewRecords(o2.stateRoot);
@@ -40639,7 +40997,7 @@ import {
   renameSync as renameSync11,
   rmSync as rmSync7,
   statSync as statSync5,
-  writeFileSync as writeFileSync12
+  writeFileSync as writeFileSync11
 } from "node:fs";
 import { homedir as homedir8 } from "node:os";
 import { dirname as dirname11, join as join36, resolve as resolve6 } from "node:path";
@@ -40716,7 +41074,7 @@ var yes = (answer) => /^(|y|yes)$/i.test(answer.trim());
 function writeAtomic2(file2, text, mode) {
   const tmp = join36(dirname11(file2), `.studio-${process.pid}-${Date.now()}.tmp`);
   try {
-    writeFileSync12(tmp, text, { flag: "wx", mode });
+    writeFileSync11(tmp, text, { flag: "wx", mode });
     chmodSync6(tmp, mode);
     renameSync11(tmp, file2);
   } catch (e) {
@@ -41628,18 +41986,9 @@ async function runCli(argv, deps) {
     const evidenceCtx = (config2, repo, root) => ({
       gh: ports.gh,
       git: ports.git,
-      ...ports.evidence === void 0 ? {} : { runner: ports.evidence },
       checkout: approvalCheckout(project, config2, repo),
       stateRoot: root,
-      now: () => ports.clock.now(),
-      ...deps.env.PATH === void 0 ? {} : { path: deps.env.PATH },
-      // What the sandboxed command may not read: the same credential and config locations a
-      // crew is kept from, the owner config (crew token, push topic) and every state root.
-      hidden: [
-        ...PROTECTED_HOME_PATHS.map((p) => join38(deps.homedir, p)),
-        ownerConfigDir(owner),
-        stateBaseFor(owner)
-      ]
+      now: () => ports.clock.now()
     });
     const queueAdd = async (arg) => {
       const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/.exec(arg ?? "");
@@ -43749,7 +44098,7 @@ ${body.replace(new RegExp("[^\\P{Cc}\\n\\t]|\\p{Cf}", "gu"), "").slice(0, PR_BOD
     const dir = mkdtempSync(join38(tmpdir(), "studio-pr-"));
     try {
       const file2 = join38(dir, "body.md");
-      writeFileSync13(file2, text, { mode: 384 });
+      writeFileSync12(file2, text, { mode: 384 });
       return await use(file2);
     } finally {
       rmSync8(dir, { recursive: true, force: true });
@@ -44066,14 +44415,14 @@ function readHiddenLine(prompt, input2, write) {
   input2.setRawMode(true);
   input2.setEncoding("utf8");
   input2.resume();
-  return new Promise((resolve9) => {
+  return new Promise((resolve8) => {
     let value = "";
     const done = (result) => {
       input2.removeListener("data", onData);
       input2.setRawMode?.(false);
       input2.pause();
       write("\n");
-      resolve9(result);
+      resolve8(result);
     };
     const onData = (chunk) => {
       for (const ch of chunk) {
@@ -44090,14 +44439,14 @@ function readHiddenLine(prompt, input2, write) {
 function readVisibleLine(prompt, input2, output2) {
   if (!input2.isTTY) return Promise.resolve(void 0);
   const rl = createInterface({ input: input2, output: output2, terminal: true });
-  return new Promise((resolve9) => {
+  return new Promise((resolve8) => {
     let answered = false;
     const finish = (value) => {
       if (answered) return;
       answered = true;
       rl.close();
       input2.pause();
-      resolve9(value);
+      resolve8(value);
     };
     rl.on("close", () => finish(void 0));
     rl.on("SIGINT", () => {
@@ -44109,7 +44458,7 @@ function readVisibleLine(prompt, input2, output2) {
 }
 
 // src/ports.ts
-import { spawn as spawn3 } from "node:child_process";
+import { spawn as spawn2 } from "node:child_process";
 import { closeSync as closeSync8, openSync as openSync8, readFileSync as readFileSync38 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
@@ -45775,8 +46124,8 @@ var disconnect = (anyProcess) => {
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/deferred.js
 var createDeferred = () => {
   const methods = {};
-  const promise2 = new Promise((resolve9, reject) => {
-    Object.assign(methods, { resolve: resolve9, reject });
+  const promise2 = new Promise((resolve8, reject) => {
+    Object.assign(methods, { resolve: resolve8, reject });
   });
   return Object.assign(promise2, methods);
 };
@@ -48967,7 +49316,7 @@ var throwOnSerializableInput = (optionName, invalidItem) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-sync.js
-import { writeFileSync as writeFileSync14, appendFileSync } from "node:fs";
+import { writeFileSync as writeFileSync13, appendFileSync } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/output.js
 var shouldLogOutput = ({ stdioItems, encoding, verboseInfo, fdNumber }) => fdNumber !== "all" && isFullVerbose(verboseInfo, fdNumber) && !BINARY_ENCODINGS.has(encoding) && isFdVerbose(fdNumber) && (stdioItems.some(({ type, value }) => type === "native" && PIPED_STDIO_VALUES.has(value)) || stdioItems.every(({ type }) => TRANSFORM_TYPES.has(type)));
@@ -49101,7 +49450,7 @@ var writeToFiles = (chunks, stdioItems, outputFiles) => {
     if (append || outputFiles.has(path10)) {
       appendFileSync(path10, contents);
     } else {
-      writeFileSync14(path10, contents);
+      writeFileSync13(path10, contents);
     }
     outputFiles.add(path10);
   }
@@ -50332,11 +50681,11 @@ var addConcurrentStream = (concurrentStreams, stream, waitName) => {
   const promises = weakMap.get(stream);
   const promise2 = createDeferred();
   promises.push(promise2);
-  const resolve9 = promise2.resolve.bind(promise2);
-  return { resolve: resolve9, promises };
+  const resolve8 = promise2.resolve.bind(promise2);
+  return { resolve: resolve8, promises };
 };
-var waitForConcurrentStreams = async ({ resolve: resolve9, promises }, subprocess) => {
-  resolve9();
+var waitForConcurrentStreams = async ({ resolve: resolve8, promises }, subprocess) => {
+  resolve8();
   const [isSubprocessExit] = await Promise.race([
     Promise.allSettled([true, subprocess]),
     Promise.all([false, ...promises])
@@ -51910,192 +52259,6 @@ var {
   getCancelSignal: getCancelSignal2
 } = getIpcExport();
 
-// src/evidence-sandbox.ts
-import { spawn as spawn2 } from "node:child_process";
-import { existsSync as existsSync12, lstatSync as lstatSync32, realpathSync as realpathSync7 } from "node:fs";
-import { dirname as dirname13, join as join39, resolve as resolve8, sep as sep7 } from "node:path";
-var PROBE_MS = 1e4;
-var KILL_GRACE_MS = 2e3;
-var SANDBOX_EXEC = "/usr/bin/sandbox-exec";
-function realOr2(p) {
-  const abs = resolve8(p);
-  if (existsSync12(abs)) return realpathSync7(abs);
-  const parent = dirname13(abs);
-  return parent === abs ? abs : join39(realOr2(parent), abs.slice(parent.length + 1));
-}
-var within2 = (child, parent) => child === parent || child.startsWith(parent.endsWith(sep7) ? parent : parent + sep7);
-var quotable = (p) => !/["\\\p{Cc}]/u.test(p);
-function seatbeltProfile(writable, hidden2) {
-  const w = realOr2(writable);
-  const all = [w, ...hidden2.map(realOr2)];
-  if (!all.every(quotable)) return void 0;
-  const q = (p) => `"${p}"`;
-  const ancestors = all.slice(1).filter((h2) => within2(w, h2));
-  const others = all.slice(1).filter((h2) => !within2(w, h2));
-  return [
-    "(version 1)",
-    "(allow default)",
-    "(deny network*)",
-    "(deny file-write*)",
-    `(allow file-write* (subpath ${q(w)}) (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))`,
-    ...others.length === 0 ? [] : [`(deny file-read* ${others.map((h2) => `(subpath ${q(h2)})`).join(" ")})`],
-    ...ancestors.length === 0 ? [] : [`(deny file-read-data ${ancestors.map((h2) => `(subpath ${q(h2)})`).join(" ")})`],
-    `(allow file-read* file-read-data (subpath ${q(w)}))`,
-    '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd") (global-name "com.apple.securityd.xpc") (global-name "com.apple.security.agent"))',
-    ""
-  ].join("\n");
-}
-function bwrapArgs(cwd, writable, hidden2) {
-  const w = resolve8(writable);
-  const masks = hidden2.flatMap((h2) => {
-    const p = resolve8(h2);
-    let dir;
-    try {
-      dir = lstatSync32(p).isDirectory();
-    } catch {
-      return [];
-    }
-    return dir ? ["--tmpfs", p] : ["--ro-bind", "/dev/null", p];
-  });
-  return [
-    "--die-with-parent",
-    "--new-session",
-    "--unshare-net",
-    "--unshare-pid",
-    "--ro-bind",
-    "/",
-    "/",
-    "--dev",
-    "/dev",
-    "--proc",
-    "/proc",
-    ...masks,
-    // After the masks: the run dir lies inside the hidden state.
-    "--bind",
-    w,
-    w,
-    "--chdir",
-    resolve8(cwd),
-    "--"
-  ];
-}
-async function probe(file2, args) {
-  try {
-    const r = await execa(file2, args, { reject: false, stdin: "ignore", timeout: PROBE_MS });
-    return r.exitCode === 0;
-  } catch {
-    return false;
-  }
-}
-var availability;
-function sandboxUnavailable() {
-  availability ??= (async () => {
-    if (process.platform === "darwin") {
-      return await probe(SANDBOX_EXEC, ["-p", "(version 1)(allow default)", "/usr/bin/true"]) ? void 0 : "sandbox-exec does not run here";
-    }
-    if (process.platform === "linux") {
-      return await probe("bwrap", [
-        "--ro-bind",
-        "/",
-        "/",
-        "--dev",
-        "/dev",
-        "--unshare-net",
-        "true"
-      ]) ? void 0 : "bwrap (bubblewrap) is missing or cannot create a namespace here";
-    }
-    return `no sandbox for evidence commands on ${process.platform}`;
-  })();
-  return availability;
-}
-function runGroup(file2, args, opts) {
-  return new Promise((done) => {
-    let settled = false;
-    const finish = (r) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      clearTimeout(hard);
-      done(r);
-    };
-    let child;
-    try {
-      child = spawn2(file2, args, {
-        cwd: opts.cwd,
-        env: opts.env,
-        detached: true,
-        stdio: ["ignore", "pipe", "ignore"]
-      });
-    } catch (e) {
-      finish({ kind: "failed", why: `cannot start: ${e.message}` });
-      return;
-    }
-    const killGroup = () => {
-      try {
-        if (child.pid !== void 0) process.kill(-child.pid, "SIGKILL");
-      } catch {
-      }
-    };
-    const chunks = [];
-    let size = 0;
-    let tooLarge = false;
-    child.stdout?.on("data", (b) => {
-      size += b.length;
-      if (size > opts.maxBytes) {
-        tooLarge = true;
-        killGroup();
-        return;
-      }
-      chunks.push(b);
-    });
-    const timer = setTimeout(() => {
-      killGroup();
-      finish({ kind: "failed", why: `timed out after ${Math.round(opts.timeoutMs / 1e3)} s` });
-    }, opts.timeoutMs);
-    const hard = setTimeout(
-      () => finish({ kind: "failed", why: "did not end" }),
-      opts.timeoutMs + KILL_GRACE_MS
-    );
-    timer.unref();
-    hard.unref();
-    child.on("error", (e) => finish({ kind: "failed", why: `cannot start: ${e.message}` }));
-    child.on("close", (code, signal) => {
-      killGroup();
-      finish({
-        kind: "exited",
-        code: code ?? (signal === null ? 1 : 128),
-        stdout: Buffer.concat(chunks).toString("utf8"),
-        tooLarge
-      });
-    });
-  });
-}
-var realEvidence = {
-  unavailable: sandboxUnavailable,
-  async extract(tarFile, dest) {
-    await execa("tar", ["-xf", tarFile, "-C", dest], { stdin: "ignore", timeout: 3e5 });
-  },
-  async run(argv, opts) {
-    const why = await sandboxUnavailable();
-    if (why !== void 0) return { kind: "failed", why };
-    if (argv.length === 0) return { kind: "failed", why: "no command" };
-    const o2 = {
-      cwd: opts.cwd,
-      env: opts.env,
-      timeoutMs: opts.timeoutMs,
-      maxBytes: opts.maxBytes
-    };
-    if (process.platform === "darwin") {
-      const profile = seatbeltProfile(opts.writable, opts.hidden);
-      if (profile === void 0) {
-        return { kind: "failed", why: "a path cannot be written into the sandbox profile" };
-      }
-      return runGroup(SANDBOX_EXEC, ["-p", profile, ...argv], o2);
-    }
-    return runGroup("bwrap", [...bwrapArgs(opts.cwd, opts.writable, opts.hidden), ...argv], o2);
-  }
-};
-
 // src/ports.ts
 var HTTP_TIMEOUT_MS = 15e3;
 var realHttp = {
@@ -52120,7 +52283,7 @@ var PLUGIN_TIMEOUT_MS2 = 3e5;
 var STOP_GRACE_MS = 5e3;
 var STOP_POLL_MS = 100;
 var IDENTITY_TIMEOUT_MS = 5e3;
-var sleep = (ms) => new Promise((resolve9) => setTimeout(resolve9, ms));
+var sleep = (ms) => new Promise((resolve8) => setTimeout(resolve8, ms));
 function realPorts(claudeBin = "claude") {
   const clock = { now: () => /* @__PURE__ */ new Date(), sleep };
   const gh = {
@@ -52161,7 +52324,7 @@ function realPorts(claudeBin = "claude") {
       return r.stdout;
     }
   };
-  const probe2 = (target) => {
+  const probe = (target) => {
     try {
       process.kill(target, 0);
       return true;
@@ -52169,13 +52332,13 @@ function realPorts(claudeBin = "claude") {
       return e.code === "EPERM";
     }
   };
-  const posix2 = process.platform !== "win32";
-  const alive = (pid) => posix2 && probe2(-pid) || probe2(pid);
+  const posix = process.platform !== "win32";
+  const alive = (pid) => posix && probe(-pid) || probe(pid);
   const signal = (pid, sig) => {
     try {
-      process.kill(posix2 ? -pid : pid, sig);
+      process.kill(posix ? -pid : pid, sig);
     } catch (e) {
-      if (!posix2 || e.code !== "ESRCH") return;
+      if (!posix || e.code !== "ESRCH") return;
       try {
         process.kill(pid, sig);
       } catch {
@@ -52186,15 +52349,15 @@ function realPorts(claudeBin = "claude") {
     async start(cwd, args, prompt, logPath, env) {
       const fd = openSync8(logPath, "a");
       try {
-        const child = spawn3(claudeBin, args, {
+        const child = spawn2(claudeBin, args, {
           cwd,
           env,
           detached: true,
           stdio: ["pipe", fd, fd]
         });
-        const pid = await new Promise((resolve9, reject) => {
+        const pid = await new Promise((resolve8, reject) => {
           child.once("error", reject);
-          child.once("spawn", () => resolve9(child.pid));
+          child.once("spawn", () => resolve8(child.pid));
         });
         child.stdin?.on("error", () => {
         });
@@ -52252,8 +52415,8 @@ function realPorts(claudeBin = "claude") {
         forceKillAfterDelay: 1e3
       });
       let timer;
-      const late = new Promise((resolve9) => {
-        timer = setTimeout(() => resolve9({ code: 1, stdout: "" }), opts.timeoutMs + 2e3);
+      const late = new Promise((resolve8) => {
+        timer = setTimeout(() => resolve8({ code: 1, stdout: "" }), opts.timeoutMs + 2e3);
         timer.unref();
       });
       const run2 = child.then((r) => ({
@@ -52292,23 +52455,13 @@ function realPorts(claudeBin = "claude") {
       };
     }
   };
-  return {
-    gh,
-    git,
-    claude,
-    clock,
-    host,
-    credentials,
-    plugins,
-    http: realHttp,
-    evidence: realEvidence
-  };
+  return { gh, git, claude, clock, host, credentials, plugins, http: realHttp };
 }
 
 // src/main.ts
 function launcher() {
   try {
-    return realpathSync8(fileURLToPath6(new URL("../bin/studio", import.meta.url)));
+    return realpathSync7(fileURLToPath6(new URL("../bin/studio", import.meta.url)));
   } catch {
     return void 0;
   }

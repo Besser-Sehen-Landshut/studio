@@ -42,8 +42,6 @@ import {
   loadOwnerConfig,
   type OwnerConfig,
   type OwnerEnv,
-  ownerConfigDir,
-  PROTECTED_HOME_PATHS,
   type RoleConfig,
   type StudioConfig,
 } from './config.js';
@@ -757,18 +755,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     const evidenceCtx = (config: StudioConfig, repo: string, root: string): EvidenceContext => ({
       gh: ports.gh,
       git: ports.git,
-      ...(ports.evidence === undefined ? {} : { runner: ports.evidence }),
       checkout: approvalCheckout(project, config, repo),
       stateRoot: root,
       now: () => ports.clock.now(),
-      ...(deps.env.PATH === undefined ? {} : { path: deps.env.PATH }),
-      // What the sandboxed command may not read: the same credential and config locations a
-      // crew is kept from, the owner config (crew token, push topic) and every state root.
-      hidden: [
-        ...PROTECTED_HOME_PATHS.map((p) => join(deps.homedir, p)),
-        ownerConfigDir(owner),
-        stateBaseFor(owner),
-      ],
     });
 
     /** Puts an approved pull request into the merge queue: the body of `queue add`. */

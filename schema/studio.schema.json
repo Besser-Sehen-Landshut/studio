@@ -501,43 +501,37 @@
             ],
             "additionalProperties": false
           },
-          "run": {
-            "default": "local",
-            "type": "string",
-            "enum": [
-              "local",
-              "ci"
-            ]
-          },
-          "command": {
-            "minItems": 1,
-            "maxItems": 32,
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 500,
-              "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
-            }
-          },
           "proof": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+            "enum": [
+              "comments_only",
+              "whitespace_only",
+              "paths_only"
+            ]
           },
-          "timeout_seconds": {
-            "default": 60,
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 600
-          },
-          "inputs": {
+          "paths": {
             "minItems": 1,
             "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string"
+            }
+          },
+          "languages": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "sql",
+                "rust",
+                "ts",
+                "js",
+                "sh",
+                "yaml",
+                "toml",
+                "python"
+              ]
             }
           },
           "owner_only": {
@@ -548,11 +542,10 @@
         "required": [
           "id",
           "guard",
-          "command",
           "proof",
-          "inputs"
+          "paths"
         ],
-        "additionalProperties": false
+        "additionalProperties": {}
       }
     }
   },

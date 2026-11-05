@@ -2,10 +2,8 @@ import { spawn } from 'node:child_process';
 import { closeSync, openSync, readFileSync } from 'node:fs';
 import { availableParallelism, loadavg } from 'node:os';
 import { execa } from 'execa';
-import { realEvidence } from './evidence-sandbox.js';
 import { parseLinuxStartTime } from './paths.js';
 
-export { realEvidence } from './evidence-sandbox.js';
 export { parseLinuxStartTime } from './paths.js';
 
 export interface Gh {
@@ -102,38 +100,8 @@ export interface PluginCli {
   ): Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
-/** What an evidence command run gives back; `failed` is an infrastructure error, worth a retry. */
-export type EvidenceRun =
-  | { kind: 'exited'; code: number; stdout: string; tooLarge: boolean }
-  | { kind: 'failed'; why: string };
-
-/**
- * Runs an evidence command from studio.yaml on the default branch (src/evidence.ts), sandboxed: no
- * shell, no network, exactly `env`, stdin closed, stderr dropped, writes only below `writable`, no
- * reads of `hidden`, in a process group of its own that a timeout kills. Never throws.
- */
-export interface EvidenceRunner {
-  /** Undefined when commands can run sandboxed here, else why not (the platform has no sandbox). */
-  unavailable(): Promise<string | undefined>;
-  /** Unpacks a tar archive into `dest`. Throws on failure. */
-  extract(tarFile: string, dest: string): Promise<void>;
-  run(
-    argv: readonly string[],
-    opts: {
-      cwd: string;
-      env: Record<string, string>;
-      timeoutMs: number;
-      maxBytes: number;
-      writable: string;
-      hidden: readonly string[];
-    },
-  ): Promise<EvidenceRun>;
-}
-
 export interface Ports {
   gh: Gh;
-  /** Optional so test doubles run no command; a missing one proves nothing. */
-  evidence?: EvidenceRunner;
   credentials: Credentials;
   git: Git;
   claude: Claude;
@@ -367,15 +335,5 @@ export function realPorts(claudeBin = 'claude'): Ports {
     },
   };
 
-  return {
-    gh,
-    git,
-    claude,
-    clock,
-    host,
-    credentials,
-    plugins,
-    http: realHttp,
-    evidence: realEvidence,
-  };
+  return { gh, git, claude, clock, host, credentials, plugins, http: realHttp };
 }

@@ -6,40 +6,39 @@ All notable changes to this project are documented here. The format follows
 ## [0.17.0] - 2026-11-05
 
 A guard job in CI (a migration guard, a floor guard) that flagged a harmless change stopped the pull request
-until a person waved it through, even when a script had already shown mechanically "only comments changed".
-Now a project binds such a guard to an evidence command in `studio.yaml`; when the command proves the hit a
-false alarm on exactly that diff, the failed checks count as waived and the exception is logged with its
-evidence. Without evidence the lead decides; only an `owner_only` rule goes to the owner. Not tagged yet; the
-maintainers tag after the merge.
+until a person waved it through, even when the change was mechanically "only comments". Now a project binds
+such a guard to a built-in proof in `studio.yaml`; when the proof holds on exactly that diff, the failed
+checks count as waived and the exception is logged with its evidence. Without a proof the lead decides; only
+an `owner_only` rule goes to the owner. Not tagged yet; the maintainers tag after the merge.
 
 ### Added
 
 - `evidence:` in `studio.yaml`: rules with `id`, `guard` (the CI job by workflow file and job name),
-  `command` (argv, no shell), `proof`, `timeout_seconds` (1 to 600, default 60), `inputs` (required; every
-  repository file the command names must be covered) and `owner_only`. Studio adds implicit inputs: the
-  directory of each file the command names, and the root manifests and lockfiles.
+  `proof`, `paths`, `languages` (for `comments_only`) and `owner_only`. The proofs, computed by Studio in
+  TypeScript, with no command run:
+  - `comments_only`: every changed file under `paths` changes only comments and whitespace, in `sql`,
+    `rust`, `ts`, `js`, `sh`, `yaml`, `toml` or `python`.
+  - `whitespace_only`: every changed file under `paths` changes only line endings, trailing blanks and
+    blank lines at the end of the file.
+  - `paths_only`: every changed path, both sides of a rename, matches `paths`.
+- Conservative tokenizers per language: strings, block and line comments, nested Rust comments, SQL dollar
+  quoting. What one cannot classify for sure proves nothing, and so does an added, deleted or renamed file,
+  a mode change, a symlink, a submodule, a binary file and a path with a control character. The diff comes
+  from git with pinned options.
 - Rules count only from `studio.yaml` at the pull request's base commit on the default branch (and only
   while the owner's checkout has rules at all). A failure applies to them only when every failed check is a
-  plain failed job of a rule's guard; the guard must be the same at base and head, and the pull request
-  must change none of the rule's inputs.
-- The command runs in an extract of the base (`git archive`, no worktree) below the state root, sandboxed
-  with Seatbelt on macOS or bubblewrap on Linux: no network, writes only in its run dir, no reads of
-  credentials, `~/.claude`, the owner config or any state root, in a process group of its own that a
-  timeout kills. It gets the diff and the NUL-separated changed paths as files, a minimal environment and a
-  nonce: proof is exit code 0 and the stdout line `<proof> <nonce>`. A changed path with a control character
-  proves nothing. Without a sandbox on the platform, no rule proves anything.
-- `exceptions.jsonl` in the state root: an append-only log of what the command answered (`applied` or
-  `not_proven`) and of grants, with rule, guard, pull request, item, base, head, a digest of the diff and of
-  the output, the command and the proof line, or the grant's reason; logged once per rule, pull request,
-  base and head under `exceptions.lock`, so a command never runs twice on one diff, also after a crash.
-  Timeouts, start failures, failed extracts and unreadable pull requests are not logged: they are retried,
-  and after 5 tries per head (`evidence-retries.json`) go to the lead. `recover` breaks a stale
-  `exceptions.lock` and removes what an interrupted run left below `evidence/`.
-- `collect` of an approval and the merge queue use it: waived checks count neither as failed nor as passed,
-  and the queue judges again right before the merge. `collect`, `tick` and `queue run` print `exceptions`;
-  `studio board` lists those of open items, the pane's details view those of the last seven days
-  (`Exceptions by evidence`, in German `Ausnahmen per Beweis`).
-- Without evidence, one line for the lead (`evidence: <job> failed on <repo>#<n> at <head> and no evidence
+  plain failed job of a rule's guard, and the guard must be the same at base and head.
+- `exceptions.jsonl` in the state root: an append-only log of each proof's result (`applied` or
+  `not_proven`) and of grants, with rule, guard, pull request, item, base, head, a digest of the diff, the
+  proof and why, or the grant's reason; logged once per rule, pull request, base and head under
+  `exceptions.lock`. An unreadable pull request or file is retried, unlogged, and after 5 tries per head
+  (`evidence-retries.json`) goes to the lead. `recover` breaks a stale `exceptions.lock`.
+- `collect` of an approval and the merge queue use it: waived checks count neither as failed nor as passed.
+  The queue judges again right before the merge and reads the base commit once more immediately before it
+  merges; a moved base is judged again. `collect`, `tick` and `queue run` print `exceptions`; `studio
+  board` lists those of open items, the pane's details view those of the last seven days (`Exceptions by
+  evidence`, in German `Ausnahmen per Beweis`).
+- Without a proof, one line for the lead (`evidence: <job> failed on <repo>#<n> at <head> and no evidence
   proved a false alarm (<rule>: <why>); decide: ...`): the approval waits, or the merge fails. These lines
   are not pushed to the owner's phone; the pane shows them as `guard hit without evidence – decide`. A guard
   with an `owner_only` rule makes it `evidence (owner): ...`, which is pushed.
@@ -48,9 +47,9 @@ maintainers tag after the merge.
   of its rules, and an `owner_only` item take the owner's, in a terminal (`by: owner`). Refused under
   `STUDIO_ROLE=crew`. The lead is trusted here: `owner_only` guards against its mistakes, not against a
   compromised lead.
-- A pull request that changes `evidence:` in `studio.yaml` or an input of a rule at its base gets no
-  approval: the review item is blocked, the owner reviews and merges such a change himself. Checked for
-  every approval from the rules at the base; the approval waits when that cannot be read.
+- A pull request that changes `evidence:` in `studio.yaml` gets no approval: the review item is blocked,
+  the owner reviews and merges such a change himself. Checked for every approval from `studio.yaml` at the
+  base; the approval waits when that cannot be read.
 - The review routine names the guard jobs Studio judges by evidence: a failure of one alone is no finding.
 
 ### Removed
@@ -63,8 +62,8 @@ maintainers tag after the merge.
 
 ### Not in this version
 
-- `run: ci` (an evidence job in CI) is refused with an error: such a job runs the pull request head, whose
-  code can prove anything. It comes later with a checkout of the base.
+- Custom proof commands. A rule with `command`, `run` or `inputs` is refused: they come later, with a real
+  sandbox model.
 
 ### Not exercised
 
