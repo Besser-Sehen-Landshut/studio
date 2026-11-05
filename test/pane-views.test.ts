@@ -568,3 +568,27 @@ describe('terminal cells', () => {
     expect(wide.some((l) => l.includes(`○ ${id}`))).toBe(true);
   });
 });
+
+describe('the cost of today in the footer', () => {
+  const today = (costUsd?: number) => ({
+    today: {
+      day: '2026-11-01',
+      merged: [{ pr: 27, repo: 'org/shop', at: ago(300), item: 'APP-11' }],
+      deployed: 0,
+      ...(costUsd === undefined ? {} : { costUsd }),
+    },
+  });
+  it('shows one value in both views and both languages', () => {
+    for (const view of ['list', 'pipeline'] as const) {
+      const en = texts(draw(read(today(3.456)), { columns: 100, view })).join('\n');
+      expect(en).toContain('today $3.46');
+      const de = texts(draw(read(today(3.456)), { columns: 100, view, lang: 'de' })).join('\n');
+      expect(de).toContain('heute $3.46');
+    }
+  });
+  it('shows nothing without a cost', () => {
+    for (const c of [undefined, 0]) {
+      expect(texts(draw(read(today(c)), { columns: 100 })).join('\n')).not.toMatch(/\$\d/);
+    }
+  });
+});

@@ -146,6 +146,11 @@ const repoName = z
   .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, 'must be owner/repo (letters, digits, . _ -)')
   .refine((r) => r.split('/').every((p) => p !== '.' && p !== '..'), 'must be owner/repo');
 
+/** `limits:` in studio.yaml and in the owner config. */
+const dailyLimitsSchema = z.strictObject({
+  dailyCostUsd: z.number().positive().optional(),
+});
+
 export const studioConfigSchema = z
   .strictObject({
     studio: z.literal(1),
@@ -187,6 +192,8 @@ export const studioConfigSchema = z
     // Plugins crews need, each at one exact version, over the defaults (src/plugins.ts).
     // `studio account setup-plugins` installs them; a launch refuses another installed version.
     plugins: z.array(pluginPinSchema).optional(),
+    // Spending brake: once the ended crew runs of the local day cost this much, nothing new starts.
+    limits: dailyLimitsSchema.optional(),
   })
   .superRefine((cfg, ctx) => {
     const seen = new Set<string>();
@@ -376,6 +383,8 @@ export const ownerConfigSchema = z.strictObject({
       'channel and command go together',
     )
     .optional(),
+  // The same daily cost cap as in studio.yaml, over all projects of the owner together.
+  limits: dailyLimitsSchema.optional(),
 });
 
 export type OwnerConfig = z.infer<typeof ownerConfigSchema>;

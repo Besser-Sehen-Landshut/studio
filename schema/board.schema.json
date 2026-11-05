@@ -239,6 +239,42 @@
             "type": "string",
             "pattern": "^E-[1-9]\\d*$"
           },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "runs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "tokens_in": {
+                "type": "number",
+                "minimum": 0
+              },
+              "tokens_out": {
+                "type": "number",
+                "minimum": 0
+              },
+              "tokens_cache": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cost_usd": {
+                "type": "number",
+                "minimum": 0
+              },
+              "estimated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "runs",
+              "tokens_in",
+              "tokens_out",
+              "cost_usd"
+            ],
+            "additionalProperties": false
+          },
           "history": {
             "default": [],
             "type": "array",

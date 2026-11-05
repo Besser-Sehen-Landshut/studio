@@ -139,6 +139,19 @@ export const workItemSchema = z.strictObject({
   model: z.string().regex(MODEL_NAME_RE, 'not a model name').optional(),
   // The epic this item is a piece of (`epics:` on the same board).
   epic: z.string().regex(EPIC_ID_RE, 'must match ^E-\\d+$').optional(),
+  // Set by `collect` from the crew logs: every run of this item and of the reviews of its pull
+  // request (src/costs.ts).
+  usage: z
+    .strictObject({
+      runs: z.number().int().nonnegative(),
+      tokensIn: z.number().nonnegative(),
+      tokensOut: z.number().nonnegative(),
+      tokensCache: z.number().nonnegative().optional(),
+      costUsd: z.number().nonnegative(),
+      // A run without a result: its cost is estimated from its assistant usage.
+      estimated: z.boolean().optional(),
+    })
+    .optional(),
   history: z.array(historySchema).default([]),
 });
 
@@ -360,6 +373,7 @@ const KEY_ORDER: readonly (keyof WorkItem)[] = [
   'triggers',
   'model',
   'epic',
+  'usage',
   'history',
 ];
 
@@ -389,7 +403,7 @@ function orderedItem(item: WorkItem): Record<string, unknown> {
   for (const key of KEY_ORDER) {
     const v = item[key];
     if (v === undefined) continue;
-    out[snake(key)] = key === 'history' ? mapKeys(v, snake) : v;
+    out[snake(key)] = key === 'history' || key === 'usage' ? mapKeys(v, snake) : v;
   }
   return out;
 }

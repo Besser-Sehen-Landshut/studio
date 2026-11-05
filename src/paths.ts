@@ -54,6 +54,8 @@ export const STATE_FILES = [
   'flaky.json',
   'ci-reruns.json',
   'ci-reruns.lock',
+  'costs.json',
+  'costs.lock',
 ];
 
 /** `$XDG_STATE_HOME/studio`, else `<home>/.local/state/studio`: the parent of every state root. */

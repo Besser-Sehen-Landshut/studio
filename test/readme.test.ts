@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { componentsOf, epicProgress, loadBoard, parseBoard } from '../src/board.js';
 import { loadConfig } from '../src/config.js';
 import { planAssignments } from '../src/planner.js';
+import { STUDIO_VERSION } from '../src/plugins.js';
 import { ROADMAP_HEADER } from '../src/roadmap.js';
 
 describe('README epics', () => {
@@ -101,7 +102,7 @@ describe('README quick start', () => {
     expect(readme).toMatch(/notify: \{ channel, command \}/);
     expect(readme).toContain('`blocks.json` in the owner root');
     expect(readme).toContain('.legacy-');
-    expect(readme).toMatch(/Status: 0\.13\.0/);
+    expect(readme).toContain(`Status: ${STUDIO_VERSION},`);
     expect(readme).toContain('### Push notifications');
     expect(readme).toContain('studio setup --notifications');
     expect(readme).toContain('### Flaky tests');
