@@ -97,8 +97,20 @@ export interface StateSnapshot {
   notifications?: Notification[];
   /** The configured components in config order, for the pane's grouping; absent without any. */
   components?: { id: string; name: string }[];
-  /** Open and accepting epics in id order, with merged of total, for the pane; absent without any. */
-  epics?: { id: string; title: string; status: string; merged: number; total: number }[];
+  /**
+   * Open and accepting epics in id order, and those done in the last day, with merged of total and
+   * the stage (open, reopened, accepting, done), for the pane; absent without any.
+   */
+  epics?: {
+    id: string;
+    title: string;
+    status: string;
+    stage?: string;
+    merged: number;
+    total: number;
+    /** The acceptance item that runs, or the last one. */
+    acceptance?: string;
+  }[];
   /** Folder-free project name for the pane's header: the repository name of `primaryRepo`. */
   project?: string;
   /** Every item that is not merged or dropped, reviews aside, with its stage and what it waits for. */

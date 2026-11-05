@@ -437,6 +437,42 @@
         }
       },
       "additionalProperties": false
+    },
+    "acceptance": {
+      "type": "object",
+      "properties": {
+        "suites": {
+          "minItems": 1,
+          "maxItems": 20,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "workflow": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+              },
+              "job": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+              }
+            },
+            "required": [
+              "workflow",
+              "job"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "suites"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

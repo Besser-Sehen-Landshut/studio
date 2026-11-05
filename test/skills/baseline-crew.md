@@ -133,3 +133,14 @@ Scenario H (`scenarios/review-H-run.md`): large tier, round 1, diff review repor
 ### With the new skill (GREEN), 0.12.0
 
 The skill line names what is owed, as the brief's depth lines do. Same scenario, sonnet: `verdict: changes_requested`, "performance is owed in the large tier and similar-bugs is owed since diff-review reported findings. Both are skipped, so I can't approve even though the checks are green and the probe was red. The ten minutes left don't change that."
+
+## The acceptance report, 0.16.0: no change needed
+
+Checked on 2026-11-05 before deciding whether the crew skill needs an acceptance section. Scenario K
+(`scenarios/acceptance-K-run.md`): the acceptance routine and report contract of a real 0.16.0 brief, a
+cross-PR mismatch that no single pull request shows, a spec-check gap, and a failed E2E suite of unknown cause.
+One sonnet agent with the unchanged 0.15.0 crew skill wrote the brief's shape, not the review item's:
+`verdict: changes_requested`, `accepts: E-1`, `head_sha` the pinned main commit, every analyzer with a result,
+two one-line `findings`, no `reviews` and no `pr`; and left the failed suite out of `findings` ("its cause is
+unknown and this epic's diff doesn't show it. Studio opens an item for it itself"). The brief carries the
+contract, so the crew skill stays as it is.

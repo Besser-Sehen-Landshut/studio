@@ -396,6 +396,14 @@ export const crewCapsSchema = z.strictObject({
   workflowChange: z.literal(true).optional(),
   /** The item holding the pull request declares paths below `.github/`: its jobs may change. */
   ciItem: z.literal(true).optional(),
+  /** An acceptance: the epic it checks, as the board held it at launch (`headRefOid` is main). */
+  acceptsEpic: z.string().optional(),
+  epicState: z.string().optional(),
+  /** The full suites on that main commit as Studio read them at launch. */
+  suites: z
+    .array(z.strictObject({ name: z.string(), state: z.enum(['pass', 'fail']) }))
+    .max(50)
+    .optional(),
 });
 
 /** What a reviewer owes, written beside the brief at launch, out of the crew's reach. */

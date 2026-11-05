@@ -401,6 +401,28 @@
               "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
             }
           },
+          "accepted": {
+            "type": "object",
+            "properties": {
+              "item": {
+                "type": "string",
+                "pattern": "^[A-Z]+-\\d+$"
+              },
+              "sha": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40,64}$"
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "item",
+              "sha",
+              "at"
+            ],
+            "additionalProperties": false
+          },
           "history": {
             "default": [],
             "type": "array",

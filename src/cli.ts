@@ -2,13 +2,24 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import {
+  type AcceptanceDone,
+  type AcceptanceResult,
+  applyAcceptance,
+  checkAcceptanceReport,
+  MAIN_NOTE,
+  prepareAcceptances,
+  settleAcceptances,
+} from './acceptance.js';
 import { runAccount } from './account-command.js';
 import { addItem } from './add-item.js';
 import {
   type ApprovedJob,
+  acceptanceOf,
   type Board,
   BoardError,
   componentsOf,
+  EPIC_STAGE_WORDS,
   ITEM_STATUSES,
   loadBoard,
   type NotRunHere,
@@ -127,6 +138,7 @@ import {
   newerReview,
   openReview,
   readCrewCaps,
+  readDefaultBranch,
   reviewRounds,
   reviewTarget,
 } from './review.js';
@@ -357,8 +369,19 @@ interface Tick {
   flakyItems: CiEvents['flakyItems'];
   /** Per item (`item`), or a phase that failed or did not run (`phase`). */
   errors: { item?: string; phase?: string; error: string }[];
-  /** Epics whose items are all merged (status `accepting`), waiting for their acceptance; absent without one. */
-  epicsReady?: { epic: string; title: string }[];
+  /** Epics whose items are all merged (status `accepting`), in their acceptance; absent without one. */
+  epicsReady?: { epic: string; title: string; acceptance?: string }[];
+  /** Acceptance items this tick added, dropped as superseded, or pinned to a main commit whose full suites completed. */
+  acceptance?: {
+    added?: { epic: string; item: string }[];
+    dropped?: { epic: string; item: string }[];
+    pinned?: { item: string; epic: string; sha: string; suites: { pass: number; fail: number } }[];
+    started?: { item: string; workflow: string; sha: string }[];
+  };
+  /** Epics whose acceptance was green in this tick: one owner line each. */
+  epicsDone?: { epic: string; title: string; item: string }[];
+  /** Epics an acceptance reopened, with the items it added for its findings and failed suites. */
+  epicsReopened?: { epic: string; item: string; findings: string[] }[];
   /** The monthly skills check, when this tick ran it: new update items and what failed. */
   skillsCheck?: { added: string[]; raised: string[]; problems: string[] };
   /** What the restart checks repaired before the tick planned (an interrupted launch); absent without. */
@@ -615,6 +638,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       for (const i of board.items) {
         const target = i.status === 'ready' && i.type === 'review' ? reviewTarget(i) : undefined;
         if (target !== undefined && (await checksPending(ports, target))) ciPending.add(i.id);
+        // An acceptance waits until the tick pinned a main commit whose full suites completed.
+        if (
+          i.status === 'ready' &&
+          acceptanceOf(i) !== undefined &&
+          !(i.notes ?? []).some((n) => n.startsWith(MAIN_NOTE))
+        ) {
+          ciPending.add(i.id);
+        }
       }
       return {
         capacity,
@@ -904,8 +935,18 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           throw new ReportError((e as Error).message);
         }
       };
+      // An epic's acceptance has no pull request: its own record, its own check.
+      const accepts = acceptanceOf(item);
+      let acceptanceDone: AcceptanceDone | undefined;
+      if (accepts !== undefined) {
+        try {
+          acceptanceDone = checkAcceptanceReport(readCrewCaps(stateRoot(), item.id), report);
+        } catch (e) {
+          throw new ReportError((e as Error).message);
+        }
+      }
       const reviewDone =
-        item.type === 'review' && report.status === 'done'
+        item.type === 'review' && report.status === 'done' && accepts === undefined
           ? reviewCaps()
           : { skipped: [] as string[], target: undefined, notRunHere: undefined };
       let approvedJobs: ApprovedJob[] = [];
@@ -1064,6 +1105,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       // Under the lock from reading the board again to saving it: a launch clearing an approval
       // cannot slip in, and what moved while GitHub was asked stays.
       let review: string | undefined;
+      let acceptance: AcceptanceResult | undefined;
       const { next, fixLimit, supersededBy } = await withBoardLock(stateRoot(), now, () => {
         const fresh = loadBoard(project);
         if (findItem(fresh, item.id).status !== item.status) {
@@ -1116,6 +1158,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 ...i,
                 notes: [...(i.notes ?? []), ...capNotes(result)],
               }));
+            }
+            // In the same save: the findings become items of the epic, or the epic is done.
+            if (acceptanceDone !== undefined) {
+              const applied = applyAcceptance(next, findItem(next, item.id), acceptanceDone, now);
+              next = applied.board;
+              acceptance = applied.outcome;
             }
           }
         } else {
@@ -1228,6 +1276,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         ...(skillsMissing.length === 0 ? {} : { skillsMissing }),
         ...(supersededBy === undefined ? {} : { supersededBy }),
         ...(fixLimit ? { fixLimit } : {}),
+        ...(acceptance === undefined ? {} : { acceptance }),
         ...(lessonsProposed > 0 ? { lessonsProposed } : {}),
         // What CI must run because the sandbox could not: only the count and the services, which
         // the schema fixes; the commands are crew text and stay on the item and in the PR body.
@@ -1348,6 +1397,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             if (r.kind === 'moved') {
               out.collected.push(r.out);
               if (typeof r.out.review === 'string') fresh.add(r.out.review);
+              const a = r.out.acceptance as AcceptanceResult | undefined;
+              if (a?.result === 'done') {
+                const title = loadBoard(project).epics?.find((e) => e.id === a.epic)?.title ?? '';
+                out.epicsDone = [...(out.epicsDone ?? []), { epic: a.epic, title, item: item.id }];
+              } else if (a?.result === 'reopened') {
+                out.epicsReopened = [
+                  ...(out.epicsReopened ?? []),
+                  { epic: a.epic, item: item.id, findings: a.findings },
+                ];
+              }
             } else if (r.kind !== 'refused') {
               out.held.push({ item: item.id, reason: r.line });
               // A CI read that keeps failing would otherwise hold the item quietly for ever.
@@ -1390,6 +1449,36 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             out.errors.push({ item: b.id, error: why(e) });
           }
         }
+      };
+
+      // An epic's acceptance: its item, and main pinned once the full suites completed there.
+      const acceptancePhase = async () => {
+        const config = loadConfig(project);
+        const r = await prepareAcceptances({
+          project,
+          stateRoot: root,
+          config,
+          gh: ports.gh,
+          now: () => ports.clock.now(),
+          defaultBranch: (repo) => readDefaultBranch(ports, repo),
+          locked: <T>(fn: () => T | Promise<T>) => withBoardLock(root, ports.clock.now(), fn),
+        });
+        noteAcceptance(r);
+        for (const w of r.waiting) out.held.push(w);
+        for (const l of r.lead) lead(l.item, l.reason);
+      };
+      const noteAcceptance = (r: {
+        added: { epic: string; item: string }[];
+        dropped: { epic: string; item: string }[];
+        pinned?: NonNullable<Tick['acceptance']>['pinned'];
+        started?: NonNullable<Tick['acceptance']>['started'];
+      }) => {
+        const a = out.acceptance ?? {};
+        if (r.added.length > 0) a.added = [...(a.added ?? []), ...r.added];
+        if (r.dropped.length > 0) a.dropped = [...(a.dropped ?? []), ...r.dropped];
+        if ((r.pinned ?? []).length > 0) a.pinned = [...(a.pinned ?? []), ...(r.pinned ?? [])];
+        if ((r.started ?? []).length > 0) a.started = [...(a.started ?? []), ...(r.started ?? [])];
+        if (Object.keys(a).length > 0) out.acceptance = a;
       };
 
       // (c) The plan, launched under every gate `launch` keeps.
@@ -1521,6 +1610,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ['recover', recoverPhase],
           ['collect', collectEnded],
           ['review', reviewMissing],
+          ['acceptance', acceptancePhase],
           ['launch', launchPlanned],
           ['queue add', queueApproved],
           ['sweep', sweep],
@@ -1568,15 +1658,33 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const board = loadBoard(project);
         let now = board;
         if (board.epics?.some((e) => e.status === 'open' || e.status === 'accepting')) {
+          const config = loadConfig(project);
           now = await withBoardLock(root, ports.clock.now(), () => {
             const fresh = loadBoard(project);
             settleAndSave(project, fresh, BY, ports.clock.now());
+            // An epic the queue just completed gets its acceptance item now; the next tick pins main.
+            const settled = settleAcceptances(loadBoard(project), config, ports.clock.now());
+            if (settled.added.length > 0 || settled.dropped.length > 0) {
+              saveBoard(project, settled.board);
+              noteAcceptance(settled);
+            }
             return loadBoard(project);
           });
         }
+        const acceptanceItem = (epic: string) =>
+          now.items.find(
+            (i) => acceptanceOf(i) === epic && i.status !== 'dropped' && i.status !== 'merged',
+          )?.id;
         const ready = (now.epics ?? [])
           .filter((e) => e.status === 'accepting')
-          .map((e) => ({ epic: e.id, title: e.title }));
+          .map((e) => {
+            const item = acceptanceItem(e.id);
+            return {
+              epic: e.id,
+              title: e.title,
+              ...(item === undefined ? {} : { acceptance: item }),
+            };
+          });
         // Only when there is one: a tick without accepting epics prints what it printed before.
         if (ready.length > 0) out.epicsReady = ready;
       } catch (e) {
@@ -1691,6 +1799,24 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               ]),
             ]),
           );
+          // Each epic's stage and progress, below the items: open, in acceptance, done, reopened.
+          const epicList = epicRows(board).filter(
+            (r) => r.stage !== 'dropped' && (epic === undefined || r.id === epic),
+          );
+          if (withEpics && only === undefined && epicList.length > 0) {
+            stdout(
+              `\n${table([
+                ['EPIC', 'STAGE', 'PROGRESS', 'ACCEPTANCE', 'TITLE'],
+                ...epicList.map((r) => [
+                  r.id,
+                  EPIC_STAGE_WORDS[r.stage],
+                  `${r.progress.merged}/${r.progress.total}`,
+                  r.acceptance === undefined ? '-' : `${r.acceptance.item} ${r.acceptance.status}`,
+                  r.title,
+                ]),
+              ])}`,
+            );
+          }
         }
         return 0;
       }
@@ -1732,12 +1858,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             };
             stdout(
               table([
-                ['ID', 'STATUS', 'PROGRESS', 'ITEMS', 'COST', 'TITLE'],
+                ['ID', 'STATUS', 'PROGRESS', 'ITEMS', 'ACCEPTANCE', 'COST', 'TITLE'],
                 ...rows.map((r) => [
                   r.id,
-                  r.status,
+                  EPIC_STAGE_WORDS[r.stage],
                   `${r.progress.merged}/${r.progress.total}`,
                   counts(r.counts),
+                  r.acceptance === undefined ? '-' : `${r.acceptance.item} ${r.acceptance.status}`,
                   usd(r.costUsd),
                   r.title,
                 ]),
@@ -1755,16 +1882,30 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           >[number];
           const items = board.items.filter((i) => i.epic === epic.id);
           if (json) {
-            print({ ...epic, progress: row.progress, counts: row.counts, items });
+            print({
+              ...epic,
+              stage: row.stage,
+              progress: row.progress,
+              counts: row.counts,
+              ...(row.acceptance === undefined ? {} : { acceptanceItem: row.acceptance }),
+              items,
+            });
             return 0;
           }
           const lines = [
-            `${epic.id}  ${epic.status}  ${row.progress.merged}/${row.progress.total}  ${epic.title}`,
+            `${epic.id}  ${EPIC_STAGE_WORDS[row.stage]}  ${row.progress.merged}/${row.progress.total}  ${epic.title}`,
             `Goal: ${epic.goal}`,
             'Acceptance:',
             ...epic.acceptance.map((a) => `  - ${a}`),
             ...(epic.components === undefined ? [] : [`Components: ${epic.components.join(', ')}`]),
             ...(epic.importedFrom === undefined ? [] : [`Imported from: ${epic.importedFrom}`]),
+            ...(epic.accepted === undefined
+              ? row.acceptance === undefined
+                ? []
+                : [`Acceptance: ${row.acceptance.item} ${row.acceptance.status}`]
+              : [
+                  `Accepted: ${epic.accepted.item} on main at ${epic.accepted.sha.slice(0, 12)} (${epic.accepted.at})`,
+                ]),
           ];
           stdout(`${lines.join('\n')}\n`);
           stdout(
@@ -3053,9 +3194,22 @@ function buildSnapshot(
       ...(item?.epic === undefined ? {} : { epic: item.epic }),
     };
   });
+  // Open and accepting epics, and those done in the last day, so the pane shows the acceptance.
+  const doneSince = now.getTime() - 86_400_000;
   const epics = epicRows(board)
-    .filter((e) => e.status === 'open' || e.status === 'accepting')
-    .map((e) => ({ id: e.id, title: e.title, status: e.status, ...e.progress }));
+    .filter((e) => {
+      if (e.status === 'open' || e.status === 'accepting') return true;
+      const at = (board.epics ?? []).find((x) => x.id === e.id)?.accepted?.at;
+      return e.status === 'done' && at !== undefined && Date.parse(at) >= doneSince;
+    })
+    .map((e) => ({
+      id: e.id,
+      title: e.title,
+      status: e.status,
+      stage: e.stage,
+      ...e.progress,
+      ...(e.acceptance === undefined ? {} : { acceptance: e.acceptance.item }),
+    }));
   const events = readMetricEvents(root);
   const usageDays = usageDaysFrom(ownerRoot);
   const ci = {

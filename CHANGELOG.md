@@ -3,6 +3,55 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.16.0] - 2026-11-05
+
+An epic whose items were all merged sat in `accepting` until someone looked: nothing ran the E2E and
+browser suites on main, which no crew sandbox can run, and nobody read the epic's pull requests together.
+Now Studio adds an acceptance item, waits for the full suites on main, has a reviewer crew check the
+combined diff against the acceptance lines, turns each finding into an item of the epic, and marks the
+epic done only when the acceptance is green. Not tagged yet; the maintainers tag after the merge.
+
+### Added
+
+- The acceptance item: once an epic is `accepting`, `tick` adds `Acceptance of E-<n>: <title>` (`review`,
+  role `reviewer`, `triggers: [epic-end]`, the acceptance lines as its Definition of Done, `epic: E-<n>`,
+  notes `acceptance E-<n>` and `acceptance-state: <hash>`). One per epic state: never a second while one is
+  open or one finished for the same items; a dropped one is replaced. It does not count in the epic's
+  progress and does not reopen it. One that has not started is dropped when its epic moves on.
+- `acceptance: { suites: [{ workflow, job }] }` in `studio.yaml`: the full suites. Without it every workflow
+  run on the main commit counts. Before the launch phase `tick` reads them on the head of the default
+  branch, waits on that commit until all completed (`held`), then pins it (`acceptance-main: <sha>`); the
+  planner defers the item until then (`ci pending`). A configured suite with no run there is started once
+  with `gh workflow run` after 10 minutes, recorded in `acceptance-runs.json` before gh runs; a suite
+  cancelled or skipped there gives way to a newer head; what cannot be resolved goes to `needsLead`.
+- The acceptance review: the reviewer loads main at the pinned commit and gets the suite results and the
+  epic's pull requests with their merge commits and files as data files. Its brief has an acceptance
+  routine (coherence across the pull requests, gaps against the acceptance lines, the epic-end full scan
+  over the combined diff, no mutation probe owed) and its own report shape: `verdict`, `accepts: E-<n>`,
+  `head_sha`, `analyzers`, `findings`.
+- `collect` of an acceptance holds the report to its launch record (epic, state, main, suites) and, in the
+  same board save as the item's move, adds one `fix` item per finding (`E-<n>: <finding>`, note
+  `finding of <id>`) and per failed suite (`E-<n>: make <suite> pass on main`, note `suite: <suite>`),
+  which reopens the epic, or marks the epic `done` with `accepted: { item, sha, at }`. It prints
+  `acceptance: { epic, result, findings }`; `tick` prints `epicsDone`, `epicsReopened` and `acceptance`
+  (items added, dropped, pinned, suites started), and `epicsReady` names the acceptance item.
+- Epic stages: `open`, `in acceptance`, `done`, `reopened` (open again after accepting). `studio board`
+  lists each epic's stage, progress and acceptance item below the items; `epic list` has an `ACCEPTANCE`
+  column and shows the stage, `epic show` the acceptance; `state.json` epics carry `stage` and
+  `acceptance` and include epics done in the last day; the pane names the stage; the roadmap adds
+  `· in acceptance` or `· reopened`.
+
+### Changed
+
+- The lead skill: the acceptance is Studio's and the reviewer crew's; the lead never runs the suites,
+  reviews the epic or sets it done by hand, acts on acceptance lines in `needsLead`, and tells the owner
+  once per epic when it is done.
+
+### Not exercised
+
+- A real acceptance crew on a real epic, `gh workflow run` against GitHub, and an epic across several
+  repositories (the acceptance runs in one of them and lists the others' pull requests).
+
 ## [0.15.0] - 2026-11-05
 
 Lessons crews proposed piled up until someone looked, and after a crash or a restart the control room

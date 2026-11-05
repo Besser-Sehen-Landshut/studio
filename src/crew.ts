@@ -11,6 +11,7 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { renderAcceptanceRoutine } from './acceptance.js';
 import { builtInAccount, crewClaudeDir } from './accounts.js';
 import type { WorkItem } from './board.js';
 import { boardPath, loadBoard, saveBoard } from './board.js';
@@ -475,6 +476,7 @@ export function writeBrief(
   const id = item.id;
   const reportFile = `.studio/reports/${caps.reportName ?? `${id}.md`}`;
   const opensPr = item.type !== 'review' && item.type !== 'research';
+  const accepting = caps.review?.acceptance;
   const lines = [
     `# Brief for ${id}`,
     '',
@@ -542,25 +544,36 @@ export function writeBrief(
       : []),
     ...(caps.review === undefined
       ? []
-      : renderReviewRoutine({
-          tier: caps.review.tier,
-          reasons: caps.review.reasons,
-          analyzers: caps.review.analyzers,
-          skipped: caps.skipped,
-          contract: caps.review.contract,
-          round: caps.review.round,
-          ...(caps.review.notRun === undefined ? {} : { notRun: caps.review.notRun }),
-          ...(caps.review.probeRequired === undefined
-            ? {}
-            : { probeRequired: caps.review.probeRequired }),
-          ...(caps.review.pr === undefined ? {} : { pr: caps.review.pr }),
-          ...(caps.review.base === undefined ? {} : { base: caps.review.base }),
-          ...(caps.review.pullRequest === undefined
-            ? {}
-            : { pullRequest: caps.review.pullRequest }),
-          ...(caps.review.notRunHere === undefined ? {} : { notRunHere: caps.review.notRunHere }),
-          ...(caps.review.ciItem === undefined ? {} : { ciItem: caps.review.ciItem }),
-        })),
+      : caps.review.acceptance !== undefined
+        ? renderAcceptanceRoutine({
+            epic: caps.review.acceptance.epic,
+            base: caps.review.acceptance.base,
+            sha: caps.review.acceptance.sha,
+            suites: caps.review.acceptance.suites,
+            pullRequests: caps.review.acceptance.pullRequests,
+            contract: caps.review.contract,
+            analyzers: caps.review.analyzers,
+            skipped: caps.skipped,
+          })
+        : renderReviewRoutine({
+            tier: caps.review.tier,
+            reasons: caps.review.reasons,
+            analyzers: caps.review.analyzers,
+            skipped: caps.skipped,
+            contract: caps.review.contract,
+            round: caps.review.round,
+            ...(caps.review.notRun === undefined ? {} : { notRun: caps.review.notRun }),
+            ...(caps.review.probeRequired === undefined
+              ? {}
+              : { probeRequired: caps.review.probeRequired }),
+            ...(caps.review.pr === undefined ? {} : { pr: caps.review.pr }),
+            ...(caps.review.base === undefined ? {} : { base: caps.review.base }),
+            ...(caps.review.pullRequest === undefined
+              ? {}
+              : { pullRequest: caps.review.pullRequest }),
+            ...(caps.review.notRunHere === undefined ? {} : { notRunHere: caps.review.notRunHere }),
+            ...(caps.review.ciItem === undefined ? {} : { ciItem: caps.review.ciItem }),
+          })),
     '## Working rules',
     '',
     '- Work only inside this checkout.',
@@ -593,33 +606,41 @@ export function writeBrief(
     '',
     opensPr
       ? `Write \`${reportFile}\` in the checkout as the last step, after pushing; do not commit it. Only that file name counts. head_sha is the SHA of the pushed head (\`git rev-parse HEAD\`).`
-      : `Write \`${reportFile}\` in the checkout as the last step, only that file name counts; do not commit it.${item.type === 'review' ? ' head_sha is the SHA of the pull request head you reviewed (`git rev-parse HEAD` after loading it).' : ''}`,
+      : `Write \`${reportFile}\` in the checkout as the last step, only that file name counts; do not commit it.${accepting !== undefined ? ` head_sha is the main commit you checked (${accepting.sha}).` : item.type === 'review' ? ' head_sha is the SHA of the pull request head you reviewed (`git rev-parse HEAD` after loading it).' : ''}`,
     'It starts with YAML frontmatter:',
     '',
     '```yaml',
     '---',
     'status: done|blocked|failed',
     `item: ${id}`,
-    ...(item.type === 'review'
+    ...(accepting !== undefined
       ? [
           'verdict: approve|changes_requested',
-          'reviews: <repo>#<pr>',
-          'head_sha: <40-hex sha of the pull request head you reviewed>',
+          `accepts: ${accepting.epic}`,
+          `head_sha: ${accepting.sha}`,
           'analyzers: { <id>: pass|findings|"skipped: <reason, at most 300 characters>" }',
-          'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"   # the text after the colon at most 300 characters',
-          'finding_attempts: <highest number of attempts on one finding>',
-          'not_run_here_jobs: []   # or entries { command: <command as listed, one line, at most 300 characters>, workflow: <file at the base that defines the job, at most 300 characters>, job: <job name, at most 300 characters>, covers: <one line, at most 600 characters: why this job covers the command> }',
+          'findings: []   # or one line each, at most 300 characters, at most 20: each becomes an item of the epic',
         ]
-      : item.type === 'research'
-        ? []
-        : [
-            caps.prByStudio === true
-              ? `pr_title: "${id}: <summary, one line, at most 200 characters>"`
-              : 'pr: <number>',
-            'head_sha: <40-hex sha of the pushed head commit>',
-            'tests_run: <number of tests that ran>',
-            'not_run_here: []   # or entries { command: <command, one line, at most 300 characters>, missing: database|docker|network|service, reason: <error line, one line, at most 300 characters> }',
-          ]),
+      : item.type === 'review'
+        ? [
+            'verdict: approve|changes_requested',
+            'reviews: <repo>#<pr>',
+            'head_sha: <40-hex sha of the pull request head you reviewed>',
+            'analyzers: { <id>: pass|findings|"skipped: <reason, at most 300 characters>" }',
+            'mutation_probe: "red: <test>"|"green: <test>"|"skipped: <reason>"   # the text after the colon at most 300 characters',
+            'finding_attempts: <highest number of attempts on one finding>',
+            'not_run_here_jobs: []   # or entries { command: <command as listed, one line, at most 300 characters>, workflow: <file at the base that defines the job, at most 300 characters>, job: <job name, at most 300 characters>, covers: <one line, at most 600 characters: why this job covers the command> }',
+          ]
+        : item.type === 'research'
+          ? []
+          : [
+              caps.prByStudio === true
+                ? `pr_title: "${id}: <summary, one line, at most 200 characters>"`
+                : 'pr: <number>',
+              'head_sha: <40-hex sha of the pushed head commit>',
+              'tests_run: <number of tests that ran>',
+              'not_run_here: []   # or entries { command: <command, one line, at most 300 characters>, missing: database|docker|network|service, reason: <error line, one line, at most 300 characters> }',
+            ]),
     'lessons: []',
     'questions: []',
     '---',
@@ -627,17 +648,22 @@ export function writeBrief(
     '',
     'Each one-line field holds no line break and stays within its limit (at most 300 characters unless the field says otherwise); one field over its limit rejects the whole report, so shorten an error line to its first line rather than paste a log.',
     '',
-    ...(item.type === 'review'
+    ...(accepting !== undefined
       ? [
-          'A reviewer opens no pull request: omit pr. reviews names the pull request you reviewed.',
+          `An acceptance opens no pull request and pushes nothing: omit pr and reviews. accepts names ${accepting.epic}; this frontmatter replaces the review item shape.`,
           '',
         ]
-      : item.type === 'research'
+      : item.type === 'review'
         ? [
-            'A research item opens no pull request and pushes nothing: omit pr, head_sha and tests_run. Give the result in the report body.',
+            'A reviewer opens no pull request: omit pr. reviews names the pull request you reviewed.',
             '',
           ]
-        : []),
+        : item.type === 'research'
+          ? [
+              'A research item opens no pull request and pushes nothing: omit pr, head_sha and tests_run. Give the result in the report body.',
+              '',
+            ]
+          : []),
     'The body says what changed and how it was verified.',
     '',
     ...(memory.lessons.length + solutions.length > 0

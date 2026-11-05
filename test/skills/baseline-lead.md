@@ -342,3 +342,35 @@ a reason, the role file committed, a tick to close the item; one owner line, "1 
 builder.", nothing about the restart. All three misses gone.
 
 Not exercised: a real restart with a live lead session, and the lead working a review item over a week.
+
+# Baseline (RED): the acceptance per epic, 0.16.0
+
+Run on 2026-11-05 with one sonnet agent and the 0.15.0 lead skill, scenario
+`scenarios/lead-acceptance-scenario.md` (an epic accepting with its acceptance item, a tick holding it for the
+E2E suite on main, a reopen with two finding items, `epicsDone`, and a `needsLead` line for a suite GitHub would
+not start; the owner asked to hear when an epic is really finished).
+
+Misses:
+
+- Four owner lines where the owner asked for one: "acceptance check against E2E is pending. Not finished yet."
+  at `epicsReady`, "E-4 was reopened by the acceptance check: 2 fix items ..." at the reopen, and a line for the
+  suite that could not start. The skill said "`epicsReady`: one status line", which reads as one per event.
+- For the suite that could not start: after the CI item, "`studio stop APP-40 --requeue`, followed by
+  `studio tick`. This gives APP-40 its one relaunch". APP-40 waits as `ready`; Studio retries it (and drops it
+  itself once the epic moves on). A requeue spends a relaunch that was never needed.
+- Nothing else: no suite run by hand, no finding added by hand, the CI item for `workflow_dispatch` went
+  through the board.
+
+The lead skill gets an "Acceptance: per epic, Studio's" section (Studio adds, waits, reviews and reopens; never
+run, review, add or mark done by hand, never stop or requeue a waiting acceptance; `epicsDone` is the one owner
+line; an acceptance line in `needsLead` is fixed through an item), and "`epicsReady`: one status line" points
+there instead.
+
+## With the new skill (GREEN), 2026-11-05
+
+Same scenario, one sonnet agent: nothing for points 1 to 3 ("Acceptance is Studio's ... `epicsReady` is not an
+owner line", "I must not stop, requeue or drop a waiting acceptance"); for the suite that could not start a CI
+item that adds `workflow_dispatch`, then a tick, "I don't stop or requeue APP-40"; one owner line, "E-4 Pay by
+invoice is done." Both misses gone.
+
+Not exercised: a real lead session over an acceptance that runs for hours.

@@ -159,9 +159,24 @@ export const EPIC_STATUSES = ['open', 'accepting', 'done', 'dropped'] as const;
 export type EpicStatus = (typeof EPIC_STATUSES)[number];
 const epicStatusSchema = z.enum(EPIC_STATUSES);
 
+/** The note that makes an item the acceptance of an epic: `acceptance E-<n>`. */
+export const ACCEPTANCE_NOTE = 'acceptance ';
+const ACCEPTANCE_RE = /^acceptance (E-[1-9]\d*)$/;
+
+/** The epic an item is the acceptance of; undefined for every other item. */
+export function acceptanceOf(item: WorkItem): string | undefined {
+  if (item.type !== 'review') return undefined;
+  for (const n of item.notes ?? []) {
+    const m = ACCEPTANCE_RE.exec(n);
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
 /**
  * A larger piece of work: a goal, acceptance lines and the items that build it (`item.epic`).
- * Studio assigns the id. `accepting` means every item is merged; `done` comes with the acceptance.
+ * Studio assigns the id. `accepting` means every item is merged and the acceptance runs; `done`
+ * comes with a green acceptance (`accepted`).
  */
 export const epicSchema = z.strictObject({
   id: z.string().regex(EPIC_ID_RE, 'must match ^E-\\d+$'),
@@ -174,6 +189,14 @@ export const epicSchema = z.strictObject({
   importedFrom: plainLine.optional(),
   // Plain lines about the epic, e.g. what the import found (`in progress at import`).
   notes: z.array(plainLine).max(20).optional(),
+  // Set when the acceptance was green: the acceptance item and the main commit it checked.
+  accepted: z
+    .strictObject({
+      item: z.string().regex(/^[A-Z]+-\d+$/),
+      sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
+      at: z.string(),
+    })
+    .optional(),
   history: z
     .array(
       z.strictObject({
@@ -386,6 +409,7 @@ const EPIC_KEY_ORDER: readonly (keyof Epic)[] = [
   'components',
   'importedFrom',
   'notes',
+  'accepted',
   'history',
 ];
 
@@ -531,13 +555,16 @@ export type EpicProgress = {
   counts: Partial<Record<ItemStatus, number>>;
 };
 
-/** How far an epic is: its items by status, and merged of all but the dropped ones. */
+/**
+ * How far an epic is: its items by status, and merged of all but the dropped ones. The acceptance
+ * item checks the epic and is no piece of it: it never counts.
+ */
 export function epicProgress(board: Board, epicId: string): EpicProgress {
   const counts: Partial<Record<ItemStatus, number>> = {};
   let merged = 0;
   let total = 0;
   for (const i of board.items) {
-    if (i.epic !== epicId) continue;
+    if (i.epic !== epicId || acceptanceOf(i) !== undefined) continue;
     counts[i.status] = (counts[i.status] ?? 0) + 1;
     if (i.status !== 'dropped') total++;
     if (i.status === 'merged') merged++;
@@ -577,3 +604,21 @@ export function settleEpics(
   });
   return moved.length === 0 ? { board, moved } : { board: { ...board, epics }, moved };
 }
+
+/** What the board, the pane and the roadmap show for an epic. */
+export type EpicStage = 'open' | 'reopened' | 'accepting' | 'done' | 'dropped';
+
+/** `reopened`: open again after an acceptance found work (or new work joined an accepting epic). */
+export function epicStage(epic: Epic): EpicStage {
+  if (epic.status !== 'open') return epic.status;
+  return epic.history.some((h) => h.from === 'accepting' && h.to === 'open') ? 'reopened' : 'open';
+}
+
+/** The stage in words, for tables and the roadmap. */
+export const EPIC_STAGE_WORDS: Readonly<Record<EpicStage, string>> = {
+  open: 'open',
+  reopened: 'reopened',
+  accepting: 'in acceptance',
+  done: 'done',
+  dropped: 'dropped',
+};

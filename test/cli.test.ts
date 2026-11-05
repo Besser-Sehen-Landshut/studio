@@ -13,8 +13,10 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { loadBoard } from '../src/board.js';
+import { epicState, withAcceptanceItem } from '../src/acceptance.js';
+import { type Epic, loadBoard, saveBoard, type WorkItem } from '../src/board.js';
 import { runCli } from '../src/cli.js';
+import { loadConfig } from '../src/config.js';
 import {
   acquireStateLock,
   checkStateMarker,
@@ -4181,16 +4183,19 @@ describe('epics in the CLI', () => {
     withEpics(fx, [epicYaml('E-1'), epicYaml('E-2')]);
     const ports = quiet();
     const t = await cli(fx, ports, 'epic', 'list');
-    expect(t.out.split('\n')[0]).toMatch(/^ID\s+STATUS\s+PROGRESS\s+ITEMS\s+COST\s+TITLE$/);
-    expect(t.out).toMatch(
-      /E-1\s+open\s+1\/3\s+ready 1, in_review 1, merged 1, dropped 1\s+\$0\.00\s+Epic E-1/,
+    expect(t.out.split('\n')[0]).toMatch(
+      /^ID\s+STATUS\s+PROGRESS\s+ITEMS\s+ACCEPTANCE\s+COST\s+TITLE$/,
     );
-    expect(t.out).toMatch(/E-2\s+open\s+0\/0\s+-\s+\$0\.00\s+Epic E-2/);
+    expect(t.out).toMatch(
+      /E-1\s+open\s+1\/3\s+ready 1, in_review 1, merged 1, dropped 1\s+-\s+\$0\.00\s+Epic E-1/,
+    );
+    expect(t.out).toMatch(/E-2\s+open\s+0\/0\s+-\s+-\s+\$0\.00\s+Epic E-2/);
     const j = JSON.parse((await cli(fx, ports, 'epic', 'list', '--json')).out);
     expect(j[0]).toEqual({
       id: 'E-1',
       title: 'Epic E-1',
       status: 'open',
+      stage: 'open',
       progress: { merged: 1, total: 3 },
       counts: { merged: 1, in_review: 1, ready: 1, dropped: 1 },
       costUsd: 0,
@@ -4320,7 +4325,7 @@ describe('epics in the CLI', () => {
     expect((await cli(fx, ports, 'state')).code).toBe(0);
     const snap = JSON.parse(readFileSync(join(fx.state, 'state.json'), 'utf8'));
     expect(snap.epics).toEqual([
-      { id: 'E-1', title: 'Epic E-1', status: 'open', merged: 1, total: 2 },
+      { id: 'E-1', title: 'Epic E-1', status: 'open', stage: 'open', merged: 1, total: 2 },
     ]);
     expect(snap.crew[0]).toMatchObject({ item: 'APP-1', epic: 'E-1' });
   });
@@ -4413,7 +4418,9 @@ describe('epics in the CLI', () => {
       expect(json.errors).toEqual([]);
       expect(statusOf(fx, 'APP-2')?.status).toBe('merged');
       expect(epicOf(fx, 'E-1')?.status).toBe('accepting');
-      expect(json.epicsReady).toEqual([{ epic: 'E-1', title: 'Epic E-1' }]);
+      // The epic the queue completed gets its acceptance item in the same tick.
+      expect(json.epicsReady).toEqual([{ epic: 'E-1', title: 'Epic E-1', acceptance: 'APP-3' }]);
+      expect(json.acceptance).toEqual({ added: [{ epic: 'E-1', item: 'APP-3' }] });
     });
 
     it('settles an epic whose items were merged by hand', async () => {
@@ -4421,7 +4428,9 @@ describe('epics in the CLI', () => {
       withEpics(fx, [epicYaml('E-1')]);
       bind(fx);
       const r = await cli(fx, quiet(), 'tick');
-      expect(JSON.parse(r.out).epicsReady).toEqual([{ epic: 'E-1', title: 'Epic E-1' }]);
+      expect(JSON.parse(r.out).epicsReady).toEqual([
+        { epic: 'E-1', title: 'Epic E-1', acceptance: 'APP-2' },
+      ]);
       expect(epicOf(fx, 'E-1')?.status).toBe('accepting');
     });
 
@@ -4431,6 +4440,167 @@ describe('epics in the CLI', () => {
       bind(fx);
       const r = await cli(fx, quiet(), 'tick');
       expect(JSON.parse(r.out)).not.toHaveProperty('epicsReady');
+    });
+  });
+
+  describe('acceptance', () => {
+    const bind = (fx: Fx) =>
+      checkStateMarker(fx.state, {
+        projectRealpath: projectRealpath(fx.project),
+        originUrl: git(fx.project, 'remote', 'get-url', 'origin'),
+      });
+    /** An accepting epic with one merged piece and its acceptance item, as the tick adds it. */
+    const accepting = (status = 'ready', notes: string[] = []) => {
+      const fx = makeFx([{ id: 'APP-1', status: 'merged', extra: inEpic }]);
+      withEpics(fx, [epicYaml('E-1', 'accepting')]);
+      const board = loadBoard(fx.project);
+      const state = epicState(board, 'E-1');
+      const added = withAcceptanceItem(board, board.epics?.[0] as Epic, loadConfig(fx.project));
+      saveBoard(fx.project, {
+        ...added.board,
+        items: added.board.items.map((i) =>
+          i.id === 'APP-2'
+            ? { ...i, status: status as WorkItem['status'], notes: [...(i.notes ?? []), ...notes] }
+            : i,
+        ),
+      });
+      return { fx, state };
+    };
+    const acceptanceCaps = (fx: Fx, state: string, suites = [{ name: 'CI', state: 'pass' }]) =>
+      writeReviewCaps(fx, 'APP-2', {
+        tier: 'large',
+        analyzers: ['diff-review'],
+        mandatory: ['diff-review'],
+        headRefOid: HEAD,
+        baseRefName: 'main',
+        acceptsEpic: 'E-1',
+        epicState: state,
+        suites,
+      });
+
+    it('plan holds an acceptance until the tick pinned main, then plans it', async () => {
+      const { fx } = accepting();
+      const p = JSON.parse((await cli(fx, quiet(), 'plan')).out);
+      expect(p.deferred).toEqual([{ id: 'APP-2', reason: 'ci pending' }]);
+      const pinned = accepting('ready', [`acceptance-main: ${HEAD}`]);
+      const q = JSON.parse((await cli(pinned.fx, quiet(), 'plan')).out);
+      expect(q.assign.map((i: { id: string }) => i.id)).toEqual(['APP-2']);
+    });
+
+    it('a green acceptance makes the epic done', async () => {
+      const { fx, state } = accepting('assigned', [`acceptance-main: ${HEAD}`]);
+      bind(fx);
+      acceptanceCaps(fx, state);
+      writeReport(
+        fx,
+        'APP-2',
+        `status: done\nitem: APP-2\nverdict: approve\naccepts: E-1\nhead_sha: ${HEAD}\nanalyzers: { diff-review: pass }\nfindings: []`,
+      );
+      const r = await cli(fx, quiet(), 'collect', 'APP-2');
+      expect(r.err).toBe('');
+      expect(JSON.parse(r.out)).toMatchObject({
+        item: 'APP-2',
+        status: 'merged',
+        verdict: 'approve',
+        acceptance: { epic: 'E-1', result: 'done', findings: [] },
+      });
+      expect(epicOf(fx, 'E-1')).toMatchObject({
+        status: 'done',
+        accepted: { item: 'APP-2', sha: HEAD },
+      });
+      expect(statusOf(fx, 'APP-2')?.notes).toEqual(expect.arrayContaining(['verdict: approve']));
+      const list = await cli(fx, quiet(), 'epic', 'list');
+      expect(list.out).toMatch(/E-1\s+done\s+1\/1\s+merged 1\s+APP-2 merged/);
+      // A tick afterwards adds no second acceptance for the done epic.
+      const t = JSON.parse((await cli(fx, quiet(), 'tick')).out);
+      expect(t).not.toHaveProperty('acceptance');
+      expect(t).not.toHaveProperty('epicsReady');
+    });
+
+    it('findings and a failed suite become items of the epic and reopen it', async () => {
+      const { fx, state } = accepting('assigned', [`acceptance-main: ${HEAD}`]);
+      acceptanceCaps(fx, state, [
+        { name: 'CI', state: 'pass' },
+        { name: 'E2E', state: 'fail' },
+      ]);
+      writeReport(
+        fx,
+        'APP-2',
+        `status: done\nitem: APP-2\nverdict: changes_requested\naccepts: E-1\nhead_sha: ${HEAD}\nanalyzers: { diff-review: findings }\nfindings: ["The order and the mail disagree on the invoice number"]`,
+      );
+      const r = await cli(fx, quiet(), 'collect', 'APP-2');
+      expect(r.err).toBe('');
+      expect(JSON.parse(r.out).acceptance).toEqual({
+        epic: 'E-1',
+        result: 'reopened',
+        findings: ['APP-3', 'APP-4'],
+      });
+      expect(statusOf(fx, 'APP-3')).toMatchObject({
+        title: 'E-1: The order and the mail disagree on the invoice number',
+        status: 'ready',
+        epic: 'E-1',
+        notes: ['finding of APP-2'],
+      });
+      expect(statusOf(fx, 'APP-4')?.title).toBe('E-1: make E2E pass on main');
+      expect(epicOf(fx, 'E-1')?.status).toBe('open');
+      const board = await cli(fx, quiet(), 'board');
+      expect(board.out).toMatch(/E-1\s+reopened\s+1\/3\s+APP-2 merged\s+Epic E-1/);
+      expect((await cli(fx, quiet(), 'roadmap')).out).toContain('E-1 — Epic E-1 (1/3) · reopened');
+    });
+
+    it('a report about another epic or another main commit moves nothing', async () => {
+      for (const front of [
+        `verdict: approve\naccepts: E-2\nhead_sha: ${HEAD}`,
+        `verdict: approve\naccepts: E-1\nhead_sha: ${OTHER}`,
+      ]) {
+        const { fx, state } = accepting('assigned', [`acceptance-main: ${HEAD}`]);
+        acceptanceCaps(fx, state);
+        writeReport(
+          fx,
+          'APP-2',
+          `status: done\nitem: APP-2\n${front}\nanalyzers: { diff-review: pass }`,
+        );
+        const r = await cli(fx, quiet(), 'collect', 'APP-2');
+        expect(r.code).toBe(1);
+        expect(r.err).toMatch(/another epic|another main commit/);
+        expect(statusOf(fx, 'APP-2')?.status).toBe('assigned');
+        expect(epicOf(fx, 'E-1')?.status).toBe('accepting');
+      }
+    });
+
+    it('tick pins main once the suites completed there and launches the acceptance', async () => {
+      const { fx } = accepting();
+      bind(fx);
+      const { gh, calls } = fakeGh((l) => {
+        if (l.startsWith('repo view org/app')) {
+          return { stdout: JSON.stringify({ defaultBranchRef: { name: 'main' } }) };
+        }
+        if (l.startsWith(`run list --repo org/app --commit ${HEAD}`)) {
+          return {
+            stdout: JSON.stringify([
+              { databaseId: 1, workflowName: 'CI', status: 'completed', conclusion: 'success' },
+            ]),
+          };
+        }
+        return undefined;
+      });
+      const api = gh.api;
+      gh.api = async (path, jq, opts) =>
+        path === 'repos/org/app/commits/main' ? `${HEAD}\n` : api(path, jq, opts);
+      const r = await cli(fx, fakePorts(gh).ports, 'tick');
+      const out = JSON.parse(r.out);
+      expect(out.errors).toEqual([]);
+      expect(out.acceptance).toEqual({
+        pinned: [{ item: 'APP-2', epic: 'E-1', sha: HEAD, suites: { pass: 1, fail: 0 } }],
+      });
+      expect(out.launched.map((l: { item: string }) => l.item)).toEqual(['APP-2']);
+      expect(out.epicsReady).toEqual([{ epic: 'E-1', title: 'Epic E-1', acceptance: 'APP-2' }]);
+      expect(statusOf(fx, 'APP-2')?.status).toBe('assigned');
+      expect(readFileSync(join(fx.state, 'briefs', 'APP-2.md'), 'utf8')).toContain(
+        '## Acceptance routine',
+      );
+      // Nothing was started: the suite had run.
+      expect(calls.some((c) => c.startsWith('workflow run'))).toBe(false);
     });
   });
 
