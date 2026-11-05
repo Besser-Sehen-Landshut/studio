@@ -366,6 +366,11 @@ function withReviewItem(
     dependsOn: [],
     dod: [...builder.dod],
     notes: [`review ${target}`],
+    // The builder's risk and triggers set the depth of the gate: security, the large tier, scans.
+    ...(builder.risk === undefined || builder.risk.length === 0 ? {} : { risk: [...builder.risk] }),
+    ...(builder.triggers === undefined || builder.triggers.length === 0
+      ? {}
+      : { triggers: [...builder.triggers] }),
     history: [],
   };
   return { board: { ...board, items: [...board.items, review] }, id };

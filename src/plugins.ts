@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { isMap, isScalar, parseDocument } from 'yaml';
+import { isAlias, isMap, isScalar, isSeq, parseDocument, type Scalar, type YAMLMap } from 'yaml';
 import { z } from 'zod';
 
 /** This plugin's own version; a test keeps it equal to package.json and plugin.json. */
@@ -299,6 +299,26 @@ export type FrontmatterName =
  * ambiguous (no closing line, a header that does not parse, two `name` keys, a list or number, an
  * unreadable or oversized file) is `invalid`.
  */
+/**
+ * Front matter must be a strict subset of YAML: a flat map with plain string keys and values that
+ * are scalars or lists of scalars, without anchors, aliases, tags or merge keys (`<<`).
+ */
+function strictFlat(map: YAMLMap): boolean {
+  const plainNode = (n: unknown): boolean =>
+    isScalar(n) && n.anchor === undefined && n.tag === undefined;
+  for (const pair of map.items) {
+    const key = pair.key;
+    if (!plainNode(key) || typeof (key as Scalar).value !== 'string') return false;
+    if ((key as Scalar).value === '<<') return false;
+    const value = pair.value;
+    if (value === null || plainNode(value)) continue;
+    if (isAlias(value)) return false;
+    if (!isSeq(value) || value.anchor !== undefined || value.tag !== undefined) return false;
+    if (!value.items.every(plainNode)) return false;
+  }
+  return true;
+}
+
 export function frontmatterName(file: string): FrontmatterName {
   let text: string;
   try {
@@ -309,15 +329,18 @@ export function frontmatterName(file: string): FrontmatterName {
   }
   if (text.startsWith('\uFEFF')) text = text.slice(1);
   const lines = text.split('\n').map((l) => l.replace(/\r$/, ''));
-  if (!(lines[0] ?? '').startsWith('---')) return { kind: 'none' };
-  if (lines[0] !== '---') return { kind: 'invalid' };
+  // Front matter that does not start the file, or a delimiter with more on its line, may be read
+  // otherwise by Claude Code: refused, never guessed.
+  const first = lines.findIndex((l) => l.trim() !== '');
+  if (first < 0 || !(lines[first] ?? '').trimStart().startsWith('---')) return { kind: 'none' };
+  if (first !== 0 || lines[0] !== '---') return { kind: 'invalid' };
   const end = lines.indexOf('---', 1);
   if (end < 0) return { kind: 'invalid' };
   const doc = parseDocument(lines.slice(1, end).join('\n'), { uniqueKeys: true });
   if (doc.errors.length > 0) return { kind: 'invalid' };
   const contents = doc.contents;
   if (contents === null) return { kind: 'none' };
-  if (!isMap(contents)) return { kind: 'invalid' };
+  if (!isMap(contents) || !strictFlat(contents)) return { kind: 'invalid' };
   const names = contents.items.filter((i) => isScalar(i.key) && i.key.value === 'name');
   if (names.length === 0) return { kind: 'none' };
   const value = names[0]?.value;
@@ -439,16 +462,14 @@ export function installedSkills(configDir: string): { names: string[]; invalid: 
   return { names: [...found.names], invalid: [...new Set(found.invalid)] };
 }
 
-const last = (s: string): string => s.slice(s.lastIndexOf(':') + 1);
 const plain = (s: string): boolean =>
   s.split(':').length <= 2 && s.split(':').every((p) => NAME.test(p));
 
-/** Whether an installed skill is one the brief names: by full name, or by name where one has no plugin. */
-function named(skill: string, allowed: readonly string[]): boolean {
-  return allowed.some(
-    (a) => a === skill || ((!a.includes(':') || !skill.includes(':')) && last(a) === last(skill)),
-  );
-}
+/**
+ * Whether an installed skill is one the brief names: exactly. A plugin skill needs its full
+ * `<plugin>:<name>`; a bare name allows only a skill without a plugin.
+ */
+const named = (skill: string, allowed: readonly string[]): boolean => allowed.includes(skill);
 
 /**
  * `permissions.deny` rules for the crew settings: `Skill(<name>)` for every installed skill the
@@ -461,11 +482,13 @@ export function skillDenyRules(
   configDir: string,
   allowed: readonly string[],
   denied: readonly string[],
+  /** Skills bundled with Claude Code (not on disk): those the brief does not name are denied. */
+  bundled: readonly string[] = [],
 ): string[] {
   const out = new Set<string>();
   const { names, invalid } = installedSkills(configDir);
   if (invalid.length > 0) throw new Error(undeniableLine(configDir, invalid));
-  for (const s of names) if (!named(s, allowed)) out.add(s);
+  for (const s of [...names, ...bundled]) if (!named(s, allowed)) out.add(s);
   for (const d of denied) if (plain(d)) out.add(d);
   return [...out].map((s) => `Skill(${s})`);
 }

@@ -316,6 +316,14 @@ describe('installed skills and the deny list', () => {
       chmodSync(join(d, 'commands', 'inner'), 0o700);
     }
   });
+  it('ordinary front matter with a description and a tool list reads fine', () => {
+    const d = setup();
+    put(
+      join(d, 'skills', 'normal', 'SKILL.md'),
+      '---\nname: normal\ndescription: "Use when: x"\nallowed-tools: [Read, Grep]\n---\n',
+    );
+    expect(installedSkills(d).invalid).toEqual([]);
+  });
   it('a SKILL.md without front matter is named by its directory', () => {
     const d = setup();
     put(join(d, 'skills', 'plain', 'SKILL.md'), '# Just text\n');
@@ -345,6 +353,14 @@ describe('installed skills and the deny list', () => {
     ['no closing delimiter', 'open', '---\nname: harmless\n# body\n'],
     ['a header that is no YAML', 'broken', '---\nname: "unterminated\n---\n'],
     ['a delimiter with trailing text', 'trailing', '--- x\nname: harmless\n---\n'],
+    ['blank lines before the front matter', 'blank', '\n\n---\nname: deploy-prod\n---\n'],
+    ['a merge key', 'merged', '---\nbase: &a {name: deploy-prod}\n<<: *a\n---\n'],
+    ['an anchor and an alias on name', 'aliased', '---\nother: &n deploy-prod\nname: *n\n---\n'],
+    ['an anchor on name', 'anchored', '---\nname: &n harmless\n---\n'],
+    ['a tagged name', 'tagged', '---\nname: !!str deploy-prod\n---\n'],
+    ['a tagged value elsewhere', 'tagged2', '---\nname: harmless\nx: !custom y\n---\n'],
+    ['a nested map', 'nested', '---\nname: harmless\nmeta: {a: 1}\n---\n'],
+    ['an oversized file', 'big', `---\nname: harmless\n---\n${'x'.repeat(300 * 1024)}`],
   ])('an installed skill with %s refuses: fail closed, never skipped', (_, dirName, text) => {
     const d = setup();
     put(join(d, 'skills', dirName, 'SKILL.md'), text);
@@ -366,10 +382,19 @@ describe('installed skills and the deny list', () => {
       'Skill(superpowers:write-plan)',
     ]);
   });
-  it('a skill named without its plugin allows the plugin skill of that name', () => {
-    const rules = skillDenyRules(setup(), ['studio:studio-crew', 'brainstorming'], []);
-    expect(rules).not.toContain('Skill(superpowers:brainstorming)');
-    expect(rules).toContain('Skill(superpowers:test-driven-development)');
+  it('a plugin skill is allowed only by its full name; a bare name allows only a skill without one', () => {
+    const d = setup();
+    put(join(d, 'skills', 'brainstorming', 'SKILL.md'));
+    const rules = skillDenyRules(d, ['studio:studio-crew', 'brainstorming'], []);
+    expect(rules).toContain('Skill(superpowers:brainstorming)');
+    expect(rules).not.toContain('Skill(brainstorming)');
+    const full = skillDenyRules(d, ['studio:studio-crew', 'superpowers:brainstorming'], []);
+    expect(full).not.toContain('Skill(superpowers:brainstorming)');
+    expect(full).toContain('Skill(brainstorming)');
+  });
+  it('bundled skills the brief does not name are denied by name; the named ones stay', () => {
+    const rules = skillDenyRules(dir(), ['simplify'], [], ['simplify', 'batch', 'run', 'verify']);
+    expect(rules.sort()).toEqual(['Skill(batch)', 'Skill(run)', 'Skill(verify)']);
   });
   it('a denied entry that is no plain skill name is dropped, never written as a rule', () => {
     expect(skillDenyRules(dir(), [], ['a) Bash(rm', 'ok-name'])).toEqual(['Skill(ok-name)']);

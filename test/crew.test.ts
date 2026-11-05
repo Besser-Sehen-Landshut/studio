@@ -2332,13 +2332,21 @@ describe('required skills at launch', () => {
       expect(deny).toContain('Skill(superpowers:executing-plans)');
       expect(deny).toContain('Skill(x:no)');
       for (const allowed of [
-        'Skill(studio-crew)',
         `Skill(superpowers:${NAME})`,
         'Skill(superpowers:verification-before-completion)',
-        'Skill(ok)',
+        // Bundled with Claude Code and offered by the chore row.
+        'Skill(simplify)',
       ]) {
         expect(deny).not.toContain(allowed);
       }
+      // The brief names x:ok; a user skill `ok` is another skill and stays denied.
+      expect(deny).toContain('Skill(ok)');
+      // Bundled skills the brief does not name are denied by name.
+      expect(deny).toEqual(expect.arrayContaining(['Skill(batch)', 'Skill(run)', 'Skill(verify)']));
+      // Nothing synced from a claude.ai account reaches the crew.
+      const settings = settingsOf(f) as unknown as Record<string, unknown>;
+      expect(settings.syncClaudeAiSkills).toBe(false);
+      expect(settings.syncClaudeAiPlugins).toBe(false);
       // The tools the crew never gets stay denied as before.
       expect(deny).toEqual(expect.arrayContaining(['WebFetch', 'WebSearch', 'mcp__*']));
     });
@@ -3517,6 +3525,23 @@ describe('capabilities at launch', () => {
       const g = makeFixture();
       await launchOn(g, reviewerConfig, 'proto/orders.proto');
       expect(capsOf(g, 'APP-20').analyzers).not.toContain('security');
+    });
+
+    it('a builder with risk auth gets a review whose brief requires security, also for a review item without it', async () => {
+      const f = makeFixture();
+      const board = join(f.project, '.studio', 'board.yaml');
+      writeFileSync(
+        board,
+        readFileSync(board, 'utf8').replace(
+          'branch: studio/APP-2 }',
+          'branch: studio/APP-2, risk: [auth] }',
+        ),
+      );
+      await launchOn(f, reviewerConfig, 'src/util/format.ts');
+      const caps = capsOf(f, 'APP-20');
+      expect(caps.mandatory).toContain('security');
+      expect(caps.tier).toBe('large');
+      expect(brief(f, 'APP-20')).toMatch(/- security: mandatory: risk tag auth/);
     });
 
     it('a risk path names its reason without naming the file', async () => {

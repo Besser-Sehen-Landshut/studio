@@ -795,6 +795,10 @@ export function writeCrewSettings(
     // Auto memory would carry text from one run into the next outside Studio's pinned rules. The
     // setting and the variable are both set (https://code.claude.com/docs/en/memory).
     autoMemoryEnabled: false,
+    // Skills and plugins synced from a claude.ai account would reach the crew outside the matrix
+    // (https://code.claude.com/docs/en/skills, /plugins/loading).
+    syncClaudeAiSkills: false,
+    syncClaudeAiPlugins: false,
     env: {
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
       // Claude Code's own temp files of this run, which the crew reads back, stay in its tmp dir
@@ -1293,8 +1297,9 @@ async function launchCrewLocked(
       macosTrustService: ownerConfig.crewAllowMacosTrustService,
       skillDeny: skillDenyRules(
         claudeConfigDir,
-        [CREW_SKILL, ...caps.required, ...caps.whenAvailable, ...caps.offered, ...BUNDLED_SKILLS],
+        [CREW_SKILL, ...caps.required, ...caps.whenAvailable, ...caps.offered],
         caps.denied,
+        BUNDLED_SKILLS,
       ),
     },
     owner,

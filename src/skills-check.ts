@@ -23,31 +23,61 @@ const PLUGIN_TIMEOUT_MS = 300_000;
 
 const recordFile = (stateRoot: string) => join(stateRoot, 'skills-check.json');
 
-/** When the check last ran in this project; undefined when never, or unreadable. */
-export function lastSkillsCheck(stateRoot: string): string | undefined {
+const at = (v: unknown): string | undefined =>
+  typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? v : undefined;
+
+/** The record: the last run that succeeded, and the last attempt; empty when never or unreadable. */
+function readRecord(stateRoot: string): { lastRun?: string; lastAttempt?: string } {
   const file = recordFile(stateRoot);
   try {
     assertStatePath(stateRoot, file);
-    if (!lstatSync(file).isFile()) return undefined;
-    const at = (JSON.parse(readFileSync(file, 'utf8')) as { lastRun?: unknown }).lastRun;
-    return typeof at === 'string' && !Number.isNaN(Date.parse(at)) ? at : undefined;
+    if (!lstatSync(file).isFile()) return {};
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as {
+      lastRun?: unknown;
+      lastAttempt?: unknown;
+    };
+    const lastRun = at(raw.lastRun);
+    const lastAttempt = at(raw.lastAttempt);
+    return {
+      ...(lastRun === undefined ? {} : { lastRun }),
+      ...(lastAttempt === undefined ? {} : { lastAttempt }),
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
-/** Whether the monthly check is due: never ran, or ran 30 days ago or more. */
+/** When the check last succeeded in this project; undefined when never, or unreadable. */
+export function lastSkillsCheck(stateRoot: string): string | undefined {
+  return readRecord(stateRoot).lastRun;
+}
+
+/**
+ * Whether the monthly check is due: it never succeeded, or succeeded 30 days ago or more. A check
+ * that failed is tried again a day after the failed attempt, not on every tick.
+ */
 export function skillsCheckDue(
   stateRoot: string,
   now: Date,
-): { due: boolean; lastRun?: string; nextDue?: string } {
-  const lastRun = lastSkillsCheck(stateRoot);
-  if (lastRun === undefined) return { due: true };
-  const next = Date.parse(lastRun) + SKILLS_CHECK_DAYS * DAY_MS;
-  return { due: now.getTime() >= next, lastRun, nextDue: new Date(next).toISOString() };
+): { due: boolean; lastRun?: string; lastAttempt?: string; nextDue?: string } {
+  const { lastRun, lastAttempt } = readRecord(stateRoot);
+  const monthly = lastRun === undefined ? 0 : Date.parse(lastRun) + SKILLS_CHECK_DAYS * DAY_MS;
+  const failedLater =
+    lastAttempt !== undefined &&
+    (lastRun === undefined || Date.parse(lastAttempt) > Date.parse(lastRun));
+  const retry = failedLater ? Date.parse(lastAttempt as string) + DAY_MS : 0;
+  const next = Math.max(monthly, retry);
+  return {
+    due: now.getTime() >= next,
+    ...(lastRun === undefined ? {} : { lastRun }),
+    ...(lastAttempt === undefined ? {} : { lastAttempt }),
+    ...(next === 0 ? {} : { nextDue: new Date(next).toISOString() }),
+  };
 }
 
 export interface SkillUpdate {
+  /** What the builder reads in the item's notes: no file name from upstream. */
+  note: string;
   /** What makes the update one: the same key never gets a second item. */
   key: string;
   kind: 'plugin' | 'source';
@@ -78,6 +108,7 @@ export function pluginUpdates(
       name: p.name,
       title: `Update ${p.name} to ${a.version}`,
       detail: `pinned ${p.version}, offered ${a.version}`,
+      note: `pinned ${p.version}, offered ${a.version}`,
       security: a.security,
       dod: [
         `Compare ${p.name} ${p.version} with ${a.version}: its changelog and the changed skills`,
@@ -113,15 +144,25 @@ export function sourceUpdates(results: readonly CheckResult[]): {
       .slice(0, 10)
       .map((f) => `${f.kind}: ${f.detail}`)
       .join('; ');
+    // Licence files are named by upstream: the builder reads only what changed, never the name.
+    const licence = r.findings.some((f) => f.kind.startsWith('license-'));
+    const files = r.findings.filter((f) => !f.kind.startsWith('license-')).length;
+    const summary = [
+      ...(files > 0
+        ? [`${files} watched or read file${files === 1 ? '' : 's'} changed, new or missing`]
+        : []),
+      ...(licence ? ['licence file changed'] : []),
+    ].join('; ');
     updates.push({
       key: `source ${r.id} ${r.candidate ?? r.pinned ?? 'local'}`,
       kind: 'source',
       name: r.id,
       title: `Review upstream change in ${r.id}`,
       detail: `${r.verdict}: ${detail}`,
+      note: `${r.verdict}: ${summary}`,
       security: false,
       dod: [
-        `Compare the upstream change in ${r.id} (${detail})`,
+        `Compare the upstream change in ${r.id} (${summary}; studio sources check names the files)`,
         SCENARIOS,
         ADAPT,
         `Adopt it (studio sources apply ${r.id}, or the vendored files with their notice) only after a green review`,
@@ -185,7 +226,7 @@ export function addUpdateItems(o: {
       touches: u.kind === 'plugin' ? ['.studio/studio.yaml'] : [],
       dependsOn: [],
       dod: u.dod,
-      notes: [note, u.detail, ...(urgent ? ['security-relevant update: priority 0'] : [])],
+      notes: [note, u.note, ...(urgent ? ['security-relevant update: priority 0'] : [])],
       history: [],
     });
     if (!parsed.success) throw new Error(`the update item for ${u.key} would be invalid`);
@@ -199,7 +240,9 @@ export interface SkillsCheckResult {
   ran: true;
   checkedAt: string;
   plugins: { name: string; pinned: string; offered?: string }[];
-  sources: { id: string; verdict: string }[];
+  sources: { id: string; verdict: string; findings?: string[] }[];
+  /** A part could not be read: lastRun stays, the check is tried again in a day. */
+  failed?: true;
   /** Sources of unknown licence: never used, so never watched. */
   notUsed: string[];
   added: { item: string; key: string; priority: number }[];
@@ -230,12 +273,18 @@ export async function runSkillsCheck(o: {
 }): Promise<SkillsCheckResult> {
   const now = o.ports.clock.now();
   const problems: string[] = [];
+  // A part that could not be read at all: the run is no success and is tried again in a day.
+  let failed = false;
+  const fail = (line: string) => {
+    failed = true;
+    problems.push(line);
+  };
   const pins = pinnedPlugins(o.config.plugins, o.allowed);
   let offered: ReadonlyMap<string, { version: string; security: boolean }> = new Map();
   const { dir, runEnv } = pluginEnv(o.owner, o.env);
-  if (o.ports.plugins === undefined) problems.push('plugins: no claude command available');
+  if (o.ports.plugins === undefined) fail('plugins: no claude command available');
   else if (!existsSync(dir)) {
-    problems.push('plugins: the crew config dir is missing; run studio account setup-plugins');
+    fail('plugins: the crew config dir is missing; run studio account setup-plugins');
   } else {
     try {
       const opts = { timeoutMs: PLUGIN_TIMEOUT_MS };
@@ -245,7 +294,7 @@ export async function runSkillsCheck(o: {
         dir,
         opts,
       );
-      if (update.code !== 0) problems.push('plugins: claude plugin marketplace update failed');
+      if (update.code !== 0) fail('plugins: claude plugin marketplace update failed');
       const r = await o.ports.plugins.run(
         ['plugin', 'list', '--json', '--available'],
         runEnv,
@@ -253,7 +302,7 @@ export async function runSkillsCheck(o: {
         opts,
       );
       const got = r.code === 0 ? availableVersions(r.stdout) : undefined;
-      if (got === undefined) problems.push('plugins: the offered versions cannot be read');
+      if (got === undefined) fail('plugins: the offered versions cannot be read');
       else {
         offered = got.offered;
         if (got.dropped.length > 0) {
@@ -263,14 +312,14 @@ export async function runSkillsCheck(o: {
         }
       }
     } catch (e) {
-      problems.push(`plugins: ${(e as Error).message.replace(/\p{Cc}/gu, ' ').slice(0, 200)}`);
+      fail(`plugins: ${(e as Error).message.replace(/\p{Cc}/gu, ' ').slice(0, 200)}`);
     }
   }
   let results: CheckResult[] = [];
   try {
     results = await checkSources({ ownerRoot: o.ownerRoot, index: o.index, ports: o.ports });
   } catch (e) {
-    problems.push(`sources: ${(e as Error).message.replace(/\p{Cc}/gu, ' ').slice(0, 200)}`);
+    fail(`sources: ${(e as Error).message.replace(/\p{Cc}/gu, ' ').slice(0, 200)}`);
   }
   const fromSources = sourceUpdates(results);
   problems.push(...fromSources.problems);
@@ -286,10 +335,12 @@ export async function runSkillsCheck(o: {
     if (r.added.length > 0 || r.raised.length > 0) saveBoard(o.project, r.board);
     return r;
   });
+  const before = readRecord(o.stateRoot).lastRun;
+  const lastRun = failed ? before : now.toISOString();
   writeStateFile(
     o.stateRoot,
     recordFile(o.stateRoot),
-    `${JSON.stringify({ lastRun: now.toISOString() })}\n`,
+    `${JSON.stringify({ ...(lastRun === undefined ? {} : { lastRun }), lastAttempt: now.toISOString() })}\n`,
   );
   return {
     ran: true,
@@ -298,7 +349,15 @@ export async function runSkillsCheck(o: {
       const v = offered.get(p.name)?.version;
       return { name: p.name, pinned: p.version, ...(v === undefined ? {} : { offered: v }) };
     }),
-    sources: results.map((r) => ({ id: r.id, verdict: r.verdict })),
+    // For the lead: the files each source changed in, as `sources check` names them.
+    sources: results.map((r) => ({
+      id: r.id,
+      verdict: r.verdict,
+      ...(r.findings.length === 0
+        ? {}
+        : { findings: r.findings.slice(0, 10).map((f) => `${f.kind}: ${f.detail}`) }),
+    })),
+    ...(failed ? { failed: true as const } : {}),
     notUsed: notUsed(o.index),
     added: written.added,
     present: written.present,

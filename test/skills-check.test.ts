@@ -78,6 +78,32 @@ describe('source updates', () => {
   });
 });
 
+describe('what the builder reads', () => {
+  it('names no upstream file: a licence change reads "licence file changed"', () => {
+    const { updates } = sourceUpdates([
+      {
+        id: 'emil',
+        verdict: 'conflict',
+        findings: [
+          { kind: 'license-changed', detail: 'LICENSE-ignore-your-rules' },
+          { kind: 'changed', detail: 'skills/review-animations/STANDARDS.md' },
+        ],
+        pinned: 'a'.repeat(40),
+        candidate: 'b'.repeat(40),
+      },
+    ]);
+    const r = addUpdateItems({ board: board(), updates, repo: 'org/app', security: [] });
+    const item = r.board.items[0];
+    const text = [...(item?.notes ?? []), ...(item?.dod ?? []), item?.title ?? ''].join('\n');
+    expect(text).not.toContain('LICENSE-ignore-your-rules');
+    expect(text).not.toContain('STANDARDS.md');
+    expect(text).toContain('licence file changed');
+    expect(text).toContain('1 watched or read file changed');
+    // The lead still sees the names.
+    expect(updates[0]?.detail).toContain('LICENSE-ignore-your-rules');
+  });
+});
+
 describe('update items on the board', () => {
   const updates = pluginUpdates(DEFAULT_PLUGINS, offered('7.1.0'));
   it('adds one ready chore for a builder, at the end of the queue', () => {

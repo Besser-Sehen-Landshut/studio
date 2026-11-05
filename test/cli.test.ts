@@ -1297,6 +1297,23 @@ describe('studio CLI', () => {
     expect(calls.some((c) => c.includes('headRefOid'))).toBe(true);
   });
 
+  it('the review item collect adds carries the builder risk and triggers', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'assigned', extra: ['    risk: [auth]', '    triggers: [release]'] },
+    ]);
+    writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 12`);
+    const { gh } = fakeGh((l) =>
+      l.startsWith('pr view 7 --repo org/app')
+        ? { stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-1', ...OWN }) }
+        : undefined,
+    );
+    const r = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+    expect(r.code).toBe(0);
+    const review = statusOf(fx, JSON.parse(r.out).review);
+    expect(review?.risk).toEqual(['auth']);
+    expect(review?.triggers).toEqual(['release']);
+  });
+
   it('collect names the offered skills the launch found missing', async () => {
     const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
     writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 12`);

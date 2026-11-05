@@ -807,6 +807,36 @@ describe('studio skills check', () => {
     expect(p.calls).toEqual([]);
   });
 
+  it('a failed check records no run and is tried again a day later, not on every tick', async () => {
+    const fx = withCrewDir(makeFx([]));
+    const p = offering({ [SP]: '7.1.0' });
+    const ok = p.ports.plugins?.run;
+    let broken = true;
+    const ports: Ports = {
+      ...p.ports,
+      plugins: {
+        run: async (args, env, cwd, opts) =>
+          broken && args.includes('--available')
+            ? { code: 1, stdout: '', stderr: 'network' }
+            : (ok as NonNullable<typeof ok>)(args, env, cwd, opts),
+      },
+    };
+    const first = JSON.parse((await cli(fx, ports, ['tick'])).out);
+    expect(first.skillsCheck.problems.join(' ')).toMatch(/cannot be read/);
+    const record = JSON.parse(readFileSync(join(fx.state, 'skills-check.json'), 'utf8'));
+    expect(record.lastRun).toBeUndefined();
+    expect(record.lastAttempt).toEqual(expect.any(String));
+    p.advance(60 * 60_000);
+    expect(JSON.parse((await cli(fx, ports, ['tick'])).out).skillsCheck).toBeUndefined();
+    broken = false;
+    p.advance(24 * 60 * 60_000);
+    const again = JSON.parse((await cli(fx, ports, ['tick'])).out);
+    expect(again.skillsCheck.added).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(fx.state, 'skills-check.json'), 'utf8')).lastRun).toEqual(
+      expect.any(String),
+    );
+  });
+
   it('tick runs it once in 30 days per project', async () => {
     const fx = withCrewDir(makeFx([]));
     const p = offering({ [SP]: '7.1.0' });
@@ -1003,6 +1033,38 @@ describe('studio account', () => {
         'plugin list --json',
       ]);
       expect(r.out).toContain(`${SP} 7.0.2`);
+    });
+
+    it('a crew dir set up before: "already added" and "already installed" count as done', async () => {
+      const fx = makeFx();
+      const base = listing(pinned);
+      const calls: string[] = [];
+      const ports: Ports = {
+        ...base.ports,
+        plugins: {
+          run: async (args, env, cwd, opts) => {
+            calls.push(args.join(' '));
+            if (args[1] === 'marketplace') {
+              return { code: 1, stdout: '', stderr: 'Marketplace is already added' };
+            }
+            if (args[1] === 'install') {
+              return { code: 1, stdout: 'Plugin is already installed', stderr: '' };
+            }
+            return (base.ports.plugins as NonNullable<Ports['plugins']>).run(args, env, cwd, opts);
+          },
+        },
+      };
+      const r = await cli(fx, ports, ['account', 'setup-plugins'], { isTerminal: true });
+      expect(r.code).toBe(0);
+      expect(calls.at(-1)).toBe('plugin list --json');
+      // Any other failure still fails.
+      const failing: Ports = {
+        ...base.ports,
+        plugins: { run: async () => ({ code: 1, stdout: '', stderr: 'network down' }) },
+      };
+      expect(
+        (await cli(fx, failing, ['account', 'setup-plugins'], { isTerminal: true })).code,
+      ).toBe(1);
     });
 
     it('another version is updated once; still another one fails, naming both', async () => {

@@ -36,10 +36,35 @@ const MAX_COPY_BYTES = 256 * 1024;
 const MANDATORY = ['diff-review', 'spec-check', 'security', 'similar-bugs', 'performance'];
 const NO_SKILLS = { required: [], allowed: [], denied: [] };
 /**
- * Skills the matrix names that ship inside Claude Code itself, not on disk: never reported
- * missing, never denied by the installed-skill list.
+ * Skills that ship inside Claude Code itself, not on disk: the entries tagged "Skill" in the
+ * commands reference (https://code.claude.com/docs/en/commands; the skills page names some under
+ * "Bundled skills", https://code.claude.com/docs/en/skills#bundled-skills), checked 2026-11-05,
+ * plus `security-review`, which the matrix offers. They are never reported missing; a crew gets a
+ * deny rule for each one its brief does not name.
  */
-export const BUNDLED_SKILLS: readonly string[] = ['simplify', 'code-review', 'security-review'];
+export const BUNDLED_SKILLS: readonly string[] = [
+  'artifact-capabilities',
+  'artifact-diagramming',
+  'batch',
+  'claude-api',
+  'claude-in-chrome',
+  'code-review',
+  'dataviz',
+  'debug',
+  'design',
+  'design-sync',
+  'doctor',
+  'fewer-permission-prompts',
+  'loop',
+  'run',
+  'run-skill-generator',
+  'security-review',
+  'simplify',
+  'slides',
+  'update-config',
+  'verify',
+  'workflow-authoring',
+];
 
 /** The item's own model, else the one for its type, else the role's. */
 export function resolveModel(item: WorkItem, role: RoleConfig): string {
@@ -207,6 +232,8 @@ export async function resolveForItem(o: {
   let fixItem = false;
   let ciItem = false;
   let ciGlobs: string[] = [];
+  // The review is judged with the risk and triggers of the item it reviews, on top of its own.
+  let subject: WorkItem = item;
   if (target !== undefined) {
     const name = `${target.repo}#${target.pr}`;
     const holder = o
@@ -221,6 +248,13 @@ export async function resolveForItem(o: {
         `${item.id}: no board item holds ${name}; tie it to its item with studio link <id> ${name}`,
       );
     }
+    const risk = [...new Set([...(item.risk ?? []), ...(holder.risk ?? [])])];
+    const own = [...new Set([...(item.triggers ?? []), ...(holder.triggers ?? [])])];
+    subject = {
+      ...item,
+      ...(risk.length === 0 ? {} : { risk }),
+      ...(own.length === 0 ? {} : { triggers: own }),
+    };
   }
   // A reviewer on running CI cannot tell its result and would ask for a needless round.
   if (target !== undefined && (await checksPending(o.ports, target))) {
@@ -257,23 +291,23 @@ export async function resolveForItem(o: {
   const configChange =
     paths !== 'unknown' && (facts?.files ?? []).some((f) => f.toLowerCase() === STUDIO_CONFIG);
   const triggers = [
-    ...itemTriggers(item),
+    ...itemTriggers(subject),
     ...(round > 0 ? ['after-fix'] : []),
     ...(contractHits.length > 0 || configChange ? ['contract-change'] : []),
   ];
-  const first = resolveSkills(item, item.role, stack, paths, phase, { ...base, triggers });
+  const first = resolveSkills(subject, item.role, stack, paths, phase, { ...base, triggers });
   const { tier, reasons } = reviewTier(
-    item,
+    subject,
     facts,
     first.analyzers.some((a) => a.id === 'security'),
   );
-  const resolved = resolveSkills(item, item.role, stack, paths, phase, {
+  const resolved = resolveSkills(subject, item.role, stack, paths, phase, {
     ...base,
     triggers,
     tier,
   });
   const securityWhy = resolved.analyzers.some((a) => a.id === 'security')
-    ? securityReason(item, paths, contractHits, triggers, configChange)
+    ? securityReason(subject, paths, contractHits, triggers, configChange)
     : undefined;
   return {
     resolved,

@@ -57,8 +57,12 @@ the maintainers tag after the merge.
 
 ### Changed
 
-- Upgrading: a launch now refuses while the crew config dir holds `studio` or `superpowers` at a version
-  other than the pin (an older `studio` after this update, say); run `studio account setup-plugins` once.
+- Upgrading: run `studio account setup-plugins` once after updating. A launch now refuses while the crew
+  config dir holds `studio` or `superpowers` at a version other than the pin (an older `studio` after this
+  update, say); `setup-plugins` works on a crew dir set up before (an "already added" or "already installed"
+  answer counts as done). A pin newer than what the marketplace offers blocks launches until the marketplace
+  offers that version or the pin is lowered. Extra plugins pinned in studio.yaml need an `allowed_plugins`
+  entry in the owner config, or they are no longer installed.
 - A source of unknown licence is not used: `better-auth` is neither fetched nor checked (`notUsed`), and its
   row reads `skipped: licence unknown`, also when a copy sits fetched below the owner root.
 - The similar-bug scan is listed for every review; its analyzer file takes diff review's findings in a first

@@ -109,7 +109,12 @@ export async function setupPlugins(
   chmodSync(dir, 0o700);
   const run = async (args: string[]) => {
     const r = await cli.run(args, runEnv, dir);
-    if (r.code !== 0) {
+    // A crew dir set up before: a marketplace already added or a plugin already installed is
+    // what setup wants, not a failure. The versions are checked below either way.
+    const already =
+      (args[1] === 'install' || (args[1] === 'marketplace' && args[2] === 'add')) &&
+      /\balready (installed|added|exists|present|configured)\b/i.test(`${r.stdout}\n${r.stderr}`);
+    if (r.code !== 0 && !already) {
       throw new Error(
         `claude ${args.join(' ')} failed (exit ${r.code}): ${safe(r.stderr.trim()).slice(0, 300)}`,
       );
