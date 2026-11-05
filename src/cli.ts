@@ -16,6 +16,7 @@ import {
   transition,
   type WorkItem,
 } from './board.js';
+import { readSkillsMissing } from './brief-caps.js';
 import { capabilitiesDir } from './capabilities.js';
 import { readCapacity, readCapacityTwice } from './capacity.js';
 import { approvedJobsProblem, type CoveredJob, verifyNotRunHereJobs } from './ci-jobs.js';
@@ -74,6 +75,7 @@ import {
 } from './paths.js';
 import { clearPause, PAUSED_LINE, readPause, setPause } from './pause.js';
 import { type Capacity, ONE_BUILD_PER_PLAN, planAssignments } from './planner.js';
+import { type PluginPin, pinnedPlugins } from './plugins.js';
 import type { Ports } from './ports.js';
 import {
   acquireQueueRunLock,
@@ -114,8 +116,9 @@ import {
 import { runDoctor, runSecretSet } from './secret-command.js';
 import { runSetup } from './setup.js';
 import { runSetupCi } from './setup-ci-command.js';
+import { runSkillsCheck, skillsCheckDue } from './skills-check.js';
 import { searchSolutions } from './solutions.js';
-import { applySource, checkSources, loadSources, setupSources } from './sources.js';
+import { applySource, checkSources, loadSources, notUsed, setupSources } from './sources.js';
 import { runSetupStack } from './stack.js';
 import {
   type CrewSnapshot,
@@ -200,6 +203,10 @@ Commands:
   sources list             Third-party sources and their licences
   sources check            Judge upstream updates: fits, unclear or conflict; adopts nothing
   sources apply <id>       Adopt a candidate that fits
+  skills check [--now] [--security <name>]...
+                           Pinned plugins against their marketplaces and sources against upstream;
+                           one board item per update. Monthly (tick runs it); --now runs it at once,
+                           --security marks a plugin or source update as security-relevant (priority 0)
   setup [--link]           Owner only, in a terminal: gh, crew token and Claude account, one guided
                            step each, skipped when done; --link puts studio on your terminal's PATH
   setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
@@ -237,6 +244,15 @@ function table(rows: string[][]): string {
         .trimEnd(),
     )
     .join('\n')}\n`;
+}
+
+/** The pinned plugins of the project: `plugins:` in studio.yaml over the defaults. */
+function projectPins(project: string): PluginPin[] {
+  try {
+    return pinnedPlugins(loadConfig(project).plugins);
+  } catch {
+    return pinnedPlugins();
+  }
 }
 
 function findItem(board: Board, id: string | undefined): WorkItem {
@@ -297,6 +313,8 @@ interface Tick {
   errors: { item?: string; phase?: string; error: string }[];
   /** Epics whose items are all merged (status `accepting`), waiting for their acceptance; absent without one. */
   epicsReady?: { epic: string; title: string }[];
+  /** The monthly skills check, when this tick ran it: new update items and what failed. */
+  skillsCheck?: { added: string[]; raised: string[]; problems: string[] };
 }
 
 /** One tick at a time; a tick whose holder died is taken over after this long. */
@@ -396,6 +414,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     }
     if (values.link !== undefined && cmd !== 'setup') {
       throw new UsageError('--link works with setup only');
+    }
+    if ((values.now !== undefined || values.security !== undefined) && cmd !== 'skills') {
+      throw new UsageError('--now and --security work with skills check only');
     }
     /** The item's components, as a field for JSON output; nothing when none are configured. */
     const componentField = (config: StudioConfig | undefined, item: WorkItem | undefined) =>
@@ -1000,6 +1021,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       });
       // Proposals only: a lesson reaches a role file through `lessons accept`. The item has moved
       // already, so a problem here must not read as a failed collect.
+      const skillsMissing = readSkillsMissing(stateRoot(), item.id);
       let lessonsProposed = 0;
       try {
         lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now);
@@ -1015,6 +1037,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         ...(report.verdict === undefined ? {} : { verdict: report.verdict }),
         ...(report.reviews === undefined ? {} : { reviews: report.reviews }),
         ...(reviewDone.skipped.length === 0 ? {} : { skipped: reviewDone.skipped }),
+        // Offered skills the launch found not installed: the lead installs them or lets them go.
+        ...(skillsMissing.length === 0 ? {} : { skillsMissing }),
         ...(supersededBy === undefined ? {} : { supersededBy }),
         ...(fixLimit ? { fixLimit } : {}),
         ...(lessonsProposed > 0 ? { lessonsProposed } : {}),
@@ -1041,6 +1065,23 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
      * and run the queue. Each item's failure, and each phase's, is recorded and the rest goes on;
      * what needs a decision is listed, never decided here.
      */
+    /** `skills check` itself, for the command and for the monthly run in `tick`. */
+    const skillsCheck = async (security: readonly string[]) => {
+      const root = await boundStateRoot();
+      return await runSkillsCheck({
+        project,
+        stateRoot: root,
+        ownerRoot: ownerRoot(),
+        config: loadConfig(project),
+        index: loadSources(),
+        ports,
+        owner,
+        env: deps.env,
+        security,
+        locked: (fn) => withBoardLock(root, ports.clock.now(), fn),
+      });
+    };
+
     const tick = async (): Promise<Tick> => {
       const out: Tick = {
         collected: [],
@@ -1235,6 +1276,17 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
       };
 
+      // (g) At most once in 30 days per project: new plugin versions and changed sources as items.
+      const skillsMonthly = async () => {
+        if (!skillsCheckDue(root, ports.clock.now()).due) return;
+        const r = await skillsCheck([]);
+        out.skillsCheck = {
+          added: r.added.map((a) => a.item),
+          raised: r.raised,
+          problems: r.problems,
+        };
+      };
+
       try {
         for (const [name, body] of [
           ['collect', collectEnded],
@@ -1242,6 +1294,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ['launch', launchPlanned],
           ['queue add', queueApproved],
           ['sweep', sweep],
+          ['skills check', skillsMonthly],
         ] as const) {
           if (!(await phase(name, body))) return out;
         }
@@ -1936,6 +1989,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           json,
           isTerminal: deps.isTerminal === true,
           ...(deps.readSecret === undefined ? {} : { readSecret: deps.readSecret }),
+          pins: projectPins(project),
           stdout,
           stderr,
         });
@@ -1957,6 +2011,37 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         return 0;
       }
 
+      case 'skills': {
+        if (rest[0] !== 'check' || rest.length !== 1) {
+          throw new UsageError('skills needs: check [--now] [--security <name>]...');
+        }
+        refuseCrew(deps.env);
+        const security = values.security ?? [];
+        // A security update named by the lead cannot wait for the month.
+        const due = skillsCheckDue(stateRoot(), ports.clock.now());
+        if (!due.due && values.now !== true && security.length === 0) {
+          print({ ran: false, ...due });
+          return 0;
+        }
+        const r = await skillsCheck(security);
+        if (json) print(r);
+        else {
+          stdout(
+            table([
+              ['WHAT', 'PINNED', 'UPSTREAM'],
+              ...r.plugins.map((p) => [p.name, p.pinned, p.offered ?? 'unknown']),
+              ...r.sources.map((x) => [`source ${x.id}`, '-', x.verdict]),
+            ]),
+          );
+          for (const a of r.added) stdout(`added ${a.item} (${a.key}, priority ${a.priority})\n`);
+          for (const p of r.present) stdout(`already on the board: ${p.item} (${p.key})\n`);
+          for (const id of r.raised) stdout(`raised to priority 0: ${id}\n`);
+          for (const id of r.notUsed) stdout(`not used: source ${id} (licence unknown)\n`);
+          for (const p of r.problems) stderr(`warning: ${p.replace(/\p{Cc}/gu, ' ')}\n`);
+        }
+        return 0;
+      }
+
       case 'sources': {
         const [sub, arg] = rest;
         if (sub === 'list') {
@@ -1971,6 +2056,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             print({
               results,
               notWatched: index.sources.filter((s) => s.kind !== 'git').map((s) => s.id),
+              notUsed: notUsed(index),
             });
           } else {
             stdout(
@@ -2181,6 +2267,8 @@ function parseCli(argv: string[]) {
         plan: { type: 'string' },
         help: { type: 'boolean' },
         link: { type: 'boolean' },
+        now: { type: 'boolean' },
+        security: { type: 'string', multiple: true },
       },
       allowPositionals: true,
       strict: true,

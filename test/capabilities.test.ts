@@ -179,6 +179,16 @@ describe('resolveSkills', () => {
     const r = resolveSkills(review(), 'reviewer', [], [], 'review', { triggers: ['after-fix'] });
     expect(r.analyzers.map((a) => a.id)).toContain('similar-bugs');
   });
+  it('every review lists the similar-bug scan, owed when diff review finds something', () => {
+    expect(analyzerIds(['docs/readme.md'])).toContain('similar-bugs');
+  });
+  it('a contract change turns security on for any path', () => {
+    const r = resolveSkills(review(), 'reviewer', [], ['proto/a.proto'], 'review', {
+      triggers: ['contract-change'],
+    });
+    expect(r.analyzers.map((a) => a.id)).toContain('security');
+    expect(analyzerIds(['proto/a.proto'])).not.toContain('security');
+  });
   it('a stack row needs the stack and the path', () => {
     const skills = (stack: string[], paths: string[]) =>
       resolveSkills(review(), 'reviewer', stack, paths, 'review').optionalRequired;

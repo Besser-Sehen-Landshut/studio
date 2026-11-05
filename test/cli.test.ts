@@ -1297,6 +1297,24 @@ describe('studio CLI', () => {
     expect(calls.some((c) => c.includes('headRefOid'))).toBe(true);
   });
 
+  it('collect names the offered skills the launch found missing', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned' }]);
+    writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 7\nhead_sha: ${HEAD}\ntests_run: 12`);
+    mkdirSync(join(fx.state, 'briefs'), { recursive: true });
+    writeFileSync(
+      join(fx.state, 'briefs', 'APP-1.skills.json'),
+      `${JSON.stringify({ missing: ['superpowers:subagent-driven-development'] })}\n`,
+    );
+    const { gh } = fakeGh((l) =>
+      l.startsWith('pr view 7 --repo org/app')
+        ? { stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-1', ...OWN }) }
+        : undefined,
+    );
+    const r = await cli(fx, fakePorts(gh).ports, 'collect', 'APP-1');
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out).skillsMissing).toEqual(['superpowers:subagent-driven-development']);
+  });
+
   it('R80: collect refuses while the crew process is still alive', async () => {
     const fx = makeFx([{ id: 'APP-1' }]);
     const { gh } = fakeGh();
@@ -3827,6 +3845,7 @@ describe('studio tick', () => {
     expect(t.json.errors.map((e: { phase?: string }) => e.phase)).toEqual([
       'queue add',
       'sweep',
+      'skills check',
       'queue run',
     ]);
   });

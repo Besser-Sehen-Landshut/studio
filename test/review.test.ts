@@ -3,6 +3,7 @@ import type { Board, WorkItem } from '../src/board.js';
 import type { Ports } from '../src/ports.js';
 import {
   checkReviewCaps,
+  gateRules,
   MAX_FIX_ATTEMPTS,
   MAX_REVIEW_ROUNDS,
   readPrFacts,
@@ -352,5 +353,124 @@ describe('checkReviewCaps', () => {
   });
   it('refuses an approval without caps, also an unknown ones', () => {
     expect(() => checkReviewCaps(undefined, report())).toThrow(/relaunch/);
+  });
+});
+
+describe('the gate per pull request', () => {
+  const base = { tier: 'small' as const, afterFix: false, fixItem: false };
+  it('diff review and spec check are mandatory for every pull request, each with its reason', () => {
+    const g = gateRules({ ...base, ids: ['diff-review', 'spec-check', 'similar-bugs'] });
+    expect(g.mandatory.map((m) => m.id)).toEqual(['diff-review', 'spec-check']);
+    for (const m of g.mandatory) expect(m.why).toMatch(/every pull request/);
+    expect(g.probeRequired).toBeUndefined();
+  });
+  it('a small change without risk names what it leaves out, and why', () => {
+    const g = gateRules({ ...base, ids: ['diff-review', 'spec-check', 'similar-bugs'] });
+    expect(g.notRun.map((n) => n.id)).toEqual(['security', 'performance']);
+    expect(g.notRun[0]?.why).toMatch(/no risk tag/);
+  });
+  it('security is mandatory with the reason launch found', () => {
+    const g = gateRules({
+      ...base,
+      ids: ['diff-review', 'spec-check', 'security', 'similar-bugs'],
+      securityWhy: 'a contract path changed (merge.contract_paths: api/**)',
+    });
+    expect(g.mandatory.find((m) => m.id === 'security')?.why).toContain('contract path');
+  });
+  it('similar bugs is owed after a fix round, else when diff review reports findings', () => {
+    const ids = ['diff-review', 'spec-check', 'similar-bugs'];
+    expect(gateRules({ ...base, ids }).onFinding).toEqual(['similar-bugs']);
+    const fix = gateRules({ ...base, ids, afterFix: true });
+    expect(fix.mandatory.map((m) => m.id)).toContain('similar-bugs');
+    expect(fix.onFinding).toEqual([]);
+  });
+  it('performance is owed in the large tier; the probe must run for a fix and in the large tier', () => {
+    const ids = ['diff-review', 'spec-check', 'similar-bugs', 'performance'];
+    const large = gateRules({ ...base, tier: 'large', ids });
+    expect(large.mandatory.map((m) => m.id)).toContain('performance');
+    expect(large.probeRequired).toMatch(/large/);
+    expect(gateRules({ ...base, ids, fixItem: true }).probeRequired).toMatch(/fix/);
+    expect(gateRules({ ...base, ids, afterFix: true }).probeRequired).toMatch(/fix round/);
+  });
+  it('the routine states each mandatory analyzer and each left out, one line each', () => {
+    const text = renderReviewRoutine({
+      tier: 'small',
+      reasons: [],
+      analyzers: [
+        { id: 'diff-review', path: '/c/diff-review.md', why: 'every pull request' },
+        { id: 'spec-check', path: '/c/spec-check.md', why: 'every pull request' },
+        { id: 'similar-bugs', path: '/c/similar-bugs.md', onFinding: true },
+      ],
+      notRun: [{ id: 'security', why: 'no risk tag, no security-sensitive or contract path' }],
+      probeRequired: 'the change is a fix',
+      skipped: [],
+      contract: '/c/CONTRACT.md',
+      round: 0,
+    }).join('\n');
+    expect(text).toContain('- diff-review: mandatory: every pull request');
+    expect(text).toContain('- spec-check: mandatory: every pull request');
+    expect(text).toMatch(/- similar-bugs: mandatory when diff-review reports findings/);
+    expect(text).toContain('- security: not run: no risk tag');
+    expect(text).toMatch(/mutation probe must run: the change is a fix/);
+  });
+});
+
+describe('collect refuses an approval that owes a mandatory analyzer', () => {
+  const caps = {
+    tier: 'small' as const,
+    analyzers: ['diff-review', 'spec-check', 'similar-bugs', 'accessibility'],
+    mandatory: ['diff-review', 'spec-check'],
+    onFinding: ['similar-bugs'],
+    reviewsTarget: 'org/app#7',
+    headRefOid: 'a'.repeat(40),
+    baseRefName: 'main',
+  };
+  const report = (analyzers: Record<string, string>, over = {}) => ({
+    status: 'done' as const,
+    verdict: 'approve' as const,
+    reviews: 'org/app#7',
+    headSha: 'a'.repeat(40),
+    lessons: [],
+    questions: [],
+    mutationProbe: 'red: t1',
+    analyzers,
+    ...over,
+  });
+  it('lists every missing and every skipped mandatory analyzer at once', () => {
+    expect(() =>
+      checkReviewCaps(caps, report({ 'diff-review': 'skipped: no time', 'similar-bugs': 'pass' })),
+    ).toThrow(/no result for spec-check, accessibility; mandatory analyzer skipped: diff-review/);
+  });
+  it('similar bugs may skip only while diff review found nothing', () => {
+    const ok = { 'spec-check': 'pass', accessibility: 'pass' };
+    expect(
+      checkReviewCaps(
+        caps,
+        report({ ...ok, 'diff-review': 'pass', 'similar-bugs': 'skipped: no finding' }),
+      ).skipped,
+    ).toEqual(['similar-bugs']);
+    expect(() =>
+      checkReviewCaps(
+        caps,
+        report({ ...ok, 'diff-review': 'findings', 'similar-bugs': 'skipped: no time' }),
+      ),
+    ).toThrow(/mandatory analyzer skipped: similar-bugs/);
+  });
+  it('a fix needs a probe that ran, also in the small tier', () => {
+    const all = {
+      'diff-review': 'pass',
+      'spec-check': 'pass',
+      'similar-bugs': 'pass',
+      accessibility: 'pass',
+    };
+    expect(() =>
+      checkReviewCaps(
+        { ...caps, probeRequired: true },
+        report(all, { mutationProbe: 'skipped: no test' }),
+      ),
+    ).toThrow(/fix without a mutation probe that ran/);
+    expect(checkReviewCaps(caps, report(all, { mutationProbe: 'skipped: docs' })).skipped).toEqual(
+      [],
+    );
   });
 });

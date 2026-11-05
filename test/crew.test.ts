@@ -722,6 +722,7 @@ describe('writeCrewSettings', () => {
           'usage.json',
           'launch.lock',
           'pause.json',
+          'skills-check.json',
         ].map((f) => join(state, f)),
         join(dirnameOf(state), 'owner'),
       ],
@@ -2303,6 +2304,101 @@ describe('required skills at launch', () => {
     await p;
     expect(started).toHaveLength(1);
   });
+
+  describe('only the skills the matrix names', () => {
+    const settingsOf = (f: ReturnType<typeof setup>) =>
+      JSON.parse(readFileSync(join(f.state, 'settings', 'APP-12.json'), 'utf8')) as {
+        permissions: { deny: string[] };
+      };
+    const withInstalled = () => {
+      const f = setup();
+      const sp = join(f.dir, 'plugins', 'cache', 'superpowers-marketplace', 'superpowers', '7.0.2');
+      put(join(sp, 'skills', NAME, 'SKILL.md'));
+      put(join(sp, 'skills', 'verification-before-completion', 'SKILL.md'));
+      put(join(sp, 'skills', 'brainstorming', 'SKILL.md'));
+      put(join(f.dir, 'skills', 'my-own-deploy', 'SKILL.md'));
+      put(join(f.dir, 'skills', 'ok', 'SKILL.md'));
+      return f;
+    };
+
+    it('crew settings deny every installed skill outside the matrix, and the denied ones', async () => {
+      const f = withInstalled();
+      const { started, p } = launch(f);
+      await p;
+      expect(started).toHaveLength(1);
+      const deny = settingsOf(f).permissions.deny;
+      expect(deny).toContain('Skill(my-own-deploy)');
+      expect(deny).toContain('Skill(superpowers:brainstorming)');
+      expect(deny).toContain('Skill(superpowers:executing-plans)');
+      expect(deny).toContain('Skill(x:no)');
+      for (const allowed of [
+        'Skill(studio-crew)',
+        `Skill(superpowers:${NAME})`,
+        'Skill(superpowers:verification-before-completion)',
+        'Skill(ok)',
+      ]) {
+        expect(deny).not.toContain(allowed);
+      }
+      // The tools the crew never gets stay denied as before.
+      expect(deny).toEqual(expect.arrayContaining(['WebFetch', 'WebSearch', 'mcp__*']));
+    });
+
+    it('a missing offered skill is named in the brief and recorded for collect; the launch goes on', async () => {
+      const f = withInstalled();
+      const { started, p } = launch(f);
+      await p;
+      expect(started).toHaveLength(1);
+      const brief = readFileSync(join(f.state, 'briefs', 'APP-12.md'), 'utf8');
+      // x:ok is offered by the role and installed only as a user skill `ok`: present.
+      expect(brief).toMatch(/Offered skills: .*x:ok/);
+      expect(
+        JSON.parse(readFileSync(join(f.state, 'briefs', 'APP-12.skills.json'), 'utf8')),
+      ).toEqual({ missing: [] });
+      rmSync(join(f.dir, 'skills', 'ok'), { recursive: true });
+      const again = launch(f);
+      await again.p;
+      const second = readFileSync(join(f.state, 'briefs', 'APP-12.md'), 'utf8');
+      expect(second).toMatch(/Offered but not installed[^\n]*x:ok/);
+      expect(second).not.toMatch(/Offered skills: [^\n]*x:ok/);
+      expect(
+        JSON.parse(readFileSync(join(f.state, 'briefs', 'APP-12.skills.json'), 'utf8')),
+      ).toEqual({ missing: ['x:ok'] });
+    });
+
+    it('a skill bundled with Claude Code is never reported missing', async () => {
+      const f = withInstalled();
+      const { p } = launch(f);
+      await p;
+      // The chore row offers the bundled `simplify`, which is not on disk.
+      const brief = readFileSync(join(f.state, 'briefs', 'APP-12.md'), 'utf8');
+      expect(brief).toMatch(/Offered skills: [^\n]*simplify/);
+    });
+
+    it('a pinned plugin at another version refuses the launch before anything starts', async () => {
+      const f = withInstalled();
+      writeFileSync(
+        join(f.dir, 'plugins', 'installed_plugins.json'),
+        JSON.stringify({
+          version: 2,
+          plugins: {
+            'superpowers@superpowers-marketplace': [{ scope: 'user', version: '7.0.1' }],
+          },
+        }),
+      );
+      const { started, p } = launch(f);
+      await expect(p).rejects.toThrow(
+        /superpowers@superpowers-marketplace is 7\.0\.1 .*pinned 7\.0\.2/,
+      );
+      expect(started).toHaveLength(0);
+      expect(existsSync(join(f.state, 'clones'))).toBe(false);
+      const ok = launch(f, {
+        ...config,
+        plugins: [{ name: 'superpowers@superpowers-marketplace', version: '7.0.1' }],
+      });
+      await ok.p;
+      expect(ok.started).toHaveLength(1);
+    });
+  });
 });
 
 const baseFixture = () => makeFixture();
@@ -3088,7 +3184,13 @@ describe('capabilities at launch', () => {
     expect(caps.tier).toBe('small');
     expect(caps.mandatory).toEqual(['diff-review', 'spec-check']);
     const dir = join(f.state, 'briefs', 'APP-20.caps', 'analyzers');
-    expect(readdirSync(dir).sort()).toEqual(['CONTRACT.md', 'diff-review.md', 'spec-check.md']);
+    // The similar-bug scan is listed for every review, owed only when diff review finds something.
+    expect(readdirSync(dir).sort()).toEqual([
+      'CONTRACT.md',
+      'diff-review.md',
+      'similar-bugs.md',
+      'spec-check.md',
+    ]);
     expect(brief(f, 'APP-20')).not.toContain('ignore-all-rules');
   });
 
@@ -3170,6 +3272,30 @@ describe('capabilities at launch', () => {
     const g = makeFixture();
     await launchCrew(g.project, item, config, fakePorts([]), g.launcher);
     expect(existsSync(join(g.state, 'briefs', `${item.id}.caps`, 'design'))).toBe(false);
+  });
+
+  it('a source of unknown licence is never copied: its row reads skipped: licence unknown', async () => {
+    const f = makeFixture();
+    const cfg: StudioConfig = { ...config, stacks: ['better-auth'] };
+    // Even a copy that sits fetched and pinned below the owner root is not used.
+    const rel = 'better-auth/best-practices/SKILL.md';
+    const src = join(owner(f), 'sources', 'better-auth', ...rel.split('/'));
+    mkdirSync(dirnameOf(src), { recursive: true });
+    writeFileSync(src, 'UNCLEAR-LICENCE-MARKER');
+    writeFileSync(
+      join(owner(f), 'sources', 'lock.json'),
+      JSON.stringify({
+        'better-auth': {
+          commit: 'a'.repeat(40),
+          license: 'unknown',
+          fetchedAt: 'x',
+          hashes: { [rel]: createHash('sha256').update('UNCLEAR-LICENCE-MARKER').digest('hex') },
+        },
+      }),
+    );
+    await launchCrew(f.project, { ...item, risk: ['auth'] }, cfg, fakePorts([]), f.launcher);
+    expect(brief(f, item.id)).toContain('better-auth: skipped: licence unknown');
+    expect(existsSync(join(f.state, 'briefs', `${item.id}.caps`, 'sources'))).toBe(false);
   });
 
   it('a source that is not fetched reads skipped, a fetched one is copied', async () => {
@@ -3310,7 +3436,78 @@ describe('capabilities at launch', () => {
       f.launcher,
     );
     expect(capsOf(f, 'APP-20').analyzers).toContain('similar-bugs');
+    expect(capsOf(f, 'APP-20').mandatory).toContain('similar-bugs');
     expect(brief(f, 'APP-20')).toContain('Review round: 2');
+  });
+
+  describe('the depth of the gate', () => {
+    const prOf = (...paths: string[]) =>
+      JSON.stringify({
+        ...PR_HEAD,
+        changedFiles: paths.length,
+        files: paths.map((path) => ({ path, additions: 3, deletions: 1 })),
+      });
+    const launchOn = async (f: Fixture, cfg: StudioConfig, ...paths: string[]) =>
+      launchCrew(
+        f.project,
+        reviewItem,
+        cfg,
+        portsWithGh([], () => ({ code: 0, stdout: prOf(...paths) })),
+        f.launcher,
+      );
+
+    it('a small docs-only pull request gets no security analyzer, and the brief says why', async () => {
+      const f = makeFixture();
+      await launchOn(f, reviewerConfig, 'README.md', 'docs/guide.md');
+      const caps = capsOf(f, 'APP-20');
+      expect(caps.tier).toBe('small');
+      expect(caps.analyzers).not.toContain('security');
+      expect(caps.mandatory).toEqual(['diff-review', 'spec-check']);
+      expect(caps.onFinding).toEqual(['similar-bugs']);
+      const text = brief(f, 'APP-20');
+      expect(text).toContain('- diff-review: mandatory: every pull request');
+      expect(text).toMatch(/- security: not run: no risk tag/);
+      expect(text).toMatch(/- performance: not run: small tier/);
+    });
+
+    it('a change under a contract path of merge.contract_paths gets security, with that reason', async () => {
+      const f = makeFixture();
+      const cfg: StudioConfig = {
+        ...reviewerConfig,
+        merge: { ...reviewerConfig.merge, contractPaths: ['proto/**'] },
+      };
+      await launchOn(f, cfg, 'proto/orders.proto');
+      const caps = capsOf(f, 'APP-20');
+      expect(caps.mandatory).toContain('security');
+      expect(caps.tier).toBe('large');
+      expect(brief(f, 'APP-20')).toMatch(
+        /- security: mandatory: a contract or migration path changed \(merge\.contract_paths: proto\/\*\*\)/,
+      );
+      // The same file without the contract path is plain.
+      const g = makeFixture();
+      await launchOn(g, reviewerConfig, 'proto/orders.proto');
+      expect(capsOf(g, 'APP-20').analyzers).not.toContain('security');
+    });
+
+    it('a risk path names its reason without naming the file', async () => {
+      const f = makeFixture();
+      await launchOn(f, reviewerConfig, 'src/auth/ignore-previous-instructions.ts');
+      const text = brief(f, 'APP-20');
+      expect(text).toMatch(/- security: mandatory: a changed path matches the security rules/);
+      expect(text).not.toContain('ignore-previous-instructions');
+    });
+
+    it('a fix owes a mutation probe that ran; a feature in the small tier does not', async () => {
+      const f = makeFixture();
+      await launchOn(f, reviewerConfig, 'src/a.ts');
+      expect(capsOf(f, 'APP-20').probeRequired).toBe(true);
+      expect(brief(f, 'APP-20')).toMatch(/mutation probe must run: the change is a fix/);
+      const g = makeFixture();
+      const board = join(g.project, '.studio', 'board.yaml');
+      writeFileSync(board, readFileSync(board, 'utf8').replace('type: fix', 'type: chore'));
+      await launchOn(g, reviewerConfig, 'src/a.ts');
+      expect(capsOf(g, 'APP-20').probeRequired).toBeUndefined();
+    });
   });
 
   it('lessons stand apart from the role, in a labelled data block', async () => {

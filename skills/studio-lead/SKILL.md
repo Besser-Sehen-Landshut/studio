@@ -86,11 +86,15 @@ pinned head SHA, once **no** check is pending and every required check is green.
 | `studio metrics` shows repeat flaky tests | one `type: fix` item for the worst |
 | Planning an item | `studio plan` lists `solutions`; read those, `studio solutions search <words>` for more; add `.studio/solutions/<topic>.md` when a hard problem is solved |
 | Manifest or stack changed | `studio setup stack --write`; commit |
-| Weekly, and before a release | `studio sources check` |
+| Before a release | `studio skills check --now` |
 
-## Sources
+## Skills and sources
 
-`fits` → `studio sources apply <id>`. `unclear` or `conflict` is held: never apply, and give the owner one line per held source with the changed files. Those lines belong in the round even when the owner says not to ask about routine.
+- `skillsCheck.added` (monthly, in `tick`): update items; crew and review adopt them. Never raise a pin or apply a source outside one.
+- An advisory: `studio skills check --security <name@marketplace or source id>` (priority 0).
+- `sources check`: `fits` → `studio sources apply <id>`; `unclear` → its update item, no owner line; `conflict` → never apply, one owner line, even when the owner says not to ask about routine.
+- A launch refused for a pinned version, or `skillsMissing`: `studio account setup-plugins`, then `studio doctor`. A missing offered skill is one status line.
+- "approval refused: ... skipped" names owed analyzers: `studio stop <id> --requeue`. No source fixes it.
 
 ## Authority
 
@@ -137,13 +141,10 @@ inside crew clones.
 | "Let me confirm the purchase details with the owner" | Owner-only: one line, the owner handles it. |
 | "The owner may know whether clients depend on it" | Technical question → research item. |
 | "It's urgent, skip the reviewer this once" | Hurry never skips review or the queue. |
-| "I'll check capacity before queueing" | The queue checks capacity twice. Queue it. |
 | "I'll add the review item for the new PR" | `collect` added it (`review:`). Only a PR opened by hand needs one. |
-| "`--watch` returned, so nothing is pending" | `--watch` exits early. The queue decides. |
 | "The crew says CI is green" | Prose. Collect and the queue check the SHA. |
 | "tests_run 0 but the fix looks right" | Not done: blocked, then one relaunch. |
 | "I'll add the phase line to ROADMAP.md" | Generated: an epic on the board, then `studio roadmap --write`. |
-| "It's tiny, I'll merge directly" | Never `gh pr merge`. |
 | "Builds take an hour, polling every 15 minutes is enough" | Crews on a blocked account keep running until the next poll. 120 seconds. |
 | "A short timer burns tokens" | A background shell loop spends none. A `/loop` tick does. |
 | "`fixLimit`, but a stronger model might do it" | Hard stop. Escalate only before the limit. |

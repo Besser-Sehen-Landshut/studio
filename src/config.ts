@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { globProblem } from './glob.js';
+import { pluginPinSchema } from './plugins.js';
 
 export { globProblem };
 
@@ -177,6 +178,9 @@ export const studioConfigSchema = z
     // Base branches a pull request may be reviewed against; empty = default branch only.
     reviewBases: strList,
     components: z.array(componentSchema).min(1).optional(),
+    // Plugins crews need, each at one exact version, over the defaults (src/plugins.ts).
+    // `studio account setup-plugins` installs them; a launch refuses another installed version.
+    plugins: z.array(pluginPinSchema).optional(),
   })
   .superRefine((cfg, ctx) => {
     const seen = new Set<string>();

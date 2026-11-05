@@ -49,6 +49,12 @@
             "items": {
               "type": "string"
             }
+          },
+          "watch": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [

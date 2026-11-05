@@ -147,9 +147,16 @@ rows:
     mode: review
     load: subagent
     model: standard
+  - id: analyzer-security-contract
+    ref: analyzer:security
+    when: { roles: [reviewer], triggers: [contract-change] }
+    mode: review
+    load: subagent
+    model: capable
+  # Every review; owed after a fix round, and in round 1 when diff review reports findings.
   - id: analyzer-similar-bugs
     ref: analyzer:similar-bugs
-    when: { roles: [reviewer], triggers: [after-fix] }
+    when: { roles: [reviewer] }
     mode: review
     load: subagent
     model: standard

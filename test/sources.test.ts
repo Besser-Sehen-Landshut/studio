@@ -19,6 +19,7 @@ import {
   checkSources,
   compareToPin,
   hashTree,
+  loadSources,
   type Source,
   type SourcesFile,
   setupSources,
@@ -224,6 +225,78 @@ describe('setupSources', () => {
     await expect(
       setupSources({ ownerRoot: o, index: file, ports, only: ['../x'] }),
     ).rejects.toThrow(/unknown source/);
+  });
+});
+
+describe('vendored content is watched upstream; an unknown licence is not used', () => {
+  const vendored: Source = {
+    id: 'vend',
+    kind: 'git',
+    url: 'https://github.com/org/vend',
+    license: 'MIT',
+    vendored: true,
+    notice: 'NOTICE.md',
+    reads: [],
+    watch: ['LICENSE', 'skills/web/SKILL.md'],
+  };
+  const unknown: Source = {
+    id: 'nolicence',
+    kind: 'git',
+    url: 'https://github.com/org/nolicence',
+    license: 'unknown',
+    vendored: false,
+    reads: ['best/SKILL.md'],
+  };
+  const index: SourcesFile = { version: 1, rules: [], sources: [vendored, unknown] };
+  const UP = { LICENSE: 'MIT License\n', 'skills/web/SKILL.md': 'rules\n', 'other.md': 'x' };
+
+  it('setup fetches a vendored source with a watch list and pins only the watched files', async () => {
+    const o = ownerRoot();
+    const r = await setupSources({
+      ownerRoot: o,
+      index,
+      ports: fakeGit({ tree: tree(UP), commit: SHA1 }).ports,
+    });
+    expect(r).toEqual([{ id: 'vend', result: 'fetched', commit: SHA1 }]);
+    const lock = JSON.parse(read(o, 'sources/lock.json')).vend;
+    expect(Object.keys(lock.hashes).sort()).toEqual(['LICENSE', 'skills/web/SKILL.md']);
+  });
+  it('a change of a watched upstream file is unclear and named', async () => {
+    const o = ownerRoot();
+    const up = { tree: tree(UP), commit: SHA1 };
+    await setupSources({ ownerRoot: o, index, ports: fakeGit(up).ports });
+    up.tree = tree({ ...UP, 'skills/web/SKILL.md': 'new rules\n' });
+    up.commit = SHA2;
+    const r = await checkSources({ ownerRoot: o, index, ports: fakeGit(up).ports });
+    expect(r).toEqual([
+      expect.objectContaining({
+        id: 'vend',
+        verdict: 'unclear',
+        findings: [{ kind: 'changed', detail: 'skills/web/SKILL.md' }],
+        candidate: SHA2,
+      }),
+    ]);
+  });
+  it('a source of unknown licence is neither fetched nor checked', async () => {
+    const o = ownerRoot();
+    const { ports, calls } = fakeGit({ tree: tree(UP), commit: SHA1 });
+    await setupSources({ ownerRoot: o, index, ports });
+    expect(calls.some((c) => c.includes('https://github.com/org/nolicence'))).toBe(false);
+    const r = await checkSources({ ownerRoot: o, index, ports });
+    expect(r.map((x) => x.id)).toEqual(['vend']);
+    await expect(setupSources({ ownerRoot: o, index, ports, only: ['nolicence'] })).rejects.toThrow(
+      /licence unknown/,
+    );
+  });
+  it('the shipped list watches the vendored platform files and marks better-auth unknown', () => {
+    const shipped = loadSources();
+    const ehmo = shipped.sources.find((s) => s.id === 'ehmo');
+    expect(ehmo?.vendored).toBe(true);
+    expect(ehmo?.reads).toEqual([]);
+    expect(ehmo?.watch).toEqual(
+      expect.arrayContaining(['LICENSE', 'skills/web/SKILL.md', 'skills/ios/SKILL.md']),
+    );
+    expect(shipped.sources.find((s) => s.id === 'better-auth')?.license).toBe('unknown');
   });
 });
 

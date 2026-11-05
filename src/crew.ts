@@ -16,6 +16,7 @@ import type { WorkItem } from './board.js';
 import { boardPath, loadBoard, saveBoard } from './board.js';
 import {
   type BriefCaps,
+  BUNDLED_SKILLS,
   plainCaps,
   resolveForItem,
   resolveModel,
@@ -62,6 +63,7 @@ import {
   writeStateFile,
 } from './paths.js';
 import { PAUSED_LINE, readPause } from './pause.js';
+import { pinMismatch, pinnedPlugins, skillDenyRules } from './plugins.js';
 import type { Ports } from './ports.js';
 import { newReportName } from './report.js';
 import { readCrewCaps, renderReviewRoutine } from './review.js';
@@ -509,8 +511,13 @@ export function writeBrief(
       ? [`Invoke when available: ${list(caps.whenAvailable)}`]
       : []),
     `Offered skills: ${list(caps.offered)}`,
+    ...((caps.skillsMissing ?? []).length > 0
+      ? [
+          `Offered but not installed (Studio reports them to the lead; do not look for them): ${list(caps.skillsMissing ?? [])}`,
+        ]
+      : []),
     `Denied skills (never invoke): ${list(caps.denied)}`,
-    'Use no other skill: only a skill named here counts.',
+    'Use no other skill: only a skill named here counts. Every other installed skill is denied in your settings.',
     ...caps.skipped.map((s) => `Skipped: ${s.id}: skipped: ${s.reason}`),
     '',
     ...(caps.knowledge.length > 0
@@ -535,6 +542,10 @@ export function writeBrief(
           skipped: caps.skipped,
           contract: caps.review.contract,
           round: caps.review.round,
+          ...(caps.review.notRun === undefined ? {} : { notRun: caps.review.notRun }),
+          ...(caps.review.probeRequired === undefined
+            ? {}
+            : { probeRequired: caps.review.probeRequired }),
           ...(caps.review.pr === undefined ? {} : { pr: caps.review.pr }),
           ...(caps.review.base === undefined ? {} : { base: caps.review.base }),
           ...(caps.review.pullRequest === undefined
@@ -667,6 +678,8 @@ export function writeCrewSettings(
     providerConfigDir?: string;
     /** The owner's opt-in to open the macOS TLS trust service to crew shells. */
     macosTrustService?: boolean;
+    /** `Skill(<name>)` deny rules: every installed skill the brief does not name. */
+    skillDeny?: readonly string[];
   },
   launcher: LauncherEnv = {},
 ): string {
@@ -790,7 +803,9 @@ export function writeCrewSettings(
     disableAllHooks: false,
     // Crew needs neither the web nor MCP servers; the guard denies these tools too.
     // Bare names remove the tool, `mcp__*` every MCP tool (https://code.claude.com/docs/en/permissions).
-    permissions: { deny: ['WebFetch', 'WebSearch', 'mcp__*'] },
+    // Skills outside the brief are denied by name: deny rules hold in bypassPermissions, allow
+    // rules do not (https://code.claude.com/docs/en/permission-modes), so there is no allowlist.
+    permissions: { deny: ['WebFetch', 'WebSearch', 'mcp__*', ...(dirs.skillDeny ?? [])] },
     hooks: {
       PreToolUse: [
         {
@@ -1157,6 +1172,9 @@ async function launchCrewLocked(
     ...forItem.resolved.required,
   ]);
   if (missingSkill) throw new Error(missingSkill);
+  // The plugins crews run with are pinned: another installed version refuses, before anything.
+  const pinOff = pinMismatch(claudeConfigDir, pinnedPlugins(config.plugins));
+  if (pinOff) throw new Error(pinOff);
   const clonePath = join(stateRoot, 'clones', item.id);
   // A run stopped at a limit or a block keeps its work: never let prepareCheckout replace that clone.
   if (
@@ -1261,6 +1279,11 @@ async function launchCrewLocked(
       toolchainPaths,
       providerConfigDir,
       macosTrustService: ownerConfig.crewAllowMacosTrustService,
+      skillDeny: skillDenyRules(
+        claudeConfigDir,
+        [CREW_SKILL, ...caps.required, ...caps.whenAvailable, ...caps.offered, ...BUNDLED_SKILLS],
+        caps.denied,
+      ),
     },
     owner,
   );

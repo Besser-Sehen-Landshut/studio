@@ -6,13 +6,13 @@ import {
   crewClaudeDir,
   expiryState,
   listAccounts,
-  PLUGIN_COMMANDS,
   removeAccount,
   setActiveLabel,
 } from './accounts.js';
 import { loadOwnerConfig, type OwnerEnv } from './config.js';
 import { activeParks, readBlocks, readLimits } from './limits.js';
 import { acquireStateLock } from './paths.js';
+import { DEFAULT_PLUGINS, listedVersions, type PluginPin, pluginCommands } from './plugins.js';
 import type { Ports } from './ports.js';
 import { safe } from './setup-ci-command.js';
 import { LAUNCH_LOCK, LAUNCH_LOCK_STALE_MS, labelUsage } from './usage.js';
@@ -71,28 +71,71 @@ export function expiryLine(row: AccountRow): string | undefined {
   return `account ${row.label}: token ${when} ${row.expiresAt.slice(0, 10)}; run claude setup-token, then studio account add ${row.label}`;
 }
 
-/** Installs the plugins crews need into the crew config dir. No login, no token involved. */
-export async function setupPlugins(
+/** The environment plugin commands run with: the crew config dir, no token. */
+export function pluginEnv(
   owner: OwnerEnv,
-  ports: Ports,
   env: Record<string, string | undefined>,
-): Promise<string | undefined> {
-  if (ports.plugins === undefined) return 'no claude command available';
+): { dir: string; runEnv: Record<string, string> } {
   const dir = crewClaudeDir(owner);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodSync(dir, 0o700);
   const runEnv: Record<string, string> = {
     CLAUDE_CONFIG_DIR: dir,
     HOME: owner.homedir ?? homedir(),
   };
   if (env.PATH !== undefined) runEnv.PATH = env.PATH;
-  for (const args of PLUGIN_COMMANDS) {
-    const r = await ports.plugins.run([...args], runEnv, dir);
+  return { dir, runEnv };
+}
+
+/**
+ * Installs the pinned plugins crews need into the crew config dir, then reads what got installed.
+ * `claude plugin install` takes no version (https://code.claude.com/docs/en/plugins/cli-reference):
+ * a plugin at another version gets one `claude plugin update`, and if it still differs, the setup
+ * fails naming both versions. A launch refuses the same mismatch. No login, no token involved.
+ */
+export async function setupPlugins(
+  owner: OwnerEnv,
+  ports: Ports,
+  env: Record<string, string | undefined>,
+  pins: readonly PluginPin[] = DEFAULT_PLUGINS,
+  say: (line: string) => void = () => {},
+): Promise<string | undefined> {
+  if (ports.plugins === undefined) return 'no claude command available';
+  const cli = ports.plugins;
+  const { dir, runEnv } = pluginEnv(owner, env);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+  const run = async (args: string[]) => {
+    const r = await cli.run(args, runEnv, dir);
     if (r.code !== 0) {
-      return `claude ${args.join(' ')} failed (exit ${r.code}): ${safe(r.stderr.trim()).slice(0, 300)}`;
+      throw new Error(
+        `claude ${args.join(' ')} failed (exit ${r.code}): ${safe(r.stderr.trim()).slice(0, 300)}`,
+      );
     }
+    return r.stdout;
+  };
+  const off = (have: Map<string, string>) =>
+    pins.filter((p) => have.get(p.name) !== undefined && have.get(p.name) !== p.version);
+  try {
+    for (const args of pluginCommands(pins)) await run(args);
+    let have = listedVersions(await run(['plugin', 'list', '--json']));
+    if (have === undefined) {
+      say('installed versions: unknown (claude plugin list --json gave nothing readable)');
+      return undefined;
+    }
+    const first = off(have);
+    if (first.length > 0) {
+      for (const p of first) await run(['plugin', 'update', p.name]);
+      have = listedVersions(await run(['plugin', 'list', '--json'])) ?? have;
+    }
+    for (const p of pins)
+      say(`${p.name} ${have.get(p.name) ?? 'not listed'} (pinned ${p.version})`);
+    const still = off(have);
+    if (still.length > 0) {
+      return `${still.map((p) => `${p.name} is ${have?.get(p.name)}, pinned ${p.version}`).join('; ')}: claude plugin install takes no version and installs what the marketplace offers; set the pin to the installed version after a reviewed update item (studio skills check), or wait for the marketplace`;
+    }
+    return undefined;
+  } catch (e) {
+    return (e as Error).message;
   }
-  return undefined;
 }
 
 export async function runAccount(o: {
@@ -103,6 +146,8 @@ export async function runAccount(o: {
   env: Record<string, string | undefined>;
   json: boolean;
   isTerminal: boolean;
+  /** The pinned plugins: studio.yaml's `plugins:` over the defaults. */
+  pins?: readonly PluginPin[];
   readSecret?: (prompt: string) => Promise<string | undefined>;
   stdout(s: string): void;
   stderr(s: string): void;
@@ -130,7 +175,7 @@ export async function runAccount(o: {
     o.stdout(`account ${label} stored${activeLabel(o.owner) === label ? ' and active' : ''}\n`);
     // The first account sets up the crew config dir; later ones leave it to setup-plugins.
     if (!first) return 0;
-    const failed = await setupPlugins(o.owner, o.ports, o.env);
+    const failed = await setupPlugins(o.owner, o.ports, o.env, o.pins);
     if (failed === undefined) return 0;
     o.stderr(
       `error: plugin setup: ${failed}; the token is stored, run studio account setup-plugins\n`,
@@ -171,7 +216,9 @@ export async function runAccount(o: {
   }
   if (sub === 'setup-plugins' && label === undefined) {
     ownerOnly();
-    const failed = await setupPlugins(o.owner, o.ports, o.env);
+    const failed = await setupPlugins(o.owner, o.ports, o.env, o.pins, (l) =>
+      o.stdout(`${safe(l)}\n`),
+    );
     if (failed !== undefined) throw new Error(`plugin setup: ${failed}`);
     o.stdout(`plugins installed in ${crewClaudeDir(o.owner)}\n`);
     return 0;

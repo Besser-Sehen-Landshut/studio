@@ -22,6 +22,7 @@ import {
 } from './credentials.js';
 import { CREW_SKILL, skillInstalled, studioPluginHint } from './crew.js';
 import { ownerStateRootFor } from './paths.js';
+import { installedVersions, pinnedPlugins } from './plugins.js';
 import type { Ports } from './ports.js';
 import { assertPrimaryRepo, safe } from './setup-ci-command.js';
 
@@ -259,6 +260,13 @@ export async function doctorReport(o: {
       ? crewClaudeDir(o.owner)
       : await crewConfigDir(command, o.owner, o.env, o.ports);
   const studioCrew = skillState(configDir, CREW_SKILL.split(':').at(-1) ?? '');
+  // Pinned against what Claude Code recorded in the crew's config dir.
+  const have = configDir === undefined ? undefined : installedVersions(configDir);
+  const plugins = pinnedPlugins(config?.plugins).map((p) => ({
+    name: p.name,
+    pinned: p.version,
+    installed: have === undefined ? 'unknown' : (have.get(p.name) ?? 'not installed'),
+  }));
   const git = await gitState(o.project, o.ports);
   const projectCheckout = await checkoutState(o.project, o.ports);
   const toolchain = toolsOutside(
@@ -279,6 +287,7 @@ export async function doctorReport(o: {
     // The foundation builders need: feature and fix items require its skills.
     superpowers: skillState(configDir, 'test-driven-development'),
     studioCrew,
+    plugins,
     ownerConfig: ownerConfig ? 'readable' : 'invalid',
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
@@ -324,6 +333,10 @@ export async function runDoctor(o: {
       `superpowers: ${report.superpowers}`,
       `git: ${git}`,
       `studio plugin: ${studioCrew}${studioCrew === 'not found' && configDir !== undefined ? ` (${studioPluginHint(configDir)})` : ''}`,
+      ...report.plugins.map(
+        (p) =>
+          `plugin ${p.name}: pinned ${p.pinned}, installed ${p.installed}${p.installed !== p.pinned && p.installed !== 'unknown' ? ' (a launch refuses: run studio account setup-plugins)' : ''}`,
+      ),
       `stacks: ${report.stacks === null ? 'not set: run studio setup stack' : report.stacks.join(', ') || '(none)'}`,
       `owner config: ${report.ownerConfig}`,
       `credential provider: ${provider === null ? 'not configured' : `configured ${provider}`}`,

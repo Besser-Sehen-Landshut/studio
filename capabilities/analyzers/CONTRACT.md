@@ -87,5 +87,6 @@ Result: <N critical, M notes> | no findings | skipped: <reason>
 The `Result:` line is what the lead copies into the report as evidence. `skipped: <reason>`
 (an analyzer whose optional source is missing) is never a pass and never "no findings": the lead
 records exactly that text as the evidence for the check and lists it under skipped checks in the
-report. Skipping an optional analyzer does not block the item; skipping diff review, spec check or
-security does.
+report. Skipping an optional analyzer does not block the item; skipping one the brief names as
+mandatory does (diff review, spec check, security when listed, performance in the large tier, the
+similar-bug scan after a fix or when diff review reports findings).
