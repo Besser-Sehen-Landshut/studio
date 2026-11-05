@@ -1,22 +1,32 @@
 // The Studio board mod: a pane, a status line, toasts and /studio, for the owner's session only.
 // It only displays. It writes no file and runs no process; only $.store and its own state change.
+// The view (work list, pipeline, detailed) and a language override are such stored preferences.
 import type { EngineInterface, Register, TextProps } from 'claude-code';
 import { atom, read, update } from 'claude-code';
 import {
   type BoardRead,
-  boardLines,
+  LANGS,
+  type Lang,
   type Line,
+  langOf,
   newAlerts,
+  paneLines,
   parseState,
   stateDirName,
   statusLine,
   statusText,
+  VIEWS,
+  type View,
 } from './board-model';
 
 const PANE = { id: 'studio-board', title: 'Studio board' };
 const TICK_MS = 10_000;
 const MAX_PATH_DEPTH = 256;
-const USAGE = 'Usage: /studio [status | pause | resume]';
+const USAGE = 'Usage: /studio [list | pipeline | more | status | pause | resume | lang de|en|auto]';
+const HINT = 'list | pipeline | more | status | pause | resume | lang';
+/** $.store keys of the preferences; neither is per project. */
+const VIEW_KEY = 'view';
+const LANG_KEY = 'lang';
 
 const board = atom(
   { plugin: 'studio', key: 'board' } as const,
@@ -26,6 +36,8 @@ const board = atom(
   },
 );
 const paused = atom({ plugin: 'studio', key: 'paused' } as const, false, { shape: 'paused-1' });
+const view = atom({ plugin: 'studio', key: 'view' } as const, 'list' as View, { shape: 'view-1' });
+const lang = atom({ plugin: 'studio', key: 'lang' } as const, 'en' as Lang, { shape: 'lang-1' });
 
 const TONE: Record<NonNullable<Line['tone']>, TextProps> = {
   ok: { color: 'success' },
@@ -34,6 +46,50 @@ const TONE: Record<NonNullable<Line['tone']>, TextProps> = {
   err: { color: 'error' },
   dim: { dimColor: true },
   head: { weight: 'bold' },
+  run: { color: 'suggestion' },
+  you: { color: 'warning', weight: 'bold', inverse: true },
+};
+
+const isView = (v: unknown): v is View => VIEWS.includes(v as View);
+const isLang = (v: unknown): v is Lang => LANGS.includes(v as Lang);
+
+/**
+ * The language of the displayed text: `/studio lang` if set, else Claude Code's `language`
+ * setting, else the locale (LC_ALL, LC_MESSAGES, LANG); English when none says.
+ */
+async function languageOf($: EngineInterface): Promise<Lang> {
+  const stored = await $.store.get(LANG_KEY).catch(() => undefined);
+  if (isLang(stored)) return stored;
+  const setting = await $.settings.read({ key: 'language' }).catch(() => undefined);
+  const fromSetting = typeof setting === 'string' ? langOf(setting) : undefined;
+  if (fromSetting !== undefined) return fromSetting;
+  for (const value of [
+    await $.env.get('LC_ALL').catch(() => undefined),
+    await $.env.get('LC_MESSAGES').catch(() => undefined),
+    await $.env.get('LANG').catch(() => undefined),
+  ]) {
+    const fromLocale = langOf(value);
+    if (fromLocale !== undefined) return fromLocale;
+  }
+  return 'en';
+}
+
+async function storedView($: EngineInterface): Promise<View> {
+  const v = await $.store.get(VIEW_KEY).catch(() => undefined);
+  return isView(v) ? v : 'list';
+}
+
+const VIEW_REPLY: Record<Lang, Record<View, string>> = {
+  en: {
+    list: 'Studio board: work list.',
+    pipeline: 'Studio board: pipeline (the work list when the pane is narrow).',
+    more: 'Studio board: details. Back with /studio list.',
+  },
+  de: {
+    list: 'Studio-Board: Arbeitsliste.',
+    pipeline: 'Studio-Board: Pipeline (bei schmalem Bereich die Arbeitsliste).',
+    more: 'Studio-Board: Details. Zurück mit /studio list.',
+  },
 };
 
 const isAbsolute = (p: string): boolean => /^(?:[\\/]|[A-Za-z]:[\\/])/.test(p);
@@ -92,12 +148,13 @@ async function raiseToasts(
   $: EngineInterface,
   dirName: string,
   state: Parameters<typeof newAlerts>[1],
+  language: Lang,
 ) {
   try {
     const key = `seen:${dirName}`;
     const stored = await $.store.get(key);
     const seen = Array.isArray(stored) ? stored.filter((s) => typeof s === 'string') : [];
-    const fresh = newAlerts(seen, state);
+    const fresh = newAlerts(seen, state, language);
     await $.store.set(key, fresh.seen);
     if (fresh.toasts.length > 0) $.ui.toast(oneToast(fresh.toasts));
   } catch {
@@ -117,12 +174,15 @@ const live: {
   timer?: boolean;
   shownStatus?: string;
   running?: Promise<void>;
+  view?: View;
 } = {};
 
-async function publish($: EngineInterface, next: BoardRead, isPaused: boolean) {
+async function publish($: EngineInterface, next: BoardRead, isPaused: boolean, language: Lang) {
   await update($, board, () => next);
   await update($, paused, () => isPaused);
-  const line = next.kind === 'ok' ? statusLine(next.state, isPaused) : undefined;
+  await update($, lang, () => language);
+  await update($, view, () => live.view ?? 'list');
+  const line = next.kind === 'ok' ? statusLine(next.state, isPaused, language) : undefined;
   if (line !== live.shownStatus) {
     live.shownStatus = line;
     $.ui.status(line);
@@ -141,13 +201,15 @@ async function isPaused($: EngineInterface, root: string): Promise<boolean> {
 
 async function refreshOnce($: EngineInterface, dir: string) {
   try {
+    const language = await languageOf($);
+    live.view ??= await storedView($);
     const { dirName, root } = await stateRoot($, dir);
     const next = await readBoard($, root);
-    await publish($, next, await isPaused($, root));
-    if (next.kind === 'ok') await raiseToasts($, dirName, next.state);
+    await publish($, next, await isPaused($, root), language);
+    if (next.kind === 'ok') await raiseToasts($, dirName, next.state, language);
   } catch {
     try {
-      await publish($, { kind: 'unreadable' }, false);
+      await publish($, { kind: 'unreadable' }, false, await languageOf($));
     } catch {
       // Nothing left to tell: the next tick tries again.
     }
@@ -180,8 +242,8 @@ export const register: Register = (on) => {
     live.project = dir;
     await $.command.register({
       name: 'studio',
-      description: 'Show the Studio board, or its status line',
-      argumentHint: 'status | pause | resume',
+      description: 'Show the Studio board: work list, pipeline or details',
+      argumentHint: HINT,
     });
     await refresh($, dir);
     armTimer($, dir);
@@ -214,7 +276,23 @@ export const register: Register = (on) => {
     if (arg === 'status') {
       await refresh($, project);
       const current = (await read($, board)) as BoardRead;
-      return { text: statusText(current, await read($, paused)) };
+      return { text: statusText(current, await read($, paused), await read($, lang)) };
+    }
+    if (isView(arg)) {
+      live.view = arg;
+      await update($, view, () => arg);
+      // A store that fails keeps the view for this session only.
+      await $.store.set(VIEW_KEY, arg).catch(() => undefined);
+      void $.ui.open(PANE).catch(() => undefined);
+      return { text: VIEW_REPLY[await read($, lang)][arg] };
+    }
+    const langArg = /^lang\s+(\S+)$/.exec(arg)?.[1];
+    if (langArg !== undefined && (isLang(langArg) || langArg === 'auto')) {
+      if (langArg === 'auto') await $.store.delete(LANG_KEY).catch(() => undefined);
+      else await $.store.set(LANG_KEY, langArg).catch(() => undefined);
+      await refresh($, project);
+      const now = await read($, lang);
+      return { text: now === 'de' ? 'Studio-Board: Deutsch.' : 'Studio board: English.' };
     }
     const binary = shellWord(`${$.plugin.root}/bin/studio`);
     if (arg === 'pause') {
@@ -232,10 +310,12 @@ export const register: Register = (on) => {
 
   on('ui.render', { component: 'Pane', requestId: 'studio-board' }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e);
-    const lines = boardLines((await read($, board)) as BoardRead, {
+    const lines = paneLines((await read($, board)) as BoardRead, {
       columns: e.props.bodyColumns,
       nowMs: await $.clock.now(),
       paused: await read($, paused),
+      view: await read($, view),
+      lang: await read($, lang),
     });
     return (
       <Box flexDirection="column">

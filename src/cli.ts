@@ -62,6 +62,15 @@ import { sendNotifications } from './notify.js';
 import { formatOverview, readOverview } from './overview.js';
 import { migrateOwnerState, pendingLegacyState } from './owner-state.js';
 import {
+  clockTime,
+  leadDecisions,
+  PR_HELD,
+  paneItems,
+  readTickRecord,
+  resolveZone,
+  writeTickRecord,
+} from './pane-data.js';
+import {
   acquireStateLock,
   checkStateMarker,
   ownerStateRootFor,
@@ -1571,6 +1580,19 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         refuseCrew(deps.env);
         if (rest.length > 0) throw new UsageError('tick takes no arguments');
         const out = await tick();
+        // The pane's lead list, from complete ticks only: a tick that did not run (another tick
+        // held it), lost its lock or had a phase fail keeps the last good record.
+        if (!out.held.some((h) => h.item === 'tick') && !out.errors.some((e) => e.phase)) {
+          try {
+            writeTickRecord(await boundStateRoot(), {
+              at: ports.clock.now().toISOString(),
+              needsLead: out.needsLead,
+              held: out.held,
+            });
+          } catch (e) {
+            stderr(`error: tick record: ${(e as Error).message.replace(/\p{Cc}/gu, ' ')}\n`);
+          }
+        }
         print(out);
         return out.errors.length === 0 ? 0 : 1;
       }
@@ -2249,7 +2271,6 @@ function crewTokenFor(config: StudioConfig, owner: OwnerEnv): string {
   );
 }
 
-const PR_HELD = 'pr held: ';
 /** In a held note: the CI read itself failed, so the hold may never end by itself. */
 const CI_READ_FAILED = 'CI read failed:';
 
@@ -2513,6 +2534,7 @@ function todayFrom(
   events: readonly unknown[],
   now: Date,
   timezone: string | undefined,
+  epicOf?: (item: string) => string | undefined,
 ): StateSnapshot['today'] {
   const day = dayKey(now, timezone);
   const merged: (StateSnapshot['today']['merged'][number] & { t: number })[] = [];
@@ -2525,13 +2547,22 @@ function todayFrom(
     if (Number.isNaN(t) || dayKey(new Date(t), timezone) !== day) continue;
     if (ev.type === 'deployed') deployed++;
     else if (typeof ev.pr === 'number' && Number.isInteger(ev.pr)) {
-      merged.push({ pr: ev.pr, repo: typeof ev.repo === 'string' ? ev.repo : '', at: ev.at, t });
+      const item = typeof ev.item === 'string' && isItemId(ev.item) ? ev.item : undefined;
+      const epic = item === undefined ? undefined : epicOf?.(item);
+      merged.push({
+        pr: ev.pr,
+        repo: typeof ev.repo === 'string' ? ev.repo : '',
+        at: ev.at,
+        t,
+        ...(item === undefined ? {} : { item }),
+        ...(epic === undefined ? {} : { epic }),
+      });
     }
   }
   merged.sort((a, b) => a.t - b.t);
   return {
     day,
-    merged: merged.slice(-MAX_MERGED_TODAY).map(({ pr, repo, at }) => ({ pr, repo, at })),
+    merged: merged.slice(-MAX_MERGED_TODAY).map(({ t: _t, ...m }) => m),
     deployed,
   };
 }
@@ -2603,17 +2634,32 @@ function buildSnapshot(
     .map((e) => ({ id: e.id, title: e.title, status: e.status, ...e.progress }));
   const events = readMetricEvents(root);
   const usageDays = usageDaysFrom(ownerRoot);
+  const ci = {
+    busy: capacity.ciBusy,
+    total: capacity.ciTotal,
+    mergeMaxBusy: extra.config.ci.capacity.mergeMaxBusy,
+    ok: capacity.ok,
+  };
+  // One zone for the day and the pause time: the owner's, else the system's.
+  const timezone = resolveZone(extra.ownerConfig.crewLabelLimits.timezone);
+  const tickRecord = readTickRecord(root);
+  const items = paneItems(board, queue, ci, {
+    ...(tickRecord === undefined ? {} : { tick: tickRecord }),
+    ...(components === undefined
+      ? {}
+      : { componentsOf: (i: WorkItem) => componentsOf(i, extra.config) }),
+  });
+  const pause = readPause(root);
+  const roleWip = (pick: (role: string) => boolean) =>
+    Object.entries(extra.config.roles)
+      .filter(([role]) => pick(role))
+      .reduce((n, [, r]) => n + (r?.wip ?? 0), 0);
   return {
     crew,
     queue,
     capacity,
-    ci: {
-      busy: capacity.ciBusy,
-      total: capacity.ciTotal,
-      mergeMaxBusy: extra.config.ci.capacity.mergeMaxBusy,
-      ok: capacity.ok,
-    },
-    today: todayFrom(events, now, extra.ownerConfig.crewLabelLimits.timezone),
+    ci,
+    today: todayFrom(events, now, timezone, (id) => board.items.find((i) => i.id === id)?.epic),
     ...(usageDays === undefined ? {} : { usageDays }),
     mainBuild: extra.mainBuild,
     counts: {
@@ -2645,6 +2691,19 @@ function buildSnapshot(
     ...(notifications.length > 0 ? { notifications } : {}),
     ...(components === undefined ? {} : { components }),
     ...(epics.length === 0 ? {} : { epics }),
+    project: extra.config.primaryRepo.split('/').at(-1) ?? extra.config.primaryRepo,
+    items,
+    ...(tickRecord === undefined ? {} : { needsLead: leadDecisions(tickRecord, board) }),
+    wip: {
+      building: roleWip((r) => r !== 'reviewer'),
+      review: roleWip((r) => r === 'reviewer'),
+    },
+    ...(pause.paused
+      ? {
+          pause:
+            pause.at === undefined ? {} : { at: pause.at, time: clockTime(pause.at, timezone) },
+        }
+      : {}),
     updatedAt: now.toISOString(),
     metrics: computeMetrics(events),
   };
