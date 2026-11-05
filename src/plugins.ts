@@ -4,7 +4,7 @@ import { isAlias, isMap, isScalar, parseDocument, visit, type YAMLMap } from 'ya
 import { z } from 'zod';
 
 /** This plugin's own version; a test keeps it equal to package.json and plugin.json. */
-export const STUDIO_VERSION = '0.12.1';
+export const STUDIO_VERSION = '0.12.2';
 
 const HTTPS_GIT = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\.git)?$/;
 

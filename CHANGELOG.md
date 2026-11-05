@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.12.2] - 2026-11-05
+
+Every Studio update moves the pinned version of the `studio` plugin, and until `setup-plugins` ran,
+no crew could start. It needed the owner in a terminal, so each patch release stopped all crews until the
+owner came by. Not tagged yet; the maintainers tag after the merge.
+
+### Changed
+
+- `studio account setup-plugins` no longer needs a terminal. It handles no secret, installs only the
+  pinned defaults and the owner-config allowlist, and still refuses crew sessions. The lead skill
+  runs it when a launch is refused for a moved pin.
+
 ## [0.12.1] - 2026-11-05
 
 From a real run: a builder crew finished its work twice and both reports were refused, because

@@ -273,3 +273,10 @@ missing offered skill "is one status line, not an action"; for the refused appro
 for the licence conflict of stripe. All four misses gone.
 
 Not exercised: a real monthly check against live marketplaces, and a crew working an update item.
+
+## A moved pin after an update: baseline (RED), 0.12.2
+
+Recorded on 2026-11-05 after the 0.12.1 patch: `studio doctor` showed `pinned 0.12.1, installed 0.12.0
+(a launch refuses: run studio account setup-plugins)`, and the lead could not run it ("is for the owner
+and needs a terminal"), so every crew waited for the owner. The command now runs without a terminal, and
+the lead skill names it for this case.

@@ -987,12 +987,16 @@ describe('studio account', () => {
     expect(existsSync(join(fx.ownerDir, 'tokens', 'work.json'))).toBe(false);
   });
 
-  it('setup-plugins is for the owner in a terminal', async () => {
+  it('setup-plugins runs for the lead without a terminal, never for a crew', async () => {
+    // it handles no secret: after every Studio update the pins move and the lead must re-run it
     const fx = makeFx();
     const { ports, calls } = withPlugins();
-    expect((await cli(fx, ports, ['account', 'setup-plugins'])).code).toBe(1);
-    expect(calls).toHaveLength(0);
-    expect((await cli(fx, ports, ['account', 'setup-plugins'], { isTerminal: true })).code).toBe(0);
+    expect((await cli(fx, ports, ['account', 'setup-plugins'])).code).toBe(0);
+    expect(calls).toHaveLength(5);
+    const crew = await cli(fx, ports, ['account', 'setup-plugins'], {
+      env: { ...fx.env, STUDIO_ROLE: 'crew' },
+    });
+    expect(crew.code).toBe(1);
     expect(calls).toHaveLength(5);
   });
 
