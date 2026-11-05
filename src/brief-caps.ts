@@ -468,6 +468,8 @@ export interface BriefCaps {
   reportName?: string;
   /** The crew cannot run gh (macOS without the trust service): Studio opens its pull request. */
   prByStudio?: boolean;
+  /** A worker without a crew token: the crew commits only, Studio pushes after it ended. */
+  pushByStudio?: boolean;
   review?: {
     tier: 'small' | 'large';
     reasons: string[];

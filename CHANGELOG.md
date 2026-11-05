@@ -3,6 +3,112 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.19.0] - 2026-11-05
+
+Some work needs another machine: real hardware, an installed program to analyse, another operating system.
+Until now the lead steered such a session by message. Now an item names a worker label (`runs_on`), the lead
+offers it on GitHub, and `studio worker --label <label>` on that machine claims it atomically, runs its crew
+under the same rules as a local crew plus a deny list of places and ports, opens the pull request with its own
+identity and hands the report back on the claim. The lead collects, reviews, queues and merges as before.
+Nothing but GitHub is shared between the machines. Not tagged yet; the maintainers tag after the merge.
+
+### Added
+
+- `runs_on: <label>` on a board item (`feature`, `fix`, `chore`, `docs` or `research` of a builder, designer
+  or researcher). `plan` lists such items under `offer`; `launch` refuses them. Offers take no role WIP, no
+  credential slot and no host load; dependencies, overlaps, component WIP, a pause, an account block and the
+  daily cost cap hold them.
+- `tick` offers each planned one as an issue `Studio offer <id> for <label>` (label `studio-offer`, the item's
+  board fields and a nonce as one JSON block, locked at once so only collaborators can comment), moves it to `assigned` with the crew `worker:<label>`, follows its claim
+  (`in_progress` while claimed, `held` with `worker: ...`), collects a `done` claim through the same `collect`
+  and blocks the item on a `released` one; `tick` prints `offered`. The offer record lives in `workers.json`.
+- Claims: `refs/studio/claims/<id>` on the primary repository, created through the GitHub API (one creator
+  wins), moved only as a fast-forward from the commit the worker wrote last (heartbeat every third of the
+  lease, default 30 minutes), taken over after the lease plus two minutes (counted from when the lead or the
+  worker first saw that claim commit, on its own clock, never from commit dates) by another worker of the label,
+  once (attempt 2, from the pushed `studio/<id>`); a second expiry goes to the lead.
+- `studio worker --label <label> [--once]`: claims one offer at a time, launches the crew with `launch`'s code
+  (the brief entirely from a fresh `origin/main`: rules, `studio.yaml`, role text, lessons and solutions;
+  sandbox, guard, skill allowlist, its own Claude account and limits), opens or renews its own pull request
+  in-process with the worker's token (never one of another account or a fork), and writes the claim `done`
+  with `report.md` and `usage.json`, or `released` with a fixed reason. Its state is `worker.json`; after a
+  restart it first goes on with the item it holds (its own heartbeats on top of what it saved count as its
+  own), then checks for new claims. A claim it cannot start (comment failed, offer closed, launch refused)
+  is removed again, never `released`; a launch held back tries again later.
+- Before every claim the worker checks that it can enforce its rules and refuses otherwise: a sandbox
+  (macOS, Linux, WSL2 with interop off, read again each time; native Windows, WSL1 and an unclear WSL version
+  refuse), an owner config `workers.self` naming the lead, a token that is not the lead's, every pinned plugin
+  installed at its pin (stricter than a local launch: a plugin that is not installed refuses), no account
+  block, a credential neither parked nor at its limit, no launch in progress, no pause, and a deny list the
+  sandbox can hold.
+- Deny lists: `workers.<label>.deny` (`paths`, `ports`) in `studio.yaml`, joined with `workers.self.deny` of
+  the worker's owner config. Paths go into the sandbox's `denyRead` and `denyWrite` and the guard's secret
+  paths; a Windows drive path holds only under WSL2, as the whole drive. On WSL2 the automount root and every
+  drvfs, 9p or virtiofs mount are denied by default; `workers.self.allow_read` opens single places for reads.
+  With ports denied, a `sandbox.network_allow` entry that could reach the machine (an IP address in any
+  spelling, `localhost` without a port, `*`, single-label or local names) refuses, judged after the host is
+  normalised (lowercase, one trailing dot dropped, WHATWG URL host parsing); an entry that does not parse
+  refuses too, and a wildcard over an IP address (`*.<address>`) is refused already when `studio.yaml` loads. The guard denies commands that name a denied port.
+- `workers.accept` in the owner config on the lead's machine: the accounts whose claims count, per label, each
+  as `{ login, id }`; the numeric id is what is compared, since a login can be reused. An accepted account
+  that is the lead's own crew token account refuses the offer.
+- The lead's checks: the claim ref is only the lock. Each claim (and each takeover) is proven by one comment on
+  the offer, `studio-claim <claim commit> <offer nonce>`; the first unedited one for the commit that started the
+  attempt must come from the account the claim names, accepted for the label; every later state change (`done`,
+  `released`) is announced the same way, naming its exact commit, and only heartbeats may stay unannounced.
+  Only unedited comments by OWNER, MEMBER or COLLABORATOR accounts with an accepted id count; others are
+  warnings and never decide or block, and an offer with more comment pages than Studio reads decides nothing.
+  The chain walk stops at the tip the lead proved before. Nothing in a commit
+  (content, author, committer, signature) counts. Unproven claims, unannounced state changes and edited
+  comments go to the lead.
+  The pull request must come from `studio/<id>` of the item's repository with the report's head, opened by the
+  claiming worker's account id. The worker token needs Issues: Read and write for the comments.
+- Two tokens on a worker: `worker-token` (`studio secret set worker-token`) for claims, pull requests and pushes,
+  used in-process (HTTPS from Node, not `gh`), never handed to a crew, refused when it equals the crew token or
+  its account is the crew token's (`GET /user`); the crew gets at most the crew token. Without one, the crew
+  commits only and the worker pushes `studio/<id>` from a fresh blob-less clone after it ended.
+- The guard refuses crew pushes to `refs/studio/*`, also as a short name git would resolve there.
+- README: a ruleset for `refs/studio/claims/*`, marked untested and not a control; anyone with contents write can
+  deny a claim, not forge one.
+- A report or pull request text that looks like a credential, or holds the worker's own tokens, is never
+  published: the claim is `released`.
+- Costs: a worker's run counts once, first in the day's ledger and then on the item (`usage`, from
+  `workers.json`); while the ledger does not take it the item waits. One run counts for at most the lowest
+  daily cap.
+- `studio status` lists offers as `worker:<label>` rows (`--json`: a `worker` object with label, offer, login,
+  claim state, attempt and last heartbeat); the pane shows the wait code `worker` in English and German.
+- `studio stop <id> --requeue` on an item on a worker withdraws the offer (the worker stops its crew) and gives
+  the item its one relaunch; `studio drop` withdraws it too.
+- Verification fixes:
+  - The lead locks an offer it reuses, too, not only one it opens.
+  - Transient launch refusals (account block, pause, parked or full label) are `HeldError`: a worker holds and
+    tries later instead of exiting. An offer let go of after a held launch (5 minutes) or a refused one (an
+    hour) is not claimed, nor commented, again in that time.
+  - A `done` or `released` commit is announced durably: the commit waits in `worker.json`, is tried again with
+    backoff on later passes (looking for its own comment first) until the comment exists.
+  - Giving up a takeover resets the ref to the previous attempt's tip, only while it still is the worker's own
+    commit, so the attempt count is not used up. The lead gives a claim commit about 2 minutes for its comment
+    (ref written, comment not there yet; done written, not announced yet) before it goes to `needsLead`; that is one window per offer, counted from the first unproven tip and reset only by a proven claim, so neither new tips nor their attempt numbers restart it (an attempt number that goes down gets none), and it never replaces what the lead proved before.
+  - The whole brief comes from one `origin/main` commit: the project rules and the crew's start use the SHA the
+    worker pinned.
+  - The worker tells the lead by numeric id (`workers.self.lead_id`), compares logins without case, reads the
+    crew token's name from the pinned `studio.yaml`, keeps the claim beating (and the worker lock fresh)
+    during the push and the pull request, and holds its lock for up to three hours.
+  - WSL interop counts as on when either `WSLInterop` or `WSLInterop-late` is enabled.
+
+### Changed
+
+- `openCrewPr` moved to `src/pull-request.ts`; it no longer reuses a pull request from a fork.
+- The lessons evidence may name a report on a claim (`refs/studio/claims/<id>@<sha>`).
+- `recover` leaves items on workers to `tick`: they have no crew record by design.
+
+### Not covered yet
+
+- No Windows programs, builds or device tools on a worker: they would run outside the sandbox. They stay on
+  the CI's Windows runner.
+- Not run against GitHub or on a real Windows machine: the GitHub calls are tested against a fake with the
+  same create and fast-forward rules, the WSL detection against sample files.
+
 ## [0.18.0] - 2026-11-05
 
 A release was the lead running the project's deploy workflow by hand: no note said what went out, a destructive

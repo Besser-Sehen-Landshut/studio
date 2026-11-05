@@ -956,7 +956,7 @@ describe('studio CLI', () => {
           });
           const ok = (stdout: string) => ({ code: 0, stdout, stderr: '' });
           if (line.startsWith('pr list'))
-            return ok(JSON.stringify(open.map((number) => ({ number }))));
+            return ok(JSON.stringify(open.map((number) => ({ number, isCrossRepository: false }))));
           if (line.startsWith('pr create')) return ok('https://github.com/org/app/pull/31\n');
           if (line.startsWith('pr edit 9 --repo org/app --body-file')) return ok('');
           if (/^pr view (31|9) --repo org\/app/.test(line)) {
@@ -3564,7 +3564,8 @@ describe('studio tick', () => {
           stdout: typeof v === 'string' ? v : JSON.stringify(v),
           stderr: '',
         });
-        if (line.startsWith('pr list')) return ok(s.open ? [{ number: 31 }] : []);
+        if (line.startsWith('pr list'))
+          return ok(s.open ? [{ number: 31, isCrossRepository: false }] : []);
         if (line.startsWith('pr create')) {
           s.open = true;
           s.created++;

@@ -616,6 +616,8 @@ const EN: Strings = {
         return 'merging';
       case 'held':
         return `held: ${w.text}`;
+      case 'worker':
+        return `worker: ${w.text}`;
       default:
         return w.text;
     }
@@ -624,6 +626,8 @@ const EN: Strings = {
     switch (w.code) {
       case 'ci_capacity':
         return w.busy !== undefined && w.total !== undefined ? `CI ${w.busy}/${w.total}` : 'CI';
+      case 'worker':
+        return 'worker';
       case 'checks_pending':
         return 'checks';
       case 'review_pending':
@@ -779,6 +783,8 @@ const DE: Strings = {
         return 'wird gemergt';
       case 'held':
         return `zurückgestellt: ${w.text}`;
+      case 'worker':
+        return `Arbeiter: ${w.text}`;
       default:
         return w.text;
     }
@@ -787,6 +793,8 @@ const DE: Strings = {
     switch (w.code) {
       case 'ci_capacity':
         return w.busy !== undefined && w.total !== undefined ? `CI ${w.busy}/${w.total}` : 'CI';
+      case 'worker':
+        return 'Arbeiter';
       case 'checks_pending':
         return 'Prüfung';
       case 'review_pending':

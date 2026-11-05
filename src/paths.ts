@@ -69,6 +69,10 @@ export const STATE_FILES = [
   'releases.json',
   'releases.jsonl',
   'releases.lock',
+  'workers.json',
+  'workers.lock',
+  'worker.json',
+  'worker.lock',
 ];
 
 /** `$XDG_STATE_HOME/studio`, else `<home>/.local/state/studio`: the parent of every state root. */

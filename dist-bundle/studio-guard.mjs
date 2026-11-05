@@ -508,6 +508,17 @@ import { join as join2 } from "node:path";
 var import_shell_quote = __toESM(require_shell_quote(), 1);
 import { globSync, lstatSync, readdirSync, readlinkSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize } from "node:path";
+function namedDeniedPort(cmd, ports) {
+  for (const port of ports) {
+    const p = String(port);
+    const re = new RegExp(
+      `(?::${p}(?![0-9]))|(?:(?:^|[\\s'"])(?:--port|-p|-P)(?:[\\s=]+|)${p}(?![0-9]))|(?:\\bport\\s*=\\s*${p}(?![0-9]))`,
+      "i"
+    );
+    if (re.test(cmd)) return port;
+  }
+  return void 0;
+}
 var GUARD_LIMITS = { glob: 1e3, walk: 5e4 };
 var Deny = class extends Error {
 };
@@ -1182,6 +1193,9 @@ function checkRefspec(env, ref) {
     deny(`git push with unclear destination "${ref}"`);
   }
   if (/^refs\/(?!heads\/)/i.test(dest)) deny(`git push to non-branch ref "${dest}"`);
+  if (!/^refs\/heads\//i.test(dest) && dest.includes("/") && (env.item === void 0 || dest.toLowerCase() !== `studio/${env.item}`.toLowerCase())) {
+    deny(`git push to "${dest}": name a branch in full (refs/heads/${dest})`);
+  }
   const norm = dest.replace(/^refs\//, "").replace(/^heads\//, "").toLowerCase();
   if (norm === "main" || norm === "master") deny(`git push to protected branch "${norm}"`);
   if (env.allowedRefs.some((r) => normRef(r) === norm)) {
@@ -1886,7 +1900,7 @@ var isSecretExempt = (s) => basename(s) === ".env.example";
 var isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === "string");
 function check(input, ctx) {
   const c = ctx;
-  if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs) || c.item !== void 0 && (typeof c.item !== "string" || !/^[A-Z]+-\d+$/.test(c.item)) || c.base !== void 0 && (typeof c.base !== "string" || !/^[A-Za-z0-9._/-]+$/.test(c.base))) {
+  if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs) || c.item !== void 0 && (typeof c.item !== "string" || !/^[A-Z]+-\d+$/.test(c.item)) || c.base !== void 0 && (typeof c.base !== "string" || !/^[A-Za-z0-9._/-]+$/.test(c.base)) || c.deniedPorts !== void 0 && !(Array.isArray(c.deniedPorts) && c.deniedPorts.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535))) {
     deny("invalid guard context");
   }
   const wt = resolveReal(ctx.worktree, "/");
@@ -1924,6 +1938,8 @@ function check(input, ctx) {
   if (toolName === "Bash") {
     const command = toolInput.command;
     if (typeof command !== "string") deny(`${toolName} call without a command`);
+    const port = namedDeniedPort(command, ctx.deniedPorts ?? []);
+    if (port !== void 0) deny(`port ${port} is denied on this worker machine`);
     checkBash(env, command, cwd, 0);
     return;
   }

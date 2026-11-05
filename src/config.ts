@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -386,6 +387,55 @@ export const evidenceRuleSchema = z
   }));
 export type EvidenceRule = z.infer<typeof evidenceRuleSchema>;
 
+/** A worker label: `runs_on` of an item names one, `studio worker --label` serves one. */
+export const WORKER_LABEL_RE = /^[a-z][a-z0-9-]{0,31}$/;
+const workerLabel = z.string().regex(WORKER_LABEL_RE, 'must match ^[a-z][a-z0-9-]{0,31}$');
+
+/** A GitHub login: letters, digits and single dashes, at most 39 characters. */
+export const GITHUB_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+const githubLogin = z.string().regex(GITHUB_LOGIN_RE, 'not a GitHub login');
+
+/**
+ * A place a worker's crews must never read or write: an absolute POSIX path, or a Windows drive
+ * path (`D:\data`, `D:/data`), which only a worker inside WSL2 can enforce (src/worker-deny.ts).
+ * Network paths (`\\server\share`) and relative paths are refused here.
+ */
+const denyPath = z
+  .string()
+  .min(2)
+  .max(500)
+  .regex(/^[^\p{Cc}\p{Cf}]+$/u, 'one line of at most 500 characters')
+  .refine(
+    (p) => (p.startsWith('/') && !p.startsWith('//')) || /^[A-Za-z]:[\\/]/.test(p),
+    'must be an absolute path (/srv/data) or a Windows drive path (D:\\data); network paths are not supported',
+  );
+
+/** What a worker's crews must never touch: places, and ports on the worker machine. */
+export const workerDenySchema = z.strictObject({
+  paths: z.array(denyPath).max(50).default([]),
+  ports: z.array(z.number().int().min(1).max(65535)).max(50).default([]),
+});
+export type WorkerDeny = z.infer<typeof workerDenySchema>;
+const NO_DENY = { paths: [], ports: [] };
+
+/**
+ * Whether a `network_allow` entry is a wildcard over an IP address (`*.<address>`, any spelling a
+ * URL parser takes, a port or a trailing dot allowed). Such a wildcard means nothing and would slip
+ * past the checks for local hosts, so it is refused.
+ */
+export function wildcardOverIp(entry: string): boolean {
+  const m = /^\*\.(.+?)(?::\d+)?$/.exec(entry.trim().toLowerCase());
+  if (!m) return false;
+  let base = (m[1] as string).replace(/\.$/, '');
+  if (base.includes(':') && !base.startsWith('[')) base = `[${base}]`;
+  try {
+    const host = new URL(`http://${base}/`).hostname.replace(/^\[|\]$/g, '');
+    return isIP(host) !== 0;
+  } catch {
+    return false;
+  }
+}
+
 /** `limits:` in studio.yaml and in the owner config. */
 const dailyLimitsSchema = z.strictObject({
   dailyCostUsd: z.number().positive().optional(),
@@ -415,7 +465,17 @@ export const studioConfigSchema = z
       .refine((r) => Object.keys(r).length > 0, 'at least one role is required'),
     // Detected from manifest files and stored by `studio setup stack`.
     stacks: z.array(z.string().min(1)).optional(),
-    sandbox: z.strictObject({ networkAllow: strList }).default({ networkAllow: [] }),
+    sandbox: z
+      .strictObject({
+        networkAllow: z
+          .array(
+            z
+              .string()
+              .refine((e) => !wildcardOverIp(e), 'a wildcard over an IP address means nothing'),
+          )
+          .default([]),
+      })
+      .default({ networkAllow: [] }),
     // Name of the env var that holds the least-privilege token (never the token itself).
     crewToken: z.strictObject({ env: z.string().min(1) }).optional(),
     // Opt-in: let a crew run start without the least-privilege token (default: refuse).
@@ -438,6 +498,11 @@ export const studioConfigSchema = z
     acceptance: acceptanceSchema.optional(),
     // Exceptions by evidence: guard jobs whose hits a command can prove false alarms.
     evidence: z.array(evidenceRuleSchema).max(20).optional(),
+    // Workers on other machines, per label (`runs_on` of an item): what their crews must never
+    // touch. The worker adds its own list from its owner config; neither can lift the other's.
+    workers: z
+      .record(workerLabel, z.strictObject({ deny: workerDenySchema.default(NO_DENY) }))
+      .optional(),
   })
   .superRefine((cfg, ctx) => {
     const ids = new Set<string>();
@@ -696,6 +761,36 @@ export const ownerConfigSchema = z.strictObject({
     .optional(),
   // The same daily cost cap as in studio.yaml, over all projects of the owner together.
   limits: dailyLimitsSchema.optional(),
+  // Workers on other machines (src/worker.ts, src/worker-lead.ts). On the lead's machine,
+  // `accept` names the GitHub logins whose claims count, per label; on a worker machine, `self`
+  // names the lead whose offers it takes and what its crews must never touch.
+  workers: z
+    .strictObject({
+      // Each with the numeric account id (`gh api users/<login> --jq .id`): a login can be
+      // renamed and taken by someone else, the id stays.
+      accept: z
+        .record(
+          workerLabel,
+          z
+            .array(z.strictObject({ login: githubLogin, id: z.number().int().positive() }))
+            .min(1)
+            .max(20),
+        )
+        .default({}),
+      self: z
+        .strictObject({
+          lead: githubLogin,
+          // The lead's numeric account id: offers are taken by this, never by the login alone.
+          leadId: z.number().int().positive(),
+          deny: workerDenySchema.default(NO_DENY),
+          // On WSL2 every Windows file system is denied to crews; these places are opened for reads.
+          allowRead: z.array(denyPath).max(50).default([]),
+          // How long a claim holds without a heartbeat before another worker may take it over.
+          leaseMinutes: z.number().int().min(10).max(240).default(30),
+        })
+        .optional(),
+    })
+    .optional(),
 });
 
 export type OwnerConfig = z.infer<typeof ownerConfigSchema>;
@@ -728,6 +823,13 @@ export const ownerConfigDir = (opts: OwnerEnv = {}): string => dirname(ownerConf
 /** Where `studio setup --notifications` keeps the push transport and its secret (key or topic). */
 export const notifySecretFile = (opts: OwnerEnv = {}): string =>
   join(ownerConfigDir(opts), 'notify-secret');
+
+/**
+ * Where `studio secret set worker-token` keeps a worker machine's own GitHub token: claims, pull
+ * requests and pushes for a crew, never handed into a crew session.
+ */
+export const workerTokenFile = (opts: OwnerEnv = {}): string =>
+  join(ownerConfigDir(opts), 'worker-token');
 
 /** Where `studio secret set crew-token` keeps the least-privilege GitHub token. */
 export const crewTokenFile = (opts: OwnerEnv = {}): string =>

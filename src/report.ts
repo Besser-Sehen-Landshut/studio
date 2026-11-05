@@ -282,6 +282,22 @@ export function readReport(
 }
 
 /**
+ * The text of `<worktree>/.studio/reports/<file>` read as `readReport` reads it (same checks), not
+ * parsed: a worker publishes these exact bytes with its claim, and the lead parses them again.
+ */
+export function readReportText(
+  worktree: string,
+  id: string,
+  opts: { notBefore?: Date; fileName?: string } = {},
+): string {
+  return readReportFile(
+    worktree,
+    join(worktree, '.studio', 'reports', opts.fileName ?? `${id}.md`),
+    opts.notBefore,
+  );
+}
+
+/**
  * A report that names a head (always for `done`) only counts for that exact commit: rejects a
  * different PR head.
  */

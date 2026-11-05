@@ -166,8 +166,16 @@ export async function prepareCheckout(
   projectDir: string,
   item: WorkItem,
   ports: Ports,
+  /** The remote branch the item branch starts from: `main`, or `studio/<id>` to go on with it. */
+  from: string = ITEM_BASE,
+  /** A commit of `origin/main` to start from instead of its tip: the whole brief comes from one SHA. */
+  pin?: string,
 ): Promise<{ path: string; branch: string }> {
   assertItemId(item.id);
+  if (pin !== undefined && !FULL_SHA.test(pin)) throw new Error('invalid pinned commit');
+  if (from !== ITEM_BASE && from !== `studio/${item.id}`) {
+    throw new Error(`invalid start branch for ${item.id}: ${JSON.stringify(from)}`);
+  }
   const clones = ensureStateDir(stateRoot, join(stateRoot, 'clones'));
   const path = join(clones, item.id);
   const branch = `studio/${item.id}`;
@@ -183,7 +191,12 @@ export async function prepareCheckout(
   chmodSync(path, 0o700);
   // Still a fresh clone no crew has run in, so git may run here (rule D4).
   await ports.git.run(path, ['remote', 'set-url', 'origin', crewOrigin]);
-  await ports.git.run(path, ['checkout', '-b', branch, `origin/${ITEM_BASE}`]);
+  await ports.git.run(path, [
+    'checkout',
+    '-b',
+    branch,
+    pin !== undefined && from === ITEM_BASE ? pin : `origin/${from}`,
+  ]);
   return { path, branch };
 }
 
@@ -385,21 +398,33 @@ export interface BriefRules {
  * plain file (mode 100644, a blob), is larger than 256 KiB or cannot be read exactly refuses.
  * Writes nothing; the caller stores the result with `writePinnedRules`.
  */
-export async function readPinnedRules(projectDir: string, ports: Ports): Promise<PinnedRules> {
-  try {
-    await ports.git.run(projectDir, [
-      'fetch',
-      'origin',
-      '+refs/heads/main:refs/remotes/origin/main',
-    ]);
-  } catch (e) {
-    throw new Error(
-      `refusing to launch: cannot fetch origin main in the project checkout (${(e as Error).message})`,
-    );
+export async function readPinnedRules(
+  projectDir: string,
+  ports: Ports,
+  /** An already pinned `origin/main` commit: nothing is fetched, the rules come from this SHA. */
+  pin?: string,
+): Promise<PinnedRules> {
+  if (pin !== undefined && !FULL_SHA.test(pin)) throw new Error('invalid pinned commit');
+  if (pin === undefined) {
+    try {
+      await ports.git.run(projectDir, [
+        'fetch',
+        'origin',
+        '+refs/heads/main:refs/remotes/origin/main',
+      ]);
+    } catch (e) {
+      throw new Error(
+        `refusing to launch: cannot fetch origin main in the project checkout (${(e as Error).message})`,
+      );
+    }
   }
   const g = (args: string[]) => ports.git.run(projectDir, ['--no-replace-objects', ...args]);
-  const sha = (await g(['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'])).trim();
-  if (!FULL_SHA.test(sha)) throw new Error('refusing to launch: origin/main is not a commit SHA');
+  const sha = (
+    await g(['rev-parse', '--verify', `${pin ?? 'refs/remotes/origin/main'}^{commit}`])
+  ).trim();
+  if (!FULL_SHA.test(sha) || (pin !== undefined && sha !== pin)) {
+    throw new Error('refusing to launch: origin/main is not a commit SHA');
+  }
   const tree = await g(['ls-tree', sha, ...RULE_FILES]);
   const files: PinnedRules['files'] = [];
   for (const line of tree.split('\n').filter((l) => l !== '')) {
@@ -606,7 +631,9 @@ export function writeBrief(
       ? [
           // No -u: the sandbox cannot write upstream tracking into .git/config, and git then
           // prints an error after a push that went through.
-          `- Push with an explicit refspec and without \`-u\`: \`git push origin HEAD:refs/heads/studio/${id}\`. Check it with \`git ls-remote origin refs/heads/studio/${id}\`: its SHA must equal \`git rev-parse HEAD\`. An error about upstream tracking or \`.git/config\` after a push that this check confirms is harmless.`,
+          caps.pushByStudio === true
+            ? `- Do not push: you have no GitHub token. Commit your work on \`studio/${id}\`; Studio pushes that branch after you end.`
+            : `- Push with an explicit refspec and without \`-u\`: \`git push origin HEAD:refs/heads/studio/${id}\`. Check it with \`git ls-remote origin refs/heads/studio/${id}\`: its SHA must equal \`git rev-parse HEAD\`. An error about upstream tracking or \`.git/config\` after a push that this check confirms is harmless.`,
           ...(caps.prByStudio === true
             ? [
                 `- Do not open the pull request, and do not run gh at all: it cannot verify TLS in this sandbox. Give \`pr_title: "${id}: <summary>"\` in the report and write the pull request text as the report body; Studio opens the pull request from your pushed branch.`,
@@ -626,7 +653,9 @@ export function writeBrief(
     '## Report contract',
     '',
     opensPr
-      ? `Write \`${reportFile}\` in the checkout as the last step, after pushing; do not commit it. Only that file name counts. head_sha is the SHA of the pushed head (\`git rev-parse HEAD\`).`
+      ? caps.pushByStudio === true
+        ? `Write \`${reportFile}\` in the checkout as the last step, after your last commit; do not commit it. Only that file name counts. head_sha is the SHA of your last commit (\`git rev-parse HEAD\`).`
+        : `Write \`${reportFile}\` in the checkout as the last step, after pushing; do not commit it. Only that file name counts. head_sha is the SHA of the pushed head (\`git rev-parse HEAD\`).`
       : `Write \`${reportFile}\` in the checkout as the last step, only that file name counts; do not commit it.${accepting !== undefined ? ` head_sha is the main commit you checked (${accepting.sha}).` : item.type === 'review' ? ' head_sha is the SHA of the pull request head you reviewed (`git rev-parse HEAD` after loading it).' : ''}`,
     'It starts with YAML frontmatter:',
     '',
@@ -736,6 +765,8 @@ export function writeCrewSettings(
     macosTrustService?: boolean;
     /** `Skill(<name>)` deny rules: every installed skill the brief does not name. */
     skillDeny?: readonly string[];
+    /** A worker machine's deny list (src/worker-deny.ts): places and ports its crews never touch. */
+    deny?: { paths: readonly string[]; ports: readonly number[]; allowRead?: readonly string[] };
   },
   launcher: LauncherEnv = {},
 ): string {
@@ -758,7 +789,8 @@ export function writeCrewSettings(
   // The state base (parent of every state root: other projects, other items, settings, logs) is
   // denied too, literal and real spelling, so an XDG_STATE_HOME outside the home is covered.
   const stateBase = dirname(stateRoot);
-  const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase)]);
+  const denied = [...(dirs.deny?.paths ?? [])];
+  const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase), ...denied]);
   const loginDir = dirs.providerConfigDir;
   // Of a login dir only what skills need: it also holds the transcripts, `.claude.json` and shell
   // snapshots of other crews. Claude Code itself runs outside the sandbox and reaches the rest.
@@ -774,6 +806,8 @@ export function writeCrewSettings(
     // (a shell command, or a file tool under the sandbox) must reach them too, or the crew
     // starts without its task. Nothing else of the state root comes back.
     ...['md', 'caps', 'rules'].map((ext) => join(stateRoot, 'briefs', `${id}.${ext}`)),
+    // Places a worker's owner opened inside its denied Windows mounts, for reads only.
+    ...(dirs.deny?.allowRead ?? []),
   ];
   const ctxFile = join(stateRoot, 'guard', `${id}.json`);
   // The clone lives inside the state root, so the root itself cannot be protected (the guard
@@ -833,12 +867,14 @@ export function writeCrewSettings(
       ...DEFAULT_SECRET_GLOBS,
       ...credentialPaths.flatMap((p) => [p, `${p}/**`]),
       ...(loginDir === undefined ? [] : [loginDir, `${loginDir}/**`]),
+      ...denied.flatMap((p) => [p, `${p}/**`]),
     ],
     crewAllowedWorkflows: config.crewAllowedWorkflows,
     crewAllowedWorkflowRefs: config.crewAllowedWorkflowRefs,
     protectedPaths,
     item: id,
     base: ITEM_BASE,
+    ...((dirs.deny?.ports ?? []).length > 0 ? { deniedPorts: [...(dirs.deny?.ports ?? [])] } : {}),
   };
   writeStateFile(stateRoot, ctxFile, `${JSON.stringify(ctx, null, 2)}\n`);
   const settings = {
@@ -882,6 +918,8 @@ export function writeCrewSettings(
       allowUnsandboxedCommands: false,
       filesystem: {
         allowWrite: [clone, dirs.tmpDir, dirs.homeDir],
+        // A worker's denied places are out for writes too, whatever else allows them.
+        ...(denied.length > 0 ? { denyWrite: denied } : {}),
         denyRead,
         allowRead,
       },
@@ -954,12 +992,12 @@ function updateCrewFile(
 
 function refuseIfBlocked(ownerRoot: string): void {
   const line = blockHold(ownerRoot);
-  if (line !== undefined) throw new Error(line);
+  if (line !== undefined) throw new HeldError(line);
 }
 
 /** A pause of the owner refuses a launch; a pause file that cannot be read pauses too. */
 function refuseIfPaused(stateRoot: string): void {
-  if (readPause(stateRoot).paused) throw new Error(PAUSED_LINE);
+  if (readPause(stateRoot).paused) throw new HeldError(PAUSED_LINE);
 }
 
 export type CrewState = 'working' | 'waiting' | 'blocked' | 'stopped' | 'crashed' | 'done';
@@ -983,12 +1021,39 @@ export function crewStateOf(
   return hasReport ? 'waiting' : 'crashed';
 }
 
+/**
+ * What a launch on a worker machine adds (src/worker.ts): the deny list the sandbox and the guard
+ * enforce, and the branch to start from. Studio opens the pull request there, with the worker's
+ * identity, so the crew never runs gh.
+ */
+export interface WorkerLaunch {
+  deny: { paths: readonly string[]; ports: readonly number[]; allowRead?: readonly string[] };
+  /** `studio/<id>` when an earlier run pushed it (a fix round, a taken-over claim); else main. */
+  from?: string;
+  /**
+   * No crew token on this machine: the crew gets no GitHub token at all, commits only, and the
+   * worker pushes its branch with its own token after the crew ended.
+   */
+  noToken?: boolean;
+  /**
+   * A directory holding `.studio/roles` and `.studio/solutions` as the pinned `origin/main` has
+   * them: the role text and the lessons of the brief come from there, never the working tree.
+   */
+  contentDir?: string;
+  /**
+   * The `origin/main` commit the worker pinned: the project rules and the crew's start come from
+   * it, so the whole brief is one SHA.
+   */
+  sha?: string;
+}
+
 export async function launchCrew(
   projectDir: string,
   item: WorkItem,
   config: StudioConfig,
   ports: Ports,
   launcher: LauncherEnv = {},
+  worker?: WorkerLaunch,
 ): Promise<{ name: string; pid: number; log: string }> {
   // Launches of one process wait for each other; launches of different processes are serialised
   // by the launch lock, taken inside once the state root is known and always released here.
@@ -1000,7 +1065,7 @@ export async function launchCrew(
   await turn;
   const held: { lock?: StateLock } = {};
   try {
-    return await launchCrewLocked(projectDir, item, config, ports, launcher, held);
+    return await launchCrewLocked(projectDir, item, config, ports, launcher, held, worker);
   } finally {
     try {
       held.lock?.release();
@@ -1078,8 +1143,17 @@ async function launchCrewLocked(
   ports: Ports,
   launcher: LauncherEnv,
   held: { lock?: StateLock },
+  worker?: WorkerLaunch,
 ): Promise<{ name: string; pid: number; log: string }> {
   assertItemId(item.id);
+  // A local launch never takes an item that runs elsewhere; a worker launch only takes one.
+  if ((item.runsOn !== undefined) !== (worker !== undefined)) {
+    throw new Error(
+      item.runsOn !== undefined
+        ? `${item.id} runs on a worker with the label ${item.runsOn}; it is offered there, not launched here`
+        : `${item.id} names no runs_on label; a worker launches only items offered to it`,
+    );
+  }
   const penv = launcher.env ?? process.env;
   const role = config.roles[item.role];
   if (!role) throw new Error(`role ${item.role} is not configured`);
@@ -1097,13 +1171,13 @@ async function launchCrewLocked(
     uid: launcher.uid,
   };
   let token: string | undefined;
-  if (config.crewToken) token = penv[config.crewToken.env] || undefined;
-  if (!token) {
+  if (config.crewToken && worker?.noToken !== true) token = penv[config.crewToken.env] || undefined;
+  if (!token && worker?.noToken !== true) {
     const file = readCrewTokenFile(owner);
     if (file.kind === 'bad') throw new Error(`refusing the crew token file: ${file.why}`);
     if (file.kind === 'ok') token = file.token;
   }
-  if (!token && !config.allowAmbientCredentials) {
+  if (!token && !config.allowAmbientCredentials && worker?.noToken !== true) {
     throw new Error(
       config.crewToken
         ? `crew token variable ${config.crewToken.env} is not set and there is no crew-token file; refusing to launch without the least-privilege token (run studio secret set crew-token, or set allow_ambient_credentials: true)`
@@ -1147,11 +1221,11 @@ async function launchCrewLocked(
   const usage = labelUsage({ ownerRoot, ownerConfig, ports });
   if (!usage.ok) throw new Error(USAGE_UNREADABLE);
   const refuseFull = (): never => {
-    throw new Error('credential limit: the label is at its configured parallel or daily limit');
+    throw new HeldError('credential limit: the label is at its configured parallel or daily limit');
   };
   // The project rules, read by Studio from the owner's checkout at a verified origin/main SHA. A
   // failed fetch or an odd file refuses here; the crew clone is never asked.
-  const pinned = await readPinnedRules(projectDir, ports);
+  const pinned = await readPinnedRules(projectDir, ports, worker?.sha);
   // The credential, before the first side effect. Provider or not, the value stays in this function
   // and reaches only the environment of the spawned process.
   let label = DEFAULT_LABEL;
@@ -1165,11 +1239,11 @@ async function launchCrewLocked(
     oauthToken = account.token;
     providerConfigDir = checkProviderConfigDir(crewDirOrRefuse(owner), owner);
     const parkedHere = parks[label];
-    if (parkedHere) throw new Error(allParkedLine(parkedHere.parkedUntil));
+    if (parkedHere) throw new HeldError(allParkedLine(parkedHere.parkedUntil));
     if (!(usage.remaining(label) > 0)) refuseFull();
   } else if (command === undefined) {
     if (parks[DEFAULT_LABEL]) {
-      throw new Error(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
+      throw new HeldError(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
     }
     if (!(usage.remaining(DEFAULT_LABEL) > 0)) refuseFull();
   } else {
@@ -1182,8 +1256,8 @@ async function launchCrewLocked(
       owner,
     );
     if (got === undefined) {
-      if (usage.full.length > 0) throw new Error(LABEL_FULL_LINE);
-      if (parked.length > 0) throw new Error(allParkedLine(earliestReset(parks)));
+      if (usage.full.length > 0) throw new HeldError(LABEL_FULL_LINE);
+      if (parked.length > 0) throw new HeldError(allParkedLine(earliestReset(parks)));
       throw new Error('credential provider: returned nothing while no label is parked');
     }
     if (Object.hasOwn(parks, got.label))
@@ -1213,7 +1287,7 @@ async function launchCrewLocked(
       remote: item.repo === config.primaryRepo ? 'origin' : githubHttpsUrl(item.repo),
     },
   });
-  readRoleMemory(projectDir, item.role);
+  readRoleMemory(worker?.contentDir ?? projectDir, item.role);
   const missingSkill = firstMissingSkill(claudeConfigDir, [
     CREW_SKILL,
     ...forItem.resolved.required,
@@ -1287,7 +1361,7 @@ async function launchCrewLocked(
     if (!again.ok) throw new Error(`${join(ownerRoot, 'limits.json')} is unreadable; refusing`);
     const parkedNow = activeParks(again.labels, ports.clock.now());
     if (Object.hasOwn(parkedNow, label)) {
-      throw new Error(allParkedLine(parkedNow[label]?.parkedUntil));
+      throw new HeldError(allParkedLine(parkedNow[label]?.parkedUntil));
     }
     const locked = labelUsage({ ownerRoot, ownerConfig, ports });
     if (!locked.ok) throw new Error(USAGE_UNREADABLE);
@@ -1296,7 +1370,7 @@ async function launchCrewLocked(
   await recheck();
   // The clone can take minutes: beat before and after it, so the lock never looks silent.
   lock.heartbeat(ports.clock.now());
-  const wt = await prepareCheckout(stateRoot, projectDir, item, ports);
+  const wt = await prepareCheckout(stateRoot, projectDir, item, ports, worker?.from, worker?.sha);
   lock.heartbeat(ports.clock.now());
   removeOldReport(stateRoot, wt.path, item.id);
   // Isolated HOME, recreated from scratch on every launch: only a git identity and a credential
@@ -1325,9 +1399,20 @@ async function launchCrewLocked(
   });
   caps.reportName = newReportName(stateRoot, item.id);
   // Without the trust service gh cannot verify TLS in the macOS sandbox: Studio opens the PR.
+  // On a worker Studio opens it too: with the worker's identity, which the lead checks.
+  caps.pushByStudio = worker?.noToken === true;
   caps.prByStudio =
-    (launcher.platform ?? process.platform) === 'darwin' && !ownerConfig.crewAllowMacosTrustService;
-  const brief = writeBrief(stateRoot, item, config, projectDir, briefRules, caps);
+    worker !== undefined ||
+    ((launcher.platform ?? process.platform) === 'darwin' &&
+      !ownerConfig.crewAllowMacosTrustService);
+  const brief = writeBrief(
+    stateRoot,
+    item,
+    config,
+    worker?.contentDir ?? projectDir,
+    briefRules,
+    caps,
+  );
   const settings = writeCrewSettings(
     stateRoot,
     item,
@@ -1346,6 +1431,7 @@ async function launchCrewLocked(
         caps.denied,
         BUNDLED_SKILLS,
       ),
+      ...(worker === undefined ? {} : { deny: worker.deny }),
     },
     owner,
   );

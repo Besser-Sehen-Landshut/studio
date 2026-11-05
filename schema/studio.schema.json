@@ -678,6 +678,50 @@
         ],
         "additionalProperties": {}
       }
+    },
+    "workers": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{0,31}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "deny": {
+            "default": {
+              "paths": [],
+              "ports": []
+            },
+            "type": "object",
+            "properties": {
+              "paths": {
+                "default": [],
+                "maxItems": 50,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 2,
+                  "maxLength": 500,
+                  "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+                }
+              },
+              "ports": {
+                "default": [],
+                "maxItems": 50,
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
     }
   },
   "required": [

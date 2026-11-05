@@ -3,6 +3,7 @@ import { closeSync, openSync, readFileSync } from 'node:fs';
 import { availableParallelism, loadavg } from 'node:os';
 import { execa } from 'execa';
 import { parseLinuxStartTime } from './paths.js';
+import type { WorkerHub } from './worker-hub.js';
 
 export { parseLinuxStartTime } from './paths.js';
 
@@ -29,7 +30,11 @@ export interface Gh {
 
 export interface Git {
   /** Runs `git <args>` in `cwd`, returns stdout. Throws on non-zero exit with stderr in the message. */
-  run(cwd: string, args: string[], opts?: { timeoutMs?: number }): Promise<string>;
+  run(
+    cwd: string,
+    args: string[],
+    opts?: { timeoutMs?: number; env?: Record<string, string> },
+  ): Promise<string>;
   /**
    * The exact bytes of a blob (`git cat-file blob <oid>`), nothing decoded or stripped. Optional
    * so test doubles need not have it; a missing one reads nothing.
@@ -116,6 +121,11 @@ export interface Ports {
   plugins?: PluginCli;
   /** Optional so test doubles never reach the network; a missing one sends nothing. */
   http?: Http;
+  /**
+   * GitHub for workers on other machines (src/worker-hub.ts); missing means `gh`, with the given
+   * token or the machine's login. A seam for tests.
+   */
+  hub?: (token?: string) => WorkerHub;
 }
 
 const HTTP_TIMEOUT_MS = 15_000;
@@ -186,7 +196,7 @@ export function realPorts(claudeBin = 'claude'): Ports {
       const r = await execa('git', args, {
         cwd,
         reject: false,
-        env: { GIT_TERMINAL_PROMPT: '0' },
+        env: { GIT_TERMINAL_PROMPT: '0', ...(opts?.env ?? {}) },
         ...(opts?.timeoutMs === undefined ? {} : { timeout: opts.timeoutMs }),
       });
       if (r.timedOut) throw new Error(`git ${args.join(' ')} timed out`);

@@ -16,6 +16,7 @@ import {
 import {
   checkProviderConfigDir,
   installCrewToken,
+  installWorkerToken,
   readCrewTokenFile,
   runCredentialProvider,
   validToken,
@@ -73,9 +74,14 @@ export async function runSecretSet(o: {
   stdout(s: string): void;
   /** The repository to check the token against; default `primary_repo` of studio.yaml. */
   repo?: string;
+  /** Which token: the crew's (default) or a worker machine's own (`studio worker`). */
+  name?: 'crew-token' | 'worker-token';
 }): Promise<number> {
   const repo = o.repo === undefined ? readPrimaryRepo(o.project) : assertPrimaryRepo(o.repo);
-  const input = o.readSecret ? await o.readSecret('Crew token (input hidden): ') : undefined;
+  const worker = o.name === 'worker-token';
+  const input = o.readSecret
+    ? await o.readSecret(worker ? 'Worker token (input hidden): ' : 'Crew token (input hidden): ')
+    : undefined;
   if (input === undefined) {
     throw new Error('studio secret set needs a terminal for hidden input; nothing written');
   }
@@ -87,7 +93,14 @@ export async function runSecretSet(o: {
     o.stdout(`failing permission: ${failing}\n`);
     return 1;
   }
-  installCrewToken(token, o.owner);
+  if (worker) {
+    // The worker's own identity must never be what a crew gets.
+    const crew = readCrewTokenFile(o.owner);
+    if (crew.kind === 'ok' && crew.token === token) {
+      throw new Error('the worker token must differ from the crew token; nothing written');
+    }
+    installWorkerToken(token, o.owner);
+  } else installCrewToken(token, o.owner);
   o.stdout(`valid for ${repo}\n`);
   return 0;
 }

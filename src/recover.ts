@@ -267,6 +267,8 @@ export async function recoverProject(o: RecoverOptions): Promise<Recovery> {
   const done = new Set(interrupted.map((i) => i.id));
   for (const item of board.items) {
     if (done.has(item.id)) continue;
+    // An item on a worker has no crew record here by design: tick follows its claim.
+    if (item.runsOn !== undefined) continue;
     if (item.status !== 'assigned' && item.status !== 'in_progress') continue;
     const rec = records[item.id];
     if (rec === undefined) {

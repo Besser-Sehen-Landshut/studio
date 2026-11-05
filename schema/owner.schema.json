@@ -106,6 +106,111 @@
         }
       },
       "additionalProperties": false
+    },
+    "workers": {
+      "type": "object",
+      "properties": {
+        "accept": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "additionalProperties": {
+            "minItems": 1,
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "login": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$"
+                },
+                "id": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "login",
+                "id"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "self": {
+          "type": "object",
+          "properties": {
+            "lead": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$"
+            },
+            "lead_id": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "deny": {
+              "default": {
+                "paths": [],
+                "ports": []
+              },
+              "type": "object",
+              "properties": {
+                "paths": {
+                  "default": [],
+                  "maxItems": 50,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 500,
+                    "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+                  }
+                },
+                "ports": {
+                  "default": [],
+                  "maxItems": 50,
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "allow_read": {
+              "default": [],
+              "maxItems": 50,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 500,
+                "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+              }
+            },
+            "lease_minutes": {
+              "default": 30,
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 240
+            }
+          },
+          "required": [
+            "lead",
+            "lead_id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
