@@ -365,6 +365,28 @@ describe('commands a crew could not run in its sandbox', () => {
     expect(r.notRunHere).toEqual([{ command: 'make e2e', missing: 'docker', reason: 'no docker' }]);
   });
 
+  it('cuts an over-long reason to 300 characters instead of refusing the report', () => {
+    // the real case: a crew wrote a 500-character reason and its whole report was refused twice
+    const long = `DATABASE_URL must be set: ${'x'.repeat(480)}`;
+    const r = parseReport(
+      done(`not_run_here:\n  - { command: cargo test, missing: database, reason: "${long}" }`),
+      item('fix'),
+    );
+    const reason = r.notRunHere[0]?.reason ?? '';
+    expect([...reason]).toHaveLength(300);
+    expect(reason.endsWith('…')).toBe(true);
+    expect(reason.startsWith('DATABASE_URL must be set: ')).toBe(true);
+  });
+
+  it('still refuses an over-long command: the job gate matches commands exactly', () => {
+    expect(() =>
+      parseReport(
+        done(`not_run_here:\n  - { command: "${'c'.repeat(301)}", missing: docker, reason: x }`),
+        item('fix'),
+      ),
+    ).toThrow(/bad field notRunHere/);
+  });
+
   it('refuses a field that is only format characters', () => {
     expect(() =>
       parseReport(

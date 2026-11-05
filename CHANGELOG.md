@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.12.1] - 2026-11-05
+
+From a real run: a builder crew finished its work twice and both reports were refused, because
+one `not_run_here` reason ran past 300 characters (about 500). A crew cannot repair its report
+once it has exited, so the whole build was lost each time. Not tagged yet; the maintainers tag after
+the merge.
+
+### Changed
+
+- A `not_run_here` reason longer than 300 characters is cut to 300 with "…" instead of refusing the
+  report. Nothing matches against a reason. The command must still fit exactly, because the job
+  gate matches it character for character.
+- The README status line names the current version again (0.12.0 had left it at 0.11.1).
+
 ## [0.12.0] - 2026-11-05
 
 Gates at the end of a phase found critical problems in pull requests that had been merged already. Now

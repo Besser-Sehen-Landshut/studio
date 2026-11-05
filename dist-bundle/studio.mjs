@@ -28436,10 +28436,15 @@ var notRunHereSchema = external_exports.strictObject({
 });
 var crewLine = external_exports.string().transform((s) => s.replace(new RegExp("\\p{Cf}", "gu"), "")).pipe(plainLine);
 var crewCovers = external_exports.string().transform((s) => s.replace(new RegExp("\\p{Cf}", "gu"), "")).pipe(plainLineOf(600));
+var crewReason = external_exports.string().transform((s) => {
+  const line3 = s.replace(new RegExp("\\p{Cf}", "gu"), "");
+  const chars = [...line3];
+  return chars.length <= 300 ? line3 : `${chars.slice(0, 299).join("")}\u2026`;
+}).pipe(plainLine);
 var notRunHereReportSchema = external_exports.strictObject({
   command: crewLine,
   missing: external_exports.enum(NOT_RUN_SERVICES),
-  reason: crewLine
+  reason: crewReason
 });
 var approvedJobSchema = external_exports.strictObject({ workflow: plainLine, job: plainLine });
 var workItemSchema = external_exports.strictObject({
