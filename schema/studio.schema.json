@@ -722,6 +722,20 @@
         },
         "additionalProperties": false
       }
+    },
+    "research": {
+      "type": "object",
+      "properties": {
+        "artifacts": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "artifacts"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

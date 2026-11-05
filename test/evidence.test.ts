@@ -17,6 +17,7 @@ import { loadBoard } from '../src/board.js';
 import { runCli } from '../src/cli.js';
 import { parseConfig, type StudioConfig, studioConfigSchema } from '../src/config.js';
 import {
+  addedInPullRequest,
   type EvidenceContext,
   EXCEPTIONS_FILE,
   evidenceChange,
@@ -626,6 +627,60 @@ describe('judging a failed guard by a built-in proof', () => {
       },
     });
     expect(await evidenceChange(ctxFor(same, fakeGh(same).gh), same.base, same.head)).toEqual({});
+  });
+
+  it('the research block is the owner’s: adding, changing or removing it gets no approval', async () => {
+    const research = 'research:\n  artifacts: /analysis/target\n';
+    const added = makeRepo({
+      change: (dir) => writeFileSync(join(dir, '.studio/studio.yaml'), studioYaml(RULE) + research),
+    });
+    expect(await evidenceChange(ctxFor(added, fakeGh(added).gh), added.base, added.head)).toEqual({
+      problem: 'the pull request changes research: in studio.yaml',
+      area: 'research',
+    });
+    const moved = makeRepo({
+      rules: RULE + research,
+      change: (dir) =>
+        writeFileSync(
+          join(dir, '.studio/studio.yaml'),
+          studioYaml(RULE + research.replace('/analysis/target', '/analysis/other')),
+        ),
+    });
+    expect(
+      (await evidenceChange(ctxFor(moved, fakeGh(moved).gh), moved.base, moved.head)).area,
+    ).toBe('research');
+    const removed = makeRepo({
+      rules: RULE + research,
+      change: (dir) => writeFileSync(join(dir, '.studio/studio.yaml'), studioYaml(RULE)),
+    });
+    expect(
+      (await evidenceChange(ctxFor(removed, fakeGh(removed).gh), removed.base, removed.head)).area,
+    ).toBe('research');
+  });
+
+  it('reads what a pull request adds in the owner checkout, line by line, and flags odd files', async () => {
+    const r = makeRepo({
+      change: (dir) => {
+        mkdirSync(join(dir, 'docs/research'), { recursive: true });
+        writeFileSync(join(dir, 'docs/guide.md'), '# Guide\nnew line\n');
+        writeFileSync(join(dir, 'docs/research/APP-2-x.md'), 'a\nb\nc\n');
+        writeFileSync(join(dir, 'docs/research/blob.bin'), Buffer.from([0, 1, 2, 0]));
+        symlinkSync('../guide.md', join(dir, 'docs/research/ln'));
+        writeFileSync(join(dir, 'odd "name".md'), 'q\n');
+      },
+    });
+    const files = await addedInPullRequest(ctxFor(r, fakeGh(r).gh), r.base, r.head);
+    const by = Object.fromEntries((files ?? []).map((f) => [f.path, f]));
+    expect(by['docs/guide.md']).toEqual({
+      path: 'docs/guide.md',
+      lines: [{ line: 2, text: 'new line' }],
+    });
+    expect(by['docs/research/APP-2-x.md']?.lines.map((l) => l.line)).toEqual([1, 2, 3]);
+    expect(by['docs/research/blob.bin']?.odd).toBe('binary');
+    expect(by['docs/research/ln']?.odd).toBe('link');
+    // A path git quotes in the patch is not read line by line: it fails closed.
+    expect(by['odd "name".md']?.odd).toBe('unreadable');
+    expect(await addedInPullRequest(ctxFor(r, fakeGh(r).gh), undefined, r.head)).toBeUndefined();
   });
 
   it('a release keeps its whole component, its workflows and the crew workflow list the owner’s', async () => {

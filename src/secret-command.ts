@@ -26,6 +26,17 @@ import { ownerStateRootFor } from './paths.js';
 import { installedVersions, pinnedPlugins, unallowedPlugins } from './plugins.js';
 import type { Ports } from './ports.js';
 import { readNotifySecret } from './push.js';
+import {
+  REA_CLASS_NAMES,
+  REA_DEFAULT_VERSION,
+  REA_KNOWN_TOOLS,
+  REA_PACKAGE,
+  REA_SERVER,
+  REA_SKILL,
+  REA_STATIC_TOOLS,
+  reaSetupHint,
+} from './rea.js';
+import { verifyReaInstall } from './rea-install.js';
 import { assertPrimaryRepo, safe } from './setup-ci-command.js';
 
 export function readPrimaryRepo(project: string): string {
@@ -217,6 +228,92 @@ function skillState(dir: string | undefined, name: string): string {
   return found === undefined ? 'cannot tell' : found ? 'installed' : 'not found';
 }
 
+/**
+ * REA for the researcher (src/rea.ts), as far as the owner can check it: which server version
+ * crews run and whether it is installed and matches its recorded integrity, whether the project's
+ * analysis directory is one the owner allows, the skill in the crew config dir, and whether the
+ * server registered there is the pinned one. Names and states, never a path or a value. Null when
+ * nothing asks for REA.
+ */
+export function reaState(
+  config: StudioConfig | undefined,
+  ownerConfig: OwnerConfig | undefined,
+  configDir: string | undefined,
+  ownerRoot?: string,
+) {
+  const roots = ownerConfig?.researchRoots ?? [];
+  if (config?.research === undefined && roots.length === 0) return null;
+  const version = ownerConfig?.reaVersion ?? REA_DEFAULT_VERSION;
+  let installed = 'cannot tell';
+  let entry: string | undefined;
+  if (ownerRoot !== undefined) {
+    try {
+      const got = verifyReaInstall(ownerRoot, version);
+      entry = got.entry;
+      installed = `yes (${got.integrity.slice(0, 19)}...)`;
+    } catch (e) {
+      installed = `no: ${(e as Error).message.replace(/^[^:]*: /, '').replace(/; .*$/, '')}; run studio research install`;
+    }
+  }
+  let artifacts: string;
+  if (config?.research === undefined) artifacts = 'not set in studio.yaml (research.artifacts)';
+  else if (roots.length === 0) artifacts = 'refused: no research_roots in the owner config';
+  else {
+    try {
+      const real = realpathSync(config.research.artifacts);
+      if (!statSync(real).isDirectory()) artifacts = 'refused: not a directory';
+      else {
+        const inside = roots.some((r) => {
+          try {
+            return within(real, realpathSync(r));
+          } catch {
+            return false;
+          }
+        });
+        artifacts = inside ? 'allowed' : 'refused: not below a research_roots entry';
+      }
+    } catch {
+      artifacts = 'refused: does not exist';
+    }
+  }
+  // What the crew config dir's own registration says; a launch writes its own server entry, so a
+  // stale one there is only a sign that REA's setup ran for another version.
+  let registered = 'not registered';
+  if (configDir !== undefined) {
+    try {
+      const raw = JSON.parse(readFileSync(join(configDir, '.claude.json'), 'utf8')) as {
+        mcpServers?: Record<string, { args?: unknown }>;
+      };
+      const args = raw.mcpServers?.[REA_SERVER]?.args;
+      const at = Array.isArray(args)
+        ? args.find((a) => typeof a === 'string' && a.startsWith(`${REA_PACKAGE}@`))
+        : undefined;
+      if (typeof at === 'string') {
+        const v = at.slice(REA_PACKAGE.length + 1);
+        registered =
+          v === version
+            ? `${version} (the pin)`
+            : `${v.replace(/[^\w.+-]/g, '?').slice(0, 40)} (not the pin)`;
+      }
+    } catch {
+      registered = 'cannot tell';
+    }
+  }
+  return {
+    server: `${REA_PACKAGE}@${version}`,
+    pinnedBy: ownerConfig?.reaVersion === undefined ? 'Studio default' : 'owner config',
+    installed,
+    analysisDirectory: artifacts,
+    skill: skillState(configDir, REA_SKILL),
+    registeredInCrewConfig: registered,
+    engineEnvironment: Object.keys(ownerConfig?.reaEnv ?? {}).sort(),
+    staticTools: REA_STATIC_TOOLS.length,
+    deniedByDefault: REA_KNOWN_TOOLS.length - REA_STATIC_TOOLS.length,
+    classes: [...REA_CLASS_NAMES],
+    setup: configDir === undefined ? null : reaSetupHint(configDir, entry),
+  };
+}
+
 export type DoctorReport = Awaited<ReturnType<typeof doctorReport>>;
 
 /** What `studio doctor` finds, without printing; `studio init` reads the same checks. */
@@ -321,6 +418,7 @@ export async function doctorReport(o: {
     ownerConfig: ownerConfig ? 'readable' : 'invalid',
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
+    rea: reaState(config, ownerConfig, configDir, ownerStateRootFor(o.owner)),
     notify: ownerConfig?.notify?.command ? 'configured' : 'not configured',
     notifications: notificationsState(o.owner),
     apiKeyVarsInEnvironment: API_KEY_VARS.filter((k) => o.env[k]),
@@ -378,6 +476,16 @@ export async function runDoctor(o: {
       `notify: ${report.notify}`,
       `notifications: ${report.notifications}`,
       `allow_api_billing: ${report.allowApiBilling ? 'on' : 'off'}`,
+      ...(report.rea === null
+        ? []
+        : [
+            `rea: ${report.rea.server} (${report.rea.pinnedBy}), installed: ${report.rea.installed}; analysis directory ${report.rea.analysisDirectory}`,
+            `rea skill in the crew config dir: ${report.rea.skill}; server registered there: ${report.rea.registeredInCrewConfig}`,
+            `rea tools: ${report.rea.staticTools} static allowed, ${report.rea.deniedByDefault} known ones denied unless an item allows their class (${report.rea.classes.join(', ')}); engine variables set: ${report.rea.engineEnvironment.join(', ') || 'none'}`,
+            ...(report.rea.skill === 'installed' || report.rea.setup === null
+              ? []
+              : [`rea setup: ${report.rea.setup}`]),
+          ]),
       `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(', ') || 'none'}`,
     ];
     o.stdout(`${lines.map(safe).join('\n')}\n`);

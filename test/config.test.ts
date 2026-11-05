@@ -258,6 +258,8 @@ describe('owner config', () => {
       crewAllowMacosTrustService: false,
       crewLabelLimits: { maxParallel: 2 },
       allowedPlugins: [],
+      researchRoots: [],
+      reaEnv: {},
     });
   });
 
@@ -271,6 +273,8 @@ describe('owner config', () => {
       crewAllowMacosTrustService: false,
       crewLabelLimits: { maxParallel: 2 },
       allowedPlugins: [],
+      researchRoots: [],
+      reaEnv: {},
     });
   });
 
@@ -282,6 +286,17 @@ describe('owner config', () => {
     for (const bad of ['relative/bin', '/', h, `${h}/.config`, `${h}/Library`, `${h}/.ssh/x`]) {
       write(file, `crew_toolchain_paths: ["${bad}"]\n`);
       expect(() => loadOwnerConfig({ homedir: h, env: {} })).toThrow(/crew_toolchain_paths/);
+    }
+  });
+
+  it('pins the REA version in the owner config, exact x.y.z only', () => {
+    const h = home();
+    const file = join(h, '.config', 'studio', 'config.yaml');
+    write(file, 'rea_version: "6.8.1"\n');
+    expect(loadOwnerConfig({ homedir: h, env: {} }).reaVersion).toBe('6.8.1');
+    for (const bad of ['^6.7.0', '~6.7.0', '6.7', 'latest', '6.7.0-beta.1', '6.7.0+x', '>=6']) {
+      write(file, `rea_version: "${bad}"\n`);
+      expect(() => loadOwnerConfig({ homedir: h, env: {} }), bad).toThrow(/rea_version/);
     }
   });
 

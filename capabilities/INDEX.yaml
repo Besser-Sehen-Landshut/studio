@@ -60,6 +60,15 @@ rows:
     load: invoke
     optional: true
 
+  # Reverse engineering: the researcher only (src/rea.ts). Offered only when the project names an
+  # analysis directory and the owner allows it; a launch otherwise denies it. Every other role is
+  # denied it by name, whatever studio.yaml says.
+  - id: reverse-engineering
+    ref: skill:reverse-engineer-anything
+    when: { roles: [researcher] }
+    mode: offered
+    load: invoke
+
   # Knowledge for builders and reviewers
   - id: live-docs
     ref: knowledge:docs-lookup.md

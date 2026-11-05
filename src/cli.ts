@@ -51,6 +51,7 @@ import {
   crewHold,
   crewStateOf,
   githubHttpsUrl,
+  ITEM_BASE,
   isItemId,
   launchCrew,
   resolveModel,
@@ -59,12 +60,14 @@ import {
 } from './crew.js';
 import { addEpic, dropEpic, editEpic, epicRows, findEpic, settleAndSave } from './epics.js';
 import {
+  addedInPullRequest,
   type EvidenceContext,
   type ExceptionEntry,
   evidenceChange,
   grantException,
   judgeFailedChecks,
   readExceptions,
+  remoteTip,
 } from './evidence.js';
 import { listFlaky, recordFlaky } from './flaky.js';
 import {
@@ -118,6 +121,7 @@ import { clearPause, PAUSED_LINE, readPause, setPause } from './pause.js';
 import { type Capacity, ONE_BUILD_PER_PLAN, planAssignments } from './planner.js';
 import { type PluginPin, pinnedPlugins, unallowedPlugins } from './plugins.js';
 import type { Ports } from './ports.js';
+import { privacyHits, privacyHitsInAdded, privacyLine } from './privacy.js';
 import { openCrewPr } from './pull-request.js';
 import { decisionsOf, pushDecisions, readNotifySecret } from './push.js';
 import {
@@ -136,6 +140,8 @@ import {
   updateQueue,
   viewPr,
 } from './queue.js';
+import { REA_CLASS_NAMES, REA_DEFAULT_VERSION, type ReaClass, reaClassOf } from './rea.js';
+import { installRea, readReaAllow, removeReaRun, updateReaAllow } from './rea-install.js';
 import { type Finding, recoverProject, TICK_LOCK, TICK_LOCK_STALE_MS } from './recover.js';
 import {
   advanceRelease,
@@ -343,6 +349,14 @@ Commands:
   account remove <label>   Owner only, in a terminal: remove a stored account
   account setup-plugins    Install the plugins crews need into the crew config dir
   accounts-clear <label>   Owner only, in a terminal: clear a label's account block
+  research allow <id> <class>...
+                           Owner only, in a terminal: open REA tool classes (annotate, debug,
+                           observe, device, export) for one researcher item, from its next launch
+  research revoke <id> [<class>...]
+                           Owner only, in a terminal: close them again (all without a class)
+  research list            The REA classes the owner opened, per item
+  research install         Owner only, in a terminal: install the pinned rea-agents (owner config
+                           rea_version) into the owner state, checked against the registry's integrity
 `;
 
 class UsageError extends Error {}
@@ -1260,6 +1274,55 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       };
     };
 
+    /** The open pull requests of an item's branch in its own repository (never a fork's). */
+    const openPrsOf = async (item: WorkItem): Promise<number[]> => {
+      const r = await ports.gh.run([
+        'pr',
+        'list',
+        '--repo',
+        item.repo,
+        '--head',
+        `studio/${item.id}`,
+        '--state',
+        'open',
+        '--json',
+        'number,isCrossRepository',
+      ]);
+      if (r.code !== 0) return [];
+      try {
+        return (JSON.parse(r.stdout || '[]') as { number?: unknown; isCrossRepository?: unknown }[])
+          .filter((p) => Number.isInteger(p.number) && p.isCrossRepository === false)
+          .map((p) => p.number as number);
+      } catch {
+        return [];
+      }
+    };
+
+    /**
+     * Closes pull requests whose researcher findings failed the privacy check. The comment is
+     * Studio's fixed text: no kind, line or content of the hit reaches GitHub.
+     */
+    const closeResearchPrs = async (item: WorkItem, prs: readonly number[]): Promise<number[]> => {
+      const closed: number[] = [];
+      for (const pr of new Set(prs)) {
+        const r = await ports.gh.run([
+          'pr',
+          'close',
+          String(pr),
+          '--repo',
+          item.repo,
+          '--comment',
+          'Closed by Studio: the findings did not pass the privacy check. The lead has the details.',
+        ]);
+        if (r.code === 0) closed.push(pr);
+        else
+          stderr(
+            `warning: could not close ${item.repo}#${pr} (gh exit ${r.code}); close it by hand\n`,
+          );
+      }
+      return closed;
+    };
+
     /** Reads a finished crew report, verifies it and moves the item: the body of `collect`. */
     const collect = async (id: string | undefined): Promise<Collected> => {
       const { board } = loadAll();
@@ -1300,6 +1363,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             throw new Error(`crew record for ${item.id} has no valid startedAt`);
           }
         }
+        // The crew has ended: its REA server's folder, with the copies REA made, goes.
+        removeReaRun(stateRoot(), item.id);
         // Reading files only: git never runs inside a crew clone.
         const clone = join(stateRoot(), 'clones', item.id);
         // The report is read exactly once; everything below verifies and stores that one result.
@@ -1310,6 +1375,27 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           );
         }
         report = readReport(clone, item.id, item, { notBefore, fileName });
+      }
+      // A researcher's result is structure, never content (src/rea.ts): the report is checked
+      // here, and what its pull request adds below, once the pull request is known. One hit fails
+      // the report closed; `tick` hands it to the lead like any rejected report. The hit's kind and
+      // line are shown, never the text.
+      if (item.role === 'researcher') {
+        // Every field of the report is crew text: the pull request title and the not_run_here
+        // entries reach GitHub, analyzer and probe lines reach the board.
+        const text = [
+          report.body,
+          report.prTitle ?? '',
+          ...(report.findings ?? []),
+          ...report.questions,
+          ...report.lessons,
+          ...crewStrings(report.notRunHere),
+          ...crewStrings(report.notRunHereJobs),
+          ...crewStrings(report.analyzers),
+          report.mutationProbe ?? '',
+        ].join('\n');
+        const hits = privacyHits(text, 'report');
+        if (hits.length > 0) throw new ReportError(privacyLine(hits));
       }
       // A review report that does not hold to its brief is a rejected report, like one that
       // cannot be read: `tick` hands both to the lead.
@@ -1413,7 +1499,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             };
           }
           if (change.problem !== undefined) {
-            const note = `approval refused: ${change.problem}; ${change.area === 'release' ? 'the release rules are' : 'evidence is'} the owner's: the owner reviews and merges such a change himself`;
+            const note = `approval refused: ${change.problem}; ${change.area === 'release' ? 'the release rules are' : change.area === 'research' ? 'the research block is' : 'evidence is'} the owner's: the owner reviews and merges such a change himself`;
             await withBoardLock(stateRoot(), ports.clock.now(), () => {
               const fresh = loadBoard(project);
               if (findItem(fresh, item.id).status !== item.status) {
@@ -1467,6 +1553,34 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           }
         }
       }
+      /**
+       * A researcher's pushed findings, checked as they left: the diff over base...head, read in
+       * the owner's checkout, never the crew's clone (which may differ from it). With a hit, every
+       * open pull request of the item's branch is closed and the report is rejected; undefined
+       * when the diff cannot be read now (collect waits).
+       */
+      const researchDiffGate = async (
+        base: string | undefined,
+        head: string | undefined,
+        prs: readonly number[],
+      ): Promise<'ok' | undefined> => {
+        const added =
+          head === undefined
+            ? undefined
+            : await addedInPullRequest(
+                evidenceCtx(loadConfig(project), item.repo, stateRoot()),
+                base,
+                head,
+              );
+        if (added === undefined) return undefined;
+        const hits = privacyHitsInAdded(added);
+        if (hits.length === 0) return 'ok';
+        const closed = await closeResearchPrs(item, prs);
+        throw new ReportError(
+          `${privacyLine(hits)}${closed.length > 0 ? `; closed pull request ${closed.map((n) => `#${n}`).join(', ')}` : ''}`,
+        );
+      };
+
       let branch = `studio/${item.id}`;
       if (
         report.status === 'done' &&
@@ -1476,6 +1590,21 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         // A worker opens its own pull request: the lead never opens one for it.
         fromWorker === undefined
       ) {
+        // A researcher's branch is checked before any pull request is opened for it.
+        if (item.role === 'researcher') {
+          const ctx = evidenceCtx(loadConfig(project), item.repo, stateRoot());
+          const gate = await researchDiffGate(
+            await remoteTip(ctx, ITEM_BASE),
+            await remoteTip(ctx, `studio/${item.id}`),
+            await openPrsOf(item),
+          );
+          if (gate === undefined) {
+            return {
+              kind: 'waiting',
+              line: `${item.id}: the privacy check cannot read the pushed branch studio/${item.id} now (git); collect again, no pull request was opened`,
+            };
+          }
+        }
         const config = loadConfig(project);
         const token = crewTokenFor(config, owner);
         // Opening the pull request is what starts CI: it waits for capacity like a merge does.
@@ -1533,6 +1662,17 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
         branch = info.branch;
         checkReportHead(report, info.head);
+        // What a researcher pushed is checked as it left: the pull request's diff, read in the
+        // owner's checkout over base...head, never the crew's clone (which may differ from it).
+        if (item.role === 'researcher') {
+          const gate = await researchDiffGate(info.baseOid, info.head, [report.pr]);
+          if (gate === undefined) {
+            return {
+              kind: 'waiting',
+              line: `${item.id}: the privacy check of pull request ${report.pr} cannot read its diff now (git); collect again, nothing moved`,
+            };
+          }
+        }
         // The pull request of a worker item counts only when the worker that claimed it opened it
         // (GitHub's author, which no client can set).
         if (fromWorker !== undefined) {
@@ -3163,6 +3303,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         updateCrewRecords(root, (all) => {
           all[id] = { ...(all[id] ?? rec), stoppedAt };
         });
+        // The crew and its REA server are gone: so is the server's folder with REA's copies. Not
+        // for a crew that cannot be verified, whose server may still be using it.
+        if (process !== 'unknown') removeReaRun(root, id);
         // A crew that ended without a usable report leaves its item assigned, and launch takes
         // only ready items. --requeue gives the item its one relaunch, through blocked as the lead
         // routine says; an item that was requeued before stays blocked: a second miss is a decision.
@@ -3342,6 +3485,61 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           stdout,
           stderr,
         });
+      }
+
+      case 'research': {
+        const sub = rest[0];
+        if (sub === 'list' && rest.length === 1) {
+          print({ allowed: readReaAllow(stateRoot()), classes: [...REA_CLASS_NAMES] });
+          return 0;
+        }
+        // Opening a class lets a crew start programs, devices or captures through REA with the
+        // owner's privileges; installing runs third-party code as the owner. Both are the owner's,
+        // in a terminal, like pause: a crew has neither the terminal nor another role.
+        if (deps.env.STUDIO_ROLE === 'crew' || deps.isTerminal !== true) {
+          stderr('studio: research is for the owner and needs a terminal; nothing changed\n');
+          return 1;
+        }
+        if (sub === 'install' && rest.length === 1) {
+          if (ports.npm === undefined)
+            throw new Error('npm is not available here; nothing installed');
+          const version = loadOwnerConfig(owner).reaVersion ?? REA_DEFAULT_VERSION;
+          const got = await installRea({
+            ownerRoot: ownerRoot(),
+            version,
+            npm: ports.npm,
+            path: deps.env.PATH ?? '/usr/bin:/bin',
+            now: ports.clock.now(),
+          });
+          print({ installed: `rea-agents@${version}`, integrity: got.integrity });
+          return 0;
+        }
+        if ((sub === 'allow' && rest.length >= 3) || (sub === 'revoke' && rest.length >= 2)) {
+          const id = findItem(loadBoard(project), rest[1]).id;
+          const named = rest
+            .slice(2)
+            .flatMap((c) => c.split(','))
+            .filter((c) => c !== '');
+          const classes: ReaClass[] = [];
+          for (const c of named) {
+            const cls = reaClassOf(c);
+            if (cls === undefined) {
+              throw new UsageError(`unknown class ${c}; classes: ${REA_CLASS_NAMES.join(', ')}`);
+            }
+            classes.push(cls);
+          }
+          const root = await boundStateRoot();
+          const open =
+            sub === 'allow'
+              ? updateReaAllow(root, id, { add: classes })
+              : updateReaAllow(root, id, { remove: classes.length === 0 ? 'all' : classes });
+          // A running crew keeps what it was launched with: the classes count from its next launch.
+          print({ item: id, open, from: 'the next launch of the item' });
+          return 0;
+        }
+        throw new UsageError(
+          'research needs: allow <id> <class>... | revoke <id> [<class>...] | list | install',
+        );
       }
 
       case 'accounts-clear': {
@@ -4565,4 +4763,14 @@ function buildSnapshot(
     updatedAt: now.toISOString(),
     metrics: computeMetrics(events),
   };
+}
+
+/** Every string in a value of crew text (a report field), for the privacy check. */
+function crewStrings(v: unknown): string[] {
+  if (typeof v === 'string') return [v];
+  if (Array.isArray(v)) return v.flatMap(crewStrings);
+  if (v !== null && typeof v === 'object') {
+    return Object.entries(v).flatMap(([k, x]) => [k, ...crewStrings(x)]);
+  }
+  return [];
 }

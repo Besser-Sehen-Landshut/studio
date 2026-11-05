@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { WorkItem } from './board.js';
 import type { RoleSkills } from './config.js';
 import { expandBraces, globProblem, hostilePath, matchGlob } from './glob.js';
+import { ROLE_ONLY_SKILLS } from './rea.js';
 
 export { expandBraces, globProblem, matchGlob };
 
@@ -261,9 +262,15 @@ export function resolveSkills(
     required.push(...(extra.required ?? []));
     offered.push(...(extra.allowed ?? []));
   }
+  // A skill only one role may use is denied to every other role, whatever the roles of studio.yaml
+  // or a matrix row say.
+  const roleOnly = Object.entries(ROLE_ONLY_SKILLS)
+    .filter(([, only]) => only !== role)
+    .map(([skill]) => skill);
   const denied = unique([
     ...index.denied.map(after),
     ...(rs?.denied ?? []).filter((s) => s !== CREW_SKILL),
+    ...roleOnly,
   ]);
   const isDenied = (s: string) => denied.includes(s);
   const req = unique(required).filter((s) => !isDenied(s));

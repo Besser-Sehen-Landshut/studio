@@ -245,6 +245,7 @@ describe('the matrix names skills the deny list can tell apart', () => {
     'ux-ui-design',
     'vibepolish',
     'winui-pro',
+    'reverse-engineer-anything',
     'bug-prospector',
     'dead-code-scanner',
     'performance-check',

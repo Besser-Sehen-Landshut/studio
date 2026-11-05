@@ -16,6 +16,7 @@ import type { RoleConfig, StudioConfig } from './config.js';
 import { globProblem, matchGlob } from './glob.js';
 import { assertStatePath, removeStateEntry, writeStateFile } from './paths.js';
 import type { Ports } from './ports.js';
+import type { ReaClass } from './rea.js';
 import {
   type CrewCaps,
   capsFile,
@@ -466,6 +467,8 @@ export interface BriefCaps {
   knowledge: { ref: string; where: string; fallback?: string }[];
   /** Where in the checkout this run's report goes; a launch draws it anew. */
   reportName?: string;
+  /** A researcher with REA: its analysis directory and the tool classes the item allows. */
+  rea?: { artifacts: string; classes: ReaClass[] };
   /** The crew cannot run gh (macOS without the trust service): Studio opens its pull request. */
   prByStudio?: boolean;
   /** A worker without a crew token: the crew commits only, Studio pushes after it ended. */

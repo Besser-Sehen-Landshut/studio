@@ -58,7 +58,8 @@ const item = (id: string, role: string, type: string, extra: string[] = [], prio
 
 const BOARD_YAML = `items:\n${[
   item('APP-1', 'builder', 'feature', ['    plan: docs/plan.md']),
-  item('APP-2', 'researcher', 'research', [], 2),
+  // A researcher's findings reach the repository through a docs item (a research item pushes nothing).
+  item('APP-2', 'researcher', 'docs', [], 2),
   item('APP-3', 'builder', 'fix', ['    depends_on: [APP-1]'], 3),
 ].join('\n')}\n`;
 
@@ -100,6 +101,8 @@ describe('crew loop with a fake claude', () => {
             headRefOid: git(cloneOf(id), 'rev-parse', 'HEAD'),
             headRefName: `studio/${id}`,
             baseRefName: 'main',
+            // The researcher's privacy check reads the pushed diff over base...head.
+            baseRefOid: git(project, 'rev-parse', 'main'),
             isCrossRepository: false,
             headRepository: { name: 'app' },
             headRepositoryOwner: { login: 'org' },
@@ -182,6 +185,9 @@ describe('crew loop with a fake claude', () => {
     } finally {
       for (const p of pids) if (ports.claude.alive(p)) await ports.claude.stop(p);
     }
+
+    // The researcher's branch as its push left it: collect checks that diff in the owner checkout.
+    git(cloneOf('APP-2'), 'push', '-q', join(root, 'origin.git'), 'HEAD:refs/heads/studio/APP-2');
 
     // A report whose head differs from the PR head must not move the item.
     const reportDir = join(cloneOf('APP-2'), '.studio', 'reports');
