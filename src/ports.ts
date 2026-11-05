@@ -100,8 +100,22 @@ export interface PluginCli {
   ): Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
+/**
+ * Runs an evidence command from studio.yaml on the default branch (src/evidence.ts): no shell,
+ * exactly `env`, stdin closed, stderr dropped. A timeout or a stdout above `maxBytes` comes back
+ * as `timedOut` or a non-zero code, never as an exception.
+ */
+export interface EvidenceRunner {
+  run(
+    argv: readonly string[],
+    opts: { cwd: string; env: Record<string, string>; timeoutMs: number; maxBytes: number },
+  ): Promise<{ code: number; stdout: string; timedOut: boolean }>;
+}
+
 export interface Ports {
   gh: Gh;
+  /** Optional so test doubles run no command; a missing one proves nothing. */
+  evidence?: EvidenceRunner;
   credentials: Credentials;
   git: Git;
   claude: Claude;
@@ -114,6 +128,45 @@ export interface Ports {
 }
 
 const HTTP_TIMEOUT_MS = 15_000;
+
+export const realEvidence: EvidenceRunner = {
+  async run(argv, opts) {
+    const [file, ...args] = argv;
+    if (file === undefined) return { code: 1, stdout: '', timedOut: false };
+    const child = execa(file, args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      extendEnv: false,
+      shell: false,
+      reject: false,
+      stdin: 'ignore',
+      stderr: 'ignore',
+      timeout: opts.timeoutMs,
+      maxBuffer: opts.maxBytes,
+      forceKillAfterDelay: 1000,
+      stripFinalNewline: false,
+    });
+    // A grandchild holding stdout open must not outlive the timeout: that counts as a timeout.
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<{ code: number; stdout: string; timedOut: boolean }>((done) => {
+      timer = setTimeout(
+        () => done({ code: 1, stdout: '', timedOut: true }),
+        opts.timeoutMs + 2000,
+      );
+      timer.unref();
+    });
+    const run = child.then((r) => ({
+      code: r.timedOut ? 124 : r.failed ? r.exitCode || 1 : 0,
+      stdout: r.failed ? '' : String(r.stdout ?? ''),
+      timedOut: r.timedOut === true,
+    }));
+    try {
+      return await Promise.race([run, late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+};
 
 /**
  * POSTs to an https URL. Only the status comes back, never the body (it may echo a key); no
@@ -335,5 +388,15 @@ export function realPorts(claudeBin = 'claude'): Ports {
     },
   };
 
-  return { gh, git, claude, clock, host, credentials, plugins, http: realHttp };
+  return {
+    gh,
+    git,
+    claude,
+    clock,
+    host,
+    credentials,
+    plugins,
+    http: realHttp,
+    evidence: realEvidence,
+  };
 }

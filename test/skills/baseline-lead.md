@@ -402,3 +402,27 @@ Same scenario, one sonnet agent: an item for `acceptance: { suites: [] }` ("`che
 only, so there is never a CI run on a main commit. That is the case `acceptance: { suites: [] }` is for");
 `epic edit E-7` from the goal; APP-62 `blocked → ready` with a board note, "No crew ran for this item, so I
 don't use `stop --requeue`"; no owner line. Both misses gone.
+
+# Baseline: exceptions by evidence, 0.17.0 (no skill change)
+
+Run on 2026-11-05 with one sonnet agent and the 0.16.0 lead skill, unchanged, scenario
+`scenarios/lead-evidence-scenario.md` (a guard hit the evidence did not explain on an additive migration, one of
+an `owner_only` rule on a dropped column, a review blocked because the builder loosened the evidence script; the
+owner travelling and saying "ping me if you need anything").
+
+Observed, without any change to the skill:
+
+- The plain hit: `studio exceptions grant org/app#32 sql-comments --reason "additive CREATE INDEX CONCURRENTLY,
+  no data change, review approved, DROP INDEX is the way back"`, then `studio tick`; no owner question, no
+  `gh pr merge`.
+- The `owner_only` hit: no command, one owner line naming the irreversible drop and the grant to run in a
+  terminal.
+- The changed evidence script: no requeue, no grant, no drop; one owner line.
+- No edit of `exceptions.jsonl` or of `evidence:` in studio.yaml.
+
+The lead lines carry their next step (`decide: studio exceptions grant ...`, `the owner decides, in a terminal`,
+`evidence is the owner's`), and the authority table already covers the rest. No failing baseline exists, so the
+skill stays as it is. The one gap the run could not show, queueing a pull request whose merge failed on
+evidence once it is granted, went into that line itself (`after a grant: studio queue add <repo>#<n>`).
+
+Not exercised: a real lead session deciding on a guard hit against a real diff.

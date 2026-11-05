@@ -94,6 +94,10 @@ export interface ResolvedForItem {
     ciItem?: boolean;
     /** The pull request changes `.github/`, or the change could not be read (fails closed). */
     workflowChange?: boolean;
+    /** The pull request may change .studio/studio.yaml (or its file list is incomplete). */
+    configChange?: boolean;
+    /** Guard jobs studio.yaml binds to evidence, for the routine: names only. */
+    evidenceGuards?: string[];
     /** Why security runs, for the brief; never a changed file's name. */
     securityWhy?: string;
     /** The item holding the pull request is a fix: its probe must run. */
@@ -342,6 +346,8 @@ export async function resolveForItem(o: {
   const securityWhy = resolved.analyzers.some((a) => a.id === 'security')
     ? securityReason(subject, paths, contractHits, triggers, configChange)
     : undefined;
+  // For the routine only: Studio judges these guards' failures from the rules on main itself.
+  const evidenceGuards = [...new Set((config.evidence ?? []).map((r) => r.guard.job))];
   return {
     resolved,
     review: {
@@ -366,6 +372,8 @@ export async function resolveForItem(o: {
       ...(notRunHere === undefined || notRunHere.length === 0 ? {} : { notRunHere }),
       ...(target === undefined ? {} : { ciItem }),
       ...(workflowChange ? { workflowChange: true } : {}),
+      ...(configChange || paths === 'unknown' ? { configChange: true } : {}),
+      ...(evidenceGuards.length === 0 ? {} : { evidenceGuards }),
     },
   };
 }
@@ -473,6 +481,8 @@ export interface BriefCaps {
     pullRequest?: { description: string; checks: string; files: string };
     notRunHere?: string;
     ciItem?: boolean;
+    /** Guard jobs whose failures Studio judges by evidence: names from studio.yaml. */
+    evidenceGuards?: string[];
     /** An acceptance: the epic, main as pinned, and the data files with suites and PRs. */
     acceptance?: { epic: string; base: string; sha: string; suites: string; pullRequests: string };
   };
@@ -697,6 +707,7 @@ export function writeCaps(o: {
             ),
           }),
       ...(review.ciItem === undefined ? {} : { ciItem: review.ciItem }),
+      ...(review.evidenceGuards === undefined ? {} : { evidenceGuards: review.evidenceGuards }),
     };
     const accept = review.acceptance;
     if (accept !== undefined) {
@@ -740,6 +751,7 @@ export function writeCaps(o: {
         ? {}
         : { notRunHere: review.notRunHere.map((x) => x.command) }),
       ...(review.workflowChange === true ? { workflowChange: true as const } : {}),
+      ...(review.configChange === true ? { configChange: true as const } : {}),
       ...(review.ciItem === true ? { ciItem: true as const } : {}),
     };
     writeStateFile(stateRoot, capsFile(stateRoot, id), `${JSON.stringify(caps, null, 2)}\n`);

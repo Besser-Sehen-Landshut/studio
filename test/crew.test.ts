@@ -726,7 +726,9 @@ describe('writeCrewSettings', () => {
       base: 'main',
       protectedPaths: [
         ctxFile,
-        ...['guard', 'settings', 'briefs', 'logs', 'homes', 'tmp'].map((d) => join(state, d)),
+        ...['guard', 'settings', 'briefs', 'logs', 'homes', 'tmp', 'evidence'].map((d) =>
+          join(state, d),
+        ),
         ...[
           'crew.json',
           'queue.json',
@@ -756,6 +758,8 @@ describe('writeCrewSettings', () => {
           'tick.lock',
           'board.lock',
           'crew.lock',
+          'exceptions.jsonl',
+          'exceptions.lock',
         ].map((f) => join(state, f)),
         join(dirnameOf(state), 'owner'),
       ],

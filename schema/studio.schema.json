@@ -470,6 +470,107 @@
         "suites"
       ],
       "additionalProperties": false
+    },
+    "evidence": {
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,47}$"
+          },
+          "guard": {
+            "type": "object",
+            "properties": {
+              "workflow": {
+                "type": "string",
+                "pattern": "^\\.github\\/workflows\\/[A-Za-z0-9._-]{1,100}\\.ya?ml$"
+              },
+              "job": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+              }
+            },
+            "required": [
+              "workflow",
+              "job"
+            ],
+            "additionalProperties": false
+          },
+          "run": {
+            "default": "local",
+            "type": "string",
+            "enum": [
+              "local",
+              "ci"
+            ]
+          },
+          "command": {
+            "minItems": 1,
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+            }
+          },
+          "proof": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+          },
+          "timeout_seconds": {
+            "default": 60,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 600
+          },
+          "job": {
+            "type": "object",
+            "properties": {
+              "workflow": {
+                "type": "string",
+                "pattern": "^\\.github\\/workflows\\/[A-Za-z0-9._-]{1,100}\\.ya?ml$"
+              },
+              "job": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+              }
+            },
+            "required": [
+              "workflow",
+              "job"
+            ],
+            "additionalProperties": false
+          },
+          "inputs": {
+            "default": [],
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "owner_only": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "guard"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [

@@ -180,6 +180,77 @@ const acceptanceSchema = z.strictObject({
     .max(20),
 });
 
+/** A CI job by its workflow file and its job name, as `acceptance.suites` names one. */
+const workflowJob = z.strictObject({
+  workflow: z
+    .string()
+    .regex(
+      /^\.github\/workflows\/[A-Za-z0-9._-]{1,100}\.ya?ml$/,
+      'must be the workflow file, .github/workflows/<file>.yml',
+    ),
+  job: ciLine.pipe(
+    z.string().regex(/^[A-Za-z0-9 ._()/:-]+$/, 'letters, digits, spaces and . _ - ( ) / : only'),
+  ),
+});
+
+/** One word of an evidence command: a plain line. */
+const argWord = z
+  .string()
+  .min(1)
+  .max(500)
+  .regex(/^[^\p{Cc}\p{Cf}]+$/u, 'one plain line of at most 500 characters');
+
+/** An evidence rule id: it names the rule in logs, lead lines and `studio exceptions grant`. */
+export const EVIDENCE_ID_RE = /^[a-z][a-z0-9-]{0,47}$/;
+
+/**
+ * `evidence:` in studio.yaml: a guard job whose failure an evidence command can prove a false alarm
+ * on exactly one diff. Studio reads these rules only from studio.yaml at the pull request's base on
+ * the default branch, never from the working tree or the pull request (src/evidence.ts).
+ */
+export const evidenceRuleSchema = z
+  .strictObject({
+    id: z.string().regex(EVIDENCE_ID_RE, 'must match ^[a-z][a-z0-9-]{0,47}$'),
+    // The CI job that reports the hit, e.g. a migration guard.
+    guard: workflowJob,
+    // local: Studio runs `command` itself, in a checkout of the base, with the diff as a file.
+    // ci: a named CI job on the pull request head is the evidence; it passes or it does not.
+    run: z.enum(['local', 'ci']).default('local'),
+    command: z.array(argWord).min(1).max(32).optional(),
+    // The line the command must print on stdout, besides exit code 0.
+    proof: z
+      .string()
+      .min(1)
+      .max(200)
+      .regex(/^[^\p{Cc}\p{Cf}]+$/u, 'one line of at most 200 characters')
+      .optional(),
+    timeoutSeconds: z.number().int().min(1).max(600).default(60),
+    job: workflowJob.optional(),
+    // Files the evidence depends on (its script, its config): a pull request that changes one gets
+    // no exception from this rule, and no approval from Studio (src/evidence.ts).
+    inputs: z.array(globSchema).max(50).default([]),
+    // A hit the evidence does not explain goes to the owner, not the lead.
+    ownerOnly: z.boolean().default(false),
+  })
+  .superRefine((r, ctx) => {
+    const issue = (path: string, message: string) =>
+      ctx.addIssue({ code: 'custom', path: [path], message });
+    if (r.run === 'local') {
+      if (r.command === undefined) issue('command', 'run local needs a command');
+      else if ((r.command[0] ?? '').startsWith('-')) issue('command', 'must not start with -');
+      if (r.proof === undefined) issue('proof', 'run local needs the proof line');
+      if (r.job !== undefined) issue('job', 'only run ci names a job');
+    } else {
+      if (r.job === undefined) issue('job', 'run ci needs the evidence job');
+      if (r.command !== undefined) issue('command', 'run ci takes no command: the job is it');
+      if (r.proof !== undefined) issue('proof', 'run ci takes no proof line: the job passes');
+      if (r.inputs.length === 0) {
+        issue('inputs', 'run ci needs inputs: the job runs the pull request head and its scripts');
+      }
+    }
+  });
+export type EvidenceRule = z.infer<typeof evidenceRuleSchema>;
+
 /** `limits:` in studio.yaml and in the owner config. */
 const dailyLimitsSchema = z.strictObject({
   dailyCostUsd: z.number().positive().optional(),
@@ -230,8 +301,21 @@ export const studioConfigSchema = z
     limits: dailyLimitsSchema.optional(),
     // The full suites an epic's acceptance waits for on main (src/acceptance.ts).
     acceptance: acceptanceSchema.optional(),
+    // Exceptions by evidence: guard jobs whose hits a command can prove false alarms.
+    evidence: z.array(evidenceRuleSchema).max(20).optional(),
   })
   .superRefine((cfg, ctx) => {
+    const ids = new Set<string>();
+    for (const [i, r] of (cfg.evidence ?? []).entries()) {
+      if (ids.has(r.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['evidence', i, 'id'],
+          message: `duplicate evidence id ${r.id}`,
+        });
+      }
+      ids.add(r.id);
+    }
     const seen = new Set<string>();
     for (const [i, c] of (cfg.components ?? []).entries()) {
       if (seen.has(c.id)) {

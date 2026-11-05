@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import type { Board } from './board.js';
 import { notifySecretFile, type OwnerConfig, type OwnerEnv } from './config.js';
 import { readOwnerSecret, writeOwnerSecret } from './credentials.js';
+import { leadOnly } from './evidence.js';
 import { readBlocksFile } from './limits.js';
 import { classifyDecision, resolveZone } from './pane-data.js';
 import { acquireStateLock, writeStateFile } from './paths.js';
@@ -96,6 +97,7 @@ export type PushKind =
   | 'changes_requested'
   | 'merge_failed'
   | 'question'
+  | 'evidence'
   | 'blocked'
   | 'account_block'
   | 'release_approval'
@@ -128,6 +130,9 @@ export function decisionsOf(o: {
 }): Decision[] {
   const out: Decision[] = [];
   for (const n of o.needsLead) {
+    // A guard hit no evidence explained is the lead's to decide: the owner hears only of real
+    // risk, a rule marked owner_only (`evidence (owner): ...`), which is pushed.
+    if (leadOnly(n.reason)) continue;
     const item = safeId(n.item);
     const kind: PushKind = n.reason.startsWith('release approval')
       ? 'release_approval'
@@ -160,6 +165,7 @@ const PHRASES: Record<Lang, Record<PushKind, string>> = {
     changes_requested: 'Changes requested',
     merge_failed: 'Merge failed',
     question: 'Crew has a question',
+    evidence: 'Guard hit, the owner decides',
     blocked: 'Blocked',
     account_block: 'Account blocked',
     release_approval: 'Release approval needed',
@@ -170,6 +176,7 @@ const PHRASES: Record<Lang, Record<PushKind, string>> = {
     changes_requested: 'Änderungen angefordert',
     merge_failed: 'Merge fehlgeschlagen',
     question: 'Crew hat eine Frage',
+    evidence: 'Prüfungstreffer, der Inhaber entscheidet',
     blocked: 'Blockiert',
     account_block: 'Konto gesperrt',
     release_approval: 'Release-Freigabe nötig',

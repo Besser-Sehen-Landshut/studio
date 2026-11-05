@@ -7846,15 +7846,15 @@ import { homedir as homedir9 } from "node:os";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
 // src/cli.ts
-import { existsSync as existsSync10, mkdtempSync, rmSync as rmSync8, writeFileSync as writeFileSync12 } from "node:fs";
+import { existsSync as existsSync11, mkdtempSync, rmSync as rmSync8, writeFileSync as writeFileSync13 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname as dirname12, join as join37, resolve as resolve7 } from "node:path";
+import { dirname as dirname12, join as join38, resolve as resolve7 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/acceptance.ts
-import { createHash as createHash3 } from "node:crypto";
-import { lstatSync as lstatSync24, readFileSync as readFileSync27 } from "node:fs";
-import { join as join28 } from "node:path";
+import { createHash as createHash4 } from "node:crypto";
+import { lstatSync as lstatSync26, readFileSync as readFileSync29 } from "node:fs";
+import { join as join30 } from "node:path";
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -27628,17 +27628,17 @@ function expandBraces(glob) {
   let steps = 0;
   while (open4.length > 0) {
     if (++steps > MAX_GLOB_EXPANSIONS * 4) return void 0;
-    const g = open4.pop();
-    const m = /\{([^{}]*)\}/.exec(g);
+    const g2 = open4.pop();
+    const m = /\{([^{}]*)\}/.exec(g2);
     if (!m) {
-      done.push(g);
+      done.push(g2);
       if (done.length > MAX_GLOB_EXPANSIONS) return void 0;
       continue;
     }
     const alternatives = m[1].split(",");
     if (open4.length + alternatives.length > MAX_GLOB_EXPANSIONS * 4) return void 0;
-    const head = g.slice(0, m.index);
-    const tail = g.slice(m.index + m[0].length);
+    const head = g2.slice(0, m.index);
+    const tail = g2.slice(m.index + m[0].length);
     for (const alt of alternatives.reverse()) open4.push(head + alt + tail);
   }
   return [...new Set(done)];
@@ -27706,7 +27706,7 @@ function matchGlob(glob, path10) {
   const globs = expandBraces(normalize(glob));
   if (globs === void 0) return true;
   const lower = path10.toLowerCase();
-  return globs.some((g) => run(tokenize(g), lower));
+  return globs.some((g2) => run(tokenize(g2), lower));
 }
 function hostilePath(path10) {
   return path10.length > MAX_PATH_LENGTH || CONTROL.test(path10);
@@ -27983,7 +27983,7 @@ function componentsOf(item, config2) {
   if (named2.length > 0) return [...new Set(named2)];
   const paths = [...item.paths, ...item.touches];
   return components.filter(
-    (c3) => c3.repo === item.repo && paths.some((p) => c3.paths.some((g) => matchGlob(g, p) || touchesOverlap(g, p)))
+    (c3) => c3.repo === item.repo && paths.some((p) => c3.paths.some((g2) => matchGlob(g2, p) || touchesOverlap(g2, p)))
   ).map((c3) => c3.id);
 }
 var KEY_ORDER = [
@@ -28203,7 +28203,7 @@ import { dirname, isAbsolute, join as join3, resolve, sep } from "node:path";
 var import_yaml2 = __toESM(require_dist(), 1);
 import { existsSync, lstatSync, readdirSync, readFileSync as readFileSync2, statSync } from "node:fs";
 import { join as join2 } from "node:path";
-var STUDIO_VERSION = "0.16.0";
+var STUDIO_VERSION = "0.17.0";
 var HTTPS_GIT = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\.git)?$/;
 var VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
 var PLUGIN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -28576,8 +28576,8 @@ function toolchainPathProblem(path10, home, extraProtectedPaths = [], platform2 
 var MODEL_NAME_RE2 = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
 var modelName = external_exports.string().regex(MODEL_NAME_RE2, "not a model name");
 var ITEM_TYPES = ["feature", "fix", "chore", "docs", "research", "review", "release"];
-var globSchema = external_exports.string().superRefine((g, ctx) => {
-  const problem = globProblem(g);
+var globSchema = external_exports.string().superRefine((g2, ctx) => {
+  const problem = globProblem(g2);
   if (problem !== void 0) ctx.addIssue({ code: "custom", message: problem });
 });
 var roleSkillsSchema = external_exports.strictObject({
@@ -28647,6 +28647,50 @@ var acceptanceSchema = external_exports.strictObject({
     })
   ).max(20)
 });
+var workflowJob = external_exports.strictObject({
+  workflow: external_exports.string().regex(
+    /^\.github\/workflows\/[A-Za-z0-9._-]{1,100}\.ya?ml$/,
+    "must be the workflow file, .github/workflows/<file>.yml"
+  ),
+  job: ciLine.pipe(
+    external_exports.string().regex(/^[A-Za-z0-9 ._()/:-]+$/, "letters, digits, spaces and . _ - ( ) / : only")
+  )
+});
+var argWord = external_exports.string().min(1).max(500).regex(/^[^\p{Cc}\p{Cf}]+$/u, "one plain line of at most 500 characters");
+var EVIDENCE_ID_RE = /^[a-z][a-z0-9-]{0,47}$/;
+var evidenceRuleSchema = external_exports.strictObject({
+  id: external_exports.string().regex(EVIDENCE_ID_RE, "must match ^[a-z][a-z0-9-]{0,47}$"),
+  // The CI job that reports the hit, e.g. a migration guard.
+  guard: workflowJob,
+  // local: Studio runs `command` itself, in a checkout of the base, with the diff as a file.
+  // ci: a named CI job on the pull request head is the evidence; it passes or it does not.
+  run: external_exports.enum(["local", "ci"]).default("local"),
+  command: external_exports.array(argWord).min(1).max(32).optional(),
+  // The line the command must print on stdout, besides exit code 0.
+  proof: external_exports.string().min(1).max(200).regex(/^[^\p{Cc}\p{Cf}]+$/u, "one line of at most 200 characters").optional(),
+  timeoutSeconds: external_exports.number().int().min(1).max(600).default(60),
+  job: workflowJob.optional(),
+  // Files the evidence depends on (its script, its config): a pull request that changes one gets
+  // no exception from this rule, and no approval from Studio (src/evidence.ts).
+  inputs: external_exports.array(globSchema).max(50).default([]),
+  // A hit the evidence does not explain goes to the owner, not the lead.
+  ownerOnly: external_exports.boolean().default(false)
+}).superRefine((r, ctx) => {
+  const issue2 = (path10, message) => ctx.addIssue({ code: "custom", path: [path10], message });
+  if (r.run === "local") {
+    if (r.command === void 0) issue2("command", "run local needs a command");
+    else if ((r.command[0] ?? "").startsWith("-")) issue2("command", "must not start with -");
+    if (r.proof === void 0) issue2("proof", "run local needs the proof line");
+    if (r.job !== void 0) issue2("job", "only run ci names a job");
+  } else {
+    if (r.job === void 0) issue2("job", "run ci needs the evidence job");
+    if (r.command !== void 0) issue2("command", "run ci takes no command: the job is it");
+    if (r.proof !== void 0) issue2("proof", "run ci takes no proof line: the job passes");
+    if (r.inputs.length === 0) {
+      issue2("inputs", "run ci needs inputs: the job runs the pull request head and its scripts");
+    }
+  }
+});
 var dailyLimitsSchema = external_exports.strictObject({
   dailyCostUsd: external_exports.number().positive().optional()
 });
@@ -28689,8 +28733,21 @@ var studioConfigSchema = external_exports.strictObject({
   // Spending brake: once the ended crew runs of the local day cost this much, nothing new starts.
   limits: dailyLimitsSchema.optional(),
   // The full suites an epic's acceptance waits for on main (src/acceptance.ts).
-  acceptance: acceptanceSchema.optional()
+  acceptance: acceptanceSchema.optional(),
+  // Exceptions by evidence: guard jobs whose hits a command can prove false alarms.
+  evidence: external_exports.array(evidenceRuleSchema).max(20).optional()
 }).superRefine((cfg, ctx) => {
+  const ids = /* @__PURE__ */ new Set();
+  for (const [i2, r] of (cfg.evidence ?? []).entries()) {
+    if (ids.has(r.id)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["evidence", i2, "id"],
+        message: `duplicate evidence id ${r.id}`
+      });
+    }
+    ids.add(r.id);
+  }
   const seen = /* @__PURE__ */ new Set();
   for (const [i2, c3] of (cfg.components ?? []).entries()) {
     if (seen.has(c3.id)) {
@@ -28898,9 +28955,9 @@ function configWarnings(config2) {
 }
 
 // src/init.ts
-var import_yaml11 = __toESM(require_dist(), 1);
-import { lstatSync as lstatSync21, mkdirSync as mkdirSync6, readdirSync as readdirSync10, rmdirSync, rmSync as rmSync5, writeFileSync as writeFileSync9 } from "node:fs";
-import { join as join25 } from "node:path";
+var import_yaml13 = __toESM(require_dist(), 1);
+import { lstatSync as lstatSync23, mkdirSync as mkdirSync6, readdirSync as readdirSync10, rmdirSync, rmSync as rmSync5, writeFileSync as writeFileSync10 } from "node:fs";
+import { join as join27 } from "node:path";
 
 // src/capacity.ts
 var DEFAULT_TIMEOUT_MS = 3e4;
@@ -29010,10 +29067,10 @@ async function capacityHoldsTwice(config2, ports, options = {}) {
 }
 
 // src/secret-command.ts
-var import_yaml9 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync23, realpathSync as realpathSync5, statSync as statSync4 } from "node:fs";
+var import_yaml11 = __toESM(require_dist(), 1);
+import { readFileSync as readFileSync25, realpathSync as realpathSync5, statSync as statSync4 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
-import { join as join23 } from "node:path";
+import { join as join25 } from "node:path";
 
 // src/account-command.ts
 import { chmodSync as chmodSync4, existsSync as existsSync4, mkdirSync as mkdirSync4 } from "node:fs";
@@ -29063,7 +29120,15 @@ import {
 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve2, sep as sep2 } from "node:path";
-var STATE_PROTECTED_DIRS = ["guard", "settings", "briefs", "logs", "homes", "tmp"];
+var STATE_PROTECTED_DIRS = [
+  "guard",
+  "settings",
+  "briefs",
+  "logs",
+  "homes",
+  "tmp",
+  "evidence"
+];
 var STATE_FILES = [
   "crew.json",
   "queue.json",
@@ -29092,7 +29157,9 @@ var STATE_FILES = [
   "lessons-review.json",
   "tick.lock",
   "board.lock",
-  "crew.lock"
+  "crew.lock",
+  "exceptions.jsonl",
+  "exceptions.lock"
 ];
 function stateBaseFor(opts = {}) {
   const env = opts.env ?? process.env;
@@ -30826,10 +30893,10 @@ function groupSelfHosted(runners) {
   for (const r of runners) {
     if (!r.labels.some((l) => l.toLowerCase() === "self-hosted")) continue;
     const key = labelKey(r.labels);
-    const g = groups.get(key) ?? { key, labels: [], runners: [] };
-    if (g.runners.length === 0) g.labels = [...new Set(r.labels)].sort();
-    g.runners.push(r);
-    groups.set(key, g);
+    const g2 = groups.get(key) ?? { key, labels: [], runners: [] };
+    if (g2.runners.length === 0) g2.labels = [...new Set(r.labels)].sort();
+    g2.runners.push(r);
+    groups.set(key, g2);
   }
   return [...groups.values()].sort(
     (a2, b) => b.runners.length - a2.runners.length || (a2.key < b.key ? -1 : 1)
@@ -30863,7 +30930,7 @@ function proposeCi(detect, repoVisibility, current, usage) {
   const group = unused ? void 0 : groups[0];
   const mode = !group ? "github-hosted" : usage?.githubHosted && usage.selfHosted ? "both" : "self-hosted";
   if (unused && groups.length > 0) {
-    const count3 = groups.reduce((sum, g) => sum + g.runners.length, 0);
+    const count3 = groups.reduce((sum, g2) => sum + g2.runners.length, 0);
     notes.push(
       `${count3} self-hosted runner(s) exist but are not used: all workflows run on GitHub-hosted runners`
     );
@@ -30883,7 +30950,7 @@ function proposeCi(detect, repoVisibility, current, usage) {
     const others = groups.slice(1);
     if (others.length > 0) {
       notes.push(
-        `other runner groups ignored: ${others.map((g) => `${g.labels.join(",")} (${g.runners.length})`).join("; ")}`
+        `other runner groups ignored: ${others.map((g2) => `${g2.labels.join(",")} (${g2.runners.length})`).join("; ")}`
       );
     }
     const offline = group.runners.filter((r) => !r.online).length;
@@ -31970,8 +32037,8 @@ var RISKS = ["ui", "landing", "auth", "security", "data", "migration"];
 var TIERS = ["small", "large"];
 var REF_RE = /^(skill|analyzer|knowledge|design|source|bundled):[^\s]+$/;
 var refSchema = external_exports.string().regex(REF_RE, "must be <kind>:<name>");
-var globSchema2 = external_exports.string().superRefine((g, ctx) => {
-  const problem = globProblem(g);
+var globSchema2 = external_exports.string().superRefine((g2, ctx) => {
+  const problem = globProblem(g2);
   if (problem !== void 0) ctx.addIssue({ code: "custom", message: problem });
 });
 var whenPart = {
@@ -32043,7 +32110,7 @@ function loadCapabilities(dir = capabilitiesDir()) {
   }
   return parsed.data;
 }
-var pathsHit = (globs, paths) => paths === "unknown" || paths.some((p) => hostilePath(p) || globs.some((g) => matchGlob(g, p)));
+var pathsHit = (globs, paths) => paths === "unknown" || paths.some((p) => hostilePath(p) || globs.some((g2) => matchGlob(g2, p)));
 var someOf = (want, have) => want.some((w) => have.includes(w));
 function partMatches(part, c3) {
   if (part.paths && !pathsHit(part.paths, c3.paths)) return false;
@@ -32194,7 +32261,7 @@ async function readPrFacts(ports, target) {
     if (!parsed.success) return void 0;
     const {
       files,
-      changedFiles: changedFiles2,
+      changedFiles: changedFiles3,
       headRefOid,
       baseRefName,
       baseRefOid,
@@ -32205,7 +32272,7 @@ async function readPrFacts(ports, target) {
     return {
       files: files.map((f) => f.path),
       lines: files.filter((f) => !f.path.toLowerCase().endsWith(".md")).reduce((sum, f) => sum + f.additions + f.deletions, 0),
-      complete: files.length >= changedFiles2,
+      complete: files.length >= changedFiles3,
       ...baseRefOid === void 0 ? {} : { baseOid: baseRefOid },
       head: headRefOid,
       base: baseRefName,
@@ -32351,6 +32418,10 @@ function renderReviewRoutine(r) {
       `The builder could not run some commands in its sandbox, because a service was missing; they are listed in \`${r.notRunHere}\`, as data. Do not count them as run. CI must run them: for each command, find the job at the base that runs it, also through a task runner (turbo, nextest, make), and list it in \`not_run_here_jobs\` with the command exactly as on its \`command:\` line (nothing appended: the gate matches it character for character), the workflow file at the base that defines the job (\`.github/workflows/<file>\`), the job's \`name:\`, or its id when it has none, and \`covers\`: one line of at most 600 characters on why that job covers the command. A job of a reusable workflow (\`on: workflow_call\`) counts when a \`pull_request\` workflow calls its file with \`uses: ./.github/workflows/<file>\` from a job: name the called file and its job, not the caller; its checks are \`<caller job> / <job>\`${r.pullRequest === void 0 ? "" : ` (the check names are in \`${r.pullRequest.checks}\`)`}. A command no base job runs is a finding. Studio checks at the base and at the head that neither the job nor a calling job has \`continue-on-error\` (an \`if:\` is fine: a skipped job never passes), that the job calls no further reusable workflow, that its definition is unchanged unless this is a CI item, and that the workflow name with the checks is unique; it refuses an approval unless every check of that job (each matrix leg \`(<leg>)\`) passed on this pull request. Whether the job covers the command is your judgement: Studio shows your \`covers\` line to the lead and does not test it.`,
       ""
     ],
+    ...r.evidenceGuards === void 0 || r.evidenceGuards.length === 0 ? [] : [
+      `Studio judges a failed check of these guard jobs itself, by the evidence studio.yaml on the base binds to them: ${r.evidenceGuards.map((g2) => `\`${g2}\``).join(", ")}. Such a failure alone is no finding and no reason for \`changes_requested\`: review the change itself, and name a real problem the guard points at as a finding.`,
+      ""
+    ],
     `Run each analyzer below as one subagent with the model named there, read-only except for the spec check's probe; every subagent gets an explicit model. Give it the contract \`${r.contract}\`, its analyzer file, the diff as a file and the Definition of Done. Ask what is wrong with this change. Never pass on why the change should be right.`,
     "",
     ...r.analyzers.map(
@@ -32400,6 +32471,8 @@ var crewCapsSchema = external_exports.strictObject({
   notRunHere: external_exports.array(external_exports.string()).optional(),
   /** The pull request changes `.github/` (or that could not be read) and its item is no CI item. */
   workflowChange: external_exports.literal(true).optional(),
+  /** The pull request may change .studio/studio.yaml: collect checks its evidence rules. */
+  configChange: external_exports.literal(true).optional(),
   /** The item holding the pull request declares paths below `.github/`: its jobs may change. */
   ciItem: external_exports.literal(true).optional(),
   /** An acceptance: the epic it checks, as the board held it at launch (`headRefOid` is main). */
@@ -32506,7 +32579,8 @@ function checkReviewCaps(caps, report) {
     skipped,
     target,
     ...notRunHere.length === 0 ? {} : { notRunHere },
-    ...caps.ciItem === true ? { ciItem: true } : {}
+    ...caps.ciItem === true ? { ciItem: true } : {},
+    ...caps.configChange === true ? { configChange: true } : {}
   };
 }
 
@@ -32859,7 +32933,7 @@ var BUNDLED_SKILLS = [
 function resolveModel(item, role) {
   return item.model ?? role.types?.[item.type] ?? role.model;
 }
-var concrete = (globs) => globs.map((g) => g.replace(/\*+|\?/g, "x"));
+var concrete = (globs) => globs.map((g2) => g2.replace(/\*+|\?/g, "x"));
 var isGithubPath = (p) => {
   const lower = p.toLowerCase();
   return lower === ".github" || lower.startsWith(".github/");
@@ -32869,19 +32943,19 @@ var GIT_FETCH_MS = 12e4;
 var STUDIO_CONFIG = ".studio/studio.yaml";
 var GIT_LOCAL_MS = 6e4;
 async function changesGithub(ports, checkout, base, head, allowed) {
-  const g = (args, timeoutMs) => ports.git.run(checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
+  const g2 = (args, timeoutMs) => ports.git.run(checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
   try {
-    await g(
+    await g2(
       ["fetch", "--no-tags", "--no-write-fetch-head", checkout.remote, head, base],
       GIT_FETCH_MS
     );
-    const diff = await g(
+    const diff = await g2(
       ["diff", "--name-only", "--no-renames", "-z", `${base}...${head}`],
       GIT_LOCAL_MS
     );
     const outside = (p) => isGithubPath(p) && !(p.startsWith(".github/") && allowed.some((glob) => globProblem(glob) === void 0 && matchGlob(glob, p)));
     if (diff.split("\0").some((p) => p !== "" && outside(p))) return true;
-    const tree = await g(["ls-tree", "-r", "-z", "--full-tree", head], GIT_LOCAL_MS);
+    const tree = await g2(["ls-tree", "-r", "-z", "--full-tree", head], GIT_LOCAL_MS);
     return tree.split("\0").some((line3) => {
       const tab = line3.indexOf("	");
       return tab > 0 && line3.startsWith("120000 ") && isGithubPath(line3.slice(tab + 1));
@@ -33016,7 +33090,7 @@ async function resolveForItem(o2) {
     round = 1;
   }
   const contractHits = paths === "unknown" ? [] : config2.merge.contractPaths.filter(
-    (g) => globProblem(g) !== void 0 || (facts?.files ?? []).some((f) => matchGlob(g, f))
+    (g2) => globProblem(g2) !== void 0 || (facts?.files ?? []).some((f) => matchGlob(g2, f))
   );
   const configChange = paths !== "unknown" && (facts?.files ?? []).some((f) => f.toLowerCase() === STUDIO_CONFIG);
   const triggers2 = [
@@ -33036,6 +33110,7 @@ async function resolveForItem(o2) {
     tier
   });
   const securityWhy = resolved.analyzers.some((a2) => a2.id === "security") ? securityReason(subject, paths, contractHits, triggers2, configChange) : void 0;
+  const evidenceGuards = [...new Set((config2.evidence ?? []).map((r) => r.guard.job))];
   return {
     resolved,
     review: {
@@ -33057,7 +33132,9 @@ async function resolveForItem(o2) {
       },
       ...notRunHere === void 0 || notRunHere.length === 0 ? {} : { notRunHere },
       ...target === void 0 ? {} : { ciItem },
-      ...workflowChange ? { workflowChange: true } : {}
+      ...workflowChange ? { workflowChange: true } : {},
+      ...configChange || paths === "unknown" ? { configChange: true } : {},
+      ...evidenceGuards.length === 0 ? {} : { evidenceGuards }
     }
   };
 }
@@ -33312,7 +33389,8 @@ ${clean5(p.body, 2e4)}
 ${notRunHereList(review.notRunHere, clean5)}`
         )
       },
-      ...review.ciItem === void 0 ? {} : { ciItem: review.ciItem }
+      ...review.ciItem === void 0 ? {} : { ciItem: review.ciItem },
+      ...review.evidenceGuards === void 0 ? {} : { evidenceGuards: review.evidenceGuards }
     };
     const accept = review.acceptance;
     if (accept !== void 0) {
@@ -33349,6 +33427,7 @@ ${notRunHereList(review.notRunHere, clean5)}`
       ...skipped.length === 0 ? {} : { skipped: skipped.map((x) => x.id) },
       ...review.notRunHere === void 0 ? {} : { notRunHere: review.notRunHere.map((x) => x.command) },
       ...review.workflowChange === true ? { workflowChange: true } : {},
+      ...review.configChange === true ? { configChange: true } : {},
       ...review.ciItem === true ? { ciItem: true } : {}
     };
     writeStateFile(stateRoot, capsFile(stateRoot, id), `${JSON.stringify(caps, null, 2)}
@@ -34455,10 +34534,10 @@ async function readPinnedRules(projectDir, ports) {
       `refusing to launch: cannot fetch origin main in the project checkout (${e.message})`
     );
   }
-  const g = (args) => ports.git.run(projectDir, ["--no-replace-objects", ...args]);
-  const sha = (await g(["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"])).trim();
+  const g2 = (args) => ports.git.run(projectDir, ["--no-replace-objects", ...args]);
+  const sha = (await g2(["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"])).trim();
   if (!FULL_SHA2.test(sha)) throw new Error("refusing to launch: origin/main is not a commit SHA");
-  const tree = await g(["ls-tree", sha, ...RULE_FILES]);
+  const tree = await g2(["ls-tree", sha, ...RULE_FILES]);
   const files = [];
   for (const line3 of tree.split("\n").filter((l) => l !== "")) {
     const m = /^(\d+) (\w+) ([0-9a-f]{40})\t(.+)$/.exec(line3);
@@ -34471,14 +34550,14 @@ async function readPinnedRules(projectDir, ports) {
         `refusing to launch: ${name} at origin/main is not a plain file (mode ${m[1]}, type ${m[2]})`
       );
     }
-    const size = Number((await g(["cat-file", "-s", m[3]])).trim());
+    const size = Number((await g2(["cat-file", "-s", m[3]])).trim());
     if (!Number.isInteger(size) || size < 0) {
       throw new Error(`refusing to launch: cannot read the size of ${name}`);
     }
     if (size > MAX_RULE_BYTES) {
       throw new Error(`refusing to launch: ${name} at origin/main is larger than 256 KiB`);
     }
-    let content = await g(["show", `${sha}:${name}`]);
+    let content = await g2(["show", `${sha}:${name}`]);
     const missing = size - Buffer.byteLength(content);
     if (missing === 1) content += "\n";
     else if (missing === 2) content += "\r\n";
@@ -34608,7 +34687,8 @@ ${item.finding}
       ...caps.review.base === void 0 ? {} : { base: caps.review.base },
       ...caps.review.pullRequest === void 0 ? {} : { pullRequest: caps.review.pullRequest },
       ...caps.review.notRunHere === void 0 ? {} : { notRunHere: caps.review.notRunHere },
-      ...caps.review.ciItem === void 0 ? {} : { ciItem: caps.review.ciItem }
+      ...caps.review.ciItem === void 0 ? {} : { ciItem: caps.review.ciItem },
+      ...caps.review.evidenceGuards === void 0 ? {} : { evidenceGuards: caps.review.evidenceGuards }
     }),
     "## Working rules",
     "",
@@ -35286,12 +35366,1341 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
 
 // src/push.ts
 import { randomBytes as randomBytes8 } from "node:crypto";
-import { lstatSync as lstatSync19, readFileSync as readFileSync22 } from "node:fs";
+import { lstatSync as lstatSync21, readFileSync as readFileSync24 } from "node:fs";
+import { join as join24 } from "node:path";
+
+// src/evidence.ts
+var import_yaml10 = __toESM(require_dist(), 1);
+import { createHash as createHash3 } from "node:crypto";
+import { existsSync as existsSync7, lstatSync as lstatSync19, readFileSync as readFileSync22, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join22 } from "node:path";
 
+// src/ci-jobs.ts
+var import_yaml9 = __toESM(require_dist(), 1);
+var GIT_FETCH_MS2 = 12e4;
+var GIT_LOCAL_MS2 = 6e4;
+var WORKFLOWS_DIR = ".github/workflows/";
+var WORKFLOW_FILE = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/;
+var SHA = /^[0-9a-f]{40,64}$/i;
+var MAX_JOBS = 20;
+var jobInstances = (checks, workflow, job) => {
+  const mine = [];
+  for (const c3 of checks) {
+    if (c3.workflow === void 0 || c3.workflow !== workflow) continue;
+    if (c3.name === job) {
+      mine.push(c3);
+      continue;
+    }
+    if (!c3.name.startsWith(`${job} `)) continue;
+    const rest = c3.name.slice(job.length);
+    if (rest.length > 3 && rest.startsWith(" (") && rest.endsWith(")")) mine.push(c3);
+    else return "ambiguous";
+  }
+  return mine;
+};
+var jobProblem = (checks, workflow, job) => {
+  const mine = jobInstances(checks, workflow, job);
+  if (mine === "ambiguous") return "ambiguous";
+  return mine.length > 0 && mine.every((c3) => c3.bucket === "pass") ? void 0 : "not passed";
+};
+function runsOn(on6, event) {
+  if (on6 === event) return true;
+  if (Array.isArray(on6)) return on6.includes(event);
+  return on6 !== null && typeof on6 === "object" && event in on6;
+}
+function readWorkflow(text, path10) {
+  let doc;
+  try {
+    doc = (0, import_yaml9.parse)(text);
+  } catch {
+    return void 0;
+  }
+  if (doc === null || typeof doc !== "object") return void 0;
+  const wf = doc;
+  const name = typeof wf.name === "string" && wf.name.trim() !== "" ? wf.name : path10;
+  const jobs = wf.jobs !== null && typeof wf.jobs === "object" ? Object.entries(wf.jobs) : [];
+  return {
+    name,
+    jobs,
+    onPullRequest: runsOn(wf.on, "pull_request"),
+    onWorkflowCall: runsOn(wf.on, "workflow_call"),
+    workingDirectory: workingDirectoryOf(wf.defaults)
+  };
+}
+function workingDirectoryOf(defaults) {
+  if (defaults === null || typeof defaults !== "object") return void 0;
+  const run2 = defaults.run;
+  if (run2 === null || typeof run2 !== "object") return void 0;
+  return run2["working-directory"];
+}
+function plainDir(v) {
+  if (typeof v !== "string") return void 0;
+  const d = v.trim().replace(/^\.\//, "").replace(/\/+$/, "");
+  if (d === "" || d === "." || d.startsWith("/") || /[$*?[\]{}\\\p{Cc}]/u.test(d)) return void 0;
+  if (d.split("/").some((seg) => seg === ".." || seg === "." || seg === "")) return void 0;
+  return d;
+}
+function jobArea(files, check2) {
+  if (check2.workflow === void 0) return void 0;
+  const named2 = [...files.values()].filter((w2) => w2 !== void 0 && w2.name === check2.workflow);
+  if (named2.length !== 1) return void 0;
+  const w = named2[0];
+  if (!w.onPullRequest) return void 0;
+  const leg = /^(.*) \(.+\)$/.exec(check2.name)?.[1];
+  const jobs = w.jobs.filter(
+    ([id, j]) => isJob(j) && (checkName(id, j) === check2.name || checkName(id, j) === leg)
+  );
+  if (jobs.length !== 1) return void 0;
+  const job = jobs[0][1];
+  if ("uses" in job) return void 0;
+  const area = plainDir(workingDirectoryOf(job.defaults) ?? w.workingDirectory);
+  if (area === void 0) return void 0;
+  const steps = Array.isArray(job.steps) ? job.steps : [];
+  for (const step of steps) {
+    if (step === null || typeof step !== "object") return void 0;
+    if ("working-directory" in step) return void 0;
+  }
+  return area;
+}
+async function readWorkflowsAt(git, dir, oid) {
+  const g2 = (args) => git.run(dir, ["--no-replace-objects", ...args], { timeoutMs: GIT_LOCAL_MS2 });
+  const paths = (await g2(["ls-tree", "--name-only", "-z", oid, WORKFLOWS_DIR])).split("\0").filter((p) => p !== "" && WORKFLOW_FILE.test(p));
+  const files = /* @__PURE__ */ new Map();
+  for (const p of paths) {
+    let text;
+    try {
+      text = await g2(["cat-file", "blob", `${oid}:${p}`]);
+    } catch {
+      text = void 0;
+    }
+    files.set(p, text === void 0 ? void 0 : readWorkflow(text, p));
+  }
+  return files;
+}
+var isJob = (j) => j !== null && typeof j === "object" && !Array.isArray(j);
+var checkName = (id, j) => typeof j.name === "string" ? j.name : id;
+var guarded = (j) => "continue-on-error" in j;
+var localCall = (j, path10) => j.uses === `./${path10}`;
+var remoteCall = (j, path10) => typeof j.uses === "string" && !j.uses.startsWith("./") && j.uses.includes(`/${path10}@`);
+function findJob(files, path10, job, where) {
+  const w = files.get(path10);
+  if (w === void 0) return `the workflow is not at ${where} or not valid YAML`;
+  const unique3 = (wf, own2) => [...files].every(([p, x]) => p === own2 || x !== void 0 && x.name !== wf.name);
+  const found = w.jobs.find(([id, j]) => isJob(j) && checkName(id, j) === job);
+  if (found === void 0) return `the job is not in the workflow at ${where}`;
+  const [, called] = found;
+  if (guarded(called)) return `the job has continue-on-error at ${where}`;
+  if (w.onPullRequest) {
+    if (typeof called.uses === "string") {
+      return called.uses.startsWith("./") ? `the job calls a reusable workflow: name the called workflow file and its job (at ${where})` : `the job calls a remote reusable workflow, which the gate cannot follow (at ${where})`;
+    }
+    if (!unique3(w, path10)) return `the workflow name is not unique at ${where}`;
+    return { targets: [{ workflow: w.name, job }], def: JSON.stringify([called]) };
+  }
+  if (!w.onWorkflowCall) return `the workflow does not run on pull_request at ${where}`;
+  if ("uses" in called) {
+    return `the called job calls a reusable workflow itself: one level only (at ${where})`;
+  }
+  const targets = [];
+  const callers = [];
+  let remote = false;
+  let nested = false;
+  for (const [p, x] of files) {
+    for (const [id, j] of x?.jobs ?? []) {
+      if (!isJob(j) || x === void 0) continue;
+      if (remoteCall(j, path10) && x.onPullRequest) remote = true;
+      if (!localCall(j, path10)) continue;
+      if (!x.onPullRequest) {
+        nested = true;
+        continue;
+      }
+      if (guarded(j)) return `a calling job has continue-on-error at ${where}`;
+      if (!unique3(x, p)) return `the workflow name is not unique at ${where}`;
+      targets.push({ workflow: x.name, job: `${checkName(id, j)} / ${job}` });
+      callers.push(j);
+    }
+  }
+  if (targets.length === 0) {
+    if (remote) {
+      return `a pull_request workflow calls it only as a remote reusable workflow, which the gate cannot follow (at ${where})`;
+    }
+    if (nested) {
+      return `the workflow is called only through another reusable workflow: one level only (at ${where})`;
+    }
+    return `no pull_request workflow calls the workflow at ${where}`;
+  }
+  return { targets, def: JSON.stringify([called, ...callers]) };
+}
+async function verifyNotRunHereJobs(o2) {
+  const g2 = (args, timeoutMs) => o2.git.run(o2.checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
+  const trees = /* @__PURE__ */ new Map();
+  const workflowsAt = async (oid) => {
+    if (trees.has(oid)) return trees.get(oid);
+    let files;
+    try {
+      files = await readWorkflowsAt(o2.git, o2.checkout.dir, oid);
+    } catch {
+      files = void 0;
+    }
+    trees.set(oid, files);
+    return files;
+  };
+  let fetched;
+  const jobs = [];
+  const covered = [];
+  for (const [i2, command] of o2.commands.entries()) {
+    const fail2 = (why) => ({ ok: false, entry: i2 + 1, why });
+    const named2 = o2.entries.find((e) => e.command.trim() === command.trim());
+    if (named2 === void 0) return fail2("no CI job named for it");
+    if (named2.covers === void 0 || named2.covers.trim() === "") {
+      return fail2("no covers text says why the named job covers the command");
+    }
+    const base = o2.baseOid;
+    if (base === void 0 || !SHA.test(base) || !SHA.test(o2.headOid)) {
+      return fail2("the base commit is unknown");
+    }
+    if (!WORKFLOW_FILE.test(named2.workflow)) {
+      return fail2("the workflow is no file in .github/workflows");
+    }
+    if (fetched === void 0) {
+      try {
+        await g2(
+          ["fetch", "--no-tags", "--no-write-fetch-head", o2.checkout.remote, base, o2.headOid],
+          GIT_FETCH_MS2
+        );
+        fetched = true;
+      } catch {
+        fetched = false;
+      }
+    }
+    if (!fetched) return fail2("the base commit cannot be fetched");
+    const at2 = async (oid, where) => {
+      const files = await workflowsAt(oid);
+      if (files === void 0) return `the workflows at ${where} cannot be listed`;
+      return findJob(files, named2.workflow, named2.job, where);
+    };
+    const atBase = await at2(base, "the base");
+    if (typeof atBase === "string") return fail2(atBase);
+    const atHead = await at2(o2.headOid, "the pull request head");
+    if (typeof atHead === "string") return fail2(atHead);
+    const key = (f) => JSON.stringify(f.targets);
+    if (key(atHead) !== key(atBase)) {
+      return fail2("the workflow names or callers differ at the pull request head");
+    }
+    if (!o2.ciItem && atHead.def !== atBase.def) {
+      return fail2("the job definition changed at the pull request head and the item is no CI item");
+    }
+    for (const t of atBase.targets) {
+      const problem = jobProblem(o2.checks, t.workflow, t.job);
+      if (problem === "ambiguous") {
+        return fail2("a check of the workflow has a name like the job that does not parse as it");
+      }
+      if (problem !== void 0) {
+        return fail2("the job has no passing check on the pull request (missing or skipped)");
+      }
+      if (!jobs.some((j) => j.workflow === t.workflow && j.job === t.job)) jobs.push(t);
+      covered.push({ entry: i2 + 1, ...t, covers: named2.covers });
+    }
+    if (jobs.length > MAX_JOBS) return fail2(`more than ${MAX_JOBS} CI jobs in all`);
+  }
+  return { ok: true, jobs, covered };
+}
+function approvedJobsProblem(jobs, checks) {
+  for (const [i2, j] of jobs.entries()) {
+    const problem = jobProblem(checks, j.workflow, j.job);
+    if (problem === "ambiguous") {
+      return `approved CI job ${i2 + 1} has a check whose name does not parse as the job: review it again`;
+    }
+    if (problem !== void 0) {
+      return `approved CI job ${i2 + 1} has no passing check on the pull request now: review it again`;
+    }
+  }
+  return void 0;
+}
+
+// src/queue.ts
+import {
+  closeSync as closeSync6,
+  constants as constants4,
+  existsSync as existsSync6,
+  lstatSync as lstatSync18,
+  openSync as openSync6,
+  readFileSync as readFileSync21,
+  writeSync as writeSync2
+} from "node:fs";
+import { constants as osConstants } from "node:os";
+import { dirname as dirname9, join as join21 } from "node:path";
+var QueueHeld = class extends Error {
+  constructor(line3) {
+    super(line3);
+    this.line = line3;
+    this.name = "QueueHeld";
+  }
+  line;
+};
+var CHECKS_POLL_MS = 3e4;
+var CAPACITY_WAIT_MS = 6e4;
+var QUEUE_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
+var MAX_ATTEMPTS = 3;
+var CHECKS_GRACE_MS = 5 * 60 * 1e3;
+var entrySchema = external_exports.strictObject({
+  pr: external_exports.number().int().positive(),
+  repo: external_exports.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+  item: external_exports.string().min(1).optional()
+});
+var stateSchema = external_exports.strictObject({
+  current: entrySchema.extend({
+    head: external_exports.string().optional(),
+    step: external_exports.enum(["update", "checks", "capacity", "merge"])
+  }).optional(),
+  pending: external_exports.array(entrySchema),
+  done: external_exports.array(
+    entrySchema.extend({
+      result: external_exports.enum(["merged", "failed"]),
+      reason: external_exports.string().optional(),
+      at: external_exports.string()
+    })
+  )
+});
+var queueFile = (stateRoot) => join21(stateRoot, "queue.json");
+function loadQueue(stateRoot) {
+  const file2 = queueFile(stateRoot);
+  assertStatePath(stateRoot, file2);
+  if (!existsSync6(file2)) return { pending: [], done: [] };
+  if (lstatSync18(file2).isSymbolicLink())
+    throw new Error(`refusing to read ${file2}: it is a symlink`);
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync21(file2, "utf8"));
+  } catch {
+    throw new Error(`queue file ${file2} is not valid JSON`);
+  }
+  const parsed = stateSchema.safeParse(raw);
+  if (!parsed.success) throw new Error(`queue file ${file2} is invalid: ${parsed.error.message}`);
+  return parsed.data;
+}
+function saveQueue(stateRoot, q) {
+  writeStateFile(stateRoot, queueFile(stateRoot), `${JSON.stringify(q, null, 2)}
+`);
+}
+var FILE_LOCK = "queue.json.lock";
+var RUN_LOCK = "queue.run.lock";
+var FILE_LOCK_STALE_MS = 3e4;
+var RUN_LOCK_HEARTBEAT_STALE_MS = 15 * 60 * 1e3;
+function sleepSync3(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function updateQueue(stateRoot, mutate, opts = {}) {
+  const until = Date.now() + (opts.timeoutMs ?? 5e3);
+  let lock;
+  for (; ; ) {
+    lock = acquireStateLock(stateRoot, FILE_LOCK, {
+      now: /* @__PURE__ */ new Date(),
+      heartbeatStaleMs: FILE_LOCK_STALE_MS
+    });
+    if (lock) break;
+    if (Date.now() >= until) throw new Error(`queue file is locked (${FILE_LOCK}); try again`);
+    sleepSync3(25);
+  }
+  try {
+    const q = loadQueue(stateRoot);
+    const result = mutate(q);
+    saveQueue(stateRoot, q);
+    return result;
+  } finally {
+    lock.release();
+  }
+}
+function enqueue(stateRoot, entry) {
+  return updateQueue(stateRoot, (q) => {
+    const dup = [...q.pending, ...q.current ? [q.current] : []].some(
+      (e) => e.pr === entry.pr && e.repo === entry.repo
+    );
+    if (dup) throw new Error(`${entry.repo}#${entry.pr} is already in the queue`);
+    q.pending.push(entry);
+    return q.pending.length;
+  });
+}
+function takeNextPending(stateRoot) {
+  return updateQueue(stateRoot, (q) => {
+    const next = q.pending.shift();
+    if (next) q.current = { ...next, step: "update" };
+    return next;
+  });
+}
+function acquireQueueRunLock(stateRoot, now, log) {
+  const lock = acquireStateLock(stateRoot, RUN_LOCK, {
+    now,
+    heartbeatStaleMs: RUN_LOCK_HEARTBEAT_STALE_MS
+  });
+  if (!lock) throw new HeldError(`queue already running (lock ${RUN_LOCK} in the state root)`);
+  if (lock.broke !== void 0) {
+    log(`note: broke a stale queue lock (${lock.broke}); a previous run did not finish`);
+  }
+  return lock;
+}
+var RELEASE_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"];
+function releaseOnSignal(lock, signal, exit = (code) => process.exit(code)) {
+  try {
+    lock.release();
+  } finally {
+    exit(128 + osConstants.signals[signal]);
+  }
+}
+function installSignalRelease(lock) {
+  const handlers = RELEASE_SIGNALS.map((signal) => {
+    const handler = () => releaseOnSignal(lock, signal);
+    process.on(signal, handler);
+    return [signal, handler];
+  });
+  return () => {
+    for (const [signal, handler] of handlers) process.off(signal, handler);
+  };
+}
+function appendStateLine(stateRoot, name, line3) {
+  const file2 = join21(stateRoot, name);
+  assertStatePath(stateRoot, file2);
+  let torn = false;
+  if (existsSync6(file2)) {
+    if (lstatSync18(file2).isSymbolicLink()) {
+      throw new Error(`refusing to use ${file2}: it is a symlink`);
+    }
+    const prev = readFileSync21(file2, "utf8");
+    torn = prev !== "" && !prev.endsWith("\n");
+  } else {
+    ensureStateDir(stateRoot, dirname9(file2));
+  }
+  const fd = openSync6(
+    file2,
+    constants4.O_WRONLY | constants4.O_CREAT | constants4.O_APPEND | (constants4.O_NOFOLLOW ?? 0),
+    384
+  );
+  try {
+    writeSync2(fd, `${torn ? "\n" : ""}${line3}
+`);
+  } finally {
+    closeSync6(fd);
+  }
+}
+var BUCKETS = /* @__PURE__ */ new Set(["pass", "fail", "pending", "skipping", "cancel"]);
+var SHA2 = /^[0-9a-f]{40,64}$/;
+function parseChecks(stdout) {
+  let raw;
+  try {
+    raw = JSON.parse(stdout);
+  } catch {
+    return void 0;
+  }
+  if (!Array.isArray(raw)) return void 0;
+  const out = [];
+  for (const c3 of raw) {
+    if (typeof c3 !== "object" || c3 === null) return void 0;
+    const { name, bucket, workflow } = c3;
+    if (typeof name !== "string" || typeof bucket !== "string") return void 0;
+    out.push({
+      name,
+      bucket,
+      ...typeof workflow === "string" && workflow !== "" ? { workflow } : {}
+    });
+  }
+  return out;
+}
+var checkKey = (c3) => `${c3.workflow ?? ""}\0${c3.name}`;
+async function readChecks(entry, gh, waived) {
+  const base = [
+    "pr",
+    "checks",
+    String(entry.pr),
+    "--repo",
+    entry.repo,
+    "--json",
+    "name,bucket,workflow"
+  ];
+  const all = await gh.run(base);
+  const checks = parseChecks(all.stdout);
+  if (checks === void 0) {
+    if (all.stdout.trim() === "" && /no checks reported/i.test(all.stderr)) {
+      return { kind: "none", reason: "no checks reported" };
+    }
+    return {
+      kind: "failed",
+      reason: `no checks reported (gh exit ${all.code}: ${all.stderr.trim()})`
+    };
+  }
+  const req = await gh.run([...base, "--required"]);
+  let required2 = parseChecks(req.stdout);
+  if (required2 === void 0) {
+    if (req.stdout.trim() === "" && /no required checks/i.test(req.stderr)) required2 = [];
+    else return { kind: "failed", reason: `required checks unreadable (gh exit ${req.code})` };
+  }
+  const requiredNames = new Set(required2.map((c3) => c3.name));
+  const known = new Set(checks.map((c3) => c3.name));
+  const evaluated = [...checks, ...required2.filter((c3) => !known.has(c3.name))];
+  if (evaluated.length === 0) return { kind: "none", reason: "no checks reported" };
+  for (const c3 of evaluated) {
+    if (!BUCKETS.has(c3.bucket)) {
+      return { kind: "failed", reason: `check ${c3.name} has unknown state ${c3.bucket}` };
+    }
+  }
+  const isWaived = (c3) => c3.bucket === "fail" && c3.workflow !== void 0 && waived?.has(checkKey(c3)) === true;
+  let first;
+  let plain2 = true;
+  const failed = [];
+  for (const c3 of evaluated) {
+    if (isWaived(c3)) continue;
+    if (c3.bucket === "fail" || c3.bucket === "cancel") {
+      const what = c3.bucket === "fail" ? "failed" : "was cancelled";
+      first ??= `check ${c3.name} ${what}`;
+      if (c3.bucket === "fail" && c3.workflow !== void 0) failed.push(c3);
+      else plain2 = false;
+    } else if (c3.bucket === "skipping" && requiredNames.has(c3.name)) {
+      first ??= `required check ${c3.name} was skipped`;
+      plain2 = false;
+    }
+  }
+  if (first !== void 0) {
+    return {
+      kind: "failed",
+      reason: first,
+      ...plain2 ? { failed, checks: evaluated } : {}
+    };
+  }
+  if (evaluated.some((c3) => c3.bucket === "pending")) return { kind: "pending" };
+  if (!evaluated.some((c3) => c3.bucket === "pass"))
+    return { kind: "failed", reason: "no check passed" };
+  return { kind: "pass", checks: evaluated };
+}
+var GIT_FETCH_MS3 = 12e4;
+var GIT_LOCAL_MS3 = 6e4;
+var MAX_BRANCH_UPDATES = 5;
+async function isBranchUpdate(ports, checkout, target, approved, head, depth = 1) {
+  const { gh, git } = ports;
+  try {
+    const c3 = await gh.run(["api", `repos/${target.repo}/commits/${head}`]);
+    if (c3.code !== 0) return false;
+    const commit = JSON.parse(c3.stdout);
+    const [first, second, ...rest] = commit.parents ?? [];
+    if (typeof first?.sha !== "string" || !SHA2.test(first.sha) || typeof second?.sha !== "string" || !SHA2.test(second.sha) || rest.length > 0 || commit.committer?.login !== "web-flow" || commit.commit?.verification?.verified !== true) {
+      return false;
+    }
+    const base = approved.base.split("/").map(encodeURIComponent).join("/");
+    const d = await gh.run(["api", `repos/${target.repo}/compare/${base}...${second.sha}`]);
+    if (d.code !== 0) return false;
+    const { status } = JSON.parse(d.stdout);
+    if (status !== "behind" && status !== "identical") return false;
+    const same2 = await sameTreeAsMerge(git, checkout, first.sha, second.sha, head);
+    if (same2 !== true) return same2;
+    if (first.sha.toLowerCase() === approved.head.toLowerCase()) return true;
+    if (depth >= MAX_BRANCH_UPDATES) return false;
+    return await isBranchUpdate(ports, checkout, target, approved, first.sha, depth + 1);
+  } catch {
+    return false;
+  }
+}
+async function sameTreeAsMerge(git, checkout, first, second, head) {
+  const g2 = (args, timeoutMs) => git.run(checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
+  const said = (e) => e.message.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
+  try {
+    await g2(["fetch", "--no-tags", "--no-write-fetch-head", checkout.remote, head], GIT_FETCH_MS3);
+  } catch (e) {
+    return `cannot fetch ${head} to compare its tree: ${said(e)}`;
+  }
+  let merged;
+  try {
+    merged = await g2(["merge-tree", "--write-tree", first, second], GIT_LOCAL_MS3);
+  } catch (e) {
+    if (/failed \(1\):/.test(e.message)) return false;
+    return `git merge-tree failed; git 2.38 or newer is needed (see studio doctor): ${said(e)}`;
+  }
+  try {
+    const tree = await g2(["rev-parse", "--verify", `${head}^{tree}`], GIT_LOCAL_MS3);
+    return merged.trim() !== "" && merged.trim() === tree.trim();
+  } catch (e) {
+    return `cannot read the tree of ${head}: ${said(e)}`;
+  }
+}
+async function liveBase(gh, target) {
+  try {
+    const v = await gh.run([
+      "pr",
+      "view",
+      String(target.pr),
+      "--repo",
+      target.repo,
+      "--json",
+      "baseRefName"
+    ]);
+    if (v.code !== 0) return void 0;
+    const { baseRefName } = JSON.parse(v.stdout);
+    return typeof baseRefName === "string" && baseRefName !== "" ? baseRefName : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function approvalProblem(ports, checkout, target, approval, head) {
+  const name = `${target.repo}#${target.pr}`;
+  const { head: approvedHead, base } = approval;
+  if (approvedHead === void 0 || base === void 0) {
+    return `no approval recorded for ${name}: review it first`;
+  }
+  const live = await liveBase(ports.gh, target);
+  if (live !== base) {
+    return `${name} has base ${String(live)}, the approval is for ${base}: review it again`;
+  }
+  if (approvedHead.toLowerCase() === head.toLowerCase()) return void 0;
+  const approved = { head: approvedHead, base };
+  const update = await isBranchUpdate(ports, checkout, target, approved, head);
+  if (update === true) return void 0;
+  if (typeof update === "string") return `${name}: ${update}`;
+  return `${name} is at ${head}, the approval is for ${approvedHead}: review it again`;
+}
+async function viewPr(entry, gh) {
+  const r = await gh.run([
+    "pr",
+    "view",
+    String(entry.pr),
+    "--repo",
+    entry.repo,
+    "--json",
+    "headRefOid,state,mergeable"
+  ]);
+  if (r.code !== 0) return `gh pr view failed (exit ${r.code}): ${r.stderr.trim()}`;
+  let raw;
+  try {
+    raw = JSON.parse(r.stdout);
+  } catch {
+    return "gh pr view returned unparsable output";
+  }
+  const { headRefOid, state, mergeable } = raw ?? {};
+  if (typeof headRefOid !== "string" || !SHA2.test(headRefOid)) {
+    return "gh pr view returned no valid head SHA";
+  }
+  if (state !== "OPEN" && state !== "MERGED" && state !== "CLOSED") {
+    return `gh pr view returned unknown state ${String(state)}`;
+  }
+  return {
+    head: headRefOid,
+    state,
+    mergeable: typeof mergeable === "string" ? mergeable : "UNKNOWN"
+  };
+}
+async function mergeShaOf(entry, gh) {
+  const r = await gh.run([
+    "pr",
+    "view",
+    String(entry.pr),
+    "--repo",
+    entry.repo,
+    "--json",
+    "mergeCommit"
+  ]);
+  if (r.code !== 0) return void 0;
+  try {
+    const parsed = JSON.parse(r.stdout);
+    const oid = parsed?.mergeCommit?.oid;
+    return typeof oid === "string" && SHA2.test(oid) ? oid : void 0;
+  } catch {
+    return void 0;
+  }
+}
+var HEAD_MOVED = /head branch was modified|match-head-commit|head commit|expected head/i;
+var NO_UPDATE_NEEDED = /no new commits|already up[ -]to[ -]date/i;
+async function mergeOne(entry, config2, ports, persist, opts = {}) {
+  const { gh, clock } = ports;
+  const pollMs = opts.pollMs ?? CHECKS_POLL_MS;
+  const capacityWaitMs = opts.capacityWaitMs ?? CAPACITY_WAIT_MS;
+  const deadline = clock.now().getTime() + (opts.timeoutMs ?? QUEUE_TIMEOUT_MS);
+  const failed = (reason) => ({ result: "failed", reason });
+  const timedOut = () => clock.now().getTime() >= deadline;
+  const graceMs = opts.checksGraceMs ?? CHECKS_GRACE_MS;
+  let graceUntil = Number.NEGATIVE_INFINITY;
+  const headChanged = () => {
+    graceUntil = clock.now().getTime() + graceMs;
+  };
+  const enter = (step2) => {
+    entry.step = step2;
+    persist(entry);
+  };
+  if (!config2.repos.includes(entry.repo)) {
+    return failed(`repository ${entry.repo} is not configured`);
+  }
+  if (!Number.isInteger(entry.pr) || entry.pr <= 0) return failed("invalid pull request number");
+  const merged = async () => {
+    const mergeSha = await mergeShaOf(entry, gh);
+    return mergeSha === void 0 ? { result: "merged" } : { result: "merged", mergeSha };
+  };
+  const moved = `head moved ${MAX_ATTEMPTS} times`;
+  const waived = /* @__PURE__ */ new Map();
+  const judged = async (head) => {
+    const verdict = await readChecks(entry, gh, waived.get(head));
+    if (verdict.kind !== "failed" || verdict.failed === void 0 || !opts.evidence) {
+      return verdict;
+    }
+    const ev = await opts.evidence(entry, head, verdict.failed, verdict.checks ?? []);
+    if (ev.kind === "none") return verdict;
+    if (ev.kind === "wait") return { kind: "pending" };
+    if (ev.kind === "lead") return { kind: "evidence", reason: ev.reason };
+    const all = /* @__PURE__ */ new Set([...waived.get(head) ?? [], ...ev.waived]);
+    waived.set(head, all);
+    return readChecks(entry, gh, all);
+  };
+  let attempts = 1;
+  let rechecks = 0;
+  let step = entry.step;
+  for (; ; ) {
+    if (step === "update") {
+      enter("update");
+      const r = await gh.run(["pr", "update-branch", String(entry.pr), "--repo", entry.repo]);
+      if (r.code === 0) headChanged();
+      if (r.code !== 0 && !NO_UPDATE_NEEDED.test(r.stderr)) {
+        const v = await viewPr(entry, gh);
+        if (typeof v === "string" || v.state === "OPEN") {
+          return failed(`update-branch failed (exit ${r.code}): ${r.stderr.trim()}`);
+        }
+      }
+      step = "checks";
+    } else if (step === "checks") {
+      enter("checks");
+      const before = await viewPr(entry, gh);
+      if (typeof before === "string") return failed(before);
+      if (before.state === "MERGED") return merged();
+      if (before.state === "CLOSED") return failed("pull request is closed");
+      for (; ; ) {
+        const verdict = await judged(before.head);
+        if (verdict.kind === "evidence") return failed(verdict.reason);
+        if (verdict.kind === "failed") {
+          const act = await opts.onChecksFailed?.(entry, before.head) ?? "fail";
+          if (act === "fail") return failed(verdict.reason);
+        } else {
+          if (verdict.kind === "none" && clock.now().getTime() >= graceUntil) {
+            return failed(verdict.reason);
+          }
+          if (verdict.kind === "pass") {
+            opts.onChecksPassed?.(entry, before.head);
+            break;
+          }
+        }
+        if (timedOut()) return failed("checks timed out");
+        await clock.sleep(pollMs);
+        if (timedOut()) return failed("checks timed out");
+      }
+      const after2 = await viewPr(entry, gh);
+      if (typeof after2 === "string") return failed(after2);
+      if (after2.state === "MERGED") return merged();
+      if (after2.state === "CLOSED") return failed("pull request is closed");
+      if (after2.head !== before.head) {
+        if (++attempts > MAX_ATTEMPTS) return failed(moved);
+        headChanged();
+        continue;
+      }
+      if (after2.mergeable === "CONFLICTING") return failed("pull request has merge conflicts");
+      entry.head = after2.head;
+      step = "capacity";
+    } else if (step === "capacity") {
+      enter("capacity");
+      for (; ; ) {
+        let holds = false;
+        try {
+          holds = await capacityHoldsTwice(config2, ports);
+        } catch {
+          holds = false;
+        }
+        if (holds) break;
+        if (timedOut()) return failed("capacity did not hold in time");
+        await clock.sleep(capacityWaitMs);
+      }
+      step = "merge";
+    } else {
+      enter("merge");
+      const head = entry.head;
+      const now = await viewPr(entry, gh);
+      if (typeof now === "string") return failed(now);
+      if (now.state === "MERGED") return merged();
+      if (now.state === "CLOSED") return failed("pull request is closed");
+      if (head === void 0 || now.head !== head) {
+        if (++attempts > MAX_ATTEMPTS) return failed(moved);
+        headChanged();
+        step = "checks";
+        continue;
+      }
+      const again = await readChecks(entry, gh, waived.get(head));
+      if (again.kind !== "pass") {
+        if (++rechecks > MAX_ATTEMPTS) return failed(`checks changed ${MAX_ATTEMPTS} times`);
+        step = "checks";
+        continue;
+      }
+      const refused = await opts.mergeAllowed?.(entry, head, waived.get(head));
+      if (refused !== void 0) return failed(refused);
+      const held2 = opts.hold?.();
+      if (held2 !== void 0) {
+        enter("capacity");
+        throw new QueueHeld(held2);
+      }
+      const r = await gh.run([
+        "pr",
+        "merge",
+        String(entry.pr),
+        "--repo",
+        entry.repo,
+        `--${config2.merge.method}`,
+        "--match-head-commit",
+        head
+      ]);
+      if (r.code === 0) return merged();
+      if (HEAD_MOVED.test(r.stderr)) {
+        if (++attempts > MAX_ATTEMPTS) return failed(moved);
+        headChanged();
+        step = "checks";
+        continue;
+      }
+      return failed(`merge failed (exit ${r.code}): ${r.stderr.trim()}`);
+    }
+  }
+}
+async function firstCommitAt(entry, gh) {
+  const r = await gh.run([
+    "pr",
+    "view",
+    String(entry.pr),
+    "--repo",
+    entry.repo,
+    "--json",
+    "commits",
+    "--jq",
+    ".commits[0].committedDate"
+  ]);
+  const v = r.stdout.trim();
+  return r.code === 0 && v !== "" && !Number.isNaN(Date.parse(v)) ? v : void 0;
+}
+async function runQueue(state, config2, ports, persist, opts = {}) {
+  const log = opts.log ?? ((m) => console.error(m));
+  for (; ; ) {
+    const held2 = opts.hold?.();
+    if (held2 !== void 0) {
+      log(`queue held: ${held2}`);
+      return state;
+    }
+    if (!state.current) {
+      const next = opts.takeNext ? opts.takeNext() : state.pending.shift();
+      if (!next) return state;
+      state.current = { ...next, step: "update" };
+      persist(state);
+    }
+    const current = state.current;
+    let outcome;
+    try {
+      outcome = await mergeOne(current, config2, ports, () => persist(state), opts);
+    } catch (err) {
+      if (!(err instanceof QueueHeld)) throw err;
+      log(`queue held: ${err.line}`);
+      return state;
+    }
+    const { step: _step, head: _head, ...entry } = current;
+    const done = {
+      ...entry,
+      result: outcome.result,
+      ...outcome.reason === void 0 ? {} : { reason: outcome.reason },
+      at: ports.clock.now().toISOString()
+    };
+    state.done.push(done);
+    state.current = void 0;
+    persist(state);
+    if (opts.onDone) {
+      try {
+        await opts.onDone(done);
+      } catch (err) {
+        log(`board update failed for PR ${current.pr}: ${err.message}`);
+      }
+    }
+    if (outcome.result === "merged" && opts.stateRoot !== void 0) {
+      try {
+        const first = await firstCommitAt(current, ports.gh);
+        appendStateLine(
+          opts.stateRoot,
+          "metrics.jsonl",
+          JSON.stringify({
+            type: "merged",
+            ...current.item === void 0 ? {} : { item: current.item },
+            pr: current.pr,
+            repo: current.repo,
+            at: ports.clock.now().toISOString(),
+            firstCommitAt: first ?? null
+          })
+        );
+      } catch (err) {
+        log(`metrics append failed for PR ${current.pr}: ${err.message}`);
+      }
+    }
+  }
+}
+
+// src/evidence.ts
+var EXCEPTIONS_FILE = "exceptions.jsonl";
+var EXCEPTIONS_LOCK = "exceptions.lock";
+var EXCEPTIONS_LOCK_STALE_MS = 3e4;
+var EVIDENCE_DIR = "evidence";
+var LEAD_PREFIX = "evidence: ";
+var OWNER_PREFIX = "evidence (owner): ";
+var STUDIO_CONFIG2 = ".studio/studio.yaml";
+var SHA3 = /^[0-9a-f]{40,64}$/i;
+var GIT_FETCH_MS4 = 12e4;
+var GIT_LOCAL_MS4 = 6e4;
+var GIT_CHECKOUT_MS = 3e5;
+var MAX_STDOUT = 1024 * 1024;
+var LOCK_WAIT_MS = 5e3;
+var entrySchema2 = external_exports.object({
+  v: external_exports.literal(1),
+  at: external_exports.string(),
+  /** `applied`: the exception holds for this head; `not_proven`: the command ran and proved nothing. */
+  outcome: external_exports.enum(["applied", "not_proven"]),
+  /** Who decided: the evidence itself, the lead, or the owner in a terminal. */
+  by: external_exports.enum(["evidence", "lead", "owner"]),
+  rule: external_exports.string().regex(EVIDENCE_ID_RE),
+  /** The guard job as `<workflow file> / <job>`. */
+  guard: external_exports.string(),
+  repo: external_exports.string(),
+  pr: external_exports.number().int().positive(),
+  item: external_exports.string().optional(),
+  base: external_exports.string().regex(SHA3),
+  head: external_exports.string().regex(SHA3),
+  /** sha256 of `git diff base...head`: what the evidence judged. */
+  diff: external_exports.string(),
+  run: external_exports.enum(["local", "ci"]).optional(),
+  command: external_exports.array(external_exports.string()).optional(),
+  /** sha256 of the command's stdout, or of the evidence job's checks. */
+  output: external_exports.string().optional(),
+  proof: external_exports.string().optional(),
+  /** Why the evidence proved nothing: Studio's own text. */
+  why: external_exports.string().optional(),
+  /** A grant: the lead's or the owner's one line. */
+  reason: external_exports.string().optional()
+});
+var digest = (text) => `sha256:${createHash3("sha256").update(text).digest("hex")}`;
+var short = (sha) => sha.slice(0, 12);
+var guardName = (r) => `${r.guard.workflow} / ${r.guard.job}`;
+var sameKey = (e, k) => e.rule === k.rule && e.repo === k.repo && e.pr === k.pr && e.base.toLowerCase() === k.base.toLowerCase() && e.head.toLowerCase() === k.head.toLowerCase();
+function readExceptions(stateRoot) {
+  const file2 = join22(stateRoot, EXCEPTIONS_FILE);
+  if (!existsSync7(file2)) return [];
+  if (lstatSync19(file2).isSymbolicLink()) {
+    throw new Error(`refusing to read ${file2}: it is a symlink`);
+  }
+  const out = [];
+  for (const line3 of readFileSync22(file2, "utf8").split("\n")) {
+    if (line3.trim() === "") continue;
+    try {
+      const parsed = entrySchema2.safeParse(JSON.parse(line3));
+      if (parsed.success) out.push(parsed.data);
+    } catch {
+    }
+  }
+  return out;
+}
+function sleepSync4(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function recordException(stateRoot, entry) {
+  const until = Date.now() + LOCK_WAIT_MS;
+  let lock;
+  for (; ; ) {
+    lock = acquireStateLock(stateRoot, EXCEPTIONS_LOCK, {
+      now: /* @__PURE__ */ new Date(),
+      heartbeatStaleMs: EXCEPTIONS_LOCK_STALE_MS
+    });
+    if (lock) break;
+    if (Date.now() >= until) throw new Error("the exceptions log is locked by another process");
+    sleepSync4(50);
+  }
+  try {
+    const known = readExceptions(stateRoot).filter((e) => sameKey(e, entry));
+    const applied = known.find((e) => e.outcome === "applied");
+    if (applied !== void 0) return applied;
+    if (entry.outcome === "not_proven" && known.length > 0) return known[0];
+    appendStateLine(stateRoot, EXCEPTIONS_FILE, JSON.stringify(entry));
+    return entry;
+  } finally {
+    lock.release();
+  }
+}
+var g = (ctx, args, timeoutMs = GIT_LOCAL_MS4) => ctx.git.run(ctx.checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
+async function rulesAt(ctx, oid) {
+  let text;
+  try {
+    text = await g(ctx, ["cat-file", "blob", `${oid}:${STUDIO_CONFIG2}`]);
+  } catch {
+    return [];
+  }
+  try {
+    return parseConfig(text, `${short(oid)}:${STUDIO_CONFIG2}`).evidence ?? [];
+  } catch {
+    return [];
+  }
+}
+async function rawEvidenceAt(ctx, oid) {
+  let text;
+  try {
+    text = await g(ctx, ["cat-file", "blob", `${oid}:${STUDIO_CONFIG2}`]);
+  } catch {
+    return "null";
+  }
+  let raw;
+  try {
+    raw = (0, import_yaml10.parse)(text);
+  } catch {
+    return `unparsable:${digest(text)}`;
+  }
+  const v = raw !== null && typeof raw === "object" ? raw.evidence : null;
+  return JSON.stringify(v ?? null);
+}
+async function fetchBoth(ctx, base, head) {
+  try {
+    await g(
+      ctx,
+      ["fetch", "--no-tags", "--no-write-fetch-head", ctx.checkout.remote, base, head],
+      GIT_FETCH_MS4
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function changedFiles(ctx, base, head) {
+  try {
+    const out = await g(ctx, ["diff", "--name-only", "--no-renames", "-z", `${base}...${head}`]);
+    return out.split("\0").filter((p) => p !== "");
+  } catch {
+    return void 0;
+  }
+}
+async function prepare(ctx, ref, head) {
+  const facts = await readPrFacts({ gh: ctx.gh }, ref);
+  if (facts === void 0) return { kind: "unreadable", why: "the pull request cannot be read" };
+  if (facts.head.toLowerCase() !== head.toLowerCase()) return { kind: "moved" };
+  const main = await readDefaultBranch({ gh: ctx.gh }, ref.repo);
+  if (main === void 0) return { kind: "unreadable", why: "the default branch cannot be read" };
+  if (facts.base !== main) return { kind: "none" };
+  const base = facts.baseOid;
+  if (base === void 0 || !SHA3.test(base) || !SHA3.test(head)) {
+    return { kind: "unreadable", why: "the base commit is unknown" };
+  }
+  if (!await fetchBoth(ctx, base, head)) {
+    return { kind: "unreadable", why: "the base and head cannot be fetched" };
+  }
+  const rules = await rulesAt(ctx, base);
+  if (rules.length === 0) return { kind: "none" };
+  const files = await changedFiles(ctx, base, head);
+  let diff;
+  try {
+    diff = await g(ctx, [
+      "diff",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-renames",
+      "--binary",
+      `${base}...${head}`
+    ]);
+  } catch {
+    diff = void 0;
+  }
+  if (files === void 0 || diff === void 0) {
+    return { kind: "unreadable", why: "the diff cannot be read" };
+  }
+  let baseWorkflows;
+  let headWorkflows;
+  try {
+    baseWorkflows = await readWorkflowsAt(ctx.git, ctx.checkout.dir, base);
+    headWorkflows = await readWorkflowsAt(ctx.git, ctx.checkout.dir, head);
+  } catch {
+    return { kind: "unreadable", why: "the workflows cannot be listed" };
+  }
+  return {
+    kind: "ok",
+    p: { base, head, rules, files, diff, baseWorkflows, headWorkflows }
+  };
+}
+var isCheckOf = (check2, target) => {
+  const mine = jobInstances([check2], target.workflow, target.job);
+  return mine !== "ambiguous" && mine.length === 1;
+};
+function guardChanged(p, r) {
+  const atBase = findJob(p.baseWorkflows, r.guard.workflow, r.guard.job, "the base");
+  const atHead = findJob(p.headWorkflows, r.guard.workflow, r.guard.job, "the head");
+  if (typeof atBase === "string") return atBase;
+  if (typeof atHead === "string") return "the guard job changed in this pull request";
+  if (JSON.stringify(atBase) !== JSON.stringify(atHead)) {
+    return "the guard job changed in this pull request";
+  }
+  return void 0;
+}
+var touchesInputs = (p, r) => p.files.some((f) => r.inputs.some((glob) => matchGlob(glob, f)));
+var isGithubPath2 = (f) => {
+  const lower = f.toLowerCase();
+  return lower === ".github" || lower.startsWith(".github/");
+};
+async function runLocal(ctx, p, r, ref, base) {
+  const known = readExceptions(ctx.stateRoot).find(
+    (e) => e.outcome === "not_proven" && sameKey(e, base)
+  );
+  if (known !== void 0) return { kind: "no", why: known.why ?? "it proved nothing" };
+  if (ctx.runner === void 0) return { kind: "no", why: "no command runner" };
+  const command = r.command ?? [];
+  const name = createHash3("sha256").update(`${r.id}\0${ref.repo}#${ref.pr}\0${p.base}\0${p.head}`).digest("hex").slice(0, 16);
+  const dir = join22(ctx.stateRoot, EVIDENCE_DIR, name);
+  const tree = join22(dir, "tree");
+  const home = join22(dir, "home");
+  removeStateEntry(ctx.stateRoot, dir);
+  await g(ctx, ["worktree", "prune"]).catch(() => "");
+  ensureStateDir(ctx.stateRoot, home);
+  let added = false;
+  try {
+    try {
+      await g(
+        ctx,
+        ["-c", "core.hooksPath=/dev/null", "worktree", "add", "--detach", "--force", tree, p.base],
+        GIT_CHECKOUT_MS
+      );
+      added = true;
+    } catch {
+      return { kind: "no", why: "the base cannot be checked out" };
+    }
+    const diffFile = join22(dir, "diff.patch");
+    const filesFile = join22(dir, "files.txt");
+    writeFileSync9(diffFile, p.diff === "" || p.diff.endsWith("\n") ? p.diff : `${p.diff}
+`, {
+      mode: 384
+    });
+    writeFileSync9(filesFile, p.files.map((f) => `${f}
+`).join(""), { mode: 384 });
+    const env = {
+      PATH: ctx.path ?? "/usr/local/bin:/usr/bin:/bin",
+      HOME: home,
+      TMPDIR: home,
+      LANG: "C.UTF-8",
+      LC_ALL: "C.UTF-8",
+      STUDIO_EVIDENCE_RULE: r.id,
+      STUDIO_EVIDENCE_REPO: ref.repo,
+      STUDIO_EVIDENCE_PR: String(ref.pr),
+      STUDIO_EVIDENCE_BASE: p.base,
+      STUDIO_EVIDENCE_HEAD: p.head,
+      STUDIO_EVIDENCE_DIFF: diffFile,
+      STUDIO_EVIDENCE_FILES: filesFile
+    };
+    const result = await ctx.runner.run(command, {
+      cwd: tree,
+      env,
+      timeoutMs: r.timeoutSeconds * 1e3,
+      maxBytes: MAX_STDOUT
+    });
+    const proven = !result.timedOut && result.code === 0 && result.stdout.split(/\r?\n/).some((line3) => line3 === r.proof);
+    const why = proven ? void 0 : result.timedOut ? `timed out after ${r.timeoutSeconds} s` : result.code !== 0 ? `exit code ${result.code}` : "its output lacks the proof line";
+    const entry = recordException(ctx.stateRoot, {
+      ...base,
+      outcome: proven ? "applied" : "not_proven",
+      by: "evidence",
+      run: "local",
+      command,
+      output: digest(result.stdout),
+      ...r.proof === void 0 ? {} : { proof: r.proof },
+      ...why === void 0 ? {} : { why }
+    });
+    return entry.outcome === "applied" ? { kind: "proven", entry } : { kind: "no", why: entry.why ?? "it proved nothing" };
+  } finally {
+    if (added) await g(ctx, ["worktree", "remove", "--force", tree]).catch(() => "");
+    removeStateEntry(ctx.stateRoot, dir);
+  }
+}
+function judgeCi(ctx, p, r, checks, base) {
+  const job = r.job;
+  if (p.files.some(isGithubPath2)) return { kind: "no", why: "the pull request changes .github/" };
+  const atBase = findJob(p.baseWorkflows, job.workflow, job.job, "the base");
+  const atHead = findJob(p.headWorkflows, job.workflow, job.job, "the head");
+  if (typeof atBase === "string") return { kind: "no", why: `the evidence job: ${atBase}` };
+  if (typeof atHead === "string" || JSON.stringify(atBase) !== JSON.stringify(atHead)) {
+    return { kind: "no", why: "the evidence job changed in this pull request" };
+  }
+  const mine = [];
+  for (const t of atBase.targets) {
+    const found = jobInstances(checks, t.workflow, t.job);
+    if (found === "ambiguous") {
+      return { kind: "no", why: "a check has a name like the evidence job that does not parse" };
+    }
+    mine.push(...found);
+  }
+  if (mine.length === 0) return { kind: "no", why: "the evidence job reported no check" };
+  if (mine.some((c3) => c3.bucket === "pending")) {
+    return { kind: "wait", why: `waiting for the evidence job ${job.job}` };
+  }
+  if (!mine.every((c3) => c3.bucket === "pass")) {
+    return { kind: "no", why: "the evidence job did not pass" };
+  }
+  const seen = mine.map((c3) => `${c3.workflow ?? ""} / ${c3.name}: ${c3.bucket}`).sort();
+  const entry = recordException(ctx.stateRoot, {
+    ...base,
+    outcome: "applied",
+    by: "evidence",
+    run: "ci",
+    output: digest(seen.join("\n"))
+  });
+  return { kind: "proven", entry };
+}
+function leadLine(ref, head, rules, whys) {
+  const owner = rules.some((r) => r.ownerOnly);
+  const first = rules[0];
+  const more = rules.length > 1 ? ` (and ${rules.length - 1} more rules)` : "";
+  const target = `${ref.repo}#${ref.pr}`;
+  const grant = `studio exceptions grant ${target} ${first.id} --reason "<one line>"`;
+  return `${owner ? OWNER_PREFIX : LEAD_PREFIX}${first.guard.job} failed on ${target} at ${short(head)} and no evidence proved a false alarm (${first.id}: ${whys[0] ?? "it proved nothing"}${more}); ${owner ? `the owner decides, in a terminal: ${grant}, or a fix through a crew` : `decide: ${grant}, or a fix through a crew`}`;
+}
+async function judgeFailedChecks(ctx, ref, head, failed, checks) {
+  if (failed.length === 0) return { kind: "none" };
+  const prep = await prepare(ctx, ref, head);
+  if (prep.kind === "none") return { kind: "none" };
+  if (prep.kind === "moved") return { kind: "wait", reason: "the head moved; judged again" };
+  if (prep.kind === "unreadable") {
+    return {
+      kind: "lead",
+      reason: `${LEAD_PREFIX}cannot judge the failed checks of ${ref.repo}#${ref.pr}: ${prep.why}`,
+      owner: false
+    };
+  }
+  const p = prep.p;
+  const groups = /* @__PURE__ */ new Map();
+  for (const c3 of failed) {
+    const rules = p.rules.filter((r) => {
+      const at2 = findJob(p.baseWorkflows, r.guard.workflow, r.guard.job, "the base");
+      return typeof at2 !== "string" && at2.targets.some((t) => isCheckOf(c3, t));
+    });
+    if (rules.length === 0) return { kind: "none" };
+    const key = guardName(rules[0]);
+    const group = groups.get(key) ?? { rules, checks: [] };
+    group.checks.push(c3);
+    groups.set(key, group);
+  }
+  const log = readExceptions(ctx.stateRoot);
+  const waived = /* @__PURE__ */ new Set();
+  const applied = [];
+  let wait;
+  for (const group of groups.values()) {
+    const keyOf = (r) => ({
+      rule: r.id,
+      repo: ref.repo,
+      pr: ref.pr,
+      base: p.base,
+      head: p.head
+    });
+    const logged = log.find(
+      (e) => e.outcome === "applied" && group.rules.some((r) => sameKey(e, keyOf(r)))
+    );
+    let proof = logged;
+    const whys = [];
+    let waiting;
+    for (const r of proof === void 0 ? group.rules : []) {
+      const changed = guardChanged(p, r);
+      if (changed !== void 0) {
+        whys.push(changed);
+        continue;
+      }
+      if (touchesInputs(p, r)) {
+        whys.push("the pull request changes an input of the evidence");
+        continue;
+      }
+      const base = {
+        v: 1,
+        at: ctx.now().toISOString(),
+        ...keyOf(r),
+        ...ref.item === void 0 ? {} : { item: ref.item },
+        guard: guardName(r),
+        diff: digest(p.diff)
+      };
+      const attempt = r.run === "ci" ? judgeCi(ctx, p, r, checks, base) : await runLocal(ctx, p, r, ref, base);
+      if (attempt.kind === "proven") {
+        proof = attempt.entry;
+        break;
+      }
+      if (attempt.kind === "wait") waiting ??= attempt.why;
+      else whys.push(attempt.why);
+    }
+    if (proof !== void 0) {
+      applied.push(proof);
+      for (const c3 of group.checks) waived.add(checkKey(c3));
+      continue;
+    }
+    if (waiting !== void 0) {
+      wait ??= waiting;
+      continue;
+    }
+    return {
+      kind: "lead",
+      reason: leadLine(ref, p.head, group.rules, whys),
+      owner: group.rules.some((r) => r.ownerOnly)
+    };
+  }
+  if (wait !== void 0) return { kind: "wait", reason: wait };
+  return { kind: "waived", waived, applied };
+}
+async function evidenceChange(ctx, baseOid, head) {
+  if (baseOid === void 0 || !SHA3.test(baseOid) || !SHA3.test(head)) return { unreadable: true };
+  if (!await fetchBoth(ctx, baseOid, head)) return { unreadable: true };
+  const files = await changedFiles(ctx, baseOid, head);
+  if (files === void 0) return { unreadable: true };
+  if (files.some((f) => f.toLowerCase() === STUDIO_CONFIG2)) {
+    const [atBase, atHead] = [await rawEvidenceAt(ctx, baseOid), await rawEvidenceAt(ctx, head)];
+    if (atBase !== atHead) return { problem: "the pull request changes evidence: in studio.yaml" };
+  }
+  const rules = await rulesAt(ctx, baseOid);
+  const touched = rules.filter((r) => files.some((f) => r.inputs.some((x) => matchGlob(x, f))));
+  if (touched.length > 0) {
+    return {
+      problem: `the pull request changes an input of evidence rule ${touched.map((r) => r.id).join(", ")}`
+    };
+  }
+  return {};
+}
+async function grantException(ctx, ref, ruleId, by, reason) {
+  const facts = await readPrFacts({ gh: ctx.gh }, ref);
+  if (facts === void 0) throw new Error(`cannot read ${ref.repo}#${ref.pr}`);
+  const prep = await prepare(ctx, ref, facts.head);
+  if (prep.kind === "unreadable") throw new Error(`${ref.repo}#${ref.pr}: ${prep.why}`);
+  if (prep.kind === "moved") throw new Error(`${ref.repo}#${ref.pr} moved meanwhile; try again`);
+  if (prep.kind === "none") {
+    throw new Error(
+      `${ref.repo}#${ref.pr}: no evidence rules in studio.yaml at its base on the default branch`
+    );
+  }
+  const rule = prep.p.rules.find((r) => r.id === ruleId);
+  if (rule === void 0) {
+    throw new Error(
+      `no evidence rule ${ruleId} in studio.yaml at the base of ${ref.repo}#${ref.pr}`
+    );
+  }
+  if (rule.ownerOnly && by !== "owner") {
+    throw new Error(`evidence rule ${ruleId} is owner_only: the owner grants it, in a terminal`);
+  }
+  const line3 = reason.replace(/[\p{Cc}\p{Cf}]/gu, " ").trim().slice(0, 200);
+  if (line3 === "") throw new Error('a grant needs --reason "<one line>"');
+  const want = {
+    v: 1,
+    at: ctx.now().toISOString(),
+    outcome: "applied",
+    by,
+    rule: rule.id,
+    guard: guardName(rule),
+    repo: ref.repo,
+    pr: ref.pr,
+    ...ref.item === void 0 ? {} : { item: ref.item },
+    base: prep.p.base,
+    head: prep.p.head,
+    diff: digest(prep.p.diff),
+    reason: line3
+  };
+  const entry = recordException(ctx.stateRoot, want);
+  return { entry, existing: entry !== want };
+}
+var leadOnly = (reason) => /^(?:blocked: |merge failed: )?evidence: /.test(reason);
+
 // src/pane-data.ts
-import { lstatSync as lstatSync18, readFileSync as readFileSync21 } from "node:fs";
-import { join as join21 } from "node:path";
+import { lstatSync as lstatSync20, readFileSync as readFileSync23 } from "node:fs";
+import { join as join23 } from "node:path";
 var PR_HELD = "pr held: ";
 var TICK_FILE = "tick.json";
 var MAX_LINE = 200;
@@ -35396,10 +36805,10 @@ function paneItems(board, queue, ci, extra = {}) {
 function classify(item, reason) {
   const r = reason.trim();
   const detail = line(r);
-  const of = (code, short, say) => ({
+  const of = (code, short2, say) => ({
     item,
     code,
-    reason: short,
+    reason: short2,
     detail,
     next: { say }
   });
@@ -35413,6 +36822,14 @@ function classify(item, reason) {
       "changes_requested",
       by === void 0 ? "changes requested" : `changes requested by ${by}`,
       `start the fix round for ${item}`
+    );
+  }
+  const evidence = /^(?:blocked: |merge failed: )?evidence( \(owner\))?: /.exec(r);
+  if (evidence !== null) {
+    return of(
+      "evidence",
+      evidence[1] === void 0 ? "guard hit without evidence" : "guard hit: the owner decides",
+      `show ${item}`
     );
   }
   if (r.startsWith("merge failed")) {
@@ -35443,12 +36860,12 @@ var rows = (v) => Array.isArray(v) ? v.flatMap(
   (r) => r !== null && typeof r === "object" && typeof r.item === "string" && typeof r.reason === "string" ? [{ item: r.item, reason: r.reason }] : []
 ) : [];
 function readTickRecord(root) {
-  const file2 = join21(root, TICK_FILE);
+  const file2 = join23(root, TICK_FILE);
   try {
     assertStatePath(root, file2);
-    const st = lstatSync18(file2, { throwIfNoEntry: false });
+    const st = lstatSync20(file2, { throwIfNoEntry: false });
     if (st === void 0 || !st.isFile()) return void 0;
-    const raw = JSON.parse(readFileSync21(file2, "utf8"));
+    const raw = JSON.parse(readFileSync23(file2, "utf8"));
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return void 0;
     const o2 = raw;
     if (typeof o2.at !== "string") return void 0;
@@ -35458,7 +36875,7 @@ function readTickRecord(root) {
   }
 }
 function writeTickRecord(root, rec) {
-  writeStateFile(root, join21(root, TICK_FILE), `${JSON.stringify(rec, null, 2)}
+  writeStateFile(root, join23(root, TICK_FILE), `${JSON.stringify(rec, null, 2)}
 `);
 }
 function resolveZone(timezone) {
@@ -35528,6 +36945,7 @@ var safeId = (s) => ITEM_RE.test(s) ? s : "?";
 function decisionsOf(o2) {
   const out = [];
   for (const n2 of o2.needsLead) {
+    if (leadOnly(n2.reason)) continue;
     const item = safeId(n2.item);
     const kind = n2.reason.startsWith("release approval") ? "release_approval" : classifyDecision(n2.reason);
     const since = o2.board?.items.find((i2) => i2.id === n2.item)?.history.at(-1)?.at ?? "";
@@ -35535,7 +36953,7 @@ function decisionsOf(o2) {
     if (out.some((d) => d.key === key)) continue;
     out.push({ key, item, kind, urgent: false });
   }
-  const read3 = readBlocksFile(join22(o2.ownerRoot, "blocks.json"));
+  const read3 = readBlocksFile(join24(o2.ownerRoot, "blocks.json"));
   if (!read3.ok) {
     out.push({ key: "block::unreadable", item: "?", kind: "account_block", urgent: true });
   } else {
@@ -35553,6 +36971,7 @@ var PHRASES = {
     changes_requested: "Changes requested",
     merge_failed: "Merge failed",
     question: "Crew has a question",
+    evidence: "Guard hit, the owner decides",
     blocked: "Blocked",
     account_block: "Account blocked",
     release_approval: "Release approval needed",
@@ -35563,6 +36982,7 @@ var PHRASES = {
     changes_requested: "\xC4nderungen angefordert",
     merge_failed: "Merge fehlgeschlagen",
     question: "Crew hat eine Frage",
+    evidence: "Pr\xFCfungstreffer, der Inhaber entscheidet",
     blocked: "Blockiert",
     account_block: "Konto gesperrt",
     release_approval: "Release-Freigabe n\xF6tig",
@@ -35608,12 +37028,12 @@ function inQuietHours(quiet, now, zone) {
 }
 function readPushed(file2) {
   try {
-    if (!lstatSync19(file2).isFile()) return void 0;
+    if (!lstatSync21(file2).isFile()) return void 0;
   } catch (e) {
     return e.code === "ENOENT" ? { sent: /* @__PURE__ */ Object.create(null), last: /* @__PURE__ */ Object.create(null) } : void 0;
   }
   try {
-    const raw = JSON.parse(readFileSync22(file2, "utf8"));
+    const raw = JSON.parse(readFileSync24(file2, "utf8"));
     const isMap4 = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((x) => typeof x === "string");
     if (!isMap4(raw?.sent) || !isMap4(raw?.last)) return void 0;
     return {
@@ -35648,7 +37068,7 @@ async function pushLocked(o2) {
   });
   if (!lock) return { sent: 0, deferred: "locked", errors: [] };
   try {
-    const file2 = join22(o2.ownerRoot, PUSHED_FILE);
+    const file2 = join24(o2.ownerRoot, PUSHED_FILE);
     const state = readPushed(file2);
     if (state === void 0) {
       return { sent: 0, errors: [`notify: ${PUSHED_FILE} is unreadable; nothing sent`] };
@@ -35703,10 +37123,10 @@ async function pushLocked(o2) {
 
 // src/secret-command.ts
 function readPrimaryRepo(project) {
-  const file2 = join23(project, ".studio", "studio.yaml");
+  const file2 = join25(project, ".studio", "studio.yaml");
   let raw;
   try {
-    raw = (0, import_yaml9.parse)(readFileSync23(file2, "utf8"));
+    raw = (0, import_yaml11.parse)(readFileSync25(file2, "utf8"));
   } catch {
     throw new Error("cannot read .studio/studio.yaml");
   }
@@ -35754,7 +37174,7 @@ async function runSecretSet(o2) {
 }
 var API_KEY_VARS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
 async function crewConfigDir(command, owner, env, ports) {
-  const fallback = env.CLAUDE_CONFIG_DIR || join23(owner.homedir ?? homedir6(), ".claude");
+  const fallback = env.CLAUDE_CONFIG_DIR || join25(owner.homedir ?? homedir6(), ".claude");
   if (command === void 0) return fallback;
   try {
     const got = await runCredentialProvider(
@@ -35808,7 +37228,7 @@ function toolsOutside(env, home, toolchain) {
   const out = [];
   for (const tool of CREW_TOOLS) {
     for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
-      const file2 = join23(dir, tool);
+      const file2 = join25(dir, tool);
       try {
         if (!statSync4(file2).isFile()) continue;
       } catch {
@@ -35978,9 +37398,9 @@ async function runDoctor(o2) {
 }
 
 // src/stack.ts
-var import_yaml10 = __toESM(require_dist(), 1);
-import { lstatSync as lstatSync20, readdirSync as readdirSync9, readFileSync as readFileSync24 } from "node:fs";
-import { join as join24 } from "node:path";
+var import_yaml12 = __toESM(require_dist(), 1);
+import { lstatSync as lstatSync22, readdirSync as readdirSync9, readFileSync as readFileSync26 } from "node:fs";
+import { join as join26 } from "node:path";
 var MAX_FILE_BYTES2 = 1024 * 1024;
 var MAX_ENTRIES = 200;
 var MONOREPO_DIRS = ["apps", "packages", "services", "crates", "libs"];
@@ -36002,20 +37422,20 @@ var DEP_STACKS = {
 };
 function isRealDir(path10) {
   try {
-    return lstatSync20(path10).isDirectory();
+    return lstatSync22(path10).isDirectory();
   } catch {
     return false;
   }
 }
 function readSmall(path10, notes, name) {
   try {
-    const st = lstatSync20(path10);
+    const st = lstatSync22(path10);
     if (!st.isFile()) return void 0;
     if (st.size > MAX_FILE_BYTES2) {
       notes.push(`${name}: larger than 1 MiB, not read`);
       return void 0;
     }
-    return readFileSync24(path10, "utf8");
+    return readFileSync26(path10, "utf8");
   } catch {
     notes.push(`${name}: cannot be read`);
     return void 0;
@@ -36023,7 +37443,7 @@ function readSmall(path10, notes, name) {
 }
 var isFileEntry = (dir, name) => {
   try {
-    return lstatSync20(join24(dir, name)).isFile();
+    return lstatSync22(join26(dir, name)).isFile();
   } catch {
     return false;
   }
@@ -36057,7 +37477,7 @@ function scanDir(dir, label, found, notes) {
     return;
   }
   const file2 = (n2) => isFileEntry(dir, n2);
-  const read3 = (n2) => readSmall(join24(dir, n2), notes, label ? `${label}/${n2}` : n2);
+  const read3 = (n2) => readSmall(join26(dir, n2), notes, label ? `${label}/${n2}` : n2);
   const some = (re) => names.some((n2) => re.test(n2) && file2(n2));
   const pkg = names.includes("package.json") && file2("package.json") ? read3("package.json") : void 0;
   if (pkg !== void 0) {
@@ -36067,7 +37487,7 @@ function scanDir(dir, label, found, notes) {
   }
   if (some(/^next\.config\./)) found.add("nextjs");
   if (some(/^components\.json$/)) found.add("shadcn");
-  if (isRealDir(join24(dir, "migrations"))) found.add("postgres");
+  if (isRealDir(join26(dir, "migrations"))) found.add("postgres");
   if (some(/^(Podfile|Package\.swift)$/) || names.some((n2) => n2.endsWith(".xcodeproj"))) {
     found.add("ios");
   }
@@ -36075,7 +37495,7 @@ function scanDir(dir, label, found, notes) {
     if (/WinUI|WindowsAppSDK/i.test(read3(n2) ?? "")) found.add("winui");
   }
   if (some(/^Cargo\.toml$/)) found.add("rust");
-  if (isRealDir(join24(dir, "src-tauri"))) {
+  if (isRealDir(join26(dir, "src-tauri"))) {
     found.add("tauri");
     found.add("rust");
   }
@@ -36084,7 +37504,7 @@ function scanDir(dir, label, found, notes) {
   if (some(/^svelte\.config\./)) found.add("svelte");
   if (some(/^(astro\.config\..*|vite\.config\..*|index\.html)$/)) found.add("web");
   if (some(/^Dockerfile/) || some(/^(docker-)?compose.*\.ya?ml$/)) found.add("docker");
-  if (some(/^wp-config\.php$/) || isRealDir(join24(dir, "wp-content"))) found.add("wordpress");
+  if (some(/^wp-config\.php$/) || isRealDir(join26(dir, "wp-content"))) found.add("wordpress");
   if (some(/^style\.css$/) && /Theme Name:/.test(read3("style.css") ?? "")) found.add("wordpress");
   for (const n2 of names.filter((x) => x.endsWith(".php") && file2(x))) {
     if (/Plugin Name:/.test(read3(n2) ?? "")) found.add("wordpress");
@@ -36094,29 +37514,29 @@ function detectStacks(dir) {
   const found = /* @__PURE__ */ new Set();
   const notes = [];
   scanDir(dir, "", found, notes);
-  if (isRealDir(join24(dir, ".github", "workflows"))) found.add("gha");
+  if (isRealDir(join26(dir, ".github", "workflows"))) found.add("gha");
   for (const group of MONOREPO_DIRS) {
-    const base = join24(dir, group);
+    const base = join26(dir, group);
     if (!isRealDir(base)) continue;
     for (const name of readdirSync9(base).slice(0, MAX_ENTRIES)) {
       if (name.startsWith(".") || name === "node_modules") continue;
-      if (isRealDir(join24(base, name))) scanDir(join24(base, name), `${group}/${name}`, found, notes);
+      if (isRealDir(join26(base, name))) scanDir(join26(base, name), `${group}/${name}`, found, notes);
     }
   }
   if (OTHER_WEB.some((s) => found.has(s))) found.delete("web");
   return { stacks: [...found].sort(), notes };
 }
 function runSetupStack(o2) {
-  const file2 = join24(o2.project, ".studio", "studio.yaml");
+  const file2 = join26(o2.project, ".studio", "studio.yaml");
   let text;
   try {
-    text = readFileSync24(file2, "utf8");
+    text = readFileSync26(file2, "utf8");
   } catch (e) {
     throw new Error(
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
     );
   }
-  const doc = (0, import_yaml10.parseDocument)(text);
+  const doc = (0, import_yaml12.parseDocument)(text);
   if (doc.errors.length > 0) throw new Error(".studio/studio.yaml is not valid YAML");
   const { stacks, notes } = detectStacks(o2.project);
   let stored = [];
@@ -36179,21 +37599,21 @@ var PLUGIN_INSTALL = [
 var SUPERPOWERS_INSTALL = "/plugin marketplace add obra/superpowers-marketplace, then /plugin install superpowers@superpowers-marketplace";
 var isRealDir2 = (path10) => {
   try {
-    return lstatSync21(path10).isDirectory();
+    return lstatSync23(path10).isDirectory();
   } catch {
     return false;
   }
 };
 var isRealFile = (path10) => {
   try {
-    return lstatSync21(path10).isFile();
+    return lstatSync23(path10).isFile();
   } catch {
     return false;
   }
 };
 var exists3 = (path10) => {
   try {
-    lstatSync21(path10);
+    lstatSync23(path10);
     return true;
   } catch {
     return false;
@@ -36222,11 +37642,11 @@ function componentId2(name, root, taken) {
 }
 function proposeComponents(project, repo) {
   const components = [];
-  const manifests = new Set(MANIFESTS.filter((m) => isRealFile(join25(project, m))));
+  const manifests = new Set(MANIFESTS.filter((m) => isRealFile(join27(project, m))));
   const notes = [];
   const taken = /* @__PURE__ */ new Set();
   for (const root of MONOREPO_DIRS) {
-    const base = join25(project, root);
+    const base = join27(project, root);
     if (!isRealDir2(base)) continue;
     let names;
     try {
@@ -36236,8 +37656,8 @@ function proposeComponents(project, repo) {
       continue;
     }
     for (const name of names) {
-      if (name.startsWith(".") || name === "node_modules" || !isRealDir2(join25(base, name))) continue;
-      const found = MANIFESTS.filter((m) => isRealFile(join25(base, name, m)));
+      if (name.startsWith(".") || name === "node_modules" || !isRealDir2(join27(base, name))) continue;
+      const found = MANIFESTS.filter((m) => isRealFile(join27(base, name, m)));
       if (found.length === 0) continue;
       if (!PLAIN_NAME.test(name)) {
         notes.push(`${root}/${safe(name)}: name needs quoting in a glob, add it by hand`);
@@ -36252,7 +37672,7 @@ function proposeComponents(project, repo) {
       });
     }
   }
-  const tooling = TOOLING_DIRS.filter((d) => isRealDir2(join25(project, d)));
+  const tooling = TOOLING_DIRS.filter((d) => isRealDir2(join27(project, d)));
   if (components.length > 0 && tooling.length > 0) {
     components.push({
       id: componentId2("tooling", "tooling", taken),
@@ -36262,8 +37682,8 @@ function proposeComponents(project, repo) {
     });
   }
   for (const c3 of components) {
-    for (const g of c3.paths) {
-      const problem = globProblem(g);
+    for (const g2 of c3.paths) {
+      const problem = globProblem(g2);
       if (problem !== void 0) throw new Error(`component ${c3.id}: ${problem}`);
     }
   }
@@ -36439,7 +37859,7 @@ function nextSteps(prefix, written, checks, launcher2) {
   ];
 }
 function writeBoth(o2, dir, files) {
-  const write = o2.writeFile ?? ((path10, text) => writeFileSync9(path10, text, { flag: "wx" }));
+  const write = o2.writeFile ?? ((path10, text) => writeFileSync10(path10, text, { flag: "wx" }));
   const madeDir = !exists3(dir);
   if (madeDir) mkdirSync6(dir);
   if (!isRealDir2(dir)) throw new Error(".studio is not a directory: nothing written");
@@ -36456,13 +37876,13 @@ function writeBoth(o2, dir, files) {
   }
 }
 async function runInit(o2) {
-  const dotStudio = join25(o2.project, ".studio");
+  const dotStudio = join27(o2.project, ".studio");
   if (exists3(dotStudio) && !isRealDir2(dotStudio)) {
     throw new Error(
       ".studio is not a directory (a link or a file): nothing written; remove it first"
     );
   }
-  const present2 = STUDIO_FILES.filter((f) => exists3(join25(o2.project, f)));
+  const present2 = STUDIO_FILES.filter((f) => exists3(join27(o2.project, f)));
   if (present2.length > 0) {
     throw new Error(
       `${present2.join(" and ")} already exists: Studio is set up here, nothing written; edit the file by hand, or use studio setup ci, studio setup stack and studio doctor`
@@ -36547,7 +37967,7 @@ async function runInit(o2) {
     review_bases: [],
     ...found.components.length === 0 ? {} : { components: snakeKeys(found.components) }
   };
-  let body = (0, import_yaml11.stringify)(config2, { lineWidth: 0 });
+  let body = (0, import_yaml13.stringify)(config2, { lineWidth: 0 });
   if (ciUnread) body = body.replace(/^ci:/m, `${CI_UNREAD_COMMENT}
 ci:`);
   const configText = `# Studio project settings, written by studio init. See the Studio README for every key.
@@ -36555,7 +37975,7 @@ ${body}`;
   const boardText = BOARD_TEXT(prefix, repo);
   if (primary !== void 0) {
     try {
-      const file2 = join25(dotStudio, "studio.yaml");
+      const file2 = join27(dotStudio, "studio.yaml");
       parseBoard(boardText, boardPath(o2.project), parseConfig(configText, file2));
       checks.push({ name: "proposal", status: "pass", detail: "both files load" });
     } catch (e) {
@@ -36575,7 +37995,7 @@ ${body}`;
       refused = `nothing written: fix ${failed.map((c3) => c3.name).join(", ") || "the checks"} first`;
     } else {
       writeBoth(o2, dotStudio, [
-        [join25(dotStudio, "studio.yaml"), configText],
+        [join27(dotStudio, "studio.yaml"), configText],
         [boardPath(o2.project), boardText]
       ]);
       written.push(...STUDIO_FILES);
@@ -36628,21 +38048,21 @@ ${body}`;
 }
 
 // src/lessons-review.ts
-import { lstatSync as lstatSync22, readFileSync as readFileSync25 } from "node:fs";
-import { join as join26 } from "node:path";
+import { lstatSync as lstatSync24, readFileSync as readFileSync27 } from "node:fs";
+import { join as join28 } from "node:path";
 var LESSONS_REVIEW_DAYS = 7;
 var DAY_MS3 = 864e5;
 var LESSONS_NOTE = "lessons-review: ";
 var NUMBERS_NOTE = "lessons: ";
 var LEAD_WORK = "lead work: studio lessons, then accept or drop each proposal";
 var BY = "studio";
-var recordFile = (stateRoot) => join26(stateRoot, "lessons-review.json");
+var recordFile = (stateRoot) => join28(stateRoot, "lessons-review.json");
 function lastRun(stateRoot) {
   const file2 = recordFile(stateRoot);
   try {
     assertStatePath(stateRoot, file2);
-    if (!lstatSync22(file2).isFile()) return void 0;
-    const raw = JSON.parse(readFileSync25(file2, "utf8"));
+    if (!lstatSync24(file2).isFile()) return void 0;
+    const raw = JSON.parse(readFileSync27(file2, "utf8"));
     return typeof raw.lastRun === "string" && !Number.isNaN(Date.parse(raw.lastRun)) ? raw.lastRun : void 0;
   } catch {
     return void 0;
@@ -36938,9 +38358,9 @@ async function addItem(o2) {
   for (const line3 of o2.dod) {
     if (!ONE_LINE.test(line3.trim())) throw new Error("each --dod must be one line");
   }
-  for (const g of o2.paths) {
-    const problem = globProblem(g) ?? (g.startsWith("/") || /^[A-Za-z]:/.test(g) ? "must be relative to the repository" : void 0) ?? (g.split(/[\\/]/).includes("..") ? "must not hold a .. segment" : void 0);
-    if (problem !== void 0) throw new Error(`--path ${JSON.stringify(g)}: ${problem}`);
+  for (const g2 of o2.paths) {
+    const problem = globProblem(g2) ?? (g2.startsWith("/") || /^[A-Za-z]:/.test(g2) ? "must be relative to the repository" : void 0) ?? (g2.split(/[\\/]/).includes("..") ? "must not hold a .. segment" : void 0);
+    if (problem !== void 0) throw new Error(`--path ${JSON.stringify(g2)}: ${problem}`);
   }
   if (o2.plan !== void 0 && !ONE_LINE.test(o2.plan)) throw new Error("--plan must be one line");
   return await o2.locked(() => {
@@ -37006,7 +38426,7 @@ async function addItem(o2) {
       );
       if (o2.component === void 0) warnings.push("no --path: the item belongs to no component");
     }
-    const notes = item.paths.some((g) => g === ".github" || g.startsWith(".github/")) ? ["a path below .github/: this is a CI item, its review may approve workflow changes"] : [];
+    const notes = item.paths.some((g2) => g2 === ".github" || g2.startsWith(".github/")) ? ["a path below .github/: this is a CI item, its review may approve workflow changes"] : [];
     return {
       item: id,
       type,
@@ -37022,15 +38442,15 @@ async function addItem(o2) {
 
 // src/roadmap.ts
 import {
-  existsSync as existsSync6,
-  lstatSync as lstatSync23,
-  readFileSync as readFileSync26,
+  existsSync as existsSync8,
+  lstatSync as lstatSync25,
+  readFileSync as readFileSync28,
   realpathSync as realpathSync6,
   renameSync as renameSync10,
   rmSync as rmSync6,
-  writeFileSync as writeFileSync10
+  writeFileSync as writeFileSync11
 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute5, join as join27, relative as relative2, resolve as resolve5, sep as sep6 } from "node:path";
+import { dirname as dirname10, isAbsolute as isAbsolute5, join as join29, relative as relative2, resolve as resolve5, sep as sep6 } from "node:path";
 
 // src/epics.ts
 var ONE_LINE2 = /^[^\p{Cc}\p{Cf}]{1,300}$/u;
@@ -37247,17 +38667,17 @@ function projectFile(project, file2) {
   }
   const root = realpathSync6(project);
   const wanted = resolve5(root, file2);
-  let dir = dirname9(wanted);
-  while (!existsSync6(dir)) dir = dirname9(dir);
+  let dir = dirname10(wanted);
+  while (!existsSync8(dir)) dir = dirname10(dir);
   const realDir = realpathSync6(dir);
-  const full = join27(realDir, relative2(dir, wanted));
+  const full = join29(realDir, relative2(dir, wanted));
   const rel = relative2(root, full);
   if (rel === "" || rel === ".." || rel.startsWith(`..${sep6}`) || isAbsolute5(rel)) {
     throw new Error(`${JSON.stringify(file2)}: must stay inside the project`);
   }
   let link2 = false;
   try {
-    link2 = lstatSync23(full).isSymbolicLink();
+    link2 = lstatSync25(full).isSymbolicLink();
   } catch (e) {
     if (e.code !== "ENOENT") throw e;
   }
@@ -37275,7 +38695,7 @@ function writeRoadmap(project, out, text, force) {
   }
   let old;
   try {
-    old = readFileSync26(file2, "utf8");
+    old = readFileSync28(file2, "utf8");
   } catch (e) {
     if (e.code !== "ENOENT") throw e;
   }
@@ -37285,9 +38705,9 @@ function writeRoadmap(project, out, text, force) {
     );
   }
   if (old === text) return { written: out, changed: false };
-  const tmp = join27(dirname9(file2), `.${process.pid}.${Date.now()}.roadmap.tmp`);
+  const tmp = join29(dirname10(file2), `.${process.pid}.${Date.now()}.roadmap.tmp`);
   try {
-    writeFileSync10(tmp, text, { flag: "wx" });
+    writeFileSync11(tmp, text, { flag: "wx" });
     renameSync10(tmp, file2);
   } catch (err) {
     rmSync6(tmp, { force: true });
@@ -37300,10 +38720,10 @@ var IMPORT_MAX_LINE = 2e3;
 var IMPORT_MAX_PHASES = 500;
 function readImportFile(project, file2) {
   const { full, rel } = projectFile(project, file2);
-  const st = lstatSync23(full);
+  const st = lstatSync25(full);
   if (!st.isFile()) throw new Error(`${JSON.stringify(file2)}: not a regular file`);
   if (st.size > IMPORT_MAX_BYTES) throw new Error(`${JSON.stringify(file2)}: larger than 1 MB`);
-  return { source: rel, text: readFileSync26(full, "utf8") };
+  return { source: rel, text: readFileSync28(full, "utf8") };
 }
 var CHECKBOX_START = /^[ \t]{0,40}[-*+][ \t]{1,8}\[[ xX~]\]/;
 var CHECKBOX = /^[ \t]{0,40}[-*+][ \t]{1,8}\[([ xX~])\][ \t]+(.*)$/;
@@ -37460,7 +38880,7 @@ var pinnedMain = (item) => {
 var piecesOf = (board, epicId) => board.items.filter((i2) => i2.epic === epicId && acceptanceOf(i2) === void 0);
 function epicState(board, epicId) {
   const ids = piecesOf(board, epicId).map((i2) => `${i2.id}:${i2.status}`).sort();
-  return createHash3("sha256").update(ids.join("\n")).digest("hex").slice(0, 12);
+  return createHash4("sha256").update(ids.join("\n")).digest("hex").slice(0, 12);
 }
 var acceptancesOf = (board, epicId) => board.items.filter((i2) => acceptanceOf(i2) === epicId);
 function acceptanceRepo(board, epicId, config2) {
@@ -37685,19 +39105,19 @@ var runsSchema = external_exports.record(
   })
 );
 function readRuns(stateRoot) {
-  const file2 = join28(stateRoot, RUNS_FILE);
+  const file2 = join30(stateRoot, RUNS_FILE);
   try {
     assertStatePath(stateRoot, file2);
-    const st = lstatSync24(file2, { throwIfNoEntry: false });
+    const st = lstatSync26(file2, { throwIfNoEntry: false });
     if (st === void 0) return {};
     if (!st.isFile()) return void 0;
-    const parsed = runsSchema.safeParse(JSON.parse(readFileSync27(file2, "utf8")));
+    const parsed = runsSchema.safeParse(JSON.parse(readFileSync29(file2, "utf8")));
     return parsed.success ? parsed.data : void 0;
   } catch {
     return void 0;
   }
 }
-var writeRuns = (stateRoot, runs) => writeStateFile(stateRoot, join28(stateRoot, RUNS_FILE), `${JSON.stringify(runs, null, 2)}
+var writeRuns = (stateRoot, runs) => writeStateFile(stateRoot, join30(stateRoot, RUNS_FILE), `${JSON.stringify(runs, null, 2)}
 `);
 async function prepareAcceptances(o2) {
   const out = {
@@ -37768,11 +39188,11 @@ async function prepareAcceptances(o2) {
       runs[item.id] = rec;
     }
     const suites = await readSuites(o2.gh, item.repo, rec.sha, o2.config);
-    const short = rec.sha.slice(0, 7);
+    const short2 = rec.sha.slice(0, 7);
     if (suites === void 0) {
       out.waiting.push({
         item: item.id,
-        reason: `cannot read the suites on ${branch} at ${short}`
+        reason: `cannot read the suites on ${branch} at ${short2}`
       });
       continue;
     }
@@ -37784,14 +39204,14 @@ async function prepareAcceptances(o2) {
         runs[item.id] = { sha: head, since: o2.now().toISOString(), started: {} };
         out.waiting.push({
           item: item.id,
-          reason: `no CI run on ${short}: waiting on ${branch} at ${head.slice(0, 7)}`
+          reason: `no CI run on ${short2}: waiting on ${branch} at ${head.slice(0, 7)}`
         });
       } else if (age < SUITE_GRACE_MS) {
-        out.waiting.push({ item: item.id, reason: `no CI run on ${branch} at ${short} yet` });
+        out.waiting.push({ item: item.id, reason: `no CI run on ${branch} at ${short2} yet` });
       } else {
         out.lead.push({
           item: item.id,
-          reason: `acceptance of ${epic}: no CI run on ${branch} at ${short}; set acceptance.suites in studio.yaml (acceptance: { suites: [] } for a repository without CI), or rerun CI on ${branch}`
+          reason: `acceptance of ${epic}: no CI run on ${branch} at ${short2}; set acceptance.suites in studio.yaml (acceptance: { suites: [] } for a repository without CI), or rerun CI on ${branch}`
         });
       }
       continue;
@@ -37829,7 +39249,7 @@ async function prepareAcceptances(o2) {
     if (pending.length > 0) {
       out.waiting.push({
         item: item.id,
-        reason: `acceptance waits for ${pending.map((s) => s.name).join(", ")} on ${branch} at ${short}`
+        reason: `acceptance waits for ${pending.map((s) => s.name).join(", ")} on ${branch} at ${short2}`
       });
       continue;
     }
@@ -37837,21 +39257,21 @@ async function prepareAcceptances(o2) {
       runs[item.id] = { sha: head, since: o2.now().toISOString(), started: {} };
       out.waiting.push({
         item: item.id,
-        reason: `${missing.map((s) => s.name).join(", ")} did not run on ${short}: waiting on ${branch} at ${head.slice(0, 7)}`
+        reason: `${missing.map((s) => s.name).join(", ")} did not run on ${short2}: waiting on ${branch} at ${head.slice(0, 7)}`
       });
       continue;
     }
     if (o2.config.acceptance === void 0) {
       out.lead.push({
         item: item.id,
-        reason: `acceptance of ${epic}: ${missing.map((s) => s.name).join(", ")} gave no result on ${branch} at ${short}; rerun it, or name the full suites in acceptance.suites`
+        reason: `acceptance of ${epic}: ${missing.map((s) => s.name).join(", ")} gave no result on ${branch} at ${short2}; rerun it, or name the full suites in acceptance.suites`
       });
       continue;
     }
     if (age < SUITE_GRACE_MS) {
       out.waiting.push({
         item: item.id,
-        reason: `acceptance waits for ${missing.map((s) => s.name).join(", ")} to start on ${branch} at ${short}`
+        reason: `acceptance waits for ${missing.map((s) => s.name).join(", ")} to start on ${branch} at ${short2}`
       });
       continue;
     }
@@ -37870,12 +39290,12 @@ async function prepareAcceptances(o2) {
         if (done.refused !== void 0 || since >= DISPATCH_WAIT_MS) {
           out.lead.push({
             item: item.id,
-            reason: `acceptance of ${epic}: ${workflow} has no run on ${branch} at ${short}${done.refused === void 0 ? " after Studio started it" : ` and could not be started (${done.refused})`}; it needs a workflow_dispatch trigger, or another acceptance.suites entry`
+            reason: `acceptance of ${epic}: ${workflow} has no run on ${branch} at ${short2}${done.refused === void 0 ? " after Studio started it" : ` and could not be started (${done.refused})`}; it needs a workflow_dispatch trigger, or another acceptance.suites entry`
           });
         } else {
           out.waiting.push({
             item: item.id,
-            reason: `acceptance waits for ${workflow}, started on ${branch} at ${short}`
+            reason: `acceptance waits for ${workflow}, started on ${branch} at ${short2}`
           });
         }
         continue;
@@ -37899,7 +39319,7 @@ async function prepareAcceptances(o2) {
         out.started.push({ item: item.id, workflow, sha: rec.sha });
         out.waiting.push({
           item: item.id,
-          reason: `acceptance waits for ${workflow}, started on ${branch} at ${short}`
+          reason: `acceptance waits for ${workflow}, started on ${branch} at ${short2}`
         });
       }
     }
@@ -38091,7 +39511,7 @@ function applyAcceptance(board, acceptance, done, now, config2) {
   );
   const rounds = sources.size + 1;
   const held2 = rounds >= MAX_ACCEPTANCE_ROUNDS;
-  const paths = acceptance.paths.filter((g) => !g.toLowerCase().startsWith(".github"));
+  const paths = acceptance.paths.filter((g2) => !g2.toLowerCase().startsWith(".github"));
   const addItem2 = (title, dod, notes, finding) => {
     const id = nextId(next, prefix);
     const parsed = workItemSchema.safeParse({
@@ -38138,7 +39558,7 @@ function applyAcceptance(board, acceptance, done, now, config2) {
     (config2.acceptance?.suites ?? []).map((x) => `${x.workflow} / ${x.job}`)
   );
   for (const [k, suite] of done.failedSuites.entries()) {
-    const key = `${SUITE_NOTE}${createHash3("sha256").update(suite).digest("hex").slice(0, 12)}`;
+    const key = `${SUITE_NOTE}${createHash4("sha256").update(suite).digest("hex").slice(0, 12)}`;
     const already = next.items.some(
       (i2) => open3(i2) && i2.epic === done.epic && (i2.notes ?? []).includes(key)
     );
@@ -38198,267 +39618,24 @@ function applyAcceptance(board, acceptance, done, now, config2) {
   return { board: next, outcome: { epic: done.epic, result: "done", findings: [] } };
 }
 
-// src/ci-jobs.ts
-var import_yaml12 = __toESM(require_dist(), 1);
-var GIT_FETCH_MS2 = 12e4;
-var GIT_LOCAL_MS2 = 6e4;
-var WORKFLOWS_DIR = ".github/workflows/";
-var WORKFLOW_FILE = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/;
-var SHA = /^[0-9a-f]{40,64}$/i;
-var MAX_JOBS = 20;
-var instances = (checks, workflow, job) => {
-  const mine = [];
-  for (const c3 of checks) {
-    if (c3.workflow === void 0 || c3.workflow !== workflow) continue;
-    if (c3.name === job) {
-      mine.push(c3);
-      continue;
-    }
-    if (!c3.name.startsWith(`${job} `)) continue;
-    const rest = c3.name.slice(job.length);
-    if (rest.length > 3 && rest.startsWith(" (") && rest.endsWith(")")) mine.push(c3);
-    else return "ambiguous";
-  }
-  return mine;
-};
-var jobProblem = (checks, workflow, job) => {
-  const mine = instances(checks, workflow, job);
-  if (mine === "ambiguous") return "ambiguous";
-  return mine.length > 0 && mine.every((c3) => c3.bucket === "pass") ? void 0 : "not passed";
-};
-function runsOn(on6, event) {
-  if (on6 === event) return true;
-  if (Array.isArray(on6)) return on6.includes(event);
-  return on6 !== null && typeof on6 === "object" && event in on6;
-}
-function readWorkflow(text, path10) {
-  let doc;
-  try {
-    doc = (0, import_yaml12.parse)(text);
-  } catch {
-    return void 0;
-  }
-  if (doc === null || typeof doc !== "object") return void 0;
-  const wf = doc;
-  const name = typeof wf.name === "string" && wf.name.trim() !== "" ? wf.name : path10;
-  const jobs = wf.jobs !== null && typeof wf.jobs === "object" ? Object.entries(wf.jobs) : [];
-  return {
-    name,
-    jobs,
-    onPullRequest: runsOn(wf.on, "pull_request"),
-    onWorkflowCall: runsOn(wf.on, "workflow_call"),
-    workingDirectory: workingDirectoryOf(wf.defaults)
-  };
-}
-function workingDirectoryOf(defaults) {
-  if (defaults === null || typeof defaults !== "object") return void 0;
-  const run2 = defaults.run;
-  if (run2 === null || typeof run2 !== "object") return void 0;
-  return run2["working-directory"];
-}
-function plainDir(v) {
-  if (typeof v !== "string") return void 0;
-  const d = v.trim().replace(/^\.\//, "").replace(/\/+$/, "");
-  if (d === "" || d === "." || d.startsWith("/") || /[$*?[\]{}\\\p{Cc}]/u.test(d)) return void 0;
-  if (d.split("/").some((seg) => seg === ".." || seg === "." || seg === "")) return void 0;
-  return d;
-}
-function jobArea(files, check2) {
-  if (check2.workflow === void 0) return void 0;
-  const named2 = [...files.values()].filter((w2) => w2 !== void 0 && w2.name === check2.workflow);
-  if (named2.length !== 1) return void 0;
-  const w = named2[0];
-  if (!w.onPullRequest) return void 0;
-  const leg = /^(.*) \(.+\)$/.exec(check2.name)?.[1];
-  const jobs = w.jobs.filter(
-    ([id, j]) => isJob(j) && (checkName(id, j) === check2.name || checkName(id, j) === leg)
-  );
-  if (jobs.length !== 1) return void 0;
-  const job = jobs[0][1];
-  if ("uses" in job) return void 0;
-  const area = plainDir(workingDirectoryOf(job.defaults) ?? w.workingDirectory);
-  if (area === void 0) return void 0;
-  const steps = Array.isArray(job.steps) ? job.steps : [];
-  for (const step of steps) {
-    if (step === null || typeof step !== "object") return void 0;
-    if ("working-directory" in step) return void 0;
-  }
-  return area;
-}
-async function readWorkflowsAt(git, dir, oid) {
-  const g = (args) => git.run(dir, ["--no-replace-objects", ...args], { timeoutMs: GIT_LOCAL_MS2 });
-  const paths = (await g(["ls-tree", "--name-only", "-z", oid, WORKFLOWS_DIR])).split("\0").filter((p) => p !== "" && WORKFLOW_FILE.test(p));
-  const files = /* @__PURE__ */ new Map();
-  for (const p of paths) {
-    let text;
-    try {
-      text = await g(["cat-file", "blob", `${oid}:${p}`]);
-    } catch {
-      text = void 0;
-    }
-    files.set(p, text === void 0 ? void 0 : readWorkflow(text, p));
-  }
-  return files;
-}
-var isJob = (j) => j !== null && typeof j === "object" && !Array.isArray(j);
-var checkName = (id, j) => typeof j.name === "string" ? j.name : id;
-var guarded = (j) => "continue-on-error" in j;
-var localCall = (j, path10) => j.uses === `./${path10}`;
-var remoteCall = (j, path10) => typeof j.uses === "string" && !j.uses.startsWith("./") && j.uses.includes(`/${path10}@`);
-function findJob(files, path10, job, where) {
-  const w = files.get(path10);
-  if (w === void 0) return `the workflow is not at ${where} or not valid YAML`;
-  const unique3 = (wf, own2) => [...files].every(([p, x]) => p === own2 || x !== void 0 && x.name !== wf.name);
-  const found = w.jobs.find(([id, j]) => isJob(j) && checkName(id, j) === job);
-  if (found === void 0) return `the job is not in the workflow at ${where}`;
-  const [, called] = found;
-  if (guarded(called)) return `the job has continue-on-error at ${where}`;
-  if (w.onPullRequest) {
-    if (typeof called.uses === "string") {
-      return called.uses.startsWith("./") ? `the job calls a reusable workflow: name the called workflow file and its job (at ${where})` : `the job calls a remote reusable workflow, which the gate cannot follow (at ${where})`;
-    }
-    if (!unique3(w, path10)) return `the workflow name is not unique at ${where}`;
-    return { targets: [{ workflow: w.name, job }], def: JSON.stringify([called]) };
-  }
-  if (!w.onWorkflowCall) return `the workflow does not run on pull_request at ${where}`;
-  if ("uses" in called) {
-    return `the called job calls a reusable workflow itself: one level only (at ${where})`;
-  }
-  const targets = [];
-  const callers = [];
-  let remote = false;
-  let nested = false;
-  for (const [p, x] of files) {
-    for (const [id, j] of x?.jobs ?? []) {
-      if (!isJob(j) || x === void 0) continue;
-      if (remoteCall(j, path10) && x.onPullRequest) remote = true;
-      if (!localCall(j, path10)) continue;
-      if (!x.onPullRequest) {
-        nested = true;
-        continue;
-      }
-      if (guarded(j)) return `a calling job has continue-on-error at ${where}`;
-      if (!unique3(x, p)) return `the workflow name is not unique at ${where}`;
-      targets.push({ workflow: x.name, job: `${checkName(id, j)} / ${job}` });
-      callers.push(j);
-    }
-  }
-  if (targets.length === 0) {
-    if (remote) {
-      return `a pull_request workflow calls it only as a remote reusable workflow, which the gate cannot follow (at ${where})`;
-    }
-    if (nested) {
-      return `the workflow is called only through another reusable workflow: one level only (at ${where})`;
-    }
-    return `no pull_request workflow calls the workflow at ${where}`;
-  }
-  return { targets, def: JSON.stringify([called, ...callers]) };
-}
-async function verifyNotRunHereJobs(o2) {
-  const g = (args, timeoutMs) => o2.git.run(o2.checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
-  const trees = /* @__PURE__ */ new Map();
-  const workflowsAt = async (oid) => {
-    if (trees.has(oid)) return trees.get(oid);
-    let files;
-    try {
-      files = await readWorkflowsAt(o2.git, o2.checkout.dir, oid);
-    } catch {
-      files = void 0;
-    }
-    trees.set(oid, files);
-    return files;
-  };
-  let fetched;
-  const jobs = [];
-  const covered = [];
-  for (const [i2, command] of o2.commands.entries()) {
-    const fail2 = (why) => ({ ok: false, entry: i2 + 1, why });
-    const named2 = o2.entries.find((e) => e.command.trim() === command.trim());
-    if (named2 === void 0) return fail2("no CI job named for it");
-    if (named2.covers === void 0 || named2.covers.trim() === "") {
-      return fail2("no covers text says why the named job covers the command");
-    }
-    const base = o2.baseOid;
-    if (base === void 0 || !SHA.test(base) || !SHA.test(o2.headOid)) {
-      return fail2("the base commit is unknown");
-    }
-    if (!WORKFLOW_FILE.test(named2.workflow)) {
-      return fail2("the workflow is no file in .github/workflows");
-    }
-    if (fetched === void 0) {
-      try {
-        await g(
-          ["fetch", "--no-tags", "--no-write-fetch-head", o2.checkout.remote, base, o2.headOid],
-          GIT_FETCH_MS2
-        );
-        fetched = true;
-      } catch {
-        fetched = false;
-      }
-    }
-    if (!fetched) return fail2("the base commit cannot be fetched");
-    const at2 = async (oid, where) => {
-      const files = await workflowsAt(oid);
-      if (files === void 0) return `the workflows at ${where} cannot be listed`;
-      return findJob(files, named2.workflow, named2.job, where);
-    };
-    const atBase = await at2(base, "the base");
-    if (typeof atBase === "string") return fail2(atBase);
-    const atHead = await at2(o2.headOid, "the pull request head");
-    if (typeof atHead === "string") return fail2(atHead);
-    const key = (f) => JSON.stringify(f.targets);
-    if (key(atHead) !== key(atBase)) {
-      return fail2("the workflow names or callers differ at the pull request head");
-    }
-    if (!o2.ciItem && atHead.def !== atBase.def) {
-      return fail2("the job definition changed at the pull request head and the item is no CI item");
-    }
-    for (const t of atBase.targets) {
-      const problem = jobProblem(o2.checks, t.workflow, t.job);
-      if (problem === "ambiguous") {
-        return fail2("a check of the workflow has a name like the job that does not parse as it");
-      }
-      if (problem !== void 0) {
-        return fail2("the job has no passing check on the pull request (missing or skipped)");
-      }
-      if (!jobs.some((j) => j.workflow === t.workflow && j.job === t.job)) jobs.push(t);
-      covered.push({ entry: i2 + 1, ...t, covers: named2.covers });
-    }
-    if (jobs.length > MAX_JOBS) return fail2(`more than ${MAX_JOBS} CI jobs in all`);
-  }
-  return { ok: true, jobs, covered };
-}
-function approvedJobsProblem(jobs, checks) {
-  for (const [i2, j] of jobs.entries()) {
-    const problem = jobProblem(checks, j.workflow, j.job);
-    if (problem === "ambiguous") {
-      return `approved CI job ${i2 + 1} has a check whose name does not parse as the job: review it again`;
-    }
-    if (problem !== void 0) {
-      return `approved CI job ${i2 + 1} has no passing check on the pull request now: review it again`;
-    }
-  }
-  return void 0;
-}
-
 // src/flaky.ts
-import { readFileSync as readFileSync28 } from "node:fs";
-import { join as join29 } from "node:path";
+import { readFileSync as readFileSync30 } from "node:fs";
+import { join as join31 } from "node:path";
 var MAX_FLAKY = 500;
 var MAX_NAME = 200;
-var entrySchema = external_exports.object({
+var entrySchema3 = external_exports.object({
   test: external_exports.string(),
   count: external_exports.number().int().positive(),
   lastSha: external_exports.string(),
   lastAt: external_exports.string()
 });
-var fileOf = (stateRoot) => join29(stateRoot, "flaky.json");
+var fileOf = (stateRoot) => join31(stateRoot, "flaky.json");
 function read2(stateRoot) {
   const file2 = fileOf(stateRoot);
   assertStatePath(stateRoot, file2);
   let text;
   try {
-    text = readFileSync28(file2, "utf8");
+    text = readFileSync30(file2, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw new Error("flaky.json cannot be read");
@@ -38469,7 +39646,7 @@ function read2(stateRoot) {
   } catch {
     throw new Error("flaky.json is not valid JSON");
   }
-  const parsed = external_exports.array(entrySchema).safeParse(raw);
+  const parsed = external_exports.array(entrySchema3).safeParse(raw);
   if (!parsed.success) throw new Error("flaky.json has the wrong shape");
   return parsed.data;
 }
@@ -38491,8 +39668,8 @@ function recordFlaky(stateRoot, test, sha, rerun, now) {
 }
 
 // src/flaky-ci.ts
-import { readFileSync as readFileSync29 } from "node:fs";
-import { join as join30 } from "node:path";
+import { readFileSync as readFileSync31 } from "node:fs";
+import { join as join32 } from "node:path";
 var RERUNS_FILE = "ci-reruns.json";
 var RERUNS_LOCK = "ci-reruns.lock";
 var RERUNS_LOCK_STALE_MS = 6e4;
@@ -38505,7 +39682,7 @@ var GH_MS2 = 6e4;
 var MAX_FILES2 = 3e3;
 var MAX_TEST = 150;
 var FLAKY_NOTE = "flaky: ";
-var entrySchema2 = external_exports.strictObject({
+var entrySchema4 = external_exports.strictObject({
   repo: external_exports.string(),
   pr: external_exports.number().int().positive(),
   sha: external_exports.string(),
@@ -38517,11 +39694,11 @@ var entrySchema2 = external_exports.strictObject({
   outcome: external_exports.enum(["pass", "fail"]).optional()
 });
 function readLedger2(stateRoot) {
-  const file2 = join30(stateRoot, RERUNS_FILE);
+  const file2 = join32(stateRoot, RERUNS_FILE);
   assertStatePath(stateRoot, file2);
   let text;
   try {
-    text = readFileSync29(file2, "utf8");
+    text = readFileSync31(file2, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw new Error(`${RERUNS_FILE} cannot be read`);
@@ -38532,13 +39709,13 @@ function readLedger2(stateRoot) {
   } catch {
     throw new Error(`${RERUNS_FILE} is not valid JSON`);
   }
-  const parsed = external_exports.array(entrySchema2).safeParse(raw);
+  const parsed = external_exports.array(entrySchema4).safeParse(raw);
   if (!parsed.success) throw new Error(`${RERUNS_FILE} has the wrong shape`);
   return parsed.data;
 }
 function writeLedger(stateRoot, entries2, now) {
   const kept = entries2.filter((e) => now.getTime() - Date.parse(e.at) < KEEP_MS2).slice(-MAX_ENTRIES3);
-  writeStateFile(stateRoot, join30(stateRoot, RERUNS_FILE), `${JSON.stringify(kept, null, 2)}
+  writeStateFile(stateRoot, join32(stateRoot, RERUNS_FILE), `${JSON.stringify(kept, null, 2)}
 `);
 }
 function withLedger(stateRoot, now, fn) {
@@ -38591,7 +39768,7 @@ async function failedChecks(gh, ref) {
   return out.length === 0 ? void 0 : { failed: out, pending };
 }
 var NOT_YET = /already running|in progress|still running|\b(403|422)\b/i;
-async function changedFiles(gh, ref) {
+async function changedFiles2(gh, ref) {
   try {
     const out = await gh.api(
       `repos/${ref.repo}/pulls/${ref.pr}/files?per_page=100`,
@@ -38616,7 +39793,7 @@ function unrelatedFailure(o2) {
       return false;
     }
   }
-  return !o2.itemPaths.some((g) => touchesOverlap(g, area));
+  return !o2.itemPaths.some((g2) => touchesOverlap(g2, area));
 }
 var testName = (c3) => [...`${c3.workflow ?? "?"} / ${c3.name}`.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ")].slice(0, MAX_TEST).join("").trim();
 function withFlakyItem(board, test, repo, runs) {
@@ -38658,7 +39835,7 @@ function ciFailurePolicy(o2) {
     const key = `${ref.repo}@${head}`;
     if (placed.has(key)) return placed.get(key);
     const files = await o2.workflowsAt(ref.repo, head);
-    const changed = await changedFiles(o2.gh, ref);
+    const changed = await changedFiles2(o2.gh, ref);
     const paths = o2.itemPaths(ref);
     const all = files !== void 0 && checks.every((c3) => unrelatedFailure({ area: jobArea(files, c3), changed, itemPaths: paths }));
     const result = all ? checks : void 0;
@@ -38857,9 +40034,9 @@ async function readMainBuild(config2, ports) {
 }
 
 // src/notify.ts
-import { lstatSync as lstatSync25, readFileSync as readFileSync30 } from "node:fs";
+import { lstatSync as lstatSync27, readFileSync as readFileSync32 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
-import { join as join31 } from "node:path";
+import { join as join33 } from "node:path";
 var MAX_SENDS_PER_RUN = 20;
 var MAX_TEXT2 = 500;
 var NOTIFY_LOCK = "notify.lock";
@@ -38886,12 +40063,12 @@ function messagesOf(projectKey, snapshot) {
 }
 function readNotified(file2) {
   try {
-    if (!lstatSync25(file2).isFile()) return { ok: false };
+    if (!lstatSync27(file2).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, keys: [] } : { ok: false };
   }
   try {
-    const raw = JSON.parse(readFileSync30(file2, "utf8"));
+    const raw = JSON.parse(readFileSync32(file2, "utf8"));
     if (!Array.isArray(raw) || !raw.every((k) => typeof k === "string")) return { ok: false };
     return { ok: true, keys: raw };
   } catch {
@@ -38917,7 +40094,7 @@ async function sendNotifications(o2) {
   }
 }
 async function sendLocked(o2, notify, lock) {
-  const file2 = join31(o2.ownerRoot, "notified.json");
+  const file2 = join33(o2.ownerRoot, "notified.json");
   const read3 = readNotified(file2);
   if (!read3.ok) return ["notify: notified.json is unreadable; nothing sent"];
   try {
@@ -38982,609 +40159,21 @@ async function sendLocked(o2, notify, lock) {
 }
 
 // src/overview.ts
-import { lstatSync as lstatSync27, readFileSync as readFileSync32 } from "node:fs";
-import { basename as basename5, isAbsolute as isAbsolute6, join as join33 } from "node:path";
-
-// src/queue.ts
-import {
-  closeSync as closeSync6,
-  constants as constants4,
-  existsSync as existsSync7,
-  lstatSync as lstatSync26,
-  openSync as openSync6,
-  readFileSync as readFileSync31,
-  writeSync as writeSync2
-} from "node:fs";
-import { constants as osConstants } from "node:os";
-import { dirname as dirname10, join as join32 } from "node:path";
-var QueueHeld = class extends Error {
-  constructor(line3) {
-    super(line3);
-    this.line = line3;
-    this.name = "QueueHeld";
-  }
-  line;
-};
-var CHECKS_POLL_MS = 3e4;
-var CAPACITY_WAIT_MS = 6e4;
-var QUEUE_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
-var MAX_ATTEMPTS = 3;
-var CHECKS_GRACE_MS = 5 * 60 * 1e3;
-var entrySchema3 = external_exports.strictObject({
-  pr: external_exports.number().int().positive(),
-  repo: external_exports.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
-  item: external_exports.string().min(1).optional()
-});
-var stateSchema = external_exports.strictObject({
-  current: entrySchema3.extend({
-    head: external_exports.string().optional(),
-    step: external_exports.enum(["update", "checks", "capacity", "merge"])
-  }).optional(),
-  pending: external_exports.array(entrySchema3),
-  done: external_exports.array(
-    entrySchema3.extend({
-      result: external_exports.enum(["merged", "failed"]),
-      reason: external_exports.string().optional(),
-      at: external_exports.string()
-    })
-  )
-});
-var queueFile = (stateRoot) => join32(stateRoot, "queue.json");
-function loadQueue(stateRoot) {
-  const file2 = queueFile(stateRoot);
-  assertStatePath(stateRoot, file2);
-  if (!existsSync7(file2)) return { pending: [], done: [] };
-  if (lstatSync26(file2).isSymbolicLink())
-    throw new Error(`refusing to read ${file2}: it is a symlink`);
-  let raw;
-  try {
-    raw = JSON.parse(readFileSync31(file2, "utf8"));
-  } catch {
-    throw new Error(`queue file ${file2} is not valid JSON`);
-  }
-  const parsed = stateSchema.safeParse(raw);
-  if (!parsed.success) throw new Error(`queue file ${file2} is invalid: ${parsed.error.message}`);
-  return parsed.data;
-}
-function saveQueue(stateRoot, q) {
-  writeStateFile(stateRoot, queueFile(stateRoot), `${JSON.stringify(q, null, 2)}
-`);
-}
-var FILE_LOCK = "queue.json.lock";
-var RUN_LOCK = "queue.run.lock";
-var FILE_LOCK_STALE_MS = 3e4;
-var RUN_LOCK_HEARTBEAT_STALE_MS = 15 * 60 * 1e3;
-function sleepSync3(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-function updateQueue(stateRoot, mutate, opts = {}) {
-  const until = Date.now() + (opts.timeoutMs ?? 5e3);
-  let lock;
-  for (; ; ) {
-    lock = acquireStateLock(stateRoot, FILE_LOCK, {
-      now: /* @__PURE__ */ new Date(),
-      heartbeatStaleMs: FILE_LOCK_STALE_MS
-    });
-    if (lock) break;
-    if (Date.now() >= until) throw new Error(`queue file is locked (${FILE_LOCK}); try again`);
-    sleepSync3(25);
-  }
-  try {
-    const q = loadQueue(stateRoot);
-    const result = mutate(q);
-    saveQueue(stateRoot, q);
-    return result;
-  } finally {
-    lock.release();
-  }
-}
-function enqueue(stateRoot, entry) {
-  return updateQueue(stateRoot, (q) => {
-    const dup = [...q.pending, ...q.current ? [q.current] : []].some(
-      (e) => e.pr === entry.pr && e.repo === entry.repo
-    );
-    if (dup) throw new Error(`${entry.repo}#${entry.pr} is already in the queue`);
-    q.pending.push(entry);
-    return q.pending.length;
-  });
-}
-function takeNextPending(stateRoot) {
-  return updateQueue(stateRoot, (q) => {
-    const next = q.pending.shift();
-    if (next) q.current = { ...next, step: "update" };
-    return next;
-  });
-}
-function acquireQueueRunLock(stateRoot, now, log) {
-  const lock = acquireStateLock(stateRoot, RUN_LOCK, {
-    now,
-    heartbeatStaleMs: RUN_LOCK_HEARTBEAT_STALE_MS
-  });
-  if (!lock) throw new HeldError(`queue already running (lock ${RUN_LOCK} in the state root)`);
-  if (lock.broke !== void 0) {
-    log(`note: broke a stale queue lock (${lock.broke}); a previous run did not finish`);
-  }
-  return lock;
-}
-var RELEASE_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"];
-function releaseOnSignal(lock, signal, exit = (code) => process.exit(code)) {
-  try {
-    lock.release();
-  } finally {
-    exit(128 + osConstants.signals[signal]);
-  }
-}
-function installSignalRelease(lock) {
-  const handlers = RELEASE_SIGNALS.map((signal) => {
-    const handler = () => releaseOnSignal(lock, signal);
-    process.on(signal, handler);
-    return [signal, handler];
-  });
-  return () => {
-    for (const [signal, handler] of handlers) process.off(signal, handler);
-  };
-}
-function appendStateLine(stateRoot, name, line3) {
-  const file2 = join32(stateRoot, name);
-  assertStatePath(stateRoot, file2);
-  let torn = false;
-  if (existsSync7(file2)) {
-    if (lstatSync26(file2).isSymbolicLink()) {
-      throw new Error(`refusing to use ${file2}: it is a symlink`);
-    }
-    const prev = readFileSync31(file2, "utf8");
-    torn = prev !== "" && !prev.endsWith("\n");
-  } else {
-    ensureStateDir(stateRoot, dirname10(file2));
-  }
-  const fd = openSync6(
-    file2,
-    constants4.O_WRONLY | constants4.O_CREAT | constants4.O_APPEND | (constants4.O_NOFOLLOW ?? 0),
-    384
-  );
-  try {
-    writeSync2(fd, `${torn ? "\n" : ""}${line3}
-`);
-  } finally {
-    closeSync6(fd);
-  }
-}
-var BUCKETS = /* @__PURE__ */ new Set(["pass", "fail", "pending", "skipping", "cancel"]);
-var SHA2 = /^[0-9a-f]{40,64}$/;
-function parseChecks(stdout) {
-  let raw;
-  try {
-    raw = JSON.parse(stdout);
-  } catch {
-    return void 0;
-  }
-  if (!Array.isArray(raw)) return void 0;
-  const out = [];
-  for (const c3 of raw) {
-    if (typeof c3 !== "object" || c3 === null) return void 0;
-    const { name, bucket, workflow } = c3;
-    if (typeof name !== "string" || typeof bucket !== "string") return void 0;
-    out.push({
-      name,
-      bucket,
-      ...typeof workflow === "string" && workflow !== "" ? { workflow } : {}
-    });
-  }
-  return out;
-}
-async function readChecks(entry, gh) {
-  const base = [
-    "pr",
-    "checks",
-    String(entry.pr),
-    "--repo",
-    entry.repo,
-    "--json",
-    "name,bucket,workflow"
-  ];
-  const all = await gh.run(base);
-  const checks = parseChecks(all.stdout);
-  if (checks === void 0) {
-    if (all.stdout.trim() === "" && /no checks reported/i.test(all.stderr)) {
-      return { kind: "none", reason: "no checks reported" };
-    }
-    return {
-      kind: "failed",
-      reason: `no checks reported (gh exit ${all.code}: ${all.stderr.trim()})`
-    };
-  }
-  const req = await gh.run([...base, "--required"]);
-  let required2 = parseChecks(req.stdout);
-  if (required2 === void 0) {
-    if (req.stdout.trim() === "" && /no required checks/i.test(req.stderr)) required2 = [];
-    else return { kind: "failed", reason: `required checks unreadable (gh exit ${req.code})` };
-  }
-  const requiredNames = new Set(required2.map((c3) => c3.name));
-  const known = new Set(checks.map((c3) => c3.name));
-  const evaluated = [...checks, ...required2.filter((c3) => !known.has(c3.name))];
-  if (evaluated.length === 0) return { kind: "none", reason: "no checks reported" };
-  for (const c3 of evaluated) {
-    if (!BUCKETS.has(c3.bucket)) {
-      return { kind: "failed", reason: `check ${c3.name} has unknown state ${c3.bucket}` };
-    }
-  }
-  for (const c3 of evaluated) {
-    if (c3.bucket === "fail" || c3.bucket === "cancel") {
-      const what = c3.bucket === "fail" ? "failed" : "was cancelled";
-      return { kind: "failed", reason: `check ${c3.name} ${what}` };
-    }
-    if (c3.bucket === "skipping" && requiredNames.has(c3.name)) {
-      return { kind: "failed", reason: `required check ${c3.name} was skipped` };
-    }
-  }
-  if (evaluated.some((c3) => c3.bucket === "pending")) return { kind: "pending" };
-  if (!evaluated.some((c3) => c3.bucket === "pass"))
-    return { kind: "failed", reason: "no check passed" };
-  return { kind: "pass", checks: evaluated };
-}
-var GIT_FETCH_MS3 = 12e4;
-var GIT_LOCAL_MS3 = 6e4;
-var MAX_BRANCH_UPDATES = 5;
-async function isBranchUpdate(ports, checkout, target, approved, head, depth = 1) {
-  const { gh, git } = ports;
-  try {
-    const c3 = await gh.run(["api", `repos/${target.repo}/commits/${head}`]);
-    if (c3.code !== 0) return false;
-    const commit = JSON.parse(c3.stdout);
-    const [first, second, ...rest] = commit.parents ?? [];
-    if (typeof first?.sha !== "string" || !SHA2.test(first.sha) || typeof second?.sha !== "string" || !SHA2.test(second.sha) || rest.length > 0 || commit.committer?.login !== "web-flow" || commit.commit?.verification?.verified !== true) {
-      return false;
-    }
-    const base = approved.base.split("/").map(encodeURIComponent).join("/");
-    const d = await gh.run(["api", `repos/${target.repo}/compare/${base}...${second.sha}`]);
-    if (d.code !== 0) return false;
-    const { status } = JSON.parse(d.stdout);
-    if (status !== "behind" && status !== "identical") return false;
-    const same2 = await sameTreeAsMerge(git, checkout, first.sha, second.sha, head);
-    if (same2 !== true) return same2;
-    if (first.sha.toLowerCase() === approved.head.toLowerCase()) return true;
-    if (depth >= MAX_BRANCH_UPDATES) return false;
-    return await isBranchUpdate(ports, checkout, target, approved, first.sha, depth + 1);
-  } catch {
-    return false;
-  }
-}
-async function sameTreeAsMerge(git, checkout, first, second, head) {
-  const g = (args, timeoutMs) => git.run(checkout.dir, ["--no-replace-objects", ...args], { timeoutMs });
-  const said = (e) => e.message.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
-  try {
-    await g(["fetch", "--no-tags", "--no-write-fetch-head", checkout.remote, head], GIT_FETCH_MS3);
-  } catch (e) {
-    return `cannot fetch ${head} to compare its tree: ${said(e)}`;
-  }
-  let merged;
-  try {
-    merged = await g(["merge-tree", "--write-tree", first, second], GIT_LOCAL_MS3);
-  } catch (e) {
-    if (/failed \(1\):/.test(e.message)) return false;
-    return `git merge-tree failed; git 2.38 or newer is needed (see studio doctor): ${said(e)}`;
-  }
-  try {
-    const tree = await g(["rev-parse", "--verify", `${head}^{tree}`], GIT_LOCAL_MS3);
-    return merged.trim() !== "" && merged.trim() === tree.trim();
-  } catch (e) {
-    return `cannot read the tree of ${head}: ${said(e)}`;
-  }
-}
-async function liveBase(gh, target) {
-  try {
-    const v = await gh.run([
-      "pr",
-      "view",
-      String(target.pr),
-      "--repo",
-      target.repo,
-      "--json",
-      "baseRefName"
-    ]);
-    if (v.code !== 0) return void 0;
-    const { baseRefName } = JSON.parse(v.stdout);
-    return typeof baseRefName === "string" && baseRefName !== "" ? baseRefName : void 0;
-  } catch {
-    return void 0;
-  }
-}
-async function approvalProblem(ports, checkout, target, approval, head) {
-  const name = `${target.repo}#${target.pr}`;
-  const { head: approvedHead, base } = approval;
-  if (approvedHead === void 0 || base === void 0) {
-    return `no approval recorded for ${name}: review it first`;
-  }
-  const live = await liveBase(ports.gh, target);
-  if (live !== base) {
-    return `${name} has base ${String(live)}, the approval is for ${base}: review it again`;
-  }
-  if (approvedHead.toLowerCase() === head.toLowerCase()) return void 0;
-  const approved = { head: approvedHead, base };
-  const update = await isBranchUpdate(ports, checkout, target, approved, head);
-  if (update === true) return void 0;
-  if (typeof update === "string") return `${name}: ${update}`;
-  return `${name} is at ${head}, the approval is for ${approvedHead}: review it again`;
-}
-async function viewPr(entry, gh) {
-  const r = await gh.run([
-    "pr",
-    "view",
-    String(entry.pr),
-    "--repo",
-    entry.repo,
-    "--json",
-    "headRefOid,state,mergeable"
-  ]);
-  if (r.code !== 0) return `gh pr view failed (exit ${r.code}): ${r.stderr.trim()}`;
-  let raw;
-  try {
-    raw = JSON.parse(r.stdout);
-  } catch {
-    return "gh pr view returned unparsable output";
-  }
-  const { headRefOid, state, mergeable } = raw ?? {};
-  if (typeof headRefOid !== "string" || !SHA2.test(headRefOid)) {
-    return "gh pr view returned no valid head SHA";
-  }
-  if (state !== "OPEN" && state !== "MERGED" && state !== "CLOSED") {
-    return `gh pr view returned unknown state ${String(state)}`;
-  }
-  return {
-    head: headRefOid,
-    state,
-    mergeable: typeof mergeable === "string" ? mergeable : "UNKNOWN"
-  };
-}
-async function mergeShaOf(entry, gh) {
-  const r = await gh.run([
-    "pr",
-    "view",
-    String(entry.pr),
-    "--repo",
-    entry.repo,
-    "--json",
-    "mergeCommit"
-  ]);
-  if (r.code !== 0) return void 0;
-  try {
-    const parsed = JSON.parse(r.stdout);
-    const oid = parsed?.mergeCommit?.oid;
-    return typeof oid === "string" && SHA2.test(oid) ? oid : void 0;
-  } catch {
-    return void 0;
-  }
-}
-var HEAD_MOVED = /head branch was modified|match-head-commit|head commit|expected head/i;
-var NO_UPDATE_NEEDED = /no new commits|already up[ -]to[ -]date/i;
-async function mergeOne(entry, config2, ports, persist, opts = {}) {
-  const { gh, clock } = ports;
-  const pollMs = opts.pollMs ?? CHECKS_POLL_MS;
-  const capacityWaitMs = opts.capacityWaitMs ?? CAPACITY_WAIT_MS;
-  const deadline = clock.now().getTime() + (opts.timeoutMs ?? QUEUE_TIMEOUT_MS);
-  const failed = (reason) => ({ result: "failed", reason });
-  const timedOut = () => clock.now().getTime() >= deadline;
-  const graceMs = opts.checksGraceMs ?? CHECKS_GRACE_MS;
-  let graceUntil = Number.NEGATIVE_INFINITY;
-  const headChanged = () => {
-    graceUntil = clock.now().getTime() + graceMs;
-  };
-  const enter = (step2) => {
-    entry.step = step2;
-    persist(entry);
-  };
-  if (!config2.repos.includes(entry.repo)) {
-    return failed(`repository ${entry.repo} is not configured`);
-  }
-  if (!Number.isInteger(entry.pr) || entry.pr <= 0) return failed("invalid pull request number");
-  const merged = async () => {
-    const mergeSha = await mergeShaOf(entry, gh);
-    return mergeSha === void 0 ? { result: "merged" } : { result: "merged", mergeSha };
-  };
-  const moved = `head moved ${MAX_ATTEMPTS} times`;
-  let attempts = 1;
-  let rechecks = 0;
-  let step = entry.step;
-  for (; ; ) {
-    if (step === "update") {
-      enter("update");
-      const r = await gh.run(["pr", "update-branch", String(entry.pr), "--repo", entry.repo]);
-      if (r.code === 0) headChanged();
-      if (r.code !== 0 && !NO_UPDATE_NEEDED.test(r.stderr)) {
-        const v = await viewPr(entry, gh);
-        if (typeof v === "string" || v.state === "OPEN") {
-          return failed(`update-branch failed (exit ${r.code}): ${r.stderr.trim()}`);
-        }
-      }
-      step = "checks";
-    } else if (step === "checks") {
-      enter("checks");
-      const before = await viewPr(entry, gh);
-      if (typeof before === "string") return failed(before);
-      if (before.state === "MERGED") return merged();
-      if (before.state === "CLOSED") return failed("pull request is closed");
-      for (; ; ) {
-        const verdict = await readChecks(entry, gh);
-        if (verdict.kind === "failed") {
-          const act = await opts.onChecksFailed?.(entry, before.head) ?? "fail";
-          if (act === "fail") return failed(verdict.reason);
-        } else {
-          if (verdict.kind === "none" && clock.now().getTime() >= graceUntil) {
-            return failed(verdict.reason);
-          }
-          if (verdict.kind === "pass") {
-            opts.onChecksPassed?.(entry, before.head);
-            break;
-          }
-        }
-        if (timedOut()) return failed("checks timed out");
-        await clock.sleep(pollMs);
-        if (timedOut()) return failed("checks timed out");
-      }
-      const after2 = await viewPr(entry, gh);
-      if (typeof after2 === "string") return failed(after2);
-      if (after2.state === "MERGED") return merged();
-      if (after2.state === "CLOSED") return failed("pull request is closed");
-      if (after2.head !== before.head) {
-        if (++attempts > MAX_ATTEMPTS) return failed(moved);
-        headChanged();
-        continue;
-      }
-      if (after2.mergeable === "CONFLICTING") return failed("pull request has merge conflicts");
-      entry.head = after2.head;
-      step = "capacity";
-    } else if (step === "capacity") {
-      enter("capacity");
-      for (; ; ) {
-        let holds = false;
-        try {
-          holds = await capacityHoldsTwice(config2, ports);
-        } catch {
-          holds = false;
-        }
-        if (holds) break;
-        if (timedOut()) return failed("capacity did not hold in time");
-        await clock.sleep(capacityWaitMs);
-      }
-      step = "merge";
-    } else {
-      enter("merge");
-      const head = entry.head;
-      const now = await viewPr(entry, gh);
-      if (typeof now === "string") return failed(now);
-      if (now.state === "MERGED") return merged();
-      if (now.state === "CLOSED") return failed("pull request is closed");
-      if (head === void 0 || now.head !== head) {
-        if (++attempts > MAX_ATTEMPTS) return failed(moved);
-        headChanged();
-        step = "checks";
-        continue;
-      }
-      const again = await readChecks(entry, gh);
-      if (again.kind !== "pass") {
-        if (++rechecks > MAX_ATTEMPTS) return failed(`checks changed ${MAX_ATTEMPTS} times`);
-        step = "checks";
-        continue;
-      }
-      const refused = await opts.mergeAllowed?.(entry, head);
-      if (refused !== void 0) return failed(refused);
-      const held2 = opts.hold?.();
-      if (held2 !== void 0) {
-        enter("capacity");
-        throw new QueueHeld(held2);
-      }
-      const r = await gh.run([
-        "pr",
-        "merge",
-        String(entry.pr),
-        "--repo",
-        entry.repo,
-        `--${config2.merge.method}`,
-        "--match-head-commit",
-        head
-      ]);
-      if (r.code === 0) return merged();
-      if (HEAD_MOVED.test(r.stderr)) {
-        if (++attempts > MAX_ATTEMPTS) return failed(moved);
-        headChanged();
-        step = "checks";
-        continue;
-      }
-      return failed(`merge failed (exit ${r.code}): ${r.stderr.trim()}`);
-    }
-  }
-}
-async function firstCommitAt(entry, gh) {
-  const r = await gh.run([
-    "pr",
-    "view",
-    String(entry.pr),
-    "--repo",
-    entry.repo,
-    "--json",
-    "commits",
-    "--jq",
-    ".commits[0].committedDate"
-  ]);
-  const v = r.stdout.trim();
-  return r.code === 0 && v !== "" && !Number.isNaN(Date.parse(v)) ? v : void 0;
-}
-async function runQueue(state, config2, ports, persist, opts = {}) {
-  const log = opts.log ?? ((m) => console.error(m));
-  for (; ; ) {
-    const held2 = opts.hold?.();
-    if (held2 !== void 0) {
-      log(`queue held: ${held2}`);
-      return state;
-    }
-    if (!state.current) {
-      const next = opts.takeNext ? opts.takeNext() : state.pending.shift();
-      if (!next) return state;
-      state.current = { ...next, step: "update" };
-      persist(state);
-    }
-    const current = state.current;
-    let outcome;
-    try {
-      outcome = await mergeOne(current, config2, ports, () => persist(state), opts);
-    } catch (err) {
-      if (!(err instanceof QueueHeld)) throw err;
-      log(`queue held: ${err.line}`);
-      return state;
-    }
-    const { step: _step, head: _head, ...entry } = current;
-    const done = {
-      ...entry,
-      result: outcome.result,
-      ...outcome.reason === void 0 ? {} : { reason: outcome.reason },
-      at: ports.clock.now().toISOString()
-    };
-    state.done.push(done);
-    state.current = void 0;
-    persist(state);
-    if (opts.onDone) {
-      try {
-        await opts.onDone(done);
-      } catch (err) {
-        log(`board update failed for PR ${current.pr}: ${err.message}`);
-      }
-    }
-    if (outcome.result === "merged" && opts.stateRoot !== void 0) {
-      try {
-        const first = await firstCommitAt(current, ports.gh);
-        appendStateLine(
-          opts.stateRoot,
-          "metrics.jsonl",
-          JSON.stringify({
-            type: "merged",
-            ...current.item === void 0 ? {} : { item: current.item },
-            pr: current.pr,
-            repo: current.repo,
-            at: ports.clock.now().toISOString(),
-            firstCommitAt: first ?? null
-          })
-        );
-      } catch (err) {
-        log(`metrics append failed for PR ${current.pr}: ${err.message}`);
-      }
-    }
-  }
-}
-
-// src/overview.ts
+import { lstatSync as lstatSync28, readFileSync as readFileSync33 } from "node:fs";
+import { basename as basename5, isAbsolute as isAbsolute6, join as join34 } from "node:path";
 var line2 = (e) => (e instanceof Error ? e.message : String(e)).replace(/[\p{Cc}\p{Cf}]/gu, " ");
 var INCONSISTENT_ROOT = "inconsistent state root: its marker names a project whose state root is another one";
 function markerProject(root) {
-  const file2 = join33(root, "marker.json");
+  const file2 = join34(root, "marker.json");
   try {
-    if (!lstatSync27(file2).isFile()) throw new Error(`${file2} is not a plain file`);
+    if (!lstatSync28(file2).isFile()) throw new Error(`${file2} is not a plain file`);
   } catch (e) {
     if (e.code === "ENOENT") return void 0;
     throw e;
   }
   let raw;
   try {
-    raw = JSON.parse(readFileSync32(file2, "utf8"));
+    raw = JSON.parse(readFileSync33(file2, "utf8"));
   } catch {
     throw new Error(`state root marker ${file2} is unreadable`);
   }
@@ -39598,7 +40187,7 @@ function itemCounts(project) {
   const file2 = boardPath(project);
   let plain2 = true;
   try {
-    plain2 = lstatSync27(file2).isFile();
+    plain2 = lstatSync28(file2).isFile();
   } catch {
   }
   if (!plain2) throw new Error(`${file2}: board.yaml is not a plain file`);
@@ -39676,8 +40265,8 @@ function formatOverview(list2) {
 }
 
 // src/recover.ts
-import { existsSync as existsSync8, lstatSync as lstatSync28, readdirSync as readdirSync11 } from "node:fs";
-import { join as join34 } from "node:path";
+import { existsSync as existsSync9, lstatSync as lstatSync29, readdirSync as readdirSync11 } from "node:fs";
+import { join as join35 } from "node:path";
 var TICK_LOCK = "tick.lock";
 var TICK_LOCK_STALE_MS = 15 * 6e4;
 var LOCKS = [
@@ -39688,6 +40277,7 @@ var LOCKS = [
   { where: "project", name: RERUNS_LOCK, staleMs: RERUNS_LOCK_STALE_MS },
   { where: "project", name: LESSONS_LOCK, staleMs: LESSONS_LOCK_STALE_MS },
   { where: "project", name: COSTS_LOCK, staleMs: COSTS_LOCK_STALE_MS },
+  { where: "project", name: EXCEPTIONS_LOCK, staleMs: EXCEPTIONS_LOCK_STALE_MS },
   { where: "owner", name: LAUNCH_LOCK, staleMs: LAUNCH_LOCK_STALE_MS },
   { where: "owner", name: "limits.lock", staleMs: LOCK_STALE_MS },
   { where: "owner", name: "blocks.lock", staleMs: LOCK_STALE_MS },
@@ -39699,6 +40289,7 @@ var ASIDE = /^.+\.lock\.[0-9a-f]{8}\.stale$/;
 var TMP = /^.+\.(\d+)\.\d+\.[0-9a-f]{8}\.tmp$/;
 var LAUNCH_GRACE_MS = 2 * 6e4;
 var ASIDE_GRACE_MS = 6e4;
+var EVIDENCE_GRACE_MS = 60 * 6e4;
 function readySince(item) {
   const at2 = item.history.findLast((h2) => h2.to === "ready")?.at;
   const t = at2 === void 0 ? Number.NaN : Date.parse(at2);
@@ -39708,7 +40299,7 @@ var LOG_QUIET_MS = 30 * 6e4;
 function logWrittenAgo(stateRoot, item, now) {
   if (!isItemId(item)) return void 0;
   try {
-    const st = lstatSync28(join34(stateRoot, "logs", `${item}.jsonl`));
+    const st = lstatSync29(join35(stateRoot, "logs", `${item}.jsonl`));
     return st.isFile() ? Math.max(0, now.getTime() - st.mtimeMs) : void 0;
   } catch {
     return void 0;
@@ -39717,7 +40308,7 @@ function logWrittenAgo(stateRoot, item, now) {
 function hasReport2(stateRoot, item) {
   if (!isItemId(item)) return false;
   const name = reportName(stateRoot, item);
-  return name !== void 0 && existsSync8(join34(stateRoot, "clones", item, ".studio", "reports", name));
+  return name !== void 0 && existsSync9(join35(stateRoot, "clones", item, ".studio", "reports", name));
 }
 async function recoverProject(o2) {
   const out = { dryRun: o2.dryRun, findings: [], needsLead: [] };
@@ -39729,7 +40320,7 @@ async function recoverProject(o2) {
   if (o2.scope === "all") {
     for (const l of LOCKS) {
       const root = l.where === "project" ? o2.stateRoot : o2.ownerRoot;
-      if (!existsSync8(root)) continue;
+      if (!existsSync9(root)) continue;
       const opts = { now: o2.now, heartbeatStaleMs: l.staleMs };
       const seen = inspectStateLock(root, l.name, opts);
       if (seen.state === "free") continue;
@@ -39761,12 +40352,12 @@ async function recoverProject(o2) {
         continue;
       }
       for (const name of names) {
-        const file2 = join34(root, name);
+        const file2 = join35(root, name);
         const tmp = TMP.exec(name);
         let gone = false;
         if (ASIDE.test(name)) {
           try {
-            const st = lstatSync28(file2);
+            const st = lstatSync29(file2);
             gone = st.isFile() && o2.now.getTime() - st.ctimeMs >= ASIDE_GRACE_MS;
           } catch {
             gone = false;
@@ -39787,11 +40378,38 @@ async function recoverProject(o2) {
         out.findings.push(finding);
       }
     }
+    let runs;
+    try {
+      runs = readdirSync11(join35(o2.stateRoot, EVIDENCE_DIR));
+    } catch {
+      runs = [];
+    }
+    let pruned = false;
+    for (const name of runs) {
+      const dir = join35(o2.stateRoot, EVIDENCE_DIR, name);
+      try {
+        if (o2.now.getTime() - lstatSync29(dir).mtimeMs < EVIDENCE_GRACE_MS) continue;
+      } catch {
+        continue;
+      }
+      const finding = {
+        check: "leftover",
+        subject: `${EVIDENCE_DIR}/${name}`,
+        found: "left behind by an interrupted evidence run"
+      };
+      if (!o2.dryRun) {
+        removeStateEntry(o2.stateRoot, dir);
+        pruned = true;
+        finding.did = "removed it";
+      }
+      out.findings.push(finding);
+    }
+    if (pruned) await o2.ports.git.run(o2.project, ["worktree", "prune"]).catch(() => "");
   }
-  if (!existsSync8(o2.stateRoot)) return out;
+  if (!existsSync9(o2.stateRoot)) return out;
   const records = readCrewRecords(o2.stateRoot);
   const board = loadBoard(o2.project);
-  const launching = existsSync8(o2.ownerRoot) && inspectStateLock(o2.ownerRoot, LAUNCH_LOCK, {
+  const launching = existsSync9(o2.ownerRoot) && inspectStateLock(o2.ownerRoot, LAUNCH_LOCK, {
     now: o2.now,
     heartbeatStaleMs: LAUNCH_LOCK_STALE_MS
   }).state === "held";
@@ -39956,16 +40574,16 @@ async function recoverProject(o2) {
 // src/setup.ts
 import {
   chmodSync as chmodSync6,
-  lstatSync as lstatSync29,
+  lstatSync as lstatSync30,
   mkdirSync as mkdirSync7,
-  readFileSync as readFileSync33,
+  readFileSync as readFileSync34,
   renameSync as renameSync11,
   rmSync as rmSync7,
   statSync as statSync5,
-  writeFileSync as writeFileSync11
+  writeFileSync as writeFileSync12
 } from "node:fs";
 import { homedir as homedir8 } from "node:os";
-import { dirname as dirname11, join as join35, resolve as resolve6 } from "node:path";
+import { dirname as dirname11, join as join36, resolve as resolve6 } from "node:path";
 var DEFAULT_LABEL2 = "main";
 var MAX_LABEL = 32;
 var TOKEN_TEXT = [
@@ -40026,7 +40644,7 @@ var SHIM_NOTE = "   The shim finds the plugin again after an update; no need to 
 var shQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 function studioOnPath(env) {
   for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
-    const file2 = join35(dir, "studio");
+    const file2 = join36(dir, "studio");
     try {
       const st = statSync5(file2);
       if (st.isFile() && (st.mode & 73) !== 0) return file2;
@@ -40037,9 +40655,9 @@ function studioOnPath(env) {
 }
 var yes = (answer) => /^(|y|yes)$/i.test(answer.trim());
 function writeAtomic2(file2, text, mode) {
-  const tmp = join35(dirname11(file2), `.studio-${process.pid}-${Date.now()}.tmp`);
+  const tmp = join36(dirname11(file2), `.studio-${process.pid}-${Date.now()}.tmp`);
   try {
-    writeFileSync11(tmp, text, { flag: "wx", mode });
+    writeFileSync12(tmp, text, { flag: "wx", mode });
     chmodSync6(tmp, mode);
     renameSync11(tmp, file2);
   } catch (e) {
@@ -40101,7 +40719,7 @@ async function link(o2, home) {
     return 0;
   }
   const launcher2 = o2.launcher;
-  const localBin = join35(home, ".local", "bin");
+  const localBin = join36(home, ".local", "bin");
   const onPath = (o2.env.PATH ?? "").split(":").some((d) => d !== "" && resolve6(d) === resolve6(localBin));
   if (!onPath) {
     say("4. studio in your terminal: ~/.local/bin is not on your PATH.");
@@ -40110,14 +40728,14 @@ async function link(o2, home) {
     say(`   Until then: node ${shQuote(launcher2)} <command>`);
     return 0;
   }
-  const target = join35(localBin, "studio");
+  const target = join36(localBin, "studio");
   let current;
   try {
-    current = lstatSync29(target).isFile() ? readFileSync33(target, "utf8") : "";
+    current = lstatSync30(target).isFile() ? readFileSync34(target, "utf8") : "";
   } catch {
     current = void 0;
   }
-  const cache = join35(ownerConfigDir(o2.owner), "launcher");
+  const cache = join36(ownerConfigDir(o2.owner), "launcher");
   const writeCache = () => {
     mkdirSync7(dirname11(cache), { recursive: true, mode: 448 });
     writeAtomic2(cache, `${launcher2}
@@ -40303,20 +40921,20 @@ async function runSetup(o2) {
 }
 
 // src/skills-check.ts
-import { existsSync as existsSync9, lstatSync as lstatSync30, readFileSync as readFileSync34 } from "node:fs";
-import { join as join36 } from "node:path";
+import { existsSync as existsSync10, lstatSync as lstatSync31, readFileSync as readFileSync35 } from "node:fs";
+import { join as join37 } from "node:path";
 var SKILLS_CHECK_DAYS = 30;
 var DAY_MS5 = 864e5;
 var NOTE = "skills-update: ";
 var PLUGIN_TIMEOUT_MS = 3e5;
-var recordFile2 = (stateRoot) => join36(stateRoot, "skills-check.json");
+var recordFile2 = (stateRoot) => join37(stateRoot, "skills-check.json");
 var at = (v) => typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : void 0;
 function readRecord(stateRoot) {
   const file2 = recordFile2(stateRoot);
   try {
     assertStatePath(stateRoot, file2);
-    if (!lstatSync30(file2).isFile()) return {};
-    const raw = JSON.parse(readFileSync34(file2, "utf8"));
+    if (!lstatSync31(file2).isFile()) return {};
+    const raw = JSON.parse(readFileSync35(file2, "utf8"));
     const lastRun2 = at(raw.lastRun);
     const lastAttempt = at(raw.lastAttempt);
     return {
@@ -40457,7 +41075,7 @@ async function runSkillsCheck(o2) {
   let offered = /* @__PURE__ */ new Map();
   const { dir, runEnv } = pluginEnv(o2.owner, o2.env);
   if (o2.ports.plugins === void 0) fail2("plugins: no claude command available");
-  else if (!existsSync9(dir)) {
+  else if (!existsSync10(dir)) {
     fail2("plugins: the crew config dir is missing; run studio account setup-plugins");
   } else {
     try {
@@ -40579,6 +41197,10 @@ Commands:
   flaky record <t> <s> pass|fail  Record a test that failed once, with its rerun
   flaky [list]             The flaky-test ledger, worst first
   solutions search <words> Earlier solutions in .studio/solutions
+  exceptions [list]        Exceptions by evidence: applied and not proven, with head and diff digest
+  exceptions grant <repo>#<pr> <rule> --reason "<line>"
+                           The lead's decision for a guard hit no evidence explained, for this head;
+                           an owner_only rule or item takes the owner's, in a terminal
   setup sources [<id>...]  Fetch the referenced third-party sources (nothing runs)
   lessons [list]           Lessons crews proposed for the role memory, with age, item and evidence
   lessons accept <n>       Move a proposed lesson into its role file
@@ -40752,8 +41374,8 @@ async function runCli(argv, deps) {
     if (values.security !== void 0 && cmd !== "skills") {
       throw new UsageError("--security works with skills check only");
     }
-    if (values.reason !== void 0 && cmd !== "lessons") {
-      throw new UsageError("--reason works with lessons drop only");
+    if (values.reason !== void 0 && cmd !== "lessons" && cmd !== "exceptions") {
+      throw new UsageError("--reason works with lessons drop and exceptions grant only");
     }
     if (values["dry-run"] !== void 0 && cmd !== "recover") {
       throw new UsageError("--dry-run works with recover only");
@@ -40829,7 +41451,7 @@ async function runCli(argv, deps) {
     const recordAllEnded = async (roots, ownerConfig) => {
       for (const root of roots) {
         try {
-          if (existsSync10(root)) {
+          if (existsSync11(root)) {
             await recordEndedRuns(root, ports, ownerConfig.crewLabelLimits.timezone);
           }
         } catch {
@@ -40881,6 +41503,24 @@ async function runCli(argv, deps) {
       };
     };
     const ciEvents = { reruns: [], flakyItems: [] };
+    const exceptionsApplied = [];
+    const appliedOut = () => {
+      const seen = /* @__PURE__ */ new Set();
+      return exceptionsApplied.flatMap((e) => {
+        const key = `${e.rule}|${e.repo}#${e.pr}|${e.head}`;
+        if (seen.has(key)) return [];
+        seen.add(key);
+        return [
+          {
+            rule: e.rule,
+            pr: `${e.repo}#${e.pr}`,
+            ...e.item === void 0 ? {} : { item: e.item },
+            head: e.head,
+            by: e.by
+          }
+        ];
+      });
+    };
     const ciPolicy = (config2, root) => ciFailurePolicy({
       stateRoot: root,
       gh: ports.gh,
@@ -40925,6 +41565,15 @@ async function runCli(argv, deps) {
       events: ciEvents,
       log: (m) => stderr(`${m}
 `)
+    });
+    const evidenceCtx = (config2, repo, root) => ({
+      gh: ports.gh,
+      git: ports.git,
+      ...ports.evidence === void 0 ? {} : { runner: ports.evidence },
+      checkout: approvalCheckout(project, config2, repo),
+      stateRoot: root,
+      now: () => ports.clock.now(),
+      ...deps.env.PATH === void 0 ? {} : { path: deps.env.PATH }
     });
     const queueAdd = async (arg) => {
       const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/.exec(arg ?? "");
@@ -41019,7 +41668,25 @@ async function runCli(argv, deps) {
             stateRoot: root,
             log,
             hold,
-            mergeAllowed: (entry, head) => boardBlocksMerge(project, root, config2, entry, head, ports),
+            mergeAllowed: (entry, head, waived) => boardBlocksMerge(project, root, config2, entry, head, ports, waived),
+            evidence: async (entry, head, failed, checks) => {
+              if ((config2.evidence ?? []).length === 0) return { kind: "none" };
+              const v = await judgeFailedChecks(
+                evidenceCtx(config2, entry.repo, root),
+                entry,
+                head,
+                failed,
+                checks
+              );
+              for (const e of v.kind === "waived" ? v.applied : []) exceptionsApplied.push(e);
+              if (v.kind === "lead") {
+                return {
+                  ...v,
+                  reason: `${v.reason}; after a grant: studio queue add ${entry.repo}#${entry.pr}`
+                };
+              }
+              return v;
+            },
             onChecksFailed: (entry, head) => policy.failed(entry, head),
             onChecksPassed: (entry, head) => policy.passed(entry, head),
             takeNext: () => takeNextPending(root),
@@ -41102,7 +41769,7 @@ async function runCli(argv, deps) {
           throw new Error(`crew record for ${item.id} has no valid startedAt`);
         }
       }
-      const clone2 = join37(stateRoot(), "clones", item.id);
+      const clone2 = join38(stateRoot(), "clones", item.id);
       const fileName = reportName(stateRoot(), item.id);
       if (fileName === void 0) {
         throw new ReportError(
@@ -41129,6 +41796,7 @@ async function runCli(argv, deps) {
       const reviewDone = item.type === "review" && report.status === "done" && accepts === void 0 ? reviewCaps() : { skipped: [], target: void 0, notRunHere: void 0 };
       let approvedJobs = [];
       let covered = [];
+      let applied = [];
       if (item.type === "review" && report.status === "done" && reviewDone.target !== void 0) {
         const m = /^(.+)#(\d+)$/.exec(reviewDone.target);
         const info = await prInfo(ports, m[1], Number(m[2]));
@@ -41139,8 +41807,33 @@ async function runCli(argv, deps) {
             (i2) => i2.repo === ref.repo && i2.pr === ref.pr && i2.type !== "review"
           );
           if (holder !== void 0) ref.item = holder.id;
-          const checks = await readChecks(ref, ports.gh);
+          let checks = await readChecks(ref, ports.gh);
           const policy = ciPolicy(loadConfig(project), stateRoot());
+          if (checks.kind === "failed" && checks.failed !== void 0 && (loadConfig(project).evidence ?? []).length > 0) {
+            const ev = await judgeFailedChecks(
+              evidenceCtx(loadConfig(project), ref.repo, stateRoot()),
+              ref,
+              info.head,
+              checks.failed,
+              checks.checks ?? []
+            );
+            if (ev.kind === "waived") {
+              applied = ev.applied;
+              exceptionsApplied.push(...ev.applied);
+              checks = await readChecks(ref, ports.gh, ev.waived);
+            } else if (ev.kind === "wait") {
+              return {
+                kind: "waiting",
+                line: `the approval counts only with green checks (${ev.reason}); collect again once they pass, nothing moved`
+              };
+            } else if (ev.kind === "lead") {
+              return {
+                kind: "waiting",
+                line: `the approval counts only with green checks (${checks.reason}); ${ev.reason}; nothing moved`,
+                lead: { item: holder?.id ?? reviewDone.target, reason: ev.reason }
+              };
+            }
+          }
           if (checks.kind !== "pass") {
             let why = checks.kind === "pending" ? "still running" : checks.reason ?? checks.kind;
             if (checks.kind === "failed") {
@@ -41157,6 +41850,34 @@ async function runCli(argv, deps) {
             };
           }
           policy.passed(ref, info.head);
+          const ownConfig = loadConfig(project);
+          const change = (ownConfig.evidence ?? []).length > 0 || reviewDone.configChange === true ? await evidenceChange(
+            evidenceCtx(ownConfig, ref.repo, stateRoot()),
+            info.baseOid,
+            info.head
+          ) : {};
+          if (change.unreadable === true) {
+            return {
+              kind: "waiting",
+              line: `the approval waits: whether ${reviewDone.target} changes the evidence rules cannot be read now (git); collect again, nothing moved`
+            };
+          }
+          if (change.problem !== void 0) {
+            const note = `approval refused: ${change.problem}; evidence is the owner's: the owner reviews and merges such a change himself`;
+            await withBoardLock(stateRoot(), ports.clock.now(), () => {
+              const fresh = loadBoard(project);
+              if (findItem(fresh, item.id).status !== item.status) {
+                throw new Error(`${item.id} changed while it was collected; nothing moved`);
+              }
+              let next2 = transition(fresh, item.id, "blocked", BY3, ports.clock.now());
+              next2 = withItem(next2, item.id, (i2) => ({ ...i2, notes: [...i2.notes ?? [], note] }));
+              saveBoard(project, next2);
+            });
+            return {
+              kind: "refused",
+              line: `${item.id}: ${note}; no approval, ${item.id} is blocked for the owner`
+            };
+          }
           if (reviewDone.notRunHere !== void 0) {
             const config2 = loadConfig(project);
             const gate = await verifyNotRunHereJobs({
@@ -41306,15 +42027,15 @@ async function runCli(argv, deps) {
               }));
             }
             if (acceptanceDone !== void 0) {
-              const applied = applyAcceptance(
+              const applied2 = applyAcceptance(
                 next2,
                 findItem(next2, item.id),
                 acceptanceDone,
                 now,
                 loadConfig(project)
               );
-              next2 = applied.board;
-              acceptance = applied.outcome;
+              next2 = applied2.board;
+              acceptance = applied2.outcome;
             }
           }
         } else {
@@ -41403,6 +42124,8 @@ async function runCli(argv, deps) {
         ...fixLimit ? { fixLimit } : {},
         ...acceptance === void 0 ? {} : { acceptance },
         ...lessonsProposed > 0 ? { lessonsProposed } : {},
+        // Failed guard checks an exception by evidence covered for the approved head: ids only.
+        ...applied.length === 0 ? {} : { exceptions: applied.map((e) => ({ rule: e.rule, by: e.by, head: e.head })) },
         // What CI must run because the sandbox could not: only the count and the services, which
         // the schema fixes; the commands are crew text and stay on the item and in the PR body.
         ...report.status === "done" && report.notRunHere.length > 0 ? {
@@ -41524,6 +42247,7 @@ async function runCli(argv, deps) {
               }
             } else if (r.kind !== "refused") {
               out.held.push({ item: item.id, reason: r.line });
+              if (r.kind === "waiting" && r.lead !== void 0) lead(r.lead.item, r.lead.reason);
               if (r.line.includes(CI_READ_FAILED))
                 out.errors.push({ item: item.id, error: r.line });
             }
@@ -41762,6 +42486,8 @@ async function runCli(argv, deps) {
       } catch (e) {
         if (!(e instanceof BoardError)) out.errors.push({ phase: "epics", error: why(e) });
       }
+      const exceptions = appliedOut();
+      if (exceptions.length > 0) out.exceptions = exceptions;
       return out;
     };
     const pushTick = async (needsLead) => {
@@ -41865,6 +42591,28 @@ async function runCli(argv, deps) {
           const epicList = epicRows(board).filter(
             (r) => r.stage !== "dropped" && (epic === void 0 || r.id === epic)
           );
+          const open4 = new Map(
+            items.filter((r) => r.item.status !== "merged" && r.item.status !== "dropped").map((r) => [`${r.item.repo}#${r.item.pr}`, r.item.id])
+          );
+          const waivedRows = exceptionsOrNone(stateRoot()).filter(
+            (e) => e.outcome === "applied" && open4.has(`${e.repo}#${e.pr}`)
+          );
+          if (waivedRows.length > 0) {
+            stdout(
+              `
+${table2([
+                ["EXCEPTION", "ITEM", "PR", "HEAD", "BY", "AT"],
+                ...waivedRows.map((e) => [
+                  e.rule,
+                  open4.get(`${e.repo}#${e.pr}`) ?? "-",
+                  `${e.repo}#${e.pr}`,
+                  e.head.slice(0, 12),
+                  e.by,
+                  e.at
+                ])
+              ])}`
+            );
+          }
           if (withEpics && only === void 0 && epicList.length > 0) {
             stdout(
               `
@@ -42182,7 +42930,8 @@ ${table2([
           print({
             ...r,
             ...ciEvents.reruns.length === 0 ? {} : { reruns: ciEvents.reruns },
-            ...ciEvents.flakyItems.length === 0 ? {} : { flakyItems: ciEvents.flakyItems }
+            ...ciEvents.flakyItems.length === 0 ? {} : { flakyItems: ciEvents.flakyItems },
+            ...appliedOut().length === 0 ? {} : { exceptions: appliedOut() }
           });
           return r.held === void 0 ? 0 : 1;
         }
@@ -42217,7 +42966,7 @@ ${table2([
             hasReport: (item) => {
               if (!isItemId(item)) return false;
               const name = reportName(root, item);
-              return name !== void 0 && existsSync10(join37(root, "clones", item, ".studio", "reports", name));
+              return name !== void 0 && existsSync11(join38(root, "clones", item, ".studio", "reports", name));
             }
           }
         );
@@ -42708,6 +43457,79 @@ ${table2([
         print(recordFlaky(await boundStateRoot(), test, sha, rerun, ports.clock.now()));
         return 0;
       }
+      case "exceptions": {
+        const [sub = "list", target, rule] = rest;
+        if (values.reason !== void 0 && sub !== "grant") {
+          throw new UsageError("--reason works with exceptions grant only");
+        }
+        if (sub === "list" && rest.length <= 1) {
+          const entries2 = readExceptions(stateRoot());
+          if (json2) print(entries2);
+          else {
+            stdout(
+              table2([
+                ["AT", "OUTCOME", "BY", "RULE", "PR", "ITEM", "HEAD", "DIFF", "WHY"],
+                ...entries2.map((e) => [
+                  e.at,
+                  e.outcome,
+                  e.by,
+                  e.rule,
+                  `${e.repo}#${e.pr}`,
+                  e.item ?? "-",
+                  e.head.slice(0, 12),
+                  e.diff.slice(0, 19),
+                  e.why ?? e.reason ?? "-"
+                ])
+              ])
+            );
+          }
+          return 0;
+        }
+        refuseCrew(deps.env);
+        const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d{0,9})$/.exec(target ?? "");
+        if (sub !== "grant" || rest.length !== 3 || !m || rule === void 0) {
+          throw new UsageError(
+            'exceptions needs: list | grant <repo>#<pr> <rule> --reason "<one line>"'
+          );
+        }
+        if (values.reason === void 0) {
+          throw new UsageError('exceptions grant needs --reason "<one line>"');
+        }
+        const { config: config2, board } = loadAll();
+        const ref = {
+          repo: m[1],
+          pr: Number(m[2])
+        };
+        if (!config2.repos.includes(ref.repo)) {
+          throw new Error(`repository ${ref.repo} is not configured`);
+        }
+        const holder = board.items.find(
+          (i2) => i2.repo === ref.repo && i2.pr === ref.pr && i2.type !== "review"
+        );
+        if (holder !== void 0) ref.item = holder.id;
+        const by = deps.isTerminal === true ? "owner" : "lead";
+        if (holder?.ownerOnly === true && by !== "owner") {
+          throw new Error(
+            `${holder.id} is owner_only: the owner grants its exception, in a terminal; nothing changed`
+          );
+        }
+        const root = await boundStateRoot();
+        const r = await grantException(
+          evidenceCtx(config2, ref.repo, root),
+          ref,
+          rule,
+          by,
+          values.reason
+        );
+        print({
+          granted: r.entry.rule,
+          pr: `${r.entry.repo}#${r.entry.pr}`,
+          head: r.entry.head,
+          by: r.entry.by,
+          ...r.existing ? { existing: true } : {}
+        });
+        return 0;
+      }
       case "solutions": {
         const [sub, ...words] = rest;
         if (sub !== "search" || words.length === 0) {
@@ -42800,6 +43622,27 @@ async function prInfo(ports, repo, pr) {
   return { head, branch, ...baseOid === void 0 ? {} : { baseOid } };
 }
 var PR_OPTIONAL = ["review", "research"];
+function recentExceptions(root, board, now) {
+  const since = now.getTime() - 7 * 864e5;
+  return exceptionsOrNone(root).filter((e) => e.outcome === "applied" && Date.parse(e.at) >= since).reverse().slice(0, 10).map((e) => {
+    const item = e.item ?? board.items.find((i2) => i2.repo === e.repo && i2.pr === e.pr && i2.type !== "review")?.id;
+    return {
+      rule: e.rule,
+      pr: `${e.repo}#${e.pr}`,
+      ...item === void 0 ? {} : { item },
+      head: e.head.slice(0, 12),
+      by: e.by,
+      at: e.at
+    };
+  });
+}
+function exceptionsOrNone(root) {
+  try {
+    return readExceptions(root);
+  } catch {
+    return [];
+  }
+}
 var PR_BODY_MAX = 2e4;
 function crewTokenFor(config2, owner) {
   const fromEnv = config2.crewToken ? owner.env?.[config2.crewToken.env] : void 0;
@@ -42840,10 +43683,10 @@ ${notRunSection(notRunHere)}
 ${body.replace(new RegExp("[^\\P{Cc}\\n\\t]|\\p{Cf}", "gu"), "").slice(0, PR_BODY_MAX)}
 `;
   const withBody = async (use) => {
-    const dir = mkdtempSync(join37(tmpdir(), "studio-pr-"));
+    const dir = mkdtempSync(join38(tmpdir(), "studio-pr-"));
     try {
-      const file2 = join37(dir, "body.md");
-      writeFileSync12(file2, text, { mode: 384 });
+      const file2 = join38(dir, "body.md");
+      writeFileSync13(file2, text, { mode: 384 });
       return await use(file2);
     } finally {
       rmSync8(dir, { recursive: true, force: true });
@@ -42921,7 +43764,7 @@ function refuseNativeQueue(config2) {
   }
 }
 var openReviewLine = (id, target) => `review ${id} of ${target} is open: run studio collect ${id}, or studio drop ${id} if it ended without a report`;
-async function boardBlocksMerge(project, root, config2, entry, head, ports) {
+async function boardBlocksMerge(project, root, config2, entry, head, ports, waived) {
   let board;
   try {
     board = loadBoard(project);
@@ -42944,7 +43787,7 @@ async function boardBlocksMerge(project, root, config2, entry, head, ports) {
     head
   );
   if (problem !== void 0 || (item.approvedJobs ?? []).length === 0) return problem;
-  const checks = await readChecks(entry, ports.gh);
+  const checks = await readChecks(entry, ports.gh, waived);
   if (checks.kind !== "pass") return "the checks are not green";
   return approvedJobsProblem(item.approvedJobs ?? [], checks.checks);
 }
@@ -43135,6 +43978,10 @@ function buildSnapshot(root, ownerRoot, board, capacity, queue, now, hold, limit
     project: extra.config.primaryRepo.split("/").at(-1) ?? extra.config.primaryRepo,
     items,
     ...tickRecord === void 0 ? {} : { needsLead: leadDecisions(tickRecord, board) },
+    ...(() => {
+      const exceptions = recentExceptions(root, board, now);
+      return exceptions.length === 0 ? {} : { exceptions };
+    })(),
     wip: {
       building: roleWip((r) => r !== "reviewer"),
       review: roleWip((r) => r === "reviewer")
@@ -43200,7 +44047,7 @@ function readVisibleLine(prompt, input2, output2) {
 
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync8, openSync as openSync8, readFileSync as readFileSync37 } from "node:fs";
+import { closeSync as closeSync8, openSync as openSync8, readFileSync as readFileSync38 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -46786,8 +47633,8 @@ function prettyMilliseconds(milliseconds, options) {
     const flooredValue = Math.round(flooredInterimValue) / 10 ** decimalDigits;
     return flooredValue.toFixed(decimalDigits);
   };
-  const add = (value, long, short, valueString) => {
-    if ((result.length === 0 || !options.colonNotation) && isZero(value) && !(options.colonNotation && short === "m")) {
+  const add = (value, long, short2, valueString) => {
+    if ((result.length === 0 || !options.colonNotation) && isZero(value) && !(options.colonNotation && short2 === "m")) {
       return;
     }
     valueString ??= String(value);
@@ -46796,7 +47643,7 @@ function prettyMilliseconds(milliseconds, options) {
       const minLength = result.length > 0 ? 2 : 1;
       valueString = "0".repeat(Math.max(0, minLength - wholeDigits)) + valueString;
     } else {
-      valueString += options.verbose ? " " + pluralize(long, value) : short;
+      valueString += options.verbose ? " " + pluralize(long, value) : short2;
     }
     result.push(valueString);
   };
@@ -46896,7 +47743,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync36 } from "node:fs";
+import { readFileSync as readFileSync37 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value, optionName) => {
@@ -47252,7 +48099,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync35 } from "node:fs";
+import { readFileSync as readFileSync36 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -47366,7 +48213,7 @@ var getTargetFd = ({ value, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync35(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync36(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value, fdNumber) => {
   if (value === "inherit") {
@@ -47760,8 +48607,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync36(value))] }),
-    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync36(file2))] }),
+    fileUrl: ({ value }) => ({ contents: () => [bufferToUint8Array(readFileSync37(value))] }),
+    filePath: ({ value: { file: file2 } }) => ({ contents: () => [bufferToUint8Array(readFileSync37(file2))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value }) => ({ contents: () => [...value] }),
     string: ({ value }) => ({ contents: [value] }),
@@ -48057,7 +48904,7 @@ var throwOnSerializableInput = (optionName, invalidItem) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-sync.js
-import { writeFileSync as writeFileSync13, appendFileSync } from "node:fs";
+import { writeFileSync as writeFileSync14, appendFileSync } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/output.js
 var shouldLogOutput = ({ stdioItems, encoding, verboseInfo, fdNumber }) => fdNumber !== "all" && isFullVerbose(verboseInfo, fdNumber) && !BINARY_ENCODINGS.has(encoding) && isFdVerbose(fdNumber) && (stdioItems.some(({ type, value }) => type === "native" && PIPED_STDIO_VALUES.has(value)) || stdioItems.every(({ type }) => TRANSFORM_TYPES.has(type)));
@@ -48191,7 +49038,7 @@ var writeToFiles = (chunks, stdioItems, outputFiles) => {
     if (append || outputFiles.has(path10)) {
       appendFileSync(path10, contents);
     } else {
-      writeFileSync13(path10, contents);
+      writeFileSync14(path10, contents);
     }
     outputFiles.add(path10);
   }
@@ -51002,6 +51849,43 @@ var {
 
 // src/ports.ts
 var HTTP_TIMEOUT_MS = 15e3;
+var realEvidence = {
+  async run(argv, opts) {
+    const [file2, ...args] = argv;
+    if (file2 === void 0) return { code: 1, stdout: "", timedOut: false };
+    const child = execa(file2, args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      extendEnv: false,
+      shell: false,
+      reject: false,
+      stdin: "ignore",
+      stderr: "ignore",
+      timeout: opts.timeoutMs,
+      maxBuffer: opts.maxBytes,
+      forceKillAfterDelay: 1e3,
+      stripFinalNewline: false
+    });
+    let timer;
+    const late = new Promise((done) => {
+      timer = setTimeout(
+        () => done({ code: 1, stdout: "", timedOut: true }),
+        opts.timeoutMs + 2e3
+      );
+      timer.unref();
+    });
+    const run2 = child.then((r) => ({
+      code: r.timedOut ? 124 : r.failed ? r.exitCode || 1 : 0,
+      stdout: r.failed ? "" : String(r.stdout ?? ""),
+      timedOut: r.timedOut === true
+    }));
+    try {
+      return await Promise.race([run2, late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+};
 var realHttp = {
   async post(url2, body, headers) {
     if (!url2.startsWith("https://")) return { ok: false };
@@ -51114,7 +51998,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync37(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync38(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }
@@ -51196,7 +52080,17 @@ function realPorts(claudeBin = "claude") {
       };
     }
   };
-  return { gh, git, claude, clock, host, credentials, plugins, http: realHttp };
+  return {
+    gh,
+    git,
+    claude,
+    clock,
+    host,
+    credentials,
+    plugins,
+    http: realHttp,
+    evidence: realEvidence
+  };
 }
 
 // src/main.ts

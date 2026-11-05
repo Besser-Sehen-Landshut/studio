@@ -3,6 +3,61 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.17.0] - 2026-11-05
+
+A guard job in CI (a migration guard, a floor guard) that flagged a harmless change stopped the pull request
+until a person waved it through, even when a script had already shown mechanically "only comments changed".
+Now a project binds such a guard to an evidence command in `studio.yaml`; when the command proves the hit a
+false alarm on exactly that diff, the failed checks count as waived and the exception is logged with its
+evidence. Without evidence the lead decides; only an `owner_only` rule goes to the owner. Not tagged yet; the
+maintainers tag after the merge.
+
+### Added
+
+- `evidence:` in `studio.yaml`: rules with `id`, `guard` (the CI job by workflow file and job name), `run`
+  (`local`, the default, or `ci`), for `local` a `command` (argv, no shell), the `proof` line and
+  `timeout_seconds` (1 to 600, default 60), for `ci` the evidence `job`, and `inputs` (globs; required for
+  `ci`) and `owner_only`.
+- Rules count only from `studio.yaml` at the pull request's base commit on the default branch (and only
+  while the owner's checkout has rules at all). A failure applies to them only when every failed check is a
+  plain failed job of a rule's guard; the guard must be the same at base and head, and the pull request
+  must change none of the rule's `inputs`.
+- `run: local` runs the command outside every crew sandbox in a temporary checkout of the base (hooks off),
+  with the diff and the changed paths as files and a minimal environment; proof is exit code 0 and the proof
+  line on stdout within the timeout. `run: ci` takes a passing evidence job, unchanged from the base, on a
+  pull request that changes nothing under `.github/`.
+- `exceptions.jsonl` in the state root: an append-only log of every answer, `applied` or `not_proven`, with
+  rule, guard, pull request, item, base, head, a digest of the diff and of the output, the command and the
+  proof line, or the grant's reason; logged once per rule, pull request, base and head under
+  `exceptions.lock`, so a command never runs twice on one diff, also after a crash. `recover` breaks a stale
+  `exceptions.lock` and removes what an interrupted run left below `evidence/`.
+- `collect` of an approval and the merge queue use it: waived checks count neither as failed nor as passed.
+  `collect`, `tick` and `queue run` print `exceptions`; `studio board` lists those of open items, the pane's
+  details view those of the last seven days (`Exceptions by evidence`, in German `Ausnahmen per Beweis`).
+- Without evidence, one line for the lead (`evidence: <job> failed on <repo>#<n> at <head> and no evidence
+  proved a false alarm (<rule>: <why>); decide: ...`): the approval waits, or the merge fails. These lines
+  are not pushed to the owner's phone; the pane shows them as `guard hit without evidence – decide`. A rule
+  marked `owner_only` makes it `evidence (owner): ...`, which is pushed.
+- `studio exceptions [list]` and `studio exceptions grant <repo>#<pr> <rule> --reason "<line>"`: the lead's
+  decision, bound to the current head and base (`by: lead`); an `owner_only` rule or item takes the owner's,
+  in a terminal (`by: owner`). Refused under `STUDIO_ROLE=crew`.
+- A pull request that changes `evidence:` in `studio.yaml` or a file a rule names in `inputs` gets no
+  approval: the review item is blocked, the owner reviews and merges such a change himself.
+- The review routine names the guard jobs Studio judges by evidence: a failure of one alone is no finding.
+
+### Removed
+
+- The reviewer's offered skill `pr-review-toolkit:review-pr`. It is a command of Anthropic's official
+  marketplace (Apache-2.0) that no crew config dir installed, so every large review reported it under
+  `skillsMissing`. Installing it would add a third marketplace to every crew for a workflow that runs
+  `gh pr view` (the reviewer may not run gh) and starts its own agents without an explicit model, and that
+  duplicates the gate's own analyzers.
+
+### Not exercised
+
+- A real guard job on GitHub, a real lead deciding on a hit, and a guard that branch protection requires
+  (GitHub then refuses the merge whatever Studio waives).
+
 ## [0.16.0] - 2026-11-05
 
 An epic whose items were all merged sat in `accepting` until someone looked: nothing ran the E2E and

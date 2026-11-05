@@ -117,6 +117,16 @@ export interface StateSnapshot {
   items?: PaneItem[];
   /** The latest tick's lead list, each with a short reason and a next step; absent before a tick. */
   needsLead?: LeadDecision[];
+  /** Exceptions by evidence of the last seven days, newest first; absent without any. */
+  exceptions?: {
+    rule: string;
+    pr: string;
+    item?: string;
+    /** The head the exception holds for, 12 characters. */
+    head: string;
+    by: 'evidence' | 'lead' | 'owner';
+    at: string;
+  }[];
   /** WIP limits of the pane's pipeline columns: build roles together, and the reviewer. */
   wip?: { building: number; review: number };
   /** Set while the owner's pause stands; `time` is `HH:MM` on the owner's clock. */

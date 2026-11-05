@@ -28,7 +28,7 @@ export type JobGate =
  * "every instance passed". Names that go on without a space (`job-slow`) are other jobs. Commit
  * statuses have no workflow and never count.
  */
-const instances = (
+export const jobInstances = (
   checks: readonly Check[],
   workflow: string,
   job: string,
@@ -54,13 +54,13 @@ const jobProblem = (
   workflow: string,
   job: string,
 ): 'ambiguous' | 'not passed' | undefined => {
-  const mine = instances(checks, workflow, job);
+  const mine = jobInstances(checks, workflow, job);
   if (mine === 'ambiguous') return 'ambiguous';
   return mine.length > 0 && mine.every((c) => c.bucket === 'pass') ? undefined : 'not passed';
 };
 
 type Job = Record<string, unknown>;
-type Workflow = {
+export type Workflow = {
   name: string;
   jobs: [string, unknown][];
   onPullRequest: boolean;
@@ -195,9 +195,9 @@ const remoteCall = (j: Job, path: string): boolean =>
  * way may have `if:` or `continue-on-error`; checks name a workflow by its name only, so the name
  * of each workflow whose checks count must be unique.
  */
-type Found = { targets: ApprovedJob[]; def: string } | string;
+export type Found = { targets: ApprovedJob[]; def: string } | string;
 
-function findJob(
+export function findJob(
   files: ReadonlyMap<string, Workflow | undefined>,
   path: string,
   job: string,

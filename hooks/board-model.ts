@@ -65,6 +65,8 @@ export interface BoardState {
   pause?: { time?: string };
   /** Merges of today with their items and epics, oldest first. */
   mergedToday?: { pr: number; item?: string; epic?: string }[];
+  /** Exceptions by evidence of the last days, newest first. */
+  exceptions?: { rule: string; pr: string; item?: string; head: string; by: string }[];
 }
 
 export type Stage = 'ready' | 'building' | 'pr_held' | 'review' | 'queued' | 'blocked';
@@ -325,6 +327,17 @@ function toState(root: Obj): BoardState {
     ];
   });
   if (mergedToday.some((m) => m.item !== undefined)) state.mergedToday = mergedToday;
+  const exceptions = list(root.exceptions).flatMap((r) => {
+    const o = obj(r);
+    const rule = str(o?.rule);
+    const pr = str(o?.pr);
+    const head = str(o?.head);
+    const by = str(o?.by);
+    if (rule === undefined || pr === undefined || head === undefined || by === undefined) return [];
+    const item = str(o?.item);
+    return [{ rule, pr, head, by, ...(item === undefined ? {} : { item }) }];
+  });
+  if (exceptions.length > 0) state.exceptions = exceptions;
   return state;
 }
 
@@ -401,6 +414,9 @@ interface Strings {
   headQueue: string;
   headForYou: (n: number) => string;
   headForLead: (n: number) => string;
+  headExceptions: (n: number) => string;
+  /** Who decided an exception: the evidence, the lead or the owner. */
+  exceptionBy: (by: string) => string;
   leadTimeLine: (median: string, deploys: number) => string;
   headDays: string;
   headUsage: string;
@@ -485,6 +501,8 @@ const EN: Strings = {
   headQueue: 'Merge queue',
   headForYou: (n) => `For you (${n})`,
   headForLead: (n) => `For the lead (${n})`,
+  headExceptions: (n) => `Exceptions by evidence (${n})`,
+  exceptionBy: (by) => (by === 'evidence' ? 'evidence' : by === 'owner' ? 'owner' : 'lead'),
   leadTimeLine: (m, d) => `Lead time (median) ${m} · deploys today ${d}`,
   headDays: 'Last 7 days (merged/deployed)',
   headUsage: 'Usage (runs)',
@@ -524,6 +542,7 @@ const EN: Strings = {
     if (code === 'changes_requested') return 'changes requested';
     if (code === 'merge_failed') return 'merge failed';
     if (code === 'question') return 'crew has a question';
+    if (code === 'evidence') return 'guard hit without evidence – decide';
     if (code === 'blocked') return 'blocked';
     return 'needs a decision';
   },
@@ -626,6 +645,8 @@ const DE: Strings = {
   headQueue: 'Merge-Warteschlange',
   headForYou: (n) => `Zur Entscheidung (${n})`,
   headForLead: (n) => `Für die Steuerung (${n})`,
+  headExceptions: (n) => `Ausnahmen per Beweis (${n})`,
+  exceptionBy: (by) => (by === 'evidence' ? 'Beweis' : by === 'owner' ? 'Inhaber' : 'Steuerung'),
   leadTimeLine: (m, d) => `Durchlaufzeit (Median) ${m} · Deploys heute ${d}`,
   headDays: 'Letzte 7 Tage (gemergt/ausgeliefert)',
   headUsage: 'Nutzung (Läufe)',
@@ -665,6 +686,7 @@ const DE: Strings = {
     if (code === 'changes_requested') return 'Änderungen angefordert';
     if (code === 'merge_failed') return 'Merge fehlgeschlagen';
     if (code === 'question') return 'Crew hat eine Frage';
+    if (code === 'evidence') return 'Prüfungstreffer ohne Beweis – entscheiden';
     if (code === 'blocked') return 'blockiert';
     return 'Entscheidung nötig';
   },
@@ -1123,6 +1145,16 @@ export function boardLines(
     }
     if (lead.length > MAX_OWNER_LINES) {
       out.push({ text: `  ${t.more(lead.length - MAX_OWNER_LINES)}`, tone: 'dim' });
+    }
+  }
+  // Exceptions by evidence: which guard hit was waived on which head, and who decided.
+  const exceptions = s.exceptions ?? [];
+  if (exceptions.length > 0) {
+    out.push({ text: t.headExceptions(exceptions.length), tone: 'head' });
+    for (const e of exceptions.slice(0, MAX_OWNER_LINES)) {
+      out.push({
+        text: `  ${e.item ?? e.pr} ${e.rule} · ${e.head.slice(0, 7)} · ${t.exceptionBy(e.by)}`,
+      });
     }
   }
   const median = s.medianLeadTimeHours === null ? '–' : t.hours(s.medianLeadTimeHours);
