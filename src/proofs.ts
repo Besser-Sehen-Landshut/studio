@@ -45,12 +45,22 @@ const isWs = (c: string | undefined): boolean =>
 const isIdent = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_$]/.test(c);
 
 /** Collects segments, merging neighbours of the same kind. */
+/**
+ * Collects segments. Each comment is classified the moment it is read, on its own: one with a
+ * meaning (`meaningful`) becomes code. Comments are never merged, so a plain comment cannot hide
+ * a meaningful one right behind it; only whitespace and code runs are merged.
+ */
 class Out {
   segs: Seg[] = [];
+  private line = 1;
+  constructor(private readonly lang: ProofLanguage) {}
   push(kind: Seg['kind'], text: string): void {
+    const own = kind === 'comment' && meaningful(text, this.lang, this.line) ? 'code' : kind;
+    for (const ch of text) if (ch === '\n') this.line++;
     const last = this.segs.at(-1);
-    if (last !== undefined && last.kind === kind && kind !== 'string') last.text += text;
-    else this.segs.push({ kind, text });
+    if (last !== undefined && last.kind === own && (own === 'ws' || own === 'code')) {
+      last.text += text;
+    } else this.segs.push({ kind: own, text });
   }
 }
 
@@ -113,8 +123,8 @@ const REGEX_AFTER = new Set([
   'await',
 ]);
 
-function tokenizeJs(s: string): Seg[] {
-  const out = new Out();
+function tokenizeJs(s: string, lang: ProofLanguage): Seg[] {
+  const out = new Out(lang);
   let i = 0;
   while (i < s.length) {
     const c = s[i] as string;
@@ -162,8 +172,8 @@ function tokenizeJs(s: string): Seg[] {
   return out.segs;
 }
 
-function tokenizeRust(s: string): Seg[] {
-  const out = new Out();
+function tokenizeRust(s: string, lang: ProofLanguage): Seg[] {
+  const out = new Out(lang);
   let i = 0;
   while (i < s.length) {
     const c = s[i] as string;
@@ -224,8 +234,8 @@ function tokenizeRust(s: string): Seg[] {
   return out.segs;
 }
 
-function tokenizeSql(s: string): Seg[] {
-  const out = new Out();
+function tokenizeSql(s: string, lang: ProofLanguage): Seg[] {
+  const out = new Out(lang);
   let i = 0;
   while (i < s.length) {
     const c = s[i] as string;
@@ -284,8 +294,8 @@ function tokenizeSql(s: string): Seg[] {
 }
 
 /** Python: `#` comments; strings with any prefix but f, single or triple quoted. */
-function tokenizePython(s: string): Seg[] {
-  const out = new Out();
+function tokenizePython(s: string, lang: ProofLanguage): Seg[] {
+  const out = new Out(lang);
   let i = 0;
   while (i < s.length) {
     const c = s[i] as string;
@@ -320,8 +330,8 @@ function tokenizePython(s: string): Seg[] {
 }
 
 /** TOML: `#` comments; basic, literal and multi-line strings. */
-function tokenizeToml(s: string): Seg[] {
-  const out = new Out();
+function tokenizeToml(s: string, lang: ProofLanguage): Seg[] {
+  const out = new Out(lang);
   let i = 0;
   while (i < s.length) {
     const c = s[i] as string;
@@ -350,8 +360,8 @@ function tokenizeToml(s: string): Seg[] {
 }
 
 /** YAML: `#` after whitespace or at a line start; quotes only where a scalar starts. */
-function tokenizeYaml(s: string): Seg[] {
-  const out = new Out();
+function tokenizeYaml(s: string, lang: ProofLanguage): Seg[] {
+  const out = new Out(lang);
   let i = 0;
   while (i < s.length) {
     const c = s[i] as string;
@@ -389,8 +399,8 @@ function tokenizeYaml(s: string): Seg[] {
 }
 
 /** Shell: `#` at the start of a word; quotes; no here-documents, no `$'...'`. */
-function tokenizeSh(s: string): Seg[] {
-  const out = new Out();
+function tokenizeSh(s: string, lang: ProofLanguage): Seg[] {
+  const out = new Out(lang);
   let i = 0;
   while (i < s.length) {
     const c = s[i] as string;
@@ -429,7 +439,7 @@ function tokenizeSh(s: string): Seg[] {
   return out.segs;
 }
 
-const TOKENIZERS: Record<ProofLanguage, (s: string) => Seg[]> = {
+const TOKENIZERS: Record<ProofLanguage, (s: string, lang: ProofLanguage) => Seg[]> = {
   sql: tokenizeSql,
   rust: tokenizeRust,
   ts: tokenizeJs,
@@ -462,8 +472,7 @@ const DIRECTIVE =
   /@ts-|<reference|sourcemappingurl|sourceurl|@jsx|eslint|biome|prettier|jshint|jscs|istanbul|\bc8\b|v8 ignore|@flow|@license|@preserve|__pure__|__no_side_effects__|webpack|vite-ignore|shellcheck|yaml-language-server|yamllint|\$schema|#:schema|taplo|tombi|renovate|noqa|nosec|pragma|pylint|mypy|pyright|ruff|isort|type:\s*ignore|\btype:|fmt:|pyre-|flake8|yapf|coverage|codespell|cspell|spell-checker|trunk-ignore|checkov|semgrep|tfsec|kics|hadolint|gitleaks|lint|ignore|disable|enable|no-transaction|goose|sqlx|flyway|liquibase|changeset|rollback|precondition|migrate/i;
 
 /** Line comments whose form gives them meaning in a language, whatever their words. */
-function meaningful(seg: Seg, language: ProofLanguage, line: number): boolean {
-  const t = seg.text;
+function meaningful(t: string, language: ProofLanguage, line: number): boolean {
   if (DIRECTIVE.test(t)) return true;
   // An interpreter line: line 1, `#!`.
   if (line === 1 && t.startsWith('#!')) return true;
@@ -490,16 +499,10 @@ function meaningful(seg: Seg, language: ProofLanguage, line: number): boolean {
 export function codeOf(text: string, language: ProofLanguage): string | undefined {
   let segs: Seg[];
   try {
-    segs = TOKENIZERS[language](text);
+    segs = TOKENIZERS[language](text, language);
   } catch (e) {
     if (e instanceof Unclassifiable) return undefined;
     throw e;
-  }
-  // A comment with a meaning is code: it is compared like code.
-  let line = 1;
-  for (const seg of segs) {
-    if (seg.kind === 'comment' && meaningful(seg, language, line)) seg.kind = 'code';
-    for (const ch of seg.text) if (ch === '\n') line++;
   }
   const mode = BREAKS[language];
   const parts: string[] = [];

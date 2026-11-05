@@ -223,6 +223,25 @@ describe('comments with a meaning are code', () => {
     no('yaml', 'a: 1\n', 'a: 1 # yamllint disable-line\n');
     no('toml', 'a = 1\n', '#:schema ./s.json\na = 1\n');
   });
+  it('a plain comment right before a meaningful one does not hide it, in every language', () => {
+    // sql: a block comment glued to an executable one, and to a migration directive
+    expect(codeOf('SELECT 1; /* a *//*! DROP TABLE a */', 'sql')).toBeUndefined();
+    no('sql', 'SELECT 1;\n', 'SELECT 1; /* a */-- +goose Down\n');
+    // rust: a block comment glued to a doc comment; a plain line comment before an inner doc
+    no('rust', 'fn a() {}\n', '/* x *//// ```\nfn a() {}\n');
+    no('rust', 'fn a() {}\n', '// x\n//! attr\nfn a() {}\n');
+    no('rust', 'fn a() {}\n', '/* x *//*! inner docs */\nfn a() {}\n');
+    for (const lang of ['ts', 'js'] as const) {
+      no(lang, 'f();\n', '/* a *//* @ts-ignore */\nf();\n');
+      no(lang, 'f();\n', '/* a */// @ts-expect-error\nf();\n');
+      no(lang, 'f();\n', '/* a *//*#__PURE__*/ f();\n');
+    }
+    no('python', 'x = 1\n', '# a\n# coding: latin-1\nx = 1\n');
+    no('python', 'x = f(1)\n', '# a\nx = f(1)  # noqa\n');
+    no('sh', 'echo $a\n', '# a\n# shellcheck disable=SC2086\necho $a\n');
+    no('yaml', 'a: 1\n', '# a\n# yaml-language-server: $schema=./s.json\na: 1\n');
+    no('toml', 'a = 1\n', '# a\n#:schema ./s.json\na = 1\n');
+  });
   it('jsx files are never read: .tsx and .jsx are in no language', () => {
     expect(languageOf('a.tsx', ['ts', 'js'])).toBeUndefined();
     expect(languageOf('a.jsx', ['ts', 'js'])).toBeUndefined();

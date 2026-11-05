@@ -28568,11 +28568,19 @@ var no = (why) => {
 var isWs = (c3) => c3 === " " || c3 === "	" || c3 === "\n" || c3 === "\r" || c3 === "\f" || c3 === "\v";
 var isIdent = (c3) => c3 !== void 0 && /[A-Za-z0-9_$]/.test(c3);
 var Out = class {
+  constructor(lang) {
+    this.lang = lang;
+  }
+  lang;
   segs = [];
+  line = 1;
   push(kind, text) {
+    const own2 = kind === "comment" && meaningful(text, this.lang, this.line) ? "code" : kind;
+    for (const ch of text) if (ch === "\n") this.line++;
     const last = this.segs.at(-1);
-    if (last !== void 0 && last.kind === kind && kind !== "string") last.text += text;
-    else this.segs.push({ kind, text });
+    if (last !== void 0 && last.kind === own2 && (own2 === "ws" || own2 === "code")) {
+      last.text += text;
+    } else this.segs.push({ kind: own2, text });
   }
 };
 function quoted(s, i2, quote, o2) {
@@ -28623,8 +28631,8 @@ var REGEX_AFTER = /* @__PURE__ */ new Set([
   "yield",
   "await"
 ]);
-function tokenizeJs(s) {
-  const out = new Out();
+function tokenizeJs(s, lang) {
+  const out = new Out(lang);
   let i2 = 0;
   while (i2 < s.length) {
     const c3 = s[i2];
@@ -28666,8 +28674,8 @@ function tokenizeJs(s) {
   }
   return out.segs;
 }
-function tokenizeRust(s) {
-  const out = new Out();
+function tokenizeRust(s, lang) {
+  const out = new Out(lang);
   let i2 = 0;
   while (i2 < s.length) {
     const c3 = s[i2];
@@ -28725,8 +28733,8 @@ function tokenizeRust(s) {
   }
   return out.segs;
 }
-function tokenizeSql(s) {
-  const out = new Out();
+function tokenizeSql(s, lang) {
+  const out = new Out(lang);
   let i2 = 0;
   while (i2 < s.length) {
     const c3 = s[i2];
@@ -28778,8 +28786,8 @@ function tokenizeSql(s) {
   }
   return out.segs;
 }
-function tokenizePython(s) {
-  const out = new Out();
+function tokenizePython(s, lang) {
+  const out = new Out(lang);
   let i2 = 0;
   while (i2 < s.length) {
     const c3 = s[i2];
@@ -28808,8 +28816,8 @@ function tokenizePython(s) {
   }
   return out.segs;
 }
-function tokenizeToml(s) {
-  const out = new Out();
+function tokenizeToml(s, lang) {
+  const out = new Out(lang);
   let i2 = 0;
   while (i2 < s.length) {
     const c3 = s[i2];
@@ -28836,8 +28844,8 @@ function tokenizeToml(s) {
   }
   return out.segs;
 }
-function tokenizeYaml(s) {
-  const out = new Out();
+function tokenizeYaml(s, lang) {
+  const out = new Out(lang);
   let i2 = 0;
   while (i2 < s.length) {
     const c3 = s[i2];
@@ -28870,8 +28878,8 @@ function tokenizeYaml(s) {
   }
   return out.segs;
 }
-function tokenizeSh(s) {
-  const out = new Out();
+function tokenizeSh(s, lang) {
+  const out = new Out(lang);
   let i2 = 0;
   while (i2 < s.length) {
     const c3 = s[i2];
@@ -28929,8 +28937,7 @@ var BREAKS = {
   python: "indent"
 };
 var DIRECTIVE = /@ts-|<reference|sourcemappingurl|sourceurl|@jsx|eslint|biome|prettier|jshint|jscs|istanbul|\bc8\b|v8 ignore|@flow|@license|@preserve|__pure__|__no_side_effects__|webpack|vite-ignore|shellcheck|yaml-language-server|yamllint|\$schema|#:schema|taplo|tombi|renovate|noqa|nosec|pragma|pylint|mypy|pyright|ruff|isort|type:\s*ignore|\btype:|fmt:|pyre-|flake8|yapf|coverage|codespell|cspell|spell-checker|trunk-ignore|checkov|semgrep|tfsec|kics|hadolint|gitleaks|lint|ignore|disable|enable|no-transaction|goose|sqlx|flyway|liquibase|changeset|rollback|precondition|migrate/i;
-function meaningful(seg, language, line3) {
-  const t = seg.text;
+function meaningful(t, language, line3) {
   if (DIRECTIVE.test(t)) return true;
   if (line3 === 1 && t.startsWith("#!")) return true;
   switch (language) {
@@ -28950,15 +28957,10 @@ function meaningful(seg, language, line3) {
 function codeOf(text, language) {
   let segs;
   try {
-    segs = TOKENIZERS[language](text);
+    segs = TOKENIZERS[language](text, language);
   } catch (e) {
     if (e instanceof Unclassifiable) return void 0;
     throw e;
-  }
-  let line3 = 1;
-  for (const seg of segs) {
-    if (seg.kind === "comment" && meaningful(seg, language, line3)) seg.kind = "code";
-    for (const ch of seg.text) if (ch === "\n") line3++;
   }
   const mode = BREAKS[language];
   const parts = [];
