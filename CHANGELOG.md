@@ -68,8 +68,9 @@ merge.
   that changes `evidence:` (`approval refused: ...; the release rules are the owner's: ...`).
 - Approver `paths` are matched against every change of the release, not only the component's.
 - `release.guarded_paths`: files outside `.github` the release workflows run (deploy scripts). Once any
-  component has a release, every file below `.github/workflows/` and `.github/actions/`, and the guarded
-  paths, are owner-owned: a pull request that changes one gets no approval. The announced record pins the tree
+  component has a release, everything below `.github/` and the guarded paths are owner-owned: a pull request
+  that changes one, or adds a link or submodule there or on the way there, gets no approval. A link or
+  submodule inside that scope refuses a draft or trigger. The announced record pins the tree
   of `.github` and the guarded files; the trigger refuses when either changed at the release commit or the
   head. The owner must list such scripts; Studio does not find them.
 - The rollback workflow is pinned like the started ones: the trigger refuses another, and the pin is checked

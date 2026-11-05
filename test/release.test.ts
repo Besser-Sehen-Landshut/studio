@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1211,5 +1212,54 @@ describe('release: what the release workflows run is pinned too', () => {
     expect(show.out).toMatch(
       /warning: \.github\/workflows\/rollback\.yml changed on main since api-1/,
     );
+  });
+});
+
+describe('release: links cannot carry the pin elsewhere', () => {
+  const link = (fx: Fx, path: string) => {
+    mkdirSync(dirname(join(fx.project, path)), { recursive: true });
+    symlinkSync('../../server/app.ts', join(fx.project, path));
+    git(fx.project, 'add', path);
+    git(fx.project, 'commit', '-q', '-m', `link ${path}`);
+    fx.head = git(fx.project, 'rev-parse', 'HEAD');
+    git(fx.project, 'push', '-q', 'origin', 'main');
+  };
+
+  it('refuses to draft with a symbolic link in .github', async () => {
+    const fx = makeFx();
+    link(fx, '.github/actions/deploy.sh');
+    const p = fakePorts(fakeGh(fx).gh);
+    const r = await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(
+      /"\.github\/actions\/deploy\.sh" at [0-9a-f]{7} is a symbolic link in \.github or a guarded path: a release cannot pin what it points to/,
+    );
+    expect(existsSync(join(fx.state, RELEASES_FILE))).toBe(false);
+  });
+
+  it('refuses to draft with a symbolic link in a guarded path, or on the way to one', async () => {
+    const release = RELEASE_BLOCK.replace(
+      '      approvers:',
+      '      guarded_paths: ["scripts/deploy/**"]\n      approvers:',
+    );
+    for (const path of ['scripts/deploy/run.sh', 'scripts/deploy']) {
+      const fx = makeFx({ release });
+      link(fx, path);
+      const p = fakePorts(fakeGh(fx).gh);
+      const r = await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+      expect(r.err, path).toContain(`"${path}" at `);
+      expect(r.err).toContain('is a symbolic link in .github or a guarded path');
+    }
+  });
+
+  it('refuses the trigger when a link appeared after the announcement', async () => {
+    const fx = makeFx();
+    const g = fakeGh(fx);
+    const p = fakePorts(g.gh);
+    await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    link(fx, '.github/workflows/shared.yml');
+    const r = await cli(fx, p.ports, ['release', 'api']);
+    expect(r.err).toMatch(/\.github\/workflows\/shared\.yml" at [0-9a-f]{7} is a symbolic link/);
+    expect(g.dispatches).toEqual([]);
   });
 });

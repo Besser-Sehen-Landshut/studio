@@ -708,7 +708,7 @@ describe('judging a failed guard by a built-in proof', () => {
     };
     expect(await changeOf(`${RULE}${release}`, '.github/workflows/other.yml')).toEqual({
       problem:
-        'the pull request changes ".github/workflows/other.yml"; with a release, workflows and actions are the owner\'s',
+        'the pull request changes ".github/workflows/other.yml"; with a release, .github is the owner\'s',
       area: 'release',
     });
     expect(await changeOf(`${RULE}${release}`, '.github/actions/setup/action.yml')).toMatchObject({
@@ -718,10 +718,27 @@ describe('judging a failed guard by a built-in proof', () => {
       problem: 'the pull request changes "scripts/deploy/run.sh", a guarded path of a release',
       area: 'release',
     });
+    // All of .github, the scope of the pin, not only workflows and actions.
+    expect(await changeOf(`${RULE}${release}`, '.github/CODEOWNERS')).toMatchObject({
+      area: 'release',
+    });
+    // A link on the way to a guarded path redirects it.
+    const linked = makeRepo({
+      rules: `${RULE}${release}`,
+      change: (dir) => symlinkSync('/tmp', join(dir, 'scripts/deploy')),
+    });
+    expect(
+      await evidenceChange(ctxFor(linked, fakeGh(linked).gh), linked.base, linked.head),
+    ).toEqual({
+      problem:
+        'the pull request adds a link at "scripts/deploy", on the way to what a release pins',
+      area: 'release',
+    });
     // Without any release, a workflow change is no owner matter here.
     expect(await changeOf(RULE, '.github/workflows/other.yml')).toEqual({});
     expect(await changeOf(`${RULE}${release}`, 'scripts/other.sh')).toEqual({});
-  });
+    // Seven repositories with git: seconds under a full parallel run.
+  }, 30_000);
 
   it('a pull request that changes the guard job gets no exception', async () => {
     const r = makeRepo({

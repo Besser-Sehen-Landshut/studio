@@ -12,7 +12,7 @@ import {
   type ReleaseRule,
   type StudioConfig,
 } from './config.js';
-import { matchGlob } from './glob.js';
+import { matchGlob, staticPrefix } from './glob.js';
 import { classifySql, type MigrationKind, naturalCompare, needsOwner } from './migrations.js';
 import { acquireStateLock, assertStatePath, writeStateFile } from './paths.js';
 import type { Gh, Git } from './ports.js';
@@ -1776,6 +1776,21 @@ export async function guardPinAt(
   sha: string,
   guarded: readonly string[],
 ): Promise<string> {
+  const entries = (await g(git, co, ['ls-tree', '-r', '--full-tree', '-z', sha]))
+    .split('\0')
+    .filter((e) => e !== '')
+    .map((e) => {
+      const tab = e.indexOf('\t');
+      return { meta: e.slice(0, tab), mode: e.slice(0, 6), path: e.slice(tab + 1) };
+    });
+  // A link (or a submodule) points somewhere the pin does not reach: refused, not followed.
+  for (const e of entries) {
+    if ((e.mode === '120000' || e.mode === '160000') && pinCovers(e.path, guarded)) {
+      throw new Error(
+        `${JSON.stringify(e.path.slice(0, 200))} at ${short(sha)} is a ${e.mode === '120000' ? 'symbolic link' : 'submodule'} in .github or a guarded path: a release cannot pin what it points to; replace it with the files themselves`,
+      );
+    }
+  }
   let tree = 'none';
   try {
     const oid = (await g(git, co, ['rev-parse', '--verify', '--quiet', `${sha}:.github`])).trim();
@@ -1783,22 +1798,26 @@ export async function guardPinAt(
   } catch {
     tree = 'none';
   }
-  let files = '';
-  if (guarded.length > 0) {
-    const out = await g(git, co, ['ls-tree', '-r', '--full-tree', '-z', sha]);
-    files = out
-      .split('\0')
-      .filter((e) => e !== '')
-      .map((e) => {
-        const tab = e.indexOf('\t');
-        return { meta: e.slice(0, tab), path: e.slice(tab + 1) };
-      })
-      .filter((e) => guarded.some((p) => matchGlob(p, e.path)))
-      .map((e) => `${e.meta} ${e.path}`)
-      .sort()
-      .join('\n');
-  }
+  const files = entries
+    .filter((e) => guarded.some((p) => matchGlob(p, e.path)))
+    .map((e) => `${e.meta} ${e.path}`)
+    .sort()
+    .join('\n');
   return `github:${tree} guarded:${digest(files)}`;
+}
+
+/**
+ * Whether `path` lies in what a release pins: `.github` (or is it), a file a guarded glob matches,
+ * or a directory on the way to one (a link there would redirect the whole glob).
+ */
+export function pinCovers(path: string, guarded: readonly string[]): boolean {
+  const p = path.toLowerCase();
+  if (p === '.github' || p.startsWith('.github/')) return true;
+  return guarded.some((glob) => {
+    if (matchGlob(glob, path)) return true;
+    const prefix = staticPrefix(glob).toLowerCase();
+    return prefix === p || prefix.startsWith(`${p}/`);
+  });
 }
 
 /** What a release waits for from the lead or the owner, as needsLead lines. */

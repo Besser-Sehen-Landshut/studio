@@ -10,6 +10,7 @@ import { acquireStateLock, type StateLock, writeStateFile } from './paths.js';
 import type { Gh, Git } from './ports.js';
 import { commentsOnlyWhy, languageOf } from './proofs.js';
 import { appendStateLine, type Check, checkKey } from './queue.js';
+import { pinCovers } from './release.js';
 import { readDefaultBranch, readPrFacts } from './review.js';
 
 /**
@@ -659,13 +660,14 @@ export async function evidenceChange(
       area: 'release',
     };
   }
-  // Once anything is released, all workflows and actions are the owner's (a release workflow may
-  // call any of them), and so are the scripts a component lists as guarded_paths.
+  // Once anything is released, all of .github is the owner's, the scope the release pins (a
+  // release workflow may call any workflow, action or file there), and so are the scripts a
+  // component lists as guarded_paths, with every directory on the way to them.
   if (atBase.released || atHead.released) {
-    const ci = files.find((f) => /^\.github\/(?:workflows|actions)\//i.test(f));
+    const ci = files.find((f) => /^\.github(?:\/|$)/i.test(f));
     if (ci !== undefined) {
       return {
-        problem: `the pull request changes ${quotePath(ci)}; with a release, workflows and actions are the owner's`,
+        problem: `the pull request changes ${quotePath(ci)}; with a release, .github is the owner's`,
         area: 'release',
       };
     }
@@ -674,6 +676,25 @@ export async function evidenceChange(
     if (script !== undefined) {
       return {
         problem: `the pull request changes ${quotePath(script)}, a guarded path of a release`,
+        area: 'release',
+      };
+    }
+    // A link added where the pin reaches redirects it: guarded too, wherever it sits on the way.
+    let changes: RawChange[] | undefined;
+    try {
+      changes = parseRaw(
+        await g(ctx, [...DIFF, '--raw', '--no-abbrev', '-z', `${baseOid}...${head}`]),
+      );
+    } catch {
+      changes = undefined;
+    }
+    if (changes === undefined) return { unreadable: true };
+    const link = changes.find(
+      (c) => (c.dstMode === '120000' || c.dstMode === '160000') && pinCovers(c.path, globs),
+    );
+    if (link !== undefined) {
+      return {
+        problem: `the pull request adds a link at ${quotePath(link.path)}, on the way to what a release pins`,
         area: 'release',
       };
     }
