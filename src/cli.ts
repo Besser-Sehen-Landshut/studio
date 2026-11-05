@@ -1,6 +1,6 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runAccount } from './account-command.js';
 import { addItem } from './add-item.js';
@@ -8,6 +8,7 @@ import {
   type ApprovedJob,
   type Board,
   componentsOf,
+  ITEM_STATUSES,
   loadBoard,
   type NotRunHere,
   saveBoard,
@@ -38,6 +39,7 @@ import {
   unverifiedHandgrip,
   unverifiedRefusal,
 } from './crew.js';
+import { addEpic, dropEpic, epicRows, findEpic, settleAndSave } from './epics.js';
 import { listFlaky, recordFlaky } from './flaky.js';
 import { HeldError } from './held.js';
 import { runInit } from './init.js';
@@ -100,6 +102,7 @@ import {
   reviewRounds,
   reviewTarget,
 } from './review.js';
+import { parsePhases, planImport, projectFile, renderRoadmap, writeRoadmap } from './roadmap.js';
 import {
   acceptLesson,
   dropLesson,
@@ -154,7 +157,16 @@ Commands:
   init [--write]           Check the prerequisites and propose .studio/ for this project; --write writes it
   add "<title>" --dod <l>  Add a ready builder item [--type fix|feature|chore|docs|research]
                            [--repo <owner/name>] [--path <glob>]... [--dod <line>]... [--component <id>] [--plan <file>]
-  board [--component <id>] Show the board, or the items of one component
+                           [--epic <id>]
+  board [--component <id>] [--epic <id>]  Show the board, or the items of one component or epic
+  epic add "<title>" --goal <text> --acceptance <line>... [--component <id>]...
+                           Add an open epic with the next free id (E-<n>)
+  epic list                Epics with their items by status and merged of total
+  epic show <id>           One epic: goal, acceptance, items
+  epic drop <id>           End an epic; refused while it has open items
+  roadmap [--write] [--out <file>] [--force]
+                           Render the roadmap from the board; --write writes ROADMAP.md
+  roadmap import <file> [--write]  Turn "- [ ] Phase <n> — <title>" lines into epics (dry run without --write)
   plan                     Dry-run the planner (JSON)
   launch <id>              Start a crew session for a planned item
   status                   Crew sessions and their board status
@@ -280,6 +292,8 @@ interface Tick {
   needsLead: { item: string; reason: string }[];
   /** Per item (`item`), or a phase that failed or did not run (`phase`). */
   errors: { item?: string; phase?: string; error: string }[];
+  /** Epics whose items are all merged (status `accepting`): they wait for their acceptance. */
+  epicsReady: { epic: string; title: string }[];
 }
 
 /** One tick at a time; a tick whose holder died is taken over after this long. */
@@ -352,12 +366,26 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       for (const w of configWarnings(config)) stderr(`warning: ${w}\n`);
       return { config, board: loadBoard(project, config) };
     };
-    if (values.component !== undefined && cmd !== 'board' && cmd !== 'add') {
-      throw new UsageError('--component works with board and add only');
+    const epicAdd = cmd === 'epic' && rest[0] === 'add';
+    if (values.component !== undefined && cmd !== 'board' && cmd !== 'add' && !epicAdd) {
+      throw new UsageError('--component works with board, add and epic add only');
     }
+    if (!epicAdd && (values.component?.length ?? 0) > 1) {
+      throw new UsageError('--component takes one id here; only epic add takes several');
+    }
+    const component = epicAdd ? undefined : values.component?.[0];
     const addOnly = [values.type, values.repo, values.path, values.dod, values.plan];
     if (cmd !== 'add' && addOnly.some((v) => v !== undefined)) {
       throw new UsageError('--type, --repo, --path, --dod and --plan work with add only');
+    }
+    if (!epicAdd && (values.goal !== undefined || values.acceptance !== undefined)) {
+      throw new UsageError('--goal and --acceptance work with epic add only');
+    }
+    if (values.epic !== undefined && cmd !== 'board' && cmd !== 'add') {
+      throw new UsageError('--epic works with board and add only');
+    }
+    if ((values.out !== undefined || values.force !== undefined) && cmd !== 'roadmap') {
+      throw new UsageError('--out and --force work with roadmap only');
     }
     if (values.link !== undefined && cmd !== 'setup') {
       throw new UsageError('--link works with setup only');
@@ -1016,6 +1044,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         held: [],
         needsLead: [],
         errors: [],
+        epicsReady: [],
       };
       const why = (e: unknown) => (e as Error).message.replace(/\p{Cc}/gu, ' ');
       const lead = (item: string, reason: string) => {
@@ -1242,6 +1271,25 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (e instanceof HeldError) out.held.push({ item: 'queue', reason: why(e) });
         else out.errors.push({ phase: 'queue run', error: why(e) });
       }
+
+      // (f) Epics whose items are all merged wait for their acceptance. Every move of an item
+      // applies the status rule; this catches a board edited by hand.
+      try {
+        const board = loadBoard(project);
+        let now = board;
+        if (board.epics?.some((e) => e.status === 'open' || e.status === 'accepting')) {
+          now = await withBoardLock(root, ports.clock.now(), () => {
+            const fresh = loadBoard(project);
+            settleAndSave(project, fresh, BY, ports.clock.now());
+            return loadBoard(project);
+          });
+        }
+        for (const e of now.epics ?? []) {
+          if (e.status === 'accepting') out.epicsReady.push({ epic: e.id, title: e.title });
+        }
+      } catch (e) {
+        out.errors.push({ phase: 'epics', error: why(e) });
+      }
       return out;
     };
 
@@ -1273,8 +1321,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ...(values.repo === undefined ? {} : { repo: values.repo }),
             paths: values.path ?? [],
             dod: values.dod ?? [],
-            ...(values.component === undefined ? {} : { component: values.component }),
+            ...(component === undefined ? {} : { component }),
             ...(values.plan === undefined ? {} : { plan: values.plan }),
+            ...(values.epic === undefined ? {} : { epic: values.epic }),
+            now: ports.clock.now(),
             locked: (fn) => withBoardLock(stateRoot(), ports.clock.now(), fn),
           }),
         );
@@ -1283,16 +1333,19 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
       case 'board': {
         const { config, board } = loadAll();
-        const only = values.component;
+        const only = component;
         if (only !== undefined && !(config.components ?? []).some((c) => c.id === only)) {
           throw new Error(`unknown component ${only}`);
         }
+        const epic = values.epic === undefined ? undefined : findEpic(board, values.epic).id;
         const items = board.items
           .map((i) => ({ item: i, ...componentField(config, i) }))
-          .filter((r) => only === undefined || r.components?.includes(only));
+          .filter((r) => only === undefined || r.components?.includes(only))
+          .filter((r) => epic === undefined || r.item.epic === epic);
         if (json) print(items.map(({ item, ...rest }) => ({ ...item, ...rest })));
         else {
           const withComponents = config.components !== undefined;
+          const withEpics = (board.epics ?? []).length > 0;
           stdout(
             table([
               [
@@ -1302,6 +1355,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 'TYPE',
                 'PRIORITY',
                 ...(withComponents ? ['COMPONENT'] : []),
+                ...(withEpics ? ['EPIC'] : []),
                 'TITLE',
               ],
               ...items.map(({ item: i, components }) => [
@@ -1311,11 +1365,143 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 i.type,
                 String(i.priority),
                 ...(withComponents ? [componentCell(components)] : []),
+                ...(withEpics ? [i.epic ?? '-'] : []),
                 i.title,
               ]),
             ]),
           );
         }
+        return 0;
+      }
+
+      case 'epic': {
+        const [sub, ...args] = rest;
+        if (sub === 'add') {
+          refuseCrew(deps.env);
+          if (args.length !== 1) {
+            throw new UsageError(
+              'epic add takes one title; quote it: studio epic add "<title>" --goal "<text>" --acceptance "<line>"',
+            );
+          }
+          print(
+            await addEpic({
+              project,
+              title: args[0],
+              goal: values.goal,
+              acceptance: values.acceptance ?? [],
+              components: values.component ?? [],
+              now: ports.clock.now(),
+              locked: (fn) => withBoardLock(stateRoot(), ports.clock.now(), fn),
+            }),
+          );
+          return 0;
+        }
+        if (sub === 'list') {
+          if (args.length !== 0) throw new UsageError('epic list takes no arguments');
+          const rows = epicRows(loadAll().board);
+          if (json) print(rows);
+          else {
+            const counts = (c: (typeof rows)[number]['counts']) => {
+              const parts = ITEM_STATUSES.flatMap((s) =>
+                c[s] === undefined ? [] : [`${s} ${c[s]}`],
+              );
+              return parts.length === 0 ? '-' : parts.join(', ');
+            };
+            stdout(
+              table([
+                ['ID', 'STATUS', 'PROGRESS', 'ITEMS', 'TITLE'],
+                ...rows.map((r) => [
+                  r.id,
+                  r.status,
+                  `${r.progress.merged}/${r.progress.total}`,
+                  counts(r.counts),
+                  r.title,
+                ]),
+              ]),
+            );
+          }
+          return 0;
+        }
+        if (sub === 'show') {
+          if (args.length !== 1) throw new UsageError('epic show needs one epic id');
+          const { board } = loadAll();
+          const epic = findEpic(board, args[0]);
+          const row = epicRows(board).find((r) => r.id === epic.id) as ReturnType<
+            typeof epicRows
+          >[number];
+          const items = board.items.filter((i) => i.epic === epic.id);
+          if (json) {
+            print({ ...epic, progress: row.progress, counts: row.counts, items });
+            return 0;
+          }
+          const lines = [
+            `${epic.id}  ${epic.status}  ${row.progress.merged}/${row.progress.total}  ${epic.title}`,
+            `Goal: ${epic.goal}`,
+            'Acceptance:',
+            ...epic.acceptance.map((a) => `  - ${a}`),
+            ...(epic.components === undefined ? [] : [`Components: ${epic.components.join(', ')}`]),
+            ...(epic.importedFrom === undefined ? [] : [`Imported from: ${epic.importedFrom}`]),
+          ];
+          stdout(`${lines.join('\n')}\n`);
+          stdout(
+            items.length === 0
+              ? 'No items yet.\n'
+              : table([['ID', 'STATUS', 'TITLE'], ...items.map((i) => [i.id, i.status, i.title])]),
+          );
+          return 0;
+        }
+        if (sub === 'drop') {
+          refuseCrew(deps.env);
+          if (args.length !== 1) throw new UsageError('epic drop needs one epic id');
+          const id = args[0] as string;
+          await withBoardLock(stateRoot(), ports.clock.now(), () => {
+            const fresh = loadBoard(project);
+            saveBoard(project, dropEpic(fresh, id, BY, ports.clock.now()));
+          });
+          print({ epic: id, status: 'dropped' });
+          return 0;
+        }
+        throw new UsageError('epic needs add, list, show or drop');
+      }
+
+      case 'roadmap': {
+        if (rest[0] === 'import') {
+          if (rest.length !== 2) throw new UsageError('roadmap import needs one file');
+          if (values.out !== undefined || values.force !== undefined) {
+            throw new UsageError('roadmap import takes only --write');
+          }
+          if (values.write === true) refuseCrew(deps.env);
+          const full = projectFile(project, rest[1] as string);
+          const source = relative(project, full).split(sep).join('/');
+          const phases = parsePhases(readFileSync(full, 'utf8'));
+          const apply = (board: Board) => planImport(board, source, phases);
+          if (values.write !== true) {
+            print({ ...apply(loadAll().board), written: false });
+            return 0;
+          }
+          loadAll();
+          const plan = await withBoardLock(stateRoot(), ports.clock.now(), () => {
+            const fresh = loadBoard(project, loadConfig(project));
+            const p = apply(fresh);
+            if (p.create.length > 0) {
+              saveBoard(project, { ...fresh, epics: [...(fresh.epics ?? []), ...p.create] });
+            }
+            return p;
+          });
+          print({ ...plan, written: plan.create.length > 0 });
+          return 0;
+        }
+        if (rest.length !== 0) throw new UsageError('roadmap takes no arguments, or import <file>');
+        if (values.write !== true && (values.out !== undefined || values.force !== undefined)) {
+          throw new UsageError('--out and --force work with roadmap --write only');
+        }
+        if (values.write === true) refuseCrew(deps.env);
+        const text = renderRoadmap(loadAll().board);
+        if (values.write !== true) {
+          stdout(text);
+          return 0;
+        }
+        print(writeRoadmap(project, values.out ?? 'ROADMAP.md', text, values.force === true));
         return 0;
       }
 
@@ -1953,7 +2139,12 @@ function parseCli(argv: string[]) {
         write: { type: 'boolean' },
         release: { type: 'boolean' },
         requeue: { type: 'boolean' },
-        component: { type: 'string' },
+        component: { type: 'string', multiple: true },
+        epic: { type: 'string' },
+        goal: { type: 'string' },
+        acceptance: { type: 'string', multiple: true },
+        out: { type: 'string' },
+        force: { type: 'boolean' },
         type: { type: 'string' },
         repo: { type: 'string' },
         path: { type: 'string', multiple: true },
@@ -2375,8 +2566,12 @@ function buildSnapshot(
       ...(components === undefined
         ? {}
         : { components: item === undefined ? [] : componentsOf(item, extra.config) }),
+      ...(item?.epic === undefined ? {} : { epic: item.epic }),
     };
   });
+  const epics = epicRows(board)
+    .filter((e) => e.status === 'open' || e.status === 'accepting')
+    .map((e) => ({ id: e.id, title: e.title, status: e.status, ...e.progress }));
   const events = readMetricEvents(root);
   const usageDays = usageDaysFrom(ownerRoot);
   return {
@@ -2420,6 +2615,7 @@ function buildSnapshot(
     ...(labelUsage === undefined ? {} : { labelUsage }),
     ...(notifications.length > 0 ? { notifications } : {}),
     ...(components === undefined ? {} : { components }),
+    ...(epics.length === 0 ? {} : { epics }),
     updatedAt: now.toISOString(),
     metrics: computeMetrics(events),
   };

@@ -3,6 +3,46 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.11.0] - 2026-11-05
+
+Larger work lived as phases in a hand-edited `ROADMAP.md`. Sessions wrote claims into the file, numbered
+phases by hand (sometimes the same number twice), and opened pull requests only to take a phase. Now the
+board holds epics, Studio numbers them, and `ROADMAP.md` is rendered from the board. Not tagged yet; the
+maintainers tag after the merge.
+
+### Added
+
+- Epics on the board: a top-level `epics:` list next to `items:` with `id` (`E-<n>`), `title`, `goal`,
+  `acceptance` (at least one line), optional `components`, `status` (`open`, `accepting`, `done`,
+  `dropped`), `history`, and `imported_from` after an import. Items take an optional `epic: E-<n>`, which must
+  name an epic on the board; only a merged or dropped item may keep a dropped epic. A board without
+  `epics:` loads and saves byte-identical.
+- The status rule: an open epic whose items are all merged (at least one, dropped ones aside) moves to
+  `accepting` on every item move (collect, merge queue, drop), and back to `open` when new work joins it.
+  `studio tick` applies the rule to a board edited by hand too and lists accepting epics under the new key
+  `epicsReady`. No command sets `done` yet; the acceptance comes in a later version.
+- `studio epic add "<title>" --goal "<text>" --acceptance "<line>"... [--component <id>]...` (refused under
+  `STUDIO_ROLE=crew`, under the board lock, prints the new id), `studio epic list` (items by status and
+  merged of total), `studio epic show <id>`, `studio epic drop <id>` (refused while the epic has open items).
+- `studio add --epic <id>` attaches the new item (an open or accepting epic only); `studio board --epic <id>`
+  lists one epic's items, and `studio board` gets an epic column when the board has epics.
+- `studio roadmap [--write] [--out <file>] [--force]`: renders a deterministic markdown roadmap from the
+  board (a header saying it is generated, one line per epic with `[ ]`, `[~]` or `[x]` and merged of total,
+  its goal and acceptance, then the open items in no epic). `--write` writes `ROADMAP.md` inside the project
+  through a temporary file and a rename, and refuses a file without the generated header unless `--force`;
+  it is refused under `STUDIO_ROLE=crew`.
+- `studio roadmap import <file> [--write]`: one epic per `- [ ] Phase <n> — <title>` line (also `[~]`, `[x]`,
+  `–`, `-` or `:` after the number, bold markers, trailing `@claim:` tags) not imported yet, recorded as
+  `imported_from: "<file>#Phase <n>"`, so a second import adds nothing. A dry run without `--write`; no
+  items are created.
+- The Studio board pane lists open and accepting epics with merged of total above the crew working on their
+  items; `state.json` carries `epics` and each crew's `epic`. Without epics the pane is unchanged.
+
+### Changed
+
+- The lead skill turns a larger request into an epic with its pieces as items, and renders `ROADMAP.md`
+  with `studio roadmap --write` instead of editing it; `/studio:add` offers a fitting open epic.
+
 ## [0.10.0] - 2026-11-04
 
 A new owner needed two `/plugin` commands, then three separate hidden-input commands in a terminal

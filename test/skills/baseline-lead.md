@@ -184,3 +184,38 @@ DoD, and ask 'Shall I add this?'", then
 with every value single-quoted and the title after `--`. `scenarios/init-scenario.md` on `main`
 with the new `studio:init`: "I ask: 'Shall I commit the two files?' ... We're on `main`, so I first
 suggest a branch (`git switch -c studio-setup`) and ask before creating it ... I never push."
+
+# Baseline (RED): a larger request and the roadmap, 0.11.0
+
+Run on 2026-11-05 with one sonnet agent per scenario and the 0.10.0 lead and add skills, with the 0.11
+CLI in place.
+
+- `scenarios/lead-epic-scenario.md` (the `--help` lines for `epic` and `roadmap` in front of the agent):
+  weak baseline, stated plainly. It made the epic, attached four items with `--epic`, imported the
+  hand-written `ROADMAP.md` and rendered it with `studio roadmap --write`. The help text did the work.
+- `scenarios/lead-epic-nohelp-scenario.md` (same request, only "Studio 0.11 is installed"; a lead works
+  from its skill): "The skill doesn't cover epics or roadmaps, so I won't guess a command", four loose
+  `feature` items without plans, and "Otherwise I add one new line, `- [ ] Phase 5 — Pay by invoice`, with no
+  claim, at the end of the phase list ... I stage `ROADMAP.md` by name and commit it separately as a small
+  PR": the hand edit and the claim PR the board replaces.
+- `scenarios/add-epic-scenario.md` (`studio epic list` shows E-1 "Pay by invoice"; the owner reports a
+  wrong VAT on the invoice option): "The invoice option plausibly belongs to epic E-1 ... My skill
+  documents no epic option for `studio add`, so I won't invent an `--epic` flag."
+
+The lead skill gets one paragraph in "Definition of Ready gaps" and one rationalization row, within its
+old length: the cuts are the launch refusals in Review step 2 (the CLI reports them), the merge queue's
+mechanics, two heartbeat and requeue explanations, and the `studio plan APP-6` row (`plan` refuses an
+argument itself). The add skill gets an epic line.
+
+## With the new skills (GREEN), 2026-11-05
+
+Same scenarios, one sonnet agent each. The first version of the lead paragraph said "`studio roadmap
+import ROADMAP.md`, then `--write`, then `studio roadmap --write --force`"; the agent read "then `--write`"
+as `studio roadmap --write` and never wrote the import. Reworded to "(dry run), the same with `--write`".
+Then, without the help text: "`studio epic add "Pay by invoice" --goal ... --acceptance ...`", one item
+per piece with `--epic E-1`, "I never edit `ROADMAP.md` by hand and never add a phase line to it",
+`studio roadmap import ROADMAP.md` as a dry run, then with `--write`, then `studio roadmap --write --force`.
+Add: "E-1 'Pay by invoice' is open and the invoice VAT bug is a piece of it, so I set `--epic='E-1'`",
+shown to the owner with the rest before the command.
+
+Not exercised: a real lead session against a project with a hand-written roadmap.

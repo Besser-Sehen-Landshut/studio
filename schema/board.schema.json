@@ -235,6 +235,10 @@
             "type": "string",
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:[\\]-]*$"
           },
+          "epic": {
+            "type": "string",
+            "pattern": "^E-[1-9]\\d*$"
+          },
           "history": {
             "default": [],
             "type": "array",
@@ -293,6 +297,111 @@
           "size",
           "priority",
           "status"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "epics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^E-[1-9]\\d*$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "accepting",
+              "done",
+              "dropped"
+            ]
+          },
+          "goal": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+          },
+          "acceptance": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300,
+              "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+            }
+          },
+          "components": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,31}$"
+            }
+          },
+          "imported_from": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+          },
+          "history": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "string"
+                },
+                "from": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "accepting",
+                    "done",
+                    "dropped"
+                  ]
+                },
+                "to": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "accepting",
+                    "done",
+                    "dropped"
+                  ]
+                },
+                "by": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "at",
+                "from",
+                "to",
+                "by"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "goal",
+          "acceptance"
         ],
         "additionalProperties": false
       }

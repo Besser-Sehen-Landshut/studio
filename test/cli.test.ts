@@ -141,7 +141,7 @@ function makeFx(items: ItemSpec[], studioYaml: string = STUDIO_YAML): Fx {
   writeFileSync(join(project, '.studio', 'studio.yaml'), studioYaml);
   writeFileSync(
     join(project, '.studio', 'board.yaml'),
-    `items:\n${items.map(itemYaml).join('\n')}\n`,
+    items.length === 0 ? 'items: []\n' : `items:\n${items.map(itemYaml).join('\n')}\n`,
   );
   const env = { PATH: process.env.PATH };
   return {
@@ -3603,6 +3603,7 @@ describe('studio tick', () => {
       held: [],
       needsLead: [],
       errors: [],
+      epicsReady: [],
     });
   }, 30_000);
 
@@ -3828,6 +3829,7 @@ describe('studio tick', () => {
       'queue add',
       'sweep',
       'queue run',
+      'epics',
     ]);
   });
 
@@ -3938,5 +3940,344 @@ describe('studio tick', () => {
     expect(r.err).toContain('not for crew sessions');
     expect(started).toEqual([]);
     expect(statusOf(fx, 'APP-1')?.status).toBe('ready');
+  });
+});
+
+describe('epics in the CLI', () => {
+  const COMPONENTS_YAML = `${STUDIO_YAML}components:
+  - { id: api, name: API server, repo: org/app, paths: ["app-1/**"] }
+`;
+  const quiet = () => fakePorts(fakeGh().gh).ports;
+  /** Adds an `epics:` list below the items makeFx wrote. */
+  const withEpics = (fx: Fx, lines: string[]) => {
+    const file = join(fx.project, '.studio', 'board.yaml');
+    writeFileSync(file, `${readFileSync(file, 'utf8')}epics:\n${lines.join('\n')}\n`);
+  };
+  const epicYaml = (id: string, status = 'open') =>
+    `  - { id: ${id}, title: Epic ${id}, status: ${status}, goal: The goal, acceptance: [it works], history: [] }`;
+  const epicOf = (fx: Fx, id: string) => loadBoard(fx.project).epics?.find((e) => e.id === id);
+  const crewEnv = (fx: Fx): Fx => ({ ...fx, env: { ...fx.env, STUDIO_ROLE: 'crew' } });
+  const inEpic = ['    epic: E-1'];
+
+  it('epic add assigns the next free id and prints it', async () => {
+    const fx = makeFx([], COMPONENTS_YAML);
+    const ports = quiet();
+    const a = await cli(
+      fx,
+      ports,
+      'epic',
+      'add',
+      'Pay by invoice',
+      '--goal',
+      'Customers can pay by invoice',
+      '--acceptance',
+      'an invoice order reaches the backend',
+      '--acceptance',
+      'the invoice is sent',
+      '--component',
+      'api',
+    );
+    expect(a.err).toBe('');
+    expect(a.code).toBe(0);
+    expect(JSON.parse(a.out)).toEqual({ epic: 'E-1', title: 'Pay by invoice', status: 'open' });
+    expect(epicOf(fx, 'E-1')).toEqual({
+      id: 'E-1',
+      title: 'Pay by invoice',
+      status: 'open',
+      goal: 'Customers can pay by invoice',
+      acceptance: ['an invoice order reaches the backend', 'the invoice is sent'],
+      components: ['api'],
+      history: [],
+    });
+    const b = await cli(fx, ports, 'epic', 'add', 'Second', '--goal', 'g', '--acceptance', 'a');
+    expect(JSON.parse(b.out).epic).toBe('E-2');
+  });
+
+  it('epic add refuses what would make a bad epic', async () => {
+    const fx = makeFx([], COMPONENTS_YAML);
+    const ports = quiet();
+    const noGoal = await cli(fx, ports, 'epic', 'add', 'T', '--acceptance', 'a');
+    expect(noGoal.code).toBe(1);
+    expect(noGoal.err).toMatch(/--goal/);
+    const noAcceptance = await cli(fx, ports, 'epic', 'add', 'T', '--goal', 'g');
+    expect(noAcceptance.err).toMatch(/--acceptance/);
+    const unknown = await cli(
+      fx,
+      ports,
+      'epic',
+      'add',
+      'T',
+      '--goal',
+      'g',
+      '--acceptance',
+      'a',
+      '--component',
+      'web',
+    );
+    expect(unknown.err).toMatch(/unknown component web/);
+    const stray = await cli(fx, ports, 'board', '--goal', 'g');
+    expect(stray.err).toMatch(/--goal and --acceptance work with epic add only/);
+    expect(loadBoard(fx.project).epics).toBeUndefined();
+  });
+
+  it('crew sessions may not add or drop epics, nor write the roadmap', async () => {
+    const fx = makeFx([]);
+    withEpics(fx, [epicYaml('E-1')]);
+    const ports = quiet();
+    const crew = crewEnv(fx);
+    for (const argv of [
+      ['epic', 'add', 'T', '--goal', 'g', '--acceptance', 'a'],
+      ['epic', 'drop', 'E-1'],
+      ['roadmap', '--write'],
+      ['roadmap', 'import', 'ROADMAP.md', '--write'],
+    ]) {
+      const r = await cli(crew, ports, ...argv);
+      expect(r.code, argv.join(' ')).toBe(1);
+      expect(r.err).toMatch(/not for crew sessions/);
+    }
+    expect(epicOf(fx, 'E-1')?.status).toBe('open');
+    expect(existsSync(join(fx.project, 'ROADMAP.md'))).toBe(false);
+    // Reading is fine.
+    expect((await cli(crew, ports, 'epic', 'list')).code).toBe(0);
+    expect((await cli(crew, ports, 'roadmap')).code).toBe(0);
+  });
+
+  it('add --epic attaches the item; an unknown or dropped epic is refused', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    withEpics(fx, [epicYaml('E-1'), epicYaml('E-2', 'dropped')]);
+    const ports = quiet();
+    const r = await cli(fx, ports, 'add', 'Invoice form', '--dod', 'test added', '--epic', 'E-1');
+    expect(r.err).toBe('');
+    expect(JSON.parse(r.out)).toMatchObject({ item: 'APP-2', epic: 'E-1' });
+    expect(statusOf(fx, 'APP-2')?.epic).toBe('E-1');
+    const unknown = await cli(fx, ports, 'add', 'X', '--dod', 'd', '--epic', 'E-9');
+    expect(unknown.err).toMatch(/unknown epic E-9/);
+    const dropped = await cli(fx, ports, 'add', 'X', '--dod', 'd', '--epic', 'E-2');
+    expect(dropped.err).toMatch(/E-2 is dropped/);
+    expect(loadBoard(fx.project).items).toHaveLength(2);
+  });
+
+  it('add --epic takes an accepting epic back to open', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'merged', extra: inEpic }]);
+    withEpics(fx, [epicYaml('E-1', 'accepting')]);
+    const r = await cli(fx, quiet(), 'add', 'Finding', '--dod', 'd', '--epic', 'E-1');
+    expect(r.code).toBe(0);
+    expect(epicOf(fx, 'E-1')).toMatchObject({
+      status: 'open',
+      history: [expect.objectContaining({ from: 'accepting', to: 'open', by: 'studio' })],
+    });
+  });
+
+  it('epic list shows each epic with its items by status and merged of total', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'merged', extra: inEpic },
+      { id: 'APP-2', status: 'in_review', pr: 4, extra: inEpic },
+      { id: 'APP-3', extra: inEpic },
+      { id: 'APP-4', status: 'dropped', extra: inEpic },
+      { id: 'APP-5' },
+    ]);
+    withEpics(fx, [epicYaml('E-1'), epicYaml('E-2')]);
+    const ports = quiet();
+    const t = await cli(fx, ports, 'epic', 'list');
+    expect(t.out.split('\n')[0]).toMatch(/^ID\s+STATUS\s+PROGRESS\s+ITEMS\s+TITLE$/);
+    expect(t.out).toMatch(
+      /E-1\s+open\s+1\/3\s+ready 1, in_review 1, merged 1, dropped 1\s+Epic E-1/,
+    );
+    expect(t.out).toMatch(/E-2\s+open\s+0\/0\s+-\s+Epic E-2/);
+    const j = JSON.parse((await cli(fx, ports, 'epic', 'list', '--json')).out);
+    expect(j[0]).toEqual({
+      id: 'E-1',
+      title: 'Epic E-1',
+      status: 'open',
+      progress: { merged: 1, total: 3 },
+      counts: { merged: 1, in_review: 1, ready: 1, dropped: 1 },
+    });
+    const show = await cli(fx, ports, 'epic', 'show', 'E-1');
+    expect(show.out).toContain('E-1  open  1/3  Epic E-1');
+    expect(show.out).toContain('Goal: The goal');
+    expect(show.out).toContain('  - it works');
+    expect(show.out).toMatch(/APP-2\s+in_review\s+Item APP-2/);
+    expect(show.out).not.toContain('APP-5');
+    const showJson = JSON.parse((await cli(fx, ports, 'epic', 'show', 'E-1', '--json')).out);
+    expect(showJson).toMatchObject({ id: 'E-1', progress: { merged: 1, total: 3 } });
+    expect(showJson.items.map((i: { id: string }) => i.id)).toEqual([
+      'APP-1',
+      'APP-2',
+      'APP-3',
+      'APP-4',
+    ]);
+    expect((await cli(fx, ports, 'epic', 'show', 'E-7')).err).toMatch(/unknown epic E-7/);
+  });
+
+  it('board --epic lists only the items of that epic, with an epic column', async () => {
+    const fx = makeFx([{ id: 'APP-1', extra: inEpic }, { id: 'APP-2' }]);
+    withEpics(fx, [epicYaml('E-1')]);
+    const ports = quiet();
+    const all = await cli(fx, ports, 'board');
+    expect(all.out.split('\n')[0]).toMatch(/^ID\s+STATUS\s+ROLE\s+TYPE\s+PRIORITY\s+EPIC\s+TITLE$/);
+    expect(all.out).toMatch(/APP-2\s+.*\s+-\s+Item APP-2/);
+    const one = await cli(fx, ports, 'board', '--epic', 'E-1');
+    expect(one.out).toContain('APP-1');
+    expect(one.out).not.toContain('APP-2');
+    expect((await cli(fx, ports, 'board', '--epic', 'E-3')).err).toMatch(/unknown epic E-3/);
+  });
+
+  it('board without epics has no epic column', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    const t = await cli(fx, quiet(), 'board');
+    expect(t.out.split('\n')[0]).toMatch(/^ID\s+STATUS\s+ROLE\s+TYPE\s+PRIORITY\s+TITLE$/);
+  });
+
+  it('epic drop is refused while the epic has open items', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', extra: inEpic },
+      { id: 'APP-2', status: 'merged', extra: inEpic },
+    ]);
+    withEpics(fx, [epicYaml('E-1')]);
+    const ports = quiet();
+    const refused = await cli(fx, ports, 'epic', 'drop', 'E-1');
+    expect(refused.code).toBe(1);
+    expect(refused.err).toMatch(/E-1 still has open items \(APP-1\)/);
+    expect((await cli(fx, ports, 'drop', 'APP-1')).code).toBe(0);
+    const ok = await cli(fx, ports, 'epic', 'drop', 'E-1');
+    expect(ok.err).toBe('');
+    expect(JSON.parse(ok.out)).toEqual({ epic: 'E-1', status: 'dropped' });
+    // Dropping APP-1 left APP-2 merged alone: the epic went to accepting first.
+    expect(epicOf(fx, 'E-1')?.history.map((h) => h.to)).toEqual(['accepting', 'dropped']);
+  });
+
+  it('collect of the last item moves the epic to accepting', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'merged', extra: inEpic },
+      { id: 'APP-2', status: 'assigned', type: 'research', role: 'researcher', extra: inEpic },
+    ]);
+    withEpics(fx, [epicYaml('E-1')]);
+    writeReport(fx, 'APP-2', `status: done\nitem: APP-2\nhead_sha: ${HEAD}`);
+    const r = await cli(fx, quiet(), 'collect', 'APP-2');
+    expect(r.code).toBe(0);
+    expect(statusOf(fx, 'APP-2')?.status).toBe('merged');
+    expect(epicOf(fx, 'E-1')?.status).toBe('accepting');
+  });
+
+  it('state gives the pane the open epics with progress and the epic of each crew', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', type: 'docs', extra: inEpic },
+      { id: 'APP-2', status: 'merged', extra: inEpic },
+    ]);
+    withEpics(fx, [epicYaml('E-1'), epicYaml('E-2', 'dropped'), epicYaml('E-3', 'done')]);
+    const ports = quiet();
+    expect((await cli(fx, ports, 'launch', 'APP-1')).code).toBe(0);
+    expect((await cli(fx, ports, 'state')).code).toBe(0);
+    const snap = JSON.parse(readFileSync(join(fx.state, 'state.json'), 'utf8'));
+    expect(snap.epics).toEqual([
+      { id: 'E-1', title: 'Epic E-1', status: 'open', merged: 1, total: 2 },
+    ]);
+    expect(snap.crew[0]).toMatchObject({ item: 'APP-1', epic: 'E-1' });
+  });
+
+  it('state has no epics field without epics', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    expect((await cli(fx, quiet(), 'state')).code).toBe(0);
+    const snap = JSON.parse(readFileSync(join(fx.state, 'state.json'), 'utf8'));
+    expect(snap).not.toHaveProperty('epics');
+  });
+
+  describe('tick', () => {
+    const bind = (fx: Fx) =>
+      checkStateMarker(fx.state, {
+        projectRealpath: projectRealpath(fx.project),
+        originUrl: git(fx.project, 'remote', 'get-url', 'origin'),
+      });
+
+    it('reports an epic whose last item the queue merged under epicsReady', async () => {
+      const fx = makeFx([
+        { id: 'APP-1', status: 'merged', extra: inEpic },
+        { id: 'APP-2', status: 'queued', pr: 5, approvedHead: HEAD, extra: inEpic },
+      ]);
+      withEpics(fx, [epicYaml('E-1'), epicYaml('E-2')]);
+      bind(fx);
+      saveQueue(fx.state, {
+        pending: [],
+        done: [
+          { pr: 5, repo: 'org/app', item: 'APP-2', result: 'merged', at: '2026-10-30T09:00:00Z' },
+        ],
+      });
+      const r = await cli(fx, fakePorts(passingGh().gh).ports, 'tick');
+      const json = JSON.parse(r.out);
+      expect(json.errors).toEqual([]);
+      expect(statusOf(fx, 'APP-2')?.status).toBe('merged');
+      expect(epicOf(fx, 'E-1')?.status).toBe('accepting');
+      expect(json.epicsReady).toEqual([{ epic: 'E-1', title: 'Epic E-1' }]);
+    });
+
+    it('settles an epic whose items were merged by hand', async () => {
+      const fx = makeFx([{ id: 'APP-1', status: 'merged', extra: inEpic }]);
+      withEpics(fx, [epicYaml('E-1')]);
+      bind(fx);
+      const r = await cli(fx, quiet(), 'tick');
+      expect(JSON.parse(r.out).epicsReady).toEqual([{ epic: 'E-1', title: 'Epic E-1' }]);
+      expect(epicOf(fx, 'E-1')?.status).toBe('accepting');
+    });
+  });
+
+  describe('roadmap', () => {
+    it('prints the roadmap without --write and writes it with --write', async () => {
+      const fx = makeFx([{ id: 'APP-1', extra: inEpic }]);
+      withEpics(fx, [epicYaml('E-1')]);
+      const ports = quiet();
+      const p = await cli(fx, ports, 'roadmap');
+      expect(p.code).toBe(0);
+      expect(p.out).toContain('- [ ] E-1 — Epic E-1 (0/1)');
+      expect(existsSync(join(fx.project, 'ROADMAP.md'))).toBe(false);
+      const w = await cli(fx, ports, 'roadmap', '--write');
+      expect(w.err).toBe('');
+      expect(JSON.parse(w.out)).toEqual({ written: 'ROADMAP.md', changed: true });
+      expect(readFileSync(join(fx.project, 'ROADMAP.md'), 'utf8')).toBe(p.out);
+      const o = await cli(fx, ports, 'roadmap', '--write', '--out', 'docs-roadmap.md');
+      expect(JSON.parse(o.out).written).toBe('docs-roadmap.md');
+      expect((await cli(fx, ports, 'roadmap', '--out', 'x.md')).err).toMatch(/--out.*--write/);
+    });
+
+    it('--write refuses a hand-written ROADMAP.md unless --force', async () => {
+      const fx = makeFx([]);
+      writeFileSync(join(fx.project, 'ROADMAP.md'), '- [ ] Phase 1 — mine\n');
+      const ports = quiet();
+      const r = await cli(fx, ports, 'roadmap', '--write');
+      expect(r.code).toBe(1);
+      expect(r.err).toMatch(/not generated by studio roadmap/);
+      expect(readFileSync(join(fx.project, 'ROADMAP.md'), 'utf8')).toBe('- [ ] Phase 1 — mine\n');
+      expect((await cli(fx, ports, 'roadmap', '--write', '--force')).code).toBe(0);
+      expect(readFileSync(join(fx.project, 'ROADMAP.md'), 'utf8')).toMatch(/^<!-- generated/);
+    });
+
+    it('import is a dry run by default and idempotent with --write', async () => {
+      const fx = makeFx([]);
+      writeFileSync(
+        join(fx.project, 'ROADMAP.md'),
+        '- [x] Phase 1 — Base\n- [~] Phase 2 – Checkout @claim:s1\n- [ ] Phase 3 - Invoices\n',
+      );
+      const ports = quiet();
+      const dry = await cli(fx, ports, 'roadmap', 'import', 'ROADMAP.md');
+      expect(dry.err).toBe('');
+      const plan = JSON.parse(dry.out);
+      expect(plan).toMatchObject({ file: 'ROADMAP.md', written: false });
+      expect(plan.create.map((e: { id: string; title: string }) => [e.id, e.title])).toEqual([
+        ['E-1', 'Base'],
+        ['E-2', 'Checkout'],
+        ['E-3', 'Invoices'],
+      ]);
+      expect(loadBoard(fx.project).epics).toBeUndefined();
+      const w = await cli(fx, ports, 'roadmap', 'import', 'ROADMAP.md', '--write');
+      expect(JSON.parse(w.out).written).toBe(true);
+      expect(loadBoard(fx.project).epics?.map((e) => [e.id, e.status, e.importedFrom])).toEqual([
+        ['E-1', 'done', 'ROADMAP.md#Phase 1'],
+        ['E-2', 'open', 'ROADMAP.md#Phase 2'],
+        ['E-3', 'open', 'ROADMAP.md#Phase 3'],
+      ]);
+      expect(loadBoard(fx.project).items).toEqual([]);
+      const again = await cli(fx, ports, 'roadmap', 'import', 'ROADMAP.md', '--write');
+      expect(JSON.parse(again.out).create).toEqual([]);
+      expect(loadBoard(fx.project).epics).toHaveLength(3);
+    });
   });
 });
