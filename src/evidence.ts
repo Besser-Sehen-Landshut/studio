@@ -5,7 +5,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { findJob, jobInstances, readWorkflowsAt, type Workflows } from './ci-jobs.js';
 import { EVIDENCE_ID_RE, type EvidenceRule, parseConfig } from './config.js';
-import { hostilePath, matchGlobExact } from './glob.js';
+import { hostilePath, matchGlob, matchGlobExact } from './glob.js';
 import { acquireStateLock, type StateLock, writeStateFile } from './paths.js';
 import type { Gh, Git } from './ports.js';
 import { commentsOnlyWhy, languageOf } from './proofs.js';
@@ -257,12 +257,18 @@ async function rulesAt(ctx: EvidenceContext, oid: string): Promise<EvidenceRule[
 async function rawOwnerBlocksAt(
   ctx: EvidenceContext,
   oid: string,
-): Promise<{ evidence: string; release: string; workflows: string[] }> {
+): Promise<{
+  evidence: string;
+  release: string;
+  workflows: string[];
+  guarded: string[];
+  released: boolean;
+}> {
   let text: string;
   try {
     text = await g(ctx, ['cat-file', 'blob', `${oid}:${STUDIO_CONFIG}`]);
   } catch {
-    return { evidence: 'null', release: 'null', workflows: [] };
+    return { evidence: 'null', release: 'null', workflows: [], guarded: [], released: false };
   }
   let raw: unknown;
   try {
@@ -270,7 +276,8 @@ async function rawOwnerBlocksAt(
   } catch {
     // A file that does not parse loads no rules; as a change it counts like any other.
     const u = `unparsable:${digest(text)}`;
-    return { evidence: u, release: u, workflows: [] };
+    // Unparsable counts as having a release: the guard errs towards the owner.
+    return { evidence: u, release: u, workflows: [], guarded: [], released: true };
   }
   const obj = (v: unknown): Record<string, unknown> =>
     v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -285,6 +292,7 @@ async function rawOwnerBlocksAt(
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   // The workflows a release starts or names: their content is the owner's like the block.
   const workflows = new Set<string>();
+  const guarded = new Set<string>();
   for (const c of released) {
     const r = obj(c.release);
     const add = (v: unknown) => {
@@ -293,6 +301,9 @@ async function rawOwnerBlocksAt(
     add(r.workflow);
     for (const pc of Array.isArray(r.post_checks) ? r.post_checks : []) add(obj(pc).workflow);
     add(obj(r.rollback).workflow);
+    for (const p of Array.isArray(r.guarded_paths) ? r.guarded_paths : []) {
+      if (typeof p === 'string') guarded.add(p);
+    }
   }
   return {
     evidence: JSON.stringify(o.evidence ?? null),
@@ -307,6 +318,8 @@ async function rawOwnerBlocksAt(
           },
     ),
     workflows: [...workflows],
+    guarded: [...guarded],
+    released: released.length > 0,
   };
 }
 
@@ -645,6 +658,25 @@ export async function evidenceChange(
       problem: `the pull request changes ${quotePath(hit)}, a workflow a component's release starts`,
       area: 'release',
     };
+  }
+  // Once anything is released, all workflows and actions are the owner's (a release workflow may
+  // call any of them), and so are the scripts a component lists as guarded_paths.
+  if (atBase.released || atHead.released) {
+    const ci = files.find((f) => /^\.github\/(?:workflows|actions)\//i.test(f));
+    if (ci !== undefined) {
+      return {
+        problem: `the pull request changes ${quotePath(ci)}; with a release, workflows and actions are the owner's`,
+        area: 'release',
+      };
+    }
+    const globs = [...atBase.guarded, ...atHead.guarded];
+    const script = files.find((f) => globs.some((p) => matchGlob(p, f)));
+    if (script !== undefined) {
+      return {
+        problem: `the pull request changes ${quotePath(script)}, a guarded path of a release`,
+        area: 'release',
+      };
+    }
   }
   return {};
 }

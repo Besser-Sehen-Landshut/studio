@@ -1117,3 +1117,99 @@ describe('release: the security review of 0.18.0', () => {
     expect(a.json.note).toContain('- server/db/schema.sql (added): destructive, needs the owner');
   });
 });
+
+describe('release: what the release workflows run is pinned too', () => {
+  const commit = (fx: Fx, path: string, text: string) => {
+    mkdirSync(dirname(join(fx.project, path)), { recursive: true });
+    writeFileSync(join(fx.project, path), text);
+    git(fx.project, 'add', path);
+    git(fx.project, 'commit', '-q', '-m', `change ${path}`);
+    fx.head = git(fx.project, 'rev-parse', 'HEAD');
+    git(fx.project, 'push', '-q', 'origin', 'main');
+  };
+
+  it('refuses the trigger when .github changed since the announcement, any workflow or action', async () => {
+    for (const path of ['.github/workflows/other.yml', '.github/actions/setup/action.yml']) {
+      const fx = makeFx();
+      const g = fakeGh(fx);
+      const p = fakePorts(g.gh);
+      await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+      expect(readReleases(fx.state)[0]?.guardPin).toMatch(/^github:[0-9a-f]{40} guarded:sha256:/);
+      commit(fx, path, 'name: other\n');
+      const r = await cli(fx, p.ports, ['release', 'api']);
+      expect(r.err, path).toMatch(/\.github or a guarded path changed since api-1 was announced/);
+      expect(g.dispatches).toEqual([]);
+    }
+  });
+
+  it('pins the guarded paths a component names, and only those outside .github', async () => {
+    const release = RELEASE_BLOCK.replace(
+      '      approvers:',
+      '      guarded_paths: ["scripts/deploy/**"]\n      approvers:',
+    );
+    const fx = makeFx({ release });
+    const g = fakeGh(fx);
+    const p = fakePorts(g.gh);
+    await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    // A file no guard names changes nothing.
+    commit(fx, 'docs/guide.md', '# Guide\n');
+    // The deploy script the workflow calls does.
+    commit(fx, 'scripts/deploy/run.sh', 'echo elsewhere\n');
+    const r = await cli(fx, p.ports, ['release', 'api']);
+    expect(r.err).toMatch(/\.github or a guarded path changed since api-1 was announced/);
+    expect(g.dispatches).toEqual([]);
+    // Without the script change it triggers.
+    const fx2 = makeFx({ release });
+    const g2 = fakeGh(fx2);
+    const p2 = fakePorts(g2.gh);
+    await cli(fx2, p2.ports, ['release', 'api', '--since', 'v1']);
+    commit(fx2, 'docs/guide.md', '# Guide\n');
+    expect((await cli(fx2, p2.ports, ['release', 'api'])).json.status).toBe('triggered');
+  });
+
+  it('refuses the trigger when the rollback workflow is no longer the pinned one', async () => {
+    const fx = makeFx();
+    const g = fakeGh(fx);
+    const p = fakePorts(g.gh);
+    await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    const file = join(fx.state, RELEASES_FILE);
+    const data = JSON.parse(readFileSync(file, 'utf8'));
+    data.releases[0].workflowBlobs['.github/workflows/rollback.yml'] = 'e'.repeat(40);
+    writeFileSync(file, JSON.stringify(data));
+    const r = await cli(fx, p.ports, ['release', 'api']);
+    expect(r.err).toMatch(/rollback\.yml changed since api-1 was announced/);
+    expect(g.dispatches).toEqual([]);
+  });
+
+  it('checks the rollback pin again before it shows the way back', async () => {
+    const fx = makeFx();
+    const g = fakeGh(fx);
+    const p = fakePorts(g.gh);
+    await cli(fx, p.ports, ['release', 'api', '--since', 'v1']);
+    await cli(fx, p.ports, ['release', 'api']);
+    g.runs[900] = {
+      ...run('completed', 'failure', [['deploy', 'completed', 'failure']]),
+      headSha: fx.head,
+    };
+    const before = await cli(fx, p.ports, ['release', 'api']);
+    expect(before.json.needsLead[0].reason).toMatch(
+      /the way back: run \.github\/workflows\/rollback\.yml by hand/,
+    );
+    // Someone changes the rollback workflow on main after the release failed.
+    commit(
+      fx,
+      '.github/workflows/rollback.yml',
+      'name: rollback\non: workflow_dispatch\njobs: {}\n',
+    );
+    const tick = await cli(fx, p.ports, ['tick']);
+    const line = tick.json.needsLead.find((l: { item: string }) => l.item === 'api-1');
+    expect(line.reason).toMatch(
+      /the way back: \.github\/workflows\/rollback\.yml changed on main since api-1 was announced: read it before running anything, Studio offers it no longer$/,
+    );
+    expect(line.reason).not.toMatch(/run \.github\/workflows\/rollback\.yml by hand/);
+    const show = await cli(fx, p.ports, ['release', 'show', 'api-1']);
+    expect(show.out).toMatch(
+      /warning: \.github\/workflows\/rollback\.yml changed on main since api-1/,
+    );
+  });
+});

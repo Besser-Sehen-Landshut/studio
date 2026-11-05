@@ -28864,7 +28864,10 @@ var releaseRuleSchema = external_exports.looseObject({
     })
   ).max(10).default([]),
   // How long after the trigger the release run and its checks may take before Studio stops.
-  timeoutMinutes: external_exports.number().int().min(5).max(1440).default(60)
+  timeoutMinutes: external_exports.number().int().min(5).max(1440).default(60),
+  // Files outside .github the release workflows run, e.g. deploy scripts: the owner's like the
+  // workflows, pinned at the announcement and guarded against crews' pull requests.
+  guardedPaths: external_exports.array(globSchema).max(50).default([])
 }).superRefine((r, ctx) => {
   const known = [
     "workflow",
@@ -28873,7 +28876,8 @@ var releaseRuleSchema = external_exports.looseObject({
     "config",
     "rollback",
     "approvers",
-    "timeoutMinutes"
+    "timeoutMinutes",
+    "guardedPaths"
   ];
   for (const key of Object.keys(r).filter((k) => !known.includes(k))) {
     ctx.addIssue({
@@ -28894,14 +28898,24 @@ var releaseRuleSchema = external_exports.looseObject({
     ids.add(a2.id);
   }
 }).transform(
-  ({ workflow, postChecks, migrations, config: config2, rollback, approvers, timeoutMinutes }) => ({
+  ({
     workflow,
     postChecks,
     migrations,
     config: config2,
     rollback,
     approvers,
-    timeoutMinutes
+    timeoutMinutes,
+    guardedPaths
+  }) => ({
+    workflow,
+    postChecks,
+    migrations,
+    config: config2,
+    rollback,
+    approvers,
+    timeoutMinutes,
+    guardedPaths
   })
 );
 var RELEASE_SUBCOMMANDS = ["list", "show", "approve", "cancel"];
@@ -36713,20 +36727,21 @@ async function rawOwnerBlocksAt(ctx, oid) {
   try {
     text = await g(ctx, ["cat-file", "blob", `${oid}:${STUDIO_CONFIG2}`]);
   } catch {
-    return { evidence: "null", release: "null", workflows: [] };
+    return { evidence: "null", release: "null", workflows: [], guarded: [], released: false };
   }
   let raw;
   try {
     raw = (0, import_yaml10.parse)(text);
   } catch {
     const u2 = `unparsable:${digest(text)}`;
-    return { evidence: u2, release: u2, workflows: [] };
+    return { evidence: u2, release: u2, workflows: [], guarded: [], released: true };
   }
   const obj = (v) => v !== null && typeof v === "object" && !Array.isArray(v) ? v : {};
   const o2 = obj(raw);
   const released = (Array.isArray(o2.components) ? o2.components : []).map(obj).filter((c3) => c3.release !== void 0 && c3.release !== null);
   const entries2 = released.map((c3) => [JSON.stringify(c3.id ?? null), JSON.stringify(c3)]).sort(([a2], [b]) => a2 < b ? -1 : a2 > b ? 1 : 0);
   const workflows = /* @__PURE__ */ new Set();
+  const guarded2 = /* @__PURE__ */ new Set();
   for (const c3 of released) {
     const r = obj(c3.release);
     const add = (v) => {
@@ -36735,6 +36750,9 @@ async function rawOwnerBlocksAt(ctx, oid) {
     add(r.workflow);
     for (const pc of Array.isArray(r.post_checks) ? r.post_checks : []) add(obj(pc).workflow);
     add(obj(r.rollback).workflow);
+    for (const p of Array.isArray(r.guarded_paths) ? r.guarded_paths : []) {
+      if (typeof p === "string") guarded2.add(p);
+    }
   }
   return {
     evidence: JSON.stringify(o2.evidence ?? null),
@@ -36746,7 +36764,9 @@ async function rawOwnerBlocksAt(ctx, oid) {
         refs: o2.crew_allowed_workflow_refs ?? null
       }
     ),
-    workflows: [...workflows]
+    workflows: [...workflows],
+    guarded: [...guarded2],
+    released: released.length > 0
   };
 }
 async function fetchBoth(ctx, base, head) {
@@ -37014,6 +37034,23 @@ async function evidenceChange(ctx, baseOid, head) {
       problem: `the pull request changes ${quotePath(hit)}, a workflow a component's release starts`,
       area: "release"
     };
+  }
+  if (atBase.released || atHead.released) {
+    const ci = files.find((f) => /^\.github\/(?:workflows|actions)\//i.test(f));
+    if (ci !== void 0) {
+      return {
+        problem: `the pull request changes ${quotePath(ci)}; with a release, workflows and actions are the owner's`,
+        area: "release"
+      };
+    }
+    const globs = [...atBase.guarded, ...atHead.guarded];
+    const script = files.find((f) => globs.some((p) => matchGlob(p, f)));
+    if (script !== void 0) {
+      return {
+        problem: `the pull request changes ${quotePath(script)}, a guarded path of a release`,
+        area: "release"
+      };
+    }
   }
   return {};
 }
@@ -41059,6 +41096,11 @@ var releaseSchema = external_exports.strictObject({
   /** The blob of each workflow the release starts or names (release, post checks, rollback) at
    * the release commit, pinned when it was announced: the trigger refuses another. */
   workflowBlobs: external_exports.record(external_exports.string(), external_exports.string().regex(/^[0-9a-f]{40,64}$/)),
+  /** The rollback workflow, when the way back is one: its pin is checked before it is shown. */
+  rollbackWorkflow: external_exports.string().optional(),
+  /** `.github`'s tree and the component's `guarded_paths` at the release commit: what the release
+   * workflows run, pinned when it was announced. */
+  guardPin: external_exports.string(),
   needs: external_exports.strictObject({ owner: external_exports.array(external_exports.string()), approvers: external_exports.array(external_exports.string()) }),
   announcement: external_exports.strictObject({ at: external_exports.string(), text: line3(1e3) }),
   approvals: external_exports.array(approvalSchema).default([]),
@@ -41629,10 +41671,13 @@ async function draftRelease(ctx, releases, componentId3, sinceRef) {
     if (oid === void 0) throw new Error(`${file2} is not in ${short2(sha)}`);
     workflowBlobs[file2] = oid;
   }
+  const guard = await guardPinAt(ctx.git, co, sha, rule.guardedPaths);
   const id = nextId2(releases, componentId3);
   return {
     id,
     workflowBlobs,
+    guardPin: guard,
+    ..."workflow" in rule.rollback ? { rollbackWorkflow: rule.rollback.workflow } : {},
     component,
     rule,
     note,
@@ -41661,6 +41706,8 @@ function announce(ctx, d) {
     note: d.note,
     migrationsDigest: migrationsDigest(d.note),
     workflowBlobs: d.workflowBlobs,
+    guardPin: d.guardPin,
+    ...d.rollbackWorkflow === void 0 ? {} : { rollbackWorkflow: d.rollbackWorkflow },
     needs: d.needs,
     announcement: { at: at2, text: d.announcement },
     approvals: [],
@@ -41840,11 +41887,28 @@ async function triggerRelease(ctx, rec, o2) {
     if (problem !== void 0) return { kind: "refused", line: `${rec.id}: ${problem}` };
   }
   for (const file2 of rollback) {
+    const [a2, b] = [
+      await blobAt(ctx.git, co, rec.sha, file2),
+      await blobAt(ctx.git, co, head, file2)
+    ];
+    if (a2 === void 0 || a2 !== b || rec.workflowBlobs[file2] !== a2) {
+      return { kind: "refused", line: `${file2} changed since ${rec.id} was announced: ${redraft}` };
+    }
     const problem = await dispatchProblem(ctx.git, co, rec.sha, file2, {
       crewAllowed: config2.crewAllowedWorkflows,
       input: false
     });
     if (problem !== void 0) return { kind: "refused", line: `${rec.id}: ${problem}` };
+  }
+  const [pinAtSha, pinAtHead] = [
+    await guardPinAt(ctx.git, co, rec.sha, rule.guardedPaths),
+    await guardPinAt(ctx.git, co, head, rule.guardedPaths)
+  ];
+  if (pinAtSha !== rec.guardPin || pinAtHead !== rec.guardPin) {
+    return {
+      kind: "refused",
+      line: `.github or a guarded path changed since ${rec.id} was announced: ${redraft}`
+    };
   }
   let list2;
   try {
@@ -42204,10 +42268,44 @@ function fail2(ctx, rec, o2, why) {
   log(ctx.stateRoot, ctx.now(), { event: "failed", release: rec.id, reason });
   return { rec: next, lead: failedLine(next) };
 }
-var failedLine = (r) => clean5(
-  `release failed: ${r.id}: ${r.reason ?? "red"}; ${r.deployedAt === void 0 ? "the deploy did not finish" : `${short2(r.sha)} is deployed`}; Studio runs nothing back; the way back: ${r.note.wayBack.join("; ")}`,
+var failedLine = (r, rollbackOk = true) => clean5(
+  `release failed: ${r.id}: ${r.reason ?? "red"}; ${r.deployedAt === void 0 ? "the deploy did not finish" : `${short2(r.sha)} is deployed`}; Studio runs nothing back; the way back: ${rollbackOk ? r.note.wayBack.join("; ") : rollbackChangedLine(r)}`,
   1500
 );
+var rollbackChangedLine = (r) => `${r.rollbackWorkflow ?? "the rollback workflow"} changed on ${r.branch} since ${r.id} was announced: read it before running anything, Studio offers it no longer`;
+async function rollbackPinHolds(ctx, r) {
+  const file2 = r.rollbackWorkflow;
+  if (file2 === void 0) return true;
+  try {
+    const head = await resolveRef2(ctx.gh, r.repo, r.branch);
+    if (head === void 0) return false;
+    const co = ctx.checkout(r.repo);
+    await fetchCommits(ctx.git, co, [r.sha, head]);
+    const [a2, b] = [await blobAt(ctx.git, co, r.sha, file2), await blobAt(ctx.git, co, head, file2)];
+    return a2 !== void 0 && a2 === b && r.workflowBlobs[file2] === a2;
+  } catch {
+    return false;
+  }
+}
+var failedLead = async (ctx, r) => failedLine(r, await rollbackPinHolds(ctx, r));
+async function guardPinAt(git, co, sha, guarded2) {
+  let tree = "none";
+  try {
+    const oid = (await g2(git, co, ["rev-parse", "--verify", "--quiet", `${sha}:.github`])).trim();
+    if (/^[0-9a-f]{40,64}$/.test(oid)) tree = oid;
+  } catch {
+    tree = "none";
+  }
+  let files = "";
+  if (guarded2.length > 0) {
+    const out = await g2(git, co, ["ls-tree", "-r", "--full-tree", "-z", sha]);
+    files = out.split("\0").filter((e) => e !== "").map((e) => {
+      const tab = e.indexOf("	");
+      return { meta: e.slice(0, tab), path: e.slice(tab + 1) };
+    }).filter((e) => guarded2.some((p) => matchGlob(p, e.path))).map((e) => `${e.meta} ${e.path}`).sort().join("\n");
+  }
+  return `github:${tree} guarded:${digest2(files)}`;
+}
 function approvalLines(r) {
   if (!BEFORE_TRIGGER.includes(r.status)) return [];
   return pendingApprovals(r).map((who) => {
@@ -44429,7 +44527,7 @@ async function runCli(argv, deps) {
         for (const r of after2) {
           if (!isOpen(r) && !recent(r)) continue;
           for (const l of approvalLines(r)) lead(l.item, l.reason);
-          if (r.status === "failed" && recent(r)) lead(r.id, failedLine(r));
+          if (r.status === "failed" && recent(r)) lead(r.id, await failedLead(ctx, r));
           rows2.push({
             ...releaseRow(r),
             ...r.status === "announced" ? { next: `studio release ${r.component} triggers it` } : {}
@@ -45649,8 +45747,15 @@ ${table2([
           only([]);
           if (args.length !== 1) throw new UsageError("release show needs one release id");
           const r = findRelease(readReleases(stateRoot()), args[0]);
-          if (json2) print(r);
-          else stdout(renderNote(r.note, r.id));
+          const { config: config3, board: board2 } = loadAll();
+          const pinned = await rollbackPinHolds(releaseCtx(config3, board2, stateRoot()), r);
+          if (json2) print({ ...r, ...pinned ? {} : { rollbackChanged: rollbackChangedLine(r) } });
+          else {
+            stdout(renderNote(r.note, r.id));
+            if (!pinned) stdout(`
+warning: ${rollbackChangedLine(r)}
+`);
+          }
           return 0;
         }
         refuseCrew(deps.env);
@@ -45782,7 +45887,7 @@ ${table2([
             return {
               ...shown(a2.rec),
               ...a2.waiting === void 0 ? {} : { waiting: a2.waiting },
-              ...a2.lead === void 0 ? {} : { needsLead: [{ item: open4.id, reason: a2.lead }] }
+              ...a2.rec.status === "failed" ? { needsLead: [{ item: open4.id, reason: await failedLead(ctx, a2.rec) }] } : a2.lead === void 0 ? {} : { needsLead: [{ item: open4.id, reason: a2.lead }] }
             };
           }
           if (open4.status === "approvals") {
@@ -45802,7 +45907,7 @@ ${table2([
           if (t.kind === "refused") throw new Error(t.line);
           return {
             ...shown(t.rec),
-            ...t.rec.status === "failed" ? { needsLead: [{ item: open4.id, reason: failedLine(t.rec) }] } : {},
+            ...t.rec.status === "failed" ? { needsLead: [{ item: open4.id, reason: await failedLead(ctx, t.rec) }] } : {},
             next: t.rec.status === "failed" ? "the release did not start; tell the owner in one line" : "tick follows the release run and the checks after the deploy"
           };
         });

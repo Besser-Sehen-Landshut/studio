@@ -169,6 +169,11 @@ const releaseSchema = z.strictObject({
   /** The blob of each workflow the release starts or names (release, post checks, rollback) at
    * the release commit, pinned when it was announced: the trigger refuses another. */
   workflowBlobs: z.record(z.string(), z.string().regex(/^[0-9a-f]{40,64}$/)),
+  /** The rollback workflow, when the way back is one: its pin is checked before it is shown. */
+  rollbackWorkflow: z.string().optional(),
+  /** `.github`'s tree and the component's `guarded_paths` at the release commit: what the release
+   * workflows run, pinned when it was announced. */
+  guardPin: z.string(),
   needs: z.strictObject({ owner: z.array(z.string()), approvers: z.array(z.string()) }),
   announcement: z.strictObject({ at: z.string(), text: line(1000) }),
   approvals: z.array(approvalSchema).default([]),
@@ -903,6 +908,8 @@ export function announcementOf(n: ReleaseNote, id: string, workflow: string): st
 export interface Draft {
   id: string;
   workflowBlobs: Record<string, string>;
+  guardPin: string;
+  rollbackWorkflow?: string;
   component: ComponentConfig;
   rule: ReleaseRule;
   note: ReleaseNote;
@@ -995,10 +1002,13 @@ export async function draftRelease(
     if (oid === undefined) throw new Error(`${file} is not in ${short(sha)}`);
     workflowBlobs[file] = oid;
   }
+  const guard = await guardPinAt(ctx.git, co, sha, rule.guardedPaths);
   const id = nextId(releases, componentId);
   return {
     id,
     workflowBlobs,
+    guardPin: guard,
+    ...('workflow' in rule.rollback ? { rollbackWorkflow: rule.rollback.workflow } : {}),
     component,
     rule,
     note,
@@ -1030,6 +1040,8 @@ export function announce(ctx: Pick<ReleaseContext, 'stateRoot' | 'now'>, d: Draf
     note: d.note,
     migrationsDigest: migrationsDigest(d.note),
     workflowBlobs: d.workflowBlobs,
+    guardPin: d.guardPin,
+    ...(d.rollbackWorkflow === undefined ? {} : { rollbackWorkflow: d.rollbackWorkflow }),
     needs: d.needs,
     announcement: { at, text: d.announcement },
     approvals: [],
@@ -1269,11 +1281,29 @@ export async function triggerRelease(
     if (problem !== undefined) return { kind: 'refused', line: `${rec.id}: ${problem}` };
   }
   for (const file of rollback) {
+    const [a, b] = [
+      await blobAt(ctx.git, co, rec.sha, file),
+      await blobAt(ctx.git, co, head, file),
+    ];
+    if (a === undefined || a !== b || rec.workflowBlobs[file] !== a) {
+      return { kind: 'refused', line: `${file} changed since ${rec.id} was announced: ${redraft}` };
+    }
     const problem = await dispatchProblem(ctx.git, co, rec.sha, file, {
       crewAllowed: config.crewAllowedWorkflows,
       input: false,
     });
     if (problem !== undefined) return { kind: 'refused', line: `${rec.id}: ${problem}` };
+  }
+  // Everything the workflows run: `.github` (workflows, actions) and the guarded paths.
+  const [pinAtSha, pinAtHead] = [
+    await guardPinAt(ctx.git, co, rec.sha, rule.guardedPaths),
+    await guardPinAt(ctx.git, co, head, rule.guardedPaths),
+  ];
+  if (pinAtSha !== rec.guardPin || pinAtHead !== rec.guardPin) {
+    return {
+      kind: 'refused',
+      line: `.github or a guarded path changed since ${rec.id} was announced: ${redraft}`,
+    };
   }
   let list: Listed[];
   try {
@@ -1695,12 +1725,81 @@ function fail(
   return { rec: next, lead: failedLine(next) };
 }
 
-/** The lead's line for a stopped deploy: what is red and the way back, which Studio never runs. */
-export const failedLine = (r: Release): string =>
+/**
+ * The lead's line for a stopped deploy: what is red and the way back, which Studio never runs. A
+ * rollback workflow whose pin no longer holds (`rollbackOk: false`) is not offered as the way back.
+ */
+export const failedLine = (r: Release, rollbackOk = true): string =>
   clean(
-    `release failed: ${r.id}: ${r.reason ?? 'red'}; ${r.deployedAt === undefined ? 'the deploy did not finish' : `${short(r.sha)} is deployed`}; Studio runs nothing back; the way back: ${r.note.wayBack.join('; ')}`,
+    `release failed: ${r.id}: ${r.reason ?? 'red'}; ${r.deployedAt === undefined ? 'the deploy did not finish' : `${short(r.sha)} is deployed`}; Studio runs nothing back; the way back: ${rollbackOk ? r.note.wayBack.join('; ') : rollbackChangedLine(r)}`,
     1500,
   );
+
+export const rollbackChangedLine = (r: Release): string =>
+  `${r.rollbackWorkflow ?? 'the rollback workflow'} changed on ${r.branch} since ${r.id} was announced: read it before running anything, Studio offers it no longer`;
+
+/**
+ * Whether the rollback workflow is still the one pinned at the announcement, at the release
+ * commit and at the branch head; true when the way back is a text. Unreadable is false.
+ */
+export async function rollbackPinHolds(
+  ctx: Pick<ReleaseContext, 'gh' | 'git' | 'checkout'>,
+  r: Release,
+): Promise<boolean> {
+  const file = r.rollbackWorkflow;
+  if (file === undefined) return true;
+  try {
+    const head = await resolveRef(ctx.gh, r.repo, r.branch);
+    if (head === undefined) return false;
+    const co = ctx.checkout(r.repo);
+    await fetchCommits(ctx.git, co, [r.sha, head]);
+    const [a, b] = [await blobAt(ctx.git, co, r.sha, file), await blobAt(ctx.git, co, head, file)];
+    return a !== undefined && a === b && r.workflowBlobs[file] === a;
+  } catch {
+    return false;
+  }
+}
+
+/** `failedLine` with the rollback pin checked right now. */
+export const failedLead = async (
+  ctx: Pick<ReleaseContext, 'gh' | 'git' | 'checkout'>,
+  r: Release,
+): Promise<string> => failedLine(r, await rollbackPinHolds(ctx, r));
+
+/**
+ * The pin of what a release's workflows run at `sha`: the tree of `.github` (workflows, actions)
+ * and every file the component's `guarded_paths` match, by blob.
+ */
+export async function guardPinAt(
+  git: Git,
+  co: Checkout,
+  sha: string,
+  guarded: readonly string[],
+): Promise<string> {
+  let tree = 'none';
+  try {
+    const oid = (await g(git, co, ['rev-parse', '--verify', '--quiet', `${sha}:.github`])).trim();
+    if (/^[0-9a-f]{40,64}$/.test(oid)) tree = oid;
+  } catch {
+    tree = 'none';
+  }
+  let files = '';
+  if (guarded.length > 0) {
+    const out = await g(git, co, ['ls-tree', '-r', '--full-tree', '-z', sha]);
+    files = out
+      .split('\0')
+      .filter((e) => e !== '')
+      .map((e) => {
+        const tab = e.indexOf('\t');
+        return { meta: e.slice(0, tab), path: e.slice(tab + 1) };
+      })
+      .filter((e) => guarded.some((p) => matchGlob(p, e.path)))
+      .map((e) => `${e.meta} ${e.path}`)
+      .sort()
+      .join('\n');
+  }
+  return `github:${tree} guarded:${digest(files)}`;
+}
 
 /** What a release waits for from the lead or the owner, as needsLead lines. */
 export function approvalLines(r: Release): { item: string; reason: string }[] {

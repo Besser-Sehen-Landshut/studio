@@ -684,6 +684,45 @@ describe('judging a failed guard by a built-in proof', () => {
     ).toEqual({});
   });
 
+  it('with a release, all workflows, actions and guarded paths are the owner’s', async () => {
+    const release = `components:
+  - id: api
+    name: API
+    repo: org/app
+    paths: ["migrations/**"]
+    release:
+      workflow: .github/workflows/ci.yml
+      post_checks: [{ workflow: .github/workflows/ci.yml, job: test }]
+      rollback: { text: redeploy the previous commit }
+      guarded_paths: ["scripts/deploy/**"]
+`;
+    const changeOf = async (rules: string, path: string) => {
+      const r = makeRepo({
+        rules,
+        change: (dir) => {
+          mkdirSync(dirname(join(dir, path)), { recursive: true });
+          writeFileSync(join(dir, path), 'x: 1\n');
+        },
+      });
+      return evidenceChange(ctxFor(r, fakeGh(r).gh), r.base, r.head);
+    };
+    expect(await changeOf(`${RULE}${release}`, '.github/workflows/other.yml')).toEqual({
+      problem:
+        'the pull request changes ".github/workflows/other.yml"; with a release, workflows and actions are the owner\'s',
+      area: 'release',
+    });
+    expect(await changeOf(`${RULE}${release}`, '.github/actions/setup/action.yml')).toMatchObject({
+      area: 'release',
+    });
+    expect(await changeOf(`${RULE}${release}`, 'scripts/deploy/run.sh')).toEqual({
+      problem: 'the pull request changes "scripts/deploy/run.sh", a guarded path of a release',
+      area: 'release',
+    });
+    // Without any release, a workflow change is no owner matter here.
+    expect(await changeOf(RULE, '.github/workflows/other.yml')).toEqual({});
+    expect(await changeOf(`${RULE}${release}`, 'scripts/other.sh')).toEqual({});
+  });
+
   it('a pull request that changes the guard job gets no exception', async () => {
     const r = makeRepo({
       change: (dir) => {

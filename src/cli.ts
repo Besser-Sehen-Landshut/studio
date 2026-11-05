@@ -143,7 +143,7 @@ import {
   approvalLines,
   BEFORE_TRIGGER,
   draftRelease,
-  failedLine,
+  failedLead,
   isOpen,
   RELEASE_ID_RE,
   type Release,
@@ -153,6 +153,8 @@ import {
   releaseRow,
   renderNote,
   replaceRelease,
+  rollbackChangedLine,
+  rollbackPinHolds,
   stopRelease,
   triggerRelease,
   withReleases,
@@ -1867,7 +1869,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           if (!isOpen(r) && !recent(r)) continue;
           for (const l of approvalLines(r)) lead(l.item, l.reason);
           // A red release stays a decision for a day: the way back is the lead's or the owner's.
-          if (r.status === 'failed' && recent(r)) lead(r.id, failedLine(r));
+          if (r.status === 'failed' && recent(r)) lead(r.id, await failedLead(ctx, r));
           rows.push({
             ...releaseRow(r),
             ...(r.status === 'announced'
@@ -3191,8 +3193,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           only([]);
           if (args.length !== 1) throw new UsageError('release show needs one release id');
           const r = findRelease(readReleases(stateRoot()), args[0]);
-          if (json) print(r);
-          else stdout(renderNote(r.note, r.id));
+          // The way back is shown only with a rollback workflow whose pin still holds.
+          const { config, board } = loadAll();
+          const pinned = await rollbackPinHolds(releaseCtx(config, board, stateRoot()), r);
+          if (json) print({ ...r, ...(pinned ? {} : { rollbackChanged: rollbackChangedLine(r) }) });
+          else {
+            stdout(renderNote(r.note, r.id));
+            if (!pinned) stdout(`\nwarning: ${rollbackChangedLine(r)}\n`);
+          }
           return 0;
         }
         // Everything below changes owner state: never a crew's.
@@ -3334,7 +3342,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             return {
               ...shown(a.rec),
               ...(a.waiting === undefined ? {} : { waiting: a.waiting }),
-              ...(a.lead === undefined ? {} : { needsLead: [{ item: open.id, reason: a.lead }] }),
+              ...(a.rec.status === 'failed'
+                ? { needsLead: [{ item: open.id, reason: await failedLead(ctx, a.rec) }] }
+                : a.lead === undefined
+                  ? {}
+                  : { needsLead: [{ item: open.id, reason: a.lead }] }),
             };
           }
           if (open.status === 'approvals') {
@@ -3355,7 +3367,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           return {
             ...shown(t.rec),
             ...(t.rec.status === 'failed'
-              ? { needsLead: [{ item: open.id, reason: failedLine(t.rec) }] }
+              ? { needsLead: [{ item: open.id, reason: await failedLead(ctx, t.rec) }] }
               : {}),
             next:
               t.rec.status === 'failed'

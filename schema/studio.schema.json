@@ -517,6 +517,14 @@
                 "type": "integer",
                 "minimum": 5,
                 "maximum": 1440
+              },
+              "guarded_paths": {
+                "default": [],
+                "maxItems": 50,
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "required": [

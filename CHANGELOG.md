@@ -67,6 +67,13 @@ merge.
   starts or names, or `crew_allowed_workflows` while a release exists gets no approval from Studio, like one
   that changes `evidence:` (`approval refused: ...; the release rules are the owner's: ...`).
 - Approver `paths` are matched against every change of the release, not only the component's.
+- `release.guarded_paths`: files outside `.github` the release workflows run (deploy scripts). Once any
+  component has a release, every file below `.github/workflows/` and `.github/actions/`, and the guarded
+  paths, are owner-owned: a pull request that changes one gets no approval. The announced record pins the tree
+  of `.github` and the guarded files; the trigger refuses when either changed at the release commit or the
+  head. The owner must list such scripts; Studio does not find them.
+- The rollback workflow is pinned like the started ones: the trigger refuses another, and the pin is checked
+  again before the way back is shown (`needsLead`, `release show`); a changed one is not offered.
 - The lead skill: a Release section (send the announcement word for word, approval lines are owner lines, never
   approve a migration or contact a third party, the second `studio release` call triggers and `tick` never does,
   never `gh workflow run` or `deploy record` a release, the way back after `release failed` is the lead's). A

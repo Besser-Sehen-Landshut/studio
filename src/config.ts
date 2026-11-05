@@ -207,6 +207,9 @@ const releaseRuleSchema = z
       .default([]),
     // How long after the trigger the release run and its checks may take before Studio stops.
     timeoutMinutes: z.number().int().min(5).max(1440).default(60),
+    // Files outside .github the release workflows run, e.g. deploy scripts: the owner's like the
+    // workflows, pinned at the announcement and guarded against crews' pull requests.
+    guardedPaths: z.array(globSchema).max(50).default([]),
   })
   .superRefine((r, ctx) => {
     const known = [
@@ -217,6 +220,7 @@ const releaseRuleSchema = z
       'rollback',
       'approvers',
       'timeoutMinutes',
+      'guardedPaths',
     ];
     for (const key of Object.keys(r).filter((k) => !known.includes(k))) {
       ctx.addIssue({
@@ -238,7 +242,7 @@ const releaseRuleSchema = z
     }
   })
   .transform(
-    ({ workflow, postChecks, migrations, config, rollback, approvers, timeoutMinutes }) => ({
+    ({
       workflow,
       postChecks,
       migrations,
@@ -246,6 +250,16 @@ const releaseRuleSchema = z
       rollback,
       approvers,
       timeoutMinutes,
+      guardedPaths,
+    }) => ({
+      workflow,
+      postChecks,
+      migrations,
+      config,
+      rollback,
+      approvers,
+      timeoutMinutes,
+      guardedPaths,
     }),
   );
 export type ReleaseRule = z.infer<typeof releaseRuleSchema>;
