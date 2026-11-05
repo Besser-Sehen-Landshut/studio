@@ -2,7 +2,7 @@
 
 Studio is a Claude Code plugin and TypeScript package for running a small software studio of coding-agent sessions from one control room: a lead session plans work from a board and a crew of role-based sessions carries it out, each in its own sandboxed clone.
 
-Status: 0.11.0, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store), plus components (work per part of the product, with their own WIP limit), an owner-wide overview, a lead heartbeat (`tick`) that carries items from ready to merged, a guided setup (`setup`, `/studio:init`, `/studio:add`), and epics with a roadmap generated from the board. See [CHANGELOG.md](CHANGELOG.md).
+Status: 0.11.1, stage (a) (board, planner, capacity, crew launch, guard, merge queue) with stage (a.1) (your own runners, crew credentials, usage limits), stage (a.2) (account blocks, owner-wide limits, pinned crew rules), stage (b) (the Studio board inside Claude Code, pause and resume, push notifications) and stage (c) (capabilities per crew, tiered review, third-party sources, role memory, model per role and item type, change failure rate and time to restore, flaky-test ledger, solutions store), plus components (work per part of the product, with their own WIP limit), an owner-wide overview, a lead heartbeat (`tick`) that carries items from ready to merged, a guided setup (`setup`, `/studio:init`, `/studio:add`), and epics with a roadmap generated from the board. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Quick start
 
@@ -163,10 +163,65 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 
 In the owner's interactive Claude Code session in a Studio project, the plugin shows what Studio is doing. It only displays: it writes no file and starts no process. Crew sessions (`STUDIO_ROLE=crew`), `claude -p` and folders without `.studio/studio.yaml` get none of it.
 
-- **Pane.** "Studio board": the crew with a state per item (`working`, `waiting`, `blocked`, `stopped`, `crashed`, `done`), grouped under a heading per component when the project has components (see "Components"), CI use, the lines for you, merges and deploys today, and the state of the push builds on `main`. A `state.json` that is missing, unreadable or the wrong shape gives a calm message, never an error.
+- **Pane.** "Studio board", in one of three views. Every state has a sign and a word, never a colour alone; titles are cut with "…", never the id, the sign or the stage. A `state.json` that is missing, unreadable or the wrong shape gives a calm message, never an error.
+  - **Work list** (the default): the project and how fresh the state is; one line of counts (`! decisions needed`, `● running`, `◷ waiting`, `✓ today`); a highlighted "Decision needed" block with each lead decision and line for you, and under it what you can say next; then each epic with a progress bar and merged of total, its items sorted decision, running, waiting, ready (`<sign> <id> <title> <stage> <time in stage>`, a waiting item with its reason on a second, dimmed line, done items folded into `✓ n done`); then "Without epic" the same way; and one footer line with CI use, the median lead time and `/studio more`. Empty sections are left out. Example, 60 columns:
+
+    ```text
+    Studio · shop                              updated 1 min ago
+    ! 1 decision needed  ● 2 running  ◷ 1 waiting  ✓ 3 today
+
+    Decision needed
+    ! APP-15 fix limit reached – decide
+      → say "show APP-15"
+
+    E-3 Connection limits                              █░░░░ 1/4
+      ! APP-15 Retry on timeout                     decide   30m
+      ● APP-14 Header timeout                       review   12m
+      ○ APP-16 Idle timeout                         ready
+      ✓ 1 done
+
+    E-4 Privacy tests                                  ██░░░ 1/3
+      ● APP-17 Backup log line                      building  4m
+      ○ APP-19 More log tests                       ready
+      ✓ 1 done
+
+    Without epic
+      ◷ APP-12 Duplicate header lines               waiting   3m
+        queue: runners 6/8 busy, merge at ≤5
+      ✓ 1 done today
+
+    CI ██████░░ 6/8 · lead time 3.1 h · /studio more
+    ```
+
+  - **Pipeline** (`/studio pipeline`): the first decision, then the columns READY, BUILDING n/wip, REVIEW n/wip (the WIP limits of the build roles and of the reviewer), QUEUE and TODAY with a card per item (sign and id, short title, epic code such as `E3`, time in stage, and what it waits for); a full column says `⚠ full`, blocked work has a row of its own below. A pane too narrow for five columns (about 60 to 70 cells) draws the work list instead. Example, 72 columns:
+
+    ```text
+    Studio · shop                                          updated 1 min ago
+    ! APP-15 fix limit reached – decide
+      → say "show APP-15"
+
+    READY 2       BUILDING 1/4  REVIEW 1/2    QUEUE 1       TODAY ✓3
+    ────────────  ────────────  ────────────  ────────────  ────────────
+    ○ APP-16      ● APP-17      ● APP-14      ◷ APP-12      ✓ APP-11
+      Idle time…    Backup lo…    Header ti…    Duplicate…  ✓ APP-18
+      E3            E4 4m         E3 12m        3m          ✓ APP-10
+    ○ APP-19                                    CI 6/8
+      More log …
+      E4
+
+    ■ BLOCKED 1
+      APP-15 fix limit reached – decide (E3)
+
+    CI ██████░░ 6/8 · lead time 3.1 h · /studio more
+    ```
+
+  - **Details** (`/studio more`): the earlier sections: the crew with a state per item (`working`, `waiting`, `blocked`, `stopped`, `crashed`, `done`), grouped under a heading per component when the project has components (see "Components"), the merge queue, CI use and the merge rule, the lines for you, the state of the push builds on `main`, the last seven days merged and deployed, and usage per label. A `state.json` written by a Studio before 0.11.1 has no work list and draws this view.
+  - **States.** No open item and nothing merged today: "No work yet." with an example of what to say. While paused: "Paused since HH:MM. Nothing starts or merges; running crews finish. → /studio resume". When the state is older than 10 minutes: "Last update n min ago. Is the lead loop still running? → say "start the Studio lead loop"". Paused and stale are shown above the view, not instead of it.
+- **What it shows comes from `studio state`.** `state.json` carries every item that is not merged or dropped (reviews aside: their builder shows the stage) with its stage (`ready`, `building`, `pr_held`, `review`, `queued`, `blocked`), epic, components, the time it entered that stage and what it waits for (`ci_capacity` with busy, total and the merge limit, `checks_pending`, `review_pending`, `queue_held`, `queue_position`, `held`, ...); the latest tick's lead list (`needsLead`, each with a code, a short reason and a next step to say); the WIP limits; the merges of today with their items and epics; the project name (the repository name of `primary_repo`); and the pause with its time on the owner's clock. `studio tick` keeps its lead list and holds in `tick.json` in the state root for this; nothing else runs in the background. Reasons and next steps are English data; the pane translates what it has words for.
+- **Language.** The displayed text is English or German; commands stay English in both. The pane follows `/studio lang de` or `/studio lang en` when set (kept in the plugin's store; `/studio lang auto` clears it), else Claude Code's `language` setting (German when it names German, for example `"language": "german"`), else the locale (`LC_ALL`, `LC_MESSAGES`, `LANG`, German for `de_*`), else English. The status line and the toasts follow it too.
 - **Status line.** `● N working · N waiting · N queued · CI x/y · for you: n`, with `· paused` while paused.
 - **Toasts.** One toast per refresh, only for lines that are new since the last one shown: a line for you, an account block, a red build on `main` and a crew that crashed and was not healed. A `usage-limit` line toasts once while it stands. Titles have control characters stripped.
-- **Commands.** `/studio` opens the pane and always places it. `/studio status` prints the status line text. `/studio pause` and `/studio resume` only print the terminal command to run, because pausing needs a terminal (`studio pause`, `studio resume`).
+- **Commands.** `/studio` opens the pane and always places it. `/studio list`, `/studio pipeline` and `/studio more` switch the view and open the pane; the choice is kept in the plugin's store for the next session. `/studio lang de|en|auto` sets the language. `/studio status` prints the status line text. `/studio pause` and `/studio resume` only print the terminal command to run, because pausing needs a terminal (`studio pause`, `studio resume`).
 - **Where it reads.** The plugin reads `state.json` and `pause.json` from the project's state root (see below), not from `.studio/`, every 10 seconds. At session start it opens the pane by itself only when the terminal is wide (about 144 columns); in a narrower one it waits undrawn until you run `/studio`.
 - **Keeping it fresh.** Only `studio state` writes `state.json`. The lead's heartbeat (`studio status` and `studio state` every 120 s, and `studio tick` in a loop of its own, see the lead skill) refreshes it and also reads crew logs, so an account block stops crews at most one heartbeat (120 s) after the event. Without a running lead nothing refreshes the board and nothing stops crews: a project with no lead is swept for a block only when another project reconciles.
 

@@ -1,0 +1,542 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the special states > missing and unreadable state keep their calm message (de) 1`] = `
+[
+  "Noch kein Board. Die Steuerung schreibt  ⟨dim⟩",
+  "es mit studio state.  ⟨dim⟩",
+  "Pausiert.  ⟨dim⟩",
+]
+`;
+
+exports[`the special states > missing and unreadable state keep their calm message (de) 2`] = `
+[
+  "Das Board ist gerade nicht lesbar. Es  ⟨dim⟩",
+  "aktualisiert sich von selbst.  ⟨dim⟩",
+  "Pausiert.  ⟨dim⟩",
+]
+`;
+
+exports[`the special states > missing and unreadable state keep their calm message (en) 1`] = `
+[
+  "No board yet. The control room writes it  ⟨dim⟩",
+  "with studio state.  ⟨dim⟩",
+  "Paused.  ⟨dim⟩",
+]
+`;
+
+exports[`the special states > missing and unreadable state keep their calm message (en) 2`] = `
+[
+  "The board cannot be read just now. It  ⟨dim⟩",
+  "refreshes by itself.  ⟨dim⟩",
+  "Paused.  ⟨dim⟩",
+]
+`;
+
+exports[`the special states > no work, de 1`] = `
+[
+  "Studio · shop                  vor 1 min  ⟨head⟩",
+  "Noch keine Aufgabe.  ⟨dim⟩",
+  "",
+  "In eigenen Worten beschreiben, was",
+  "gebaut werden soll, z. B.:",
+  "„Neue Aufgabe für die API: … Fertig,  ⟨dim⟩",
+  "wenn ein Test … belegt.“  ⟨dim⟩",
+]
+`;
+
+exports[`the special states > no work, en 1`] = `
+[
+  "Studio · shop          updated 1 min ago  ⟨head⟩",
+  "No work yet.  ⟨dim⟩",
+  "",
+  "Describe in plain words what should be",
+  "built, e.g.:",
+  ""New item for the API: … Done when a  ⟨dim⟩",
+  "test shows …"  ⟨dim⟩",
+]
+`;
+
+exports[`the special states > paused, de 1`] = `
+[
+  "Studio · shop                 ◷ pausiert  ⟨head⟩",
+  "Pausiert seit 14:02. Nichts startet,  ⟨wait⟩",
+  "nichts wird gemergt; laufende Crews  ⟨wait⟩",
+  "arbeiten zu Ende.  ⟨wait⟩",
+  "→ /studio resume  ⟨dim⟩",
+  "",
+  "! 1 Entscheidung nötig  ● 2 laufen",
+  "◷ 1 wartet  ✓ 3 heute fertig",
+  "",
+  "Entscheidung nötig                        ⟨you⟩",
+  "! APP-15 Fix-Limit erreicht –  ⟨err⟩",
+  "  entscheiden  ⟨err⟩",
+  "  → sagen: „show APP-15“  ⟨dim⟩",
+  "",
+  "E-3 Connection limits          █░░░░ 1/4  ⟨head⟩",
+  "  ! APP-15 Retry on tim… entscheiden 30m  ⟨err⟩",
+  "  ● APP-14 Header timeo… Review      12m  ⟨run⟩",
+  "  ○ APP-16 Idle timeout  bereit  ⟨idle⟩",
+  "  ✓ 1 fertig  ⟨dim⟩",
+  "",
+  "E-4 Privacy tests              ██░░░ 1/3  ⟨head⟩",
+  "  ● APP-17 Backup log l… baut         4m  ⟨run⟩",
+  "  ○ APP-19 More log tes… bereit  ⟨idle⟩",
+  "  ✓ 1 fertig  ⟨dim⟩",
+  "",
+  "Ohne Vorhaben  ⟨head⟩",
+  "  ◷ APP-12 Duplicate he… wartet       3m  ⟨wait⟩",
+  "    Warteschlange: Läufer 6/8 belegt,  ⟨dim⟩",
+  "    Merge ab ≤5  ⟨dim⟩",
+  "  ✓ 1 heute fertig  ⟨dim⟩",
+  "",
+  "CI ██████░░ 6/8 · Ø Durchlauf 3,1 h  ⟨dim⟩",
+  "/studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the special states > paused, en 1`] = `
+[
+  "Studio · shop                   ◷ paused  ⟨head⟩",
+  "Paused since 14:02. Nothing starts or  ⟨wait⟩",
+  "merges; running crews finish.  ⟨wait⟩",
+  "→ /studio resume  ⟨dim⟩",
+  "",
+  "! 1 decision needed  ● 2 running",
+  "◷ 1 waiting  ✓ 3 today",
+  "",
+  "Decision needed                           ⟨you⟩",
+  "! APP-15 fix limit reached – decide  ⟨err⟩",
+  "  → say "show APP-15"  ⟨dim⟩",
+  "",
+  "E-3 Connection limits          █░░░░ 1/4  ⟨head⟩",
+  "  ! APP-15 Retry on timeout decide   30m  ⟨err⟩",
+  "  ● APP-14 Header timeout   review   12m  ⟨run⟩",
+  "  ○ APP-16 Idle timeout     ready  ⟨idle⟩",
+  "  ✓ 1 done  ⟨dim⟩",
+  "",
+  "E-4 Privacy tests              ██░░░ 1/3  ⟨head⟩",
+  "  ● APP-17 Backup log line  building  4m  ⟨run⟩",
+  "  ○ APP-19 More log tests   ready  ⟨idle⟩",
+  "  ✓ 1 done  ⟨dim⟩",
+  "",
+  "Without epic  ⟨head⟩",
+  "  ◷ APP-12 Duplicate heade… waiting   3m  ⟨wait⟩",
+  "    queue: runners 6/8 busy, merge at ≤5  ⟨dim⟩",
+  "  ✓ 1 done today  ⟨dim⟩",
+  "",
+  "CI ██████░░ 6/8 · lead time 3.1 h  ⟨dim⟩",
+  "/studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the special states > stale, de 1`] = `
+[
+  "Studio · shop                ! Stand alt  ⟨head⟩",
+  "Letzte Aktualisierung vor 14 min. Läuft  ⟨err⟩",
+  "die Steuerung noch?  ⟨err⟩",
+  "→ sagen: „start the Studio lead loop“  ⟨dim⟩",
+  "",
+  "! 1 Entscheidung nötig  ● 2 laufen",
+  "◷ 1 wartet  ✓ 3 heute fertig",
+  "",
+  "Entscheidung nötig                        ⟨you⟩",
+  "! APP-15 Fix-Limit erreicht –  ⟨err⟩",
+  "  entscheiden  ⟨err⟩",
+  "  → sagen: „show APP-15“  ⟨dim⟩",
+  "",
+  "E-3 Connection limits          █░░░░ 1/4  ⟨head⟩",
+  "  ! APP-15 Retry on tim… entscheiden 30m  ⟨err⟩",
+  "  ● APP-14 Header timeo… Review      12m  ⟨run⟩",
+  "  ○ APP-16 Idle timeout  bereit  ⟨idle⟩",
+  "  ✓ 1 fertig  ⟨dim⟩",
+  "",
+  "E-4 Privacy tests              ██░░░ 1/3  ⟨head⟩",
+  "  ● APP-17 Backup log l… baut         4m  ⟨run⟩",
+  "  ○ APP-19 More log tes… bereit  ⟨idle⟩",
+  "  ✓ 1 fertig  ⟨dim⟩",
+  "",
+  "Ohne Vorhaben  ⟨head⟩",
+  "  ◷ APP-12 Duplicate he… wartet       3m  ⟨wait⟩",
+  "    Warteschlange: Läufer 6/8 belegt,  ⟨dim⟩",
+  "    Merge ab ≤5  ⟨dim⟩",
+  "  ✓ 1 heute fertig  ⟨dim⟩",
+  "",
+  "CI ██████░░ 6/8 · Ø Durchlauf 3,1 h  ⟨dim⟩",
+  "/studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the special states > stale, en 1`] = `
+[
+  "Studio · shop                    ! stale  ⟨head⟩",
+  "Last update 14 min ago. Is the lead loop  ⟨err⟩",
+  "still running?  ⟨err⟩",
+  "→ say "start the Studio lead loop"  ⟨dim⟩",
+  "",
+  "! 1 decision needed  ● 2 running",
+  "◷ 1 waiting  ✓ 3 today",
+  "",
+  "Decision needed                           ⟨you⟩",
+  "! APP-15 fix limit reached – decide  ⟨err⟩",
+  "  → say "show APP-15"  ⟨dim⟩",
+  "",
+  "E-3 Connection limits          █░░░░ 1/4  ⟨head⟩",
+  "  ! APP-15 Retry on timeout decide   30m  ⟨err⟩",
+  "  ● APP-14 Header timeout   review   12m  ⟨run⟩",
+  "  ○ APP-16 Idle timeout     ready  ⟨idle⟩",
+  "  ✓ 1 done  ⟨dim⟩",
+  "",
+  "E-4 Privacy tests              ██░░░ 1/3  ⟨head⟩",
+  "  ● APP-17 Backup log line  building  4m  ⟨run⟩",
+  "  ○ APP-19 More log tests   ready  ⟨idle⟩",
+  "  ✓ 1 done  ⟨dim⟩",
+  "",
+  "Without epic  ⟨head⟩",
+  "  ◷ APP-12 Duplicate heade… waiting   3m  ⟨wait⟩",
+  "    queue: runners 6/8 busy, merge at ≤5  ⟨dim⟩",
+  "  ✓ 1 done today  ⟨dim⟩",
+  "",
+  "CI ██████░░ 6/8 · lead time 3.1 h  ⟨dim⟩",
+  "/studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the two views of the scenario > list, de, 40 columns 1`] = `
+[
+  "Studio · shop                  vor 1 min  ⟨head⟩",
+  "! 1 Entscheidung nötig  ● 2 laufen",
+  "◷ 1 wartet  ✓ 3 heute fertig",
+  "",
+  "Entscheidung nötig                        ⟨you⟩",
+  "! APP-15 Fix-Limit erreicht –  ⟨err⟩",
+  "  entscheiden  ⟨err⟩",
+  "  → sagen: „show APP-15“  ⟨dim⟩",
+  "",
+  "E-3 Connection limits          █░░░░ 1/4  ⟨head⟩",
+  "  ! APP-15 Retry on tim… entscheiden 30m  ⟨err⟩",
+  "  ● APP-14 Header timeo… Review      12m  ⟨run⟩",
+  "  ○ APP-16 Idle timeout  bereit  ⟨idle⟩",
+  "  ✓ 1 fertig  ⟨dim⟩",
+  "",
+  "E-4 Privacy tests              ██░░░ 1/3  ⟨head⟩",
+  "  ● APP-17 Backup log l… baut         4m  ⟨run⟩",
+  "  ○ APP-19 More log tes… bereit  ⟨idle⟩",
+  "  ✓ 1 fertig  ⟨dim⟩",
+  "",
+  "Ohne Vorhaben  ⟨head⟩",
+  "  ◷ APP-12 Duplicate he… wartet       3m  ⟨wait⟩",
+  "    Warteschlange: Läufer 6/8 belegt,  ⟨dim⟩",
+  "    Merge ab ≤5  ⟨dim⟩",
+  "  ✓ 1 heute fertig  ⟨dim⟩",
+  "",
+  "CI ██████░░ 6/8 · Ø Durchlauf 3,1 h  ⟨dim⟩",
+  "/studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the two views of the scenario > list, de, 60 columns 1`] = `
+[
+  "Studio · shop                                      vor 1 min  ⟨head⟩",
+  "! 1 Entscheidung nötig  ● 2 laufen  ◷ 1 wartet",
+  "✓ 3 heute fertig",
+  "",
+  "Entscheidung nötig                                            ⟨you⟩",
+  "! APP-15 Fix-Limit erreicht – entscheiden  ⟨err⟩",
+  "  → sagen: „show APP-15“  ⟨dim⟩",
+  "",
+  "E-3 Connection limits                              █░░░░ 1/4  ⟨head⟩",
+  "  ! APP-15 Retry on timeout                  entscheiden 30m  ⟨err⟩",
+  "  ● APP-14 Header timeout                    Review      12m  ⟨run⟩",
+  "  ○ APP-16 Idle timeout                      bereit  ⟨idle⟩",
+  "  ✓ 1 fertig  ⟨dim⟩",
+  "",
+  "E-4 Privacy tests                                  ██░░░ 1/3  ⟨head⟩",
+  "  ● APP-17 Backup log line                   baut         4m  ⟨run⟩",
+  "  ○ APP-19 More log tests                    bereit  ⟨idle⟩",
+  "  ✓ 1 fertig  ⟨dim⟩",
+  "",
+  "Ohne Vorhaben  ⟨head⟩",
+  "  ◷ APP-12 Duplicate header lines            wartet       3m  ⟨wait⟩",
+  "    Warteschlange: Läufer 6/8 belegt, Merge ab ≤5  ⟨dim⟩",
+  "  ✓ 1 heute fertig  ⟨dim⟩",
+  "",
+  "CI ██████░░ 6/8 · Ø Durchlauf 3,1 h · /studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the two views of the scenario > list, de, 100 columns 1`] = `
+[
+  "Studio · shop                                                  vor 1 min  ⟨head⟩",
+  "! 1 Entscheidung nötig  ● 2 laufen  ◷ 1 wartet  ✓ 3 heute fertig",
+  "",
+  "Entscheidung nötig                                                        ⟨you⟩",
+  "! APP-15 Fix-Limit erreicht – entscheiden  ⟨err⟩",
+  "  → sagen: „show APP-15“  ⟨dim⟩",
+  "",
+  "E-3 Connection limits                                          █░░░░ 1/4  ⟨head⟩",
+  "  ! APP-15 Retry on timeout                              entscheiden 30m  ⟨err⟩",
+  "  ● APP-14 Header timeout                                Review      12m  ⟨run⟩",
+  "  ○ APP-16 Idle timeout                                  bereit  ⟨idle⟩",
+  "  ✓ 1 fertig  ⟨dim⟩",
+  "",
+  "E-4 Privacy tests                                              ██░░░ 1/3  ⟨head⟩",
+  "  ● APP-17 Backup log line                               baut         4m  ⟨run⟩",
+  "  ○ APP-19 More log tests                                bereit  ⟨idle⟩",
+  "  ✓ 1 fertig  ⟨dim⟩",
+  "",
+  "Ohne Vorhaben  ⟨head⟩",
+  "  ◷ APP-12 Duplicate header lines                        wartet       3m  ⟨wait⟩",
+  "    Warteschlange: Läufer 6/8 belegt, Merge ab ≤5  ⟨dim⟩",
+  "  ✓ 1 heute fertig  ⟨dim⟩",
+  "",
+  "CI ██████░░ 6/8 · Ø Durchlauf 3,1 h · /studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the two views of the scenario > list, en, 40 columns 1`] = `
+[
+  "Studio · shop          updated 1 min ago  ⟨head⟩",
+  "! 1 decision needed  ● 2 running",
+  "◷ 1 waiting  ✓ 3 today",
+  "",
+  "Decision needed                           ⟨you⟩",
+  "! APP-15 fix limit reached – decide  ⟨err⟩",
+  "  → say "show APP-15"  ⟨dim⟩",
+  "",
+  "E-3 Connection limits          █░░░░ 1/4  ⟨head⟩",
+  "  ! APP-15 Retry on timeout decide   30m  ⟨err⟩",
+  "  ● APP-14 Header timeout   review   12m  ⟨run⟩",
+  "  ○ APP-16 Idle timeout     ready  ⟨idle⟩",
+  "  ✓ 1 done  ⟨dim⟩",
+  "",
+  "E-4 Privacy tests              ██░░░ 1/3  ⟨head⟩",
+  "  ● APP-17 Backup log line  building  4m  ⟨run⟩",
+  "  ○ APP-19 More log tests   ready  ⟨idle⟩",
+  "  ✓ 1 done  ⟨dim⟩",
+  "",
+  "Without epic  ⟨head⟩",
+  "  ◷ APP-12 Duplicate heade… waiting   3m  ⟨wait⟩",
+  "    queue: runners 6/8 busy, merge at ≤5  ⟨dim⟩",
+  "  ✓ 1 done today  ⟨dim⟩",
+  "",
+  "CI ██████░░ 6/8 · lead time 3.1 h  ⟨dim⟩",
+  "/studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the two views of the scenario > list, en, 60 columns 1`] = `
+[
+  "Studio · shop                              updated 1 min ago  ⟨head⟩",
+  "! 1 decision needed  ● 2 running  ◷ 1 waiting  ✓ 3 today",
+  "",
+  "Decision needed                                               ⟨you⟩",
+  "! APP-15 fix limit reached – decide  ⟨err⟩",
+  "  → say "show APP-15"  ⟨dim⟩",
+  "",
+  "E-3 Connection limits                              █░░░░ 1/4  ⟨head⟩",
+  "  ! APP-15 Retry on timeout                     decide   30m  ⟨err⟩",
+  "  ● APP-14 Header timeout                       review   12m  ⟨run⟩",
+  "  ○ APP-16 Idle timeout                         ready  ⟨idle⟩",
+  "  ✓ 1 done  ⟨dim⟩",
+  "",
+  "E-4 Privacy tests                                  ██░░░ 1/3  ⟨head⟩",
+  "  ● APP-17 Backup log line                      building  4m  ⟨run⟩",
+  "  ○ APP-19 More log tests                       ready  ⟨idle⟩",
+  "  ✓ 1 done  ⟨dim⟩",
+  "",
+  "Without epic  ⟨head⟩",
+  "  ◷ APP-12 Duplicate header lines               waiting   3m  ⟨wait⟩",
+  "    queue: runners 6/8 busy, merge at ≤5  ⟨dim⟩",
+  "  ✓ 1 done today  ⟨dim⟩",
+  "",
+  "CI ██████░░ 6/8 · lead time 3.1 h · /studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the two views of the scenario > list, en, 100 columns 1`] = `
+[
+  "Studio · shop                                          updated 1 min ago  ⟨head⟩",
+  "! 1 decision needed  ● 2 running  ◷ 1 waiting  ✓ 3 today",
+  "",
+  "Decision needed                                                           ⟨you⟩",
+  "! APP-15 fix limit reached – decide  ⟨err⟩",
+  "  → say "show APP-15"  ⟨dim⟩",
+  "",
+  "E-3 Connection limits                                          █░░░░ 1/4  ⟨head⟩",
+  "  ! APP-15 Retry on timeout                                 decide   30m  ⟨err⟩",
+  "  ● APP-14 Header timeout                                   review   12m  ⟨run⟩",
+  "  ○ APP-16 Idle timeout                                     ready  ⟨idle⟩",
+  "  ✓ 1 done  ⟨dim⟩",
+  "",
+  "E-4 Privacy tests                                              ██░░░ 1/3  ⟨head⟩",
+  "  ● APP-17 Backup log line                                  building  4m  ⟨run⟩",
+  "  ○ APP-19 More log tests                                   ready  ⟨idle⟩",
+  "  ✓ 1 done  ⟨dim⟩",
+  "",
+  "Without epic  ⟨head⟩",
+  "  ◷ APP-12 Duplicate header lines                           waiting   3m  ⟨wait⟩",
+  "    queue: runners 6/8 busy, merge at ≤5  ⟨dim⟩",
+  "  ✓ 1 done today  ⟨dim⟩",
+  "",
+  "CI ██████░░ 6/8 · lead time 3.1 h · /studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the two views of the scenario > pipeline, de, 40 columns 1`] = `
+[
+  "Studio · shop                  vor 1 min  ⟨head⟩",
+  "! 1 Entscheidung nötig  ● 2 laufen",
+  "◷ 1 wartet  ✓ 3 heute fertig",
+  "",
+  "Entscheidung nötig                        ⟨you⟩",
+  "! APP-15 Fix-Limit erreicht –  ⟨err⟩",
+  "  entscheiden  ⟨err⟩",
+  "  → sagen: „show APP-15“  ⟨dim⟩",
+  "",
+  "E-3 Connection limits          █░░░░ 1/4  ⟨head⟩",
+  "  ! APP-15 Retry on tim… entscheiden 30m  ⟨err⟩",
+  "  ● APP-14 Header timeo… Review      12m  ⟨run⟩",
+  "  ○ APP-16 Idle timeout  bereit  ⟨idle⟩",
+  "  ✓ 1 fertig  ⟨dim⟩",
+  "",
+  "E-4 Privacy tests              ██░░░ 1/3  ⟨head⟩",
+  "  ● APP-17 Backup log l… baut         4m  ⟨run⟩",
+  "  ○ APP-19 More log tes… bereit  ⟨idle⟩",
+  "  ✓ 1 fertig  ⟨dim⟩",
+  "",
+  "Ohne Vorhaben  ⟨head⟩",
+  "  ◷ APP-12 Duplicate he… wartet       3m  ⟨wait⟩",
+  "    Warteschlange: Läufer 6/8 belegt,  ⟨dim⟩",
+  "    Merge ab ≤5  ⟨dim⟩",
+  "  ✓ 1 heute fertig  ⟨dim⟩",
+  "",
+  "CI ██████░░ 6/8 · Ø Durchlauf 3,1 h  ⟨dim⟩",
+  "/studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the two views of the scenario > pipeline, de, 60 columns 1`] = `
+[
+  "Studio · shop                                      vor 1 min  ⟨head⟩",
+  "! APP-15 Fix-Limit erreicht – entscheiden  ⟨you⟩",
+  "  → sagen: „show APP-15“  ⟨dim⟩",
+  "",
+  "BEREIT 2    BAUT 1/4    REVIEW 1/2  QUEUE 1     HEUTE ✓3  ⟨head⟩",
+  "──────────  ──────────  ──────────  ──────────  ──────────  ⟨dim⟩",
+  "○ APP-16    ● APP-17    ● APP-14    ◷ APP-12    ✓ APP-11",
+  "  Idle ti…    Backup …    Header …    Duplica…  ✓ APP-18",
+  "  E3          E4 4m       E3 12m      3m        ✓ APP-10",
+  "○ APP-19                              CI 6/8",
+  "  More lo…",
+  "  E4",
+  "",
+  "■ BLOCKIERT 1  ⟨err⟩",
+  "  APP-15 Fix-Limit erreicht – entscheiden (E3)  ⟨err⟩",
+  "",
+  "CI ██████░░ 6/8 · Ø Durchlauf 3,1 h · /studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the two views of the scenario > pipeline, de, 100 columns 1`] = `
+[
+  "Studio · shop                                                                              vor 1 min  ⟨head⟩",
+  "! APP-15 Fix-Limit erreicht – entscheiden  ⟨you⟩",
+  "  → sagen: „show APP-15“  ⟨dim⟩",
+  "",
+  "BEREIT 2            BAUT 1/4            REVIEW 1/2          QUEUE 1             HEUTE ✓3  ⟨head⟩",
+  "──────────────────  ──────────────────  ──────────────────  ──────────────────  ──────────────────  ⟨dim⟩",
+  "○ APP-16            ● APP-17            ● APP-14            ◷ APP-12            ✓ APP-11",
+  "  Idle timeout        Backup log line     Header timeout      Duplicate heade…  ✓ APP-18",
+  "  E3                  E4 4m               E3 12m              3m                ✓ APP-10",
+  "○ APP-19                                                      CI 6/8",
+  "  More log tests",
+  "  E4",
+  "",
+  "■ BLOCKIERT 1  ⟨err⟩",
+  "  APP-15 Fix-Limit erreicht – entscheiden (E3)  ⟨err⟩",
+  "",
+  "CI ██████░░ 6/8 · Ø Durchlauf 3,1 h · /studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the two views of the scenario > pipeline, en, 40 columns 1`] = `
+[
+  "Studio · shop          updated 1 min ago  ⟨head⟩",
+  "! 1 decision needed  ● 2 running",
+  "◷ 1 waiting  ✓ 3 today",
+  "",
+  "Decision needed                           ⟨you⟩",
+  "! APP-15 fix limit reached – decide  ⟨err⟩",
+  "  → say "show APP-15"  ⟨dim⟩",
+  "",
+  "E-3 Connection limits          █░░░░ 1/4  ⟨head⟩",
+  "  ! APP-15 Retry on timeout decide   30m  ⟨err⟩",
+  "  ● APP-14 Header timeout   review   12m  ⟨run⟩",
+  "  ○ APP-16 Idle timeout     ready  ⟨idle⟩",
+  "  ✓ 1 done  ⟨dim⟩",
+  "",
+  "E-4 Privacy tests              ██░░░ 1/3  ⟨head⟩",
+  "  ● APP-17 Backup log line  building  4m  ⟨run⟩",
+  "  ○ APP-19 More log tests   ready  ⟨idle⟩",
+  "  ✓ 1 done  ⟨dim⟩",
+  "",
+  "Without epic  ⟨head⟩",
+  "  ◷ APP-12 Duplicate heade… waiting   3m  ⟨wait⟩",
+  "    queue: runners 6/8 busy, merge at ≤5  ⟨dim⟩",
+  "  ✓ 1 done today  ⟨dim⟩",
+  "",
+  "CI ██████░░ 6/8 · lead time 3.1 h  ⟨dim⟩",
+  "/studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the two views of the scenario > pipeline, en, 60 columns 1`] = `
+[
+  "Studio · shop                              updated 1 min ago  ⟨head⟩",
+  "! 1 decision needed  ● 2 running  ◷ 1 waiting  ✓ 3 today",
+  "",
+  "Decision needed                                               ⟨you⟩",
+  "! APP-15 fix limit reached – decide  ⟨err⟩",
+  "  → say "show APP-15"  ⟨dim⟩",
+  "",
+  "E-3 Connection limits                              █░░░░ 1/4  ⟨head⟩",
+  "  ! APP-15 Retry on timeout                     decide   30m  ⟨err⟩",
+  "  ● APP-14 Header timeout                       review   12m  ⟨run⟩",
+  "  ○ APP-16 Idle timeout                         ready  ⟨idle⟩",
+  "  ✓ 1 done  ⟨dim⟩",
+  "",
+  "E-4 Privacy tests                                  ██░░░ 1/3  ⟨head⟩",
+  "  ● APP-17 Backup log line                      building  4m  ⟨run⟩",
+  "  ○ APP-19 More log tests                       ready  ⟨idle⟩",
+  "  ✓ 1 done  ⟨dim⟩",
+  "",
+  "Without epic  ⟨head⟩",
+  "  ◷ APP-12 Duplicate header lines               waiting   3m  ⟨wait⟩",
+  "    queue: runners 6/8 busy, merge at ≤5  ⟨dim⟩",
+  "  ✓ 1 done today  ⟨dim⟩",
+  "",
+  "CI ██████░░ 6/8 · lead time 3.1 h · /studio more  ⟨dim⟩",
+]
+`;
+
+exports[`the two views of the scenario > pipeline, en, 100 columns 1`] = `
+[
+  "Studio · shop                                                                      updated 1 min ago  ⟨head⟩",
+  "! APP-15 fix limit reached – decide  ⟨you⟩",
+  "  → say "show APP-15"  ⟨dim⟩",
+  "",
+  "READY 2             BUILDING 1/4        REVIEW 1/2          QUEUE 1             TODAY ✓3  ⟨head⟩",
+  "──────────────────  ──────────────────  ──────────────────  ──────────────────  ──────────────────  ⟨dim⟩",
+  "○ APP-16            ● APP-17            ● APP-14            ◷ APP-12            ✓ APP-11",
+  "  Idle timeout        Backup log line     Header timeout      Duplicate heade…  ✓ APP-18",
+  "  E3                  E4 4m               E3 12m              3m                ✓ APP-10",
+  "○ APP-19                                                      CI 6/8",
+  "  More log tests",
+  "  E4",
+  "",
+  "■ BLOCKED 1  ⟨err⟩",
+  "  APP-15 fix limit reached – decide (E3)  ⟨err⟩",
+  "",
+  "CI ██████░░ 6/8 · lead time 3.1 h · /studio more  ⟨dim⟩",
+]
+`;

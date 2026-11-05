@@ -48,6 +48,46 @@ export interface BoardState {
   components?: { id: string; name: string }[];
   /** Open and accepting epics in id order with merged of total; absent without any. */
   epics?: BoardEpic[];
+  /** The repository name of the project, for the header. */
+  project?: string;
+  /** Every open item with its stage; absent from a state written before the work list. */
+  items?: BoardItem[];
+  /** The latest tick's lead decisions. */
+  needsLead?: BoardDecision[];
+  /** WIP limits of the pipeline columns; 0 is none. */
+  wip?: { building: number; review: number };
+  /** Present while paused; `time` is `HH:MM` on the owner's clock. */
+  pause?: { time?: string };
+  /** Merges of today with their items and epics, oldest first. */
+  mergedToday?: { pr: number; item?: string; epic?: string }[];
+}
+
+export type Stage = 'ready' | 'building' | 'pr_held' | 'review' | 'queued' | 'blocked';
+
+export interface BoardWait {
+  code: string;
+  text: string;
+  busy?: number;
+  total?: number;
+  max?: number;
+  position?: number;
+}
+
+export interface BoardItem {
+  id: string;
+  title: string;
+  stage: Stage;
+  epic?: string;
+  since?: string;
+  wait?: BoardWait;
+}
+
+export interface BoardDecision {
+  /** An item id, or another key (`account-block`, `main-build`) that is not shown. */
+  item: string;
+  code: string;
+  reason: string;
+  next?: { say?: string; type?: string };
 }
 
 export type BoardRead =
@@ -55,13 +95,17 @@ export type BoardRead =
   | { kind: 'unreadable' }
   | { kind: 'ok'; state: BoardState };
 
-export type Line = { text: string; tone?: 'ok' | 'wait' | 'idle' | 'err' | 'dim' | 'head' };
+export type Line = {
+  text: string;
+  tone?: 'ok' | 'wait' | 'idle' | 'err' | 'dim' | 'head' | 'run' | 'you';
+};
+
+export type View = 'list' | 'pipeline' | 'more';
+export type Lang = 'en' | 'de';
+export const VIEWS: readonly View[] = ['list', 'pipeline', 'more'];
+export const LANGS: readonly Lang[] = ['en', 'de'];
 
 const MAX_STRING = 200;
-const STALE_MS = 15 * 60_000;
-const MISSING_TEXT = 'No board yet. The control room writes it with studio state.';
-const PAUSED_TEXT = 'Paused.';
-const UNREADABLE_TEXT = 'The board cannot be read just now. It refreshes by itself.';
 const STATES: readonly CrewState[] = [
   'working',
   'waiting',
@@ -219,7 +263,70 @@ function toState(root: Obj): BoardState {
       : [{ id, title, status, merged, total }];
   });
   if (epics.length > 0) state.epics = epics;
+  const project = str(root.project);
+  if (project !== undefined) state.project = project;
+  if (Array.isArray(root.items)) state.items = root.items.flatMap((r) => parseItem(r) ?? []);
+  if (Array.isArray(root.needsLead)) {
+    state.needsLead = root.needsLead.flatMap((r) => {
+      const o = obj(r);
+      const item = str(o?.item);
+      const reason = str(o?.reason);
+      if (item === undefined || reason === undefined) return [];
+      const say = str(obj(o?.next)?.say);
+      return [
+        {
+          item,
+          code: str(o?.code) ?? 'other',
+          reason,
+          ...(say === undefined ? {} : { next: { say } }),
+        },
+      ];
+    });
+  }
+  const wip = obj(root.wip);
+  if (wip) state.wip = { building: num(wip.building) ?? 0, review: num(wip.review) ?? 0 };
+  const pause = obj(root.pause);
+  if (pause) {
+    const time = str(pause.time);
+    state.pause = time !== undefined && /^\d\d:\d\d$/.test(time) ? { time } : {};
+  }
+  const mergedToday = list(today?.merged).flatMap((m) => {
+    const o = obj(m);
+    const pr = num(o?.pr);
+    if (pr === undefined) return [];
+    const item = str(o?.item);
+    const epic = str(o?.epic);
+    return [
+      { pr, ...(item === undefined ? {} : { item }), ...(epic === undefined ? {} : { epic }) },
+    ];
+  });
+  if (mergedToday.some((m) => m.item !== undefined)) state.mergedToday = mergedToday;
   return state;
+}
+
+const STAGES: readonly Stage[] = ['ready', 'building', 'pr_held', 'review', 'queued', 'blocked'];
+
+function parseItem(raw: unknown): BoardItem | undefined {
+  const o = obj(raw);
+  const id = str(o?.id);
+  const stage = STAGES.find((s) => s === o?.stage);
+  if (!o || id === undefined || stage === undefined) return undefined;
+  const row: BoardItem = { id, title: str(o.title) ?? '', stage };
+  const epic = str(o.epic);
+  if (epic !== undefined) row.epic = epic;
+  const since = str(o.since);
+  if (since !== undefined) row.since = since;
+  const w = obj(o.wait);
+  const code = str(w?.code);
+  if (w && code !== undefined) {
+    const wait: BoardWait = { code, text: str(w.text) ?? '' };
+    for (const k of ['busy', 'total', 'max', 'position'] as const) {
+      const v = num(w[k]);
+      if (v !== undefined) wait[k] = v;
+    }
+    row.wait = wait;
+  }
+  return row;
 }
 
 export function parseState(text: string): BoardRead {
@@ -232,43 +339,396 @@ export function parseState(text: string): BoardRead {
   }
 }
 
+// ---------- displayed text ----------
+
+/** Every text the pane, the status line and the toasts show. Commands stay English in both. */
+interface Strings {
+  missing: string;
+  unreadable: string;
+  paused: string;
+  // status line
+  status: (working: number, waiting: number, queued: number, ci: string, forYou: number) => string;
+  statusPaused: string;
+  // toasts
+  forYou: (title: string) => string;
+  accountBlocked: (label: string, reason: string) => string;
+  mainRed: (sha: string) => string;
+  crashed: (role: string, item: string) => string;
+  more: (n: number) => string;
+  // the detailed view (/studio more)
+  crewState: Record<CrewState, string>;
+  crossCutting: string;
+  noComponent: string;
+  noCrew: string;
+  accepting: string;
+  now: string;
+  next: string;
+  queueEmpty: string;
+  mergedTodayList: string;
+  ciUnreadable: string;
+  mergeRule: (max: number, total: number, over: boolean) => string;
+  headEpics: string;
+  headCrew: string;
+  headQueue: string;
+  headForYou: (n: number) => string;
+  leadTimeLine: (median: string, deploys: number) => string;
+  headDays: string;
+  headUsage: string;
+  lastUpdate: (min: number) => string;
+  hours: (h: number) => string;
+  // the work list and the pipeline
+  updated: (min: number) => string;
+  stale: string;
+  pausedTag: string;
+  decisions: (n: number) => string;
+  running: (n: number) => string;
+  waiting: (n: number) => string;
+  today: (n: number) => string;
+  decisionHead: string;
+  say: (phrase: string) => string;
+  word: Record<RowState, string>;
+  stage: Record<Stage, string>;
+  done: (n: number) => string;
+  doneToday: (n: number) => string;
+  withoutEpic: string;
+  leadTime: (h: string) => string;
+  decision: (code: string, reason: string) => string;
+  wait: (w: BoardWait) => string;
+  waitShort: (w: BoardWait) => string;
+  column: { ready: string; building: string; review: string; queue: string; today: string };
+  full: string;
+  blocked: string;
+  emptyTitle: string;
+  emptyHint: string;
+  emptyExample: string;
+  pausedSince: (time: string | undefined) => string;
+  staleBanner: (min: number) => string;
+  staleQuestion: string;
+  staleSay: string;
+}
+
+type RowState = 'decision' | 'blocked' | 'running' | 'waiting' | 'ready';
+
+const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
+const decimal = (h: number, comma: boolean) => {
+  const s = h.toFixed(1);
+  return comma ? s.replace('.', ',') : s;
+};
+
+const EN: Strings = {
+  missing: 'No board yet. The control room writes it with studio state.',
+  unreadable: 'The board cannot be read just now. It refreshes by itself.',
+  paused: 'Paused.',
+  status: (w, a, q, ci, f) =>
+    `● ${w} working · ${a} waiting · ${q} queued · CI ${ci} · for you: ${f}`,
+  statusPaused: 'paused',
+  forYou: (t) => `For you: ${t}`,
+  accountBlocked: (l, r) => `Account blocked${l ? ` (${l})` : ''}: ${r}`,
+  mainRed: (sha) => `Main build is red${sha ? ` (${sha})` : ''}`,
+  crashed: (role, item) => `Crashed: ${role} on ${item}`,
+  more: (n) => `… ${n} more`,
+  crewState: {
+    working: 'working',
+    waiting: 'waiting',
+    blocked: 'blocked',
+    stopped: 'stopped',
+    crashed: 'crashed',
+    done: 'done',
+  },
+  crossCutting: 'cross-cutting',
+  noComponent: 'no component',
+  noCrew: 'No crew running.',
+  accepting: 'accepting',
+  now: 'now',
+  next: 'next',
+  queueEmpty: 'Queue is empty.',
+  mergedTodayList: 'Merged today',
+  ciUnreadable: 'CI unreadable, counted as busy',
+  mergeRule: (m, t, over) => `merge rule: at most ${m}/${t} busy${over ? ', now over' : ''}`,
+  headEpics: 'Epics',
+  headCrew: 'Crew',
+  headQueue: 'Merge queue',
+  headForYou: (n) => `For you (${n})`,
+  leadTimeLine: (m, d) => `Lead time (median) ${m} · deploys today ${d}`,
+  headDays: 'Last 7 days (merged/deployed)',
+  headUsage: 'Usage (runs)',
+  lastUpdate: (m) => `Last update ${m} min ago.`,
+  hours: (h) => `${decimal(h, false)} h`,
+  updated: (m) => (m < 1 ? 'updated just now' : `updated ${m} min ago`),
+  stale: '! stale',
+  pausedTag: '◷ paused',
+  decisions: (n) => `! ${n} ${plural(n, 'decision', 'decisions')} needed`,
+  running: (n) => `● ${n} running`,
+  waiting: (n) => `◷ ${n} waiting`,
+  today: (n) => `✓ ${n} today`,
+  decisionHead: 'Decision needed',
+  say: (p) => `→ say "${p}"`,
+  word: {
+    decision: 'decide',
+    blocked: 'blocked',
+    running: 'running',
+    waiting: 'waiting',
+    ready: 'ready',
+  },
+  stage: {
+    ready: 'ready',
+    building: 'building',
+    pr_held: 'PR held',
+    review: 'review',
+    queued: 'queue',
+    blocked: 'blocked',
+  },
+  done: (n) => `✓ ${n} done`,
+  doneToday: (n) => `✓ ${n} done today`,
+  withoutEpic: 'Without epic',
+  leadTime: (h) => `lead time ${h}`,
+  decision: (code, reason) => {
+    if (code === 'fix_limit') return 'fix limit reached – decide';
+    if (code === 'changes_requested') return 'changes requested';
+    if (code === 'blocked') return `blocked: ${reason}`;
+    return reason;
+  },
+  wait: (w) => {
+    switch (w.code) {
+      case 'ci_capacity':
+        return w.busy !== undefined && w.total !== undefined && w.max !== undefined
+          ? `runners ${w.busy}/${w.total} busy, merge at ≤${w.max}`
+          : `CI capacity: ${w.text}`;
+      case 'checks_pending':
+        return 'checks pending';
+      case 'review_pending':
+        return 'review not started yet';
+      case 'queue_held':
+        return `queue held: ${w.text}`;
+      case 'queue_position':
+        return w.position === undefined ? w.text : `place ${w.position} in the queue`;
+      case 'updating':
+        return 'updating the branch';
+      case 'merging':
+        return 'merging';
+      case 'held':
+        return `held: ${w.text}`;
+      default:
+        return w.text;
+    }
+  },
+  waitShort: (w) => {
+    switch (w.code) {
+      case 'ci_capacity':
+        return w.busy !== undefined && w.total !== undefined ? `CI ${w.busy}/${w.total}` : 'CI';
+      case 'checks_pending':
+        return 'checks';
+      case 'review_pending':
+        return 'not started';
+      case 'queue_position':
+        return w.position === undefined ? 'queued' : `place ${w.position}`;
+      case 'updating':
+        return 'update';
+      case 'merging':
+        return 'merging';
+      default:
+        return 'held';
+    }
+  },
+  column: {
+    ready: 'READY',
+    building: 'BUILDING',
+    review: 'REVIEW',
+    queue: 'QUEUE',
+    today: 'TODAY',
+  },
+  full: '⚠ full',
+  blocked: 'BLOCKED',
+  emptyTitle: 'No work yet.',
+  emptyHint: 'Describe in plain words what should be built, e.g.:',
+  emptyExample: '"New item for the API: … Done when a test shows …"',
+  pausedSince: (t) =>
+    `${t === undefined ? 'Paused.' : `Paused since ${t}.`} Nothing starts or merges; running crews finish.`,
+  staleBanner: (m) => `Last update ${m} min ago.`,
+  staleQuestion: 'Is the lead loop still running?',
+  staleSay: 'start the Studio lead loop',
+};
+
+const DE: Strings = {
+  missing: 'Noch kein Board. Die Steuerung schreibt es mit studio state.',
+  unreadable: 'Das Board ist gerade nicht lesbar. Es aktualisiert sich von selbst.',
+  paused: 'Pausiert.',
+  status: (w, a, q, ci, f) =>
+    `● ${w} aktiv · ${a} warten · ${q} in Warteschlange · CI ${ci} · zu entscheiden: ${f}`,
+  statusPaused: 'pausiert',
+  forYou: (t) => `Zur Entscheidung: ${t}`,
+  accountBlocked: (l, r) => `Konto gesperrt${l ? ` (${l})` : ''}: ${r}`,
+  mainRed: (sha) => `Build auf main ist rot${sha ? ` (${sha})` : ''}`,
+  crashed: (role, item) => `Abgestürzt: ${role} an ${item}`,
+  more: (n) => `… ${n} weitere`,
+  crewState: {
+    working: 'aktiv',
+    waiting: 'wartet',
+    blocked: 'blockiert',
+    stopped: 'gestoppt',
+    crashed: 'abgestürzt',
+    done: 'fertig',
+  },
+  crossCutting: 'übergreifend',
+  noComponent: 'ohne Komponente',
+  noCrew: 'Keine Crew aktiv.',
+  accepting: 'in Abnahme',
+  now: 'jetzt',
+  next: 'danach',
+  queueEmpty: 'Warteschlange ist leer.',
+  mergedTodayList: 'Heute gemergt',
+  ciUnreadable: 'CI nicht lesbar, gilt als belegt',
+  mergeRule: (m, t, over) =>
+    `Merge-Regel: höchstens ${m}/${t} belegt${over ? ', derzeit darüber' : ''}`,
+  headEpics: 'Vorhaben',
+  headCrew: 'Crew',
+  headQueue: 'Merge-Warteschlange',
+  headForYou: (n) => `Zur Entscheidung (${n})`,
+  leadTimeLine: (m, d) => `Durchlaufzeit (Median) ${m} · Deploys heute ${d}`,
+  headDays: 'Letzte 7 Tage (gemergt/ausgeliefert)',
+  headUsage: 'Nutzung (Läufe)',
+  lastUpdate: (m) => `Letzte Aktualisierung vor ${m} min.`,
+  hours: (h) => `${decimal(h, true)} h`,
+  updated: (m) => (m < 1 ? 'gerade aktualisiert' : `vor ${m} min`),
+  stale: '! Stand alt',
+  pausedTag: '◷ pausiert',
+  decisions: (n) => `! ${n} ${plural(n, 'Entscheidung', 'Entscheidungen')} nötig`,
+  running: (n) => `● ${n} ${plural(n, 'läuft', 'laufen')}`,
+  waiting: (n) => `◷ ${n} ${plural(n, 'wartet', 'warten')}`,
+  today: (n) => `✓ ${n} heute fertig`,
+  decisionHead: 'Entscheidung nötig',
+  say: (p) => `→ sagen: „${p}“`,
+  word: {
+    decision: 'entscheiden',
+    blocked: 'blockiert',
+    running: 'läuft',
+    waiting: 'wartet',
+    ready: 'bereit',
+  },
+  stage: {
+    ready: 'bereit',
+    building: 'baut',
+    pr_held: 'PR zurückgehalten',
+    review: 'Review',
+    queued: 'Warteschlange',
+    blocked: 'blockiert',
+  },
+  done: (n) => `✓ ${n} fertig`,
+  doneToday: (n) => `✓ ${n} heute fertig`,
+  withoutEpic: 'Ohne Vorhaben',
+  leadTime: (h) => `Ø Durchlauf ${h}`,
+  decision: (code, reason) => {
+    if (code === 'fix_limit') return 'Fix-Limit erreicht – entscheiden';
+    if (code === 'changes_requested') return 'Änderungen angefordert';
+    if (code === 'merge_failed') {
+      const detail = reason.replace(/^merge failed:?\s*/, '');
+      return detail === '' ? 'Merge fehlgeschlagen' : `Merge fehlgeschlagen: ${detail}`;
+    }
+    if (code === 'blocked') return `blockiert: ${reason}`;
+    return reason;
+  },
+  wait: (w) => {
+    switch (w.code) {
+      case 'ci_capacity':
+        return w.busy !== undefined && w.total !== undefined && w.max !== undefined
+          ? `Läufer ${w.busy}/${w.total} belegt, Merge ab ≤${w.max}`
+          : `CI-Kapazität: ${w.text}`;
+      case 'checks_pending':
+        return 'Prüfungen laufen';
+      case 'review_pending':
+        return 'Review noch nicht begonnen';
+      case 'queue_held':
+        return `Warteschlange angehalten: ${w.text}`;
+      case 'queue_position':
+        return w.position === undefined ? w.text : `Platz ${w.position} in der Warteschlange`;
+      case 'updating':
+        return 'Zweig wird aktualisiert';
+      case 'merging':
+        return 'wird gemergt';
+      case 'held':
+        return `zurückgestellt: ${w.text}`;
+      default:
+        return w.text;
+    }
+  },
+  waitShort: (w) => {
+    switch (w.code) {
+      case 'ci_capacity':
+        return w.busy !== undefined && w.total !== undefined ? `CI ${w.busy}/${w.total}` : 'CI';
+      case 'checks_pending':
+        return 'Prüfung';
+      case 'review_pending':
+        return 'offen';
+      case 'queue_position':
+        return w.position === undefined ? 'wartet' : `Platz ${w.position}`;
+      case 'updating':
+        return 'Update';
+      case 'merging':
+        return 'Merge';
+      default:
+        return 'zurückgest.';
+    }
+  },
+  column: {
+    ready: 'BEREIT',
+    building: 'BAUT',
+    review: 'REVIEW',
+    queue: 'QUEUE',
+    today: 'HEUTE',
+  },
+  full: '⚠ voll',
+  blocked: 'BLOCKIERT',
+  emptyTitle: 'Noch keine Aufgabe.',
+  emptyHint: 'In eigenen Worten beschreiben, was gebaut werden soll, z. B.:',
+  emptyExample: '„Neue Aufgabe für die API: … Fertig, wenn ein Test … belegt.“',
+  pausedSince: (t) =>
+    `${t === undefined ? 'Pausiert.' : `Pausiert seit ${t}.`} Nichts startet, nichts wird gemergt; laufende Crews arbeiten zu Ende.`,
+  staleBanner: (m) => `Letzte Aktualisierung vor ${m} min.`,
+  staleQuestion: 'Läuft die Steuerung noch?',
+  staleSay: 'start the Studio lead loop',
+};
+
+const TEXTS: Record<Lang, Strings> = { en: EN, de: DE };
+const textsOf = (lang: Lang | undefined): Strings => TEXTS[lang ?? 'en'] ?? EN;
+
+/** German when a language setting or locale names it, else English. */
+export function langOf(value: string | undefined): Lang | undefined {
+  if (value === undefined) return undefined;
+  const v = value.trim().toLowerCase();
+  if (v === '' || v === 'c' || v === 'posix') return undefined;
+  return /^(de([-_.@]|$)|german|deutsch)/.test(v) ? 'de' : 'en';
+}
+
 // ---------- status line and alerts ----------
 
-export function statusLine(state: BoardState, paused: boolean): string {
+export function statusLine(state: BoardState, paused: boolean, lang?: Lang): string {
+  const t = textsOf(lang);
   const working = state.crew.filter((c) => c.state === 'working').length;
   const waiting = state.crew.filter((c) => c.state === 'waiting').length;
   const ci = `${state.ci.ok ? state.ci.busy : '?'}/${state.ci.total}`;
-  const base = `● ${working} working · ${waiting} waiting · ${state.counts.queued} queued · CI ${ci} · for you: ${state.forOwner.length}`;
-  return paused ? `${base} · paused` : base;
+  const base = t.status(working, waiting, state.counts.queued, ci, state.forOwner.length);
+  return paused ? `${base} · ${t.statusPaused}` : base;
 }
 
-export function alertsFor(state: BoardState): { key: string; text: string }[] {
+export function alertsFor(state: BoardState, lang?: Lang): { key: string; text: string }[] {
+  const t = textsOf(lang);
   const out: { key: string; text: string }[] = [];
   for (const f of state.forOwner) {
     if (f.id === 'account-block') continue;
     // The usage-limit title carries a time that changes; key it by id so it toasts once while it stands.
     const key = f.id === 'usage-limit' ? 'owner:usage-limit' : `owner:${f.id}:${f.title}`;
-    out.push({ key, text: `For you: ${f.title}` });
+    out.push({ key, text: t.forYou(f.title) });
   }
   for (const n of state.notifications) {
-    out.push({
-      key: `block:${n.label}:${n.reason}`,
-      text: `Account blocked${n.label ? ` (${n.label})` : ''}: ${n.reason}`,
-    });
+    out.push({ key: `block:${n.label}:${n.reason}`, text: t.accountBlocked(n.label, n.reason) });
   }
   if (state.mainBuild.status === 'red') {
     const sha = state.mainBuild.sha ?? '';
-    out.push({
-      key: `main-red:${sha}`,
-      text: `Main build is red${sha ? ` (${sha.slice(0, 7)})` : ''}`,
-    });
+    out.push({ key: `main-red:${sha}`, text: t.mainRed(sha.slice(0, 7)) });
   }
   for (const c of state.crew) {
     if (c.state === 'crashed') {
-      out.push({
-        key: `crash:${c.item}:${c.since ?? ''}`,
-        text: `Crashed: ${c.role} on ${c.item}`,
-      });
+      out.push({ key: `crash:${c.item}:${c.since ?? ''}`, text: t.crashed(c.role, c.item) });
     }
   }
   return out;
@@ -279,30 +739,33 @@ const MAX_TOASTS = 5;
 export function newAlerts(
   seen: readonly string[],
   state: BoardState,
+  lang?: Lang,
 ): { toasts: string[]; seen: string[] } {
   const known = new Set(seen);
   const keys = new Set<string>();
   const toasts: string[] = [];
-  for (const a of alertsFor(state)) {
+  for (const a of alertsFor(state, lang)) {
     if (keys.has(a.key)) continue;
     keys.add(a.key);
     if (!known.has(a.key)) toasts.push(a.text);
   }
   const shown = toasts.slice(0, MAX_TOASTS);
-  if (toasts.length > MAX_TOASTS) shown.push(`… ${toasts.length - MAX_TOASTS} more`);
+  if (toasts.length > MAX_TOASTS) shown.push(textsOf(lang).more(toasts.length - MAX_TOASTS));
   return { toasts: shown, seen: [...keys] };
 }
 
-// ---------- layout ----------
+// ---------- helpers ----------
 
-const LOOK: Record<CrewState, { word: string; tone: NonNullable<Line['tone']> }> = {
-  working: { word: '● working', tone: 'ok' },
-  waiting: { word: '◐ waiting', tone: 'wait' },
-  blocked: { word: '■ blocked', tone: 'err' },
-  stopped: { word: '○ stopped', tone: 'idle' },
-  crashed: { word: '✕ crashed', tone: 'err' },
-  done: { word: '✓ done', tone: 'dim' },
+const LOOK: Record<CrewState, { glyph: string; tone: NonNullable<Line['tone']> }> = {
+  working: { glyph: '●', tone: 'ok' },
+  waiting: { glyph: '◐', tone: 'wait' },
+  blocked: { glyph: '■', tone: 'err' },
+  stopped: { glyph: '○', tone: 'idle' },
+  crashed: { glyph: '✕', tone: 'err' },
+  done: { glyph: '✓', tone: 'dim' },
 };
+
+const width = (s: string): number => [...s].length;
 
 /** Cuts to `n` code points, marking the cut with an ellipsis. */
 function cut(s: string, n: number): string {
@@ -313,7 +776,53 @@ function cut(s: string, n: number): string {
 
 function pad(s: string, n: number): string {
   const c = cut(s, n);
-  return c + ' '.repeat(Math.max(0, n - [...c].length));
+  return c + ' '.repeat(Math.max(0, n - width(c)));
+}
+
+/** Words of `text` in lines of at most `columns`; the first line starts with `first`, the rest with `indent`. */
+function wrap(text: string, columns: number, indent = '', first = indent): string[] {
+  return pack(
+    text.split(/\s+/).filter((w) => w !== ''),
+    ' ',
+    columns,
+    indent,
+    first,
+  );
+}
+
+/** `parts` joined by `sep` in lines of at most `columns`; a part is never split, only cut. */
+function pack(
+  parts: string[],
+  sep: string,
+  columns: number,
+  indent = '',
+  first = indent,
+): string[] {
+  const out: string[] = [];
+  let line = '';
+  for (const part of parts) {
+    const next =
+      line === '' ? `${out.length === 0 ? first : indent}${part}` : `${line}${sep}${part}`;
+    if (line !== '' && width(next) > columns) {
+      out.push(line);
+      line = `${indent}${part}`;
+    } else line = next;
+  }
+  if (line !== '') out.push(line);
+  return out;
+}
+
+/** `left` and `right` on one line, `right` flush with the edge when both fit. */
+function spread(left: string, right: string, columns: number): string {
+  const room = columns - width(right) - 1;
+  if (room < 4) return cut(left, columns);
+  const l = cut(left, room);
+  return `${l}${' '.repeat(columns - width(l) - width(right))}${right}`;
+}
+
+function bar(done: number, total: number, size: number): string {
+  const filled = total > 0 ? Math.min(size, Math.max(0, Math.round((done / total) * size))) : 0;
+  return '█'.repeat(filled) + '░'.repeat(size - filled);
 }
 
 export function formatRuntime(ms: number): string {
@@ -334,11 +843,16 @@ function runtimeOf(c: BoardCrew, nowMs: number): string {
   return formatRuntime((Number.isNaN(stop) ? nowMs : stop) - start);
 }
 
+const clampColumns = (columns: number): number =>
+  Number.isFinite(columns) ? Math.min(1000, Math.max(20, Math.floor(columns))) : 20;
+
+const clip = (lines: Line[], columns: number): Line[] =>
+  lines.map((l) => ({ ...l, text: cut(l.text, columns) }));
+
+// ---------- the detailed view: /studio more ----------
+
 const MAX_CREW_ROWS = 50;
 const MAX_OWNER_LINES = 20;
-
-const CROSS_CUTTING = 'cross-cutting';
-const NO_COMPONENT = 'no component';
 
 type Group = { key: string; heading: string };
 
@@ -346,17 +860,21 @@ type Group = { key: string; heading: string };
  * Crew rows by component when the project has components: one group per component in config
  * order, then work on several components, then work on none. Keys of the last two are no ids.
  */
-function grouped(rows: BoardCrew[], state: BoardState): { crew: BoardCrew; group?: Group }[] {
+function grouped(
+  rows: BoardCrew[],
+  state: BoardState,
+  t: Strings,
+): { crew: BoardCrew; group?: Group }[] {
   const components = state.components ?? [];
   if (components.length === 0) return rows.map((crew) => ({ crew }));
   const names = new Map(components.map((c) => [c.id, c.name]));
   const order = [...components.map((c) => c.id), '#cross', '#none'];
   const groupOf = (c: BoardCrew): Group => {
     const ids = c.components ?? [];
-    if (ids.length > 1) return { key: '#cross', heading: CROSS_CUTTING };
+    if (ids.length > 1) return { key: '#cross', heading: t.crossCutting };
     const name = names.get(ids[0] ?? '');
     return name === undefined
-      ? { key: '#none', heading: NO_COMPONENT }
+      ? { key: '#none', heading: t.noComponent }
       : { key: ids[0] as string, heading: name };
   };
   return rows
@@ -364,17 +882,20 @@ function grouped(rows: BoardCrew[], state: BoardState): { crew: BoardCrew; group
     .sort((a, b) => order.indexOf(a.group.key) - order.indexOf(b.group.key));
 }
 
-function crewLines(state: BoardState, columns: number, nowMs: number): Line[] {
+const crewWord = (c: BoardCrew, t: Strings) => `${LOOK[c.state].glyph} ${t.crewState[c.state]}`;
+
+function crewLines(state: BoardState, columns: number, nowMs: number, t: Strings): Line[] {
   const rows = state.crew.length > 10 ? state.crew.filter((c) => c.state !== 'done') : state.crew;
-  if (rows.length === 0) return [{ text: 'No crew running.', tone: 'dim' }];
+  if (rows.length === 0) return [{ text: t.noCrew, tone: 'dim' }];
   const out: Line[] = [];
   let shown: string | undefined;
-  for (const { crew: c, group } of grouped(rows, state).slice(0, MAX_CREW_ROWS)) {
+  for (const { crew: c, group } of grouped(rows, state, t).slice(0, MAX_CREW_ROWS)) {
     if (group !== undefined && group.key !== shown) {
       out.push({ text: group.heading, tone: 'head' });
       shown = group.key;
     }
     const look = LOOK[c.state];
+    const word = crewWord(c, t);
     const pr = c.pr === undefined ? '' : `#${c.pr}`;
     const runtime = runtimeOf(c, nowMs);
     const label = c.label ?? '';
@@ -383,7 +904,7 @@ function crewLines(state: BoardState, columns: number, nowMs: number): Line[] {
       const w = columns - 50;
       const text = [
         pad(c.role, 10),
-        pad(look.word, 10),
+        pad(word, 10),
         pad(itemTitle, w),
         pad(pr, 7),
         pad(runtime, 8),
@@ -393,13 +914,13 @@ function crewLines(state: BoardState, columns: number, nowMs: number): Line[] {
         .trimEnd();
       out.push({ text, tone: look.tone });
     } else {
-      out.push({ text: `${look.word} ${c.role} ${c.item}`, tone: look.tone });
+      out.push({ text: `${word} ${c.role} ${c.item}`, tone: look.tone });
       const rest = [c.title ?? '', pr, runtime, label].filter((x) => x !== '').join(' · ');
       out.push({ text: `  ${rest}`.trimEnd(), tone: 'dim' });
     }
   }
   if (rows.length > MAX_CREW_ROWS) {
-    out.push({ text: `… ${rows.length - MAX_CREW_ROWS} more`, tone: 'dim' });
+    out.push({ text: t.more(rows.length - MAX_CREW_ROWS), tone: 'dim' });
   }
   return out;
 }
@@ -407,134 +928,537 @@ function crewLines(state: BoardState, columns: number, nowMs: number): Line[] {
 const MAX_EPICS = 10;
 
 /** Each epic with merged of total, and under it the crew rows working on its items. */
-function epicLines(state: BoardState): Line[] {
+function epicLines(state: BoardState, t: Strings): Line[] {
   const epics = state.epics ?? [];
   const out: Line[] = [];
   for (const e of epics.slice(0, MAX_EPICS)) {
     const accepting = e.status === 'accepting';
     out.push({
-      text: `${e.id} ${e.title} ${e.merged}/${e.total}${accepting ? ' · accepting' : ''}`,
+      text: `${e.id} ${e.title} ${e.merged}/${e.total}${accepting ? ` · ${t.accepting}` : ''}`,
       ...(accepting ? { tone: 'ok' as const } : {}),
     });
     for (const c of state.crew.filter((c) => c.epic === e.id && c.state !== 'done')) {
-      const look = LOOK[c.state];
-      out.push({ text: `  ${look.word} ${c.role} ${c.item}`, tone: look.tone });
+      out.push({ text: `  ${crewWord(c, t)} ${c.role} ${c.item}`, tone: LOOK[c.state].tone });
     }
   }
   if (epics.length > MAX_EPICS) {
-    out.push({ text: `… ${epics.length - MAX_EPICS} more`, tone: 'dim' });
+    out.push({ text: t.more(epics.length - MAX_EPICS), tone: 'dim' });
   }
   return out;
 }
 
-function queueLines(state: BoardState): Line[] {
+function queueLines(state: BoardState, t: Strings): Line[] {
   const { current, pending } = state.queue;
   const out: Line[] = [];
   if (current) {
     out.push({
-      text: `now: ${current.repo}#${current.pr}${current.step ? ` · ${current.step}` : ''}`,
+      text: `${t.now}: ${current.repo}#${current.pr}${current.step ? ` · ${current.step}` : ''}`,
     });
   }
-  for (const p of pending.slice(0, 3)) out.push({ text: `next: ${p.repo}#${p.pr}` });
-  if (pending.length > 3) out.push({ text: `… ${pending.length - 3} more`, tone: 'dim' });
-  if (!current && pending.length === 0) out.push({ text: 'Queue is empty.', tone: 'dim' });
+  for (const p of pending.slice(0, 3)) out.push({ text: `${t.next}: ${p.repo}#${p.pr}` });
+  if (pending.length > 3) out.push({ text: t.more(pending.length - 3), tone: 'dim' });
+  if (!current && pending.length === 0) out.push({ text: t.queueEmpty, tone: 'dim' });
   if (state.today.merged.length > 0) {
-    out.push({ text: `Merged today: ${state.today.merged.map((n) => `#${n}`).join(', ')}` });
+    out.push({
+      text: `${t.mergedTodayList}: ${state.today.merged.map((n) => `#${n}`).join(', ')}`,
+    });
   }
   return out;
 }
 
-function ciLines(state: BoardState, columns: number): Line[] {
-  const { busy, total, mergeMaxBusy, ok } = state.ci;
-  const width = Math.min(20, Math.max(4, Math.floor(columns / 6)));
+function ciBar(state: BoardState, size: number): string {
+  const { busy, total, ok } = state.ci;
   const filled = !ok
-    ? width
+    ? size
     : total > 0
-      ? Math.min(width, Math.max(0, Math.round((busy / total) * width)))
+      ? Math.min(size, Math.max(0, Math.round((busy / total) * size)))
       : 0;
-  const bar = '█'.repeat(filled) + '░'.repeat(width - filled);
-  const text = `CI [${bar}] ${ok ? busy : '?'}/${total}`;
+  return '█'.repeat(filled) + '░'.repeat(size - filled);
+}
+
+function ciLines(state: BoardState, columns: number, t: Strings): Line[] {
+  const { busy, total, mergeMaxBusy, ok } = state.ci;
+  const size = Math.min(20, Math.max(4, Math.floor(columns / 6)));
+  const text = `CI [${ciBar(state, size)}] ${ok ? busy : '?'}/${total}`;
   const lines: Line[] = [ok ? { text } : { text, tone: 'err' }];
   if (!ok) {
-    lines.push({ text: 'CI unreadable, counted as busy', tone: 'err' });
+    lines.push({ text: t.ciUnreadable, tone: 'err' });
   } else {
     lines.push({
-      text: `merge rule: at most ${mergeMaxBusy}/${total} busy${busy > mergeMaxBusy ? ', now over' : ''}`,
+      text: t.mergeRule(mergeMaxBusy, total, busy > mergeMaxBusy),
       tone: busy > mergeMaxBusy ? 'err' : 'dim',
     });
   }
   return lines;
 }
 
+const STALE_MORE_MS = 15 * 60_000;
+
+/** The detailed view (`/studio more`): crew, queue, CI, lines for you, the last days, usage. */
 export function boardLines(
   read: BoardRead,
-  o: { columns: number; nowMs: number; paused: boolean },
+  o: { columns: number; nowMs: number; paused: boolean; lang?: Lang },
 ): Line[] {
-  const columns = Number.isFinite(o.columns)
-    ? Math.min(1000, Math.max(20, Math.floor(o.columns)))
-    : 20;
-  const clip = (lines: Line[]): Line[] => lines.map((l) => ({ ...l, text: cut(l.text, columns) }));
-  if (read.kind !== 'ok') {
-    const text = read.kind === 'missing' ? MISSING_TEXT : UNREADABLE_TEXT;
-    const note: Line[] = o.paused ? [{ text: PAUSED_TEXT, tone: 'dim' }] : [];
-    return clip([{ text, tone: 'dim' }, ...note]);
-  }
+  const t = textsOf(o.lang);
+  const columns = clampColumns(o.columns);
+  if (read.kind !== 'ok') return clip(calmLines(read.kind, o.paused, t), columns);
   const s = read.state;
   const out: Line[] = [];
   const updated = s.updatedAt === undefined ? Number.NaN : Date.parse(s.updatedAt);
-  if (!Number.isNaN(updated) && o.nowMs - updated > STALE_MS) {
-    out.push({
-      text: `Last update ${Math.floor((o.nowMs - updated) / 60_000)} min ago.`,
-      tone: 'dim',
-    });
+  if (!Number.isNaN(updated) && o.nowMs - updated > STALE_MORE_MS) {
+    out.push({ text: t.lastUpdate(Math.floor((o.nowMs - updated) / 60_000)), tone: 'dim' });
   }
-  out.push({ text: statusLine(s, o.paused), tone: 'head' });
-  if ((s.epics ?? []).length > 0) out.push({ text: 'Epics', tone: 'head' }, ...epicLines(s));
-  out.push({ text: 'Crew', tone: 'head' }, ...crewLines(s, columns, o.nowMs));
-  out.push({ text: 'Merge queue', tone: 'head' }, ...queueLines(s));
-  out.push(...ciLines(s, columns));
+  out.push({ text: statusLine(s, o.paused, o.lang), tone: 'head' });
+  if ((s.epics ?? []).length > 0) out.push({ text: t.headEpics, tone: 'head' }, ...epicLines(s, t));
+  out.push({ text: t.headCrew, tone: 'head' }, ...crewLines(s, columns, o.nowMs, t));
+  out.push({ text: t.headQueue, tone: 'head' }, ...queueLines(s, t));
+  out.push(...ciLines(s, columns, t));
   if (s.mainBuild.status === 'red') {
-    out.push({
-      text: `Main build is red${s.mainBuild.sha ? ` (${s.mainBuild.sha.slice(0, 7)})` : ''}`,
-      tone: 'err',
-    });
+    out.push({ text: t.mainRed(s.mainBuild.sha ? s.mainBuild.sha.slice(0, 7) : ''), tone: 'err' });
   }
-  out.push({ text: `For you (${s.forOwner.length})`, tone: 'head' });
+  out.push({ text: t.headForYou(s.forOwner.length), tone: 'head' });
   for (const f of s.forOwner.slice(0, MAX_OWNER_LINES)) out.push({ text: `  ${f.title}` });
   if (s.forOwner.length > MAX_OWNER_LINES) {
-    out.push({ text: `  … ${s.forOwner.length - MAX_OWNER_LINES} more`, tone: 'dim' });
+    out.push({ text: `  ${t.more(s.forOwner.length - MAX_OWNER_LINES)}`, tone: 'dim' });
   }
   for (const n of s.notifications) {
-    out.push({
-      text: `  Account blocked${n.label ? ` (${n.label})` : ''}: ${n.reason}`,
-      tone: 'err',
-    });
+    out.push({ text: `  ${t.accountBlocked(n.label, n.reason)}`, tone: 'err' });
   }
-  const median = s.medianLeadTimeHours === null ? '–' : `${s.medianLeadTimeHours.toFixed(1)} h`;
-  out.push({ text: `Lead time (median) ${median} · deploys today ${s.today.deployed}` });
+  const median = s.medianLeadTimeHours === null ? '–' : t.hours(s.medianLeadTimeHours);
+  out.push({ text: t.leadTimeLine(median, s.today.deployed) });
   const days = s.perDay.slice(-7);
   if (days.length > 0) {
-    out.push({ text: 'Last 7 days (merged/deployed)', tone: 'head' });
+    out.push({ text: t.headDays, tone: 'head' });
     for (const d of days) out.push({ text: `  ${d.day} ${d.merged}/${d.deployed}` });
   }
   const usage = s.usageDays.slice(-7);
   if (usage.length > 0) {
-    out.push({ text: 'Usage (runs)', tone: 'head' });
+    out.push({ text: t.headUsage, tone: 'head' });
     for (const d of usage) {
       out.push({
         text: `  ${d.day} ${d.labels.map((l) => `${l.label} ${l.runs}`).join(' · ')}`.trimEnd(),
       });
     }
   }
-  return clip(out);
+  return clip(out, columns);
 }
 
-export function statusText(read: BoardRead, paused: boolean): string {
+function calmLines(kind: 'missing' | 'unreadable', paused: boolean, t: Strings): Line[] {
+  const text = kind === 'missing' ? t.missing : t.unreadable;
+  return [{ text, tone: 'dim' }, ...(paused ? [{ text: t.paused, tone: 'dim' as const }] : [])];
+}
+
+export function statusText(read: BoardRead, paused: boolean, lang?: Lang): string {
+  const t = textsOf(lang);
   if (read.kind !== 'ok') {
-    const text = read.kind === 'missing' ? MISSING_TEXT : UNREADABLE_TEXT;
-    return paused ? `${text} ${PAUSED_TEXT}` : text;
+    const text = read.kind === 'missing' ? t.missing : t.unreadable;
+    return paused ? `${text} ${t.paused}` : text;
   }
-  return statusLine(read.state, paused);
+  return statusLine(read.state, paused, lang);
+}
+
+// ---------- the work list and the pipeline ----------
+
+const STALE_MS = 10 * 60_000;
+/** Five columns of at least this many cells, and the gaps between them. */
+const MIN_CARD = 10;
+const MAX_CARDS = 4;
+const MAX_TODAY = 6;
+const MAX_ROWS = 30;
+const LIST_MAX = 72;
+
+const GLYPH: Record<RowState, string> = {
+  decision: '!',
+  blocked: '■',
+  running: '●',
+  waiting: '◷',
+  ready: '○',
+};
+const TONE_OF: Record<RowState, NonNullable<Line['tone']>> = {
+  decision: 'err',
+  blocked: 'err',
+  running: 'run',
+  waiting: 'wait',
+  ready: 'idle',
+};
+const RANK: Record<RowState, number> = {
+  decision: 0,
+  blocked: 0,
+  running: 1,
+  waiting: 2,
+  ready: 3,
+};
+
+const ITEM_ID = /^[A-Z]+-\d+$/;
+
+interface Decision {
+  /** Shown before the reason when it is an item id. */
+  id?: string;
+  text: string;
+  next?: string;
+}
+
+/** The lead's decisions, then the lines for the owner and a red main build. One per key. */
+function decisionsOf(s: BoardState, t: Strings): Decision[] {
+  const out: Decision[] = [];
+  const keys = new Set<string>();
+  for (const d of s.needsLead ?? []) {
+    if (keys.has(d.item)) continue;
+    keys.add(d.item);
+    const id = ITEM_ID.test(d.item) ? d.item : undefined;
+    out.push({
+      ...(id === undefined ? {} : { id }),
+      text: t.decision(d.code, d.reason),
+      ...(d.next?.say === undefined ? {} : { next: t.say(d.next.say) }),
+    });
+  }
+  for (const f of s.forOwner) {
+    if (keys.has(f.id)) continue;
+    keys.add(f.id);
+    const id = ITEM_ID.test(f.id) ? f.id : undefined;
+    out.push({
+      ...(id === undefined ? {} : { id }),
+      text: f.title,
+      next: id === undefined ? '→ /studio more' : t.say(`show ${id}`),
+    });
+  }
+  if (s.mainBuild.status === 'red') {
+    out.push({
+      text: t.mainRed(s.mainBuild.sha ? s.mainBuild.sha.slice(0, 7) : ''),
+      next: '→ /studio more',
+    });
+  }
+  return out;
+}
+
+function rowStateOf(item: BoardItem, decided: Set<string>): RowState {
+  if (decided.has(item.id)) return 'decision';
+  if (item.stage === 'blocked') return 'blocked';
+  if (item.stage === 'pr_held' || item.stage === 'queued') return 'waiting';
+  if (item.stage === 'review' && item.wait !== undefined) return 'waiting';
+  if (item.stage === 'building' || item.stage === 'review') return 'running';
+  return 'ready';
+}
+
+function since(item: BoardItem, nowMs: number): string {
+  const at = item.since === undefined ? Number.NaN : Date.parse(item.since);
+  return Number.isNaN(at) ? '' : formatRuntime(nowMs - at);
+}
+
+interface Row {
+  item: BoardItem;
+  state: RowState;
+  word: string;
+  time: string;
+}
+
+/** The word a row shows: running rows name their stage, all others their state. */
+function wordOf(item: BoardItem, state: RowState, t: Strings): string {
+  return state === 'running' ? t.stage[item.stage] : t.word[state];
+}
+
+/**
+ * One item line: glyph, id, title, word, time. The title gives way first, then the time, then
+ * the indent; the glyph, the id and the word are never cut.
+ */
+function itemLine(r: Row, columns: number, wordW: number, timeW: number): string {
+  const glyph = GLYPH[r.state];
+  for (const [indent, withTime] of [
+    ['  ', true],
+    ['  ', false],
+    ['', false],
+  ] as const) {
+    const head = `${indent}${glyph} ${r.item.id} `;
+    const tail = ` ${r.word.padEnd(wordW)}${withTime && timeW > 0 ? ` ${r.time.padStart(timeW)}` : ''}`;
+    const room = columns - width(head) - width(tail);
+    if (room >= 4 || (room >= 0 && r.item.title === '')) {
+      return `${head}${pad(r.item.title, Math.max(0, room))}${tail}`.trimEnd();
+    }
+    if (!withTime && indent === '') return `${glyph} ${r.item.id} ${r.word}`;
+  }
+  return `${glyph} ${r.item.id} ${r.word}`;
+}
+
+function headerLines(s: BoardState | undefined, right: string, columns: number): Line[] {
+  const name = s?.project === undefined || s.project === '' ? 'Studio' : `Studio · ${s.project}`;
+  return [{ text: right === '' ? name : spread(name, right, columns), tone: 'head' }];
+}
+
+function footerLines(s: BoardState, t: Strings, columns: number): Line[] {
+  const ci = `CI ${ciBar(s, 8)} ${s.ci.ok ? s.ci.busy : '?'}/${s.ci.total}`;
+  const parts = [ci];
+  if (s.medianLeadTimeHours !== null) parts.push(t.leadTime(t.hours(s.medianLeadTimeHours)));
+  parts.push('/studio more');
+  return pack(parts, ' · ', columns).map((text) => ({ text, tone: 'dim' }));
+}
+
+const epicCode = (epic: string | undefined): string =>
+  epic === undefined ? '' : epic.replace('-', '');
+
+interface Frame {
+  t: Strings;
+  s: BoardState;
+  columns: number;
+  nowMs: number;
+  paused: boolean;
+  staleMin: number | undefined;
+}
+
+function banners(f: Frame): Line[] {
+  const out: Line[] = [];
+  if (f.paused) {
+    for (const text of wrap(f.t.pausedSince(f.s.pause?.time), f.columns))
+      out.push({ text, tone: 'wait' });
+    out.push({ text: '→ /studio resume', tone: 'dim' });
+  }
+  if (f.staleMin !== undefined) {
+    for (const text of wrap(`${f.t.staleBanner(f.staleMin)} ${f.t.staleQuestion}`, f.columns)) {
+      out.push({ text, tone: 'err' });
+    }
+    out.push(
+      ...wrap(f.t.say(f.t.staleSay), f.columns, '  ').map((text) => ({
+        text: text.trimStart(),
+        tone: 'dim' as const,
+      })),
+    );
+  }
+  return out;
+}
+
+function rightTag(f: Frame): string {
+  if (f.staleMin !== undefined) return f.t.stale;
+  if (f.paused) return f.t.pausedTag;
+  const updated = f.s.updatedAt === undefined ? Number.NaN : Date.parse(f.s.updatedAt);
+  return Number.isNaN(updated)
+    ? ''
+    : f.t.updated(Math.max(0, Math.floor((f.nowMs - updated) / 60_000)));
+}
+
+function emptyLines(f: Frame): Line[] {
+  return [
+    { text: f.t.emptyTitle, tone: 'dim' },
+    { text: '' },
+    ...wrap(f.t.emptyHint, f.columns).map((text) => ({ text })),
+    ...wrap(f.t.emptyExample, f.columns).map((text) => ({ text, tone: 'dim' as const })),
+  ];
+}
+
+function rowsOf(items: BoardItem[], decided: Set<string>, f: Frame): Row[] {
+  return items
+    .map((item) => {
+      const state = rowStateOf(item, decided);
+      return {
+        item,
+        state,
+        word: wordOf(item, state, f.t),
+        time: state === 'ready' ? '' : since(item, f.nowMs),
+      };
+    })
+    .sort((a, b) => RANK[a.state] - RANK[b.state]);
+}
+
+function listBody(f: Frame, decisions: Decision[], items: BoardItem[]): Line[] {
+  const { t, s, columns } = f;
+  const out: Line[] = [];
+  const decided = new Set(decisions.flatMap((d) => (d.id === undefined ? [] : [d.id])));
+  const rows = rowsOf(items, decided, f);
+  const count = (st: RowState) => rows.filter((r) => r.state === st).length;
+  const merged = s.today.merged.length;
+  const summary = [
+    decisions.length > 0 ? t.decisions(decisions.length) : '',
+    count('running') > 0 ? t.running(count('running')) : '',
+    count('waiting') > 0 ? t.waiting(count('waiting')) : '',
+    merged > 0 ? t.today(merged) : '',
+  ].filter((x) => x !== '');
+  for (const text of pack(summary, '  ', columns)) out.push({ text });
+  if (decisions.length > 0) {
+    out.push({ text: '' }, { text: pad(t.decisionHead, columns), tone: 'you' });
+    for (const d of decisions.slice(0, MAX_OWNER_LINES)) {
+      const head = d.id === undefined ? '! ' : `! ${d.id} `;
+      for (const text of wrap(`${head}${d.text}`, columns, '  ', ''))
+        out.push({ text, tone: 'err' });
+      if (d.next !== undefined) {
+        for (const text of wrap(d.next, columns, '    ', '  ')) out.push({ text, tone: 'dim' });
+      }
+    }
+    if (decisions.length > MAX_OWNER_LINES) {
+      out.push({ text: t.more(decisions.length - MAX_OWNER_LINES), tone: 'dim' });
+    }
+  }
+  const wordW = Math.max(0, ...rows.map((r) => width(r.word)));
+  const timeW = Math.max(0, ...rows.map((r) => width(r.time)));
+  const section = (heading: Line, part: Row[], done: string | undefined) => {
+    if (part.length === 0 && done === undefined) return;
+    out.push({ text: '' }, heading);
+    for (const r of part.slice(0, MAX_ROWS)) {
+      out.push({ text: itemLine(r, columns, wordW, timeW), tone: TONE_OF[r.state] });
+      if (r.state === 'waiting' && r.item.wait !== undefined) {
+        const reason = `${t.stage[r.item.stage]}: ${t.wait(r.item.wait)}`;
+        for (const text of wrap(reason, columns, '    ')) out.push({ text, tone: 'dim' });
+      }
+    }
+    if (part.length > MAX_ROWS)
+      out.push({ text: `  ${t.more(part.length - MAX_ROWS)}`, tone: 'dim' });
+    if (done !== undefined) out.push({ text: `  ${done}`, tone: 'dim' });
+  };
+  const epics = (s.epics ?? []).filter((e) => e.total > 0);
+  const known = new Set(epics.map((e) => e.id));
+  for (const e of epics) {
+    const right = `${bar(e.merged, e.total, 5)} ${e.merged}/${e.total}`;
+    section(
+      { text: spread(`${e.id} ${e.title}`, right, columns), tone: 'head' },
+      rows.filter((r) => r.item.epic === e.id),
+      e.merged > 0 ? t.done(e.merged) : undefined,
+    );
+  }
+  const loose = rows.filter((r) => r.item.epic === undefined || !known.has(r.item.epic));
+  const looseDone = (s.mergedToday ?? []).filter(
+    (m) => m.epic === undefined || !known.has(m.epic),
+  ).length;
+  section(
+    { text: t.withoutEpic, tone: 'head' },
+    loose,
+    looseDone > 0 ? t.doneToday(looseDone) : undefined,
+  );
+  out.push({ text: '' }, ...footerLines(s, t, columns));
+  return out;
+}
+
+type Column = { header: string; full: boolean; lines: string[] };
+
+function card(r: Row, w: number, f: Frame): string[] {
+  const extra = [epicCode(r.item.epic), r.time].filter((x) => x !== '').join(' ');
+  const lines = [`${GLYPH[r.state]} ${r.item.id}`, `  ${cut(r.item.title, w - 2)}`];
+  if (extra !== '') lines.push(`  ${extra}`);
+  if (r.state === 'waiting' && r.item.wait !== undefined)
+    lines.push(`  ${f.t.waitShort(r.item.wait)}`);
+  return lines;
+}
+
+function pipelineBody(f: Frame, decisions: Decision[], items: BoardItem[]): Line[] | undefined {
+  const { t, s, columns } = f;
+  const decided = new Set(decisions.flatMap((d) => (d.id === undefined ? [] : [d.id])));
+  const rows = rowsOf(items, decided, f);
+  const of = (...stages: Stage[]) => rows.filter((r) => stages.includes(r.item.stage));
+  const wip = s.wip ?? { building: 0, review: 0 };
+  const limit = (name: string, n: number, max: number) =>
+    max > 0 ? `${name} ${n}/${max}` : `${name} ${n}`;
+  const building = of('building', 'pr_held');
+  const review = of('review');
+  const todayIds =
+    s.mergedToday !== undefined
+      ? s.mergedToday.map((m) => m.item ?? `#${m.pr}`)
+      : s.today.merged.map((pr) => `#${pr}`);
+  const cols: { header: string; full: boolean; rows?: Row[]; today?: string[] }[] = [
+    { header: `${t.column.ready} ${of('ready').length}`, full: false, rows: of('ready') },
+    {
+      header: limit(t.column.building, building.length, wip.building),
+      full: wip.building > 0 && building.length >= wip.building,
+      rows: building,
+    },
+    {
+      header: limit(t.column.review, review.length, wip.review),
+      full: wip.review > 0 && review.length >= wip.review,
+      rows: review,
+    },
+    { header: `${t.column.queue} ${of('queued').length}`, full: false, rows: of('queued') },
+    { header: `${t.column.today} ✓${todayIds.length}`, full: false, today: todayIds },
+  ];
+  const w = Math.max(MIN_CARD, ...cols.map((c) => width(c.header)), width(t.full));
+  const gap = 2;
+  if (5 * w + 4 * gap > columns) return undefined;
+  const colW = Math.floor((columns - 4 * gap) / 5);
+  const built: Column[] = cols.map((c) => {
+    const lines: string[] = [];
+    if (c.rows !== undefined) {
+      for (const r of c.rows.slice(0, MAX_CARDS)) lines.push(...card(r, colW, f));
+      if (c.rows.length > MAX_CARDS) lines.push(`+${c.rows.length - MAX_CARDS}`);
+    }
+    if (c.today !== undefined) {
+      for (const id of c.today.slice(-MAX_TODAY)) lines.push(`✓ ${id}`);
+      if (c.today.length > MAX_TODAY) lines.push(`+${c.today.length - MAX_TODAY}`);
+    }
+    return { header: c.header, full: c.full, lines };
+  });
+  const join = (cells: string[]) =>
+    cells
+      .map((c) => pad(c, colW))
+      .join(' '.repeat(gap))
+      .trimEnd();
+  const out: Line[] = [];
+  if (decisions.length > 0) {
+    const d = decisions[0] as Decision;
+    const more = decisions.length > 1 ? ` (+${decisions.length - 1})` : '';
+    const head = `! ${d.id === undefined ? '' : `${d.id} `}${d.text}${more}`;
+    for (const text of wrap(head, columns, '  ', '')) out.push({ text, tone: 'you' });
+    if (d.next !== undefined) {
+      for (const text of wrap(d.next, columns, '    ', '  ')) out.push({ text, tone: 'dim' });
+    }
+  }
+  out.push({ text: '' });
+  out.push({ text: join(built.map((c) => c.header)), tone: 'head' });
+  out.push({
+    text: join(built.map((c) => (c.full ? t.full : '─'.repeat(colW)))),
+    tone: 'dim',
+  });
+  const height = Math.max(0, ...built.map((c) => c.lines.length));
+  for (let i = 0; i < height; i++) out.push({ text: join(built.map((c) => c.lines[i] ?? '')) });
+  const blocked = of('blocked');
+  if (blocked.length > 0) {
+    out.push({ text: '' }, { text: `■ ${t.blocked} ${blocked.length}`, tone: 'err' });
+    for (const r of blocked.slice(0, MAX_ROWS)) {
+      const reason = decisions.find((d) => d.id === r.item.id)?.text ?? r.item.wait?.text ?? '';
+      const code = epicCode(r.item.epic);
+      const text = `${r.item.id} ${reason}${code === '' ? '' : ` (${code})`}`;
+      for (const l of wrap(text, columns, '    ', '  ')) out.push({ text: l, tone: 'err' });
+    }
+  }
+  out.push({ text: '' }, ...footerLines(s, t, columns));
+  return out;
+}
+
+/**
+ * The pane: the work list (default), the pipeline (the list again when five columns do not fit)
+ * or the detailed view. A state from before the work list draws the detailed view.
+ */
+export function paneLines(
+  read: BoardRead,
+  o: { columns: number; nowMs: number; paused: boolean; view?: View; lang?: Lang },
+): Line[] {
+  const t = textsOf(o.lang);
+  const columns = clampColumns(o.columns);
+  if (read.kind !== 'ok') {
+    return calmLines(read.kind, o.paused, t).flatMap((l) =>
+      wrap(l.text, columns).map((text) => ({ ...l, text: cut(text, columns) })),
+    );
+  }
+  const s = read.state;
+  if (o.view === 'more' || s.items === undefined) return boardLines(read, { ...o, columns });
+  const updated = s.updatedAt === undefined ? Number.NaN : Date.parse(s.updatedAt);
+  const age = Number.isNaN(updated) ? 0 : o.nowMs - updated;
+  const f: Frame = {
+    t,
+    s,
+    columns,
+    nowMs: o.nowMs,
+    paused: o.paused || s.pause !== undefined,
+    staleMin: age > STALE_MS ? Math.floor(age / 60_000) : undefined,
+  };
+  const decisions = decisionsOf(s, t);
+  const items = s.items;
+  const body = o.view === 'pipeline' ? pipelineBody(f, decisions, items) : undefined;
+  // The work list reads best at most 72 cells wide; the pipeline takes the whole pane.
+  const lf: Frame = body === undefined ? { ...f, columns: Math.min(columns, LIST_MAX) } : f;
+  const notes = banners(lf);
+  const out: Line[] = [
+    ...headerLines(s, rightTag(lf), lf.columns),
+    ...notes,
+    ...(notes.length > 0 ? [{ text: '' }] : []),
+  ];
+  if (items.length === 0 && decisions.length === 0 && s.today.merged.length === 0) {
+    out.push(...emptyLines(lf));
+  } else out.push(...(body ?? listBody(lf, decisions, items)));
+  return clip(out, columns);
 }
 
 // ---------- state directory name (same result as src/paths.ts) ----------

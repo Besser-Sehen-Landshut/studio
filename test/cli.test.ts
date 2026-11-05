@@ -3679,6 +3679,52 @@ describe('studio tick', () => {
     ]);
   });
 
+  it('keeps the lead list for the pane, and state gives it a reason and a next step', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'blocked', notes: ['fix limit reached: 6 review rounds'] },
+      { id: 'APP-2' },
+    ]);
+    const ports = fakePorts(fakeGh().gh).ports;
+    const t = await tick(fx, ports);
+    expect(t.json.needsLead).toEqual([
+      { item: 'APP-1', reason: 'blocked: fix limit reached: 6 review rounds' },
+    ]);
+    const rec = JSON.parse(readFileSync(join(fx.state, 'tick.json'), 'utf8'));
+    expect(rec).toMatchObject({ needsLead: t.json.needsLead, held: t.json.held });
+    expect(typeof rec.at).toBe('string');
+    expect((await cli(fx, ports, 'state')).code).toBe(0);
+    const snap = JSON.parse(readFileSync(join(fx.state, 'state.json'), 'utf8'));
+    expect(snap.needsLead).toEqual([
+      {
+        item: 'APP-1',
+        code: 'fix_limit',
+        reason: 'fix limit reached: 6 review rounds',
+        next: { say: 'show APP-1' },
+      },
+    ]);
+    expect(snap.items.map((i: { id: string; stage: string }) => [i.id, i.stage])).toEqual([
+      ['APP-1', 'blocked'],
+      ['APP-2', expect.any(String)],
+    ]);
+  });
+
+  it('a tick another tick holds leaves the lead list as it was', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    bind(fx);
+    writeStateFile(
+      fx.state,
+      join(fx.state, 'tick.lock'),
+      JSON.stringify({
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        heartbeatAt: new Date().toISOString(),
+      }),
+    );
+    const t = await tick(fx, fakePorts(fakeGh().gh).ports);
+    expect(t.json.held).toEqual([{ item: 'tick', reason: 'another tick is running' }]);
+    expect(existsSync(join(fx.state, 'tick.json'))).toBe(false);
+  });
+
   it('a merge that failed after the approval is not queued again', async () => {
     const at = (t: string, from: string, to: string) =>
       `{ at: "${t}", from: ${from}, to: ${to}, by: studio }`;
@@ -4219,6 +4265,37 @@ describe('epics in the CLI', () => {
       { id: 'E-1', title: 'Epic E-1', status: 'open', merged: 1, total: 2 },
     ]);
     expect(snap.crew[0]).toMatchObject({ item: 'APP-1', epic: 'E-1' });
+  });
+
+  it('state gives the pane every open item, the project, the WIP limits and no pause', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', extra: inEpic },
+      { id: 'APP-2', status: 'merged', extra: inEpic },
+      { id: 'APP-3', status: 'in_review', pr: 4 },
+    ]);
+    withEpics(fx, [epicYaml('E-1')]);
+    expect((await cli(fx, quiet(), 'state')).code).toBe(0);
+    const snap = JSON.parse(readFileSync(join(fx.state, 'state.json'), 'utf8'));
+    expect(snap.project).toBe('app');
+    expect(snap.wip).toEqual({ building: 2, review: 1 });
+    expect(snap.items).toEqual([
+      expect.objectContaining({ id: 'APP-1', stage: 'ready', epic: 'E-1', status: 'ready' }),
+      expect.objectContaining({ id: 'APP-3', stage: 'review' }),
+    ]);
+    expect(snap).not.toHaveProperty('pause');
+    expect(snap).not.toHaveProperty('needsLead');
+  });
+
+  it('state carries the pause with its clock time', async () => {
+    const fx = makeFx([{ id: 'APP-1' }]);
+    const ports = quiet();
+    expect((await cli(fx, ports, 'pause')).code).toBe(0);
+    expect((await cli(fx, ports, 'state')).code).toBe(0);
+    const snap = JSON.parse(readFileSync(join(fx.state, 'state.json'), 'utf8'));
+    expect(snap.pause).toEqual({
+      at: expect.any(String),
+      time: expect.stringMatching(/^\d\d:\d\d$/),
+    });
   });
 
   it('state has no epics field without epics', async () => {

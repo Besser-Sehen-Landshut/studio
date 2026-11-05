@@ -3,6 +3,46 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.11.1] - 2026-11-05
+
+The board pane showed the crew, the queue and the CI figures, but not what needed the owner, what
+waited for what, or how far each epic was. It now opens on a work list that starts with the
+decisions, and a pipeline view is one command away. Not tagged yet; the maintainers tag after the
+merge.
+
+### Added
+
+- Work list as the pane's default view: header with the project and the age of the state, one line
+  of counts (`! decisions needed`, `● running`, `◷ waiting`, `✓ today`), a highlighted "Decision
+  needed" block with a next step to say, each epic with a progress bar and merged of total and its
+  items sorted decision, running, waiting, ready (a waiting item with its reason on a dimmed second
+  line, done items folded), "Without epic", and one footer line (CI, median lead time,
+  `/studio more`). Empty sections are left out.
+- Pipeline view (`/studio pipeline`): READY, BUILDING n/wip, REVIEW n/wip, QUEUE and TODAY columns
+  with cards (sign and id, short title, epic code, time in stage, what it waits for), `⚠ full` on a
+  full column and a row of its own for blocked work. Narrower than five columns, the pane draws the
+  work list instead.
+- `/studio list`, `/studio pipeline` and `/studio more` (the earlier detailed sections) switch the
+  view; the choice is kept in the plugin's store. `/studio lang de|en|auto` sets the language.
+- States for both views: no work yet (with an example of what to say), paused since HH:MM with
+  `→ /studio resume`, and a state older than 10 minutes with a hint to start the lead loop.
+- English and German text in the pane, the status line and the toasts. German follows
+  `/studio lang`, else Claude Code's `language` setting, else the locale (`LC_ALL`, `LC_MESSAGES`,
+  `LANG`); commands stay English in both.
+- `state.json` carries what the pane needs: `items` (every item that is not merged or dropped,
+  reviews aside, with `stage`, epic, components, the time it entered the stage and a `wait` reason
+  with a code), `needsLead` (the latest tick's lead list with a code, a short reason and a next step
+  to say), `wip`, `project`, `pause` (with the time on the owner's clock), and the item and epic of
+  each merge of today.
+- `studio tick` keeps its lead list and holds in `tick.json` in the state root, unless the tick did
+  not run (another tick held the lock, or no state root).
+
+### Changed
+
+- Every state in the pane has a sign and a word; a title is cut with "…", never the id, the sign or
+  the stage. Long lines in the work list wrap instead of being cut.
+- A `state.json` without `items`, written by an earlier Studio, draws the detailed view as before.
+
 ## [0.11.0] - 2026-11-05
 
 Larger work lived as phases in a hand-edited `ROADMAP.md`. Sessions wrote claims into the file, numbered

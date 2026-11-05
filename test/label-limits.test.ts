@@ -599,7 +599,7 @@ describe('pane fields in state.json', () => {
     expect(s.ci).toEqual({ busy: 0, total: 8, mergeMaxBusy: 5, ok: true });
     expect(s.today).toEqual({
       day: '2026-11-01',
-      merged: [{ pr: 7, repo: 'org/app', at: '2026-11-01T08:00:00Z' }],
+      merged: [{ pr: 7, repo: 'org/app', at: '2026-11-01T08:00:00Z', item: 'APP-9' }],
       deployed: 1,
     });
     expect(s.usageDays).toEqual({ '2026-11-01': { 'label-a': 1 } });
