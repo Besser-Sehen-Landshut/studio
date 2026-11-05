@@ -24,11 +24,16 @@ each crew's target dir, cargo registry and pnpm store. Not tagged yet; the maint
   `held`, running crews finish, and the next day starts from zero.
 - Build cache: `studio cache refresh` builds seeds from `origin/main` in an owner-side clone
   (`cache-build/`) with a timeout and publishes them in one swap; `studio cache status` shows size and age.
+  Every refresh step runs in the OS sandbox (Seatbelt on macOS, bubblewrap on Linux, refused elsewhere):
+  reads denied like a crew's, writes only to the build dir (not its `.git`), no token, network only for
+  the fetch steps (`cargo fetch`, `pnpm fetch`), the builds offline. `CARGO_HOME` is fresh per refresh, and
+  a root `.cargo/config*` or a toolchain path in `rust-toolchain(.toml)` refuses unless
+  `--trust-repo-config`.
   A launch copies the seeds copy-on-write into the crew's fresh clone and HOME (`cp -c` on macOS,
   `cp --reflink=always` on Linux) and sets `PNPM_CONFIG_STORE_DIR`; the cache is in the sandbox's
   `allowRead`, never in `allowWrite`, and guard-protected. `cache.max_gb` (default 20) bounds all caches;
-  `tick` cleans up the least recently used once a day and starts a refresh in the background once a week
-  for a cache that exists.
+  `tick` cleans up the least recently used once a day; it starts a weekly refresh in the background only
+  with `cache: { auto_refresh: true }` in both `studio.yaml` and the owner config (default off).
 - An optional `exec` port for build and copy tools.
 
 ### Left out
@@ -36,6 +41,8 @@ each crew's target dir, cargo registry and pnpm store. Not tagged yet; the maint
 - A pnpm store shared read-only between crews and hard-link seeding: pnpm writes to its store and links
   its files into `node_modules`, so a crew could change files other crews use.
 - File systems without copy-on-write: each crew would get a full copy, so `cache refresh` refuses there.
+- A host allowlist for the refresh's network: Seatbelt and bubblewrap cannot filter by host name (Claude
+  Code uses a proxy for that). The fetch steps get the network and run no project code; the builds get none.
 
 ## [0.12.2] - 2026-11-05
 

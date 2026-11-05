@@ -28216,7 +28216,9 @@ var studioConfigSchema = external_exports.strictObject({
   // `studio account setup-plugins` installs them; a launch refuses another installed version.
   plugins: external_exports.array(pluginPinSchema).optional(),
   // Spending brake: once the ended crew runs of the local day cost this much, nothing new starts.
-  limits: dailyLimitsSchema.optional()
+  limits: dailyLimitsSchema.optional(),
+  // The weekly refresh of the build cache in `tick` runs only with this and the owner's opt-in.
+  cache: external_exports.strictObject({ autoRefresh: external_exports.boolean().optional() }).optional()
 }).superRefine((cfg, ctx) => {
   const seen = /* @__PURE__ */ new Set();
   for (const [i2, c3] of (cfg.components ?? []).entries()) {
@@ -28334,7 +28336,9 @@ var ownerConfigSchema = external_exports.strictObject({
   // Defaults: 20 GB, a refresh of at most 60 minutes (`cacheLimits`).
   cache: external_exports.strictObject({
     maxGb: external_exports.number().positive().optional(),
-    refreshTimeoutMin: external_exports.number().int().positive().optional()
+    refreshTimeoutMin: external_exports.number().int().positive().optional(),
+    // The owner's half of the opt-in to the weekly refresh (studio.yaml has the other).
+    autoRefresh: external_exports.boolean().optional()
   }).optional()
 });
 var cacheLimits = (c3) => ({
@@ -29273,6 +29277,10 @@ function credentialLocations(home, env) {
   const realDir = realish(ownerDir);
   if (realDir !== ownerDir) extra.push(realDir, join4(realDir, basename(crewTokenFile(owner))));
   return { all: [...CREDENTIAL_PATHS.map((p) => join4(home, p)), ...extra], extra };
+}
+function sandboxDenyRead(stateRoot, home, env) {
+  const stateBase = dirname2(stateRoot);
+  return [.../* @__PURE__ */ new Set([home, ...credentialLocations(home, env).all, stateBase, realish(stateBase)])];
 }
 
 // src/report.ts
@@ -31740,7 +31748,7 @@ async function runAccount(o2) {
 
 // src/init.ts
 var import_yaml11 = __toESM(require_dist(), 1);
-import { lstatSync as lstatSync19, mkdirSync as mkdirSync6, readdirSync as readdirSync11, rmdirSync, rmSync as rmSync6, writeFileSync as writeFileSync9 } from "node:fs";
+import { lstatSync as lstatSync20, mkdirSync as mkdirSync6, readdirSync as readdirSync11, rmdirSync, rmSync as rmSync6, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join23 } from "node:path";
 
 // src/secret-command.ts
@@ -31753,7 +31761,7 @@ import { join as join21 } from "node:path";
 import {
   chmodSync as chmodSync5,
   existsSync as existsSync6,
-  lstatSync as lstatSync17,
+  lstatSync as lstatSync18,
   readdirSync as readdirSync9,
   readFileSync as readFileSync20,
   realpathSync as realpathSync4,
@@ -33137,13 +33145,75 @@ function readSkillsMissing(stateRoot, id) {
 import { randomBytes as randomBytes7 } from "node:crypto";
 import {
   existsSync as existsSync5,
-  lstatSync as lstatSync12,
+  lstatSync as lstatSync13,
   readdirSync as readdirSync7,
   readFileSync as readFileSync16,
   renameSync as renameSync8,
   rmSync as rmSync4
 } from "node:fs";
 import { join as join15 } from "node:path";
+
+// src/build-sandbox.ts
+import { lstatSync as lstatSync12 } from "node:fs";
+var spellings = (paths) => [
+  ...new Set(paths.flatMap((p) => [p, realish(p)]))
+];
+function sbplPath(p) {
+  if (/["\\\p{Cc}]/u.test(p))
+    throw new Error(
+      `refusing a sandbox path with quotes or control characters: ${JSON.stringify(p)}`
+    );
+  return `"${p}"`;
+}
+var subpaths = (paths) => paths.map((p) => `(subpath ${sbplPath(p)})`).join(" ");
+function seatbeltProfile(box) {
+  const lines = ["(version 1)", "(allow default)"];
+  if (!box.network) lines.push("(deny network*)");
+  const deny = spellings(box.denyRead);
+  const allow = spellings([...box.allowRead, ...box.allowWrite]);
+  if (deny.length > 0) lines.push(`(deny file-read* ${subpaths(deny)})`);
+  if (allow.length > 0) lines.push(`(allow file-read* ${subpaths(allow)})`);
+  lines.push("(allow file-read-metadata)");
+  lines.push("(deny file-write*)");
+  lines.push(
+    `(allow file-write* ${subpaths(spellings(box.allowWrite))} (literal "/dev/null") (literal "/dev/zero") (regex #"^/dev/tty") (regex #"^/dev/fd/"))`
+  );
+  const frozen = spellings(box.denyWrite);
+  if (frozen.length > 0) lines.push(`(deny file-write* ${subpaths(frozen)})`);
+  return lines.join("\n");
+}
+var kindOf = (p) => {
+  try {
+    const st = lstatSync12(p);
+    return st.isDirectory() ? "dir" : "file";
+  } catch {
+    return void 0;
+  }
+};
+function bwrapArgs(box, cwd) {
+  const args = ["--die-with-parent", "--new-session", "--unshare-pid"];
+  if (!box.network) args.push("--unshare-net");
+  args.push("--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp");
+  for (const p of spellings(box.denyRead)) {
+    const kind = kindOf(p);
+    if (kind === "dir") args.push("--tmpfs", p);
+    else if (kind === "file") args.push("--ro-bind", "/dev/null", p);
+  }
+  for (const p of spellings(box.allowRead)) if (kindOf(p)) args.push("--ro-bind", p, p);
+  for (const p of spellings(box.allowWrite)) if (kindOf(p)) args.push("--bind", p, p);
+  for (const p of spellings(box.denyWrite)) if (kindOf(p)) args.push("--ro-bind", p, p);
+  args.push("--chdir", cwd);
+  return args;
+}
+function sandboxed(platform2, box, cwd, cmd, args) {
+  if (platform2 === "darwin") {
+    return { cmd: "/usr/bin/sandbox-exec", args: ["-p", seatbeltProfile(box), cmd, ...args] };
+  }
+  if (platform2 === "linux") {
+    return { cmd: "bwrap", args: [...bwrapArgs(box, cwd), "--", cmd, ...args] };
+  }
+  return void 0;
+}
 
 // src/held.ts
 var HeldError = class extends Error {
@@ -33170,7 +33240,7 @@ var seedsDir = (stateRoot) => join15(cacheDir(stateRoot), "seeds");
 var isObject4 = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 function lstatOrUndefined(p) {
   try {
-    return lstatSync12(p);
+    return lstatSync13(p);
   } catch {
     return void 0;
   }
@@ -33268,25 +33338,62 @@ function refreshSteps(src) {
   const steps = [];
   if (isRealFile(join15(src, "Cargo.toml"))) {
     const locked = isRealFile(join15(src, "Cargo.lock")) ? ["--locked"] : [];
-    steps.push({
-      name: "cargo build",
-      cmd: "cargo",
-      args: ["build", "--workspace", "--all-targets", ...locked]
-    });
+    steps.push(
+      { name: "cargo fetch", cmd: "cargo", args: ["fetch", ...locked], network: true },
+      {
+        name: "cargo build",
+        cmd: "cargo",
+        args: ["build", "--workspace", "--all-targets", "--offline", ...locked],
+        network: false
+      }
+    );
   }
   if (isRealFile(join15(src, "pnpm-lock.yaml"))) {
-    steps.push({
-      name: "pnpm install",
-      cmd: "pnpm",
-      args: ["install", "--frozen-lockfile", "--ignore-scripts"]
-    });
+    steps.push(
+      { name: "pnpm fetch", cmd: "pnpm", args: ["fetch", "--frozen-lockfile"], network: true },
+      {
+        name: "pnpm install",
+        cmd: "pnpm",
+        args: ["install", "--frozen-lockfile", "--offline", "--ignore-scripts"],
+        network: false
+      }
+    );
   }
   return steps;
 }
+function repoConfigProblem(src) {
+  for (const name of ["config", "config.toml"]) {
+    if (lstatOrUndefined(join15(src, ".cargo", name)) !== void 0) {
+      return `.cargo/${name} at the root of main`;
+    }
+  }
+  const legacy = join15(src, "rust-toolchain");
+  if (isRealFile(legacy) && readFileSync16(legacy, "utf8").includes("/")) {
+    return "rust-toolchain at the root of main names a path";
+  }
+  const toml = join15(src, "rust-toolchain.toml");
+  if (lstatOrUndefined(toml) !== void 0) {
+    if (!isRealFile(toml)) return "rust-toolchain.toml at the root of main is not a plain file";
+    if (/^\s*path\s*=/m.test(readFileSync16(toml, "utf8"))) {
+      return "rust-toolchain.toml at the root of main names a toolchain path";
+    }
+  } else if (lstatOrUndefined(legacy) !== void 0 && !isRealFile(legacy)) {
+    return "rust-toolchain at the root of main is not a plain file";
+  }
+  return void 0;
+}
+var SAFE_GIT = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
 async function refreshCache(o2) {
   const exec = o2.ports.exec;
   if (exec === void 0) throw new Error("the build cache needs the exec port");
-  if (cowCopyArgs(o2.platform, "a", "b") === void 0) {
+  const noBox = {
+    denyRead: [],
+    allowRead: [],
+    allowWrite: [],
+    denyWrite: [],
+    network: false
+  };
+  if (cowCopyArgs(o2.platform, "a", "b") === void 0 || sandboxed(o2.platform, noBox, "/", "true", []) === void 0) {
     throw new Error(`the build cache is not supported on ${o2.platform}`);
   }
   const now = () => o2.ports.clock.now();
@@ -33312,7 +33419,7 @@ async function refreshCache(o2) {
       );
     }
     const src = join15(build, "src");
-    const g = (args) => o2.ports.git.run(src, args, { timeoutMs: left() });
+    const g = (args) => o2.ports.git.run(src, [...SAFE_GIT, ...args], { timeoutMs: left() });
     if (isRealDir(join15(src, ".git"))) {
       await g(["remote", "set-url", "origin", o2.originUrl]);
       await g(["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
@@ -33320,7 +33427,7 @@ async function refreshCache(o2) {
       removeStateEntry(o2.stateRoot, src);
       await o2.ports.git.run(
         build,
-        ["clone", "--filter=blob:none", "--no-checkout", o2.originUrl, src],
+        [...SAFE_GIT, "clone", "--filter=blob:none", "--no-checkout", o2.originUrl, src],
         {
           timeoutMs: left()
         }
@@ -33332,8 +33439,21 @@ async function refreshCache(o2) {
     if (steps.length === 0) {
       throw new Error("nothing to cache: main has no Cargo.toml or pnpm-lock.yaml at its root");
     }
+    const problem = o2.trustRepoConfig === true ? void 0 : repoConfigProblem(src);
+    if (problem !== void 0) {
+      throw new Error(
+        `cache refresh: ${problem} could point the build outside its sandboxed dirs; check it, then run studio cache refresh --trust-repo-config`
+      );
+    }
     const home = ensureStateDir(o2.stateRoot, join15(build, "home"));
-    const rustup = o2.env.RUSTUP_HOME || join15(o2.home, ".rustup");
+    const tmp = ensureStateDir(o2.stateRoot, join15(build, "tmp"));
+    removeStateEntry(o2.stateRoot, join15(build, "cargo-home"));
+    ensureStateDir(o2.stateRoot, join15(build, "cargo-home"));
+    for (const d of ["target", "pnpm-store"]) ensureStateDir(o2.stateRoot, join15(build, d));
+    const toolchains = o2.ownerConfig.crewToolchainPaths;
+    const rustup = toolchains.find(
+      (p) => existsSync5(join15(p, "settings.toml")) && existsSync5(join15(p, "toolchains"))
+    );
     const env = {
       ...Object.fromEntries(
         ["PATH", "LANG", "TERM", "USER"].flatMap(
@@ -33344,12 +33464,27 @@ async function refreshCache(o2) {
       CARGO_HOME: join15(build, "cargo-home"),
       CARGO_TARGET_DIR: join15(build, "target"),
       PNPM_CONFIG_STORE_DIR: join15(build, "pnpm-store"),
-      ...existsSync5(rustup) ? { RUSTUP_HOME: rustup } : {}
+      TMPDIR: tmp,
+      ...rustup === void 0 ? {} : { RUSTUP_HOME: rustup }
     };
     const log = join15(build, "refresh.log");
+    const denyRead = sandboxDenyRead(o2.stateRoot, o2.home, o2.env);
     for (const step of steps) {
       lock.heartbeat(now());
-      const r = await exec.run(step.cmd, step.args, { cwd: src, env, timeoutMs: left(), log });
+      const box = {
+        denyRead,
+        allowRead: toolchains,
+        allowWrite: [build],
+        denyWrite: [join15(src, ".git")],
+        network: step.network
+      };
+      const run2 = sandboxed(o2.platform, box, src, step.cmd, step.args);
+      const r = await exec.run(run2.cmd, run2.args, { cwd: src, env, timeoutMs: left(), log });
+      if (r.code === 127) {
+        throw new Error(
+          `cache refresh: ${step.name} could not start in the sandbox (${run2.cmd} missing?); see ${log}`
+        );
+      }
       if (r.code === 124) throw new Error(`cache refresh: ${step.name} timed out; see ${log}`);
       if (r.code !== 0) {
         throw new Error(`cache refresh: ${step.name} failed (${r.code}); see ${log}`);
@@ -33365,7 +33500,7 @@ async function refreshCache(o2) {
     ensureStateDir(o2.stateRoot, staging);
     const seeds = [];
     for (const [seed, from] of produced) {
-      if (!isRealDir(from)) continue;
+      if (!isRealDir(from) || readdirSync7(from).length === 0) continue;
       if (!await cowCopy(exec, o2.stateRoot, o2.platform, from, join15(staging, seed), left())) {
         throw new Error(`cache refresh: copying ${seed} failed`);
       }
@@ -33520,7 +33655,8 @@ async function cacheTick(o2) {
   if (removed !== void 0 && removed.length > 0) out.removed = removed;
   const last = startedAt(o2.stateRoot);
   const grace = cacheLimits(o2.ownerConfig).refreshTimeoutMin * 6e4 + 10 * 6e4;
-  if (refreshDue(o2.stateRoot, o2.now) && (last === void 0 || o2.now.getTime() - last > grace)) {
+  const due = o2.autoRefresh && refreshDue(o2.stateRoot, o2.now);
+  if (due && (last === void 0 || o2.now.getTime() - last > grace)) {
     if (o2.start === void 0) out.refresh = "due: run studio cache refresh";
     else {
       const build = ensureStateDir(o2.stateRoot, cacheBuildDir(o2.stateRoot));
@@ -33584,7 +33720,7 @@ var PULL_FLAGS = /* @__PURE__ */ new Set([
 ]);
 
 // src/owner-state.ts
-import { lstatSync as lstatSync13, renameSync as renameSync9 } from "node:fs";
+import { lstatSync as lstatSync14, renameSync as renameSync9 } from "node:fs";
 import { basename as basename3, dirname as dirname6, join as join16 } from "node:path";
 var MIGRATE_LOCK = "migrate.lock";
 var LOCK_STALE_MS2 = 5 * 6e4;
@@ -33637,7 +33773,7 @@ var FILES = [
   { name: "limits.json", lock: "limits.lock", staleMs: LOCK_STALE_MS2, merge: mergeLimits },
   { name: "usage.json", lock: LAUNCH_LOCK, staleMs: LAUNCH_LOCK_STALE_MS, merge: mergeUsage }
 ];
-var present = (file2) => lstatSync13(file2, { throwIfNoEntry: false }) !== void 0;
+var present = (file2) => lstatSync14(file2, { throwIfNoEntry: false }) !== void 0;
 function pendingLegacyState(stateBase) {
   return projectStateRoots(stateBase).flatMap(
     (root) => FILES.map((f) => join16(root, f.name)).filter(present)
@@ -33652,7 +33788,7 @@ function keepUnreadable(ownerRoot, root, name) {
   const legacy = join16(root, name);
   const kept = freeName(join16(ownerRoot, `${name}.legacy-${basename3(root)}`));
   ensureStateDir(ownerRoot, ownerRoot);
-  if (lstatSync13(legacy).isSymbolicLink()) {
+  if (lstatSync14(legacy).isSymbolicLink()) {
     const note = `${name} in the project state root ${basename3(root)} was a symlink; it was not followed
 `;
     writeStateFile(ownerRoot, kept, note);
@@ -33672,7 +33808,7 @@ function migrateFile(ownerRoot, roots, file2, now, problems) {
   try {
     for (const root of here) {
       const legacy = join16(root, file2.name);
-      const link2 = lstatSync13(legacy).isSymbolicLink();
+      const link2 = lstatSync14(legacy).isSymbolicLink();
       const merged = link2 ? "legacy-unreadable" : file2.merge(ownerRoot, legacy);
       if (merged === "merged") removeStateEntry(root, legacy);
       else if (merged === "legacy-unreadable") keepUnreadable(ownerRoot, root, file2.name);
@@ -33717,14 +33853,14 @@ function migrateOwnerState(ownerRoot, now) {
 }
 
 // src/pause.ts
-import { lstatSync as lstatSync14, readFileSync as readFileSync17 } from "node:fs";
+import { lstatSync as lstatSync15, readFileSync as readFileSync17 } from "node:fs";
 import { join as join17 } from "node:path";
 var PAUSE_FILE = "pause.json";
 var PAUSED_LINE = "paused: no crew starts and nothing is merged until the owner runs studio resume";
 function readPause(root) {
   const file2 = join17(root, PAUSE_FILE);
   try {
-    const st = lstatSync14(file2, { throwIfNoEntry: false });
+    const st = lstatSync15(file2, { throwIfNoEntry: false });
     if (st === void 0) return { paused: false };
     if (!st.isFile()) return { paused: true };
     const raw = JSON.parse(readFileSync17(file2, "utf8"));
@@ -33744,7 +33880,7 @@ function clearPause(root) {
 
 // src/role-memory.ts
 import { randomBytes as randomBytes8 } from "node:crypto";
-import { lstatSync as lstatSync15, mkdirSync as mkdirSync5, readFileSync as readFileSync18, renameSync as renameSync10, rmSync as rmSync5, writeFileSync as writeFileSync7 } from "node:fs";
+import { lstatSync as lstatSync16, mkdirSync as mkdirSync5, readFileSync as readFileSync18, renameSync as renameSync10, rmSync as rmSync5, writeFileSync as writeFileSync7 } from "node:fs";
 import { dirname as dirname7, join as join18 } from "node:path";
 var MAX_LESSON_LINES = 40;
 var MAX_LESSON_CHARS = 300;
@@ -33821,7 +33957,7 @@ function roleFile(projectDir, role) {
     at2 = join18(at2, seg);
     let st;
     try {
-      st = lstatSync15(at2);
+      st = lstatSync16(at2);
     } catch (e) {
       if (e.code === "ENOENT") return join18(projectDir, ...segments);
       throw new Error(`the role file cannot be reached (${e.code})`);
@@ -33920,7 +34056,7 @@ function readRoleMemory(projectDir, role) {
 }
 
 // src/solutions.ts
-import { lstatSync as lstatSync16, readdirSync as readdirSync8, readFileSync as readFileSync19 } from "node:fs";
+import { lstatSync as lstatSync17, readdirSync as readdirSync8, readFileSync as readFileSync19 } from "node:fs";
 import { join as join19 } from "node:path";
 var MAX_FILE_BYTES = 64 * 1024;
 var MAX_FILES = 1e3;
@@ -33933,7 +34069,7 @@ var wordsOf = (text) => [
 ];
 var isReal = (path10, test) => {
   try {
-    const st = lstatSync16(path10);
+    const st = lstatSync17(path10);
     return test === "dir" ? st.isDirectory() : st.isFile() && st.size <= MAX_FILE_BYTES;
   } catch {
     return false;
@@ -34030,7 +34166,7 @@ function removeOldReport(stateRoot, clone2, id) {
     assertStatePath(stateRoot, cur);
     let st;
     try {
-      st = lstatSync17(cur);
+      st = lstatSync18(cur);
     } catch {
       return;
     }
@@ -34047,7 +34183,7 @@ function removeOldReport(stateRoot, clone2, id) {
 }
 function existsNoFollow(p) {
   try {
-    lstatSync17(p);
+    lstatSync18(p);
     return true;
   } catch {
     return false;
@@ -34055,14 +34191,14 @@ function existsNoFollow(p) {
 }
 function fileSize(p) {
   try {
-    return lstatSync17(p).size;
+    return lstatSync18(p).size;
   } catch {
     return 0;
   }
 }
 function isLink2(p) {
   try {
-    return lstatSync17(p).isSymbolicLink();
+    return lstatSync18(p).isSymbolicLink();
   } catch {
     return false;
   }
@@ -34378,7 +34514,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
     extraCredentialPaths: extraSecret
   });
   const stateBase = dirname8(stateRoot);
-  const denyRead = unique2([realHome, ...credentialPaths, stateBase, realOr(stateBase)]);
+  const denyRead = sandboxDenyRead(stateRoot, realHome, env);
   const loginDir = dirs.providerConfigDir;
   const allowRead = [
     clone2,
@@ -35220,7 +35356,7 @@ async function runDoctor(o2) {
 
 // src/stack.ts
 var import_yaml10 = __toESM(require_dist(), 1);
-import { lstatSync as lstatSync18, readdirSync as readdirSync10, readFileSync as readFileSync22 } from "node:fs";
+import { lstatSync as lstatSync19, readdirSync as readdirSync10, readFileSync as readFileSync22 } from "node:fs";
 import { join as join22 } from "node:path";
 var MAX_FILE_BYTES2 = 1024 * 1024;
 var MAX_ENTRIES = 200;
@@ -35243,14 +35379,14 @@ var DEP_STACKS = {
 };
 function isRealDir2(path10) {
   try {
-    return lstatSync18(path10).isDirectory();
+    return lstatSync19(path10).isDirectory();
   } catch {
     return false;
   }
 }
 function readSmall(path10, notes, name) {
   try {
-    const st = lstatSync18(path10);
+    const st = lstatSync19(path10);
     if (!st.isFile()) return void 0;
     if (st.size > MAX_FILE_BYTES2) {
       notes.push(`${name}: larger than 1 MiB, not read`);
@@ -35264,7 +35400,7 @@ function readSmall(path10, notes, name) {
 }
 var isFileEntry = (dir, name) => {
   try {
-    return lstatSync18(join22(dir, name)).isFile();
+    return lstatSync19(join22(dir, name)).isFile();
   } catch {
     return false;
   }
@@ -35420,21 +35556,21 @@ var PLUGIN_INSTALL = [
 var SUPERPOWERS_INSTALL = "/plugin marketplace add obra/superpowers-marketplace, then /plugin install superpowers@superpowers-marketplace";
 var isRealDir3 = (path10) => {
   try {
-    return lstatSync19(path10).isDirectory();
+    return lstatSync20(path10).isDirectory();
   } catch {
     return false;
   }
 };
 var isRealFile2 = (path10) => {
   try {
-    return lstatSync19(path10).isFile();
+    return lstatSync20(path10).isFile();
   } catch {
     return false;
   }
 };
 var exists3 = (path10) => {
   try {
-    lstatSync19(path10);
+    lstatSync20(path10);
     return true;
   } catch {
     return false;
@@ -36316,7 +36452,7 @@ function approvedJobsProblem(jobs, checks) {
 }
 
 // src/costs.ts
-import { closeSync as closeSync5, fstatSync as fstatSync4, lstatSync as lstatSync20, openSync as openSync5, readFileSync as readFileSync23, readSync as readSync3 } from "node:fs";
+import { closeSync as closeSync5, fstatSync as fstatSync4, lstatSync as lstatSync21, openSync as openSync5, readFileSync as readFileSync23, readSync as readSync3 } from "node:fs";
 import { join as join24 } from "node:path";
 var COSTS_FILE = "costs.json";
 var MAX_LOG_BYTES = 64 * 1024 * 1024;
@@ -36385,7 +36521,7 @@ function readLog(stateRoot, id, from = 0) {
   const file2 = logFile2(stateRoot, id);
   assertStatePath(stateRoot, file2);
   try {
-    if (!lstatSync20(file2).isFile()) return "";
+    if (!lstatSync21(file2).isFile()) return "";
     const fd = openSync5(file2, "r");
     try {
       const size = fstatSync4(fd).size;
@@ -36449,7 +36585,7 @@ var ledgerFile = (stateRoot) => join24(stateRoot, COSTS_FILE);
 function readLedger(stateRoot) {
   const file2 = ledgerFile(stateRoot);
   try {
-    if (!lstatSync20(file2).isFile()) return { ok: false };
+    if (!lstatSync21(file2).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, runs: {} } : { ok: false };
   }
@@ -36841,7 +36977,7 @@ async function readMainBuild(config2, ports) {
 }
 
 // src/notify.ts
-import { lstatSync as lstatSync21, readFileSync as readFileSync25 } from "node:fs";
+import { lstatSync as lstatSync22, readFileSync as readFileSync25 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { join as join26 } from "node:path";
 var MAX_SENDS_PER_RUN = 20;
@@ -36869,7 +37005,7 @@ function messagesOf(projectKey, snapshot) {
 }
 function readNotified(file2) {
   try {
-    if (!lstatSync21(file2).isFile()) return { ok: false };
+    if (!lstatSync22(file2).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, keys: [] } : { ok: false };
   }
@@ -36961,7 +37097,7 @@ async function sendLocked(o2, notify, lock) {
 }
 
 // src/overview.ts
-import { lstatSync as lstatSync23, readFileSync as readFileSync27 } from "node:fs";
+import { lstatSync as lstatSync24, readFileSync as readFileSync27 } from "node:fs";
 import { basename as basename5, isAbsolute as isAbsolute5, join as join28 } from "node:path";
 
 // src/queue.ts
@@ -36969,7 +37105,7 @@ import {
   closeSync as closeSync6,
   constants as constants4,
   existsSync as existsSync7,
-  lstatSync as lstatSync22,
+  lstatSync as lstatSync23,
   openSync as openSync6,
   readFileSync as readFileSync26,
   writeSync as writeSync2
@@ -37013,7 +37149,7 @@ function loadQueue(stateRoot) {
   const file2 = queueFile(stateRoot);
   assertStatePath(stateRoot, file2);
   if (!existsSync7(file2)) return { pending: [], done: [] };
-  if (lstatSync22(file2).isSymbolicLink())
+  if (lstatSync23(file2).isSymbolicLink())
     throw new Error(`refusing to read ${file2}: it is a symlink`);
   let raw;
   try {
@@ -37108,7 +37244,7 @@ function appendStateLine(stateRoot, name, line3) {
   assertStatePath(stateRoot, file2);
   let torn = false;
   if (existsSync7(file2)) {
-    if (lstatSync22(file2).isSymbolicLink()) {
+    if (lstatSync23(file2).isSymbolicLink()) {
       throw new Error(`refusing to use ${file2}: it is a symlink`);
     }
     const prev = readFileSync26(file2, "utf8");
@@ -37549,7 +37685,7 @@ var INCONSISTENT_ROOT = "inconsistent state root: its marker names a project who
 function markerProject(root) {
   const file2 = join28(root, "marker.json");
   try {
-    if (!lstatSync23(file2).isFile()) throw new Error(`${file2} is not a plain file`);
+    if (!lstatSync24(file2).isFile()) throw new Error(`${file2} is not a plain file`);
   } catch (e) {
     if (e.code === "ENOENT") return void 0;
     throw e;
@@ -37570,7 +37706,7 @@ function itemCounts(project) {
   const file2 = boardPath(project);
   let plain2 = true;
   try {
-    plain2 = lstatSync23(file2).isFile();
+    plain2 = lstatSync24(file2).isFile();
   } catch {
   }
   if (!plain2) throw new Error(`${file2}: board.yaml is not a plain file`);
@@ -37648,7 +37784,7 @@ function formatOverview(list2) {
 }
 
 // src/pane-data.ts
-import { lstatSync as lstatSync24, readFileSync as readFileSync28 } from "node:fs";
+import { lstatSync as lstatSync25, readFileSync as readFileSync28 } from "node:fs";
 import { join as join29 } from "node:path";
 var PR_HELD = "pr held: ";
 var TICK_FILE = "tick.json";
@@ -37803,7 +37939,7 @@ function readTickRecord(root) {
   const file2 = join29(root, TICK_FILE);
   try {
     assertStatePath(root, file2);
-    const st = lstatSync24(file2, { throwIfNoEntry: false });
+    const st = lstatSync25(file2, { throwIfNoEntry: false });
     if (st === void 0 || !st.isFile()) return void 0;
     const raw = JSON.parse(readFileSync28(file2, "utf8"));
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return void 0;
@@ -37839,7 +37975,7 @@ function clockTime(iso, timezone) {
 // src/roadmap.ts
 import {
   existsSync as existsSync8,
-  lstatSync as lstatSync25,
+  lstatSync as lstatSync26,
   readFileSync as readFileSync29,
   realpathSync as realpathSync6,
   renameSync as renameSync11,
@@ -37908,7 +38044,7 @@ function projectFile(project, file2) {
   }
   let link2 = false;
   try {
-    link2 = lstatSync25(full).isSymbolicLink();
+    link2 = lstatSync26(full).isSymbolicLink();
   } catch (e) {
     if (e.code !== "ENOENT") throw e;
   }
@@ -37951,7 +38087,7 @@ var IMPORT_MAX_LINE = 2e3;
 var IMPORT_MAX_PHASES = 500;
 function readImportFile(project, file2) {
   const { full, rel } = projectFile(project, file2);
-  const st = lstatSync25(full);
+  const st = lstatSync26(full);
   if (!st.isFile()) throw new Error(`${JSON.stringify(file2)}: not a regular file`);
   if (st.size > IMPORT_MAX_BYTES) throw new Error(`${JSON.stringify(file2)}: larger than 1 MB`);
   return { source: rel, text: readFileSync29(full, "utf8") };
@@ -38093,7 +38229,7 @@ function planImport(board, source, phases) {
 // src/setup.ts
 import {
   chmodSync as chmodSync6,
-  lstatSync as lstatSync26,
+  lstatSync as lstatSync27,
   mkdirSync as mkdirSync7,
   readFileSync as readFileSync30,
   renameSync as renameSync12,
@@ -38250,7 +38386,7 @@ async function link(o2, home) {
   const target = join31(localBin, "studio");
   let current;
   try {
-    current = lstatSync26(target).isFile() ? readFileSync30(target, "utf8") : "";
+    current = lstatSync27(target).isFile() ? readFileSync30(target, "utf8") : "";
   } catch {
     current = void 0;
   }
@@ -38374,7 +38510,7 @@ async function runSetup(o2) {
 }
 
 // src/skills-check.ts
-import { existsSync as existsSync9, lstatSync as lstatSync27, readFileSync as readFileSync31 } from "node:fs";
+import { existsSync as existsSync9, lstatSync as lstatSync28, readFileSync as readFileSync31 } from "node:fs";
 import { join as join32 } from "node:path";
 var SKILLS_CHECK_DAYS = 30;
 var DAY_MS4 = 864e5;
@@ -38386,7 +38522,7 @@ function readRecord(stateRoot) {
   const file2 = recordFile(stateRoot);
   try {
     assertStatePath(stateRoot, file2);
-    if (!lstatSync27(file2).isFile()) return {};
+    if (!lstatSync28(file2).isFile()) return {};
     const raw = JSON.parse(readFileSync31(file2, "utf8"));
     const lastRun = at(raw.lastRun);
     const lastAttempt = at(raw.lastAttempt);
@@ -38663,7 +38799,9 @@ Commands:
                            Pinned plugins against their marketplaces and sources against upstream;
                            one board item per update. Monthly (tick runs it); --now runs it at once,
                            --security marks a plugin or source update as security-relevant (priority 0)
-  cache refresh            Build the shared build cache from main in an owner-side clone (not for crews)
+  cache refresh [--trust-repo-config]
+                           Build the shared build cache from main in an owner-side clone, sandboxed
+                           (not for crews); --trust-repo-config accepts main's .cargo/config and toolchain path
   cache status             Size and age of the build cache
   setup [--link]           Owner only, in a terminal: gh, crew token and Claude account, one guided
                            step each, skipped when done; --link puts studio on your terminal's PATH
@@ -38816,6 +38954,9 @@ async function runCli(argv, deps) {
     }
     if (values.link !== void 0 && cmd !== "setup") {
       throw new UsageError("--link works with setup only");
+    }
+    if (values["trust-repo-config"] !== void 0 && !(cmd === "cache" && rest[0] === "refresh")) {
+      throw new UsageError("--trust-repo-config works with cache refresh only");
     }
     if ((values.now !== void 0 || values.security !== void 0) && cmd !== "skills") {
       throw new UsageError("--now and --security work with skills check only");
@@ -39376,11 +39517,13 @@ async function runCli(argv, deps) {
     const upkeepCache = (root) => {
       const exec = ports.exec;
       const launcher2 = deps.launcher;
+      const ownerConfig = loadOwnerConfig(owner);
       return cacheTick({
+        autoRefresh: loadConfig(project).cache?.autoRefresh === true && ownerConfig.cache?.autoRefresh === true,
         stateRoot: root,
         stateBase: dirname12(ownerRoot()),
         ownerRoot: ownerRoot(),
-        ownerConfig: loadOwnerConfig(owner),
+        ownerConfig,
         now: ports.clock.now(),
         ...exec === void 0 || launcher2 === void 0 ? {} : {
           start: async (log) => (await exec.detach(
@@ -40287,7 +40430,7 @@ async function runCli(argv, deps) {
       case "cache": {
         const [sub] = rest;
         if (rest.length !== 1 || sub !== "refresh" && sub !== "status") {
-          throw new UsageError("cache needs: refresh | status");
+          throw new UsageError("cache needs: refresh [--trust-repo-config] | status");
         }
         const ownerConfig = loadOwnerConfig(owner);
         if (sub === "status") {
@@ -40305,7 +40448,8 @@ async function runCli(argv, deps) {
             ports,
             platform: process.platform,
             env: deps.env,
-            home: deps.homedir
+            home: deps.homedir,
+            trustRepoConfig: values["trust-repo-config"] === true
           })
         );
         return 0;
@@ -40564,7 +40708,8 @@ function parseCli(argv) {
         help: { type: "boolean" },
         link: { type: "boolean" },
         now: { type: "boolean" },
-        security: { type: "string", multiple: true }
+        security: { type: "string", multiple: true },
+        "trust-repo-config": { type: "boolean" }
       },
       allowPositionals: true,
       strict: true

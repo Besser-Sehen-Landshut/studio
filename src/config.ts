@@ -188,6 +188,8 @@ export const studioConfigSchema = z
     plugins: z.array(pluginPinSchema).optional(),
     // Spending brake: once the ended crew runs of the local day cost this much, nothing new starts.
     limits: dailyLimitsSchema.optional(),
+    // The weekly refresh of the build cache in `tick` runs only with this and the owner's opt-in.
+    cache: z.strictObject({ autoRefresh: z.boolean().optional() }).optional(),
   })
   .superRefine((cfg, ctx) => {
     const seen = new Set<string>();
@@ -337,6 +339,8 @@ export const ownerConfigSchema = z.strictObject({
     .strictObject({
       maxGb: z.number().positive().optional(),
       refreshTimeoutMin: z.number().int().positive().optional(),
+      // The owner's half of the opt-in to the weekly refresh (studio.yaml has the other).
+      autoRefresh: z.boolean().optional(),
     })
     .optional(),
 });

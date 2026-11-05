@@ -9,6 +9,7 @@ import {
   type Stats,
 } from 'node:fs';
 import { join } from 'node:path';
+import { type BuildSandbox, sandboxed } from './build-sandbox.js';
 import { cacheLimits, type OwnerConfig } from './config.js';
 import { HeldError } from './held.js';
 import {
@@ -17,6 +18,7 @@ import {
   ensureStateDir,
   projectStateRoots,
   removeStateEntry,
+  sandboxDenyRead,
   writeStateFile,
 } from './paths.js';
 import type { Exec, Ports } from './ports.js';
@@ -226,33 +228,79 @@ export interface RefreshResult {
   steps: string[];
 }
 
-/** What the build of a seed runs, in the owner's build clone. */
-export function refreshSteps(src: string): { name: string; cmd: string; args: string[] }[] {
-  const steps: { name: string; cmd: string; args: string[] }[] = [];
+export interface RefreshStep {
+  name: string;
+  cmd: string;
+  args: string[];
+  /** Only steps that run no project code get the network. */
+  network: boolean;
+}
+
+/**
+ * What a refresh runs in the owner's build clone, each in the OS sandbox: first the downloads
+ * (`cargo fetch`, `pnpm fetch`), which run no project code and get the network, then the builds,
+ * offline. `build.rs` and proc macros run in the cargo build only; pnpm runs no install scripts.
+ */
+export function refreshSteps(src: string): RefreshStep[] {
+  const steps: RefreshStep[] = [];
   if (isRealFile(join(src, 'Cargo.toml'))) {
     const locked = isRealFile(join(src, 'Cargo.lock')) ? ['--locked'] : [];
-    steps.push({
-      name: 'cargo build',
-      cmd: 'cargo',
-      args: ['build', '--workspace', '--all-targets', ...locked],
-    });
+    steps.push(
+      { name: 'cargo fetch', cmd: 'cargo', args: ['fetch', ...locked], network: true },
+      {
+        name: 'cargo build',
+        cmd: 'cargo',
+        args: ['build', '--workspace', '--all-targets', '--offline', ...locked],
+        network: false,
+      },
+    );
   }
   if (isRealFile(join(src, 'pnpm-lock.yaml'))) {
-    // No install scripts: the store needs none, and they would run as the owner.
-    steps.push({
-      name: 'pnpm install',
-      cmd: 'pnpm',
-      args: ['install', '--frozen-lockfile', '--ignore-scripts'],
-    });
+    steps.push(
+      { name: 'pnpm fetch', cmd: 'pnpm', args: ['fetch', '--frozen-lockfile'], network: true },
+      {
+        name: 'pnpm install',
+        cmd: 'pnpm',
+        args: ['install', '--frozen-lockfile', '--offline', '--ignore-scripts'],
+        network: false,
+      },
+    );
   }
   return steps;
 }
 
+/** The files a checkout could reconfigure its build with: cargo config and toolchain overrides. */
+export function repoConfigProblem(src: string): string | undefined {
+  for (const name of ['config', 'config.toml']) {
+    if (lstatOrUndefined(join(src, '.cargo', name)) !== undefined) {
+      return `.cargo/${name} at the root of main`;
+    }
+  }
+  const legacy = join(src, 'rust-toolchain');
+  if (isRealFile(legacy) && readFileSync(legacy, 'utf8').includes('/')) {
+    return 'rust-toolchain at the root of main names a path';
+  }
+  const toml = join(src, 'rust-toolchain.toml');
+  if (lstatOrUndefined(toml) !== undefined) {
+    if (!isRealFile(toml)) return 'rust-toolchain.toml at the root of main is not a plain file';
+    if (/^\s*path\s*=/m.test(readFileSync(toml, 'utf8'))) {
+      return 'rust-toolchain.toml at the root of main names a toolchain path';
+    }
+  } else if (lstatOrUndefined(legacy) !== undefined && !isRealFile(legacy)) {
+    return 'rust-toolchain at the root of main is not a plain file';
+  }
+  return undefined;
+}
+
+/** Git in the build clone: no hooks and no fsmonitor, whatever a config says. */
+const SAFE_GIT = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+
 /**
  * Builds the seeds from the project's `origin/main` in the owner's build clone (never a crew clone),
  * within `cache.refresh_timeout_min`, then puts them in place in one swap under the launch lock.
- * A failed step publishes nothing; the old seeds stay. Build scripts (`build.rs`) run as the owner,
- * with a HOME and CARGO_HOME of the build dir and no token; pnpm runs without install scripts.
+ * A failed step publishes nothing; the old seeds stay. Every step runs in the OS sandbox
+ * (src/build-sandbox.ts): it reads like a crew, writes only the build dir, and has no token. A
+ * checkout with its own cargo config or toolchain path refuses unless `trustRepoConfig`.
  */
 export async function refreshCache(o: {
   stateRoot: string;
@@ -263,10 +311,22 @@ export async function refreshCache(o: {
   platform: NodeJS.Platform;
   env: Record<string, string | undefined>;
   home: string;
+  /** `--trust-repo-config`: the owner accepts the checkout's `.cargo/config*` and toolchain file. */
+  trustRepoConfig?: boolean;
 }): Promise<RefreshResult> {
   const exec = o.ports.exec;
   if (exec === undefined) throw new Error('the build cache needs the exec port');
-  if (cowCopyArgs(o.platform, 'a', 'b') === undefined) {
+  const noBox: BuildSandbox = {
+    denyRead: [],
+    allowRead: [],
+    allowWrite: [],
+    denyWrite: [],
+    network: false,
+  };
+  if (
+    cowCopyArgs(o.platform, 'a', 'b') === undefined ||
+    sandboxed(o.platform, noBox, '/', 'true', []) === undefined
+  ) {
     throw new Error(`the build cache is not supported on ${o.platform}`);
   }
   const now = () => o.ports.clock.now();
@@ -293,7 +353,8 @@ export async function refreshCache(o: {
       );
     }
     const src = join(build, 'src');
-    const g = (args: string[]) => o.ports.git.run(src, args, { timeoutMs: left() });
+    const g = (args: string[]) =>
+      o.ports.git.run(src, [...SAFE_GIT, ...args], { timeoutMs: left() });
     if (isRealDir(join(src, '.git'))) {
       await g(['remote', 'set-url', 'origin', o.originUrl]);
       await g(['fetch', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main']);
@@ -301,7 +362,7 @@ export async function refreshCache(o: {
       removeStateEntry(o.stateRoot, src);
       await o.ports.git.run(
         build,
-        ['clone', '--filter=blob:none', '--no-checkout', o.originUrl, src],
+        [...SAFE_GIT, 'clone', '--filter=blob:none', '--no-checkout', o.originUrl, src],
         {
           timeoutMs: left(),
         },
@@ -313,8 +374,23 @@ export async function refreshCache(o: {
     if (steps.length === 0) {
       throw new Error('nothing to cache: main has no Cargo.toml or pnpm-lock.yaml at its root');
     }
+    const problem = o.trustRepoConfig === true ? undefined : repoConfigProblem(src);
+    if (problem !== undefined) {
+      throw new Error(
+        `cache refresh: ${problem} could point the build outside its sandboxed dirs; check it, then run studio cache refresh --trust-repo-config`,
+      );
+    }
     const home = ensureStateDir(o.stateRoot, join(build, 'home'));
-    const rustup = o.env.RUSTUP_HOME || join(o.home, '.rustup');
+    const tmp = ensureStateDir(o.stateRoot, join(build, 'tmp'));
+    // A fresh CARGO_HOME every time: nothing a build wrote there (a config.toml) reaches the next.
+    removeStateEntry(o.stateRoot, join(build, 'cargo-home'));
+    ensureStateDir(o.stateRoot, join(build, 'cargo-home'));
+    for (const d of ['target', 'pnpm-store']) ensureStateDir(o.stateRoot, join(build, d));
+    // Toolchains as crews get them: the owner's crew_toolchain_paths, read-only.
+    const toolchains = o.ownerConfig.crewToolchainPaths;
+    const rustup = toolchains.find(
+      (p) => existsSync(join(p, 'settings.toml')) && existsSync(join(p, 'toolchains')),
+    );
     const env: Record<string, string> = {
       ...Object.fromEntries(
         (['PATH', 'LANG', 'TERM', 'USER'] as const).flatMap((k) =>
@@ -325,12 +401,30 @@ export async function refreshCache(o: {
       CARGO_HOME: join(build, 'cargo-home'),
       CARGO_TARGET_DIR: join(build, 'target'),
       PNPM_CONFIG_STORE_DIR: join(build, 'pnpm-store'),
-      ...(existsSync(rustup) ? { RUSTUP_HOME: rustup } : {}),
+      TMPDIR: tmp,
+      ...(rustup === undefined ? {} : { RUSTUP_HOME: rustup }),
     };
     const log = join(build, 'refresh.log');
+    const denyRead = sandboxDenyRead(o.stateRoot, o.home, o.env);
     for (const step of steps) {
       lock.heartbeat(now());
-      const r = await exec.run(step.cmd, step.args, { cwd: src, env, timeoutMs: left(), log });
+      const box: BuildSandbox = {
+        denyRead,
+        allowRead: toolchains,
+        allowWrite: [build],
+        denyWrite: [join(src, '.git')],
+        network: step.network,
+      };
+      const run = sandboxed(o.platform, box, src, step.cmd, step.args) as {
+        cmd: string;
+        args: string[];
+      };
+      const r = await exec.run(run.cmd, run.args, { cwd: src, env, timeoutMs: left(), log });
+      if (r.code === 127) {
+        throw new Error(
+          `cache refresh: ${step.name} could not start in the sandbox (${run.cmd} missing?); see ${log}`,
+        );
+      }
       if (r.code === 124) throw new Error(`cache refresh: ${step.name} timed out; see ${log}`);
       if (r.code !== 0) {
         throw new Error(`cache refresh: ${step.name} failed (${r.code}); see ${log}`);
@@ -346,7 +440,7 @@ export async function refreshCache(o: {
     ensureStateDir(o.stateRoot, staging);
     const seeds: Seed[] = [];
     for (const [seed, from] of produced) {
-      if (!isRealDir(from)) continue;
+      if (!isRealDir(from) || readdirSync(from).length === 0) continue;
       if (!(await cowCopy(exec, o.stateRoot, o.platform, from, join(staging, seed), left()))) {
         throw new Error(`cache refresh: copying ${seed} failed`);
       }
@@ -545,8 +639,8 @@ export interface CacheTick {
 }
 
 /**
- * The cache's part of a tick: the size cleanup (daily) and, for a cache that exists, a refresh in
- * the background once a week (`start` spawns `studio cache refresh`; a tick never waits for a
+ * The cache's part of a tick: the size cleanup (daily) and, when the owner and the project opted in
+ * (`cache.auto_refresh`) and a cache exists, a refresh in the background once a week (`start` spawns `studio cache refresh`; a tick never waits for a
  * build). A refresh started earlier is given its whole timeout before the next one. Undefined when
  * nothing was due.
  */
@@ -556,6 +650,8 @@ export async function cacheTick(o: {
   ownerRoot: string;
   ownerConfig: OwnerConfig;
   now: Date;
+  /** `cache.auto_refresh: true` in both studio.yaml and the owner config; off by default. */
+  autoRefresh: boolean;
   start?: (log: string) => Promise<number>;
 }): Promise<CacheTick | undefined> {
   const out: CacheTick = {};
@@ -563,7 +659,8 @@ export async function cacheTick(o: {
   if (removed !== undefined && removed.length > 0) out.removed = removed;
   const last = startedAt(o.stateRoot);
   const grace = cacheLimits(o.ownerConfig).refreshTimeoutMin * 60_000 + 10 * 60_000;
-  if (refreshDue(o.stateRoot, o.now) && (last === undefined || o.now.getTime() - last > grace)) {
+  const due = o.autoRefresh && refreshDue(o.stateRoot, o.now);
+  if (due && (last === undefined || o.now.getTime() - last > grace)) {
     if (o.start === undefined) out.refresh = 'due: run studio cache refresh';
     else {
       const build = ensureStateDir(o.stateRoot, cacheBuildDir(o.stateRoot));

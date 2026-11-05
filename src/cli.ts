@@ -218,7 +218,9 @@ Commands:
                            Pinned plugins against their marketplaces and sources against upstream;
                            one board item per update. Monthly (tick runs it); --now runs it at once,
                            --security marks a plugin or source update as security-relevant (priority 0)
-  cache refresh            Build the shared build cache from main in an owner-side clone (not for crews)
+  cache refresh [--trust-repo-config]
+                           Build the shared build cache from main in an owner-side clone, sandboxed
+                           (not for crews); --trust-repo-config accepts main's .cargo/config and toolchain path
   cache status             Size and age of the build cache
   setup [--link]           Owner only, in a terminal: gh, crew token and Claude account, one guided
                            step each, skipped when done; --link puts studio on your terminal's PATH
@@ -446,6 +448,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     }
     if (values.link !== undefined && cmd !== 'setup') {
       throw new UsageError('--link works with setup only');
+    }
+    if (values['trust-repo-config'] !== undefined && !(cmd === 'cache' && rest[0] === 'refresh')) {
+      throw new UsageError('--trust-repo-config works with cache refresh only');
     }
     if ((values.now !== undefined || values.security !== undefined) && cmd !== 'skills') {
       throw new UsageError('--now and --security work with skills check only');
@@ -1126,11 +1131,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     const upkeepCache = (root: string) => {
       const exec = ports.exec;
       const launcher = deps.launcher;
+      const ownerConfig = loadOwnerConfig(owner);
       return cacheTick({
+        autoRefresh:
+          loadConfig(project).cache?.autoRefresh === true &&
+          ownerConfig.cache?.autoRefresh === true,
         stateRoot: root,
         stateBase: dirname(ownerRoot()),
         ownerRoot: ownerRoot(),
-        ownerConfig: loadOwnerConfig(owner),
+        ownerConfig,
         now: ports.clock.now(),
         ...(exec === undefined || launcher === undefined
           ? {}
@@ -2128,7 +2137,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       case 'cache': {
         const [sub] = rest;
         if (rest.length !== 1 || (sub !== 'refresh' && sub !== 'status')) {
-          throw new UsageError('cache needs: refresh | status');
+          throw new UsageError('cache needs: refresh [--trust-repo-config] | status');
         }
         const ownerConfig = loadOwnerConfig(owner);
         if (sub === 'status') {
@@ -2147,6 +2156,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             platform: process.platform,
             env: deps.env,
             home: deps.homedir,
+            trustRepoConfig: values['trust-repo-config'] === true,
           }),
         );
         return 0;
@@ -2426,6 +2436,7 @@ function parseCli(argv: string[]) {
         link: { type: 'boolean' },
         now: { type: 'boolean' },
         security: { type: 'string', multiple: true },
+        'trust-repo-config': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: true,

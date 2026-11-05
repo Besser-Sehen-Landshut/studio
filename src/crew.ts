@@ -59,6 +59,7 @@ import {
   STATE_FILES,
   STATE_PROTECTED_DIRS,
   type StateLock,
+  sandboxDenyRead,
   stateRootFor,
   withBoardLock,
   writeStateFile,
@@ -713,7 +714,7 @@ export function writeCrewSettings(
   // The state base (parent of every state root: other projects, other items, settings, logs) is
   // denied too, literal and real spelling, so an XDG_STATE_HOME outside the home is covered.
   const stateBase = dirname(stateRoot);
-  const denyRead = unique([realHome, ...credentialPaths, stateBase, realOr(stateBase)]);
+  const denyRead = sandboxDenyRead(stateRoot, realHome, env);
   const loginDir = dirs.providerConfigDir;
   // Of a login dir only what skills need: it also holds the transcripts, `.claude.json` and shell
   // snapshots of other crews. Claude Code itself runs outside the sandbox and reaches the rest.

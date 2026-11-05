@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
@@ -81,6 +81,21 @@ interface Call {
   cmd: string;
   args: string[];
   env: Record<string, string>;
+  /** The sandbox the command ran in: the Seatbelt profile or the bubblewrap arguments. */
+  profile?: string;
+  bwrap?: string[];
+}
+
+/** The command inside a sandbox wrapper, and the wrapper. */
+function unwrap(cmd: string, args: string[]): Omit<Call, 'env'> {
+  if (cmd === '/usr/bin/sandbox-exec' && args[0] === '-p') {
+    return { cmd: args[2] as string, args: args.slice(3), profile: args[1] as string };
+  }
+  if (cmd === 'bwrap') {
+    const at = args.indexOf('--');
+    return { cmd: args[at + 1] as string, args: args.slice(at + 2), bwrap: args.slice(0, at) };
+  }
+  return { cmd, args };
 }
 
 /**
@@ -91,8 +106,10 @@ function fakeExec(o: { fail?: string[]; code?: number } = {}) {
   const calls: Call[] = [];
   const detached: Call[] = [];
   const exec: Exec = {
-    async run(cmd, args, opts) {
-      calls.push({ cmd, args, env: opts.env });
+    async run(outer, outerArgs, opts) {
+      const call = { ...unwrap(outer, outerArgs), env: opts.env };
+      calls.push(call);
+      const { cmd, args } = call;
       if (o.fail?.includes(cmd)) return { code: o.code ?? 1, stdout: '', stderr: 'no' };
       if (cmd === 'cp') {
         const [src, dst] = args.slice(-2) as [string, string];
@@ -163,20 +180,26 @@ describe('studio cache refresh', () => {
     const fx = makeProject({ 'Cargo.toml': '[package]\n', 'Cargo.lock': '', 'pnpm-lock.yaml': '' });
     const x = fakeExec();
     const r = await refresh(fx, ports(x.exec));
-    expect(r.steps).toEqual(['cargo build', 'pnpm install']);
+    expect(r.steps).toEqual(['cargo fetch', 'cargo build', 'pnpm fetch', 'pnpm install']);
     expect(r.seeds).toEqual(['cargo-target', 'cargo-registry', 'pnpm-store']);
     expect(r.sha).toBe(git(fx.project, 'rev-parse', 'HEAD'));
-    const cargo = x.calls.find((c) => c.cmd === 'cargo') as Call;
-    expect(cargo.args).toEqual(['build', '--workspace', '--all-targets', '--locked']);
+    const cargoCalls = x.calls.filter((c) => c.cmd === 'cargo');
+    expect(cargoCalls.map((c) => c.args)).toEqual([
+      ['fetch', '--locked'],
+      ['build', '--workspace', '--all-targets', '--offline', '--locked'],
+    ]);
+    const cargo = cargoCalls[1] as Call;
     expect(cargo.env.CARGO_TARGET_DIR).toBe(join(fx.state, 'cache-build', 'target'));
     expect(cargo.env.CARGO_HOME).toBe(join(fx.state, 'cache-build', 'cargo-home'));
     expect(cargo.env.HOME).toBe(join(fx.state, 'cache-build', 'home'));
     // No token and nothing else of the owner's environment reaches a build.
     expect(Object.keys(cargo.env).sort()).toEqual(
-      ['CARGO_HOME', 'CARGO_TARGET_DIR', 'HOME', 'PATH', 'PNPM_CONFIG_STORE_DIR'].sort(),
+      ['CARGO_HOME', 'CARGO_TARGET_DIR', 'HOME', 'PATH', 'PNPM_CONFIG_STORE_DIR', 'TMPDIR'].sort(),
     );
-    const pnpm = x.calls.find((c) => c.cmd === 'pnpm') as Call;
-    expect(pnpm.args).toEqual(['install', '--frozen-lockfile', '--ignore-scripts']);
+    expect(x.calls.filter((c) => c.cmd === 'pnpm').map((c) => c.args)).toEqual([
+      ['fetch', '--frozen-lockfile'],
+      ['install', '--frozen-lockfile', '--offline', '--ignore-scripts'],
+    ]);
     expect(existsSync(join(cacheDir(fx.state), 'seeds', 'cargo-target', 'debug', 'deps'))).toBe(
       true,
     );
@@ -235,6 +258,157 @@ describe('studio cache refresh', () => {
     await refresh(fx, ports(fakeExec().exec));
     expect(refreshDue(fx.state, new Date('2026-11-11T10:00:00Z'))).toBe(false);
     expect(refreshDue(fx.state, new Date('2026-11-12T10:00:00Z'))).toBe(true);
+  });
+});
+
+/** The paths of `(subpath "…")` in the rules of a profile whose lines start with `head`. */
+const ruleSubpaths = (profile: string, head: string): string[] =>
+  profile
+    .split('\n')
+    .filter((l) => l.startsWith(head))
+    .flatMap((l) => [...l.matchAll(/\(subpath "([^"]+)"\)/g)].map((m) => m[1] as string));
+
+describe('every refresh step runs in the OS sandbox', () => {
+  const inside = (p: string, dir: string) => p === dir || p.startsWith(`${dir}/`);
+
+  it('on macOS: Seatbelt, writes only below the build dir, owner paths unreadable', async () => {
+    const fx = makeProject({ 'Cargo.toml': '[package]\n', 'pnpm-lock.yaml': '' });
+    const x = fakeExec();
+    await refresh(fx, ports(x.exec));
+    const steps = x.calls.filter((c) => c.cmd === 'cargo' || c.cmd === 'pnpm');
+    expect(steps).toHaveLength(4);
+    const build = join(fx.state, 'cache-build');
+    const realBuild = realpathSync(build);
+    for (const step of steps) {
+      const profile = step.profile as string;
+      expect(profile, `${step.cmd} ${step.args[0]}`).toBeDefined();
+      const writable = ruleSubpaths(profile, '(allow file-write*');
+      expect(writable.length).toBeGreaterThan(0);
+      for (const w of writable) {
+        expect(inside(w, build) || inside(w, realBuild), w).toBe(true);
+      }
+      for (const ownerPath of [fx.home, fx.project, fx.owner, join(fx.state, 'clones')]) {
+        expect(writable.some((w) => inside(ownerPath, w))).toBe(false);
+      }
+      const denied = ruleSubpaths(profile, '(deny file-read*');
+      expect(denied).toContain(fx.home);
+      expect(denied).toContain(join(fx.home, '.local', 'state', 'studio'));
+      expect(denied).toContain(join(fx.home, '.ssh'));
+      // The build clone's git dir is read by owner-side git on the next refresh: never written.
+      expect(ruleSubpaths(profile, '(deny file-write*')).toContain(join(build, 'src', '.git'));
+      expect(step.env.GH_TOKEN).toBeUndefined();
+    }
+    // Network only for the fetch steps, which run no project code.
+    for (const step of steps) {
+      const fetch = step.args[0] === 'fetch';
+      expect(step.profile?.includes('(deny network*)'), `${step.cmd} ${step.args[0]}`).toBe(!fetch);
+    }
+  });
+
+  it('on Linux: bubblewrap, binding only the build dir writable, no network to build', async () => {
+    const fx = makeProject({ 'Cargo.toml': '[package]\n' });
+    const x = fakeExec();
+    await refresh(fx, ports(x.exec), 'linux');
+    const build = join(fx.state, 'cache-build');
+    const realBuild = realpathSync(build);
+    const steps = x.calls.filter((c) => c.cmd === 'cargo');
+    expect(steps).toHaveLength(2);
+    for (const step of steps) {
+      const args = step.bwrap as string[];
+      const binds = args.flatMap((a, i) => (a === '--bind' ? [args[i + 1] as string] : []));
+      expect(binds.length).toBeGreaterThan(0);
+      for (const b of binds) expect(inside(b, build) || inside(b, realBuild), b).toBe(true);
+      expect(args[args.indexOf(fx.home) - 1]).toBe('--tmpfs');
+      expect(args.includes('--unshare-net')).toBe(step.args[0] !== 'fetch');
+    }
+  });
+
+  it('refuses a platform without a sandbox', async () => {
+    const fx = makeProject({ 'Cargo.toml': '[package]\n' });
+    await expect(refresh(fx, ports(fakeExec().exec), 'freebsd')).rejects.toThrow(/not supported/);
+  });
+
+  it.runIf(process.platform === 'darwin' && existsSync('/usr/bin/sandbox-exec'))(
+    'the Seatbelt profile holds for real: no read of the home, no write outside it',
+    async () => {
+      const { seatbeltProfile } = await import('../src/build-sandbox.js');
+      const base = realpathSync(mkdtempSync(join(tmpdir(), 'studio-sbx-')));
+      try {
+        const home = join(base, 'home');
+        const build = join(home, 'state', 'cache-build');
+        mkdirSync(build, { recursive: true });
+        writeFileSync(join(home, 'secret'), 'top');
+        const profile = seatbeltProfile({
+          denyRead: [home],
+          allowRead: [],
+          allowWrite: [build],
+          denyWrite: [],
+          network: false,
+        });
+        const sh = (script: string) =>
+          spawnSync('/usr/bin/sandbox-exec', ['-p', profile, '/bin/sh', '-c', script], {
+            encoding: 'utf8',
+          });
+        expect(sh(`cat ${home}/secret`).status).not.toBe(0);
+        expect(sh(`echo x > ${home}/planted`).status).not.toBe(0);
+        expect(existsSync(join(home, 'planted'))).toBe(false);
+        expect(sh(`echo x > ${build}/out && cat ${build}/out`).stdout).toBe('x\n');
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe('the repository cannot configure the refresh build', () => {
+  it('starts every refresh with a fresh CARGO_HOME', async () => {
+    const fx = makeProject({ 'Cargo.toml': '[package]\n' });
+    await refresh(fx, ports(fakeExec().exec));
+    const planted = join(fx.state, 'cache-build', 'cargo-home', 'config.toml');
+    writeFileSync(planted, '[build]\nrustc-wrapper = "/tmp/x"\n');
+    await refresh(fx, ports(fakeExec().exec, '2026-11-20T10:00:00Z'));
+    expect(existsSync(planted)).toBe(false);
+  });
+
+  it.each([
+    ['.cargo/config.toml', '[build]\nrustc-wrapper = "/tmp/evil"\n'],
+    ['.cargo/config', '[build]\ntarget-dir = "/tmp/elsewhere"\n'],
+    ['rust-toolchain.toml', '[toolchain]\npath = "/opt/evil-toolchain"\n'],
+    ['rust-toolchain', '/opt/evil-toolchain\n'],
+  ])('refuses a checkout with %s unless the owner trusts it', async (file, text) => {
+    const fx = makeProject({ 'Cargo.toml': '[package]\n' });
+    mkdirSync(join(fx.project, '.cargo'), { recursive: true });
+    writeFileSync(join(fx.project, file), text);
+    git(fx.project, 'add', '-f', file);
+    git(fx.project, 'commit', '-q', '-m', 'config');
+    git(fx.project, 'push', '-q', 'origin', 'main');
+    const x = fakeExec();
+    await expect(refresh(fx, ports(x.exec))).rejects.toThrow(/--trust-repo-config/);
+    expect(x.calls.some((c) => c.cmd === 'cargo')).toBe(false);
+    expect(readCacheMeta(fx.state)).toBeUndefined();
+    const trusted = fakeExec();
+    await refreshCache({
+      stateRoot: fx.state,
+      ownerRoot: fx.owner,
+      originUrl: fx.origin,
+      ownerConfig: owner,
+      ports: ports(trusted.exec),
+      platform: 'darwin',
+      env: fx.env,
+      home: fx.home,
+      trustRepoConfig: true,
+    });
+    expect(trusted.calls.some((c) => c.cmd === 'cargo')).toBe(true);
+  });
+
+  it('a plain toolchain channel is fine', async () => {
+    const fx = makeProject({
+      'Cargo.toml': '[package]\n',
+      'rust-toolchain.toml': '[toolchain]\nchannel = "1.90"\n',
+    });
+    await expect(refresh(fx, ports(fakeExec().exec))).resolves.toMatchObject({
+      seeds: expect.any(Array),
+    });
   });
 });
 
@@ -465,16 +639,27 @@ owner_only: []
 deploy_commands: []
 `;
 
-function cliProject() {
+/** `autoRefresh`: `cache: { auto_refresh: true }` in studio.yaml. */
+function cliProject(autoRefresh = false) {
   const fx = makeProject({ 'Cargo.toml': '[package]\n' });
   mkdirSync(join(fx.project, '.studio'));
-  writeFileSync(join(fx.project, '.studio', 'studio.yaml'), STUDIO_YAML);
+  writeFileSync(
+    join(fx.project, '.studio', 'studio.yaml'),
+    `${STUDIO_YAML}${autoRefresh ? 'cache: { auto_refresh: true }\n' : ''}`,
+  );
   writeFileSync(join(fx.project, '.studio', 'board.yaml'), 'items: []\n');
   checkStateMarker(fx.state, {
     projectRealpath: projectRealpath(fx.project),
     originUrl: git(fx.project, 'remote', 'get-url', 'origin'),
   });
   return fx;
+}
+
+/** The owner's half of the opt-in to the weekly refresh. */
+function optInOwner(fx: ReturnType<typeof makeProject>) {
+  const dir = join(fx.home, '.config', 'studio');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'config.yaml'), 'cache: { auto_refresh: true }\n');
 }
 
 async function cli(
@@ -517,6 +702,21 @@ describe('studio cache in the CLI', () => {
     expect(status.sizeBytes).toBeGreaterThan(0);
   });
 
+  it('refresh refuses main’s cargo config until the owner passes --trust-repo-config', async () => {
+    const fx = cliProject();
+    mkdirSync(join(fx.project, '.cargo'));
+    writeFileSync(join(fx.project, '.cargo', 'config.toml'), '[build]\nrustc-wrapper = "/x"\n');
+    git(fx.project, 'add', '-f', '.cargo/config.toml');
+    git(fx.project, 'commit', '-q', '-m', 'cargo config');
+    git(fx.project, 'push', '-q', 'origin', 'main');
+    const p = ports(fakeExec().exec);
+    const r = await cli(fx, p, ['cache', 'refresh']);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toMatch(/\.cargo\/config\.toml .*--trust-repo-config/);
+    expect((await cli(fx, p, ['cache', 'refresh', '--trust-repo-config'])).code).toBe(0);
+    expect((await cli(fx, p, ['cache', 'status', '--trust-repo-config'])).code).not.toBe(0);
+  });
+
   it('refresh is not for crews', async () => {
     const fx = cliProject();
     fx.env.STUDIO_ROLE = 'crew';
@@ -525,8 +725,29 @@ describe('studio cache in the CLI', () => {
     expect(r.err).toMatch(/not for crew sessions/);
   });
 
+  it('tick never refreshes without the opt-in in both studio.yaml and the owner config', async () => {
+    for (const [inProject, inOwner] of [
+      [false, false],
+      [true, false],
+      [false, true],
+    ] as const) {
+      const fx = cliProject(inProject);
+      if (inOwner) optInOwner(fx);
+      const x = fakeExec();
+      const p = ports(x.exec);
+      await cli(fx, p, ['cache', 'refresh']);
+      p.set('2026-11-13T10:00:00Z');
+      const t = JSON.parse(
+        (await cli(fx, p, ['tick'], { launcher: '/opt/studio/bin/studio' })).out,
+      );
+      expect(x.detached).toEqual([]);
+      expect(t.cache).toBeUndefined();
+    }
+  });
+
   it('tick starts a refresh in the background once a week, and only for a cache that exists', async () => {
-    const fx = cliProject();
+    const fx = cliProject(true);
+    optInOwner(fx);
     const x = fakeExec();
     const p = ports(x.exec);
     const deps = { launcher: '/opt/studio/bin/studio' };
