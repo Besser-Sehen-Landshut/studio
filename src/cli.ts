@@ -381,7 +381,7 @@ interface Tick {
   /** Epics whose acceptance was green in this tick: one owner line each. */
   epicsDone?: { epic: string; title: string; item: string }[];
   /** Epics an acceptance reopened, with the items it added for its findings and failed suites. */
-  epicsReopened?: { epic: string; item: string; findings: string[] }[];
+  epicsReopened?: { epic: string; item: string; findings: string[]; held?: true }[];
   /** The monthly skills check, when this tick ran it: new update items and what failed. */
   skillsCheck?: { added: string[]; raised: string[]; problems: string[] };
   /** What the restart checks repaired before the tick planned (an interrupted launch); absent without. */
@@ -1410,8 +1410,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               } else if (a?.result === 'reopened') {
                 out.epicsReopened = [
                   ...(out.epicsReopened ?? []),
-                  { epic: a.epic, item: item.id, findings: a.findings },
+                  {
+                    epic: a.epic,
+                    item: item.id,
+                    findings: a.findings,
+                    ...(a.held ? { held: true as const } : {}),
+                  },
                 ];
+                // The round limit held the new work: the lead decides how the epic goes on.
+                if (a.held) lead(a.epic, `acceptance limit reached for ${a.epic}`);
               }
             } else if (r.kind !== 'refused') {
               out.held.push({ item: item.id, reason: r.line });

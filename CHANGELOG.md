@@ -46,8 +46,18 @@ epic done only when the acceptance is green. Not tagged yet; the maintainers tag
   `acceptance` and include epics done in the last day; the pane names the stage; the roadmap adds
   `· in acceptance` or `· reopened`.
 
+- An epic that is already `accepting` from an older Studio gets its acceptance item on the first tick of
+  0.16. An imported epic whose acceptance is still the placeholder gets none: `needsLead` says
+  `define acceptance first`.
+- Without `acceptance.suites` a main commit with no CI run is never accepted: after 10 minutes the lead is
+  asked to configure the suites or rerun CI. `acceptance: { suites: [] }` opts a repository without CI out.
+- When the round limit holds an epic, `tick` adds `acceptance limit reached for E-<n>` to `needsLead` and
+  `held: true` to its `epicsReopened` entry.
+
 ### Changed
 
+- A tab or line break in a crew reason (a `not_run_here` reason, an acceptance finding) becomes a space
+  instead of rejecting the report.
 - The lead skill: the acceptance is Studio's and the reviewer crew's; the lead never runs the suites,
   reviews the epic or sets it done by hand, acts on acceptance lines in `needsLead`, and tells the owner
   once per epic when it is done.

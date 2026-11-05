@@ -22,6 +22,7 @@ import { assertStatePath, writeStateFile } from './paths.js';
 import type { Gh } from './ports.js';
 import type { Report } from './report.js';
 import { type CrewCaps, usableBaseName } from './review.js';
+import { IMPORT_ACCEPTANCE } from './roadmap.js';
 
 /** The fingerprint of the epic the acceptance was made for: which items it had. */
 export const STATE_NOTE = 'acceptance-state: ';
@@ -109,7 +110,7 @@ export function withAcceptanceItem(
   epic: Epic,
   config: StudioConfig,
 ): { board: Board; id?: string } {
-  if (epic.status !== 'accepting') return { board };
+  if (epic.status !== 'accepting' || placeholderAcceptance(epic)) return { board };
   const state = epicState(board, epic.id);
   const earlier = acceptancesOf(board, epic.id);
   if (earlier.some(open)) return { board };
@@ -153,6 +154,10 @@ export function withAcceptanceItem(
   }
   return { board: { ...board, items: [...board.items, parsed.data] }, id };
 }
+
+/** An imported epic whose acceptance is still the import's placeholder: nothing to accept against. */
+export const placeholderAcceptance = (epic: Epic): boolean =>
+  epic.acceptance.some((a) => a === IMPORT_ACCEPTANCE);
 
 export type AcceptanceMoves = {
   added: { epic: string; item: string }[];
@@ -461,6 +466,14 @@ export async function prepareAcceptances(o: {
       (i) => acceptanceOf(i) !== undefined && (i.status === 'ready' || i.status === 'blocked'),
     );
   if (!busy) return out;
+  for (const e of before.epics ?? []) {
+    if (e.status === 'accepting' && placeholderAcceptance(e)) {
+      out.lead.push({
+        item: e.id,
+        reason: `${e.id}: define acceptance first: studio epic edit ${e.id} --acceptance "<line>"... (it still has the import's placeholder, so no acceptance runs)`,
+      });
+    }
+  }
   const moves = await o.locked(() => {
     const board = loadBoard(o.project);
     const r = settleAcceptances(board, o.config, o.now());
@@ -521,10 +534,26 @@ export async function prepareAcceptances(o: {
     const pending = suites.filter((s) => s.state === 'pending');
     const missing = suites.filter((s) => s.state === 'missing');
     const age = o.now().getTime() - Date.parse(rec.since);
-    // Without configured suites a fresh commit may not show its runs yet.
-    const tooSoon =
-      o.config.acceptance === undefined && suites.length === 0 && age < SUITE_GRACE_MS;
-    if (pending.length === 0 && missing.length === 0 && !tooSoon) {
+    // Without configured suites a commit with no CI run is no evidence: never pinned as green.
+    // `acceptance: { suites: [] }` is the explicit choice of a repository without CI.
+    if (o.config.acceptance === undefined && suites.length === 0) {
+      if (head !== undefined && head !== rec.sha) {
+        runs[item.id] = { sha: head, since: o.now().toISOString(), started: {} };
+        out.waiting.push({
+          item: item.id,
+          reason: `no CI run on ${short}: waiting on ${branch} at ${head.slice(0, 7)}`,
+        });
+      } else if (age < SUITE_GRACE_MS) {
+        out.waiting.push({ item: item.id, reason: `no CI run on ${branch} at ${short} yet` });
+      } else {
+        out.lead.push({
+          item: item.id,
+          reason: `acceptance of ${epic}: no CI run on ${branch} at ${short}; set acceptance.suites in studio.yaml (acceptance: { suites: [] } for a repository without CI), or rerun CI on ${branch}`,
+        });
+      }
+      continue;
+    }
+    if (pending.length === 0 && missing.length === 0) {
       const sha = rec.sha;
       const pinned = await o.locked(() => {
         const fresh = loadBoard(o.project);
@@ -559,10 +588,6 @@ export async function prepareAcceptances(o: {
         item: item.id,
         reason: `acceptance waits for ${pending.map((s) => s.name).join(', ')} on ${branch} at ${short}`,
       });
-      continue;
-    }
-    if (tooSoon) {
-      out.waiting.push({ item: item.id, reason: `no CI run on ${branch} at ${short} yet` });
       continue;
     }
     // A suite cannot give a result on this commit: a newer head may have it (or run it).
@@ -873,6 +898,8 @@ export function checkAcceptanceReport(
     );
   }
   const findings = report.findings ?? [];
+  // parseReport already refuses it for a review item; never read silence as a verdict.
+  if (report.verdict === undefined) throw new Error('a done acceptance needs a verdict');
   if (report.verdict === 'changes_requested' && findings.length === 0) {
     throw new Error('changes requested without findings: each finding becomes an item, name them');
   }
@@ -898,7 +925,7 @@ export function checkAcceptanceReport(
     epic: caps.acceptsEpic,
     state: caps.epicState,
     sha: caps.headRefOid,
-    verdict: report.verdict ?? 'changes_requested',
+    verdict: report.verdict,
     findings,
     failedSuites: (caps.suites ?? []).filter((s) => s.state === 'fail').map((s) => s.name),
   };
@@ -910,6 +937,8 @@ export type AcceptanceResult = {
   result: 'done' | 'reopened' | 'superseded';
   /** The items added for findings and failed suites. */
   findings: string[];
+  /** The round limit held the new items `blocked` for the lead. */
+  held?: true;
 };
 
 /**
@@ -1025,7 +1054,15 @@ export function applyAcceptance(
   const epic = (next.epics ?? []).find((e) => e.id === done.epic);
   if (added.length > 0) {
     next = settleEpics(next, BY, now).board;
-    return { board: next, outcome: { epic: done.epic, result: 'reopened', findings: added } };
+    return {
+      board: next,
+      outcome: {
+        epic: done.epic,
+        result: 'reopened',
+        findings: added,
+        ...(held ? { held: true as const } : {}),
+      },
+    };
   }
   const current =
     epic !== undefined && epic.status === 'accepting' && epicState(next, done.epic) === done.state;

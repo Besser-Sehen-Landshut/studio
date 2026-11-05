@@ -78,7 +78,11 @@ export const crewCovers = z
 export const crewReason = z
   .string()
   .transform((s) => {
-    const line = s.replace(/\p{Cf}/gu, '');
+    // A tab or a line break in crew text becomes a space: it never rejects a whole report.
+    const line = s
+      .replace(/\p{Cf}/gu, '')
+      .replace(/\p{Cc}+/gu, ' ')
+      .trim();
     const chars = [...line];
     return chars.length <= 300 ? line : `${chars.slice(0, 299).join('')}…`;
   })

@@ -374,3 +374,31 @@ item that adds `workflow_dispatch`, then a tick, "I don't stop or requeue APP-40
 invoice is done." Both misses gone.
 
 Not exercised: a real lead session over an acceptance that runs for hours.
+
+# Baseline (RED): what an unconfigured acceptance checks, the placeholder and the round limit, 0.16.0
+
+Run on 2026-11-05 with one sonnet agent and the lead skill of the first 0.16.0 commit, scenario
+`scenarios/lead-acceptance-ci-scenario.md` (a documentation repository whose only workflow runs on pull requests,
+`needsLead` with `no CI run on main`, an imported epic with the placeholder acceptance, and an epic the round
+limit holds with one blocked finding item).
+
+Misses:
+
+- For `no CI run on main`: a CI item that makes the pull-request workflow run on pushes to main and "names the
+  lint and link-check workflow" in `acceptance.suites`, with no file or job form, and "I don't set
+  `suites: []`". The skill said neither what an unconfigured acceptance checks nor that suites are named by file.
+- For the round limit: `studio stop APP-62 --requeue`. No crew ran for that item; the requeue is for a crew
+  that ended without a usable report.
+- Nothing else: the placeholder got `studio epic edit E-7 --acceptance ...` from the goal, and no owner line.
+
+The Acceptance section gets three lines: what it checks (`acceptance.suites` by file and job, otherwise every
+workflow run on the pinned commit, no run never green, `suites: []` only where CI does not run on main),
+`define acceptance first`, and `acceptance limit reached` (`blocked → ready` on the board when findings
+shrink, never `stop --requeue`; a research item or a drop when they do not converge).
+
+## With the new skill (GREEN), 2026-11-05
+
+Same scenario, one sonnet agent: an item for `acceptance: { suites: [] }` ("`checks.yml` runs on pull requests
+only, so there is never a CI run on a main commit. That is the case `acceptance: { suites: [] }` is for");
+`epic edit E-7` from the goal; APP-62 `blocked → ready` with a board note, "No crew ran for this item, so I
+don't use `stop --requeue`"; no owner line. Both misses gone.

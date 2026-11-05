@@ -4573,6 +4573,71 @@ describe('epics in the CLI', () => {
       }
     });
 
+    it('tick reports an epic the round limit holds, to the lead and in epicsReopened', async () => {
+      const fx = makeFx([
+        { id: 'APP-1', status: 'merged', extra: inEpic },
+        { id: 'APP-2', status: 'merged', extra: inEpic, notes: ['finding of APP-8'] },
+        { id: 'APP-3', status: 'merged', extra: inEpic, notes: ['finding of APP-9'] },
+      ]);
+      withEpics(fx, [epicYaml('E-1', 'accepting')]);
+      const board = loadBoard(fx.project);
+      const state = epicState(board, 'E-1');
+      const added = withAcceptanceItem(board, board.epics?.[0] as Epic, loadConfig(fx.project));
+      const id = added.id as string;
+      saveBoard(fx.project, {
+        ...added.board,
+        items: added.board.items.map((i) =>
+          i.id === id
+            ? {
+                ...i,
+                status: 'assigned' as const,
+                notes: [...(i.notes ?? []), `acceptance-main: ${HEAD}`],
+              }
+            : i,
+        ),
+      });
+      bind(fx);
+      writeReviewCaps(fx, id, {
+        tier: 'large',
+        analyzers: [],
+        mandatory: [],
+        headRefOid: HEAD,
+        baseRefName: 'main',
+        acceptsEpic: 'E-1',
+        epicState: state,
+        suites: [],
+      });
+      writeStateFile(
+        fx.state,
+        join(fx.state, 'crew.json'),
+        JSON.stringify({
+          [id]: {
+            name: `crew-${id}`,
+            item: id,
+            role: 'reviewer',
+            pid: 999999,
+            log: '/x',
+            startedAt: '2026-10-30T08:00:00.000Z',
+          },
+        }),
+      );
+      writeReport(
+        fx,
+        id,
+        `status: done\nitem: ${id}\nverdict: changes_requested\naccepts: E-1\nhead_sha: ${HEAD}\nanalyzers: {}\nfindings: ["x"]`,
+      );
+      const { ports } = fakePorts(fakeGh().gh);
+      const dead = { ...ports, claude: { ...ports.claude, alive: () => false } };
+      const out = JSON.parse((await cli(fx, dead, 'tick')).out);
+      expect(out.epicsReopened).toEqual([
+        { epic: 'E-1', item: id, findings: [expect.any(String)], held: true },
+      ]);
+      expect(out.needsLead).toEqual(
+        expect.arrayContaining([{ item: 'E-1', reason: 'acceptance limit reached for E-1' }]),
+      );
+      expect(statusOf(fx, out.epicsReopened[0].findings[0])?.status).toBe('blocked');
+    });
+
     it('tick pins main once the suites completed there and launches the acceptance', async () => {
       const { fx } = accepting();
       bind(fx);

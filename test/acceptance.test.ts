@@ -36,6 +36,7 @@ import { dropEpic } from '../src/epics.js';
 import type { Gh } from '../src/ports.js';
 import { parseReport } from '../src/report.js';
 import type { CrewCaps } from '../src/review.js';
+import { IMPORT_ACCEPTANCE } from '../src/roadmap.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -589,7 +590,7 @@ describe('preparing an acceptance on main', () => {
     expect(pinned.pinned[0]).toMatchObject({ sha: NEWER, suites: { pass: 1, fail: 0 } });
   });
 
-  it('without configured suites and without any run, it waits the grace, then goes on without', async () => {
+  it('without configured suites and without any run it never pins: after the grace the lead decides', async () => {
     const fx = projectWith(ready());
     const { gh } = scriptedGh(
       (l) => headIs(MAIN)(l) ?? (l.startsWith('run list') ? runs([]) : undefined),
@@ -598,6 +599,24 @@ describe('preparing an acceptance on main', () => {
       'no CI run on main at aaaaaaa yet',
     );
     const r = await prepare(fx, gh, config(), new Date(NOW.getTime() + SUITE_GRACE_MS));
+    expect(r.pinned).toEqual([]);
+    expect(r.lead[0]?.reason).toMatch(
+      /no CI run on main at aaaaaaa; set acceptance\.suites in studio\.yaml \(acceptance: \{ suites: \[\] \} for a repository without CI\), or rerun/,
+    );
+    expect(
+      loadBoard(fx.project)
+        .items.at(-1)
+        ?.notes?.some((n) => n.startsWith(MAIN_NOTE)),
+    ).toBe(false);
+  });
+
+  it('acceptance: { suites: [] } is a repository without CI: main is pinned with no suite', async () => {
+    const fx = projectWith(ready());
+    const none = config({ acceptance: { suites: [] } });
+    const { gh } = scriptedGh(
+      (l) => headIs(MAIN)(l) ?? (l.startsWith('run list') ? runs([]) : undefined),
+    );
+    const r = await prepare(fx, gh, none, NOW);
     expect(r.pinned[0]).toMatchObject({ sha: MAIN, suites: { pass: 0, fail: 0 } });
   });
 });
@@ -974,7 +993,7 @@ describe('limits and edges', () => {
         failedSuites: ['.github/workflows/e2e.yml / browser'],
       },
       // A report without a verdict counts as changes requested (checkAcceptanceReport).
-      'no verdict': {
+      'changes requested with only a failed suite': {
         verdict: 'changes_requested' as const,
         findings: [],
         failedSuites: ['.github/workflows/docs.yml'],
@@ -1022,10 +1041,16 @@ describe('limits and edges', () => {
       expect(r.board.items.at(-1)?.status).toBe('ready');
     });
 
-    it('a missing verdict is read as changes requested', () => {
-      const caps2: CrewCaps = { ...caps, analyzers: [], mandatory: [] };
+    it('a done acceptance report without a verdict is rejected', () => {
+      const acceptance = accepted().items.at(-1) as WorkItem;
+      expect(() =>
+        parseReport(
+          `---\nstatus: done\nitem: ${acceptance.id}\naccepts: E-1\nhead_sha: ${MAIN}\nfindings: ["x"]\n---\n`,
+          acceptance,
+        ),
+      ).toThrow(/needs verdict/);
       const { verdict: _v, ...noVerdict } = report({ findings: ['x'] });
-      expect(checkAcceptanceReport(caps2, noVerdict)?.verdict).toBe('changes_requested');
+      expect(() => checkAcceptanceReport(caps, noVerdict)).toThrow(/needs a verdict/);
     });
   });
 
@@ -1070,5 +1095,39 @@ describe('limits and edges', () => {
     expect(() => dropEpic(running, 'E-1', 'lead', NOW)).toThrow(
       /APP-2, the acceptance of E-1, is running/,
     );
+  });
+});
+
+describe('imported epics and crew text', () => {
+  it('no acceptance item while the acceptance is the import placeholder; the lead is told', async () => {
+    const epic = epicOf('accepting', { acceptance: [IMPORT_ACCEPTANCE] });
+    const b = boardOf([piece('APP-1', 'merged')], epic);
+    expect(withAcceptanceItem(b, epic, config()).id).toBeUndefined();
+    const fx = projectWith(b);
+    const r = await prepareAcceptances({
+      project: fx.project,
+      stateRoot: fx.state,
+      config: config(),
+      gh: scriptedGh(() => undefined).gh,
+      now: () => NOW,
+      defaultBranch: async () => 'main',
+      locked: async (fn) => fn(),
+    });
+    expect(r.added).toEqual([]);
+    expect(r.lead).toEqual([
+      {
+        item: 'E-1',
+        reason: expect.stringMatching(
+          /^E-1: define acceptance first: studio epic edit E-1 --acceptance/,
+        ),
+      },
+    ]);
+  });
+
+  it('a finding with a tab or a line break becomes one line instead of rejecting the report', () => {
+    const r = parseReport(
+      `---\nstatus: done\nverdict: changes_requested\naccepts: E-1\nhead_sha: ${MAIN}\nfindings: ["a\\tb\\nc"]\n---\n`,
+    );
+    expect(r.findings).toEqual(['a b c']);
   });
 });

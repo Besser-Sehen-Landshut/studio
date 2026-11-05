@@ -82,9 +82,16 @@ Findings and failed suites come back as items of the epic (`epicsReopened`); the
 - Never run the suites, review the epic, add its findings or mark it done yourself. Never stop, requeue or drop
   an acceptance that waits: Studio retries it, and drops it itself when the epic moves on.
 - `epicsDone`: one owner line, "<E-n> <title> is done". Nothing to the owner for `epicsReady`, a wait or a reopen.
-- An acceptance line in `needsLead` (a suite that cannot start, no result on main): fix the cause through an
-  item, e.g. a CI item with `--path ".github/workflows/<file>"` that adds `workflow_dispatch`, or name the suites
-  in `acceptance.suites` of studio.yaml. The ticks after its merge pick the acceptance up again.
+- What it checks: the suites in `acceptance: { suites: [{ workflow: .github/workflows/<file>.yml, job: <job> }] }`
+  of studio.yaml (by file, never display name); without that block every workflow that ran on the pinned main
+  commit, and a commit with no run is never green. `acceptance: { suites: [] }` only for a repository whose CI
+  does not run on main: the review is then the whole acceptance.
+- An acceptance line in `needsLead` (a suite that cannot start, no CI run on main): fix the cause through an
+  item, e.g. a CI item with `--path ".github/workflows/<file>"` that adds `workflow_dispatch`, or the
+  `acceptance:` block of studio.yaml as above. The ticks after its merge pick the acceptance up again.
+- `define acceptance first` (an imported epic): `studio epic edit E-<n> --acceptance "<check>"...` from its goal.
+- `acceptance limit reached for E-<n>`: its new items wait `blocked`. Findings that shrink: `blocked → ready`
+  on the board (no `stop --requeue`: no crew ran). Findings that do not converge: a research item, or drop them.
 
 ## After each event
 

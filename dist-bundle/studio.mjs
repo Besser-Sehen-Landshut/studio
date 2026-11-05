@@ -7853,8 +7853,8 @@ import { parseArgs } from "node:util";
 
 // src/acceptance.ts
 import { createHash as createHash3 } from "node:crypto";
-import { lstatSync as lstatSync23, readFileSync as readFileSync26 } from "node:fs";
-import { join as join27 } from "node:path";
+import { lstatSync as lstatSync24, readFileSync as readFileSync27 } from "node:fs";
+import { join as join28 } from "node:path";
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -27763,7 +27763,7 @@ var notRunHereSchema = external_exports.strictObject({
 var crewLine = external_exports.string().transform((s) => s.replace(new RegExp("\\p{Cf}", "gu"), "")).pipe(plainLine);
 var crewCovers = external_exports.string().transform((s) => s.replace(new RegExp("\\p{Cf}", "gu"), "")).pipe(plainLineOf(600));
 var crewReason = external_exports.string().transform((s) => {
-  const line3 = s.replace(new RegExp("\\p{Cf}", "gu"), "");
+  const line3 = s.replace(new RegExp("\\p{Cf}", "gu"), "").replace(new RegExp("\\p{Cc}+", "gu"), " ").trim();
   const chars = [...line3];
   return chars.length <= 300 ? line3 : `${chars.slice(0, 299).join("")}\u2026`;
 }).pipe(plainLine);
@@ -28645,7 +28645,7 @@ var acceptanceSchema = external_exports.strictObject({
         external_exports.string().regex(/^[A-Za-z0-9 ._()/:-]+$/, "letters, digits, spaces and . _ - ( ) / : only")
       )
     })
-  ).min(1).max(20)
+  ).max(20)
 });
 var dailyLimitsSchema = external_exports.strictObject({
   dailyCostUsd: external_exports.number().positive().optional()
@@ -37020,6 +37020,425 @@ async function addItem(o2) {
   });
 }
 
+// src/roadmap.ts
+import {
+  existsSync as existsSync6,
+  lstatSync as lstatSync23,
+  readFileSync as readFileSync26,
+  realpathSync as realpathSync6,
+  renameSync as renameSync10,
+  rmSync as rmSync6,
+  writeFileSync as writeFileSync10
+} from "node:fs";
+import { dirname as dirname9, isAbsolute as isAbsolute5, join as join27, relative as relative2, resolve as resolve5, sep as sep6 } from "node:path";
+
+// src/epics.ts
+var ONE_LINE2 = /^[^\p{Cc}\p{Cf}]{1,300}$/u;
+var GOAL = /^[^\p{Cc}\p{Cf}]{1,2000}$/u;
+function nextEpicId(board) {
+  const numbers = (board.epics ?? []).map((e) => Number(e.id.slice(2)));
+  return `E-${Math.max(0, ...numbers) + 1}`;
+}
+var byEpicId = (a2, b) => Number(a2.id.slice(2)) - Number(b.id.slice(2));
+function findEpic(board, id) {
+  if (id === void 0 || id === "") throw new Error("missing epic id");
+  const epic = (board.epics ?? []).find((e) => e.id === id);
+  if (epic === void 0) throw new Error(`unknown epic ${id}`);
+  return epic;
+}
+async function addEpic(o2) {
+  const title = o2.title?.trim();
+  if (title === void 0 || title === "") {
+    throw new Error('epic add needs a title: studio epic add "<title>" --goal "<text>"');
+  }
+  if (!ONE_LINE2.test(title))
+    throw new Error("the title must be one line of at most 300 characters");
+  const goal = o2.goal?.trim();
+  if (goal === void 0 || goal === "") {
+    throw new Error('epic add needs --goal "<text>": what the epic is for');
+  }
+  if (!GOAL.test(goal)) throw new Error("--goal must be one line of at most 2000 characters");
+  const acceptance = o2.acceptance.map((a2) => a2.trim());
+  if (acceptance.length === 0) {
+    throw new Error('epic add needs at least one --acceptance "<line>": how it is accepted');
+  }
+  if (acceptance.some((a2) => !ONE_LINE2.test(a2))) {
+    throw new Error("each --acceptance must be one line of at most 300 characters");
+  }
+  return await o2.locked(() => {
+    const config2 = loadConfig(o2.project);
+    const board = loadBoard(o2.project, config2);
+    const known = (config2.components ?? []).map((c3) => c3.id);
+    for (const c3 of o2.components) {
+      if (!known.includes(c3)) {
+        throw new Error(
+          `unknown component ${c3}${known.length > 0 ? ` (known: ${known.join(", ")})` : ": studio.yaml has no components"}`
+        );
+      }
+    }
+    const id = nextEpicId(board);
+    const parsed = epicSchema.safeParse({
+      id,
+      title,
+      status: "open",
+      goal,
+      acceptance,
+      ...o2.components.length === 0 ? {} : { components: [...new Set(o2.components)] },
+      history: []
+    });
+    if (!parsed.success) {
+      throw new Error(
+        `the epic would be invalid: ${parsed.error.issues.map((i2) => i2.message).join("; ")}`
+      );
+    }
+    saveBoard(o2.project, { ...board, epics: [...board.epics ?? [], parsed.data] });
+    return { epic: id, title, status: "open" };
+  });
+}
+function currentAcceptance(board, epicId) {
+  const all = board.items.filter((i2) => acceptanceOf(i2) === epicId);
+  return all.find((i2) => i2.status !== "merged" && i2.status !== "dropped") ?? all.at(-1);
+}
+function epicRows(board) {
+  return [...board.epics ?? []].sort(byEpicId).map((e) => {
+    const p = epicProgress(board, e.id);
+    const a2 = currentAcceptance(board, e.id);
+    return {
+      id: e.id,
+      title: e.title,
+      status: e.status,
+      stage: epicStage(e),
+      progress: { merged: p.merged, total: p.total },
+      counts: p.counts,
+      ...a2 === void 0 ? {} : { acceptance: { item: a2.id, status: a2.status } }
+    };
+  });
+}
+function editEpic(board, id, edit) {
+  const epic = findEpic(board, id);
+  if (epic.status === "dropped") throw new Error(`${id} is dropped`);
+  const changed = [];
+  const next = structuredClone(epic);
+  if (edit.title !== void 0) {
+    const title = edit.title.trim();
+    if (!ONE_LINE2.test(title)) {
+      throw new Error("--title must be one line of at most 300 characters");
+    }
+    next.title = title;
+    changed.push("title");
+  }
+  if (edit.goal !== void 0) {
+    const goal = edit.goal.trim();
+    if (!GOAL.test(goal)) throw new Error("--goal must be one line of at most 2000 characters");
+    next.goal = goal;
+    changed.push("goal");
+  }
+  if (edit.acceptance !== void 0) {
+    const lines = edit.acceptance.map((a2) => a2.trim());
+    if (lines.length === 0 || lines.some((a2) => !ONE_LINE2.test(a2))) {
+      throw new Error("each --acceptance must be one line of at most 300 characters");
+    }
+    next.acceptance = lines;
+    changed.push("acceptance");
+  }
+  if (changed.length === 0) {
+    throw new Error("epic edit needs --title, --goal or --acceptance");
+  }
+  const parsed = epicSchema.safeParse(next);
+  if (!parsed.success) {
+    throw new Error(
+      `the epic would be invalid: ${parsed.error.issues.map((i2) => i2.message).join("; ")}`
+    );
+  }
+  return {
+    board: {
+      ...board,
+      epics: (board.epics ?? []).map((e) => e.id === id ? parsed.data : e)
+    },
+    changed
+  };
+}
+function dropEpic(board, id, by, now) {
+  const epic = findEpic(board, id);
+  if (epic.status === "dropped" || epic.status === "done") {
+    throw new Error(`${id} is ${epic.status} already`);
+  }
+  const open4 = board.items.filter(
+    (i2) => i2.epic === id && i2.status !== "merged" && i2.status !== "dropped" && acceptanceOf(i2) === void 0
+  );
+  if (open4.length > 0) {
+    throw new Error(
+      `${id} still has open items (${open4.map((i2) => i2.id).join(", ")}): drop or finish them first`
+    );
+  }
+  const entry = { at: now.toISOString(), from: epic.status, to: "dropped", by };
+  for (const a2 of board.items) {
+    if (acceptanceOf(a2) !== id || a2.status === "merged" || a2.status === "dropped") continue;
+    if (a2.status === "assigned" || a2.status === "in_progress") {
+      throw new Error(`${a2.id}, the acceptance of ${id}, is running: stop it first`);
+    }
+    board = transition(board, a2.id, "dropped", by, now);
+  }
+  return {
+    ...board,
+    epics: (board.epics ?? []).map(
+      (e) => e.id === id ? { ...structuredClone(e), status: "dropped", history: [...e.history, entry] } : e
+    )
+  };
+}
+function settleAndSave(project, board, by, now) {
+  const settled = settleEpics(board, by, now);
+  if (settled.moved.length > 0) saveBoard(project, settled.board);
+  return settled.moved;
+}
+
+// src/roadmap.ts
+var ROADMAP_HEADER = "<!-- generated by studio roadmap; edit the board, not this file -->";
+var IMPORT_ACCEPTANCE = "imported from ROADMAP: define acceptance";
+var IN_PROGRESS_NOTE = "in progress at import";
+var ACTIVE3 = ["assigned", "in_progress", "in_review", "queued"];
+function compareIds2(a2, b) {
+  const pa = /^(.*?)(\d+)$/.exec(a2);
+  const pb = /^(.*?)(\d+)$/.exec(b);
+  if (pa && pb && pa[1] === pb[1]) return Number(pa[2]) - Number(pb[2]);
+  return a2 < b ? -1 : a2 > b ? 1 : 0;
+}
+function epicBox(board, epic) {
+  if (epic.status === "done") return "[x]";
+  if (epic.status === "accepting") return "[~]";
+  const items = board.items.filter((i2) => i2.epic === epic.id);
+  if (items.length === 0 && (epic.notes ?? []).some((n2) => n2.startsWith(IN_PROGRESS_NOTE))) {
+    return "[~]";
+  }
+  return items.some((i2) => ACTIVE3.includes(i2.status)) ? "[~]" : "[ ]";
+}
+var itemBox = (i2) => i2.status === "merged" ? "[x]" : ACTIVE3.includes(i2.status) ? "[~]" : "[ ]";
+function renderRoadmap(board) {
+  const out = [ROADMAP_HEADER, "", "# Roadmap", ""];
+  const epics = [...board.epics ?? []].filter((e) => e.status !== "dropped").sort(byEpicId);
+  for (const e of epics) {
+    const p = epicProgress(board, e.id);
+    const stage = epicStage(e);
+    const word = stage === "accepting" ? " \xB7 in acceptance" : stage === "reopened" ? " \xB7 reopened" : "";
+    out.push(`- ${epicBox(board, e)} ${e.id} \u2014 ${e.title} (${p.merged}/${p.total})${word}`);
+    out.push(`  - Goal: ${e.goal}`);
+    out.push("  - Acceptance:");
+    for (const a2 of e.acceptance) out.push(`    - ${a2}`);
+  }
+  const loose = board.items.filter((i2) => i2.epic === void 0 && i2.type !== "review");
+  const open4 = loose.filter((i2) => i2.status !== "merged" && i2.status !== "dropped").sort((a2, b) => compareIds2(a2.id, b.id));
+  const merged = loose.filter((i2) => i2.status === "merged").length;
+  if (open4.length > 0 || merged > 0) {
+    if (epics.length > 0) out.push("");
+    out.push("## Not in an epic", "");
+    for (const i2 of open4) out.push(`- ${itemBox(i2)} ${i2.id} \u2014 ${i2.title}`);
+    if (merged > 0) out.push(`- ${merged} merged ${merged === 1 ? "item" : "items"} not shown`);
+  }
+  if (epics.length === 0 && open4.length === 0 && merged === 0) out.push("Nothing planned yet.");
+  return `${out.join("\n")}
+`;
+}
+function projectFile(project, file2) {
+  if (file2 === "" || isAbsolute5(file2) || /^[A-Za-z]:/.test(file2)) {
+    throw new Error(`${JSON.stringify(file2)}: give a path relative to the project`);
+  }
+  if (file2.split(/[\\/]/).includes("..")) {
+    throw new Error(`${JSON.stringify(file2)}: must stay inside the project`);
+  }
+  const root = realpathSync6(project);
+  const wanted = resolve5(root, file2);
+  let dir = dirname9(wanted);
+  while (!existsSync6(dir)) dir = dirname9(dir);
+  const realDir = realpathSync6(dir);
+  const full = join27(realDir, relative2(dir, wanted));
+  const rel = relative2(root, full);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep6}`) || isAbsolute5(rel)) {
+    throw new Error(`${JSON.stringify(file2)}: must stay inside the project`);
+  }
+  let link2 = false;
+  try {
+    link2 = lstatSync23(full).isSymbolicLink();
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+  if (link2) throw new Error(`${JSON.stringify(file2)}: is a link; give the file itself`);
+  return { full, rel: rel.split(sep6).join("/") };
+}
+function writeRoadmap(project, out, text, force) {
+  const { full: file2, rel } = projectFile(project, out);
+  const parts = rel.split("/");
+  if (parts[0] === ".studio" || parts.includes(".git")) {
+    throw new Error(`--out ${out}: the roadmap goes neither below .studio/ nor below .git/`);
+  }
+  if (force && !rel.toLowerCase().endsWith(".md")) {
+    throw new Error(`--force overwrites only a .md file, not ${out}`);
+  }
+  let old;
+  try {
+    old = readFileSync26(file2, "utf8");
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+  if (old !== void 0 && !old.startsWith(ROADMAP_HEADER) && !force) {
+    throw new Error(
+      `${out} was not generated by studio roadmap: import its phases with studio roadmap import ${out}, or overwrite it with --force`
+    );
+  }
+  if (old === text) return { written: out, changed: false };
+  const tmp = join27(dirname9(file2), `.${process.pid}.${Date.now()}.roadmap.tmp`);
+  try {
+    writeFileSync10(tmp, text, { flag: "wx" });
+    renameSync10(tmp, file2);
+  } catch (err) {
+    rmSync6(tmp, { force: true });
+    throw err;
+  }
+  return { written: out, changed: true };
+}
+var IMPORT_MAX_BYTES = 1024 * 1024;
+var IMPORT_MAX_LINE = 2e3;
+var IMPORT_MAX_PHASES = 500;
+function readImportFile(project, file2) {
+  const { full, rel } = projectFile(project, file2);
+  const st = lstatSync23(full);
+  if (!st.isFile()) throw new Error(`${JSON.stringify(file2)}: not a regular file`);
+  if (st.size > IMPORT_MAX_BYTES) throw new Error(`${JSON.stringify(file2)}: larger than 1 MB`);
+  return { source: rel, text: readFileSync26(full, "utf8") };
+}
+var CHECKBOX_START = /^[ \t]{0,40}[-*+][ \t]{1,8}\[[ xX~]\]/;
+var CHECKBOX = /^[ \t]{0,40}[-*+][ \t]{1,8}\[([ xX~])\][ \t]+(.*)$/;
+var PHASE_NUMBER = /^\d{1,6}(?:\.\d{1,3}){0,3}[a-z]?$/i;
+var SEPARATOR = /^[—–:-]{1,3}$/;
+var clean3 = (s) => s.replace(/[\p{Cc}\p{Cf}]/gu, " ");
+var capped = (s, n2) => {
+  const cps = [...s];
+  return cps.length <= n2 ? s : `${cps.slice(0, n2 - 1).join("")}\u2026`;
+};
+function withoutComments(s) {
+  let out = "";
+  let at2 = 0;
+  for (; ; ) {
+    const open4 = s.indexOf("<!--", at2);
+    if (open4 < 0) return out + s.slice(at2);
+    const close = s.indexOf("-->", open4 + 4);
+    out += `${s.slice(at2, open4)} `;
+    if (close < 0) return out;
+    at2 = close + 3;
+  }
+}
+function parsePhases(text) {
+  const phases = [];
+  const skipped = [];
+  const lines = text.split("\n");
+  for (let i2 = 0; i2 < lines.length; i2++) {
+    const raw = lines[i2].replace(/\r$/, "");
+    const line3 = i2 + 1;
+    if (raw.length > IMPORT_MAX_LINE) {
+      if (CHECKBOX_START.test(raw.slice(0, 64))) {
+        skipped.push({ line: line3, reason: `longer than ${IMPORT_MAX_LINE} characters` });
+      }
+      continue;
+    }
+    const m = CHECKBOX.exec(raw);
+    if (!m) continue;
+    const body = withoutComments(
+      clean3(m[2]).replaceAll("**", "").replaceAll("__", "")
+    );
+    const tokens = body.split(" ").filter((t) => t !== "");
+    if (tokens[0]?.toLowerCase() !== "phase" || tokens[1] === void 0) continue;
+    let num = tokens[1];
+    while (num.length > 0 && "\u2014\u2013:-".includes(num.at(-1))) num = num.slice(0, -1);
+    if (!PHASE_NUMBER.test(num)) {
+      if (/^\d/.test(num)) skipped.push({ line: line3, reason: `not a phase number: ${capped(num, 40)}` });
+      continue;
+    }
+    const rest = tokens.slice(2);
+    let claim2;
+    while (rest.length > 0 && rest.at(-1).startsWith("@")) {
+      const tag = rest.pop();
+      if (claim2 === void 0 && tag.toLowerCase().startsWith("@claim:")) {
+        const who = tag.slice(7).replace(/[^\w.-]/g, "");
+        if (who !== "") claim2 = capped(who, 64);
+      }
+    }
+    while (rest.length > 0 && SEPARATOR.test(rest[0])) rest.shift();
+    while (rest.length > 0 && SEPARATOR.test(rest.at(-1))) rest.pop();
+    let title = rest;
+    let after2 = [];
+    for (let j = 0; j < rest.length; j++) {
+      const t = rest[j];
+      if (j > 0 && SEPARATOR.test(t) && t !== ":") {
+        title = rest.slice(0, j);
+        after2 = rest.slice(j + 1);
+        break;
+      }
+      if (t.endsWith(":") && t.length > 1) {
+        title = [...rest.slice(0, j), t.slice(0, -1)];
+        after2 = rest.slice(j + 1);
+        break;
+      }
+    }
+    const name = title.length === 0 ? `Phase ${num}` : title.join(" ");
+    const goal = after2.join(" ");
+    phases.push({
+      line: line3,
+      phase: num,
+      box: m[1].toLowerCase(),
+      title: capped(name, 300),
+      goal: capped(goal === "" ? name : goal, 2e3),
+      ...claim2 === void 0 ? {} : { claim: claim2 }
+    });
+    if (phases.length > IMPORT_MAX_PHASES) {
+      throw new Error(`more than ${IMPORT_MAX_PHASES} phases: split the file, nothing imported`);
+    }
+  }
+  return { phases, skipped };
+}
+var snake4 = (key) => key.replace(/[A-Z]/g, (c3) => `_${c3.toLowerCase()}`);
+function planImport(board, source, phases) {
+  const seen = new Set((board.epics ?? []).flatMap((e) => e.importedFrom ?? []));
+  const inFile = /* @__PURE__ */ new Set();
+  const create = [];
+  const skipped = [];
+  let next = Number(nextEpicId(board).slice(2));
+  for (const p of phases) {
+    const from = `${source}#Phase ${p.phase}`;
+    const skip = (reason) => skipped.push({ phase: p.phase, line: p.line, reason });
+    if (inFile.has(p.phase)) {
+      skip("the phase number comes twice in the file");
+      continue;
+    }
+    inFile.add(p.phase);
+    if (seen.has(from)) {
+      skip("imported already");
+      continue;
+    }
+    const parsed = epicSchema.safeParse({
+      id: `E-${next}`,
+      title: p.title,
+      status: p.box === "x" ? "done" : "open",
+      goal: p.goal,
+      acceptance: [IMPORT_ACCEPTANCE],
+      importedFrom: from,
+      ...p.box === "~" ? {
+        notes: [
+          p.claim === void 0 ? IN_PROGRESS_NOTE : `${IN_PROGRESS_NOTE} (claim: ${p.claim})`
+        ]
+      } : {},
+      history: []
+    });
+    if (!parsed.success) {
+      const issue2 = parsed.error.issues[0];
+      const where = issue2?.path.map((k) => snake4(String(k))).join(".") ?? "";
+      skip(`invalid: ${where}: ${issue2?.message ?? "unknown"}`);
+      continue;
+    }
+    next++;
+    create.push(parsed.data);
+  }
+  return { file: source, create, skipped };
+}
+
 // src/acceptance.ts
 var STATE_NOTE = "acceptance-state: ";
 var MAIN_NOTE = "acceptance-main: ";
@@ -37064,7 +37483,7 @@ var cut = (s, max) => {
   return chars.length <= max ? s : `${chars.slice(0, max - 1).join("")}\u2026`;
 };
 function withAcceptanceItem(board, epic, config2) {
-  if (epic.status !== "accepting") return { board };
+  if (epic.status !== "accepting" || placeholderAcceptance(epic)) return { board };
   const state = epicState(board, epic.id);
   const earlier = acceptancesOf(board, epic.id);
   if (earlier.some(open3)) return { board };
@@ -37108,6 +37527,7 @@ function withAcceptanceItem(board, epic, config2) {
   }
   return { board: { ...board, items: [...board.items, parsed.data] }, id };
 }
+var placeholderAcceptance = (epic) => epic.acceptance.some((a2) => a2 === IMPORT_ACCEPTANCE);
 function settleAcceptances(board, config2, now) {
   let next = board;
   const out = { added: [], dropped: [] };
@@ -37152,7 +37572,7 @@ var jobsSchema = external_exports.object({
 });
 var NO_RESULT = /* @__PURE__ */ new Set(["cancelled", "skipped", "stale"]);
 var SAFE_PATH = /^[A-Za-z0-9._/-]{1,200}$/;
-var clean3 = (s) => s.replace(/[\p{Cc}\p{Cf}]/gu, " ").slice(0, 200);
+var clean4 = (s) => s.replace(/[\p{Cc}\p{Cf}]/gu, " ").slice(0, 200);
 function worst(states) {
   for (const s of ["fail", "pending", "pass"]) if (states.includes(s)) return s;
   return "missing";
@@ -37265,19 +37685,19 @@ var runsSchema = external_exports.record(
   })
 );
 function readRuns(stateRoot) {
-  const file2 = join27(stateRoot, RUNS_FILE);
+  const file2 = join28(stateRoot, RUNS_FILE);
   try {
     assertStatePath(stateRoot, file2);
-    const st = lstatSync23(file2, { throwIfNoEntry: false });
+    const st = lstatSync24(file2, { throwIfNoEntry: false });
     if (st === void 0) return {};
     if (!st.isFile()) return void 0;
-    const parsed = runsSchema.safeParse(JSON.parse(readFileSync26(file2, "utf8")));
+    const parsed = runsSchema.safeParse(JSON.parse(readFileSync27(file2, "utf8")));
     return parsed.success ? parsed.data : void 0;
   } catch {
     return void 0;
   }
 }
-var writeRuns = (stateRoot, runs) => writeStateFile(stateRoot, join27(stateRoot, RUNS_FILE), `${JSON.stringify(runs, null, 2)}
+var writeRuns = (stateRoot, runs) => writeStateFile(stateRoot, join28(stateRoot, RUNS_FILE), `${JSON.stringify(runs, null, 2)}
 `);
 async function prepareAcceptances(o2) {
   const out = {
@@ -37293,6 +37713,14 @@ async function prepareAcceptances(o2) {
     (i2) => acceptanceOf(i2) !== void 0 && (i2.status === "ready" || i2.status === "blocked")
   );
   if (!busy) return out;
+  for (const e of before.epics ?? []) {
+    if (e.status === "accepting" && placeholderAcceptance(e)) {
+      out.lead.push({
+        item: e.id,
+        reason: `${e.id}: define acceptance first: studio epic edit ${e.id} --acceptance "<line>"... (it still has the import's placeholder, so no acceptance runs)`
+      });
+    }
+  }
   const moves = await o2.locked(() => {
     const board2 = loadBoard(o2.project);
     const r = settleAcceptances(board2, o2.config, o2.now());
@@ -37351,8 +37779,24 @@ async function prepareAcceptances(o2) {
     const pending = suites.filter((s) => s.state === "pending");
     const missing = suites.filter((s) => s.state === "missing");
     const age = o2.now().getTime() - Date.parse(rec.since);
-    const tooSoon = o2.config.acceptance === void 0 && suites.length === 0 && age < SUITE_GRACE_MS;
-    if (pending.length === 0 && missing.length === 0 && !tooSoon) {
+    if (o2.config.acceptance === void 0 && suites.length === 0) {
+      if (head !== void 0 && head !== rec.sha) {
+        runs[item.id] = { sha: head, since: o2.now().toISOString(), started: {} };
+        out.waiting.push({
+          item: item.id,
+          reason: `no CI run on ${short}: waiting on ${branch} at ${head.slice(0, 7)}`
+        });
+      } else if (age < SUITE_GRACE_MS) {
+        out.waiting.push({ item: item.id, reason: `no CI run on ${branch} at ${short} yet` });
+      } else {
+        out.lead.push({
+          item: item.id,
+          reason: `acceptance of ${epic}: no CI run on ${branch} at ${short}; set acceptance.suites in studio.yaml (acceptance: { suites: [] } for a repository without CI), or rerun CI on ${branch}`
+        });
+      }
+      continue;
+    }
+    if (pending.length === 0 && missing.length === 0) {
       const sha = rec.sha;
       const pinned = await o2.locked(() => {
         const fresh = loadBoard(o2.project);
@@ -37387,10 +37831,6 @@ async function prepareAcceptances(o2) {
         item: item.id,
         reason: `acceptance waits for ${pending.map((s) => s.name).join(", ")} on ${branch} at ${short}`
       });
-      continue;
-    }
-    if (tooSoon) {
-      out.waiting.push({ item: item.id, reason: `no CI run on ${branch} at ${short} yet` });
       continue;
     }
     if (head !== void 0 && head !== rec.sha) {
@@ -37449,7 +37889,7 @@ async function prepareAcceptances(o2) {
         { timeoutMs: GH_MS }
       );
       if (r.code !== 0) {
-        const why = clean3(r.stderr.trim().split("\n")[0] ?? "") || `gh exit ${r.code}`;
+        const why = clean4(r.stderr.trim().split("\n")[0] ?? "") || `gh exit ${r.code}`;
         rec.started[workflow] = { at: at2, refused: why };
         out.lead.push({
           item: item.id,
@@ -37613,6 +38053,7 @@ function checkAcceptanceReport(caps, report) {
     );
   }
   const findings = report.findings ?? [];
+  if (report.verdict === void 0) throw new Error("a done acceptance needs a verdict");
   if (report.verdict === "changes_requested" && findings.length === 0) {
     throw new Error("changes requested without findings: each finding becomes an item, name them");
   }
@@ -37636,7 +38077,7 @@ function checkAcceptanceReport(caps, report) {
     epic: caps.acceptsEpic,
     state: caps.epicState,
     sha: caps.headRefOid,
-    verdict: report.verdict ?? "changes_requested",
+    verdict: report.verdict,
     findings,
     failedSuites: (caps.suites ?? []).filter((s) => s.state === "fail").map((s) => s.name)
   };
@@ -37728,7 +38169,15 @@ function applyAcceptance(board, acceptance, done, now, config2) {
   const epic = (next.epics ?? []).find((e) => e.id === done.epic);
   if (added.length > 0) {
     next = settleEpics(next, BY2, now).board;
-    return { board: next, outcome: { epic: done.epic, result: "reopened", findings: added } };
+    return {
+      board: next,
+      outcome: {
+        epic: done.epic,
+        result: "reopened",
+        findings: added,
+        ...held2 ? { held: true } : {}
+      }
+    };
   }
   const current = epic !== void 0 && epic.status === "accepting" && epicState(next, done.epic) === done.state;
   if (done.verdict !== "approve" || done.failedSuites.length > 0 || !current || epic === void 0) {
@@ -37992,169 +38441,9 @@ function approvedJobsProblem(jobs, checks) {
   return void 0;
 }
 
-// src/epics.ts
-var ONE_LINE2 = /^[^\p{Cc}\p{Cf}]{1,300}$/u;
-var GOAL = /^[^\p{Cc}\p{Cf}]{1,2000}$/u;
-function nextEpicId(board) {
-  const numbers = (board.epics ?? []).map((e) => Number(e.id.slice(2)));
-  return `E-${Math.max(0, ...numbers) + 1}`;
-}
-var byEpicId = (a2, b) => Number(a2.id.slice(2)) - Number(b.id.slice(2));
-function findEpic(board, id) {
-  if (id === void 0 || id === "") throw new Error("missing epic id");
-  const epic = (board.epics ?? []).find((e) => e.id === id);
-  if (epic === void 0) throw new Error(`unknown epic ${id}`);
-  return epic;
-}
-async function addEpic(o2) {
-  const title = o2.title?.trim();
-  if (title === void 0 || title === "") {
-    throw new Error('epic add needs a title: studio epic add "<title>" --goal "<text>"');
-  }
-  if (!ONE_LINE2.test(title))
-    throw new Error("the title must be one line of at most 300 characters");
-  const goal = o2.goal?.trim();
-  if (goal === void 0 || goal === "") {
-    throw new Error('epic add needs --goal "<text>": what the epic is for');
-  }
-  if (!GOAL.test(goal)) throw new Error("--goal must be one line of at most 2000 characters");
-  const acceptance = o2.acceptance.map((a2) => a2.trim());
-  if (acceptance.length === 0) {
-    throw new Error('epic add needs at least one --acceptance "<line>": how it is accepted');
-  }
-  if (acceptance.some((a2) => !ONE_LINE2.test(a2))) {
-    throw new Error("each --acceptance must be one line of at most 300 characters");
-  }
-  return await o2.locked(() => {
-    const config2 = loadConfig(o2.project);
-    const board = loadBoard(o2.project, config2);
-    const known = (config2.components ?? []).map((c3) => c3.id);
-    for (const c3 of o2.components) {
-      if (!known.includes(c3)) {
-        throw new Error(
-          `unknown component ${c3}${known.length > 0 ? ` (known: ${known.join(", ")})` : ": studio.yaml has no components"}`
-        );
-      }
-    }
-    const id = nextEpicId(board);
-    const parsed = epicSchema.safeParse({
-      id,
-      title,
-      status: "open",
-      goal,
-      acceptance,
-      ...o2.components.length === 0 ? {} : { components: [...new Set(o2.components)] },
-      history: []
-    });
-    if (!parsed.success) {
-      throw new Error(
-        `the epic would be invalid: ${parsed.error.issues.map((i2) => i2.message).join("; ")}`
-      );
-    }
-    saveBoard(o2.project, { ...board, epics: [...board.epics ?? [], parsed.data] });
-    return { epic: id, title, status: "open" };
-  });
-}
-function currentAcceptance(board, epicId) {
-  const all = board.items.filter((i2) => acceptanceOf(i2) === epicId);
-  return all.find((i2) => i2.status !== "merged" && i2.status !== "dropped") ?? all.at(-1);
-}
-function epicRows(board) {
-  return [...board.epics ?? []].sort(byEpicId).map((e) => {
-    const p = epicProgress(board, e.id);
-    const a2 = currentAcceptance(board, e.id);
-    return {
-      id: e.id,
-      title: e.title,
-      status: e.status,
-      stage: epicStage(e),
-      progress: { merged: p.merged, total: p.total },
-      counts: p.counts,
-      ...a2 === void 0 ? {} : { acceptance: { item: a2.id, status: a2.status } }
-    };
-  });
-}
-function editEpic(board, id, edit) {
-  const epic = findEpic(board, id);
-  if (epic.status === "dropped") throw new Error(`${id} is dropped`);
-  const changed = [];
-  const next = structuredClone(epic);
-  if (edit.title !== void 0) {
-    const title = edit.title.trim();
-    if (!ONE_LINE2.test(title)) {
-      throw new Error("--title must be one line of at most 300 characters");
-    }
-    next.title = title;
-    changed.push("title");
-  }
-  if (edit.goal !== void 0) {
-    const goal = edit.goal.trim();
-    if (!GOAL.test(goal)) throw new Error("--goal must be one line of at most 2000 characters");
-    next.goal = goal;
-    changed.push("goal");
-  }
-  if (edit.acceptance !== void 0) {
-    const lines = edit.acceptance.map((a2) => a2.trim());
-    if (lines.length === 0 || lines.some((a2) => !ONE_LINE2.test(a2))) {
-      throw new Error("each --acceptance must be one line of at most 300 characters");
-    }
-    next.acceptance = lines;
-    changed.push("acceptance");
-  }
-  if (changed.length === 0) {
-    throw new Error("epic edit needs --title, --goal or --acceptance");
-  }
-  const parsed = epicSchema.safeParse(next);
-  if (!parsed.success) {
-    throw new Error(
-      `the epic would be invalid: ${parsed.error.issues.map((i2) => i2.message).join("; ")}`
-    );
-  }
-  return {
-    board: {
-      ...board,
-      epics: (board.epics ?? []).map((e) => e.id === id ? parsed.data : e)
-    },
-    changed
-  };
-}
-function dropEpic(board, id, by, now) {
-  const epic = findEpic(board, id);
-  if (epic.status === "dropped" || epic.status === "done") {
-    throw new Error(`${id} is ${epic.status} already`);
-  }
-  const open4 = board.items.filter(
-    (i2) => i2.epic === id && i2.status !== "merged" && i2.status !== "dropped" && acceptanceOf(i2) === void 0
-  );
-  if (open4.length > 0) {
-    throw new Error(
-      `${id} still has open items (${open4.map((i2) => i2.id).join(", ")}): drop or finish them first`
-    );
-  }
-  const entry = { at: now.toISOString(), from: epic.status, to: "dropped", by };
-  for (const a2 of board.items) {
-    if (acceptanceOf(a2) !== id || a2.status === "merged" || a2.status === "dropped") continue;
-    if (a2.status === "assigned" || a2.status === "in_progress") {
-      throw new Error(`${a2.id}, the acceptance of ${id}, is running: stop it first`);
-    }
-    board = transition(board, a2.id, "dropped", by, now);
-  }
-  return {
-    ...board,
-    epics: (board.epics ?? []).map(
-      (e) => e.id === id ? { ...structuredClone(e), status: "dropped", history: [...e.history, entry] } : e
-    )
-  };
-}
-function settleAndSave(project, board, by, now) {
-  const settled = settleEpics(board, by, now);
-  if (settled.moved.length > 0) saveBoard(project, settled.board);
-  return settled.moved;
-}
-
 // src/flaky.ts
-import { readFileSync as readFileSync27 } from "node:fs";
-import { join as join28 } from "node:path";
+import { readFileSync as readFileSync28 } from "node:fs";
+import { join as join29 } from "node:path";
 var MAX_FLAKY = 500;
 var MAX_NAME = 200;
 var entrySchema = external_exports.object({
@@ -38163,13 +38452,13 @@ var entrySchema = external_exports.object({
   lastSha: external_exports.string(),
   lastAt: external_exports.string()
 });
-var fileOf = (stateRoot) => join28(stateRoot, "flaky.json");
+var fileOf = (stateRoot) => join29(stateRoot, "flaky.json");
 function read2(stateRoot) {
   const file2 = fileOf(stateRoot);
   assertStatePath(stateRoot, file2);
   let text;
   try {
-    text = readFileSync27(file2, "utf8");
+    text = readFileSync28(file2, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw new Error("flaky.json cannot be read");
@@ -38202,8 +38491,8 @@ function recordFlaky(stateRoot, test, sha, rerun, now) {
 }
 
 // src/flaky-ci.ts
-import { readFileSync as readFileSync28 } from "node:fs";
-import { join as join29 } from "node:path";
+import { readFileSync as readFileSync29 } from "node:fs";
+import { join as join30 } from "node:path";
 var RERUNS_FILE = "ci-reruns.json";
 var RERUNS_LOCK = "ci-reruns.lock";
 var RERUNS_LOCK_STALE_MS = 6e4;
@@ -38228,11 +38517,11 @@ var entrySchema2 = external_exports.strictObject({
   outcome: external_exports.enum(["pass", "fail"]).optional()
 });
 function readLedger2(stateRoot) {
-  const file2 = join29(stateRoot, RERUNS_FILE);
+  const file2 = join30(stateRoot, RERUNS_FILE);
   assertStatePath(stateRoot, file2);
   let text;
   try {
-    text = readFileSync28(file2, "utf8");
+    text = readFileSync29(file2, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw new Error(`${RERUNS_FILE} cannot be read`);
@@ -38249,7 +38538,7 @@ function readLedger2(stateRoot) {
 }
 function writeLedger(stateRoot, entries2, now) {
   const kept = entries2.filter((e) => now.getTime() - Date.parse(e.at) < KEEP_MS2).slice(-MAX_ENTRIES3);
-  writeStateFile(stateRoot, join29(stateRoot, RERUNS_FILE), `${JSON.stringify(kept, null, 2)}
+  writeStateFile(stateRoot, join30(stateRoot, RERUNS_FILE), `${JSON.stringify(kept, null, 2)}
 `);
 }
 function withLedger(stateRoot, now, fn) {
@@ -38568,9 +38857,9 @@ async function readMainBuild(config2, ports) {
 }
 
 // src/notify.ts
-import { lstatSync as lstatSync24, readFileSync as readFileSync29 } from "node:fs";
+import { lstatSync as lstatSync25, readFileSync as readFileSync30 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
-import { join as join30 } from "node:path";
+import { join as join31 } from "node:path";
 var MAX_SENDS_PER_RUN = 20;
 var MAX_TEXT2 = 500;
 var NOTIFY_LOCK = "notify.lock";
@@ -38597,12 +38886,12 @@ function messagesOf(projectKey, snapshot) {
 }
 function readNotified(file2) {
   try {
-    if (!lstatSync24(file2).isFile()) return { ok: false };
+    if (!lstatSync25(file2).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, keys: [] } : { ok: false };
   }
   try {
-    const raw = JSON.parse(readFileSync29(file2, "utf8"));
+    const raw = JSON.parse(readFileSync30(file2, "utf8"));
     if (!Array.isArray(raw) || !raw.every((k) => typeof k === "string")) return { ok: false };
     return { ok: true, keys: raw };
   } catch {
@@ -38628,7 +38917,7 @@ async function sendNotifications(o2) {
   }
 }
 async function sendLocked(o2, notify, lock) {
-  const file2 = join30(o2.ownerRoot, "notified.json");
+  const file2 = join31(o2.ownerRoot, "notified.json");
   const read3 = readNotified(file2);
   if (!read3.ok) return ["notify: notified.json is unreadable; nothing sent"];
   try {
@@ -38693,21 +38982,21 @@ async function sendLocked(o2, notify, lock) {
 }
 
 // src/overview.ts
-import { lstatSync as lstatSync26, readFileSync as readFileSync31 } from "node:fs";
-import { basename as basename5, isAbsolute as isAbsolute5, join as join32 } from "node:path";
+import { lstatSync as lstatSync27, readFileSync as readFileSync32 } from "node:fs";
+import { basename as basename5, isAbsolute as isAbsolute6, join as join33 } from "node:path";
 
 // src/queue.ts
 import {
   closeSync as closeSync6,
   constants as constants4,
-  existsSync as existsSync6,
-  lstatSync as lstatSync25,
+  existsSync as existsSync7,
+  lstatSync as lstatSync26,
   openSync as openSync6,
-  readFileSync as readFileSync30,
+  readFileSync as readFileSync31,
   writeSync as writeSync2
 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { dirname as dirname9, join as join31 } from "node:path";
+import { dirname as dirname10, join as join32 } from "node:path";
 var QueueHeld = class extends Error {
   constructor(line3) {
     super(line3);
@@ -38740,16 +39029,16 @@ var stateSchema = external_exports.strictObject({
     })
   )
 });
-var queueFile = (stateRoot) => join31(stateRoot, "queue.json");
+var queueFile = (stateRoot) => join32(stateRoot, "queue.json");
 function loadQueue(stateRoot) {
   const file2 = queueFile(stateRoot);
   assertStatePath(stateRoot, file2);
-  if (!existsSync6(file2)) return { pending: [], done: [] };
-  if (lstatSync25(file2).isSymbolicLink())
+  if (!existsSync7(file2)) return { pending: [], done: [] };
+  if (lstatSync26(file2).isSymbolicLink())
     throw new Error(`refusing to read ${file2}: it is a symlink`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync30(file2, "utf8"));
+    raw = JSON.parse(readFileSync31(file2, "utf8"));
   } catch {
     throw new Error(`queue file ${file2} is not valid JSON`);
   }
@@ -38836,17 +39125,17 @@ function installSignalRelease(lock) {
   };
 }
 function appendStateLine(stateRoot, name, line3) {
-  const file2 = join31(stateRoot, name);
+  const file2 = join32(stateRoot, name);
   assertStatePath(stateRoot, file2);
   let torn = false;
-  if (existsSync6(file2)) {
-    if (lstatSync25(file2).isSymbolicLink()) {
+  if (existsSync7(file2)) {
+    if (lstatSync26(file2).isSymbolicLink()) {
       throw new Error(`refusing to use ${file2}: it is a symlink`);
     }
-    const prev = readFileSync30(file2, "utf8");
+    const prev = readFileSync31(file2, "utf8");
     torn = prev !== "" && !prev.endsWith("\n");
   } else {
-    ensureStateDir(stateRoot, dirname9(file2));
+    ensureStateDir(stateRoot, dirname10(file2));
   }
   const fd = openSync6(
     file2,
@@ -39286,21 +39575,21 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
 var line2 = (e) => (e instanceof Error ? e.message : String(e)).replace(/[\p{Cc}\p{Cf}]/gu, " ");
 var INCONSISTENT_ROOT = "inconsistent state root: its marker names a project whose state root is another one";
 function markerProject(root) {
-  const file2 = join32(root, "marker.json");
+  const file2 = join33(root, "marker.json");
   try {
-    if (!lstatSync26(file2).isFile()) throw new Error(`${file2} is not a plain file`);
+    if (!lstatSync27(file2).isFile()) throw new Error(`${file2} is not a plain file`);
   } catch (e) {
     if (e.code === "ENOENT") return void 0;
     throw e;
   }
   let raw;
   try {
-    raw = JSON.parse(readFileSync31(file2, "utf8"));
+    raw = JSON.parse(readFileSync32(file2, "utf8"));
   } catch {
     throw new Error(`state root marker ${file2} is unreadable`);
   }
   const p = raw?.projectRealpath;
-  if (typeof p !== "string" || !isAbsolute5(p)) {
+  if (typeof p !== "string" || !isAbsolute6(p)) {
     throw new Error(`state root marker ${file2} names no project`);
   }
   return p;
@@ -39309,7 +39598,7 @@ function itemCounts(project) {
   const file2 = boardPath(project);
   let plain2 = true;
   try {
-    plain2 = lstatSync26(file2).isFile();
+    plain2 = lstatSync27(file2).isFile();
   } catch {
   }
   if (!plain2) throw new Error(`${file2}: board.yaml is not a plain file`);
@@ -39387,8 +39676,8 @@ function formatOverview(list2) {
 }
 
 // src/recover.ts
-import { existsSync as existsSync7, lstatSync as lstatSync27, readdirSync as readdirSync11 } from "node:fs";
-import { join as join33 } from "node:path";
+import { existsSync as existsSync8, lstatSync as lstatSync28, readdirSync as readdirSync11 } from "node:fs";
+import { join as join34 } from "node:path";
 var TICK_LOCK = "tick.lock";
 var TICK_LOCK_STALE_MS = 15 * 6e4;
 var LOCKS = [
@@ -39419,7 +39708,7 @@ var LOG_QUIET_MS = 30 * 6e4;
 function logWrittenAgo(stateRoot, item, now) {
   if (!isItemId(item)) return void 0;
   try {
-    const st = lstatSync27(join33(stateRoot, "logs", `${item}.jsonl`));
+    const st = lstatSync28(join34(stateRoot, "logs", `${item}.jsonl`));
     return st.isFile() ? Math.max(0, now.getTime() - st.mtimeMs) : void 0;
   } catch {
     return void 0;
@@ -39428,7 +39717,7 @@ function logWrittenAgo(stateRoot, item, now) {
 function hasReport2(stateRoot, item) {
   if (!isItemId(item)) return false;
   const name = reportName(stateRoot, item);
-  return name !== void 0 && existsSync7(join33(stateRoot, "clones", item, ".studio", "reports", name));
+  return name !== void 0 && existsSync8(join34(stateRoot, "clones", item, ".studio", "reports", name));
 }
 async function recoverProject(o2) {
   const out = { dryRun: o2.dryRun, findings: [], needsLead: [] };
@@ -39440,7 +39729,7 @@ async function recoverProject(o2) {
   if (o2.scope === "all") {
     for (const l of LOCKS) {
       const root = l.where === "project" ? o2.stateRoot : o2.ownerRoot;
-      if (!existsSync7(root)) continue;
+      if (!existsSync8(root)) continue;
       const opts = { now: o2.now, heartbeatStaleMs: l.staleMs };
       const seen = inspectStateLock(root, l.name, opts);
       if (seen.state === "free") continue;
@@ -39472,12 +39761,12 @@ async function recoverProject(o2) {
         continue;
       }
       for (const name of names) {
-        const file2 = join33(root, name);
+        const file2 = join34(root, name);
         const tmp = TMP.exec(name);
         let gone = false;
         if (ASIDE.test(name)) {
           try {
-            const st = lstatSync27(file2);
+            const st = lstatSync28(file2);
             gone = st.isFile() && o2.now.getTime() - st.ctimeMs >= ASIDE_GRACE_MS;
           } catch {
             gone = false;
@@ -39499,10 +39788,10 @@ async function recoverProject(o2) {
       }
     }
   }
-  if (!existsSync7(o2.stateRoot)) return out;
+  if (!existsSync8(o2.stateRoot)) return out;
   const records = readCrewRecords(o2.stateRoot);
   const board = loadBoard(o2.project);
-  const launching = existsSync7(o2.ownerRoot) && inspectStateLock(o2.ownerRoot, LAUNCH_LOCK, {
+  const launching = existsSync8(o2.ownerRoot) && inspectStateLock(o2.ownerRoot, LAUNCH_LOCK, {
     now: o2.now,
     heartbeatStaleMs: LAUNCH_LOCK_STALE_MS
   }).state === "held";
@@ -39662,262 +39951,6 @@ async function recoverProject(o2) {
     }
   }
   return out;
-}
-
-// src/roadmap.ts
-import {
-  existsSync as existsSync8,
-  lstatSync as lstatSync28,
-  readFileSync as readFileSync32,
-  realpathSync as realpathSync6,
-  renameSync as renameSync10,
-  rmSync as rmSync6,
-  writeFileSync as writeFileSync10
-} from "node:fs";
-import { dirname as dirname10, isAbsolute as isAbsolute6, join as join34, relative as relative2, resolve as resolve5, sep as sep6 } from "node:path";
-var ROADMAP_HEADER = "<!-- generated by studio roadmap; edit the board, not this file -->";
-var IN_PROGRESS_NOTE = "in progress at import";
-var ACTIVE3 = ["assigned", "in_progress", "in_review", "queued"];
-function compareIds2(a2, b) {
-  const pa = /^(.*?)(\d+)$/.exec(a2);
-  const pb = /^(.*?)(\d+)$/.exec(b);
-  if (pa && pb && pa[1] === pb[1]) return Number(pa[2]) - Number(pb[2]);
-  return a2 < b ? -1 : a2 > b ? 1 : 0;
-}
-function epicBox(board, epic) {
-  if (epic.status === "done") return "[x]";
-  if (epic.status === "accepting") return "[~]";
-  const items = board.items.filter((i2) => i2.epic === epic.id);
-  if (items.length === 0 && (epic.notes ?? []).some((n2) => n2.startsWith(IN_PROGRESS_NOTE))) {
-    return "[~]";
-  }
-  return items.some((i2) => ACTIVE3.includes(i2.status)) ? "[~]" : "[ ]";
-}
-var itemBox = (i2) => i2.status === "merged" ? "[x]" : ACTIVE3.includes(i2.status) ? "[~]" : "[ ]";
-function renderRoadmap(board) {
-  const out = [ROADMAP_HEADER, "", "# Roadmap", ""];
-  const epics = [...board.epics ?? []].filter((e) => e.status !== "dropped").sort(byEpicId);
-  for (const e of epics) {
-    const p = epicProgress(board, e.id);
-    const stage = epicStage(e);
-    const word = stage === "accepting" ? " \xB7 in acceptance" : stage === "reopened" ? " \xB7 reopened" : "";
-    out.push(`- ${epicBox(board, e)} ${e.id} \u2014 ${e.title} (${p.merged}/${p.total})${word}`);
-    out.push(`  - Goal: ${e.goal}`);
-    out.push("  - Acceptance:");
-    for (const a2 of e.acceptance) out.push(`    - ${a2}`);
-  }
-  const loose = board.items.filter((i2) => i2.epic === void 0 && i2.type !== "review");
-  const open4 = loose.filter((i2) => i2.status !== "merged" && i2.status !== "dropped").sort((a2, b) => compareIds2(a2.id, b.id));
-  const merged = loose.filter((i2) => i2.status === "merged").length;
-  if (open4.length > 0 || merged > 0) {
-    if (epics.length > 0) out.push("");
-    out.push("## Not in an epic", "");
-    for (const i2 of open4) out.push(`- ${itemBox(i2)} ${i2.id} \u2014 ${i2.title}`);
-    if (merged > 0) out.push(`- ${merged} merged ${merged === 1 ? "item" : "items"} not shown`);
-  }
-  if (epics.length === 0 && open4.length === 0 && merged === 0) out.push("Nothing planned yet.");
-  return `${out.join("\n")}
-`;
-}
-function projectFile(project, file2) {
-  if (file2 === "" || isAbsolute6(file2) || /^[A-Za-z]:/.test(file2)) {
-    throw new Error(`${JSON.stringify(file2)}: give a path relative to the project`);
-  }
-  if (file2.split(/[\\/]/).includes("..")) {
-    throw new Error(`${JSON.stringify(file2)}: must stay inside the project`);
-  }
-  const root = realpathSync6(project);
-  const wanted = resolve5(root, file2);
-  let dir = dirname10(wanted);
-  while (!existsSync8(dir)) dir = dirname10(dir);
-  const realDir = realpathSync6(dir);
-  const full = join34(realDir, relative2(dir, wanted));
-  const rel = relative2(root, full);
-  if (rel === "" || rel === ".." || rel.startsWith(`..${sep6}`) || isAbsolute6(rel)) {
-    throw new Error(`${JSON.stringify(file2)}: must stay inside the project`);
-  }
-  let link2 = false;
-  try {
-    link2 = lstatSync28(full).isSymbolicLink();
-  } catch (e) {
-    if (e.code !== "ENOENT") throw e;
-  }
-  if (link2) throw new Error(`${JSON.stringify(file2)}: is a link; give the file itself`);
-  return { full, rel: rel.split(sep6).join("/") };
-}
-function writeRoadmap(project, out, text, force) {
-  const { full: file2, rel } = projectFile(project, out);
-  const parts = rel.split("/");
-  if (parts[0] === ".studio" || parts.includes(".git")) {
-    throw new Error(`--out ${out}: the roadmap goes neither below .studio/ nor below .git/`);
-  }
-  if (force && !rel.toLowerCase().endsWith(".md")) {
-    throw new Error(`--force overwrites only a .md file, not ${out}`);
-  }
-  let old;
-  try {
-    old = readFileSync32(file2, "utf8");
-  } catch (e) {
-    if (e.code !== "ENOENT") throw e;
-  }
-  if (old !== void 0 && !old.startsWith(ROADMAP_HEADER) && !force) {
-    throw new Error(
-      `${out} was not generated by studio roadmap: import its phases with studio roadmap import ${out}, or overwrite it with --force`
-    );
-  }
-  if (old === text) return { written: out, changed: false };
-  const tmp = join34(dirname10(file2), `.${process.pid}.${Date.now()}.roadmap.tmp`);
-  try {
-    writeFileSync10(tmp, text, { flag: "wx" });
-    renameSync10(tmp, file2);
-  } catch (err) {
-    rmSync6(tmp, { force: true });
-    throw err;
-  }
-  return { written: out, changed: true };
-}
-var IMPORT_MAX_BYTES = 1024 * 1024;
-var IMPORT_MAX_LINE = 2e3;
-var IMPORT_MAX_PHASES = 500;
-function readImportFile(project, file2) {
-  const { full, rel } = projectFile(project, file2);
-  const st = lstatSync28(full);
-  if (!st.isFile()) throw new Error(`${JSON.stringify(file2)}: not a regular file`);
-  if (st.size > IMPORT_MAX_BYTES) throw new Error(`${JSON.stringify(file2)}: larger than 1 MB`);
-  return { source: rel, text: readFileSync32(full, "utf8") };
-}
-var CHECKBOX_START = /^[ \t]{0,40}[-*+][ \t]{1,8}\[[ xX~]\]/;
-var CHECKBOX = /^[ \t]{0,40}[-*+][ \t]{1,8}\[([ xX~])\][ \t]+(.*)$/;
-var PHASE_NUMBER = /^\d{1,6}(?:\.\d{1,3}){0,3}[a-z]?$/i;
-var SEPARATOR = /^[—–:-]{1,3}$/;
-var clean4 = (s) => s.replace(/[\p{Cc}\p{Cf}]/gu, " ");
-var capped = (s, n2) => {
-  const cps = [...s];
-  return cps.length <= n2 ? s : `${cps.slice(0, n2 - 1).join("")}\u2026`;
-};
-function withoutComments(s) {
-  let out = "";
-  let at2 = 0;
-  for (; ; ) {
-    const open4 = s.indexOf("<!--", at2);
-    if (open4 < 0) return out + s.slice(at2);
-    const close = s.indexOf("-->", open4 + 4);
-    out += `${s.slice(at2, open4)} `;
-    if (close < 0) return out;
-    at2 = close + 3;
-  }
-}
-function parsePhases(text) {
-  const phases = [];
-  const skipped = [];
-  const lines = text.split("\n");
-  for (let i2 = 0; i2 < lines.length; i2++) {
-    const raw = lines[i2].replace(/\r$/, "");
-    const line3 = i2 + 1;
-    if (raw.length > IMPORT_MAX_LINE) {
-      if (CHECKBOX_START.test(raw.slice(0, 64))) {
-        skipped.push({ line: line3, reason: `longer than ${IMPORT_MAX_LINE} characters` });
-      }
-      continue;
-    }
-    const m = CHECKBOX.exec(raw);
-    if (!m) continue;
-    const body = withoutComments(
-      clean4(m[2]).replaceAll("**", "").replaceAll("__", "")
-    );
-    const tokens = body.split(" ").filter((t) => t !== "");
-    if (tokens[0]?.toLowerCase() !== "phase" || tokens[1] === void 0) continue;
-    let num = tokens[1];
-    while (num.length > 0 && "\u2014\u2013:-".includes(num.at(-1))) num = num.slice(0, -1);
-    if (!PHASE_NUMBER.test(num)) {
-      if (/^\d/.test(num)) skipped.push({ line: line3, reason: `not a phase number: ${capped(num, 40)}` });
-      continue;
-    }
-    const rest = tokens.slice(2);
-    let claim2;
-    while (rest.length > 0 && rest.at(-1).startsWith("@")) {
-      const tag = rest.pop();
-      if (claim2 === void 0 && tag.toLowerCase().startsWith("@claim:")) {
-        const who = tag.slice(7).replace(/[^\w.-]/g, "");
-        if (who !== "") claim2 = capped(who, 64);
-      }
-    }
-    while (rest.length > 0 && SEPARATOR.test(rest[0])) rest.shift();
-    while (rest.length > 0 && SEPARATOR.test(rest.at(-1))) rest.pop();
-    let title = rest;
-    let after2 = [];
-    for (let j = 0; j < rest.length; j++) {
-      const t = rest[j];
-      if (j > 0 && SEPARATOR.test(t) && t !== ":") {
-        title = rest.slice(0, j);
-        after2 = rest.slice(j + 1);
-        break;
-      }
-      if (t.endsWith(":") && t.length > 1) {
-        title = [...rest.slice(0, j), t.slice(0, -1)];
-        after2 = rest.slice(j + 1);
-        break;
-      }
-    }
-    const name = title.length === 0 ? `Phase ${num}` : title.join(" ");
-    const goal = after2.join(" ");
-    phases.push({
-      line: line3,
-      phase: num,
-      box: m[1].toLowerCase(),
-      title: capped(name, 300),
-      goal: capped(goal === "" ? name : goal, 2e3),
-      ...claim2 === void 0 ? {} : { claim: claim2 }
-    });
-    if (phases.length > IMPORT_MAX_PHASES) {
-      throw new Error(`more than ${IMPORT_MAX_PHASES} phases: split the file, nothing imported`);
-    }
-  }
-  return { phases, skipped };
-}
-var snake4 = (key) => key.replace(/[A-Z]/g, (c3) => `_${c3.toLowerCase()}`);
-function planImport(board, source, phases) {
-  const seen = new Set((board.epics ?? []).flatMap((e) => e.importedFrom ?? []));
-  const inFile = /* @__PURE__ */ new Set();
-  const create = [];
-  const skipped = [];
-  let next = Number(nextEpicId(board).slice(2));
-  for (const p of phases) {
-    const from = `${source}#Phase ${p.phase}`;
-    const skip = (reason) => skipped.push({ phase: p.phase, line: p.line, reason });
-    if (inFile.has(p.phase)) {
-      skip("the phase number comes twice in the file");
-      continue;
-    }
-    inFile.add(p.phase);
-    if (seen.has(from)) {
-      skip("imported already");
-      continue;
-    }
-    const parsed = epicSchema.safeParse({
-      id: `E-${next}`,
-      title: p.title,
-      status: p.box === "x" ? "done" : "open",
-      goal: p.goal,
-      acceptance: ["imported from ROADMAP: define acceptance"],
-      importedFrom: from,
-      ...p.box === "~" ? {
-        notes: [
-          p.claim === void 0 ? IN_PROGRESS_NOTE : `${IN_PROGRESS_NOTE} (claim: ${p.claim})`
-        ]
-      } : {},
-      history: []
-    });
-    if (!parsed.success) {
-      const issue2 = parsed.error.issues[0];
-      const where = issue2?.path.map((k) => snake4(String(k))).join(".") ?? "";
-      skip(`invalid: ${where}: ${issue2?.message ?? "unknown"}`);
-      continue;
-    }
-    next++;
-    create.push(parsed.data);
-  }
-  return { file: source, create, skipped };
 }
 
 // src/setup.ts
@@ -41480,8 +41513,14 @@ async function runCli(argv, deps) {
               } else if (a2?.result === "reopened") {
                 out.epicsReopened = [
                   ...out.epicsReopened ?? [],
-                  { epic: a2.epic, item: item.id, findings: a2.findings }
+                  {
+                    epic: a2.epic,
+                    item: item.id,
+                    findings: a2.findings,
+                    ...a2.held ? { held: true } : {}
+                  }
                 ];
+                if (a2.held) lead(a2.epic, `acceptance limit reached for ${a2.epic}`);
               }
             } else if (r.kind !== "refused") {
               out.held.push({ item: item.id, reason: r.line });

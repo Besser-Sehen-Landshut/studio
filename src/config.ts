@@ -176,7 +176,7 @@ const acceptanceSchema = z.strictObject({
         ),
       }),
     )
-    .min(1)
+    // `[]`: a repository without CI says so; the acceptance then is the review alone.
     .max(20),
 });
 
