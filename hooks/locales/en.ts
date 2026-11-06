@@ -310,6 +310,7 @@ const strings: Strings = {
     fix_limit: 'Fix limit reached',
     changes_requested: 'Changes requested',
     merge_failed: 'Merge failed',
+    merged: 'Merged',
     question: 'Crew has a question',
     evidence: 'Guard hit, the owner decides',
     blocked: 'Blocked',

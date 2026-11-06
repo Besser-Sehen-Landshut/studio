@@ -81,6 +81,12 @@ export const COMMANDS: HelpEntry[] = [
   },
   { usage: 'queue add <repo>#<pr>', about: 'Put a reviewed PR into the merge queue' },
   { usage: 'queue run', about: 'Merge the queued PRs, one at a time' },
+  { usage: 'queue [list]', about: 'Show the merge queue (JSON), external entries included' },
+  {
+    usage: 'merge <pr> [--repo <owner/name>] [--by <name>] [--follow-head] [--wait]',
+    about:
+      'Hand a PR without a board item to the merge queue (checks, main build, capacity, runner load); only the head seen now merges unless --follow-head; --wait runs the queue and reports MERGED, FAILED or TIMEOUT',
+  },
   { usage: 'state', about: 'Refresh state.json in the state root' },
   { usage: 'pause', about: 'Owner only: nothing new starts or merges until resume' },
   { usage: 'resume', about: 'Owner only: lift the pause' },

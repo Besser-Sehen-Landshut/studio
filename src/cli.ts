@@ -152,12 +152,16 @@ import { privacyHits, privacyHitsInAdded, privacyLine } from './privacy.js';
 import { openCrewPr } from './pull-request.js';
 import { decisionsOf, pushDecisions, readNotifySecret } from './push.js';
 import {
+  ASKED_BY_RE,
   acquireQueueRunLock,
   appendStateLine,
   approvalProblem,
+  CHECKS_POLL_MS,
+  doneStatus,
   enqueue,
   installSignalRelease,
   loadQueue,
+  QUEUE_TIMEOUT_MS,
   type QueueDone,
   type QueueEntry,
   type QueueState,
@@ -560,9 +564,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       throw new UsageError('--component takes one id here; only epic add takes several');
     }
     const component = epicAdd ? undefined : values.component?.[0];
-    const addOnly = [values.type, values.repo, values.path, values.dod, values.plan];
+    const addOnly = [values.type, values.path, values.dod, values.plan];
     if (cmd !== 'add' && addOnly.some((v) => v !== undefined)) {
-      throw new UsageError('--type, --repo, --path, --dod and --plan work with add only');
+      throw new UsageError('--type, --path, --dod and --plan work with add only');
+    }
+    if (values.repo !== undefined && cmd !== 'add' && cmd !== 'merge') {
+      throw new UsageError('--repo works with add and merge only');
+    }
+    if ((values.wait !== undefined || values['follow-head'] !== undefined) && cmd !== 'merge') {
+      throw new UsageError('--wait and --follow-head work with merge only');
     }
     const epicEdit = cmd === 'epic' && rest[0] === 'edit';
     if (!epicEdit && values.title !== undefined) {
@@ -604,9 +614,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     ) {
       throw new UsageError('--dry-run works with recover, release and tick only');
     }
+    if (values.by !== undefined && cmd !== 'release' && cmd !== 'merge') {
+      throw new UsageError('--by works with release and merge only');
+    }
     const releaseOnly = [
       values.since,
-      values.by,
       values.said,
       values.at,
       values.deployed,
@@ -614,7 +626,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     ];
     if (cmd !== 'release' && releaseOnly.some((v) => v !== undefined)) {
       throw new UsageError(
-        '--since, --by, --said, --at, --deployed and --not-deployed work with release only',
+        '--since, --said, --at, --deployed and --not-deployed work with release only',
       );
     }
     if ((values.from !== undefined || values.apply !== undefined) && cmd !== 'adopt') {
@@ -1037,6 +1049,53 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       return { queued: item.id, pr, repo, pending };
     };
 
+    /**
+     * Hands a pull request without a board item to the merge queue: the body of `studio merge`.
+     * A pull request of a board item goes through `queue add`, which needs its approval.
+     */
+    const mergeExternal = async (arg: string | undefined) => {
+      if (!/^[1-9]\d{0,9}$/.test(arg ?? '')) {
+        throw new UsageError('merge needs a pull request number, e.g. studio merge 12');
+      }
+      const pr = Number(arg);
+      const { config, board } = loadAll();
+      refuseNativeQueue(config);
+      const repo = typeof values.repo === 'string' ? values.repo : config.primaryRepo;
+      if (!config.repos.includes(repo)) throw new Error(`repository ${repo} is not configured`);
+      const by = typeof values.by === 'string' ? values.by : 'lead';
+      if (!ASKED_BY_RE.test(by)) {
+        throw new UsageError('--by needs a short name (letters, digits, . _ @ -, at most 64)');
+      }
+      const onBoard = boardItemOf(board, repo, pr);
+      if (onBoard !== undefined) {
+        throw new Error(
+          `${repo}#${pr} belongs to board item ${onBoard}: it merges through its review and studio queue add`,
+        );
+      }
+      const view = await viewPr({ pr, repo }, ports.gh);
+      if (typeof view === 'string') throw new Error(view);
+      if (view.state !== 'OPEN') throw new Error(`${repo}#${pr} is ${view.state.toLowerCase()}`);
+      const root = await boundStateRoot();
+      const at = ports.clock.now().toISOString();
+      const followHead = values['follow-head'] === true;
+      const pending = enqueue(root, {
+        pr,
+        repo,
+        external: { by, at, head: view.head, ...(followHead ? { followHead: true as const } : {}) },
+      });
+      return {
+        queued: `${repo}#${pr}`,
+        external: true,
+        by,
+        at,
+        head: view.head,
+        // Without --follow-head only this head merges; a later push fails the entry.
+        followHead,
+        pending,
+        next: 'studio queue run (or the next tick) merges it; studio queue shows the queue',
+      };
+    };
+
     /** Merges the queued pull requests, one at a time: the body of `queue run`. */
     const queueRun = async () => {
       const { config } = loadAll();
@@ -1099,10 +1158,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             log,
             hold,
             mergeAllowed: (entry, head, waived) =>
-              boardBlocksMerge(project, root, config, entry, head, ports, waived),
+              entry.external !== undefined
+                ? externalBlocksMerge(project, root, entry)
+                : boardBlocksMerge(project, root, config, entry, head, ports, waived),
             evidence: async (entry, head, failed) => {
-              // Without rules in the owner's config none apply: a failure fails as before.
-              if ((config.evidence ?? []).length === 0) return { kind: 'none' as const };
+              // Without rules in the owner's config none apply: a failure fails as before. An
+              // external pull request gets no exception: a failed check stops it.
+              if ((config.evidence ?? []).length === 0 || entry.external !== undefined) {
+                return { kind: 'none' as const };
+              }
               const v = await judgeFailedChecks(
                 evidenceCtx(config, entry.repo, root),
                 entry,
@@ -1119,8 +1183,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               }
               return v;
             },
-            onChecksFailed: (entry, head) => policy.failed(entry, head),
-            onChecksPassed: (entry, head) => policy.passed(entry, head),
+            // The rerun and the flaky ledger are for the board's pull requests: an external one
+            // stops on its first failed check and is reported.
+            onChecksFailed: async (entry, head) =>
+              entry.external !== undefined ? 'fail' : policy.failed(entry, head),
+            onChecksPassed: (entry, head) => {
+              if (entry.external === undefined) policy.passed(entry, head);
+            },
             takeNext: () => takeNextPending(root),
             onDone: (d) => applyQueueResults(project, root, [d], ports, stderr),
           },
@@ -1135,6 +1204,39 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       } finally {
         removeSignals();
         lock.release();
+      }
+    };
+
+    /**
+     * `merge --wait`: runs the queue here until the external entry queued at `at` is done. While
+     * another run holds the queue, it reads queue.json every 30 s instead; a pause or block ends
+     * the wait (the entry stays queued), and so does the queue's time limit plus an hour.
+     */
+    const waitForExternal = async (
+      target: string,
+      at: string,
+    ): Promise<
+      { kind: 'done'; done: QueueDone } | { kind: 'held'; line: string } | { kind: 'waiting' }
+    > => {
+      const root = await boundStateRoot();
+      const deadline = ports.clock.now().getTime() + QUEUE_TIMEOUT_MS + 60 * 60_000;
+      const mine = () =>
+        loadQueue(root).done.find((d) => d.external?.at === at && `${d.repo}#${d.pr}` === target);
+      for (;;) {
+        let held: string | undefined;
+        try {
+          held = (await queueRun()).held;
+        } catch (e) {
+          if (!(e instanceof HeldError)) throw e;
+          held = (e as Error).message;
+        }
+        const done = mine();
+        if (done !== undefined) return { kind: 'done', done };
+        if (held !== undefined && !held.startsWith('queue already running')) {
+          return { kind: 'held', line: held };
+        }
+        if (ports.clock.now().getTime() >= deadline) return { kind: 'waiting' };
+        await ports.clock.sleep(CHECKS_POLL_MS);
       }
     };
 
@@ -2586,7 +2688,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const q = loadQueue(root);
         const inQueue = (i: WorkItem) =>
           [...q.pending, ...(q.current === undefined ? [] : [q.current])].some((e) =>
-            e.item === undefined ? e.repo === i.repo && e.pr === i.pr : e.item === i.id,
+            entryMatches(e, i),
           );
         const stray = loadBoard(project).items.some((i) => i.status === 'queued' && !inQueue(i));
         if (q.pending.length > 0 || q.current !== undefined || stray) {
@@ -2899,6 +3001,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       return out;
     };
 
+    /** The queue's finished entries for the pushes; none when queue.json cannot be read. */
+    const queueDoneOrNone = (): QueueDone[] => {
+      try {
+        return loadQueue(stateRoot()).done;
+      } catch {
+        return [];
+      }
+    };
+
     /** The tick's decisions, and the owner's account blocks, as Pushover messages. */
     const pushTick = async (needsLead: Tick['needsLead']): Promise<string[]> => {
       try {
@@ -2915,7 +3026,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ownerRoot: ownerRoot(),
           projectKey,
           project: config.primaryRepo.split('/').at(-1) ?? config.primaryRepo,
-          decisions: decisionsOf({ projectKey, needsLead, board, ownerRoot: ownerRoot() }),
+          decisions: decisionsOf({
+            projectKey,
+            needsLead,
+            board,
+            ownerRoot: ownerRoot(),
+            queueDone: queueDoneOrNone(),
+            now: ports.clock.now(),
+          }),
           ownerConfig,
           owner,
           http: ports.http,
@@ -3630,8 +3748,48 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         return 1;
       }
 
+      case 'merge': {
+        refuseCrew(deps.env);
+        const [arg, ...more] = rest;
+        if (more.length > 0) throw new UsageError('merge takes one pull request number');
+        const q = await mergeExternal(arg);
+        if (values.wait !== true) {
+          print(q);
+          return 0;
+        }
+        const w = await waitForExternal(q.queued, q.at);
+        if (w.kind === 'done') {
+          const status = doneStatus(w.done);
+          print({
+            ...q,
+            status,
+            ...(w.done.reason === undefined ? {} : { reason: w.done.reason }),
+          });
+          return status === 'MERGED' ? 0 : 1;
+        }
+        print({
+          ...q,
+          status: 'QUEUED',
+          reason:
+            w.kind === 'held'
+              ? `queue held: ${w.line}`
+              : 'still in the queue; studio queue shows where it is',
+        });
+        return 1;
+      }
+
       case 'queue': {
         const [sub, arg] = rest;
+        if (sub === undefined || sub === 'list') {
+          if (arg !== undefined) throw new UsageError('queue list takes no arguments');
+          const q = loadQueue(await boundStateRoot());
+          print({
+            current: q.current ?? null,
+            pending: q.pending,
+            done: q.done.slice(-20).map((d) => ({ ...d, status: doneStatus(d) })),
+          });
+          return 0;
+        }
         if (sub === 'add') {
           print(await queueAdd(arg));
           return 0;
@@ -3646,7 +3804,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           });
           return r.held === undefined ? 0 : 1;
         }
-        throw new UsageError('queue needs a subcommand: add <repo>#<pr> | run');
+        throw new UsageError('queue needs a subcommand: list | add <repo>#<pr> | run');
       }
 
       case 'state': {
@@ -4835,6 +4993,8 @@ function parseCli(argv: string[]) {
         artifacts: { type: 'string' },
         from: { type: 'string' },
         apply: { type: 'boolean' },
+        wait: { type: 'boolean' },
+        'follow-head': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: true,
@@ -5052,13 +5212,40 @@ async function boardBlocksMerge(
   return approvedJobsProblem(item.approvedJobs ?? [], checks.checks);
 }
 
+/** The board item (any type) that holds this pull request and is not dropped, by id. */
+function boardItemOf(board: Board, repo: string, pr: number): string | undefined {
+  return board.items.find((i) => i.repo === repo && i.pr === pr && i.status !== 'dropped')?.id;
+}
+
+/**
+ * Why an external entry (`studio merge`) must not merge now: the board is read again right before
+ * the merge, and a pull request a board item or an open review holds is refused, so the external
+ * path never skips a review the board asks for. Branch protection on GitHub decides the rest.
+ */
+function externalBlocksMerge(project: string, root: string, entry: QueueEntry): string | undefined {
+  let board: Board;
+  try {
+    board = loadBoard(project);
+  } catch {
+    return 'the board cannot be read';
+  }
+  const item = boardItemOf(board, entry.repo, entry.pr);
+  if (item !== undefined) return `the pull request belongs to board item ${item}`;
+  const target = `${entry.repo}#${entry.pr}`;
+  const open = openReview(root, board, target);
+  return open === undefined ? undefined : openReviewLine(open, target);
+}
+
 /** The owner's checkout tracks the primary repo; another repo is reached by its URL. */
 function approvalCheckout(project: string, config: StudioConfig, repo: string) {
   return { dir: project, remote: repo === config.primaryRepo ? 'origin' : githubHttpsUrl(repo) };
 }
 
-const doneMatches = (d: QueueDone, item: WorkItem): boolean =>
-  d.item === undefined ? d.repo === item.repo && d.pr === item.pr : d.item === item.id;
+/** Whether a queue entry stands for this board item; an external entry never does. */
+const entryMatches = (e: QueueEntry, item: WorkItem): boolean =>
+  e.external === undefined &&
+  (e.item === undefined ? e.repo === item.repo && e.pr === item.pr : e.item === item.id);
+const doneMatches = (d: QueueDone, item: WorkItem): boolean => entryMatches(d, item);
 
 /**
  * A run that stopped after recording a result but before moving the board leaves the item
@@ -5076,13 +5263,7 @@ async function reconcileQueued(
   const results: QueueDone[] = [];
   for (const item of board.items) {
     if (item.status !== 'queued') continue;
-    if (
-      waiting.some((e) =>
-        e.item === undefined ? e.pr === item.pr && e.repo === item.repo : e.item === item.id,
-      )
-    ) {
-      continue;
-    }
+    if (waiting.some((e) => entryMatches(e, item))) continue;
     const last = state.done.filter((d) => doneMatches(d, item)).at(-1);
     if (last) results.push(last);
   }
