@@ -80,7 +80,10 @@ export interface MigrationUse {
   main: Map<number, string>;
   /** Every entry name on the default branch: a pull request that changes one adds nothing. */
   names: Set<string>;
-  /** Entries on main or in open pull requests whose number is too large to compare. */
+  /**
+   * Entries on the default branch whose number is too large to compare. One in an open pull
+   * request is left out: that pull request's own check blocks it, and no other user is held.
+   */
   tooLarge: string[];
   /** Per open pull request: the numbers of its migrations that are not on main. */
   prs: Map<number, Map<number, string>>;
@@ -275,7 +278,7 @@ export async function readMigrationUse(gh: Gh, scheme: MigrationScheme): Promise
     scheme,
   );
   const main = onBranch.numbers;
-  const tooLarge = [...onBranch.tooLarge];
+  const tooLarge = onBranch.tooLarge;
   const onMain = new Set(names ?? []);
   const list = await ghJson(
     gh,
@@ -319,7 +322,6 @@ export async function readMigrationUse(gh: Gh, scheme: MigrationScheme): Promise
       return entry !== undefined && !onMain.has(entry);
     });
     const read = numbersOf(fresh, scheme);
-    tooLarge.push(...read.tooLarge);
     if (read.numbers.size > 0) prs.set(pr, read.numbers);
   }
   return { branch, main, names: onMain, tooLarge, prs, dirOnMain: names !== undefined };
@@ -403,7 +405,7 @@ export function reserveIn(
   // Above a number too large to compare nothing is known to be free: refused, never guessed.
   if (use.tooLarge.length > 0) {
     throw new Error(
-      `${use.tooLarge.slice(0, 3).map(shown).join(', ')} holds a number of more than 15 digits; the next free number cannot be told; nothing reserved`,
+      `${use.tooLarge.slice(0, 3).map(shown).join(', ')} on ${use.branch} holds a number of more than 15 digits; the next free number cannot be told; nothing reserved`,
     );
   }
   syncLanded(reg, use, now);

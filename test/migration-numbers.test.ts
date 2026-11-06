@@ -153,13 +153,31 @@ describe('reserving', () => {
     ]);
   });
 
-  it('refuses when main or an open pull request holds a number too large to compare', () => {
-    const reg = empty();
+  it('a number too large to compare refuses reserve only when it is on the default branch', async () => {
     const big = `${'9'.repeat(16)}_x.sql`;
-    expect(() => reserveIn(reg, use({}, {}, [big]), { for: 'B-1', purpose: 'x' }, NOW)).toThrow(
-      /more than 15 digits.*nothing reserved/,
+    const onMain = fakeGh({ main: ['0001_a.sql', big] });
+    const r = stateRoot();
+    const ask = (gh: Gh) =>
+      reserveMigrationNumber({
+        gh,
+        root: r,
+        scheme: SCHEME,
+        request: { for: 'B-1', purpose: 'x' },
+        now: NOW,
+      });
+    await expect(ask(onMain.gh)).rejects.toThrow(
+      /on main holds a number of more than 15 digits.*nothing reserved/,
     );
-    expect(reg.reservations).toEqual([]);
+    expect(readRegister(r).reservations).toEqual([]);
+    // In an open pull request, any author's: left out of the next free number, nothing held.
+    const inPr = fakeGh({
+      main: ['0001_a.sql'],
+      open: [{ number: 9, files: [{ path: `db/m/${big}`, changeType: 'ADDED' }] }],
+    });
+    const use = await readMigrationUse(inPr.gh, SCHEME);
+    expect(use.tooLarge).toEqual([]);
+    expect(use.prs.size).toBe(0);
+    expect((await ask(inPr.gh)).number).toBe(2);
   });
 
   it('starts at 1 in an empty folder', () => {
@@ -454,6 +472,27 @@ describe('what main and the open pull requests hold', () => {
     expect(u.prs.get(5)?.get(4)).toBe('0004_late.sql');
     expect(calls.some((c) => c.startsWith('api --paginate repos/org/app/pulls/5/files'))).toBe(
       true,
+    );
+  });
+
+  it('the pull request that holds a number too large to compare is blocked itself', async () => {
+    const big = `${'9'.repeat(16)}_x.sql`;
+    const { gh } = fakeGh({
+      main: ['0001_a.sql'],
+      open: [{ number: 9, files: [{ path: `db/m/${big}`, changeType: 'ADDED' }] }],
+      prFiles: { 9: [`db/m/${big}`] },
+    });
+    const res = await pullRequestMigrationCheck({
+      gh,
+      root: stateRoot(),
+      config: parse('migrations: { dir: db/m }\n'),
+      repo: 'org/app',
+      pr: 9,
+      holder: [],
+      now: NOW,
+    });
+    expect(res.problem).toBe(
+      `migration number: ${big}: its number has more than 15 digits; Studio cannot check it`,
     );
   });
 

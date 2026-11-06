@@ -39574,7 +39574,7 @@ async function readMigrationUse(gh, scheme) {
     scheme
   );
   const main = onBranch.numbers;
-  const tooLarge = [...onBranch.tooLarge];
+  const tooLarge = onBranch.tooLarge;
   const onMain = new Set(names ?? []);
   const list2 = await ghJson(
     gh,
@@ -39613,7 +39613,6 @@ async function readMigrationUse(gh, scheme) {
       return entry !== void 0 && !onMain.has(entry);
     });
     const read3 = numbersOf(fresh, scheme);
-    tooLarge.push(...read3.tooLarge);
     if (read3.numbers.size > 0) prs.set(pr, read3.numbers);
   }
   return { branch, main, names: onMain, tooLarge, prs, dirOnMain: names !== void 0 };
@@ -39669,7 +39668,7 @@ function reserveIn(reg, use, req, now) {
   checkReserveRequest(req);
   if (use.tooLarge.length > 0) {
     throw new Error(
-      `${use.tooLarge.slice(0, 3).map(shown).join(", ")} holds a number of more than 15 digits; the next free number cannot be told; nothing reserved`
+      `${use.tooLarge.slice(0, 3).map(shown).join(", ")} on ${use.branch} holds a number of more than 15 digits; the next free number cannot be told; nothing reserved`
     );
   }
   syncLanded(reg, use, now);
