@@ -55,7 +55,8 @@ const psString = (s) => `'${String(s).replace(/'/g, "''")}'`;
 /**
  * PowerShell that names what is left under `base` (`HKCU:\` for the crew user) that would start a
  * program in a later job: any value of the Run and RunOnce keys (the default value and names with
- * spaces included), cmd's AutoRun, any environment value but TEMP and TMP. Prints a JSON list.
+ * spaces included), cmd's AutoRun, any environment value but TEMP and TMP, a COM class of the user's
+ * own, a shell folder outside the profile. Prints a JSON list.
  */
 export const registryLeftScript = (base) => `$ErrorActionPreference = 'Stop'
 $base = ${psString(base)}
@@ -68,11 +69,27 @@ foreach ($k in @('Software\\Microsoft\\Windows\\CurrentVersion\\Run', 'Software\
 if ((Names (Join-Path $base 'Software\\Microsoft\\Command Processor')) -contains 'AutoRun') { $left += 'cmd AutoRun' }
 $n = @(Names (Join-Path $base 'Environment') | Where-Object { @('TEMP', 'TMP') -notcontains $_.ToUpperInvariant() })
 if ($n.Count -gt 0) { $left += ('Environment: ' + ($n -join ', ')) }
-# COM classes of the user's own (a hijack of a class a program loads) and moved shell folders.
+# COM classes of the user's own (a hijack of a class a program loads): none but Local Settings,
+# which Windows keeps there itself.
 $classes = Join-Path $base 'Software\\Classes'
-if ((Test-Path -LiteralPath $classes) -and (@(Get-ChildItem -LiteralPath $classes).Count -gt 0 -or (Names $classes).Count -gt 0)) { $left += 'Software\\Classes' }
+if (Test-Path -LiteralPath $classes) {
+  $extra = @(Get-ChildItem -LiteralPath $classes | Where-Object { $_.PSChildName -ne 'Local Settings' })
+  if ($extra.Count -gt 0 -or (Names $classes).Count -gt 0) { $left += 'Software\\Classes' }
+}
+# Shell folders moved out of the profile (Startup or Documents somewhere a later job would read):
+# Windows writes its defaults back, all inside the profile. Only the variables of the profile count.
+$root = [Environment]::GetFolderPath('UserProfile').TrimEnd('\\')
 foreach ($k in @('Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders', 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders')) {
-  if ((Names (Join-Path $base $k)).Count -gt 0) { $left += $k.Split('\\')[-1] }
+  $p = Join-Path $base $k
+  if (-not (Test-Path -LiteralPath $p)) { continue }
+  $item = Get-Item -LiteralPath $p
+  $moved = @(foreach ($n in $item.GetValueNames()) {
+    if ($n.StartsWith('!')) { continue }
+    $v = [string]$item.GetValue($n, '', 'DoNotExpandEnvironmentNames')
+    $v = $v -ireplace '%USERPROFILE%', $root -ireplace '%APPDATA%', ($root + '\\AppData\\Roaming') -ireplace '%LOCALAPPDATA%', ($root + '\\AppData\\Local')
+    if ($v.Contains('%') -or -not $v.StartsWith($root + '\\', [StringComparison]::OrdinalIgnoreCase) -or $v.Contains('..')) { if ($n -eq '') { '(Default)' } else { $n } }
+  })
+  if ($moved.Count -gt 0) { $left += ($k.Split('\\')[-1] + ': ' + ($moved -join ', ')) }
 }
 ConvertTo-Json -Compress -InputObject @($left)
 `;
@@ -96,8 +113,14 @@ if (Test-Path -LiteralPath $envKey) {
 }
 Fresh $envKey
 foreach ($n in $keep.Keys) { New-ItemProperty -LiteralPath $envKey -Name $n -Value $keep[$n] -PropertyType ExpandString | Out-Null }
-# The user's own COM classes and its moved shell folders go: Windows falls back to the defaults.
-Fresh (Join-Path $base 'Software\\Classes')
+# The user's own COM classes (Local Settings stays, Windows keeps it there) and its shell folder
+# keys go: Windows writes its defaults back.
+$classes = Join-Path $base 'Software\\Classes'
+if (Test-Path -LiteralPath $classes) {
+  Get-ChildItem -LiteralPath $classes | Where-Object { $_.PSChildName -ne 'Local Settings' } | ForEach-Object { Remove-Item -LiteralPath $_.PSPath -Recurse -Force }
+  $item = Get-Item -LiteralPath $classes
+  foreach ($n in $item.GetValueNames()) { if ($n -eq '') { Remove-ItemProperty -LiteralPath $classes -Name '(default)' } else { Remove-ItemProperty -LiteralPath $classes -Name $n } }
+}
 foreach ($k in @('Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders', 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders')) { Fresh (Join-Path $base $k) }
 ${registryLeftScript(base).replace("$ErrorActionPreference = 'Stop'\n", '')}`;
 

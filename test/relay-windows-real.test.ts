@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { systemSpawnRunner } from '../src/relay-serve.js';
 import { FOLDER_FUNCTIONS } from '../src/relay-windows.js';
 import { machineTreeProblem } from '../src/relay-windows-check.js';
-import { runFile } from '../src/windows-sandbox.js';
+import { powershellEnv, runFile } from '../src/windows-sandbox.js';
 
 const on = process.platform === 'win32';
 
@@ -65,13 +65,31 @@ Set-ItemProperty -LiteralPath $run -Name '(default)' -Value 'calc.exe'
 New-ItemProperty -LiteralPath $once -Name 'once' -Value 'calc.exe' | Out-Null
 New-ItemProperty -LiteralPath $cp -Name 'AutoRun' -Value 'calc.exe' | Out-Null
 New-ItemProperty -LiteralPath $envk -Name 'TEMP' -Value '%USERPROFILE%\\AppData\\Local\\Temp' -PropertyType ExpandString | Out-Null
-New-ItemProperty -LiteralPath $envk -Name 'MY VAR' -Value 'x' | Out-Null`);
+New-ItemProperty -LiteralPath $envk -Name 'MY VAR' -Value 'x' | Out-Null
+$cls = Join-Path $b 'Software\\Classes'
+New-Item -Path (Join-Path $cls 'CLSID\\{00000000-0000-0000-0000-00000000beef}\\InprocServer32') -Force | Out-Null
+New-Item -Path (Join-Path $cls 'Local Settings\\Software') -Force | Out-Null
+$usf = Join-Path $b 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders'
+$sf = Join-Path $b 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders'
+foreach ($k in @($usf, $sf)) { New-Item -Path $k -Force | Out-Null }
+New-ItemProperty -LiteralPath $usf -Name 'Startup' -Value 'C:\\elsewhere\\Startup' -PropertyType ExpandString | Out-Null
+New-ItemProperty -LiteralPath $usf -Name 'AppData' -Value '%USERPROFILE%\\AppData\\Roaming' -PropertyType ExpandString | Out-Null
+New-ItemProperty -LiteralPath $usf -Name 'Favorites' -Value '%USERPROFILE%\\..\\Public' -PropertyType ExpandString | Out-Null
+New-ItemProperty -LiteralPath $sf -Name 'Personal' -Value 'D:\\documents' | Out-Null
+New-ItemProperty -LiteralPath $sf -Name '!Do not use this registry key' -Value 'x' | Out-Null`);
     try {
       const before = reset.registryLeft(base).join('; ');
       expect(before).toContain('evil name with spaces');
       expect(before).toContain('(Default)');
       expect(before).toContain('cmd AutoRun');
       expect(before).toContain('MY VAR');
+      // A COM class of the user's own, shell folders out of the profile; Local Settings, AppData
+      // inside the profile and the "!" note are no finding.
+      expect(before).toContain('Software\\Classes');
+      expect(before).toContain('User Shell Folders: Startup, Favorites');
+      expect(before).toContain('Shell Folders: Personal');
+      expect(before).not.toContain('AppData');
+      expect(before).not.toContain('Do not use');
       expect(reset.resetRegistry(base)).toEqual([]);
       expect(reset.registryLeft(base)).toEqual([]);
       // TEMP stays as it was, unexpanded.
@@ -80,6 +98,12 @@ New-ItemProperty -LiteralPath $envk -Name 'MY VAR' -Value 'x' | Out-Null`);
           `(Get-Item -LiteralPath (Join-Path '${base}' 'Environment')).GetValue('TEMP', $null, 'DoNotExpandEnvironmentNames')`,
         ).trim(),
       ).toBe('%USERPROFILE%\\AppData\\Local\\Temp');
+      // Windows keeps Local Settings there; the reset leaves it.
+      expect(
+        ps(
+          `Test-Path -LiteralPath (Join-Path '${base}' 'Software\\Classes\\Local Settings')`,
+        ).trim(),
+      ).toBe('True');
     } finally {
       ps(`Remove-Item -LiteralPath '${base}' -Recurse -Force`);
     }
@@ -93,6 +117,7 @@ describe.skipIf(!elevated)("the relay worker's folders on Windows", () => {
   const ps = (script: string) =>
     execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
       encoding: 'utf8',
+      env: powershellEnv(process.env),
     });
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'studio-relay-acl-')));
   const q = (p: string) => `'${p.replace(/'/g, "''")}'`;
