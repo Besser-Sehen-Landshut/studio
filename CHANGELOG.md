@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.26.0] - 2026-11-07
+
+A fresh crew user per job on Windows workers.
+
+### Changed
+
+- Windows workers (native and relay) run every job as a fresh local user: `<prefix>-<6 hex>` in Studio's group `<prefix>s`. After the job the user is disabled with a new unknown password, swept twice, its profile moved into an admin-only quarantine and deleted there in bounded steps by a deleter that never follows a link; the account is deleted last, and a SID with a live process blocks the next user. The shared crew user and its profile reset are gone; the setup removes the old user. `crew_user` is now this name prefix, at most 13 characters. Re-run `studio worker windows-setup` or `studio relay install`.
+- Relay jobs count toward `max_parallel` of the credential label the lead handed over, while they start or run.
+- The Windows setups require Git for Windows 2.35.2 or later.
+
+### Fixed
+
+- `studio relay install` and `studio relay unpair` can replace an existing `authorized_keys` on Windows (`[IO.File]::Replace` got an empty string instead of null), and the intended ACL is applied again after the replace.
+
 ## [0.25.0] - 2026-11-06
 
 Relay workers: crews on a machine without GitHub access, experimental until a pilot.
