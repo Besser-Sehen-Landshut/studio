@@ -882,6 +882,10 @@ export const ownerConfigSchema = z.strictObject({
       'channel and command go together',
     )
     .optional(),
+  // The Studio board in Claude Code (hooks/register.tsx reads this key itself, without a YAML
+  // library: hooks/board-model.ts nestedWorktreesOf). `hide`: a session in a git worktree nested
+  // under a Studio project starts with the board off (`/studio on` brings it back).
+  pane: z.strictObject({ nestedWorktrees: z.enum(['show', 'hide']).default('show') }).optional(),
   // The same daily cost cap as in studio.yaml, over all projects of the owner together.
   limits: dailyLimitsSchema.optional(),
   // Groups of related projects (src/group.ts); a project folder is in at most one.

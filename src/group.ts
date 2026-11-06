@@ -734,7 +734,7 @@ export function contractScope(m: Membership): { globs: string[]; narrow: string[
   return { globs: m.group.contracts ?? m.group.reference, narrow: m.self.contracts ?? [] };
 }
 
-function readContracts(stateRoot: string): ContractsRecord | undefined {
+export function readContracts(stateRoot: string): ContractsRecord | undefined {
   const file = join(stateRoot, CONTRACTS_FILE);
   assertStatePath(stateRoot, file);
   let text: string;

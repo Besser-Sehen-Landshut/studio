@@ -13,6 +13,7 @@ import {
 } from './acceptance.js';
 import { runAccount } from './account-command.js';
 import { addItem, boardPrefix } from './add-item.js';
+import { adoptStateRoot } from './adopt.js';
 import {
   REVIEW_GRACE_MS,
   timedOutAgents,
@@ -65,6 +66,7 @@ import {
   resolveModel,
   unverifiedHandgrip,
   unverifiedRefusal,
+  wantsRea,
 } from './crew.js';
 import { addEpic, dropEpic, editEpic, epicRows, findEpic, settleAndSave } from './epics.js';
 import {
@@ -93,9 +95,11 @@ import {
   groupRows,
   memberStatusLookup,
   membershipOf,
+  readContracts,
   resolveExternalDeps,
 } from './group.js';
 import { HeldError } from './held.js';
+import { USAGE } from './help.js';
 import { runInit } from './init.js';
 import { runLessonsReview, settleLessonsReviews } from './lessons-review.js';
 import {
@@ -127,6 +131,7 @@ import {
 import {
   acquireStateLock,
   checkStateMarker,
+  inspectStateLock,
   ownerStateRootFor,
   projectRealpath,
   projectStateRoots,
@@ -152,6 +157,8 @@ import {
   type QueueDone,
   type QueueEntry,
   type QueueState,
+  RUN_LOCK,
+  RUN_LOCK_HEARTBEAT_STALE_MS,
   readChecks,
   runQueue,
   takeNextPending,
@@ -163,6 +170,7 @@ import {
   type Asker,
   ensureRea,
   ReaInstallNeeded,
+  reaDecision,
   reaMode,
   reaVersionOf,
   researchFolder,
@@ -287,104 +295,6 @@ export interface CliDeps {
   /** Test seam: where `studio worker` pushes a crew's branch instead of GitHub. */
   workerPushUrl?: (repo: string) => string;
 }
-
-const USAGE = `Usage: studio [--project <dir>] [--json] <command>
-
-Commands:
-  init [--write]           Check the prerequisites and propose .studio/ for this project; --write writes it
-  add "<title>" --dod <l>  Add a ready builder item [--type fix|feature|chore|docs|research]
-                           [--repo <owner/name>] [--path <glob>]... [--dod <line>]... [--component <id>] [--plan <file>]
-                           [--epic <id>]
-  board [--component <id>] [--epic <id>]  Show the board, or the items of one component or epic
-  epic add "<title>" --goal <text> --acceptance <line>... [--component <id>]...
-                           Add an open epic with the next free id (E-<n>)
-  epic list                Epics with their items by status and merged of total
-  epic show <id>           One epic: goal, acceptance, items
-  epic edit <id> [--title <t>] [--goal <text>] [--acceptance <line>...]
-                           Replace an epic's title, goal or acceptance lines
-  epic drop <id>           End an epic; refused while it has open items
-  roadmap [--write] [--out <file>] [--force]
-                           Render the roadmap from the board; --write writes ROADMAP.md
-  roadmap import <file> [--write]  Turn "- [ ] Phase <n> — <title>" lines into epics (dry run without --write)
-  plan                     Dry-run the planner (JSON)
-  launch <id>              Start a crew session for a planned item
-  status                   Crew sessions and their board status, items on workers included
-  worker --label <label> [--once]
-                           Serve offered items of this label on this machine: claim one, run its
-                           crew, open its pull request, hand the report back (see README, Workers)
-  overview                 Owner only, in a terminal: every project of this owner, read only
-  collect <id>             Read a crew report and move the item
-  tick                     One lead heartbeat: collect, launch, queue and merge what is due (JSON)
-  queue add <repo>#<pr>    Put a reviewed PR into the merge queue
-  queue run                Merge the queued PRs, one at a time
-  state                    Refresh state.json in the state root
-  pause                    Owner only: nothing new starts or merges until resume
-  resume                   Owner only: lift the pause
-  stop <id> [--release] [--requeue]  Stop a crew session; --release closes the record of one it cannot verify, --requeue puts its item back to ready
-  drop <id>                End an item; refuses while its crew runs
-  link <id> <repo>#<pr>    Owner only, in a terminal: tie a pull request opened by hand to its item
-  metrics                  Lead time, deploy frequency, change failure rate, time to restore
-  deploy record [<sha>]    Record a production deploy
-  incident open <id>       Record that a deploy broke something
-  incident resolve <id>    Record that service is restored
-  flaky record <t> <s> pass|fail  Record a test that failed once, with its rerun
-  flaky [list]             The flaky-test ledger, worst first
-  solutions search <words> Earlier solutions in .studio/solutions
-  exceptions [list]        Exceptions by evidence: applied and not proven, with head and diff digest
-  exceptions grant <repo>#<pr> <rule> --reason "<line>"
-                           The lead's decision for a guard hit no evidence explained, for this head;
-                           an owner_only rule or item takes the owner's, in a terminal
-  release <component> [--dry-run] [--since <commit>]
-                           The release gate: draft the note and log the announcement; run it again
-                           to trigger the release workflow once approvals are in, then it follows
-                           the checks after the deploy. --since names production's commit, first
-                           release only; --dry-run prints the note and changes nothing
-  release list             Releases with status, commit and what they wait for
-  release show <id>        A release's note
-  release approve <id> <approver> --said "<words>" [--by "<who>"] [--at <time>]
-                           Record an approval: a third party's, relayed by the lead with who said
-                           it and when; the owner's (approver owner) only in a terminal
-  release resolve <id> --deployed|--not-deployed --reason "<line>"
-                           Settle a failed release whose deploy is unknown, after checking production
-  release cancel <id> --reason "<line>"  Stop a release before its trigger
-  setup sources [<id>...]  Fetch the referenced third-party sources (nothing runs)
-  lessons [list]           Lessons crews proposed for the role memory, with age, item and evidence
-  lessons accept <n>       Move a proposed lesson into its role file
-  lessons drop <n> [--reason <line>]  Discard a proposed lesson, with a one-line reason
-  lessons prune <role> <l> Remove a lesson line from a role file
-  lessons review [--now]   Bundle pending proposals into one review item per role (weekly; tick runs it)
-  recover [--dry-run]      After a crash or reboot: stale locks, interrupted launches and merges,
-                           ended crews; prints what it found and did (--dry-run changes nothing)
-  escalate <id>            Run a stuck item on the role's stronger model
-  sources list             Third-party sources and their licences
-  sources check            Judge upstream updates: fits, unclear or conflict; adopts nothing
-  sources apply <id>       Adopt a candidate that fits
-  skills check [--now] [--security <name>]...
-                           Pinned plugins against their marketplaces and sources against upstream;
-                           one board item per update. Monthly (tick runs it); --now runs it at once,
-                           --security marks a plugin or source update as security-relevant (priority 0)
-  setup [--link]           Owner only, in a terminal: gh, crew token, Claude account and phone
-                           notifications, one guided step each, skipped when done; --link puts
-                           studio on your terminal's PATH; --notifications runs only that step again
-  setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
-  setup stack [--write]    Detect the project's stacks from its manifest files
-  secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
-  doctor                   What is set and what is missing, never values
-  account add <label>      Owner only, in a terminal: store a token from claude setup-token
-  account list             Stored Claude accounts and their state, never a token
-  account use <label>      Owner only, in a terminal: make another account the active one
-  account remove <label>   Owner only, in a terminal: remove a stored account
-  account setup-plugins    Install the plugins crews need into the crew config dir
-  accounts-clear <label>   Owner only, in a terminal: clear a label's account block
-  research allow <id> <class>...
-                           Owner only, in a terminal: open REA tool classes (annotate, debug,
-                           observe, device, export) for one researcher item, from its next launch
-  research revoke <id> [<class>...]
-                           Owner only, in a terminal: close them again (all without a class)
-  research list            The REA classes the owner opened, per item
-  research install         Owner only, in a terminal: install the pinned rea-agents (owner config
-                           rea_version) into the owner state, checked against the registry's integrity
-`;
 
 class UsageError extends Error {}
 
@@ -614,11 +524,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
   const debug = Boolean(deps.env.STUDIO_DEBUG);
   try {
     const { values, positionals } = parseCli(argv);
-    if (values.help) {
+    const [cmd, ...rest] = positionals;
+    if (values.help === true || cmd === 'help') {
       stdout(USAGE);
       return 0;
     }
-    const [cmd, ...rest] = positionals;
     const project = resolve(deps.cwd, values.project ?? '.');
     const json = values.json === true;
     const print = (v: unknown) => stdout(`${JSON.stringify(v, null, 2)}\n`);
@@ -673,8 +583,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         '--reason works with lessons drop, exceptions grant and release cancel only',
       );
     }
-    if (values['dry-run'] !== undefined && cmd !== 'recover' && cmd !== 'release') {
-      throw new UsageError('--dry-run works with recover and release only');
+    if (
+      values['dry-run'] !== undefined &&
+      cmd !== 'recover' &&
+      cmd !== 'release' &&
+      cmd !== 'tick'
+    ) {
+      throw new UsageError('--dry-run works with recover, release and tick only');
     }
     const releaseOnly = [
       values.since,
@@ -689,6 +604,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         '--since, --by, --said, --at, --deployed and --not-deployed work with release only',
       );
     }
+    if ((values.from !== undefined || values.apply !== undefined) && cmd !== 'adopt') {
+      throw new UsageError('--from and --apply work with adopt only');
+    }
     if ((values.label !== undefined || values.once !== undefined) && cmd !== 'worker') {
       throw new UsageError('--label and --once work with worker only');
     }
@@ -701,10 +619,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       ids === undefined || ids.length === 0 ? '-' : ids.join(',');
     const stateRoot = () => stateRootFor(project, owner);
     let migrated = false;
+    /** `tick --dry-run`: nothing may be written, so no migration and no cost ledger entries. */
+    const readOnly = cmd === 'tick' && values['dry-run'] === true;
     /** The owner-wide state; the first use in a process merges what old versions left behind. */
     const ownerRoot = () => {
       const root = ownerStateRootFor(owner);
-      if (!migrated) {
+      if (!migrated && !readOnly) {
         migrated = true;
         for (const line of migrateOwnerState(root, ports.clock.now())) stderr(`error: ${line}\n`);
       }
@@ -791,7 +711,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         ownerConfig.limits?.dailyCostUsd === undefined
           ? [stateRoot()]
           : [...new Set([stateRoot(), ...projectStateRoots(dirname(ownerRoot()))])];
-      await recordAllEnded(roots, ownerConfig);
+      if (!readOnly) await recordAllEnded(roots, ownerConfig);
       return costHold({
         stateRoot: stateRoot(),
         stateBase: dirname(ownerRoot()),
@@ -2704,6 +2624,245 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       return out;
     };
 
+    /**
+     * `tick --dry-run`: what the next tick would do, read only. It takes no lock, binds no state
+     * root, runs no collect, launch, queue or fetch, writes no ledger, record or board, and pushes
+     * nothing. What the tick decides only by acting (a report's verdict, a merge) is named as what
+     * it would try.
+     */
+    const tickPreview = async () => {
+      const now = ports.clock.now();
+      const root = stateRoot();
+      const rootExists = existsSync(root);
+      const why = (e: unknown) => (e as Error).message.replace(/\p{Cc}/gu, ' ');
+      const out: Record<string, unknown> & {
+        needsLead: { item: string; reason: string }[];
+        held: { item: string; reason: string }[];
+        errors: { phase: string; error: string }[];
+      } = { dryRun: true, needsLead: [], held: [], errors: [] };
+      const lead = (item: string, reason: string) => {
+        if (!out.needsLead.some((n) => n.item === item && n.reason === reason)) {
+          out.needsLead.push({ item, reason });
+        }
+      };
+      const step = async (name: string, body: () => Promise<void>) => {
+        try {
+          await body();
+        } catch (e) {
+          out.errors.push({ phase: name, error: why(e) });
+        }
+      };
+      if (rootExists) {
+        const t = inspectStateLock(root, TICK_LOCK, { now, heartbeatStaleMs: TICK_LOCK_STALE_MS });
+        if (t.state === 'held') out.tickRunning = true;
+      }
+      const { config, board } = loadAll();
+      const records = rootExists ? readCrewRecords(root) : {};
+
+      await step('recover', async () => {
+        if (!rootExists) return;
+        const r = await recoverProject({
+          project,
+          stateRoot: root,
+          ownerRoot: ownerRoot(),
+          ports,
+          now,
+          dryRun: true,
+          scope: 'tick',
+        });
+        if (r.findings.length > 0) out.recover = r.findings;
+        for (const n of r.needsLead) lead(n.item, n.reason);
+      });
+
+      // (a), (b): crews that ended and pull requests held for CI capacity would be collected.
+      await step('collect', async () => {
+        const collect: { item: string; why: string }[] = [];
+        for (const item of board.items) {
+          if (item.status !== 'assigned' && item.status !== 'in_progress') continue;
+          if (item.runsOn !== undefined) continue;
+          const rec = records[item.id];
+          const heldPr = (item.notes ?? []).some((n) => n.startsWith(PR_HELD));
+          if (rec !== undefined) {
+            const hold = await crewHold(rec, ports);
+            if (hold === 'running') {
+              out.held.push({ item: item.id, reason: 'crew running' });
+              continue;
+            }
+            if (hold === 'unverified') {
+              lead(item.id, unverifiedRefusal(rec));
+              continue;
+            }
+            collect.push({ item: item.id, why: 'its crew ended: read its report and move it' });
+          } else if (heldPr) {
+            collect.push({ item: item.id, why: 'its pull request was held for CI capacity' });
+          }
+        }
+        out.collect = collect;
+        const onWorkers = board.items.filter(
+          (i) => i.runsOn !== undefined && (i.status === 'assigned' || i.status === 'in_progress'),
+        );
+        if (onWorkers.length > 0) {
+          out.workers = onWorkers.map((i) => ({
+            item: i.id,
+            label: i.runsOn,
+            would: 'follow the claim on GitHub; collect a report handed back',
+          }));
+        }
+      });
+
+      // A builder in review with neither a review nor a verdict gets a review item.
+      await step('review', async () => {
+        const reviews: string[] = [];
+        for (const b of board.items) {
+          if (PR_OPTIONAL.includes(b.type) || b.status !== 'in_review' || b.pr === undefined) {
+            continue;
+          }
+          const target = `${b.repo}#${b.pr}`;
+          if (b.approvedHead !== undefined || board.items.some((i) => isOpenReviewOf(i, target))) {
+            continue;
+          }
+          if (latestReview(board, target)?.notes?.includes('verdict: changes_requested')) continue;
+          reviews.push(b.id);
+        }
+        if (reviews.length > 0) out.reviewItems = reviews;
+      });
+
+      // (c) The plan, with every gate it has; each launch would pass the launch's gates again.
+      await step('launch', async () => {
+        const ownerConfig = loadOwnerConfig(owner);
+        const { plan } = await planNow(config, board);
+        out.launch = plan.assign.map((a) => {
+          const rea = wantsRea(a, config, false)
+            ? reaDecision({ ownerRoot: ownerRoot(), owner, item: a.id })
+            : undefined;
+          if (rea?.decision === 'needs-owner') lead(a.id, rea.line);
+          return {
+            item: a.id,
+            role: a.role,
+            ...(rea === undefined ? {} : { rea: rea.decision, reaLine: rea.line }),
+          };
+        });
+        if (plan.offer.length > 0) {
+          out.offer = plan.offer.map((o) => ({
+            item: o.id,
+            label: o.runsOn,
+            ...(acceptedFor(ownerConfig, o.runsOn as string).length === 0
+              ? { held: `no worker is accepted for the label ${o.runsOn}` }
+              : {}),
+          }));
+        }
+        for (const d of plan.deferred) out.held.push({ item: d.id, reason: d.reason });
+        for (const b of plan.blocked) {
+          if (b.reason.startsWith('waiting on ')) out.held.push({ item: b.id, reason: b.reason });
+          else lead(b.id, b.reason);
+        }
+      });
+
+      // (d) Approved pull requests would be queued (queue add checks the approval at the head).
+      const queue: { item: string; pr: number; repo: string }[] = [];
+      await step('queue add', async () => {
+        for (const b of board.items) {
+          if (b.type === 'review' || b.status !== 'in_review' || b.pr === undefined) continue;
+          const target = `${b.repo}#${b.pr}`;
+          const latest = latestReview(board, target);
+          if (b.approvedHead === undefined) {
+            if (
+              latest?.notes?.includes('verdict: changes_requested') &&
+              !board.items.some((i) => isOpenReviewOf(i, target))
+            ) {
+              lead(b.id, `changes requested by ${latest.id}`);
+            }
+            continue;
+          }
+          const failedAt = b.history.findLast(
+            (h) => h.from === 'queued' && h.to === 'in_review',
+          )?.at;
+          const approvedAt = latest?.history.at(-1)?.at;
+          if (
+            failedAt !== undefined &&
+            (approvedAt === undefined || Date.parse(failedAt) >= Date.parse(approvedAt))
+          ) {
+            lead(b.id, 'merge failed after the approval');
+            continue;
+          }
+          queue.push({ item: b.id, pr: b.pr, repo: b.repo });
+        }
+        out.queue = queue;
+      });
+
+      // (e) The merge queue: whether the tick would run it.
+      await step('queue run', async () => {
+        const q = rootExists ? loadQueue(root) : { pending: [], done: [], current: undefined };
+        const pending = q.pending.length + queue.length;
+        const due =
+          pending > 0 || q.current !== undefined || board.items.some((i) => i.status === 'queued');
+        const active =
+          rootExists &&
+          inspectStateLock(root, RUN_LOCK, { now, heartbeatStaleMs: RUN_LOCK_HEARTBEAT_STALE_MS })
+            .state === 'held';
+        out.queueRun = {
+          pending,
+          ...(q.current === undefined ? {} : { current: `${q.current.repo}#${q.current.pr}` }),
+          would: !due
+            ? 'nothing to merge'
+            : active
+              ? 'leave the running queue alone'
+              : 'run the queue',
+          ...(rootExists && readPause(root).paused ? { held: 'paused' } : {}),
+        };
+      });
+
+      // The sweep: every blocked item is the lead's.
+      for (const i of board.items) {
+        if (i.status === 'blocked') lead(i.id, `blocked: ${(i.notes ?? []).at(-1) ?? 'no note'}`);
+      }
+
+      // A group member's contract check: the tick fetches the main project; nothing is fetched here.
+      await step('contracts', async () => {
+        const m = groupOf(config, loadOwnerConfig(owner));
+        if (m === undefined || m.isMain) return;
+        const last = rootExists ? readContracts(root) : undefined;
+        out.contractCheck = {
+          group: m.group.name,
+          main: m.group.main,
+          would: `fetch origin/main of ${m.group.main} and compare its contract files with the last record; a change adds one check item`,
+          lastRecord: last === undefined ? 'none: the first look records a baseline' : last.sha,
+        };
+      });
+
+      await step('epics', async () => {
+        const accepting = (board.epics ?? []).filter((e) => e.status === 'accepting');
+        if (accepting.length > 0) {
+          out.acceptance = accepting.map((e) => ({
+            epic: e.id,
+            would:
+              'prepare the acceptance: its item, and main pinned once the full suites completed',
+          }));
+        }
+      });
+
+      await step('releases', async () => {
+        if (!rootExists) return;
+        const open = readReleases(root).filter(isOpen);
+        if (open.length > 0) {
+          out.releases = open.map((r) => ({
+            ...releaseRow(r),
+            would:
+              r.status === 'triggered' || r.status === 'checking'
+                ? 'follow the run and the checks after the deploy'
+                : 'list what it waits for (tick never triggers a release)',
+          }));
+        }
+      });
+
+      await step('skills check', async () => {
+        if (skillsCheckDue(root, now).due) {
+          out.skillsCheck = 'due: the tick runs the monthly skills check';
+        }
+      });
+      return out;
+    };
+
     /** The tick's decisions, and the owner's account blocks, as Pushover messages. */
     const pushTick = async (needsLead: Tick['needsLead']): Promise<string[]> => {
       try {
@@ -3228,6 +3387,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       case 'tick': {
         refuseCrew(deps.env);
         if (rest.length > 0) throw new UsageError('tick takes no arguments');
+        if (values['dry-run'] === true) {
+          print(await tickPreview());
+          return 0;
+        }
         const out = await tick();
         // The pane's lead list, from complete ticks only: a tick that did not run (another tick
         // held it), lost its lock or had a phase fail keeps the last good record.
@@ -3823,6 +3986,50 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         throw new UsageError(
           'research needs: allow <id> <class>... | revoke <id> [<class>...] | list | install',
         );
+      }
+
+      case 'adopt': {
+        // Moving history between state roots is the owner's, in a terminal, like pause.
+        if (deps.env.STUDIO_ROLE === 'crew' || deps.isTerminal !== true) {
+          stderr('studio: adopt is for the owner and needs a terminal; nothing changed\n');
+          return 1;
+        }
+        if (rest.length > 0)
+          throw new UsageError('adopt takes no arguments, only --from and --apply');
+        if (values.from === undefined || values.from === '') {
+          throw new UsageError('adopt needs --from <old state root>');
+        }
+        const r = await adoptStateRoot({
+          project,
+          to: stateRoot(),
+          from: resolve(deps.cwd, values.from),
+          apply: values.apply === true,
+          ports,
+          now: ports.clock.now(),
+        });
+        if (json) print(r);
+        else {
+          const clean = (t: string) => t.replace(/\p{Cc}/gu, ' ');
+          const out = [
+            `adopt ${clean(r.from)} -> ${clean(r.to)} (${values.apply === true ? (r.applied ? 'applied' : 'nothing to do') : 'dry run'})`,
+            ...(r.files.length === 0
+              ? ['  no history files in the old root']
+              : r.files.map(
+                  (f) =>
+                    `  ${f.action.padEnd(8)} ${f.name}${f.added === undefined ? '' : ` (+${f.added})`}${f.note === undefined ? '' : `: ${f.note}`}`,
+                )),
+            ...(r.pendingLeft === undefined
+              ? []
+              : [`  ${r.pendingLeft} pending queue entries stay behind: queue them again here`]),
+            `left in the old root: ${r.left.length === 0 ? 'nothing' : clean(r.left.join(', '))}`,
+            `next: ${clean(r.next)}`,
+            ...(values.apply === true
+              ? []
+              : [`the old root is never deleted; later: ${clean(r.deleteOld)}`]),
+          ];
+          stdout(`${out.join('\n')}\n`);
+        }
+        return r.files.some((f) => f.action === 'conflict') ? 1 : 0;
       }
 
       case 'accounts-clear': {
@@ -4519,7 +4726,7 @@ function parseCli(argv: string[]) {
         path: { type: 'string', multiple: true },
         dod: { type: 'string', multiple: true },
         plan: { type: 'string' },
-        help: { type: 'boolean' },
+        help: { type: 'boolean', short: 'h' },
         link: { type: 'boolean' },
         notifications: { type: 'boolean' },
         now: { type: 'boolean' },
@@ -4539,6 +4746,8 @@ function parseCli(argv: string[]) {
         yes: { type: 'boolean' },
         folder: { type: 'string' },
         artifacts: { type: 'string' },
+        from: { type: 'string' },
+        apply: { type: 'boolean' },
       },
       allowPositionals: true,
       strict: true,

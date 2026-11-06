@@ -412,6 +412,53 @@ export async function ensureRea(o: {
 }
 
 /**
+ * What a launch of `item` would decide about REA, read only (for `studio tick --dry-run`): nothing
+ * is installed, asked, recorded or imported. `ready`: installed and a folder granted; `install`:
+ * the owner confirmed (here or with the pane's button), the launch installs; `needs-owner`: the
+ * lead would get `line`; `declined`: the owner said no.
+ */
+export function reaDecision(o: {
+  ownerRoot: string;
+  owner: OwnerEnv;
+  item: string;
+  uid?: number;
+}): { decision: 'ready' | 'install' | 'needs-owner' | 'declined'; line: string } {
+  const ownerConfig = loadOwnerConfig(o.owner);
+  const version = reaVersionOf(ownerConfig);
+  const mode = reaMode(ownerConfig);
+  const needsFolder = ownerConfig.researchRoots.length === 0;
+  let installed = true;
+  try {
+    verifyReaInstall(o.ownerRoot, version, o.uid ?? process.getuid?.(), mode);
+  } catch {
+    installed = false;
+  }
+  const what = `${REA_PACKAGE} ${version} (${mode === 'full' ? 'trust' : 'strict'} mode)`;
+  if (installed && !needsFolder) return { decision: 'ready', line: `${what} installed` };
+  const home = o.owner.homedir ?? homedir();
+  let pane = false;
+  try {
+    pane = lstatSync(join(o.ownerRoot, PANE_CONFIRM_FILE)).isFile();
+  } catch {
+    pane = false;
+  }
+  const answer = readConsentEntry(o.ownerRoot, version, mode, home)?.answer;
+  if (answer === 'no' && !pane) {
+    return {
+      decision: 'declined',
+      line: `the install of ${what} was declined; studio research install --yes installs it`,
+    };
+  }
+  if (answer === 'yes' || pane) {
+    return {
+      decision: 'install',
+      line: `${installed ? 'grants the analysis folder' : `installs ${what}`} on launch: the owner confirmed${pane ? ' with the pane' : ''}`,
+    };
+  }
+  return { decision: 'needs-owner', line: installNeededLine(o.item, needsFolder) };
+}
+
+/**
  * The trust-mode notice, once per owner: true the first time (and records it), false after. A
  * record that cannot be written shows it again next time, never fails a launch.
  */

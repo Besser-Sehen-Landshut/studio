@@ -59,6 +59,7 @@ function world(on: On, options: WorldOptions = {}) {
     commands: [] as string[],
     hints: [] as (string | undefined)[],
     opened: [] as string[],
+    closed: [] as string[],
     statuses: [] as (string | undefined)[],
     toasts: [] as string[],
     forbidden: [] as string[],
@@ -89,6 +90,10 @@ function world(on: On, options: WorldOptions = {}) {
     if (options.openFails) throw new Error('refused');
     seen.opened.push(`${e.id}:${e.title}`);
     return { value: { isPlaced: true } };
+  });
+  on('ui.close', (_, e) => {
+    seen.closed.push(e.id);
+    return { value: undefined };
   });
   on('ui.status', (_, e) => {
     seen.statuses.push(e.text);
@@ -217,7 +222,9 @@ test('a Studio session registers the command, a 10 s timer and opens the pane', 
   const { clock, files, seen } = world(on, { files: { [YAML]: 'project: app\n' } });
   await $.session.start(start);
   expect(seen.commands).toEqual(['studio']);
-  expect(seen.hints).toEqual(['list | pipeline | more | group | status | pause | resume | lang']);
+  expect(seen.hints).toEqual([
+    'list | pipeline | more | group | status | pause | resume | lang | off | on',
+  ]);
   expect(seen.opened).toEqual(['studio-board:Studio board']);
   files.set(STATE, JSON.stringify(OK_STATE));
   await clock.advance(9_999);
@@ -516,6 +523,74 @@ test('/studio status answers the status text, read fresh', async ($, on) => {
   expect(after.text).toBe(OK_LINE);
 });
 
+// ---------- /studio off and on, and nested worktrees ----------
+
+const WORKTREE = `${PROJECT}/.worktrees/feature`;
+const OWNER_CONFIG = '/home/u/.config/studio/config.yaml';
+
+test('/studio off clears the status line, closes the pane and stops reading; on brings it back', async ($, on) => {
+  const { clock, seen } = world(on, { files: withState() });
+  await $.session.start(start);
+  expect(seen.statuses).toEqual([OK_LINE]);
+  const off = await $.command.run({ ...run, command: 'studio', args: 'off' });
+  expect(off.text).toMatch(/^Studio board off in this session/);
+  expect(seen.closed).toEqual(['studio-board']);
+  expect(seen.statuses).toEqual([OK_LINE, undefined]);
+  const reads = seen.fsCalls.length;
+  await clock.advance(60_000);
+  expect(seen.fsCalls.length).toBe(reads);
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  expect((await ui.find({ type: 'Text' }))?.text).toBe(
+    'Studio board is off in this session. → /studio on',
+  );
+  await ui.unmount();
+  const other = await $.command.run({ ...run, command: 'studio', args: 'status' });
+  expect(other.text).toMatch(/Back with \/studio on/);
+  const back = await $.command.run({ ...run, command: 'studio', args: 'on' });
+  expect(back.text).toBe('Studio board on again in this session.');
+  expect(seen.statuses.at(-1)).toBe(OK_LINE);
+  expect(seen.opened.at(-1)).toBe('studio-board:Studio board');
+});
+
+test('pane.nested_worktrees: hide starts a nested worktree session off, with the command', async ($, on) => {
+  const { clock, seen } = world(on, {
+    files: {
+      ...withState(),
+      [`${WORKTREE}/.git`]: 'gitdir: /work/app/.git/worktrees/feature\n',
+      [OWNER_CONFIG]: 'pane:\n  nested_worktrees: hide # quiet in worktrees\n',
+    },
+    cwd: WORKTREE,
+  });
+  await $.session.start({ ...start, cwd: `${WORKTREE}/src` });
+  expect(seen.commands).toEqual(['studio']);
+  expect(seen.opened).toEqual([]);
+  expect(seen.statuses).toEqual([]);
+  await clock.advance(60_000);
+  expect(seen.statuses).toEqual([]);
+  expect(seen.toasts).toEqual([]);
+  await $.command.run({ ...run, command: 'studio', args: 'on' });
+  expect(seen.opened).toEqual(['studio-board:Studio board']);
+  expect(seen.statuses).toEqual([OK_LINE]);
+});
+
+test('the default, show, keeps the board in a nested worktree session', async ($, on) => {
+  const { seen } = world(on, {
+    files: { ...withState(), [`${WORKTREE}/.git`]: 'gitdir: /work/app/.git/worktrees/feature\n' },
+  });
+  await $.session.start({ ...start, cwd: WORKTREE });
+  expect(seen.opened).toEqual(['studio-board:Studio board']);
+  expect(seen.statuses).toEqual([OK_LINE]);
+});
+
+test('hide leaves the project itself and other sessions alone', async ($, on) => {
+  const { seen } = world(on, {
+    files: { ...withState(), [OWNER_CONFIG]: 'pane: { nested_worktrees: hide }\n' },
+  });
+  await $.session.start(start);
+  expect(seen.opened).toEqual(['studio-board:Studio board']);
+  expect(seen.statuses).toEqual([OK_LINE]);
+});
+
 test('/studio pause names the terminal command and runs nothing', async ($, on) => {
   const { seen, files } = world(on, { files: withState() });
   await $.session.start(start);
@@ -553,7 +628,7 @@ test('anything else answers the usage text', async ($, on) => {
   await $.session.start(start);
   const { text } = await $.command.run({ ...run, command: 'studio', args: 'stop everything' });
   expect(text).toBe(
-    'Usage: /studio [list | pipeline | more | group [<project>] | status | pause | resume | lang de|en|auto]',
+    'Usage: /studio [list | pipeline | more | group [<project>] | status | pause | resume | lang de|en|auto | off | on]',
   );
   expect(seen.forbidden).toEqual([]);
 });
@@ -1005,7 +1080,7 @@ test('the command replies, the pane title and the owner lines speak German too',
   expect(await paneTexts($)).toContain('! Nutzungslimit: jede Crew-Anmeldung ist an ihrem Limit');
   const usage = await $.command.run({ ...run, command: 'studio', args: 'nonsense' });
   expect(usage.text).toBe(
-    'Aufruf: /studio [list | pipeline | more | group [<project>] | status | pause | resume | lang de|en|auto]',
+    'Aufruf: /studio [list | pipeline | more | group [<project>] | status | pause | resume | lang de|en|auto | off | on]',
   );
   const pause = await $.command.run({ ...run, command: 'studio', args: 'pause' });
   expect(pause.text).toMatch(

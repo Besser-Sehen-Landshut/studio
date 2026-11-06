@@ -1,4 +1,12 @@
-import { lstatSync, mkdirSync, readdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { stringify } from 'yaml';
 import { boardPath, parseBoard } from './board.js';
@@ -359,6 +367,27 @@ const CI_UNREAD_COMMENT = '# runners could not be read; run studio setup ci';
 
 /** The files a project's `.studio/` holds that `init` writes, relative to the project. */
 const STUDIO_FILES = ['.studio/studio.yaml', '.studio/board.yaml'];
+/** What goes into the repository: the config and the role files; the board stays on the lead machine. */
+const COMMITTED = ['.studio/studio.yaml', '.studio/roles/builder.md'];
+export const BOARD_IGNORE = '/.studio/board.yaml';
+const BOARD_IGNORE_TEXT = `# Studio: the board is lead-machine state; studio roadmap --write writes the shareable ROADMAP.md\n${BOARD_IGNORE}\n`;
+
+/**
+ * Adds the board to the project's `.gitignore` (created when missing), so Studio's edits of the
+ * working-tree board never show as changes. Refuses a `.gitignore` that is a link or no file.
+ */
+function ignoreBoard(project: string): void {
+  const file = join(project, '.gitignore');
+  let text = '';
+  if (exists(file)) {
+    const st = lstatSync(file);
+    if (st.isSymbolicLink() || !st.isFile()) throw new Error('.gitignore is not a plain file');
+    text = readFileSync(file, 'utf8');
+  }
+  if (text.split(/\r?\n/).some((l) => l.trim() === BOARD_IGNORE)) return;
+  const sep = text === '' || text.endsWith('\n') ? '' : '\n';
+  writeFileSync(file, `${text}${sep}${text === '' ? '' : '\n'}${BOARD_IGNORE_TEXT}`);
+}
 
 async function isIgnored(o: InitOptions, file: string): Promise<boolean> {
   try {
@@ -388,7 +417,7 @@ function nextSteps(
         ]
       : []),
     ...(written ? [] : ['Run studio init --write to write the two files.']),
-    'Commit .studio/studio.yaml and .studio/board.yaml.',
+    'Commit .studio/studio.yaml and .gitignore. The board (.studio/board.yaml) stays on this machine and is not committed; studio roadmap --write writes ROADMAP.md to share.',
     ...(open('crew token') || open('claude account')
       ? [
           `In your own terminal, run studio setup once: it stores the crew token and a Claude account for the crews, one guided step each.${notFound}`,
@@ -465,17 +494,25 @@ export async function runInit(o: InitOptions): Promise<number> {
     });
   } else checks.push({ name: 'repository', status: 'pass', detail: primary });
 
+  // studio.yaml and roles/ go into the repository; the board does not (init ignores it).
   const ignored = (
-    await Promise.all(STUDIO_FILES.map(async (f) => ((await isIgnored(o, f)) ? f : undefined)))
+    await Promise.all(COMMITTED.map(async (f) => ((await isIgnored(o, f)) ? f : undefined)))
   ).filter((f) => f !== undefined);
+  const boardIgnored = await isIgnored(o, '.studio/board.yaml');
   checks.push(
     ignored.length === 0
-      ? { name: 'gitignore', status: 'pass', detail: '.studio/ is not ignored' }
+      ? {
+          name: 'gitignore',
+          status: 'pass',
+          detail: boardIgnored
+            ? '.studio/studio.yaml is not ignored, the board is'
+            : `.studio/studio.yaml is not ignored; --write adds ${BOARD_IGNORE} to .gitignore`,
+        }
       : {
           name: 'gitignore',
           status: 'warn',
-          detail: `${ignored.join(', ')} ignored by git, but they belong in the repository`,
-          fix: 'remove .studio from .gitignore (runtime state lives outside the repository)',
+          detail: `${ignored.join(', ')} ignored by git, but studio.yaml and roles/ belong in the repository`,
+          fix: `ignore only ${BOARD_IGNORE}, not all of .studio (runtime state lives outside the repository)`,
         },
   );
 
@@ -565,6 +602,16 @@ export async function runInit(o: InitOptions): Promise<number> {
         [boardPath(o.project), boardText],
       ]);
       written.push(...STUDIO_FILES);
+      if (!boardIgnored) {
+        try {
+          ignoreBoard(o.project);
+          written.push('.gitignore');
+        } catch (e) {
+          warnings.push(
+            `gitignore: could not add ${BOARD_IGNORE} (${(e as Error).message}); add it by hand`,
+          );
+        }
+      }
     }
   }
   const steps = nextSteps(prefix, written.length > 0, checks, o.launcher);
@@ -605,7 +652,12 @@ export async function runInit(o: InitOptions): Promise<number> {
         .split('\n')
         .map((l) => `  ${l}`),
     );
-    lines.push('', '.studio/board.yaml: an empty board (items: []) with a commented example', '');
+    lines.push(
+      '',
+      '.studio/board.yaml: an empty board (items: []) with a commented example; it stays on this machine',
+      ...(boardIgnored ? [] : [`.gitignore: gets ${BOARD_IGNORE}`]),
+      '',
+    );
     if (refused !== undefined) lines.push(refused);
     else if (written.length > 0) lines.push(`written: ${written.join(', ')}`);
     else lines.push('dry run: nothing written; run studio init --write to write these files');

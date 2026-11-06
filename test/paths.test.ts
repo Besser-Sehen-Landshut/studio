@@ -22,8 +22,10 @@ import {
   cloneOriginUrl,
   ensureStateDir,
   inspectStateLock,
+  normalizeOrigin,
   processIdentity,
   removeStateEntry,
+  sameOrigin,
   stateDirName,
   stateRootFor,
   writeStateFile,
@@ -79,6 +81,74 @@ describe('checkStateMarker', () => {
     const unmarked = join(fresh(), 'state');
     mkdirSync(join(unmarked, 'clones'), { recursive: true });
     expect(() => checkStateMarker(unmarked, m)).toThrow(/no marker/);
+  });
+
+  it('takes another spelling of the same origin and refuses another repository', () => {
+    const state = join(fresh(), 'state');
+    const m = { projectRealpath: '/p', originUrl: 'git@github.com:org/repo.git' };
+    checkStateMarker(state, m);
+    for (const url of [
+      'https://github.com/org/repo',
+      'https://github.com/org/repo.git',
+      'https://github.com/org/repo/',
+      'ssh://git@github.com/org/repo.git',
+      'https://GitHub.com/Org/Repo.git',
+    ]) {
+      expect(() => checkStateMarker(state, { ...m, originUrl: url })).not.toThrow();
+    }
+    expect(() =>
+      checkStateMarker(state, { ...m, originUrl: 'https://github.com/org/other' }),
+    ).toThrow(/another project or origin/);
+    expect(() =>
+      checkStateMarker(state, { ...m, originUrl: 'https://gitlab.com/org/repo' }),
+    ).toThrow(/another project or origin/);
+  });
+});
+
+describe('normalizeOrigin', () => {
+  it('maps ssh, scp-like and https spellings of one repository to one identity', () => {
+    const same = [
+      'git@github.com:org/repo.git',
+      'git@github.com:org/repo',
+      'git@github.com:/org/repo.git',
+      'ssh://git@github.com/org/repo.git',
+      'ssh://git@github.com:22/org/repo',
+      'git+ssh://git@github.com/org/repo.git',
+      'https://github.com/org/repo',
+      'https://github.com/org/repo.git',
+      'https://github.com/org/repo/',
+      'https://github.com/org/repo.git/',
+      'https://user@github.com/org/repo.git',
+      'https://www.github.com/org/repo',
+      'HTTPS://GITHUB.COM/org/repo',
+      '  https://github.com/org/repo  ',
+    ];
+    for (const url of same) expect(normalizeOrigin(url), url).toBe('github.com/org/repo');
+  });
+
+  it('ignores case on the host always, on owner and repository only on GitHub', () => {
+    expect(sameOrigin('https://GitHub.com/Org/Repo', 'git@github.com:org/repo.git')).toBe(true);
+    expect(sameOrigin('https://Git.Example.org/Org/Repo', 'https://git.example.org/Org/Repo')).toBe(
+      true,
+    );
+    expect(sameOrigin('https://git.example.org/Org/Repo', 'https://git.example.org/org/repo')).toBe(
+      false,
+    );
+  });
+
+  it('tells different repositories, owners and hosts apart', () => {
+    expect(sameOrigin('git@github.com:org/repo.git', 'git@github.com:org/repo2.git')).toBe(false);
+    expect(sameOrigin('git@github.com:org/repo.git', 'git@github.com:other/repo.git')).toBe(false);
+    expect(sameOrigin('git@github.com:org/repo.git', 'git@gitlab.com:org/repo.git')).toBe(false);
+    expect(sameOrigin('https://github.com/org/repo', 'https://github.com/org/repo/sub')).toBe(
+      false,
+    );
+  });
+
+  it('keeps local paths as they are, without trailing slashes', () => {
+    expect(normalizeOrigin('/srv/git/app.git/')).toBe('/srv/git/app.git');
+    expect(normalizeOrigin('file:///srv/git/app.git')).toBe('file:///srv/git/app.git');
+    expect(sameOrigin('/srv/git/app', '/srv/git/other')).toBe(false);
   });
 });
 

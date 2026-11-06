@@ -217,9 +217,9 @@ export interface StateMarker {
 
 /**
  * Binds a state root to one project: on first use writes `<root>/marker.json` (0600, exclusive);
- * later it must name the same project real path and origin URL, else the launch is refused. A
- * state root that already has entries but no marker, a symlinked root or marker, or an unreadable
- * marker are refused as well.
+ * later it must name the same project real path and origin (compared by `normalizeOrigin`), else
+ * the launch is refused. A state root that already has entries but no marker, a symlinked root or
+ * marker, or an unreadable marker are refused as well.
  */
 export function checkStateMarker(root: string, expected: StateMarker): void {
   const file = join(root, 'marker.json');
@@ -247,12 +247,47 @@ export function checkStateMarker(root: string, expected: StateMarker): void {
   }
   if (
     found?.projectRealpath !== expected.projectRealpath ||
-    found?.originUrl !== expected.originUrl
+    typeof found?.originUrl !== 'string' ||
+    !sameOrigin(found.originUrl, expected.originUrl)
   ) {
     throw new Error(
       `state root marker ${file} belongs to another project or origin; refusing to launch`,
     );
   }
+}
+
+/** Hosts that treat owner and repository names case-insensitively. */
+const CASE_FREE_HOSTS = new Set(['github.com', 'www.github.com']);
+
+/**
+ * One spelling per repository for comparing origins: `<host>/<owner>/<repo>`, so
+ * `git@github.com:org/repo.git`, `ssh://git@github.com/org/repo`, `https://github.com/org/repo`
+ * and `https://github.com/org/repo.git/` are the same project. The host is lower-cased, a login
+ * and a port are dropped, a trailing slash and `.git` are stripped; on GitHub owner and repository
+ * are lower-cased too, since GitHub ignores their case. Anything else (a local path, `file://`)
+ * keeps its spelling, without trailing slashes.
+ */
+export function normalizeOrigin(url: string): string {
+  const raw = url.trim();
+  const clean = (host: string, path: string): string => {
+    const h = host.toLowerCase().replace(/\.$/, '');
+    let p = path.replace(/^\/+/, '').replace(/\/+$/, '');
+    p = p.replace(/\.git$/i, '').replace(/\/+$/, '');
+    if (CASE_FREE_HOSTS.has(h)) p = p.toLowerCase();
+    return `${h === 'www.github.com' ? 'github.com' : h}/${p}`;
+  };
+  // ssh://, git+ssh://, https://, http://, git:// with an optional login and port.
+  const m = /^(?:git\+)?(?:ssh|https?|git):\/\/(?:[^@/]*@)?([^/:]+)(?::\d*)?(\/.*)?$/i.exec(raw);
+  if (m) return clean(m[1] as string, m[2] ?? '');
+  // scp-like: [user@]host:path, never a Windows drive (C:\...) or a local path.
+  const scp = /^(?:[^@/\s]+@)?([A-Za-z0-9.-]+):(?!\/\/)(.+)$/.exec(raw);
+  if (scp && (scp[1] as string).length > 1) return clean(scp[1] as string, scp[2] as string);
+  return raw.replace(/\/+$/, '');
+}
+
+/** Whether two origin URLs name the same repository (see `normalizeOrigin`). */
+export function sameOrigin(a: string, b: string): boolean {
+  return normalizeOrigin(a) === normalizeOrigin(b);
 }
 
 /**

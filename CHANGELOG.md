@@ -3,6 +3,55 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.22.1] - 2026-11-06
+
+Fixes from the review before the handover: a project's state root can be moved, origins compare by
+repository rather than by spelling, the board stays out of git, the board can be turned off per session
+and in nested worktrees, the help covers every command, and a tick can be previewed. Not tagged yet; the
+maintainers tag after the merge.
+
+### Added
+
+- `studio adopt --from <old state root> [--apply]`: brings the history of an earlier state root of the
+  same repository (metrics, costs, lessons, the lessons review, the skills check, exceptions, releases,
+  REA grants, the flaky ledger, CI reruns, acceptance runs, the contract record, the queue's merge
+  history) into this project's state root. Owner only, in a terminal; refused for crews, for another
+  repository, and while a crew is alive, a queue run or a tick holds its lock, or a merge is in progress
+  in either root. A dry run without `--apply`; idempotent (append-only logs merge line by line, the queue
+  history entry by entry, a differing JSON file is kept and reported as a conflict); never copies
+  clones, crew records, logs, locks or per-run folders; never deletes the old root and prints the
+  command to do it.
+- `studio tick --dry-run`: what the next tick would do (collect, review items, launches with each
+  researcher's REA decision, offers, queue adds and the queue run, a member's contract check, accepting
+  epics, open releases, a due skills check, held and lead lines), read only: no lock, no state root bound,
+  no fetch, no crew, no write, no push.
+- `studio help`, with `--help` and `-h` as aliases, exits 0. The help is generated from one list
+  (`src/help.ts`) and now names `setup research`, `research install --yes --folder`, `status --group`,
+  `add --artifacts`, `epic edit --member`, `adopt`, `tick --dry-run`, `secret set worker-token` and the
+  REA step of `setup`. A test holds it to the dispatcher's commands, the parser's options and the
+  README's CLI table.
+- `/studio off` and `/studio on`: the board off or on in this session only (pane, status line, toasts).
+- `pane: { nested_worktrees: show | hide }` in the owner config (default `show`): with `hide`, a session
+  in a git worktree nested under a Studio project starts with the board off; `/studio on` brings it back.
+- `studio doctor` warns while git tracks `.studio/board.yaml` (`boardTracked` in `--json`).
+
+### Changed
+
+- The board is not committed: it is the lead machine's working state. `studio init --write` adds
+  `/.studio/board.yaml` to `.gitignore` (created when missing) and its next steps say to commit
+  `.studio/studio.yaml` and `.gitignore`; `studio.yaml` and `roles/` stay committed. The `gitignore`
+  check warns only when `studio.yaml` or `roles/` would be ignored. The `studio:init` skill is unchanged:
+  two baseline runs (`test/skills/baseline-lead.md`) followed the new next steps and committed
+  `.studio/studio.yaml` and `.gitignore`, so no failing baseline exists for a change.
+- `marker.json` origins compare by repository: `git@github.com:org/repo.git`,
+  `ssh://git@github.com/org/repo`, `https://github.com/org/repo` and `https://github.com/org/repo.git/`
+  are the same project (host lower-cased, login and port dropped, trailing slash and `.git` stripped,
+  owner and repository case-insensitive on GitHub).
+- README: the `workers.accept` example in the owner config uses `{ login, id }` entries; `studio setup`
+  has six numbered steps, the sixth (REA) optional; the board section says where the board lives and
+  that cross-project dependencies and group epics read the other project's working-tree board.
+- Version 0.22.1.
+
 ## [0.22.0] - 2026-11-06
 
 Localization done properly: one set of locale files for the pane, the `/studio` command, the pushes

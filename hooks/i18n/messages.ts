@@ -150,6 +150,11 @@ export interface Strings {
   noProjectReply: (project: string) => string;
   /** The reply to `/studio lang`: this language, named in itself. */
   languageSet: string;
+  /** `/studio off`: this session shows no board until `/studio on`. */
+  offReply: string;
+  onReply: string;
+  /** The pane while the board is off in this session. */
+  offPane: string;
   reaConfirmed: string;
   reaNotConfirmed: string;
 

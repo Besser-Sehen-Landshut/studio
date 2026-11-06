@@ -302,6 +302,10 @@ export default defineLocale({
     focusReply: (id) => `Studio-Board: die Arbeitsliste von ${id}. Zurück mit /studio group.`,
     noProjectReply: (id) => `Kein Projekt ${id} in diesem Verbund. Siehe /studio group.`,
     languageSet: 'Studio-Board: Deutsch.',
+    offReply:
+      'Studio-Board in dieser Sitzung aus: kein Bereich, keine Statuszeile, keine Hinweise. Zurück mit /studio on.',
+    onReply: 'Studio-Board in dieser Sitzung wieder an.',
+    offPane: 'Studio-Board ist in dieser Sitzung aus. → /studio on',
     reaConfirmed: 'REA-Installation bestätigt. Sie läuft beim nächsten Start, der sie braucht.',
     reaNotConfirmed:
       'Die REA-Bestätigung ließ sich nicht speichern; studio research install im eigenen Terminal ausführen.',

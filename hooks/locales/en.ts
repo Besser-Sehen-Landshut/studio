@@ -296,6 +296,10 @@ const strings: Strings = {
   focusReply: (id) => `Studio board: the work list of ${id}. Back with /studio group.`,
   noProjectReply: (id) => `No project ${id} in this group. See /studio group.`,
   languageSet: 'Studio board: English.',
+  offReply:
+    'Studio board off in this session: no pane, status line or toasts. Back with /studio on.',
+  onReply: 'Studio board on again in this session.',
+  offPane: 'Studio board is off in this session. → /studio on',
   reaConfirmed: 'REA install confirmed. It installs on the next launch that needs it.',
   reaNotConfirmed:
     'The REA confirmation could not be saved; run studio research install in your own terminal.',
