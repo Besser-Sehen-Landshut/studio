@@ -438,6 +438,30 @@ export function wildcardOverIp(entry: string): boolean {
   }
 }
 
+/**
+ * `merge.runner_load`: the queue merges only while at most `max_busy` of the organisation's
+ * self-hosted runners whose name matches `name_pattern` are busy, in each of `samples` reads
+ * `interval_s` apart. A read that fails counts as busy.
+ */
+export const runnerLoadSchema = z.strictObject({
+  org: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/, 'must be a GitHub organisation name'),
+  namePattern: z
+    .string()
+    .min(1)
+    .max(200)
+    .superRefine((p, ctx) => {
+      try {
+        new RegExp(p);
+      } catch {
+        ctx.addIssue({ code: 'custom', message: 'not a valid regular expression' });
+      }
+    }),
+  maxBusy: z.number().int().nonnegative(),
+  samples: z.number().int().min(1).max(10).default(2),
+  intervalS: z.number().nonnegative().max(600).default(30),
+});
+export type RunnerLoad = z.infer<typeof runnerLoadSchema>;
+
 /** `limits:` in studio.yaml and in the owner config. */
 const dailyLimitsSchema = z.strictObject({
   dailyCostUsd: z.number().positive().optional(),
@@ -460,6 +484,9 @@ export const studioConfigSchema = z
       strategy: z.enum(['studio-queue', 'native-queue']),
       contractPaths: strList,
       method: z.enum(['merge', 'squash', 'rebase']).default('merge'),
+      // Optional gate before every merge of the queue: the self-hosted runners of an organisation
+      // that the merged repositories' CI uses. Off when unset.
+      runnerLoad: runnerLoadSchema.optional(),
     }),
     // Partial record keyed by role template name; at least one role must be configured.
     roles: z

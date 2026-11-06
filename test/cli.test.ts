@@ -5191,3 +5191,116 @@ describe('tick --dry-run', () => {
     expect((await cli(fx, fakePorts(passingGh().gh).ports, 'tick', 'x', '--dry-run')).code).toBe(1);
   });
 });
+
+describe('merge: any pull request through the queue', () => {
+  /** A green, open PR 7 without a board item. */
+  const externalGh = (check = 'pass') =>
+    fakeGh((l) => {
+      if (/^pr view 7 --repo org\/app --json headRefOid,state,mergeable/.test(l)) {
+        return {
+          stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN', mergeable: 'MERGEABLE' }),
+        };
+      }
+      if (l.startsWith('pr checks 7')) {
+        return { stdout: JSON.stringify([{ name: 'ci', bucket: check }]) };
+      }
+      if (l.startsWith('run list --repo org/app --branch main --event push')) {
+        return { stdout: '[]' };
+      }
+      if (l.startsWith('pr merge 7')) return {};
+      if (l.includes('--json mergeCommit')) {
+        return { stdout: JSON.stringify({ mergeCommit: { oid: 'c'.repeat(40) } }) };
+      }
+      return undefined;
+    });
+
+  it('queues an external PR, lists it, and the queue merges it without touching the board', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const g = externalGh();
+    const { ports } = fakePorts(g.gh);
+    const add = await cli(fx, ports, 'merge', '7', '--by', 'peer-session');
+    expect(add.code).toBe(0);
+    expect(JSON.parse(add.out)).toMatchObject({
+      queued: 'org/app#7',
+      external: true,
+      by: 'peer-session',
+      head: HEAD,
+      pending: 1,
+    });
+    const list = JSON.parse((await cli(fx, ports, 'queue')).out);
+    expect(list.pending).toEqual([
+      { pr: 7, repo: 'org/app', external: { by: 'peer-session', at: expect.any(String) } },
+    ]);
+    const run = await cli(fx, ports, 'queue', 'run');
+    expect(run.code).toBe(0);
+    expect(g.calls.some((c) => c.startsWith('pr update-branch'))).toBe(false);
+    expect(g.calls).toContain(`pr merge 7 --repo org/app --squash --match-head-commit ${HEAD}`);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('in_review');
+    const after = JSON.parse((await cli(fx, ports, 'queue', 'list')).out);
+    expect(after.done).toEqual([
+      expect.objectContaining({
+        pr: 7,
+        result: 'merged',
+        status: 'MERGED',
+        external: expect.any(Object),
+      }),
+    ]);
+    // Metrics count the studio's own work only.
+    expect(existsSync(join(fx.state, 'metrics.jsonl'))).toBe(false);
+  });
+
+  it('refuses a PR of a board item, an unconfigured repo, a closed PR and a bad --by', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const { ports } = fakePorts(
+      fakeGh((l) =>
+        l.startsWith('pr view 8 ')
+          ? { stdout: JSON.stringify({ headRefOid: HEAD, state: 'CLOSED', mergeable: 'UNKNOWN' }) }
+          : undefined,
+      ).gh,
+    );
+    const board = await cli(fx, ports, 'merge', '5');
+    expect(board.code).toBe(1);
+    expect(board.err).toContain('belongs to board item APP-1');
+    expect((await cli(fx, ports, 'merge', '7', '--repo', 'other/x')).err).toContain(
+      'repository other/x is not configured',
+    );
+    expect((await cli(fx, ports, 'merge', '8')).err).toContain('org/app#8 is closed');
+    expect((await cli(fx, ports, 'merge', '7', '--by', 'two words')).code).toBe(1);
+    expect((await cli(fx, ports, 'merge', 'abc')).code).toBe(1);
+    const crew = { ...fx, env: { ...fx.env, STUDIO_ROLE: 'crew' } };
+    expect((await cli(crew, ports, 'merge', '7')).err).toContain('not for crew sessions');
+    expect(existsSync(join(fx.state, 'queue.json'))).toBe(false);
+  });
+
+  it('--wait runs the queue and reports MERGED, or FAILED with exit 1', async () => {
+    const fx = makeFx([]);
+    const ok = await cli(fx, fakePorts(externalGh().gh).ports, 'merge', '7', '--wait');
+    expect(ok.code).toBe(0);
+    expect(JSON.parse(ok.out)).toMatchObject({ queued: 'org/app#7', status: 'MERGED' });
+    const fx2 = makeFx([]);
+    const bad = await cli(fx2, fakePorts(externalGh('fail').gh).ports, 'merge', '7', '--wait');
+    expect(bad.code).toBe(1);
+    expect(JSON.parse(bad.out)).toMatchObject({ status: 'FAILED', reason: 'check ci failed' });
+  });
+
+  it('a board item that took the PR meanwhile stops the external merge', async () => {
+    const fx = makeFx([]);
+    const g = externalGh();
+    const { ports } = fakePorts(g.gh);
+    expect((await cli(fx, ports, 'merge', '7')).code).toBe(0);
+    writeFileSync(
+      join(fx.project, '.studio', 'board.yaml'),
+      `items:\n${itemYaml({ id: 'APP-2', status: 'in_review', pr: 7 })}\n`,
+    );
+    expect((await cli(fx, ports, 'queue', 'run')).code).toBe(0);
+    expect(g.calls.some((c) => c.startsWith('pr merge 7'))).toBe(false);
+    const q = JSON.parse(readFileSync(join(fx.state, 'queue.json'), 'utf8'));
+    expect(q.done[0]).toMatchObject({
+      pr: 7,
+      result: 'failed',
+      reason: 'the pull request belongs to board item APP-2',
+    });
+    // The board item is not moved by the external entry's result.
+    expect(statusOf(fx, 'APP-2')?.status).toBe('in_review');
+  });
+});

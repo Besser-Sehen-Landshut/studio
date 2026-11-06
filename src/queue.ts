@@ -10,9 +10,10 @@ import {
 import { constants as osConstants } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
-import { capacityHoldsTwice } from './capacity.js';
+import { capacityHoldsTwice, readRunnerLoad } from './capacity.js';
 import type { StudioConfig } from './config.js';
 import { HeldError } from './held.js';
+import { branchBuildRunning } from './main-build.js';
 import {
   acquireStateLock,
   assertStatePath,
@@ -23,15 +24,35 @@ import {
 import type { Clock, Gh, Git, Host } from './ports.js';
 
 export type QueueStep = 'update' | 'checks' | 'capacity' | 'merge';
-export type QueueEntry = { pr: number; repo: string; item?: string };
+/**
+ * A pull request handed to the queue without a board item (`studio merge`): who asked and when.
+ * It skips the branch update and the board's approval; GitHub's branch protection decides.
+ */
+export type ExternalMark = { by: string; at: string };
+export type QueueEntry = { pr: number; repo: string; item?: string; external?: ExternalMark };
 export type QueueCurrent = QueueEntry & { head?: string; step: QueueStep };
 export type QueueDone = QueueEntry & {
   result: 'merged' | 'failed';
   reason?: string;
+  /** The failure was the queue's time limit running out while it waited. */
+  timeout?: true;
   at: string;
 };
 export type QueueState = { current?: QueueCurrent; pending: QueueEntry[]; done: QueueDone[] };
-export type MergeOutcome = { result: 'merged' | 'failed'; reason?: string; mergeSha?: string };
+export type MergeOutcome = {
+  result: 'merged' | 'failed';
+  reason?: string;
+  mergeSha?: string;
+  timeout?: true;
+};
+/** How a finished entry is reported: merged, failed, or failed because the time limit ran out. */
+export const doneStatus = (d: Pick<QueueDone, 'result' | 'timeout'>): string =>
+  d.result === 'merged' ? 'MERGED' : d.timeout === true ? 'TIMEOUT' : 'FAILED';
+/** The step an entry starts at: an external pull request's branch is not Studio's to update. */
+export const firstStep = (e: QueueEntry): QueueStep =>
+  e.external === undefined ? 'update' : 'checks';
+/** Who may be named as having asked for an external merge: a short plain name. */
+export const ASKED_BY_RE = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$/;
 export type QueuePorts = { gh: Gh; clock: Clock; host: Host };
 export type QueueOptions = {
   /** Owner-level state root; when set, a `merged` event is appended to its metrics.jsonl. */
@@ -99,6 +120,7 @@ const entrySchema = z.strictObject({
   pr: z.number().int().positive(),
   repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
   item: z.string().min(1).optional(),
+  external: z.strictObject({ by: z.string().regex(ASKED_BY_RE), at: z.string() }).optional(),
 });
 const stateSchema = z.strictObject({
   current: entrySchema
@@ -112,6 +134,7 @@ const stateSchema = z.strictObject({
     entrySchema.extend({
       result: z.enum(['merged', 'failed']),
       reason: z.string().optional(),
+      timeout: z.literal(true).optional(),
       at: z.string(),
     }),
   ),
@@ -201,7 +224,7 @@ export function enqueue(stateRoot: string, entry: QueueEntry): number {
 export function takeNextPending(stateRoot: string): QueueEntry | undefined {
   return updateQueue(stateRoot, (q) => {
     const next = q.pending.shift();
-    if (next) q.current = { ...next, step: 'update' };
+    if (next) q.current = { ...next, step: firstStep(next) };
     return next;
   });
 }
@@ -655,6 +678,7 @@ export async function mergeOne(
   const capacityWaitMs = opts.capacityWaitMs ?? CAPACITY_WAIT_MS;
   const deadline = clock.now().getTime() + (opts.timeoutMs ?? QUEUE_TIMEOUT_MS);
   const failed = (reason: string): MergeOutcome => ({ result: 'failed', reason });
+  const expired = (reason: string): MergeOutcome => ({ result: 'failed', reason, timeout: true });
   const timedOut = () => clock.now().getTime() >= deadline;
   const graceMs = opts.checksGraceMs ?? CHECKS_GRACE_MS;
   // Zero checks right after a head change (update-branch, a moved head) are pending until then.
@@ -740,9 +764,9 @@ export async function mergeOne(
             break;
           }
         }
-        if (timedOut()) return failed('checks timed out');
+        if (timedOut()) return expired('checks timed out');
         await clock.sleep(pollMs);
-        if (timedOut()) return failed('checks timed out');
+        if (timedOut()) return expired('checks timed out');
       }
       const after = await viewPr(entry, gh);
       if (typeof after === 'string') return failed(after);
@@ -759,14 +783,9 @@ export async function mergeOne(
     } else if (step === 'capacity') {
       enter('capacity');
       for (;;) {
-        let holds = false;
-        try {
-          holds = await capacityHoldsTwice(config, ports);
-        } catch {
-          holds = false; // unknown capacity counts as busy
-        }
-        if (holds) break;
-        if (timedOut()) return failed('capacity did not hold in time');
+        const waiting = await mergeGateWaits(entry, config, ports);
+        if (waiting === undefined) break;
+        if (timedOut()) return expired(waiting);
         await clock.sleep(capacityWaitMs);
       }
       step = 'merge';
@@ -841,6 +860,45 @@ export async function mergeOne(
   }
 }
 
+/**
+ * Why the merge must wait now, as the line a timeout reports, or undefined when it may go on. In
+ * order: for an external pull request, a push build still running on its base branch (a merge
+ * would cancel or race it); CI capacity, read twice; then `merge.runner_load` when configured.
+ * Anything that cannot be read counts as a reason to wait.
+ */
+async function mergeGateWaits(
+  entry: QueueEntry,
+  config: StudioConfig,
+  ports: QueuePorts,
+): Promise<string | undefined> {
+  if (entry.external !== undefined) {
+    const base = await liveBase(ports.gh, entry);
+    const build =
+      base === undefined ? 'unknown' : await branchBuildRunning(ports.gh, entry.repo, base);
+    if (build !== 'idle') {
+      return build === 'running'
+        ? `the push build on ${base} was still running when the time ran out`
+        : 'the push build on the base branch could not be read in time';
+    }
+  }
+  let holds = false;
+  try {
+    holds = await capacityHoldsTwice(config, ports);
+  } catch {
+    holds = false; // unknown capacity counts as busy
+  }
+  if (!holds) return 'capacity did not hold in time';
+  const rule = config.merge.runnerLoad;
+  if (rule === undefined) return undefined;
+  const load = await readRunnerLoad(rule, ports);
+  if (load.ok) return undefined;
+  const detail =
+    load.error !== undefined
+      ? `runner read failed: ${load.error}`
+      : `${load.busy ?? '?'} busy, at most ${rule.maxBusy}`;
+  return `runner load of ${rule.org} did not hold in time (${detail})`;
+}
+
 async function firstCommitAt(entry: QueueEntry, gh: Gh): Promise<string | undefined> {
   const r = await gh.run([
     'pr',
@@ -879,7 +937,7 @@ export async function runQueue(
     if (!state.current) {
       const next = opts.takeNext ? opts.takeNext() : state.pending.shift();
       if (!next) return state;
-      state.current = { ...next, step: 'update' };
+      state.current = { ...next, step: firstStep(next) };
       persist(state);
     }
     const current = state.current;
@@ -896,6 +954,7 @@ export async function runQueue(
       ...entry,
       result: outcome.result,
       ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+      ...(outcome.timeout === true ? { timeout: true as const } : {}),
       at: ports.clock.now().toISOString(),
     };
     state.done.push(done);
@@ -909,7 +968,8 @@ export async function runQueue(
         log(`board update failed for PR ${current.pr}: ${(err as Error).message}`);
       }
     }
-    if (outcome.result === 'merged' && opts.stateRoot !== undefined) {
+    // Metrics measure the studio's own work: an external pull request's merge is not counted.
+    if (outcome.result === 'merged' && opts.stateRoot !== undefined && !current.external) {
       try {
         const first = await firstCommitAt(current, ports.gh);
         appendStateLine(
