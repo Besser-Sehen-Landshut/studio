@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.25.0] - 2026-11-06
+
+Relay workers: crews on a machine without GitHub access, experimental until a pilot.
+
+### Added
+
+- Relay workers (experimental, not yet piloted on a real Windows machine): a worker machine without any GitHub access. With `workers.relay.<label>` (host, pinned host key, the lead's key) in the lead's owner config, `tick` starts items of that label over SSH: the pinned `main` goes over as a git bundle with the job and the crew's Claude token (picked by the usual credential rules). `studio relay serve`, forced for the lead's key, runs the crew there exactly as a worker does and hands back the report and a bundle of `studio/<id>`; the lead checks it as untrusted crew output, pushes it with its crew token (never forced) and opens the pull request. A worker out of reach past `grace_minutes` goes to the lead. `studio stop`/`drop` stop the crew there; `studio doctor` checks each relay label end to end.
+- Windows relay workers: a standard relay account restricted by an sshd `Match User` block, a broker task (SYSTEM) for the one elevated step, admin-only trees for the Node.js and Studio copies, keys, pairings and config, the crew password sealed for the machine, a profile reset between jobs run as the crew user, and checks before every start: load and disk, WebClient stopped and disabled, loopback listeners on denied ports, SMB sessions to `deny.hosts` (hosts, ranges, `local-subnets`, `tailnet-peers`) as the crew user, no stored credentials.
+- `studio relay pair <label> <host>` and `studio relay install --pair "<line>"`: a Windows relay worker in five steps. The install (elevated, run again to repair, refused over SSH) sets up everything the worker needs, keeps sshd stopped and closed until verified, allows keys only, lets only the Tailscale interface (or a given interface or range) reach sshd, and authorizes exactly the keys of its recorded pairings. `studio relay pair <label> --connect` pins the worker's host key only when the worker proves it with the pairing's single-use secret (HMAC-SHA256, an hour). `studio relay unpair <label>` takes a lead's key away.
+- `deny.hosts` in `workers.<label>.deny` and the worker's own deny list.
+
+### Changed
+
+- The guard refuses network paths (`\\host\share`, WebDAV, `\\?\UNC\`) for crews on native Windows workers.
+
 ## [0.24.0] - 2026-11-06
 
 Native Windows workers, experimental.
