@@ -28436,6 +28436,8 @@ var de_default2 = defineLocale({
           return "Nutzungslimit: jede Crew-Anmeldung ist an ihrem Limit";
         case "usage_parked":
           return `Nutzungslimit: keine Crew-Anmeldung frei; fr\xFChestens wieder ${p.reset ?? "unbekannt"}`;
+        case "usage_label":
+          return `Nutzungslimit bei ${p.label} bis ${p.reset}; darauf startet nichts`;
         case "limits_unreadable":
           return "limits.json ist nicht lesbar: keine Crew startet";
         case "usage_unreadable":
@@ -28743,6 +28745,8 @@ var strings = {
         return "usage limit: every crew credential is at its limit";
       case "usage_parked":
         return `usage limit: no crew credential free; earliest reset ${p.reset ?? "unknown"}`;
+      case "usage_label":
+        return `usage limit on ${p.label} until ${p.reset}; nothing launches on it`;
       case "limits_unreadable":
         return "limits.json is unreadable: no crew starts";
       case "usage_unreadable":
@@ -31943,6 +31947,15 @@ var RULES = [
       return reset2 === void 0 || reset2 === "unknown" ? void 0 : { reset: reset2 };
     }
   ],
+  [
+    /^usage limit on (\S+) until (.+?); nothing launches on it$/,
+    "usage_label",
+    (m) => {
+      const label = value(m[1]);
+      const reset2 = value(m[2]);
+      return label === void 0 || reset2 === void 0 ? void 0 : { label, reset: reset2 };
+    }
+  ],
   [/^usage limit state is unreadable/, "limits_unreadable"],
   [/^usage\.json is unreadable/, "usage_unreadable"],
   [/^credential provider returned nothing/, "provider_empty"],
@@ -32241,6 +32254,30 @@ function matchLimitText(text) {
   return { kind, ...resetsAt ? { resetsAt } : {} };
 }
 var isObject2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+function rateLimitInfo(ev) {
+  if (isObject2(ev.rate_limit_info)) return ev.rate_limit_info;
+  const params = ev.api_error_params;
+  return isObject2(params) && isObject2(params.rate_limit_info) ? params.rate_limit_info : void 0;
+}
+function rejectedWindow(info) {
+  if (info?.status !== "rejected") return void 0;
+  const type = typeof info.rateLimitType === "string" ? info.rateLimitType : "";
+  const reset2 = info.resetsAt;
+  const raw = typeof reset2 === "number" && Number.isFinite(reset2) ? String(Math.trunc(reset2)) : typeof reset2 === "string" ? reset2.slice(0, MAX_RESET_CHARS) : void 0;
+  return {
+    kind: type.startsWith("seven_day") ? "weekly" : "session",
+    ...raw ? { resetsAt: raw } : {}
+  };
+}
+function structuredLimit(ev, text) {
+  const window = rejectedWindow(rateLimitInfo(ev));
+  const usage = ev.api_error === "usage_limit_reached";
+  if (!usage && !(ev.api_error_status === 429 && window !== void 0)) return void 0;
+  if (window?.resetsAt !== void 0) return window;
+  const fromText = matchLimitText(text);
+  return fromText ?? window ?? { kind: "session" };
+}
+var absoluteReset = (s) => s !== void 0 && (/^\d{10}$|^\d{13}$/.test(s) || ISO_TIME.test(s));
 function detectLimit(logLine2) {
   const line4 = logLine2.trimEnd();
   let ev;
@@ -32260,16 +32297,23 @@ function detectLimit(logLine2) {
     };
   }
   if (ev.type === "result") {
+    if (ev.is_error === true) {
+      const structured = structuredLimit(ev, ev.result);
+      if (structured) return structured;
+    }
     return matchLimitText(ev.error) ?? (ev.is_error === true ? matchLimitText(ev.result) : void 0);
   }
-  if (ev.type === "assistant" && (ev.isApiErrorMessage === true || typeof ev.error === "string")) {
+  if (ev.type === "assistant" && (ev.isApiErrorMessage === true || ev.is_api_error_message === true || typeof ev.error === "string")) {
     const content = isObject2(ev.message) ? ev.message.content : void 0;
-    if (!Array.isArray(content)) return void 0;
-    for (const block of content) {
-      if (isObject2(block) && block.type === "text") {
-        const hit = matchLimitText(block.text);
-        if (hit) return hit;
-      }
+    const texts = Array.isArray(content) ? content.filter((b) => isObject2(b) && b.type === "text").map((b) => b.text) : [];
+    const structured = structuredLimit(
+      ev,
+      texts.find((t) => matchLimitText(t) !== void 0)
+    );
+    if (structured) return structured;
+    for (const text of texts) {
+      const hit = matchLimitText(text);
+      if (hit) return hit;
     }
   }
   return void 0;
@@ -32285,6 +32329,25 @@ function parkUntil(resetsAt, now) {
   if (Number.isNaN(t) || t <= now.getTime() || t > now.getTime() + MAX_PARK_MS) return fallback;
   return new Date(t);
 }
+function limitTime(iso, timezone) {
+  const at2 = new Date(iso);
+  if (Number.isNaN(at2.getTime())) return iso;
+  const format2 = (timeZone) => new Intl.DateTimeFormat("sv-SE", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).format(at2);
+  try {
+    return format2(timezone);
+  } catch {
+    return format2(void 0);
+  }
+}
+var usageLimitLine = (label, parkedUntil, timezone) => `usage limit on ${label} until ${limitTime(parkedUntil, timezone)}; nothing launches on it`;
 var limitsFile = (ownerRoot) => join7(ownerRoot, "limits.json");
 function readLimits(ownerRoot) {
   if (ownerFileHeld(ownerRoot, "limits.json")) return { ok: false };
@@ -32367,7 +32430,9 @@ function parsedEvent(line4) {
   }
 }
 function showsRecovery(ev) {
-  if (ev?.type === "assistant") return ev.isApiErrorMessage !== true && ev.error === void 0;
+  if (ev?.type === "assistant") {
+    return ev.isApiErrorMessage !== true && ev.is_api_error_message !== true && ev.error === void 0;
+  }
   if (ev?.type === "result") return ev.is_error !== true;
   return false;
 }
@@ -32381,11 +32446,20 @@ function scanLogForLimit(stateRoot, id, from) {
   if (range.start > from) lines2.shift();
   let recovered = false;
   let retry;
-  for (const line4 of lines2.reverse()) {
+  const reversed = lines2.reverse();
+  for (const [i2, line4] of reversed.entries()) {
     const hit = detectLimit(line4);
     const ev = parsedEvent(line4);
     if (hit) {
-      if (ev?.type !== "system") return hit;
+      if (ev?.type !== "system") {
+        if (absoluteReset(hit.resetsAt)) return hit;
+        for (const earlier of reversed.slice(i2 + 1)) {
+          const e = parsedEvent(earlier);
+          const window = e === void 0 ? void 0 : rejectedWindow(rateLimitInfo(e));
+          if (window?.resetsAt !== void 0 && absoluteReset(window.resetsAt)) return window;
+        }
+        return hit;
+      }
       if (!recovered) retry ??= { ...hit, retryOnly: true };
     } else if (showsRecovery(ev)) recovered = true;
   }
@@ -33847,7 +33921,12 @@ async function parksHold(parks, ownerConfig, ports, owner) {
   const labels = Object.keys(parks);
   const command = ownerConfig.crewCredentialCommand;
   if (command === void 0) {
-    const park = parks[DEFAULT_LABEL];
+    let label = DEFAULT_LABEL;
+    try {
+      if (listAccounts(owner).length > 0) label = activeLabel(owner) ?? DEFAULT_LABEL;
+    } catch {
+    }
+    const park = parks[label];
     return park ? allParkedLine(park.parkedUntil) : void 0;
   }
   if (labels.length === 0) return void 0;
@@ -44506,7 +44585,7 @@ function messagesOf(projectKey, snapshot, t) {
   const out = [];
   for (const line4 of snapshot.forOwner) {
     if (line4.id === "account-block" && notes.length > 0) continue;
-    const kind = line4.id === "account-block" ? "account-block" : line4.id === "usage-limit" ? "usage-limit" : "owner-item";
+    const kind = line4.id === "account-block" ? "account-block" : line4.id === "usage-limit" || line4.id.startsWith("usage-limit:") ? "usage-limit" : "owner-item";
     out.push({
       key: `${projectKey}:${line4.id}:${line4.title}`,
       kind,
@@ -50195,15 +50274,23 @@ async function runCli(argv, deps) {
         ownerRoot: ownerRoot(),
         ports
       });
-      for (const s of r.stopped) {
-        stderr(
-          `note: ${s.item} stopped at a ${s.kind} limit, ${s.label} parked until ${s.parkedUntil}
-`
-        );
+      let timezone;
+      try {
+        timezone = r.stopped.length === 0 ? void 0 : resolveZone(loadOwnerConfig(owner).crewLabelLimits.timezone);
+      } catch {
+        timezone = void 0;
+      }
+      const limited = r.stopped.map((s) => ({
+        item: s.item,
+        line: usageLimitLine(s.label, s.parkedUntil, timezone)
+      }));
+      for (const l of limited) {
+        stderr(`note: ${l.line} (${l.item} back to ready, its relaunch kept)
+`);
       }
       for (const e of r.errors) stderr(`error: ${e}
 `);
-      return b.lockFailed;
+      return { lockFailed: b.lockFailed, limited };
     };
     const crewRecordsProblem = () => {
       try {
@@ -50590,7 +50677,7 @@ async function runCli(argv, deps) {
       return { item: item.id, label, offer };
     };
     const launch = async (id, asker) => {
-      if (await reconcile()) {
+      if ((await reconcile()).lockFailed) {
         throw new HeldError(
           "another Studio process is reconciling account blocks; refusing to launch, try again"
         );
@@ -51738,8 +51825,13 @@ async function runCli(argv, deps) {
         }
         if (rows2.length > 0) out.releases = rows2;
       };
+      const limitsPhase = async () => {
+        for (const l of (await reconcile()).limited)
+          out.held.push({ item: l.item, reason: l.line });
+      };
       try {
         for (const [name, body] of [
+          ["limits", limitsPhase],
           ["recover", recoverPhase],
           ["review timeouts", reviewTimeoutPhase],
           ["contracts", contractsPhase],
@@ -52636,6 +52728,14 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
         return 0;
       }
       case "collect": {
+        const stopped = (await reconcile()).limited.find(
+          (l) => rest[0] === void 0 || l.item === rest[0]
+        );
+        if (stopped !== void 0) {
+          stderr(`studio: ${stopped.item}: ${stopped.line}; back to ready, nothing to collect
+`);
+          return 1;
+        }
         const r = await collect2(rest[0]);
         if (r.kind === "moved") {
           print(r.out);
@@ -54069,8 +54169,16 @@ function buildSnapshot(root, ownerRoot, board, capacity, queue, now, hold, limit
     },
     forOwner: [
       ...board.items.filter((i2) => i2.ownerOnly && i2.status !== "merged" && i2.status !== "dropped").map((i2) => ({ id: i2.id, title: i2.title })),
-      // Exactly one line however many items wait or labels are blocked; a block outranks a limit.
-      ...blocked !== void 0 ? [ownerLine("account-block", blocked)] : hold === void 0 ? [] : [ownerLine("usage-limit", hold)],
+      // One line however many labels are blocked, or all parked; a block outranks a limit.
+      ...blocked !== void 0 ? [ownerLine("account-block", blocked)] : hold !== void 0 ? [ownerLine("usage-limit", hold)] : (
+        // Some labels parked, others free (a provider's): one line per parked label.
+        Object.entries(limits).filter(([, p]) => p.parkedUntil !== void 0).sort(([a2], [b]) => a2 < b ? -1 : a2 > b ? 1 : 0).map(
+          ([label, p]) => ownerLine(
+            `usage-limit:${label}`,
+            usageLimitLine(label, p.parkedUntil, timezone)
+          )
+        )
+      ),
       ...extra.crewRecordsUnreadable ? [
         ownerLine(
           "crew-records",

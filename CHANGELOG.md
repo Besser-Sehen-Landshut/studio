@@ -26,6 +26,21 @@ Fixes from the owner's first real REA setup. Not tagged yet; the maintainers tag
   how many are missing on disk; never their paths, `researchRoots` in `--json`) and treats
   `research.artifacts` as optional. Its advice, and the launch's, says REA installs on first use after
   one confirmation, or `studio setup research`.
+- A crew that ended at once at the weekly usage limit was reported as `report file is missing ...
+  studio stop --requeue` instead of a usage limit. Two causes: `tick` collected ended crews before it
+  looked for limits, and the reset came only from the text (`resets Nov 7 at 7pm (Europe/Berlin)`),
+  which Studio does not guess, so the label would have been parked for one hour. Now every tick, and
+  `studio collect`, reconcile limits first; a limit is recognized by the structured fields of Claude
+  Code's failed `result` and assistant API error message (`api_error: "usage_limit_reached"`, or
+  `api_error_status: 429` with a rejected `rate_limit_info`), and the label is parked until the
+  window's `resetsAt` (`seven_day` windows are the weekly limit). The item returns to `ready` with its
+  one relaunch kept; with a credential provider the next launch asks it for another label. The owner
+  and the lead see `usage limit on <label> until <time>; nothing launches on it` (time in the owner's
+  zone; code `usage_label`, English and German), in the tick's `held`, on stderr, and in the pane and
+  pushes as one owner line per parked label while other labels are free.
+- Without a credential provider, a parked active account kept by Studio (`studio account`) now holds
+  the plan like the parked default label; before, only `default` was checked there and the launch
+  refused item by item.
 
 ### Changed
 

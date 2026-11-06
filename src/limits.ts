@@ -72,6 +72,51 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
+ * The `rate_limit_info` Claude Code attaches to an event: on a `rate_limit_event` and on a failed
+ * `result` at the top, on an assistant API error message under `api_error_params`.
+ */
+function rateLimitInfo(ev: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (isObject(ev.rate_limit_info)) return ev.rate_limit_info;
+  const params = ev.api_error_params;
+  return isObject(params) && isObject(params.rate_limit_info) ? params.rate_limit_info : undefined;
+}
+
+/** A rejected window's reset (epoch seconds) and kind; `seven_day*` windows are the weekly limit. */
+function rejectedWindow(info: Record<string, unknown> | undefined): DetectedLimit | undefined {
+  if (info?.status !== 'rejected') return undefined;
+  const type = typeof info.rateLimitType === 'string' ? info.rateLimitType : '';
+  const reset = info.resetsAt;
+  const raw =
+    typeof reset === 'number' && Number.isFinite(reset)
+      ? String(Math.trunc(reset))
+      : typeof reset === 'string'
+        ? reset.slice(0, MAX_RESET_CHARS)
+        : undefined;
+  return {
+    kind: type.startsWith('seven_day') ? 'weekly' : 'session',
+    ...(raw ? { resetsAt: raw } : {}),
+  };
+}
+
+/**
+ * A usage limit by the structured fields of a failed `result` or an assistant API error message:
+ * `api_error: "usage_limit_reached"`, or status 429 with a rejected rate-limit window. The window
+ * gives kind and reset; without one the limit text, if any, does.
+ */
+function structuredLimit(ev: Record<string, unknown>, text: unknown): DetectedLimit | undefined {
+  const window = rejectedWindow(rateLimitInfo(ev));
+  const usage = ev.api_error === 'usage_limit_reached';
+  if (!usage && !(ev.api_error_status === 429 && window !== undefined)) return undefined;
+  if (window?.resetsAt !== undefined) return window;
+  const fromText = matchLimitText(text);
+  return fromText ?? window ?? { kind: 'session' };
+}
+
+/** A reset `parkUntil` can use as it stands: an ISO time with an offset or an epoch. */
+const absoluteReset = (s: string | undefined): boolean =>
+  s !== undefined && (/^\d{10}$|^\d{13}$/.test(s) || ISO_TIME.test(s));
+
+/**
  * Finds a usage limit in one line of a crew log. Crew tool output is untrusted and also lands in
  * this log, so only events Claude Code itself emits count: a top-level `system`/`api_retry` event
  * with `error:"rate_limit"`, or the limit text as the whole error text of a failed `result` event
@@ -98,18 +143,32 @@ export function detectLimit(logLine: string): DetectedLimit | undefined {
     };
   }
   if (ev.type === 'result') {
+    if (ev.is_error === true) {
+      const structured = structuredLimit(ev, ev.result);
+      if (structured) return structured;
+    }
     return (
       matchLimitText(ev.error) ?? (ev.is_error === true ? matchLimitText(ev.result) : undefined)
     );
   }
-  if (ev.type === 'assistant' && (ev.isApiErrorMessage === true || typeof ev.error === 'string')) {
+  if (
+    ev.type === 'assistant' &&
+    (ev.isApiErrorMessage === true ||
+      ev.is_api_error_message === true ||
+      typeof ev.error === 'string')
+  ) {
     const content = isObject(ev.message) ? ev.message.content : undefined;
-    if (!Array.isArray(content)) return undefined;
-    for (const block of content) {
-      if (isObject(block) && block.type === 'text') {
-        const hit = matchLimitText(block.text);
-        if (hit) return hit;
-      }
+    const texts = Array.isArray(content)
+      ? content.filter((b) => isObject(b) && b.type === 'text').map((b) => b.text)
+      : [];
+    const structured = structuredLimit(
+      ev,
+      texts.find((t) => matchLimitText(t) !== undefined),
+    );
+    if (structured) return structured;
+    for (const text of texts) {
+      const hit = matchLimitText(text);
+      if (hit) return hit;
     }
   }
   return undefined;
@@ -132,6 +191,31 @@ export function parkUntil(resetsAt: string | undefined, now: Date): Date {
   if (Number.isNaN(t) || t <= now.getTime() || t > now.getTime() + MAX_PARK_MS) return fallback;
   return new Date(t);
 }
+
+/** `YYYY-MM-DD HH:MM` of `iso` in `timezone` (the system zone when it is unset or unknown). */
+export function limitTime(iso: string, timezone?: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso;
+  const format = (timeZone: string | undefined) =>
+    new Intl.DateTimeFormat('sv-SE', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).format(at);
+  try {
+    return format(timezone);
+  } catch {
+    return format(undefined);
+  }
+}
+
+/** The owner's and the lead's line for a parked label (code `usage_label` in src/reasons.ts). */
+export const usageLimitLine = (label: string, parkedUntil: string, timezone?: string): string =>
+  `usage limit on ${label} until ${limitTime(parkedUntil, timezone)}; nothing launches on it`;
 
 const limitsFile = (ownerRoot: string): string => join(ownerRoot, 'limits.json');
 
@@ -239,7 +323,11 @@ function parsedEvent(line: string): Record<string, unknown> | undefined {
 
 /** A later event like this shows the API call behind an earlier retry succeeded. */
 function showsRecovery(ev: Record<string, unknown> | undefined): boolean {
-  if (ev?.type === 'assistant') return ev.isApiErrorMessage !== true && ev.error === undefined;
+  if (ev?.type === 'assistant') {
+    return (
+      ev.isApiErrorMessage !== true && ev.is_api_error_message !== true && ev.error === undefined
+    );
+  }
   if (ev?.type === 'result') return ev.is_error !== true;
   return false;
 }
@@ -265,12 +353,23 @@ export function scanLogForLimit(
   if (range.start > from) lines.shift();
   let recovered = false;
   let retry: ScannedLimit | undefined;
-  for (const line of lines.reverse()) {
+  const reversed = lines.reverse();
+  for (const [i, line] of reversed.entries()) {
     const hit = detectLimit(line);
     const ev = parsedEvent(line);
     if (hit) {
       // Keep walking after a retry: terminal text further back still wins.
-      if (ev?.type !== 'system') return hit;
+      if (ev?.type !== 'system') {
+        if (absoluteReset(hit.resetsAt)) return hit;
+        // "resets Nov 7 at 7pm" is not a time Studio can use: the run's last rejected window
+        // (a `rate_limit_event` just before) has the reset as an epoch.
+        for (const earlier of reversed.slice(i + 1)) {
+          const e = parsedEvent(earlier);
+          const window = e === undefined ? undefined : rejectedWindow(rateLimitInfo(e));
+          if (window?.resetsAt !== undefined && absoluteReset(window.resetsAt)) return window;
+        }
+        return hit;
+      }
       if (!recovered) retry ??= { ...hit, retryOnly: true };
     } else if (showsRecovery(ev)) recovered = true;
   }

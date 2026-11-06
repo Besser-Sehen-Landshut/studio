@@ -143,6 +143,8 @@ const strings: Strings = {
         return 'usage limit: every crew credential is at its limit';
       case 'usage_parked':
         return `usage limit: no crew credential free; earliest reset ${p.reset ?? 'unknown'}`;
+      case 'usage_label':
+        return `usage limit on ${p.label} until ${p.reset}; nothing launches on it`;
       case 'limits_unreadable':
         return 'limits.json is unreadable: no crew starts';
       case 'usage_unreadable':

@@ -11,8 +11,10 @@ import {
   readLimits,
   scanLogForLimit,
   sessionIdSince,
+  usageLimitLine,
   writeLimits,
 } from '../src/limits.js';
+import { weeklyLimitLog } from './limit-log-fixture.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-limits-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -251,6 +253,56 @@ describe('limits file', () => {
     writeFileSync(join(s, 'elsewhere.json'), '{}');
     symlinkSync(join(s, 'elsewhere.json'), join(s, 'limits.json'));
     expect(readLimits(s).ok).toBe(false);
+  });
+});
+
+describe('a usage limit by the structured fields', () => {
+  const RESET = 1793728800; // 2026-11-03T18:00:00Z
+  const [, event, assistant, result] = weeklyLimitLog(RESET) as [string, string, string, string];
+
+  it('takes the failed result and the API error message as weekly limits', () => {
+    expect(detectLimit(result)?.kind).toBe('weekly');
+    expect(detectLimit(assistant)).toEqual({ kind: 'weekly', resetsAt: String(RESET) });
+    // The event alone is no stop: it only carries the reset.
+    expect(detectLimit(event)).toBeUndefined();
+  });
+
+  it('needs no limit text: api_error usage_limit_reached, or 429 with a rejected window', () => {
+    const bare = { type: 'result', is_error: true, result: 'API Error' };
+    expect(detectLimit(JSON.stringify({ ...bare, api_error: 'usage_limit_reached' }))).toEqual({
+      kind: 'session',
+    });
+    expect(
+      detectLimit(
+        JSON.stringify({
+          ...bare,
+          api_error_status: 429,
+          rate_limit_info: { status: 'rejected', resetsAt: RESET, rateLimitType: 'five_hour' },
+        }),
+      ),
+    ).toEqual({ kind: 'session', resetsAt: String(RESET) });
+    // A 429 without a rejected window is an ordinary rate limit, and a result that did not fail
+    // is the model's answer.
+    expect(detectLimit(JSON.stringify({ ...bare, api_error_status: 429 }))).toBeUndefined();
+    expect(
+      detectLimit(
+        JSON.stringify({ type: 'result', result: 'x', api_error: 'usage_limit_reached' }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('parks until the epoch of the rejected window, not an hour for the local phrase', () => {
+    const s = stateDir();
+    writeFileSync(join(s, 'logs', 'APP-1.jsonl'), `${weeklyLimitLog(RESET).join('\n')}\n`);
+    const hit = scanLogForLimit(s, 'APP-1', 0);
+    expect(hit).toEqual({ kind: 'weekly', resetsAt: String(RESET) });
+    expect(parkUntil(hit?.resetsAt, NOW).toISOString()).toBe('2026-11-03T18:00:00.000Z');
+  });
+
+  it('words the line in the owner’s zone', () => {
+    expect(usageLimitLine('main', '2026-11-03T18:00:00.000Z', 'Europe/Berlin')).toBe(
+      'usage limit on main until 2026-11-03 19:00; nothing launches on it',
+    );
   });
 });
 

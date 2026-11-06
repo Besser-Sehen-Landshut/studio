@@ -22,6 +22,7 @@ import { STUDIO_VERSION } from '../src/plugins.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import { newReportName } from '../src/report.js';
 import { prepareCrewDir } from './crew-dir.js';
+import { weeklyLimitLog } from './limit-log-fixture.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-cli-limits-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -316,6 +317,61 @@ describe('usage limits through the CLI', () => {
     expect(p.stopped).toEqual([]);
   });
 
+  it('a crew that ended at the weekly limit (structured fields) is parked, not a missing report', async () => {
+    const fx = makeFx();
+    mkdirSync(fx.ownerDir, { recursive: true });
+    // A provider with two labels: label-b once label-a is excluded.
+    const f = join(fx.ownerDir, 'provider-two.sh');
+    writeFileSync(
+      f,
+      `#!/bin/sh\ncase ",$STUDIO_EXCLUDE," in *,label-b,*) exit 0;; *,label-a,*) L=label-b;; *) L=label-a;; esac\nprintf '{"label":"%s","env":{"CLAUDE_CODE_OAUTH_TOKEN":"${TOKEN}"}}\\n' "$L"\n`,
+      { mode: 0o700 },
+    );
+    writeFileSync(
+      join(fx.ownerDir, 'config.yaml'),
+      `crew_credential_command: ${f}\ncrew_label_limits:\n  max_parallel: 8\n  timezone: Europe/Berlin\n`,
+    );
+    prepareCrewDir(fx.ownerDir);
+    const p = makePorts();
+    expect((await cli(fx, p.ports, ['launch', 'APP-1'])).err).toBe('');
+    expect(recordOf(fx, 'APP-1').label).toBe('label-a');
+    // `claude -p` ended at once: no report, only the log.
+    p.alive.clear();
+    for (const line of weeklyLimitLog(1793728800)) hitLimit(fx, 'APP-1', JSON.parse(line));
+
+    const tick = await cli(fx, p.ports, ['tick']);
+    const out = JSON.parse(tick.out) as {
+      held: { item: string; reason: string }[];
+      needsLead: { item: string; reason: string }[];
+    };
+    expect(out.needsLead.filter((n) => n.item === 'APP-1')).toEqual([]);
+    expect(tick.out).not.toMatch(/report file is missing|--requeue/);
+    const line = 'usage limit on label-a until 2026-11-03 19:00; nothing launches on it';
+    expect(out.held).toContainEqual({ item: 'APP-1', reason: line });
+    expect(limitsOf(fx)['label-a']).toEqual({
+      parkedUntil: '2026-11-03T18:00:00.000Z',
+      kind: 'weekly',
+    });
+    // Back to ready with its relaunch kept (no requeue note), and the same tick launched it again
+    // on the label the provider gave once label-a was excluded.
+    const notes = itemOf(fx, 'APP-1')?.notes ?? [];
+    expect(notes.some((n) => n.startsWith('requeued'))).toBe(false);
+    expect(notes.some((n) => n.startsWith('usage limit (weekly) on label-a'))).toBe(true);
+    expect(recordOf(fx, 'APP-1').label).toBe('label-b');
+
+    // The owner's line, with its code for the pane and the pushes.
+    const state = JSON.parse((await cli(fx, p.ports, ['state'])).out) as {
+      forOwner: { id: string; title: string; code?: string; params?: Record<string, string> }[];
+    };
+    expect(state.forOwner).toContainEqual({
+      id: 'usage-limit:label-a',
+      title: line,
+      code: 'usage_label',
+      params: { label: 'label-a', reset: '2026-11-03 19:00' },
+    });
+    // A launch, a whole tick with a relaunch, and a state: slow on a loaded machine.
+  }, 30_000);
+
   describe('rate_limit retries', () => {
     const RETRY = { type: 'system', subtype: 'api_retry', error: 'rate_limit' };
     const RECOVERED = { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } };
@@ -552,6 +608,21 @@ describe('usage limits through the CLI', () => {
     p.advance(2 * HOUR);
     const later = JSON.parse((await cli(fx, p.ports, ['plan'])).out);
     expect(startable(later)).toEqual(['APP-1', 'APP-2']);
+  });
+
+  it('without a provider, a parked active account holds everything, as the default label does', async () => {
+    const fx = makeFx();
+    const p = makePorts();
+    addAccount({ homedir: fx.home, env: fx.env }, 'main', TOKEN, new Date('2026-10-30T00:00:00Z'));
+    mkdirSync(fx.owner, { recursive: true });
+    writeFileSync(
+      join(fx.owner, 'limits.json'),
+      JSON.stringify({ main: { parkedUntil: '2026-11-03T18:00:00.000Z', kind: 'weekly' } }),
+    );
+    const state = JSON.parse((await cli(fx, p.ports, ['state'])).out);
+    expect(state.forOwner).toContainEqual(
+      expect.objectContaining({ id: 'usage-limit', code: 'usage_parked' }),
+    );
   });
 
   it('an unreadable limits file holds everything and tells the owner', async () => {
