@@ -331,29 +331,10 @@ async function probe(p) {
   }
   // What a crew could have left to run in a later job; the broker resets it before every grant.
   if (p.persistence === true) {
-    const left = [];
-    const query = (key, value) => {
-      try {
-        return execFileSync('reg', ['query', key, ...(value === undefined ? [] : ['/v', value])], {
-          encoding: 'utf8',
-          windowsHide: true,
-          stdio: ['ignore', 'pipe', 'ignore'],
-        });
-      } catch {
-        return undefined;
-      }
-    };
-    if (query('HKCU\\Software\\Microsoft\\Command Processor', 'AutoRun') !== undefined)
-      left.push('cmd AutoRun');
-    const envValues = (query('HKCU\\Environment') ?? '')
-      .split(/\r?\n/)
-      .map((l) => /^\s{4}(\S+)\s+REG_/.exec(l)?.[1])
-      .filter((n) => n !== undefined && !['TEMP', 'TMP'].includes(n.toUpperCase()));
-    if (envValues.length > 0) left.push(`environment values ${envValues.join(', ')}`);
-    for (const k of ['Run', 'RunOnce']) {
-      const out = query(`HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\${k}`);
-      if (out !== undefined && /\sREG_/.test(out)) left.push(`${k} entries`);
-    }
+    // The registry through its API (studio-crew-reset.mjs): names with spaces and the default value
+    // count like any other.
+    const { registryLeft } = await import('./studio-crew-reset.mjs');
+    const left = [...registryLeft()];
     let startup = [];
     try {
       const dir = execFileSync(
@@ -405,7 +386,7 @@ if (spec.mode === 'reset') {
       ['-NoProfile', '-NonInteractive', '-Command', "[Environment]::GetFolderPath('Startup')"],
       { encoding: 'utf8', windowsHide: true },
     ).trim();
-    report = { registry: resetRegistry(), startup: startup === '' ? null : resetStartup(startup) };
+    report = { left: resetRegistry(), startup: startup === '' ? null : resetStartup(startup) };
   } catch (e) {
     report = { error: String(e?.message ?? e).split('\n')[0] };
   }
