@@ -117,6 +117,13 @@ import {
   validLabel,
 } from './limits.js';
 import { readMainBuild } from './main-build.js';
+import {
+  listMigrationNumbers,
+  migrationScheme,
+  pullRequestMigrationCheck,
+  releaseMigrationNumber,
+  reserveMigrationNumber,
+} from './migration-numbers.js';
 import { sendNotifications } from './notify.js';
 import { formatOverview, readOverview } from './overview.js';
 import { migrateOwnerState, pendingLegacyState } from './owner-state.js';
@@ -610,6 +617,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     }
     if ((values.label !== undefined || values.once !== undefined) && cmd !== 'worker') {
       throw new UsageError('--label and --once work with worker only');
+    }
+    const reserveOnly = [values.number, values.for, values.purpose];
+    if (
+      !(cmd === 'migration' && rest[0] === 'reserve') &&
+      reserveOnly.some((v) => v !== undefined)
+    ) {
+      throw new UsageError('--number, --for and --purpose work with migration reserve only');
     }
     /** The item's components, as a field for JSON output; nothing when none are configured. */
     const componentField = (config: StudioConfig | undefined, item: WorkItem | undefined) =>
@@ -1710,6 +1724,39 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               `PR ${report.pr} was opened by ${facts.author.replace(/[^A-Za-z0-9-[\]/]/g, '?')}, not by ${fromWorker.worker}, who claimed ${item.id}`,
             );
           }
+        }
+        // A new migration whose number is someone else's (reserved for another, on main, in another
+        // open pull request) stops here, before a review: the lead renumbers or decides.
+        const numbers = await pullRequestMigrationCheck({
+          gh: ports.gh,
+          root: stateRoot(),
+          config: loadConfig(project),
+          repo: item.repo,
+          pr: report.pr,
+          holder: [item.id, `studio/${item.id}`, ...(item.crew === undefined ? [] : [item.crew])],
+          now: ports.clock.now(),
+        });
+        if (numbers.unreadable !== undefined) {
+          return {
+            kind: 'waiting',
+            line: `${item.id}: the migration numbers cannot be read now (${numbers.unreadable}); collect again, nothing moved`,
+          };
+        }
+        if (numbers.problem !== undefined) {
+          const note = `${numbers.problem}; renumber it (studio migration reserve) or release the reservation`;
+          await withBoardLock(stateRoot(), ports.clock.now(), () => {
+            const fresh = loadBoard(project);
+            if (findItem(fresh, item.id).status !== item.status) {
+              throw new Error(`${item.id} changed while it was collected; nothing moved`);
+            }
+            let next = transition(fresh, item.id, 'blocked', BY, ports.clock.now());
+            next = withItem(next, item.id, (i) => ({ ...i, notes: [...(i.notes ?? []), note] }));
+            saveBoard(project, next);
+          });
+          return {
+            kind: 'refused',
+            line: `${item.id}: ${note}; pull request ${report.pr} is not reviewed, ${item.id} is blocked for the lead`,
+          };
         }
       } else if (report.status === 'done' && !PR_OPTIONAL.includes(item.type)) {
         throw new ReportError(`done report for ${item.id} names no pr`);
@@ -3925,6 +3972,73 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         return await runDoctor({ project, owner, env: deps.env, ports, json, stdout });
       }
 
+      case 'migration': {
+        const [sub, ...args] = rest;
+        const usage =
+          'migration needs: reserve [--number <n>] --for <who> --purpose "<text>" | list | release <n>';
+        if (sub !== 'reserve' && sub !== 'list' && sub !== 'release') throw new UsageError(usage);
+        refuseCrew(deps.env);
+        const scheme = migrationScheme(loadAll().config);
+        if (scheme === undefined) {
+          throw new Error(
+            'no migrations block in studio.yaml: add migrations: { dir: <folder>, number_pattern: <regex> }',
+          );
+        }
+        if (sub === 'reserve') {
+          if (args.length > 0 || values.for === undefined || values.purpose === undefined) {
+            throw new UsageError(usage);
+          }
+          if (values.number !== undefined && !/^[1-9]\d{0,14}$/.test(values.number)) {
+            throw new UsageError('--number must be a whole number from 1 to 999999999999999');
+          }
+          const r = await reserveMigrationNumber({
+            gh: ports.gh,
+            root: await boundStateRoot(),
+            scheme,
+            request: {
+              for: values.for,
+              purpose: values.purpose,
+              ...(values.number === undefined ? {} : { number: Number(values.number) }),
+            },
+            now: ports.clock.now(),
+          });
+          print({ reserved: r.number, for: r.for, purpose: r.purpose, at: r.at });
+          return 0;
+        }
+        if (sub === 'release') {
+          const [n] = args;
+          if (args.length !== 1 || !/^[1-9]\d{0,14}$/.test(n ?? '')) throw new UsageError(usage);
+          const r = releaseMigrationNumber(await boundStateRoot(), Number(n), ports.clock.now());
+          print({ released: r.number, for: r.for });
+          return 0;
+        }
+        if (args.length > 0) throw new UsageError(usage);
+        const l = await listMigrationNumbers({
+          gh: ports.gh,
+          root: await boundStateRoot(),
+          scheme,
+          now: ports.clock.now(),
+        });
+        if (l.warning !== undefined) stderr(`warning: ${l.warning}\n`);
+        if (json) print(l);
+        else {
+          stdout(
+            table([
+              ['NUMBER', 'STATUS', 'FOR', 'PURPOSE', 'AT'],
+              ...l.reservations.map((r) => [
+                String(r.number),
+                r.status,
+                r.for,
+                r.purpose,
+                r.landedAt ?? r.releasedAt ?? r.at,
+              ]),
+            ]),
+          );
+          if (l.next !== undefined) stdout(`next free: ${l.next}\n`);
+        }
+        return 0;
+      }
+
       case 'account': {
         return await runAccount({
           args: rest,
@@ -4780,6 +4894,9 @@ function parseCli(argv: string[]) {
         artifacts: { type: 'string' },
         from: { type: 'string' },
         apply: { type: 'boolean' },
+        number: { type: 'string' },
+        for: { type: 'string' },
+        purpose: { type: 'string' },
       },
       allowPositionals: true,
       strict: true,
@@ -4990,7 +5107,22 @@ async function boardBlocksMerge(
     { head: item.approvedHead, base: item.approvedBase },
     head,
   );
-  if (problem !== undefined || (item.approvedJobs ?? []).length === 0) return problem;
+  if (problem !== undefined) return problem;
+  // Read again right before the merge: another pull request may have landed the number meanwhile.
+  const numbers = await pullRequestMigrationCheck({
+    gh: ports.gh,
+    root,
+    config,
+    repo: entry.repo,
+    pr: entry.pr,
+    holder: [item.id, `studio/${item.id}`, ...(item.crew === undefined ? [] : [item.crew])],
+    now: ports.clock.now(),
+  });
+  if (numbers.unreadable !== undefined) {
+    return `the migration numbers cannot be read now (${numbers.unreadable})`;
+  }
+  if (numbers.problem !== undefined) return numbers.problem;
+  if ((item.approvedJobs ?? []).length === 0) return undefined;
   // The jobs the approval named for commands the builder could not run must still have passed.
   const checks = await readChecks(entry, ports.gh, waived);
   if (checks.kind !== 'pass') return 'the checks are not green';

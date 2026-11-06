@@ -117,6 +117,16 @@ export const COMMANDS: HelpEntry[] = [
       "The lead's decision for a guard hit no evidence explained, for this head; an owner_only rule or item takes the owner's, in a terminal",
   },
   {
+    usage: 'migration reserve [--number <n>] --for <who> --purpose "<text>"',
+    about:
+      'Reserve a database migration number (the next free one, or <n> if free) in the lead state; needs migrations: in studio.yaml',
+  },
+  {
+    usage: 'migration list',
+    about: 'Reserved, landed and released migration numbers, and the next free one',
+  },
+  { usage: 'migration release <n>', about: 'Free a reserved migration number again' },
+  {
     usage: 'release <component> [--dry-run] [--since <commit>]',
     about:
       "The release gate: draft the note and log the announcement; run it again to trigger the release workflow once approvals are in, then it follows the checks after the deploy. --since names production's commit, first release only; --dry-run prints the note and changes nothing",
