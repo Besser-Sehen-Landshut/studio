@@ -23,6 +23,7 @@ import {
   validToken,
 } from './credentials.js';
 import { CREW_SKILL, skillInstalled, studioPluginHint } from './crew.js';
+import { registerDoctorLine } from './migration-numbers.js';
 import { ownerStateRootFor, stateRootFor } from './paths.js';
 import { installedVersions, pinnedPlugins, unallowedPlugins } from './plugins.js';
 import type { Ports } from './ports.js';
@@ -373,6 +374,19 @@ async function boardTrackedState(project: string, ports: Ports): Promise<'yes' |
   }
 }
 
+/** The register of reserved migration numbers, from the state root alone (no network). */
+function migrationRegisterLine(
+  config: StudioConfig | undefined,
+  project: string,
+  owner: OwnerEnv,
+): string {
+  try {
+    return registerDoctorLine(config, stateRootFor(project, owner));
+  } catch (e) {
+    return `unreadable: ${(e as Error).message}`;
+  }
+}
+
 /** The disk the items' clones, crew homes and tmp dirs use, and how many of them can go. */
 async function clonesState(o: { project: string; owner: OwnerEnv; ports: Ports }) {
   const r = await runCloneGc({
@@ -518,6 +532,7 @@ export async function doctorReport(o: {
     notify: ownerConfig?.notify?.command ? 'configured' : 'not configured',
     notifications: notificationsState(o.owner),
     apiKeyVarsInEnvironment: API_KEY_VARS.filter((k) => o.env[k]),
+    migrationRegister: migrationRegisterLine(config, o.project, o.owner),
     clones,
   };
   return {
@@ -575,6 +590,7 @@ export async function runDoctor(o: {
       `notifications: ${report.notifications}`,
       `allow_api_billing: ${report.allowApiBilling ? 'on' : 'off'}`,
       ...(report.rea === null ? [] : reaDoctorLines(report.rea)),
+      `migration register: ${report.migrationRegister}`,
       `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(', ') || 'none'}`,
       clonesLine(report.clones),
     ];

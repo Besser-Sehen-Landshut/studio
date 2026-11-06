@@ -661,6 +661,26 @@
       },
       "additionalProperties": false
     },
+    "migrations": {
+      "type": "object",
+      "properties": {
+        "dir": {
+          "type": "string"
+        },
+        "number_pattern": {
+          "default": "^(\\d+)_",
+          "type": "string"
+        },
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+        }
+      },
+      "required": [
+        "dir"
+      ],
+      "additionalProperties": false
+    },
     "evidence": {
       "maxItems": 20,
       "type": "array",

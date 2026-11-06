@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { componentsOf, epicProgress, loadBoard, parseBoard } from '../src/board.js';
-import { loadConfig } from '../src/config.js';
+import { loadConfig, parseConfig } from '../src/config.js';
+import { migrationNumberOf } from '../src/migration-pattern.js';
 import { planAssignments } from '../src/planner.js';
 import { STUDIO_VERSION } from '../src/plugins.js';
 import { ROADMAP_HEADER } from '../src/roadmap.js';
@@ -167,6 +168,18 @@ describe('README components', () => {
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
+  });
+});
+
+describe('README migration numbers', () => {
+  it('has an example that loads on top of the quick start and reads numbers as described', () => {
+    const at = readme.indexOf('## Migration numbers');
+    const m = /```yaml\n([\s\S]*?)```/.exec(readme.slice(at));
+    const quick = block('.studio/studio.yaml');
+    const config = parseConfig(`${quick}${(m as RegExpExecArray)[1]}`, 'studio.yaml');
+    const pattern = new RegExp(config.migrations?.numberPattern ?? '');
+    expect(config.migrations?.dir).toBe('server/migrations');
+    expect(migrationNumberOf('20261027000039_some_name.sql', pattern)).toBe(39);
   });
 });
 
