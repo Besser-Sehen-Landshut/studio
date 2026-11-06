@@ -58,6 +58,7 @@ import {
 import {
   authorizedKeysFile,
   leadFromAuthInfo,
+  machineConfig,
   relayHomeDefault,
   relayMachineDefault,
   relaySetupScript,
@@ -476,13 +477,18 @@ export async function relayDoctorLines(
 // ---- On the relay worker -----------------------------------------------------------------------
 
 /** The relay worker's owner: config and state in the relay home, whatever the profile holds. */
-export function relayOwner(owner: OwnerEnv, home: string | undefined): OwnerEnv {
+export function relayOwner(
+  owner: OwnerEnv,
+  home: string | undefined,
+  /** Native Windows: the admin-only tree, which holds the worker's config instead of the home. */
+  machine?: string,
+): OwnerEnv {
   if (home === undefined) return owner;
   return {
     ...owner,
     env: {
       ...(owner.env ?? {}),
-      XDG_CONFIG_HOME: join(home, 'config'),
+      XDG_CONFIG_HOME: machine === undefined ? join(home, 'config') : machineConfig(machine),
       XDG_STATE_HOME: join(home, 'state'),
     },
   };
@@ -503,7 +509,8 @@ export function relayContext(o: {
   log: (line: string) => void;
 }): RelayContext {
   if (!LEAD_RE.test(o.lead)) throw new Error('not a lead name');
-  const owner = relayOwner(o.owner, o.home);
+  const native0 = (o.platform ?? detectPlatform()).platform === 'win32';
+  const owner = relayOwner(o.owner, o.home, native0 ? machineOf() : undefined);
   const root = relayRoot(owner);
   ensureStateDir(root, root);
   const platform = () => o.platform ?? detectPlatform();
@@ -585,6 +592,19 @@ export function sessionLead(o: {
         }
       : { lead: fromKey };
   }
+  if (o.flag === undefined && fromKey === undefined) {
+    // Elsewhere the keys are the owner's own: with more than one key forced to relay serve, each
+    // must name its lead, or one lead could act as another.
+    const serving = (readText(o.keysFile) ?? '')
+      .split(/\r?\n/)
+      .filter((l) => /relay serve/.test(l) && !l.trimStart().startsWith('#')).length;
+    if (serving > 1) {
+      return {
+        problem:
+          'several keys run relay serve here: give each its own --lead <name> in its command',
+      };
+    }
+  }
   return { lead: o.flag ?? fromKey ?? 'default' };
 }
 
@@ -650,7 +670,10 @@ export async function runRelayCommand(o: {
       platform,
       flag: o.values.lead,
       env: o.env,
-      keysFile: platform === 'win32' ? authorizedKeysFile(machineOf()) : undefined,
+      keysFile:
+        platform === 'win32'
+          ? authorizedKeysFile(machineOf())
+          : join(o.homedir ?? homedir(), '.ssh', 'authorized_keys'),
     });
     if ('problem' in lead) {
       refuse(o.stdout, lead.problem);
@@ -672,10 +695,9 @@ export async function runRelayCommand(o: {
     return state === 'refused' ? 1 : 0;
   }
   if (sub === 'setup' && args.length === 0) {
-    const settings = serveSettings(relayOwner(o.owner, home));
     const machine = relayMachineDefault(o.env);
+    const settings = serveSettings(relayOwner(o.owner, home, machine));
     const claude = findClaude(o.env.PATH ?? o.env.Path);
-    const crewConfig = crewClaudeDir(relayOwner(o.owner, home));
     o.stdout(
       relaySetupScript({
         relayUser: 'studio-relay',
@@ -683,12 +705,10 @@ export async function runRelayCommand(o: {
         home,
         machine,
         task: settings.windows?.broker ?? 'Studio relay broker',
-        // Node.js and Studio are read from their admin-only copies; these are the rest.
+        // Node.js, Studio and the plugins are read from the admin-only tree; these are the rest.
         readPaths: [
           ...(claude === undefined ? [] : [dirname(claude)]),
           ...loadOwnerConfig(o.owner).crewToolchainPaths,
-          join(crewConfig, 'skills'),
-          join(crewConfig, 'plugins'),
         ],
         source: { node: process.execPath, studio: resolve(dirname(STUDIO_BIN), '..') },
         ...(o.values['lead-key'] === undefined ? {} : { leadKey: o.values['lead-key'] }),

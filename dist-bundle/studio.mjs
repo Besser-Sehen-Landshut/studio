@@ -62162,6 +62162,16 @@ async function collect2(c3, id, out) {
       });
     }
     const hooks = ["-c", `core.hooksPath=${join55(dir, "no-hooks")}`, "--no-replace-objects"];
+    const problem = await indexAndCheck(c3, dir, hooks);
+    if (problem !== void 0) {
+      return answer(out, {
+        ...base2,
+        report: text,
+        headSha: null,
+        payload: false,
+        problem: `the crew's objects do not check out: ${problem}`
+      });
+    }
     await git(c3, dir, [...hooks, "update-ref", branch, crewHead]);
     const got = (await git(c3, dir, [...hooks, "rev-parse", "--verify", `${branch}^{commit}`])).trim();
     if (got !== head) {
@@ -62407,7 +62417,7 @@ function copyCrewObjects(clone2, dest, id, root) {
       const pst = lstatSync45(sub);
       if (pst.isSymbolicLink() || !pst.isDirectory()) throw new Error("a link among the objects");
       for (const o2 of readdirSync18(sub)) {
-        if (/^pack-[0-9a-f]{40,64}\.(pack|idx|rev)$/.test(o2))
+        if (/^pack-[0-9a-f]{40,64}\.pack$/.test(o2))
           copy(join55(sub, o2), join55(dest, "objects", "pack", o2));
       }
     }
@@ -62431,6 +62441,35 @@ function copyCrewObjects(clone2, dest, id, root) {
   }
   throw new Error(`the clone has no branch studio/${id}`);
 }
+async function indexAndCheck(c3, dir, hooks) {
+  const packDir = join55(dir, "objects", "pack");
+  let todo = existsSync17(packDir) ? readdirSync18(packDir).filter((f3) => /^pack-[0-9a-f]{40,64}\.pack$/.test(f3)) : [];
+  while (todo.length > 0) {
+    const failed2 = [];
+    for (const f3 of todo) {
+      try {
+        await git(c3, dir, [...hooks, "index-pack", "--strict", join55(packDir, f3)]);
+      } catch {
+        failed2.push(f3);
+      }
+    }
+    if (failed2.length === todo.length) return `a pack does not index (${failed2[0]})`;
+    todo = failed2;
+  }
+  try {
+    await git(c3, dir, [
+      ...hooks,
+      "fsck",
+      "--strict",
+      "--no-full",
+      "--no-dangling",
+      "--no-progress"
+    ]);
+  } catch {
+    return "git fsck --strict found a broken object";
+  }
+  return void 0;
+}
 
 // src/relay-windows.ts
 import { posix as posix2, win32 } from "node:path";
@@ -62443,6 +62482,7 @@ var authorizedKeysFile = (machine) => join56(machine, "authorized_keys");
 var machineNode = (machine) => join56(machine, "node", "node.exe");
 var machineStudio = (machine) => join56(machine, "studio");
 var machineStudioBin = (machine) => join56(machine, "studio", "bin", "studio");
+var machineConfig = (machine) => join56(machine, "config");
 var forcedCommand = (machine, home) => `"${machineNode(machine)}" "${machineStudioBin(machine)}" relay serve --home "${home}"`;
 function sshdMatchBlock(o2) {
   const keys2 = authorizedKeysFile(o2.machine).replace(/\\/g, "/");
@@ -62613,11 +62653,67 @@ function adminFileSnippet(o2) {
   return `$target = ${psQuote(o2.file)}
 $tmp = Join-Path (Split-Path -Parent $target) ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
 [IO.File]::WriteAllText($tmp, ${text}, (New-Object Text.ASCIIEncoding))
-icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /Q | Out-Null
+icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /L /Q | Out-Null
 if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $target" }
-icacls $tmp /setowner '*S-1-5-32-544' /Q | Out-Null
+icacls $tmp /setowner '*S-1-5-32-544' /L /Q | Out-Null
 if (Test-Path -LiteralPath $target) { [IO.File]::Replace($tmp, $target, $null) } else { [IO.File]::Move($tmp, $target) }`;
 }
+var FOLDER_FUNCTIONS = String.raw`$adminSids = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+# What may own a folder of Studio's before this run: administrators, SYSTEM, TrustedInstaller, or
+# the administrator running this script (who may own what it created on an earlier run).
+$ownerSids = $adminSids + @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+# Every folder of Studio's, from the drive down: no reparse point anywhere, and none another account
+# owns (a folder planted there before would keep its owner's rights).
+function SafeFolder([string]$path, [string]$top) {
+  $walk = $path
+  while ($walk) {
+    if (Test-Path -LiteralPath $walk) {
+      $item = Get-Item -LiteralPath $walk -Force
+      if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$walk is a reparse point: refusing to set up Studio there" }
+      if ($walk.Length -gt $top.Length -and $walk.StartsWith($top, [StringComparison]::OrdinalIgnoreCase)) {
+        $owner = (Get-Acl -LiteralPath $walk).GetOwner([Security.Principal.SecurityIdentifier]).Value
+        if ($ownerSids -notcontains $owner) { throw "$walk is owned by $owner, not by administrators: remove it, then run this again" }
+      }
+    }
+    $up = Split-Path -Parent $walk
+    if (-not $up -or $up -eq $walk) { break }
+    $walk = $up
+  }
+}
+# A folder of Studio's with exactly the DACL it should have: built from scratch and protected, so
+# no entry anyone added before survives. An existing one must be a plain folder administrators own.
+function StrictFolder([string]$path, [object[]]$rules) {
+  if (Test-Path -LiteralPath $path) {
+    $item = Get-Item -LiteralPath $path -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$path is a reparse point: refusing to set up Studio there" }
+    $owner = (Get-Acl -LiteralPath $path).GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($ownerSids -notcontains $owner) { throw "$path is owned by $owner, not by administrators: remove it, then run this again" }
+  } else {
+    New-Item -ItemType Directory -Path $path | Out-Null
+  }
+  icacls $path /setowner '*S-1-5-32-544' /L /Q | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "cannot make administrators the owner of $path" }
+  $acl = New-Object Security.AccessControl.DirectorySecurity
+  $acl.SetAccessRuleProtection($true, $false)
+  $all = 'ContainerInherit, ObjectInherit'
+  foreach ($r in @(@('S-1-5-18', 'FullControl', $all, 'None'), @('S-1-5-32-544', 'FullControl', $all, 'None')) + $rules) {
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+      (New-Object Security.Principal.SecurityIdentifier($r[0])),
+      [Security.AccessControl.FileSystemRights]$r[1],
+      [Security.AccessControl.InheritanceFlags]$r[2],
+      [Security.AccessControl.PropagationFlags]$r[3],
+      [Security.AccessControl.AccessControlType]::Allow)))
+  }
+  (Get-Item -LiteralPath $path -Force).SetAccessControl($acl)
+}
+# Nothing below the relay home that the elevated steps reach may be a reparse point.
+function NoLinksIn([string]$path) {
+  if (-not (Test-Path -LiteralPath $path)) { return }
+  foreach ($c in Get-ChildItem -LiteralPath $path -Force) {
+    if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$($c.FullName) is a reparse point: remove it, then run this again" }
+  }
+}
+`;
 function relaySetupScript(o2) {
   for (const u2 of [o2.relayUser, o2.crewUser]) {
     if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(u2)) throw new Error(`not a local user name: ${u2}`);
@@ -62631,7 +62727,12 @@ function relaySetupScript(o2) {
     lead: leadOfKeyComment(o2.leadKey.trim().split(/\s+/)[2])
   });
   const block = sshdMatchBlock({ relayUser: o2.relayUser, machine: o2.machine, command });
-  const pluginSetup = `$env:XDG_CONFIG_HOME = ${psQuote(join56(o2.home, "config"))}; $env:XDG_STATE_HOME = ${psQuote(join56(o2.home, "state"))}; & ${psQuote(machineNode(o2.machine))} ${psQuote(machineStudioBin(o2.machine))} account setup-plugins`;
+  const pluginSetup = `$env:XDG_CONFIG_HOME = ${psQuote(machineConfig(o2.machine))}; $env:XDG_STATE_HOME = ${psQuote(join56(o2.machine, "setup-state"))}; & ${psQuote(machineNode(o2.machine))} ${psQuote(machineStudioBin(o2.machine))} account setup-plugins
+if ($LASTEXITCODE -ne 0) { throw 'the plugin setup failed' }
+$claude = ${psQuote(join56(machineConfig(o2.machine), "studio", "claude"))}
+foreach ($d in @((Join-Path $claude 'skills'), (Join-Path $claude 'plugins'))) {
+  if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($crewSid):(OI)(CI)RX" /L /Q | Out-Null }
+}`;
   return `#Requires -RunAsAdministrator
 # Studio: the setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
@@ -62642,32 +62743,7 @@ $crew = ${psQuote(o2.crewUser)}
 $home_ = ${psQuote(o2.home)}
 $machine = ${psQuote(o2.machine)}
 $task = ${psQuote(o2.task)}
-$adminSids = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
-# Every folder of Studio's, from the drive down: no reparse point anywhere, and none another account
-# owns (a folder planted there before would keep its owner's rights).
-function SafeFolder([string]$path, [string]$top) {
-  $walk = $path
-  while ($walk) {
-    if (Test-Path -LiteralPath $walk) {
-      $item = Get-Item -LiteralPath $walk -Force
-      if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$walk is a reparse point: refusing to set up Studio there" }
-      if ($walk.Length -gt $top.Length -and $walk.StartsWith($top, [StringComparison]::OrdinalIgnoreCase)) {
-        $owner = (Get-Acl -LiteralPath $walk).GetOwner([Security.Principal.SecurityIdentifier]).Value
-        if ($adminSids -notcontains $owner) { throw "$walk is owned by $owner, not by administrators: remove it, then run this again" }
-      }
-    }
-    $up = Split-Path -Parent $walk
-    if (-not $up -or $up -eq $walk) { break }
-    $walk = $up
-  }
-}
-function LockFolder([string]$path, [string[]]$grants) {
-  New-Item -ItemType Directory -Force -Path $path | Out-Null
-  icacls $path /setowner '*S-1-5-32-544' /Q | Out-Null
-  icacls $path /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' @grants /Q | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "cannot set the ACL of $path" }
-}
-function NewSecret { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b) + 'aA1!' }
+${FOLDER_FUNCTIONS}function NewSecret { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b) + 'aA1!' }
 function EnsureUser([string]$name, [string]$what, [string]$plain) {
   $u = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
   if ($null -eq $u) {
@@ -62697,23 +62773,25 @@ if (-not (Test-Path -LiteralPath $credFile) -or $null -eq (Get-LocalUser -Name $
 $crewSid = (EnsureUser $crew 'Studio crew sandbox' $plain).SID.Value
 # The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew user reads
 # Node.js and Studio only.
-LockFolder $filesStudio @("*$($relaySid):(OI)(CI)RX")
-LockFolder $machine @("*$($relaySid):(OI)(CI)RX")
-LockFolder (Join-Path $machine 'broker') @("*$($relaySid):(OI)(CI)RX")
-LockFolder (Join-Path $machine 'node') @("*$($relaySid):(OI)(CI)RX", "*$($crewSid):(OI)(CI)RX")
-LockFolder (Join-Path $machine 'studio') @("*$($relaySid):(OI)(CI)RX", "*$($crewSid):(OI)(CI)RX")
-# The copies the forced command runs: never the files of an account that can change them.
+$tree = 'ContainerInherit, ObjectInherit'
+$rx = 'ReadAndExecute, Synchronize'
+StrictFolder $filesStudio @(,@($relaySid, $rx, $tree, 'None'))
+StrictFolder $machine @(,@($relaySid, $rx, $tree, 'None'))
+foreach ($sub in @('broker', 'config', 'setup-state')) { StrictFolder (Join-Path $machine $sub) @(,@($relaySid, $rx, $tree, 'None')) }
+foreach ($sub in @('node', 'studio')) { StrictFolder (Join-Path $machine $sub) @(@($relaySid, $rx, $tree, 'None'), @($crewSid, $rx, $tree, 'None')) }
+# The copies the forced command runs: never the files of an account that can change them, and no
+# junction of the source copied along.
 Copy-Item -LiteralPath ${psQuote(o2.source.node)} -Destination ${psQuote(machineNode(o2.machine))} -Force
-& robocopy.exe ${psQuote(o2.source.studio)} ${psQuote(machineStudio(o2.machine))} /MIR /XD node_modules .git .worktrees /NFL /NDL /NJH /NJS /NP | Out-Null
+& robocopy.exe ${psQuote(o2.source.studio)} ${psQuote(machineStudio(o2.machine))} /MIR /XJ /XD node_modules .git .worktrees /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "cannot copy Studio into $machine (robocopy $LASTEXITCODE)" }
-icacls ${psQuote(machineStudio(o2.machine))} /reset /T /C /Q | Out-Null
-# The relay home: the relay account may fill state and config, never rename or remove them, and
-# nothing else of the home.
-LockFolder $dataStudio @("*$($relaySid):RX")
-LockFolder $home_ @("*$($relaySid):RX")
-foreach ($sub in @('state', 'config')) {
-  LockFolder (Join-Path $home_ $sub) @("*$($relaySid):(RX,WD,AD)", "*$($relaySid):(OI)(CI)(IO)M")
-}
+icacls ${psQuote(machineStudio(o2.machine))} /reset /T /C /L /Q | Out-Null
+# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
+# the home. The elevated steps only set the ACLs of these folders themselves, and refuse a reparse
+# point among them or just below the home.
+StrictFolder $dataStudio @(,@($relaySid, $rx, 'None', 'None'))
+StrictFolder $home_ @(,@($relaySid, $rx, 'None', 'None'))
+NoLinksIn $home_
+StrictFolder (Join-Path $home_ 'state') @(@($relaySid, 'ReadAndExecute, CreateFiles, CreateDirectories, Synchronize', 'None', 'None'), @($relaySid, 'Modify, Synchronize', $tree, 'InheritOnly'))
 # The crew user's password, sealed for this machine (LocalMachine DPAPI): an SSH key logon cannot
 # open the relay account's own DPAPI keys. Only SYSTEM, administrators and the relay account read it.
 if ($plain) {
@@ -62722,10 +62800,10 @@ if ($plain) {
   $plain = $null
   $tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
   [IO.File]::WriteAllBytes($tmp, $sealed)
-  icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /Q | Out-Null
+  icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
   if (Test-Path -LiteralPath $credFile) { [IO.File]::Replace($tmp, $credFile, $null) } else { [IO.File]::Move($tmp, $credFile) }
 }
-icacls $credFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /Q | Out-Null
+icacls $credFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
 # No direct network for the crew user: every outbound connection to anything but loopback.
 $rule = 'Studio crew ' + $crew + ': no direct network'
 Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
@@ -62771,7 +62849,7 @@ if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
 }
 # Read, never write, for the crew user on Claude Code and the toolchains.
 foreach ($p in ${list2(o2.readPaths)}) {
-  if (Test-Path -LiteralPath $p) { icacls $p /grant "\${crew}:(OI)(CI)RX" /Q | Out-Null }
+  if (Test-Path -LiteralPath $p) { icacls $p /grant "\${crew}:(OI)(CI)RX" /L /Q | Out-Null }
 }
 # The pinned plugins in the crew Claude config dir of the relay home.
 ${pluginSetup}
@@ -63122,22 +63200,45 @@ async function machineTreeProblem(run2, o2) {
   if (!inside(o2.node, o2.machine) || !inside(o2.studioBin, o2.machine)) {
     return `studio relay serve runs only from the admin-only copies in ${o2.machine} (studio relay install)`;
   }
+  const m = psQuote(o2.machine);
+  const h2 = psQuote(o2.home);
   const script = `$ErrorActionPreference = 'Stop'
 $admin = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $write = [Security.AccessControl.FileSystemRights]'WriteData, AppendData, WriteExtendedAttributes, WriteAttributes, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+$fill = [Security.AccessControl.FileSystemRights]'ReadAndExecute, CreateFiles, CreateDirectories, Synchronize'
 function Up([string]$p) { $out = @(); while ($p) { $out += $p; $u = Split-Path -Parent $p; if (-not $u -or $u -eq $p) { break }; $p = $u }; $out }
 $problems = @()
-foreach ($p in @(Up ${psQuote(o2.machine)}) + @(Up ${psQuote(o2.home)})) {
+foreach ($p in @(Up ${m}) + @(Up (Join-Path ${h2} 'state'))) {
   if (-not (Test-Path -LiteralPath $p)) { $problems += "$p is missing"; continue }
   if ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { $problems += "$p is a reparse point" }
 }
-foreach ($p in @(${psQuote(o2.machine)}, (Join-Path ${psQuote(o2.machine)} 'node'), (Join-Path ${psQuote(o2.machine)} 'studio'), ${psQuote(o2.home)}, (Split-Path -Parent ${psQuote(o2.home)}))) {
+# Each folder of Studio's: owned by administrators, its DACL protected, and no entry but the ones
+# the setup makes. Only state takes the relay account's writes: files and folders added to it, and
+# modify below it (inherit-only); it can rename or remove neither state nor anything above.
+$folders = @(
+  @(${m}, 'read'), @((Join-Path ${m} 'node'), 'read'), @((Join-Path ${m} 'studio'), 'read'),
+  @((Join-Path ${m} 'config'), 'read'), @((Split-Path -Parent ${h2}), 'read'), @(${h2}, 'read'),
+  @((Join-Path ${h2} 'state'), 'fill')
+)
+foreach ($f in $folders) {
+  $p = $f[0]
+  if (-not (Test-Path -LiteralPath $p)) { continue }
   $acl = Get-Acl -LiteralPath $p
   $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
   if ($admin -notcontains $owner) { $problems += "$p is owned by $owner" }
+  if (-not $acl.AreAccessRulesProtected) { $problems += "$p inherits its ACL" }
   foreach ($r in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
-    if ($r.AccessControlType -ne 'Allow' -or $admin -contains $r.IdentityReference.Value) { continue }
-    if (($r.FileSystemRights -band $write) -ne 0 -and $r.PropagationFlags -ne 'InheritOnly') { $problems += "$p is writable by $($r.IdentityReference.Value)" }
+    $sid = $r.IdentityReference.Value
+    if ($admin -contains $sid) { continue }
+    if ($r.AccessControlType -ne 'Allow') { continue }
+    $writes = ($r.FileSystemRights -band $write) -ne 0
+    if ($f[1] -eq 'fill' -and $sid -eq $me) {
+      if ($r.PropagationFlags -eq 'InheritOnly') { continue }
+      if (([int]$r.FileSystemRights -band (-bnot [int]$fill)) -ne 0) { $problems += "$p gives $sid more than adding files" }
+      continue
+    }
+    if ($writes) { $problems += "$p is writable by $sid" }
   }
 }
 ConvertTo-Json -Compress -InputObject @($problems)`;
@@ -64197,20 +64298,21 @@ async function relayDoctorLines(owner, config2, seam) {
   }
   return { ok, lines: lines2 };
 }
-function relayOwner(owner, home) {
+function relayOwner(owner, home, machine) {
   if (home === void 0) return owner;
   return {
     ...owner,
     env: {
       ...owner.env ?? {},
-      XDG_CONFIG_HOME: join59(home, "config"),
+      XDG_CONFIG_HOME: machine === void 0 ? join59(home, "config") : machineConfig(machine),
       XDG_STATE_HOME: join59(home, "state")
     }
   };
 }
 function relayContext(o2) {
   if (!LEAD_RE.test(o2.lead)) throw new Error("not a lead name");
-  const owner = relayOwner(o2.owner, o2.home);
+  const native0 = (o2.platform ?? detectPlatform()).platform === "win32";
+  const owner = relayOwner(o2.owner, o2.home, native0 ? machineOf() : void 0);
   const root = relayRoot(owner);
   ensureStateDir(root, root);
   const platform2 = () => o2.platform ?? detectPlatform();
@@ -64269,6 +64371,14 @@ function sessionLead(o2) {
       problem: "cannot tell which lead this key is (sshd ExposeAuthInfo and a key paired by studio relay install)"
     } : { lead: fromKey };
   }
+  if (o2.flag === void 0 && fromKey === void 0) {
+    const serving = (readText2(o2.keysFile) ?? "").split(/\r?\n/).filter((l) => /relay serve/.test(l) && !l.trimStart().startsWith("#")).length;
+    if (serving > 1) {
+      return {
+        problem: "several keys run relay serve here: give each its own --lead <name> in its command"
+      };
+    }
+  }
   return { lead: o2.flag ?? fromKey ?? "default" };
 }
 var refuse = (out, line4) => {
@@ -64311,7 +64421,7 @@ async function runRelayCommand(o2) {
       platform: platform2,
       flag: o2.values.lead,
       env: o2.env,
-      keysFile: platform2 === "win32" ? authorizedKeysFile(machineOf()) : void 0
+      keysFile: platform2 === "win32" ? authorizedKeysFile(machineOf()) : join59(o2.homedir ?? homedir13(), ".ssh", "authorized_keys")
     });
     if ("problem" in lead) {
       refuse(o2.stdout, lead.problem);
@@ -64333,10 +64443,9 @@ async function runRelayCommand(o2) {
     return state === "refused" ? 1 : 0;
   }
   if (sub === "setup" && args.length === 0) {
-    const settings = serveSettings(relayOwner(o2.owner, home));
     const machine = relayMachineDefault(o2.env);
+    const settings = serveSettings(relayOwner(o2.owner, home, machine));
     const claude = findClaude(o2.env.PATH ?? o2.env.Path);
-    const crewConfig = crewClaudeDir(relayOwner(o2.owner, home));
     o2.stdout(
       relaySetupScript({
         relayUser: "studio-relay",
@@ -64344,12 +64453,10 @@ async function runRelayCommand(o2) {
         home,
         machine,
         task: settings.windows?.broker ?? "Studio relay broker",
-        // Node.js and Studio are read from their admin-only copies; these are the rest.
+        // Node.js, Studio and the plugins are read from the admin-only tree; these are the rest.
         readPaths: [
           ...claude === void 0 ? [] : [dirname17(claude)],
-          ...loadOwnerConfig(o2.owner).crewToolchainPaths,
-          join59(crewConfig, "skills"),
-          join59(crewConfig, "plugins")
+          ...loadOwnerConfig(o2.owner).crewToolchainPaths
         ],
         source: { node: process.execPath, studio: resolve13(dirname17(STUDIO_BIN), "..") },
         ...o2.values["lead-key"] === void 0 ? {} : { leadKey: o2.values["lead-key"] }

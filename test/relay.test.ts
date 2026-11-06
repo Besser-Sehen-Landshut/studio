@@ -352,6 +352,14 @@ describe("the worker reads a crew's clone as files only", () => {
     mkdirSync(dest);
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: c, encoding: 'utf8' }).trim();
     expect(copyCrewObjects(c, dest, 'APP-1', root)).toBe(head);
+    // Packs come without the crew's own index files: the worker builds them from the packs.
+    execFileSync('git', ['repack', '-q', '-a', '-d'], { cwd: c });
+    const dest2 = join(root, 'dest-packed');
+    mkdirSync(dest2);
+    copyCrewObjects(c, dest2, 'APP-1', root);
+    const packs = readdirSync(join(dest2, 'objects', 'pack'));
+    expect(packs.some((f) => f.endsWith('.pack'))).toBe(true);
+    expect(packs.filter((f) => !f.endsWith('.pack'))).toEqual([]);
   });
   it('refuses a .git that is a link or a file, alternates, and a link among the objects', () => {
     const a = clone('crew-alt');
@@ -696,17 +704,27 @@ describe('the Windows relay worker, with fakes', () => {
     // No path of Studio's with a reparse point or a folder another account owns.
     expect(script).toContain('is a reparse point: refusing to set up Studio there');
     expect(script).toContain('not by administrators: remove it, then run this again');
-    // The home: the relay account may fill state and config, never rename or remove anything.
-    expect(script).toContain(`LockFolder $home_ @("*$($relaySid):RX")`);
+    // Every folder of Studio's gets a protected DACL built from scratch: nothing added before stays.
+    expect(script).toContain('$acl.SetAccessRuleProtection($true, $false)');
+    expect(script).toContain('(Get-Item -LiteralPath $path -Force).SetAccessControl($acl)');
+    // The home: only state takes the relay account's writes, and it can rename or remove nothing.
+    expect(script).toContain(`StrictFolder $home_ @(,@($relaySid, $rx, 'None', 'None'))`);
     expect(script).toContain(
-      `LockFolder (Join-Path $home_ $sub) @("*$($relaySid):(RX,WD,AD)", "*$($relaySid):(OI)(CI)(IO)M")`,
+      `StrictFolder (Join-Path $home_ 'state') @(@($relaySid, 'ReadAndExecute, CreateFiles, CreateDirectories, Synchronize', 'None', 'None'), @($relaySid, 'Modify, Synchronize', $tree, 'InheritOnly'))`,
     );
-    expect(script).not.toMatch(/\(OI\)\(CI\)M"/);
-    // Node.js and Studio run from admin-only copies.
+    expect(script).toContain('NoLinksIn $home_');
+    expect(script).not.toContain("Join-Path $home_ 'config'");
+    // The worker's config and the plugins: in the admin-only tree, set up there elevated.
+    expect(script).toContain(`$env:XDG_CONFIG_HOME = 'C:\\Program Files\\Studio\\relay\\config'`);
+    // Every icacls works on a link itself, never on what it points to.
+    for (const line of script.split('\n').filter((l) => /^\s*icacls /.test(l))) {
+      expect(line, line).toContain('/L');
+    }
+    // Node.js and Studio run from admin-only copies; no junction of the source comes along.
     expect(script).toContain(
       `'C:\\nodejs\\node.exe' -Destination 'C:\\Program Files\\Studio\\relay\\node\\node.exe'`,
     );
-    expect(script).toContain('robocopy.exe');
+    expect(script).toMatch(/robocopy\.exe .* \/MIR \/XJ /);
     // The broker has no script file: its action carries it, encoded.
     expect(script).not.toContain('sweep.ps1');
     expect(script).toContain('-EncodedCommand ');

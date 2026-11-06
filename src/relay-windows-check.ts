@@ -272,22 +272,45 @@ export async function machineTreeProblem(
   if (!inside(o.node, o.machine) || !inside(o.studioBin, o.machine)) {
     return `studio relay serve runs only from the admin-only copies in ${o.machine} (studio relay install)`;
   }
+  const m = psQuote(o.machine);
+  const h = psQuote(o.home);
   const script = `$ErrorActionPreference = 'Stop'
 $admin = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $write = [Security.AccessControl.FileSystemRights]'WriteData, AppendData, WriteExtendedAttributes, WriteAttributes, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+$fill = [Security.AccessControl.FileSystemRights]'ReadAndExecute, CreateFiles, CreateDirectories, Synchronize'
 function Up([string]$p) { $out = @(); while ($p) { $out += $p; $u = Split-Path -Parent $p; if (-not $u -or $u -eq $p) { break }; $p = $u }; $out }
 $problems = @()
-foreach ($p in @(Up ${psQuote(o.machine)}) + @(Up ${psQuote(o.home)})) {
+foreach ($p in @(Up ${m}) + @(Up (Join-Path ${h} 'state'))) {
   if (-not (Test-Path -LiteralPath $p)) { $problems += "$p is missing"; continue }
   if ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { $problems += "$p is a reparse point" }
 }
-foreach ($p in @(${psQuote(o.machine)}, (Join-Path ${psQuote(o.machine)} 'node'), (Join-Path ${psQuote(o.machine)} 'studio'), ${psQuote(o.home)}, (Split-Path -Parent ${psQuote(o.home)}))) {
+# Each folder of Studio's: owned by administrators, its DACL protected, and no entry but the ones
+# the setup makes. Only state takes the relay account's writes: files and folders added to it, and
+# modify below it (inherit-only); it can rename or remove neither state nor anything above.
+$folders = @(
+  @(${m}, 'read'), @((Join-Path ${m} 'node'), 'read'), @((Join-Path ${m} 'studio'), 'read'),
+  @((Join-Path ${m} 'config'), 'read'), @((Split-Path -Parent ${h}), 'read'), @(${h}, 'read'),
+  @((Join-Path ${h} 'state'), 'fill')
+)
+foreach ($f in $folders) {
+  $p = $f[0]
+  if (-not (Test-Path -LiteralPath $p)) { continue }
   $acl = Get-Acl -LiteralPath $p
   $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
   if ($admin -notcontains $owner) { $problems += "$p is owned by $owner" }
+  if (-not $acl.AreAccessRulesProtected) { $problems += "$p inherits its ACL" }
   foreach ($r in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
-    if ($r.AccessControlType -ne 'Allow' -or $admin -contains $r.IdentityReference.Value) { continue }
-    if (($r.FileSystemRights -band $write) -ne 0 -and $r.PropagationFlags -ne 'InheritOnly') { $problems += "$p is writable by $($r.IdentityReference.Value)" }
+    $sid = $r.IdentityReference.Value
+    if ($admin -contains $sid) { continue }
+    if ($r.AccessControlType -ne 'Allow') { continue }
+    $writes = ($r.FileSystemRights -band $write) -ne 0
+    if ($f[1] -eq 'fill' -and $sid -eq $me) {
+      if ($r.PropagationFlags -eq 'InheritOnly') { continue }
+      if (([int]$r.FileSystemRights -band (-bnot [int]$fill)) -ne 0) { $problems += "$p gives $sid more than adding files" }
+      continue
+    }
+    if ($writes) { $problems += "$p is writable by $sid" }
   }
 }
 ConvertTo-Json -Compress -InputObject @($problems)`;

@@ -68,6 +68,12 @@ foreach ($k in @('Software\\Microsoft\\Windows\\CurrentVersion\\Run', 'Software\
 if ((Names (Join-Path $base 'Software\\Microsoft\\Command Processor')) -contains 'AutoRun') { $left += 'cmd AutoRun' }
 $n = @(Names (Join-Path $base 'Environment') | Where-Object { @('TEMP', 'TMP') -notcontains $_.ToUpperInvariant() })
 if ($n.Count -gt 0) { $left += ('Environment: ' + ($n -join ', ')) }
+# COM classes of the user's own (a hijack of a class a program loads) and moved shell folders.
+$classes = Join-Path $base 'SoftwareClasses'
+if ((Test-Path -LiteralPath $classes) -and (@(Get-ChildItem -LiteralPath $classes).Count -gt 0 -or (Names $classes).Count -gt 0)) { $left += 'SoftwareClasses' }
+foreach ($k in @('SoftwareMicrosoftWindowsCurrentVersionExplorerUser Shell Folders', 'SoftwareMicrosoftWindowsCurrentVersionExplorerShell Folders')) {
+  if ((Names (Join-Path $base $k)).Count -gt 0) { $left += $k.Split('')[-1] }
+}
 ConvertTo-Json -Compress -InputObject @($left)
 `;
 
@@ -90,6 +96,9 @@ if (Test-Path -LiteralPath $envKey) {
 }
 Fresh $envKey
 foreach ($n in $keep.Keys) { New-ItemProperty -LiteralPath $envKey -Name $n -Value $keep[$n] -PropertyType ExpandString | Out-Null }
+# The user's own COM classes and its moved shell folders go: Windows falls back to the defaults.
+Fresh (Join-Path $base 'SoftwareClasses')
+foreach ($k in @('SoftwareMicrosoftWindowsCurrentVersionExplorerUser Shell Folders', 'SoftwareMicrosoftWindowsCurrentVersionExplorerShell Folders')) { Fresh (Join-Path $base $k) }
 ${registryLeftScript(base).replace("$ErrorActionPreference = 'Stop'\n", '')}`;
 
 const powershell = (script) =>
@@ -98,6 +107,46 @@ const powershell = (script) =>
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+
+/**
+ * PowerShell profiles in a Documents folder (`PowerShell` and `WindowsPowerShell`): every profile
+ * script goes, a link as a link. Returns the names removed and what could not be.
+ */
+export function resetProfiles(documents) {
+  const removed = [];
+  const left = [];
+  for (const sub of ['PowerShell', 'WindowsPowerShell']) {
+    const dir = join(documents, sub);
+    let st;
+    try {
+      st = lstatSync(dir);
+    } catch {
+      continue;
+    }
+    if (st.isSymbolicLink()) {
+      try {
+        unlinkSync(dir);
+      } catch {
+        rmdirSync(dir);
+      }
+      removed.push(sub);
+      continue;
+    }
+    if (!st.isDirectory()) continue;
+    for (const name of readdirSync(dir)) {
+      if (!/profile\.ps1$/i.test(name)) continue;
+      const p = join(dir, name);
+      const e = lstatSync(p);
+      if (e.isSymbolicLink() || e.isFile()) {
+        unlinkSync(p);
+        removed.push(`${sub}\\${name}`);
+      } else {
+        left.push(`${sub}\\${name}`);
+      }
+    }
+  }
+  return { removed, left };
+}
 
 /** What is left in the registry under `base`; a list that could not be read is a problem too. */
 export function registryLeft(base = 'HKCU:\\') {

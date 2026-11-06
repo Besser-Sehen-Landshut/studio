@@ -753,7 +753,7 @@ workers:
       host_key: "ssh-ed25519 AAAA..." # pinned: the worker's host key, as ssh-keyscan prints it
       identity_file: /home/owner/.ssh/studio-lab # the lead's private key for this worker
       grace_minutes: 30 # the default: unreachable longer goes to the lead
-# owner config on the worker, optional (config/studio/config.yaml in its relay home)
+# owner config on the worker, optional (on Windows config\studio\config.yaml in the admin-only tree %ProgramFiles%\Studio\relay)
 workers:
   serve:
     deny: { paths: ['D:\data'], ports: [5432], hosts: [local-subnets, tailnet-peers, nas.example] }
@@ -775,7 +775,7 @@ A label is either under `workers.accept` (GitHub workers, above) or under `worke
 **Set up a Windows relay worker.**
 
 1. On the worker, install Node.js, Git, Claude Code, Studio and the OpenSSH server.
-2. In an elevated Windows PowerShell, run `studio relay setup --lead-key "<the lead's public key line> studio-relay-<lead>"` and run the script it prints. It creates the relay account `studio-relay` (a standard user, never an administrator; the lead logs in as it) and the crew user `studio-crew`, copies Node.js and Studio into the admin-only tree `%ProgramFiles%\Studio\relay` (the forced command runs these copies), seals the crew user's password there, adds the crew user's firewall rule and denied logons, creates the broker task, stops and disables WebClient, grants the crew user read on the toolchains, installs the pinned plugins into the relay home (`%ProgramData%\Studio\relay`, whose `state` and `config` folders alone the relay account may fill) and writes the lead's key with the forced command. The key's comment names its lead (`studio-relay-<lead>`; without one, `default`). Run it again after an update of Studio or the plugins: it renews the copies.
+2. In an elevated Windows PowerShell, run `studio relay setup --lead-key "<the lead's public key line> studio-relay-<lead>"` and run the script it prints. It creates the relay account `studio-relay` (a standard user, never an administrator; the lead logs in as it) and the crew user `studio-crew`, copies Node.js and Studio into the admin-only tree `%ProgramFiles%\Studio\relay` (the forced command runs these copies), seals the crew user's password there, adds the crew user's firewall rule and denied logons, creates the broker task, stops and disables WebClient, grants the crew user read on the toolchains, installs the pinned plugins and the worker's config into the admin-only tree, makes the relay home (`%ProgramData%\Studio\relay`, whose `state` folder alone the relay account may fill) and writes the lead's key with the forced command. The key's comment names its lead (`studio-relay-<lead>`; without one, `default`). Run it again after an update of Studio or the plugins: it renews the copies.
 3. Add the `Match User studio-relay` block the script prints at the end of `sshd_config` and restart sshd. It forces `studio relay serve` with `ExposeAuthInfo` (so the key that logged in decides the lead) and allows no terminal, no forwarding of any kind and no password; the keys come from the admin-only tree, not from the account's profile.
 4. On the lead, put the worker under `workers.relay.<label>` with the host key the script printed.
 5. `studio doctor` on the lead checks the connection, the versions and the worker's probe.
