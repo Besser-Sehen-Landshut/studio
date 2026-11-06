@@ -23,8 +23,8 @@ describe('worker settings', () => {
       'studio.yaml',
     );
     expect(c.workers).toEqual({
-      windows: { deny: { paths: ['D:\\data', '/srv/backup'], ports: [5432] } },
-      lab: { deny: { paths: [], ports: [] } },
+      windows: { deny: { paths: ['D:\\data', '/srv/backup'], ports: [5432], hosts: [] } },
+      lab: { deny: { paths: [], ports: [], hosts: [] } },
     });
   });
   it('refuses relative and network paths, bad ports and bad labels', () => {
@@ -47,10 +47,11 @@ describe('worker settings', () => {
     });
     expect(o.workers).toEqual({
       accept: { windows: [{ login: 'win-bot', id: 42 }] },
+      relay: {},
       self: {
         lead: 'lead-user',
         leadId: 7,
-        deny: { paths: [], ports: [] },
+        deny: { paths: [], ports: [], hosts: [] },
         allowRead: [],
         leaseMinutes: 30,
       },
@@ -142,5 +143,63 @@ describe('planning items for workers', () => {
     expect(p.blocked).toEqual([
       { id: 'APP-1', reason: expect.stringMatching(/a review item stays with the lead/) },
     ]);
+  });
+
+  it('the lead names relay workers per label: host, account, pinned host key, its own key', () => {
+    const key = `ssh-ed25519 ${'A'.repeat(68)}`;
+    const o = ownerConfigSchema.parse({
+      workers: {
+        relay: {
+          lab: { host: 'worker.example', hostKey: key, identityFile: '/home/o/.ssh/studio-lab' },
+        },
+      },
+    });
+    expect(o.workers?.relay.lab).toEqual({
+      host: 'worker.example',
+      user: 'studio-relay',
+      port: 22,
+      hostKey: key,
+      identityFile: '/home/o/.ssh/studio-lab',
+      graceMinutes: 30,
+    });
+    const bad =
+      (relay: unknown, accept: unknown = {}) =>
+      () =>
+        ownerConfigSchema.parse({ workers: { relay, accept } });
+    // Options for ssh never get in through a host or an account name.
+    expect(bad({ lab: { host: '-oProxyCommand=x', hostKey: key, identityFile: '/k' } })).toThrow();
+    expect(bad({ lab: { host: 'a b', hostKey: key, identityFile: '/k' } })).toThrow();
+    expect(
+      bad({ lab: { host: 'worker.example', user: '-l', hostKey: key, identityFile: '/k' } }),
+    ).toThrow();
+    expect(
+      bad({ lab: { host: 'worker.example', hostKey: 'ssh-ed25519', identityFile: '/k' } }),
+    ).toThrow();
+    expect(bad({ lab: { host: 'worker.example', hostKey: key, identityFile: 'k' } })).toThrow(
+      /absolute/,
+    );
+    // One label, one transport.
+    expect(
+      bad(
+        { lab: { host: 'worker.example', hostKey: key, identityFile: '/k' } },
+        { lab: [{ login: 'win-bot', id: 42 }] },
+      ),
+    ).toThrow(/both accept and relay/);
+  });
+  it('a relay worker machine names its crew user, its load limits and hosts its crews must not reach', () => {
+    const o = ownerConfigSchema.parse({
+      workers: { serve: { windows: {}, deny: { hosts: ['nas.example'] } } },
+    });
+    expect(o.workers?.serve).toEqual({
+      deny: { paths: [], ports: [], hosts: ['nas.example'] },
+      allowRead: [],
+      windows: { crewUser: 'studio-crew', broker: 'Studio relay broker' },
+      maxCpuPercent: 75,
+      minFreeDiskGb: 20,
+      probeUnreachable: [],
+    });
+    expect(() =>
+      ownerConfigSchema.parse({ workers: { serve: { deny: { hosts: ['\\\\nas'] } } } }),
+    ).toThrow();
   });
 });

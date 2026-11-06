@@ -183,6 +183,52 @@ describe('README migration numbers', () => {
   });
 });
 
+describe('README relay workers', () => {
+  it('names the config, the forced command, the checks and the steps of a Windows setup', () => {
+    const at = readme.indexOf('## Relay workers');
+    expect(at).toBeGreaterThan(0);
+    const s = readme.slice(at, readme.indexOf('\n## ', at + 1));
+    for (const phrase of [
+      'workers.relay',
+      'host_key',
+      'identity_file',
+      'grace_minutes',
+      'workers.serve',
+      'studio relay serve',
+      'studio relay setup --lead-key',
+      'Match User studio-relay',
+      'never forced',
+      'never to a second attempt elsewhere',
+      'local-subnets',
+      'tailnet-peers',
+      'WebClient',
+      'studio doctor',
+      'Experimental',
+    ]) {
+      expect(s).toContain(phrase);
+    }
+    expect(readme).toContain('| `relay setup [--lead-key <line>] [--home <dir>]`');
+  });
+  it('SECURITY.md names both threat models, what runs elevated and the gaps the probe covers', () => {
+    const security = readFileSync(join(import.meta.dirname, '..', 'SECURITY.md'), 'utf8');
+    const at = security.indexOf('## Relay workers');
+    expect(at).toBeGreaterThan(0);
+    const s = security.slice(at, security.indexOf('\n## ', at + 1));
+    for (const phrase of [
+      'a compromised worker machine',
+      'a compromised lead key',
+      'What runs elevated',
+      'LocalMachine DPAPI',
+      'loopback',
+      'WebClient',
+      'IPC$',
+      'Not verified',
+    ]) {
+      expect(s).toContain(phrase);
+    }
+  });
+});
+
 describe('README workers on other machines', () => {
   const section = () => {
     const at = readme.indexOf('## Workers on other machines');

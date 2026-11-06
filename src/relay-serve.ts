@@ -1,0 +1,981 @@
+// The worker's side of a relay worker: `studio relay serve`, the command sshd forces for the lead's
+// key. It reads one request (src/relay-protocol.ts) and answers it; it never runs a command it was
+// sent. The machine holds no GitHub credential and no credential of the lead's machine: code comes
+// in as a git bundle of the pinned `main`, the crew's Claude token comes in the start request and
+// stays in memory, and results go back as a report and a bundle of `studio/<id>`, which the lead
+// checks, pushes and turns into a pull request itself.
+//
+// A crew outlives the SSH session: a start hands the job to a runner (`studio relay run <id>`), a
+// process of its own that the session does not end. The runner probes the sandbox, launches the
+// crew exactly as a worker does (src/worker.ts: the brief from the pinned commit, the deny lists,
+// the Windows crew sandbox on native Windows) and on Windows holds the egress proxy until the crew
+// ends. One crew at a time on a relay worker.
+import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  statfsSync,
+  writeFileSync,
+} from 'node:fs';
+import { createServer } from 'node:net';
+import { cpus, homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { crewClaudeDir, listAccounts } from './accounts.js';
+import type { WorkItem } from './board.js';
+import { loadOwnerConfig, parseConfig, type RelayServe, relayServeSchema } from './config.js';
+import { runUsageSince } from './costs.js';
+import { readCrewTokenFile, readWorkerTokenFile } from './credentials.js';
+import { crewHold, type LauncherEnv, launchCrew, type WindowsLaunch } from './crew.js';
+import { HeldError } from './held.js';
+import { scanLogForBlock, scanLogForLimit } from './limits.js';
+import {
+  acquireStateLock,
+  assertStatePath,
+  checkStateMarker,
+  ensureStateDir,
+  projectRealpath,
+  removeStateEntry,
+  stateBaseFor,
+  stateRootFor,
+  writeStateFile,
+} from './paths.js';
+import { installedVersions, pinnedPlugins, STUDIO_VERSION } from './plugins.js';
+import type { Ports } from './ports.js';
+import {
+  type CollectAnswer,
+  encodeMessage,
+  LineReader,
+  MAX_HEADER_BYTES,
+  MAX_RESULT_BUNDLE_BYTES,
+  MAX_START_BUNDLE_BYTES,
+  parseRequest,
+  RELAY_PROTOCOL,
+  type RelayJob,
+  type RelayState,
+  readMessage,
+} from './relay-protocol.js';
+import { parseReport, readReportText, reportName } from './report.js';
+import { readCrewRecords } from './state.js';
+import { pinnedContent, strictPinProblem } from './worker.js';
+import { workerItemOf } from './worker-claim.js';
+import {
+  type EnforcedDeny,
+  enforceDeny,
+  mergeDeny,
+  sandboxProblem,
+  type WorkerPlatform,
+} from './worker-deny.js';
+
+/** Where a relay worker keeps its jobs, mirrors and project checkouts: below the state base. */
+export const relayRoot = (owner: LauncherEnv): string => join(stateBaseFor(owner), 'relay');
+
+const RELAY_LOCK = 'relay.lock';
+const RELAY_LOCK_STALE_MS = 10 * 60_000;
+/** How long `start` waits for the runner to take the job (its spec, with the token). */
+const HANDOFF_MS = 60_000;
+
+/** One job as the worker keeps it; never the token. */
+export interface JobRecord {
+  id: string;
+  label: string;
+  repo: string;
+  sha: string;
+  from: string;
+  fromSha?: string;
+  item: Record<string, unknown>;
+  state: RelayState;
+  /** Studio's own line: why held, refused or stopped. */
+  line?: string;
+  /** The start's random number: the runner proves it took this job's spec by writing it back. */
+  nonce: string;
+  handoff?: string;
+  runnerPid?: number;
+  startedAt: string;
+  /** When the crew started: a report from then on is this run's. */
+  crewStartedAt?: string;
+  warnings?: string[];
+}
+
+/** Load right now: CPU busy share over a short sample and free disk where state lies. */
+export interface Load {
+  cpuPercent: number;
+  freeDiskGb: number;
+}
+
+/** Everything one relay worker needs; the Windows parts only on native Windows. */
+export interface RelayContext {
+  owner: LauncherEnv;
+  ports: Ports;
+  platform: () => WorkerPlatform;
+  /** Hands the spec (it holds the token) to a new runner process for job `id`. */
+  spawnRunner: (o: { id: string; spec: string; log: string }) => Promise<{ pid: number }>;
+  load: () => Promise<Load>;
+  /** Native Windows: the crew sandbox in relay mode (src/relay-windows.ts, through the CLI). */
+  windows?: RelayWindows;
+  log?: (line: string) => void;
+}
+
+/** The Windows crew sandbox as a relay worker uses it. */
+export interface RelayWindows {
+  /**
+   * Every check before a start, the probe as the crew user included. `held`: not now; `refused`:
+   * not on this machine until the owner fixed it. Warnings go to doctor.
+   */
+  check(o: {
+    deny: EnforcedDeny;
+    hosts: readonly string[];
+  }): Promise<{ problem?: { kind: 'held' | 'refused'; line: string }; warnings: string[] }>;
+  /** What a launch needs, with the proxy up; `close` ends the proxy. */
+  launch(networkAllow: readonly string[]): Promise<{
+    claude: Ports['claude'];
+    launch: WindowsLaunch;
+    close(): Promise<void>;
+  }>;
+  /** Stopping a crew: the keeper ends, the grants go (through the broker). */
+  claude(): Ports['claude'];
+}
+
+const relayLock = (root: string, now: Date) =>
+  acquireStateLock(root, RELAY_LOCK, { now, heartbeatStaleMs: RELAY_LOCK_STALE_MS });
+
+async function withRelayLock<T>(c: RelayContext, fn: () => Promise<T> | T): Promise<T> {
+  const root = ensureStateDir(relayRoot(c.owner), relayRoot(c.owner));
+  for (let i = 0; i < 100; i++) {
+    const lock = relayLock(root, c.ports.clock.now());
+    if (lock) {
+      try {
+        return await fn();
+      } finally {
+        lock.release();
+      }
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new HeldError('another relay request is in progress on this machine; try again');
+}
+
+const jobFile = (root: string, id: string) => join(root, 'jobs', `${id}.json`);
+
+export function readJob(owner: LauncherEnv, id: string): JobRecord | undefined {
+  const root = relayRoot(owner);
+  const f = jobFile(root, id);
+  assertStatePath(root, f);
+  if (!existsSync(f)) return undefined;
+  if (!lstatSync(f).isFile()) throw new Error(`${f} is not a plain file`);
+  return JSON.parse(readFileSync(f, 'utf8')) as JobRecord;
+}
+
+function writeJob(owner: LauncherEnv, job: JobRecord): void {
+  const root = relayRoot(owner);
+  ensureStateDir(root, join(root, 'jobs'));
+  writeStateFile(root, jobFile(root, job.id), `${JSON.stringify(job, null, 2)}\n`);
+}
+
+function allJobs(owner: LauncherEnv): JobRecord[] {
+  const dir = join(relayRoot(owner), 'jobs');
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => /^[A-Z]+-\d+\.json$/.test(f))
+    .flatMap((f) => {
+      const j = readJob(owner, f.slice(0, -5));
+      return j === undefined ? [] : [j];
+    });
+}
+
+const repoSlug = (repo: string): string => repo.replace('/', '--');
+export const mirrorDir = (owner: LauncherEnv, repo: string): string =>
+  join(relayRoot(owner), 'mirrors', `${repoSlug(repo)}.git`);
+export const projectDir = (owner: LauncherEnv, repo: string): string =>
+  join(relayRoot(owner), 'projects', repoSlug(repo));
+
+/** The relay worker's own settings: `workers.serve`, or its defaults (nothing to write by hand). */
+export function serveSettings(owner: LauncherEnv): RelayServe {
+  return loadOwnerConfig(owner).workers?.serve ?? relayServeSchema.parse({});
+}
+
+/** The Claude config dir crews of this machine run with: plugins, never a login. */
+function crewConfigDir(owner: LauncherEnv): string {
+  const stored = crewClaudeDir(owner);
+  if (existsSync(stored)) return stored;
+  const env = owner.env ?? process.env;
+  return env.CLAUDE_CONFIG_DIR || join(owner.homedir ?? homedir(), '.claude');
+}
+
+/**
+ * A relay worker stores no credential at all: no GitHub token, no Claude account, no credential
+ * provider. Each one found refuses, so a crew can never come near one.
+ */
+export function storedCredentialProblem(owner: LauncherEnv): string | undefined {
+  const found: string[] = [];
+  if (readCrewTokenFile(owner).kind !== 'absent')
+    found.push('a crew token (studio secret set crew-token)');
+  if (readWorkerTokenFile(owner).kind !== 'absent') found.push('a worker token');
+  try {
+    if (listAccounts(owner).length > 0) found.push('Claude accounts (studio account add)');
+  } catch {
+    found.push('an unreadable Claude accounts folder');
+  }
+  if (loadOwnerConfig(owner).crewCredentialCommand !== undefined) {
+    found.push('crew_credential_command in the owner config');
+  }
+  return found.length === 0
+    ? undefined
+    : `a relay worker holds no credential, but this machine has ${found.join(', ')}: remove it; the lead sends each crew's credential`;
+}
+
+function loadProblem(load: Load | undefined, s: RelayServe): string | undefined {
+  if (load === undefined) return 'the load of this machine cannot be read';
+  if (load.cpuPercent > s.maxCpuPercent) {
+    return `this machine is busy (CPU ${Math.round(load.cpuPercent)} %, limit ${s.maxCpuPercent} %)`;
+  }
+  if (load.freeDiskGb < s.minFreeDiskGb) {
+    return `this machine is low on disk (${load.freeDiskGb.toFixed(1)} GB free, at least ${s.minFreeDiskGb} GB)`;
+  }
+  return undefined;
+}
+
+/** CPU busy share over `ms` of all cores, and free disk at `path`; a seam replaces it in tests. */
+export async function systemLoad(path: string, ms = 1000): Promise<Load> {
+  const sample = () =>
+    cpus().reduce(
+      (a, c) => {
+        const t = c.times;
+        const all = t.user + t.nice + t.sys + t.idle + t.irq;
+        return { idle: a.idle + t.idle, all: a.all + all };
+      },
+      { idle: 0, all: 0 },
+    );
+  const a = sample();
+  await new Promise((r) => setTimeout(r, ms));
+  const b = sample();
+  const all = b.all - a.all;
+  const cpuPercent = all <= 0 ? 0 : (100 * (all - (b.idle - a.idle))) / all;
+  const fs = statfsSync(path);
+  return { cpuPercent, freeDiskGb: (fs.bavail * fs.bsize) / 1e9 };
+}
+
+type Problem = { kind: 'held' | 'refused'; line: string };
+
+/**
+ * What must hold before anything starts here, the same for `probe` and the runner: no stored
+ * credential, a sandbox, a deny list the sandbox can hold, the load below its limits, and on native
+ * Windows the crew sandbox's own checks and its probe as the crew user.
+ */
+async function readiness(
+  c: RelayContext,
+  o: {
+    deny: { paths: string[]; ports: number[]; hosts?: string[] };
+    networkAllow: readonly string[];
+    keep: readonly string[];
+  },
+): Promise<{ problem?: Problem; deny?: EnforcedDeny; load?: Load; warnings: string[] }> {
+  const warnings: string[] = [];
+  const stored = storedCredentialProblem(c.owner);
+  if (stored !== undefined) return { problem: { kind: 'refused', line: stored }, warnings };
+  const settings = serveSettings(c.owner);
+  const platform = c.platform();
+  const native = platform.platform === 'win32';
+  if (native && c.windows === undefined) {
+    return {
+      problem: {
+        kind: 'refused',
+        line: 'native Windows runs crews only in the Windows crew sandbox: run the script of studio relay setup, elevated',
+      },
+      warnings,
+    };
+  }
+  if (!native) {
+    const p = sandboxProblem(platform);
+    if (p !== undefined) return { problem: { kind: 'refused', line: p }, warnings };
+  }
+  const deny = enforceDeny({
+    deny: mergeDeny(o.deny, settings.deny),
+    platform,
+    networkAllow: o.networkAllow,
+    keep: o.keep,
+    allowRead: settings.allowRead,
+  });
+  if ('refused' in deny) return { problem: { kind: 'refused', line: deny.refused }, warnings };
+  let load: Load | undefined;
+  try {
+    load = await c.load();
+  } catch {
+    load = undefined;
+  }
+  const busy = loadProblem(load, settings);
+  if (busy !== undefined) {
+    return { problem: { kind: 'held', line: busy }, deny, ...(load ? { load } : {}), warnings };
+  }
+  if (native && c.windows !== undefined) {
+    const w = await c.windows.check({ deny, hosts: deny.hosts ?? [] });
+    warnings.push(...w.warnings);
+    if (w.problem !== undefined) {
+      return { problem: w.problem, deny, ...(load ? { load } : {}), warnings };
+    }
+  }
+  return { deny, ...(load ? { load } : {}), warnings };
+}
+
+/** The job that is starting or running, if any: one crew at a time on a relay worker. */
+async function busyJob(c: RelayContext): Promise<JobRecord | undefined> {
+  for (const j of allJobs(c.owner)) {
+    const s = await liveState(c, j);
+    if (s === 'starting' || s === 'running') return j;
+  }
+  return undefined;
+}
+
+const pidAlive = (pid: number | undefined): boolean => {
+  if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};
+
+/**
+ * Where a job stands now: a running job whose crew has ended is `ended`; a start whose runner died
+ * before its crew started is refused.
+ */
+async function liveState(c: RelayContext, j: JobRecord): Promise<RelayState> {
+  if (j.state === 'starting') {
+    if (pidAlive(j.runnerPid)) return 'starting';
+    // A start that has not recorded its runner yet is still starting, for a while.
+    const age = c.ports.clock.now().getTime() - Date.parse(j.startedAt);
+    if (j.runnerPid === undefined && age < HANDOFF_MS * 2) return 'starting';
+    const after = readJob(c.owner, j.id);
+    if (after !== undefined && after.state !== 'starting') return liveState(c, after);
+    writeJob(c.owner, { ...j, state: 'refused', line: 'the runner ended before its crew started' });
+    return 'refused';
+  }
+  if (j.state !== 'running') return j.state;
+  const stateRoot = stateRootFor(projectDir(c.owner, j.repo), c.owner);
+  const rec = readCrewRecords(stateRoot)[j.id];
+  const hold = rec === undefined ? undefined : await crewHold(rec, crewPorts(c));
+  if (hold === 'running' || hold === 'unverified') return 'running';
+  writeJob(c.owner, { ...j, state: 'ended' });
+  return 'ended';
+}
+
+/** The ports a crew record is judged with: on Windows the record is the keeper's. */
+const crewPorts = (c: RelayContext): Ports =>
+  c.windows === undefined ? c.ports : { ...c.ports, claude: c.windows.claude() };
+
+const git = (c: RelayContext, cwd: string, args: string[], timeoutMs = 600_000) =>
+  c.ports.git.run(cwd, args, { timeoutMs });
+
+/**
+ * Takes the lead's bundle into the mirror of the repository: exactly `main` at the pinned commit,
+ * and `studio/<id>` at its head for a fix round; nothing else may be in it. Then the project
+ * checkout fetches from the mirror. Objects are checked as they come in.
+ */
+async function takeBundle(c: RelayContext, job: RelayJob, bundle: Buffer): Promise<string> {
+  const root = relayRoot(c.owner);
+  const inbox = ensureStateDir(root, join(root, 'in'));
+  const file = join(inbox, `${job.id}.bundle`);
+  writeStateFile(root, file, '');
+  writeFileSync(file, bundle);
+  try {
+    const mirror = mirrorDir(c.owner, job.repo);
+    if (!existsSync(join(mirror, 'HEAD'))) {
+      ensureStateDir(root, dirname(mirror));
+      removeStateEntry(root, mirror);
+      await git(c, dirname(mirror), ['init', '-q', '--bare', '--template=', mirror]);
+    }
+    const heads = (await git(c, mirror, ['bundle', 'list-heads', file]))
+      .split('\n')
+      .filter((l) => l.trim() !== '');
+    const want = new Map<string, string>([['refs/heads/main', job.sha]]);
+    if (job.from !== 'main') {
+      if (job.fromSha === undefined) throw new Error('a start from studio/<id> names no head');
+      want.set(`refs/heads/studio/${job.id}`, job.fromSha);
+    }
+    if (heads.length !== want.size)
+      throw new Error('the bundle holds other refs than the job names');
+    for (const l of heads) {
+      const [sha, ref] = l.trim().split(/\s+/);
+      if (ref === undefined || want.get(ref) !== sha) {
+        throw new Error('the bundle holds other refs than the job names');
+      }
+    }
+    const refspecs = [...want.keys()].map((r) => `+${r}:${r}`);
+    await git(c, mirror, ['fetch', '-q', '--no-tags', '--no-write-fetch-head', file, ...refspecs]);
+    if (job.from === 'main') {
+      await git(c, mirror, ['update-ref', '-d', `refs/heads/studio/${job.id}`]).catch(() => '');
+    }
+    const project = projectDir(c.owner, job.repo);
+    const url = pathToFileURL(mirror).href;
+    if (!existsSync(join(project, '.git'))) {
+      ensureStateDir(root, dirname(project));
+      removeStateEntry(root, project);
+      await git(c, dirname(project), ['clone', '-q', '--no-checkout', url, project]);
+    } else {
+      await git(c, project, [
+        'fetch',
+        '-q',
+        '--prune',
+        'origin',
+        '+refs/heads/*:refs/remotes/origin/*',
+      ]);
+    }
+    const got = (
+      await git(c, project, ['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'])
+    ).trim();
+    if (got !== job.sha) throw new Error('the project checkout is not at the pinned commit');
+    return project;
+  } finally {
+    removeStateEntry(root, file);
+  }
+}
+
+/** The item and studio.yaml of a job, read from the pinned commit as a GitHub worker reads them. */
+async function jobInputs(
+  c: RelayContext,
+  job: Pick<RelayJob, 'id' | 'label' | 'repo' | 'sha' | 'item'>,
+) {
+  const project = projectDir(c.owner, job.repo);
+  const text = await git(c, project, [
+    '--no-replace-objects',
+    'show',
+    `${job.sha}:.studio/studio.yaml`,
+  ]);
+  const config = parseConfig(text, 'origin/main:.studio/studio.yaml');
+  if (config.primaryRepo !== job.repo) {
+    throw new Error(`the pinned studio.yaml names ${config.primaryRepo}, not ${job.repo}`);
+  }
+  const item = workerItemOf(job.item, job.label);
+  if (item === undefined || item.id !== job.id)
+    throw new Error('the job carries no item a worker may run');
+  if (item.repo !== config.primaryRepo && !config.repos.includes(item.repo)) {
+    throw new Error(`repo ${item.repo} is not configured in the pinned studio.yaml`);
+  }
+  return { project, config, item };
+}
+
+type Out = (line: string) => void;
+
+const fail = (out: Out, kind: 'held' | 'refused' | 'error', line: string) => {
+  for (const l of encodeMessage({
+    studioRelay: RELAY_PROTOCOL,
+    ok: false,
+    kind,
+    line: line.slice(0, 300) || 'failed',
+  })) {
+    out(l);
+  }
+};
+const answer = (out: Out, header: object, payload?: Uint8Array) => {
+  for (const l of encodeMessage({ studioRelay: RELAY_PROTOCOL, ok: true, ...header }, payload))
+    out(l);
+};
+
+/**
+ * `studio relay serve`: one request in, one answer out. The request is read with a cap per line and
+ * on the payload; anything that does not parse is answered with an error and nothing else happens.
+ * Errors carry Studio's own lines; the token of a start is never part of any of them.
+ */
+export async function serveRelay(
+  c: RelayContext,
+  input: AsyncIterable<Uint8Array | string>,
+  out: Out,
+): Promise<void> {
+  let request: ReturnType<typeof parseRequest>;
+  let payload: Buffer | undefined;
+  try {
+    const msg = await readMessage(
+      new LineReader(input, MAX_HEADER_BYTES + 1024),
+      MAX_START_BUNDLE_BYTES,
+    );
+    if (msg === undefined) return fail(out, 'error', 'no request');
+    request = parseRequest(msg.header);
+    payload = msg.payload;
+  } catch (e) {
+    return fail(out, 'error', (e as Error).message);
+  }
+  try {
+    switch (request.op) {
+      case 'hello': {
+        const busy = await busyJob(c);
+        const have = installedVersions(crewConfigDir(c.owner));
+        const stored = storedCredentialProblem(c.owner);
+        let load: Load | undefined;
+        try {
+          load = await c.load();
+        } catch {
+          load = undefined;
+        }
+        const held =
+          busy !== undefined
+            ? `this machine runs ${busy.id}: one crew at a time on a relay worker`
+            : loadProblem(load, serveSettings(c.owner));
+        return answer(out, {
+          studio: STUDIO_VERSION,
+          platform: c.platform().platform,
+          plugins: have === undefined ? null : Object.fromEntries(have),
+          busy: busy?.id ?? null,
+          held: held ?? null,
+          warnings: stored === undefined ? [] : [stored],
+        });
+      }
+      case 'probe': {
+        const r = await readiness(c, {
+          deny: { paths: [], ports: [] },
+          networkAllow: [],
+          keep: [relayRoot(c.owner), ...loadOwnerConfig(c.owner).crewToolchainPaths],
+        });
+        return answer(out, {
+          problem: r.problem?.line ?? null,
+          kind: r.problem?.kind ?? null,
+          load: r.load ?? null,
+          warnings: r.warnings,
+        });
+      }
+      case 'start':
+        return await start(c, request.job, payload as Buffer, out);
+      case 'status': {
+        const j = readJob(c.owner, request.id);
+        if (j === undefined) return answer(out, { state: 'unknown', line: null });
+        const state = await liveState(c, j);
+        const now = readJob(c.owner, request.id) ?? j;
+        return answer(out, { state, line: now.line ?? null });
+      }
+      case 'collect':
+        return await collect(c, request.id, out);
+      case 'stop':
+        await stop(c, request.id);
+        return answer(out, {});
+      case 'cleanup':
+        await cleanup(c, request.id);
+        return answer(out, {});
+    }
+  } catch (e) {
+    return fail(out, e instanceof HeldError ? 'held' : 'error', (e as Error).message);
+  }
+}
+
+async function start(c: RelayContext, job: RelayJob, bundle: Buffer, out: Out): Promise<void> {
+  const nonce = randomBytes(16).toString('hex');
+  const prepared = await withRelayLock(c, async () => {
+    const busy = await busyJob(c);
+    if (busy !== undefined) {
+      throw new HeldError(`this machine runs ${busy.id}: one crew at a time on a relay worker`);
+    }
+    const stored = storedCredentialProblem(c.owner);
+    if (stored !== undefined) return { refused: stored };
+    const project = await takeBundle(c, job, bundle);
+    const { config } = await jobInputs(c, job);
+    const ownerConfig = loadOwnerConfig(c.owner);
+    const pins = strictPinProblem(
+      crewConfigDir(c.owner),
+      pinnedPlugins(config.plugins, ownerConfig.allowedPlugins),
+    );
+    if (pins !== undefined) return { refused: pins };
+    const record: JobRecord = {
+      id: job.id,
+      label: job.label,
+      repo: job.repo,
+      sha: job.sha,
+      from: job.from,
+      ...(job.fromSha === undefined ? {} : { fromSha: job.fromSha }),
+      item: job.item,
+      state: 'starting',
+      nonce,
+      startedAt: c.ports.clock.now().toISOString(),
+    };
+    writeJob(c.owner, record);
+    return { project, record };
+  });
+  if ('refused' in prepared) return fail(out, 'refused', prepared.refused as string);
+  const root = relayRoot(c.owner);
+  const log = join(ensureStateDir(root, join(root, 'logs')), `${job.id}.runner.log`);
+  // The spec goes to the runner over its stdin (or a pipe on Windows), never to a file.
+  const spec = JSON.stringify({ nonce, job });
+  const { pid } = await c.spawnRunner({ id: job.id, spec, log });
+  writeJob(c.owner, { ...(readJob(c.owner, job.id) as JobRecord), runnerPid: pid });
+  const until = c.ports.clock.now().getTime() + HANDOFF_MS;
+  for (;;) {
+    const j = readJob(c.owner, job.id);
+    if (j?.handoff === nonce || (j !== undefined && j.state !== 'starting')) {
+      if (j.state === 'held' || j.state === 'refused') {
+        return fail(out, j.state, j.line ?? 'not started');
+      }
+      return answer(out, { state: 'starting' });
+    }
+    if (c.ports.clock.now().getTime() >= until || !pidAlive(pid)) {
+      if (j !== undefined)
+        writeJob(c.owner, { ...j, state: 'refused', line: 'the runner did not take the job' });
+      return fail(out, 'refused', 'the runner did not take the job');
+    }
+    await c.ports.clock.sleep(250);
+  }
+}
+
+/**
+ * `studio relay run <id>`: the runner of one job. It takes its spec (with the token) from the
+ * start, probes, launches the crew and, on Windows, holds the proxy until the crew ends. The token
+ * lives in this process only and reaches the crew's environment through the launch.
+ */
+export async function runRelayJob(
+  c: RelayContext,
+  id: string,
+  specText: string,
+): Promise<RelayState> {
+  let spec: { nonce: string; job: RelayJob };
+  try {
+    spec = JSON.parse(specText) as typeof spec;
+  } catch {
+    throw new Error('the runner got no spec');
+  }
+  const job = spec.job;
+  const rec = readJob(c.owner, id);
+  if (rec === undefined || job?.id !== id || rec.nonce !== spec.nonce || rec.state !== 'starting') {
+    throw new Error('the runner got a spec for no starting job');
+  }
+  writeJob(c.owner, { ...rec, handoff: spec.nonce, runnerPid: process.pid });
+  const settle = (state: RelayState, line?: string, extra: Partial<JobRecord> = {}) => {
+    const now = readJob(c.owner, id) ?? rec;
+    writeJob(c.owner, { ...now, ...extra, state, ...(line === undefined ? {} : { line }) });
+    return state;
+  };
+  let windows: Awaited<ReturnType<RelayWindows['launch']>> | undefined;
+  try {
+    const { project, config, item } = await jobInputs(c, job);
+    const stateRoot = stateRootFor(project, c.owner);
+    // Binds the project's state root to its checkout and mirror before anything is written there.
+    const url = (await git(c, project, ['remote', 'get-url', 'origin'])).trim();
+    checkStateMarker(stateRoot, { projectRealpath: projectRealpath(project), originUrl: url });
+    const ownerConfig = loadOwnerConfig(c.owner);
+    const ready = await readiness(c, {
+      deny: config.workers?.[job.label]?.deny ?? { paths: [], ports: [] },
+      networkAllow: config.sandbox.networkAllow,
+      keep: [
+        project,
+        stateRoot,
+        relayRoot(c.owner),
+        stateBaseFor(c.owner),
+        ...ownerConfig.crewToolchainPaths,
+      ],
+    });
+    if (ready.warnings.length > 0)
+      writeJob(c.owner, { ...(readJob(c.owner, id) ?? rec), warnings: ready.warnings });
+    if (ready.problem !== undefined) return settle(ready.problem.kind, ready.problem.line);
+    const contentDir = await pinnedContent({ project, ports: c.ports }, stateRoot, job.sha);
+    if (c.windows !== undefined && c.platform().platform === 'win32') {
+      windows = await c.windows.launch(config.sandbox.networkAllow);
+    }
+    const env: Record<string, string | undefined> = {
+      ...(c.owner.env ?? process.env),
+      CLAUDE_CODE_OAUTH_TOKEN: job.token,
+    };
+    const configDir = crewClaudeDir(c.owner);
+    if (existsSync(configDir)) env.CLAUDE_CONFIG_DIR = configDir;
+    const ports = windows === undefined ? c.ports : { ...c.ports, claude: windows.claude };
+    await launchCrew(
+      project,
+      item as WorkItem,
+      config,
+      ports,
+      { ...c.owner, env },
+      {
+        deny: ready.deny as EnforcedDeny,
+        ...(windows === undefined ? {} : { windows: windows.launch }),
+        from: job.from,
+        contentDir,
+        sha: job.sha,
+        noToken: true,
+      },
+    );
+    settle('running', undefined, { crewStartedAt: c.ports.clock.now().toISOString() });
+    if (windows === undefined) return 'running';
+    // The proxy lives in this process: it stays until the crew has ended.
+    const crewRec = () => readCrewRecords(stateRoot)[id];
+    for (;;) {
+      const r = crewRec();
+      const hold = r === undefined ? undefined : await crewHold(r, ports);
+      if (hold !== 'running' && hold !== 'unverified') break;
+      if (readJob(c.owner, id)?.state === 'stopped') break;
+      await c.ports.clock.sleep(15_000);
+    }
+    const after = readJob(c.owner, id);
+    return after?.state === 'stopped' ? 'stopped' : settle('ended');
+  } catch (e) {
+    const line = (e as Error).message;
+    c.log?.(`${id}: ${line}`);
+    return settle(e instanceof HeldError ? 'held' : 'refused', line);
+  } finally {
+    await windows?.close();
+  }
+}
+
+const opensPr = (item: WorkItem): boolean => item.type !== 'research' && item.type !== 'review';
+
+async function collect(c: RelayContext, id: string, out: Out): Promise<void> {
+  const j = readJob(c.owner, id);
+  if (j === undefined) return fail(out, 'refused', `no job ${id} on this machine`);
+  const state = await liveState(c, j);
+  if (state !== 'ended') return fail(out, 'held', `${id} is ${state}, nothing to collect yet`);
+  const project = projectDir(c.owner, j.repo);
+  const stateRoot = stateRootFor(project, c.owner);
+  const crew = readCrewRecords(stateRoot)[id];
+  const from = typeof crew?.logStart === 'number' && crew.logStart >= 0 ? crew.logStart : 0;
+  const usage = crew === undefined ? undefined : runUsageSince(stateRoot, id, from);
+  const limit = crew === undefined ? undefined : scanLogForLimit(stateRoot, id, from);
+  const block = crew === undefined ? undefined : scanLogForBlock(stateRoot, id, from);
+  const base: Omit<CollectAnswer, 'studioRelay' | 'ok' | 'report' | 'headSha' | 'payload'> = {
+    usage:
+      usage === undefined || usage.runs === 0
+        ? null
+        : {
+            runs: usage.runs,
+            tokensIn: usage.tokensIn,
+            tokensOut: usage.tokensOut,
+            tokensCache: usage.tokensCache,
+            costUsd: Math.round(usage.costUsd * 1e6) / 1e6,
+            ...(usage.estimated ? { estimated: true as const } : {}),
+          },
+    limit: limit === undefined ? null : { kind: limit.kind, resetsAt: limit.resetsAt ?? null },
+    block: block !== undefined,
+    problem: null,
+  };
+  const item = workerItemOf(j.item, j.label) as WorkItem;
+  let text: string;
+  try {
+    const fileName = reportName(stateRoot, id);
+    if (fileName === undefined || crew === undefined)
+      throw new Error('no report name was drawn for this run');
+    text = readReportText(join(stateRoot, 'clones', id), id, {
+      notBefore: new Date(crew.startedAt),
+      fileName,
+    });
+  } catch {
+    return answer(out, {
+      ...base,
+      report: '',
+      headSha: null,
+      payload: false,
+      problem: 'the crew left no report',
+    });
+  }
+  let report: ReturnType<typeof parseReport> | undefined;
+  try {
+    report = parseReport(text, item);
+  } catch {
+    report = undefined;
+  }
+  // The lead parses the report itself; the worker only finds what it must hand back with it.
+  if (report?.status !== 'done' || !opensPr(item) || report.headSha === undefined) {
+    return answer(out, { ...base, report: text, headSha: null, payload: false });
+  }
+  const head = report.headSha.toLowerCase();
+  const root = relayRoot(c.owner);
+  const dir = join(ensureStateDir(root, join(root, 'out')), id);
+  removeStateEntry(root, dir);
+  const branch = `refs/heads/studio/${id}`;
+  try {
+    await git(c, dirname(dir), ['init', '-q', '--bare', '--template=', dir]);
+    // Objects of the pinned main come from the mirror; only the crew's new ones land here.
+    const mirrorObjects = join(mirrorDir(c.owner, j.repo), 'objects');
+    writeStateFile(root, join(dir, 'objects', 'info', 'alternates'), `${mirrorObjects}\n`);
+    // The crew's clone is read as a remote only: git never runs inside it.
+    await git(c, dir, [
+      '-c',
+      'protocol.file.allow=always',
+      'fetch',
+      '-q',
+      '--no-tags',
+      '--no-write-fetch-head',
+      join(stateRoot, 'clones', id),
+      `+${branch}:${branch}`,
+    ]);
+    const got = (
+      await git(c, dir, ['--no-replace-objects', 'rev-parse', '--verify', `${branch}^{commit}`])
+    ).trim();
+    if (got !== head) {
+      return answer(out, {
+        ...base,
+        report: text,
+        headSha: null,
+        payload: false,
+        problem: 'the branch in the clone differs from the report',
+      });
+    }
+    const file = join(dir, 'result.bundle');
+    const negative = [`^${j.sha}`, ...(j.fromSha === undefined ? [] : [`^${j.fromSha}`])];
+    try {
+      await git(c, dir, ['bundle', 'create', '-q', file, branch, ...negative]);
+    } catch {
+      return answer(out, {
+        ...base,
+        report: text,
+        headSha: null,
+        payload: false,
+        problem: 'the crew committed nothing on top of the pinned commit',
+      });
+    }
+    const bytes = readFileSync(file);
+    if (bytes.length > MAX_RESULT_BUNDLE_BYTES) {
+      return answer(out, {
+        ...base,
+        report: text,
+        headSha: null,
+        payload: false,
+        problem: 'the branch is larger than a relay result may be',
+      });
+    }
+    return answer(out, { ...base, report: text, headSha: head, payload: true }, bytes);
+  } finally {
+    removeStateEntry(root, dir);
+  }
+}
+
+async function stop(c: RelayContext, id: string): Promise<void> {
+  const j = readJob(c.owner, id);
+  if (j === undefined) return;
+  const project = projectDir(c.owner, j.repo);
+  const stateRoot = stateRootFor(project, c.owner);
+  writeJob(c.owner, { ...j, state: 'stopped', line: 'stopped by the lead' });
+  const rec = readCrewRecords(stateRoot)[id];
+  const ports = crewPorts(c);
+  if (rec !== undefined && (await crewHold(rec, ports)) === 'running') {
+    await ports.claude.stop(rec.pid);
+  }
+}
+
+async function cleanup(c: RelayContext, id: string): Promise<void> {
+  const j = readJob(c.owner, id);
+  if (j === undefined) return;
+  const s = await liveState(c, j);
+  if (s === 'starting' || s === 'running') {
+    throw new HeldError(`${id} is ${s}: stop it before it is cleaned up`);
+  }
+  const project = projectDir(c.owner, j.repo);
+  const stateRoot = stateRootFor(project, c.owner);
+  for (const sub of ['clones', 'homes', 'tmp'])
+    removeStateEntry(stateRoot, join(stateRoot, sub, id));
+  const root = relayRoot(c.owner);
+  removeStateEntry(root, jobFile(root, id));
+}
+
+/** The bin of this Studio: a runner is started from it. */
+export const STUDIO_BIN = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'studio');
+
+/**
+ * Starts a runner that outlives the SSH session. POSIX: a new session (detached), the spec on its
+ * stdin. Native Windows: sshd ends every process of a session's job object with the session, so the
+ * runner is created through CIM (Win32_Process.Create, outside that job) and takes its spec from a
+ * named pipe with a random name, which this process serves once.
+ */
+export function systemSpawnRunner(o: {
+  home: string | undefined;
+  platform: NodeJS.Platform;
+  run?: (file: string, args: string[]) => Promise<{ code: number; stdout: string }>;
+}): RelayContext['spawnRunner'] {
+  const homeArgs = o.home === undefined ? [] : ['--home', o.home];
+  if (o.platform !== 'win32') {
+    return async ({ id, spec, log }) => {
+      const fd = openSync(log, 'a');
+      try {
+        const child = spawn(process.execPath, [STUDIO_BIN, 'relay', 'run', id, ...homeArgs], {
+          detached: true,
+          stdio: ['pipe', fd, fd],
+          env: process.env,
+        });
+        const pid = await new Promise<number>((res, rej) => {
+          child.once('error', rej);
+          child.once('spawn', () => res(child.pid as number));
+        });
+        child.stdin?.on('error', () => {});
+        child.stdin?.end(spec);
+        child.unref();
+        return { pid };
+      } finally {
+        closeSync(fd);
+      }
+    };
+  }
+  return async ({ id, spec }) => {
+    const name = `studio-relay-${randomBytes(16).toString('hex')}`;
+    const server = createServer({ allowHalfOpen: false });
+    let served = false;
+    const handed = new Promise<void>((res, rej) => {
+      server.once('connection', (s) => {
+        if (served) {
+          s.destroy();
+          return;
+        }
+        served = true;
+        server.close();
+        s.end(spec, () => res());
+        s.on('error', rej);
+      });
+    });
+    await new Promise<void>((res, rej) => {
+      server.once('error', rej);
+      server.listen(`\\\\.\\pipe\\${name}`, () => res());
+    });
+    const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
+    const cmd = [process.execPath, STUDIO_BIN, 'relay', 'run', id, '--pipe', name, ...homeArgs]
+      .map((a) => `"${a}"`)
+      .join(' ');
+    const run = o.run ?? defaultRun;
+    const r = await run('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${q(cmd)} }; if ($r.ReturnValue -ne 0) { exit 3 }; [Console]::Out.Write($r.ProcessId)`,
+    ]);
+    const pid = Number(r.stdout.trim());
+    if (r.code !== 0 || !Number.isInteger(pid) || pid <= 0) {
+      server.close();
+      throw new Error('cannot start the relay runner (Win32_Process.Create)');
+    }
+    const timeout = new Promise<never>((_, rej) =>
+      setTimeout(
+        () => rej(new Error('the relay runner did not take its spec')),
+        HANDOFF_MS,
+      ).unref(),
+    );
+    try {
+      await Promise.race([handed, timeout]);
+    } finally {
+      server.close();
+    }
+    return { pid };
+  };
+}
+
+const defaultRun = (file: string, args: string[]) =>
+  new Promise<{ code: number; stdout: string }>((res) => {
+    const child = spawn(file, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    let stdout = '';
+    child.stdout?.on('data', (d) => {
+      stdout += String(d);
+    });
+    child.on('error', () => res({ code: 1, stdout: '' }));
+    child.on('close', (code) => res({ code: code ?? 1, stdout }));
+  });
+
+/** The runner's side of the Windows hand-over: the spec from the named pipe `name`. */
+export async function readSpecFromPipe(name: string): Promise<string> {
+  if (!/^studio-relay-[0-9a-f]{32}$/.test(name)) throw new Error('not a relay pipe name');
+  const { connect } = await import('node:net');
+  return new Promise((res, rej) => {
+    const chunks: Buffer[] = [];
+    const s = connect(`\\\\.\\pipe\\${name}`);
+    s.setTimeout(HANDOFF_MS, () => {
+      s.destroy();
+      rej(new Error('no spec came'));
+    });
+    s.on('data', (d) => chunks.push(Buffer.from(d)));
+    s.on('end', () => res(Buffer.concat(chunks).toString('utf8')));
+    s.on('error', rej);
+  });
+}

@@ -12,7 +12,7 @@
 //
 // Self-contained on purpose: no import of Studio's sources or of anything the working directory
 // could provide.
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { closeSync, openSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { userInfo } from 'node:os';
@@ -88,6 +88,63 @@ const proxyAnswer = (port, target) =>
     s.once('error', (e) => resolve(e.code ?? 'error'));
     s.write(`CONNECT ${target}:443 HTTP/1.1\r\nHost: ${target}:443\r\n\r\n`);
   });
+
+// Windows' own network and credential APIs, through PowerShell, answering with numbers only: the
+// language of the system never matters.
+const NET_API = `Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class StudioNet {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public class Res { public int Scope; public int Type; public int DisplayType; public int Usage; public string LocalName; public string RemoteName; public string Comment; public string Provider; }
+  [DllImport("mpr.dll", CharSet = CharSet.Unicode)] public static extern int WNetAddConnection2(Res r, string password, string user, int flags);
+  [DllImport("mpr.dll", CharSet = CharSet.Unicode)] public static extern int WNetCancelConnection2(string name, int flags, bool force);
+  [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern bool CredEnumerate(string filter, int flags, out int count, out IntPtr creds);
+  [DllImport("advapi32.dll")] public static extern void CredFree(IntPtr p);
+}
+'@
+`;
+
+const powershell = (script) =>
+  new Promise((resolve) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { encoding: 'utf8', windowsHide: true, timeout: 60_000 },
+      (err, stdout) => resolve(err === null ? stdout.trim() : undefined),
+    );
+  });
+
+/** The system error code of `\\<host>\IPC$` opened without credentials (0: a session opened). */
+async function smbCode(host) {
+  if (!/^[A-Za-z0-9.:-]{1,253}$/.test(host)) return -1;
+  // No persistence (flags 0), no drive letter; a session that opened is cancelled at once.
+  const target = `\\\\${host}\\IPC$`;
+  const out = await powershell(
+    `${NET_API}$r = New-Object StudioNet+Res; $r.RemoteName = '${target}'; $c = [StudioNet]::WNetAddConnection2($r, $null, $null, 0); if ($c -eq 0) { [void][StudioNet]::WNetCancelConnection2('${target}', 0, $true) }; [Console]::Out.Write($c)`,
+  );
+  const n = Number(out);
+  return out !== undefined && /^\d+$/.test(out) ? n : -1;
+}
+
+/** How many credentials this user has stored (Credential Manager); -1 when it cannot be read. */
+function storedCredentials() {
+  try {
+    const out = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `${NET_API}$n = 0; $p = [IntPtr]::Zero; if ([StudioNet]::CredEnumerate($null, 0, [ref]$n, [ref]$p)) { [StudioNet]::CredFree($p); [Console]::Out.Write($n) } elseif ([Runtime.InteropServices.Marshal]::GetLastWin32Error() -eq 1168) { [Console]::Out.Write(0) } else { [Console]::Out.Write(-1) }`,
+      ],
+      { encoding: 'utf8', windowsHide: true, timeout: 60_000 },
+    ).trim();
+    return /^-?\d+$/.test(out) ? Number(out) : -1;
+  } catch {
+    return -1;
+  }
+}
 
 async function probe(p) {
   const results = [];
@@ -212,6 +269,65 @@ async function probe(p) {
     );
   } else {
     add('former', false, 'no place taken back was given to check');
+  }
+  // Relay workers: places this user must not reach directly, the firewall rule holds them.
+  for (const [check, list, what] of [
+    ['unreachable', p.unreachable, 'a direct connection'],
+    ['loopback', p.loopback, 'a denied port on loopback'],
+  ]) {
+    if (!Array.isArray(list)) continue;
+    const open = [];
+    const seen = [];
+    for (const t of list) {
+      const r = await tryConnect(t.host, t.port, 5000);
+      seen.push(`${t.host}:${t.port} ${r}`);
+      if (r === 'open') open.push(`${t.host}:${t.port}`);
+    }
+    add(
+      check,
+      open.length === 0,
+      open.length === 0
+        ? `${what}: ${seen.join(', ') || 'none to try'}`
+        : `${what} opened: ${open.join(', ')}`,
+    );
+  }
+  // SMB passes the firewall rule (the redirector runs in the System process): each host's IPC$,
+  // opened without credentials, must refuse or not be there. A session that opened is closed.
+  if (Array.isArray(p.smb)) {
+    const codes = {};
+    const queue = [...p.smb];
+    const worker = async () => {
+      for (;;) {
+        const h = queue.shift();
+        if (h === undefined) return;
+        codes[h] = await smbCode(h);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(16, queue.length) }, worker));
+    const bad = Object.entries(codes).filter(
+      ([, c]) => ![5, 86, 1326, 1327, 1331, 1909, 53, 64, 67, 1231].includes(c),
+    );
+    results.push({
+      check: 'smb',
+      ok: bad.length === 0,
+      detail:
+        bad.length === 0
+          ? `${p.smb.length} host(s): none opened`
+          : bad.map(([h, c]) => `${h}: ${c === 0 ? 'session opened' : `error ${c}`}`).join(', '),
+      codes,
+    });
+  }
+  if (p.noStoredCredentials === true) {
+    const n = storedCredentials();
+    add(
+      'credentials',
+      n === 0,
+      n === 0
+        ? 'no stored credential'
+        : n < 0
+          ? 'the stored credentials cannot be listed'
+          : `${n} stored credential(s)`,
+    );
   }
   // A scheduled task of this user would start processes outside every keeper's job.
   try {

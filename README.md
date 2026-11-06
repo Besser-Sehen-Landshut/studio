@@ -136,6 +136,9 @@ Then, in a Claude Code session in that repository, ask the lead (skill `studio:s
 | `status --group <name>`                                                                                                         | Read only: one line per project of a group (decisions, running, waiting, ready, blocked) and every lead decision of the group, from the projects' state files; see "Groups of related projects"                                                                                                                   |
 | `worker --label <label> [--once]`                                                                                               | On a worker machine: claim offered items of that label, run their crews with the deny list, open the pull requests, hand the reports back; see "Workers on other machines"                                                                                                                                        |
 | `worker windows-setup`                                                                                                          | Native Windows worker: print the one-time PowerShell script that creates the crew sandbox user (run it elevated); see "The Windows crew sandbox"                                                                                                                                                                  |
+| `relay serve [--home <dir>]` | On a relay worker: the command sshd forces for the lead's key; one request in, one answer out; see "Relay workers" |
+| `relay run <id> [--pipe <name>] [--home <dir>]` | On a relay worker: the runner a start hands its job to; Studio starts it, not you |
+| `relay setup [--lead-key <line>] [--home <dir>]` | Windows relay worker: print the one-time PowerShell script (run it elevated); --lead-key authorizes the lead's key |
 | `overview`                                                                                                                      | Owner only, in a terminal, read only: every project with item counts, running crews, queued merges                                                                                                                                                                                                                |
 | `collect <id>`                                                                                                                  | Verify a crew report and PR head, move the item; for a builder's pull request, add its review item                                                                                                                                                                                                                |
 | `tick [--dry-run]`                                                                                                              | One lead heartbeat: collect ended crews and held pull requests, launch what the plan assigns, queue approved pull requests, run the queue, once a month the skills check, a build cache item when one is due, push new decisions to your phone (JSON); `--dry-run` prints what it would do and changes nothing    |
@@ -733,6 +736,54 @@ gh api -X POST repos/OWNER/REPO/rulesets --input ruleset.json
 
 `TEAM_ID` is the id of the team of worker accounts (`gh api orgs/OWNER/teams/TEAM --jq .id`); role 5 is the admin role, which the lead needs to remove claims. Studio writes no `refs/studio/briefs/*`.
 
+## Relay workers
+
+A relay worker is a worker machine without any GitHub access: no GitHub account, no token, no credential of the lead's machine. The lead connects to it over SSH and does everything on GitHub itself; the worker only runs crews. Use it for a machine that sits next to systems nobody else should reach through it. Experimental: not yet piloted on a real native Windows machine (see SECURITY.md, "Relay workers").
+
+```yaml
+# .studio/board.yaml, an item: nothing else changes for a project
+runs_on: lab
+# owner config on the lead's machine: the worker of the label
+workers:
+  relay:
+    lab:
+      host: worker.example
+      user: studio-relay # the default
+      port: 22 # the default
+      host_key: "ssh-ed25519 AAAA..." # pinned: the worker's host key, as ssh-keyscan prints it
+      identity_file: /home/owner/.ssh/studio-lab # the lead's private key for this worker
+      grace_minutes: 30 # the default: unreachable longer goes to the lead
+# owner config on the worker, optional (config/studio/config.yaml in its relay home)
+workers:
+  serve:
+    deny: { paths: ['D:\data'], ports: [5432], hosts: [local-subnets, tailnet-peers, nas.example] }
+    windows: { crew_user: studio-crew, broker: Studio relay broker } # the defaults
+    max_cpu_percent: 75 # the default: busier, nothing starts
+    min_free_disk_gb: 20 # the default
+    probe_unreachable: ['nas.example:445'] # addresses the crew user must not reach
+```
+
+A label is either under `workers.accept` (GitHub workers, above) or under `workers.relay`, never both. A new project needs nothing on the worker: the item's `runs_on` is enough, and `workers.<label>.deny` in `studio.yaml` stays optional.
+
+- **Start.** The plan lists the item under `offer`, as for a GitHub worker; `tick` starts it on the worker instead. It first asks the worker whether it would start anything now (`hello`): a busy worker (one crew at a time), a CPU above `max_cpu_percent` or free disk below `min_free_disk_gb` holds the item, nothing is sent and no run is counted. Then the lead pins `origin/main`, makes a git bundle of `main` at that commit (and of `studio/<id>` as GitHub has it, for a fix round), picks the Claude credential by the usual rules (provider, active account, else the environment's token; parked and full labels never) and sends the job: the item's board fields (exactly what an offer carries), the commit, the bundle and the token. The run counts on that credential's label. The item moves to `assigned` with the crew `worker:<label>`.
+- **On the worker.** `studio relay serve` takes the bundle into a mirror of the repository (exactly `main` at the pinned commit and the job's branch; any other ref refuses), refuses while the machine holds any credential, checks the pinned plugins, and hands the job to a runner, a process of its own that outlives the SSH session. The runner checks again (load, sandbox, deny list, on Windows every check below and the probe as the crew user) and launches the crew as a worker does: the brief from the pinned commit, the deny lists of `studio.yaml` and `workers.serve`, no GitHub token (the crew commits only, Studio opens the pull request). The token stays in memory.
+- **Following.** Each `tick` asks for the job's state. The item moves to `in_progress` while its crew runs (`worker: relay lab, crew running`). A worker that does not answer holds the item (`unreachable for <n> min`); longer than `grace_minutes`, it goes to the lead, never to a second attempt elsewhere. A start the worker held (busy, load, a check that says "not now") goes back to `ready` without using up its relaunch; one it refused is blocked for the lead with the reason.
+- **Result.** When the crew has ended, the lead collects the report and a bundle of `studio/<id>` and treats both as untrusted: size caps, a credential scan of the report, the bundle unpacked into a fresh bare directory with no hooks, exactly one ref `studio/<id>`, its head equal to the report's `head_sha`, descending from the pinned commit. Then the lead pushes `studio/<id>` with its crew token (never forced), and `collect`, the review item, the queue and the merge go on as for a local crew: the lead opens or renews the pull request. The usage the worker reports counts in the day's ledger (capped per run at the daily cap); a usage limit or an account block the crew hit parks or blocks the lead's credential label. The worker then cleans up.
+- **Stop.** `studio stop <id>` sends `stop` and `cleanup` to the worker (`--requeue` gives the item its relaunch); `studio drop <id>` does the same. A worker out of reach is named and not waited for: it holds no credential, so a crew it still runs can push nothing.
+- **Where it shows.** `studio status` lists the job with the crew `worker:<label>` and, with `--json`, a `relay` object (label, state, last answer). `studio doctor` names each relay label: reachable or not, the worker's Studio and plugin versions against the pins, its load, and every warning of its probe (loopback listeners, SMB candidates and where they came from).
+
+**Set up a Windows relay worker.**
+
+1. On the worker, install Node.js, Git, Claude Code, Studio and the OpenSSH server.
+2. In an elevated Windows PowerShell, run `studio relay setup --lead-key "<the lead's public key line>"` and run the script it prints. It creates the relay account `studio-relay` (a standard user, never an administrator; the lead logs in as it) and the crew user `studio-crew`, seals the crew user's password for the machine, adds the crew user's firewall rule and denied logons, creates the broker task, stops and disables WebClient, grants the crew user read on the toolchains, installs the pinned plugins into the relay home (`%ProgramData%\Studio\relay`) and writes the lead's key with the forced command. Run it again after an update of Studio or the plugins.
+3. Add the `Match User studio-relay` block the script prints at the end of `sshd_config` and restart sshd. It forces `studio relay serve` and allows no terminal, no forwarding of any kind and no password; the keys come from the relay home, not from the account's profile.
+4. On the lead, put the worker under `workers.relay.<label>` with the host key the script printed.
+5. `studio doctor` on the lead checks the connection, the versions and the worker's probe.
+
+**Before every start on Windows** the worker checks: the relay account is no administrator; the crew credential opens; WebClient is stopped and disabled; the load; the loopback listeners (a denied port listening on loopback holds the start; others are doctor warnings); the SMB check of `deny.hosts` (each candidate's `IPC$` as the crew user: a session refuses, access denied or not found pass, any other code holds); and the probe of the Windows crew sandbox as the crew user, with no stored credential of the crew user and no direct connection to `probe_unreachable` or to neighbors. `deny.hosts` takes host names, addresses, IPv4 ranges up to /22 and two keywords: `local-subnets` (the private subnets this machine sits in, capped at /22 each) and `tailnet-peers` (the peers of `tailscale status --json`). Candidates come from the neighbor table inside the ranges, the explicit entries and the Tailscale peers; a range without any candidate refuses.
+
+On Linux, macOS or WSL2 a relay worker uses Claude Code's sandbox as a worker does; its SSH server and forced command are yours to set up (`studio relay serve --home <dir>`). Not covered yet: one crew at a time per worker and one worker per label; a label's parallel limit does not count relay crews; a start bundle carries the whole history of `main` each time.
+
 
 ## Reverse engineering for the researcher
 
@@ -980,6 +1031,8 @@ crew_label_limits: # usage limits per credential label, see "Usage limits per cr
 # workers: # optional, see "Workers on other machines"
 #   accept: { windows: [{ login: worker-login, id: 1234567 }] } # on the lead's machine: whose claims count, per label, by login and account id
 #   self: { lead: lead-login, lead_id: 1234567, deny: { paths: [], ports: [] }, lease_minutes: 30 } # on a worker machine
+#   relay: { lab: { host: worker.example, host_key: "ssh-ed25519 AAAA...", identity_file: /home/owner/.ssh/studio-lab } } # on the lead's machine, see "Relay workers"
+#   serve: { deny: { paths: [], ports: [], hosts: [local-subnets] } } # on a relay worker
 ```
 
 Tools installed below your home, such as `cargo` from rustup or `node` from a version manager, run in a crew only when their directories are listed here; `studio doctor` names any it finds on `PATH` that are not. For Rust list `~/.cargo/bin` and `~/.rustup`, never `~/.cargo` itself, which holds the registry credentials and is refused. Crews then get `RUSTUP_HOME` pointing to the rustup dir (read-only) and `CARGO_HOME` in their own `HOME`, so crates are fetched again per run and `~/.cargo/credentials*` stay denied.

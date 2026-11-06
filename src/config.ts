@@ -486,13 +486,112 @@ const denyPath = z
     'must be an absolute path (/srv/data) or a Windows drive path (D:\\data); network paths are not supported',
   );
 
+/** The keywords of `deny.hosts` that Studio expands on the worker (src/relay-hosts.ts). */
+export const DENY_HOST_KEYWORDS = ['local-subnets', 'tailnet-peers'] as const;
+const HOST_NAME_RE =
+  /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
+const IPV4_RE = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/;
+
+/** Why an entry of `deny.hosts` cannot be used, or undefined. */
+export function denyHostProblem(h: string): string | undefined {
+  if ((DENY_HOST_KEYWORDS as readonly string[]).includes(h)) return undefined;
+  const cidr = /^([^/]+)\/(\d{1,2})$/.exec(h);
+  if (cidr) {
+    if (!IPV4_RE.test(cidr[1] as string)) return `${h}: a range is an IPv4 address with /22 to /32`;
+    const bits = Number(cidr[2]);
+    return bits >= 22 && bits <= 32
+      ? undefined
+      : `${h}: a range covers at most /22 (1024 addresses); list several`;
+  }
+  if (IPV4_RE.test(h) || HOST_NAME_RE.test(h)) return undefined;
+  if (/^[0-9A-Fa-f:]{2,39}$/.test(h) && h.includes(':')) return undefined;
+  return `${h}: not a host name, an IP address, an IPv4 range or one of ${DENY_HOST_KEYWORDS.join(', ')}`;
+}
+
 /** What a worker's crews must never touch: places, and ports on the worker machine. */
 export const workerDenySchema = z.strictObject({
   paths: z.array(denyPath).max(50).default([]),
   ports: z.array(z.number().int().min(1).max(65535)).max(50).default([]),
+  // Hosts of the network a Windows crew must not reach over SMB or WebDAV, which pass the crew
+  // user's firewall rule (the redirector runs in the System process): the probe checks each. A
+  // name, an IP address, an IPv4 range (at most /22), or `local-subnets` / `tailnet-peers`
+  // (src/relay-hosts.ts).
+  hosts: z
+    .array(
+      z
+        .string()
+        .max(253)
+        .superRefine((h, ctx) => {
+          const problem = denyHostProblem(h);
+          if (problem !== undefined) ctx.addIssue({ code: 'custom', message: problem });
+        }),
+    )
+    .max(50)
+    .default([]),
 });
 export type WorkerDeny = z.infer<typeof workerDenySchema>;
-const NO_DENY = { paths: [], ports: [] };
+const NO_DENY = { paths: [], ports: [], hosts: [] };
+
+/** A host the lead reaches a relay worker at: a DNS name or an IP address, nothing else. */
+export const RELAY_HOST_RE =
+  /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$|^[0-9A-Fa-f:]{2,39}$/;
+/** A pinned SSH host key as `ssh-keyscan` prints it, without the host: `<type> <base64>`. */
+export const RELAY_HOST_KEY_RE =
+  /^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|rsa-sha2-256|rsa-sha2-512|ssh-rsa) [A-Za-z0-9+/]{40,2000}={0,2}$/;
+/** A local account name on a relay worker: the SSH login, or the crew sandbox user. */
+const accountName = z
+  .string()
+  .regex(/^[A-Za-z][A-Za-z0-9_-]{0,19}$/, 'a local user name of at most 20 characters');
+
+/** One relay worker, as the lead's owner config names it (`workers.relay.<label>`). */
+export const relayTargetSchema = z.strictObject({
+  host: z.string().max(253).regex(RELAY_HOST_RE, 'a host name or an IP address'),
+  // The non-admin account on the worker whose key forces `studio relay serve`.
+  user: accountName.default('studio-relay'),
+  port: z.number().int().min(1).max(65535).default(22),
+  // Pinned: Studio writes its own known_hosts with exactly this key and nothing else.
+  hostKey: z.string().regex(RELAY_HOST_KEY_RE, 'an SSH public key: <type> <base64>'),
+  // The lead's private key for this worker; absolute, never the agent.
+  identityFile: z
+    .string()
+    .min(2)
+    .max(500)
+    .refine((p) => isAbsolute(p), 'must be an absolute path'),
+  // How long the worker may be unreachable before the item goes to the lead.
+  graceMinutes: z
+    .number()
+    .int()
+    .min(5)
+    .max(24 * 60)
+    .default(30),
+});
+export type RelayTarget = z.infer<typeof relayTargetSchema>;
+
+/** A relay worker machine's own settings (`workers.serve` in its owner config). */
+export const relayServeSchema = z.strictObject({
+  deny: workerDenySchema.default(NO_DENY),
+  allowRead: z.array(denyPath).max(50).default([]),
+  // Native Windows: the local standard user every crew runs as.
+  windows: z
+    .strictObject({
+      crewUser: accountName.default('studio-crew'),
+      // The scheduled task that ends the crew user's processes (`studio relay setup`).
+      broker: z
+        .string()
+        .regex(/^[A-Za-z0-9 _-]{1,64}$/, 'a task name of letters, digits, spaces, _ and -')
+        .default('Studio relay broker'),
+    })
+    .optional(),
+  // Nothing starts while the machine is busier than this (it may run a CI runner too).
+  maxCpuPercent: z.number().int().min(1).max(100).default(75),
+  minFreeDiskGb: z.number().min(0).max(100_000).default(20),
+  // Addresses (`host:port`) the crew user must not reach, checked by the probe before every start.
+  probeUnreachable: z
+    .array(z.string().regex(/^[A-Za-z0-9.:[\]-]{1,253}:\d{1,5}$/, 'host:port'))
+    .max(20)
+    .default([]),
+});
+export type RelayServe = z.infer<typeof relayServeSchema>;
 
 /**
  * Whether a `network_allow` entry is a wildcard over an IP address (`*.<address>`, any spelling a
@@ -1088,6 +1187,23 @@ export const ownerConfigSchema = z.strictObject({
             .optional(),
         })
         .optional(),
+      // Relay workers (src/relay-lead.ts): on the lead's machine, per label, the machine the lead
+      // reaches over SSH. The worker holds no GitHub credential; the lead does everything there.
+      relay: z.record(workerLabel, relayTargetSchema).default({}),
+      // On a relay worker machine (src/relay-serve.ts): what its crews must never touch, the crew
+      // sandbox user, and the load below which it starts nothing.
+      serve: relayServeSchema.optional(),
+    })
+    .superRefine((w, ctx) => {
+      for (const label of Object.keys(w.relay)) {
+        if (Object.hasOwn(w.accept, label)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['relay', label],
+            message: `the label ${label} is under both accept and relay: a label goes either to GitHub workers or to one relay worker`,
+          });
+        }
+      }
     })
     .optional(),
 });

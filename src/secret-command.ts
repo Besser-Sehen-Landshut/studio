@@ -568,12 +568,18 @@ export async function runDoctor(o: {
   ports: Ports;
   json: boolean;
   stdout(s: string): void;
+  /** Relay workers (src/relay-command.ts): one line per finding; not ok fails the doctor. */
+  relay?: () => Promise<{ ok: boolean; lines: string[] }>;
 }): Promise<number> {
   const { report, required, configDir } = await doctorReport(o);
   const { crewToken, accounts, git, projectCheckout, studioCrew, claudeLogin } = report;
   const toolchain = report.toolchainOutside;
-  if (o.json) o.stdout(`${JSON.stringify(report, null, 2)}\n`);
-  else {
+  const relay = (await o.relay?.()) ?? { ok: true, lines: [] };
+  if (o.json) {
+    o.stdout(
+      `${JSON.stringify(relay.lines.length === 0 ? report : { ...report, relay: relay.lines }, null, 2)}\n`,
+    );
+  } else {
     const source = crewToken.source ? ` (${crewToken.source})` : '';
     const provider = report.credentialProvider;
     const lines = [
@@ -610,8 +616,9 @@ export async function runDoctor(o: {
       `migration register: ${report.migrationRegister}`,
       `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(', ') || 'none'}`,
       clonesLine(report.clones),
+      ...relay.lines.map((l) => `relay ${l}`),
     ];
     o.stdout(`${lines.map(safe).join('\n')}\n`);
   }
-  return required && crewToken.status !== 'set' ? 1 : 0;
+  return (required && crewToken.status !== 'set') || !relay.ok ? 1 : 0;
 }

@@ -85,12 +85,41 @@ const camel = (k: string): string => k.replace(/_([a-z0-9])/g, (_, c: string) =>
 
 export const offerTitle = (id: string, label: string): string => `Studio offer ${id} for ${label}`;
 
+/**
+ * The board fields a worker gets of an item, snake_case as in board.yaml: never status, history,
+ * dependencies or anything of the state root. Offers and relay jobs carry exactly these.
+ */
+export function workerItemFields(item: WorkItem): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  for (const k of OFFER_FIELDS) if (item[k] !== undefined) fields[snake(k)] = item[k];
+  return fields;
+}
+
+/**
+ * The item a worker launches from fields of `workerItemFields`: status `assigned`, no history, the
+ * board schema and the worker rules hold, and it names `label`. Anything else is undefined.
+ */
+export function workerItemOf(raw: Record<string, unknown>, label: string): WorkItem | undefined {
+  const fields = Object.fromEntries(Object.entries(raw).map(([k, v]) => [camel(k), v]));
+  if (Object.keys(fields).some((k) => !(OFFER_FIELDS as readonly string[]).includes(k))) {
+    return undefined;
+  }
+  const item = workItemSchema.safeParse({
+    ...fields,
+    status: 'assigned',
+    dependsOn: [],
+    history: [],
+  });
+  if (!item.success || item.data.runsOn !== label) return undefined;
+  if (workerItemProblem(item.data) !== undefined) return undefined;
+  return item.data;
+}
+
 /** The issue body of an offer: a line for people and one JSON block for workers. */
 export function renderOffer(item: WorkItem, lead: string, now: Date, nonce: string): string {
   if (!NONCE_RE.test(nonce)) throw new Error('invalid offer nonce');
   if (item.runsOn === undefined) throw new Error(`${item.id} names no runs_on label`);
-  const fields: Record<string, unknown> = {};
-  for (const k of OFFER_FIELDS) if (item[k] !== undefined) fields[snake(k)] = item[k];
+  const fields = workerItemFields(item);
   const body = {
     studio_offer: 1,
     label: item.runsOn,
@@ -130,22 +159,9 @@ export function parseOffer(title: string, body: string): Offer | undefined {
   const top = Object.fromEntries(Object.entries(raw).map(([k, v]) => [camel(k), v]));
   const parsed = offerSchema.safeParse(top);
   if (!parsed.success) return undefined;
-  const fields = Object.fromEntries(
-    Object.entries(parsed.data.item).map(([k, v]) => [camel(k), v]),
-  );
-  if (Object.keys(fields).some((k) => !(OFFER_FIELDS as readonly string[]).includes(k))) {
-    return undefined;
-  }
-  const item = workItemSchema.safeParse({
-    ...fields,
-    status: 'assigned',
-    dependsOn: [],
-    history: [],
-  });
-  if (!item.success) return undefined;
-  const it = item.data;
-  if (it.id !== t[1] || it.runsOn !== t[2] || parsed.data.label !== t[2]) return undefined;
-  if (workerItemProblem(it) !== undefined) return undefined;
+  if (parsed.data.label !== t[2]) return undefined;
+  const it = workerItemOf(parsed.data.item, parsed.data.label);
+  if (it === undefined || it.id !== t[1]) return undefined;
   return {
     label: parsed.data.label,
     lead: parsed.data.lead,

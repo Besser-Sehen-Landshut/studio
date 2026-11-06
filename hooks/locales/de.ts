@@ -198,6 +198,14 @@ export default defineLocale({
           return `auf ${p.worker} (${p.label}), Lebenszeichen vor ${p.minutes} min`;
         case 'worker_none':
           return `kein Arbeiter für ${p.label} zugelassen`;
+        case 'relay_on':
+          return `auf Relay ${p.label}, Crew läuft`;
+        case 'relay_starting':
+          return `auf Relay ${p.label}, Crew startet`;
+        case 'relay_unreachable':
+          return `Relay ${p.label} seit ${p.minutes} min nicht erreichbar`;
+        case 'relay_held':
+          return `Relay ${p.label}: jetzt nicht`;
         default:
           return undefined;
       }

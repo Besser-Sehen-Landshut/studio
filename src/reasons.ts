@@ -98,6 +98,15 @@ const RULES: readonly Rule[] = [
     'worker_none',
     (m) => ({ label: value(m[1]) ?? '?' }),
   ],
+  [/^relay (\S+), crew running$/, 'relay_on', (m) => ({ label: value(m[1]) ?? '?' })],
+  [/^relay (\S+), starting the crew$/, 'relay_starting', (m) => ({ label: value(m[1]) ?? '?' })],
+  [
+    /^relay (\S+), unreachable for (\d+) min$/,
+    'relay_unreachable',
+    (m) => ({ label: value(m[1]) ?? '?', minutes: Number(m[2]) }),
+  ],
+  // Any other hold of a relay worker: its line stays the details, the code names the label only.
+  [/^relay (\S+), /, 'relay_held', (m) => ({ label: value(m[1]) ?? '?' })],
 ];
 
 /** Every code `reasonOf` gives: each locale words them (a test holds English and German to it). */

@@ -193,6 +193,14 @@ const strings: Strings = {
         return `on ${p.worker} (${p.label}), heartbeat ${p.minutes} min ago`;
       case 'worker_none':
         return `no worker accepted for ${p.label}`;
+      case 'relay_on':
+        return `on relay ${p.label}, crew running`;
+      case 'relay_starting':
+        return `on relay ${p.label}, starting the crew`;
+      case 'relay_unreachable':
+        return `relay ${p.label} unreachable for ${p.minutes} min`;
+      case 'relay_held':
+        return `relay ${p.label}: not now`;
       default:
         return undefined;
     }
