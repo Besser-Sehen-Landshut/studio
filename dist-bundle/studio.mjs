@@ -36290,13 +36290,16 @@ var ReaInstallNeeded = class extends Error {
   }
 };
 var consentKey = (version2, mode) => `${version2}:${mode}`;
-function readConsent(ownerRoot, version2, mode) {
+function readConsentEntry(ownerRoot, version2, mode) {
   try {
     const file3 = join21(ownerRoot, CONSENT_FILE);
     if (!lstatSync19(file3).isFile()) return void 0;
     const raw = JSON.parse(readFileSync22(file3, "utf8"));
-    const a2 = raw?.[consentKey(version2, mode)]?.answer;
-    return a2 === "yes" || a2 === "no" ? a2 : void 0;
+    const e = raw?.[consentKey(version2, mode)];
+    const a2 = e?.answer;
+    if (a2 !== "yes" && a2 !== "no") return void 0;
+    const folder = typeof e?.folder === "string" && isAbsolute6(e.folder) && !new RegExp("\\p{Cc}", "u").test(e.folder) ? e.folder : void 0;
+    return { answer: a2, ...folder === void 0 ? {} : { folder } };
   } catch {
     return void 0;
   }
@@ -36390,7 +36393,7 @@ var isYes = (a2) => {
   if (v === "n" || v === "no") return false;
   return void 0;
 };
-var installNeededLine = (item, needsFolder) => `REA install needed for ${item}: confirm with studio research install --yes${needsFolder ? ` --folder ${DEFAULT_ANALYSIS_DIR}` : ""} (or name another folder), or say "confirm the rea install"`;
+var installNeededLine = (item, needsFolder) => `REA install needed for ${item}: the owner confirms once, with the button in the Studio pane${needsFolder ? ` (analysis folder ${DEFAULT_ANALYSIS_DIR})` : ""} or with studio research install in their own terminal`;
 async function ensureRea(o2) {
   let ownerConfig = loadOwnerConfig(o2.owner);
   const version2 = reaVersionOf(ownerConfig);
@@ -36406,10 +36409,17 @@ async function ensureRea(o2) {
   } catch {
     installedNow = true;
   }
-  if (!installedNow && !needsFolder && o2.folder === void 0)
+  if (!installedNow && !needsFolder && o2.folder === void 0) {
     return { installed: false, version: version2, mode };
-  let answer = o2.yes === true ? "yes" : readConsent(o2.ownerRoot, version2, mode);
-  let folder = o2.folder;
+  }
+  if ((o2.yes === true || o2.folder !== void 0) && !o2.asker.isTerminal) {
+    throw new Error(
+      "studio research install --yes and --folder count only in your own terminal; or confirm with the button in the Studio pane"
+    );
+  }
+  const remembered = readConsentEntry(o2.ownerRoot, version2, mode);
+  let answer = o2.yes === true ? "yes" : remembered?.answer;
+  let folder = o2.folder ?? (needsFolder && answer === "yes" ? remembered?.folder : void 0);
   const canAsk = o2.asker.isTerminal && o2.asker.readLine !== void 0;
   if (installedNow && answer === void 0) {
     if (!canAsk)
@@ -39763,7 +39773,7 @@ function classify(item, reason) {
     return of("analyzer_timeout", "analyzer timed out", `show ${item}`);
   }
   if (r.startsWith("REA install needed")) {
-    return of("rea_install", "REA install needs the owner", "confirm the rea install");
+    return of("rea_install", "REA install needs the owner", `show ${item}`);
   }
   if (r.startsWith("merge failed")) {
     return of("merge_failed", "merge failed", `show why ${item} did not merge`);
@@ -50881,6 +50891,13 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
             }
           }
         );
+        if ((snapshot.needsLead ?? []).some((d) => d.code === "rea_install")) {
+          snapshot.reaInstall = {
+            version: reaVersionOf(ownerConfig),
+            mode: reaMode(ownerConfig),
+            needsFolder: ownerConfig.researchRoots.length === 0
+          };
+        }
         try {
           const m = groupOf(config2, ownerConfig);
           if (m !== void 0) {
@@ -51169,9 +51186,9 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
             );
             return 1;
           }
-          if (values.yes !== true && deps.isTerminal !== true) {
+          if (deps.isTerminal !== true) {
             stderr(
-              "studio: research install asks in a terminal; without one, confirm with --yes (and --folder <dir> when no research_roots is set); nothing changed\n"
+              "studio: research install needs your own terminal (--yes and --folder count only there); or confirm with the button in the Studio pane; nothing changed\n"
             );
             return 1;
           }

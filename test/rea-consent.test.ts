@@ -235,55 +235,103 @@ describe('the first REA install, in a terminal', () => {
 });
 
 describe('the first REA install without a terminal', () => {
-  it('puts one decision to the lead; the owner confirms once by command; then it installs', async () => {
+  /** What the pane's button writes (hooks/register.tsx, tested in hooks/register.test.tsx). */
+  const paneConfirms = (f: F, version: string, folder?: string) => {
+    mkdirSync(f.ownerRoot, { recursive: true });
+    writeFileSync(
+      join(f.ownerRoot, 'rea-consent.json'),
+      JSON.stringify({
+        [`${version}:full`]: {
+          answer: 'yes',
+          at: '2026-11-06T10:00:00.000Z',
+          by: 'pane',
+          ...(folder === undefined ? {} : { folder }),
+        },
+      }),
+    );
+  };
+  const research_install = (f: F, args: string[], terminal: boolean) => {
+    let err = '';
+    return runCli(['--project', f.project, 'research', 'install', ...args], {
+      ports: f.ports,
+      stdout: () => {},
+      stderr: (s) => {
+        err += s;
+      },
+      env: { ...f.owner.env },
+      homedir: f.home,
+      cwd: f.project,
+      isTerminal: terminal,
+    }).then((code) => ({ code, err }));
+  };
+
+  it('puts one decision to the lead that never suggests a command without a terminal', async () => {
     const f = setup();
     const e = await launch(f).catch((x: unknown) => x);
     expect(e).toBeInstanceOf(ReaInstallNeeded);
     expect((e as Error).message).toBe(
-      'REA install needed for APP-5: confirm with studio research install --yes (or name another folder), or say "confirm the rea install"',
+      'REA install needed for APP-5: the owner confirms once, with the button in the Studio pane or with studio research install in their own terminal',
     );
+    expect((e as Error).message).not.toContain('--yes');
     expect(classifyDecision((e as Error).message)).toBe('rea_install');
     expect(f.npm.calls).toEqual([]);
-    // The owner's yes, by command (as the lead runs it on the owner's word).
-    const env = { ...f.owner.env };
-    let out = '';
-    const code = await runCli(['--project', f.project, 'research', 'install', '--yes'], {
-      ports: f.ports,
-      stdout: (s) => {
-        out += s;
-      },
-      stderr: () => {},
-      env,
-      homedir: f.home,
-      cwd: f.project,
-      isTerminal: false,
-    });
-    expect(code).toBe(0);
-    expect(JSON.parse(out)).toMatchObject({ mode: 'trust', installed: 'now' });
+  });
+
+  it('a --yes or --folder without a terminal is refused and changes nothing', async () => {
+    const f = setup({ roots: false });
+    for (const args of [
+      ['--yes'],
+      ['--yes', '--folder', join(f.home, 'x')],
+      ['--folder', '/tmp'],
+    ]) {
+      const r = await research_install(f, args, false);
+      expect(r.code).toBe(1);
+      expect(r.err).toContain('needs your own terminal');
+    }
+    await expect(
+      ensureRea({
+        ownerRoot: f.ownerRoot,
+        owner: f.owner,
+        env: f.owner.env,
+        ports: f.ports,
+        asker: { isTerminal: false },
+        now: new Date(),
+        yes: true,
+      }),
+    ).rejects.toThrow(/count only in your own terminal/);
+    expect(f.npm.calls).toEqual([]);
+    expect(readConsent(f.ownerRoot, '6.7.0', 'full')).toBeUndefined();
+    expect(loadOwnerConfig(f.owner).researchRoots).toEqual([]);
+  });
+
+  it('the pane confirmation counts: the next launch installs without asking', async () => {
+    const f = setup();
+    await expect(launch(f)).rejects.toThrow(ReaInstallNeeded);
+    paneConfirms(f, '6.7.0');
     expect(readConsent(f.ownerRoot, '6.7.0', 'full')).toBe('yes');
     await launch(f);
+    expect(f.npm.calls.map((c) => c[0])).toEqual(['view', 'install']);
     expect(f.started).toHaveLength(1);
   });
 
-  it('without a granted folder the line asks for one too, and --folder grants it', async () => {
+  it('without a granted folder the pane confirms ~/analysis with it, and the launch grants it', async () => {
     const f = setup({ roots: false });
-    await expect(launch(f, undefined, research, inDefault(f))).rejects.toThrow(
-      /--yes --folder ~\/analysis/,
-    );
+    const e = await launch(f, undefined, research, inDefault(f)).catch((x: unknown) => x);
+    expect((e as Error).message).toContain('(analysis folder ~/analysis)');
     const folder = join(f.home, 'analysis');
-    await ensureRea({
-      ownerRoot: f.ownerRoot,
-      owner: f.owner,
-      env: f.owner.env,
-      ports: f.ports,
-      asker: { isTerminal: false },
-      now: new Date(),
-      yes: true,
-      folder,
-    });
-    expect(loadOwnerConfig(f.owner).researchRoots).toEqual([folder]);
+    paneConfirms(f, '6.7.0', folder);
     await launch(f, undefined, research, inDefault(f));
+    expect(loadOwnerConfig(f.owner).researchRoots).toEqual([folder]);
     expect(f.started).toHaveLength(1);
+  });
+
+  it('in the owner terminal --yes and --folder confirm without a question', async () => {
+    const f = setup({ roots: false });
+    const folder = join(f.home, 'work', 'analysis');
+    const r = await research_install(f, ['--yes', '--folder', folder], true);
+    expect(r.code).toBe(0);
+    expect(readConsent(f.ownerRoot, '6.7.0', 'full')).toBe('yes');
+    expect(loadOwnerConfig(f.owner).researchRoots).toEqual([folder]);
   });
 
   it('a remembered yes installs without asking anybody', async () => {

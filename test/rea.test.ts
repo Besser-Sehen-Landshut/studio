@@ -691,7 +691,7 @@ describe('launch of a researcher with REA', () => {
     const none = setup({ roots: [] });
     await expect(
       launchCrew(none.project, research, none.config, none.ports, none.launcher),
-    ).rejects.toThrow(/REA install needed for APP-5: .*--folder ~\/analysis/);
+    ).rejects.toThrow(/REA install needed for APP-5: .*\(analysis folder ~\/analysis\)/);
     expect(none.started).toHaveLength(0);
 
     const out = setup({ roots: [join(root, 'nowhere')] });
@@ -721,7 +721,7 @@ describe('launch of a researcher with REA', () => {
         notInstalled.ports,
         notInstalled.launcher,
       ),
-    ).rejects.toThrow(/REA install needed for APP-5: confirm with studio research install --yes/);
+    ).rejects.toThrow(/REA install needed for APP-5: the owner confirms once/);
     expect(notInstalled.started).toHaveLength(0);
   });
 });

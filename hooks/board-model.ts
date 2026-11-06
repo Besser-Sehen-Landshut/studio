@@ -71,6 +71,8 @@ export interface BoardState {
   releases?: BoardRelease[];
   /** This project's group: one row per project (the group view). */
   group?: BoardGroup;
+  /** A REA install waits for the owner's one confirmation: what the pane's button confirms. */
+  reaInstall?: { version: string; mode: 'full' | 'static'; needsFolder: boolean };
 }
 
 export interface BoardGroupRow {
@@ -141,7 +143,12 @@ export type BoardRead =
 export type Line = {
   text: string;
   tone?: 'ok' | 'wait' | 'idle' | 'err' | 'dim' | 'head' | 'run' | 'you';
+  /** A control the person presses: the mod draws a Button with this key and label. */
+  button?: { key: string; label: string };
 };
+
+/** The key of the pane's one-time REA install confirmation (handled in register.tsx). */
+export const REA_CONFIRM_KEY = 'rea-confirm';
 
 export type View = 'list' | 'pipeline' | 'more' | 'group';
 export type Lang = 'en' | 'de';
@@ -389,6 +396,20 @@ function toState(root: Obj): BoardState {
   if (releases.length > 0) state.releases = releases;
   const group = parseGroup(root.group);
   if (group !== undefined) state.group = group;
+  const rea = obj(root.reaInstall);
+  const reaVersion = str(rea?.version);
+  if (
+    rea !== undefined &&
+    reaVersion !== undefined &&
+    /^\d+\.\d+\.\d+$/.test(reaVersion) &&
+    (rea.mode === 'full' || rea.mode === 'static')
+  ) {
+    state.reaInstall = {
+      version: reaVersion,
+      mode: rea.mode,
+      needsFolder: rea.needsFolder === true,
+    };
+  }
   return state;
 }
 
@@ -572,6 +593,8 @@ interface Strings {
   groupProblem: (problem: string) => string;
   groupBack: (name: string) => string;
   groupOpen: string;
+  /** The label of the REA install button. */
+  reaConfirm: (version: string, withFolder: boolean) => string;
 }
 
 type RowState = 'decision' | 'blocked' | 'running' | 'waiting' | 'ready';
@@ -682,7 +705,7 @@ const EN: Strings = {
     if (code === 'release_approval') return 'release approval needed';
     if (code === 'release_failed') return 'release stopped: a check is red';
     if (code === 'analyzer_timeout') return 'analyzer timed out – decide';
-    if (code === 'rea_install') return 'REA install – confirm once';
+    if (code === 'rea_install') return 'REA install – confirm once, here';
     return 'needs a decision';
   },
   wait: (w) => {
@@ -763,6 +786,7 @@ const EN: Strings = {
           : 'cannot be read',
   groupBack: (name) => `Group ${name} · back: /studio group`,
   groupOpen: 'open a project: /studio group <project>',
+  reaConfirm: (v, f) => `Confirm REA install (rea-agents ${v}${f ? ', folder ~/analysis' : ''})`,
 };
 
 const DE: Strings = {
@@ -866,7 +890,7 @@ const DE: Strings = {
     if (code === 'release_approval') return 'Release-Freigabe nötig';
     if (code === 'release_failed') return 'Release angehalten: eine Prüfung ist rot';
     if (code === 'analyzer_timeout') return 'Prüfer-Zeit abgelaufen – entscheiden';
-    if (code === 'rea_install') return 'REA-Installation – einmal bestätigen';
+    if (code === 'rea_install') return 'REA-Installation – einmal hier bestätigen';
     return 'Entscheidung nötig';
   },
   wait: (w) => {
@@ -948,6 +972,8 @@ const DE: Strings = {
           : 'nicht lesbar',
   groupBack: (name) => `Verbund ${name} · zurück: /studio group`,
   groupOpen: 'Projekt öffnen: /studio group <Projekt>',
+  reaConfirm: (v, f) =>
+    `REA-Installation bestätigen (rea-agents ${v}${f ? ', Ordner ~/analysis' : ''})`,
 };
 
 const TEXTS: Record<Lang, Strings> = { en: EN, de: DE };
@@ -1445,6 +1471,13 @@ const ITEM_ID = /^[A-Z]+-\d+$/;
 const HINT_INDENT = '  ';
 const TEXT_INDENT = '    ';
 
+/** A pressable line: the text is what a surface without buttons shows. */
+const buttonLine = (b: { key: string; label: string }): Line => ({
+  text: `${HINT_INDENT}[ ${b.label} ]`,
+  tone: 'you',
+  button: b,
+});
+
 function hintLines(next: string, columns: number): Line[] {
   return wrap(next.replace(/^→\s*/, ''), columns, '      ', `${HINT_INDENT}→ `).map((text) => ({
     text,
@@ -1457,6 +1490,8 @@ interface Decision {
   id?: string;
   text: string;
   next?: string;
+  /** A control in place of the hint: the REA install confirmation. */
+  button?: { key: string; label: string };
 }
 
 /** The lead's decisions, then the lines for the owner and a red main build. One per key. */
@@ -1467,6 +1502,18 @@ function decisionsOf(s: BoardState, t: Strings): Decision[] {
     if (keys.has(d.item)) continue;
     keys.add(d.item);
     const id = ITEM_ID.test(d.item) ? d.item : undefined;
+    if (d.code === 'rea_install' && s.reaInstall !== undefined) {
+      // The owner's one confirmation is a press in this pane, never a phrase the lead could say.
+      out.push({
+        ...(id === undefined ? {} : { id }),
+        text: t.decision(d.code),
+        button: {
+          key: REA_CONFIRM_KEY,
+          label: t.reaConfirm(s.reaInstall.version, s.reaInstall.needsFolder),
+        },
+      });
+      continue;
+    }
     out.push({
       ...(id === undefined ? {} : { id }),
       text: t.decision(d.code),
@@ -1644,7 +1691,8 @@ function listBody(f: Frame, decisions: Decision[], items: BoardItem[]): Line[] {
       const head = d.id === undefined ? '! ' : `! ${d.id} `;
       for (const text of wrap(`${head}${d.text}`, columns, TEXT_INDENT, ''))
         out.push({ text, tone: 'err' });
-      if (d.next !== undefined) out.push(...hintLines(d.next, columns));
+      if (d.button !== undefined) out.push(buttonLine(d.button));
+      else if (d.next !== undefined) out.push(...hintLines(d.next, columns));
     }
     if (decisions.length > MAX_OWNER_LINES) {
       out.push({ text: t.more(decisions.length - MAX_OWNER_LINES), tone: 'dim' });
@@ -1764,7 +1812,8 @@ function pipelineBody(f: Frame, decisions: Decision[], items: BoardItem[]): Line
     const more = decisions.length > 1 ? ` (+${decisions.length - 1})` : '';
     const head = `! ${d.id === undefined ? '' : `${d.id} `}${d.text}${more}`;
     for (const text of wrap(head, columns, TEXT_INDENT, '')) out.push({ text, tone: 'you' });
-    if (d.next !== undefined) out.push(...hintLines(d.next, columns));
+    if (d.button !== undefined) out.push(buttonLine(d.button));
+    else if (d.next !== undefined) out.push(...hintLines(d.next, columns));
   }
   out.push({ text: '' });
   out.push({ text: join(built.map((c) => c.header)), tone: 'head' });

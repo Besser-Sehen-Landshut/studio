@@ -154,7 +154,14 @@ import {
   viewPr,
 } from './queue.js';
 import { REA_CLASS_NAMES, type ReaClass, reaClassOf } from './rea.js';
-import { type Asker, ensureRea, ReaInstallNeeded, researchFolder } from './rea-consent.js';
+import {
+  type Asker,
+  ensureRea,
+  ReaInstallNeeded,
+  reaMode,
+  reaVersionOf,
+  researchFolder,
+} from './rea-consent.js';
 import { readReaAllow, removeReaRun, updateReaAllow } from './rea-install.js';
 import { type Finding, recoverProject, TICK_LOCK, TICK_LOCK_STALE_MS } from './recover.js';
 import {
@@ -3400,6 +3407,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             },
           },
         );
+        // A REA install waits for the owner: the pane's button confirms this version and mode.
+        if ((snapshot.needsLead ?? []).some((d) => d.code === 'rea_install')) {
+          snapshot.reaInstall = {
+            version: reaVersionOf(ownerConfig),
+            mode: reaMode(ownerConfig),
+            needsFolder: ownerConfig.researchRoots.length === 0,
+          };
+        }
         // A project of a group: one row per project, read from their state files.
         try {
           const m = groupOf(config, ownerConfig);
@@ -3714,9 +3729,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             );
             return 1;
           }
-          if (values.yes !== true && deps.isTerminal !== true) {
+          // The confirmation is the owner's: only a real terminal, never the lead or a script.
+          if (deps.isTerminal !== true) {
             stderr(
-              'studio: research install asks in a terminal; without one, confirm with --yes (and --folder <dir> when no research_roots is set); nothing changed\n',
+              'studio: research install needs your own terminal (--yes and --folder count only there); or confirm with the button in the Studio pane; nothing changed\n',
             );
             return 1;
           }

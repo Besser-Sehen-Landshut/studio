@@ -1,6 +1,7 @@
 // The Studio board mod: a pane, a status line, toasts and /studio, for the owner's session only.
-// It only displays. It writes no file and runs no process; only $.store and its own state change.
-// The view (work list, pipeline, detailed) and a language override are such stored preferences.
+// It displays, runs no process, and writes one file only: the owner's one-time REA install
+// confirmation, when the person presses its button in the pane (never from a command or a model).
+// Otherwise only $.store and its own state change: the view and a language override.
 import type { EngineInterface, Register, TextProps } from 'claude-code';
 import { atom, read, update } from 'claude-code';
 import {
@@ -12,6 +13,7 @@ import {
   newAlerts,
   paneLines,
   parseState,
+  REA_CONFIRM_KEY,
   STATE_DIR,
   stateDirName,
   statusLine,
@@ -125,6 +127,62 @@ async function findProject($: EngineInterface, cwd: string): Promise<string | un
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** The owner state root, `<base>/studio/owner`, as ownerStateRootFor in src/paths.ts. */
+async function ownerRootOf($: EngineInterface): Promise<string | undefined> {
+  const xdg = await $.env.get('XDG_STATE_HOME');
+  const home = await $.env.get('HOME');
+  const base = xdg && isAbsolute(xdg) ? xdg : home ? `${home}/.local/state` : undefined;
+  return base === undefined ? undefined : `${withoutTrailingSlash(base)}/studio/owner`;
+}
+
+const CONFIRMED: Record<Lang, string> = {
+  en: 'REA install confirmed. It installs on the next launch that needs it.',
+  de: 'REA-Installation bestätigt. Sie läuft beim nächsten Start, der sie braucht.',
+};
+const NOT_CONFIRMED: Record<Lang, string> = {
+  en: 'The REA confirmation could not be saved; run studio research install in your own terminal.',
+  de: 'Die REA-Bestätigung ließ sich nicht speichern; studio research install im eigenen Terminal ausführen.',
+};
+
+/**
+ * The person pressed the REA install button: writes the one confirmation into the owner state
+ * (`rea-consent.json`, as src/rea-consent.ts reads it), for the pinned version and mode the state
+ * names, with `~/analysis` as the folder when none is granted. Only a press reaches here: a command
+ * or the model cannot. A file it cannot read as JSON is left alone.
+ */
+async function confirmRea($: EngineInterface): Promise<void> {
+  const language = await read($, lang);
+  try {
+    const current = (await read($, board)) as BoardRead;
+    const want = current.kind === 'ok' ? current.state.reaInstall : undefined;
+    const owner = await ownerRootOf($);
+    const home = await $.env.get('HOME');
+    if (want === undefined || owner === undefined) throw new Error('nothing to confirm');
+    const file = `${owner}/rea-consent.json`;
+    let raw: Record<string, unknown> = {};
+    if (await $.fs.exists(file)) {
+      const parsed = JSON.parse(await $.fs.read(file)) as unknown;
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('unreadable');
+      }
+      raw = parsed as Record<string, unknown>;
+    }
+    const entry = {
+      answer: 'yes',
+      at: new Date(await $.clock.now()).toISOString(),
+      by: 'pane',
+      ...(want.needsFolder && home ? { folder: `${withoutTrailingSlash(home)}/analysis` } : {}),
+    };
+    await $.fs.write(
+      file,
+      `${JSON.stringify({ ...raw, [`${want.version}:${want.mode}`]: entry }, null, 2)}\n`,
+    );
+    $.ui.toast(CONFIRMED[language]);
+  } catch {
+    $.ui.toast(NOT_CONFIRMED[language]);
+  }
 }
 
 /** The same directory as stateRootFor in src/paths.ts. Rejects when it cannot be told. */
@@ -365,7 +423,7 @@ export const register: Register = (on) => {
   });
 
   on('ui.render', { component: 'Pane', requestId: 'studio-board' }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e);
+    const { Box, Text, Button } = $.ui.resolve(e);
     const lines = paneLines((await read($, board)) as BoardRead, {
       columns: e.props.bodyColumns,
       nowMs: await $.clock.now(),
@@ -376,9 +434,18 @@ export const register: Register = (on) => {
     });
     return (
       <Box flexDirection="column">
-        {lines.map((line) => (
-          <Text {...(line.tone ? TONE[line.tone] : {})}>{line.text}</Text>
-        ))}
+        {lines.map((line) =>
+          line.button?.key === REA_CONFIRM_KEY ? (
+            <Button
+              key={REA_CONFIRM_KEY}
+              label={line.button.label}
+              variant="primary"
+              onPress={() => void confirmRea($)}
+            />
+          ) : (
+            <Text {...(line.tone ? TONE[line.tone] : {})}>{line.text}</Text>
+          ),
+        )}
       </Box>
     );
   });

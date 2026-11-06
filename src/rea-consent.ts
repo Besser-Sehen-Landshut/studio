@@ -87,12 +87,33 @@ const consentKey = (version: string, mode: ReaMode) => `${version}:${mode}`;
 
 /** The remembered answer for this version and mode; an unreadable file counts as none. */
 export function readConsent(ownerRoot: string, version: string, mode: ReaMode): Answer | undefined {
+  return readConsentEntry(ownerRoot, version, mode)?.answer;
+}
+
+/**
+ * The remembered entry: the answer and, from the pane's button, the analysis folder the owner
+ * confirmed with it (absolute, below the home: the pane writes `<home>/analysis`).
+ */
+export function readConsentEntry(
+  ownerRoot: string,
+  version: string,
+  mode: ReaMode,
+): { answer: Answer; folder?: string } | undefined {
   try {
     const file = join(ownerRoot, CONSENT_FILE);
     if (!lstatSync(file).isFile()) return undefined;
-    const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, { answer?: unknown }>;
-    const a = raw?.[consentKey(version, mode)]?.answer;
-    return a === 'yes' || a === 'no' ? a : undefined;
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<
+      string,
+      { answer?: unknown; folder?: unknown }
+    >;
+    const e = raw?.[consentKey(version, mode)];
+    const a = e?.answer;
+    if (a !== 'yes' && a !== 'no') return undefined;
+    const folder =
+      typeof e?.folder === 'string' && isAbsolute(e.folder) && !/\p{Cc}/u.test(e.folder)
+        ? e.folder
+        : undefined;
+    return { answer: a, ...(folder === undefined ? {} : { folder }) };
   } catch {
     return undefined;
   }
@@ -222,7 +243,7 @@ const isYes = (a: string | undefined): boolean | undefined => {
 
 /** The line the lead gets when nobody can be asked. */
 export const installNeededLine = (item: string, needsFolder: boolean): string =>
-  `REA install needed for ${item}: confirm with studio research install --yes${needsFolder ? ` --folder ${DEFAULT_ANALYSIS_DIR}` : ''} (or name another folder), or say "confirm the rea install"`;
+  `REA install needed for ${item}: the owner confirms once, with the button in the Studio pane${needsFolder ? ` (analysis folder ${DEFAULT_ANALYSIS_DIR})` : ''} or with studio research install in their own terminal`;
 
 /**
  * Makes sure the pinned REA is installed in the mode the owner config asks for. Installed already:
@@ -260,10 +281,19 @@ export async function ensureRea(o: {
   } catch {
     installedNow = true;
   }
-  if (!installedNow && !needsFolder && o.folder === undefined)
+  if (!installedNow && !needsFolder && o.folder === undefined) {
     return { installed: false, version, mode };
-  let answer: Answer | undefined = o.yes === true ? 'yes' : readConsent(o.ownerRoot, version, mode);
-  let folder = o.folder;
+  }
+  // `yes` and `folder` are the owner's own words: only in the owner's terminal.
+  if ((o.yes === true || o.folder !== undefined) && !o.asker.isTerminal) {
+    throw new Error(
+      'studio research install --yes and --folder count only in your own terminal; or confirm with the button in the Studio pane',
+    );
+  }
+  const remembered = readConsentEntry(o.ownerRoot, version, mode);
+  let answer: Answer | undefined = o.yes === true ? 'yes' : remembered?.answer;
+  // A folder confirmed with the pane's button counts like one named in the terminal.
+  let folder = o.folder ?? (needsFolder && answer === 'yes' ? remembered?.folder : undefined);
   const canAsk = o.asker.isTerminal && o.asker.readLine !== undefined;
   if (installedNow && answer === undefined) {
     if (!canAsk)

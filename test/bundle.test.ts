@@ -60,9 +60,15 @@ describe('the board mod', () => {
     expect(text).toContain('stateDirName');
   });
 
-  it('only displays: no process, no file write, no import the engine would refuse', () => {
+  it('no process, one file write (the REA confirmation on a press), no import the engine would refuse', () => {
     const source = readFileSync(join(hooks, 'register.tsx'), 'utf8');
-    expect(source).not.toMatch(/\$\.process\b|\$\.fs\.write\b|\bimport\(|node:/);
+    expect(source).not.toMatch(/\$\.process\b|\bimport\(|node:/);
+    // The one write is the owner's REA install confirmation, inside confirmRea, run by onPress.
+    expect(source.match(/\$\.fs\.write\b/g) ?? []).toHaveLength(1);
+    const confirm = source.slice(source.indexOf('async function confirmRea'));
+    expect(confirm.slice(0, confirm.indexOf('\n}\n'))).toMatch(/\$\.fs\.write\(\s*file/);
+    expect(source).toMatch(/onPress=\{\(\) => void confirmRea\(\$\)\}/);
+    expect(source.match(/confirmRea\(/g) ?? []).toHaveLength(2);
   });
 
   it('stays out of vitest', () => {

@@ -272,7 +272,7 @@ function classify(item: string, reason: string): LeadDecision {
   }
   // A researcher item needs REA and the owner has not said yes for this version yet.
   if (r.startsWith('REA install needed')) {
-    return of('rea_install', 'REA install needs the owner', 'confirm the rea install');
+    return of('rea_install', 'REA install needs the owner', `show ${item}`);
   }
   if (r.startsWith('merge failed')) {
     return of('merge_failed', 'merge failed', `show why ${item} did not merge`);

@@ -10,8 +10,10 @@ declare module 'claude-code' {
     studio: {
       board: Shaped<StudioBoardRead>;
       paused: Shaped<boolean>;
-      view: Shaped<'list' | 'pipeline' | 'more'>;
+      view: Shaped<'list' | 'pipeline' | 'more' | 'group'>;
       lang: Shaped<'en' | 'de'>;
+      /** The group's name while another project of it is shown; '' for this project. */
+      focus: Shaped<string>;
     };
   }
 }

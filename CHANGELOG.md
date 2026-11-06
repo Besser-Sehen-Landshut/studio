@@ -48,9 +48,10 @@ after one confirmation. Not tagged yet; the maintainers tag after the merge.
   prints one notice. `research: { trust: false }` keeps the strict behaviour.
 - REA installs on first use: a researcher launch that finds the pinned version missing asks the owner once
   in a terminal (and for the analysis folder, default `~/analysis`, when none is granted); without a
-  terminal the lead gets `REA install needed for <id>: confirm with studio research install --yes`, shown
-  in the pane with `→ say "confirm the rea install"`. Answers are kept per version and mode
-  (`rea-consent.json`); a new version asks again; crews can neither install nor confirm.
+  terminal the lead gets a decision the owner answers with a button in the Studio pane (the press writes
+  the confirmation into the owner state) or with `studio research install` in their own terminal.
+  Answers are kept per version and mode (`rea-consent.json`); a new version asks again; crews and the
+  lead can neither install nor confirm.
 - `studio research install [--yes] [--folder <dir>]`, `studio setup research`, and an optional sixth step
   in `studio setup` (asked once; a skip is kept).
 - `studio add ... --artifacts <dir>`: a research item for the researcher with its own analysis folder,
@@ -58,10 +59,11 @@ after one confirmation. Not tagged yet; the maintainers tag after the merge.
 
 ### Changed
 
-- `studio research install` no longer needs a terminal with `--yes`; it confirms and installs in the
+- `studio research install` confirms (asked, or `--yes`, both only in a terminal) and installs in the
   mode the owner config asks for. A static install does not count for trust mode, and the other way
   round.
 - `studio doctor` shows the REA mode (`trust` or `strict`).
+- The board mod writes one file: the REA install confirmation, on a press of its button.
 - Version 0.21.0.
 
 ## [0.20.0] - 2026-11-05

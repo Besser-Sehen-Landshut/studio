@@ -143,6 +143,8 @@ export interface StateSnapshot {
   wip?: { building: number; review: number };
   /** Set while the owner's pause stands; `time` is `HH:MM` on the owner's clock. */
   pause?: { at?: string; time?: string };
+  /** A REA install waiting for the owner's one confirmation (the pane's button writes it). */
+  reaInstall?: { version: string; mode: 'full' | 'static'; needsFolder: boolean };
   /** This project's group (owner config): one row per project, for the pane's group view. */
   group?: { name: string; main: string; self: string; projects: GroupRow[] };
   updatedAt: string;

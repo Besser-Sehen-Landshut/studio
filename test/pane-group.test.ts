@@ -43,6 +43,48 @@ const read = (group: unknown = GROUP): BoardRead => {
 const draw = (r: BoardRead, columns: number, lang: 'en' | 'de' = 'en') =>
   paneLines(r, { nowMs: NOW, paused: false, columns, view: 'group', lang }).map((l) => l.text);
 
+describe('the REA install confirmation in the pane', () => {
+  const rea = (reaInstall: unknown) =>
+    parseState(
+      JSON.stringify(
+        scenario({
+          needsLead: [
+            { item: 'APP-5', code: 'rea_install', reason: 'x', next: { say: 'show APP-5' } },
+          ],
+          reaInstall,
+        }),
+      ),
+    );
+  it('is a button under the decision, never a phrase to say', () => {
+    for (const lang of ['en', 'de'] as const) {
+      const lines = paneLines(rea({ version: '6.7.0', mode: 'full', needsFolder: true }), {
+        nowMs: NOW,
+        paused: false,
+        columns: 72,
+        lang,
+      });
+      const b = lines.find((l) => l.button !== undefined);
+      expect(b?.button?.key).toBe('rea-confirm');
+      expect(b?.button?.label).toBe(
+        lang === 'en'
+          ? 'Confirm REA install (rea-agents 6.7.0, folder ~/analysis)'
+          : 'REA-Installation bestätigen (rea-agents 6.7.0, Ordner ~/analysis)',
+      );
+      expect(lines.some((l) => l.text.includes('say "show APP-5"'))).toBe(false);
+    }
+  });
+  it('a state without the pending install, or with an odd version, gets no button', () => {
+    for (const r of [
+      undefined,
+      { version: 'latest', mode: 'full' },
+      { version: '1.2.3', mode: 'x' },
+    ]) {
+      const lines = paneLines(rea(r), { nowMs: NOW, paused: false, columns: 72 });
+      expect(lines.some((l) => l.button !== undefined)).toBe(false);
+    }
+  });
+});
+
 describe('the group view', () => {
   it('one line per project, decisions collected across projects with the command to open each', () => {
     const lines = draw(read(), 72);
