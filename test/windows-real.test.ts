@@ -194,7 +194,7 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
       clone,
       log,
       line,
-      why: `${show(`${id}.keeper.log`)}; ${show(`${id}.host.err`)}`,
+      why: () => `${show(`${id}.keeper.log`)}; ${show(`${id}.host.err`)}`,
     };
   }
 
@@ -214,7 +214,7 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     writeFileSync(join(outside, 'owner.txt'), 'the owner');
     const aclBefore = (await runFile('icacls', [outside, '/T'])).stdout;
     const r = await crew('APP-1', code.replace(JSON.stringify('OUTSIDE'), JSON.stringify(outside)));
-    expect(r.line?.who?.toLowerCase(), r.why).toBe(USER);
+    expect(r.line?.who?.toLowerCase(), r.why()).toBe(USER);
     expect(r.line?.prompt).toBe('hello crew');
     expect(r.line?.proxy).toBe(`http://${LOOPBACK}:${proxy.port}`);
     expect(r.line?.token).toBe(TOKEN);
@@ -249,12 +249,12 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     ].join('');
     const clone = join(stateRoot, 'clones', 'APP-2');
     const r = await crew('APP-2', `${code}`.replace('process.argv[1]', JSON.stringify(first)));
-    expect(r.line?.read, r.why).toMatch(/^(EPERM|EACCES)$/);
+    expect(r.line?.read, r.why()).toMatch(/^(EPERM|EACCES)$/);
     expect(existsSync(clone)).toBe(true);
     for (let i = 0; i < 50 && r.claude.alive(r.pid); i++) await sleep(200);
     expect(r.claude.alive(r.pid)).toBe(false);
     // The keeper took the grants off as the crew ended by itself.
     const acl = await runFile('icacls', [clone]);
-    expect(acl.stdout.toLowerCase()).not.toContain(`${USER}:`);
+    expect(acl.stdout.toLowerCase(), `${acl.stdout}; ${r.why()}`).not.toContain(`${USER}:`);
   }, 180_000);
 });
