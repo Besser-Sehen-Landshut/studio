@@ -10,13 +10,14 @@
 // user's password is sealed for the machine (LocalMachine DPAPI) in a file whose ACL lets only the
 // relay account, SYSTEM and administrators read it. Any process of those accounts on this machine
 // can open it; the crew user cannot read the file.
-import { win32 } from 'node:path';
+import { posix, win32 } from 'node:path';
 import { ipv4 } from './egress-proxy.js';
 import type { Neighbor } from './relay-hosts.js';
 import { OUTSIDE, powershellEnv, psQuote, type RunFile } from './windows-sandbox.js';
 
-/** Every path here is a Windows path, also where tests run elsewhere. */
-const join = win32.join;
+/** Every path here is a Windows path, also where tests run elsewhere (with POSIX folders). */
+const join = (...parts: string[]): string =>
+  parts[0]?.startsWith('/') === true ? posix.join(...parts) : win32.join(...parts);
 
 /**
  * Where a relay worker keeps what the relay account writes: its config and state, each in its own
@@ -123,11 +124,12 @@ export function leadFromAuthInfo(
 }
 
 /**
- * The broker: ends every process of the crew user (by SID, through CIM), then takes away what a
- * crew could have left in the crew user's profile to run in the next job (the AutoRun of cmd, its
- * own environment values and Run keys, the Startup folder), and writes what it found, with the
- * time, to its answer file. It is the task's action itself (no script file anyone could change)
- * and takes no argument: the crew user and the answer file are written into it by the setup.
+ * The broker: ends every process of the crew user (by SID, through CIM) and writes what it found,
+ * with the time, to its answer file. It is the task's action itself (no script file anyone could
+ * change) and takes no argument: the crew user and the answer file are written into it by the
+ * setup. It touches nothing of the crew user's files or registry: what a crew could leave there to
+ * start in a later job is taken away by the crew user itself (studio-crew-reset.mjs), which can
+ * reach no more than the crew could anyway.
  */
 export const brokerScript = (o: { crewUser: string; result: string }): string =>
   [
@@ -140,25 +142,7 @@ export const brokerScript = (o: { crewUser: string; result: string }): string =>
     '  foreach ($p in $found) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }',
     '  if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }',
     '  $left = @(Crew | ForEach-Object { [int]$_.ProcessId })',
-    '  $reset = $false',
-    '  $profile = (Get-CimInstance Win32_UserProfile | Where-Object { $_.SID -eq $sid } | Select-Object -First 1).LocalPath',
-    '  if ($left.Count -eq 0 -and $profile) {',
-    '    $hive = "Registry::HKEY_USERS\\$sid"',
-    '    $loaded = Test-Path -LiteralPath $hive',
-    "    if (-not $loaded) { & reg.exe load \"HKU\\$sid\" (Join-Path $profile 'NTUSER.DAT') | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'cannot load the crew user profile' } }",
-    '    try {',
-    '      Remove-ItemProperty -LiteralPath "$hive\\Software\\Microsoft\\Command Processor" -Name AutoRun -ErrorAction SilentlyContinue',
-    '      $envKey = "$hive\\Environment"',
-    "      if (Test-Path -LiteralPath $envKey) { foreach ($n in (Get-Item -LiteralPath $envKey).GetValueNames()) { if ($n -notin @('TEMP', 'TMP')) { Remove-ItemProperty -LiteralPath $envKey -Name $n } } }",
-    '      foreach ($k in @(\'Software\\Microsoft\\Windows\\CurrentVersion\\Run\', \'Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce\')) { if (Test-Path -LiteralPath "$hive\\$k") { Remove-Item -LiteralPath "$hive\\$k" -Recurse -Force } }',
-    '    } finally {',
-    '      if (-not $loaded) { [GC]::Collect(); [GC]::WaitForPendingFinalizers(); & reg.exe unload "HKU\\$sid" | Out-Null }',
-    '    }',
-    "    $startup = Join-Path $profile 'AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup'",
-    '    if (Test-Path -LiteralPath $startup) { Get-ChildItem -LiteralPath $startup -Force | Remove-Item -Recurse -Force }',
-    '    $reset = $true',
-    '  }',
-    "  $out = @{ at = (Get-Date).ToUniversalTime().ToString('o'); found = $found.Count; left = $left; reset = $reset }",
+    "  $out = @{ at = (Get-Date).ToUniversalTime().ToString('o'); found = $found.Count; left = $left }",
     '} catch {',
     "  $out = @{ at = (Get-Date).ToUniversalTime().ToString('o'); error = $_.Exception.Message }",
     '}',

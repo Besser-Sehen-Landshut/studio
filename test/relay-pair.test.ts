@@ -31,7 +31,11 @@ import {
 import { encodeMessage, LineReader, readMessage } from '../src/relay-protocol.js';
 import { serveRelay } from '../src/relay-serve.js';
 import type { RelayTransport } from '../src/relay-transport.js';
-import { authorizedKeysFile, authorizedKeysScript, relaySetupScript } from '../src/relay-windows.js';
+import {
+  authorizedKeysFile,
+  authorizedKeysScript,
+  relaySetupScript,
+} from '../src/relay-windows.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-relay-pair-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));

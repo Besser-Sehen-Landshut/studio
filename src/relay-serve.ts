@@ -14,14 +14,17 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
   closeSync,
-  copyFileSync,
   existsSync,
+  constants as fsConstants,
+  fstatSync,
   lstatSync,
   openSync,
   readdirSync,
   readFileSync,
+  readSync,
   statfsSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { cpus, homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -148,6 +151,8 @@ export interface RelayWindows {
   }>;
   /** Stopping a crew: the keeper ends, the grants go (through the broker). */
   claude(): Ports['claude'];
+  /** Ends every process of the crew user, through the broker; refuses when any is left. */
+  sweep(): Promise<void>;
 }
 
 const relayLock = (root: string, now: Date) =>
@@ -839,6 +844,19 @@ async function collect(c: RelayContext, id: string, out: Out): Promise<void> {
     writeStateFile(root, join(dir, 'objects', 'info', 'alternates'), `${mirrorObjects}\n`);
     // Git never runs inside the crew's clone (rule D4), not even as a remote: its objects and the
     // head of its branch are copied as plain files, checked one by one, and git runs here only.
+    // Nothing of the crew may run while its clone is read: on Windows the broker proves it right
+    // before; a sweep that cannot, or leaves anything, holds the collect for the next tick.
+    if (c.windows !== undefined) {
+      try {
+        await c.windows.sweep();
+      } catch (e) {
+        return fail(
+          out,
+          'held',
+          `the crew user's processes are not proven gone: ${(e as Error).message}`,
+        );
+      }
+    }
     let crewHead: string;
     try {
       crewHead = copyCrewObjects(join(stateRoot, 'clones', id), dir, id, root);
@@ -1114,14 +1132,35 @@ export function copyCrewObjects(clone: string, dest: string, id: string, root: s
     if (existsSync(join(objects, 'info', f))) throw new Error(`the clone has objects/info/${f}`);
   }
   let total = 0;
+  // Each file is opened once, never through a link (O_NOFOLLOW where the system has it), checked
+  // on what was opened, and copied from that very handle.
   const copy = (from: string, to: string) => {
-    const fst = lstatSync(from);
-    if (fst.isSymbolicLink()) throw new Error('a link among the objects');
-    if (!fst.isFile()) return;
-    total += fst.size;
-    if (total > MAX_CREW_OBJECTS_BYTES) throw new Error('the objects are larger than allowed');
-    ensureStateDir(root, dirname(to));
-    copyFileSync(from, to);
+    const before = lstatSync(from);
+    if (before.isSymbolicLink()) throw new Error('a link among the objects');
+    if (!before.isFile()) return;
+    const fd = openSync(from, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    try {
+      const st = fstatSync(fd);
+      if (!st.isFile() || st.ino !== before.ino || st.dev !== before.dev) {
+        throw new Error('an object changed while it was read');
+      }
+      total += st.size;
+      if (total > MAX_CREW_OBJECTS_BYTES) throw new Error('the objects are larger than allowed');
+      ensureStateDir(root, dirname(to));
+      const out = openSync(to, 'wx', 0o600);
+      try {
+        const buf = Buffer.alloc(1 << 20);
+        for (;;) {
+          const n = readSync(fd, buf, 0, buf.length, null);
+          if (n <= 0) break;
+          writeSync(out, buf, 0, n);
+        }
+      } finally {
+        closeSync(out);
+      }
+    } finally {
+      closeSync(fd);
+    }
   };
   for (const name of readdirSync(objects)) {
     const sub = join(objects, name);

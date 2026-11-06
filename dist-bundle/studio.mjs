@@ -40816,6 +40816,9 @@ ${JSON.stringify(spec)}`,
       },
       env: { ...o2.env, STUDIO_PROBE_MARK: mark }
     };
+    if (o2.extra?.persistence === true && !await host({ mode: "reset", env: o2.env })) {
+      return { problem: unfinished };
+    }
     if (!await host(spec)) return { problem: unfinished };
     let results;
     try {
@@ -60818,8 +60821,8 @@ import { existsSync as existsSync16, mkdirSync as mkdirSync12, readFileSync as r
 import { dirname as dirname15, join as join55 } from "node:path";
 
 // src/relay-windows.ts
-import { win32 } from "node:path";
-var join54 = win32.join;
+import { posix as posix2, win32 } from "node:path";
+var join54 = (...parts) => parts[0]?.startsWith("/") === true ? posix2.join(...parts) : win32.join(...parts);
 var relayHomeDefault = (env) => join54(env.ProgramData ?? env.PROGRAMDATA ?? "C:\\ProgramData", "Studio", "relay");
 var relayMachineDefault = (env) => join54(env.ProgramFiles ?? env.PROGRAMFILES ?? "C:\\Program Files", "Studio", "relay");
 var machineCredFile = (machine) => join54(machine, "crew-credential.bin");
@@ -60882,25 +60885,7 @@ var brokerScript = (o2) => [
   "  foreach ($p in $found) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }",
   "  if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }",
   "  $left = @(Crew | ForEach-Object { [int]$_.ProcessId })",
-  "  $reset = $false",
-  "  $profile = (Get-CimInstance Win32_UserProfile | Where-Object { $_.SID -eq $sid } | Select-Object -First 1).LocalPath",
-  "  if ($left.Count -eq 0 -and $profile) {",
-  '    $hive = "Registry::HKEY_USERS\\$sid"',
-  "    $loaded = Test-Path -LiteralPath $hive",
-  `    if (-not $loaded) { & reg.exe load "HKU\\$sid" (Join-Path $profile 'NTUSER.DAT') | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'cannot load the crew user profile' } }`,
-  "    try {",
-  '      Remove-ItemProperty -LiteralPath "$hive\\Software\\Microsoft\\Command Processor" -Name AutoRun -ErrorAction SilentlyContinue',
-  '      $envKey = "$hive\\Environment"',
-  "      if (Test-Path -LiteralPath $envKey) { foreach ($n in (Get-Item -LiteralPath $envKey).GetValueNames()) { if ($n -notin @('TEMP', 'TMP')) { Remove-ItemProperty -LiteralPath $envKey -Name $n } } }",
-  `      foreach ($k in @('Software\\Microsoft\\Windows\\CurrentVersion\\Run', 'Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce')) { if (Test-Path -LiteralPath "$hive\\$k") { Remove-Item -LiteralPath "$hive\\$k" -Recurse -Force } }`,
-  "    } finally {",
-  '      if (-not $loaded) { [GC]::Collect(); [GC]::WaitForPendingFinalizers(); & reg.exe unload "HKU\\$sid" | Out-Null }',
-  "    }",
-  "    $startup = Join-Path $profile 'AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup'",
-  "    if (Test-Path -LiteralPath $startup) { Get-ChildItem -LiteralPath $startup -Force | Remove-Item -Recurse -Force }",
-  "    $reset = $true",
-  "  }",
-  "  $out = @{ at = (Get-Date).ToUniversalTime().ToString('o'); found = $found.Count; left = $left; reset = $reset }",
+  "  $out = @{ at = (Get-Date).ToUniversalTime().ToString('o'); found = $found.Count; left = $left }",
   "} catch {",
   "  $out = @{ at = (Get-Date).ToUniversalTime().ToString('o'); error = $_.Exception.Message }",
   "}",
@@ -61421,14 +61406,17 @@ import { spawn as spawn5 } from "node:child_process";
 import { randomBytes as randomBytes13 } from "node:crypto";
 import {
   closeSync as closeSync9,
-  copyFileSync as copyFileSync2,
   existsSync as existsSync18,
+  constants as fsConstants,
+  fstatSync as fstatSync5,
   lstatSync as lstatSync45,
   openSync as openSync9,
   readdirSync as readdirSync18,
   readFileSync as readFileSync53,
+  readSync as readSync5,
   statfsSync,
-  writeFileSync as writeFileSync19
+  writeFileSync as writeFileSync19,
+  writeSync as writeSync3
 } from "node:fs";
 import { cpus, homedir as homedir12 } from "node:os";
 import { dirname as dirname17, join as join57, resolve as resolve12 } from "node:path";
@@ -62770,6 +62758,17 @@ async function collect2(c3, id, out) {
     const mirrorObjects = join57(mirrorDir(c3, j.repo), "objects");
     writeStateFile(root, join57(dir, "objects", "info", "alternates"), `${mirrorObjects}
 `);
+    if (c3.windows !== void 0) {
+      try {
+        await c3.windows.sweep();
+      } catch (e) {
+        return fail3(
+          out,
+          "held",
+          `the crew user's processes are not proven gone: ${e.message}`
+        );
+      }
+    }
     let crewHead;
     try {
       crewHead = copyCrewObjects(join57(stateRoot, "clones", id), dir, id, root);
@@ -62989,13 +62988,32 @@ function copyCrewObjects(clone2, dest, id, root) {
   }
   let total = 0;
   const copy = (from, to) => {
-    const fst = lstatSync45(from);
-    if (fst.isSymbolicLink()) throw new Error("a link among the objects");
-    if (!fst.isFile()) return;
-    total += fst.size;
-    if (total > MAX_CREW_OBJECTS_BYTES) throw new Error("the objects are larger than allowed");
-    ensureStateDir(root, dirname17(to));
-    copyFileSync2(from, to);
+    const before = lstatSync45(from);
+    if (before.isSymbolicLink()) throw new Error("a link among the objects");
+    if (!before.isFile()) return;
+    const fd = openSync9(from, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    try {
+      const st2 = fstatSync5(fd);
+      if (!st2.isFile() || st2.ino !== before.ino || st2.dev !== before.dev) {
+        throw new Error("an object changed while it was read");
+      }
+      total += st2.size;
+      if (total > MAX_CREW_OBJECTS_BYTES) throw new Error("the objects are larger than allowed");
+      ensureStateDir(root, dirname17(to));
+      const out = openSync9(to, "wx", 384);
+      try {
+        const buf = Buffer.alloc(1 << 20);
+        for (; ; ) {
+          const n4 = readSync5(fd, buf, 0, buf.length, null);
+          if (n4 <= 0) break;
+          writeSync3(out, buf, 0, n4);
+        }
+      } finally {
+        closeSync9(out);
+      }
+    } finally {
+      closeSync9(fd);
+    }
   };
   for (const name of readdirSync18(objects)) {
     const sub = join57(objects, name);
@@ -63220,25 +63238,21 @@ function relayWindows(o2) {
   const path10 = o2.env.PATH ?? o2.env.Path;
   const claudeBin = findClaude(path10) ?? "claude";
   const ifaces = () => (o2.interfaces ?? networkInterfaces2)();
-  const grants = new WindowsGrants({
-    ownerRoot: o2.ownerRoot,
-    user: o2.user,
+  const sweep = () => brokerSweep({
     run: run2,
-    sweep: () => brokerSweep({
-      run: run2,
-      task: o2.task,
-      result: brokerResultFile(o2.machine),
-      readFile: (f3) => {
-        try {
-          return readFileSync54(f3, "utf8");
-        } catch {
-          return void 0;
-        }
-      },
-      now: () => /* @__PURE__ */ new Date(),
-      sleep: (ms) => new Promise((r) => setTimeout(r, ms))
-    })
+    task: o2.task,
+    result: brokerResultFile(o2.machine),
+    readFile: (f3) => {
+      try {
+        return readFileSync54(f3, "utf8");
+      } catch {
+        return void 0;
+      }
+    },
+    now: () => /* @__PURE__ */ new Date(),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms))
   });
+  const grants = new WindowsGrants({ ownerRoot: o2.ownerRoot, user: o2.user, run: run2, sweep });
   const claude = () => windowsClaude({
     stateRoot: o2.stateRoot,
     credFile,
@@ -63366,7 +63380,8 @@ function relayWindows(o2) {
         close: () => proxy.close()
       };
     },
-    claude
+    claude,
+    sweep
   };
 }
 async function machineTreeProblem(run2, o2) {
@@ -70486,13 +70501,13 @@ function realPorts(claudeBin = "claude") {
       return e.code === "EPERM";
     }
   };
-  const posix2 = process.platform !== "win32";
-  const alive = (pid) => posix2 && probe(-pid) || probe(pid);
+  const posix3 = process.platform !== "win32";
+  const alive = (pid) => posix3 && probe(-pid) || probe(pid);
   const signal = (pid, sig) => {
     try {
-      process.kill(posix2 ? -pid : pid, sig);
+      process.kill(posix3 ? -pid : pid, sig);
     } catch (e) {
-      if (!posix2 || e.code !== "ESRCH") return;
+      if (!posix3 || e.code !== "ESRCH") return;
       try {
         process.kill(pid, sig);
       } catch {

@@ -378,6 +378,40 @@ describe("the worker reads a crew's clone as files only", () => {
   });
 });
 
+describe('what a crew leaves to start in a later job goes, as the crew user, never through a link', () => {
+  it('removes files and links as links; targets outside survive; folders are left and named', async () => {
+    const resetModule = new URL('../bin/studio-crew-reset.mjs', import.meta.url).href;
+    const { resetStartup } = (await import(resetModule)) as {
+      resetStartup: (dir: string) => { removed: string[]; left: string[] };
+    };
+    const outside = join(root, 'outside');
+    mkdirSync(join(outside, 'deep'), { recursive: true });
+    writeFileSync(join(outside, 'deep', 'precious.txt'), 'keep\n');
+    writeFileSync(join(outside, 'file.txt'), 'keep\n');
+    const startup = join(root, 'Startup');
+    mkdirSync(startup);
+    writeFileSync(join(startup, 'evil.cmd'), 'start x\n');
+    writeFileSync(join(startup, 'desktop.ini'), '[x]\n');
+    // A planted link to a folder outside (a junction on Windows) and one to a file outside.
+    symlinkSync(join(outside, 'deep'), join(startup, 'to-folder'), 'dir');
+    symlinkSync(join(outside, 'file.txt'), join(startup, 'to-file'));
+    mkdirSync(join(startup, 'sub'));
+    writeFileSync(join(startup, 'sub', 'inside.txt'), 'x\n');
+    const r = resetStartup(startup);
+    expect(r.removed.sort()).toEqual(['evil.cmd', 'to-file', 'to-folder']);
+    expect(r.left).toEqual(['sub']);
+    expect(readFileSync(join(outside, 'deep', 'precious.txt'), 'utf8')).toBe('keep\n');
+    expect(readFileSync(join(outside, 'file.txt'), 'utf8')).toBe('keep\n');
+    expect(readFileSync(join(startup, 'sub', 'inside.txt'), 'utf8')).toBe('x\n');
+    expect(readdirSync(startup).sort()).toEqual(['desktop.ini', 'sub']);
+    // A Startup folder that is itself a link is not touched.
+    const linked = join(root, 'StartupLink');
+    symlinkSync(join(outside, 'deep'), linked, 'dir');
+    expect(resetStartup(linked).removed).toEqual([]);
+    expect(readFileSync(join(outside, 'deep', 'precious.txt'), 'utf8')).toBe('keep\n');
+  });
+});
+
 describe('the lead reads one answer, and no more than one answer may be', () => {
   it('stops at the cap of all bytes, and drops what comes after the answer', async () => {
     const big = (async function* () {
@@ -703,17 +737,12 @@ describe('the Windows relay worker, with fakes', () => {
     expect(() =>
       authorizedKeyLine({ key: 'ssh-ed25519 x\nssh-rsa y', command: 'x', lead: 'lab' }),
     ).toThrow();
-    // The broker resets what a crew could leave in the crew user's profile.
+    // The broker ends the crew user's processes and touches nothing of its files or registry:
+    // SYSTEM never walks a tree a crew could have planted links in.
     const broker = brokerScript({ crewUser: 'studio-crew', result: 'C:\\r.json' });
-    for (const s of [
-      "'studio-crew'",
-      'Command Processor',
-      'AutoRun',
-      'Environment',
-      'CurrentVersion\\Run',
-      'Startup',
-    ]) {
-      expect(broker, s).toContain(s);
+    expect(broker).toContain("'studio-crew'");
+    for (const s of ['Remove-Item', 'Remove-ItemProperty', 'reg.exe', 'Startup', 'HKEY_USERS']) {
+      expect(broker, s).not.toContain(s);
     }
     const encoded =
       brokerArguments({ crewUser: 'studio-crew', result: 'C:\\r.json' }).split(' ').at(-1) ?? '';
