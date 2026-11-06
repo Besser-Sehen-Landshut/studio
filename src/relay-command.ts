@@ -809,6 +809,7 @@ export interface RelayValues {
   lead?: string;
   'keep-passwords'?: boolean;
   'i-am-local'?: boolean;
+  'force-stop'?: boolean;
   'disable-spooler'?: boolean;
   pair?: string;
   user?: string;
@@ -1033,6 +1034,7 @@ async function install(o: {
       scope,
       ...(o.values['keep-passwords'] === true ? { keepPasswords: true } : {}),
       ...(o.values['disable-spooler'] === true ? { disableSpooler: true } : {}),
+      ...(o.values['force-stop'] === true ? { forceStop: true } : {}),
     }),
   );
   let r: Awaited<ReturnType<Exec>>;

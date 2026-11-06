@@ -701,10 +701,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       values['keep-passwords'],
       values['disable-spooler'],
       values['i-am-local'],
+      values['force-stop'],
     ];
     if (relayOnly.some((v) => v !== undefined) && cmd !== 'relay') {
       throw new UsageError(
-        '--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler and --i-am-local work with relay only',
+        '--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local and --force-stop work with relay only',
       );
     }
     const reserveOnly = [values.number, values.for, values.purpose];
@@ -5456,6 +5457,7 @@ function parseCli(argv: string[]) {
         connect: { type: 'boolean' },
         'keep-passwords': { type: 'boolean' },
         'i-am-local': { type: 'boolean' },
+        'force-stop': { type: 'boolean' },
         'disable-spooler': { type: 'boolean' },
       },
       allowPositionals: true,

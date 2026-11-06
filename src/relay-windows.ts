@@ -452,7 +452,7 @@ $claude = ${psQuote(join(machineConfig(o.machine), 'studio', 'claude'))}
 foreach ($d in @((Join-Path $claude 'skills'), (Join-Path $claude 'plugins'))) {
   if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($crewSid):(OI)(CI)RX" /L /Q | Out-Null }
 }`;
-  return `${o.install === undefined ? '' : installHead(o.install)}#Requires -RunAsAdministrator
+  return `${o.install === undefined ? '' : installHead(o.install, o.relayUser, o.crewUser)}#Requires -RunAsAdministrator
 # Studio: the setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
 # Nothing here leaves this machine.
@@ -585,6 +585,8 @@ export interface RelayInstall {
   keepPasswords?: boolean;
   /** Stop and disable the print spooler, which acts for users in a service. */
   disableSpooler?: boolean;
+  /** Stop every process of the relay account and the crew user instead of refusing. */
+  forceStop?: boolean;
 }
 
 const setupTail = (
@@ -619,13 +621,42 @@ ${adminFileSnippet({ file: o.file, lines: o.lines, readers: 'relay' })}
  * sshd stopped and every inbound rule for it off. Then the prerequisites: Git and Claude Code
  * through winget (for the whole machine), the OpenSSH server as the Windows capability it is.
  */
-const installHead = (i: RelayInstall) => `#Requires -RunAsAdministrator
+const installHead = (
+  i: RelayInstall,
+  relayUser: string,
+  crewUser: string,
+) => `#Requires -RunAsAdministrator
 $ErrorActionPreference = 'Stop'
 $ok = $false
 function SshdOff {
   Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue
   Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Disable-NetFirewallRule
 }
+# No relay job may run while the install walks the folders and sets their ACLs: a runner or crew
+# could plant a link between the two. Every process of the relay account or the crew user counts.
+$forceStop = ${i.forceStop === true ? '$true' : '$false'}
+function RelayProcesses {
+  @(foreach ($n in @(${psQuote(relayUser)}, ${psQuote(crewUser)})) {
+    $u = Get-LocalUser -Name $n -ErrorAction SilentlyContinue
+    if ($null -eq $u) { continue }
+    $sid = $u.SID.Value
+    Get-CimInstance Win32_Process | Where-Object { try { (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $sid } catch { $false } }
+  })
+}
+function NoRelayJob {
+  $running = RelayProcesses
+  if ($running.Count -eq 0) { return }
+  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or the crew user): let it end, or run this again with --force-stop" }
+  Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew user (--force-stop)."
+  for ($t = 0; $t -lt 20 -and $running.Count -gt 0; $t++) {
+    foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 500
+    $running = RelayProcesses
+  }
+  if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew user' }
+}
+# Before sshd stops: a running job is refused while the lead can still reach it.
+NoRelayJob
 try {
 function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
 function Need([string]$what, [scriptblock]$have, [string]$id) {
@@ -642,6 +673,8 @@ $ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Ser
 if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
 if ($ssh.State -ne 'Installed') { Write-Output 'installing: OpenSSH server'; Add-WindowsCapability -Online -Name $ssh.Name | Out-Null } else { Write-Output 'ok: OpenSSH server' }
 SshdOff
+# With sshd off no new job starts: once more, for one that started in between.
+NoRelayJob
 Set-Service -Name sshd -StartupType Automatic
 ${
   i.disableSpooler === true

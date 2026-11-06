@@ -396,6 +396,12 @@ describe('the install script', () => {
       source: { node: 'C:\\nodejs\\node.exe', studio: 'C:\\plugins\\studio' },
     };
     const tail = relaySetupScript({ ...base, install: { port: 22, scope: { tailscale: true } } });
+    expect(
+      relaySetupScript({
+        ...base,
+        install: { port: 22, scope: { tailscale: true }, forceStop: true },
+      }),
+    ).toContain('$forceStop = $true');
     for (const s of [
       "Need 'Git' { Get-Command git -ErrorAction SilentlyContinue } 'Git.Git'",
       "Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'",
@@ -410,7 +416,12 @@ describe('the install script', () => {
       // Keys only for every account, at the top where sshd reads it first.
       '# studio relay begin global\nPasswordAuthentication no\nKbdInteractiveAuthentication no',
       // sshd stays stopped and closed until the end; a failure leaves it so.
-      'SshdOff\nSet-Service -Name sshd -StartupType Automatic',
+      // No relay job runs while the folders are walked: refused before sshd stops, checked again
+      // after, every process of the relay account and the crew user.
+      "foreach ($n in @('studio-relay', 'studio-crew'))",
+      '$forceStop = $false',
+      '# Before sshd stops: a running job is refused while the lead can still reach it.\nNoRelayJob\ntry {',
+      'SshdOff\n# With sshd off no new job starts: once more, for one that started in between.\nNoRelayJob\nSet-Service -Name sshd -StartupType Automatic',
       '$ok = $true\n} finally {\n  if (-not $ok) {\n    SshdOff',
       "-like '*Tailscale*'",
       '$scope = @{ InterfaceAlias = $ts.Name }',

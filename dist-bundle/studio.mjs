@@ -59430,7 +59430,7 @@ var COMMANDS = [
     about: "On the lead: pin the host key the worker proves with the pairing secret; write workers.relay.<label>"
   },
   {
-    usage: "relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--i-am-local]",
+    usage: "relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--i-am-local] [--force-stop]",
     about: "On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead"
   },
   {
@@ -61106,7 +61106,7 @@ $claude = ${psQuote(join54(machineConfig(o2.machine), "studio", "claude"))}
 foreach ($d in @((Join-Path $claude 'skills'), (Join-Path $claude 'plugins'))) {
   if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($crewSid):(OI)(CI)RX" /L /Q | Out-Null }
 }`;
-  return `${o2.install === void 0 ? "" : installHead(o2.install)}#Requires -RunAsAdministrator
+  return `${o2.install === void 0 ? "" : installHead(o2.install, o2.relayUser, o2.crewUser)}#Requires -RunAsAdministrator
 # Studio: the setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
 # Nothing here leaves this machine.
@@ -61241,13 +61241,38 @@ $relaySid = (Get-LocalUser -Name ${psQuote(o2.relayUser)}).SID.Value
 ${adminFileSnippet({ file: o2.file, lines: o2.lines, readers: "relay" })}
 `;
 }
-var installHead = (i2) => `#Requires -RunAsAdministrator
+var installHead = (i2, relayUser, crewUser) => `#Requires -RunAsAdministrator
 $ErrorActionPreference = 'Stop'
 $ok = $false
 function SshdOff {
   Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue
   Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Disable-NetFirewallRule
 }
+# No relay job may run while the install walks the folders and sets their ACLs: a runner or crew
+# could plant a link between the two. Every process of the relay account or the crew user counts.
+$forceStop = ${i2.forceStop === true ? "$true" : "$false"}
+function RelayProcesses {
+  @(foreach ($n in @(${psQuote(relayUser)}, ${psQuote(crewUser)})) {
+    $u = Get-LocalUser -Name $n -ErrorAction SilentlyContinue
+    if ($null -eq $u) { continue }
+    $sid = $u.SID.Value
+    Get-CimInstance Win32_Process | Where-Object { try { (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $sid } catch { $false } }
+  })
+}
+function NoRelayJob {
+  $running = RelayProcesses
+  if ($running.Count -eq 0) { return }
+  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or the crew user): let it end, or run this again with --force-stop" }
+  Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew user (--force-stop)."
+  for ($t = 0; $t -lt 20 -and $running.Count -gt 0; $t++) {
+    foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 500
+    $running = RelayProcesses
+  }
+  if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew user' }
+}
+# Before sshd stops: a running job is refused while the lead can still reach it.
+NoRelayJob
 try {
 function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
 function Need([string]$what, [scriptblock]$have, [string]$id) {
@@ -61264,6 +61289,8 @@ $ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Ser
 if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
 if ($ssh.State -ne 'Installed') { Write-Output 'installing: OpenSSH server'; Add-WindowsCapability -Online -Name $ssh.Name | Out-Null } else { Write-Output 'ok: OpenSSH server' }
 SshdOff
+# With sshd off no new job starts: once more, for one that started in between.
+NoRelayJob
 Set-Service -Name sshd -StartupType Automatic
 ${i2.disableSpooler === true ? `Write-Output 'Stopping and disabling the print spooler (--disable-spooler).'
 Stop-Service -Name Spooler -Force -ErrorAction SilentlyContinue
@@ -64951,7 +64978,8 @@ async function install(o2) {
       port,
       scope,
       ...o2.values["keep-passwords"] === true ? { keepPasswords: true } : {},
-      ...o2.values["disable-spooler"] === true ? { disableSpooler: true } : {}
+      ...o2.values["disable-spooler"] === true ? { disableSpooler: true } : {},
+      ...o2.values["force-stop"] === true ? { forceStop: true } : {}
     })
   );
   let r;
@@ -65962,11 +65990,12 @@ async function runCli(argv, deps) {
       values.connect,
       values["keep-passwords"],
       values["disable-spooler"],
-      values["i-am-local"]
+      values["i-am-local"],
+      values["force-stop"]
     ];
     if (relayOnly.some((v) => v !== void 0) && cmd !== "relay") {
       throw new UsageError(
-        "--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler and --i-am-local work with relay only"
+        "--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local and --force-stop work with relay only"
       );
     }
     const reserveOnly = [values.number, values.for, values.purpose];
@@ -70112,6 +70141,7 @@ function parseCli(argv) {
         connect: { type: "boolean" },
         "keep-passwords": { type: "boolean" },
         "i-am-local": { type: "boolean" },
+        "force-stop": { type: "boolean" },
         "disable-spooler": { type: "boolean" }
       },
       allowPositionals: true,

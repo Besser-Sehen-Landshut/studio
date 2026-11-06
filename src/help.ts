@@ -89,7 +89,7 @@ export const COMMANDS: HelpEntry[] = [
   },
   {
     usage:
-      'relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--i-am-local]',
+      'relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--i-am-local] [--force-stop]',
     about:
       'On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead',
   },
