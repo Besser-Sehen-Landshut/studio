@@ -113,6 +113,7 @@ import {
   readLimits,
   reconcileBlocks,
   reconcileLimits,
+  usageLimitLine,
   validLabel,
 } from './limits.js';
 import { readMainBuild } from './main-build.js';
@@ -658,9 +659,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     };
     /**
      * Applies account blocks, then usage limits, found in the crew logs; runs before anything looks
-     * at the board. Returns whether the block reconcile could not run.
+     * at the board. Returns whether the block reconcile could not run, and one line per crew a
+     * usage limit stopped.
      */
-    const reconcile = async (): Promise<boolean> => {
+    const reconcile = async (): Promise<{
+      lockFailed: boolean;
+      limited: { item: string; line: string }[];
+    }> => {
       const b = await reconcileBlocks({
         project,
         stateRoot: stateRoot(),
@@ -678,13 +683,24 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         ownerRoot: ownerRoot(),
         ports,
       });
-      for (const s of r.stopped) {
-        stderr(
-          `note: ${s.item} stopped at a ${s.kind} limit, ${s.label} parked until ${s.parkedUntil}\n`,
-        );
+      let timezone: string | undefined;
+      try {
+        timezone =
+          r.stopped.length === 0
+            ? undefined
+            : resolveZone(loadOwnerConfig(owner).crewLabelLimits.timezone);
+      } catch {
+        timezone = undefined;
+      }
+      const limited = r.stopped.map((s) => ({
+        item: s.item,
+        line: usageLimitLine(s.label, s.parkedUntil, timezone),
+      }));
+      for (const l of limited) {
+        stderr(`note: ${l.line} (${l.item} back to ready, its relaunch kept)\n`);
       }
       for (const e of r.errors) stderr(`error: ${e}\n`);
-      return b.lockFailed;
+      return { lockFailed: b.lockFailed, limited };
     };
     /**
      * Why crew records of some project cannot be read, as a single line; undefined when they can.
@@ -1158,7 +1174,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
     /** Starts the crew of a planned item and moves it to `assigned`: the body of `launch`. */
     const launch = async (id: string | undefined, asker?: Asker) => {
-      if (await reconcile()) {
+      if ((await reconcile()).lockFailed) {
         throw new HeldError(
           'another Studio process is reconciling account blocks; refusing to launch, try again',
         );
@@ -2521,8 +2537,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (rows.length > 0) out.releases = rows;
       };
 
+      // Usage limits and account blocks in the crew logs, before anything collects: a crew that
+      // ended at a limit left no report, and its item goes back to ready with its relaunch kept.
+      const limitsPhase = async () => {
+        for (const l of (await reconcile()).limited)
+          out.held.push({ item: l.item, reason: l.line });
+      };
+
       try {
         for (const [name, body] of [
+          ['limits', limitsPhase],
           ['recover', recoverPhase],
           ['review timeouts', reviewTimeoutPhase],
           ['contracts', contractsPhase],
@@ -3534,6 +3558,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'collect': {
+        // A crew that ended at a usage limit has no report to collect: its item went back to ready.
+        const stopped = (await reconcile()).limited.find(
+          (l) => rest[0] === undefined || l.item === rest[0],
+        );
+        if (stopped !== undefined) {
+          stderr(`studio: ${stopped.item}: ${stopped.line}; back to ready, nothing to collect\n`);
+          return 1;
+        }
         const r = await collect(rest[0]);
         if (r.kind === 'moved') {
           print(r.out);
@@ -5206,12 +5238,21 @@ function buildSnapshot(
       ...board.items
         .filter((i) => i.ownerOnly && i.status !== 'merged' && i.status !== 'dropped')
         .map((i) => ({ id: i.id, title: i.title })),
-      // Exactly one line however many items wait or labels are blocked; a block outranks a limit.
+      // One line however many labels are blocked, or all parked; a block outranks a limit.
       ...(blocked !== undefined
         ? [ownerLine('account-block', blocked)]
-        : hold === undefined
-          ? []
-          : [ownerLine('usage-limit', hold)]),
+        : hold !== undefined
+          ? [ownerLine('usage-limit', hold)]
+          : // Some labels parked, others free (a provider's): one line per parked label.
+            Object.entries(limits)
+              .filter(([, p]) => p.parkedUntil !== undefined)
+              .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+              .map(([label, p]) =>
+                ownerLine(
+                  `usage-limit:${label}`,
+                  usageLimitLine(label, p.parkedUntil as string, timezone),
+                ),
+              )),
       ...(extra.crewRecordsUnreadable
         ? [
             ownerLine(

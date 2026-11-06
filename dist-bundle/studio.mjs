@@ -28436,6 +28436,8 @@ var de_default2 = defineLocale({
           return "Nutzungslimit: jede Crew-Anmeldung ist an ihrem Limit";
         case "usage_parked":
           return `Nutzungslimit: keine Crew-Anmeldung frei; fr\xFChestens wieder ${p.reset ?? "unbekannt"}`;
+        case "usage_label":
+          return `Nutzungslimit bei ${p.label} bis ${p.reset}; darauf startet nichts`;
         case "limits_unreadable":
           return "limits.json ist nicht lesbar: keine Crew startet";
         case "usage_unreadable":
@@ -28743,6 +28745,8 @@ var strings = {
         return "usage limit: every crew credential is at its limit";
       case "usage_parked":
         return `usage limit: no crew credential free; earliest reset ${p.reset ?? "unknown"}`;
+      case "usage_label":
+        return `usage limit on ${p.label} until ${p.reset}; nothing launches on it`;
       case "limits_unreadable":
         return "limits.json is unreadable: no crew starts";
       case "usage_unreadable":
@@ -28988,7 +28992,7 @@ var resolveLang = shipped.resolve;
 var import_yaml2 = __toESM(require_dist(), 1);
 import { existsSync, lstatSync, readdirSync, readFileSync as readFileSync2, statSync } from "node:fs";
 import { join as join2 } from "node:path";
-var STUDIO_VERSION = "0.22.1";
+var STUDIO_VERSION = "0.22.2";
 var HTTPS_GIT = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\.git)?$/;
 var VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
 var PLUGIN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -30288,7 +30292,7 @@ function reaMcpServer(o2) {
   };
 }
 function reaSetupHint(configDir, entry) {
-  return entry === void 0 ? "install the pinned REA package first (studio research install), then run its setup for the crew config dir" : `run CLAUDE_CONFIG_DIR=${configDir} node ${entry} setup --client claude_code --dry-run in a terminal, read the plan, then the same with --yes`;
+  return entry === void 0 ? "REA installs on first use after one confirmation (or studio setup research); then run its setup for the crew config dir" : `run CLAUDE_CONFIG_DIR=${configDir} node ${entry} setup --client claude_code --dry-run in a terminal, read the plan, then the same with --yes`;
 }
 function renderReaBrief(o2) {
   const open4 = o2.classes.length > 0 ? o2.classes.join(", ") : "(none)";
@@ -31943,6 +31947,15 @@ var RULES = [
       return reset2 === void 0 || reset2 === "unknown" ? void 0 : { reset: reset2 };
     }
   ],
+  [
+    /^usage limit on (\S+) until (.+?); nothing launches on it$/,
+    "usage_label",
+    (m) => {
+      const label = value(m[1]);
+      const reset2 = value(m[2]);
+      return label === void 0 || reset2 === void 0 ? void 0 : { label, reset: reset2 };
+    }
+  ],
   [/^usage limit state is unreadable/, "limits_unreadable"],
   [/^usage\.json is unreadable/, "usage_unreadable"],
   [/^credential provider returned nothing/, "provider_empty"],
@@ -32241,6 +32254,30 @@ function matchLimitText(text) {
   return { kind, ...resetsAt ? { resetsAt } : {} };
 }
 var isObject2 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+function rateLimitInfo(ev) {
+  if (isObject2(ev.rate_limit_info)) return ev.rate_limit_info;
+  const params = ev.api_error_params;
+  return isObject2(params) && isObject2(params.rate_limit_info) ? params.rate_limit_info : void 0;
+}
+function rejectedWindow(info) {
+  if (info?.status !== "rejected") return void 0;
+  const type = typeof info.rateLimitType === "string" ? info.rateLimitType : "";
+  const reset2 = info.resetsAt;
+  const raw = typeof reset2 === "number" && Number.isFinite(reset2) ? String(Math.trunc(reset2)) : typeof reset2 === "string" ? reset2.slice(0, MAX_RESET_CHARS) : void 0;
+  return {
+    kind: type.startsWith("seven_day") ? "weekly" : "session",
+    ...raw ? { resetsAt: raw } : {}
+  };
+}
+function structuredLimit(ev, text) {
+  const window = rejectedWindow(rateLimitInfo(ev));
+  const usage = ev.api_error === "usage_limit_reached";
+  if (!usage && !(ev.api_error_status === 429 && window !== void 0)) return void 0;
+  if (window?.resetsAt !== void 0) return window;
+  const fromText = matchLimitText(text);
+  return fromText ?? window ?? { kind: "session" };
+}
+var absoluteReset = (s) => s !== void 0 && (/^\d{10}$|^\d{13}$/.test(s) || ISO_TIME.test(s));
 function detectLimit(logLine2) {
   const line4 = logLine2.trimEnd();
   let ev;
@@ -32260,16 +32297,23 @@ function detectLimit(logLine2) {
     };
   }
   if (ev.type === "result") {
+    if (ev.is_error === true) {
+      const structured = structuredLimit(ev, ev.result);
+      if (structured) return structured;
+    }
     return matchLimitText(ev.error) ?? (ev.is_error === true ? matchLimitText(ev.result) : void 0);
   }
-  if (ev.type === "assistant" && (ev.isApiErrorMessage === true || typeof ev.error === "string")) {
+  if (ev.type === "assistant" && (ev.isApiErrorMessage === true || ev.is_api_error_message === true || typeof ev.error === "string")) {
     const content = isObject2(ev.message) ? ev.message.content : void 0;
-    if (!Array.isArray(content)) return void 0;
-    for (const block of content) {
-      if (isObject2(block) && block.type === "text") {
-        const hit = matchLimitText(block.text);
-        if (hit) return hit;
-      }
+    const texts = Array.isArray(content) ? content.filter((b) => isObject2(b) && b.type === "text").map((b) => b.text) : [];
+    const structured = structuredLimit(
+      ev,
+      texts.find((t) => matchLimitText(t) !== void 0)
+    );
+    if (structured) return structured;
+    for (const text of texts) {
+      const hit = matchLimitText(text);
+      if (hit) return hit;
     }
   }
   return void 0;
@@ -32285,6 +32329,25 @@ function parkUntil(resetsAt, now) {
   if (Number.isNaN(t) || t <= now.getTime() || t > now.getTime() + MAX_PARK_MS) return fallback;
   return new Date(t);
 }
+function limitTime(iso, timezone) {
+  const at2 = new Date(iso);
+  if (Number.isNaN(at2.getTime())) return iso;
+  const format2 = (timeZone) => new Intl.DateTimeFormat("sv-SE", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).format(at2);
+  try {
+    return format2(timezone);
+  } catch {
+    return format2(void 0);
+  }
+}
+var usageLimitLine = (label, parkedUntil, timezone) => `usage limit on ${label} until ${limitTime(parkedUntil, timezone)}; nothing launches on it`;
 var limitsFile = (ownerRoot) => join7(ownerRoot, "limits.json");
 function readLimits(ownerRoot) {
   if (ownerFileHeld(ownerRoot, "limits.json")) return { ok: false };
@@ -32367,7 +32430,9 @@ function parsedEvent(line4) {
   }
 }
 function showsRecovery(ev) {
-  if (ev?.type === "assistant") return ev.isApiErrorMessage !== true && ev.error === void 0;
+  if (ev?.type === "assistant") {
+    return ev.isApiErrorMessage !== true && ev.is_api_error_message !== true && ev.error === void 0;
+  }
   if (ev?.type === "result") return ev.is_error !== true;
   return false;
 }
@@ -32381,11 +32446,20 @@ function scanLogForLimit(stateRoot, id, from) {
   if (range.start > from) lines2.shift();
   let recovered = false;
   let retry;
-  for (const line4 of lines2.reverse()) {
+  const reversed = lines2.reverse();
+  for (const [i2, line4] of reversed.entries()) {
     const hit = detectLimit(line4);
     const ev = parsedEvent(line4);
     if (hit) {
-      if (ev?.type !== "system") return hit;
+      if (ev?.type !== "system") {
+        if (absoluteReset(hit.resetsAt)) return hit;
+        for (const earlier of reversed.slice(i2 + 1)) {
+          const e = parsedEvent(earlier);
+          const window = e === void 0 ? void 0 : rejectedWindow(rateLimitInfo(e));
+          if (window?.resetsAt !== void 0 && absoluteReset(window.resetsAt)) return window;
+        }
+        return hit;
+      }
       if (!recovered) retry ??= { ...hit, retryOnly: true };
     } else if (showsRecovery(ev)) recovered = true;
   }
@@ -33847,7 +33921,12 @@ async function parksHold(parks, ownerConfig, ports, owner) {
   const labels = Object.keys(parks);
   const command = ownerConfig.crewCredentialCommand;
   if (command === void 0) {
-    const park = parks[DEFAULT_LABEL];
+    let label = DEFAULT_LABEL;
+    try {
+      if (listAccounts(owner).length > 0) label = activeLabel(owner) ?? DEFAULT_LABEL;
+    } catch {
+    }
+    const park = parks[label];
     return park ? allParkedLine(park.parkedUntil) : void 0;
   }
   if (labels.length === 0) return void 0;
@@ -37075,12 +37154,19 @@ var reaInstallDir = (ownerRoot, version2) => {
   if (!REA_VERSION_RE.test(version2)) throw new Error(`rea_version ${version2} is not exact`);
   return join21(ownerRoot, "rea", version2);
 };
-function npmEnv(ownerRoot, home, path10) {
+var NPMRC_USER = ".npmrc-user";
+var NPMRC_GLOBAL = ".npmrc-global";
+function npmStagingEnv(ownerRoot, staging, path10) {
+  const home = ensureStateDir(ownerRoot, join21(staging, ".home"));
+  const userconfig = join21(staging, NPMRC_USER);
+  const globalconfig = join21(staging, NPMRC_GLOBAL);
+  writeStateFile(ownerRoot, userconfig, "");
+  writeStateFile(ownerRoot, globalconfig, "");
   return {
     PATH: path10,
     HOME: home,
-    npm_config_userconfig: "/dev/null",
-    npm_config_globalconfig: "/dev/null",
+    npm_config_userconfig: userconfig,
+    npm_config_globalconfig: globalconfig,
     npm_config_cache: join21(ownerRoot, "rea", "npm-cache"),
     npm_config_update_notifier: "false",
     npm_config_fund: "false",
@@ -37091,8 +37177,7 @@ async function installRea(o2) {
   const dir = reaInstallDir(o2.ownerRoot, o2.version);
   const staging = `${dir}.staging`;
   removeStateEntry(o2.ownerRoot, staging);
-  ensureStateDir(o2.ownerRoot, join21(staging, ".home"));
-  const env = npmEnv(o2.ownerRoot, join21(staging, ".home"), o2.path);
+  const env = npmStagingEnv(o2.ownerRoot, staging, o2.path);
   try {
     const view = await o2.npm.run(
       ["view", `${REA_PACKAGE}@${o2.version}`, "dist.integrity", "--json"],
@@ -37144,7 +37229,9 @@ async function installRea(o2) {
       `${JSON.stringify({ package: REA_PACKAGE, version: o2.version, integrity, ...o2.full === true ? { full: true } : {}, installedAt: o2.now.toISOString() }, null, 2)}
 `
     );
-    removeStateEntry(o2.ownerRoot, join21(staging, ".home"));
+    for (const p of [".home", NPMRC_USER, NPMRC_GLOBAL]) {
+      removeStateEntry(o2.ownerRoot, join21(staging, p));
+    }
     const previous = `${dir}.previous`;
     removeStateEntry(o2.ownerRoot, previous);
     assertStatePath(o2.ownerRoot, dir);
@@ -37191,7 +37278,7 @@ function ownedPlain(path10, kind, uid) {
 }
 function verifyReaInstall(ownerRoot, version2, uid = process.getuid?.(), mode = "static") {
   const dir = reaInstallDir(ownerRoot, version2);
-  const hint = `it installs on the first launch that needs it, after one confirmation by the owner (or studio research install) of ${REA_PACKAGE}@${version2}`;
+  const hint = `it installs on the first launch that needs it, after one confirmation by the owner (or studio setup research) of ${REA_PACKAGE}@${version2}`;
   try {
     ownedPlain(dir, "dir", uid);
     ownedPlain(join21(dir, REA_RECORD), "file", uid);
@@ -41386,12 +41473,26 @@ function reaState(config2, ownerConfig, configDir, ownerRoot) {
       entry = got.entry;
       installed = `yes (${got.integrity.slice(0, 19)}...)`;
     } catch (e) {
-      installed = `no: ${e.message.replace(/^[^:]*: /, "").replace(/; .*$/, "")}; it installs on first use after one confirmation (or studio research install)`;
+      installed = `no: ${e.message.replace(/^[^:]*: /, "").replace(/; .*$/, "")}; it installs on first use after one confirmation (or studio setup research)`;
     }
   }
+  let researchRoots;
+  if (roots.length === 0) {
+    researchRoots = "none granted: the first research launch asks for a folder after one confirmation (or studio setup research)";
+  } else {
+    const missing = roots.filter((r) => {
+      try {
+        return !statSync5(r).isDirectory();
+      } catch {
+        return true;
+      }
+    }).length;
+    researchRoots = `${roots.length} granted${missing === 0 ? "" : `, ${missing} missing on disk`}`;
+  }
   let artifacts;
-  if (config2?.research === void 0) artifacts = "not set in studio.yaml (research.artifacts)";
-  else if (roots.length === 0) artifacts = "refused: no research_roots in the owner config";
+  if (config2?.research === void 0) {
+    artifacts = "not set (optional: research items name their folder with --artifacts)";
+  } else if (roots.length === 0) artifacts = "refused: no research_roots in the owner config";
   else {
     try {
       const real = realpathSync7(config2.research.artifacts);
@@ -41430,15 +41531,28 @@ function reaState(config2, ownerConfig, configDir, ownerRoot) {
     // Trust mode (default): every class, full install. Strict: per-item classes, static install.
     mode: ownerConfig?.research.trust === false ? "strict" : "trust",
     installed,
+    researchRoots,
     analysisDirectory: artifacts,
     skill: skillState(configDir, REA_SKILL),
     registeredInCrewConfig: registered,
     engineEnvironment: Object.keys(ownerConfig?.reaEnv ?? {}).sort(),
+    knownTools: REA_KNOWN_TOOLS.length,
     staticTools: REA_STATIC_TOOLS.length,
-    deniedByDefault: REA_KNOWN_TOOLS.length - REA_STATIC_TOOLS.length,
+    // Trust mode opens every class to every item; strict mode only what an item was allowed.
+    deniedByDefault: ownerConfig?.research.trust === false ? REA_KNOWN_TOOLS.length - REA_STATIC_TOOLS.length : 0,
     classes: [...REA_CLASS_NAMES],
     setup: configDir === void 0 ? null : reaSetupHint(configDir, entry)
   };
+}
+function reaDoctorLines(rea) {
+  const tools = rea.mode === "trust" ? `all ${rea.knownTools} known ones allowed (trust mode: every class, ${rea.classes.join(", ")})` : `${rea.staticTools} static allowed, ${rea.deniedByDefault} known ones denied unless an item allows their class (strict mode: studio research allow; ${rea.classes.join(", ")})`;
+  return [
+    `rea: ${rea.server} (${rea.pinnedBy}), ${rea.mode} mode, installed: ${rea.installed}`,
+    `rea research_roots (owner config): ${rea.researchRoots}; studio.yaml research.artifacts: ${rea.analysisDirectory}`,
+    `rea skill in the crew config dir: ${rea.skill}; server registered there: ${rea.registeredInCrewConfig}`,
+    `rea tools: ${tools}; engine variables set: ${rea.engineEnvironment.join(", ") || "none"}`,
+    ...rea.skill === "installed" || rea.setup === null ? [] : [`rea setup: ${rea.setup}`]
+  ];
 }
 var BOARD_TRACKED_LINE = "warning: .studio/board.yaml is tracked by git, but the board is lead-machine state that Studio edits in the working tree: run git rm --cached .studio/board.yaml, add /.studio/board.yaml to .gitignore and commit both; studio roadmap --write writes the shareable ROADMAP.md";
 async function boardTrackedState(project, ports) {
@@ -41591,12 +41705,7 @@ async function runDoctor(o2) {
       `notify: ${report.notify}`,
       `notifications: ${report.notifications}`,
       `allow_api_billing: ${report.allowApiBilling ? "on" : "off"}`,
-      ...report.rea === null ? [] : [
-        `rea: ${report.rea.server} (${report.rea.pinnedBy}), installed: ${report.rea.installed}; analysis directory ${report.rea.analysisDirectory}`,
-        `rea skill in the crew config dir: ${report.rea.skill}; server registered there: ${report.rea.registeredInCrewConfig}`,
-        `rea tools: ${report.rea.staticTools} static allowed, ${report.rea.deniedByDefault} known ones denied unless an item allows their class (${report.rea.classes.join(", ")}); engine variables set: ${report.rea.engineEnvironment.join(", ") || "none"}`,
-        ...report.rea.skill === "installed" || report.rea.setup === null ? [] : [`rea setup: ${report.rea.setup}`]
-      ],
+      ...report.rea === null ? [] : reaDoctorLines(report.rea),
       `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(", ") || "none"}`
     ];
     o2.stdout(`${lines2.map(safe).join("\n")}
@@ -44476,7 +44585,7 @@ function messagesOf(projectKey, snapshot, t) {
   const out = [];
   for (const line4 of snapshot.forOwner) {
     if (line4.id === "account-block" && notes.length > 0) continue;
-    const kind = line4.id === "account-block" ? "account-block" : line4.id === "usage-limit" ? "usage-limit" : "owner-item";
+    const kind = line4.id === "account-block" ? "account-block" : line4.id === "usage-limit" || line4.id.startsWith("usage-limit:") ? "usage-limit" : "owner-item";
     out.push({
       key: `${projectKey}:${line4.id}:${line4.title}`,
       kind,
@@ -50165,15 +50274,23 @@ async function runCli(argv, deps) {
         ownerRoot: ownerRoot(),
         ports
       });
-      for (const s of r.stopped) {
-        stderr(
-          `note: ${s.item} stopped at a ${s.kind} limit, ${s.label} parked until ${s.parkedUntil}
-`
-        );
+      let timezone;
+      try {
+        timezone = r.stopped.length === 0 ? void 0 : resolveZone(loadOwnerConfig(owner).crewLabelLimits.timezone);
+      } catch {
+        timezone = void 0;
+      }
+      const limited = r.stopped.map((s) => ({
+        item: s.item,
+        line: usageLimitLine(s.label, s.parkedUntil, timezone)
+      }));
+      for (const l of limited) {
+        stderr(`note: ${l.line} (${l.item} back to ready, its relaunch kept)
+`);
       }
       for (const e of r.errors) stderr(`error: ${e}
 `);
-      return b.lockFailed;
+      return { lockFailed: b.lockFailed, limited };
     };
     const crewRecordsProblem = () => {
       try {
@@ -50560,7 +50677,7 @@ async function runCli(argv, deps) {
       return { item: item.id, label, offer };
     };
     const launch = async (id, asker) => {
-      if (await reconcile()) {
+      if ((await reconcile()).lockFailed) {
         throw new HeldError(
           "another Studio process is reconciling account blocks; refusing to launch, try again"
         );
@@ -51708,8 +51825,13 @@ async function runCli(argv, deps) {
         }
         if (rows2.length > 0) out.releases = rows2;
       };
+      const limitsPhase = async () => {
+        for (const l of (await reconcile()).limited)
+          out.held.push({ item: l.item, reason: l.line });
+      };
       try {
         for (const [name, body] of [
+          ["limits", limitsPhase],
           ["recover", recoverPhase],
           ["review timeouts", reviewTimeoutPhase],
           ["contracts", contractsPhase],
@@ -52606,6 +52728,14 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
         return 0;
       }
       case "collect": {
+        const stopped = (await reconcile()).limited.find(
+          (l) => rest[0] === void 0 || l.item === rest[0]
+        );
+        if (stopped !== void 0) {
+          stderr(`studio: ${stopped.item}: ${stopped.line}; back to ready, nothing to collect
+`);
+          return 1;
+        }
         const r = await collect2(rest[0]);
         if (r.kind === "moved") {
           print(r.out);
@@ -54039,8 +54169,16 @@ function buildSnapshot(root, ownerRoot, board, capacity, queue, now, hold, limit
     },
     forOwner: [
       ...board.items.filter((i2) => i2.ownerOnly && i2.status !== "merged" && i2.status !== "dropped").map((i2) => ({ id: i2.id, title: i2.title })),
-      // Exactly one line however many items wait or labels are blocked; a block outranks a limit.
-      ...blocked !== void 0 ? [ownerLine("account-block", blocked)] : hold === void 0 ? [] : [ownerLine("usage-limit", hold)],
+      // One line however many labels are blocked, or all parked; a block outranks a limit.
+      ...blocked !== void 0 ? [ownerLine("account-block", blocked)] : hold !== void 0 ? [ownerLine("usage-limit", hold)] : (
+        // Some labels parked, others free (a provider's): one line per parked label.
+        Object.entries(limits).filter(([, p]) => p.parkedUntil !== void 0).sort(([a2], [b]) => a2 < b ? -1 : a2 > b ? 1 : 0).map(
+          ([label, p]) => ownerLine(
+            `usage-limit:${label}`,
+            usageLimitLine(label, p.parkedUntil, timezone)
+          )
+        )
+      ),
       ...extra.crewRecordsUnreadable ? [
         ownerLine(
           "crew-records",

@@ -28,6 +28,15 @@ const RULES: readonly Rule[] = [
       return reset === undefined || reset === 'unknown' ? undefined : { reset };
     },
   ],
+  [
+    /^usage limit on (\S+) until (.+?); nothing launches on it$/,
+    'usage_label',
+    (m) => {
+      const label = value(m[1]);
+      const reset = value(m[2]);
+      return label === undefined || reset === undefined ? undefined : { label, reset };
+    },
+  ],
   [/^usage limit state is unreadable/, 'limits_unreadable'],
   [/^usage\.json is unreadable/, 'usage_unreadable'],
   [/^credential provider returned nothing/, 'provider_empty'],

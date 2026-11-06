@@ -13,8 +13,8 @@
 // Self-contained on purpose: no import of Studio's sources or of anything the working directory
 // could provide.
 import { spawn } from 'node:child_process';
-import { lstatSync, readFileSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 
 const fail = (why) => {
   process.stderr.write(`studio-rea-server: ${why}\n`);
@@ -59,6 +59,19 @@ for (const [k, v] of Object.entries(spec.env ?? {})) {
   engine[k] = v;
 }
 
+// npm refuses one file as both user and global config (`double-loading config "/dev/null"`): each
+// gets its own empty file in the run's config folder. `wx` never follows a link; an existing file
+// must be the owner's plain one.
+const npmrc = (name) => {
+  const file = join(run.config, name);
+  try {
+    writeFileSync(file, '', { mode: 0o600, flag: 'wx' });
+  } catch (e) {
+    if (e?.code !== 'EEXIST') fail(`cannot write ${file}`);
+  }
+  return plain(file, 'file');
+};
+
 const env = {
   PATH: spec.path,
   ...(typeof spec.lang === 'string' && /^[A-Za-z0-9_.@-]{1,40}$/.test(spec.lang)
@@ -72,8 +85,8 @@ const env = {
   XDG_CONFIG_HOME: run.config,
   XDG_DATA_HOME: run.data,
   XDG_STATE_HOME: run.state,
-  npm_config_userconfig: '/dev/null',
-  npm_config_globalconfig: '/dev/null',
+  npm_config_userconfig: npmrc('npmrc-user'),
+  npm_config_globalconfig: npmrc('npmrc-global'),
   npm_config_cache: run.cache,
   npm_config_update_notifier: 'false',
   ...engine,

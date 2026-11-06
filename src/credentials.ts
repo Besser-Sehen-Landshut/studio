@@ -12,6 +12,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, sep } from 'node:path';
+import { activeLabel, listAccounts } from './accounts.js';
 import {
   crewTokenFile,
   type OwnerConfig,
@@ -330,7 +331,14 @@ async function parksHold(
   const labels = Object.keys(parks);
   const command = ownerConfig.crewCredentialCommand;
   if (command === undefined) {
-    const park = parks[DEFAULT_LABEL];
+    // Without a provider a launch takes the active account Studio keeps, else the default label.
+    let label = DEFAULT_LABEL;
+    try {
+      if (listAccounts(owner).length > 0) label = activeLabel(owner) ?? DEFAULT_LABEL;
+    } catch {
+      // unreadable accounts: the launch itself refuses with the reason
+    }
+    const park = parks[label];
     return park ? allParkedLine(park.parkedUntil) : undefined;
   }
   if (labels.length === 0) return undefined;

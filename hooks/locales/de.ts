@@ -148,6 +148,8 @@ export default defineLocale({
           return 'Nutzungslimit: jede Crew-Anmeldung ist an ihrem Limit';
         case 'usage_parked':
           return `Nutzungslimit: keine Crew-Anmeldung frei; frühestens wieder ${p.reset ?? 'unbekannt'}`;
+        case 'usage_label':
+          return `Nutzungslimit bei ${p.label} bis ${p.reset}; darauf startet nichts`;
         case 'limits_unreadable':
           return 'limits.json ist nicht lesbar: keine Crew startet';
         case 'usage_unreadable':

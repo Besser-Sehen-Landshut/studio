@@ -111,6 +111,10 @@ ${body}
 
 async function fromServer(entry) {
   const dir = mkdtempSync(join(tmpdir(), 'rea-schemas-'));
+  // npm refuses one file as both user and global config: two distinct empty ones.
+  for (const f of ['.npmrc-user', '.npmrc-global']) {
+    writeFileSync(join(dir, f), '', { mode: 0o600, flag: 'wx' });
+  }
   try {
     return await new Promise((resolve, reject) => {
       const cp = spawn(process.execPath, [entry, 'mcp'], {
@@ -119,8 +123,8 @@ async function fromServer(entry) {
           PATH: process.env.PATH ?? '/usr/bin:/bin',
           HOME: dir,
           TMPDIR: dir,
-          npm_config_userconfig: '/dev/null',
-          npm_config_globalconfig: '/dev/null',
+          npm_config_userconfig: join(dir, '.npmrc-user'),
+          npm_config_globalconfig: join(dir, '.npmrc-global'),
         },
         stdio: ['pipe', 'pipe', 'inherit'],
       });

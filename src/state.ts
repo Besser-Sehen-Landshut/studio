@@ -104,7 +104,8 @@ export interface StateSnapshot {
   counts: { ready: number; queued: number };
   /**
    * Owner-only items that are not merged or dropped, plus at most one `account-block` or
-   * `usage-limit` line. `title` is English (an item's own title, or Studio's line); Studio's lines
+   * `usage-limit` line, or, while some labels are parked and others free, one
+   * `usage-limit:<label>` line per parked label. `title` is English (an item's own title, or Studio's line); Studio's lines
    * also carry `code` and `params`, which the pane and the messages word in the owner's language.
    */
   forOwner: OwnerLine[];

@@ -43,6 +43,7 @@ import {
 import {
   installRea,
   itemReaClasses,
+  npmStagingEnv,
   prepareReaRun,
   readReaAllow,
   removeReaRun,
@@ -51,7 +52,7 @@ import {
   writeReaSpec,
 } from '../src/rea-install.js';
 import { REA_TOOL_SCHEMAS } from '../src/rea-schemas.js';
-import { reaState } from '../src/secret-command.js';
+import { reaDoctorLines, reaState } from '../src/secret-command.js';
 import { fakeReaInstall, REA_TEST_INTEGRITY } from './rea-fixture.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-rea-')));
@@ -783,7 +784,82 @@ describe('studio doctor on REA', () => {
     expect(s?.analysisDirectory).toMatch(/refused/);
     expect(JSON.stringify(s)).not.toContain(root);
   });
+
+  it('says every class is allowed in trust mode (the default), and per item only in strict mode', () => {
+    const trust = reaState(
+      undefined,
+      ownerConfigSchema.parse({ researchRoots: [root] }),
+      undefined,
+    );
+    expect(trust?.mode).toBe('trust');
+    const lines = reaDoctorLines(trust ?? fail());
+    const tools = lines.find((l) => l.startsWith('rea tools:'));
+    expect(tools).toContain(`all ${REA_KNOWN_TOOLS.length} known ones allowed (trust mode`);
+    expect(tools).not.toMatch(/denied/);
+    expect(lines[0]).toContain('trust mode');
+
+    const strict = reaState(
+      undefined,
+      ownerConfigSchema.parse({ researchRoots: [root], research: { trust: false } }),
+      undefined,
+    );
+    const strictTools = reaDoctorLines(strict ?? fail()).find((l) => l.startsWith('rea tools:'));
+    expect(strictTools).toContain(
+      `${REA_STATIC_TOOLS.length} static allowed, ${REA_KNOWN_TOOLS.length - REA_STATIC_TOOLS.length} known ones denied unless an item allows their class (strict mode`,
+    );
+  });
+
+  it('reports the owner’s research_roots as the grant and studio.yaml research.artifacts as optional', () => {
+    const granted = reaState(
+      undefined,
+      ownerConfigSchema.parse({ researchRoots: [root, join(root, 'gone')] }),
+      undefined,
+    );
+    const line = reaDoctorLines(granted ?? fail()).find((l) => l.startsWith('rea research_roots'));
+    expect(line).toBe(
+      'rea research_roots (owner config): 2 granted, 1 missing on disk; studio.yaml research.artifacts: not set (optional: research items name their folder with --artifacts)',
+    );
+    expect(line).not.toContain(root);
+
+    const none = reaState(
+      studioConfigSchema.parse({
+        studio: 1,
+        primaryRepo: 'org/app',
+        repos: ['org/app'],
+        ci: {
+          provider: 'github',
+          runners: 'github-hosted',
+          runnerLabels: [],
+          capacity: { total: 8, mergeMaxBusy: 5, checkTwiceSeconds: 30 },
+        },
+        merge: { strategy: 'studio-queue', contractPaths: [] },
+        roles: {
+          researcher: {
+            model: 'sonnet',
+            wip: 1,
+            skills: { required: [], allowed: [], denied: [] },
+          },
+        },
+        research: { artifacts: root },
+      }),
+      ownerConfigSchema.parse({}),
+      undefined,
+      join(root, 'no-owner-state'),
+    );
+    const text = reaDoctorLines(none ?? fail()).join('\n');
+    expect(text).toContain(
+      'rea research_roots (owner config): none granted: the first research launch asks for a folder after one confirmation (or studio setup research)',
+    );
+    expect(text).toContain(
+      'it installs on first use after one confirmation (or studio setup research)',
+    );
+    expect(text).not.toContain('studio research install');
+  });
 });
+
+function fail(): never {
+  throw new Error('expected a REA state');
+}
 
 describe('the guard reads values, not key names, and resolves every path', () => {
   const dir = join(root, 'v');
@@ -1088,6 +1164,29 @@ describe('the REA install', () => {
   };
   const now = new Date('2026-11-05T10:00:00Z');
 
+  // The fake npm above accepts any environment; the real one refused `/dev/null` as both user and
+  // global config (`double-loading config`), which only showed up at the owner's first install.
+  const npmOnPath = spawnSync('npm', ['--version'], { encoding: 'utf8' }).status === 0;
+  it.skipIf(!npmOnPath)('gives the real npm an environment it accepts', () => {
+    const owner = join(root, 'inst-real-npm');
+    const staging = join(owner, 'rea', '6.7.0.staging');
+    const env = npmStagingEnv(owner, staging, process.env.PATH ?? '/usr/bin:/bin');
+    expect(env.npm_config_userconfig).not.toBe(env.npm_config_globalconfig);
+    for (const f of [env.npm_config_userconfig, env.npm_config_globalconfig]) {
+      const st = lstatSync(f ?? '');
+      expect(st.isFile() && st.size === 0 && (st.mode & 0o777) === 0o600).toBe(true);
+    }
+    const r = spawnSync('npm', ['config', 'get', 'registry'], {
+      cwd: staging,
+      env,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    expect(r.stderr).not.toMatch(/double-loading/);
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe('https://registry.npmjs.org/');
+  });
+
   it('installs the pinned version into the owner state with npm config and tokens kept out', async () => {
     const owner = join(root, 'inst-ok');
     const { npm, calls } = fakeNpm({});
@@ -1101,8 +1200,9 @@ describe('the REA install', () => {
     expect(got).toEqual({ dir: join(owner, 'rea', '6.7.0'), integrity: REA_TEST_INTEGRITY });
     expect(calls.map((c) => c.args[0])).toEqual(['view', 'install']);
     for (const c of calls) {
-      expect(c.env.npm_config_userconfig).toBe('/dev/null');
-      expect(c.env.npm_config_globalconfig).toBe('/dev/null');
+      const staging = join(owner, 'rea', '6.7.0.staging');
+      expect(c.env.npm_config_userconfig).toBe(join(staging, '.npmrc-user'));
+      expect(c.env.npm_config_globalconfig).toBe(join(staging, '.npmrc-global'));
       expect(Object.keys(c.env).some((k) => /TOKEN|AUTH/i.test(k))).toBe(false);
       expect(c.cwd.startsWith(join(owner, 'rea'))).toBe(true);
     }
@@ -1111,6 +1211,10 @@ describe('the REA install', () => {
     expect(calls[1]?.args).toEqual(expect.arrayContaining(['--ignore-scripts', '--omit=optional']));
     const record = JSON.parse(readFileSync(join(got.dir, 'studio-rea.json'), 'utf8'));
     expect(record).toMatchObject({ version: '6.7.0', integrity: REA_TEST_INTEGRITY });
+    // npm's own files stay behind in the staging directory.
+    for (const f of ['.home', '.npmrc-user', '.npmrc-global']) {
+      expect(() => lstatSync(join(got.dir, f))).toThrow();
+    }
     expect(verifyReaInstall(owner, '6.7.0').entry).toBe(
       join(got.dir, 'node_modules', 'rea-agents', 'scripts', 'rea.mjs'),
     );
@@ -1253,7 +1357,9 @@ describe('the REA server wrapper', () => {
     expect(got.env.XDG_CONFIG_HOME).toBe(run.config);
     expect(got.env.XDG_DATA_HOME).toBe(run.data);
     expect(got.env.XDG_STATE_HOME).toBe(run.state);
-    expect(got.env.npm_config_userconfig).toBe('/dev/null');
+    expect(got.env.npm_config_userconfig).toBe(join(run.config, 'npmrc-user'));
+    expect(got.env.npm_config_globalconfig).toBe(join(run.config, 'npmrc-global'));
+    expect(readFileSync(join(run.config, 'npmrc-user'), 'utf8')).toBe('');
     expect(got.env.JAVA_HOME).toBe('/opt/jdk');
     expect(got.env.npm_config_registry).toBeUndefined();
     expect(out).not.toMatch(/gh-secret|oauth-secret|api-secret|crew-home|crew-tmp/);

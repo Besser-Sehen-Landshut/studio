@@ -51,7 +51,7 @@ function messagesOf(projectKey: string, snapshot: StateSnapshot, t: Strings): Me
     const kind: Kind =
       line.id === 'account-block'
         ? 'account-block'
-        : line.id === 'usage-limit'
+        : line.id === 'usage-limit' || line.id.startsWith('usage-limit:')
           ? 'usage-limit'
           : 'owner-item';
     out.push({
