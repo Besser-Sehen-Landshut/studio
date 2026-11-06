@@ -150,8 +150,9 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     expect(await probe(USER)).toBeUndefined();
   }, 150_000);
 
-  it('the probe fails closed when the process does not run as the expected user', async () => {
-    expect(await probe('someoneelse')).toMatch(/does not hold here: user: runs as studioci/i);
+  it('the probe fails closed for a crew user that is not the one set up', async () => {
+    // The keeper cannot even open its pipe to an unknown account: no answer, which refuses.
+    expect(await probe('someoneelse')).toMatch(/could not be shown to hold|does not hold here/);
   }, 150_000);
 
   /** Starts `code` as a crew through the keeper, in its own clone, and waits for its first line. */

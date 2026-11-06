@@ -654,6 +654,8 @@ public static class StudioJob {
   }
 }
 '@
+function Note([string]$line) { [Console]::Error.WriteLine("studio keeper: $line") }
+Note 'started'
 $raw = [Console]::In.ReadToEnd()
 $nl = $raw.IndexOf([char]10)
 if ($nl -lt 0) { throw 'no spec on stdin' }
@@ -674,9 +676,11 @@ try {
   $c = Import-Clixml -LiteralPath $Cred
   $p = Start-Process -FilePath $Node -ArgumentList @(('"' + $HostBin + '"'), $name) -Credential $c -WorkingDirectory $Cwd -WindowStyle Hidden -PassThru -RedirectStandardOutput $Out -RedirectStandardError $Err
   [StudioJob]::Assign($job, $p.Handle)
+  Note "host $($p.Id) started in the job"
   $wait = $pipe.BeginWaitForConnection($null, $null)
   if (-not $wait.AsyncWaitHandle.WaitOne($WaitSeconds * 1000)) { throw 'the crew host did not connect' }
   $pipe.EndWaitForConnection($wait)
+  Note 'host connected'
   if ([StudioJob]::ClientPid($pipe.SafePipeHandle.DangerousGetHandle()) -ne [uint32]$p.Id) {
     throw 'a process other than the crew host connected'
   }
@@ -687,6 +691,7 @@ try {
   $spec = $null
   $p.WaitForExit()
   $code = $p.ExitCode
+  Note "host ended with $code"
 } catch {
   if ($null -ne $p -and -not $p.HasExited) { $p.Kill() }
   [Console]::Error.WriteLine("studio keeper: $($_.Exception.Message)")
