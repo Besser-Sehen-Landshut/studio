@@ -93,6 +93,43 @@ if (-not $script:planted) { throw 'the hook never ran' }`);
       expect(readFileSync(join(outside, 'owner.txt'), 'utf8')).toBe('the owner');
       expect(run(`(Get-Acl -LiteralPath ${q(outside)}).Sddl`)).toBe(before);
     }, 120_000);
+
+    it('walks 10,000 levels without a stack to overflow, and refuses a tree over its caps clearly', () => {
+      const base = realpathSync(mkdtempSync(join(tmpdir(), 'studio-deep-')));
+      const q = (p: string) => `'${p.replace(/'/g, "''")}'`;
+      const run = (script: string) =>
+        execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+          encoding: 'utf8',
+          env: powershellEnv(process.env),
+          maxBuffer: 16 * 1024 * 1024,
+        });
+      const deep = join(base, 'deep');
+      // 10,000 folders, one inside the other: a path of about 20,000 characters.
+      const make = (root: string, levels: number) =>
+        `$p = '\\\\?\\' + ${q(root)}; for ($i = 0; $i -lt ${levels}; $i++) { $p += '\\a'; [void][IO.Directory]::CreateDirectory($p) }; [IO.File]::WriteAllText($p + '\\end.txt', 'x')`;
+      run(make(deep, 10_000));
+      run(
+        `$ErrorActionPreference = 'Stop'; Add-Type -Path ${q(TREE_SOURCE())}; [StudioTree]::Remove(${q(deep)}, $null)`,
+      );
+      expect(existsSync(deep)).toBe(false);
+      // Over a cap: a clear error at once, nothing crashes.
+      const capped = join(base, 'capped');
+      run(make(capped, 50));
+      expect(() =>
+        run(
+          `$ErrorActionPreference = 'Stop'; Add-Type -Path ${q(TREE_SOURCE())}; [StudioTree]::Remove(${q(capped)}, $null, 20, 1000000)`,
+        ),
+      ).toThrow(/deeper than 20 folders/);
+      expect(() =>
+        run(
+          `$ErrorActionPreference = 'Stop'; Add-Type -Path ${q(TREE_SOURCE())}; [StudioTree]::Remove(${q(capped)}, $null, 1000, 10)`,
+        ),
+      ).toThrow(/more than 10 entries/);
+      run(
+        `$ErrorActionPreference = 'Stop'; Add-Type -Path ${q(TREE_SOURCE())}; [StudioTree]::Remove(${q(capped)}, $null)`,
+      );
+      expect(existsSync(capped)).toBe(false);
+    }, 600_000);
   },
 );
 

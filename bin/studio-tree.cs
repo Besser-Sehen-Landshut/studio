@@ -5,7 +5,9 @@
 // says (FILE_FLAG_BACKUP_SEMANTICS), so a Deny entry the crew set cannot stop it and no new DACL is
 // ever handed down a tree. Paths go to Windows with the \\?\ prefix, so length is no limit.
 // A folder that is not empty when it is deleted (something appeared in it after it was listed)
-// fails the pass; the whole tree is walked again, up to five times.
+// fails the pass; the whole tree is walked again, up to five times. The walk keeps a stack of its
+// own, so no depth overflows it; a tree deeper than MaxDepth folders or with more than MaxEntries
+// entries is refused with a clear error, never retried.
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -83,36 +85,68 @@ public static class StudioTree {
   }
 
   /** Deletes the tree at `path`, a link as the link; `afterList` (tests) runs after each listing. */
+  /** Too deep or too many entries: refused at once, never retried. */
+  public class TooLarge : Exception {
+    public TooLarge(string message) : base(message) { }
+  }
+
+  public const int MaxDepth = 20000;
+  public const long MaxEntries = 5000000;
+
+  /** Deletes the tree at `path`, a link as the link; `afterList` (tests) runs after each listing. */
   public static void Remove(string path, Action<string> afterList) {
+    Remove(path, afterList, MaxDepth, MaxEntries);
+  }
+
+  public static void Remove(string path, Action<string> afterList, int maxDepth, long maxEntries) {
     Enable("SeBackupPrivilege");
     Enable("SeRestorePrivilege");
     string p = Long(path);
     for (int pass = 0; ; pass++) {
       try {
-        RemoveOne(p, afterList);
+        Walk(p, afterList, maxDepth, maxEntries);
         return;
+      } catch (TooLarge) {
+        throw;
       } catch (Exception) {
         if (pass >= 4) throw;
       }
     }
   }
 
-  static void RemoveOne(string p, Action<string> afterList) {
-    SafeFileHandle h = CreateFileW(p, DELETE | LIST_OR_READ | READ_ATTRIBUTES | WRITE_ATTRIBUTES | SYNCHRONIZE, SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, BACKUP_SEMANTICS | OPEN_REPARSE_POINT, IntPtr.Zero);
-    if (h.IsInvalid) {
-      int e = Marshal.GetLastWin32Error();
-      if (e == 2 || e == 3) return;
-      throw new Win32Exception(e, p);
-    }
-    using (h) {
-      BasicInfo info;
-      if (!GetFileInformationByHandleEx(h, FILE_BASIC_INFO, out info, (uint)Marshal.SizeOf(typeof(BasicInfo)))) throw new Win32Exception(Marshal.GetLastWin32Error(), p);
-      bool folder = (info.Attributes & ATTR_DIRECTORY) != 0 && (info.Attributes & ATTR_REPARSE_POINT) == 0;
-      if (folder) {
-        foreach (string name in List(h, p)) RemoveOne(p + "\\" + name, afterList);
-        if (afterList != null) afterList(p);
+  struct Step { public string Path; public int Depth; public bool Listed; }
+
+  // One walk, with a stack of its own (no recursion, so no depth can overflow it): a folder is
+  // listed when it is first taken off the stack and deleted when it comes off again, after all it
+  // held. Everything else is deleted at once.
+  static void Walk(string root, Action<string> afterList, int maxDepth, long maxEntries) {
+    Stack<Step> todo = new Stack<Step>();
+    todo.Push(new Step { Path = root, Depth = 0, Listed = false });
+    long seen = 0;
+    while (todo.Count > 0) {
+      Step step = todo.Pop();
+      SafeFileHandle h = CreateFileW(step.Path, DELETE | LIST_OR_READ | READ_ATTRIBUTES | WRITE_ATTRIBUTES | SYNCHRONIZE, SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, BACKUP_SEMANTICS | OPEN_REPARSE_POINT, IntPtr.Zero);
+      if (h.IsInvalid) {
+        int e = Marshal.GetLastWin32Error();
+        if (e == 2 || e == 3) continue;
+        throw new Win32Exception(e, step.Path);
       }
-      Delete(h, p, info);
+      using (h) {
+        BasicInfo info;
+        if (!GetFileInformationByHandleEx(h, FILE_BASIC_INFO, out info, (uint)Marshal.SizeOf(typeof(BasicInfo)))) throw new Win32Exception(Marshal.GetLastWin32Error(), step.Path);
+        bool folder = (info.Attributes & ATTR_DIRECTORY) != 0 && (info.Attributes & ATTR_REPARSE_POINT) == 0;
+        if (folder && !step.Listed) {
+          if (step.Depth > maxDepth) throw new TooLarge("the tree is deeper than " + maxDepth + " folders: " + root);
+          List<string> names = List(h, step.Path);
+          seen += names.Count;
+          if (seen > maxEntries) throw new TooLarge("the tree holds more than " + maxEntries + " entries: " + root);
+          if (afterList != null) afterList(step.Path);
+          todo.Push(new Step { Path = step.Path, Depth = step.Depth, Listed = true });
+          foreach (string name in names) todo.Push(new Step { Path = step.Path + "\\" + name, Depth = step.Depth + 1, Listed = false });
+          continue;
+        }
+        Delete(h, step.Path, info);
+      }
     }
   }
 
