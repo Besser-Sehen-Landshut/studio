@@ -15,6 +15,7 @@ import { readBlocksFile } from './limits.js';
 import { classifyDecision, resolveZone } from './pane-data.js';
 import { acquireStateLock, writeStateFile } from './paths.js';
 import type { Http } from './ports.js';
+import type { QueueDone } from './queue.js';
 
 export const PUSHED_FILE = 'pushed.json';
 export const PUSH_LOCK = 'push.lock';
@@ -105,6 +106,9 @@ export interface Decision {
   urgent: boolean;
 }
 
+/** How long an external merge's result stays a decision to push: one push, then it is history. */
+const EXTERNAL_MS = 24 * 60 * 60_000;
+
 const ITEM_RE = /^(?:[A-Z]+-\d+|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#\d+|[A-Za-z0-9._-]{1,64})$/;
 /** Ids only: anything else would be text Studio did not write. */
 const safeId = (s: string): string => (ITEM_RE.test(s) ? s : '?');
@@ -120,8 +124,18 @@ export function decisionsOf(o: {
   needsLead: readonly { item: string; reason: string }[];
   board: Board | undefined;
   ownerRoot: string;
+  /** The queue's finished entries: external merges of the last day are pushed, merged or not. */
+  queueDone?: readonly QueueDone[];
+  now?: Date;
 }): Decision[] {
   const out: Decision[] = [];
+  const since = o.now === undefined ? Number.POSITIVE_INFINITY : o.now.getTime() - EXTERNAL_MS;
+  const external = (o.queueDone ?? []).filter(
+    (d) => d.external !== undefined && Date.parse(d.at) >= since,
+  );
+  /** When an external pull request last finished: its failure line then keys like its result. */
+  const externalAt = (item: string): string | undefined =>
+    external.filter((d) => `${d.repo}#${d.pr}` === item).at(-1)?.at;
   for (const n of o.needsLead) {
     // A guard hit no evidence explained is the lead's to decide: the owner hears only of real
     // risk, a rule marked owner_only (`evidence (owner): ...`), which is pushed.
@@ -132,10 +146,17 @@ export function decisionsOf(o: {
       : n.reason.startsWith('release failed')
         ? 'release_failed'
         : classifyDecision(n.reason);
-    const since = o.board?.items.find((i) => i.id === n.item)?.history.at(-1)?.at ?? '';
-    const key = `${o.projectKey}:${item}:${kind}:${since}`;
+    const arose =
+      o.board?.items.find((i) => i.id === n.item)?.history.at(-1)?.at ?? externalAt(n.item) ?? '';
+    const key = `${o.projectKey}:${item}:${kind}:${arose}`;
     if (out.some((d) => d.key === key)) continue;
     out.push({ key, item, kind, urgent: false });
+  }
+  for (const d of external) {
+    const item = safeId(`${d.repo}#${d.pr}`);
+    const kind: PushKind = d.result === 'merged' ? 'merged' : 'merge_failed';
+    const key = `${o.projectKey}:${item}:${kind}:${d.at}`;
+    if (!out.some((x) => x.key === key)) out.push({ key, item, kind, urgent: false });
   }
   const read = readBlocksFile(join(o.ownerRoot, 'blocks.json'));
   if (!read.ok) {
