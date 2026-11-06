@@ -976,6 +976,45 @@ test('an unknown language answers the usage text and changes nothing', async ($,
   expect(await paneTexts($)).toContain('Decision needed');
 });
 
+test('a language without a locale file reads English, whatever the locale says', async ($, on) => {
+  world(on, {
+    files: withState(LIST_STATE),
+    settings: { language: 'français' },
+    env: { HOME: '/home/u', LANG: 'de_DE.UTF-8' },
+  });
+  await $.session.start(start);
+  expect(await paneTexts($)).toContain('Decision needed');
+});
+
+test('the command replies, the pane title and the owner lines speak German too', async ($, on) => {
+  const { seen } = world(on, {
+    files: withState({
+      ...LIST_STATE,
+      forOwner: [
+        {
+          id: 'usage-limit',
+          title: 'usage limit: every crew credential is at its configured limit',
+          code: 'usage_full',
+        },
+      ],
+    }),
+    settings: { language: 'german' },
+  });
+  await $.session.start(start);
+  expect(seen.opened).toEqual(['studio-board:Studio-Board']);
+  expect(await paneTexts($)).toContain('! Nutzungslimit: jede Crew-Anmeldung ist an ihrem Limit');
+  const usage = await $.command.run({ ...run, command: 'studio', args: 'nonsense' });
+  expect(usage.text).toBe(
+    'Aufruf: /studio [list | pipeline | more | group [<project>] | status | pause | resume | lang de|en|auto]',
+  );
+  const pause = await $.command.run({ ...run, command: 'studio', args: 'pause' });
+  expect(pause.text).toMatch(
+    /^Pausieren braucht ein Terminal: \/\S+\/bin\/studio --project \/work\/app pause ausführen$/,
+  );
+  const more = await $.command.run({ ...run, command: 'studio', args: 'more' });
+  expect(more.text).toBe('Studio-Board: Details. Zurück mit /studio list.');
+});
+
 test('a failing store still switches the view for the session', async ($, on) => {
   world(on, { files: withState(LIST_STATE), storeFails: true });
   await $.session.start(start);

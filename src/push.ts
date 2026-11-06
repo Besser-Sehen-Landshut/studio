@@ -5,7 +5,9 @@
 import { randomBytes } from 'node:crypto';
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { type Lang, type PushKind, resolveLang, stringsFor } from '../hooks/i18n/index.js';
 import type { Board } from './board.js';
+import { claudeLanguage } from './claude-language.js';
 import { notifySecretFile, type OwnerConfig, type OwnerEnv } from './config.js';
 import { readOwnerSecret, writeOwnerSecret } from './credentials.js';
 import { leadOnly } from './evidence.js';
@@ -92,20 +94,7 @@ export function sendPush(
 export const pushFailure = (reply: { status?: number }): string =>
   reply.status === undefined ? 'ntfy could not be reached' : `ntfy answered ${reply.status}`;
 
-export type PushKind =
-  | 'fix_limit'
-  | 'changes_requested'
-  | 'merge_failed'
-  | 'question'
-  | 'evidence'
-  | 'blocked'
-  | 'account_block'
-  | 'release_approval'
-  | 'release_failed'
-  | 'release_announced'
-  | 'analyzer_timeout'
-  | 'rea_install'
-  | 'other';
+export type { PushKind };
 
 export interface Decision {
   /** What makes it the same decision on the next tick: project, item, kind, when it arose. */
@@ -160,72 +149,37 @@ export function decisionsOf(o: {
   return out;
 }
 
-export type Lang = 'en' | 'de';
+export type { Lang };
 
 /** A project name a push may carry; anything else is shown as `?`. */
 const PROJECT_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
-const PHRASES: Record<Lang, Record<PushKind, string>> = {
-  en: {
-    fix_limit: 'Fix limit reached',
-    changes_requested: 'Changes requested',
-    merge_failed: 'Merge failed',
-    question: 'Crew has a question',
-    evidence: 'Guard hit, the owner decides',
-    blocked: 'Blocked',
-    account_block: 'Account blocked',
-    release_approval: 'Release approval needed',
-    release_failed: 'Release stopped, a check is red',
-    release_announced: 'Release announced, it cannot be undone once triggered',
-    analyzer_timeout: 'Analyzer timed out',
-    rea_install: 'REA install needs your yes',
-    other: 'Decision needed',
-  },
-  de: {
-    fix_limit: 'Fix-Limit erreicht',
-    changes_requested: 'Änderungen angefordert',
-    merge_failed: 'Merge fehlgeschlagen',
-    question: 'Crew hat eine Frage',
-    evidence: 'Prüfungstreffer, der Inhaber entscheidet',
-    blocked: 'Blockiert',
-    account_block: 'Konto gesperrt',
-    release_approval: 'Release-Freigabe nötig',
-    release_failed: 'Release angehalten, eine Prüfung ist rot',
-    release_announced: 'Release angekündigt, nach dem Auslösen nicht umkehrbar',
-    analyzer_timeout: 'Prüfer-Zeit abgelaufen',
-    rea_install: 'REA-Installation braucht eine Bestätigung',
-    other: 'Entscheidung nötig',
-  },
-};
-
 /** The one line of a push: a fixed phrase, the item and the project, or a count for several. */
 export function pushText(decisions: readonly Decision[], project: string, lang: Lang): string {
+  const t = stringsFor(lang);
   const one = decisions[0];
   if (decisions.length === 1 && one !== undefined) {
-    return `${PHRASES[lang][one.kind]}: ${one.item} in ${project}`;
+    return t.pushOne(t.push[one.kind], one.item, project);
   }
-  const n = decisions.length;
   const blocked = decisions.some((d) => d.kind === 'account_block');
-  if (lang === 'de') {
-    return `${n} Entscheidungen nötig in ${project}${blocked ? ': Konto gesperrt' : ''}`;
-  }
-  return `${n} decisions needed in ${project}${blocked ? ': account blocked' : ''}`;
+  return t.pushMany(decisions.length, project, blocked);
 }
 
-/** German when the locale names it, else English; the owner config wins. */
-export function pushLanguage(config: OwnerConfig, env: Record<string, string | undefined>): Lang {
-  if (config.notify?.language !== undefined) return config.notify.language;
-  for (const v of [env.LC_ALL, env.LC_MESSAGES, env.LANG]) {
-    const t = (v ?? '').trim().toLowerCase();
-    if (t === '' || t === 'c' || t === 'posix') continue;
-    return /^(de([-_.@]|$)|german|deutsch)/.test(t) ? 'de' : 'en';
-  }
-  return 'en';
+/**
+ * The language of pushes and notify messages: `notify.language` when it names a language (not
+ * `auto`), else Claude Code's `language` setting, else the locale, else English. The same chain as
+ * the pane's, with `notify.language` in place of `/studio lang`.
+ */
+export function pushLanguage(
+  config: OwnerConfig,
+  env: Record<string, string | undefined>,
+  setting?: string,
+): Lang {
+  return resolveLang({ override: config.notify?.language, setting, env });
 }
 
 /** The text of the setup's test push. */
-export const testPushText = (lang: Lang): string =>
-  lang === 'de' ? 'Test: Studio erreicht dich hier' : 'Test: Studio reaches you here';
+export const testPushText = (lang: Lang): string => stringsFor(lang).pushTest;
 
 /** Whether `now` lies in `HH:MM-HH:MM` on the clock of `zone`; a window may span midnight. */
 export function inQuietHours(quiet: string | undefined, now: Date, zone: string): boolean {
@@ -295,6 +249,8 @@ export async function pushDecisions(o: {
   owner: OwnerEnv;
   http: Http | undefined;
   now: Date;
+  /** The project folder, for its Claude Code `language` setting. */
+  projectDir?: string;
 }): Promise<PushResult> {
   try {
     return await pushLocked(o);
@@ -358,7 +314,11 @@ async function pushLocked(o: Parameters<typeof pushDecisions>[0]): Promise<PushR
         return { sent: 0, deferred: 'throttle', errors: save() };
       }
     }
-    const lang = pushLanguage(o.ownerConfig, o.owner.env ?? process.env);
+    const lang = pushLanguage(
+      o.ownerConfig,
+      o.owner.env ?? process.env,
+      claudeLanguage(o.owner, o.projectDir),
+    );
     const reply = await sendPush(http, stored.secret, o.ownerConfig, {
       text: pushText(fresh, PROJECT_RE.test(o.project) ? o.project : '?', lang),
       urgent,

@@ -381,7 +381,7 @@ describe('formatRuntime', () => {
 describe('stateDirName parity with src/paths.ts', () => {
   const sha = (p: string): string => createHash('sha256').update(p).digest('hex');
   it.each([
-    '/srv/a/Projekte/app',
+    '/srv/a/projects/app',
     '/srv/a/with space/my app',
     '/srv/a/ünïcode/日本語-プロジェクト',
     `/srv/a/${'long-name-'.repeat(20)}`,

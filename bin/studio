@@ -3,7 +3,7 @@
 // session runs `studio <command>` as a bare command
 // (https://code.claude.com/docs/en/plugins-reference, "Standard layout", Executables).
 // Loads the committed self-contained bundle (an installed plugin has no node_modules and no dist).
-for (const rel of ['../dist-bundle/studio.mjs', '../dist/main.js']) {
+for (const rel of ['../dist-bundle/studio.mjs', '../dist/src/main.js']) {
   try {
     await import(new URL(rel, import.meta.url).href);
     break;

@@ -174,7 +174,7 @@ describe('the work list', () => {
         expect(line).toMatch(lang === 'en' ? /building/ : /baut/);
         if (columns >= 40) {
           expect(line).toContain('…');
-          expect(line).toMatch(/1h 15m$/);
+          expect(line).toMatch(lang === 'en' ? /1h 15m$/ : /1h 15min$/);
         }
         expect([...(line as string)].length).toBeLessThanOrEqual(columns);
       }
@@ -322,10 +322,10 @@ describe('meaning never by colour alone', () => {
         expect(rows.length).toBe(6);
         for (const l of rows) {
           expect(l.text).toMatch(GLYPHS);
-          expect(l.text).toMatch(WORDS[lang]);
+          expect(l.text).toMatch(WORDS[lang] as RegExp);
         }
         for (const l of lines.filter((x) => /✓ \d/.test(x.text)))
-          expect(l.text).toMatch(WORDS[lang]);
+          expect(l.text).toMatch(WORDS[lang] as RegExp);
       });
     }
   }
@@ -528,7 +528,7 @@ describe('terminal cells', () => {
       for (const l of lines) expect(cellWidth(l.text)).toBeLessThanOrEqual(columns);
       const row = lines.find((l) => l.text.includes('APP-1'))?.text ?? '';
       expect(row).toMatch(
-        lang === 'en' ? /^ {2}● APP-1 .+ +building +5m$/ : /^ {2}● APP-1 .+ +baut +5m$/,
+        lang === 'en' ? /^ {2}● APP-1 .+ +building +5m$/ : /^ {2}● APP-1 .+ +baut +5min$/,
       );
       // 34 cells of title fit only the widest pane.
       expect(row.includes('…')).toBe(columns < 60);
@@ -586,7 +586,8 @@ describe('the cost of today in the footer', () => {
       const en = texts(draw(read(today(3.456)), { columns: 100, view })).join('\n');
       expect(en).toContain('today $3.46');
       const de = texts(draw(read(today(3.456)), { columns: 100, view, lang: 'de' })).join('\n');
-      expect(de).toContain('heute $3.46');
+      // Intl's German currency format: comma decimals, the sign after a no-break space.
+      expect(de).toContain('heute 3,46\u00a0$');
     }
   });
   it('shows nothing without a cost', () => {

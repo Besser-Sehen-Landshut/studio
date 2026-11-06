@@ -1,11 +1,12 @@
 // What the board pane needs beyond the crew rows: every open item with its stage and what it waits
 // for, and the latest tick's lead decisions with a next step. Derived from the board, the queue,
-// the CI figures and the tick record; English data, the pane localizes its frame.
+// the CI figures and the tick record; English data with codes, which the pane words in its language.
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Board, WorkItem } from './board.js';
 import { assertStatePath, writeStateFile } from './paths.js';
 import type { QueueState } from './queue.js';
+import { type Reason, reasonOf } from './reasons.js';
 import { reviewTarget } from './review.js';
 
 /** The prefix of `tick`'s hold for an item on a worker (same as in src/worker-lead.ts). */
@@ -42,6 +43,8 @@ export interface PaneWait {
   max?: number;
   /** `queue_position`: 1 is next. */
   position?: number;
+  /** What holds it as a code, for the pane to word; absent when `text` is no line Studio knows. */
+  reason?: Reason;
 }
 
 export interface PaneItem {
@@ -121,6 +124,12 @@ function stageSince(item: WorkItem): string | undefined {
 
 type Ci = { busy: number; total: number; mergeMaxBusy: number; ok: boolean };
 
+/** A wait on one of Studio's English lines, with the line's code when it has one. */
+function coded(code: WaitCode, text: string): PaneWait {
+  const reason = reasonOf(text);
+  return reason === undefined ? { code, text } : { code, text, reason };
+}
+
 const ciWait = (text: string, ci: Ci): PaneWait => ({
   code: 'ci_capacity',
   text,
@@ -145,7 +154,7 @@ function waitOf(
   if (stage === 'pr_held') {
     const note = notes.findLast((n) => n.startsWith(PR_HELD)) ?? PR_HELD;
     const text = line(note.slice(PR_HELD.length));
-    return text.startsWith('ci capacity') ? ciWait(text, ci) : { code: 'held', text };
+    return text.startsWith('ci capacity') ? ciWait(text, ci) : coded('held', text);
   }
   if (stage === 'review') {
     if (item.pr === undefined) return undefined;
@@ -171,7 +180,7 @@ function waitOf(
       return { code: 'merging', text: 'merging' };
     }
     const held = tick?.held.find((h) => h.item === 'queue');
-    if (held !== undefined) return { code: 'queue_held', text: line(held.reason) };
+    if (held !== undefined) return coded('queue_held', line(held.reason));
     const at = queue.pending.findIndex(mine);
     if (at >= 0) {
       // The place among the waiting entries; the one in progress is not counted.
@@ -183,9 +192,9 @@ function waitOf(
   if (held === undefined) return undefined;
   // `tick` holds an item on a worker with what its claim says (src/worker-lead.ts).
   if (held.reason.startsWith(WORKER_WAIT)) {
-    return { code: 'worker', text: line(held.reason.slice(WORKER_WAIT.length)) };
+    return coded('worker', line(held.reason.slice(WORKER_WAIT.length)));
   }
-  return { code: 'held', text: line(held.reason) };
+  return coded('held', line(held.reason));
 }
 
 /** Every item that is not merged or dropped, reviews aside (their builder shows the stage). */

@@ -1,5 +1,10 @@
-// Builds the self-contained plugin bundles committed under dist-bundle/ (run: pnpm bundle).
+// Builds the self-contained plugin bundles committed under dist-bundle/ (run: pnpm bundle). Writes
+// the language registry first, so a new locale file is in the bundle and the board mod.
+import { join } from 'node:path';
 import { build } from 'esbuild';
+import { writeLocaleIndex } from './gen-locales.mjs';
+
+writeLocaleIndex(join(import.meta.dirname, '..', 'hooks', 'locales'));
 
 const common = {
   bundle: true,

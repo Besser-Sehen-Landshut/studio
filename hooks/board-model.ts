@@ -1,5 +1,20 @@
-// Pure board model for the Studio pane. No imports on purpose: no Node, no engine code.
+// Pure board model for the Studio pane. No Node, no engine code: its only imports are the shared
+// texts (hooks/i18n, hooks/locales), which import nothing either.
 // It reads the snapshot that `studio state` writes (StateSnapshot in src/state.ts) leniently.
+import {
+  isLang,
+  LANGS,
+  type Lang,
+  langOf,
+  type Params,
+  type QueueStep,
+  type Reason,
+  type Strings,
+  stringsFor,
+} from './i18n/index.js';
+import { pick, type RowState } from './i18n/messages.js';
+
+export { isLang, LANGS, type Lang, langOf };
 
 export type CrewState = 'working' | 'waiting' | 'blocked' | 'stopped' | 'crashed' | 'done';
 
@@ -43,7 +58,8 @@ export interface BoardState {
   usageDays: { day: string; labels: { label: string; runs: number }[] }[];
   mainBuild: { status: string; sha?: string };
   counts: { ready: number; queued: number };
-  forOwner: { id: string; title: string }[];
+  /** `title` is English; `code` and `params`, when set, are what the pane words itself. */
+  forOwner: OwnerLine[];
   notifications: { label: string; reason: string; title: string }[];
   /** Ascending by day. */
   perDay: { day: string; merged: number; deployed: number }[];
@@ -73,6 +89,13 @@ export interface BoardState {
   group?: BoardGroup;
   /** A REA install waits for the owner's one confirmation: what the pane's button confirms. */
   reaInstall?: { version: string; mode: 'full' | 'static'; needsFolder: boolean };
+}
+
+export interface OwnerLine {
+  id: string;
+  title: string;
+  code?: string;
+  params?: Params;
 }
 
 export interface BoardGroupRow {
@@ -113,6 +136,8 @@ export interface BoardWait {
   total?: number;
   max?: number;
   position?: number;
+  /** What holds it, as a code: the pane words it; `text` is the English fallback. */
+  reason?: Reason;
 }
 
 export interface BoardItem {
@@ -151,9 +176,7 @@ export type Line = {
 export const REA_CONFIRM_KEY = 'rea-confirm';
 
 export type View = 'list' | 'pipeline' | 'more' | 'group';
-export type Lang = 'en' | 'de';
 export const VIEWS: readonly View[] = ['list', 'pipeline', 'more', 'group'];
-export const LANGS: readonly Lang[] = ['en', 'de'];
 
 const MAX_STRING = 200;
 const STATES: readonly CrewState[] = [
@@ -274,7 +297,9 @@ function toState(root: Obj): BoardState {
       const o = obj(r);
       const id = str(o?.id);
       const title = str(o?.title);
-      return id === undefined || title === undefined ? [] : [{ id, title }];
+      if (id === undefined || title === undefined) return [];
+      const reason = parseReason(o);
+      return [{ id, title, ...(reason === undefined ? {} : reason) }];
     }),
     notifications: list(root.notifications).flatMap((r) => {
       const o = obj(r);
@@ -468,6 +493,20 @@ function parseGroup(raw: unknown): BoardGroup | undefined {
   return projects.length === 0 ? undefined : { name, main, self, projects };
 }
 
+const REASON_CODE = /^[a-z_]{1,40}$/;
+const PARAM_KEY = /^[a-z][A-Za-z]{0,31}$/;
+const MAX_PARAMS = 8;
+
+/** A reason code and its values (strings and numbers only), or undefined when it is none. */
+function parseReason(o: Obj | undefined): Reason | undefined {
+  const code = str(o?.code);
+  if (code === undefined || !REASON_CODE.test(code)) return undefined;
+  const params = entries(o?.params)
+    .filter(([k, v]) => PARAM_KEY.test(k) && (str(v) !== undefined || num(v) !== undefined))
+    .slice(0, MAX_PARAMS) as [string, string | number][];
+  return params.length === 0 ? { code } : { code, params: Object.fromEntries(params) };
+}
+
 /** A next step the pane offers: lower-case words and item ids, nothing else. */
 const SAY = /^[a-z]+(?: (?:[a-z]+|[A-Z]+-\d+))*$/;
 
@@ -491,6 +530,8 @@ function parseItem(raw: unknown): BoardItem | undefined {
       const v = num(w[k]);
       if (v !== undefined) wait[k] = v;
     }
+    const reason = parseReason(obj(w.reason));
+    if (reason !== undefined) wait.reason = reason;
     row.wait = wait;
   }
   return row;
@@ -508,489 +549,23 @@ export function parseState(text: string): BoardRead {
 
 // ---------- displayed text ----------
 
-/** Every text the pane, the status line and the toasts show. Commands stay English in both. */
-interface Strings {
-  missing: string;
-  unreadable: string;
-  paused: string;
-  // status line
-  status: (working: number, waiting: number, queued: number, ci: string, forYou: number) => string;
-  statusPaused: string;
-  // toasts
-  forYou: (title: string) => string;
-  accountBlocked: (label: string, reason: string) => string;
-  mainRed: (sha: string) => string;
-  crashed: (role: string, item: string) => string;
-  more: (n: number) => string;
-  // the detailed view (/studio more)
-  crewState: Record<CrewState, string>;
-  crossCutting: string;
-  noComponent: string;
-  noCrew: string;
-  accepting: string;
-  reopened: string;
-  epicDone: string;
-  now: string;
-  next: string;
-  queueEmpty: string;
-  mergedTodayList: string;
-  ciUnreadable: string;
-  mergeRule: (max: number, total: number, over: boolean) => string;
-  headEpics: string;
-  headCrew: string;
-  headQueue: string;
-  headForYou: (n: number) => string;
-  headForLead: (n: number) => string;
-  headExceptions: (n: number) => string;
-  headReleases: (n: number) => string;
-  /** A release's status in words. */
-  releaseStatus: (status: string, pending: string[]) => string;
-  /** Who decided an exception: the evidence, the lead or the owner. */
-  exceptionBy: (by: string) => string;
-  leadTimeLine: (median: string, deploys: number) => string;
-  headDays: string;
-  headUsage: string;
-  lastUpdate: (min: number) => string;
-  hours: (h: number) => string;
-  // the work list and the pipeline
-  updated: (min: number) => string;
-  stale: string;
-  pausedTag: string;
-  decisions: (n: number) => string;
-  running: (n: number) => string;
-  waiting: (n: number) => string;
-  today: (n: number) => string;
-  decisionHead: string;
-  say: (phrase: string) => string;
-  word: Record<RowState, string>;
-  stage: Record<Stage, string>;
-  done: (n: number) => string;
-  doneToday: (n: number) => string;
-  withoutEpic: string;
-  leadTime: (h: string) => string;
-  /** The cost of today's crew runs, one value. */
-  costToday: (usd: string) => string;
-  /** A fixed phrase per decision code: the reason itself may be crew text and is never shown. */
-  decision: (code: string) => string;
-  wait: (w: BoardWait) => string;
-  waitShort: (w: BoardWait) => string;
-  column: { ready: string; building: string; review: string; queue: string; today: string };
-  full: string;
-  blocked: string;
-  emptyTitle: string;
-  emptyHint: string;
-  emptyExample: string;
-  pausedSince: (time: string | undefined) => string;
-  staleBanner: (min: number) => string;
-  staleQuestion: string;
-  staleSay: string;
-  // the group view (/studio group)
-  groupTitle: (name: string) => string;
-  groupMain: string;
-  groupHere: string;
-  groupNone: string;
-  groupIdle: string;
-  groupProblem: (problem: string) => string;
-  groupBack: (name: string) => string;
-  groupOpen: string;
-  /** The label of the REA install button. */
-  reaConfirm: (version: string, withFolder: boolean) => string;
+/** A forOwner line in words: its code in this language, else its English title. */
+function ownerText(f: { title: string; code?: string; params?: Params }, t: Strings): string {
+  return f.code === undefined
+    ? f.title
+    : (t.reason({ code: f.code, ...(f.params === undefined ? {} : { params: f.params }) }) ??
+        f.title);
 }
 
-type RowState = 'decision' | 'blocked' | 'running' | 'waiting' | 'ready';
-
-const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
-const decimal = (h: number, comma: boolean) => {
-  const s = h.toFixed(1);
-  return comma ? s.replace('.', ',') : s;
-};
-
-const EN: Strings = {
-  missing: 'No board yet. The control room writes it with studio state.',
-  unreadable: 'The board cannot be read just now. It refreshes by itself.',
-  paused: 'Paused.',
-  status: (w, a, q, ci, f) =>
-    `● ${w} working · ${a} waiting · ${q} queued · CI ${ci} · for you: ${f}`,
-  statusPaused: 'paused',
-  forYou: (t) => `For you: ${t}`,
-  accountBlocked: (l, r) => `Account blocked${l ? ` (${l})` : ''}: ${r}`,
-  mainRed: (sha) => `Main build is red${sha ? ` (${sha})` : ''}`,
-  crashed: (role, item) => `Crashed: ${role} on ${item}`,
-  more: (n) => `… ${n} more`,
-  crewState: {
-    working: 'working',
-    waiting: 'waiting',
-    blocked: 'blocked',
-    stopped: 'stopped',
-    crashed: 'crashed',
-    done: 'done',
-  },
-  crossCutting: 'cross-cutting',
-  noComponent: 'no component',
-  noCrew: 'No crew running.',
-  accepting: 'in acceptance',
-  reopened: 'reopened',
-  epicDone: 'done',
-  now: 'now',
-  next: 'next',
-  queueEmpty: 'Queue is empty.',
-  mergedTodayList: 'Merged today',
-  ciUnreadable: 'CI unreadable, counted as busy',
-  mergeRule: (m, t, over) => `merge rule: at most ${m}/${t} busy${over ? ', now over' : ''}`,
-  headEpics: 'Epics',
-  headCrew: 'Crew',
-  headQueue: 'Merge queue',
-  headForYou: (n) => `For you (${n})`,
-  headForLead: (n) => `For the lead (${n})`,
-  headExceptions: (n) => `Exceptions by evidence (${n})`,
-  headReleases: (n) => `Releases (${n})`,
-  releaseStatus: (s, p) =>
-    s === 'announced'
-      ? 'announced, ready to trigger'
-      : s === 'approvals'
-        ? `waits for approval: ${p.join(', ')}`
-        : s === 'triggered'
-          ? 'deploying'
-          : s === 'checking'
-            ? 'deployed, checks running'
-            : s === 'done'
-              ? 'done'
-              : s === 'failed'
-                ? 'stopped: a check is red'
-                : s === 'stopped'
-                  ? 'cancelled'
-                  : s,
-  exceptionBy: (by) => (by === 'evidence' ? 'evidence' : by === 'owner' ? 'owner' : 'lead'),
-  leadTimeLine: (m, d) => `Lead time (median) ${m} · deploys today ${d}`,
-  headDays: 'Last 7 days (merged/deployed)',
-  headUsage: 'Usage (runs)',
-  lastUpdate: (m) => `Last update ${m} min ago.`,
-  hours: (h) => `${decimal(h, false)} h`,
-  updated: (m) => (m < 1 ? 'updated just now' : `updated ${m} min ago`),
-  stale: '! stale',
-  pausedTag: '◷ paused',
-  decisions: (n) => `! ${n} ${plural(n, 'decision', 'decisions')} needed`,
-  running: (n) => `● ${n} running`,
-  waiting: (n) => `◷ ${n} waiting`,
-  today: (n) => `✓ ${n} today`,
-  decisionHead: 'Decision needed',
-  say: (p) => `→ say "${p}"`,
-  word: {
-    decision: 'decide',
-    blocked: 'blocked',
-    running: 'running',
-    waiting: 'waiting',
-    ready: 'ready',
-  },
-  stage: {
-    ready: 'ready',
-    building: 'building',
-    pr_held: 'PR held',
-    review: 'review',
-    queued: 'queue',
-    blocked: 'blocked',
-  },
-  done: (n) => `✓ ${n} done`,
-  doneToday: (n) => `✓ ${n} done today`,
-  withoutEpic: 'Without epic',
-  leadTime: (h) => `lead time ${h}`,
-  costToday: (usd) => `today ${usd}`,
-  decision: (code) => {
-    if (code === 'fix_limit') return 'fix limit reached – decide';
-    if (code === 'changes_requested') return 'changes requested';
-    if (code === 'merge_failed') return 'merge failed';
-    if (code === 'question') return 'crew has a question';
-    if (code === 'evidence') return 'guard hit without evidence – decide';
-    if (code === 'blocked') return 'blocked';
-    if (code === 'release_approval') return 'release approval needed';
-    if (code === 'release_failed') return 'release stopped: a check is red';
-    if (code === 'analyzer_timeout') return 'analyzer timed out – decide';
-    if (code === 'rea_install') return 'REA install – confirm once, here';
-    return 'needs a decision';
-  },
-  wait: (w) => {
-    switch (w.code) {
-      case 'ci_capacity':
-        return w.busy !== undefined && w.total !== undefined && w.max !== undefined
-          ? `runners ${w.busy}/${w.total} busy, merge at ≤${w.max}`
-          : `CI capacity: ${w.text}`;
-      case 'checks_pending':
-        return 'checks pending';
-      case 'review_pending':
-        return 'review not started yet';
-      case 'queue_held':
-        return `queue held: ${w.text}`;
-      case 'queue_position':
-        return w.position === undefined ? w.text : `place ${w.position} in the queue`;
-      case 'updating':
-        return 'updating the branch';
-      case 'merging':
-        return 'merging';
-      case 'held':
-        return `held: ${w.text}`;
-      case 'worker':
-        return `worker: ${w.text}`;
-      default:
-        return w.text;
-    }
-  },
-  waitShort: (w) => {
-    switch (w.code) {
-      case 'ci_capacity':
-        return w.busy !== undefined && w.total !== undefined ? `CI ${w.busy}/${w.total}` : 'CI';
-      case 'worker':
-        return 'worker';
-      case 'checks_pending':
-        return 'checks';
-      case 'review_pending':
-        return 'not started';
-      case 'queue_position':
-        return w.position === undefined ? 'queued' : `place ${w.position}`;
-      case 'updating':
-        return 'update';
-      case 'merging':
-        return 'merging';
-      default:
-        return 'held';
-    }
-  },
-  column: {
-    ready: 'READY',
-    building: 'BUILDING',
-    review: 'REVIEW',
-    queue: 'QUEUE',
-    today: 'TODAY',
-  },
-  full: '⚠ full',
-  blocked: 'BLOCKED',
-  emptyTitle: 'No work yet.',
-  emptyHint: 'Describe in plain words what should be built, e.g.:',
-  emptyExample: '"New item for the API: … Done when a test shows …"',
-  pausedSince: (t) =>
-    `${t === undefined ? 'Paused.' : `Paused since ${t}.`} Nothing starts or merges; running crews finish.`,
-  staleBanner: (m) => `Last update ${m} min ago.`,
-  staleQuestion: 'Is the lead loop still running?',
-  staleSay: 'start the Studio lead loop',
-  groupTitle: (name) => `Group ${name}`,
-  groupMain: 'main',
-  groupHere: 'here',
-  groupNone: 'This project is in no group. Groups are set in the owner config.',
-  groupIdle: 'nothing open',
-  groupProblem: (p) =>
-    p === 'no state yet'
-      ? 'no state yet'
-      : p === 'state unreadable'
-        ? 'state unreadable'
-        : p === 'folder cannot be read'
-          ? 'folder cannot be read'
-          : 'cannot be read',
-  groupBack: (name) => `Group ${name} · back: /studio group`,
-  groupOpen: 'open a project: /studio group <project>',
-  reaConfirm: (v, f) => `Confirm REA install (rea-agents ${v}${f ? ', folder ~/analysis' : ''})`,
-};
-
-const DE: Strings = {
-  missing: 'Noch kein Board. Die Steuerung schreibt es mit studio state.',
-  unreadable: 'Das Board ist gerade nicht lesbar. Es aktualisiert sich von selbst.',
-  paused: 'Pausiert.',
-  status: (w, a, q, ci, f) =>
-    `● ${w} aktiv · ${a} warten · ${q} in Warteschlange · CI ${ci} · zu entscheiden: ${f}`,
-  statusPaused: 'pausiert',
-  forYou: (t) => `Zur Entscheidung: ${t}`,
-  accountBlocked: (l, r) => `Konto gesperrt${l ? ` (${l})` : ''}: ${r}`,
-  mainRed: (sha) => `Build auf main ist rot${sha ? ` (${sha})` : ''}`,
-  crashed: (role, item) => `Abgestürzt: ${role} an ${item}`,
-  more: (n) => `… ${n} weitere`,
-  crewState: {
-    working: 'aktiv',
-    waiting: 'wartet',
-    blocked: 'blockiert',
-    stopped: 'gestoppt',
-    crashed: 'abgestürzt',
-    done: 'fertig',
-  },
-  crossCutting: 'übergreifend',
-  noComponent: 'ohne Komponente',
-  noCrew: 'Keine Crew aktiv.',
-  accepting: 'in Abnahme',
-  reopened: 'wieder offen',
-  epicDone: 'fertig',
-  now: 'jetzt',
-  next: 'danach',
-  queueEmpty: 'Warteschlange ist leer.',
-  mergedTodayList: 'Heute gemergt',
-  ciUnreadable: 'CI nicht lesbar, gilt als belegt',
-  mergeRule: (m, t, over) =>
-    `Merge-Regel: höchstens ${m}/${t} belegt${over ? ', derzeit darüber' : ''}`,
-  headEpics: 'Vorhaben',
-  headCrew: 'Crew',
-  headQueue: 'Merge-Warteschlange',
-  headForYou: (n) => `Zur Entscheidung (${n})`,
-  headForLead: (n) => `Für die Steuerung (${n})`,
-  headExceptions: (n) => `Ausnahmen per Beweis (${n})`,
-  headReleases: (n) => `Releases (${n})`,
-  releaseStatus: (s, p) =>
-    s === 'announced'
-      ? 'angekündigt, bereit zum Auslösen'
-      : s === 'approvals'
-        ? `wartet auf Freigabe: ${p.join(', ')}`
-        : s === 'triggered'
-          ? 'wird ausgeliefert'
-          : s === 'checking'
-            ? 'ausgeliefert, Prüfungen laufen'
-            : s === 'done'
-              ? 'fertig'
-              : s === 'failed'
-                ? 'angehalten: eine Prüfung ist rot'
-                : s === 'stopped'
-                  ? 'abgebrochen'
-                  : s,
-  exceptionBy: (by) => (by === 'evidence' ? 'Beweis' : by === 'owner' ? 'Inhaber' : 'Steuerung'),
-  leadTimeLine: (m, d) => `Durchlaufzeit (Median) ${m} · Deploys heute ${d}`,
-  headDays: 'Letzte 7 Tage (gemergt/ausgeliefert)',
-  headUsage: 'Nutzung (Läufe)',
-  lastUpdate: (m) => `Letzte Aktualisierung vor ${m} min.`,
-  hours: (h) => `${decimal(h, true)} h`,
-  updated: (m) => (m < 1 ? 'gerade aktualisiert' : `vor ${m} min`),
-  stale: '! Stand alt',
-  pausedTag: '◷ pausiert',
-  decisions: (n) => `! ${n} ${plural(n, 'Entscheidung', 'Entscheidungen')} nötig`,
-  running: (n) => `● ${n} ${plural(n, 'läuft', 'laufen')}`,
-  waiting: (n) => `◷ ${n} ${plural(n, 'wartet', 'warten')}`,
-  today: (n) => `✓ ${n} heute fertig`,
-  decisionHead: 'Entscheidung nötig',
-  say: (p) => `→ sagen: „${p}“`,
-  word: {
-    decision: 'entscheiden',
-    blocked: 'blockiert',
-    running: 'läuft',
-    waiting: 'wartet',
-    ready: 'bereit',
-  },
-  stage: {
-    ready: 'bereit',
-    building: 'baut',
-    pr_held: 'PR zurückgehalten',
-    review: 'Review',
-    queued: 'Warteschlange',
-    blocked: 'blockiert',
-  },
-  done: (n) => `✓ ${n} fertig`,
-  doneToday: (n) => `✓ ${n} heute fertig`,
-  withoutEpic: 'Ohne Vorhaben',
-  leadTime: (h) => `Ø Durchlauf ${h}`,
-  costToday: (usd) => `heute ${usd}`,
-  decision: (code) => {
-    if (code === 'fix_limit') return 'Fix-Limit erreicht – entscheiden';
-    if (code === 'changes_requested') return 'Änderungen angefordert';
-    if (code === 'merge_failed') return 'Merge fehlgeschlagen';
-    if (code === 'question') return 'Crew hat eine Frage';
-    if (code === 'evidence') return 'Prüfungstreffer ohne Beweis – entscheiden';
-    if (code === 'blocked') return 'blockiert';
-    if (code === 'release_approval') return 'Release-Freigabe nötig';
-    if (code === 'release_failed') return 'Release angehalten: eine Prüfung ist rot';
-    if (code === 'analyzer_timeout') return 'Prüfer-Zeit abgelaufen – entscheiden';
-    if (code === 'rea_install') return 'REA-Installation – einmal hier bestätigen';
-    return 'Entscheidung nötig';
-  },
-  wait: (w) => {
-    switch (w.code) {
-      case 'ci_capacity':
-        return w.busy !== undefined && w.total !== undefined && w.max !== undefined
-          ? `Läufer ${w.busy}/${w.total} belegt, Merge ab ≤${w.max}`
-          : `CI-Kapazität: ${w.text}`;
-      case 'checks_pending':
-        return 'Prüfungen laufen';
-      case 'review_pending':
-        return 'Review noch nicht begonnen';
-      case 'queue_held':
-        return `Warteschlange angehalten: ${w.text}`;
-      case 'queue_position':
-        return w.position === undefined ? w.text : `Platz ${w.position} in der Warteschlange`;
-      case 'updating':
-        return 'Zweig wird aktualisiert';
-      case 'merging':
-        return 'wird gemergt';
-      case 'held':
-        return `zurückgestellt: ${w.text}`;
-      case 'worker':
-        return `Arbeiter: ${w.text}`;
-      default:
-        return w.text;
-    }
-  },
-  waitShort: (w) => {
-    switch (w.code) {
-      case 'ci_capacity':
-        return w.busy !== undefined && w.total !== undefined ? `CI ${w.busy}/${w.total}` : 'CI';
-      case 'worker':
-        return 'Arbeiter';
-      case 'checks_pending':
-        return 'Prüfung';
-      case 'review_pending':
-        return 'offen';
-      case 'queue_position':
-        return w.position === undefined ? 'wartet' : `Platz ${w.position}`;
-      case 'updating':
-        return 'Update';
-      case 'merging':
-        return 'Merge';
-      default:
-        return 'zurückgest.';
-    }
-  },
-  column: {
-    ready: 'BEREIT',
-    building: 'BAUT',
-    review: 'REVIEW',
-    queue: 'QUEUE',
-    today: 'HEUTE',
-  },
-  full: '⚠ voll',
-  blocked: 'BLOCKIERT',
-  emptyTitle: 'Noch keine Aufgabe.',
-  emptyHint: 'In eigenen Worten beschreiben, was gebaut werden soll, z. B.:',
-  emptyExample: '„Neue Aufgabe für die API: … Fertig, wenn ein Test … belegt.“',
-  pausedSince: (t) =>
-    `${t === undefined ? 'Pausiert.' : `Pausiert seit ${t}.`} Nichts startet, nichts wird gemergt; laufende Crews arbeiten zu Ende.`,
-  staleBanner: (m) => `Letzte Aktualisierung vor ${m} min.`,
-  staleQuestion: 'Läuft die Steuerung noch?',
-  staleSay: 'start the Studio lead loop',
-  groupTitle: (name) => `Verbund ${name}`,
-  groupMain: 'Haupt',
-  groupHere: 'hier',
-  groupNone:
-    'Dieses Projekt gehört zu keinem Verbund. Verbünde stehen in der Inhaber-Konfiguration.',
-  groupIdle: 'nichts offen',
-  groupProblem: (p) =>
-    p === 'no state yet'
-      ? 'noch kein Stand'
-      : p === 'state unreadable'
-        ? 'Stand nicht lesbar'
-        : p === 'folder cannot be read'
-          ? 'Ordner nicht lesbar'
-          : 'nicht lesbar',
-  groupBack: (name) => `Verbund ${name} · zurück: /studio group`,
-  groupOpen: 'Projekt öffnen: /studio group <Projekt>',
-  reaConfirm: (v, f) =>
-    `REA-Installation bestätigen (rea-agents ${v}${f ? ', Ordner ~/analysis' : ''})`,
-};
-
-const TEXTS: Record<Lang, Strings> = { en: EN, de: DE };
-const textsOf = (lang: Lang | undefined): Strings => TEXTS[lang ?? 'en'] ?? EN;
-
-/** German when a language setting or locale names it, else English. */
-export function langOf(value: string | undefined): Lang | undefined {
-  if (value === undefined) return undefined;
-  const v = value.trim().toLowerCase();
-  if (v === '' || v === 'c' || v === 'posix') return undefined;
-  return /^(de([-_.@]|$)|german|deutsch)/.test(v) ? 'de' : 'en';
+/** What a wait is held by, in words: its reason's code in this language, else the English text. */
+function whyOf(w: BoardWait, t: Strings): string {
+  return w.reason === undefined ? w.text : (t.reason(w.reason) ?? w.text);
 }
 
 // ---------- status line and alerts ----------
 
 export function statusLine(state: BoardState, paused: boolean, lang?: Lang): string {
-  const t = textsOf(lang);
+  const t = stringsFor(lang);
   const working = state.crew.filter((c) => c.state === 'working').length;
   const waiting = state.crew.filter((c) => c.state === 'waiting').length;
   const ci = `${state.ci.ok ? state.ci.busy : '?'}/${state.ci.total}`;
@@ -999,16 +574,19 @@ export function statusLine(state: BoardState, paused: boolean, lang?: Lang): str
 }
 
 export function alertsFor(state: BoardState, lang?: Lang): { key: string; text: string }[] {
-  const t = textsOf(lang);
+  const t = stringsFor(lang);
   const out: { key: string; text: string }[] = [];
   for (const f of state.forOwner) {
     if (f.id === 'account-block') continue;
     // The usage-limit title carries a time that changes; key it by id so it toasts once while it stands.
     const key = f.id === 'usage-limit' ? 'owner:usage-limit' : `owner:${f.id}:${f.title}`;
-    out.push({ key, text: t.forYou(f.title) });
+    out.push({ key, text: t.forYou(ownerText(f, t)) });
   }
   for (const n of state.notifications) {
-    out.push({ key: `block:${n.label}:${n.reason}`, text: t.accountBlocked(n.label, n.reason) });
+    out.push({
+      key: `block:${n.label}:${n.reason}`,
+      text: t.accountBlocked(n.label, t.blockReason(n.reason)),
+    });
   }
   if (state.mainBuild.status === 'red') {
     const sha = state.mainBuild.sha ?? '';
@@ -1038,7 +616,7 @@ export function newAlerts(
     if (!known.has(a.key)) toasts.push(a.text);
   }
   const shown = toasts.slice(0, MAX_TOASTS);
-  if (toasts.length > MAX_TOASTS) shown.push(textsOf(lang).more(toasts.length - MAX_TOASTS));
+  if (toasts.length > MAX_TOASTS) shown.push(stringsFor(lang).more(toasts.length - MAX_TOASTS));
   return { toasts: shown, seen: [...keys] };
 }
 
@@ -1151,22 +729,26 @@ function bar(done: number, total: number, size: number): string {
   return '█'.repeat(filled) + '░'.repeat(size - filled);
 }
 
-export function formatRuntime(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return '0s';
+/** A duration in the two largest units, in the language's units (English by default). */
+export function formatRuntime(
+  ms: number,
+  units: Strings['units'] = stringsFor('en').units,
+): string {
+  if (!Number.isFinite(ms) || ms < 0) return units.s(0);
   const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
+  if (s < 60) return units.s(s);
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
+  if (m < 60) return units.m(m);
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ${m % 60}m`;
-  return `${Math.floor(h / 24)}d ${h % 24}h`;
+  if (h < 24) return `${units.h(h)} ${units.m(m % 60)}`;
+  return `${units.d(Math.floor(h / 24))} ${units.h(h % 24)}`;
 }
 
-function runtimeOf(c: BoardCrew, nowMs: number): string {
+function runtimeOf(c: BoardCrew, nowMs: number, t: Strings): string {
   const start = c.since === undefined ? Number.NaN : Date.parse(c.since);
   if (Number.isNaN(start)) return '';
   const stop = c.stoppedAt === undefined ? Number.NaN : Date.parse(c.stoppedAt);
-  return formatRuntime((Number.isNaN(stop) ? nowMs : stop) - start);
+  return formatRuntime((Number.isNaN(stop) ? nowMs : stop) - start, t.units);
 }
 
 const clampColumns = (columns: number): number =>
@@ -1223,7 +805,7 @@ function crewLines(state: BoardState, columns: number, nowMs: number, t: Strings
     const look = LOOK[c.state];
     const word = crewWord(c, t);
     const pr = c.pr === undefined ? '' : `#${c.pr}`;
-    const runtime = runtimeOf(c, nowMs);
+    const runtime = runtimeOf(c, nowMs, t);
     const label = c.label ?? '';
     const itemTitle = c.title ? `${c.item} ${c.title}` : c.item;
     if (columns >= 72) {
@@ -1289,7 +871,7 @@ function queueLines(state: BoardState, t: Strings): Line[] {
   const out: Line[] = [];
   if (current) {
     out.push({
-      text: `${t.now}: ${current.repo}#${current.pr}${current.step ? ` · ${current.step}` : ''}`,
+      text: `${t.now}: ${current.repo}#${current.pr}${current.step ? ` · ${pick(t.queueStep, current.step as QueueStep) ?? current.step}` : ''}`,
     });
   }
   for (const p of pending.slice(0, 3)) out.push({ text: `${t.next}: ${p.repo}#${p.pr}` });
@@ -1336,7 +918,7 @@ export function boardLines(
   read: BoardRead,
   o: { columns: number; nowMs: number; paused: boolean; lang?: Lang },
 ): Line[] {
-  const t = textsOf(o.lang);
+  const t = stringsFor(o.lang);
   const columns = clampColumns(o.columns);
   if (read.kind !== 'ok') return clip(calmLines(read.kind, o.paused, t), columns);
   const s = read.state;
@@ -1354,12 +936,12 @@ export function boardLines(
     out.push({ text: t.mainRed(s.mainBuild.sha ? s.mainBuild.sha.slice(0, 7) : ''), tone: 'err' });
   }
   out.push({ text: t.headForYou(s.forOwner.length), tone: 'head' });
-  for (const f of s.forOwner.slice(0, MAX_OWNER_LINES)) out.push({ text: `  ${f.title}` });
+  for (const f of s.forOwner.slice(0, MAX_OWNER_LINES)) out.push({ text: `  ${ownerText(f, t)}` });
   if (s.forOwner.length > MAX_OWNER_LINES) {
     out.push({ text: `  ${t.more(s.forOwner.length - MAX_OWNER_LINES)}`, tone: 'dim' });
   }
   for (const n of s.notifications) {
-    out.push({ text: `  ${t.accountBlocked(n.label, n.reason)}`, tone: 'err' });
+    out.push({ text: `  ${t.accountBlocked(n.label, t.blockReason(n.reason))}`, tone: 'err' });
   }
   // The lead's full lines: they may hold crew text, so only this view shows them, as data.
   const lead = s.needsLead ?? [];
@@ -1422,7 +1004,7 @@ function calmLines(kind: 'missing' | 'unreadable', paused: boolean, t: Strings):
 }
 
 export function statusText(read: BoardRead, paused: boolean, lang?: Lang): string {
-  const t = textsOf(lang);
+  const t = stringsFor(lang);
   if (read.kind !== 'ok') {
     const text = read.kind === 'missing' ? t.missing : t.unreadable;
     return paused ? `${text} ${t.paused}` : text;
@@ -1530,7 +1112,7 @@ function decisionsOf(s: BoardState, t: Strings): Decision[] {
     const id = ITEM_ID.test(f.id) ? f.id : undefined;
     out.push({
       ...(id === undefined ? {} : { id }),
-      text: f.title,
+      text: ownerText(f, t),
       next: id === undefined ? '→ /studio more' : t.say(`show ${id}`),
     });
   }
@@ -1552,9 +1134,9 @@ function rowStateOf(item: BoardItem, decided: Set<string>): RowState {
   return 'ready';
 }
 
-function since(item: BoardItem, nowMs: number): string {
+function since(item: BoardItem, nowMs: number, t: Strings): string {
   const at = item.since === undefined ? Number.NaN : Date.parse(item.since);
-  return Number.isNaN(at) ? '' : formatRuntime(nowMs - at);
+  return Number.isNaN(at) ? '' : formatRuntime(nowMs - at, t.units);
 }
 
 interface Row {
@@ -1601,7 +1183,7 @@ function footerLines(s: BoardState, t: Strings, columns: number): Line[] {
   const parts = [ci];
   if (s.medianLeadTimeHours !== null) parts.push(t.leadTime(t.hours(s.medianLeadTimeHours)));
   const cost = s.today.costUsd;
-  if (cost !== undefined && cost > 0) parts.push(t.costToday(`$${cost.toFixed(2)}`));
+  if (cost !== undefined && cost > 0) parts.push(t.costToday(t.money(cost)));
   parts.push('/studio more');
   return pack(parts, ' · ', columns).map((text) => ({ text, tone: 'dim' }));
 }
@@ -1665,7 +1247,7 @@ function rowsOf(items: BoardItem[], decided: Set<string>, f: Frame): Row[] {
         item,
         state,
         word: wordOf(item, state, f.t),
-        time: state === 'ready' ? '' : since(item, f.nowMs),
+        time: state === 'ready' ? '' : since(item, f.nowMs, f.t),
       };
     })
     .sort((a, b) => RANK[a.state] - RANK[b.state]);
@@ -1706,7 +1288,7 @@ function listBody(f: Frame, decisions: Decision[], items: BoardItem[]): Line[] {
     for (const r of part.slice(0, MAX_ROWS)) {
       out.push({ text: itemLine(r, columns, wordW, timeW), tone: TONE_OF[r.state] });
       if (r.state === 'waiting' && r.item.wait !== undefined) {
-        const reason = `${t.stage[r.item.stage]}: ${t.wait(r.item.wait)}`;
+        const reason = `${t.stage[r.item.stage]}: ${t.wait(r.item.wait, whyOf(r.item.wait, t))}`;
         for (const text of wrap(reason, columns, '    ')) out.push({ text, tone: 'dim' });
       }
     }
@@ -1853,7 +1435,7 @@ export function paneLines(
     focusOf?: string;
   },
 ): Line[] {
-  const t = textsOf(o.lang);
+  const t = stringsFor(o.lang);
   const columns = clampColumns(o.columns);
   if (o.focusOf !== undefined) {
     const inner = paneLines(read, {

@@ -11,6 +11,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { runAccount } from './account-command.js';
+import { claudeLanguage } from './claude-language.js';
 import { loadOwnerConfig, type OwnerConfig, type OwnerEnv, ownerConfigDir } from './config.js';
 import { ghCheck, githubRepoOf } from './init.js';
 import { validLabel } from './limits.js';
@@ -409,7 +410,7 @@ async function notificationsStep(o: SetupOptions, again: boolean): Promise<numbe
     return 0;
   }
   const reply = await sendPush(http, secret, config, {
-    text: testPushText(pushLanguage(config, o.env)),
+    text: testPushText(pushLanguage(config, o.env, claudeLanguage(o.owner, o.project))),
     urgent: false,
   });
   if (!reply.ok) {

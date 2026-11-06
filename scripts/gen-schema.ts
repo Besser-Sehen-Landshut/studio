@@ -3,10 +3,14 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { z } from 'zod';
 
-// Sources import each other as './x.js'; type stripping runs them as './x.ts'.
+// Sources (and the shared texts in hooks/) import each other as './x.js'; type stripping runs
+// them as './x.ts'.
 registerHooks({
   resolve(specifier, context, next) {
-    const ours = specifier.startsWith('./') && context.parentURL?.includes('/src/');
+    const parent = context.parentURL ?? '';
+    const ours =
+      (specifier.startsWith('./') || specifier.startsWith('../')) &&
+      (parent.includes('/src/') || parent.includes('/hooks/'));
     return next(ours ? specifier.replace(/\.js$/, '.ts') : specifier, context);
   },
 });

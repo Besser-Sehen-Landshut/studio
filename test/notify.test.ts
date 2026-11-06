@@ -57,7 +57,7 @@ function setup(mode = 0o700) {
 }
 
 const snap = (
-  forOwner: { id: string; title: string }[],
+  forOwner: StateSnapshot['forOwner'],
   notifications?: StateSnapshot['notifications'],
 ): StateSnapshot => ({ forOwner, ...(notifications ? { notifications } : {}) }) as StateSnapshot;
 
@@ -243,6 +243,7 @@ describe('sendNotifications', () => {
       'STUDIO_NOTIFY_CHANNEL',
       'STUDIO_NOTIFY_ID',
       'STUDIO_NOTIFY_KIND',
+      'STUDIO_NOTIFY_LANG',
       'STUDIO_NOTIFY_PROJECT',
       'STUDIO_NOTIFY_TEXT',
     ]);
@@ -352,5 +353,48 @@ deploy_commands: []
     expect(calls).toHaveLength(0);
     expect(ownerStateRootFor({ env, homedir: home })).toBeTruthy();
     expect(stateRootFor(project, { env, homedir: home })).toBeTruthy();
+  });
+});
+
+describe('the notify command speaks the owner language', () => {
+  const block = {
+    id: 'account-block' as const,
+    title: 'account block on label-a: authentication_failed',
+    reason: 'authentication_failed',
+    at: '2026-11-01T10:00:00.000Z',
+    label: 'label-a',
+  };
+  const lines = [
+    { id: 'APP-1', title: 'Pay the invoice' },
+    {
+      id: 'usage-limit',
+      title: 'usage limit: every crew credential is at its configured limit; work resumes later',
+      code: 'usage_full',
+    },
+  ];
+  const german = (s: ReturnType<typeof setup>) =>
+    ownerConfigSchema.parse({ notify: { channel: 'label-a', command: s.command, language: 'de' } });
+
+  it('words Studio lines and blocks by code, keeps item titles, and names the language', async () => {
+    const s = setup();
+    await run(s, snap(lines, [block]), 'proj-a', german(s));
+    expect(s.calls.map((c) => [c.env.STUDIO_NOTIFY_TEXT, c.env.STUDIO_NOTIFY_LANG])).toEqual([
+      ['Pay the invoice', 'de'],
+      ['Nutzungslimit: jede Crew-Anmeldung ist an ihrem Limit', 'de'],
+      ['Konto gesperrt (label-a): Anmeldung fehlgeschlagen', 'de'],
+    ]);
+  });
+
+  it('is English by default, and a message is not sent again in another language', async () => {
+    const s = setup();
+    await run(s, snap(lines, [block]));
+    expect(s.calls.map((c) => c.env.STUDIO_NOTIFY_TEXT)).toEqual([
+      'Pay the invoice',
+      'usage limit: every crew credential is at its limit',
+      'Account blocked (label-a): sign-in failed',
+    ]);
+    expect(s.calls[0]?.env.STUDIO_NOTIFY_LANG).toBe('en');
+    await run(s, snap(lines, [block]), 'proj-a', german(s));
+    expect(s.calls).toHaveLength(3);
   });
 });

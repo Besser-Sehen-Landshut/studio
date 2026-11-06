@@ -411,6 +411,7 @@ describe('workers on other machines', () => {
     expect(state.items.find((i: { id: string }) => i.id === 'APP-1').wait).toEqual({
       code: 'worker',
       text: 'on win-bot (windows), heartbeat 0 min ago',
+      reason: { code: 'worker_on', params: { worker: 'win-bot', label: 'windows', minutes: 0 } },
     });
     const status = JSON.parse((await run(w.lead, lead, ['--json', 'status'])).out);
     expect(status.find((r: { item: string }) => r.item === 'APP-1')).toMatchObject({

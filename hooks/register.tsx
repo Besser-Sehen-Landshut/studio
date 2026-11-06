@@ -6,10 +6,7 @@ import type { EngineInterface, Register, TextProps } from 'claude-code';
 import { atom, read, update } from 'claude-code';
 import {
   type BoardRead,
-  LANGS,
-  type Lang,
   type Line,
-  langOf,
   newAlerts,
   paneLines,
   parseState,
@@ -20,13 +17,14 @@ import {
   statusText,
   VIEWS,
   type View,
-} from './board-model';
+} from './board-model.js';
+import { isLang, LANGS, type Lang, resolveLang, stringsFor } from './i18n/index.js';
 
-const PANE = { id: 'studio-board', title: 'Studio board' };
+const PANE_ID = 'studio-board';
 const TICK_MS = 10_000;
 const MAX_PATH_DEPTH = 256;
-const USAGE =
-  'Usage: /studio [list | pipeline | more | group [<project>] | status | pause | resume | lang de|en|auto]';
+/** The arguments, English in every language; the language codes come from the locale files. */
+const COMMANDS = `list | pipeline | more | group [<project>] | status | pause | resume | lang ${[...LANGS, 'auto'].join('|')}`;
 const HINT = 'list | pipeline | more | group | status | pause | resume | lang';
 /** $.store keys of the preferences; neither is per project. */
 const VIEW_KEY = 'view';
@@ -57,57 +55,32 @@ const TONE: Record<NonNullable<Line['tone']>, TextProps> = {
 };
 
 const isView = (v: unknown): v is View => VIEWS.includes(v as View);
-const isLang = (v: unknown): v is Lang => LANGS.includes(v as Lang);
 
 /**
- * The language of the displayed text: `/studio lang` if set, else Claude Code's `language`
- * setting, else the locale (LC_ALL, LC_MESSAGES, LANG); English when none says.
+ * The language of the displayed text, by the chain pushes use too (hooks/i18n/resolve.ts):
+ * `/studio lang` if set, else Claude Code's `language` setting, else the locale (LC_ALL,
+ * LC_MESSAGES, LANG); English when none says or the language has no locale file.
  */
 async function languageOf($: EngineInterface): Promise<Lang> {
   const stored = await $.store.get(LANG_KEY).catch(() => undefined);
-  if (isLang(stored)) return stored;
   const setting = await $.settings.read({ key: 'language' }).catch(() => undefined);
-  const fromSetting = typeof setting === 'string' ? langOf(setting) : undefined;
-  if (fromSetting !== undefined) return fromSetting;
-  for (const value of [
-    await $.env.get('LC_ALL').catch(() => undefined),
-    await $.env.get('LC_MESSAGES').catch(() => undefined),
-    await $.env.get('LANG').catch(() => undefined),
-  ]) {
-    const fromLocale = langOf(value);
-    if (fromLocale !== undefined) return fromLocale;
-  }
-  return 'en';
+  // The engine wants each variable named literally.
+  const env = {
+    LC_ALL: await $.env.get('LC_ALL').catch(() => undefined),
+    LC_MESSAGES: await $.env.get('LC_MESSAGES').catch(() => undefined),
+    LANG: await $.env.get('LANG').catch(() => undefined),
+  };
+  return resolveLang({
+    override: isLang(stored) ? stored : undefined,
+    setting: typeof setting === 'string' ? setting : undefined,
+    env,
+  });
 }
 
 async function storedView($: EngineInterface): Promise<View> {
   const v = await $.store.get(VIEW_KEY).catch(() => undefined);
   return isView(v) ? v : 'list';
 }
-
-const VIEW_REPLY: Record<Lang, Record<View, string>> = {
-  en: {
-    list: 'Studio board: work list.',
-    pipeline: 'Studio board: pipeline (the work list when the pane is narrow).',
-    more: 'Studio board: details. Back with /studio list.',
-    group: 'Studio board: the group, one line per project.',
-  },
-  de: {
-    list: 'Studio-Board: Arbeitsliste.',
-    pipeline: 'Studio-Board: Pipeline (bei schmalem Bereich die Arbeitsliste).',
-    more: 'Studio-Board: Details. Zurück mit /studio list.',
-    group: 'Studio-Board: der Verbund, eine Zeile je Projekt.',
-  },
-};
-
-const FOCUS_REPLY: Record<Lang, (id: string) => string> = {
-  en: (id) => `Studio board: the work list of ${id}. Back with /studio group.`,
-  de: (id) => `Studio-Board: die Arbeitsliste von ${id}. Zurück mit /studio group.`,
-};
-const NO_PROJECT_REPLY: Record<Lang, (id: string) => string> = {
-  en: (id) => `No project ${id} in this group. See /studio group.`,
-  de: (id) => `Kein Projekt ${id} in diesem Verbund. Siehe /studio group.`,
-};
 
 const isAbsolute = (p: string): boolean => /^(?:[\\/]|[A-Za-z]:[\\/])/.test(p);
 const withoutTrailingSlash = (p: string): string => p.replace(/\/+$/, '');
@@ -136,15 +109,6 @@ async function ownerRootOf($: EngineInterface): Promise<string | undefined> {
   const base = xdg && isAbsolute(xdg) ? xdg : home ? `${home}/.local/state` : undefined;
   return base === undefined ? undefined : `${withoutTrailingSlash(base)}/studio/owner`;
 }
-
-const CONFIRMED: Record<Lang, string> = {
-  en: 'REA install confirmed. It installs on the next launch that needs it.',
-  de: 'REA-Installation bestätigt. Sie läuft beim nächsten Start, der sie braucht.',
-};
-const NOT_CONFIRMED: Record<Lang, string> = {
-  en: 'The REA confirmation could not be saved; run studio research install in your own terminal.',
-  de: 'Die REA-Bestätigung ließ sich nicht speichern; studio research install im eigenen Terminal ausführen.',
-};
 
 /**
  * The person pressed the REA install button: writes the one confirmation, for the pinned version
@@ -179,9 +143,9 @@ async function confirmRea($: EngineInterface): Promise<void> {
       ...(want.needsFolder && home ? { folder: `${withoutTrailingSlash(home)}/analysis` } : {}),
     };
     await $.fs.write(file, `${JSON.stringify(confirmation)}\n`);
-    $.ui.toast(CONFIRMED[language]);
+    $.ui.toast(stringsFor(language).reaConfirmed);
   } catch {
-    $.ui.toast(NOT_CONFIRMED[language]);
+    $.ui.toast(stringsFor(language).reaNotConfirmed);
   }
 }
 
@@ -331,14 +295,15 @@ export const register: Register = (on) => {
     const dir = await ownerProject($, e.isInteractive, e.cwd).catch(() => undefined);
     if (dir === undefined) return next(e);
     live.project = dir;
+    const t = stringsFor(await languageOf($));
     await $.command.register({
       name: 'studio',
-      description: 'Show the Studio board: work list, pipeline or details',
+      description: t.commandDescription,
       argumentHint: HINT,
     });
     await refresh($, dir);
     armTimer($, dir);
-    void $.ui.open(PANE).catch(() => undefined);
+    void $.ui.open({ id: PANE_ID, title: t.paneTitle }).catch(() => undefined);
     return next(e);
   });
 
@@ -353,16 +318,18 @@ export const register: Register = (on) => {
         (await $.session.surfaces().catch(() => [])).length > 0,
         await $.session.cwd(),
       ).catch(() => undefined));
-    if (project === undefined) return { text: 'Not in a Studio project.' };
+    if (project === undefined) return { text: stringsFor(await languageOf($)).notInProject };
     live.project = project;
     if (!live.timer) armTimer($, project);
+    const pane = async () => ({ id: PANE_ID, title: stringsFor(await read($, lang)).paneTitle });
     if (arg === '') {
+      const t = stringsFor(await read($, lang));
       try {
-        await $.ui.open(PANE);
+        await $.ui.open({ id: PANE_ID, title: t.paneTitle });
       } catch {
-        return { text: 'The board could not be opened here.' };
+        return { text: t.openFailed };
       }
-      return { text: 'Studio board opened.' };
+      return { text: t.opened };
     }
     if (arg === 'status') {
       await refresh($, project);
@@ -376,9 +343,9 @@ export const register: Register = (on) => {
       const own = (await read($, board)) as BoardRead;
       const row =
         own.kind === 'ok' ? own.state.group?.projects.find((p) => p.id === groupArg) : undefined;
-      const language = await read($, lang);
+      const t = stringsFor(await read($, lang));
       if (own.kind !== 'ok' || own.state.group === undefined || row === undefined) {
-        return { text: NO_PROJECT_REPLY[language](groupArg) };
+        return { text: t.noProjectReply(groupArg) };
       }
       if (!row.self && row.stateDir !== undefined) {
         live.focus = { id: row.id, stateDir: row.stateDir, group: own.state.group.name };
@@ -386,8 +353,8 @@ export const register: Register = (on) => {
       live.view = 'list';
       await update($, view, () => 'list');
       await refresh($, project);
-      void $.ui.open(PANE).catch(() => undefined);
-      return { text: FOCUS_REPLY[language](row.id) };
+      void $.ui.open(await pane()).catch(() => undefined);
+      return { text: t.focusReply(row.id) };
     }
     if (isView(arg)) {
       const wasFocused = live.focus !== undefined;
@@ -397,29 +364,25 @@ export const register: Register = (on) => {
       if (wasFocused) await refresh($, project);
       // A store that fails keeps the view for this session only.
       await $.store.set(VIEW_KEY, arg).catch(() => undefined);
-      void $.ui.open(PANE).catch(() => undefined);
-      return { text: VIEW_REPLY[await read($, lang)][arg] };
+      void $.ui.open(await pane()).catch(() => undefined);
+      return { text: stringsFor(await read($, lang)).viewReply[arg] };
     }
     const langArg = /^lang\s+(\S+)$/.exec(arg)?.[1];
     if (langArg !== undefined && (isLang(langArg) || langArg === 'auto')) {
       if (langArg === 'auto') await $.store.delete(LANG_KEY).catch(() => undefined);
       else await $.store.set(LANG_KEY, langArg).catch(() => undefined);
       await refresh($, project);
-      const now = await read($, lang);
-      return { text: now === 'de' ? 'Studio-Board: Deutsch.' : 'Studio board: English.' };
+      return { text: stringsFor(await read($, lang)).languageSet };
     }
+    const t = stringsFor(await languageOf($));
     const binary = shellWord(`${$.plugin.root}/bin/studio`);
     if (arg === 'pause') {
-      return {
-        text: `Pausing needs a terminal: run ${binary} --project ${shellWord(project)} pause`,
-      };
+      return { text: t.pauseNeedsTerminal(`${binary} --project ${shellWord(project)} pause`) };
     }
     if (arg === 'resume') {
-      return {
-        text: `Resuming needs a terminal: run ${binary} --project ${shellWord(project)} resume`,
-      };
+      return { text: t.resumeNeedsTerminal(`${binary} --project ${shellWord(project)} resume`) };
     }
-    return { text: USAGE };
+    return { text: t.usage(COMMANDS) };
   });
 
   on('ui.render', { component: 'Pane', requestId: 'studio-board' }, async ($, e) => {
