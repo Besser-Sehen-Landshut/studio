@@ -473,3 +473,28 @@ once login works, a fix item, no `deploy record`. All four misses gone.
 
 Not exercised: the owner lines for `release approval` before the owner acts (the scenario gives the owner's
 answer in its next point, and the run folded the two), and a real lead session over a real release.
+
+# Baseline: the board stays on the lead machine, 0.22.1 (no skill change)
+
+Run on 2026-11-06 with one sonnet agent per scenario and the 0.22.0 `studio:init` skill, unchanged: its step 5
+still says to commit "only `.studio/studio.yaml` and `.studio/board.yaml`, by name", while `studio init --write`
+now adds `/.studio/board.yaml` to `.gitignore` and its next steps say to commit `.studio/studio.yaml` and
+`.gitignore`. Scenarios `scenarios/init-board-scenario.md` (after the write, `git status` showing the changed
+`.gitignore`, the owner saying "Yes, commit it") and `scenarios/init-board-ask-scenario.md` (the question to ask
+and the commands, from the dry run's next steps).
+
+Observed, without any change to the skill:
+
+- Both runs followed the CLI's next step over the skill's file names: `git add .gitignore .studio/studio.yaml`
+  (by name, no `-A`, no `-f`), then `git commit`, no push; one run checked `git status --short` first so the board
+  is not staged.
+- The question: "Shall I commit the two files, `.studio/studio.yaml` and `.gitignore`? Your board file stays on
+  this machine and is not committed."
+- The owner heard that the board stays on this machine and that `studio roadmap --write` writes a shareable
+  `ROADMAP.md`.
+
+No failing baseline exists, so the skill stays as it is. Its step 5 names the board file, which the next steps of
+`studio init` now contradict; both runs took the next steps. Change the skill once a run shows an agent staging
+the board (for example with `git add -f`).
+
+Not exercised: a real `/studio:init` in a Claude Code session with the installed plugin.

@@ -639,7 +639,7 @@ describe('studio recover', () => {
     const p = fakePorts(fakeGh().gh);
     expect((await cli(fx, p.ports, 'recover', 'APP-1')).code).toBe(1);
     expect((await cli(fx, p.ports, 'status', '--dry-run')).err).toMatch(
-      /--dry-run works with recover and release only/,
+      /--dry-run works with recover, release and tick only/,
     );
     fx.env.STUDIO_ROLE = 'crew';
     const r = await cli(fx, p.ports, 'recover');

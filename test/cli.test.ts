@@ -5083,3 +5083,111 @@ describe('studio tick: pushes to the phone', () => {
     expect(h.posts).toEqual([]);
   });
 });
+
+describe('tick --dry-run', () => {
+  /** Every file below `dir` with its content: a write anywhere shows as a difference. */
+  const fileTree = (dir: string): Record<string, string> => {
+    const out: Record<string, string> = {};
+    if (!existsSync(dir)) return out;
+    const walk = (d: string) => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const p = join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else out[p] = readFileSync(p, 'utf8');
+      }
+    };
+    walk(dir);
+    return out;
+  };
+  const MUTATING =
+    /^(pr (create|merge|edit|close|comment|review)|workflow run|run rerun|issue (create|close|lock|comment)|api -X)/;
+
+  it('prints what tick would collect, launch and queue, and writes nothing anywhere', async () => {
+    const fx = makeFx([
+      { id: 'APP-1', status: 'ready' },
+      { id: 'APP-2', status: 'assigned' },
+      { id: 'APP-3', status: 'in_review', pr: 7 },
+      { id: 'APP-4', status: 'blocked', notes: ['needs the owner'] },
+    ]);
+    checkStateMarker(fx.state, {
+      projectRealpath: projectRealpath(fx.project),
+      originUrl: git(fx.project, 'remote', 'get-url', 'origin'),
+    });
+    writeStateFile(
+      fx.state,
+      join(fx.state, 'crew.json'),
+      JSON.stringify({
+        'APP-2': {
+          name: 'studio-builder-app-2',
+          item: 'APP-2',
+          role: 'builder',
+          pid: 999999,
+          log: join(fx.state, 'logs', 'APP-2.jsonl'),
+          startedAt: '2026-10-31T09:00:00.000Z',
+          identity: 'start-999999',
+        },
+      }),
+    );
+    const { gh, calls } = passingGh();
+    const { ports, started, stopped } = fakePorts(gh);
+    const before = { home: fileTree(fx.home), project: fileTree(fx.project) };
+    const head = git(fx.project, 'rev-parse', 'HEAD');
+    const r = await cli(fx, ports, 'tick', '--dry-run');
+    expect(r.code).toBe(0);
+    const out = JSON.parse(r.out);
+    expect(out.dryRun).toBe(true);
+    expect(out.errors).toEqual([]);
+    expect(out.collect).toEqual([
+      { item: 'APP-2', why: 'its crew ended: read its report and move it' },
+    ]);
+    expect(out.launch).toEqual([{ item: 'APP-1', role: 'builder' }]);
+    expect(out.queue).toEqual([{ item: 'APP-3', pr: 7, repo: 'org/app' }]);
+    expect(out.queueRun).toMatchObject({ pending: 1, would: 'run the queue' });
+    expect(out.needsLead).toContainEqual({ item: 'APP-4', reason: 'blocked: needs the owner' });
+    // Nothing changed: no file below the home (state and owner roots), none in the project.
+    expect(fileTree(fx.home)).toEqual(before.home);
+    expect(fileTree(fx.project)).toEqual(before.project);
+    expect(git(fx.project, 'rev-parse', 'HEAD')).toBe(head);
+    expect(started).toEqual([]);
+    expect(stopped).toEqual([]);
+    expect(calls.filter((c) => MUTATING.test(c))).toEqual([]);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('ready');
+    expect(statusOf(fx, 'APP-2')?.status).toBe('assigned');
+  });
+
+  it('creates no state root, marker or owner state in a project that never ran', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'ready' }]);
+    const r = await cli(fx, fakePorts(passingGh().gh).ports, 'tick', '--dry-run');
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out).launch).toEqual([{ item: 'APP-1', role: 'builder' }]);
+    expect(existsSync(fx.state)).toBe(false);
+    expect(existsSync(fx.owner)).toBe(false);
+  });
+
+  it('names a researcher launch that needs the owner’s REA confirmation, and asks nobody', async () => {
+    const fx = makeFx(
+      [{ id: 'APP-1', status: 'ready', type: 'research', role: 'researcher' }],
+      `${STUDIO_YAML.replace(
+        '  reviewer: { model: opus, wip: 1 }',
+        '  reviewer: { model: opus, wip: 1 }\n  researcher: { model: opus, wip: 1 }',
+      )}research:\n  artifacts: /nonexistent/analysis\n`,
+    );
+    const r = await cli(fx, fakePorts(passingGh().gh).ports, 'tick', '--dry-run');
+    const out = JSON.parse(r.out);
+    expect(out.launch).toEqual([
+      expect.objectContaining({ item: 'APP-1', role: 'researcher', rea: 'needs-owner' }),
+    ]);
+    expect(out.needsLead).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringMatching(/^REA install needed for APP-1: the owner confirms once/),
+    });
+    expect(existsSync(fx.owner)).toBe(false);
+  });
+
+  it('is refused for crews and takes no arguments', async () => {
+    const fx = makeFx([]);
+    const crew = { ...fx, env: { ...fx.env, STUDIO_ROLE: 'crew' } };
+    expect((await cli(crew, fakePorts(passingGh().gh).ports, 'tick', '--dry-run')).code).toBe(1);
+    expect((await cli(fx, fakePorts(passingGh().gh).ports, 'tick', 'x', '--dry-run')).code).toBe(1);
+  });
+});

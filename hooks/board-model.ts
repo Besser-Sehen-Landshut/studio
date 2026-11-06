@@ -1569,3 +1569,36 @@ export function stateDirName(realPath: string, sha256Hex: string): string {
   const suffix = (parts[parts.length - 1] ?? '').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 32);
   return suffix ? `${hash}-${suffix}` : hash;
 }
+
+// ---------- the owner config's pane switch (same meaning as src/config.ts) ----------
+
+export type NestedWorktrees = 'show' | 'hide';
+
+/**
+ * `pane.nested_worktrees` of the owner config (`show`, the default, or `hide`), read without a
+ * YAML library: the block form (`pane:` with an indented `nested_worktrees: hide`) and the flow
+ * form (`pane: { nested_worktrees: hide }`), comments and quotes allowed. Anything else, a file
+ * that cannot be read included, is `show`: the switch only ever hides.
+ */
+export function nestedWorktreesOf(text: string): NestedWorktrees {
+  const value = (raw: string | undefined): NestedWorktrees =>
+    raw?.replace(/^["']|["']$/g, '') === 'hide' ? 'hide' : 'show';
+  const lines = text.split(/\r?\n/).map((l) => l.replace(/\s+#.*$/, '').replace(/^#.*$/, ''));
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] as string;
+    const flow = /^pane:\s*\{(.*)\}\s*$/.exec(line);
+    if (flow) {
+      const m = /(?:^|,)\s*["']?nested_worktrees["']?\s*:\s*([^,\s}]+)/.exec(flow[1] as string);
+      return value(m?.[1]);
+    }
+    if (!/^pane:\s*$/.test(line)) continue;
+    for (const inner of lines.slice(i + 1)) {
+      if (inner.trim() === '') continue;
+      if (!/^\s/.test(inner)) break;
+      const m = /^\s+["']?nested_worktrees["']?\s*:\s*(\S+)\s*$/.exec(inner);
+      if (m) return value(m[1]);
+    }
+    return 'show';
+  }
+  return 'show';
+}

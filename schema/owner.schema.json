@@ -132,6 +132,20 @@
       },
       "additionalProperties": false
     },
+    "pane": {
+      "type": "object",
+      "properties": {
+        "nested_worktrees": {
+          "default": "show",
+          "type": "string",
+          "enum": [
+            "show",
+            "hide"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "limits": {
       "type": "object",
       "properties": {

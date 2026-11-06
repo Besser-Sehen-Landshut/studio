@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -87,7 +87,16 @@ function world() {
     let out = '';
     let err = '';
     const code = await runCli(['--project', dir, ...args], {
-      ports: realPorts(),
+      ports: {
+        ...realPorts(),
+        // GitHub-hosted runners: the capacity read asks gh for runs; nothing else may reach it.
+        gh: {
+          api: async () => '0',
+          run: async (a: string[]) => {
+            throw new Error(`unscripted gh ${a.join(' ')}`);
+          },
+        },
+      },
       stdout: (s) => {
         out += s;
       },
@@ -140,5 +149,23 @@ describe('the group on the command line', () => {
     );
     const fromMember = await w.cli(w.web, 'epic', 'edit', 'E-1', '--member', 'platform:PLAT-1');
     expect(fromMember.code).toBe(1);
+  });
+
+  it('tick --dry-run in a member names the contract check and fetches nothing', async () => {
+    const before = readdirSync(w.main).sort();
+    const r = await w.cli(w.web, 'tick', '--dry-run');
+    expect(r.code).toBe(0);
+    const out = JSON.parse(r.out);
+    expect(out.contractCheck).toEqual({
+      group: 'shop',
+      main: 'platform',
+      would:
+        'fetch origin/main of platform and compare its contract files with the last record; a change adds one check item',
+      lastRecord: 'none: the first look records a baseline',
+    });
+    expect(readdirSync(w.main).sort()).toEqual(before);
+    // The main project checks nothing.
+    const main = JSON.parse((await w.cli(w.main, 'tick', '--dry-run')).out);
+    expect(main.contractCheck).toBeUndefined();
   });
 });

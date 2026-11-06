@@ -7,6 +7,7 @@ import { atom, read, update } from 'claude-code';
 import {
   type BoardRead,
   type Line,
+  nestedWorktreesOf,
   newAlerts,
   paneLines,
   parseState,
@@ -24,8 +25,8 @@ const PANE_ID = 'studio-board';
 const TICK_MS = 10_000;
 const MAX_PATH_DEPTH = 256;
 /** The arguments, English in every language; the language codes come from the locale files. */
-const COMMANDS = `list | pipeline | more | group [<project>] | status | pause | resume | lang ${[...LANGS, 'auto'].join('|')}`;
-const HINT = 'list | pipeline | more | group | status | pause | resume | lang';
+const COMMANDS = `list | pipeline | more | group [<project>] | status | pause | resume | lang ${[...LANGS, 'auto'].join('|')} | off | on`;
+const HINT = 'list | pipeline | more | group | status | pause | resume | lang | off | on';
 /** $.store keys of the preferences; neither is per project. */
 const VIEW_KEY = 'view';
 const LANG_KEY = 'lang';
@@ -42,6 +43,17 @@ const view = atom({ plugin: 'studio', key: 'view' } as const, 'list' as View, { 
 const lang = atom({ plugin: 'studio', key: 'lang' } as const, 'en' as Lang, { shape: 'lang-1' });
 /** The group's name while another project of it is shown; '' for this project. */
 const focusAtom = atom({ plugin: 'studio', key: 'focus' } as const, '', { shape: 'focus-1' });
+/**
+ * `/studio off` and `/studio on` in this session ($.state is the session's, kept over a reload);
+ * `auto` until one of them: then the owner config decides (pane.nested_worktrees).
+ */
+const switchAtom = atom(
+  { plugin: 'studio', key: 'switch' } as const,
+  'auto' as 'auto' | 'on' | 'off',
+  {
+    shape: 'switch-1',
+  },
+);
 
 const TONE: Record<NonNullable<Line['tone']>, TextProps> = {
   ok: { color: 'success' },
@@ -95,6 +107,54 @@ async function findProject($: EngineInterface, cwd: string): Promise<string | un
     dir = dir.slice(0, cut);
   }
   return undefined;
+}
+
+/** `$XDG_CONFIG_HOME/studio/config.yaml`, else `$HOME/.config/studio/config.yaml`, as src/config.ts. */
+async function ownerConfigFileOf($: EngineInterface): Promise<string | undefined> {
+  const xdg = await $.env.get('XDG_CONFIG_HOME').catch(() => undefined);
+  const home = await $.env.get('HOME').catch(() => undefined);
+  const base = xdg && isAbsolute(xdg) ? xdg : home ? `${home}/.config` : undefined;
+  return base === undefined ? undefined : `${withoutTrailingSlash(base)}/studio/config.yaml`;
+}
+
+/**
+ * Whether the session runs in a git worktree nested under a Studio project: the nearest folder at
+ * or above `cwd` with a `.git` holds it as a file (a linked worktree), and a folder above that one
+ * holds `.studio/studio.yaml`.
+ */
+async function inNestedWorktree($: EngineInterface, cwd: string): Promise<boolean> {
+  let dir = withoutTrailingSlash(cwd);
+  for (let depth = 0; depth < MAX_PATH_DEPTH; depth++) {
+    const git = `${dir}/.git`;
+    if (await $.fs.exists(git)) {
+      const st = await $.fs.stat(git);
+      if (st.kind !== 'file') return false;
+      const cut = dir.lastIndexOf('/');
+      return cut >= 0 && (await findProject($, dir.slice(0, cut))) !== undefined;
+    }
+    const cut = dir.lastIndexOf('/');
+    if (cut < 0) return false;
+    dir = dir.slice(0, cut);
+  }
+  return false;
+}
+
+/** Whether the owner config hides the board in this session: `hide`, and a nested worktree. */
+async function hiddenByConfig($: EngineInterface, cwd: string): Promise<boolean> {
+  try {
+    const file = await ownerConfigFileOf($);
+    if (file === undefined || !(await $.fs.exists(file))) return false;
+    if (nestedWorktreesOf(await $.fs.read(file)) !== 'hide') return false;
+    return await inNestedWorktree($, cwd);
+  } catch {
+    return false;
+  }
+}
+
+/** The board is off in this session: `/studio off`, or the owner config's switch before any. */
+async function isOff($: EngineInterface): Promise<boolean> {
+  const s = await read($, switchAtom);
+  return s === 'off' || (s === 'auto' && live.hidden === true);
 }
 
 async function sha256Hex(text: string): Promise<string> {
@@ -212,6 +272,8 @@ const live: {
   shownStatus?: string;
   running?: Promise<void>;
   view?: View;
+  /** The owner config hides the board in this session (a nested worktree). */
+  hidden?: boolean;
   /** Another project of the group whose work list is shown, by its state folder. */
   focus?: { id: string; stateDir: string; group: string };
 } = {};
@@ -246,6 +308,8 @@ async function isPaused($: EngineInterface, root: string): Promise<boolean> {
 }
 
 async function refreshOnce($: EngineInterface, dir: string) {
+  // Off in this session: nothing is read, drawn or toasted.
+  if (await isOff($).catch(() => false)) return;
   try {
     const language = await languageOf($);
     live.view ??= await storedView($);
@@ -295,14 +359,17 @@ export const register: Register = (on) => {
     const dir = await ownerProject($, e.isInteractive, e.cwd).catch(() => undefined);
     if (dir === undefined) return next(e);
     live.project = dir;
+    live.hidden = await hiddenByConfig($, e.cwd);
     const t = stringsFor(await languageOf($));
     await $.command.register({
       name: 'studio',
       description: t.commandDescription,
       argumentHint: HINT,
     });
-    await refresh($, dir);
     armTimer($, dir);
+    // Off in this session: the command stays, so /studio on can bring the board back.
+    if (await isOff($)) return next(e);
+    await refresh($, dir);
     void $.ui.open({ id: PANE_ID, title: t.paneTitle }).catch(() => undefined);
     return next(e);
   });
@@ -319,9 +386,24 @@ export const register: Register = (on) => {
         await $.session.cwd(),
       ).catch(() => undefined));
     if (project === undefined) return { text: stringsFor(await languageOf($)).notInProject };
+    if (live.project === undefined) live.hidden = await hiddenByConfig($, await $.session.cwd());
     live.project = project;
     if (!live.timer) armTimer($, project);
     const pane = async () => ({ id: PANE_ID, title: stringsFor(await read($, lang)).paneTitle });
+    if (arg === 'off') {
+      await update($, switchAtom, () => 'off');
+      live.shownStatus = undefined;
+      $.ui.status(undefined);
+      await $.ui.close({ id: PANE_ID }).catch(() => undefined);
+      return { text: stringsFor(await languageOf($)).offReply };
+    }
+    if (arg === 'on') {
+      await update($, switchAtom, () => 'on');
+      await refresh($, project);
+      void $.ui.open(await pane()).catch(() => undefined);
+      return { text: stringsFor(await languageOf($)).onReply };
+    }
+    if (await isOff($)) return { text: stringsFor(await languageOf($)).offReply };
     if (arg === '') {
       const t = stringsFor(await read($, lang));
       try {
@@ -387,6 +469,13 @@ export const register: Register = (on) => {
 
   on('ui.render', { component: 'Pane', requestId: 'studio-board' }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e);
+    if (await isOff($)) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>{stringsFor(await read($, lang)).offPane}</Text>
+        </Box>
+      );
+    }
     const lines = paneLines((await read($, board)) as BoardRead, {
       columns: e.props.bodyColumns,
       nowMs: await $.clock.now(),

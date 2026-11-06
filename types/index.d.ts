@@ -14,6 +14,8 @@ declare module 'claude-code' {
       lang: Shaped<'en' | 'de'>;
       /** The group's name while another project of it is shown; '' for this project. */
       focus: Shaped<string>;
+      /** `/studio off` and `/studio on` in this session; `auto`: the owner config decides. */
+      switch: Shaped<'auto' | 'on' | 'off'>;
     };
   }
 }

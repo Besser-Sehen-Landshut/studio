@@ -399,7 +399,7 @@ var require_directives = __commonJS({
         return tag[0] === "!" ? tag : `!<${tag}>`;
       }
       toString(doc) {
-        const lines = this.yaml.explicit ? [`%YAML ${this.yaml.version || "1.2"}`] : [];
+        const lines2 = this.yaml.explicit ? [`%YAML ${this.yaml.version || "1.2"}`] : [];
         const tagEntries = Object.entries(this.tags);
         let tagNames;
         if (doc && tagEntries.length > 0 && identity3.isNode(doc.contents)) {
@@ -415,9 +415,9 @@ var require_directives = __commonJS({
           if (handle === "!!" && prefix === "tag:yaml.org,2002:")
             continue;
           if (!doc || tagNames.some((tn) => tn.startsWith(prefix)))
-            lines.push(`%TAG ${handle} ${prefix}`);
+            lines2.push(`%TAG ${handle} ${prefix}`);
         }
-        return lines.join("\n");
+        return lines2.join("\n");
       }
     };
     Directives.defaultYaml = { explicit: false, version: "1.2" };
@@ -1878,22 +1878,22 @@ var require_stringifyCollection = __commonJS({
       const { indent, options: { commentString } } = ctx;
       const itemCtx = Object.assign({}, ctx, { indent: itemIndent, type: null });
       let chompKeep = false;
-      const lines = [];
+      const lines2 = [];
       for (let i2 = 0; i2 < items.length; ++i2) {
         const item = items[i2];
         let comment2 = null;
         if (identity3.isNode(item)) {
           if (!chompKeep && item.spaceBefore)
-            lines.push("");
-          addCommentBefore(ctx, lines, item.commentBefore, chompKeep);
+            lines2.push("");
+          addCommentBefore(ctx, lines2, item.commentBefore, chompKeep);
           if (item.comment)
             comment2 = item.comment;
         } else if (identity3.isPair(item)) {
           const ik = identity3.isNode(item.key) ? item.key : null;
           if (ik) {
             if (!chompKeep && ik.spaceBefore)
-              lines.push("");
-            addCommentBefore(ctx, lines, ik.commentBefore, chompKeep);
+              lines2.push("");
+            addCommentBefore(ctx, lines2, ik.commentBefore, chompKeep);
           }
         }
         chompKeep = false;
@@ -1902,15 +1902,15 @@ var require_stringifyCollection = __commonJS({
           str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
           chompKeep = false;
-        lines.push(blockItemPrefix + str2);
+        lines2.push(blockItemPrefix + str2);
       }
       let str;
-      if (lines.length === 0) {
+      if (lines2.length === 0) {
         str = flowChars.start + flowChars.end;
       } else {
-        str = lines[0];
-        for (let i2 = 1; i2 < lines.length; ++i2) {
-          const line4 = lines[i2];
+        str = lines2[0];
+        for (let i2 = 1; i2 < lines2.length; ++i2) {
+          const line4 = lines2[i2];
           str += line4 ? `
 ${indent}${line4}` : "\n";
         }
@@ -1933,22 +1933,22 @@ ${indent}${line4}` : "\n";
       });
       let reqNewline = false;
       let linesAtValue = 0;
-      const lines = [];
+      const lines2 = [];
       for (let i2 = 0; i2 < items.length; ++i2) {
         const item = items[i2];
         let comment = null;
         if (identity3.isNode(item)) {
           if (item.spaceBefore)
-            lines.push("");
-          addCommentBefore(ctx, lines, item.commentBefore, false);
+            lines2.push("");
+          addCommentBefore(ctx, lines2, item.commentBefore, false);
           if (item.comment)
             comment = item.comment;
         } else if (identity3.isPair(item)) {
           const ik = identity3.isNode(item.key) ? item.key : null;
           if (ik) {
             if (ik.spaceBefore)
-              lines.push("");
-            addCommentBefore(ctx, lines, ik.commentBefore, false);
+              lines2.push("");
+            addCommentBefore(ctx, lines2, ik.commentBefore, false);
             if (ik.comment)
               reqNewline = true;
           }
@@ -1965,12 +1965,12 @@ ${indent}${line4}` : "\n";
         if (comment)
           reqNewline = true;
         let str = stringify3.stringify(item, itemCtx, () => comment = null);
-        reqNewline || (reqNewline = lines.length > linesAtValue || str.includes("\n"));
+        reqNewline || (reqNewline = lines2.length > linesAtValue || str.includes("\n"));
         if (i2 < items.length - 1) {
           str += ",";
         } else if (ctx.options.trailingComma) {
           if (ctx.options.lineWidth > 0) {
-            reqNewline || (reqNewline = lines.reduce((sum, line4) => sum + line4.length + 2, 2) + (str.length + 2) > ctx.options.lineWidth);
+            reqNewline || (reqNewline = lines2.reduce((sum, line4) => sum + line4.length + 2, 2) + (str.length + 2) > ctx.options.lineWidth);
           }
           if (reqNewline) {
             str += ",";
@@ -1978,35 +1978,35 @@ ${indent}${line4}` : "\n";
         }
         if (comment)
           str += stringifyComment.lineComment(str, itemIndent, commentString(comment));
-        lines.push(str);
-        linesAtValue = lines.length;
+        lines2.push(str);
+        linesAtValue = lines2.length;
       }
       const { start, end } = flowChars;
-      if (lines.length === 0) {
+      if (lines2.length === 0) {
         return start + end;
       } else {
         if (!reqNewline) {
-          const len = lines.reduce((sum, line4) => sum + line4.length + 2, 2);
+          const len = lines2.reduce((sum, line4) => sum + line4.length + 2, 2);
           reqNewline = ctx.options.lineWidth > 0 && len > ctx.options.lineWidth;
         }
         if (reqNewline) {
           let str = start;
-          for (const line4 of lines)
+          for (const line4 of lines2)
             str += line4 ? `
 ${indentStep}${indent}${line4}` : "\n";
           return `${str}
 ${indent}${end}`;
         } else {
-          return `${start}${fcPadding}${lines.join(" ")}${fcPadding}${end}`;
+          return `${start}${fcPadding}${lines2.join(" ")}${fcPadding}${end}`;
         }
       }
     }
-    function addCommentBefore({ indent, options: { commentString } }, lines, comment, chompKeep) {
+    function addCommentBefore({ indent, options: { commentString } }, lines2, comment, chompKeep) {
       if (comment && chompKeep)
         comment = comment.replace(/^\n+/, "");
       if (comment) {
         const ic = stringifyComment.indentComment(commentString(comment), indent);
-        lines.push(ic.trimStart());
+        lines2.push(ic.trimStart());
       }
     }
     exports.stringifyCollection = stringifyCollection;
@@ -2644,11 +2644,11 @@ var require_binary = __commonJS({
         if (type !== Scalar.Scalar.QUOTE_DOUBLE) {
           const lineWidth = Math.max(ctx.options.lineWidth - ctx.indent.length, ctx.options.minContentWidth);
           const n4 = Math.ceil(str.length / lineWidth);
-          const lines = new Array(n4);
+          const lines2 = new Array(n4);
           for (let i2 = 0, o2 = 0; i2 < n4; ++i2, o2 += lineWidth) {
-            lines[i2] = str.substr(o2, lineWidth);
+            lines2[i2] = str.substr(o2, lineWidth);
           }
-          str = lines.join(type === Scalar.Scalar.BLOCK_LITERAL ? "\n" : " ");
+          str = lines2.join(type === Scalar.Scalar.BLOCK_LITERAL ? "\n" : " ");
         }
         return stringifyString.stringifyString({ comment, type, value: str }, ctx, onComment, onChompKeep);
       }
@@ -3328,35 +3328,35 @@ var require_stringifyDocument = __commonJS({
     var stringify3 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyDocument(doc, options) {
-      const lines = [];
+      const lines2 = [];
       let hasDirectives = options.directives === true;
       if (options.directives !== false && doc.directives) {
         const dir = doc.directives.toString(doc);
         if (dir) {
-          lines.push(dir);
+          lines2.push(dir);
           hasDirectives = true;
         } else if (doc.directives.docStart)
           hasDirectives = true;
       }
       if (hasDirectives)
-        lines.push("---");
+        lines2.push("---");
       const ctx = stringify3.createStringifyContext(doc, options);
       const { commentString } = ctx.options;
       if (doc.commentBefore) {
-        if (lines.length !== 1)
-          lines.unshift("");
+        if (lines2.length !== 1)
+          lines2.unshift("");
         const cs = commentString(doc.commentBefore);
-        lines.unshift(stringifyComment.indentComment(cs, ""));
+        lines2.unshift(stringifyComment.indentComment(cs, ""));
       }
       let chompKeep = false;
       let contentComment = null;
       if (doc.contents) {
         if (identity3.isNode(doc.contents)) {
           if (doc.contents.spaceBefore && hasDirectives)
-            lines.push("");
+            lines2.push("");
           if (doc.contents.commentBefore) {
             const cs = commentString(doc.contents.commentBefore);
-            lines.push(stringifyComment.indentComment(cs, ""));
+            lines2.push(stringifyComment.indentComment(cs, ""));
           }
           ctx.forceBlockIndent = !!doc.comment;
           contentComment = doc.contents.comment;
@@ -3365,36 +3365,36 @@ var require_stringifyDocument = __commonJS({
         let body = stringify3.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
         if (contentComment)
           body += stringifyComment.lineComment(body, "", commentString(contentComment));
-        if ((body[0] === "|" || body[0] === ">") && lines[lines.length - 1] === "---") {
-          lines[lines.length - 1] = `--- ${body}`;
+        if ((body[0] === "|" || body[0] === ">") && lines2[lines2.length - 1] === "---") {
+          lines2[lines2.length - 1] = `--- ${body}`;
         } else
-          lines.push(body);
+          lines2.push(body);
       } else {
-        lines.push(stringify3.stringify(doc.contents, ctx));
+        lines2.push(stringify3.stringify(doc.contents, ctx));
       }
       if (doc.directives?.docEnd) {
         if (doc.comment) {
           const cs = commentString(doc.comment);
           if (cs.includes("\n")) {
-            lines.push("...");
-            lines.push(stringifyComment.indentComment(cs, ""));
+            lines2.push("...");
+            lines2.push(stringifyComment.indentComment(cs, ""));
           } else {
-            lines.push(`... ${cs}`);
+            lines2.push(`... ${cs}`);
           }
         } else {
-          lines.push("...");
+          lines2.push("...");
         }
       } else {
         let dc = doc.comment;
         if (dc && chompKeep)
           dc = dc.replace(/^\n+/, "");
         if (dc) {
-          if ((!chompKeep || contentComment) && lines[lines.length - 1] !== "")
-            lines.push("");
-          lines.push(stringifyComment.indentComment(commentString(dc), ""));
+          if ((!chompKeep || contentComment) && lines2[lines2.length - 1] !== "")
+            lines2.push("");
+          lines2.push(stringifyComment.indentComment(commentString(dc), ""));
         }
       }
-      return lines.join("\n") + "\n";
+      return lines2.join("\n") + "\n";
     }
     exports.stringifyDocument = stringifyDocument;
   }
@@ -4456,17 +4456,17 @@ var require_resolve_block_scalar = __commonJS({
       if (!header)
         return { value: "", type: null, comment: "", range: [start, start, start] };
       const type = header.mode === ">" ? Scalar.Scalar.BLOCK_FOLDED : Scalar.Scalar.BLOCK_LITERAL;
-      const lines = scalar.source ? splitLines(scalar.source) : [];
-      let chompStart = lines.length;
-      for (let i2 = lines.length - 1; i2 >= 0; --i2) {
-        const content = lines[i2][1];
+      const lines2 = scalar.source ? splitLines(scalar.source) : [];
+      let chompStart = lines2.length;
+      for (let i2 = lines2.length - 1; i2 >= 0; --i2) {
+        const content = lines2[i2][1];
         if (content === "" || content === "\r")
           chompStart = i2;
         else
           break;
       }
       if (chompStart === 0) {
-        const value3 = header.chomp === "+" && lines.length > 0 ? "\n".repeat(Math.max(1, lines.length - 1)) : "";
+        const value3 = header.chomp === "+" && lines2.length > 0 ? "\n".repeat(Math.max(1, lines2.length - 1)) : "";
         let end2 = start + header.length;
         if (scalar.source)
           end2 += scalar.source.length;
@@ -4476,7 +4476,7 @@ var require_resolve_block_scalar = __commonJS({
       let offset = scalar.offset + header.length;
       let contentStart = 0;
       for (let i2 = 0; i2 < chompStart; ++i2) {
-        const [indent, content] = lines[i2];
+        const [indent, content] = lines2[i2];
         if (content === "" || content === "\r") {
           if (header.indent === 0 && indent.length > trimIndent)
             trimIndent = indent.length;
@@ -4496,17 +4496,17 @@ var require_resolve_block_scalar = __commonJS({
         }
         offset += indent.length + content.length + 1;
       }
-      for (let i2 = lines.length - 1; i2 >= chompStart; --i2) {
-        if (lines[i2][0].length > trimIndent)
+      for (let i2 = lines2.length - 1; i2 >= chompStart; --i2) {
+        if (lines2[i2][0].length > trimIndent)
           chompStart = i2 + 1;
       }
       let value2 = "";
       let sep7 = "";
       let prevMoreIndented = false;
       for (let i2 = 0; i2 < contentStart; ++i2)
-        value2 += lines[i2][0].slice(trimIndent) + "\n";
+        value2 += lines2[i2][0].slice(trimIndent) + "\n";
       for (let i2 = contentStart; i2 < chompStart; ++i2) {
-        let [indent, content] = lines[i2];
+        let [indent, content] = lines2[i2];
         offset += indent.length + content.length + 1;
         const crlf = content[content.length - 1] === "\r";
         if (crlf)
@@ -4543,8 +4543,8 @@ var require_resolve_block_scalar = __commonJS({
         case "-":
           break;
         case "+":
-          for (let i2 = chompStart; i2 < lines.length; ++i2)
-            value2 += "\n" + lines[i2][0].slice(trimIndent);
+          for (let i2 = chompStart; i2 < lines2.length; ++i2)
+            value2 += "\n" + lines2[i2][0].slice(trimIndent);
           if (value2[value2.length - 1] !== "\n")
             value2 += "\n";
           break;
@@ -4619,10 +4619,10 @@ var require_resolve_block_scalar = __commonJS({
       const first = split2[0];
       const m = first.match(/^( *)/);
       const line0 = m?.[1] ? [m[1], first.slice(m[1].length)] : ["", first];
-      const lines = [line0];
+      const lines2 = [line0];
       for (let i2 = 1; i2 < split2.length; i2 += 2)
-        lines.push([split2[i2], split2[i2 + 1]]);
-      return lines;
+        lines2.push([split2[i2], split2[i2 + 1]]);
+      return lines2;
     }
     exports.resolveBlockScalar = resolveBlockScalar;
   }
@@ -7841,19 +7841,19 @@ var require_shell_quote = __commonJS({
 });
 
 // src/main.ts
-import { realpathSync as realpathSync10 } from "node:fs";
+import { realpathSync as realpathSync11 } from "node:fs";
 import { homedir as homedir13 } from "node:os";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
 // src/cli.ts
 import { existsSync as existsSync14 } from "node:fs";
 import { homedir as homedir12 } from "node:os";
-import { dirname as dirname14, join as join49, resolve as resolve9 } from "node:path";
+import { dirname as dirname14, join as join50, resolve as resolve10 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/acceptance.ts
 import { createHash as createHash5 } from "node:crypto";
-import { lstatSync as lstatSync32, readFileSync as readFileSync35 } from "node:fs";
+import { lstatSync as lstatSync32, readFileSync as readFileSync36 } from "node:fs";
 import { join as join36 } from "node:path";
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/external.js
@@ -8636,7 +8636,7 @@ function putProp(target, key, value2) {
   else
     target[key] = value2;
 }
-function mirrorShape(target, source, keys2, wrap) {
+function mirrorShape(target, source, keys2, wrap2) {
   const raw = sourceShape(source);
   for (const key of keys2) {
     const desc = Object.getOwnPropertyDescriptor(raw, key);
@@ -8645,10 +8645,10 @@ function mirrorShape(target, source, keys2, wrap) {
     if (desc.get) {
       deferProp(target, key, () => {
         const value2 = source._zod.def.shape[key];
-        return wrap ? wrap(value2, key) : value2;
+        return wrap2 ? wrap2(value2, key) : value2;
       });
     } else
-      putProp(target, key, wrap ? wrap(desc.value, key) : desc.value);
+      putProp(target, key, wrap2 ? wrap2(desc.value, key) : desc.value);
   }
 }
 function mirrorProps(target, source) {
@@ -9596,14 +9596,14 @@ function toDotPath(_path) {
   return segs.join("");
 }
 function prettifyError(error62) {
-  const lines = [];
+  const lines2 = [];
   const issues = [...error62.issues].sort((a2, b) => (a2.path ?? []).length - (b.path ?? []).length);
   for (const issue2 of issues) {
-    lines.push(`\u2716 ${issue2.message}`);
+    lines2.push(`\u2716 ${issue2.message}`);
     if (issue2.path?.length)
-      lines.push(`  \u2192 at ${toDotPath(issue2.path)}`);
+      lines2.push(`  \u2192 at ${toDotPath(issue2.path)}`);
   }
-  return lines.join("\n");
+  return lines2.join("\n");
 }
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/core/parse.js
@@ -10438,9 +10438,9 @@ var Doc = class {
       return;
     }
     const content = arg;
-    const lines = content.split("\n").filter((x) => x);
-    const minIndent = Math.min(...lines.map((x) => x.length - x.trimStart().length));
-    const dedented = lines.map((x) => x.slice(minIndent)).map((x) => " ".repeat(this.indent * 2) + x);
+    const lines2 = content.split("\n").filter((x) => x);
+    const minIndent = Math.min(...lines2.map((x) => x.length - x.trimStart().length));
+    const dedented = lines2.map((x) => x.slice(minIndent)).map((x) => " ".repeat(this.indent * 2) + x);
     for (const line4 of dedented) {
       this.content.push(line4);
     }
@@ -12923,7 +12923,7 @@ var recursive = /* @__PURE__ */ new WeakMap();
 var NONE = 0;
 var ASSUMED = 1;
 var PROVEN = 2;
-function isRecursive(inst, stack, resolve10) {
+function isRecursive(inst, stack, resolve11) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -12933,7 +12933,7 @@ function isRecursive(inst, stack, resolve10) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve10);
+      const answer = isRecursive(child, stack, resolve11);
       if (answer > result)
         result = answer;
     }
@@ -12944,7 +12944,7 @@ function isRecursive(inst, stack, resolve10) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve10) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve11) : NONE;
       if (child > answer)
         answer = child;
     }
@@ -13008,7 +13008,7 @@ function isRecursive(inst, stack, resolve10) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve10 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve11 ? inst._zod.innerType : void 0);
       merge3(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -28581,6 +28581,9 @@ var de_default2 = defineLocale({
     focusReply: (id) => `Studio-Board: die Arbeitsliste von ${id}. Zur\xFCck mit /studio group.`,
     noProjectReply: (id) => `Kein Projekt ${id} in diesem Verbund. Siehe /studio group.`,
     languageSet: "Studio-Board: Deutsch.",
+    offReply: "Studio-Board in dieser Sitzung aus: kein Bereich, keine Statuszeile, keine Hinweise. Zur\xFCck mit /studio on.",
+    onReply: "Studio-Board in dieser Sitzung wieder an.",
+    offPane: "Studio-Board ist in dieser Sitzung aus. \u2192 /studio on",
     reaConfirmed: "REA-Installation best\xE4tigt. Sie l\xE4uft beim n\xE4chsten Start, der sie braucht.",
     reaNotConfirmed: "Die REA-Best\xE4tigung lie\xDF sich nicht speichern; studio research install im eigenen Terminal ausf\xFChren.",
     push: {
@@ -28885,6 +28888,9 @@ var strings = {
   focusReply: (id) => `Studio board: the work list of ${id}. Back with /studio group.`,
   noProjectReply: (id) => `No project ${id} in this group. See /studio group.`,
   languageSet: "Studio board: English.",
+  offReply: "Studio board off in this session: no pane, status line or toasts. Back with /studio on.",
+  onReply: "Studio board on again in this session.",
+  offPane: "Studio board is off in this session. \u2192 /studio on",
   reaConfirmed: "REA install confirmed. It installs on the next launch that needs it.",
   reaNotConfirmed: "The REA confirmation could not be saved; run studio research install in your own terminal.",
   push: {
@@ -28982,7 +28988,7 @@ var resolveLang = shipped.resolve;
 var import_yaml2 = __toESM(require_dist(), 1);
 import { existsSync, lstatSync, readdirSync, readFileSync as readFileSync2, statSync } from "node:fs";
 import { join as join2 } from "node:path";
-var STUDIO_VERSION = "0.22.0";
+var STUDIO_VERSION = "0.22.1";
 var HTTPS_GIT = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\.git)?$/;
 var VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
 var PLUGIN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -29206,13 +29212,13 @@ function frontmatterName(file3) {
     return { kind: "invalid" };
   }
   if (text.startsWith("\uFEFF")) text = text.slice(1);
-  const lines = text.split("\n").map((l) => l.replace(/\r$/, ""));
-  const first = lines.findIndex((l) => l.trim() !== "");
-  if (first < 0 || !(lines[first] ?? "").trimStart().startsWith("---")) return { kind: "none" };
-  if (first !== 0 || lines[0] !== "---") return { kind: "invalid" };
-  const end = lines.indexOf("---", 1);
+  const lines2 = text.split("\n").map((l) => l.replace(/\r$/, ""));
+  const first = lines2.findIndex((l) => l.trim() !== "");
+  if (first < 0 || !(lines2[first] ?? "").trimStart().startsWith("---")) return { kind: "none" };
+  if (first !== 0 || lines2[0] !== "---") return { kind: "invalid" };
+  const end = lines2.indexOf("---", 1);
   if (end < 0) return { kind: "invalid" };
-  const doc = (0, import_yaml2.parseDocument)(lines.slice(1, end).join("\n"), { uniqueKeys: true });
+  const doc = (0, import_yaml2.parseDocument)(lines2.slice(1, end).join("\n"), { uniqueKeys: true });
   if (doc.errors.length > 0) return { kind: "invalid" };
   const contents = doc.contents;
   if (contents === null) return { kind: "none" };
@@ -30897,6 +30903,10 @@ var ownerConfigSchema = external_exports.strictObject({
     (n4) => n4.channel === void 0 === (n4.command === void 0),
     "channel and command go together"
   ).optional(),
+  // The Studio board in Claude Code (hooks/register.tsx reads this key itself, without a YAML
+  // library: hooks/board-model.ts nestedWorktreesOf). `hide`: a session in a git worktree nested
+  // under a Studio project starts with the board off (`/studio on` brings it back).
+  pane: external_exports.strictObject({ nestedWorktrees: external_exports.enum(["show", "hide"]).default("show") }).optional(),
   // The same daily cost cap as in studio.yaml, over all projects of the owner together.
   limits: dailyLimitsSchema.optional(),
   // Groups of related projects (src/group.ts); a project folder is in at most one.
@@ -31018,7 +31028,15 @@ function configWarnings(config2) {
 
 // src/init.ts
 var import_yaml14 = __toESM(require_dist(), 1);
-import { lstatSync as lstatSync29, mkdirSync as mkdirSync7, readdirSync as readdirSync11, rmdirSync, rmSync as rmSync7, writeFileSync as writeFileSync11 } from "node:fs";
+import {
+  lstatSync as lstatSync29,
+  mkdirSync as mkdirSync7,
+  readdirSync as readdirSync11,
+  readFileSync as readFileSync33,
+  rmdirSync,
+  rmSync as rmSync7,
+  writeFileSync as writeFileSync11
+} from "node:fs";
 import { join as join33 } from "node:path";
 
 // src/capacity.ts
@@ -31038,7 +31056,7 @@ async function selfHostedBusy(config2, gh, timeoutMs) {
   const pattern = config2.ci.runnerNamePattern;
   const re = pattern === void 0 ? void 0 : new RegExp(pattern);
   const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ, { timeoutMs });
-  let busy = 0;
+  let busy2 = 0;
   let matching = 0;
   for (const line4 of out.split("\n")) {
     if (line4.trim() === "") continue;
@@ -31047,14 +31065,14 @@ async function selfHostedBusy(config2, gh, timeoutMs) {
     const [, name = "", status, isBusy] = m;
     if (re !== void 0 && !re.test(name)) continue;
     matching++;
-    if (status === "online" && isBusy === "true") busy++;
+    if (status === "online" && isBusy === "true") busy2++;
   }
   if (matching === 0) {
     throw new Error(
       pattern === void 0 ? `no organisation runner found for ${org}; capacity reads organisation runners only` : `no organisation runner of ${org} matches ${pattern}; capacity reads organisation runners only`
     );
   }
-  return busy;
+  return busy2;
 }
 async function runCount(config2, gh, status, timeoutMs) {
   const out = await gh.api(
@@ -31338,11 +31356,30 @@ function checkStateMarker(root, expected) {
   } catch {
     throw new Error(`state root marker ${file3} is unreadable`);
   }
-  if (found?.projectRealpath !== expected.projectRealpath || found?.originUrl !== expected.originUrl) {
+  if (found?.projectRealpath !== expected.projectRealpath || typeof found?.originUrl !== "string" || !sameOrigin(found.originUrl, expected.originUrl)) {
     throw new Error(
       `state root marker ${file3} belongs to another project or origin; refusing to launch`
     );
   }
+}
+var CASE_FREE_HOSTS = /* @__PURE__ */ new Set(["github.com", "www.github.com"]);
+function normalizeOrigin(url2) {
+  const raw = url2.trim();
+  const clean6 = (host, path10) => {
+    const h2 = host.toLowerCase().replace(/\.$/, "");
+    let p = path10.replace(/^\/+/, "").replace(/\/+$/, "");
+    p = p.replace(/\.git$/i, "").replace(/\/+$/, "");
+    if (CASE_FREE_HOSTS.has(h2)) p = p.toLowerCase();
+    return `${h2 === "www.github.com" ? "github.com" : h2}/${p}`;
+  };
+  const m = /^(?:git\+)?(?:ssh|https?|git):\/\/(?:[^@/]*@)?([^/:]+)(?::\d*)?(\/.*)?$/i.exec(raw);
+  if (m) return clean6(m[1], m[2] ?? "");
+  const scp = /^(?:[^@/\s]+@)?([A-Za-z0-9.-]+):(?!\/\/)(.+)$/.exec(raw);
+  if (scp && scp[1].length > 1) return clean6(scp[1], scp[2]);
+  return raw.replace(/\/+$/, "");
+}
+function sameOrigin(a2, b) {
+  return normalizeOrigin(a2) === normalizeOrigin(b);
 }
 function cloneOriginUrl(clone2) {
   try {
@@ -32340,11 +32377,11 @@ function scanLogForLimit(stateRoot, id, from) {
     return { start, length: size - start };
   });
   if (!range) return void 0;
-  const lines = range.text.split("\n");
-  if (range.start > from) lines.shift();
+  const lines2 = range.text.split("\n");
+  if (range.start > from) lines2.shift();
   let recovered = false;
   let retry;
-  for (const line4 of lines.reverse()) {
+  for (const line4 of lines2.reverse()) {
     const hit = detectLimit(line4);
     const ev = parsedEvent(line4);
     if (hit) {
@@ -32561,11 +32598,11 @@ function scanLogForBlock(stateRoot, id, from) {
     return { start, length: size - start };
   });
   if (!range) return void 0;
-  const lines = range.text.split("\n");
-  if (range.start > from) lines.shift();
+  const lines2 = range.text.split("\n");
+  if (range.start > from) lines2.shift();
   let recovered = false;
   let retry;
-  for (const line4 of lines.reverse()) {
+  for (const line4 of lines2.reverse()) {
     const hit = detectBlock(line4);
     const ev = parsedEvent(line4);
     if (hit) {
@@ -33032,12 +33069,12 @@ function parseRunners(out) {
     if (line4.trim() === "") continue;
     const m = RUNNER_LINE2.exec(line4);
     if (!m) throw new Error("unparsable runner line");
-    const [, name = "", status, busy, labels = ""] = m;
+    const [, name = "", status, busy2, labels = ""] = m;
     runners.push({
       name,
       labels: labels === "" ? [] : labels.split(","),
       online: status === "online",
-      busy: busy === "true"
+      busy: busy2 === "true"
     });
   }
   return runners;
@@ -33484,14 +33521,14 @@ function writeAtomic(file3, text) {
   }
 }
 function describeDetection(d) {
-  const lines = [`Detection: source ${d.source}, ${d.runners.length} runner(s)`];
+  const lines2 = [`Detection: source ${d.source}, ${d.runners.length} runner(s)`];
   for (const r of d.runners) {
-    lines.push(
+    lines2.push(
       `  ${r.name}  ${r.online ? "online" : "offline"}  ${r.busy ? "busy" : "idle"}  ${r.labels.join(",")}`
     );
   }
-  if (d.error) lines.push(`  error: ${d.error}`);
-  return lines;
+  if (d.error) lines2.push(`  error: ${d.error}`);
+  return lines2;
 }
 async function detectCi(project, primary, ports, current, timeoutMs) {
   const [owner = "", name = ""] = primary.split("/");
@@ -33557,21 +33594,21 @@ async function runSetupCi(o2) {
 `
     );
   } else {
-    const lines = [...describeDetection(detection), "Proposal:"];
-    if (ciOut === void 0) lines.push("  none");
+    const lines2 = [...describeDetection(detection), "Proposal:"];
+    if (ciOut === void 0) lines2.push("  none");
     else
-      lines.push(
+      lines2.push(
         ...(0, import_yaml6.stringify)(ciOut).trimEnd().split("\n").map((l) => `  ${l}`)
       );
     const section = (title, items) => {
-      if (items.length > 0) lines.push(`${title}:`, ...items.map((i2) => `  - ${i2}`));
+      if (items.length > 0) lines2.push(`${title}:`, ...items.map((i2) => `  - ${i2}`));
     };
     section("Notes", allNotes);
     section("Errors", errors);
     section("Warnings", warnings);
-    if (refused) lines.push(refused);
-    if (written) lines.push("written: .studio/studio.yaml");
-    o2.stdout(`${lines.map(safe).join("\n")}
+    if (refused) lines2.push(refused);
+    if (written) lines2.push("written: .studio/studio.yaml");
+    o2.stdout(`${lines2.map(safe).join("\n")}
 `);
   }
   return errors.length > 0 ? 1 : 0;
@@ -34249,9 +34286,9 @@ function timedOutAgents(stateRoot, id) {
   } catch (e) {
     return e.code === "ENOENT" ? 0 : 1;
   }
-  const lines = text.split("\n").filter((l) => l !== "");
-  const ids = new Set(lines.filter((l) => AGENT_ID_RE.test(l)));
-  return ids.size + (lines.some((l) => !AGENT_ID_RE.test(l)) ? 1 : 0);
+  const lines2 = text.split("\n").filter((l) => l !== "");
+  const ids = new Set(lines2.filter((l) => AGENT_ID_RE.test(l)));
+  return ids.size + (lines2.some((l) => !AGENT_ID_RE.test(l)) ? 1 : 0);
 }
 function timeoutReportProblem(stopped, results, analyzers, mandatory) {
   if (stopped === 0) return void 0;
@@ -36639,8 +36676,8 @@ async function checkContracts(o2) {
     if (pathProblem(e.path) === "unusual path") continue;
     files[e.path] = `${e.mode} ${e.oid}`;
   }
-  const lines = Object.keys(files).sort().map((p) => `${files[p]}	${p}`);
-  const digest3 = createHash3("sha256").update(lines.join("\n")).digest("hex").slice(0, 16);
+  const lines2 = Object.keys(files).sort().map((p) => `${files[p]}	${p}`);
+  const digest3 = createHash3("sha256").update(lines2.join("\n")).digest("hex").slice(0, 16);
   const scope = createHash3("sha256").update(JSON.stringify([o2.m.main.repo, globs, narrow])).digest("hex").slice(0, 16);
   const before = readContracts(o2.stateRoot);
   const record2 = {
@@ -37535,6 +37572,41 @@ async function ensureRea(o2) {
   }
   return { installed: installedNow, ...root === void 0 ? {} : { root }, version: version2, mode };
 }
+function reaDecision(o2) {
+  const ownerConfig = loadOwnerConfig(o2.owner);
+  const version2 = reaVersionOf(ownerConfig);
+  const mode = reaMode(ownerConfig);
+  const needsFolder = ownerConfig.researchRoots.length === 0;
+  let installed = true;
+  try {
+    verifyReaInstall(o2.ownerRoot, version2, o2.uid ?? process.getuid?.(), mode);
+  } catch {
+    installed = false;
+  }
+  const what = `${REA_PACKAGE} ${version2} (${mode === "full" ? "trust" : "strict"} mode)`;
+  if (installed && !needsFolder) return { decision: "ready", line: `${what} installed` };
+  const home = o2.owner.homedir ?? homedir5();
+  let pane = false;
+  try {
+    pane = lstatSync19(join22(o2.ownerRoot, PANE_CONFIRM_FILE)).isFile();
+  } catch {
+    pane = false;
+  }
+  const answer = readConsentEntry(o2.ownerRoot, version2, mode, home)?.answer;
+  if (answer === "no" && !pane) {
+    return {
+      decision: "declined",
+      line: `the install of ${what} was declined; studio research install --yes installs it`
+    };
+  }
+  if (answer === "yes" || pane) {
+    return {
+      decision: "install",
+      line: `${installed ? "grants the analysis folder" : `installs ${what}`} on launch: the owner confirmed${pane ? " with the pane" : ""}`
+    };
+  }
+  return { decision: "needs-owner", line: installNeededLine(o2.item, needsFolder) };
+}
 function trustNoticeDue(ownerRoot, now) {
   const file3 = join22(ownerRoot, TRUST_NOTICE_FILE);
   try {
@@ -37795,15 +37867,15 @@ function writeRole(projectDir, role, text) {
   }
 }
 function split(text) {
-  const lines = text.split("\n");
-  const start = lines.findIndex((l) => l.trim() === HEADING);
-  if (start === -1) return { before: lines, lessons: [], after: [], found: false };
-  let end = lines.findIndex((l, i2) => i2 > start && /^##? /.test(l));
-  if (end === -1) end = lines.length;
+  const lines2 = text.split("\n");
+  const start = lines2.findIndex((l) => l.trim() === HEADING);
+  if (start === -1) return { before: lines2, lessons: [], after: [], found: false };
+  let end = lines2.findIndex((l, i2) => i2 > start && /^##? /.test(l));
+  if (end === -1) end = lines2.length;
   return {
-    before: lines.slice(0, start),
-    lessons: lines.slice(start + 1, end).filter((l) => l.trim() !== ""),
-    after: lines.slice(end),
+    before: lines2.slice(0, start),
+    lessons: lines2.slice(start + 1, end).filter((l) => l.trim() !== ""),
+    after: lines2.slice(end),
     found: true
   };
 }
@@ -38248,7 +38320,7 @@ ${item.finding}
 `
     );
   }
-  const lines = [
+  const lines2 = [
     `# Brief for ${id}`,
     "",
     "## Project instructions",
@@ -38425,7 +38497,7 @@ ${item.finding}
     ] : []
   ];
   const file3 = join25(stateRoot, "briefs", `${id}.md`);
-  writeStateFile(stateRoot, file3, lines.join("\n"));
+  writeStateFile(stateRoot, file3, lines2.join("\n"));
   return file3;
 }
 function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {}) {
@@ -38645,8 +38717,8 @@ async function launchCrew(projectDir, item, config2, ports, launcher2 = {}, work
   const turn = launchChain;
   let done = () => {
   };
-  launchChain = new Promise((resolve10) => {
-    done = resolve10;
+  launchChain = new Promise((resolve11) => {
+    done = resolve11;
   });
   await turn;
   const held2 = {};
@@ -41368,6 +41440,15 @@ function reaState(config2, ownerConfig, configDir, ownerRoot) {
     setup: configDir === void 0 ? null : reaSetupHint(configDir, entry)
   };
 }
+var BOARD_TRACKED_LINE = "warning: .studio/board.yaml is tracked by git, but the board is lead-machine state that Studio edits in the working tree: run git rm --cached .studio/board.yaml, add /.studio/board.yaml to .gitignore and commit both; studio roadmap --write writes the shareable ROADMAP.md";
+async function boardTrackedState(project, ports) {
+  try {
+    const out = await ports.git.run(project, ["ls-files", "--", ".studio/board.yaml"]);
+    return out.trim() === "" ? "no" : "yes";
+  } catch {
+    return "unknown";
+  }
+}
 async function doctorReport(o2) {
   let config2;
   try {
@@ -41435,6 +41516,7 @@ async function doctorReport(o2) {
   const pluginsNotAllowed = unallowedPlugins(config2?.plugins, ownerConfig?.allowedPlugins ?? []);
   const git = await gitState(o2.project, o2.ports);
   const projectCheckout = await checkoutState(o2.project, o2.ports);
+  const boardTracked = await boardTrackedState(o2.project, o2.ports);
   const toolchain = toolsOutside(
     o2.env,
     o2.owner.homedir ?? homedir8(),
@@ -41443,6 +41525,7 @@ async function doctorReport(o2) {
   const report = {
     claudeLogin,
     projectCheckout,
+    boardTracked,
     toolchainOutside: toolchain,
     accounts,
     git,
@@ -41481,7 +41564,7 @@ async function runDoctor(o2) {
   else {
     const source = crewToken.source ? ` (${crewToken.source})` : "";
     const provider = report.credentialProvider;
-    const lines = [
+    const lines2 = [
       `project checkout: ${projectCheckout}`,
       ...toolchain.map((t) => `toolchain: ${t}`),
       `claude login: ${claudeLogin}`,
@@ -41491,6 +41574,7 @@ async function runDoctor(o2) {
       ...accounts.flatMap((a2) => expiryLine(a2) ?? []),
       `crew token: ${crewToken.status}${source}${required2 ? "" : " (optional: allow_ambient_credentials)"}`,
       `studio.yaml: ${report.studioYaml}`,
+      ...report.boardTracked === "yes" ? [BOARD_TRACKED_LINE] : [],
       `superpowers: ${report.superpowers}`,
       `git: ${git}`,
       `studio plugin: ${studioCrew}${studioCrew === "not found" && configDir !== void 0 ? ` (${studioPluginHint(configDir)})` : ""}`,
@@ -41515,7 +41599,7 @@ async function runDoctor(o2) {
       ],
       `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(", ") || "none"}`
     ];
-    o2.stdout(`${lines.map(safe).join("\n")}
+    o2.stdout(`${lines2.map(safe).join("\n")}
 `);
   }
   return required2 && crewToken.status !== "set" ? 1 : 0;
@@ -41684,14 +41768,14 @@ function runSetupStack(o2) {
     o2.stdout(`${JSON.stringify({ stacks, added, removed, notes, written }, null, 2)}
 `);
   } else {
-    const lines = [
+    const lines2 = [
       `Stacks: ${stacks.join(", ") || "(none)"}`,
       ...added.length > 0 ? [`Added: ${added.join(", ")}`] : [],
       ...removed.length > 0 ? [`Removed: ${removed.join(", ")}`] : [],
       ...notes.map((n4) => `Note: ${n4}`),
       ...written ? ["written: .studio/studio.yaml"] : []
     ];
-    o2.stdout(`${lines.map(safe).join("\n")}
+    o2.stdout(`${lines2.map(safe).join("\n")}
 `);
   }
   return 0;
@@ -41955,6 +42039,23 @@ async function prerequisites(o2) {
 var DEFAULT_ROLES = { builder: { model: "sonnet", wip: 2 }, reviewer: { model: "opus", wip: 1 } };
 var CI_UNREAD_COMMENT = "# runners could not be read; run studio setup ci";
 var STUDIO_FILES = [".studio/studio.yaml", ".studio/board.yaml"];
+var COMMITTED = [".studio/studio.yaml", ".studio/roles/builder.md"];
+var BOARD_IGNORE = "/.studio/board.yaml";
+var BOARD_IGNORE_TEXT = `# Studio: the board is lead-machine state; studio roadmap --write writes the shareable ROADMAP.md
+${BOARD_IGNORE}
+`;
+function ignoreBoard(project) {
+  const file3 = join33(project, ".gitignore");
+  let text = "";
+  if (exists3(file3)) {
+    const st = lstatSync29(file3);
+    if (st.isSymbolicLink() || !st.isFile()) throw new Error(".gitignore is not a plain file");
+    text = readFileSync33(file3, "utf8");
+  }
+  if (text.split(/\r?\n/).some((l) => l.trim() === BOARD_IGNORE)) return;
+  const sep7 = text === "" || text.endsWith("\n") ? "" : "\n";
+  writeFileSync11(file3, `${text}${sep7}${text === "" ? "" : "\n"}${BOARD_IGNORE_TEXT}`);
+}
 async function isIgnored(o2, file3) {
   try {
     await o2.ports.git.run(o2.project, ["check-ignore", "-q", "--", file3]);
@@ -41971,7 +42072,7 @@ function nextSteps(prefix, written, checks, launcher2) {
       "Studio could not read your CI runners: run studio setup ci (with --write) to fix the ci: block."
     ] : [],
     ...written ? [] : ["Run studio init --write to write the two files."],
-    "Commit .studio/studio.yaml and .studio/board.yaml.",
+    "Commit .studio/studio.yaml and .gitignore. The board (.studio/board.yaml) stays on this machine and is not committed; studio roadmap --write writes ROADMAP.md to share.",
     ...open4("crew token") || open4("claude account") ? [
       `In your own terminal, run studio setup once: it stores the crew token and a Claude account for the crews, one guided step each.${notFound}`
     ] : [],
@@ -42036,13 +42137,18 @@ async function runInit(o2) {
       fix: "Studio works with GitHub: set origin to https://github.com/<owner>/<name>.git"
     });
   } else checks.push({ name: "repository", status: "pass", detail: primary });
-  const ignored = (await Promise.all(STUDIO_FILES.map(async (f3) => await isIgnored(o2, f3) ? f3 : void 0))).filter((f3) => f3 !== void 0);
+  const ignored = (await Promise.all(COMMITTED.map(async (f3) => await isIgnored(o2, f3) ? f3 : void 0))).filter((f3) => f3 !== void 0);
+  const boardIgnored = await isIgnored(o2, ".studio/board.yaml");
   checks.push(
-    ignored.length === 0 ? { name: "gitignore", status: "pass", detail: ".studio/ is not ignored" } : {
+    ignored.length === 0 ? {
+      name: "gitignore",
+      status: "pass",
+      detail: boardIgnored ? ".studio/studio.yaml is not ignored, the board is" : `.studio/studio.yaml is not ignored; --write adds ${BOARD_IGNORE} to .gitignore`
+    } : {
       name: "gitignore",
       status: "warn",
-      detail: `${ignored.join(", ")} ignored by git, but they belong in the repository`,
-      fix: "remove .studio from .gitignore (runtime state lives outside the repository)"
+      detail: `${ignored.join(", ")} ignored by git, but studio.yaml and roles/ belong in the repository`,
+      fix: `ignore only ${BOARD_IGNORE}, not all of .studio (runtime state lives outside the repository)`
     }
   );
   const repo = primary ?? "owner/name";
@@ -42123,6 +42229,16 @@ ${body}`;
         [boardPath(o2.project), boardText]
       ]);
       written.push(...STUDIO_FILES);
+      if (!boardIgnored) {
+        try {
+          ignoreBoard(o2.project);
+          written.push(".gitignore");
+        } catch (e) {
+          warnings.push(
+            `gitignore: could not add ${BOARD_IGNORE} (${e.message}); add it by hand`
+          );
+        }
+      }
     }
   }
   const steps = nextSteps(prefix, written.length > 0, checks, o2.launcher);
@@ -42146,33 +42262,38 @@ ${body}`;
     );
   } else {
     const width = Math.max(...checks.map((c3) => c3.name.length));
-    const lines = ["Checks:"];
+    const lines2 = ["Checks:"];
     for (const c3 of checks) {
       const mark = c3.status === "fail" ? "FAIL" : c3.status;
-      lines.push(`  ${mark.padEnd(4)}  ${c3.name.padEnd(width)}  ${c3.detail}`);
+      lines2.push(`  ${mark.padEnd(4)}  ${c3.name.padEnd(width)}  ${c3.detail}`);
       if (c3.fix !== void 0 && c3.status !== "pass")
-        lines.push(`        ${"".padEnd(width)}  fix: ${c3.fix}`);
+        lines2.push(`        ${"".padEnd(width)}  fix: ${c3.fix}`);
     }
     const allWarnings = [...warnings, ...stacks.notes.map((n4) => `stack: ${n4}`)];
-    if (allWarnings.length > 0) lines.push("Warnings:", ...allWarnings.map((w) => `  - ${w}`));
-    lines.push(
+    if (allWarnings.length > 0) lines2.push("Warnings:", ...allWarnings.map((w) => `  - ${w}`));
+    lines2.push(
       "",
       ".studio/studio.yaml:",
       ...configText.trimEnd().split("\n").map((l) => `  ${l}`)
     );
-    lines.push("", ".studio/board.yaml: an empty board (items: []) with a commented example", "");
-    if (refused !== void 0) lines.push(refused);
-    else if (written.length > 0) lines.push(`written: ${written.join(", ")}`);
-    else lines.push("dry run: nothing written; run studio init --write to write these files");
-    lines.push("", "Next steps:", ...steps.map((s, i2) => `  ${i2 + 1}. ${s}`));
-    o2.stdout(`${lines.map(safe).join("\n")}
+    lines2.push(
+      "",
+      ".studio/board.yaml: an empty board (items: []) with a commented example; it stays on this machine",
+      ...boardIgnored ? [] : [`.gitignore: gets ${BOARD_IGNORE}`],
+      ""
+    );
+    if (refused !== void 0) lines2.push(refused);
+    else if (written.length > 0) lines2.push(`written: ${written.join(", ")}`);
+    else lines2.push("dry run: nothing written; run studio init --write to write these files");
+    lines2.push("", "Next steps:", ...steps.map((s, i2) => `  ${i2 + 1}. ${s}`));
+    o2.stdout(`${lines2.map(safe).join("\n")}
 `);
   }
   return refused === void 0 ? 0 : 1;
 }
 
 // src/lessons-review.ts
-import { lstatSync as lstatSync30, readFileSync as readFileSync33 } from "node:fs";
+import { lstatSync as lstatSync30, readFileSync as readFileSync34 } from "node:fs";
 import { join as join34 } from "node:path";
 var LESSONS_REVIEW_DAYS = 7;
 var DAY_MS3 = 864e5;
@@ -42186,7 +42307,7 @@ function lastRun(stateRoot) {
   try {
     assertStatePath(stateRoot, file3);
     if (!lstatSync30(file3).isFile()) return void 0;
-    const raw = JSON.parse(readFileSync33(file3, "utf8"));
+    const raw = JSON.parse(readFileSync34(file3, "utf8"));
     return typeof raw.lastRun === "string" && !Number.isNaN(Date.parse(raw.lastRun)) ? raw.lastRun : void 0;
   } catch {
     return void 0;
@@ -42805,7 +42926,7 @@ async function addItem(o2) {
 import {
   existsSync as existsSync9,
   lstatSync as lstatSync31,
-  readFileSync as readFileSync34,
+  readFileSync as readFileSync35,
   realpathSync as realpathSync8,
   renameSync as renameSync13,
   rmSync as rmSync8,
@@ -42919,11 +43040,11 @@ function editEpic(board, id, edit) {
     changed.push("goal");
   }
   if (edit.acceptance !== void 0) {
-    const lines = edit.acceptance.map((a2) => a2.trim());
-    if (lines.length === 0 || lines.some((a2) => !ONE_LINE2.test(a2))) {
+    const lines2 = edit.acceptance.map((a2) => a2.trim());
+    if (lines2.length === 0 || lines2.some((a2) => !ONE_LINE2.test(a2))) {
       throw new Error("each --acceptance must be one line of at most 300 characters");
     }
-    next.acceptance = lines;
+    next.acceptance = lines2;
     changed.push("acceptance");
   }
   if (edit.members !== void 0) {
@@ -43069,7 +43190,7 @@ function writeRoadmap(project, out, text, force) {
   }
   let old;
   try {
-    old = readFileSync34(file3, "utf8");
+    old = readFileSync35(file3, "utf8");
   } catch (e) {
     if (e.code !== "ENOENT") throw e;
   }
@@ -43097,7 +43218,7 @@ function readImportFile(project, file3) {
   const st = lstatSync31(full);
   if (!st.isFile()) throw new Error(`${JSON.stringify(file3)}: not a regular file`);
   if (st.size > IMPORT_MAX_BYTES) throw new Error(`${JSON.stringify(file3)}: larger than 1 MB`);
-  return { source: rel, text: readFileSync34(full, "utf8") };
+  return { source: rel, text: readFileSync35(full, "utf8") };
 }
 var CHECKBOX_START = /^[ \t]{0,40}[-*+][ \t]{1,8}\[[ xX~]\]/;
 var CHECKBOX = /^[ \t]{0,40}[-*+][ \t]{1,8}\[([ xX~])\][ \t]+(.*)$/;
@@ -43123,9 +43244,9 @@ function withoutComments(s) {
 function parsePhases(text) {
   const phases = [];
   const skipped = [];
-  const lines = text.split("\n");
-  for (let i2 = 0; i2 < lines.length; i2++) {
-    const raw = lines[i2].replace(/\r$/, "");
+  const lines2 = text.split("\n");
+  for (let i2 = 0; i2 < lines2.length; i2++) {
+    const raw = lines2[i2].replace(/\r$/, "");
     const line4 = i2 + 1;
     if (raw.length > IMPORT_MAX_LINE) {
       if (CHECKBOX_START.test(raw.slice(0, 64))) {
@@ -43485,7 +43606,7 @@ function readRuns(stateRoot) {
     const st = lstatSync32(file3, { throwIfNoEntry: false });
     if (st === void 0) return {};
     if (!st.isFile()) return void 0;
-    const parsed = runsSchema.safeParse(JSON.parse(readFileSync35(file3, "utf8")));
+    const parsed = runsSchema.safeParse(JSON.parse(readFileSync36(file3, "utf8")));
     return parsed.success ? parsed.data : void 0;
   } catch {
     return void 0;
@@ -43503,10 +43624,10 @@ async function prepareAcceptances(o2) {
     lead: []
   };
   const before = loadBoard(o2.project);
-  const busy = (before.epics ?? []).some((e) => e.status === "accepting") || before.items.some(
+  const busy2 = (before.epics ?? []).some((e) => e.status === "accepting") || before.items.some(
     (i2) => acceptanceOf(i2) !== void 0 && (i2.status === "ready" || i2.status === "blocked")
   );
-  if (!busy) return out;
+  if (!busy2) return out;
   for (const e of before.epics ?? []) {
     if (e.status === "accepting" && placeholderAcceptance(e)) {
       out.lead.push({
@@ -43992,8 +44113,20 @@ function applyAcceptance(board, acceptance, done, now, config2) {
   return { board: next, outcome: { epic: done.epic, result: "done", findings: [] } };
 }
 
+// src/adopt.ts
+import { lstatSync as lstatSync36, readdirSync as readdirSync13, readFileSync as readFileSync41, realpathSync as realpathSync9 } from "node:fs";
+import { join as join42, resolve as resolve8 } from "node:path";
+
+// src/recover.ts
+import { existsSync as existsSync10, lstatSync as lstatSync35, readdirSync as readdirSync12 } from "node:fs";
+import { join as join41 } from "node:path";
+
+// src/flaky-ci.ts
+import { readFileSync as readFileSync38 } from "node:fs";
+import { join as join38 } from "node:path";
+
 // src/flaky.ts
-import { readFileSync as readFileSync36 } from "node:fs";
+import { readFileSync as readFileSync37 } from "node:fs";
 import { join as join37 } from "node:path";
 var MAX_FLAKY = 500;
 var MAX_NAME = 200;
@@ -44009,7 +44142,7 @@ function read2(stateRoot) {
   assertStatePath(stateRoot, file3);
   let text;
   try {
-    text = readFileSync36(file3, "utf8");
+    text = readFileSync37(file3, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw new Error("flaky.json cannot be read");
@@ -44042,8 +44175,6 @@ function recordFlaky(stateRoot, test, sha, rerun, now) {
 }
 
 // src/flaky-ci.ts
-import { readFileSync as readFileSync37 } from "node:fs";
-import { join as join38 } from "node:path";
 var RERUNS_FILE = "ci-reruns.json";
 var RERUNS_LOCK = "ci-reruns.lock";
 var RERUNS_LOCK_STALE_MS = 6e4;
@@ -44072,7 +44203,7 @@ function readLedger2(stateRoot) {
   assertStatePath(stateRoot, file3);
   let text;
   try {
-    text = readFileSync37(file3, "utf8");
+    text = readFileSync38(file3, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw new Error(`${RERUNS_FILE} cannot be read`);
@@ -44327,88 +44458,8 @@ function ciFailurePolicy(o2) {
   };
 }
 
-// src/main-build.ts
-var UNKNOWN = { status: "unknown" };
-var RED = /* @__PURE__ */ new Set(["failure", "timed_out", "startup_failure"]);
-var MAX_NAME2 = 100;
-var READ_TIMEOUT_MS = 3e4;
-function parseRuns(stdout) {
-  let raw;
-  try {
-    raw = JSON.parse(stdout);
-  } catch {
-    return void 0;
-  }
-  if (!Array.isArray(raw)) return void 0;
-  const runs = [];
-  for (const r of raw) {
-    if (r === null || typeof r !== "object") return void 0;
-    const { status, conclusion, headSha, workflowName } = r;
-    if (typeof status !== "string" || typeof workflowName !== "string") return void 0;
-    if (conclusion !== null && conclusion !== void 0 && typeof conclusion !== "string") {
-      return void 0;
-    }
-    runs.push({
-      workflow: workflowName,
-      status,
-      conclusion: conclusion ?? "",
-      sha: typeof headSha === "string" ? headSha : ""
-    });
-  }
-  return runs;
-}
-var cleanName = (s) => s.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_NAME2);
-var validSha = (s) => /^[0-9a-f]{7,64}$/i.test(s) ? s : void 0;
-async function readMainBuild(config2, ports) {
-  try {
-    const reply = await ports.gh.run(
-      [
-        "run",
-        "list",
-        "--repo",
-        config2.primaryRepo,
-        "--branch",
-        "main",
-        "--event",
-        "push",
-        "--limit",
-        "30",
-        "--json",
-        "status,conclusion,headSha,workflowName"
-      ],
-      { timeoutMs: READ_TIMEOUT_MS }
-    );
-    if (reply.code !== 0) return UNKNOWN;
-    const runs = parseRuns(reply.stdout);
-    if (runs === void 0) return UNKNOWN;
-    const newest = /* @__PURE__ */ new Map();
-    for (const r of runs) if (!newest.has(r.workflow)) newest.set(r.workflow, r);
-    const latest = [...newest.values()];
-    if (latest.length === 0) return UNKNOWN;
-    const red2 = latest.find((r) => r.status === "completed" && RED.has(r.conclusion));
-    if (red2) {
-      const sha2 = validSha(red2.sha);
-      return {
-        status: "red",
-        ...sha2 === void 0 ? {} : { sha: sha2 },
-        workflow: cleanName(red2.workflow)
-      };
-    }
-    if (latest.some((r) => r.status !== "completed")) return { status: "pending" };
-    const first = latest[0];
-    const sha = validSha(first.sha);
-    return {
-      status: "green",
-      ...sha === void 0 ? {} : { sha },
-      workflow: cleanName(first.workflow)
-    };
-  } catch {
-    return UNKNOWN;
-  }
-}
-
 // src/notify.ts
-import { lstatSync as lstatSync33, readFileSync as readFileSync38 } from "node:fs";
+import { lstatSync as lstatSync33, readFileSync as readFileSync39 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
 import { join as join39 } from "node:path";
 var MAX_SENDS_PER_RUN = 20;
@@ -44451,7 +44502,7 @@ function readNotified(file3) {
     return e.code === "ENOENT" ? { ok: true, keys: [] } : { ok: false };
   }
   try {
-    const raw = JSON.parse(readFileSync38(file3, "utf8"));
+    const raw = JSON.parse(readFileSync39(file3, "utf8"));
     if (!Array.isArray(raw) || !raw.every((k) => typeof k === "string")) return { ok: false };
     return { ok: true, keys: raw };
   } catch {
@@ -44543,334 +44594,11 @@ async function sendLocked(o2, notify, lock) {
   return errors;
 }
 
-// src/overview.ts
-import { lstatSync as lstatSync34, readFileSync as readFileSync39 } from "node:fs";
-import { basename as basename5, isAbsolute as isAbsolute10, join as join40 } from "node:path";
-var line2 = (e) => (e instanceof Error ? e.message : String(e)).replace(/[\p{Cc}\p{Cf}]/gu, " ");
-var INCONSISTENT_ROOT = "inconsistent state root: its marker names a project whose state root is another one";
-function markerProject(root) {
-  const file3 = join40(root, "marker.json");
-  try {
-    if (!lstatSync34(file3).isFile()) throw new Error(`${file3} is not a plain file`);
-  } catch (e) {
-    if (e.code === "ENOENT") return void 0;
-    throw e;
-  }
-  let raw;
-  try {
-    raw = JSON.parse(readFileSync39(file3, "utf8"));
-  } catch {
-    throw new Error(`state root marker ${file3} is unreadable`);
-  }
-  const p = raw?.projectRealpath;
-  if (typeof p !== "string" || !isAbsolute10(p)) {
-    throw new Error(`state root marker ${file3} names no project`);
-  }
-  return p;
-}
-function itemCounts(project) {
-  const file3 = boardPath(project);
-  let plain2 = true;
-  try {
-    plain2 = lstatSync34(file3).isFile();
-  } catch {
-  }
-  if (!plain2) throw new Error(`${file3}: board.yaml is not a plain file`);
-  const counts = {};
-  const board = loadBoard(project);
-  for (const s of ITEM_STATUSES) {
-    const n4 = board.items.filter((i2) => i2.status === s).length;
-    if (n4 > 0) counts[s] = n4;
-  }
-  return counts;
-}
-function readOne(root, alive) {
-  const problems = [];
-  const out = { name: line2(basename5(root)), stateRoot: root, problems };
-  let project;
-  try {
-    project = markerProject(root);
-    if (project === void 0) problems.push("no marker.json: the project is unknown");
-  } catch (e) {
-    problems.push(line2(e));
-  }
-  if (project !== void 0 && stateDirName(project) !== basename5(root)) {
-    problems.push(INCONSISTENT_ROOT);
-    return out;
-  }
-  if (project !== void 0) {
-    out.project = project;
-    out.name = line2(basename5(project)) || out.name;
-    try {
-      out.items = itemCounts(project);
-    } catch (e) {
-      problems.push(line2(e));
-    }
-  }
-  try {
-    out.crews = Object.values(readCrewRecords(root)).filter(
-      (r) => r !== null && typeof r === "object" && r.stoppedAt === void 0 && Number.isInteger(r.pid) && r.pid > 0 && alive(r.pid)
-    ).length;
-  } catch (e) {
-    problems.push(line2(e));
-  }
-  try {
-    const q = loadQueue(root);
-    out.queued = q.pending.length + (q.current === void 0 ? 0 : 1);
-  } catch (e) {
-    problems.push(line2(e));
-  }
-  return out;
-}
-function readOverview(base, alive) {
-  return projectStateRoots(base).filter((r) => basename5(r) !== OWNER_DIR).map((r) => readOne(r, alive)).sort(
-    (a2, b) => a2.name < b.name ? -1 : a2.name > b.name ? 1 : a2.stateRoot < b.stateRoot ? -1 : 1
-  );
-}
-function table(rows2) {
-  const widths = rows2[0]?.map((_, c3) => Math.max(...rows2.map((r) => (r[c3] ?? "").length))) ?? [];
-  return `${rows2.map(
-    (r) => r.map((cell, c3) => c3 === r.length - 1 ? cell : cell.padEnd(widths[c3] ?? 0)).join("  ").trimEnd()
-  ).join("\n")}
-`;
-}
-var counted = (n4) => n4 === void 0 ? "?" : String(n4);
-function formatOverview(list2) {
-  if (list2.length === 0) return "No Studio projects yet.\n";
-  return table([
-    ["PROJECT", "ITEMS", "CREWS", "QUEUED", "PROBLEMS"],
-    ...list2.map((p) => [
-      p.name,
-      p.items === void 0 ? "?" : Object.entries(p.items).map(([s, n4]) => `${s} ${n4}`).join(", ") || "-",
-      counted(p.crews),
-      counted(p.queued),
-      p.problems.join("; ")
-    ])
-  ]);
-}
-
-// src/privacy.ts
-var EMAIL = /[A-Za-z0-9._%+-]{1,64}@([A-Za-z0-9-]{1,63}\.)+[A-Za-z]{2,24}/g;
-var RESERVED_DOMAIN = /(^|\.)(example(\.(com|net|org))?|invalid|test|localhost|local|placeholder)$/i;
-var PHONE = /(?<![\w.])\+?\d[\d\s()./-]{6,}\d(?![\w])/g;
-var ISO_DATE = /^\d{4}-\d{2}-\d{2}([ T]\d{2})?/;
-var IBAN = /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,3})?\b/g;
-var CARD = /\b(?:\d[ -]?){13,19}\b/g;
-var SECRET = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-  /\bAKIA[0-9A-Z]{16}\b/,
-  /\bgh[pousr]_[A-Za-z0-9]{30,}\b/,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/,
-  /\bsk-[A-Za-z0-9]{20,}\b/,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/
-];
-var PII_FIELD = /\b(first_?name|last_?name|sur_?name|full_?name|given_?name|birth_?(date|day)|date_of_birth|dob|street|house_?number|postal_?code|zip_?code|phone(_?number)?|mobile|email(_?address)?|iban|ssn|tax_?id|patient(_?name)?|customer(_?name)?)\b["']?\s*[:=]\s*["']?([^\s"',;|}]{2,})/gi;
-var FIELD_VALUE_OK = /^(string|text|varchar|char|int|integer|bigint|smallint|number|float|double|decimal|bool|boolean|date|datetime|timestamp|blob|binary|bytes|uuid|json|null|none|nil|true|false|optional|required|unknown|n\/a|tbd|redacted|masked|<[^>]*>|\[[^\]]*\]|\{[^}]*\}|\*+|x+|\.{2,}|\w*\(.*\)|\?)$/i;
-var LINE_LIMIT = 4e3;
-function privacyHits(text, file3) {
-  const hits = [];
-  const add = (kind, line4) => {
-    if (!hits.some((h2) => h2.kind === kind && h2.line === line4)) hits.push({ kind, line: line4, file: file3 });
-  };
-  const lines = text.split(/\r?\n/);
-  const delim = lines.map(
-    (l) => (l.match(/\t/g)?.length ?? 0) * 100 + (l.match(/,/g)?.length ?? 0)
-  );
-  lines.forEach((raw, i2) => {
-    const n4 = i2 + 1;
-    if (raw.length > LINE_LIMIT) {
-      add("line too long to check", n4);
-      return;
-    }
-    const l = raw;
-    for (const m of l.matchAll(EMAIL)) {
-      const domain2 = m[0].slice(m[0].lastIndexOf("@") + 1);
-      if (!RESERVED_DOMAIN.test(domain2)) add("email address", n4);
-    }
-    for (const m of l.matchAll(PHONE)) {
-      const digits = m[0].replace(/\D/g, "");
-      if (digits.length < 8 || digits.length > 15 || ISO_DATE.test(m[0].trim())) continue;
-      if (/^\d+(\.\d+){2,3}$/.test(m[0].trim())) continue;
-      if (!/^\+/.test(m[0].trim()) && !/[\s()/-]/.test(m[0].trim())) continue;
-      add("phone-like number", n4);
-    }
-    if ([...l.matchAll(IBAN)].some((m) => m[0].replace(/\s/g, "").length >= 15))
-      add("account number", n4);
-    for (const m of l.matchAll(CARD)) if (luhn(m[0].replace(/\D/g, ""))) add("card number", n4);
-    for (const re of SECRET) if (re.test(l)) add("credential or key", n4);
-    for (const m of l.matchAll(PII_FIELD)) {
-      const value2 = (m[m.length - 1] ?? "").replace(/["']+$/, "");
-      if (!FIELD_VALUE_OK.test(value2)) add("personal field with a value", n4);
-    }
-    if (/\binsert\s+into\b[\s\S]*\bvalues\b/i.test(l)) add("row dump (insert statement)", n4);
-  });
-  for (let i2 = 0; i2 + 4 < lines.length; i2++) {
-    const d = delim[i2];
-    const commas = d % 100;
-    const tabs = Math.floor(d / 100);
-    if (commas < 2 && tabs < 2) continue;
-    let run2 = 1;
-    while (i2 + run2 < lines.length && delim[i2 + run2] === d && (lines[i2 + run2] ?? "").trim() !== "")
-      run2++;
-    if (run2 >= 5) {
-      add("row dump (delimited lines)", i2 + 1);
-      i2 += run2 - 1;
-    }
-  }
-  return hits;
-}
-function luhn(d) {
-  if (d.length < 13 || d.length > 19 || /^(\d)\1+$/.test(d)) return false;
-  let sum = 0;
-  for (let i2 = 0; i2 < d.length; i2++) {
-    let x = Number(d[d.length - 1 - i2]);
-    if (i2 % 2 === 1) {
-      x *= 2;
-      if (x > 9) x -= 9;
-    }
-    sum += x;
-  }
-  return sum % 10 === 0;
-}
-function privacyHitsInAdded(files) {
-  const hits = [];
-  const odd = {
-    link: "link in the pull request",
-    submodule: "submodule in the pull request",
-    binary: "file that is not text",
-    large: "file too large to check",
-    unreadable: "file whose lines could not be read"
-  };
-  for (const f3 of files) {
-    if (f3.odd !== void 0) {
-      hits.push({ kind: odd[f3.odd] ?? "file that could not be checked", line: 0, file: f3.path });
-      continue;
-    }
-    const found = privacyHits(f3.lines.map((l) => l.text).join("\n"), f3.path);
-    for (const h2 of found) hits.push({ ...h2, line: f3.lines[h2.line - 1]?.line ?? h2.line });
-  }
-  return hits;
-}
-function privacyLine(hits) {
-  const shown2 = hits.slice(0, 8).map(
-    (h2) => `${h2.kind} (${h2.file.replace(/[^\w./-]/g, "?").slice(0, 80)}${h2.line > 0 ? `:${h2.line}` : ""})`
-  );
-  return `privacy check failed, the report is held for the lead: ${shown2.join("; ")}${hits.length > 8 ? `; ${hits.length - 8} more` : ""}`;
-}
-
-// src/pull-request.ts
-import { mkdtempSync, rmSync as rmSync9, writeFileSync as writeFileSync13 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join as join41 } from "node:path";
-var PR_BODY_MAX = 2e4;
-function crewPrText(item, body, notRunHere) {
-  return `Opened by Studio for ${item.id}; the text below the line was written by the crew.
-${notRunSection(notRunHere)}
----
-
-${body.replace(new RegExp("[^\\P{Cc}\\n\\t]|\\p{Cf}", "gu"), "").slice(0, PR_BODY_MAX)}
-`;
-}
-var crewPrTitle = (title) => title.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
-async function openCrewPr(ports, item, title, body, notRunHere, token, capacity, unchanged) {
-  const head = `studio/${item.id}`;
-  const list2 = await ports.gh.run(
-    [
-      "pr",
-      "list",
-      "--repo",
-      item.repo,
-      "--head",
-      head,
-      "--state",
-      "open",
-      "--json",
-      "number,isCrossRepository"
-    ],
-    { token }
-  );
-  if (list2.code !== 0)
-    throw new Error(`cannot list pull requests of ${head} (gh exit ${list2.code})`);
-  const open4 = JSON.parse(list2.stdout || "[]");
-  const known = open4.find(
-    (p) => Number.isInteger(p.number) && p.isCrossRepository === false
-  )?.number;
-  const plainTitle = title.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
-  if (plainTitle === "")
-    throw new Error(`the pull request title for ${head} is empty; nothing moved`);
-  const text = crewPrText(item, body, notRunHere);
-  const withBody = async (use) => {
-    const dir = mkdtempSync(join41(tmpdir(), "studio-pr-"));
-    try {
-      const file3 = join41(dir, "body.md");
-      writeFileSync13(file3, text, { mode: 384 });
-      return await use(file3);
-    } finally {
-      rmSync9(dir, { recursive: true, force: true });
-    }
-  };
-  const room = await capacity();
-  if (!room.ok) return { held: room.capacity };
-  unchanged();
-  if (typeof known === "number") {
-    return withBody(async (file3) => {
-      const r = await ports.gh.run(
-        ["pr", "edit", String(known), "--repo", item.repo, "--body-file", file3],
-        { token }
-      );
-      if (r.code !== 0) {
-        throw new Error(`gh pr edit failed for ${head} (exit ${r.code}); nothing moved`);
-      }
-      return { pr: known };
-    });
-  }
-  return withBody(async (file3) => {
-    const r = await ports.gh.run(
-      [
-        "pr",
-        "create",
-        "--repo",
-        item.repo,
-        "--head",
-        head,
-        "--title",
-        plainTitle,
-        "--body-file",
-        file3
-      ],
-      { token }
-    );
-    const m = /\/pull\/(\d+)\s*$/.exec(r.stdout);
-    if (r.code !== 0 || !m)
-      throw new Error(`gh pr create failed for ${head} (exit ${r.code}); nothing moved`);
-    return { pr: Number(m[1]) };
-  });
-}
-function notRunSection(list2) {
-  if (list2.length === 0) return "";
-  const lines = list2.map(
-    (x) => `${x.command} (missing ${x.missing}: ${x.reason})`.replace(/`{3,}/g, "")
-  );
-  return `
-## Not run in the crew sandbox
-
-The crew could not run these commands, because its sandbox lacks the service named (crew text). CI must run them; an approval counts only with green checks.
-
-\`\`\`text
-${lines.join("\n")}
-\`\`\`
-`;
-}
-
-// src/recover.ts
-import { existsSync as existsSync10, lstatSync as lstatSync36, readdirSync as readdirSync12 } from "node:fs";
-import { join as join43 } from "node:path";
-
 // src/release.ts
 var import_yaml15 = __toESM(require_dist(), 1);
 import { createHash as createHash6 } from "node:crypto";
-import { lstatSync as lstatSync35, readFileSync as readFileSync40 } from "node:fs";
-import { join as join42 } from "node:path";
+import { lstatSync as lstatSync34, readFileSync as readFileSync40 } from "node:fs";
+import { join as join40 } from "node:path";
 
 // src/migrations.ts
 var MIGRATION_RISKS = ["lock", "fails_on_data"];
@@ -45261,18 +44989,18 @@ var BEFORE_TRIGGER = ["announced", "approvals"];
 var OPEN = ["announced", "approvals", "triggered", "checking"];
 var isOpen = (r) => OPEN.includes(r.status);
 var RELEASE_ID_RE = /^[a-z][a-z0-9-]{0,31}-[1-9]\d{0,5}$/;
-var line3 = (max) => external_exports.string().max(max).regex(/^[^\p{Cc}\p{Cf}]*$/u);
+var line2 = (max) => external_exports.string().max(max).regex(/^[^\p{Cc}\p{Cf}]*$/u);
 var migrationSchema = external_exports.strictObject({
-  path: line3(500),
+  path: line2(500),
   change: external_exports.enum(["added", "changed", "deleted"]),
   kind: external_exports.enum(["additive", "backfill", "unclear", "destructive"]),
-  why: line3(300),
+  why: line2(300),
   owner: external_exports.boolean(),
   /** What it may do to the running system: lock a table, fail on existing rows. */
   risks: external_exports.array(external_exports.enum(MIGRATION_RISKS)).optional()
 });
 var noteSchema = external_exports.strictObject({
-  component: external_exports.strictObject({ id: external_exports.string(), name: line3(100) }),
+  component: external_exports.strictObject({ id: external_exports.string(), name: line2(100) }),
   repo: external_exports.string(),
   branch: external_exports.string(),
   since: external_exports.string().regex(SHA4),
@@ -45282,28 +45010,28 @@ var noteSchema = external_exports.strictObject({
   epics: external_exports.array(
     external_exports.strictObject({
       epic: external_exports.string().nullable(),
-      title: line3(200),
-      items: external_exports.array(external_exports.strictObject({ id: external_exports.string(), title: line3(200), pr: external_exports.number().int() }))
+      title: line2(200),
+      items: external_exports.array(external_exports.strictObject({ id: external_exports.string(), title: line2(200), pr: external_exports.number().int() }))
     })
   ),
   /** Merged items of the component whose merge commit Studio could not read. */
-  unplaced: external_exports.array(external_exports.strictObject({ id: external_exports.string(), why: line3(200) })),
+  unplaced: external_exports.array(external_exports.strictObject({ id: external_exports.string(), why: line2(200) })),
   migrations: external_exports.array(migrationSchema),
   config: external_exports.strictObject({
-    files: external_exports.array(line3(500)),
-    added: external_exports.array(line3(100)),
-    removed: external_exports.array(line3(100))
+    files: external_exports.array(line2(500)),
+    added: external_exports.array(line2(100)),
+    removed: external_exports.array(line2(100))
   }),
-  wayBack: external_exports.array(line3(600)),
-  postChecks: external_exports.array(line3(400)),
-  approvers: external_exports.array(external_exports.strictObject({ id: external_exports.string(), who: line3(100), for: line3(200).optional() })),
+  wayBack: external_exports.array(line2(600)),
+  postChecks: external_exports.array(line2(400)),
+  approvers: external_exports.array(external_exports.strictObject({ id: external_exports.string(), who: line2(100), for: line2(200).optional() })),
   /** Files that look like a schema change outside `release.migrations`: the owner should look. */
-  warnings: external_exports.array(line3(600)).default([])
+  warnings: external_exports.array(line2(600)).default([])
 });
 var approvalSchema = external_exports.strictObject({
   approver: external_exports.string(),
-  who: line3(100),
-  said: line3(500),
+  who: line2(100),
+  said: line2(500),
   at: external_exports.string(),
   recordedAt: external_exports.string(),
   recordedBy: external_exports.enum(["lead", "owner"])
@@ -45340,7 +45068,7 @@ var releaseSchema = external_exports.strictObject({
    * workflows run, pinned when it was announced. */
   guardPin: external_exports.string(),
   needs: external_exports.strictObject({ owner: external_exports.array(external_exports.string()), approvers: external_exports.array(external_exports.string()) }),
-  announcement: external_exports.strictObject({ at: external_exports.string(), text: line3(1e3) }),
+  announcement: external_exports.strictObject({ at: external_exports.string(), text: line2(1e3) }),
   approvals: external_exports.array(approvalSchema).default([]),
   trigger: external_exports.strictObject({
     at: external_exports.string(),
@@ -45350,7 +45078,7 @@ var releaseSchema = external_exports.strictObject({
     /** The newest run id of the workflow before the dispatch: only a later run can be its run. */
     floor: external_exports.number().int().nonnegative(),
     run: external_exports.number().int().optional(),
-    refused: line3(300).optional()
+    refused: line2(300).optional()
   }).optional(),
   /** Post-check workflows other than the release workflow, as Studio started them. */
   started: external_exports.record(
@@ -45362,7 +45090,7 @@ var releaseSchema = external_exports.strictObject({
       head: external_exports.string().regex(SHA4).optional(),
       floor: external_exports.number().int().nonnegative().optional(),
       run: external_exports.number().int().optional(),
-      refused: line3(300).optional()
+      refused: line2(300).optional()
     })
   ).default({}),
   checks: external_exports.array(checkSchema).default([]),
@@ -45374,11 +45102,11 @@ var releaseSchema = external_exports.strictObject({
   resolved: external_exports.strictObject({
     deployed: external_exports.boolean(),
     by: external_exports.enum(["lead", "owner"]),
-    reason: line3(300),
+    reason: line2(300),
     at: external_exports.string()
   }).optional(),
   finishedAt: external_exports.string().optional(),
-  reason: line3(600).optional()
+  reason: line2(600).optional()
 });
 var fileSchema2 = external_exports.strictObject({ v: external_exports.literal(1), releases: external_exports.array(releaseSchema) });
 var digest2 = (text) => `sha256:${createHash6("sha256").update(text).digest("hex")}`;
@@ -45386,9 +45114,9 @@ var short2 = (sha) => sha.slice(0, 7);
 var clean5 = (s, max) => s.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ").trim().slice(0, max);
 var quote = (p) => JSON.stringify(clean5(p, 300));
 function readReleases(stateRoot) {
-  const file3 = join42(stateRoot, RELEASES_FILE);
+  const file3 = join40(stateRoot, RELEASES_FILE);
   assertStatePath(stateRoot, file3);
-  const st = lstatSync35(file3, { throwIfNoEntry: false });
+  const st = lstatSync34(file3, { throwIfNoEntry: false });
   if (st === void 0) return [];
   if (!st.isFile()) throw new Error(`${RELEASES_FILE} in the state root is no regular file`);
   let raw;
@@ -45406,7 +45134,7 @@ function readReleases(stateRoot) {
 function writeReleases(stateRoot, releases) {
   writeStateFile(
     stateRoot,
-    join42(stateRoot, RELEASES_FILE),
+    join40(stateRoot, RELEASES_FILE),
     `${JSON.stringify({ v: 1, releases }, null, 2)}
 `
   );
@@ -46733,7 +46461,7 @@ var LOG_QUIET_MS = 30 * 6e4;
 function logWrittenAgo(stateRoot, item, now) {
   if (!isItemId(item)) return void 0;
   try {
-    const st = lstatSync36(join43(stateRoot, "logs", `${item}.jsonl`));
+    const st = lstatSync35(join41(stateRoot, "logs", `${item}.jsonl`));
     return st.isFile() ? Math.max(0, now.getTime() - st.mtimeMs) : void 0;
   } catch {
     return void 0;
@@ -46742,7 +46470,7 @@ function logWrittenAgo(stateRoot, item, now) {
 function hasReport2(stateRoot, item) {
   if (!isItemId(item)) return false;
   const name = reportName(stateRoot, item);
-  return name !== void 0 && existsSync10(join43(stateRoot, "clones", item, ".studio", "reports", name));
+  return name !== void 0 && existsSync10(join41(stateRoot, "clones", item, ".studio", "reports", name));
 }
 async function recoverProject(o2) {
   const out = { dryRun: o2.dryRun, findings: [], needsLead: [] };
@@ -46786,12 +46514,12 @@ async function recoverProject(o2) {
         continue;
       }
       for (const name of names) {
-        const file3 = join43(root, name);
+        const file3 = join41(root, name);
         const tmp = TMP.exec(name);
         let gone = false;
         if (ASIDE.test(name)) {
           try {
-            const st = lstatSync36(file3);
+            const st = lstatSync35(file3);
             gone = st.isFile() && o2.now.getTime() - st.ctimeMs >= ASIDE_GRACE_MS;
           } catch {
             gone = false;
@@ -46979,19 +46707,850 @@ async function recoverProject(o2) {
   return out;
 }
 
+// src/adopt.ts
+var ADOPT_FILES = [
+  { name: "metrics.jsonl", kind: "jsonl" },
+  { name: "costs.json", kind: "json" },
+  { name: "lessons.json", kind: "json" },
+  { name: "lessons-review.json", kind: "json" },
+  { name: "skills-check.json", kind: "json" },
+  { name: "exceptions.jsonl", kind: "jsonl" },
+  { name: "releases.json", kind: "json" },
+  { name: "releases.jsonl", kind: "jsonl" },
+  { name: "rea-allow.json", kind: "json" },
+  { name: "flaky.json", kind: "json" },
+  { name: "ci-reruns.json", kind: "json" },
+  { name: "acceptance-runs.json", kind: "json" },
+  { name: "group-contracts.json", kind: "json" }
+];
+var QUEUE = "queue.json";
+var shellWord = (p) => /^[\w./:@%+=,-]+$/.test(p) ? p : `'${p.replaceAll("'", "'\\''")}'`;
+function plainFile(file3) {
+  try {
+    const st = lstatSync36(file3);
+    if (st.isSymbolicLink()) throw new Error(`refusing ${file3}: it is a symlink`);
+    if (!st.isFile()) throw new Error(`refusing ${file3}: it is not a plain file`);
+    return readFileSync41(file3, "utf8");
+  } catch (e) {
+    if (e.code === "ENOENT") return void 0;
+    throw e;
+  }
+}
+function isDir2(p) {
+  try {
+    const st = lstatSync36(p);
+    return st.isDirectory() && !st.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+function markerOrigin(root) {
+  const text = plainFile(join42(root, "marker.json"));
+  if (text === void 0) throw new Error(`${root} has no marker.json: it is not a state root`);
+  let m;
+  try {
+    m = JSON.parse(text);
+  } catch {
+    throw new Error(`${join42(root, "marker.json")} is unreadable`);
+  }
+  if (typeof m?.originUrl !== "string") throw new Error(`${root}/marker.json names no origin`);
+  return m.originUrl;
+}
+async function busy(root, label, ports, now) {
+  if (!isDir2(root)) return [];
+  const why = [];
+  const records = readCrewRecords(root);
+  for (const rec of Object.values(records)) {
+    if (rec.stoppedAt !== void 0) continue;
+    const hold = await crewHold(rec, ports);
+    if (hold === "running") why.push(`${label}: crew ${rec.name} of ${rec.item} is alive`);
+    else if (hold === "unverified") {
+      why.push(`${label}: crew ${rec.name} of ${rec.item} may be alive (pid ${rec.pid})`);
+    }
+  }
+  for (const [name, staleMs, what] of [
+    [RUN_LOCK, RUN_LOCK_HEARTBEAT_STALE_MS, "a queue run is active"],
+    [TICK_LOCK, TICK_LOCK_STALE_MS, "a tick is running"]
+  ]) {
+    if (inspectStateLock(root, name, { now, heartbeatStaleMs: staleMs }).state === "held") {
+      why.push(`${label}: ${what}`);
+    }
+  }
+  const q = plainFile(join42(root, QUEUE));
+  if (q !== void 0) {
+    try {
+      const cur = JSON.parse(q).current;
+      if (cur !== void 0 && cur !== null)
+        why.push(`${label}: the queue has a merge in progress`);
+    } catch {
+      why.push(`${label}: queue.json is unreadable`);
+    }
+  }
+  return why;
+}
+var lines = (text) => text.split("\n").filter((l) => l.trim() !== "");
+var doneKey = (d) => `${d.repo}#${d.pr}|${d.result}|${d.at}`;
+async function adoptStateRoot(o2) {
+  const from = resolve8(o2.from);
+  if (!isDir2(from))
+    throw new Error(`${from} is not a state root folder (missing, a link or a file)`);
+  const realFrom = realpathSync9(from);
+  if (isDir2(o2.to) && realpathSync9(o2.to) === realFrom) {
+    throw new Error(`${from} is this project's own state root; nothing to adopt`);
+  }
+  const oldOrigin = markerOrigin(from);
+  const origin = (await o2.ports.git.run(o2.project, ["remote", "get-url", "origin"])).trim();
+  if (!sameOrigin(oldOrigin, origin)) {
+    throw new Error(
+      `${from} belongs to ${normalizeOrigin(oldOrigin)}, this project is ${normalizeOrigin(origin)}: only a state root of the same repository can be adopted`
+    );
+  }
+  const busyNow = [
+    ...await busy(from, "old root", o2.ports, o2.now),
+    ...await busy(o2.to, "this root", o2.ports, o2.now)
+  ];
+  if (busyNow.length > 0) {
+    throw new Error(`not now: ${busyNow.join("; ")}; nothing changed`);
+  }
+  const files = [];
+  const writes = [];
+  for (const f3 of ADOPT_FILES) {
+    const old = plainFile(join42(from, f3.name));
+    if (old === void 0) continue;
+    const cur = isDir2(o2.to) ? plainFile(join42(o2.to, f3.name)) : void 0;
+    if (cur === void 0) {
+      files.push({ name: f3.name, action: "copy" });
+      writes.push({ name: f3.name, content: old });
+    } else if (cur === old) {
+      files.push({ name: f3.name, action: "same" });
+    } else if (f3.kind === "jsonl") {
+      const have = new Set(lines(cur));
+      const missing = lines(old).filter((l) => !have.has(l));
+      if (missing.length === 0) files.push({ name: f3.name, action: "same" });
+      else {
+        files.push({ name: f3.name, action: "merge", added: missing.length });
+        writes.push({ name: f3.name, content: `${[...missing, ...lines(cur)].join("\n")}
+` });
+      }
+    } else {
+      files.push({
+        name: f3.name,
+        action: "conflict",
+        note: "both roots hold one and they differ: the current one is kept; compare them by hand"
+      });
+    }
+  }
+  let queueDone = [];
+  let pendingLeft = 0;
+  const oldQueue = plainFile(join42(from, QUEUE));
+  if (oldQueue !== void 0) {
+    const q = JSON.parse(oldQueue);
+    pendingLeft = q.pending?.length ?? 0;
+    queueDone = q.done ?? [];
+    if (queueDone.length > 0) {
+      const curText = isDir2(o2.to) ? plainFile(join42(o2.to, QUEUE)) : void 0;
+      const have = new Set(
+        (curText === void 0 ? {} : JSON.parse(curText)).done?.map(doneKey) ?? []
+      );
+      const added = queueDone.filter((d) => !have.has(doneKey(d))).length;
+      files.push(
+        added === 0 ? { name: `${QUEUE} (done)`, action: "same" } : { name: `${QUEUE} (done)`, action: "merge", added }
+      );
+    }
+  }
+  const known = /* @__PURE__ */ new Set([...ADOPT_FILES.map((f3) => f3.name), QUEUE]);
+  const left = readdirSync13(from).filter((e) => !known.has(e)).sort();
+  const deleteOld = `rm -rf -- ${shellWord(from)}`;
+  const changes = files.some((f3) => f3.action === "copy" || f3.action === "merge");
+  if (o2.apply && changes) {
+    checkStateMarker(o2.to, { projectRealpath: projectRealpath(o2.project), originUrl: origin });
+    const lock = acquireStateLock(o2.to, TICK_LOCK, {
+      now: o2.now,
+      heartbeatStaleMs: TICK_LOCK_STALE_MS
+    });
+    if (lock === void 0)
+      throw new Error("not now: a tick is running in this root; nothing changed");
+    try {
+      for (const w of writes) writeStateFile(o2.to, join42(o2.to, w.name), w.content);
+      if (queueDone.length > 0) {
+        updateQueue(
+          o2.to,
+          (q) => {
+            const have = new Set(q.done.map(doneKey));
+            const missing = queueDone.filter((d) => !have.has(doneKey(d)));
+            q.done = [...missing, ...q.done];
+          },
+          { timeoutMs: FILE_LOCK_STALE_MS }
+        );
+      }
+    } finally {
+      lock.release();
+    }
+  }
+  return {
+    from,
+    to: o2.to,
+    applied: o2.apply && changes,
+    files,
+    left,
+    ...pendingLeft > 0 ? { pendingLeft } : {},
+    next: o2.apply ? `check this project (studio metrics, studio lessons, studio release list), then delete the old root yourself: ${deleteOld}` : `studio adopt --from ${shellWord(from)} --apply`,
+    deleteOld
+  };
+}
+
+// src/help.ts
+var GLOBAL_OPTIONS = [
+  { usage: "--project <dir>", about: "The project folder (default: the current folder)" },
+  { usage: "--json", about: "Print JSON where a command supports it" },
+  { usage: "-h, --help", about: "Print this help (also: studio help)" }
+];
+var COMMANDS = [
+  { usage: "help", about: "Print this help; studio --help and studio -h do the same" },
+  {
+    usage: "init [--write]",
+    about: "Check the prerequisites and propose .studio/ for this project; --write writes it"
+  },
+  {
+    usage: 'add "<title>" --dod <line>... [--type fix|feature|chore|docs|research] [--repo <owner/name>] [--path <glob>]... [--component <id>] [--plan <file>] [--epic <id>] [--artifacts <dir>]',
+    about: "Add a ready builder item; --artifacts <dir> files a research item for the researcher with its own analysis folder below a granted research_roots entry"
+  },
+  {
+    usage: "board [--component <id>] [--epic <id>]",
+    about: "Show the board, or the items of one component or epic"
+  },
+  {
+    usage: 'epic add "<title>" --goal <text> --acceptance <line>... [--component <id>]...',
+    about: "Add an open epic with the next free id (E-<n>)"
+  },
+  { usage: "epic list", about: "Epics with their items by status and merged of total" },
+  { usage: "epic show <id>", about: "One epic: goal, acceptance, items" },
+  {
+    usage: "epic edit <id> [--title <t>] [--goal <text>] [--acceptance <line>...] [--member <project>:<id>...]",
+    about: "Replace an epic's title, goal, acceptance lines or (main project of a group only) its member items"
+  },
+  { usage: "epic drop <id>", about: "End an epic; refused while it has open items" },
+  {
+    usage: "roadmap [--write] [--out <file>] [--force]",
+    about: "Render the roadmap from the board; --write writes ROADMAP.md"
+  },
+  {
+    usage: "roadmap import <file> [--write]",
+    about: 'Turn "- [ ] Phase <n> \u2014 <title>" lines into epics (dry run without --write)'
+  },
+  { usage: "plan", about: "Dry-run the planner (JSON)" },
+  { usage: "launch <id>", about: "Start a crew session for a planned item" },
+  { usage: "status", about: "Crew sessions and their board status, items on workers included" },
+  {
+    usage: "status --group <name>",
+    about: "Read only: one line per project of a group and every lead decision of the group"
+  },
+  {
+    usage: "worker --label <label> [--once]",
+    about: "Serve offered items of this label on this machine: claim one, run its crew, open its pull request, hand the report back"
+  },
+  {
+    usage: "overview",
+    about: "Owner only, in a terminal: every project of this owner, read only"
+  },
+  { usage: "collect <id>", about: "Read a crew report and move the item" },
+  {
+    usage: "tick [--dry-run]",
+    about: "One lead heartbeat: collect, launch, queue and merge what is due (JSON); --dry-run prints what it would do (collect, launch, queue, contract checks, REA decisions) and changes nothing"
+  },
+  { usage: "queue add <repo>#<pr>", about: "Put a reviewed PR into the merge queue" },
+  { usage: "queue run", about: "Merge the queued PRs, one at a time" },
+  { usage: "state", about: "Refresh state.json in the state root" },
+  { usage: "pause", about: "Owner only: nothing new starts or merges until resume" },
+  { usage: "resume", about: "Owner only: lift the pause" },
+  {
+    usage: "stop <id> [--release] [--requeue]",
+    about: "Stop a crew session; --release closes the record of one it cannot verify, --requeue puts its item back to ready"
+  },
+  { usage: "drop <id>", about: "End an item; refuses while its crew runs" },
+  {
+    usage: "link <id> <repo>#<pr>",
+    about: "Owner only, in a terminal: tie a pull request opened by hand to its item"
+  },
+  {
+    usage: "adopt --from <old state root> [--apply]",
+    about: "Owner only, in a terminal: bring the history (metrics, costs, lessons, queue history, releases, ...) of an earlier state root of the same repository into this project's; a dry run without --apply; never copies clones, crew records, locks or run folders and never deletes the old root"
+  },
+  {
+    usage: "metrics",
+    about: "Lead time, deploy frequency, change failure rate, time to restore, costs"
+  },
+  { usage: "deploy record [<sha>]", about: "Record a production deploy" },
+  { usage: "incident open <id>", about: "Record that a deploy broke something" },
+  { usage: "incident resolve <id>", about: "Record that service is restored" },
+  {
+    usage: "flaky record <test> <sha> pass|fail",
+    about: "Record a test that failed once, with its rerun"
+  },
+  { usage: "flaky [list]", about: "The flaky-test ledger, worst first" },
+  { usage: "solutions search <words>", about: "Earlier solutions in .studio/solutions" },
+  {
+    usage: "exceptions [list]",
+    about: "Exceptions by evidence: applied and not proven, with head and diff digest"
+  },
+  {
+    usage: 'exceptions grant <repo>#<pr> <rule> --reason "<line>"',
+    about: "The lead's decision for a guard hit no evidence explained, for this head; an owner_only rule or item takes the owner's, in a terminal"
+  },
+  {
+    usage: "release <component> [--dry-run] [--since <commit>]",
+    about: "The release gate: draft the note and log the announcement; run it again to trigger the release workflow once approvals are in, then it follows the checks after the deploy. --since names production's commit, first release only; --dry-run prints the note and changes nothing"
+  },
+  { usage: "release list", about: "Releases with status, commit and what they wait for" },
+  { usage: "release show <id>", about: "A release's note" },
+  {
+    usage: 'release approve <id> <approver> --said "<words>" [--by "<who>"] [--at <time>]',
+    about: "Record an approval: a third party's, relayed by the lead with who said it and when; the owner's (approver owner) only in a terminal"
+  },
+  {
+    usage: 'release resolve <id> --deployed|--not-deployed --reason "<line>"',
+    about: "Settle a failed release whose deploy is unknown, after checking production"
+  },
+  { usage: 'release cancel <id> --reason "<line>"', about: "Stop a release before its trigger" },
+  {
+    usage: "lessons [list]",
+    about: "Lessons crews proposed for the role memory, with age, item and evidence"
+  },
+  { usage: "lessons accept <n>", about: "Move a proposed lesson into its role file" },
+  {
+    usage: "lessons drop <n> [--reason <line>]",
+    about: "Discard a proposed lesson, with a one-line reason"
+  },
+  { usage: "lessons prune <role> <line>", about: "Remove a lesson line from a role file" },
+  {
+    usage: "lessons review [--now]",
+    about: "Bundle pending proposals into one review item per role (weekly; tick runs it)"
+  },
+  {
+    usage: "recover [--dry-run]",
+    about: "After a crash or reboot: stale locks, interrupted launches and merges, ended crews; prints what it found and did (--dry-run changes nothing)"
+  },
+  { usage: "escalate <id>", about: "Run a stuck item on the role's stronger model" },
+  { usage: "sources list", about: "Third-party sources and their licences" },
+  {
+    usage: "sources check",
+    about: "Judge upstream updates: fits, unclear or conflict; adopts nothing"
+  },
+  { usage: "sources apply <id>", about: "Adopt a candidate that fits" },
+  {
+    usage: "skills check [--now] [--security <name>]...",
+    about: "Pinned plugins against their marketplaces and sources against upstream; one board item per update. Monthly (tick runs it); --now runs it at once, --security marks an update as security-relevant (priority 0)"
+  },
+  {
+    usage: "setup [--link] [--notifications]",
+    about: "Owner only, in a terminal: gh, crew token, Claude account, studio on your terminal's PATH (--link), phone notifications and, optionally, REA for researcher crews; one guided step each, skipped when done; --notifications runs only that step again"
+  },
+  {
+    usage: "setup ci [--write]",
+    about: "Detect CI runners, propose the ci: block, lint workflows"
+  },
+  { usage: "setup stack [--write]", about: "Detect the project's stacks from its manifest files" },
+  {
+    usage: "setup sources [<id>...]",
+    about: "Fetch the referenced third-party sources (nothing runs)"
+  },
+  {
+    usage: "setup research",
+    about: "Owner only, in a terminal: the optional REA step of studio setup on its own (install, analysis folder, default ~/analysis); idempotent"
+  },
+  {
+    usage: "secret set crew-token|worker-token",
+    about: "Store the crew's (or a worker machine's) GitHub token (hidden input, checked first)"
+  },
+  {
+    usage: "doctor",
+    about: "What is set and what is missing, never values; warns when .studio/board.yaml is tracked"
+  },
+  {
+    usage: "account add <label>",
+    about: "Owner only, in a terminal: store a token from claude setup-token"
+  },
+  { usage: "account list", about: "Stored Claude accounts and their state, never a token" },
+  {
+    usage: "account use <label>",
+    about: "Owner only, in a terminal: make another account the active one"
+  },
+  { usage: "account remove <label>", about: "Owner only, in a terminal: remove a stored account" },
+  {
+    usage: "account setup-plugins",
+    about: "Install the plugins crews need into the crew config dir"
+  },
+  {
+    usage: "accounts-clear <label>",
+    about: "Owner only, in a terminal: clear a label's account block"
+  },
+  {
+    usage: "research allow <id> <class>...",
+    about: "Owner only, in a terminal: open REA tool classes (annotate, debug, observe, device, export) for one researcher item, from its next launch"
+  },
+  {
+    usage: "research revoke <id> [<class>...]",
+    about: "Owner only, in a terminal: close them again (all without a class)"
+  },
+  { usage: "research list", about: "The REA classes the owner opened, per item" },
+  {
+    usage: "research install [--yes] [--folder <dir>]",
+    about: "Owner only, in a terminal: install the pinned rea-agents into the owner state, checked against the registry's integrity; --yes confirms without asking, --folder grants an analysis folder"
+  }
+];
+var WIDTH = 100;
+var COLUMN = 27;
+function wrap(text, indent, first = indent) {
+  const lines2 = [];
+  let line4 = "";
+  let pad = first;
+  for (const word2 of text.split(" ")) {
+    if (line4 !== "" && pad + line4.length + 1 + word2.length > WIDTH) {
+      lines2.push(" ".repeat(pad) + line4);
+      line4 = word2;
+      pad = indent;
+    } else line4 = line4 === "" ? word2 : `${line4} ${word2}`;
+  }
+  if (line4 !== "") lines2.push(" ".repeat(pad) + line4);
+  return lines2;
+}
+function entryLines(e) {
+  const usage = wrap(e.usage, 4, 2);
+  const last = usage.at(-1);
+  if (usage.length === 1 && last.length < COLUMN - 1) {
+    const about = wrap(e.about, COLUMN);
+    return [`${last.padEnd(COLUMN)}${about[0].trimStart()}`, ...about.slice(1)];
+  }
+  return [...usage, ...wrap(e.about, COLUMN)];
+}
+function helpText() {
+  return [
+    "Usage: studio [--project <dir>] [--json] <command>",
+    "",
+    "Options:",
+    ...GLOBAL_OPTIONS.flatMap(entryLines),
+    "",
+    "Commands:",
+    ...COMMANDS.flatMap(entryLines),
+    "",
+    "See README.md for every command in full.",
+    ""
+  ].join("\n");
+}
+var USAGE = helpText();
+
+// src/main-build.ts
+var UNKNOWN = { status: "unknown" };
+var RED = /* @__PURE__ */ new Set(["failure", "timed_out", "startup_failure"]);
+var MAX_NAME2 = 100;
+var READ_TIMEOUT_MS = 3e4;
+function parseRuns(stdout) {
+  let raw;
+  try {
+    raw = JSON.parse(stdout);
+  } catch {
+    return void 0;
+  }
+  if (!Array.isArray(raw)) return void 0;
+  const runs = [];
+  for (const r of raw) {
+    if (r === null || typeof r !== "object") return void 0;
+    const { status, conclusion, headSha, workflowName } = r;
+    if (typeof status !== "string" || typeof workflowName !== "string") return void 0;
+    if (conclusion !== null && conclusion !== void 0 && typeof conclusion !== "string") {
+      return void 0;
+    }
+    runs.push({
+      workflow: workflowName,
+      status,
+      conclusion: conclusion ?? "",
+      sha: typeof headSha === "string" ? headSha : ""
+    });
+  }
+  return runs;
+}
+var cleanName = (s) => s.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_NAME2);
+var validSha = (s) => /^[0-9a-f]{7,64}$/i.test(s) ? s : void 0;
+async function readMainBuild(config2, ports) {
+  try {
+    const reply = await ports.gh.run(
+      [
+        "run",
+        "list",
+        "--repo",
+        config2.primaryRepo,
+        "--branch",
+        "main",
+        "--event",
+        "push",
+        "--limit",
+        "30",
+        "--json",
+        "status,conclusion,headSha,workflowName"
+      ],
+      { timeoutMs: READ_TIMEOUT_MS }
+    );
+    if (reply.code !== 0) return UNKNOWN;
+    const runs = parseRuns(reply.stdout);
+    if (runs === void 0) return UNKNOWN;
+    const newest = /* @__PURE__ */ new Map();
+    for (const r of runs) if (!newest.has(r.workflow)) newest.set(r.workflow, r);
+    const latest = [...newest.values()];
+    if (latest.length === 0) return UNKNOWN;
+    const red2 = latest.find((r) => r.status === "completed" && RED.has(r.conclusion));
+    if (red2) {
+      const sha2 = validSha(red2.sha);
+      return {
+        status: "red",
+        ...sha2 === void 0 ? {} : { sha: sha2 },
+        workflow: cleanName(red2.workflow)
+      };
+    }
+    if (latest.some((r) => r.status !== "completed")) return { status: "pending" };
+    const first = latest[0];
+    const sha = validSha(first.sha);
+    return {
+      status: "green",
+      ...sha === void 0 ? {} : { sha },
+      workflow: cleanName(first.workflow)
+    };
+  } catch {
+    return UNKNOWN;
+  }
+}
+
+// src/overview.ts
+import { lstatSync as lstatSync37, readFileSync as readFileSync42 } from "node:fs";
+import { basename as basename5, isAbsolute as isAbsolute10, join as join43 } from "node:path";
+var line3 = (e) => (e instanceof Error ? e.message : String(e)).replace(/[\p{Cc}\p{Cf}]/gu, " ");
+var INCONSISTENT_ROOT = "inconsistent state root: its marker names a project whose state root is another one";
+function markerProject(root) {
+  const file3 = join43(root, "marker.json");
+  try {
+    if (!lstatSync37(file3).isFile()) throw new Error(`${file3} is not a plain file`);
+  } catch (e) {
+    if (e.code === "ENOENT") return void 0;
+    throw e;
+  }
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync42(file3, "utf8"));
+  } catch {
+    throw new Error(`state root marker ${file3} is unreadable`);
+  }
+  const p = raw?.projectRealpath;
+  if (typeof p !== "string" || !isAbsolute10(p)) {
+    throw new Error(`state root marker ${file3} names no project`);
+  }
+  return p;
+}
+function itemCounts(project) {
+  const file3 = boardPath(project);
+  let plain2 = true;
+  try {
+    plain2 = lstatSync37(file3).isFile();
+  } catch {
+  }
+  if (!plain2) throw new Error(`${file3}: board.yaml is not a plain file`);
+  const counts = {};
+  const board = loadBoard(project);
+  for (const s of ITEM_STATUSES) {
+    const n4 = board.items.filter((i2) => i2.status === s).length;
+    if (n4 > 0) counts[s] = n4;
+  }
+  return counts;
+}
+function readOne(root, alive) {
+  const problems = [];
+  const out = { name: line3(basename5(root)), stateRoot: root, problems };
+  let project;
+  try {
+    project = markerProject(root);
+    if (project === void 0) problems.push("no marker.json: the project is unknown");
+  } catch (e) {
+    problems.push(line3(e));
+  }
+  if (project !== void 0 && stateDirName(project) !== basename5(root)) {
+    problems.push(INCONSISTENT_ROOT);
+    return out;
+  }
+  if (project !== void 0) {
+    out.project = project;
+    out.name = line3(basename5(project)) || out.name;
+    try {
+      out.items = itemCounts(project);
+    } catch (e) {
+      problems.push(line3(e));
+    }
+  }
+  try {
+    out.crews = Object.values(readCrewRecords(root)).filter(
+      (r) => r !== null && typeof r === "object" && r.stoppedAt === void 0 && Number.isInteger(r.pid) && r.pid > 0 && alive(r.pid)
+    ).length;
+  } catch (e) {
+    problems.push(line3(e));
+  }
+  try {
+    const q = loadQueue(root);
+    out.queued = q.pending.length + (q.current === void 0 ? 0 : 1);
+  } catch (e) {
+    problems.push(line3(e));
+  }
+  return out;
+}
+function readOverview(base, alive) {
+  return projectStateRoots(base).filter((r) => basename5(r) !== OWNER_DIR).map((r) => readOne(r, alive)).sort(
+    (a2, b) => a2.name < b.name ? -1 : a2.name > b.name ? 1 : a2.stateRoot < b.stateRoot ? -1 : 1
+  );
+}
+function table(rows2) {
+  const widths = rows2[0]?.map((_, c3) => Math.max(...rows2.map((r) => (r[c3] ?? "").length))) ?? [];
+  return `${rows2.map(
+    (r) => r.map((cell, c3) => c3 === r.length - 1 ? cell : cell.padEnd(widths[c3] ?? 0)).join("  ").trimEnd()
+  ).join("\n")}
+`;
+}
+var counted = (n4) => n4 === void 0 ? "?" : String(n4);
+function formatOverview(list2) {
+  if (list2.length === 0) return "No Studio projects yet.\n";
+  return table([
+    ["PROJECT", "ITEMS", "CREWS", "QUEUED", "PROBLEMS"],
+    ...list2.map((p) => [
+      p.name,
+      p.items === void 0 ? "?" : Object.entries(p.items).map(([s, n4]) => `${s} ${n4}`).join(", ") || "-",
+      counted(p.crews),
+      counted(p.queued),
+      p.problems.join("; ")
+    ])
+  ]);
+}
+
+// src/privacy.ts
+var EMAIL = /[A-Za-z0-9._%+-]{1,64}@([A-Za-z0-9-]{1,63}\.)+[A-Za-z]{2,24}/g;
+var RESERVED_DOMAIN = /(^|\.)(example(\.(com|net|org))?|invalid|test|localhost|local|placeholder)$/i;
+var PHONE = /(?<![\w.])\+?\d[\d\s()./-]{6,}\d(?![\w])/g;
+var ISO_DATE = /^\d{4}-\d{2}-\d{2}([ T]\d{2})?/;
+var IBAN = /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,3})?\b/g;
+var CARD = /\b(?:\d[ -]?){13,19}\b/g;
+var SECRET = [
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  /\bAKIA[0-9A-Z]{16}\b/,
+  /\bgh[pousr]_[A-Za-z0-9]{30,}\b/,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/,
+  /\bsk-[A-Za-z0-9]{20,}\b/,
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/
+];
+var PII_FIELD = /\b(first_?name|last_?name|sur_?name|full_?name|given_?name|birth_?(date|day)|date_of_birth|dob|street|house_?number|postal_?code|zip_?code|phone(_?number)?|mobile|email(_?address)?|iban|ssn|tax_?id|patient(_?name)?|customer(_?name)?)\b["']?\s*[:=]\s*["']?([^\s"',;|}]{2,})/gi;
+var FIELD_VALUE_OK = /^(string|text|varchar|char|int|integer|bigint|smallint|number|float|double|decimal|bool|boolean|date|datetime|timestamp|blob|binary|bytes|uuid|json|null|none|nil|true|false|optional|required|unknown|n\/a|tbd|redacted|masked|<[^>]*>|\[[^\]]*\]|\{[^}]*\}|\*+|x+|\.{2,}|\w*\(.*\)|\?)$/i;
+var LINE_LIMIT = 4e3;
+function privacyHits(text, file3) {
+  const hits = [];
+  const add = (kind, line4) => {
+    if (!hits.some((h2) => h2.kind === kind && h2.line === line4)) hits.push({ kind, line: line4, file: file3 });
+  };
+  const lines2 = text.split(/\r?\n/);
+  const delim = lines2.map(
+    (l) => (l.match(/\t/g)?.length ?? 0) * 100 + (l.match(/,/g)?.length ?? 0)
+  );
+  lines2.forEach((raw, i2) => {
+    const n4 = i2 + 1;
+    if (raw.length > LINE_LIMIT) {
+      add("line too long to check", n4);
+      return;
+    }
+    const l = raw;
+    for (const m of l.matchAll(EMAIL)) {
+      const domain2 = m[0].slice(m[0].lastIndexOf("@") + 1);
+      if (!RESERVED_DOMAIN.test(domain2)) add("email address", n4);
+    }
+    for (const m of l.matchAll(PHONE)) {
+      const digits = m[0].replace(/\D/g, "");
+      if (digits.length < 8 || digits.length > 15 || ISO_DATE.test(m[0].trim())) continue;
+      if (/^\d+(\.\d+){2,3}$/.test(m[0].trim())) continue;
+      if (!/^\+/.test(m[0].trim()) && !/[\s()/-]/.test(m[0].trim())) continue;
+      add("phone-like number", n4);
+    }
+    if ([...l.matchAll(IBAN)].some((m) => m[0].replace(/\s/g, "").length >= 15))
+      add("account number", n4);
+    for (const m of l.matchAll(CARD)) if (luhn(m[0].replace(/\D/g, ""))) add("card number", n4);
+    for (const re of SECRET) if (re.test(l)) add("credential or key", n4);
+    for (const m of l.matchAll(PII_FIELD)) {
+      const value2 = (m[m.length - 1] ?? "").replace(/["']+$/, "");
+      if (!FIELD_VALUE_OK.test(value2)) add("personal field with a value", n4);
+    }
+    if (/\binsert\s+into\b[\s\S]*\bvalues\b/i.test(l)) add("row dump (insert statement)", n4);
+  });
+  for (let i2 = 0; i2 + 4 < lines2.length; i2++) {
+    const d = delim[i2];
+    const commas = d % 100;
+    const tabs = Math.floor(d / 100);
+    if (commas < 2 && tabs < 2) continue;
+    let run2 = 1;
+    while (i2 + run2 < lines2.length && delim[i2 + run2] === d && (lines2[i2 + run2] ?? "").trim() !== "")
+      run2++;
+    if (run2 >= 5) {
+      add("row dump (delimited lines)", i2 + 1);
+      i2 += run2 - 1;
+    }
+  }
+  return hits;
+}
+function luhn(d) {
+  if (d.length < 13 || d.length > 19 || /^(\d)\1+$/.test(d)) return false;
+  let sum = 0;
+  for (let i2 = 0; i2 < d.length; i2++) {
+    let x = Number(d[d.length - 1 - i2]);
+    if (i2 % 2 === 1) {
+      x *= 2;
+      if (x > 9) x -= 9;
+    }
+    sum += x;
+  }
+  return sum % 10 === 0;
+}
+function privacyHitsInAdded(files) {
+  const hits = [];
+  const odd = {
+    link: "link in the pull request",
+    submodule: "submodule in the pull request",
+    binary: "file that is not text",
+    large: "file too large to check",
+    unreadable: "file whose lines could not be read"
+  };
+  for (const f3 of files) {
+    if (f3.odd !== void 0) {
+      hits.push({ kind: odd[f3.odd] ?? "file that could not be checked", line: 0, file: f3.path });
+      continue;
+    }
+    const found = privacyHits(f3.lines.map((l) => l.text).join("\n"), f3.path);
+    for (const h2 of found) hits.push({ ...h2, line: f3.lines[h2.line - 1]?.line ?? h2.line });
+  }
+  return hits;
+}
+function privacyLine(hits) {
+  const shown2 = hits.slice(0, 8).map(
+    (h2) => `${h2.kind} (${h2.file.replace(/[^\w./-]/g, "?").slice(0, 80)}${h2.line > 0 ? `:${h2.line}` : ""})`
+  );
+  return `privacy check failed, the report is held for the lead: ${shown2.join("; ")}${hits.length > 8 ? `; ${hits.length - 8} more` : ""}`;
+}
+
+// src/pull-request.ts
+import { mkdtempSync, rmSync as rmSync9, writeFileSync as writeFileSync13 } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as join44 } from "node:path";
+var PR_BODY_MAX = 2e4;
+function crewPrText(item, body, notRunHere) {
+  return `Opened by Studio for ${item.id}; the text below the line was written by the crew.
+${notRunSection(notRunHere)}
+---
+
+${body.replace(new RegExp("[^\\P{Cc}\\n\\t]|\\p{Cf}", "gu"), "").slice(0, PR_BODY_MAX)}
+`;
+}
+var crewPrTitle = (title) => title.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
+async function openCrewPr(ports, item, title, body, notRunHere, token, capacity, unchanged) {
+  const head = `studio/${item.id}`;
+  const list2 = await ports.gh.run(
+    [
+      "pr",
+      "list",
+      "--repo",
+      item.repo,
+      "--head",
+      head,
+      "--state",
+      "open",
+      "--json",
+      "number,isCrossRepository"
+    ],
+    { token }
+  );
+  if (list2.code !== 0)
+    throw new Error(`cannot list pull requests of ${head} (gh exit ${list2.code})`);
+  const open4 = JSON.parse(list2.stdout || "[]");
+  const known = open4.find(
+    (p) => Number.isInteger(p.number) && p.isCrossRepository === false
+  )?.number;
+  const plainTitle = title.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
+  if (plainTitle === "")
+    throw new Error(`the pull request title for ${head} is empty; nothing moved`);
+  const text = crewPrText(item, body, notRunHere);
+  const withBody = async (use) => {
+    const dir = mkdtempSync(join44(tmpdir(), "studio-pr-"));
+    try {
+      const file3 = join44(dir, "body.md");
+      writeFileSync13(file3, text, { mode: 384 });
+      return await use(file3);
+    } finally {
+      rmSync9(dir, { recursive: true, force: true });
+    }
+  };
+  const room = await capacity();
+  if (!room.ok) return { held: room.capacity };
+  unchanged();
+  if (typeof known === "number") {
+    return withBody(async (file3) => {
+      const r = await ports.gh.run(
+        ["pr", "edit", String(known), "--repo", item.repo, "--body-file", file3],
+        { token }
+      );
+      if (r.code !== 0) {
+        throw new Error(`gh pr edit failed for ${head} (exit ${r.code}); nothing moved`);
+      }
+      return { pr: known };
+    });
+  }
+  return withBody(async (file3) => {
+    const r = await ports.gh.run(
+      [
+        "pr",
+        "create",
+        "--repo",
+        item.repo,
+        "--head",
+        head,
+        "--title",
+        plainTitle,
+        "--body-file",
+        file3
+      ],
+      { token }
+    );
+    const m = /\/pull\/(\d+)\s*$/.exec(r.stdout);
+    if (r.code !== 0 || !m)
+      throw new Error(`gh pr create failed for ${head} (exit ${r.code}); nothing moved`);
+    return { pr: Number(m[1]) };
+  });
+}
+function notRunSection(list2) {
+  if (list2.length === 0) return "";
+  const lines2 = list2.map(
+    (x) => `${x.command} (missing ${x.missing}: ${x.reason})`.replace(/`{3,}/g, "")
+  );
+  return `
+## Not run in the crew sandbox
+
+The crew could not run these commands, because its sandbox lacks the service named (crew text). CI must run them; an approval counts only with green checks.
+
+\`\`\`text
+${lines2.join("\n")}
+\`\`\`
+`;
+}
+
 // src/setup.ts
 import {
   chmodSync as chmodSync6,
-  lstatSync as lstatSync37,
+  lstatSync as lstatSync38,
   mkdirSync as mkdirSync8,
-  readFileSync as readFileSync41,
+  readFileSync as readFileSync43,
   renameSync as renameSync14,
   rmSync as rmSync10,
   statSync as statSync6,
   writeFileSync as writeFileSync14
 } from "node:fs";
 import { homedir as homedir10 } from "node:os";
-import { dirname as dirname12, join as join44, resolve as resolve8 } from "node:path";
+import { dirname as dirname12, join as join45, resolve as resolve9 } from "node:path";
 var DEFAULT_LABEL2 = "main";
 var MAX_LABEL = 32;
 var TOKEN_TEXT = [
@@ -47052,7 +47611,7 @@ var SHIM_NOTE = "   The shim finds the plugin again after an update; no need to 
 var shQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 function studioOnPath(env) {
   for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
-    const file3 = join44(dir, "studio");
+    const file3 = join45(dir, "studio");
     try {
       const st = statSync6(file3);
       if (st.isFile() && (st.mode & 73) !== 0) return file3;
@@ -47063,7 +47622,7 @@ function studioOnPath(env) {
 }
 var yes = (answer) => /^(|y|yes)$/i.test(answer.trim());
 function writeAtomic2(file3, text, mode) {
-  const tmp = join44(dirname12(file3), `.studio-${process.pid}-${Date.now()}.tmp`);
+  const tmp = join45(dirname12(file3), `.studio-${process.pid}-${Date.now()}.tmp`);
   try {
     writeFileSync14(tmp, text, { flag: "wx", mode });
     chmodSync6(tmp, mode);
@@ -47127,8 +47686,8 @@ async function link(o2, home) {
     return 0;
   }
   const launcher2 = o2.launcher;
-  const localBin = join44(home, ".local", "bin");
-  const onPath = (o2.env.PATH ?? "").split(":").some((d) => d !== "" && resolve8(d) === resolve8(localBin));
+  const localBin = join45(home, ".local", "bin");
+  const onPath = (o2.env.PATH ?? "").split(":").some((d) => d !== "" && resolve9(d) === resolve9(localBin));
   if (!onPath) {
     say("4. studio in your terminal: ~/.local/bin is not on your PATH.");
     say("   Studio does not edit shell files. Add ~/.local/bin to PATH in your shell's startup");
@@ -47136,14 +47695,14 @@ async function link(o2, home) {
     say(`   Until then: node ${shQuote(launcher2)} <command>`);
     return 0;
   }
-  const target = join44(localBin, "studio");
+  const target = join45(localBin, "studio");
   let current;
   try {
-    current = lstatSync37(target).isFile() ? readFileSync41(target, "utf8") : "";
+    current = lstatSync38(target).isFile() ? readFileSync43(target, "utf8") : "";
   } catch {
     current = void 0;
   }
-  const cache2 = join44(ownerConfigDir(o2.owner), "launcher");
+  const cache2 = join45(ownerConfigDir(o2.owner), "launcher");
   const writeCache = () => {
     mkdirSync8(dirname12(cache2), { recursive: true, mode: 448 });
     writeAtomic2(cache2, `${launcher2}
@@ -47405,20 +47964,20 @@ async function runSetup(o2) {
 }
 
 // src/skills-check.ts
-import { existsSync as existsSync11, lstatSync as lstatSync38, readFileSync as readFileSync42 } from "node:fs";
-import { join as join45 } from "node:path";
+import { existsSync as existsSync11, lstatSync as lstatSync39, readFileSync as readFileSync44 } from "node:fs";
+import { join as join46 } from "node:path";
 var SKILLS_CHECK_DAYS = 30;
 var DAY_MS5 = 864e5;
 var NOTE = "skills-update: ";
 var PLUGIN_TIMEOUT_MS = 3e5;
-var recordFile2 = (stateRoot) => join45(stateRoot, "skills-check.json");
+var recordFile2 = (stateRoot) => join46(stateRoot, "skills-check.json");
 var at = (v) => typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : void 0;
 function readRecord(stateRoot) {
   const file3 = recordFile2(stateRoot);
   try {
     assertStatePath(stateRoot, file3);
-    if (!lstatSync38(file3).isFile()) return {};
-    const raw = JSON.parse(readFileSync42(file3, "utf8"));
+    if (!lstatSync39(file3).isFile()) return {};
+    const raw = JSON.parse(readFileSync44(file3, "utf8"));
     const lastRun2 = at(raw.lastRun);
     const lastAttempt = at(raw.lastAttempt);
     return {
@@ -47642,17 +48201,17 @@ async function runSkillsCheck(o2) {
 }
 
 // src/worker.ts
-import { existsSync as existsSync13, lstatSync as lstatSync39, readdirSync as readdirSync13, readFileSync as readFileSync44 } from "node:fs";
+import { existsSync as existsSync13, lstatSync as lstatSync40, readdirSync as readdirSync14, readFileSync as readFileSync46 } from "node:fs";
 import { homedir as homedir11 } from "node:os";
-import { dirname as dirname13, join as join47 } from "node:path";
+import { dirname as dirname13, join as join48 } from "node:path";
 
 // src/worker-deny.ts
-import { existsSync as existsSync12, readFileSync as readFileSync43, realpathSync as realpathSync9 } from "node:fs";
+import { existsSync as existsSync12, readFileSync as readFileSync45, realpathSync as realpathSync10 } from "node:fs";
 import { isIP as isIP2 } from "node:net";
-import { isAbsolute as isAbsolute11, join as join46, posix } from "node:path";
+import { isAbsolute as isAbsolute11, join as join47, posix } from "node:path";
 var readText = (file3) => {
   try {
-    return readFileSync43(file3, "utf8");
+    return readFileSync45(file3, "utf8");
   } catch {
     return void 0;
   }
@@ -47734,7 +48293,7 @@ function sandboxProblem(p) {
 var WINDOWS_DRIVE = /^([A-Za-z]):[\\/]/;
 var realOr2 = (p) => {
   try {
-    return realpathSync9(p);
+    return realpathSync10(p);
   } catch {
     return p;
   }
@@ -47907,13 +48466,13 @@ var WORKER_LOCK = "worker.lock";
 var WORKER_LOCK_STALE_MS = 3 * 60 * 6e4;
 var MAX_OWN_BEATS = 20;
 function readWorkerState(stateRoot, label) {
-  const file3 = join47(stateRoot, WORKER_FILE);
+  const file3 = join48(stateRoot, WORKER_FILE);
   assertStatePath(stateRoot, file3);
   if (!existsSync13(file3)) return { label };
-  if (!lstatSync39(file3).isFile()) throw new Error(`${file3} is not a plain file`);
+  if (!lstatSync40(file3).isFile()) throw new Error(`${file3} is not a plain file`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync44(file3, "utf8"));
+    raw = JSON.parse(readFileSync46(file3, "utf8"));
   } catch {
     throw new Error(`${file3} is not valid JSON; inspect it before the worker goes on`);
   }
@@ -47951,7 +48510,7 @@ function saveWorkerState(stateRoot, s) {
       if (v !== void 0) out[k] = v;
     } else if (s[k] === void 0) delete out[k];
   }
-  writeStateFile(stateRoot, join47(stateRoot, WORKER_FILE), `${JSON.stringify(out, null, 2)}
+  writeStateFile(stateRoot, join48(stateRoot, WORKER_FILE), `${JSON.stringify(out, null, 2)}
 `);
 }
 async function mainConfig(c3) {
@@ -47971,11 +48530,11 @@ async function pinnedMain2(project, ports) {
 }
 var CONTENT_PATH = /^\.studio\/(roles|solutions)\/[A-Za-z0-9._-]{1,100}\.md$/;
 async function pinnedContent(c3, stateRoot, sha) {
-  const base = join47(stateRoot, "pinned");
-  const dir = join47(base, sha);
-  if (existsSync13(join47(dir, ".complete"))) return dir;
+  const base = join48(stateRoot, "pinned");
+  const dir = join48(base, sha);
+  if (existsSync13(join48(dir, ".complete"))) return dir;
   ensureStateDir(stateRoot, base);
-  for (const old of readdirSync13(base)) removeStateEntry(stateRoot, join47(base, old));
+  for (const old of readdirSync14(base)) removeStateEntry(stateRoot, join48(base, old));
   const g3 = (args) => c3.ports.git.run(c3.project, ["--no-replace-objects", ...args]);
   const tree = await g3(["ls-tree", "-r", sha, "--", ".studio/roles", ".studio/solutions"]);
   ensureStateDir(stateRoot, dir);
@@ -47984,12 +48543,12 @@ async function pinnedContent(c3, stateRoot, sha) {
     const m = /^100644 blob ([0-9a-f]{40})\t(.+)$/.exec(line4);
     if (!m || !CONTENT_PATH.test(m[2]) || n4++ >= 500) continue;
     const text = await g3(["cat-file", "blob", m[1]]);
-    const file3 = join47(dir, m[2]);
+    const file3 = join48(dir, m[2]);
     ensureStateDir(stateRoot, dirname13(file3));
     writeStateFile(stateRoot, file3, `${text}
 `);
   }
-  writeStateFile(stateRoot, join47(dir, ".complete"), `${sha}
+  writeStateFile(stateRoot, join48(dir, ".complete"), `${sha}
 `);
   return dir;
 }
@@ -47997,7 +48556,7 @@ function crewConfigDir2(owner) {
   const env = owner.env ?? process.env;
   const stored = crewClaudeDir(owner);
   if (existsSync13(stored)) return stored;
-  return env.CLAUDE_CONFIG_DIR || join47(owner.homedir ?? homedir11(), ".claude");
+  return env.CLAUDE_CONFIG_DIR || join48(owner.homedir ?? homedir11(), ".claude");
 }
 function strictPinProblem(configDir, pins) {
   const have = installedVersions(configDir);
@@ -48480,7 +49039,7 @@ async function finish(c3, stateRoot, state, held2, repo, rec, touch) {
   try {
     const fileName = reportName(stateRoot, id);
     if (fileName === void 0) throw new ReportError("no report name was drawn for this run");
-    text = readReportText(join47(stateRoot, "clones", id), id, {
+    text = readReportText(join48(stateRoot, "clones", id), id, {
       notBefore: new Date(rec.startedAt),
       fileName
     });
@@ -48590,8 +49149,8 @@ async function openPullRequest(c3, item, report) {
 async function pushForCrew(c3, stateRoot, item, head) {
   const id = item.id;
   const branch = `refs/heads/studio/${id}`;
-  const parent = join47(stateRoot, "push");
-  const dir = join47(parent, id);
+  const parent = join48(stateRoot, "push");
+  const dir = join48(parent, id);
   ensureStateDir(stateRoot, parent);
   removeStateEntry(stateRoot, dir);
   const timeoutMs = 6e5;
@@ -48613,7 +49172,7 @@ async function pushForCrew(c3, stateRoot, item, head) {
       "-q",
       "--no-tags",
       "--no-write-fetch-head",
-      join47(stateRoot, "clones", id),
+      join48(stateRoot, "clones", id),
       `+${branch}:${branch}`
     ]);
     const got = (await git(dir, ["--no-replace-objects", "rev-parse", "--verify", `${branch}^{commit}`])).trim();
@@ -48663,7 +49222,7 @@ function noteLimitOrBlock(c3, stateRoot, id, from, label = "default") {
 // src/worker-hub.ts
 import { mkdtempSync as mkdtempSync2, rmSync as rmSync11, writeFileSync as writeFileSync15 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join48 } from "node:path";
+import { join as join49 } from "node:path";
 var OFFER_LABEL = "studio-offer";
 var CLAIM_PREFIX = "refs/studio/claims/";
 var TIMEOUT_MS = 6e4;
@@ -48694,9 +49253,9 @@ function ghTransport(gh, token) {
       let r;
       if (body === void 0) r = await run2([]);
       else {
-        const dir = mkdtempSync2(join48(tmpdir2(), "studio-hub-"));
+        const dir = mkdtempSync2(join49(tmpdir2(), "studio-hub-"));
         try {
-          const file3 = join48(dir, "body.json");
+          const file3 = join49(dir, "body.json");
           writeFileSync15(file3, JSON.stringify(body), { mode: 384 });
           r = await run2(["--input", file3]);
         } finally {
@@ -49380,103 +49939,6 @@ async function closeOffer(o2) {
 }
 
 // src/cli.ts
-var USAGE = `Usage: studio [--project <dir>] [--json] <command>
-
-Commands:
-  init [--write]           Check the prerequisites and propose .studio/ for this project; --write writes it
-  add "<title>" --dod <l>  Add a ready builder item [--type fix|feature|chore|docs|research]
-                           [--repo <owner/name>] [--path <glob>]... [--dod <line>]... [--component <id>] [--plan <file>]
-                           [--epic <id>]
-  board [--component <id>] [--epic <id>]  Show the board, or the items of one component or epic
-  epic add "<title>" --goal <text> --acceptance <line>... [--component <id>]...
-                           Add an open epic with the next free id (E-<n>)
-  epic list                Epics with their items by status and merged of total
-  epic show <id>           One epic: goal, acceptance, items
-  epic edit <id> [--title <t>] [--goal <text>] [--acceptance <line>...]
-                           Replace an epic's title, goal or acceptance lines
-  epic drop <id>           End an epic; refused while it has open items
-  roadmap [--write] [--out <file>] [--force]
-                           Render the roadmap from the board; --write writes ROADMAP.md
-  roadmap import <file> [--write]  Turn "- [ ] Phase <n> \u2014 <title>" lines into epics (dry run without --write)
-  plan                     Dry-run the planner (JSON)
-  launch <id>              Start a crew session for a planned item
-  status                   Crew sessions and their board status, items on workers included
-  worker --label <label> [--once]
-                           Serve offered items of this label on this machine: claim one, run its
-                           crew, open its pull request, hand the report back (see README, Workers)
-  overview                 Owner only, in a terminal: every project of this owner, read only
-  collect <id>             Read a crew report and move the item
-  tick                     One lead heartbeat: collect, launch, queue and merge what is due (JSON)
-  queue add <repo>#<pr>    Put a reviewed PR into the merge queue
-  queue run                Merge the queued PRs, one at a time
-  state                    Refresh state.json in the state root
-  pause                    Owner only: nothing new starts or merges until resume
-  resume                   Owner only: lift the pause
-  stop <id> [--release] [--requeue]  Stop a crew session; --release closes the record of one it cannot verify, --requeue puts its item back to ready
-  drop <id>                End an item; refuses while its crew runs
-  link <id> <repo>#<pr>    Owner only, in a terminal: tie a pull request opened by hand to its item
-  metrics                  Lead time, deploy frequency, change failure rate, time to restore
-  deploy record [<sha>]    Record a production deploy
-  incident open <id>       Record that a deploy broke something
-  incident resolve <id>    Record that service is restored
-  flaky record <t> <s> pass|fail  Record a test that failed once, with its rerun
-  flaky [list]             The flaky-test ledger, worst first
-  solutions search <words> Earlier solutions in .studio/solutions
-  exceptions [list]        Exceptions by evidence: applied and not proven, with head and diff digest
-  exceptions grant <repo>#<pr> <rule> --reason "<line>"
-                           The lead's decision for a guard hit no evidence explained, for this head;
-                           an owner_only rule or item takes the owner's, in a terminal
-  release <component> [--dry-run] [--since <commit>]
-                           The release gate: draft the note and log the announcement; run it again
-                           to trigger the release workflow once approvals are in, then it follows
-                           the checks after the deploy. --since names production's commit, first
-                           release only; --dry-run prints the note and changes nothing
-  release list             Releases with status, commit and what they wait for
-  release show <id>        A release's note
-  release approve <id> <approver> --said "<words>" [--by "<who>"] [--at <time>]
-                           Record an approval: a third party's, relayed by the lead with who said
-                           it and when; the owner's (approver owner) only in a terminal
-  release resolve <id> --deployed|--not-deployed --reason "<line>"
-                           Settle a failed release whose deploy is unknown, after checking production
-  release cancel <id> --reason "<line>"  Stop a release before its trigger
-  setup sources [<id>...]  Fetch the referenced third-party sources (nothing runs)
-  lessons [list]           Lessons crews proposed for the role memory, with age, item and evidence
-  lessons accept <n>       Move a proposed lesson into its role file
-  lessons drop <n> [--reason <line>]  Discard a proposed lesson, with a one-line reason
-  lessons prune <role> <l> Remove a lesson line from a role file
-  lessons review [--now]   Bundle pending proposals into one review item per role (weekly; tick runs it)
-  recover [--dry-run]      After a crash or reboot: stale locks, interrupted launches and merges,
-                           ended crews; prints what it found and did (--dry-run changes nothing)
-  escalate <id>            Run a stuck item on the role's stronger model
-  sources list             Third-party sources and their licences
-  sources check            Judge upstream updates: fits, unclear or conflict; adopts nothing
-  sources apply <id>       Adopt a candidate that fits
-  skills check [--now] [--security <name>]...
-                           Pinned plugins against their marketplaces and sources against upstream;
-                           one board item per update. Monthly (tick runs it); --now runs it at once,
-                           --security marks a plugin or source update as security-relevant (priority 0)
-  setup [--link]           Owner only, in a terminal: gh, crew token, Claude account and phone
-                           notifications, one guided step each, skipped when done; --link puts
-                           studio on your terminal's PATH; --notifications runs only that step again
-  setup ci [--write]       Detect CI runners, propose the ci: block, lint workflows
-  setup stack [--write]    Detect the project's stacks from its manifest files
-  secret set crew-token    Store the crew's GitHub token (hidden input, checked first)
-  doctor                   What is set and what is missing, never values
-  account add <label>      Owner only, in a terminal: store a token from claude setup-token
-  account list             Stored Claude accounts and their state, never a token
-  account use <label>      Owner only, in a terminal: make another account the active one
-  account remove <label>   Owner only, in a terminal: remove a stored account
-  account setup-plugins    Install the plugins crews need into the crew config dir
-  accounts-clear <label>   Owner only, in a terminal: clear a label's account block
-  research allow <id> <class>...
-                           Owner only, in a terminal: open REA tool classes (annotate, debug,
-                           observe, device, export) for one researcher item, from its next launch
-  research revoke <id> [<class>...]
-                           Owner only, in a terminal: close them again (all without a class)
-  research list            The REA classes the owner opened, per item
-  research install         Owner only, in a terminal: install the pinned rea-agents (owner config
-                           rea_version) into the owner state, checked against the registry's integrity
-`;
 var UsageError = class extends Error {
 };
 var BY3 = "studio";
@@ -49572,12 +50034,12 @@ async function runCli(argv, deps) {
   const debug = Boolean(deps.env.STUDIO_DEBUG);
   try {
     const { values, positionals } = parseCli(argv);
-    if (values.help) {
+    const [cmd, ...rest] = positionals;
+    if (values.help === true || cmd === "help") {
       stdout(USAGE);
       return 0;
     }
-    const [cmd, ...rest] = positionals;
-    const project = resolve9(deps.cwd, values.project ?? ".");
+    const project = resolve10(deps.cwd, values.project ?? ".");
     const json2 = values.json === true;
     const print = (v) => stdout(`${JSON.stringify(v, null, 2)}
 `);
@@ -49627,8 +50089,8 @@ async function runCli(argv, deps) {
         "--reason works with lessons drop, exceptions grant and release cancel only"
       );
     }
-    if (values["dry-run"] !== void 0 && cmd !== "recover" && cmd !== "release") {
-      throw new UsageError("--dry-run works with recover and release only");
+    if (values["dry-run"] !== void 0 && cmd !== "recover" && cmd !== "release" && cmd !== "tick") {
+      throw new UsageError("--dry-run works with recover, release and tick only");
     }
     const releaseOnly = [
       values.since,
@@ -49643,6 +50105,9 @@ async function runCli(argv, deps) {
         "--since, --by, --said, --at, --deployed and --not-deployed work with release only"
       );
     }
+    if ((values.from !== void 0 || values.apply !== void 0) && cmd !== "adopt") {
+      throw new UsageError("--from and --apply work with adopt only");
+    }
     if ((values.label !== void 0 || values.once !== void 0) && cmd !== "worker") {
       throw new UsageError("--label and --once work with worker only");
     }
@@ -49650,9 +50115,10 @@ async function runCli(argv, deps) {
     const componentCell = (ids) => ids === void 0 || ids.length === 0 ? "-" : ids.join(",");
     const stateRoot = () => stateRootFor(project, owner);
     let migrated = false;
+    const readOnly = cmd === "tick" && values["dry-run"] === true;
     const ownerRoot = () => {
       const root = ownerStateRootFor(owner);
-      if (!migrated) {
+      if (!migrated && !readOnly) {
         migrated = true;
         for (const line4 of migrateOwnerState(root, ports.clock.now())) stderr(`error: ${line4}
 `);
@@ -49719,7 +50185,7 @@ async function runCli(argv, deps) {
     };
     const dailyCostHold = async (config2, ownerConfig) => {
       const roots = ownerConfig.limits?.dailyCostUsd === void 0 ? [stateRoot()] : [.../* @__PURE__ */ new Set([stateRoot(), ...projectStateRoots(dirname14(ownerRoot()))])];
-      await recordAllEnded(roots, ownerConfig);
+      if (!readOnly) await recordAllEnded(roots, ownerConfig);
       return costHold({
         stateRoot: stateRoot(),
         stateBase: dirname14(ownerRoot()),
@@ -50263,7 +50729,7 @@ async function runCli(argv, deps) {
           }
         }
         removeReaRun(stateRoot(), item.id);
-        const clone2 = join49(stateRoot(), "clones", item.id);
+        const clone2 = join50(stateRoot(), "clones", item.id);
         fileName = reportName(stateRoot(), item.id);
         if (fileName === void 0) {
           throw new ReportError(
@@ -51107,7 +51573,7 @@ async function runCli(argv, deps) {
           if (item.status !== "assigned" && item.status !== "in_progress") continue;
           const rec = records[item.id];
           if (rec === void 0 || rec.stoppedAt !== void 0) continue;
-          const t = timeoutsOfContext(join49(root, "guard", `${item.id}.json`));
+          const t = timeoutsOfContext(join50(root, "guard", `${item.id}.json`));
           const ends = t === void 0 ? Number.NaN : Date.parse(t.sessionEndsAt);
           if (Number.isNaN(ends) || now < ends + REVIEW_GRACE_MS) continue;
           beat();
@@ -51327,6 +51793,194 @@ async function runCli(argv, deps) {
       }
       const exceptions = appliedOut();
       if (exceptions.length > 0) out.exceptions = exceptions;
+      return out;
+    };
+    const tickPreview = async () => {
+      const now = ports.clock.now();
+      const root = stateRoot();
+      const rootExists = existsSync14(root);
+      const why = (e) => e.message.replace(new RegExp("\\p{Cc}", "gu"), " ");
+      const out = { dryRun: true, needsLead: [], held: [], errors: [] };
+      const lead = (item, reason) => {
+        if (!out.needsLead.some((n4) => n4.item === item && n4.reason === reason)) {
+          out.needsLead.push({ item, reason });
+        }
+      };
+      const step = async (name, body) => {
+        try {
+          await body();
+        } catch (e) {
+          out.errors.push({ phase: name, error: why(e) });
+        }
+      };
+      if (rootExists) {
+        const t = inspectStateLock(root, TICK_LOCK, { now, heartbeatStaleMs: TICK_LOCK_STALE_MS });
+        if (t.state === "held") out.tickRunning = true;
+      }
+      const { config: config2, board } = loadAll();
+      const records = rootExists ? readCrewRecords(root) : {};
+      await step("recover", async () => {
+        if (!rootExists) return;
+        const r = await recoverProject({
+          project,
+          stateRoot: root,
+          ownerRoot: ownerRoot(),
+          ports,
+          now,
+          dryRun: true,
+          scope: "tick"
+        });
+        if (r.findings.length > 0) out.recover = r.findings;
+        for (const n4 of r.needsLead) lead(n4.item, n4.reason);
+      });
+      await step("collect", async () => {
+        const collect3 = [];
+        for (const item of board.items) {
+          if (item.status !== "assigned" && item.status !== "in_progress") continue;
+          if (item.runsOn !== void 0) continue;
+          const rec = records[item.id];
+          const heldPr = (item.notes ?? []).some((n4) => n4.startsWith(PR_HELD));
+          if (rec !== void 0) {
+            const hold = await crewHold(rec, ports);
+            if (hold === "running") {
+              out.held.push({ item: item.id, reason: "crew running" });
+              continue;
+            }
+            if (hold === "unverified") {
+              lead(item.id, unverifiedRefusal(rec));
+              continue;
+            }
+            collect3.push({ item: item.id, why: "its crew ended: read its report and move it" });
+          } else if (heldPr) {
+            collect3.push({ item: item.id, why: "its pull request was held for CI capacity" });
+          }
+        }
+        out.collect = collect3;
+        const onWorkers = board.items.filter(
+          (i2) => i2.runsOn !== void 0 && (i2.status === "assigned" || i2.status === "in_progress")
+        );
+        if (onWorkers.length > 0) {
+          out.workers = onWorkers.map((i2) => ({
+            item: i2.id,
+            label: i2.runsOn,
+            would: "follow the claim on GitHub; collect a report handed back"
+          }));
+        }
+      });
+      await step("review", async () => {
+        const reviews = [];
+        for (const b of board.items) {
+          if (PR_OPTIONAL.includes(b.type) || b.status !== "in_review" || b.pr === void 0) {
+            continue;
+          }
+          const target = `${b.repo}#${b.pr}`;
+          if (b.approvedHead !== void 0 || board.items.some((i2) => isOpenReviewOf(i2, target))) {
+            continue;
+          }
+          if (latestReview(board, target)?.notes?.includes("verdict: changes_requested")) continue;
+          reviews.push(b.id);
+        }
+        if (reviews.length > 0) out.reviewItems = reviews;
+      });
+      await step("launch", async () => {
+        const ownerConfig = loadOwnerConfig(owner);
+        const { plan } = await planNow(config2, board);
+        out.launch = plan.assign.map((a2) => {
+          const rea = wantsRea(a2, config2, false) ? reaDecision({ ownerRoot: ownerRoot(), owner, item: a2.id }) : void 0;
+          if (rea?.decision === "needs-owner") lead(a2.id, rea.line);
+          return {
+            item: a2.id,
+            role: a2.role,
+            ...rea === void 0 ? {} : { rea: rea.decision, reaLine: rea.line }
+          };
+        });
+        if (plan.offer.length > 0) {
+          out.offer = plan.offer.map((o2) => ({
+            item: o2.id,
+            label: o2.runsOn,
+            ...acceptedFor(ownerConfig, o2.runsOn).length === 0 ? { held: `no worker is accepted for the label ${o2.runsOn}` } : {}
+          }));
+        }
+        for (const d of plan.deferred) out.held.push({ item: d.id, reason: d.reason });
+        for (const b of plan.blocked) {
+          if (b.reason.startsWith("waiting on ")) out.held.push({ item: b.id, reason: b.reason });
+          else lead(b.id, b.reason);
+        }
+      });
+      const queue = [];
+      await step("queue add", async () => {
+        for (const b of board.items) {
+          if (b.type === "review" || b.status !== "in_review" || b.pr === void 0) continue;
+          const target = `${b.repo}#${b.pr}`;
+          const latest = latestReview(board, target);
+          if (b.approvedHead === void 0) {
+            if (latest?.notes?.includes("verdict: changes_requested") && !board.items.some((i2) => isOpenReviewOf(i2, target))) {
+              lead(b.id, `changes requested by ${latest.id}`);
+            }
+            continue;
+          }
+          const failedAt = b.history.findLast(
+            (h2) => h2.from === "queued" && h2.to === "in_review"
+          )?.at;
+          const approvedAt = latest?.history.at(-1)?.at;
+          if (failedAt !== void 0 && (approvedAt === void 0 || Date.parse(failedAt) >= Date.parse(approvedAt))) {
+            lead(b.id, "merge failed after the approval");
+            continue;
+          }
+          queue.push({ item: b.id, pr: b.pr, repo: b.repo });
+        }
+        out.queue = queue;
+      });
+      await step("queue run", async () => {
+        const q = rootExists ? loadQueue(root) : { pending: [], done: [], current: void 0 };
+        const pending = q.pending.length + queue.length;
+        const due = pending > 0 || q.current !== void 0 || board.items.some((i2) => i2.status === "queued");
+        const active = rootExists && inspectStateLock(root, RUN_LOCK, { now, heartbeatStaleMs: RUN_LOCK_HEARTBEAT_STALE_MS }).state === "held";
+        out.queueRun = {
+          pending,
+          ...q.current === void 0 ? {} : { current: `${q.current.repo}#${q.current.pr}` },
+          would: !due ? "nothing to merge" : active ? "leave the running queue alone" : "run the queue",
+          ...rootExists && readPause(root).paused ? { held: "paused" } : {}
+        };
+      });
+      for (const i2 of board.items) {
+        if (i2.status === "blocked") lead(i2.id, `blocked: ${(i2.notes ?? []).at(-1) ?? "no note"}`);
+      }
+      await step("contracts", async () => {
+        const m = groupOf(config2, loadOwnerConfig(owner));
+        if (m === void 0 || m.isMain) return;
+        const last = rootExists ? readContracts(root) : void 0;
+        out.contractCheck = {
+          group: m.group.name,
+          main: m.group.main,
+          would: `fetch origin/main of ${m.group.main} and compare its contract files with the last record; a change adds one check item`,
+          lastRecord: last === void 0 ? "none: the first look records a baseline" : last.sha
+        };
+      });
+      await step("epics", async () => {
+        const accepting = (board.epics ?? []).filter((e) => e.status === "accepting");
+        if (accepting.length > 0) {
+          out.acceptance = accepting.map((e) => ({
+            epic: e.id,
+            would: "prepare the acceptance: its item, and main pinned once the full suites completed"
+          }));
+        }
+      });
+      await step("releases", async () => {
+        if (!rootExists) return;
+        const open4 = readReleases(root).filter(isOpen);
+        if (open4.length > 0) {
+          out.releases = open4.map((r) => ({
+            ...releaseRow(r),
+            would: r.status === "triggered" || r.status === "checking" ? "follow the run and the checks after the deploy" : "list what it waits for (tick never triggers a release)"
+          }));
+        }
+      });
+      await step("skills check", async () => {
+        if (skillsCheckDue(root, now).due) {
+          out.skillsCheck = "due: the tick runs the monthly skills check";
+        }
+      });
       return out;
     };
     const pushTick = async (needsLead) => {
@@ -51650,7 +52304,7 @@ ${table2([
             });
             return 0;
           }
-          const lines = [
+          const lines2 = [
             `${epic.id}  ${EPIC_STAGE_WORDS[row.stage]}  ${row.progress.merged}/${row.progress.total}  ${epic.title}`,
             `Goal: ${epic.goal}`,
             "Acceptance:",
@@ -51661,7 +52315,7 @@ ${table2([
               `Accepted: ${epic.accepted.item} on main at ${epic.accepted.sha.slice(0, 12)} (${epic.accepted.at})`
             ]
           ];
-          stdout(`${lines.join("\n")}
+          stdout(`${lines2.join("\n")}
 `);
           stdout(
             items.length === 0 ? "No items yet.\n" : table2([["ID", "STATUS", "TITLE"], ...items.map((i2) => [i2.id, i2.status, i2.title])])
@@ -51818,6 +52472,10 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
       case "tick": {
         refuseCrew(deps.env);
         if (rest.length > 0) throw new UsageError("tick takes no arguments");
+        if (values["dry-run"] === true) {
+          print(await tickPreview());
+          return 0;
+        }
         const out = await tick();
         if (!out.held.some((h2) => h2.item === "tick") && !out.errors.some((e) => e.phase)) {
           try {
@@ -52006,7 +52664,7 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
             hasReport: (item) => {
               if (!isItemId(item)) return false;
               const name = reportName(root, item);
-              return name !== void 0 && existsSync14(join49(root, "clones", item, ".studio", "reports", name));
+              return name !== void 0 && existsSync14(join50(root, "clones", item, ".studio", "reports", name));
             }
           }
         );
@@ -52358,6 +53016,42 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
         throw new UsageError(
           "research needs: allow <id> <class>... | revoke <id> [<class>...] | list | install"
         );
+      }
+      case "adopt": {
+        if (deps.env.STUDIO_ROLE === "crew" || deps.isTerminal !== true) {
+          stderr("studio: adopt is for the owner and needs a terminal; nothing changed\n");
+          return 1;
+        }
+        if (rest.length > 0)
+          throw new UsageError("adopt takes no arguments, only --from and --apply");
+        if (values.from === void 0 || values.from === "") {
+          throw new UsageError("adopt needs --from <old state root>");
+        }
+        const r = await adoptStateRoot({
+          project,
+          to: stateRoot(),
+          from: resolve10(deps.cwd, values.from),
+          apply: values.apply === true,
+          ports,
+          now: ports.clock.now()
+        });
+        if (json2) print(r);
+        else {
+          const clean6 = (t) => t.replace(new RegExp("\\p{Cc}", "gu"), " ");
+          const out = [
+            `adopt ${clean6(r.from)} -> ${clean6(r.to)} (${values.apply === true ? r.applied ? "applied" : "nothing to do" : "dry run"})`,
+            ...r.files.length === 0 ? ["  no history files in the old root"] : r.files.map(
+              (f3) => `  ${f3.action.padEnd(8)} ${f3.name}${f3.added === void 0 ? "" : ` (+${f3.added})`}${f3.note === void 0 ? "" : `: ${f3.note}`}`
+            ),
+            ...r.pendingLeft === void 0 ? [] : [`  ${r.pendingLeft} pending queue entries stay behind: queue them again here`],
+            `left in the old root: ${r.left.length === 0 ? "nothing" : clean6(r.left.join(", "))}`,
+            `next: ${clean6(r.next)}`,
+            ...values.apply === true ? [] : [`the old root is never deleted; later: ${clean6(r.deleteOld)}`]
+          ];
+          stdout(`${out.join("\n")}
+`);
+        }
+        return r.files.some((f3) => f3.action === "conflict") ? 1 : 0;
       }
       case "accounts-clear": {
         if (deps.env.STUDIO_ROLE === "crew" || deps.isTerminal !== true) {
@@ -53005,7 +53699,7 @@ function parseCli(argv) {
         path: { type: "string", multiple: true },
         dod: { type: "string", multiple: true },
         plan: { type: "string" },
-        help: { type: "boolean" },
+        help: { type: "boolean", short: "h" },
         link: { type: "boolean" },
         notifications: { type: "boolean" },
         now: { type: "boolean" },
@@ -53024,7 +53718,9 @@ function parseCli(argv) {
         member: { type: "string", multiple: true },
         yes: { type: "boolean" },
         folder: { type: "string" },
-        artifacts: { type: "string" }
+        artifacts: { type: "string" },
+        from: { type: "string" },
+        apply: { type: "boolean" }
       },
       allowPositionals: true,
       strict: true
@@ -53404,14 +54100,14 @@ function readHiddenLine(prompt, input2, write) {
   input2.setRawMode(true);
   input2.setEncoding("utf8");
   input2.resume();
-  return new Promise((resolve10) => {
+  return new Promise((resolve11) => {
     let value2 = "";
     const done = (result) => {
       input2.removeListener("data", onData);
       input2.setRawMode?.(false);
       input2.pause();
       write("\n");
-      resolve10(result);
+      resolve11(result);
     };
     const onData = (chunk) => {
       for (const ch of chunk) {
@@ -53428,14 +54124,14 @@ function readHiddenLine(prompt, input2, write) {
 function readVisibleLine(prompt, input2, output2) {
   if (!input2.isTTY) return Promise.resolve(void 0);
   const rl = createInterface({ input: input2, output: output2, terminal: true });
-  return new Promise((resolve10) => {
+  return new Promise((resolve11) => {
     let answered = false;
     const finish2 = (value2) => {
       if (answered) return;
       answered = true;
       rl.close();
       input2.pause();
-      resolve10(value2);
+      resolve11(value2);
     };
     rl.on("close", () => finish2(void 0));
     rl.on("SIGINT", () => {
@@ -53448,7 +54144,7 @@ function readVisibleLine(prompt, input2, output2) {
 
 // src/ports.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync as closeSync8, openSync as openSync8, readFileSync as readFileSync47 } from "node:fs";
+import { closeSync as closeSync8, openSync as openSync8, readFileSync as readFileSync49 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
@@ -53512,7 +54208,7 @@ var joinCommand = (filePath, rawArguments, shell) => {
   const escapedCommand = shell ? escapeControlCharacters(command) : fileAndArguments.map((fileAndArgument) => quoteString(escapeControlCharacters(fileAndArgument))).join(" ");
   return { command, escapedCommand };
 };
-var escapeLines = (lines) => stripVTControlCharacters(lines).split("\n").map((line4) => escapeControlCharacters(line4)).join("\n");
+var escapeLines = (lines2) => stripVTControlCharacters(lines2).split("\n").map((line4) => escapeControlCharacters(line4)).join("\n");
 var escapeControlCharacters = (line4) => line4.replaceAll(SPECIAL_CHAR_REGEXP, (character) => escapeControlCharacter(character));
 var escapeControlCharacter = (character) => {
   const commonEscape = COMMON_ESCAPES[character];
@@ -55113,8 +55809,8 @@ var disconnect = (anyProcess) => {
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/deferred.js
 var createDeferred = () => {
   const methods = {};
-  const promise2 = new Promise((resolve10, reject) => {
-    Object.assign(methods, { resolve: resolve10, reject });
+  const promise2 = new Promise((resolve11, reject) => {
+    Object.assign(methods, { resolve: resolve11, reject });
   });
   return Object.assign(promise2, methods);
 };
@@ -56000,7 +56696,7 @@ var normalizeOptions = (filePath, rawArguments, rawOptions) => {
   options.shell = normalizeFileUrl(options.shell);
   options.killSignal = normalizeKillSignal(options.killSignal);
   options.forceKillAfterDelay = normalizeForceKillAfterDelay(options.forceKillAfterDelay);
-  options.lines = options.lines.map((lines, fdNumber) => lines && !BINARY_ENCODINGS.has(options.encoding) && options.buffer[fdNumber]);
+  options.lines = options.lines.map((lines2, fdNumber) => lines2 && !BINARY_ENCODINGS.has(options.encoding) && options.buffer[fdNumber]);
   if (process9.platform === "win32" && cmdExeRegExp.test(path7.basename(file3))) {
     commandArguments.unshift("/q");
   }
@@ -56219,7 +56915,7 @@ var getAllSync = ([, stdout, stderr], allFds, options) => {
 };
 var concatBase64 = (stdout, stderr, encoding) => Buffer3.concat([Buffer3.from(stdout, encoding), Buffer3.from(stderr, encoding)]).toString(encoding);
 var BASE64_ENCODINGS = /* @__PURE__ */ new Set(["base64", "base64url"]);
-var hasLines = ({ lines }) => Boolean(lines[1] || lines[2]);
+var hasLines = ({ lines: lines2 }) => Boolean(lines2[1] || lines2[2]);
 var splitAllLines = (value2, allFds, options) => value2 === void 0 || Array.isArray(value2) || !hasLines(options) ? value2 : splitLinesSync(value2, !getStripFinalNewline(options.stripFinalNewline, "all", allFds), false);
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/return/message.js
@@ -56596,23 +57292,23 @@ var stringMethods = {
 Object.assign(nodeImports, { on, finished });
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/max-buffer.js
-var handleMaxBuffer = ({ error: error62, stream, readableObjectMode, lines, encoding, fdNumber }) => {
+var handleMaxBuffer = ({ error: error62, stream, readableObjectMode, lines: lines2, encoding, fdNumber }) => {
   if (!(error62 instanceof MaxBufferError)) {
     throw error62;
   }
   if (fdNumber === "all") {
     return error62;
   }
-  const unit = getMaxBufferUnit(readableObjectMode, lines, encoding);
+  const unit = getMaxBufferUnit(readableObjectMode, lines2, encoding);
   error62.maxBufferInfo = { fdNumber, unit };
   stream.destroy();
   throw error62;
 };
-var getMaxBufferUnit = (readableObjectMode, lines, encoding) => {
+var getMaxBufferUnit = (readableObjectMode, lines2, encoding) => {
   if (readableObjectMode) {
     return "objects";
   }
-  if (lines) {
+  if (lines2) {
     return "lines";
   }
   return encoding === "buffer" ? "bytes" : "characters";
@@ -56834,11 +57530,11 @@ var getEarlyErrorOutput = (fileDescriptors, options) => {
   const stdio = fileDescriptors.map((fileDescriptor, fdNumber) => getEmptyOutput(fileDescriptor, fdNumber, options));
   return { stdio, all: getAllSync(stdio, getAllSyncFds(stdio), options) };
 };
-var getEmptyOutput = ({ direction, objectMode }, fdNumber, { stdio, buffer, lines, encoding }) => {
+var getEmptyOutput = ({ direction, objectMode }, fdNumber, { stdio, buffer, lines: lines2, encoding }) => {
   if (direction === "input" || !PIPED_STDIO.has(stdio[fdNumber]) || !buffer[fdNumber]) {
     return;
   }
-  if (objectMode || lines[fdNumber]) {
+  if (objectMode || lines2[fdNumber]) {
     return [];
   }
   return encoding === "buffer" ? new Uint8Array() : "";
@@ -57144,7 +57840,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync46 } from "node:fs";
+import { readFileSync as readFileSync48 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value2, optionName) => {
@@ -57500,7 +58196,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync45 } from "node:fs";
+import { readFileSync as readFileSync47 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -57614,7 +58310,7 @@ var getTargetFd = ({ value: value2, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value2)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync45(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync47(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value2, fdNumber) => {
   if (value2 === "inherit") {
@@ -58008,8 +58704,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value: value2 }) => ({ contents: () => [bufferToUint8Array(readFileSync46(value2))] }),
-    filePath: ({ value: { file: file3 } }) => ({ contents: () => [bufferToUint8Array(readFileSync46(file3))] }),
+    fileUrl: ({ value: value2 }) => ({ contents: () => [bufferToUint8Array(readFileSync48(value2))] }),
+    filePath: ({ value: { file: file3 } }) => ({ contents: () => [bufferToUint8Array(readFileSync48(file3))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value: value2 }) => ({ contents: () => [...value2] }),
     string: ({ value: value2 }) => ({ contents: [value2] }),
@@ -58350,7 +59046,7 @@ var transformOutputSync = ({ fileDescriptors, syncResult, options, verboseInfo }
   return { output: transformedOutput, error: errors.find((error62) => error62 !== void 0) };
 };
 var getSpawnFailureOutput = ({ stdio }) => stdio.map((stdioOption, fdNumber) => fdNumber !== 0 && stdioOption === "pipe" ? new Uint8Array() : null);
-var transformOutputResultSync = ({ result, fileDescriptors, fdNumber, errors, outputFiles, verboseInfo }, { buffer, encoding, lines, stripFinalNewline: stripFinalNewline2, maxBuffer }) => {
+var transformOutputResultSync = ({ result, fileDescriptors, fdNumber, errors, outputFiles, verboseInfo }, { buffer, encoding, lines: lines2, stripFinalNewline: stripFinalNewline2, maxBuffer }) => {
   if (result === null) {
     return;
   }
@@ -58362,7 +59058,7 @@ var transformOutputResultSync = ({ result, fileDescriptors, fdNumber, errors, ou
     chunks,
     objectMode,
     encoding,
-    lines,
+    lines: lines2,
     stripFinalNewline: stripFinalNewline2,
     fdNumber
   });
@@ -58394,7 +59090,7 @@ var runOutputGeneratorsSync = (chunks, stdioItems, encoding) => {
     return { chunks: [], error: error62 };
   }
 };
-var serializeChunks = ({ chunks, objectMode, encoding, lines, stripFinalNewline: stripFinalNewline2, fdNumber }) => {
+var serializeChunks = ({ chunks, objectMode, encoding, lines: lines2, stripFinalNewline: stripFinalNewline2, fdNumber }) => {
   if (objectMode) {
     return { serializedResult: chunks, finalResult: chunks };
   }
@@ -58403,7 +59099,7 @@ var serializeChunks = ({ chunks, objectMode, encoding, lines, stripFinalNewline:
     return { serializedResult: serializedResult2, finalResult: serializedResult2 };
   }
   const serializedResult = joinToString(chunks, encoding);
-  const finalResult = lines[fdNumber] ? splitLinesSync(serializedResult, !stripFinalNewline2[fdNumber], objectMode) : serializedResult;
+  const finalResult = lines2[fdNumber] ? splitLinesSync(serializedResult, !stripFinalNewline2[fdNumber], objectMode) : serializedResult;
   return { serializedResult, finalResult };
 };
 var logOutputSync = ({ serializedResult, fdNumber, verboseInfo, encoding, stdioItems, objectMode }) => {
@@ -59670,11 +60366,11 @@ var addConcurrentStream = (concurrentStreams, stream, waitName) => {
   const promises = weakMap.get(stream);
   const promise2 = createDeferred();
   promises.push(promise2);
-  const resolve10 = promise2.resolve.bind(promise2);
-  return { resolve: resolve10, promises };
+  const resolve11 = promise2.resolve.bind(promise2);
+  return { resolve: resolve11, promises };
 };
-var waitForConcurrentStreams = async ({ resolve: resolve10, promises }, subprocess) => {
-  resolve10();
+var waitForConcurrentStreams = async ({ resolve: resolve11, promises }, subprocess) => {
+  resolve11();
   const [isSubprocessExit] = await Promise.race([
     Promise.allSettled([true, subprocess]),
     Promise.all([false, ...promises])
@@ -59706,7 +60402,7 @@ var stopReadingOnExit = async (subprocess, controller) => {
     controller.abort();
   }
 };
-var iterateForResult = ({ stream, onStreamEnd, lines, encoding, stripFinalNewline: stripFinalNewline2, allMixed }) => {
+var iterateForResult = ({ stream, onStreamEnd, lines: lines2, encoding, stripFinalNewline: stripFinalNewline2, allMixed }) => {
   const controller = new AbortController();
   stopReadingOnStreamEnd(onStreamEnd, controller, stream);
   const objectMode = stream.readableObjectMode && !allMixed;
@@ -59716,7 +60412,7 @@ var iterateForResult = ({ stream, onStreamEnd, lines, encoding, stripFinalNewlin
     binary: encoding === "buffer",
     shouldEncode: !objectMode,
     encoding,
-    shouldSplit: !objectMode && lines,
+    shouldSplit: !objectMode && lines2,
     preserveNewlines: !stripFinalNewline2
   });
 };
@@ -60446,7 +61142,7 @@ var getSubprocessPromises = (sourcePromise, destination, source) => Promise.allS
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/contents.js
 import { setImmediate } from "node:timers/promises";
-var getStreamOutput = async ({ stream, onStreamEnd, fdNumber, encoding, buffer, maxBuffer, lines, allMixed, stripFinalNewline: stripFinalNewline2, allFds, verboseInfo, streamInfo }) => {
+var getStreamOutput = async ({ stream, onStreamEnd, fdNumber, encoding, buffer, maxBuffer, lines: lines2, allMixed, stripFinalNewline: stripFinalNewline2, allFds, verboseInfo, streamInfo }) => {
   const logPromise = logOutputAsync({
     stream,
     onStreamEnd,
@@ -60464,7 +61160,7 @@ var getStreamOutput = async ({ stream, onStreamEnd, fdNumber, encoding, buffer, 
   const iterable = iterateForResult({
     stream,
     onStreamEnd,
-    lines,
+    lines: lines2,
     encoding,
     stripFinalNewline: stripFinalNewlineValue,
     allMixed
@@ -60476,7 +61172,7 @@ var getStreamOutput = async ({ stream, onStreamEnd, fdNumber, encoding, buffer, 
       fdNumber,
       encoding,
       maxBuffer,
-      lines
+      lines: lines2
     }),
     logPromise
   ]);
@@ -60507,9 +61203,9 @@ var resumeStream = async (stream) => {
     stream.resume();
   }
 };
-var getStreamContents2 = async ({ stream, stream: { readableObjectMode }, iterable, fdNumber, encoding, maxBuffer, lines }) => {
+var getStreamContents2 = async ({ stream, stream: { readableObjectMode }, iterable, fdNumber, encoding, maxBuffer, lines: lines2 }) => {
   try {
-    if (readableObjectMode || lines) {
+    if (readableObjectMode || lines2) {
       return await getStreamAsArray(iterable, { maxBuffer });
     }
     return encoding === "buffer" ? new Uint8Array(await getStreamAsArrayBuffer(iterable, { maxBuffer })) : await getStreamAsString(iterable, { maxBuffer });
@@ -60518,7 +61214,7 @@ var getStreamContents2 = async ({ stream, stream: { readableObjectMode }, iterab
       error: error62,
       stream,
       readableObjectMode,
-      lines,
+      lines: lines2,
       encoding,
       fdNumber
     }));
@@ -60534,19 +61230,19 @@ var getBufferedData = async (streamPromise) => {
 var handleBufferedData = (error62) => isArrayBuffer(error62?.bufferedData) ? new Uint8Array(error62.bufferedData) : error62?.bufferedData;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/resolve/stdio.js
-var waitForStdioStreams = ({ subprocess, encoding, buffer, maxBuffer, lines, stripFinalNewline: stripFinalNewline2, verboseInfo, streamInfo }) => subprocess.stdio.map((stream, fdNumber) => waitForSubprocessStream({
+var waitForStdioStreams = ({ subprocess, encoding, buffer, maxBuffer, lines: lines2, stripFinalNewline: stripFinalNewline2, verboseInfo, streamInfo }) => subprocess.stdio.map((stream, fdNumber) => waitForSubprocessStream({
   stream,
   fdNumber,
   encoding,
   buffer: buffer[fdNumber],
   maxBuffer: maxBuffer[fdNumber],
-  lines: lines[fdNumber],
+  lines: lines2[fdNumber],
   allMixed: false,
   stripFinalNewline: stripFinalNewline2,
   verboseInfo,
   streamInfo
 }));
-var waitForSubprocessStream = async ({ stream, fdNumber, encoding, buffer, maxBuffer, lines, allMixed, stripFinalNewline: stripFinalNewline2, allFds, verboseInfo, streamInfo }) => {
+var waitForSubprocessStream = async ({ stream, fdNumber, encoding, buffer, maxBuffer, lines: lines2, allMixed, stripFinalNewline: stripFinalNewline2, allFds, verboseInfo, streamInfo }) => {
   if (!stream) {
     return;
   }
@@ -60563,7 +61259,7 @@ var waitForSubprocessStream = async ({ stream, fdNumber, encoding, buffer, maxBu
       encoding,
       buffer,
       maxBuffer,
-      lines,
+      lines: lines2,
       allMixed,
       stripFinalNewline: stripFinalNewline2,
       allFds,
@@ -60587,7 +61283,7 @@ var getAllFds = ({ stdout, stderr }, [, bufferStdout, bufferStderr]) => [
   ...stdout !== null && bufferStdout ? [1] : [],
   ...stderr !== null && bufferStderr ? [2] : []
 ];
-var waitForAllStream = ({ subprocess, all, encoding, buffer, maxBuffer, lines, stripFinalNewline: stripFinalNewline2, verboseInfo, streamInfo }) => {
+var waitForAllStream = ({ subprocess, all, encoding, buffer, maxBuffer, lines: lines2, stripFinalNewline: stripFinalNewline2, verboseInfo, streamInfo }) => {
   const { stream, buffer: bufferAll, drainedStream } = getAllStream(subprocess, all, buffer);
   return Promise.all([
     waitForSubprocessStream({
@@ -60596,7 +61292,7 @@ var waitForAllStream = ({ subprocess, all, encoding, buffer, maxBuffer, lines, s
       fdNumber: "all",
       encoding,
       maxBuffer: maxBuffer[1] + maxBuffer[2],
-      lines: lines[1] || lines[2],
+      lines: lines2[1] || lines2[2],
       allFds: getAllFds(subprocess, buffer),
       // A single buffered descriptor keeps its own object mode, even when the merged stream has mixed modes.
       allMixed: stream === all && getAllMixed(subprocess, all),
@@ -60694,7 +61390,7 @@ var waitForSubprocessResult = async ({
     encoding,
     buffer,
     maxBuffer,
-    lines,
+    lines: lines2,
     timeoutDuration: timeout,
     cancelSignal,
     gracefulCancel,
@@ -60723,7 +61419,7 @@ var waitForSubprocessResult = async ({
     encoding,
     buffer,
     maxBuffer,
-    lines,
+    lines: lines2,
     stripFinalNewline: stripFinalNewline2,
     verboseInfo,
     streamInfo
@@ -60734,7 +61430,7 @@ var waitForSubprocessResult = async ({
     encoding,
     buffer,
     maxBuffer,
-    lines,
+    lines: lines2,
     stripFinalNewline: stripFinalNewline2,
     verboseInfo,
     streamInfo
@@ -61272,7 +61968,7 @@ var PLUGIN_TIMEOUT_MS2 = 3e5;
 var STOP_GRACE_MS = 5e3;
 var STOP_POLL_MS = 100;
 var IDENTITY_TIMEOUT_MS = 5e3;
-var sleep = (ms) => new Promise((resolve10) => setTimeout(resolve10, ms));
+var sleep = (ms) => new Promise((resolve11) => setTimeout(resolve11, ms));
 function realPorts(claudeBin = "claude") {
   const clock = { now: () => /* @__PURE__ */ new Date(), sleep };
   const gh = {
@@ -61357,9 +62053,9 @@ function realPorts(claudeBin = "claude") {
           detached: true,
           stdio: ["pipe", fd, fd]
         });
-        const pid = await new Promise((resolve10, reject) => {
+        const pid = await new Promise((resolve11, reject) => {
           child.once("error", reject);
-          child.once("spawn", () => resolve10(child.pid));
+          child.once("spawn", () => resolve11(child.pid));
         });
         child.stdin?.on("error", () => {
         });
@@ -61375,7 +62071,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync47(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync49(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }
@@ -61417,8 +62113,8 @@ function realPorts(claudeBin = "claude") {
         forceKillAfterDelay: 1e3
       });
       let timer;
-      const late = new Promise((resolve10) => {
-        timer = setTimeout(() => resolve10({ code: 1, stdout: "" }), opts.timeoutMs + 2e3);
+      const late = new Promise((resolve11) => {
+        timer = setTimeout(() => resolve11({ code: 1, stdout: "" }), opts.timeoutMs + 2e3);
         timer.unref();
       });
       const run2 = child.then((r) => ({
@@ -61463,7 +62159,7 @@ function realPorts(claudeBin = "claude") {
 // src/main.ts
 function launcher() {
   try {
-    return realpathSync10(fileURLToPath6(new URL("../bin/studio", import.meta.url)));
+    return realpathSync11(fileURLToPath6(new URL("../bin/studio", import.meta.url)));
   } catch {
     return void 0;
   }

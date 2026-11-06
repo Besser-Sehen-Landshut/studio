@@ -321,6 +321,20 @@ export function reaState(
   };
 }
 
+/** The line `doctor` warns with while git tracks the board, which is lead-machine state. */
+export const BOARD_TRACKED_LINE =
+  'warning: .studio/board.yaml is tracked by git, but the board is lead-machine state that Studio edits in the working tree: run git rm --cached .studio/board.yaml, add /.studio/board.yaml to .gitignore and commit both; studio roadmap --write writes the shareable ROADMAP.md';
+
+/** Whether git tracks the board: `yes`, `no`, or `unknown` when git cannot tell (no checkout). */
+async function boardTrackedState(project: string, ports: Ports): Promise<'yes' | 'no' | 'unknown'> {
+  try {
+    const out = await ports.git.run(project, ['ls-files', '--', '.studio/board.yaml']);
+    return out.trim() === '' ? 'no' : 'yes';
+  } catch {
+    return 'unknown';
+  }
+}
+
 export type DoctorReport = Awaited<ReturnType<typeof doctorReport>>;
 
 /** What `studio doctor` finds, without printing; `studio init` reads the same checks. */
@@ -401,6 +415,7 @@ export async function doctorReport(o: {
   const pluginsNotAllowed = unallowedPlugins(config?.plugins, ownerConfig?.allowedPlugins ?? []);
   const git = await gitState(o.project, o.ports);
   const projectCheckout = await checkoutState(o.project, o.ports);
+  const boardTracked = await boardTrackedState(o.project, o.ports);
   const toolchain = toolsOutside(
     o.env,
     o.owner.homedir ?? homedir(),
@@ -409,6 +424,7 @@ export async function doctorReport(o: {
   const report = {
     claudeLogin,
     projectCheckout,
+    boardTracked,
     toolchainOutside: toolchain,
     accounts,
     git,
@@ -466,6 +482,7 @@ export async function runDoctor(o: {
       ...accounts.flatMap((a) => expiryLine(a) ?? []),
       `crew token: ${crewToken.status}${source}${required ? '' : ' (optional: allow_ambient_credentials)'}`,
       `studio.yaml: ${report.studioYaml}`,
+      ...(report.boardTracked === 'yes' ? [BOARD_TRACKED_LINE] : []),
       `superpowers: ${report.superpowers}`,
       `git: ${git}`,
       `studio plugin: ${studioCrew}${studioCrew === 'not found' && configDir !== undefined ? ` (${studioPluginHint(configDir)})` : ''}`,

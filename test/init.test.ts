@@ -252,6 +252,60 @@ describe('studio init', () => {
     expect(config.components).toBeUndefined();
   });
 
+  it('--write keeps the board out of git: .gitignore gets it, studio.yaml stays committable', async () => {
+    const fx = fixture({ files: { '.gitignore': 'node_modules/' } });
+    const r = await cli(fx, 'init', '--write', '--json');
+    expect(r.code).toBe(0);
+    const out = JSON.parse(r.out);
+    expect(out.written).toEqual(['.studio/studio.yaml', '.studio/board.yaml', '.gitignore']);
+    expect(out.nextSteps.join('\n')).toMatch(/Commit \.studio\/studio\.yaml and \.gitignore/);
+    expect(out.nextSteps.join('\n')).toMatch(
+      /board \(\.studio\/board\.yaml\) stays on this machine and is not committed/,
+    );
+    expect(readFileSync(join(fx.dir, '.gitignore'), 'utf8')).toBe(
+      'node_modules/\n\n# Studio: the board is lead-machine state; studio roadmap --write writes the shareable ROADMAP.md\n/.studio/board.yaml\n',
+    );
+    const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+      cwd: fx.dir,
+      encoding: 'utf8',
+    });
+    expect(status).toContain('.studio/studio.yaml');
+    expect(status).not.toContain('board.yaml');
+  });
+
+  it('doctor warns while git tracks the board, and is quiet once it does not', async () => {
+    const fx = fixture();
+    expect((await cli(fx, 'init', '--write')).code).toBe(0);
+    const quiet = await cli(fx, 'doctor');
+    expect(quiet.out).not.toMatch(/board\.yaml is tracked/);
+    expect(JSON.parse((await cli(fx, 'doctor', '--json')).out).boardTracked).toBe('no');
+    execFileSync('git', ['add', '-f', '.studio/board.yaml'], { cwd: fx.dir });
+    const loud = await cli(fx, 'doctor');
+    expect(loud.out).toMatch(
+      /^warning: \.studio\/board\.yaml is tracked by git, .*git rm --cached \.studio\/board\.yaml/m,
+    );
+    expect(JSON.parse((await cli(fx, 'doctor', '--json')).out).boardTracked).toBe('yes');
+  });
+
+  it('creates .gitignore when missing and adds nothing when the board is ignored already', async () => {
+    const fresh = fixture();
+    expect((await cli(fresh, 'init', '--write')).code).toBe(0);
+    expect(readFileSync(join(fresh.dir, '.gitignore'), 'utf8')).toMatch(
+      /^# Studio: .*\n\/\.studio\/board\.yaml\n$/,
+    );
+    const already = fixture({ files: { '.gitignore': '.studio/board.yaml\n' } });
+    const r = await cli(already, 'init', '--write', '--json');
+    expect(JSON.parse(r.out).written).toEqual(['.studio/studio.yaml', '.studio/board.yaml']);
+    expect(readFileSync(join(already.dir, '.gitignore'), 'utf8')).toBe('.studio/board.yaml\n');
+  });
+
+  it('a dry run names the .gitignore line and writes no .gitignore', async () => {
+    const fx = fixture();
+    const r = await cli(fx, 'init');
+    expect(r.out).toContain('.gitignore: gets /.studio/board.yaml');
+    expect(existsSync(join(fx.dir, '.gitignore'))).toBe(false);
+  });
+
   it('warns when .studio/ is ignored by git', async () => {
     const fx = fixture({ files: { '.gitignore': '.studio/\n' } });
     const out = JSON.parse((await cli(fx, 'init', '--json')).out);
