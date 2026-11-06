@@ -330,6 +330,7 @@ if (Test-Path -LiteralPath (Join-Path ${h} 'state')) {
 # modify below it (inherit-only); it can rename or remove neither state nor anything above.
 $folders = @(
   @(${m}, 'read'), @((Join-Path ${m} 'node'), 'read'), @((Join-Path ${m} 'studio'), 'read'),
+  @((Join-Path ${m} 'broker'), 'read'),
   @((Join-Path ${m} 'config'), 'read'), @((Split-Path -Parent ${h}), 'read'), @(${h}, 'read'),
   @((Join-Path ${h} 'state'), 'fill')
 )

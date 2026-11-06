@@ -16,7 +16,12 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { WorkItem } from '../src/board.js';
 import { relayTargetSchema } from '../src/config.js';
-import { brokerCrewAccounts, GIT_MIN_CHECK, RELAY_SID_SLOT } from '../src/crew-accounts.js';
+import {
+  brokerCrewAccounts,
+  CREW_ACCOUNT_BODY,
+  GIT_MIN_CHECK,
+  RELAY_SID_SLOT,
+} from '../src/crew-accounts.js';
 import { realPorts } from '../src/ports.js';
 import { sessionLead } from '../src/relay-command.js';
 import {
@@ -804,6 +809,11 @@ describe('the Windows relay worker, with fakes', () => {
       `NewJobUser '${machine}\\crew-credential.bin' '${RELAY_SID_SLOT}'`,
     );
     expect(script).toContain(`.Replace('${RELAY_SID_SLOT}', $relaySid)`);
+    // The brokers load their functions from the admin-only broker folder, which the setup fills.
+    expect(script).toContain(Buffer.from(CREW_ACCOUNT_BODY, 'utf8').toString('base64'));
+    expect(brokerScript({ op: 'sweep', prefix: 'studio-crew', machine })).toContain(
+      `. ([ScriptBlock]::Create([IO.File]::ReadAllText('${machine}\\broker\\crew-accounts.ps1')))`,
+    );
     // The brokers load the tree deleter from the admin-only copy of Studio only.
     expect(brokerScript({ op: 'retire', prefix: 'studio-crew', machine })).toContain(
       `$treeSource = '${machine}\\studio\\bin\\studio-tree.cs'`,

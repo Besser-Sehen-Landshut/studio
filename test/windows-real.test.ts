@@ -160,7 +160,7 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
   const quarantined = async () =>
     Number(
       await ps(
-        `$q = Join-Path ([Environment]::ExpandEnvironmentVariables((Get-ItemProperty -LiteralPath 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList').ProfilesDirectory)) 'Studio crew quarantine'; if (Test-Path -LiteralPath $q) { @(Get-ChildItem -LiteralPath $q -Recurse -Force -Attributes !ReparsePoint -ErrorAction SilentlyContinue).Count } else { 0 }`,
+        `$q = Join-Path ([Environment]::ExpandEnvironmentVariables((Get-ItemProperty -LiteralPath 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList').ProfilesDirectory)) 'Studio crew quarantine\\trees'; if (Test-Path -LiteralPath $q) { @(Get-ChildItem -LiteralPath $q -Recurse -Force -Attributes !ReparsePoint -ErrorAction SilentlyContinue).Count } else { 0 }`,
       ),
     );
   /** The crew users that exist now. */
@@ -326,7 +326,9 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     expect(await probe()).toBeUndefined();
     expect(grants.account()?.user).not.toBe(r.account.user);
     expect(await crewUsers()).toEqual([grants.account()?.user]);
-    // The quarantine shrinks with every retire, and never held up a fresh user.
+    // The quarantine shrinks with every retire, and never held up a fresh user. The first retire
+    // also moves in the profile of the user just made.
+    await grants.retire();
     let left = await quarantined();
     for (let i = 0; i < 10 && left > 0; i++) {
       await grants.retire();

@@ -13,6 +13,7 @@
 // can open it; the crew user cannot read the file.
 import { posix, win32 } from 'node:path';
 import {
+  CREW_ACCOUNT_BODY,
   CREW_DESCRIPTION,
   type CrewAccountOp,
   crewAccountFunctions,
@@ -53,6 +54,9 @@ export const brokerResultFiles = (machine: string): Record<CrewAccountOp, string
   retire: join(machine, 'broker', 'retire.json'),
   fresh: join(machine, 'broker', 'fresh.json'),
 });
+/** The functions of the crew users the broker tasks load: admin-only, written by the setup. */
+export const brokerBodyFile = (machine: string): string =>
+  join(machine, 'broker', 'crew-accounts.ps1');
 /** The broker task of each operation: the sweep keeps the task name of earlier versions. */
 export const brokerTasks = (task: string): Record<CrewAccountOp, string> => ({
   sweep: task,
@@ -159,8 +163,10 @@ export const brokerScript = (o: { op: CrewAccountOp; prefix: string; machine: st
     op: o.op,
     prefix: o.prefix,
     result: brokerResultFiles(o.machine)[o.op],
-    // The admin-only copy of the tree deleter: nothing the relay account could change.
+    // The admin-only copies of the tree deleter and of the functions: nothing the relay account
+    // could change.
     treeSource: join(machineStudio(o.machine), 'bin', 'studio-tree.cs'),
+    bodyFile: brokerBodyFile(o.machine),
     ...(o.op === 'fresh' ? { credFile: machineCredFile(o.machine), reader: '$relaySid' } : {}),
   })
     // Short, for the task's action: no comment line, no indentation (no here-string in it).
@@ -491,6 +497,8 @@ $service.Connect()
 $folder = $service.GetFolder('\\')
 # SYSTEM runs them; SYSTEM and administrators own them; the relay account may read and run them.
 $sddl = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;$relaySid)"
+# The functions the brokers load, in their admin-only folder.
+[IO.File]::WriteAllText(${psQuote(brokerBodyFile(o.machine))}, [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(CREW_ACCOUNT_BODY, 'utf8').toString('base64')}')), (New-Object Text.UTF8Encoding($false)))
 ${(['sweep', 'retire', 'fresh'] as const)
   .map(
     (

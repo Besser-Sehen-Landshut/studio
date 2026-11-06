@@ -86,7 +86,7 @@ describe('the setup script', () => {
 
   it('takes away the shared crew user of earlier versions and crew users a crash left', () => {
     expect(script).toContain("$old.Description -eq 'Studio crew sandbox'");
-    expect(script).toContain('QuarantineProfile $old (Quarantine)');
+    expect(script).toContain("QuarantineProfile $old (Join-Path (Quarantine) 'trees')");
     expect(script).toContain('$null = RetireJobUsers');
   });
 
@@ -503,23 +503,30 @@ describe('the crew user scripts', () => {
     expect(s).toContain('$_.Description -eq $crewDescription');
     expect(s).toContain(`$treeSource = '${TREE_SOURCE()}'`);
     expect(s).toContain('$pruneBudget = 500');
-    // One order, each step for every user even when it failed for another: lock (disabled, a
-    // password nobody knows), sweep, profile into the quarantine, sweep, delete the account, then
-    // a bounded part of the quarantine.
+    // Per user, each step only when the one before held: lock, no process left, profile into the
+    // quarantine, no process left, its SID listed as retired, the account deleted.
     const retire = s.slice(s.indexOf('function RetireJobUsers'));
     const at = (x: string) => retire.indexOf(x);
     const order = [
-      'foreach ($u in $users) { try { LockJobUser $u } catch {',
-      '$null = SweepJobUsers',
-      'try { QuarantineProfile $u $q } catch {',
+      'try { LockJobUser $u; $locked += $u } catch {',
       '$s = SweepJobUsers',
-      'try { Remove-LocalUser -SID $u.SID; $gone += $u.Name } catch {',
-      '[StudioTree]::Prune($q, $pruneBudget, $true, $null)',
+      'foreach ($u in $locked) {',
+      'if ($s.leftSids -contains $u.SID.Value) { $problems += "$($u.Name): its processes are still running, kept"; continue }',
+      "try { QuarantineProfile $u (Join-Path $q 'trees'); $moved += $u } catch {",
+      '$s2 = SweepJobUsers',
+      'foreach ($u in $moved) {',
+      'if ($s2.leftSids -contains $sid)',
+      'WriteRetired (@(@(ReadRetired) + $sid | Select-Object -Unique))',
+      'Remove-LocalUser -SID $sid',
+      '[StudioTree]::Prune($trees, $pruneBudget, $true, $null)',
     ];
     for (let i = 1; i < order.length; i++) {
       expect(at(order[i - 1] as string), order[i - 1]).toBeGreaterThan(0);
       expect(at(order[i - 1] as string), order[i]).toBeLessThan(at(order[i] as string));
     }
+    // Every sweep looks for the retired SIDs too, and every process still running holds a fresh user.
+    expect(s).toContain('$retired = @(ReadRetired)');
+    expect(retire).toContain('left = @($s2.left)');
     expect(s).toContain('Disable-LocalUser -SID $u.SID');
     expect(s).toContain('Set-LocalUser -SID $u.SID -Password (ConvertTo-SecureString (NewSecret)');
     // The profile is moved in one rename; nothing deletes it in place, nothing with Remove-Item

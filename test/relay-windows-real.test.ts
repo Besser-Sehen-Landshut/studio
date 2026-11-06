@@ -15,7 +15,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { TREE_SOURCE } from '../src/crew-accounts.js';
+import { crewAccountFunctions, TREE_SOURCE } from '../src/crew-accounts.js';
 import { systemSpawnRunner } from '../src/relay-serve.js';
 import { FOLDER_FUNCTIONS } from '../src/relay-windows.js';
 import { machineTreeProblem } from '../src/relay-windows-check.js';
@@ -131,6 +131,67 @@ $out -join ','`)
     }, 600_000);
   },
 );
+
+describe.skipIf(!on)('retiring crew users, step by step per user (stand-ins for Windows)', () => {
+  const A = 'S-1-5-21-1-1-1-1001';
+  const B = 'S-1-5-21-1-1-1-1002';
+  /** RetireJobUsers with every step that touches Windows replaced by a stand-in that logs. */
+  const retire = (o: { leftSids: string[]; failMove?: string }) => {
+    const script = `$ErrorActionPreference = 'Stop'
+${crewAccountFunctions('p')}
+$log = New-Object Collections.Generic.List[string]
+$script:retired = @()
+function U($n, $s) { [pscustomobject]@{ Name = $n; SID = [pscustomobject]@{ Value = $s } } }
+function JobUsers { @((U 'p-aaaaaa' '${A}'), (U 'p-bbbbbb' '${B}')) }
+function LockJobUser($u) { $log.Add('lock ' + $u.Name) }
+function SweepJobUsers { $log.Add('sweep'); @{ found = 0; left = @(${o.leftSids.length > 0 ? '77' : ''}); leftSids = @(${o.leftSids.map((x) => `'${x}'`).join(', ')}) } }
+function Quarantine { 'C:\\nowhere' }
+function QuarantineProfile($u, $q) { if ($u.Name -eq '${o.failMove ?? ''}') { throw 'busy' }; $log.Add('move ' + $u.Name) }
+function ReadRetired { @($script:retired) }
+function WriteRetired([string[]]$sids) { $script:retired = @($sids) }
+function Remove-LocalUser { param($SID) $log.Add('delete ' + $SID) }
+function LoadTree { }
+$r = RetireJobUsers
+ConvertTo-Json -Compress -Depth 4 @{ log = @($log); retired = @($script:retired); left = @($r.left); problems = @($r.problems) }`;
+    return JSON.parse(
+      execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+        encoding: 'utf8',
+        env: powershellEnv(process.env),
+      }),
+    ) as { log: string[]; retired: string[]; left: number[]; problems: string[] };
+  };
+
+  it('a user with a process left is kept, locked; its profile stays and it is not deleted', () => {
+    const r = retire({ leftSids: [A] });
+    expect(r.log).toEqual([
+      'lock p-aaaaaa',
+      'lock p-bbbbbb',
+      'sweep',
+      'move p-bbbbbb',
+      'sweep',
+      `delete ${B}`,
+    ]);
+    expect(r.retired).toEqual([B]);
+    // A fresh user waits: the process is still there.
+    expect(r.left).toEqual([77]);
+    expect(r.problems.join('\n')).toContain('p-aaaaaa: its processes are still running, kept');
+  }, 60_000);
+
+  it('a user whose profile cannot move is kept for the next retire; the other one goes', () => {
+    const r = retire({ leftSids: [], failMove: 'p-aaaaaa' });
+    expect(r.log).toEqual([
+      'lock p-aaaaaa',
+      'lock p-bbbbbb',
+      'sweep',
+      'move p-bbbbbb',
+      'sweep',
+      `delete ${B}`,
+    ]);
+    expect(r.retired).toEqual([B]);
+    expect(r.left).toEqual([]);
+    expect(r.problems.join('\n')).toContain('p-aaaaaa: its profile stays where it is, kept: busy');
+  }, 60_000);
+});
 
 describe.skipIf(!on)('the PowerShell of the crew user on Windows', () => {
   it('loads core modules from $PSHOME only, whatever PSModulePath it was given', async () => {

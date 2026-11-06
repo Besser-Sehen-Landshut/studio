@@ -39585,12 +39585,13 @@ var prefixOf = (prefix) => {
   }
   return prefix;
 };
-var crewAccountFunctions = (prefix, treeSource = TREE_SOURCE(), pruneBudget = PRUNE_BUDGET) => `$prefix = ${psQuote(prefixOf(prefix))}
+var crewAccountFunctions = (prefix, treeSource = TREE_SOURCE(), pruneBudget = PRUNE_BUDGET, bodyFile) => `$prefix = ${psQuote(prefixOf(prefix))}
 $treeSource = ${psQuote(treeSource)}
 $pruneBudget = ${Math.max(1, Math.trunc(pruneBudget))}
 $crewDescription = ${psQuote(CREW_DESCRIPTION)}
 $groupDescription = ${psQuote(GROUP_DESCRIPTION)}
-${CREW_ACCOUNT_BODY}`;
+${bodyFile === void 0 ? CREW_ACCOUNT_BODY : `. ([ScriptBlock]::Create([IO.File]::ReadAllText(${psQuote(bodyFile)})))
+`}`;
 var CREW_ACCOUNT_BODY = String.raw`function CrewGroup {
   $g = Get-LocalGroup -Name ($prefix + 's') -ErrorAction SilentlyContinue
   if ($null -eq $g) { throw "there is no group $($prefix)s: run the setup script of Studio again, elevated" }
@@ -39611,16 +39612,38 @@ function JobUsers {
   }
   @(Get-LocalUser | Where-Object { $_.Name -match $re -and $_.Description -eq $crewDescription })
 }
-function OwnedBy([string[]]$sids) {
-  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })
+# The processes of these SIDs, each with its owner.
+function Owned([string[]]$sids) {
+  @(Get-CimInstance Win32_Process | ForEach-Object {
+    try {
+      $o = (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid
+      if ($sids -contains $o) { [pscustomobject]@{ Id = [int]$_.ProcessId; Sid = $o } }
+    } catch { }
+  })
 }
+# The SIDs of deleted crew users whose processes were not yet seen gone (in the quarantine folder,
+# admin-only): every sweep looks for them too.
+function RetiredFile { Join-Path (Quarantine) 'retired-sids.txt' }
+function ReadRetired {
+  $f = RetiredFile
+  if (-not (Test-Path -LiteralPath $f)) { return @() }
+  @(Get-Content -LiteralPath $f | Where-Object { $_ -match '^S-1-5-21(-\d+)+$' })
+}
+function WriteRetired([string[]]$sids) { Set-Content -LiteralPath (RetiredFile) -Value @($sids) -Encoding ASCII }
+# Ends every process of the crew users and of the retired SIDs; says which are left, and whose.
 function SweepJobUsers {
-  $sids = @(JobUsers | ForEach-Object { $_.SID.Value })
-  if ($sids.Count -eq 0) { return @{ found = 0; left = @() } }
-  $found = OwnedBy $sids
-  foreach ($p in $found) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+  $retired = @(ReadRetired)
+  $sids = @(@(JobUsers | ForEach-Object { $_.SID.Value }) + $retired | Select-Object -Unique)
+  if ($sids.Count -eq 0) { return @{ found = 0; left = @(); leftSids = @() } }
+  $found = Owned $sids
+  foreach ($p in $found) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
   if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }
-  @{ found = $found.Count; left = @(OwnedBy $sids | ForEach-Object { [int]$_.ProcessId }) }
+  $after = Owned $sids
+  $leftSids = @($after | ForEach-Object { $_.Sid } | Select-Object -Unique)
+  # A retired SID with nothing left needs no more watching: no logon can start one again.
+  $keep = @($retired | Where-Object { $leftSids -contains $_ })
+  if ($keep.Count -ne $retired.Count) { WriteRetired $keep }
+  @{ found = $found.Count; left = @($after | ForEach-Object { $_.Id }); leftSids = $leftSids }
 }
 function LoadTree { if (-not ('StudioTree' -as [type])) { Add-Type -Path $treeSource } }
 function ProfileRoot {
@@ -39638,6 +39661,7 @@ function Quarantine {
     icacls $q /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /L /Q | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "cannot set the ACL of $q" }
     icacls $q /setowner '*S-1-5-32-544' /L /Q | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $q 'trees') | Out-Null
     return $q
   }
   if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$q is a reparse point" }
@@ -39645,6 +39669,9 @@ function Quarantine {
   $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
   if (@('S-1-5-32-544', 'S-1-5-18') -notcontains $owner) { throw "$q is owned by $owner" }
   if (-not $acl.AreAccessRulesProtected) { throw "$q inherits its ACL" }
+  $trees = Get-Item -LiteralPath (Join-Path $q 'trees') -Force -ErrorAction SilentlyContinue
+  if ($null -eq $trees) { New-Item -ItemType Directory -Path (Join-Path $q 'trees') | Out-Null }
+  elseif ($trees.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$q\trees is a reparse point" }
   $q
 }
 # No logon as a crew user any more: disabled, with a new password nobody ever learns. What could
@@ -39679,37 +39706,51 @@ function QuarantineProfile($u, [string]$q) {
   $key = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $sid
   if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
 }
-# Retiring a crew user never waits for its profile to be deleted. Every step runs for every user,
-# also when it failed for another, and each failure is reported by user: lock them all, end their
-# processes, move their profiles into the quarantine, end what is left once more, delete the
-# accounts. Then up to $pruneBudget entries of the quarantine go.
+# Retiring a crew user never waits for its profile to be deleted. Per user, each step runs only when
+# the one before it held: lock it, see none of its processes left, move its profile into the
+# quarantine, see none of its processes left once more, list its SID as retired, delete the
+# account. A user whose step failed is kept (locked, so the next sweep finds it and the next retire
+# tries again); the other users go on. Then up to $pruneBudget entries of the quarantine go.
 function RetireJobUsers {
   LoadTree
   $users = @(JobUsers)
   $problems = @()
-  foreach ($u in $users) { try { LockJobUser $u } catch { $problems += "$($u.Name): cannot lock it: $($_.Exception.Message)" } }
-  $null = SweepJobUsers
-  $q = $null
-  try { $q = Quarantine } catch { $problems += "the quarantine: $($_.Exception.Message)" }
+  $locked = @()
   foreach ($u in $users) {
-    if ($null -eq $q) { $problems += "$($u.Name): its profile stays where it is"; continue }
-    try { QuarantineProfile $u $q } catch { $problems += "$($u.Name): its profile stays where it is: $($_.Exception.Message)" }
+    try { LockJobUser $u; $locked += $u } catch { $problems += "$($u.Name): cannot lock it, kept: $($_.Exception.Message)" }
   }
   $s = SweepJobUsers
+  $q = $null
+  try { $q = Quarantine } catch { $problems += "the quarantine: $($_.Exception.Message)" }
+  $moved = @()
+  foreach ($u in $locked) {
+    if ($s.leftSids -contains $u.SID.Value) { $problems += "$($u.Name): its processes are still running, kept"; continue }
+    if ($null -eq $q) { $problems += "$($u.Name): no quarantine for its profile, kept"; continue }
+    try { QuarantineProfile $u (Join-Path $q 'trees'); $moved += $u } catch { $problems += "$($u.Name): its profile stays where it is, kept: $($_.Exception.Message)" }
+  }
+  $s2 = SweepJobUsers
   $gone = @()
-  foreach ($u in $users) {
-    try { Remove-LocalUser -SID $u.SID; $gone += $u.Name } catch { $problems += "$($u.Name): cannot delete it: $($_.Exception.Message)" }
+  foreach ($u in $moved) {
+    $sid = $u.SID.Value
+    if ($s2.leftSids -contains $sid) { $problems += "$($u.Name): its processes are still running, kept"; continue }
+    try {
+      WriteRetired (@(@(ReadRetired) + $sid | Select-Object -Unique))
+      Remove-LocalUser -SID $sid
+      $gone += $u.Name
+    } catch { $problems += "$($u.Name): cannot delete it, kept: $($_.Exception.Message)" }
   }
   $quarantine = @{ trees = 0; pruned = 0; done = $false }
   if ($null -ne $q) {
+    $trees = Join-Path $q 'trees'
     try {
-      $r = [StudioTree]::Prune($q, $pruneBudget, $true, $null)
+      $r = [StudioTree]::Prune($trees, $pruneBudget, $true, $null)
       $quarantine.pruned = $r.Deleted
       $quarantine.done = $r.Done
     } catch { $problems += "the quarantine: $($_.Exception.Message)" }
-    try { $quarantine.trees = @(Get-ChildItem -LiteralPath $q -Force -ErrorAction Stop).Count } catch { $quarantine.trees = -1 }
+    try { $quarantine.trees = @(Get-ChildItem -LiteralPath $trees -Force -ErrorAction Stop).Count } catch { $quarantine.trees = -1 }
   }
-  @{ removed = $gone; problems = $problems; left = $s.left; quarantine = $quarantine }
+  # Every process still running of a crew user, kept or retired: a fresh user waits for none.
+  @{ removed = $gone; problems = $problems; left = @($s2.left); quarantine = $quarantine }
 }
 function NewSecret { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b) + 'aA1!' }
 # The password, sealed for this machine, in a file only SYSTEM, administrators and the reader read:
@@ -39775,7 +39816,7 @@ function crewAccountScript(o2) {
   return `$ErrorActionPreference = 'Stop'
 $out = @{ op = ${psQuote(o2.op)}; at = (Get-Date).ToUniversalTime().ToString('o') }
 try {
-${crewAccountFunctions(o2.prefix, o2.treeSource ?? TREE_SOURCE(), o2.pruneBudget ?? PRUNE_BUDGET)}
+${crewAccountFunctions(o2.prefix, o2.treeSource ?? TREE_SOURCE(), o2.pruneBudget ?? PRUNE_BUDGET, o2.bodyFile)}
 ${body}
 } catch {
   $out.error = $_.Exception.Message
@@ -39928,10 +39969,11 @@ $old = Get-LocalUser -Name $prefix -ErrorAction SilentlyContinue
 if ($null -ne $old -and $old.Description -eq 'Studio crew sandbox') {
   LoadTree
   LockJobUser $old
-  $left = @(OwnedBy @($old.SID.Value))
-  foreach ($p in $left) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+  foreach ($p in @(Owned @($old.SID.Value))) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
   Start-Sleep -Milliseconds 800
-  QuarantineProfile $old (Quarantine)
+  if (@(Owned @($old.SID.Value)).Count -gt 0) { throw "processes of the old crew user $prefix are still running: end them, then run this again" }
+  QuarantineProfile $old (Join-Path (Quarantine) 'trees')
+  WriteRetired (@(@(ReadRetired) + $old.SID.Value | Select-Object -Unique))
   Remove-LocalUser -SID $old.SID
   Get-NetFirewallRule -DisplayName ('Studio crew ' + $prefix + ': no direct network') -ErrorAction SilentlyContinue | Remove-NetFirewallRule
   Write-Output "Removed the shared crew user $prefix of an earlier version."
@@ -61248,6 +61290,7 @@ var brokerResultFiles = (machine) => ({
   retire: join55(machine, "broker", "retire.json"),
   fresh: join55(machine, "broker", "fresh.json")
 });
+var brokerBodyFile = (machine) => join55(machine, "broker", "crew-accounts.ps1");
 var brokerTasks = (task) => ({
   sweep: task,
   retire: `${task} retire`,
@@ -61306,8 +61349,10 @@ var brokerScript = (o2) => crewAccountScript({
   op: o2.op,
   prefix: o2.prefix,
   result: brokerResultFiles(o2.machine)[o2.op],
-  // The admin-only copy of the tree deleter: nothing the relay account could change.
+  // The admin-only copies of the tree deleter and of the functions: nothing the relay account
+  // could change.
   treeSource: join55(machineStudio(o2.machine), "bin", "studio-tree.cs"),
+  bodyFile: brokerBodyFile(o2.machine),
   ...o2.op === "fresh" ? { credFile: machineCredFile(o2.machine), reader: "$relaySid" } : {}
 }).split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#")).join("\r\n");
 var brokerArgumentsSnippet = (script) => `$brokerScript = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(script, "utf8").toString("base64")}')).Replace('${RELAY_SID_SLOT}', $relaySid)
@@ -61550,6 +61595,8 @@ $service.Connect()
 $folder = $service.GetFolder('\\')
 # SYSTEM runs them; SYSTEM and administrators own them; the relay account may read and run them.
 $sddl = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;$relaySid)"
+# The functions the brokers load, in their admin-only folder.
+[IO.File]::WriteAllText(${psQuote(brokerBodyFile(o2.machine))}, [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(CREW_ACCOUNT_BODY, "utf8").toString("base64")}')), (New-Object Text.UTF8Encoding($false)))
 ${["sweep", "retire", "fresh"].map(
     (op) => `${brokerArgumentsSnippet(brokerScript({ op, prefix: o2.crewPrefix, machine: o2.machine }))}
 $def = $service.NewTask(0)
@@ -63923,6 +63970,7 @@ if (Test-Path -LiteralPath (Join-Path ${h2} 'state')) {
 # modify below it (inherit-only); it can rename or remove neither state nor anything above.
 $folders = @(
   @(${m}, 'read'), @((Join-Path ${m} 'node'), 'read'), @((Join-Path ${m} 'studio'), 'read'),
+  @((Join-Path ${m} 'broker'), 'read'),
   @((Join-Path ${m} 'config'), 'read'), @((Split-Path -Parent ${h2}), 'read'), @(${h2}, 'read'),
   @((Join-Path ${h2} 'state'), 'fill')
 )
