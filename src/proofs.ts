@@ -1,40 +1,68 @@
+import { isDeepStrictEqual } from 'node:util';
+import { parseAllDocuments } from 'yaml';
+import {
+  tokenizeJs,
+  tokenizePython,
+  tokenizeRust,
+  tokenizeShell,
+  tokenizeToml,
+  tokenizeYaml,
+} from './proof-languages.js';
+import { no, Out, type Seg, Unclassifiable } from './proof-tokens.js';
+
 /**
  * Built-in proofs for exceptions by evidence: pure functions over the files of the base and the
  * head, no command runs. Each accepts only the boring case and errs towards "not proven".
  *
- * `comments_only` reads SQL as PostgreSQL does, and nothing else: comment text edited or added,
- * with code untouched. More languages and dialects come later, each with an adversarial review of
- * its own. It compares the code of a file with its plain comments taken out and its whitespace
- * reduced to "a line break here" or "a blank here"; string literals, quoted identifiers and
- * dollar-quoted bodies stay byte for byte, and comments with a meaning (directives, hints,
- * executable comments) must be byte-identical and in the same place.
+ * `comments_only` reads SQL as PostgreSQL does, and Rust, TypeScript and JavaScript, shell, Python,
+ * YAML and TOML with the tokenizers in src/proof-languages.ts: comment text edited or added, with
+ * code untouched. The language comes from the file extension. It compares the code of a file with
+ * its plain comments taken out. In free-form languages (SQL, Rust, TypeScript, JavaScript, shell,
+ * TOML) whitespace between tokens is reduced to "a line break here" or "a blank here"; in Python
+ * and YAML, where indentation is code, every line stays byte for byte and only lines that hold
+ * nothing but a plain comment or blanks drop out. String literals, raw strings, templates,
+ * here-documents and the like stay byte for byte, and comments with a meaning (directives, hints,
+ * doc comments in Rust, executable comments) must be byte-identical and in the same place.
  */
 
-export const PROOF_LANGUAGES = ['sql'] as const;
+export const PROOF_LANGUAGES = [
+  'sql',
+  'rust',
+  'typescript',
+  'javascript',
+  'shell',
+  'python',
+  'yaml',
+  'toml',
+] as const;
 export type ProofLanguage = (typeof PROOF_LANGUAGES)[number];
 
+/** The file extensions of each language, lower case. */
+const EXTENSIONS: Record<ProofLanguage, readonly string[]> = {
+  sql: ['.sql'],
+  rust: ['.rs'],
+  typescript: ['.ts', '.tsx', '.mts', '.cts'],
+  javascript: ['.js', '.jsx', '.mjs', '.cjs'],
+  shell: ['.sh', '.bash'],
+  python: ['.py', '.pyi'],
+  yaml: ['.yml', '.yaml'],
+  toml: ['.toml'],
+};
+
 /** Why another language is refused in a rule. */
-export const ONLY_SQL =
-  'comments_only reads sql only so far; more languages come later, each with its own adversarial review';
+export const UNKNOWN_LANGUAGE = `comments_only reads ${PROOF_LANGUAGES.join(', ')}; any other language comes later, with its own adversarial review`;
 
 /** The language of a path by its extension, among `allowed`; undefined for any other file. */
 export function languageOf(
   path: string,
   allowed: readonly ProofLanguage[],
 ): ProofLanguage | undefined {
-  return allowed.includes('sql') && path.toLowerCase().endsWith('.sql') ? 'sql' : undefined;
+  const lower = path.toLowerCase();
+  return allowed.find((l) => EXTENSIONS[l].some((ext) => lower.endsWith(ext)));
 }
 
-/**
- * A run of the file. A comment keeps its kind while the tokenizer runs; `meaningful` marks one
- * that must stay byte for byte, and nothing in the tokenizer reads that flag.
- */
-type Seg = { kind: 'code' | 'string' | 'comment' | 'ws'; text: string; meaningful?: true };
-/** Thrown for anything the tokenizer cannot classify for sure. */
-class Unclassifiable extends Error {}
-const no = (why: string): never => {
-  throw new Unclassifiable(why);
-};
+/** Whether a TypeScript or JavaScript file may hold JSX: all but plain TypeScript, and an unknown path. */
+const mayHoldJsx = (path: string): boolean => !/\.[mc]?ts$/i.test(path);
 
 const isIdent = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_$]/.test(c);
 
@@ -53,25 +81,6 @@ function meaningful(t: string): boolean {
   return /^--\s*(?:[+!@$#:%]|[A-Za-z_-]+\s*:)/.test(t);
 }
 
-/**
- * Collects segments. Each comment is classified the moment it is read, on its own, and keeps its
- * kind; comments are never merged, so a plain comment cannot hide a meaningful one right behind
- * it. Only whitespace and code runs are merged.
- */
-class Out {
-  segs: Seg[] = [];
-  push(kind: Seg['kind'], text: string): void {
-    if (kind === 'comment') {
-      this.segs.push({ kind, text, ...(meaningful(text) ? { meaningful: true as const } : {}) });
-      return;
-    }
-    const last = this.segs.at(-1);
-    if (last !== undefined && last.kind === kind && (kind === 'ws' || kind === 'code')) {
-      last.text += text;
-    } else this.segs.push({ kind, text });
-  }
-}
-
 /** A quoted run from `i` (at the opening quote) to its closing quote, doubled quotes inside. */
 function quoted(s: string, i: number, quote: string): number {
   let j = i + 1;
@@ -86,14 +95,35 @@ function quoted(s: string, i: number, quote: string): number {
   }
 }
 
+/** Line and paragraph separators and NEL: JavaScript and YAML end a line there, the tokenizers do not. */
+const SEPARATORS = new Set([0x85, 0x2028, 0x2029]);
+/** Bidirectional controls: code that reads otherwise than it shows. */
+const BIDI = new Set([0x61c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e]);
+
+/** Why a character of `raw` is refused outside SQL; undefined when none is. */
+function refusedChar(raw: string): string | undefined {
+  if (raw.charCodeAt(0) === 0xfeff) return 'a byte order mark';
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw.charCodeAt(i);
+    if (c < 0x80) continue;
+    if (SEPARATORS.has(c)) return 'a line separator that is not a line feed';
+    if (BIDI.has(c) || (c >= 0x2066 && c <= 0x2069)) return 'a bidirectional control character';
+  }
+  return undefined;
+}
+
 /**
- * The text of a blob as SQL may be read here, or why not: valid UTF-8 only (a byte order mark is
- * kept), no backslash anywhere (escapes in `E'...'`, other dialects' strings), no form feed or
- * vertical tab, no carriage return but one right before a line feed (PostgreSQL ends a `--`
- * comment at a lone one), and line endings either all LF or all CRLF.
+ * The text of a blob as `language` may be read here, or why not: valid UTF-8 only, no form feed
+ * or vertical tab, no carriage return but one right before a line feed (PostgreSQL ends a `--`
+ * comment at a lone one), and line endings either all LF or all CRLF. SQL: a byte order mark is
+ * kept, and no backslash anywhere (escapes in `E'...'`, other dialects' strings). Every other
+ * language reads escapes itself, and refuses a byte order mark, a line or paragraph separator or
+ * NEL (JavaScript and YAML end a line there, the tokenizers do not) and bidirectional controls
+ * (code that reads otherwise than it shows).
  */
 function plainText(
   bytes: Uint8Array | string,
+  language: ProofLanguage = 'sql',
 ): { text: string; crlf: boolean | undefined } | string {
   let raw: string;
   if (typeof bytes === 'string') raw = bytes;
@@ -105,7 +135,12 @@ function plainText(
     }
   }
   if (raw.includes('\0')) return 'binary';
-  if (raw.includes('\\')) return 'a backslash';
+  if (language === 'sql') {
+    if (raw.includes('\\')) return 'a backslash';
+  } else {
+    const refused = refusedChar(raw);
+    if (refused !== undefined) return refused;
+  }
   if (/[\f\v]/.test(raw)) return 'a form feed or vertical tab';
   if (/\r(?!\n)/.test(raw)) return 'a carriage return without a line feed';
   const lf = (raw.match(/\n/g) ?? []).length;
@@ -122,7 +157,7 @@ function plainText(
 // backtick, a `$` that is neither a dollar quote nor a parameter, and anything unterminated.
 // Every loop moves forward: the work is linear in the length of the file.
 function tokenizeSql(s: string): Seg[] {
-  const out = new Out();
+  const out = new Out(meaningful);
   let i = 0;
   while (i < s.length) {
     const c = s[i] as string;
@@ -136,7 +171,7 @@ function tokenizeSql(s: string): Seg[] {
       }
       const end = s.indexOf('\n', i);
       const stop = end === -1 ? s.length : end;
-      out.push('comment', s.slice(i, stop));
+      out.push('comment', s.slice(i, stop), { eol: true });
       i = stop;
     } else if (s.startsWith('/*', i)) {
       const end = s.indexOf('*/', i + 2);
@@ -179,25 +214,106 @@ function tokenizeSql(s: string): Seg[] {
   return out.segs;
 }
 
-/**
- * The code of a SQL text with plain comments out, as tokens joined by `\n` (a line break, or a
- * line comment, lay between them) or a blank; undefined when unsure. A line comment always ends a
- * line here, so code before and after it is never joined. A meaningful comment stays as it is.
- */
-export function codeOf(text: string, _language: ProofLanguage = 'sql'): string | undefined {
-  const plain = plainText(text);
-  if (typeof plain === 'string') return undefined;
-  return normalized(plain.text);
+/** The tokenizer of a language; `path` tells plain TypeScript from files that may hold JSX. */
+function tokenize(text: string, language: ProofLanguage, path: string): Seg[] {
+  switch (language) {
+    case 'sql':
+      return tokenizeSql(text);
+    case 'rust':
+      return tokenizeRust(text);
+    case 'typescript':
+    case 'javascript':
+      return tokenizeJs(text, mayHoldJsx(path));
+    case 'shell':
+      return tokenizeShell(text);
+    case 'python':
+      return tokenizePython(text);
+    case 'yaml':
+      return tokenizeYaml(text);
+    case 'toml':
+      return tokenizeToml(text);
+  }
 }
 
-function normalized(text: string): string | undefined {
+/** Languages whose indentation is code: lines stay byte for byte. */
+const BY_LINE: readonly ProofLanguage[] = ['python', 'yaml'];
+
+/**
+ * The code of a text with plain comments out; undefined when unsure. Free-form languages: tokens
+ * joined by `\n` (a line break, or a line comment, lay between them) or a blank. A line comment
+ * always ends a line here, so code before and after it is never joined. Python and YAML: see
+ * `byLine`. A meaningful comment stays as it is.
+ */
+export function codeOf(
+  text: string,
+  language: ProofLanguage = 'sql',
+  path = '',
+): string | undefined {
+  const plain = plainText(text, language);
+  if (typeof plain === 'string') return undefined;
+  const code = normalized(plain.text, language, path);
+  return typeof code === 'string' ? code : undefined;
+}
+
+function normalized(text: string, language: ProofLanguage, path: string): string | { why: string } {
   let segs: Seg[];
   try {
-    segs = tokenizeSql(text);
+    segs = tokenize(text, language, path);
+    return BY_LINE.includes(language) ? byLine(segs, language) : byGap(segs);
   } catch (e) {
-    if (e instanceof Unclassifiable) return undefined;
+    if (e instanceof Unclassifiable) return { why: e.message };
     throw e;
   }
+}
+
+/**
+ * The lines of the code, each byte for byte, with a trailing plain comment and the blanks before
+ * it taken off, and lines that then hold nothing but blanks left out. Python: a line that ends in
+ * a backslash joins the next one, so a dropped line after it, or a comment taken off right after a
+ * backslash, is not proven.
+ */
+function byLine(segs: Seg[], language: ProofLanguage): string {
+  const lines: Seg[][] = [[]];
+  for (const seg of segs) {
+    if (seg.kind !== 'ws') {
+      (lines.at(-1) as Seg[]).push(seg);
+      continue;
+    }
+    for (const [k, part] of seg.text.split('\n').entries()) {
+      if (k > 0) lines.push([]);
+      if (part !== '') (lines.at(-1) as Seg[]).push({ kind: 'ws', text: part });
+    }
+  }
+  const kept: string[] = [];
+  let joins = false;
+  for (const line of lines) {
+    let rest = line;
+    let stripped = false;
+    const last = rest.findLastIndex((x) => x.kind !== 'ws');
+    const tail = rest[last];
+    if (tail?.kind === 'comment' && tail.meaningful !== true) {
+      rest = rest.slice(0, last);
+      while (rest.at(-1)?.kind === 'ws') rest = rest.slice(0, -1);
+      stripped = true;
+    }
+    if (rest.some((x) => x.kind === 'comment' && x.meaningful !== true)) {
+      no('a comment that does not end its line');
+    }
+    if (!rest.some((x) => x.kind !== 'ws')) {
+      if (joins) no('a line dropped after a backslash');
+      continue;
+    }
+    const text = rest.map((x) => x.text).join('');
+    // The Python tokenizer keeps a backslash and its line feed together in one code run.
+    const backslash = language === 'python' && text.endsWith('\\\n');
+    if (stripped && backslash) no('a comment right after a backslash');
+    joins = backslash;
+    kept.push(text);
+  }
+  return kept.join('\n');
+}
+
+function byGap(segs: Seg[]): string {
   const parts: string[] = [];
   let gap: 'none' | 'blank' | 'line' = 'none';
   const widen = (to: 'blank' | 'line') => {
@@ -208,7 +324,7 @@ function normalized(text: string): string | undefined {
       widen(seg.text.includes('\n') ? 'line' : 'blank');
       continue;
     }
-    const line = seg.kind === 'comment' && seg.text.startsWith('--');
+    const line = seg.kind === 'comment' && seg.eol === true;
     if (seg.kind === 'comment' && seg.meaningful !== true) {
       widen(line || seg.text.includes('\n') ? 'line' : 'blank');
       continue;
@@ -220,31 +336,60 @@ function normalized(text: string): string | undefined {
   return parts.join('');
 }
 
-/** Why two versions of a SQL file are not "comments only"; undefined when they are. */
+/**
+ * YAML read a second way: both versions must load without an error in the `yaml` package, to the
+ * same data. A second reader that disagrees with the tokenizer proves nothing.
+ */
+function sameYaml(a: string, b: string): string | undefined {
+  try {
+    const load = (text: string) => {
+      const docs = parseAllDocuments(text);
+      const list = Array.isArray(docs) ? docs : [docs];
+      if (list.some((d) => d.errors.length > 0)) return undefined;
+      return list.map((d) => d.toJS({ maxAliasCount: 100 }) as unknown);
+    };
+    const da = load(a);
+    const db = load(b);
+    if (da === undefined || db === undefined) return 'it does not load as YAML';
+    return isDeepStrictEqual(da, db) ? undefined : 'it loads to other data';
+  } catch {
+    return 'it does not load as YAML';
+  }
+}
+
+/**
+ * Why two versions of a file are not "comments only"; undefined when they are. `path` names the
+ * file (plain TypeScript holds no JSX); the language is the caller's, from `languageOf`.
+ */
 export function commentsOnlyWhy(
   base: Uint8Array | string,
   head: Uint8Array | string,
+  language: ProofLanguage = 'sql',
+  path = '',
 ): string | undefined {
-  const a = plainText(base);
-  const b = plainText(head);
+  const a = plainText(base, language);
+  const b = plainText(head, language);
   if (typeof a === 'string') return `the base has ${a}`;
   if (typeof b === 'string') return `the head has ${b}`;
   if (a.crlf !== undefined && b.crlf !== undefined && a.crlf !== b.crlf) {
     return 'its line endings changed';
   }
-  const ca = normalized(a.text);
-  const cb = normalized(b.text);
-  if (ca === undefined || cb === undefined) return 'it cannot be read for sure';
-  return ca === cb ? undefined : 'it changes more than plain comments';
+  const ca = normalized(a.text, language, path);
+  const cb = normalized(b.text, language, path);
+  if (typeof ca !== 'string') return `the base cannot be read for sure: ${ca.why}`;
+  if (typeof cb !== 'string') return `the head cannot be read for sure: ${cb.why}`;
+  if (ca !== cb) return 'it changes more than plain comments';
+  return language === 'yaml' ? sameYaml(a.text, b.text) : undefined;
 }
 
-/** Whether two versions of a SQL file differ in plain comments only. */
+/** Whether two versions of a file differ in plain comments only. */
 export function commentsOnly(
   base: Uint8Array | string,
   head: Uint8Array | string,
-  _language: ProofLanguage = 'sql',
+  language: ProofLanguage = 'sql',
+  path = '',
 ): boolean {
-  return commentsOnlyWhy(base, head) === undefined;
+  return commentsOnlyWhy(base, head, language, path) === undefined;
 }
 
 /** A token of SQL code: a bare word (upper-cased), a quoted name, a literal or one character. */

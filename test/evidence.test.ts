@@ -282,13 +282,20 @@ describe('evidence rules in studio.yaml', () => {
     ).toThrow(/only comments_only reads languages/);
     expect(() => load(rule('    proof: paths_only\n'))).toThrow(/paths/);
     expect(() => load(rule('    proof: anything\n    paths: ["a"]\n'))).toThrow(/proof/);
-    for (const lang of ['cobol', 'ts', 'rust', 'python']) {
+    for (const lang of ['cobol', 'ts', 'go', 'bash', 'yml', 'Rust']) {
       expect(() =>
         load(rule(`    proof: comments_only\n    languages: [sql, ${lang}]\n    paths: ["a"]\n`)),
       ).toThrow(
-        /languages\.1: comments_only reads sql only so far; more languages come later, each with its own adversarial review/,
+        /languages\.1: comments_only reads sql, rust, typescript, javascript, shell, python, yaml, toml; any other language comes later, with its own adversarial review/,
       );
     }
+    expect(
+      load(
+        rule(
+          '    proof: comments_only\n    languages: [rust, typescript, javascript, shell, python, yaml, toml]\n    paths: ["a"]\n',
+        ),
+      ).evidence?.[0]?.languages,
+    ).toEqual(['rust', 'typescript', 'javascript', 'shell', 'python', 'yaml', 'toml']);
     expect(() => load(`${RULE}${RULE}`)).toThrow(/duplicate evidence id sql-comments/);
     expect(() => load(rule('    proof: paths_only\n    paths: ["a"]\n    extra: 1\n'))).toThrow(
       /extra: unknown key/,
