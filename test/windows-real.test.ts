@@ -201,12 +201,18 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     const code = [
       "let p='';process.stdin.on('data',d=>p+=d);process.stdin.on('end',()=>{",
       "require('fs').writeFileSync('secret.txt','from the first crew');",
+      // A junction the crew plants to a place of the owner's: ACL work must never follow it.
+      `require('fs').symlinkSync(${JSON.stringify('OUTSIDE')},'planted','junction');`,
       "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});",
       "console.log(JSON.stringify({who:require('os').userInfo().username,prompt:p,proxy:process.env.HTTPS_PROXY,",
       'token:process.env.CLAUDE_CODE_OAUTH_TOKEN,me:String(process.pid),child:String(c.pid)}));',
       'setInterval(()=>{},1000);});',
     ].join('');
-    const r = await crew('APP-1', code);
+    const outside = join(base, 'outside');
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, 'owner.txt'), 'the owner');
+    const aclBefore = (await runFile('icacls', [outside, '/T'])).stdout;
+    const r = await crew('APP-1', code.replace(JSON.stringify('OUTSIDE'), JSON.stringify(outside)));
     expect(r.line?.who?.toLowerCase(), r.why).toBe(USER);
     expect(r.line?.prompt).toBe('hello crew');
     expect(r.line?.proxy).toBe(`http://${LOOPBACK}:${proxy.port}`);
@@ -217,7 +223,12 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     // The identity is the keeper's, read owner-side.
     expect(await r.claude.identity(r.pid)).toMatch(/^keeper:\d{4}-/);
     expect(r.claude.alive(r.pid)).toBe(true);
+    expect(existsSync(join(r.clone, 'planted'))).toBe(true);
     await r.claude.stop(r.pid);
+    // Taking the clone back removed the junction and left the place it led to as it was.
+    expect(existsSync(join(r.clone, 'planted'))).toBe(false);
+    expect((await runFile('icacls', [outside, '/T'])).stdout).toBe(aclBefore);
+    expect(readFileSync(join(outside, 'owner.txt'), 'utf8')).toBe('the owner');
     expect(r.claude.alive(r.pid)).toBe(false);
     // Ending the keeper ended the whole tree, the grandchild included.
     for (let i = 0; i < 50 && (exists(Number(r.line?.me)) || exists(Number(r.line?.child))); i++) {

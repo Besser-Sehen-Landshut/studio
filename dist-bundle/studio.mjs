@@ -4003,10 +4003,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep7, value: value2 } = collItem;
+        const { start, key, sep: sep8, value: value2 } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep7?.[0],
+          next: key ?? sep8?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -4020,7 +4020,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep7) {
+          if (!keyProps.anchor && !keyProps.tag && !sep8) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map2.comment)
@@ -4044,7 +4044,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map2.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep7 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep8 ?? [], {
           indicator: "map-value-ind",
           next: value2,
           offset: keyNode.range[2],
@@ -4060,7 +4060,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value2 ? composeNode(ctx, value2, valueProps, onError) : composeEmptyNode(ctx, offset, sep7, null, valueProps, onError);
+          const valueNode = value2 ? composeNode(ctx, value2, valueProps, onError) : composeEmptyNode(ctx, offset, sep8, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value2, onError);
           offset = valueNode.range[2];
@@ -4151,7 +4151,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep7 = "";
+        let sep8 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -4165,13 +4165,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep7 + cb;
-              sep7 = "";
+                comment += sep8 + cb;
+              sep8 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep7 += source;
+                sep8 += source;
               hasSpace = true;
               break;
             default:
@@ -4214,18 +4214,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i2 = 0; i2 < fc.items.length; ++i2) {
         const collItem = fc.items[i2];
-        const { start, key, sep: sep7, value: value2 } = collItem;
+        const { start, key, sep: sep8, value: value2 } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep7?.[0],
+          next: key ?? sep8?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep7 && !value2) {
+          if (!props.anchor && !props.tag && !sep8 && !value2) {
             if (i2 === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i2 < fc.items.length - 1)
@@ -4279,8 +4279,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap5 && !sep7 && !props.found) {
-          const valueNode = value2 ? composeNode(ctx, value2, props, onError) : composeEmptyNode(ctx, props.end, sep7, null, props, onError);
+        if (!isMap5 && !sep8 && !props.found) {
+          const valueNode = value2 ? composeNode(ctx, value2, props, onError) : composeEmptyNode(ctx, props.end, sep8, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value2))
@@ -4292,7 +4292,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep7 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep8 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value2,
@@ -4303,8 +4303,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap5 && !props.found && ctx.options.strict) {
-              if (sep7)
-                for (const st of sep7) {
+              if (sep8)
+                for (const st of sep8) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -4321,7 +4321,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value2 ? composeNode(ctx, value2, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep7, null, valueProps, onError) : null;
+          const valueNode = value2 ? composeNode(ctx, value2, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep8, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value2))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -4501,7 +4501,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i2 + 1;
       }
       let value2 = "";
-      let sep7 = "";
+      let sep8 = "";
       let prevMoreIndented = false;
       for (let i2 = 0; i2 < contentStart; ++i2)
         value2 += lines2[i2][0].slice(trimIndent) + "\n";
@@ -4518,24 +4518,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value2 += sep7 + indent.slice(trimIndent) + content;
-          sep7 = "\n";
+          value2 += sep8 + indent.slice(trimIndent) + content;
+          sep8 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep7 === " ")
-            sep7 = "\n";
-          else if (!prevMoreIndented && sep7 === "\n")
-            sep7 = "\n\n";
-          value2 += sep7 + indent.slice(trimIndent) + content;
-          sep7 = "\n";
+          if (sep8 === " ")
+            sep8 = "\n";
+          else if (!prevMoreIndented && sep8 === "\n")
+            sep8 = "\n\n";
+          value2 += sep8 + indent.slice(trimIndent) + content;
+          sep8 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep7 === "\n")
+          if (sep8 === "\n")
             value2 += "\n";
           else
-            sep7 = "\n";
+            sep8 = "\n";
         } else {
-          value2 += sep7 + content;
-          sep7 = " ";
+          value2 += sep8 + content;
+          sep8 = " ";
           prevMoreIndented = false;
         }
       }
@@ -4718,25 +4718,25 @@ var require_resolve_flow_scalar = __commonJS({
         trimBoth = /^[ \t]+|[ \t]+$/g;
       }
       let res = match[1].replace(trimEnd, "");
-      let sep7 = " ";
+      let sep8 = " ";
       let pos = line4.lastIndex;
       while (match = line4.exec(source)) {
         const lm = match[1].replace(trimBoth, "");
         if (lm === "") {
-          if (sep7 === "\n")
-            res += sep7;
+          if (sep8 === "\n")
+            res += sep8;
           else
-            sep7 = "\n";
+            sep8 = "\n";
         } else {
-          res += sep7 + lm;
-          sep7 = " ";
+          res += sep8 + lm;
+          sep8 = " ";
         }
         pos = line4.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep7 + (match?.[1] ?? "");
+      return res + sep8 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -5546,14 +5546,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep7, value: value2 }) {
+    function stringifyItem({ start, key, sep: sep8, value: value2 }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep7)
-        for (const st of sep7)
+      if (sep8)
+        for (const st of sep8)
           res += st.source;
       if (value2)
         res += stringifyToken(value2);
@@ -6720,18 +6720,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep7;
+          let sep8;
           if (scalar.end) {
-            sep7 = scalar.end;
-            sep7.push(this.sourceToken);
+            sep8 = scalar.end;
+            sep8.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep7 = [this.sourceToken];
+            sep8 = [this.sourceToken];
           const map2 = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep7 }]
+            items: [{ start, key: scalar, sep: sep8 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map2;
@@ -6884,15 +6884,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep7 = it.sep;
-                  sep7.push(this.sourceToken);
+                  const sep8 = it.sep;
+                  sep8.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep7 }]
+                    items: [{ start: start2, key, sep: sep8 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -7086,13 +7086,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep7 = fc.end.splice(1, fc.end.length);
-            sep7.push(this.sourceToken);
+            const sep8 = fc.end.splice(1, fc.end.length);
+            sep8.push(this.sourceToken);
             const map2 = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep7 }]
+              items: [{ start, key: fc, sep: sep8 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map2;
@@ -7841,7 +7841,7 @@ var require_shell_quote = __commonJS({
 });
 
 // src/main.ts
-import { realpathSync as realpathSync11 } from "node:fs";
+import { realpathSync as realpathSync12 } from "node:fs";
 import { homedir as homedir13 } from "node:os";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 
@@ -31922,7 +31922,7 @@ import {
   mkdirSync as mkdirSync8,
   readdirSync as readdirSync14,
   readFileSync as readFileSync38,
-  rmdirSync,
+  rmdirSync as rmdirSync2,
   rmSync as rmSync8,
   writeFileSync as writeFileSync11
 } from "node:fs";
@@ -32058,7 +32058,7 @@ async function capacityHoldsTwice(config2, ports, options = {}) {
 
 // src/secret-command.ts
 var import_yaml13 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync36, realpathSync as realpathSync8, statSync as statSync5 } from "node:fs";
+import { readFileSync as readFileSync36, realpathSync as realpathSync9, statSync as statSync5 } from "node:fs";
 import { homedir as homedir8 } from "node:os";
 import { join as join36 } from "node:path";
 
@@ -35652,13 +35652,13 @@ import {
   lstatSync as lstatSync24,
   readdirSync as readdirSync11,
   readFileSync as readFileSync28,
-  realpathSync as realpathSync7,
+  realpathSync as realpathSync8,
   statSync as statSync4,
-  unlinkSync as unlinkSync5,
+  unlinkSync as unlinkSync6,
   writeFileSync as writeFileSync10
 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
-import { basename as basename4, dirname as dirname10, join as join28, resolve as resolve7, sep as sep5 } from "node:path";
+import { basename as basename4, dirname as dirname10, join as join28, resolve as resolve7, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/analyzer-timeout.ts
@@ -39397,9 +39397,12 @@ import {
   mkdirSync as mkdirSync7,
   openSync as openSync6,
   readdirSync as readdirSync10,
-  readFileSync as readFileSync27
+  readFileSync as readFileSync27,
+  realpathSync as realpathSync7,
+  rmdirSync,
+  unlinkSync as unlinkSync5
 } from "node:fs";
-import { dirname as dirname9, join as join27, resolve as resolve6 } from "node:path";
+import { dirname as dirname9, join as join27, resolve as resolve6, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/egress-proxy.ts
@@ -40015,15 +40018,51 @@ function revokeArgs(user, path10) {
   if (!CREW_USER_RE.test(user)) throw new Error(`not a crew user name: ${user}`);
   return [path10, "/remove:g", user, "/Q"];
 }
-function revokeSteps(user, owner, path10, dir) {
-  if (!/^[^\p{Cc}"*?<>|]+$/u.test(owner)) throw new Error(`not an account name: ${owner}`);
+function revokeSteps(user, ownerSid2, path10, dir) {
+  if (!OWNER_SID_RE.test(ownerSid2)) throw new Error(`not a SID: ${ownerSid2}`);
   return [
     revokeArgs(user, path10),
-    ...dir ? [[join27(path10, "*"), "/reset", "/T", "/C", "/Q"]] : [],
-    [path10, "/setowner", owner, ...dir ? ["/T"] : [], "/C", "/Q"]
+    ...dir ? [[join27(path10, "*"), "/reset", "/T", "/C", "/L", "/Q"]] : [],
+    [path10, "/setowner", ownerSid2, ...dir ? ["/T"] : [], "/C", "/L", "/Q"]
   ];
 }
-var ownerAccount = (env = process.env) => env.USERDOMAIN !== void 0 && env.USERNAME !== void 0 ? `${env.USERDOMAIN}\\${env.USERNAME}` : env.USERNAME ?? "";
+var OWNER_SID_RE = /^\*S-1-\d+(-\d+)+$/;
+async function ownerSid(run2) {
+  const r = await run2("whoami", ["/user", "/fo", "csv", "/nh"]);
+  const sid = /"(S-1-\d+(?:-\d+)+)"\s*$/.exec(r.stdout.trim())?.[1];
+  if (r.code !== 0 || sid === void 0) throw new Error("cannot read the SID of this account");
+  return `*${sid}`;
+}
+function removeLinks(root) {
+  const top = realpathSync7(root);
+  const inside = (p) => p === top || p.startsWith(`${top}${sep5}`);
+  const walk = (dir) => {
+    if (!inside(realpathSync7(dir))) throw new Error(`${dir} leads outside ${root}`);
+    for (const name of readdirSync10(dir)) {
+      const p = join27(dir, name);
+      const st = lstatSync23(p);
+      if (st.isSymbolicLink()) {
+        try {
+          unlinkSync5(p);
+        } catch {
+          rmdirSync(p);
+        }
+        if (existsLink(p)) throw new Error(`cannot remove the link ${p}`);
+      } else if (st.isDirectory()) {
+        walk(p);
+      }
+    }
+  };
+  walk(root);
+}
+function existsLink(p) {
+  try {
+    lstatSync23(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
 function isDir2(p) {
   try {
     return lstatSync23(p).isDirectory();
@@ -40086,6 +40125,8 @@ var WindowsGrants = class {
     this.o = o2;
   }
   o;
+  /** The owner's SID (`*S-1-...`), read once. */
+  sid;
   paths() {
     return readGrantRecord(this.o.ownerRoot, this.o.user).paths;
   }
@@ -40113,10 +40154,17 @@ var WindowsGrants = class {
   async revokeLocked() {
     const rec = readGrantRecord(this.o.ownerRoot, this.o.user);
     const failed = [];
-    const owner = this.o.owner ?? ownerAccount();
+    if (rec.paths.length > 0) this.sid ??= this.o.owner ?? await ownerSid(this.o.run);
     for (const p of rec.paths) {
       if (!existsSync7(p)) continue;
-      for (const args of revokeSteps(this.o.user, owner, p, isDir2(p))) {
+      const dir = isDir2(p);
+      try {
+        if (dir) removeLinks(p);
+      } catch {
+        failed.push(p);
+        continue;
+      }
+      for (const args of revokeSteps(this.o.user, this.sid, p, dir)) {
         const r = await this.o.run("icacls", args);
         if (r.code !== 0) {
           failed.push(p);
@@ -40163,8 +40211,8 @@ var WindowsGrants = class {
           `a crew of the crew user ${this.o.user} is still running: one crew at a time on this machine, as all projects share the crew user`
         );
       }
-      await this.revokeLocked();
       await this.sweep();
+      await this.revokeLocked();
       writeGrantRecord(this.o.ownerRoot, this.o.user, { paths: grants.map((g3) => g3.path) });
       for (const g3 of grants) {
         const steps = [
@@ -40237,6 +40285,9 @@ public static class StudioJob {
   static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
   [DllImport("kernel32.dll", SetLastError = true)]
   static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint pid);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+  public static void Terminate(IntPtr job) { TerminateJobObject(job, 1); }
   public static IntPtr Create() {
     IntPtr job = CreateJobObject(IntPtr.Zero, null);
     if (job == IntPtr.Zero) throw new Win32Exception();
@@ -40262,6 +40313,7 @@ $revoke = @(ConvertFrom-Json $raw.Substring(0, $nl))
 $spec = [Text.Encoding]::UTF8.GetBytes($raw.Substring($nl + 1))
 $raw = $null
 $p = $null
+$job = $null
 try {
   $job = [StudioJob]::Create()
   $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -40292,16 +40344,15 @@ try {
   [Console]::Error.WriteLine("studio keeper: $($_.Exception.Message)")
   $code = 2
 } finally {
-  # As Studio's revokeSteps: the grant goes, ACLs below go back to inherited, the owner is ours.
-  $owner = "$($env:USERDOMAIN)$($env:USERNAME)"
+  # Nothing the crew started outlives it here, then its grants go. The ownership reset and the
+  # walk for planted links are Studio's, at the next grant or stop (WindowsGrants.revokeAll).
+  if ($null -ne $job) { [StudioJob]::Terminate($job) }
   foreach ($r in $revoke) {
     if (-not (Test-Path -LiteralPath $r)) { continue }
-    icacls $r /remove:g $User /Q | Out-Null
-    if (Test-Path -LiteralPath $r -PathType Container) {
-      icacls (Join-Path $r '*') /reset /T /C /Q | Out-Null
-      icacls $r /setowner $owner /T /C /Q | Out-Null
-    } else {
-      icacls $r /setowner $owner /C /Q | Out-Null
+    icacls $r /remove:g $User /L /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      [Console]::Error.WriteLine("studio keeper: cannot take the grant off $r ($LASTEXITCODE)")
+      $code = 3
     }
   }
 }
@@ -40751,7 +40802,7 @@ function removeOldReport(stateRoot, clone2, id) {
       return;
     }
     if (st.isSymbolicLink()) {
-      unlinkSync5(cur);
+      unlinkSync6(cur);
       return;
     }
     if (seg === `${id}.md`) {
@@ -40785,9 +40836,9 @@ function isLink2(p) {
 }
 function writeHomeFile(homeDir, name, content) {
   const target = join28(homeDir, name);
-  const realHome = realpathSync7(homeDir);
-  const parent = realpathSync7(dirname10(target));
-  if (parent !== realHome && !parent.startsWith(realHome + sep5)) {
+  const realHome = realpathSync8(homeDir);
+  const parent = realpathSync8(dirname10(target));
+  if (parent !== realHome && !parent.startsWith(realHome + sep6)) {
     throw new Error(`refusing to write outside the crew home: ${target}`);
   }
   writeFileSync10(join28(parent, basename4(target)), content, { flag: "wx" });
@@ -40795,7 +40846,7 @@ function writeHomeFile(homeDir, name, content) {
 var unique2 = (xs) => [...new Set(xs)];
 function realOr2(p) {
   try {
-    return realpathSync7(p);
+    return realpathSync8(p);
   } catch {
     return p;
   }
@@ -40868,7 +40919,7 @@ function planRea(o2) {
   const below = roots.some((r) => {
     let root = r;
     try {
-      root = realpathSync7(r);
+      root = realpathSync8(r);
     } catch {
     }
     return within(pathKey(real, platform2), pathKey(root, platform2));
@@ -45102,7 +45153,7 @@ var CREW_TOOLS = ["cargo", "rustc", "rustup", "node", "pnpm", "npm", "gh", "git"
 function toolsOutside(env, home, toolchain) {
   const real = (p) => {
     try {
-      return realpathSync8(p);
+      return realpathSync9(p);
     } catch {
       return p;
     }
@@ -45174,12 +45225,12 @@ function reaState(config2, ownerConfig, configDir, ownerRoot) {
   } else if (roots.length === 0) artifacts = "refused: no research_roots in the owner config";
   else {
     try {
-      const real = realpathSync8(config2.research.artifacts);
+      const real = realpathSync9(config2.research.artifacts);
       if (!statSync5(real).isDirectory()) artifacts = "refused: not a directory";
       else {
         const inside = roots.some((r) => {
           try {
-            return within(real, realpathSync8(r));
+            return within(real, realpathSync9(r));
           } catch {
             return false;
           }
@@ -45890,8 +45941,8 @@ function ignoreBoard(project) {
     text = readFileSync38(file3, "utf8");
   }
   if (text.split(/\r?\n/).some((l) => l.trim() === BOARD_IGNORE)) return;
-  const sep7 = text === "" || text.endsWith("\n") ? "" : "\n";
-  writeFileSync11(file3, `${text}${sep7}${text === "" ? "" : "\n"}${BOARD_IGNORE_TEXT}`);
+  const sep8 = text === "" || text.endsWith("\n") ? "" : "\n";
+  writeFileSync11(file3, `${text}${sep8}${text === "" ? "" : "\n"}${BOARD_IGNORE_TEXT}`);
 }
 async function isIgnored(o2, file3) {
   try {
@@ -45933,7 +45984,7 @@ function writeBoth(o2, dir, files) {
     }
   } catch (e) {
     for (const path10 of done) rmSync8(path10, { force: true });
-    if (madeDir) rmdirSync(dir);
+    if (madeDir) rmdirSync2(dir);
     throw e;
   }
 }
@@ -46764,12 +46815,12 @@ import {
   existsSync as existsSync12,
   lstatSync as lstatSync35,
   readFileSync as readFileSync40,
-  realpathSync as realpathSync9,
+  realpathSync as realpathSync10,
   renameSync as renameSync14,
   rmSync as rmSync9,
   writeFileSync as writeFileSync12
 } from "node:fs";
-import { dirname as dirname12, isAbsolute as isAbsolute10, join as join40, relative as relative2, resolve as resolve8, sep as sep6 } from "node:path";
+import { dirname as dirname12, isAbsolute as isAbsolute10, join as join40, relative as relative2, resolve as resolve8, sep as sep7 } from "node:path";
 
 // src/epics.ts
 var ONE_LINE2 = /^[^\p{Cc}\p{Cf}]{1,300}$/u;
@@ -46997,14 +47048,14 @@ function projectFile(project, file3) {
   if (file3.split(/[\\/]/).includes("..")) {
     throw new Error(`${JSON.stringify(file3)}: must stay inside the project`);
   }
-  const root = realpathSync9(project);
+  const root = realpathSync10(project);
   const wanted = resolve8(root, file3);
   let dir = dirname12(wanted);
   while (!existsSync12(dir)) dir = dirname12(dir);
-  const realDir = realpathSync9(dir);
+  const realDir = realpathSync10(dir);
   const full = join40(realDir, relative2(dir, wanted));
   const rel = relative2(root, full);
-  if (rel === "" || rel === ".." || rel.startsWith(`..${sep6}`) || isAbsolute10(rel)) {
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep7}`) || isAbsolute10(rel)) {
     throw new Error(`${JSON.stringify(file3)}: must stay inside the project`);
   }
   let link2 = false;
@@ -47014,7 +47065,7 @@ function projectFile(project, file3) {
     if (e.code !== "ENOENT") throw e;
   }
   if (link2) throw new Error(`${JSON.stringify(file3)}: is a link; give the file itself`);
-  return { full, rel: rel.split(sep6).join("/") };
+  return { full, rel: rel.split(sep7).join("/") };
 }
 function writeRoadmap(project, out, text, force) {
   const { full: file3, rel } = projectFile(project, out);
@@ -47951,7 +48002,7 @@ function applyAcceptance(board, acceptance, done, now, config2) {
 }
 
 // src/adopt.ts
-import { lstatSync as lstatSync40, readdirSync as readdirSync16, readFileSync as readFileSync46, realpathSync as realpathSync10 } from "node:fs";
+import { lstatSync as lstatSync40, readdirSync as readdirSync16, readFileSync as readFileSync46, realpathSync as realpathSync11 } from "node:fs";
 import { join as join47, resolve as resolve9 } from "node:path";
 
 // src/recover.ts
@@ -50631,8 +50682,8 @@ async function adoptStateRoot(o2) {
   const from = resolve9(o2.from);
   if (!isDir3(from))
     throw new Error(`${from} is not a state root folder (missing, a link or a file)`);
-  const realFrom = realpathSync10(from);
-  if (isDir3(o2.to) && realpathSync10(o2.to) === realFrom) {
+  const realFrom = realpathSync11(from);
+  if (isDir3(o2.to) && realpathSync11(o2.to) === realFrom) {
     throw new Error(`${from} is this project's own state root; nothing to adopt`);
   }
   const oldOrigin = markerOrigin(from);
@@ -66136,7 +66187,7 @@ function realPorts(claudeBin = "claude") {
 // src/main.ts
 function launcher() {
   try {
-    return realpathSync11(fileURLToPath7(new URL("../bin/studio", import.meta.url)));
+    return realpathSync12(fileURLToPath7(new URL("../bin/studio", import.meta.url)));
   } catch {
     return void 0;
   }

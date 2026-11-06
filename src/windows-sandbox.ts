@@ -9,8 +9,11 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
+  rmdirSync,
+  unlinkSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ipv4, LOOPBACK } from './egress-proxy.js';
 import { HeldError } from './held.js';
@@ -244,20 +247,69 @@ export function revokeArgs(user: string, path: string): string[] {
  * the account Studio runs as. The inheritable OWNER RIGHTS entry of the grant stays on the
  * directory, so even an owner keeps no rights of its own there.
  */
-export function revokeSteps(user: string, owner: string, path: string, dir: boolean): string[][] {
-  if (!/^[^\p{Cc}"*?<>|]+$/u.test(owner)) throw new Error(`not an account name: ${owner}`);
+export function revokeSteps(
+  user: string,
+  ownerSid: string,
+  path: string,
+  dir: boolean,
+): string[][] {
+  if (!OWNER_SID_RE.test(ownerSid)) throw new Error(`not a SID: ${ownerSid}`);
+  // `/L` works on a link itself, never on what it points to; `removeLinks` has removed them anyway.
   return [
     revokeArgs(user, path),
-    ...(dir ? [[join(path, '*'), '/reset', '/T', '/C', '/Q']] : []),
-    [path, '/setowner', owner, ...(dir ? ['/T'] : []), '/C', '/Q'],
+    ...(dir ? [[join(path, '*'), '/reset', '/T', '/C', '/L', '/Q']] : []),
+    [path, '/setowner', ownerSid, ...(dir ? ['/T'] : []), '/C', '/L', '/Q'],
   ];
 }
 
-/** The account Studio runs as, for `icacls /setowner`. */
-export const ownerAccount = (env: Record<string, string | undefined> = process.env): string =>
-  env.USERDOMAIN !== undefined && env.USERNAME !== undefined
-    ? `${env.USERDOMAIN}\\${env.USERNAME}`
-    : (env.USERNAME ?? '');
+/** The owner as icacls takes a SID: `*S-1-...`, never a name a template could garble. */
+const OWNER_SID_RE = /^\*S-1-\d+(-\d+)+$/;
+
+/** The SID of the account Studio runs as, in icacls' form, from `whoami /user`. */
+export async function ownerSid(run: RunFile): Promise<string> {
+  const r = await run('whoami', ['/user', '/fo', 'csv', '/nh']);
+  const sid = /"(S-1-\d+(?:-\d+)+)"\s*$/.exec(r.stdout.trim())?.[1];
+  if (r.code !== 0 || sid === undefined) throw new Error('cannot read the SID of this account');
+  return `*${sid}`;
+}
+
+/**
+ * Removes every link (symbolic link or junction) below `root`, which a crew may have planted
+ * there, before any ACL work as the owner: such work must never reach a place outside the root.
+ * Walks with lstat and never follows a link; a directory whose real path leaves the root, or a link
+ * that cannot be removed, refuses.
+ */
+export function removeLinks(root: string): void {
+  const top = realpathSync(root);
+  const inside = (p: string) => p === top || p.startsWith(`${top}${sep}`);
+  const walk = (dir: string) => {
+    if (!inside(realpathSync(dir))) throw new Error(`${dir} leads outside ${root}`);
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) {
+        try {
+          unlinkSync(p);
+        } catch {
+          rmdirSync(p);
+        }
+        if (existsLink(p)) throw new Error(`cannot remove the link ${p}`);
+      } else if (st.isDirectory()) {
+        walk(p);
+      }
+    }
+  };
+  walk(root);
+}
+
+function existsLink(p: string): boolean {
+  try {
+    lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function isDir(p: string): boolean {
   try {
@@ -352,8 +404,17 @@ export const sweepScript = (user: string): string =>
  * recorded keeper lives refuses, and so does a grant while processes of the crew user are left.
  */
 export class WindowsGrants {
+  /** The owner's SID (`*S-1-...`), read once. */
+  private sid: string | undefined;
+
   constructor(
-    private readonly o: { ownerRoot: string; user: string; run: RunFile; owner?: string },
+    private readonly o: {
+      ownerRoot: string;
+      user: string;
+      run: RunFile;
+      /** The SID `/setowner` gives the places back to; read from `whoami` when absent. */
+      owner?: string;
+    },
   ) {}
 
   paths(): string[] {
@@ -385,10 +446,17 @@ export class WindowsGrants {
   private async revokeLocked(): Promise<void> {
     const rec = readGrantRecord(this.o.ownerRoot, this.o.user);
     const failed: string[] = [];
-    const owner = this.o.owner ?? ownerAccount();
+    if (rec.paths.length > 0) this.sid ??= this.o.owner ?? (await ownerSid(this.o.run));
     for (const p of rec.paths) {
       if (!existsSync(p)) continue;
-      for (const args of revokeSteps(this.o.user, owner, p, isDir(p))) {
+      const dir = isDir(p);
+      try {
+        if (dir) removeLinks(p);
+      } catch {
+        failed.push(p);
+        continue;
+      }
+      for (const args of revokeSteps(this.o.user, this.sid as string, p, dir)) {
         const r = await this.o.run('icacls', args);
         if (r.code !== 0) {
           failed.push(p);
@@ -438,8 +506,9 @@ export class WindowsGrants {
           `a crew of the crew user ${this.o.user} is still running: one crew at a time on this machine, as all projects share the crew user`,
         );
       }
-      await this.revokeLocked();
+      // Nothing of the crew user may run while its places are taken back and walked.
       await this.sweep();
+      await this.revokeLocked();
       // Recorded before granting: a crash halfway leaves nothing that is not taken off later.
       writeGrantRecord(this.o.ownerRoot, this.o.user, { paths: grants.map((g) => g.path) });
       for (const g of grants) {
@@ -533,6 +602,9 @@ public static class StudioJob {
   static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
   [DllImport("kernel32.dll", SetLastError = true)]
   static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint pid);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+  public static void Terminate(IntPtr job) { TerminateJobObject(job, 1); }
   public static IntPtr Create() {
     IntPtr job = CreateJobObject(IntPtr.Zero, null);
     if (job == IntPtr.Zero) throw new Win32Exception();
@@ -558,6 +630,7 @@ $revoke = @(ConvertFrom-Json $raw.Substring(0, $nl))
 $spec = [Text.Encoding]::UTF8.GetBytes($raw.Substring($nl + 1))
 $raw = $null
 $p = $null
+$job = $null
 try {
   $job = [StudioJob]::Create()
   $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -588,16 +661,15 @@ try {
   [Console]::Error.WriteLine("studio keeper: $($_.Exception.Message)")
   $code = 2
 } finally {
-  # As Studio's revokeSteps: the grant goes, ACLs below go back to inherited, the owner is ours.
-  $owner = "$($env:USERDOMAIN)$($env:USERNAME)"
+  # Nothing the crew started outlives it here, then its grants go. The ownership reset and the
+  # walk for planted links are Studio's, at the next grant or stop (WindowsGrants.revokeAll).
+  if ($null -ne $job) { [StudioJob]::Terminate($job) }
   foreach ($r in $revoke) {
     if (-not (Test-Path -LiteralPath $r)) { continue }
-    icacls $r /remove:g $User /Q | Out-Null
-    if (Test-Path -LiteralPath $r -PathType Container) {
-      icacls (Join-Path $r '*') /reset /T /C /Q | Out-Null
-      icacls $r /setowner $owner /T /C /Q | Out-Null
-    } else {
-      icacls $r /setowner $owner /C /Q | Out-Null
+    icacls $r /remove:g $User /L /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      [Console]::Error.WriteLine("studio keeper: cannot take the grant off $r ($LASTEXITCODE)")
+      $code = 3
     }
   }
 }
