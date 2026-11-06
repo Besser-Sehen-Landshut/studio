@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.23.1] - 2026-11-06
+
+### Fixed
+
+- Migration numbers: an open pull request's new migrations are read from tree listings of the migrations folder
+  at its head and its merge base, no longer from its file list. A pull request that changes 3000 files or more
+  elsewhere (a code move) no longer counts as unreadable, so it no longer blocks `studio migration reserve` or
+  makes `list` warn. A tree GitHub reports as truncated still fails closed.
+
 ## [0.23.0] - 2026-11-06
 
 Cheaper on disk, one merge queue for every pull request, a register of migration numbers, a shared build
