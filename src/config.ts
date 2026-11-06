@@ -6,8 +6,13 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { isLang, LANGS } from '../hooks/i18n/index.js';
 import { globProblem } from './glob.js';
+import {
+  DEFAULT_NUMBER_PATTERN,
+  migrationDirProblem,
+  numberPatternProblem,
+} from './migration-pattern.js';
 import { allowedPluginSchema, pluginPinSchema } from './plugins.js';
-import { ONLY_SQL, PROOF_LANGUAGES, type ProofLanguage } from './proofs.js';
+import { PROOF_LANGUAGES, type ProofLanguage, UNKNOWN_LANGUAGE } from './proofs.js';
 import { REA_VERSION_RE, reaEnvKeyOk } from './rea.js';
 
 export { globProblem };
@@ -328,6 +333,29 @@ const acceptanceSchema = z.strictObject({
     .max(20),
 });
 
+/**
+ * `migrations:` in studio.yaml: where the project's database migrations live and how a number is
+ * read from a name there, for the register of reserved numbers (src/migration-numbers.ts).
+ */
+const migrationsSchema = z.strictObject({
+  // The folder, relative to the repository root; each file or folder directly in it is one.
+  dir: z.string().superRefine((d, ctx) => {
+    const problem = migrationDirProblem(d);
+    if (problem !== undefined) ctx.addIssue({ code: 'custom', message: problem });
+  }),
+  // A regular expression over a name in `dir` whose one capturing group is the number.
+  numberPattern: z
+    .string()
+    .default(DEFAULT_NUMBER_PATTERN)
+    .superRefine((p, ctx) => {
+      const problem = numberPatternProblem(p);
+      if (problem !== undefined) ctx.addIssue({ code: 'custom', message: problem });
+    }),
+  // The repository that holds them (default: primary_repo).
+  repo: repoName.optional(),
+});
+export type MigrationsConfig = z.infer<typeof migrationsSchema>;
+
 /** An evidence rule id: it names the rule in logs, lead lines and `studio exceptions grant`. */
 export const EVIDENCE_ID_RE = /^[a-z][a-z0-9-]{0,47}$/;
 
@@ -350,17 +378,18 @@ export const evidenceRuleSchema = z
     // The CI job that reports the hit, e.g. a migration guard.
     guard: workflowJob,
     // Every changed file of the pull request must lie under `paths`. comments_only: each one is a
-    // .sql file that changes plain comments only. paths_only: that is all.
+    // file in one of `languages` that changes plain comments only. paths_only: that is all.
     proof: z.enum(['comments_only', 'whitespace_only', 'paths_only']),
     paths: z.array(globSchema).min(1).max(50),
-    // comments_only: the languages it reads (sql only so far); any other file proves nothing.
+    // comments_only: the languages it reads (PROOF_LANGUAGES, by file extension); any other file
+    // proves nothing.
     languages: z
       .array(
         z
           .string()
           .refine(
             (l): l is ProofLanguage => (PROOF_LANGUAGES as readonly string[]).includes(l),
-            ONLY_SQL,
+            UNKNOWN_LANGUAGE,
           ),
       )
       .min(1)
@@ -445,6 +474,30 @@ export function wildcardOverIp(entry: string): boolean {
   }
 }
 
+/**
+ * `merge.runner_load`: the queue merges only while at most `max_busy` of the organisation's
+ * self-hosted runners whose name matches `name_pattern` are busy, in each of `samples` reads
+ * `interval_s` apart. A read that fails counts as busy.
+ */
+export const runnerLoadSchema = z.strictObject({
+  org: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/, 'must be a GitHub organisation name'),
+  namePattern: z
+    .string()
+    .min(1)
+    .max(200)
+    .superRefine((p, ctx) => {
+      try {
+        new RegExp(p);
+      } catch {
+        ctx.addIssue({ code: 'custom', message: 'not a valid regular expression' });
+      }
+    }),
+  maxBusy: z.number().int().nonnegative(),
+  samples: z.number().int().min(1).max(10).default(2),
+  intervalS: z.number().nonnegative().max(600).default(30),
+});
+export type RunnerLoad = z.infer<typeof runnerLoadSchema>;
+
 /** `limits:` in studio.yaml and in the owner config. */
 const dailyLimitsSchema = z.strictObject({
   dailyCostUsd: z.number().positive().optional(),
@@ -467,6 +520,9 @@ export const studioConfigSchema = z
       strategy: z.enum(['studio-queue', 'native-queue']),
       contractPaths: strList,
       method: z.enum(['merge', 'squash', 'rebase']).default('merge'),
+      // Optional gate before every merge of the queue: the self-hosted runners of an organisation
+      // that the merged repositories' CI uses. Off when unset.
+      runnerLoad: runnerLoadSchema.optional(),
     }),
     // Partial record keyed by role template name; at least one role must be configured.
     roles: z
@@ -522,6 +578,8 @@ export const studioConfigSchema = z
         analyzerTimeoutMinutes: z.number().int().min(5).max(240).default(30),
       })
       .optional(),
+    // The migrations folder and number scheme for `studio migration` (src/migration-numbers.ts).
+    migrations: migrationsSchema.optional(),
     // Exceptions by evidence: guard jobs whose hits a command can prove false alarms.
     evidence: z.array(evidenceRuleSchema).max(20).optional(),
     // Workers on other machines, per label (`runs_on` of an item): what their crews must never
@@ -548,6 +606,13 @@ export const studioConfigSchema = z
         code: 'custom',
         path: ['cache', 'enabled'],
         message: 'the build cache is built by a crew of the role cache: add roles.cache',
+      });
+    }
+    if (cfg.migrations?.repo !== undefined && !cfg.repos.includes(cfg.migrations.repo)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['migrations', 'repo'],
+        message: 'must be one of repos',
       });
     }
     const ids = new Set<string>();

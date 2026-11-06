@@ -5191,3 +5191,420 @@ describe('tick --dry-run', () => {
     expect((await cli(fx, fakePorts(passingGh().gh).ports, 'tick', 'x', '--dry-run')).code).toBe(1);
   });
 });
+
+describe('studio migration: the register of reserved migration numbers', () => {
+  const MIG_YAML = `${STUDIO_YAML}migrations: { dir: db/m }\n`;
+  type MigView = {
+    main?: string[];
+    open?: { number: number; files: { path: string; changeType: string }[] }[];
+    prFiles?: Record<number, string[]>;
+    /** Lines that fail as GitHub would on an outage. */
+    fail?: RegExp;
+  };
+  /** GitHub with migrations on main and in open pull requests; other lines go to `rest`. */
+  const migGh = (o: MigView, rest: (line: string) => GhReply | undefined = () => undefined) =>
+    fakeGh((l) => {
+      if (o.fail?.test(l)) return { code: 1, stderr: 'HTTP 502' };
+      if (l === 'repo view org/app --json defaultBranchRef') {
+        return { stdout: JSON.stringify({ defaultBranchRef: { name: 'main' } }) };
+      }
+      if (l === 'api repos/org/app/git/trees/main%3Adb%2Fm') {
+        return {
+          stdout: JSON.stringify({
+            truncated: false,
+            tree: (o.main ?? []).map((path) => ({ path, type: 'blob' })),
+          }),
+        };
+      }
+      if (l.startsWith('pr list --repo org/app --state open --limit 1000 --json number,files')) {
+        return { stdout: JSON.stringify(o.open ?? []) };
+      }
+      const m = /^api --paginate repos\/org\/app\/pulls\/(\d+)\/files/.exec(l);
+      if (m) {
+        return {
+          stdout: (o.prFiles?.[Number(m[1])] ?? [])
+            .map((f) => JSON.stringify(['added', f]))
+            .join('\n'),
+        };
+      }
+      const v = /^pr view (\d+) --repo org\/app --json changedFiles$/.exec(l);
+      if (v)
+        return { stdout: JSON.stringify({ changedFiles: o.prFiles?.[Number(v[1])]?.length ?? 0 }) };
+      return rest(l);
+    });
+  const reserve = (num: number, holder: string, purpose: string) => ({
+    number: num,
+    for: holder,
+    purpose,
+    at: '2026-10-31T09:00:00.000Z',
+    status: 'reserved',
+  });
+  const writeRegister = (fx: Fx, reservations: unknown[]) => {
+    checkStateMarker(fx.state, {
+      projectRealpath: projectRealpath(fx.project),
+      originUrl: git(fx.project, 'remote', 'get-url', 'origin'),
+    });
+    writeStateFile(
+      fx.state,
+      join(fx.state, 'migration-numbers.json'),
+      JSON.stringify({ v: 1, reservations }),
+    );
+  };
+  const view31 = (l: string): GhReply | undefined =>
+    /^pr view 31 --repo org\/app/.test(l)
+      ? { stdout: JSON.stringify({ headRefOid: HEAD, headRefName: 'studio/APP-1', ...OWN }) }
+      : undefined;
+  const PR31 = {
+    main: ['0001_a.sql'],
+    open: [{ number: 31, files: [{ path: 'db/m/0003_x.sql', changeType: 'ADDED' }] }],
+    prFiles: { 31: ['db/m/0003_x.sql'] },
+  };
+
+  it('reserve gives the next free number, list shows it, release frees it', async () => {
+    const fx = makeFx([], MIG_YAML);
+    const { gh } = migGh({
+      main: ['0001_a.sql', '0002_b.sql'],
+      open: [{ number: 7, files: [{ path: 'db/m/0003_c.sql', changeType: 'ADDED' }] }],
+    });
+    const { ports } = fakePorts(gh);
+    const r = await cli(fx, ports, 'migration', 'reserve', '--for', 'APP-1', '--purpose', 'users');
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out)).toMatchObject({ reserved: 4, for: 'APP-1', purpose: 'users' });
+    const taken = await cli(
+      fx,
+      ports,
+      'migration',
+      'reserve',
+      '--number',
+      '4',
+      '--for',
+      'APP-2',
+      '--purpose',
+      'orders',
+    );
+    expect(taken.code).toBe(1);
+    expect(taken.err).toMatch(/number 4 is reserved for APP-1 \(users\)/);
+    const list = await cli(fx, ports, 'migration', 'list');
+    expect(list.code).toBe(0);
+    expect(list.out).toMatch(/4\s+reserved\s+APP-1\s+users/);
+    expect(list.out).toMatch(/next free: 5/);
+    const json = JSON.parse((await cli(fx, ports, 'migration', 'list', '--json')).out);
+    expect(json.reservations).toEqual([expect.objectContaining({ number: 4, status: 'reserved' })]);
+    expect((await cli(fx, ports, 'migration', 'release', '4')).code).toBe(0);
+    const after = JSON.parse((await cli(fx, ports, 'migration', 'list', '--json')).out);
+    expect(after.reservations[0].status).toBe('released');
+    // The register is the lead's state, never a file in the repository.
+    expect(existsSync(join(fx.state, 'migration-numbers.json'))).toBe(true);
+    expect(git(fx.project, 'status', '--porcelain', '--untracked-files=all')).not.toMatch(
+      /migration-numbers/,
+    );
+  });
+
+  it('list marks a reserved number that landed on main', async () => {
+    const fx = makeFx([], MIG_YAML);
+    writeRegister(fx, [reserve(2, 'APP-1', 'users')]);
+    const { gh } = migGh({ main: ['0001_a.sql', '0002_users.sql'] });
+    const listed = await cli(fx, fakePorts(gh).ports, 'migration', 'list', '--json');
+    expect(listed.err).toBe('');
+    const json = JSON.parse(listed.out);
+    expect(json.reservations).toEqual([
+      expect.objectContaining({ number: 2, status: 'landed', file: '0002_users.sql' }),
+    ]);
+    expect(json.next).toBe(3);
+  });
+
+  it('refuses without a migrations block, for crews, and with flags of another command', async () => {
+    const plain = makeFx([]);
+    const { ports } = fakePorts(migGh({}).gh);
+    const none = await cli(plain, ports, 'migration', 'reserve', '--for', 'A', '--purpose', 'x');
+    expect(none.code).toBe(1);
+    expect(none.err).toMatch(/no migrations block in studio\.yaml/);
+    const fx = makeFx([], MIG_YAML);
+    const crew = { ...fx, env: { ...fx.env, STUDIO_ROLE: 'crew' } };
+    expect(
+      (await cli(crew, ports, 'migration', 'reserve', '--for', 'A', '--purpose', 'x')).code,
+    ).toBe(1);
+    const wrong = await cli(fx, ports, 'board', '--purpose', 'x');
+    expect(wrong.code).toBe(1);
+    expect(wrong.err).toMatch(/--number, --for and --purpose work with migration reserve only/);
+    expect((await cli(fx, ports, 'migration', 'reserve', '--purpose', 'x')).code).toBe(1);
+    expect((await cli(fx, ports, 'migration', 'release', 'x')).code).toBe(1);
+    expect((await cli(fx, ports, 'migration', 'frobnicate')).code).toBe(1);
+  });
+
+  it('doctor names the register', async () => {
+    const fx = makeFx([], MIG_YAML);
+    const r = await cli(fx, fakePorts(migGh({}).gh).ports, 'doctor');
+    expect(r.out).toMatch(/^migration register: db\/m in org\/app, 0 reserved, 0 landed$/m);
+  });
+
+  it('collect blocks a crew pull request whose new migration takes a number reserved for another', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned' }], MIG_YAML);
+    writeRegister(fx, [reserve(3, 'APP-2', 'orders')]);
+    writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 31\nhead_sha: ${HEAD}\ntests_run: 3`);
+    const r = await cli(fx, fakePorts(migGh(PR31, view31).gh).ports, 'collect', 'APP-1');
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/pull request 31 is not reviewed, APP-1 is blocked for the lead/);
+    const item = statusOf(fx, 'APP-1');
+    expect(item?.status).toBe('blocked');
+    expect(item?.notes?.join('\n')).toContain(
+      'migration number: 0003_x.sql: number 3 is reserved for APP-2 (orders)',
+    );
+  });
+
+  it('collect waits when GitHub cannot be read, and lets its own reserved number go on', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'assigned' }], MIG_YAML);
+    writeRegister(fx, [reserve(3, 'APP-1', 'mine')]);
+    writeReport(fx, 'APP-1', `status: done\nitem: APP-1\npr: 31\nhead_sha: ${HEAD}\ntests_run: 3`);
+    const down = migGh({ ...PR31, fail: /git\/trees/ }, view31);
+    const wait = await cli(fx, fakePorts(down.gh).ports, 'collect', 'APP-1');
+    expect(wait.code).toBe(1);
+    expect(wait.err).toMatch(/migration numbers cannot be read now.*collect again, nothing moved/);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('assigned');
+    const ok = await cli(fx, fakePorts(migGh(PR31, view31).gh).ports, 'collect', 'APP-1');
+    expect(ok.err).toBe('');
+    expect(ok.code).toBe(0);
+    expect(statusOf(fx, 'APP-1')).toMatchObject({ status: 'in_review', pr: 31 });
+  });
+
+  it('queue run fails a pull request whose new migration number is already on main', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }], MIG_YAML);
+    const merges: string[] = [];
+    const pass = passingGh((l) => {
+      if (l.startsWith('pr merge')) merges.push(l);
+    });
+    const mig = migGh({
+      main: ['0001_a.sql', '0002_landed.sql'],
+      open: [{ number: 5, files: [{ path: 'db/m/0002_mine.sql', changeType: 'ADDED' }] }],
+      prFiles: { 5: ['db/m/0002_mine.sql'] },
+    });
+    // The register's lines first, every other one as a passing queue run answers it.
+    const gh: Gh = {
+      api: pass.gh.api,
+      run: async (args, opts) => {
+        const r = await mig.gh.run(args, opts).catch(() => undefined);
+        return r ?? pass.gh.run(args, opts);
+      },
+    };
+    const { ports } = fakePorts(gh);
+    expect((await cli(fx, ports, 'queue', 'add', 'org/app#5')).code).toBe(0);
+    const q = await cli(fx, ports, 'queue', 'run');
+    expect(q.code).toBe(0);
+    expect(merges).toEqual([]);
+    const item = statusOf(fx, 'APP-1');
+    expect(item?.status).toBe('in_review');
+    expect(item?.notes?.join('\n')).toContain(
+      'migration number: 0002_mine.sql: number 2 is already on main (0002_landed.sql)',
+    );
+  });
+
+  it('an external pull request through the queue is checked too; its --by may hold the number', async () => {
+    const run = async (holder: string) => {
+      const fx = makeFx([], MIG_YAML);
+      writeRegister(fx, [reserve(3, holder, 'orders')]);
+      const merges: string[] = [];
+      const mig = migGh(
+        {
+          main: ['0001_a.sql'],
+          open: [{ number: 7, files: [{ path: 'db/m/0003_x.sql', changeType: 'ADDED' }] }],
+          prFiles: { 7: ['db/m/0003_x.sql'] },
+        },
+        (l) => {
+          if (/^pr view 7 --repo org\/app --json headRefOid,state,mergeable/.test(l)) {
+            return {
+              stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN', mergeable: 'MERGEABLE' }),
+            };
+          }
+          if (l.startsWith('pr checks 7')) {
+            return { stdout: JSON.stringify([{ name: 'ci', bucket: 'pass' }]) };
+          }
+          if (l.startsWith('run list --repo org/app --branch main --event push')) {
+            return { stdout: '[]' };
+          }
+          if (l.startsWith('pr merge 7')) {
+            merges.push(l);
+            return {};
+          }
+          if (l.includes('--json mergeCommit')) {
+            return { stdout: JSON.stringify({ mergeCommit: { oid: 'c'.repeat(40) } }) };
+          }
+          return undefined;
+        },
+      );
+      const { ports } = fakePorts(mig.gh);
+      expect((await cli(fx, ports, 'merge', '7', '--by', 'peer-session')).code).toBe(0);
+      expect((await cli(fx, ports, 'queue', 'run')).code).toBe(0);
+      const done = JSON.parse((await cli(fx, ports, 'queue', 'list')).out).done;
+      return { merges, done };
+    };
+    const other = await run('APP-2');
+    expect(other.merges).toEqual([]);
+    expect(other.done[0]).toMatchObject({
+      pr: 7,
+      result: 'failed',
+      reason: expect.stringContaining('number 3 is reserved for APP-2 (orders)'),
+    });
+    const own = await run('peer-session');
+    expect(own.merges).toHaveLength(1);
+    expect(own.done[0]).toMatchObject({ pr: 7, result: 'merged' });
+  });
+});
+
+describe('merge: any pull request through the queue', () => {
+  /** A green, open PR 7 without a board item. */
+  const externalGh = (check = 'pass') =>
+    fakeGh((l) => {
+      if (/^pr view 7 --repo org\/app --json headRefOid,state,mergeable/.test(l)) {
+        return {
+          stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN', mergeable: 'MERGEABLE' }),
+        };
+      }
+      if (l.startsWith('pr checks 7')) {
+        return { stdout: JSON.stringify([{ name: 'ci', bucket: check }]) };
+      }
+      if (l.startsWith('run list --repo org/app --branch main --event push')) {
+        return { stdout: '[]' };
+      }
+      if (l.startsWith('pr merge 7')) return {};
+      if (l.includes('--json mergeCommit')) {
+        return { stdout: JSON.stringify({ mergeCommit: { oid: 'c'.repeat(40) } }) };
+      }
+      return undefined;
+    });
+
+  it('queues an external PR, lists it, and the queue merges it without touching the board', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const g = externalGh();
+    const { ports } = fakePorts(g.gh);
+    const add = await cli(fx, ports, 'merge', '7', '--by', 'peer-session');
+    expect(add.code).toBe(0);
+    expect(JSON.parse(add.out)).toMatchObject({
+      queued: 'org/app#7',
+      external: true,
+      by: 'peer-session',
+      head: HEAD,
+      pending: 1,
+    });
+    const list = JSON.parse((await cli(fx, ports, 'queue')).out);
+    expect(list.pending).toEqual([
+      {
+        pr: 7,
+        repo: 'org/app',
+        external: { by: 'peer-session', at: expect.any(String), head: HEAD },
+      },
+    ]);
+    const run = await cli(fx, ports, 'queue', 'run');
+    expect(run.code).toBe(0);
+    expect(g.calls.some((c) => c.startsWith('pr update-branch'))).toBe(false);
+    expect(g.calls).toContain(`pr merge 7 --repo org/app --squash --match-head-commit ${HEAD}`);
+    expect(statusOf(fx, 'APP-1')?.status).toBe('in_review');
+    const after = JSON.parse((await cli(fx, ports, 'queue', 'list')).out);
+    expect(after.done).toEqual([
+      expect.objectContaining({
+        pr: 7,
+        result: 'merged',
+        status: 'MERGED',
+        external: expect.any(Object),
+      }),
+    ]);
+    // Metrics count the studio's own work only.
+    expect(existsSync(join(fx.state, 'metrics.jsonl'))).toBe(false);
+  });
+
+  it('refuses a PR of a board item, an unconfigured repo, a closed PR and a bad --by', async () => {
+    const fx = makeFx([{ id: 'APP-1', status: 'in_review', pr: 5 }]);
+    const { ports } = fakePorts(
+      fakeGh((l) =>
+        l.startsWith('pr view 8 ')
+          ? { stdout: JSON.stringify({ headRefOid: HEAD, state: 'CLOSED', mergeable: 'UNKNOWN' }) }
+          : undefined,
+      ).gh,
+    );
+    const board = await cli(fx, ports, 'merge', '5');
+    expect(board.code).toBe(1);
+    expect(board.err).toContain('belongs to board item APP-1');
+    expect((await cli(fx, ports, 'merge', '7', '--repo', 'other/x')).err).toContain(
+      'repository other/x is not configured',
+    );
+    expect((await cli(fx, ports, 'merge', '8')).err).toContain('org/app#8 is closed');
+    expect((await cli(fx, ports, 'merge', '7', '--by', 'two words')).code).toBe(1);
+    expect((await cli(fx, ports, 'merge', 'abc')).code).toBe(1);
+    const crew = { ...fx, env: { ...fx.env, STUDIO_ROLE: 'crew' } };
+    expect((await cli(crew, ports, 'merge', '7')).err).toContain('not for crew sessions');
+    expect(existsSync(join(fx.state, 'queue.json'))).toBe(false);
+  });
+
+  it('--wait runs the queue and reports MERGED, or FAILED with exit 1', async () => {
+    const fx = makeFx([]);
+    const ok = await cli(fx, fakePorts(externalGh().gh).ports, 'merge', '7', '--wait');
+    expect(ok.code).toBe(0);
+    expect(JSON.parse(ok.out)).toMatchObject({ queued: 'org/app#7', status: 'MERGED' });
+    const fx2 = makeFx([]);
+    const bad = await cli(fx2, fakePorts(externalGh('fail').gh).ports, 'merge', '7', '--wait');
+    expect(bad.code).toBe(1);
+    expect(JSON.parse(bad.out)).toMatchObject({ status: 'FAILED', reason: 'check ci failed' });
+  });
+
+  it('a push after studio merge fails the entry; with --follow-head the new head merges', async () => {
+    /** PR 7 at HEAD when queued, at OTHER from then on. */
+    const movingGh = () => {
+      let views = 0;
+      return fakeGh((l) => {
+        if (/^pr view 7 --repo org\/app --json headRefOid,state,mergeable/.test(l)) {
+          const head = views++ === 0 ? HEAD : OTHER;
+          return {
+            stdout: JSON.stringify({ headRefOid: head, state: 'OPEN', mergeable: 'MERGEABLE' }),
+          };
+        }
+        if (l.startsWith('run list --repo org/app')) return { stdout: '[]' };
+        if (l.startsWith('pr merge 7')) return {};
+        if (l.includes('--json mergeCommit')) {
+          return { stdout: JSON.stringify({ mergeCommit: { oid: 'c'.repeat(40) } }) };
+        }
+        return undefined;
+      });
+    };
+    const fx = makeFx([]);
+    const pinned = movingGh();
+    const r = await cli(fx, fakePorts(pinned.gh).ports, 'merge', '7', '--wait');
+    expect(r.code).toBe(1);
+    expect(JSON.parse(r.out)).toMatchObject({
+      followHead: false,
+      status: 'FAILED',
+      reason: `head moved since enqueue: ${HEAD} -> ${OTHER}; re-run studio merge`,
+    });
+    expect(pinned.calls.some((c) => c.startsWith('pr merge 7'))).toBe(false);
+
+    const fx2 = makeFx([]);
+    const follow = movingGh();
+    const f = await cli(fx2, fakePorts(follow.gh).ports, 'merge', '7', '--follow-head', '--wait');
+    expect(f.code).toBe(0);
+    expect(JSON.parse(f.out)).toMatchObject({ followHead: true, status: 'MERGED' });
+    expect(follow.calls).toContain(
+      `pr merge 7 --repo org/app --squash --match-head-commit ${OTHER}`,
+    );
+    expect((await cli(fx2, fakePorts(follow.gh).ports, 'queue', '--follow-head')).code).toBe(1);
+  });
+
+  it('a board item that took the PR meanwhile stops the external merge', async () => {
+    const fx = makeFx([]);
+    const g = externalGh();
+    const { ports } = fakePorts(g.gh);
+    expect((await cli(fx, ports, 'merge', '7')).code).toBe(0);
+    writeFileSync(
+      join(fx.project, '.studio', 'board.yaml'),
+      `items:\n${itemYaml({ id: 'APP-2', status: 'in_review', pr: 7 })}\n`,
+    );
+    expect((await cli(fx, ports, 'queue', 'run')).code).toBe(0);
+    expect(g.calls.some((c) => c.startsWith('pr merge 7'))).toBe(false);
+    const q = JSON.parse(readFileSync(join(fx.state, 'queue.json'), 'utf8'));
+    expect(q.done[0]).toMatchObject({
+      pr: 7,
+      result: 'failed',
+      reason: 'the pull request belongs to board item APP-2',
+    });
+    // The board item is not moved by the external entry's result.
+    expect(statusOf(fx, 'APP-2')?.status).toBe('in_review');
+  });
+});
