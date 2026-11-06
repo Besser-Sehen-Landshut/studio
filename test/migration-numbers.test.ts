@@ -9,7 +9,6 @@ import {
   type MigrationScheme,
   type MigrationUse,
   migrationCollisions,
-  pullRequestFiles,
   pullRequestMigrationCheck,
   type Register,
   readMigrationUse,
@@ -172,7 +171,7 @@ describe('reserving', () => {
     // In an open pull request, any author's: left out of the next free number, nothing held.
     const inPr = fakeGh({
       main: ['0001_a.sql'],
-      open: [{ number: 9, files: [{ path: `db/m/${big}`, changeType: 'ADDED' }] }],
+      open: [{ number: 9, head: ['0001_a.sql', big] }],
     });
     const use = await readMigrationUse(inPr.gh, SCHEME);
     expect(use.tooLarge).toEqual([]);
@@ -382,16 +381,35 @@ describe('collisions of a pull request', () => {
   });
 });
 
+/** An open pull request as the fake GitHub holds it: the folder's names at its head and base. */
+interface FakePr {
+  number: number;
+  /** Names in the folder at the head; undefined: the folder is not there. */
+  head?: string[];
+  /** Names at the merge base; default: those on main. */
+  base?: string[];
+  /** The head's tree listing comes back truncated. */
+  truncated?: boolean;
+}
+const headOf = (n: number) => String(n).padStart(40, 'a');
+const mergeBaseOf = (n: number) => String(n).padStart(40, 'b');
+const BASE_OID = 'c'.repeat(40);
+
 /** A gh that answers like GitHub for the register's reads. */
-function fakeGh(o: {
-  main?: string[] | 'missing';
-  open?: { number: number; files: { path: string; changeType: string }[] }[];
-  prFiles?: Record<number, string[]>;
-  /** What `changedFiles` says per pull request; default: as many as listed. */
-  changed?: Record<number, number>;
-  fail?: RegExp;
-}) {
+function fakeGh(o: { main?: string[] | 'missing'; open?: FakePr[]; fail?: RegExp }) {
   const calls: string[] = [];
+  const open = o.open ?? [];
+  const tree = (names: string[] | undefined, truncated = false) =>
+    names === undefined
+      ? { code: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' }
+      : {
+          code: 0,
+          stdout: JSON.stringify({
+            truncated,
+            tree: names.map((path) => ({ path, type: 'blob' })),
+          }),
+          stderr: '',
+        };
   const gh: Gh = {
     api: async () => {
       throw new Error('api is not used');
@@ -401,33 +419,39 @@ function fakeGh(o: {
       calls.push(line);
       const ok = (stdout: string) => ({ code: 0, stdout, stderr: '' });
       if (o.fail?.test(line)) return { code: 1, stdout: '', stderr: 'HTTP 502' };
+      const mainNames = o.main === 'missing' ? undefined : (o.main ?? []);
       if (line === 'repo view org/app --json defaultBranchRef') {
         return ok(JSON.stringify({ defaultBranchRef: { name: 'main' } }));
       }
-      if (line === 'api repos/org/app/git/trees/main%3Adb%2Fm') {
-        if (o.main === 'missing')
-          return { code: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' };
+      const t = /^api repos\/org\/app\/git\/trees\/(\S+)$/.exec(line);
+      if (t) {
+        const ref = decodeURIComponent(t[1] as string).replace(/:db\/m$/, '');
+        if (ref === 'main') return tree(mainNames);
+        const atHead = open.find((p) => headOf(p.number) === ref);
+        if (atHead) return tree(atHead.head, atHead.truncated);
+        const atBase = open.find((p) => mergeBaseOf(p.number) === ref);
+        if (atBase) return tree(atBase.base ?? mainNames);
+      }
+      const c =
+        /^api repos\/org\/app\/compare\/(\w+)\.\.\.(\w+) --jq \.merge_base_commit\.sha$/.exec(line);
+      if (c && c[1] === BASE_OID) {
+        const pr = open.find((p) => headOf(p.number) === c[2]);
+        if (pr) return ok(`${mergeBaseOf(pr.number)}\n`);
+      }
+      if (line.startsWith('pr list --repo org/app --state open')) {
         return ok(
-          JSON.stringify({
-            truncated: false,
-            tree: (o.main ?? []).map((path) => ({ path, type: 'blob' })),
-          }),
+          JSON.stringify(
+            open.map((p) => ({
+              number: p.number,
+              headRefOid: headOf(p.number),
+              baseRefOid: BASE_OID,
+            })),
+          ),
         );
       }
-      if (line.startsWith('pr list --repo org/app --state open'))
-        return ok(JSON.stringify(o.open ?? []));
-      const m = /^api --paginate repos\/org\/app\/pulls\/(\d+)\/files/.exec(line);
-      if (m) {
-        return ok(
-          (o.prFiles?.[Number(m[1])] ?? []).map((f) => JSON.stringify(['added', f])).join('\n'),
-        );
-      }
-      const v = /^pr view (\d+) --repo org\/app --json changedFiles$/.exec(line);
+      const v = /^pr view (\d+) --repo org\/app --json headRefOid,baseRefOid$/.exec(line);
       if (v) {
-        const pr = Number(v[1]);
-        return ok(
-          JSON.stringify({ changedFiles: o.changed?.[pr] ?? o.prFiles?.[pr]?.length ?? 0 }),
-        );
+        return ok(JSON.stringify({ headRefOid: headOf(Number(v[1])), baseRefOid: BASE_OID }));
       }
       return { code: 1, stdout: '', stderr: `unscripted: ${line}` };
     },
@@ -436,19 +460,20 @@ function fakeGh(o: {
 }
 
 describe('what main and the open pull requests hold', () => {
-  it('reads numbers on main and new ones in open pull requests', async () => {
+  it('reads numbers on main and the ones each open pull request adds over its merge base', async () => {
     const { gh } = fakeGh({
       main: ['0001_a.sql', '0002_b.sql', 'README.md'],
       open: [
+        // Adds 0003; 0009_gone.sql was at its merge base and is gone at its head.
         {
           number: 5,
-          files: [
-            { path: 'db/m/0003_c.sql', changeType: 'ADDED' },
-            { path: 'db/m/0002_b.sql', changeType: 'MODIFIED' },
-            { path: 'db/m/0009_gone.sql', changeType: 'DELETED' },
-          ],
+          head: ['0001_a.sql', '0002_b.sql', '0003_c.sql'],
+          base: ['0001_a.sql', '0002_b.sql', '0009_gone.sql'],
         },
-        { number: 6, files: [{ path: 'src/x.ts', changeType: 'MODIFIED' }] },
+        // Branched before 0002 landed: what main gained since is no number of its own.
+        { number: 6, head: ['0001_a.sql'], base: ['0001_a.sql'] },
+        // A pull request without the folder at its head adds nothing.
+        { number: 7 },
       ],
     });
     const u = await readMigrationUse(gh, SCHEME);
@@ -459,19 +484,58 @@ describe('what main and the open pull requests hold', () => {
     expect([...u.prs]).toEqual([[5, new Map([[3, '0003_c.sql']])]]);
   });
 
-  it('a pull request with a full file list is read page by page', async () => {
-    const many = Array.from({ length: 100 }, (_, i) => ({
-      path: `src/f${i}.ts`,
-      changeType: 'ADDED',
-    }));
+  it('a huge pull request outside the folder blocks nothing: only the folder is listed', async () => {
+    // A code move of thousands of files: the folder at its head is as at its merge base.
     const { gh, calls } = fakeGh({
-      open: [{ number: 5, files: many }],
-      prFiles: { 5: [...many.map((f) => f.path), 'db/m/0004_late.sql'] },
+      main: ['0001_a.sql'],
+      open: [{ number: 5, head: ['0001_a.sql'] }],
     });
     const u = await readMigrationUse(gh, SCHEME);
-    expect(u.prs.get(5)?.get(4)).toBe('0004_late.sql');
-    expect(calls.some((c) => c.startsWith('api --paginate repos/org/app/pulls/5/files'))).toBe(
-      true,
+    expect(u.prs.size).toBe(0);
+    expect(calls.some((c) => /pulls\/5\/files|changedFiles|--json files/.test(c))).toBe(false);
+    const r = stateRoot();
+    const reserved = await reserveMigrationNumber({
+      gh,
+      root: r,
+      scheme: SCHEME,
+      request: { for: 'B-1', purpose: 'x' },
+      now: NOW,
+    });
+    expect(reserved.number).toBe(2);
+    const check = await pullRequestMigrationCheck({
+      gh,
+      root: r,
+      config: parse('migrations: { dir: db/m }\n'),
+      repo: 'org/app',
+      pr: 5,
+      holder: [],
+      now: NOW,
+    });
+    expect(check).toEqual({});
+  });
+
+  it('a truncated tree is unreadable, never read in part', async () => {
+    const { gh } = fakeGh({
+      main: ['0001_a.sql'],
+      open: [{ number: 5, head: ['0001_a.sql', '0002_x.sql'], truncated: true }],
+    });
+    await expect(readMigrationUse(gh, SCHEME)).rejects.toThrow(
+      new RegExp(`cannot read db/m at ${headOf(5).slice(0, 12)} in full`),
+    );
+    const res = await pullRequestMigrationCheck({
+      gh,
+      root: stateRoot(),
+      config: parse('migrations: { dir: db/m }\n'),
+      repo: 'org/app',
+      pr: 5,
+      holder: [],
+      now: NOW,
+    });
+    expect(res.unreadable).toMatch(/in full/);
+    // A pull request list at its limit may be cut as well.
+    const full = Array.from({ length: 1000 }, (_, i) => ({ number: i + 1 }));
+    await expect(readMigrationUse(fakeGh({ open: full }).gh, SCHEME)).rejects.toThrow(
+      /in full: 1000 or more are open/,
     );
   });
 
@@ -479,8 +543,7 @@ describe('what main and the open pull requests hold', () => {
     const big = `${'9'.repeat(16)}_x.sql`;
     const { gh } = fakeGh({
       main: ['0001_a.sql'],
-      open: [{ number: 9, files: [{ path: `db/m/${big}`, changeType: 'ADDED' }] }],
-      prFiles: { 9: [`db/m/${big}`] },
+      open: [{ number: 9, head: ['0001_a.sql', big] }],
     });
     const res = await pullRequestMigrationCheck({
       gh,
@@ -496,43 +559,16 @@ describe('what main and the open pull requests hold', () => {
     );
   });
 
-  it('a file list GitHub may have cut is unreadable, never read in part', async () => {
-    // Fewer files listed than the pull request changes.
-    const cut = fakeGh({ prFiles: { 5: ['db/m/0004_a.sql'] }, changed: { 5: 2 } });
-    await expect(pullRequestFiles(cut.gh, 'org/app', 5)).rejects.toThrow(
-      /GitHub listed 1 of its 2 changed files/,
-    );
-    // At GitHub's cap of 3000, even when the counts agree.
-    const many = Array.from({ length: 3000 }, (_, i) => `src/f${i}.ts`);
-    await expect(
-      pullRequestFiles(fakeGh({ prFiles: { 5: many } }).gh, 'org/app', 5),
-    ).rejects.toThrow(/3000 files or more/);
-    // A pull request list at its limit may be cut as well.
-    const full = Array.from({ length: 1000 }, (_, i) => ({ number: i + 1, files: [] }));
-    await expect(readMigrationUse(fakeGh({ open: full }).gh, SCHEME)).rejects.toThrow(
-      /in full: 1000 or more are open/,
-    );
-    // The check of a pull request then waits instead of passing it.
-    const res = await pullRequestMigrationCheck({
-      gh: cut.gh,
-      root: stateRoot(),
-      config: parse('migrations: { dir: db/m }\n'),
-      repo: 'org/app',
-      pr: 5,
-      holder: [],
-      now: NOW,
-    });
-    expect(res.unreadable).toMatch(/listed 1 of its 2/);
-  });
-
   it('a folder not on main yet holds no numbers; a read that fails throws', async () => {
     expect((await readMigrationUse(fakeGh({ main: 'missing' }).gh, SCHEME)).dirOnMain).toBe(false);
     await expect(readMigrationUse(fakeGh({ fail: /^pr list/ }).gh, SCHEME)).rejects.toThrow(
       /cannot read the open pull requests/,
     );
-    await expect(readMigrationUse(fakeGh({ fail: /git\/trees/ }).gh, SCHEME)).rejects.toThrow(
-      /cannot read db\/m on main/,
+    await expect(readMigrationUse(fakeGh({ fail: /trees/ }).gh, SCHEME)).rejects.toThrow(
+      /cannot read db\/m at main/,
     );
+    const noBase = fakeGh({ open: [{ number: 5, head: ['0002_x.sql'] }], fail: /compare/ });
+    await expect(readMigrationUse(noBase.gh, SCHEME)).rejects.toThrow(/cannot read the merge base/);
   });
 
   it('reserve reads first and refuses without writing when GitHub cannot be read', async () => {
@@ -561,8 +597,11 @@ describe('what main and the open pull requests hold', () => {
 describe('the check of one pull request', () => {
   const config = parse('migrations: { dir: db/m }\n');
 
-  it('passes a pull request outside the folder without reading main', async () => {
-    const { gh, calls } = fakeGh({ prFiles: { 30: ['src/x.ts'] } });
+  it('passes a pull request that adds nothing to the folder without reading main', async () => {
+    const { gh, calls } = fakeGh({
+      main: ['0001_a.sql'],
+      open: [{ number: 30, head: ['0001_a.sql'] }],
+    });
     const r = await pullRequestMigrationCheck({
       gh,
       root: stateRoot(),
@@ -573,10 +612,10 @@ describe('the check of one pull request', () => {
       now: NOW,
     });
     expect(r).toEqual({});
-    expect(calls.some((c) => c.includes('git/trees'))).toBe(false);
+    expect(calls.some((c) => c.includes('main%3A'))).toBe(false);
   });
 
-  it('blocks a number reserved for another item and marks landed ones', async () => {
+  it('blocks a migration it adds whose number is reserved for another, and marks landed ones', async () => {
     const r = stateRoot();
     writeFileSync(
       join(r, 'migration-numbers.json'),
@@ -590,8 +629,7 @@ describe('the check of one pull request', () => {
     );
     const { gh } = fakeGh({
       main: ['0001_a.sql', '0002_b.sql'],
-      open: [{ number: 30, files: [{ path: 'db/m/0003_x.sql', changeType: 'ADDED' }] }],
-      prFiles: { 30: ['db/m/0003_x.sql'] },
+      open: [{ number: 30, head: ['0001_a.sql', '0002_b.sql', '0003_x.sql'] }],
     });
     const res = await pullRequestMigrationCheck({
       gh,
@@ -611,7 +649,7 @@ describe('the check of one pull request', () => {
 
   it('cannot read GitHub: unreadable, never passed', async () => {
     const res = await pullRequestMigrationCheck({
-      gh: fakeGh({ prFiles: { 30: ['db/m/0003_x.sql'] }, fail: /^pr list/ }).gh,
+      gh: fakeGh({ open: [{ number: 30, head: ['0003_x.sql'] }], fail: /^pr list/ }).gh,
       root: stateRoot(),
       config,
       repo: 'org/app',

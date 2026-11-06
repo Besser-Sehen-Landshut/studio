@@ -18,10 +18,8 @@ const LOCK_STALE_MS = 30_000;
 const GH_TIMEOUT_MS = 60_000;
 /** Landed and released entries kept for `list`, newest first; reserved ones are always kept. */
 const KEEP_HISTORY = 500;
-/** A pull request list returns at most this many files per pull request; more are read one by one. */
-const LIST_FILES_CAP = 100;
-/** GitHub lists at most this many files of a pull request: a list this long may be cut. */
-const PR_FILES_API_CAP = 3000;
+/** A commit id as GitHub reports one. */
+const SHA = /^[0-9a-f]{40,64}$/i;
 /** Open pull requests read at once: a list this long may be cut. */
 const PR_LIST_LIMIT = 1000;
 
@@ -185,82 +183,69 @@ async function ghJson(gh: Gh, args: string[], what: string): Promise<unknown> {
   }
 }
 
-/** The entry names directly in `dir` on `branch`; undefined when the folder is not there. */
-async function namesOnBranch(
+/**
+ * The entry names directly in `dir` at `ref` (a branch or a commit), from the trees API; undefined
+ * when the folder is not there. A tree GitHub reports as truncated throws: a cut list could hide a
+ * number.
+ */
+async function namesAt(
   gh: Gh,
   scheme: MigrationScheme,
-  branch: string,
+  ref: string,
 ): Promise<string[] | undefined> {
+  const at = SHA.test(ref) ? ref.slice(0, 12) : ref;
   const r = await gh.run(
-    ['api', `repos/${scheme.repo}/git/trees/${encodeURIComponent(`${branch}:${scheme.dir}`)}`],
+    ['api', `repos/${scheme.repo}/git/trees/${encodeURIComponent(`${ref}:${scheme.dir}`)}`],
     { timeoutMs: GH_TIMEOUT_MS },
   );
   if (r.code !== 0) {
     if (/HTTP 404|Not Found/.test(`${r.stderr}${r.stdout}`)) return undefined;
-    throw new Error(`cannot read ${scheme.dir} on ${branch} (gh exit ${r.code})`);
+    throw new Error(`cannot read ${scheme.dir} at ${at} (gh exit ${r.code})`);
   }
   let tree: { tree?: unknown; truncated?: unknown };
   try {
     tree = JSON.parse(r.stdout) as typeof tree;
   } catch {
-    throw new Error(`cannot read ${scheme.dir} on ${branch}: gh returned no JSON`);
+    throw new Error(`cannot read ${scheme.dir} at ${at}: gh returned no JSON`);
   }
-  // A cut list could hide a number: refused rather than read in part.
   if (tree.truncated !== false || !Array.isArray(tree.tree)) {
-    throw new Error(`cannot read ${scheme.dir} on ${branch} in full`);
+    throw new Error(`cannot read ${scheme.dir} at ${at} in full`);
   }
   return tree.tree.flatMap((e: { path?: unknown }) => (typeof e.path === 'string' ? [e.path] : []));
 }
 
-/**
- * The files a pull request adds or changes (removed ones aside), every page of them. GitHub cuts
- * the list (at 3000 files): a list that does not hold every changed file the pull request counts,
- * or one at the cap, throws.
- */
-export async function pullRequestFiles(gh: Gh, repo: string, pr: number): Promise<string[]> {
-  const unreadable = (why: string) => new Error(`cannot read the files of ${repo}#${pr}${why}`);
+/** The commit a pull request's head branched from its base, from the compare API. */
+async function mergeBaseOf(gh: Gh, repo: string, base: string, head: string): Promise<string> {
   const r = await gh.run(
-    [
-      'api',
-      '--paginate',
-      `repos/${repo}/pulls/${pr}/files?per_page=100`,
-      '--jq',
-      '.[] | [.status, .filename] | @json',
-    ],
+    ['api', `repos/${repo}/compare/${base}...${head}`, '--jq', '.merge_base_commit.sha'],
     { timeoutMs: GH_TIMEOUT_MS },
   );
-  if (r.code !== 0) throw unreadable(` (gh exit ${r.code})`);
-  const files: string[] = [];
-  let listed = 0;
-  for (const line of r.stdout.split('\n')) {
-    if (line.trim() === '') continue;
-    let pair: unknown;
-    try {
-      pair = JSON.parse(line);
-    } catch {
-      throw unreadable(': gh returned no JSON');
-    }
-    const [status, name] = Array.isArray(pair) ? pair : [];
-    if (typeof status !== 'string' || typeof name !== 'string') {
-      throw unreadable(': gh returned no file');
-    }
-    listed++;
-    if (status !== 'removed') files.push(name);
+  const sha = r.stdout.trim();
+  if (r.code !== 0 || !SHA.test(sha)) {
+    throw new Error(`cannot read the merge base of ${head.slice(0, 12)} (gh exit ${r.code})`);
   }
-  const count = await ghJson(
-    gh,
-    ['pr', 'view', String(pr), '--repo', repo, '--json', 'changedFiles'],
-    `the file count of ${repo}#${pr}`,
+  return sha;
+}
+
+/**
+ * The migration entries a pull request adds: the names in `dir` at its head that are not there at
+ * its merge base. Two tree listings of the folder, whatever else the pull request changes (a code
+ * move of thousands of files reads like any other).
+ */
+export async function addedEntries(
+  gh: Gh,
+  scheme: MigrationScheme,
+  pr: { number: number; head: string; base: string },
+): Promise<string[]> {
+  if (!SHA.test(pr.head) || !SHA.test(pr.base)) {
+    throw new Error(`cannot read the commits of ${scheme.repo}#${pr.number}`);
+  }
+  const atHead = await namesAt(gh, scheme, pr.head);
+  if (atHead === undefined || atHead.length === 0) return [];
+  const atBase = new Set(
+    (await namesAt(gh, scheme, await mergeBaseOf(gh, scheme.repo, pr.base, pr.head))) ?? [],
   );
-  const changed = (count as { changedFiles?: unknown } | null)?.changedFiles;
-  if (!Number.isInteger(changed)) throw unreadable(': gh returned no file count');
-  if ((changed as number) >= PR_FILES_API_CAP || listed >= PR_FILES_API_CAP) {
-    throw unreadable(`: it changes ${PR_FILES_API_CAP} files or more, more than GitHub lists`);
-  }
-  if (listed !== changed) {
-    throw unreadable(`: GitHub listed ${listed} of its ${changed as number} changed files`);
-  }
-  return files;
+  return atHead.filter((n) => !atBase.has(n));
 }
 
 /**
@@ -272,7 +257,7 @@ export async function readMigrationUse(gh: Gh, scheme: MigrationScheme): Promise
   if (branch === undefined || !usableBaseName(branch)) {
     throw new Error(`cannot read the default branch of ${scheme.repo}`);
   }
-  const names = await namesOnBranch(gh, scheme, branch);
+  const names = await namesAt(gh, scheme, branch);
   const onBranch = numbersOf(
     (names ?? []).map((n) => `${scheme.dir}/${n}`),
     scheme,
@@ -292,7 +277,7 @@ export async function readMigrationUse(gh: Gh, scheme: MigrationScheme): Promise
       '--limit',
       String(PR_LIST_LIMIT),
       '--json',
-      'number,files',
+      'number,headRefOid,baseRefOid',
     ],
     `the open pull requests of ${scheme.repo}`,
   );
@@ -304,23 +289,22 @@ export async function readMigrationUse(gh: Gh, scheme: MigrationScheme): Promise
     );
   }
   const prs = new Map<number, Map<number, string>>();
-  for (const raw of list as { number?: unknown; files?: unknown }[]) {
-    if (!Number.isInteger(raw.number) || !Array.isArray(raw.files)) {
+  for (const raw of list as { number?: unknown; headRefOid?: unknown; baseRefOid?: unknown }[]) {
+    if (
+      !Number.isInteger(raw.number) ||
+      typeof raw.headRefOid !== 'string' ||
+      typeof raw.baseRefOid !== 'string'
+    ) {
       throw new Error(`cannot read the open pull requests of ${scheme.repo}`);
     }
     const pr = raw.number as number;
-    const listed = raw.files as { path?: unknown; changeType?: unknown }[];
-    const paths =
-      listed.length >= LIST_FILES_CAP
-        ? await pullRequestFiles(gh, scheme.repo, pr)
-        : listed.flatMap((f) =>
-            typeof f.path === 'string' && f.changeType !== 'DELETED' ? [f.path] : [],
-          );
-    // What is on main already is the pull request's change of an existing migration, no new one.
-    const fresh = paths.filter((p) => {
-      const entry = migrationEntryOf(p, scheme.dir);
-      return entry !== undefined && !onMain.has(entry);
+    const added = await addedEntries(gh, scheme, {
+      number: pr,
+      head: raw.headRefOid,
+      base: raw.baseRefOid,
     });
+    // What main holds by now is no new one of the pull request.
+    const fresh = added.filter((e) => !onMain.has(e)).map((e) => `${scheme.dir}/${e}`);
     const read = numbersOf(fresh, scheme);
     if (read.numbers.size > 0) prs.set(pr, read.numbers);
   }
@@ -501,7 +485,7 @@ export function migrationCollisions(o: {
   use: MigrationUse;
   reg: Register;
   pr: number;
-  /** The pull request's files, removed ones aside. */
+  /** The pull request's paths in the folder, removed ones aside (`addedEntries` below `dir`). */
   files: readonly string[];
   /** The names a reservation for this pull request may carry: item id, crew, branch. */
   holder: readonly string[];
@@ -563,9 +547,19 @@ export async function pullRequestMigrationCheck(o: {
   let use: MigrationUse;
   let files: string[];
   try {
-    files = await pullRequestFiles(o.gh, o.repo, o.pr);
-    // Only a pull request that touches the folder needs the rest of the picture.
-    if (!files.some((f) => migrationEntryOf(f, scheme.dir) !== undefined)) return {};
+    const view = (await ghJson(
+      o.gh,
+      ['pr', 'view', String(o.pr), '--repo', o.repo, '--json', 'headRefOid,baseRefOid'],
+      `${o.repo}#${o.pr}`,
+    )) as { headRefOid?: unknown; baseRefOid?: unknown } | null;
+    const added = await addedEntries(o.gh, scheme, {
+      number: o.pr,
+      head: typeof view?.headRefOid === 'string' ? view.headRefOid : '',
+      base: typeof view?.baseRefOid === 'string' ? view.baseRefOid : '',
+    });
+    // Only a pull request that adds to the folder needs the rest of the picture.
+    if (added.length === 0) return {};
+    files = added.map((e) => `${scheme.dir}/${e}`);
     use = await readMigrationUse(o.gh, scheme);
   } catch (e) {
     return { unreadable: (e as Error).message };
