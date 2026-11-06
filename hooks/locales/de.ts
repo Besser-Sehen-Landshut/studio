@@ -316,6 +316,7 @@ export default defineLocale({
       fix_limit: 'Fix-Limit erreicht',
       changes_requested: 'Änderungen angefordert',
       merge_failed: 'Merge fehlgeschlagen',
+      merged: 'Gemergt',
       question: 'Crew hat eine Frage',
       evidence: 'Prüfungstreffer, der Inhaber entscheidet',
       blocked: 'Blockiert',
