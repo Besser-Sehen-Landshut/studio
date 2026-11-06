@@ -17,6 +17,10 @@
       "default": false,
       "type": "boolean"
     },
+    "allow_proof_commands": {
+      "default": false,
+      "type": "boolean"
+    },
     "crew_allow_macos_trust_service": {
       "default": false,
       "type": "boolean"

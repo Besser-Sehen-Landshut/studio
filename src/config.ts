@@ -324,18 +324,26 @@ const acceptanceSchema = z.strictObject({
 /** An evidence rule id: it names the rule in logs, lead lines and `studio exceptions grant`. */
 export const EVIDENCE_ID_RE = /^[a-z][a-z0-9-]{0,47}$/;
 
-/** Why a rule with a command is refused: no user-configured command runs in this version. */
+/** Why a key of an earlier draft's command rules is refused. */
 export const NO_COMMANDS =
-  'evidence rules take a built-in proof (comments_only, paths_only); custom proof commands come later, with a real sandbox';
+  'a proof command takes command and timeout_seconds only: it runs locally, sandboxed, in an extract of the base (proof: command)';
 
 /** Keys of the command rules an earlier draft had; refused with NO_COMMANDS. */
-const COMMAND_KEYS = ['command', 'run', 'inputs', 'timeoutSeconds', 'job'];
+const COMMAND_KEYS = ['run', 'inputs', 'job'];
+
+/** One word of a proof command: a plain line, no control characters. */
+const argWord = z
+  .string()
+  .min(1)
+  .max(500)
+  .regex(/^[^\p{Cc}]+$/u, 'no control characters');
 
 /**
- * `evidence:` in studio.yaml: a guard job whose failure a built-in proof can show a false alarm on
- * exactly one diff. Studio computes the proof itself (src/proofs.ts), no command runs, and it reads
+ * `evidence:` in studio.yaml: a guard job whose failure a proof can show a false alarm on exactly
+ * one diff. A built-in proof Studio computes itself (src/proofs.ts); `command` runs a command of
+ * the project, sandboxed (src/proof-sandbox.ts), only when the owner config allows it. Studio reads
  * these rules only from studio.yaml at the pull request's base on the default branch
- * (src/evidence.ts).
+ * (src/evidence.ts), so a pull request never brings or changes its own proof.
  */
 export const evidenceRuleSchema = z
   .looseObject({
@@ -343,8 +351,14 @@ export const evidenceRuleSchema = z
     // The CI job that reports the hit, e.g. a migration guard.
     guard: workflowJob,
     // Every changed file of the pull request must lie under `paths`. comments_only: each one is a
-    // .sql file that changes plain comments only. paths_only: that is all.
-    proof: z.enum(['comments_only', 'whitespace_only', 'paths_only']),
+    // .sql file that changes plain comments only. paths_only: that is all. command: `command`
+    // exits 0 and prints the run's proof line.
+    proof: z.enum(['comments_only', 'whitespace_only', 'paths_only', 'command']),
+    // proof: command: the program and its arguments, no shell. The program is a name on the
+    // sandbox's PATH, an absolute path, or a path in the base tree (`scripts/prove.mjs`).
+    command: z.array(argWord).min(1).max(32).optional(),
+    // proof: command: wall clock and CPU seconds.
+    timeoutSeconds: z.number().int().min(1).max(600).optional(),
     paths: z.array(globSchema).min(1).max(50),
     // comments_only: the languages it reads (sql only so far); any other file proves nothing.
     languages: z
@@ -365,9 +379,32 @@ export const evidenceRuleSchema = z
   .superRefine((r, ctx) => {
     const issue = (path: string, message: string) =>
       ctx.addIssue({ code: 'custom', path: [path], message });
-    const known = ['id', 'guard', 'proof', 'paths', 'languages', 'ownerOnly'];
+    const known = [
+      'id',
+      'guard',
+      'proof',
+      'paths',
+      'languages',
+      'command',
+      'timeoutSeconds',
+      'ownerOnly',
+    ];
     for (const key of Object.keys(r).filter((k) => !known.includes(k))) {
       issue(key, COMMAND_KEYS.includes(key) ? NO_COMMANDS : 'unknown key');
+    }
+    if (r.proof === 'command' && r.command === undefined) {
+      issue('command', 'proof: command needs the command to run');
+    }
+    if (r.proof !== 'command') {
+      if (r.command !== undefined) issue('command', 'only proof: command takes a command');
+      if (r.timeoutSeconds !== undefined) {
+        issue('timeoutSeconds', 'only proof: command takes timeout_seconds');
+      }
+    }
+    const program = r.command?.[0];
+    if (program?.startsWith('-')) issue('command', 'the program must not start with -');
+    if (r.command?.some((w) => w.split('/').includes('..'))) {
+      issue('command', 'no .. in a path: the command stays in its base tree');
     }
     if (r.proof === 'whitespace_only') {
       issue('proof', 'whitespace_only is not in this version: it comes later');
@@ -379,12 +416,13 @@ export const evidenceRuleSchema = z
       issue('languages', 'only comments_only reads languages');
     }
   })
-  .transform(({ id, guard, proof, paths, languages, ownerOnly }) => ({
+  .transform(({ id, guard, proof, paths, languages, command, timeoutSeconds, ownerOnly }) => ({
     id,
     guard,
     proof,
     paths,
     ...(languages === undefined ? {} : { languages }),
+    ...(command === undefined ? {} : { command, timeoutSeconds: timeoutSeconds ?? 60 }),
     ownerOnly,
   }));
 export type EvidenceRule = z.infer<typeof evidenceRuleSchema>;
@@ -803,6 +841,10 @@ export const ownerConfigSchema = z.strictObject({
   // Opt-in: let crew runs bill the API. An API key would otherwise take precedence over the
   // subscription login, so the variables and settings for it are refused by default.
   allowApiBilling: z.boolean().default(false),
+  // Opt-in: let `proof: command` rules of a project's studio.yaml run on this machine, in the proof
+  // sandbox (src/proof-sandbox.ts). Off: such rules prove nothing. It lives here, not in
+  // studio.yaml, because the command runs on the owner's machine.
+  allowProofCommands: z.boolean().default(false),
   // Opens the macOS TLS trust service to crew shells so gh can run; weakens the network
   // boundary (SECURITY.md). Off: Studio opens a crew's pull request itself.
   crewAllowMacosTrustService: z.boolean().default(false),

@@ -659,8 +659,25 @@
             "enum": [
               "comments_only",
               "whitespace_only",
-              "paths_only"
+              "paths_only",
+              "command"
             ]
+          },
+          "command": {
+            "minItems": 1,
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "^[^\\p{Cc}]+$"
+            }
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 600
           },
           "paths": {
             "minItems": 1,

@@ -76,6 +76,7 @@ import {
   evidenceChange,
   grantException,
   judgeFailedChecks,
+  proofCommandsFor,
   readExceptions,
   remoteTip,
 } from './evidence.js';
@@ -910,13 +911,29 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       });
 
     /** Exceptions by evidence for a pull request of `repo`, judged in the owner's checkout. */
-    const evidenceCtx = (config: StudioConfig, repo: string, root: string): EvidenceContext => ({
-      gh: ports.gh,
-      git: ports.git,
-      checkout: approvalCheckout(project, config, repo),
-      stateRoot: root,
-      now: () => ports.clock.now(),
-    });
+    const evidenceCtx = (config: StudioConfig, repo: string, root: string): EvidenceContext => {
+      // proof: command runs only with the owner's yes; an owner config that does not load says no.
+      let ownerConfig: Pick<OwnerConfig, 'allowProofCommands' | 'crewToolchainPaths'>;
+      try {
+        ownerConfig = loadOwnerConfig(owner);
+      } catch {
+        ownerConfig = { allowProofCommands: false, crewToolchainPaths: [] };
+      }
+      return {
+        gh: ports.gh,
+        git: ports.git,
+        checkout: approvalCheckout(project, config, repo),
+        stateRoot: root,
+        now: () => ports.clock.now(),
+        commands: proofCommandsFor({
+          ownerConfig,
+          env: deps.env,
+          homedir: deps.homedir,
+          projectDir: project,
+          stateRoot: root,
+        }),
+      };
+    };
 
     /** The release gate of a component, read in the owner's checkout. */
     const releaseCtx = (config: StudioConfig, board: Board, root: string): ReleaseContext => ({
