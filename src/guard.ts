@@ -69,6 +69,12 @@ export interface GuardContext {
   /** A research item: it opens no pull request, so every `git push` is refused. */
   noPush?: boolean;
   /**
+   * A cache crew (src/cache.ts): the only shell commands it may run, each exactly as listed, and
+   * the only files it may write (its report). It edits nothing and starts no subagent.
+   */
+  onlyCommands?: string[];
+  onlyWrites?: string[];
+  /**
    * Per allowed MCP tool (src/rea-schemas.ts): the argument names it accepts, those that name a
    * place on disk, and the free-text ones. Any other argument is refused.
    */
@@ -1995,6 +2001,37 @@ const isSecretExempt = (s: string): boolean => basename(s) === '.env.example';
 const isStringArray = (v: unknown): boolean =>
   Array.isArray(v) && v.every((x) => typeof x === 'string');
 
+/**
+ * A cache crew's narrow lane, before the usual checks: a shell command only as listed (no
+ * operator, no addition, compared as text after trimming), a write only to a listed file, no
+ * edit and no subagent. The sandbox stays the boundary; this keeps the build what Studio named.
+ */
+function checkOnly(
+  ctx: GuardContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  cwd: string,
+): void {
+  if (toolName === 'Bash') {
+    const command = toolInput.command;
+    if (typeof command !== 'string' || !(ctx.onlyCommands ?? []).includes(command.trim())) {
+      deny('a cache crew runs only the commands its brief lists, each exactly as written');
+    }
+    return;
+  }
+  if (toolName === 'Task' || toolName === 'Agent') deny('a cache crew starts no subagent');
+  if (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'NotebookEdit') {
+    deny('a cache crew edits no file');
+  }
+  if (toolName === 'Write') {
+    const p = toolInput.file_path;
+    const allowed = (ctx.onlyWrites ?? []).map((w) => resolveReal(w, '/'));
+    if (typeof p !== 'string' || p === '' || !allowed.includes(resolveReal(p, cwd))) {
+      deny('a cache crew writes only its report');
+    }
+  }
+}
+
 function check(input: GuardInput, ctx: GuardContext): void {
   const c = ctx as unknown as Record<string, unknown> | null;
   if (
@@ -2017,6 +2054,9 @@ function check(input: GuardInput, ctx: GuardContext): void {
     (c.blockedCommands !== undefined && !isStringArray(c.blockedCommands)) ||
     (c.reaClasses !== undefined && !isStringArray(c.reaClasses)) ||
     (c.noPush !== undefined && typeof c.noPush !== 'boolean') ||
+    (c.onlyCommands !== undefined && !isStringArray(c.onlyCommands)) ||
+    (c.onlyWrites !== undefined &&
+      !(isStringArray(c.onlyWrites) && (c.onlyWrites as string[]).every((p) => isAbsolute(p)))) ||
     (c.mcpKeys !== undefined &&
       !(
         c.mcpKeys !== null &&
@@ -2090,6 +2130,9 @@ function check(input: GuardInput, ctx: GuardContext): void {
   }
   if (typeof toolName !== 'string' || !CREW_TOOLS.has(toolName)) {
     deny(`tool not allowed for crew: ${String(toolName)}`);
+  }
+  if (ctx.onlyCommands !== undefined || ctx.onlyWrites !== undefined) {
+    checkOnly(ctx, toolName, toolInput, cwd);
   }
   if (toolName === 'Bash') {
     const command = toolInput.command;

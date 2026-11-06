@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { type AccountRow, accountRows, expiryLine } from './account-command.js';
 import { builtInAccount, crewClaudeDir } from './accounts.js';
+import { type CacheStatus, cacheDoctorLine, cacheStatus } from './cache.js';
 import { formatBytes, runCloneGc } from './clone-gc.js';
 import {
   crewTokenFile,
@@ -417,6 +418,20 @@ export function clonesLine(c: Awaited<ReturnType<typeof clonesState>> | 'unknown
 
 export type DoctorReport = Awaited<ReturnType<typeof doctorReport>>;
 
+/** The project's build cache (src/cache.ts); null when the state root cannot be named. */
+function buildCacheState(
+  project: string,
+  owner: OwnerEnv,
+  config: StudioConfig | undefined,
+  ownerConfig: OwnerConfig | undefined,
+): CacheStatus | null {
+  try {
+    return cacheStatus(stateRootFor(project, owner), config, ownerConfig);
+  } catch {
+    return null;
+  }
+}
+
 /** What `studio doctor` finds, without printing; `studio init` reads the same checks. */
 export async function doctorReport(o: {
   project: string;
@@ -529,6 +544,7 @@ export async function doctorReport(o: {
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
     rea: reaState(config, ownerConfig, configDir, ownerStateRootFor(o.owner)),
+    buildCache: buildCacheState(o.project, o.owner, config, ownerConfig),
     notify: ownerConfig?.notify?.command ? 'configured' : 'not configured',
     notifications: notificationsState(o.owner),
     apiKeyVarsInEnvironment: API_KEY_VARS.filter((k) => o.env[k]),
@@ -590,6 +606,7 @@ export async function runDoctor(o: {
       `notifications: ${report.notifications}`,
       `allow_api_billing: ${report.allowApiBilling ? 'on' : 'off'}`,
       ...(report.rea === null ? [] : reaDoctorLines(report.rea)),
+      ...(report.buildCache === null ? [] : [cacheDoctorLine(report.buildCache)]),
       `migration register: ${report.migrationRegister}`,
       `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(', ') || 'none'}`,
       clonesLine(report.clones),
