@@ -26,6 +26,11 @@ export interface WorkerPlatform {
   automountRoot: string;
   /** Mount points of Windows file systems (drvfs, 9p, virtiofs) from /proc/self/mountinfo. */
   windowsMounts?: string[];
+  /**
+   * Native Windows: the crew sandbox user and what its probe as that user found just now
+   * (src/windows-sandbox.ts); `problem` undefined means every check held. Absent: not probed.
+   */
+  windowsSandbox?: { user: string; problem?: string };
 }
 
 type ReadText = (file: string) => string | undefined;
@@ -127,7 +132,11 @@ export function detectPlatform(
  */
 export function sandboxProblem(p: WorkerPlatform): string | undefined {
   if (p.platform === 'win32') {
-    return 'native Windows has no sandbox for crew commands (Claude Code runs them unsandboxed there); run studio worker inside a WSL2 distribution on this machine';
+    // Claude Code's sandbox does not run here: crews run only as the probed crew sandbox user.
+    if (p.windowsSandbox === undefined) {
+      return 'native Windows has no Claude Code sandbox for crew commands; set workers.self.windows.crew_user in the owner config and run the script of studio worker windows-setup, or run studio worker inside a WSL2 distribution';
+    }
+    return p.windowsSandbox.problem;
   }
   if (p.platform !== 'linux' && p.platform !== 'darwin') {
     return `${p.platform} has no sandbox for crew commands; a worker runs on macOS, Linux or WSL2`;
@@ -259,7 +268,13 @@ export function enforceDeny(o: {
   for (const entry of o.deny.paths) {
     const drive = WINDOWS_DRIVE.exec(entry);
     let target: string;
-    if (drive) {
+    if (drive && o.platform.platform === 'win32') {
+      // Native Windows: the crew user's probe must find each place unreadable before any claim.
+      target = entry.replace(/\//g, '\\').replace(/\\+$/, '');
+      if (/^[A-Za-z]:$/.test(target)) target = `${target}\\`;
+    } else if (o.platform.platform === 'win32') {
+      return { refused: `deny path ${entry} is not a Windows drive path (D:\\data)` };
+    } else if (drive) {
       if (!wsl) {
         return {
           refused: `deny path ${entry} is a Windows path: only a worker inside WSL2 can enforce it`,

@@ -98,7 +98,7 @@ describe('detectPlatform', () => {
 describe('sandboxProblem', () => {
   it('refuses native Windows, WSL1 and WSL2 with interop on or unknown', () => {
     expect(sandboxProblem({ platform: 'win32', wsl: 'none', automountRoot: '/mnt/' })).toMatch(
-      /native Windows has no sandbox.*WSL2/,
+      /native Windows has no Claude Code sandbox.*windows-setup.*WSL2/,
     );
     expect(sandboxProblem({ ...wsl2, wsl: 'wsl1' })).toMatch(/WSL1 has no sandbox/);
     expect(sandboxProblem({ ...wsl2, interop: true })).toMatch(
@@ -109,6 +109,13 @@ describe('sandboxProblem', () => {
     expect(sandboxProblem({ platform: 'freebsd', wsl: 'none', automountRoot: '/mnt/' })).toMatch(
       /no sandbox/,
     );
+  });
+  it("native Windows runs crews only once the crew user's probe held", () => {
+    const win: WorkerPlatform = { platform: 'win32', wsl: 'none', automountRoot: '/mnt/' };
+    expect(sandboxProblem({ ...win, windowsSandbox: { user: 'crew', problem: 'read: x' } })).toBe(
+      'read: x',
+    );
+    expect(sandboxProblem({ ...win, windowsSandbox: { user: 'crew' } })).toBeUndefined();
   });
   it('allows macOS, Linux and WSL2 with interop off', () => {
     expect(sandboxProblem(linux)).toBeUndefined();
@@ -130,6 +137,16 @@ describe('enforceDeny', () => {
     mkdirSync(real);
     const r = run([`${real}/`]);
     expect(r).toEqual({ paths: [real], ports: [], allowRead: [], notes: [] });
+  });
+  it('on native Windows a drive path is kept as written for the probe; a POSIX one refuses', () => {
+    const win: WorkerPlatform = { platform: 'win32', wsl: 'none', automountRoot: '/mnt/' };
+    expect(run(['D:\\data\\', 'e:/backup', 'F:\\'], [], win)).toMatchObject({
+      paths: ['D:\\data', 'e:\\backup', 'F:\\'],
+      notes: [],
+    });
+    expect(run(['/srv/data'], [], win)).toEqual({
+      refused: expect.stringMatching(/not a Windows drive path/),
+    });
   });
   it('a Windows drive path holds only inside WSL2, as the whole drive', () => {
     expect(run(['D:\\data'])).toEqual({

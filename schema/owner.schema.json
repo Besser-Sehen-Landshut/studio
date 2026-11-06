@@ -333,6 +333,19 @@
               "type": "integer",
               "minimum": 10,
               "maximum": 240
+            },
+            "windows": {
+              "type": "object",
+              "properties": {
+                "crew_user": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,19}$"
+                }
+              },
+              "required": [
+                "crew_user"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [

@@ -12,7 +12,14 @@ import type { WorkItem } from './board.js';
 import { loadOwnerConfig, parseConfig, type StudioConfig } from './config.js';
 import { type RunUsage, runUsageSince } from './costs.js';
 import { limitHold } from './credentials.js';
-import { crewHold, githubHttpsUrl, ITEM_BASE, type LauncherEnv, launchCrew } from './crew.js';
+import {
+  crewHold,
+  githubHttpsUrl,
+  ITEM_BASE,
+  type LauncherEnv,
+  launchCrew,
+  type WindowsLaunch,
+} from './crew.js';
 import { HeldError } from './held.js';
 import {
   blockHold,
@@ -143,6 +150,15 @@ export interface WorkerContext {
   owner: LauncherEnv;
   /** Read again before every claim: interop or mounts can change while the worker runs. */
   platform: () => WorkerPlatform;
+  /**
+   * Native Windows: the crew sandbox user (src/windows-sandbox.ts). `probe` proves its isolation
+   * again before every claim, the deny paths included; `launch` is what a crew launch needs.
+   */
+  windows?: {
+    user: string;
+    probe(mustNotRead: readonly string[]): Promise<string | undefined>;
+    launch: WindowsLaunch;
+  };
   log: (line: string) => void;
   /** Milliseconds between heartbeats during long git calls; a third of the lease by default. */
   beatMs?: number;
@@ -333,8 +349,10 @@ async function readiness(
   c: WorkerContext,
   stateRoot: string,
 ): Promise<({ ok: true } & Ready) | { ok: false; kind: 'refused' | 'held'; line: string }> {
-  const platform = c.platform();
-  const problem = sandboxProblem(platform);
+  let platform = c.platform();
+  // Native Windows with a crew user is judged after its probe, below.
+  const probed = platform.platform === 'win32' && c.windows !== undefined;
+  const problem = probed ? undefined : sandboxProblem(platform);
   if (problem !== undefined) return { ok: false, kind: 'refused', line: problem };
   const ownerConfig = loadOwnerConfig(c.owner);
   const self = ownerConfig.workers?.self;
@@ -363,6 +381,14 @@ async function readiness(
     allowRead: self.allowRead,
   });
   if ('refused' in deny) return { ok: false, kind: 'refused', line: deny.refused };
+  if (probed && c.windows !== undefined) {
+    platform = {
+      ...platform,
+      windowsSandbox: { user: c.windows.user, problem: await c.windows.probe(deny.paths) },
+    };
+    const held = sandboxProblem(platform);
+    if (held !== undefined) return { ok: false, kind: 'refused', line: held };
+  }
   const pins = strictPinProblem(
     crewConfigDir(c.owner),
     pinnedPlugins(config.plugins, ownerConfig.allowedPlugins),
@@ -594,6 +620,7 @@ async function claimNext(
     try {
       await launchCrew(c.project, item, config, c.ports, c.owner, {
         deny: ready.deny,
+        ...(c.windows === undefined ? {} : { windows: c.windows.launch }),
         from,
         contentDir: ready.contentDir,
         sha: ready.sha,

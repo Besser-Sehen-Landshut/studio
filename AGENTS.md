@@ -24,7 +24,7 @@ Bundle drift check (what CI runs): `pnpm bundle`, then `git status --porcelain -
 ## Hard rules
 
 - **Public repo.** Never commit private names, hostnames, IPs, local paths, or company, customer, or project names. Tests enforce this: a pattern denylist (`test/denylist.txt`) plus a word list from the masked CI secret `STUDIO_PRIVATE_WORDS`.
-- **CI runs only on GitHub-hosted runners** (`ubuntu-latest`), because forks run it too. Do not add self-hosted runner labels. Fork pull requests get no secrets, so only they may run with an empty word list (`STUDIO_PRIVATE_WORDS_OPTIONAL`).
+- **CI runs only on GitHub-hosted runners** (`ubuntu-latest`; the `windows` job on `windows-latest`), because forks run it too. Do not add self-hosted runner labels. Fork pull requests get no secrets, so only they may run with an empty word list (`STUDIO_PRIVATE_WORDS_OPTIONAL`).
 - **Git hygiene.** Stage files by name, never `git add -A` or `git add .`. No force-push. Work on a branch and open a PR.
 - **`main` is protected:** changes arrive by pull request with the checks `check` (lint, typecheck, bundle drift, tests) and `secrets` (gitleaks) passing.
 - **The crew guard is a convenience layer, not the security boundary.** The boundary is the sandbox, a least-privilege token, and server-side branch protection. See `SECURITY.md`.
