@@ -25,6 +25,7 @@ import {
   WORKER_LABEL_RE,
 } from './config.js';
 import { ensureStateDir, ownerStateRootFor, writeStateFile } from './paths.js';
+import { authorizedKeyLine } from './relay-windows.js';
 
 /** How long a pairing secret holds, on the lead and on the worker. */
 export const PAIR_TTL_MS = 60 * 60_000;
@@ -206,15 +207,16 @@ export interface Pairing {
 }
 
 /**
- * Where a relay worker records its pairings: a folder of the relay home that only SYSTEM and
- * administrators may write and the relay account may read (the setup script makes it).
+ * Where a relay worker records its pairings: a folder of the admin-only tree that only SYSTEM and
+ * administrators may write and the relay account may read (the setup script makes it). Each
+ * pairing's label is a lead on this worker: its jobs are its own.
  */
-export const pairingsFile = (home: string): string => join(home, 'pairing', 'pairings.json');
+export const pairingsFile = (machine: string): string => join(machine, 'pairing', 'pairings.json');
 
-export function readPairings(home: string): Record<string, Pairing> {
+export function readPairings(machine: string): Record<string, Pairing> {
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(pairingsFile(home), 'utf8'));
+    raw = JSON.parse(readFileSync(pairingsFile(machine), 'utf8'));
   } catch {
     return {};
   }
@@ -236,9 +238,9 @@ export function readPairings(home: string): Record<string, Pairing> {
   return out;
 }
 
-/** Writes the record whole: a temporary file renamed over the old one. */
-export function writePairings(home: string, all: Record<string, Pairing>): void {
-  const file = pairingsFile(home);
+/** Writes the record whole: a temporary file renamed over the old one (run elevated). */
+export function writePairings(machine: string, all: Record<string, Pairing>): void {
+  const file = pairingsFile(machine);
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(all, null, 2)}\n`);
@@ -257,9 +259,6 @@ export function pairProofs(
     .map(([label, p]) => ({ label, mac: pairProof(p.secret, hostKey) }));
 }
 
-/** The tag that names a lead's key in the authorized keys file. */
-export const keyTag = (label: string): string => `studio-relay-${label}`;
-
 /**
  * The authorized keys file a worker's pairings give: one line per pairing, forced to the relay
  * command, in label order, and nothing else. Lines of the old file that are not in it are named so
@@ -275,10 +274,10 @@ export function authorizedKeysPlan(o: {
   lines: { label: string; fingerprint: string }[];
   removed: string[];
 } {
-  const command = o.command.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const labels = Object.keys(o.pairings).sort();
-  const want = labels.map(
-    (l) => `restrict,command="${command}" ${keyOnly((o.pairings[l] as Pairing).key)} ${keyTag(l)}`,
+  // Each key's forced command names its lead, and so does its comment.
+  const want = labels.map((l) =>
+    authorizedKeyLine({ key: (o.pairings[l] as Pairing).key, command: o.command, lead: l }),
   );
   const removed = (o.existing ?? '')
     .split(/\r?\n/)

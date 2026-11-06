@@ -260,6 +260,7 @@ function world(): World {
   w.ctx = relayContext({
     owner: { env: w.worker.env, homedir: workerHome },
     home: undefined,
+    lead: 'default',
     ports,
     env: w.worker.env,
     homedir: workerHome,
@@ -322,10 +323,16 @@ async function lead(w: World, argv: string[], gh = leadGh(w)) {
 }
 
 const workerState = (w: World) =>
-  stateRootFor(projectDir({ env: w.worker.env, homedir: w.worker.home }, 'org/app'), {
-    env: w.worker.env,
-    homedir: w.worker.home,
-  });
+  stateRootFor(
+    projectDir(
+      { owner: { env: w.worker.env, homedir: w.worker.home }, lead: 'default' },
+      'org/app',
+    ),
+    {
+      env: w.worker.env,
+      homedir: w.worker.home,
+    },
+  );
 
 /** What the crew leaves on the worker: a commit on studio/APP-1 and its report. */
 function crewFinishes(w: World, o: { report?: (head: string) => string } = {}): string {
@@ -401,7 +408,9 @@ describe('relay workers', () => {
     );
     expect(statusOf(w)).toMatchObject({ status: 'in_review', pr: 7 });
     // The worker cleaned up; the lead forgot the job.
-    expect(readJob({ env: w.worker.env, homedir: w.worker.home }, 'APP-1')).toBeUndefined();
+    expect(
+      readJob({ owner: { env: w.worker.env, homedir: w.worker.home }, lead: 'default' }, 'APP-1'),
+    ).toBeUndefined();
     expect(existsSync(join(st, 'clones', 'APP-1'))).toBe(false);
     expect(readRelay(leadState(w)).items).toEqual({});
     // The run counts in the day's ledger.
@@ -527,6 +536,49 @@ describe('relay workers', () => {
       line: expect.stringMatching(/runs APP-1: one crew at a time/),
     });
     expect(w.crew.started).toHaveLength(1);
+  });
+
+  it('another lead sees nothing of a job: no state, no collect, no stop, and busy without a name', async () => {
+    const w = world();
+    await lead(w, ['tick']);
+    const other = { ...w.ctx, lead: 'other' };
+    const ask = async (header: Record<string, unknown>) => {
+      let out = '';
+      await serveRelay(other, chunks([...encodeMessage({ studioRelay: 1, ...header })]), (s) => {
+        out += s;
+      });
+      return (await readMessage(new LineReader(chunks([out]), MAX_HEADER_BYTES), 0))?.header;
+    };
+    expect(await ask({ op: 'status', id: 'APP-1' })).toMatchObject({ ok: true, state: 'unknown' });
+    expect(await ask({ op: 'collect', id: 'APP-1' })).toMatchObject({ ok: false, kind: 'refused' });
+    expect(await ask({ op: 'stop', id: 'APP-1' })).toMatchObject({ ok: true });
+    expect(w.crew.stopped).toEqual([]);
+    expect(await ask({ op: 'hello' })).toMatchObject({
+      ok: true,
+      busy: null,
+      held: "this machine runs another lead's job: one crew at a time on a relay worker",
+    });
+  });
+
+  it('a block the worker reports parks the handed-over label for a while, never a global block', async () => {
+    const w = world();
+    await lead(w, ['tick']);
+    crewFinishes(w);
+    const st = workerState(w);
+    writeFileSync(
+      join(st, 'logs', 'APP-1.jsonl'),
+      `${JSON.stringify({ type: 'system', subtype: 'api_retry', error: 'account_on_hold' })}\n`,
+    );
+    const t = JSON.parse((await lead(w, ['tick'])).out);
+    expect(t.needsLead.find((x: { item: string }) => x.item === 'APP-1')?.reason).toMatch(
+      /reports an account block of default; that label is parked for an hour/,
+    );
+    const owner = join(w.lead.home, '.local', 'state', 'studio', 'owner');
+    expect(existsSync(join(owner, 'blocks.json'))).toBe(false);
+    const limits = JSON.parse(readFileSync(join(owner, 'limits.json'), 'utf8'));
+    expect(Date.parse(limits.default.parkedUntil) - w.now.t).toBeLessThanOrEqual(
+      60 * 60_000 + 1000,
+    );
   });
 
   it('doctor names the relay worker, its versions and its load', async () => {

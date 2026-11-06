@@ -259,14 +259,22 @@ export class LineReader {
   private ended = false;
   private waiting: (() => void) | undefined;
   private error: Error | undefined;
+  private total = 0;
+  private stopped = false;
 
   constructor(
     input: AsyncIterable<Uint8Array | string>,
     private readonly max: number,
+    /** All bytes the stream may bring: past it, reading stops with an error. */
+    private readonly maxTotal = Number.POSITIVE_INFINITY,
   ) {
     void (async () => {
       try {
         for await (const chunk of input) {
+          if (this.stopped) break;
+          this.total += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length;
+          if (this.total > this.maxTotal)
+            throw new Error('the relay answer is larger than allowed');
           this.buf += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
           let nl = this.buf.indexOf('\n');
           while (nl >= 0) {
@@ -284,6 +292,13 @@ export class LineReader {
       this.ended = true;
       this.wake();
     })();
+  }
+
+  /** Reads nothing more: what the stream still brings is dropped. */
+  stop(): void {
+    this.stopped = true;
+    this.lines = [];
+    this.buf = '';
   }
 
   private wake() {

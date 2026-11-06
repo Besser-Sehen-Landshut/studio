@@ -691,16 +691,19 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     const relayOnly = [
       values.home,
       values.pipe,
+      values.lead,
       values.pair,
       values.user,
       values.port,
       values.source,
       values.interface,
       values.connect,
+      values['keep-passwords'],
+      values['disable-spooler'],
     ];
     if (relayOnly.some((v) => v !== undefined) && cmd !== 'relay') {
       throw new UsageError(
-        '--home, --pipe, --pair, --user, --port, --source, --interface and --connect work with relay only',
+        '--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords and --disable-spooler work with relay only',
       );
     }
     const reserveOnly = [values.number, values.for, values.purpose];
@@ -2380,6 +2383,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             if (step.kind === 'held') out.held.push({ item: item.id, reason: step.reason });
             else if (step.kind === 'lead') lead(item.id, step.reason);
             else {
+              if (step.note !== undefined) lead(item.id, step.note);
               const r = await collect(item.id);
               if (r.kind === 'moved') {
                 out.collected.push(r.out);
@@ -5442,12 +5446,15 @@ function parseCli(argv: string[]) {
         'follow-head': { type: 'boolean' },
         home: { type: 'string' },
         pipe: { type: 'string' },
+        lead: { type: 'string' },
         pair: { type: 'string' },
         user: { type: 'string' },
         port: { type: 'string' },
         source: { type: 'string' },
         interface: { type: 'string' },
         connect: { type: 'boolean' },
+        'keep-passwords': { type: 'boolean' },
+        'disable-spooler': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: true,

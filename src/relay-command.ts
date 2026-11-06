@@ -4,7 +4,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { crewClaudeDir } from './accounts.js';
 import { type Board, loadBoard, saveBoard, transition, type WorkItem } from './board.js';
 import {
@@ -22,15 +22,7 @@ import { type RunUsage, recordLedgerRun, withItemUsage } from './costs.js';
 import { pickCrewCredential } from './crew.js';
 import { startEgressProxy } from './egress-proxy.js';
 import { HeldError } from './held.js';
-import {
-  activeParks,
-  blockHold,
-  parkUntil,
-  readBlocks,
-  readLimits,
-  writeBlocks,
-  writeLimits,
-} from './limits.js';
+import { activeParks, blockHold, parkUntil, readLimits, writeLimits } from './limits.js';
 import { ensureStateDir, ownerStateRootFor, removeStateEntry, withBoardLock } from './paths.js';
 import { pinnedPlugins, STUDIO_VERSION } from './plugins.js';
 import type { Ports } from './ports.js';
@@ -65,7 +57,9 @@ import {
   writePending,
   writeRelayTarget,
 } from './relay-pair.js';
+import { encodeMessage, RELAY_PROTOCOL } from './relay-protocol.js';
 import {
+  LEAD_RE,
   type RelayContext,
   readSpecFromPipe,
   relayRoot,
@@ -86,19 +80,25 @@ import {
   authorizedKeysFile,
   authorizedKeysScript,
   forcedCommand,
+  leadFromAuthInfo,
   type RelayInstall,
   relayHomeDefault,
+  relayMachineDefault,
   relaySetupScript,
   type SshdScope,
 } from './relay-windows.js';
-import { elevated, relayWindows } from './relay-windows-check.js';
+import { elevated, machineTreeProblem, relayWindows } from './relay-windows-check.js';
 import { labelUsage, recordRun, USAGE_UNREADABLE } from './usage.js';
-import { findClaude, runFile, setupReadPaths } from './windows-sandbox.js';
+import { findClaude, runFile } from './windows-sandbox.js';
 import { pinnedMain } from './worker.js';
 import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
 import { updateWorkers, workerCrewName } from './worker-lead.js';
 
 const BY = 'studio';
+/** How long a worker's report of an account block parks the handed-over label. */
+const RELAY_PARK_MS = 60 * 60_000;
+/** The longest a worker's report of a usage limit parks the handed-over label. */
+const RELAY_PARK_MAX_MS = 6 * 60 * 60_000;
 
 const withItem = (board: Board, id: string, fn: (i: WorkItem) => WorkItem): Board => ({
   ...board,
@@ -254,7 +254,7 @@ export async function startRelayItem(
 export type RelayStep =
   | { kind: 'held'; reason: string }
   | { kind: 'lead'; reason: string }
-  | { kind: 'collect' };
+  | { kind: 'collect'; note?: string };
 
 const dropRecord = (stateRoot: string, id: string) =>
   updateRelay(stateRoot, (s) => {
@@ -388,30 +388,30 @@ export async function followRelayItem(
       }
     });
   }
-  // A usage limit or an account block of the credential the lead gave is the lead's to record.
-  if (got.limit !== null) {
+  // A limit or a block the worker reports is its word only: it parks the one credential label the
+  // lead handed over, for a bounded time, and never blocks the owner's accounts as a whole.
+  let parkNote: string | undefined;
+  if (got.limit !== null || got.block) {
     const read = readLimits(d.ownerRoot);
     if (read.ok) {
+      const until = got.block
+        ? new Date(now.getTime() + RELAY_PARK_MS)
+        : new Date(
+            Math.min(
+              parkUntil(got.limit?.resetsAt ?? undefined, now).getTime(),
+              now.getTime() + RELAY_PARK_MAX_MS,
+            ),
+          );
       writeLimits(d.ownerRoot, {
         ...read.labels,
         [record.credential]: {
-          parkedUntil: parkUntil(got.limit.resetsAt ?? undefined, now).toISOString(),
-          kind: got.limit.kind,
+          parkedUntil: until.toISOString(),
+          kind: got.limit?.kind ?? 'session',
         },
       });
     }
-  }
-  if (got.block) {
-    const read = readBlocks(d.ownerRoot);
-    if (read.ok && !read.blocks.some((b) => b.label === record.credential)) {
-      writeBlocks(d.ownerRoot, [
-        ...read.blocks,
-        {
-          label: record.credential,
-          reason: 'account block reported by a relay worker',
-          at: now.toISOString(),
-        },
-      ]);
+    if (got.block) {
+      parkNote = `${item.id}: the relay worker ${label} reports an account block of ${record.credential}; that label is parked for an hour; check the account`;
     }
   }
   if (got.kind === 'failed') {
@@ -424,7 +424,7 @@ export async function followRelayItem(
       reason: `${item.id}: ${note}; studio stop ${item.id} --requeue starts it once more`,
     };
   }
-  return { kind: 'collect' };
+  return parkNote === undefined ? { kind: 'collect' } : { kind: 'collect', note: parkNote };
 }
 
 /** After `collect` moved the item: the worker cleans up, the lead forgets the job. */
@@ -517,6 +517,8 @@ export function relayOwner(owner: OwnerEnv, home: string | undefined): OwnerEnv 
 export function relayContext(o: {
   owner: OwnerEnv;
   home: string | undefined;
+  /** The lead this request is for. */
+  lead: string;
   ports: Ports;
   env: Record<string, string | undefined>;
   homedir: string;
@@ -525,8 +527,11 @@ export function relayContext(o: {
   load?: RelayContext['load'];
   /** This machine's SSH host key; read from the OpenSSH server's key file by default. */
   hostKey?: () => string | undefined;
+  /** The admin-only folder of the record of pairings; the admin-only tree on Windows. */
+  pairings?: string;
   log: (line: string) => void;
 }): RelayContext {
+  if (!LEAD_RE.test(o.lead)) throw new Error('not a lead name');
   const owner = relayOwner(o.owner, o.home);
   const root = relayRoot(owner);
   ensureStateDir(root, root);
@@ -536,12 +541,18 @@ export function relayContext(o: {
   const home = o.home ?? relayHomeDefault(o.env);
   return {
     owner,
+    lead: o.lead,
     ports: o.ports,
     platform,
     spawnRunner:
-      o.spawnRunner ?? systemSpawnRunner({ home: o.home, platform: platform().platform }),
+      o.spawnRunner ??
+      systemSpawnRunner({ home: o.home, platform: platform().platform, lead: o.lead }),
     load: o.load ?? (() => systemLoad(root)),
-    ...(o.home === undefined ? {} : { home: o.home }),
+    ...(o.pairings !== undefined
+      ? { pairings: o.pairings }
+      : native
+        ? { pairings: machineOf() }
+        : {}),
     hostKey: o.hostKey ?? (() => readHostKey(o.env, platform().platform)),
     log: o.log,
     ...(native
@@ -549,6 +560,7 @@ export function relayContext(o: {
           windows: relayWindows({
             user: settings.windows?.crewUser ?? 'studio-crew',
             home,
+            machine: machineOf(),
             task: settings.windows?.broker ?? 'Studio relay broker',
             stateRoot: root,
             ownerRoot: ownerStateRootFor(owner),
@@ -564,6 +576,9 @@ export function relayContext(o: {
       : {}),
   };
 }
+
+/** The admin-only tree this process runs from: `<machine>\node\node.exe`. */
+const machineOf = (): string => resolve(dirname(process.execPath), '..');
 
 async function readAll(input: AsyncIterable<Uint8Array | string>): Promise<string> {
   let s = '';
@@ -591,6 +606,48 @@ export function readHostKey(
   }
 }
 
+const readText = (file: string | undefined): string | undefined => {
+  if (file === undefined) return undefined;
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Which lead a session of `relay serve` is for. On native Windows the key that logged in decides
+ * (sshd's `ExposeAuthInfo`, matched against the admin-only authorized keys), and a `--lead` the
+ * key's command names must agree; without either, nothing is served. Elsewhere `--lead`, else the
+ * key's lead when sshd names it, else `default`.
+ */
+export function sessionLead(o: {
+  platform: NodeJS.Platform;
+  flag: string | undefined;
+  env: Record<string, string | undefined>;
+  keysFile: string | undefined;
+}): { lead: string } | { problem: string } {
+  const fromKey = leadFromAuthInfo(readText(o.env.SSH_USER_AUTH), readText(o.keysFile));
+  if (o.flag !== undefined && !LEAD_RE.test(o.flag)) return { problem: 'not a lead name' };
+  if (o.flag !== undefined && fromKey !== undefined && o.flag !== fromKey) {
+    return { problem: 'this key belongs to another lead' };
+  }
+  if (o.platform === 'win32') {
+    return fromKey === undefined
+      ? {
+          problem:
+            'cannot tell which lead this key is (sshd ExposeAuthInfo and a key paired by studio relay install)',
+        }
+      : { lead: fromKey };
+  }
+  return { lead: o.flag ?? fromKey ?? 'default' };
+}
+
+const refuse = (out: (s: string) => void, line: string) => {
+  for (const l of encodeMessage({ studioRelay: RELAY_PROTOCOL, ok: false, kind: 'refused', line }))
+    out(l);
+};
+
 /** `studio relay ...`; undefined for a call it does not know. Returns the exit code. */
 export async function runRelayCommand(o: {
   rest: string[];
@@ -611,12 +668,19 @@ export async function runRelayCommand(o: {
   /** Seams for tests of install and unpair: elevation, the host key, where keys are written. */
   elevated?: () => Promise<boolean | undefined>;
   hostKey?: () => string | undefined;
+  /** Seam for tests: the check of the admin-only tree on native Windows. */
+  treeCheck?: () => Promise<string | undefined>;
+  /** Seam for tests: the admin-only tree install and unpair write. */
+  machine?: string;
 }): Promise<number | undefined> {
   const [sub, ...args] = o.rest;
-  const ctx = () =>
+  const platform = (o.platform ?? detectPlatform()).platform;
+  const home = o.values.home ?? relayHomeDefault(o.env);
+  const ctx = (lead: string) =>
     relayContext({
       owner: o.owner,
       home: o.values.home,
+      lead,
       ports: o.ports,
       env: o.env,
       homedir: o.homedir ?? homedir(),
@@ -626,27 +690,61 @@ export async function runRelayCommand(o: {
       ...(o.hostKey === undefined ? {} : { hostKey: o.hostKey }),
       log: (l) => o.stderr(`${l.replace(/\p{Cc}/gu, ' ')}\n`),
     });
+  /** Native Windows: never run from copies anyone but administrators could have changed. */
+  const trusted = async (): Promise<string | undefined> => {
+    if (platform !== 'win32') return undefined;
+    return (
+      o.treeCheck ??
+      (() =>
+        machineTreeProblem(runFile, {
+          machine: machineOf(),
+          home,
+          node: process.execPath,
+          studioBin: STUDIO_BIN,
+        }))
+    )();
+  };
   if (sub === 'serve' && args.length === 0) {
-    await serveRelay(ctx(), o.stdin, o.stdout);
+    const tree = await trusted();
+    if (tree !== undefined) {
+      refuse(o.stdout, tree);
+      return 1;
+    }
+    const lead = sessionLead({
+      platform,
+      flag: o.values.lead,
+      env: o.env,
+      keysFile: platform === 'win32' ? authorizedKeysFile(machineOf()) : undefined,
+    });
+    if ('problem' in lead) {
+      refuse(o.stdout, lead.problem);
+      return 1;
+    }
+    await serveRelay(ctx(lead.lead), o.stdin, o.stdout);
     return 0;
   }
   if (sub === 'run' && args.length === 1) {
     const id = args[0] as string;
-    if (!/^[A-Z]+-\d+$/.test(id)) return undefined;
+    const lead = o.values.lead ?? 'default';
+    if (!/^[A-Z]+-\d+$/.test(id) || !LEAD_RE.test(lead)) return undefined;
+    const tree = await trusted();
+    if (tree !== undefined) throw new Error(tree);
     const spec =
       o.values.pipe === undefined ? await readAll(o.stdin) : await readSpecFromPipe(o.values.pipe);
-    const state = await runRelayJob(ctx(), id, spec);
+    const state = await runRelayJob(ctx(lead), id, spec);
     o.stdout(`${JSON.stringify({ item: id, state })}\n`);
     return state === 'refused' ? 1 : 0;
   }
-  const home = o.values.home ?? relayHomeDefault(o.env);
+  const machine = o.machine ?? relayMachineDefault(o.env);
   const relayUser = o.values.user ?? 'studio-relay';
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(relayUser)) {
     throw new Error('--user: a local user name of at most 20 characters');
   }
   if (sub === 'setup' && args.length === 0) {
     if (o.values.pair !== undefined) throw new Error('--pair works with relay install only');
-    o.stdout(setupScriptFor({ owner: o.owner, env: o.env, home, relayUser, install: undefined }));
+    o.stdout(
+      setupScriptFor({ owner: o.owner, env: o.env, home, machine, relayUser, install: undefined }),
+    );
     return 0;
   }
   if (sub === 'install' && args.length === 0) {
@@ -656,11 +754,13 @@ export async function runRelayCommand(o: {
       home,
       relayUser,
       pair,
-      script: (i) => setupScriptFor({ owner: o.owner, env: o.env, home, relayUser, install: i }),
+      machine,
+      script: (i) =>
+        setupScriptFor({ owner: o.owner, env: o.env, home, machine, relayUser, install: i }),
     });
   }
   if (sub === 'unpair' && args.length === 1) {
-    return await unpair({ ...o, home, relayUser, label: args[0] as string });
+    return await unpair({ ...o, home, machine, relayUser, label: args[0] as string });
   }
   if (sub === 'pair' && o.values.connect !== true && args.length === 2) {
     return await pairStart({ ...o, label: args[0] as string, host: args[1] as string });
@@ -675,6 +775,9 @@ export async function runRelayCommand(o: {
 export interface RelayValues {
   home?: string;
   pipe?: string;
+  lead?: string;
+  'keep-passwords'?: boolean;
+  'disable-spooler'?: boolean;
   pair?: string;
   user?: string;
   port?: string;
@@ -719,26 +822,28 @@ function setupScriptFor(o: {
   owner: OwnerEnv;
   env: Record<string, string | undefined>;
   home: string;
+  machine: string;
   relayUser: string;
   install: RelayInstall | undefined;
 }): string {
   const owner = relayOwner(o.owner, o.home);
   const settings = serveSettings(owner);
-  const q = (x: string) => `'${x.replace(/'/g, "''")}'`;
-  const pluginEnv = `$env:XDG_CONFIG_HOME = ${q(join(o.home, 'config'))}; $env:XDG_STATE_HOME = ${q(join(o.home, 'state'))}`;
+  const claude = findClaude(o.env.PATH ?? o.env.Path);
+  const crewConfig = crewClaudeDir(owner);
   return relaySetupScript({
     relayUser: o.relayUser,
     crewUser: settings.windows?.crewUser ?? 'studio-crew',
     home: o.home,
+    machine: o.machine,
     task: settings.windows?.broker ?? 'Studio relay broker',
-    readPaths: setupReadPaths({
-      node: process.execPath,
-      claude: findClaude(o.env.PATH ?? o.env.Path),
-      toolchains: loadOwnerConfig(owner).crewToolchainPaths,
-      crewConfigDir: crewClaudeDir(owner),
-    }),
-    command: forcedCommand(process.execPath, STUDIO_BIN, o.home),
-    pluginSetup: `${pluginEnv}; & ${q(process.execPath)} ${q(STUDIO_BIN)} account setup-plugins`,
+    // Node.js and Studio are read from their admin-only copies; these are the rest.
+    readPaths: [
+      ...(claude === undefined ? [] : [dirname(claude)]),
+      ...loadOwnerConfig(o.owner).crewToolchainPaths,
+      join(crewConfig, 'skills'),
+      join(crewConfig, 'plugins'),
+    ],
+    source: { node: process.execPath, studio: resolve(dirname(STUDIO_BIN), '..') },
     ...(o.install === undefined ? {} : { install: o.install }),
   });
 }
@@ -775,11 +880,12 @@ async function windowsAdmin(o: {
  */
 async function syncAuthorizedKeys(o: {
   home: string;
+  machine: string;
   relayUser: string;
   exec: Exec;
   stdout: (s: string) => void;
 }): Promise<boolean> {
-  const file = authorizedKeysFile(o.home);
+  const file = authorizedKeysFile(o.machine);
   let existing: string | undefined;
   try {
     existing = readFileSync(file, 'utf8');
@@ -787,8 +893,8 @@ async function syncAuthorizedKeys(o: {
     existing = undefined;
   }
   const plan = authorizedKeysPlan({
-    pairings: readPairings(o.home),
-    command: forcedCommand(process.execPath, STUDIO_BIN, o.home),
+    pairings: readPairings(o.machine),
+    command: forcedCommand(o.machine, o.home),
     existing,
   });
   const r = await o.exec('powershell.exe', [
@@ -823,6 +929,7 @@ async function syncAuthorizedKeys(o: {
  */
 async function install(o: {
   home: string;
+  machine: string;
   relayUser: string;
   script: (install: RelayInstall) => string;
   pair: PairLine | undefined;
@@ -869,7 +976,15 @@ async function install(o: {
   mkdirSync(o.home, { recursive: true });
   const dir = mkdtempSync(join(tmpdir(), 'studio-relay-install-'));
   const file = join(dir, 'install.ps1');
-  writeFileSync(file, o.script({ port, scope }));
+  writeFileSync(
+    file,
+    o.script({
+      port,
+      scope,
+      ...(o.values['keep-passwords'] === true ? { keepPasswords: true } : {}),
+      ...(o.values['disable-spooler'] === true ? { disableSpooler: true } : {}),
+    }),
+  );
   let r: Awaited<ReturnType<Exec>>;
   try {
     r = await exec(
@@ -891,8 +1006,8 @@ async function install(o: {
     writeFileSync(config, DEFAULT_SERVE_CONFIG);
   }
   if (o.pair !== undefined) {
-    writePairings(o.home, {
-      ...readPairings(o.home),
+    writePairings(o.machine, {
+      ...readPairings(o.machine),
       [o.pair.label]: {
         key: o.pair.key,
         secret: o.pair.secret,
@@ -913,6 +1028,7 @@ async function install(o: {
 /** `studio relay unpair <label>` on the worker: the pairing goes, and its key with it. */
 async function unpair(o: {
   home: string;
+  machine: string;
   relayUser: string;
   label: string;
   stdout: (s: string) => void;
@@ -923,10 +1039,10 @@ async function unpair(o: {
   if (!WORKER_LABEL_RE.test(o.label))
     throw new Error('relay unpair: a label is ^[a-z][a-z0-9-]{0,31}$');
   await windowsAdmin({ ...o, what: 'unpair' });
-  const all = readPairings(o.home);
+  const all = readPairings(o.machine);
   const known = o.label in all;
   delete all[o.label];
-  writePairings(o.home, all);
+  writePairings(o.machine, all);
   o.stdout(known ? `unpaired: ${o.label}\n` : `no pairing of ${o.label} here\n`);
   return (await syncAuthorizedKeys({ ...o, exec: o.exec ?? systemExec })) ? 0 : 1;
 }

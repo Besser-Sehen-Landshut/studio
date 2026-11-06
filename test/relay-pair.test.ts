@@ -31,7 +31,7 @@ import {
 import { encodeMessage, LineReader, readMessage } from '../src/relay-protocol.js';
 import { serveRelay } from '../src/relay-serve.js';
 import type { RelayTransport } from '../src/relay-transport.js';
-import { authorizedKeysScript, relaySetupScript } from '../src/relay-windows.js';
+import { authorizedKeysFile, authorizedKeysScript, relaySetupScript } from '../src/relay-windows.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-relay-pair-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -111,6 +111,8 @@ describe('pairing lines, fingerprints and proofs', () => {
     const ctx = relayContext({
       owner: { env: { PATH: process.env.PATH }, homedir: home },
       home,
+      lead: 'lab',
+      pairings: home,
       ports: realPorts(),
       env: { PATH: process.env.PATH },
       homedir: home,
@@ -141,7 +143,7 @@ describe('the authorized keys of a worker are exactly its pairings', () => {
       lab: { key: a, secret: SECRET, pairedAt: '2026-11-06T10:00:00Z' },
     };
     const want = (k: string, l: string) =>
-      `restrict,command="\\"C:\\\\node.exe\\" \\"C:\\\\studio\\\\bin\\\\studio\\" relay serve --home \\"C:\\\\relay\\"" ${k} studio-relay-${l}`;
+      `restrict,command="\\"C:\\\\node.exe\\" \\"C:\\\\studio\\\\bin\\\\studio\\" relay serve --home \\"C:\\\\relay\\" --lead ${l}" ${k} studio-relay-${l}`;
     const plan = authorizedKeysPlan({
       pairings,
       command,
@@ -156,16 +158,17 @@ describe('the authorized keys of a worker are exactly its pairings', () => {
     expect(authorizedKeysPlan({ pairings: {}, command, existing: undefined }).keyLines).toEqual([]);
   });
 
-  it('is written whole: ACL on a temporary file first, then one rename; only administrators write', () => {
+  it('is written whole in its admin-only folder: final ACL on a temporary file, then one replace', () => {
     const script = authorizedKeysScript({
       file: 'C:\\relay\\authorized_keys',
       lines: ['restrict,command="x" ssh-ed25519 AAAA studio-relay-lab'],
       relayUser: 'studio-relay',
     });
+    expect(script).toContain('$tmp = Join-Path (Split-Path -Parent $target)');
     const acl = script.indexOf(
       `icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R"`,
     );
-    const move = script.indexOf('Move-Item -LiteralPath $tmp -Destination $keys -Force');
+    const move = script.indexOf('[IO.File]::Replace($tmp, $target, $null)');
     expect(acl).toBeGreaterThan(0);
     expect(move).toBeGreaterThan(acl);
     expect(() =>
@@ -178,7 +181,7 @@ describe('the authorized keys of a worker are exactly its pairings', () => {
     mkdirSync(home);
     const key = newKey();
     writePairings(home, { lab: { key, secret: SECRET, pairedAt: '2026-11-06T10:00:00Z' } });
-    writeFileSync(join(home, 'authorized_keys'), `ssh-ed25519 ${'Y'.repeat(68)} stray\n`);
+    writeFileSync(authorizedKeysFile(home), `ssh-ed25519 ${'Y'.repeat(68)} stray\n`);
     const scripts: string[] = [];
     const out: string[] = [];
     const exec: Exec = async (_file, args) => {
@@ -195,6 +198,7 @@ describe('the authorized keys of a worker are exactly its pairings', () => {
       exec,
       platform: { platform: 'win32' as const, wsl: 'none' as const, automountRoot: '/mnt/' },
       elevated: async () => true,
+      machine: home,
     };
     expect(await runRelayCommand({ ...base, rest: ['unpair', 'lab'], values: { home } })).toBe(0);
     expect(readPairings(home)).toEqual({});
@@ -365,11 +369,10 @@ describe('the install script', () => {
       relayUser: 'studio-relay',
       crewUser: 'studio-crew',
       home: 'C:\\ProgramData\\Studio\\relay',
+      machine: 'C:\\Program Files\\Studio\\relay',
       task: 'Studio relay broker',
       readPaths: [],
-      command:
-        '"C:\\node.exe" "C:\\studio\\bin\\studio" relay serve --home "C:\\ProgramData\\Studio\\relay"',
-      pluginSetup: '# plugins',
+      source: { node: 'C:\\nodejs\\node.exe', studio: 'C:\\plugins\\studio' },
     };
     const tail = relaySetupScript({ ...base, install: { port: 22, scope: { tailscale: true } } });
     for (const s of [
@@ -378,17 +381,37 @@ describe('the install script', () => {
       'Add-WindowsCapability -Online -Name $ssh.Name',
       '# studio relay begin',
       '# studio relay end',
-      "'System32\\OpenSSH\\sshd.exe') -t",
-      "throw 'sshd does not accept the new sshd_config; it was put back as it was'",
+      "$exe = Join-Path $env:SystemRoot 'System32\\OpenSSH\\sshd.exe'",
+      "Start-Process -FilePath $exe -ArgumentList '-t' -Wait -PassThru -NoNewWindow",
+      'if ($null -eq $tested -or $tested.ExitCode -ne 0) {',
+      // Put back byte for byte, never re-encoded.
+      '[IO.File]::WriteAllBytes($conf, $before)',
+      // Keys only for every account, at the top where sshd reads it first.
+      '# studio relay begin global\nPasswordAuthentication no\nKbdInteractiveAuthentication no',
+      // sshd stays stopped and closed until the end; a failure leaves it so.
+      'SshdOff\nSet-Service -Name sshd -StartupType Automatic',
+      '$ok = $true\n} finally {\n  if (-not $ok) {\n    SshdOff',
       "-like '*Tailscale*'",
       '$scope = @{ InterfaceAlias = $ts.Name }',
       "Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Disable-NetFirewallRule",
       'Set-Service -Name WebClient -StartupType Disabled',
       // The record of pairings: written by SYSTEM and administrators only.
-      "(Join-Path $home_ 'pairing')",
+      "LockFolder (Join-Path $machine 'pairing')",
     ]) {
       expect(tail, s).toContain(s);
     }
+    // sshd starts only once everything checked out, never before the end.
+    expect(tail.indexOf('Start-Service sshd\nWrite-Output "ok: relay account')).toBeGreaterThan(
+      tail.indexOf('-ExitCode -ne 0'),
+    );
+    expect(tail).not.toContain('Restart-Service sshd');
+    expect(tail).not.toContain('Spooler');
+    const kept = relaySetupScript({
+      ...base,
+      install: { port: 22, scope: { tailscale: true }, keepPasswords: true, disableSpooler: true },
+    });
+    expect(kept).not.toContain('PasswordAuthentication no\nKbdInteractiveAuthentication no');
+    expect(kept).toContain('Set-Service -Name Spooler -StartupType Disabled');
     // No key is written by the script: authorized keys come from the record alone.
     expect(tail).not.toMatch(/\$keys = |Set-Content -LiteralPath \$keys/);
     const source = relaySetupScript({

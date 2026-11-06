@@ -397,17 +397,41 @@ export async function acceptResult(o: {
   const parent = ensureStateDir(o.stateRoot, join(o.stateRoot, 'relay'));
   const dir = join(parent, `in-${id}`);
   removeStateEntry(o.stateRoot, dir);
-  const noHooks = ['-c', `core.hooksPath=${join(dir, 'no-hooks')}`];
+  const noHooks = [
+    '-c',
+    `core.hooksPath=${join(dir, 'no-hooks')}`,
+    '-c',
+    'gc.auto=0',
+    '-c',
+    'maintenance.auto=false',
+  ];
   const g = (args: string[]) =>
     o.ports.git.run(dir, [...noHooks, '--no-replace-objects', ...args], { timeoutMs: 600_000 });
   try {
     await o.ports.git.run(parent, ['init', '-q', '--bare', '--template=', dir]);
-    const relayObjects = join(await relayGit(o.stateRoot, o.project, o.ports), 'objects');
-    writeStateFile(
-      o.stateRoot,
-      join(dir, 'objects', 'info', 'alternates'),
-      `${await projectObjects(o.project, o.ports)}\n${relayObjects}\n`,
-    );
+    // No alternates: this repository holds exactly the pinned main (and the head a fix round
+    // started from), taken from the lead's relay repository as a bundle, and then the result. A
+    // result can lean on nothing else of the owner's objects, so nothing else can be pushed.
+    const relay = await relayGit(o.stateRoot, o.project, o.ports);
+    const rg = (args: string[]) => o.ports.git.run(relay, args, { timeoutMs: 600_000 });
+    const bases: [string, string][] = [
+      [`refs/relay/${id}/base`, o.record.sha],
+      ...(o.record.fromSha === undefined
+        ? []
+        : ([[`refs/relay/${id}/from`, o.record.fromSha]] as [string, string][])),
+    ];
+    for (const [ref, sha] of bases) await rg(['update-ref', ref, sha]);
+    const baseFile = join(dir, 'base.bundle');
+    await rg(['bundle', 'create', '-q', baseFile, ...bases.map(([ref]) => ref)]);
+    await g([
+      'fetch',
+      '-q',
+      '--no-tags',
+      '--no-write-fetch-head',
+      baseFile,
+      ...bases.map(([ref]) => `${ref}:${ref}`),
+    ]);
+    removeStateEntry(o.stateRoot, baseFile);
     const file = join(dir, 'result.bundle');
     writeStateFile(o.stateRoot, file, '');
     writeFileSync(file, o.bundle);
