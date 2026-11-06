@@ -744,7 +744,8 @@ exit $code
 
 export interface HostSpec {
   /** seed: only writes `seed` (a file the crew user owns), for the probe's later check. */
-  mode: 'run' | 'probe' | 'seed';
+  /** reset: as the crew user, takes away what a crew left to start in a later job. */
+  mode: 'run' | 'probe' | 'seed' | 'reset';
   seed?: string;
   /** run: what to start, where, its prompt on stdin and the log it appends to. */
   cmd?: string;
@@ -1169,6 +1170,11 @@ export async function probeWindowsResults(
       },
       env: { ...o.env, STUDIO_PROBE_MARK: mark },
     };
+    // A relay start: what an earlier crew left to start in this one goes first, as the crew user
+    // (who can reach no more than a crew could), and the probe then checks that it is gone.
+    if (o.extra?.persistence === true && !(await host({ mode: 'reset', env: o.env }))) {
+      return { problem: unfinished };
+    }
     if (!(await host(spec))) return { problem: unfinished };
     let results: ProbeResult[] | undefined;
     try {

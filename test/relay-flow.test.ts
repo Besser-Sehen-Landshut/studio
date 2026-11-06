@@ -581,6 +581,35 @@ describe('relay workers', () => {
     );
   });
 
+  it('collect waits until the broker proves no process of the crew user is left', async () => {
+    const w = world();
+    await lead(w, ['tick']);
+    crewFinishes(w);
+    let swept = 0;
+    w.ctx = {
+      ...w.ctx,
+      windows: {
+        check: async () => ({ warnings: [] }),
+        launch: async () => {
+          throw new Error('unused');
+        },
+        claude: () => portsFor(w, leadGh(w).gh).claude,
+        sweep: async () => {
+          swept += 1;
+          throw new Error('processes of the crew user are still running (77)');
+        },
+      },
+    };
+    const t = JSON.parse((await lead(w, ['tick'])).out);
+    expect(swept).toBe(1);
+    expect(t.held).toContainEqual({
+      item: 'APP-1',
+      reason: expect.stringContaining("the crew user's processes are not proven gone"),
+    });
+    expect(statusOf(w)?.status).not.toBe('in_review');
+    expect(() => git(w.origin, 'rev-parse', '--verify', 'refs/heads/studio/APP-1')).toThrow();
+  });
+
   it('doctor names the relay worker, its versions and its load', async () => {
     const w = world();
     const r = await lead(w, ['doctor']);

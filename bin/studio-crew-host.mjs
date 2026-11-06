@@ -395,7 +395,22 @@ async function probe(p) {
   return results;
 }
 
-if (spec.mode === 'seed') {
+if (spec.mode === 'reset') {
+  // What a crew could leave in this user's profile to start in a later job goes, as this user.
+  let report;
+  try {
+    const { resetRegistry, resetStartup } = await import('./studio-crew-reset.mjs');
+    const startup = execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', "[Environment]::GetFolderPath('Startup')"],
+      { encoding: 'utf8', windowsHide: true },
+    ).trim();
+    report = { registry: resetRegistry(), startup: startup === '' ? null : resetStartup(startup) };
+  } catch (e) {
+    report = { error: String(e?.message ?? e).split('\n')[0] };
+  }
+  process.stdout.write(JSON.stringify(report), () => process.exit(0));
+} else if (spec.mode === 'seed') {
   try {
     writeFileSync(spec.seed, 'made by the crew user');
     process.exit(0);

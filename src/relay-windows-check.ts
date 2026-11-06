@@ -98,26 +98,22 @@ export function relayWindows(o: {
   const path = o.env.PATH ?? o.env.Path;
   const claudeBin = findClaude(path) ?? 'claude';
   const ifaces = () => (o.interfaces ?? networkInterfaces)();
-  const grants = new WindowsGrants({
-    ownerRoot: o.ownerRoot,
-    user: o.user,
-    run,
-    sweep: () =>
-      brokerSweep({
-        run,
-        task: o.task,
-        result: brokerResultFile(o.machine),
-        readFile: (f) => {
-          try {
-            return readFileSync(f, 'utf8');
-          } catch {
-            return undefined;
-          }
-        },
-        now: () => new Date(),
-        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-      }),
-  });
+  const sweep = () =>
+    brokerSweep({
+      run,
+      task: o.task,
+      result: brokerResultFile(o.machine),
+      readFile: (f) => {
+        try {
+          return readFileSync(f, 'utf8');
+        } catch {
+          return undefined;
+        }
+      },
+      now: () => new Date(),
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    });
+  const grants = new WindowsGrants({ ownerRoot: o.ownerRoot, user: o.user, run, sweep });
   const claude = () =>
     windowsClaude({
       stateRoot: o.stateRoot,
@@ -257,6 +253,7 @@ export function relayWindows(o: {
       };
     },
     claude,
+    sweep,
   };
 }
 
