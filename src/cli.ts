@@ -36,6 +36,16 @@ import {
   type WorkItem,
 } from './board.js';
 import { readSkillsMissing } from './brief-caps.js';
+import {
+  CACHE_MANIFESTS,
+  CACHE_ROLE,
+  cacheCleanup,
+  cacheDue,
+  openCacheItem,
+  publishCache,
+  systemCowCopy,
+  withCacheItem,
+} from './cache.js';
 import { capabilitiesDir } from './capabilities.js';
 import { capacityHoldsTwice, readCapacity, readCapacityTwice } from './capacity.js';
 import {
@@ -44,6 +54,7 @@ import {
   readWorkflowsAt,
   verifyNotRunHereJobs,
 } from './ci-jobs.js';
+import { gcLines, runCloneGc, TICK_REMOTE_MAX } from './clone-gc.js';
 import {
   configWarnings,
   loadConfig,
@@ -120,6 +131,13 @@ import {
   validLabel,
 } from './limits.js';
 import { readMainBuild } from './main-build.js';
+import {
+  listMigrationNumbers,
+  migrationScheme,
+  pullRequestMigrationCheck,
+  releaseMigrationNumber,
+  reserveMigrationNumber,
+} from './migration-numbers.js';
 import { sendNotifications } from './notify.js';
 import { formatOverview, readOverview } from './overview.js';
 import { migrateOwnerState, pendingLegacyState } from './owner-state.js';
@@ -443,6 +461,8 @@ interface Tick {
     pinned?: { item: string; epic: string; sha: string; suites: { pass: number; fail: number } }[];
     started?: { item: string; workflow: string; sha: string }[];
   };
+  /** The build cache: the item this tick added to rebuild it, caches the size cleanup removed. */
+  cache?: { added?: string; removed?: number };
   /** Epics whose acceptance was green in this tick: one owner line each. */
   epicsDone?: { epic: string; title: string; item: string }[];
   /** Epics an acceptance reopened, with the items it added for its findings and failed suites. */
@@ -459,6 +479,8 @@ interface Tick {
   exceptions?: { rule: string; pr: string; item?: string; head: string; by: string }[];
   /** Open releases and those that ended in the last day; absent without any. */
   releases?: (ReturnType<typeof releaseRow> & { next?: string })[];
+  /** Finished items whose clone, crew home and tmp dir this tick removed; absent without any. */
+  cleaned?: string[];
 }
 
 /**
@@ -629,11 +651,21 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         '--since, --said, --at, --deployed and --not-deployed work with release only',
       );
     }
-    if ((values.from !== undefined || values.apply !== undefined) && cmd !== 'adopt') {
-      throw new UsageError('--from and --apply work with adopt only');
+    if (values.from !== undefined && cmd !== 'adopt') {
+      throw new UsageError('--from works with adopt only');
+    }
+    if (values.apply !== undefined && cmd !== 'adopt' && cmd !== 'gc') {
+      throw new UsageError('--apply works with adopt and gc only');
     }
     if ((values.label !== undefined || values.once !== undefined) && cmd !== 'worker') {
       throw new UsageError('--label and --once work with worker only');
+    }
+    const reserveOnly = [values.number, values.for, values.purpose];
+    if (
+      !(cmd === 'migration' && rest[0] === 'reserve') &&
+      reserveOnly.some((v) => v !== undefined)
+    ) {
+      throw new UsageError('--number, --for and --purpose work with migration reserve only');
     }
     /** The item's components, as a field for JSON output; nothing when none are configured. */
     const componentField = (config: StudioConfig | undefined, item: WorkItem | undefined) =>
@@ -1159,7 +1191,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             hold,
             mergeAllowed: (entry, head, waived) =>
               entry.external !== undefined
-                ? externalBlocksMerge(project, root, entry)
+                ? externalBlocksMerge(project, root, config, entry, ports)
                 : boardBlocksMerge(project, root, config, entry, head, ports, waived),
             evidence: async (entry, head, failed) => {
               // Without rules in the owner's config none apply: a failure fails as before. An
@@ -1519,6 +1551,32 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const hits = privacyHits(text, 'report');
         if (hits.length > 0) throw new ReportError(privacyLine(hits));
       }
+      // A cache crew's build of main, done: what it left becomes the project's build cache
+      // (src/cache.ts). A publish that fails blocks the item with the reason, like a failed run.
+      let cached: { sha: string; sizeBytes: number } | undefined;
+      if (item.role === CACHE_ROLE && item.runsOn === undefined && report.status === 'done') {
+        try {
+          const meta = await publishCache({
+            stateRoot: stateRoot(),
+            ownerRoot: ownerRoot(),
+            item: item.id,
+            clone: join(stateRoot(), 'clones', item.id),
+            homeDir: join(stateRoot(), 'homes', item.id),
+            ownerConfig: loadOwnerConfig(owner),
+            cow: ports.cow ?? systemCowCopy(),
+            now: ports.clock.now(),
+            crewNonce: readCrewRecords(stateRoot())[item.id]?.cacheRun,
+          });
+          cached = { sha: meta.sha, sizeBytes: meta.sizeBytes };
+        } catch (e) {
+          const line = (e as Error).message.replace(/\p{Cc}/gu, ' ');
+          report = {
+            ...report,
+            status: 'failed',
+            questions: [...report.questions, `build cache not published: ${line}`],
+          };
+        }
+      }
       // A review report that does not hold to its brief is a rejected report, like one that
       // cannot be read: `tick` hands both to the lead.
       // A subagent the guard stopped for time never counts as a pass: the approval must show it.
@@ -1825,6 +1883,39 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             );
           }
         }
+        // A new migration whose number is someone else's (reserved for another, on main, in another
+        // open pull request) stops here, before a review: the lead renumbers or decides.
+        const numbers = await pullRequestMigrationCheck({
+          gh: ports.gh,
+          root: stateRoot(),
+          config: loadConfig(project),
+          repo: item.repo,
+          pr: report.pr,
+          holder: [item.id, `studio/${item.id}`, ...(item.crew === undefined ? [] : [item.crew])],
+          now: ports.clock.now(),
+        });
+        if (numbers.unreadable !== undefined) {
+          return {
+            kind: 'waiting',
+            line: `${item.id}: the migration numbers cannot be read now (${numbers.unreadable}); collect again, nothing moved`,
+          };
+        }
+        if (numbers.problem !== undefined) {
+          const note = `${numbers.problem}; renumber it (studio migration reserve) or release the reservation`;
+          await withBoardLock(stateRoot(), ports.clock.now(), () => {
+            const fresh = loadBoard(project);
+            if (findItem(fresh, item.id).status !== item.status) {
+              throw new Error(`${item.id} changed while it was collected; nothing moved`);
+            }
+            let next = transition(fresh, item.id, 'blocked', BY, ports.clock.now());
+            next = withItem(next, item.id, (i) => ({ ...i, notes: [...(i.notes ?? []), note] }));
+            saveBoard(project, next);
+          });
+          return {
+            kind: 'refused',
+            line: `${item.id}: ${note}; pull request ${report.pr} is not reviewed, ${item.id} is blocked for the lead`,
+          };
+        }
       } else if (report.status === 'done' && !PR_OPTIONAL.includes(item.type)) {
         throw new ReportError(`done report for ${item.id} names no pr`);
       }
@@ -2025,6 +2116,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         // Offered skills the launch found not installed: the lead installs them or lets them go.
         ...(skillsMissing.length === 0 ? {} : { skillsMissing }),
         ...(supersededBy === undefined ? {} : { supersededBy }),
+        ...(cached === undefined ? {} : { cache: cached }),
         ...(fixLimit ? { fixLimit } : {}),
         ...(acceptance === undefined ? {} : { acceptance }),
         ...(lessonsProposed > 0 ? { lessonsProposed } : {}),
@@ -2388,6 +2480,32 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (Object.keys(a).length > 0) out.acceptance = a;
       };
 
+      // The shared build cache (src/cache.ts): once a day the size cleanup over all projects, and a
+      // cache item when the cache is on and older than every_days. The item is launched like any.
+      const cachePhase = async () => {
+        const now = ports.clock.now();
+        const removed = await cacheCleanup({
+          stateBase: dirname(root),
+          ownerRoot: ownerRoot(),
+          ownerConfig: loadOwnerConfig(owner),
+          now,
+        });
+        if ((removed ?? []).length > 0) out.cache = { removed: removed?.length };
+        const config = loadConfig(project);
+        if (!cacheDue(root, config, now) || openCacheItem(loadBoard(project)) !== undefined) return;
+        // Only when main has something to cache: its root as the owner's checkout last fetched it.
+        const names = (
+          await ports.git.run(project, ['ls-tree', '--name-only', 'refs/remotes/origin/main'])
+        ).split('\n');
+        if (!CACHE_MANIFESTS.some((m) => names.includes(m))) return;
+        const id = await withBoardLock(root, now, () => {
+          const r = withCacheItem(loadBoard(project), config);
+          if (r.id !== undefined) saveBoard(project, r.board);
+          return r.id;
+        });
+        if (id !== undefined) out.cache = { ...out.cache, added: id };
+      };
+
       // (c) The plan, launched under every gate `launch` keeps.
       const launchPlanned = async () => {
         const { config, board } = loadAll();
@@ -2583,6 +2701,27 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (open.length > 0) out.lessonsReview = open;
       };
 
+      // Finished items give their disk back: a clone, crew home and tmp dir go once nothing needs
+      // them any more (src/clone-gc.ts). What stays is retried on the next tick.
+      const cleanupPhase = async () => {
+        const r = await runCloneGc({
+          stateRoot: root,
+          ownerRoot: ownerRoot(),
+          project,
+          ports,
+          apply: true,
+          sizes: false,
+          maxRemote: TICK_REMOTE_MAX,
+        });
+        const cleaned = [...(r.result?.removed ?? []), ...(r.result?.trimmed ?? [])];
+        if (cleaned.length > 0) out.cleaned = cleaned;
+        for (const s of r.result?.skipped ?? []) {
+          if (s.reason === 'a launch is in progress' || s.reason === 'its crew is running')
+            continue;
+          out.held.push({ item: s.item, reason: `clean-up: ${s.reason}` });
+        }
+      };
+
       // Releases: follow triggered ones on GitHub, list what waits for approvals. Never triggers:
       // that is the lead's `studio release <component>`.
       const releasesPhase = async () => {
@@ -2668,12 +2807,14 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ['review', reviewMissing],
           ['workers', followWorkers],
           ['acceptance', acceptancePhase],
+          ['cache', cachePhase],
           ['launch', launchPlanned],
           ['queue add', queueApproved],
           ['sweep', sweep],
           ['releases', releasesPhase],
           ['skills check', skillsMonthly],
           ['lessons', lessonsWeekly],
+          ['cleanup', cleanupPhase],
         ] as const) {
           if (!(await phase(name, body))) return out;
         }
@@ -2997,6 +3138,28 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (skillsCheckDue(root, now).due) {
           out.skillsCheck = 'due: the tick runs the monthly skills check';
         }
+      });
+
+      // Without asking GitHub: a clone with commits shows as one the tick would check first.
+      await step('cleanup', async () => {
+        if (!rootExists) return;
+        const r = await runCloneGc({
+          stateRoot: root,
+          ownerRoot: ownerRoot(),
+          project,
+          ports,
+          apply: false,
+          sizes: false,
+          remote: false,
+        });
+        const cleanup = r.entries.flatMap((e) =>
+          e.verdict === 'remove' || e.verdict === 'trim'
+            ? [{ item: e.item, would: e.verdict === 'trim' ? 'trim to its report' : 'remove' }]
+            : e.verdict === 'unchecked'
+              ? [{ item: e.item, would: 'remove once GitHub shows its commits are pushed' }]
+              : [],
+        );
+        if (cleanup.length > 0) out.cleanup = cleanup;
       });
       return out;
     };
@@ -4137,8 +4300,92 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         });
       }
 
+      case 'gc': {
+        refuseCrew(deps.env);
+        if (rest.length > 0) throw new UsageError('gc takes no arguments, only --apply');
+        const apply = values.apply === true;
+        const r = await runCloneGc({
+          stateRoot: apply ? await boundStateRoot() : stateRoot(),
+          ownerRoot: ownerRoot(),
+          project,
+          ports,
+          apply,
+          sizes: true,
+        });
+        if (json) print(r);
+        else stdout(`${gcLines(r).join('\n')}\n`);
+        return r.result !== undefined && r.result.skipped.length > 0 ? 1 : 0;
+      }
+
       case 'doctor': {
         return await runDoctor({ project, owner, env: deps.env, ports, json, stdout });
+      }
+
+      case 'migration': {
+        const [sub, ...args] = rest;
+        const usage =
+          'migration needs: reserve [--number <n>] --for <who> --purpose "<text>" | list | release <n>';
+        if (sub !== 'reserve' && sub !== 'list' && sub !== 'release') throw new UsageError(usage);
+        refuseCrew(deps.env);
+        const scheme = migrationScheme(loadAll().config);
+        if (scheme === undefined) {
+          throw new Error(
+            'no migrations block in studio.yaml: add migrations: { dir: <folder>, number_pattern: <regex> }',
+          );
+        }
+        if (sub === 'reserve') {
+          if (args.length > 0 || values.for === undefined || values.purpose === undefined) {
+            throw new UsageError(usage);
+          }
+          if (values.number !== undefined && !/^[1-9]\d{0,14}$/.test(values.number)) {
+            throw new UsageError('--number must be a whole number from 1 to 999999999999999');
+          }
+          const r = await reserveMigrationNumber({
+            gh: ports.gh,
+            root: await boundStateRoot(),
+            scheme,
+            request: {
+              for: values.for,
+              purpose: values.purpose,
+              ...(values.number === undefined ? {} : { number: Number(values.number) }),
+            },
+            now: ports.clock.now(),
+          });
+          print({ reserved: r.number, for: r.for, purpose: r.purpose, at: r.at });
+          return 0;
+        }
+        if (sub === 'release') {
+          const [n] = args;
+          if (args.length !== 1 || !/^[1-9]\d{0,14}$/.test(n ?? '')) throw new UsageError(usage);
+          const r = releaseMigrationNumber(await boundStateRoot(), Number(n), ports.clock.now());
+          print({ released: r.number, for: r.for });
+          return 0;
+        }
+        if (args.length > 0) throw new UsageError(usage);
+        const l = await listMigrationNumbers({
+          gh: ports.gh,
+          root: await boundStateRoot(),
+          scheme,
+          now: ports.clock.now(),
+        });
+        if (l.warning !== undefined) stderr(`warning: ${l.warning}\n`);
+        if (json) print(l);
+        else {
+          stdout(
+            table([
+              ['NUMBER', 'STATUS', 'FOR', 'PURPOSE', 'AT'],
+              ...l.reservations.map((r) => [
+                String(r.number),
+                r.status,
+                r.for,
+                r.purpose,
+                r.landedAt ?? r.releasedAt ?? r.at,
+              ]),
+            ]),
+          );
+          if (l.next !== undefined) stdout(`next free: ${l.next}\n`);
+        }
+        return 0;
       }
 
       case 'account': {
@@ -4996,6 +5243,9 @@ function parseCli(argv: string[]) {
         artifacts: { type: 'string' },
         from: { type: 'string' },
         apply: { type: 'boolean' },
+        number: { type: 'string' },
+        for: { type: 'string' },
+        purpose: { type: 'string' },
         wait: { type: 'boolean' },
         'follow-head': { type: 'boolean' },
       },
@@ -5208,7 +5458,22 @@ async function boardBlocksMerge(
     { head: item.approvedHead, base: item.approvedBase },
     head,
   );
-  if (problem !== undefined || (item.approvedJobs ?? []).length === 0) return problem;
+  if (problem !== undefined) return problem;
+  // Read again right before the merge: another pull request may have landed the number meanwhile.
+  const numbers = await pullRequestMigrationCheck({
+    gh: ports.gh,
+    root,
+    config,
+    repo: entry.repo,
+    pr: entry.pr,
+    holder: [item.id, `studio/${item.id}`, ...(item.crew === undefined ? [] : [item.crew])],
+    now: ports.clock.now(),
+  });
+  if (numbers.unreadable !== undefined) {
+    return `the migration numbers cannot be read now (${numbers.unreadable})`;
+  }
+  if (numbers.problem !== undefined) return numbers.problem;
+  if ((item.approvedJobs ?? []).length === 0) return undefined;
   // The jobs the approval named for commands the builder could not run must still have passed.
   const checks = await readChecks(entry, ports.gh, waived);
   if (checks.kind !== 'pass') return 'the checks are not green';
@@ -5225,7 +5490,13 @@ function boardItemOf(board: Board, repo: string, pr: number): string | undefined
  * the merge, and a pull request a board item or an open review holds is refused, so the external
  * path never skips a review the board asks for. Branch protection on GitHub decides the rest.
  */
-function externalBlocksMerge(project: string, root: string, entry: QueueEntry): string | undefined {
+async function externalBlocksMerge(
+  project: string,
+  root: string,
+  config: StudioConfig,
+  entry: QueueEntry,
+  ports: Ports,
+): Promise<string | undefined> {
   let board: Board;
   try {
     board = loadBoard(project);
@@ -5236,7 +5507,21 @@ function externalBlocksMerge(project: string, root: string, entry: QueueEntry): 
   if (item !== undefined) return `the pull request belongs to board item ${item}`;
   const target = `${entry.repo}#${entry.pr}`;
   const open = openReview(root, board, target);
-  return open === undefined ? undefined : openReviewLine(open, target);
+  if (open !== undefined) return openReviewLine(open, target);
+  // The migration register holds for every merge: the session that queued it may hold a number.
+  const numbers = await pullRequestMigrationCheck({
+    gh: ports.gh,
+    root,
+    config,
+    repo: entry.repo,
+    pr: entry.pr,
+    holder: entry.external === undefined ? [] : [entry.external.by],
+    now: ports.clock.now(),
+  });
+  if (numbers.unreadable !== undefined) {
+    return `the migration numbers cannot be read now (${numbers.unreadable})`;
+  }
+  return numbers.problem;
 }
 
 /** The owner's checkout tracks the primary repo; another repo is reached by its URL. */

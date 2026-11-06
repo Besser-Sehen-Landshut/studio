@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { closeSync, openSync, readFileSync } from 'node:fs';
 import { availableParallelism, loadavg } from 'node:os';
 import { execa } from 'execa';
+import type { CowCopy } from './cache.js';
 import { parseLinuxStartTime } from './paths.js';
 import type { WorkerHub } from './worker-hub.js';
 
@@ -131,6 +132,11 @@ export interface Ports {
    * token or the machine's login. A seam for tests.
    */
   hub?: (token?: string) => WorkerHub;
+  /**
+   * The copy-on-write copy of the build cache (src/cache.ts); missing means the system's `cp`. A
+   * seam for tests, whose file systems may not clone.
+   */
+  cow?: CowCopy;
 }
 
 const HTTP_TIMEOUT_MS = 15_000;

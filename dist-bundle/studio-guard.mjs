@@ -2107,9 +2107,29 @@ function checkSearch(env, path, globs, cwd) {
 }
 var isSecretExempt = (s) => basename(s) === ".env.example";
 var isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === "string");
+function checkOnly(ctx, toolName, toolInput, cwd) {
+  if (toolName === "Bash") {
+    const command = toolInput.command;
+    if (typeof command !== "string" || !(ctx.onlyCommands ?? []).includes(command.trim())) {
+      deny("a cache crew runs only the commands its brief lists, each exactly as written");
+    }
+    return;
+  }
+  if (toolName === "Task" || toolName === "Agent") deny("a cache crew starts no subagent");
+  if (toolName === "Edit" || toolName === "MultiEdit" || toolName === "NotebookEdit") {
+    deny("a cache crew edits no file");
+  }
+  if (toolName === "Write") {
+    const p = toolInput.file_path;
+    const allowed = (ctx.onlyWrites ?? []).map((w) => resolveReal(w, "/"));
+    if (typeof p !== "string" || p === "" || !allowed.includes(resolveReal(p, cwd))) {
+      deny("a cache crew writes only its report");
+    }
+  }
+}
 function check(input, ctx) {
   const c = ctx;
-  if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs) || c.item !== void 0 && (typeof c.item !== "string" || !/^[A-Z]+-\d+$/.test(c.item)) || c.base !== void 0 && (typeof c.base !== "string" || !/^[A-Za-z0-9._/-]+$/.test(c.base)) || c.mcpAllow !== void 0 && !isStringArray(c.mcpAllow) || c.blockedCommands !== void 0 && !isStringArray(c.blockedCommands) || c.reaClasses !== void 0 && !isStringArray(c.reaClasses) || c.noPush !== void 0 && typeof c.noPush !== "boolean" || c.mcpKeys !== void 0 && !(c.mcpKeys !== null && typeof c.mcpKeys === "object" && Object.values(c.mcpKeys).every(
+  if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs) || c.item !== void 0 && (typeof c.item !== "string" || !/^[A-Z]+-\d+$/.test(c.item)) || c.base !== void 0 && (typeof c.base !== "string" || !/^[A-Za-z0-9._/-]+$/.test(c.base)) || c.mcpAllow !== void 0 && !isStringArray(c.mcpAllow) || c.blockedCommands !== void 0 && !isStringArray(c.blockedCommands) || c.reaClasses !== void 0 && !isStringArray(c.reaClasses) || c.noPush !== void 0 && typeof c.noPush !== "boolean" || c.onlyCommands !== void 0 && !isStringArray(c.onlyCommands) || c.onlyWrites !== void 0 && !(isStringArray(c.onlyWrites) && c.onlyWrites.every((p) => isAbsolute2(p))) || c.mcpKeys !== void 0 && !(c.mcpKeys !== null && typeof c.mcpKeys === "object" && Object.values(c.mcpKeys).every(
     (e) => isStringArray(e.keys) && isStringArray(e.paths) && isStringArray(e.text)
   )) || c.artifacts !== void 0 && (typeof c.artifacts !== "string" || !isAbsolute2(c.artifacts) || c.artifacts === "/") || c.deniedPorts !== void 0 && !(Array.isArray(c.deniedPorts) && c.deniedPorts.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535))) {
     deny("invalid guard context");
@@ -2161,6 +2181,9 @@ function check(input, ctx) {
   }
   if (typeof toolName !== "string" || !CREW_TOOLS.has(toolName)) {
     deny(`tool not allowed for crew: ${String(toolName)}`);
+  }
+  if (ctx.onlyCommands !== void 0 || ctx.onlyWrites !== void 0) {
+    checkOnly(ctx, toolName, toolInput, cwd);
   }
   if (toolName === "Bash") {
     const command = toolInput.command;

@@ -154,7 +154,7 @@ describe('studio adopt', () => {
     expect(existsSync(fx.to)).toBe(false);
   });
 
-  it('needs --from; --from and --apply belong to adopt only', async () => {
+  it('needs --from; --apply belongs to adopt and gc only', async () => {
     const fx = makeFx();
     expect((await adopt(fx, [])).err).toMatch(/adopt needs --from/);
     let err = '';
@@ -168,7 +168,7 @@ describe('studio adopt', () => {
       homedir: fx.home,
       cwd: fx.project,
     });
-    expect(err).toMatch(/--from and --apply work with adopt only/);
+    expect(err).toMatch(/--apply works with adopt and gc only/);
   });
 
   it('is a dry run by default: lists what it would take and writes nothing', async () => {

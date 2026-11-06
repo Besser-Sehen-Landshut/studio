@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { type AccountRow, accountRows, expiryLine } from './account-command.js';
 import { builtInAccount, crewClaudeDir } from './accounts.js';
+import { type CacheStatus, cacheDoctorLine, cacheStatus } from './cache.js';
+import { formatBytes, runCloneGc } from './clone-gc.js';
 import {
   crewTokenFile,
   loadConfig,
@@ -22,7 +24,8 @@ import {
   validToken,
 } from './credentials.js';
 import { CREW_SKILL, skillInstalled, studioPluginHint } from './crew.js';
-import { ownerStateRootFor } from './paths.js';
+import { registerDoctorLine } from './migration-numbers.js';
+import { ownerStateRootFor, stateRootFor } from './paths.js';
 import { installedVersions, pinnedPlugins, unallowedPlugins } from './plugins.js';
 import type { Ports } from './ports.js';
 import { readNotifySecret } from './push.js';
@@ -372,7 +375,62 @@ async function boardTrackedState(project: string, ports: Ports): Promise<'yes' |
   }
 }
 
+/** The register of reserved migration numbers, from the state root alone (no network). */
+function migrationRegisterLine(
+  config: StudioConfig | undefined,
+  project: string,
+  owner: OwnerEnv,
+): string {
+  try {
+    return registerDoctorLine(config, stateRootFor(project, owner));
+  } catch (e) {
+    return `unreadable: ${(e as Error).message}`;
+  }
+}
+
+/** The disk the items' clones, crew homes and tmp dirs use, and how many of them can go. */
+async function clonesState(o: { project: string; owner: OwnerEnv; ports: Ports }) {
+  const r = await runCloneGc({
+    stateRoot: stateRootFor(o.project, o.owner),
+    ownerRoot: ownerStateRootFor(o.owner),
+    project: o.project,
+    ports: o.ports,
+    apply: false,
+    sizes: true,
+    remote: false,
+  });
+  return {
+    count: r.clones,
+    bytes: r.bytes,
+    removable: r.removable,
+    removableBytes: r.removableBytes,
+    unchecked: r.unchecked,
+  };
+}
+
+/** The doctor line for the clones. */
+export function clonesLine(c: Awaited<ReturnType<typeof clonesState>> | 'unknown'): string {
+  if (c === 'unknown') return 'clones: unknown (the state root cannot be read)';
+  const more =
+    c.unchecked > 0 ? `, ${c.unchecked} more once GitHub shows their commits are pushed` : '';
+  return `clones: ${c.count}, ${formatBytes(c.bytes)} with crew homes and tmp dirs; removable now: ${c.removable} (${formatBytes(c.removableBytes)})${more}${c.removable + c.unchecked > 0 ? ' (studio gc)' : ''}`;
+}
+
 export type DoctorReport = Awaited<ReturnType<typeof doctorReport>>;
+
+/** The project's build cache (src/cache.ts); null when the state root cannot be named. */
+function buildCacheState(
+  project: string,
+  owner: OwnerEnv,
+  config: StudioConfig | undefined,
+  ownerConfig: OwnerConfig | undefined,
+): CacheStatus | null {
+  try {
+    return cacheStatus(stateRootFor(project, owner), config, ownerConfig);
+  } catch {
+    return null;
+  }
+}
 
 /** What `studio doctor` finds, without printing; `studio init` reads the same checks. */
 export async function doctorReport(o: {
@@ -458,6 +516,13 @@ export async function doctorReport(o: {
     o.owner.homedir ?? homedir(),
     ownerConfig?.crewToolchainPaths ?? [],
   );
+  // Local files only: whether a clone's commits are pushed is for studio gc and the tick to ask.
+  let clones: Awaited<ReturnType<typeof clonesState>> | 'unknown';
+  try {
+    clones = await clonesState(o);
+  } catch {
+    clones = 'unknown';
+  }
   const report = {
     claudeLogin,
     projectCheckout,
@@ -479,9 +544,12 @@ export async function doctorReport(o: {
     credentialProvider: ownerConfig?.crewCredentialCommand ?? null,
     allowApiBilling: ownerConfig?.allowApiBilling ?? false,
     rea: reaState(config, ownerConfig, configDir, ownerStateRootFor(o.owner)),
+    buildCache: buildCacheState(o.project, o.owner, config, ownerConfig),
     notify: ownerConfig?.notify?.command ? 'configured' : 'not configured',
     notifications: notificationsState(o.owner),
     apiKeyVarsInEnvironment: API_KEY_VARS.filter((k) => o.env[k]),
+    migrationRegister: migrationRegisterLine(config, o.project, o.owner),
+    clones,
   };
   return {
     report,
@@ -538,7 +606,10 @@ export async function runDoctor(o: {
       `notifications: ${report.notifications}`,
       `allow_api_billing: ${report.allowApiBilling ? 'on' : 'off'}`,
       ...(report.rea === null ? [] : reaDoctorLines(report.rea)),
+      ...(report.buildCache === null ? [] : [cacheDoctorLine(report.buildCache)]),
+      `migration register: ${report.migrationRegister}`,
       `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(', ') || 'none'}`,
+      clonesLine(report.clones),
     ];
     o.stdout(`${lines.map(safe).join('\n')}\n`);
   }
