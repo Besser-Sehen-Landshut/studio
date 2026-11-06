@@ -19,6 +19,8 @@ export type PushKind =
   | 'fix_limit'
   | 'changes_requested'
   | 'merge_failed'
+  /** An external pull request (`studio merge`) was merged. */
+  | 'merged'
   | 'question'
   | 'evidence'
   | 'blocked'

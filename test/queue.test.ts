@@ -479,7 +479,11 @@ describe('mergeOne', () => {
       ]),
       { busy: { n: 8 } },
     );
-    expect(r.result.result).toBe('failed');
+    expect(r.result).toEqual({
+      result: 'failed',
+      reason: 'capacity did not hold in time',
+      timeout: true,
+    });
     expect(mergeCalls(r.calls)).toHaveLength(0);
   });
 
@@ -491,7 +495,7 @@ describe('mergeOne', () => {
         { prefix: VIEW, responses: [view(H1)] },
       ]),
     );
-    expect(r.result).toEqual({ result: 'failed', reason: 'checks timed out' });
+    expect(r.result).toEqual({ result: 'failed', reason: 'checks timed out', timeout: true });
   });
 
   it('PR already MERGED (restart after merge): merged without a second merge call', async () => {

@@ -28592,6 +28592,7 @@ var de_default2 = defineLocale({
       fix_limit: "Fix-Limit erreicht",
       changes_requested: "\xC4nderungen angefordert",
       merge_failed: "Merge fehlgeschlagen",
+      merged: "Gemergt",
       question: "Crew hat eine Frage",
       evidence: "Pr\xFCfungstreffer, der Inhaber entscheidet",
       blocked: "Blockiert",
@@ -28901,6 +28902,7 @@ var strings = {
     fix_limit: "Fix limit reached",
     changes_requested: "Changes requested",
     merge_failed: "Merge failed",
+    merged: "Merged",
     question: "Crew has a question",
     evidence: "Guard hit, the owner decides",
     blocked: "Blocked",
@@ -31338,6 +31340,19 @@ function wildcardOverIp(entry) {
     return false;
   }
 }
+var runnerLoadSchema = external_exports.strictObject({
+  org: external_exports.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/, "must be a GitHub organisation name"),
+  namePattern: external_exports.string().min(1).max(200).superRefine((p, ctx) => {
+    try {
+      new RegExp(p);
+    } catch {
+      ctx.addIssue({ code: "custom", message: "not a valid regular expression" });
+    }
+  }),
+  maxBusy: external_exports.number().int().nonnegative(),
+  samples: external_exports.number().int().min(1).max(10).default(2),
+  intervalS: external_exports.number().nonnegative().max(600).default(30)
+});
 var dailyLimitsSchema = external_exports.strictObject({
   dailyCostUsd: external_exports.number().positive().optional()
 });
@@ -31354,7 +31369,10 @@ var studioConfigSchema = external_exports.strictObject({
   merge: external_exports.strictObject({
     strategy: external_exports.enum(["studio-queue", "native-queue"]),
     contractPaths: strList2,
-    method: external_exports.enum(["merge", "squash", "rebase"]).default("merge")
+    method: external_exports.enum(["merge", "squash", "rebase"]).default("merge"),
+    // Optional gate before every merge of the queue: the self-hosted runners of an organisation
+    // that the merged repositories' CI uses. Off when unset.
+    runnerLoad: runnerLoadSchema.optional()
   }),
   // Partial record keyed by role template name; at least one role must be configured.
   roles: external_exports.partialRecord(external_exports.enum(ROLE_TEMPLATES), roleSchema).refine((r) => Object.keys(r).length > 0, "at least one role is required"),
@@ -31810,7 +31828,9 @@ var RUNNER_JQ = ".runners[] | [.name, .status, .busy] | @tsv";
 var RUNNER_LINE = /^(\S+)\t(\S+)\t(true|false)$/;
 async function selfHostedBusy(config2, gh, timeoutMs) {
   const org = config2.primaryRepo.split("/")[0];
-  const pattern = config2.ci.runnerNamePattern;
+  return orgRunnersBusy(org, config2.ci.runnerNamePattern, gh, timeoutMs);
+}
+async function orgRunnersBusy(org, pattern, gh, timeoutMs) {
   const re = pattern === void 0 ? void 0 : new RegExp(pattern);
   const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ, { timeoutMs });
   let busy2 = 0;
@@ -31898,6 +31918,25 @@ async function readCapacityTwice(config2, ports, options = {}) {
   await ports.clock.sleep(config2.ci.capacity.checkTwiceSeconds * 1e3);
   const second = await readCapacity(config2, ports, options);
   return { ok: second.ok, capacity: second };
+}
+async function readRunnerLoad(rule, ports, options = {}) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let last = { ok: false };
+  for (let i2 = 0; i2 < rule.samples; i2++) {
+    if (i2 > 0) await ports.clock.sleep(rule.intervalS * 1e3);
+    try {
+      const busy2 = await withTimeout(
+        orgRunnersBusy(rule.org, rule.namePattern, ports.gh, timeoutMs),
+        timeoutMs
+      );
+      last = { ok: busy2 <= rule.maxBusy, busy: busy2 };
+    } catch (err) {
+      const error62 = (err instanceof Error ? err.message : String(err)).replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 300);
+      return { ok: false, error: error62 };
+    }
+    if (!last.ok) return last;
+  }
+  return last;
 }
 async function capacityHoldsTwice(config2, ports, options = {}) {
   return (await readCapacityTwice(config2, ports, options)).ok;
@@ -40371,6 +40410,104 @@ import {
 } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { dirname as dirname10, join as join27 } from "node:path";
+
+// src/main-build.ts
+var UNKNOWN = { status: "unknown" };
+var RED = /* @__PURE__ */ new Set(["failure", "timed_out", "startup_failure"]);
+var MAX_NAME = 100;
+var READ_TIMEOUT_MS = 3e4;
+function parseRuns(stdout) {
+  let raw;
+  try {
+    raw = JSON.parse(stdout);
+  } catch {
+    return void 0;
+  }
+  if (!Array.isArray(raw)) return void 0;
+  const runs = [];
+  for (const r of raw) {
+    if (r === null || typeof r !== "object") return void 0;
+    const { status, conclusion, headSha, workflowName } = r;
+    if (typeof status !== "string" || typeof workflowName !== "string") return void 0;
+    if (conclusion !== null && conclusion !== void 0 && typeof conclusion !== "string") {
+      return void 0;
+    }
+    runs.push({
+      workflow: workflowName,
+      status,
+      conclusion: conclusion ?? "",
+      sha: typeof headSha === "string" ? headSha : ""
+    });
+  }
+  return runs;
+}
+var cleanName = (s) => s.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_NAME);
+var validSha = (s) => /^[0-9a-f]{7,64}$/i.test(s) ? s : void 0;
+async function latestPushRuns(gh, repo, branch) {
+  const reply = await gh.run(
+    [
+      "run",
+      "list",
+      "--repo",
+      repo,
+      "--branch",
+      branch,
+      "--event",
+      "push",
+      "--limit",
+      "30",
+      "--json",
+      "status,conclusion,headSha,workflowName"
+    ],
+    { timeoutMs: READ_TIMEOUT_MS }
+  );
+  if (reply.code !== 0) return void 0;
+  const runs = parseRuns(reply.stdout);
+  if (runs === void 0) return void 0;
+  const newest = /* @__PURE__ */ new Map();
+  for (const r of runs) if (!newest.has(r.workflow)) newest.set(r.workflow, r);
+  return [...newest.values()];
+}
+async function branchBuildRunning(gh, repo, branch) {
+  try {
+    const latest = await latestPushRuns(gh, repo, branch);
+    if (latest === void 0) return "unknown";
+    return latest.some((r) => r.status !== "completed") ? "running" : "idle";
+  } catch {
+    return "unknown";
+  }
+}
+async function readMainBuild(config2, ports) {
+  try {
+    const latest = await latestPushRuns(ports.gh, config2.primaryRepo, "main");
+    if (latest === void 0 || latest.length === 0) return UNKNOWN;
+    const red2 = latest.find((r) => r.status === "completed" && RED.has(r.conclusion));
+    if (red2) {
+      const sha2 = validSha(red2.sha);
+      return {
+        status: "red",
+        ...sha2 === void 0 ? {} : { sha: sha2 },
+        workflow: cleanName(red2.workflow)
+      };
+    }
+    if (latest.some((r) => r.status !== "completed")) return { status: "pending" };
+    const first = latest[0];
+    const sha = validSha(first.sha);
+    return {
+      status: "green",
+      ...sha === void 0 ? {} : { sha },
+      workflow: cleanName(first.workflow)
+    };
+  } catch {
+    return UNKNOWN;
+  }
+}
+
+// src/queue.ts
+var doneStatus = (d) => d.result === "merged" ? "MERGED" : d.timeout === true ? "TIMEOUT" : "FAILED";
+var firstStep = (e) => e.external === void 0 ? "update" : "checks";
+var headMovedLine = (old, now) => `head moved since enqueue: ${old} -> ${now}; re-run studio merge`;
+var ASKED_BY_RE = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$/;
 var QueueHeld = class extends Error {
   constructor(line4) {
     super(line4);
@@ -40387,7 +40524,13 @@ var CHECKS_GRACE_MS = 5 * 60 * 1e3;
 var entrySchema = external_exports.strictObject({
   pr: external_exports.number().int().positive(),
   repo: external_exports.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
-  item: external_exports.string().min(1).optional()
+  item: external_exports.string().min(1).optional(),
+  external: external_exports.strictObject({
+    by: external_exports.string().regex(ASKED_BY_RE),
+    at: external_exports.string(),
+    head: external_exports.string().regex(/^[0-9a-f]{40,64}$/),
+    followHead: external_exports.literal(true).optional()
+  }).optional()
 });
 var stateSchema = external_exports.strictObject({
   current: entrySchema.extend({
@@ -40399,6 +40542,7 @@ var stateSchema = external_exports.strictObject({
     entrySchema.extend({
       result: external_exports.enum(["merged", "failed"]),
       reason: external_exports.string().optional(),
+      timeout: external_exports.literal(true).optional(),
       at: external_exports.string()
     })
   )
@@ -40465,7 +40609,7 @@ function enqueue(stateRoot, entry) {
 function takeNextPending(stateRoot) {
   return updateQueue(stateRoot, (q) => {
     const next = q.pending.shift();
-    if (next) q.current = { ...next, step: "update" };
+    if (next) q.current = { ...next, step: firstStep(next) };
     return next;
   });
 }
@@ -40770,6 +40914,7 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
   const capacityWaitMs = opts.capacityWaitMs ?? CAPACITY_WAIT_MS;
   const deadline = clock.now().getTime() + (opts.timeoutMs ?? QUEUE_TIMEOUT_MS);
   const failed = (reason) => ({ result: "failed", reason });
+  const expired = (reason) => ({ result: "failed", reason, timeout: true });
   const timedOut = () => clock.now().getTime() >= deadline;
   const graceMs = opts.checksGraceMs ?? CHECKS_GRACE_MS;
   let graceUntil = Number.NEGATIVE_INFINITY;
@@ -40789,6 +40934,8 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
     return mergeSha === void 0 ? { result: "merged" } : { result: "merged", mergeSha };
   };
   const moved = `head moved ${MAX_ATTEMPTS} times`;
+  const pinnedHead = entry.external !== void 0 && entry.external.followHead !== true ? entry.external.head : void 0;
+  const movedSinceEnqueue = (head) => pinnedHead === void 0 || pinnedHead.toLowerCase() === head.toLowerCase() ? void 0 : headMovedLine(pinnedHead, head);
   const waived = /* @__PURE__ */ new Map();
   const waivedBase = /* @__PURE__ */ new Map();
   const judged = async (head) => {
@@ -40827,6 +40974,8 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
       if (typeof before === "string") return failed(before);
       if (before.state === "MERGED") return merged();
       if (before.state === "CLOSED") return failed("pull request is closed");
+      const movedBefore = movedSinceEnqueue(before.head);
+      if (movedBefore !== void 0) return failed(movedBefore);
       for (; ; ) {
         const verdict = await judged(before.head);
         if (verdict.kind === "evidence") return failed(verdict.reason);
@@ -40842,15 +40991,17 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
             break;
           }
         }
-        if (timedOut()) return failed("checks timed out");
+        if (timedOut()) return expired("checks timed out");
         await clock.sleep(pollMs);
-        if (timedOut()) return failed("checks timed out");
+        if (timedOut()) return expired("checks timed out");
       }
       const after2 = await viewPr(entry, gh);
       if (typeof after2 === "string") return failed(after2);
       if (after2.state === "MERGED") return merged();
       if (after2.state === "CLOSED") return failed("pull request is closed");
       if (after2.head !== before.head) {
+        const movedAfter = movedSinceEnqueue(after2.head);
+        if (movedAfter !== void 0) return failed(movedAfter);
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
         headChanged();
         continue;
@@ -40861,14 +41012,9 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
     } else if (step === "capacity") {
       enter("capacity");
       for (; ; ) {
-        let holds = false;
-        try {
-          holds = await capacityHoldsTwice(config2, ports);
-        } catch {
-          holds = false;
-        }
-        if (holds) break;
-        if (timedOut()) return failed("capacity did not hold in time");
+        const waiting = await mergeGateWaits(entry, config2, ports);
+        if (waiting === void 0) break;
+        if (timedOut()) return expired(waiting);
         await clock.sleep(capacityWaitMs);
       }
       step = "merge";
@@ -40880,6 +41026,8 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
       if (now.state === "MERGED") return merged();
       if (now.state === "CLOSED") return failed("pull request is closed");
       if (head === void 0 || now.head !== head) {
+        const movedNow = movedSinceEnqueue(now.head);
+        if (movedNow !== void 0) return failed(movedNow);
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
         headChanged();
         step = "checks";
@@ -40923,6 +41071,10 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
       ]);
       if (r.code === 0) return merged();
       if (HEAD_MOVED.test(r.stderr)) {
+        if (pinnedHead !== void 0) {
+          const v = await viewPr(entry, gh);
+          return failed(headMovedLine(pinnedHead, typeof v === "string" ? "unknown" : v.head));
+        }
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
         headChanged();
         step = "checks";
@@ -40931,6 +41083,28 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
       return failed(`merge failed (exit ${r.code}): ${r.stderr.trim()}`);
     }
   }
+}
+async function mergeGateWaits(entry, config2, ports) {
+  if (entry.external !== void 0) {
+    const base = await liveBase(ports.gh, entry);
+    const build = base === void 0 ? "unknown" : await branchBuildRunning(ports.gh, entry.repo, base);
+    if (build !== "idle") {
+      return build === "running" ? `the push build on ${base} was still running when the time ran out` : "the push build on the base branch could not be read in time";
+    }
+  }
+  let holds = false;
+  try {
+    holds = await capacityHoldsTwice(config2, ports);
+  } catch {
+    holds = false;
+  }
+  if (!holds) return "capacity did not hold in time";
+  const rule = config2.merge.runnerLoad;
+  if (rule === void 0) return void 0;
+  const load2 = await readRunnerLoad(rule, ports);
+  if (load2.ok) return void 0;
+  const detail = load2.error !== void 0 ? `runner read failed: ${load2.error}` : `${load2.busy ?? "?"} busy, at most ${rule.maxBusy}`;
+  return `runner load of ${rule.org} did not hold in time (${detail})`;
 }
 async function firstCommitAt(entry, gh) {
   const r = await gh.run([
@@ -40958,7 +41132,7 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
     if (!state.current) {
       const next = opts.takeNext ? opts.takeNext() : state.pending.shift();
       if (!next) return state;
-      state.current = { ...next, step: "update" };
+      state.current = { ...next, step: firstStep(next) };
       persist(state);
     }
     const current = state.current;
@@ -40975,6 +41149,7 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
       ...entry,
       result: outcome.result,
       ...outcome.reason === void 0 ? {} : { reason: outcome.reason },
+      ...outcome.timeout === true ? { timeout: true } : {},
       at: ports.clock.now().toISOString()
     };
     state.done.push(done);
@@ -40987,7 +41162,7 @@ async function runQueue(state, config2, ports, persist, opts = {}) {
         log2(`board update failed for PR ${current.pr}: ${err.message}`);
       }
     }
-    if (outcome.result === "merged" && opts.stateRoot !== void 0) {
+    if (outcome.result === "merged" && opts.stateRoot !== void 0 && !current.external) {
       try {
         const first = await firstCommitAt(current, ports.gh);
         appendStateLine(
@@ -41921,18 +42096,30 @@ function sendPush(http, secret, config2, message) {
   });
 }
 var pushFailure = (reply) => reply.status === void 0 ? "ntfy could not be reached" : `ntfy answered ${reply.status}`;
+var EXTERNAL_MS = 24 * 60 * 6e4;
 var ITEM_RE2 = /^(?:[A-Z]+-\d+|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#\d+|[A-Za-z0-9._-]{1,64})$/;
 var safeId = (s) => ITEM_RE2.test(s) ? s : "?";
 function decisionsOf(o2) {
   const out = [];
+  const since = o2.now === void 0 ? Number.POSITIVE_INFINITY : o2.now.getTime() - EXTERNAL_MS;
+  const external = (o2.queueDone ?? []).filter(
+    (d) => d.external !== void 0 && Date.parse(d.at) >= since
+  );
+  const externalAt = (item) => external.filter((d) => `${d.repo}#${d.pr}` === item).at(-1)?.at;
   for (const n4 of o2.needsLead) {
     if (leadOnly(n4.reason)) continue;
     const item = safeId(n4.item);
     const kind = n4.reason.startsWith("release approval") ? "release_approval" : n4.reason.startsWith("release failed") ? "release_failed" : classifyDecision(n4.reason);
-    const since = o2.board?.items.find((i2) => i2.id === n4.item)?.history.at(-1)?.at ?? "";
-    const key = `${o2.projectKey}:${item}:${kind}:${since}`;
+    const arose = o2.board?.items.find((i2) => i2.id === n4.item)?.history.at(-1)?.at ?? externalAt(n4.item) ?? "";
+    const key = `${o2.projectKey}:${item}:${kind}:${arose}`;
     if (out.some((d) => d.key === key)) continue;
     out.push({ key, item, kind, urgent: false });
+  }
+  for (const d of external) {
+    const item = safeId(`${d.repo}#${d.pr}`);
+    const kind = d.result === "merged" ? "merged" : "merge_failed";
+    const key = `${o2.projectKey}:${item}:${kind}:${d.at}`;
+    if (!out.some((x) => x.key === key)) out.push({ key, item, kind, urgent: false });
   }
   const read3 = readBlocksFile(join30(o2.ownerRoot, "blocks.json"));
   if (!read3.ok) {
@@ -44992,7 +45179,7 @@ import { join as join38 } from "node:path";
 import { readFileSync as readFileSync37 } from "node:fs";
 import { join as join37 } from "node:path";
 var MAX_FLAKY = 500;
-var MAX_NAME = 200;
+var MAX_NAME2 = 200;
 var entrySchema3 = external_exports.object({
   test: external_exports.string(),
   count: external_exports.number().int().positive(),
@@ -45023,7 +45210,7 @@ function read2(stateRoot) {
 var ordered = (entries2) => [...entries2].sort((a2, b) => b.count - a2.count || a2.test.localeCompare(b.test));
 var listFlaky = (stateRoot) => ordered(read2(stateRoot));
 function recordFlaky(stateRoot, test, sha, rerun, now) {
-  const name = test.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ").trim().slice(0, MAX_NAME);
+  const name = test.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ").trim().slice(0, MAX_NAME2);
   if (name === "") throw new Error("a test name is needed");
   const entries2 = read2(stateRoot);
   if (rerun === "fail") return { status: "real" };
@@ -47823,6 +48010,11 @@ var COMMANDS = [
   },
   { usage: "queue add <repo>#<pr>", about: "Put a reviewed PR into the merge queue" },
   { usage: "queue run", about: "Merge the queued PRs, one at a time" },
+  { usage: "queue [list]", about: "Show the merge queue (JSON), external entries included" },
+  {
+    usage: "merge <pr> [--repo <owner/name>] [--by <name>] [--follow-head] [--wait]",
+    about: "Hand a PR without a board item to the merge queue (checks, main build, capacity, runner load); only the head seen now merges unless --follow-head; --wait runs the queue and reports MERGED, FAILED or TIMEOUT"
+  },
   { usage: "state", about: "Refresh state.json in the state root" },
   { usage: "pause", about: "Owner only: nothing new starts or merges until resume" },
   { usage: "resume", about: "Owner only: lift the pause" },
@@ -48001,86 +48193,6 @@ function helpText() {
   ].join("\n");
 }
 var USAGE = helpText();
-
-// src/main-build.ts
-var UNKNOWN = { status: "unknown" };
-var RED = /* @__PURE__ */ new Set(["failure", "timed_out", "startup_failure"]);
-var MAX_NAME2 = 100;
-var READ_TIMEOUT_MS = 3e4;
-function parseRuns(stdout) {
-  let raw;
-  try {
-    raw = JSON.parse(stdout);
-  } catch {
-    return void 0;
-  }
-  if (!Array.isArray(raw)) return void 0;
-  const runs = [];
-  for (const r of raw) {
-    if (r === null || typeof r !== "object") return void 0;
-    const { status, conclusion, headSha, workflowName } = r;
-    if (typeof status !== "string" || typeof workflowName !== "string") return void 0;
-    if (conclusion !== null && conclusion !== void 0 && typeof conclusion !== "string") {
-      return void 0;
-    }
-    runs.push({
-      workflow: workflowName,
-      status,
-      conclusion: conclusion ?? "",
-      sha: typeof headSha === "string" ? headSha : ""
-    });
-  }
-  return runs;
-}
-var cleanName = (s) => s.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_NAME2);
-var validSha = (s) => /^[0-9a-f]{7,64}$/i.test(s) ? s : void 0;
-async function readMainBuild(config2, ports) {
-  try {
-    const reply = await ports.gh.run(
-      [
-        "run",
-        "list",
-        "--repo",
-        config2.primaryRepo,
-        "--branch",
-        "main",
-        "--event",
-        "push",
-        "--limit",
-        "30",
-        "--json",
-        "status,conclusion,headSha,workflowName"
-      ],
-      { timeoutMs: READ_TIMEOUT_MS }
-    );
-    if (reply.code !== 0) return UNKNOWN;
-    const runs = parseRuns(reply.stdout);
-    if (runs === void 0) return UNKNOWN;
-    const newest = /* @__PURE__ */ new Map();
-    for (const r of runs) if (!newest.has(r.workflow)) newest.set(r.workflow, r);
-    const latest = [...newest.values()];
-    if (latest.length === 0) return UNKNOWN;
-    const red2 = latest.find((r) => r.status === "completed" && RED.has(r.conclusion));
-    if (red2) {
-      const sha2 = validSha(red2.sha);
-      return {
-        status: "red",
-        ...sha2 === void 0 ? {} : { sha: sha2 },
-        workflow: cleanName(red2.workflow)
-      };
-    }
-    if (latest.some((r) => r.status !== "completed")) return { status: "pending" };
-    const first = latest[0];
-    const sha = validSha(first.sha);
-    return {
-      status: "green",
-      ...sha === void 0 ? {} : { sha },
-      workflow: cleanName(first.workflow)
-    };
-  } catch {
-    return UNKNOWN;
-  }
-}
 
 // src/overview.ts
 import { lstatSync as lstatSync37, readFileSync as readFileSync42 } from "node:fs";
@@ -50921,9 +51033,15 @@ async function runCli(argv, deps) {
       throw new UsageError("--component takes one id here; only epic add takes several");
     }
     const component = epicAdd ? void 0 : values.component?.[0];
-    const addOnly = [values.type, values.repo, values.path, values.dod, values.plan];
+    const addOnly = [values.type, values.path, values.dod, values.plan];
     if (cmd !== "add" && addOnly.some((v) => v !== void 0)) {
-      throw new UsageError("--type, --repo, --path, --dod and --plan work with add only");
+      throw new UsageError("--type, --path, --dod and --plan work with add only");
+    }
+    if (values.repo !== void 0 && cmd !== "add" && cmd !== "merge") {
+      throw new UsageError("--repo works with add and merge only");
+    }
+    if ((values.wait !== void 0 || values["follow-head"] !== void 0) && cmd !== "merge") {
+      throw new UsageError("--wait and --follow-head work with merge only");
     }
     const epicEdit = cmd === "epic" && rest[0] === "edit";
     if (!epicEdit && values.title !== void 0) {
@@ -50955,9 +51073,11 @@ async function runCli(argv, deps) {
     if (values["dry-run"] !== void 0 && cmd !== "recover" && cmd !== "release" && cmd !== "tick") {
       throw new UsageError("--dry-run works with recover, release and tick only");
     }
+    if (values.by !== void 0 && cmd !== "release" && cmd !== "merge") {
+      throw new UsageError("--by works with release and merge only");
+    }
     const releaseOnly = [
       values.since,
-      values.by,
       values.said,
       values.at,
       values.deployed,
@@ -50965,7 +51085,7 @@ async function runCli(argv, deps) {
     ];
     if (cmd !== "release" && releaseOnly.some((v) => v !== void 0)) {
       throw new UsageError(
-        "--since, --by, --said, --at, --deployed and --not-deployed work with release only"
+        "--since, --said, --at, --deployed and --not-deployed work with release only"
       );
     }
     if ((values.from !== void 0 || values.apply !== void 0) && cmd !== "adopt") {
@@ -51299,6 +51419,48 @@ async function runCli(argv, deps) {
       });
       return { queued: item.id, pr, repo, pending };
     };
+    const mergeExternal = async (arg) => {
+      if (!/^[1-9]\d{0,9}$/.test(arg ?? "")) {
+        throw new UsageError("merge needs a pull request number, e.g. studio merge 12");
+      }
+      const pr = Number(arg);
+      const { config: config2, board } = loadAll();
+      refuseNativeQueue(config2);
+      const repo = typeof values.repo === "string" ? values.repo : config2.primaryRepo;
+      if (!config2.repos.includes(repo)) throw new Error(`repository ${repo} is not configured`);
+      const by = typeof values.by === "string" ? values.by : "lead";
+      if (!ASKED_BY_RE.test(by)) {
+        throw new UsageError("--by needs a short name (letters, digits, . _ @ -, at most 64)");
+      }
+      const onBoard = boardItemOf(board, repo, pr);
+      if (onBoard !== void 0) {
+        throw new Error(
+          `${repo}#${pr} belongs to board item ${onBoard}: it merges through its review and studio queue add`
+        );
+      }
+      const view = await viewPr({ pr, repo }, ports.gh);
+      if (typeof view === "string") throw new Error(view);
+      if (view.state !== "OPEN") throw new Error(`${repo}#${pr} is ${view.state.toLowerCase()}`);
+      const root = await boundStateRoot();
+      const at2 = ports.clock.now().toISOString();
+      const followHead = values["follow-head"] === true;
+      const pending = enqueue(root, {
+        pr,
+        repo,
+        external: { by, at: at2, head: view.head, ...followHead ? { followHead: true } : {} }
+      });
+      return {
+        queued: `${repo}#${pr}`,
+        external: true,
+        by,
+        at: at2,
+        head: view.head,
+        // Without --follow-head only this head merges; a later push fails the entry.
+        followHead,
+        pending,
+        next: "studio queue run (or the next tick) merges it; studio queue shows the queue"
+      };
+    };
     const queueRun = async () => {
       const { config: config2 } = loadAll();
       refuseNativeQueue(config2);
@@ -51354,9 +51516,11 @@ async function runCli(argv, deps) {
             stateRoot: root,
             log: log2,
             hold,
-            mergeAllowed: (entry, head, waived) => boardBlocksMerge(project, root, config2, entry, head, ports, waived),
+            mergeAllowed: (entry, head, waived) => entry.external !== void 0 ? externalBlocksMerge(project, root, entry) : boardBlocksMerge(project, root, config2, entry, head, ports, waived),
             evidence: async (entry, head, failed) => {
-              if ((config2.evidence ?? []).length === 0) return { kind: "none" };
+              if ((config2.evidence ?? []).length === 0 || entry.external !== void 0) {
+                return { kind: "none" };
+              }
               const v = await judgeFailedChecks(
                 evidenceCtx(config2, entry.repo, root),
                 entry,
@@ -51372,8 +51536,12 @@ async function runCli(argv, deps) {
               }
               return v;
             },
-            onChecksFailed: (entry, head) => policy.failed(entry, head),
-            onChecksPassed: (entry, head) => policy.passed(entry, head),
+            // The rerun and the flaky ledger are for the board's pull requests: an external one
+            // stops on its first failed check and is reported.
+            onChecksFailed: async (entry, head) => entry.external !== void 0 ? "fail" : policy.failed(entry, head),
+            onChecksPassed: (entry, head) => {
+              if (entry.external === void 0) policy.passed(entry, head);
+            },
             takeNext: () => takeNextPending(root),
             onDone: (d) => applyQueueResults(project, root, [d], ports, stderr)
           }
@@ -51388,6 +51556,27 @@ async function runCli(argv, deps) {
       } finally {
         removeSignals();
         lock.release();
+      }
+    };
+    const waitForExternal = async (target, at2) => {
+      const root = await boundStateRoot();
+      const deadline = ports.clock.now().getTime() + QUEUE_TIMEOUT_MS + 60 * 6e4;
+      const mine = () => loadQueue(root).done.find((d) => d.external?.at === at2 && `${d.repo}#${d.pr}` === target);
+      for (; ; ) {
+        let held2;
+        try {
+          held2 = (await queueRun()).held;
+        } catch (e) {
+          if (!(e instanceof HeldError)) throw e;
+          held2 = e.message;
+        }
+        const done = mine();
+        if (done !== void 0) return { kind: "done", done };
+        if (held2 !== void 0 && !held2.startsWith("queue already running")) {
+          return { kind: "held", line: held2 };
+        }
+        if (ports.clock.now().getTime() >= deadline) return { kind: "waiting" };
+        await ports.clock.sleep(CHECKS_POLL_MS);
       }
     };
     const offerItem = async (config2, item) => {
@@ -52608,7 +52797,7 @@ async function runCli(argv, deps) {
       try {
         const q = loadQueue(root);
         const inQueue = (i2) => [...q.pending, ...q.current === void 0 ? [] : [q.current]].some(
-          (e) => e.item === void 0 ? e.repo === i2.repo && e.pr === i2.pr : e.item === i2.id
+          (e) => entryMatches(e, i2)
         );
         const stray = loadBoard(project).items.some((i2) => i2.status === "queued" && !inQueue(i2));
         if (q.pending.length > 0 || q.current !== void 0 || stray) {
@@ -52859,6 +53048,13 @@ async function runCli(argv, deps) {
       });
       return out;
     };
+    const queueDoneOrNone = () => {
+      try {
+        return loadQueue(stateRoot()).done;
+      } catch {
+        return [];
+      }
+    };
     const pushTick = async (needsLead) => {
       try {
         const ownerConfig = loadOwnerConfig(owner);
@@ -52874,7 +53070,14 @@ async function runCli(argv, deps) {
           ownerRoot: ownerRoot(),
           projectKey,
           project: config2.primaryRepo.split("/").at(-1) ?? config2.primaryRepo,
-          decisions: decisionsOf({ projectKey, needsLead, board, ownerRoot: ownerRoot() }),
+          decisions: decisionsOf({
+            projectKey,
+            needsLead,
+            board,
+            ownerRoot: ownerRoot(),
+            queueDone: queueDoneOrNone(),
+            now: ports.clock.now()
+          }),
           ownerConfig,
           owner,
           http: ports.http,
@@ -53500,8 +53703,44 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
 `);
         return 1;
       }
+      case "merge": {
+        refuseCrew(deps.env);
+        const [arg, ...more] = rest;
+        if (more.length > 0) throw new UsageError("merge takes one pull request number");
+        const q = await mergeExternal(arg);
+        if (values.wait !== true) {
+          print(q);
+          return 0;
+        }
+        const w = await waitForExternal(q.queued, q.at);
+        if (w.kind === "done") {
+          const status = doneStatus(w.done);
+          print({
+            ...q,
+            status,
+            ...w.done.reason === void 0 ? {} : { reason: w.done.reason }
+          });
+          return status === "MERGED" ? 0 : 1;
+        }
+        print({
+          ...q,
+          status: "QUEUED",
+          reason: w.kind === "held" ? `queue held: ${w.line}` : "still in the queue; studio queue shows where it is"
+        });
+        return 1;
+      }
       case "queue": {
         const [sub, arg] = rest;
+        if (sub === void 0 || sub === "list") {
+          if (arg !== void 0) throw new UsageError("queue list takes no arguments");
+          const q = loadQueue(await boundStateRoot());
+          print({
+            current: q.current ?? null,
+            pending: q.pending,
+            done: q.done.slice(-20).map((d) => ({ ...d, status: doneStatus(d) }))
+          });
+          return 0;
+        }
         if (sub === "add") {
           print(await queueAdd(arg));
           return 0;
@@ -53516,7 +53755,7 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
           });
           return r.held === void 0 ? 0 : 1;
         }
-        throw new UsageError("queue needs a subcommand: add <repo>#<pr> | run");
+        throw new UsageError("queue needs a subcommand: list | add <repo>#<pr> | run");
       }
       case "state": {
         await reconcile();
@@ -54604,7 +54843,9 @@ function parseCli(argv) {
         folder: { type: "string" },
         artifacts: { type: "string" },
         from: { type: "string" },
-        apply: { type: "boolean" }
+        apply: { type: "boolean" },
+        wait: { type: "boolean" },
+        "follow-head": { type: "boolean" }
       },
       allowPositionals: true,
       strict: true
@@ -54753,21 +54994,34 @@ async function boardBlocksMerge(project, root, config2, entry, head, ports, waiv
   if (checks.kind !== "pass") return "the checks are not green";
   return approvedJobsProblem(item.approvedJobs ?? [], checks.checks);
 }
+function boardItemOf(board, repo, pr) {
+  return board.items.find((i2) => i2.repo === repo && i2.pr === pr && i2.status !== "dropped")?.id;
+}
+function externalBlocksMerge(project, root, entry) {
+  let board;
+  try {
+    board = loadBoard(project);
+  } catch {
+    return "the board cannot be read";
+  }
+  const item = boardItemOf(board, entry.repo, entry.pr);
+  if (item !== void 0) return `the pull request belongs to board item ${item}`;
+  const target = `${entry.repo}#${entry.pr}`;
+  const open4 = openReview(root, board, target);
+  return open4 === void 0 ? void 0 : openReviewLine(open4, target);
+}
 function approvalCheckout(project, config2, repo) {
   return { dir: project, remote: repo === config2.primaryRepo ? "origin" : githubHttpsUrl(repo) };
 }
-var doneMatches = (d, item) => d.item === void 0 ? d.repo === item.repo && d.pr === item.pr : d.item === item.id;
+var entryMatches = (e, item) => e.external === void 0 && (e.item === void 0 ? e.repo === item.repo && e.pr === item.pr : e.item === item.id);
+var doneMatches = (d, item) => entryMatches(d, item);
 async function reconcileQueued(project, root, state, ports, stderr) {
   const board = loadBoard(project);
   const waiting = [...state.pending, ...state.current ? [state.current] : []];
   const results = [];
   for (const item of board.items) {
     if (item.status !== "queued") continue;
-    if (waiting.some(
-      (e) => e.item === void 0 ? e.pr === item.pr && e.repo === item.repo : e.item === item.id
-    )) {
-      continue;
-    }
+    if (waiting.some((e) => entryMatches(e, item))) continue;
     const last = state.done.filter((d) => doneMatches(d, item)).at(-1);
     if (last) results.push(last);
   }
