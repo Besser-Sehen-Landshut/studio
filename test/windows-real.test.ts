@@ -139,9 +139,12 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     ].join('');
     const { pid } = await claude.start(cwd, ['-e', crew], 'hello crew', log, env());
     const identity = await claude.identity(pid);
-    const errFile = join(hostDirOf(stateRoot, id), 'host.err');
-    const hostErr = existsSync(errFile) ? readFileSync(errFile, 'utf8') : '(no host.err)';
-    expect(identity, hostErr).toMatch(/^host:[0-9a-f]+$/);
+    const dir = hostDirOf(stateRoot, id);
+    const show = (f: string) =>
+      existsSync(join(dir, f)) ? `${f}: ${readFileSync(join(dir, f), 'utf8')}` : `(no ${f})`;
+    expect(
+      identity ?? `none; ${show('host.err')}; ${show('host.out')}; ${show('host.json')}`,
+    ).toMatch(/^host:[0-9a-f]+$/);
     expect(existsSync(join(hostDirOf(stateRoot, id), 'spec.json'))).toBe(false);
     let line: { who: string; prompt: string; proxy: string } | undefined;
     for (let i = 0; i < 100 && line === undefined; i++) {
