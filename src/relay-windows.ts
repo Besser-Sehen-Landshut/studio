@@ -18,7 +18,8 @@ import {
   type CrewAccountOp,
   crewAccountFunctions,
   crewAccountScript,
-  crewGroupSetup,
+  crewGroupFinish,
+  crewGroupMake,
   GIT_MIN_CHECK,
   RELAY_SID_SLOT,
 } from './crew-accounts.js';
@@ -54,6 +55,13 @@ export const brokerResultFiles = (machine: string): Record<CrewAccountOp, string
   retire: join(machine, 'broker', 'retire.json'),
   fresh: join(machine, 'broker', 'fresh.json'),
 });
+/** What a broker and the setup load, all in the admin-only tree. */
+const brokerPlaces = (machine: string) => ({
+  treeSource: join(machineStudio(machine), 'bin', 'studio-tree.cs'),
+  treeTemp: join(machine, 'broker', 'tmp'),
+  bodyFile: brokerBodyFile(machine),
+});
+
 /** The functions of the crew users the broker tasks load: admin-only, written by the setup. */
 export const brokerBodyFile = (machine: string): string =>
   join(machine, 'broker', 'crew-accounts.ps1');
@@ -163,10 +171,9 @@ export const brokerScript = (o: { op: CrewAccountOp; prefix: string; machine: st
     op: o.op,
     prefix: o.prefix,
     result: brokerResultFiles(o.machine)[o.op],
-    // The admin-only copies of the tree deleter and of the functions: nothing the relay account
-    // could change.
-    treeSource: join(machineStudio(o.machine), 'bin', 'studio-tree.cs'),
-    bodyFile: brokerBodyFile(o.machine),
+    // The admin-only copies of the tree deleter and of the functions (checked by their SHA-256),
+    // and an admin-only folder for the compiler: nothing the relay account could change.
+    places: brokerPlaces(o.machine),
     ...(o.op === 'fresh' ? { credFile: machineCredFile(o.machine), reader: '$relaySid' } : {}),
   })
     // Short, for the task's action: no comment line, no indentation (no here-string in it).
@@ -440,7 +447,7 @@ $relay = ${psQuote(o.relayUser)}
 $home_ = ${psQuote(o.home)}
 $machine = ${psQuote(o.machine)}
 $task = ${psQuote(o.task)}
-${GIT_MIN_CHECK}${FOLDER_FUNCTIONS}${crewAccountFunctions(o.crewPrefix, join(o.source.studio, 'bin', 'studio-tree.cs'))}function EnsureUser([string]$name, [string]$what, [string]$plain) {
+${GIT_MIN_CHECK}${FOLDER_FUNCTIONS}${crewAccountFunctions(o.crewPrefix, { treeSource: brokerPlaces(o.machine).treeSource, treeTemp: brokerPlaces(o.machine).treeTemp })}function EnsureUser([string]$name, [string]$what, [string]$plain) {
   $u = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
   if ($null -eq $u) {
     if (-not $plain) { $plain = NewSecret }
@@ -461,10 +468,10 @@ SafeFolder $home_ (Split-Path -Parent $dataStudio)
 SafeFolder $machine (Split-Path -Parent $filesStudio)
 # The relay account: a standard user the lead logs in as over SSH, with a password nobody sees.
 $relaySid = (EnsureUser $relay 'Studio relay (SSH, forced command)' $null).SID.Value
-# Studio's group of crew users (one user per job, made and deleted by the broker), with its firewall
-# rule, denied logons and read grants on Claude Code and the toolchains.
+# Studio's group of crew users (one user per job, made and deleted by the broker); what it carries
+# comes once the admin-only copy of Studio is in place.
 $readPaths = ${list(o.readPaths)}
-${crewGroupSetup()}# The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew users read
+${crewGroupMake()}# The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew users read
 # Node.js and Studio only.
 $tree = 'ContainerInherit, ObjectInherit'
 $rx = 'ReadAndExecute, Synchronize'
@@ -478,7 +485,11 @@ Copy-Item -LiteralPath ${psQuote(o.source.node)} -Destination ${psQuote(machineN
 & robocopy.exe ${psQuote(o.source.studio)} ${psQuote(machineStudio(o.machine))} /MIR /XJ /XD node_modules .git .worktrees /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "cannot copy Studio into $machine (robocopy $LASTEXITCODE)" }
 icacls ${psQuote(machineStudio(o.machine))} /reset /T /C /L /Q | Out-Null
-# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
+# The compiler of the tree deleter writes here, as SYSTEM or as this setup: administrators only.
+StrictFolder (Join-Path $machine 'broker\\tmp') @()
+# What the group carries, and the crew users of earlier versions or a crash go: with the tree
+# deleter compiled from the admin-only copy just made.
+${crewGroupFinish()}# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
 # the home. The elevated steps only set the ACLs of these folders themselves, and refuse a reparse
 # point among them or just below the home.
 StrictFolder $dataStudio @(,@($relaySid, $rx, 'None', 'None'))

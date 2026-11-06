@@ -18,6 +18,8 @@ import { localCrewAccounts } from '../src/crew-accounts.js';
 import { type EgressProxy, LOOPBACK, startEgressProxy } from '../src/egress-proxy.js';
 import {
   credFileIn,
+  nativeCrewDir,
+  nativeCrewPlaces,
   ownerSid,
   powershellEnv,
   probeWindowsSandbox,
@@ -73,6 +75,7 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
       script,
       windowsSetupScript({
         prefix: PREFIX,
+        crewDir: nativeCrewDir(process.env),
         readPaths: [
           dirname(process.execPath),
           resolve(import.meta.dirname, '..'),
@@ -122,6 +125,7 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     grants = new WindowsGrants({
       ownerRoot: join(base, 'owner'),
       accounts: localCrewAccounts({
+        ...nativeCrewPlaces(nativeCrewDir(process.env)),
         prefix: PREFIX,
         credFile: credFileIn(ownerConfigDir),
         run: runFile,

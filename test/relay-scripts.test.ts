@@ -15,15 +15,28 @@ import {
 import { KEEPER_SCRIPT, windowsSetupScript } from '../src/windows-sandbox.js';
 
 const scripts: Record<string, string> = {
-  'crew sweep': crewAccountScript({ op: 'sweep', prefix: 'studio-crew' }),
-  'crew retire': crewAccountScript({ op: 'retire', prefix: 'studio-crew' }),
+  'crew sweep': crewAccountScript({
+    op: 'sweep',
+    prefix: 'studio-crew',
+    places: { treeSource: 'C:\\crew\\studio-tree.cs', treeTemp: 'C:\\crew\\tmp' },
+  }),
+  'crew retire': crewAccountScript({
+    op: 'retire',
+    prefix: 'studio-crew',
+    places: { treeSource: 'C:\\crew\\studio-tree.cs', treeTemp: 'C:\\crew\\tmp' },
+  }),
   'crew fresh': crewAccountScript({
+    places: { treeSource: 'C:\\crew\\studio-tree.cs', treeTemp: 'C:\\crew\\tmp' },
     op: 'fresh',
     prefix: 'studio-crew',
     credFile: 'C:\\c\\crew.bin',
     reader: 'S-1-5-21-1-2-3-1001',
   }),
-  'native setup': windowsSetupScript({ prefix: 'studio-crew', readPaths: ['C:\\claude'] }),
+  'native setup': windowsSetupScript({
+    prefix: 'studio-crew',
+    crewDir: 'C:\\Program Files\\Studio crew',
+    readPaths: ['C:\\claude'],
+  }),
   keeper: KEEPER_SCRIPT,
   setup: relaySetupScript({
     relayUser: 'studio-relay',
