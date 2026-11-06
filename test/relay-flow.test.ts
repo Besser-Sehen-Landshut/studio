@@ -581,6 +581,21 @@ describe('relay workers', () => {
     );
   });
 
+  it("a broken object in the crew's clone stops the result before any bundle", async () => {
+    const w = world();
+    await lead(w, ['tick']);
+    const head = crewFinishes(w);
+    const clone = join(workerState(w), 'clones', 'APP-1');
+    const loose = join(clone, '.git', 'objects', head.slice(0, 2), head.slice(2));
+    rmSync(loose);
+    writeFileSync(loose, Buffer.from('not an object at all'));
+    const t = JSON.parse((await lead(w, ['tick'])).out);
+    expect(t.needsLead.find((x: { item: string }) => x.item === 'APP-1')?.reason).toMatch(
+      /do not check out/,
+    );
+    expect(() => git(w.origin, 'rev-parse', '--verify', 'refs/heads/studio/APP-1')).toThrow();
+  });
+
   it('collect waits until the broker proves no process of the crew user is left', async () => {
     const w = world();
     await lead(w, ['tick']);

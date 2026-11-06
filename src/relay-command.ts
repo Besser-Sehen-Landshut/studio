@@ -2,7 +2,15 @@
 // planned item on its relay worker and following it each tick; on the worker, `studio relay serve`,
 // `relay run` and `relay setup`. Kept out of src/cli.ts, which only calls in here.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { crewClaudeDir } from './accounts.js';
@@ -81,6 +89,7 @@ import {
   authorizedKeysScript,
   forcedCommand,
   leadFromAuthInfo,
+  machineConfig,
   type RelayInstall,
   relayHomeDefault,
   relayMachineDefault,
@@ -501,13 +510,18 @@ export async function relayDoctorLines(
 // ---- On the relay worker -----------------------------------------------------------------------
 
 /** The relay worker's owner: config and state in the relay home, whatever the profile holds. */
-export function relayOwner(owner: OwnerEnv, home: string | undefined): OwnerEnv {
+export function relayOwner(
+  owner: OwnerEnv,
+  home: string | undefined,
+  /** Native Windows: the admin-only tree, which holds the worker's config instead of the home. */
+  machine?: string,
+): OwnerEnv {
   if (home === undefined) return owner;
   return {
     ...owner,
     env: {
       ...(owner.env ?? {}),
-      XDG_CONFIG_HOME: join(home, 'config'),
+      XDG_CONFIG_HOME: machine === undefined ? join(home, 'config') : machineConfig(machine),
       XDG_STATE_HOME: join(home, 'state'),
     },
   };
@@ -532,7 +546,8 @@ export function relayContext(o: {
   log: (line: string) => void;
 }): RelayContext {
   if (!LEAD_RE.test(o.lead)) throw new Error('not a lead name');
-  const owner = relayOwner(o.owner, o.home);
+  const native0 = (o.platform ?? detectPlatform()).platform === 'win32';
+  const owner = relayOwner(o.owner, o.home, native0 ? machineOf() : undefined);
   const root = relayRoot(owner);
   ensureStateDir(root, root);
   const platform = () => o.platform ?? detectPlatform();
@@ -640,6 +655,19 @@ export function sessionLead(o: {
         }
       : { lead: fromKey };
   }
+  if (o.flag === undefined && fromKey === undefined) {
+    // Elsewhere the keys are the owner's own: with more than one key forced to relay serve, each
+    // must name its lead, or one lead could act as another.
+    const serving = (readText(o.keysFile) ?? '')
+      .split(/\r?\n/)
+      .filter((l) => /relay serve/.test(l) && !l.trimStart().startsWith('#')).length;
+    if (serving > 1) {
+      return {
+        problem:
+          'several keys run relay serve here: give each its own --lead <name> in its command',
+      };
+    }
+  }
   return { lead: o.flag ?? fromKey ?? 'default' };
 }
 
@@ -714,7 +742,10 @@ export async function runRelayCommand(o: {
       platform,
       flag: o.values.lead,
       env: o.env,
-      keysFile: platform === 'win32' ? authorizedKeysFile(machineOf()) : undefined,
+      keysFile:
+        platform === 'win32'
+          ? authorizedKeysFile(machineOf())
+          : join(o.homedir ?? homedir(), '.ssh', 'authorized_keys'),
     });
     if ('problem' in lead) {
       refuse(o.stdout, lead.problem);
@@ -777,6 +808,7 @@ export interface RelayValues {
   pipe?: string;
   lead?: string;
   'keep-passwords'?: boolean;
+  'i-am-local'?: boolean;
   'disable-spooler'?: boolean;
   pair?: string;
   user?: string;
@@ -826,22 +858,19 @@ function setupScriptFor(o: {
   relayUser: string;
   install: RelayInstall | undefined;
 }): string {
-  const owner = relayOwner(o.owner, o.home);
+  const owner = relayOwner(o.owner, o.home, o.machine);
   const settings = serveSettings(owner);
   const claude = findClaude(o.env.PATH ?? o.env.Path);
-  const crewConfig = crewClaudeDir(owner);
   return relaySetupScript({
     relayUser: o.relayUser,
     crewUser: settings.windows?.crewUser ?? 'studio-crew',
     home: o.home,
     machine: o.machine,
     task: settings.windows?.broker ?? 'Studio relay broker',
-    // Node.js and Studio are read from their admin-only copies; these are the rest.
+    // Node.js, Studio and the plugins are read from the admin-only tree; these are the rest.
     readPaths: [
       ...(claude === undefined ? [] : [dirname(claude)]),
       ...loadOwnerConfig(o.owner).crewToolchainPaths,
-      join(crewConfig, 'skills'),
-      join(crewConfig, 'plugins'),
     ],
     source: { node: process.execPath, studio: resolve(dirname(STUDIO_BIN), '..') },
     ...(o.install === undefined ? {} : { install: o.install }),
@@ -855,6 +884,21 @@ workers:
     deny:
       hosts: [local-subnets, tailnet-peers]
 `;
+
+/** Whether this process runs in an SSH session by its environment. */
+const sshSessionVar = (env: Record<string, string | undefined>): boolean =>
+  [env.SSH_CONNECTION, env.SSH_CLIENT, env.SSH_TTY].some((v) => v !== undefined && v !== '');
+
+/** Whether an sshd is among the parents of this process (Windows, through CIM). */
+async function underSshd(exec: Exec): Promise<boolean> {
+  const r = await exec('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    `$p = ${process.pid}; $hit = $false; for ($i = 0; $i -lt 16 -and $p; $i++) { $x = Get-CimInstance Win32_Process -Filter "ProcessId=$p"; if ($null -eq $x) { break }; if ($x.Name -like 'sshd*') { $hit = $true; break }; $p = $x.ParentProcessId }; [Console]::Out.Write($hit)`,
+  ]);
+  return r.code === 0 && r.stdout.trim() === 'True';
+}
 
 /** What install and unpair need on the worker: a Windows machine and an elevated session. */
 async function windowsAdmin(o: {
@@ -945,6 +989,12 @@ async function install(o: {
 }): Promise<number> {
   const exec = o.exec ?? systemExec;
   await windowsAdmin({ ...o, what: 'install' });
+  // sshd is stopped while the install runs: over SSH it would cut its own session off.
+  if (o.values['i-am-local'] !== true && (sshSessionVar(o.env) || (await underSshd(exec)))) {
+    throw new Error(
+      'relay install stops sshd while it runs: run it at the machine or over remote desktop, never over SSH (--i-am-local if this is not an SSH session)',
+    );
+  }
   const port = o.values.port === undefined ? 22 : Number(o.values.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('--port: 1 to 65535');
   let scope: SshdScope;
@@ -973,7 +1023,7 @@ async function install(o: {
   o.stdout(
     'Studio relay install: this stops and disables the WebClient service (WebDAV), which the crew sandbox does not hold.\n',
   );
-  mkdirSync(o.home, { recursive: true });
+  // Nothing of the home is made here: the script makes every folder with its own DACL.
   const dir = mkdtempSync(join(tmpdir(), 'studio-relay-install-'));
   const file = join(dir, 'install.ps1');
   writeFileSync(
@@ -999,11 +1049,14 @@ async function install(o: {
     o.stderr('studio: relay install stopped; fix what it says and run it again (it repairs)\n');
     return 1;
   }
-  // A new machine gets the defaults of a Windows relay worker; an existing config stays.
-  const config = join(o.home, 'config', 'studio', 'config.yaml');
+  // A new machine gets the defaults of a Windows relay worker; an existing config stays. The
+  // config lives in the admin-only tree, written whole and swapped in.
+  const config = join(machineConfig(o.machine), 'studio', 'config.yaml');
   if (!existsSync(config)) {
     mkdirSync(dirname(config), { recursive: true });
-    writeFileSync(config, DEFAULT_SERVE_CONFIG);
+    const tmp = `${config}.${process.pid}.tmp`;
+    writeFileSync(tmp, DEFAULT_SERVE_CONFIG, { flag: 'wx' });
+    renameSync(tmp, config);
   }
   if (o.pair !== undefined) {
     writePairings(o.machine, {

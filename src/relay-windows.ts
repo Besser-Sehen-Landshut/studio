@@ -46,6 +46,11 @@ export const machineNode = (machine: string): string => join(machine, 'node', 'n
 export const machineStudio = (machine: string): string => join(machine, 'studio');
 export const machineStudioBin = (machine: string): string =>
   join(machine, 'studio', 'bin', 'studio');
+/**
+ * The worker's own config (`workers.serve`) and its crews' Claude config dir with the pinned
+ * plugins: admin-only, so neither the relay account nor anything it planted can change them.
+ */
+export const machineConfig = (machine: string): string => join(machine, 'config');
 
 /** The command sshd forces for the relay account: the admin-only Node and Studio, nothing else. */
 export const forcedCommand = (machine: string, home: string): string =>
@@ -311,11 +316,73 @@ export function adminFileSnippet(o: {
   return `$target = ${psQuote(o.file)}
 $tmp = Join-Path (Split-Path -Parent $target) ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
 [IO.File]::WriteAllText($tmp, ${text}, (New-Object Text.ASCIIEncoding))
-icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /Q | Out-Null
+icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /L /Q | Out-Null
 if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $target" }
-icacls $tmp /setowner '*S-1-5-32-544' /Q | Out-Null
+icacls $tmp /setowner '*S-1-5-32-544' /L /Q | Out-Null
 if (Test-Path -LiteralPath $target) { [IO.File]::Replace($tmp, $target, $null) } else { [IO.File]::Move($tmp, $target) }`;
 }
+
+/**
+ * The PowerShell functions of the setup that make and check Studio's folders: `SafeFolder` (no
+ * reparse point on the way, no foreign owner), `StrictFolder` (a protected DACL built from scratch)
+ * and `NoLinksIn` (no reparse point just below a folder). Exported for the Windows CI.
+ */
+export const FOLDER_FUNCTIONS = String.raw`$adminSids = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+# What may own a folder of Studio's before this run: administrators, SYSTEM, TrustedInstaller, or
+# the administrator running this script (who may own what it created on an earlier run).
+$ownerSids = $adminSids + @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+# Every folder of Studio's, from the drive down: no reparse point anywhere, and none another account
+# owns (a folder planted there before would keep its owner's rights).
+function SafeFolder([string]$path, [string]$top) {
+  $walk = $path
+  while ($walk) {
+    if (Test-Path -LiteralPath $walk) {
+      $item = Get-Item -LiteralPath $walk -Force
+      if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$walk is a reparse point: refusing to set up Studio there" }
+      if ($walk.Length -gt $top.Length -and $walk.StartsWith($top, [StringComparison]::OrdinalIgnoreCase)) {
+        $owner = (Get-Acl -LiteralPath $walk).GetOwner([Security.Principal.SecurityIdentifier]).Value
+        if ($ownerSids -notcontains $owner) { throw "$walk is owned by $owner, not by administrators: remove it, then run this again" }
+      }
+    }
+    $up = Split-Path -Parent $walk
+    if (-not $up -or $up -eq $walk) { break }
+    $walk = $up
+  }
+}
+# A folder of Studio's with exactly the DACL it should have: built from scratch and protected, so
+# no entry anyone added before survives. An existing one must be a plain folder administrators own.
+function StrictFolder([string]$path, [object[]]$rules) {
+  if (Test-Path -LiteralPath $path) {
+    $item = Get-Item -LiteralPath $path -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$path is a reparse point: refusing to set up Studio there" }
+    $owner = (Get-Acl -LiteralPath $path).GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($ownerSids -notcontains $owner) { throw "$path is owned by $owner, not by administrators: remove it, then run this again" }
+  } else {
+    New-Item -ItemType Directory -Path $path | Out-Null
+  }
+  icacls $path /setowner '*S-1-5-32-544' /L /Q | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "cannot make administrators the owner of $path" }
+  $acl = New-Object Security.AccessControl.DirectorySecurity
+  $acl.SetAccessRuleProtection($true, $false)
+  $all = 'ContainerInherit, ObjectInherit'
+  foreach ($r in @(@('S-1-5-18', 'FullControl', $all, 'None'), @('S-1-5-32-544', 'FullControl', $all, 'None')) + $rules) {
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+      (New-Object Security.Principal.SecurityIdentifier($r[0])),
+      [Security.AccessControl.FileSystemRights]$r[1],
+      [Security.AccessControl.InheritanceFlags]$r[2],
+      [Security.AccessControl.PropagationFlags]$r[3],
+      [Security.AccessControl.AccessControlType]::Allow)))
+  }
+  (Get-Item -LiteralPath $path -Force).SetAccessControl($acl)
+}
+# Nothing below the relay home that the elevated steps reach may be a reparse point.
+function NoLinksIn([string]$path) {
+  if (-not (Test-Path -LiteralPath $path)) { return }
+  foreach ($c in Get-ChildItem -LiteralPath $path -Force) {
+    if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$($c.FullName) is a reparse point: remove it, then run this again" }
+  }
+}
+`;
 
 /**
  * The one-time setup of a Windows relay worker, for an administrator to run in an elevated
@@ -351,7 +418,14 @@ export function relaySetupScript(o: {
   const list = (ps: readonly string[]) => `@(${ps.map(psQuote).join(', ')})`;
   const command = forcedCommand(o.machine, o.home);
   const block = sshdMatchBlock({ relayUser: o.relayUser, machine: o.machine, command });
-  const pluginSetup = `$env:XDG_CONFIG_HOME = ${psQuote(join(o.home, 'config'))}; $env:XDG_STATE_HOME = ${psQuote(join(o.home, 'state'))}; & ${psQuote(machineNode(o.machine))} ${psQuote(machineStudioBin(o.machine))} account setup-plugins`;
+  // The worker's config and its crews' Claude config dir live in the admin-only tree: the plugin
+  // setup, run elevated, writes there and never into a folder the relay account could fill.
+  const pluginSetup = `$env:XDG_CONFIG_HOME = ${psQuote(machineConfig(o.machine))}; $env:XDG_STATE_HOME = ${psQuote(join(o.machine, 'setup-state'))}; & ${psQuote(machineNode(o.machine))} ${psQuote(machineStudioBin(o.machine))} account setup-plugins
+if ($LASTEXITCODE -ne 0) { throw 'the plugin setup failed' }
+$claude = ${psQuote(join(machineConfig(o.machine), 'studio', 'claude'))}
+foreach ($d in @((Join-Path $claude 'skills'), (Join-Path $claude 'plugins'))) {
+  if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($crewSid):(OI)(CI)RX" /L /Q | Out-Null }
+}`;
   return `${o.install === undefined ? '' : installHead(o.install)}#Requires -RunAsAdministrator
 # Studio: the setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
@@ -362,32 +436,7 @@ $crew = ${psQuote(o.crewUser)}
 $home_ = ${psQuote(o.home)}
 $machine = ${psQuote(o.machine)}
 $task = ${psQuote(o.task)}
-$adminSids = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
-# Every folder of Studio's, from the drive down: no reparse point anywhere, and none another account
-# owns (a folder planted there before would keep its owner's rights).
-function SafeFolder([string]$path, [string]$top) {
-  $walk = $path
-  while ($walk) {
-    if (Test-Path -LiteralPath $walk) {
-      $item = Get-Item -LiteralPath $walk -Force
-      if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$walk is a reparse point: refusing to set up Studio there" }
-      if ($walk.Length -gt $top.Length -and $walk.StartsWith($top, [StringComparison]::OrdinalIgnoreCase)) {
-        $owner = (Get-Acl -LiteralPath $walk).GetOwner([Security.Principal.SecurityIdentifier]).Value
-        if ($adminSids -notcontains $owner) { throw "$walk is owned by $owner, not by administrators: remove it, then run this again" }
-      }
-    }
-    $up = Split-Path -Parent $walk
-    if (-not $up -or $up -eq $walk) { break }
-    $walk = $up
-  }
-}
-function LockFolder([string]$path, [string[]]$grants) {
-  New-Item -ItemType Directory -Force -Path $path | Out-Null
-  icacls $path /setowner '*S-1-5-32-544' /Q | Out-Null
-  icacls $path /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' @grants /Q | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "cannot set the ACL of $path" }
-}
-function NewSecret { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b) + 'aA1!' }
+${FOLDER_FUNCTIONS}function NewSecret { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b) + 'aA1!' }
 function EnsureUser([string]$name, [string]$what, [string]$plain) {
   $u = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
   if ($null -eq $u) {
@@ -417,26 +466,25 @@ if (-not (Test-Path -LiteralPath $credFile) -or $null -eq (Get-LocalUser -Name $
 $crewSid = (EnsureUser $crew 'Studio crew sandbox' $plain).SID.Value
 # The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew user reads
 # Node.js and Studio only.
-LockFolder $filesStudio @("*$($relaySid):(OI)(CI)RX")
-LockFolder $machine @("*$($relaySid):(OI)(CI)RX")
-LockFolder (Join-Path $machine 'broker') @("*$($relaySid):(OI)(CI)RX")
-# The record of pairings (studio relay install --pair): administrators write it, the relay account
-# reads it for the proofs of a pairing.
-LockFolder (Join-Path $machine 'pairing') @("*$($relaySid):(OI)(CI)RX")
-LockFolder (Join-Path $machine 'node') @("*$($relaySid):(OI)(CI)RX", "*$($crewSid):(OI)(CI)RX")
-LockFolder (Join-Path $machine 'studio') @("*$($relaySid):(OI)(CI)RX", "*$($crewSid):(OI)(CI)RX")
-# The copies the forced command runs: never the files of an account that can change them.
+$tree = 'ContainerInherit, ObjectInherit'
+$rx = 'ReadAndExecute, Synchronize'
+StrictFolder $filesStudio @(,@($relaySid, $rx, $tree, 'None'))
+StrictFolder $machine @(,@($relaySid, $rx, $tree, 'None'))
+foreach ($sub in @('broker', 'config', 'setup-state', 'pairing')) { StrictFolder (Join-Path $machine $sub) @(,@($relaySid, $rx, $tree, 'None')) }
+foreach ($sub in @('node', 'studio')) { StrictFolder (Join-Path $machine $sub) @(@($relaySid, $rx, $tree, 'None'), @($crewSid, $rx, $tree, 'None')) }
+# The copies the forced command runs: never the files of an account that can change them, and no
+# junction of the source copied along.
 Copy-Item -LiteralPath ${psQuote(o.source.node)} -Destination ${psQuote(machineNode(o.machine))} -Force
-& robocopy.exe ${psQuote(o.source.studio)} ${psQuote(machineStudio(o.machine))} /MIR /XD node_modules .git .worktrees /NFL /NDL /NJH /NJS /NP | Out-Null
+& robocopy.exe ${psQuote(o.source.studio)} ${psQuote(machineStudio(o.machine))} /MIR /XJ /XD node_modules .git .worktrees /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "cannot copy Studio into $machine (robocopy $LASTEXITCODE)" }
-icacls ${psQuote(machineStudio(o.machine))} /reset /T /C /Q | Out-Null
-# The relay home: the relay account may fill state and config, never rename or remove them, and
-# nothing else of the home.
-LockFolder $dataStudio @("*$($relaySid):RX")
-LockFolder $home_ @("*$($relaySid):RX")
-foreach ($sub in @('state', 'config')) {
-  LockFolder (Join-Path $home_ $sub) @("*$($relaySid):(RX,WD,AD)", "*$($relaySid):(OI)(CI)(IO)M")
-}
+icacls ${psQuote(machineStudio(o.machine))} /reset /T /C /L /Q | Out-Null
+# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
+# the home. The elevated steps only set the ACLs of these folders themselves, and refuse a reparse
+# point among them or just below the home.
+StrictFolder $dataStudio @(,@($relaySid, $rx, 'None', 'None'))
+StrictFolder $home_ @(,@($relaySid, $rx, 'None', 'None'))
+NoLinksIn $home_
+StrictFolder (Join-Path $home_ 'state') @(@($relaySid, 'ReadAndExecute, CreateFiles, CreateDirectories, Synchronize', 'None', 'None'), @($relaySid, 'Modify, Synchronize', $tree, 'InheritOnly'))
 # The crew user's password, sealed for this machine (LocalMachine DPAPI): an SSH key logon cannot
 # open the relay account's own DPAPI keys. Only SYSTEM, administrators and the relay account read it.
 if ($plain) {
@@ -445,10 +493,10 @@ if ($plain) {
   $plain = $null
   $tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
   [IO.File]::WriteAllBytes($tmp, $sealed)
-  icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /Q | Out-Null
+  icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
   if (Test-Path -LiteralPath $credFile) { [IO.File]::Replace($tmp, $credFile, $null) } else { [IO.File]::Move($tmp, $credFile) }
 }
-icacls $credFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /Q | Out-Null
+icacls $credFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
 # No direct network for the crew user: every outbound connection to anything but loopback.
 $rule = 'Studio crew ' + $crew + ': no direct network'
 Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
@@ -494,7 +542,7 @@ if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
 }
 # Read, never write, for the crew user on Claude Code and the toolchains.
 foreach ($p in ${list(o.readPaths)}) {
-  if (Test-Path -LiteralPath $p) { icacls $p /grant "\${crew}:(OI)(CI)RX" /Q | Out-Null }
+  if (Test-Path -LiteralPath $p) { icacls $p /grant "\${crew}:(OI)(CI)RX" /L /Q | Out-Null }
 }
 # The pinned plugins in the crew Claude config dir of the relay home.
 ${pluginSetup}

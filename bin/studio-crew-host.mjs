@@ -347,6 +347,27 @@ async function probe(p) {
       if (e?.code !== 'ENOENT') left.push('the Startup folder cannot be read');
     }
     if (startup.length > 0) left.push(`${startup.length} item(s) in the Startup folder`);
+    try {
+      const documents = execFileSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          "[Environment]::GetFolderPath('MyDocuments')",
+        ],
+        { encoding: 'utf8', windowsHide: true },
+      ).trim();
+      for (const sub of ['PowerShell', 'WindowsPowerShell']) {
+        let names = [];
+        try {
+          names = readdirSync(join(documents, sub)).filter((n) => /profile\.ps1$/i.test(n));
+        } catch {}
+        if (names.length > 0) left.push(`PowerShell profile(s) ${names.join(', ')}`);
+      }
+    } catch {
+      left.push('the Documents folder cannot be read');
+    }
     add(
       'persistence',
       left.length === 0,
@@ -380,13 +401,22 @@ if (spec.mode === 'reset') {
   // What a crew could leave in this user's profile to start in a later job goes, as this user.
   let report;
   try {
-    const { resetRegistry, resetStartup } = await import('./studio-crew-reset.mjs');
-    const startup = execFileSync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', "[Environment]::GetFolderPath('Startup')"],
-      { encoding: 'utf8', windowsHide: true },
-    ).trim();
-    report = { left: resetRegistry(), startup: startup === '' ? null : resetStartup(startup) };
+    const { resetProfiles, resetRegistry, resetStartup } = await import('./studio-crew-reset.mjs');
+    // The registry first: its shell folders go back to the defaults before they are asked for.
+    const left = resetRegistry();
+    const folder = (name) =>
+      execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', `[Environment]::GetFolderPath('${name}')`],
+        { encoding: 'utf8', windowsHide: true },
+      ).trim();
+    const startup = folder('Startup');
+    const documents = folder('MyDocuments');
+    report = {
+      left,
+      startup: startup === '' ? null : resetStartup(startup),
+      profiles: documents === '' ? null : resetProfiles(documents),
+    };
   } catch (e) {
     report = { error: String(e?.message ?? e).split('\n')[0] };
   }

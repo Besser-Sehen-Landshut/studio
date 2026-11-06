@@ -870,6 +870,18 @@ async function collect(c: RelayContext, id: string, out: Out): Promise<void> {
       });
     }
     const hooks = ['-c', `core.hooksPath=${join(dir, 'no-hooks')}`, '--no-replace-objects'];
+    // Every pack gets its index built here from its own bytes (`index-pack --strict`), and the
+    // whole repository is checked (`fsck --strict`) before anything is bundled from it.
+    const problem = await indexAndCheck(c, dir, hooks);
+    if (problem !== undefined) {
+      return answer(out, {
+        ...base,
+        report: text,
+        headSha: null,
+        payload: false,
+        problem: `the crew's objects do not check out: ${problem}`,
+      });
+    }
     await git(c, dir, [...hooks, 'update-ref', branch, crewHead]);
     const got = (
       await git(c, dir, [...hooks, 'rev-parse', '--verify', `${branch}^{commit}`])
@@ -1174,7 +1186,8 @@ export function copyCrewObjects(clone: string, dest: string, id: string, root: s
       const pst = lstatSync(sub);
       if (pst.isSymbolicLink() || !pst.isDirectory()) throw new Error('a link among the objects');
       for (const o of readdirSync(sub)) {
-        if (/^pack-[0-9a-f]{40,64}\.(pack|idx|rev)$/.test(o))
+        // Packs only: their index is built anew here, never taken from the crew.
+        if (/^pack-[0-9a-f]{40,64}\.pack$/.test(o))
           copy(join(sub, o), join(dest, 'objects', 'pack', o));
       }
     }
@@ -1197,4 +1210,45 @@ export function copyCrewObjects(clone: string, dest: string, id: string, root: s
     }
   }
   throw new Error(`the clone has no branch studio/${id}`);
+}
+
+/**
+ * Builds the index of every pack copied from a crew's clone with `git index-pack --strict` (packs
+ * that lean on each other are tried again until none more succeeds), then checks the repository's
+ * own objects with `git fsck --strict`. Returns why it failed, or undefined.
+ */
+async function indexAndCheck(
+  c: RelayContext,
+  dir: string,
+  hooks: readonly string[],
+): Promise<string | undefined> {
+  const packDir = join(dir, 'objects', 'pack');
+  let todo = existsSync(packDir)
+    ? readdirSync(packDir).filter((f) => /^pack-[0-9a-f]{40,64}\.pack$/.test(f))
+    : [];
+  while (todo.length > 0) {
+    const failed: string[] = [];
+    for (const f of todo) {
+      try {
+        await git(c, dir, [...hooks, 'index-pack', '--strict', join(packDir, f)]);
+      } catch {
+        failed.push(f);
+      }
+    }
+    if (failed.length === todo.length) return `a pack does not index (${failed[0]})`;
+    todo = failed;
+  }
+  try {
+    await git(c, dir, [
+      ...hooks,
+      'fsck',
+      '--strict',
+      '--no-full',
+      '--no-dangling',
+      '--no-progress',
+    ]);
+  } catch {
+    return 'git fsck --strict found a broken object';
+  }
+  return undefined;
 }

@@ -228,6 +228,23 @@ describe('the authorized keys of a worker are exactly its pairings', () => {
         values: { home },
       }),
     ).rejects.toThrow(/sets up a Windows relay worker/);
+    // Never over SSH: the install stops sshd. By the environment, or an sshd among the parents.
+    await expect(
+      runRelayCommand({
+        ...base,
+        env: { SSH_CONNECTION: 'peer 22 me 22' },
+        rest: ['install'],
+        values: { home, source: 'fd7a::/48' },
+      }),
+    ).rejects.toThrow(/never over SSH/);
+    await expect(
+      runRelayCommand({
+        ...base,
+        exec: async () => ({ code: 0, stdout: 'True', stderr: '' }),
+        rest: ['install'],
+        values: { home, source: 'fd7a::/48' },
+      }),
+    ).rejects.toThrow(/never over SSH/);
   });
 });
 
@@ -400,7 +417,7 @@ describe('the install script', () => {
       "Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Disable-NetFirewallRule",
       'Set-Service -Name WebClient -StartupType Disabled',
       // The record of pairings: written by SYSTEM and administrators only.
-      "LockFolder (Join-Path $machine 'pairing')",
+      "foreach ($sub in @('broker', 'config', 'setup-state', 'pairing'))",
     ]) {
       expect(tail, s).toContain(s);
     }
