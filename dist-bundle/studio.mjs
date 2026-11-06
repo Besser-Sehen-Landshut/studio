@@ -40381,7 +40381,8 @@ Note 'started'
 $raw = [Console]::In.ReadToEnd()
 $nl = $raw.IndexOf([char]10)
 if ($nl -lt 0) { throw 'no spec on stdin' }
-$revoke = @(ConvertFrom-Json $raw.Substring(0, $nl))
+# Windows PowerShell hands a JSON array on as one object: @() around it would nest it.
+$revoke = ConvertFrom-Json $raw.Substring(0, $nl)
 $spec = [Text.Encoding]::UTF8.GetBytes($raw.Substring($nl + 1))
 $raw = $null
 $p = $null
