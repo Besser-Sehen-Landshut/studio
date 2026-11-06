@@ -36,7 +36,7 @@ const scripts: Record<string, string> = {
     task: 'Studio relay broker',
     readPaths: [],
     source: { node: 'C:\\nodejs\\node.exe', studio: 'C:\\plugins\\studio' },
-    install: { port: 22, scope: { source: '192.0.2.0/24' }, disableSpooler: true },
+    install: { port: 22, scope: { source: 'fd7a::/48' }, disableSpooler: true },
   }),
   'authorized keys': authorizedKeysScript({
     file: 'C:\\Program Files\\Studio\\relay\\authorized_keys',
