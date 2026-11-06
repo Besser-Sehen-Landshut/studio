@@ -1,9 +1,9 @@
 // The CLI's side of relay workers (src/relay-lead.ts, src/relay-serve.ts): on the lead, starting a
 // planned item on its relay worker and following it each tick; on the worker, `studio relay serve`,
 // `relay run` and `relay setup`. Kept out of src/cli.ts, which only calls in here.
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { crewClaudeDir } from './accounts.js';
 import { type Board, loadBoard, saveBoard, transition, type WorkItem } from './board.js';
 import {
@@ -18,15 +18,7 @@ import { type RunUsage, recordLedgerRun, withItemUsage } from './costs.js';
 import { pickCrewCredential } from './crew.js';
 import { startEgressProxy } from './egress-proxy.js';
 import { HeldError } from './held.js';
-import {
-  activeParks,
-  blockHold,
-  parkUntil,
-  readBlocks,
-  readLimits,
-  writeBlocks,
-  writeLimits,
-} from './limits.js';
+import { activeParks, blockHold, parkUntil, readLimits, writeLimits } from './limits.js';
 import { ensureStateDir, ownerStateRootFor, removeStateEntry, withBoardLock } from './paths.js';
 import { pinnedPlugins, STUDIO_VERSION } from './plugins.js';
 import type { Ports } from './ports.js';
@@ -44,7 +36,9 @@ import {
   stopRelay,
   updateRelay,
 } from './relay-lead.js';
+import { encodeMessage, RELAY_PROTOCOL } from './relay-protocol.js';
 import {
+  LEAD_RE,
   type RelayContext,
   readSpecFromPipe,
   relayRoot,
@@ -61,15 +55,25 @@ import {
   relayCall,
   sshTransport,
 } from './relay-transport.js';
-import { forcedCommand, relayHomeDefault, relaySetupScript } from './relay-windows.js';
-import { relayWindows } from './relay-windows-check.js';
+import {
+  authorizedKeysFile,
+  leadFromAuthInfo,
+  relayHomeDefault,
+  relayMachineDefault,
+  relaySetupScript,
+} from './relay-windows.js';
+import { machineTreeProblem, relayWindows } from './relay-windows-check.js';
 import { labelUsage, recordRun, USAGE_UNREADABLE } from './usage.js';
-import { findClaude, setupReadPaths } from './windows-sandbox.js';
+import { findClaude, runFile } from './windows-sandbox.js';
 import { pinnedMain } from './worker.js';
 import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
 import { updateWorkers, workerCrewName } from './worker-lead.js';
 
 const BY = 'studio';
+/** How long a worker's report of an account block parks the handed-over label. */
+const RELAY_PARK_MS = 60 * 60_000;
+/** The longest a worker's report of a usage limit parks the handed-over label. */
+const RELAY_PARK_MAX_MS = 6 * 60 * 60_000;
 
 const withItem = (board: Board, id: string, fn: (i: WorkItem) => WorkItem): Board => ({
   ...board,
@@ -225,7 +229,7 @@ export async function startRelayItem(
 export type RelayStep =
   | { kind: 'held'; reason: string }
   | { kind: 'lead'; reason: string }
-  | { kind: 'collect' };
+  | { kind: 'collect'; note?: string };
 
 const dropRecord = (stateRoot: string, id: string) =>
   updateRelay(stateRoot, (s) => {
@@ -359,30 +363,30 @@ export async function followRelayItem(
       }
     });
   }
-  // A usage limit or an account block of the credential the lead gave is the lead's to record.
-  if (got.limit !== null) {
+  // A limit or a block the worker reports is its word only: it parks the one credential label the
+  // lead handed over, for a bounded time, and never blocks the owner's accounts as a whole.
+  let parkNote: string | undefined;
+  if (got.limit !== null || got.block) {
     const read = readLimits(d.ownerRoot);
     if (read.ok) {
+      const until = got.block
+        ? new Date(now.getTime() + RELAY_PARK_MS)
+        : new Date(
+            Math.min(
+              parkUntil(got.limit?.resetsAt ?? undefined, now).getTime(),
+              now.getTime() + RELAY_PARK_MAX_MS,
+            ),
+          );
       writeLimits(d.ownerRoot, {
         ...read.labels,
         [record.credential]: {
-          parkedUntil: parkUntil(got.limit.resetsAt ?? undefined, now).toISOString(),
-          kind: got.limit.kind,
+          parkedUntil: until.toISOString(),
+          kind: got.limit?.kind ?? 'session',
         },
       });
     }
-  }
-  if (got.block) {
-    const read = readBlocks(d.ownerRoot);
-    if (read.ok && !read.blocks.some((b) => b.label === record.credential)) {
-      writeBlocks(d.ownerRoot, [
-        ...read.blocks,
-        {
-          label: record.credential,
-          reason: 'account block reported by a relay worker',
-          at: now.toISOString(),
-        },
-      ]);
+    if (got.block) {
+      parkNote = `${item.id}: the relay worker ${label} reports an account block of ${record.credential}; that label is parked for an hour; check the account`;
     }
   }
   if (got.kind === 'failed') {
@@ -395,7 +399,7 @@ export async function followRelayItem(
       reason: `${item.id}: ${note}; studio stop ${item.id} --requeue starts it once more`,
     };
   }
-  return { kind: 'collect' };
+  return parkNote === undefined ? { kind: 'collect' } : { kind: 'collect', note: parkNote };
 }
 
 /** After `collect` moved the item: the worker cleans up, the lead forgets the job. */
@@ -488,6 +492,8 @@ export function relayOwner(owner: OwnerEnv, home: string | undefined): OwnerEnv 
 export function relayContext(o: {
   owner: OwnerEnv;
   home: string | undefined;
+  /** The lead this request is for. */
+  lead: string;
   ports: Ports;
   env: Record<string, string | undefined>;
   homedir: string;
@@ -496,6 +502,7 @@ export function relayContext(o: {
   load?: RelayContext['load'];
   log: (line: string) => void;
 }): RelayContext {
+  if (!LEAD_RE.test(o.lead)) throw new Error('not a lead name');
   const owner = relayOwner(o.owner, o.home);
   const root = relayRoot(owner);
   ensureStateDir(root, root);
@@ -505,10 +512,12 @@ export function relayContext(o: {
   const home = o.home ?? relayHomeDefault(o.env);
   return {
     owner,
+    lead: o.lead,
     ports: o.ports,
     platform,
     spawnRunner:
-      o.spawnRunner ?? systemSpawnRunner({ home: o.home, platform: platform().platform }),
+      o.spawnRunner ??
+      systemSpawnRunner({ home: o.home, platform: platform().platform, lead: o.lead }),
     load: o.load ?? (() => systemLoad(root)),
     log: o.log,
     ...(native
@@ -516,6 +525,7 @@ export function relayContext(o: {
           windows: relayWindows({
             user: settings.windows?.crewUser ?? 'studio-crew',
             home,
+            machine: machineOf(),
             task: settings.windows?.broker ?? 'Studio relay broker',
             stateRoot: root,
             ownerRoot: ownerStateRootFor(owner),
@@ -532,16 +542,61 @@ export function relayContext(o: {
   };
 }
 
+/** The admin-only tree this process runs from: `<machine>\node\node.exe`. */
+const machineOf = (): string => resolve(dirname(process.execPath), '..');
+
 async function readAll(input: AsyncIterable<Uint8Array | string>): Promise<string> {
   let s = '';
   for await (const c of input) s += typeof c === 'string' ? c : Buffer.from(c).toString('utf8');
   return s;
 }
 
+const readText = (file: string | undefined): string | undefined => {
+  if (file === undefined) return undefined;
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Which lead a session of `relay serve` is for. On native Windows the key that logged in decides
+ * (sshd's `ExposeAuthInfo`, matched against the admin-only authorized keys), and a `--lead` the
+ * key's command names must agree; without either, nothing is served. Elsewhere `--lead`, else the
+ * key's lead when sshd names it, else `default`.
+ */
+export function sessionLead(o: {
+  platform: NodeJS.Platform;
+  flag: string | undefined;
+  env: Record<string, string | undefined>;
+  keysFile: string | undefined;
+}): { lead: string } | { problem: string } {
+  const fromKey = leadFromAuthInfo(readText(o.env.SSH_USER_AUTH), readText(o.keysFile));
+  if (o.flag !== undefined && !LEAD_RE.test(o.flag)) return { problem: 'not a lead name' };
+  if (o.flag !== undefined && fromKey !== undefined && o.flag !== fromKey) {
+    return { problem: 'this key belongs to another lead' };
+  }
+  if (o.platform === 'win32') {
+    return fromKey === undefined
+      ? {
+          problem:
+            'cannot tell which lead this key is (sshd ExposeAuthInfo and a key paired by studio relay install)',
+        }
+      : { lead: fromKey };
+  }
+  return { lead: o.flag ?? fromKey ?? 'default' };
+}
+
+const refuse = (out: (s: string) => void, line: string) => {
+  for (const l of encodeMessage({ studioRelay: RELAY_PROTOCOL, ok: false, kind: 'refused', line }))
+    out(l);
+};
+
 /** `studio relay serve | run <id> | setup`. Returns the exit code. */
 export async function runRelayCommand(o: {
   rest: string[];
-  values: { home?: string; pipe?: string; 'lead-key'?: string };
+  values: { home?: string; pipe?: string; 'lead-key'?: string; lead?: string };
   owner: OwnerEnv;
   ports: Ports;
   env: Record<string, string | undefined>;
@@ -552,12 +607,17 @@ export async function runRelayCommand(o: {
   platform?: WorkerPlatform;
   spawnRunner?: RelayContext['spawnRunner'];
   load?: RelayContext['load'];
+  /** Seam for tests: the check of the admin-only tree on native Windows. */
+  treeCheck?: () => Promise<string | undefined>;
 }): Promise<number | undefined> {
   const [sub, ...args] = o.rest;
-  const ctx = () =>
+  const platform = (o.platform ?? detectPlatform()).platform;
+  const home = o.values.home ?? relayHomeDefault(o.env);
+  const ctx = (lead: string) =>
     relayContext({
       owner: o.owner,
       home: o.values.home,
+      lead,
       ports: o.ports,
       env: o.env,
       homedir: o.homedir ?? homedir(),
@@ -566,41 +626,72 @@ export async function runRelayCommand(o: {
       ...(o.load === undefined ? {} : { load: o.load }),
       log: (l) => o.stderr(`${l.replace(/\p{Cc}/gu, ' ')}\n`),
     });
+  /** Native Windows: never run from copies anyone but administrators could have changed. */
+  const trusted = async (): Promise<string | undefined> => {
+    if (platform !== 'win32') return undefined;
+    return (
+      o.treeCheck ??
+      (() =>
+        machineTreeProblem(runFile, {
+          machine: machineOf(),
+          home,
+          node: process.execPath,
+          studioBin: STUDIO_BIN,
+        }))
+    )();
+  };
   if (sub === 'serve' && args.length === 0) {
-    await serveRelay(ctx(), o.stdin, o.stdout);
+    const tree = await trusted();
+    if (tree !== undefined) {
+      refuse(o.stdout, tree);
+      return 1;
+    }
+    const lead = sessionLead({
+      platform,
+      flag: o.values.lead,
+      env: o.env,
+      keysFile: platform === 'win32' ? authorizedKeysFile(machineOf()) : undefined,
+    });
+    if ('problem' in lead) {
+      refuse(o.stdout, lead.problem);
+      return 1;
+    }
+    await serveRelay(ctx(lead.lead), o.stdin, o.stdout);
     return 0;
   }
   if (sub === 'run' && args.length === 1) {
     const id = args[0] as string;
-    if (!/^[A-Z]+-\d+$/.test(id)) return undefined;
+    const lead = o.values.lead ?? 'default';
+    if (!/^[A-Z]+-\d+$/.test(id) || !LEAD_RE.test(lead)) return undefined;
+    const tree = await trusted();
+    if (tree !== undefined) throw new Error(tree);
     const spec =
       o.values.pipe === undefined ? await readAll(o.stdin) : await readSpecFromPipe(o.values.pipe);
-    const state = await runRelayJob(ctx(), id, spec);
+    const state = await runRelayJob(ctx(lead), id, spec);
     o.stdout(`${JSON.stringify({ item: id, state })}\n`);
     return state === 'refused' ? 1 : 0;
   }
   if (sub === 'setup' && args.length === 0) {
-    const owner = relayOwner(o.owner, o.values.home);
-    const home = o.values.home ?? relayHomeDefault(o.env);
     const settings = serveSettings(relayOwner(o.owner, home));
-    const relayUser = 'studio-relay';
-    const command = forcedCommand(process.execPath, STUDIO_BIN, home);
-    const pluginEnv = `$env:XDG_CONFIG_HOME = '${join(home, 'config').replace(/'/g, "''")}'; $env:XDG_STATE_HOME = '${join(home, 'state').replace(/'/g, "''")}'`;
+    const machine = relayMachineDefault(o.env);
+    const claude = findClaude(o.env.PATH ?? o.env.Path);
+    const crewConfig = crewClaudeDir(relayOwner(o.owner, home));
     o.stdout(
       relaySetupScript({
-        relayUser,
+        relayUser: 'studio-relay',
         crewUser: settings.windows?.crewUser ?? 'studio-crew',
         home,
+        machine,
         task: settings.windows?.broker ?? 'Studio relay broker',
-        readPaths: setupReadPaths({
-          node: process.execPath,
-          claude: findClaude(o.env.PATH ?? o.env.Path),
-          toolchains: loadOwnerConfig(owner).crewToolchainPaths,
-          crewConfigDir: crewClaudeDir(relayOwner(o.owner, home)),
-        }),
-        command,
+        // Node.js and Studio are read from their admin-only copies; these are the rest.
+        readPaths: [
+          ...(claude === undefined ? [] : [dirname(claude)]),
+          ...loadOwnerConfig(o.owner).crewToolchainPaths,
+          join(crewConfig, 'skills'),
+          join(crewConfig, 'plugins'),
+        ],
+        source: { node: process.execPath, studio: resolve(dirname(STUDIO_BIN), '..') },
         ...(o.values['lead-key'] === undefined ? {} : { leadKey: o.values['lead-key'] }),
-        pluginSetup: `${pluginEnv}; & '${process.execPath.replace(/'/g, "''")}' '${STUDIO_BIN.replace(/'/g, "''")}' account setup-plugins`,
       }),
     );
     return 0;

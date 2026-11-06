@@ -10,39 +10,59 @@
 // user's password is sealed for the machine (LocalMachine DPAPI) in a file whose ACL lets only the
 // relay account, SYSTEM and administrators read it. Any process of those accounts on this machine
 // can open it; the crew user cannot read the file.
-import { join } from 'node:path';
+import { win32 } from 'node:path';
 import { ipv4 } from './egress-proxy.js';
 import type { Neighbor } from './relay-hosts.js';
 import { OUTSIDE, powershellEnv, psQuote, type RunFile } from './windows-sandbox.js';
 
-/** The machine-wide home of a relay worker: config, state, the crew credential, the broker. */
+/** Every path here is a Windows path, also where tests run elsewhere. */
+const join = win32.join;
+
+/**
+ * Where a relay worker keeps what the relay account writes: its config and state, each in its own
+ * folder the relay account may fill but never rename or remove. The folder itself, and everything
+ * above it, only administrators may change.
+ */
 export const relayHomeDefault = (env: Record<string, string | undefined>): string =>
   join(env.ProgramData ?? env.PROGRAMDATA ?? 'C:\\ProgramData', 'Studio', 'relay');
 
-/** The crew user's password, sealed for this machine. */
-export const machineCredFile = (home: string): string => join(home, 'crew-credential.bin');
-/** The broker's script and the file it answers in; both written by the setup, elevated. */
-export const brokerScriptFile = (home: string): string => join(home, 'broker', 'sweep.ps1');
-export const brokerResultFile = (home: string): string => join(home, 'broker', 'sweep.json');
-/** The key the lead logs in with, forced to `studio relay serve` (sshd `AuthorizedKeysFile`). */
-export const authorizedKeysFile = (home: string): string => join(home, 'authorized_keys');
+/**
+ * The admin-only tree of a relay worker: the copies of Node.js and Studio the forced command runs,
+ * the sealed crew credential, the broker's answer and the authorized keys. Only SYSTEM and
+ * administrators write anything here; the relay account reads what it needs.
+ */
+export const relayMachineDefault = (env: Record<string, string | undefined>): string =>
+  join(env.ProgramFiles ?? env.PROGRAMFILES ?? 'C:\\Program Files', 'Studio', 'relay');
 
-/** The command sshd forces for the relay account: this Node, this Studio, nothing from the client. */
-export const forcedCommand = (node: string, studioBin: string, home: string): string =>
-  `"${node}" "${studioBin}" relay serve --home "${home}"`;
+/** The crew user's password, sealed for this machine. */
+export const machineCredFile = (machine: string): string => join(machine, 'crew-credential.bin');
+/** The file the broker answers in; its folder only SYSTEM and administrators write. */
+export const brokerResultFile = (machine: string): string => join(machine, 'broker', 'answer.json');
+/** The keys the leads log in with, each forced to `studio relay serve` (sshd `AuthorizedKeysFile`). */
+export const authorizedKeysFile = (machine: string): string => join(machine, 'authorized_keys');
+/** The Node.js and the Studio the forced command runs: admin-only copies. */
+export const machineNode = (machine: string): string => join(machine, 'node', 'node.exe');
+export const machineStudio = (machine: string): string => join(machine, 'studio');
+export const machineStudioBin = (machine: string): string =>
+  join(machine, 'studio', 'bin', 'studio');
+
+/** The command sshd forces for the relay account: the admin-only Node and Studio, nothing else. */
+export const forcedCommand = (machine: string, home: string): string =>
+  `"${machineNode(machine)}" "${machineStudioBin(machine)}" relay serve --home "${home}"`;
 
 /**
  * The block for `sshd_config` (at its end): the relay account may only run the forced command,
- * with no terminal, no forwarding of any kind and no password, and its keys come from a file of
- * the setup's, not from its profile.
+ * with no terminal, no forwarding of any kind and no password; its keys come from the admin-only
+ * tree, not from its profile. `ExposeAuthInfo` tells the forced command which key logged in, so
+ * it serves that key's lead only.
  */
-export function sshdMatchBlock(o: { relayUser: string; home: string; command: string }): string {
-  // sshd on Windows reads forward slashes and expands __PROGRAMDATA__ itself.
-  const keys = authorizedKeysFile(o.home).replace(/\\/g, '/');
+export function sshdMatchBlock(o: { relayUser: string; machine: string; command: string }): string {
+  const keys = authorizedKeysFile(o.machine).replace(/\\/g, '/');
   return [
     `Match User ${o.relayUser}`,
     `    AuthorizedKeysFile "${keys}"`,
     `    ForceCommand ${o.command}`,
+    '    ExposeAuthInfo yes',
     '    PermitTTY no',
     '    AllowTcpForwarding no',
     '    AllowStreamLocalForwarding no',
@@ -55,26 +75,62 @@ export function sshdMatchBlock(o: { relayUser: string; home: string; command: st
   ].join('\n');
 }
 
-/** The line for the authorized keys file: the forced command, plus `restrict` as an extra. */
-export function authorizedKeyLine(o: { key: string; command: string }): string {
+/** A lead's name as its key's comment carries it: `studio-relay-<lead>`. */
+export const keyTag = (lead: string): string => `studio-relay-${lead}`;
+
+/** The line of one lead's key: the forced command naming that lead, plus `restrict` as an extra. */
+export function authorizedKeyLine(o: { key: string; command: string; lead: string }): string {
+  const key = o.key.trim().split(/\s+/).slice(0, 2).join(' ');
   if (
-    !/^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa) [A-Za-z0-9+/]{40,2000}={0,2}( [^\p{Cc}"]{0,100})?$/u.test(
-      o.key,
-    )
+    !/^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa) [A-Za-z0-9+/]{40,2000}={0,2}$/.test(key)
   ) {
     throw new Error('not an SSH public key line: <type> <base64> [comment]');
   }
-  return `restrict,command="${o.command.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" ${o.key}`;
+  if (!/^[a-z][a-z0-9-]{0,31}$/.test(o.lead)) throw new Error('not a lead name');
+  const command = `${o.command} --lead ${o.lead}`.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return `restrict,command="${command}" ${key} ${keyTag(o.lead)}`;
+}
+
+/** The lead a key line names by its comment; `default` for a key without Studio's tag. */
+export function leadOfKeyComment(comment: string | undefined): string {
+  const m = /^studio-relay-([a-z][a-z0-9-]{0,31})$/.exec(comment ?? '');
+  return m?.[1] ?? 'default';
 }
 
 /**
- * The broker's script: ends every process of the crew user (by SID, through CIM) and writes how
- * many it found and which are left, with the time, to its answer file. It takes no argument: the
- * crew user is written into it by the setup.
+ * The lead of the key this SSH session logged in with: sshd (`ExposeAuthInfo`) names the key in
+ * the file `SSH_USER_AUTH` points to; the admin-only authorized keys file says whose it is.
+ * Undefined when either cannot tell.
+ */
+export function leadFromAuthInfo(
+  authInfo: string | undefined,
+  keysText: string | undefined,
+): string | undefined {
+  if (authInfo === undefined || keysText === undefined) return undefined;
+  const used = /^publickey (\S+) (\S+)/m.exec(authInfo);
+  if (used === null) return undefined;
+  for (const line of keysText.split(/\r?\n/)) {
+    const m =
+      /(?:^|\s)(ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa) ([A-Za-z0-9+/]+={0,2})(?: (\S+))?\s*$/.exec(
+        line,
+      );
+    if (m !== null && m[1] === used[1] && m[2] === used[2]) {
+      const tag = /^studio-relay-([a-z][a-z0-9-]{0,31})$/.exec(m[3] ?? '');
+      return tag?.[1];
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The broker: ends every process of the crew user (by SID, through CIM), then takes away what a
+ * crew could have left in the crew user's profile to run in the next job (the AutoRun of cmd, its
+ * own environment values and Run keys, the Startup folder), and writes what it found, with the
+ * time, to its answer file. It is the task's action itself (no script file anyone could change)
+ * and takes no argument: the crew user and the answer file are written into it by the setup.
  */
 export const brokerScript = (o: { crewUser: string; result: string }): string =>
   [
-    '# Studio relay broker: ends every process of the crew user. Written by the setup; runs as SYSTEM.',
     "$ErrorActionPreference = 'Stop'",
     `$result = ${psQuote(o.result)}`,
     'try {',
@@ -84,12 +140,34 @@ export const brokerScript = (o: { crewUser: string; result: string }): string =>
     '  foreach ($p in $found) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }',
     '  if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }',
     '  $left = @(Crew | ForEach-Object { [int]$_.ProcessId })',
-    "  $out = @{ at = (Get-Date).ToUniversalTime().ToString('o'); found = $found.Count; left = $left }",
+    '  $reset = $false',
+    '  $profile = (Get-CimInstance Win32_UserProfile | Where-Object { $_.SID -eq $sid } | Select-Object -First 1).LocalPath',
+    '  if ($left.Count -eq 0 -and $profile) {',
+    '    $hive = "Registry::HKEY_USERS\\$sid"',
+    '    $loaded = Test-Path -LiteralPath $hive',
+    "    if (-not $loaded) { & reg.exe load \"HKU\\$sid\" (Join-Path $profile 'NTUSER.DAT') | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'cannot load the crew user profile' } }",
+    '    try {',
+    '      Remove-ItemProperty -LiteralPath "$hive\\Software\\Microsoft\\Command Processor" -Name AutoRun -ErrorAction SilentlyContinue',
+    '      $envKey = "$hive\\Environment"',
+    "      if (Test-Path -LiteralPath $envKey) { foreach ($n in (Get-Item -LiteralPath $envKey).GetValueNames()) { if ($n -notin @('TEMP', 'TMP')) { Remove-ItemProperty -LiteralPath $envKey -Name $n } } }",
+    '      foreach ($k in @(\'Software\\Microsoft\\Windows\\CurrentVersion\\Run\', \'Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce\')) { if (Test-Path -LiteralPath "$hive\\$k") { Remove-Item -LiteralPath "$hive\\$k" -Recurse -Force } }',
+    '    } finally {',
+    '      if (-not $loaded) { [GC]::Collect(); [GC]::WaitForPendingFinalizers(); & reg.exe unload "HKU\\$sid" | Out-Null }',
+    '    }',
+    "    $startup = Join-Path $profile 'AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup'",
+    '    if (Test-Path -LiteralPath $startup) { Get-ChildItem -LiteralPath $startup -Force | Remove-Item -Recurse -Force }',
+    '    $reset = $true',
+    '  }',
+    "  $out = @{ at = (Get-Date).ToUniversalTime().ToString('o'); found = $found.Count; left = $left; reset = $reset }",
     '} catch {',
     "  $out = @{ at = (Get-Date).ToUniversalTime().ToString('o'); error = $_.Exception.Message }",
     '}',
     'Set-Content -LiteralPath $result -Value (ConvertTo-Json -Compress $out) -Encoding UTF8',
   ].join('\r\n');
+
+/** The broker as a task action: PowerShell with the script encoded, so no file holds it. */
+export const brokerArguments = (o: { crewUser: string; result: string }): string =>
+  `-NoProfile -NonInteractive -EncodedCommand ${Buffer.from(brokerScript(o), 'utf16le').toString('base64')}`;
 
 /**
  * Ends every process of the crew user through the broker task and reads its answer: one written
@@ -235,42 +313,101 @@ export async function machineCredProblem(run: RunFile, file: string): Promise<st
 }
 
 /**
+ * PowerShell that writes a file of the admin-only tree whole: a temporary file in the same folder
+ * gets its final ACL first, then replaces the old file in one step (`[IO.File]::Replace`, or a
+ * move when there is none yet). `$relaySid` must be set. The lines are quoted one by one.
+ */
+export function adminFileSnippet(o: {
+  file: string;
+  lines: readonly string[];
+  readers: 'relay' | 'none';
+}): string {
+  const text = `(@(${o.lines.map(psQuote).join(', ')}) | ForEach-Object { $_ + [char]13 + [char]10 }) -join ''`;
+  const relay = o.readers === 'relay' ? ` "*$($relaySid):R"` : '';
+  return `$target = ${psQuote(o.file)}
+$tmp = Join-Path (Split-Path -Parent $target) ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+[IO.File]::WriteAllText($tmp, ${text}, (New-Object Text.ASCIIEncoding))
+icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $target" }
+icacls $tmp /setowner '*S-1-5-32-544' /Q | Out-Null
+if (Test-Path -LiteralPath $target) { [IO.File]::Replace($tmp, $target, $null) } else { [IO.File]::Move($tmp, $target) }`;
+}
+
+/**
  * The one-time setup of a Windows relay worker, for an administrator to run in an elevated
- * PowerShell. It creates the relay account (standard user, never an administrator; SSH only), the
- * crew user with a password sealed for this machine, the outbound firewall rule of the crew user,
- * the broker task (SYSTEM; only the relay account may start it), the ACLs of the relay home, read
- * grants for the toolchains, and stops and disables WebClient. It prints the sshd block, and with
- * a lead key, writes its line. sshd_config itself is not changed: the owner adds the block.
+ * PowerShell. It refuses a path of Studio's that holds a reparse point or a folder another account
+ * owns; makes the admin-only tree (copies of Node.js and Studio the forced command runs, the sealed
+ * crew credential, the broker's answer folder, the authorized keys) and the relay home (only its
+ * `state` and `config` folders take the relay account's writes, and it can rename or remove
+ * neither); creates the relay account (standard user, never an administrator; SSH only), the crew
+ * user, the crew user's outbound firewall rule and denied logons, the broker task (SYSTEM, its
+ * script in the action, only the relay account may start it), read grants for the toolchains, and
+ * stops and disables WebClient. With a lead key, it writes the authorized keys. It prints the sshd
+ * block; sshd_config itself is not changed here.
  */
 export function relaySetupScript(o: {
   relayUser: string;
   crewUser: string;
   home: string;
+  machine: string;
   task: string;
   readPaths: readonly string[];
-  command: string;
-  /** The lead's public key line, to authorize with the forced command. */
+  /** The Node.js and the Studio plugin folder to copy into the admin-only tree. */
+  source: { node: string; studio: string };
+  /** The lead's public key line, to authorize with the forced command; its lead by its comment. */
   leadKey?: string;
-  /** Plugin setup for the crew Claude config dir of the relay home. */
-  pluginSetup: string;
 }): string {
   for (const u of [o.relayUser, o.crewUser]) {
     if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(u)) throw new Error(`not a local user name: ${u}`);
   }
   if (!/^[A-Za-z0-9 _-]{1,64}$/.test(o.task)) throw new Error(`not a task name: ${o.task}`);
   const list = (ps: readonly string[]) => `@(${ps.map(psQuote).join(', ')})`;
+  const command = forcedCommand(o.machine, o.home);
   const keyLine =
-    o.leadKey === undefined ? undefined : authorizedKeyLine({ key: o.leadKey, command: o.command });
-  const block = sshdMatchBlock({ relayUser: o.relayUser, home: o.home, command: o.command });
+    o.leadKey === undefined
+      ? undefined
+      : authorizedKeyLine({
+          key: o.leadKey,
+          command,
+          lead: leadOfKeyComment(o.leadKey.trim().split(/\s+/)[2]),
+        });
+  const block = sshdMatchBlock({ relayUser: o.relayUser, machine: o.machine, command });
+  const pluginSetup = `$env:XDG_CONFIG_HOME = ${psQuote(join(o.home, 'config'))}; $env:XDG_STATE_HOME = ${psQuote(join(o.home, 'state'))}; & ${psQuote(machineNode(o.machine))} ${psQuote(machineStudioBin(o.machine))} account setup-plugins`;
   return `#Requires -RunAsAdministrator
-# Studio: the one-time setup of this Windows relay worker. Run it in an elevated Windows PowerShell
+# Studio: the setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
 # Nothing here leaves this machine.
 $ErrorActionPreference = 'Stop'
 $relay = ${psQuote(o.relayUser)}
 $crew = ${psQuote(o.crewUser)}
 $home_ = ${psQuote(o.home)}
+$machine = ${psQuote(o.machine)}
 $task = ${psQuote(o.task)}
+$adminSids = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+# Every folder of Studio's, from the drive down: no reparse point anywhere, and none another account
+# owns (a folder planted there before would keep its owner's rights).
+function SafeFolder([string]$path, [string]$top) {
+  $walk = $path
+  while ($walk) {
+    if (Test-Path -LiteralPath $walk) {
+      $item = Get-Item -LiteralPath $walk -Force
+      if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$walk is a reparse point: refusing to set up Studio there" }
+      if ($walk.Length -gt $top.Length -and $walk.StartsWith($top, [StringComparison]::OrdinalIgnoreCase)) {
+        $owner = (Get-Acl -LiteralPath $walk).GetOwner([Security.Principal.SecurityIdentifier]).Value
+        if ($adminSids -notcontains $owner) { throw "$walk is owned by $owner, not by administrators: remove it, then run this again" }
+      }
+    }
+    $up = Split-Path -Parent $walk
+    if (-not $up -or $up -eq $walk) { break }
+    $walk = $up
+  }
+}
+function LockFolder([string]$path, [string[]]$grants) {
+  New-Item -ItemType Directory -Force -Path $path | Out-Null
+  icacls $path /setowner '*S-1-5-32-544' /Q | Out-Null
+  icacls $path /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' @grants /Q | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "cannot set the ACL of $path" }
+}
 function NewSecret { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b) + 'aA1!' }
 function EnsureUser([string]$name, [string]$what, [string]$plain) {
   $u = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
@@ -287,27 +424,47 @@ function EnsureUser([string]$name, [string]$what, [string]$plain) {
   if (Get-LocalGroupMember -Group $admins | Where-Object { $_.SID -eq $u.SID }) { throw "$name is an administrator: remove it from that group first" }
   return $u
 }
+$dataStudio = Split-Path -Parent $home_
+$filesStudio = Split-Path -Parent $machine
+SafeFolder $home_ (Split-Path -Parent $dataStudio)
+SafeFolder $machine (Split-Path -Parent $filesStudio)
 # The relay account: a standard user the lead logs in as over SSH, with a password nobody sees.
 $relaySid = (EnsureUser $relay 'Studio relay (SSH, forced command)' $null).SID.Value
-# The relay home: the relay account may change it, the crew user gets nothing (grants per run).
-New-Item -ItemType Directory -Force -Path $home_, (Join-Path $home_ 'broker') | Out-Null
-icacls $home_ /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($relaySid):(OI)(CI)M" /Q | Out-Null
-# The broker's folder: written by SYSTEM and administrators only, read by the relay account.
-$broker = Join-Path $home_ 'broker'
-icacls $broker /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($relaySid):(OI)(CI)RX" /Q | Out-Null
-# The crew user, its password sealed for this machine (LocalMachine DPAPI): an SSH key logon cannot
-# open the relay account's own DPAPI keys. Only SYSTEM, administrators and the relay account read it.
-$credFile = ${psQuote(machineCredFile(o.home))}
 $plain = $null
+$credFile = ${psQuote(machineCredFile(o.machine))}
 if (-not (Test-Path -LiteralPath $credFile) -or $null -eq (Get-LocalUser -Name $crew -ErrorAction SilentlyContinue)) {
   $plain = NewSecret
 }
 $crewSid = (EnsureUser $crew 'Studio crew sandbox' $plain).SID.Value
+# The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew user reads
+# Node.js and Studio only.
+LockFolder $filesStudio @("*$($relaySid):(OI)(CI)RX")
+LockFolder $machine @("*$($relaySid):(OI)(CI)RX")
+LockFolder (Join-Path $machine 'broker') @("*$($relaySid):(OI)(CI)RX")
+LockFolder (Join-Path $machine 'node') @("*$($relaySid):(OI)(CI)RX", "*$($crewSid):(OI)(CI)RX")
+LockFolder (Join-Path $machine 'studio') @("*$($relaySid):(OI)(CI)RX", "*$($crewSid):(OI)(CI)RX")
+# The copies the forced command runs: never the files of an account that can change them.
+Copy-Item -LiteralPath ${psQuote(o.source.node)} -Destination ${psQuote(machineNode(o.machine))} -Force
+& robocopy.exe ${psQuote(o.source.studio)} ${psQuote(machineStudio(o.machine))} /MIR /XD node_modules .git .worktrees /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "cannot copy Studio into $machine (robocopy $LASTEXITCODE)" }
+icacls ${psQuote(machineStudio(o.machine))} /reset /T /C /Q | Out-Null
+# The relay home: the relay account may fill state and config, never rename or remove them, and
+# nothing else of the home.
+LockFolder $dataStudio @("*$($relaySid):RX")
+LockFolder $home_ @("*$($relaySid):RX")
+foreach ($sub in @('state', 'config')) {
+  LockFolder (Join-Path $home_ $sub) @("*$($relaySid):(RX,WD,AD)", "*$($relaySid):(OI)(CI)(IO)M")
+}
+# The crew user's password, sealed for this machine (LocalMachine DPAPI): an SSH key logon cannot
+# open the relay account's own DPAPI keys. Only SYSTEM, administrators and the relay account read it.
 if ($plain) {
   Add-Type -AssemblyName System.Security
   $sealed = [Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes($plain), $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
   $plain = $null
-  [IO.File]::WriteAllBytes($credFile, $sealed)
+  $tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+  [IO.File]::WriteAllBytes($tmp, $sealed)
+  icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /Q | Out-Null
+  if (Test-Path -LiteralPath $credFile) { [IO.File]::Replace($tmp, $credFile, $null) } else { [IO.File]::Move($tmp, $credFile) }
 }
 icacls $credFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /Q | Out-Null
 # No direct network for the crew user: every outbound connection to anything but loopback.
@@ -331,12 +488,9 @@ Set-Content -LiteralPath $cfg -Value $lines -Encoding Unicode
 secedit /configure /db $db /cfg $cfg /areas USER_RIGHTS /quiet | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "secedit could not set the logon rights ($LASTEXITCODE)" }
 Remove-Item -LiteralPath $cfg, $db -ErrorAction SilentlyContinue
-# The broker: ends every process of the crew user, as SYSTEM, with no argument. Only the relay
-# account (and administrators) may start it; it answers in a file the relay account can only read.
-$script = ${psQuote(brokerScriptFile(o.home))}
-Set-Content -LiteralPath $script -Encoding UTF8 -Value @'
-${brokerScript({ crewUser: o.crewUser, result: brokerResultFile(o.home) })}
-'@
+# The broker: ends every process of the crew user and resets its profile, as SYSTEM, with no
+# argument; its script is the action itself, so no file of it exists. Only the relay account (and
+# administrators) may start it; it answers in a folder the relay account can only read.
 $service = New-Object -ComObject Schedule.Service
 $service.Connect()
 $folder = $service.GetFolder('\\')
@@ -345,7 +499,7 @@ $def.Settings.ExecutionTimeLimit = 'PT5M'
 $def.Settings.MultipleInstances = 2
 $action = $def.Actions.Create(0)
 $action.Path = 'powershell.exe'
-$action.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $script + '"'
+$action.Arguments = ${psQuote(brokerArguments({ crewUser: o.crewUser, result: brokerResultFile(o.machine) }))}
 # SYSTEM runs it; SYSTEM and administrators own it; the relay account may read and run it.
 $sddl = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;$relaySid)"
 $null = $folder.RegisterTaskDefinition($task, $def, 6, 'SYSTEM', $null, 5, $sddl)
@@ -356,18 +510,16 @@ if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
   Stop-Service -Name WebClient -Force -ErrorAction SilentlyContinue
   Set-Service -Name WebClient -StartupType Disabled
 }
-# Read, never write, for the crew user on Node.js, Studio, Claude Code and the toolchains.
+# Read, never write, for the crew user on Claude Code and the toolchains.
 foreach ($p in ${list(o.readPaths)}) {
   if (Test-Path -LiteralPath $p) { icacls $p /grant "\${crew}:(OI)(CI)RX" /Q | Out-Null }
 }
 # The pinned plugins in the crew Claude config dir of the relay home.
-${o.pluginSetup}
+${pluginSetup}
 ${
   keyLine === undefined
     ? '# No lead key given: run studio relay setup --lead-key "<public key line>" to authorize one.'
-    : `$keys = ${psQuote(authorizedKeysFile(o.home))}
-Set-Content -LiteralPath $keys -Encoding ASCII -Value ${psQuote(keyLine)}
-icacls $keys /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /Q | Out-Null`
+    : adminFileSnippet({ file: authorizedKeysFile(o.machine), lines: [keyLine], readers: 'relay' })
 }
 Write-Output 'Add this block at the end of sshd_config (C:\\ProgramData\\ssh\\sshd_config), then Restart-Service sshd:'
 Write-Output @'

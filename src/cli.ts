@@ -691,10 +691,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     if (
       (values.home !== undefined ||
         values.pipe !== undefined ||
-        values['lead-key'] !== undefined) &&
+        values['lead-key'] !== undefined ||
+        values.lead !== undefined) &&
       cmd !== 'relay'
     ) {
-      throw new UsageError('--home, --pipe and --lead-key work with relay only');
+      throw new UsageError('--home, --pipe, --lead-key and --lead work with relay only');
     }
     const reserveOnly = [values.number, values.for, values.purpose];
     if (
@@ -2373,6 +2374,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             if (step.kind === 'held') out.held.push({ item: item.id, reason: step.reason });
             else if (step.kind === 'lead') lead(item.id, step.reason);
             else {
+              if (step.note !== undefined) lead(item.id, step.note);
               const r = await collect(item.id);
               if (r.kind === 'moved') {
                 out.collected.push(r.out);
@@ -5433,6 +5435,7 @@ function parseCli(argv: string[]) {
         home: { type: 'string' },
         pipe: { type: 'string' },
         'lead-key': { type: 'string' },
+        lead: { type: 'string' },
       },
       allowPositionals: true,
       strict: true,

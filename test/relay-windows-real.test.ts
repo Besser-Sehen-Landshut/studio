@@ -27,7 +27,7 @@ s.on('end', () => writeFileSync(${JSON.stringify(out)}, Buffer.concat(chunks)));
 s.on('error', (e) => writeFileSync(${JSON.stringify(out)}, 'error ' + e.code));
 `,
     );
-    const start = systemSpawnRunner({ home: dir, platform: 'win32', bin });
+    const start = systemSpawnRunner({ home: dir, platform: 'win32', bin, lead: 'lab' });
     const spec = JSON.stringify({ nonce: 'n', job: { token: 'token-for-the-handover-test-0001' } });
     const { pid } = await start({ id: 'APP-1', spec, log: join(dir, 'log') });
     expect(pid).toBeGreaterThan(0);

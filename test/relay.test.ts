@@ -1,13 +1,23 @@
 // The parts of relay workers that need no second machine: the wire, the ssh call, the lead's
 // checks of a result bundle, the SMB candidates and verdicts, and the Windows pieces with fakes.
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { WorkItem } from '../src/board.js';
 import { relayTargetSchema } from '../src/config.js';
 import { realPorts } from '../src/ports.js';
+import { sessionLead } from '../src/relay-command.js';
 import {
   localSubnets,
   rangeOf,
@@ -25,18 +35,26 @@ import {
   parseRequest,
   readMessage,
 } from '../src/relay-protocol.js';
-import { relayHandoffScript, STUDIO_BIN, systemSpawnRunner } from '../src/relay-serve.js';
+import {
+  copyCrewObjects,
+  relayHandoffScript,
+  STUDIO_BIN,
+  systemSpawnRunner,
+} from '../src/relay-serve.js';
 import { sshArgs } from '../src/relay-transport.js';
 import {
   authorizedKeyLine,
+  brokerArguments,
   brokerScript,
   brokerSweep,
+  forcedCommand,
+  leadFromAuthInfo,
   loopbackListeners,
   relaySetupScript,
   sshdMatchBlock,
   webClientProblem,
 } from '../src/relay-windows.js';
-import { judgeRelayProbe } from '../src/relay-windows-check.js';
+import { judgeRelayProbe, machineTreeProblem } from '../src/relay-windows-check.js';
 import type { ProbeResult, RunFile } from '../src/windows-sandbox.js';
 
 /** A dotted IPv4 address from its parts: the repository refuses dotted literals. */
@@ -249,6 +267,135 @@ describe('the lead checks a result bundle before it pushes', () => {
   });
 });
 
+describe('the result repository of the lead holds the pinned main, nothing else of the owner', () => {
+  it('refuses a result that leans on a commit the owner has but did not send', async () => {
+    const GIT_ENV = {
+      ...process.env,
+      GIT_AUTHOR_NAME: 't',
+      GIT_AUTHOR_EMAIL: 't@example.com',
+      GIT_COMMITTER_NAME: 't',
+      GIT_COMMITTER_EMAIL: 't@example.com',
+    };
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim();
+    const base = join(root, 'private');
+    mkdirSync(base);
+    const origin = join(base, 'origin.git');
+    git(base, 'init', '-q', '--bare', '-b', 'main', origin);
+    const project = join(base, 'lead');
+    git(base, 'clone', '-q', origin, project);
+    git(project, 'checkout', '-q', '-b', 'main');
+    writeFileSync(join(project, 'a.txt'), 'a\n');
+    git(project, 'add', 'a.txt');
+    git(project, 'commit', '-q', '-m', 'a');
+    git(project, 'push', '-q', 'origin', 'main');
+    const sha = git(project, 'rev-parse', 'HEAD');
+    // A commit only the owner's checkout has, never pushed, never sent to the worker.
+    git(project, 'checkout', '-q', '-b', 'private');
+    writeFileSync(join(project, 'secret.txt'), 'owner only\n');
+    git(project, 'add', 'secret.txt');
+    git(project, 'commit', '-q', '-m', 'private');
+    const priv = git(project, 'rev-parse', 'HEAD');
+    // The crew's branch sits on that commit, and its bundle names it as a prerequisite.
+    git(project, 'checkout', '-q', '-b', 'studio/APP-1');
+    writeFileSync(join(project, 'b.txt'), 'b\n');
+    git(project, 'add', 'b.txt');
+    git(project, 'commit', '-q', '-m', 'b');
+    const head = git(project, 'rev-parse', 'HEAD');
+    const file = join(base, 'r.bundle');
+    git(project, 'bundle', 'create', '-q', file, 'studio/APP-1', `^${priv}`);
+    git(project, 'checkout', '-q', 'main');
+    const state = join(base, 'state');
+    mkdirSync(state);
+    writeFileSync(join(state, 'marker.json'), '{}');
+    const problem = await acceptResult({
+      stateRoot: state,
+      project,
+      item: { id: 'APP-1', repo: 'org/app' } as WorkItem,
+      record: {
+        label: 'lab',
+        sha,
+        from: 'main',
+        credential: 'default',
+        startedAt: '2026-11-06T10:00:00Z',
+        state: 'ended',
+        seenAt: '2026-11-06T10:00:00Z',
+      },
+      ports: realPorts(),
+      crewToken: 'unused-token-0001',
+      head,
+      bundle: readFileSync(file),
+      url: origin,
+    });
+    expect(problem).toMatch(/does not apply on top of the pinned commit/);
+    expect(() => git(origin, 'rev-parse', '--verify', 'refs/heads/studio/APP-1')).toThrow();
+    expect(() => git(origin, 'cat-file', '-e', priv)).toThrow();
+  });
+});
+
+describe("the worker reads a crew's clone as files only", () => {
+  const clone = (name: string) => {
+    const dir = join(root, name);
+    execFileSync('git', ['init', '-q', '-b', 'studio/APP-1', dir]);
+    writeFileSync(join(dir, 'x.txt'), 'x\n');
+    execFileSync('git', ['add', 'x.txt'], { cwd: dir });
+    execFileSync(
+      'git',
+      ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '-m', 'x'],
+      { cwd: dir },
+    );
+    return dir;
+  };
+  it('copies objects and reads the branch head, git never running in the clone', () => {
+    const c = clone('crew-ok');
+    const dest = join(root, 'dest-ok');
+    mkdirSync(dest);
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: c, encoding: 'utf8' }).trim();
+    expect(copyCrewObjects(c, dest, 'APP-1', root)).toBe(head);
+  });
+  it('refuses a .git that is a link or a file, alternates, and a link among the objects', () => {
+    const a = clone('crew-alt');
+    mkdirSync(join(a, '.git', 'objects', 'info'), { recursive: true });
+    writeFileSync(join(a, '.git', 'objects', 'info', 'alternates'), '/elsewhere\n');
+    expect(() => copyCrewObjects(a, join(root, 'd1'), 'APP-1', root)).toThrow(/alternates/);
+    const b = join(root, 'crew-link');
+    mkdirSync(b);
+    symlinkSync(join(clone('crew-target'), '.git'), join(b, '.git'));
+    expect(() => copyCrewObjects(b, join(root, 'd2'), 'APP-1', root)).toThrow(/not a plain folder/);
+    const f = join(root, 'crew-file');
+    mkdirSync(f);
+    writeFileSync(join(f, '.git'), 'gitdir: /elsewhere\n');
+    expect(() => copyCrewObjects(f, join(root, 'd3'), 'APP-1', root)).toThrow(/not a plain folder/);
+    const l = clone('crew-objlink');
+    const objects = join(l, '.git', 'objects');
+    const sub = readdirSync(objects).find((n) => /^[0-9a-f]{2}$/.test(n)) as string;
+    const first = readdirSync(join(objects, sub))[0] as string;
+    rmSync(join(objects, sub, first));
+    symlinkSync('/etc/hosts', join(objects, sub, first));
+    expect(() => copyCrewObjects(l, join(root, 'd4'), 'APP-1', root)).toThrow(
+      /a link among the objects/,
+    );
+  });
+});
+
+describe('the lead reads one answer, and no more than one answer may be', () => {
+  it('stops at the cap of all bytes, and drops what comes after the answer', async () => {
+    const big = (async function* () {
+      for (let i = 0; i < 100; i++) yield `${'x'.repeat(1000)}\n`;
+    })();
+    const capped = new LineReader(big, 2000, 10_000);
+    await expect(
+      (async () => {
+        for (;;) if ((await capped.next()) === undefined) return;
+      })(),
+    ).rejects.toThrow(/larger than allowed/);
+    const r = new LineReader(chunks(['{"a":1}\n', 'more\n']), 100);
+    expect(await r.next()).toBe('{"a":1}');
+    r.stop();
+    expect(await r.next()).toBeUndefined();
+  });
+});
+
 describe('SMB candidates and verdicts', () => {
   const ifaces = {
     eth0: [
@@ -329,6 +476,7 @@ describe('the hand-over of a spec to a Windows runner', () => {
     const start = systemSpawnRunner({
       home: 'C:\\ProgramData\\Studio\\relay',
       platform: 'win32',
+      lead: 'lab',
       spawn: async (file, args, stdin) => {
         calls.push({ file, args, stdin });
         return { code: 0, stdout: '4711' };
@@ -348,8 +496,10 @@ describe('the hand-over of a spec to a Windows runner', () => {
         bin: STUDIO_BIN,
         id: 'APP-1',
         home: 'C:\\ProgramData\\Studio\\relay',
+        lead: 'lab',
       }),
     );
+    expect(script).toContain('relay run APP-1 --lead lab --pipe');
   });
 
   it('the pipe: an explicit DACL of the relay account alone, the client checked before a byte', () => {
@@ -358,6 +508,7 @@ describe('the hand-over of a spec to a Windows runner', () => {
       bin: 'C:\\studio',
       id: 'APP-1',
       home: undefined,
+      lead: 'default',
     });
     expect(script).toContain('$security.SetAccessRuleProtection($true, $false)');
     expect(script.match(/AddAccessRule/g)).toHaveLength(1);
@@ -371,7 +522,13 @@ describe('the hand-over of a spec to a Windows runner', () => {
       "-ne $runner) {\n    throw 'a process other than the runner connected'",
     );
     expect(() =>
-      relayHandoffScript({ node: 'C:\\node.exe"', bin: 'x', id: 'APP-1', home: undefined }),
+      relayHandoffScript({
+        node: 'C:\\node.exe"',
+        bin: 'x',
+        id: 'APP-1',
+        home: undefined,
+        lead: 'default',
+      }),
     ).toThrow();
   });
 
@@ -485,50 +642,140 @@ describe('the Windows relay worker, with fakes', () => {
     ).toMatchObject({ kind: 'refused' });
   });
 
-  it('setup: a standard relay account, the broker as SYSTEM for the relay account only, sshd closed', () => {
-    const key = `ssh-ed25519 ${'B'.repeat(68)} lead`;
-    const command =
-      '"C:\\node\\node.exe" "C:\\studio\\bin\\studio" relay serve --home "C:\\ProgramData\\Studio\\relay"';
+  it('setup: admin-only tree and copies, a home the relay account cannot rename, the broker in the task action', () => {
+    const key = `ssh-ed25519 ${'B'.repeat(68)} studio-relay-lab`;
+    const machine = 'C:\\Program Files\\Studio\\relay';
+    const home = 'C:\\ProgramData\\Studio\\relay';
     const script = relaySetupScript({
       relayUser: 'studio-relay',
       crewUser: 'studio-crew',
-      home: 'C:\\ProgramData\\Studio\\relay',
+      home,
+      machine,
       task: 'Studio relay broker',
-      readPaths: ['C:\\node'],
-      command,
+      readPaths: ['C:\\claude'],
+      source: { node: 'C:\\nodejs\\node.exe', studio: 'C:\\plugins\\studio' },
       leadKey: key,
-      pluginSetup: '# plugins',
     });
     expect(script).toMatch(/#Requires -RunAsAdministrator/);
     expect(script).toContain('is an administrator: remove it from that group first');
     expect(script).toContain('DataProtectionScope]::LocalMachine');
-    expect(script).not.toContain('Import-Clixml');
+    // No path of Studio's with a reparse point or a folder another account owns.
+    expect(script).toContain('is a reparse point: refusing to set up Studio there');
+    expect(script).toContain('not by administrators: remove it, then run this again');
+    // The home: the relay account may fill state and config, never rename or remove anything.
+    expect(script).toContain(`LockFolder $home_ @("*$($relaySid):RX")`);
+    expect(script).toContain(
+      `LockFolder (Join-Path $home_ $sub) @("*$($relaySid):(RX,WD,AD)", "*$($relaySid):(OI)(CI)(IO)M")`,
+    );
+    expect(script).not.toMatch(/\(OI\)\(CI\)M"/);
+    // Node.js and Studio run from admin-only copies.
+    expect(script).toContain(
+      `'C:\\nodejs\\node.exe' -Destination 'C:\\Program Files\\Studio\\relay\\node\\node.exe'`,
+    );
+    expect(script).toContain('robocopy.exe');
+    // The broker has no script file: its action carries it, encoded.
+    expect(script).not.toContain('sweep.ps1');
+    expect(script).toContain('-EncodedCommand ');
     expect(script).toContain('$sddl = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;$relaySid)"');
-    expect(script).toContain("RegisterTaskDefinition($task, $def, 6, 'SYSTEM', $null, 5, $sddl)");
     expect(script).toContain('Set-Service -Name WebClient -StartupType Disabled');
-    expect(script).toContain(authorizedKeyLine({ key, command }).replace(/'/g, "''"));
+    // The key file: final ACL on a temporary file in the admin-only folder, then one replace.
+    const keyLine = authorizedKeyLine({ key, command: forcedCommand(machine, home), lead: 'lab' });
+    expect(keyLine).toContain(
+      'relay serve --home \\"C:\\\\ProgramData\\\\Studio\\\\relay\\" --lead lab',
+    );
+    expect(keyLine.endsWith(' studio-relay-lab')).toBe(true);
+    expect(script).toContain(keyLine.replace(/'/g, "''"));
+    expect(script).toContain('[IO.File]::Replace($tmp, $target, $null)');
     const block = sshdMatchBlock({
       relayUser: 'studio-relay',
-      home: 'C:\\ProgramData\\Studio\\relay',
-      command,
+      machine,
+      command: forcedCommand(machine, home),
     });
     for (const line of [
       'Match User studio-relay',
-      `    ForceCommand ${command}`,
+      '    AuthorizedKeysFile "C:/Program Files/Studio/relay/authorized_keys"',
+      `    ForceCommand "${machine}\\node\\node.exe" "${machine}\\studio\\bin\\studio" relay serve --home "${home}"`,
+      '    ExposeAuthInfo yes',
       '    PermitTTY no',
       '    AllowTcpForwarding no',
-      '    X11Forwarding no',
-      '    PermitTunnel no',
-      '    AllowAgentForwarding no',
       '    PasswordAuthentication no',
     ]) {
       expect(block).toContain(line);
     }
-    expect(authorizedKeyLine({ key, command })).toMatch(/^restrict,command="/);
-    expect(() => authorizedKeyLine({ key: 'ssh-ed25519 x\nssh-rsa y', command })).toThrow();
-    // The broker takes no argument: the crew user is written into it.
-    expect(brokerScript({ crewUser: 'studio-crew', result: 'C:\\r.json' })).toContain(
+    expect(() =>
+      authorizedKeyLine({ key: 'ssh-ed25519 x\nssh-rsa y', command: 'x', lead: 'lab' }),
+    ).toThrow();
+    // The broker resets what a crew could leave in the crew user's profile.
+    const broker = brokerScript({ crewUser: 'studio-crew', result: 'C:\\r.json' });
+    for (const s of [
       "'studio-crew'",
-    );
+      'Command Processor',
+      'AutoRun',
+      'Environment',
+      'CurrentVersion\\Run',
+      'Startup',
+    ]) {
+      expect(broker, s).toContain(s);
+    }
+    const encoded =
+      brokerArguments({ crewUser: 'studio-crew', result: 'C:\\r.json' }).split(' ').at(-1) ?? '';
+    expect(Buffer.from(encoded, 'base64').toString('utf16le')).toBe(broker);
+  });
+
+  it('which lead a session is for: the key decides on Windows, a --lead must agree', () => {
+    const key = `ssh-ed25519 ${'D'.repeat(68)}`;
+    const keys = `restrict,command="x --lead lab" ${key} studio-relay-lab\r\n`;
+    const dir = join(root, `auth-${Date.now()}`);
+    mkdirSync(dir);
+    const auth = join(dir, 'auth');
+    writeFileSync(auth, `publickey ${key}\n`);
+    const keysFile = join(dir, 'keys');
+    writeFileSync(keysFile, keys);
+    expect(leadFromAuthInfo(`publickey ${key}\n`, keys)).toBe('lab');
+    expect(leadFromAuthInfo(`publickey ssh-ed25519 ${'E'.repeat(68)}\n`, keys)).toBeUndefined();
+    const env = { SSH_USER_AUTH: auth };
+    expect(sessionLead({ platform: 'win32', flag: undefined, env, keysFile })).toEqual({
+      lead: 'lab',
+    });
+    expect(sessionLead({ platform: 'win32', flag: 'other', env, keysFile })).toEqual({
+      problem: 'this key belongs to another lead',
+    });
+    expect(sessionLead({ platform: 'win32', flag: 'lab', env: {}, keysFile })).toMatchObject({
+      problem: expect.stringContaining('cannot tell which lead'),
+    });
+    expect(
+      sessionLead({ platform: 'linux', flag: undefined, env: {}, keysFile: undefined }),
+    ).toEqual({
+      lead: 'default',
+    });
+  });
+
+  it('serves nothing from copies outside the admin-only tree', async () => {
+    expect(
+      await machineTreeProblem(async () => ({ code: 0, stdout: '[]', stderr: '' }), {
+        machine: 'C:\\Program Files\\Studio\\relay',
+        home: 'C:\\ProgramData\\Studio\\relay',
+        node: 'C:\\Users\\x\\node.exe',
+        studioBin: 'C:\\Program Files\\Studio\\relay\\studio\\bin\\studio',
+      }),
+    ).toMatch(/runs only from the admin-only copies/);
+    const tree = {
+      machine: 'C:\\Program Files\\Studio\\relay',
+      home: 'C:\\ProgramData\\Studio\\relay',
+      node: 'C:\\Program Files\\Studio\\relay\\node\\node.exe',
+      studioBin: 'C:\\Program Files\\Studio\\relay\\studio\\bin\\studio',
+    };
+    expect(
+      await machineTreeProblem(async () => ({ code: 0, stdout: '[]', stderr: '' }), tree),
+    ).toBeUndefined();
+    expect(
+      await machineTreeProblem(
+        async () => ({ code: 0, stdout: '["x is writable by S-1-5-21-1"]', stderr: '' }),
+        tree,
+      ),
+    ).toMatch(/cannot be trusted \(x is writable by S-1-5-21-1\)/);
+    expect(
+      await machineTreeProblem(async () => ({ code: 1, stdout: '', stderr: '' }), tree),
+    ).toMatch(/cannot be checked/);
   });
 });

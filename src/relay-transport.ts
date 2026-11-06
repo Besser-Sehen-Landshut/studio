@@ -133,13 +133,28 @@ export function sshTransport(o: {
           }
         }
         child.stdin?.end();
-        const reader = new LineReader(child.stdout as AsyncIterable<Buffer>, MAX_HEADER_BYTES);
+        // Never more than one answer can need: its header, its payload in base64 lines, and slack.
+        const maxTotal =
+          MAX_HEADER_BYTES + Math.ceil((opts.maxPayload * 4) / 3) * 1.05 + 1024 * 1024;
+        const reader = new LineReader(
+          child.stdout as AsyncIterable<Buffer>,
+          MAX_HEADER_BYTES,
+          maxTotal,
+        );
         let msg: Awaited<ReturnType<typeof readMessage>>;
         try {
           msg = await readMessage(reader, opts.maxPayload);
         } catch (e) {
+          child.stdout?.destroy();
           child.kill('SIGKILL');
           throw new Error(`the relay worker ${o.label} answered badly: ${(e as Error).message}`);
+        } finally {
+          // One answer is all: whatever the worker sends after it is not read, and ssh ends.
+          reader.stop();
+        }
+        if (msg !== undefined) {
+          child.stdout?.destroy();
+          child.kill('SIGKILL');
         }
         const code = await exited;
         if (msg === undefined) {

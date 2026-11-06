@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
   closeSync,
+  copyFileSync,
   existsSync,
   lstatSync,
   openSync,
@@ -82,6 +83,8 @@ const HANDOFF_MS = 60_000;
 /** One job as the worker keeps it; never the token. */
 export interface JobRecord {
   id: string;
+  /** The lead that started it: no other lead can see, stop, collect or clean it up. */
+  lead: string;
   label: string;
   repo: string;
   sha: string;
@@ -110,6 +113,8 @@ export interface Load {
 /** Everything one relay worker needs; the Windows parts only on native Windows. */
 export interface RelayContext {
   owner: LauncherEnv;
+  /** The lead of this request, from its key (src/relay-command.ts). */
+  lead: string;
   ports: Ports;
   platform: () => WorkerPlatform;
   /** Hands the spec (it holds the token) to a new runner process for job `id`. */
@@ -159,39 +164,69 @@ async function withRelayLock<T>(c: RelayContext, fn: () => Promise<T> | T): Prom
   throw new HeldError('another relay request is in progress on this machine; try again');
 }
 
-const jobFile = (root: string, id: string) => join(root, 'jobs', `${id}.json`);
+/** Which lead a request is for: its jobs, mirrors and projects are its own (`leads/<lead>`). */
+export interface Where {
+  owner: LauncherEnv;
+  lead: string;
+}
 
-export function readJob(owner: LauncherEnv, id: string): JobRecord | undefined {
-  const root = relayRoot(owner);
-  const f = jobFile(root, id);
+/** A lead's name: the label its key carries (`studio-relay-<lead>`), or `default`. */
+export const LEAD_RE = /^[a-z][a-z0-9-]{0,31}$/;
+
+/** Everything of one lead on this worker; another lead's requests never reach it. */
+export function leadRoot(w: Where): string {
+  if (!LEAD_RE.test(w.lead)) throw new Error('not a lead name');
+  return join(relayRoot(w.owner), 'leads', w.lead);
+}
+
+const jobFile = (w: Where, id: string) => join(leadRoot(w), 'jobs', `${id}.json`);
+
+export function readJob(w: Where, id: string): JobRecord | undefined {
+  const root = relayRoot(w.owner);
+  const f = jobFile(w, id);
   assertStatePath(root, f);
   if (!existsSync(f)) return undefined;
   if (!lstatSync(f).isFile()) throw new Error(`${f} is not a plain file`);
-  return JSON.parse(readFileSync(f, 'utf8')) as JobRecord;
+  const j = JSON.parse(readFileSync(f, 'utf8')) as JobRecord;
+  // A job is only ever its own lead's.
+  if (j.lead !== w.lead || j.id !== id) throw new Error(`${f} is not a job of this lead`);
+  return j;
 }
 
-function writeJob(owner: LauncherEnv, job: JobRecord): void {
-  const root = relayRoot(owner);
-  ensureStateDir(root, join(root, 'jobs'));
-  writeStateFile(root, jobFile(root, job.id), `${JSON.stringify(job, null, 2)}\n`);
+function writeJob(w: Where, job: JobRecord): void {
+  if (job.lead !== w.lead) throw new Error('a job of another lead');
+  const root = relayRoot(w.owner);
+  ensureStateDir(root, join(leadRoot(w), 'jobs'));
+  writeStateFile(root, jobFile(w, job.id), `${JSON.stringify(job, null, 2)}\n`);
 }
 
+/** The jobs of every lead: one crew at a time on this machine, whoever started it. */
 function allJobs(owner: LauncherEnv): JobRecord[] {
-  const dir = join(relayRoot(owner), 'jobs');
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((f) => /^[A-Z]+-\d+\.json$/.test(f))
-    .flatMap((f) => {
-      const j = readJob(owner, f.slice(0, -5));
-      return j === undefined ? [] : [j];
+  const leads = join(relayRoot(owner), 'leads');
+  if (!existsSync(leads)) return [];
+  return readdirSync(leads)
+    .filter((l) => LEAD_RE.test(l))
+    .flatMap((lead) => {
+      const dir = join(leads, lead, 'jobs');
+      if (!existsSync(dir)) return [];
+      return readdirSync(dir)
+        .filter((f) => /^[A-Z]+-\d+\.json$/.test(f))
+        .flatMap((f) => {
+          try {
+            const j = readJob({ owner, lead }, f.slice(0, -5));
+            return j === undefined ? [] : [j];
+          } catch {
+            return [];
+          }
+        });
     });
 }
 
 const repoSlug = (repo: string): string => repo.replace('/', '--');
-export const mirrorDir = (owner: LauncherEnv, repo: string): string =>
-  join(relayRoot(owner), 'mirrors', `${repoSlug(repo)}.git`);
-export const projectDir = (owner: LauncherEnv, repo: string): string =>
-  join(relayRoot(owner), 'projects', repoSlug(repo));
+export const mirrorDir = (w: Where, repo: string): string =>
+  join(leadRoot(w), 'mirrors', `${repoSlug(repo)}.git`);
+export const projectDir = (w: Where, repo: string): string =>
+  join(leadRoot(w), 'projects', repoSlug(repo));
 
 /** The relay worker's own settings: `workers.serve`, or its defaults (nothing to write by hand). */
 export function serveSettings(owner: LauncherEnv): RelayServe {
@@ -324,11 +359,15 @@ async function readiness(
 /** The job that is starting or running, if any: one crew at a time on a relay worker. */
 async function busyJob(c: RelayContext): Promise<JobRecord | undefined> {
   for (const j of allJobs(c.owner)) {
-    const s = await liveState(c, j);
+    const s = await liveState({ ...c, lead: j.lead }, j);
     if (s === 'starting' || s === 'running') return j;
   }
   return undefined;
 }
+
+/** A busy job as one lead may see it: its own by id, another lead's by nothing but that. */
+const busyName = (c: Where, j: JobRecord): string =>
+  j.lead === c.lead ? j.id : "another lead's job";
 
 const pidAlive = (pid: number | undefined): boolean => {
   if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return false;
@@ -350,17 +389,17 @@ async function liveState(c: RelayContext, j: JobRecord): Promise<RelayState> {
     // A start that has not recorded its runner yet is still starting, for a while.
     const age = c.ports.clock.now().getTime() - Date.parse(j.startedAt);
     if (j.runnerPid === undefined && age < HANDOFF_MS * 2) return 'starting';
-    const after = readJob(c.owner, j.id);
+    const after = readJob(c, j.id);
     if (after !== undefined && after.state !== 'starting') return liveState(c, after);
-    writeJob(c.owner, { ...j, state: 'refused', line: 'the runner ended before its crew started' });
+    writeJob(c, { ...j, state: 'refused', line: 'the runner ended before its crew started' });
     return 'refused';
   }
   if (j.state !== 'running') return j.state;
-  const stateRoot = stateRootFor(projectDir(c.owner, j.repo), c.owner);
+  const stateRoot = stateRootFor(projectDir(c, j.repo), c.owner);
   const rec = readCrewRecords(stateRoot)[j.id];
   const hold = rec === undefined ? undefined : await crewHold(rec, crewPorts(c));
   if (hold === 'running' || hold === 'unverified') return 'running';
-  writeJob(c.owner, { ...j, state: 'ended' });
+  writeJob(c, { ...j, state: 'ended' });
   return 'ended';
 }
 
@@ -383,7 +422,7 @@ async function takeBundle(c: RelayContext, job: RelayJob, bundle: Buffer): Promi
   writeStateFile(root, file, '');
   writeFileSync(file, bundle);
   try {
-    const mirror = mirrorDir(c.owner, job.repo);
+    const mirror = mirrorDir(c, job.repo);
     if (!existsSync(join(mirror, 'HEAD'))) {
       ensureStateDir(root, dirname(mirror));
       removeStateEntry(root, mirror);
@@ -410,7 +449,7 @@ async function takeBundle(c: RelayContext, job: RelayJob, bundle: Buffer): Promi
     if (job.from === 'main') {
       await git(c, mirror, ['update-ref', '-d', `refs/heads/studio/${job.id}`]).catch(() => '');
     }
-    const project = projectDir(c.owner, job.repo);
+    const project = projectDir(c, job.repo);
     const url = pathToFileURL(mirror).href;
     if (!existsSync(join(project, '.git'))) {
       ensureStateDir(root, dirname(project));
@@ -440,7 +479,7 @@ async function jobInputs(
   c: RelayContext,
   job: Pick<RelayJob, 'id' | 'label' | 'repo' | 'sha' | 'item'>,
 ) {
-  const project = projectDir(c.owner, job.repo);
+  const project = projectDir(c, job.repo);
   const text = await git(c, project, [
     '--no-replace-objects',
     'show',
@@ -513,13 +552,13 @@ export async function serveRelay(
         }
         const held =
           busy !== undefined
-            ? `this machine runs ${busy.id}: one crew at a time on a relay worker`
+            ? `this machine runs ${busyName(c, busy)}: one crew at a time on a relay worker`
             : loadProblem(load, serveSettings(c.owner));
         return answer(out, {
           studio: STUDIO_VERSION,
           platform: c.platform().platform,
           plugins: have === undefined ? null : Object.fromEntries(have),
-          busy: busy?.id ?? null,
+          busy: busy !== undefined && busy.lead === c.lead ? busy.id : null,
           held: held ?? null,
           warnings: stored === undefined ? [] : [stored],
         });
@@ -540,10 +579,10 @@ export async function serveRelay(
       case 'start':
         return await start(c, request.job, payload as Buffer, out);
       case 'status': {
-        const j = readJob(c.owner, request.id);
+        const j = readJob(c, request.id);
         if (j === undefined) return answer(out, { state: 'unknown', line: null });
         const state = await liveState(c, j);
-        const now = readJob(c.owner, request.id) ?? j;
+        const now = readJob(c, request.id) ?? j;
         return answer(out, { state, line: now.line ?? null });
       }
       case 'collect':
@@ -565,7 +604,9 @@ async function start(c: RelayContext, job: RelayJob, bundle: Buffer, out: Out): 
   const prepared = await withRelayLock(c, async () => {
     const busy = await busyJob(c);
     if (busy !== undefined) {
-      throw new HeldError(`this machine runs ${busy.id}: one crew at a time on a relay worker`);
+      throw new HeldError(
+        `this machine runs ${busyName(c, busy)}: one crew at a time on a relay worker`,
+      );
     }
     const stored = storedCredentialProblem(c.owner);
     if (stored !== undefined) return { refused: stored };
@@ -578,6 +619,7 @@ async function start(c: RelayContext, job: RelayJob, bundle: Buffer, out: Out): 
     );
     if (pins !== undefined) return { refused: pins };
     const record: JobRecord = {
+      lead: c.lead,
       id: job.id,
       label: job.label,
       repo: job.repo,
@@ -589,7 +631,7 @@ async function start(c: RelayContext, job: RelayJob, bundle: Buffer, out: Out): 
       nonce,
       startedAt: c.ports.clock.now().toISOString(),
     };
-    writeJob(c.owner, record);
+    writeJob(c, record);
     return { project, record };
   });
   if ('refused' in prepared) return fail(out, 'refused', prepared.refused as string);
@@ -598,10 +640,10 @@ async function start(c: RelayContext, job: RelayJob, bundle: Buffer, out: Out): 
   // The spec goes to the runner over its stdin (or a pipe on Windows), never to a file.
   const spec = JSON.stringify({ nonce, job });
   const { pid } = await c.spawnRunner({ id: job.id, spec, log });
-  writeJob(c.owner, { ...(readJob(c.owner, job.id) as JobRecord), runnerPid: pid });
+  writeJob(c, { ...(readJob(c, job.id) as JobRecord), runnerPid: pid });
   const until = c.ports.clock.now().getTime() + HANDOFF_MS;
   for (;;) {
-    const j = readJob(c.owner, job.id);
+    const j = readJob(c, job.id);
     if (j?.handoff === nonce || (j !== undefined && j.state !== 'starting')) {
       if (j.state === 'held' || j.state === 'refused') {
         return fail(out, j.state, j.line ?? 'not started');
@@ -610,7 +652,7 @@ async function start(c: RelayContext, job: RelayJob, bundle: Buffer, out: Out): 
     }
     if (c.ports.clock.now().getTime() >= until || !pidAlive(pid)) {
       if (j !== undefined)
-        writeJob(c.owner, { ...j, state: 'refused', line: 'the runner did not take the job' });
+        writeJob(c, { ...j, state: 'refused', line: 'the runner did not take the job' });
       return fail(out, 'refused', 'the runner did not take the job');
     }
     await c.ports.clock.sleep(250);
@@ -634,14 +676,14 @@ export async function runRelayJob(
     throw new Error('the runner got no spec');
   }
   const job = spec.job;
-  const rec = readJob(c.owner, id);
+  const rec = readJob(c, id);
   if (rec === undefined || job?.id !== id || rec.nonce !== spec.nonce || rec.state !== 'starting') {
     throw new Error('the runner got a spec for no starting job');
   }
-  writeJob(c.owner, { ...rec, handoff: spec.nonce, runnerPid: process.pid });
+  writeJob(c, { ...rec, handoff: spec.nonce, runnerPid: process.pid });
   const settle = (state: RelayState, line?: string, extra: Partial<JobRecord> = {}) => {
-    const now = readJob(c.owner, id) ?? rec;
-    writeJob(c.owner, { ...now, ...extra, state, ...(line === undefined ? {} : { line }) });
+    const now = readJob(c, id) ?? rec;
+    writeJob(c, { ...now, ...extra, state, ...(line === undefined ? {} : { line }) });
     return state;
   };
   let windows: Awaited<ReturnType<RelayWindows['launch']>> | undefined;
@@ -664,7 +706,7 @@ export async function runRelayJob(
       ],
     });
     if (ready.warnings.length > 0)
-      writeJob(c.owner, { ...(readJob(c.owner, id) ?? rec), warnings: ready.warnings });
+      writeJob(c, { ...(readJob(c, id) ?? rec), warnings: ready.warnings });
     if (ready.problem !== undefined) return settle(ready.problem.kind, ready.problem.line);
     const contentDir = await pinnedContent({ project, ports: c.ports }, stateRoot, job.sha);
     if (c.windows !== undefined && c.platform().platform === 'win32') {
@@ -700,10 +742,10 @@ export async function runRelayJob(
       const r = crewRec();
       const hold = r === undefined ? undefined : await crewHold(r, ports);
       if (hold !== 'running' && hold !== 'unverified') break;
-      if (readJob(c.owner, id)?.state === 'stopped') break;
+      if (readJob(c, id)?.state === 'stopped') break;
       await c.ports.clock.sleep(15_000);
     }
-    const after = readJob(c.owner, id);
+    const after = readJob(c, id);
     return after?.state === 'stopped' ? 'stopped' : settle('ended');
   } catch (e) {
     const line = (e as Error).message;
@@ -717,11 +759,11 @@ export async function runRelayJob(
 const opensPr = (item: WorkItem): boolean => item.type !== 'research' && item.type !== 'review';
 
 async function collect(c: RelayContext, id: string, out: Out): Promise<void> {
-  const j = readJob(c.owner, id);
+  const j = readJob(c, id);
   if (j === undefined) return fail(out, 'refused', `no job ${id} on this machine`);
   const state = await liveState(c, j);
   if (state !== 'ended') return fail(out, 'held', `${id} is ${state}, nothing to collect yet`);
-  const project = projectDir(c.owner, j.repo);
+  const project = projectDir(c, j.repo);
   const stateRoot = stateRootFor(project, c.owner);
   const crew = readCrewRecords(stateRoot)[id];
   const from = typeof crew?.logStart === 'number' && crew.logStart >= 0 ? crew.logStart : 0;
@@ -775,27 +817,32 @@ async function collect(c: RelayContext, id: string, out: Out): Promise<void> {
   }
   const head = report.headSha.toLowerCase();
   const root = relayRoot(c.owner);
-  const dir = join(ensureStateDir(root, join(root, 'out')), id);
+  const dir = join(ensureStateDir(root, join(leadRoot(c), 'out')), id);
   removeStateEntry(root, dir);
   const branch = `refs/heads/studio/${id}`;
   try {
     await git(c, dirname(dir), ['init', '-q', '--bare', '--template=', dir]);
     // Objects of the pinned main come from the mirror; only the crew's new ones land here.
-    const mirrorObjects = join(mirrorDir(c.owner, j.repo), 'objects');
+    const mirrorObjects = join(mirrorDir(c, j.repo), 'objects');
     writeStateFile(root, join(dir, 'objects', 'info', 'alternates'), `${mirrorObjects}\n`);
-    // The crew's clone is read as a remote only: git never runs inside it.
-    await git(c, dir, [
-      '-c',
-      'protocol.file.allow=always',
-      'fetch',
-      '-q',
-      '--no-tags',
-      '--no-write-fetch-head',
-      join(stateRoot, 'clones', id),
-      `+${branch}:${branch}`,
-    ]);
+    // Git never runs inside the crew's clone (rule D4), not even as a remote: its objects and the
+    // head of its branch are copied as plain files, checked one by one, and git runs here only.
+    let crewHead: string;
+    try {
+      crewHead = copyCrewObjects(join(stateRoot, 'clones', id), dir, id, root);
+    } catch (e) {
+      return answer(out, {
+        ...base,
+        report: text,
+        headSha: null,
+        payload: false,
+        problem: `the crew's clone cannot be read safely: ${(e as Error).message}`,
+      });
+    }
+    const hooks = ['-c', `core.hooksPath=${join(dir, 'no-hooks')}`, '--no-replace-objects'];
+    await git(c, dir, [...hooks, 'update-ref', branch, crewHead]);
     const got = (
-      await git(c, dir, ['--no-replace-objects', 'rev-parse', '--verify', `${branch}^{commit}`])
+      await git(c, dir, [...hooks, 'rev-parse', '--verify', `${branch}^{commit}`])
     ).trim();
     if (got !== head) {
       return answer(out, {
@@ -809,7 +856,7 @@ async function collect(c: RelayContext, id: string, out: Out): Promise<void> {
     const file = join(dir, 'result.bundle');
     const negative = [`^${j.sha}`, ...(j.fromSha === undefined ? [] : [`^${j.fromSha}`])];
     try {
-      await git(c, dir, ['bundle', 'create', '-q', file, branch, ...negative]);
+      await git(c, dir, [...hooks, 'bundle', 'create', '-q', file, branch, ...negative]);
     } catch {
       return answer(out, {
         ...base,
@@ -836,11 +883,11 @@ async function collect(c: RelayContext, id: string, out: Out): Promise<void> {
 }
 
 async function stop(c: RelayContext, id: string): Promise<void> {
-  const j = readJob(c.owner, id);
+  const j = readJob(c, id);
   if (j === undefined) return;
-  const project = projectDir(c.owner, j.repo);
+  const project = projectDir(c, j.repo);
   const stateRoot = stateRootFor(project, c.owner);
-  writeJob(c.owner, { ...j, state: 'stopped', line: 'stopped by the lead' });
+  writeJob(c, { ...j, state: 'stopped', line: 'stopped by the lead' });
   const rec = readCrewRecords(stateRoot)[id];
   const ports = crewPorts(c);
   if (rec !== undefined && (await crewHold(rec, ports)) === 'running') {
@@ -849,18 +896,18 @@ async function stop(c: RelayContext, id: string): Promise<void> {
 }
 
 async function cleanup(c: RelayContext, id: string): Promise<void> {
-  const j = readJob(c.owner, id);
+  const j = readJob(c, id);
   if (j === undefined) return;
   const s = await liveState(c, j);
   if (s === 'starting' || s === 'running') {
     throw new HeldError(`${id} is ${s}: stop it before it is cleaned up`);
   }
-  const project = projectDir(c.owner, j.repo);
+  const project = projectDir(c, j.repo);
   const stateRoot = stateRootFor(project, c.owner);
   for (const sub of ['clones', 'homes', 'tmp'])
     removeStateEntry(stateRoot, join(stateRoot, sub, id));
   const root = relayRoot(c.owner);
-  removeStateEntry(root, jobFile(root, id));
+  removeStateEntry(root, jobFile(c, id));
 }
 
 /** The bin of this Studio: a runner is started from it. */
@@ -880,8 +927,10 @@ export function relayHandoffScript(o: {
   bin: string;
   id: string;
   home: string | undefined;
+  lead: string;
 }): string {
   if (!/^[A-Z]+-\d+$/.test(o.id)) throw new Error('not an item id');
+  if (!LEAD_RE.test(o.lead)) throw new Error('not a lead name');
   const q = (s: string) => {
     if (/[\p{Cc}"]/u.test(s)) throw new Error(`refusing ${JSON.stringify(s)} in a command line`);
     return `'${s.replace(/'/g, "''")}'`;
@@ -911,7 +960,7 @@ $security.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, 'FullCon
 $name = 'studio-relay-' + [Guid]::NewGuid().ToString('N')
 $pipe = New-Object System.IO.Pipes.NamedPipeServerStream($name, 'Out', 1, 'Byte', 'Asynchronous', 0, 65536, $security)
 try {
-  $cmd = '"' + ${q(o.node)} + '" "' + ${q(o.bin)} + '" relay run ${o.id} --pipe ' + $name + ${home}
+  $cmd = '"' + ${q(o.node)} + '" "' + ${q(o.bin)} + '" relay run ${o.id} --lead ${o.lead} --pipe ' + $name + ${home}
   $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
   if ($r.ReturnValue -ne 0) { throw "Win32_Process.Create returned $($r.ReturnValue)" }
   $runner = [uint32]$r.ProcessId
@@ -966,9 +1015,12 @@ export function systemSpawnRunner(o: {
   spawn?: SpawnWithInput;
   /** The Studio to run; this one by default. */
   bin?: string;
+  /** The lead the runner works for. */
+  lead: string;
 }): RelayContext['spawnRunner'] {
   const bin = o.bin ?? STUDIO_BIN;
-  const homeArgs = o.home === undefined ? [] : ['--home', o.home];
+  if (!LEAD_RE.test(o.lead)) throw new Error('not a lead name');
+  const homeArgs = [...(o.home === undefined ? [] : ['--home', o.home]), '--lead', o.lead];
   if (o.platform !== 'win32') {
     return async ({ id, spec, log }) => {
       const fd = openSync(log, 'a');
@@ -997,6 +1049,7 @@ export function systemSpawnRunner(o: {
       bin,
       id,
       home: o.home,
+      lead: o.lead,
     });
     const r = await (o.spawn ?? spawnWithInput)(
       'powershell.exe',
@@ -1026,4 +1079,71 @@ export async function readSpecFromPipe(name: string): Promise<string> {
     s.on('end', () => res(Buffer.concat(chunks).toString('utf8')));
     s.on('error', rej);
   });
+}
+
+/** What a crew's objects may total: a clone that grew past this is not taken. */
+const MAX_CREW_OBJECTS_BYTES = 4 * 1024 * 1024 * 1024;
+
+/**
+ * Copies the objects of a crew's clone into the fresh repository `dest` and returns the head of its
+ * `studio/<id>`, read as files: `.git` must be a real folder (no link, no gitdir file), with no
+ * alternates of its own; only plain files with the names git gives loose objects and packs are
+ * copied, never a link; the head comes from the branch's ref file or packed-refs.
+ */
+export function copyCrewObjects(clone: string, dest: string, id: string, root: string): string {
+  const gitDir = join(clone, '.git');
+  const st = lstatSync(gitDir);
+  if (st.isSymbolicLink() || !st.isDirectory()) throw new Error('.git is not a plain folder');
+  const objects = join(gitDir, 'objects');
+  const ost = lstatSync(objects);
+  if (ost.isSymbolicLink() || !ost.isDirectory())
+    throw new Error('.git/objects is not a plain folder');
+  for (const f of ['alternates', 'http-alternates']) {
+    if (existsSync(join(objects, 'info', f))) throw new Error(`the clone has objects/info/${f}`);
+  }
+  let total = 0;
+  const copy = (from: string, to: string) => {
+    const fst = lstatSync(from);
+    if (fst.isSymbolicLink()) throw new Error('a link among the objects');
+    if (!fst.isFile()) return;
+    total += fst.size;
+    if (total > MAX_CREW_OBJECTS_BYTES) throw new Error('the objects are larger than allowed');
+    ensureStateDir(root, dirname(to));
+    copyFileSync(from, to);
+  };
+  for (const name of readdirSync(objects)) {
+    const sub = join(objects, name);
+    if (/^[0-9a-f]{2}$/.test(name)) {
+      const sst = lstatSync(sub);
+      if (sst.isSymbolicLink() || !sst.isDirectory()) throw new Error('a link among the objects');
+      for (const o of readdirSync(sub)) {
+        if (/^[0-9a-f]{38}$/.test(o)) copy(join(sub, o), join(dest, 'objects', name, o));
+      }
+    } else if (name === 'pack') {
+      const pst = lstatSync(sub);
+      if (pst.isSymbolicLink() || !pst.isDirectory()) throw new Error('a link among the objects');
+      for (const o of readdirSync(sub)) {
+        if (/^pack-[0-9a-f]{40,64}\.(pack|idx|rev)$/.test(o))
+          copy(join(sub, o), join(dest, 'objects', 'pack', o));
+      }
+    }
+  }
+  const sha = /^[0-9a-f]{40}$/;
+  const refFile = join(gitDir, 'refs', 'heads', 'studio', id);
+  if (existsSync(refFile)) {
+    const rst = lstatSync(refFile);
+    if (rst.isSymbolicLink() || !rst.isFile())
+      throw new Error('the branch ref is not a plain file');
+    const v = readFileSync(refFile, 'utf8').trim();
+    if (!sha.test(v)) throw new Error('the branch ref holds no commit');
+    return v;
+  }
+  const packed = join(gitDir, 'packed-refs');
+  if (existsSync(packed) && lstatSync(packed).isFile()) {
+    for (const line of readFileSync(packed, 'utf8').split('\n')) {
+      const [v, ref] = line.trim().split(' ');
+      if (ref === `refs/heads/studio/${id}` && v !== undefined && sha.test(v)) return v;
+    }
+  }
+  throw new Error(`the clone has no branch studio/${id}`);
 }

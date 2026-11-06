@@ -70,12 +70,12 @@ export const COMMANDS: HelpEntry[] = [
       'Print the one-time PowerShell script of the Windows crew sandbox user (run it elevated)',
   },
   {
-    usage: 'relay serve [--home <dir>]',
+    usage: 'relay serve [--home <dir>] [--lead <name>]',
     about:
       "On a relay worker: the command sshd forces for the lead's key; one request in, one answer out",
   },
   {
-    usage: 'relay run <id> [--pipe <name>] [--home <dir>]',
+    usage: 'relay run <id> [--lead <name>] [--pipe <name>] [--home <dir>]',
     about: 'On a relay worker: the runner a start hands its job to (Studio starts it, not you)',
   },
   {

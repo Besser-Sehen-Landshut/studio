@@ -23,8 +23,10 @@ import {
   CLAUDE_HOSTS,
   findClaude,
   type ProbeResult,
+  powershellEnv,
   probeProblem,
   probeWindowsResults,
+  psQuote,
   type RunFile,
   runFile,
   type SpawnKeeper,
@@ -72,8 +74,10 @@ export function judgeRelayProbe(
 
 export function relayWindows(o: {
   user: string;
-  /** The relay home (relay-windows.ts): the sealed credential and the broker's files. */
+  /** The relay home (relay-windows.ts): state and config; the crew user must not read it. */
   home: string;
+  /** The admin-only tree: the sealed credential and the broker's answer. */
+  machine: string;
   task: string;
   stateRoot: string;
   ownerRoot: string;
@@ -90,7 +94,7 @@ export function relayWindows(o: {
   interfaces?: () => ReturnType<typeof networkInterfaces>;
 }): RelayWindows {
   const run = o.run ?? runFile;
-  const credFile = machineCredFile(o.home);
+  const credFile = machineCredFile(o.machine);
   const path = o.env.PATH ?? o.env.Path;
   const claudeBin = findClaude(path) ?? 'claude';
   const ifaces = () => (o.interfaces ?? networkInterfaces)();
@@ -102,7 +106,7 @@ export function relayWindows(o: {
       brokerSweep({
         run,
         task: o.task,
-        result: brokerResultFile(o.home),
+        result: brokerResultFile(o.machine),
         readFile: (f) => {
           try {
             return readFileSync(f, 'utf8');
@@ -210,7 +214,7 @@ export function relayWindows(o: {
           user: o.user,
           ownerHome: o.ownerHome,
           ownerConfigDir: o.ownerConfigDir,
-          mustNotRead: [...deny.paths, o.home],
+          mustNotRead: [...deny.paths, o.home, credFile],
           crewConfigDir: o.crewConfigDir,
           grants,
           proxyPort: proxy.port,
@@ -225,6 +229,7 @@ export function relayWindows(o: {
             loopback,
             smb: candidates.hosts,
             noStoredCredentials: true,
+            persistence: true,
           },
           ...(o.spawn === undefined ? {} : { spawn: o.spawn }),
         });
@@ -253,4 +258,54 @@ export function relayWindows(o: {
     },
     claude,
   };
+}
+
+/**
+ * Whether the admin-only tree may be trusted to run from: the folders of the copies of Node.js and
+ * Studio this process runs, the tree around them, and the relay home with every folder above it.
+ * None may be a reparse point, each must be owned by administrators, SYSTEM or TrustedInstaller,
+ * and in the tree no other account may write. Undefined when all holds; else the refusal.
+ */
+export async function machineTreeProblem(
+  run: RunFile,
+  o: { machine: string; home: string; node: string; studioBin: string },
+): Promise<string | undefined> {
+  const inside = (p: string, dir: string) =>
+    p.toLowerCase().startsWith(`${dir.toLowerCase().replace(/[\\/]+$/, '')}\\`);
+  if (!inside(o.node, o.machine) || !inside(o.studioBin, o.machine)) {
+    return `studio relay serve runs only from the admin-only copies in ${o.machine} (studio relay install)`;
+  }
+  const script = `$ErrorActionPreference = 'Stop'
+$admin = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+$write = [Security.AccessControl.FileSystemRights]'WriteData, AppendData, WriteExtendedAttributes, WriteAttributes, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+function Up([string]$p) { $out = @(); while ($p) { $out += $p; $u = Split-Path -Parent $p; if (-not $u -or $u -eq $p) { break }; $p = $u }; $out }
+$problems = @()
+foreach ($p in @(Up ${psQuote(o.machine)}) + @(Up ${psQuote(o.home)})) {
+  if (-not (Test-Path -LiteralPath $p)) { $problems += "$p is missing"; continue }
+  if ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { $problems += "$p is a reparse point" }
+}
+foreach ($p in @(${psQuote(o.machine)}, (Join-Path ${psQuote(o.machine)} 'node'), (Join-Path ${psQuote(o.machine)} 'studio'), ${psQuote(o.home)}, (Split-Path -Parent ${psQuote(o.home)}))) {
+  $acl = Get-Acl -LiteralPath $p
+  $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+  if ($admin -notcontains $owner) { $problems += "$p is owned by $owner" }
+  foreach ($r in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    if ($r.AccessControlType -ne 'Allow' -or $admin -contains $r.IdentityReference.Value) { continue }
+    if (($r.FileSystemRights -band $write) -ne 0 -and $r.PropagationFlags -ne 'InheritOnly') { $problems += "$p is writable by $($r.IdentityReference.Value)" }
+  }
+}
+ConvertTo-Json -Compress -InputObject @($problems)`;
+  const r = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    env: powershellEnv(process.env),
+    timeoutMs: 60_000,
+  });
+  let problems: unknown;
+  try {
+    problems = r.code === 0 ? JSON.parse(r.stdout.trim() || 'null') : undefined;
+  } catch {
+    problems = undefined;
+  }
+  if (!Array.isArray(problems)) return 'the admin-only tree of this relay worker cannot be checked';
+  return problems.length === 0
+    ? undefined
+    : `the admin-only tree of this relay worker cannot be trusted (${problems.slice(0, 3).join('; ')}); run studio relay install again, elevated`;
 }

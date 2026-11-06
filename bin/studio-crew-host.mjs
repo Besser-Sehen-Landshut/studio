@@ -329,6 +329,49 @@ async function probe(p) {
           : `${n} stored credential(s)`,
     );
   }
+  // What a crew could have left to run in a later job; the broker resets it before every grant.
+  if (p.persistence === true) {
+    const left = [];
+    const query = (key, value) => {
+      try {
+        return execFileSync('reg', ['query', key, ...(value === undefined ? [] : ['/v', value])], {
+          encoding: 'utf8',
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+      } catch {
+        return undefined;
+      }
+    };
+    if (query('HKCU\\Software\\Microsoft\\Command Processor', 'AutoRun') !== undefined)
+      left.push('cmd AutoRun');
+    const envValues = (query('HKCU\\Environment') ?? '')
+      .split(/\r?\n/)
+      .map((l) => /^\s{4}(\S+)\s+REG_/.exec(l)?.[1])
+      .filter((n) => n !== undefined && !['TEMP', 'TMP'].includes(n.toUpperCase()));
+    if (envValues.length > 0) left.push(`environment values ${envValues.join(', ')}`);
+    for (const k of ['Run', 'RunOnce']) {
+      const out = query(`HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\${k}`);
+      if (out !== undefined && /\sREG_/.test(out)) left.push(`${k} entries`);
+    }
+    let startup = [];
+    try {
+      const dir = execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', "[Environment]::GetFolderPath('Startup')"],
+        { encoding: 'utf8', windowsHide: true },
+      ).trim();
+      startup = dir === '' ? [] : readdirSync(dir).filter((n) => n.toLowerCase() !== 'desktop.ini');
+    } catch (e) {
+      if (e?.code !== 'ENOENT') left.push('the Startup folder cannot be read');
+    }
+    if (startup.length > 0) left.push(`${startup.length} item(s) in the Startup folder`);
+    add(
+      'persistence',
+      left.length === 0,
+      left.length === 0 ? 'nothing left to start in a later job' : `left: ${left.join(', ')}`,
+    );
+  }
   // A scheduled task of this user would start processes outside every keeper's job.
   try {
     const tasks = execFileSync('schtasks', ['/query', '/fo', 'csv', '/v', '/nh'], {

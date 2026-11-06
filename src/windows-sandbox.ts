@@ -783,6 +783,11 @@ export interface ProbeSpec {
   smb?: string[];
   /** Whether the crew user must hold no stored credential (Credential Manager). */
   noStoredCredentials?: boolean;
+  /**
+   * Whether the crew user's profile must hold nothing that starts a program in a later job: no cmd
+   * AutoRun, no environment values but TEMP and TMP, no Run keys, an empty Startup folder.
+   */
+  persistence?: boolean;
 }
 
 /** What PowerShell itself gets: what Windows programs need, no token, no PowerShell 7 modules. */
@@ -1032,6 +1037,7 @@ export const probeChecks = (p: ProbeSpec): string[] => [
   ...(p.loopback === undefined ? [] : ['loopback']),
   ...(p.smb === undefined ? [] : ['smb']),
   ...(p.noStoredCredentials === true ? ['credentials'] : []),
+  ...(p.persistence === true ? ['persistence'] : []),
 ];
 
 export const PROBE_CHECKS = [
@@ -1074,7 +1080,10 @@ export async function probeWindowsSandbox(o: {
   timeoutMs?: number;
   /** A relay worker: the sealed machine credential, and the checks of its probe on top. */
   machine?: boolean;
-  extra?: Pick<ProbeSpec, 'unreachable' | 'loopback' | 'smb' | 'noStoredCredentials'>;
+  extra?: Pick<
+    ProbeSpec,
+    'unreachable' | 'loopback' | 'smb' | 'noStoredCredentials' | 'persistence'
+  >;
 }): Promise<string | undefined> {
   const r = await probeWindowsResults(o);
   return 'problem' in r ? r.problem : probeProblem(r.results);
