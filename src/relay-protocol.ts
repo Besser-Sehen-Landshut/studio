@@ -133,6 +133,11 @@ export const helloAnswer = z.strictObject({
   busy: ITEM_ID.nullable(),
   /** Why a start would be held now (busy, load, disk); the lead sends nothing then. */
   held: relayLine.nullable(),
+  /** The one-time codes of the pairings this worker took (`relay install --pair`). */
+  pairCodes: z
+    .array(z.string().regex(/^[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$/))
+    .max(20)
+    .default([]),
   warnings,
 });
 export const probeAnswer = z.strictObject({

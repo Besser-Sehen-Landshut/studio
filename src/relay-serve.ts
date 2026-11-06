@@ -46,6 +46,7 @@ import {
 } from './paths.js';
 import { installedVersions, pinnedPlugins, STUDIO_VERSION } from './plugins.js';
 import type { Ports } from './ports.js';
+import { readPairings } from './relay-pair.js';
 import {
   type CollectAnswer,
   encodeMessage,
@@ -115,6 +116,8 @@ export interface RelayContext {
   /** Hands the spec (it holds the token) to a new runner process for job `id`. */
   spawnRunner: (o: { id: string; spec: string; log: string }) => Promise<{ pid: number }>;
   load: () => Promise<Load>;
+  /** The relay home (`--home`): where the pairings this worker took are kept. */
+  home?: string;
   /** Native Windows: the crew sandbox in relay mode (src/relay-windows.ts, through the CLI). */
   windows?: RelayWindows;
   log?: (line: string) => void;
@@ -521,6 +524,7 @@ export async function serveRelay(
           plugins: have === undefined ? null : Object.fromEntries(have),
           busy: busy?.id ?? null,
           held: held ?? null,
+          pairCodes: c.home === undefined ? [] : Object.values(readPairings(c.home)).slice(0, 20),
           warnings: stored === undefined ? [] : [stored],
         });
       }

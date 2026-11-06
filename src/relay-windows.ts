@@ -253,6 +253,11 @@ export function relaySetupScript(o: {
   leadKey?: string;
   /** Plugin setup for the crew Claude config dir of the relay home. */
   pluginSetup: string;
+  /**
+   * `studio relay install`: also the prerequisites (winget, the OpenSSH server), the sshd block
+   * written into sshd_config, and an inbound rule that lets only `scope` reach sshd.
+   */
+  install?: RelayInstall;
 }): string {
   for (const u of [o.relayUser, o.crewUser]) {
     if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(u)) throw new Error(`not a local user name: ${u}`);
@@ -262,7 +267,8 @@ export function relaySetupScript(o: {
   const keyLine =
     o.leadKey === undefined ? undefined : authorizedKeyLine({ key: o.leadKey, command: o.command });
   const block = sshdMatchBlock({ relayUser: o.relayUser, home: o.home, command: o.command });
-  return `#Requires -RunAsAdministrator
+  const tag = o.leadKey?.trim().split(/\s+/)[2];
+  return `${o.install === undefined ? '' : installHead()}#Requires -RunAsAdministrator
 # Studio: the one-time setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
 # Nothing here leaves this machine.
@@ -366,14 +372,104 @@ ${
   keyLine === undefined
     ? '# No lead key given: run studio relay setup --lead-key "<public key line>" to authorize one.'
     : `$keys = ${psQuote(authorizedKeysFile(o.home))}
-Set-Content -LiteralPath $keys -Encoding ASCII -Value ${psQuote(keyLine)}
+# One line per lead key, told apart by its comment: a key paired again replaces its own line only.
+$keep = @()
+${
+  tag === undefined
+    ? ''
+    : `if (Test-Path -LiteralPath $keys) { $keep = @(Get-Content -LiteralPath $keys | Where-Object { $_ -and -not $_.EndsWith(' ' + ${psQuote(tag)}) }) }`
+}
+Set-Content -LiteralPath $keys -Encoding ASCII -Value (@($keep) + ${psQuote(keyLine)})
 icacls $keys /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /Q | Out-Null`
 }
-Write-Output 'Add this block at the end of sshd_config (C:\\ProgramData\\ssh\\sshd_config), then Restart-Service sshd:'
+${o.install === undefined ? setupTail(block) : installTail(block, o.install)}`;
+}
+
+/** Where sshd may be reached from: the Tailscale interface, another interface, or a source range. */
+export type SshdScope = { tailscale: true } | { interface: string } | { source: string };
+
+export interface RelayInstall {
+  port: number;
+  scope: SshdScope;
+}
+
+const setupTail = (
+  block: string,
+) => `Write-Output 'Add this block at the end of sshd_config (C:\\ProgramData\\ssh\\sshd_config), then Restart-Service sshd:'
 Write-Output @'
 ${block}'@
 Write-Output 'Host key to pin on the lead (workers.relay.<label>.host_key):'
 Get-Content -LiteralPath (Join-Path $env:ProgramData 'ssh\\ssh_host_ed25519_key.pub') | ForEach-Object { ($_ -split ' ')[0..1] -join ' ' }
 Write-Output "Studio relay worker is ready: relay account $relay, crew user $crew."
+`;
+
+/**
+ * The prerequisites of `studio relay install`: Git and Claude Code through winget (for the whole
+ * machine), the OpenSSH server as the Windows capability it is, started and set to start with
+ * Windows. Each is checked first; one that is still missing after its install stops the script.
+ */
+const installHead = () => `#Requires -RunAsAdministrator
+$ErrorActionPreference = 'Stop'
+function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
+function Need([string]$what, [scriptblock]$have, [string]$id) {
+  if (& $have) { Write-Output "ok: $what"; return }
+  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "$what is missing and winget is not there to install it; install $what by hand" }
+  Write-Output "installing: $what (winget $id)"
+  winget install --id $id --exact --silent --scope machine --accept-package-agreements --accept-source-agreements | Out-Null
+  Fresh
+  if (-not (& $have)) { throw "$what is still missing after winget install $id; install it by hand" }
+}
+Write-Output "ok: Node.js $(node --version)"
+Need 'Git' { Get-Command git -ErrorAction SilentlyContinue } 'Git.Git'
+Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
+$ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
+if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
+if ($ssh.State -ne 'Installed') { Write-Output 'installing: OpenSSH server'; Add-WindowsCapability -Online -Name $ssh.Name | Out-Null } else { Write-Output 'ok: OpenSSH server' }
+Set-Service -Name sshd -StartupType Automatic
+Start-Service sshd
+`;
+
+/**
+ * The end of `studio relay install`: the sshd block between Studio's markers at the end of
+ * sshd_config (an earlier one replaced), checked with `sshd -t` before sshd restarts (a config
+ * that fails is put back); an inbound rule that lets only the scope reach sshd, the rule OpenSSH
+ * adds for every address turned off.
+ */
+function installTail(block: string, i: RelayInstall): string {
+  if (!Number.isInteger(i.port) || i.port < 1 || i.port > 65535) throw new Error('not a port');
+  const scope =
+    'tailscale' in i.scope
+      ? `$ts = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like '*Tailscale*' -or $_.Name -like 'Tailscale*' } | Select-Object -First 1
+if ($null -eq $ts) { throw 'no Tailscale interface here: run studio relay install --interface <name> or --source <range>' }
+$scope = @{ InterfaceAlias = $ts.Name }
+$where = 'the Tailscale interface ' + $ts.Name`
+      : 'interface' in i.scope
+        ? `$scope = @{ InterfaceAlias = ${psQuote(i.scope.interface)} }
+$where = 'the interface ' + ${psQuote(i.scope.interface)}`
+        : `$scope = @{ RemoteAddress = ${psQuote(i.scope.source)} }
+$where = 'the source ' + ${psQuote(i.scope.source)}`;
+  return `$conf = Join-Path $env:ProgramData 'ssh\\sshd_config'
+for ($k = 0; $k -lt 20 -and -not (Test-Path -LiteralPath $conf); $k++) { Start-Sleep -Milliseconds 500 }
+$before = Get-Content -LiteralPath $conf -Raw
+$clean = [regex]::Replace($before, '(?s)\\r?\\n?# studio relay begin.*?# studio relay end\\r?\\n?', [Environment]::NewLine)
+$ours = @'
+# studio relay begin
+${block}# studio relay end
+'@
+Set-Content -LiteralPath $conf -Encoding ASCII -Value ($clean.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $ours)
+& (Join-Path $env:SystemRoot 'System32\\OpenSSH\\sshd.exe') -t
+if ($LASTEXITCODE -ne 0) {
+  Set-Content -LiteralPath $conf -Encoding ASCII -Value $before -NoNewline
+  throw 'sshd does not accept the new sshd_config; it was put back as it was'
+}
+Restart-Service sshd
+${scope}
+$rule = 'Studio relay: sshd'
+Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+New-NetFirewallRule -DisplayName $rule -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${i.port} @scope | Out-Null
+Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Disable-NetFirewallRule
+Write-Output "ok: relay account $relay, crew user $crew, broker task $task"
+Write-Output "ok: sshd forces studio relay serve for $relay; port ${i.port} only from $where"
+Write-Output 'ok: WebClient stopped and disabled'
 `;
 }

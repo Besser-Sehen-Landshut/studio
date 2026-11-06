@@ -688,13 +688,22 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     if ((values.label !== undefined || values.once !== undefined) && cmd !== 'worker') {
       throw new UsageError('--label and --once work with worker only');
     }
-    if (
-      (values.home !== undefined ||
-        values.pipe !== undefined ||
-        values['lead-key'] !== undefined) &&
-      cmd !== 'relay'
-    ) {
-      throw new UsageError('--home, --pipe and --lead-key work with relay only');
+    const relayOnly = [
+      values.home,
+      values.pipe,
+      values['lead-key'],
+      values.pair,
+      values.user,
+      values.port,
+      values.source,
+      values.interface,
+      values.connect,
+      values.code,
+    ];
+    if (relayOnly.some((v) => v !== undefined) && cmd !== 'relay') {
+      throw new UsageError(
+        '--home, --pipe, --lead-key, --pair, --user, --port, --source, --interface, --connect and --code work with relay only',
+      );
     }
     const reserveOnly = [values.number, values.for, values.purpose];
     if (
@@ -3474,9 +3483,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ...(deps.workerPlatform === undefined ? {} : { platform: deps.workerPlatform }),
           ...(deps.relaySpawnRunner === undefined ? {} : { spawnRunner: deps.relaySpawnRunner }),
           ...(deps.relayLoad === undefined ? {} : { load: deps.relayLoad }),
+          ...(deps.readLine === undefined || deps.isTerminal !== true
+            ? {}
+            : { readLine: deps.readLine }),
+          ...(deps.relayTransport === undefined ? {} : { transport: deps.relayTransport }),
         });
         if (code === undefined) {
-          throw new UsageError('relay takes: serve, run <id>, or setup [--lead-key <line>]');
+          throw new UsageError(
+            'relay takes: pair <label> <host>, pair <label> --connect, install [--pair <line>], setup, serve, run <id>',
+          );
         }
         return code;
       }
@@ -5433,6 +5448,13 @@ function parseCli(argv: string[]) {
         home: { type: 'string' },
         pipe: { type: 'string' },
         'lead-key': { type: 'string' },
+        pair: { type: 'string' },
+        user: { type: 'string' },
+        port: { type: 'string' },
+        source: { type: 'string' },
+        interface: { type: 'string' },
+        connect: { type: 'boolean' },
+        code: { type: 'string' },
       },
       allowPositionals: true,
       strict: true,

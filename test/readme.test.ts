@@ -209,6 +209,23 @@ describe('README relay workers', () => {
     }
     expect(readme).toContain('| `relay setup [--lead-key <line>] [--home <dir>]`');
   });
+  it('sets up a Windows relay worker in five steps, with a troubleshooting table', () => {
+    const at = readme.indexOf('### Set up a Windows relay worker in 10 minutes');
+    expect(at).toBeGreaterThan(0);
+    const s = readme.slice(at, readme.indexOf('\n## ', at));
+    const steps = [...s.matchAll(/^(\d)\. \*\*/gm)].map((m) => m[1]);
+    expect(steps).toEqual(['1', '2', '3', '4', '5']);
+    for (const phrase of [
+      'studio relay pair lab worker.example',
+      'studio relay install --pair',
+      'studio relay pair lab --connect',
+      'host key code',
+      'studio doctor',
+    ]) {
+      expect(s).toContain(phrase);
+    }
+    expect(s).toMatch(/\| What you see +\| Why +\| Fix +\|/);
+  });
   it('SECURITY.md names both threat models, what runs elevated and the gaps the probe covers', () => {
     const security = readFileSync(join(import.meta.dirname, '..', 'SECURITY.md'), 'utf8');
     const at = security.indexOf('## Relay workers');

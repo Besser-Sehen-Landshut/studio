@@ -79,6 +79,21 @@ export const COMMANDS: HelpEntry[] = [
     about: 'On a relay worker: the runner a start hands its job to (Studio starts it, not you)',
   },
   {
+    usage: 'relay pair <label> <host> [--port <n>] [--user <name>]',
+    about: "On the lead: make the lead's key for a relay worker and print the one pairing line",
+  },
+  {
+    usage: 'relay pair <label> --connect [--code <code>]',
+    about:
+      "On the lead: show the worker's host key code, pin it once confirmed, write workers.relay.<label>",
+  },
+  {
+    usage:
+      'relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>]',
+    about:
+      'On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead',
+  },
+  {
     usage: 'relay setup [--lead-key <line>] [--home <dir>]',
     about:
       'Print the one-time PowerShell script of a Windows relay worker (run it elevated); --lead-key authorizes the lead',

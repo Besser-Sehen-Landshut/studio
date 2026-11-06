@@ -1,9 +1,10 @@
 // The CLI's side of relay workers (src/relay-lead.ts, src/relay-serve.ts): on the lead, starting a
 // planned item on its relay worker and following it each tick; on the worker, `studio relay serve`,
 // `relay run` and `relay setup`. Kept out of src/cli.ts, which only calls in here.
-import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { crewClaudeDir } from './accounts.js';
 import { type Board, loadBoard, saveBoard, transition, type WorkItem } from './board.js';
 import {
@@ -11,8 +12,11 @@ import {
   type OwnerConfig,
   type OwnerEnv,
   ownerConfigDir,
+  RELAY_HOST_RE,
   type RelayTarget,
+  relayTargetSchema,
   type StudioConfig,
+  WORKER_LABEL_RE,
 } from './config.js';
 import { type RunUsage, recordLedgerRun, withItemUsage } from './costs.js';
 import { pickCrewCredential } from './crew.js';
@@ -45,6 +49,20 @@ import {
   updateRelay,
 } from './relay-lead.js';
 import {
+  dropPending,
+  hostKeyCode,
+  keyscanKey,
+  leadKeyFile,
+  newPairCode,
+  type PairLine,
+  parsePairLine,
+  readPending,
+  renderPairLine,
+  writePairing,
+  writePending,
+  writeRelayTarget,
+} from './relay-pair.js';
+import {
   type RelayContext,
   readSpecFromPipe,
   relayRoot,
@@ -61,10 +79,16 @@ import {
   relayCall,
   sshTransport,
 } from './relay-transport.js';
-import { forcedCommand, relayHomeDefault, relaySetupScript } from './relay-windows.js';
-import { relayWindows } from './relay-windows-check.js';
+import {
+  forcedCommand,
+  type RelayInstall,
+  relayHomeDefault,
+  relaySetupScript,
+  type SshdScope,
+} from './relay-windows.js';
+import { elevated, relayWindows } from './relay-windows-check.js';
 import { labelUsage, recordRun, USAGE_UNREADABLE } from './usage.js';
-import { findClaude, setupReadPaths } from './windows-sandbox.js';
+import { findClaude, runFile, setupReadPaths } from './windows-sandbox.js';
 import { pinnedMain } from './worker.js';
 import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
 import { updateWorkers, workerCrewName } from './worker-lead.js';
@@ -510,6 +534,7 @@ export function relayContext(o: {
     spawnRunner:
       o.spawnRunner ?? systemSpawnRunner({ home: o.home, platform: platform().platform }),
     load: o.load ?? (() => systemLoad(root)),
+    ...(o.home === undefined ? {} : { home: o.home }),
     log: o.log,
     ...(native
       ? {
@@ -541,7 +566,7 @@ async function readAll(input: AsyncIterable<Uint8Array | string>): Promise<strin
 /** `studio relay serve | run <id> | setup`. Returns the exit code. */
 export async function runRelayCommand(o: {
   rest: string[];
-  values: { home?: string; pipe?: string; 'lead-key'?: string };
+  values: RelayValues;
   owner: OwnerEnv;
   ports: Ports;
   env: Record<string, string | undefined>;
@@ -552,6 +577,11 @@ export async function runRelayCommand(o: {
   platform?: WorkerPlatform;
   spawnRunner?: RelayContext['spawnRunner'];
   load?: RelayContext['load'];
+  /** A terminal to ask the owner in; undefined without one. */
+  readLine?: (prompt: string) => Promise<string | undefined>;
+  transport?: (label: string, target: RelayTarget) => RelayTransport;
+  /** Runs a program and gives its exit code and output; a seam for tests. */
+  exec?: Exec;
 }): Promise<number | undefined> {
   const [sub, ...args] = o.rest;
   const ctx = () =>
@@ -579,31 +609,354 @@ export async function runRelayCommand(o: {
     o.stdout(`${JSON.stringify({ item: id, state })}\n`);
     return state === 'refused' ? 1 : 0;
   }
-  if (sub === 'setup' && args.length === 0) {
-    const owner = relayOwner(o.owner, o.values.home);
+  if ((sub === 'setup' || sub === 'install') && args.length === 0) {
     const home = o.values.home ?? relayHomeDefault(o.env);
-    const settings = serveSettings(relayOwner(o.owner, home));
-    const relayUser = 'studio-relay';
-    const command = forcedCommand(process.execPath, STUDIO_BIN, home);
-    const pluginEnv = `$env:XDG_CONFIG_HOME = '${join(home, 'config').replace(/'/g, "''")}'; $env:XDG_STATE_HOME = '${join(home, 'state').replace(/'/g, "''")}'`;
-    o.stdout(
-      relaySetupScript({
-        relayUser,
-        crewUser: settings.windows?.crewUser ?? 'studio-crew',
-        home,
-        task: settings.windows?.broker ?? 'Studio relay broker',
-        readPaths: setupReadPaths({
-          node: process.execPath,
-          claude: findClaude(o.env.PATH ?? o.env.Path),
-          toolchains: loadOwnerConfig(owner).crewToolchainPaths,
-          crewConfigDir: crewClaudeDir(relayOwner(o.owner, home)),
-        }),
-        command,
-        ...(o.values['lead-key'] === undefined ? {} : { leadKey: o.values['lead-key'] }),
-        pluginSetup: `${pluginEnv}; & '${process.execPath.replace(/'/g, "''")}' '${STUDIO_BIN.replace(/'/g, "''")}' account setup-plugins`,
-      }),
-    );
-    return 0;
+    const relayUser = o.values.user ?? 'studio-relay';
+    if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(relayUser)) {
+      throw new Error('--user: a local user name of at most 20 characters');
+    }
+    const pair = o.values.pair === undefined ? undefined : parsePairLine(o.values.pair);
+    const leadKey =
+      pair !== undefined ? `${pair.key} studio-relay-${pair.label}` : o.values['lead-key'];
+    const script = (install?: RelayInstall) =>
+      setupScriptFor({ owner: o.owner, env: o.env, home, relayUser, leadKey, install });
+    if (sub === 'setup') {
+      if (pair !== undefined) throw new Error('--pair works with relay install only');
+      o.stdout(script());
+      return 0;
+    }
+    return await install({ ...o, home, script, pair });
+  }
+  if (sub === 'pair' && o.values.connect !== true && args.length === 2) {
+    return await pairStart({ ...o, label: args[0] as string, host: args[1] as string });
+  }
+  if (sub === 'pair' && o.values.connect === true && args.length === 1) {
+    return await pairConnect({ ...o, label: args[0] as string });
   }
   return undefined;
+}
+
+/** The flags of `studio relay`. */
+export interface RelayValues {
+  home?: string;
+  pipe?: string;
+  'lead-key'?: string;
+  pair?: string;
+  user?: string;
+  port?: string;
+  source?: string;
+  interface?: string;
+  connect?: boolean;
+  code?: string;
+}
+
+/** Runs a program; output goes to `onOutput` as it comes when given. */
+export type Exec = (
+  file: string,
+  args: string[],
+  o?: { onOutput?: (s: string) => void; timeoutMs?: number },
+) => Promise<{ code: number; stdout: string; stderr: string }>;
+
+const systemExec: Exec = (file, args, o = {}) =>
+  new Promise((res) => {
+    const child = spawn(file, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => child.kill(), o.timeoutMs ?? 30 * 60_000);
+    child.stdout?.on('data', (d) => {
+      stdout += String(d);
+      o.onOutput?.(String(d));
+    });
+    child.stderr?.on('data', (d) => {
+      stderr += String(d);
+      o.onOutput?.(String(d));
+    });
+    child.on('error', () => {
+      clearTimeout(timer);
+      res({ code: 127, stdout, stderr });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      res({ code: code ?? 1, stdout, stderr });
+    });
+  });
+
+/** The setup script of a Windows relay worker, as `relay setup` prints and `relay install` runs it. */
+function setupScriptFor(o: {
+  owner: OwnerEnv;
+  env: Record<string, string | undefined>;
+  home: string;
+  relayUser: string;
+  leadKey: string | undefined;
+  install: RelayInstall | undefined;
+}): string {
+  const owner = relayOwner(o.owner, o.home);
+  const settings = serveSettings(owner);
+  const q = (x: string) => `'${x.replace(/'/g, "''")}'`;
+  const pluginEnv = `$env:XDG_CONFIG_HOME = ${q(join(o.home, 'config'))}; $env:XDG_STATE_HOME = ${q(join(o.home, 'state'))}`;
+  return relaySetupScript({
+    relayUser: o.relayUser,
+    crewUser: settings.windows?.crewUser ?? 'studio-crew',
+    home: o.home,
+    task: settings.windows?.broker ?? 'Studio relay broker',
+    readPaths: setupReadPaths({
+      node: process.execPath,
+      claude: findClaude(o.env.PATH ?? o.env.Path),
+      toolchains: loadOwnerConfig(owner).crewToolchainPaths,
+      crewConfigDir: crewClaudeDir(owner),
+    }),
+    command: forcedCommand(process.execPath, STUDIO_BIN, o.home),
+    ...(o.leadKey === undefined ? {} : { leadKey: o.leadKey }),
+    pluginSetup: `${pluginEnv}; & ${q(process.execPath)} ${q(STUDIO_BIN)} account setup-plugins`,
+    ...(o.install === undefined ? {} : { install: o.install }),
+  });
+}
+
+/** A Windows relay worker's own config, written once with the defaults of a new machine. */
+const DEFAULT_SERVE_CONFIG = `# Studio relay worker (studio relay install). Optional; see the README, "Relay workers".
+workers:
+  serve:
+    deny:
+      hosts: [local-subnets, tailnet-peers]
+`;
+
+/**
+ * `studio relay install`: on a Windows machine, elevated. Checks and installs what a relay worker
+ * needs, creates the relay account, the crew user and the broker, writes the sshd block and the
+ * firewall rule for sshd, authorizes the lead's key of a pairing line, and ends with a summary.
+ * Run again, it repairs and updates.
+ */
+async function install(o: {
+  home: string;
+  script: (install?: RelayInstall) => string;
+  pair: PairLine | undefined;
+  values: RelayValues;
+  env: Record<string, string | undefined>;
+  stdout: (s: string) => void;
+  stderr: (s: string) => void;
+  platform?: WorkerPlatform;
+  readLine?: (prompt: string) => Promise<string | undefined>;
+  exec?: Exec;
+}): Promise<number> {
+  const exec = o.exec ?? systemExec;
+  const platform = (o.platform ?? detectPlatform()).platform;
+  if (platform !== 'win32') {
+    throw new Error(
+      'relay install sets up a Windows relay worker; elsewhere run studio relay serve --home <dir> as the forced command of your sshd',
+    );
+  }
+  if ((await elevated(runFile)) !== true) {
+    throw new Error('relay install needs an elevated PowerShell (run it as administrator)');
+  }
+  const port = o.values.port === undefined ? 22 : Number(o.values.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('--port: 1 to 65535');
+  let scope: SshdScope;
+  if (o.values.source !== undefined) {
+    if (!/^[0-9A-Fa-f.:/,-]{2,200}$/.test(o.values.source)) {
+      throw new Error('--source: addresses or ranges, comma separated');
+    }
+    scope = { source: o.values.source };
+  } else if (o.values.interface !== undefined) {
+    if (!/^[\w .()-]{1,64}$/.test(o.values.interface)) throw new Error('--interface: a name');
+    scope = { interface: o.values.interface };
+  } else {
+    const ts = await exec('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      "@(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like '*Tailscale*' -or $_.Name -like 'Tailscale*' }).Count",
+    ]);
+    if (ts.code === 0 && Number(ts.stdout.trim()) > 0) scope = { tailscale: true };
+    else {
+      const answer = (
+        await o.readLine?.(
+          'No Tailscale interface here. Which interface name, or which source range, may reach sshd? ',
+        )
+      )?.trim();
+      if (answer === undefined || answer === '') {
+        throw new Error(
+          'no Tailscale interface here: run studio relay install --interface <name> or --source <range>',
+        );
+      }
+      scope = /^[0-9A-Fa-f.:/,-]+$/.test(answer) ? { source: answer } : { interface: answer };
+    }
+  }
+  o.stdout(
+    'Studio relay install: this stops and disables the WebClient service (WebDAV), which the crew sandbox does not hold.\n',
+  );
+  mkdirSync(o.home, { recursive: true });
+  const file = join(mkdtempSync(join(tmpdir(), 'studio-relay-install-')), 'install.ps1');
+  writeFileSync(file, o.script({ port, scope }));
+  let r: Awaited<ReturnType<Exec>>;
+  try {
+    r = await exec(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file],
+      { onOutput: o.stdout },
+    );
+  } finally {
+    rmSync(dirname(file), { recursive: true, force: true });
+  }
+  if (r.code !== 0) {
+    o.stderr('studio: relay install stopped; fix what it says and run it again (it repairs)\n');
+    return 1;
+  }
+  // A new machine gets the defaults of a Windows relay worker; an existing config stays.
+  const config = join(o.home, 'config', 'studio', 'config.yaml');
+  if (!existsSync(config)) {
+    mkdirSync(dirname(config), { recursive: true });
+    writeFileSync(config, DEFAULT_SERVE_CONFIG);
+  }
+  const summary: string[] = [];
+  if (o.pair !== undefined) {
+    writePairing(o.home, o.pair.label, o.pair.code);
+    summary.push(
+      `paired: the lead's key for ${o.pair.label} (code ${o.pair.code}), forced to studio relay serve`,
+    );
+  }
+  const hostKey = join(o.env.ProgramData ?? 'C:\\ProgramData', 'ssh', 'ssh_host_ed25519_key.pub');
+  let code: string | undefined;
+  try {
+    code = hostKeyCode(readFileSync(hostKey, 'utf8'));
+  } catch {
+    code = undefined;
+  }
+  summary.push(
+    code === undefined
+      ? `host key: cannot read ${hostKey}`
+      : `host key code: ${code}; on the lead, studio relay pair <label> --connect shows a code: it must be this one`,
+  );
+  o.stdout(`\n${summary.join('\n')}\n`);
+  return 0;
+}
+
+/** `studio relay pair <label> <host>` on the lead: the key and the one pairing line. */
+async function pairStart(o: {
+  label: string;
+  host: string;
+  values: RelayValues;
+  owner: OwnerEnv;
+  stdout: (s: string) => void;
+  exec?: Exec;
+  ports: Ports;
+}): Promise<number> {
+  if (!WORKER_LABEL_RE.test(o.label))
+    throw new Error('relay pair: a label is ^[a-z][a-z0-9-]{0,31}$');
+  if (!RELAY_HOST_RE.test(o.host)) throw new Error('relay pair: a host name or an IP address');
+  const port = o.values.port === undefined ? 22 : Number(o.values.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('--port: 1 to 65535');
+  const user = o.values.user ?? 'studio-relay';
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(user)) throw new Error('--user: a local user name');
+  const exec = o.exec ?? systemExec;
+  const key = leadKeyFile(o.owner, o.label);
+  mkdirSync(dirname(key), { recursive: true, mode: 0o700 });
+  // A key paired before is replaced: the worker gets the new line, the old one goes with it.
+  rmSync(key, { force: true });
+  rmSync(`${key}.pub`, { force: true });
+  const made = await exec('ssh-keygen', [
+    '-q',
+    '-t',
+    'ed25519',
+    '-N',
+    '',
+    '-C',
+    `studio-relay-${o.label}`,
+    '-f',
+    key,
+  ]);
+  if (made.code !== 0) throw new Error('ssh-keygen could not make the key');
+  const pub = readFileSync(`${key}.pub`, 'utf8').trim().split(/\s+/).slice(0, 2).join(' ');
+  const code = newPairCode();
+  writePending(o.owner, {
+    label: o.label,
+    host: o.host,
+    port,
+    user,
+    code,
+    identityFile: key,
+    createdAt: o.ports.clock.now().toISOString(),
+  });
+  o.stdout(
+    `On the worker, in an elevated PowerShell:\n  studio relay install --pair "${renderPairLine({ label: o.label, code, key: pub })}"\nThen here: studio relay pair ${o.label} --connect\n`,
+  );
+  return 0;
+}
+
+/**
+ * `studio relay pair <label> --connect` on the lead: the worker's host key, shown as its short
+ * code and pinned only when the owner confirms it (or `--code` names it); a first request over the
+ * pinned connection must name the pairing's code. Then the worker goes into the owner config.
+ */
+async function pairConnect(o: {
+  label: string;
+  values: RelayValues;
+  owner: OwnerEnv;
+  stdout: (s: string) => void;
+  readLine?: (prompt: string) => Promise<string | undefined>;
+  transport?: (label: string, target: RelayTarget) => RelayTransport;
+  exec?: Exec;
+}): Promise<number> {
+  const p = readPending(o.owner, o.label);
+  if (p === undefined) {
+    throw new Error(
+      `no pairing of ${o.label} is waiting: studio relay pair ${o.label} <host> first`,
+    );
+  }
+  const scan = await (o.exec ?? systemExec)('ssh-keyscan', [
+    '-T',
+    '15',
+    '-t',
+    'ed25519',
+    '-p',
+    String(p.port),
+    p.host,
+  ]);
+  const key = keyscanKey(scan.stdout);
+  if (key === undefined) throw new Error(`cannot read the host key of ${p.host}:${p.port}`);
+  const code = hostKeyCode(key);
+  let confirmed: boolean;
+  if (o.values.code !== undefined) confirmed = o.values.code.trim().toUpperCase() === code;
+  else {
+    const a = await o.readLine?.(
+      `Host key code of ${p.host}: ${code}. Does it match what studio relay install printed on the worker? [y/N] `,
+    );
+    if (a === undefined) {
+      throw new Error(
+        `no terminal to confirm in: run studio relay pair ${o.label} --connect --code <code the worker printed>`,
+      );
+    }
+    confirmed = /^y(es)?$/i.test(a.trim());
+  }
+  if (!confirmed) {
+    o.stdout(`not paired: the host key code ${code} was not confirmed; nothing was pinned\n`);
+    return 1;
+  }
+  const target = relayTargetSchema.parse({
+    host: p.host,
+    port: p.port,
+    user: p.user,
+    hostKey: key,
+    identityFile: p.identityFile,
+  });
+  const transport =
+    o.transport?.(o.label, target) ?? sshTransport({ label: o.label, target, owner: o.owner });
+  const { answer } = await relayCall(transport, 'hello', {}, { timeoutMs: 60_000 });
+  if (!answer.ok) throw new Error(`the worker answered: ${answer.line}`);
+  if (!answer.pairCodes.includes(p.code)) {
+    throw new Error(
+      `the worker did not take this pairing (code ${p.code}): run studio relay install --pair with the line studio relay pair printed`,
+    );
+  }
+  writeRelayTarget(o.owner, o.label, {
+    host: p.host,
+    port: p.port,
+    user: p.user,
+    hostKey: key,
+    identityFile: p.identityFile,
+  });
+  dropPending(o.owner, o.label);
+  o.stdout(
+    `paired: ${o.label} is ${p.user}@${p.host}:${p.port}, Studio ${answer.studio} on ${answer.platform}, host key pinned (${code}). studio doctor checks it end to end.\n`,
+  );
+  return 0;
 }

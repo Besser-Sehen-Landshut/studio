@@ -53,7 +53,7 @@ var require_identity = __commonJS({
     var NODE_TYPE = /* @__PURE__ */ Symbol.for("yaml.node.type");
     var isAlias2 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === ALIAS;
     var isDocument = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === DOC;
-    var isMap5 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === MAP;
+    var isMap6 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === MAP;
     var isPair = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === PAIR;
     var isScalar3 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === SCALAR;
     var isSeq3 = (node2) => !!node2 && typeof node2 === "object" && node2[NODE_TYPE] === SEQ;
@@ -89,7 +89,7 @@ var require_identity = __commonJS({
     exports.isAlias = isAlias2;
     exports.isCollection = isCollection;
     exports.isDocument = isDocument;
-    exports.isMap = isMap5;
+    exports.isMap = isMap6;
     exports.isNode = isNode;
     exports.isPair = isPair;
     exports.isScalar = isScalar3;
@@ -4201,9 +4201,9 @@ var require_resolve_flow_collection = __commonJS({
     var blockMsg = "Block collections are not allowed within flow collections";
     var isBlock = (token) => token && (token.type === "block-map" || token.type === "block-seq");
     function resolveFlowCollection({ composeNode, composeEmptyNode }, ctx, fc, onError, tag) {
-      const isMap5 = fc.start.source === "{";
-      const fcName = isMap5 ? "flow map" : "flow sequence";
-      const NodeClass = tag?.nodeClass ?? (isMap5 ? YAMLMap.YAMLMap : YAMLSeq.YAMLSeq);
+      const isMap6 = fc.start.source === "{";
+      const fcName = isMap6 ? "flow map" : "flow sequence";
+      const NodeClass = tag?.nodeClass ?? (isMap6 ? YAMLMap.YAMLMap : YAMLSeq.YAMLSeq);
       const coll = new NodeClass(ctx.schema);
       coll.flow = true;
       const atRoot = ctx.atRoot;
@@ -4239,7 +4239,7 @@ var require_resolve_flow_collection = __commonJS({
             offset = props.end;
             continue;
           }
-          if (!isMap5 && ctx.options.strict && utilContainsNewline.containsNewline(key))
+          if (!isMap6 && ctx.options.strict && utilContainsNewline.containsNewline(key))
             onError(
               key,
               // checked by containsNewline()
@@ -4279,7 +4279,7 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap5 && !sep9 && !props.found) {
+        if (!isMap6 && !sep9 && !props.found) {
           const valueNode = value2 ? composeNode(ctx, value2, props, onError) : composeEmptyNode(ctx, props.end, sep9, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
@@ -4302,7 +4302,7 @@ var require_resolve_flow_collection = __commonJS({
             startOnNewline: false
           });
           if (valueProps.found) {
-            if (!isMap5 && !props.found && ctx.options.strict) {
+            if (!isMap6 && !props.found && ctx.options.strict) {
               if (sep9)
                 for (const st of sep9) {
                   if (st === valueProps.found)
@@ -4334,7 +4334,7 @@ var require_resolve_flow_collection = __commonJS({
           const pair = new Pair.Pair(keyNode, valueNode);
           if (ctx.options.keepSourceTokens)
             pair.srcToken = collItem;
-          if (isMap5) {
+          if (isMap6) {
             const map2 = coll;
             if (utilMapIncludes.mapIncludes(ctx, map2.items, keyNode))
               onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
@@ -4350,7 +4350,7 @@ var require_resolve_flow_collection = __commonJS({
           offset = valueNode ? valueNode.range[2] : valueProps.end;
         }
       }
-      const expectedEnd = isMap5 ? "}" : "]";
+      const expectedEnd = isMap6 ? "}" : "]";
       const [ce, ...ee] = fc.end;
       let cePos = offset;
       if (ce?.source === expectedEnd)
@@ -7251,7 +7251,7 @@ var require_public_api = __commonJS({
         return docs;
       return Object.assign([], { empty: true }, composer$1.streamInfo());
     }
-    function parseDocument6(source, options = {}) {
+    function parseDocument7(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
       const parser$1 = new parser.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
@@ -7277,7 +7277,7 @@ var require_public_api = __commonJS({
       } else if (options === void 0 && reviver && typeof reviver === "object") {
         options = reviver;
       }
-      const doc = parseDocument6(src, options);
+      const doc = parseDocument7(src, options);
       if (!doc)
         return null;
       doc.warnings.forEach((warning) => log2.warn(doc.options.logLevel, warning));
@@ -7313,7 +7313,7 @@ var require_public_api = __commonJS({
     }
     exports.parse = parse4;
     exports.parseAllDocuments = parseAllDocuments2;
-    exports.parseDocument = parseDocument6;
+    exports.parseDocument = parseDocument7;
     exports.stringify = stringify3;
   }
 });
@@ -7846,9 +7846,9 @@ import { homedir as homedir16 } from "node:os";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
 
 // src/cli.ts
-import { existsSync as existsSync20, readFileSync as readFileSync56 } from "node:fs";
+import { existsSync as existsSync21, readFileSync as readFileSync58 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
-import { dirname as dirname18, join as join62, resolve as resolve14 } from "node:path";
+import { dirname as dirname20, join as join63, resolve as resolve14 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/acceptance.ts
@@ -38659,7 +38659,7 @@ async function installRea(o2) {
       `${JSON.stringify({ private: true, dependencies: { [REA_PACKAGE]: o2.version } }, null, 2)}
 `
     );
-    const install = await o2.npm.run(
+    const install2 = await o2.npm.run(
       [
         "install",
         "--save-exact",
@@ -38672,7 +38672,7 @@ async function installRea(o2) {
       staging,
       { timeoutMs: NPM_TIMEOUT_MS }
     );
-    if (install.code !== 0) throw new Error(`npm install failed (exit ${install.code})`);
+    if (install2.code !== 0) throw new Error(`npm install failed (exit ${install2.code})`);
     const locked = lockedPackage(staging);
     if (locked.version !== o2.version) throw new Error("npm installed another version");
     if (locked.resolved !== REGISTRY_TARBALL(o2.version)) {
@@ -41158,7 +41158,7 @@ function planRea(o2) {
   if (!below) fail4("is not below a research_roots entry of the owner config");
   const version2 = o2.ownerConfig.reaVersion ?? REA_DEFAULT_VERSION;
   const trust = o2.ownerConfig.research.trust;
-  const install = verifyReaInstall(
+  const install2 = verifyReaInstall(
     o2.ownerRoot,
     version2,
     o2.owner.uid ?? process.getuid?.(),
@@ -41166,7 +41166,7 @@ function planRea(o2) {
   );
   if (skillInstalled(o2.configDir, REA_SKILL) === false) {
     throw new Error(
-      `${o2.item.id}: the REA skill is not installed in ${o2.configDir}; ${reaSetupHint(o2.configDir, install.entry)}`
+      `${o2.item.id}: the REA skill is not installed in ${o2.configDir}; ${reaSetupHint(o2.configDir, install2.entry)}`
     );
   }
   return {
@@ -41177,7 +41177,7 @@ function planRea(o2) {
     classes: trust ? [...REA_CLASS_NAMES] : itemReaClasses(o2.stateRoot, o2.item.id),
     trust,
     env: { ...o2.ownerConfig.reaEnv },
-    entry: install.entry
+    entry: install2.entry
   };
 }
 var CREW_SKILL2 = "studio:studio-crew";
@@ -53515,8 +53515,8 @@ function readPushed(file4) {
   }
   try {
     const raw = JSON.parse(readFileSync37(file4, "utf8"));
-    const isMap5 = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((x) => typeof x === "string");
-    if (!isMap5(raw?.sent) || !isMap5(raw?.last)) return void 0;
+    const isMap6 = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((x) => typeof x === "string");
+    if (!isMap6(raw?.sent) || !isMap6(raw?.last)) return void 0;
     return {
       sent: Object.assign(/* @__PURE__ */ Object.create(null), raw.sent),
       last: Object.assign(/* @__PURE__ */ Object.create(null), raw.last)
@@ -59418,6 +59418,18 @@ var COMMANDS = [
     about: "On a relay worker: the runner a start hands its job to (Studio starts it, not you)"
   },
   {
+    usage: "relay pair <label> <host> [--port <n>] [--user <name>]",
+    about: "On the lead: make the lead's key for a relay worker and print the one pairing line"
+  },
+  {
+    usage: "relay pair <label> --connect [--code <code>]",
+    about: "On the lead: show the worker's host key code, pin it once confirmed, write workers.relay.<label>"
+  },
+  {
+    usage: "relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>]",
+    about: "On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead"
+  },
+  {
     usage: "relay setup [--lead-key <line>] [--home <dir>]",
     about: "Print the one-time PowerShell script of a Windows relay worker (run it elevated); --lead-key authorizes the lead"
   },
@@ -59949,9 +59961,10 @@ ${lines2.join("\n")}
 }
 
 // src/relay-command.ts
-import { existsSync as existsSync18 } from "node:fs";
-import { homedir as homedir13 } from "node:os";
-import { join as join59 } from "node:path";
+import { spawn as spawn6 } from "node:child_process";
+import { existsSync as existsSync19, mkdirSync as mkdirSync13, mkdtempSync as mkdtempSync4, readFileSync as readFileSync55, rmSync as rmSync13, writeFileSync as writeFileSync21 } from "node:fs";
+import { homedir as homedir13, tmpdir as tmpdir4 } from "node:os";
+import { dirname as dirname18, join as join60 } from "node:path";
 
 // src/relay-lead.ts
 import { existsSync as existsSync15, lstatSync as lstatSync43, readFileSync as readFileSync50, writeFileSync as writeFileSync17 } from "node:fs";
@@ -60043,6 +60056,8 @@ var helloAnswer = external_exports.strictObject({
   busy: ITEM_ID.nullable(),
   /** Why a start would be held now (busy, load, disk); the lead sends nothing then. */
   held: relayLine.nullable(),
+  /** The one-time codes of the pairings this worker took (`relay install --pair`). */
+  pairCodes: external_exports.array(external_exports.string().regex(/^[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$/)).max(20).default([]),
   warnings
 });
 var probeAnswer = external_exports.strictObject({
@@ -60695,7 +60710,7 @@ async function relayDoctor(o2) {
     if (hello.studio !== o2.studioVersion) {
       ok = false;
       lines2.push(
-        `${o2.label}: Studio ${hello.studio} there, ${o2.studioVersion} here: update the worker`
+        `${o2.label}: Studio ${hello.studio} there, ${o2.studioVersion} here; fix: update Studio on the worker, then run studio relay install there again`
       );
     }
     for (const p of o2.pins) {
@@ -60703,7 +60718,7 @@ async function relayDoctor(o2) {
       if (v !== p.version) {
         ok = false;
         lines2.push(
-          `${o2.label}: plugin ${p.name} is ${v ?? "missing"} there, pinned ${p.version}: run the script of studio relay setup there again`
+          `${o2.label}: plugin ${p.name} is ${v ?? "missing"} there, pinned ${p.version}; fix: run studio relay install on the worker again`
         );
       }
     }
@@ -60730,9 +60745,129 @@ async function relayDoctor(o2) {
       for (const w of probe.warnings) lines2.push(`${o2.label}: note: ${w}`);
     }
   } catch (e) {
-    return { ok: false, lines: [`${o2.label}: ${e.message}`] };
+    return {
+      ok: false,
+      lines: [
+        `${o2.label}: ${e.message}; fix: check that the worker is on and sshd runs there; if it was set up anew, studio relay pair ${o2.label} <host> again`
+      ]
+    };
   }
   return { ok, lines: lines2 };
+}
+
+// src/relay-pair.ts
+var import_yaml17 = __toESM(require_dist(), 1);
+import { createHash as createHash8, randomInt } from "node:crypto";
+import { existsSync as existsSync16, mkdirSync as mkdirSync12, readFileSync as readFileSync51, renameSync as renameSync15, rmSync as rmSync11, writeFileSync as writeFileSync18 } from "node:fs";
+import { dirname as dirname15, join as join54 } from "node:path";
+var ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+var PAIR_CODE_RE = /^[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$/;
+var PAIR_PREFIX = "studio-pair-1";
+function newPairCode() {
+  const c3 = Array.from({ length: 8 }, () => ALPHABET[randomInt(ALPHABET.length)]).join("");
+  return `${c3.slice(0, 4)}-${c3.slice(4)}`;
+}
+function hostKeyCode(key) {
+  const blob = Buffer.from(key.trim().split(/\s+/)[1] ?? "", "base64");
+  const digest3 = createHash8("sha256").update(blob).digest();
+  let out = "";
+  for (let i2 = 0; i2 < 8; i2++) out += ALPHABET[digest3[i2] % ALPHABET.length];
+  return `${out.slice(0, 4)}-${out.slice(4)}`;
+}
+function renderPairLine(p) {
+  return `${PAIR_PREFIX} ${p.label} ${p.code} ${p.key}`;
+}
+function parsePairLine(line4) {
+  const parts = line4.trim().split(/\s+/);
+  const [prefix, label, code, type, blob] = parts;
+  if (parts.length !== 5 || prefix !== PAIR_PREFIX || label === void 0 || !WORKER_LABEL_RE.test(label) || code === void 0 || !PAIR_CODE_RE.test(code) || !RELAY_HOST_KEY_RE.test(`${type} ${blob}`)) {
+    throw new Error(
+      "not a pairing line: studio relay pair <label> <host> on the lead prints it (studio-pair-1 <label> <code> <key>)"
+    );
+  }
+  return { label, code, key: `${type} ${blob}` };
+}
+var leadKeyFile = (owner, label) => join54(ownerConfigDir(owner), "relay", `${label}_ed25519`);
+var pendingFile = (owner, label) => join54(ownerStateRootFor(owner), "relay", `pair-${label}.json`);
+function writePending(owner, p) {
+  const root = ownerStateRootFor(owner);
+  ensureStateDir(root, join54(root, "relay"));
+  writeStateFile(root, pendingFile(owner, p.label), `${JSON.stringify(p, null, 2)}
+`);
+}
+function readPending(owner, label) {
+  const f3 = pendingFile(owner, label);
+  if (!existsSync16(f3)) return void 0;
+  const p = JSON.parse(readFileSync51(f3, "utf8"));
+  if (p.label !== label || !RELAY_HOST_RE.test(p.host) || !PAIR_CODE_RE.test(p.code) || !Number.isInteger(p.port)) {
+    throw new Error(
+      `${f3} has an unknown shape; start again with studio relay pair ${label} <host>`
+    );
+  }
+  return p;
+}
+var dropPending = (owner, label) => rmSync11(pendingFile(owner, label), { force: true });
+function keyscanKey(stdout) {
+  for (const line4 of stdout.split("\n")) {
+    if (line4.startsWith("#")) continue;
+    const [, type, blob] = line4.trim().split(/\s+/);
+    const key = `${type} ${blob}`;
+    if (type === "ssh-ed25519" && RELAY_HOST_KEY_RE.test(key)) return key;
+  }
+  return void 0;
+}
+function writeRelayTarget(owner, label, t) {
+  const file4 = ownerConfigFile(owner);
+  let text = "";
+  try {
+    text = readFileSync51(file4, "utf8");
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+  const doc = (0, import_yaml17.parseDocument)(text === "" ? "{}" : text);
+  if (doc.errors.length > 0) throw new Error(`${file4}: invalid YAML; nothing changed`);
+  if (!(0, import_yaml17.isMap)(doc.contents)) throw new Error(`${file4}: not a map; nothing changed`);
+  doc.setIn(["workers", "relay", label], {
+    host: t.host,
+    user: t.user,
+    port: t.port,
+    host_key: t.hostKey,
+    identity_file: t.identityFile
+  });
+  mkdirSync12(dirname15(file4), { recursive: true, mode: 448 });
+  const tmp = `${file4}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync18(tmp, doc.toString(), { mode: 384, flag: "wx" });
+    renameSync15(tmp, file4);
+  } catch (e) {
+    rmSync11(tmp, { force: true });
+    throw e;
+  }
+  try {
+    loadOwnerConfig(owner);
+  } catch (e) {
+    if (text === "") rmSync11(file4, { force: true });
+    else writeFileSync18(file4, text, { mode: 384 });
+    throw e;
+  }
+}
+var pairingsFile = (home) => join54(home, "pairings.json");
+function readPairings(home) {
+  try {
+    const raw = JSON.parse(readFileSync51(pairingsFile(home), "utf8"));
+    return Object.fromEntries(
+      Object.entries(raw).filter(
+        (e) => WORKER_LABEL_RE.test(e[0]) && typeof e[1] === "string" && PAIR_CODE_RE.test(e[1])
+      )
+    );
+  } catch {
+    return {};
+  }
+}
+function writePairing(home, label, code) {
+  const all = { ...readPairings(home), [label]: code };
+  writeFileSync18(pairingsFile(home), `${JSON.stringify(all, null, 2)}
+`);
 }
 
 // src/relay-serve.ts
@@ -60740,34 +60875,34 @@ import { spawn as spawn5 } from "node:child_process";
 import { randomBytes as randomBytes12 } from "node:crypto";
 import {
   closeSync as closeSync9,
-  existsSync as existsSync17,
+  existsSync as existsSync18,
   lstatSync as lstatSync45,
   openSync as openSync9,
   readdirSync as readdirSync18,
-  readFileSync as readFileSync52,
+  readFileSync as readFileSync53,
   statfsSync,
-  writeFileSync as writeFileSync18
+  writeFileSync as writeFileSync19
 } from "node:fs";
 import { cpus, homedir as homedir12 } from "node:os";
-import { dirname as dirname16, join as join55, resolve as resolve12 } from "node:path";
+import { dirname as dirname17, join as join56, resolve as resolve12 } from "node:path";
 import { fileURLToPath as fileURLToPath7, pathToFileURL } from "node:url";
 
 // src/worker.ts
-import { existsSync as existsSync16, lstatSync as lstatSync44, readdirSync as readdirSync17, readFileSync as readFileSync51 } from "node:fs";
+import { existsSync as existsSync17, lstatSync as lstatSync44, readdirSync as readdirSync17, readFileSync as readFileSync52 } from "node:fs";
 import { homedir as homedir11 } from "node:os";
-import { dirname as dirname15, join as join54 } from "node:path";
+import { dirname as dirname16, join as join55 } from "node:path";
 var WORKER_FILE = "worker.json";
 var WORKER_LOCK = "worker.lock";
 var WORKER_LOCK_STALE_MS = 3 * 60 * 6e4;
 var MAX_OWN_BEATS = 20;
 function readWorkerState(stateRoot, label) {
-  const file4 = join54(stateRoot, WORKER_FILE);
+  const file4 = join55(stateRoot, WORKER_FILE);
   assertStatePath(stateRoot, file4);
-  if (!existsSync16(file4)) return { label };
+  if (!existsSync17(file4)) return { label };
   if (!lstatSync44(file4).isFile()) throw new Error(`${file4} is not a plain file`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync51(file4, "utf8"));
+    raw = JSON.parse(readFileSync52(file4, "utf8"));
   } catch {
     throw new Error(`${file4} is not valid JSON; inspect it before the worker goes on`);
   }
@@ -60805,7 +60940,7 @@ function saveWorkerState(stateRoot, s) {
       if (v !== void 0) out[k] = v;
     } else if (s[k] === void 0) delete out[k];
   }
-  writeStateFile(stateRoot, join54(stateRoot, WORKER_FILE), `${JSON.stringify(out, null, 2)}
+  writeStateFile(stateRoot, join55(stateRoot, WORKER_FILE), `${JSON.stringify(out, null, 2)}
 `);
 }
 async function mainConfig(c3) {
@@ -60825,11 +60960,11 @@ async function pinnedMain2(project, ports) {
 }
 var CONTENT_PATH = /^\.studio\/(roles|solutions)\/[A-Za-z0-9._-]{1,100}\.md$/;
 async function pinnedContent(c3, stateRoot, sha) {
-  const base2 = join54(stateRoot, "pinned");
-  const dir = join54(base2, sha);
-  if (existsSync16(join54(dir, ".complete"))) return dir;
+  const base2 = join55(stateRoot, "pinned");
+  const dir = join55(base2, sha);
+  if (existsSync17(join55(dir, ".complete"))) return dir;
   ensureStateDir(stateRoot, base2);
-  for (const old of readdirSync17(base2)) removeStateEntry(stateRoot, join54(base2, old));
+  for (const old of readdirSync17(base2)) removeStateEntry(stateRoot, join55(base2, old));
   const g3 = (args) => c3.ports.git.run(c3.project, ["--no-replace-objects", ...args]);
   const tree = await g3(["ls-tree", "-r", sha, "--", ".studio/roles", ".studio/solutions"]);
   ensureStateDir(stateRoot, dir);
@@ -60838,20 +60973,20 @@ async function pinnedContent(c3, stateRoot, sha) {
     const m = /^100644 blob ([0-9a-f]{40})\t(.+)$/.exec(line4);
     if (!m || !CONTENT_PATH.test(m[2]) || n4++ >= 500) continue;
     const text = await g3(["cat-file", "blob", m[1]]);
-    const file4 = join54(dir, m[2]);
-    ensureStateDir(stateRoot, dirname15(file4));
+    const file4 = join55(dir, m[2]);
+    ensureStateDir(stateRoot, dirname16(file4));
     writeStateFile(stateRoot, file4, `${text}
 `);
   }
-  writeStateFile(stateRoot, join54(dir, ".complete"), `${sha}
+  writeStateFile(stateRoot, join55(dir, ".complete"), `${sha}
 `);
   return dir;
 }
 function crewConfigDir2(owner) {
   const env = owner.env ?? process.env;
   const stored = crewClaudeDir(owner);
-  if (existsSync16(stored)) return stored;
-  return env.CLAUDE_CONFIG_DIR || join54(owner.homedir ?? homedir11(), ".claude");
+  if (existsSync17(stored)) return stored;
+  return env.CLAUDE_CONFIG_DIR || join55(owner.homedir ?? homedir11(), ".claude");
 }
 function strictPinProblem(configDir, pins) {
   const have = installedVersions(configDir);
@@ -60893,7 +61028,7 @@ async function readiness(c3, stateRoot) {
       line: "this machine's GitHub token is the lead's own identity; a worker needs a token of its own, so its claims and pull requests can be told apart"
     };
   }
-  const stateBase = dirname15(stateRoot);
+  const stateBase = dirname16(stateRoot);
   const deny = enforceDeny({
     deny: mergeDeny(config2.workers?.[c3.label]?.deny, self.deny),
     platform: platform2,
@@ -60925,7 +61060,7 @@ async function readiness(c3, stateRoot) {
   if (slots.slots <= 0) {
     return { ok: false, kind: "held", line: "credential limit: no label of this machine has room" };
   }
-  if (existsSync16(ownerRoot) && inspectStateLock(ownerRoot, LAUNCH_LOCK, {
+  if (existsSync17(ownerRoot) && inspectStateLock(ownerRoot, LAUNCH_LOCK, {
     now: c3.ports.clock.now(),
     heartbeatStaleMs: LAUNCH_LOCK_STALE_MS
   }).state === "held") {
@@ -61344,7 +61479,7 @@ async function finish(c3, stateRoot, state, held2, repo, rec, touch) {
   try {
     const fileName = reportName(stateRoot, id);
     if (fileName === void 0) throw new ReportError("no report name was drawn for this run");
-    text = readReportText(join54(stateRoot, "clones", id), id, {
+    text = readReportText(join55(stateRoot, "clones", id), id, {
       notBefore: new Date(rec.startedAt),
       fileName
     });
@@ -61454,8 +61589,8 @@ async function openPullRequest(c3, item, report) {
 async function pushForCrew(c3, stateRoot, item, head) {
   const id = item.id;
   const branch = `refs/heads/studio/${id}`;
-  const parent = join54(stateRoot, "push");
-  const dir = join54(parent, id);
+  const parent = join55(stateRoot, "push");
+  const dir = join55(parent, id);
   ensureStateDir(stateRoot, parent);
   removeStateEntry(stateRoot, dir);
   const timeoutMs = 6e5;
@@ -61477,7 +61612,7 @@ async function pushForCrew(c3, stateRoot, item, head) {
       "-q",
       "--no-tags",
       "--no-write-fetch-head",
-      join54(stateRoot, "clones", id),
+      join55(stateRoot, "clones", id),
       `+${branch}:${branch}`
     ]);
     const got = (await git2(dir, ["--no-replace-objects", "rev-parse", "--verify", `${branch}^{commit}`])).trim();
@@ -61525,7 +61660,7 @@ function noteLimitOrBlock(c3, stateRoot, id, from, label = "default") {
 }
 
 // src/relay-serve.ts
-var relayRoot = (owner) => join55(stateBaseFor(owner), "relay");
+var relayRoot = (owner) => join56(stateBaseFor(owner), "relay");
 var RELAY_LOCK2 = "relay.lock";
 var RELAY_LOCK_STALE_MS = 10 * 6e4;
 var HANDOFF_MS = 6e4;
@@ -61545,40 +61680,40 @@ async function withRelayLock(c3, fn) {
   }
   throw new HeldError("another relay request is in progress on this machine; try again");
 }
-var jobFile = (root, id) => join55(root, "jobs", `${id}.json`);
+var jobFile = (root, id) => join56(root, "jobs", `${id}.json`);
 function readJob(owner, id) {
   const root = relayRoot(owner);
   const f3 = jobFile(root, id);
   assertStatePath(root, f3);
-  if (!existsSync17(f3)) return void 0;
+  if (!existsSync18(f3)) return void 0;
   if (!lstatSync45(f3).isFile()) throw new Error(`${f3} is not a plain file`);
-  return JSON.parse(readFileSync52(f3, "utf8"));
+  return JSON.parse(readFileSync53(f3, "utf8"));
 }
 function writeJob(owner, job) {
   const root = relayRoot(owner);
-  ensureStateDir(root, join55(root, "jobs"));
+  ensureStateDir(root, join56(root, "jobs"));
   writeStateFile(root, jobFile(root, job.id), `${JSON.stringify(job, null, 2)}
 `);
 }
 function allJobs(owner) {
-  const dir = join55(relayRoot(owner), "jobs");
-  if (!existsSync17(dir)) return [];
+  const dir = join56(relayRoot(owner), "jobs");
+  if (!existsSync18(dir)) return [];
   return readdirSync18(dir).filter((f3) => /^[A-Z]+-\d+\.json$/.test(f3)).flatMap((f3) => {
     const j = readJob(owner, f3.slice(0, -5));
     return j === void 0 ? [] : [j];
   });
 }
 var repoSlug = (repo) => repo.replace("/", "--");
-var mirrorDir = (owner, repo) => join55(relayRoot(owner), "mirrors", `${repoSlug(repo)}.git`);
-var projectDir = (owner, repo) => join55(relayRoot(owner), "projects", repoSlug(repo));
+var mirrorDir = (owner, repo) => join56(relayRoot(owner), "mirrors", `${repoSlug(repo)}.git`);
+var projectDir = (owner, repo) => join56(relayRoot(owner), "projects", repoSlug(repo));
 function serveSettings(owner) {
   return loadOwnerConfig(owner).workers?.serve ?? relayServeSchema.parse({});
 }
 function crewConfigDir3(owner) {
   const stored = crewClaudeDir(owner);
-  if (existsSync17(stored)) return stored;
+  if (existsSync18(stored)) return stored;
   const env = owner.env ?? process.env;
-  return env.CLAUDE_CONFIG_DIR || join55(owner.homedir ?? homedir12(), ".claude");
+  return env.CLAUDE_CONFIG_DIR || join56(owner.homedir ?? homedir12(), ".claude");
 }
 function storedCredentialProblem(owner) {
   const found = [];
@@ -61707,16 +61842,16 @@ var crewPorts = (c3) => c3.windows === void 0 ? c3.ports : { ...c3.ports, claude
 var git = (c3, cwd, args, timeoutMs = 6e5) => c3.ports.git.run(cwd, args, { timeoutMs });
 async function takeBundle(c3, job, bundle) {
   const root = relayRoot(c3.owner);
-  const inbox = ensureStateDir(root, join55(root, "in"));
-  const file4 = join55(inbox, `${job.id}.bundle`);
+  const inbox = ensureStateDir(root, join56(root, "in"));
+  const file4 = join56(inbox, `${job.id}.bundle`);
   writeStateFile(root, file4, "");
-  writeFileSync18(file4, bundle);
+  writeFileSync19(file4, bundle);
   try {
     const mirror = mirrorDir(c3.owner, job.repo);
-    if (!existsSync17(join55(mirror, "HEAD"))) {
-      ensureStateDir(root, dirname16(mirror));
+    if (!existsSync18(join56(mirror, "HEAD"))) {
+      ensureStateDir(root, dirname17(mirror));
       removeStateEntry(root, mirror);
-      await git(c3, dirname16(mirror), ["init", "-q", "--bare", "--template=", mirror]);
+      await git(c3, dirname17(mirror), ["init", "-q", "--bare", "--template=", mirror]);
     }
     const heads = (await git(c3, mirror, ["bundle", "list-heads", file4])).split("\n").filter((l) => l.trim() !== "");
     const want = /* @__PURE__ */ new Map([["refs/heads/main", job.sha]]);
@@ -61739,10 +61874,10 @@ async function takeBundle(c3, job, bundle) {
     }
     const project = projectDir(c3.owner, job.repo);
     const url2 = pathToFileURL(mirror).href;
-    if (!existsSync17(join55(project, ".git"))) {
-      ensureStateDir(root, dirname16(project));
+    if (!existsSync18(join56(project, ".git"))) {
+      ensureStateDir(root, dirname17(project));
       removeStateEntry(root, project);
-      await git(c3, dirname16(project), ["clone", "-q", "--no-checkout", url2, project]);
+      await git(c3, dirname17(project), ["clone", "-q", "--no-checkout", url2, project]);
     } else {
       await git(c3, project, [
         "fetch",
@@ -61825,6 +61960,7 @@ async function serveRelay(c3, input2, out) {
           plugins: have === void 0 ? null : Object.fromEntries(have),
           busy: busy2?.id ?? null,
           held: held2 ?? null,
+          pairCodes: c3.home === void 0 ? [] : Object.values(readPairings(c3.home)).slice(0, 20),
           warnings: stored === void 0 ? [] : [stored]
         });
       }
@@ -61897,7 +62033,7 @@ async function start(c3, job, bundle, out) {
   });
   if ("refused" in prepared) return fail3(out, "refused", prepared.refused);
   const root = relayRoot(c3.owner);
-  const log2 = join55(ensureStateDir(root, join55(root, "logs")), `${job.id}.runner.log`);
+  const log2 = join56(ensureStateDir(root, join56(root, "logs")), `${job.id}.runner.log`);
   const spec = JSON.stringify({ nonce, job });
   const { pid } = await c3.spawnRunner({ id: job.id, spec, log: log2 });
   writeJob(c3.owner, { ...readJob(c3.owner, job.id), runnerPid: pid });
@@ -61966,7 +62102,7 @@ async function runRelayJob(c3, id, specText) {
       CLAUDE_CODE_OAUTH_TOKEN: job.token
     };
     const configDir = crewClaudeDir(c3.owner);
-    if (existsSync17(configDir)) env.CLAUDE_CONFIG_DIR = configDir;
+    if (existsSync18(configDir)) env.CLAUDE_CONFIG_DIR = configDir;
     const ports = windows === void 0 ? c3.ports : { ...c3.ports, claude: windows.claude };
     await launchCrew(
       project,
@@ -62035,7 +62171,7 @@ async function collect2(c3, id, out) {
     const fileName = reportName(stateRoot, id);
     if (fileName === void 0 || crew === void 0)
       throw new Error("no report name was drawn for this run");
-    text = readReportText(join55(stateRoot, "clones", id), id, {
+    text = readReportText(join56(stateRoot, "clones", id), id, {
       notBefore: new Date(crew.startedAt),
       fileName
     });
@@ -62059,13 +62195,13 @@ async function collect2(c3, id, out) {
   }
   const head = report.headSha.toLowerCase();
   const root = relayRoot(c3.owner);
-  const dir = join55(ensureStateDir(root, join55(root, "out")), id);
+  const dir = join56(ensureStateDir(root, join56(root, "out")), id);
   removeStateEntry(root, dir);
   const branch = `refs/heads/studio/${id}`;
   try {
-    await git(c3, dirname16(dir), ["init", "-q", "--bare", "--template=", dir]);
-    const mirrorObjects = join55(mirrorDir(c3.owner, j.repo), "objects");
-    writeStateFile(root, join55(dir, "objects", "info", "alternates"), `${mirrorObjects}
+    await git(c3, dirname17(dir), ["init", "-q", "--bare", "--template=", dir]);
+    const mirrorObjects = join56(mirrorDir(c3.owner, j.repo), "objects");
+    writeStateFile(root, join56(dir, "objects", "info", "alternates"), `${mirrorObjects}
 `);
     await git(c3, dir, [
       "-c",
@@ -62074,7 +62210,7 @@ async function collect2(c3, id, out) {
       "-q",
       "--no-tags",
       "--no-write-fetch-head",
-      join55(stateRoot, "clones", id),
+      join56(stateRoot, "clones", id),
       `+${branch}:${branch}`
     ]);
     const got = (await git(c3, dir, ["--no-replace-objects", "rev-parse", "--verify", `${branch}^{commit}`])).trim();
@@ -62087,7 +62223,7 @@ async function collect2(c3, id, out) {
         problem: "the branch in the clone differs from the report"
       });
     }
-    const file4 = join55(dir, "result.bundle");
+    const file4 = join56(dir, "result.bundle");
     const negative = [`^${j.sha}`, ...j.fromSha === void 0 ? [] : [`^${j.fromSha}`]];
     try {
       await git(c3, dir, ["bundle", "create", "-q", file4, branch, ...negative]);
@@ -62100,7 +62236,7 @@ async function collect2(c3, id, out) {
         problem: "the crew committed nothing on top of the pinned commit"
       });
     }
-    const bytes = readFileSync52(file4);
+    const bytes = readFileSync53(file4);
     if (bytes.length > MAX_RESULT_BUNDLE_BYTES) {
       return answer(out, {
         ...base2,
@@ -62137,11 +62273,11 @@ async function cleanup(c3, id) {
   const project = projectDir(c3.owner, j.repo);
   const stateRoot = stateRootFor(project, c3.owner);
   for (const sub of ["clones", "homes", "tmp"])
-    removeStateEntry(stateRoot, join55(stateRoot, sub, id));
+    removeStateEntry(stateRoot, join56(stateRoot, sub, id));
   const root = relayRoot(c3.owner);
   removeStateEntry(root, jobFile(root, id));
 }
-var STUDIO_BIN = resolve12(dirname16(fileURLToPath7(import.meta.url)), "..", "bin", "studio");
+var STUDIO_BIN = resolve12(dirname17(fileURLToPath7(import.meta.url)), "..", "bin", "studio");
 function relayHandoffScript(o2) {
   if (!/^[A-Z]+-\d+$/.test(o2.id)) throw new Error("not an item id");
   const q = (s) => {
@@ -62267,12 +62403,12 @@ async function readSpecFromPipe(name) {
 }
 
 // src/relay-windows.ts
-import { join as join56 } from "node:path";
-var relayHomeDefault = (env) => join56(env.ProgramData ?? env.PROGRAMDATA ?? "C:\\ProgramData", "Studio", "relay");
-var machineCredFile = (home) => join56(home, "crew-credential.bin");
-var brokerScriptFile = (home) => join56(home, "broker", "sweep.ps1");
-var brokerResultFile = (home) => join56(home, "broker", "sweep.json");
-var authorizedKeysFile = (home) => join56(home, "authorized_keys");
+import { join as join57 } from "node:path";
+var relayHomeDefault = (env) => join57(env.ProgramData ?? env.PROGRAMDATA ?? "C:\\ProgramData", "Studio", "relay");
+var machineCredFile = (home) => join57(home, "crew-credential.bin");
+var brokerScriptFile = (home) => join57(home, "broker", "sweep.ps1");
+var brokerResultFile = (home) => join57(home, "broker", "sweep.json");
+var authorizedKeysFile = (home) => join57(home, "authorized_keys");
 var forcedCommand = (node2, studioBin, home) => `"${node2}" "${studioBin}" relay serve --home "${home}"`;
 function sshdMatchBlock(o2) {
   const keys2 = authorizedKeysFile(o2.home).replace(/\\/g, "/");
@@ -62423,7 +62559,8 @@ function relaySetupScript(o2) {
   const list2 = (ps) => `@(${ps.map(psQuote).join(", ")})`;
   const keyLine = o2.leadKey === void 0 ? void 0 : authorizedKeyLine({ key: o2.leadKey, command: o2.command });
   const block = sshdMatchBlock({ relayUser: o2.relayUser, home: o2.home, command: o2.command });
-  return `#Requires -RunAsAdministrator
+  const tag = o2.leadKey?.trim().split(/\s+/)[2];
+  return `${o2.install === void 0 ? "" : installHead()}#Requires -RunAsAdministrator
 # Studio: the one-time setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
 # Nothing here leaves this machine.
@@ -62524,21 +62661,78 @@ foreach ($p in ${list2(o2.readPaths)}) {
 # The pinned plugins in the crew Claude config dir of the relay home.
 ${o2.pluginSetup}
 ${keyLine === void 0 ? '# No lead key given: run studio relay setup --lead-key "<public key line>" to authorize one.' : `$keys = ${psQuote(authorizedKeysFile(o2.home))}
-Set-Content -LiteralPath $keys -Encoding ASCII -Value ${psQuote(keyLine)}
+# One line per lead key, told apart by its comment: a key paired again replaces its own line only.
+$keep = @()
+${tag === void 0 ? "" : `if (Test-Path -LiteralPath $keys) { $keep = @(Get-Content -LiteralPath $keys | Where-Object { $_ -and -not $_.EndsWith(' ' + ${psQuote(tag)}) }) }`}
+Set-Content -LiteralPath $keys -Encoding ASCII -Value (@($keep) + ${psQuote(keyLine)})
 icacls $keys /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /Q | Out-Null`}
-Write-Output 'Add this block at the end of sshd_config (C:\\ProgramData\\ssh\\sshd_config), then Restart-Service sshd:'
+${o2.install === void 0 ? setupTail(block) : installTail(block, o2.install)}`;
+}
+var setupTail = (block) => `Write-Output 'Add this block at the end of sshd_config (C:\\ProgramData\\ssh\\sshd_config), then Restart-Service sshd:'
 Write-Output @'
 ${block}'@
 Write-Output 'Host key to pin on the lead (workers.relay.<label>.host_key):'
 Get-Content -LiteralPath (Join-Path $env:ProgramData 'ssh\\ssh_host_ed25519_key.pub') | ForEach-Object { ($_ -split ' ')[0..1] -join ' ' }
 Write-Output "Studio relay worker is ready: relay account $relay, crew user $crew."
 `;
+var installHead = () => `#Requires -RunAsAdministrator
+$ErrorActionPreference = 'Stop'
+function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
+function Need([string]$what, [scriptblock]$have, [string]$id) {
+  if (& $have) { Write-Output "ok: $what"; return }
+  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "$what is missing and winget is not there to install it; install $what by hand" }
+  Write-Output "installing: $what (winget $id)"
+  winget install --id $id --exact --silent --scope machine --accept-package-agreements --accept-source-agreements | Out-Null
+  Fresh
+  if (-not (& $have)) { throw "$what is still missing after winget install $id; install it by hand" }
+}
+Write-Output "ok: Node.js $(node --version)"
+Need 'Git' { Get-Command git -ErrorAction SilentlyContinue } 'Git.Git'
+Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
+$ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
+if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
+if ($ssh.State -ne 'Installed') { Write-Output 'installing: OpenSSH server'; Add-WindowsCapability -Online -Name $ssh.Name | Out-Null } else { Write-Output 'ok: OpenSSH server' }
+Set-Service -Name sshd -StartupType Automatic
+Start-Service sshd
+`;
+function installTail(block, i2) {
+  if (!Number.isInteger(i2.port) || i2.port < 1 || i2.port > 65535) throw new Error("not a port");
+  const scope = "tailscale" in i2.scope ? `$ts = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like '*Tailscale*' -or $_.Name -like 'Tailscale*' } | Select-Object -First 1
+if ($null -eq $ts) { throw 'no Tailscale interface here: run studio relay install --interface <name> or --source <range>' }
+$scope = @{ InterfaceAlias = $ts.Name }
+$where = 'the Tailscale interface ' + $ts.Name` : "interface" in i2.scope ? `$scope = @{ InterfaceAlias = ${psQuote(i2.scope.interface)} }
+$where = 'the interface ' + ${psQuote(i2.scope.interface)}` : `$scope = @{ RemoteAddress = ${psQuote(i2.scope.source)} }
+$where = 'the source ' + ${psQuote(i2.scope.source)}`;
+  return `$conf = Join-Path $env:ProgramData 'ssh\\sshd_config'
+for ($k = 0; $k -lt 20 -and -not (Test-Path -LiteralPath $conf); $k++) { Start-Sleep -Milliseconds 500 }
+$before = Get-Content -LiteralPath $conf -Raw
+$clean = [regex]::Replace($before, '(?s)\\r?\\n?# studio relay begin.*?# studio relay end\\r?\\n?', [Environment]::NewLine)
+$ours = @'
+# studio relay begin
+${block}# studio relay end
+'@
+Set-Content -LiteralPath $conf -Encoding ASCII -Value ($clean.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $ours)
+& (Join-Path $env:SystemRoot 'System32\\OpenSSH\\sshd.exe') -t
+if ($LASTEXITCODE -ne 0) {
+  Set-Content -LiteralPath $conf -Encoding ASCII -Value $before -NoNewline
+  throw 'sshd does not accept the new sshd_config; it was put back as it was'
+}
+Restart-Service sshd
+${scope}
+$rule = 'Studio relay: sshd'
+Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+New-NetFirewallRule -DisplayName $rule -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${i2.port} @scope | Out-Null
+Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Disable-NetFirewallRule
+Write-Output "ok: relay account $relay, crew user $crew, broker task $task"
+Write-Output "ok: sshd forces studio relay serve for $relay; port ${i2.port} only from $where"
+Write-Output 'ok: WebClient stopped and disabled'
+`;
 }
 
 // src/relay-windows-check.ts
-import { readFileSync as readFileSync53 } from "node:fs";
+import { readFileSync as readFileSync54 } from "node:fs";
 import { networkInterfaces as networkInterfaces2 } from "node:os";
-import { join as join57 } from "node:path";
+import { join as join58 } from "node:path";
 
 // src/relay-hosts.ts
 import { networkInterfaces } from "node:os";
@@ -62731,7 +62925,7 @@ function relayWindows(o2) {
       result: brokerResultFile(o2.home),
       readFile: (f3) => {
         try {
-          return readFileSync53(f3, "utf8");
+          return readFileSync54(f3, "utf8");
         } catch {
           return void 0;
         }
@@ -62818,7 +63012,7 @@ function relayWindows(o2) {
       ];
       const proxy = await o2.startProxy([...CLAUDE_HOSTS]);
       try {
-        const tmp = join57(o2.stateRoot, "tmp");
+        const tmp = join58(o2.stateRoot, "tmp");
         const r = await probeWindowsResults({
           stateRoot: o2.stateRoot,
           credFile,
@@ -62874,9 +63068,9 @@ function relayWindows(o2) {
 import { randomBytes as randomBytes13 } from "node:crypto";
 
 // src/worker-hub.ts
-import { mkdtempSync as mkdtempSync3, rmSync as rmSync11, writeFileSync as writeFileSync19 } from "node:fs";
+import { mkdtempSync as mkdtempSync3, rmSync as rmSync12, writeFileSync as writeFileSync20 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { join as join58 } from "node:path";
+import { join as join59 } from "node:path";
 var OFFER_LABEL = "studio-offer";
 var CLAIM_PREFIX = "refs/studio/claims/";
 var TIMEOUT_MS = 6e4;
@@ -62907,13 +63101,13 @@ function ghTransport(gh, token) {
       let r;
       if (body === void 0) r = await run2([]);
       else {
-        const dir = mkdtempSync3(join58(tmpdir3(), "studio-hub-"));
+        const dir = mkdtempSync3(join59(tmpdir3(), "studio-hub-"));
         try {
-          const file4 = join58(dir, "body.json");
-          writeFileSync19(file4, JSON.stringify(body), { mode: 384 });
+          const file4 = join59(dir, "body.json");
+          writeFileSync20(file4, JSON.stringify(body), { mode: 384 });
           r = await run2(["--input", file4]);
         } finally {
-          rmSync11(dir, { recursive: true, force: true });
+          rmSync12(dir, { recursive: true, force: true });
         }
       }
       if (r.code !== 0) return { status: httpStatus(r.stderr) ?? 0, json: null };
@@ -63741,7 +63935,7 @@ async function followRelayItem(d, config2, item, o2) {
   }
   const transport = d.transport(label);
   const now = d.ports.clock.now();
-  if (existsSync18(relayReportFile(d.stateRoot, item.id))) return { kind: "collect" };
+  if (existsSync19(relayReportFile(d.stateRoot, item.id))) return { kind: "collect" };
   const f3 = await followRelay({
     transport,
     stateRoot: d.stateRoot,
@@ -63919,8 +64113,8 @@ function relayOwner(owner, home) {
     ...owner,
     env: {
       ...owner.env ?? {},
-      XDG_CONFIG_HOME: join59(home, "config"),
-      XDG_STATE_HOME: join59(home, "state")
+      XDG_CONFIG_HOME: join60(home, "config"),
+      XDG_STATE_HOME: join60(home, "state")
     }
   };
 }
@@ -63938,6 +64132,7 @@ function relayContext(o2) {
     platform: platform2,
     spawnRunner: o2.spawnRunner ?? systemSpawnRunner({ home: o2.home, platform: platform2().platform }),
     load: o2.load ?? (() => systemLoad(root)),
+    ...o2.home === void 0 ? {} : { home: o2.home },
     log: o2.log,
     ...native ? {
       windows: relayWindows({
@@ -63989,48 +64184,293 @@ async function runRelayCommand(o2) {
 `);
     return state === "refused" ? 1 : 0;
   }
-  if (sub === "setup" && args.length === 0) {
-    const owner = relayOwner(o2.owner, o2.values.home);
+  if ((sub === "setup" || sub === "install") && args.length === 0) {
     const home = o2.values.home ?? relayHomeDefault(o2.env);
-    const settings = serveSettings(relayOwner(o2.owner, home));
-    const relayUser = "studio-relay";
-    const command = forcedCommand(process.execPath, STUDIO_BIN, home);
-    const pluginEnv2 = `$env:XDG_CONFIG_HOME = '${join59(home, "config").replace(/'/g, "''")}'; $env:XDG_STATE_HOME = '${join59(home, "state").replace(/'/g, "''")}'`;
-    o2.stdout(
-      relaySetupScript({
-        relayUser,
-        crewUser: settings.windows?.crewUser ?? "studio-crew",
-        home,
-        task: settings.windows?.broker ?? "Studio relay broker",
-        readPaths: setupReadPaths({
-          node: process.execPath,
-          claude: findClaude(o2.env.PATH ?? o2.env.Path),
-          toolchains: loadOwnerConfig(owner).crewToolchainPaths,
-          crewConfigDir: crewClaudeDir(relayOwner(o2.owner, home))
-        }),
-        command,
-        ...o2.values["lead-key"] === void 0 ? {} : { leadKey: o2.values["lead-key"] },
-        pluginSetup: `${pluginEnv2}; & '${process.execPath.replace(/'/g, "''")}' '${STUDIO_BIN.replace(/'/g, "''")}' account setup-plugins`
-      })
-    );
-    return 0;
+    const relayUser = o2.values.user ?? "studio-relay";
+    if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(relayUser)) {
+      throw new Error("--user: a local user name of at most 20 characters");
+    }
+    const pair = o2.values.pair === void 0 ? void 0 : parsePairLine(o2.values.pair);
+    const leadKey = pair !== void 0 ? `${pair.key} studio-relay-${pair.label}` : o2.values["lead-key"];
+    const script = (install2) => setupScriptFor({ owner: o2.owner, env: o2.env, home, relayUser, leadKey, install: install2 });
+    if (sub === "setup") {
+      if (pair !== void 0) throw new Error("--pair works with relay install only");
+      o2.stdout(script());
+      return 0;
+    }
+    return await install({ ...o2, home, script, pair });
+  }
+  if (sub === "pair" && o2.values.connect !== true && args.length === 2) {
+    return await pairStart({ ...o2, label: args[0], host: args[1] });
+  }
+  if (sub === "pair" && o2.values.connect === true && args.length === 1) {
+    return await pairConnect({ ...o2, label: args[0] });
   }
   return void 0;
+}
+var systemExec = (file4, args, o2 = {}) => new Promise((res) => {
+  const child = spawn6(file4, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  const timer = setTimeout(() => child.kill(), o2.timeoutMs ?? 30 * 6e4);
+  child.stdout?.on("data", (d) => {
+    stdout += String(d);
+    o2.onOutput?.(String(d));
+  });
+  child.stderr?.on("data", (d) => {
+    stderr += String(d);
+    o2.onOutput?.(String(d));
+  });
+  child.on("error", () => {
+    clearTimeout(timer);
+    res({ code: 127, stdout, stderr });
+  });
+  child.on("close", (code) => {
+    clearTimeout(timer);
+    res({ code: code ?? 1, stdout, stderr });
+  });
+});
+function setupScriptFor(o2) {
+  const owner = relayOwner(o2.owner, o2.home);
+  const settings = serveSettings(owner);
+  const q = (x) => `'${x.replace(/'/g, "''")}'`;
+  const pluginEnv2 = `$env:XDG_CONFIG_HOME = ${q(join60(o2.home, "config"))}; $env:XDG_STATE_HOME = ${q(join60(o2.home, "state"))}`;
+  return relaySetupScript({
+    relayUser: o2.relayUser,
+    crewUser: settings.windows?.crewUser ?? "studio-crew",
+    home: o2.home,
+    task: settings.windows?.broker ?? "Studio relay broker",
+    readPaths: setupReadPaths({
+      node: process.execPath,
+      claude: findClaude(o2.env.PATH ?? o2.env.Path),
+      toolchains: loadOwnerConfig(owner).crewToolchainPaths,
+      crewConfigDir: crewClaudeDir(owner)
+    }),
+    command: forcedCommand(process.execPath, STUDIO_BIN, o2.home),
+    ...o2.leadKey === void 0 ? {} : { leadKey: o2.leadKey },
+    pluginSetup: `${pluginEnv2}; & ${q(process.execPath)} ${q(STUDIO_BIN)} account setup-plugins`,
+    ...o2.install === void 0 ? {} : { install: o2.install }
+  });
+}
+var DEFAULT_SERVE_CONFIG = `# Studio relay worker (studio relay install). Optional; see the README, "Relay workers".
+workers:
+  serve:
+    deny:
+      hosts: [local-subnets, tailnet-peers]
+`;
+async function install(o2) {
+  const exec = o2.exec ?? systemExec;
+  const platform2 = (o2.platform ?? detectPlatform()).platform;
+  if (platform2 !== "win32") {
+    throw new Error(
+      "relay install sets up a Windows relay worker; elsewhere run studio relay serve --home <dir> as the forced command of your sshd"
+    );
+  }
+  if (await elevated(runFile2) !== true) {
+    throw new Error("relay install needs an elevated PowerShell (run it as administrator)");
+  }
+  const port = o2.values.port === void 0 ? 22 : Number(o2.values.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port: 1 to 65535");
+  let scope;
+  if (o2.values.source !== void 0) {
+    if (!/^[0-9A-Fa-f.:/,-]{2,200}$/.test(o2.values.source)) {
+      throw new Error("--source: addresses or ranges, comma separated");
+    }
+    scope = { source: o2.values.source };
+  } else if (o2.values.interface !== void 0) {
+    if (!/^[\w .()-]{1,64}$/.test(o2.values.interface)) throw new Error("--interface: a name");
+    scope = { interface: o2.values.interface };
+  } else {
+    const ts = await exec("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "@(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like '*Tailscale*' -or $_.Name -like 'Tailscale*' }).Count"
+    ]);
+    if (ts.code === 0 && Number(ts.stdout.trim()) > 0) scope = { tailscale: true };
+    else {
+      const answer2 = (await o2.readLine?.(
+        "No Tailscale interface here. Which interface name, or which source range, may reach sshd? "
+      ))?.trim();
+      if (answer2 === void 0 || answer2 === "") {
+        throw new Error(
+          "no Tailscale interface here: run studio relay install --interface <name> or --source <range>"
+        );
+      }
+      scope = /^[0-9A-Fa-f.:/,-]+$/.test(answer2) ? { source: answer2 } : { interface: answer2 };
+    }
+  }
+  o2.stdout(
+    "Studio relay install: this stops and disables the WebClient service (WebDAV), which the crew sandbox does not hold.\n"
+  );
+  mkdirSync13(o2.home, { recursive: true });
+  const file4 = join60(mkdtempSync4(join60(tmpdir4(), "studio-relay-install-")), "install.ps1");
+  writeFileSync21(file4, o2.script({ port, scope }));
+  let r;
+  try {
+    r = await exec(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file4],
+      { onOutput: o2.stdout }
+    );
+  } finally {
+    rmSync13(dirname18(file4), { recursive: true, force: true });
+  }
+  if (r.code !== 0) {
+    o2.stderr("studio: relay install stopped; fix what it says and run it again (it repairs)\n");
+    return 1;
+  }
+  const config2 = join60(o2.home, "config", "studio", "config.yaml");
+  if (!existsSync19(config2)) {
+    mkdirSync13(dirname18(config2), { recursive: true });
+    writeFileSync21(config2, DEFAULT_SERVE_CONFIG);
+  }
+  const summary = [];
+  if (o2.pair !== void 0) {
+    writePairing(o2.home, o2.pair.label, o2.pair.code);
+    summary.push(
+      `paired: the lead's key for ${o2.pair.label} (code ${o2.pair.code}), forced to studio relay serve`
+    );
+  }
+  const hostKey = join60(o2.env.ProgramData ?? "C:\\ProgramData", "ssh", "ssh_host_ed25519_key.pub");
+  let code;
+  try {
+    code = hostKeyCode(readFileSync55(hostKey, "utf8"));
+  } catch {
+    code = void 0;
+  }
+  summary.push(
+    code === void 0 ? `host key: cannot read ${hostKey}` : `host key code: ${code}; on the lead, studio relay pair <label> --connect shows a code: it must be this one`
+  );
+  o2.stdout(`
+${summary.join("\n")}
+`);
+  return 0;
+}
+async function pairStart(o2) {
+  if (!WORKER_LABEL_RE.test(o2.label))
+    throw new Error("relay pair: a label is ^[a-z][a-z0-9-]{0,31}$");
+  if (!RELAY_HOST_RE.test(o2.host)) throw new Error("relay pair: a host name or an IP address");
+  const port = o2.values.port === void 0 ? 22 : Number(o2.values.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port: 1 to 65535");
+  const user = o2.values.user ?? "studio-relay";
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(user)) throw new Error("--user: a local user name");
+  const exec = o2.exec ?? systemExec;
+  const key = leadKeyFile(o2.owner, o2.label);
+  mkdirSync13(dirname18(key), { recursive: true, mode: 448 });
+  rmSync13(key, { force: true });
+  rmSync13(`${key}.pub`, { force: true });
+  const made = await exec("ssh-keygen", [
+    "-q",
+    "-t",
+    "ed25519",
+    "-N",
+    "",
+    "-C",
+    `studio-relay-${o2.label}`,
+    "-f",
+    key
+  ]);
+  if (made.code !== 0) throw new Error("ssh-keygen could not make the key");
+  const pub = readFileSync55(`${key}.pub`, "utf8").trim().split(/\s+/).slice(0, 2).join(" ");
+  const code = newPairCode();
+  writePending(o2.owner, {
+    label: o2.label,
+    host: o2.host,
+    port,
+    user,
+    code,
+    identityFile: key,
+    createdAt: o2.ports.clock.now().toISOString()
+  });
+  o2.stdout(
+    `On the worker, in an elevated PowerShell:
+  studio relay install --pair "${renderPairLine({ label: o2.label, code, key: pub })}"
+Then here: studio relay pair ${o2.label} --connect
+`
+  );
+  return 0;
+}
+async function pairConnect(o2) {
+  const p = readPending(o2.owner, o2.label);
+  if (p === void 0) {
+    throw new Error(
+      `no pairing of ${o2.label} is waiting: studio relay pair ${o2.label} <host> first`
+    );
+  }
+  const scan = await (o2.exec ?? systemExec)("ssh-keyscan", [
+    "-T",
+    "15",
+    "-t",
+    "ed25519",
+    "-p",
+    String(p.port),
+    p.host
+  ]);
+  const key = keyscanKey(scan.stdout);
+  if (key === void 0) throw new Error(`cannot read the host key of ${p.host}:${p.port}`);
+  const code = hostKeyCode(key);
+  let confirmed;
+  if (o2.values.code !== void 0) confirmed = o2.values.code.trim().toUpperCase() === code;
+  else {
+    const a2 = await o2.readLine?.(
+      `Host key code of ${p.host}: ${code}. Does it match what studio relay install printed on the worker? [y/N] `
+    );
+    if (a2 === void 0) {
+      throw new Error(
+        `no terminal to confirm in: run studio relay pair ${o2.label} --connect --code <code the worker printed>`
+      );
+    }
+    confirmed = /^y(es)?$/i.test(a2.trim());
+  }
+  if (!confirmed) {
+    o2.stdout(`not paired: the host key code ${code} was not confirmed; nothing was pinned
+`);
+    return 1;
+  }
+  const target = relayTargetSchema.parse({
+    host: p.host,
+    port: p.port,
+    user: p.user,
+    hostKey: key,
+    identityFile: p.identityFile
+  });
+  const transport = o2.transport?.(o2.label, target) ?? sshTransport({ label: o2.label, target, owner: o2.owner });
+  const { answer: answer2 } = await relayCall(transport, "hello", {}, { timeoutMs: 6e4 });
+  if (!answer2.ok) throw new Error(`the worker answered: ${answer2.line}`);
+  if (!answer2.pairCodes.includes(p.code)) {
+    throw new Error(
+      `the worker did not take this pairing (code ${p.code}): run studio relay install --pair with the line studio relay pair printed`
+    );
+  }
+  writeRelayTarget(o2.owner, o2.label, {
+    host: p.host,
+    port: p.port,
+    user: p.user,
+    hostKey: key,
+    identityFile: p.identityFile
+  });
+  dropPending(o2.owner, o2.label);
+  o2.stdout(
+    `paired: ${o2.label} is ${p.user}@${p.host}:${p.port}, Studio ${answer2.studio} on ${answer2.platform}, host key pinned (${code}). studio doctor checks it end to end.
+`
+  );
+  return 0;
 }
 
 // src/setup.ts
 import {
   chmodSync as chmodSync6,
   lstatSync as lstatSync46,
-  mkdirSync as mkdirSync12,
-  readFileSync as readFileSync54,
-  renameSync as renameSync15,
-  rmSync as rmSync12,
+  mkdirSync as mkdirSync14,
+  readFileSync as readFileSync56,
+  renameSync as renameSync16,
+  rmSync as rmSync14,
   statSync as statSync7,
-  writeFileSync as writeFileSync20
+  writeFileSync as writeFileSync22
 } from "node:fs";
 import { homedir as homedir14 } from "node:os";
-import { dirname as dirname17, join as join60, resolve as resolve13 } from "node:path";
+import { dirname as dirname19, join as join61, resolve as resolve13 } from "node:path";
 var DEFAULT_LABEL2 = "main";
 var MAX_LABEL = 32;
 var TOKEN_TEXT = [
@@ -64091,7 +64531,7 @@ var SHIM_NOTE = "   The shim finds the plugin again after an update; no need to 
 var shQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 function studioOnPath(env) {
   for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
-    const file4 = join60(dir, "studio");
+    const file4 = join61(dir, "studio");
     try {
       const st = statSync7(file4);
       if (st.isFile() && (st.mode & 73) !== 0) return file4;
@@ -64102,13 +64542,13 @@ function studioOnPath(env) {
 }
 var yes = (answer2) => /^(|y|yes)$/i.test(answer2.trim());
 function writeAtomic2(file4, text, mode) {
-  const tmp = join60(dirname17(file4), `.studio-${process.pid}-${Date.now()}.tmp`);
+  const tmp = join61(dirname19(file4), `.studio-${process.pid}-${Date.now()}.tmp`);
   try {
-    writeFileSync20(tmp, text, { flag: "wx", mode });
+    writeFileSync22(tmp, text, { flag: "wx", mode });
     chmodSync6(tmp, mode);
-    renameSync15(tmp, file4);
+    renameSync16(tmp, file4);
   } catch (e) {
-    rmSync12(tmp, { force: true });
+    rmSync14(tmp, { force: true });
     throw e;
   }
 }
@@ -64166,7 +64606,7 @@ async function link(o2, home) {
     return 0;
   }
   const launcher2 = o2.launcher;
-  const localBin = join60(home, ".local", "bin");
+  const localBin = join61(home, ".local", "bin");
   const onPath = (o2.env.PATH ?? "").split(":").some((d) => d !== "" && resolve13(d) === resolve13(localBin));
   if (!onPath) {
     say("4. studio in your terminal: ~/.local/bin is not on your PATH.");
@@ -64175,16 +64615,16 @@ async function link(o2, home) {
     say(`   Until then: node ${shQuote(launcher2)} <command>`);
     return 0;
   }
-  const target = join60(localBin, "studio");
+  const target = join61(localBin, "studio");
   let current;
   try {
-    current = lstatSync46(target).isFile() ? readFileSync54(target, "utf8") : "";
+    current = lstatSync46(target).isFile() ? readFileSync56(target, "utf8") : "";
   } catch {
     current = void 0;
   }
-  const cache2 = join60(ownerConfigDir(o2.owner), "launcher");
+  const cache2 = join61(ownerConfigDir(o2.owner), "launcher");
   const writeCache = () => {
-    mkdirSync12(dirname17(cache2), { recursive: true, mode: 448 });
+    mkdirSync14(dirname19(cache2), { recursive: true, mode: 448 });
     writeAtomic2(cache2, `${launcher2}
 `, 384);
   };
@@ -64209,7 +64649,7 @@ async function link(o2, home) {
     say(`   nothing written; until you do: node ${shQuote(launcher2)} <command>`);
     return 0;
   }
-  mkdirSync12(localBin, { recursive: true });
+  mkdirSync14(localBin, { recursive: true });
   writeCache();
   writeAtomic2(target, SHIM, 493);
   say(`   wrote ${target}`);
@@ -64444,20 +64884,20 @@ async function runSetup(o2) {
 }
 
 // src/skills-check.ts
-import { existsSync as existsSync19, lstatSync as lstatSync47, readFileSync as readFileSync55 } from "node:fs";
-import { join as join61 } from "node:path";
+import { existsSync as existsSync20, lstatSync as lstatSync47, readFileSync as readFileSync57 } from "node:fs";
+import { join as join62 } from "node:path";
 var SKILLS_CHECK_DAYS = 30;
 var DAY_MS6 = 864e5;
 var NOTE = "skills-update: ";
 var PLUGIN_TIMEOUT_MS = 3e5;
-var recordFile3 = (stateRoot) => join61(stateRoot, "skills-check.json");
+var recordFile3 = (stateRoot) => join62(stateRoot, "skills-check.json");
 var at = (v) => typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : void 0;
 function readRecord(stateRoot) {
   const file4 = recordFile3(stateRoot);
   try {
     assertStatePath(stateRoot, file4);
     if (!lstatSync47(file4).isFile()) return {};
-    const raw = JSON.parse(readFileSync55(file4, "utf8"));
+    const raw = JSON.parse(readFileSync57(file4, "utf8"));
     const lastRun2 = at(raw.lastRun);
     const lastAttempt = at(raw.lastAttempt);
     return {
@@ -64598,7 +65038,7 @@ async function runSkillsCheck(o2) {
   let offered = /* @__PURE__ */ new Map();
   const { dir, runEnv } = pluginEnv(o2.owner, o2.env);
   if (o2.ports.plugins === void 0) fail4("plugins: no claude command available");
-  else if (!existsSync19(dir)) {
+  else if (!existsSync20(dir)) {
     fail4("plugins: the crew config dir is missing; run studio account setup-plugins");
   } else {
     try {
@@ -64864,8 +65304,22 @@ async function runCli(argv, deps) {
     if ((values.label !== void 0 || values.once !== void 0) && cmd !== "worker") {
       throw new UsageError("--label and --once work with worker only");
     }
-    if ((values.home !== void 0 || values.pipe !== void 0 || values["lead-key"] !== void 0) && cmd !== "relay") {
-      throw new UsageError("--home, --pipe and --lead-key work with relay only");
+    const relayOnly = [
+      values.home,
+      values.pipe,
+      values["lead-key"],
+      values.pair,
+      values.user,
+      values.port,
+      values.source,
+      values.interface,
+      values.connect,
+      values.code
+    ];
+    if (relayOnly.some((v) => v !== void 0) && cmd !== "relay") {
+      throw new UsageError(
+        "--home, --pipe, --lead-key, --pair, --user, --port, --source, --interface, --connect and --code work with relay only"
+      );
     }
     const reserveOnly = [values.number, values.for, values.purpose];
     if (!(cmd === "migration" && rest[0] === "reserve") && reserveOnly.some((v) => v !== void 0)) {
@@ -64962,11 +65416,11 @@ async function runCli(argv, deps) {
       }
     };
     const dailyCostHold = async (config2, ownerConfig) => {
-      const roots = ownerConfig.limits?.dailyCostUsd === void 0 ? [stateRoot()] : [.../* @__PURE__ */ new Set([stateRoot(), ...projectStateRoots(dirname18(ownerRoot()))])];
+      const roots = ownerConfig.limits?.dailyCostUsd === void 0 ? [stateRoot()] : [.../* @__PURE__ */ new Set([stateRoot(), ...projectStateRoots(dirname20(ownerRoot()))])];
       if (!readOnly) await recordAllEnded(roots, ownerConfig);
       return costHold({
         stateRoot: stateRoot(),
-        stateBase: dirname18(ownerRoot()),
+        stateBase: dirname20(ownerRoot()),
         config: config2,
         ownerConfig,
         now: ports.clock.now()
@@ -64975,7 +65429,7 @@ async function runCli(argv, deps) {
     const recordAllEnded = async (roots, ownerConfig) => {
       for (const root of roots) {
         try {
-          if (existsSync20(root)) {
+          if (existsSync21(root)) {
             await recordEndedRuns(root, ports, ownerConfig.crewLabelLimits.timezone);
           }
         } catch {
@@ -65267,7 +65721,7 @@ async function runCli(argv, deps) {
       const { config: config2 } = loadAll();
       refuseNativeQueue(config2);
       const root = await boundStateRoot();
-      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname18(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
+      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname20(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
       const blockedNow = queueHold();
       if (blockedNow !== void 0) throw new HeldError(blockedNow);
       let heldLine;
@@ -65566,8 +66020,8 @@ async function runCli(argv, deps) {
       const relayed = item.runsOn !== void 0 && isRelayItem(loadOwnerConfig(owner), item);
       if (relayed) {
         const file4 = relayReportFile(stateRoot(), item.id);
-        if (!existsSync20(file4)) throw new Error(`${item.id}: no relay result yet; nothing moved`);
-        report = parseReport(readFileSync56(file4, "utf8"), item);
+        if (!existsSync21(file4)) throw new Error(`${item.id}: no relay result yet; nothing moved`);
+        report = parseReport(readFileSync58(file4, "utf8"), item);
         fileName = `relay/${item.id}.report.md`;
       } else if (item.runsOn !== void 0) {
         const got = await workerReport(item);
@@ -65597,7 +66051,7 @@ async function runCli(argv, deps) {
           }
         }
         removeReaRun(stateRoot(), item.id);
-        const clone2 = join62(stateRoot(), "clones", item.id);
+        const clone2 = join63(stateRoot(), "clones", item.id);
         fileName = reportName(stateRoot(), item.id);
         if (fileName === void 0) {
           throw new ReportError(
@@ -65628,8 +66082,8 @@ async function runCli(argv, deps) {
             stateRoot: stateRoot(),
             ownerRoot: ownerRoot(),
             item: item.id,
-            clone: join62(stateRoot(), "clones", item.id),
-            homeDir: join62(stateRoot(), "homes", item.id),
+            clone: join63(stateRoot(), "clones", item.id),
+            homeDir: join63(stateRoot(), "homes", item.id),
             ownerConfig: loadOwnerConfig(owner),
             cow: ports.cow ?? systemCowCopy(),
             now: ports.clock.now(),
@@ -66436,7 +66890,7 @@ async function runCli(argv, deps) {
       const cachePhase = async () => {
         const now = ports.clock.now();
         const removed = await cacheCleanup({
-          stateBase: dirname18(root),
+          stateBase: dirname20(root),
           ownerRoot: ownerRoot(),
           ownerConfig: loadOwnerConfig(owner),
           now
@@ -66553,7 +67007,7 @@ async function runCli(argv, deps) {
           if (item.status !== "assigned" && item.status !== "in_progress") continue;
           const rec = records[item.id];
           if (rec === void 0 || rec.stoppedAt !== void 0) continue;
-          const t = timeoutsOfContext(join62(root, "guard", `${item.id}.json`));
+          const t = timeoutsOfContext(join63(root, "guard", `${item.id}.json`));
           const ends = t === void 0 ? Number.NaN : Date.parse(t.sessionEndsAt);
           if (Number.isNaN(ends) || now < ends + REVIEW_GRACE_MS) continue;
           beat();
@@ -66803,7 +67257,7 @@ async function runCli(argv, deps) {
     const tickPreview = async () => {
       const now = ports.clock.now();
       const root = stateRoot();
-      const rootExists = existsSync20(root);
+      const rootExists = existsSync21(root);
       const why = (e) => e.message.replace(new RegExp("\\p{Cc}", "gu"), " ");
       const out = { dryRun: true, needsLead: [], held: [], errors: [] };
       const lead = (item, reason) => {
@@ -67178,10 +67632,14 @@ async function runCli(argv, deps) {
           stderr,
           ...deps.workerPlatform === void 0 ? {} : { platform: deps.workerPlatform },
           ...deps.relaySpawnRunner === void 0 ? {} : { spawnRunner: deps.relaySpawnRunner },
-          ...deps.relayLoad === void 0 ? {} : { load: deps.relayLoad }
+          ...deps.relayLoad === void 0 ? {} : { load: deps.relayLoad },
+          ...deps.readLine === void 0 || deps.isTerminal !== true ? {} : { readLine: deps.readLine },
+          ...deps.relayTransport === void 0 ? {} : { transport: deps.relayTransport }
         });
         if (code === void 0) {
-          throw new UsageError("relay takes: serve, run <id>, or setup [--lead-key <line>]");
+          throw new UsageError(
+            "relay takes: pair <label> <host>, pair <label> --connect, install [--pair <line>], setup, serve, run <id>"
+          );
         }
         return code;
       }
@@ -67819,7 +68277,7 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
             hasReport: (item) => {
               if (!isItemId(item)) return false;
               const name = reportName(root, item);
-              return name !== void 0 && existsSync20(join62(root, "clones", item, ".studio", "reports", name));
+              return name !== void 0 && existsSync21(join63(root, "clones", item, ".studio", "reports", name));
             }
           }
         );
@@ -68332,7 +68790,7 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
           throw new UsageError("accounts-clear needs exactly one valid label");
         }
         await boundStateRoot();
-        await recordAllEnded(projectStateRoots(dirname18(ownerRoot())), loadOwnerConfig(owner));
+        await recordAllEnded(projectStateRoots(dirname20(ownerRoot())), loadOwnerConfig(owner));
         const r = clearBlocks(ownerRoot(), label, ports.clock.now());
         print({ label, ...r });
         return 0;
@@ -68997,7 +69455,14 @@ function parseCli(argv) {
         "follow-head": { type: "boolean" },
         home: { type: "string" },
         pipe: { type: "string" },
-        "lead-key": { type: "string" }
+        "lead-key": { type: "string" },
+        pair: { type: "string" },
+        user: { type: "string" },
+        port: { type: "string" },
+        source: { type: "string" },
+        interface: { type: "string" },
+        connect: { type: "boolean" },
+        code: { type: "string" }
       },
       allowPositionals: true,
       strict: true
@@ -69468,8 +69933,8 @@ function readVisibleLine(prompt, input2, output2) {
 }
 
 // src/ports.ts
-import { spawn as spawn6 } from "node:child_process";
-import { closeSync as closeSync10, openSync as openSync10, readFileSync as readFileSync57 } from "node:fs";
+import { spawn as spawn7 } from "node:child_process";
+import { closeSync as closeSync10, openSync as openSync10, readFileSync as readFileSync59 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 var HTTP_TIMEOUT_MS = 15e3;
 var realHttp = {
@@ -69573,7 +70038,7 @@ function realPorts(claudeBin = "claude") {
     async start(cwd, args, prompt, logPath, env) {
       const fd = openSync10(logPath, "a");
       try {
-        const child = spawn6(claudeBin, args, {
+        const child = spawn7(claudeBin, args, {
           cwd,
           env,
           detached: true,
@@ -69597,7 +70062,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync57(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync59(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }

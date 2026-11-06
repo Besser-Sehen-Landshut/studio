@@ -498,7 +498,7 @@ export async function relayDoctor(o: {
     if (hello.studio !== o.studioVersion) {
       ok = false;
       lines.push(
-        `${o.label}: Studio ${hello.studio} there, ${o.studioVersion} here: update the worker`,
+        `${o.label}: Studio ${hello.studio} there, ${o.studioVersion} here; fix: update Studio on the worker, then run studio relay install there again`,
       );
     }
     for (const p of o.pins) {
@@ -506,7 +506,7 @@ export async function relayDoctor(o: {
       if (v !== p.version) {
         ok = false;
         lines.push(
-          `${o.label}: plugin ${p.name} is ${v ?? 'missing'} there, pinned ${p.version}: run the script of studio relay setup there again`,
+          `${o.label}: plugin ${p.name} is ${v ?? 'missing'} there, pinned ${p.version}; fix: run studio relay install on the worker again`,
         );
       }
     }
@@ -533,7 +533,12 @@ export async function relayDoctor(o: {
       for (const w of probe.warnings) lines.push(`${o.label}: note: ${w}`);
     }
   } catch (e) {
-    return { ok: false, lines: [`${o.label}: ${(e as Error).message}`] };
+    return {
+      ok: false,
+      lines: [
+        `${o.label}: ${(e as Error).message}; fix: check that the worker is on and sshd runs there; if it was set up anew, studio relay pair ${o.label} <host> again`,
+      ],
+    };
   }
   return { ok, lines };
 }
