@@ -124,16 +124,69 @@ if (Test-Path -LiteralPath $classes) {
 foreach ($k in @('Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders', 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders')) { Fresh (Join-Path $base $k) }
 ${registryLeftScript(base).replace("$ErrorActionPreference = 'Stop'\n", '')}`;
 
-const powershell = (script) =>
-  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    encoding: 'utf8',
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+/** Windows PowerShell of the system, by its full path, not whatever `PATH` finds first. */
+export const PS_HOME = join(
+  process.env.SystemRoot ?? 'C:\\Windows',
+  'System32',
+  'WindowsPowerShell',
+  'v1.0',
+);
+export const PS_EXE = join(PS_HOME, 'powershell.exe');
 
 /**
- * PowerShell profiles in a Documents folder (`PowerShell` and `WindowsPowerShell`): every profile
- * script goes, a link as a link. Returns the names removed and what could not be.
+ * Every PowerShell the crew user runs: its modules only from `$PSHOME\Modules`, so a module the
+ * crew put in Documents or named in its environment cannot stand in for a core one. The module
+ * path is pinned twice, in the environment and as the first statement.
+ */
+export function pinnedPowerShell(script) {
+  const env = { ...process.env, PSModulePath: join(PS_HOME, 'Modules') };
+  for (const k of Object.keys(env)) {
+    if (k !== 'PSModulePath' && k.toLowerCase() === 'psmodulepath') delete env[k];
+  }
+  return {
+    file: PS_EXE,
+    args: [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `$env:PSModulePath = Join-Path $PSHOME 'Modules'\n${script}`,
+    ],
+    env,
+  };
+}
+
+export const powershell = (script) => {
+  const ps = pinnedPowerShell(script);
+  return execFileSync(ps.file, ps.args, {
+    encoding: 'utf8',
+    windowsHide: true,
+    env: ps.env,
+    timeout: 120_000,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+};
+
+/** Removes a file, link or folder; a link as a link, a folder by walking it without following one. */
+function removeTree(p) {
+  const st = lstatSync(p);
+  if (st.isSymbolicLink()) {
+    try {
+      unlinkSync(p);
+    } catch {
+      rmdirSync(p);
+    }
+  } else if (st.isDirectory()) {
+    for (const name of readdirSync(p)) removeTree(join(p, name));
+    rmdirSync(p);
+  } else {
+    unlinkSync(p);
+  }
+}
+
+/**
+ * PowerShell profiles and modules in a Documents folder (`PowerShell` and `WindowsPowerShell`):
+ * every profile script and the `Modules` folder go, a link as a link, never followed. Returns the
+ * names removed and what could not be.
  */
 export function resetProfiles(documents) {
   const removed = [];
@@ -157,6 +210,15 @@ export function resetProfiles(documents) {
     }
     if (!st.isDirectory()) continue;
     for (const name of readdirSync(dir)) {
+      if (name.toLowerCase() === 'modules') {
+        try {
+          removeTree(join(dir, name));
+          removed.push(`${sub}\\${name}`);
+        } catch {
+          left.push(`${sub}\\${name}`);
+        }
+        continue;
+      }
       if (!/profile\.ps1$/i.test(name)) continue;
       const p = join(dir, name);
       const e = lstatSync(p);
