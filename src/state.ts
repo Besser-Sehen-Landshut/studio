@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CrewRecord, CrewState } from './crew.js';
+import type { GroupRow } from './group.js';
 import type { Parks } from './limits.js';
 import type { MainBuild } from './main-build.js';
 import type { LeadDecision, PaneItem } from './pane-data.js';
@@ -142,6 +143,10 @@ export interface StateSnapshot {
   wip?: { building: number; review: number };
   /** Set while the owner's pause stands; `time` is `HH:MM` on the owner's clock. */
   pause?: { at?: string; time?: string };
+  /** A REA install waiting for the owner's one confirmation (the pane's button writes it). */
+  reaInstall?: { version: string; mode: 'full' | 'static'; needsFolder: boolean };
+  /** This project's group (owner config): one row per project, for the pane's group view. */
+  group?: { name: string; main: string; self: string; projects: GroupRow[] };
   updatedAt: string;
   metrics: Metrics;
 }

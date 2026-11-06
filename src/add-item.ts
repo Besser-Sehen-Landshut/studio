@@ -26,6 +26,11 @@ export type AddOptions = {
   plan?: string;
   /** The epic the item is a piece of; it must be open or accepting. */
   epic?: string;
+  /**
+   * A researcher's analysis folder, checked by the caller against research_roots: the item goes
+   * to the researcher, as research unless `type` says otherwise.
+   */
+  artifacts?: string;
   /** For the epic's history when the new item moves it back to open. */
   now?: Date;
   /** Runs `fn` under the board lock. */
@@ -54,7 +59,7 @@ export async function addItem(o: AddOptions): Promise<Record<string, unknown>> {
     throw new Error('add needs a title: studio add "<title>"');
   if (!ONE_LINE.test(title))
     throw new Error('the title must be one line of at most 300 characters');
-  const type = (o.type ?? 'fix') as AddType;
+  const type = (o.type ?? (o.artifacts === undefined ? 'fix' : 'research')) as AddType;
   if (!ADD_TYPES.includes(type)) throw new Error(`--type must be one of ${ADD_TYPES.join(', ')}`);
   if (type === 'feature' && o.plan === undefined) {
     throw new Error(
@@ -110,7 +115,7 @@ export async function addItem(o: AddOptions): Promise<Record<string, unknown>> {
       id,
       title,
       type,
-      role: 'builder',
+      role: o.artifacts === undefined ? 'builder' : 'researcher',
       repo,
       size: 'S',
       priority,
@@ -123,6 +128,7 @@ export async function addItem(o: AddOptions): Promise<Record<string, unknown>> {
       dod: o.dod.map((d) => d.trim()),
       ...(o.plan === undefined ? {} : { plan: o.plan }),
       ...(o.epic === undefined ? {} : { epic: o.epic }),
+      ...(o.artifacts === undefined ? {} : { artifacts: o.artifacts }),
       history: [],
     });
     if (!parsed.success) {

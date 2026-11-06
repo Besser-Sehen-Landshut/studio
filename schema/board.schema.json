@@ -245,6 +245,12 @@
             "maxLength": 300,
             "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
           },
+          "artifacts": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 500,
+            "pattern": "^\\/[^\\p{Cc}\\p{Cf}]*$"
+          },
           "epic": {
             "type": "string",
             "pattern": "^E-[1-9]\\d*$"
@@ -409,6 +415,14 @@
               "minLength": 1,
               "maxLength": 300,
               "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+            }
+          },
+          "member_items": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^([a-z][a-z0-9-]{0,31}):([A-Z]+-\\d+)$"
             }
           },
           "accepted": {

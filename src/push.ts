@@ -103,6 +103,8 @@ export type PushKind =
   | 'release_approval'
   | 'release_failed'
   | 'release_announced'
+  | 'analyzer_timeout'
+  | 'rea_install'
   | 'other';
 
 export interface Decision {
@@ -175,6 +177,8 @@ const PHRASES: Record<Lang, Record<PushKind, string>> = {
     release_approval: 'Release approval needed',
     release_failed: 'Release stopped, a check is red',
     release_announced: 'Release announced, it cannot be undone once triggered',
+    analyzer_timeout: 'Analyzer timed out',
+    rea_install: 'REA install needs your yes',
     other: 'Decision needed',
   },
   de: {
@@ -188,6 +192,8 @@ const PHRASES: Record<Lang, Record<PushKind, string>> = {
     release_approval: 'Release-Freigabe nötig',
     release_failed: 'Release angehalten, eine Prüfung ist rot',
     release_announced: 'Release angekündigt, nach dem Auslösen nicht umkehrbar',
+    analyzer_timeout: 'Prüfer-Zeit abgelaufen',
+    rea_install: 'REA-Installation braucht eine Bestätigung',
     other: 'Entscheidung nötig',
   },
 };

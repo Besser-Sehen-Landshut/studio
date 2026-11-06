@@ -46,6 +46,8 @@ type WorldOptions = {
   cwd?: string;
   /** What the session draws on; default one terminal. */
   surfaces?: ('terminal' | 'app')[];
+  /** Paths that stat as symbolic links. */
+  links?: string[];
   /** Claude Code settings as `$.settings.read` answers them; default none. */
   settings?: Record<string, unknown>;
 };
@@ -118,7 +120,13 @@ function world(on: On, options: WorldOptions = {}) {
     };
   });
   on('fs.stat', (_, e) => ({
-    value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath: e.path },
+    value: {
+      kind: files.has(e.path) ? 'file' : 'dir',
+      size: 0,
+      mtimeMs: 0,
+      isLink: options.links?.includes(e.path) ?? false,
+      realPath: e.path,
+    },
   }));
   on('fs.read', (_, e) => {
     if (options.unreadable?.includes(e.path)) throw new Error('too large');
@@ -128,6 +136,7 @@ function world(on: On, options: WorldOptions = {}) {
   });
   on('fs.write', (_, e) => {
     seen.forbidden.push(`fs.write ${e.path}`);
+    files.set(e.path, e.text);
     return { value: undefined };
   });
   on('process.run', (_, e) => {
@@ -208,7 +217,7 @@ test('a Studio session registers the command, a 10 s timer and opens the pane', 
   const { clock, files, seen } = world(on, { files: { [YAML]: 'project: app\n' } });
   await $.session.start(start);
   expect(seen.commands).toEqual(['studio']);
-  expect(seen.hints).toEqual(['list | pipeline | more | status | pause | resume | lang']);
+  expect(seen.hints).toEqual(['list | pipeline | more | group | status | pause | resume | lang']);
   expect(seen.opened).toEqual(['studio-board:Studio board']);
   files.set(STATE, JSON.stringify(OK_STATE));
   await clock.advance(9_999);
@@ -544,7 +553,7 @@ test('anything else answers the usage text', async ($, on) => {
   await $.session.start(start);
   const { text } = await $.command.run({ ...run, command: 'studio', args: 'stop everything' });
   expect(text).toBe(
-    'Usage: /studio [list | pipeline | more | status | pause | resume | lang de|en|auto]',
+    'Usage: /studio [list | pipeline | more | group [<project>] | status | pause | resume | lang de|en|auto]',
   );
   expect(seen.forbidden).toEqual([]);
 });
@@ -572,6 +581,74 @@ test('the mod never writes a file or runs a process', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
   await ui.unmount();
   expect(seen.forbidden).toEqual([]);
+});
+
+// ---------- the one write: the owner's REA install confirmation ----------
+
+const OWNER_ROOT = '/home/u/.local/state/studio/owner';
+const PANE_CONFIRM = `${OWNER_ROOT}/rea-confirm.json`;
+const reaState = () => ({
+  ...LIST_STATE,
+  needsLead: [
+    {
+      item: 'APP-5',
+      code: 'rea_install',
+      reason: 'REA install needs the owner',
+      next: { say: 'show APP-5' },
+    },
+  ],
+  reaInstall: { version: '6.7.0', mode: 'full', needsFolder: true },
+});
+
+test('a press on the REA button writes the owner confirmation, and nothing else does', async ($, on) => {
+  const { seen, files } = world(on, { files: withState(reaState()) });
+  await $.session.start(start);
+  // Commands never confirm: only the press does.
+  for (const args of ['', 'status', 'group', 'junk', 'list']) {
+    await $.command.run({ ...run, command: 'studio', args });
+  }
+  expect(seen.forbidden).toEqual([]);
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  expect(await ui.find({ key: 'rea-confirm' })).toBeDefined();
+  await ui.press({ key: 'rea-confirm' });
+  await ui.unmount();
+  // Its own small file, never the shared record: Studio checks it and takes it in.
+  expect(seen.forbidden).toEqual([`fs.write ${PANE_CONFIRM}`]);
+  expect(JSON.parse(files.get(PANE_CONFIRM) ?? '{}')).toMatchObject({
+    version: '6.7.0',
+    mode: 'full',
+    by: 'pane',
+    folder: '/home/u/analysis',
+  });
+  expect(seen.toasts.at(-1)).toBe(
+    'REA install confirmed. It installs on the next launch that needs it.',
+  );
+});
+
+for (const [what, links] of [
+  ['the owner folder', [OWNER_ROOT]],
+  ['the confirmation file', [PANE_CONFIRM]],
+] as const) {
+  test(`the REA button writes nothing when ${what} is a link`, async ($, on) => {
+    const { seen } = world(on, {
+      files: { ...withState(reaState()), [PANE_CONFIRM]: '{}' },
+      links: [...links],
+    });
+    await $.session.start(start);
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+    await ui.press({ key: 'rea-confirm' });
+    await ui.unmount();
+    expect(seen.forbidden).toEqual([]);
+    expect(seen.toasts.at(-1)).toMatch(/could not be saved/);
+  });
+}
+
+test('a state without a pending install draws no button', async ($, on) => {
+  world(on, { files: withState(LIST_STATE) });
+  await $.session.start(start);
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+  expect(await ui.find({ key: 'rea-confirm' })).toBeUndefined();
+  await ui.unmount();
 });
 
 // ---------- fix round ----------
@@ -762,6 +839,52 @@ test('/studio more draws the detailed view and /studio list the work list again'
   const list = await $.command.run({ ...run, command: 'studio', args: ' list ' });
   expect(list.text).toBe('Studio board: work list.');
   expect(await paneTexts($)).toContain('Decision needed');
+});
+
+test('/studio group draws the group, /studio group <id> that project, /studio list this one', async ($, on) => {
+  const other = '/home/u/.local/state/studio/fedcba9876543210-web';
+  const group = {
+    name: 'shop',
+    main: 'app',
+    self: 'app',
+    projects: [
+      { id: 'app', repo: 'org/app', main: true, self: true, decisions: [] },
+      {
+        id: 'web',
+        repo: 'org/web',
+        main: false,
+        self: false,
+        stateDir: 'fedcba9876543210-web',
+        counts: { decisions: 1, running: 0, waiting: 0, ready: 0, blocked: 0 },
+        decisions: [{ item: 'WEB-3', code: 'merge_failed' }],
+      },
+    ],
+  };
+  const { seen } = world(on, {
+    files: {
+      ...withState({ ...LIST_STATE, group }),
+      [`${other}/state.json`]: JSON.stringify({ ...LIST_STATE, project: 'web' }),
+    },
+  });
+  await $.session.start(start);
+  const g = await $.command.run({ ...run, command: 'studio', args: 'group' });
+  expect(g.text).toBe('Studio board: the group, one line per project.');
+  const drawn = await paneTexts($);
+  expect(drawn[0]).toMatch(/^Group shop/);
+  expect(drawn).toContain('! web · WEB-3 merge failed');
+  expect(drawn).toContain('  → /studio group web');
+  const w = await $.command.run({ ...run, command: 'studio', args: 'group web' });
+  expect(w.text).toBe('Studio board: the work list of web. Back with /studio group.');
+  const focused = await paneTexts($);
+  expect(focused[0]).toBe('Group shop · back: /studio group');
+  expect(focused[1]).toMatch(/^Studio · web/);
+  // The status line stays this project's.
+  expect(seen.statuses.at(-1)).toMatch(/for you/);
+  const none = await $.command.run({ ...run, command: 'studio', args: 'group nope' });
+  expect(none.text).toBe('No project nope in this group. See /studio group.');
+  await $.command.run({ ...run, command: 'studio', args: 'list' });
+  expect((await paneTexts($))[0]).toMatch(/^Studio · app/);
+  expect(seen.forbidden).toEqual([]);
 });
 
 test('a view chosen in an earlier session is drawn from the store', async ($, on) => {

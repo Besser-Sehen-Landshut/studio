@@ -33,9 +33,21 @@ import {
 } from './config.js';
 
 /** Entries of the state root that a crew session must never write (besides its own clone). */
-export const STATE_PROTECTED_DIRS = ['guard', 'settings', 'briefs', 'logs', 'homes', 'tmp', 'rea'];
+export const STATE_PROTECTED_DIRS = [
+  'guard',
+  'settings',
+  'briefs',
+  'logs',
+  'homes',
+  'tmp',
+  'rea',
+  // A group member's reference cache and the changed paths of its contract check items.
+  'reference',
+  'contract-changes',
+];
 export const STATE_FILES = [
   'crew.json',
+  'group-contracts.json',
   'rea-allow.json',
   'queue.json',
   'state.json',

@@ -69,6 +69,29 @@ export interface BoardState {
   exceptions?: { rule: string; pr: string; item?: string; head: string; by: string }[];
   /** Open releases and those that ended in the last days, newest first. */
   releases?: BoardRelease[];
+  /** This project's group: one row per project (the group view). */
+  group?: BoardGroup;
+  /** A REA install waits for the owner's one confirmation: what the pane's button confirms. */
+  reaInstall?: { version: string; mode: 'full' | 'static'; needsFolder: boolean };
+}
+
+export interface BoardGroupRow {
+  id: string;
+  repo: string;
+  main: boolean;
+  self: boolean;
+  /** The project's state folder name: the pane opens its work list from there. */
+  stateDir?: string;
+  counts?: { decisions: number; running: number; waiting: number; ready: number; blocked: number };
+  decisions: { item: string; code: string }[];
+  problem?: string;
+}
+
+export interface BoardGroup {
+  name: string;
+  main: string;
+  self: string;
+  projects: BoardGroupRow[];
 }
 
 export interface BoardRelease {
@@ -120,11 +143,16 @@ export type BoardRead =
 export type Line = {
   text: string;
   tone?: 'ok' | 'wait' | 'idle' | 'err' | 'dim' | 'head' | 'run' | 'you';
+  /** A control the person presses: the mod draws a Button with this key and label. */
+  button?: { key: string; label: string };
 };
 
-export type View = 'list' | 'pipeline' | 'more';
+/** The key of the pane's one-time REA install confirmation (handled in register.tsx). */
+export const REA_CONFIRM_KEY = 'rea-confirm';
+
+export type View = 'list' | 'pipeline' | 'more' | 'group';
 export type Lang = 'en' | 'de';
-export const VIEWS: readonly View[] = ['list', 'pipeline', 'more'];
+export const VIEWS: readonly View[] = ['list', 'pipeline', 'more', 'group'];
 export const LANGS: readonly Lang[] = ['en', 'de'];
 
 const MAX_STRING = 200;
@@ -366,7 +394,78 @@ function toState(root: Obj): BoardState {
     return [{ id, component, status, sha, ...(pending.length === 0 ? {} : { pending }) }];
   });
   if (releases.length > 0) state.releases = releases;
+  const group = parseGroup(root.group);
+  if (group !== undefined) state.group = group;
+  const rea = obj(root.reaInstall);
+  const reaVersion = str(rea?.version);
+  if (
+    rea !== undefined &&
+    reaVersion !== undefined &&
+    /^\d+\.\d+\.\d+$/.test(reaVersion) &&
+    (rea.mode === 'full' || rea.mode === 'static')
+  ) {
+    state.reaInstall = {
+      version: reaVersion,
+      mode: rea.mode,
+      needsFolder: rea.needsFolder === true,
+    };
+  }
   return state;
+}
+
+/** A project id, item id, decision code and state folder name: only these forms are kept. */
+const GROUP_ID = /^[a-z][a-z0-9-]{0,31}$/;
+const DECISION_CODE = /^[a-z_]{1,32}$/;
+/** As stateDirName in src/paths.ts: 16 hex digits and a sanitised name. */
+export const STATE_DIR = /^[0-9a-f]{16}(?:-[A-Za-z0-9._-]{1,32})?$/;
+
+function parseGroup(raw: unknown): BoardGroup | undefined {
+  const g = obj(raw);
+  const name = str(g?.name);
+  const main = str(g?.main);
+  const self = str(g?.self);
+  if (!g || name === undefined || main === undefined || self === undefined) return undefined;
+  if (![name, main, self].every((x) => GROUP_ID.test(x))) return undefined;
+  const projects = list(g.projects).flatMap((r): BoardGroupRow[] => {
+    const o = obj(r);
+    const id = str(o?.id);
+    if (!o || id === undefined || !GROUP_ID.test(id)) return [];
+    const c = obj(o.counts);
+    const counts =
+      c === undefined
+        ? undefined
+        : {
+            decisions: num(c.decisions) ?? 0,
+            running: num(c.running) ?? 0,
+            waiting: num(c.waiting) ?? 0,
+            ready: num(c.ready) ?? 0,
+            blocked: num(c.blocked) ?? 0,
+          };
+    const stateDir = str(o.stateDir);
+    const problem = str(o.problem);
+    return [
+      {
+        id,
+        repo: str(o.repo) ?? '',
+        main: o.main === true,
+        self: o.self === true,
+        ...(stateDir !== undefined && STATE_DIR.test(stateDir) ? { stateDir } : {}),
+        ...(counts === undefined ? {} : { counts }),
+        decisions: list(o.decisions).flatMap((d) => {
+          const item = str(obj(d)?.item);
+          const code = str(obj(d)?.code);
+          return item !== undefined &&
+            ITEM_ID.test(item) &&
+            code !== undefined &&
+            DECISION_CODE.test(code)
+            ? [{ item, code }]
+            : [];
+        }),
+        ...(problem === undefined ? {} : { problem }),
+      },
+    ];
+  });
+  return projects.length === 0 ? undefined : { name, main, self, projects };
 }
 
 /** A next step the pane offers: lower-case words and item ids, nothing else. */
@@ -485,6 +584,17 @@ interface Strings {
   staleBanner: (min: number) => string;
   staleQuestion: string;
   staleSay: string;
+  // the group view (/studio group)
+  groupTitle: (name: string) => string;
+  groupMain: string;
+  groupHere: string;
+  groupNone: string;
+  groupIdle: string;
+  groupProblem: (problem: string) => string;
+  groupBack: (name: string) => string;
+  groupOpen: string;
+  /** The label of the REA install button. */
+  reaConfirm: (version: string, withFolder: boolean) => string;
 }
 
 type RowState = 'decision' | 'blocked' | 'running' | 'waiting' | 'ready';
@@ -594,6 +704,8 @@ const EN: Strings = {
     if (code === 'blocked') return 'blocked';
     if (code === 'release_approval') return 'release approval needed';
     if (code === 'release_failed') return 'release stopped: a check is red';
+    if (code === 'analyzer_timeout') return 'analyzer timed out – decide';
+    if (code === 'rea_install') return 'REA install – confirm once, here';
     return 'needs a decision';
   },
   wait: (w) => {
@@ -659,6 +771,22 @@ const EN: Strings = {
   staleBanner: (m) => `Last update ${m} min ago.`,
   staleQuestion: 'Is the lead loop still running?',
   staleSay: 'start the Studio lead loop',
+  groupTitle: (name) => `Group ${name}`,
+  groupMain: 'main',
+  groupHere: 'here',
+  groupNone: 'This project is in no group. Groups are set in the owner config.',
+  groupIdle: 'nothing open',
+  groupProblem: (p) =>
+    p === 'no state yet'
+      ? 'no state yet'
+      : p === 'state unreadable'
+        ? 'state unreadable'
+        : p === 'folder cannot be read'
+          ? 'folder cannot be read'
+          : 'cannot be read',
+  groupBack: (name) => `Group ${name} · back: /studio group`,
+  groupOpen: 'open a project: /studio group <project>',
+  reaConfirm: (v, f) => `Confirm REA install (rea-agents ${v}${f ? ', folder ~/analysis' : ''})`,
 };
 
 const DE: Strings = {
@@ -761,6 +889,8 @@ const DE: Strings = {
     if (code === 'blocked') return 'blockiert';
     if (code === 'release_approval') return 'Release-Freigabe nötig';
     if (code === 'release_failed') return 'Release angehalten: eine Prüfung ist rot';
+    if (code === 'analyzer_timeout') return 'Prüfer-Zeit abgelaufen – entscheiden';
+    if (code === 'rea_install') return 'REA-Installation – einmal hier bestätigen';
     return 'Entscheidung nötig';
   },
   wait: (w) => {
@@ -826,6 +956,24 @@ const DE: Strings = {
   staleBanner: (m) => `Letzte Aktualisierung vor ${m} min.`,
   staleQuestion: 'Läuft die Steuerung noch?',
   staleSay: 'start the Studio lead loop',
+  groupTitle: (name) => `Verbund ${name}`,
+  groupMain: 'Haupt',
+  groupHere: 'hier',
+  groupNone:
+    'Dieses Projekt gehört zu keinem Verbund. Verbünde stehen in der Inhaber-Konfiguration.',
+  groupIdle: 'nichts offen',
+  groupProblem: (p) =>
+    p === 'no state yet'
+      ? 'noch kein Stand'
+      : p === 'state unreadable'
+        ? 'Stand nicht lesbar'
+        : p === 'folder cannot be read'
+          ? 'Ordner nicht lesbar'
+          : 'nicht lesbar',
+  groupBack: (name) => `Verbund ${name} · zurück: /studio group`,
+  groupOpen: 'Projekt öffnen: /studio group <Projekt>',
+  reaConfirm: (v, f) =>
+    `REA-Installation bestätigen (rea-agents ${v}${f ? ', Ordner ~/analysis' : ''})`,
 };
 
 const TEXTS: Record<Lang, Strings> = { en: EN, de: DE };
@@ -1323,6 +1471,13 @@ const ITEM_ID = /^[A-Z]+-\d+$/;
 const HINT_INDENT = '  ';
 const TEXT_INDENT = '    ';
 
+/** A pressable line: the text is what a surface without buttons shows. */
+const buttonLine = (b: { key: string; label: string }): Line => ({
+  text: `${HINT_INDENT}[ ${b.label} ]`,
+  tone: 'you',
+  button: b,
+});
+
 function hintLines(next: string, columns: number): Line[] {
   return wrap(next.replace(/^→\s*/, ''), columns, '      ', `${HINT_INDENT}→ `).map((text) => ({
     text,
@@ -1335,6 +1490,8 @@ interface Decision {
   id?: string;
   text: string;
   next?: string;
+  /** A control in place of the hint: the REA install confirmation. */
+  button?: { key: string; label: string };
 }
 
 /** The lead's decisions, then the lines for the owner and a red main build. One per key. */
@@ -1345,6 +1502,18 @@ function decisionsOf(s: BoardState, t: Strings): Decision[] {
     if (keys.has(d.item)) continue;
     keys.add(d.item);
     const id = ITEM_ID.test(d.item) ? d.item : undefined;
+    if (d.code === 'rea_install' && s.reaInstall !== undefined) {
+      // The owner's one confirmation is a press in this pane, never a phrase the lead could say.
+      out.push({
+        ...(id === undefined ? {} : { id }),
+        text: t.decision(d.code),
+        button: {
+          key: REA_CONFIRM_KEY,
+          label: t.reaConfirm(s.reaInstall.version, s.reaInstall.needsFolder),
+        },
+      });
+      continue;
+    }
     out.push({
       ...(id === undefined ? {} : { id }),
       text: t.decision(d.code),
@@ -1522,7 +1691,8 @@ function listBody(f: Frame, decisions: Decision[], items: BoardItem[]): Line[] {
       const head = d.id === undefined ? '! ' : `! ${d.id} `;
       for (const text of wrap(`${head}${d.text}`, columns, TEXT_INDENT, ''))
         out.push({ text, tone: 'err' });
-      if (d.next !== undefined) out.push(...hintLines(d.next, columns));
+      if (d.button !== undefined) out.push(buttonLine(d.button));
+      else if (d.next !== undefined) out.push(...hintLines(d.next, columns));
     }
     if (decisions.length > MAX_OWNER_LINES) {
       out.push({ text: t.more(decisions.length - MAX_OWNER_LINES), tone: 'dim' });
@@ -1642,7 +1812,8 @@ function pipelineBody(f: Frame, decisions: Decision[], items: BoardItem[]): Line
     const more = decisions.length > 1 ? ` (+${decisions.length - 1})` : '';
     const head = `! ${d.id === undefined ? '' : `${d.id} `}${d.text}${more}`;
     for (const text of wrap(head, columns, TEXT_INDENT, '')) out.push({ text, tone: 'you' });
-    if (d.next !== undefined) out.push(...hintLines(d.next, columns));
+    if (d.button !== undefined) out.push(buttonLine(d.button));
+    else if (d.next !== undefined) out.push(...hintLines(d.next, columns));
   }
   out.push({ text: '' });
   out.push({ text: join(built.map((c) => c.header)), tone: 'head' });
@@ -1672,10 +1843,29 @@ function pipelineBody(f: Frame, decisions: Decision[], items: BoardItem[]): Line
  */
 export function paneLines(
   read: BoardRead,
-  o: { columns: number; nowMs: number; paused: boolean; view?: View; lang?: Lang },
+  o: {
+    columns: number;
+    nowMs: number;
+    paused: boolean;
+    view?: View;
+    lang?: Lang;
+    /** Another project of the group is shown: its group's name, for the way back. */
+    focusOf?: string;
+  },
 ): Line[] {
   const t = textsOf(o.lang);
   const columns = clampColumns(o.columns);
+  if (o.focusOf !== undefined) {
+    const inner = paneLines(read, {
+      ...o,
+      focusOf: undefined,
+      view: o.view === 'group' ? 'list' : o.view,
+    });
+    return clip([{ text: t.groupBack(o.focusOf), tone: 'dim' }, ...inner], columns);
+  }
+  if (o.view === 'group' && read.kind === 'ok') {
+    return clip(groupLines(read.state, t, Math.min(columns, LIST_MAX), o.nowMs), columns);
+  }
   if (read.kind !== 'ok') {
     return calmLines(read.kind, o.paused, t).flatMap((l) =>
       wrap(l.text, columns).map((text) => ({ ...l, text: cut(text, columns) })),
@@ -1708,6 +1898,85 @@ export function paneLines(
     out.push(...emptyLines(lf));
   } else out.push(...(body ?? listBody(lf, decisions, items)));
   return clip(out, columns);
+}
+
+/** The counts of a project's line: only signs that are not zero, each with its number. */
+function groupCounts(r: BoardGroupRow, t: Strings): string {
+  if (r.counts === undefined) return t.groupProblem(r.problem ?? '');
+  const c = r.counts;
+  const parts = [
+    c.decisions > 0 ? `! ${c.decisions}` : '',
+    c.running > 0 ? `● ${c.running}` : '',
+    c.waiting > 0 ? `◷ ${c.waiting}` : '',
+    c.blocked > 0 ? `■ ${c.blocked}` : '',
+    c.ready > 0 ? `○ ${c.ready}` : '',
+  ].filter((x) => x !== '');
+  return parts.length === 0 ? `✓ ${t.groupIdle}` : parts.join('  ');
+}
+
+/**
+ * The group view: one line per project (its id, `main` and `here` as words, its counts by sign),
+ * then every lead decision of every project in one block, each with the command that opens that
+ * project's work list. Narrow panes put the counts on a second line, never cutting an id.
+ */
+export function groupLines(s: BoardState, t: Strings, columns: number, nowMs: number): Line[] {
+  const g = s.group;
+  if (g === undefined) {
+    return [
+      { text: 'Studio', tone: 'head' },
+      ...wrap(t.groupNone, columns).map((text) => ({ text, tone: 'dim' as const })),
+    ];
+  }
+  const updated = s.updatedAt === undefined ? Number.NaN : Date.parse(s.updatedAt);
+  const right = Number.isNaN(updated)
+    ? ''
+    : t.updated(Math.max(0, Math.floor((nowMs - updated) / 60_000)));
+  const out: Line[] = [
+    {
+      text: right === '' ? t.groupTitle(g.name) : spread(t.groupTitle(g.name), right, columns),
+      tone: 'head',
+    },
+  ];
+  const decisions = g.projects.flatMap((p) => p.decisions.map((d) => ({ project: p.id, ...d })));
+  if (decisions.length > 0) {
+    out.push({ text: t.decisions(decisions.length) });
+    out.push({ text: '' }, { text: pad(t.decisionHead, columns), tone: 'you' });
+    for (const d of decisions.slice(0, MAX_OWNER_LINES)) {
+      for (const text of wrap(
+        `! ${d.project} · ${d.item} ${t.decision(d.code)}`,
+        columns,
+        TEXT_INDENT,
+        '',
+      )) {
+        out.push({ text, tone: 'err' });
+      }
+      out.push(...hintLines(`/studio group ${d.project}`, columns));
+    }
+    if (decisions.length > MAX_OWNER_LINES) {
+      out.push({ text: t.more(decisions.length - MAX_OWNER_LINES), tone: 'dim' });
+    }
+  }
+  out.push({ text: '' });
+  for (const p of g.projects) {
+    const tags = [p.main ? t.groupMain : '', p.self ? t.groupHere : ''].filter((x) => x !== '');
+    const left = `${p.id}${tags.length === 0 ? '' : ` (${tags.join(', ')})`}`;
+    const right = groupCounts(p, t);
+    const tone: Line['tone'] =
+      p.counts === undefined
+        ? 'dim'
+        : p.counts.decisions > 0 || p.counts.blocked > 0
+          ? 'err'
+          : undefined;
+    if (width(left) + 2 + width(right) <= columns) {
+      out.push({ text: spread(left, right, columns), ...(tone === undefined ? {} : { tone }) });
+    } else {
+      out.push({ text: cut(left, columns), ...(tone === undefined ? {} : { tone }) });
+      for (const text of wrap(right, columns, TEXT_INDENT, TEXT_INDENT))
+        out.push({ text, tone: 'dim' });
+    }
+  }
+  out.push({ text: '' }, ...hintLines(t.groupOpen, columns));
+  return out;
 }
 
 // ---------- state directory name (same result as src/paths.ts) ----------

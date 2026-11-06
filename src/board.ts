@@ -43,6 +43,15 @@ const componentId = z.string().regex(COMPONENT_ID_RE, 'must match ^[a-z][a-z0-9-
 /** An epic id: Studio numbers epics `E-1`, `E-2`, ... */
 export const EPIC_ID_RE = /^E-[1-9]\d*$/;
 
+/**
+ * An item of another project of the owner's group: `<project>:<id>` (src/group.ts). Same rule as
+ * GROUP_REF_RE there; the board checks its form, the planner whether the group knows it.
+ */
+export const GROUP_REF_RE = /^([a-z][a-z0-9-]{0,31}):([A-Z]+-\d+)$/;
+
+/** How a member item of an epic stands, as the main project read it; undefined when unreadable. */
+export type MemberStatus = (ref: string) => ItemStatus | undefined;
+
 /** What a crew sandbox lacks: a test that needs one of these is not run there, CI runs it. */
 export const NOT_RUN_SERVICES = ['database', 'docker', 'network', 'service'] as const;
 // No control characters, and no format characters (bidi overrides, zero-width): those make a line
@@ -150,6 +159,14 @@ export const workItemSchema = z.strictObject({
   // Set by an acceptance: what its reviewer crew found (or a failed suite the repository names).
   // Crew text: the builder gets it as a data file, never in its title or Definition of Done.
   finding: plainLine.optional(),
+  // A researcher's own analysis folder (`studio add --artifacts`): absolute, and at launch it must
+  // lie below a `research_roots` entry of the owner config, like the project's `research.artifacts`.
+  artifacts: z
+    .string()
+    .min(2)
+    .max(500)
+    .regex(/^\/[^\p{Cc}\p{Cf}]*$/u, 'must be an absolute path')
+    .optional(),
   // The epic this item is a piece of (`epics:` on the same board).
   epic: z.string().regex(EPIC_ID_RE, 'must match ^E-\\d+$').optional(),
   // Set by `collect` from the crew logs: every run of this item and of the reviews of its pull
@@ -202,6 +219,12 @@ export const epicSchema = z.strictObject({
   importedFrom: plainLine.optional(),
   // Plain lines about the epic, e.g. what the import found (`in progress at import`).
   notes: z.array(plainLine).max(20).optional(),
+  // Items of member projects of the group this epic holds (`<project>:<id>`, src/group.ts): they
+  // count in its progress, and it is accepted only once they are merged too.
+  memberItems: z
+    .array(z.string().regex(GROUP_REF_RE, 'must be <project>:<id>'))
+    .max(100)
+    .optional(),
   // Set when the acceptance was green: the acceptance item and the main commit it checked.
   accepted: z
     .strictObject({
@@ -331,6 +354,8 @@ export function parseBoard(text: string, file: string, config?: StudioConfig): B
   }
   for (const it of board.items) {
     for (const dep of it.dependsOn) {
+      // An item of another project of the group: the planner resolves it against that board.
+      if (GROUP_REF_RE.test(dep)) continue;
       if (!ids.has(dep)) throw new BoardError(file, `${it.id}: depends_on unknown id ${dep}`);
     }
     for (const c of it.conflictsWith ?? []) {
@@ -410,6 +435,7 @@ const KEY_ORDER: readonly (keyof WorkItem)[] = [
   'triggers',
   'model',
   'finding',
+  'artifacts',
   'epic',
   'usage',
   'history',
@@ -424,6 +450,7 @@ const EPIC_KEY_ORDER: readonly (keyof Epic)[] = [
   'components',
   'importedFrom',
   'notes',
+  'memberItems',
   'accepted',
   'history',
 ];
@@ -568,23 +595,43 @@ export type EpicProgress = {
   /** The epic's items except dropped ones. */
   total: number;
   counts: Partial<Record<ItemStatus, number>>;
+  /** Member items of the group whose board could not be read (counted in total, not merged). */
+  unknown?: number;
 };
 
 /**
  * How far an epic is: its items by status, and merged of all but the dropped ones. The acceptance
  * item checks the epic and is no piece of it: it never counts.
  */
-export function epicProgress(board: Board, epicId: string): EpicProgress {
+export function epicProgress(
+  board: Board,
+  epicId: string,
+  /** The statuses of the epic's member items; without it they are left out. */
+  members?: MemberStatus,
+): EpicProgress {
   const counts: Partial<Record<ItemStatus, number>> = {};
   let merged = 0;
   let total = 0;
+  let unknown = 0;
+  const add = (status: ItemStatus) => {
+    counts[status] = (counts[status] ?? 0) + 1;
+    if (status !== 'dropped') total++;
+    if (status === 'merged') merged++;
+  };
   for (const i of board.items) {
     if (i.epic !== epicId || acceptanceOf(i) !== undefined) continue;
-    counts[i.status] = (counts[i.status] ?? 0) + 1;
-    if (i.status !== 'dropped') total++;
-    if (i.status === 'merged') merged++;
+    add(i.status);
   }
-  return { merged, total, counts };
+  if (members !== undefined) {
+    for (const ref of board.epics?.find((e) => e.id === epicId)?.memberItems ?? []) {
+      const status = members(ref);
+      if (status === undefined) {
+        unknown++;
+        total++;
+      } else add(status);
+    }
+  }
+  return { merged, total, counts, ...(unknown > 0 ? { unknown } : {}) };
 }
 
 /**
@@ -596,12 +643,20 @@ export function settleEpics(
   board: Board,
   by: string,
   now: Date,
+  /**
+   * The statuses of member items. An epic that holds any moves only with them, and only while all
+   * can be read (fail closed): without them it stays where it is.
+   */
+  members?: MemberStatus,
 ): { board: Board; moved: { epic: string; from: EpicStatus; to: EpicStatus }[] } {
   if (board.epics === undefined || board.epics.length === 0) return { board, moved: [] };
   const moved: { epic: string; from: EpicStatus; to: EpicStatus }[] = [];
   const epics = board.epics.map((e) => {
     if (e.status !== 'open' && e.status !== 'accepting') return e;
-    const p = epicProgress(board, e.id);
+    const held = (e.memberItems ?? []).length > 0;
+    if (held && members === undefined) return e;
+    const p = epicProgress(board, e.id, held ? members : undefined);
+    if ((p.unknown ?? 0) > 0) return e;
     const allMerged = p.total > 0 && p.merged === p.total;
     const to: EpicStatus | undefined =
       e.status === 'open' && allMerged

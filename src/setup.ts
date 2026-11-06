@@ -27,6 +27,8 @@ import {
   subscribeLink,
   testPushText,
 } from './push.js';
+import { ensureRea, reaMode, reaVersionOf, recordSetupSkip, setupSkipped } from './rea-consent.js';
+import { verifyReaInstall } from './rea-install.js';
 import { doctorReport, readPrimaryRepo, runSecretSet } from './secret-command.js';
 import { assertPrimaryRepo, safe } from './setup-ci-command.js';
 
@@ -268,6 +270,88 @@ async function link(o: SetupOptions, home: string): Promise<number> {
   return 0;
 }
 
+const RESEARCH_TEXT = [
+  '   A researcher crew can reverse engineer shipped programs with REA (rea-agents). Studio installs',
+  '   it once into its own state, checked against the npm registry, and grants it one analysis',
+  '   folder. REA tools run with your user rights outside the sandbox. Skip it if you never need it:',
+  '   Studio asks again the first time a researcher item needs it.',
+];
+
+/**
+ * Step 6, optional: REA for researcher crews. Done when the pinned version is installed in the mode
+ * the owner config asks for and a research root is granted; otherwise offered (`standalone`: asked
+ * directly, as `studio setup research`). Runs the same one-time confirmation as a first launch.
+ */
+export async function researchStep(o: SetupOptions, standalone: boolean): Promise<number> {
+  const say = (s: string) => o.stdout(`${safe(s)}\n`);
+  if (o.env.STUDIO_ROLE === 'crew') throw new Error('this command is not for crew sessions');
+  if (!o.isTerminal || o.readLine === undefined) {
+    throw new Error(
+      'studio setup research needs your own terminal; without one use studio research install --yes --folder <dir>. Nothing changed',
+    );
+  }
+  let config: OwnerConfig;
+  try {
+    config = loadOwnerConfig(o.owner);
+  } catch {
+    say(
+      '6. Reverse engineering: the owner config cannot be read; fix it with studio doctor. Nothing changed.',
+    );
+    return 1;
+  }
+  const ownerRoot = ownerStateRootFor(o.owner);
+  const version = reaVersionOf(config);
+  const mode = reaMode(config);
+  let installed = true;
+  try {
+    verifyReaInstall(ownerRoot, version, o.owner.uid ?? process.getuid?.(), mode);
+  } catch {
+    installed = false;
+  }
+  const modeWord = mode === 'full' ? 'trust mode' : 'strict mode';
+  if (installed && config.researchRoots.length > 0) {
+    say(
+      `6. Reverse engineering: done (rea-agents ${version}, ${modeWord}, ${config.researchRoots.join(', ')})`,
+    );
+    return 0;
+  }
+  if (!standalone && setupSkipped(ownerRoot)) {
+    say('6. Reverse engineering (optional): skipped; studio setup research sets it up');
+    return 0;
+  }
+  say('6. Reverse engineering (optional): not set up');
+  for (const l of RESEARCH_TEXT) say(l);
+  if (!standalone) {
+    const answer = await o.readLine('   Set it up now? [y/N] ');
+    // Enter is no here: the step is optional.
+    if (answer === undefined || !['y', 'yes'].includes(answer.trim().toLowerCase())) {
+      // Asked once: setup stays quiet about it from now on.
+      recordSetupSkip(ownerRoot, o.ports.clock.now());
+      say('   skipped; later: studio setup research');
+      return 0;
+    }
+  }
+  try {
+    const r = await ensureRea({
+      ownerRoot,
+      owner: o.owner,
+      env: o.env,
+      ports: o.ports,
+      asker: {
+        isTerminal: true,
+        readLine: (p) => (o.readLine as NonNullable<typeof o.readLine>)(`   ${p}`),
+        say: (l) => say(`   ${l}`),
+      },
+      now: o.ports.clock.now(),
+    });
+    say(`   done (rea-agents ${r.version}, ${modeWord}${r.installed ? ', installed now' : ''})`);
+    return 0;
+  } catch (e) {
+    say(`   ${(e as Error).message}`);
+    return 1;
+  }
+}
+
 const NOTIFY_TEXT = [
   '   Studio can push one line to your phone when it needs a decision: a fixed phrase, the item',
   '   id and the project name, nothing else. It uses ntfy, which needs no account: Studio makes a',
@@ -428,6 +512,9 @@ export async function runSetup(o: SetupOptions): Promise<number> {
 
   const notified = await notificationsStep(o, false);
   if (notified !== 0) return notified;
+
+  const researched = await researchStep(o, false);
+  if (researched !== 0) return researched;
 
   say('');
   say('Done. Now open your project in Claude Code and run /studio:init.');

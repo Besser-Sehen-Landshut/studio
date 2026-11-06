@@ -259,6 +259,7 @@ describe('owner config', () => {
       crewLabelLimits: { maxParallel: 2 },
       allowedPlugins: [],
       researchRoots: [],
+      research: { trust: true },
       reaEnv: {},
     });
   });
@@ -274,6 +275,7 @@ describe('owner config', () => {
       crewLabelLimits: { maxParallel: 2 },
       allowedPlugins: [],
       researchRoots: [],
+      research: { trust: true },
       reaEnv: {},
     });
   });

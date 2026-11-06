@@ -67,6 +67,11 @@ export async function installRea(o: {
   npm: NonNullable<Ports['npm']>;
   path: string;
   now: Date;
+  /**
+   * Trust mode: optional dependencies and install scripts too, which the debug and observe tools
+   * need. The tarball is still checked against the registry's integrity.
+   */
+  full?: boolean;
 }): Promise<{ dir: string; integrity: string }> {
   const dir = reaInstallDir(o.ownerRoot, o.version);
   const staging = `${dir}.staging`;
@@ -100,8 +105,7 @@ export async function installRea(o: {
         'install',
         '--save-exact',
         '--package-lock=true',
-        '--ignore-scripts',
-        '--omit=optional',
+        ...(o.full === true ? [] : ['--ignore-scripts', '--omit=optional']),
         '--no-audit',
         '--no-fund',
       ],
@@ -121,7 +125,7 @@ export async function installRea(o: {
     writeStateFile(
       o.ownerRoot,
       join(staging, REA_RECORD),
-      `${JSON.stringify({ package: REA_PACKAGE, version: o.version, integrity, installedAt: o.now.toISOString() }, null, 2)}\n`,
+      `${JSON.stringify({ package: REA_PACKAGE, version: o.version, integrity, ...(o.full === true ? { full: true } : {}), installedAt: o.now.toISOString() }, null, 2)}\n`,
     );
     removeStateEntry(o.ownerRoot, join(staging, '.home'));
     // Swap: the earlier install aside, the new one in, verified as a launch would; back on failure.
@@ -132,7 +136,12 @@ export async function installRea(o: {
     if (hadPrevious) renameSync(dir, previous);
     renameSync(staging, dir);
     try {
-      verifyReaInstall(o.ownerRoot, o.version);
+      verifyReaInstall(
+        o.ownerRoot,
+        o.version,
+        process.getuid?.(),
+        o.full === true ? 'full' : 'static',
+      );
     } catch (e) {
       removeStateEntry(o.ownerRoot, dir);
       if (hadPrevious) renameSync(previous, dir);
@@ -191,9 +200,11 @@ export function verifyReaInstall(
   ownerRoot: string,
   version: string,
   uid: number | undefined = process.getuid?.(),
+  /** `full`: a trust-mode install (record says so); `static`: no optional native part. */
+  mode: 'full' | 'static' = 'static',
 ): ReaInstall {
   const dir = reaInstallDir(ownerRoot, version);
-  const hint = `run studio research install in a terminal to install ${REA_PACKAGE}@${version}`;
+  const hint = `it installs on the first launch that needs it, after one confirmation by the owner (or studio research install) of ${REA_PACKAGE}@${version}`;
   try {
     ownedPlain(dir, 'dir', uid);
     ownedPlain(join(dir, REA_RECORD), 'file', uid);
@@ -202,7 +213,16 @@ export function verifyReaInstall(
       package?: unknown;
       version?: unknown;
       integrity?: unknown;
+      full?: unknown;
     };
+    if (mode === 'full' && record.full !== true) {
+      throw new Error(
+        'installed for strict mode (static tools only); trust mode needs the full install',
+      );
+    }
+    if (mode === 'static' && record.full === true) {
+      throw new Error('installed in full for trust mode; strict mode needs the static install');
+    }
     if (record.package !== REA_PACKAGE || record.version !== version) {
       throw new Error('the install record names another package or version');
     }
@@ -218,7 +238,7 @@ export function verifyReaInstall(
       throw new Error('the lockfile does not match the install record');
     }
     // Installed without optional dependencies: a native part there was not pinned by Studio.
-    if (existsNoFollow(join(dir, 'node_modules', 'frida'))) {
+    if (mode === 'static' && existsNoFollow(join(dir, 'node_modules', 'frida'))) {
       throw new Error('the install holds the optional native dependency frida');
     }
     const pkgDir = join(dir, 'node_modules', REA_PACKAGE);

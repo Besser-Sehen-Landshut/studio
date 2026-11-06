@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
@@ -11,7 +12,13 @@ import {
   settleAcceptances,
 } from './acceptance.js';
 import { runAccount } from './account-command.js';
-import { addItem } from './add-item.js';
+import { addItem, boardPrefix } from './add-item.js';
+import {
+  REVIEW_GRACE_MS,
+  timedOutAgents,
+  timeoutReportProblem,
+  timeoutsOfContext,
+} from './analyzer-timeout.js';
 import {
   type ApprovedJob,
   acceptanceOf,
@@ -21,6 +28,7 @@ import {
   EPIC_STAGE_WORDS,
   ITEM_STATUSES,
   loadBoard,
+  type MemberStatus,
   saveBoard,
   transition,
   type WorkItem,
@@ -77,6 +85,16 @@ import {
   type PrRef,
   withFlakyItem,
 } from './flaky-ci.js';
+import {
+  checkContracts,
+  externalDeps,
+  formatGroupRows,
+  groupNamed,
+  groupRows,
+  memberStatusLookup,
+  membershipOf,
+  resolveExternalDeps,
+} from './group.js';
 import { HeldError } from './held.js';
 import { runInit } from './init.js';
 import { runLessonsReview, settleLessonsReviews } from './lessons-review.js';
@@ -140,8 +158,16 @@ import {
   updateQueue,
   viewPr,
 } from './queue.js';
-import { REA_CLASS_NAMES, REA_DEFAULT_VERSION, type ReaClass, reaClassOf } from './rea.js';
-import { installRea, readReaAllow, removeReaRun, updateReaAllow } from './rea-install.js';
+import { REA_CLASS_NAMES, type ReaClass, reaClassOf } from './rea.js';
+import {
+  type Asker,
+  ensureRea,
+  ReaInstallNeeded,
+  reaMode,
+  reaVersionOf,
+  researchFolder,
+} from './rea-consent.js';
+import { readReaAllow, removeReaRun, updateReaAllow } from './rea-install.js';
 import { type Finding, recoverProject, TICK_LOCK, TICK_LOCK_STALE_MS } from './recover.js';
 import {
   advanceRelease,
@@ -196,7 +222,7 @@ import {
   pruneLesson,
 } from './role-memory.js';
 import { runDoctor, runSecretSet } from './secret-command.js';
-import { runSetup } from './setup.js';
+import { researchStep, runSetup } from './setup.js';
 import { runSetupCi } from './setup-ci-command.js';
 import { runSkillsCheck, skillsCheckDue } from './skills-check.js';
 import { searchSolutions } from './solutions.js';
@@ -452,6 +478,13 @@ function latestReview(board: Board, target: string): WorkItem | undefined {
 }
 
 /** What one `tick` did and what it leaves to the lead. */
+/** The lead's line for reference files left out because their paths differ only in case. */
+const collisionLine = (paths: readonly string[]): string =>
+  `reference case collision: the main project has paths that differ only in case, none of them copied: ${paths
+    .slice(0, 10)
+    .join(', ')
+    .replace(/\p{Cc}/gu, ' ')}; rename one there`;
+
 interface Tick {
   collected: Record<string, unknown>[];
   /** Review items added for pull requests in review that had neither a review nor a verdict. */
@@ -469,6 +502,10 @@ interface Tick {
   flakyItems: CiEvents['flakyItems'];
   /** Per item (`item`), or a phase that failed or did not run (`phase`). */
   errors: { item?: string; phase?: string; error: string }[];
+  /** One-time notices of a launch (REA trust mode), for the lead to pass on. */
+  notices?: string[];
+  /** A contract change of the group's main project and the check item it gave this member. */
+  contractCheck?: { group: string; item?: string; files: number; sha: string };
   /** Epics whose items are all merged (status `accepting`), in their acceptance; absent without one. */
   epicsReady?: { epic: string; title: string; acceptance?: string }[];
   /** Acceptance items this tick added, dropped as superseded, or pinned to a main commit whose full suites completed. */
@@ -777,6 +814,32 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         }
       }
     };
+    /** This project's group, from the owner config alone (src/group.ts); undefined in none. */
+    const groupOf = (config: StudioConfig, ownerConfig: OwnerConfig) =>
+      membershipOf(project, config, ownerConfig);
+    /**
+     * Cross-project dependencies of ready items, read from the other projects' boards. A group
+     * that cannot be told leaves them unresolved: the planner then holds each such item.
+     */
+    const externalDepsOf = (config: StudioConfig, ownerConfig: OwnerConfig, board: Board) => {
+      if (!board.items.some((i) => i.status === 'ready' && externalDeps(i).length > 0)) {
+        return undefined;
+      }
+      try {
+        return resolveExternalDeps(board, groupOf(config, ownerConfig));
+      } catch {
+        return undefined;
+      }
+    };
+    /** Member item statuses for the epics of a group's main project; undefined elsewhere. */
+    const memberLookup = () => {
+      try {
+        const m = groupOf(loadConfig(project), loadOwnerConfig(owner));
+        return m?.isMain === true ? memberStatusLookup(m) : undefined;
+      } catch {
+        return undefined;
+      }
+    };
     /** `skipLabelCount`: `state` goes on without the per-label room when crew records are unreadable. */
     const planNow = async (config: StudioConfig, board: Board, skipLabelCount = false) => {
       const capacity = await readCapacity(config, ports);
@@ -832,6 +895,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           slots,
           ciPending,
           offerHold,
+          externalDepsOf(config, ownerConfig, board),
         ),
       };
     };
@@ -1171,7 +1235,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     };
 
     /** Starts the crew of a planned item and moves it to `assigned`: the body of `launch`. */
-    const launch = async (id: string | undefined) => {
+    const launch = async (id: string | undefined, asker?: Asker) => {
       if (await reconcile()) {
         throw new HeldError(
           'another Studio process is reconciling account blocks; refusing to launch, try again',
@@ -1200,7 +1264,13 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           'not in the current plan';
         throw new HeldError(`${item.id} is not in the current plan: ${why}`);
       }
-      const res = await launchCrew(project, item, config, ports, owner);
+      const res = await launchCrew(
+        project,
+        item,
+        config,
+        ports,
+        asker === undefined ? owner : { ...owner, asker },
+      );
       // The launch took a while: re-read the board and move the item on the fresh copy.
       await withBoardLock(stateRoot(), ports.clock.now(), () => {
         const fresh = loadBoard(project);
@@ -1399,6 +1469,20 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
       // A review report that does not hold to its brief is a rejected report, like one that
       // cannot be read: `tick` hands both to the lead.
+      // A subagent the guard stopped for time never counts as a pass: the approval must show it.
+      const timeoutHold = () => {
+        if (item.type !== 'review' || report.status !== 'done' || report.verdict !== 'approve') {
+          return;
+        }
+        const caps = readCrewCaps(stateRoot(), item.id);
+        const problem = timeoutReportProblem(
+          timedOutAgents(stateRoot(), item.id),
+          report.analyzers ?? {},
+          caps?.analyzers ?? [],
+          caps?.mandatory ?? [],
+        );
+        if (problem !== undefined) throw new ReportError(problem);
+      };
       const reviewCaps = () => {
         try {
           return checkReviewCaps(readCrewCaps(stateRoot(), item.id), report);
@@ -1420,6 +1504,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         item.type === 'review' && report.status === 'done' && accepts === undefined
           ? reviewCaps()
           : { skipped: [] as string[], target: undefined, notRunHere: undefined };
+      timeoutHold();
       let approvedJobs: ApprovedJob[] = [];
       let covered: CoveredJob[] = [];
       let applied: ExceptionEntry[] = [];
@@ -1499,7 +1584,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             };
           }
           if (change.problem !== undefined) {
-            const note = `approval refused: ${change.problem}; ${change.area === 'release' ? 'the release rules are' : change.area === 'research' ? 'the research block is' : 'evidence is'} the owner's: the owner reviews and merges such a change himself`;
+            const note = `approval refused: ${change.problem}; ${change.area === 'release' ? 'the release rules are' : change.area === 'research' ? 'the research block is' : change.area === 'board' ? 'the board is' : 'evidence is'} the owner's: the owner reviews and merges such a change himself`;
             await withBoardLock(stateRoot(), ports.clock.now(), () => {
               const fresh = loadBoard(project);
               if (findItem(fresh, item.id).status !== item.status) {
@@ -2264,8 +2349,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           try {
             const res = await launch(a.id);
             out.launched.push({ item: a.id, name: res.name, pid: res.pid });
+            if (res.notice !== undefined) out.notices = [...(out.notices ?? []), res.notice];
+            if (res.collisions !== undefined) lead(a.id, collisionLine(res.collisions));
           } catch (e) {
             if (e instanceof HeldError) out.held.push({ item: a.id, reason: why(e) });
+            // Nobody to ask in a tick: the owner confirms the REA install once, by command.
+            else if (e instanceof ReaInstallNeeded) lead(a.id, why(e));
             else out.errors.push({ item: a.id, error: why(e) });
           }
         }
@@ -2345,6 +2434,63 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           raised: r.raised,
           problems: r.problems,
         };
+      };
+
+      // A reviewer still alive well after its session deadline (src/analyzer-timeout.ts): the guard
+      // refused it everything but the report, and it wrote none. Stopped, and the lead decides.
+      const reviewTimeoutPhase = async () => {
+        const records = readCrewRecords(root);
+        const now = ports.clock.now().getTime();
+        for (const item of loadBoard(project).items) {
+          if (item.type !== 'review') continue;
+          if (item.status !== 'assigned' && item.status !== 'in_progress') continue;
+          const rec = records[item.id];
+          if (rec === undefined || rec.stoppedAt !== undefined) continue;
+          const t = timeoutsOfContext(join(root, 'guard', `${item.id}.json`));
+          const ends = t === undefined ? Number.NaN : Date.parse(t.sessionEndsAt);
+          if (Number.isNaN(ends) || now < ends + REVIEW_GRACE_MS) continue;
+          beat();
+          const process = await crewProcess(rec, ports);
+          if (process === 'unknown') {
+            lead(item.id, `review timed out: ${unverifiedHandgrip(rec)}`);
+            continue;
+          }
+          if (process !== 'verified') continue;
+          await ports.claude.stop(rec.pid);
+          const stoppedAt = ports.clock.now().toISOString();
+          updateCrewRecords(root, (all) => {
+            all[item.id] = { ...(all[item.id] ?? rec), stoppedAt };
+          });
+          lead(
+            item.id,
+            `review timed out: the crew wrote no report by its deadline and was stopped; studio stop ${item.id} --requeue for its one relaunch`,
+          );
+        }
+      };
+
+      // A member of a group: a change of the main project's contract files gives one check item.
+      const contractsPhase = async () => {
+        const config = loadConfig(project);
+        const m = groupOf(config, loadOwnerConfig(owner));
+        if (m === undefined || m.isMain) return;
+        const r = await checkContracts({
+          m,
+          config,
+          stateRoot: root,
+          ports,
+          prefix: (board) => boardPrefix(board, config.primaryRepo),
+          locked: (fn) => withBoardLock(root, ports.clock.now(), fn),
+          loadBoard: () => loadBoard(project),
+          saveBoard: (board) => saveBoard(project, board),
+        });
+        if (r?.changed !== undefined) {
+          out.contractCheck = {
+            group: m.group.name,
+            ...(r.item === undefined ? {} : { item: r.item }),
+            files: r.changed.length,
+            sha: r.sha,
+          };
+        }
       };
 
       // First, after a crash or a reboot: a launch cut short is finished on the board, never started
@@ -2456,6 +2602,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       try {
         for (const [name, body] of [
           ['recover', recoverPhase],
+          ['review timeouts', reviewTimeoutPhase],
+          ['contracts', contractsPhase],
           ['collect', collectEnded],
           ['review', reviewMissing],
           ['workers', followWorkers],
@@ -2509,9 +2657,17 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         let now = board;
         if (board.epics?.some((e) => e.status === 'open' || e.status === 'accepting')) {
           const config = loadConfig(project);
+          // The main project of a group: epics holding member items move with their statuses.
+          let members: ReturnType<typeof memberStatusLookup> | undefined;
+          try {
+            const m = groupOf(config, loadOwnerConfig(owner));
+            if (m?.isMain === true) members = memberStatusLookup(m);
+          } catch {
+            members = undefined; // such epics stay where they are
+          }
           now = await withBoardLock(root, ports.clock.now(), () => {
             const fresh = loadBoard(project);
-            settleAndSave(project, fresh, BY, ports.clock.now());
+            settleAndSave(project, fresh, BY, ports.clock.now(), members);
             // An epic the queue just completed gets its acceptance item now; the next tick pins main.
             const settled = settleAcceptances(loadBoard(project), config, ports.clock.now());
             if (settled.added.length > 0 || settled.dropped.length > 0) {
@@ -2692,6 +2848,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ...(component === undefined ? {} : { component }),
             ...(values.plan === undefined ? {} : { plan: values.plan }),
             ...(values.epic === undefined ? {} : { epic: values.epic }),
+            ...(values.artifacts === undefined
+              ? {}
+              : {
+                  artifacts: researchFolder(
+                    values.artifacts,
+                    loadOwnerConfig(owner).researchRoots,
+                    owner.homedir ?? homedir(),
+                  ),
+                }),
             now: ports.clock.now(),
             locked: (fn) => withBoardLock(stateRoot(), ports.clock.now(), fn),
           }),
@@ -2834,7 +2999,10 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           if (args.length !== 0) throw new UsageError('epic list takes no arguments');
           const board = loadAll().board;
           const costs = new Map(costReport(board).epics.map((e) => [e.epic, e.costUsd]));
-          const rows = epicRows(board).map((r) => ({ ...r, costUsd: costs.get(r.id) ?? 0 }));
+          const rows = epicRows(board, memberLookup()).map((r) => ({
+            ...r,
+            costUsd: costs.get(r.id) ?? 0,
+          }));
           if (json) print(rows);
           else {
             const counts = (c: (typeof rows)[number]['counts']) => {
@@ -2864,7 +3032,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           if (args.length !== 1) throw new UsageError('epic show needs one epic id');
           const { board } = loadAll();
           const epic = findEpic(board, args[0]);
-          const row = epicRows(board).find((r) => r.id === epic.id) as ReturnType<
+          const row = epicRows(board, memberLookup()).find((r) => r.id === epic.id) as ReturnType<
             typeof epicRows
           >[number];
           const items = board.items.filter((i) => i.epic === epic.id);
@@ -2900,6 +3068,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
               ? 'No items yet.\n'
               : table([['ID', 'STATUS', 'TITLE'], ...items.map((i) => [i.id, i.status, i.title])]),
           );
+          if ((row.members ?? []).length > 0) {
+            stdout(
+              `Member items:\n${table([['ITEM', 'STATUS'], ...(row.members ?? []).map((x) => [x.ref, x.status])])}`,
+            );
+          }
           return 0;
         }
         if (sub === 'drop') {
@@ -2917,11 +3090,30 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           refuseCrew(deps.env);
           if (args.length !== 1) throw new UsageError('epic edit needs one epic id');
           const id = args[0] as string;
+          if (values.member !== undefined) {
+            // Member items belong to an epic of the group's main project, and only to one there.
+            const config = loadConfig(project);
+            const m = groupOf(config, loadOwnerConfig(owner));
+            if (m === undefined || !m.isMain) {
+              throw new Error(
+                '--member needs this project to be the main project of a group in the owner config',
+              );
+            }
+            for (const ref of values.member) {
+              const p = /^([a-z][a-z0-9-]{0,31}):/.exec(ref.trim())?.[1];
+              if (p === undefined || p === m.self.id || !m.group.projects.some((x) => x.id === p)) {
+                throw new Error(
+                  `--member ${ref}: not an item of a member project of ${m.group.name}`,
+                );
+              }
+            }
+          }
           const changed = await withBoardLock(stateRoot(), ports.clock.now(), () => {
             const r = editEpic(loadBoard(project, loadConfig(project)), id, {
               ...(values.title === undefined ? {} : { title: values.title }),
               ...(values.goal === undefined ? {} : { goal: values.goal }),
               ...(values.acceptance === undefined ? {} : { acceptance: values.acceptance }),
+              ...(values.member === undefined ? {} : { members: values.member }),
             });
             saveBoard(project, r.board);
             return r.changed;
@@ -3018,7 +3210,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'launch': {
-        print(await launch(rest[0]));
+        // The owner in a terminal is asked for a first REA install here; the lead never is.
+        const res = await launch(rest[0], {
+          isTerminal: deps.isTerminal === true && deps.env.STUDIO_ROLE !== 'crew',
+          ...(deps.readLine === undefined ? {} : { readLine: deps.readLine }),
+          say: (l) => stderr(`${l}\n`),
+        });
+        if (res.notice !== undefined) stderr(`note: ${res.notice}\n`);
+        if (res.collisions !== undefined) stderr(`warning: ${collisionLine(res.collisions)}\n`);
+        print(res);
         return 0;
       }
 
@@ -3049,6 +3249,21 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'status': {
+        // One line per project of a group, from their state files: read only, nothing reconciled.
+        if (values.group !== undefined) {
+          if (rest.length > 0) throw new UsageError('status --group takes no arguments');
+          const group = groupNamed(loadOwnerConfig(owner), values.group);
+          let self: string | undefined;
+          try {
+            self = groupOf(loadConfig(project), loadOwnerConfig(owner))?.self.id;
+          } catch {
+            self = undefined;
+          }
+          const rows = groupRows(group, self, owner);
+          if (json) print({ group: group.name, main: group.main, projects: rows });
+          else stdout(formatGroupRows(group.name, rows));
+          return 0;
+        }
         await reconcile();
         // Status never needed the config: one that cannot be read costs the component column
         // only, silently, so the heartbeat's output stays as it was.
@@ -3209,6 +3424,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ownerConfig,
             mainBuild: await readMainBuild(config, ports),
             crewRecordsUnreadable: crewProblem !== undefined,
+            members: memberLookup(),
             alive: (pid) => Number.isInteger(pid) && pid > 0 && ports.claude.alive(pid),
             hasReport: (item) => {
               if (!isItemId(item)) return false;
@@ -3220,6 +3436,28 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             },
           },
         );
+        // A REA install waits for the owner: the pane's button confirms this version and mode.
+        if ((snapshot.needsLead ?? []).some((d) => d.code === 'rea_install')) {
+          snapshot.reaInstall = {
+            version: reaVersionOf(ownerConfig),
+            mode: reaMode(ownerConfig),
+            needsFolder: ownerConfig.researchRoots.length === 0,
+          };
+        }
+        // A project of a group: one row per project, read from their state files.
+        try {
+          const m = groupOf(config, ownerConfig);
+          if (m !== undefined) {
+            snapshot.group = {
+              name: m.group.name,
+              main: m.group.main,
+              self: m.self.id,
+              projects: groupRows(m.group, m.self.id, owner, JSON.stringify(snapshot)),
+            };
+          }
+        } catch (e) {
+          stderr(`error: group: ${(e as Error).message.replace(/\p{Cc}/gu, ' ')}\n`);
+        }
         writeState(root, snapshot);
         try {
           for (const line of await sendNotifications({
@@ -3431,9 +3669,26 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (rest[0] === 'stack' && rest.length === 1) {
           return runSetupStack({ project, json, write: values.write === true, stdout });
         }
+        if (rest[0] === 'research' && rest.length === 1) {
+          return await researchStep(
+            {
+              project,
+              ports,
+              owner,
+              env: deps.env,
+              isTerminal: deps.isTerminal === true,
+              ...(deps.readLine === undefined ? {} : { readLine: deps.readLine }),
+              link: false,
+              notifications: false,
+              stdout,
+              stderr,
+            },
+            true,
+          );
+        }
         if (rest[0] !== 'ci' || rest.length !== 1) {
           throw new UsageError(
-            'setup takes: [--link] | ci [--write] | stack [--write] | sources [<id>...]',
+            'setup takes: [--link] | ci [--write] | stack [--write] | sources [<id>...] | research',
           );
         }
         return await runSetupCi({
@@ -3493,26 +3748,50 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           print({ allowed: readReaAllow(stateRoot()), classes: [...REA_CLASS_NAMES] });
           return 0;
         }
+        // Installing runs third-party code as the owner: never for a crew. `--yes` is the owner's
+        // one confirmation, also when the lead runs it on the owner's word; without it a terminal
+        // asks. Nothing else here changes without a terminal.
+        if (sub === 'install' && rest.length === 1) {
+          if (deps.env.STUDIO_ROLE === 'crew') {
+            stderr(
+              'studio: REA is installed by the owner only, never by a crew; nothing changed\n',
+            );
+            return 1;
+          }
+          // The confirmation is the owner's: only a real terminal, never the lead or a script.
+          if (deps.isTerminal !== true) {
+            stderr(
+              'studio: research install needs your own terminal (--yes and --folder count only there); or confirm with the button in the Studio pane; nothing changed\n',
+            );
+            return 1;
+          }
+          const r = await ensureRea({
+            ownerRoot: ownerRoot(),
+            owner,
+            env: deps.env,
+            ports,
+            asker: {
+              isTerminal: deps.isTerminal === true,
+              ...(deps.readLine === undefined ? {} : { readLine: deps.readLine }),
+              say: (l) => stderr(`${l}\n`),
+            },
+            now: ports.clock.now(),
+            ...(values.yes === true ? { yes: true } : {}),
+            ...(values.folder === undefined ? {} : { folder: values.folder }),
+          });
+          print({
+            rea: `rea-agents@${r.version}`,
+            mode: r.mode === 'full' ? 'trust' : 'strict',
+            installed: r.installed ? 'now' : 'already',
+            ...(r.root === undefined ? {} : { researchRoot: r.root }),
+          });
+          return 0;
+        }
         // Opening a class lets a crew start programs, devices or captures through REA with the
-        // owner's privileges; installing runs third-party code as the owner. Both are the owner's,
-        // in a terminal, like pause: a crew has neither the terminal nor another role.
+        // owner's privileges: the owner's, in a terminal, like pause.
         if (deps.env.STUDIO_ROLE === 'crew' || deps.isTerminal !== true) {
           stderr('studio: research is for the owner and needs a terminal; nothing changed\n');
           return 1;
-        }
-        if (sub === 'install' && rest.length === 1) {
-          if (ports.npm === undefined)
-            throw new Error('npm is not available here; nothing installed');
-          const version = loadOwnerConfig(owner).reaVersion ?? REA_DEFAULT_VERSION;
-          const got = await installRea({
-            ownerRoot: ownerRoot(),
-            version,
-            npm: ports.npm,
-            path: deps.env.PATH ?? '/usr/bin:/bin',
-            now: ports.clock.now(),
-          });
-          print({ installed: `rea-agents@${version}`, integrity: got.integrity });
-          return 0;
         }
         if ((sub === 'allow' && rest.length >= 3) || (sub === 'revoke' && rest.length >= 2)) {
           const id = findItem(loadBoard(project), rest[1]).id;
@@ -4251,6 +4530,11 @@ function parseCli(argv: string[]) {
         at: { type: 'string' },
         label: { type: 'string' },
         once: { type: 'boolean' },
+        group: { type: 'string' },
+        member: { type: 'string', multiple: true },
+        yes: { type: 'boolean' },
+        folder: { type: 'string' },
+        artifacts: { type: 'string' },
       },
       allowPositionals: true,
       strict: true,
@@ -4544,6 +4828,8 @@ interface SnapshotExtra {
   crewRecordsUnreadable: boolean;
   alive(pid: number): boolean;
   hasReport(item: string): boolean;
+  /** Member item statuses when this is the main project of a group. */
+  members?: MemberStatus;
 }
 
 const MAX_MERGED_TODAY = 200;
@@ -4650,7 +4936,7 @@ function buildSnapshot(
   });
   // Open and accepting epics, and those done in the last day, so the pane shows the acceptance.
   const doneSince = now.getTime() - 86_400_000;
-  const epics = epicRows(board)
+  const epics = epicRows(board, extra.members)
     .filter((e) => {
       if (e.status === 'open' || e.status === 'accepting') return true;
       const at = (board.epics ?? []).find((x) => x.id === e.id)?.accepted?.at;

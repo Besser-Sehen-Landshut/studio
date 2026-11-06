@@ -7,7 +7,10 @@ import {
   epicProgress,
   epicSchema,
   epicStage,
+  GROUP_REF_RE,
+  type ItemStatus,
   loadBoard,
+  type MemberStatus,
   saveBoard,
   settleEpics,
   transition,
@@ -107,6 +110,8 @@ export type EpicRow = {
   counts: EpicProgress['counts'];
   /** The acceptance item that runs, or the last one; absent before the first. */
   acceptance?: { item: string; status: string };
+  /** Member items of the group, with their status as read (`unknown` when unreadable). */
+  members?: { ref: string; status: ItemStatus | 'unknown' }[];
 };
 
 /** The epic's open acceptance item, else its newest one. */
@@ -116,9 +121,10 @@ export function currentAcceptance(board: Board, epicId: string): WorkItem | unde
 }
 
 /** Every epic in id order, with its items by status and merged of total. */
-export function epicRows(board: Board): EpicRow[] {
+export function epicRows(board: Board, members?: MemberStatus): EpicRow[] {
   return [...(board.epics ?? [])].sort(byEpicId).map((e) => {
-    const p = epicProgress(board, e.id);
+    const p = epicProgress(board, e.id, members);
+    const refs = e.memberItems ?? [];
     const a = currentAcceptance(board, e.id);
     return {
       id: e.id,
@@ -128,11 +134,22 @@ export function epicRows(board: Board): EpicRow[] {
       progress: { merged: p.merged, total: p.total },
       counts: p.counts,
       ...(a === undefined ? {} : { acceptance: { item: a.id, status: a.status } }),
+      ...(refs.length === 0
+        ? {}
+        : {
+            members: refs.map((ref) => ({ ref, status: members?.(ref) ?? ('unknown' as const) })),
+          }),
     };
   });
 }
 
-export type EpicEdit = { title?: string; goal?: string; acceptance?: string[] };
+export type EpicEdit = {
+  title?: string;
+  goal?: string;
+  acceptance?: string[];
+  /** Items of member projects (`<project>:<id>`), replacing the list; checked against the group by the caller. */
+  members?: string[];
+};
 
 /**
  * `epic edit`: replaces the title, the goal or the whole acceptance list (e.g. after an import).
@@ -169,8 +186,17 @@ export function editEpic(
     next.acceptance = lines;
     changed.push('acceptance');
   }
+  if (edit.members !== undefined) {
+    const refs = [...new Set(edit.members.map((r) => r.trim()))];
+    if (refs.some((r) => !GROUP_REF_RE.test(r))) {
+      throw new Error('each --member must be <project>:<id>, an item of a member project');
+    }
+    if (refs.length > 0) next.memberItems = refs;
+    else delete next.memberItems;
+    changed.push('member_items');
+  }
   if (changed.length === 0) {
-    throw new Error('epic edit needs --title, --goal or --acceptance');
+    throw new Error('epic edit needs --title, --goal, --acceptance or --member');
   }
   const parsed = epicSchema.safeParse(next);
   if (!parsed.success) {
@@ -230,8 +256,9 @@ export function settleAndSave(
   board: Board,
   by: string,
   now: Date,
+  members?: MemberStatus,
 ): ReturnType<typeof settleEpics>['moved'] {
-  const settled = settleEpics(board, by, now);
+  const settled = settleEpics(board, by, now, members);
   if (settled.moved.length > 0) saveBoard(project, settled.board);
   return settled.moved;
 }

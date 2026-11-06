@@ -1,6 +1,7 @@
 // The Studio board mod: a pane, a status line, toasts and /studio, for the owner's session only.
-// It only displays. It writes no file and runs no process; only $.store and its own state change.
-// The view (work list, pipeline, detailed) and a language override are such stored preferences.
+// It displays, runs no process, and writes one file only: the owner's one-time REA install
+// confirmation, when the person presses its button in the pane (never from a command or a model).
+// Otherwise only $.store and its own state change: the view and a language override.
 import type { EngineInterface, Register, TextProps } from 'claude-code';
 import { atom, read, update } from 'claude-code';
 import {
@@ -12,6 +13,8 @@ import {
   newAlerts,
   paneLines,
   parseState,
+  REA_CONFIRM_KEY,
+  STATE_DIR,
   stateDirName,
   statusLine,
   statusText,
@@ -22,8 +25,9 @@ import {
 const PANE = { id: 'studio-board', title: 'Studio board' };
 const TICK_MS = 10_000;
 const MAX_PATH_DEPTH = 256;
-const USAGE = 'Usage: /studio [list | pipeline | more | status | pause | resume | lang de|en|auto]';
-const HINT = 'list | pipeline | more | status | pause | resume | lang';
+const USAGE =
+  'Usage: /studio [list | pipeline | more | group [<project>] | status | pause | resume | lang de|en|auto]';
+const HINT = 'list | pipeline | more | group | status | pause | resume | lang';
 /** $.store keys of the preferences; neither is per project. */
 const VIEW_KEY = 'view';
 const LANG_KEY = 'lang';
@@ -38,6 +42,8 @@ const board = atom(
 const paused = atom({ plugin: 'studio', key: 'paused' } as const, false, { shape: 'paused-1' });
 const view = atom({ plugin: 'studio', key: 'view' } as const, 'list' as View, { shape: 'view-1' });
 const lang = atom({ plugin: 'studio', key: 'lang' } as const, 'en' as Lang, { shape: 'lang-1' });
+/** The group's name while another project of it is shown; '' for this project. */
+const focusAtom = atom({ plugin: 'studio', key: 'focus' } as const, '', { shape: 'focus-1' });
 
 const TONE: Record<NonNullable<Line['tone']>, TextProps> = {
   ok: { color: 'success' },
@@ -84,12 +90,23 @@ const VIEW_REPLY: Record<Lang, Record<View, string>> = {
     list: 'Studio board: work list.',
     pipeline: 'Studio board: pipeline (the work list when the pane is narrow).',
     more: 'Studio board: details. Back with /studio list.',
+    group: 'Studio board: the group, one line per project.',
   },
   de: {
     list: 'Studio-Board: Arbeitsliste.',
     pipeline: 'Studio-Board: Pipeline (bei schmalem Bereich die Arbeitsliste).',
     more: 'Studio-Board: Details. Zurück mit /studio list.',
+    group: 'Studio-Board: der Verbund, eine Zeile je Projekt.',
   },
+};
+
+const FOCUS_REPLY: Record<Lang, (id: string) => string> = {
+  en: (id) => `Studio board: the work list of ${id}. Back with /studio group.`,
+  de: (id) => `Studio-Board: die Arbeitsliste von ${id}. Zurück mit /studio group.`,
+};
+const NO_PROJECT_REPLY: Record<Lang, (id: string) => string> = {
+  en: (id) => `No project ${id} in this group. See /studio group.`,
+  de: (id) => `Kein Projekt ${id} in diesem Verbund. Siehe /studio group.`,
 };
 
 const isAbsolute = (p: string): boolean => /^(?:[\\/]|[A-Za-z]:[\\/])/.test(p);
@@ -110,6 +127,62 @@ async function findProject($: EngineInterface, cwd: string): Promise<string | un
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** The owner state root, `<base>/studio/owner`, as ownerStateRootFor in src/paths.ts. */
+async function ownerRootOf($: EngineInterface): Promise<string | undefined> {
+  const xdg = await $.env.get('XDG_STATE_HOME');
+  const home = await $.env.get('HOME');
+  const base = xdg && isAbsolute(xdg) ? xdg : home ? `${home}/.local/state` : undefined;
+  return base === undefined ? undefined : `${withoutTrailingSlash(base)}/studio/owner`;
+}
+
+const CONFIRMED: Record<Lang, string> = {
+  en: 'REA install confirmed. It installs on the next launch that needs it.',
+  de: 'REA-Installation bestätigt. Sie läuft beim nächsten Start, der sie braucht.',
+};
+const NOT_CONFIRMED: Record<Lang, string> = {
+  en: 'The REA confirmation could not be saved; run studio research install in your own terminal.',
+  de: 'Die REA-Bestätigung ließ sich nicht speichern; studio research install im eigenen Terminal ausführen.',
+};
+
+/**
+ * The person pressed the REA install button: writes the one confirmation, for the pinned version
+ * and mode the state names (with `<home>/analysis` when no folder is granted), as its own small
+ * file in the owner state, `rea-confirm.json`. The engine's file calls have no rename and no mode,
+ * so the shared record is never rewritten here: Studio takes this file in, checks it (a plain file
+ * of this user, writable by nobody else, one whole JSON object, nothing but that folder) and folds
+ * it into its record with a temporary file and a rename. Nothing is written through a link: the
+ * owner folder and the file must not be links. Only a press reaches here: a command or the model
+ * cannot.
+ */
+async function confirmRea($: EngineInterface): Promise<void> {
+  const language = await read($, lang);
+  try {
+    const current = (await read($, board)) as BoardRead;
+    const want = current.kind === 'ok' ? current.state.reaInstall : undefined;
+    const owner = await ownerRootOf($);
+    const home = await $.env.get('HOME');
+    if (want === undefined || owner === undefined) throw new Error('nothing to confirm');
+    const dir = await $.fs.stat(owner);
+    if (dir.isLink || dir.kind !== 'dir') throw new Error('the owner state is not a folder');
+    const file = `${owner}/rea-confirm.json`;
+    if (await $.fs.exists(file)) {
+      const st = await $.fs.stat(file);
+      if (st.isLink || st.kind !== 'file') throw new Error('not a plain file');
+    }
+    const confirmation = {
+      version: want.version,
+      mode: want.mode,
+      at: new Date(await $.clock.now()).toISOString(),
+      by: 'pane',
+      ...(want.needsFolder && home ? { folder: `${withoutTrailingSlash(home)}/analysis` } : {}),
+    };
+    await $.fs.write(file, `${JSON.stringify(confirmation)}\n`);
+    $.ui.toast(CONFIRMED[language]);
+  } catch {
+    $.ui.toast(NOT_CONFIRMED[language]);
+  }
 }
 
 /** The same directory as stateRootFor in src/paths.ts. Rejects when it cannot be told. */
@@ -175,14 +248,23 @@ const live: {
   shownStatus?: string;
   running?: Promise<void>;
   view?: View;
+  /** Another project of the group whose work list is shown, by its state folder. */
+  focus?: { id: string; stateDir: string; group: string };
 } = {};
 
-async function publish($: EngineInterface, next: BoardRead, isPaused: boolean, language: Lang) {
+/** `own`: this project's board, for the status line, also while another project is shown. */
+async function publish(
+  $: EngineInterface,
+  next: BoardRead,
+  isPaused: boolean,
+  language: Lang,
+  own: BoardRead = next,
+) {
   await update($, board, () => next);
   await update($, paused, () => isPaused);
   await update($, lang, () => language);
   await update($, view, () => live.view ?? 'list');
-  const line = next.kind === 'ok' ? statusLine(next.state, isPaused, language) : undefined;
+  const line = own.kind === 'ok' ? statusLine(own.state, isPaused, language) : undefined;
   if (line !== live.shownStatus) {
     live.shownStatus = line;
     $.ui.status(line);
@@ -205,7 +287,16 @@ async function refreshOnce($: EngineInterface, dir: string) {
     live.view ??= await storedView($);
     const { dirName, root } = await stateRoot($, dir);
     const next = await readBoard($, root);
-    await publish($, next, await isPaused($, root), language);
+    const focus = live.focus;
+    if (focus !== undefined && STATE_DIR.test(focus.stateDir)) {
+      // Another project of the group: its state file beside this one, read only.
+      const other = `${root.slice(0, root.lastIndexOf('/'))}/${focus.stateDir}`;
+      await publish($, await readBoard($, other), await isPaused($, other), language, next);
+      await update($, focusAtom, () => focus.group);
+    } else {
+      await publish($, next, await isPaused($, root), language);
+      await update($, focusAtom, () => '');
+    }
     if (next.kind === 'ok') await raiseToasts($, dirName, next.state, language);
   } catch {
     try {
@@ -278,9 +369,32 @@ export const register: Register = (on) => {
       const current = (await read($, board)) as BoardRead;
       return { text: statusText(current, await read($, paused), await read($, lang)) };
     }
+    const groupArg = /^group\s+([a-z][a-z0-9-]{0,31})$/.exec(arg)?.[1];
+    if (groupArg !== undefined) {
+      live.focus = undefined;
+      await refresh($, project);
+      const own = (await read($, board)) as BoardRead;
+      const row =
+        own.kind === 'ok' ? own.state.group?.projects.find((p) => p.id === groupArg) : undefined;
+      const language = await read($, lang);
+      if (own.kind !== 'ok' || own.state.group === undefined || row === undefined) {
+        return { text: NO_PROJECT_REPLY[language](groupArg) };
+      }
+      if (!row.self && row.stateDir !== undefined) {
+        live.focus = { id: row.id, stateDir: row.stateDir, group: own.state.group.name };
+      }
+      live.view = 'list';
+      await update($, view, () => 'list');
+      await refresh($, project);
+      void $.ui.open(PANE).catch(() => undefined);
+      return { text: FOCUS_REPLY[language](row.id) };
+    }
     if (isView(arg)) {
+      const wasFocused = live.focus !== undefined;
+      live.focus = undefined;
       live.view = arg;
       await update($, view, () => arg);
+      if (wasFocused) await refresh($, project);
       // A store that fails keeps the view for this session only.
       await $.store.set(VIEW_KEY, arg).catch(() => undefined);
       void $.ui.open(PANE).catch(() => undefined);
@@ -309,19 +423,29 @@ export const register: Register = (on) => {
   });
 
   on('ui.render', { component: 'Pane', requestId: 'studio-board' }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e);
+    const { Box, Text, Button } = $.ui.resolve(e);
     const lines = paneLines((await read($, board)) as BoardRead, {
       columns: e.props.bodyColumns,
       nowMs: await $.clock.now(),
       paused: await read($, paused),
       view: await read($, view),
       lang: await read($, lang),
+      ...((await read($, focusAtom)) === '' ? {} : { focusOf: await read($, focusAtom) }),
     });
     return (
       <Box flexDirection="column">
-        {lines.map((line) => (
-          <Text {...(line.tone ? TONE[line.tone] : {})}>{line.text}</Text>
-        ))}
+        {lines.map((line) =>
+          line.button?.key === REA_CONFIRM_KEY ? (
+            <Button
+              key={REA_CONFIRM_KEY}
+              label={line.button.label}
+              variant="primary"
+              onPress={() => void confirmRea($)}
+            />
+          ) : (
+            <Text {...(line.tone ? TONE[line.tone] : {})}>{line.text}</Text>
+          ),
+        )}
       </Box>
     );
   });

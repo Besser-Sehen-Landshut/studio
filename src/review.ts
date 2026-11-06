@@ -1,6 +1,7 @@
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { skippedOwedParts } from './analyzer-timeout.js';
 import type { Board, WorkItem } from './board.js';
 import { assertStatePath } from './paths.js';
 import type { Ports } from './ports.js';
@@ -542,7 +543,7 @@ export function checkReviewCaps(
   if (missing.length > 0 || skippedOwed.length > 0) {
     const parts = [
       ...(missing.length > 0 ? [`no result for ${missing.join(', ')}`] : []),
-      ...(skippedOwed.length > 0 ? [`mandatory analyzer skipped: ${skippedOwed.join(', ')}`] : []),
+      ...skippedOwedParts(skippedOwed, results),
     ];
     throw new Error(`approval refused: ${parts.join('; ')}`);
   }

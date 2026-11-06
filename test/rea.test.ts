@@ -497,7 +497,14 @@ describe('launch of a researcher with REA', () => {
   };
 
   function setup(
-    opts: { roots?: string[]; artifacts?: string; skill?: boolean; installed?: boolean } = {},
+    opts: {
+      roots?: string[];
+      artifacts?: string;
+      skill?: boolean;
+      installed?: boolean;
+      /** Trust mode (the owner default); these tests use strict mode unless they say so. */
+      trust?: boolean;
+    } = {},
   ) {
     const dir = join(root, `l${n++}`);
     const home = join(dir, 'home');
@@ -518,12 +525,14 @@ describe('launch of a researcher with REA', () => {
     mkdirSync(join(home, '.config', 'studio'), { recursive: true });
     writeFileSync(
       join(home, '.config', 'studio', 'config.yaml'),
-      `research_roots: ${JSON.stringify(roots)}\nrea_env:\n  JAVA_HOME: /opt/jdk\n`,
+      `research_roots: ${JSON.stringify(roots)}\nrea_env:\n  JAVA_HOME: /opt/jdk\nresearch: { trust: ${opts.trust === true} }\n`,
     );
     const env = { PATH: process.env.PATH ?? '/usr/bin:/bin', CREW_TOKEN: 'crew-token-value' };
     const ownerRoot = ownerStateRootFor({ homedir: home, env });
     const entry =
-      opts.installed === false ? undefined : fakeReaInstall(join(ownerRoot, 'rea', '6.7.0'));
+      opts.installed === false
+        ? undefined
+        : fakeReaInstall(join(ownerRoot, 'rea', '6.7.0'), { full: opts.trust === true });
     const claude = join(home, '.claude');
     const skills = ['studio-crew', ...(opts.skill === false ? [] : ['reverse-engineer-anything'])];
     for (const s of skills) {
@@ -678,10 +687,11 @@ describe('launch of a researcher with REA', () => {
   });
 
   it('refuses without research_roots, outside them, in the credential store, or without the skill', async () => {
+    // No granted folder: nobody to ask in this launch, so the lead hears what to confirm.
     const none = setup({ roots: [] });
     await expect(
       launchCrew(none.project, research, none.config, none.ports, none.launcher),
-    ).rejects.toThrow(/research_roots/);
+    ).rejects.toThrow(/REA install needed for APP-5: .*\(analysis folder ~\/analysis\)/);
     expect(none.started).toHaveLength(0);
 
     const out = setup({ roots: [join(root, 'nowhere')] });
@@ -711,7 +721,7 @@ describe('launch of a researcher with REA', () => {
         notInstalled.ports,
         notInstalled.launcher,
       ),
-    ).rejects.toThrow(/not installed; run studio research install/);
+    ).rejects.toThrow(/REA install needed for APP-5: the owner confirms once/);
     expect(notInstalled.started).toHaveLength(0);
   });
 });
@@ -766,7 +776,9 @@ describe('studio doctor on REA', () => {
     const s = reaState(cfg, owner, undefined, join(root, 'no-owner-state'));
     expect(s?.server).toBe('rea-agents@6.8.0');
     expect(s?.pinnedBy).toBe('owner config');
-    expect(s?.installed).toMatch(/^no: not installed; run studio research install/);
+    expect(s?.installed).toMatch(
+      /^no: not installed; it installs on first use after one confirmation/,
+    );
     expect(reaState(cfg, undefined, undefined)?.pinnedBy).toBe('Studio default');
     expect(s?.analysisDirectory).toMatch(/refused/);
     expect(JSON.stringify(s)).not.toContain(root);

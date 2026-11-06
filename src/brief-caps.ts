@@ -14,6 +14,7 @@ import {
 } from './capabilities.js';
 import type { RoleConfig, StudioConfig } from './config.js';
 import { globProblem, matchGlob } from './glob.js';
+import type { BriefReference } from './group.js';
 import { assertStatePath, removeStateEntry, writeStateFile } from './paths.js';
 import type { Ports } from './ports.js';
 import type { ReaClass } from './rea.js';
@@ -121,6 +122,8 @@ const isCiItem = (i: WorkItem): boolean => [...i.paths, ...i.touches].some(isGit
 const GIT_FETCH_MS = 120_000;
 /** The project config in the repository; a change to it always gets the security analyzer. */
 const STUDIO_CONFIG = '.studio/studio.yaml';
+/** The board: dependencies, epics and member items on it move work in other projects too. */
+const STUDIO_BOARD = '.studio/board.yaml';
 const GIT_LOCAL_MS = 60_000;
 
 /**
@@ -327,7 +330,8 @@ export async function resolveForItem(o: {
         );
   // The project config holds the plugin pins, the sandbox and the roles: a change is one of trust.
   const configChange =
-    paths !== 'unknown' && (facts?.files ?? []).some((f) => f.toLowerCase() === STUDIO_CONFIG);
+    paths !== 'unknown' &&
+    (facts?.files ?? []).some((f) => [STUDIO_CONFIG, STUDIO_BOARD].includes(f.toLowerCase()));
   const triggers = [
     ...itemTriggers(subject),
     ...(round > 0 ? ['after-fix'] : []),
@@ -473,6 +477,10 @@ export interface BriefCaps {
   prByStudio?: boolean;
   /** A worker without a crew token: the crew commits only, Studio pushes after it ended. */
   pushByStudio?: boolean;
+  /** A member of a group: the main project's read-only excerpt beside the brief (src/group.ts). */
+  reference?: BriefReference;
+  /** A reviewer: minutes per analyzer subagent, and when the session's time is up (ISO). */
+  timeouts?: { analyzerMinutes: number; sessionEndsAt: string };
   review?: {
     tier: 'small' | 'large';
     reasons: string[];

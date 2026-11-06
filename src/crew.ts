@@ -14,6 +14,13 @@ import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderAcceptanceRoutine } from './acceptance.js';
 import { builtInAccount, crewClaudeDir } from './accounts.js';
+import {
+  DEFAULT_ANALYZER_TIMEOUT_MINUTES,
+  type ReviewTimeouts,
+  reviewTimeouts,
+  timeoutBrief,
+  timeoutsFileOf,
+} from './analyzer-timeout.js';
 import type { WorkItem } from './board.js';
 import { boardPath, loadBoard, saveBoard } from './board.js';
 import {
@@ -33,6 +40,14 @@ import {
   readCrewTokenFile,
   runCredentialProvider,
 } from './credentials.js';
+import {
+  membershipOf,
+  readContractChange,
+  readReference,
+  referenceBrief,
+  referenceCollisions,
+  writeReference,
+} from './group.js';
 import { DEFAULT_SECRET_GLOBS } from './guard.js';
 import { HeldError } from './held.js';
 import {
@@ -75,6 +90,7 @@ import {
 } from './plugins.js';
 import type { Ports } from './ports.js';
 import {
+  REA_CLASS_NAMES,
   REA_DEFAULT_VERSION,
   REA_SERVER,
   REA_SKILL,
@@ -85,6 +101,7 @@ import {
   reaSetupHint,
   renderReaBrief,
 } from './rea.js';
+import { type Asker, ensureRea, TRUST_NOTICE, trustNoticeDue } from './rea-consent.js';
 import {
   itemReaClasses,
   prepareReaRun,
@@ -316,6 +333,11 @@ export function writeHomeFile(homeDir: string, name: string, content: string): v
 export type LauncherEnv = OwnerEnv & {
   /** Test seam: where `capabilities/` is; defaults to the one shipped with the plugin. */
   capabilitiesDir?: string;
+  /**
+   * Who can be asked during a launch (the owner in a terminal): the one-time REA install
+   * confirmation. Absent (a tick, the lead): nobody is asked; the lead gets the decision.
+   */
+  asker?: Asker;
 };
 
 const unique = (xs: string[]): string[] => [...new Set(xs)];
@@ -385,6 +407,8 @@ export interface ReaPlan {
   env: Record<string, string>;
   /** The installed package's command, checked against its install record. */
   entry: string;
+  /** Trust mode: every class, no per-item approval (owner config `research.trust`). */
+  trust?: boolean;
 }
 
 /**
@@ -393,6 +417,15 @@ export interface ReaPlan {
  * directory). A project that names one the owner has not allowed, or one that is no place for it,
  * refuses: the owner config (`research_roots`) grants, studio.yaml only points.
  */
+/**
+ * Whether a launch gives the item REA: a researcher on this machine whose project has `research:`
+ * in studio.yaml or whose item names its own analysis folder (`artifacts`).
+ */
+export const wantsRea = (item: WorkItem, config: StudioConfig, worker: boolean): boolean =>
+  item.role === 'researcher' &&
+  !worker &&
+  (config.research !== undefined || item.artifacts !== undefined);
+
 export function planRea(o: {
   item: WorkItem;
   config: StudioConfig;
@@ -404,8 +437,9 @@ export function planRea(o: {
   ownerRoot: string;
   worker: boolean;
 }): ReaPlan | undefined {
-  const research = o.config.research;
-  if (o.item.role !== 'researcher' || research === undefined || o.worker) return undefined;
+  if (!wantsRea(o.item, o.config, o.worker)) return undefined;
+  // The item's own folder wins; it must lie below a granted root like the project's.
+  const research = { artifacts: (o.item.artifacts ?? o.config.research?.artifacts) as string };
   const fail = (why: string): never => {
     throw new Error(`${o.item.id}: research.artifacts: ${why}`);
   };
@@ -444,7 +478,13 @@ export function planRea(o: {
   if (!below) fail('is not below a research_roots entry of the owner config');
   // The version is the owner's (owner config `rea_version`), never the repository's.
   const version = o.ownerConfig.reaVersion ?? REA_DEFAULT_VERSION;
-  const install = verifyReaInstall(o.ownerRoot, version, o.owner.uid ?? process.getuid?.());
+  const trust = o.ownerConfig.research.trust;
+  const install = verifyReaInstall(
+    o.ownerRoot,
+    version,
+    o.owner.uid ?? process.getuid?.(),
+    trust ? 'full' : 'static',
+  );
   if (skillInstalled(o.configDir, REA_SKILL) === false) {
     throw new Error(
       `${o.item.id}: the REA skill is not installed in ${o.configDir}; ${reaSetupHint(o.configDir, install.entry)}`,
@@ -453,8 +493,10 @@ export function planRea(o: {
   return {
     artifacts: real,
     version,
-    // Opened by the owner only (studio research allow), never by a note on the board.
-    classes: itemReaClasses(o.stateRoot, o.item.id),
+    // Trust mode: every class. Strict mode: what the owner opened (studio research allow), never
+    // a note on the board.
+    classes: trust ? [...REA_CLASS_NAMES] : itemReaClasses(o.stateRoot, o.item.id),
+    trust,
     env: { ...o.ownerConfig.reaEnv },
     entry: install.entry,
   };
@@ -732,6 +774,8 @@ export function writeBrief(
               ? {}
               : { evidenceGuards: caps.review.evidenceGuards }),
           })),
+    ...(caps.reference === undefined ? [] : referenceBrief(caps.reference)),
+    ...(caps.timeouts === undefined ? [] : timeoutBrief(caps.timeouts)),
     '## Working rules',
     '',
     '- Work only inside this checkout.',
@@ -884,6 +928,8 @@ export function writeCrewSettings(
     rea?: { artifacts: string; classes: readonly ReaClass[]; runDir: string };
     /** A worker machine's deny list (src/worker-deny.ts): places and ports its crews never touch. */
     deny?: { paths: readonly string[]; ports: readonly number[]; allowRead?: readonly string[] };
+    /** A reviewer run: its analyzer and session time limits (src/analyzer-timeout.ts). */
+    timeouts?: ReviewTimeouts;
   },
   launcher: LauncherEnv = {},
 ): string {
@@ -937,7 +983,8 @@ export function writeCrewSettings(
     // The crew's own brief, caps and rules: the guard lets them be read, and a sandboxed read
     // (a shell command, or a file tool under the sandbox) must reach them too, or the crew
     // starts without its task. Nothing else of the state root comes back.
-    ...['md', 'caps', 'rules'].map((ext) => join(stateRoot, 'briefs', `${id}.${ext}`)),
+    // The reference excerpt of a group's main project (src/group.ts) is beside them.
+    ...['md', 'caps', 'rules', 'reference'].map((ext) => join(stateRoot, 'briefs', `${id}.${ext}`)),
     // Places a worker's owner opened inside its denied Windows mounts, for reads only.
     ...(dirs.deny?.allowRead ?? []),
   ];
@@ -982,6 +1029,7 @@ export function writeCrewSettings(
     join(stateRoot, 'briefs', `${id}.md`),
     join(stateRoot, 'briefs', `${id}.caps`),
     join(stateRoot, 'briefs', `${id}.rules`),
+    join(stateRoot, 'briefs', `${id}.reference`),
     dirs.homeDir,
     dirs.tmpDir,
     ...skillRoots,
@@ -1013,6 +1061,7 @@ export function writeCrewSettings(
     ...(item.type === 'research' ? { noPush: true } : {}),
     ...((dirs.deny?.ports ?? []).length > 0 ? { deniedPorts: [...(dirs.deny?.ports ?? [])] } : {}),
     ...(dirs.rea === undefined ? {} : reaGuard(dirs.rea.artifacts, dirs.rea.classes)),
+    ...(dirs.timeouts === undefined ? {} : { timeouts: dirs.timeouts }),
   };
   writeStateFile(stateRoot, ctxFile, `${JSON.stringify(ctx, null, 2)}\n`);
   const settings = {
@@ -1058,6 +1107,18 @@ export function writeCrewSettings(
           hooks: [{ type: 'command', command: guardHookCommand(GUARD_BIN), onFailure: 'block' }],
         },
       ],
+      // A reviewer's subagents: the guard records each start, so its analyzer timeout counts
+      // from the spawn (https://code.claude.com/docs/en/hooks, SubagentStart; it cannot block).
+      ...(dirs.timeouts === undefined
+        ? {}
+        : {
+            SubagentStart: [
+              {
+                matcher: '*',
+                hooks: [{ type: 'command', command: guardHookCommand(GUARD_BIN) }],
+              },
+            ],
+          }),
     },
     sandbox: {
       enabled: true,
@@ -1203,7 +1264,7 @@ export async function launchCrew(
   ports: Ports,
   launcher: LauncherEnv = {},
   worker?: WorkerLaunch,
-): Promise<{ name: string; pid: number; log: string }> {
+): Promise<{ name: string; pid: number; log: string; notice?: string; collisions?: string[] }> {
   // Launches of one process wait for each other; launches of different processes are serialised
   // by the launch lock, taken inside once the state root is known and always released here.
   const turn = launchChain;
@@ -1437,10 +1498,25 @@ async function launchCrewLocked(
     },
   });
   readRoleMemory(worker?.contentDir ?? projectDir, item.role);
+  // REA installs itself once the owner confirmed it for this version (src/rea-consent.ts).
+  let reaOwnerConfig = ownerConfig;
+  if (wantsRea(item, config, worker !== undefined)) {
+    await ensureRea({
+      ownerRoot,
+      owner,
+      env: penv,
+      ports,
+      asker: launcher.asker ?? { isTerminal: false },
+      now: ports.clock.now(),
+      item: item.id,
+      ...(launcher.uid === undefined ? {} : { uid: launcher.uid }),
+    });
+    reaOwnerConfig = loadOwnerConfig(owner);
+  }
   const rea = planRea({
     item,
     config,
-    ownerConfig,
+    ownerConfig: reaOwnerConfig,
     owner,
     stateRoot,
     projectDir,
@@ -1448,6 +1524,8 @@ async function launchCrewLocked(
     ownerRoot,
     worker: worker !== undefined,
   });
+  // Trust mode is said once per owner, on the first launch that uses it; never again.
+  const trustNotice = rea?.trust === true && trustNoticeDue(ownerRoot, ports.clock.now());
   // The REA skill goes with the REA server: without a plan it is denied, not offered.
   if (rea === undefined) {
     const skills = forItem.resolved;
@@ -1498,6 +1576,17 @@ async function launchCrewLocked(
     projectRealpath: projectRealpath(projectDir),
     originUrl: await ownerOriginUrl(projectDir, ports),
   });
+  // A member of a group gets the main project's reference: read now, so a main project that
+  // cannot be read refuses the launch before anything starts. Membership is the owner config's.
+  const membership = membershipOf(projectDir, config, ownerConfig);
+  const reference =
+    membership !== undefined && !membership.isMain
+      ? await readReference(membership, stateRoot, ports).catch((e: unknown) => {
+          throw new Error(
+            `refusing to launch: the reference of group ${membership.group.name} cannot be read (${(e as Error).message})`,
+          );
+        })
+      : undefined;
   // From here to the crew record one launch at a time over all projects of the owner, because the
   // running and daily counts read the records. No lock means refuse. Under the lock the chosen label is checked against the counts once more: the
   // pick above may have run next to another launch.
@@ -1551,6 +1640,12 @@ async function launchCrewLocked(
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
   const briefRules = writePinnedRules(stateRoot, item.id, pinned);
+  const briefReference =
+    reference === undefined
+      ? undefined
+      : writeReference(stateRoot, item.id, reference, readContractChange(stateRoot, item));
+  if (reference === undefined)
+    removeStateEntry(stateRoot, join(stateRoot, 'briefs', `${item.id}.reference`));
   const installedNames = new Set(installedSkills(claudeConfigDir).names);
   const caps = writeCaps({
     stateRoot,
@@ -1566,10 +1661,28 @@ async function launchCrewLocked(
     startedAt: ports.clock.now().toISOString(),
   });
   caps.reportName = newReportName(stateRoot, item.id);
+  // A reviewer's analyzers and its whole session have a hard time limit, which the guard holds.
+  let timeouts: ReviewTimeouts | undefined;
+  if (item.type === 'review' && caps.review !== undefined) {
+    const agentsFile = join(stateRoot, 'guard', `${item.id}.agents.json`);
+    removeStateEntry(stateRoot, agentsFile);
+    removeStateEntry(stateRoot, timeoutsFileOf(agentsFile));
+    const analyzerMinutes =
+      config.review?.analyzerTimeoutMinutes ?? DEFAULT_ANALYZER_TIMEOUT_MINUTES;
+    timeouts = reviewTimeouts({
+      analyzerMinutes,
+      analyzers: caps.review.analyzers.length,
+      now: ports.clock.now(),
+      reportFile: join(wt.path, '.studio', 'reports', caps.reportName),
+      agentsFile,
+    });
+    caps.timeouts = { analyzerMinutes, sessionEndsAt: timeouts.sessionEndsAt };
+  }
   // Without the trust service gh cannot verify TLS in the macOS sandbox: Studio opens the PR.
   // On a worker Studio opens it too: with the worker's identity, which the lead checks.
   caps.pushByStudio = worker?.noToken === true;
   if (rea !== undefined) caps.rea = { artifacts: rea.artifacts, classes: rea.classes };
+  if (briefReference !== undefined) caps.reference = briefReference;
   caps.prByStudio =
     worker !== undefined ||
     ((launcher.platform ?? process.platform) === 'darwin' &&
@@ -1610,6 +1723,7 @@ async function launchCrewLocked(
             },
           }),
       ...(worker === undefined ? {} : { deny: worker.deny }),
+      ...(timeouts === undefined ? {} : { timeouts }),
     },
     owner,
   );
@@ -1784,7 +1898,14 @@ async function launchCrewLocked(
   await updateCrewFile(stateRoot, (all) => {
     all[item.id] = { ...record, identity };
   });
-  return { name, pid, log };
+  const collisions = reference === undefined ? [] : referenceCollisions(reference);
+  return {
+    name,
+    pid,
+    log,
+    ...(trustNotice ? { notice: TRUST_NOTICE } : {}),
+    ...(collisions.length > 0 ? { collisions } : {}),
+  };
 }
 
 /** Session id of a crew run (first `system` event of its stream-json log), for `--resume`. */

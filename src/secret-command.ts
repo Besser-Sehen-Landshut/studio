@@ -248,11 +248,16 @@ export function reaState(
   let entry: string | undefined;
   if (ownerRoot !== undefined) {
     try {
-      const got = verifyReaInstall(ownerRoot, version);
+      const got = verifyReaInstall(
+        ownerRoot,
+        version,
+        process.getuid?.(),
+        ownerConfig?.research.trust === false ? 'static' : 'full',
+      );
       entry = got.entry;
       installed = `yes (${got.integrity.slice(0, 19)}...)`;
     } catch (e) {
-      installed = `no: ${(e as Error).message.replace(/^[^:]*: /, '').replace(/; .*$/, '')}; run studio research install`;
+      installed = `no: ${(e as Error).message.replace(/^[^:]*: /, '').replace(/; .*$/, '')}; it installs on first use after one confirmation (or studio research install)`;
     }
   }
   let artifacts: string;
@@ -302,6 +307,8 @@ export function reaState(
   return {
     server: `${REA_PACKAGE}@${version}`,
     pinnedBy: ownerConfig?.reaVersion === undefined ? 'Studio default' : 'owner config',
+    // Trust mode (default): every class, full install. Strict: per-item classes, static install.
+    mode: ownerConfig?.research.trust === false ? 'strict' : 'trust',
     installed,
     analysisDirectory: artifacts,
     skill: skillState(configDir, REA_SKILL),

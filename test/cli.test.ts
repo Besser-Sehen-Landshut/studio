@@ -4540,7 +4540,7 @@ describe('epics in the CLI', () => {
     expect(JSON.parse(t.out).changed).toEqual(['title', 'goal']);
     expect(epicOf(fx, 'E-1')).toMatchObject({ title: 'Pay by invoice', goal: 'G' });
     expect((await cli(fx, ports, 'epic', 'edit', 'E-1')).err).toMatch(
-      /--title, --goal or --acceptance/,
+      /--title, --goal, --acceptance or --member/,
     );
     expect((await cli(fx, ports, 'epic', 'edit', 'E-1', '--goal', 'a\u0007b')).err).toMatch(
       /--goal must be one line/,

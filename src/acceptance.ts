@@ -3,6 +3,7 @@ import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { boardPrefix } from './add-item.js';
+import { skippedOwedParts } from './analyzer-timeout.js';
 import {
   ACCEPTANCE_NOTE,
   acceptanceOf,
@@ -911,9 +912,7 @@ export function checkAcceptanceReport(
     if (missing.length > 0 || skippedOwed.length > 0) {
       const parts = [
         ...(missing.length > 0 ? [`no result for ${missing.join(', ')}`] : []),
-        ...(skippedOwed.length > 0
-          ? [`mandatory analyzer skipped: ${skippedOwed.join(', ')}`]
-          : []),
+        ...skippedOwedParts(skippedOwed, results),
       ];
       throw new Error(`approval refused: ${parts.join('; ')}`);
     }

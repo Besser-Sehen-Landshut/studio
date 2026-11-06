@@ -497,6 +497,13 @@ export const studioConfigSchema = z
     limits: dailyLimitsSchema.optional(),
     // The full suites an epic's acceptance waits for on main (src/acceptance.ts).
     acceptance: acceptanceSchema.optional(),
+    // A reviewer's time limits (src/analyzer-timeout.ts): minutes per analyzer subagent; the
+    // session gets them for every analyzer plus one share, then only the report may be written.
+    review: z
+      .strictObject({
+        analyzerTimeoutMinutes: z.number().int().min(5).max(240).default(30),
+      })
+      .optional(),
     // Exceptions by evidence: guard jobs whose hits a command can prove false alarms.
     evidence: z.array(evidenceRuleSchema).max(20).optional(),
     // Workers on other machines, per label (`runs_on` of an item): what their crews must never
@@ -721,6 +728,70 @@ export function validNtfyServer(v: string): boolean {
 /** Quiet hours: `HH:MM-HH:MM`, 24-hour clock. */
 export const QUIET_RE = /^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/;
 
+/** A project id in a group: `depends_on: <id>:<item>` names it. Same rule as in board.ts. */
+export const GROUP_PROJECT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+const groupProjectId = z.string().regex(GROUP_PROJECT_ID_RE, 'must match ^[a-z][a-z0-9-]{0,31}$');
+
+/** A project of a group: its id, its repository and the folder of its checkout on this machine. */
+const groupProjectSchema = z.strictObject({
+  id: groupProjectId,
+  repo: repoName,
+  dir: z
+    .string()
+    .min(1)
+    .max(500)
+    .refine((p) => isAbsolute(p) && !/\p{Cc}/u.test(p), 'must be an absolute path'),
+  // A member only: the contract paths that concern it (default: all of the group's).
+  contracts: z.array(globSchema).min(1).max(50).optional(),
+});
+export type GroupProject = z.infer<typeof groupProjectSchema>;
+
+/**
+ * A group of related projects (src/group.ts). It lives here, outside every repository: a project
+ * cannot claim to be in a group, name the main project or widen what its crews read.
+ */
+const groupSchema = z
+  .strictObject({
+    name: groupProjectId,
+    // The project that owns contracts, ADRs and the glossary.
+    main: groupProjectId,
+    projects: z.array(groupProjectSchema).min(2).max(20),
+    // Paths in the main project that member crews get as a read-only excerpt in their brief.
+    reference: z.array(globSchema).min(1).max(50),
+    // The paths whose change gives each affected member a check item (default: `reference`).
+    contracts: z.array(globSchema).min(1).max(50).optional(),
+    // The excerpt's total size cap.
+    referenceMaxKib: z.number().int().min(16).max(2048).default(256),
+  })
+  .superRefine((g, ctx) => {
+    const ids = new Set<string>();
+    for (const [i, p] of g.projects.entries()) {
+      if (ids.has(p.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['projects', i, 'id'],
+          message: `duplicate project ${p.id}`,
+        });
+      }
+      ids.add(p.id);
+      if (p.id === g.main && p.contracts !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['projects', i, 'contracts'],
+          message: 'the main project owns the contracts; contracts narrows a member only',
+        });
+      }
+    }
+    if (!ids.has(g.main)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['main'],
+        message: 'must be the id of one of projects',
+      });
+    }
+  });
+export type GroupConfig = z.infer<typeof groupSchema>;
+
 /** Owner-level settings, kept outside every repository. */
 export const ownerConfigSchema = z.strictObject({
   // Absolute directories a crew may read in addition to its clone, tmp dir and HOME (toolchains
@@ -754,6 +825,10 @@ export const ownerConfigSchema = z.strictObject({
   // x.y.z only, never a range, tag or prerelease; the default is pinned in Studio. It lives here,
   // because it runs third-party code with the owner's privileges.
   reaVersion: z.string().regex(REA_VERSION_RE, 'must be one exact version (x.y.z)').optional(),
+  // Reverse engineering for researcher crews (src/rea-consent.ts). `trust` (the default): REA is
+  // installed in full and researcher crews may use every tool class; false: the static install and
+  // the classes the owner opens per item (studio research allow).
+  research: z.strictObject({ trust: z.boolean().default(true) }).default({ trust: true }),
   // Environment for the REA server (where its analysis engines are): these names only, short
   // values. Never a secret.
   reaEnv: z
@@ -801,6 +876,33 @@ export const ownerConfigSchema = z.strictObject({
     .optional(),
   // The same daily cost cap as in studio.yaml, over all projects of the owner together.
   limits: dailyLimitsSchema.optional(),
+  // Groups of related projects (src/group.ts); a project folder is in at most one.
+  groups: z
+    .array(groupSchema)
+    .max(20)
+    .optional()
+    .superRefine((groups, ctx) => {
+      const names = new Set<string>();
+      const dirs = new Map<string, string>();
+      for (const [i, g] of (groups ?? []).entries()) {
+        if (names.has(g.name)) {
+          ctx.addIssue({ code: 'custom', path: [i, 'name'], message: `duplicate group ${g.name}` });
+        }
+        names.add(g.name);
+        for (const [j, p] of g.projects.entries()) {
+          const key = pathKey(resolve(p.dir));
+          const other = dirs.get(key);
+          if (other !== undefined) {
+            ctx.addIssue({
+              code: 'custom',
+              path: [i, 'projects', j, 'dir'],
+              message: `this folder is already ${other}: a project is in at most one group, once`,
+            });
+          }
+          dirs.set(key, `${g.name}/${p.id}`);
+        }
+      }
+    }),
   // Workers on other machines (src/worker.ts, src/worker-lead.ts). On the lead's machine,
   // `accept` names the GitHub logins whose claims count, per label; on a worker machine, `self`
   // names the lead whose offers it takes and what its crews must never touch.
