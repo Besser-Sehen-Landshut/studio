@@ -285,6 +285,21 @@ foreach ($p in @(Up ${m}) + @(Up (Join-Path ${h} 'state'))) {
   if (-not (Test-Path -LiteralPath $p)) { $problems += "$p is missing"; continue }
   if ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { $problems += "$p is a reparse point" }
 }
+# No reparse point anywhere in the config (small, admin-only), none just below state: the elevated
+# install hands DACL entries down these folders.
+$todo = New-Object Collections.Stack
+if (Test-Path -LiteralPath (Join-Path ${m} 'config')) { $todo.Push((Join-Path ${m} 'config')) }
+while ($todo.Count -gt 0) {
+  foreach ($c in Get-ChildItem -LiteralPath $todo.Pop() -Force) {
+    if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { $problems += "$($c.FullName) is a reparse point"; continue }
+    if ($c.PSIsContainer) { $todo.Push($c.FullName) }
+  }
+}
+if (Test-Path -LiteralPath (Join-Path ${h} 'state')) {
+  foreach ($c in Get-ChildItem -LiteralPath (Join-Path ${h} 'state') -Force) {
+    if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { $problems += "$($c.FullName) is a reparse point" }
+  }
+}
 # Each folder of Studio's: owned by administrators, its DACL protected, and no entry but the ones
 # the setup makes. Only state takes the relay account's writes: files and folders added to it, and
 # modify below it (inherit-only); it can rename or remove neither state nor anything above.

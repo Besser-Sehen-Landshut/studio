@@ -69,10 +69,10 @@ if ((Names (Join-Path $base 'Software\\Microsoft\\Command Processor')) -contains
 $n = @(Names (Join-Path $base 'Environment') | Where-Object { @('TEMP', 'TMP') -notcontains $_.ToUpperInvariant() })
 if ($n.Count -gt 0) { $left += ('Environment: ' + ($n -join ', ')) }
 # COM classes of the user's own (a hijack of a class a program loads) and moved shell folders.
-$classes = Join-Path $base 'SoftwareClasses'
-if ((Test-Path -LiteralPath $classes) -and (@(Get-ChildItem -LiteralPath $classes).Count -gt 0 -or (Names $classes).Count -gt 0)) { $left += 'SoftwareClasses' }
-foreach ($k in @('SoftwareMicrosoftWindowsCurrentVersionExplorerUser Shell Folders', 'SoftwareMicrosoftWindowsCurrentVersionExplorerShell Folders')) {
-  if ((Names (Join-Path $base $k)).Count -gt 0) { $left += $k.Split('')[-1] }
+$classes = Join-Path $base 'Software\\Classes'
+if ((Test-Path -LiteralPath $classes) -and (@(Get-ChildItem -LiteralPath $classes).Count -gt 0 -or (Names $classes).Count -gt 0)) { $left += 'Software\\Classes' }
+foreach ($k in @('Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders', 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders')) {
+  if ((Names (Join-Path $base $k)).Count -gt 0) { $left += $k.Split('\\')[-1] }
 }
 ConvertTo-Json -Compress -InputObject @($left)
 `;
@@ -97,8 +97,8 @@ if (Test-Path -LiteralPath $envKey) {
 Fresh $envKey
 foreach ($n in $keep.Keys) { New-ItemProperty -LiteralPath $envKey -Name $n -Value $keep[$n] -PropertyType ExpandString | Out-Null }
 # The user's own COM classes and its moved shell folders go: Windows falls back to the defaults.
-Fresh (Join-Path $base 'SoftwareClasses')
-foreach ($k in @('SoftwareMicrosoftWindowsCurrentVersionExplorerUser Shell Folders', 'SoftwareMicrosoftWindowsCurrentVersionExplorerShell Folders')) { Fresh (Join-Path $base $k) }
+Fresh (Join-Path $base 'Software\\Classes')
+foreach ($k in @('Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders', 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders')) { Fresh (Join-Path $base $k) }
 ${registryLeftScript(base).replace("$ErrorActionPreference = 'Stop'\n", '')}`;
 
 const powershell = (script) =>
