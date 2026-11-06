@@ -349,7 +349,7 @@ describe('shell', () => {
     no(sh, 'x=#a\n', 'x=#b\n');
     no(sh, "echo '#'a\n", "echo '#'b\n");
     no(sh, 'echo "x"#a\n', 'echo "x"#b\n');
-    yes(sh, 'f;#a\n', 'f;#b\n');
+    unsure(sh, 'f;#a\n');
   });
   it('quotes hold a # as content', () => {
     no(sh, "echo '# a'\n", "echo '# b'\n");
@@ -405,6 +405,24 @@ describe('shell', () => {
     unsure(sh, 'grep "^#" "${BASH_SOURCE[0]}"\n');
     unsure(sh, 'cat ${0}\n');
     reads(sh, 'echo $10\n');
+    unsure(sh, 'echo "at $LINENO"\n');
+    unsure(sh, 'echo "${BASH_LINENO[0]}"\n');
+  });
+  it('a # whose reading depends on context is refused: [[ ]], extglob, after an operator', () => {
+    // bash may read a # after ( or | inside [[ ]] or a pattern as part of a word
+    unsure(sh, '[[ $x =~ (#a) ]] && echo y\n');
+    unsure(sh, '[[ $x == @(a|#b) ]] && evil\n');
+    unsure(sh, '[[ $x ]] # c\n');
+    unsure(sh, 'shopt -s extglob\ncase $x in @(a|b)) echo;; esac\n');
+    for (const g of ['@(a)', '!(a)', '+(a)', '*(a)', '?(a)']) unsure(sh, `ls ${g}\n`);
+    unsure(sh, 'case $x in a|#b) echo;; esac\n');
+    unsure(sh, 'f(#x\n)\n');
+    unsure(sh, 'x=$(#c\necho)\n');
+    unsure(sh, 'a&&#c\n');
+    unsure(sh, 'echo a;\\\n#c\n');
+    // a blank or a line start before the # stays a comment
+    yes(sh, 'if [ -n "$x" ]; then\n  f\nfi\n', 'if [ -n "$x" ]; then # check\n  f # call\nfi\n');
+    yes(sh, 'a |\n  b\n', 'a | # pipe\n  b\n');
   });
   it('anything unterminated proves nothing', () => {
     for (const t of ["echo 'a", 'echo "a', "echo $'a", 'echo $(a', 'echo ${a', 'echo \\'])
@@ -472,6 +490,34 @@ describe('python', () => {
       "s = 'a\nb'",
     ])
       unsure(py, t);
+  });
+  it('code that reads its own source or line numbers makes its comments code', () => {
+    for (const t of [
+      'print(__file__)\n',
+      'import inspect\n',
+      'import sys\nprint(sys._getframe().f_lineno)\n',
+      'print(f.__code__.co_firstlineno)\n',
+      'import traceback\n',
+      'import linecache\n',
+      'logging.basicConfig(format="%(lineno)d")\nx = lineno\n',
+      'x = e.__traceback__.tb_lineno\n',
+      'getattr(frame, "f_lineno")\n',
+    ]) {
+      unsure(py, t);
+    }
+    reads(py, 'line_no = 1\n');
+  });
+  it('an encoding declaration counts in lines 1 and 2: those lines must stay as they are', () => {
+    const latin = '# -*- coding: latin-1 -*-\nx = 1\n';
+    // a line above moves the declaration to line 3, where CPython no longer reads it
+    no(py, latin, '# note\n# -*- coding: latin-1 -*-\nx = 1\n');
+    no(py, latin, '#!/usr/bin/env python3\n# -*- coding: latin-1 -*-\nx = 1\n');
+    no(py, 'x = 1\n', '# coding=latin-1\nx = 1\n');
+    no(py, '# a\nx = 1\n', '# vim: set fileencoding=latin-1 :\nx = 1\n');
+    // a plain comment that only looks like a declaration, moved into line 2, counts as one
+    no(py, '# x\ny = 1\n# coding: latin-1\n', '# x\n# coding: latin-1\ny = 1\n');
+    yes(py, latin, `${latin}# more\n`);
+    yes(py, '# a\nx = 1\n', '# b\nx = 1\n');
   });
 });
 

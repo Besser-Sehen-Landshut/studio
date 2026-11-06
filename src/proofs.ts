@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { parseAllDocuments } from 'yaml';
 import {
+  PY_CODING,
   tokenizeJs,
   tokenizePython,
   tokenizeRust,
@@ -379,6 +380,17 @@ export function commentsOnlyWhy(
   if (typeof ca !== 'string') return `the base cannot be read for sure: ${ca.why}`;
   if (typeof cb !== 'string') return `the head cannot be read for sure: ${cb.why}`;
   if (ca !== cb) return 'it changes more than plain comments';
+  if (language === 'python') {
+    // An encoding declaration counts only in line 1 or 2: a line added above it, or one in a
+    // line where there was none, changes how the file is decoded.
+    const firstTwo = (t: string) => t.split('\n').slice(0, 2);
+    const la = firstTwo(a.text);
+    const lb = firstTwo(b.text);
+    const declares = [...la, ...lb].some((l) => PY_CODING.test(l));
+    if (declares && la.join('\n') !== lb.join('\n')) {
+      return 'it changes the lines that may declare the encoding';
+    }
+  }
   return language === 'yaml' ? sameYaml(a.text, b.text) : undefined;
 }
 

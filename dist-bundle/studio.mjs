@@ -30070,6 +30070,11 @@ function tokenizeShell(s) {
         word2 = true;
         if (pending.length > 0) bodies();
       } else if (c3 === "#" && word2) {
+        const before = s[i2 - 1];
+        if (i2 > 0 && before !== " " && before !== "	" && before !== "\n") {
+          no("a # right after an operator or parenthesis");
+        }
+        if (before === "\n" && s[i2 - 2] === "\\") no("a # right after a joined line");
         const end = s.indexOf("\n", i2);
         const stop = end === -1 ? s.length : end;
         out.push("comment", s.slice(i2, stop), { eol: true });
@@ -30113,6 +30118,7 @@ function tokenizeShell(s) {
       } else if (s.startsWith("<<", i2)) {
         heredoc();
       } else if (c3 === "(") {
+        if (/[@!+*?]/.test(s[i2 - 1] ?? "")) no("an extglob pattern");
         if (inSubst) parens++;
         out.push("code", c3);
         i2++;
@@ -30141,6 +30147,7 @@ function tokenizeShell(s) {
         i2 = j;
         word2 = false;
       } else {
+        if (c3 === "[" && s[i2 + 1] === "[") no("a [[ ... ]] test");
         out.push("code", c3);
         i2++;
         word2 = false;
@@ -30152,8 +30159,8 @@ function tokenizeShell(s) {
   };
   code(false);
   for (const x of out.segs) {
-    if (x.kind !== "comment" && /\$\{?0(?![0-9])|BASH_SOURCE/.test(x.text)) {
-      no("a script that reads itself ($0, BASH_SOURCE)");
+    if (x.kind !== "comment" && /\$\{?0(?![0-9])|BASH_SOURCE|LINENO/.test(x.text)) {
+      no("a script that reads itself or its line numbers ($0, BASH_SOURCE, LINENO)");
     }
   }
   return out.segs;
@@ -30263,8 +30270,15 @@ function tokenizePython(s) {
       i2++;
     }
   }
+  for (const x of out.segs) {
+    if (x.kind !== "comment" && PY_SELF.test(x.text)) {
+      no("code that reads its own source or line numbers");
+    }
+  }
   return out.segs;
 }
+var PY_SELF = /__file__|__code__|__loader__|__spec__|\binspect\b|\btraceback\b|\blinecache\b|_getframe|currentframe|f_lineno|co_firstlineno|co_lines|co_positions|tb_lineno|\blineno\b|getsource|getframeinfo|stack_info/;
+var PY_CODING = /^[ \t\f]*#.*?coding[:=]/;
 function tokenizeToml(s) {
   const out = new Out(hashMeaningful);
   let i2 = 0;
@@ -30664,6 +30678,15 @@ function commentsOnlyWhy(base, head, language = "sql", path10 = "") {
   if (typeof ca !== "string") return `the base cannot be read for sure: ${ca.why}`;
   if (typeof cb !== "string") return `the head cannot be read for sure: ${cb.why}`;
   if (ca !== cb) return "it changes more than plain comments";
+  if (language === "python") {
+    const firstTwo = (t) => t.split("\n").slice(0, 2);
+    const la = firstTwo(a2.text);
+    const lb = firstTwo(b.text);
+    const declares = [...la, ...lb].some((l) => PY_CODING.test(l));
+    if (declares && la.join("\n") !== lb.join("\n")) {
+      return "it changes the lines that may declare the encoding";
+    }
+  }
   return language === "yaml" ? sameYaml(a2.text, b.text) : void 0;
 }
 function sqlStatements(bytes) {

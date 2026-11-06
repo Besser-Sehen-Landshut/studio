@@ -856,6 +856,13 @@ export function tokenizeShell(s: string): Seg[] {
         word = true;
         if (pending.length > 0) bodies();
       } else if (c === '#' && word) {
+        // Only after a blank or at a line start is a comment sure: after an operator, a
+        // parenthesis or a joined line, bash's reading depends on context (`[[`, extglob, `=~`).
+        const before = s[i - 1];
+        if (i > 0 && before !== ' ' && before !== '\t' && before !== '\n') {
+          no('a # right after an operator or parenthesis');
+        }
+        if (before === '\n' && s[i - 2] === '\\') no('a # right after a joined line');
         const end = s.indexOf('\n', i);
         const stop = end === -1 ? s.length : end;
         out.push('comment', s.slice(i, stop), { eol: true });
@@ -901,6 +908,8 @@ export function tokenizeShell(s: string): Seg[] {
       } else if (s.startsWith('<<', i)) {
         heredoc();
       } else if (c === '(') {
+        // extglob patterns read words their own way
+        if (/[@!+*?]/.test(s[i - 1] ?? '')) no('an extglob pattern');
         if (inSubst) parens++;
         out.push('code', c);
         i++;
@@ -929,6 +938,8 @@ export function tokenizeShell(s: string): Seg[] {
         i = j;
         word = false;
       } else {
+        // `[[ ... ]]` parses its operands (`=~`, patterns) in a mode of its own: refused whole
+        if (c === '[' && s[i + 1] === '[') no('a [[ ... ]] test');
         out.push('code', c);
         i++;
         word = false;
@@ -941,8 +952,8 @@ export function tokenizeShell(s: string): Seg[] {
 
   code(false);
   for (const x of out.segs) {
-    if (x.kind !== 'comment' && /\$\{?0(?![0-9])|BASH_SOURCE/.test(x.text)) {
-      no('a script that reads itself ($0, BASH_SOURCE)');
+    if (x.kind !== 'comment' && /\$\{?0(?![0-9])|BASH_SOURCE|LINENO/.test(x.text)) {
+      no('a script that reads itself or its line numbers ($0, BASH_SOURCE, LINENO)');
     }
   }
   return out.segs;
@@ -1065,8 +1076,24 @@ export function tokenizePython(s: string): Seg[] {
       i++;
     }
   }
+  // Code that reads its own source or line numbers: an added comment line changes what it sees.
+  for (const x of out.segs) {
+    if (x.kind !== 'comment' && PY_SELF.test(x.text)) {
+      no('code that reads its own source or line numbers');
+    }
+  }
   return out.segs;
 }
+
+/** Names through which Python code reads its own file, frames or line numbers. */
+const PY_SELF =
+  /__file__|__code__|__loader__|__spec__|\binspect\b|\btraceback\b|\blinecache\b|_getframe|currentframe|f_lineno|co_firstlineno|co_lines|co_positions|tb_lineno|\blineno\b|getsource|getframeinfo|stack_info/;
+
+/**
+ * A PEP 263 encoding declaration (also the Emacs and Vim forms): a comment in line 1 or 2 that
+ * changes how CPython decodes the file.
+ */
+export const PY_CODING = /^[ \t\f]*#.*?coding[:=]/;
 
 // --- TOML -------------------------------------------------------------------------------------
 
