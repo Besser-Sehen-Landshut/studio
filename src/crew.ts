@@ -1832,7 +1832,7 @@ async function launchCrewLocked(
       { path: settings, rights: 'R' },
       { path: mcpConfig, rights: 'R' },
       { path: join(stateRoot, 'guard', `${item.id}.json`), rights: 'R' },
-      { path: log, rights: 'W' },
+      { path: log, rights: 'M' },
     ]);
   }
   // A block or a pause may have arrived while this launch was preparing.

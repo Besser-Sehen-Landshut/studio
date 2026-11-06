@@ -125,7 +125,7 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     await grant([
       { path: cwd, rights: 'M' },
       { path: hostDirOf(stateRoot, id), rights: 'M' },
-      { path: log, rights: 'W' },
+      { path: log, rights: 'M' },
     ]);
     const claude = windowsClaude({
       stateRoot,

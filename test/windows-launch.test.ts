@@ -149,7 +149,7 @@ describe('a crew launch on native Windows', () => {
       { path: join(s, 'settings', 'APP-3.json'), rights: 'R' },
       { path: join(s, 'settings', 'APP-3.mcp.json'), rights: 'R' },
       { path: join(s, 'guard', 'APP-3.json'), rights: 'R' },
-      { path: join(s, 'logs', 'APP-3.jsonl'), rights: 'W' },
+      { path: join(s, 'logs', 'APP-3.jsonl'), rights: 'M' },
     ]);
     const settings = JSON.parse(readFileSync(join(s, 'settings', 'APP-3.json'), 'utf8'));
     expect(settings.sandbox).toEqual({ enabled: false });

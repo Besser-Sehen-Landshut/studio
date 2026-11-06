@@ -40017,7 +40017,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
       { path: settings, rights: "R" },
       { path: mcpConfig, rights: "R" },
       { path: join27(stateRoot, "guard", `${item.id}.json`), rights: "R" },
-      { path: log2, rights: "W" }
+      { path: log2, rights: "M" }
     ]);
   }
   refuseIfBlocked(ownerRoot);

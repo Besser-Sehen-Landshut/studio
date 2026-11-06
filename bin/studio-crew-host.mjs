@@ -199,7 +199,12 @@ if (spec.mode !== 'run' || typeof spec.cmd !== 'string' || !Array.isArray(spec.a
 }
 const nonce = randomBytes(12).toString('hex');
 writeFileSync(join(spec.dir, 'host.json'), JSON.stringify({ pid: process.pid, nonce }));
-const fd = openSync(spec.log, 'a');
+let fd;
+try {
+  fd = openSync(spec.log, 'a');
+} catch (e) {
+  fail(`cannot open the log ${spec.log}: ${e?.code ?? e}`);
+}
 const child = spawn(spec.cmd, spec.args, {
   cwd: spec.cwd,
   env: childEnv,

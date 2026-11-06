@@ -18,7 +18,7 @@ import type { Claude } from './ports.js';
  * - **Files.** The crew user is a member of Users only. The owner's profile (credentials, gh and
  *   git logins, Studio's state and owner config) is closed to other users by Windows' default
  *   profile ACL. For each run Studio grants the crew user only the run's own places: its clone,
- *   HOME and tmp dir (modify), its brief, settings and guard context (read) and its log (write).
+ *   HOME, tmp dir and log (modify), its brief, settings and guard context (read).
  *   Toolchains, node, Git and Claude Code must be readable by it (Program Files is; the setup
  *   grants read on the paths it is given).
  * - **Network.** A firewall rule of the setup blocks every outbound connection of the crew user
