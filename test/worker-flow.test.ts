@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { loadBoard } from '../src/board.js';
-import { runCli } from '../src/cli.js';
+import { type CliDeps, runCli } from '../src/cli.js';
 import { acquireStateLock, ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { clearPause, setPause } from '../src/pause.js';
 import { pinnedPlugins } from '../src/plugins.js';
@@ -280,7 +280,7 @@ async function run(
   ports: Ports,
   argv: string[],
   platform = LINUX,
-  extra: { beatMs?: number } = {},
+  extra: { beatMs?: number; windowsWorker?: CliDeps['windowsWorker'] } = {},
 ) {
   let out = '';
   let err = '';
@@ -297,6 +297,7 @@ async function run(
     cwd: m.project,
     workerPlatform: platform,
     ...(extra.beatMs === undefined ? {} : { workerBeatMs: extra.beatMs }),
+    ...(extra.windowsWorker === undefined ? {} : { windowsWorker: extra.windowsWorker }),
     // Pushes a worker makes for a crew without a token go to the fixture's origin.
     workerPushUrl: () => currentOrigin,
   });
@@ -672,7 +673,7 @@ describe('workers on other machines', () => {
     expect(native.code).toBe(1);
     expect(lastLine(native.out)).toMatchObject({
       kind: 'refused',
-      line: expect.stringMatching(/native Windows has no sandbox/),
+      line: expect.stringMatching(/native Windows has no Claude Code sandbox.*windows-setup/),
     });
     const interop = await run(wm, wp, ['worker', '--label', 'windows'], {
       platform: 'linux',
@@ -1603,6 +1604,70 @@ describe('workers on other machines', () => {
     issue.authorId = idOf('lead-user');
     issue.author = 'Lead-User';
     expect(lastLine((await run(wm, wp, once)).out).kind).toBe('claimed');
+  });
+
+  it('native Windows claims only once the crew user probe held, before every claim', async () => {
+    const w = world();
+    const wm = workerMachine(w, 'win');
+    writeOwnerConfig(
+      wm.home,
+      `workers:\n  self:\n    lead: lead-user\n    lead_id: ${idOf('lead-user')}\n    deny: { paths: ['D:\\data'] }\n    windows: { crew_user: studio-crew }\n`,
+    );
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    const asked: (readonly string[])[] = [];
+    let closed = 0;
+    const fake =
+      (problem: string | undefined): CliDeps['windowsWorker'] =>
+      async (o) => {
+        expect(o.user).toBe('studio-crew');
+        return {
+          claude: wp.claude,
+          sandbox: {
+            user: o.user,
+            probe: async (paths) => {
+              asked.push(paths);
+              return problem;
+            },
+            launch: { user: o.user, proxyPort: 1, grant: async () => {} },
+          },
+          close: async () => {
+            closed++;
+          },
+        };
+      };
+    const win = { platform: 'win32', wsl: 'none', automountRoot: '/mnt/' } as const;
+    // A label of its own: the repository's deny list for `windows` holds POSIX paths, which a
+    // native Windows worker refuses.
+    const held = await run(wm, wp, ['worker', '--label', 'native'], win, {
+      windowsWorker: fake('the Windows crew sandbox does not hold here: direct: open'),
+    });
+    expect(held.code).toBe(1);
+    expect(lastLine(held.out)).toMatchObject({
+      kind: 'refused',
+      line: 'the Windows crew sandbox does not hold here: direct: open',
+    });
+    expect(asked).toEqual([['D:\\data']]);
+    expect(closed).toBe(1);
+    expect(w.github.refs.size).toBe(0);
+  });
+
+  it('worker windows-setup prints the script for the configured crew user, and needs one', async () => {
+    const w = world();
+    const wm = workerMachine(w, 'win');
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    const without = await run(wm, wp, ['worker', 'windows-setup']);
+    expect(without.code).not.toBe(0);
+    expect(without.err).toMatch(/workers\.self\.windows\.crew_user/);
+    writeOwnerConfig(
+      wm.home,
+      `workers:\n  self:\n    lead: lead-user\n    lead_id: ${idOf('lead-user')}\n    windows: { crew_user: studio-crew }\n`,
+    );
+    const r = await run(wm, wp, ['worker', 'windows-setup']);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/^#Requires -RunAsAdministrator/);
+    expect(r.out).toContain("$name = 'studio-crew'");
+    expect(r.out).toContain('windows-crew.xml');
+    expect(w.github.refs.size).toBe(0);
   });
 
   it("N6: a worker token of the lead's account is refused by id", async () => {

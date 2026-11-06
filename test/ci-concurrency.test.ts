@@ -55,12 +55,13 @@ describe('ci workflow guard', () => {
     expect(workflow.concurrency['cancel-in-progress']).toBe(true);
   });
 
-  it('runs every job on GitHub-hosted ubuntu-latest', () => {
+  it('runs every job on a GitHub-hosted runner: ubuntu-latest, Windows only for its own job', () => {
     const jobs = Object.entries(workflow.jobs);
     expect(jobs.length).toBeGreaterThan(0);
-    for (const [, job] of jobs) {
-      expect(job['runs-on']).toBe('ubuntu-latest');
+    for (const [name, job] of jobs) {
+      expect(job['runs-on']).toBe(name === 'windows' ? 'windows-latest' : 'ubuntu-latest');
     }
+    expect(workflow.jobs.check?.['runs-on']).toBe('ubuntu-latest');
   });
 
   it('fails the bundle drift check on modified and on new untracked files', () => {

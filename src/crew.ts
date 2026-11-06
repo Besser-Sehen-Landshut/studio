@@ -132,6 +132,7 @@ import {
   recordRun,
   USAGE_UNREADABLE,
 } from './usage.js';
+import { type Grant, runConfigDir, windowsCrewEnv } from './windows-sandbox.js';
 
 export { resolveModel };
 
@@ -958,6 +959,13 @@ export function writeCrewSettings(
     /** A reviewer run: its analyzer and session time limits (src/analyzer-timeout.ts). */
     timeouts?: ReviewTimeouts;
     /**
+     * A native Windows worker (src/windows-sandbox.ts): Claude Code's sandbox does not run there;
+     * the crew runs as the crew sandbox user behind Studio's proxy instead.
+     */
+    windows?: boolean;
+    /** On a native Windows worker: the run's own Claude config dir, where its tool outputs land. */
+    runConfigDir?: string;
+    /**
      * A cache crew (src/cache.ts): the only commands it may run and files it may write, and the
      * time each command may take (Claude Code's Bash limit, 2 minutes by default).
      */
@@ -967,6 +975,8 @@ export function writeCrewSettings(
 ): string {
   assertItemId(item.id);
   const id = item.id;
+  // Claude Code runs hooks on Windows through Git Bash: the guard's path with forward slashes.
+  const guardBin = dirs.windows === true ? GUARD_BIN.replace(/\\/g, '/') : GUARD_BIN;
   const realHome = launcher.homedir ?? homedir();
   const env = launcher.env ?? process.env;
   const { all: credentialPaths, extra: extraSecret } = credentialLocations(realHome, env);
@@ -1042,7 +1052,10 @@ export function writeCrewSettings(
   // Where Claude Code saves a tool output too long to show, and tells the crew to read it. The
   // transcripts beside it stay out.
   const toolResultGlobs = unique(
-    [configDir, realOr(configDir)].flatMap((dir) =>
+    (dirs.runConfigDir === undefined
+      ? [configDir, realOr(configDir)]
+      : [dirs.runConfigDir]
+    ).flatMap((dir) =>
       [clone, realOr(clone)].map(
         (c) => `${join(dir, 'projects', c.replace(/[^A-Za-z0-9]/g, '-'))}/*/tool-results/**`,
       ),
@@ -1146,7 +1159,7 @@ export function writeCrewSettings(
           matcher: '*',
           // onFailure "block" also blocks when the hook cannot start or times out
           // (https://code.claude.com/docs/en/hooks, "Block the action when a hook fails").
-          hooks: [{ type: 'command', command: guardHookCommand(GUARD_BIN), onFailure: 'block' }],
+          hooks: [{ type: 'command', command: guardHookCommand(guardBin), onFailure: 'block' }],
         },
       ],
       // A reviewer's subagents: the guard records each start, so its analyzer timeout counts
@@ -1157,34 +1170,39 @@ export function writeCrewSettings(
             SubagentStart: [
               {
                 matcher: '*',
-                hooks: [{ type: 'command', command: guardHookCommand(GUARD_BIN) }],
+                hooks: [{ type: 'command', command: guardHookCommand(guardBin) }],
               },
             ],
           }),
     },
-    sandbox: {
-      enabled: true,
-      failIfUnavailable: true,
-      allowUnsandboxedCommands: false,
-      filesystem: {
-        allowWrite: [clone, dirs.tmpDir, dirs.homeDir],
-        // A worker's denied places are out for writes too, whatever else allows them.
-        ...(denied.length + reaDenied.length > 0
-          ? { denyWrite: unique([...denied, ...reaDenied]) }
-          : {}),
-        denyRead,
-        allowRead,
-      },
-      network: {
-        allowedDomains: config.sandbox.networkAllow,
-        strictAllowlist: true,
-        // Go tools such as gh verify TLS only through this macOS service; only it is opened, see
-        // SECURITY.md (https://code.claude.com/docs/en/sandboxing).
-        ...((launcher.platform ?? process.platform) === 'darwin' && dirs.macosTrustService === true
-          ? { allowMachLookup: ['com.apple.trustd.agent'] }
-          : {}),
-      },
-    },
+    // Native Windows: the sandbox is the crew user, its ACLs and the firewall (src/windows-sandbox.ts).
+    sandbox:
+      dirs.windows === true
+        ? { enabled: false }
+        : {
+            enabled: true,
+            failIfUnavailable: true,
+            allowUnsandboxedCommands: false,
+            filesystem: {
+              allowWrite: [clone, dirs.tmpDir, dirs.homeDir],
+              // A worker's denied places are out for writes too, whatever else allows them.
+              ...(denied.length + reaDenied.length > 0
+                ? { denyWrite: unique([...denied, ...reaDenied]) }
+                : {}),
+              denyRead,
+              allowRead,
+            },
+            network: {
+              allowedDomains: config.sandbox.networkAllow,
+              strictAllowlist: true,
+              // Go tools such as gh verify TLS only through this macOS service; only it is opened, see
+              // SECURITY.md (https://code.claude.com/docs/en/sandboxing).
+              ...((launcher.platform ?? process.platform) === 'darwin' &&
+              dirs.macosTrustService === true
+                ? { allowMachLookup: ['com.apple.trustd.agent'] }
+                : {}),
+            },
+          },
   };
   const file = join(stateRoot, 'settings', `${id}.json`);
   writeStateFile(stateRoot, file, `${JSON.stringify(settings, null, 2)}\n`);
@@ -1299,6 +1317,15 @@ export interface WorkerLaunch {
    * it, so the whole brief is one SHA.
    */
   sha?: string;
+  /** A native Windows worker: the crew sandbox user, its proxy and the grants of a run. */
+  windows?: WindowsLaunch;
+}
+
+/** What a launch on a native Windows worker needs (src/windows-sandbox.ts). */
+export interface WindowsLaunch {
+  user: string;
+  proxyPort: number;
+  grant(grants: Grant[]): Promise<void>;
 }
 
 export async function launchCrew(
@@ -1409,6 +1436,14 @@ async function launchCrewLocked(
     );
   }
   const penv = launcher.env ?? process.env;
+  // Claude Code runs crew commands unsandboxed on native Windows: only the crew sandbox user of a
+  // Windows worker may run them there.
+  const windows = worker?.windows;
+  if ((launcher.platform ?? process.platform) === 'win32' && windows === undefined) {
+    throw new Error(
+      'native Windows has no Claude Code sandbox for crew commands: crews run there only on a worker with the Windows crew sandbox (studio worker windows-setup)',
+    );
+  }
   const role = config.roles[item.role];
   if (!role) throw new Error(`role ${item.role} is not configured`);
   if (item.repo !== config.primaryRepo && !config.repos.includes(item.repo)) {
@@ -1830,6 +1865,9 @@ async function launchCrewLocked(
           }),
       ...(worker === undefined ? {} : { deny: worker.deny }),
       ...(timeouts === undefined ? {} : { timeouts }),
+      ...(windows === undefined
+        ? {}
+        : { windows: true, runConfigDir: join(homeDir, '.claude-run') }),
       ...(isCache
         ? {
             only: {
@@ -1897,6 +1935,29 @@ async function launchCrewLocked(
   const log = join(stateRoot, 'logs', `${item.id}.jsonl`);
   ensureStateDir(stateRoot, dirname(log));
   const logStart = fileSize(log);
+  if (windows !== undefined) {
+    // The crew user's own places for this run, and nothing else of the state root.
+    Object.assign(
+      env,
+      windowsCrewEnv({ proxyPort: windows.proxyPort, homeDir, tmpDir, base: penv }),
+    );
+    // A Claude config dir of the run's own; the shared one stays read-only for the crew user.
+    env.CLAUDE_CONFIG_DIR = runConfigDir(homeDir, claudeConfigDir);
+    if (!existsNoFollow(log)) writeStateFile(stateRoot, log, '');
+    const briefs = ['md', 'caps', 'rules', 'reference']
+      .map((ext) => join(stateRoot, 'briefs', `${item.id}.${ext}`))
+      .filter(existsNoFollow);
+    await windows.grant([
+      { path: wt.path, rights: 'M' },
+      { path: homeDir, rights: 'M' },
+      { path: tmpDir, rights: 'M' },
+      ...briefs.map((path) => ({ path, rights: 'R' as const })),
+      { path: settings, rights: 'R' },
+      { path: mcpConfig, rights: 'R' },
+      { path: join(stateRoot, 'guard', `${item.id}.json`), rights: 'R' },
+      { path: log, rights: 'M' },
+    ]);
+  }
   // A block or a pause may have arrived while this launch was preparing.
   refuseIfBlocked(ownerRoot);
   refuseIfPaused(stateRoot);

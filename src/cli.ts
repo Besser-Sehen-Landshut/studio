@@ -12,6 +12,7 @@ import {
   settleAcceptances,
 } from './acceptance.js';
 import { runAccount } from './account-command.js';
+import { crewClaudeDir } from './accounts.js';
 import { addItem, boardPrefix } from './add-item.js';
 import { adoptStateRoot } from './adopt.js';
 import {
@@ -60,6 +61,7 @@ import {
   loadOwnerConfig,
   type OwnerConfig,
   type OwnerEnv,
+  ownerConfigDir,
   type RoleConfig,
   type StudioConfig,
   WORKER_LABEL_RE,
@@ -79,6 +81,7 @@ import {
   unverifiedRefusal,
   wantsRea,
 } from './crew.js';
+import { startEgressProxy } from './egress-proxy.js';
 import { addEpic, dropEpic, editEpic, epicRows, findEpic, settleAndSave } from './epics.js';
 import {
   addedInPullRequest,
@@ -279,6 +282,13 @@ import {
   readUsage,
   runningPerLabel,
 } from './usage.js';
+import {
+  credFileIn,
+  findClaude,
+  setupReadPaths,
+  windowsSetupScript,
+  windowsWorker,
+} from './windows-sandbox.js';
 import { pinnedMain, workerStep } from './worker.js';
 import { parseClaim } from './worker-claim.js';
 import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
@@ -314,6 +324,8 @@ export interface CliDeps {
   launcher?: string;
   /** What `studio worker` can enforce on this machine; read from the system when missing. */
   workerPlatform?: WorkerPlatform;
+  /** Test seam: the crew sandbox of a native Windows worker (src/windows-sandbox.ts). */
+  windowsWorker?: typeof windowsWorker;
   /** Heartbeat interval during long git calls of a worker, in milliseconds; tests shorten it. */
   workerBeatMs?: number;
   /** Test seam: where `studio worker` pushes a crew's branch instead of GitHub. */
@@ -3244,6 +3256,30 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     switch (cmd) {
       case 'worker': {
         refuseCrew(deps.env);
+        // The one-time setup of the Windows crew sandbox: printed for the owner to run elevated.
+        if (rest[0] === 'windows-setup' && rest.length === 1) {
+          const ownerConfig = loadOwnerConfig(owner);
+          const user = ownerConfig.workers?.self?.windows?.crewUser;
+          if (user === undefined) {
+            throw new UsageError(
+              'worker windows-setup needs workers.self.windows.crew_user in the owner config',
+            );
+          }
+          stdout(
+            windowsSetupScript({
+              user,
+              credFile: credFileIn(ownerConfigDir(owner)),
+              readPaths: setupReadPaths({
+                node: process.execPath,
+                claude: findClaude(deps.env.PATH ?? deps.env.Path),
+                toolchains: ownerConfig.crewToolchainPaths,
+                crewConfigDir: crewClaudeDir(owner),
+              }),
+              revokePaths: [crewClaudeDir(owner)],
+            }),
+          );
+          return 0;
+        }
         if (rest.length > 0)
           throw new UsageError('worker takes no arguments, only --label and --once');
         const label = values.label;
@@ -3267,10 +3303,28 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             return 1;
           }
         }
+        // Native Windows: crews run as the crew sandbox user, proven by a probe before each claim.
+        const platformNow = deps.workerPlatform ?? detectPlatform();
+        const winUser = loadOwnerConfig(owner).workers?.self?.windows?.crewUser;
+        const win =
+          platformNow.platform === 'win32' && winUser !== undefined
+            ? await (deps.windowsWorker ?? windowsWorker)({
+                user: winUser,
+                stateRoot: stateRootFor(project, owner),
+                ownerRoot: ownerStateRootFor(owner),
+                crewConfigDir: crewClaudeDir(owner),
+                ownerHome: deps.homedir ?? homedir(),
+                ownerConfigDir: ownerConfigDir(owner),
+                networkAllow: pinnedConfig.sandbox.networkAllow,
+                env: deps.env,
+                startProxy: (allow) => startEgressProxy({ allow }),
+              })
+            : undefined;
         const ctx = {
           project,
           label,
-          ports,
+          ports: win === undefined ? ports : { ...ports, claude: win.claude },
+          ...(win === undefined ? {} : { windows: win.sandbox }),
           hub,
           token,
           secrets: crewToken === undefined ? [] : [crewToken],
@@ -3281,24 +3335,28 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ...(deps.workerBeatMs === undefined ? {} : { beatMs: deps.workerBeatMs }),
           log: (line: string) => stderr(`${line.replace(/\p{Cc}/gu, ' ')}\n`),
         };
-        for (;;) {
-          let kind: string;
-          try {
-            const r = await workerStep(ctx);
-            kind = r.kind;
-            stdout(`${JSON.stringify({ at: ports.clock.now().toISOString(), ...r })}\n`);
-          } catch (e) {
-            kind = 'error';
-            stdout(
-              `${JSON.stringify({ at: ports.clock.now().toISOString(), kind, line: (e as Error).message.replace(/\p{Cc}/gu, ' ') })}\n`,
+        try {
+          for (;;) {
+            let kind: string;
+            try {
+              const r = await workerStep(ctx);
+              kind = r.kind;
+              stdout(`${JSON.stringify({ at: ports.clock.now().toISOString(), ...r })}\n`);
+            } catch (e) {
+              kind = 'error';
+              stdout(
+                `${JSON.stringify({ at: ports.clock.now().toISOString(), kind, line: (e as Error).message.replace(/\p{Cc}/gu, ' ') })}\n`,
+              );
+            }
+            // Fail closed: what this machine cannot enforce stops the worker, it never waits it out.
+            if (kind === 'refused') return 1;
+            if (values.once === true) return kind === 'error' ? 1 : 0;
+            await ports.clock.sleep(
+              kind === 'idle' || kind === 'held' || kind === 'error' ? 60_000 : 20_000,
             );
           }
-          // Fail closed: what this machine cannot enforce stops the worker, it never waits it out.
-          if (kind === 'refused') return 1;
-          if (values.once === true) return kind === 'error' ? 1 : 0;
-          await ports.clock.sleep(
-            kind === 'idle' || kind === 'held' || kind === 'error' ? 60_000 : 20_000,
-          );
+        } finally {
+          await win?.close();
         }
       }
 

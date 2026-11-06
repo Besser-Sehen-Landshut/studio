@@ -4003,10 +4003,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep8, value: value2 } = collItem;
+        const { start, key, sep: sep9, value: value2 } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep8?.[0],
+          next: key ?? sep9?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -4020,7 +4020,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep8) {
+          if (!keyProps.anchor && !keyProps.tag && !sep9) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map2.comment)
@@ -4044,7 +4044,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map2.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep8 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep9 ?? [], {
           indicator: "map-value-ind",
           next: value2,
           offset: keyNode.range[2],
@@ -4060,7 +4060,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value2 ? composeNode(ctx, value2, valueProps, onError) : composeEmptyNode(ctx, offset, sep8, null, valueProps, onError);
+          const valueNode = value2 ? composeNode(ctx, value2, valueProps, onError) : composeEmptyNode(ctx, offset, sep9, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value2, onError);
           offset = valueNode.range[2];
@@ -4151,7 +4151,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep8 = "";
+        let sep9 = "";
         for (const token of end) {
           const { source, type } = token;
           switch (type) {
@@ -4165,13 +4165,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep8 + cb;
-              sep8 = "";
+                comment += sep9 + cb;
+              sep9 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep8 += source;
+                sep9 += source;
               hasSpace = true;
               break;
             default:
@@ -4214,18 +4214,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i2 = 0; i2 < fc.items.length; ++i2) {
         const collItem = fc.items[i2];
-        const { start, key, sep: sep8, value: value2 } = collItem;
+        const { start, key, sep: sep9, value: value2 } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep8?.[0],
+          next: key ?? sep9?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep8 && !value2) {
+          if (!props.anchor && !props.tag && !sep9 && !value2) {
             if (i2 === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i2 < fc.items.length - 1)
@@ -4279,8 +4279,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap5 && !sep8 && !props.found) {
-          const valueNode = value2 ? composeNode(ctx, value2, props, onError) : composeEmptyNode(ctx, props.end, sep8, null, props, onError);
+        if (!isMap5 && !sep9 && !props.found) {
+          const valueNode = value2 ? composeNode(ctx, value2, props, onError) : composeEmptyNode(ctx, props.end, sep9, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value2))
@@ -4292,7 +4292,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep8 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep9 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value2,
@@ -4303,8 +4303,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap5 && !props.found && ctx.options.strict) {
-              if (sep8)
-                for (const st of sep8) {
+              if (sep9)
+                for (const st of sep9) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -4321,7 +4321,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value2 ? composeNode(ctx, value2, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep8, null, valueProps, onError) : null;
+          const valueNode = value2 ? composeNode(ctx, value2, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep9, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value2))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -4501,7 +4501,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i2 + 1;
       }
       let value2 = "";
-      let sep8 = "";
+      let sep9 = "";
       let prevMoreIndented = false;
       for (let i2 = 0; i2 < contentStart; ++i2)
         value2 += lines2[i2][0].slice(trimIndent) + "\n";
@@ -4518,24 +4518,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value2 += sep8 + indent.slice(trimIndent) + content;
-          sep8 = "\n";
+          value2 += sep9 + indent.slice(trimIndent) + content;
+          sep9 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep8 === " ")
-            sep8 = "\n";
-          else if (!prevMoreIndented && sep8 === "\n")
-            sep8 = "\n\n";
-          value2 += sep8 + indent.slice(trimIndent) + content;
-          sep8 = "\n";
+          if (sep9 === " ")
+            sep9 = "\n";
+          else if (!prevMoreIndented && sep9 === "\n")
+            sep9 = "\n\n";
+          value2 += sep9 + indent.slice(trimIndent) + content;
+          sep9 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep8 === "\n")
+          if (sep9 === "\n")
             value2 += "\n";
           else
-            sep8 = "\n";
+            sep9 = "\n";
         } else {
-          value2 += sep8 + content;
-          sep8 = " ";
+          value2 += sep9 + content;
+          sep9 = " ";
           prevMoreIndented = false;
         }
       }
@@ -4718,25 +4718,25 @@ var require_resolve_flow_scalar = __commonJS({
         trimBoth = /^[ \t]+|[ \t]+$/g;
       }
       let res = match[1].replace(trimEnd, "");
-      let sep8 = " ";
+      let sep9 = " ";
       let pos = line4.lastIndex;
       while (match = line4.exec(source)) {
         const lm = match[1].replace(trimBoth, "");
         if (lm === "") {
-          if (sep8 === "\n")
-            res += sep8;
+          if (sep9 === "\n")
+            res += sep9;
           else
-            sep8 = "\n";
+            sep9 = "\n";
         } else {
-          res += sep8 + lm;
-          sep8 = " ";
+          res += sep9 + lm;
+          sep9 = " ";
         }
         pos = line4.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep8 + (match?.[1] ?? "");
+      return res + sep9 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -5546,14 +5546,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep8, value: value2 }) {
+    function stringifyItem({ start, key, sep: sep9, value: value2 }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep8)
-        for (const st of sep8)
+      if (sep9)
+        for (const st of sep9)
           res += st.source;
       if (value2)
         res += stringifyToken(value2);
@@ -6720,18 +6720,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep8;
+          let sep9;
           if (scalar.end) {
-            sep8 = scalar.end;
-            sep8.push(this.sourceToken);
+            sep9 = scalar.end;
+            sep9.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep8 = [this.sourceToken];
+            sep9 = [this.sourceToken];
           const map2 = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep8 }]
+            items: [{ start, key: scalar, sep: sep9 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map2;
@@ -6884,15 +6884,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep8 = it.sep;
-                  sep8.push(this.sourceToken);
+                  const sep9 = it.sep;
+                  sep9.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep8 }]
+                    items: [{ start: start2, key, sep: sep9 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -7086,13 +7086,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep8 = fc.end.splice(1, fc.end.length);
-            sep8.push(this.sourceToken);
+            const sep9 = fc.end.splice(1, fc.end.length);
+            sep9.push(this.sourceToken);
             const map2 = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep8 }]
+              items: [{ start, key: fc, sep: sep9 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map2;
@@ -7841,20 +7841,20 @@ var require_shell_quote = __commonJS({
 });
 
 // src/main.ts
-import { realpathSync as realpathSync12 } from "node:fs";
+import { realpathSync as realpathSync13 } from "node:fs";
 import { homedir as homedir14 } from "node:os";
-import { fileURLToPath as fileURLToPath6 } from "node:url";
+import { fileURLToPath as fileURLToPath7 } from "node:url";
 
 // src/cli.ts
-import { existsSync as existsSync16 } from "node:fs";
+import { existsSync as existsSync17 } from "node:fs";
 import { homedir as homedir13 } from "node:os";
-import { dirname as dirname16, join as join55, resolve as resolve11 } from "node:path";
+import { dirname as dirname17, join as join56, resolve as resolve12 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/acceptance.ts
 import { createHash as createHash5 } from "node:crypto";
-import { lstatSync as lstatSync36, readFileSync as readFileSync41 } from "node:fs";
-import { join as join41 } from "node:path";
+import { lstatSync as lstatSync37, readFileSync as readFileSync43 } from "node:fs";
+import { join as join43 } from "node:path";
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -12923,7 +12923,7 @@ var recursive = /* @__PURE__ */ new WeakMap();
 var NONE = 0;
 var ASSUMED = 1;
 var PROVEN = 2;
-function isRecursive(inst, stack, resolve12) {
+function isRecursive(inst, stack, resolve13) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -12933,7 +12933,7 @@ function isRecursive(inst, stack, resolve12) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve12);
+      const answer = isRecursive(child, stack, resolve13);
       if (answer > result)
         result = answer;
     }
@@ -12944,7 +12944,7 @@ function isRecursive(inst, stack, resolve12) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve12) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve13) : NONE;
       if (child > answer)
         answer = child;
     }
@@ -13008,7 +13008,7 @@ function isRecursive(inst, stack, resolve12) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve12 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve13 ? inst._zod.innerType : void 0);
       merge3(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -31150,7 +31150,7 @@ var CREDENTIAL_PATHS = [
   ".cargo/credentials.toml"
 ];
 var PROTECTED_HOME_PATHS = [...CREDENTIAL_PATHS, ".claude"];
-var pathKey = (p, platform2 = process.platform) => platform2 === "darwin" ? p.toLowerCase() : p;
+var pathKey = (p, platform2 = process.platform) => platform2 === "darwin" || platform2 === "win32" ? p.toLowerCase() : p;
 var within = (child, parent) => child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
 function toolchainPathProblem(path10, home, extraProtectedPaths = [], platform2 = process.platform) {
   if (!isAbsolute(path10)) return "must be an absolute path";
@@ -31865,7 +31865,15 @@ var ownerConfigSchema = external_exports.strictObject({
       // On WSL2 every Windows file system is denied to crews; these places are opened for reads.
       allowRead: external_exports.array(denyPath).max(50).default([]),
       // How long a claim holds without a heartbeat before another worker may take it over.
-      leaseMinutes: external_exports.number().int().min(10).max(240).default(30)
+      leaseMinutes: external_exports.number().int().min(10).max(240).default(30),
+      // Native Windows: the local standard user every crew runs as (src/windows-sandbox.ts),
+      // created by the script of `studio worker windows-setup`.
+      windows: external_exports.strictObject({
+        crewUser: external_exports.string().regex(
+          /^[A-Za-z][A-Za-z0-9_-]{0,19}$/,
+          "a local user name of at most 20 characters"
+        )
+      }).optional()
     }).optional()
   }).optional()
 });
@@ -31945,15 +31953,15 @@ function configWarnings(config2) {
 // src/init.ts
 var import_yaml15 = __toESM(require_dist(), 1);
 import {
-  lstatSync as lstatSync33,
-  mkdirSync as mkdirSync10,
-  readdirSync as readdirSync13,
-  readFileSync as readFileSync38,
-  rmdirSync,
+  lstatSync as lstatSync34,
+  mkdirSync as mkdirSync11,
+  readdirSync as readdirSync14,
+  readFileSync as readFileSync40,
+  rmdirSync as rmdirSync2,
   rmSync as rmSync8,
   writeFileSync as writeFileSync14
 } from "node:fs";
-import { join as join38 } from "node:path";
+import { join as join40 } from "node:path";
 
 // src/capacity.ts
 var DEFAULT_TIMEOUT_MS = 3e4;
@@ -32085,9 +32093,9 @@ async function capacityHoldsTwice(config2, ports, options = {}) {
 
 // src/secret-command.ts
 var import_yaml13 = __toESM(require_dist(), 1);
-import { readFileSync as readFileSync36, realpathSync as realpathSync8, statSync as statSync6 } from "node:fs";
+import { readFileSync as readFileSync38, realpathSync as realpathSync10, statSync as statSync6 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
-import { join as join36 } from "node:path";
+import { join as join38 } from "node:path";
 
 // src/account-command.ts
 import { chmodSync as chmodSync4, existsSync as existsSync4, mkdirSync as mkdirSync4 } from "node:fs";
@@ -34828,17 +34836,17 @@ async function runCredentialProvider(command, ctx, ports, owner) {
     STUDIO_EXCLUDE: ctx.exclude.join(",")
   };
   if (penv.PATH !== void 0) env.PATH = penv.PATH;
-  let reply;
+  let reply2;
   try {
-    reply = await ports.credentials.runProvider(command, env, {
+    reply2 = await ports.credentials.runProvider(command, env, {
       timeoutMs: PROVIDER_TIMEOUT_MS,
       maxBytes: PROVIDER_MAX_BYTES
     });
   } catch {
     return fail("could not be run");
   }
-  if (reply.code !== 0) return fail("failed");
-  return parseProviderOutput(reply.stdout);
+  if (reply2.code !== 0) return fail("failed");
+  return parseProviderOutput(reply2.stdout);
 }
 var allParkedLine = (reset2) => `usage limit: no crew credential available; earliest reset ${reset2 ?? "unknown"}`;
 async function limitHold(ownerRoot, ownerConfig, ports, owner) {
@@ -35338,13 +35346,13 @@ function cowCopyArgs(platform2, src, dst) {
 }
 function systemCowCopy(platform2 = process.platform) {
   if (cowCopyArgs(platform2, "a", "b") === void 0) return void 0;
-  return (src, dst, timeoutMs) => new Promise((resolve12) => {
+  return (src, dst, timeoutMs) => new Promise((resolve13) => {
     const args = cowCopyArgs(platform2, src, dst);
     execFile(
       "/bin/cp",
       args,
       { env: { PATH: "/bin:/usr/bin" }, timeout: timeoutMs, killSignal: "SIGKILL" },
-      (err) => resolve12(err === null)
+      (err) => resolve13(err === null)
     );
   });
 }
@@ -35669,24 +35677,24 @@ async function cacheCleanup(o2) {
 }
 
 // src/clone-gc.ts
-import { lstatSync as lstatSync24, readdirSync as readdirSync11, readFileSync as readFileSync27 } from "node:fs";
-import { join as join27 } from "node:path";
+import { lstatSync as lstatSync25, readdirSync as readdirSync12, readFileSync as readFileSync29 } from "node:fs";
+import { join as join29 } from "node:path";
 
 // src/crew.ts
 import {
   chmodSync as chmodSync5,
-  existsSync as existsSync6,
-  lstatSync as lstatSync23,
-  readdirSync as readdirSync10,
-  readFileSync as readFileSync26,
-  realpathSync as realpathSync6,
+  existsSync as existsSync8,
+  lstatSync as lstatSync24,
+  readdirSync as readdirSync11,
+  readFileSync as readFileSync28,
+  realpathSync as realpathSync8,
   statSync as statSync4,
-  unlinkSync as unlinkSync5,
+  unlinkSync as unlinkSync6,
   writeFileSync as writeFileSync10
 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
-import { basename as basename4, dirname as dirname9, join as join26, resolve as resolve6, sep as sep5 } from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { basename as basename4, dirname as dirname10, join as join28, resolve as resolve7, sep as sep6 } from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/analyzer-timeout.ts
 import {
@@ -39413,16 +39421,1402 @@ function searchSolutions(projectDir, query, limit = 5) {
   return hits.sort((a2, b) => b.score - a2.score || a2.path.localeCompare(b.path)).slice(0, limit);
 }
 
+// src/windows-sandbox.ts
+import { execFile as execFile2, spawn } from "node:child_process";
+import { randomBytes as randomBytes9 } from "node:crypto";
+import {
+  closeSync as closeSync6,
+  copyFileSync,
+  existsSync as existsSync7,
+  lstatSync as lstatSync23,
+  mkdirSync as mkdirSync7,
+  openSync as openSync6,
+  readdirSync as readdirSync10,
+  readFileSync as readFileSync27,
+  realpathSync as realpathSync7,
+  rmdirSync,
+  unlinkSync as unlinkSync5
+} from "node:fs";
+import { dirname as dirname9, join as join27, resolve as resolve6, sep as sep5 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+
+// src/egress-proxy.ts
+import { lookup } from "node:dns/promises";
+import {
+  BlockList,
+  createServer,
+  isIP as isIP3,
+  connect as tcpConnect
+} from "node:net";
+
+// src/worker-deny.ts
+import { existsSync as existsSync6, readFileSync as readFileSync26, realpathSync as realpathSync6 } from "node:fs";
+import { isIP as isIP2 } from "node:net";
+import { isAbsolute as isAbsolute8, join as join26, posix } from "node:path";
+var readText = (file3) => {
+  try {
+    return readFileSync26(file3, "utf8");
+  } catch {
+    return void 0;
+  }
+};
+function automountRoot(conf) {
+  let section = "";
+  for (const raw of (conf ?? "").split(/\r?\n/)) {
+    const line4 = raw.replace(/[#;].*$/, "").trim();
+    const head = /^\[(.+)\]$/.exec(line4);
+    if (head) {
+      section = head[1].trim().toLowerCase();
+      continue;
+    }
+    const kv = /^([A-Za-z]+)\s*=\s*(.+)$/.exec(line4);
+    if (section === "automount" && kv && kv[1].toLowerCase() === "root") {
+      const v = kv[2].trim().replace(/^"(.*)"$/, "$1");
+      if (v.startsWith("/") && !v.split("/").includes("..")) return v.endsWith("/") ? v : `${v}/`;
+    }
+  }
+  return "/mnt/";
+}
+function windowsMountsOf(mountinfo) {
+  const out = [];
+  for (const line4 of (mountinfo ?? "").split("\n")) {
+    const [left, right] = line4.split(" - ");
+    if (left === void 0 || right === void 0) continue;
+    const point = left.split(" ")[4];
+    const type = right.split(" ")[0];
+    if (point === void 0 || type === void 0) continue;
+    if (!/^(drvfs|9p|virtiofs)$/.test(type)) continue;
+    const p = point.replace(
+      /\\([0-7]{3})/g,
+      (_, o2) => String.fromCharCode(Number.parseInt(o2, 8))
+    );
+    if (p.startsWith("/") && p !== "/" && !out.includes(p)) out.push(p);
+  }
+  return out;
+}
+function detectPlatform(platform2 = process.platform, read3 = readText, env = process.env, exists4 = existsSync6) {
+  if (platform2 !== "linux") return { platform: platform2, wsl: "none", automountRoot: "/mnt/" };
+  const release2 = read3("/proc/sys/kernel/osrelease") ?? "";
+  const signs = /microsoft/i.test(release2) || read3("/proc/sys/fs/binfmt_misc/WSLInterop") !== void 0 || read3("/proc/sys/fs/binfmt_misc/WSLInterop-late") !== void 0 || (env.WSL_DISTRO_NAME ?? "") !== "" || exists4("/run/WSL");
+  if (!signs) return { platform: platform2, wsl: "none", automountRoot: "/mnt/" };
+  const wsl = /WSL2|microsoft-standard/i.test(release2) ? "wsl2" : /microsoft/i.test(release2) ? "wsl1" : "unknown";
+  const entries2 = [
+    read3("/proc/sys/fs/binfmt_misc/WSLInterop"),
+    read3("/proc/sys/fs/binfmt_misc/WSLInterop-late")
+  ].filter((e) => e !== void 0);
+  const status = read3("/proc/sys/fs/binfmt_misc/status");
+  let interop;
+  if (entries2.length > 0) interop = entries2.some((e) => /^enabled/m.test(e));
+  else if (status !== void 0) interop = false;
+  return {
+    platform: platform2,
+    wsl,
+    ...interop === void 0 ? {} : { interop },
+    automountRoot: automountRoot(read3("/etc/wsl.conf")),
+    windowsMounts: windowsMountsOf(read3("/proc/self/mountinfo"))
+  };
+}
+function sandboxProblem(p) {
+  if (p.platform === "win32") {
+    if (p.windowsSandbox === void 0) {
+      return "native Windows has no Claude Code sandbox for crew commands; set workers.self.windows.crew_user in the owner config and run the script of studio worker windows-setup, or run studio worker inside a WSL2 distribution";
+    }
+    return p.windowsSandbox.problem;
+  }
+  if (p.platform !== "linux" && p.platform !== "darwin") {
+    return `${p.platform} has no sandbox for crew commands; a worker runs on macOS, Linux or WSL2`;
+  }
+  if (p.wsl === "unknown") {
+    return "this looks like WSL, but its version cannot be told; a worker runs only in WSL2 with interop off";
+  }
+  if (p.wsl === "wsl1") {
+    return "WSL1 has no sandbox for crew commands; convert the distribution to WSL2 (wsl --set-version <distro> 2)";
+  }
+  if (p.wsl === "wsl2" && p.interop !== false) {
+    return p.interop === void 0 ? "cannot tell whether WSL interop is off: a crew could start Windows programs outside the sandbox; set [interop] enabled=false in /etc/wsl.conf, run wsl --shutdown and start the worker again" : "WSL interop is on: a crew could start Windows programs, which run outside the sandbox; set [interop] enabled=false in /etc/wsl.conf, run wsl --shutdown and start the worker again";
+  }
+  return void 0;
+}
+var WINDOWS_DRIVE = /^([A-Za-z]):[\\/]/;
+var realOr = (p) => {
+  try {
+    return realpathSync6(p);
+  } catch {
+    return p;
+  }
+};
+function normalizeHost(host) {
+  let h2 = host.toLowerCase();
+  if (h2 === "*") return { host: "*", wildcard: true, ip: 0 };
+  const wildcard = h2.startsWith("*.");
+  if (wildcard) h2 = h2.slice(2);
+  if (h2.endsWith(".")) h2 = h2.slice(0, -1);
+  if (h2 === "" || h2.endsWith(".")) return void 0;
+  const forUrl = h2.includes(":") && !h2.startsWith("[") ? `[${h2}]` : h2;
+  let parsed;
+  try {
+    parsed = new URL(`http://${forUrl}/`).hostname;
+  } catch {
+    return void 0;
+  }
+  if (parsed === "") return void 0;
+  const bare = parsed.startsWith("[") && parsed.endsWith("]") ? parsed.slice(1, -1) : parsed;
+  const ip = isIP2(bare);
+  return { host: bare, wildcard, ip: ip === 4 ? 4 : ip === 6 ? 6 : 0 };
+}
+function localName(host) {
+  const n4 = normalizeHost(host);
+  if (n4 === void 0) return true;
+  const h2 = n4.host;
+  if (h2 === "*" || h2 === "localhost" || h2.endsWith(".localhost")) return true;
+  if (n4.ip !== 0) return false;
+  if (!h2.includes(".")) return true;
+  return /\.(local|lan|internal|intranet|home\.arpa|localdomain)$/.test(h2);
+}
+function ipLiteral(host) {
+  const n4 = normalizeHost(host);
+  return n4 !== void 0 && !n4.wildcard && n4.ip !== 0;
+}
+function hostPort(entry) {
+  const v6 = /^(\[[^\]]+\])(?::(\d+))?$/.exec(entry);
+  if (v6) return { host: v6[1], ...v6[2] ? { port: Number(v6[2]) } : {} };
+  const m = /^([^:]+):(\d+)$/.exec(entry);
+  return m ? { host: m[1], port: Number(m[2]) } : { host: entry };
+}
+function enforceDeny(o2) {
+  const paths = [];
+  const notes = [];
+  const key = (p) => pathKey(p, o2.platform.platform);
+  const wsl = o2.platform.wsl === "wsl2";
+  const root = o2.platform.automountRoot;
+  const explicit = [];
+  for (const entry of o2.deny.paths) {
+    const drive = WINDOWS_DRIVE.exec(entry);
+    let target;
+    if (drive && o2.platform.platform === "win32") {
+      target = entry.replace(/\//g, "\\").replace(/\\+$/, "");
+      if (/^[A-Za-z]:$/.test(target)) target = `${target}\\`;
+    } else if (o2.platform.platform === "win32") {
+      return { refused: `deny path ${entry} is not a Windows drive path (D:\\data)` };
+    } else if (drive) {
+      if (!wsl) {
+        return {
+          refused: `deny path ${entry} is a Windows path: only a worker inside WSL2 can enforce it`
+        };
+      }
+      target = `${root}${drive[1].toLowerCase()}`;
+      notes.push(
+        `deny path ${entry}: the whole drive ${target} is denied, because Windows drives ignore case and a narrower rule could be bypassed by another spelling`
+      );
+    } else {
+      if (!isAbsolute8(entry) || entry.includes("\\")) {
+        return { refused: `deny path ${entry} is not an absolute path` };
+      }
+      target = posix.normalize(entry).replace(/\/+$/, "") || "/";
+      const mounted = wsl ? new RegExp(`^${root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([a-z])(/|$)`, "i").exec(
+        target
+      ) : null;
+      if (mounted) {
+        const whole = `${root}${mounted[1].toLowerCase()}`;
+        if (whole !== target) {
+          notes.push(
+            `deny path ${entry}: the whole drive ${whole} is denied, because Windows drives ignore case and a narrower rule could be bypassed by another spelling`
+          );
+        }
+        target = whole;
+      }
+    }
+    if (target === "/") return { refused: `deny path ${entry} denies everything` };
+    explicit.push(target);
+    for (const spelling of [target, realOr(target)]) {
+      const k = key(spelling);
+      const hit = o2.keep.find((p) => within(key(p), k) || within(k, key(p)));
+      if (hit !== void 0) {
+        return {
+          refused: `deny path ${entry} overlaps ${hit}, which the worker needs for its own checkout, state or toolchains`
+        };
+      }
+      if (!paths.includes(spelling)) paths.push(spelling);
+    }
+  }
+  const allowRead = [];
+  if (wsl) {
+    const defaults = [root.replace(/\/+$/, ""), ...o2.platform.windowsMounts ?? []];
+    for (const d of defaults) {
+      if (d === "" || d === "/") continue;
+      const hit = o2.keep.find((p) => within(key(p), key(d)));
+      if (hit !== void 0) {
+        return {
+          refused: `${hit} lies on a Windows file system (${d}); keep the worker's checkout, state and toolchains in the Linux file system`
+        };
+      }
+      if (!paths.includes(d)) paths.push(d);
+    }
+    for (const entry of o2.allowRead ?? []) {
+      const drive = WINDOWS_DRIVE.exec(entry);
+      const target = drive ? `${root}${drive[1].toLowerCase()}/${entry.slice(3).replace(/\\/g, "/")}`.replace(
+        /\/+$/,
+        ""
+      ) : posix.normalize(entry).replace(/\/+$/, "");
+      if (!isAbsolute8(target) || !defaults.some((d) => within(target, d))) {
+        return {
+          refused: `allow_read ${entry} does not lie on a Windows file system of this machine`
+        };
+      }
+      const denied = explicit.find((d) => within(target, d) || within(d, target));
+      if (denied !== void 0) {
+        return {
+          refused: `allow_read ${entry} lies inside the denied ${denied}; the deny list wins`
+        };
+      }
+      if (!allowRead.includes(target)) allowRead.push(target);
+    }
+  } else if ((o2.allowRead ?? []).length > 0) {
+    return {
+      refused: "allow_read opens places on Windows file systems and only holds inside WSL2"
+    };
+  }
+  for (const entry of o2.networkAllow) {
+    const normal = normalizeHost(hostPort(entry).host);
+    if (normal?.wildcard === true && normal.ip !== 0 || wildcardOverIp(entry)) {
+      return { refused: `network_allow entry ${entry} is a wildcard over an IP address` };
+    }
+  }
+  const ports = [...new Set(o2.deny.ports)].sort((a2, b) => a2 - b);
+  if (ports.length > 0) {
+    for (const entry of o2.networkAllow) {
+      const { host, port } = hostPort(entry);
+      const normal = normalizeHost(host);
+      if (normal === void 0) {
+        return { refused: `network_allow entry ${entry} cannot be read as a host` };
+      }
+      if (port !== void 0 && ports.includes(port)) {
+        return { refused: `network_allow entry ${entry} opens denied port ${port}` };
+      }
+      if ((ipLiteral(host) || localName(host)) && port === void 0) {
+        return {
+          refused: `network_allow entry ${entry} may reach this machine or its network on every port, and ports ${ports.join(", ")} are denied: name the port (${host}:443) or remove the entry`
+        };
+      }
+    }
+  }
+  return { paths, ports, allowRead, notes };
+}
+function mergeDeny(...lists) {
+  const paths = [];
+  const ports = [];
+  for (const l of lists) {
+    for (const p of l?.paths ?? []) if (!paths.includes(p)) paths.push(p);
+    for (const p of l?.ports ?? []) if (!ports.includes(p)) ports.push(p);
+  }
+  return { paths, ports };
+}
+
+// src/egress-proxy.ts
+var ipv43 = (...parts) => parts.join(".");
+var LOOPBACK = ipv43(127, 0, 0, 1);
+var HEADER_LIMIT = 8 * 1024;
+var CONNECT_TIMEOUT_MS = 15e3;
+function allowRules(entries2) {
+  const rules = [];
+  for (const entry of entries2) {
+    const { host, port } = hostPort(entry);
+    const n4 = normalizeHost(host);
+    if (n4 === void 0 || n4.ip !== 0 || n4.host === "*") continue;
+    rules.push({ host: n4.host, wildcard: n4.wildcard, port: port ?? 443 });
+  }
+  return rules;
+}
+function egressProblem(rules, host, port) {
+  const n4 = normalizeHost(host);
+  if (n4 === void 0 || n4.wildcard) return "not a host name";
+  if (n4.ip !== 0) return "an IP address";
+  const h2 = n4.host;
+  if (h2 === "localhost" || h2.endsWith(".localhost") || !h2.includes(".")) return "a local name";
+  const hit = rules.some(
+    (r) => r.port === port && (r.wildcard ? h2.endsWith(`.${r.host}`) : h2 === r.host)
+  );
+  return hit ? void 0 : "not in network_allow";
+}
+function connectTarget(head) {
+  const line4 = head.split("\r\n")[0] ?? "";
+  const m = /^CONNECT ([^\s]+) HTTP\/1\.[01]$/.exec(line4);
+  if (!m) return void 0;
+  const { host, port } = hostPort(m[1]);
+  if (port === void 0 || port < 1 || port > 65535) return void 0;
+  const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  return { host: bare, port };
+}
+var BLOCKED = (() => {
+  const b = new BlockList();
+  const v4 = (a2, c3, d, e, prefix) => b.addSubnet(ipv43(a2, c3, d, e), prefix, "ipv4");
+  v4(0, 0, 0, 0, 8);
+  v4(10, 0, 0, 0, 8);
+  v4(100, 64, 0, 0, 10);
+  v4(127, 0, 0, 0, 8);
+  v4(169, 254, 0, 0, 16);
+  v4(172, 16, 0, 0, 12);
+  v4(192, 0, 0, 0, 24);
+  v4(192, 168, 0, 0, 16);
+  v4(192, 0, 2, 0, 24);
+  v4(198, 51, 100, 0, 24);
+  v4(203, 0, 113, 0, 24);
+  v4(198, 18, 0, 0, 15);
+  v4(224, 0, 0, 0, 4);
+  v4(240, 0, 0, 0, 4);
+  for (const [net, prefix] of [
+    ["::", 128],
+    // unspecified
+    ["::1", 128],
+    // loopback
+    ["fc00::", 7],
+    // unique local
+    ["fe80::", 10],
+    // link-local
+    ["ff00::", 8],
+    // multicast
+    ["64:ff9b:1::", 48],
+    // local-use translation
+    ["100::", 64]
+    // discard-only
+  ]) {
+    b.addSubnet(net, prefix, "ipv6");
+  }
+  return b;
+})();
+function blockedAddress(address) {
+  const kind = isIP3(address);
+  if (kind === 4) return BLOCKED.check(address, "ipv4");
+  if (kind !== 6) return true;
+  const h2 = hextets(address);
+  if (h2 === void 0) return true;
+  if (embeddedIpv4(h2).some((v4) => BLOCKED.check(v4, "ipv4"))) return true;
+  return BLOCKED.check(address, "ipv6");
+}
+function hextets(address) {
+  let a2 = address.toLowerCase().replace(/%.*$/, "");
+  const dotted3 = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(a2);
+  if (dotted3) {
+    const [b0, b1, b2, b3] = dotted3.slice(1).map(Number);
+    a2 = `${a2.slice(0, dotted3.index)}${(b0 << 8 | b1).toString(16)}:${(b2 << 8 | b3).toString(16)}`;
+  }
+  const halves = a2.split("::");
+  if (halves.length > 2) return void 0;
+  const part = (x) => x === "" ? [] : x.split(":").map((g3) => Number.parseInt(g3, 16));
+  const head = part(halves[0]);
+  const tail = halves.length === 2 ? part(halves[1]) : [];
+  const fill = 8 - head.length - tail.length;
+  if (halves.length === 1 ? head.length !== 8 : fill < 0) return void 0;
+  const all = [...head, ...Array(halves.length === 2 ? fill : 0).fill(0), ...tail];
+  return all.every((g3) => Number.isInteger(g3) && g3 >= 0 && g3 <= 65535) ? all : void 0;
+}
+var v4Of = (hi, lo) => ipv43(hi >> 8 & 255, hi & 255, lo >> 8 & 255, lo & 255);
+function embeddedIpv4(h2) {
+  const [a2, b, c3, d, e, f3, g3, i2] = h2;
+  const zero = (...xs) => xs.every((x) => x === 0);
+  const out = [];
+  if (zero(a2, b, c3, d, e) && (f3 === 65535 || f3 === 0)) out.push(v4Of(g3, i2));
+  if (a2 === 100 && b === 65435 && zero(c3, d, e, f3)) out.push(v4Of(g3, i2));
+  if (a2 === 8194) out.push(v4Of(b, c3));
+  if (a2 === 8193 && b === 0) out.push(v4Of(c3, d), v4Of(g3 ^ 65535, i2 ^ 65535));
+  return out;
+}
+var systemResolve = async (host) => (await lookup(host, { all: true, verbatim: true })).map((a2) => a2.address);
+async function checkedAddress(resolve13, host) {
+  let answers;
+  try {
+    answers = await resolve13(host);
+  } catch {
+    return { refused: "does not resolve" };
+  }
+  if (answers.length === 0) return { refused: "does not resolve" };
+  const bad = answers.find(blockedAddress);
+  if (bad !== void 0) return { refused: `resolves to a local or private address (${bad})` };
+  return { address: answers[0] };
+}
+function reply(socket, status) {
+  socket.end(`HTTP/1.1 ${status}\r
+Connection: close\r
+Content-Length: 0\r
+\r
+`);
+}
+async function startEgressProxy(o2) {
+  const rules = allowRules(o2.allow);
+  const refused = [];
+  const resolve13 = o2.resolve ?? systemResolve;
+  const dial = o2.dial ?? ((address2, port) => tcpConnect({ host: address2, port }));
+  const refuse = (client, what) => {
+    refused.push(what);
+    if (refused.length > 50) refused.shift();
+    reply(client, "403 Forbidden");
+  };
+  const sockets = /* @__PURE__ */ new Set();
+  const server = createServer((client) => {
+    sockets.add(client);
+    client.on("close", () => sockets.delete(client));
+    client.on("error", () => client.destroy());
+    let head = Buffer.alloc(0);
+    const onData = (chunk) => {
+      head = Buffer.concat([head, chunk]);
+      const end = head.indexOf("\r\n\r\n");
+      if (end < 0) {
+        if (head.length > HEADER_LIMIT) reply(client, "431 Request Header Fields Too Large");
+        return;
+      }
+      client.off("data", onData);
+      const target = connectTarget(head.subarray(0, end).toString("latin1"));
+      if (target === void 0) {
+        reply(client, "405 Method Not Allowed");
+        return;
+      }
+      const why = egressProblem(rules, target.host, target.port);
+      if (why !== void 0) {
+        refuse(client, `${target.host}:${target.port} (${why})`);
+        return;
+      }
+      void checkedAddress(resolve13, target.host).then((checked) => {
+        if (client.destroyed) return;
+        if ("refused" in checked) {
+          refuse(client, `${target.host}:${target.port} (${checked.refused})`);
+          return;
+        }
+        tunnel(checked.address, target.port);
+      });
+      const tunnel = (address2, port) => {
+        const upstream = dial(address2, port);
+        sockets.add(upstream);
+        upstream.setTimeout(CONNECT_TIMEOUT_MS, () => upstream.destroy());
+        upstream.on("close", () => sockets.delete(upstream));
+        upstream.once("connect", () => {
+          upstream.setTimeout(0);
+          client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+          const rest = head.subarray(end + 4);
+          if (rest.length > 0) upstream.write(rest);
+          client.pipe(upstream);
+          upstream.pipe(client);
+        });
+        upstream.on("error", () => {
+          if (!client.destroyed) reply(client, "502 Bad Gateway");
+          upstream.destroy();
+        });
+        client.on("close", () => upstream.destroy());
+      };
+    };
+    client.on("data", onData);
+  });
+  await new Promise((resolve14, reject) => {
+    server.once("error", reject);
+    server.listen(0, LOOPBACK, () => resolve14());
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("egress proxy: no port");
+  return {
+    port: address.port,
+    refused,
+    close: () => new Promise((resolve14) => {
+      for (const s of sockets) s.destroy();
+      server.close(() => resolve14());
+    })
+  };
+}
+
+// src/windows-sandbox.ts
+var CREW_USER_RE = /^[A-Za-z][A-Za-z0-9_-]{0,19}$/;
+var OUTSIDE = [
+  `${ipv43(0, 0, 0, 0)}-${ipv43(126, 255, 255, 255)}`,
+  `${ipv43(128, 0, 0, 0)}-${ipv43(255, 255, 255, 255)}`,
+  "::",
+  "::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+];
+var CLAUDE_HOSTS = ["api.anthropic.com"];
+function windowsCrewEnv(o2) {
+  const proxy = `http://${LOOPBACK}:${o2.proxyPort}`;
+  const env = {};
+  for (const k of [
+    "SystemRoot",
+    "SystemDrive",
+    "windir",
+    "ComSpec",
+    "PATHEXT",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramW6432",
+    "ProgramData",
+    "CommonProgramFiles",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "OS"
+  ]) {
+    const v = o2.base[k];
+    if (v !== void 0) env[k] = v;
+  }
+  return {
+    ...env,
+    USERPROFILE: o2.homeDir,
+    APPDATA: join27(o2.homeDir, "AppData", "Roaming"),
+    LOCALAPPDATA: join27(o2.homeDir, "AppData", "Local"),
+    TEMP: o2.tmpDir,
+    TMP: o2.tmpDir,
+    HTTPS_PROXY: proxy,
+    HTTP_PROXY: proxy,
+    https_proxy: proxy,
+    http_proxy: proxy,
+    NO_PROXY: "",
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    DISABLE_TELEMETRY: "1",
+    DISABLE_ERROR_REPORTING: "1"
+  };
+}
+function psQuote(s) {
+  if (/[\p{Cc}]/u.test(s)) throw new Error(`refusing a control character in ${JSON.stringify(s)}`);
+  return `'${s.replace(/'/g, "''")}'`;
+}
+function windowsSetupScript(o2) {
+  if (!CREW_USER_RE.test(o2.user)) throw new Error(`not a crew user name: ${o2.user}`);
+  const list2 = (ps) => `@(${ps.map(psQuote).join(", ")})`;
+  return `#Requires -RunAsAdministrator
+# Studio: the crew sandbox user of this Windows worker. Run once in an elevated Windows PowerShell
+# (powershell.exe), as the account that runs \`studio worker\`. Nothing here leaves this machine.
+$ErrorActionPreference = 'Stop'
+$name = ${psQuote(o2.user)}
+$credFile = ${psQuote(o2.credFile)}
+$bytes = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$plain = [Convert]::ToBase64String($bytes) + 'aA1!'
+$secret = ConvertTo-SecureString $plain -AsPlainText -Force
+$plain = $null
+$user = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
+if ($null -eq $user) {
+  $user = New-LocalUser -Name $name -Password $secret -PasswordNeverExpires -AccountNeverExpires -UserMayNotChangePassword -Description 'Studio crew sandbox'
+} elseif (-not (Test-Path -LiteralPath $credFile)) {
+  Set-LocalUser -Name $name -Password $secret
+} else {
+  $secret = (Import-Clixml -LiteralPath $credFile).Password
+}
+# Users only, never Administrators (groups by SID: their names depend on the language).
+$users = Get-LocalGroup -SID 'S-1-5-32-545'
+if (-not (Get-LocalGroupMember -Group $users | Where-Object { $_.SID -eq $user.SID })) {
+  Add-LocalGroupMember -Group $users -Member $user
+}
+$admins = Get-LocalGroup -SID 'S-1-5-32-544'
+if (Get-LocalGroupMember -Group $admins | Where-Object { $_.SID -eq $user.SID }) {
+  throw "$name is an administrator: remove it from that group first"
+}
+# The credential, for this account on this machine only.
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $credFile) | Out-Null
+New-Object System.Management.Automation.PSCredential ($name, $secret) | Export-Clixml -LiteralPath $credFile
+icacls $credFile /inheritance:r /grant:r "$($env:USERDOMAIN)\\$($env:USERNAME):F" | Out-Null
+# No direct network: every outbound connection of the crew user to anything but loopback.
+$sid = $user.SID.Value
+$rule = 'Studio crew ' + $name + ': no direct network'
+Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+New-NetFirewallRule -DisplayName $rule -Direction Outbound -Action Block -LocalUser "D:(A;;CC;;;$sid)" -RemoteAddress @(${OUTSIDE.map(psQuote).join(", ")}) | Out-Null
+# An earlier setup opened the crew Claude config dir for writing: that grant goes, all the way down.
+foreach ($p in ${list2(o2.revokePaths ?? [])}) {
+  if (Test-Path -LiteralPath $p) { icacls $p /remove:g $name /T /C /Q | Out-Null }
+}
+# No logon as a batch job (no scheduled task with a stored password), as a service, over the
+# network or by remote desktop: the crew user starts processes only through Studio's keeper.
+$cfg = Join-Path $env:TEMP ('studio-rights-' + [Guid]::NewGuid().ToString('N') + '.inf')
+$db = [IO.Path]::ChangeExtension($cfg, '.sdb')
+secedit /export /cfg $cfg /areas USER_RIGHTS | Out-Null
+$lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $cfg)
+$at = $lines.IndexOf('[Privilege Rights]')
+if ($at -lt 0) { throw 'secedit gave no [Privilege Rights] section' }
+foreach ($right in @('SeDenyBatchLogonRight', 'SeDenyServiceLogonRight', 'SeDenyNetworkLogonRight', 'SeDenyRemoteInteractiveLogonRight')) {
+  $i = -1
+  for ($k = 0; $k -lt $lines.Count; $k++) { if ($lines[$k] -like "$right *") { $i = $k } }
+  if ($i -lt 0) { $lines.Insert($at + 1, "$right = *$sid") }
+  elseif ($lines[$i] -notlike "**$sid*") { $lines[$i] = $lines[$i] + ",*$sid" }
+}
+Set-Content -LiteralPath $cfg -Value $lines -Encoding Unicode
+secedit /configure /db $db /cfg $cfg /areas USER_RIGHTS /quiet | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "secedit could not set the logon rights ($LASTEXITCODE)" }
+Remove-Item -LiteralPath $cfg, $db -ErrorAction SilentlyContinue
+foreach ($p in ${list2(o2.readPaths)}) {
+  if (Test-Path -LiteralPath $p) { icacls $p /grant "\${name}:(OI)(CI)RX" /Q | Out-Null }
+}
+Write-Output "Studio crew user $name is ready; start the worker again."
+`;
+}
+var OWNER_RIGHTS = "*S-1-3-4";
+function grantArgs(user, g3) {
+  if (!CREW_USER_RE.test(user)) throw new Error(`not a crew user name: ${user}`);
+  const rights = g3.rights === "R" ? "RX" : "M";
+  return [g3.path, "/grant", `${user}:${isDir2(g3.path) ? "(OI)(CI)" : ""}${rights}`, "/Q"];
+}
+function ownerRightsArgs(path10) {
+  return [path10, "/grant", `${OWNER_RIGHTS}:(OI)(CI)(S)`, "/Q"];
+}
+function revokeArgs(user, path10) {
+  if (!CREW_USER_RE.test(user)) throw new Error(`not a crew user name: ${user}`);
+  return [path10, "/remove:g", user, "/Q"];
+}
+function rootRevokeSteps(user, ownerSid2, path10) {
+  if (!OWNER_SID_RE.test(ownerSid2)) throw new Error(`not a SID: ${ownerSid2}`);
+  return [revokeArgs(user, path10), [path10, "/setowner", ownerSid2, "/C", "/L", "/Q"]];
+}
+function deepRevokeSteps(ownerSid2, path10) {
+  if (!OWNER_SID_RE.test(ownerSid2)) throw new Error(`not a SID: ${ownerSid2}`);
+  return [
+    [join27(path10, "*"), "/reset", "/T", "/C", "/L", "/Q"],
+    [path10, "/setowner", ownerSid2, "/T", "/C", "/L", "/Q"]
+  ];
+}
+var OWNER_SID_RE = /^\*S-1-\d+(-\d+)+$/;
+async function ownerSid(run2) {
+  const r = await run2("whoami", ["/user", "/fo", "csv", "/nh"]);
+  const sid = /"(S-1-\d+(?:-\d+)+)"\s*$/.exec(r.stdout.trim())?.[1];
+  if (r.code !== 0 || sid === void 0) throw new Error("cannot read the SID of this account");
+  return `*${sid}`;
+}
+function removeLinks(root) {
+  const top = realpathSync7(root);
+  const inside = (p) => p === top || p.startsWith(`${top}${sep5}`);
+  const walk = (dir) => {
+    if (!inside(realpathSync7(dir))) throw new Error(`${dir} leads outside ${root}`);
+    for (const name of readdirSync10(dir)) {
+      const p = join27(dir, name);
+      const st = lstatSync23(p);
+      if (st.isSymbolicLink()) {
+        try {
+          unlinkSync5(p);
+        } catch {
+          rmdirSync(p);
+        }
+        if (existsLink(p)) throw new Error(`cannot remove the link ${p}`);
+      } else if (st.isDirectory()) {
+        walk(p);
+      }
+    }
+  };
+  walk(root);
+}
+function existsLink(p) {
+  try {
+    lstatSync23(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isDir2(p) {
+  try {
+    return lstatSync23(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+var runFile2 = (file3, args, opts = {}) => new Promise((resolve13) => {
+  execFile2(
+    file3,
+    args,
+    {
+      ...opts.env === void 0 ? {} : { env: opts.env },
+      timeout: opts.timeoutMs ?? 6e4,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024
+    },
+    (err, stdout, stderr) => {
+      const code = err === null ? 0 : typeof err.code === "number" ? err.code : 1;
+      resolve13({ code, stdout: String(stdout), stderr: String(stderr) });
+    }
+  );
+});
+var recordFile = (user) => `windows-crew-${user.toLowerCase()}.json`;
+var lockFile = (user) => `windows-crew-${user.toLowerCase()}.lock`;
+var LOCK_STALE_MS3 = 10 * 6e4;
+function readGrantRecord(ownerRoot, user) {
+  try {
+    const raw = JSON.parse(readFileSync27(join27(ownerRoot, recordFile(user)), "utf8"));
+    return {
+      ...typeof raw.keeper === "number" ? { keeper: raw.keeper } : {},
+      paths: Array.isArray(raw.paths) ? raw.paths.filter((p) => typeof p === "string") : []
+    };
+  } catch {
+    return { paths: [] };
+  }
+}
+var writeGrantRecord = (ownerRoot, user, r) => writeStateFile(ownerRoot, join27(ownerRoot, recordFile(user)), `${JSON.stringify(r)}
+`);
+var processExists = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM";
+  }
+};
+var sweepScript = (user) => [
+  "$ErrorActionPreference = 'Stop'",
+  // Only an elevated token sees and ends every process of another user; without one, a process
+  // whose owner cannot be read would simply not be found, which must never read as none running.
+  "$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
+  "if (-not $elevated) { [Console]::Out.Write((ConvertTo-Json -Compress @{ elevated = $false })); exit 0 }",
+  `$sid = (New-Object Security.Principal.NTAccount($env:COMPUTERNAME, ${psQuote(user)})).Translate([Security.Principal.SecurityIdentifier]).Value`,
+  "function Crew { @(Get-CimInstance Win32_Process | Where-Object { try { (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $sid } catch { $false } }) }",
+  "$found = Crew",
+  "foreach ($p in $found) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }",
+  "if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }",
+  "$left = @(Crew | ForEach-Object { [int]$_.ProcessId })",
+  "[Console]::Out.Write((ConvertTo-Json -Compress @{ elevated = $true; found = $found.Count; left = $left }))"
+].join("\n");
+var WindowsGrants = class {
+  constructor(o2) {
+    this.o = o2;
+  }
+  o;
+  /** The owner's SID (`*S-1-...`), read once. */
+  sid;
+  paths() {
+    return readGrantRecord(this.o.ownerRoot, this.o.user).paths;
+  }
+  /** Runs `fn` under the crew user's lock, waiting up to 30 seconds for it. */
+  async locked(fn) {
+    const until = Date.now() + 3e4;
+    for (; ; ) {
+      const lock = acquireStateLock(this.o.ownerRoot, lockFile(this.o.user), {
+        now: /* @__PURE__ */ new Date(),
+        heartbeatStaleMs: LOCK_STALE_MS3
+      });
+      if (lock) {
+        try {
+          return await fn();
+        } finally {
+          lock.release();
+        }
+      }
+      if (Date.now() >= until) {
+        throw new HeldError(`another launch holds the crew user ${this.o.user}; try again`);
+      }
+      await sleep(250);
+    }
+  }
+  /**
+   * Takes every recorded place back, in one fixed order per place: the grant on the root goes
+   * first and the root's owner becomes Studio's account, whatever happens next, so the crew user
+   * loses its access at once; then the links below are removed; only when that worked, the ACLs
+   * below go back to inherited and their owner to Studio's account. With `swept` false (processes
+   * of the crew user may still run) only the first two steps run. A place where any step failed is
+   * kept in the record and reported.
+   */
+  async revokeLocked(swept = true) {
+    const rec = readGrantRecord(this.o.ownerRoot, this.o.user);
+    const failed = [];
+    if (rec.paths.length > 0) this.sid ??= this.o.owner ?? await ownerSid(this.o.run);
+    const sid = this.sid;
+    const icacls = async (args) => (await this.o.run("icacls", args)).code === 0;
+    for (const p of rec.paths) {
+      if (!existsSync7(p)) continue;
+      const dir = isDir2(p);
+      const [remove, rootOwner] = rootRevokeSteps(this.o.user, sid, p);
+      if (!await icacls(remove) || !await icacls(rootOwner)) {
+        failed.push(p);
+        continue;
+      }
+      if (!dir) continue;
+      if (!swept) {
+        failed.push(p);
+        continue;
+      }
+      try {
+        removeLinks(p);
+      } catch {
+        failed.push(p);
+        continue;
+      }
+      for (const args of deepRevokeSteps(sid, p)) {
+        if (!await icacls(args)) {
+          failed.push(p);
+          break;
+        }
+      }
+    }
+    writeGrantRecord(this.o.ownerRoot, this.o.user, { paths: failed });
+    if (failed.length > 0) {
+      throw new Error(`cannot take the crew user's grants off ${failed.join(", ")}`);
+    }
+  }
+  /**
+   * Takes every recorded grant off, after the sweep: no crew process may plant a link behind the
+   * walk. When the sweep refuses, the grants on the roots still go, and the sweep's refusal is
+   * thrown.
+   */
+  revokeAll() {
+    return this.locked(async () => {
+      try {
+        await this.sweep();
+      } catch (e) {
+        await this.revokeLocked(false).catch(() => {
+        });
+        throw e;
+      }
+      await this.revokeLocked();
+    });
+  }
+  /** Ends what is left of the crew user; refuses when something cannot be ended. */
+  async sweep() {
+    const r = await this.o.run(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", sweepScript(this.o.user)],
+      { env: powershellEnv(process.env), timeoutMs: 12e4 }
+    );
+    let answer = {};
+    try {
+      answer = JSON.parse(r.stdout);
+    } catch {
+      answer = {};
+    }
+    if (r.code === 0 && answer.elevated === false) {
+      throw new Error(
+        `the worker does not run elevated, so it cannot see every process of the crew user ${this.o.user}: run studio worker in an elevated PowerShell (as administrator)`
+      );
+    }
+    const left = answer.left;
+    if (r.code !== 0 || answer.elevated !== true || !Array.isArray(left)) {
+      throw new Error(`cannot list the processes of the crew user ${this.o.user}`);
+    }
+    if (left.length > 0) {
+      throw new Error(
+        `processes of the crew user ${this.o.user} are still running (${left.join(", ")}) and cannot be ended from this account; end them as an administrator`
+      );
+    }
+  }
+  grant(grants) {
+    return this.locked(async () => {
+      const rec = readGrantRecord(this.o.ownerRoot, this.o.user);
+      if (rec.keeper !== void 0 && processExists(rec.keeper)) {
+        throw new HeldError(
+          `a crew of the crew user ${this.o.user} is still running: one crew at a time on this machine, as all projects share the crew user`
+        );
+      }
+      await this.sweep();
+      await this.revokeLocked();
+      writeGrantRecord(this.o.ownerRoot, this.o.user, { paths: grants.map((g3) => g3.path) });
+      for (const g3 of grants) {
+        const steps = [
+          grantArgs(this.o.user, g3),
+          ...g3.rights === "M" && isDir2(g3.path) ? [ownerRightsArgs(g3.path)] : []
+        ];
+        for (const args of steps) {
+          const r = await this.o.run("icacls", args);
+          if (r.code !== 0) {
+            throw new Error(
+              `cannot open ${g3.path} to the crew user ${this.o.user}: icacls exited ${r.code}`
+            );
+          }
+        }
+      }
+    });
+  }
+  recordKeeper(pid) {
+    return this.locked(async () => {
+      writeGrantRecord(this.o.ownerRoot, this.o.user, {
+        ...readGrantRecord(this.o.ownerRoot, this.o.user),
+        keeper: pid
+      });
+    });
+  }
+};
+var CREW_HOST_BIN = resolve6(
+  dirname9(fileURLToPath2(import.meta.url)),
+  "..",
+  "bin",
+  "studio-crew-host.mjs"
+);
+var KEEPER_FILE = "studio-crew-keeper.ps1";
+var KEEPER_SCRIPT = `# Studio: the keeper of one crew on a Windows worker (src/windows-sandbox.ts).
+param(
+  [Parameter(Mandatory = $true)][string]$Cred,
+  [Parameter(Mandatory = $true)][string]$Node,
+  [Parameter(Mandatory = $true)][string]$HostBin,
+  [Parameter(Mandatory = $true)][string]$Cwd,
+  [Parameter(Mandatory = $true)][string]$Out,
+  [Parameter(Mandatory = $true)][string]$Err,
+  [Parameter(Mandatory = $true)][string]$User,
+  [int]$WaitSeconds = 60
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class StudioJob {
+  [StructLayout(LayoutKind.Sequential)]
+  struct Basic {
+    public long PerProcessUserTimeLimit; public long PerJobUserTimeLimit; public uint LimitFlags;
+    public UIntPtr MinimumWorkingSetSize; public UIntPtr MaximumWorkingSetSize;
+    public uint ActiveProcessLimit; public UIntPtr Affinity; public uint PriorityClass;
+    public uint SchedulingClass;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  struct Io { public ulong A, B, C, D, E, F; }
+  [StructLayout(LayoutKind.Sequential)]
+  struct Extended {
+    public Basic BasicLimits; public Io IoInfo; public UIntPtr ProcessMemoryLimit;
+    public UIntPtr JobMemoryLimit; public UIntPtr PeakProcessMemoryUsed; public UIntPtr PeakJobMemoryUsed;
+  }
+  [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref Extended info, int length);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint pid);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+  public static void Terminate(IntPtr job) { TerminateJobObject(job, 1); }
+  public static IntPtr Create() {
+    IntPtr job = CreateJobObject(IntPtr.Zero, null);
+    if (job == IntPtr.Zero) throw new Win32Exception();
+    Extended info = new Extended();
+    info.BasicLimits.LimitFlags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if (!SetInformationJobObject(job, 9, ref info, Marshal.SizeOf(typeof(Extended)))) throw new Win32Exception();
+    return job;
+  }
+  public static void Assign(IntPtr job, IntPtr process) {
+    if (!AssignProcessToJobObject(job, process)) throw new Win32Exception();
+  }
+  public static uint ClientPid(IntPtr pipe) {
+    uint pid;
+    if (!GetNamedPipeClientProcessId(pipe, out pid)) throw new Win32Exception();
+    return pid;
+  }
+}
+'@
+function Note([string]$line) { [Console]::Error.WriteLine("studio keeper: $line") }
+Note 'started'
+$raw = [Console]::In.ReadToEnd()
+$nl = $raw.IndexOf([char]10)
+if ($nl -lt 0) { throw 'no spec on stdin' }
+# Windows PowerShell hands a JSON array on as one object: @() around it would nest it.
+$revoke = ConvertFrom-Json $raw.Substring(0, $nl)
+$spec = [Text.Encoding]::UTF8.GetBytes($raw.Substring($nl + 1))
+$raw = $null
+$p = $null
+$job = $null
+try {
+  $job = [StudioJob]::Create()
+  $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+  $crew = (New-Object Security.Principal.NTAccount($env:COMPUTERNAME, $User)).Translate([Security.Principal.SecurityIdentifier])
+  $security = New-Object System.IO.Pipes.PipeSecurity
+  $security.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, 'FullControl', 'Allow')))
+  $security.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($crew, 'ReadWrite', 'Allow')))
+  $name = 'studio-' + [Guid]::NewGuid().ToString('N')
+  $pipe = New-Object System.IO.Pipes.NamedPipeServerStream($name, 'Out', 1, 'Byte', 'Asynchronous', 0, 65536, $security)
+  $c = Import-Clixml -LiteralPath $Cred
+  $p = Start-Process -FilePath $Node -ArgumentList @(('"' + $HostBin + '"'), $name) -Credential $c -WorkingDirectory $Cwd -WindowStyle Hidden -PassThru -RedirectStandardOutput $Out -RedirectStandardError $Err
+  [StudioJob]::Assign($job, $p.Handle)
+  Note "host $($p.Id) started in the job"
+  $wait = $pipe.BeginWaitForConnection($null, $null)
+  if (-not $wait.AsyncWaitHandle.WaitOne($WaitSeconds * 1000)) { throw 'the crew host did not connect' }
+  $pipe.EndWaitForConnection($wait)
+  Note 'host connected'
+  if ([StudioJob]::ClientPid($pipe.SafePipeHandle.DangerousGetHandle()) -ne [uint32]$p.Id) {
+    throw 'a process other than the crew host connected'
+  }
+  $pipe.Write($spec, 0, $spec.Length)
+  $pipe.Flush()
+  $pipe.WaitForPipeDrain()
+  $pipe.Dispose()
+  $spec = $null
+  $p.WaitForExit()
+  $code = $p.ExitCode
+  Note "host ended with $code"
+} catch {
+  if ($null -ne $p -and -not $p.HasExited) { $p.Kill() }
+  [Console]::Error.WriteLine("studio keeper: $($_.Exception.Message)")
+  $code = 2
+} finally {
+  # Nothing the crew started outlives it here, then its grants go. The ownership reset and the
+  # walk for planted links are Studio's, at the next grant or stop (WindowsGrants.revokeAll).
+  if ($null -ne $job) { [StudioJob]::Terminate($job) }
+  foreach ($r in $revoke) {
+    if (-not (Test-Path -LiteralPath $r)) { continue }
+    icacls $r /remove:g $User /L /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      [Console]::Error.WriteLine("studio keeper: cannot take the grant off $r ($LASTEXITCODE)")
+      $code = 3
+    }
+  }
+}
+exit $code
+`;
+function powershellEnv(env) {
+  const keep = /* @__PURE__ */ new Set([
+    "systemroot",
+    "systemdrive",
+    "windir",
+    "comspec",
+    "pathext",
+    "path",
+    "programfiles",
+    "programdata",
+    "number_of_processors",
+    "processor_architecture",
+    "os",
+    "computername",
+    "userdomain",
+    "username"
+  ]);
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      (e) => e[1] !== void 0 && keep.has(e[0].toLowerCase())
+    )
+  );
+}
+var spawnKeeper = async (o2) => {
+  const fd = openSync6(o2.log, "a");
+  try {
+    const child = spawn("powershell.exe", o2.args, {
+      env: o2.env,
+      stdio: ["pipe", fd, fd],
+      windowsHide: true
+    });
+    const pid = await new Promise((resolve13, reject) => {
+      child.once("error", reject);
+      child.once("spawn", () => resolve13(child.pid));
+    });
+    const exited = new Promise((resolve13) => child.once("exit", (c3) => resolve13(c3 ?? 1)));
+    child.stdin?.on("error", () => {
+    });
+    child.stdin?.end(o2.stdin);
+    if (o2.detached) child.unref();
+    return { pid, exited };
+  } finally {
+    closeSync6(fd);
+  }
+};
+function ownerFiles(stateRoot, name) {
+  const logs = ensureStateDir(stateRoot, join27(stateRoot, "logs"));
+  if (lstatSync23(logs).isSymbolicLink()) throw new Error(`${logs} is a link`);
+  const files = {
+    out: join27(logs, `${name}.host.out`),
+    err: join27(logs, `${name}.host.err`),
+    keeper: join27(logs, `${name}.keeper.log`)
+  };
+  for (const f3 of Object.values(files)) {
+    removeStateEntry(stateRoot, f3);
+    assertStatePath(stateRoot, f3);
+  }
+  return files;
+}
+function keeperFile(stateRoot) {
+  const file3 = join27(stateRoot, "settings", KEEPER_FILE);
+  writeStateFile(stateRoot, file3, KEEPER_SCRIPT);
+  return file3;
+}
+function keeperArgs(o2) {
+  return [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    o2.script,
+    "-Cred",
+    o2.credFile,
+    "-Node",
+    o2.node,
+    "-HostBin",
+    CREW_HOST_BIN,
+    "-Cwd",
+    o2.cwd,
+    "-Out",
+    o2.out,
+    "-Err",
+    o2.err,
+    "-User",
+    o2.user
+  ];
+}
+var identityScript = (pid) => [
+  "$ErrorActionPreference = 'Stop'",
+  `$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${Math.trunc(pid)}'`,
+  "if ($null -eq $p) { exit 3 }",
+  "$o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid",
+  "$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+  `if ($o.Sid -ne $me -or $p.CommandLine -notlike ${psQuote(`*${KEEPER_FILE}*`)}) { exit 4 }`,
+  "[Console]::Out.Write($p.CreationDate.ToUniversalTime().ToString('o'))"
+].join("\n");
+var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function windowsClaude(o2) {
+  const run2 = o2.run ?? runFile2;
+  const start = o2.spawn ?? spawnKeeper;
+  const node2 = o2.node ?? process.execPath;
+  return {
+    async start(cwd, args, prompt, logPath, env) {
+      const id = logPath.replace(/\\/g, "/").split("/").at(-1)?.replace(/\.jsonl$/, "") ?? "";
+      if (!/^[A-Z]+-\d+$/.test(id)) throw new Error(`not a crew log: ${logPath}`);
+      const files = ownerFiles(o2.stateRoot, id);
+      const spec = {
+        mode: "run",
+        cmd: o2.claudeBin,
+        args,
+        cwd,
+        prompt,
+        log: logPath,
+        env
+      };
+      const k = await start({
+        args: keeperArgs({
+          script: keeperFile(o2.stateRoot),
+          credFile: o2.credFile,
+          node: node2,
+          cwd,
+          out: files.out,
+          err: files.err,
+          user: o2.user
+        }),
+        env: powershellEnv(env),
+        stdin: `${JSON.stringify(o2.grants.paths())}
+${JSON.stringify(spec)}`,
+        log: files.keeper,
+        detached: true
+      });
+      await o2.grants.recordKeeper(k.pid);
+      return { pid: k.pid };
+    },
+    alive: processExists,
+    async identity(pid) {
+      if (!Number.isInteger(pid) || pid <= 0 || !processExists(pid)) return void 0;
+      const r = await run2(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-Command", identityScript(pid)],
+        { env: powershellEnv(process.env), timeoutMs: 3e4 }
+      );
+      const at2 = r.stdout.trim();
+      return r.code === 0 && at2 !== "" ? `keeper:${at2}` : void 0;
+    },
+    async stop(pid) {
+      if (processExists(pid)) await run2("taskkill", ["/PID", String(pid), "/F"]);
+      for (let i2 = 0; i2 < 50 && processExists(pid); i2++) await sleep(200);
+      await o2.grants.revokeAll();
+    }
+  };
+}
+function probeProblem(results) {
+  if (results === void 0 || results.length === 0) {
+    return "the Windows crew sandbox could not be shown to hold here: the probe as the crew user gave no answer";
+  }
+  const bad = results.find((r) => !r.ok);
+  return bad === void 0 ? void 0 : `the Windows crew sandbox does not hold here: ${bad.check}: ${bad.detail}`;
+}
+var PROBE_CHECKS = [
+  "user",
+  "admin",
+  "env",
+  "read",
+  "write",
+  "direct",
+  "proxy",
+  "tasks",
+  "former"
+];
+async function probeWindowsSandbox(o2) {
+  const start = o2.spawn ?? spawnKeeper;
+  const name = `probe-${randomBytes9(4).toString("hex")}`;
+  const files = ownerFiles(o2.stateRoot, name);
+  const canary = join27(o2.ownerConfigDir, "crew-probe-canary");
+  const formerDir = join27(o2.stateRoot, "tmp", `${name}-former`);
+  writeStateFile(dirname9(canary), canary, "canary\n");
+  const host = async (spec, revoke = []) => {
+    for (const f3 of Object.values(files)) removeStateEntry(o2.stateRoot, f3);
+    const k = await start({
+      args: keeperArgs({
+        script: keeperFile(o2.stateRoot),
+        credFile: o2.credFile,
+        node: o2.node ?? process.execPath,
+        cwd: o2.env.SystemRoot ?? o2.env.SYSTEMROOT ?? "C:\\Windows",
+        out: files.out,
+        err: files.err,
+        user: o2.user
+      }),
+      env: powershellEnv(o2.env),
+      stdin: `${JSON.stringify(revoke)}
+${JSON.stringify(spec)}`,
+      log: files.keeper,
+      detached: false
+    });
+    const timeout = sleep(o2.timeoutMs ?? 12e4).then(() => "timeout");
+    if (await Promise.race([k.exited, timeout]) === "timeout") {
+      try {
+        process.kill(k.pid);
+      } catch {
+      }
+      return false;
+    }
+    return true;
+  };
+  const unfinished = "the Windows crew sandbox could not be shown to hold here: the probe as the crew user did not finish";
+  try {
+    const mark = randomBytes9(8).toString("hex");
+    let former;
+    if (o2.grants !== void 0) {
+      ensureStateDir(o2.stateRoot, formerDir);
+      const file3 = join27(formerDir, "made-by-the-crew-user.txt");
+      await o2.grants.grant([{ path: formerDir, rights: "M" }]);
+      const seeded = await host({ mode: "seed", seed: file3, env: o2.env });
+      await o2.grants.revokeAll();
+      if (!seeded) return unfinished;
+      former = { dir: formerDir, file: file3 };
+    }
+    const spec = {
+      mode: "probe",
+      probe: {
+        user: o2.user,
+        mark,
+        mustNotRead: [canary, o2.ownerHome, ...o2.mustNotRead],
+        mustNotWrite: [
+          join27(o2.ownerHome, `studio-probe-${mark}`),
+          ...o2.crewConfigDir === void 0 ? [] : [
+            join27(o2.crewConfigDir, `studio-probe-${mark}`),
+            join27(o2.crewConfigDir, "plugins", `studio-probe-${mark}`)
+          ]
+        ],
+        direct: { host: "github.com", port: 443 },
+        proxy: { port: o2.proxyPort, refused: "example.invalid" },
+        ...former === void 0 ? {} : { former }
+      },
+      env: { ...o2.env, STUDIO_PROBE_MARK: mark }
+    };
+    if (!await host(spec)) return unfinished;
+    let results;
+    try {
+      const raw = JSON.parse(readFileSync27(files.out, "utf8"));
+      results = Array.isArray(raw) ? raw : void 0;
+    } catch {
+      results = void 0;
+    }
+    const missing = PROBE_CHECKS.find((c3) => !(results ?? []).some((r) => r.check === c3));
+    if (results !== void 0 && missing !== void 0) {
+      return `the Windows crew sandbox could not be shown to hold here: the probe did not check ${missing}`;
+    }
+    return probeProblem(results);
+  } finally {
+    for (const f3 of Object.values(files)) removeStateEntry(o2.stateRoot, f3);
+    removeStateEntry(o2.stateRoot, formerDir);
+    removeStateEntry(dirname9(canary), canary);
+  }
+}
+var credFileIn = (ownerConfigDir2) => join27(ownerConfigDir2, "windows-crew.xml");
+function findClaude(path10) {
+  for (const dir of (path10 ?? "").split(";")) {
+    if (dir === "") continue;
+    for (const name of ["claude.exe", "claude.cmd"]) {
+      const p = join27(dir, name);
+      if (existsSync7(p)) return p;
+    }
+  }
+  return void 0;
+}
+function setupReadPaths(o2) {
+  const plugin = resolve6(dirname9(CREW_HOST_BIN), "..");
+  return [
+    .../* @__PURE__ */ new Set([
+      dirname9(o2.node),
+      plugin,
+      ...o2.claude === void 0 ? [] : [dirname9(o2.claude)],
+      ...o2.toolchains,
+      join27(o2.crewConfigDir, "skills"),
+      join27(o2.crewConfigDir, "plugins")
+    ])
+  ];
+}
+function runConfigDir(homeDir, shared) {
+  const dir = join27(homeDir, ".claude-run");
+  mkdirSync7(join27(dir, "plugins"), { recursive: true });
+  const copy = (from, to) => {
+    let st;
+    try {
+      st = lstatSync23(from);
+    } catch {
+      return;
+    }
+    if (st.isSymbolicLink()) return;
+    if (st.isDirectory()) {
+      mkdirSync7(to, { recursive: true });
+      for (const n4 of readdirSync10(from)) copy(join27(from, n4), join27(to, n4));
+    } else if (st.isFile()) {
+      copyFileSync(from, to);
+    }
+  };
+  copy(join27(shared, "skills"), join27(dir, "skills"));
+  for (const f3 of ["installed_plugins.json", "known_marketplaces.json"]) {
+    copy(join27(shared, "plugins", f3), join27(dir, "plugins", f3));
+  }
+  copy(join27(shared, "settings.json"), join27(dir, "settings.json"));
+  return dir;
+}
+async function windowsWorker(o2) {
+  const run2 = o2.run ?? runFile2;
+  const credFile = credFileIn(o2.ownerConfigDir);
+  const path10 = o2.env.PATH ?? o2.env.Path;
+  const claudeBin = findClaude(path10);
+  const proxy = await o2.startProxy([...o2.networkAllow, ...CLAUDE_HOSTS]);
+  const grants = new WindowsGrants({ ownerRoot: o2.ownerRoot, user: o2.user, run: run2 });
+  const missing = () => !existsSync7(credFile) ? `no crew user credential at ${credFile}: run the script of studio worker windows-setup` : claudeBin === void 0 ? "claude is not on PATH" : void 0;
+  return {
+    claude: windowsClaude({
+      stateRoot: o2.stateRoot,
+      credFile,
+      claudeBin: claudeBin ?? "claude",
+      user: o2.user,
+      grants,
+      run: run2,
+      ...o2.spawn === void 0 ? {} : { spawn: o2.spawn }
+    }),
+    sandbox: {
+      user: o2.user,
+      async probe(mustNotRead) {
+        const why = missing();
+        if (why !== void 0) return why;
+        try {
+          return await probe(mustNotRead);
+        } catch (e) {
+          return `the Windows crew sandbox could not be shown to hold here: ${e.message}`;
+        }
+      },
+      launch: { user: o2.user, proxyPort: proxy.port, grant: (g3) => grants.grant(g3) }
+    },
+    close: () => proxy.close()
+  };
+  async function probe(mustNotRead) {
+    const tmp = ensureStateDir(o2.stateRoot, join27(o2.stateRoot, "tmp"));
+    const probeEnv = windowsCrewEnv({
+      proxyPort: proxy.port,
+      homeDir: tmp,
+      tmpDir: tmp,
+      base: o2.env
+    });
+    return probeWindowsSandbox({
+      stateRoot: o2.stateRoot,
+      credFile,
+      user: o2.user,
+      ownerHome: o2.ownerHome,
+      ownerConfigDir: o2.ownerConfigDir,
+      mustNotRead,
+      crewConfigDir: o2.crewConfigDir,
+      grants,
+      proxyPort: proxy.port,
+      env: { ...probeEnv, PATH: path10 ?? "" },
+      ...o2.spawn === void 0 ? {} : { spawn: o2.spawn }
+    });
+  }
+}
+
 // src/crew.ts
 var crewName = (item) => `studio-${item.role}-${item.id.toLowerCase()}`;
-var GUARD_BIN = resolve6(
-  dirname9(fileURLToPath2(import.meta.url)),
+var GUARD_BIN = resolve7(
+  dirname10(fileURLToPath3(import.meta.url)),
   "..",
   "bin",
   "studio-guard.mjs"
 );
-var REA_SERVER_BIN = resolve6(
-  dirname9(fileURLToPath2(import.meta.url)),
+var REA_SERVER_BIN = resolve7(
+  dirname10(fileURLToPath3(import.meta.url)),
   "..",
   "bin",
   "studio-rea-server.mjs"
@@ -39447,7 +40841,7 @@ function githubHttpsUrl(repo) {
 }
 function cloneBranch(path10) {
   try {
-    const head = readFileSync26(join26(path10, ".git", "HEAD"), "utf8").trim();
+    const head = readFileSync28(join28(path10, ".git", "HEAD"), "utf8").trim();
     return /^ref: refs\/heads\/(.+)$/.exec(head)?.[1];
   } catch {
     return void 0;
@@ -39459,8 +40853,8 @@ async function prepareCheckout(stateRoot, projectDir, item, ports, from = ITEM_B
   if (from !== ITEM_BASE && from !== `studio/${item.id}`) {
     throw new Error(`invalid start branch for ${item.id}: ${JSON.stringify(from)}`);
   }
-  const clones = ensureStateDir(stateRoot, join26(stateRoot, "clones"));
-  const path10 = join26(clones, item.id);
+  const clones = ensureStateDir(stateRoot, join28(stateRoot, "clones"));
+  const path10 = join28(clones, item.id);
   const branch = `studio/${item.id}`;
   const crewOrigin = githubHttpsUrl(item.repo);
   assertStatePath(stateRoot, path10);
@@ -39491,16 +40885,16 @@ function removeOldReport(stateRoot, clone2, id) {
   assertItemId(id);
   let cur = clone2;
   for (const seg of [".studio", "reports", `${id}.md`]) {
-    cur = join26(cur, seg);
+    cur = join28(cur, seg);
     assertStatePath(stateRoot, cur);
     let st;
     try {
-      st = lstatSync23(cur);
+      st = lstatSync24(cur);
     } catch {
       return;
     }
     if (st.isSymbolicLink()) {
-      unlinkSync5(cur);
+      unlinkSync6(cur);
       return;
     }
     if (seg === `${id}.md`) {
@@ -39512,7 +40906,7 @@ function removeOldReport(stateRoot, clone2, id) {
 }
 function existsNoFollow2(p) {
   try {
-    lstatSync23(p);
+    lstatSync24(p);
     return true;
   } catch {
     return false;
@@ -39520,31 +40914,31 @@ function existsNoFollow2(p) {
 }
 function fileSize(p) {
   try {
-    return lstatSync23(p).size;
+    return lstatSync24(p).size;
   } catch {
     return 0;
   }
 }
 function isLink2(p) {
   try {
-    return lstatSync23(p).isSymbolicLink();
+    return lstatSync24(p).isSymbolicLink();
   } catch {
     return false;
   }
 }
 function writeHomeFile(homeDir, name, content) {
-  const target = join26(homeDir, name);
-  const realHome = realpathSync6(homeDir);
-  const parent = realpathSync6(dirname9(target));
-  if (parent !== realHome && !parent.startsWith(realHome + sep5)) {
+  const target = join28(homeDir, name);
+  const realHome = realpathSync8(homeDir);
+  const parent = realpathSync8(dirname10(target));
+  if (parent !== realHome && !parent.startsWith(realHome + sep6)) {
     throw new Error(`refusing to write outside the crew home: ${target}`);
   }
-  writeFileSync10(join26(parent, basename4(target)), content, { flag: "wx" });
+  writeFileSync10(join28(parent, basename4(target)), content, { flag: "wx" });
 }
 var unique2 = (xs) => [...new Set(xs)];
-function realOr(p) {
+function realOr2(p) {
   try {
-    return realpathSync6(p);
+    return realpathSync8(p);
   } catch {
     return p;
   }
@@ -39552,7 +40946,7 @@ function realOr(p) {
 var SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 function entries(dir) {
   try {
-    return readdirSync10(dir);
+    return readdirSync11(dir);
   } catch (e) {
     const code = e.code;
     return code === "ENOENT" || code === "ENOTDIR" ? null : void 0;
@@ -39560,13 +40954,13 @@ function entries(dir) {
 }
 function skillInstalled(configDir, name) {
   if (!Array.isArray(entries(configDir))) return void 0;
-  const skills = join26(configDir, "skills");
+  const skills = join28(configDir, "skills");
   const direct = entries(skills);
   if (direct === void 0) return void 0;
   if (direct !== null) {
-    if (existsSync6(join26(skills, name, "SKILL.md"))) return true;
+    if (existsSync8(join28(skills, name, "SKILL.md"))) return true;
   }
-  const cache2 = join26(configDir, "plugins", "cache");
+  const cache2 = join28(configDir, "plugins", "cache");
   const top = entries(cache2);
   if (top === void 0) return void 0;
   if (top !== null) {
@@ -39576,11 +40970,11 @@ function skillInstalled(configDir, name) {
       for (const d of dirs) {
         const names = entries(d);
         if (names === void 0) return void 0;
-        next.push(...(names ?? []).map((n4) => join26(d, n4)));
+        next.push(...(names ?? []).map((n4) => join28(d, n4)));
       }
       dirs = next;
     }
-    if (dirs.some((d) => existsSync6(join26(d, "skills", name, "SKILL.md")))) return true;
+    if (dirs.some((d) => existsSync8(join28(d, "skills", name, "SKILL.md")))) return true;
   }
   return false;
 }
@@ -39617,7 +41011,7 @@ function planRea(o2) {
   const below = roots.some((r) => {
     let root = r;
     try {
-      root = realpathSync6(r);
+      root = realpathSync8(r);
     } catch {
     }
     return within(pathKey(real, platform2), pathKey(root, platform2));
@@ -39724,11 +41118,11 @@ async function readPinnedRules(projectDir, ports, pin) {
 }
 function writePinnedRules(stateRoot, id, rules) {
   assertItemId(id);
-  const dir = join26(stateRoot, "briefs", `${id}.rules`);
+  const dir = join28(stateRoot, "briefs", `${id}.rules`);
   removeStateEntry(stateRoot, dir);
   const paths = [];
   for (const f3 of rules.files) {
-    const file3 = join26(dir, f3.name);
+    const file3 = join28(dir, f3.name);
     writeStateFile(stateRoot, file3, f3.content);
     paths.push(file3);
   }
@@ -39747,7 +41141,7 @@ function writeBrief(stateRoot, item, config2, projectDir, rules, caps = plainCap
   const accepting = caps.review?.acceptance;
   let findingFile;
   if (item.finding !== void 0) {
-    findingFile = join26(stateRoot, "briefs", `${item.id}.caps`, "acceptance-finding.txt");
+    findingFile = join28(stateRoot, "briefs", `${item.id}.caps`, "acceptance-finding.txt");
     writeStateFile(
       stateRoot,
       findingFile,
@@ -39934,7 +41328,7 @@ ${item.finding}
       ""
     ] : []
   ];
-  const file3 = join26(stateRoot, "briefs", `${id}.md`);
+  const file3 = join28(stateRoot, "briefs", `${id}.md`);
   writeStateFile(stateRoot, file3, lines2.join("\n"));
   return file3;
 }
@@ -39955,6 +41349,7 @@ function cacheBrief(c3) {
 function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {}) {
   assertItemId(item.id);
   const id = item.id;
+  const guardBin = dirs.windows === true ? GUARD_BIN.replace(/\\/g, "/") : GUARD_BIN;
   const realHome = launcher2.homedir ?? homedir6();
   const env = launcher2.env ?? process.env;
   const { all: credentialPaths, extra: extraSecret } = credentialLocations(realHome, env);
@@ -39966,14 +41361,14 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
     stateRoot,
     extraCredentialPaths: extraSecret
   });
-  const stateBase = dirname9(stateRoot);
+  const stateBase = dirname10(stateRoot);
   const denied = [...dirs.deny?.paths ?? []];
-  const reaDenied = dirs.rea === void 0 ? [] : unique2([dirs.rea.artifacts, dirs.rea.runDir, realOr(dirs.rea.runDir)]);
+  const reaDenied = dirs.rea === void 0 ? [] : unique2([dirs.rea.artifacts, dirs.rea.runDir, realOr2(dirs.rea.runDir)]);
   const denyRead = unique2([
     realHome,
     ...credentialPaths,
     stateBase,
-    realOr(stateBase),
+    realOr2(stateBase),
     ...denied,
     ...reaDenied
   ]);
@@ -39983,33 +41378,33 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
     dirs.tmpDir,
     dirs.homeDir,
     ...toolchain,
-    ...loginDir === void 0 ? [] : ["skills", "plugins/cache", "plugins/marketplaces"].map((p) => join26(loginDir, p)),
+    ...loginDir === void 0 ? [] : ["skills", "plugins/cache", "plugins/marketplaces"].map((p) => join28(loginDir, p)),
     // The crew's own brief, caps and rules: the guard lets them be read, and a sandboxed read
     // (a shell command, or a file tool under the sandbox) must reach them too, or the crew
     // starts without its task. Nothing else of the state root comes back.
     // The reference excerpt of a group's main project (src/group.ts) is beside them.
-    ...["md", "caps", "rules", "reference"].map((ext) => join26(stateRoot, "briefs", `${id}.${ext}`)),
+    ...["md", "caps", "rules", "reference"].map((ext) => join28(stateRoot, "briefs", `${id}.${ext}`)),
     // Places a worker's owner opened inside its denied Windows mounts, for reads only.
     ...dirs.deny?.allowRead ?? []
   ];
-  const ctxFile = join26(stateRoot, "guard", `${id}.json`);
+  const ctxFile = join28(stateRoot, "guard", `${id}.json`);
   const protectedPaths = [
     ctxFile,
-    ...STATE_PROTECTED_DIRS.map((d) => join26(stateRoot, d)),
-    ...STATE_FILES.map((f3) => join26(stateRoot, f3)),
+    ...STATE_PROTECTED_DIRS.map((d) => join28(stateRoot, d)),
+    ...STATE_FILES.map((f3) => join28(stateRoot, f3)),
     // Below the state base, so the sandbox already keeps crews out; this is the second net.
-    join26(stateBase, OWNER_DIR)
+    join28(stateBase, OWNER_DIR)
   ];
-  const configDir = loginDir ?? (env.CLAUDE_CONFIG_DIR || join26(realHome, ".claude"));
+  const configDir = loginDir ?? (env.CLAUDE_CONFIG_DIR || join28(realHome, ".claude"));
   const skillRoots = unique2([
-    join26(configDir, "skills"),
-    join26(configDir, "plugins", "cache"),
-    join26(configDir, "plugins", "marketplaces")
+    join28(configDir, "skills"),
+    join28(configDir, "plugins", "cache"),
+    join28(configDir, "plugins", "marketplaces")
   ]);
   const toolResultGlobs = unique2(
-    [configDir, realOr(configDir)].flatMap(
-      (dir) => [clone2, realOr(clone2)].map(
-        (c3) => `${join26(dir, "projects", c3.replace(/[^A-Za-z0-9]/g, "-"))}/*/tool-results/**`
+    (dirs.runConfigDir === void 0 ? [configDir, realOr2(configDir)] : [dirs.runConfigDir]).flatMap(
+      (dir) => [clone2, realOr2(clone2)].map(
+        (c3) => `${join28(dir, "projects", c3.replace(/[^A-Za-z0-9]/g, "-"))}/*/tool-results/**`
       )
     )
   );
@@ -40018,10 +41413,10 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
     `${p}/**`
   ]);
   const readRoots = [
-    join26(stateRoot, "briefs", `${id}.md`),
-    join26(stateRoot, "briefs", `${id}.caps`),
-    join26(stateRoot, "briefs", `${id}.rules`),
-    join26(stateRoot, "briefs", `${id}.reference`),
+    join28(stateRoot, "briefs", `${id}.md`),
+    join28(stateRoot, "briefs", `${id}.caps`),
+    join28(stateRoot, "briefs", `${id}.rules`),
+    join28(stateRoot, "briefs", `${id}.reference`),
     dirs.homeDir,
     dirs.tmpDir,
     ...skillRoots
@@ -40040,7 +41435,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
       ...credentialPaths.flatMap((p) => [p, `${p}/**`]),
       ...loginDir === void 0 ? [] : [loginDir, `${loginDir}/**`],
       ...denied.flatMap((p) => [p, `${p}/**`]),
-      ...dirs.rea === void 0 ? [] : unique2([dirs.rea.runDir, realOr(dirs.rea.runDir)]).flatMap((p) => [p, `${p}/**`])
+      ...dirs.rea === void 0 ? [] : unique2([dirs.rea.runDir, realOr2(dirs.rea.runDir)]).flatMap((p) => [p, `${p}/**`])
     ],
     crewAllowedWorkflows: config2.crewAllowedWorkflows,
     crewAllowedWorkflowRefs: config2.crewAllowedWorkflowRefs,
@@ -40101,7 +41496,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
           matcher: "*",
           // onFailure "block" also blocks when the hook cannot start or times out
           // (https://code.claude.com/docs/en/hooks, "Block the action when a hook fails").
-          hooks: [{ type: "command", command: guardHookCommand(GUARD_BIN), onFailure: "block" }]
+          hooks: [{ type: "command", command: guardHookCommand(guardBin), onFailure: "block" }]
         }
       ],
       // A reviewer's subagents: the guard records each start, so its analyzer timeout counts
@@ -40110,12 +41505,13 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
         SubagentStart: [
           {
             matcher: "*",
-            hooks: [{ type: "command", command: guardHookCommand(GUARD_BIN) }]
+            hooks: [{ type: "command", command: guardHookCommand(guardBin) }]
           }
         ]
       }
     },
-    sandbox: {
+    // Native Windows: the sandbox is the crew user, its ACLs and the firewall (src/windows-sandbox.ts).
+    sandbox: dirs.windows === true ? { enabled: false } : {
       enabled: true,
       failIfUnavailable: true,
       allowUnsandboxedCommands: false,
@@ -40135,7 +41531,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
       }
     }
   };
-  const file3 = join26(stateRoot, "settings", `${id}.json`);
+  const file3 = join28(stateRoot, "settings", `${id}.json`);
   writeStateFile(stateRoot, file3, `${JSON.stringify(settings, null, 2)}
 `);
   return file3;
@@ -40175,8 +41571,8 @@ async function launchCrew(projectDir, item, config2, ports, launcher2 = {}, work
   const turn = launchChain;
   let done = () => {
   };
-  launchChain = new Promise((resolve12) => {
-    done = resolve12;
+  launchChain = new Promise((resolve13) => {
+    done = resolve13;
   });
   await turn;
   const held2 = {};
@@ -40200,7 +41596,7 @@ var unverifiedRefusal = (rec) => `crew ${rec.name} may be still running (pid ${r
 var unverifiedHandgrip = (rec) => `crew ${rec.name} (pid ${rec.pid}) got no signal, because it cannot be verified as that crew. Look with pgrep -g ${rec.pid}; if those processes are this crew's, stop them with kill -- -${rec.pid}.`;
 function crewDirOrRefuse(owner) {
   const dir = crewClaudeDir(owner);
-  if (!existsSync6(dir)) {
+  if (!existsSync8(dir)) {
     throw new Error(`the crew config dir ${dir} is missing; run studio account setup-plugins`);
   }
   return dir;
@@ -40230,6 +41626,12 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
     );
   }
   const penv = launcher2.env ?? process.env;
+  const windows = worker?.windows;
+  if ((launcher2.platform ?? process.platform) === "win32" && windows === void 0) {
+    throw new Error(
+      "native Windows has no Claude Code sandbox for crew commands: crews run there only on a worker with the Windows crew sandbox (studio worker windows-setup)"
+    );
+  }
   const role = config2.roles[item.role];
   if (!role) throw new Error(`role ${item.role} is not configured`);
   if (item.repo !== config2.primaryRepo && !config2.repos.includes(item.repo)) {
@@ -40272,7 +41674,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   migrateOwnerState(ownerRoot, ports.clock.now());
   refuseIfBlocked(ownerRoot);
   refuseIfPaused(stateRoot);
-  if (pendingLegacyState(dirname9(ownerRoot)).length > 0) {
+  if (pendingLegacyState(dirname10(ownerRoot)).length > 0) {
     throw new Error("old project state files are not migrated yet; refusing to launch, try again");
   }
   const ownerConfig = loadOwnerConfig(owner);
@@ -40286,12 +41688,12 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
     extraCredentialPaths: credentialLocations(home, penv).extra
   });
   for (const sub of ["clones", "homes", "tmp"]) {
-    assertStatePath(stateRoot, join26(stateRoot, sub, item.id));
+    assertStatePath(stateRoot, join28(stateRoot, sub, item.id));
   }
   const previous = await refuseIfRunning(stateRoot, item, ports);
   const limits = readLimits(ownerRoot);
   if (!limits.ok) {
-    throw new Error(`${join26(ownerRoot, "limits.json")} is unreadable; refusing to launch`);
+    throw new Error(`${join28(ownerRoot, "limits.json")} is unreadable; refusing to launch`);
   }
   const parks = activeParks(limits.labels, ports.clock.now());
   const usage = labelUsage({ ownerRoot, ownerConfig, ports });
@@ -40338,9 +41740,9 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
     oauthToken = got.token;
     providerConfigDir = checkProviderConfigDir(got.configDir ?? crewDirOrRefuse(owner), owner);
   }
-  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join26(home, ".claude"));
+  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join28(home, ".claude"));
   const billing = apiBillingProblem(
-    join26(claudeConfigDir, "settings.json"),
+    join28(claudeConfigDir, "settings.json"),
     ownerConfig.allowApiBilling
   );
   if (billing) throw new Error(billing);
@@ -40401,7 +41803,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   if (pinOff) throw new Error(pinOff);
   const undeniable = installedSkills(claudeConfigDir).invalid;
   if (undeniable.length > 0) throw new Error(undeniableLine(claudeConfigDir, undeniable));
-  const clonePath = join26(stateRoot, "clones", item.id);
+  const clonePath = join28(stateRoot, "clones", item.id);
   if (!isCache && (previous?.limit || previous?.block) && existsNoFollow2(clonePath) && (cloneBranch(clonePath) !== `studio/${item.id}` || cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))) {
     throw new Error(
       `the clone of ${item.id} left its branch after ${previous.limit ? "a usage limit" : "an account block"}; refusing to replace it (inspect it, then remove ${clonePath} to start over)`
@@ -40437,7 +41839,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
     await refuseIfRunning(stateRoot, item, ports);
     const target = forItem.review?.target;
     if (target !== void 0) {
-      const items = existsSync6(boardPath(projectDir)) ? loadBoard(projectDir).items : [];
+      const items = existsSync8(boardPath(projectDir)) ? loadBoard(projectDir).items : [];
       for (const [other, crew] of Object.entries(readCrewRecords(stateRoot))) {
         if (other === item.id || readCrewCaps(stateRoot, other)?.reviewsTarget !== target) continue;
         if (crew.stoppedAt !== void 0) continue;
@@ -40449,7 +41851,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
       }
     }
     const again = readLimits(ownerRoot);
-    if (!again.ok) throw new Error(`${join26(ownerRoot, "limits.json")} is unreadable; refusing`);
+    if (!again.ok) throw new Error(`${join28(ownerRoot, "limits.json")} is unreadable; refusing`);
     const parkedNow = activeParks(again.labels, ports.clock.now());
     if (Object.hasOwn(parkedNow, label)) {
       throw new HeldError(allParkedLine(parkedNow[label]?.parkedUntil));
@@ -40471,11 +41873,11 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   );
   lock.heartbeat(ports.clock.now());
   removeOldReport(stateRoot, wt.path, item.id);
-  const homeDir = join26(stateRoot, "homes", item.id);
+  const homeDir = join28(stateRoot, "homes", item.id);
   removeStateEntry(stateRoot, homeDir);
   ensureStateDir(stateRoot, homeDir);
   writeHomeFile(homeDir, ".gitconfig", GITCONFIG);
-  const tmpDir = join26(stateRoot, "tmp", item.id);
+  const tmpDir = join28(stateRoot, "tmp", item.id);
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
   const cow = ports.cow ?? systemCowCopy(launcher2.platform ?? process.platform);
@@ -40509,7 +41911,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   const briefRules = writePinnedRules(stateRoot, item.id, pinned);
   const briefReference = reference === void 0 ? void 0 : writeReference(stateRoot, item.id, reference, readContractChange(stateRoot, item));
   if (reference === void 0)
-    removeStateEntry(stateRoot, join26(stateRoot, "briefs", `${item.id}.reference`));
+    removeStateEntry(stateRoot, join28(stateRoot, "briefs", `${item.id}.reference`));
   const installedNames = new Set(installedSkills(claudeConfigDir).names);
   const caps = writeCaps({
     stateRoot,
@@ -40524,7 +41926,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   caps.reportName = newReportName(stateRoot, item.id);
   let timeouts;
   if (item.type === "review" && caps.review !== void 0) {
-    const agentsFile = join26(stateRoot, "guard", `${item.id}.agents.json`);
+    const agentsFile = join28(stateRoot, "guard", `${item.id}.agents.json`);
     removeStateEntry(stateRoot, agentsFile);
     removeStateEntry(stateRoot, timeoutsFileOf(agentsFile));
     const analyzerMinutes = config2.review?.analyzerTimeoutMinutes ?? DEFAULT_ANALYZER_TIMEOUT_MINUTES;
@@ -40532,7 +41934,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
       analyzerMinutes,
       analyzers: caps.review.analyzers.length,
       now: ports.clock.now(),
-      reportFile: join26(wt.path, ".studio", "reports", caps.reportName),
+      reportFile: join28(wt.path, ".studio", "reports", caps.reportName),
       agentsFile
     });
     caps.timeouts = { analyzerMinutes, sessionEndsAt: timeouts.sessionEndsAt };
@@ -40583,17 +41985,18 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
       },
       ...worker === void 0 ? {} : { deny: worker.deny },
       ...timeouts === void 0 ? {} : { timeouts },
+      ...windows === void 0 ? {} : { windows: true, runConfigDir: join28(homeDir, ".claude-run") },
       ...isCache ? {
         only: {
           commands: cacheCommands,
-          writes: [join26(wt.path, ".studio", "reports", caps.reportName)],
+          writes: [join28(wt.path, ".studio", "reports", caps.reportName)],
           commandMs: (config2.cache?.timeoutMin ?? 60) * 6e4
         }
       } : {}
     },
     owner
   );
-  const mcpConfig = join26(stateRoot, "settings", `${item.id}.mcp.json`);
+  const mcpConfig = join28(stateRoot, "settings", `${item.id}.mcp.json`);
   let reaServer;
   if (rea !== void 0) {
     const run2 = prepareReaRun(stateRoot, item.id);
@@ -40614,7 +42017,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
     })}
 `
   );
-  const settingsEnv = JSON.parse(readFileSync26(settings, "utf8")).env;
+  const settingsEnv = JSON.parse(readFileSync28(settings, "utf8")).env;
   const env = {};
   for (const k of BASE_ENV) {
     const v = penv[k];
@@ -40622,9 +42025,9 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   }
   env.HOME = homeDir;
   env.TMPDIR = tmpDir;
-  env.CARGO_HOME = join26(homeDir, ".cargo");
+  env.CARGO_HOME = join28(homeDir, ".cargo");
   const rustupHome = toolchainPaths.find(
-    (p) => existsSync6(join26(p, "settings.toml")) && existsSync6(join26(p, "toolchains"))
+    (p) => existsSync8(join28(p, "settings.toml")) && existsSync8(join28(p, "toolchains"))
   );
   if (rustupHome !== void 0) env.RUSTUP_HOME = rustupHome;
   env.CLAUDE_CONFIG_DIR = claudeConfigDir;
@@ -40638,14 +42041,33 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   Object.assign(env, settingsEnv);
   if (config2.cache?.enabled === true && worker === void 0) Object.assign(env, cacheEnv(homeDir));
   if (token && item.type !== "research") env.GH_TOKEN = token;
-  const log2 = join26(stateRoot, "logs", `${item.id}.jsonl`);
-  ensureStateDir(stateRoot, dirname9(log2));
+  const log2 = join28(stateRoot, "logs", `${item.id}.jsonl`);
+  ensureStateDir(stateRoot, dirname10(log2));
   const logStart = fileSize(log2);
+  if (windows !== void 0) {
+    Object.assign(
+      env,
+      windowsCrewEnv({ proxyPort: windows.proxyPort, homeDir, tmpDir, base: penv })
+    );
+    env.CLAUDE_CONFIG_DIR = runConfigDir(homeDir, claudeConfigDir);
+    if (!existsNoFollow2(log2)) writeStateFile(stateRoot, log2, "");
+    const briefs = ["md", "caps", "rules", "reference"].map((ext) => join28(stateRoot, "briefs", `${item.id}.${ext}`)).filter(existsNoFollow2);
+    await windows.grant([
+      { path: wt.path, rights: "M" },
+      { path: homeDir, rights: "M" },
+      { path: tmpDir, rights: "M" },
+      ...briefs.map((path10) => ({ path: path10, rights: "R" })),
+      { path: settings, rights: "R" },
+      { path: mcpConfig, rights: "R" },
+      { path: join28(stateRoot, "guard", `${item.id}.json`), rights: "R" },
+      { path: log2, rights: "M" }
+    ]);
+  }
   refuseIfBlocked(ownerRoot);
   refuseIfPaused(stateRoot);
   lock.heartbeat(ports.clock.now());
   await recheck();
-  if (forItem.review?.target !== void 0 && existsSync6(boardPath(projectDir))) {
+  if (forItem.review?.target !== void 0 && existsSync8(boardPath(projectDir))) {
     const reviewing = forItem.review.target;
     await withBoardLock(stateRoot, ports.clock.now(), () => {
       const board = loadBoard(projectDir);
@@ -40691,7 +42113,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
     env
   );
   const name = crewName(item);
-  const crewFile = join26(stateRoot, "crew.json");
+  const crewFile = join28(stateRoot, "crew.json");
   const record2 = {
     name,
     item: item.id,
@@ -40766,7 +42188,7 @@ var MAX_PACKED_BYTES = 1024 * 1024;
 var TERMINAL2 = /* @__PURE__ */ new Set(["merged", "dropped"]);
 function lstatOr(p) {
   try {
-    return lstatSync24(p);
+    return lstatSync25(p);
   } catch {
     return void 0;
   }
@@ -40775,7 +42197,7 @@ function listDir(dir) {
   const st = lstatOr(dir);
   if (st === void 0 || !st.isDirectory()) return [];
   try {
-    return readdirSync11(dir);
+    return readdirSync12(dir);
   } catch {
     return [];
   }
@@ -40791,7 +42213,7 @@ function diskBytes2(path10, seen = /* @__PURE__ */ new Set()) {
     if (seen.has(key)) continue;
     seen.add(key);
     total += st.blocks !== void 0 ? st.blocks * 512 : st.size;
-    if (st.isDirectory()) for (const name of listDir(p)) stack.push(join27(p, name));
+    if (st.isDirectory()) for (const name of listDir(p)) stack.push(join29(p, name));
   }
   return total;
 }
@@ -40799,32 +42221,32 @@ function smallFile(p, max) {
   const st = lstatOr(p);
   if (st === void 0 || !st.isFile() || st.size > max) return void 0;
   try {
-    return readFileSync27(p, "utf8");
+    return readFileSync29(p, "utf8");
   } catch {
     return void 0;
   }
 }
 function localTips(clone2) {
-  const git = join27(clone2, ".git");
+  const git = join29(clone2, ".git");
   const tips = /* @__PURE__ */ new Set();
-  const head = smallFile(join27(git, "HEAD"), MAX_REF_BYTES);
+  const head = smallFile(join29(git, "HEAD"), MAX_REF_BYTES);
   if (head === void 0) return { ok: false, why: ".git/HEAD cannot be read as a plain file" };
   const h2 = head.trim();
   if (SHA.test(h2)) tips.add(h2);
   else if (!/^ref: refs\/heads\/\S+$/.test(h2)) return { ok: false, why: ".git/HEAD is unusual" };
-  if (lstatOr(join27(git, "refs", "stash")) !== void 0)
+  if (lstatOr(join29(git, "refs", "stash")) !== void 0)
     return { ok: false, why: "it has a stash" };
-  const refsSt = lstatOr(join27(git, "refs"));
+  const refsSt = lstatOr(join29(git, "refs"));
   if (refsSt !== void 0 && !refsSt.isDirectory())
     return { ok: false, why: ".git/refs is no folder" };
-  const stack = [join27(git, "refs", "heads")];
+  const stack = [join29(git, "refs", "heads")];
   while (stack.length > 0) {
     const dir = stack.pop();
     const st = lstatOr(dir);
     if (st === void 0) continue;
     if (!st.isDirectory()) return { ok: false, why: "a branch ref is no plain file" };
     for (const name of listDir(dir)) {
-      const p = join27(dir, name);
+      const p = join29(dir, name);
       const s = lstatOr(p);
       if (s?.isDirectory()) {
         stack.push(p);
@@ -40837,7 +42259,7 @@ function localTips(clone2) {
       tips.add(text);
     }
   }
-  const packedPath = join27(git, "packed-refs");
+  const packedPath = join29(git, "packed-refs");
   if (lstatOr(packedPath) !== void 0) {
     const packed = smallFile(packedPath, MAX_PACKED_BYTES);
     if (packed === void 0) return { ok: false, why: ".git/packed-refs cannot be read" };
@@ -40858,7 +42280,7 @@ function localTips(clone2) {
 function onlyReports(clone2) {
   const top = listDir(clone2);
   if (top.length !== 1 || top[0] !== ".studio") return false;
-  const inner = listDir(join27(clone2, ".studio"));
+  const inner = listDir(join29(clone2, ".studio"));
   return inner.length === 1 && inner[0] === "reports";
 }
 function droppedAt(item) {
@@ -40902,19 +42324,19 @@ async function prHead(ports, repo, pr) {
 }
 async function planCloneGc(o2) {
   const ids = /* @__PURE__ */ new Set();
-  for (const sub of ITEM_DIRS) for (const name of listDir(join27(o2.stateRoot, sub))) ids.add(name);
+  for (const sub of ITEM_DIRS) for (const name of listDir(join29(o2.stateRoot, sub))) ids.add(name);
   const sorted = [...ids].sort();
   const sized = (id, e) => {
-    const clone2 = join27(o2.stateRoot, "clones", id);
+    const clone2 = join29(o2.stateRoot, "clones", id);
     const entry = { item: id, clone: lstatOr(clone2) !== void 0, ...e };
     if (!o2.sizes) return entry;
     const seen = /* @__PURE__ */ new Set();
     const parts = {};
     for (const part of SIZE_PARTS) {
-      if (lstatOr(join27(clone2, part))?.isDirectory())
-        parts[part] = diskBytes2(join27(clone2, part), new Set(seen));
+      if (lstatOr(join29(clone2, part))?.isDirectory())
+        parts[part] = diskBytes2(join29(clone2, part), new Set(seen));
     }
-    entry.bytes = ITEM_DIRS.reduce((n4, sub) => n4 + diskBytes2(join27(o2.stateRoot, sub, id), seen), 0);
+    entry.bytes = ITEM_DIRS.reduce((n4, sub) => n4 + diskBytes2(join29(o2.stateRoot, sub, id), seen), 0);
     if (Object.keys(parts).length > 0) entry.parts = parts;
     return entry;
   };
@@ -40968,12 +42390,12 @@ async function planCloneGc(o2) {
     } catch {
       return keep("the item names no valid repository");
     }
-    const clone2 = join27(o2.stateRoot, "clones", id);
+    const clone2 = join29(o2.stateRoot, "clones", id);
     const cloneSt = lstatOr(clone2);
     let tips = [];
     if (cloneSt !== void 0) {
       if (!cloneSt.isDirectory()) return keep("the clone is no plain folder");
-      const gitSt = lstatOr(join27(clone2, ".git"));
+      const gitSt = lstatOr(join29(clone2, ".git"));
       if (gitSt !== void 0) {
         if (!gitSt.isDirectory()) return keep(".git is no plain folder");
         const t = localTips(clone2);
@@ -40982,7 +42404,7 @@ async function planCloneGc(o2) {
       }
     }
     if (lessons === void 0 && cloneSt !== void 0) return keep("lessons.json cannot be read");
-    const hasReports = lstatOr(join27(clone2, ".studio", "reports"))?.isDirectory() === true;
+    const hasReports = lstatOr(join29(clone2, ".studio", "reports"))?.isDirectory() === true;
     const cited = hasReports ? citingLessons(lessons ?? [], id) : [];
     if (cited.length > 0 && onlyReports(clone2)) {
       return keep(`only its report is left, cited by lesson ${cited.join(", ")}`);
@@ -41037,11 +42459,11 @@ async function applyCloneGc(o2) {
         continue;
       }
       try {
-        const clone2 = join27(o2.stateRoot, "clones", e.item);
+        const clone2 = join29(o2.stateRoot, "clones", e.item);
         if (e.verdict === "trim") trimToReports(o2.stateRoot, clone2);
         else removeStateEntry(o2.stateRoot, clone2);
-        removeStateEntry(o2.stateRoot, join27(o2.stateRoot, "homes", e.item));
-        removeStateEntry(o2.stateRoot, join27(o2.stateRoot, "tmp", e.item));
+        removeStateEntry(o2.stateRoot, join29(o2.stateRoot, "homes", e.item));
+        removeStateEntry(o2.stateRoot, join29(o2.stateRoot, "tmp", e.item));
         (e.verdict === "trim" ? out.trimmed : out.removed).push(e.item);
       } catch (err) {
         out.skipped.push({
@@ -41057,15 +42479,15 @@ async function applyCloneGc(o2) {
 }
 function trimToReports(stateRoot, clone2) {
   for (const name of listDir(clone2)) {
-    if (name !== ".studio") removeStateEntry(stateRoot, join27(clone2, name));
+    if (name !== ".studio") removeStateEntry(stateRoot, join29(clone2, name));
   }
-  const studio = join27(clone2, ".studio");
+  const studio = join29(clone2, ".studio");
   if (lstatOr(studio)?.isDirectory() !== true) {
     removeStateEntry(stateRoot, studio);
     return;
   }
   for (const name of listDir(studio)) {
-    if (name !== "reports") removeStateEntry(stateRoot, join27(studio, name));
+    if (name !== "reports") removeStateEntry(stateRoot, join29(studio, name));
   }
 }
 function formatBytes(n4) {
@@ -41155,11 +42577,11 @@ function gcLines(r) {
 }
 
 // src/migration-numbers.ts
-import { existsSync as existsSync7, lstatSync as lstatSync25, readFileSync as readFileSync28 } from "node:fs";
-import { join as join28 } from "node:path";
+import { existsSync as existsSync9, lstatSync as lstatSync26, readFileSync as readFileSync30 } from "node:fs";
+import { join as join30 } from "node:path";
 var REGISTER_FILE = "migration-numbers.json";
 var REGISTER_LOCK = "migration-numbers.lock";
-var LOCK_STALE_MS3 = 3e4;
+var LOCK_STALE_MS4 = 3e4;
 var GH_TIMEOUT_MS2 = 6e4;
 var KEEP_HISTORY = 500;
 var SHA2 = /^[0-9a-f]{40,64}$/i;
@@ -41189,17 +42611,17 @@ function migrationScheme(config2) {
   if (m === void 0) return void 0;
   return { repo: m.repo ?? config2.primaryRepo, dir: m.dir, pattern: new RegExp(m.numberPattern) };
 }
-var registerFile = (root) => join28(root, REGISTER_FILE);
+var registerFile = (root) => join30(root, REGISTER_FILE);
 function readRegister(root) {
   const file3 = registerFile(root);
   assertStatePath(root, file3);
-  if (!existsSync7(file3)) return { v: 1, reservations: [] };
-  if (lstatSync25(file3).isSymbolicLink()) {
+  if (!existsSync9(file3)) return { v: 1, reservations: [] };
+  if (lstatSync26(file3).isSymbolicLink()) {
     throw new Error(`refusing to read ${file3}: it is a symlink`);
   }
   let raw;
   try {
-    raw = JSON.parse(readFileSync28(file3, "utf8"));
+    raw = JSON.parse(readFileSync30(file3, "utf8"));
   } catch {
     throw new Error(`migration register ${file3} is not valid JSON`);
   }
@@ -41215,7 +42637,7 @@ function updateRegister(root, mutate, opts) {
   for (; ; ) {
     const lock = acquireStateLock(root, REGISTER_LOCK, {
       now: opts.now,
-      heartbeatStaleMs: LOCK_STALE_MS3
+      heartbeatStaleMs: LOCK_STALE_MS4
     });
     if (lock) {
       try {
@@ -41555,20 +42977,20 @@ function registerDoctorLine(config2, root) {
 }
 
 // src/push.ts
-import { randomBytes as randomBytes10 } from "node:crypto";
-import { lstatSync as lstatSync31, readFileSync as readFileSync35 } from "node:fs";
-import { join as join35 } from "node:path";
+import { randomBytes as randomBytes11 } from "node:crypto";
+import { lstatSync as lstatSync32, readFileSync as readFileSync37 } from "node:fs";
+import { join as join37 } from "node:path";
 
 // src/claude-language.ts
-import { lstatSync as lstatSync26, readFileSync as readFileSync29 } from "node:fs";
+import { lstatSync as lstatSync27, readFileSync as readFileSync31 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
-import { isAbsolute as isAbsolute8, join as join29 } from "node:path";
+import { isAbsolute as isAbsolute9, join as join31 } from "node:path";
 var MAX_BYTES = 1024 * 1024;
 function languageIn2(file3) {
   try {
-    const st = lstatSync26(file3);
+    const st = lstatSync27(file3);
     if (!st.isFile() || st.size > MAX_BYTES) return void 0;
-    const raw = JSON.parse(readFileSync29(file3, "utf8"));
+    const raw = JSON.parse(readFileSync31(file3, "utf8"));
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return void 0;
     const language = raw.language;
     return typeof language === "string" && language.trim() !== "" ? language : void 0;
@@ -41578,13 +43000,13 @@ function languageIn2(file3) {
 }
 function claudeLanguage(owner = {}, projectDir) {
   const env = owner.env ?? process.env;
-  const configDir = env.CLAUDE_CONFIG_DIR !== void 0 && isAbsolute8(env.CLAUDE_CONFIG_DIR) ? env.CLAUDE_CONFIG_DIR : join29(owner.homedir ?? homedir7(), ".claude");
+  const configDir = env.CLAUDE_CONFIG_DIR !== void 0 && isAbsolute9(env.CLAUDE_CONFIG_DIR) ? env.CLAUDE_CONFIG_DIR : join31(owner.homedir ?? homedir7(), ".claude");
   const files = [
     ...projectDir === void 0 ? [] : [
-      join29(projectDir, ".claude", "settings.local.json"),
-      join29(projectDir, ".claude", "settings.json")
+      join31(projectDir, ".claude", "settings.local.json"),
+      join31(projectDir, ".claude", "settings.json")
     ],
-    join29(configDir, "settings.json")
+    join31(configDir, "settings.json")
   ];
   for (const file3 of files) {
     const language = languageIn2(file3);
@@ -41595,9 +43017,9 @@ function claudeLanguage(owner = {}, projectDir) {
 
 // src/evidence.ts
 var import_yaml12 = __toESM(require_dist(), 1);
-import { createHash as createHash4, randomBytes as randomBytes9 } from "node:crypto";
-import { existsSync as existsSync10, lstatSync as lstatSync29, mkdirSync as mkdirSync9, readFileSync as readFileSync33, writeFileSync as writeFileSync13 } from "node:fs";
-import { join as join33 } from "node:path";
+import { createHash as createHash4, randomBytes as randomBytes10 } from "node:crypto";
+import { existsSync as existsSync12, lstatSync as lstatSync30, mkdirSync as mkdirSync10, readFileSync as readFileSync35, writeFileSync as writeFileSync13 } from "node:fs";
+import { join as join35 } from "node:path";
 
 // src/ci-jobs.ts
 var import_yaml11 = __toESM(require_dist(), 1);
@@ -41843,24 +43265,24 @@ function approvedJobsProblem(jobs, checks) {
 }
 
 // src/proof-sandbox.ts
-import { spawn, spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync8, lstatSync as lstatSync27, mkdirSync as mkdirSync7, mkdtempSync, readlinkSync, realpathSync as realpathSync7 } from "node:fs";
+import { spawn as spawn2, spawnSync as spawnSync2 } from "node:child_process";
+import { existsSync as existsSync10, lstatSync as lstatSync28, mkdirSync as mkdirSync8, mkdtempSync, readlinkSync, realpathSync as realpathSync9 } from "node:fs";
 import { homedir as homedir8, tmpdir } from "node:os";
-import { basename as basename5, dirname as dirname10, join as join30, resolve as resolve7, sep as sep6 } from "node:path";
+import { basename as basename5, dirname as dirname11, join as join32, resolve as resolve8, sep as sep7 } from "node:path";
 var SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 var BWRAP = ["/usr/bin/bwrap", "/usr/local/bin/bwrap", "/bin/bwrap"];
 var KILL_GRACE_MS = 2e3;
 var LIMITS_REFUSED = 125;
-var within2 = (child, parent) => child === parent || child.startsWith(parent.endsWith(sep6) ? parent : parent + sep6);
-function realOr2(p) {
-  const abs = resolve7(p);
-  if (existsSync8(abs)) return realpathSync7(abs);
-  const parent = dirname10(abs);
-  return parent === abs ? abs : join30(realOr2(parent), basename5(abs));
+var within2 = (child, parent) => child === parent || child.startsWith(parent.endsWith(sep7) ? parent : parent + sep7);
+function realOr3(p) {
+  const abs = resolve8(p);
+  if (existsSync10(abs)) return realpathSync9(abs);
+  const parent = dirname11(abs);
+  return parent === abs ? abs : join32(realOr3(parent), basename5(abs));
 }
 var ancestors = (p) => {
   const out = [];
-  for (let d = dirname10(p); d !== dirname10(d); d = dirname10(d)) out.push(d);
+  for (let d = dirname11(p); d !== dirname11(d); d = dirname11(d)) out.push(d);
   return out;
 };
 var quotable = (p) => p.startsWith("/") && !/["\\\p{Cc}]/u.test(p);
@@ -41890,11 +43312,11 @@ function seatbeltProfile(plan, home = homedir8()) {
   if ([plan.run, plan.tmp, ...plan.read, ...plan.deny].some((p) => !p.startsWith("/"))) {
     return void 0;
   }
-  const run2 = realOr2(plan.run);
-  const tmp = realOr2(plan.tmp);
+  const run2 = realOr3(plan.run);
+  const tmp = realOr3(plan.tmp);
   if (!within2(tmp, run2)) return void 0;
-  const read3 = [...plan.read.map(realOr2), ...MAC_SYSTEM_READ.filter(existsSync8)];
-  const deny = [.../* @__PURE__ */ new Set([...MAC_DENY, realOr2(home), ...plan.deny.map(realOr2)])];
+  const read3 = [...plan.read.map(realOr3), ...MAC_SYSTEM_READ.filter(existsSync10)];
+  const deny = [.../* @__PURE__ */ new Set([...MAC_DENY, realOr3(home), ...plan.deny.map(realOr3)])];
   const fenced = deny.filter((d) => !MAC_DENY.includes(d));
   if (fenced.some((d) => within2(run2, d) || within2(d, run2))) return void 0;
   if ([run2, tmp, ...read3, ...deny].some((p) => !quotable(p))) return void 0;
@@ -41942,8 +43364,8 @@ function bwrapArgs(plan, probe = probeDir, link2 = readlinkSync) {
   if ([plan.run, plan.tmp, plan.cwd, ...plan.read].some((p) => !p.startsWith("/"))) {
     return void 0;
   }
-  const run2 = resolve7(plan.run);
-  const tmp = resolve7(plan.tmp);
+  const run2 = resolve8(plan.run);
+  const tmp = resolve8(plan.tmp);
   if (!within2(tmp, run2)) return void 0;
   const system = LINUX_SYSTEM.flatMap((d) => {
     const kind = probe(d);
@@ -41963,7 +43385,7 @@ function bwrapArgs(plan, probe = probeDir, link2 = readlinkSync) {
     "/dev",
     "--tmpfs",
     "/tmp",
-    ...plan.read.flatMap((r) => ["--ro-bind", resolve7(r), resolve7(r)]),
+    ...plan.read.flatMap((r) => ["--ro-bind", resolve8(r), resolve8(r)]),
     "--ro-bind",
     run2,
     run2,
@@ -41971,13 +43393,13 @@ function bwrapArgs(plan, probe = probeDir, link2 = readlinkSync) {
     tmp,
     tmp,
     "--chdir",
-    resolve7(plan.cwd),
+    resolve8(plan.cwd),
     "--"
   ];
 }
 function probeDir(p) {
   try {
-    const st = lstatSync27(p);
+    const st = lstatSync28(p);
     if (st.isSymbolicLink()) return "link";
     return st.isDirectory() ? "dir" : "missing";
   } catch {
@@ -42006,7 +43428,7 @@ var SYSTEM_PATH = [
 ];
 var PROOF_VAR = /^STUDIO_PROOF_[A-Z_]+$/;
 function proofEnv(read3, tmp, vars) {
-  const path10 = [...read3.flatMap((d) => [join30(d, "bin"), d]), ...SYSTEM_PATH];
+  const path10 = [...read3.flatMap((d) => [join32(d, "bin"), d]), ...SYSTEM_PATH];
   const env = {
     PATH: [...new Set(path10)].join(":"),
     HOME: tmp,
@@ -42022,16 +43444,16 @@ function proofEnv(read3, tmp, vars) {
   return env;
 }
 function makeRunDir(home = homedir8()) {
-  let base = realOr2(tmpdir());
-  if (within2(base, realOr2(home))) base = realOr2("/tmp");
-  const run2 = realpathSync7(mkdtempSync(join30(base, "studio-proof-")));
-  const tmp = join30(run2, "tmp");
-  mkdirSync7(tmp, { mode: 448 });
+  let base = realOr3(tmpdir());
+  if (within2(base, realOr3(home))) base = realOr3("/tmp");
+  const run2 = realpathSync9(mkdtempSync(join32(base, "studio-proof-")));
+  const tmp = join32(run2, "tmp");
+  mkdirSync8(tmp, { mode: 448 });
   return { run: run2, tmp };
 }
 var realHost = {
   platform: process.platform,
-  exists: existsSync8,
+  exists: existsSync10,
   probe(file3, args) {
     try {
       const r = spawnSync2(file3, args, {
@@ -42098,7 +43520,7 @@ function runGroup(file3, args, opts) {
     };
     let child;
     try {
-      child = spawn(file3, args, {
+      child = spawn2(file3, args, {
         cwd: opts.cwd,
         env: opts.env,
         detached: true,
@@ -42175,8 +43597,8 @@ var realProofRunner = {
 };
 
 // src/proof-tree.ts
-import { mkdirSync as mkdirSync8, writeFileSync as writeFileSync12 } from "node:fs";
-import { dirname as dirname11, join as join31 } from "node:path";
+import { mkdirSync as mkdirSync9, writeFileSync as writeFileSync12 } from "node:fs";
+import { dirname as dirname12, join as join33 } from "node:path";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
 function isPlainObject3(value2) {
@@ -42188,7 +43610,7 @@ function isPlainObject3(value2) {
 }
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/file-url.js
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
 var safeNormalizeFileUrl = (file3, name) => {
   const fileString = normalizeFileUrl(normalizeDenoExecPath(file3));
   if (typeof fileString !== "string") {
@@ -42198,7 +43620,7 @@ var safeNormalizeFileUrl = (file3, name) => {
 };
 var normalizeDenoExecPath = (file3) => isDenoExecPath(file3) ? file3.toString() : file3;
 var isDenoExecPath = (file3) => typeof file3 !== "string" && file3 && Object.getPrototypeOf(file3) === String.prototype;
-var normalizeFileUrl = (file3) => file3 instanceof URL ? fileURLToPath3(file3) : file3;
+var normalizeFileUrl = (file3) => file3 instanceof URL ? fileURLToPath4(file3) : file3;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/parameters.js
 var normalizeParameters = (rawFile, rawArguments = [], rawOptions, ...rawExtraArguments) => {
@@ -43157,10 +44579,10 @@ function pathKey2(options = {}) {
 import { promisify } from "node:util";
 import { execFile as execFileCallback, execFileSync as execFileSyncOriginal } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath as fileURLToPath4 } from "node:url";
+import { fileURLToPath as fileURLToPath5 } from "node:url";
 var execFileOriginal = promisify(execFileCallback);
 function toPath(urlOrPath) {
-  return urlOrPath instanceof URL ? fileURLToPath4(urlOrPath) : urlOrPath;
+  return urlOrPath instanceof URL ? fileURLToPath5(urlOrPath) : urlOrPath;
 }
 function traversePathUp(startPath) {
   return {
@@ -43840,8 +45262,8 @@ var disconnect = (anyProcess) => {
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/utils/deferred.js
 var createDeferred = () => {
   const methods = {};
-  const promise2 = new Promise((resolve12, reject) => {
-    Object.assign(methods, { resolve: resolve12, reject });
+  const promise2 = new Promise((resolve13, reject) => {
+    Object.assign(methods, { resolve: resolve13, reject });
   });
   return Object.assign(promise2, methods);
 };
@@ -44450,7 +45872,7 @@ var ENCODING_ALIASES = {
 var serializeEncoding = (encoding) => typeof encoding === "string" ? `"${encoding}"` : String(encoding);
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/command-file.js
-import { openSync as openSync6, readSync as readSync4, closeSync as closeSync6 } from "node:fs";
+import { openSync as openSync7, readSync as readSync4, closeSync as closeSync7 } from "node:fs";
 import { Buffer as Buffer2 } from "node:buffer";
 import path5 from "node:path";
 import process7 from "node:process";
@@ -44617,11 +46039,11 @@ var readShebang = (file3) => {
   const buffer = Buffer2.alloc(SHEBANG_BYTE_LENGTH);
   let bytesRead = 0;
   try {
-    const fileDescriptor = openSync6(file3, "r");
+    const fileDescriptor = openSync7(file3, "r");
     try {
       bytesRead = readSync4(fileDescriptor, buffer, 0, SHEBANG_BYTE_LENGTH, 0);
     } finally {
-      closeSync6(fileDescriptor);
+      closeSync7(fileDescriptor);
     }
   } catch {
     return void 0;
@@ -45871,7 +47293,7 @@ var handleResult = (result, verboseInfo, { reject }) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/handle-sync.js
-import { readFileSync as readFileSync31 } from "node:fs";
+import { readFileSync as readFileSync33 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/type.js
 var getStdioItemType = (value2, optionName) => {
@@ -46227,7 +47649,7 @@ var isFixedOutputPipe = (fdNumber, input2) => input2 === true && isStandardOutpu
 var isStandardOutputFd = (fdNumber) => fdNumber === 1 || fdNumber === 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/native.js
-import { readFileSync as readFileSync30 } from "node:fs";
+import { readFileSync as readFileSync32 } from "node:fs";
 import tty2 from "node:tty";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/arguments/fd-options.js
@@ -46341,7 +47763,7 @@ var getTargetFd = ({ value: value2, optionName, fdNumber, direction }) => {
   if (tty2.isatty(targetFdNumber)) {
     throw new TypeError(`The \`${optionName}: ${serializeOptionValue(value2)}\` option is invalid: it cannot be a TTY with synchronous methods.`);
   }
-  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync30(targetFdNumber))], optionName };
+  return { type: "uint8Array", contents: () => [bufferToUint8Array(readFileSync32(targetFdNumber))], optionName };
 };
 var getTargetFdNumber = (value2, fdNumber) => {
   if (value2 === "inherit") {
@@ -46410,9 +47832,9 @@ var getInputFileType = (inputFile) => {
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/stdio/duplicate.js
 import path8 from "node:path";
-import { fileURLToPath as fileURLToPath5 } from "node:url";
+import { fileURLToPath as fileURLToPath6 } from "node:url";
 var isFileType = (type) => SPECIAL_DUPLICATE_TYPES_SYNC.has(type);
-var getFileTarget = ({ type, value: value2 }) => type === "filePath" ? path8.resolve(value2.file) : fileURLToPath5(value2);
+var getFileTarget = ({ type, value: value2 }) => type === "filePath" ? path8.resolve(value2.file) : fileURLToPath6(value2);
 var filterDuplicates = (stdioItems) => stdioItems.filter((stdioItemOne, indexOne) => stdioItems.every((stdioItemTwo, indexTwo) => !hasSameValueAndDirection(stdioItemOne, stdioItemTwo) || indexOne >= indexTwo || stdioItemOne.type === "generator" || stdioItemOne.type === "asyncGenerator"));
 var hasSameValueAndDirection = (stdioItemOne, stdioItemTwo) => stdioItemOne.value === stdioItemTwo.value && stdioItemOne.direction === stdioItemTwo.direction;
 var getDuplicateStream = ({ stdioItem: { type, value: value2, optionName }, direction, fileDescriptors, isSync }) => {
@@ -46735,8 +48157,8 @@ var addPropertiesSync = {
     generator: forbiddenInputTransformIfSync,
     native: forbiddenNativeInputIfSync,
     // Files and iterables are read lazily, so that a file which cannot be read, or an iterable which throws, is reported like any other early error, instead of being thrown as a raw error
-    fileUrl: ({ value: value2 }) => ({ contents: () => [bufferToUint8Array(readFileSync31(value2))] }),
-    filePath: ({ value: { file: file3 } }) => ({ contents: () => [bufferToUint8Array(readFileSync31(file3))] }),
+    fileUrl: ({ value: value2 }) => ({ contents: () => [bufferToUint8Array(readFileSync33(value2))] }),
+    filePath: ({ value: { file: file3 } }) => ({ contents: () => [bufferToUint8Array(readFileSync33(file3))] }),
     fileNumber: forbiddenIfSync,
     iterable: ({ value: value2 }) => ({ contents: () => [...value2] }),
     string: ({ value: value2 }) => ({ contents: [value2] }),
@@ -47369,7 +48791,7 @@ var getSyncResult = ({ error: error62, exitCode, signal, timedOut, isMaxBuffer, 
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/main-async.js
 import { setMaxListeners, once as once9 } from "node:events";
-import { spawn as spawn2 } from "node:child_process";
+import { spawn as spawn3 } from "node:child_process";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/methods.js
 import process11 from "node:process";
@@ -48068,7 +49490,7 @@ var MAX_LISTENERS_INCREMENT = 2;
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/terminate/kill-descendants.js
 import process12 from "node:process";
-import { execFile as execFile2 } from "node:child_process";
+import { execFile as execFile3 } from "node:child_process";
 import path9 from "node:path/win32";
 var isWindows2 = process12.platform === "win32";
 var getSpawnOptions = (options) => !isWindows2 && options.killDescendants ? { ...options, detached: true } : options;
@@ -48100,7 +49522,7 @@ var killDescendantsWindows = (subprocess, signal) => {
   if (taskkillFile === void 0) {
     return subprocess.kill(signal);
   }
-  execFile2(taskkillFile, ["/pid", `${subprocess.pid}`, "/T", "/F"], (error62) => {
+  execFile3(taskkillFile, ["/pid", `${subprocess.pid}`, "/T", "/F"], (error62) => {
     if (error62) {
       subprocess.kill(signal);
     }
@@ -48397,11 +49819,11 @@ var addConcurrentStream = (concurrentStreams, stream, waitName) => {
   const promises = weakMap.get(stream);
   const promise2 = createDeferred();
   promises.push(promise2);
-  const resolve12 = promise2.resolve.bind(promise2);
-  return { resolve: resolve12, promises };
+  const resolve13 = promise2.resolve.bind(promise2);
+  return { resolve: resolve13, promises };
 };
-var waitForConcurrentStreams = async ({ resolve: resolve12, promises }, subprocess) => {
-  resolve12();
+var waitForConcurrentStreams = async ({ resolve: resolve13, promises }, subprocess) => {
+  resolve13();
   const [isSubprocessExit] = await Promise.race([
     Promise.allSettled([true, subprocess]),
     Promise.all([false, ...promises])
@@ -49744,7 +51166,7 @@ var handleAsyncOptions = ({ timeout, signal, ...options }) => ({ __proto__: null
 var spawnSubprocessAsync = ({ file: file3, commandArguments, options, startTime, verboseInfo, command, escapedCommand, fileDescriptors }) => {
   let subprocess;
   try {
-    subprocess = spawn2(...concatenateShell(file3, commandArguments, getSpawnOptions(options)));
+    subprocess = spawn3(...concatenateShell(file3, commandArguments, getSpawnOptions(options)));
   } catch (error62) {
     return handleEarlyError({
       error: error62,
@@ -50032,8 +51454,8 @@ async function writeTree(gitDir, entries2, dest, timeoutMs) {
     if (body.length !== e.size || out[nl + 1 + e.size] !== 10) {
       throw new Error("git cat-file ended early");
     }
-    const file3 = join31(dest, e.path);
-    mkdirSync8(dirname11(file3), { recursive: true });
+    const file3 = join33(dest, e.path);
+    mkdirSync9(dirname12(file3), { recursive: true });
     writeFileSync12(file3, body, { flag: "wx", mode: e.mode === "100755" ? 493 : 420 });
     at2 = nl + 2 + e.size;
   }
@@ -50041,16 +51463,16 @@ async function writeTree(gitDir, entries2, dest, timeoutMs) {
 
 // src/queue.ts
 import {
-  closeSync as closeSync7,
+  closeSync as closeSync8,
   constants as constants7,
-  existsSync as existsSync9,
-  lstatSync as lstatSync28,
-  openSync as openSync7,
-  readFileSync as readFileSync32,
+  existsSync as existsSync11,
+  lstatSync as lstatSync29,
+  openSync as openSync8,
+  readFileSync as readFileSync34,
   writeSync as writeSync2
 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { dirname as dirname12, join as join32 } from "node:path";
+import { dirname as dirname13, join as join34 } from "node:path";
 
 // src/main-build.ts
 var UNKNOWN = { status: "unknown" };
@@ -50085,7 +51507,7 @@ function parseRuns(stdout) {
 var cleanName = (s) => s.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, MAX_NAME);
 var validSha = (s) => /^[0-9a-f]{7,64}$/i.test(s) ? s : void 0;
 async function latestPushRuns(gh, repo, branch) {
-  const reply = await gh.run(
+  const reply2 = await gh.run(
     [
       "run",
       "list",
@@ -50102,8 +51524,8 @@ async function latestPushRuns(gh, repo, branch) {
     ],
     { timeoutMs: READ_TIMEOUT_MS }
   );
-  if (reply.code !== 0) return void 0;
-  const runs = parseRuns(reply.stdout);
+  if (reply2.code !== 0) return void 0;
+  const runs = parseRuns(reply2.stdout);
   if (runs === void 0) return void 0;
   const newest = /* @__PURE__ */ new Map();
   for (const r of runs) if (!newest.has(r.workflow)) newest.set(r.workflow, r);
@@ -50188,16 +51610,16 @@ var stateSchema = external_exports.strictObject({
     })
   )
 });
-var queueFile = (stateRoot) => join32(stateRoot, "queue.json");
+var queueFile = (stateRoot) => join34(stateRoot, "queue.json");
 function loadQueue(stateRoot) {
   const file3 = queueFile(stateRoot);
   assertStatePath(stateRoot, file3);
-  if (!existsSync9(file3)) return { pending: [], done: [] };
-  if (lstatSync28(file3).isSymbolicLink())
+  if (!existsSync11(file3)) return { pending: [], done: [] };
+  if (lstatSync29(file3).isSymbolicLink())
     throw new Error(`refusing to read ${file3}: it is a symlink`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync32(file3, "utf8"));
+    raw = JSON.parse(readFileSync34(file3, "utf8"));
   } catch {
     throw new Error(`queue file ${file3} is not valid JSON`);
   }
@@ -50284,19 +51706,19 @@ function installSignalRelease(lock) {
   };
 }
 function appendStateLine(stateRoot, name, line4) {
-  const file3 = join32(stateRoot, name);
+  const file3 = join34(stateRoot, name);
   assertStatePath(stateRoot, file3);
   let torn = false;
-  if (existsSync9(file3)) {
-    if (lstatSync28(file3).isSymbolicLink()) {
+  if (existsSync11(file3)) {
+    if (lstatSync29(file3).isSymbolicLink()) {
       throw new Error(`refusing to use ${file3}: it is a symlink`);
     }
-    const prev = readFileSync32(file3, "utf8");
+    const prev = readFileSync34(file3, "utf8");
     torn = prev !== "" && !prev.endsWith("\n");
   } else {
-    ensureStateDir(stateRoot, dirname12(file3));
+    ensureStateDir(stateRoot, dirname13(file3));
   }
-  const fd = openSync7(
+  const fd = openSync8(
     file3,
     constants7.O_WRONLY | constants7.O_CREAT | constants7.O_APPEND | (constants7.O_NOFOLLOW ?? 0),
     384
@@ -50305,7 +51727,7 @@ function appendStateLine(stateRoot, name, line4) {
     writeSync2(fd, `${torn ? "\n" : ""}${line4}
 `);
   } finally {
-    closeSync7(fd);
+    closeSync8(fd);
   }
 }
 var BUCKETS = /* @__PURE__ */ new Set(["pass", "fail", "pending", "skipping", "cancel"]);
@@ -50883,7 +52305,7 @@ function proofCommandsFor(o2) {
     o2.homedir,
     stateBaseFor(owner),
     ownerConfigDir(owner),
-    o2.env.CLAUDE_CONFIG_DIR || join33(o2.homedir, ".claude"),
+    o2.env.CLAUDE_CONFIG_DIR || join35(o2.homedir, ".claude"),
     ...credentialLocations(o2.homedir, o2.env).all
   ];
   const runner = o2.runner ?? realProofRunner;
@@ -50911,13 +52333,13 @@ var short = (sha) => sha.slice(0, 12);
 var guardName = (r) => `${r.guard.workflow} / ${r.guard.job}`;
 var sameKey = (e, k) => e.rule === k.rule && e.repo === k.repo && e.pr === k.pr && e.base.toLowerCase() === k.base.toLowerCase() && e.head.toLowerCase() === k.head.toLowerCase();
 function readExceptions(stateRoot) {
-  const file3 = join33(stateRoot, EXCEPTIONS_FILE);
-  if (!existsSync10(file3)) return [];
-  if (lstatSync29(file3).isSymbolicLink()) {
+  const file3 = join35(stateRoot, EXCEPTIONS_FILE);
+  if (!existsSync12(file3)) return [];
+  if (lstatSync30(file3).isSymbolicLink()) {
     throw new Error(`refusing to read ${file3}: it is a symlink`);
   }
   const out = [];
-  for (const line4 of readFileSync33(file3, "utf8").split("\n")) {
+  for (const line4 of readFileSync35(file3, "utf8").split("\n")) {
     if (line4.trim() === "") continue;
     try {
       const parsed = entrySchema2.safeParse(JSON.parse(line4));
@@ -50958,11 +52380,11 @@ function recordException(stateRoot, entry) {
   }
 }
 function retryAllowed(stateRoot, key, now) {
-  const file3 = join33(stateRoot, RETRIES_FILE);
+  const file3 = join35(stateRoot, RETRIES_FILE);
   let counts = {};
   try {
-    if (existsSync10(file3) && !lstatSync29(file3).isSymbolicLink()) {
-      const raw = JSON.parse(readFileSync33(file3, "utf8"));
+    if (existsSync12(file3) && !lstatSync30(file3).isSymbolicLink()) {
+      const raw = JSON.parse(readFileSync35(file3, "utf8"));
       if (raw !== null && typeof raw === "object") {
         counts = raw;
       }
@@ -51221,8 +52643,8 @@ async function runCommand(ctx, p, r, ref) {
     return { kind: "retry", why: "the proof run dir cannot be made" };
   }
   try {
-    const base = join33(dirs.run, "base");
-    const head = join33(dirs.run, "head");
+    const base = join35(dirs.run, "base");
+    const head = join35(dirs.run, "head");
     const listed = [];
     for (const [side, oid, dir] of [
       ["base", p.base, base],
@@ -51241,17 +52663,17 @@ async function runCommand(ctx, p, r, ref) {
     }
     try {
       for (const [dir, entries2] of listed) {
-        mkdirSync9(dir);
+        mkdirSync10(dir);
         await writeTree(ctx.checkout.dir, entries2, dir, GIT_ARCHIVE_MS);
       }
     } catch {
       return { kind: "retry", why: "the base and head cannot be written out" };
     }
-    const diff = join33(dirs.run, "diff.patch");
-    const files = join33(dirs.run, "files");
+    const diff = join35(dirs.run, "diff.patch");
+    const files = join35(dirs.run, "files");
     writeFileSync13(diff, p.diff, { mode: 256 });
     writeFileSync13(files, p.files.map((f3) => `${f3}\0`).join(""), { mode: 256 });
-    const nonce = randomBytes9(16).toString("hex");
+    const nonce = randomBytes10(16).toString("hex");
     const env = proofEnv(c3.read, dirs.tmp, {
       STUDIO_PROOF_RULE: r.id,
       STUDIO_PROOF_REPO: ref.repo,
@@ -51601,8 +53023,8 @@ async function remoteTip(ctx, branch) {
 }
 
 // src/pane-data.ts
-import { lstatSync as lstatSync30, readFileSync as readFileSync34 } from "node:fs";
-import { join as join34 } from "node:path";
+import { lstatSync as lstatSync31, readFileSync as readFileSync36 } from "node:fs";
+import { join as join36 } from "node:path";
 var WORKER_WAIT = "worker: ";
 var PR_HELD = "pr held: ";
 var TICK_FILE = "tick.json";
@@ -51783,12 +53205,12 @@ var rows = (v) => Array.isArray(v) ? v.flatMap(
   (r) => r !== null && typeof r === "object" && typeof r.item === "string" && typeof r.reason === "string" ? [{ item: r.item, reason: r.reason }] : []
 ) : [];
 function readTickRecord(root) {
-  const file3 = join34(root, TICK_FILE);
+  const file3 = join36(root, TICK_FILE);
   try {
     assertStatePath(root, file3);
-    const st = lstatSync30(file3, { throwIfNoEntry: false });
+    const st = lstatSync31(file3, { throwIfNoEntry: false });
     if (st === void 0 || !st.isFile()) return void 0;
-    const raw = JSON.parse(readFileSync34(file3, "utf8"));
+    const raw = JSON.parse(readFileSync36(file3, "utf8"));
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return void 0;
     const o2 = raw;
     if (typeof o2.at !== "string") return void 0;
@@ -51798,7 +53220,7 @@ function readTickRecord(root) {
   }
 }
 function writeTickRecord(root, rec) {
-  writeStateFile(root, join34(root, TICK_FILE), `${JSON.stringify(rec, null, 2)}
+  writeStateFile(root, join36(root, TICK_FILE), `${JSON.stringify(rec, null, 2)}
 `);
 }
 function resolveZone(timezone) {
@@ -51822,13 +53244,13 @@ function clockTime(iso, timezone) {
 // src/push.ts
 var PUSHED_FILE = "pushed.json";
 var PUSH_LOCK = "push.lock";
-var LOCK_STALE_MS4 = 2 * 6e4;
+var LOCK_STALE_MS5 = 2 * 6e4;
 var PUSH_INTERVAL_MS = 10 * 6e4;
 var KEEP_MS = 30 * 24 * 60 * 6e4;
 var MAX_KEYS = 2e3;
 var DEFAULT_NTFY_SERVER = "https://ntfy.sh";
 var TOPIC_RE = /^studio-[A-Za-z0-9_-]{24}$/;
-var newNtfyTopic = () => `studio-${randomBytes10(18).toString("base64url")}`;
+var newNtfyTopic = () => `studio-${randomBytes11(18).toString("base64url")}`;
 function readNotifySecret(owner) {
   const file3 = notifySecretFile(owner);
   const read3 = readOwnerSecret(file3, owner);
@@ -51862,7 +53284,7 @@ function sendPush(http, secret, config2, message) {
     Priority: message.urgent ? "high" : "default"
   });
 }
-var pushFailure = (reply) => reply.status === void 0 ? "ntfy could not be reached" : `ntfy answered ${reply.status}`;
+var pushFailure = (reply2) => reply2.status === void 0 ? "ntfy could not be reached" : `ntfy answered ${reply2.status}`;
 var EXTERNAL_MS = 24 * 60 * 6e4;
 var ITEM_RE2 = /^(?:[A-Z]+-\d+|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#\d+|[A-Za-z0-9._-]{1,64})$/;
 var safeId = (s) => ITEM_RE2.test(s) ? s : "?";
@@ -51888,7 +53310,7 @@ function decisionsOf(o2) {
     const key = `${o2.projectKey}:${item}:${kind}:${d.at}`;
     if (!out.some((x) => x.key === key)) out.push({ key, item, kind, urgent: false });
   }
-  const read3 = readBlocksFile(join35(o2.ownerRoot, "blocks.json"));
+  const read3 = readBlocksFile(join37(o2.ownerRoot, "blocks.json"));
   if (!read3.ok) {
     out.push({ key: "block::unreadable", item: "?", kind: "account_block", urgent: true });
   } else {
@@ -51930,12 +53352,12 @@ function inQuietHours(quiet, now, zone) {
 }
 function readPushed(file3) {
   try {
-    if (!lstatSync31(file3).isFile()) return void 0;
+    if (!lstatSync32(file3).isFile()) return void 0;
   } catch (e) {
     return e.code === "ENOENT" ? { sent: /* @__PURE__ */ Object.create(null), last: /* @__PURE__ */ Object.create(null) } : void 0;
   }
   try {
-    const raw = JSON.parse(readFileSync35(file3, "utf8"));
+    const raw = JSON.parse(readFileSync37(file3, "utf8"));
     const isMap5 = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((x) => typeof x === "string");
     if (!isMap5(raw?.sent) || !isMap5(raw?.last)) return void 0;
     return {
@@ -51966,11 +53388,11 @@ async function pushLocked(o2) {
   }
   const lock = acquireStateLock(o2.ownerRoot, PUSH_LOCK, {
     now: o2.now,
-    heartbeatStaleMs: LOCK_STALE_MS4
+    heartbeatStaleMs: LOCK_STALE_MS5
   });
   if (!lock) return { sent: 0, deferred: "locked", errors: [] };
   try {
-    const file3 = join35(o2.ownerRoot, PUSHED_FILE);
+    const file3 = join37(o2.ownerRoot, PUSHED_FILE);
     const state = readPushed(file3);
     if (state === void 0) {
       return { sent: 0, errors: [`notify: ${PUSHED_FILE} is unreadable; nothing sent`] };
@@ -52011,12 +53433,12 @@ async function pushLocked(o2) {
       o2.owner.env ?? process.env,
       claudeLanguage(o2.owner, o2.projectDir)
     );
-    const reply = await sendPush(http, stored.secret, o2.ownerConfig, {
+    const reply2 = await sendPush(http, stored.secret, o2.ownerConfig, {
       text: pushText(fresh, PROJECT_RE.test(o2.project) ? o2.project : "?", lang),
       urgent
     });
-    if (!reply.ok) {
-      return { sent: 0, errors: [`notify: ${pushFailure(reply)}; retried next tick`, ...save()] };
+    if (!reply2.ok) {
+      return { sent: 0, errors: [`notify: ${pushFailure(reply2)}; retried next tick`, ...save()] };
     }
     const at2 = o2.now.toISOString();
     for (const d of fresh) state.sent[d.key] = at2;
@@ -52029,10 +53451,10 @@ async function pushLocked(o2) {
 
 // src/secret-command.ts
 function readPrimaryRepo(project) {
-  const file3 = join36(project, ".studio", "studio.yaml");
+  const file3 = join38(project, ".studio", "studio.yaml");
   let raw;
   try {
-    raw = (0, import_yaml13.parse)(readFileSync36(file3, "utf8"));
+    raw = (0, import_yaml13.parse)(readFileSync38(file3, "utf8"));
   } catch {
     throw new Error("cannot read .studio/studio.yaml");
   }
@@ -52087,7 +53509,7 @@ async function runSecretSet(o2) {
 }
 var API_KEY_VARS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
 async function crewConfigDir(command, owner, env, ports) {
-  const fallback = env.CLAUDE_CONFIG_DIR || join36(owner.homedir ?? homedir9(), ".claude");
+  const fallback = env.CLAUDE_CONFIG_DIR || join38(owner.homedir ?? homedir9(), ".claude");
   if (command === void 0) return fallback;
   try {
     const got = await runCredentialProvider(
@@ -52131,7 +53553,7 @@ var CREW_TOOLS = ["cargo", "rustc", "rustup", "node", "pnpm", "npm", "gh", "git"
 function toolsOutside(env, home, toolchain) {
   const real = (p) => {
     try {
-      return realpathSync8(p);
+      return realpathSync10(p);
     } catch {
       return p;
     }
@@ -52141,7 +53563,7 @@ function toolsOutside(env, home, toolchain) {
   const out = [];
   for (const tool of CREW_TOOLS) {
     for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
-      const file3 = join36(dir, tool);
+      const file3 = join38(dir, tool);
       try {
         if (!statSync6(file3).isFile()) continue;
       } catch {
@@ -52203,12 +53625,12 @@ function reaState(config2, ownerConfig, configDir, ownerRoot) {
   } else if (roots.length === 0) artifacts = "refused: no research_roots in the owner config";
   else {
     try {
-      const real = realpathSync8(config2.research.artifacts);
+      const real = realpathSync10(config2.research.artifacts);
       if (!statSync6(real).isDirectory()) artifacts = "refused: not a directory";
       else {
         const inside = roots.some((r) => {
           try {
-            return within(real, realpathSync8(r));
+            return within(real, realpathSync10(r));
           } catch {
             return false;
           }
@@ -52222,7 +53644,7 @@ function reaState(config2, ownerConfig, configDir, ownerRoot) {
   let registered = "not registered";
   if (configDir !== void 0) {
     try {
-      const raw = JSON.parse(readFileSync36(join36(configDir, ".claude.json"), "utf8"));
+      const raw = JSON.parse(readFileSync38(join38(configDir, ".claude.json"), "utf8"));
       const args = raw.mcpServers?.[REA_SERVER]?.args;
       const at2 = Array.isArray(args) ? args.find((a2) => typeof a2 === "string" && a2.startsWith(`${REA_PACKAGE}@`)) : void 0;
       if (typeof at2 === "string") {
@@ -52473,8 +53895,8 @@ async function runDoctor(o2) {
 
 // src/stack.ts
 var import_yaml14 = __toESM(require_dist(), 1);
-import { lstatSync as lstatSync32, readdirSync as readdirSync12, readFileSync as readFileSync37 } from "node:fs";
-import { join as join37 } from "node:path";
+import { lstatSync as lstatSync33, readdirSync as readdirSync13, readFileSync as readFileSync39 } from "node:fs";
+import { join as join39 } from "node:path";
 var MAX_FILE_BYTES2 = 1024 * 1024;
 var MAX_ENTRIES = 200;
 var MONOREPO_DIRS = ["apps", "packages", "services", "crates", "libs"];
@@ -52496,20 +53918,20 @@ var DEP_STACKS = {
 };
 function isRealDir2(path10) {
   try {
-    return lstatSync32(path10).isDirectory();
+    return lstatSync33(path10).isDirectory();
   } catch {
     return false;
   }
 }
 function readSmall(path10, notes, name) {
   try {
-    const st = lstatSync32(path10);
+    const st = lstatSync33(path10);
     if (!st.isFile()) return void 0;
     if (st.size > MAX_FILE_BYTES2) {
       notes.push(`${name}: larger than 1 MiB, not read`);
       return void 0;
     }
-    return readFileSync37(path10, "utf8");
+    return readFileSync39(path10, "utf8");
   } catch {
     notes.push(`${name}: cannot be read`);
     return void 0;
@@ -52517,7 +53939,7 @@ function readSmall(path10, notes, name) {
 }
 var isFileEntry = (dir, name) => {
   try {
-    return lstatSync32(join37(dir, name)).isFile();
+    return lstatSync33(join39(dir, name)).isFile();
   } catch {
     return false;
   }
@@ -52545,13 +53967,13 @@ function depStacks(text, notes, name) {
 function scanDir(dir, label, found, notes) {
   let names;
   try {
-    names = readdirSync12(dir).slice(0, MAX_ENTRIES * 5);
+    names = readdirSync13(dir).slice(0, MAX_ENTRIES * 5);
   } catch {
     notes.push(`${label || "."}: cannot be read`);
     return;
   }
   const file3 = (n4) => isFileEntry(dir, n4);
-  const read3 = (n4) => readSmall(join37(dir, n4), notes, label ? `${label}/${n4}` : n4);
+  const read3 = (n4) => readSmall(join39(dir, n4), notes, label ? `${label}/${n4}` : n4);
   const some = (re) => names.some((n4) => re.test(n4) && file3(n4));
   const pkg = names.includes("package.json") && file3("package.json") ? read3("package.json") : void 0;
   if (pkg !== void 0) {
@@ -52561,7 +53983,7 @@ function scanDir(dir, label, found, notes) {
   }
   if (some(/^next\.config\./)) found.add("nextjs");
   if (some(/^components\.json$/)) found.add("shadcn");
-  if (isRealDir2(join37(dir, "migrations"))) found.add("postgres");
+  if (isRealDir2(join39(dir, "migrations"))) found.add("postgres");
   if (some(/^(Podfile|Package\.swift)$/) || names.some((n4) => n4.endsWith(".xcodeproj"))) {
     found.add("ios");
   }
@@ -52569,7 +53991,7 @@ function scanDir(dir, label, found, notes) {
     if (/WinUI|WindowsAppSDK/i.test(read3(n4) ?? "")) found.add("winui");
   }
   if (some(/^Cargo\.toml$/)) found.add("rust");
-  if (isRealDir2(join37(dir, "src-tauri"))) {
+  if (isRealDir2(join39(dir, "src-tauri"))) {
     found.add("tauri");
     found.add("rust");
   }
@@ -52578,7 +54000,7 @@ function scanDir(dir, label, found, notes) {
   if (some(/^svelte\.config\./)) found.add("svelte");
   if (some(/^(astro\.config\..*|vite\.config\..*|index\.html)$/)) found.add("web");
   if (some(/^Dockerfile/) || some(/^(docker-)?compose.*\.ya?ml$/)) found.add("docker");
-  if (some(/^wp-config\.php$/) || isRealDir2(join37(dir, "wp-content"))) found.add("wordpress");
+  if (some(/^wp-config\.php$/) || isRealDir2(join39(dir, "wp-content"))) found.add("wordpress");
   if (some(/^style\.css$/) && /Theme Name:/.test(read3("style.css") ?? "")) found.add("wordpress");
   for (const n4 of names.filter((x) => x.endsWith(".php") && file3(x))) {
     if (/Plugin Name:/.test(read3(n4) ?? "")) found.add("wordpress");
@@ -52588,23 +54010,23 @@ function detectStacks(dir) {
   const found = /* @__PURE__ */ new Set();
   const notes = [];
   scanDir(dir, "", found, notes);
-  if (isRealDir2(join37(dir, ".github", "workflows"))) found.add("gha");
+  if (isRealDir2(join39(dir, ".github", "workflows"))) found.add("gha");
   for (const group of MONOREPO_DIRS) {
-    const base = join37(dir, group);
+    const base = join39(dir, group);
     if (!isRealDir2(base)) continue;
-    for (const name of readdirSync12(base).slice(0, MAX_ENTRIES)) {
+    for (const name of readdirSync13(base).slice(0, MAX_ENTRIES)) {
       if (name.startsWith(".") || name === "node_modules") continue;
-      if (isRealDir2(join37(base, name))) scanDir(join37(base, name), `${group}/${name}`, found, notes);
+      if (isRealDir2(join39(base, name))) scanDir(join39(base, name), `${group}/${name}`, found, notes);
     }
   }
   if (OTHER_WEB.some((s) => found.has(s))) found.delete("web");
   return { stacks: [...found].sort(), notes };
 }
 function runSetupStack(o2) {
-  const file3 = join37(o2.project, ".studio", "studio.yaml");
+  const file3 = join39(o2.project, ".studio", "studio.yaml");
   let text;
   try {
-    text = readFileSync37(file3, "utf8");
+    text = readFileSync39(file3, "utf8");
   } catch (e) {
     throw new Error(
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
@@ -52673,21 +54095,21 @@ var PLUGIN_INSTALL = [
 var SUPERPOWERS_INSTALL = "/plugin marketplace add obra/superpowers-marketplace, then /plugin install superpowers@superpowers-marketplace";
 var isRealDir3 = (path10) => {
   try {
-    return lstatSync33(path10).isDirectory();
+    return lstatSync34(path10).isDirectory();
   } catch {
     return false;
   }
 };
 var isRealFile2 = (path10) => {
   try {
-    return lstatSync33(path10).isFile();
+    return lstatSync34(path10).isFile();
   } catch {
     return false;
   }
 };
 var exists3 = (path10) => {
   try {
-    lstatSync33(path10);
+    lstatSync34(path10);
     return true;
   } catch {
     return false;
@@ -52716,22 +54138,22 @@ function componentId2(name, root, taken) {
 }
 function proposeComponents(project, repo) {
   const components = [];
-  const manifests = new Set(MANIFESTS.filter((m) => isRealFile2(join38(project, m))));
+  const manifests = new Set(MANIFESTS.filter((m) => isRealFile2(join40(project, m))));
   const notes = [];
   const taken = /* @__PURE__ */ new Set();
   for (const root of MONOREPO_DIRS) {
-    const base = join38(project, root);
+    const base = join40(project, root);
     if (!isRealDir3(base)) continue;
     let names;
     try {
-      names = readdirSync13(base).sort().slice(0, MAX_ENTRIES2);
+      names = readdirSync14(base).sort().slice(0, MAX_ENTRIES2);
     } catch {
       notes.push(`${root}: cannot be read`);
       continue;
     }
     for (const name of names) {
-      if (name.startsWith(".") || name === "node_modules" || !isRealDir3(join38(base, name))) continue;
-      const found = MANIFESTS.filter((m) => isRealFile2(join38(base, name, m)));
+      if (name.startsWith(".") || name === "node_modules" || !isRealDir3(join40(base, name))) continue;
+      const found = MANIFESTS.filter((m) => isRealFile2(join40(base, name, m)));
       if (found.length === 0) continue;
       if (!PLAIN_NAME.test(name)) {
         notes.push(`${root}/${safe(name)}: name needs quoting in a glob, add it by hand`);
@@ -52746,7 +54168,7 @@ function proposeComponents(project, repo) {
       });
     }
   }
-  const tooling = TOOLING_DIRS.filter((d) => isRealDir3(join38(project, d)));
+  const tooling = TOOLING_DIRS.filter((d) => isRealDir3(join40(project, d)));
   if (components.length > 0 && tooling.length > 0) {
     components.push({
       id: componentId2("tooling", "tooling", taken),
@@ -52911,16 +54333,16 @@ var BOARD_IGNORE_TEXT = `# Studio: the board is lead-machine state; studio roadm
 ${BOARD_IGNORE}
 `;
 function ignoreBoard(project) {
-  const file3 = join38(project, ".gitignore");
+  const file3 = join40(project, ".gitignore");
   let text = "";
   if (exists3(file3)) {
-    const st = lstatSync33(file3);
+    const st = lstatSync34(file3);
     if (st.isSymbolicLink() || !st.isFile()) throw new Error(".gitignore is not a plain file");
-    text = readFileSync38(file3, "utf8");
+    text = readFileSync40(file3, "utf8");
   }
   if (text.split(/\r?\n/).some((l) => l.trim() === BOARD_IGNORE)) return;
-  const sep8 = text === "" || text.endsWith("\n") ? "" : "\n";
-  writeFileSync14(file3, `${text}${sep8}${text === "" ? "" : "\n"}${BOARD_IGNORE_TEXT}`);
+  const sep9 = text === "" || text.endsWith("\n") ? "" : "\n";
+  writeFileSync14(file3, `${text}${sep9}${text === "" ? "" : "\n"}${BOARD_IGNORE_TEXT}`);
 }
 async function isIgnored(o2, file3) {
   try {
@@ -52952,7 +54374,7 @@ function nextSteps(prefix, written, checks, launcher2) {
 function writeBoth(o2, dir, files) {
   const write = o2.writeFile ?? ((path10, text) => writeFileSync14(path10, text, { flag: "wx" }));
   const madeDir = !exists3(dir);
-  if (madeDir) mkdirSync10(dir);
+  if (madeDir) mkdirSync11(dir);
   if (!isRealDir3(dir)) throw new Error(".studio is not a directory: nothing written");
   const done = [];
   try {
@@ -52962,18 +54384,18 @@ function writeBoth(o2, dir, files) {
     }
   } catch (e) {
     for (const path10 of done) rmSync8(path10, { force: true });
-    if (madeDir) rmdirSync(dir);
+    if (madeDir) rmdirSync2(dir);
     throw e;
   }
 }
 async function runInit(o2) {
-  const dotStudio = join38(o2.project, ".studio");
+  const dotStudio = join40(o2.project, ".studio");
   if (exists3(dotStudio) && !isRealDir3(dotStudio)) {
     throw new Error(
       ".studio is not a directory (a link or a file): nothing written; remove it first"
     );
   }
-  const present2 = STUDIO_FILES.filter((f3) => exists3(join38(o2.project, f3)));
+  const present2 = STUDIO_FILES.filter((f3) => exists3(join40(o2.project, f3)));
   if (present2.length > 0) {
     throw new Error(
       `${present2.join(" and ")} already exists: Studio is set up here, nothing written; edit the file by hand, or use studio setup ci, studio setup stack and studio doctor`
@@ -53071,7 +54493,7 @@ ${body}`;
   const boardText = BOARD_TEXT(prefix, repo);
   if (primary !== void 0) {
     try {
-      const file3 = join38(dotStudio, "studio.yaml");
+      const file3 = join40(dotStudio, "studio.yaml");
       parseBoard(boardText, boardPath(o2.project), parseConfig(configText, file3));
       checks.push({ name: "proposal", status: "pass", detail: "both files load" });
     } catch (e) {
@@ -53091,7 +54513,7 @@ ${body}`;
       refused = `nothing written: fix ${failed.map((c3) => c3.name).join(", ") || "the checks"} first`;
     } else {
       writeBoth(o2, dotStudio, [
-        [join38(dotStudio, "studio.yaml"), configText],
+        [join40(dotStudio, "studio.yaml"), configText],
         [boardPath(o2.project), boardText]
       ]);
       written.push(...STUDIO_FILES);
@@ -53159,21 +54581,21 @@ ${body}`;
 }
 
 // src/lessons-review.ts
-import { lstatSync as lstatSync34, readFileSync as readFileSync39 } from "node:fs";
-import { join as join39 } from "node:path";
+import { lstatSync as lstatSync35, readFileSync as readFileSync41 } from "node:fs";
+import { join as join41 } from "node:path";
 var LESSONS_REVIEW_DAYS = 7;
 var DAY_MS4 = 864e5;
 var LESSONS_NOTE = "lessons-review: ";
 var NUMBERS_NOTE = "lessons: ";
 var LEAD_WORK = "lead work: studio lessons, then accept or drop each proposal";
 var BY = "studio";
-var recordFile = (stateRoot) => join39(stateRoot, "lessons-review.json");
+var recordFile2 = (stateRoot) => join41(stateRoot, "lessons-review.json");
 function lastRun(stateRoot) {
-  const file3 = recordFile(stateRoot);
+  const file3 = recordFile2(stateRoot);
   try {
     assertStatePath(stateRoot, file3);
-    if (!lstatSync34(file3).isFile()) return void 0;
-    const raw = JSON.parse(readFileSync39(file3, "utf8"));
+    if (!lstatSync35(file3).isFile()) return void 0;
+    const raw = JSON.parse(readFileSync41(file3, "utf8"));
     return typeof raw.lastRun === "string" && !Number.isNaN(Date.parse(raw.lastRun)) ? raw.lastRun : void 0;
   } catch {
     return void 0;
@@ -53243,7 +54665,7 @@ async function runLessonsReview(o2) {
   });
   writeStateFile(
     o2.stateRoot,
-    recordFile(o2.stateRoot),
+    recordFile2(o2.stateRoot),
     `${JSON.stringify({ lastRun: o2.now.toISOString() })}
 `
   );
@@ -53790,15 +55212,15 @@ async function addItem(o2) {
 
 // src/roadmap.ts
 import {
-  existsSync as existsSync11,
-  lstatSync as lstatSync35,
-  readFileSync as readFileSync40,
-  realpathSync as realpathSync9,
+  existsSync as existsSync13,
+  lstatSync as lstatSync36,
+  readFileSync as readFileSync42,
+  realpathSync as realpathSync11,
   renameSync as renameSync14,
   rmSync as rmSync9,
   writeFileSync as writeFileSync15
 } from "node:fs";
-import { dirname as dirname13, isAbsolute as isAbsolute9, join as join40, relative as relative2, resolve as resolve8, sep as sep7 } from "node:path";
+import { dirname as dirname14, isAbsolute as isAbsolute10, join as join42, relative as relative2, resolve as resolve9, sep as sep8 } from "node:path";
 
 // src/epics.ts
 var ONE_LINE2 = /^[^\p{Cc}\p{Cf}]{1,300}$/u;
@@ -54020,30 +55442,30 @@ function renderRoadmap(board) {
 `;
 }
 function projectFile(project, file3) {
-  if (file3 === "" || isAbsolute9(file3) || /^[A-Za-z]:/.test(file3)) {
+  if (file3 === "" || isAbsolute10(file3) || /^[A-Za-z]:/.test(file3)) {
     throw new Error(`${JSON.stringify(file3)}: give a path relative to the project`);
   }
   if (file3.split(/[\\/]/).includes("..")) {
     throw new Error(`${JSON.stringify(file3)}: must stay inside the project`);
   }
-  const root = realpathSync9(project);
-  const wanted = resolve8(root, file3);
-  let dir = dirname13(wanted);
-  while (!existsSync11(dir)) dir = dirname13(dir);
-  const realDir = realpathSync9(dir);
-  const full = join40(realDir, relative2(dir, wanted));
+  const root = realpathSync11(project);
+  const wanted = resolve9(root, file3);
+  let dir = dirname14(wanted);
+  while (!existsSync13(dir)) dir = dirname14(dir);
+  const realDir = realpathSync11(dir);
+  const full = join42(realDir, relative2(dir, wanted));
   const rel = relative2(root, full);
-  if (rel === "" || rel === ".." || rel.startsWith(`..${sep7}`) || isAbsolute9(rel)) {
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep8}`) || isAbsolute10(rel)) {
     throw new Error(`${JSON.stringify(file3)}: must stay inside the project`);
   }
   let link2 = false;
   try {
-    link2 = lstatSync35(full).isSymbolicLink();
+    link2 = lstatSync36(full).isSymbolicLink();
   } catch (e) {
     if (e.code !== "ENOENT") throw e;
   }
   if (link2) throw new Error(`${JSON.stringify(file3)}: is a link; give the file itself`);
-  return { full, rel: rel.split(sep7).join("/") };
+  return { full, rel: rel.split(sep8).join("/") };
 }
 function writeRoadmap(project, out, text, force) {
   const { full: file3, rel } = projectFile(project, out);
@@ -54056,7 +55478,7 @@ function writeRoadmap(project, out, text, force) {
   }
   let old;
   try {
-    old = readFileSync40(file3, "utf8");
+    old = readFileSync42(file3, "utf8");
   } catch (e) {
     if (e.code !== "ENOENT") throw e;
   }
@@ -54066,7 +55488,7 @@ function writeRoadmap(project, out, text, force) {
     );
   }
   if (old === text) return { written: out, changed: false };
-  const tmp = join40(dirname13(file3), `.${process.pid}.${Date.now()}.roadmap.tmp`);
+  const tmp = join42(dirname14(file3), `.${process.pid}.${Date.now()}.roadmap.tmp`);
   try {
     writeFileSync15(tmp, text, { flag: "wx" });
     renameSync14(tmp, file3);
@@ -54081,10 +55503,10 @@ var IMPORT_MAX_LINE = 2e3;
 var IMPORT_MAX_PHASES = 500;
 function readImportFile(project, file3) {
   const { full, rel } = projectFile(project, file3);
-  const st = lstatSync35(full);
+  const st = lstatSync36(full);
   if (!st.isFile()) throw new Error(`${JSON.stringify(file3)}: not a regular file`);
   if (st.size > IMPORT_MAX_BYTES) throw new Error(`${JSON.stringify(file3)}: larger than 1 MB`);
-  return { source: rel, text: readFileSync40(full, "utf8") };
+  return { source: rel, text: readFileSync42(full, "utf8") };
 }
 var CHECKBOX_START = /^[ \t]{0,40}[-*+][ \t]{1,8}\[[ xX~]\]/;
 var CHECKBOX = /^[ \t]{0,40}[-*+][ \t]{1,8}\[([ xX~])\][ \t]+(.*)$/;
@@ -54466,19 +55888,19 @@ var runsSchema = external_exports.record(
   })
 );
 function readRuns(stateRoot) {
-  const file3 = join41(stateRoot, RUNS_FILE);
+  const file3 = join43(stateRoot, RUNS_FILE);
   try {
     assertStatePath(stateRoot, file3);
-    const st = lstatSync36(file3, { throwIfNoEntry: false });
+    const st = lstatSync37(file3, { throwIfNoEntry: false });
     if (st === void 0) return {};
     if (!st.isFile()) return void 0;
-    const parsed = runsSchema.safeParse(JSON.parse(readFileSync41(file3, "utf8")));
+    const parsed = runsSchema.safeParse(JSON.parse(readFileSync43(file3, "utf8")));
     return parsed.success ? parsed.data : void 0;
   } catch {
     return void 0;
   }
 }
-var writeRuns = (stateRoot, runs) => writeStateFile(stateRoot, join41(stateRoot, RUNS_FILE), `${JSON.stringify(runs, null, 2)}
+var writeRuns = (stateRoot, runs) => writeStateFile(stateRoot, join43(stateRoot, RUNS_FILE), `${JSON.stringify(runs, null, 2)}
 `);
 async function prepareAcceptances(o2) {
   const out = {
@@ -54980,20 +56402,20 @@ function applyAcceptance(board, acceptance, done, now, config2) {
 }
 
 // src/adopt.ts
-import { lstatSync as lstatSync40, readdirSync as readdirSync15, readFileSync as readFileSync46, realpathSync as realpathSync10 } from "node:fs";
-import { join as join47, resolve as resolve9 } from "node:path";
+import { lstatSync as lstatSync41, readdirSync as readdirSync16, readFileSync as readFileSync48, realpathSync as realpathSync12 } from "node:fs";
+import { join as join49, resolve as resolve10 } from "node:path";
 
 // src/recover.ts
-import { existsSync as existsSync12, lstatSync as lstatSync39, readdirSync as readdirSync14 } from "node:fs";
-import { join as join46 } from "node:path";
+import { existsSync as existsSync14, lstatSync as lstatSync40, readdirSync as readdirSync15 } from "node:fs";
+import { join as join48 } from "node:path";
 
 // src/flaky-ci.ts
-import { readFileSync as readFileSync43 } from "node:fs";
-import { join as join43 } from "node:path";
+import { readFileSync as readFileSync45 } from "node:fs";
+import { join as join45 } from "node:path";
 
 // src/flaky.ts
-import { readFileSync as readFileSync42 } from "node:fs";
-import { join as join42 } from "node:path";
+import { readFileSync as readFileSync44 } from "node:fs";
+import { join as join44 } from "node:path";
 var MAX_FLAKY = 500;
 var MAX_NAME2 = 200;
 var entrySchema3 = external_exports.object({
@@ -55002,13 +56424,13 @@ var entrySchema3 = external_exports.object({
   lastSha: external_exports.string(),
   lastAt: external_exports.string()
 });
-var fileOf = (stateRoot) => join42(stateRoot, "flaky.json");
+var fileOf = (stateRoot) => join44(stateRoot, "flaky.json");
 function read2(stateRoot) {
   const file3 = fileOf(stateRoot);
   assertStatePath(stateRoot, file3);
   let text;
   try {
-    text = readFileSync42(file3, "utf8");
+    text = readFileSync44(file3, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw new Error("flaky.json cannot be read");
@@ -55065,11 +56487,11 @@ var entrySchema4 = external_exports.strictObject({
   outcome: external_exports.enum(["pass", "fail"]).optional()
 });
 function readLedger2(stateRoot) {
-  const file3 = join43(stateRoot, RERUNS_FILE);
+  const file3 = join45(stateRoot, RERUNS_FILE);
   assertStatePath(stateRoot, file3);
   let text;
   try {
-    text = readFileSync43(file3, "utf8");
+    text = readFileSync45(file3, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw new Error(`${RERUNS_FILE} cannot be read`);
@@ -55086,7 +56508,7 @@ function readLedger2(stateRoot) {
 }
 function writeLedger(stateRoot, entries2, now) {
   const kept = entries2.filter((e) => now.getTime() - Date.parse(e.at) < KEEP_MS2).slice(-MAX_ENTRIES3);
-  writeStateFile(stateRoot, join43(stateRoot, RERUNS_FILE), `${JSON.stringify(kept, null, 2)}
+  writeStateFile(stateRoot, join45(stateRoot, RERUNS_FILE), `${JSON.stringify(kept, null, 2)}
 `);
 }
 function withLedger(stateRoot, now, fn) {
@@ -55325,13 +56747,13 @@ function ciFailurePolicy(o2) {
 }
 
 // src/notify.ts
-import { lstatSync as lstatSync37, readFileSync as readFileSync44 } from "node:fs";
+import { lstatSync as lstatSync38, readFileSync as readFileSync46 } from "node:fs";
 import { homedir as homedir10 } from "node:os";
-import { join as join44 } from "node:path";
+import { join as join46 } from "node:path";
 var MAX_SENDS_PER_RUN = 20;
 var MAX_TEXT2 = 500;
 var NOTIFY_LOCK = "notify.lock";
-var LOCK_STALE_MS5 = 2 * 6e4;
+var LOCK_STALE_MS6 = 2 * 6e4;
 var cleanText = (s) => Array.from(s.replace(new RegExp("\\p{Cc}", "gu"), " ")).slice(0, MAX_TEXT2).join("");
 function ownerText(line4, t) {
   if (line4.code === void 0) return line4.title;
@@ -55363,12 +56785,12 @@ function messagesOf(projectKey, snapshot, t) {
 }
 function readNotified(file3) {
   try {
-    if (!lstatSync37(file3).isFile()) return { ok: false };
+    if (!lstatSync38(file3).isFile()) return { ok: false };
   } catch (e) {
     return e.code === "ENOENT" ? { ok: true, keys: [] } : { ok: false };
   }
   try {
-    const raw = JSON.parse(readFileSync44(file3, "utf8"));
+    const raw = JSON.parse(readFileSync46(file3, "utf8"));
     if (!Array.isArray(raw) || !raw.every((k) => typeof k === "string")) return { ok: false };
     return { ok: true, keys: raw };
   } catch {
@@ -55384,7 +56806,7 @@ async function sendNotifications(o2) {
   if (notify === void 0) return [];
   const lock = acquireStateLock(o2.ownerRoot, NOTIFY_LOCK, {
     now: /* @__PURE__ */ new Date(),
-    heartbeatStaleMs: LOCK_STALE_MS5
+    heartbeatStaleMs: LOCK_STALE_MS6
   });
   if (!lock) return [];
   try {
@@ -55394,7 +56816,7 @@ async function sendNotifications(o2) {
   }
 }
 async function sendLocked(o2, notify, lock) {
-  const file3 = join44(o2.ownerRoot, "notified.json");
+  const file3 = join46(o2.ownerRoot, "notified.json");
   const read3 = readNotified(file3);
   if (!read3.ok) return ["notify: notified.json is unreadable; nothing sent"];
   try {
@@ -55430,11 +56852,11 @@ async function sendLocked(o2, notify, lock) {
     if (penv.PATH !== void 0) env.PATH = penv.PATH;
     lock.heartbeat(/* @__PURE__ */ new Date());
     try {
-      const reply = await o2.ports.credentials.runProvider(notify.command, env, {
+      const reply2 = await o2.ports.credentials.runProvider(notify.command, env, {
         timeoutMs: PROVIDER_TIMEOUT_MS,
         maxBytes: PROVIDER_MAX_BYTES
       });
-      if (reply.code === 0) sent.add(m.key);
+      if (reply2.code === 0) sent.add(m.key);
       else {
         errors.push(
           `notify: the notify command failed (${m.kind}); it and the rest are retried next time`
@@ -55463,8 +56885,8 @@ async function sendLocked(o2, notify, lock) {
 // src/release.ts
 var import_yaml16 = __toESM(require_dist(), 1);
 import { createHash as createHash6 } from "node:crypto";
-import { lstatSync as lstatSync38, readFileSync as readFileSync45 } from "node:fs";
-import { join as join45 } from "node:path";
+import { lstatSync as lstatSync39, readFileSync as readFileSync47 } from "node:fs";
+import { join as join47 } from "node:path";
 
 // src/migrations.ts
 var MIGRATION_RISKS = ["lock", "fails_on_data"];
@@ -55980,14 +57402,14 @@ var short2 = (sha) => sha.slice(0, 7);
 var clean6 = (s, max) => s.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ").trim().slice(0, max);
 var quote = (p) => JSON.stringify(clean6(p, 300));
 function readReleases(stateRoot) {
-  const file3 = join45(stateRoot, RELEASES_FILE);
+  const file3 = join47(stateRoot, RELEASES_FILE);
   assertStatePath(stateRoot, file3);
-  const st = lstatSync38(file3, { throwIfNoEntry: false });
+  const st = lstatSync39(file3, { throwIfNoEntry: false });
   if (st === void 0) return [];
   if (!st.isFile()) throw new Error(`${RELEASES_FILE} in the state root is no regular file`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync45(file3, "utf8"));
+    raw = JSON.parse(readFileSync47(file3, "utf8"));
   } catch {
     throw new Error(`${RELEASES_FILE} in the state root is unreadable; check it by hand`);
   }
@@ -56000,7 +57422,7 @@ function readReleases(stateRoot) {
 function writeReleases(stateRoot, releases) {
   writeStateFile(
     stateRoot,
-    join45(stateRoot, RELEASES_FILE),
+    join47(stateRoot, RELEASES_FILE),
     `${JSON.stringify({ v: 1, releases }, null, 2)}
 `
   );
@@ -57310,8 +58732,8 @@ var LOCKS = [
   { where: "owner", name: LAUNCH_LOCK, staleMs: LAUNCH_LOCK_STALE_MS },
   { where: "owner", name: "limits.lock", staleMs: LOCK_STALE_MS },
   { where: "owner", name: "blocks.lock", staleMs: LOCK_STALE_MS },
-  { where: "owner", name: PUSH_LOCK, staleMs: LOCK_STALE_MS4 },
-  { where: "owner", name: NOTIFY_LOCK, staleMs: LOCK_STALE_MS5 },
+  { where: "owner", name: PUSH_LOCK, staleMs: LOCK_STALE_MS5 },
+  { where: "owner", name: NOTIFY_LOCK, staleMs: LOCK_STALE_MS6 },
   { where: "owner", name: MIGRATE_LOCK, staleMs: LOCK_STALE_MS2 }
 ];
 var ASIDE = /^.+\.lock\.[0-9a-f]{8}\.stale$/;
@@ -57327,7 +58749,7 @@ var LOG_QUIET_MS = 30 * 6e4;
 function logWrittenAgo(stateRoot, item, now) {
   if (!isItemId(item)) return void 0;
   try {
-    const st = lstatSync39(join46(stateRoot, "logs", `${item}.jsonl`));
+    const st = lstatSync40(join48(stateRoot, "logs", `${item}.jsonl`));
     return st.isFile() ? Math.max(0, now.getTime() - st.mtimeMs) : void 0;
   } catch {
     return void 0;
@@ -57336,7 +58758,7 @@ function logWrittenAgo(stateRoot, item, now) {
 function hasReport2(stateRoot, item) {
   if (!isItemId(item)) return false;
   const name = reportName(stateRoot, item);
-  return name !== void 0 && existsSync12(join46(stateRoot, "clones", item, ".studio", "reports", name));
+  return name !== void 0 && existsSync14(join48(stateRoot, "clones", item, ".studio", "reports", name));
 }
 async function recoverProject(o2) {
   const out = { dryRun: o2.dryRun, findings: [], needsLead: [] };
@@ -57348,7 +58770,7 @@ async function recoverProject(o2) {
   if (o2.scope === "all") {
     for (const l of LOCKS) {
       const root = l.where === "project" ? o2.stateRoot : o2.ownerRoot;
-      if (!existsSync12(root)) continue;
+      if (!existsSync14(root)) continue;
       const opts = { now: o2.now, heartbeatStaleMs: l.staleMs };
       const seen = inspectStateLock(root, l.name, opts);
       if (seen.state === "free") continue;
@@ -57375,17 +58797,17 @@ async function recoverProject(o2) {
     for (const root of [o2.stateRoot, o2.ownerRoot]) {
       let names;
       try {
-        names = readdirSync14(root);
+        names = readdirSync15(root);
       } catch {
         continue;
       }
       for (const name of names) {
-        const file3 = join46(root, name);
+        const file3 = join48(root, name);
         const tmp = TMP.exec(name);
         let gone = false;
         if (ASIDE.test(name)) {
           try {
-            const st = lstatSync39(file3);
+            const st = lstatSync40(file3);
             gone = st.isFile() && o2.now.getTime() - st.ctimeMs >= ASIDE_GRACE_MS;
           } catch {
             gone = false;
@@ -57407,10 +58829,10 @@ async function recoverProject(o2) {
       }
     }
   }
-  if (!existsSync12(o2.stateRoot)) return out;
+  if (!existsSync14(o2.stateRoot)) return out;
   const records = readCrewRecords(o2.stateRoot);
   const board = loadBoard(o2.project);
-  const launching = existsSync12(o2.ownerRoot) && inspectStateLock(o2.ownerRoot, LAUNCH_LOCK, {
+  const launching = existsSync14(o2.ownerRoot) && inspectStateLock(o2.ownerRoot, LAUNCH_LOCK, {
     now: o2.now,
     heartbeatStaleMs: LAUNCH_LOCK_STALE_MS
   }).state === "held";
@@ -57593,37 +59015,37 @@ var QUEUE = "queue.json";
 var shellWord = (p) => /^[\w./:@%+=,-]+$/.test(p) ? p : `'${p.replaceAll("'", "'\\''")}'`;
 function plainFile(file3) {
   try {
-    const st = lstatSync40(file3);
+    const st = lstatSync41(file3);
     if (st.isSymbolicLink()) throw new Error(`refusing ${file3}: it is a symlink`);
     if (!st.isFile()) throw new Error(`refusing ${file3}: it is not a plain file`);
-    return readFileSync46(file3, "utf8");
+    return readFileSync48(file3, "utf8");
   } catch (e) {
     if (e.code === "ENOENT") return void 0;
     throw e;
   }
 }
-function isDir2(p) {
+function isDir3(p) {
   try {
-    const st = lstatSync40(p);
+    const st = lstatSync41(p);
     return st.isDirectory() && !st.isSymbolicLink();
   } catch {
     return false;
   }
 }
 function markerOrigin(root) {
-  const text = plainFile(join47(root, "marker.json"));
+  const text = plainFile(join49(root, "marker.json"));
   if (text === void 0) throw new Error(`${root} has no marker.json: it is not a state root`);
   let m;
   try {
     m = JSON.parse(text);
   } catch {
-    throw new Error(`${join47(root, "marker.json")} is unreadable`);
+    throw new Error(`${join49(root, "marker.json")} is unreadable`);
   }
   if (typeof m?.originUrl !== "string") throw new Error(`${root}/marker.json names no origin`);
   return m.originUrl;
 }
 async function busy(root, label, ports, now) {
-  if (!isDir2(root)) return [];
+  if (!isDir3(root)) return [];
   const why = [];
   const records = readCrewRecords(root);
   for (const rec of Object.values(records)) {
@@ -57642,7 +59064,7 @@ async function busy(root, label, ports, now) {
       why.push(`${label}: ${what}`);
     }
   }
-  const q = plainFile(join47(root, QUEUE));
+  const q = plainFile(join49(root, QUEUE));
   if (q !== void 0) {
     try {
       const cur = JSON.parse(q).current;
@@ -57657,11 +59079,11 @@ async function busy(root, label, ports, now) {
 var lines = (text) => text.split("\n").filter((l) => l.trim() !== "");
 var doneKey = (d) => `${d.repo}#${d.pr}|${d.result}|${d.at}`;
 async function adoptStateRoot(o2) {
-  const from = resolve9(o2.from);
-  if (!isDir2(from))
+  const from = resolve10(o2.from);
+  if (!isDir3(from))
     throw new Error(`${from} is not a state root folder (missing, a link or a file)`);
-  const realFrom = realpathSync10(from);
-  if (isDir2(o2.to) && realpathSync10(o2.to) === realFrom) {
+  const realFrom = realpathSync12(from);
+  if (isDir3(o2.to) && realpathSync12(o2.to) === realFrom) {
     throw new Error(`${from} is this project's own state root; nothing to adopt`);
   }
   const oldOrigin = markerOrigin(from);
@@ -57681,9 +59103,9 @@ async function adoptStateRoot(o2) {
   const files = [];
   const writes = [];
   for (const f3 of ADOPT_FILES) {
-    const old = plainFile(join47(from, f3.name));
+    const old = plainFile(join49(from, f3.name));
     if (old === void 0) continue;
-    const cur = isDir2(o2.to) ? plainFile(join47(o2.to, f3.name)) : void 0;
+    const cur = isDir3(o2.to) ? plainFile(join49(o2.to, f3.name)) : void 0;
     if (cur === void 0) {
       files.push({ name: f3.name, action: "copy" });
       writes.push({ name: f3.name, content: old });
@@ -57708,13 +59130,13 @@ async function adoptStateRoot(o2) {
   }
   let queueDone = [];
   let pendingLeft = 0;
-  const oldQueue = plainFile(join47(from, QUEUE));
+  const oldQueue = plainFile(join49(from, QUEUE));
   if (oldQueue !== void 0) {
     const q = JSON.parse(oldQueue);
     pendingLeft = q.pending?.length ?? 0;
     queueDone = q.done ?? [];
     if (queueDone.length > 0) {
-      const curText = isDir2(o2.to) ? plainFile(join47(o2.to, QUEUE)) : void 0;
+      const curText = isDir3(o2.to) ? plainFile(join49(o2.to, QUEUE)) : void 0;
       const have = new Set(
         (curText === void 0 ? {} : JSON.parse(curText)).done?.map(doneKey) ?? []
       );
@@ -57725,7 +59147,7 @@ async function adoptStateRoot(o2) {
     }
   }
   const known = /* @__PURE__ */ new Set([...ADOPT_FILES.map((f3) => f3.name), QUEUE]);
-  const left = readdirSync15(from).filter((e) => !known.has(e)).sort();
+  const left = readdirSync16(from).filter((e) => !known.has(e)).sort();
   const deleteOld = `rm -rf -- ${shellWord(from)}`;
   const changes = files.some((f3) => f3.action === "copy" || f3.action === "merge");
   if (o2.apply && changes) {
@@ -57737,7 +59159,7 @@ async function adoptStateRoot(o2) {
     if (lock === void 0)
       throw new Error("not now: a tick is running in this root; nothing changed");
     try {
-      for (const w of writes) writeStateFile(o2.to, join47(o2.to, w.name), w.content);
+      for (const w of writes) writeStateFile(o2.to, join49(o2.to, w.name), w.content);
       if (queueDone.length > 0) {
         updateQueue(
           o2.to,
@@ -57814,6 +59236,10 @@ var COMMANDS = [
   {
     usage: "worker --label <label> [--once]",
     about: "Serve offered items of this label on this machine: claim one, run its crew, open its pull request, hand the report back"
+  },
+  {
+    usage: "worker windows-setup",
+    about: "Print the one-time PowerShell script of the Windows crew sandbox user (run it elevated)"
   },
   {
     usage: "overview",
@@ -58024,26 +59450,26 @@ function helpText() {
 var USAGE = helpText();
 
 // src/overview.ts
-import { lstatSync as lstatSync41, readFileSync as readFileSync47 } from "node:fs";
-import { basename as basename6, isAbsolute as isAbsolute10, join as join48 } from "node:path";
+import { lstatSync as lstatSync42, readFileSync as readFileSync49 } from "node:fs";
+import { basename as basename6, isAbsolute as isAbsolute11, join as join50 } from "node:path";
 var line3 = (e) => (e instanceof Error ? e.message : String(e)).replace(/[\p{Cc}\p{Cf}]/gu, " ");
 var INCONSISTENT_ROOT = "inconsistent state root: its marker names a project whose state root is another one";
 function markerProject(root) {
-  const file3 = join48(root, "marker.json");
+  const file3 = join50(root, "marker.json");
   try {
-    if (!lstatSync41(file3).isFile()) throw new Error(`${file3} is not a plain file`);
+    if (!lstatSync42(file3).isFile()) throw new Error(`${file3} is not a plain file`);
   } catch (e) {
     if (e.code === "ENOENT") return void 0;
     throw e;
   }
   let raw;
   try {
-    raw = JSON.parse(readFileSync47(file3, "utf8"));
+    raw = JSON.parse(readFileSync49(file3, "utf8"));
   } catch {
     throw new Error(`state root marker ${file3} is unreadable`);
   }
   const p = raw?.projectRealpath;
-  if (typeof p !== "string" || !isAbsolute10(p)) {
+  if (typeof p !== "string" || !isAbsolute11(p)) {
     throw new Error(`state root marker ${file3} names no project`);
   }
   return p;
@@ -58052,7 +59478,7 @@ function itemCounts(project) {
   const file3 = boardPath(project);
   let plain2 = true;
   try {
-    plain2 = lstatSync41(file3).isFile();
+    plain2 = lstatSync42(file3).isFile();
   } catch {
   }
   if (!plain2) throw new Error(`${file3}: board.yaml is not a plain file`);
@@ -58241,7 +59667,7 @@ function privacyLine(hits) {
 // src/pull-request.ts
 import { mkdtempSync as mkdtempSync2, rmSync as rmSync10, writeFileSync as writeFileSync16 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join49 } from "node:path";
+import { join as join51 } from "node:path";
 var PR_BODY_MAX = 2e4;
 function crewPrText(item, body, notRunHere) {
   return `Opened by Studio for ${item.id}; the text below the line was written by the crew.
@@ -58280,9 +59706,9 @@ async function openCrewPr(ports, item, title, body, notRunHere, token, capacity,
     throw new Error(`the pull request title for ${head} is empty; nothing moved`);
   const text = crewPrText(item, body, notRunHere);
   const withBody = async (use) => {
-    const dir = mkdtempSync2(join49(tmpdir2(), "studio-pr-"));
+    const dir = mkdtempSync2(join51(tmpdir2(), "studio-pr-"));
     try {
-      const file3 = join49(dir, "body.md");
+      const file3 = join51(dir, "body.md");
       writeFileSync16(file3, text, { mode: 384 });
       return await use(file3);
     } finally {
@@ -58345,16 +59771,16 @@ ${lines2.join("\n")}
 // src/setup.ts
 import {
   chmodSync as chmodSync6,
-  lstatSync as lstatSync42,
-  mkdirSync as mkdirSync11,
-  readFileSync as readFileSync48,
+  lstatSync as lstatSync43,
+  mkdirSync as mkdirSync12,
+  readFileSync as readFileSync50,
   renameSync as renameSync15,
   rmSync as rmSync11,
   statSync as statSync7,
   writeFileSync as writeFileSync17
 } from "node:fs";
 import { homedir as homedir11 } from "node:os";
-import { dirname as dirname14, join as join50, resolve as resolve10 } from "node:path";
+import { dirname as dirname15, join as join52, resolve as resolve11 } from "node:path";
 var DEFAULT_LABEL2 = "main";
 var MAX_LABEL = 32;
 var TOKEN_TEXT = [
@@ -58415,7 +59841,7 @@ var SHIM_NOTE = "   The shim finds the plugin again after an update; no need to 
 var shQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 function studioOnPath(env) {
   for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
-    const file3 = join50(dir, "studio");
+    const file3 = join52(dir, "studio");
     try {
       const st = statSync7(file3);
       if (st.isFile() && (st.mode & 73) !== 0) return file3;
@@ -58426,7 +59852,7 @@ function studioOnPath(env) {
 }
 var yes = (answer) => /^(|y|yes)$/i.test(answer.trim());
 function writeAtomic2(file3, text, mode) {
-  const tmp = join50(dirname14(file3), `.studio-${process.pid}-${Date.now()}.tmp`);
+  const tmp = join52(dirname15(file3), `.studio-${process.pid}-${Date.now()}.tmp`);
   try {
     writeFileSync17(tmp, text, { flag: "wx", mode });
     chmodSync6(tmp, mode);
@@ -58490,8 +59916,8 @@ async function link(o2, home) {
     return 0;
   }
   const launcher2 = o2.launcher;
-  const localBin = join50(home, ".local", "bin");
-  const onPath = (o2.env.PATH ?? "").split(":").some((d) => d !== "" && resolve10(d) === resolve10(localBin));
+  const localBin = join52(home, ".local", "bin");
+  const onPath = (o2.env.PATH ?? "").split(":").some((d) => d !== "" && resolve11(d) === resolve11(localBin));
   if (!onPath) {
     say("4. studio in your terminal: ~/.local/bin is not on your PATH.");
     say("   Studio does not edit shell files. Add ~/.local/bin to PATH in your shell's startup");
@@ -58499,16 +59925,16 @@ async function link(o2, home) {
     say(`   Until then: node ${shQuote(launcher2)} <command>`);
     return 0;
   }
-  const target = join50(localBin, "studio");
+  const target = join52(localBin, "studio");
   let current;
   try {
-    current = lstatSync42(target).isFile() ? readFileSync48(target, "utf8") : "";
+    current = lstatSync43(target).isFile() ? readFileSync50(target, "utf8") : "";
   } catch {
     current = void 0;
   }
-  const cache2 = join50(ownerConfigDir(o2.owner), "launcher");
+  const cache2 = join52(ownerConfigDir(o2.owner), "launcher");
   const writeCache = () => {
-    mkdirSync11(dirname14(cache2), { recursive: true, mode: 448 });
+    mkdirSync12(dirname15(cache2), { recursive: true, mode: 448 });
     writeAtomic2(cache2, `${launcher2}
 `, 384);
   };
@@ -58533,7 +59959,7 @@ async function link(o2, home) {
     say(`   nothing written; until you do: node ${shQuote(launcher2)} <command>`);
     return 0;
   }
-  mkdirSync11(localBin, { recursive: true });
+  mkdirSync12(localBin, { recursive: true });
   writeCache();
   writeAtomic2(target, SHIM, 493);
   say(`   wrote ${target}`);
@@ -58665,12 +60091,12 @@ async function notificationsStep(o2, again) {
     say("   nothing stored; later: studio setup --notifications");
     return 0;
   }
-  const reply = await sendPush(http, secret, config2, {
+  const reply2 = await sendPush(http, secret, config2, {
     text: testPushText(pushLanguage(config2, o2.env, claudeLanguage(o2.owner, o2.project))),
     urgent: false
   });
-  if (!reply.ok) {
-    say(`   test push failed: ${pushFailure(reply)}; nothing stored`);
+  if (!reply2.ok) {
+    say(`   test push failed: ${pushFailure(reply2)}; nothing stored`);
     return 1;
   }
   installNotifySecret(secret, o2.owner);
@@ -58768,20 +60194,20 @@ async function runSetup(o2) {
 }
 
 // src/skills-check.ts
-import { existsSync as existsSync13, lstatSync as lstatSync43, readFileSync as readFileSync49 } from "node:fs";
-import { join as join51 } from "node:path";
+import { existsSync as existsSync15, lstatSync as lstatSync44, readFileSync as readFileSync51 } from "node:fs";
+import { join as join53 } from "node:path";
 var SKILLS_CHECK_DAYS = 30;
 var DAY_MS6 = 864e5;
 var NOTE = "skills-update: ";
 var PLUGIN_TIMEOUT_MS = 3e5;
-var recordFile2 = (stateRoot) => join51(stateRoot, "skills-check.json");
+var recordFile3 = (stateRoot) => join53(stateRoot, "skills-check.json");
 var at = (v) => typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : void 0;
 function readRecord(stateRoot) {
-  const file3 = recordFile2(stateRoot);
+  const file3 = recordFile3(stateRoot);
   try {
     assertStatePath(stateRoot, file3);
-    if (!lstatSync43(file3).isFile()) return {};
-    const raw = JSON.parse(readFileSync49(file3, "utf8"));
+    if (!lstatSync44(file3).isFile()) return {};
+    const raw = JSON.parse(readFileSync51(file3, "utf8"));
     const lastRun2 = at(raw.lastRun);
     const lastAttempt = at(raw.lastAttempt);
     return {
@@ -58922,7 +60348,7 @@ async function runSkillsCheck(o2) {
   let offered = /* @__PURE__ */ new Map();
   const { dir, runEnv } = pluginEnv(o2.owner, o2.env);
   if (o2.ports.plugins === void 0) fail3("plugins: no claude command available");
-  else if (!existsSync13(dir)) {
+  else if (!existsSync15(dir)) {
     fail3("plugins: the crew config dir is missing; run studio account setup-plugins");
   } else {
     try {
@@ -58978,7 +60404,7 @@ async function runSkillsCheck(o2) {
   const lastRun2 = failed ? before : now.toISOString();
   writeStateFile(
     o2.stateRoot,
-    recordFile2(o2.stateRoot),
+    recordFile3(o2.stateRoot),
     `${JSON.stringify({ ...lastRun2 === void 0 ? {} : { lastRun: lastRun2 }, lastAttempt: now.toISOString() })}
 `
   );
@@ -59005,278 +60431,21 @@ async function runSkillsCheck(o2) {
 }
 
 // src/worker.ts
-import { existsSync as existsSync15, lstatSync as lstatSync44, readdirSync as readdirSync16, readFileSync as readFileSync51 } from "node:fs";
+import { existsSync as existsSync16, lstatSync as lstatSync45, readdirSync as readdirSync17, readFileSync as readFileSync52 } from "node:fs";
 import { homedir as homedir12 } from "node:os";
-import { dirname as dirname15, join as join53 } from "node:path";
-
-// src/worker-deny.ts
-import { existsSync as existsSync14, readFileSync as readFileSync50, realpathSync as realpathSync11 } from "node:fs";
-import { isIP as isIP2 } from "node:net";
-import { isAbsolute as isAbsolute11, join as join52, posix } from "node:path";
-var readText = (file3) => {
-  try {
-    return readFileSync50(file3, "utf8");
-  } catch {
-    return void 0;
-  }
-};
-function automountRoot(conf) {
-  let section = "";
-  for (const raw of (conf ?? "").split(/\r?\n/)) {
-    const line4 = raw.replace(/[#;].*$/, "").trim();
-    const head = /^\[(.+)\]$/.exec(line4);
-    if (head) {
-      section = head[1].trim().toLowerCase();
-      continue;
-    }
-    const kv = /^([A-Za-z]+)\s*=\s*(.+)$/.exec(line4);
-    if (section === "automount" && kv && kv[1].toLowerCase() === "root") {
-      const v = kv[2].trim().replace(/^"(.*)"$/, "$1");
-      if (v.startsWith("/") && !v.split("/").includes("..")) return v.endsWith("/") ? v : `${v}/`;
-    }
-  }
-  return "/mnt/";
-}
-function windowsMountsOf(mountinfo) {
-  const out = [];
-  for (const line4 of (mountinfo ?? "").split("\n")) {
-    const [left, right] = line4.split(" - ");
-    if (left === void 0 || right === void 0) continue;
-    const point = left.split(" ")[4];
-    const type = right.split(" ")[0];
-    if (point === void 0 || type === void 0) continue;
-    if (!/^(drvfs|9p|virtiofs)$/.test(type)) continue;
-    const p = point.replace(
-      /\\([0-7]{3})/g,
-      (_, o2) => String.fromCharCode(Number.parseInt(o2, 8))
-    );
-    if (p.startsWith("/") && p !== "/" && !out.includes(p)) out.push(p);
-  }
-  return out;
-}
-function detectPlatform(platform2 = process.platform, read3 = readText, env = process.env, exists4 = existsSync14) {
-  if (platform2 !== "linux") return { platform: platform2, wsl: "none", automountRoot: "/mnt/" };
-  const release2 = read3("/proc/sys/kernel/osrelease") ?? "";
-  const signs = /microsoft/i.test(release2) || read3("/proc/sys/fs/binfmt_misc/WSLInterop") !== void 0 || read3("/proc/sys/fs/binfmt_misc/WSLInterop-late") !== void 0 || (env.WSL_DISTRO_NAME ?? "") !== "" || exists4("/run/WSL");
-  if (!signs) return { platform: platform2, wsl: "none", automountRoot: "/mnt/" };
-  const wsl = /WSL2|microsoft-standard/i.test(release2) ? "wsl2" : /microsoft/i.test(release2) ? "wsl1" : "unknown";
-  const entries2 = [
-    read3("/proc/sys/fs/binfmt_misc/WSLInterop"),
-    read3("/proc/sys/fs/binfmt_misc/WSLInterop-late")
-  ].filter((e) => e !== void 0);
-  const status = read3("/proc/sys/fs/binfmt_misc/status");
-  let interop;
-  if (entries2.length > 0) interop = entries2.some((e) => /^enabled/m.test(e));
-  else if (status !== void 0) interop = false;
-  return {
-    platform: platform2,
-    wsl,
-    ...interop === void 0 ? {} : { interop },
-    automountRoot: automountRoot(read3("/etc/wsl.conf")),
-    windowsMounts: windowsMountsOf(read3("/proc/self/mountinfo"))
-  };
-}
-function sandboxProblem(p) {
-  if (p.platform === "win32") {
-    return "native Windows has no sandbox for crew commands (Claude Code runs them unsandboxed there); run studio worker inside a WSL2 distribution on this machine";
-  }
-  if (p.platform !== "linux" && p.platform !== "darwin") {
-    return `${p.platform} has no sandbox for crew commands; a worker runs on macOS, Linux or WSL2`;
-  }
-  if (p.wsl === "unknown") {
-    return "this looks like WSL, but its version cannot be told; a worker runs only in WSL2 with interop off";
-  }
-  if (p.wsl === "wsl1") {
-    return "WSL1 has no sandbox for crew commands; convert the distribution to WSL2 (wsl --set-version <distro> 2)";
-  }
-  if (p.wsl === "wsl2" && p.interop !== false) {
-    return p.interop === void 0 ? "cannot tell whether WSL interop is off: a crew could start Windows programs outside the sandbox; set [interop] enabled=false in /etc/wsl.conf, run wsl --shutdown and start the worker again" : "WSL interop is on: a crew could start Windows programs, which run outside the sandbox; set [interop] enabled=false in /etc/wsl.conf, run wsl --shutdown and start the worker again";
-  }
-  return void 0;
-}
-var WINDOWS_DRIVE = /^([A-Za-z]):[\\/]/;
-var realOr3 = (p) => {
-  try {
-    return realpathSync11(p);
-  } catch {
-    return p;
-  }
-};
-function normalizeHost(host) {
-  let h2 = host.toLowerCase();
-  if (h2 === "*") return { host: "*", wildcard: true, ip: 0 };
-  const wildcard = h2.startsWith("*.");
-  if (wildcard) h2 = h2.slice(2);
-  if (h2.endsWith(".")) h2 = h2.slice(0, -1);
-  if (h2 === "" || h2.endsWith(".")) return void 0;
-  const forUrl = h2.includes(":") && !h2.startsWith("[") ? `[${h2}]` : h2;
-  let parsed;
-  try {
-    parsed = new URL(`http://${forUrl}/`).hostname;
-  } catch {
-    return void 0;
-  }
-  if (parsed === "") return void 0;
-  const bare = parsed.startsWith("[") && parsed.endsWith("]") ? parsed.slice(1, -1) : parsed;
-  const ip = isIP2(bare);
-  return { host: bare, wildcard, ip: ip === 4 ? 4 : ip === 6 ? 6 : 0 };
-}
-function localName(host) {
-  const n4 = normalizeHost(host);
-  if (n4 === void 0) return true;
-  const h2 = n4.host;
-  if (h2 === "*" || h2 === "localhost" || h2.endsWith(".localhost")) return true;
-  if (n4.ip !== 0) return false;
-  if (!h2.includes(".")) return true;
-  return /\.(local|lan|internal|intranet|home\.arpa|localdomain)$/.test(h2);
-}
-function ipLiteral(host) {
-  const n4 = normalizeHost(host);
-  return n4 !== void 0 && !n4.wildcard && n4.ip !== 0;
-}
-function hostPort(entry) {
-  const v6 = /^(\[[^\]]+\])(?::(\d+))?$/.exec(entry);
-  if (v6) return { host: v6[1], ...v6[2] ? { port: Number(v6[2]) } : {} };
-  const m = /^([^:]+):(\d+)$/.exec(entry);
-  return m ? { host: m[1], port: Number(m[2]) } : { host: entry };
-}
-function enforceDeny(o2) {
-  const paths = [];
-  const notes = [];
-  const key = (p) => pathKey(p, o2.platform.platform);
-  const wsl = o2.platform.wsl === "wsl2";
-  const root = o2.platform.automountRoot;
-  const explicit = [];
-  for (const entry of o2.deny.paths) {
-    const drive = WINDOWS_DRIVE.exec(entry);
-    let target;
-    if (drive) {
-      if (!wsl) {
-        return {
-          refused: `deny path ${entry} is a Windows path: only a worker inside WSL2 can enforce it`
-        };
-      }
-      target = `${root}${drive[1].toLowerCase()}`;
-      notes.push(
-        `deny path ${entry}: the whole drive ${target} is denied, because Windows drives ignore case and a narrower rule could be bypassed by another spelling`
-      );
-    } else {
-      if (!isAbsolute11(entry) || entry.includes("\\")) {
-        return { refused: `deny path ${entry} is not an absolute path` };
-      }
-      target = posix.normalize(entry).replace(/\/+$/, "") || "/";
-      const mounted = wsl ? new RegExp(`^${root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([a-z])(/|$)`, "i").exec(
-        target
-      ) : null;
-      if (mounted) {
-        const whole = `${root}${mounted[1].toLowerCase()}`;
-        if (whole !== target) {
-          notes.push(
-            `deny path ${entry}: the whole drive ${whole} is denied, because Windows drives ignore case and a narrower rule could be bypassed by another spelling`
-          );
-        }
-        target = whole;
-      }
-    }
-    if (target === "/") return { refused: `deny path ${entry} denies everything` };
-    explicit.push(target);
-    for (const spelling of [target, realOr3(target)]) {
-      const k = key(spelling);
-      const hit = o2.keep.find((p) => within(key(p), k) || within(k, key(p)));
-      if (hit !== void 0) {
-        return {
-          refused: `deny path ${entry} overlaps ${hit}, which the worker needs for its own checkout, state or toolchains`
-        };
-      }
-      if (!paths.includes(spelling)) paths.push(spelling);
-    }
-  }
-  const allowRead = [];
-  if (wsl) {
-    const defaults = [root.replace(/\/+$/, ""), ...o2.platform.windowsMounts ?? []];
-    for (const d of defaults) {
-      if (d === "" || d === "/") continue;
-      const hit = o2.keep.find((p) => within(key(p), key(d)));
-      if (hit !== void 0) {
-        return {
-          refused: `${hit} lies on a Windows file system (${d}); keep the worker's checkout, state and toolchains in the Linux file system`
-        };
-      }
-      if (!paths.includes(d)) paths.push(d);
-    }
-    for (const entry of o2.allowRead ?? []) {
-      const drive = WINDOWS_DRIVE.exec(entry);
-      const target = drive ? `${root}${drive[1].toLowerCase()}/${entry.slice(3).replace(/\\/g, "/")}`.replace(
-        /\/+$/,
-        ""
-      ) : posix.normalize(entry).replace(/\/+$/, "");
-      if (!isAbsolute11(target) || !defaults.some((d) => within(target, d))) {
-        return {
-          refused: `allow_read ${entry} does not lie on a Windows file system of this machine`
-        };
-      }
-      const denied = explicit.find((d) => within(target, d) || within(d, target));
-      if (denied !== void 0) {
-        return {
-          refused: `allow_read ${entry} lies inside the denied ${denied}; the deny list wins`
-        };
-      }
-      if (!allowRead.includes(target)) allowRead.push(target);
-    }
-  } else if ((o2.allowRead ?? []).length > 0) {
-    return {
-      refused: "allow_read opens places on Windows file systems and only holds inside WSL2"
-    };
-  }
-  for (const entry of o2.networkAllow) {
-    const normal = normalizeHost(hostPort(entry).host);
-    if (normal?.wildcard === true && normal.ip !== 0 || wildcardOverIp(entry)) {
-      return { refused: `network_allow entry ${entry} is a wildcard over an IP address` };
-    }
-  }
-  const ports = [...new Set(o2.deny.ports)].sort((a2, b) => a2 - b);
-  if (ports.length > 0) {
-    for (const entry of o2.networkAllow) {
-      const { host, port } = hostPort(entry);
-      const normal = normalizeHost(host);
-      if (normal === void 0) {
-        return { refused: `network_allow entry ${entry} cannot be read as a host` };
-      }
-      if (port !== void 0 && ports.includes(port)) {
-        return { refused: `network_allow entry ${entry} opens denied port ${port}` };
-      }
-      if ((ipLiteral(host) || localName(host)) && port === void 0) {
-        return {
-          refused: `network_allow entry ${entry} may reach this machine or its network on every port, and ports ${ports.join(", ")} are denied: name the port (${host}:443) or remove the entry`
-        };
-      }
-    }
-  }
-  return { paths, ports, allowRead, notes };
-}
-function mergeDeny(...lists) {
-  const paths = [];
-  const ports = [];
-  for (const l of lists) {
-    for (const p of l?.paths ?? []) if (!paths.includes(p)) paths.push(p);
-    for (const p of l?.ports ?? []) if (!ports.includes(p)) ports.push(p);
-  }
-  return { paths, ports };
-}
-
-// src/worker.ts
+import { dirname as dirname16, join as join54 } from "node:path";
 var WORKER_FILE = "worker.json";
 var WORKER_LOCK = "worker.lock";
 var WORKER_LOCK_STALE_MS = 3 * 60 * 6e4;
 var MAX_OWN_BEATS = 20;
 function readWorkerState(stateRoot, label) {
-  const file3 = join53(stateRoot, WORKER_FILE);
+  const file3 = join54(stateRoot, WORKER_FILE);
   assertStatePath(stateRoot, file3);
-  if (!existsSync15(file3)) return { label };
-  if (!lstatSync44(file3).isFile()) throw new Error(`${file3} is not a plain file`);
+  if (!existsSync16(file3)) return { label };
+  if (!lstatSync45(file3).isFile()) throw new Error(`${file3} is not a plain file`);
   let raw;
   try {
-    raw = JSON.parse(readFileSync51(file3, "utf8"));
+    raw = JSON.parse(readFileSync52(file3, "utf8"));
   } catch {
     throw new Error(`${file3} is not valid JSON; inspect it before the worker goes on`);
   }
@@ -59314,7 +60483,7 @@ function saveWorkerState(stateRoot, s) {
       if (v !== void 0) out[k] = v;
     } else if (s[k] === void 0) delete out[k];
   }
-  writeStateFile(stateRoot, join53(stateRoot, WORKER_FILE), `${JSON.stringify(out, null, 2)}
+  writeStateFile(stateRoot, join54(stateRoot, WORKER_FILE), `${JSON.stringify(out, null, 2)}
 `);
 }
 async function mainConfig(c3) {
@@ -59334,11 +60503,11 @@ async function pinnedMain2(project, ports) {
 }
 var CONTENT_PATH = /^\.studio\/(roles|solutions)\/[A-Za-z0-9._-]{1,100}\.md$/;
 async function pinnedContent(c3, stateRoot, sha) {
-  const base = join53(stateRoot, "pinned");
-  const dir = join53(base, sha);
-  if (existsSync15(join53(dir, ".complete"))) return dir;
+  const base = join54(stateRoot, "pinned");
+  const dir = join54(base, sha);
+  if (existsSync16(join54(dir, ".complete"))) return dir;
   ensureStateDir(stateRoot, base);
-  for (const old of readdirSync16(base)) removeStateEntry(stateRoot, join53(base, old));
+  for (const old of readdirSync17(base)) removeStateEntry(stateRoot, join54(base, old));
   const g3 = (args) => c3.ports.git.run(c3.project, ["--no-replace-objects", ...args]);
   const tree = await g3(["ls-tree", "-r", sha, "--", ".studio/roles", ".studio/solutions"]);
   ensureStateDir(stateRoot, dir);
@@ -59347,20 +60516,20 @@ async function pinnedContent(c3, stateRoot, sha) {
     const m = /^100644 blob ([0-9a-f]{40})\t(.+)$/.exec(line4);
     if (!m || !CONTENT_PATH.test(m[2]) || n4++ >= 500) continue;
     const text = await g3(["cat-file", "blob", m[1]]);
-    const file3 = join53(dir, m[2]);
-    ensureStateDir(stateRoot, dirname15(file3));
+    const file3 = join54(dir, m[2]);
+    ensureStateDir(stateRoot, dirname16(file3));
     writeStateFile(stateRoot, file3, `${text}
 `);
   }
-  writeStateFile(stateRoot, join53(dir, ".complete"), `${sha}
+  writeStateFile(stateRoot, join54(dir, ".complete"), `${sha}
 `);
   return dir;
 }
 function crewConfigDir2(owner) {
   const env = owner.env ?? process.env;
   const stored = crewClaudeDir(owner);
-  if (existsSync15(stored)) return stored;
-  return env.CLAUDE_CONFIG_DIR || join53(owner.homedir ?? homedir12(), ".claude");
+  if (existsSync16(stored)) return stored;
+  return env.CLAUDE_CONFIG_DIR || join54(owner.homedir ?? homedir12(), ".claude");
 }
 function strictPinProblem(configDir, pins) {
   const have = installedVersions(configDir);
@@ -59380,8 +60549,9 @@ function strictPinProblem(configDir, pins) {
 }
 var opensPr = (item) => item.type !== "research" && item.type !== "review";
 async function readiness(c3, stateRoot) {
-  const platform2 = c3.platform();
-  const problem = sandboxProblem(platform2);
+  let platform2 = c3.platform();
+  const probed = platform2.platform === "win32" && c3.windows !== void 0;
+  const problem = probed ? void 0 : sandboxProblem(platform2);
   if (problem !== void 0) return { ok: false, kind: "refused", line: problem };
   const ownerConfig = loadOwnerConfig(c3.owner);
   const self = ownerConfig.workers?.self;
@@ -59401,7 +60571,7 @@ async function readiness(c3, stateRoot) {
       line: "this machine's GitHub token is the lead's own identity; a worker needs a token of its own, so its claims and pull requests can be told apart"
     };
   }
-  const stateBase = dirname15(stateRoot);
+  const stateBase = dirname16(stateRoot);
   const deny = enforceDeny({
     deny: mergeDeny(config2.workers?.[c3.label]?.deny, self.deny),
     platform: platform2,
@@ -59410,6 +60580,14 @@ async function readiness(c3, stateRoot) {
     allowRead: self.allowRead
   });
   if ("refused" in deny) return { ok: false, kind: "refused", line: deny.refused };
+  if (probed && c3.windows !== void 0) {
+    platform2 = {
+      ...platform2,
+      windowsSandbox: { user: c3.windows.user, problem: await c3.windows.probe(deny.paths) }
+    };
+    const held2 = sandboxProblem(platform2);
+    if (held2 !== void 0) return { ok: false, kind: "refused", line: held2 };
+  }
   const pins = strictPinProblem(
     crewConfigDir2(c3.owner),
     pinnedPlugins(config2.plugins, ownerConfig.allowedPlugins)
@@ -59425,7 +60603,7 @@ async function readiness(c3, stateRoot) {
   if (slots.slots <= 0) {
     return { ok: false, kind: "held", line: "credential limit: no label of this machine has room" };
   }
-  if (existsSync15(ownerRoot) && inspectStateLock(ownerRoot, LAUNCH_LOCK, {
+  if (existsSync16(ownerRoot) && inspectStateLock(ownerRoot, LAUNCH_LOCK, {
     now: c3.ports.clock.now(),
     heartbeatStaleMs: LAUNCH_LOCK_STALE_MS
   }).state === "held") {
@@ -59586,6 +60764,7 @@ async function claimNext(c3, stateRoot, state, ready) {
     try {
       await launchCrew(c3.project, item, config2, c3.ports, c3.owner, {
         deny: ready.deny,
+        ...c3.windows === void 0 ? {} : { windows: c3.windows.launch },
         from,
         contentDir: ready.contentDir,
         sha: ready.sha,
@@ -59843,7 +61022,7 @@ async function finish(c3, stateRoot, state, held2, repo, rec, touch) {
   try {
     const fileName = reportName(stateRoot, id);
     if (fileName === void 0) throw new ReportError("no report name was drawn for this run");
-    text = readReportText(join53(stateRoot, "clones", id), id, {
+    text = readReportText(join54(stateRoot, "clones", id), id, {
       notBefore: new Date(rec.startedAt),
       fileName
     });
@@ -59953,8 +61132,8 @@ async function openPullRequest(c3, item, report) {
 async function pushForCrew(c3, stateRoot, item, head) {
   const id = item.id;
   const branch = `refs/heads/studio/${id}`;
-  const parent = join53(stateRoot, "push");
-  const dir = join53(parent, id);
+  const parent = join54(stateRoot, "push");
+  const dir = join54(parent, id);
   ensureStateDir(stateRoot, parent);
   removeStateEntry(stateRoot, dir);
   const timeoutMs = 6e5;
@@ -59976,7 +61155,7 @@ async function pushForCrew(c3, stateRoot, item, head) {
       "-q",
       "--no-tags",
       "--no-write-fetch-head",
-      join53(stateRoot, "clones", id),
+      join54(stateRoot, "clones", id),
       `+${branch}:${branch}`
     ]);
     const got = (await git(dir, ["--no-replace-objects", "rev-parse", "--verify", `${branch}^{commit}`])).trim();
@@ -60026,7 +61205,7 @@ function noteLimitOrBlock(c3, stateRoot, id, from, label = "default") {
 // src/worker-hub.ts
 import { mkdtempSync as mkdtempSync3, rmSync as rmSync12, writeFileSync as writeFileSync18 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { join as join54 } from "node:path";
+import { join as join55 } from "node:path";
 var OFFER_LABEL = "studio-offer";
 var CLAIM_PREFIX = "refs/studio/claims/";
 var TIMEOUT_MS = 6e4;
@@ -60057,9 +61236,9 @@ function ghTransport(gh, token) {
       let r;
       if (body === void 0) r = await run2([]);
       else {
-        const dir = mkdtempSync3(join54(tmpdir3(), "studio-hub-"));
+        const dir = mkdtempSync3(join55(tmpdir3(), "studio-hub-"));
         try {
-          const file3 = join54(dir, "body.json");
+          const file3 = join55(dir, "body.json");
           writeFileSync18(file3, JSON.stringify(body), { mode: 384 });
           r = await run2(["--input", file3]);
         } finally {
@@ -60428,7 +61607,7 @@ var ghHub = (gh, token) => makeHub(ghTransport(gh, token));
 var fetchHub = (token, doFetch) => makeHub(fetchTransport(token, doFetch));
 
 // src/worker-lead.ts
-import { randomBytes as randomBytes11 } from "node:crypto";
+import { randomBytes as randomBytes12 } from "node:crypto";
 var WORKER_WAIT2 = "worker: ";
 var workerCrewName = (label) => `worker:${label}`;
 var COMMENTERS = ["OWNER", "MEMBER", "COLLABORATOR"];
@@ -60450,7 +61629,7 @@ async function openOffer(o2) {
     await o2.hub.lockOffer(o2.repo, mine.number);
     return { offer: mine.number, nonce: known.nonce };
   }
-  const nonce = randomBytes11(16).toString("hex");
+  const nonce = randomBytes12(16).toString("hex");
   const offer = await o2.hub.openOffer(o2.repo, title, renderOffer(o2.item, o2.lead, o2.now, nonce), [
     OFFER_LABEL,
     `studio-runs-on:${label}`
@@ -60843,7 +62022,7 @@ async function runCli(argv, deps) {
       stdout(USAGE);
       return 0;
     }
-    const project = resolve11(deps.cwd, values.project ?? ".");
+    const project = resolve12(deps.cwd, values.project ?? ".");
     const json2 = values.json === true;
     const print = (v) => stdout(`${JSON.stringify(v, null, 2)}
 `);
@@ -61011,11 +62190,11 @@ async function runCli(argv, deps) {
       }
     };
     const dailyCostHold = async (config2, ownerConfig) => {
-      const roots = ownerConfig.limits?.dailyCostUsd === void 0 ? [stateRoot()] : [.../* @__PURE__ */ new Set([stateRoot(), ...projectStateRoots(dirname16(ownerRoot()))])];
+      const roots = ownerConfig.limits?.dailyCostUsd === void 0 ? [stateRoot()] : [.../* @__PURE__ */ new Set([stateRoot(), ...projectStateRoots(dirname17(ownerRoot()))])];
       if (!readOnly) await recordAllEnded(roots, ownerConfig);
       return costHold({
         stateRoot: stateRoot(),
-        stateBase: dirname16(ownerRoot()),
+        stateBase: dirname17(ownerRoot()),
         config: config2,
         ownerConfig,
         now: ports.clock.now()
@@ -61024,7 +62203,7 @@ async function runCli(argv, deps) {
     const recordAllEnded = async (roots, ownerConfig) => {
       for (const root of roots) {
         try {
-          if (existsSync16(root)) {
+          if (existsSync17(root)) {
             await recordEndedRuns(root, ports, ownerConfig.crewLabelLimits.timezone);
           }
         } catch {
@@ -61316,7 +62495,7 @@ async function runCli(argv, deps) {
       const { config: config2 } = loadAll();
       refuseNativeQueue(config2);
       const root = await boundStateRoot();
-      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname16(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
+      const queueHold = () => blockHold(ownerRoot()) ?? (readPause(root).paused ? PAUSED_LINE : void 0) ?? (pendingLegacyState(dirname17(ownerRoot())).length > 0 ? LEGACY_LINE : void 0);
       const blockedNow = queueHold();
       if (blockedNow !== void 0) throw new HeldError(blockedNow);
       let heldLine;
@@ -61640,7 +62819,7 @@ async function runCli(argv, deps) {
           }
         }
         removeReaRun(stateRoot(), item.id);
-        const clone2 = join55(stateRoot(), "clones", item.id);
+        const clone2 = join56(stateRoot(), "clones", item.id);
         fileName = reportName(stateRoot(), item.id);
         if (fileName === void 0) {
           throw new ReportError(
@@ -61671,8 +62850,8 @@ async function runCli(argv, deps) {
             stateRoot: stateRoot(),
             ownerRoot: ownerRoot(),
             item: item.id,
-            clone: join55(stateRoot(), "clones", item.id),
-            homeDir: join55(stateRoot(), "homes", item.id),
+            clone: join56(stateRoot(), "clones", item.id),
+            homeDir: join56(stateRoot(), "homes", item.id),
             ownerConfig: loadOwnerConfig(owner),
             cow: ports.cow ?? systemCowCopy(),
             now: ports.clock.now(),
@@ -62449,7 +63628,7 @@ async function runCli(argv, deps) {
       const cachePhase = async () => {
         const now = ports.clock.now();
         const removed = await cacheCleanup({
-          stateBase: dirname16(root),
+          stateBase: dirname17(root),
           ownerRoot: ownerRoot(),
           ownerConfig: loadOwnerConfig(owner),
           now
@@ -62560,7 +63739,7 @@ async function runCli(argv, deps) {
           if (item.status !== "assigned" && item.status !== "in_progress") continue;
           const rec = records[item.id];
           if (rec === void 0 || rec.stoppedAt !== void 0) continue;
-          const t = timeoutsOfContext(join55(root, "guard", `${item.id}.json`));
+          const t = timeoutsOfContext(join56(root, "guard", `${item.id}.json`));
           const ends = t === void 0 ? Number.NaN : Date.parse(t.sessionEndsAt);
           if (Number.isNaN(ends) || now < ends + REVIEW_GRACE_MS) continue;
           beat();
@@ -62810,7 +63989,7 @@ async function runCli(argv, deps) {
     const tickPreview = async () => {
       const now = ports.clock.now();
       const root = stateRoot();
-      const rootExists = existsSync16(root);
+      const rootExists = existsSync17(root);
       const why = (e) => e.message.replace(new RegExp("\\p{Cc}", "gu"), " ");
       const out = { dryRun: true, needsLead: [], held: [], errors: [] };
       const lead = (item, reason) => {
@@ -63074,6 +64253,29 @@ async function runCli(argv, deps) {
     switch (cmd) {
       case "worker": {
         refuseCrew(deps.env);
+        if (rest[0] === "windows-setup" && rest.length === 1) {
+          const ownerConfig = loadOwnerConfig(owner);
+          const user = ownerConfig.workers?.self?.windows?.crewUser;
+          if (user === void 0) {
+            throw new UsageError(
+              "worker windows-setup needs workers.self.windows.crew_user in the owner config"
+            );
+          }
+          stdout(
+            windowsSetupScript({
+              user,
+              credFile: credFileIn(ownerConfigDir(owner)),
+              readPaths: setupReadPaths({
+                node: process.execPath,
+                claude: findClaude(deps.env.PATH ?? deps.env.Path),
+                toolchains: ownerConfig.crewToolchainPaths,
+                crewConfigDir: crewClaudeDir(owner)
+              }),
+              revokePaths: [crewClaudeDir(owner)]
+            })
+          );
+          return 0;
+        }
         if (rest.length > 0)
           throw new UsageError("worker takes no arguments, only --label and --once");
         const label = values.label;
@@ -63094,10 +64296,24 @@ async function runCli(argv, deps) {
             return 1;
           }
         }
+        const platformNow = deps.workerPlatform ?? detectPlatform();
+        const winUser = loadOwnerConfig(owner).workers?.self?.windows?.crewUser;
+        const win = platformNow.platform === "win32" && winUser !== void 0 ? await (deps.windowsWorker ?? windowsWorker)({
+          user: winUser,
+          stateRoot: stateRootFor(project, owner),
+          ownerRoot: ownerStateRootFor(owner),
+          crewConfigDir: crewClaudeDir(owner),
+          ownerHome: deps.homedir ?? homedir13(),
+          ownerConfigDir: ownerConfigDir(owner),
+          networkAllow: pinnedConfig.sandbox.networkAllow,
+          env: deps.env,
+          startProxy: (allow) => startEgressProxy({ allow })
+        }) : void 0;
         const ctx = {
           project,
           label,
-          ports,
+          ports: win === void 0 ? ports : { ...ports, claude: win.claude },
+          ...win === void 0 ? {} : { windows: win.sandbox },
           hub,
           token,
           secrets: crewToken === void 0 ? [] : [crewToken],
@@ -63109,25 +64325,29 @@ async function runCli(argv, deps) {
           log: (line4) => stderr(`${line4.replace(new RegExp("\\p{Cc}", "gu"), " ")}
 `)
         };
-        for (; ; ) {
-          let kind;
-          try {
-            const r = await workerStep(ctx);
-            kind = r.kind;
-            stdout(`${JSON.stringify({ at: ports.clock.now().toISOString(), ...r })}
+        try {
+          for (; ; ) {
+            let kind;
+            try {
+              const r = await workerStep(ctx);
+              kind = r.kind;
+              stdout(`${JSON.stringify({ at: ports.clock.now().toISOString(), ...r })}
 `);
-          } catch (e) {
-            kind = "error";
-            stdout(
-              `${JSON.stringify({ at: ports.clock.now().toISOString(), kind, line: e.message.replace(new RegExp("\\p{Cc}", "gu"), " ") })}
+            } catch (e) {
+              kind = "error";
+              stdout(
+                `${JSON.stringify({ at: ports.clock.now().toISOString(), kind, line: e.message.replace(new RegExp("\\p{Cc}", "gu"), " ") })}
 `
+              );
+            }
+            if (kind === "refused") return 1;
+            if (values.once === true) return kind === "error" ? 1 : 0;
+            await ports.clock.sleep(
+              kind === "idle" || kind === "held" || kind === "error" ? 6e4 : 2e4
             );
           }
-          if (kind === "refused") return 1;
-          if (values.once === true) return kind === "error" ? 1 : 0;
-          await ports.clock.sleep(
-            kind === "idle" || kind === "held" || kind === "error" ? 6e4 : 2e4
-          );
+        } finally {
+          await win?.close();
         }
       }
       case "init": {
@@ -63750,7 +64970,7 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
             hasReport: (item) => {
               if (!isItemId(item)) return false;
               const name = reportName(root, item);
-              return name !== void 0 && existsSync16(join55(root, "clones", item, ".studio", "reports", name));
+              return name !== void 0 && existsSync17(join56(root, "clones", item, ".studio", "reports", name));
             }
           }
         );
@@ -64200,7 +65420,7 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
         const r = await adoptStateRoot({
           project,
           to: stateRoot(),
-          from: resolve11(deps.cwd, values.from),
+          from: resolve12(deps.cwd, values.from),
           apply: values.apply === true,
           ports,
           now: ports.clock.now()
@@ -64233,7 +65453,7 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
           throw new UsageError("accounts-clear needs exactly one valid label");
         }
         await boundStateRoot();
-        await recordAllEnded(projectStateRoots(dirname16(ownerRoot())), loadOwnerConfig(owner));
+        await recordAllEnded(projectStateRoots(dirname17(ownerRoot())), loadOwnerConfig(owner));
         const r = clearBlocks(ownerRoot(), label, ports.clock.now());
         print({ label, ...r });
         return 0;
@@ -65323,14 +66543,14 @@ function readHiddenLine(prompt, input2, write) {
   input2.setRawMode(true);
   input2.setEncoding("utf8");
   input2.resume();
-  return new Promise((resolve12) => {
+  return new Promise((resolve13) => {
     let value2 = "";
     const done = (result) => {
       input2.removeListener("data", onData);
       input2.setRawMode?.(false);
       input2.pause();
       write("\n");
-      resolve12(result);
+      resolve13(result);
     };
     const onData = (chunk) => {
       for (const ch of chunk) {
@@ -65347,14 +66567,14 @@ function readHiddenLine(prompt, input2, write) {
 function readVisibleLine(prompt, input2, output2) {
   if (!input2.isTTY) return Promise.resolve(void 0);
   const rl = createInterface({ input: input2, output: output2, terminal: true });
-  return new Promise((resolve12) => {
+  return new Promise((resolve13) => {
     let answered = false;
     const finish2 = (value2) => {
       if (answered) return;
       answered = true;
       rl.close();
       input2.pause();
-      resolve12(value2);
+      resolve13(value2);
     };
     rl.on("close", () => finish2(void 0));
     rl.on("SIGINT", () => {
@@ -65366,8 +66586,8 @@ function readVisibleLine(prompt, input2, output2) {
 }
 
 // src/ports.ts
-import { spawn as spawn3 } from "node:child_process";
-import { closeSync as closeSync8, openSync as openSync8, readFileSync as readFileSync52 } from "node:fs";
+import { spawn as spawn4 } from "node:child_process";
+import { closeSync as closeSync9, openSync as openSync9, readFileSync as readFileSync53 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 var HTTP_TIMEOUT_MS = 15e3;
 var realHttp = {
@@ -65392,9 +66612,9 @@ var PLUGIN_TIMEOUT_MS2 = 3e5;
 var STOP_GRACE_MS = 5e3;
 var STOP_POLL_MS = 100;
 var IDENTITY_TIMEOUT_MS = 5e3;
-var sleep = (ms) => new Promise((resolve12) => setTimeout(resolve12, ms));
+var sleep2 = (ms) => new Promise((resolve13) => setTimeout(resolve13, ms));
 function realPorts(claudeBin = "claude") {
-  const clock = { now: () => /* @__PURE__ */ new Date(), sleep };
+  const clock = { now: () => /* @__PURE__ */ new Date(), sleep: sleep2 };
   const gh = {
     async api(path10, jq, opts) {
       const args = [
@@ -65469,17 +66689,17 @@ function realPorts(claudeBin = "claude") {
   };
   const claude = {
     async start(cwd, args, prompt, logPath, env) {
-      const fd = openSync8(logPath, "a");
+      const fd = openSync9(logPath, "a");
       try {
-        const child = spawn3(claudeBin, args, {
+        const child = spawn4(claudeBin, args, {
           cwd,
           env,
           detached: true,
           stdio: ["pipe", fd, fd]
         });
-        const pid = await new Promise((resolve12, reject) => {
+        const pid = await new Promise((resolve13, reject) => {
           child.once("error", reject);
-          child.once("spawn", () => resolve12(child.pid));
+          child.once("spawn", () => resolve13(child.pid));
         });
         child.stdin?.on("error", () => {
         });
@@ -65487,7 +66707,7 @@ function realPorts(claudeBin = "claude") {
         child.unref();
         return { pid };
       } finally {
-        closeSync8(fd);
+        closeSync9(fd);
       }
     },
     alive,
@@ -65495,7 +66715,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync52(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync53(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }
@@ -65513,7 +66733,7 @@ function realPorts(claudeBin = "claude") {
       if (!alive(pid)) return;
       signal(pid, "SIGTERM");
       for (let waited = 0; waited < STOP_GRACE_MS; waited += STOP_POLL_MS) {
-        await sleep(STOP_POLL_MS);
+        await sleep2(STOP_POLL_MS);
         if (!alive(pid)) return;
       }
       signal(pid, "SIGKILL");
@@ -65537,8 +66757,8 @@ function realPorts(claudeBin = "claude") {
         forceKillAfterDelay: 1e3
       });
       let timer;
-      const late = new Promise((resolve12) => {
-        timer = setTimeout(() => resolve12({ code: 1, stdout: "" }), opts.timeoutMs + 2e3);
+      const late = new Promise((resolve13) => {
+        timer = setTimeout(() => resolve13({ code: 1, stdout: "" }), opts.timeoutMs + 2e3);
         timer.unref();
       });
       const run2 = child.then((r) => ({
@@ -65583,7 +66803,7 @@ function realPorts(claudeBin = "claude") {
 // src/main.ts
 function launcher() {
   try {
-    return realpathSync12(fileURLToPath6(new URL("../bin/studio", import.meta.url)));
+    return realpathSync13(fileURLToPath7(new URL("../bin/studio", import.meta.url)));
   } catch {
     return void 0;
   }

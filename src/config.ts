@@ -48,7 +48,7 @@ export const PROTECTED_HOME_PATHS = [...CREDENTIAL_PATHS, '.claude'];
 
 /** Path comparison key: case-insensitive on darwin (its default file systems are). */
 export const pathKey = (p: string, platform: NodeJS.Platform = process.platform): string =>
-  platform === 'darwin' ? p.toLowerCase() : p;
+  platform === 'darwin' || platform === 'win32' ? p.toLowerCase() : p;
 
 /** `child` equals `parent` or lies below it (both already resolved and case-folded). */
 export const within = (child: string, parent: string): boolean =>
@@ -1074,6 +1074,18 @@ export const ownerConfigSchema = z.strictObject({
           allowRead: z.array(denyPath).max(50).default([]),
           // How long a claim holds without a heartbeat before another worker may take it over.
           leaseMinutes: z.number().int().min(10).max(240).default(30),
+          // Native Windows: the local standard user every crew runs as (src/windows-sandbox.ts),
+          // created by the script of `studio worker windows-setup`.
+          windows: z
+            .strictObject({
+              crewUser: z
+                .string()
+                .regex(
+                  /^[A-Za-z][A-Za-z0-9_-]{0,19}$/,
+                  'a local user name of at most 20 characters',
+                ),
+            })
+            .optional(),
         })
         .optional(),
     })
