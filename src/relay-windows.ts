@@ -352,10 +352,10 @@ function SafeFolder([string]$path, [string]$top) {
 }
 # The explicit entries of a DACL and whether it is protected, comparable as text.
 function AclKey($sec) {
-  $keys = foreach ($r in $sec.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+  $entries = foreach ($r in $sec.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
     '{0}|{1}|{2}|{3}|{4}|{5}' -f $r.IdentityReference.Value, [int]$r.FileSystemRights, [int]$r.InheritanceFlags, [int]$r.PropagationFlags, [int]$r.AccessControlType, $r.IsInherited
   }
-  [string]$sec.AreAccessRulesProtected + ':' + ((@($keys) | Sort-Object) -join ';')
+  [string]$sec.AreAccessRulesProtected + ':' + ((@($entries) | Sort-Object) -join ';')
 }
 # Every reparse point below a folder, found without following one.
 function LinksBelow([string]$path) {
