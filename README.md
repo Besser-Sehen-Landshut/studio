@@ -433,16 +433,16 @@ evidence:
 - **The proofs.** Both cover every changed file of the pull request: one outside `paths` proves nothing, because a change elsewhere could be what the guard saw. `paths` match case-sensitively (`docs/**` never covers `DOCS/run.sh`), and a path with a control character proves nothing.
   - `comments_only`: each changed file is a plain change of a regular file in one of `languages`, chosen by its extension, in which only plain comment text was edited, added or removed, the boring case. A file with any other extension proves nothing. Code, string literals and the like, and comments with a meaning must stay byte for byte where they are. In free-form languages only "a blank here" and "a line break here" count between tokens, and a line comment always ends a line; in Python and YAML every line of code stays byte for byte, indentation included, and only lines that hold nothing but a plain comment or blanks may come and go. A rule that names another language is refused.
 
-    | Language     | Extensions                         | What is content, not comment                                                                                 |
-    | ------------ | ---------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-    | `sql`        | `.sql`                             | strings, quoted identifiers, dollar-quoted bodies (PostgreSQL, see below)                                    |
-    | `rust`       | `.rs`                              | strings, byte and C strings, raw strings `r#"..."#`, char literals (told from lifetimes); block comments nest |
-    | `typescript` | `.ts`, `.tsx`, `.mts`, `.cts`      | strings, templates with `${...}`, regular expressions, JSX text and attributes (not in `.ts`, `.mts`, `.cts`) |
-    | `javascript` | `.js`, `.jsx`, `.mjs`, `.cjs`      | as `typescript`, JSX in every file                                                                           |
-    | `shell`      | `.sh`, `.bash`                     | quotes, `$'...'`, `$(...)` and `${...}` (also inside quotes), arithmetic, here-documents                    |
-    | `python`     | `.py`, `.pyi`                      | strings with any prefix, triple-quoted strings, f-strings with their fields                                 |
-    | `yaml`       | `.yml`, `.yaml`                    | quoted scalars, block scalars (`\|`, `>`) with every line below them; both versions must also load to the same data |
-    | `toml`       | `.toml`                            | basic, literal and multi-line strings                                                                        |
+    | Language     | Extensions                    | What is content, not comment                                                                                        |
+    | ------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+    | `sql`        | `.sql`                        | strings, quoted identifiers, dollar-quoted bodies (PostgreSQL, see below)                                           |
+    | `rust`       | `.rs`                         | strings, byte and C strings, raw strings `r#"..."#`, char literals (told from lifetimes); block comments nest       |
+    | `typescript` | `.ts`, `.tsx`, `.mts`, `.cts` | strings, templates with `${...}`, regular expressions, JSX text and attributes (not in `.ts`, `.mts`, `.cts`)       |
+    | `javascript` | `.js`, `.jsx`, `.mjs`, `.cjs` | as `typescript`, JSX in every file                                                                                  |
+    | `shell`      | `.sh`, `.bash`                | quotes, `$'...'`, `$(...)` and `${...}` (also inside quotes), arithmetic, here-documents                            |
+    | `python`     | `.py`, `.pyi`                 | strings with any prefix, triple-quoted strings, f-strings with their fields                                         |
+    | `yaml`       | `.yml`, `.yaml`               | quoted scalars, block scalars (`\|`, `>`) with every line below them; both versions must also load to the same data |
+    | `toml`       | `.toml`                       | basic, literal and multi-line strings                                                                               |
 
     Doc comments in Rust (`///`, `//!`, `/** */`, `/*! */`) are never plain: they are `#[doc]` attributes, a code block in them runs as a doctest, and derive macros put their text into the program (command-line help, API schemas). Only `//` and `/* */` prose is plain there.
   - `paths_only`: every changed path, both sides of a rename, matches `paths`.

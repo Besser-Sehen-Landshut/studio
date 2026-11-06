@@ -221,6 +221,9 @@ describe('typescript and javascript', () => {
     no(ts, 'const r = /\\/*/; f(); // */', 'const r = /\\/*/; g(); // */');
     no(ts, "const r = /'/; f(); // '", "const r = /'/; g(); // '");
     yes(ts, 'const r = /a/g;', 'const r = /a/g; // re');
+    // The literal ends as the lexical grammar says, without nested classes (flags come after it):
+    // node reads `/*]/v; f(); //*/` as a comment too.
+    yes(ts, 'const r = /[[a]/ /*]/v; f(); //*/', 'const r = /[[a]/ /*]/u; g(); //*/');
   });
   it('a / is told as division or regular expression by what stands before it', () => {
     yes(ts, 'const x = (a + b) / 2;', 'const x = (a + b) / 2; // half');
