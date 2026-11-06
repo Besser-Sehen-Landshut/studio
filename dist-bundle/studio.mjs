@@ -39492,6 +39492,15 @@ function revokeArgs(user, path10) {
   if (!CREW_USER_RE.test(user)) throw new Error(`not a crew user name: ${user}`);
   return [path10, "/remove:g", user, "/Q"];
 }
+function revokeSteps(user, owner, path10, dir) {
+  if (!/^[^\p{Cc}"*?<>|]+$/u.test(owner)) throw new Error(`not an account name: ${owner}`);
+  return [
+    revokeArgs(user, path10),
+    ...dir ? [[join26(path10, "*"), "/reset", "/T", "/C", "/Q"]] : [],
+    [path10, "/setowner", owner, ...dir ? ["/T"] : [], "/C", "/Q"]
+  ];
+}
+var ownerAccount = (env = process.env) => env.USERDOMAIN !== void 0 && env.USERNAME !== void 0 ? `${env.USERDOMAIN}\\${env.USERNAME}` : env.USERNAME ?? "";
 function isDir2(p) {
   try {
     return lstatSync22(p).isDirectory();
@@ -39581,10 +39590,16 @@ var WindowsGrants = class {
   async revokeLocked() {
     const rec = readGrantRecord(this.o.ownerRoot, this.o.user);
     const failed = [];
+    const owner = this.o.owner ?? ownerAccount();
     for (const p of rec.paths) {
       if (!existsSync7(p)) continue;
-      const r = await this.o.run("icacls", revokeArgs(this.o.user, p));
-      if (r.code !== 0) failed.push(p);
+      for (const args of revokeSteps(this.o.user, owner, p, isDir2(p))) {
+        const r = await this.o.run("icacls", args);
+        if (r.code !== 0) {
+          failed.push(p);
+          break;
+        }
+      }
     }
     writeGrantRecord(this.o.ownerRoot, this.o.user, { paths: failed });
     if (failed.length > 0) {
@@ -39754,8 +39769,17 @@ try {
   [Console]::Error.WriteLine("studio keeper: $($_.Exception.Message)")
   $code = 2
 } finally {
+  # As Studio's revokeSteps: the grant goes, ACLs below go back to inherited, the owner is ours.
+  $owner = "$($env:USERDOMAIN)$($env:USERNAME)"
   foreach ($r in $revoke) {
-    if (Test-Path -LiteralPath $r) { icacls $r /remove:g $User /Q | Out-Null }
+    if (-not (Test-Path -LiteralPath $r)) { continue }
+    icacls $r /remove:g $User /Q | Out-Null
+    if (Test-Path -LiteralPath $r -PathType Container) {
+      icacls (Join-Path $r '*') /reset /T /C /Q | Out-Null
+      icacls $r /setowner $owner /T /C /Q | Out-Null
+    } else {
+      icacls $r /setowner $owner /C /Q | Out-Null
+    }
   }
 }
 exit $code
@@ -39921,15 +39945,65 @@ function probeProblem(results) {
   const bad = results.find((r) => !r.ok);
   return bad === void 0 ? void 0 : `the Windows crew sandbox does not hold here: ${bad.check}: ${bad.detail}`;
 }
-var PROBE_CHECKS = ["user", "admin", "env", "read", "write", "direct", "proxy", "tasks"];
+var PROBE_CHECKS = [
+  "user",
+  "admin",
+  "env",
+  "read",
+  "write",
+  "direct",
+  "proxy",
+  "tasks",
+  "former"
+];
 async function probeWindowsSandbox(o2) {
   const start = o2.spawn ?? spawnKeeper;
   const name = `probe-${randomBytes8(4).toString("hex")}`;
   const files = ownerFiles(o2.stateRoot, name);
   const canary = join26(o2.ownerConfigDir, "crew-probe-canary");
+  const formerDir = join26(o2.stateRoot, "tmp", `${name}-former`);
   writeStateFile(dirname9(canary), canary, "canary\n");
+  const host = async (spec, revoke = []) => {
+    for (const f3 of Object.values(files)) removeStateEntry(o2.stateRoot, f3);
+    const k = await start({
+      args: keeperArgs({
+        script: keeperFile(o2.stateRoot),
+        credFile: o2.credFile,
+        node: o2.node ?? process.execPath,
+        cwd: o2.env.SystemRoot ?? o2.env.SYSTEMROOT ?? "C:\\Windows",
+        out: files.out,
+        err: files.err,
+        user: o2.user
+      }),
+      env: powershellEnv(o2.env),
+      stdin: `${JSON.stringify(revoke)}
+${JSON.stringify(spec)}`,
+      log: files.keeper,
+      detached: false
+    });
+    const timeout = sleep(o2.timeoutMs ?? 12e4).then(() => "timeout");
+    if (await Promise.race([k.exited, timeout]) === "timeout") {
+      try {
+        process.kill(k.pid);
+      } catch {
+      }
+      return false;
+    }
+    return true;
+  };
+  const unfinished = "the Windows crew sandbox could not be shown to hold here: the probe as the crew user did not finish";
   try {
     const mark = randomBytes8(8).toString("hex");
+    let former;
+    if (o2.grants !== void 0) {
+      ensureStateDir(o2.stateRoot, formerDir);
+      const file3 = join26(formerDir, "made-by-the-crew-user.txt");
+      await o2.grants.grant([{ path: formerDir, rights: "M" }]);
+      const seeded = await host({ mode: "seed", seed: file3, env: o2.env });
+      await o2.grants.revokeAll();
+      if (!seeded) return unfinished;
+      former = { dir: formerDir, file: file3 };
+    }
     const spec = {
       mode: "probe",
       probe: {
@@ -39944,34 +40018,12 @@ async function probeWindowsSandbox(o2) {
           ]
         ],
         direct: { host: "github.com", port: 443 },
-        proxy: { port: o2.proxyPort, refused: "example.invalid" }
+        proxy: { port: o2.proxyPort, refused: "example.invalid" },
+        ...former === void 0 ? {} : { former }
       },
       env: { ...o2.env, STUDIO_PROBE_MARK: mark }
     };
-    const k = await start({
-      args: keeperArgs({
-        script: keeperFile(o2.stateRoot),
-        credFile: o2.credFile,
-        node: o2.node ?? process.execPath,
-        cwd: o2.env.SystemRoot ?? o2.env.SYSTEMROOT ?? "C:\\Windows",
-        out: files.out,
-        err: files.err,
-        user: o2.user
-      }),
-      env: powershellEnv(o2.env),
-      stdin: `[]
-${JSON.stringify(spec)}`,
-      log: files.keeper,
-      detached: false
-    });
-    const timeout = sleep(o2.timeoutMs ?? 12e4).then(() => "timeout");
-    if (await Promise.race([k.exited, timeout]) === "timeout") {
-      try {
-        process.kill(k.pid);
-      } catch {
-      }
-      return "the Windows crew sandbox could not be shown to hold here: the probe as the crew user did not finish";
-    }
+    if (!await host(spec)) return unfinished;
     let results;
     try {
       const raw = JSON.parse(readFileSync26(files.out, "utf8"));
@@ -39986,6 +40038,7 @@ ${JSON.stringify(spec)}`,
     return probeProblem(results);
   } finally {
     for (const f3 of Object.values(files)) removeStateEntry(o2.stateRoot, f3);
+    removeStateEntry(o2.stateRoot, formerDir);
     removeStateEntry(dirname9(canary), canary);
   }
 }
@@ -40076,6 +40129,7 @@ async function windowsWorker(o2) {
           ownerConfigDir: o2.ownerConfigDir,
           mustNotRead,
           crewConfigDir: o2.crewConfigDir,
+          grants,
           proxyPort: proxy.port,
           env: { ...probeEnv, PATH: path10 ?? "" },
           ...o2.spawn === void 0 ? {} : { spawn: o2.spawn }

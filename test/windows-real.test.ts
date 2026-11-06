@@ -132,6 +132,7 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
       ownerConfigDir,
       mustNotRead: [],
       crewConfigDir,
+      grants,
       proxyPort: proxy.port,
       env: env(),
       timeoutMs: 120_000,

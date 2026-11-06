@@ -16,6 +16,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, openSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { userInfo } from 'node:os';
+import { join } from 'node:path';
 
 const fail = (why) => {
   process.stderr.write(`studio-crew-host: ${why}\n`);
@@ -178,6 +179,40 @@ async function probe(p) {
     /^HTTP\/1\.1 403 /.test(answer),
     `the proxy answered ${p.proxy.refused} with ${answer}`,
   );
+  // A place taken back: the file this user made there, its ACL and the place stay out of reach.
+  if (p.former !== undefined && p.former !== null) {
+    const bad = [];
+    try {
+      writeFileSync(p.former.file, 'changed');
+      bad.push('changed the file it made');
+    } catch (e) {
+      if (!denied(e)) bad.push(`writing the file: ${e?.code}`);
+    }
+    try {
+      execFileSync('icacls', [p.former.file, '/grant', `${p.user}:F`], {
+        windowsHide: true,
+        stdio: 'ignore',
+      });
+      bad.push('changed the ACL of the file it made');
+    } catch {
+      // refused, as it must be
+    }
+    try {
+      writeFileSync(join(p.former.dir, 'new.txt'), 'x', { flag: 'wx' });
+      bad.push('added a file');
+    } catch (e) {
+      if (!denied(e)) bad.push(`adding a file: ${e?.code}`);
+    }
+    add(
+      'former',
+      bad.length === 0,
+      bad.length === 0
+        ? 'a place taken back stays closed'
+        : `a place taken back: ${bad.join(', ')}`,
+    );
+  } else {
+    add('former', false, 'no place taken back was given to check');
+  }
   // A scheduled task of this user would start processes outside every keeper's job.
   try {
     const tasks = execFileSync('schtasks', ['/query', '/fo', 'csv', '/v', '/nh'], {
@@ -201,7 +236,14 @@ async function probe(p) {
   return results;
 }
 
-if (spec.mode === 'probe') {
+if (spec.mode === 'seed') {
+  try {
+    writeFileSync(spec.seed, 'made by the crew user');
+    process.exit(0);
+  } catch (e) {
+    fail(`cannot write the seed: ${e?.code ?? e}`);
+  }
+} else if (spec.mode === 'probe') {
   let results;
   try {
     results = await probe(spec.probe);

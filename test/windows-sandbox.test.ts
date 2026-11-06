@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { ipv4, LOOPBACK } from '../src/egress-proxy.js';
 import { HeldError } from '../src/held.js';
@@ -22,6 +22,7 @@ import {
   KEEPER_FILE,
   KEEPER_SCRIPT,
   OUTSIDE,
+  ownerAccount,
   ownerRightsArgs,
   PROBE_CHECKS,
   type ProbeResult,
@@ -31,6 +32,7 @@ import {
   psQuote,
   type RunFile,
   revokeArgs,
+  revokeSteps,
   runConfigDir,
   type SpawnKeeper,
   setupReadPaths,
@@ -128,6 +130,7 @@ describe('quoting and the keeper', () => {
     expect(KEEPER_SCRIPT).toContain("PipeAccessRule($crew, 'ReadWrite', 'Allow')");
     // The grants come off however the host ends.
     expect(at('icacls $r /remove:g $User')).toBeGreaterThan(at('} finally {'));
+    expect(at('/setowner $owner /T')).toBeGreaterThan(at('/reset /T'));
     // Nothing of the spec is written to a file.
     expect(KEEPER_SCRIPT).not.toMatch(/Set-Content|Out-File|WriteAllText/);
   });
@@ -193,7 +196,7 @@ describe('grants', () => {
     const dir = join(base, 'clone');
     mkdirSync(dir, { recursive: true });
     const f = fakeRun();
-    const g = new WindowsGrants({ ownerRoot, user: 'crew', run: f.run });
+    const g = new WindowsGrants({ ownerRoot, user: 'crew', run: f.run, owner: 'HOST\\owner' });
     await g.grant([{ path: dir, rights: 'M' }]);
     expect(f.calls.map((c) => c[0])).toEqual(['powershell.exe', 'icacls', 'icacls']);
     expect(f.calls[0]?.at(-1)).toContain("NTAccount($env:COMPUTERNAME, 'crew')");
@@ -209,7 +212,12 @@ describe('grants', () => {
     await g.recordKeeper(2 ** 22 + 12345);
     f.calls.length = 0;
     await g.grant([{ path: dir, rights: 'R' }]);
-    expect(f.icacls()[0]).toEqual(['icacls', dir, '/remove:g', 'crew', '/Q']);
+    // The grant goes, ACLs below go back to inherited, and the owner is Studio's account again.
+    expect(f.icacls().slice(0, 3)).toEqual([
+      ['icacls', dir, '/remove:g', 'crew', '/Q'],
+      ['icacls', join(dir, '*'), '/reset', '/T', '/C', '/Q'],
+      ['icacls', dir, '/setowner', 'HOST\\owner', '/T', '/C', '/Q'],
+    ]);
     await g.revokeAll();
     expect(g.paths()).toEqual([]);
   });
@@ -219,10 +227,20 @@ describe('grants', () => {
     const ownerRoot = join(base, 'owner');
     const dir = join(base, 'clone');
     mkdirSync(dir, { recursive: true });
-    const one = new WindowsGrants({ ownerRoot, user: 'Crew', run: fakeRun().run });
+    const one = new WindowsGrants({
+      ownerRoot,
+      user: 'Crew',
+      run: fakeRun().run,
+      owner: 'HOST\\owner',
+    });
     await one.grant([{ path: dir, rights: 'M' }]);
     await one.recordKeeper(process.pid);
-    const other = new WindowsGrants({ ownerRoot, user: 'crew', run: fakeRun().run });
+    const other = new WindowsGrants({
+      ownerRoot,
+      user: 'crew',
+      run: fakeRun().run,
+      owner: 'HOST\\owner',
+    });
     await expect(other.grant([{ path: dir, rights: 'M' }])).rejects.toThrow(
       /one crew at a time on this machine/,
     );
@@ -234,7 +252,7 @@ describe('grants', () => {
     const dir = join(base, 'clone');
     mkdirSync(dir, { recursive: true });
     const f = fakeRun([77, 78]);
-    const g = new WindowsGrants({ ownerRoot, user: 'crew', run: f.run });
+    const g = new WindowsGrants({ ownerRoot, user: 'crew', run: f.run, owner: 'HOST\\owner' });
     await expect(g.grant([{ path: dir, rights: 'M' }])).rejects.toThrow(
       /processes of the crew user crew are still running \(77, 78\)/,
     );
@@ -244,10 +262,21 @@ describe('grants', () => {
         ? { code: 1, stdout: '', stderr: 'no' }
         : { code: 0, stdout: '', stderr: '' };
     await expect(
-      new WindowsGrants({ ownerRoot, user: 'crew', run: broken }).grant([
+      new WindowsGrants({ ownerRoot, user: 'crew', run: broken, owner: 'HOST\\owner' }).grant([
         { path: dir, rights: 'M' },
       ]),
     ).rejects.toThrow(/cannot list the processes/);
+  });
+
+  it('a file taken back gets its owner reset; a bad account name refuses', () => {
+    const file = join(root, `rf${n++}`);
+    writeFileSync(file, '');
+    expect(revokeSteps('crew', 'HOST\\owner', file, false)).toEqual([
+      [file, '/remove:g', 'crew', '/Q'],
+      [file, '/setowner', 'HOST\\owner', '/C', '/Q'],
+    ]);
+    expect(() => revokeSteps('crew', '', file, false)).toThrow(/not an account name/);
+    expect(ownerAccount({ USERDOMAIN: 'HOST', USERNAME: 'owner' })).toBe('HOST\\owner');
   });
 
   it('the sweep finds the crew user by SID and ends what it finds', () => {
@@ -452,6 +481,42 @@ describe('probeWindowsSandbox', () => {
       join('C:', 'crew', `studio-probe-${spec.probe?.mark}`),
       join('C:', 'crew', 'plugins', `studio-probe-${spec.probe?.mark}`),
     ]);
+  });
+
+  it('with grants, a seed run makes a file in a granted place, which is taken back before the probe', async () => {
+    const o = setup();
+    const modes: string[] = [];
+    const calls: string[][] = [];
+    const run: RunFile = async (file, args) => {
+      calls.push([file, ...args]);
+      return file === 'powershell.exe'
+        ? { code: 0, stdout: JSON.stringify({ found: 0, left: [] }), stderr: '' }
+        : { code: 0, stdout: '', stderr: '' };
+    };
+    const grants = new WindowsGrants({
+      ownerRoot: join(o.stateRoot, 'owner'),
+      user: 'studio-crew',
+      run,
+      owner: 'HOST\\owner',
+    });
+    let former: { dir: string; file: string } | undefined;
+    const f = fakeSpawn((spec) => {
+      modes.push(spec.mode);
+      if (spec.mode === 'seed') {
+        // Granted to the crew user while it seeds.
+        expect(grants.paths()).toEqual([dirname(spec.seed as string)]);
+        return undefined;
+      }
+      former = spec.probe?.former;
+      // Taken back before the probe.
+      expect(grants.paths()).toEqual([]);
+      return ok;
+    });
+    expect(await probeWindowsSandbox({ ...o, grants, spawn: f.spawn })).toBeUndefined();
+    expect(modes).toEqual(['seed', 'probe']);
+    expect(former?.file).toBe(join(former?.dir as string, 'made-by-the-crew-user.txt'));
+    expect(calls.some((c) => c.includes('/setowner'))).toBe(true);
+    expect(existsSync(former?.dir as string)).toBe(false);
   });
 
   it('refuses a failed check, a missing check, no answer, and a host that never finishes', async () => {

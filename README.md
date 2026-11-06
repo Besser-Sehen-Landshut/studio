@@ -654,7 +654,7 @@ Run it again after an update of the plugin, because the plugin's folder changes.
 
 **One crew at a time.** All crews share the one crew user, so a Windows machine runs one crew at a time, across all projects of the owner: the grants and the running crew are recorded per crew user in the owner's state root, under a lock, and a launch while a crew of that user runs is held. Before each grant Studio ends every process of the crew user it finds (by owner SID); a process it cannot end (ending another user's process takes an administrator) refuses the launch.
 
-**Grants per run.** For each crew Studio grants the crew user only that run's clone, `HOME`, tmp dir and log (modify) and its brief, settings and guard context (read). A writable folder also gets an inheritable OWNER RIGHTS entry, so the crew user keeps no owner's rights over what it created. Every grant is recorded in the state root and taken off when the crew ends, when it is stopped, and before the next grant. Each run gets its own writable Claude config dir in its `HOME`, with copies of the skills and plugin lists; the shared plugins stay read-only.
+**Grants per run.** For each crew Studio grants the crew user only that run's clone, `HOME`, tmp dir and log (modify) and its brief, settings and guard context (read). A writable folder also gets an inheritable OWNER RIGHTS entry, so the crew user keeps no owner's rights over what it created. Taking a place back removes the grant, resets every ACL below it to what it inherits, and makes your account the owner of everything there again. Every grant is recorded in the state root and taken off when the crew ends, when it is stopped, and before the next grant. Each run gets its own writable Claude config dir in its `HOME`, with copies of the skills and plugin lists; the shared plugins stay read-only.
 
 **Starting and stopping.** Claude Code's own sandbox is off for such a run (it does not exist there).
 - **Network:** traffic goes through a proxy Studio runs on loopback. It tunnels only to the names of `sandbox.network_allow` and `api.anthropic.com`, resolves each name itself, refuses any answer that points to this machine or a private, link-local, multicast or reserved network (also inside an IPv6 address that carries an IPv4 one: mapped, compatible, NAT64, 6to4, Teredo), and connects to the address it checked. Claude Code's optional traffic is off.
@@ -670,7 +670,8 @@ Deny paths on a native worker are Windows drive paths (`D:\data`); a POSIX path 
 - a direct connection to `github.com:443` fails;
 - the proxy refuses a name that is not allowed;
 - the environment Studio set arrived;
-- no scheduled task runs as the crew user.
+- no scheduled task runs as the crew user;
+- a place taken back stays closed: a seed run as the crew user makes a file in a granted place, the place is taken back, and the probe must fail to change that file, its ACL, or add a file there.
 
 A failed or missing check, or no answer, refuses (fail closed). A crew launch on native Windows outside such a worker refuses as well. What this sandbox does not cover is in SECURITY.md.
 

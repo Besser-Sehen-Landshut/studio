@@ -236,6 +236,29 @@ export function revokeArgs(user: string, path: string): string[] {
   return [path, '/remove:g', user, '/Q'];
 }
 
+/**
+ * The `icacls` calls that take a run's place back from the crew user, in order. Removing its grant
+ * is not enough: what it created is owned by it, and an owner may change the ACL of its files.
+ * So, below a directory, every ACL goes back to what it inherits (`/reset`, which also drops the
+ * entries CREATOR OWNER gave the creator and any it set itself), and the owner of everything becomes
+ * the account Studio runs as. The inheritable OWNER RIGHTS entry of the grant stays on the
+ * directory, so even an owner keeps no rights of its own there.
+ */
+export function revokeSteps(user: string, owner: string, path: string, dir: boolean): string[][] {
+  if (!/^[^\p{Cc}"*?<>|]+$/u.test(owner)) throw new Error(`not an account name: ${owner}`);
+  return [
+    revokeArgs(user, path),
+    ...(dir ? [[join(path, '*'), '/reset', '/T', '/C', '/Q']] : []),
+    [path, '/setowner', owner, ...(dir ? ['/T'] : []), '/C', '/Q'],
+  ];
+}
+
+/** The account Studio runs as, for `icacls /setowner`. */
+export const ownerAccount = (env: Record<string, string | undefined> = process.env): string =>
+  env.USERDOMAIN !== undefined && env.USERNAME !== undefined
+    ? `${env.USERDOMAIN}\\${env.USERNAME}`
+    : (env.USERNAME ?? '');
+
 function isDir(p: string): boolean {
   try {
     return lstatSync(p).isDirectory();
@@ -329,7 +352,9 @@ export const sweepScript = (user: string): string =>
  * recorded keeper lives refuses, and so does a grant while processes of the crew user are left.
  */
 export class WindowsGrants {
-  constructor(private readonly o: { ownerRoot: string; user: string; run: RunFile }) {}
+  constructor(
+    private readonly o: { ownerRoot: string; user: string; run: RunFile; owner?: string },
+  ) {}
 
   paths(): string[] {
     return readGrantRecord(this.o.ownerRoot, this.o.user).paths;
@@ -360,10 +385,16 @@ export class WindowsGrants {
   private async revokeLocked(): Promise<void> {
     const rec = readGrantRecord(this.o.ownerRoot, this.o.user);
     const failed: string[] = [];
+    const owner = this.o.owner ?? ownerAccount();
     for (const p of rec.paths) {
       if (!existsSync(p)) continue;
-      const r = await this.o.run('icacls', revokeArgs(this.o.user, p));
-      if (r.code !== 0) failed.push(p);
+      for (const args of revokeSteps(this.o.user, owner, p, isDir(p))) {
+        const r = await this.o.run('icacls', args);
+        if (r.code !== 0) {
+          failed.push(p);
+          break;
+        }
+      }
     }
     writeGrantRecord(this.o.ownerRoot, this.o.user, { paths: failed });
     if (failed.length > 0) {
@@ -557,15 +588,26 @@ try {
   [Console]::Error.WriteLine("studio keeper: $($_.Exception.Message)")
   $code = 2
 } finally {
+  # As Studio's revokeSteps: the grant goes, ACLs below go back to inherited, the owner is ours.
+  $owner = "$($env:USERDOMAIN)$($env:USERNAME)"
   foreach ($r in $revoke) {
-    if (Test-Path -LiteralPath $r) { icacls $r /remove:g $User /Q | Out-Null }
+    if (-not (Test-Path -LiteralPath $r)) { continue }
+    icacls $r /remove:g $User /Q | Out-Null
+    if (Test-Path -LiteralPath $r -PathType Container) {
+      icacls (Join-Path $r '*') /reset /T /C /Q | Out-Null
+      icacls $r /setowner $owner /T /C /Q | Out-Null
+    } else {
+      icacls $r /setowner $owner /C /Q | Out-Null
+    }
   }
 }
 exit $code
 `;
 
 export interface HostSpec {
-  mode: 'run' | 'probe';
+  /** seed: only writes `seed` (a file the crew user owns), for the probe's later check. */
+  mode: 'run' | 'probe' | 'seed';
+  seed?: string;
   /** run: what to start, where, its prompt on stdin and the log it appends to. */
   cmd?: string;
   args?: string[];
@@ -587,6 +629,11 @@ export interface ProbeSpec {
   direct: { host: string; port: number };
   /** The proxy, and a name it must refuse. */
   proxy: { port: number; refused: string };
+  /**
+   * A place granted to the crew user before and taken back since, and a file the crew user made
+   * there: it must not change the file, its ACL, or add a file.
+   */
+  former?: { dir: string; file: string };
 }
 
 /** What PowerShell itself gets: what Windows programs need, no token, no PowerShell 7 modules. */
@@ -821,13 +868,27 @@ export function probeProblem(results: readonly ProbeResult[] | undefined): strin
 }
 
 /** The checks a probe must report, every one of them. */
-export const PROBE_CHECKS = ['user', 'admin', 'env', 'read', 'write', 'direct', 'proxy', 'tasks'];
+export const PROBE_CHECKS = [
+  'user',
+  'admin',
+  'env',
+  'read',
+  'write',
+  'direct',
+  'proxy',
+  'tasks',
+  'former',
+];
 
 /**
  * Starts the host in probe mode as the crew user through a keeper, waits for it and judges what it
  * printed. Canaries: a file in the owner config dir (read) and the owner's home (write);
  * `mustNotRead` adds the worker's deny paths. It runs in the Windows directory, which every user
  * may read, so it needs no grant.
+ *
+ * With `grants`, it first shows that taking a place back holds: a seed run as the crew user makes a
+ * file in a place granted to it, the grant is taken back as after every run, and the probe must
+ * then fail to change that file, its ACL, or add a file there.
  */
 export async function probeWindowsSandbox(o: {
   stateRoot: string;
@@ -838,6 +899,8 @@ export async function probeWindowsSandbox(o: {
   mustNotRead: readonly string[];
   /** The shared crew Claude config dir: its root and its plugins must not be writable. */
   crewConfigDir?: string;
+  /** The crew user's grants: for the check of a place taken back. */
+  grants?: WindowsGrants;
   proxyPort: number;
   env: Record<string, string>;
   spawn?: SpawnKeeper;
@@ -848,9 +911,51 @@ export async function probeWindowsSandbox(o: {
   const name = `probe-${randomBytes(4).toString('hex')}`;
   const files = ownerFiles(o.stateRoot, name);
   const canary = join(o.ownerConfigDir, 'crew-probe-canary');
+  const formerDir = join(o.stateRoot, 'tmp', `${name}-former`);
   writeStateFile(dirname(canary), canary, 'canary\n');
+  /** One host run as the crew user; false when it did not finish in time. */
+  const host = async (spec: HostSpec, revoke: readonly string[] = []): Promise<boolean> => {
+    for (const f of Object.values(files)) removeStateEntry(o.stateRoot, f);
+    const k = await start({
+      args: keeperArgs({
+        script: keeperFile(o.stateRoot),
+        credFile: o.credFile,
+        node: o.node ?? process.execPath,
+        cwd: o.env.SystemRoot ?? o.env.SYSTEMROOT ?? 'C:\\Windows',
+        out: files.out,
+        err: files.err,
+        user: o.user,
+      }),
+      env: powershellEnv(o.env),
+      stdin: `${JSON.stringify(revoke)}\n${JSON.stringify(spec)}`,
+      log: files.keeper,
+      detached: false,
+    });
+    const timeout = sleep(o.timeoutMs ?? 120_000).then(() => 'timeout' as const);
+    if ((await Promise.race([k.exited, timeout])) === 'timeout') {
+      try {
+        process.kill(k.pid);
+      } catch {
+        // gone already
+      }
+      return false;
+    }
+    return true;
+  };
+  const unfinished =
+    'the Windows crew sandbox could not be shown to hold here: the probe as the crew user did not finish';
   try {
     const mark = randomBytes(8).toString('hex');
+    let former: { dir: string; file: string } | undefined;
+    if (o.grants !== undefined) {
+      ensureStateDir(o.stateRoot, formerDir);
+      const file = join(formerDir, 'made-by-the-crew-user.txt');
+      await o.grants.grant([{ path: formerDir, rights: 'M' }]);
+      const seeded = await host({ mode: 'seed', seed: file, env: o.env });
+      await o.grants.revokeAll();
+      if (!seeded) return unfinished;
+      former = { dir: formerDir, file };
+    }
     const spec: HostSpec = {
       mode: 'probe',
       probe: {
@@ -868,33 +973,11 @@ export async function probeWindowsSandbox(o: {
         ],
         direct: { host: 'github.com', port: 443 },
         proxy: { port: o.proxyPort, refused: 'example.invalid' },
+        ...(former === undefined ? {} : { former }),
       },
       env: { ...o.env, STUDIO_PROBE_MARK: mark },
     };
-    const k = await start({
-      args: keeperArgs({
-        script: keeperFile(o.stateRoot),
-        credFile: o.credFile,
-        node: o.node ?? process.execPath,
-        cwd: o.env.SystemRoot ?? o.env.SYSTEMROOT ?? 'C:\\Windows',
-        out: files.out,
-        err: files.err,
-        user: o.user,
-      }),
-      env: powershellEnv(o.env),
-      stdin: `[]\n${JSON.stringify(spec)}`,
-      log: files.keeper,
-      detached: false,
-    });
-    const timeout = sleep(o.timeoutMs ?? 120_000).then(() => 'timeout' as const);
-    if ((await Promise.race([k.exited, timeout])) === 'timeout') {
-      try {
-        process.kill(k.pid);
-      } catch {
-        // gone already
-      }
-      return 'the Windows crew sandbox could not be shown to hold here: the probe as the crew user did not finish';
-    }
+    if (!(await host(spec))) return unfinished;
     let results: ProbeResult[] | undefined;
     try {
       const raw = JSON.parse(readFileSync(files.out, 'utf8')) as unknown;
@@ -910,6 +993,7 @@ export async function probeWindowsSandbox(o: {
     return probeProblem(results);
   } finally {
     for (const f of Object.values(files)) removeStateEntry(o.stateRoot, f);
+    removeStateEntry(o.stateRoot, formerDir);
     removeStateEntry(dirname(canary), canary);
   }
 }
@@ -1058,6 +1142,7 @@ export async function windowsWorker(o: {
           ownerConfigDir: o.ownerConfigDir,
           mustNotRead,
           crewConfigDir: o.crewConfigDir,
+          grants,
           proxyPort: proxy.port,
           env: { ...probeEnv, PATH: path ?? '' },
           ...(o.spawn === undefined ? {} : { spawn: o.spawn }),
