@@ -1,5 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -161,6 +169,33 @@ describe('the cache role through tick and collect', () => {
     expect(readCacheMeta(f.state)).toBeUndefined();
     const again = JSON.parse((await cli(f, p, ['tick'])).out);
     expect(again.cache).toBeUndefined();
+  });
+
+  it('publishes nothing for a crew record that is not the cache launch, or a moved clone', async () => {
+    const f = fx();
+    const p = ports();
+    await cli(f, p, ['tick']);
+    finish(f, 'APP-1');
+    const crewFile = join(f.state, 'crew.json');
+    const records = JSON.parse(readFileSync(crewFile, 'utf8'));
+    records['APP-1'].cacheRun = 'e'.repeat(32);
+    writeFileSync(crewFile, JSON.stringify(records));
+    const r = JSON.parse((await cli(f, p, ['collect', 'APP-1'])).out);
+    expect(r.status).toBe('blocked');
+    expect(loadBoard(f.project).items[0]?.notes?.join('\n')).toMatch(
+      /not the cache run Studio launched/,
+    );
+    expect(readCacheMeta(f.state)).toBeUndefined();
+
+    const g = fx();
+    await cli(g, p, ['tick']);
+    finish(g, 'APP-1');
+    const clone = join(g.state, 'clones', 'APP-1');
+    git(clone, 'commit', '-q', '--allow-empty', '-m', 'moved');
+    const moved = JSON.parse((await cli(g, p, ['collect', 'APP-1'])).out);
+    expect(moved.status).toBe('blocked');
+    expect(loadBoard(g.project).items[0]?.notes?.join('\n')).toMatch(/not at main's/);
+    expect(readCacheMeta(g.state)).toBeUndefined();
   });
 
   it('off by default, and nothing on a main with nothing to cache', async () => {

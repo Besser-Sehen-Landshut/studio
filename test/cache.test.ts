@@ -16,6 +16,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import type { Board, WorkItem } from '../src/board.js';
 import {
   CACHE_GC_FILE,
+  type CacheRun,
   type CowCopy,
   cacheCleanup,
   cacheDir,
@@ -23,14 +24,15 @@ import {
   cacheDue,
   cacheStatus,
   cacheSteps,
+  cloneHead,
   cowCopyArgs,
-  publishCache,
+  publishCache as publish,
   readCacheMeta,
   readCacheRun,
   seedCrew,
   systemCowCopy,
   withCacheItem,
-  writeCacheRun,
+  writeCacheRun as writeRun,
 } from '../src/cache.js';
 import { type StudioConfig, studioConfigSchema } from '../src/config.js';
 
@@ -45,6 +47,25 @@ const fakeCow: CowCopy = async (src, dst) => {
   return true;
 };
 const failingCow: CowCopy = async () => false;
+
+const NONCE = 'f'.repeat(32);
+const runSha = new Map<string, string>();
+/** A run record as a cache launch writes it, with the nonce its crew record carries. */
+function writeCacheRun(stateRoot: string, run: Omit<CacheRun, 'nonce'>): void {
+  writeRun(stateRoot, { ...run, nonce: NONCE });
+  runSha.set(stateRoot, run.sha);
+}
+/** A clone whose HEAD names `sha` as a detached commit, as git leaves it on disk. */
+function atCommit(clone: string, sha: string): void {
+  mkdirSync(join(clone, '.git'), { recursive: true });
+  writeFileSync(join(clone, '.git', 'HEAD'), `${sha}\n`);
+}
+/** Publishes for the run's own crew, its clone at the run's commit. */
+function publishCache(o: Omit<Parameters<typeof publish>[0], 'crewNonce'>) {
+  const sha = runSha.get(o.stateRoot);
+  if (sha !== undefined) atCommit(o.clone, sha);
+  return publish({ ...o, crewNonce: NONCE });
+}
 
 let n = 0;
 /** A state base with one project state root, its owner root, a crew clone and HOME. */
@@ -399,5 +420,78 @@ describe('status and cleanup', () => {
       now: new Date(NOW.getTime() + 3_600_000),
     });
     expect(again).toBeUndefined();
+  });
+});
+
+describe('publishing only for the cache run Studio launched', () => {
+  async function ready() {
+    const l = layout();
+    built(l.clone, l.homeDir);
+    writeRun(l.stateRoot, {
+      item: 'APP-9',
+      sha: SHA,
+      commands: [],
+      startedAt: NOW.toISOString(),
+      nonce: NONCE,
+    });
+    return { ...l, item: 'APP-9', ownerConfig: {}, cow: fakeCow, now: NOW };
+  }
+
+  it('refuses a crew record without the run nonce, or with another one', async () => {
+    const o = await ready();
+    atCommit(o.clone, SHA);
+    await expect(publish({ ...o, crewNonce: undefined })).rejects.toThrow(
+      /not the cache run Studio launched/,
+    );
+    await expect(publish({ ...o, crewNonce: 'e'.repeat(32) })).rejects.toThrow(
+      /not the cache run Studio launched/,
+    );
+    expect(readCacheMeta(o.stateRoot)).toBeUndefined();
+  });
+
+  it('refuses a clone that is not at the commit the run was launched for', async () => {
+    const o = await ready();
+    atCommit(o.clone, 'b'.repeat(40));
+    await expect(publish({ ...o, crewNonce: NONCE })).rejects.toThrow(
+      /at bbbbbbbbbbbb, not at main's aaaaaaaaaaaa/,
+    );
+    rmSync(join(o.clone, '.git'), { recursive: true });
+    await expect(publish({ ...o, crewNonce: NONCE })).rejects.toThrow(/an unknown commit/);
+    expect(readCacheMeta(o.stateRoot)).toBeUndefined();
+  });
+});
+
+describe('cloneHead', () => {
+  const clone = () => {
+    const d = join(root, `head${n++}`);
+    mkdirSync(join(d, '.git', 'refs', 'heads', 'studio'), { recursive: true });
+    return d;
+  };
+
+  it('reads a detached HEAD, a loose branch ref and a packed one', () => {
+    const a = clone();
+    writeFileSync(join(a, '.git', 'HEAD'), `${SHA}\n`);
+    expect(cloneHead(a)).toBe(SHA);
+    const b = clone();
+    writeFileSync(join(b, '.git', 'HEAD'), 'ref: refs/heads/studio/APP-1\n');
+    writeFileSync(join(b, '.git', 'refs', 'heads', 'studio', 'APP-1'), `${SHA}\n`);
+    expect(cloneHead(b)).toBe(SHA);
+    const c = clone();
+    writeFileSync(join(c, '.git', 'HEAD'), 'ref: refs/heads/studio/APP-1\n');
+    writeFileSync(
+      join(c, '.git', 'packed-refs'),
+      `# pack-refs with: peeled\n${'c'.repeat(40)} refs/heads/studio/APP-1\n`,
+    );
+    expect(cloneHead(c)).toBe('c'.repeat(40));
+  });
+
+  it('cannot tell through a link, a bad ref or no .git', () => {
+    const a = clone();
+    symlinkSync('/etc/hosts', join(a, '.git', 'HEAD'));
+    expect(cloneHead(a)).toBeUndefined();
+    const b = clone();
+    writeFileSync(join(b, '.git', 'HEAD'), 'ref: refs/heads/../../x\n');
+    expect(cloneHead(b)).toBeUndefined();
+    expect(cloneHead(join(root, 'nowhere'))).toBeUndefined();
   });
 });

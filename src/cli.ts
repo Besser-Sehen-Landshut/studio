@@ -1431,6 +1431,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ownerConfig: loadOwnerConfig(owner),
             cow: ports.cow ?? systemCowCopy(),
             now: ports.clock.now(),
+            crewNonce: readCrewRecords(stateRoot())[item.id]?.cacheRun,
           });
           cached = { sha: meta.sha, sizeBytes: meta.sizeBytes };
         } catch (e) {

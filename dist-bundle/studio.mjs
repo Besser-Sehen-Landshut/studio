@@ -34505,20 +34505,59 @@ var cacheEnv = (homeDir) => ({
   // pnpm reads PNPM_CONFIG_* over pnpm-workspace.yaml and .npmrc.
   PNPM_CONFIG_STORE_DIR: join11(homeDir, ".pnpm-store")
 });
+var NONCE_RE = /^[0-9a-f]{32}$/;
+var cacheRunNonce = () => randomBytes7(16).toString("hex");
 function writeCacheRun(stateRoot, run2) {
   if (!SHA_RE2.test(run2.sha)) throw new Error("a cache run needs the full commit of main");
+  if (!NONCE_RE.test(run2.nonce)) throw new Error("a cache run needs a nonce");
   writeStateFile(stateRoot, runFile(stateRoot, run2.item), `${JSON.stringify(run2, null, 2)}
 `);
+}
+function clearCacheRun(stateRoot, id) {
+  removeStateEntry(stateRoot, runFile(stateRoot, id));
+}
+function cloneHead(clone2) {
+  const git = realDirBelow(clone2, ".git");
+  if (git === void 0) return void 0;
+  const read3 = (p) => {
+    if (!isRealFile(p)) return void 0;
+    try {
+      return readFileSync12(p, "utf8");
+    } catch {
+      return void 0;
+    }
+  };
+  const head = read3(join11(git, "HEAD"))?.trim();
+  if (head === void 0) return void 0;
+  if (SHA_RE2.test(head)) return head;
+  const ref = /^ref: (refs\/heads\/[A-Za-z0-9._/-]+)$/.exec(head)?.[1];
+  if (ref === void 0 || ref.split("/").includes("..")) return void 0;
+  const segs = ref.split("/");
+  if (realDirBelow(git, ...segs.slice(0, -1)) !== void 0) {
+    const loose = read3(join11(git, ...segs))?.trim();
+    if (loose !== void 0) return SHA_RE2.test(loose) ? loose : void 0;
+  }
+  for (const line4 of (read3(join11(git, "packed-refs")) ?? "").split("\n")) {
+    const m = /^([0-9a-f]{40}) (\S+)$/.exec(line4.trim());
+    if (m && m[2] === ref) return m[1];
+  }
+  return void 0;
 }
 function readCacheRun(stateRoot, id) {
   const file3 = runFile(stateRoot, id);
   if (!isRealFile(file3)) return void 0;
   try {
     const raw = JSON.parse(readFileSync12(file3, "utf8"));
-    if (!isObject4(raw) || raw.item !== id || typeof raw.sha !== "string" || !SHA_RE2.test(raw.sha) || !Array.isArray(raw.commands) || !raw.commands.every((c3) => typeof c3 === "string") || !validDate(raw.startedAt)) {
+    if (!isObject4(raw) || raw.item !== id || typeof raw.sha !== "string" || !SHA_RE2.test(raw.sha) || !Array.isArray(raw.commands) || !raw.commands.every((c3) => typeof c3 === "string") || !validDate(raw.startedAt) || typeof raw.nonce !== "string" || !NONCE_RE.test(raw.nonce)) {
       return void 0;
     }
-    return { item: id, sha: raw.sha, commands: raw.commands, startedAt: raw.startedAt };
+    return {
+      item: id,
+      sha: raw.sha,
+      commands: raw.commands,
+      startedAt: raw.startedAt,
+      nonce: raw.nonce
+    };
   } catch {
     return void 0;
   }
@@ -34549,6 +34588,15 @@ var gb = (bytes) => `${(bytes / 1e9).toFixed(1)} GB`;
 async function publishCache(o2) {
   const run2 = readCacheRun(o2.stateRoot, o2.item);
   if (run2 === void 0) throw new Error(`no cache run of ${o2.item} is recorded`);
+  if (o2.crewNonce === void 0 || o2.crewNonce !== run2.nonce) {
+    throw new Error(`the crew run of ${o2.item} is not the cache run Studio launched`);
+  }
+  const head = cloneHead(o2.clone);
+  if (head !== run2.sha) {
+    throw new Error(
+      `the clone of ${o2.item} is at ${head === void 0 ? "an unknown commit" : head.slice(0, 12)}, not at main's ${run2.sha.slice(0, 12)} the run was launched for`
+    );
+  }
   if (o2.cow === void 0) throw new Error("this platform has no copy-on-write copy");
   const cache2 = ensureStateDir(o2.stateRoot, cacheDir(o2.stateRoot));
   const staging = join11(cache2, `.staging-${randomBytes7(4).toString("hex")}`);
@@ -39527,6 +39575,8 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   ensureStateDir(stateRoot, tmpDir);
   const cow = ports.cow ?? systemCowCopy(launcher2.platform ?? process.platform);
   const cacheCommands = isCache ? cacheSteps(wt.path).map((s) => s.command) : [];
+  const cacheNonce = isCache ? cacheRunNonce() : void 0;
+  clearCacheRun(stateRoot, item.id);
   if (isCache) {
     if (cacheCommands.length === 0) {
       throw new Error(
@@ -39537,7 +39587,8 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
       item: item.id,
       sha: pinned.sha,
       commands: cacheCommands,
-      startedAt: ports.clock.now().toISOString()
+      startedAt: ports.clock.now().toISOString(),
+      nonce: cacheNonce
     });
   } else if (worker === void 0 && config2.cache?.enabled === true) {
     await seedCrew({
@@ -39745,7 +39796,8 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
     startedAt: ports.clock.now().toISOString(),
     label,
     ...tokenConfigDir === void 0 ? {} : { tokenConfigDir },
-    logStart
+    logStart,
+    ...cacheNonce === void 0 ? {} : { cacheRun: cacheNonce }
   };
   const hadFile = existsNoFollow2(crewFile);
   let before;
@@ -43074,20 +43126,20 @@ function workerItemProblem(item) {
   }
   return void 0;
 }
-var NONCE_RE = /^[0-9a-f]{32}$/;
+var NONCE_RE2 = /^[0-9a-f]{32}$/;
 var offerSchema = external_exports.strictObject({
   studioOffer: external_exports.literal(1),
   label: external_exports.string().regex(WORKER_LABEL_RE),
   lead: external_exports.string().regex(GITHUB_LOGIN_RE),
   offeredAt: external_exports.string().refine((s) => !Number.isNaN(Date.parse(s)), "not a time"),
-  nonce: external_exports.string().regex(NONCE_RE),
+  nonce: external_exports.string().regex(NONCE_RE2),
   item: external_exports.record(external_exports.string(), external_exports.unknown())
 });
 var snake4 = (k) => k.replace(/[A-Z]/g, (c3) => `_${c3.toLowerCase()}`);
 var camel5 = (k) => k.replace(/_([a-z0-9])/g, (_, c3) => c3.toUpperCase());
 var offerTitle = (id, label) => `Studio offer ${id} for ${label}`;
 function renderOffer(item, lead, now, nonce) {
-  if (!NONCE_RE.test(nonce)) throw new Error("invalid offer nonce");
+  if (!NONCE_RE2.test(nonce)) throw new Error("invalid offer nonce");
   if (item.runsOn === void 0) throw new Error(`${item.id} names no runs_on label`);
   const fields = {};
   for (const k of OFFER_FIELDS) if (item[k] !== void 0) fields[snake4(k)] = item[k];
@@ -51368,7 +51420,8 @@ async function runCli(argv, deps) {
             homeDir: join51(stateRoot(), "homes", item.id),
             ownerConfig: loadOwnerConfig(owner),
             cow: ports.cow ?? systemCowCopy(),
-            now: ports.clock.now()
+            now: ports.clock.now(),
+            crewNonce: readCrewRecords(stateRoot())[item.id]?.cacheRun
           });
           cached2 = { sha: meta3.sha, sizeBytes: meta3.sizeBytes };
         } catch (e) {

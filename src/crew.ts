@@ -34,7 +34,9 @@ import {
 import {
   CACHE_ROLE,
   cacheEnv,
+  cacheRunNonce,
   cacheSteps,
+  clearCacheRun,
   seedCrew,
   systemCowCopy,
   writeCacheRun,
@@ -1225,6 +1227,8 @@ export interface CrewRecord {
   logStart?: number;
   /** The run was stopped at a usage limit. */
   limit?: { at: string; kind: LimitKind; sessionId?: string };
+  /** A cache crew: the nonce of its cache run record (src/cache.ts). */
+  cacheRun?: string;
 }
 
 // Updates of crew.json are serialised in-process, and across processes by `crew.lock`
@@ -1707,6 +1711,9 @@ async function launchCrewLocked(
   // other local crew starts from copy-on-write copies of it (src/cache.ts).
   const cow = ports.cow ?? systemCowCopy(launcher.platform ?? process.platform);
   const cacheCommands = isCache ? cacheSteps(wt.path).map((s) => s.command) : [];
+  const cacheNonce = isCache ? cacheRunNonce() : undefined;
+  // Only the launch that wrote it may publish: any other launch of this id removes the record.
+  clearCacheRun(stateRoot, item.id);
   if (isCache) {
     if (cacheCommands.length === 0) {
       throw new Error(
@@ -1718,6 +1725,7 @@ async function launchCrewLocked(
       sha: pinned.sha,
       commands: cacheCommands,
       startedAt: ports.clock.now().toISOString(),
+      nonce: cacheNonce as string,
     });
   } else if (worker === undefined && config.cache?.enabled === true) {
     await seedCrew({
@@ -1958,6 +1966,7 @@ async function launchCrewLocked(
     label,
     ...(tokenConfigDir === undefined ? {} : { tokenConfigDir }),
     logStart,
+    ...(cacheNonce === undefined ? {} : { cacheRun: cacheNonce }),
   };
   // The pid goes on disk at once: a lead killed from here on leaves a record, so the next tick
   // finds the crew instead of starting a second one. Without an identity yet the record is

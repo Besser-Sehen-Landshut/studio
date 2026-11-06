@@ -265,12 +265,58 @@ export interface CacheRun {
   sha: string;
   commands: string[];
   startedAt: string;
+  /** Also on the crew record of this launch: collect publishes only for that very run. */
+  nonce: string;
 }
+
+const NONCE_RE = /^[0-9a-f]{32}$/;
+
+/** A fresh nonce that binds a cache run record to its crew record. */
+export const cacheRunNonce = (): string => randomBytes(16).toString('hex');
 
 /** Written at a cache crew's launch, out of its reach: what collect publishes from. */
 export function writeCacheRun(stateRoot: string, run: CacheRun): void {
   if (!SHA_RE.test(run.sha)) throw new Error('a cache run needs the full commit of main');
+  if (!NONCE_RE.test(run.nonce)) throw new Error('a cache run needs a nonce');
   writeStateFile(stateRoot, runFile(stateRoot, run.item), `${JSON.stringify(run, null, 2)}\n`);
+}
+
+/** Any launch that is not a cache run removes an older record of that id: it can publish nothing. */
+export function clearCacheRun(stateRoot: string, id: string): void {
+  removeStateEntry(stateRoot, runFile(stateRoot, id));
+}
+
+/**
+ * The commit a clone's HEAD names, read from files only (git never runs in a crew clone): a
+ * detached HEAD, or the branch's loose ref, else its line in packed-refs. Every file must be a
+ * plain file reached without a link; undefined when it cannot be told.
+ */
+export function cloneHead(clone: string): string | undefined {
+  const git = realDirBelow(clone, '.git');
+  if (git === undefined) return undefined;
+  const read = (p: string): string | undefined => {
+    if (!isRealFile(p)) return undefined;
+    try {
+      return readFileSync(p, 'utf8');
+    } catch {
+      return undefined;
+    }
+  };
+  const head = read(join(git, 'HEAD'))?.trim();
+  if (head === undefined) return undefined;
+  if (SHA_RE.test(head)) return head;
+  const ref = /^ref: (refs\/heads\/[A-Za-z0-9._/-]+)$/.exec(head)?.[1];
+  if (ref === undefined || ref.split('/').includes('..')) return undefined;
+  const segs = ref.split('/');
+  if (realDirBelow(git, ...segs.slice(0, -1)) !== undefined) {
+    const loose = read(join(git, ...segs))?.trim();
+    if (loose !== undefined) return SHA_RE.test(loose) ? loose : undefined;
+  }
+  for (const line of (read(join(git, 'packed-refs')) ?? '').split('\n')) {
+    const m = /^([0-9a-f]{40}) (\S+)$/.exec(line.trim());
+    if (m && m[2] === ref) return m[1];
+  }
+  return undefined;
 }
 
 export function readCacheRun(stateRoot: string, id: string): CacheRun | undefined {
@@ -285,11 +331,19 @@ export function readCacheRun(stateRoot: string, id: string): CacheRun | undefine
       !SHA_RE.test(raw.sha) ||
       !Array.isArray(raw.commands) ||
       !raw.commands.every((c) => typeof c === 'string') ||
-      !validDate(raw.startedAt)
+      !validDate(raw.startedAt) ||
+      typeof raw.nonce !== 'string' ||
+      !NONCE_RE.test(raw.nonce)
     ) {
       return undefined;
     }
-    return { item: id, sha: raw.sha, commands: raw.commands as string[], startedAt: raw.startedAt };
+    return {
+      item: id,
+      sha: raw.sha,
+      commands: raw.commands as string[],
+      startedAt: raw.startedAt,
+      nonce: raw.nonce,
+    };
   } catch {
     return undefined;
   }
@@ -354,9 +408,20 @@ export async function publishCache(o: {
   ownerConfig: Pick<OwnerConfig, 'cache'>;
   cow: CowCopy | undefined;
   now: Date;
+  /** The nonce on the crew record collect handles: it must be the run record's. */
+  crewNonce: string | undefined;
 }): Promise<CacheMeta> {
   const run = readCacheRun(o.stateRoot, o.item);
   if (run === undefined) throw new Error(`no cache run of ${o.item} is recorded`);
+  if (o.crewNonce === undefined || o.crewNonce !== run.nonce) {
+    throw new Error(`the crew run of ${o.item} is not the cache run Studio launched`);
+  }
+  const head = cloneHead(o.clone);
+  if (head !== run.sha) {
+    throw new Error(
+      `the clone of ${o.item} is at ${head === undefined ? 'an unknown commit' : head.slice(0, 12)}, not at main's ${run.sha.slice(0, 12)} the run was launched for`,
+    );
+  }
   if (o.cow === undefined) throw new Error('this platform has no copy-on-write copy');
   const cache = ensureStateDir(o.stateRoot, cacheDir(o.stateRoot));
   const staging = join(cache, `.staging-${randomBytes(4).toString('hex')}`);

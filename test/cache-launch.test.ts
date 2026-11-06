@@ -13,7 +13,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { WorkItem } from '../src/board.js';
-import { type CowCopy, publishCache, readCacheMeta, readCacheRun } from '../src/cache.js';
+import {
+  type CowCopy,
+  cloneHead,
+  publishCache,
+  readCacheMeta,
+  readCacheRun,
+} from '../src/cache.js';
 import { type StudioConfig, studioConfigSchema } from '../src/config.js';
 import { type LauncherEnv, launchCrew } from '../src/crew.js';
 import { evaluateGuard } from '../src/guard.js';
@@ -177,6 +183,22 @@ describe('launching a cache crew', () => {
     expect(existsSync(join(clone, 'target'))).toBe(false);
   });
 
+  it('binds the run record to its crew record; any other launch of the id removes it', async () => {
+    const f = fixture(CARGO);
+    await launchCrew(f.project, cacheItem, config(true), ports([]), f.launcher);
+    const run = readCacheRun(f.state, 'APP-7');
+    const records = JSON.parse(readFileSync(join(f.state, 'crew.json'), 'utf8'));
+    expect(run?.nonce).toMatch(/^[0-9a-f]{32}$/);
+    expect(records['APP-7'].cacheRun).toBe(run?.nonce);
+    // The clone the run left reads as main's commit, from files.
+    expect(cloneHead(join(f.state, 'clones', 'APP-7'))).toBe(f.sha);
+    const other = { ...builder, id: 'APP-7' };
+    await launchCrew(f.project, other, config(true), ports([]), f.launcher);
+    expect(readCacheRun(f.state, 'APP-7')).toBeUndefined();
+    const after = JSON.parse(readFileSync(join(f.state, 'crew.json'), 'utf8'));
+    expect(after['APP-7'].cacheRun).toBeUndefined();
+  });
+
   it('refuses while the cache is off, and on a main with nothing to cache', async () => {
     const f = fixture(CARGO);
     await expect(
@@ -211,6 +233,7 @@ describe('other crews start from the cache', () => {
       ownerConfig: {},
       cow,
       now: new Date(),
+      crewNonce: readCacheRun(f.state, 'APP-7')?.nonce,
     });
     expect(readCacheMeta(f.state)?.sha).toBe(f.sha);
     return f;
