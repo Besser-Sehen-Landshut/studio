@@ -94,7 +94,7 @@ if (-not $script:planted) { throw 'the hook never ran' }`);
       expect(run(`(Get-Acl -LiteralPath ${q(outside)}).Sddl`)).toBe(before);
     }, 120_000);
 
-    it('walks 10,000 levels without a stack to overflow, and refuses a tree over its caps clearly', () => {
+    it('deletes in bounded steps: 10,000 levels and a wide tree go over several calls, none crashes', () => {
       const base = realpathSync(mkdtempSync(join(tmpdir(), 'studio-deep-')));
       const q = (p: string) => `'${p.replace(/'/g, "''")}'`;
       const run = (script: string) =>
@@ -102,33 +102,32 @@ if (-not $script:planted) { throw 'the hook never ran' }`);
           encoding: 'utf8',
           env: powershellEnv(process.env),
           maxBuffer: 16 * 1024 * 1024,
-        });
-      const deep = join(base, 'deep');
-      // 10,000 folders, one inside the other: a path of about 20,000 characters.
-      const make = (root: string, levels: number) =>
-        `$p = '\\\\?\\' + ${q(root)}; for ($i = 0; $i -lt ${levels}; $i++) { $p += '\\a'; [void][IO.Directory]::CreateDirectory($p) }; [IO.File]::WriteAllText($p + '\\end.txt', 'x')`;
-      run(make(deep, 10_000));
+        }).trim();
+      const tree = `Add-Type -Path ${q(TREE_SOURCE())}`;
+      /** Prune calls of `budget` entries until the tree is gone; the entries each call deleted. */
+      const prune = (root: string, budget: number) =>
+        run(`$ErrorActionPreference = 'Stop'; ${tree}
+$out = @(); for ($i = 0; $i -lt 100; $i++) { $r = [StudioTree]::Prune(${q(root)}, ${budget}, $false, $null); $out += $r.Deleted; if ($r.Done) { break } }
+$out -join ','`)
+          .split(',')
+          .map(Number);
+      // 10,000 folders, one inside the other (a path of about 20,000 characters), built with short
+      // paths only: the chain moves one level down into a new top folder, 10,000 times.
+      const deep = join(base, 'c');
       run(
-        `$ErrorActionPreference = 'Stop'; Add-Type -Path ${q(TREE_SOURCE())}; [StudioTree]::Remove(${q(deep)}, $null)`,
+        `$b = ${q(base)}; [void][IO.Directory]::CreateDirectory("$b\\c"); [IO.File]::WriteAllText("$b\\c\\end.txt", 'x'); for ($i = 0; $i -lt 10000; $i++) { [void][IO.Directory]::CreateDirectory("$b\\n"); [IO.Directory]::Move("$b\\c", "$b\\n\\a"); [IO.Directory]::Move("$b\\n", "$b\\c") }`,
       );
+      const deepRuns = prune(deep, 3000);
+      expect(deepRuns.slice(0, 3)).toEqual([3000, 3000, 3000]);
+      expect(deepRuns.reduce((x, y) => x + y, 0)).toBe(10_002);
       expect(existsSync(deep)).toBe(false);
-      // Over a cap: a clear error at once, nothing crashes.
-      const capped = join(base, 'capped');
-      run(make(capped, 50));
-      expect(() =>
-        run(
-          `$ErrorActionPreference = 'Stop'; Add-Type -Path ${q(TREE_SOURCE())}; [StudioTree]::Remove(${q(capped)}, $null, 20, 1000000)`,
-        ),
-      ).toThrow(/deeper than 20 folders/);
-      expect(() =>
-        run(
-          `$ErrorActionPreference = 'Stop'; Add-Type -Path ${q(TREE_SOURCE())}; [StudioTree]::Remove(${q(capped)}, $null, 1000, 10)`,
-        ),
-      ).toThrow(/more than 10 entries/);
+      // A wide tree: 5,000 files in one folder.
+      const wide = join(base, 'wide');
       run(
-        `$ErrorActionPreference = 'Stop'; Add-Type -Path ${q(TREE_SOURCE())}; [StudioTree]::Remove(${q(capped)}, $null)`,
+        `[void][IO.Directory]::CreateDirectory(${q(wide)}); for ($i = 0; $i -lt 5000; $i++) { [IO.File]::WriteAllText((Join-Path ${q(wide)} ("f$i.txt")), 'x') }`,
       );
-      expect(existsSync(capped)).toBe(false);
+      expect(prune(wide, 1000)).toEqual([1000, 1000, 1000, 1000, 1000, 1]);
+      expect(existsSync(wide)).toBe(false);
     }, 600_000);
   },
 );

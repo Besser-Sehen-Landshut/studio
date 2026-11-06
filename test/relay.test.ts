@@ -634,7 +634,13 @@ describe('the Windows relay worker, with fakes', () => {
     started.length = 0;
     const SID = 'S-1-5-21-1-2-3-1001';
     expect(
-      await accounts({ op: 'fresh', at: at(), user: 'studio-crew-0a1b2c', sid: SID }).fresh(),
+      await accounts({
+        op: 'fresh',
+        at: at(),
+        left: [],
+        user: 'studio-crew-0a1b2c',
+        sid: SID,
+      }).fresh(),
     ).toMatchObject({ user: 'studio-crew-0a1b2c', sid: SID });
     await accounts({ op: 'retire', at: at(), left: [] }).retire();
     expect(started).toEqual(['T fresh', 'T retire']);

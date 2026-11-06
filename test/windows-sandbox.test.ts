@@ -86,7 +86,7 @@ describe('the setup script', () => {
 
   it('takes away the shared crew user of earlier versions and crew users a crash left', () => {
     expect(script).toContain("$old.Description -eq 'Studio crew sandbox'");
-    expect(script).toContain('RemoveJobUser $old');
+    expect(script).toContain('QuarantineProfile $old (Quarantine)');
     expect(script).toContain('$null = RetireJobUsers');
   });
 
@@ -495,40 +495,51 @@ describe('grants and the crew user of each job', () => {
 });
 
 describe('the crew user scripts', () => {
-  it("count only users of the prefix with Studio's description; delete a profile without following a link", () => {
-    const s = crewAccountScript({ op: 'retire', prefix: 'studio-crew' });
+  it("count only users of the prefix with Studio's description; retire never waits for a profile", () => {
+    const s = crewAccountScript({ op: 'retire', prefix: 'studio-crew', pruneBudget: 500 });
     expect(s).toContain("$prefix = 'studio-crew'");
     expect(s).toContain(`$crewDescription = '${CREW_DESCRIPTION}'`);
     expect(s).toContain("'-[0-9a-f]{6}$'");
     expect(s).toContain('$_.Description -eq $crewDescription');
-    // Every crew user is locked first (disabled, a password nobody knows), then its processes
-    // end: nothing can start one again before its profile and the user are gone.
+    expect(s).toContain(`$treeSource = '${TREE_SOURCE()}'`);
+    expect(s).toContain('$pruneBudget = 500');
+    // One order, each step for every user even when it failed for another: lock (disabled, a
+    // password nobody knows), sweep, profile into the quarantine, sweep, delete the account, then
+    // a bounded part of the quarantine.
     const retire = s.slice(s.indexOf('function RetireJobUsers'));
     const at = (x: string) => retire.indexOf(x);
-    expect(at('foreach ($u in $users) { LockJobUser $u }')).toBeGreaterThan(0);
-    expect(at('foreach ($u in $users) { LockJobUser $u }')).toBeLessThan(at('NoneLeft'));
-    expect(at('NoneLeft')).toBeLessThan(at('RemoveJobUser $u'));
+    const order = [
+      'foreach ($u in $users) { try { LockJobUser $u } catch {',
+      '$null = SweepJobUsers',
+      'try { QuarantineProfile $u $q } catch {',
+      '$s = SweepJobUsers',
+      'try { Remove-LocalUser -SID $u.SID; $gone += $u.Name } catch {',
+      '[StudioTree]::Prune($q, $pruneBudget, $true, $null)',
+    ];
+    for (let i = 1; i < order.length; i++) {
+      expect(at(order[i - 1] as string), order[i - 1]).toBeGreaterThan(0);
+      expect(at(order[i - 1] as string), order[i]).toBeLessThan(at(order[i] as string));
+    }
     expect(s).toContain('Disable-LocalUser -SID $u.SID');
     expect(s).toContain('Set-LocalUser -SID $u.SID -Password (ConvertTo-SecureString (NewSecret)');
-    // The profile goes through Studio's tree deleter, and processes are swept again after it,
-    // before Windows forgets the profile; nothing deletes it with Remove-Item (which follows
-    // junctions in Windows PowerShell).
-    const remove = s.slice(
-      s.indexOf('function RemoveJobUser'),
+    // The profile is moved in one rename; nothing deletes it in place, nothing with Remove-Item
+    // (which follows junctions in Windows PowerShell).
+    const quarantine = s.slice(
+      s.indexOf('function QuarantineProfile'),
       s.indexOf('function RetireJobUsers'),
     );
-    const r = (x: string) => remove.indexOf(x);
-    expect(r('RemoveTree $path $null')).toBeLessThan(r('NoneLeft'));
-    expect(r('NoneLeft')).toBeLessThan(r('Remove-CimInstance -InputObject $prof'));
-    expect(remove).not.toMatch(/Remove-Item -LiteralPath \$path/);
-    expect(s).toContain('[StudioTree]::Remove($root, $afterList)');
-    expect(s).toContain(`$treeSource = '${TREE_SOURCE()}'`);
+    expect(quarantine).toContain('[StudioTree]::Move($path, (Join-Path $q');
+    expect(quarantine).not.toMatch(/Remove-Item -LiteralPath \$path/);
+    expect(s).toContain("Join-Path (ProfileRoot) 'Studio crew quarantine'");
+    expect(s).toContain(
+      "icacls $q /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'",
+    );
+    expect(s).toContain('inherits its ACL');
     expect(s).toContain('is a reparse point');
     expect(s).toContain('not a folder right below');
-    expect(s).toContain('Remove-LocalUser -SID $sid');
     // A member of the group that is not a crew user of Studio's refuses everything.
     expect(s).toContain("which is not a crew user of Studio's: remove it from the group");
-    expect(s).toContain('$out.removed = @(RetireJobUsers)');
+    expect(s).toContain('$out.problems = @($r.problems)');
   });
 
   it('a fresh user is a standard user in the group, its password sealed for the reader only', () => {
@@ -543,7 +554,10 @@ describe('the crew user scripts', () => {
     expect(s).toContain("Get-LocalGroup -SID 'S-1-5-32-544'");
     expect(s).toContain('DataProtectionScope]::LocalMachine');
     expect(s).toContain(`"*$($reader):R"`);
-    expect(s).toMatch(/\$out\.removed = @\(RetireJobUsers\)[\s\S]*NewJobUser/);
+    // A fresh user only when no process of an earlier one is left.
+    expect(s).toMatch(
+      /\$r = RetireJobUsers[\s\S]*if \(@\(\$out\.left\)\.Count -eq 0\) \{\s*\$n = NewJobUser/,
+    );
     // Replace keeps the DACL of the file it replaced: the intended one goes on after it.
     const seal = s.slice(s.indexOf('function SealFor'));
     expect(seal.indexOf('[IO.File]::Replace(')).toBeLessThan(
@@ -557,33 +571,47 @@ describe('the crew user scripts', () => {
     ).toThrow(/not a SID/);
   });
 
-  it('judges answers: an error, processes left, a fresh user, and nothing else', () => {
-    expect(judgeCrewAnswer('sweep', { op: 'sweep', at: 'x', left: [] })).toEqual({ left: [] });
-    expect(judgeCrewAnswer('sweep', { op: 'sweep', at: 'x', left: 77 })).toEqual({ left: [77] });
+  it('judges answers: an error, processes left, a fresh user with its notes, and nothing else', () => {
+    const none = { problems: [] };
+    expect(judgeCrewAnswer('sweep', { op: 'sweep', at: 'x', left: [] })).toEqual({
+      left: [],
+      notes: none,
+    });
+    expect(judgeCrewAnswer('sweep', { op: 'sweep', at: 'x', left: 77 })).toMatchObject({
+      left: [77],
+    });
     expect(judgeCrewAnswer('sweep', { op: 'retire', at: 'x', left: [] })).toBeUndefined();
     expect(judgeCrewAnswer('retire', { op: 'retire', at: 'x', error: 'no' })).toEqual({
       error: 'no',
     });
-    expect(
-      judgeCrewAnswer('fresh', { op: 'fresh', at: 'x', user: 'studio-crew-0a1b2c', sid: SID }),
-    ).toEqual({ account: { user: 'studio-crew-0a1b2c', sid: SID, at: 'x' } });
-    expect(
-      judgeCrewAnswer('fresh', { op: 'fresh', at: 'x', user: 'Administrator', sid: SID }),
-    ).toBeUndefined();
-    expect(
-      judgeCrewAnswer('fresh', {
-        op: 'fresh',
-        at: 'x',
-        user: 'studio-crew-0a1b2c',
-        sid: 'S-1-5-18',
-      }),
-    ).toBeUndefined();
+    const fresh = {
+      op: 'fresh',
+      at: 'x',
+      left: [],
+      problems: 'studio-crew-aaaaaa: its profile stays where it is: busy',
+      quarantine: { trees: 2, pruned: 500, done: false },
+      user: 'studio-crew-0a1b2c',
+      sid: SID,
+    };
+    expect(judgeCrewAnswer('fresh', fresh)).toEqual({
+      account: { user: 'studio-crew-0a1b2c', sid: SID, at: 'x' },
+      notes: {
+        problems: ['studio-crew-aaaaaa: its profile stays where it is: busy'],
+        quarantined: 2,
+      },
+    });
+    // Processes left: no fresh user, and that refuses.
+    expect(judgeCrewAnswer('fresh', { op: 'fresh', at: 'x', left: [9] })).toMatchObject({
+      left: [9],
+    });
+    expect(judgeCrewAnswer('fresh', { ...fresh, user: 'Administrator' })).toBeUndefined();
+    expect(judgeCrewAnswer('fresh', { ...fresh, sid: 'S-1-5-18' })).toBeUndefined();
   });
 
   it('the native worker runs them itself, elevated, and reads their answer', async () => {
     const scripts: string[] = [];
     const answers: Record<string, unknown> = {
-      fresh: { op: 'fresh', at: '2026-01-01T00:00:00Z', user: 'crew-0a1b2c', sid: SID },
+      fresh: { op: 'fresh', at: '2026-01-01T00:00:00Z', left: [], user: 'crew-0a1b2c', sid: SID },
       retire: { op: 'retire', at: 'x', left: [] },
       sweep: { op: 'sweep', at: 'x', left: [5] },
     };
@@ -598,7 +626,12 @@ describe('the crew user scripts', () => {
         return { code: 0, stdout: JSON.stringify(answers[op]), stderr: '' };
       },
     });
-    expect(await a.fresh()).toEqual({ user: 'crew-0a1b2c', sid: SID, at: '2026-01-01T00:00:00Z' });
+    expect(await a.fresh()).toEqual({
+      user: 'crew-0a1b2c',
+      sid: SID,
+      at: '2026-01-01T00:00:00Z',
+      notes: { problems: [] },
+    });
     expect(scripts[0]).toMatch(/^if \(-not \(\[Security\.Principal\.WindowsPrincipal\]/);
     await a.retire();
     await expect(a.sweep()).rejects.toThrow(/still running \(5\)/);

@@ -329,12 +329,20 @@ function readGrantRecord(ownerRoot: string): GrantRecord {
   try {
     const raw = JSON.parse(readFileSync(join(ownerRoot, RECORD_FILE), 'utf8')) as GrantRecord;
     const a = raw.account;
+    const n = a?.notes;
+    const notes =
+      n !== undefined && n !== null && Array.isArray(n.problems)
+        ? {
+            problems: n.problems.filter((x): x is string => typeof x === 'string'),
+            ...(typeof n.quarantined === 'number' ? { quarantined: n.quarantined } : {}),
+          }
+        : undefined;
     const account =
       a !== undefined &&
       typeof a.user === 'string' &&
       typeof a.sid === 'string' &&
       typeof a.at === 'string'
-        ? { user: a.user, sid: a.sid, at: a.at }
+        ? { user: a.user, sid: a.sid, at: a.at, ...(notes === undefined ? {} : { notes }) }
         : undefined;
     return {
       ...(account === undefined ? {} : { account }),

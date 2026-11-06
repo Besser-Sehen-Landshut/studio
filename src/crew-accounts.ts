@@ -13,6 +13,9 @@
 import { dirname, join } from 'node:path';
 import { CREW_HOST_BIN, OUTSIDE, powershellEnv, psQuote, type RunFile } from './windows-sandbox.js';
 
+/** Entries of the quarantine deleted per retire: bounded time, a huge tree goes over several. */
+export const PRUNE_BUDGET = 20_000;
+
 /** The tree deleter (bin/studio-tree.cs) beside the crew host. */
 export const TREE_SOURCE = (): string => join(dirname(CREW_HOST_BIN), 'studio-tree.cs');
 
@@ -34,6 +37,8 @@ export interface CrewAccount {
   user: string;
   sid: string;
   at: string;
+  /** What the run that made it reported about the users it retired and the quarantine. */
+  notes?: CrewNotes;
 }
 
 /** What makes and deletes the crew users: the worker itself, elevated, or the broker tasks. */
@@ -63,9 +68,14 @@ const prefixOf = (prefix: string): string => {
  * after every reparse point in it is removed as a link, never followed, and only when it is a folder
  * right below the profiles folder of this machine.
  */
-export const crewAccountFunctions = (prefix: string, treeSource: string = TREE_SOURCE()): string =>
+export const crewAccountFunctions = (
+  prefix: string,
+  treeSource: string = TREE_SOURCE(),
+  pruneBudget = PRUNE_BUDGET,
+): string =>
   `$prefix = ${psQuote(prefixOf(prefix))}
 $treeSource = ${psQuote(treeSource)}
+$pruneBudget = ${Math.max(1, Math.trunc(pruneBudget))}
 $crewDescription = ${psQuote(CREW_DESCRIPTION)}
 $groupDescription = ${psQuote(GROUP_DESCRIPTION)}
 ${CREW_ACCOUNT_BODY}`;
@@ -101,19 +111,30 @@ function SweepJobUsers {
   if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }
   @{ found = $found.Count; left = @(OwnedBy $sids | ForEach-Object { [int]$_.ProcessId }) }
 }
-function NoneLeft {
-  $s = SweepJobUsers
-  if ($s.left.Count -gt 0) { throw "processes of the crew users are still running ($($s.left -join ', ')) and cannot be ended" }
-}
-# A tree deleted as administrators or SYSTEM, never following a link and whatever its DACLs say
-# (bin/studio-tree.cs: backup and restore semantics, long paths).
-function RemoveTree([string]$root, $afterList) {
-  if (-not ('StudioTree' -as [type])) { Add-Type -Path $treeSource }
-  [StudioTree]::Remove($root, $afterList)
-}
+function LoadTree { if (-not ('StudioTree' -as [type])) { Add-Type -Path $treeSource } }
 function ProfileRoot {
   $list = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
   [Environment]::ExpandEnvironmentVariables($list.ProfilesDirectory).TrimEnd('\')
+}
+# Where profiles of retired crew users wait to be deleted, a bounded number of entries per run:
+# a folder right below the profiles folder (only administrators make folders there), owned by
+# administrators, its DACL protected (SYSTEM and administrators only).
+function Quarantine {
+  $q = Join-Path (ProfileRoot) 'Studio crew quarantine'
+  $item = Get-Item -LiteralPath $q -Force -ErrorAction SilentlyContinue
+  if ($null -eq $item) {
+    New-Item -ItemType Directory -Path $q | Out-Null
+    icacls $q /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /L /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "cannot set the ACL of $q" }
+    icacls $q /setowner '*S-1-5-32-544' /L /Q | Out-Null
+    return $q
+  }
+  if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$q is a reparse point" }
+  $acl = Get-Acl -LiteralPath $q
+  $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+  if (@('S-1-5-32-544', 'S-1-5-18') -notcontains $owner) { throw "$q is owned by $owner" }
+  if (-not $acl.AreAccessRulesProtected) { throw "$q inherits its ACL" }
+  $q
 }
 # No logon as a crew user any more: disabled, with a new password nobody ever learns. What could
 # start one of its processes (the relay account, which could unseal the old password) cannot.
@@ -121,7 +142,8 @@ function LockJobUser($u) {
   Disable-LocalUser -SID $u.SID
   Set-LocalUser -SID $u.SID -Password (ConvertTo-SecureString (NewSecret) -AsPlainText -Force)
 }
-function RemoveJobUser($u) {
+# The profile leaves the profiles folder in one rename, into the quarantine, and Windows forgets it.
+function QuarantineProfile($u, [string]$q) {
   $sid = $u.SID.Value
   $prof = $null
   for ($i = 0; $i -lt 60; $i++) {
@@ -129,33 +151,54 @@ function RemoveJobUser($u) {
     if ($null -eq $prof -or -not $prof.Loaded) { break }
     Start-Sleep -Milliseconds 500
   }
-  if ($null -ne $prof) {
-    if ($prof.Loaded) { throw "the profile of $($u.Name) is still loaded" }
-    $path = [string]$prof.LocalPath
-    $root = ProfileRoot
-    $rest = if ($path.Length -gt $root.Length + 1) { $path.Substring($root.Length + 1) } else { '' }
-    if (-not $path.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase) -or $rest -eq '' -or $rest.Contains('\')) {
-      throw "the profile of $($u.Name) is at $path, not a folder right below $root"
-    }
-    $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-    if ($null -ne $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "the profile of $($u.Name) at $path is a reparse point" }
-    # Studio deletes the folder itself, never following a link, before Windows forgets the profile.
-    RemoveTree $path $null
-    NoneLeft
-    try { Remove-CimInstance -InputObject $prof } catch { }
-    $key = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $sid
-    if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
-    RemoveTree $path $null
+  if ($null -eq $prof) { return }
+  if ($prof.Loaded) { throw "its profile is still loaded" }
+  $path = [string]$prof.LocalPath
+  $root = ProfileRoot
+  $rest = if ($path.Length -gt $root.Length + 1) { $path.Substring($root.Length + 1) } else { '' }
+  if (-not $path.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase) -or $rest -eq '' -or $rest.Contains('\')) {
+    throw "its profile is at $path, not a folder right below $root"
   }
-  Remove-LocalUser -SID $sid
+  $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+  if ($null -ne $item) {
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "its profile at $path is a reparse point" }
+    [StudioTree]::Move($path, (Join-Path $q ($sid + '-' + [Guid]::NewGuid().ToString('N'))))
+  }
+  try { Remove-CimInstance -InputObject $prof } catch { }
+  $key = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $sid
+  if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
 }
+# Retiring a crew user never waits for its profile to be deleted. Every step runs for every user,
+# also when it failed for another, and each failure is reported by user: lock them all, end their
+# processes, move their profiles into the quarantine, end what is left once more, delete the
+# accounts. Then up to $pruneBudget entries of the quarantine go.
 function RetireJobUsers {
-  $users = JobUsers
-  foreach ($u in $users) { LockJobUser $u }
-  NoneLeft
+  LoadTree
+  $users = @(JobUsers)
+  $problems = @()
+  foreach ($u in $users) { try { LockJobUser $u } catch { $problems += "$($u.Name): cannot lock it: $($_.Exception.Message)" } }
+  $null = SweepJobUsers
+  $q = $null
+  try { $q = Quarantine } catch { $problems += "the quarantine: $($_.Exception.Message)" }
+  foreach ($u in $users) {
+    if ($null -eq $q) { $problems += "$($u.Name): its profile stays where it is"; continue }
+    try { QuarantineProfile $u $q } catch { $problems += "$($u.Name): its profile stays where it is: $($_.Exception.Message)" }
+  }
+  $s = SweepJobUsers
   $gone = @()
-  foreach ($u in $users) { RemoveJobUser $u; $gone += $u.Name }
-  $gone
+  foreach ($u in $users) {
+    try { Remove-LocalUser -SID $u.SID; $gone += $u.Name } catch { $problems += "$($u.Name): cannot delete it: $($_.Exception.Message)" }
+  }
+  $quarantine = @{ trees = 0; pruned = 0; done = $false }
+  if ($null -ne $q) {
+    try {
+      $r = [StudioTree]::Prune($q, $pruneBudget, $true, $null)
+      $quarantine.pruned = $r.Deleted
+      $quarantine.done = $r.Done
+    } catch { $problems += "the quarantine: $($_.Exception.Message)" }
+    try { $quarantine.trees = @(Get-ChildItem -LiteralPath $q -Force -ErrorAction Stop).Count } catch { $quarantine.trees = -1 }
+  }
+  @{ removed = $gone; problems = $problems; left = $s.left; quarantine = $quarantine }
 }
 function NewSecret { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b) + 'aA1!' }
 # The password, sealed for this machine, in a file only SYSTEM, administrators and the reader read:
@@ -198,6 +241,15 @@ function NewJobUser([string]$credFile, [string]$reader) {
 
 export type CrewAccountOp = 'sweep' | 'retire' | 'fresh';
 
+/** A retire's part of a script: its answer, with every user's problems and the quarantine. */
+const RETIRE_BODY = [
+  '  $r = RetireJobUsers',
+  '  $out.removed = @($r.removed)',
+  '  $out.problems = @($r.problems)',
+  '  $out.left = @($r.left)',
+  '  $out.quarantine = $r.quarantine',
+].join('\n');
+
 /** Where a broker script names the relay account's SID, filled in by the setup. */
 export const RELAY_SID_SLOT = '__STUDIO_RELAY_SID__';
 
@@ -214,6 +266,8 @@ export function crewAccountScript(o: {
   result?: string;
   /** The tree deleter to load (bin/studio-tree.cs): the admin-only copy on a relay worker. */
   treeSource?: string;
+  /** Entries of the quarantine deleted in this run. */
+  pruneBudget?: number;
 }): string {
   if (o.op === 'fresh' && (o.credFile === undefined || o.reader === undefined)) {
     throw new Error('a fresh crew user needs a credential file and its reader');
@@ -227,8 +281,8 @@ export function crewAccountScript(o: {
     o.op === 'sweep'
       ? '  $s = SweepJobUsers\n  $out.found = $s.found\n  $out.left = $s.left'
       : o.op === 'retire'
-        ? '  $out.removed = @(RetireJobUsers)\n  $out.left = @()'
-        : `  $out.removed = @(RetireJobUsers)\n  $n = NewJobUser ${psQuote(o.credFile ?? '')} ${reader}\n  $out.user = $n.user\n  $out.sid = $n.sid`;
+        ? RETIRE_BODY
+        : `${RETIRE_BODY}\n  if (@($out.left).Count -eq 0) {\n    $n = NewJobUser ${psQuote(o.credFile ?? '')} ${reader}\n    $out.user = $n.user\n    $out.sid = $n.sid\n  }`;
   const write =
     o.result === undefined
       ? '[Console]::Out.Write((ConvertTo-Json -Compress $out))'
@@ -236,7 +290,7 @@ export function crewAccountScript(o: {
   return `$ErrorActionPreference = 'Stop'
 $out = @{ op = ${psQuote(o.op)}; at = (Get-Date).ToUniversalTime().ToString('o') }
 try {
-${crewAccountFunctions(o.prefix, o.treeSource ?? TREE_SOURCE())}
+${crewAccountFunctions(o.prefix, o.treeSource ?? TREE_SOURCE(), o.pruneBudget ?? PRUNE_BUDGET)}
 ${body}
 } catch {
   $out.error = $_.Exception.Message
@@ -245,11 +299,23 @@ ${write}
 `;
 }
 
+/** What a retire or fresh run reports beside its result: problems by user, and the quarantine. */
+export interface CrewNotes {
+  /** One line per user and step that failed; the other steps ran on. */
+  problems: string[];
+  /** Profiles of retired users still waiting in the quarantine; -1 when it cannot be read. */
+  quarantined?: number;
+}
+
 /** An answer of a crew account script: undefined when it has not the shape it must have. */
 export function judgeCrewAnswer(
   op: CrewAccountOp,
   answer: unknown,
-): { error: string } | { left: number[] } | { account: CrewAccount } | undefined {
+):
+  | { error: string }
+  | { left: number[]; notes: CrewNotes }
+  | { account: CrewAccount; notes: CrewNotes }
+  | undefined {
   const a = answer as {
     op?: unknown;
     at?: unknown;
@@ -257,30 +323,45 @@ export function judgeCrewAnswer(
     left?: unknown;
     user?: unknown;
     sid?: unknown;
+    problems?: unknown;
+    quarantine?: unknown;
   } | null;
   if (a === null || typeof a !== 'object' || a.op !== op || typeof a.at !== 'string') {
     return undefined;
   }
   if (typeof a.error === 'string') return { error: a.error.slice(0, 300) };
-  if (op === 'fresh') {
-    if (
-      typeof a.user !== 'string' ||
-      !/^[A-Za-z][A-Za-z0-9_-]{0,12}-[0-9a-f]{6}$/.test(a.user) ||
-      typeof a.sid !== 'string' ||
-      !/^S-1-5-21(-\d+)+$/.test(a.sid)
-    ) {
-      return undefined;
-    }
-    return { account: { user: a.user, sid: a.sid, at: a.at } };
-  }
   // Windows PowerShell writes a one-element array as its element.
+  const list = (x: unknown): unknown[] | undefined =>
+    Array.isArray(x) ? x : x === undefined || x === null ? [] : [x];
   const left = Array.isArray(a.left) ? a.left : typeof a.left === 'number' ? [a.left] : undefined;
   if (left === undefined || !left.every((n) => Number.isInteger(n))) return undefined;
-  return { left: left as number[] };
+  const problems = (list(a.problems) ?? [])
+    .filter((x): x is string => typeof x === 'string')
+    .map((x) => x.slice(0, 300))
+    .slice(0, 20);
+  const q = a.quarantine as { trees?: unknown } | undefined;
+  const notes: CrewNotes = {
+    problems,
+    ...(typeof q?.trees === 'number' && Number.isInteger(q.trees) ? { quarantined: q.trees } : {}),
+  };
+  if (op !== 'fresh' || left.length > 0) return { left: left as number[], notes };
+  if (
+    typeof a.user !== 'string' ||
+    !/^[A-Za-z][A-Za-z0-9_-]{0,12}-[0-9a-f]{6}$/.test(a.user) ||
+    typeof a.sid !== 'string' ||
+    !/^S-1-5-21(-\d+)+$/.test(a.sid)
+  ) {
+    return undefined;
+  }
+  return { account: { user: a.user, sid: a.sid, at: a.at }, notes };
 }
 
-/** Throws the refusal of an answer; returns the account of a fresh one. */
-function settle(op: CrewAccountOp, raw: unknown, where: string): CrewAccount | undefined {
+/** Throws the refusal of an answer; returns the account of a fresh one and the notes. */
+function settle(
+  op: CrewAccountOp,
+  raw: unknown,
+  where: string,
+): { account?: CrewAccount; notes?: CrewNotes } {
   const j = judgeCrewAnswer(op, raw);
   if (j === undefined) throw new Error(`${where} answered in an unknown shape`);
   if ('error' in j) throw new Error(`${where} could not ${op} the crew users: ${j.error}`);
@@ -289,7 +370,7 @@ function settle(op: CrewAccountOp, raw: unknown, where: string): CrewAccount | u
       `processes of the crew users are still running (${j.left.join(', ')}) and ${where} cannot end them`,
     );
   }
-  return 'account' in j ? j.account : undefined;
+  return 'account' in j ? { account: j.account, notes: j.notes } : { notes: j.notes };
 }
 
 /** Whether a crew user of this SID exists, asked as any account may. */
@@ -318,11 +399,14 @@ export function localCrewAccounts(o: {
   run: RunFile;
   /** The SID of the account Studio runs as (`S-1-...`), which reads the sealed password. */
   reader: () => Promise<string>;
+  /** Entries of the quarantine deleted per retire (tests make it small). */
+  pruneBudget?: number;
 }): CrewAccounts {
-  const call = async (op: CrewAccountOp): Promise<CrewAccount | undefined> => {
+  const call = async (op: CrewAccountOp): Promise<{ account?: CrewAccount; notes?: CrewNotes }> => {
     const script = crewAccountScript({
       op,
       prefix: o.prefix,
+      ...(o.pruneBudget === undefined ? {} : { pruneBudget: o.pruneBudget }),
       ...(op === 'fresh' ? { credFile: o.credFile, reader: await o.reader() } : {}),
     });
     const elevated =
@@ -353,7 +437,13 @@ export function localCrewAccounts(o: {
     retire: async () => {
       await call('retire');
     },
-    fresh: async () => (await call('fresh')) as CrewAccount,
+    fresh: async () => {
+      const r = await call('fresh');
+      return {
+        ...(r.account as CrewAccount),
+        ...(r.notes === undefined ? {} : { notes: r.notes }),
+      };
+    },
     exists: (sid) => crewUserExists(o.run, sid),
   };
 }
@@ -375,7 +465,7 @@ export function brokerCrewAccounts(o: {
   sleep: (ms: number) => Promise<void>;
   waitMs?: number;
 }): CrewAccounts {
-  const call = async (op: CrewAccountOp): Promise<CrewAccount | undefined> => {
+  const call = async (op: CrewAccountOp): Promise<{ account?: CrewAccount; notes?: CrewNotes }> => {
     const started = o.now().getTime();
     const task = o.tasks[op];
     const r = await o.run('schtasks.exe', ['/Run', '/TN', task]);
@@ -408,7 +498,13 @@ export function brokerCrewAccounts(o: {
     retire: async () => {
       await call('retire');
     },
-    fresh: async () => (await call('fresh')) as CrewAccount,
+    fresh: async () => {
+      const r = await call('fresh');
+      return {
+        ...(r.account as CrewAccount),
+        ...(r.notes === undefined ? {} : { notes: r.notes }),
+      };
+    },
     exists: (sid) => crewUserExists(o.run, sid),
   };
 }
@@ -429,11 +525,13 @@ $groupSid = $group.SID.Value
 # The shared crew user of earlier versions goes, with what it left.
 $old = Get-LocalUser -Name $prefix -ErrorAction SilentlyContinue
 if ($null -ne $old -and $old.Description -eq 'Studio crew sandbox') {
+  LoadTree
   LockJobUser $old
   $left = @(OwnedBy @($old.SID.Value))
   foreach ($p in $left) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
   Start-Sleep -Milliseconds 800
-  RemoveJobUser $old
+  QuarantineProfile $old (Quarantine)
+  Remove-LocalUser -SID $old.SID
   Get-NetFirewallRule -DisplayName ('Studio crew ' + $prefix + ': no direct network') -ErrorAction SilentlyContinue | Remove-NetFirewallRule
   Write-Output "Removed the shared crew user $prefix of an earlier version."
 }

@@ -126,6 +126,8 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
         credFile: credFileIn(ownerConfigDir),
         run: runFile,
         reader: async () => (await ownerSid(runFile)).slice(1),
+        // Small, so a profile of a few thousand files waits in the quarantine over several runs.
+        pruneBudget: 1000,
       }),
       run: runFile,
     });
@@ -154,6 +156,13 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
         env: powershellEnv(process.env),
       })
     ).stdout.trim();
+  /** Entries waiting in the quarantine of retired profiles. */
+  const quarantined = async () =>
+    Number(
+      await ps(
+        `$q = Join-Path ([Environment]::ExpandEnvironmentVariables((Get-ItemProperty -LiteralPath 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList').ProfilesDirectory)) 'Studio crew quarantine'; if (Test-Path -LiteralPath $q) { @(Get-ChildItem -LiteralPath $q -Recurse -Force -Attributes !ReparsePoint -ErrorAction SilentlyContinue).Count } else { 0 }`,
+      ),
+    );
   /** The crew users that exist now. */
   const crewUsers = async () =>
     (
@@ -238,6 +247,9 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
       // One in its own profile, which is deleted after the job: that must never follow it either.
       "const home=require('os').userInfo().homedir;",
       `require('fs').symlinkSync(${JSON.stringify('PROFILE_OUTSIDE')},require('path').join(home,'planted'),'junction');`,
+      // A profile too big to delete in one go: it must not hold up the next job.
+      "const bulk=require('path').join(home,'bulk');require('fs').mkdirSync(bulk);",
+      "for(let i=0;i<3000;i++)require('fs').writeFileSync(require('path').join(bulk,'f'+i),'x');",
       "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});",
       "console.log(JSON.stringify({who:require('os').userInfo().username,home,prompt:p,proxy:process.env.HTTPS_PROXY,",
       'token:process.env.CLAUDE_CODE_OAUTH_TOKEN,me:String(process.pid),child:String(c.pid)}));',
@@ -282,9 +294,11 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     expect(exists(Number(r.line?.me))).toBe(false);
     expect(exists(Number(r.line?.child))).toBe(false);
     expect(grants.paths()).toEqual([]);
-    // Stopping deleted the crew user and its profile; the junction in it led nowhere on the way.
+    // Stopping deleted the crew user and moved its profile into the quarantine, where a part of it
+    // was deleted; the junction in it led nowhere on the way.
     expect(await crewUsers()).toEqual([]);
     expect(existsSync(r.line?.home as string)).toBe(false);
+    expect(await quarantined()).toBeGreaterThan(1000);
     expect(readFileSync(join(profileOutside, 'owner.txt'), 'utf8')).toBe('the owner');
     expect((await runFile('icacls', [profileOutside, '/T'])).stdout).toBe(profileAclBefore);
   }, 300_000);
@@ -312,7 +326,16 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     expect(await probe()).toBeUndefined();
     expect(grants.account()?.user).not.toBe(r.account.user);
     expect(await crewUsers()).toEqual([grants.account()?.user]);
-    await grants.retire();
+    // The quarantine shrinks with every retire, and never held up a fresh user.
+    let left = await quarantined();
+    for (let i = 0; i < 10 && left > 0; i++) {
+      await grants.retire();
+      const now = await quarantined();
+      expect(now).toBeLessThan(left);
+      left = now;
+    }
+    expect(left).toBe(0);
     expect(await crewUsers()).toEqual([]);
+    expect(readFileSync(join(base, 'profile-outside', 'owner.txt'), 'utf8')).toBe('the owner');
   }, 400_000);
 });

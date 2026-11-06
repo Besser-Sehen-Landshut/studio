@@ -202,7 +202,18 @@ export function relayWindows(o: {
       ];
       // The crew user of the coming job: a fresh one, unless no crew ran as the one made before.
       try {
-        await grants.ready();
+        const account = await grants.ready();
+        // What retiring the last crew users left to say: doctor shows it.
+        for (const line of account.notes?.problems ?? [])
+          warnings.push(`retiring a crew user: ${line}`);
+        const waiting = account.notes?.quarantined ?? 0;
+        if (waiting !== 0) {
+          warnings.push(
+            waiting < 0
+              ? 'the quarantine of retired crew profiles cannot be read'
+              : `${waiting} retired crew profile(s) wait in the quarantine; each retire deletes part of them`,
+          );
+        }
       } catch (e) {
         return {
           problem: {
