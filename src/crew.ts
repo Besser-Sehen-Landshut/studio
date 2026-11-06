@@ -122,7 +122,7 @@ import {
   recordRun,
   USAGE_UNREADABLE,
 } from './usage.js';
-import { type Grant, hostDirOf, windowsCrewEnv } from './windows-sandbox.js';
+import { type Grant, runConfigDir, windowsCrewEnv } from './windows-sandbox.js';
 
 export { resolveModel };
 
@@ -936,6 +936,8 @@ export function writeCrewSettings(
      * the crew runs as the crew sandbox user behind Studio's proxy instead.
      */
     windows?: boolean;
+    /** On a native Windows worker: the run's own Claude config dir, where its tool outputs land. */
+    runConfigDir?: string;
   },
   launcher: LauncherEnv = {},
 ): string {
@@ -1018,7 +1020,10 @@ export function writeCrewSettings(
   // Where Claude Code saves a tool output too long to show, and tells the crew to read it. The
   // transcripts beside it stay out.
   const toolResultGlobs = unique(
-    [configDir, realOr(configDir)].flatMap((dir) =>
+    (dirs.runConfigDir === undefined
+      ? [configDir, realOr(configDir)]
+      : [dirs.runConfigDir]
+    ).flatMap((dir) =>
       [clone, realOr(clone)].map(
         (c) => `${join(dir, 'projects', c.replace(/[^A-Za-z0-9]/g, '-'))}/*/tool-results/**`,
       ),
@@ -1754,7 +1759,9 @@ async function launchCrewLocked(
           }),
       ...(worker === undefined ? {} : { deny: worker.deny }),
       ...(timeouts === undefined ? {} : { timeouts }),
-      ...(windows === undefined ? {} : { windows: true }),
+      ...(windows === undefined
+        ? {}
+        : { windows: true, runConfigDir: join(homeDir, '.claude-run') }),
     },
     owner,
   );
@@ -1818,7 +1825,8 @@ async function launchCrewLocked(
       env,
       windowsCrewEnv({ proxyPort: windows.proxyPort, homeDir, tmpDir, base: penv }),
     );
-    const hostDir = ensureStateDir(stateRoot, hostDirOf(stateRoot, item.id));
+    // A Claude config dir of the run's own; the shared one stays read-only for the crew user.
+    env.CLAUDE_CONFIG_DIR = runConfigDir(homeDir, claudeConfigDir);
     if (!existsNoFollow(log)) writeStateFile(stateRoot, log, '');
     const briefs = ['md', 'caps', 'rules', 'reference']
       .map((ext) => join(stateRoot, 'briefs', `${item.id}.${ext}`))
@@ -1827,7 +1835,6 @@ async function launchCrewLocked(
       { path: wt.path, rights: 'M' },
       { path: homeDir, rights: 'M' },
       { path: tmpDir, rights: 'M' },
-      { path: hostDir, rights: 'M' },
       ...briefs.map((path) => ({ path, rights: 'R' as const })),
       { path: settings, rights: 'R' },
       { path: mcpConfig, rights: 'R' },

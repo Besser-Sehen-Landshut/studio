@@ -1,10 +1,20 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync } from 'node:fs';
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ipv4, LOOPBACK } from './egress-proxy.js';
-import { ensureStateDir, removeStateEntry, writeStateFile } from './paths.js';
+import { HeldError } from './held.js';
+import { assertStatePath, ensureStateDir, removeStateEntry, writeStateFile } from './paths.js';
 import type { Claude } from './ports.js';
 
 /**
@@ -18,7 +28,8 @@ import type { Claude } from './ports.js';
  * - **Files.** The crew user is a member of Users only. The owner's profile (credentials, gh and
  *   git logins, Studio's state and owner config) is closed to other users by Windows' default
  *   profile ACL. For each run Studio grants the crew user only the run's own places: its clone,
- *   HOME, tmp dir and log (modify), its brief, settings and guard context (read).
+ *   HOME, tmp dir and log (modify), its brief, settings and guard context (read), and takes the
+ *   grants off when the run ends (`WindowsGrants`). One crew at a time, as all share the user.
  *   Toolchains, node, Git and Claude Code must be readable by it (Program Files is; the setup
  *   grants read on the paths it is given).
  * - **Network.** A firewall rule of the setup blocks every outbound connection of the crew user
@@ -107,14 +118,13 @@ export function psQuote(s: string): string {
  * under (the credential file is encrypted for that account, DPAPI). It creates the crew user with a
  * random password nobody sees, a member of Users only; stores its credential for the owner alone;
  * adds the outbound firewall rule; and grants the crew user read on `readPaths` (toolchains, the
- * Studio plugin, Claude Code) and modify on `writePaths` (the crew Claude config dir). Idempotent:
+ * Studio plugin, Claude Code, the skills and plugins of the crew Claude config dir). Idempotent:
  * an existing user keeps its password unless the credential file is missing.
  */
 export function windowsSetupScript(o: {
   user: string;
   credFile: string;
   readPaths: readonly string[];
-  writePaths: readonly string[];
 }): string {
   if (!CREW_USER_RE.test(o.user)) throw new Error(`not a crew user name: ${o.user}`);
   const list = (ps: readonly string[]) => `@(${ps.map(psQuote).join(', ')})`;
@@ -158,10 +168,6 @@ New-NetFirewallRule -DisplayName $rule -Direction Outbound -Action Block -LocalU
 foreach ($p in ${list(o.readPaths)}) {
   if (Test-Path -LiteralPath $p) { icacls $p /grant "\${name}:(OI)(CI)RX" /Q | Out-Null }
 }
-foreach ($p in ${list(o.writePaths)}) {
-  New-Item -ItemType Directory -Force -Path $p | Out-Null
-  icacls $p /grant "\${name}:(OI)(CI)M" /Q | Out-Null
-}
 Write-Output "Studio crew user $name is ready; start the worker again."
 `;
 }
@@ -170,21 +176,42 @@ Write-Output "Studio crew user $name is ready; start the worker again."
 
 export interface Grant {
   path: string;
-  /** `M` modify (with inheritance for a directory), `R` read, `W` write (a file). */
-  rights: 'M' | 'R' | 'W';
+  /** `M` modify (with inheritance for a directory), `R` read and execute. */
+  rights: 'M' | 'R';
 }
+
+/** The SID of OWNER RIGHTS: an ACE for it replaces what a file's owner may do by default. */
+const OWNER_RIGHTS = '*S-1-3-4';
 
 /** The `icacls` arguments of one grant. */
 export function grantArgs(user: string, g: Grant): string[] {
   if (!CREW_USER_RE.test(user)) throw new Error(`not a crew user name: ${user}`);
-  let dir = false;
+  const rights = g.rights === 'R' ? 'RX' : 'M';
+  return [g.path, '/grant', `${user}:${isDir(g.path) ? '(OI)(CI)' : ''}${rights}`, '/Q'];
+}
+
+/**
+ * A writable directory also gets an inheritable OWNER RIGHTS entry with nothing but SYNCHRONIZE:
+ * what the crew user creates there is owned by it, and an owner may by default read and change the
+ * ACL of its files. With this entry it keeps no rights of its own once its grant is removed, so a
+ * later crew cannot open what an earlier one left in another clone.
+ */
+export function ownerRightsArgs(path: string): string[] {
+  return [path, '/grant', `${OWNER_RIGHTS}:(OI)(CI)(S)`, '/Q'];
+}
+
+/** The `icacls` arguments that take every grant of the crew user off a path. */
+export function revokeArgs(user: string, path: string): string[] {
+  if (!CREW_USER_RE.test(user)) throw new Error(`not a crew user name: ${user}`);
+  return [path, '/remove:g', user, '/Q'];
+}
+
+function isDir(p: string): boolean {
   try {
-    dir = lstatSync(g.path).isDirectory();
+    return lstatSync(p).isDirectory();
   } catch {
-    dir = false;
+    return false;
   }
-  const rights = g.rights === 'R' ? 'RX' : g.rights;
-  return [g.path, '/grant', `${user}:${dir ? '(OI)(CI)' : ''}${rights}`, '/Q'];
 }
 
 export type RunFile = (
@@ -211,23 +238,100 @@ export const runFile: RunFile = (file, args, opts = {}) =>
     );
   });
 
-/** Grants every place of a run to the crew user; the first failure refuses the launch. */
-export async function grantAll(
-  run: RunFile,
-  user: string,
-  grants: readonly Grant[],
-): Promise<void> {
-  for (const g of grants) {
-    const r = await run('icacls', grantArgs(user, g));
-    if (r.code !== 0) {
-      throw new Error(`cannot open ${g.path} to the crew user ${user}: icacls exited ${r.code}`);
-    }
+const GRANTS_FILE = 'windows-grants.json';
+
+interface GrantRecord {
+  /** The keeper of the crew that holds the grants, once it started. */
+  keeper?: number;
+  paths: string[];
+}
+
+function readGrantRecord(stateRoot: string): GrantRecord {
+  try {
+    const raw = JSON.parse(readFileSync(join(stateRoot, GRANTS_FILE), 'utf8')) as GrantRecord;
+    return {
+      ...(typeof raw.keeper === 'number' ? { keeper: raw.keeper } : {}),
+      paths: Array.isArray(raw.paths) ? raw.paths.filter((p) => typeof p === 'string') : [],
+    };
+  } catch {
+    return { paths: [] };
   }
 }
 
-// ---- Starting a process as the crew user -------------------------------------------------------
+const writeGrantRecord = (stateRoot: string, r: GrantRecord) =>
+  writeStateFile(stateRoot, join(stateRoot, GRANTS_FILE), `${JSON.stringify(r)}\n`);
 
-/** The crew host (bin/studio-crew-host.mjs): runs as the crew user, starts and stops the crew. */
+const processExists = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};
+
+/**
+ * The grants of the one crew this worker runs at a time, recorded owner-side (the state root, never
+ * the crew's places) so that they are taken off when it ends, when it is stopped, and before any
+ * later grant, also after a crash. With one shared crew user, two crews at once could reach each
+ * other's places: a grant while a recorded keeper lives refuses.
+ */
+export class WindowsGrants {
+  constructor(private readonly o: { stateRoot: string; user: string; run: RunFile }) {}
+
+  paths(): string[] {
+    return readGrantRecord(this.o.stateRoot).paths;
+  }
+
+  /** Takes every recorded grant off; a failure is thrown after all were tried. */
+  async revokeAll(): Promise<void> {
+    const rec = readGrantRecord(this.o.stateRoot);
+    const failed: string[] = [];
+    for (const p of rec.paths) {
+      if (!existsSync(p)) continue;
+      const r = await this.o.run('icacls', revokeArgs(this.o.user, p));
+      if (r.code !== 0) failed.push(p);
+    }
+    writeGrantRecord(this.o.stateRoot, { paths: failed });
+    if (failed.length > 0) {
+      throw new Error(`cannot take the crew user's grants off ${failed.join(', ')}`);
+    }
+  }
+
+  async grant(grants: readonly Grant[]): Promise<void> {
+    const rec = readGrantRecord(this.o.stateRoot);
+    if (rec.keeper !== undefined && processExists(rec.keeper)) {
+      throw new HeldError(
+        'a crew of this Windows worker is still running: one crew at a time, as all share the crew user',
+      );
+    }
+    await this.revokeAll();
+    // Recorded before granting: a crash halfway leaves nothing that is not taken off later.
+    writeGrantRecord(this.o.stateRoot, { paths: grants.map((g) => g.path) });
+    for (const g of grants) {
+      const steps = [
+        grantArgs(this.o.user, g),
+        ...(g.rights === 'M' && isDir(g.path) ? [ownerRightsArgs(g.path)] : []),
+      ];
+      for (const args of steps) {
+        const r = await this.o.run('icacls', args);
+        if (r.code !== 0) {
+          throw new Error(
+            `cannot open ${g.path} to the crew user ${this.o.user}: icacls exited ${r.code}`,
+          );
+        }
+      }
+    }
+  }
+
+  recordKeeper(pid: number): void {
+    writeGrantRecord(this.o.stateRoot, { ...readGrantRecord(this.o.stateRoot), keeper: pid });
+  }
+}
+
+// ---- The keeper: starting, holding and stopping a crew -----------------------------------------
+
+/** The crew host (bin/studio-crew-host.mjs): runs as the crew user, starts the crew. */
 export const CREW_HOST_BIN = resolve(
   dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -235,38 +339,124 @@ export const CREW_HOST_BIN = resolve(
   'studio-crew-host.mjs',
 );
 
+/** The keeper's file name; the identity check looks for it on the command line. */
+export const KEEPER_FILE = 'studio-crew-keeper.ps1';
+
 /**
- * The PowerShell that starts `node <host> <spec>` as the crew user and prints its pid. The
- * credential is decrypted inside PowerShell; Studio never holds the password. `Start-Process
- * -Credential` gives the new process the crew user's own environment, not this one's (seen on
- * Windows), so the crew's environment travels in the spec. The host's stdout and stderr go to
- * `host.out` and `host.err` in the control dir.
+ * The keeper: a PowerShell of the owner that lives as long as the crew. It reads from its stdin a
+ * first line with the paths whose grants it takes off at the end, then the spec. It creates a job
+ * object that ends every process in it when its last handle closes, starts the host as the crew
+ * user (`Start-Process -Credential`, whose process handle has full access) and puts it in the job
+ * before the host has its spec, so nothing the crew starts escapes the job. The spec, with the
+ * crew's environment and so the Claude token, goes to the host over a named pipe only the owner and
+ * the crew user may open, and only once the pipe's client is that very host: it never lands on
+ * disk. Then it waits for the host and takes the grants off. Ending the keeper (Studio's stop)
+ * closes the job and so ends the crew's whole tree. The host's output goes to files in a directory
+ * of the owner, which the crew user cannot reach.
  */
-export function startScript(o: {
-  credFile: string;
-  node: string;
-  host: string;
-  spec: string;
-  cwd: string;
-  dir: string;
-}): string {
-  // Start-Process joins -ArgumentList with spaces: each argument is quoted for the command line.
-  const arg = (s: string) => {
-    if (/["\p{Cc}]/u.test(s)) throw new Error(`refusing a path with quotes: ${JSON.stringify(s)}`);
-    return psQuote(`"${s}"`);
-  };
-  return [
-    "$ErrorActionPreference = 'Stop'",
-    `$c = Import-Clixml -LiteralPath ${psQuote(o.credFile)}`,
-    `$p = Start-Process -FilePath ${psQuote(o.node)} -ArgumentList @(${arg(o.host)}, ${arg(o.spec)}) -Credential $c -WorkingDirectory ${psQuote(o.cwd)} -WindowStyle Hidden -PassThru -RedirectStandardOutput ${psQuote(join(o.dir, 'host.out'))} -RedirectStandardError ${psQuote(join(o.dir, 'host.err'))}`,
-    '[Console]::Out.Write($p.Id)',
-  ].join('\n');
+export const KEEPER_SCRIPT = `# Studio: the keeper of one crew on a Windows worker (src/windows-sandbox.ts).
+param(
+  [Parameter(Mandatory = $true)][string]$Cred,
+  [Parameter(Mandatory = $true)][string]$Node,
+  [Parameter(Mandatory = $true)][string]$HostBin,
+  [Parameter(Mandatory = $true)][string]$Cwd,
+  [Parameter(Mandatory = $true)][string]$Out,
+  [Parameter(Mandatory = $true)][string]$Err,
+  [Parameter(Mandatory = $true)][string]$User,
+  [int]$WaitSeconds = 60
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class StudioJob {
+  [StructLayout(LayoutKind.Sequential)]
+  struct Basic {
+    public long PerProcessUserTimeLimit; public long PerJobUserTimeLimit; public uint LimitFlags;
+    public UIntPtr MinimumWorkingSetSize; public UIntPtr MaximumWorkingSetSize;
+    public uint ActiveProcessLimit; public UIntPtr Affinity; public uint PriorityClass;
+    public uint SchedulingClass;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  struct Io { public ulong A, B, C, D, E, F; }
+  [StructLayout(LayoutKind.Sequential)]
+  struct Extended {
+    public Basic BasicLimits; public Io IoInfo; public UIntPtr ProcessMemoryLimit;
+    public UIntPtr JobMemoryLimit; public UIntPtr PeakProcessMemoryUsed; public UIntPtr PeakJobMemoryUsed;
+  }
+  [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref Extended info, int length);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint pid);
+  public static IntPtr Create() {
+    IntPtr job = CreateJobObject(IntPtr.Zero, null);
+    if (job == IntPtr.Zero) throw new Win32Exception();
+    Extended info = new Extended();
+    info.BasicLimits.LimitFlags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if (!SetInformationJobObject(job, 9, ref info, Marshal.SizeOf(typeof(Extended)))) throw new Win32Exception();
+    return job;
+  }
+  public static void Assign(IntPtr job, IntPtr process) {
+    if (!AssignProcessToJobObject(job, process)) throw new Win32Exception();
+  }
+  public static uint ClientPid(IntPtr pipe) {
+    uint pid;
+    if (!GetNamedPipeClientProcessId(pipe, out pid)) throw new Win32Exception();
+    return pid;
+  }
 }
+'@
+$raw = [Console]::In.ReadToEnd()
+$nl = $raw.IndexOf([char]10)
+if ($nl -lt 0) { throw 'no spec on stdin' }
+$revoke = @(ConvertFrom-Json $raw.Substring(0, $nl))
+$spec = [Text.Encoding]::UTF8.GetBytes($raw.Substring($nl + 1))
+$raw = $null
+$p = $null
+try {
+  $job = [StudioJob]::Create()
+  $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+  $crew = (New-Object Security.Principal.NTAccount($env:COMPUTERNAME, $User)).Translate([Security.Principal.SecurityIdentifier])
+  $security = New-Object System.IO.Pipes.PipeSecurity
+  $security.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, 'FullControl', 'Allow')))
+  $security.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($crew, 'ReadWrite', 'Allow')))
+  $name = 'studio-' + [Guid]::NewGuid().ToString('N')
+  $pipe = New-Object System.IO.Pipes.NamedPipeServerStream($name, 'Out', 1, 'Byte', 'Asynchronous', 0, 65536, $security)
+  $c = Import-Clixml -LiteralPath $Cred
+  $p = Start-Process -FilePath $Node -ArgumentList @(('"' + $HostBin + '"'), $name) -Credential $c -WorkingDirectory $Cwd -WindowStyle Hidden -PassThru -RedirectStandardOutput $Out -RedirectStandardError $Err
+  [StudioJob]::Assign($job, $p.Handle)
+  $wait = $pipe.BeginWaitForConnection($null, $null)
+  if (-not $wait.AsyncWaitHandle.WaitOne($WaitSeconds * 1000)) { throw 'the crew host did not connect' }
+  $pipe.EndWaitForConnection($wait)
+  if ([StudioJob]::ClientPid($pipe.SafePipeHandle.DangerousGetHandle()) -ne [uint32]$p.Id) {
+    throw 'a process other than the crew host connected'
+  }
+  $pipe.Write($spec, 0, $spec.Length)
+  $pipe.Flush()
+  $pipe.WaitForPipeDrain()
+  $pipe.Dispose()
+  $spec = $null
+  $p.WaitForExit()
+  $code = $p.ExitCode
+} catch {
+  if ($null -ne $p -and -not $p.HasExited) { $p.Kill() }
+  [Console]::Error.WriteLine("studio keeper: $($_.Exception.Message)")
+  $code = 2
+} finally {
+  foreach ($r in $revoke) {
+    if (Test-Path -LiteralPath $r) { icacls $r /remove:g $User /Q | Out-Null }
+  }
+}
+exit $code
+`;
 
 export interface HostSpec {
   mode: 'run' | 'probe';
-  /** The control dir of the run: the stop file, the host's record, the probe result. */
-  dir: string;
   /** run: what to start, where, its prompt on stdin and the log it appends to. */
   cmd?: string;
   args?: string[];
@@ -275,11 +465,7 @@ export interface HostSpec {
   log?: string;
   /** probe: what must hold for the crew user. */
   probe?: ProbeSpec;
-  /**
-   * The environment of the crew (or of the probe's child). It may hold the Claude token, so the
-   * host removes the spec file as soon as it has read it; the control dir is the crew user's and
-   * the owner's only.
-   */
+  /** The environment of the crew (or of the probe's child); it may hold the Claude token. */
   env?: Record<string, string>;
 }
 
@@ -294,30 +480,8 @@ export interface ProbeSpec {
   proxy: { port: number; refused: string };
 }
 
-/** Where the control dir of a run lies: beside the crew's tmp dir, `tmp/<id>.host`. */
-export const hostDirOf = (stateRoot: string, id: string): string =>
-  join(stateRoot, 'tmp', `${id}.host`);
-
-interface HostRecord {
-  pid: number;
-  nonce: string;
-}
-
-function readHostRecord(dir: string): HostRecord | undefined {
-  try {
-    const raw = JSON.parse(readFileSync(join(dir, 'host.json'), 'utf8')) as Partial<HostRecord>;
-    return typeof raw.pid === 'number' && typeof raw.nonce === 'string'
-      ? { pid: raw.pid, nonce: raw.nonce }
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 /** What PowerShell itself gets: what Windows programs need, no token, no PowerShell 7 modules. */
-function powershellEnv(env: Record<string, string>): Record<string, string> {
+export function powershellEnv(env: Record<string, string | undefined>): Record<string, string> {
   const keep = new Set([
     'systemroot',
     'systemdrive',
@@ -330,77 +494,148 @@ function powershellEnv(env: Record<string, string>): Record<string, string> {
     'number_of_processors',
     'processor_architecture',
     'os',
+    'computername',
+    'userdomain',
+    'username',
   ]);
-  return Object.fromEntries(Object.entries(env).filter(([k]) => keep.has(k.toLowerCase())));
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      (e): e is [string, string] => e[1] !== undefined && keep.has(e[0].toLowerCase()),
+    ),
+  );
 }
 
-/** Writes the spec with the environment, starts the host as the crew user, returns its pid. */
-async function startHost(o: {
-  run: RunFile;
-  stateRoot: string;
+/** Starts a keeper; `exited` settles with its exit code. A seam for tests. */
+export type SpawnKeeper = (o: {
+  args: string[];
+  env: Record<string, string>;
+  stdin: string;
+  /** The keeper's own output, a file of the owner. */
+  log: string;
+  detached: boolean;
+}) => Promise<{ pid: number; exited: Promise<number> }>;
+
+export const spawnKeeper: SpawnKeeper = async (o) => {
+  const fd = openSync(o.log, 'a');
+  try {
+    const child = spawn('powershell.exe', o.args, {
+      env: o.env,
+      detached: o.detached,
+      stdio: ['pipe', fd, fd],
+      windowsHide: true,
+    });
+    const pid = await new Promise<number>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('spawn', () => resolve(child.pid as number));
+    });
+    const exited = new Promise<number>((resolve) => child.once('exit', (c) => resolve(c ?? 1)));
+    child.stdin?.on('error', () => {});
+    child.stdin?.end(o.stdin);
+    if (o.detached) child.unref();
+    return { pid, exited };
+  } finally {
+    closeSync(fd);
+  }
+};
+
+/**
+ * Files the keeper and the host write their output to, in the owner's `logs` dir, which no crew
+ * user is granted: a link planted there would be followed with the owner's rights. Each is removed
+ * first (a link is unlinked, never followed) and every directory on the way checked, right before
+ * the keeper starts.
+ */
+function ownerFiles(stateRoot: string, name: string) {
+  const logs = ensureStateDir(stateRoot, join(stateRoot, 'logs'));
+  if (lstatSync(logs).isSymbolicLink()) throw new Error(`${logs} is a link`);
+  const files = {
+    out: join(logs, `${name}.host.out`),
+    err: join(logs, `${name}.host.err`),
+    keeper: join(logs, `${name}.keeper.log`),
+  };
+  for (const f of Object.values(files)) {
+    removeStateEntry(stateRoot, f);
+    assertStatePath(stateRoot, f);
+  }
+  return files;
+}
+
+/** Writes the keeper script into the owner's settings dir and returns its path. */
+function keeperFile(stateRoot: string): string {
+  const file = join(stateRoot, 'settings', KEEPER_FILE);
+  writeStateFile(stateRoot, file, KEEPER_SCRIPT);
+  return file;
+}
+
+function keeperArgs(o: {
+  script: string;
   credFile: string;
   node: string;
-  spec: HostSpec;
   cwd: string;
-  env: Record<string, string>;
-}): Promise<number> {
-  const file = join(o.spec.dir, 'spec.json');
-  writeStateFile(o.stateRoot, file, JSON.stringify({ ...o.spec, env: o.env }));
-  const script = startScript({
-    credFile: o.credFile,
-    node: o.node,
-    host: CREW_HOST_BIN,
-    spec: file,
-    cwd: o.cwd,
-    dir: o.spec.dir,
-  });
-  const r = await o.run(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
-    { env: powershellEnv(o.env), timeoutMs: 120_000 },
-  );
-  const pid = Number(r.stdout.trim());
-  if (r.code !== 0 || !Number.isInteger(pid) || pid <= 0) {
-    throw new Error(
-      `cannot start a process as the crew user (powershell exited ${r.code}): ${r.stderr.split(/\r?\n/)[0] ?? ''}`,
-    );
-  }
-  return pid;
+  out: string;
+  err: string;
+  user: string;
+}): string[] {
+  return [
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    o.script,
+    '-Cred',
+    o.credFile,
+    '-Node',
+    o.node,
+    '-HostBin',
+    CREW_HOST_BIN,
+    '-Cwd',
+    o.cwd,
+    '-Out',
+    o.out,
+    '-Err',
+    o.err,
+    '-User',
+    o.user,
+  ];
 }
 
 /**
- * Claude Code for crews of this worker, started as the crew user through the host. `alive` and
- * `stop` work on the host's pid; the host stops its own tree when Studio writes `stop` in its
- * control dir, because the owner's account may not end processes of another user.
+ * The PowerShell that tells whether `pid` is a keeper of this owner: its owner's SID is the
+ * caller's, its command line runs the keeper file; then it prints the process's creation time.
+ */
+export const identityScript = (pid: number): string =>
+  [
+    "$ErrorActionPreference = 'Stop'",
+    `$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${Math.trunc(pid)}'`,
+    'if ($null -eq $p) { exit 3 }',
+    '$o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid',
+    '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+    `if ($o.Sid -ne $me -or $p.CommandLine -notlike ${psQuote(`*${KEEPER_FILE}*`)}) { exit 4 }`,
+    "[Console]::Out.Write($p.CreationDate.ToUniversalTime().ToString('o'))",
+  ].join('\n');
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Claude Code for crews of this worker, started as the crew user through a keeper. Studio records
+ * the keeper (the owner's own process): `alive`, `identity` and `stop` work on it, never on anything
+ * the crew controls. The identity is the keeper's creation time, read owner-side through CIM, and
+ * only for a process of this owner running the keeper file. Stopping ends the keeper, which closes
+ * its job and so ends the crew's tree; the grants are taken off then as well.
  */
 export function windowsClaude(o: {
   stateRoot: string;
   credFile: string;
   claudeBin: string;
+  user: string;
+  grants: WindowsGrants;
   run?: RunFile;
+  spawn?: SpawnKeeper;
   node?: string;
 }): Claude {
   const run = o.run ?? runFile;
+  const start = o.spawn ?? spawnKeeper;
   const node = o.node ?? process.execPath;
-  const exists = (pid: number): boolean => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (e) {
-      return (e as NodeJS.ErrnoException).code === 'EPERM';
-    }
-  };
-  /** The control dir whose host record names this pid. */
-  const dirOf = (pid: number): string | undefined => {
-    const tmp = join(o.stateRoot, 'tmp');
-    let names: string[] = [];
-    try {
-      names = readdirSync(tmp).filter((n) => n.endsWith('.host'));
-    } catch {
-      return undefined;
-    }
-    return names.map((n) => join(tmp, n)).find((d) => readHostRecord(d)?.pid === pid);
-  };
   return {
     async start(cwd, args, prompt, logPath, env) {
       const id =
@@ -409,45 +644,50 @@ export function windowsClaude(o: {
           .split('/')
           .at(-1)
           ?.replace(/\.jsonl$/, '') ?? '';
-      const dir = hostDirOf(o.stateRoot, id);
+      if (!/^[A-Z]+-\d+$/.test(id)) throw new Error(`not a crew log: ${logPath}`);
+      const files = ownerFiles(o.stateRoot, id);
       const spec: HostSpec = {
         mode: 'run',
-        dir,
         cmd: o.claudeBin,
         args,
         cwd,
         prompt,
         log: logPath,
-      };
-      // The log exists before the crew user is granted it: the owner's file, appended by the host.
-      closeSync(openSync(logPath, 'a'));
-      const pid = await startHost({
-        run,
-        stateRoot: o.stateRoot,
-        credFile: o.credFile,
-        node,
-        spec,
-        cwd,
         env,
+      };
+      const k = await start({
+        args: keeperArgs({
+          script: keeperFile(o.stateRoot),
+          credFile: o.credFile,
+          node,
+          cwd,
+          out: files.out,
+          err: files.err,
+          user: o.user,
+        }),
+        env: powershellEnv(env),
+        stdin: `${JSON.stringify(o.grants.paths())}\n${JSON.stringify(spec)}`,
+        log: files.keeper,
+        detached: true,
       });
-      return { pid };
+      o.grants.recordKeeper(k.pid);
+      return { pid: k.pid };
     },
-    alive: exists,
+    alive: processExists,
     async identity(pid) {
-      for (let i = 0; i < 50; i++) {
-        const dir = dirOf(pid);
-        const rec = dir === undefined ? undefined : readHostRecord(dir);
-        if (rec !== undefined) return exists(pid) ? `host:${rec.nonce}` : undefined;
-        if (!exists(pid)) return undefined;
-        await sleep(200);
-      }
-      return undefined;
+      if (!Number.isInteger(pid) || pid <= 0 || !processExists(pid)) return undefined;
+      const r = await run(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', identityScript(pid)],
+        { env: powershellEnv(process.env), timeoutMs: 30_000 },
+      );
+      const at = r.stdout.trim();
+      return r.code === 0 && at !== '' ? `keeper:${at}` : undefined;
     },
     async stop(pid) {
-      const dir = dirOf(pid);
-      if (dir !== undefined) writeStateFile(o.stateRoot, join(dir, 'stop'), 'stop\n');
-      for (let i = 0; i < 50 && exists(pid); i++) await sleep(200);
-      if (exists(pid)) await run('taskkill', ['/PID', String(pid), '/T', '/F']);
+      if (processExists(pid)) await run('taskkill', ['/PID', String(pid), '/F']);
+      for (let i = 0; i < 50 && processExists(pid); i++) await sleep(200);
+      await o.grants.revokeAll();
     },
   };
 }
@@ -475,9 +715,10 @@ export function probeProblem(results: readonly ProbeResult[] | undefined): strin
 export const PROBE_CHECKS = ['user', 'admin', 'env', 'read', 'write', 'direct', 'proxy'];
 
 /**
- * Starts the host in probe mode as the crew user, waits for its result and judges it. `run` and
- * `node` are seams for tests. Canaries: a file in the owner config dir (read) and the owner's home
- * (write); `mustNotRead` adds the worker's deny paths.
+ * Starts the host in probe mode as the crew user through a keeper, waits for it and judges what it
+ * printed. Canaries: a file in the owner config dir (read) and the owner's home (write);
+ * `mustNotRead` adds the worker's deny paths. It runs in the Windows directory, which every user
+ * may read, so it needs no grant.
  */
 export async function probeWindowsSandbox(o: {
   stateRoot: string;
@@ -488,21 +729,19 @@ export async function probeWindowsSandbox(o: {
   mustNotRead: readonly string[];
   proxyPort: number;
   env: Record<string, string>;
-  grant: (grants: Grant[]) => Promise<void>;
-  run?: RunFile;
+  spawn?: SpawnKeeper;
   node?: string;
   timeoutMs?: number;
 }): Promise<string | undefined> {
-  const run = o.run ?? runFile;
-  const dir = join(o.stateRoot, 'tmp', `probe-${randomBytes(4).toString('hex')}.host`);
-  ensureStateDir(o.stateRoot, dir);
+  const start = o.spawn ?? spawnKeeper;
+  const name = `probe-${randomBytes(4).toString('hex')}`;
+  const files = ownerFiles(o.stateRoot, name);
   const canary = join(o.ownerConfigDir, 'crew-probe-canary');
   writeStateFile(dirname(canary), canary, 'canary\n');
   try {
     const mark = randomBytes(8).toString('hex');
     const spec: HostSpec = {
       mode: 'probe',
-      dir,
       probe: {
         user: o.user,
         mark,
@@ -511,23 +750,35 @@ export async function probeWindowsSandbox(o: {
         direct: { host: 'github.com', port: 443 },
         proxy: { port: o.proxyPort, refused: 'example.invalid' },
       },
-    };
-    await o.grant([{ path: dir, rights: 'M' }]);
-    await startHost({
-      run,
-      stateRoot: o.stateRoot,
-      credFile: o.credFile,
-      node: o.node ?? process.execPath,
-      spec,
-      cwd: dir,
       env: { ...o.env, STUDIO_PROBE_MARK: mark },
+    };
+    const k = await start({
+      args: keeperArgs({
+        script: keeperFile(o.stateRoot),
+        credFile: o.credFile,
+        node: o.node ?? process.execPath,
+        cwd: o.env.SystemRoot ?? o.env.SYSTEMROOT ?? 'C:\\Windows',
+        out: files.out,
+        err: files.err,
+        user: o.user,
+      }),
+      env: powershellEnv(o.env),
+      stdin: `[]\n${JSON.stringify(spec)}`,
+      log: files.keeper,
+      detached: false,
     });
-    const until = Date.now() + (o.timeoutMs ?? 60_000);
-    const out = join(dir, 'probe.json');
-    while (Date.now() < until && !existsSync(out)) await sleep(250);
+    const timeout = sleep(o.timeoutMs ?? 120_000).then(() => 'timeout' as const);
+    if ((await Promise.race([k.exited, timeout])) === 'timeout') {
+      try {
+        process.kill(k.pid);
+      } catch {
+        // gone already
+      }
+      return 'the Windows crew sandbox could not be shown to hold here: the probe as the crew user did not finish';
+    }
     let results: ProbeResult[] | undefined;
     try {
-      const raw = JSON.parse(readFileSync(out, 'utf8')) as unknown;
+      const raw = JSON.parse(readFileSync(files.out, 'utf8')) as unknown;
       results = Array.isArray(raw) ? (raw as ProbeResult[]) : undefined;
     } catch {
       results = undefined;
@@ -539,7 +790,7 @@ export async function probeWindowsSandbox(o: {
     }
     return probeProblem(results);
   } finally {
-    removeStateEntry(o.stateRoot, dir);
+    for (const f of Object.values(files)) removeStateEntry(o.stateRoot, f);
     removeStateEntry(dirname(canary), canary);
   }
 }
@@ -562,11 +813,16 @@ export function findClaude(path: string | undefined): string | undefined {
   return undefined;
 }
 
-/** What the setup must open for reads: node, the Studio plugin, Claude Code, the toolchains. */
+/**
+ * What the setup opens for reads: node, the Studio plugin, Claude Code, the toolchains, and of the
+ * crew Claude config dir only the skills and plugins (each run gets a writable config dir of its
+ * own in its HOME).
+ */
 export function setupReadPaths(o: {
   node: string;
   claude: string | undefined;
   toolchains: readonly string[];
+  crewConfigDir: string;
 }): string[] {
   const plugin = resolve(dirname(CREW_HOST_BIN), '..');
   return [
@@ -575,8 +831,41 @@ export function setupReadPaths(o: {
       plugin,
       ...(o.claude === undefined ? [] : [dirname(o.claude)]),
       ...o.toolchains,
+      join(o.crewConfigDir, 'skills'),
+      join(o.crewConfigDir, 'plugins'),
     ]),
   ];
+}
+
+/**
+ * A run's own Claude config dir in its HOME, writable by the crew user: the skills and the plugin
+ * lists of the shared crew config dir are copied (plain files and folders, no links); the plugins
+ * themselves stay in the shared dir, which the crew user may only read.
+ */
+export function runConfigDir(homeDir: string, shared: string): string {
+  const dir = join(homeDir, '.claude-run');
+  mkdirSync(join(dir, 'plugins'), { recursive: true });
+  const copy = (from: string, to: string) => {
+    let st: ReturnType<typeof lstatSync>;
+    try {
+      st = lstatSync(from);
+    } catch {
+      return;
+    }
+    if (st.isSymbolicLink()) return;
+    if (st.isDirectory()) {
+      mkdirSync(to, { recursive: true });
+      for (const n of readdirSync(from)) copy(join(from, n), join(to, n));
+    } else if (st.isFile()) {
+      copyFileSync(from, to);
+    }
+  };
+  copy(join(shared, 'skills'), join(dir, 'skills'));
+  for (const f of ['installed_plugins.json', 'known_marketplaces.json']) {
+    copy(join(shared, 'plugins', f), join(dir, 'plugins', f));
+  }
+  copy(join(shared, 'settings.json'), join(dir, 'settings.json'));
+  return dir;
 }
 
 export interface WindowsWorker {
@@ -591,7 +880,7 @@ export interface WindowsWorker {
 
 /**
  * Everything a native Windows worker needs for its crews: the proxy, the Claude port that starts
- * crews as the crew user, the probe and the grants. `run` is a seam for tests.
+ * crews as the crew user, the probe and the grants. `run` and `spawn` are seams for tests.
  */
 export async function windowsWorker(o: {
   user: string;
@@ -602,13 +891,14 @@ export async function windowsWorker(o: {
   env: Record<string, string | undefined>;
   startProxy: (allow: readonly string[]) => Promise<{ port: number; close(): Promise<void> }>;
   run?: RunFile;
+  spawn?: SpawnKeeper;
 }): Promise<WindowsWorker> {
   const run = o.run ?? runFile;
   const credFile = credFileIn(o.ownerConfigDir);
   const path = o.env.PATH ?? o.env.Path;
   const claudeBin = findClaude(path);
   const proxy = await o.startProxy([...o.networkAllow, ...CLAUDE_HOSTS]);
-  const grant = (grants: Grant[]) => grantAll(run, o.user, grants);
+  const grants = new WindowsGrants({ stateRoot: o.stateRoot, user: o.user, run });
   const missing = (): string | undefined =>
     !existsSync(credFile)
       ? `no crew user credential at ${credFile}: run the script of studio worker windows-setup`
@@ -620,7 +910,10 @@ export async function windowsWorker(o: {
       stateRoot: o.stateRoot,
       credFile,
       claudeBin: claudeBin ?? 'claude',
+      user: o.user,
+      grants,
       run,
+      ...(o.spawn === undefined ? {} : { spawn: o.spawn }),
     }),
     sandbox: {
       user: o.user,
@@ -643,11 +936,10 @@ export async function windowsWorker(o: {
           mustNotRead,
           proxyPort: proxy.port,
           env: { ...probeEnv, PATH: path ?? '' },
-          grant,
-          run,
+          ...(o.spawn === undefined ? {} : { spawn: o.spawn }),
         });
       },
-      launch: { user: o.user, proxyPort: proxy.port, grant },
+      launch: { user: o.user, proxyPort: proxy.port, grant: (g) => grants.grant(g) },
     },
     close: () => proxy.close(),
   };

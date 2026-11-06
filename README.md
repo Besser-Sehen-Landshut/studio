@@ -596,7 +596,7 @@ The account id is what counts: a login can be renamed and then taken by someone 
 
 **Platforms.** Claude Code's sandbox runs on macOS, Linux and WSL2; on native Windows it runs commands unsandboxed. A worker never starts a crew without a sandbox. On a Windows machine there are two ways. One: run `studio worker` inside a WSL2 distribution. It refuses under WSL1 and when signs of WSL (the kernel name, the `WSLInterop` entries, `WSL_DISTRO_NAME`, `/run/WSL`) leave its version unclear. Under WSL2 a crew could start a Windows program through interop, which runs outside the Linux sandbox, so the worker refuses while interop is on or cannot be told off (`[interop] enabled=false` in `/etc/wsl.conf`, then `wsl --shutdown`), checked again before every claim. Two: run it natively with the **Windows crew sandbox**, described next. Without that a native worker refuses.
 
-**The Windows crew sandbox.** On native Windows every crew, Claude Code included, runs as a dedicated local standard user:
+**The Windows crew sandbox (experimental).** Not yet piloted on a real native Windows worker: use WSL2 for work you rely on until it has been. On native Windows every crew, Claude Code included, runs as a dedicated local standard user:
 
 ```yaml
 # owner config on the Windows worker
@@ -604,7 +604,34 @@ workers:
   self: { lead: lead-login, lead_id: 1234567, windows: { crew_user: studio-crew } }
 ```
 
-`studio worker windows-setup` prints a PowerShell script; save it and run it once in an elevated PowerShell as the account that runs the worker. It creates the user (a member of Users, never of Administrators) with a random password nobody sees, stores its credential encrypted for your account (`windows-crew.xml` in the owner config dir, DPAPI), adds an outbound firewall rule that blocks that user from every address but loopback, grants it read on Node.js, the Studio plugin, Claude Code and your `crew_toolchain_paths`, and modify on the crew Claude config dir. Run it again after an update of the plugin, because the plugin's folder changes. For each crew Studio grants the crew user only that run's clone, `HOME`, tmp dir, control dir and log (modify), and its brief, settings and guard context (read). Claude Code's own sandbox is off for such a run (it does not exist there). Its traffic goes through a proxy Studio runs on loopback, which tunnels only to the names of `sandbox.network_allow` and `api.anthropic.com`; Claude Code's optional traffic is off. The worker starts the crew through `bin/studio-crew-host.mjs` with `Start-Process -Credential`, and stops it by a stop file the host watches, because your account may not end another user's processes. Deny paths on a native worker are Windows drive paths (`D:\data`); a POSIX path refuses. **Before every claim** the worker starts a probe as the crew user. It refuses unless the probe shows all of this: the process runs as that user and not as an administrator; it cannot read your profile, the owner config or any deny path; it cannot write your home; a direct connection to `github.com:443` fails; the proxy refuses a name that is not allowed; and the environment Studio set arrived. A failed or missing check, or no answer, refuses (fail closed). A crew launch on native Windows outside such a worker refuses as well. What this sandbox does not cover is in SECURITY.md.
+`studio worker windows-setup` prints a PowerShell script. Save it and run it once in an elevated Windows PowerShell as the account that runs the worker. It does four things:
+- creates the user (a member of Users, never of Administrators) with a random password nobody sees;
+- stores its credential encrypted for your account (`windows-crew.xml` in the owner config dir, DPAPI);
+- adds an outbound firewall rule that blocks that user from every address but loopback;
+- grants it read, never write, on Node.js, the Studio plugin, Claude Code, your `crew_toolchain_paths`, and the `skills` and `plugins` folders of the crew Claude config dir.
+
+Run it again after an update of the plugin, because the plugin's folder changes.
+
+**One crew at a time.** All crews share the one crew user, so a native worker runs one crew at a time: a launch while a crew of the worker runs is held.
+
+**Grants per run.** For each crew Studio grants the crew user only that run's clone, `HOME`, tmp dir and log (modify) and its brief, settings and guard context (read). A writable folder also gets an inheritable OWNER RIGHTS entry, so the crew user keeps no owner's rights over what it created. Every grant is recorded in the state root and taken off when the crew ends, when it is stopped, and before the next grant. Each run gets its own writable Claude config dir in its `HOME`, with copies of the skills and plugin lists; the shared plugins stay read-only.
+
+**Starting and stopping.** Claude Code's own sandbox is off for such a run (it does not exist there).
+- **Network:** traffic goes through a proxy Studio runs on loopback. It tunnels only to the names of `sandbox.network_allow` and `api.anthropic.com`, resolves each name itself, refuses any answer that points to this machine or a private, link-local, multicast or reserved network, and connects to the address it checked. Claude Code's optional traffic is off.
+- **The keeper:** the worker starts each crew through a keeper, `studio-crew-keeper.ps1`, a PowerShell of your account. The keeper puts `bin/studio-crew-host.mjs`, started as the crew user with `Start-Process -Credential`, into a job object before the host gets anything. It hands the spec, with the crew's environment, to that very host over a named pipe, so the Claude token never lands on disk. When the host ends, it takes the grants off.
+- **Identity and stop:** Studio records the keeper, never anything the crew can write. The identity is the keeper's creation time, read through CIM, and only for a process of your account running the keeper file. Stopping ends the keeper, which ends the job and the crew's whole tree. The output of keeper and host goes to files in the `logs` folder of the state root, which the crew user cannot reach; links there are removed, not followed.
+
+Deny paths on a native worker are Windows drive paths (`D:\data`); a POSIX path refuses.
+
+**The probe.** Before every claim the worker starts a probe as the crew user. It refuses unless the probe shows all of this:
+- the process runs as that user and not as an administrator;
+- it cannot read your profile, the owner config or any deny path;
+- it cannot write your home;
+- a direct connection to `github.com:443` fails;
+- the proxy refuses a name that is not allowed;
+- the environment Studio set arrived.
+
+A failed or missing check, or no answer, refuses (fail closed). A crew launch on native Windows outside such a worker refuses as well. What this sandbox does not cover is in SECURITY.md.
 
 **Identity.** A worker uses its own GitHub identity: the worker token of the worker machine (`studio secret set worker-token` there, a fine-grained token of a separate account, stored only on that machine). As a fine-grained token on the repositories of the project it needs Contents: Read and write (write the claim ref, push `studio/<id>` for a crew without a token), Pull requests: Read and write (open its pull request), Issues: Read and write (read offers, post the claim comments) and Metadata: Read; nothing else, no administration, workflows or actions. Its account needs write access to the repository, or it cannot comment on the locked offers. With issue write a worker could open or edit an issue: workers take only offers the lead opened and nobody else edited, and the lead ignores edited claim comments. The worker refuses a token whose login is the lead's. Studio never merges for a worker and never counts a GitHub review: approvals come from the lead's own reviewer crews, merges from the lead's queue. Protect `main` server-side so that no worker account can push to it or merge; if branch protection requires approving reviews, a worker account with write access could give one, so require a review from code owners that do not include it.
 

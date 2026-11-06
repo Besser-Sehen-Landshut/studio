@@ -1,4 +1,12 @@
-import { createServer, type Server, type Socket, connect as tcpConnect } from 'node:net';
+import { lookup } from 'node:dns/promises';
+import {
+  BlockList,
+  createServer,
+  isIP,
+  type Server,
+  type Socket,
+  connect as tcpConnect,
+} from 'node:net';
 import { hostPort, normalizeHost } from './worker-deny.js';
 
 /**
@@ -73,21 +81,98 @@ export function connectTarget(head: string): { host: string; port: number } | un
   return { host: bare, port };
 }
 
+/**
+ * Addresses no allowed name may lead to: this machine, private networks, link-local, multicast,
+ * unspecified and reserved ranges, IPv4 and IPv6 (mapped IPv4 included). A public name that
+ * resolves to one of them (a DNS answer pointing inside) is refused like the address itself.
+ */
+const BLOCKED = (() => {
+  const b = new BlockList();
+  const v4 = (a: number, c: number, d: number, e: number, prefix: number) =>
+    b.addSubnet(ipv4(a, c, d, e), prefix, 'ipv4');
+  v4(0, 0, 0, 0, 8); // this network, unspecified
+  v4(10, 0, 0, 0, 8); // private
+  v4(100, 64, 0, 0, 10); // shared address space (carrier-grade NAT)
+  v4(127, 0, 0, 0, 8); // loopback
+  v4(169, 254, 0, 0, 16); // link-local
+  v4(172, 16, 0, 0, 12); // private
+  v4(192, 0, 0, 0, 24); // protocol assignments
+  v4(192, 168, 0, 0, 16); // private
+  v4(198, 18, 0, 0, 15); // benchmarking
+  v4(224, 0, 0, 0, 4); // multicast
+  v4(240, 0, 0, 0, 4); // reserved, broadcast
+  for (const [net, prefix] of [
+    ['::', 128], // unspecified
+    ['::1', 128], // loopback
+    ['fc00::', 7], // unique local
+    ['fe80::', 10], // link-local
+    ['ff00::', 8], // multicast
+    ['64:ff9b:1::', 48], // local-use translation
+  ] as const) {
+    b.addSubnet(net, prefix, 'ipv6');
+  }
+  return b;
+})();
+
+/** Whether an address is one no tunnel may reach; anything that is not an address counts as one. */
+export function blockedAddress(address: string): boolean {
+  const kind = isIP(address);
+  if (kind === 4) return BLOCKED.check(address, 'ipv4');
+  if (kind !== 6) return true;
+  // An IPv4-mapped IPv6 address is judged as its IPv4 address.
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
+  if (mapped) return BLOCKED.check(mapped[1] as string, 'ipv4');
+  return BLOCKED.check(address, 'ipv6');
+}
+
+export type Resolve = (host: string) => Promise<string[]>;
+
+const systemResolve: Resolve = async (host) =>
+  (await lookup(host, { all: true, verbatim: true })).map((a) => a.address);
+
+/**
+ * The address a tunnel to an allowed name goes to: resolved here, refused when any answer is an
+ * address no tunnel may reach (a mixed answer is not trusted), else the first answer. The proxy
+ * connects to exactly this address, so a second lookup cannot lead elsewhere.
+ */
+export async function checkedAddress(
+  resolve: Resolve,
+  host: string,
+): Promise<{ address: string } | { refused: string }> {
+  let answers: string[];
+  try {
+    answers = await resolve(host);
+  } catch {
+    return { refused: 'does not resolve' };
+  }
+  if (answers.length === 0) return { refused: 'does not resolve' };
+  const bad = answers.find(blockedAddress);
+  if (bad !== undefined) return { refused: `resolves to a local or private address (${bad})` };
+  return { address: answers[0] as string };
+}
+
 function reply(socket: Socket, status: string): void {
   socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
 }
 
 /**
- * Starts the proxy on loopback with a free port. `dial` is a seam for tests; it connects to the
- * name as given, so the resolver of this machine decides the address, after the name was allowed.
+ * Starts the proxy on loopback with a free port. An allowed name is resolved by the proxy and
+ * the tunnel goes to the checked address. `dial` and `resolve` are seams for tests.
  */
 export async function startEgressProxy(o: {
   allow: readonly string[];
-  dial?: (host: string, port: number) => Socket;
+  dial?: (address: string, port: number) => Socket;
+  resolve?: Resolve;
 }): Promise<EgressProxy> {
   const rules = allowRules(o.allow);
   const refused: string[] = [];
-  const dial = o.dial ?? ((host: string, port: number) => tcpConnect({ host, port }));
+  const resolve = o.resolve ?? systemResolve;
+  const dial = o.dial ?? ((address: string, port: number) => tcpConnect({ host: address, port }));
+  const refuse = (client: Socket, what: string) => {
+    refused.push(what);
+    if (refused.length > 50) refused.shift();
+    reply(client, '403 Forbidden');
+  };
   const sockets = new Set<Socket>();
   const server: Server = createServer((client) => {
     sockets.add(client);
@@ -109,28 +194,36 @@ export async function startEgressProxy(o: {
       }
       const why = egressProblem(rules, target.host, target.port);
       if (why !== undefined) {
-        refused.push(`${target.host}:${target.port} (${why})`);
-        if (refused.length > 50) refused.shift();
-        reply(client, '403 Forbidden');
+        refuse(client, `${target.host}:${target.port} (${why})`);
         return;
       }
-      const upstream = dial(target.host, target.port);
-      sockets.add(upstream);
-      upstream.setTimeout(CONNECT_TIMEOUT_MS, () => upstream.destroy());
-      upstream.on('close', () => sockets.delete(upstream));
-      upstream.once('connect', () => {
-        upstream.setTimeout(0);
-        client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-        const rest = head.subarray(end + 4);
-        if (rest.length > 0) upstream.write(rest);
-        client.pipe(upstream);
-        upstream.pipe(client);
+      void checkedAddress(resolve, target.host).then((checked) => {
+        if (client.destroyed) return;
+        if ('refused' in checked) {
+          refuse(client, `${target.host}:${target.port} (${checked.refused})`);
+          return;
+        }
+        tunnel(checked.address, target.port);
       });
-      upstream.on('error', () => {
-        if (!client.destroyed) reply(client, '502 Bad Gateway');
-        upstream.destroy();
-      });
-      client.on('close', () => upstream.destroy());
+      const tunnel = (address: string, port: number) => {
+        const upstream = dial(address, port);
+        sockets.add(upstream);
+        upstream.setTimeout(CONNECT_TIMEOUT_MS, () => upstream.destroy());
+        upstream.on('close', () => sockets.delete(upstream));
+        upstream.once('connect', () => {
+          upstream.setTimeout(0);
+          client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+          const rest = head.subarray(end + 4);
+          if (rest.length > 0) upstream.write(rest);
+          client.pipe(upstream);
+          upstream.pipe(client);
+        });
+        upstream.on('error', () => {
+          if (!client.destroyed) reply(client, '502 Bad Gateway');
+          upstream.destroy();
+        });
+        client.on('close', () => upstream.destroy());
+      };
     };
     client.on('data', onData);
   });

@@ -2975,8 +2975,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 node: process.execPath,
                 claude: findClaude(deps.env.PATH ?? deps.env.Path),
                 toolchains: ownerConfig.crewToolchainPaths,
+                crewConfigDir: crewClaudeDir(owner),
               }),
-              writePaths: [crewClaudeDir(owner)],
             }),
           );
           return 0;

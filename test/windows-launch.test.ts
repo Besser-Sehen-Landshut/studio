@@ -143,7 +143,6 @@ describe('a crew launch on native Windows', () => {
       { path: join(s, 'clones', 'APP-3'), rights: 'M' },
       { path: join(s, 'homes', 'APP-3'), rights: 'M' },
       { path: join(s, 'tmp', 'APP-3'), rights: 'M' },
-      { path: join(s, 'tmp', 'APP-3.host'), rights: 'M' },
       { path: join(s, 'briefs', 'APP-3.md'), rights: 'R' },
       { path: join(s, 'briefs', 'APP-3.caps'), rights: 'R' },
       { path: join(s, 'settings', 'APP-3.json'), rights: 'R' },
@@ -158,5 +157,11 @@ describe('a crew launch on native Windows', () => {
     expect(env.HTTPS_PROXY).toBe(`http://${LOOPBACK}:4567`);
     expect(env.USERPROFILE).toBe(join(s, 'homes', 'APP-3'));
     expect(env.SystemRoot).toBe('C:\\Windows');
+    // A Claude config dir of the run's own, in its HOME; tool outputs are read from there.
+    expect(env.CLAUDE_CONFIG_DIR).toBe(join(s, 'homes', 'APP-3', '.claude-run'));
+    const ctx = JSON.parse(readFileSync(join(s, 'guard', 'APP-3.json'), 'utf8'));
+    expect(
+      ctx.toolResultGlobs.every((g: string) => g.startsWith(env.CLAUDE_CONFIG_DIR as string)),
+    ).toBe(true);
   });
 });

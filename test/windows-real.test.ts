@@ -5,8 +5,10 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -15,10 +17,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type EgressProxy, LOOPBACK, startEgressProxy } from '../src/egress-proxy.js';
 import {
   credFileIn,
-  grantAll,
-  hostDirOf,
   probeWindowsSandbox,
   runFile,
+  WindowsGrants,
   windowsClaude,
   windowsCrewEnv,
   windowsSetupScript,
@@ -26,12 +27,39 @@ import {
 
 const on = process.platform === 'win32' && process.env.STUDIO_WINDOWS_SANDBOX_TEST === '1';
 const USER = 'studioci';
+const TOKEN = 'token-that-must-never-be-on-disk-0123456789';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const exists = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};
+
+/** Every file below `dir` whose content holds `text`. */
+function filesHolding(dir: string, text: string): string[] {
+  const hits: string[] = [];
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    try {
+      if (statSync(p).isDirectory()) hits.push(...filesHolding(p, text));
+      else if (readFileSync(p, 'utf8').includes(text)) hits.push(p);
+    } catch {
+      // unreadable for the owner: not Studio's file
+    }
+  }
+  return hits;
+}
 
 describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
   let base: string;
   let stateRoot: string;
   let ownerConfigDir: string;
   let proxy: EgressProxy;
+  let grants: WindowsGrants;
   const env = () => ({
     ...windowsCrewEnv({
       proxyPort: proxy.port,
@@ -41,13 +69,13 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     }),
     PATH: process.env.PATH ?? process.env.Path ?? '',
   });
-  const grant = (g: Parameters<typeof grantAll>[2]) => grantAll(runFile, USER, g);
 
   beforeAll(async () => {
     base = realpathSync(mkdtempSync(join(tmpdir(), 'studio-win-real-')));
     stateRoot = join(base, 'state');
     ownerConfigDir = join(base, 'config');
     mkdirSync(join(stateRoot, 'tmp'), { recursive: true });
+    mkdirSync(join(stateRoot, 'logs'), { recursive: true });
     mkdirSync(ownerConfigDir, { recursive: true });
     const script = join(base, 'setup.ps1');
     writeFileSync(
@@ -56,7 +84,6 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
         user: USER,
         credFile: credFileIn(ownerConfigDir),
         readPaths: [dirname(process.execPath), resolve(import.meta.dirname, '..')],
-        writePaths: [],
       }),
     );
     const r = await runFile(
@@ -77,89 +104,122 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     expect(r.code).toBe(0);
     expect(existsSync(credFileIn(ownerConfigDir))).toBe(true);
     proxy = await startEgressProxy({ allow: ['github.com'] });
+    grants = new WindowsGrants({ stateRoot, user: USER, run: runFile });
   }, 240_000);
   afterAll(async () => {
     await proxy?.close();
   });
 
-  it('the probe as the crew user holds', async () => {
-    const problem = await probeWindowsSandbox({
+  const probe = (user: string) =>
+    probeWindowsSandbox({
       stateRoot,
       credFile: credFileIn(ownerConfigDir),
-      user: USER,
+      user,
       ownerHome: homedir(),
       ownerConfigDir,
       mustNotRead: [],
       proxyPort: proxy.port,
       env: env(),
-      grant,
-      timeoutMs: 90_000,
+      timeoutMs: 120_000,
     });
-    expect(problem).toBeUndefined();
-  }, 120_000);
+
+  it('the probe as the crew user holds', async () => {
+    expect(await probe(USER)).toBeUndefined();
+  }, 150_000);
 
   it('the probe fails closed when the process does not run as the expected user', async () => {
-    const problem = await probeWindowsSandbox({
-      stateRoot,
-      credFile: credFileIn(ownerConfigDir),
-      user: 'someoneelse',
-      ownerHome: homedir(),
-      ownerConfigDir,
-      mustNotRead: [],
-      proxyPort: proxy.port,
-      env: env(),
-      grant,
-      timeoutMs: 90_000,
-    });
-    expect(problem).toMatch(/does not hold here: user: runs as studioci/i);
-  }, 120_000);
+    expect(await probe('someoneelse')).toMatch(/does not hold here: user: runs as studioci/i);
+  }, 150_000);
 
-  it('a crew runs as the crew user, gets its prompt and the proxy, appends to its log and stops', async () => {
-    const id = 'APP-1';
-    const cwd = join(stateRoot, 'clones', id);
+  /** Starts `code` as a crew through the keeper, in its own clone, and waits for its first line. */
+  async function crew(id: string, code: string) {
+    const clone = join(stateRoot, 'clones', id);
     const log = join(stateRoot, 'logs', `${id}.jsonl`);
-    mkdirSync(cwd, { recursive: true });
-    mkdirSync(dirname(log), { recursive: true });
-    mkdirSync(hostDirOf(stateRoot, id), { recursive: true });
+    mkdirSync(clone, { recursive: true });
     writeFileSync(log, 'before\n');
-    await grant([
-      { path: cwd, rights: 'M' },
-      { path: hostDirOf(stateRoot, id), rights: 'M' },
+    await grants.grant([
+      { path: clone, rights: 'M' },
       { path: log, rights: 'M' },
     ]);
     const claude = windowsClaude({
       stateRoot,
       credFile: credFileIn(ownerConfigDir),
       claudeBin: process.execPath,
+      user: USER,
+      grants,
     });
-    const crew = [
-      "let p='';process.stdin.on('data',d=>p+=d);process.stdin.on('end',()=>{",
-      "console.log(JSON.stringify({who:require('os').userInfo().username,prompt:p,proxy:process.env.HTTPS_PROXY}));",
-      'setInterval(()=>{},1000);});',
-    ].join('');
-    const { pid } = await claude.start(cwd, ['-e', crew], 'hello crew', log, env());
-    const identity = await claude.identity(pid);
-    const dir = hostDirOf(stateRoot, id);
-    const show = (f: string) =>
-      existsSync(join(dir, f)) ? `${f}: ${readFileSync(join(dir, f), 'utf8')}` : `(no ${f})`;
-    expect(
-      identity ?? `none; ${show('host.err')}; ${show('host.out')}; ${show('host.json')}`,
-    ).toMatch(/^host:[0-9a-f]+$/);
-    expect(existsSync(join(hostDirOf(stateRoot, id), 'spec.json'))).toBe(false);
-    let line: { who: string; prompt: string; proxy: string } | undefined;
-    for (let i = 0; i < 100 && line === undefined; i++) {
-      const last = readFileSync(log, 'utf8')
+    const { pid } = await claude.start(clone, ['-e', code], 'hello crew', log, {
+      ...env(),
+      CLAUDE_CODE_OAUTH_TOKEN: TOKEN,
+    });
+    let line: Record<string, string> | undefined;
+    for (let i = 0; i < 200 && line === undefined; i++) {
+      const first = readFileSync(log, 'utf8')
         .split('\n')
         .find((l) => l.startsWith('{'));
-      if (last !== undefined) line = JSON.parse(last);
-      else await new Promise((r) => setTimeout(r, 300));
+      if (first !== undefined) line = JSON.parse(first);
+      else await sleep(300);
     }
-    expect(readFileSync(log, 'utf8').startsWith('before\n')).toBe(true);
-    expect(line?.who.toLowerCase()).toBe(USER);
-    expect(line?.prompt).toBe('hello crew');
-    expect(line?.proxy).toBe(`http://${LOOPBACK}:${proxy.port}`);
-    expect(claude.alive(pid)).toBe(true);
-    await claude.stop(pid);
-    expect(claude.alive(pid)).toBe(false);
-  }, 120_000);
+    const show = (f: string) => {
+      const p = join(stateRoot, 'logs', f);
+      return existsSync(p) ? `${f}: ${readFileSync(p, 'utf8')}` : `(no ${f})`;
+    };
+    return {
+      claude,
+      pid,
+      clone,
+      log,
+      line,
+      why: `${show(`${id}.keeper.log`)}; ${show(`${id}.host.err`)}`,
+    };
+  }
+
+  it('a crew runs as the crew user in a job of the keeper, gets its spec by pipe, and stops with it', async () => {
+    const code = [
+      "let p='';process.stdin.on('data',d=>p+=d);process.stdin.on('end',()=>{",
+      "require('fs').writeFileSync('secret.txt','from the first crew');",
+      "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});",
+      "console.log(JSON.stringify({who:require('os').userInfo().username,prompt:p,proxy:process.env.HTTPS_PROXY,",
+      'token:process.env.CLAUDE_CODE_OAUTH_TOKEN,me:String(process.pid),child:String(c.pid)}));',
+      'setInterval(()=>{},1000);});',
+    ].join('');
+    const r = await crew('APP-1', code);
+    expect(r.line?.who?.toLowerCase(), r.why).toBe(USER);
+    expect(r.line?.prompt).toBe('hello crew');
+    expect(r.line?.proxy).toBe(`http://${LOOPBACK}:${proxy.port}`);
+    expect(r.line?.token).toBe(TOKEN);
+    expect(readFileSync(r.log, 'utf8').startsWith('before\n')).toBe(true);
+    // The token reached the crew without touching the disk.
+    expect(filesHolding(stateRoot, TOKEN).filter((f) => !f.endsWith('APP-1.jsonl'))).toEqual([]);
+    // The identity is the keeper's, read owner-side.
+    expect(await r.claude.identity(r.pid)).toMatch(/^keeper:\d{4}-/);
+    expect(r.claude.alive(r.pid)).toBe(true);
+    await r.claude.stop(r.pid);
+    expect(r.claude.alive(r.pid)).toBe(false);
+    // Ending the keeper ended the whole tree, the grandchild included.
+    for (let i = 0; i < 50 && (exists(Number(r.line?.me)) || exists(Number(r.line?.child))); i++) {
+      await sleep(200);
+    }
+    expect(exists(Number(r.line?.me))).toBe(false);
+    expect(exists(Number(r.line?.child))).toBe(false);
+    expect(grants.paths()).toEqual([]);
+  }, 180_000);
+
+  it('after its run, the crew user cannot read what an earlier crew left, though it made it', async () => {
+    const first = join(stateRoot, 'clones', 'APP-1', 'secret.txt');
+    expect(readFileSync(first, 'utf8')).toBe('from the first crew');
+    const code = [
+      "let r;try{r=require('fs').readFileSync(process.argv[1],'utf8')}catch(e){r=e.code}",
+      "process.stdin.resume();process.stdin.on('end',()=>{console.log(JSON.stringify({read:r}));process.exit(0)});",
+    ].join('');
+    const clone = join(stateRoot, 'clones', 'APP-2');
+    const r = await crew('APP-2', `${code}`.replace('process.argv[1]', JSON.stringify(first)));
+    expect(r.line?.read, r.why).toMatch(/^(EPERM|EACCES)$/);
+    expect(existsSync(clone)).toBe(true);
+    for (let i = 0; i < 50 && r.claude.alive(r.pid); i++) await sleep(200);
+    expect(r.claude.alive(r.pid)).toBe(false);
+    // The keeper took the grants off as the crew ended by itself.
+    const acl = await runFile('icacls', [clone]);
+    expect(acl.stdout.toLowerCase()).not.toContain(`${USER}:`);
+  }, 180_000);
 });

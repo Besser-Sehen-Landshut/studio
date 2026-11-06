@@ -2,51 +2,49 @@
 // The crew host of a native Windows worker (src/windows-sandbox.ts). Studio starts it as the crew
 // sandbox user with `Start-Process -Credential`; it never runs as the owner.
 //
+// It reads its spec from the keeper's named pipe (the keeper put it in a job object first and
+// checked that the pipe's client is this process), so the crew's environment never lands on disk.
 // run:   starts the crew (Claude Code) with the arguments of the spec, writes the prompt to its
-//        stdin, appends its output to the crew's log, and stops its whole process tree when Studio
-//        writes `stop` into the control dir (the owner's account may not end another user's
-//        processes). It records its pid and a nonce in `host.json`, which Studio reads as the run's
-//        identity.
-// probe: checks what the sandbox must hold for this user and writes the results to `probe.json`.
-//        Every check reports ok or not; a check that cannot run reports not ok.
+//        stdin and appends its output to the crew's log. Stopping is the keeper's: ending it ends
+//        the job and the whole tree.
+// probe: checks what the sandbox must hold for this user and prints the results to its stdout, a
+//        file of the owner. Every check reports ok or not; a check that cannot run reports not ok.
 //
 // Self-contained on purpose: no import of Studio's sources or of anything the working directory
 // could provide.
 import { execFileSync, spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import {
-  closeSync,
-  existsSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { closeSync, openSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { userInfo } from 'node:os';
-import { join } from 'node:path';
 
 const fail = (why) => {
   process.stderr.write(`studio-crew-host: ${why}\n`);
   process.exit(2);
 };
 
-const specFile = process.argv[2];
-if (typeof specFile !== 'string') fail('no spec file');
+// The spec comes over the keeper's named pipe, never from a file: it holds the crew's environment
+// and with it the Claude token. The pipe's name is the only argument.
+const pipeName = process.argv[2];
+if (typeof pipeName !== 'string' || !/^studio-[0-9a-f]{32}$/.test(pipeName)) fail('no pipe name');
+const readPipe = () =>
+  new Promise((resolve, reject) => {
+    const chunks = [];
+    const s = connect(`\\\\.\\pipe\\${pipeName}`);
+    s.setTimeout(60_000, () => {
+      s.destroy();
+      reject(new Error('the keeper sent no spec'));
+    });
+    s.on('data', (d) => chunks.push(d));
+    s.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    s.on('error', reject);
+  });
 let spec;
 try {
-  spec = JSON.parse(readFileSync(specFile, 'utf8'));
-} catch {
-  fail('the spec cannot be read');
+  spec = JSON.parse(await readPipe());
+} catch (e) {
+  fail(`the spec cannot be read: ${e?.message ?? e}`);
 }
-if (spec === null || typeof spec !== 'object' || typeof spec.dir !== 'string') fail('bad spec');
-// The spec may hold the Claude token: gone from disk before anything else runs.
-try {
-  unlinkSync(specFile);
-} catch {
-  fail('the spec cannot be removed');
-}
+if (spec === null || typeof spec !== 'object') fail('bad spec');
 const childEnv =
   spec.env !== null && typeof spec.env === 'object'
     ? { ...spec.env }
@@ -190,45 +188,32 @@ if (spec.mode === 'probe') {
   } catch (e) {
     results = [{ check: 'host', ok: false, detail: String(e?.message ?? e).split('\n')[0] }];
   }
-  writeFileSync(join(spec.dir, 'probe.json'), JSON.stringify(results));
-  process.exit(0);
+  // Stdout is a file of the owner the keeper opened: the probe's answer goes there.
+  process.stdout.write(JSON.stringify(results), () => process.exit(0));
+} else {
+  run();
 }
 
-if (spec.mode !== 'run' || typeof spec.cmd !== 'string' || !Array.isArray(spec.args)) {
-  fail('bad run spec');
-}
-const nonce = randomBytes(12).toString('hex');
-writeFileSync(join(spec.dir, 'host.json'), JSON.stringify({ pid: process.pid, nonce }));
-let fd;
-try {
-  fd = openSync(spec.log, 'a');
-} catch (e) {
-  fail(`cannot open the log ${spec.log}: ${e?.code ?? e}`);
-}
-const child = spawn(spec.cmd, spec.args, {
-  cwd: spec.cwd,
-  env: childEnv,
-  stdio: ['pipe', fd, fd],
-  windowsHide: true,
-});
-closeSync(fd);
-child.stdin?.on('error', () => {});
-child.stdin?.end(spec.prompt ?? '');
-const stopFile = join(spec.dir, 'stop');
-const timer = setInterval(() => {
-  if (!existsSync(stopFile)) return;
-  clearInterval(timer);
-  try {
-    execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
-  } catch {
-    child.kill();
+function run() {
+  if (spec.mode !== 'run' || typeof spec.cmd !== 'string' || !Array.isArray(spec.args)) {
+    fail('bad run spec');
   }
-}, 1000);
-child.on('exit', (code) => {
-  clearInterval(timer);
-  process.exit(code ?? 1);
-});
-child.on('error', (e) => {
-  clearInterval(timer);
-  fail(`the crew did not start: ${e.message}`);
-});
+  let fd;
+  try {
+    fd = openSync(spec.log, 'a');
+  } catch (e) {
+    fail(`cannot open the log ${spec.log}: ${e?.code ?? e}`);
+  }
+  // The whole tree lives in the keeper's job: ending the keeper ends it, so no stop signal here.
+  const child = spawn(spec.cmd, spec.args, {
+    cwd: spec.cwd,
+    env: childEnv,
+    stdio: ['pipe', fd, fd],
+    windowsHide: true,
+  });
+  closeSync(fd);
+  child.stdin?.on('error', () => {});
+  child.stdin?.end(spec.prompt ?? '');
+  child.on('exit', (code) => process.exit(code ?? 1));
+  child.on('error', (e) => fail(`the crew did not start: ${e.message}`));
+}

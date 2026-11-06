@@ -31042,7 +31042,7 @@ function configWarnings(config2) {
 var import_yaml14 = __toESM(require_dist(), 1);
 import {
   lstatSync as lstatSync30,
-  mkdirSync as mkdirSync7,
+  mkdirSync as mkdirSync8,
   readdirSync as readdirSync12,
   readFileSync as readFileSync35,
   rmdirSync,
@@ -38072,14 +38072,29 @@ function searchSolutions(projectDir, query, limit = 5) {
 }
 
 // src/windows-sandbox.ts
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomBytes as randomBytes8 } from "node:crypto";
-import { closeSync as closeSync6, existsSync as existsSync7, lstatSync as lstatSync22, openSync as openSync6, readdirSync as readdirSync9, readFileSync as readFileSync26 } from "node:fs";
+import {
+  closeSync as closeSync6,
+  copyFileSync,
+  existsSync as existsSync7,
+  lstatSync as lstatSync22,
+  mkdirSync as mkdirSync7,
+  openSync as openSync6,
+  readdirSync as readdirSync9,
+  readFileSync as readFileSync26
+} from "node:fs";
 import { dirname as dirname9, join as join26, resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/egress-proxy.ts
-import { createServer, connect as tcpConnect } from "node:net";
+import { lookup } from "node:dns/promises";
+import {
+  BlockList,
+  createServer,
+  isIP as isIP3,
+  connect as tcpConnect
+} from "node:net";
 
 // src/worker-deny.ts
 import { existsSync as existsSync6, readFileSync as readFileSync25, realpathSync as realpathSync6 } from "node:fs";
@@ -38379,6 +38394,59 @@ function connectTarget(head) {
   const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
   return { host: bare, port };
 }
+var BLOCKED = (() => {
+  const b = new BlockList();
+  const v4 = (a2, c3, d, e, prefix) => b.addSubnet(ipv43(a2, c3, d, e), prefix, "ipv4");
+  v4(0, 0, 0, 0, 8);
+  v4(10, 0, 0, 0, 8);
+  v4(100, 64, 0, 0, 10);
+  v4(127, 0, 0, 0, 8);
+  v4(169, 254, 0, 0, 16);
+  v4(172, 16, 0, 0, 12);
+  v4(192, 0, 0, 0, 24);
+  v4(192, 168, 0, 0, 16);
+  v4(198, 18, 0, 0, 15);
+  v4(224, 0, 0, 0, 4);
+  v4(240, 0, 0, 0, 4);
+  for (const [net, prefix] of [
+    ["::", 128],
+    // unspecified
+    ["::1", 128],
+    // loopback
+    ["fc00::", 7],
+    // unique local
+    ["fe80::", 10],
+    // link-local
+    ["ff00::", 8],
+    // multicast
+    ["64:ff9b:1::", 48]
+    // local-use translation
+  ]) {
+    b.addSubnet(net, prefix, "ipv6");
+  }
+  return b;
+})();
+function blockedAddress(address) {
+  const kind = isIP3(address);
+  if (kind === 4) return BLOCKED.check(address, "ipv4");
+  if (kind !== 6) return true;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
+  if (mapped) return BLOCKED.check(mapped[1], "ipv4");
+  return BLOCKED.check(address, "ipv6");
+}
+var systemResolve = async (host) => (await lookup(host, { all: true, verbatim: true })).map((a2) => a2.address);
+async function checkedAddress(resolve12, host) {
+  let answers;
+  try {
+    answers = await resolve12(host);
+  } catch {
+    return { refused: "does not resolve" };
+  }
+  if (answers.length === 0) return { refused: "does not resolve" };
+  const bad = answers.find(blockedAddress);
+  if (bad !== void 0) return { refused: `resolves to a local or private address (${bad})` };
+  return { address: answers[0] };
+}
 function reply(socket, status) {
   socket.end(`HTTP/1.1 ${status}\r
 Connection: close\r
@@ -38389,7 +38457,13 @@ Content-Length: 0\r
 async function startEgressProxy(o2) {
   const rules = allowRules(o2.allow);
   const refused = [];
-  const dial = o2.dial ?? ((host, port) => tcpConnect({ host, port }));
+  const resolve12 = o2.resolve ?? systemResolve;
+  const dial = o2.dial ?? ((address2, port) => tcpConnect({ host: address2, port }));
+  const refuse = (client, what) => {
+    refused.push(what);
+    if (refused.length > 50) refused.shift();
+    reply(client, "403 Forbidden");
+  };
   const sockets = /* @__PURE__ */ new Set();
   const server = createServer((client) => {
     sockets.add(client);
@@ -38411,43 +38485,51 @@ async function startEgressProxy(o2) {
       }
       const why = egressProblem(rules, target.host, target.port);
       if (why !== void 0) {
-        refused.push(`${target.host}:${target.port} (${why})`);
-        if (refused.length > 50) refused.shift();
-        reply(client, "403 Forbidden");
+        refuse(client, `${target.host}:${target.port} (${why})`);
         return;
       }
-      const upstream = dial(target.host, target.port);
-      sockets.add(upstream);
-      upstream.setTimeout(CONNECT_TIMEOUT_MS, () => upstream.destroy());
-      upstream.on("close", () => sockets.delete(upstream));
-      upstream.once("connect", () => {
-        upstream.setTimeout(0);
-        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-        const rest = head.subarray(end + 4);
-        if (rest.length > 0) upstream.write(rest);
-        client.pipe(upstream);
-        upstream.pipe(client);
+      void checkedAddress(resolve12, target.host).then((checked) => {
+        if (client.destroyed) return;
+        if ("refused" in checked) {
+          refuse(client, `${target.host}:${target.port} (${checked.refused})`);
+          return;
+        }
+        tunnel(checked.address, target.port);
       });
-      upstream.on("error", () => {
-        if (!client.destroyed) reply(client, "502 Bad Gateway");
-        upstream.destroy();
-      });
-      client.on("close", () => upstream.destroy());
+      const tunnel = (address2, port) => {
+        const upstream = dial(address2, port);
+        sockets.add(upstream);
+        upstream.setTimeout(CONNECT_TIMEOUT_MS, () => upstream.destroy());
+        upstream.on("close", () => sockets.delete(upstream));
+        upstream.once("connect", () => {
+          upstream.setTimeout(0);
+          client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+          const rest = head.subarray(end + 4);
+          if (rest.length > 0) upstream.write(rest);
+          client.pipe(upstream);
+          upstream.pipe(client);
+        });
+        upstream.on("error", () => {
+          if (!client.destroyed) reply(client, "502 Bad Gateway");
+          upstream.destroy();
+        });
+        client.on("close", () => upstream.destroy());
+      };
     };
     client.on("data", onData);
   });
-  await new Promise((resolve12, reject) => {
+  await new Promise((resolve13, reject) => {
     server.once("error", reject);
-    server.listen(0, LOOPBACK, () => resolve12());
+    server.listen(0, LOOPBACK, () => resolve13());
   });
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("egress proxy: no port");
   return {
     port: address.port,
     refused,
-    close: () => new Promise((resolve12) => {
+    close: () => new Promise((resolve13) => {
       for (const s of sockets) s.destroy();
-      server.close(() => resolve12());
+      server.close(() => resolve13());
     })
   };
 }
@@ -38546,23 +38628,28 @@ New-NetFirewallRule -DisplayName $rule -Direction Outbound -Action Block -LocalU
 foreach ($p in ${list2(o2.readPaths)}) {
   if (Test-Path -LiteralPath $p) { icacls $p /grant "\${name}:(OI)(CI)RX" /Q | Out-Null }
 }
-foreach ($p in ${list2(o2.writePaths)}) {
-  New-Item -ItemType Directory -Force -Path $p | Out-Null
-  icacls $p /grant "\${name}:(OI)(CI)M" /Q | Out-Null
-}
 Write-Output "Studio crew user $name is ready; start the worker again."
 `;
 }
+var OWNER_RIGHTS = "*S-1-3-4";
 function grantArgs(user, g3) {
   if (!CREW_USER_RE.test(user)) throw new Error(`not a crew user name: ${user}`);
-  let dir = false;
+  const rights = g3.rights === "R" ? "RX" : "M";
+  return [g3.path, "/grant", `${user}:${isDir2(g3.path) ? "(OI)(CI)" : ""}${rights}`, "/Q"];
+}
+function ownerRightsArgs(path10) {
+  return [path10, "/grant", `${OWNER_RIGHTS}:(OI)(CI)(S)`, "/Q"];
+}
+function revokeArgs(user, path10) {
+  if (!CREW_USER_RE.test(user)) throw new Error(`not a crew user name: ${user}`);
+  return [path10, "/remove:g", user, "/Q"];
+}
+function isDir2(p) {
   try {
-    dir = lstatSync22(g3.path).isDirectory();
+    return lstatSync22(p).isDirectory();
   } catch {
-    dir = false;
+    return false;
   }
-  const rights = g3.rights === "R" ? "RX" : g3.rights;
-  return [g3.path, "/grant", `${user}:${dir ? "(OI)(CI)" : ""}${rights}`, "/Q"];
 }
 var runFile = (file3, args, opts = {}) => new Promise((resolve12) => {
   execFile(
@@ -38580,42 +38667,185 @@ var runFile = (file3, args, opts = {}) => new Promise((resolve12) => {
     }
   );
 });
-async function grantAll(run2, user, grants) {
-  for (const g3 of grants) {
-    const r = await run2("icacls", grantArgs(user, g3));
-    if (r.code !== 0) {
-      throw new Error(`cannot open ${g3.path} to the crew user ${user}: icacls exited ${r.code}`);
-    }
+var GRANTS_FILE = "windows-grants.json";
+function readGrantRecord(stateRoot) {
+  try {
+    const raw = JSON.parse(readFileSync26(join26(stateRoot, GRANTS_FILE), "utf8"));
+    return {
+      ...typeof raw.keeper === "number" ? { keeper: raw.keeper } : {},
+      paths: Array.isArray(raw.paths) ? raw.paths.filter((p) => typeof p === "string") : []
+    };
+  } catch {
+    return { paths: [] };
   }
 }
+var writeGrantRecord = (stateRoot, r) => writeStateFile(stateRoot, join26(stateRoot, GRANTS_FILE), `${JSON.stringify(r)}
+`);
+var processExists = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM";
+  }
+};
+var WindowsGrants = class {
+  constructor(o2) {
+    this.o = o2;
+  }
+  o;
+  paths() {
+    return readGrantRecord(this.o.stateRoot).paths;
+  }
+  /** Takes every recorded grant off; a failure is thrown after all were tried. */
+  async revokeAll() {
+    const rec = readGrantRecord(this.o.stateRoot);
+    const failed = [];
+    for (const p of rec.paths) {
+      if (!existsSync7(p)) continue;
+      const r = await this.o.run("icacls", revokeArgs(this.o.user, p));
+      if (r.code !== 0) failed.push(p);
+    }
+    writeGrantRecord(this.o.stateRoot, { paths: failed });
+    if (failed.length > 0) {
+      throw new Error(`cannot take the crew user's grants off ${failed.join(", ")}`);
+    }
+  }
+  async grant(grants) {
+    const rec = readGrantRecord(this.o.stateRoot);
+    if (rec.keeper !== void 0 && processExists(rec.keeper)) {
+      throw new HeldError(
+        "a crew of this Windows worker is still running: one crew at a time, as all share the crew user"
+      );
+    }
+    await this.revokeAll();
+    writeGrantRecord(this.o.stateRoot, { paths: grants.map((g3) => g3.path) });
+    for (const g3 of grants) {
+      const steps = [
+        grantArgs(this.o.user, g3),
+        ...g3.rights === "M" && isDir2(g3.path) ? [ownerRightsArgs(g3.path)] : []
+      ];
+      for (const args of steps) {
+        const r = await this.o.run("icacls", args);
+        if (r.code !== 0) {
+          throw new Error(
+            `cannot open ${g3.path} to the crew user ${this.o.user}: icacls exited ${r.code}`
+          );
+        }
+      }
+    }
+  }
+  recordKeeper(pid) {
+    writeGrantRecord(this.o.stateRoot, { ...readGrantRecord(this.o.stateRoot), keeper: pid });
+  }
+};
 var CREW_HOST_BIN = resolve6(
   dirname9(fileURLToPath2(import.meta.url)),
   "..",
   "bin",
   "studio-crew-host.mjs"
 );
-function startScript(o2) {
-  const arg = (s) => {
-    if (/["\p{Cc}]/u.test(s)) throw new Error(`refusing a path with quotes: ${JSON.stringify(s)}`);
-    return psQuote(`"${s}"`);
-  };
-  return [
-    "$ErrorActionPreference = 'Stop'",
-    `$c = Import-Clixml -LiteralPath ${psQuote(o2.credFile)}`,
-    `$p = Start-Process -FilePath ${psQuote(o2.node)} -ArgumentList @(${arg(o2.host)}, ${arg(o2.spec)}) -Credential $c -WorkingDirectory ${psQuote(o2.cwd)} -WindowStyle Hidden -PassThru -RedirectStandardOutput ${psQuote(join26(o2.dir, "host.out"))} -RedirectStandardError ${psQuote(join26(o2.dir, "host.err"))}`,
-    "[Console]::Out.Write($p.Id)"
-  ].join("\n");
-}
-var hostDirOf = (stateRoot, id) => join26(stateRoot, "tmp", `${id}.host`);
-function readHostRecord(dir) {
-  try {
-    const raw = JSON.parse(readFileSync26(join26(dir, "host.json"), "utf8"));
-    return typeof raw.pid === "number" && typeof raw.nonce === "string" ? { pid: raw.pid, nonce: raw.nonce } : void 0;
-  } catch {
-    return void 0;
+var KEEPER_FILE = "studio-crew-keeper.ps1";
+var KEEPER_SCRIPT = `# Studio: the keeper of one crew on a Windows worker (src/windows-sandbox.ts).
+param(
+  [Parameter(Mandatory = $true)][string]$Cred,
+  [Parameter(Mandatory = $true)][string]$Node,
+  [Parameter(Mandatory = $true)][string]$HostBin,
+  [Parameter(Mandatory = $true)][string]$Cwd,
+  [Parameter(Mandatory = $true)][string]$Out,
+  [Parameter(Mandatory = $true)][string]$Err,
+  [Parameter(Mandatory = $true)][string]$User,
+  [int]$WaitSeconds = 60
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class StudioJob {
+  [StructLayout(LayoutKind.Sequential)]
+  struct Basic {
+    public long PerProcessUserTimeLimit; public long PerJobUserTimeLimit; public uint LimitFlags;
+    public UIntPtr MinimumWorkingSetSize; public UIntPtr MaximumWorkingSetSize;
+    public uint ActiveProcessLimit; public UIntPtr Affinity; public uint PriorityClass;
+    public uint SchedulingClass;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  struct Io { public ulong A, B, C, D, E, F; }
+  [StructLayout(LayoutKind.Sequential)]
+  struct Extended {
+    public Basic BasicLimits; public Io IoInfo; public UIntPtr ProcessMemoryLimit;
+    public UIntPtr JobMemoryLimit; public UIntPtr PeakProcessMemoryUsed; public UIntPtr PeakJobMemoryUsed;
+  }
+  [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref Extended info, int length);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint pid);
+  public static IntPtr Create() {
+    IntPtr job = CreateJobObject(IntPtr.Zero, null);
+    if (job == IntPtr.Zero) throw new Win32Exception();
+    Extended info = new Extended();
+    info.BasicLimits.LimitFlags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if (!SetInformationJobObject(job, 9, ref info, Marshal.SizeOf(typeof(Extended)))) throw new Win32Exception();
+    return job;
+  }
+  public static void Assign(IntPtr job, IntPtr process) {
+    if (!AssignProcessToJobObject(job, process)) throw new Win32Exception();
+  }
+  public static uint ClientPid(IntPtr pipe) {
+    uint pid;
+    if (!GetNamedPipeClientProcessId(pipe, out pid)) throw new Win32Exception();
+    return pid;
   }
 }
-var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+'@
+$raw = [Console]::In.ReadToEnd()
+$nl = $raw.IndexOf([char]10)
+if ($nl -lt 0) { throw 'no spec on stdin' }
+$revoke = @(ConvertFrom-Json $raw.Substring(0, $nl))
+$spec = [Text.Encoding]::UTF8.GetBytes($raw.Substring($nl + 1))
+$raw = $null
+$p = $null
+try {
+  $job = [StudioJob]::Create()
+  $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+  $crew = (New-Object Security.Principal.NTAccount($env:COMPUTERNAME, $User)).Translate([Security.Principal.SecurityIdentifier])
+  $security = New-Object System.IO.Pipes.PipeSecurity
+  $security.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, 'FullControl', 'Allow')))
+  $security.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($crew, 'ReadWrite', 'Allow')))
+  $name = 'studio-' + [Guid]::NewGuid().ToString('N')
+  $pipe = New-Object System.IO.Pipes.NamedPipeServerStream($name, 'Out', 1, 'Byte', 'Asynchronous', 0, 65536, $security)
+  $c = Import-Clixml -LiteralPath $Cred
+  $p = Start-Process -FilePath $Node -ArgumentList @(('"' + $HostBin + '"'), $name) -Credential $c -WorkingDirectory $Cwd -WindowStyle Hidden -PassThru -RedirectStandardOutput $Out -RedirectStandardError $Err
+  [StudioJob]::Assign($job, $p.Handle)
+  $wait = $pipe.BeginWaitForConnection($null, $null)
+  if (-not $wait.AsyncWaitHandle.WaitOne($WaitSeconds * 1000)) { throw 'the crew host did not connect' }
+  $pipe.EndWaitForConnection($wait)
+  if ([StudioJob]::ClientPid($pipe.SafePipeHandle.DangerousGetHandle()) -ne [uint32]$p.Id) {
+    throw 'a process other than the crew host connected'
+  }
+  $pipe.Write($spec, 0, $spec.Length)
+  $pipe.Flush()
+  $pipe.WaitForPipeDrain()
+  $pipe.Dispose()
+  $spec = $null
+  $p.WaitForExit()
+  $code = $p.ExitCode
+} catch {
+  if ($null -ne $p -and -not $p.HasExited) { $p.Kill() }
+  [Console]::Error.WriteLine("studio keeper: $($_.Exception.Message)")
+  $code = 2
+} finally {
+  foreach ($r in $revoke) {
+    if (Test-Path -LiteralPath $r) { icacls $r /remove:g $User /Q | Out-Null }
+  }
+}
+exit $code
+`;
 function powershellEnv(env) {
   const keep = /* @__PURE__ */ new Set([
     "systemroot",
@@ -38628,96 +38858,145 @@ function powershellEnv(env) {
     "programdata",
     "number_of_processors",
     "processor_architecture",
-    "os"
+    "os",
+    "computername",
+    "userdomain",
+    "username"
   ]);
-  return Object.fromEntries(Object.entries(env).filter(([k]) => keep.has(k.toLowerCase())));
-}
-async function startHost(o2) {
-  const file3 = join26(o2.spec.dir, "spec.json");
-  writeStateFile(o2.stateRoot, file3, JSON.stringify({ ...o2.spec, env: o2.env }));
-  const script = startScript({
-    credFile: o2.credFile,
-    node: o2.node,
-    host: CREW_HOST_BIN,
-    spec: file3,
-    cwd: o2.cwd,
-    dir: o2.spec.dir
-  });
-  const r = await o2.run(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
-    { env: powershellEnv(o2.env), timeoutMs: 12e4 }
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      (e) => e[1] !== void 0 && keep.has(e[0].toLowerCase())
+    )
   );
-  const pid = Number(r.stdout.trim());
-  if (r.code !== 0 || !Number.isInteger(pid) || pid <= 0) {
-    throw new Error(
-      `cannot start a process as the crew user (powershell exited ${r.code}): ${r.stderr.split(/\r?\n/)[0] ?? ""}`
-    );
-  }
-  return pid;
 }
+var spawnKeeper = async (o2) => {
+  const fd = openSync6(o2.log, "a");
+  try {
+    const child = spawn("powershell.exe", o2.args, {
+      env: o2.env,
+      detached: o2.detached,
+      stdio: ["pipe", fd, fd],
+      windowsHide: true
+    });
+    const pid = await new Promise((resolve12, reject) => {
+      child.once("error", reject);
+      child.once("spawn", () => resolve12(child.pid));
+    });
+    const exited = new Promise((resolve12) => child.once("exit", (c3) => resolve12(c3 ?? 1)));
+    child.stdin?.on("error", () => {
+    });
+    child.stdin?.end(o2.stdin);
+    if (o2.detached) child.unref();
+    return { pid, exited };
+  } finally {
+    closeSync6(fd);
+  }
+};
+function ownerFiles(stateRoot, name) {
+  const logs = ensureStateDir(stateRoot, join26(stateRoot, "logs"));
+  if (lstatSync22(logs).isSymbolicLink()) throw new Error(`${logs} is a link`);
+  const files = {
+    out: join26(logs, `${name}.host.out`),
+    err: join26(logs, `${name}.host.err`),
+    keeper: join26(logs, `${name}.keeper.log`)
+  };
+  for (const f3 of Object.values(files)) {
+    removeStateEntry(stateRoot, f3);
+    assertStatePath(stateRoot, f3);
+  }
+  return files;
+}
+function keeperFile(stateRoot) {
+  const file3 = join26(stateRoot, "settings", KEEPER_FILE);
+  writeStateFile(stateRoot, file3, KEEPER_SCRIPT);
+  return file3;
+}
+function keeperArgs(o2) {
+  return [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    o2.script,
+    "-Cred",
+    o2.credFile,
+    "-Node",
+    o2.node,
+    "-HostBin",
+    CREW_HOST_BIN,
+    "-Cwd",
+    o2.cwd,
+    "-Out",
+    o2.out,
+    "-Err",
+    o2.err,
+    "-User",
+    o2.user
+  ];
+}
+var identityScript = (pid) => [
+  "$ErrorActionPreference = 'Stop'",
+  `$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${Math.trunc(pid)}'`,
+  "if ($null -eq $p) { exit 3 }",
+  "$o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid",
+  "$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+  `if ($o.Sid -ne $me -or $p.CommandLine -notlike ${psQuote(`*${KEEPER_FILE}*`)}) { exit 4 }`,
+  "[Console]::Out.Write($p.CreationDate.ToUniversalTime().ToString('o'))"
+].join("\n");
+var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function windowsClaude(o2) {
   const run2 = o2.run ?? runFile;
+  const start = o2.spawn ?? spawnKeeper;
   const node2 = o2.node ?? process.execPath;
-  const exists4 = (pid) => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (e) {
-      return e.code === "EPERM";
-    }
-  };
-  const dirOf = (pid) => {
-    const tmp = join26(o2.stateRoot, "tmp");
-    let names = [];
-    try {
-      names = readdirSync9(tmp).filter((n4) => n4.endsWith(".host"));
-    } catch {
-      return void 0;
-    }
-    return names.map((n4) => join26(tmp, n4)).find((d) => readHostRecord(d)?.pid === pid);
-  };
   return {
     async start(cwd, args, prompt, logPath, env) {
       const id = logPath.replace(/\\/g, "/").split("/").at(-1)?.replace(/\.jsonl$/, "") ?? "";
-      const dir = hostDirOf(o2.stateRoot, id);
+      if (!/^[A-Z]+-\d+$/.test(id)) throw new Error(`not a crew log: ${logPath}`);
+      const files = ownerFiles(o2.stateRoot, id);
       const spec = {
         mode: "run",
-        dir,
         cmd: o2.claudeBin,
         args,
         cwd,
         prompt,
-        log: logPath
-      };
-      closeSync6(openSync6(logPath, "a"));
-      const pid = await startHost({
-        run: run2,
-        stateRoot: o2.stateRoot,
-        credFile: o2.credFile,
-        node: node2,
-        spec,
-        cwd,
+        log: logPath,
         env
+      };
+      const k = await start({
+        args: keeperArgs({
+          script: keeperFile(o2.stateRoot),
+          credFile: o2.credFile,
+          node: node2,
+          cwd,
+          out: files.out,
+          err: files.err,
+          user: o2.user
+        }),
+        env: powershellEnv(env),
+        stdin: `${JSON.stringify(o2.grants.paths())}
+${JSON.stringify(spec)}`,
+        log: files.keeper,
+        detached: true
       });
-      return { pid };
+      o2.grants.recordKeeper(k.pid);
+      return { pid: k.pid };
     },
-    alive: exists4,
+    alive: processExists,
     async identity(pid) {
-      for (let i2 = 0; i2 < 50; i2++) {
-        const dir = dirOf(pid);
-        const rec = dir === void 0 ? void 0 : readHostRecord(dir);
-        if (rec !== void 0) return exists4(pid) ? `host:${rec.nonce}` : void 0;
-        if (!exists4(pid)) return void 0;
-        await sleep(200);
-      }
-      return void 0;
+      if (!Number.isInteger(pid) || pid <= 0 || !processExists(pid)) return void 0;
+      const r = await run2(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-Command", identityScript(pid)],
+        { env: powershellEnv(process.env), timeoutMs: 3e4 }
+      );
+      const at2 = r.stdout.trim();
+      return r.code === 0 && at2 !== "" ? `keeper:${at2}` : void 0;
     },
     async stop(pid) {
-      const dir = dirOf(pid);
-      if (dir !== void 0) writeStateFile(o2.stateRoot, join26(dir, "stop"), "stop\n");
-      for (let i2 = 0; i2 < 50 && exists4(pid); i2++) await sleep(200);
-      if (exists4(pid)) await run2("taskkill", ["/PID", String(pid), "/T", "/F"]);
+      if (processExists(pid)) await run2("taskkill", ["/PID", String(pid), "/F"]);
+      for (let i2 = 0; i2 < 50 && processExists(pid); i2++) await sleep(200);
+      await o2.grants.revokeAll();
     }
   };
 }
@@ -38730,16 +39009,15 @@ function probeProblem(results) {
 }
 var PROBE_CHECKS = ["user", "admin", "env", "read", "write", "direct", "proxy"];
 async function probeWindowsSandbox(o2) {
-  const run2 = o2.run ?? runFile;
-  const dir = join26(o2.stateRoot, "tmp", `probe-${randomBytes8(4).toString("hex")}.host`);
-  ensureStateDir(o2.stateRoot, dir);
+  const start = o2.spawn ?? spawnKeeper;
+  const name = `probe-${randomBytes8(4).toString("hex")}`;
+  const files = ownerFiles(o2.stateRoot, name);
   const canary = join26(o2.ownerConfigDir, "crew-probe-canary");
   writeStateFile(dirname9(canary), canary, "canary\n");
   try {
     const mark = randomBytes8(8).toString("hex");
     const spec = {
       mode: "probe",
-      dir,
       probe: {
         user: o2.user,
         mark,
@@ -38747,24 +39025,36 @@ async function probeWindowsSandbox(o2) {
         mustNotWrite: [join26(o2.ownerHome, `studio-probe-${mark}`)],
         direct: { host: "github.com", port: 443 },
         proxy: { port: o2.proxyPort, refused: "example.invalid" }
-      }
-    };
-    await o2.grant([{ path: dir, rights: "M" }]);
-    await startHost({
-      run: run2,
-      stateRoot: o2.stateRoot,
-      credFile: o2.credFile,
-      node: o2.node ?? process.execPath,
-      spec,
-      cwd: dir,
+      },
       env: { ...o2.env, STUDIO_PROBE_MARK: mark }
+    };
+    const k = await start({
+      args: keeperArgs({
+        script: keeperFile(o2.stateRoot),
+        credFile: o2.credFile,
+        node: o2.node ?? process.execPath,
+        cwd: o2.env.SystemRoot ?? o2.env.SYSTEMROOT ?? "C:\\Windows",
+        out: files.out,
+        err: files.err,
+        user: o2.user
+      }),
+      env: powershellEnv(o2.env),
+      stdin: `[]
+${JSON.stringify(spec)}`,
+      log: files.keeper,
+      detached: false
     });
-    const until = Date.now() + (o2.timeoutMs ?? 6e4);
-    const out = join26(dir, "probe.json");
-    while (Date.now() < until && !existsSync7(out)) await sleep(250);
+    const timeout = sleep(o2.timeoutMs ?? 12e4).then(() => "timeout");
+    if (await Promise.race([k.exited, timeout]) === "timeout") {
+      try {
+        process.kill(k.pid);
+      } catch {
+      }
+      return "the Windows crew sandbox could not be shown to hold here: the probe as the crew user did not finish";
+    }
     let results;
     try {
-      const raw = JSON.parse(readFileSync26(out, "utf8"));
+      const raw = JSON.parse(readFileSync26(files.out, "utf8"));
       results = Array.isArray(raw) ? raw : void 0;
     } catch {
       results = void 0;
@@ -38775,7 +39065,7 @@ async function probeWindowsSandbox(o2) {
     }
     return probeProblem(results);
   } finally {
-    removeStateEntry(o2.stateRoot, dir);
+    for (const f3 of Object.values(files)) removeStateEntry(o2.stateRoot, f3);
     removeStateEntry(dirname9(canary), canary);
   }
 }
@@ -38797,9 +39087,36 @@ function setupReadPaths(o2) {
       dirname9(o2.node),
       plugin,
       ...o2.claude === void 0 ? [] : [dirname9(o2.claude)],
-      ...o2.toolchains
+      ...o2.toolchains,
+      join26(o2.crewConfigDir, "skills"),
+      join26(o2.crewConfigDir, "plugins")
     ])
   ];
+}
+function runConfigDir(homeDir, shared) {
+  const dir = join26(homeDir, ".claude-run");
+  mkdirSync7(join26(dir, "plugins"), { recursive: true });
+  const copy = (from, to) => {
+    let st;
+    try {
+      st = lstatSync22(from);
+    } catch {
+      return;
+    }
+    if (st.isSymbolicLink()) return;
+    if (st.isDirectory()) {
+      mkdirSync7(to, { recursive: true });
+      for (const n4 of readdirSync9(from)) copy(join26(from, n4), join26(to, n4));
+    } else if (st.isFile()) {
+      copyFileSync(from, to);
+    }
+  };
+  copy(join26(shared, "skills"), join26(dir, "skills"));
+  for (const f3 of ["installed_plugins.json", "known_marketplaces.json"]) {
+    copy(join26(shared, "plugins", f3), join26(dir, "plugins", f3));
+  }
+  copy(join26(shared, "settings.json"), join26(dir, "settings.json"));
+  return dir;
 }
 async function windowsWorker(o2) {
   const run2 = o2.run ?? runFile;
@@ -38807,14 +39124,17 @@ async function windowsWorker(o2) {
   const path10 = o2.env.PATH ?? o2.env.Path;
   const claudeBin = findClaude(path10);
   const proxy = await o2.startProxy([...o2.networkAllow, ...CLAUDE_HOSTS]);
-  const grant = (grants) => grantAll(run2, o2.user, grants);
+  const grants = new WindowsGrants({ stateRoot: o2.stateRoot, user: o2.user, run: run2 });
   const missing = () => !existsSync7(credFile) ? `no crew user credential at ${credFile}: run the script of studio worker windows-setup` : claudeBin === void 0 ? "claude is not on PATH" : void 0;
   return {
     claude: windowsClaude({
       stateRoot: o2.stateRoot,
       credFile,
       claudeBin: claudeBin ?? "claude",
-      run: run2
+      user: o2.user,
+      grants,
+      run: run2,
+      ...o2.spawn === void 0 ? {} : { spawn: o2.spawn }
     }),
     sandbox: {
       user: o2.user,
@@ -38837,11 +39157,10 @@ async function windowsWorker(o2) {
           mustNotRead,
           proxyPort: proxy.port,
           env: { ...probeEnv, PATH: path10 ?? "" },
-          grant,
-          run: run2
+          ...o2.spawn === void 0 ? {} : { spawn: o2.spawn }
         });
       },
-      launch: { user: o2.user, proxyPort: proxy.port, grant }
+      launch: { user: o2.user, proxyPort: proxy.port, grant: (g3) => grants.grant(g3) }
     },
     close: () => proxy.close()
   };
@@ -39427,7 +39746,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
     join27(configDir, "plugins", "marketplaces")
   ]);
   const toolResultGlobs = unique2(
-    [configDir, realOr2(configDir)].flatMap(
+    (dirs.runConfigDir === void 0 ? [configDir, realOr2(configDir)] : [dirs.runConfigDir]).flatMap(
       (dir) => [clone2, realOr2(clone2)].map(
         (c3) => `${join27(dir, "projects", c3.replace(/[^A-Za-z0-9]/g, "-"))}/*/tool-results/**`
       )
@@ -39949,7 +40268,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
       },
       ...worker === void 0 ? {} : { deny: worker.deny },
       ...timeouts === void 0 ? {} : { timeouts },
-      ...windows === void 0 ? {} : { windows: true }
+      ...windows === void 0 ? {} : { windows: true, runConfigDir: join27(homeDir, ".claude-run") }
     },
     owner
   );
@@ -40005,14 +40324,13 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
       env,
       windowsCrewEnv({ proxyPort: windows.proxyPort, homeDir, tmpDir, base: penv })
     );
-    const hostDir = ensureStateDir(stateRoot, hostDirOf(stateRoot, item.id));
+    env.CLAUDE_CONFIG_DIR = runConfigDir(homeDir, claudeConfigDir);
     if (!existsNoFollow2(log2)) writeStateFile(stateRoot, log2, "");
     const briefs = ["md", "caps", "rules", "reference"].map((ext) => join27(stateRoot, "briefs", `${item.id}.${ext}`)).filter(existsNoFollow2);
     await windows.grant([
       { path: wt.path, rights: "M" },
       { path: homeDir, rights: "M" },
       { path: tmpDir, rights: "M" },
-      { path: hostDir, rights: "M" },
       ...briefs.map((path10) => ({ path: path10, rights: "R" })),
       { path: settings, rights: "R" },
       { path: mcpConfig, rights: "R" },
@@ -43008,7 +43326,7 @@ function nextSteps(prefix, written, checks, launcher2) {
 function writeBoth(o2, dir, files) {
   const write = o2.writeFile ?? ((path10, text) => writeFileSync11(path10, text, { flag: "wx" }));
   const madeDir = !exists3(dir);
-  if (madeDir) mkdirSync7(dir);
+  if (madeDir) mkdirSync8(dir);
   if (!isRealDir2(dir)) throw new Error(".studio is not a directory: nothing written");
   const done = [];
   try {
@@ -47658,7 +47976,7 @@ function plainFile(file3) {
     throw e;
   }
 }
-function isDir2(p) {
+function isDir3(p) {
   try {
     const st = lstatSync37(p);
     return st.isDirectory() && !st.isSymbolicLink();
@@ -47679,7 +47997,7 @@ function markerOrigin(root) {
   return m.originUrl;
 }
 async function busy(root, label, ports, now) {
-  if (!isDir2(root)) return [];
+  if (!isDir3(root)) return [];
   const why = [];
   const records = readCrewRecords(root);
   for (const rec of Object.values(records)) {
@@ -47714,10 +48032,10 @@ var lines = (text) => text.split("\n").filter((l) => l.trim() !== "");
 var doneKey = (d) => `${d.repo}#${d.pr}|${d.result}|${d.at}`;
 async function adoptStateRoot(o2) {
   const from = resolve9(o2.from);
-  if (!isDir2(from))
+  if (!isDir3(from))
     throw new Error(`${from} is not a state root folder (missing, a link or a file)`);
   const realFrom = realpathSync10(from);
-  if (isDir2(o2.to) && realpathSync10(o2.to) === realFrom) {
+  if (isDir3(o2.to) && realpathSync10(o2.to) === realFrom) {
     throw new Error(`${from} is this project's own state root; nothing to adopt`);
   }
   const oldOrigin = markerOrigin(from);
@@ -47739,7 +48057,7 @@ async function adoptStateRoot(o2) {
   for (const f3 of ADOPT_FILES) {
     const old = plainFile(join44(from, f3.name));
     if (old === void 0) continue;
-    const cur = isDir2(o2.to) ? plainFile(join44(o2.to, f3.name)) : void 0;
+    const cur = isDir3(o2.to) ? plainFile(join44(o2.to, f3.name)) : void 0;
     if (cur === void 0) {
       files.push({ name: f3.name, action: "copy" });
       writes.push({ name: f3.name, content: old });
@@ -47770,7 +48088,7 @@ async function adoptStateRoot(o2) {
     pendingLeft = q.pending?.length ?? 0;
     queueDone = q.done ?? [];
     if (queueDone.length > 0) {
-      const curText = isDir2(o2.to) ? plainFile(join44(o2.to, QUEUE)) : void 0;
+      const curText = isDir3(o2.to) ? plainFile(join44(o2.to, QUEUE)) : void 0;
       const have = new Set(
         (curText === void 0 ? {} : JSON.parse(curText)).done?.map(doneKey) ?? []
       );
@@ -48468,7 +48786,7 @@ ${lines2.join("\n")}
 import {
   chmodSync as chmodSync6,
   lstatSync as lstatSync39,
-  mkdirSync as mkdirSync8,
+  mkdirSync as mkdirSync9,
   readFileSync as readFileSync45,
   renameSync as renameSync14,
   rmSync as rmSync10,
@@ -48630,7 +48948,7 @@ async function link(o2, home) {
   }
   const cache2 = join47(ownerConfigDir(o2.owner), "launcher");
   const writeCache = () => {
-    mkdirSync8(dirname13(cache2), { recursive: true, mode: 448 });
+    mkdirSync9(dirname13(cache2), { recursive: true, mode: 448 });
     writeAtomic2(cache2, `${launcher2}
 `, 384);
   };
@@ -48655,7 +48973,7 @@ async function link(o2, home) {
     say(`   nothing written; until you do: node ${shQuote(launcher2)} <command>`);
     return 0;
   }
-  mkdirSync8(localBin, { recursive: true });
+  mkdirSync9(localBin, { recursive: true });
   writeCache();
   writeAtomic2(target, SHIM, 493);
   say(`   wrote ${target}`);
@@ -52739,9 +53057,9 @@ async function runCli(argv, deps) {
               readPaths: setupReadPaths({
                 node: process.execPath,
                 claude: findClaude(deps.env.PATH ?? deps.env.Path),
-                toolchains: ownerConfig.crewToolchainPaths
-              }),
-              writePaths: [crewClaudeDir(owner)]
+                toolchains: ownerConfig.crewToolchainPaths,
+                crewConfigDir: crewClaudeDir(owner)
+              })
             })
           );
           return 0;
@@ -54889,7 +55207,7 @@ function readVisibleLine(prompt, input2, output2) {
 }
 
 // src/ports.ts
-import { spawn as spawn2 } from "node:child_process";
+import { spawn as spawn3 } from "node:child_process";
 import { closeSync as closeSync9, openSync as openSync9, readFileSync as readFileSync50 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 
@@ -60084,7 +60402,7 @@ var getSyncResult = ({ error: error62, exitCode, signal, timedOut, isMaxBuffer, 
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/methods/main-async.js
 import { setMaxListeners, once as once9 } from "node:events";
-import { spawn } from "node:child_process";
+import { spawn as spawn2 } from "node:child_process";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/ipc/methods.js
 import process11 from "node:process";
@@ -62459,7 +62777,7 @@ var handleAsyncOptions = ({ timeout, signal, ...options }) => ({ __proto__: null
 var spawnSubprocessAsync = ({ file: file3, commandArguments, options, startTime, verboseInfo, command, escapedCommand, fileDescriptors }) => {
   let subprocess;
   try {
-    subprocess = spawn(...concatenateShell(file3, commandArguments, getSpawnOptions(options)));
+    subprocess = spawn2(...concatenateShell(file3, commandArguments, getSpawnOptions(options)));
   } catch (error62) {
     return handleEarlyError({
       error: error62,
@@ -62793,7 +63111,7 @@ function realPorts(claudeBin = "claude") {
     async start(cwd, args, prompt, logPath, env) {
       const fd = openSync9(logPath, "a");
       try {
-        const child = spawn2(claudeBin, args, {
+        const child = spawn3(claudeBin, args, {
           cwd,
           env,
           detached: true,

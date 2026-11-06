@@ -2,6 +2,7 @@ import { connect, createServer, type Server, type Socket } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   allowRules,
+  blockedAddress,
   connectTarget,
   egressProblem,
   ipv4,
@@ -39,6 +40,33 @@ describe('the allowlist', () => {
 
   it('never turns an IP literal or a bare * into a rule', () => {
     expect(rules.map((r) => r.host)).toEqual(['github.com', 'crates.io', 'example.org']);
+  });
+});
+
+describe('blockedAddress', () => {
+  it('blocks loopback, private, link-local, multicast, unspecified and mapped forms', () => {
+    for (const a of [
+      ipv4(127, 0, 0, 1),
+      ipv4(10, 0, 0, 1),
+      ipv4(172, 20, 0, 1),
+      ipv4(192, 168, 0, 1),
+      ipv4(169, 254, 169, 254),
+      ipv4(100, 64, 0, 1),
+      ipv4(0, 0, 0, 0),
+      ipv4(224, 0, 0, 1),
+      ipv4(255, 255, 255, 255),
+      '::',
+      '::1',
+      'fd00::1',
+      'fe80::1',
+      'ff02::1',
+      `::ffff:${ipv4(127, 0, 0, 1)}`,
+      'not-an-address',
+    ]) {
+      expect(blockedAddress(a), a).toBe(true);
+    }
+    expect(blockedAddress(ipv4(140, 82, 121, 3))).toBe(false);
+    expect(blockedAddress('2606:50c0:8000::153')).toBe(false);
   });
 });
 
@@ -83,9 +111,22 @@ describe('the proxy', () => {
       s.write(text);
     });
 
+  /** github.com resolves to a public address; the others lead inside. */
+  const PUBLIC = ipv4(140, 82, 121, 3);
+  const answers: Record<string, string[]> = {
+    'github.com': [PUBLIC],
+    'inside.github.com': [ipv4(10, 1, 2, 3)],
+    'mixed.github.com': [PUBLIC, '::1'],
+    'mapped.github.com': [`::ffff:${ipv4(192, 168, 1, 1)}`],
+  };
   const start = () =>
     startEgressProxy({
-      allow: ['github.com'],
+      allow: ['github.com', '*.github.com'],
+      resolve: async (host) => {
+        const a = answers[host];
+        if (a === undefined) throw new Error('ENOTFOUND');
+        return a;
+      },
       dial: (host, port) => {
         dialed.push(`${host}:${port}`);
         return connect({ host: LOOPBACK, port: upstreamPort });
@@ -100,7 +141,26 @@ describe('the proxy', () => {
       /ping$/,
     );
     expect(got).toBe('HTTP/1.1 200 Connection Established\r\n\r\nping');
-    expect(dialed).toContain('github.com:443');
+    // The tunnel goes to the address the proxy checked, not to the name.
+    expect(dialed).toContain(`${PUBLIC}:443`);
+    await proxy.close();
+  });
+
+  it('refuses an allowed name whose answer leads inside, or that does not resolve', async () => {
+    const proxy = await start();
+    const before = dialed.length;
+    for (const name of ['inside', 'mixed', 'mapped', 'gone']) {
+      expect(await talk(proxy.port, `CONNECT ${name}.github.com:443 HTTP/1.1\r\n\r\n`)).toMatch(
+        /^HTTP\/1\.1 403 /,
+      );
+    }
+    expect(dialed.length).toBe(before);
+    expect(proxy.refused).toEqual([
+      `inside.github.com:443 (resolves to a local or private address (${ipv4(10, 1, 2, 3)}))`,
+      'mixed.github.com:443 (resolves to a local or private address (::1))',
+      `mapped.github.com:443 (resolves to a local or private address (::ffff:${ipv4(192, 168, 1, 1)}))`,
+      'gone.github.com:443 (does not resolve)',
+    ]);
     await proxy.close();
   });
 
