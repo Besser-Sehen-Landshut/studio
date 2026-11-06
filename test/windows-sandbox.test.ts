@@ -17,9 +17,11 @@ import {
   CREW_DESCRIPTION,
   type CrewAccounts,
   crewAccountScript,
+  GIT_MIN_CHECK,
   GROUP_DESCRIPTION,
   judgeCrewAnswer,
   localCrewAccounts,
+  TREE_SOURCE,
 } from '../src/crew-accounts.js';
 import { ipv4, LOOPBACK } from '../src/egress-proxy.js';
 import { HeldError } from '../src/held.js';
@@ -68,6 +70,9 @@ describe('the setup script', () => {
 
   it("makes Studio's group of crew users; the users themselves come per job", () => {
     expect(script).toMatch(/^#Requires -RunAsAdministrator/);
+    // Git for Windows 2.35.2 or later (CVE-2022-24765), before anything else.
+    expect(script).toContain(GIT_MIN_CHECK);
+    expect(GIT_MIN_CHECK).toContain("-lt [version]'2.35.2'");
     expect(script).toContain("$prefix = 'studio-crew'");
     expect(script).toContain(`$groupDescription = '${GROUP_DESCRIPTION}'`);
     expect(script).toContain("New-LocalGroup -Name ($prefix + 's') -Description $groupDescription");
@@ -496,16 +501,33 @@ describe('the crew user scripts', () => {
     expect(s).toContain(`$crewDescription = '${CREW_DESCRIPTION}'`);
     expect(s).toContain("'-[0-9a-f]{6}$'");
     expect(s).toContain('$_.Description -eq $crewDescription');
-    // Processes end before anything is deleted; a link goes as a link before the profile goes.
-    const at = (x: string) => s.indexOf(x);
-    expect(at('$s = SweepJobUsers')).toBeLessThan(
-      at('foreach ($u in JobUsers) { RemoveJobUser $u'),
+    // Every crew user is locked first (disabled, a password nobody knows), then its processes
+    // end: nothing can start one again before its profile and the user are gone.
+    const retire = s.slice(s.indexOf('function RetireJobUsers'));
+    const at = (x: string) => retire.indexOf(x);
+    expect(at('foreach ($u in $users) { LockJobUser $u }')).toBeGreaterThan(0);
+    expect(at('foreach ($u in $users) { LockJobUser $u }')).toBeLessThan(at('NoneLeft'));
+    expect(at('NoneLeft')).toBeLessThan(at('RemoveJobUser $u'));
+    expect(s).toContain('Disable-LocalUser -SID $u.SID');
+    expect(s).toContain('Set-LocalUser -SID $u.SID -Password (ConvertTo-SecureString (NewSecret)');
+    // The profile goes through Studio's tree deleter, and processes are swept again after it,
+    // before Windows forgets the profile; nothing deletes it with Remove-Item (which follows
+    // junctions in Windows PowerShell).
+    const remove = s.slice(
+      s.indexOf('function RemoveJobUser'),
+      s.indexOf('function RetireJobUsers'),
     );
-    expect(at('DropLinks $path')).toBeLessThan(at('Remove-CimInstance -InputObject $prof'));
-    expect(s).toContain('[IO.Directory]::Delete($c.FullName, $false)');
+    const r = (x: string) => remove.indexOf(x);
+    expect(r('RemoveTree $path $null')).toBeLessThan(r('NoneLeft'));
+    expect(r('NoneLeft')).toBeLessThan(r('Remove-CimInstance -InputObject $prof'));
+    expect(remove).not.toMatch(/Remove-Item -LiteralPath \$path/);
+    expect(s).toContain('[StudioTree]::Remove($root, $afterList)');
+    expect(s).toContain(`$treeSource = '${TREE_SOURCE()}'`);
     expect(s).toContain('is a reparse point');
     expect(s).toContain('not a folder right below');
     expect(s).toContain('Remove-LocalUser -SID $sid');
+    // A member of the group that is not a crew user of Studio's refuses everything.
+    expect(s).toContain("which is not a crew user of Studio's: remove it from the group");
     expect(s).toContain('$out.removed = @(RetireJobUsers)');
   });
 
@@ -522,6 +544,13 @@ describe('the crew user scripts', () => {
     expect(s).toContain('DataProtectionScope]::LocalMachine');
     expect(s).toContain(`"*$($reader):R"`);
     expect(s).toMatch(/\$out\.removed = @\(RetireJobUsers\)[\s\S]*NewJobUser/);
+    // Replace keeps the DACL of the file it replaced: the intended one goes on after it.
+    const seal = s.slice(s.indexOf('function SealFor'));
+    expect(seal.indexOf('[IO.File]::Replace(')).toBeLessThan(
+      seal.lastIndexOf(
+        `icacls $file /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($reader):R" /L /Q`,
+      ),
+    );
     expect(() => crewAccountScript({ op: 'fresh', prefix: 'studio-crew' })).toThrow(/reader/);
     expect(() =>
       crewAccountScript({ op: 'fresh', prefix: 'x', credFile: 'c', reader: "a'b" }),

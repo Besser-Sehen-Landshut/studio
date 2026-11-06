@@ -3,10 +3,19 @@
 // a pipe only the runner it created may read. The runner here is a stand-in that writes what it got.
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { TREE_SOURCE } from '../src/crew-accounts.js';
 import { systemSpawnRunner } from '../src/relay-serve.js';
 import { FOLDER_FUNCTIONS } from '../src/relay-windows.js';
 import { machineTreeProblem } from '../src/relay-windows-check.js';
@@ -40,6 +49,52 @@ s.on('error', (e) => writeFileSync(${JSON.stringify(out)}, 'error ' + e.code));
     expect(readFileSync(out, 'utf8')).toBe(spec);
   }, 120_000);
 });
+
+// Elevated (the windows-latest job): the backup and restore privileges are an administrator's.
+describe.skipIf(!(on && process.env.STUDIO_WINDOWS_SANDBOX_TEST === '1'))(
+  "deleting a crew user's profile",
+  () => {
+    it('follows no link, also one planted after the listing; a Deny entry and a long path do not stop it', () => {
+      const base = realpathSync(mkdtempSync(join(tmpdir(), 'studio-tree-')));
+      const outside = join(base, 'outside');
+      mkdirSync(outside);
+      writeFileSync(join(outside, 'owner.txt'), 'the owner');
+      const root = join(base, 'profile');
+      // A path of more than 260 characters, in a folder closed to everyone by a Deny entry.
+      const deep = join(
+        root,
+        'closed',
+        ...Array.from({ length: 8 }, (_, i) => `${i}${'d'.repeat(40)}`),
+      );
+      mkdirSync(deep, { recursive: true });
+      expect(deep.length).toBeGreaterThan(300);
+      writeFileSync(join(deep, 'deep.txt'), 'x');
+      symlinkSync(outside, join(deep, 'link-deep'), 'junction');
+      symlinkSync(outside, join(root, 'link'), 'junction');
+      writeFileSync(join(root, 'readonly.txt'), 'x');
+      const q = (p: string) => `'${p.replace(/'/g, "''")}'`;
+      const run = (script: string) =>
+        execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+          encoding: 'utf8',
+          env: powershellEnv(process.env),
+        });
+      run(
+        `Set-ItemProperty -LiteralPath ${q(join(root, 'readonly.txt'))} -Name IsReadOnly -Value $true; icacls ${q(join(root, 'closed'))} /deny '*S-1-1-0:(OI)(CI)F' /Q | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls' }`,
+      );
+      const before = run(`(Get-Acl -LiteralPath ${q(outside)}).Sddl`);
+      // A junction to the outside appears in the profile right after its listing.
+      run(`$ErrorActionPreference = 'Stop'
+Add-Type -Path ${q(TREE_SOURCE())}
+$script:planted = $false
+$hook = [Action[string]]{ param($d) if (-not $script:planted -and $d.TrimEnd('\\') -ieq ${q(`\\\\?\\${root}`)}) { $script:planted = $true; cmd /c mklink /J ${q(join(root, 'late'))} ${q(outside)} | Out-Null } }
+[StudioTree]::Remove(${q(root)}, $hook)
+if (-not $script:planted) { throw 'the hook never ran' }`);
+      expect(existsSync(root)).toBe(false);
+      expect(readFileSync(join(outside, 'owner.txt'), 'utf8')).toBe('the owner');
+      expect(run(`(Get-Acl -LiteralPath ${q(outside)}).Sddl`)).toBe(before);
+    }, 120_000);
+  },
+);
 
 describe.skipIf(!on)('the PowerShell of the crew user on Windows', () => {
   it('loads core modules from $PSHOME only, whatever PSModulePath it was given', async () => {

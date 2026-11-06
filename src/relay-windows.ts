@@ -18,6 +18,7 @@ import {
   crewAccountFunctions,
   crewAccountScript,
   crewGroupSetup,
+  GIT_MIN_CHECK,
   RELAY_SID_SLOT,
 } from './crew-accounts.js';
 import { ipv4 } from './egress-proxy.js';
@@ -158,6 +159,8 @@ export const brokerScript = (o: { op: CrewAccountOp; prefix: string; machine: st
     op: o.op,
     prefix: o.prefix,
     result: brokerResultFiles(o.machine)[o.op],
+    // The admin-only copy of the tree deleter: nothing the relay account could change.
+    treeSource: join(machineStudio(o.machine), 'bin', 'studio-tree.cs'),
     ...(o.op === 'fresh' ? { credFile: machineCredFile(o.machine), reader: '$relaySid' } : {}),
   })
     // Short, for the task's action: no comment line, no indentation (no here-string in it).
@@ -284,7 +287,11 @@ $tmp = Join-Path (Split-Path -Parent $target) ('.' + [Guid]::NewGuid().ToString(
 icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /L /Q | Out-Null
 if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $target" }
 icacls $tmp /setowner '*S-1-5-32-544' /L /Q | Out-Null
-if (Test-Path -LiteralPath $target) { [IO.File]::Replace($tmp, $target, [NullString]::Value) } else { [IO.File]::Move($tmp, $target) }`;
+if (Test-Path -LiteralPath $target) { [IO.File]::Replace($tmp, $target, [NullString]::Value) } else { [IO.File]::Move($tmp, $target) }
+# Replace keeps the DACL of the file it replaced: the intended one goes on again.
+icacls $target /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /L /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "cannot set the ACL of $target" }
+icacls $target /setowner '*S-1-5-32-544' /L /Q | Out-Null`;
 }
 
 /**
@@ -427,7 +434,7 @@ $relay = ${psQuote(o.relayUser)}
 $home_ = ${psQuote(o.home)}
 $machine = ${psQuote(o.machine)}
 $task = ${psQuote(o.task)}
-${FOLDER_FUNCTIONS}${crewAccountFunctions(o.crewPrefix)}function EnsureUser([string]$name, [string]$what, [string]$plain) {
+${GIT_MIN_CHECK}${FOLDER_FUNCTIONS}${crewAccountFunctions(o.crewPrefix, join(o.source.studio, 'bin', 'studio-tree.cs'))}function EnsureUser([string]$name, [string]$what, [string]$plain) {
   $u = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
   if ($null -eq $u) {
     if (-not $plain) { $plain = NewSecret }

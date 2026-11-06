@@ -10,7 +10,11 @@
 // Making and deleting users needs an administrator. A native worker runs elevated and runs these
 // scripts itself; a relay worker's account is a standard user and asks its broker tasks, which run
 // them as SYSTEM (src/relay-windows.ts).
-import { OUTSIDE, powershellEnv, psQuote, type RunFile } from './windows-sandbox.js';
+import { dirname, join } from 'node:path';
+import { CREW_HOST_BIN, OUTSIDE, powershellEnv, psQuote, type RunFile } from './windows-sandbox.js';
+
+/** The tree deleter (bin/studio-tree.cs) beside the crew host. */
+export const TREE_SOURCE = (): string => join(dirname(CREW_HOST_BIN), 'studio-tree.cs');
 
 /**
  * The name prefix of the crew users: letters, digits, `_` and `-`, at most 13 characters, so that
@@ -59,8 +63,9 @@ const prefixOf = (prefix: string): string => {
  * after every reparse point in it is removed as a link, never followed, and only when it is a folder
  * right below the profiles folder of this machine.
  */
-export const crewAccountFunctions = (prefix: string): string =>
+export const crewAccountFunctions = (prefix: string, treeSource: string = TREE_SOURCE()): string =>
   `$prefix = ${psQuote(prefixOf(prefix))}
+$treeSource = ${psQuote(treeSource)}
 $crewDescription = ${psQuote(CREW_DESCRIPTION)}
 $groupDescription = ${psQuote(GROUP_DESCRIPTION)}
 ${CREW_ACCOUNT_BODY}`;
@@ -73,6 +78,16 @@ const CREW_ACCOUNT_BODY = String.raw`function CrewGroup {
 }
 function JobUsers {
   $re = '^' + [regex]::Escape($prefix) + '-[0-9a-f]{6}$'
+  # Every member of Studio's group must be one of them: anything else there refuses.
+  $g = Get-LocalGroup -Name ($prefix + 's') -ErrorAction SilentlyContinue
+  if ($null -ne $g) {
+    foreach ($m in @(Get-LocalGroupMember -Group $g)) {
+      $mu = if ($m.ObjectClass -eq 'User') { Get-LocalUser -SID $m.SID -ErrorAction SilentlyContinue } else { $null }
+      if ($null -eq $mu -or $mu.Name -notmatch $re -or $mu.Description -ne $crewDescription) {
+        throw "the group $($g.Name) holds $($m.Name), which is not a crew user of Studio's: remove it from the group"
+      }
+    }
+  }
   @(Get-LocalUser | Where-Object { $_.Name -match $re -and $_.Description -eq $crewDescription })
 }
 function OwnedBy([string[]]$sids) {
@@ -86,34 +101,25 @@ function SweepJobUsers {
   if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }
   @{ found = $found.Count; left = @(OwnedBy $sids | ForEach-Object { [int]$_.ProcessId }) }
 }
-# A folder the crew user closed to everyone else: administrators take it, for this folder only.
-function Grab([string]$p) {
-  takeown /F $p /A | Out-Null
-  icacls $p /grant '*S-1-5-18:F' '*S-1-5-32-544:F' /L /Q | Out-Null
+function NoneLeft {
+  $s = SweepJobUsers
+  if ($s.left.Count -gt 0) { throw "processes of the crew users are still running ($($s.left -join ', ')) and cannot be ended" }
 }
-function Children([string]$dir) {
-  try { @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop) }
-  catch { Grab $dir; @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop) }
-}
-# Every reparse point below a profile goes as a link, never followed: what deletes the profile then
-# reaches nothing outside it.
-function DropLinks([string]$root) {
-  $todo = New-Object Collections.Stack
-  $todo.Push($root)
-  while ($todo.Count -gt 0) {
-    foreach ($c in Children $todo.Pop()) {
-      if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-        if ($c.PSIsContainer) { [IO.Directory]::Delete($c.FullName, $false) } else { [IO.File]::Delete($c.FullName) }
-        if ($null -ne (Get-Item -LiteralPath $c.FullName -Force -ErrorAction SilentlyContinue)) { throw "cannot remove the link $($c.FullName)" }
-        continue
-      }
-      if ($c.PSIsContainer) { $todo.Push($c.FullName) }
-    }
-  }
+# A tree deleted as administrators or SYSTEM, never following a link and whatever its DACLs say
+# (bin/studio-tree.cs: backup and restore semantics, long paths).
+function RemoveTree([string]$root, $afterList) {
+  if (-not ('StudioTree' -as [type])) { Add-Type -Path $treeSource }
+  [StudioTree]::Remove($root, $afterList)
 }
 function ProfileRoot {
   $list = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
   [Environment]::ExpandEnvironmentVariables($list.ProfilesDirectory).TrimEnd('\')
+}
+# No logon as a crew user any more: disabled, with a new password nobody ever learns. What could
+# start one of its processes (the relay account, which could unseal the old password) cannot.
+function LockJobUser($u) {
+  Disable-LocalUser -SID $u.SID
+  Set-LocalUser -SID $u.SID -Password (ConvertTo-SecureString (NewSecret) -AsPlainText -Force)
 }
 function RemoveJobUser($u) {
   $sid = $u.SID.Value
@@ -132,21 +138,23 @@ function RemoveJobUser($u) {
       throw "the profile of $($u.Name) is at $path, not a folder right below $root"
     }
     $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-    if ($null -ne $item) {
-      if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "the profile of $($u.Name) at $path is a reparse point" }
-      DropLinks $path
-    }
-    Remove-CimInstance -InputObject $prof
-    # What the profile service left: no link is in it any more, so this reaches nothing outside.
-    if (Test-Path -LiteralPath $path) { DropLinks $path; Remove-Item -LiteralPath $path -Recurse -Force }
+    if ($null -ne $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "the profile of $($u.Name) at $path is a reparse point" }
+    # Studio deletes the folder itself, never following a link, before Windows forgets the profile.
+    RemoveTree $path $null
+    NoneLeft
+    try { Remove-CimInstance -InputObject $prof } catch { }
+    $key = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $sid
+    if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
+    RemoveTree $path $null
   }
   Remove-LocalUser -SID $sid
 }
 function RetireJobUsers {
-  $s = SweepJobUsers
-  if ($s.left.Count -gt 0) { throw "processes of the crew users are still running ($($s.left -join ', ')) and cannot be ended" }
+  $users = JobUsers
+  foreach ($u in $users) { LockJobUser $u }
+  NoneLeft
   $gone = @()
-  foreach ($u in JobUsers) { RemoveJobUser $u; $gone += $u.Name }
+  foreach ($u in $users) { RemoveJobUser $u; $gone += $u.Name }
   $gone
 }
 function NewSecret { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b) + 'aA1!' }
@@ -160,6 +168,10 @@ function SealFor([string]$file, [string]$plain, [string]$reader) {
   icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($reader):R" /L /Q | Out-Null
   if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $file" }
   if (Test-Path -LiteralPath $file) { [IO.File]::Replace($tmp, $file, [NullString]::Value) } else { [IO.File]::Move($tmp, $file) }
+  # Replace keeps the DACL of the file it replaced: the intended one goes on again.
+  icacls $file /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($reader):R" /L /Q | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "cannot set the ACL of $file" }
+  icacls $file /setowner '*S-1-5-32-544' /L /Q | Out-Null
 }
 function NewJobUser([string]$credFile, [string]$reader) {
   $g = CrewGroup
@@ -200,6 +212,8 @@ export function crewAccountScript(o: {
   credFile?: string;
   reader?: string;
   result?: string;
+  /** The tree deleter to load (bin/studio-tree.cs): the admin-only copy on a relay worker. */
+  treeSource?: string;
 }): string {
   if (o.op === 'fresh' && (o.credFile === undefined || o.reader === undefined)) {
     throw new Error('a fresh crew user needs a credential file and its reader');
@@ -222,7 +236,7 @@ export function crewAccountScript(o: {
   return `$ErrorActionPreference = 'Stop'
 $out = @{ op = ${psQuote(o.op)}; at = (Get-Date).ToUniversalTime().ToString('o') }
 try {
-${crewAccountFunctions(o.prefix)}
+${crewAccountFunctions(o.prefix, o.treeSource ?? TREE_SOURCE())}
 ${body}
 } catch {
   $out.error = $_.Exception.Message
@@ -415,6 +429,7 @@ $groupSid = $group.SID.Value
 # The shared crew user of earlier versions goes, with what it left.
 $old = Get-LocalUser -Name $prefix -ErrorAction SilentlyContinue
 if ($null -ne $old -and $old.Description -eq 'Studio crew sandbox') {
+  LockJobUser $old
   $left = @(OwnedBy @($old.SID.Value))
   foreach ($p in $left) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
   Start-Sleep -Milliseconds 800
@@ -449,4 +464,17 @@ Remove-Item -LiteralPath $cfg, $db -ErrorAction SilentlyContinue
 foreach ($p in $readPaths) {
   if (Test-Path -LiteralPath $p) { icacls $p /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
 }
+`;
+
+/**
+ * PowerShell of a setup that refuses Git for Windows older than 2.35.2: older versions read a
+ * `.git` another user planted above a folder (CVE-2022-24765), and crews of other users work on
+ * this machine.
+ */
+export const GIT_MIN_CHECK = String.raw`$gitCmd = Get-Command git -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($null -eq $gitCmd) { throw 'Git for Windows is not installed: install 2.35.2 or later (winget install --id Git.Git)' }
+$gitVersion = [string](& $gitCmd.Source --version)
+if ($gitVersion -notmatch '(\d+)\.(\d+)\.(\d+)') { throw "cannot read the version of Git: $gitVersion" }
+if ([version]('{0}.{1}.{2}' -f $Matches[1], $Matches[2], $Matches[3]) -lt [version]'2.35.2') { throw "Git $($Matches[0]) is older than 2.35.2: update Git for Windows (winget upgrade --id Git.Git)" }
+Write-Output "ok: Git $($Matches[0])"
 `;

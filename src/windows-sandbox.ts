@@ -21,6 +21,7 @@ import {
   type CrewAccounts,
   crewAccountFunctions,
   crewGroupSetup,
+  GIT_MIN_CHECK,
   localCrewAccounts,
 } from './crew-accounts.js';
 import { ipv4, LOOPBACK } from './egress-proxy.js';
@@ -151,7 +152,7 @@ export function windowsSetupScript(o: {
 # Studio: the crew users of this Windows worker. Run once in an elevated Windows PowerShell
 # (powershell.exe). Nothing here leaves this machine.
 $ErrorActionPreference = 'Stop'
-${crewAccountFunctions(o.prefix)}
+${GIT_MIN_CHECK}${crewAccountFunctions(o.prefix)}
 # An earlier setup opened the crew Claude config dir for writing: that grant goes, all the way down.
 foreach ($p in ${list(o.revokePaths ?? [])}) {
   if (Test-Path -LiteralPath $p) {

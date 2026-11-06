@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { WorkItem } from '../src/board.js';
 import { relayTargetSchema } from '../src/config.js';
-import { brokerCrewAccounts, RELAY_SID_SLOT } from '../src/crew-accounts.js';
+import { brokerCrewAccounts, GIT_MIN_CHECK, RELAY_SID_SLOT } from '../src/crew-accounts.js';
 import { realPorts } from '../src/ports.js';
 import { sessionLead } from '../src/relay-command.js';
 import {
@@ -798,6 +798,12 @@ describe('the Windows relay worker, with fakes', () => {
       `NewJobUser '${machine}\\crew-credential.bin' '${RELAY_SID_SLOT}'`,
     );
     expect(script).toContain(`.Replace('${RELAY_SID_SLOT}', $relaySid)`);
+    // The brokers load the tree deleter from the admin-only copy of Studio only.
+    expect(brokerScript({ op: 'retire', prefix: 'studio-crew', machine })).toContain(
+      `$treeSource = '${machine}\\studio\\bin\\studio-tree.cs'`,
+    );
+    // Git for Windows 2.35.2 or later.
+    expect(script).toContain(GIT_MIN_CHECK);
     // Studio's group carries the firewall rule, the denied logons and the read grants.
     expect(script).toContain('-LocalUser "D:(A;;CC;;;$groupSid)"');
     expect(script).toContain("@($groupSid, $rx, $tree, 'None')");
