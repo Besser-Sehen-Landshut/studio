@@ -41,6 +41,16 @@ try {
   fail('the spec cannot be read');
 }
 if (spec === null || typeof spec !== 'object' || typeof spec.dir !== 'string') fail('bad spec');
+// The spec may hold the Claude token: gone from disk before anything else runs.
+try {
+  unlinkSync(specFile);
+} catch {
+  fail('the spec cannot be removed');
+}
+const childEnv =
+  spec.env !== null && typeof spec.env === 'object'
+    ? { ...spec.env }
+    : fail('the spec has no environment');
 
 // The IPv4 loopback address, from its parts (the public repository refuses dotted literals).
 const LOOPBACK = [127, 0, 0, 1].join('.');
@@ -102,10 +112,25 @@ async function probe(p) {
   } catch (e) {
     add('admin', false, `whoami failed: ${e.message.split('\n')[0]}`);
   }
+  // What a crew's processes see: a child started with the spec's environment.
+  let seen = '';
+  try {
+    seen = execFileSync(
+      process.execPath,
+      ['-e', 'process.stdout.write(process.env.STUDIO_PROBE_MARK ?? "")'],
+      {
+        encoding: 'utf8',
+        env: childEnv,
+        windowsHide: true,
+      },
+    );
+  } catch (e) {
+    seen = `(failed: ${String(e?.message ?? e).split('\n')[0]})`;
+  }
   add(
     'env',
-    process.env.STUDIO_PROBE_MARK === p.mark,
-    'the environment Studio set reached the crew user',
+    seen === p.mark,
+    `a child of the host sees the environment Studio set: ${seen === p.mark}`,
   );
   const readable = [];
   for (const path of p.mustNotRead) {
@@ -177,7 +202,7 @@ writeFileSync(join(spec.dir, 'host.json'), JSON.stringify({ pid: process.pid, no
 const fd = openSync(spec.log, 'a');
 const child = spawn(spec.cmd, spec.args, {
   cwd: spec.cwd,
-  env: process.env,
+  env: childEnv,
   stdio: ['pipe', fd, fd],
   windowsHide: true,
 });

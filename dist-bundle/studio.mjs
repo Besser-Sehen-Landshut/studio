@@ -38602,7 +38602,7 @@ function startScript(o2) {
   return [
     "$ErrorActionPreference = 'Stop'",
     `$c = Import-Clixml -LiteralPath ${psQuote(o2.credFile)}`,
-    `$p = Start-Process -FilePath ${psQuote(o2.node)} -ArgumentList @(${arg(o2.host)}, ${arg(o2.spec)}) -Credential $c -WorkingDirectory ${psQuote(o2.cwd)} -WindowStyle Hidden -PassThru`,
+    `$p = Start-Process -FilePath ${psQuote(o2.node)} -ArgumentList @(${arg(o2.host)}, ${arg(o2.spec)}) -Credential $c -WorkingDirectory ${psQuote(o2.cwd)} -WindowStyle Hidden -PassThru -RedirectStandardOutput ${psQuote(join26(o2.dir, "host.out"))} -RedirectStandardError ${psQuote(join26(o2.dir, "host.err"))}`,
     "[Console]::Out.Write($p.Id)"
   ].join("\n");
 }
@@ -38616,18 +38616,37 @@ function readHostRecord(dir) {
   }
 }
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function powershellEnv(env) {
+  const keep = /* @__PURE__ */ new Set([
+    "systemroot",
+    "systemdrive",
+    "windir",
+    "comspec",
+    "pathext",
+    "path",
+    "programfiles",
+    "programdata",
+    "number_of_processors",
+    "processor_architecture",
+    "os"
+  ]);
+  return Object.fromEntries(Object.entries(env).filter(([k]) => keep.has(k.toLowerCase())));
+}
 async function startHost(o2) {
+  const file3 = join26(o2.spec.dir, "spec.json");
+  writeStateFile(o2.stateRoot, file3, JSON.stringify({ ...o2.spec, env: o2.env }));
   const script = startScript({
     credFile: o2.credFile,
     node: o2.node,
     host: CREW_HOST_BIN,
-    spec: o2.spec,
-    cwd: o2.cwd
+    spec: file3,
+    cwd: o2.cwd,
+    dir: o2.spec.dir
   });
   const r = await o2.run(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
-    { env: o2.env, timeoutMs: 12e4 }
+    { env: powershellEnv(o2.env), timeoutMs: 12e4 }
   );
   const pid = Number(r.stdout.trim());
   if (r.code !== 0 || !Number.isInteger(pid) || pid <= 0) {
@@ -38671,10 +38690,16 @@ function windowsClaude(o2) {
         prompt,
         log: logPath
       };
-      const file3 = join26(dir, "spec.json");
-      writeStateFile(o2.stateRoot, file3, JSON.stringify(spec));
       closeSync6(openSync6(logPath, "a"));
-      const pid = await startHost({ run: run2, credFile: o2.credFile, node: node2, spec: file3, cwd, env });
+      const pid = await startHost({
+        run: run2,
+        stateRoot: o2.stateRoot,
+        credFile: o2.credFile,
+        node: node2,
+        spec,
+        cwd,
+        env
+      });
       return { pid };
     },
     alive: exists4,
@@ -38724,14 +38749,13 @@ async function probeWindowsSandbox(o2) {
         proxy: { port: o2.proxyPort, refused: "example.invalid" }
       }
     };
-    const file3 = join26(dir, "spec.json");
-    writeStateFile(o2.stateRoot, file3, JSON.stringify(spec));
     await o2.grant([{ path: dir, rights: "M" }]);
     await startHost({
       run: run2,
+      stateRoot: o2.stateRoot,
       credFile: o2.credFile,
       node: o2.node ?? process.execPath,
-      spec: file3,
+      spec,
       cwd: dir,
       env: { ...o2.env, STUDIO_PROBE_MARK: mark }
     });

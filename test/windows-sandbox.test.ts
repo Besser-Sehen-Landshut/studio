@@ -75,13 +75,14 @@ describe('quoting', () => {
       host: 'C:\\p\\bin\\studio-crew-host.mjs',
       spec: 'C:\\s\\spec.json',
       cwd: 'C:\\w',
+      dir: 'C:\\d',
     });
     expect(s).toContain("Import-Clixml -LiteralPath 'C:\\c.xml'");
     expect(s).toContain(
       `-ArgumentList @('"C:\\p\\bin\\studio-crew-host.mjs"', '"C:\\s\\spec.json"') -Credential $c`,
     );
     expect(() =>
-      startScript({ credFile: 'c', node: 'n', host: 'h', spec: 'a"b', cwd: 'w' }),
+      startScript({ credFile: 'c', node: 'n', host: 'h', spec: 'a"b', cwd: 'w', dir: 'd' }),
     ).toThrow(/quotes/);
   });
 
@@ -160,7 +161,10 @@ describe('probeWindowsSandbox', () => {
       const spec = /'"([^"]+spec\.json)"'/.exec(script)?.[1] as string;
       const s = JSON.parse(readFileSync(spec, 'utf8')) as HostSpec;
       expect(s.mode).toBe('probe');
-      expect(opts?.env?.STUDIO_PROBE_MARK).toBe(s.probe?.mark);
+      // The environment travels in the spec; PowerShell itself gets only what Windows needs.
+      expect(s.env?.STUDIO_PROBE_MARK).toBe(s.probe?.mark);
+      expect(opts?.env?.STUDIO_PROBE_MARK).toBeUndefined();
+      expect(opts?.env?.PATH).toBe('x');
       if (results !== undefined) writeFileSync(join(s.dir, 'probe.json'), JSON.stringify(results));
       return {
         code,

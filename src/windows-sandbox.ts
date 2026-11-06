@@ -237,8 +237,10 @@ export const CREW_HOST_BIN = resolve(
 
 /**
  * The PowerShell that starts `node <host> <spec>` as the crew user and prints its pid. The
- * credential is decrypted inside PowerShell; Studio never holds the password. The environment of
- * this PowerShell is the one the host gets.
+ * credential is decrypted inside PowerShell; Studio never holds the password. `Start-Process
+ * -Credential` gives the new process the crew user's own environment, not this one's (seen on
+ * Windows), so the crew's environment travels in the spec. The host's stdout and stderr go to
+ * `host.out` and `host.err` in the control dir.
  */
 export function startScript(o: {
   credFile: string;
@@ -246,6 +248,7 @@ export function startScript(o: {
   host: string;
   spec: string;
   cwd: string;
+  dir: string;
 }): string {
   // Start-Process joins -ArgumentList with spaces: each argument is quoted for the command line.
   const arg = (s: string) => {
@@ -255,7 +258,7 @@ export function startScript(o: {
   return [
     "$ErrorActionPreference = 'Stop'",
     `$c = Import-Clixml -LiteralPath ${psQuote(o.credFile)}`,
-    `$p = Start-Process -FilePath ${psQuote(o.node)} -ArgumentList @(${arg(o.host)}, ${arg(o.spec)}) -Credential $c -WorkingDirectory ${psQuote(o.cwd)} -WindowStyle Hidden -PassThru`,
+    `$p = Start-Process -FilePath ${psQuote(o.node)} -ArgumentList @(${arg(o.host)}, ${arg(o.spec)}) -Credential $c -WorkingDirectory ${psQuote(o.cwd)} -WindowStyle Hidden -PassThru -RedirectStandardOutput ${psQuote(join(o.dir, 'host.out'))} -RedirectStandardError ${psQuote(join(o.dir, 'host.err'))}`,
     '[Console]::Out.Write($p.Id)',
   ].join('\n');
 }
@@ -272,6 +275,12 @@ export interface HostSpec {
   log?: string;
   /** probe: what must hold for the crew user. */
   probe?: ProbeSpec;
+  /**
+   * The environment of the crew (or of the probe's child). It may hold the Claude token, so the
+   * host removes the spec file as soon as it has read it; the control dir is the crew user's and
+   * the owner's only.
+   */
+  env?: Record<string, string>;
 }
 
 export interface ProbeSpec {
@@ -307,26 +316,48 @@ function readHostRecord(dir: string): HostRecord | undefined {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Starts the host as the crew user and returns its pid (the process Studio records). */
+/** What PowerShell itself gets: what Windows programs need, no token, no PowerShell 7 modules. */
+function powershellEnv(env: Record<string, string>): Record<string, string> {
+  const keep = new Set([
+    'systemroot',
+    'systemdrive',
+    'windir',
+    'comspec',
+    'pathext',
+    'path',
+    'programfiles',
+    'programdata',
+    'number_of_processors',
+    'processor_architecture',
+    'os',
+  ]);
+  return Object.fromEntries(Object.entries(env).filter(([k]) => keep.has(k.toLowerCase())));
+}
+
+/** Writes the spec with the environment, starts the host as the crew user, returns its pid. */
 async function startHost(o: {
   run: RunFile;
+  stateRoot: string;
   credFile: string;
   node: string;
-  spec: string;
+  spec: HostSpec;
   cwd: string;
   env: Record<string, string>;
 }): Promise<number> {
+  const file = join(o.spec.dir, 'spec.json');
+  writeStateFile(o.stateRoot, file, JSON.stringify({ ...o.spec, env: o.env }));
   const script = startScript({
     credFile: o.credFile,
     node: o.node,
     host: CREW_HOST_BIN,
-    spec: o.spec,
+    spec: file,
     cwd: o.cwd,
+    dir: o.spec.dir,
   });
   const r = await o.run(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
-    { env: o.env, timeoutMs: 120_000 },
+    { env: powershellEnv(o.env), timeoutMs: 120_000 },
   );
   const pid = Number(r.stdout.trim());
   if (r.code !== 0 || !Number.isInteger(pid) || pid <= 0) {
@@ -388,11 +419,17 @@ export function windowsClaude(o: {
         prompt,
         log: logPath,
       };
-      const file = join(dir, 'spec.json');
-      writeStateFile(o.stateRoot, file, JSON.stringify(spec));
       // The log exists before the crew user is granted it: the owner's file, appended by the host.
       closeSync(openSync(logPath, 'a'));
-      const pid = await startHost({ run, credFile: o.credFile, node, spec: file, cwd, env });
+      const pid = await startHost({
+        run,
+        stateRoot: o.stateRoot,
+        credFile: o.credFile,
+        node,
+        spec,
+        cwd,
+        env,
+      });
       return { pid };
     },
     alive: exists,
@@ -475,14 +512,13 @@ export async function probeWindowsSandbox(o: {
         proxy: { port: o.proxyPort, refused: 'example.invalid' },
       },
     };
-    const file = join(dir, 'spec.json');
-    writeStateFile(o.stateRoot, file, JSON.stringify(spec));
     await o.grant([{ path: dir, rights: 'M' }]);
     await startHost({
       run,
+      stateRoot: o.stateRoot,
       credFile: o.credFile,
       node: o.node ?? process.execPath,
-      spec: file,
+      spec,
       cwd: dir,
       env: { ...o.env, STUDIO_PROBE_MARK: mark },
     });
