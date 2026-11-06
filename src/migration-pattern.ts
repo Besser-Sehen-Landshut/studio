@@ -6,7 +6,7 @@ export const DEFAULT_NUMBER_PATTERN = '^(\\d+)_';
 
 /** Longest pattern studio.yaml may hold. */
 export const MAX_PATTERN_LENGTH = 200;
-/** Longest name a pattern is run on: longer names are no migration (and cannot slow it down). */
+/** Longest name a pattern is run on: a longer one in the folder counts as `TOO_LARGE`. */
 const MAX_NAME_LENGTH = 255;
 /** More digits than this do not fit a safe integer: such a capture is no number. */
 const MAX_DIGITS = 15;
@@ -66,16 +66,24 @@ export function migrationEntryOf(path: string, dir: string): string | undefined 
   return entry === undefined || entry === '' ? undefined : entry;
 }
 
+/** A capture that is a number, but one too large to compare safely: never read as no migration. */
+export const TOO_LARGE = 'too-large';
+
 /**
- * The number of a migration entry: the digits the pattern's one group captures. Undefined when the
- * name does not match, the capture is no plain run of digits, or it has more than 15.
+ * The number of a migration entry: the digits the pattern's one group captures, leading zeros
+ * aside. Undefined when the name does not match or the capture is no plain run of digits;
+ * `TOO_LARGE` when the value has more than 15 digits, which callers treat as a problem (fails
+ * closed), never as a name that is no migration.
  */
-export function migrationNumberOf(entry: string, pattern: RegExp): number | undefined {
-  if (entry.length > MAX_NAME_LENGTH) return undefined;
+export function migrationNumberOf(
+  entry: string,
+  pattern: RegExp,
+): number | typeof TOO_LARGE | undefined {
+  // A name this long is refused, not skipped: the pattern is never run on it.
+  if (entry.length > MAX_NAME_LENGTH) return TOO_LARGE;
   const m = pattern.exec(entry);
   const digits = m?.slice(1).find((g) => g !== undefined);
-  if (digits === undefined || !/^\d+$/.test(digits) || digits.length > MAX_DIGITS) {
-    return undefined;
-  }
-  return Number(digits);
+  if (digits === undefined || !/^\d+$/.test(digits)) return undefined;
+  const value = digits.replace(/^0+(?=\d)/, '');
+  return value.length > MAX_DIGITS ? TOO_LARGE : Number(value);
 }

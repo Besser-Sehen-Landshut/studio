@@ -29029,14 +29029,14 @@ function migrationEntryOf(path10, dir) {
   const entry = path10.slice(dir.length + 1).split("/")[0];
   return entry === void 0 || entry === "" ? void 0 : entry;
 }
+var TOO_LARGE = "too-large";
 function migrationNumberOf(entry, pattern) {
-  if (entry.length > MAX_NAME_LENGTH) return void 0;
+  if (entry.length > MAX_NAME_LENGTH) return TOO_LARGE;
   const m = pattern.exec(entry);
   const digits = m?.slice(1).find((g3) => g3 !== void 0);
-  if (digits === void 0 || !/^\d+$/.test(digits) || digits.length > MAX_DIGITS) {
-    return void 0;
-  }
-  return Number(digits);
+  if (digits === void 0 || !/^\d+$/.test(digits)) return void 0;
+  const value2 = digits.replace(/^0+(?=\d)/, "");
+  return value2.length > MAX_DIGITS ? TOO_LARGE : Number(value2);
 }
 
 // src/plugins.ts
@@ -39401,6 +39401,8 @@ var LOCK_STALE_MS3 = 3e4;
 var GH_TIMEOUT_MS2 = 6e4;
 var KEEP_HISTORY = 500;
 var LIST_FILES_CAP = 100;
+var PR_FILES_API_CAP = 3e3;
+var PR_LIST_LIMIT = 1e3;
 var HOLDER_RE = /^[A-Za-z0-9][A-Za-z0-9._:/#@-]{0,63}$/;
 var holderSchema = external_exports.string().regex(HOLDER_RE, "one word of at most 64 characters");
 var purposeSchema = external_exports.string().min(1).max(200).regex(/^[^\p{Cc}\p{Cf}]+$/u, "one line of at most 200 characters");
@@ -39476,14 +39478,16 @@ function updateRegister(root, mutate, opts) {
   }
 }
 function numbersOf(paths, scheme) {
-  const out = /* @__PURE__ */ new Map();
+  const numbers = /* @__PURE__ */ new Map();
+  const tooLarge = /* @__PURE__ */ new Set();
   for (const p of paths) {
     const entry = migrationEntryOf(p, scheme.dir);
     if (entry === void 0) continue;
     const n4 = migrationNumberOf(entry, scheme.pattern);
-    if (n4 !== void 0 && !out.has(n4)) out.set(n4, entry);
+    if (n4 === TOO_LARGE) tooLarge.add(entry);
+    else if (n4 !== void 0 && !numbers.has(n4)) numbers.set(n4, entry);
   }
-  return out;
+  return { numbers, tooLarge: [...tooLarge] };
 }
 async function ghJson(gh, args, what) {
   const r = await gh.run(args, { timeoutMs: GH_TIMEOUT_MS2 });
@@ -39515,27 +39519,47 @@ async function namesOnBranch(gh, scheme, branch) {
   return tree.tree.flatMap((e) => typeof e.path === "string" ? [e.path] : []);
 }
 async function pullRequestFiles(gh, repo, pr) {
+  const unreadable = (why) => new Error(`cannot read the files of ${repo}#${pr}${why}`);
   const r = await gh.run(
     [
       "api",
       "--paginate",
       `repos/${repo}/pulls/${pr}/files?per_page=100`,
       "--jq",
-      '.[] | select(.status != "removed") | .filename | @json'
+      ".[] | [.status, .filename] | @json"
     ],
     { timeoutMs: GH_TIMEOUT_MS2 }
   );
-  if (r.code !== 0) throw new Error(`cannot read the files of ${repo}#${pr} (gh exit ${r.code})`);
+  if (r.code !== 0) throw unreadable(` (gh exit ${r.code})`);
   const files = [];
+  let listed = 0;
   for (const line4 of r.stdout.split("\n")) {
     if (line4.trim() === "") continue;
-    let name;
+    let pair;
     try {
-      name = JSON.parse(line4);
+      pair = JSON.parse(line4);
     } catch {
-      throw new Error(`cannot read the files of ${repo}#${pr}: gh returned no JSON`);
+      throw unreadable(": gh returned no JSON");
     }
-    if (typeof name === "string") files.push(name);
+    const [status, name] = Array.isArray(pair) ? pair : [];
+    if (typeof status !== "string" || typeof name !== "string") {
+      throw unreadable(": gh returned no file");
+    }
+    listed++;
+    if (status !== "removed") files.push(name);
+  }
+  const count3 = await ghJson(
+    gh,
+    ["pr", "view", String(pr), "--repo", repo, "--json", "changedFiles"],
+    `the file count of ${repo}#${pr}`
+  );
+  const changed = count3?.changedFiles;
+  if (!Number.isInteger(changed)) throw unreadable(": gh returned no file count");
+  if (changed >= PR_FILES_API_CAP || listed >= PR_FILES_API_CAP) {
+    throw unreadable(`: it changes ${PR_FILES_API_CAP} files or more, more than GitHub lists`);
+  }
+  if (listed !== changed) {
+    throw unreadable(`: GitHub listed ${listed} of its ${changed} changed files`);
   }
   return files;
 }
@@ -39545,10 +39569,12 @@ async function readMigrationUse(gh, scheme) {
     throw new Error(`cannot read the default branch of ${scheme.repo}`);
   }
   const names = await namesOnBranch(gh, scheme, branch);
-  const main = numbersOf(
+  const onBranch = numbersOf(
     (names ?? []).map((n4) => `${scheme.dir}/${n4}`),
     scheme
   );
+  const main = onBranch.numbers;
+  const tooLarge = [...onBranch.tooLarge];
   const onMain = new Set(names ?? []);
   const list2 = await ghJson(
     gh,
@@ -39560,13 +39586,18 @@ async function readMigrationUse(gh, scheme) {
       "--state",
       "open",
       "--limit",
-      "1000",
+      String(PR_LIST_LIMIT),
       "--json",
       "number,files"
     ],
     `the open pull requests of ${scheme.repo}`
   );
   if (!Array.isArray(list2)) throw new Error(`cannot read the open pull requests of ${scheme.repo}`);
+  if (list2.length >= PR_LIST_LIMIT) {
+    throw new Error(
+      `cannot read the open pull requests of ${scheme.repo} in full: ${PR_LIST_LIMIT} or more are open`
+    );
+  }
   const prs = /* @__PURE__ */ new Map();
   for (const raw of list2) {
     if (!Number.isInteger(raw.number) || !Array.isArray(raw.files)) {
@@ -39581,10 +39612,11 @@ async function readMigrationUse(gh, scheme) {
       const entry = migrationEntryOf(p, scheme.dir);
       return entry !== void 0 && !onMain.has(entry);
     });
-    const numbers = numbersOf(fresh, scheme);
-    if (numbers.size > 0) prs.set(pr, numbers);
+    const read3 = numbersOf(fresh, scheme);
+    tooLarge.push(...read3.tooLarge);
+    if (read3.numbers.size > 0) prs.set(pr, read3.numbers);
   }
-  return { branch, main, names: onMain, prs, dirOnMain: names !== void 0 };
+  return { branch, main, names: onMain, tooLarge, prs, dirOnMain: names !== void 0 };
 }
 function syncLanded(reg, use, now) {
   let changed = 0;
@@ -39635,6 +39667,11 @@ function checkReserveRequest(req) {
 }
 function reserveIn(reg, use, req, now) {
   checkReserveRequest(req);
+  if (use.tooLarge.length > 0) {
+    throw new Error(
+      `${use.tooLarge.slice(0, 3).map(shown).join(", ")} holds a number of more than 15 digits; the next free number cannot be told; nothing reserved`
+    );
+  }
   syncLanded(reg, use, now);
   let n4;
   if (req.number !== void 0) {
@@ -39703,7 +39740,11 @@ function migrationCollisions(o2) {
     const entry = migrationEntryOf(p, o2.scheme.dir);
     return entry !== void 0 && !o2.use.names.has(entry);
   });
-  for (const [n4, entry] of numbersOf(fresh, o2.scheme)) {
+  const read3 = numbersOf(fresh, o2.scheme);
+  const large = read3.tooLarge.map(
+    (entry) => `${shown(entry)}: its number has more than 15 digits; Studio cannot check it`
+  );
+  for (const [n4, entry] of read3.numbers) {
     const main = o2.use.main.get(n4);
     if (main !== void 0) {
       reasons.set(n4, `${shown(entry)}: number ${n4} is already on ${o2.use.branch} (${shown(main)})`);
@@ -39726,7 +39767,7 @@ function migrationCollisions(o2) {
       break;
     }
   }
-  return [...reasons.values()];
+  return [...large, ...reasons.values()];
 }
 async function pullRequestMigrationCheck(o2) {
   const scheme = migrationScheme(o2.config);

@@ -5222,9 +5222,14 @@ describe('studio migration: the register of reserved migration numbers', () => {
       const m = /^api --paginate repos\/org\/app\/pulls\/(\d+)\/files/.exec(l);
       if (m) {
         return {
-          stdout: (o.prFiles?.[Number(m[1])] ?? []).map((f) => JSON.stringify(f)).join('\n'),
+          stdout: (o.prFiles?.[Number(m[1])] ?? [])
+            .map((f) => JSON.stringify(['added', f]))
+            .join('\n'),
         };
       }
+      const v = /^pr view (\d+) --repo org\/app --json changedFiles$/.exec(l);
+      if (v)
+        return { stdout: JSON.stringify({ changedFiles: o.prFiles?.[Number(v[1])]?.length ?? 0 }) };
       return rest(l);
     });
   const reserve = (num: number, holder: string, purpose: string) => ({

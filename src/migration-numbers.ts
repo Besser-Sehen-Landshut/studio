@@ -7,7 +7,7 @@ import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { MigrationsConfig, StudioConfig } from './config.js';
-import { migrationEntryOf, migrationNumberOf } from './migration-pattern.js';
+import { migrationEntryOf, migrationNumberOf, TOO_LARGE } from './migration-pattern.js';
 import { acquireStateLock, assertStatePath, writeStateFile } from './paths.js';
 import type { Gh } from './ports.js';
 import { readDefaultBranch, usableBaseName } from './review.js';
@@ -20,6 +20,10 @@ const GH_TIMEOUT_MS = 60_000;
 const KEEP_HISTORY = 500;
 /** A pull request list returns at most this many files per pull request; more are read one by one. */
 const LIST_FILES_CAP = 100;
+/** GitHub lists at most this many files of a pull request: a list this long may be cut. */
+const PR_FILES_API_CAP = 3000;
+/** Open pull requests read at once: a list this long may be cut. */
+const PR_LIST_LIMIT = 1000;
 
 /** Who a number is for: an item id, a crew or session name, a branch. One plain word. */
 export const HOLDER_RE = /^[A-Za-z0-9][A-Za-z0-9._:/#@-]{0,63}$/;
@@ -76,6 +80,8 @@ export interface MigrationUse {
   main: Map<number, string>;
   /** Every entry name on the default branch: a pull request that changes one adds nothing. */
   names: Set<string>;
+  /** Entries on main or in open pull requests whose number is too large to compare. */
+  tooLarge: string[];
   /** Per open pull request: the numbers of its migrations that are not on main. */
   prs: Map<number, Map<number, string>>;
   /** False when the folder does not exist on the default branch (yet). */
@@ -145,16 +151,24 @@ export function updateRegister<T>(
   }
 }
 
-/** Numbers of the entries below `dir` in `paths`, each with the first entry that holds it. */
-function numbersOf(paths: readonly string[], scheme: MigrationScheme): Map<number, string> {
-  const out = new Map<number, string>();
+/**
+ * Numbers of the entries below `dir` in `paths`, each with the first entry that holds it, and the
+ * entries whose number is too large to compare (kept apart: never read as no migration).
+ */
+function numbersOf(
+  paths: readonly string[],
+  scheme: MigrationScheme,
+): { numbers: Map<number, string>; tooLarge: string[] } {
+  const numbers = new Map<number, string>();
+  const tooLarge = new Set<string>();
   for (const p of paths) {
     const entry = migrationEntryOf(p, scheme.dir);
     if (entry === undefined) continue;
     const n = migrationNumberOf(entry, scheme.pattern);
-    if (n !== undefined && !out.has(n)) out.set(n, entry);
+    if (n === TOO_LARGE) tooLarge.add(entry);
+    else if (n !== undefined && !numbers.has(n)) numbers.set(n, entry);
   }
-  return out;
+  return { numbers, tooLarge: [...tooLarge] };
 }
 
 /** `gh` that must answer: anything else throws with a line that names what could not be read. */
@@ -195,29 +209,53 @@ async function namesOnBranch(
   return tree.tree.flatMap((e: { path?: unknown }) => (typeof e.path === 'string' ? [e.path] : []));
 }
 
-/** The files a pull request adds or changes (removed ones aside), every page of them. */
+/**
+ * The files a pull request adds or changes (removed ones aside), every page of them. GitHub cuts
+ * the list (at 3000 files): a list that does not hold every changed file the pull request counts,
+ * or one at the cap, throws.
+ */
 export async function pullRequestFiles(gh: Gh, repo: string, pr: number): Promise<string[]> {
+  const unreadable = (why: string) => new Error(`cannot read the files of ${repo}#${pr}${why}`);
   const r = await gh.run(
     [
       'api',
       '--paginate',
       `repos/${repo}/pulls/${pr}/files?per_page=100`,
       '--jq',
-      '.[] | select(.status != "removed") | .filename | @json',
+      '.[] | [.status, .filename] | @json',
     ],
     { timeoutMs: GH_TIMEOUT_MS },
   );
-  if (r.code !== 0) throw new Error(`cannot read the files of ${repo}#${pr} (gh exit ${r.code})`);
+  if (r.code !== 0) throw unreadable(` (gh exit ${r.code})`);
   const files: string[] = [];
+  let listed = 0;
   for (const line of r.stdout.split('\n')) {
     if (line.trim() === '') continue;
-    let name: unknown;
+    let pair: unknown;
     try {
-      name = JSON.parse(line);
+      pair = JSON.parse(line);
     } catch {
-      throw new Error(`cannot read the files of ${repo}#${pr}: gh returned no JSON`);
+      throw unreadable(': gh returned no JSON');
     }
-    if (typeof name === 'string') files.push(name);
+    const [status, name] = Array.isArray(pair) ? pair : [];
+    if (typeof status !== 'string' || typeof name !== 'string') {
+      throw unreadable(': gh returned no file');
+    }
+    listed++;
+    if (status !== 'removed') files.push(name);
+  }
+  const count = await ghJson(
+    gh,
+    ['pr', 'view', String(pr), '--repo', repo, '--json', 'changedFiles'],
+    `the file count of ${repo}#${pr}`,
+  );
+  const changed = (count as { changedFiles?: unknown } | null)?.changedFiles;
+  if (!Number.isInteger(changed)) throw unreadable(': gh returned no file count');
+  if ((changed as number) >= PR_FILES_API_CAP || listed >= PR_FILES_API_CAP) {
+    throw unreadable(`: it changes ${PR_FILES_API_CAP} files or more, more than GitHub lists`);
+  }
+  if (listed !== changed) {
+    throw unreadable(`: GitHub listed ${listed} of its ${changed as number} changed files`);
   }
   return files;
 }
@@ -232,10 +270,12 @@ export async function readMigrationUse(gh: Gh, scheme: MigrationScheme): Promise
     throw new Error(`cannot read the default branch of ${scheme.repo}`);
   }
   const names = await namesOnBranch(gh, scheme, branch);
-  const main = numbersOf(
+  const onBranch = numbersOf(
     (names ?? []).map((n) => `${scheme.dir}/${n}`),
     scheme,
   );
+  const main = onBranch.numbers;
+  const tooLarge = [...onBranch.tooLarge];
   const onMain = new Set(names ?? []);
   const list = await ghJson(
     gh,
@@ -247,13 +287,19 @@ export async function readMigrationUse(gh: Gh, scheme: MigrationScheme): Promise
       '--state',
       'open',
       '--limit',
-      '1000',
+      String(PR_LIST_LIMIT),
       '--json',
       'number,files',
     ],
     `the open pull requests of ${scheme.repo}`,
   );
   if (!Array.isArray(list)) throw new Error(`cannot read the open pull requests of ${scheme.repo}`);
+  // A list at its limit may be cut: a pull request beyond it would go unseen.
+  if (list.length >= PR_LIST_LIMIT) {
+    throw new Error(
+      `cannot read the open pull requests of ${scheme.repo} in full: ${PR_LIST_LIMIT} or more are open`,
+    );
+  }
   const prs = new Map<number, Map<number, string>>();
   for (const raw of list as { number?: unknown; files?: unknown }[]) {
     if (!Number.isInteger(raw.number) || !Array.isArray(raw.files)) {
@@ -272,10 +318,11 @@ export async function readMigrationUse(gh: Gh, scheme: MigrationScheme): Promise
       const entry = migrationEntryOf(p, scheme.dir);
       return entry !== undefined && !onMain.has(entry);
     });
-    const numbers = numbersOf(fresh, scheme);
-    if (numbers.size > 0) prs.set(pr, numbers);
+    const read = numbersOf(fresh, scheme);
+    tooLarge.push(...read.tooLarge);
+    if (read.numbers.size > 0) prs.set(pr, read.numbers);
   }
-  return { branch, main, names: onMain, prs, dirOnMain: names !== undefined };
+  return { branch, main, names: onMain, tooLarge, prs, dirOnMain: names !== undefined };
 }
 
 /** Marks reserved numbers that main now holds as landed; returns how many changed. */
@@ -353,6 +400,12 @@ export function reserveIn(
   now: Date,
 ): Reservation {
   checkReserveRequest(req);
+  // Above a number too large to compare nothing is known to be free: refused, never guessed.
+  if (use.tooLarge.length > 0) {
+    throw new Error(
+      `${use.tooLarge.slice(0, 3).map(shown).join(', ')} holds a number of more than 15 digits; the next free number cannot be told; nothing reserved`,
+    );
+  }
   syncLanded(reg, use, now);
   let n: number;
   if (req.number !== undefined) {
@@ -457,7 +510,11 @@ export function migrationCollisions(o: {
     const entry = migrationEntryOf(p, o.scheme.dir);
     return entry !== undefined && !o.use.names.has(entry);
   });
-  for (const [n, entry] of numbersOf(fresh, o.scheme)) {
+  const read = numbersOf(fresh, o.scheme);
+  const large = read.tooLarge.map(
+    (entry) => `${shown(entry)}: its number has more than 15 digits; Studio cannot check it`,
+  );
+  for (const [n, entry] of read.numbers) {
     const main = o.use.main.get(n);
     if (main !== undefined) {
       reasons.set(n, `${shown(entry)}: number ${n} is already on ${o.use.branch} (${shown(main)})`);
@@ -481,7 +538,7 @@ export function migrationCollisions(o: {
       break;
     }
   }
-  return [...reasons.values()];
+  return [...large, ...reasons.values()];
 }
 
 /**

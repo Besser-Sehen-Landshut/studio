@@ -9,6 +9,7 @@ import {
   type MigrationScheme,
   type MigrationUse,
   migrationCollisions,
+  pullRequestFiles,
   pullRequestMigrationCheck,
   type Register,
   readMigrationUse,
@@ -24,6 +25,7 @@ import {
   migrationEntryOf,
   migrationNumberOf,
   numberPatternProblem,
+  TOO_LARGE,
 } from '../src/migration-pattern.js';
 import { acquireStateLock } from '../src/paths.js';
 import type { Gh } from '../src/ports.js';
@@ -98,11 +100,17 @@ describe('reading a number from a name', () => {
     expect(migrationNumberOf(entry, new RegExp(pattern))).toBe(expected);
   });
 
-  it('no match, a capture that is no number, or too many digits: no number', () => {
+  it('no match or a capture that is no number: no number', () => {
     expect(migrationNumberOf('README.md', /^(\d+)_/)).toBeUndefined();
     expect(migrationNumberOf('abc_x.sql', /^(\w+)_/)).toBeUndefined();
-    expect(migrationNumberOf(`${'1'.repeat(16)}_x.sql`, /^(\d+)_/)).toBeUndefined();
-    expect(migrationNumberOf(`${'1'.repeat(300)}_x.sql`, /^(\d+)_/)).toBeUndefined();
+  });
+
+  it('leading zeros do not count; a value still too large is TOO_LARGE, never no migration', () => {
+    expect(migrationNumberOf(`${'0'.repeat(40)}42_x.sql`, /^(\d+)_/)).toBe(42);
+    expect(migrationNumberOf('0000_x.sql', /^(\d+)_/)).toBe(0);
+    expect(migrationNumberOf(`${'1'.repeat(16)}_x.sql`, /^(\d+)_/)).toBe(TOO_LARGE);
+    expect(migrationNumberOf(`0${'9'.repeat(16)}_x.sql`, /^(\d+)_/)).toBe(TOO_LARGE);
+    expect(migrationNumberOf(`${'1'.repeat(300)}_x.sql`, /^(\d+)_/)).toBe(TOO_LARGE);
   });
 
   it('the entry is the first segment below the folder', () => {
@@ -117,10 +125,12 @@ const SCHEME: MigrationScheme = { repo: 'org/app', dir: 'db/m', pattern: /^(\d+)
 const use = (
   main: Record<number, string>,
   prs: Record<number, Record<number, string>> = {},
+  tooLarge: string[] = [],
 ): MigrationUse => ({
   branch: 'main',
   main: new Map(Object.entries(main).map(([k, v]) => [Number(k), v])),
   names: new Set(Object.values(main)),
+  tooLarge,
   prs: new Map(
     Object.entries(prs).map(([pr, m]) => [
       Number(pr),
@@ -141,6 +151,15 @@ describe('reserving', () => {
       [10, 'B-1', 'reserved'],
       [11, 'B-2', 'reserved'],
     ]);
+  });
+
+  it('refuses when main or an open pull request holds a number too large to compare', () => {
+    const reg = empty();
+    const big = `${'9'.repeat(16)}_x.sql`;
+    expect(() => reserveIn(reg, use({}, {}, [big]), { for: 'B-1', purpose: 'x' }, NOW)).toThrow(
+      /more than 15 digits.*nothing reserved/,
+    );
+    expect(reg.reservations).toEqual([]);
   });
 
   it('starts at 1 in an empty folder', () => {
@@ -240,7 +259,7 @@ describe('reserving', () => {
       `import { updateRegister, reserveIn } from ${JSON.stringify(join(import.meta.dirname, '..', 'src', 'migration-numbers.ts'))};
 const [stateRoot, who, startAt] = process.argv.slice(2);
 while (Date.now() < Number(startAt)) {}
-const use = { branch: 'main', main: new Map([[4, '0004_a.sql']]), names: new Set(['0004_a.sql']), prs: new Map(), dirOnMain: true };
+const use = { branch: 'main', main: new Map([[4, '0004_a.sql']]), names: new Set(['0004_a.sql']), tooLarge: [], prs: new Map(), dirOnMain: true };
 for (let i = 0; i < 5; i++) {
   const r = updateRegister(stateRoot, (reg) => reserveIn(reg, use, { for: who + '-' + i, purpose: 'race' }, new Date()), { now: new Date(), timeoutMs: 20000 });
   process.stdout.write(r.number + '\\n');
@@ -323,6 +342,16 @@ describe('collisions of a pull request', () => {
     expect(check(['db/m/0008_users.sql'], ['b-1'], u)).toEqual([]);
   });
 
+  it('a new migration with a number too large to compare blocks; leading zeros are no way around', () => {
+    const big = `${'9'.repeat(16)}_x.sql`;
+    expect(check([`db/m/${big}`], ['B-1'])).toEqual([
+      `${big}: its number has more than 15 digits; Studio cannot check it`,
+    ]);
+    expect(check([`db/m/${'0'.repeat(30)}9_x.sql`], ['B-1'])).toEqual([
+      `${'0'.repeat(30)}9_x.sql: number 9 is reserved for B-2 (orders)`,
+    ]);
+  });
+
   it('a name that is not plain is quoted as data in the reason', () => {
     expect(check(['db/m/0009_say \u202e hi.sql'], [])).toEqual([
       '"0009_say ? hi.sql": number 9 is reserved for B-2 (orders)',
@@ -340,6 +369,8 @@ function fakeGh(o: {
   main?: string[] | 'missing';
   open?: { number: number; files: { path: string; changeType: string }[] }[];
   prFiles?: Record<number, string[]>;
+  /** What `changedFiles` says per pull request; default: as many as listed. */
+  changed?: Record<number, number>;
   fail?: RegExp;
 }) {
   const calls: string[] = [];
@@ -368,7 +399,18 @@ function fakeGh(o: {
       if (line.startsWith('pr list --repo org/app --state open'))
         return ok(JSON.stringify(o.open ?? []));
       const m = /^api --paginate repos\/org\/app\/pulls\/(\d+)\/files/.exec(line);
-      if (m) return ok((o.prFiles?.[Number(m[1])] ?? []).map((f) => JSON.stringify(f)).join('\n'));
+      if (m) {
+        return ok(
+          (o.prFiles?.[Number(m[1])] ?? []).map((f) => JSON.stringify(['added', f])).join('\n'),
+        );
+      }
+      const v = /^pr view (\d+) --repo org\/app --json changedFiles$/.exec(line);
+      if (v) {
+        const pr = Number(v[1]);
+        return ok(
+          JSON.stringify({ changedFiles: o.changed?.[pr] ?? o.prFiles?.[pr]?.length ?? 0 }),
+        );
+      }
       return { code: 1, stdout: '', stderr: `unscripted: ${line}` };
     },
   };
@@ -413,6 +455,35 @@ describe('what main and the open pull requests hold', () => {
     expect(calls.some((c) => c.startsWith('api --paginate repos/org/app/pulls/5/files'))).toBe(
       true,
     );
+  });
+
+  it('a file list GitHub may have cut is unreadable, never read in part', async () => {
+    // Fewer files listed than the pull request changes.
+    const cut = fakeGh({ prFiles: { 5: ['db/m/0004_a.sql'] }, changed: { 5: 2 } });
+    await expect(pullRequestFiles(cut.gh, 'org/app', 5)).rejects.toThrow(
+      /GitHub listed 1 of its 2 changed files/,
+    );
+    // At GitHub's cap of 3000, even when the counts agree.
+    const many = Array.from({ length: 3000 }, (_, i) => `src/f${i}.ts`);
+    await expect(
+      pullRequestFiles(fakeGh({ prFiles: { 5: many } }).gh, 'org/app', 5),
+    ).rejects.toThrow(/3000 files or more/);
+    // A pull request list at its limit may be cut as well.
+    const full = Array.from({ length: 1000 }, (_, i) => ({ number: i + 1, files: [] }));
+    await expect(readMigrationUse(fakeGh({ open: full }).gh, SCHEME)).rejects.toThrow(
+      /in full: 1000 or more are open/,
+    );
+    // The check of a pull request then waits instead of passing it.
+    const res = await pullRequestMigrationCheck({
+      gh: cut.gh,
+      root: stateRoot(),
+      config: parse('migrations: { dir: db/m }\n'),
+      repo: 'org/app',
+      pr: 5,
+      holder: [],
+      now: NOW,
+    });
+    expect(res.unreadable).toMatch(/listed 1 of its 2/);
   });
 
   it('a folder not on main yet holds no numbers; a read that fails throws', async () => {
