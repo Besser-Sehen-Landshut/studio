@@ -2,7 +2,8 @@
 // Bundled to dist-bundle/studio-guard.mjs (see `pnpm bundle`); bin/studio-guard.mjs loads it.
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { evaluateGuard } from './guard.js';
+import { agentStartOf, timeoutDecision } from './analyzer-timeout.js';
+import { evaluateGuard, type GuardContext } from './guard.js';
 
 interface Summary {
   tool?: string;
@@ -33,9 +34,43 @@ function deny(reason: string, summary?: Summary): void {
   }
 }
 
+/** Records a subagent's start for its analyzer timeout. It cannot block: errors are dropped. */
+function subagentStart(hook: { agent_id?: unknown }): void {
+  try {
+    const ctxPath = process.env.STUDIO_GUARD_CTX;
+    if (!ctxPath || typeof hook.agent_id !== 'string') return;
+    const ctx = JSON.parse(readFileSync(ctxPath, 'utf8')) as GuardContext;
+    if (ctx.timeouts === undefined) return;
+    agentStartOf(ctx.timeouts.agentsFile, hook.agent_id, Date.now());
+  } catch {
+    // The first tool call of the subagent records its start instead.
+  }
+}
+
+/** A reviewer past its time: the deny line, or undefined. Throws to deny on any doubt. */
+function overTime(hook: Record<string, unknown>, ctx: GuardContext): string | undefined {
+  const t = ctx.timeouts;
+  if (t === undefined) return undefined;
+  const now = Date.now();
+  const agentId = typeof hook.agent_id === 'string' ? hook.agent_id : undefined;
+  return timeoutDecision(t, {
+    now,
+    ...(agentId === undefined
+      ? {}
+      : { agentId, agentStart: agentStartOf(t.agentsFile, agentId, now) }),
+    toolName: String(hook.tool_name),
+    toolInput: (hook.tool_input ?? {}) as Record<string, unknown>,
+    ...(typeof hook.cwd === 'string' ? { cwd: hook.cwd } : {}),
+  });
+}
+
 let summary: Summary | undefined;
 try {
   const hook = JSON.parse(readFileSync(0, 'utf8'));
+  if (hook?.hook_event_name === 'SubagentStart') {
+    subagentStart(hook);
+    process.exit(0);
+  }
   const input = hook.tool_input ?? {};
   summary = { tool: hook.tool_name, input: JSON.stringify(input).slice(0, 300) };
   const ctxPath = process.env.STUDIO_GUARD_CTX;
@@ -54,10 +89,15 @@ try {
       if (ctx === null || typeof ctx !== 'object' || Array.isArray(ctx)) {
         deny('guard context is not an object', summary);
       } else {
-        const result = evaluateGuard(
-          { toolName: hook.tool_name, toolInput: input, cwd: hook.cwd },
-          ctx as Parameters<typeof evaluateGuard>[1],
-        );
+        // A reviewer past its time gets the timeout line before anything else is judged.
+        const late = overTime(hook, ctx as GuardContext);
+        const result: { decision: string; reason?: string } =
+          late !== undefined
+            ? { decision: 'deny', reason: late }
+            : evaluateGuard(
+                { toolName: hook.tool_name, toolInput: input, cwd: hook.cwd },
+                ctx as Parameters<typeof evaluateGuard>[1],
+              );
         if (result.decision === 'deny') deny(result.reason ?? 'denied by guard', summary);
       }
     }

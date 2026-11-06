@@ -10,7 +10,14 @@ export const REA_TEST_INTEGRITY = `sha512-${'A'.repeat(86)}==`;
  */
 export function fakeReaInstall(
   dir: string,
-  o: { version?: string; integrity?: string; recordIntegrity?: string; entryScript?: string } = {},
+  o: {
+    version?: string;
+    integrity?: string;
+    recordIntegrity?: string;
+    entryScript?: string;
+    /** A trust-mode install: optional dependencies and scripts included. */
+    full?: boolean;
+  } = {},
 ): string {
   const version = o.version ?? '6.7.0';
   const integrity = o.integrity ?? REA_TEST_INTEGRITY;
@@ -35,6 +42,7 @@ export function fakeReaInstall(
       package: 'rea-agents',
       version,
       integrity: o.recordIntegrity ?? integrity,
+      ...(o.full === true ? { full: true } : {}),
       installedAt: '2026-11-05T10:00:00.000Z',
     }),
   );

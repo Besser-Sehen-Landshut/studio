@@ -1,6 +1,7 @@
-import { type Board, componentsOf, type WorkItem } from './board.js';
+import { type Board, componentsOf, GROUP_REF_RE, type WorkItem } from './board.js';
 import type { StudioConfig } from './config.js';
 import { touchesOverlap } from './glob.js';
+import type { ExternalDep } from './group.js';
 import { isLessonsReview, LEAD_WORK } from './lessons-review.js';
 import { workerItemProblem } from './worker-claim.js';
 
@@ -127,6 +128,11 @@ export function planAssignments(
    * daily cost cap. Defaults to `hold`.
    */
   offerHold: string | undefined = hold,
+  /**
+   * Cross-project dependencies (`<project>:<id>`) as `resolveExternalDeps` read them, keyed by
+   * `<item> <ref>`. One that is missing here counts as unreadable: the item waits (fail closed).
+   */
+  external?: ReadonlyMap<string, ExternalDep>,
 ): Plan {
   const byId = new Map(board.items.map((i) => [i.id, i]));
   const tainted = cycleTainted(board.items);
@@ -145,13 +151,31 @@ export function planAssignments(
       continue;
     }
     const ready = isReady(item);
-    const unknown = item.dependsOn.find((d) => !byId.has(d));
-    const waiting = item.dependsOn.filter((d) => byId.get(d)?.status !== 'merged');
+    const local = item.dependsOn.filter((d) => !GROUP_REF_RE.test(d));
+    const remote = item.dependsOn
+      .filter((d) => GROUP_REF_RE.test(d))
+      .map((ref) => ({
+        ref,
+        dep: external?.get(`${item.id} ${ref}`) ?? {
+          state: 'unreadable' as const,
+          why: 'not checked',
+        },
+      }));
+    const unknown =
+      local.find((d) => !byId.has(d)) ?? remote.find((r) => r.dep.state === 'unknown')?.ref;
+    const unreadable = remote.find((r) => r.dep.state === 'unreadable');
+    const waiting = [
+      ...local.filter((d) => byId.get(d)?.status !== 'merged'),
+      ...remote.filter((r) => r.dep.state === 'waiting').map((r) => r.ref),
+    ];
     let reason: string | undefined;
     if (!ready.ok) reason = `not ready: missing ${ready.missing.join(', ')}`;
-    else if (tainted.has(item.id)) reason = 'dependency cycle';
-    else if (unknown !== undefined) reason = `unknown dependency ${unknown}`;
-    else if (item.ownerOnly) reason = 'owner only';
+    else if (tainted.has(item.id) || remote.some((r) => r.dep.state === 'cycle')) {
+      reason = 'dependency cycle';
+    } else if (unknown !== undefined) reason = `unknown dependency ${unknown}`;
+    else if (unreadable !== undefined) {
+      reason = `dependency ${unreadable.ref} unreadable: ${(unreadable.dep as { why: string }).why}`;
+    } else if (item.ownerOnly) reason = 'owner only';
     else if (!config.roles[item.role]) reason = 'role not configured';
     else if (item.runsOn !== undefined && workerItemProblem(item) !== undefined) {
       reason = workerItemProblem(item);

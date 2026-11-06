@@ -16,6 +16,7 @@
 import { type Dirent, globSync, lstatSync, readdirSync, readlinkSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path';
 import { type ParseEntry, parse as shellParse } from 'shell-quote';
+import type { ReviewTimeouts } from './analyzer-timeout.js';
 
 export interface GuardInput {
   toolName: string;
@@ -72,6 +73,8 @@ export interface GuardContext {
    * place on disk, and the free-text ones. Any other argument is refused.
    */
   mcpKeys?: Record<string, { keys: string[]; paths: string[]; text: string[] }>;
+  /** A reviewer run: the time per analyzer subagent and for the session (src/analyzer-timeout.ts). */
+  timeouts?: ReviewTimeouts;
 }
 
 export interface GuardResult {

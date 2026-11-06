@@ -80,6 +80,19 @@
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$"
     },
+    "research": {
+      "default": {
+        "trust": true
+      },
+      "type": "object",
+      "properties": {
+        "trust": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "rea_env": {
       "default": {},
       "type": "object",
@@ -131,6 +144,89 @@
         }
       },
       "additionalProperties": false
+    },
+    "groups": {
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "main": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "projects": {
+            "minItems": 2,
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                },
+                "repo": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                },
+                "dir": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                },
+                "contracts": {
+                  "minItems": 1,
+                  "maxItems": 50,
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "repo",
+                "dir"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "reference": {
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "contracts": {
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reference_max_kib": {
+            "default": 256,
+            "type": "integer",
+            "minimum": 16,
+            "maximum": 2048
+          }
+        },
+        "required": [
+          "name",
+          "main",
+          "projects",
+          "reference"
+        ],
+        "additionalProperties": false
+      }
     },
     "workers": {
       "type": "object",

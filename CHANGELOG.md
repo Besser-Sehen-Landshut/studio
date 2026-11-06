@@ -3,6 +3,67 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.21.0] - 2026-11-06
+
+Related repositories can now work as a group without becoming one project: each keeps its board, CI,
+releases and approvals, and the owner config ties them together. A reviewer step can no longer hang a
+review for hours. REA is simple to use: trust mode is the default, and it installs itself on first use
+after one confirmation. Not tagged yet; the maintainers tag after the merge.
+
+### Added
+
+- Groups of related projects: `groups:` in the owner config (name, main project, projects with id,
+  repository and folder, `reference` globs, optional `contracts` and `reference_max_kib`). Membership is
+  matched by the folder's real path and checked against the repository its `studio.yaml` names; a
+  repository cannot claim a group (`studio.yaml` refuses the key).
+- A member's crews get the main project's contracts, decisions and glossary as a read-only excerpt beside
+  the brief (`briefs/<id>.reference/`): read from the main project's freshly fetched `origin/main` at one
+  commit, only the listed paths, plain files, no secret-like names, capped in count and size, cached per
+  commit in the member's state root, marked as reference. A main project that cannot be read refuses the
+  launch.
+- Contract changes: each member's `tick` hashes the main project's contract files on `origin/main`; a
+  change adds one check item (research, for the researcher or else the builder) to the member's board,
+  idempotent by a digest note and crash-safe (board first, record second). `tick` prints
+  `contractCheck`.
+- Cross-project dependencies: `depends_on: [<project>:<id>]` waits until that item of another project of
+  the group is merged. Read only, each board once per plan, fail closed (unreadable holds and goes to the
+  lead, unknown refuses, a direct cycle is a cycle).
+- Epics of the main project can hold member items (`studio epic edit <id> --member <project>:<id>`,
+  saved as `member_items`); they count in progress and the epic accepts only once they are merged and
+  readable.
+- The group in the pane: `/studio group` draws one line per project and every project's decisions in one
+  block; `/studio group <project>` opens that project's work list from its state file; German and English
+  text, commands in English, counts on their own line in a narrow pane. `studio status --group <name>`
+  prints the same (`--json` too). `state.json` carries `group`.
+- Time limits for reviews: `review.analyzer_timeout_minutes` in `studio.yaml` (5 to 240, default 30) per
+  analyzer subagent, and a session deadline of all analyzers plus one share. The guard records each
+  subagent's start (`SubagentStart`, `agent_id`) and refuses its tool calls once its time is up, telling
+  it to answer `skipped: timeout`; after the deadline only the report may be written. A mandatory analyzer
+  that timed out refuses the approval, named as such (`mandatory analyzer timed out: ...`), and goes to
+  the lead (`analyzer timed out – decide`); `tick` stops a reviewer still alive 15 minutes after its
+  deadline (`review timed out`).
+- REA trust mode, the default: `research: { trust: true }` in the owner config lets researcher crews use
+  every REA tool class without `studio research allow`, and installs REA in full (optional dependencies
+  and install scripts, still checked against the registry's integrity). The first launch that uses it
+  prints one notice. `research: { trust: false }` keeps the strict behaviour.
+- REA installs on first use: a researcher launch that finds the pinned version missing asks the owner once
+  in a terminal (and for the analysis folder, default `~/analysis`, when none is granted); without a
+  terminal the lead gets `REA install needed for <id>: confirm with studio research install --yes`, shown
+  in the pane with `→ say "confirm the rea install"`. Answers are kept per version and mode
+  (`rea-consent.json`); a new version asks again; crews can neither install nor confirm.
+- `studio research install [--yes] [--folder <dir>]`, `studio setup research`, and an optional sixth step
+  in `studio setup` (asked once; a skip is kept).
+- `studio add ... --artifacts <dir>`: a research item for the researcher with its own analysis folder,
+  which must lie below a granted `research_roots` entry.
+
+### Changed
+
+- `studio research install` no longer needs a terminal with `--yes`; it confirms and installs in the
+  mode the owner config asks for. A static install does not count for trust mode, and the other way
+  round.
+- `studio doctor` shows the REA mode (`trust` or `strict`).
+- Version 0.21.0.
+
 ## [0.20.0] - 2026-11-05
 
 Some questions are answered by a shipped program, not by a source tree. The researcher role can now use REA

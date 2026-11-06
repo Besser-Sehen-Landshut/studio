@@ -208,7 +208,7 @@ test('a Studio session registers the command, a 10 s timer and opens the pane', 
   const { clock, files, seen } = world(on, { files: { [YAML]: 'project: app\n' } });
   await $.session.start(start);
   expect(seen.commands).toEqual(['studio']);
-  expect(seen.hints).toEqual(['list | pipeline | more | status | pause | resume | lang']);
+  expect(seen.hints).toEqual(['list | pipeline | more | group | status | pause | resume | lang']);
   expect(seen.opened).toEqual(['studio-board:Studio board']);
   files.set(STATE, JSON.stringify(OK_STATE));
   await clock.advance(9_999);
@@ -544,7 +544,7 @@ test('anything else answers the usage text', async ($, on) => {
   await $.session.start(start);
   const { text } = await $.command.run({ ...run, command: 'studio', args: 'stop everything' });
   expect(text).toBe(
-    'Usage: /studio [list | pipeline | more | status | pause | resume | lang de|en|auto]',
+    'Usage: /studio [list | pipeline | more | group [<project>] | status | pause | resume | lang de|en|auto]',
   );
   expect(seen.forbidden).toEqual([]);
 });
@@ -762,6 +762,52 @@ test('/studio more draws the detailed view and /studio list the work list again'
   const list = await $.command.run({ ...run, command: 'studio', args: ' list ' });
   expect(list.text).toBe('Studio board: work list.');
   expect(await paneTexts($)).toContain('Decision needed');
+});
+
+test('/studio group draws the group, /studio group <id> that project, /studio list this one', async ($, on) => {
+  const other = '/home/u/.local/state/studio/fedcba9876543210-web';
+  const group = {
+    name: 'shop',
+    main: 'app',
+    self: 'app',
+    projects: [
+      { id: 'app', repo: 'org/app', main: true, self: true, decisions: [] },
+      {
+        id: 'web',
+        repo: 'org/web',
+        main: false,
+        self: false,
+        stateDir: 'fedcba9876543210-web',
+        counts: { decisions: 1, running: 0, waiting: 0, ready: 0, blocked: 0 },
+        decisions: [{ item: 'WEB-3', code: 'merge_failed' }],
+      },
+    ],
+  };
+  const { seen } = world(on, {
+    files: {
+      ...withState({ ...LIST_STATE, group }),
+      [`${other}/state.json`]: JSON.stringify({ ...LIST_STATE, project: 'web' }),
+    },
+  });
+  await $.session.start(start);
+  const g = await $.command.run({ ...run, command: 'studio', args: 'group' });
+  expect(g.text).toBe('Studio board: the group, one line per project.');
+  const drawn = await paneTexts($);
+  expect(drawn[0]).toMatch(/^Group shop/);
+  expect(drawn).toContain('! web · WEB-3 merge failed');
+  expect(drawn).toContain('  → /studio group web');
+  const w = await $.command.run({ ...run, command: 'studio', args: 'group web' });
+  expect(w.text).toBe('Studio board: the work list of web. Back with /studio group.');
+  const focused = await paneTexts($);
+  expect(focused[0]).toBe('Group shop · back: /studio group');
+  expect(focused[1]).toMatch(/^Studio · web/);
+  // The status line stays this project's.
+  expect(seen.statuses.at(-1)).toMatch(/for you/);
+  const none = await $.command.run({ ...run, command: 'studio', args: 'group nope' });
+  expect(none.text).toBe('No project nope in this group. See /studio group.');
+  await $.command.run({ ...run, command: 'studio', args: 'list' });
+  expect((await paneTexts($))[0]).toMatch(/^Studio · app/);
+  expect(seen.forbidden).toEqual([]);
 });
 
 test('a view chosen in an earlier session is drawn from the store', async ($, on) => {

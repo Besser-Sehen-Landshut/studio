@@ -66,6 +66,8 @@ export type DecisionCode =
   | 'blocked'
   | 'release_approval'
   | 'release_failed'
+  | 'analyzer_timeout'
+  | 'rea_install'
   | 'other';
 
 export interface LeadDecision {
@@ -260,6 +262,17 @@ function classify(item: string, reason: string): LeadDecision {
   }
   if (r.startsWith('release failed')) {
     return of('release_failed', 'release stopped: a check is red', 'show the way back');
+  }
+  // A mandatory analyzer ran out of time (src/analyzer-timeout.ts), or a whole review did.
+  if (
+    /^(?:approval refused: .*)?mandatory analyzer timed out: /.test(r) ||
+    r.startsWith('review timed out')
+  ) {
+    return of('analyzer_timeout', 'analyzer timed out', `show ${item}`);
+  }
+  // A researcher item needs REA and the owner has not said yes for this version yet.
+  if (r.startsWith('REA install needed')) {
+    return of('rea_install', 'REA install needs the owner', 'confirm the rea install');
   }
   if (r.startsWith('merge failed')) {
     return of('merge_failed', 'merge failed', `show why ${item} did not merge`);

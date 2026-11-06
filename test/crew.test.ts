@@ -45,7 +45,7 @@ import { prepareCrewDir } from './crew-dir.js';
 
 /** What a crew's sandbox lets it read of the state root: its own brief, caps and rules. */
 const ownBrief = (stateRoot: string, id: string) =>
-  ['md', 'caps', 'rules'].map((ext) => join(stateRoot, 'briefs', `${id}.${ext}`));
+  ['md', 'caps', 'rules', 'reference'].map((ext) => join(stateRoot, 'briefs', `${id}.${ext}`));
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-crew-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -773,6 +773,44 @@ describe('writeCrewSettings', () => {
         join(dirnameOf(state), 'owner'),
       ],
     });
+    // Not a reviewer: no time limits and no SubagentStart hook.
+    const settings = JSON.parse(readFileSync(join(state, 'settings', 'APP-12.json'), 'utf8'));
+    expect(settings.hooks.SubagentStart).toBeUndefined();
+  });
+
+  it('a reviewer run carries its time limits to the guard and records subagent starts', () => {
+    const project = makeProject();
+    const state = join(root, `state-${n++}`);
+    const wt = join(state, 'clones', 'APP-12');
+    const timeouts = {
+      analyzerMs: 30 * 60_000,
+      sessionEndsAt: '2026-11-06T12:00:00.000Z',
+      reportFile: join(wt, '.studio', 'reports', 'r.md'),
+      agentsFile: join(state, 'guard', 'APP-12.agents.json'),
+    };
+    const file = writeCrewSettings(
+      state,
+      { ...item, type: 'review', role: 'reviewer' },
+      wt,
+      config,
+      {
+        homeDir: join(state, 'homes', 'APP-12'),
+        tmpDir: join(state, 'tmp', 'APP-12'),
+        projectDir: project,
+        toolchainPaths: [],
+        timeouts,
+      },
+      { homedir: FAKE_HOME, env: {}, platform: 'linux' },
+    );
+    const ctx = JSON.parse(readFileSync(join(state, 'guard', 'APP-12.json'), 'utf8'));
+    expect(ctx.timeouts).toEqual(timeouts);
+    const s = JSON.parse(readFileSync(file, 'utf8'));
+    expect(s.hooks.SubagentStart).toEqual([
+      {
+        matcher: '*',
+        hooks: [{ type: 'command', command: s.hooks.PreToolUse[0].hooks[0].command }],
+      },
+    ]);
   });
 });
 
@@ -3886,5 +3924,60 @@ describe('notRunHereList', () => {
       'command: cargo test --workspace\n  missing database: DATABASE_URL unset\n  missing network: bind refused\n' +
         '\ncommand: pnpm test\n  missing service: no store lock\n',
     );
+  });
+});
+
+describe('launchCrew in a group', () => {
+  /** A main project with contracts on its origin/main, and the owner config naming both. */
+  const group = (f: Fixture, mainOk = true) => {
+    const base = join(root, `g${n++}`);
+    mkdirSync(base);
+    const main = makeRepo(base);
+    mkdirSync(join(main, 'docs', 'contracts'), { recursive: true });
+    writeFileSync(join(main, 'docs', 'contracts', 'api.md'), '# API\n');
+    git(main, 'add', 'docs');
+    git(main, 'commit', '-q', '-m', 'contracts');
+    git(main, 'push', '-q', 'origin', 'main');
+    if (!mainOk) rmSync(join(base, 'origin.git'), { recursive: true, force: true });
+    const ownerFile = join(f.home, '.config', 'studio', 'config.yaml');
+    mkdirSync(dirnameOf(ownerFile), { recursive: true });
+    writeFileSync(
+      ownerFile,
+      [
+        'groups:',
+        '  - name: shop',
+        '    main: platform',
+        '    projects:',
+        `      - { id: platform, repo: org/platform, dir: ${main} }`,
+        `      - { id: app, repo: org/app, dir: ${f.project} }`,
+        '    reference: ["docs/contracts/**"]',
+        '',
+      ].join('\n'),
+    );
+    return main;
+  };
+
+  it('a member crew gets the main project excerpt beside its brief, readable and named', async () => {
+    const f = makeFixture();
+    group(f);
+    const started: Started[] = [];
+    await launchCrew(f.project, item, config, fakePorts(started), f.launcher);
+    const dir = join(f.state, 'briefs', 'APP-12.reference');
+    expect(readFileSync(join(dir, 'files', 'docs', 'contracts', 'api.md'), 'utf8')).toBe('# API\n');
+    const brief = readFileSync(join(f.state, 'briefs', 'APP-12.md'), 'utf8');
+    expect(brief).toContain('## Reference from the main project (read only)');
+    expect(brief).toContain(join(dir, 'files'));
+    const settings = JSON.parse(readFileSync(join(f.state, 'settings', 'APP-12.json'), 'utf8'));
+    expect(settings.sandbox.filesystem.allowRead).toContain(dir);
+  });
+
+  it('refuses to launch a member when the main project cannot be read', async () => {
+    const f = makeFixture();
+    group(f, false);
+    const started: Started[] = [];
+    await expect(
+      launchCrew(f.project, item, config, fakePorts(started), f.launcher),
+    ).rejects.toThrow(/reference of group shop cannot be read/);
+    expect(started).toHaveLength(0);
   });
 });

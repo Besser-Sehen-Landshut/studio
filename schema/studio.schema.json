@@ -612,6 +612,18 @@
       ],
       "additionalProperties": false
     },
+    "review": {
+      "type": "object",
+      "properties": {
+        "analyzer_timeout_minutes": {
+          "default": 30,
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 240
+        }
+      },
+      "additionalProperties": false
+    },
     "evidence": {
       "maxItems": 20,
       "type": "array",

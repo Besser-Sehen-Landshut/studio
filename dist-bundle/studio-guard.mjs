@@ -501,13 +501,77 @@ var require_shell_quote = __commonJS({
 });
 
 // src/guard-main.ts
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync as readFileSync2 } from "node:fs";
 import { join as join2 } from "node:path";
+
+// src/analyzer-timeout.ts
+import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
+var REVIEW_GRACE_MS = 15 * 6e4;
+var TIMEOUT_RESULT = "skipped: timeout";
+var MAX_AGENTS = 500;
+var analyzerTimeUp = (minutes) => `Studio: this subagent's time is up (analyzer timeout of ${minutes} min). Call no further tool. End now and answer with exactly "${TIMEOUT_RESULT}"; the reviewer records the analyzer as ${TIMEOUT_RESULT}.`;
+var sessionTimeUp = (report) => `Studio: the review's time is up. Only the report may still be written: write ${report} now, with "${TIMEOUT_RESULT}" for every analyzer that has no result, and end.`;
+var WRITE_TOOLS = ["Write", "Edit", "MultiEdit"];
+function timeoutDecision(t, call) {
+  const ends = Date.parse(t.sessionEndsAt);
+  const sessionOver = Number.isNaN(ends) || call.now >= ends;
+  if (call.agentId !== void 0) {
+    const start = call.agentStart;
+    if (start === void 0 || call.now - start >= t.analyzerMs || sessionOver) {
+      return analyzerTimeUp(Math.round(t.analyzerMs / 6e4));
+    }
+    return void 0;
+  }
+  if (!sessionOver) return void 0;
+  const target = call.toolInput.file_path;
+  if (WRITE_TOOLS.includes(call.toolName) && typeof target === "string") {
+    const full = isAbsolute(target) ? resolve(target) : resolve(call.cwd ?? "/", target);
+    if (full === resolve(t.reportFile)) return void 0;
+  }
+  return sessionTimeUp(t.reportFile);
+}
+function readAgentStarts(file) {
+  let text;
+  try {
+    if (!lstatSync(file).isFile()) throw new Error(`${file} is not a plain file`);
+    text = readFileSync(file, "utf8");
+  } catch (e) {
+    if (e.code === "ENOENT") return {};
+    throw e;
+  }
+  const raw = JSON.parse(text);
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`${file} is not an object`);
+  }
+  const out = {};
+  for (const [k, v] of Object.entries(raw)) if (typeof v === "number") out[k] = v;
+  return out;
+}
+var AGENT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+function agentStartOf(file, agentId, now) {
+  if (!AGENT_ID_RE.test(agentId)) throw new Error("unexpected agent id");
+  const starts = readAgentStarts(file);
+  const known = starts[agentId];
+  if (known !== void 0) return known;
+  if (Object.keys(starts).length >= MAX_AGENTS) throw new Error("too many subagents in one run");
+  starts[agentId] = now;
+  const tmp = `${file}.${process.pid}.${now}.tmp`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(starts)}
+`, { mode: 384, flag: "wx" });
+    renameSync(tmp, file);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+  return now;
+}
 
 // src/guard.ts
 var import_shell_quote = __toESM(require_shell_quote(), 1);
-import { globSync, lstatSync, readdirSync, readlinkSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, normalize } from "node:path";
+import { globSync, lstatSync as lstatSync2, readdirSync, readlinkSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute as isAbsolute2, join, normalize } from "node:path";
 function namedDeniedPort(cmd, ports) {
   for (const port of ports) {
     const p = String(port);
@@ -605,7 +669,7 @@ function braceExpand(s, budget = { n: 64 }) {
   return [s];
 }
 function resolveReal(p, base) {
-  const start = isAbsolute(p) ? p : `${base}/${p}`;
+  const start = isAbsolute2(p) ? p : `${base}/${p}`;
   const queue = start.split("/").filter((x) => x !== "" && x !== ".");
   let cur = "/";
   let missing = false;
@@ -623,7 +687,7 @@ function resolveReal(p, base) {
     }
     let st;
     try {
-      st = lstatSync(next);
+      st = lstatSync2(next);
     } catch {
       missing = true;
       cur = next;
@@ -632,7 +696,7 @@ function resolveReal(p, base) {
     if (st.isSymbolicLink()) {
       if (++hops > 40) deny("too many symlinks");
       const target = readlinkSync(next);
-      if (isAbsolute(target)) cur = "/";
+      if (isAbsolute2(target)) cur = "/";
       queue.unshift(...target.split("/").filter((x) => x !== "" && x !== "."));
       continue;
     }
@@ -682,7 +746,7 @@ function checkWritePath(env, tok, cwd, why) {
       deny(`unresolvable path in ${why}: ${t0.replaceAll(SUBST, "<runtime>")}`);
     }
     if (t0 === "") deny(`empty path in ${why}`);
-    if (cwd === null && !isAbsolute(t0)) {
+    if (cwd === null && !isAbsolute2(t0)) {
       deny(`relative path after unresolvable cd in ${why}: ${t0}`);
     }
     for (const t of expandGlobPath(t0, cwd ?? env.wt)) {
@@ -693,7 +757,7 @@ function checkWritePath(env, tok, cwd, why) {
   }
 }
 function checkSecretPath(env, tok, base) {
-  const lexical = isAbsolute(tok) ? normalize(tok) : normalize(join(base, tok));
+  const lexical = isAbsolute2(tok) ? normalize(tok) : normalize(join(base, tok));
   if (isSecretString(env, tok) || isSecretString(env, lexical)) {
     deny(`secret file access: ${tok}`);
   }
@@ -1426,7 +1490,7 @@ function checkInsideDir(env, dir, state, why) {
   if (dir.includes(SUBST) || dir.includes("$") || dir.startsWith("~")) {
     deny(`unresolvable path in ${why}`);
   }
-  if (state.cwd === null && !isAbsolute(dir)) deny(`relative path after unresolvable cd in ${why}`);
+  if (state.cwd === null && !isAbsolute2(dir)) deny(`relative path after unresolvable cd in ${why}`);
   if (!isInside(env, resolveReal(dir, state.cwd ?? env.wt)))
     deny(`${why} outside worktree: ${dir}`);
 }
@@ -1450,7 +1514,7 @@ function checkPrCreate(env, args, cwd) {
     deny(`gh pr create needs --base ${env.base ?? "<the item base>"} (the item's base branch)`);
   }
   const file = got.get("--body-file");
-  if (unresolvedWord(file) || !/^[A-Za-z0-9._ /-]+$/.test(file) || isAbsolute(file) || file.split("/").includes("..")) {
+  if (unresolvedWord(file) || !/^[A-Za-z0-9._ /-]+$/.test(file) || isAbsolute2(file) || file.split("/").includes("..")) {
     deny("gh pr create --body-file needs a plain relative path inside the clone");
   }
   if (cwd !== env.wt) deny("gh pr create runs from the clone root only");
@@ -1598,7 +1662,7 @@ var isStudioBinary = (w) => /^studio(\.(mjs|cjs|js))?$/i.test(basename(w));
 var NODE_ALTERNATIVE = "use node <relative script> or node --test <relative paths or patterns>";
 var STUDIO_NAMES = ["studio", "studio.mjs", "studio.cjs", "studio.js"];
 function checkNodePath(path) {
-  if (unresolved(path) || path.startsWith("~") || isAbsolute(path) || path.split("/").includes("..")) {
+  if (unresolved(path) || path.startsWith("~") || isAbsolute2(path) || path.split("/").includes("..")) {
     deny(`node with a path that is not literal and relative is not allowed; ${NODE_ALTERNATIVE}`);
   }
   if (!hasMagic(path) && !path.includes("{")) {
@@ -1712,7 +1776,7 @@ function checkWords(env, words, state) {
   }
   if (name === "cd" || name === "pushd") {
     const target = args.find((a) => !a.startsWith("-") || a === "-");
-    const relative = target !== void 0 && !isAbsolute(target);
+    const relative = target !== void 0 && !isAbsolute2(target);
     if (target === void 0 || target === "-" || unresolved(target) || target.startsWith("~") || relative && state.cwd === null) {
       state.cwd = null;
     } else {
@@ -1810,7 +1874,7 @@ function checkMcp(env, tool, input, cwd) {
     if (/\\/.test(v) || /^[A-Za-z]:/.test(v))
       deny(`${tool}: ${key}: Windows paths are not supported`);
     if (v.split("/").includes("..")) deny(`${tool}: write ${key} without ..`);
-    if (!isAbsolute(v)) deny(`${tool}: ${key} must be an absolute path in the analysis directory`);
+    if (!isAbsolute2(v)) deny(`${tool}: ${key} must be an absolute path in the analysis directory`);
     const given = [
       artifacts,
       ...env.artifactsGiven === void 0 ? [] : [normalize(env.artifactsGiven)]
@@ -1863,7 +1927,7 @@ function checkMcp(env, tool, input, cwd) {
     }
   }
 }
-var WRITE_TOOLS = {
+var WRITE_TOOLS2 = {
   Edit: "file_path",
   Write: "file_path",
   MultiEdit: "file_path",
@@ -1967,7 +2031,7 @@ function checkGlobScope(env, pattern, base, tool) {
   for (const e of plain.expansions) {
     const segs = e.split("/");
     const first = segs.findIndex((s) => hasMagic(s));
-    const prefix = first < 0 ? e : segs.slice(0, first).join("/") || (isAbsolute(e) ? "/" : ".");
+    const prefix = first < 0 ? e : segs.slice(0, first).join("/") || (isAbsolute2(e) ? "/" : ".");
     checkReadScope(env, prefix, base, tool);
   }
 }
@@ -2012,7 +2076,7 @@ function check(input, ctx) {
   const c = ctx;
   if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs) || c.item !== void 0 && (typeof c.item !== "string" || !/^[A-Z]+-\d+$/.test(c.item)) || c.base !== void 0 && (typeof c.base !== "string" || !/^[A-Za-z0-9._/-]+$/.test(c.base)) || c.mcpAllow !== void 0 && !isStringArray(c.mcpAllow) || c.blockedCommands !== void 0 && !isStringArray(c.blockedCommands) || c.reaClasses !== void 0 && !isStringArray(c.reaClasses) || c.noPush !== void 0 && typeof c.noPush !== "boolean" || c.mcpKeys !== void 0 && !(c.mcpKeys !== null && typeof c.mcpKeys === "object" && Object.values(c.mcpKeys).every(
     (e) => isStringArray(e.keys) && isStringArray(e.paths) && isStringArray(e.text)
-  )) || c.artifacts !== void 0 && (typeof c.artifacts !== "string" || !isAbsolute(c.artifacts) || c.artifacts === "/") || c.deniedPorts !== void 0 && !(Array.isArray(c.deniedPorts) && c.deniedPorts.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535))) {
+  )) || c.artifacts !== void 0 && (typeof c.artifacts !== "string" || !isAbsolute2(c.artifacts) || c.artifacts === "/") || c.deniedPorts !== void 0 && !(Array.isArray(c.deniedPorts) && c.deniedPorts.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535))) {
     deny("invalid guard context");
   }
   const wt = resolveReal(ctx.worktree, "/");
@@ -2052,7 +2116,7 @@ function check(input, ctx) {
   };
   const { toolName, toolInput } = input;
   const given = input.cwd;
-  if (given !== void 0 && (typeof given !== "string" || !isAbsolute(given) || given.split("/").includes(".."))) {
+  if (given !== void 0 && (typeof given !== "string" || !isAbsolute2(given) || given.split("/").includes(".."))) {
     deny("invalid working directory");
   }
   const cwd = resolveReal(input.cwd ?? wt, wt);
@@ -2073,7 +2137,7 @@ function check(input, ctx) {
     return;
   }
   if (toolInput.command !== void 0) deny(`${toolName} call with a command`);
-  const writeKey = WRITE_TOOLS[toolName];
+  const writeKey = WRITE_TOOLS2[toolName];
   if (writeKey !== void 0) {
     const p = toolInput[writeKey];
     if (typeof p !== "string" || p === "") deny(`${toolName} call without ${writeKey}`);
@@ -2131,9 +2195,36 @@ function deny2(reason, summary2) {
     }
   }
 }
+function subagentStart(hook) {
+  try {
+    const ctxPath = process.env.STUDIO_GUARD_CTX;
+    if (!ctxPath || typeof hook.agent_id !== "string") return;
+    const ctx = JSON.parse(readFileSync2(ctxPath, "utf8"));
+    if (ctx.timeouts === void 0) return;
+    agentStartOf(ctx.timeouts.agentsFile, hook.agent_id, Date.now());
+  } catch {
+  }
+}
+function overTime(hook, ctx) {
+  const t = ctx.timeouts;
+  if (t === void 0) return void 0;
+  const now = Date.now();
+  const agentId = typeof hook.agent_id === "string" ? hook.agent_id : void 0;
+  return timeoutDecision(t, {
+    now,
+    ...agentId === void 0 ? {} : { agentId, agentStart: agentStartOf(t.agentsFile, agentId, now) },
+    toolName: String(hook.tool_name),
+    toolInput: hook.tool_input ?? {},
+    ...typeof hook.cwd === "string" ? { cwd: hook.cwd } : {}
+  });
+}
 var summary;
 try {
-  const hook = JSON.parse(readFileSync(0, "utf8"));
+  const hook = JSON.parse(readFileSync2(0, "utf8"));
+  if (hook?.hook_event_name === "SubagentStart") {
+    subagentStart(hook);
+    process.exit(0);
+  }
   const input = hook.tool_input ?? {};
   summary = { tool: hook.tool_name, input: JSON.stringify(input).slice(0, 300) };
   const ctxPath = process.env.STUDIO_GUARD_CTX;
@@ -2143,7 +2234,7 @@ try {
     let ctx;
     let readable = true;
     try {
-      ctx = JSON.parse(readFileSync(ctxPath, "utf8"));
+      ctx = JSON.parse(readFileSync2(ctxPath, "utf8"));
     } catch {
       readable = false;
       deny2("guard context unreadable", summary);
@@ -2152,7 +2243,8 @@ try {
       if (ctx === null || typeof ctx !== "object" || Array.isArray(ctx)) {
         deny2("guard context is not an object", summary);
       } else {
-        const result = evaluateGuard(
+        const late = overTime(hook, ctx);
+        const result = late !== void 0 ? { decision: "deny", reason: late } : evaluateGuard(
           { toolName: hook.tool_name, toolInput: input, cwd: hook.cwd },
           ctx
         );

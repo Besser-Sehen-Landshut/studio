@@ -14,6 +14,7 @@ import {
 } from './capabilities.js';
 import type { RoleConfig, StudioConfig } from './config.js';
 import { globProblem, matchGlob } from './glob.js';
+import type { BriefReference } from './group.js';
 import { assertStatePath, removeStateEntry, writeStateFile } from './paths.js';
 import type { Ports } from './ports.js';
 import type { ReaClass } from './rea.js';
@@ -473,6 +474,10 @@ export interface BriefCaps {
   prByStudio?: boolean;
   /** A worker without a crew token: the crew commits only, Studio pushes after it ended. */
   pushByStudio?: boolean;
+  /** A member of a group: the main project's read-only excerpt beside the brief (src/group.ts). */
+  reference?: BriefReference;
+  /** A reviewer: minutes per analyzer subagent, and when the session's time is up (ISO). */
+  timeouts?: { analyzerMinutes: number; sessionEndsAt: string };
   review?: {
     tier: 'small' | 'large';
     reasons: string[];

@@ -17,8 +17,10 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { addAccount, listAccounts } from '../src/accounts.js';
 import { runCli } from '../src/cli.js';
 import { installCrewToken, readCrewTokenFile } from '../src/credentials.js';
+import { ownerStateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import { installNotifySecret, newNtfyTopic, readNotifySecret } from '../src/push.js';
+import { recordSetupSkip } from '../src/rea-consent.js';
 import { SHIM_MARKER } from '../src/setup.js';
 
 const root = mkdtempSync(join(tmpdir(), 'studio-setup-'));
@@ -42,6 +44,8 @@ type Opts = {
   notified?: boolean;
   /** What the fake ntfy server answers; default 200. */
   httpReply?: { ok: boolean; status?: number };
+  /** The optional REA step was skipped before; default true, so the other tests ask nothing more. */
+  researchSkipped?: boolean;
 };
 
 /** A fake plugin launcher that prints its version and arguments. */
@@ -127,6 +131,7 @@ function fixture(o: Opts = {}) {
   };
   if (o.notified !== false)
     installNotifySecret({ transport: 'ntfy', topic: newNtfyTopic() }, owner);
+  if (o.researchSkipped !== false) recordSetupSkip(ownerStateRootFor(owner), new Date());
   return { base, project, home, env, owner, ports, launcher, localBin, tokens, pluginRuns, posts };
 }
 type Fx = ReturnType<typeof fixture>;
@@ -529,6 +534,40 @@ describe('studio setup --link', () => {
     const r = await setup(fx, ['ci', '--link']);
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/--link/);
+  });
+});
+
+describe('studio setup: reverse engineering', () => {
+  const ready = () => {
+    const fx = fixture({ studioOnPath: true, researchSkipped: false });
+    installCrewToken(CREW_VALUE, fx.owner);
+    addAccount(fx.owner, 'main', ACCOUNT_VALUE, new Date('2026-11-01T00:00:00Z'));
+    return fx;
+  };
+
+  it('offers the optional step once; a skip is kept, so the next setup asks nothing', async () => {
+    const fx = ready();
+    const r = await setup(fx, [], { lines: [''] });
+    expect(r.code).toBe(0);
+    expect(r.asked).toEqual(['line:    Set it up now? [y/N] ']);
+    expect(r.out).toContain('6. Reverse engineering (optional): not set up');
+    expect(r.out).toContain('skipped; later: studio setup research');
+    const again = await setup(fx);
+    expect(again.asked).toEqual([]);
+    expect(again.out).toContain('6. Reverse engineering (optional): skipped');
+  });
+
+  it('studio setup research asks directly, and is for the owner in a terminal only', async () => {
+    const fx = ready();
+    const r = await setup(fx, ['research'], { lines: ['n'] });
+    // Asked the install question at once (no "set it up now?"), and the no is kept.
+    expect(r.asked).toEqual([
+      'line:    REA is not installed yet. Install rea-agents 6.7.0 now? It runs with your user rights outside the sandbox. [Y/n] ',
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('declined');
+    expect((await setup(fx, ['research'], { terminal: false })).code).not.toBe(0);
+    expect((await setup(fx, ['research'], { role: 'crew' })).code).not.toBe(0);
   });
 });
 
