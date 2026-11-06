@@ -387,13 +387,17 @@ const processExists = (pid: number): boolean => {
 export const sweepScript = (user: string): string =>
   [
     "$ErrorActionPreference = 'Stop'",
+    // Only an elevated token sees and ends every process of another user; without one, a process
+    // whose owner cannot be read would simply not be found, which must never read as none running.
+    '$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
+    'if (-not $elevated) { [Console]::Out.Write((ConvertTo-Json -Compress @{ elevated = $false })); exit 0 }',
     `$sid = (New-Object Security.Principal.NTAccount($env:COMPUTERNAME, ${psQuote(user)})).Translate([Security.Principal.SecurityIdentifier]).Value`,
     'function Crew { @(Get-CimInstance Win32_Process | Where-Object { try { (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $sid } catch { $false } }) }',
     '$found = Crew',
     'foreach ($p in $found) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }',
     'if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }',
     '$left = @(Crew | ForEach-Object { [int]$_.ProcessId })',
-    '[Console]::Out.Write((ConvertTo-Json -Compress @{ found = $found.Count; left = $left }))',
+    '[Console]::Out.Write((ConvertTo-Json -Compress @{ elevated = $true; found = $found.Count; left = $left }))',
   ].join('\n');
 
 /**
@@ -513,13 +517,20 @@ export class WindowsGrants {
       ['-NoProfile', '-NonInteractive', '-Command', sweepScript(this.o.user)],
       { env: powershellEnv(process.env), timeoutMs: 120_000 },
     );
-    let left: unknown;
+    let answer: { elevated?: unknown; left?: unknown } = {};
     try {
-      left = (JSON.parse(r.stdout) as { left?: unknown }).left;
+      answer = JSON.parse(r.stdout) as typeof answer;
     } catch {
-      left = undefined;
+      answer = {};
     }
-    if (r.code !== 0 || !Array.isArray(left)) {
+    // Fail closed: what an account without administrator rights cannot see may still run.
+    if (r.code === 0 && answer.elevated === false) {
+      throw new Error(
+        `the worker does not run elevated, so it cannot see every process of the crew user ${this.o.user}: run studio worker in an elevated PowerShell (as administrator)`,
+      );
+    }
+    const left = answer.left;
+    if (r.code !== 0 || answer.elevated !== true || !Array.isArray(left)) {
       throw new Error(`cannot list the processes of the crew user ${this.o.user}`);
     }
     if (left.length > 0) {
@@ -1238,29 +1249,39 @@ export async function windowsWorker(o: {
       async probe(mustNotRead) {
         const why = missing();
         if (why !== undefined) return why;
-        const tmp = ensureStateDir(o.stateRoot, join(o.stateRoot, 'tmp'));
-        const probeEnv = windowsCrewEnv({
-          proxyPort: proxy.port,
-          homeDir: tmp,
-          tmpDir: tmp,
-          base: o.env,
-        });
-        return probeWindowsSandbox({
-          stateRoot: o.stateRoot,
-          credFile,
-          user: o.user,
-          ownerHome: o.ownerHome,
-          ownerConfigDir: o.ownerConfigDir,
-          mustNotRead,
-          crewConfigDir: o.crewConfigDir,
-          grants,
-          proxyPort: proxy.port,
-          env: { ...probeEnv, PATH: path ?? '' },
-          ...(o.spawn === undefined ? {} : { spawn: o.spawn }),
-        });
+        try {
+          return await probe(mustNotRead);
+        } catch (e) {
+          // A probe that cannot run (no elevation, a grant that cannot be taken back) proves
+          // nothing: it refuses like a failed check.
+          return `the Windows crew sandbox could not be shown to hold here: ${(e as Error).message}`;
+        }
       },
       launch: { user: o.user, proxyPort: proxy.port, grant: (g) => grants.grant(g) },
     },
     close: () => proxy.close(),
   };
+
+  async function probe(mustNotRead: readonly string[]): Promise<string | undefined> {
+    const tmp = ensureStateDir(o.stateRoot, join(o.stateRoot, 'tmp'));
+    const probeEnv = windowsCrewEnv({
+      proxyPort: proxy.port,
+      homeDir: tmp,
+      tmpDir: tmp,
+      base: o.env,
+    });
+    return probeWindowsSandbox({
+      stateRoot: o.stateRoot,
+      credFile,
+      user: o.user,
+      ownerHome: o.ownerHome,
+      ownerConfigDir: o.ownerConfigDir,
+      mustNotRead,
+      crewConfigDir: o.crewConfigDir,
+      grants,
+      proxyPort: proxy.port,
+      env: { ...probeEnv, PATH: path ?? '' },
+      ...(o.spawn === undefined ? {} : { spawn: o.spawn }),
+    });
+  }
 }

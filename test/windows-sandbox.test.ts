@@ -45,6 +45,7 @@ import {
   windowsClaude,
   windowsCrewEnv,
   windowsSetupScript,
+  windowsWorker,
 } from '../src/windows-sandbox.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-win-')));
@@ -189,7 +190,11 @@ describe('grants', () => {
     const run: RunFile = async (file, args) => {
       calls.push([file, ...args]);
       if (file === 'powershell.exe') {
-        return { code: 0, stdout: JSON.stringify({ found: left.length, left }), stderr: '' };
+        return {
+          code: 0,
+          stdout: JSON.stringify({ elevated: true, found: left.length, left }),
+          stderr: '',
+        };
       }
       return { code: 0, stdout: '', stderr: '' };
     };
@@ -319,7 +324,7 @@ describe('grants', () => {
         if (file === 'powershell.exe') {
           return {
             code: 0,
-            stdout: JSON.stringify({ found: 0, left: o.sweepLeft ?? [] }),
+            stdout: JSON.stringify({ elevated: true, found: 0, left: o.sweepLeft ?? [] }),
             stderr: '',
           };
         }
@@ -412,6 +417,73 @@ describe('grants', () => {
     expect(readdirSync(place).sort()).toEqual(['deep']);
     expect(readdirSync(join(place, 'deep'))).toEqual(['mine.txt']);
     expect(readFileSync(join(outside, 'keep.txt'), 'utf8')).toBe('keep');
+  });
+
+  it('without elevation the sweep sees too little: a grant refuses, never reading it as nothing running', async () => {
+    const base = join(root, `g${n++}`);
+    const ownerRoot = join(base, 'owner');
+    const dir = join(base, 'clone');
+    mkdirSync(dir, { recursive: true });
+    const calls: string[][] = [];
+    const run: RunFile = async (file, args) => {
+      calls.push([file, ...args]);
+      return file === 'powershell.exe'
+        ? { code: 0, stdout: JSON.stringify({ elevated: false }), stderr: '' }
+        : { code: 0, stdout: '', stderr: '' };
+    };
+    const g = new WindowsGrants({ ownerRoot, user: 'crew', run, owner: '*S-1-5-21-1-2-3-1001' });
+    await expect(g.grant([{ path: dir, rights: 'M' }])).rejects.toThrow(
+      /does not run elevated.*elevated PowerShell/,
+    );
+    expect(calls.filter((c) => c[0] === 'icacls')).toEqual([]);
+    // An answer that does not say it was elevated counts the same as one that says it was not.
+    const vague: RunFile = async (file) =>
+      file === 'powershell.exe'
+        ? { code: 0, stdout: JSON.stringify({ found: 0, left: [] }), stderr: '' }
+        : { code: 0, stdout: '', stderr: '' };
+    await expect(
+      new WindowsGrants({
+        ownerRoot,
+        user: 'crew',
+        run: vague,
+        owner: '*S-1-5-21-1-2-3-1001',
+      }).grant([{ path: dir, rights: 'M' }]),
+    ).rejects.toThrow(/cannot list the processes/);
+  });
+
+  it('a worker that is not elevated refuses to claim: its probe answers with the refusal', async () => {
+    const base = join(root, `w${n++}`);
+    const ownerConfigDir = join(base, 'config');
+    mkdirSync(ownerConfigDir, { recursive: true });
+    writeFileSync(join(ownerConfigDir, 'windows-crew.xml'), 'x');
+    const bin = join(base, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'claude.exe'), '');
+    const spawned: string[] = [];
+    const w = await windowsWorker({
+      user: 'crew',
+      stateRoot: join(base, 'state'),
+      ownerRoot: join(base, 'owner'),
+      crewConfigDir: join(base, 'crew'),
+      ownerHome: base,
+      ownerConfigDir,
+      networkAllow: [],
+      env: { PATH: bin, SystemRoot: 'C:\\Windows' },
+      startProxy: async () => ({ port: 1, close: async () => {} }),
+      run: async (file) =>
+        file === 'powershell.exe'
+          ? { code: 0, stdout: JSON.stringify({ elevated: false }), stderr: '' }
+          : { code: 0, stdout: '"h\\o","S-1-5-21-1-2-3-1001"', stderr: '' },
+      spawn: async (o) => {
+        spawned.push(o.stdin);
+        return { pid: 1, exited: Promise.resolve(0) };
+      },
+    });
+    expect(await w.sandbox.probe([])).toMatch(
+      /could not be shown to hold here: the worker does not run elevated/,
+    );
+    // Nothing ran as the crew user.
+    expect(spawned).toEqual([]);
   });
 
   it('the sweep finds the crew user by SID and ends what it finds', () => {
@@ -625,7 +697,7 @@ describe('probeWindowsSandbox', () => {
     const run: RunFile = async (file, args) => {
       calls.push([file, ...args]);
       return file === 'powershell.exe'
-        ? { code: 0, stdout: JSON.stringify({ found: 0, left: [] }), stderr: '' }
+        ? { code: 0, stdout: JSON.stringify({ elevated: true, found: 0, left: [] }), stderr: '' }
         : { code: 0, stdout: '', stderr: '' };
     };
     const grants = new WindowsGrants({
