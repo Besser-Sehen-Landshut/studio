@@ -543,6 +543,14 @@ const accountName = z
   .string()
   .regex(/^[A-Za-z][A-Za-z0-9_-]{0,19}$/, 'a local user name of at most 20 characters');
 
+/** The name prefix of per-job crew users: `<prefix>-<6 hex>` stays a local user name. */
+const crewPrefix = z
+  .string()
+  .regex(
+    /^[A-Za-z][A-Za-z0-9_-]{0,12}$/,
+    'a name prefix of at most 13 characters (each job runs as <prefix>-<6 hex>)',
+  );
+
 /** One relay worker, as the lead's owner config names it (`workers.relay.<label>`). */
 export const relayTargetSchema = z.strictObject({
   host: z.string().max(253).regex(RELAY_HOST_RE, 'a host name or an IP address'),
@@ -571,11 +579,14 @@ export type RelayTarget = z.infer<typeof relayTargetSchema>;
 export const relayServeSchema = z.strictObject({
   deny: workerDenySchema.default(NO_DENY),
   allowRead: z.array(denyPath).max(50).default([]),
-  // Native Windows: the local standard user every crew runs as.
+  // Native Windows: the local standard users the crews run as, one per job.
   windows: z
     .strictObject({
-      crewUser: accountName.default('studio-crew'),
-      // The scheduled task that ends the crew user's processes (`studio relay setup`).
+      // The name prefix of the crew users: one local user `<prefix>-<6 hex>` per job, in the group
+      // `<prefix>s` (src/crew-accounts.ts).
+      crewUser: crewPrefix.default('studio-crew'),
+      // The broker tasks that end the crew users' processes, delete them and make a fresh one per
+      // job (`<broker>`, `<broker> retire`, `<broker> fresh`; `studio relay install`).
       broker: z
         .string()
         .regex(/^[A-Za-z0-9 _-]{1,64}$/, 'a task name of letters, digits, spaces, _ and -')
@@ -1173,16 +1184,11 @@ export const ownerConfigSchema = z.strictObject({
           allowRead: z.array(denyPath).max(50).default([]),
           // How long a claim holds without a heartbeat before another worker may take it over.
           leaseMinutes: z.number().int().min(10).max(240).default(30),
-          // Native Windows: the local standard user every crew runs as (src/windows-sandbox.ts),
-          // created by the script of `studio worker windows-setup`.
+          // Native Windows: the name prefix of the local standard users the crews run as, one per
+          // job (src/crew-accounts.ts); their group comes from `studio worker windows-setup`.
           windows: z
             .strictObject({
-              crewUser: z
-                .string()
-                .regex(
-                  /^[A-Za-z][A-Za-z0-9_-]{0,19}$/,
-                  'a local user name of at most 20 characters',
-                ),
+              crewUser: crewPrefix,
             })
             .optional(),
         })

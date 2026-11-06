@@ -299,7 +299,6 @@ import {
   runningPerLabel,
 } from './usage.js';
 import {
-  credFileIn,
   findClaude,
   setupReadPaths,
   windowsSetupScript,
@@ -3371,16 +3370,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         // The one-time setup of the Windows crew sandbox: printed for the owner to run elevated.
         if (rest[0] === 'windows-setup' && rest.length === 1) {
           const ownerConfig = loadOwnerConfig(owner);
-          const user = ownerConfig.workers?.self?.windows?.crewUser;
-          if (user === undefined) {
+          const prefix = ownerConfig.workers?.self?.windows?.crewUser;
+          if (prefix === undefined) {
             throw new UsageError(
-              'worker windows-setup needs workers.self.windows.crew_user in the owner config',
+              'worker windows-setup needs workers.self.windows.crew_user (the name prefix of the crew users) in the owner config',
             );
           }
           stdout(
             windowsSetupScript({
-              user,
-              credFile: credFileIn(ownerConfigDir(owner)),
+              prefix,
               readPaths: setupReadPaths({
                 node: process.execPath,
                 claude: findClaude(deps.env.PATH ?? deps.env.Path),
@@ -3421,7 +3419,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const win =
           platformNow.platform === 'win32' && winUser !== undefined
             ? await (deps.windowsWorker ?? windowsWorker)({
-                user: winUser,
+                prefix: winUser,
                 stateRoot: stateRootFor(project, owner),
                 ownerRoot: ownerStateRootFor(owner),
                 crewConfigDir: crewClaudeDir(owner),

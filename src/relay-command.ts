@@ -573,7 +573,7 @@ export function relayContext(o: {
     ...(native
       ? {
           windows: relayWindows({
-            user: settings.windows?.crewUser ?? 'studio-crew',
+            prefix: settings.windows?.crewUser ?? 'studio-crew',
             home,
             machine: machineOf(),
             task: settings.windows?.broker ?? 'Studio relay broker',
@@ -864,7 +864,7 @@ function setupScriptFor(o: {
   const claude = findClaude(o.env.PATH ?? o.env.Path);
   return relaySetupScript({
     relayUser: o.relayUser,
-    crewUser: settings.windows?.crewUser ?? 'studio-crew',
+    crewPrefix: settings.windows?.crewUser ?? 'studio-crew',
     home: o.home,
     machine: o.machine,
     task: settings.windows?.broker ?? 'Studio relay broker',

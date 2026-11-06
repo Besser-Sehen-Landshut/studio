@@ -1619,16 +1619,16 @@ describe('workers on other machines', () => {
     const fake =
       (problem: string | undefined): CliDeps['windowsWorker'] =>
       async (o) => {
-        expect(o.user).toBe('studio-crew');
+        expect(o.prefix).toBe('studio-crew');
         return {
           claude: wp.claude,
           sandbox: {
-            user: o.user,
+            user: o.prefix,
             probe: async (paths) => {
               asked.push(paths);
               return problem;
             },
-            launch: { user: o.user, proxyPort: 1, grant: async () => {} },
+            launch: { user: o.prefix, proxyPort: 1, grant: async () => {} },
           },
           close: async () => {
             closed++;
@@ -1651,7 +1651,7 @@ describe('workers on other machines', () => {
     expect(w.github.refs.size).toBe(0);
   });
 
-  it('worker windows-setup prints the script for the configured crew user, and needs one', async () => {
+  it('worker windows-setup prints the script for the configured crew user prefix, and needs one', async () => {
     const w = world();
     const wm = workerMachine(w, 'win');
     const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
@@ -1665,8 +1665,9 @@ describe('workers on other machines', () => {
     const r = await run(wm, wp, ['worker', 'windows-setup']);
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/^#Requires -RunAsAdministrator/);
-    expect(r.out).toContain("$name = 'studio-crew'");
-    expect(r.out).toContain('windows-crew.xml');
+    expect(r.out).toContain("$prefix = 'studio-crew'");
+    // The crew users come per job; the setup makes their group and stores no password.
+    expect(r.out).not.toContain('windows-crew.xml');
     expect(w.github.refs.size).toBe(0);
   });
 

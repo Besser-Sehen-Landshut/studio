@@ -151,8 +151,13 @@ export interface RelayWindows {
   }>;
   /** Stopping a crew: the keeper ends, the grants go (through the broker). */
   claude(): Ports['claude'];
-  /** Ends every process of the crew user, through the broker; refuses when any is left. */
+  /** Ends every process of the crew users, through the broker; refuses when any is left. */
   sweep(): Promise<void>;
+  /**
+   * After a job: its crew user's processes end, its places go back, and it is deleted with its
+   * profile, through the broker.
+   */
+  retire(): Promise<void>;
 }
 
 const relayLock = (root: string, now: Date) =>
@@ -763,6 +768,12 @@ export async function runRelayJob(
       await c.ports.clock.sleep(15_000);
     }
     const after = readJob(c, id);
+    // The crew user of this job is done with: the next job gets a fresh one.
+    try {
+      await c.windows?.retire();
+    } catch (e) {
+      c.log?.(`${id}: the crew user is not deleted yet: ${(e as Error).message}`);
+    }
     return after?.state === 'stopped' ? 'stopped' : settle('ended');
   } catch (e) {
     const line = (e as Error).message;

@@ -130,6 +130,41 @@ export function runningPerLabel(ownerRoot: string, ports: Ports): Record<string,
         typeof rec.label === 'string' && validLabel(rec.label) ? rec.label : DEFAULT_LABEL;
       out[label] = count(out, label) + 1;
     }
+    // A crew on a relay worker runs on a credential the lead handed over: it counts on that
+    // label like a crew of this machine, until the lead hears it ended (relay.json, relay-lead.ts).
+    for (const label of relayRunningLabels(root)) out[label] = count(out, label) + 1;
+  }
+  return out;
+}
+
+/**
+ * The credential labels of this state root's relay jobs that are starting or running. A relay file
+ * that cannot be read counts as one crew on the default label: never as none.
+ */
+function relayRunningLabels(stateRoot: string): string[] {
+  const f = join(stateRoot, 'relay.json');
+  let text: string;
+  try {
+    if (!lstatSync(f).isFile()) return [DEFAULT_LABEL];
+    text = readFileSync(f, 'utf8');
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? [] : [DEFAULT_LABEL];
+  }
+  let items: unknown;
+  try {
+    items = (JSON.parse(text) as { items?: unknown }).items;
+  } catch {
+    return [DEFAULT_LABEL];
+  }
+  if (items === null || typeof items !== 'object') return [DEFAULT_LABEL];
+  const out: string[] = [];
+  for (const rec of Object.values(items as Record<string, unknown>)) {
+    const r = rec as { state?: unknown; credential?: unknown } | null;
+    if (r === null || typeof r !== 'object') continue;
+    if (r.state !== 'starting' && r.state !== 'running') continue;
+    out.push(
+      typeof r.credential === 'string' && validLabel(r.credential) ? r.credential : DEFAULT_LABEL,
+    );
   }
   return out;
 }

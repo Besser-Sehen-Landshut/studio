@@ -388,7 +388,7 @@ describe('the install script', () => {
   it('prerequisites, the sshd block between markers checked by sshd -t, sshd only from the scope', () => {
     const base = {
       relayUser: 'studio-relay',
-      crewUser: 'studio-crew',
+      crewPrefix: 'studio-crew',
       home: 'C:\\ProgramData\\Studio\\relay',
       machine: 'C:\\Program Files\\Studio\\relay',
       task: 'Studio relay broker',
@@ -418,7 +418,7 @@ describe('the install script', () => {
       // sshd stays stopped and closed until the end; a failure leaves it so.
       // No relay job runs while the folders are walked: refused before sshd stops, checked again
       // after, every process of the relay account and the crew user.
-      "foreach ($n in @('studio-relay', 'studio-crew'))",
+      "$_.Name -eq 'studio-relay' -or ($_.Name -match $crewRe -and $_.Description -eq 'Studio crew (one job)')",
       '$forceStop = $false',
       '# Before sshd stops: a running job is refused while the lead can still reach it.\nNoRelayJob\ntry {',
       'SshdOff\n# With sshd off no new job starts: once more, for one that started in between.\nNoRelayJob\nSet-Service -Name sshd -StartupType Automatic',

@@ -1,7 +1,9 @@
-// The PowerShell Studio generates for a relay worker, read as text: a backslash a template literal
-// dropped would make a path that names nothing (a reset that cleans no key, a check that checks no
-// folder), and nothing would fail. Every Windows path in the scripts keeps its backslashes.
+// The PowerShell Studio generates for Windows workers, read as text: a backslash a template literal
+// dropped would make a path that names nothing (a profile check that finds no profile, a check that
+// checks no folder), and nothing would fail. Every Windows path in the scripts keeps its backslashes.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { crewAccountScript } from '../src/crew-accounts.js';
 import { relayHandoffScript } from '../src/relay-serve.js';
 import {
   authorizedKeysScript,
@@ -10,18 +12,22 @@ import {
   relaySetupScript,
   sshdMatchBlock,
 } from '../src/relay-windows.js';
-
-const reset = (await import(new URL('../bin/studio-crew-reset.mjs', import.meta.url).href)) as {
-  registryLeftScript: (base: string) => string;
-  registryResetScript: (base: string) => string;
-};
+import { KEEPER_SCRIPT, windowsSetupScript } from '../src/windows-sandbox.js';
 
 const scripts: Record<string, string> = {
-  'registry reset': reset.registryResetScript('HKCU:\\'),
-  'registry left': reset.registryLeftScript('HKCU:\\'),
+  'crew sweep': crewAccountScript({ op: 'sweep', prefix: 'studio-crew' }),
+  'crew retire': crewAccountScript({ op: 'retire', prefix: 'studio-crew' }),
+  'crew fresh': crewAccountScript({
+    op: 'fresh',
+    prefix: 'studio-crew',
+    credFile: 'C:\\c\\crew.bin',
+    reader: 'S-1-5-21-1-2-3-1001',
+  }),
+  'native setup': windowsSetupScript({ prefix: 'studio-crew', readPaths: ['C:\\claude'] }),
+  keeper: KEEPER_SCRIPT,
   setup: relaySetupScript({
     relayUser: 'studio-relay',
-    crewUser: 'studio-crew',
+    crewPrefix: 'studio-crew',
     home: 'C:\\ProgramData\\Studio\\relay',
     machine: 'C:\\Program Files\\Studio\\relay',
     task: 'Studio relay broker',
@@ -30,7 +36,7 @@ const scripts: Record<string, string> = {
   }),
   install: relaySetupScript({
     relayUser: 'studio-relay',
-    crewUser: 'studio-crew',
+    crewPrefix: 'studio-crew',
     home: 'C:\\ProgramData\\Studio\\relay',
     machine: 'C:\\Program Files\\Studio\\relay',
     task: 'Studio relay broker',
@@ -43,7 +49,11 @@ const scripts: Record<string, string> = {
     lines: [],
     relayUser: 'studio-relay',
   }),
-  broker: brokerScript({ crewUser: 'studio-crew', result: 'C:\\r.json' }),
+  broker: brokerScript({
+    op: 'fresh',
+    prefix: 'studio-crew',
+    machine: 'C:\\Program Files\\Studio\\relay',
+  }),
   'folder functions': FOLDER_FUNCTIONS,
   'sshd block': sshdMatchBlock({
     relayUser: 'studio-relay',
@@ -61,7 +71,7 @@ const scripts: Record<string, string> = {
 
 /** Words that only ever follow a backslash in a Windows path. */
 const GLUED =
-  /(Software|Microsoft|Windows|CurrentVersion|Explorer|ProgramData|System32|OpenSSH)(Microsoft|Windows|CurrentVersion|Explorer|Classes|Run\b|RunOnce|User Shell|Shell Folders|Command Processor|ssh|OpenSSH|sshd)/;
+  /(Software|SOFTWARE|Microsoft|Windows|Windows NT|CurrentVersion|Explorer|ProgramData|System32|OpenSSH)(Microsoft|Windows|CurrentVersion|Explorer|Classes|Run\b|RunOnce|User Shell|Shell Folders|Command Processor|ProfileList|ssh|OpenSSH|sshd)/;
 
 describe('the generated PowerShell keeps its backslashes', () => {
   for (const [name, text] of Object.entries(scripts)) {
@@ -73,18 +83,23 @@ describe('the generated PowerShell keeps its backslashes', () => {
       }
     });
   }
-  it('the reset and its check name the same keys, Classes and both shell folder keys included', () => {
-    for (const text of [scripts['registry reset'], scripts['registry left']] as string[]) {
-      for (const key of [
-        'Software\\Classes',
-        'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders',
-        'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders',
-        'Software\\Microsoft\\Windows\\CurrentVersion\\Run',
-        'Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce',
-        'Software\\Microsoft\\Command Processor',
-      ]) {
-        expect(text).toContain(`'${key}'`);
-      }
+  it('each broker script fits a task action as -EncodedCommand, with room to spare', () => {
+    for (const op of ['sweep', 'retire', 'fresh'] as const) {
+      const script = brokerScript({
+        op,
+        prefix: 'abcdefghijklm',
+        machine: 'C:\\Program Files\\Studio\\relay',
+      });
+      // A command line holds 32767 characters; the encoded script is the most of it.
+      expect(Buffer.from(script, 'utf16le').toString('base64').length, op).toBeLessThan(24_000);
+      expect(script, op).not.toMatch(/^\s*#/m);
     }
+  });
+  it('the profile list is named whole where crew users are deleted and where the host checks', () => {
+    const key = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList';
+    expect(scripts['crew retire']).toContain(`'${key}'`);
+    // The crew host builds the key in a template literal of its own.
+    const host = readFileSync(new URL('../bin/studio-crew-host.mjs', import.meta.url), 'utf8');
+    expect(host).toContain(`'${key.replace(/\\/g, '\\\\')}\\\\\${sid}'`);
   });
 });

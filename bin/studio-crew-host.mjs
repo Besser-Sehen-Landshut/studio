@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The crew host of a native Windows worker (src/windows-sandbox.ts). Studio starts it as the crew
-// sandbox user with `Start-Process -Credential`; it never runs as the owner.
+// user of the job with `Start-Process -Credential`; it never runs as the owner.
 //
 // It reads its spec from the keeper's named pipe (the keeper put it in a job object first and
 // checked that the pipe's client is this process), so the crew's environment never lands on disk.
@@ -11,13 +11,13 @@
 //        file of the owner. Every check reports ok or not; a check that cannot run reports not ok.
 //
 // Self-contained on purpose: no import of Studio's sources or of anything the working directory
-// could provide.
+// could provide (studio-crew-ps.mjs lies beside it).
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { closeSync, openSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
-import { pinnedPowerShell, powershell as powershellSync } from './studio-crew-reset.mjs';
+import { pinnedPowerShell, powershell as powershellSync } from './studio-crew-ps.mjs';
 
 const fail = (why) => {
   process.stderr.write(`studio-crew-host: ${why}\n`);
@@ -325,38 +325,39 @@ async function probe(p) {
           : `${n} stored credential(s)`,
     );
   }
-  // What a crew could have left to run in a later job; the broker resets it before every grant.
-  if (p.persistence === true) {
-    // The registry through its API (studio-crew-reset.mjs): names with spaces and the default value
-    // count like any other.
-    const { registryLeft } = await import('./studio-crew-reset.mjs');
-    const left = [...registryLeft()];
-    let startup = [];
-    try {
-      const dir = powershellSync("[Environment]::GetFolderPath('Startup')").trim();
-      startup = dir === '' ? [] : readdirSync(dir).filter((n) => n.toLowerCase() !== 'desktop.ini');
-    } catch (e) {
-      if (e?.code !== 'ENOENT') left.push('the Startup folder cannot be read');
+  // The crew user made for this job only: its SID, and a profile no older than the user, so it is
+  // never one an earlier crew ran as (crew-accounts.ts deletes those with their profiles).
+  try {
+    const sid = powershellSync(
+      '[Console]::Out.Write([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)',
+    ).trim();
+    const fresh = p.fresh ?? {};
+    const notBefore = Date.parse(String(fresh.notBefore));
+    if (sid !== fresh.sid || Number.isNaN(notBefore)) {
+      add('fresh', false, `runs as ${sid}, not as the crew user made for this job`);
+    } else {
+      // The profile as Windows records it for this SID, never what the environment says.
+      const profile = powershellSync(
+        `$k = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\${sid}'; if (Test-Path -LiteralPath $k) { [Console]::Out.Write((Get-ItemProperty -LiteralPath $k).ProfileImagePath) }`,
+      ).trim();
+      const born = profile === '' ? undefined : statSync(profile).birthtimeMs;
+      // Two seconds of slack: the clocks are this machine's, the times rounded.
+      const ok = born === undefined || born >= notBefore - 2000;
+      add(
+        'fresh',
+        ok,
+        born === undefined
+          ? 'a crew user made for this job, without a profile yet'
+          : ok
+            ? 'a crew user made for this job, its profile made since'
+            : `the profile ${profile} is older than the crew user of this job`,
+      );
     }
-    if (startup.length > 0) left.push(`${startup.length} item(s) in the Startup folder`);
-    try {
-      const documents = powershellSync("[Environment]::GetFolderPath('MyDocuments')").trim();
-      for (const sub of ['PowerShell', 'WindowsPowerShell']) {
-        let names = [];
-        try {
-          names = readdirSync(join(documents, sub)).filter((n) =>
-            /profile\.ps1$|^modules$/i.test(n),
-          );
-        } catch {}
-        if (names.length > 0) left.push(`PowerShell profile(s) or modules ${names.join(', ')}`);
-      }
-    } catch {
-      left.push('the Documents folder cannot be read');
-    }
+  } catch (e) {
     add(
-      'persistence',
-      left.length === 0,
-      left.length === 0 ? 'nothing left to start in a later job' : `left: ${left.join(', ')}`,
+      'fresh',
+      false,
+      `cannot tell whether the crew user is fresh: ${String(e?.message ?? e).split('\n')[0]}`,
     );
   }
   // A scheduled task of this user would start processes outside every keeper's job.
@@ -382,26 +383,7 @@ async function probe(p) {
   return results;
 }
 
-if (spec.mode === 'reset') {
-  // What a crew could leave in this user's profile to start in a later job goes, as this user.
-  let report;
-  try {
-    const { resetProfiles, resetRegistry, resetStartup } = await import('./studio-crew-reset.mjs');
-    // The registry first: its shell folders go back to the defaults before they are asked for.
-    const left = resetRegistry();
-    const folder = (name) => powershellSync(`[Environment]::GetFolderPath('${name}')`).trim();
-    const startup = folder('Startup');
-    const documents = folder('MyDocuments');
-    report = {
-      left,
-      startup: startup === '' ? null : resetStartup(startup),
-      profiles: documents === '' ? null : resetProfiles(documents),
-    };
-  } catch (e) {
-    report = { error: String(e?.message ?? e).split('\n')[0] };
-  }
-  process.stdout.write(JSON.stringify(report), () => process.exit(0));
-} else if (spec.mode === 'seed') {
+if (spec.mode === 'seed') {
   try {
     writeFileSync(spec.seed, 'made by the crew user');
     process.exit(0);

@@ -27665,14 +27665,14 @@ function run(tokens, path10) {
   const size = tokens.length + 1;
   let at2 = new Uint8Array(size);
   let skipping = new Uint8Array(size);
-  const settle2 = (states) => {
+  const settle3 = (states) => {
     for (let i2 = 0; i2 < tokens.length; i2++) {
       const k = tokens[i2]?.k;
       if (states[i2] && (k === "star" || k === "any" || k === "dirs")) states[i2 + 1] = 1;
     }
   };
   at2[0] = 1;
-  settle2(at2);
+  settle3(at2);
   for (const c3 of path10) {
     const next = new Uint8Array(size);
     const nextSkipping = new Uint8Array(size);
@@ -27695,7 +27695,7 @@ function run(tokens, path10) {
         if (!slash) next[i2] = 1;
       } else next[i2] = 1;
     }
-    settle2(next);
+    settle3(next);
     at2 = next;
     skipping = nextSkipping;
   }
@@ -31482,6 +31482,10 @@ var NO_DENY = { paths: [], ports: [], hosts: [] };
 var RELAY_HOST_RE = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$|^[0-9A-Fa-f:]{2,39}$/;
 var RELAY_HOST_KEY_RE = /^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|rsa-sha2-256|rsa-sha2-512|ssh-rsa) [A-Za-z0-9+/]{40,2000}={0,2}$/;
 var accountName = external_exports.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,19}$/, "a local user name of at most 20 characters");
+var crewPrefix = external_exports.string().regex(
+  /^[A-Za-z][A-Za-z0-9_-]{0,12}$/,
+  "a name prefix of at most 13 characters (each job runs as <prefix>-<6 hex>)"
+);
 var relayTargetSchema = external_exports.strictObject({
   host: external_exports.string().max(253).regex(RELAY_HOST_RE, "a host name or an IP address"),
   // The non-admin account on the worker whose key forces `studio relay serve`.
@@ -31497,10 +31501,13 @@ var relayTargetSchema = external_exports.strictObject({
 var relayServeSchema = external_exports.strictObject({
   deny: workerDenySchema.default(NO_DENY),
   allowRead: external_exports.array(denyPath).max(50).default([]),
-  // Native Windows: the local standard user every crew runs as.
+  // Native Windows: the local standard users the crews run as, one per job.
   windows: external_exports.strictObject({
-    crewUser: accountName.default("studio-crew"),
-    // The scheduled task that ends the crew user's processes (`studio relay setup`).
+    // The name prefix of the crew users: one local user `<prefix>-<6 hex>` per job, in the group
+    // `<prefix>s` (src/crew-accounts.ts).
+    crewUser: crewPrefix.default("studio-crew"),
+    // The broker tasks that end the crew users' processes, delete them and make a fresh one per
+    // job (`<broker>`, `<broker> retire`, `<broker> fresh`; `studio relay install`).
     broker: external_exports.string().regex(/^[A-Za-z0-9 _-]{1,64}$/, "a task name of letters, digits, spaces, _ and -").default("Studio relay broker")
   }).optional(),
   // Nothing starts while the machine is busier than this (it may run a CI runner too).
@@ -31937,13 +31944,10 @@ var ownerConfigSchema = external_exports.strictObject({
       allowRead: external_exports.array(denyPath).max(50).default([]),
       // How long a claim holds without a heartbeat before another worker may take it over.
       leaseMinutes: external_exports.number().int().min(10).max(240).default(30),
-      // Native Windows: the local standard user every crew runs as (src/windows-sandbox.ts),
-      // created by the script of `studio worker windows-setup`.
+      // Native Windows: the name prefix of the local standard users the crews run as, one per
+      // job (src/crew-accounts.ts); their group comes from `studio worker windows-setup`.
       windows: external_exports.strictObject({
-        crewUser: external_exports.string().regex(
-          /^[A-Za-z][A-Za-z0-9_-]{0,19}$/,
-          "a local user name of at most 20 characters"
-        )
+        crewUser: crewPrefix
       }).optional()
     }).optional(),
     // Relay workers (src/relay-lead.ts): on the lead's machine, per label, the machine the lead
@@ -35069,6 +35073,34 @@ function runningPerLabel(ownerRoot, ports) {
       const label = typeof rec.label === "string" && validLabel(rec.label) ? rec.label : DEFAULT_LABEL;
       out[label] = count(out, label) + 1;
     }
+    for (const label of relayRunningLabels(root)) out[label] = count(out, label) + 1;
+  }
+  return out;
+}
+function relayRunningLabels(stateRoot) {
+  const f3 = join10(stateRoot, "relay.json");
+  let text;
+  try {
+    if (!lstatSync8(f3).isFile()) return [DEFAULT_LABEL];
+    text = readFileSync11(f3, "utf8");
+  } catch (e) {
+    return e.code === "ENOENT" ? [] : [DEFAULT_LABEL];
+  }
+  let items;
+  try {
+    items = JSON.parse(text).items;
+  } catch {
+    return [DEFAULT_LABEL];
+  }
+  if (items === null || typeof items !== "object") return [DEFAULT_LABEL];
+  const out = [];
+  for (const rec of Object.values(items)) {
+    const r = rec;
+    if (r === null || typeof r !== "object") continue;
+    if (r.state !== "starting" && r.state !== "running") continue;
+    out.push(
+      typeof r.credential === "string" && validLabel(r.credential) ? r.credential : DEFAULT_LABEL
+    );
   }
   return out;
 }
@@ -39540,6 +39572,324 @@ import {
 import { dirname as dirname9, join as join27, resolve as resolve6, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
+// src/crew-accounts.ts
+var CREW_PREFIX_RE = /^[A-Za-z][A-Za-z0-9_-]{0,12}$/;
+var CREW_DESCRIPTION = "Studio crew (one job)";
+var GROUP_DESCRIPTION = "Studio crews: one local user per job";
+var prefixOf = (prefix) => {
+  if (!CREW_PREFIX_RE.test(prefix)) {
+    throw new Error(`not a crew user prefix (at most 13 characters): ${prefix}`);
+  }
+  return prefix;
+};
+var crewAccountFunctions = (prefix) => `$prefix = ${psQuote(prefixOf(prefix))}
+$crewDescription = ${psQuote(CREW_DESCRIPTION)}
+$groupDescription = ${psQuote(GROUP_DESCRIPTION)}
+${CREW_ACCOUNT_BODY}`;
+var CREW_ACCOUNT_BODY = String.raw`function CrewGroup {
+  $g = Get-LocalGroup -Name ($prefix + 's') -ErrorAction SilentlyContinue
+  if ($null -eq $g) { throw "there is no group $($prefix)s: run the setup script of Studio again, elevated" }
+  if ($g.Description -ne $groupDescription) { throw "the group $($g.Name) is not Studio's" }
+  $g
+}
+function JobUsers {
+  $re = '^' + [regex]::Escape($prefix) + '-[0-9a-f]{6}$'
+  @(Get-LocalUser | Where-Object { $_.Name -match $re -and $_.Description -eq $crewDescription })
+}
+function OwnedBy([string[]]$sids) {
+  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })
+}
+function SweepJobUsers {
+  $sids = @(JobUsers | ForEach-Object { $_.SID.Value })
+  if ($sids.Count -eq 0) { return @{ found = 0; left = @() } }
+  $found = OwnedBy $sids
+  foreach ($p in $found) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+  if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }
+  @{ found = $found.Count; left = @(OwnedBy $sids | ForEach-Object { [int]$_.ProcessId }) }
+}
+# A folder the crew user closed to everyone else: administrators take it, for this folder only.
+function Grab([string]$p) {
+  takeown /F $p /A | Out-Null
+  icacls $p /grant '*S-1-5-18:F' '*S-1-5-32-544:F' /L /Q | Out-Null
+}
+function Children([string]$dir) {
+  try { @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop) }
+  catch { Grab $dir; @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop) }
+}
+# Every reparse point below a profile goes as a link, never followed: what deletes the profile then
+# reaches nothing outside it.
+function DropLinks([string]$root) {
+  $todo = New-Object Collections.Stack
+  $todo.Push($root)
+  while ($todo.Count -gt 0) {
+    foreach ($c in Children $todo.Pop()) {
+      if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        if ($c.PSIsContainer) { [IO.Directory]::Delete($c.FullName, $false) } else { [IO.File]::Delete($c.FullName) }
+        if ($null -ne (Get-Item -LiteralPath $c.FullName -Force -ErrorAction SilentlyContinue)) { throw "cannot remove the link $($c.FullName)" }
+        continue
+      }
+      if ($c.PSIsContainer) { $todo.Push($c.FullName) }
+    }
+  }
+}
+function ProfileRoot {
+  $list = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
+  [Environment]::ExpandEnvironmentVariables($list.ProfilesDirectory).TrimEnd('\')
+}
+function RemoveJobUser($u) {
+  $sid = $u.SID.Value
+  $prof = $null
+  for ($i = 0; $i -lt 60; $i++) {
+    $prof = Get-CimInstance Win32_UserProfile -Filter ("SID='" + $sid + "'")
+    if ($null -eq $prof -or -not $prof.Loaded) { break }
+    Start-Sleep -Milliseconds 500
+  }
+  if ($null -ne $prof) {
+    if ($prof.Loaded) { throw "the profile of $($u.Name) is still loaded" }
+    $path = [string]$prof.LocalPath
+    $root = ProfileRoot
+    $rest = if ($path.Length -gt $root.Length + 1) { $path.Substring($root.Length + 1) } else { '' }
+    if (-not $path.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase) -or $rest -eq '' -or $rest.Contains('\')) {
+      throw "the profile of $($u.Name) is at $path, not a folder right below $root"
+    }
+    $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    if ($null -ne $item) {
+      if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "the profile of $($u.Name) at $path is a reparse point" }
+      DropLinks $path
+    }
+    Remove-CimInstance -InputObject $prof
+    # What the profile service left: no link is in it any more, so this reaches nothing outside.
+    if (Test-Path -LiteralPath $path) { DropLinks $path; Remove-Item -LiteralPath $path -Recurse -Force }
+  }
+  Remove-LocalUser -SID $sid
+}
+function RetireJobUsers {
+  $s = SweepJobUsers
+  if ($s.left.Count -gt 0) { throw "processes of the crew users are still running ($($s.left -join ', ')) and cannot be ended" }
+  $gone = @()
+  foreach ($u in JobUsers) { RemoveJobUser $u; $gone += $u.Name }
+  $gone
+}
+function NewSecret { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b) + 'aA1!' }
+# The password, sealed for this machine, in a file only SYSTEM, administrators and the reader read:
+# written beside the target with its final ACL, then swapped in.
+function SealFor([string]$file, [string]$plain, [string]$reader) {
+  Add-Type -AssemblyName System.Security
+  $sealed = [Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes($plain), $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
+  $tmp = Join-Path (Split-Path -Parent $file) ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+  [IO.File]::WriteAllBytes($tmp, $sealed)
+  icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($reader):R" /L /Q | Out-Null
+  if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $file" }
+  if (Test-Path -LiteralPath $file) { [IO.File]::Replace($tmp, $file, $null) } else { [IO.File]::Move($tmp, $file) }
+}
+function NewJobUser([string]$credFile, [string]$reader) {
+  $g = CrewGroup
+  $b = New-Object byte[] 3
+  [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+  $name = $prefix + '-' + (($b | ForEach-Object { $_.ToString('x2') }) -join '')
+  $plain = NewSecret
+  $u = New-LocalUser -Name $name -Password (ConvertTo-SecureString $plain -AsPlainText -Force) -PasswordNeverExpires -AccountNeverExpires -UserMayNotChangePassword -Description $crewDescription
+  try {
+    # Users and Studio's group only, never Administrators (groups by SID: names depend on the language).
+    $users = Get-LocalGroup -SID 'S-1-5-32-545'
+    if (-not (Get-LocalGroupMember -Group $users | Where-Object { $_.SID -eq $u.SID })) { Add-LocalGroupMember -Group $users -Member $u }
+    Add-LocalGroupMember -Group $g -Member $u
+    if (Get-LocalGroupMember -Group (Get-LocalGroup -SID 'S-1-5-32-544') | Where-Object { $_.SID -eq $u.SID }) { throw "$name is an administrator" }
+    SealFor $credFile $plain $reader
+  } catch {
+    Remove-LocalUser -SID $u.SID
+    throw
+  }
+  $plain = $null
+  @{ user = $name; sid = $u.SID.Value }
+}
+`;
+var RELAY_SID_SLOT = "__STUDIO_RELAY_SID__";
+function crewAccountScript(o2) {
+  if (o2.op === "fresh" && (o2.credFile === void 0 || o2.reader === void 0)) {
+    throw new Error("a fresh crew user needs a credential file and its reader");
+  }
+  if (o2.reader !== void 0 && o2.reader !== "$relaySid" && !/^S-1-\d+(-\d+)+$/.test(o2.reader)) {
+    throw new Error(`not a SID: ${o2.reader}`);
+  }
+  const reader = o2.reader === "$relaySid" ? `'${RELAY_SID_SLOT}'` : psQuote(o2.reader ?? "");
+  const body = o2.op === "sweep" ? "  $s = SweepJobUsers\n  $out.found = $s.found\n  $out.left = $s.left" : o2.op === "retire" ? "  $out.removed = @(RetireJobUsers)\n  $out.left = @()" : `  $out.removed = @(RetireJobUsers)
+  $n = NewJobUser ${psQuote(o2.credFile ?? "")} ${reader}
+  $out.user = $n.user
+  $out.sid = $n.sid`;
+  const write = o2.result === void 0 ? "[Console]::Out.Write((ConvertTo-Json -Compress $out))" : `Set-Content -LiteralPath ${psQuote(o2.result)} -Value (ConvertTo-Json -Compress $out) -Encoding UTF8`;
+  return `$ErrorActionPreference = 'Stop'
+$out = @{ op = ${psQuote(o2.op)}; at = (Get-Date).ToUniversalTime().ToString('o') }
+try {
+${crewAccountFunctions(o2.prefix)}
+${body}
+} catch {
+  $out.error = $_.Exception.Message
+}
+${write}
+`;
+}
+function judgeCrewAnswer(op, answer2) {
+  const a2 = answer2;
+  if (a2 === null || typeof a2 !== "object" || a2.op !== op || typeof a2.at !== "string") {
+    return void 0;
+  }
+  if (typeof a2.error === "string") return { error: a2.error.slice(0, 300) };
+  if (op === "fresh") {
+    if (typeof a2.user !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,12}-[0-9a-f]{6}$/.test(a2.user) || typeof a2.sid !== "string" || !/^S-1-5-21(-\d+)+$/.test(a2.sid)) {
+      return void 0;
+    }
+    return { account: { user: a2.user, sid: a2.sid, at: a2.at } };
+  }
+  const left = Array.isArray(a2.left) ? a2.left : typeof a2.left === "number" ? [a2.left] : void 0;
+  if (left === void 0 || !left.every((n4) => Number.isInteger(n4))) return void 0;
+  return { left };
+}
+function settle2(op, raw, where) {
+  const j = judgeCrewAnswer(op, raw);
+  if (j === void 0) throw new Error(`${where} answered in an unknown shape`);
+  if ("error" in j) throw new Error(`${where} could not ${op} the crew users: ${j.error}`);
+  if ("left" in j && j.left.length > 0) {
+    throw new Error(
+      `processes of the crew users are still running (${j.left.join(", ")}) and ${where} cannot end them`
+    );
+  }
+  return "account" in j ? j.account : void 0;
+}
+async function crewUserExists(run2, sid) {
+  if (!/^S-1-5-21(-\d+)+$/.test(sid)) return false;
+  const r = await run2(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `[Console]::Out.Write($null -ne (Get-LocalUser -SID ${psQuote(sid)} -ErrorAction SilentlyContinue))`
+    ],
+    { env: powershellEnv(process.env), timeoutMs: 6e4 }
+  );
+  return r.code === 0 && r.stdout.trim() === "True";
+}
+function localCrewAccounts(o2) {
+  const call = async (op) => {
+    const script = crewAccountScript({
+      op,
+      prefix: o2.prefix,
+      ...op === "fresh" ? { credFile: o2.credFile, reader: await o2.reader() } : {}
+    });
+    const elevated2 = `if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { [Console]::Out.Write('{"notElevated":true}'); exit 0 }
+`;
+    const r = await o2.run(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", elevated2 + script],
+      { env: powershellEnv(process.env), timeoutMs: 3e5 }
+    );
+    let raw;
+    try {
+      raw = JSON.parse(r.stdout.trim());
+    } catch {
+      raw = void 0;
+    }
+    if (raw?.notElevated === true) {
+      throw new Error(
+        "the worker does not run elevated, so it can neither see every process of a crew user nor make one: run studio worker in an elevated PowerShell (as administrator)"
+      );
+    }
+    return settle2(op, raw, "this worker");
+  };
+  return {
+    credFile: o2.credFile,
+    sweep: async () => {
+      await call("sweep");
+    },
+    retire: async () => {
+      await call("retire");
+    },
+    fresh: async () => await call("fresh"),
+    exists: (sid) => crewUserExists(o2.run, sid)
+  };
+}
+function brokerCrewAccounts(o2) {
+  const call = async (op) => {
+    const started = o2.now().getTime();
+    const task = o2.tasks[op];
+    const r = await o2.run("schtasks.exe", ["/Run", "/TN", task]);
+    if (r.code !== 0) {
+      throw new Error(
+        `cannot start the broker task ${task} (schtasks exit ${r.code}); run studio relay install again, elevated`
+      );
+    }
+    const until = started + (o2.waitMs ?? (op === "sweep" ? 6e4 : 3e5));
+    for (; ; ) {
+      const text = o2.readFile(o2.results[op])?.replace(/^﻿/, "");
+      let raw;
+      try {
+        raw = text === void 0 ? void 0 : JSON.parse(text);
+      } catch {
+        raw = void 0;
+      }
+      const at2 = typeof raw?.at === "string" ? Date.parse(raw.at) : Number.NaN;
+      if (raw !== void 0 && at2 >= started - 1e3) return settle2(op, raw, "the broker");
+      if (o2.now().getTime() >= until) throw new Error(`the broker task ${task} did not answer`);
+      await o2.sleep(500);
+    }
+  };
+  return {
+    credFile: o2.credFile,
+    sweep: async () => {
+      await call("sweep");
+    },
+    retire: async () => {
+      await call("retire");
+    },
+    fresh: async () => await call("fresh"),
+    exists: (sid) => crewUserExists(o2.run, sid)
+  };
+}
+var crewGroupSetup = () => `# Studio's group of crew users: every crew user is made in it for one job and deleted after.
+$group = Get-LocalGroup -Name ($prefix + 's') -ErrorAction SilentlyContinue
+if ($null -eq $group) { $group = New-LocalGroup -Name ($prefix + 's') -Description $groupDescription }
+elseif ($group.Description -ne $groupDescription) { throw "a group $($group.Name) exists and is not Studio's: remove it or choose another crew_user prefix" }
+$groupSid = $group.SID.Value
+# The shared crew user of earlier versions goes, with what it left.
+$old = Get-LocalUser -Name $prefix -ErrorAction SilentlyContinue
+if ($null -ne $old -and $old.Description -eq 'Studio crew sandbox') {
+  $left = @(OwnedBy @($old.SID.Value))
+  foreach ($p in $left) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+  Start-Sleep -Milliseconds 800
+  RemoveJobUser $old
+  Get-NetFirewallRule -DisplayName ('Studio crew ' + $prefix + ': no direct network') -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+  Write-Output "Removed the shared crew user $prefix of an earlier version."
+}
+# Crew users left by a crash go now.
+$null = RetireJobUsers
+# No direct network for any crew user: every outbound connection to anything but loopback.
+$rule = 'Studio crews ' + $group.Name + ': no direct network'
+Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+New-NetFirewallRule -DisplayName $rule -Direction Outbound -Action Block -LocalUser "D:(A;;CC;;;$groupSid)" -RemoteAddress @(${OUTSIDE.map(psQuote).join(", ")}) | Out-Null
+# Crew users log on only through Studio's keeper: no batch job, service, network or remote desktop.
+$cfg = Join-Path $env:TEMP ('studio-rights-' + [Guid]::NewGuid().ToString('N') + '.inf')
+$db = [IO.Path]::ChangeExtension($cfg, '.sdb')
+secedit /export /cfg $cfg /areas USER_RIGHTS | Out-Null
+$lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $cfg)
+$at = $lines.IndexOf('[Privilege Rights]')
+if ($at -lt 0) { throw 'secedit gave no [Privilege Rights] section' }
+foreach ($right in @('SeDenyBatchLogonRight', 'SeDenyServiceLogonRight', 'SeDenyNetworkLogonRight', 'SeDenyRemoteInteractiveLogonRight')) {
+  $i = -1
+  for ($k = 0; $k -lt $lines.Count; $k++) { if ($lines[$k] -like "$right *") { $i = $k } }
+  if ($i -lt 0) { $lines.Insert($at + 1, "$right = *$groupSid") }
+  elseif ($lines[$i] -notlike "**$groupSid*") { $lines[$i] = $lines[$i] + ",*$groupSid" }
+}
+Set-Content -LiteralPath $cfg -Value $lines -Encoding Unicode
+secedit /configure /db $db /cfg $cfg /areas USER_RIGHTS /quiet | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "secedit could not set the logon rights ($LASTEXITCODE)" }
+Remove-Item -LiteralPath $cfg, $db -ErrorAction SilentlyContinue
+# Read, never write, for the crew users on Claude Code and the toolchains.
+foreach ($p in $readPaths) {
+  if (Test-Path -LiteralPath $p) { icacls $p /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
+}
+`;
+
 // src/egress-proxy.ts
 import { lookup } from "node:dns/promises";
 import {
@@ -40027,7 +40377,6 @@ async function startEgressProxy(o2) {
 }
 
 // src/windows-sandbox.ts
-var CREW_USER_RE = /^[A-Za-z][A-Za-z0-9_-]{0,19}$/;
 var OUTSIDE = [
   `${ipv43(0, 0, 0, 0)}-${ipv43(126, 255, 255, 255)}`,
   `${ipv43(128, 0, 0, 0)}-${ipv43(255, 255, 255, 255)}`,
@@ -40078,89 +40427,45 @@ function psQuote(s) {
   return `'${s.replace(/'/g, "''")}'`;
 }
 function windowsSetupScript(o2) {
-  if (!CREW_USER_RE.test(o2.user)) throw new Error(`not a crew user name: ${o2.user}`);
+  if (!CREW_PREFIX_RE.test(o2.prefix)) {
+    throw new Error(`not a crew user prefix (at most 13 characters): ${o2.prefix}`);
+  }
   const list2 = (ps) => `@(${ps.map(psQuote).join(", ")})`;
   return `#Requires -RunAsAdministrator
-# Studio: the crew sandbox user of this Windows worker. Run once in an elevated Windows PowerShell
-# (powershell.exe), as the account that runs \`studio worker\`. Nothing here leaves this machine.
+# Studio: the crew users of this Windows worker. Run once in an elevated Windows PowerShell
+# (powershell.exe). Nothing here leaves this machine.
 $ErrorActionPreference = 'Stop'
-$name = ${psQuote(o2.user)}
-$credFile = ${psQuote(o2.credFile)}
-$bytes = New-Object byte[] 32
-[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-$plain = [Convert]::ToBase64String($bytes) + 'aA1!'
-$secret = ConvertTo-SecureString $plain -AsPlainText -Force
-$plain = $null
-$user = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
-if ($null -eq $user) {
-  $user = New-LocalUser -Name $name -Password $secret -PasswordNeverExpires -AccountNeverExpires -UserMayNotChangePassword -Description 'Studio crew sandbox'
-} elseif (-not (Test-Path -LiteralPath $credFile)) {
-  Set-LocalUser -Name $name -Password $secret
-} else {
-  $secret = (Import-Clixml -LiteralPath $credFile).Password
-}
-# Users only, never Administrators (groups by SID: their names depend on the language).
-$users = Get-LocalGroup -SID 'S-1-5-32-545'
-if (-not (Get-LocalGroupMember -Group $users | Where-Object { $_.SID -eq $user.SID })) {
-  Add-LocalGroupMember -Group $users -Member $user
-}
-$admins = Get-LocalGroup -SID 'S-1-5-32-544'
-if (Get-LocalGroupMember -Group $admins | Where-Object { $_.SID -eq $user.SID }) {
-  throw "$name is an administrator: remove it from that group first"
-}
-# The credential, for this account on this machine only.
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $credFile) | Out-Null
-New-Object System.Management.Automation.PSCredential ($name, $secret) | Export-Clixml -LiteralPath $credFile
-icacls $credFile /inheritance:r /grant:r "$($env:USERDOMAIN)\\$($env:USERNAME):F" | Out-Null
-# No direct network: every outbound connection of the crew user to anything but loopback.
-$sid = $user.SID.Value
-$rule = 'Studio crew ' + $name + ': no direct network'
-Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-New-NetFirewallRule -DisplayName $rule -Direction Outbound -Action Block -LocalUser "D:(A;;CC;;;$sid)" -RemoteAddress @(${OUTSIDE.map(psQuote).join(", ")}) | Out-Null
+${crewAccountFunctions(o2.prefix)}
 # An earlier setup opened the crew Claude config dir for writing: that grant goes, all the way down.
 foreach ($p in ${list2(o2.revokePaths ?? [])}) {
-  if (Test-Path -LiteralPath $p) { icacls $p /remove:g $name /T /C /Q | Out-Null }
+  if (Test-Path -LiteralPath $p) {
+    icacls $p /remove:g $prefix /T /C /L /Q | Out-Null
+    $g = Get-LocalGroup -Name ($prefix + 's') -ErrorAction SilentlyContinue
+    if ($null -ne $g) { icacls $p /remove:g "*$($g.SID.Value)" /T /C /L /Q | Out-Null }
+  }
 }
-# No logon as a batch job (no scheduled task with a stored password), as a service, over the
-# network or by remote desktop: the crew user starts processes only through Studio's keeper.
-$cfg = Join-Path $env:TEMP ('studio-rights-' + [Guid]::NewGuid().ToString('N') + '.inf')
-$db = [IO.Path]::ChangeExtension($cfg, '.sdb')
-secedit /export /cfg $cfg /areas USER_RIGHTS | Out-Null
-$lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $cfg)
-$at = $lines.IndexOf('[Privilege Rights]')
-if ($at -lt 0) { throw 'secedit gave no [Privilege Rights] section' }
-foreach ($right in @('SeDenyBatchLogonRight', 'SeDenyServiceLogonRight', 'SeDenyNetworkLogonRight', 'SeDenyRemoteInteractiveLogonRight')) {
-  $i = -1
-  for ($k = 0; $k -lt $lines.Count; $k++) { if ($lines[$k] -like "$right *") { $i = $k } }
-  if ($i -lt 0) { $lines.Insert($at + 1, "$right = *$sid") }
-  elseif ($lines[$i] -notlike "**$sid*") { $lines[$i] = $lines[$i] + ",*$sid" }
-}
-Set-Content -LiteralPath $cfg -Value $lines -Encoding Unicode
-secedit /configure /db $db /cfg $cfg /areas USER_RIGHTS /quiet | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "secedit could not set the logon rights ($LASTEXITCODE)" }
-Remove-Item -LiteralPath $cfg, $db -ErrorAction SilentlyContinue
-foreach ($p in ${list2(o2.readPaths)}) {
-  if (Test-Path -LiteralPath $p) { icacls $p /grant "\${name}:(OI)(CI)RX" /Q | Out-Null }
-}
-Write-Output "Studio crew user $name is ready; start the worker again."
+$readPaths = ${list2(o2.readPaths)}
+${crewGroupSetup()}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
 `;
 }
 var OWNER_RIGHTS = "*S-1-3-4";
-function grantArgs(user, g3) {
-  if (!CREW_USER_RE.test(user)) throw new Error(`not a crew user name: ${user}`);
+var crewSid = (sid) => {
+  if (!/^S-1-5-21(-\d+)+$/.test(sid)) throw new Error(`not the SID of a local user: ${sid}`);
+  return `*${sid}`;
+};
+function grantArgs(sid, g3) {
   const rights = g3.rights === "R" ? "RX" : "M";
-  return [g3.path, "/grant", `${user}:${isDir2(g3.path) ? "(OI)(CI)" : ""}${rights}`, "/Q"];
+  return [g3.path, "/grant", `${crewSid(sid)}:${isDir2(g3.path) ? "(OI)(CI)" : ""}${rights}`, "/Q"];
 }
 function ownerRightsArgs(path10) {
   return [path10, "/grant", `${OWNER_RIGHTS}:(OI)(CI)(S)`, "/Q"];
 }
-function revokeArgs(user, path10) {
-  if (!CREW_USER_RE.test(user)) throw new Error(`not a crew user name: ${user}`);
-  return [path10, "/remove:g", user, "/Q"];
+function revokeArgs(sid, path10) {
+  return [path10, "/remove:g", crewSid(sid), "/Q"];
 }
-function rootRevokeSteps(user, ownerSid2, path10) {
+function rootRevokeSteps(sid, ownerSid2, path10) {
   if (!OWNER_SID_RE.test(ownerSid2)) throw new Error(`not a SID: ${ownerSid2}`);
-  return [revokeArgs(user, path10), [path10, "/setowner", ownerSid2, "/C", "/L", "/Q"]];
+  return [revokeArgs(sid, path10), [path10, "/setowner", ownerSid2, "/C", "/L", "/Q"]];
 }
 function deepRevokeSteps(ownerSid2, path10) {
   if (!OWNER_SID_RE.test(ownerSid2)) throw new Error(`not a SID: ${ownerSid2}`);
@@ -40229,21 +40534,27 @@ var runFile2 = (file4, args, opts = {}) => new Promise((resolve16) => {
     }
   );
 });
-var recordFile = (user) => `windows-crew-${user.toLowerCase()}.json`;
-var lockFile = (user) => `windows-crew-${user.toLowerCase()}.lock`;
+var RECORD_FILE = "windows-crew.json";
+var LOCK_FILE = "windows-crew.lock";
 var LOCK_STALE_MS3 = 10 * 6e4;
-function readGrantRecord(ownerRoot, user) {
+function readGrantRecord(ownerRoot) {
   try {
-    const raw = JSON.parse(readFileSync27(join27(ownerRoot, recordFile(user)), "utf8"));
+    const raw = JSON.parse(readFileSync27(join27(ownerRoot, RECORD_FILE), "utf8"));
+    const a2 = raw.account;
+    const account = a2 !== void 0 && typeof a2.user === "string" && typeof a2.sid === "string" && typeof a2.at === "string" ? { user: a2.user, sid: a2.sid, at: a2.at } : void 0;
     return {
+      ...account === void 0 ? {} : { account },
+      // Anything but a plain false counts as used: the next job then gets a fresh user.
+      used: raw.used !== false,
       ...typeof raw.keeper === "number" ? { keeper: raw.keeper } : {},
+      ...typeof raw.sid === "string" ? { sid: raw.sid } : {},
       paths: Array.isArray(raw.paths) ? raw.paths.filter((p) => typeof p === "string") : []
     };
   } catch {
     return { paths: [] };
   }
 }
-var writeGrantRecord = (ownerRoot, user, r) => writeStateFile(ownerRoot, join27(ownerRoot, recordFile(user)), `${JSON.stringify(r)}
+var writeGrantRecord = (ownerRoot, r) => writeStateFile(ownerRoot, join27(ownerRoot, RECORD_FILE), `${JSON.stringify(r)}
 `);
 var processExists = (pid) => {
   try {
@@ -40253,20 +40564,6 @@ var processExists = (pid) => {
     return e.code === "EPERM";
   }
 };
-var sweepScript = (user) => [
-  "$ErrorActionPreference = 'Stop'",
-  // Only an elevated token sees and ends every process of another user; without one, a process
-  // whose owner cannot be read would simply not be found, which must never read as none running.
-  "$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
-  "if (-not $elevated) { [Console]::Out.Write((ConvertTo-Json -Compress @{ elevated = $false })); exit 0 }",
-  `$sid = (New-Object Security.Principal.NTAccount($env:COMPUTERNAME, ${psQuote(user)})).Translate([Security.Principal.SecurityIdentifier]).Value`,
-  "function Crew { @(Get-CimInstance Win32_Process | Where-Object { try { (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $sid } catch { $false } }) }",
-  "$found = Crew",
-  "foreach ($p in $found) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }",
-  "if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }",
-  "$left = @(Crew | ForEach-Object { [int]$_.ProcessId })",
-  "[Console]::Out.Write((ConvertTo-Json -Compress @{ elevated = $true; found = $found.Count; left = $left }))"
-].join("\n");
 var WindowsGrants = class {
   constructor(o2) {
     this.o = o2;
@@ -40274,14 +40571,21 @@ var WindowsGrants = class {
   o;
   /** The owner's SID (`*S-1-...`), read once. */
   sid;
-  paths() {
-    return readGrantRecord(this.o.ownerRoot, this.o.user).paths;
+  /** The crew user of the coming or running job, if one was made. */
+  account() {
+    return readGrantRecord(this.o.ownerRoot).account;
   }
-  /** Runs `fn` under the crew user's lock, waiting up to 30 seconds for it. */
+  get credFile() {
+    return this.o.accounts.credFile;
+  }
+  paths() {
+    return readGrantRecord(this.o.ownerRoot).paths;
+  }
+  /** Runs `fn` under the lock of the crew users, waiting up to 30 seconds for it. */
   async locked(fn) {
     const until = Date.now() + 3e4;
     for (; ; ) {
-      const lock = acquireStateLock(this.o.ownerRoot, lockFile(this.o.user), {
+      const lock = acquireStateLock(this.o.ownerRoot, LOCK_FILE, {
         now: /* @__PURE__ */ new Date(),
         heartbeatStaleMs: LOCK_STALE_MS3
       });
@@ -40293,9 +40597,16 @@ var WindowsGrants = class {
         }
       }
       if (Date.now() >= until) {
-        throw new HeldError(`another launch holds the crew user ${this.o.user}; try again`);
+        throw new HeldError("another launch holds the crew users of this machine; try again");
       }
       await sleep(250);
+    }
+  }
+  refuseWhileRunning(rec) {
+    if (rec.keeper !== void 0 && processExists(rec.keeper)) {
+      throw new HeldError(
+        "a crew is still running on this machine: one crew at a time, as all projects share its crew users"
+      );
     }
   }
   /**
@@ -40303,19 +40614,22 @@ var WindowsGrants = class {
    * first and the root's owner becomes Studio's account, whatever happens next, so the crew user
    * loses its access at once; then the links below are removed; only when that worked, the ACLs
    * below go back to inherited and their owner to Studio's account. With `swept` false (processes
-   * of the crew user may still run) only the first two steps run. A place where any step failed is
+   * of a crew user may still run) only the first two steps run. A place where any step failed is
    * kept in the record and reported.
    */
   async revokeLocked(swept = true) {
-    const rec = readGrantRecord(this.o.ownerRoot, this.o.user);
+    const rec = readGrantRecord(this.o.ownerRoot);
     const failed2 = [];
+    if (rec.paths.length > 0 && rec.sid === void 0) {
+      throw new Error(`the crew grants on ${rec.paths.join(", ")} name no crew user`);
+    }
     if (rec.paths.length > 0) this.sid ??= this.o.owner ?? await ownerSid(this.o.run);
     const sid = this.sid;
     const icacls = async (args) => (await this.o.run("icacls", args)).code === 0;
     for (const p of rec.paths) {
       if (!existsSync7(p)) continue;
       const dir = isDir2(p);
-      const [remove, rootOwner] = rootRevokeSteps(this.o.user, sid, p);
+      const [remove, rootOwner] = rootRevokeSteps(rec.sid, sid, p);
       if (!await icacls(remove) || !await icacls(rootOwner)) {
         failed2.push(p);
         continue;
@@ -40338,7 +40652,12 @@ var WindowsGrants = class {
         }
       }
     }
-    writeGrantRecord(this.o.ownerRoot, this.o.user, { paths: failed2 });
+    const { paths: _paths, sid: _sid, keeper: _keeper, ...keep } = rec;
+    writeGrantRecord(this.o.ownerRoot, {
+      ...keep,
+      paths: failed2,
+      ...failed2.length > 0 && rec.sid !== void 0 ? { sid: rec.sid } : {}
+    });
     if (failed2.length > 0) {
       throw new Error(`cannot take the crew user's grants off ${failed2.join(", ")}`);
     }
@@ -40349,67 +40668,75 @@ var WindowsGrants = class {
    * thrown.
    */
   revokeAll() {
+    return this.locked(() => this.revokeSwept());
+  }
+  async revokeSwept() {
+    try {
+      await this.o.accounts.sweep();
+    } catch (e) {
+      await this.revokeLocked(false).catch(() => {
+      });
+      throw e;
+    }
+    await this.revokeLocked();
+  }
+  /**
+   * The crew user for the coming job: the recorded one while no crew ran as it and it still exists,
+   * else a fresh one, after the places of the earlier ones are taken back and they are deleted.
+   */
+  ready() {
     return this.locked(async () => {
-      try {
-        await this.sweep();
-      } catch (e) {
-        await this.revokeLocked(false).catch(() => {
-        });
-        throw e;
+      const rec = readGrantRecord(this.o.ownerRoot);
+      this.refuseWhileRunning(rec);
+      if (rec.account !== void 0 && rec.used === false && rec.paths.length === 0 && await this.o.accounts.exists(rec.account.sid)) {
+        return rec.account;
       }
-      await this.revokeLocked();
+      await this.revokeSwept();
+      writeGrantRecord(this.o.ownerRoot, { used: true, paths: [] });
+      const account = await this.o.accounts.fresh();
+      writeGrantRecord(this.o.ownerRoot, { account, used: false, paths: [] });
+      return account;
     });
   }
-  /** Ends what is left of the crew user; refuses when something cannot be ended. */
-  async sweep() {
-    if (this.o.sweep !== void 0) return this.o.sweep();
-    const r = await this.o.run(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", sweepScript(this.o.user)],
-      { env: powershellEnv(process.env), timeoutMs: 12e4 }
-    );
-    let answer2 = {};
-    try {
-      answer2 = JSON.parse(r.stdout);
-    } catch {
-      answer2 = {};
-    }
-    if (r.code === 0 && answer2.elevated === false) {
-      throw new Error(
-        `the worker does not run elevated, so it cannot see every process of the crew user ${this.o.user}: run studio worker in an elevated PowerShell (as administrator)`
-      );
-    }
-    const left = answer2.left;
-    if (r.code !== 0 || answer2.elevated !== true || !Array.isArray(left)) {
-      throw new Error(`cannot list the processes of the crew user ${this.o.user}`);
-    }
-    if (left.length > 0) {
-      throw new Error(
-        `processes of the crew user ${this.o.user} are still running (${left.join(", ")}) and cannot be ended from this account; end them as an administrator`
-      );
-    }
-  }
-  grant(grants) {
+  /** After a job: every process of the crew users ends, their places go back, they are deleted. */
+  retire() {
     return this.locked(async () => {
-      const rec = readGrantRecord(this.o.ownerRoot, this.o.user);
-      if (rec.keeper !== void 0 && processExists(rec.keeper)) {
-        throw new HeldError(
-          `a crew of the crew user ${this.o.user} is still running: one crew at a time on this machine, as all projects share the crew user`
-        );
+      const rec = readGrantRecord(this.o.ownerRoot);
+      this.refuseWhileRunning(rec);
+      await this.revokeSwept();
+      writeGrantRecord(this.o.ownerRoot, { used: true, paths: [] });
+      await this.o.accounts.retire();
+    });
+  }
+  /**
+   * Grants places to the crew user of the coming job (from `ready`). `launch`: for a crew, which
+   * makes the user used, so the next job gets a fresh one; else (the probe's seed) it stays unused.
+   */
+  grant(grants, opts = {}) {
+    return this.locked(async () => {
+      const rec = readGrantRecord(this.o.ownerRoot);
+      this.refuseWhileRunning(rec);
+      const account = rec.account;
+      if (account === void 0) {
+        throw new Error("no crew user was made for this job: the probe before it did not run");
       }
-      await this.sweep();
-      await this.revokeLocked();
-      writeGrantRecord(this.o.ownerRoot, this.o.user, { paths: grants.map((g3) => g3.path) });
+      await this.revokeSwept();
+      writeGrantRecord(this.o.ownerRoot, {
+        account,
+        used: opts.launch === true || rec.used !== false,
+        sid: account.sid,
+        paths: grants.map((g3) => g3.path)
+      });
       for (const g3 of grants) {
         const steps = [
-          grantArgs(this.o.user, g3),
+          grantArgs(account.sid, g3),
           ...g3.rights === "M" && isDir2(g3.path) ? [ownerRightsArgs(g3.path)] : []
         ];
         for (const args of steps) {
           const r = await this.o.run("icacls", args);
           if (r.code !== 0) {
             throw new Error(
-              `cannot open ${g3.path} to the crew user ${this.o.user}: icacls exited ${r.code}`
+              `cannot open ${g3.path} to the crew user ${account.user}: icacls exited ${r.code}`
             );
           }
         }
@@ -40418,8 +40745,8 @@ var WindowsGrants = class {
   }
   recordKeeper(pid) {
     return this.locked(async () => {
-      writeGrantRecord(this.o.ownerRoot, this.o.user, {
-        ...readGrantRecord(this.o.ownerRoot, this.o.user),
+      writeGrantRecord(this.o.ownerRoot, {
+        ...readGrantRecord(this.o.ownerRoot),
         keeper: pid
       });
     });
@@ -40441,8 +40768,7 @@ param(
   [Parameter(Mandatory = $true)][string]$Out,
   [Parameter(Mandatory = $true)][string]$Err,
   [Parameter(Mandatory = $true)][string]$User,
-  [int]$WaitSeconds = 60,
-  [switch]$Machine
+  [int]$WaitSeconds = 60
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
@@ -40504,6 +40830,7 @@ $spec = [Text.Encoding]::UTF8.GetBytes($raw.Substring($nl + 1))
 $raw = $null
 $p = $null
 $job = $null
+$crew = $null
 try {
   $job = [StudioJob]::Create()
   $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -40513,18 +40840,15 @@ try {
   $security.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($crew, 'ReadWrite', 'Allow')))
   $name = 'studio-' + [Guid]::NewGuid().ToString('N')
   $pipe = New-Object System.IO.Pipes.NamedPipeServerStream($name, 'Out', 1, 'Byte', 'Asynchronous', 0, 65536, $security)
-  if ($Machine) {
-    # A relay worker: the password is sealed for this machine (LocalMachine DPAPI) in a file only
-    # the relay account and SYSTEM may read; an SSH key logon cannot open the account's own DPAPI.
-    Add-Type -AssemblyName System.Security
-    $plain = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($Cred), $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
-    $secure = New-Object Security.SecureString
-    foreach ($ch in [Text.Encoding]::UTF8.GetString($plain).ToCharArray()) { $secure.AppendChar($ch) }
-    [Array]::Clear($plain, 0, $plain.Length)
-    $c = New-Object System.Management.Automation.PSCredential ("$env:COMPUTERNAME\\$User", $secure)
-  } else {
-    $c = Import-Clixml -LiteralPath $Cred
-  }
+  # The password of this job's crew user, sealed for this machine (LocalMachine DPAPI) in a file
+  # only SYSTEM, administrators and the account Studio runs as may read (crew-accounts.ts); an SSH
+  # key logon (a relay worker) could not open the account's own DPAPI keys.
+  Add-Type -AssemblyName System.Security
+  $plain = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($Cred), $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
+  $secure = New-Object Security.SecureString
+  foreach ($ch in [Text.Encoding]::UTF8.GetString($plain).ToCharArray()) { $secure.AppendChar($ch) }
+  [Array]::Clear($plain, 0, $plain.Length)
+  $c = New-Object System.Management.Automation.PSCredential ("$env:COMPUTERNAME\\$User", $secure)
   $p = Start-Process -FilePath $Node -ArgumentList @(('"' + $HostBin + '"'), $name) -Credential $c -WorkingDirectory $Cwd -WindowStyle Hidden -PassThru -RedirectStandardOutput $Out -RedirectStandardError $Err
   [StudioJob]::Assign($job, $p.Handle)
   Note "host $($p.Id) started in the job"
@@ -40552,8 +40876,8 @@ try {
   # walk for planted links are Studio's, at the next grant or stop (WindowsGrants.revokeAll).
   if ($null -ne $job) { [StudioJob]::Terminate($job) }
   foreach ($r in $revoke) {
-    if (-not (Test-Path -LiteralPath $r)) { continue }
-    icacls $r /remove:g $User /L /Q | Out-Null
+    if ($null -eq $crew -or -not (Test-Path -LiteralPath $r)) { continue }
+    icacls $r /remove:g "*$($crew.Value)" /L /Q | Out-Null
     if ($LASTEXITCODE -ne 0) {
       [Console]::Error.WriteLine("studio keeper: cannot take the grant off $r ($LASTEXITCODE)")
       $code = 3
@@ -40647,8 +40971,7 @@ function keeperArgs(o2) {
     "-Err",
     o2.err,
     "-User",
-    o2.user,
-    ...o2.machine === true ? ["-Machine"] : []
+    o2.user
   ];
 }
 var identityScript = (pid) => [
@@ -40669,6 +40992,8 @@ function windowsClaude(o2) {
     async start(cwd, args, prompt, logPath, env) {
       const id = logPath.replace(/\\/g, "/").split("/").at(-1)?.replace(/\.jsonl$/, "") ?? "";
       if (!/^[A-Z]+-\d+$/.test(id)) throw new Error(`not a crew log: ${logPath}`);
+      const account = o2.grants.account();
+      if (account === void 0) throw new Error("no crew user was made for this job");
       const files = ownerFiles(o2.stateRoot, id);
       const spec = {
         mode: "run",
@@ -40682,13 +41007,12 @@ function windowsClaude(o2) {
       const k = await start2({
         args: keeperArgs({
           script: keeperFile(o2.stateRoot),
-          credFile: o2.credFile,
+          credFile: o2.grants.credFile,
           node: node2,
           cwd,
           out: files.out,
           err: files.err,
-          user: o2.user,
-          ...o2.machine === true ? { machine: true } : {}
+          user: account.user
         }),
         env: powershellEnv(env),
         stdin: `${JSON.stringify(o2.grants.paths())}
@@ -40713,7 +41037,7 @@ ${JSON.stringify(spec)}`,
     async stop(pid) {
       if (processExists(pid)) await run2("taskkill", ["/PID", String(pid), "/F"]);
       for (let i2 = 0; i2 < 50 && processExists(pid); i2++) await sleep(200);
-      await o2.grants.revokeAll();
+      await o2.grants.retire();
     }
   };
 }
@@ -40729,8 +41053,7 @@ var probeChecks = (p) => [
   ...p.unreachable === void 0 ? [] : ["unreachable"],
   ...p.loopback === void 0 ? [] : ["loopback"],
   ...p.smb === void 0 ? [] : ["smb"],
-  ...p.noStoredCredentials === true ? ["credentials"] : [],
-  ...p.persistence === true ? ["persistence"] : []
+  ...p.noStoredCredentials === true ? ["credentials"] : []
 ];
 var PROBE_CHECKS = [
   "user",
@@ -40741,7 +41064,8 @@ var PROBE_CHECKS = [
   "direct",
   "proxy",
   "tasks",
-  "former"
+  "former",
+  "fresh"
 ];
 async function probeWindowsSandbox(o2) {
   const r = await probeWindowsResults(o2);
@@ -40749,6 +41073,7 @@ async function probeWindowsSandbox(o2) {
 }
 async function probeWindowsResults(o2) {
   const start2 = o2.spawn ?? spawnKeeper;
+  const account = await o2.grants.ready();
   const name = `probe-${randomBytes9(4).toString("hex")}`;
   const files = ownerFiles(o2.stateRoot, name);
   const canary = join27(o2.ownerConfigDir, "crew-probe-canary");
@@ -40759,13 +41084,12 @@ async function probeWindowsResults(o2) {
     const k = await start2({
       args: keeperArgs({
         script: keeperFile(o2.stateRoot),
-        credFile: o2.credFile,
+        credFile: o2.grants.credFile,
         node: o2.node ?? process.execPath,
         cwd: o2.env.SystemRoot ?? o2.env.SYSTEMROOT ?? "C:\\Windows",
         out: files.out,
         err: files.err,
-        user: o2.user,
-        ...o2.machine === true ? { machine: true } : {}
+        user: account.user
       }),
       env: powershellEnv(o2.env),
       stdin: `${JSON.stringify(revoke)}
@@ -40786,20 +41110,17 @@ ${JSON.stringify(spec)}`,
   const unfinished = "the Windows crew sandbox could not be shown to hold here: the probe as the crew user did not finish";
   try {
     const mark = randomBytes9(8).toString("hex");
-    let former;
-    if (o2.grants !== void 0) {
-      ensureStateDir(o2.stateRoot, formerDir);
-      const file4 = join27(formerDir, "made-by-the-crew-user.txt");
-      await o2.grants.grant([{ path: formerDir, rights: "M" }]);
-      const seeded = await host({ mode: "seed", seed: file4, env: o2.env });
-      await o2.grants.revokeAll();
-      if (!seeded) return { problem: unfinished };
-      former = { dir: formerDir, file: file4 };
-    }
+    ensureStateDir(o2.stateRoot, formerDir);
+    const file4 = join27(formerDir, "made-by-the-crew-user.txt");
+    await o2.grants.grant([{ path: formerDir, rights: "M" }]);
+    const seeded = await host({ mode: "seed", seed: file4, env: o2.env });
+    await o2.grants.revokeAll();
+    if (!seeded) return { problem: unfinished };
+    const former = { dir: formerDir, file: file4 };
     const spec = {
       mode: "probe",
       probe: {
-        user: o2.user,
+        user: account.user,
         mark,
         mustNotRead: [canary, o2.ownerHome, ...o2.mustNotRead],
         mustNotWrite: [
@@ -40811,14 +41132,12 @@ ${JSON.stringify(spec)}`,
         ],
         direct: { host: "github.com", port: 443 },
         proxy: { port: o2.proxyPort, refused: "example.invalid" },
-        ...former === void 0 ? {} : { former },
+        former,
+        fresh: { sid: account.sid, notBefore: account.at },
         ...o2.extra ?? {}
       },
       env: { ...o2.env, STUDIO_PROBE_MARK: mark }
     };
-    if (o2.extra?.persistence === true && !await host({ mode: "reset", env: o2.env })) {
-      return { problem: unfinished };
-    }
     if (!await host(spec)) return { problem: unfinished };
     let results;
     try {
@@ -40844,7 +41163,7 @@ ${JSON.stringify(spec)}`,
     removeStateEntry(dirname9(canary), canary);
   }
 }
-var credFileIn = (ownerConfigDir2) => join27(ownerConfigDir2, "windows-crew.xml");
+var credFileIn = (ownerConfigDir2) => join27(ownerConfigDir2, "windows-crew.bin");
 function findClaude(path10) {
   for (const dir of (path10 ?? "").split(";")) {
     if (dir === "") continue;
@@ -40895,34 +41214,39 @@ function runConfigDir(homeDir, shared) {
 }
 async function windowsWorker(o2) {
   const run2 = o2.run ?? runFile2;
-  const credFile = credFileIn(o2.ownerConfigDir);
   const path10 = o2.env.PATH ?? o2.env.Path;
   const claudeBin = findClaude(path10);
   const proxy = await o2.startProxy([...o2.networkAllow, ...CLAUDE_HOSTS]);
-  const grants = new WindowsGrants({ ownerRoot: o2.ownerRoot, user: o2.user, run: run2 });
-  const missing = () => !existsSync7(credFile) ? `no crew user credential at ${credFile}: run the script of studio worker windows-setup` : claudeBin === void 0 ? "claude is not on PATH" : void 0;
+  const accounts = o2.accounts ?? localCrewAccounts({
+    prefix: o2.prefix,
+    credFile: credFileIn(o2.ownerConfigDir),
+    run: run2,
+    reader: async () => (await ownerSid(run2)).slice(1)
+  });
+  const grants = new WindowsGrants({ ownerRoot: o2.ownerRoot, accounts, run: run2 });
   return {
     claude: windowsClaude({
       stateRoot: o2.stateRoot,
-      credFile,
       claudeBin: claudeBin ?? "claude",
-      user: o2.user,
       grants,
       run: run2,
       ...o2.spawn === void 0 ? {} : { spawn: o2.spawn }
     }),
     sandbox: {
-      user: o2.user,
+      user: o2.prefix,
       async probe(mustNotRead) {
-        const why = missing();
-        if (why !== void 0) return why;
+        if (claudeBin === void 0) return "claude is not on PATH";
         try {
           return await probe(mustNotRead);
         } catch (e) {
           return `the Windows crew sandbox could not be shown to hold here: ${e.message}`;
         }
       },
-      launch: { user: o2.user, proxyPort: proxy.port, grant: (g3) => grants.grant(g3) }
+      launch: {
+        user: o2.prefix,
+        proxyPort: proxy.port,
+        grant: (g3) => grants.grant(g3, { launch: true })
+      }
     },
     close: () => proxy.close()
   };
@@ -40936,8 +41260,6 @@ async function windowsWorker(o2) {
     });
     return probeWindowsSandbox({
       stateRoot: o2.stateRoot,
-      credFile,
-      user: o2.user,
       ownerHome: o2.ownerHome,
       ownerConfigDir: o2.ownerConfigDir,
       mustNotRead,
@@ -54385,7 +54707,7 @@ var BOARD_TEXT = (prefix, repo) => `# The Studio board: one entry per work item,
 #     history: []
 items: []
 `;
-function prefixOf(repo) {
+function prefixOf2(repo) {
   const letters = (repo.split("/").at(-1) ?? "").toUpperCase().replace(/[^A-Z]/g, "");
   return letters.slice(0, 8) || "ITEM";
 }
@@ -54606,7 +54928,7 @@ async function runInit(o2) {
     }
   );
   const repo = primary ?? "owner/name";
-  const prefix = prefixOf(repo);
+  const prefix = prefixOf2(repo);
   const ghMs = o2.timeouts?.ghMs ?? GH_TIMEOUT_MS3;
   const ci = primary === void 0 ? void 0 : await detectCi(o2.project, primary, o2.ports, void 0, ghMs);
   let ciBlock = ci?.proposal.ci;
@@ -54755,9 +55077,9 @@ var LESSONS_NOTE = "lessons-review: ";
 var NUMBERS_NOTE = "lessons: ";
 var LEAD_WORK = "lead work: studio lessons, then accept or drop each proposal";
 var BY = "studio";
-var recordFile2 = (stateRoot) => join41(stateRoot, "lessons-review.json");
+var recordFile = (stateRoot) => join41(stateRoot, "lessons-review.json");
 function lastRun(stateRoot) {
-  const file4 = recordFile2(stateRoot);
+  const file4 = recordFile(stateRoot);
   try {
     assertStatePath(stateRoot, file4);
     if (!lstatSync35(file4).isFile()) return void 0;
@@ -54831,7 +55153,7 @@ async function runLessonsReview(o2) {
   });
   writeStateFile(
     o2.stateRoot,
-    recordFile2(o2.stateRoot),
+    recordFile(o2.stateRoot),
     `${JSON.stringify({ lastRun: o2.now.toISOString() })}
 `
   );
@@ -55278,7 +55600,7 @@ function boardPrefix(board, repo) {
   }
   let best;
   for (const [p, c3] of counts) if (best === void 0 || c3 > (counts.get(best) ?? 0)) best = p;
-  return best ?? prefixOf(repo);
+  return best ?? prefixOf2(repo);
 }
 async function addItem(o2) {
   const title = o2.title?.trim();
@@ -56807,7 +57129,7 @@ function ciFailurePolicy(o2) {
     placed.set(key, result);
     return result;
   };
-  const settle2 = (ref, head, outcome) => {
+  const settle3 = (ref, head, outcome) => {
     const now = o2.now();
     const settled = withLedger(o2.stateRoot, now, (entries2) => {
       const mine = entries2.find((e) => e.repo === ref.repo && e.sha === head);
@@ -56831,7 +57153,7 @@ function ciFailurePolicy(o2) {
         if (known !== void 0) {
           const stale = current?.failed.every((c3) => known.jobs.includes(c3.job)) === true;
           if (stale && o2.now().getTime() - Date.parse(known.at) < RERUN_SETTLE_MS) return "wait";
-          settle2(ref, head, "fail");
+          settle3(ref, head, "fail");
           return "fail";
         }
         if (current === void 0) return "fail";
@@ -56876,7 +57198,7 @@ function ciFailurePolicy(o2) {
           }
           if (started > 0) break;
           o2.log(`error: rerun of run ${run2} failed (gh exit ${r.code}); a real failure now`);
-          settle2(ref, head, "fail");
+          settle3(ref, head, "fail");
           return "fail";
         }
         o2.events.reruns.push({
@@ -56910,7 +57232,7 @@ function ciFailurePolicy(o2) {
     },
     passed(ref, head) {
       try {
-        settle2(ref, head, "pass");
+        settle3(ref, head, "pass");
       } catch (e) {
         o2.log(`error: flaky ledger: ${say(e)}`);
       }
@@ -59411,7 +59733,7 @@ var COMMANDS = [
   },
   {
     usage: "worker windows-setup",
-    about: "Print the one-time PowerShell script of the Windows crew sandbox user (run it elevated)"
+    about: "Print the one-time PowerShell script of the group of the Windows crew users, one per job (run it elevated)"
   },
   {
     usage: "relay serve [--home <dir>] [--lead <name>]",
@@ -60834,7 +61156,16 @@ var join54 = (...parts) => parts[0]?.startsWith("/") === true ? posix2.join(...p
 var relayHomeDefault = (env) => join54(env.ProgramData ?? env.PROGRAMDATA ?? "C:\\ProgramData", "Studio", "relay");
 var relayMachineDefault = (env) => join54(env.ProgramFiles ?? env.PROGRAMFILES ?? "C:\\Program Files", "Studio", "relay");
 var machineCredFile = (machine) => join54(machine, "crew-credential.bin");
-var brokerResultFile = (machine) => join54(machine, "broker", "answer.json");
+var brokerResultFiles = (machine) => ({
+  sweep: join54(machine, "broker", "answer.json"),
+  retire: join54(machine, "broker", "retire.json"),
+  fresh: join54(machine, "broker", "fresh.json")
+});
+var brokerTasks = (task) => ({
+  sweep: task,
+  retire: `${task} retire`,
+  fresh: `${task} fresh`
+});
 var authorizedKeysFile = (machine) => join54(machine, "authorized_keys");
 var machineNode = (machine) => join54(machine, "node", "node.exe");
 var machineStudio = (machine) => join54(machine, "studio");
@@ -60884,60 +61215,14 @@ function leadFromAuthInfo(authInfo, keysText) {
   }
   return void 0;
 }
-var brokerScript = (o2) => [
-  "$ErrorActionPreference = 'Stop'",
-  `$result = ${psQuote(o2.result)}`,
-  "try {",
-  `  $sid = (New-Object Security.Principal.NTAccount($env:COMPUTERNAME, ${psQuote(o2.crewUser)})).Translate([Security.Principal.SecurityIdentifier]).Value`,
-  "  function Crew { @(Get-CimInstance Win32_Process | Where-Object { try { (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $sid } catch { $false } }) }",
-  "  $found = Crew",
-  "  foreach ($p in $found) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }",
-  "  if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }",
-  "  $left = @(Crew | ForEach-Object { [int]$_.ProcessId })",
-  "  $out = @{ at = (Get-Date).ToUniversalTime().ToString('o'); found = $found.Count; left = $left }",
-  "} catch {",
-  "  $out = @{ at = (Get-Date).ToUniversalTime().ToString('o'); error = $_.Exception.Message }",
-  "}",
-  "Set-Content -LiteralPath $result -Value (ConvertTo-Json -Compress $out) -Encoding UTF8"
-].join("\r\n");
-var brokerArguments = (o2) => `-NoProfile -NonInteractive -EncodedCommand ${Buffer.from(brokerScript(o2), "utf16le").toString("base64")}`;
-async function brokerSweep(o2) {
-  const started = o2.now().getTime();
-  const r = await o2.run("schtasks.exe", ["/Run", "/TN", o2.task]);
-  if (r.code !== 0) {
-    throw new Error(
-      `cannot start the broker task ${o2.task} (schtasks exit ${r.code}); run the script of studio relay setup again, elevated`
-    );
-  }
-  const until = started + (o2.waitMs ?? 6e4);
-  for (; ; ) {
-    const text = o2.readFile(o2.result)?.replace(/^\uFEFF/, "");
-    let answer2;
-    try {
-      answer2 = text === void 0 ? void 0 : JSON.parse(text);
-    } catch {
-      answer2 = void 0;
-    }
-    const at2 = typeof answer2?.at === "string" ? Date.parse(answer2.at) : Number.NaN;
-    if (answer2 !== void 0 && at2 >= started - 1e3) {
-      if (typeof answer2.error === "string") {
-        throw new Error(
-          `the broker could not end the crew user's processes: ${answer2.error.slice(0, 200)}`
-        );
-      }
-      const left = Array.isArray(answer2.left) ? answer2.left : void 0;
-      if (left === void 0) throw new Error("the broker answered in an unknown shape");
-      if (left.length > 0) {
-        throw new Error(
-          `processes of the crew user are still running (${left.join(", ")}) and the broker cannot end them`
-        );
-      }
-      return;
-    }
-    if (o2.now().getTime() >= until) throw new Error(`the broker task ${o2.task} did not answer`);
-    await o2.sleep(500);
-  }
-}
+var brokerScript = (o2) => crewAccountScript({
+  op: o2.op,
+  prefix: o2.prefix,
+  result: brokerResultFiles(o2.machine)[o2.op],
+  ...o2.op === "fresh" ? { credFile: machineCredFile(o2.machine), reader: "$relaySid" } : {}
+}).split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#")).join("\r\n");
+var brokerArgumentsSnippet = (script) => `$brokerScript = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(script, "utf8").toString("base64")}')).Replace('${RELAY_SID_SLOT}', $relaySid)
+$brokerArgs = '-NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($brokerScript))`;
 async function psJson(run2, script) {
   const r = await run2("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
     env: powershellEnv(process.env),
@@ -61093,8 +61378,8 @@ function NoLinksIn([string]$path) {
 }
 `;
 function relaySetupScript(o2) {
-  for (const u2 of [o2.relayUser, o2.crewUser]) {
-    if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(u2)) throw new Error(`not a local user name: ${u2}`);
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o2.relayUser)) {
+    throw new Error(`not a local user name: ${o2.relayUser}`);
   }
   if (!/^[A-Za-z0-9 _-]{1,64}$/.test(o2.task)) throw new Error(`not a task name: ${o2.task}`);
   const list2 = (ps) => `@(${ps.map(psQuote).join(", ")})`;
@@ -61104,20 +61389,18 @@ function relaySetupScript(o2) {
 if ($LASTEXITCODE -ne 0) { throw 'the plugin setup failed' }
 $claude = ${psQuote(join54(machineConfig(o2.machine), "studio", "claude"))}
 foreach ($d in @((Join-Path $claude 'skills'), (Join-Path $claude 'plugins'))) {
-  if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($crewSid):(OI)(CI)RX" /L /Q | Out-Null }
+  if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
 }`;
-  return `${o2.install === void 0 ? "" : installHead(o2.install, o2.relayUser, o2.crewUser)}#Requires -RunAsAdministrator
+  return `${o2.install === void 0 ? "" : installHead(o2.install, o2.relayUser, o2.crewPrefix)}#Requires -RunAsAdministrator
 # Studio: the setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
 # Nothing here leaves this machine.
 $ErrorActionPreference = 'Stop'
 $relay = ${psQuote(o2.relayUser)}
-$crew = ${psQuote(o2.crewUser)}
 $home_ = ${psQuote(o2.home)}
 $machine = ${psQuote(o2.machine)}
 $task = ${psQuote(o2.task)}
-${FOLDER_FUNCTIONS}function NewSecret { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b) + 'aA1!' }
-function EnsureUser([string]$name, [string]$what, [string]$plain) {
+${FOLDER_FUNCTIONS}${crewAccountFunctions(o2.crewPrefix)}function EnsureUser([string]$name, [string]$what, [string]$plain) {
   $u = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
   if ($null -eq $u) {
     if (-not $plain) { $plain = NewSecret }
@@ -61138,20 +61421,17 @@ SafeFolder $home_ (Split-Path -Parent $dataStudio)
 SafeFolder $machine (Split-Path -Parent $filesStudio)
 # The relay account: a standard user the lead logs in as over SSH, with a password nobody sees.
 $relaySid = (EnsureUser $relay 'Studio relay (SSH, forced command)' $null).SID.Value
-$plain = $null
-$credFile = ${psQuote(machineCredFile(o2.machine))}
-if (-not (Test-Path -LiteralPath $credFile) -or $null -eq (Get-LocalUser -Name $crew -ErrorAction SilentlyContinue)) {
-  $plain = NewSecret
-}
-$crewSid = (EnsureUser $crew 'Studio crew sandbox' $plain).SID.Value
-# The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew user reads
+# Studio's group of crew users (one user per job, made and deleted by the broker), with its firewall
+# rule, denied logons and read grants on Claude Code and the toolchains.
+$readPaths = ${list2(o2.readPaths)}
+${crewGroupSetup()}# The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew users read
 # Node.js and Studio only.
 $tree = 'ContainerInherit, ObjectInherit'
 $rx = 'ReadAndExecute, Synchronize'
 StrictFolder $filesStudio @(,@($relaySid, $rx, $tree, 'None'))
 StrictFolder $machine @(,@($relaySid, $rx, $tree, 'None'))
 foreach ($sub in @('broker', 'config', 'setup-state', 'pairing')) { StrictFolder (Join-Path $machine $sub) @(,@($relaySid, $rx, $tree, 'None')) }
-foreach ($sub in @('node', 'studio')) { StrictFolder (Join-Path $machine $sub) @(@($relaySid, $rx, $tree, 'None'), @($crewSid, $rx, $tree, 'None')) }
+foreach ($sub in @('node', 'studio')) { StrictFolder (Join-Path $machine $sub) @(@($relaySid, $rx, $tree, 'None'), @($groupSid, $rx, $tree, 'None')) }
 # The copies the forced command runs: never the files of an account that can change them, and no
 # junction of the source copied along.
 Copy-Item -LiteralPath ${psQuote(o2.source.node)} -Destination ${psQuote(machineNode(o2.machine))} -Force
@@ -61165,64 +61445,36 @@ StrictFolder $dataStudio @(,@($relaySid, $rx, 'None', 'None'))
 StrictFolder $home_ @(,@($relaySid, $rx, 'None', 'None'))
 NoLinksIn $home_
 StrictFolder (Join-Path $home_ 'state') @(@($relaySid, 'ReadAndExecute, CreateFiles, CreateDirectories, Synchronize', 'None', 'None'), @($relaySid, 'Modify, Synchronize', $tree, 'InheritOnly'))
-# The crew user's password, sealed for this machine (LocalMachine DPAPI): an SSH key logon cannot
-# open the relay account's own DPAPI keys. Only SYSTEM, administrators and the relay account read it.
-if ($plain) {
-  Add-Type -AssemblyName System.Security
-  $sealed = [Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes($plain), $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
-  $plain = $null
-  $tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
-  [IO.File]::WriteAllBytes($tmp, $sealed)
-  icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
-  if (Test-Path -LiteralPath $credFile) { [IO.File]::Replace($tmp, $credFile, $null) } else { [IO.File]::Move($tmp, $credFile) }
-}
-icacls $credFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
-# No direct network for the crew user: every outbound connection to anything but loopback.
-$rule = 'Studio crew ' + $crew + ': no direct network'
-Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-New-NetFirewallRule -DisplayName $rule -Direction Outbound -Action Block -LocalUser "D:(A;;CC;;;$crewSid)" -RemoteAddress @(${OUTSIDE.map(psQuote).join(", ")}) | Out-Null
-# The crew user logs on only through the keeper: no batch job, service, network or remote desktop.
-$cfg = Join-Path $env:TEMP ('studio-rights-' + [Guid]::NewGuid().ToString('N') + '.inf')
-$db = [IO.Path]::ChangeExtension($cfg, '.sdb')
-secedit /export /cfg $cfg /areas USER_RIGHTS | Out-Null
-$lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $cfg)
-$at = $lines.IndexOf('[Privilege Rights]')
-if ($at -lt 0) { throw 'secedit gave no [Privilege Rights] section' }
-foreach ($right in @('SeDenyBatchLogonRight', 'SeDenyServiceLogonRight', 'SeDenyNetworkLogonRight', 'SeDenyRemoteInteractiveLogonRight')) {
-  $i = -1
-  for ($k = 0; $k -lt $lines.Count; $k++) { if ($lines[$k] -like "$right *") { $i = $k } }
-  if ($i -lt 0) { $lines.Insert($at + 1, "$right = *$crewSid") }
-  elseif ($lines[$i] -notlike "**$crewSid*") { $lines[$i] = $lines[$i] + ",*$crewSid" }
-}
-Set-Content -LiteralPath $cfg -Value $lines -Encoding Unicode
-secedit /configure /db $db /cfg $cfg /areas USER_RIGHTS /quiet | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "secedit could not set the logon rights ($LASTEXITCODE)" }
-Remove-Item -LiteralPath $cfg, $db -ErrorAction SilentlyContinue
-# The broker: ends every process of the crew user and resets its profile, as SYSTEM, with no
-# argument; its script is the action itself, so no file of it exists. Only the relay account (and
-# administrators) may start it; it answers in a folder the relay account can only read.
+# A crew user's password is sealed for this machine by the fresh broker, per job; one of a crew user
+# of an earlier version goes.
+Remove-Item -LiteralPath ${psQuote(machineCredFile(o2.machine))} -Force -ErrorAction SilentlyContinue
+# The brokers: as SYSTEM, with no argument, each its script in its action, so no file of it exists:
+# one ends every process of the crew users, one also deletes them with their profiles, one also
+# makes the fresh crew user of a job. Only the relay account (and administrators) may start them;
+# they answer in a folder the relay account can only read.
 $service = New-Object -ComObject Schedule.Service
 $service.Connect()
 $folder = $service.GetFolder('\\')
+# SYSTEM runs them; SYSTEM and administrators own them; the relay account may read and run them.
+$sddl = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;$relaySid)"
+${["sweep", "retire", "fresh"].map(
+    (op) => `${brokerArgumentsSnippet(brokerScript({ op, prefix: o2.crewPrefix, machine: o2.machine }))}
 $def = $service.NewTask(0)
-$def.Settings.ExecutionTimeLimit = 'PT5M'
+$def.Settings.ExecutionTimeLimit = 'PT10M'
 $def.Settings.MultipleInstances = 2
 $action = $def.Actions.Create(0)
 $action.Path = 'powershell.exe'
-$action.Arguments = ${psQuote(brokerArguments({ crewUser: o2.crewUser, result: brokerResultFile(o2.machine) }))}
-# SYSTEM runs it; SYSTEM and administrators own it; the relay account may read and run it.
-$sddl = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;$relaySid)"
-$null = $folder.RegisterTaskDefinition($task, $def, 6, 'SYSTEM', $null, 5, $sddl)
-# WebDAV paths (\\\\host@80\\) pass the crew user's firewall rule through the WebClient service:
+$action.Arguments = $brokerArgs
+$null = $folder.RegisterTaskDefinition(${psQuote(brokerTasks(o2.task)[op])}, $def, 6, 'SYSTEM', $null, 5, $sddl)
+`
+  ).join(
+    ""
+  )}# WebDAV paths (\\\\host@80\\) pass the crew user's firewall rule through the WebClient service:
 # it is stopped and disabled.
 Write-Output 'Stopping and disabling the WebClient service (WebDAV), which the crew sandbox does not hold.'
 if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
   Stop-Service -Name WebClient -Force -ErrorAction SilentlyContinue
   Set-Service -Name WebClient -StartupType Disabled
-}
-# Read, never write, for the crew user on Claude Code and the toolchains.
-foreach ($p in ${list2(o2.readPaths)}) {
-  if (Test-Path -LiteralPath $p) { icacls $p /grant "\${crew}:(OI)(CI)RX" /L /Q | Out-Null }
 }
 # The pinned plugins in the crew Claude config dir of the relay home.
 ${pluginSetup}
@@ -61232,7 +61484,7 @@ var setupTail = (block) => `Write-Output 'Add this block at the end of sshd_conf
 Write-Output @'
 ${block}'@
 Write-Output 'Authorize the lead with studio relay install --pair "<line>" (the line studio relay pair prints on the lead).'
-Write-Output "Studio relay worker is ready: relay account $relay, crew user $crew."
+Write-Output "Studio relay worker is ready: relay account $relay, crew users of group $($prefix)s, one per job."
 `;
 function authorizedKeysScript(o2) {
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o2.relayUser)) throw new Error("not a local user name");
@@ -61241,7 +61493,7 @@ $relaySid = (Get-LocalUser -Name ${psQuote(o2.relayUser)}).SID.Value
 ${adminFileSnippet({ file: o2.file, lines: o2.lines, readers: "relay" })}
 `;
 }
-var installHead = (i2, relayUser, crewUser) => `#Requires -RunAsAdministrator
+var installHead = (i2, relayUser, crewPrefix2) => `#Requires -RunAsAdministrator
 $ErrorActionPreference = 'Stop'
 $ok = $false
 function SshdOff {
@@ -61249,27 +61501,25 @@ function SshdOff {
   Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Disable-NetFirewallRule
 }
 # No relay job may run while the install walks the folders and sets their ACLs: a runner or crew
-# could plant a link between the two. Every process of the relay account or the crew user counts.
+# could plant a link between the two. Every process of the relay account or a crew user counts.
 $forceStop = ${i2.forceStop === true ? "$true" : "$false"}
 function RelayProcesses {
-  @(foreach ($n in @(${psQuote(relayUser)}, ${psQuote(crewUser)})) {
-    $u = Get-LocalUser -Name $n -ErrorAction SilentlyContinue
-    if ($null -eq $u) { continue }
-    $sid = $u.SID.Value
-    Get-CimInstance Win32_Process | Where-Object { try { (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $sid } catch { $false } }
-  })
+  $crewRe = '^' + [regex]::Escape(${psQuote(crewPrefix2)}) + '-[0-9a-f]{6}$'
+  $sids = @(Get-LocalUser | Where-Object { $_.Name -eq ${psQuote(relayUser)} -or ($_.Name -match $crewRe -and $_.Description -eq ${psQuote(CREW_DESCRIPTION)}) } | ForEach-Object { $_.SID.Value })
+  if ($sids.Count -eq 0) { return @() }
+  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })
 }
 function NoRelayJob {
   $running = RelayProcesses
   if ($running.Count -eq 0) { return }
-  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or the crew user): let it end, or run this again with --force-stop" }
-  Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew user (--force-stop)."
+  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or a crew user): let it end, or run this again with --force-stop" }
+  Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew users (--force-stop)."
   for ($t = 0; $t -lt 20 -and $running.Count -gt 0; $t++) {
     foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Milliseconds 500
     $running = RelayProcesses
   }
-  if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew user' }
+  if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew users' }
 }
 # Before sshd stops: a running job is refused while the lead can still reach it.
 NoRelayJob
@@ -62718,7 +62968,7 @@ async function runRelayJob(c3, id, specText) {
     throw new Error("the runner got a spec for no starting job");
   }
   writeJob(c3, { ...rec, handoff: spec.nonce, runnerPid: process.pid });
-  const settle2 = (state, line4, extra = {}) => {
+  const settle3 = (state, line4, extra = {}) => {
     const now = readJob(c3, id) ?? rec;
     writeJob(c3, { ...now, ...extra, state, ...line4 === void 0 ? {} : { line: line4 } });
     return state;
@@ -62743,7 +62993,7 @@ async function runRelayJob(c3, id, specText) {
     });
     if (ready.warnings.length > 0)
       writeJob(c3, { ...readJob(c3, id) ?? rec, warnings: ready.warnings });
-    if (ready.problem !== void 0) return settle2(ready.problem.kind, ready.problem.line);
+    if (ready.problem !== void 0) return settle3(ready.problem.kind, ready.problem.line);
     const contentDir = await pinnedContent({ project, ports: c3.ports }, stateRoot, job.sha);
     if (c3.windows !== void 0 && c3.platform().platform === "win32") {
       windows = await c3.windows.launch(config2.sandbox.networkAllow);
@@ -62770,7 +63020,7 @@ async function runRelayJob(c3, id, specText) {
         noToken: true
       }
     );
-    settle2("running", void 0, { crewStartedAt: c3.ports.clock.now().toISOString() });
+    settle3("running", void 0, { crewStartedAt: c3.ports.clock.now().toISOString() });
     if (windows === void 0) return "running";
     const crewRec = () => readCrewRecords(stateRoot)[id];
     for (; ; ) {
@@ -62781,11 +63031,16 @@ async function runRelayJob(c3, id, specText) {
       await c3.ports.clock.sleep(15e3);
     }
     const after2 = readJob(c3, id);
-    return after2?.state === "stopped" ? "stopped" : settle2("ended");
+    try {
+      await c3.windows?.retire();
+    } catch (e) {
+      c3.log?.(`${id}: the crew user is not deleted yet: ${e.message}`);
+    }
+    return after2?.state === "stopped" ? "stopped" : settle3("ended");
   } catch (e) {
     const line4 = e.message;
     c3.log?.(`${id}: ${line4}`);
-    return settle2(e instanceof HeldError ? "held" : "refused", line4);
+    return settle3(e instanceof HeldError ? "held" : "refused", line4);
   } finally {
     await windows?.close();
   }
@@ -63373,10 +63628,11 @@ function relayWindows(o2) {
   const path10 = o2.env.PATH ?? o2.env.Path;
   const claudeBin = findClaude(path10) ?? "claude";
   const ifaces = () => (o2.interfaces ?? networkInterfaces2)();
-  const sweep = () => brokerSweep({
+  const accounts = brokerCrewAccounts({
     run: run2,
-    task: o2.task,
-    result: brokerResultFile(o2.machine),
+    tasks: brokerTasks(o2.task),
+    results: brokerResultFiles(o2.machine),
+    credFile,
     readFile: (f3) => {
       try {
         return readFileSync54(f3, "utf8");
@@ -63387,15 +63643,12 @@ function relayWindows(o2) {
     now: () => /* @__PURE__ */ new Date(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms))
   });
-  const grants = new WindowsGrants({ ownerRoot: o2.ownerRoot, user: o2.user, run: run2, sweep });
+  const grants = new WindowsGrants({ ownerRoot: o2.ownerRoot, accounts, run: run2 });
   const claude = () => windowsClaude({
     stateRoot: o2.stateRoot,
-    credFile,
     claudeBin,
-    user: o2.user,
     grants,
     run: run2,
-    machine: true,
     ...o2.spawn === void 0 ? {} : { spawn: o2.spawn }
   });
   return {
@@ -63411,8 +63664,6 @@ function relayWindows(o2) {
           warnings: warnings2
         };
       }
-      const cred = await machineCredProblem(run2, credFile);
-      if (cred !== void 0) return { problem: { kind: "refused", line: cred }, warnings: warnings2 };
       const web = await webClientProblem(run2);
       if (web !== void 0) return { problem: { kind: "held", line: web }, warnings: warnings2 };
       const listeners = await loopbackListeners(run2);
@@ -63464,13 +63715,24 @@ function relayWindows(o2) {
           return { host: e.slice(0, at2).replace(/^\[|\]$/g, ""), port: Number(e.slice(at2 + 1)) };
         })
       ];
+      try {
+        await grants.ready();
+      } catch (e) {
+        return {
+          problem: {
+            kind: e instanceof HeldError ? "held" : "refused",
+            line: `no crew user for the coming job: ${e.message}`
+          },
+          warnings: warnings2
+        };
+      }
+      const cred = await machineCredProblem(run2, credFile);
+      if (cred !== void 0) return { problem: { kind: "refused", line: cred }, warnings: warnings2 };
       const proxy = await o2.startProxy([...CLAUDE_HOSTS]);
       try {
         const tmp = join58(o2.stateRoot, "tmp");
         const r = await probeWindowsResults({
           stateRoot: o2.stateRoot,
-          credFile,
-          user: o2.user,
           ownerHome: o2.ownerHome,
           ownerConfigDir: o2.ownerConfigDir,
           mustNotRead: [...deny.paths, o2.home, credFile],
@@ -63481,14 +63743,12 @@ function relayWindows(o2) {
             ...windowsCrewEnv({ proxyPort: proxy.port, homeDir: tmp, tmpDir: tmp, base: o2.env }),
             PATH: path10 ?? ""
           },
-          machine: true,
           timeoutMs: 3e5,
           extra: {
             unreachable,
             loopback,
             smb: candidates.hosts,
-            noStoredCredentials: true,
-            persistence: true
+            noStoredCredentials: true
           },
           ...o2.spawn === void 0 ? {} : { spawn: o2.spawn }
         });
@@ -63511,12 +63771,17 @@ function relayWindows(o2) {
       const proxy = await o2.startProxy([...networkAllow, ...CLAUDE_HOSTS]);
       return {
         claude: claude(),
-        launch: { user: o2.user, proxyPort: proxy.port, grant: (g3) => grants.grant(g3) },
+        launch: {
+          user: o2.prefix,
+          proxyPort: proxy.port,
+          grant: (g3) => grants.grant(g3, { launch: true })
+        },
         close: () => proxy.close()
       };
     },
     claude,
-    sweep
+    sweep: () => accounts.sweep(),
+    retire: () => grants.retire()
   };
 }
 async function machineTreeProblem(run2, o2) {
@@ -64670,7 +64935,7 @@ function relayContext(o2) {
     log: o2.log,
     ...native ? {
       windows: relayWindows({
-        user: settings.windows?.crewUser ?? "studio-crew",
+        prefix: settings.windows?.crewUser ?? "studio-crew",
         home,
         machine: machineOf(),
         task: settings.windows?.broker ?? "Studio relay broker",
@@ -64858,7 +65123,7 @@ function setupScriptFor(o2) {
   const claude = findClaude(o2.env.PATH ?? o2.env.Path);
   return relaySetupScript({
     relayUser: o2.relayUser,
-    crewUser: settings.windows?.crewUser ?? "studio-crew",
+    crewPrefix: settings.windows?.crewUser ?? "studio-crew",
     home: o2.home,
     machine: o2.machine,
     task: settings.windows?.broker ?? "Studio relay broker",
@@ -65564,10 +65829,10 @@ var SKILLS_CHECK_DAYS = 30;
 var DAY_MS6 = 864e5;
 var NOTE = "skills-update: ";
 var PLUGIN_TIMEOUT_MS = 3e5;
-var recordFile3 = (stateRoot) => join62(stateRoot, "skills-check.json");
+var recordFile2 = (stateRoot) => join62(stateRoot, "skills-check.json");
 var at = (v) => typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : void 0;
 function readRecord(stateRoot) {
-  const file4 = recordFile3(stateRoot);
+  const file4 = recordFile2(stateRoot);
   try {
     assertStatePath(stateRoot, file4);
     if (!lstatSync47(file4).isFile()) return {};
@@ -65768,7 +66033,7 @@ async function runSkillsCheck(o2) {
   const lastRun2 = failed2 ? before : now.toISOString();
   writeStateFile(
     o2.stateRoot,
-    recordFile3(o2.stateRoot),
+    recordFile2(o2.stateRoot),
     `${JSON.stringify({ ...lastRun2 === void 0 ? {} : { lastRun: lastRun2 }, lastAttempt: now.toISOString() })}
 `
   );
@@ -68201,16 +68466,15 @@ async function runCli(argv, deps) {
         refuseCrew(deps.env);
         if (rest[0] === "windows-setup" && rest.length === 1) {
           const ownerConfig = loadOwnerConfig(owner);
-          const user = ownerConfig.workers?.self?.windows?.crewUser;
-          if (user === void 0) {
+          const prefix = ownerConfig.workers?.self?.windows?.crewUser;
+          if (prefix === void 0) {
             throw new UsageError(
-              "worker windows-setup needs workers.self.windows.crew_user in the owner config"
+              "worker windows-setup needs workers.self.windows.crew_user (the name prefix of the crew users) in the owner config"
             );
           }
           stdout(
             windowsSetupScript({
-              user,
-              credFile: credFileIn(ownerConfigDir(owner)),
+              prefix,
               readPaths: setupReadPaths({
                 node: process.execPath,
                 claude: findClaude(deps.env.PATH ?? deps.env.Path),
@@ -68245,7 +68509,7 @@ async function runCli(argv, deps) {
         const platformNow = deps.workerPlatform ?? detectPlatform();
         const winUser = loadOwnerConfig(owner).workers?.self?.windows?.crewUser;
         const win = platformNow.platform === "win32" && winUser !== void 0 ? await (deps.windowsWorker ?? windowsWorker)({
-          user: winUser,
+          prefix: winUser,
           stateRoot: stateRootFor(project, owner),
           ownerRoot: ownerStateRootFor(owner),
           crewConfigDir: crewClaudeDir(owner),
