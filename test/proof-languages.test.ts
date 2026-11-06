@@ -32,10 +32,6 @@ describe('the language comes from the file extension', () => {
       ['a/b.jsx', 'javascript'],
       ['a/b.mjs', 'javascript'],
       ['a/b.cjs', 'javascript'],
-      ['scripts/run.sh', 'shell'],
-      ['scripts/run.bash', 'shell'],
-      ['tool/x.py', 'python'],
-      ['tool/x.pyi', 'python'],
       ['.github/workflows/ci.yml', 'yaml'],
       ['k8s/app.YAML', 'yaml'],
       ['Cargo.toml', 'toml'],
@@ -67,6 +63,13 @@ describe('the language comes from the file extension', () => {
       'rs',
       'README',
     ]) {
+      expect(languageOf(p, ALL), p).toBeUndefined();
+    }
+  });
+  it('shell and Python are not applicable: they read their own source and line numbers', () => {
+    expect(ALL).not.toContain('shell');
+    expect(ALL).not.toContain('python');
+    for (const p of ['run.sh', 'run.bash', 'tool.py', 'tool.pyi', 'scripts/X.SH']) {
       expect(languageOf(p, ALL), p).toBeUndefined();
     }
   });
@@ -331,196 +334,6 @@ describe('typescript and javascript', () => {
   });
 });
 
-describe('shell', () => {
-  const sh: ProofLanguage = 'shell';
-  it('plain comments may change; code may not', () => {
-    yes(sh, 'echo a\n', '# say a\necho a # here\n');
-    no(sh, 'echo a\n', 'echo b\n');
-    yes(sh, 'a;\nb\n', 'a; # x\nb\n');
-    no(sh, 'a b\n', 'a # x\nb\n');
-  });
-  it('a # starts a comment only at the start of a word', () => {
-    no(sh, 'echo a#b\n', 'echo a#c\n');
-    no(sh, 'echo ${#x} $# ${x#y}\n', 'echo ${#x} $# ${x#z}\n');
-    no(sh, 'echo \\# a\n', 'echo \\# b\n');
-    no(sh, 'echo \\ #a\n', 'echo \\ #b\n');
-    no(sh, 'echo x\\\n#a\n', 'echo x\\\n#b\n');
-    yes(sh, 'echo x \\\n  y\n', 'echo x \\\n  y # z\n');
-    no(sh, 'x=#a\n', 'x=#b\n');
-    no(sh, "echo '#'a\n", "echo '#'b\n");
-    no(sh, 'echo "x"#a\n', 'echo "x"#b\n');
-    unsure(sh, 'f;#a\n');
-  });
-  it('quotes hold a # as content', () => {
-    no(sh, "echo '# a'\n", "echo '# b'\n");
-    no(sh, 'echo "# a"\n', 'echo "# b"\n');
-    no(sh, "echo $'\\' # a'\n", "echo $'\\' # b'\n");
-    no(sh, 'echo "a\\" # x"\n', 'echo "a\\" # y"\n');
-    no(sh, "echo 'a\n# x\n'\n", "echo 'a\n# y\n'\n");
-    no(sh, 'echo ${x:-"# a"}\n', 'echo ${x:-"# b"}\n');
-    no(sh, 'echo ${x:- #a}\n', 'echo ${x:- #b}\n');
-  });
-  it('$(...) nests in and out of double quotes, with its own comments', () => {
-    yes(sh, 'x="$(f "a"\n)"\n', 'x="$(f "a" # why\n)"\n');
-    no(sh, 'x="$(echo "# a")"\n', 'x="$(echo "# b")"\n');
-    no(sh, 'x="$(echo ")" # a)"\n', 'x="$(echo ")" # b)"\n');
-    yes(sh, 'x=$( (a) )\n', 'x=$( (a) ) # sub\n');
-    unsure(sh, 'x=$(case a in a) echo;; esac)\n');
-  });
-  it('arithmetic has no comments: all of it is code', () => {
-    no(sh, 'x=$(( 1 # a\n))\n', 'x=$(( 1 # b\n))\n');
-    no(sh, '(( i # a\n))\n', '(( i # b\n))\n');
-    no(sh, 'x="$(( 1 #a ))"\n', 'x="$(( 1 #b ))"\n');
-    yes(sh, 'x=$(( (a + b) * 2 ))\n(( i++ ))\n', 'x=$(( (a + b) * 2 )) # sum\n(( i++ )) # next\n');
-    unsure(sh, 'x=$(( $(f) ))\n');
-    unsure(sh, 'x=$(( "1" ))\n');
-    unsure(sh, 'x=$[ 1 #a ]\n');
-    unsure(sh, 'x=`date`\n');
-  });
-  it('here-documents are content up to their delimiter', () => {
-    no(sh, 'cat <<EOF\n# a\nEOF\n', 'cat <<EOF\n# b\nEOF\n');
-    no(sh, "cat <<'EOF'\n# a\nEOF\n", "cat <<'EOF'\n# b\nEOF\n");
-    no(sh, 'cat <<"EOF"\n# a\nEOF\n', 'cat <<"EOF"\n# b\nEOF\n');
-    no(sh, 'cat <<\\EOF\n# a\nEOF\n', 'cat <<\\EOF\n# b\nEOF\n');
-    no(sh, 'cat <<-EOF\n\t# a\n\tEOF\n', 'cat <<-EOF\n\t# b\n\tEOF\n');
-    no(sh, 'cat <<A <<B\n# a\nA\n# b\nB\n', 'cat <<A <<B\n# a\nA\n# c\nB\n');
-    yes(sh, 'cat <<EOF # why\nbody\nEOF\necho\n', 'cat <<EOF # because\nbody\nEOF\n# done\necho\n');
-    no(sh, 'cat <<EOF\nEOFX\n# a\nEOF\n', 'cat <<EOF\nEOFX\n# b\nEOF\n');
-    no(sh, 'x=$(cat <<EOF\n# a\nEOF\n)\n', 'x=$(cat <<EOF\n# b\nEOF\n)\n');
-    yes(sh, 'cat <<<"# a"\n', 'cat <<<"# a" # c\n');
-    no(sh, 'cat <<<"# a"\n', 'cat <<<"# b"\n');
-    unsure(sh, 'cat <<EOF\nno end\n');
-    unsure(sh, 'cat <<E"O"F\nx\nEOF\n');
-    unsure(sh, 'cat <<$X\nx\n$X\n');
-    unsure(sh, 'cat <<EOF "a\nb"\nEOF\n');
-  });
-  it('the shebang and tool directives stay', () => {
-    no(sh, '#!/bin/sh\necho\n', '#!/bin/bash\necho\n');
-    no(sh, 'echo\n', '#!/bin/sh\necho\n');
-    no(sh, 'echo $1\n', '# shellcheck disable=SC2086\necho $1\n');
-    yes(sh, '#!/bin/sh\n# a\necho\n', '#!/bin/sh\n# b\necho\n');
-  });
-  it('a script that reads itself makes its comments code', () => {
-    unsure(sh, '# usage: x\nsed -n "s/^# //p" "$0"\n');
-    unsure(sh, 'grep "^#" "${BASH_SOURCE[0]}"\n');
-    unsure(sh, 'cat ${0}\n');
-    reads(sh, 'echo $10\n');
-    unsure(sh, 'echo "at $LINENO"\n');
-    unsure(sh, 'echo "${BASH_LINENO[0]}"\n');
-  });
-  it('a # whose reading depends on context is refused: [[ ]], extglob, after an operator', () => {
-    // bash may read a # after ( or | inside [[ ]] or a pattern as part of a word
-    unsure(sh, '[[ $x =~ (#a) ]] && echo y\n');
-    unsure(sh, '[[ $x == @(a|#b) ]] && evil\n');
-    unsure(sh, '[[ $x ]] # c\n');
-    unsure(sh, 'shopt -s extglob\ncase $x in @(a|b)) echo;; esac\n');
-    for (const g of ['@(a)', '!(a)', '+(a)', '*(a)', '?(a)']) unsure(sh, `ls ${g}\n`);
-    unsure(sh, 'case $x in a|#b) echo;; esac\n');
-    unsure(sh, 'f(#x\n)\n');
-    unsure(sh, 'x=$(#c\necho)\n');
-    unsure(sh, 'a&&#c\n');
-    unsure(sh, 'echo a;\\\n#c\n');
-    // a blank or a line start before the # stays a comment
-    yes(sh, 'if [ -n "$x" ]; then\n  f\nfi\n', 'if [ -n "$x" ]; then # check\n  f # call\nfi\n');
-    yes(sh, 'a |\n  b\n', 'a | # pipe\n  b\n');
-  });
-  it('anything unterminated proves nothing', () => {
-    for (const t of ["echo 'a", 'echo "a', "echo $'a", 'echo $(a', 'echo ${a', 'echo \\'])
-      unsure(sh, t);
-  });
-});
-
-describe('python', () => {
-  const py: ProofLanguage = 'python';
-  it('plain comments may change; code and indentation may not', () => {
-    yes(py, 'def f():\n    return 1\n', '# f\ndef f():\n    # one\n    return 1  # here\n');
-    no(py, 'def f():\n    return 1\n', 'def f():\n    return 2\n');
-    no(py, 'if a:\n    b\nc\n', 'if a:\n    b\n    c\n');
-    no(py, 'x = 1\n', 'x  = 1\n');
-    yes(py, 'x = [\n    1,\n    2,\n]\n', 'x = [\n    1,  # one\n    # two next\n    2,\n]\n');
-  });
-  it('strings of every kind hold # as content', () => {
-    no(py, "s = '# a'\n", "s = '# b'\n");
-    no(py, 's = "# a"\n', 's = "# b"\n');
-    no(py, 's = """\n# a\n"""\n', 's = """\n# b\n"""\n');
-    no(py, "s = '''\n# a\n'''\n", "s = '''\n# b\n'''\n");
-    no(py, 's = r"\\" # a"\n', 's = r"\\" # b"\n');
-    no(py, "s = b'# a'\n", "s = b'# b'\n");
-    no(py, 's = Rb"# a"\n', 's = Rb"# b"\n');
-    no(py, 'def f():\n    """Doc # a."""\n', 'def f():\n    """Doc # b."""\n');
-  });
-  it('f-strings: fields with strings in the other quote read; anything else in a field is refused', () => {
-    no(py, 's = f"{x} # a"\n', 's = f"{x} # b"\n');
-    yes(py, 's = f"{x[\'k\']}"\n', 's = f"{x[\'k\']}"  # key\n');
-    yes(py, 's = f"{x:>{w}} {{y}}"\n', 's = f"{x:>{w}} {{y}}"  # c\n');
-    // Python 3.12 lets a field reuse the quote: a naive reader would see a comment here
-    unsure(py, 's = f"{"#"} evil()"\n');
-    unsure(py, 's = f"{x # c\n}"\n');
-    unsure(py, 's = f\'{x["a\\n"]}\'\n');
-    unsure(py, 's = f"a}"\n');
-  });
-  it('a backslash continuation joins lines: no comment or dropped line may follow it', () => {
-    yes(py, 'x = 1 + \\\n    2\n', 'x = 1 + \\\n    2  # sum\n');
-    no(py, 'x = 1 + \\\n    2\n', 'x = 1 + \\\n# c\n    2\n');
-    no(py, 'x = 1 + \\\n    2\n', 'x = 1 + \\\n\n    2\n');
-    unsure(py, 'x = 1 + \\ # c\n    2\n');
-  });
-  it('the shebang, the encoding line and tool comments stay', () => {
-    no(py, '#!/usr/bin/env python3\nx = 1\n', '#!/usr/bin/env python\nx = 1\n');
-    for (const c of [
-      '# -*- coding: latin-1 -*-',
-      '# type: ignore',
-      '# noqa: E501',
-      '# pragma: no cover',
-      '# fmt: off',
-      '# pylint: disable=x',
-      '# mypy: strict',
-    ]) {
-      no(py, 'x = 1\n', `${c}\nx = 1\n`);
-      no(py, 'x = 1\n', `x = 1  ${c}\n`);
-    }
-  });
-  it('anything unclear proves nothing', () => {
-    for (const t of [
-      "s = 'open",
-      's = """open',
-      'x = 1 \\ 2',
-      'größe = 1',
-      's = foo"a"',
-      "s = 'a\nb'",
-    ])
-      unsure(py, t);
-  });
-  it('code that reads its own source or line numbers makes its comments code', () => {
-    for (const t of [
-      'print(__file__)\n',
-      'import inspect\n',
-      'import sys\nprint(sys._getframe().f_lineno)\n',
-      'print(f.__code__.co_firstlineno)\n',
-      'import traceback\n',
-      'import linecache\n',
-      'logging.basicConfig(format="%(lineno)d")\nx = lineno\n',
-      'x = e.__traceback__.tb_lineno\n',
-      'getattr(frame, "f_lineno")\n',
-    ]) {
-      unsure(py, t);
-    }
-    reads(py, 'line_no = 1\n');
-  });
-  it('an encoding declaration counts in lines 1 and 2: those lines must stay as they are', () => {
-    const latin = '# -*- coding: latin-1 -*-\nx = 1\n';
-    // a line above moves the declaration to line 3, where CPython no longer reads it
-    no(py, latin, '# note\n# -*- coding: latin-1 -*-\nx = 1\n');
-    no(py, latin, '#!/usr/bin/env python3\n# -*- coding: latin-1 -*-\nx = 1\n');
-    no(py, 'x = 1\n', '# coding=latin-1\nx = 1\n');
-    no(py, '# a\nx = 1\n', '# vim: set fileencoding=latin-1 :\nx = 1\n');
-    // a plain comment that only looks like a declaration, moved into line 2, counts as one
-    no(py, '# x\ny = 1\n# coding: latin-1\n', '# x\n# coding: latin-1\ny = 1\n');
-    yes(py, latin, `${latin}# more\n`);
-    yes(py, '# a\nx = 1\n', '# b\nx = 1\n');
-  });
-});
-
 describe('yaml', () => {
   const y: ProofLanguage = 'yaml';
   it('plain comments may change; data and indentation may not', () => {
@@ -635,24 +448,6 @@ describe('a change to code is never classified as comments only, in any language
       ],
     ],
     [
-      'shell',
-      'a.sh',
-      [
-        [true, 'x="$(f "a")" y=${z:-1}\ncat <<EOF\n# body\nEOF\n'],
-        [false, '# why\n'],
-        [true, "echo 'q' a#b\n"],
-      ],
-    ],
-    [
-      'python',
-      'a.py',
-      [
-        [true, 'def f(x):\n    return f"{x}" + r"\\d"\n'],
-        [false, '# why\n'],
-        [true, "y = '''q'''\n"],
-      ],
-    ],
-    [
       'yaml',
       'a.yml',
       [
@@ -713,8 +508,6 @@ describe('the tokenizers are linear', () => {
     ['rust', 'a.rs', nl('let s = "a"; // c\n/* b /* n */ */ x\n')],
     ['typescript', 'a.tsx', nl('const a = `x${b}`; // c\nf(<p>{x}</p>, /r/g);\n')],
     ['javascript', 'a.js', fill('/* */')],
-    ['shell', 'a.sh', nl('echo "$(a)" ${b} # c\n')],
-    ['python', 'a.py', nl('x = f"{a}" + \'b\'  # c\n')],
     ['yaml', 'a.yml', nl('- a: "x" # c\n  b: [1, 2]\n')],
     ['toml', 'a.toml', nl('a = "x" # c\n')],
   ] as [ProofLanguage, string, string][])(
@@ -728,6 +521,5 @@ describe('the tokenizers are linear', () => {
   it('deep nesting is refused, not a stack overflow', () => {
     unsure('typescript', `${'`${'.repeat(5000)}${'}`'.repeat(5000)}`);
     unsure('typescript', `x = ${'<a>'.repeat(5000)}${'</a>'.repeat(5000)};`, 'a.tsx');
-    unsure('shell', `${'$('.repeat(5000)}${')'.repeat(5000)}\n`);
   });
 });

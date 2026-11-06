@@ -1,41 +1,24 @@
 import { isDeepStrictEqual } from 'node:util';
 import { parseAllDocuments } from 'yaml';
-import {
-  PY_CODING,
-  tokenizeJs,
-  tokenizePython,
-  tokenizeRust,
-  tokenizeShell,
-  tokenizeToml,
-  tokenizeYaml,
-} from './proof-languages.js';
+import { tokenizeJs, tokenizeRust, tokenizeToml, tokenizeYaml } from './proof-languages.js';
 import { no, Out, type Seg, Unclassifiable } from './proof-tokens.js';
 
 /**
  * Built-in proofs for exceptions by evidence: pure functions over the files of the base and the
  * head, no command runs. Each accepts only the boring case and errs towards "not proven".
  *
- * `comments_only` reads SQL as PostgreSQL does, and Rust, TypeScript and JavaScript, shell, Python,
- * YAML and TOML with the tokenizers in src/proof-languages.ts: comment text edited or added, with
- * code untouched. The language comes from the file extension. It compares the code of a file with
- * its plain comments taken out. In free-form languages (SQL, Rust, TypeScript, JavaScript, shell,
- * TOML) whitespace between tokens is reduced to "a line break here" or "a blank here"; in Python
- * and YAML, where indentation is code, every line stays byte for byte and only lines that hold
- * nothing but a plain comment or blanks drop out. String literals, raw strings, templates,
- * here-documents and the like stay byte for byte, and comments with a meaning (directives, hints,
- * doc comments in Rust, executable comments) must be byte-identical and in the same place.
+ * `comments_only` reads SQL as PostgreSQL does, and Rust, TypeScript and JavaScript, YAML and TOML
+ * with the tokenizers in src/proof-languages.ts: comment text edited or added, with code
+ * untouched. The language comes from the file extension; shell and Python are left out on purpose
+ * (SECURITY.md). It compares the code of a file with its plain comments taken out. In free-form
+ * languages (SQL, Rust, TypeScript, JavaScript, TOML) whitespace between tokens is reduced to "a
+ * line break here" or "a blank here"; in YAML, where indentation is code, every line stays byte for
+ * byte and only lines that hold nothing but a plain comment or blanks drop out. String literals,
+ * raw strings, templates and the like stay byte for byte, and comments with a meaning (directives,
+ * hints, doc comments in Rust, executable comments) must be byte-identical and in the same place.
  */
 
-export const PROOF_LANGUAGES = [
-  'sql',
-  'rust',
-  'typescript',
-  'javascript',
-  'shell',
-  'python',
-  'yaml',
-  'toml',
-] as const;
+export const PROOF_LANGUAGES = ['sql', 'rust', 'typescript', 'javascript', 'yaml', 'toml'] as const;
 export type ProofLanguage = (typeof PROOF_LANGUAGES)[number];
 
 /** The file extensions of each language, lower case. */
@@ -44,14 +27,12 @@ const EXTENSIONS: Record<ProofLanguage, readonly string[]> = {
   rust: ['.rs'],
   typescript: ['.ts', '.tsx', '.mts', '.cts'],
   javascript: ['.js', '.jsx', '.mjs', '.cjs'],
-  shell: ['.sh', '.bash'],
-  python: ['.py', '.pyi'],
   yaml: ['.yml', '.yaml'],
   toml: ['.toml'],
 };
 
 /** Why another language is refused in a rule. */
-export const UNKNOWN_LANGUAGE = `comments_only reads ${PROOF_LANGUAGES.join(', ')}; any other language comes later, with its own adversarial review`;
+export const UNKNOWN_LANGUAGE = `comments_only reads ${PROOF_LANGUAGES.join(', ')}; shell and python never (a script reads its own source and line numbers in too many ways), any other language comes later, with its own adversarial review`;
 
 /** The language of a path by its extension, among `allowed`; undefined for any other file. */
 export function languageOf(
@@ -225,10 +206,6 @@ function tokenize(text: string, language: ProofLanguage, path: string): Seg[] {
     case 'typescript':
     case 'javascript':
       return tokenizeJs(text, mayHoldJsx(path));
-    case 'shell':
-      return tokenizeShell(text);
-    case 'python':
-      return tokenizePython(text);
     case 'yaml':
       return tokenizeYaml(text);
     case 'toml':
@@ -236,14 +213,11 @@ function tokenize(text: string, language: ProofLanguage, path: string): Seg[] {
   }
 }
 
-/** Languages whose indentation is code: lines stay byte for byte. */
-const BY_LINE: readonly ProofLanguage[] = ['python', 'yaml'];
-
 /**
  * The code of a text with plain comments out; undefined when unsure. Free-form languages: tokens
  * joined by `\n` (a line break, or a line comment, lay between them) or a blank. A line comment
- * always ends a line here, so code before and after it is never joined. Python and YAML: see
- * `byLine`. A meaningful comment stays as it is.
+ * always ends a line here, so code before and after it is never joined. YAML, whose indentation
+ * is code: see `byLine`. A meaningful comment stays as it is.
  */
 export function codeOf(
   text: string,
@@ -260,7 +234,7 @@ function normalized(text: string, language: ProofLanguage, path: string): string
   let segs: Seg[];
   try {
     segs = tokenize(text, language, path);
-    return BY_LINE.includes(language) ? byLine(segs, language) : byGap(segs);
+    return language === 'yaml' ? byLine(segs) : byGap(segs);
   } catch (e) {
     if (e instanceof Unclassifiable) return { why: e.message };
     throw e;
@@ -269,11 +243,9 @@ function normalized(text: string, language: ProofLanguage, path: string): string
 
 /**
  * The lines of the code, each byte for byte, with a trailing plain comment and the blanks before
- * it taken off, and lines that then hold nothing but blanks left out. Python: a line that ends in
- * a backslash joins the next one, so a dropped line after it, or a comment taken off right after a
- * backslash, is not proven.
+ * it taken off, and lines that then hold nothing but blanks left out.
  */
-function byLine(segs: Seg[], language: ProofLanguage): string {
+function byLine(segs: Seg[]): string {
   const lines: Seg[][] = [[]];
   for (const seg of segs) {
     if (seg.kind !== 'ws') {
@@ -286,30 +258,19 @@ function byLine(segs: Seg[], language: ProofLanguage): string {
     }
   }
   const kept: string[] = [];
-  let joins = false;
   for (const line of lines) {
     let rest = line;
-    let stripped = false;
     const last = rest.findLastIndex((x) => x.kind !== 'ws');
     const tail = rest[last];
     if (tail?.kind === 'comment' && tail.meaningful !== true) {
       rest = rest.slice(0, last);
       while (rest.at(-1)?.kind === 'ws') rest = rest.slice(0, -1);
-      stripped = true;
     }
     if (rest.some((x) => x.kind === 'comment' && x.meaningful !== true)) {
       no('a comment that does not end its line');
     }
-    if (!rest.some((x) => x.kind !== 'ws')) {
-      if (joins) no('a line dropped after a backslash');
-      continue;
-    }
-    const text = rest.map((x) => x.text).join('');
-    // The Python tokenizer keeps a backslash and its line feed together in one code run.
-    const backslash = language === 'python' && text.endsWith('\\\n');
-    if (stripped && backslash) no('a comment right after a backslash');
-    joins = backslash;
-    kept.push(text);
+    if (!rest.some((x) => x.kind !== 'ws')) continue;
+    kept.push(rest.map((x) => x.text).join(''));
   }
   return kept.join('\n');
 }
@@ -380,17 +341,6 @@ export function commentsOnlyWhy(
   if (typeof ca !== 'string') return `the base cannot be read for sure: ${ca.why}`;
   if (typeof cb !== 'string') return `the head cannot be read for sure: ${cb.why}`;
   if (ca !== cb) return 'it changes more than plain comments';
-  if (language === 'python') {
-    // An encoding declaration counts only in line 1 or 2: a line added above it, or one in a
-    // line where there was none, changes how the file is decoded.
-    const firstTwo = (t: string) => t.split('\n').slice(0, 2);
-    const la = firstTwo(a.text);
-    const lb = firstTwo(b.text);
-    const declares = [...la, ...lb].some((l) => PY_CODING.test(l));
-    if (declares && la.join('\n') !== lb.join('\n')) {
-      return 'it changes the lines that may declare the encoding';
-    }
-  }
   return language === 'yaml' ? sameYaml(a.text, b.text) : undefined;
 }
 

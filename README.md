@@ -421,7 +421,7 @@ evidence:
   - id: sql-comments # ^[a-z][a-z0-9-]{0,47}$, unique
     guard: { workflow: .github/workflows/ci.yml, job: migration-guard } # the job whose failure it explains
     proof: comments_only # or paths_only
-    languages: [sql] # comments_only only: sql, rust, typescript, javascript, shell, python, yaml, toml
+    languages: [sql] # comments_only only: sql, rust, typescript, javascript, yaml, toml
     paths: ["migrations/**"] # every changed file of the pull request must lie here
     owner_only: false # true: a hit the proof does not explain goes to the owner
   - id: docs-only
@@ -431,7 +431,7 @@ evidence:
 ```
 
 - **The proofs.** Both cover every changed file of the pull request: one outside `paths` proves nothing, because a change elsewhere could be what the guard saw. `paths` match case-sensitively (`docs/**` never covers `DOCS/run.sh`), and a path with a control character proves nothing.
-  - `comments_only`: each changed file is a plain change of a regular file in one of `languages`, chosen by its extension, in which only plain comment text was edited, added or removed, the boring case. A file with any other extension proves nothing. Code, string literals and the like, and comments with a meaning must stay byte for byte where they are. In free-form languages only "a blank here" and "a line break here" count between tokens, and a line comment always ends a line; in Python and YAML every line of code stays byte for byte, indentation included, and only lines that hold nothing but a plain comment or blanks may come and go. A rule that names another language is refused.
+  - `comments_only`: each changed file is a plain change of a regular file in one of `languages`, chosen by its extension, in which only plain comment text was edited, added or removed, the boring case. A file with any other extension proves nothing. Code, string literals and the like, and comments with a meaning must stay byte for byte where they are. In free-form languages only "a blank here" and "a line break here" count between tokens, and a line comment always ends a line; in YAML every line of code stays byte for byte, indentation included, and only lines that hold nothing but a plain comment or blanks may come and go. A rule that names another language is refused. Shell (`.sh`, `.bash`) and Python (`.py`) are left out on purpose: a script can read its own source and line numbers in too many ways (`$0`, `LINENO`, `caller`, `eval`, `set -v`, `__file__`, `inspect`, frames, `logging`, `warnings`, encoding lines), so a comment-only diff there may change what it does. For such files the proof does not apply.
 
     | Language     | Extensions                    | What is content, not comment                                                                                        |
     | ------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------- |
@@ -439,8 +439,6 @@ evidence:
     | `rust`       | `.rs`                         | strings, byte and C strings, raw strings `r#"..."#`, char literals (told from lifetimes); block comments nest       |
     | `typescript` | `.ts`, `.tsx`, `.mts`, `.cts` | strings, templates with `${...}`, regular expressions, JSX text and attributes (not in `.ts`, `.mts`, `.cts`)       |
     | `javascript` | `.js`, `.jsx`, `.mjs`, `.cjs` | as `typescript`, JSX in every file                                                                                  |
-    | `shell`      | `.sh`, `.bash`                | quotes, `$'...'`, `$(...)` and `${...}` (also inside quotes), arithmetic, here-documents                            |
-    | `python`     | `.py`, `.pyi`                 | strings with any prefix, triple-quoted strings, f-strings with their fields                                         |
     | `yaml`       | `.yml`, `.yaml`               | quoted scalars, block scalars (`\|`, `>`) with every line below them; both versions must also load to the same data |
     | `toml`       | `.toml`                       | basic, literal and multi-line strings                                                                               |
 
@@ -455,11 +453,9 @@ evidence:
   Comments with a meaning must be byte-identical in base and head and sit between the same tokens: line comments with a migration or query directive (`-- +goose Up`, `-- name: ...`, `-- no-transaction`) and any comment that names a tool (`goose`, `sqlx`, `flyway`, `liquibase`, `migrate`, `sqlc`, `noqa`, any `lint`, `ignore` or `disable`, and more; see `src/proofs.ts`). Each comment is judged on its own. The tokenizer is linear in the size of the file. When in doubt, not proven.
 - **The other languages, only the boring case.** Each tokenizer reads what it can classify for sure and proves nothing for anything else (`src/proof-languages.ts`):
   - everywhere: the file rules above, a byte order mark, a line or paragraph separator or NEL (JavaScript and YAML end a line there), a bidirectional control character, and anything unterminated or unbalanced;
-  - code: a backslash outside a string (except a Python or shell line continuation, and shell escapes), and a character that is not ASCII outside strings and comments (shell and YAML excepted);
+  - code: a backslash outside a string, and a character that is not ASCII outside strings and comments (YAML excepted);
   - Rust: a lifetime glued to a quote, a name glued to a quote or `#` that is no literal prefix, `line!` or `column!` anywhere (a moved line changes their value);
   - TypeScript and JavaScript: a `/` or a `<` that may start a regular expression or JSX as well as not, that is after `)` of `if`, `while`, `for` or `with`, after `}`, after `++` or `--`, after a postfix `!`, or after a contextual word (`await`, `yield`, `of`, `type`, ...); `<!--` and `-->`; a JSX tag that does not close as it opened;
-  - shell: backticks, `[[ ... ]]`, extglob patterns (`@(`, `!(`, `+(`, `*(`, `?(`), a `#` at a word start that does not follow a blank or a line start (after `;`, `|`, `(`, a joined line), `case` inside `$(...)`, `$[...]`, a quote or substitution inside arithmetic, a here-document delimiter that is not a plain word, a line break inside a quote while a here-document waits, and a script that reads itself or its line numbers (`$0`, `BASH_SOURCE`, `LINENO`, `BASH_LINENO`), whose comments may be its help text;
-  - Python: an f-string field that holds its own quote, a `#`, a backslash or a line break (a reader older than Python 3.12 would see a comment there); a comment or a dropped line right after a backslash continuation; code that reads its own source, frames or line numbers (`__file__`, `__code__`, `inspect`, `traceback`, `linecache`, `sys._getframe`, `f_lineno`, `co_firstlineno`, `lineno`, ...); and a change to lines 1 and 2 when either version declares an encoding there (PEP 263, also the Emacs and Vim forms), because a line added above moves the declaration out of reach;
   - YAML: a quoted scalar over several lines, a plain scalar over several lines outside a flow collection, a block scalar that is no mapping value or sequence entry, a tab in indentation, and a file that does not load or loads to other data in the `yaml` package.
 
   Comments with a meaning count as code, also in these languages: a shebang line, tool words (`noqa`, `pragma`, `type:`, `fmt:`, `eslint`, `biome`, `prettier`, `shellcheck`, `clippy`, `SAFETY`, `renovate`, `yaml-language-server`, `$schema`, `coding`, and more), a `#` comment that starts with a word and a colon (`# key: value`), and in TypeScript and JavaScript any `@tag` (JSDoc types count under `checkJs`), triple-slash directives, `//#`, `/*!`, `#__PURE__` and bundler hints. Line numbers in stack traces and panic messages may still move with an added comment line.

@@ -29373,7 +29373,7 @@ var MAX_DEPTH = 200;
 var isAsciiIdentStart = (c3) => c3 !== void 0 && /[A-Za-z_]/.test(c3);
 var isAsciiIdent = (c3) => c3 !== void 0 && /[A-Za-z0-9_]/.test(c3);
 var nonAscii = (c3) => c3.charCodeAt(0) > 127;
-var TOOL_WORDS = /noqa|lint|ignore|disable|enable|pragma|nosec|generated|codegen|prettier|biome|eslint|istanbul|\bc8\b|coverage|shellcheck|clippy|rustfmt|safety|renovate|dependabot|schema|yaml-language-server|zizmor|release-please|checkov|tfsec|trivy|codespell|cspell|gitleaks|secret|taplo|mypy|pyright|pyre|pylint|ruff|isort|fmt:|type:|coding|vim:|tidy|sourcemappingurl|sourceurl|webpack|vite|jsx|ts-|deno|\$flow|noinspection|spdx|__pure__|__no_side_effects__/i;
+var TOOL_WORDS = /noqa|lint|ignore|disable|enable|pragma|nosec|generated|codegen|prettier|biome|eslint|istanbul|\bc8\b|coverage|shellcheck|clippy|rustfmt|safety|renovate|dependabot|schema|yaml-language-server|zizmor|release-please|checkov|tfsec|trivy|codespell|cspell|gitleaks|secret|taplo|fmt:|type:|coding|vim:|tidy|sourcemappingurl|sourceurl|webpack|vite|jsx|ts-|deno|\$flow|noinspection|spdx|__pure__|__no_side_effects__/i;
 function hashMeaningful(t) {
   return TOOL_WORDS.test(t) || /^#\s*(?:[!+@$:%-]|[A-Za-z_-]+\s*:)/.test(t);
 }
@@ -29870,415 +29870,6 @@ function tokenizeJs(s, jsx) {
   code("eof");
   return out.segs;
 }
-function tokenizeShell(s) {
-  const out = new Out(hashMeaningful);
-  let i2 = 0;
-  let depth = 0;
-  let word2 = true;
-  let pending = [];
-  const deeper = () => {
-    if (++depth > MAX_DEPTH) no("nesting too deep");
-  };
-  if (s.startsWith("#!")) {
-    const end = s.indexOf("\n");
-    i2 = end === -1 ? s.length : end;
-    out.push("comment", s.slice(0, i2), { eol: true, meaningful: true });
-  }
-  const noBreakWhilePending = (text) => {
-    if (pending.length > 0 && text.includes("\n")) {
-      no("a line break inside a quote while a here-document waits");
-    }
-  };
-  const bodies = () => {
-    const list2 = pending;
-    pending = [];
-    for (const [k, h2] of list2.entries()) {
-      if (k > 0) {
-        if (s[i2] !== "\n") no("an unterminated here-document");
-        out.push("ws", "\n");
-        i2++;
-      }
-      let p = i2;
-      for (; ; ) {
-        if (p >= s.length) no("an unterminated here-document");
-        const nl = s.indexOf("\n", p);
-        const end = nl === -1 ? s.length : nl;
-        const line4 = s.slice(p, end);
-        if ((h2.tabs ? line4.replace(/^\t+/, "") : line4) === h2.delim) {
-          out.push("string", s.slice(i2, end));
-          i2 = end;
-          break;
-        }
-        if (nl === -1) no("an unterminated here-document");
-        p = nl + 1;
-      }
-    }
-  };
-  const heredoc = () => {
-    let j = i2 + 2;
-    let tabs = false;
-    if (s[j] === "-") {
-      tabs = true;
-      j++;
-    }
-    while (s[j] === " " || s[j] === "	") j++;
-    let delim;
-    let end;
-    const q = s[j];
-    if (q === "'" || q === '"') {
-      const close = s.indexOf(q, j + 1);
-      if (close === -1) no("an unterminated here-document delimiter");
-      delim = s.slice(j + 1, close);
-      if (!/^[A-Za-z0-9_.-]+$/.test(delim))
-        no("a here-document delimiter that is not a plain word");
-      end = close + 1;
-    } else {
-      const from = q === "\\" ? j + 1 : j;
-      const m = /^[A-Za-z0-9_][A-Za-z0-9_.-]*/.exec(s.slice(from, from + 256));
-      if (m === null) no("a here-document delimiter that is not a plain word");
-      delim = m[0];
-      end = from + delim.length;
-    }
-    const after2 = s[end];
-    if (after2 !== void 0 && !/[\s;|&<>)]/.test(after2)) {
-      no("a here-document delimiter that is not a plain word");
-    }
-    out.push("code", s.slice(i2, end));
-    pending.push({ delim, tabs });
-    i2 = end;
-    word2 = true;
-  };
-  const dquote = () => {
-    deeper();
-    let start = i2;
-    let j = i2 + 1;
-    for (; ; ) {
-      const c3 = s[j];
-      if (c3 === void 0) no("an unterminated string");
-      if (c3 === "\\") j += 2;
-      else if (c3 === '"') {
-        out.push("string", s.slice(start, j + 1));
-        i2 = j + 1;
-        break;
-      } else if (c3 === "`") no("a backtick");
-      else if (c3 === "$" && (s[j + 1] === "(" || s[j + 1] === "{")) {
-        noBreakWhilePending(s.slice(start, j));
-        out.push("string", s.slice(start, j));
-        i2 = j;
-        if (s[j + 1] === "(") subst();
-        else param(true);
-        start = i2;
-        j = i2;
-      } else j++;
-    }
-    noBreakWhilePending(s.slice(start, i2));
-    depth--;
-  };
-  const arith = () => {
-    let j = s[i2] === "$" ? i2 + 1 : i2;
-    let open4 = 0;
-    for (; ; ) {
-      const c3 = s[j];
-      if (c3 === void 0) no("unterminated arithmetic");
-      if (c3 === "(") open4++;
-      else if (c3 === ")") {
-        open4--;
-        if (open4 === 0) break;
-      } else if (c3 === "'" || c3 === '"' || c3 === "`" || c3 === "\\" || c3 === "$" && s[j + 1] === "(") {
-        no("a quote or substitution in arithmetic");
-      } else if (c3 === "\n" && pending.length > 0) {
-        no("a line break in arithmetic while a here-document waits");
-      }
-      j++;
-    }
-    out.push("code", s.slice(i2, j + 1));
-    i2 = j + 1;
-  };
-  const subst = () => {
-    if (s[i2 + 2] === "(") {
-      arith();
-      return;
-    }
-    out.push("code", "$(");
-    i2 += 2;
-    code(true);
-    out.push("code", ")");
-    i2++;
-  };
-  const param = (inDouble) => {
-    deeper();
-    out.push("code", "${");
-    i2 += 2;
-    for (; ; ) {
-      const c3 = s[i2];
-      if (c3 === void 0) no("an unterminated parameter expansion");
-      if (c3 === "}") {
-        out.push("code", c3);
-        i2++;
-        break;
-      }
-      if (c3 === "\\") {
-        out.push("code", s.slice(i2, i2 + 2));
-        i2 += 2;
-      } else if (c3 === "`") no("a backtick");
-      else if (c3 === '"') dquote();
-      else if (c3 === "'" && !inDouble) single();
-      else if (c3 === "$" && s[i2 + 1] === "(") subst();
-      else if (c3 === "$" && s[i2 + 1] === "{") param(inDouble);
-      else {
-        if (c3 === "\n" && pending.length > 0)
-          no("a line break inside a parameter expansion while a here-document waits");
-        out.push("code", c3);
-        i2++;
-      }
-    }
-    depth--;
-  };
-  const single = () => {
-    const end = s.indexOf("'", i2 + 1);
-    if (end === -1) no("an unterminated string");
-    noBreakWhilePending(s.slice(i2, end));
-    out.push("string", s.slice(i2, end + 1));
-    i2 = end + 1;
-  };
-  const ansi = () => {
-    let j = i2 + 2;
-    for (; ; ) {
-      const c3 = s[j];
-      if (c3 === void 0) no("an unterminated string");
-      if (c3 === "\\") j += 2;
-      else if (c3 === "'") break;
-      else j++;
-    }
-    noBreakWhilePending(s.slice(i2, j));
-    out.push("string", s.slice(i2, j + 1));
-    i2 = j + 1;
-  };
-  const code = (inSubst) => {
-    deeper();
-    let parens = 0;
-    word2 = true;
-    while (i2 < s.length) {
-      const c3 = s[i2];
-      if (c3 === " " || c3 === "	") {
-        out.push("ws", c3);
-        i2++;
-        word2 = true;
-      } else if (c3 === "\n") {
-        out.push("ws", c3);
-        i2++;
-        word2 = true;
-        if (pending.length > 0) bodies();
-      } else if (c3 === "#" && word2) {
-        const before = s[i2 - 1];
-        if (i2 > 0 && before !== " " && before !== "	" && before !== "\n") {
-          no("a # right after an operator or parenthesis");
-        }
-        if (before === "\n" && s[i2 - 2] === "\\") no("a # right after a joined line");
-        const end = s.indexOf("\n", i2);
-        const stop = end === -1 ? s.length : end;
-        out.push("comment", s.slice(i2, stop), { eol: true });
-        i2 = stop;
-      } else if (c3 === "\\") {
-        const next = s[i2 + 1];
-        if (next === void 0) no("a backslash at the end");
-        out.push("code", s.slice(i2, i2 + 2));
-        i2 += 2;
-        if (next !== "\n") word2 = false;
-      } else if (c3 === "'") {
-        single();
-        word2 = false;
-      } else if (c3 === '"') {
-        dquote();
-        word2 = false;
-      } else if (c3 === "`") {
-        no("a backtick");
-      } else if (c3 === "$") {
-        const next = s[i2 + 1];
-        if (next === "'") ansi();
-        else if (next === '"') {
-          out.push("code", "$");
-          i2++;
-          dquote();
-        } else if (next === "(") subst();
-        else if (next === "{") param(false);
-        else if (next === "[") no("$[...] arithmetic");
-        else {
-          out.push("code", c3);
-          i2++;
-        }
-        word2 = false;
-      } else if (s.startsWith("((", i2)) {
-        arith();
-        word2 = false;
-      } else if (s.startsWith("<<<", i2)) {
-        out.push("code", "<<<");
-        i2 += 3;
-        word2 = true;
-      } else if (s.startsWith("<<", i2)) {
-        heredoc();
-      } else if (c3 === "(") {
-        if (/[@!+*?]/.test(s[i2 - 1] ?? "")) no("an extglob pattern");
-        if (inSubst) parens++;
-        out.push("code", c3);
-        i2++;
-        word2 = true;
-      } else if (c3 === ")") {
-        if (inSubst) {
-          if (parens === 0) {
-            depth--;
-            return;
-          }
-          parens--;
-        }
-        out.push("code", c3);
-        i2++;
-        word2 = true;
-      } else if (c3 === ";" || c3 === "&" || c3 === "|" || c3 === "<" || c3 === ">") {
-        out.push("code", c3);
-        i2++;
-        word2 = true;
-      } else if (isAsciiIdent(c3)) {
-        let j = i2;
-        while (isAsciiIdent(s[j])) j++;
-        const w = s.slice(i2, j);
-        if (inSubst && word2 && w === "case") no("case inside $(...)");
-        out.push("code", w);
-        i2 = j;
-        word2 = false;
-      } else {
-        if (c3 === "[" && s[i2 + 1] === "[") no("a [[ ... ]] test");
-        out.push("code", c3);
-        i2++;
-        word2 = false;
-      }
-    }
-    if (inSubst) no("an unterminated $(...)");
-    if (pending.length > 0) no("an unterminated here-document");
-    depth--;
-  };
-  code(false);
-  for (const x of out.segs) {
-    if (x.kind !== "comment" && /\$\{?0(?![0-9])|BASH_SOURCE|LINENO/.test(x.text)) {
-      no("a script that reads itself or its line numbers ($0, BASH_SOURCE, LINENO)");
-    }
-  }
-  return out.segs;
-}
-var PY_PREFIXES = /* @__PURE__ */ new Set(["r", "u", "b", "br", "rb", "f", "fr", "rf", "t", "tr", "rt"]);
-function tokenizePython(s) {
-  const out = new Out(hashMeaningful);
-  let i2 = 0;
-  if (s.startsWith("#!")) {
-    const end = s.indexOf("\n");
-    i2 = end === -1 ? s.length : end;
-    out.push("comment", s.slice(0, i2), { eol: true, meaningful: true });
-  }
-  const field = (from, quote2) => {
-    const other = quote2 === '"' ? "'" : '"';
-    let open4 = 1;
-    let k = from + 1;
-    for (; ; ) {
-      const c3 = s[k];
-      if (c3 === void 0) return no("an unterminated f-string field");
-      if (c3 === quote2 || c3 === "#" || c3 === "\\" || c3 === "\n") {
-        return no("an f-string field that cannot be read for sure");
-      }
-      if (c3 === other) {
-        if (s.startsWith(other.repeat(3), k)) no("an f-string field that cannot be read for sure");
-        const end = s.indexOf(other, k + 1);
-        if (end === -1) return no("an unterminated string");
-        const inner = s.slice(k + 1, end);
-        if (inner.includes("\\") || inner.includes("\n")) {
-          no("an f-string field that cannot be read for sure");
-        }
-        k = end + 1;
-        continue;
-      }
-      if (c3 === "(" || c3 === "[" || c3 === "{") open4++;
-      else if (c3 === ")" || c3 === "]" || c3 === "}") {
-        open4--;
-        if (open4 === 0) return k + 1;
-      }
-      k++;
-    }
-  };
-  const string4 = (start, prefix) => {
-    const at2 = start + prefix.length;
-    const q = s[at2];
-    const triple = s.startsWith(q.repeat(3), at2);
-    const close = triple ? q.repeat(3) : q;
-    const f3 = /[ft]/i.test(prefix);
-    let j = at2 + close.length;
-    for (; ; ) {
-      const c3 = s[j];
-      if (c3 === void 0) return no("an unterminated string");
-      if (c3 === "\\") {
-        j += 2;
-        continue;
-      }
-      if (!triple && c3 === "\n") return no("an unterminated string");
-      if (s.startsWith(close, j)) return j + close.length;
-      if (f3 && c3 === "{") {
-        if (s[j + 1] === "{") j += 2;
-        else j = field(j, q);
-        continue;
-      }
-      if (f3 && c3 === "}") {
-        if (s[j + 1] !== "}") no("a lone } in an f-string");
-        j += 2;
-        continue;
-      }
-      j++;
-    }
-  };
-  while (i2 < s.length) {
-    const c3 = s[i2];
-    if (c3 === " " || c3 === "	" || c3 === "\n") {
-      out.push("ws", c3);
-      i2++;
-    } else if (c3 === "#") {
-      const end = s.indexOf("\n", i2);
-      const stop = end === -1 ? s.length : end;
-      out.push("comment", s.slice(i2, stop), { eol: true });
-      i2 = stop;
-    } else if (c3 === "\\") {
-      if (s[i2 + 1] !== "\n") no("a backslash in code that does not end the line");
-      out.push("code", "\\\n");
-      i2 += 2;
-    } else if (c3 === '"' || c3 === "'") {
-      const end = string4(i2, "");
-      out.push("string", s.slice(i2, end));
-      i2 = end;
-    } else if (isAsciiIdentStart(c3)) {
-      let j = i2;
-      while (isAsciiIdent(s[j])) j++;
-      const w = s.slice(i2, j);
-      if (s[j] === '"' || s[j] === "'") {
-        if (!PY_PREFIXES.has(w.toLowerCase())) no("a name glued to a quote");
-        const end = string4(i2, w);
-        out.push("string", s.slice(i2, end));
-        i2 = end;
-      } else {
-        out.push("code", w);
-        i2 = j;
-      }
-    } else if (nonAscii(c3)) {
-      no("a character that is not ASCII in code");
-    } else {
-      out.push("code", c3);
-      i2++;
-    }
-  }
-  for (const x of out.segs) {
-    if (x.kind !== "comment" && PY_SELF.test(x.text)) {
-      no("code that reads its own source or line numbers");
-    }
-  }
-  return out.segs;
-}
-var PY_SELF = /__file__|__code__|__loader__|__spec__|\binspect\b|\btraceback\b|\blinecache\b|_getframe|currentframe|f_lineno|co_firstlineno|co_lines|co_positions|tb_lineno|\blineno\b|getsource|getframeinfo|stack_info/;
-var PY_CODING = /^[ \t\f]*#.*?coding[:=]/;
 function tokenizeToml(s) {
   const out = new Out(hashMeaningful);
   let i2 = 0;
@@ -30421,27 +30012,16 @@ function tokenizeYaml(s) {
 }
 
 // src/proofs.ts
-var PROOF_LANGUAGES = [
-  "sql",
-  "rust",
-  "typescript",
-  "javascript",
-  "shell",
-  "python",
-  "yaml",
-  "toml"
-];
+var PROOF_LANGUAGES = ["sql", "rust", "typescript", "javascript", "yaml", "toml"];
 var EXTENSIONS = {
   sql: [".sql"],
   rust: [".rs"],
   typescript: [".ts", ".tsx", ".mts", ".cts"],
   javascript: [".js", ".jsx", ".mjs", ".cjs"],
-  shell: [".sh", ".bash"],
-  python: [".py", ".pyi"],
   yaml: [".yml", ".yaml"],
   toml: [".toml"]
 };
-var UNKNOWN_LANGUAGE = `comments_only reads ${PROOF_LANGUAGES.join(", ")}; any other language comes later, with its own adversarial review`;
+var UNKNOWN_LANGUAGE = `comments_only reads ${PROOF_LANGUAGES.join(", ")}; shell and python never (a script reads its own source and line numbers in too many ways), any other language comes later, with its own adversarial review`;
 function languageOf(path10, allowed) {
   const lower = path10.toLowerCase();
   return allowed.find((l) => EXTENSIONS[l].some((ext) => lower.endsWith(ext)));
@@ -30567,28 +30147,23 @@ function tokenize2(text, language, path10) {
     case "typescript":
     case "javascript":
       return tokenizeJs(text, mayHoldJsx(path10));
-    case "shell":
-      return tokenizeShell(text);
-    case "python":
-      return tokenizePython(text);
     case "yaml":
       return tokenizeYaml(text);
     case "toml":
       return tokenizeToml(text);
   }
 }
-var BY_LINE = ["python", "yaml"];
 function normalized(text, language, path10) {
   let segs;
   try {
     segs = tokenize2(text, language, path10);
-    return BY_LINE.includes(language) ? byLine(segs, language) : byGap(segs);
+    return language === "yaml" ? byLine(segs) : byGap(segs);
   } catch (e) {
     if (e instanceof Unclassifiable) return { why: e.message };
     throw e;
   }
 }
-function byLine(segs, language) {
+function byLine(segs) {
   const lines2 = [[]];
   for (const seg of segs) {
     if (seg.kind !== "ws") {
@@ -30601,29 +30176,19 @@ function byLine(segs, language) {
     }
   }
   const kept = [];
-  let joins = false;
   for (const line4 of lines2) {
     let rest = line4;
-    let stripped = false;
     const last = rest.findLastIndex((x) => x.kind !== "ws");
     const tail = rest[last];
     if (tail?.kind === "comment" && tail.meaningful !== true) {
       rest = rest.slice(0, last);
       while (rest.at(-1)?.kind === "ws") rest = rest.slice(0, -1);
-      stripped = true;
     }
     if (rest.some((x) => x.kind === "comment" && x.meaningful !== true)) {
       no("a comment that does not end its line");
     }
-    if (!rest.some((x) => x.kind !== "ws")) {
-      if (joins) no("a line dropped after a backslash");
-      continue;
-    }
-    const text = rest.map((x) => x.text).join("");
-    const backslash = language === "python" && text.endsWith("\\\n");
-    if (stripped && backslash) no("a comment right after a backslash");
-    joins = backslash;
-    kept.push(text);
+    if (!rest.some((x) => x.kind !== "ws")) continue;
+    kept.push(rest.map((x) => x.text).join(""));
   }
   return kept.join("\n");
 }
@@ -30678,15 +30243,6 @@ function commentsOnlyWhy(base, head, language = "sql", path10 = "") {
   if (typeof ca !== "string") return `the base cannot be read for sure: ${ca.why}`;
   if (typeof cb !== "string") return `the head cannot be read for sure: ${cb.why}`;
   if (ca !== cb) return "it changes more than plain comments";
-  if (language === "python") {
-    const firstTwo = (t) => t.split("\n").slice(0, 2);
-    const la = firstTwo(a2.text);
-    const lb = firstTwo(b.text);
-    const declares = [...la, ...lb].some((l) => PY_CODING.test(l));
-    if (declares && la.join("\n") !== lb.join("\n")) {
-      return "it changes the lines that may declare the encoding";
-    }
-  }
   return language === "yaml" ? sameYaml(a2.text, b.text) : void 0;
 }
 function sqlStatements(bytes) {
