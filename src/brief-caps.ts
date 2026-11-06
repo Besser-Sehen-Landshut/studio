@@ -481,6 +481,8 @@ export interface BriefCaps {
   reference?: BriefReference;
   /** A reviewer: minutes per analyzer subagent, and when the session's time is up (ISO). */
   timeouts?: { analyzerMinutes: number; sessionEndsAt: string };
+  /** A cache crew (src/cache.ts): main's commit, the only commands it runs, minutes for each. */
+  cache?: { sha: string; commands: string[]; minutes: number };
   review?: {
     tier: 'small' | 'large';
     reasons: string[];

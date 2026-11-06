@@ -203,7 +203,8 @@
           "reviewer",
           "designer",
           "researcher",
-          "release"
+          "release",
+          "cache"
         ]
       },
       "additionalProperties": {
@@ -616,6 +617,28 @@
       },
       "additionalProperties": false
     },
+    "cache": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "every_days": {
+          "default": 7,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 90
+        },
+        "timeout_min": {
+          "default": 60,
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 240
+        }
+      },
+      "additionalProperties": false
+    },
     "acceptance": {
       "type": "object",
       "properties": {
@@ -659,6 +682,26 @@
           "maximum": 240
         }
       },
+      "additionalProperties": false
+    },
+    "migrations": {
+      "type": "object",
+      "properties": {
+        "dir": {
+          "type": "string"
+        },
+        "number_pattern": {
+          "default": "^(\\d+)_",
+          "type": "string"
+        },
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+        }
+      },
+      "required": [
+        "dir"
+      ],
       "additionalProperties": false
     },
     "evidence": {

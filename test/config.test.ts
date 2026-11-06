@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   ConfigError,
+  cacheMaxGb,
   configWarnings,
   loadConfig,
   loadOwnerConfig,
@@ -431,5 +432,33 @@ describe('plugins: pinned versions', () => {
     '{ name: superpowers@m, version: 7.1.0, marketplace: "http://example.com/x" }',
   ])('refuses %s', (entry) => {
     expect(() => loadConfig(project(`${MINIMAL}plugins:\n  - ${entry}\n`))).toThrow(ConfigError);
+  });
+});
+
+describe('build cache settings', () => {
+  const withCacheRole = MINIMAL.replace(
+    'roles:\n  builder: { model: strongest, wip: 1 }\n',
+    'roles:\n  builder: { model: strongest, wip: 1 }\n  cache: { model: haiku, wip: 1 }\n',
+  );
+
+  it('is off by default and needs a cache role once it is on', () => {
+    expect(loadConfig(project(MINIMAL)).cache).toBeUndefined();
+    expect(() => loadConfig(project(`${MINIMAL}cache: { enabled: true }\n`))).toThrow(
+      /cache.*roles\.cache/,
+    );
+    const cfg = loadConfig(project(`${withCacheRole}cache: { enabled: true }\n`));
+    expect(cfg.cache).toEqual({ enabled: true, everyDays: 7, timeoutMin: 60 });
+  });
+
+  it('refuses a refresh interval or a time limit out of range', () => {
+    expect(() => loadConfig(project(`${MINIMAL}cache: { every_days: 0 }\n`))).toThrow(ConfigError);
+    expect(() => loadConfig(project(`${MINIMAL}cache: { timeout_min: 600 }\n`))).toThrow(
+      ConfigError,
+    );
+  });
+
+  it('caps the disk use of all caches in the owner config, 20 GB by default', () => {
+    expect(cacheMaxGb({})).toBe(20);
+    expect(cacheMaxGb({ cache: { maxGb: 5 } })).toBe(5);
   });
 });

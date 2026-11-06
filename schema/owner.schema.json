@@ -160,6 +160,17 @@
       },
       "additionalProperties": false
     },
+    "cache": {
+      "type": "object",
+      "properties": {
+        "max_gb": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 10000
+        }
+      },
+      "additionalProperties": false
+    },
     "groups": {
       "maxItems": 20,
       "type": "array",

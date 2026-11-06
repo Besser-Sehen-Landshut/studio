@@ -6,13 +6,25 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { isLang, LANGS } from '../hooks/i18n/index.js';
 import { globProblem } from './glob.js';
+import {
+  DEFAULT_NUMBER_PATTERN,
+  migrationDirProblem,
+  numberPatternProblem,
+} from './migration-pattern.js';
 import { allowedPluginSchema, pluginPinSchema } from './plugins.js';
 import { PROOF_LANGUAGES, type ProofLanguage, UNKNOWN_LANGUAGE } from './proofs.js';
 import { REA_VERSION_RE, reaEnvKeyOk } from './rea.js';
 
 export { globProblem };
 
-export const ROLE_TEMPLATES = ['builder', 'reviewer', 'designer', 'researcher', 'release'] as const;
+export const ROLE_TEMPLATES = [
+  'builder',
+  'reviewer',
+  'designer',
+  'researcher',
+  'release',
+  'cache',
+] as const;
 export type RoleTemplate = (typeof ROLE_TEMPLATES)[number];
 
 const strList = z.array(z.string()).default([]);
@@ -321,6 +333,29 @@ const acceptanceSchema = z.strictObject({
     .max(20),
 });
 
+/**
+ * `migrations:` in studio.yaml: where the project's database migrations live and how a number is
+ * read from a name there, for the register of reserved numbers (src/migration-numbers.ts).
+ */
+const migrationsSchema = z.strictObject({
+  // The folder, relative to the repository root; each file or folder directly in it is one.
+  dir: z.string().superRefine((d, ctx) => {
+    const problem = migrationDirProblem(d);
+    if (problem !== undefined) ctx.addIssue({ code: 'custom', message: problem });
+  }),
+  // A regular expression over a name in `dir` whose one capturing group is the number.
+  numberPattern: z
+    .string()
+    .default(DEFAULT_NUMBER_PATTERN)
+    .superRefine((p, ctx) => {
+      const problem = numberPatternProblem(p);
+      if (problem !== undefined) ctx.addIssue({ code: 'custom', message: problem });
+    }),
+  // The repository that holds them (default: primary_repo).
+  repo: repoName.optional(),
+});
+export type MigrationsConfig = z.infer<typeof migrationsSchema>;
+
 /** An evidence rule id: it names the rule in logs, lead lines and `studio exceptions grant`. */
 export const EVIDENCE_ID_RE = /^[a-z][a-z0-9-]{0,47}$/;
 
@@ -562,6 +597,16 @@ export const studioConfigSchema = z
     plugins: z.array(pluginPinSchema).optional(),
     // Spending brake: once the ended crew runs of the local day cost this much, nothing new starts.
     limits: dailyLimitsSchema.optional(),
+    // The shared build cache (src/cache.ts): a crew of the role `cache` builds it from main every
+    // `every_days`; other crews start from a copy-on-write copy. Off unless `enabled`.
+    cache: z
+      .strictObject({
+        enabled: z.boolean().default(false),
+        everyDays: z.number().int().min(1).max(90).default(7),
+        // The cache crew's whole build, also each of its shell commands (Claude Code's Bash limit).
+        timeoutMin: z.number().int().min(5).max(240).default(60),
+      })
+      .optional(),
     // The full suites an epic's acceptance waits for on main (src/acceptance.ts).
     acceptance: acceptanceSchema.optional(),
     // A reviewer's time limits (src/analyzer-timeout.ts): minutes per analyzer subagent; the
@@ -571,6 +616,8 @@ export const studioConfigSchema = z
         analyzerTimeoutMinutes: z.number().int().min(5).max(240).default(30),
       })
       .optional(),
+    // The migrations folder and number scheme for `studio migration` (src/migration-numbers.ts).
+    migrations: migrationsSchema.optional(),
     // Exceptions by evidence: guard jobs whose hits a command can prove false alarms.
     evidence: z.array(evidenceRuleSchema).max(20).optional(),
     // Workers on other machines, per label (`runs_on` of an item): what their crews must never
@@ -592,6 +639,20 @@ export const studioConfigSchema = z
       .optional(),
   })
   .superRefine((cfg, ctx) => {
+    if (cfg.cache?.enabled === true && cfg.roles.cache === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['cache', 'enabled'],
+        message: 'the build cache is built by a crew of the role cache: add roles.cache',
+      });
+    }
+    if (cfg.migrations?.repo !== undefined && !cfg.repos.includes(cfg.migrations.repo)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['migrations', 'repo'],
+        message: 'must be one of repos',
+      });
+    }
     const ids = new Set<string>();
     for (const [i, r] of (cfg.evidence ?? []).entries()) {
       if (ids.has(r.id)) {
@@ -958,6 +1019,8 @@ export const ownerConfigSchema = z.strictObject({
   pane: z.strictObject({ nestedWorktrees: z.enum(['show', 'hide']).default('show') }).optional(),
   // The same daily cost cap as in studio.yaml, over all projects of the owner together.
   limits: dailyLimitsSchema.optional(),
+  // The build caches of all projects together stay below `max_gb` (`cacheMaxGb`, 20 by default).
+  cache: z.strictObject({ maxGb: z.number().positive().max(10_000).optional() }).optional(),
   // Groups of related projects (src/group.ts); a project folder is in at most one.
   groups: z
     .array(groupSchema)
@@ -1018,6 +1081,10 @@ export const ownerConfigSchema = z.strictObject({
 });
 
 export type OwnerConfig = z.infer<typeof ownerConfigSchema>;
+
+/** The disk cap of all build caches together, in GB (owner config `cache.max_gb`). */
+export const cacheMaxGb = (c: { cache?: { maxGb?: number | undefined } | undefined }): number =>
+  c.cache?.maxGb ?? 20;
 
 /** Home, environment and platform of the owner; injectable so tests never touch the real ones. */
 export interface OwnerEnv {
