@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows
 Native Windows workers, experimental.
 
 ### Added
+
 - Native Windows workers (experimental, until a pilot on a real Windows machine; run the worker elevated). With `workers.self.windows.crew_user`, every crew runs as a dedicated local standard user. `studio worker windows-setup` prints the one-time elevated script: user, DPAPI credential, outbound firewall block except loopback, denied batch/service/network/RDP logons, read-only grants.
 - Each crew starts through an owner-side keeper that puts it into a kill-on-close job and hands it its environment by named pipe. A run's places are granted and taken back (grant, owner, links, ACLs) under an owner-wide lock, one crew at a time per machine.
 - Traffic goes through a loopback proxy that resolves allowed names itself and refuses internal addresses.
