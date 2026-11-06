@@ -309,6 +309,65 @@ describe('decisionsOf', () => {
       },
     ]);
   });
+
+  it('pushes each external merge result of the last day once, a failure only once with its lead line', () => {
+    const s = setup();
+    const by = { by: 'lead', at: '2026-11-05T07:00:00.000Z', head: 'a'.repeat(40) };
+    const done = [
+      {
+        pr: 5,
+        repo: 'org/app',
+        external: by,
+        result: 'merged' as const,
+        at: '2026-11-05T09:00:00.000Z',
+      },
+      {
+        pr: 6,
+        repo: 'org/app',
+        external: by,
+        result: 'failed' as const,
+        reason: 'check ci failed',
+        at: '2026-11-05T09:30:00.000Z',
+      },
+      // Older than a day, and a board item's result: neither is pushed from here.
+      {
+        pr: 7,
+        repo: 'org/app',
+        external: by,
+        result: 'merged' as const,
+        at: '2026-11-03T09:00:00.000Z',
+      },
+      {
+        pr: 8,
+        repo: 'org/app',
+        item: 'APP-8',
+        result: 'merged' as const,
+        at: '2026-11-05T09:00:00.000Z',
+      },
+    ];
+    const out = decisionsOf({
+      projectKey: 'pk',
+      needsLead: [{ item: 'org/app#6', reason: 'merge failed: check ci failed' }],
+      board: undefined,
+      ownerRoot: s.ownerRoot,
+      queueDone: done,
+      now: at('2026-11-05T10:00:00.000Z'),
+    });
+    expect(out).toEqual([
+      {
+        key: 'pk:org/app#6:merge_failed:2026-11-05T09:30:00.000Z',
+        item: 'org/app#6',
+        kind: 'merge_failed',
+        urgent: false,
+      },
+      {
+        key: 'pk:org/app#5:merged:2026-11-05T09:00:00.000Z',
+        item: 'org/app#5',
+        kind: 'merged',
+        urgent: false,
+      },
+    ]);
+  });
 });
 
 describe('review fixes', () => {

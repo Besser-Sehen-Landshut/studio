@@ -76,6 +76,12 @@ export const COMMANDS: HelpEntry[] = [
   },
   { usage: 'queue add <repo>#<pr>', about: 'Put a reviewed PR into the merge queue' },
   { usage: 'queue run', about: 'Merge the queued PRs, one at a time' },
+  { usage: 'queue [list]', about: 'Show the merge queue (JSON), external entries included' },
+  {
+    usage: 'merge <pr> [--repo <owner/name>] [--by <name>] [--follow-head] [--wait]',
+    about:
+      'Hand a PR without a board item to the merge queue (checks, main build, capacity, runner load); only the head seen now merges unless --follow-head; --wait runs the queue and reports MERGED, FAILED or TIMEOUT',
+  },
   { usage: 'state', about: 'Refresh state.json in the state root' },
   { usage: 'pause', about: 'Owner only: nothing new starts or merges until resume' },
   { usage: 'resume', about: 'Owner only: lift the pause' },
@@ -190,7 +196,12 @@ export const COMMANDS: HelpEntry[] = [
   {
     usage: 'doctor',
     about:
-      'What is set and what is missing, never values; warns when .studio/board.yaml is tracked',
+      'What is set and what is missing, never values; warns when .studio/board.yaml is tracked; the disk the clones use and how many can go',
+  },
+  {
+    usage: 'gc [--apply]',
+    about:
+      'List the clones, crew homes and tmp dirs of finished items with their sizes and whether they can go; a dry run without --apply, which removes them (the tick does too)',
   },
   {
     usage: 'account add <label>',

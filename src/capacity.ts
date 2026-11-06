@@ -1,4 +1,4 @@
-import { GITHUB_HOSTED_UNLIMITED, type StudioConfig } from './config.js';
+import { GITHUB_HOSTED_UNLIMITED, type RunnerLoad, type StudioConfig } from './config.js';
 import type { Capacity } from './planner.js';
 import type { Clock, Gh, Host } from './ports.js';
 
@@ -28,8 +28,16 @@ const RUNNER_LINE = /^(\S+)\t(\S+)\t(true|false)$/;
  * are not read here, and an empty list must not look like idle runners.
  */
 async function selfHostedBusy(config: StudioConfig, gh: Gh, timeoutMs: number): Promise<number> {
-  const org = config.primaryRepo.split('/')[0];
-  const pattern = config.ci.runnerNamePattern;
+  const org = config.primaryRepo.split('/')[0] as string;
+  return orgRunnersBusy(org, config.ci.runnerNamePattern, gh, timeoutMs);
+}
+
+async function orgRunnersBusy(
+  org: string,
+  pattern: string | undefined,
+  gh: Gh,
+  timeoutMs: number,
+): Promise<number> {
   const re = pattern === undefined ? undefined : new RegExp(pattern);
   const out = await gh.api(`/orgs/${org}/actions/runners`, RUNNER_JQ, { timeoutMs });
   let busy = 0;
@@ -155,6 +163,39 @@ export async function readCapacityTwice(
   await ports.clock.sleep(config.ci.capacity.checkTwiceSeconds * 1000);
   const second = await readCapacity(config, ports, options);
   return { ok: second.ok, capacity: second };
+}
+
+export type RunnerLoadRead = { ok: boolean; busy?: number; error?: string };
+
+/**
+ * The `merge.runner_load` gate: `samples` reads `intervalS` apart, each with at most `maxBusy`
+ * busy runners. A busy read returns at once; a failed, unparsable or timed-out read, and one that
+ * finds no runner matching the pattern, counts as busy (fail closed) and says why.
+ */
+export async function readRunnerLoad(
+  rule: RunnerLoad,
+  ports: { gh: Gh; clock: Clock },
+  options: CapacityOptions = {},
+): Promise<RunnerLoadRead> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let last: RunnerLoadRead = { ok: false };
+  for (let i = 0; i < rule.samples; i++) {
+    if (i > 0) await ports.clock.sleep(rule.intervalS * 1000);
+    try {
+      const busy = await withTimeout(
+        orgRunnersBusy(rule.org, rule.namePattern, ports.gh, timeoutMs),
+        timeoutMs,
+      );
+      last = { ok: busy <= rule.maxBusy, busy };
+    } catch (err) {
+      const error = (err instanceof Error ? err.message : String(err))
+        .replace(/\p{Cc}/gu, ' ')
+        .slice(0, 300);
+      return { ok: false, error };
+    }
+    if (!last.ok) return last;
+  }
+  return last;
 }
 
 /** Two reads `checkTwiceSeconds` apart, both ok. A busy first read returns false without waiting. */
