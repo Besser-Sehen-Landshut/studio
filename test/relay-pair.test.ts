@@ -172,7 +172,7 @@ describe('the authorized keys of a worker are exactly its pairings', () => {
     const acl = script.indexOf(
       `icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R"`,
     );
-    const move = script.indexOf('[IO.File]::Replace($tmp, $target, $null)');
+    const move = script.indexOf('[IO.File]::Replace($tmp, $target, [NullString]::Value)');
     expect(acl).toBeGreaterThan(0);
     expect(move).toBeGreaterThan(acl);
     expect(() =>

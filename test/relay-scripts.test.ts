@@ -83,6 +83,22 @@ describe('the generated PowerShell keeps its backslashes', () => {
       }
     });
   }
+  it('a .NET method never gets $null for a string: PowerShell would pass an empty string', () => {
+    for (const [name, text] of Object.entries(scripts)) {
+      expect(text, name).not.toMatch(/::Replace\([^)]*\$null\)/);
+    }
+  });
+
+  it('the crew host imports every fs function it calls', () => {
+    const host = readFileSync(new URL('../bin/studio-crew-host.mjs', import.meta.url), 'utf8');
+    const imported = /import \{([^}]*)\} from 'node:fs'/.exec(host)?.[1] ?? '';
+    for (const m of host.matchAll(/\b(\w+Sync)\(/g)) {
+      const fn = m[1] as string;
+      if (fn === 'powershellSync' || fn === 'execFileSync') continue;
+      expect(imported, fn).toMatch(new RegExp(`\\b${fn}\\b`));
+    }
+  });
+
   it('each broker script fits a task action as -EncodedCommand, with room to spare', () => {
     for (const op of ['sweep', 'retire', 'fresh'] as const) {
       const script = brokerScript({

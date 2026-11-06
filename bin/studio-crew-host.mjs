@@ -13,7 +13,15 @@
 // Self-contained on purpose: no import of Studio's sources or of anything the working directory
 // could provide (studio-crew-ps.mjs lies beside it).
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { closeSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { connect } from 'node:net';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';

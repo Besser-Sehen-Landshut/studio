@@ -39680,7 +39680,7 @@ function SealFor([string]$file, [string]$plain, [string]$reader) {
   [IO.File]::WriteAllBytes($tmp, $sealed)
   icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($reader):R" /L /Q | Out-Null
   if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $file" }
-  if (Test-Path -LiteralPath $file) { [IO.File]::Replace($tmp, $file, $null) } else { [IO.File]::Move($tmp, $file) }
+  if (Test-Path -LiteralPath $file) { [IO.File]::Replace($tmp, $file, [NullString]::Value) } else { [IO.File]::Move($tmp, $file) }
 }
 function NewJobUser([string]$credFile, [string]$reader) {
   $g = CrewGroup
@@ -61294,7 +61294,7 @@ $tmp = Join-Path (Split-Path -Parent $target) ('.' + [Guid]::NewGuid().ToString(
 icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /L /Q | Out-Null
 if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $target" }
 icacls $tmp /setowner '*S-1-5-32-544' /L /Q | Out-Null
-if (Test-Path -LiteralPath $target) { [IO.File]::Replace($tmp, $target, $null) } else { [IO.File]::Move($tmp, $target) }`;
+if (Test-Path -LiteralPath $target) { [IO.File]::Replace($tmp, $target, [NullString]::Value) } else { [IO.File]::Move($tmp, $target) }`;
 }
 var FOLDER_FUNCTIONS = String.raw`$adminSids = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
 # What may own a folder of Studio's before this run: administrators, SYSTEM, TrustedInstaller, or

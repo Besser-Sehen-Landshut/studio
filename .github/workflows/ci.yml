@@ -47,7 +47,8 @@ jobs:
           STUDIO_PRIVATE_WORDS_OPTIONAL: ${{ github.event.pull_request.head.repo.fork == true && '1' || '' }}
 
   # The Windows crew sandbox of workers (src/windows-sandbox.ts) on a real Windows machine. The
-  # GitHub-hosted runner is elevated, so the test creates its crew user and firewall rule there.
+  # GitHub-hosted runner is elevated, so the test creates its crew users, their group and firewall
+  # rule there. One test file at a time: they make and delete users and set ACLs elevated.
   windows:
     runs-on: windows-latest
     steps:
@@ -59,7 +60,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Windows crew sandbox
-        run: pnpm exec vitest run test/egress-proxy.test.ts test/windows-sandbox.test.ts test/windows-real.test.ts test/relay-windows-real.test.ts
+        run: pnpm exec vitest run --no-file-parallelism test/egress-proxy.test.ts test/windows-sandbox.test.ts test/windows-real.test.ts test/relay-windows-real.test.ts
         env:
           STUDIO_WINDOWS_SANDBOX_TEST: "1"
 

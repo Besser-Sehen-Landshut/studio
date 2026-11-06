@@ -159,7 +159,7 @@ function SealFor([string]$file, [string]$plain, [string]$reader) {
   [IO.File]::WriteAllBytes($tmp, $sealed)
   icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($reader):R" /L /Q | Out-Null
   if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $file" }
-  if (Test-Path -LiteralPath $file) { [IO.File]::Replace($tmp, $file, $null) } else { [IO.File]::Move($tmp, $file) }
+  if (Test-Path -LiteralPath $file) { [IO.File]::Replace($tmp, $file, [NullString]::Value) } else { [IO.File]::Move($tmp, $file) }
 }
 function NewJobUser([string]$credFile, [string]$reader) {
   $g = CrewGroup
