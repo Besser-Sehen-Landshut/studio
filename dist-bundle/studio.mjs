@@ -29052,7 +29052,7 @@ function migrationNumberOf(entry, pattern) {
 var import_yaml2 = __toESM(require_dist(), 1);
 import { existsSync, lstatSync, readdirSync, readFileSync as readFileSync2, statSync } from "node:fs";
 import { join as join2 } from "node:path";
-var STUDIO_VERSION = "0.23.0";
+var STUDIO_VERSION = "0.23.1";
 var HTTPS_GIT = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\.git)?$/;
 var VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
 var PLUGIN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -42567,8 +42567,7 @@ var REGISTER_LOCK = "migration-numbers.lock";
 var LOCK_STALE_MS4 = 3e4;
 var GH_TIMEOUT_MS2 = 6e4;
 var KEEP_HISTORY = 500;
-var LIST_FILES_CAP = 100;
-var PR_FILES_API_CAP = 3e3;
+var SHA2 = /^[0-9a-f]{40,64}$/i;
 var PR_LIST_LIMIT = 1e3;
 var HOLDER_RE = /^[A-Za-z0-9][A-Za-z0-9._:/#@-]{0,63}$/;
 var holderSchema = external_exports.string().regex(HOLDER_RE, "one word of at most 64 characters");
@@ -42665,77 +42664,55 @@ async function ghJson(gh, args, what) {
     throw new Error(`cannot read ${what}: gh returned no JSON`);
   }
 }
-async function namesOnBranch(gh, scheme, branch) {
+async function namesAt(gh, scheme, ref) {
+  const at2 = SHA2.test(ref) ? ref.slice(0, 12) : ref;
   const r = await gh.run(
-    ["api", `repos/${scheme.repo}/git/trees/${encodeURIComponent(`${branch}:${scheme.dir}`)}`],
+    ["api", `repos/${scheme.repo}/git/trees/${encodeURIComponent(`${ref}:${scheme.dir}`)}`],
     { timeoutMs: GH_TIMEOUT_MS2 }
   );
   if (r.code !== 0) {
     if (/HTTP 404|Not Found/.test(`${r.stderr}${r.stdout}`)) return void 0;
-    throw new Error(`cannot read ${scheme.dir} on ${branch} (gh exit ${r.code})`);
+    throw new Error(`cannot read ${scheme.dir} at ${at2} (gh exit ${r.code})`);
   }
   let tree;
   try {
     tree = JSON.parse(r.stdout);
   } catch {
-    throw new Error(`cannot read ${scheme.dir} on ${branch}: gh returned no JSON`);
+    throw new Error(`cannot read ${scheme.dir} at ${at2}: gh returned no JSON`);
   }
   if (tree.truncated !== false || !Array.isArray(tree.tree)) {
-    throw new Error(`cannot read ${scheme.dir} on ${branch} in full`);
+    throw new Error(`cannot read ${scheme.dir} at ${at2} in full`);
   }
   return tree.tree.flatMap((e) => typeof e.path === "string" ? [e.path] : []);
 }
-async function pullRequestFiles(gh, repo, pr) {
-  const unreadable = (why) => new Error(`cannot read the files of ${repo}#${pr}${why}`);
+async function mergeBaseOf(gh, repo, base, head) {
   const r = await gh.run(
-    [
-      "api",
-      "--paginate",
-      `repos/${repo}/pulls/${pr}/files?per_page=100`,
-      "--jq",
-      ".[] | [.status, .filename] | @json"
-    ],
+    ["api", `repos/${repo}/compare/${base}...${head}`, "--jq", ".merge_base_commit.sha"],
     { timeoutMs: GH_TIMEOUT_MS2 }
   );
-  if (r.code !== 0) throw unreadable(` (gh exit ${r.code})`);
-  const files = [];
-  let listed = 0;
-  for (const line4 of r.stdout.split("\n")) {
-    if (line4.trim() === "") continue;
-    let pair;
-    try {
-      pair = JSON.parse(line4);
-    } catch {
-      throw unreadable(": gh returned no JSON");
-    }
-    const [status, name] = Array.isArray(pair) ? pair : [];
-    if (typeof status !== "string" || typeof name !== "string") {
-      throw unreadable(": gh returned no file");
-    }
-    listed++;
-    if (status !== "removed") files.push(name);
+  const sha = r.stdout.trim();
+  if (r.code !== 0 || !SHA2.test(sha)) {
+    throw new Error(`cannot read the merge base of ${head.slice(0, 12)} (gh exit ${r.code})`);
   }
-  const count3 = await ghJson(
-    gh,
-    ["pr", "view", String(pr), "--repo", repo, "--json", "changedFiles"],
-    `the file count of ${repo}#${pr}`
+  return sha;
+}
+async function addedEntries(gh, scheme, pr) {
+  if (!SHA2.test(pr.head) || !SHA2.test(pr.base)) {
+    throw new Error(`cannot read the commits of ${scheme.repo}#${pr.number}`);
+  }
+  const atHead = await namesAt(gh, scheme, pr.head);
+  if (atHead === void 0 || atHead.length === 0) return [];
+  const atBase = new Set(
+    await namesAt(gh, scheme, await mergeBaseOf(gh, scheme.repo, pr.base, pr.head)) ?? []
   );
-  const changed = count3?.changedFiles;
-  if (!Number.isInteger(changed)) throw unreadable(": gh returned no file count");
-  if (changed >= PR_FILES_API_CAP || listed >= PR_FILES_API_CAP) {
-    throw unreadable(`: it changes ${PR_FILES_API_CAP} files or more, more than GitHub lists`);
-  }
-  if (listed !== changed) {
-    throw unreadable(`: GitHub listed ${listed} of its ${changed} changed files`);
-  }
-  return files;
+  return atHead.filter((n4) => !atBase.has(n4));
 }
 async function readMigrationUse(gh, scheme) {
   const branch = await readDefaultBranch({ gh }, scheme.repo);
   if (branch === void 0 || !usableBaseName(branch)) {
     throw new Error(`cannot read the default branch of ${scheme.repo}`);
   }
-  const names = await namesOnBranch(gh, scheme, branch);
+  const names = await namesAt(gh, scheme, branch);
   const onBranch = numbersOf(
     (names ?? []).map((n4) => `${scheme.dir}/${n4}`),
     scheme
@@ -42755,7 +42732,7 @@ async function readMigrationUse(gh, scheme) {
       "--limit",
       String(PR_LIST_LIMIT),
       "--json",
-      "number,files"
+      "number,headRefOid,baseRefOid"
     ],
     `the open pull requests of ${scheme.repo}`
   );
@@ -42767,18 +42744,16 @@ async function readMigrationUse(gh, scheme) {
   }
   const prs = /* @__PURE__ */ new Map();
   for (const raw of list2) {
-    if (!Number.isInteger(raw.number) || !Array.isArray(raw.files)) {
+    if (!Number.isInteger(raw.number) || typeof raw.headRefOid !== "string" || typeof raw.baseRefOid !== "string") {
       throw new Error(`cannot read the open pull requests of ${scheme.repo}`);
     }
     const pr = raw.number;
-    const listed = raw.files;
-    const paths = listed.length >= LIST_FILES_CAP ? await pullRequestFiles(gh, scheme.repo, pr) : listed.flatMap(
-      (f3) => typeof f3.path === "string" && f3.changeType !== "DELETED" ? [f3.path] : []
-    );
-    const fresh = paths.filter((p) => {
-      const entry = migrationEntryOf(p, scheme.dir);
-      return entry !== void 0 && !onMain.has(entry);
+    const added = await addedEntries(gh, scheme, {
+      number: pr,
+      head: raw.headRefOid,
+      base: raw.baseRefOid
     });
+    const fresh = added.filter((e) => !onMain.has(e)).map((e) => `${scheme.dir}/${e}`);
     const read3 = numbersOf(fresh, scheme);
     if (read3.numbers.size > 0) prs.set(pr, read3.numbers);
   }
@@ -42941,8 +42916,18 @@ async function pullRequestMigrationCheck(o2) {
   let use;
   let files;
   try {
-    files = await pullRequestFiles(o2.gh, o2.repo, o2.pr);
-    if (!files.some((f3) => migrationEntryOf(f3, scheme.dir) !== void 0)) return {};
+    const view = await ghJson(
+      o2.gh,
+      ["pr", "view", String(o2.pr), "--repo", o2.repo, "--json", "headRefOid,baseRefOid"],
+      `${o2.repo}#${o2.pr}`
+    );
+    const added = await addedEntries(o2.gh, scheme, {
+      number: o2.pr,
+      head: typeof view?.headRefOid === "string" ? view.headRefOid : "",
+      base: typeof view?.baseRefOid === "string" ? view.baseRefOid : ""
+    });
+    if (added.length === 0) return {};
+    files = added.map((e) => `${scheme.dir}/${e}`);
     use = await readMigrationUse(o2.gh, scheme);
   } catch (e) {
     return { unreadable: e.message };
@@ -43025,7 +43010,7 @@ var GIT_FETCH_MS2 = 12e4;
 var GIT_LOCAL_MS2 = 6e4;
 var WORKFLOWS_DIR = ".github/workflows/";
 var WORKFLOW_FILE = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/;
-var SHA2 = /^[0-9a-f]{40,64}$/i;
+var SHA3 = /^[0-9a-f]{40,64}$/i;
 var MAX_JOBS = 20;
 var jobInstances = (checks, workflow, job) => {
   const mine = [];
@@ -43200,7 +43185,7 @@ async function verifyNotRunHereJobs(o2) {
       return fail3("no covers text says why the named job covers the command");
     }
     const base = o2.baseOid;
-    if (base === void 0 || !SHA2.test(base) || !SHA2.test(o2.headOid)) {
+    if (base === void 0 || !SHA3.test(base) || !SHA3.test(o2.headOid)) {
       return fail3("the base commit is unknown");
     }
     if (!WORKFLOW_FILE.test(named2.workflow)) {
@@ -51729,7 +51714,7 @@ function appendStateLine(stateRoot, name, line4) {
   }
 }
 var BUCKETS = /* @__PURE__ */ new Set(["pass", "fail", "pending", "skipping", "cancel"]);
-var SHA3 = /^[0-9a-f]{40,64}$/;
+var SHA4 = /^[0-9a-f]{40,64}$/;
 function parseChecks(stdout) {
   let raw;
   try {
@@ -51826,7 +51811,7 @@ async function isBranchUpdate(ports, checkout, target, approved, head, depth = 1
     if (c3.code !== 0) return false;
     const commit = JSON.parse(c3.stdout);
     const [first, second, ...rest] = commit.parents ?? [];
-    if (typeof first?.sha !== "string" || !SHA3.test(first.sha) || typeof second?.sha !== "string" || !SHA3.test(second.sha) || rest.length > 0 || commit.committer?.login !== "web-flow" || commit.commit?.verification?.verified !== true) {
+    if (typeof first?.sha !== "string" || !SHA4.test(first.sha) || typeof second?.sha !== "string" || !SHA4.test(second.sha) || rest.length > 0 || commit.committer?.login !== "web-flow" || commit.commit?.verification?.verified !== true) {
       return false;
     }
     const base = approved.base.split("/").map(encodeURIComponent).join("/");
@@ -51918,7 +51903,7 @@ async function viewPr(entry, gh) {
     return "gh pr view returned unparsable output";
   }
   const { headRefOid, state, mergeable } = raw ?? {};
-  if (typeof headRefOid !== "string" || !SHA3.test(headRefOid)) {
+  if (typeof headRefOid !== "string" || !SHA4.test(headRefOid)) {
     return "gh pr view returned no valid head SHA";
   }
   if (state !== "OPEN" && state !== "MERGED" && state !== "CLOSED") {
@@ -51962,7 +51947,7 @@ async function mergeShaOf(entry, gh) {
   try {
     const parsed = JSON.parse(r.stdout);
     const oid = parsed?.mergeCommit?.oid;
-    return typeof oid === "string" && SHA3.test(oid) ? oid : void 0;
+    return typeof oid === "string" && SHA4.test(oid) ? oid : void 0;
   } catch {
     return void 0;
   }
@@ -52255,7 +52240,7 @@ var LEAD_PREFIX = "evidence: ";
 var OWNER_PREFIX = "evidence (owner): ";
 var STUDIO_CONFIG2 = ".studio/studio.yaml";
 var STUDIO_BOARD2 = ".studio/board.yaml";
-var SHA4 = /^[0-9a-f]{40,64}$/i;
+var SHA5 = /^[0-9a-f]{40,64}$/i;
 var GIT_FETCH_MS4 = 12e4;
 var GIT_LOCAL_MS4 = 6e4;
 var LOCK_WAIT_MS = 5e3;
@@ -52284,8 +52269,8 @@ var entrySchema2 = external_exports.object({
   repo: external_exports.string(),
   pr: external_exports.number().int().positive(),
   item: external_exports.string().optional(),
-  base: external_exports.string().regex(SHA4),
-  head: external_exports.string().regex(SHA4),
+  base: external_exports.string().regex(SHA5),
+  head: external_exports.string().regex(SHA5),
   /** sha256 of `git diff base...head`: what the proof judged. */
   diff: external_exports.string(),
   /** The built-in proof that was computed. */
@@ -52531,7 +52516,7 @@ async function prepare(ctx, ref, head) {
   if (main === void 0) return { kind: "unreadable", why: "the default branch cannot be read" };
   if (facts.base !== main) return { kind: "none" };
   const base = facts.baseOid;
-  if (base === void 0 || !SHA4.test(base) || !SHA4.test(head)) {
+  if (base === void 0 || !SHA5.test(base) || !SHA5.test(head)) {
     return { kind: "unreadable", why: "the base commit is unknown" };
   }
   if (!await fetchBoth(ctx, base, head)) {
@@ -52817,7 +52802,7 @@ async function judgeFailedChecks(ctx, ref, head, failed) {
   return { kind: "waived", waived, applied, base: p.base };
 }
 async function evidenceChange(ctx, baseOid, head) {
-  if (baseOid === void 0 || !SHA4.test(baseOid) || !SHA4.test(head)) return { unreadable: true };
+  if (baseOid === void 0 || !SHA5.test(baseOid) || !SHA5.test(head)) return { unreadable: true };
   if (!await fetchBoth(ctx, baseOid, head)) return { unreadable: true };
   const files = await changedFiles(ctx, baseOid, head);
   if (files === void 0) return { unreadable: true };
@@ -52944,7 +52929,7 @@ async function grantException(ctx, ref, ruleId, by, reason) {
 }
 var leadOnly = (reason) => /^(?:blocked: |merge failed: )?evidence: /.test(reason);
 async function addedInPullRequest(ctx, base, head) {
-  if (base === void 0 || !SHA4.test(base) || !SHA4.test(head)) return void 0;
+  if (base === void 0 || !SHA5.test(base) || !SHA5.test(head)) return void 0;
   if (!await fetchBoth(ctx, base, head)) return void 0;
   let raw;
   let numstat;
@@ -53014,7 +52999,7 @@ async function remoteTip(ctx, branch) {
     );
     const line4 = out.split("\n").find((l) => l.endsWith(`	refs/heads/${branch}`));
     const sha = line4?.split("	")[0];
-    return sha !== void 0 && SHA4.test(sha) ? sha : void 0;
+    return sha !== void 0 && SHA5.test(sha) ? sha : void 0;
   } catch {
     return void 0;
   }
@@ -57246,7 +57231,7 @@ var RUN_FIND_MS = 10 * 6e4;
 var GH_MS4 = 6e4;
 var GIT_FETCH_MS5 = 12e4;
 var GIT_LOCAL_MS5 = 6e4;
-var SHA5 = /^[0-9a-f]{40}$/i;
+var SHA6 = /^[0-9a-f]{40}$/i;
 var STUDIO_CONFIG3 = ".studio/studio.yaml";
 var MAX_BLOB2 = 2 * 1024 * 1024;
 var MAX_FILES3 = 5e3;
@@ -57289,8 +57274,8 @@ var noteSchema = external_exports.strictObject({
   component: external_exports.strictObject({ id: external_exports.string(), name: line2(100) }),
   repo: external_exports.string(),
   branch: external_exports.string(),
-  since: external_exports.string().regex(SHA5),
-  sha: external_exports.string().regex(SHA5),
+  since: external_exports.string().regex(SHA6),
+  sha: external_exports.string().regex(SHA6),
   commits: external_exports.number().int().nonnegative(),
   files: external_exports.number().int().nonnegative(),
   epics: external_exports.array(
@@ -57335,8 +57320,8 @@ var releaseSchema = external_exports.strictObject({
   component: external_exports.string(),
   repo: external_exports.string(),
   branch: external_exports.string(),
-  sha: external_exports.string().regex(SHA5),
-  since: external_exports.string().regex(SHA5),
+  sha: external_exports.string().regex(SHA6),
+  since: external_exports.string().regex(SHA6),
   createdAt: external_exports.string(),
   status: external_exports.enum(RELEASE_STATUSES),
   workflow: external_exports.string(),
@@ -57359,7 +57344,7 @@ var releaseSchema = external_exports.strictObject({
   trigger: external_exports.strictObject({
     at: external_exports.string(),
     by: external_exports.enum(["lead", "owner"]),
-    head: external_exports.string().regex(SHA5),
+    head: external_exports.string().regex(SHA6),
     workflowId: external_exports.number().int(),
     /** The newest run id of the workflow before the dispatch: only a later run can be its run. */
     floor: external_exports.number().int().nonnegative(),
@@ -57373,7 +57358,7 @@ var releaseSchema = external_exports.strictObject({
       at: external_exports.string(),
       workflowId: external_exports.number().int(),
       /** The branch head checked right before the start: its run must be of this head. */
-      head: external_exports.string().regex(SHA5).optional(),
+      head: external_exports.string().regex(SHA6).optional(),
       floor: external_exports.number().int().nonnegative().optional(),
       run: external_exports.number().int().optional(),
       refused: line2(300).optional()
@@ -57542,7 +57527,7 @@ async function resolveRef2(gh, repo, ref) {
       paginate: false,
       timeoutMs: GH_MS4
     })).trim();
-    return SHA5.test(sha) ? sha.toLowerCase() : void 0;
+    return SHA6.test(sha) ? sha.toLowerCase() : void 0;
   } catch {
     return void 0;
   }
@@ -57705,7 +57690,7 @@ function wayBackOf(rule, repo, branch, previous, migrations) {
 }
 async function buildNote(ctx, o2) {
   const co = ctx.checkout(o2.component.repo);
-  const range = (await g2(ctx.git, co, ["rev-list", "--max-count=10001", `${o2.since}..${o2.sha}`])).split("\n").map((s) => s.trim().toLowerCase()).filter((s) => SHA5.test(s));
+  const range = (await g2(ctx.git, co, ["rev-list", "--max-count=10001", `${o2.since}..${o2.sha}`])).split("\n").map((s) => s.trim().toLowerCase()).filter((s) => SHA6.test(s));
   if (range.length > 1e4)
     throw new Error("more than 10000 commits in the release: release smaller steps");
   const inRange = new Set(range);
@@ -57733,7 +57718,7 @@ async function buildNote(ctx, o2) {
     } catch {
       merge3 = void 0;
     }
-    if (merge3 === void 0 || !SHA5.test(merge3)) {
+    if (merge3 === void 0 || !SHA6.test(merge3)) {
       unplaced.push({ id: item.id, why: "its merge commit cannot be read" });
     } else if (inRange.has(merge3)) placed.push(item);
   }
