@@ -60748,7 +60748,6 @@ import {
   statfsSync,
   writeFileSync as writeFileSync18
 } from "node:fs";
-import { createServer as createServer2 } from "node:net";
 import { cpus, homedir as homedir12 } from "node:os";
 import { dirname as dirname16, join as join55, resolve as resolve12 } from "node:path";
 import { fileURLToPath as fileURLToPath7, pathToFileURL } from "node:url";
@@ -62143,13 +62142,77 @@ async function cleanup(c3, id) {
   removeStateEntry(root, jobFile(root, id));
 }
 var STUDIO_BIN = resolve12(dirname16(fileURLToPath7(import.meta.url)), "..", "bin", "studio");
+function relayHandoffScript(o2) {
+  if (!/^[A-Z]+-\d+$/.test(o2.id)) throw new Error("not an item id");
+  const q = (s) => {
+    if (/[\p{Cc}"]/u.test(s)) throw new Error(`refusing ${JSON.stringify(s)} in a command line`);
+    return `'${s.replace(/'/g, "''")}'`;
+  };
+  const home = o2.home === void 0 ? "''" : `' --home "' + ${q(o2.home)} + '"'`;
+  return `$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class StudioRelayPipe {
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint pid);
+  public static uint ClientPid(IntPtr pipe) {
+    uint pid;
+    if (!GetNamedPipeClientProcessId(pipe, out pid)) throw new Win32Exception();
+    return pid;
+  }
+}
+'@
+$spec = [Text.Encoding]::UTF8.GetBytes([Console]::In.ReadToEnd())
+# Only the relay account may open the pipe; the runner runs as that account.
+$me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+$security = New-Object System.IO.Pipes.PipeSecurity
+$security.SetAccessRuleProtection($true, $false)
+$security.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, 'FullControl', 'Allow')))
+$name = 'studio-relay-' + [Guid]::NewGuid().ToString('N')
+$pipe = New-Object System.IO.Pipes.NamedPipeServerStream($name, 'Out', 1, 'Byte', 'Asynchronous', 0, 65536, $security)
+try {
+  $cmd = '"' + ${q(o2.node)} + '" "' + ${q(o2.bin)} + '" relay run ${o2.id} --pipe ' + $name + ${home}
+  $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
+  if ($r.ReturnValue -ne 0) { throw "Win32_Process.Create returned $($r.ReturnValue)" }
+  $runner = [uint32]$r.ProcessId
+  $wait = $pipe.BeginWaitForConnection($null, $null)
+  if (-not $wait.AsyncWaitHandle.WaitOne(60000)) { throw 'the runner did not connect' }
+  $pipe.EndWaitForConnection($wait)
+  if ([StudioRelayPipe]::ClientPid($pipe.SafePipeHandle.DangerousGetHandle()) -ne $runner) {
+    throw 'a process other than the runner connected'
+  }
+  $pipe.Write($spec, 0, $spec.Length)
+  $pipe.Flush()
+  $pipe.WaitForPipeDrain()
+  [Console]::Out.Write($runner)
+} finally {
+  $spec = $null
+  $pipe.Dispose()
+}
+`;
+}
+var spawnWithInput = (file4, args, stdin) => new Promise((res) => {
+  const child = spawn5(file4, args, { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+  let stdout = "";
+  child.stdout?.on("data", (d) => {
+    stdout += String(d);
+  });
+  child.on("error", () => res({ code: 1, stdout: "" }));
+  child.on("close", (code) => res({ code: code ?? 1, stdout }));
+  child.stdin?.on("error", () => {
+  });
+  child.stdin?.end(stdin);
+});
 function systemSpawnRunner(o2) {
+  const bin2 = o2.bin ?? STUDIO_BIN;
   const homeArgs = o2.home === void 0 ? [] : ["--home", o2.home];
   if (o2.platform !== "win32") {
     return async ({ id, spec, log: log2 }) => {
       const fd = openSync9(log2, "a");
       try {
-        const child = spawn5(process.execPath, [STUDIO_BIN, "relay", "run", id, ...homeArgs], {
+        const child = spawn5(process.execPath, [bin2, "relay", "run", id, ...homeArgs], {
           detached: true,
           stdio: ["pipe", fd, fd],
           env: process.env
@@ -62169,62 +62232,24 @@ function systemSpawnRunner(o2) {
     };
   }
   return async ({ id, spec }) => {
-    const name = `studio-relay-${randomBytes12(16).toString("hex")}`;
-    const server = createServer2({ allowHalfOpen: false });
-    let served = false;
-    const handed = new Promise((res, rej) => {
-      server.once("connection", (s) => {
-        if (served) {
-          s.destroy();
-          return;
-        }
-        served = true;
-        server.close();
-        s.end(spec, () => res());
-        s.on("error", rej);
-      });
+    const script = relayHandoffScript({
+      node: process.execPath,
+      bin: bin2,
+      id,
+      home: o2.home
     });
-    await new Promise((res, rej) => {
-      server.once("error", rej);
-      server.listen(`\\\\.\\pipe\\${name}`, () => res());
-    });
-    const q = (s) => `'${s.replace(/'/g, "''")}'`;
-    const cmd = [process.execPath, STUDIO_BIN, "relay", "run", id, "--pipe", name, ...homeArgs].map((a2) => `"${a2}"`).join(" ");
-    const run2 = o2.run ?? defaultRun;
-    const r = await run2("powershell.exe", [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${q(cmd)} }; if ($r.ReturnValue -ne 0) { exit 3 }; [Console]::Out.Write($r.ProcessId)`
-    ]);
+    const r = await (o2.spawn ?? spawnWithInput)(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      spec
+    );
     const pid = Number(r.stdout.trim());
     if (r.code !== 0 || !Number.isInteger(pid) || pid <= 0) {
-      server.close();
-      throw new Error("cannot start the relay runner (Win32_Process.Create)");
-    }
-    const timeout = new Promise(
-      (_, rej) => setTimeout(
-        () => rej(new Error("the relay runner did not take its spec")),
-        HANDOFF_MS
-      ).unref()
-    );
-    try {
-      await Promise.race([handed, timeout]);
-    } finally {
-      server.close();
+      throw new Error("cannot hand the job to a relay runner");
     }
     return { pid };
   };
 }
-var defaultRun = (file4, args) => new Promise((res) => {
-  const child = spawn5(file4, args, { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
-  let stdout = "";
-  child.stdout?.on("data", (d) => {
-    stdout += String(d);
-  });
-  child.on("error", () => res({ code: 1, stdout: "" }));
-  child.on("close", (code) => res({ code: code ?? 1, stdout }));
-});
 async function readSpecFromPipe(name) {
   if (!/^studio-relay-[0-9a-f]{32}$/.test(name)) throw new Error("not a relay pipe name");
   const { connect } = await import("node:net");

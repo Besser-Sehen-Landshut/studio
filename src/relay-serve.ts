@@ -22,7 +22,6 @@ import {
   statfsSync,
   writeFileSync,
 } from 'node:fs';
-import { createServer } from 'node:net';
 import { cpus, homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -868,22 +867,113 @@ async function cleanup(c: RelayContext, id: string): Promise<void> {
 export const STUDIO_BIN = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'studio');
 
 /**
- * Starts a runner that outlives the SSH session. POSIX: a new session (detached), the spec on its
- * stdin. Native Windows: sshd ends every process of a session's job object with the session, so the
- * runner is created through CIM (Win32_Process.Create, outside that job) and takes its spec from a
- * named pipe with a random name, which this process serves once.
+ * The PowerShell that hands a spec to a new Windows runner, run as a child of `relay serve` with
+ * the spec on its stdin (an anonymous pipe only that child holds). It creates a named pipe whose
+ * DACL allows the relay account alone (nobody else, the crew user included, may even open it),
+ * creates the runner through CIM (`Win32_Process.Create`, outside sshd's job object for the
+ * session), waits for the pipe's client and writes the spec only when that client is the runner it
+ * created (GetNamedPipeClientProcessId), as the keeper does for the crew host. It prints the
+ * runner's pid; any other client, or none, fails and nothing is written.
+ */
+export function relayHandoffScript(o: {
+  node: string;
+  bin: string;
+  id: string;
+  home: string | undefined;
+}): string {
+  if (!/^[A-Z]+-\d+$/.test(o.id)) throw new Error('not an item id');
+  const q = (s: string) => {
+    if (/[\p{Cc}"]/u.test(s)) throw new Error(`refusing ${JSON.stringify(s)} in a command line`);
+    return `'${s.replace(/'/g, "''")}'`;
+  };
+  const home = o.home === undefined ? "''" : `' --home "' + ${q(o.home)} + '"'`;
+  return `$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class StudioRelayPipe {
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint pid);
+  public static uint ClientPid(IntPtr pipe) {
+    uint pid;
+    if (!GetNamedPipeClientProcessId(pipe, out pid)) throw new Win32Exception();
+    return pid;
+  }
+}
+'@
+$spec = [Text.Encoding]::UTF8.GetBytes([Console]::In.ReadToEnd())
+# Only the relay account may open the pipe; the runner runs as that account.
+$me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+$security = New-Object System.IO.Pipes.PipeSecurity
+$security.SetAccessRuleProtection($true, $false)
+$security.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, 'FullControl', 'Allow')))
+$name = 'studio-relay-' + [Guid]::NewGuid().ToString('N')
+$pipe = New-Object System.IO.Pipes.NamedPipeServerStream($name, 'Out', 1, 'Byte', 'Asynchronous', 0, 65536, $security)
+try {
+  $cmd = '"' + ${q(o.node)} + '" "' + ${q(o.bin)} + '" relay run ${o.id} --pipe ' + $name + ${home}
+  $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
+  if ($r.ReturnValue -ne 0) { throw "Win32_Process.Create returned $($r.ReturnValue)" }
+  $runner = [uint32]$r.ProcessId
+  $wait = $pipe.BeginWaitForConnection($null, $null)
+  if (-not $wait.AsyncWaitHandle.WaitOne(60000)) { throw 'the runner did not connect' }
+  $pipe.EndWaitForConnection($wait)
+  if ([StudioRelayPipe]::ClientPid($pipe.SafePipeHandle.DangerousGetHandle()) -ne $runner) {
+    throw 'a process other than the runner connected'
+  }
+  $pipe.Write($spec, 0, $spec.Length)
+  $pipe.Flush()
+  $pipe.WaitForPipeDrain()
+  [Console]::Out.Write($runner)
+} finally {
+  $spec = $null
+  $pipe.Dispose()
+}
+`;
+}
+
+/** Starts a process with `stdin` on its standard input; a seam for tests. */
+export type SpawnWithInput = (
+  file: string,
+  args: string[],
+  stdin: string,
+) => Promise<{ code: number; stdout: string }>;
+
+const spawnWithInput: SpawnWithInput = (file, args, stdin) =>
+  new Promise((res) => {
+    const child = spawn(file, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+    let stdout = '';
+    child.stdout?.on('data', (d) => {
+      stdout += String(d);
+    });
+    child.on('error', () => res({ code: 1, stdout: '' }));
+    child.on('close', (code) => res({ code: code ?? 1, stdout }));
+    child.stdin?.on('error', () => {});
+    child.stdin?.end(stdin);
+  });
+
+/**
+ * Starts a runner that outlives the SSH session; the spec, with the token, reaches it only through
+ * handles no other process can open. POSIX: a new session (detached) with the spec on its stdin.
+ * Native Windows: sshd ends every process of a session's job object with the session, so the runner
+ * is created through CIM, and a PowerShell child of this process (spec on its stdin) hands the spec
+ * over a named pipe that only the relay account may open and only to that runner's pid
+ * (`relayHandoffScript`). This process listens on nothing.
  */
 export function systemSpawnRunner(o: {
   home: string | undefined;
   platform: NodeJS.Platform;
-  run?: (file: string, args: string[]) => Promise<{ code: number; stdout: string }>;
+  spawn?: SpawnWithInput;
+  /** The Studio to run; this one by default. */
+  bin?: string;
 }): RelayContext['spawnRunner'] {
+  const bin = o.bin ?? STUDIO_BIN;
   const homeArgs = o.home === undefined ? [] : ['--home', o.home];
   if (o.platform !== 'win32') {
     return async ({ id, spec, log }) => {
       const fd = openSync(log, 'a');
       try {
-        const child = spawn(process.execPath, [STUDIO_BIN, 'relay', 'run', id, ...homeArgs], {
+        const child = spawn(process.execPath, [bin, 'relay', 'run', id, ...homeArgs], {
           detached: true,
           stdio: ['pipe', fd, fd],
           env: process.env,
@@ -902,66 +992,24 @@ export function systemSpawnRunner(o: {
     };
   }
   return async ({ id, spec }) => {
-    const name = `studio-relay-${randomBytes(16).toString('hex')}`;
-    const server = createServer({ allowHalfOpen: false });
-    let served = false;
-    const handed = new Promise<void>((res, rej) => {
-      server.once('connection', (s) => {
-        if (served) {
-          s.destroy();
-          return;
-        }
-        served = true;
-        server.close();
-        s.end(spec, () => res());
-        s.on('error', rej);
-      });
+    const script = relayHandoffScript({
+      node: process.execPath,
+      bin,
+      id,
+      home: o.home,
     });
-    await new Promise<void>((res, rej) => {
-      server.once('error', rej);
-      server.listen(`\\\\.\\pipe\\${name}`, () => res());
-    });
-    const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
-    const cmd = [process.execPath, STUDIO_BIN, 'relay', 'run', id, '--pipe', name, ...homeArgs]
-      .map((a) => `"${a}"`)
-      .join(' ');
-    const run = o.run ?? defaultRun;
-    const r = await run('powershell.exe', [
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${q(cmd)} }; if ($r.ReturnValue -ne 0) { exit 3 }; [Console]::Out.Write($r.ProcessId)`,
-    ]);
+    const r = await (o.spawn ?? spawnWithInput)(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      spec,
+    );
     const pid = Number(r.stdout.trim());
     if (r.code !== 0 || !Number.isInteger(pid) || pid <= 0) {
-      server.close();
-      throw new Error('cannot start the relay runner (Win32_Process.Create)');
-    }
-    const timeout = new Promise<never>((_, rej) =>
-      setTimeout(
-        () => rej(new Error('the relay runner did not take its spec')),
-        HANDOFF_MS,
-      ).unref(),
-    );
-    try {
-      await Promise.race([handed, timeout]);
-    } finally {
-      server.close();
+      throw new Error('cannot hand the job to a relay runner');
     }
     return { pid };
   };
 }
-
-const defaultRun = (file: string, args: string[]) =>
-  new Promise<{ code: number; stdout: string }>((res) => {
-    const child = spawn(file, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-    let stdout = '';
-    child.stdout?.on('data', (d) => {
-      stdout += String(d);
-    });
-    child.on('error', () => res({ code: 1, stdout: '' }));
-    child.on('close', (code) => res({ code: code ?? 1, stdout }));
-  });
 
 /** The runner's side of the Windows hand-over: the spec from the named pipe `name`. */
 export async function readSpecFromPipe(name: string): Promise<string> {

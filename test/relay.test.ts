@@ -25,6 +25,7 @@ import {
   parseRequest,
   readMessage,
 } from '../src/relay-protocol.js';
+import { relayHandoffScript, STUDIO_BIN, systemSpawnRunner } from '../src/relay-serve.js';
 import { sshArgs } from '../src/relay-transport.js';
 import {
   authorizedKeyLine,
@@ -319,6 +320,64 @@ describe('SMB candidates and verdicts', () => {
       line: expect.stringContaining('error 1219'),
     });
     expect(smbProblem([ip(192, 0, 2, 5)], {})).toMatchObject({ kind: 'held' });
+  });
+});
+
+describe('the hand-over of a spec to a Windows runner', () => {
+  it('goes over stdin to a child, then a pipe only the relay account may open, only to the runner', async () => {
+    const calls: { file: string; args: string[]; stdin: string }[] = [];
+    const start = systemSpawnRunner({
+      home: 'C:\\ProgramData\\Studio\\relay',
+      platform: 'win32',
+      spawn: async (file, args, stdin) => {
+        calls.push({ file, args, stdin });
+        return { code: 0, stdout: '4711' };
+      },
+    });
+    const spec = JSON.stringify({ nonce: 'n', job: { token: 'secret-token-value' } });
+    expect(await start({ id: 'APP-1', spec, log: 'unused' })).toEqual({ pid: 4711 });
+    expect(calls).toHaveLength(1);
+    const [call] = calls;
+    // The spec is the child's stdin, never an argument.
+    expect(call?.stdin).toBe(spec);
+    expect(call?.args.join(' ')).not.toContain('secret-token-value');
+    const script = call?.args.at(-1) ?? '';
+    expect(script).toBe(
+      relayHandoffScript({
+        node: process.execPath,
+        bin: STUDIO_BIN,
+        id: 'APP-1',
+        home: 'C:\\ProgramData\\Studio\\relay',
+      }),
+    );
+  });
+
+  it('the pipe: an explicit DACL of the relay account alone, the client checked before a byte', () => {
+    const script = relayHandoffScript({
+      node: 'C:\\node.exe',
+      bin: 'C:\\studio',
+      id: 'APP-1',
+      home: undefined,
+    });
+    expect(script).toContain('$security.SetAccessRuleProtection($true, $false)');
+    expect(script.match(/AddAccessRule/g)).toHaveLength(1);
+    expect(script).toContain("PipeAccessRule($me, 'FullControl', 'Allow')");
+    expect(script).not.toMatch(/Everyone|S-1-1-0|Anonymous/);
+    expect(script).toContain("NamedPipeServerStream($name, 'Out', 1,");
+    const check = script.indexOf('[StudioRelayPipe]::ClientPid(');
+    expect(check).toBeGreaterThan(0);
+    expect(script.indexOf('$pipe.Write(')).toBeGreaterThan(check);
+    expect(script).toContain(
+      "-ne $runner) {\n    throw 'a process other than the runner connected'",
+    );
+    expect(() =>
+      relayHandoffScript({ node: 'C:\\node.exe"', bin: 'x', id: 'APP-1', home: undefined }),
+    ).toThrow();
+  });
+
+  it('relay serve listens on nothing for the spec', () => {
+    const source = readFileSync(join(import.meta.dirname, '..', 'src', 'relay-serve.ts'), 'utf8');
+    expect(source).not.toMatch(/createServer|\.listen\(/);
   });
 });
 
