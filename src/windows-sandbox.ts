@@ -14,7 +14,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ipv4, LOOPBACK } from './egress-proxy.js';
 import { HeldError } from './held.js';
-import { assertStatePath, ensureStateDir, removeStateEntry, writeStateFile } from './paths.js';
+import {
+  acquireStateLock,
+  assertStatePath,
+  ensureStateDir,
+  removeStateEntry,
+  writeStateFile,
+} from './paths.js';
 import type { Claude } from './ports.js';
 
 /**
@@ -125,6 +131,8 @@ export function windowsSetupScript(o: {
   user: string;
   credFile: string;
   readPaths: readonly string[];
+  /** Places an earlier setup may have opened for writing (the crew Claude config dir): closed first. */
+  revokePaths?: readonly string[];
 }): string {
   if (!CREW_USER_RE.test(o.user)) throw new Error(`not a crew user name: ${o.user}`);
   const list = (ps: readonly string[]) => `@(${ps.map(psQuote).join(', ')})`;
@@ -165,6 +173,28 @@ $sid = $user.SID.Value
 $rule = 'Studio crew ' + $name + ': no direct network'
 Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 New-NetFirewallRule -DisplayName $rule -Direction Outbound -Action Block -LocalUser "D:(A;;CC;;;$sid)" -RemoteAddress @(${OUTSIDE.map(psQuote).join(', ')}) | Out-Null
+# An earlier setup opened the crew Claude config dir for writing: that grant goes, all the way down.
+foreach ($p in ${list(o.revokePaths ?? [])}) {
+  if (Test-Path -LiteralPath $p) { icacls $p /remove:g $name /T /C /Q | Out-Null }
+}
+# No logon as a batch job (no scheduled task with a stored password), as a service, over the
+# network or by remote desktop: the crew user starts processes only through Studio's keeper.
+$cfg = Join-Path $env:TEMP ('studio-rights-' + [Guid]::NewGuid().ToString('N') + '.inf')
+$db = [IO.Path]::ChangeExtension($cfg, '.sdb')
+secedit /export /cfg $cfg /areas USER_RIGHTS | Out-Null
+$lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $cfg)
+$at = $lines.IndexOf('[Privilege Rights]')
+if ($at -lt 0) { throw 'secedit gave no [Privilege Rights] section' }
+foreach ($right in @('SeDenyBatchLogonRight', 'SeDenyServiceLogonRight', 'SeDenyNetworkLogonRight', 'SeDenyRemoteInteractiveLogonRight')) {
+  $i = -1
+  for ($k = 0; $k -lt $lines.Count; $k++) { if ($lines[$k] -like "$right *") { $i = $k } }
+  if ($i -lt 0) { $lines.Insert($at + 1, "$right = *$sid") }
+  elseif ($lines[$i] -notlike "**$sid*") { $lines[$i] = $lines[$i] + ",*$sid" }
+}
+Set-Content -LiteralPath $cfg -Value $lines -Encoding Unicode
+secedit /configure /db $db /cfg $cfg /areas USER_RIGHTS /quiet | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "secedit could not set the logon rights ($LASTEXITCODE)" }
+Remove-Item -LiteralPath $cfg, $db -ErrorAction SilentlyContinue
 foreach ($p in ${list(o.readPaths)}) {
   if (Test-Path -LiteralPath $p) { icacls $p /grant "\${name}:(OI)(CI)RX" /Q | Out-Null }
 }
@@ -238,7 +268,10 @@ export const runFile: RunFile = (file, args, opts = {}) =>
     );
   });
 
-const GRANTS_FILE = 'windows-grants.json';
+/** The record and the lock of one crew user, owner-wide: all projects of this owner share it. */
+const recordFile = (user: string) => `windows-crew-${user.toLowerCase()}.json`;
+const lockFile = (user: string) => `windows-crew-${user.toLowerCase()}.lock`;
+const LOCK_STALE_MS = 10 * 60_000;
 
 interface GrantRecord {
   /** The keeper of the crew that holds the grants, once it started. */
@@ -246,9 +279,9 @@ interface GrantRecord {
   paths: string[];
 }
 
-function readGrantRecord(stateRoot: string): GrantRecord {
+function readGrantRecord(ownerRoot: string, user: string): GrantRecord {
   try {
-    const raw = JSON.parse(readFileSync(join(stateRoot, GRANTS_FILE), 'utf8')) as GrantRecord;
+    const raw = JSON.parse(readFileSync(join(ownerRoot, recordFile(user)), 'utf8')) as GrantRecord;
     return {
       ...(typeof raw.keeper === 'number' ? { keeper: raw.keeper } : {}),
       paths: Array.isArray(raw.paths) ? raw.paths.filter((p) => typeof p === 'string') : [],
@@ -258,8 +291,8 @@ function readGrantRecord(stateRoot: string): GrantRecord {
   }
 }
 
-const writeGrantRecord = (stateRoot: string, r: GrantRecord) =>
-  writeStateFile(stateRoot, join(stateRoot, GRANTS_FILE), `${JSON.stringify(r)}\n`);
+const writeGrantRecord = (ownerRoot: string, user: string, r: GrantRecord) =>
+  writeStateFile(ownerRoot, join(ownerRoot, recordFile(user)), `${JSON.stringify(r)}\n`);
 
 const processExists = (pid: number): boolean => {
   try {
@@ -271,61 +304,137 @@ const processExists = (pid: number): boolean => {
 };
 
 /**
- * The grants of the one crew this worker runs at a time, recorded owner-side (the state root, never
- * the crew's places) so that they are taken off when it ends, when it is stopped, and before any
- * later grant, also after a crash. With one shared crew user, two crews at once could reach each
- * other's places: a grant while a recorded keeper lives refuses.
+ * Ends every process of the crew user (found by owner SID through CIM) and prints how many it
+ * found and which are left. Run before a grant: whatever a crew left outside its job (a scheduled
+ * task, a WMI start) must not see the next crew's places. Ending another user's process takes an
+ * administrator; without one, a process that is left refuses the grant.
+ */
+export const sweepScript = (user: string): string =>
+  [
+    "$ErrorActionPreference = 'Stop'",
+    `$sid = (New-Object Security.Principal.NTAccount($env:COMPUTERNAME, ${psQuote(user)})).Translate([Security.Principal.SecurityIdentifier]).Value`,
+    'function Crew { @(Get-CimInstance Win32_Process | Where-Object { try { (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $sid } catch { $false } }) }',
+    '$found = Crew',
+    'foreach ($p in $found) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }',
+    'if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }',
+    '$left = @(Crew | ForEach-Object { [int]$_.ProcessId })',
+    '[Console]::Out.Write((ConvertTo-Json -Compress @{ found = $found.Count; left = $left }))',
+  ].join('\n');
+
+/**
+ * The grants of the one crew a crew user runs at a time, recorded owner-wide per crew user (the
+ * owner's state root, never a crew's places, under a lock across processes), so that they are taken
+ * off when it ends, when it is stopped, and before any later grant, also after a crash, and so that
+ * two projects of the owner sharing the crew user cannot run crews at once: a grant while a
+ * recorded keeper lives refuses, and so does a grant while processes of the crew user are left.
  */
 export class WindowsGrants {
-  constructor(private readonly o: { stateRoot: string; user: string; run: RunFile }) {}
+  constructor(private readonly o: { ownerRoot: string; user: string; run: RunFile }) {}
 
   paths(): string[] {
-    return readGrantRecord(this.o.stateRoot).paths;
+    return readGrantRecord(this.o.ownerRoot, this.o.user).paths;
   }
 
-  /** Takes every recorded grant off; a failure is thrown after all were tried. */
-  async revokeAll(): Promise<void> {
-    const rec = readGrantRecord(this.o.stateRoot);
+  /** Runs `fn` under the crew user's lock, waiting up to 30 seconds for it. */
+  private async locked<T>(fn: () => Promise<T>): Promise<T> {
+    const until = Date.now() + 30_000;
+    for (;;) {
+      const lock = acquireStateLock(this.o.ownerRoot, lockFile(this.o.user), {
+        now: new Date(),
+        heartbeatStaleMs: LOCK_STALE_MS,
+      });
+      if (lock) {
+        try {
+          return await fn();
+        } finally {
+          lock.release();
+        }
+      }
+      if (Date.now() >= until) {
+        throw new HeldError(`another launch holds the crew user ${this.o.user}; try again`);
+      }
+      await sleep(250);
+    }
+  }
+
+  private async revokeLocked(): Promise<void> {
+    const rec = readGrantRecord(this.o.ownerRoot, this.o.user);
     const failed: string[] = [];
     for (const p of rec.paths) {
       if (!existsSync(p)) continue;
       const r = await this.o.run('icacls', revokeArgs(this.o.user, p));
       if (r.code !== 0) failed.push(p);
     }
-    writeGrantRecord(this.o.stateRoot, { paths: failed });
+    writeGrantRecord(this.o.ownerRoot, this.o.user, { paths: failed });
     if (failed.length > 0) {
       throw new Error(`cannot take the crew user's grants off ${failed.join(', ')}`);
     }
   }
 
-  async grant(grants: readonly Grant[]): Promise<void> {
-    const rec = readGrantRecord(this.o.stateRoot);
-    if (rec.keeper !== undefined && processExists(rec.keeper)) {
-      throw new HeldError(
-        'a crew of this Windows worker is still running: one crew at a time, as all share the crew user',
-      );
+  /** Takes every recorded grant off; a failure is thrown after all were tried. */
+  revokeAll(): Promise<void> {
+    return this.locked(() => this.revokeLocked());
+  }
+
+  /** Ends what is left of the crew user; refuses when something cannot be ended. */
+  private async sweep(): Promise<void> {
+    const r = await this.o.run(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', sweepScript(this.o.user)],
+      { env: powershellEnv(process.env), timeoutMs: 120_000 },
+    );
+    let left: unknown;
+    try {
+      left = (JSON.parse(r.stdout) as { left?: unknown }).left;
+    } catch {
+      left = undefined;
     }
-    await this.revokeAll();
-    // Recorded before granting: a crash halfway leaves nothing that is not taken off later.
-    writeGrantRecord(this.o.stateRoot, { paths: grants.map((g) => g.path) });
-    for (const g of grants) {
-      const steps = [
-        grantArgs(this.o.user, g),
-        ...(g.rights === 'M' && isDir(g.path) ? [ownerRightsArgs(g.path)] : []),
-      ];
-      for (const args of steps) {
-        const r = await this.o.run('icacls', args);
-        if (r.code !== 0) {
-          throw new Error(
-            `cannot open ${g.path} to the crew user ${this.o.user}: icacls exited ${r.code}`,
-          );
-        }
-      }
+    if (r.code !== 0 || !Array.isArray(left)) {
+      throw new Error(`cannot list the processes of the crew user ${this.o.user}`);
+    }
+    if (left.length > 0) {
+      throw new Error(
+        `processes of the crew user ${this.o.user} are still running (${left.join(', ')}) and cannot be ended from this account; end them as an administrator`,
+      );
     }
   }
 
-  recordKeeper(pid: number): void {
-    writeGrantRecord(this.o.stateRoot, { ...readGrantRecord(this.o.stateRoot), keeper: pid });
+  grant(grants: readonly Grant[]): Promise<void> {
+    return this.locked(async () => {
+      const rec = readGrantRecord(this.o.ownerRoot, this.o.user);
+      if (rec.keeper !== undefined && processExists(rec.keeper)) {
+        throw new HeldError(
+          `a crew of the crew user ${this.o.user} is still running: one crew at a time on this machine, as all projects share the crew user`,
+        );
+      }
+      await this.revokeLocked();
+      await this.sweep();
+      // Recorded before granting: a crash halfway leaves nothing that is not taken off later.
+      writeGrantRecord(this.o.ownerRoot, this.o.user, { paths: grants.map((g) => g.path) });
+      for (const g of grants) {
+        const steps = [
+          grantArgs(this.o.user, g),
+          ...(g.rights === 'M' && isDir(g.path) ? [ownerRightsArgs(g.path)] : []),
+        ];
+        for (const args of steps) {
+          const r = await this.o.run('icacls', args);
+          if (r.code !== 0) {
+            throw new Error(
+              `cannot open ${g.path} to the crew user ${this.o.user}: icacls exited ${r.code}`,
+            );
+          }
+        }
+      }
+    });
+  }
+
+  recordKeeper(pid: number): Promise<void> {
+    return this.locked(async () => {
+      writeGrantRecord(this.o.ownerRoot, this.o.user, {
+        ...readGrantRecord(this.o.ownerRoot, this.o.user),
+        keeper: pid,
+      });
+    });
   }
 }
 
@@ -670,7 +779,7 @@ export function windowsClaude(o: {
         log: files.keeper,
         detached: true,
       });
-      o.grants.recordKeeper(k.pid);
+      await o.grants.recordKeeper(k.pid);
       return { pid: k.pid };
     },
     alive: processExists,
@@ -712,7 +821,7 @@ export function probeProblem(results: readonly ProbeResult[] | undefined): strin
 }
 
 /** The checks a probe must report, every one of them. */
-export const PROBE_CHECKS = ['user', 'admin', 'env', 'read', 'write', 'direct', 'proxy'];
+export const PROBE_CHECKS = ['user', 'admin', 'env', 'read', 'write', 'direct', 'proxy', 'tasks'];
 
 /**
  * Starts the host in probe mode as the crew user through a keeper, waits for it and judges what it
@@ -727,6 +836,8 @@ export async function probeWindowsSandbox(o: {
   ownerHome: string;
   ownerConfigDir: string;
   mustNotRead: readonly string[];
+  /** The shared crew Claude config dir: its root and its plugins must not be writable. */
+  crewConfigDir?: string;
   proxyPort: number;
   env: Record<string, string>;
   spawn?: SpawnKeeper;
@@ -746,7 +857,15 @@ export async function probeWindowsSandbox(o: {
         user: o.user,
         mark,
         mustNotRead: [canary, o.ownerHome, ...o.mustNotRead],
-        mustNotWrite: [join(o.ownerHome, `studio-probe-${mark}`)],
+        mustNotWrite: [
+          join(o.ownerHome, `studio-probe-${mark}`),
+          ...(o.crewConfigDir === undefined
+            ? []
+            : [
+                join(o.crewConfigDir, `studio-probe-${mark}`),
+                join(o.crewConfigDir, 'plugins', `studio-probe-${mark}`),
+              ]),
+        ],
         direct: { host: 'github.com', port: 443 },
         proxy: { port: o.proxyPort, refused: 'example.invalid' },
       },
@@ -885,6 +1004,10 @@ export interface WindowsWorker {
 export async function windowsWorker(o: {
   user: string;
   stateRoot: string;
+  /** The owner's state root: the crew user's grant record and lock, shared by all projects. */
+  ownerRoot: string;
+  /** The shared crew Claude config dir: the probe proves the crew user cannot write it. */
+  crewConfigDir: string;
   ownerHome: string;
   ownerConfigDir: string;
   networkAllow: readonly string[];
@@ -898,7 +1021,7 @@ export async function windowsWorker(o: {
   const path = o.env.PATH ?? o.env.Path;
   const claudeBin = findClaude(path);
   const proxy = await o.startProxy([...o.networkAllow, ...CLAUDE_HOSTS]);
-  const grants = new WindowsGrants({ stateRoot: o.stateRoot, user: o.user, run });
+  const grants = new WindowsGrants({ ownerRoot: o.ownerRoot, user: o.user, run });
   const missing = (): string | undefined =>
     !existsSync(credFile)
       ? `no crew user credential at ${credFile}: run the script of studio worker windows-setup`
@@ -934,6 +1057,7 @@ export async function windowsWorker(o: {
           ownerHome: o.ownerHome,
           ownerConfigDir: o.ownerConfigDir,
           mustNotRead,
+          crewConfigDir: o.crewConfigDir,
           proxyPort: proxy.port,
           env: { ...probeEnv, PATH: path ?? '' },
           ...(o.spawn === undefined ? {} : { spawn: o.spawn }),

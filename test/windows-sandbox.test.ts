@@ -34,6 +34,7 @@ import {
   runConfigDir,
   type SpawnKeeper,
   setupReadPaths,
+  sweepScript,
   WindowsGrants,
   windowsClaude,
   windowsCrewEnv,
@@ -49,6 +50,7 @@ describe('the setup script', () => {
     user: 'studio-crew',
     credFile: "C:\\Users\\o'wner\\.config\\studio\\windows-crew.xml",
     readPaths: ['C:\\Program Files\\nodejs'],
+    revokePaths: ['C:\\Users\\owner\\.config\\studio\\claude'],
   });
 
   it('makes a standard user, never an administrator, and keeps its credential for the owner', () => {
@@ -68,6 +70,25 @@ describe('the setup script', () => {
     expect(OUTSIDE[0]).toBe(`${ipv4(0, 0, 0, 0)}-${ipv4(126, 255, 255, 255)}`);
     expect(script).toContain("'::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'");
     expect(script).not.toContain(`${ipv4(127, 0, 0, 0)}-`);
+  });
+
+  it('closes what an earlier setup opened for writing, before it opens anything for reading', () => {
+    const at = (x: string) => script.indexOf(x);
+    expect(script).toContain("@('C:\\Users\\owner\\.config\\studio\\claude')");
+    expect(script).toContain('icacls $p /remove:g $name /T /C /Q');
+    expect(at('/remove:g $name')).toBeLessThan(at('(OI)(CI)RX'));
+  });
+
+  it('denies the crew user batch, service, network and remote desktop logons', () => {
+    for (const right of [
+      'SeDenyBatchLogonRight',
+      'SeDenyServiceLogonRight',
+      'SeDenyNetworkLogonRight',
+      'SeDenyRemoteInteractiveLogonRight',
+    ]) {
+      expect(script).toContain(`'${right}'`);
+    }
+    expect(script).toContain('secedit /configure');
   });
 
   it('opens the given paths for reading only, and refuses a bad user name', () => {
@@ -153,37 +174,87 @@ describe('grants', () => {
     expect(() => grantArgs('a b', { path: file, rights: 'R' })).toThrow();
   });
 
-  const fakeIcacls = () => {
+  /** icacls always succeeds; the sweep finds `left` processes of the crew user. */
+  const fakeRun = (left: number[] = []) => {
     const calls: string[][] = [];
     const run: RunFile = async (file, args) => {
       calls.push([file, ...args]);
+      if (file === 'powershell.exe') {
+        return { code: 0, stdout: JSON.stringify({ found: left.length, left }), stderr: '' };
+      }
       return { code: 0, stdout: '', stderr: '' };
     };
-    return { run, calls };
+    return { run, calls, icacls: () => calls.filter((c) => c[0] === 'icacls') };
   };
 
-  it('takes the last run off before the next grant, records first, and refuses while a crew runs', async () => {
-    const stateRoot = join(root, `g${n++}`);
-    const dir = join(stateRoot, 'clone');
+  it('takes the last run off and sweeps the crew user before the next grant; refuses while a crew runs', async () => {
+    const base = join(root, `g${n++}`);
+    const ownerRoot = join(base, 'owner');
+    const dir = join(base, 'clone');
     mkdirSync(dir, { recursive: true });
-    const f = fakeIcacls();
-    const g = new WindowsGrants({ stateRoot, user: 'crew', run: f.run });
+    const f = fakeRun();
+    const g = new WindowsGrants({ ownerRoot, user: 'crew', run: f.run });
     await g.grant([{ path: dir, rights: 'M' }]);
-    expect(f.calls).toEqual([
+    expect(f.calls.map((c) => c[0])).toEqual(['powershell.exe', 'icacls', 'icacls']);
+    expect(f.calls[0]?.at(-1)).toContain("NTAccount($env:COMPUTERNAME, 'crew')");
+    expect(f.icacls()).toEqual([
       ['icacls', dir, '/grant', 'crew:(OI)(CI)M', '/Q'],
       ['icacls', dir, '/grant', '*S-1-3-4:(OI)(CI)(S)', '/Q'],
     ]);
     expect(g.paths()).toEqual([dir]);
-    // A live keeper (this test process) holds the worker: no second crew.
-    g.recordKeeper(process.pid);
+    // A live keeper (this test process) holds the crew user: no second crew.
+    await g.recordKeeper(process.pid);
     await expect(g.grant([{ path: dir, rights: 'M' }])).rejects.toThrow(HeldError);
     // Once it is gone, the next grant first takes the old ones off.
-    g.recordKeeper(2 ** 22 + 12345);
+    await g.recordKeeper(2 ** 22 + 12345);
     f.calls.length = 0;
     await g.grant([{ path: dir, rights: 'R' }]);
-    expect(f.calls[0]).toEqual(['icacls', dir, '/remove:g', 'crew', '/Q']);
+    expect(f.icacls()[0]).toEqual(['icacls', dir, '/remove:g', 'crew', '/Q']);
     await g.revokeAll();
     expect(g.paths()).toEqual([]);
+  });
+
+  it("the record is the crew user's, owner-wide: another project sees the running crew", async () => {
+    const base = join(root, `g${n++}`);
+    const ownerRoot = join(base, 'owner');
+    const dir = join(base, 'clone');
+    mkdirSync(dir, { recursive: true });
+    const one = new WindowsGrants({ ownerRoot, user: 'Crew', run: fakeRun().run });
+    await one.grant([{ path: dir, rights: 'M' }]);
+    await one.recordKeeper(process.pid);
+    const other = new WindowsGrants({ ownerRoot, user: 'crew', run: fakeRun().run });
+    await expect(other.grant([{ path: dir, rights: 'M' }])).rejects.toThrow(
+      /one crew at a time on this machine/,
+    );
+  });
+
+  it('refuses a grant while processes of the crew user are left, and when they cannot be listed', async () => {
+    const base = join(root, `g${n++}`);
+    const ownerRoot = join(base, 'owner');
+    const dir = join(base, 'clone');
+    mkdirSync(dir, { recursive: true });
+    const f = fakeRun([77, 78]);
+    const g = new WindowsGrants({ ownerRoot, user: 'crew', run: f.run });
+    await expect(g.grant([{ path: dir, rights: 'M' }])).rejects.toThrow(
+      /processes of the crew user crew are still running \(77, 78\)/,
+    );
+    expect(f.icacls()).toEqual([]);
+    const broken: RunFile = async (file) =>
+      file === 'powershell.exe'
+        ? { code: 1, stdout: '', stderr: 'no' }
+        : { code: 0, stdout: '', stderr: '' };
+    await expect(
+      new WindowsGrants({ ownerRoot, user: 'crew', run: broken }).grant([
+        { path: dir, rights: 'M' },
+      ]),
+    ).rejects.toThrow(/cannot list the processes/);
+  });
+
+  it('the sweep finds the crew user by SID and ends what it finds', () => {
+    const s = sweepScript('crew');
+    expect(s).toContain('GetOwnerSid');
+    expect(s).toContain('Stop-Process -Id $p.ProcessId -Force');
+    expect(s).toContain('left = $left');
   });
 });
 
@@ -258,7 +329,7 @@ describe('the Claude port', () => {
     mkdirSync(join(stateRoot, 'logs'), { recursive: true });
     const f = fakeSpawn();
     const grants = new WindowsGrants({
-      stateRoot,
+      ownerRoot: join(stateRoot, 'owner'),
       user: 'crew',
       run: async () => ({ code: 0, stdout: '', stderr: '' }),
     });
@@ -310,7 +381,7 @@ describe('the Claude port', () => {
       claudeBin: 'claude.exe',
       user: 'crew',
       grants: new WindowsGrants({
-        stateRoot,
+        ownerRoot: join(stateRoot, 'owner'),
         user: 'crew',
         run: async () => ({ code: 0, stdout: '', stderr: '' }),
       }),
@@ -361,7 +432,9 @@ describe('probeWindowsSandbox', () => {
   it('passes when the host as the crew user reports every check held, and leaves nothing behind', async () => {
     const o = setup();
     const f = fakeSpawn(() => ok);
-    expect(await probeWindowsSandbox({ ...o, spawn: f.spawn })).toBeUndefined();
+    expect(
+      await probeWindowsSandbox({ ...o, crewConfigDir: join('C:', 'crew'), spawn: f.spawn }),
+    ).toBeUndefined();
     const c = f.calls[0];
     expect(c?.detached).toBe(false);
     // The mark travels in the spec, never in PowerShell's own environment; it runs in Windows.
@@ -375,6 +448,10 @@ describe('probeWindowsSandbox', () => {
       'D:\\data',
     ]);
     expect(existsSync(join(o.ownerConfigDir, 'crew-probe-canary'))).toBe(false);
+    expect(spec.probe?.mustNotWrite.slice(1)).toEqual([
+      join('C:', 'crew', `studio-probe-${spec.probe?.mark}`),
+      join('C:', 'crew', 'plugins', `studio-probe-${spec.probe?.mark}`),
+    ]);
   });
 
   it('refuses a failed check, a missing check, no answer, and a host that never finishes', async () => {

@@ -3095,6 +3095,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
                 toolchains: ownerConfig.crewToolchainPaths,
                 crewConfigDir: crewClaudeDir(owner),
               }),
+              revokePaths: [crewClaudeDir(owner)],
             }),
           );
           return 0;
@@ -3130,6 +3131,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ? await (deps.windowsWorker ?? windowsWorker)({
                 user: winUser,
                 stateRoot: stateRootFor(project, owner),
+                ownerRoot: ownerStateRootFor(owner),
+                crewConfigDir: crewClaudeDir(owner),
                 ownerHome: deps.homedir ?? homedir(),
                 ownerConfigDir: ownerConfigDir(owner),
                 networkAllow: pinnedConfig.sandbox.networkAllow,

@@ -66,6 +66,22 @@ describe('blockedAddress', () => {
       expect(blockedAddress(a), a).toBe(true);
     }
     expect(blockedAddress(ipv4(140, 82, 121, 3))).toBe(false);
+  });
+
+  it('judges an IPv6 address by the IPv4 address it carries', () => {
+    const inside = [
+      '64:ff9b::7f00:1', // NAT64 of loopback
+      `64:ff9b::${ipv4(10, 0, 0, 1)}`,
+      '2002:c0a8:101::1', // 6to4 of a private address
+      '::a00:1', // IPv4-compatible, private
+      '2001:0:4136:e378:8000:63bf:3fff:fdd2', // Teredo, client a documentation address, inverted
+      '2001:0:a00:1::1', // Teredo, private server
+      '100::1', // discard-only
+    ];
+    for (const a of inside) expect(blockedAddress(a), a).toBe(true);
+    // The same forms around a public address pass.
+    expect(blockedAddress(`64:ff9b::${ipv4(140, 82, 121, 3)}`)).toBe(false);
+    expect(blockedAddress('2002:8c52:7903::1')).toBe(false);
     expect(blockedAddress('2606:50c0:8000::153')).toBe(false);
   });
 });

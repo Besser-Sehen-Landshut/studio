@@ -39197,6 +39197,9 @@ var BLOCKED = (() => {
   v4(172, 16, 0, 0, 12);
   v4(192, 0, 0, 0, 24);
   v4(192, 168, 0, 0, 16);
+  v4(192, 0, 2, 0, 24);
+  v4(198, 51, 100, 0, 24);
+  v4(203, 0, 113, 0, 24);
   v4(198, 18, 0, 0, 15);
   v4(224, 0, 0, 0, 4);
   v4(240, 0, 0, 0, 4);
@@ -39211,8 +39214,10 @@ var BLOCKED = (() => {
     // link-local
     ["ff00::", 8],
     // multicast
-    ["64:ff9b:1::", 48]
+    ["64:ff9b:1::", 48],
     // local-use translation
+    ["100::", 64]
+    // discard-only
   ]) {
     b.addSubnet(net, prefix, "ipv6");
   }
@@ -39222,9 +39227,38 @@ function blockedAddress(address) {
   const kind = isIP3(address);
   if (kind === 4) return BLOCKED.check(address, "ipv4");
   if (kind !== 6) return true;
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
-  if (mapped) return BLOCKED.check(mapped[1], "ipv4");
+  const h2 = hextets(address);
+  if (h2 === void 0) return true;
+  if (embeddedIpv4(h2).some((v4) => BLOCKED.check(v4, "ipv4"))) return true;
   return BLOCKED.check(address, "ipv6");
+}
+function hextets(address) {
+  let a2 = address.toLowerCase().replace(/%.*$/, "");
+  const dotted3 = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(a2);
+  if (dotted3) {
+    const [b0, b1, b2, b3] = dotted3.slice(1).map(Number);
+    a2 = `${a2.slice(0, dotted3.index)}${(b0 << 8 | b1).toString(16)}:${(b2 << 8 | b3).toString(16)}`;
+  }
+  const halves = a2.split("::");
+  if (halves.length > 2) return void 0;
+  const part = (x) => x === "" ? [] : x.split(":").map((g3) => Number.parseInt(g3, 16));
+  const head = part(halves[0]);
+  const tail = halves.length === 2 ? part(halves[1]) : [];
+  const fill = 8 - head.length - tail.length;
+  if (halves.length === 1 ? head.length !== 8 : fill < 0) return void 0;
+  const all = [...head, ...Array(halves.length === 2 ? fill : 0).fill(0), ...tail];
+  return all.every((g3) => Number.isInteger(g3) && g3 >= 0 && g3 <= 65535) ? all : void 0;
+}
+var v4Of = (hi, lo) => ipv43(hi >> 8 & 255, hi & 255, lo >> 8 & 255, lo & 255);
+function embeddedIpv4(h2) {
+  const [a2, b, c3, d, e, f3, g3, i2] = h2;
+  const zero = (...xs) => xs.every((x) => x === 0);
+  const out = [];
+  if (zero(a2, b, c3, d, e) && (f3 === 65535 || f3 === 0)) out.push(v4Of(g3, i2));
+  if (a2 === 100 && b === 65435 && zero(c3, d, e, f3)) out.push(v4Of(g3, i2));
+  if (a2 === 8194) out.push(v4Of(b, c3));
+  if (a2 === 8193 && b === 0) out.push(v4Of(c3, d), v4Of(g3 ^ 65535, i2 ^ 65535));
+  return out;
 }
 var systemResolve = async (host) => (await lookup(host, { all: true, verbatim: true })).map((a2) => a2.address);
 async function checkedAddress(resolve12, host) {
@@ -39417,6 +39451,28 @@ $sid = $user.SID.Value
 $rule = 'Studio crew ' + $name + ': no direct network'
 Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 New-NetFirewallRule -DisplayName $rule -Direction Outbound -Action Block -LocalUser "D:(A;;CC;;;$sid)" -RemoteAddress @(${OUTSIDE.map(psQuote).join(", ")}) | Out-Null
+# An earlier setup opened the crew Claude config dir for writing: that grant goes, all the way down.
+foreach ($p in ${list2(o2.revokePaths ?? [])}) {
+  if (Test-Path -LiteralPath $p) { icacls $p /remove:g $name /T /C /Q | Out-Null }
+}
+# No logon as a batch job (no scheduled task with a stored password), as a service, over the
+# network or by remote desktop: the crew user starts processes only through Studio's keeper.
+$cfg = Join-Path $env:TEMP ('studio-rights-' + [Guid]::NewGuid().ToString('N') + '.inf')
+$db = [IO.Path]::ChangeExtension($cfg, '.sdb')
+secedit /export /cfg $cfg /areas USER_RIGHTS | Out-Null
+$lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $cfg)
+$at = $lines.IndexOf('[Privilege Rights]')
+if ($at -lt 0) { throw 'secedit gave no [Privilege Rights] section' }
+foreach ($right in @('SeDenyBatchLogonRight', 'SeDenyServiceLogonRight', 'SeDenyNetworkLogonRight', 'SeDenyRemoteInteractiveLogonRight')) {
+  $i = -1
+  for ($k = 0; $k -lt $lines.Count; $k++) { if ($lines[$k] -like "$right *") { $i = $k } }
+  if ($i -lt 0) { $lines.Insert($at + 1, "$right = *$sid") }
+  elseif ($lines[$i] -notlike "**$sid*") { $lines[$i] = $lines[$i] + ",*$sid" }
+}
+Set-Content -LiteralPath $cfg -Value $lines -Encoding Unicode
+secedit /configure /db $db /cfg $cfg /areas USER_RIGHTS /quiet | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "secedit could not set the logon rights ($LASTEXITCODE)" }
+Remove-Item -LiteralPath $cfg, $db -ErrorAction SilentlyContinue
 foreach ($p in ${list2(o2.readPaths)}) {
   if (Test-Path -LiteralPath $p) { icacls $p /grant "\${name}:(OI)(CI)RX" /Q | Out-Null }
 }
@@ -39459,10 +39515,12 @@ var runFile = (file3, args, opts = {}) => new Promise((resolve12) => {
     }
   );
 });
-var GRANTS_FILE = "windows-grants.json";
-function readGrantRecord(stateRoot) {
+var recordFile = (user) => `windows-crew-${user.toLowerCase()}.json`;
+var lockFile = (user) => `windows-crew-${user.toLowerCase()}.lock`;
+var LOCK_STALE_MS3 = 10 * 6e4;
+function readGrantRecord(ownerRoot, user) {
   try {
-    const raw = JSON.parse(readFileSync26(join26(stateRoot, GRANTS_FILE), "utf8"));
+    const raw = JSON.parse(readFileSync26(join26(ownerRoot, recordFile(user)), "utf8"));
     return {
       ...typeof raw.keeper === "number" ? { keeper: raw.keeper } : {},
       paths: Array.isArray(raw.paths) ? raw.paths.filter((p) => typeof p === "string") : []
@@ -39471,7 +39529,7 @@ function readGrantRecord(stateRoot) {
     return { paths: [] };
   }
 }
-var writeGrantRecord = (stateRoot, r) => writeStateFile(stateRoot, join26(stateRoot, GRANTS_FILE), `${JSON.stringify(r)}
+var writeGrantRecord = (ownerRoot, user, r) => writeStateFile(ownerRoot, join26(ownerRoot, recordFile(user)), `${JSON.stringify(r)}
 `);
 var processExists = (pid) => {
   try {
@@ -39481,54 +39539,118 @@ var processExists = (pid) => {
     return e.code === "EPERM";
   }
 };
+var sweepScript = (user) => [
+  "$ErrorActionPreference = 'Stop'",
+  `$sid = (New-Object Security.Principal.NTAccount($env:COMPUTERNAME, ${psQuote(user)})).Translate([Security.Principal.SecurityIdentifier]).Value`,
+  "function Crew { @(Get-CimInstance Win32_Process | Where-Object { try { (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $sid } catch { $false } }) }",
+  "$found = Crew",
+  "foreach ($p in $found) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }",
+  "if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }",
+  "$left = @(Crew | ForEach-Object { [int]$_.ProcessId })",
+  "[Console]::Out.Write((ConvertTo-Json -Compress @{ found = $found.Count; left = $left }))"
+].join("\n");
 var WindowsGrants = class {
   constructor(o2) {
     this.o = o2;
   }
   o;
   paths() {
-    return readGrantRecord(this.o.stateRoot).paths;
+    return readGrantRecord(this.o.ownerRoot, this.o.user).paths;
   }
-  /** Takes every recorded grant off; a failure is thrown after all were tried. */
-  async revokeAll() {
-    const rec = readGrantRecord(this.o.stateRoot);
+  /** Runs `fn` under the crew user's lock, waiting up to 30 seconds for it. */
+  async locked(fn) {
+    const until = Date.now() + 3e4;
+    for (; ; ) {
+      const lock = acquireStateLock(this.o.ownerRoot, lockFile(this.o.user), {
+        now: /* @__PURE__ */ new Date(),
+        heartbeatStaleMs: LOCK_STALE_MS3
+      });
+      if (lock) {
+        try {
+          return await fn();
+        } finally {
+          lock.release();
+        }
+      }
+      if (Date.now() >= until) {
+        throw new HeldError(`another launch holds the crew user ${this.o.user}; try again`);
+      }
+      await sleep(250);
+    }
+  }
+  async revokeLocked() {
+    const rec = readGrantRecord(this.o.ownerRoot, this.o.user);
     const failed = [];
     for (const p of rec.paths) {
       if (!existsSync7(p)) continue;
       const r = await this.o.run("icacls", revokeArgs(this.o.user, p));
       if (r.code !== 0) failed.push(p);
     }
-    writeGrantRecord(this.o.stateRoot, { paths: failed });
+    writeGrantRecord(this.o.ownerRoot, this.o.user, { paths: failed });
     if (failed.length > 0) {
       throw new Error(`cannot take the crew user's grants off ${failed.join(", ")}`);
     }
   }
-  async grant(grants) {
-    const rec = readGrantRecord(this.o.stateRoot);
-    if (rec.keeper !== void 0 && processExists(rec.keeper)) {
-      throw new HeldError(
-        "a crew of this Windows worker is still running: one crew at a time, as all share the crew user"
+  /** Takes every recorded grant off; a failure is thrown after all were tried. */
+  revokeAll() {
+    return this.locked(() => this.revokeLocked());
+  }
+  /** Ends what is left of the crew user; refuses when something cannot be ended. */
+  async sweep() {
+    const r = await this.o.run(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", sweepScript(this.o.user)],
+      { env: powershellEnv(process.env), timeoutMs: 12e4 }
+    );
+    let left;
+    try {
+      left = JSON.parse(r.stdout).left;
+    } catch {
+      left = void 0;
+    }
+    if (r.code !== 0 || !Array.isArray(left)) {
+      throw new Error(`cannot list the processes of the crew user ${this.o.user}`);
+    }
+    if (left.length > 0) {
+      throw new Error(
+        `processes of the crew user ${this.o.user} are still running (${left.join(", ")}) and cannot be ended from this account; end them as an administrator`
       );
     }
-    await this.revokeAll();
-    writeGrantRecord(this.o.stateRoot, { paths: grants.map((g3) => g3.path) });
-    for (const g3 of grants) {
-      const steps = [
-        grantArgs(this.o.user, g3),
-        ...g3.rights === "M" && isDir2(g3.path) ? [ownerRightsArgs(g3.path)] : []
-      ];
-      for (const args of steps) {
-        const r = await this.o.run("icacls", args);
-        if (r.code !== 0) {
-          throw new Error(
-            `cannot open ${g3.path} to the crew user ${this.o.user}: icacls exited ${r.code}`
-          );
+  }
+  grant(grants) {
+    return this.locked(async () => {
+      const rec = readGrantRecord(this.o.ownerRoot, this.o.user);
+      if (rec.keeper !== void 0 && processExists(rec.keeper)) {
+        throw new HeldError(
+          `a crew of the crew user ${this.o.user} is still running: one crew at a time on this machine, as all projects share the crew user`
+        );
+      }
+      await this.revokeLocked();
+      await this.sweep();
+      writeGrantRecord(this.o.ownerRoot, this.o.user, { paths: grants.map((g3) => g3.path) });
+      for (const g3 of grants) {
+        const steps = [
+          grantArgs(this.o.user, g3),
+          ...g3.rights === "M" && isDir2(g3.path) ? [ownerRightsArgs(g3.path)] : []
+        ];
+        for (const args of steps) {
+          const r = await this.o.run("icacls", args);
+          if (r.code !== 0) {
+            throw new Error(
+              `cannot open ${g3.path} to the crew user ${this.o.user}: icacls exited ${r.code}`
+            );
+          }
         }
       }
-    }
+    });
   }
   recordKeeper(pid) {
-    writeGrantRecord(this.o.stateRoot, { ...readGrantRecord(this.o.stateRoot), keeper: pid });
+    return this.locked(async () => {
+      writeGrantRecord(this.o.ownerRoot, this.o.user, {
+        ...readGrantRecord(this.o.ownerRoot, this.o.user),
+        keeper: pid
+      });
+    });
   }
 };
 var CREW_HOST_BIN = resolve6(
@@ -39771,7 +39893,7 @@ ${JSON.stringify(spec)}`,
         log: files.keeper,
         detached: true
       });
-      o2.grants.recordKeeper(k.pid);
+      await o2.grants.recordKeeper(k.pid);
       return { pid: k.pid };
     },
     alive: processExists,
@@ -39799,7 +39921,7 @@ function probeProblem(results) {
   const bad = results.find((r) => !r.ok);
   return bad === void 0 ? void 0 : `the Windows crew sandbox does not hold here: ${bad.check}: ${bad.detail}`;
 }
-var PROBE_CHECKS = ["user", "admin", "env", "read", "write", "direct", "proxy"];
+var PROBE_CHECKS = ["user", "admin", "env", "read", "write", "direct", "proxy", "tasks"];
 async function probeWindowsSandbox(o2) {
   const start = o2.spawn ?? spawnKeeper;
   const name = `probe-${randomBytes8(4).toString("hex")}`;
@@ -39814,7 +39936,13 @@ async function probeWindowsSandbox(o2) {
         user: o2.user,
         mark,
         mustNotRead: [canary, o2.ownerHome, ...o2.mustNotRead],
-        mustNotWrite: [join26(o2.ownerHome, `studio-probe-${mark}`)],
+        mustNotWrite: [
+          join26(o2.ownerHome, `studio-probe-${mark}`),
+          ...o2.crewConfigDir === void 0 ? [] : [
+            join26(o2.crewConfigDir, `studio-probe-${mark}`),
+            join26(o2.crewConfigDir, "plugins", `studio-probe-${mark}`)
+          ]
+        ],
         direct: { host: "github.com", port: 443 },
         proxy: { port: o2.proxyPort, refused: "example.invalid" }
       },
@@ -39916,7 +40044,7 @@ async function windowsWorker(o2) {
   const path10 = o2.env.PATH ?? o2.env.Path;
   const claudeBin = findClaude(path10);
   const proxy = await o2.startProxy([...o2.networkAllow, ...CLAUDE_HOSTS]);
-  const grants = new WindowsGrants({ stateRoot: o2.stateRoot, user: o2.user, run: run2 });
+  const grants = new WindowsGrants({ ownerRoot: o2.ownerRoot, user: o2.user, run: run2 });
   const missing = () => !existsSync7(credFile) ? `no crew user credential at ${credFile}: run the script of studio worker windows-setup` : claudeBin === void 0 ? "claude is not on PATH" : void 0;
   return {
     claude: windowsClaude({
@@ -39947,6 +40075,7 @@ async function windowsWorker(o2) {
           ownerHome: o2.ownerHome,
           ownerConfigDir: o2.ownerConfigDir,
           mustNotRead,
+          crewConfigDir: o2.crewConfigDir,
           proxyPort: proxy.port,
           env: { ...probeEnv, PATH: path10 ?? "" },
           ...o2.spawn === void 0 ? {} : { spawn: o2.spawn }
@@ -43186,7 +43315,7 @@ function clockTime(iso, timezone) {
 // src/push.ts
 var PUSHED_FILE = "pushed.json";
 var PUSH_LOCK = "push.lock";
-var LOCK_STALE_MS3 = 2 * 6e4;
+var LOCK_STALE_MS4 = 2 * 6e4;
 var PUSH_INTERVAL_MS = 10 * 6e4;
 var KEEP_MS = 30 * 24 * 60 * 6e4;
 var MAX_KEYS = 2e3;
@@ -43330,7 +43459,7 @@ async function pushLocked(o2) {
   }
   const lock = acquireStateLock(o2.ownerRoot, PUSH_LOCK, {
     now: o2.now,
-    heartbeatStaleMs: LOCK_STALE_MS3
+    heartbeatStaleMs: LOCK_STALE_MS4
   });
   if (!lock) return { sent: 0, deferred: "locked", errors: [] };
   try {
@@ -44482,9 +44611,9 @@ var LESSONS_NOTE = "lessons-review: ";
 var NUMBERS_NOTE = "lessons: ";
 var LEAD_WORK = "lead work: studio lessons, then accept or drop each proposal";
 var BY = "studio";
-var recordFile = (stateRoot) => join36(stateRoot, "lessons-review.json");
+var recordFile2 = (stateRoot) => join36(stateRoot, "lessons-review.json");
 function lastRun(stateRoot) {
-  const file3 = recordFile(stateRoot);
+  const file3 = recordFile2(stateRoot);
   try {
     assertStatePath(stateRoot, file3);
     if (!lstatSync31(file3).isFile()) return void 0;
@@ -44558,7 +44687,7 @@ async function runLessonsReview(o2) {
   });
   writeStateFile(
     o2.stateRoot,
-    recordFile(o2.stateRoot),
+    recordFile2(o2.stateRoot),
     `${JSON.stringify({ lastRun: o2.now.toISOString() })}
 `
   );
@@ -46646,7 +46775,7 @@ import { join as join41 } from "node:path";
 var MAX_SENDS_PER_RUN = 20;
 var MAX_TEXT2 = 500;
 var NOTIFY_LOCK = "notify.lock";
-var LOCK_STALE_MS4 = 2 * 6e4;
+var LOCK_STALE_MS5 = 2 * 6e4;
 var cleanText = (s) => Array.from(s.replace(new RegExp("\\p{Cc}", "gu"), " ")).slice(0, MAX_TEXT2).join("");
 function ownerText(line4, t) {
   if (line4.code === void 0) return line4.title;
@@ -46699,7 +46828,7 @@ async function sendNotifications(o2) {
   if (notify === void 0) return [];
   const lock = acquireStateLock(o2.ownerRoot, NOTIFY_LOCK, {
     now: /* @__PURE__ */ new Date(),
-    heartbeatStaleMs: LOCK_STALE_MS4
+    heartbeatStaleMs: LOCK_STALE_MS5
   });
   if (!lock) return [];
   try {
@@ -48625,8 +48754,8 @@ var LOCKS = [
   { where: "owner", name: LAUNCH_LOCK, staleMs: LAUNCH_LOCK_STALE_MS },
   { where: "owner", name: "limits.lock", staleMs: LOCK_STALE_MS },
   { where: "owner", name: "blocks.lock", staleMs: LOCK_STALE_MS },
-  { where: "owner", name: PUSH_LOCK, staleMs: LOCK_STALE_MS3 },
-  { where: "owner", name: NOTIFY_LOCK, staleMs: LOCK_STALE_MS4 },
+  { where: "owner", name: PUSH_LOCK, staleMs: LOCK_STALE_MS4 },
+  { where: "owner", name: NOTIFY_LOCK, staleMs: LOCK_STALE_MS5 },
   { where: "owner", name: MIGRATE_LOCK, staleMs: LOCK_STALE_MS2 }
 ];
 var ASIDE = /^.+\.lock\.[0-9a-f]{8}\.stale$/;
@@ -50080,10 +50209,10 @@ var SKILLS_CHECK_DAYS = 30;
 var DAY_MS5 = 864e5;
 var NOTE = "skills-update: ";
 var PLUGIN_TIMEOUT_MS = 3e5;
-var recordFile2 = (stateRoot) => join48(stateRoot, "skills-check.json");
+var recordFile3 = (stateRoot) => join48(stateRoot, "skills-check.json");
 var at = (v) => typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : void 0;
 function readRecord(stateRoot) {
-  const file3 = recordFile2(stateRoot);
+  const file3 = recordFile3(stateRoot);
   try {
     assertStatePath(stateRoot, file3);
     if (!lstatSync40(file3).isFile()) return {};
@@ -50284,7 +50413,7 @@ async function runSkillsCheck(o2) {
   const lastRun2 = failed ? before : now.toISOString();
   writeStateFile(
     o2.stateRoot,
-    recordFile2(o2.stateRoot),
+    recordFile3(o2.stateRoot),
     `${JSON.stringify({ ...lastRun2 === void 0 ? {} : { lastRun: lastRun2 }, lastAttempt: now.toISOString() })}
 `
   );
@@ -54016,7 +54145,8 @@ async function runCli(argv, deps) {
                 claude: findClaude(deps.env.PATH ?? deps.env.Path),
                 toolchains: ownerConfig.crewToolchainPaths,
                 crewConfigDir: crewClaudeDir(owner)
-              })
+              }),
+              revokePaths: [crewClaudeDir(owner)]
             })
           );
           return 0;
@@ -54046,6 +54176,8 @@ async function runCli(argv, deps) {
         const win = platformNow.platform === "win32" && winUser !== void 0 ? await (deps.windowsWorker ?? windowsWorker)({
           user: winUser,
           stateRoot: stateRootFor(project, owner),
+          ownerRoot: ownerStateRootFor(owner),
+          crewConfigDir: crewClaudeDir(owner),
           ownerHome: deps.homedir ?? homedir12(),
           ownerConfigDir: ownerConfigDir(owner),
           networkAllow: pinnedConfig.sandbox.networkAllow,

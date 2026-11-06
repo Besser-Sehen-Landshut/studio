@@ -60,30 +60,22 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
   let ownerConfigDir: string;
   let proxy: EgressProxy;
   let grants: WindowsGrants;
-  const env = () => ({
-    ...windowsCrewEnv({
-      proxyPort: proxy.port,
-      homeDir: join(stateRoot, 'tmp'),
-      tmpDir: join(stateRoot, 'tmp'),
-      base: process.env,
-    }),
-    PATH: process.env.PATH ?? process.env.Path ?? '',
-  });
+  let crewConfigDir: string;
 
-  beforeAll(async () => {
-    base = realpathSync(mkdtempSync(join(tmpdir(), 'studio-win-real-')));
-    stateRoot = join(base, 'state');
-    ownerConfigDir = join(base, 'config');
-    mkdirSync(join(stateRoot, 'tmp'), { recursive: true });
-    mkdirSync(join(stateRoot, 'logs'), { recursive: true });
-    mkdirSync(ownerConfigDir, { recursive: true });
+  /** Runs the setup script, elevated as this job is. */
+  async function setup() {
     const script = join(base, 'setup.ps1');
     writeFileSync(
       script,
       windowsSetupScript({
         user: USER,
         credFile: credFileIn(ownerConfigDir),
-        readPaths: [dirname(process.execPath), resolve(import.meta.dirname, '..')],
+        readPaths: [
+          dirname(process.execPath),
+          resolve(import.meta.dirname, '..'),
+          join(crewConfigDir, 'plugins'),
+        ],
+        revokePaths: [crewConfigDir],
       }),
     );
     const r = await runFile(
@@ -102,9 +94,30 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     );
     expect(r.stderr).toBe('');
     expect(r.code).toBe(0);
+  }
+  const env = () => ({
+    ...windowsCrewEnv({
+      proxyPort: proxy.port,
+      homeDir: join(stateRoot, 'tmp'),
+      tmpDir: join(stateRoot, 'tmp'),
+      base: process.env,
+    }),
+    PATH: process.env.PATH ?? process.env.Path ?? '',
+  });
+
+  beforeAll(async () => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'studio-win-real-')));
+    stateRoot = join(base, 'state');
+    ownerConfigDir = join(base, 'config');
+    mkdirSync(join(stateRoot, 'tmp'), { recursive: true });
+    mkdirSync(join(stateRoot, 'logs'), { recursive: true });
+    mkdirSync(ownerConfigDir, { recursive: true });
+    crewConfigDir = join(base, 'crew-claude');
+    mkdirSync(join(crewConfigDir, 'plugins'), { recursive: true });
+    await setup();
     expect(existsSync(credFileIn(ownerConfigDir))).toBe(true);
     proxy = await startEgressProxy({ allow: ['github.com'] });
-    grants = new WindowsGrants({ stateRoot, user: USER, run: runFile });
+    grants = new WindowsGrants({ ownerRoot: join(base, 'owner'), user: USER, run: runFile });
   }, 240_000);
   afterAll(async () => {
     await proxy?.close();
@@ -118,10 +131,19 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
       ownerHome: homedir(),
       ownerConfigDir,
       mustNotRead: [],
+      crewConfigDir,
       proxyPort: proxy.port,
       env: env(),
       timeoutMs: 120_000,
     });
+
+  it('a write grant an earlier setup left on the crew Claude config dir refuses, and the setup takes it off', async () => {
+    const r = await runFile('icacls', [crewConfigDir, '/grant', `${USER}:(OI)(CI)M`, '/Q']);
+    expect(r.code).toBe(0);
+    expect(await probe(USER)).toMatch(/does not hold here: write: writable: .*crew-claude/);
+    await setup();
+    expect(await probe(USER)).toBeUndefined();
+  }, 400_000);
 
   it('the probe as the crew user holds', async () => {
     expect(await probe(USER)).toBeUndefined();

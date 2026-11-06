@@ -647,16 +647,17 @@ workers:
 - creates the user (a member of Users, never of Administrators) with a random password nobody sees;
 - stores its credential encrypted for your account (`windows-crew.xml` in the owner config dir, DPAPI);
 - adds an outbound firewall rule that blocks that user from every address but loopback;
-- grants it read, never write, on Node.js, the Studio plugin, Claude Code, your `crew_toolchain_paths`, and the `skills` and `plugins` folders of the crew Claude config dir.
+- grants it read, never write, on Node.js, the Studio plugin, Claude Code, your `crew_toolchain_paths`, and the `skills` and `plugins` folders of the crew Claude config dir; a write grant an earlier version of the script left there is taken off first;
+- denies the user logon as a batch job (no scheduled task with a stored password), as a service, over the network and by remote desktop.
 
 Run it again after an update of the plugin, because the plugin's folder changes.
 
-**One crew at a time.** All crews share the one crew user, so a native worker runs one crew at a time: a launch while a crew of the worker runs is held.
+**One crew at a time.** All crews share the one crew user, so a Windows machine runs one crew at a time, across all projects of the owner: the grants and the running crew are recorded per crew user in the owner's state root, under a lock, and a launch while a crew of that user runs is held. Before each grant Studio ends every process of the crew user it finds (by owner SID); a process it cannot end (ending another user's process takes an administrator) refuses the launch.
 
 **Grants per run.** For each crew Studio grants the crew user only that run's clone, `HOME`, tmp dir and log (modify) and its brief, settings and guard context (read). A writable folder also gets an inheritable OWNER RIGHTS entry, so the crew user keeps no owner's rights over what it created. Every grant is recorded in the state root and taken off when the crew ends, when it is stopped, and before the next grant. Each run gets its own writable Claude config dir in its `HOME`, with copies of the skills and plugin lists; the shared plugins stay read-only.
 
 **Starting and stopping.** Claude Code's own sandbox is off for such a run (it does not exist there).
-- **Network:** traffic goes through a proxy Studio runs on loopback. It tunnels only to the names of `sandbox.network_allow` and `api.anthropic.com`, resolves each name itself, refuses any answer that points to this machine or a private, link-local, multicast or reserved network, and connects to the address it checked. Claude Code's optional traffic is off.
+- **Network:** traffic goes through a proxy Studio runs on loopback. It tunnels only to the names of `sandbox.network_allow` and `api.anthropic.com`, resolves each name itself, refuses any answer that points to this machine or a private, link-local, multicast or reserved network (also inside an IPv6 address that carries an IPv4 one: mapped, compatible, NAT64, 6to4, Teredo), and connects to the address it checked. Claude Code's optional traffic is off.
 - **The keeper:** the worker starts each crew through a keeper, `studio-crew-keeper.ps1`, a PowerShell of your account. The keeper puts `bin/studio-crew-host.mjs`, started as the crew user with `Start-Process -Credential`, into a job object before the host gets anything. It hands the spec, with the crew's environment, to that very host over a named pipe, so the Claude token never lands on disk. When the host ends, it takes the grants off.
 - **Identity and stop:** Studio records the keeper, never anything the crew can write. The identity is the keeper's creation time, read through CIM, and only for a process of your account running the keeper file. Stopping ends the keeper, which ends the job and the crew's whole tree. The output of keeper and host goes to files in the `logs` folder of the state root, which the crew user cannot reach; links there are removed, not followed.
 
@@ -665,10 +666,11 @@ Deny paths on a native worker are Windows drive paths (`D:\data`); a POSIX path 
 **The probe.** Before every claim the worker starts a probe as the crew user. It refuses unless the probe shows all of this:
 - the process runs as that user and not as an administrator;
 - it cannot read your profile, the owner config or any deny path;
-- it cannot write your home;
+- it cannot write your home, nor the crew Claude config dir or its plugins;
 - a direct connection to `github.com:443` fails;
 - the proxy refuses a name that is not allowed;
-- the environment Studio set arrived.
+- the environment Studio set arrived;
+- no scheduled task runs as the crew user.
 
 A failed or missing check, or no answer, refuses (fail closed). A crew launch on native Windows outside such a worker refuses as well. What this sandbox does not cover is in SECURITY.md.
 

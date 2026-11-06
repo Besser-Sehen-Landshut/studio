@@ -98,6 +98,9 @@ const BLOCKED = (() => {
   v4(172, 16, 0, 0, 12); // private
   v4(192, 0, 0, 0, 24); // protocol assignments
   v4(192, 168, 0, 0, 16); // private
+  v4(192, 0, 2, 0, 24); // documentation
+  v4(198, 51, 100, 0, 24); // documentation
+  v4(203, 0, 113, 0, 24); // documentation
   v4(198, 18, 0, 0, 15); // benchmarking
   v4(224, 0, 0, 0, 4); // multicast
   v4(240, 0, 0, 0, 4); // reserved, broadcast
@@ -108,6 +111,7 @@ const BLOCKED = (() => {
     ['fe80::', 10], // link-local
     ['ff00::', 8], // multicast
     ['64:ff9b:1::', 48], // local-use translation
+    ['100::', 64], // discard-only
   ] as const) {
     b.addSubnet(net, prefix, 'ipv6');
   }
@@ -119,10 +123,58 @@ export function blockedAddress(address: string): boolean {
   const kind = isIP(address);
   if (kind === 4) return BLOCKED.check(address, 'ipv4');
   if (kind !== 6) return true;
-  // An IPv4-mapped IPv6 address is judged as its IPv4 address.
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
-  if (mapped) return BLOCKED.check(mapped[1] as string, 'ipv4');
+  const h = hextets(address);
+  if (h === undefined) return true;
+  // An IPv6 address that carries an IPv4 address is judged by that one too.
+  if (embeddedIpv4(h).some((v4) => BLOCKED.check(v4, 'ipv4'))) return true;
   return BLOCKED.check(address, 'ipv6');
+}
+
+/** The eight 16-bit groups of an IPv6 address (a dotted IPv4 tail included); undefined if bad. */
+export function hextets(address: string): number[] | undefined {
+  let a = address.toLowerCase().replace(/%.*$/, '');
+  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(a);
+  if (dotted) {
+    const [b0, b1, b2, b3] = dotted.slice(1).map(Number) as [number, number, number, number];
+    a = `${a.slice(0, dotted.index)}${((b0 << 8) | b1).toString(16)}:${((b2 << 8) | b3).toString(16)}`;
+  }
+  const halves = a.split('::');
+  if (halves.length > 2) return undefined;
+  const part = (x: string) => (x === '' ? [] : x.split(':').map((g) => Number.parseInt(g, 16)));
+  const head = part(halves[0] as string);
+  const tail = halves.length === 2 ? part(halves[1] as string) : [];
+  const fill = 8 - head.length - tail.length;
+  if (halves.length === 1 ? head.length !== 8 : fill < 0) return undefined;
+  const all = [...head, ...Array(halves.length === 2 ? fill : 0).fill(0), ...tail];
+  return all.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff) ? all : undefined;
+}
+
+const v4Of = (hi: number, lo: number): string =>
+  ipv4((hi >> 8) & 255, hi & 255, (lo >> 8) & 255, lo & 255);
+
+/**
+ * The IPv4 addresses an IPv6 address carries: IPv4-mapped (::ffff:0:0/96), IPv4-compatible
+ * (::/96), NAT64 (64:ff9b::/96), 6to4 (2002::/16) and Teredo (2001::/32: its server, and its
+ * client, stored inverted).
+ */
+export function embeddedIpv4(h: readonly number[]): string[] {
+  const [a, b, c, d, e, f, g, i] = h as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  const zero = (...xs: number[]) => xs.every((x) => x === 0);
+  const out: string[] = [];
+  if (zero(a, b, c, d, e) && (f === 0xffff || f === 0)) out.push(v4Of(g, i));
+  if (a === 0x64 && b === 0xff9b && zero(c, d, e, f)) out.push(v4Of(g, i));
+  if (a === 0x2002) out.push(v4Of(b, c));
+  if (a === 0x2001 && b === 0) out.push(v4Of(c, d), v4Of(g ^ 0xffff, i ^ 0xffff));
+  return out;
 }
 
 export type Resolve = (host: string) => Promise<string[]>;

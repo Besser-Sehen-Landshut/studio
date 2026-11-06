@@ -178,6 +178,26 @@ async function probe(p) {
     /^HTTP\/1\.1 403 /.test(answer),
     `the proxy answered ${p.proxy.refused} with ${answer}`,
   );
+  // A scheduled task of this user would start processes outside every keeper's job.
+  try {
+    const tasks = execFileSync('schtasks', ['/query', '/fo', 'csv', '/v', '/nh'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    const me = String(p.user).toLowerCase();
+    const mine = tasks
+      .split(/\r?\n/)
+      .filter((l) => l.toLowerCase().includes(`"${me}"`) || l.toLowerCase().includes(`\\${me}"`));
+    add(
+      'tasks',
+      mine.length === 0,
+      mine.length === 0
+        ? 'no scheduled task runs as the crew user'
+        : `${mine.length} scheduled task(s) run as the crew user: ${mine.map((l) => l.split(',')[1]).join(', ')}`,
+    );
+  } catch (e) {
+    add('tasks', false, `schtasks failed: ${String(e?.message ?? e).split('\n')[0]}`);
+  }
   return results;
 }
 
