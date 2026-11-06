@@ -33,13 +33,29 @@ export const reaInstallDir = (ownerRoot: string, version: string): string => {
   return join(ownerRoot, 'rea', version);
 };
 
-/** The environment npm runs with for an install: no user or global npmrc, no token, no project. */
-function npmEnv(ownerRoot: string, home: string, path: string): Record<string, string> {
+const NPMRC_USER = '.npmrc-user';
+const NPMRC_GLOBAL = '.npmrc-global';
+
+/**
+ * The environment npm runs with for an install: no user or global npmrc, no token, no project.
+ * npm refuses one file as both (`double-loading config "/dev/null"`), so each gets its own empty
+ * file in the staging directory, created here (mode 0600) together with npm's HOME.
+ */
+export function npmStagingEnv(
+  ownerRoot: string,
+  staging: string,
+  path: string,
+): Record<string, string> {
+  const home = ensureStateDir(ownerRoot, join(staging, '.home'));
+  const userconfig = join(staging, NPMRC_USER);
+  const globalconfig = join(staging, NPMRC_GLOBAL);
+  writeStateFile(ownerRoot, userconfig, '');
+  writeStateFile(ownerRoot, globalconfig, '');
   return {
     PATH: path,
     HOME: home,
-    npm_config_userconfig: '/dev/null',
-    npm_config_globalconfig: '/dev/null',
+    npm_config_userconfig: userconfig,
+    npm_config_globalconfig: globalconfig,
     npm_config_cache: join(ownerRoot, 'rea', 'npm-cache'),
     npm_config_update_notifier: 'false',
     npm_config_fund: 'false',
@@ -76,8 +92,7 @@ export async function installRea(o: {
   const dir = reaInstallDir(o.ownerRoot, o.version);
   const staging = `${dir}.staging`;
   removeStateEntry(o.ownerRoot, staging);
-  ensureStateDir(o.ownerRoot, join(staging, '.home'));
-  const env = npmEnv(o.ownerRoot, join(staging, '.home'), o.path);
+  const env = npmStagingEnv(o.ownerRoot, staging, o.path);
   try {
     const view = await o.npm.run(
       ['view', `${REA_PACKAGE}@${o.version}`, 'dist.integrity', '--json'],
@@ -127,7 +142,9 @@ export async function installRea(o: {
       join(staging, REA_RECORD),
       `${JSON.stringify({ package: REA_PACKAGE, version: o.version, integrity, ...(o.full === true ? { full: true } : {}), installedAt: o.now.toISOString() }, null, 2)}\n`,
     );
-    removeStateEntry(o.ownerRoot, join(staging, '.home'));
+    for (const p of ['.home', NPMRC_USER, NPMRC_GLOBAL]) {
+      removeStateEntry(o.ownerRoot, join(staging, p));
+    }
     // Swap: the earlier install aside, the new one in, verified as a launch would; back on failure.
     const previous = `${dir}.previous`;
     removeStateEntry(o.ownerRoot, previous);
@@ -204,7 +221,7 @@ export function verifyReaInstall(
   mode: 'full' | 'static' = 'static',
 ): ReaInstall {
   const dir = reaInstallDir(ownerRoot, version);
-  const hint = `it installs on the first launch that needs it, after one confirmation by the owner (or studio research install) of ${REA_PACKAGE}@${version}`;
+  const hint = `it installs on the first launch that needs it, after one confirmation by the owner (or studio setup research) of ${REA_PACKAGE}@${version}`;
   try {
     ownedPlain(dir, 'dir', uid);
     ownedPlain(join(dir, REA_RECORD), 'file', uid);

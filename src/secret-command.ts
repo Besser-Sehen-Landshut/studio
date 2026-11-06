@@ -257,12 +257,30 @@ export function reaState(
       entry = got.entry;
       installed = `yes (${got.integrity.slice(0, 19)}...)`;
     } catch (e) {
-      installed = `no: ${(e as Error).message.replace(/^[^:]*: /, '').replace(/; .*$/, '')}; it installs on first use after one confirmation (or studio research install)`;
+      installed = `no: ${(e as Error).message.replace(/^[^:]*: /, '').replace(/; .*$/, '')}; it installs on first use after one confirmation (or studio setup research)`;
     }
   }
+  // The grant is the owner's research_roots (since 0.21); an item names its folder below one with
+  // `studio add --artifacts`. Counted, never named: doctor shows no path.
+  let researchRoots: string;
+  if (roots.length === 0) {
+    researchRoots =
+      'none granted: the first research launch asks for a folder after one confirmation (or studio setup research)';
+  } else {
+    const missing = roots.filter((r) => {
+      try {
+        return !statSync(r).isDirectory();
+      } catch {
+        return true;
+      }
+    }).length;
+    researchRoots = `${roots.length} granted${missing === 0 ? '' : `, ${missing} missing on disk`}`;
+  }
+  // studio.yaml `research.artifacts` is optional: a project-wide default folder for its items.
   let artifacts: string;
-  if (config?.research === undefined) artifacts = 'not set in studio.yaml (research.artifacts)';
-  else if (roots.length === 0) artifacts = 'refused: no research_roots in the owner config';
+  if (config?.research === undefined) {
+    artifacts = 'not set (optional: research items name their folder with --artifacts)';
+  } else if (roots.length === 0) artifacts = 'refused: no research_roots in the owner config';
   else {
     try {
       const real = realpathSync(config.research.artifacts);
@@ -310,15 +328,34 @@ export function reaState(
     // Trust mode (default): every class, full install. Strict: per-item classes, static install.
     mode: ownerConfig?.research.trust === false ? 'strict' : 'trust',
     installed,
+    researchRoots,
     analysisDirectory: artifacts,
     skill: skillState(configDir, REA_SKILL),
     registeredInCrewConfig: registered,
     engineEnvironment: Object.keys(ownerConfig?.reaEnv ?? {}).sort(),
+    knownTools: REA_KNOWN_TOOLS.length,
     staticTools: REA_STATIC_TOOLS.length,
-    deniedByDefault: REA_KNOWN_TOOLS.length - REA_STATIC_TOOLS.length,
+    // Trust mode opens every class to every item; strict mode only what an item was allowed.
+    deniedByDefault:
+      ownerConfig?.research.trust === false ? REA_KNOWN_TOOLS.length - REA_STATIC_TOOLS.length : 0,
     classes: [...REA_CLASS_NAMES],
     setup: configDir === undefined ? null : reaSetupHint(configDir, entry),
   };
+}
+
+/** What `doctor` prints about REA, from {@link reaState}. */
+export function reaDoctorLines(rea: NonNullable<ReturnType<typeof reaState>>): string[] {
+  const tools =
+    rea.mode === 'trust'
+      ? `all ${rea.knownTools} known ones allowed (trust mode: every class, ${rea.classes.join(', ')})`
+      : `${rea.staticTools} static allowed, ${rea.deniedByDefault} known ones denied unless an item allows their class (strict mode: studio research allow; ${rea.classes.join(', ')})`;
+  return [
+    `rea: ${rea.server} (${rea.pinnedBy}), ${rea.mode} mode, installed: ${rea.installed}`,
+    `rea research_roots (owner config): ${rea.researchRoots}; studio.yaml research.artifacts: ${rea.analysisDirectory}`,
+    `rea skill in the crew config dir: ${rea.skill}; server registered there: ${rea.registeredInCrewConfig}`,
+    `rea tools: ${tools}; engine variables set: ${rea.engineEnvironment.join(', ') || 'none'}`,
+    ...(rea.skill === 'installed' || rea.setup === null ? [] : [`rea setup: ${rea.setup}`]),
+  ];
 }
 
 /** The line `doctor` warns with while git tracks the board, which is lead-machine state. */
@@ -500,16 +537,7 @@ export async function runDoctor(o: {
       `notify: ${report.notify}`,
       `notifications: ${report.notifications}`,
       `allow_api_billing: ${report.allowApiBilling ? 'on' : 'off'}`,
-      ...(report.rea === null
-        ? []
-        : [
-            `rea: ${report.rea.server} (${report.rea.pinnedBy}), installed: ${report.rea.installed}; analysis directory ${report.rea.analysisDirectory}`,
-            `rea skill in the crew config dir: ${report.rea.skill}; server registered there: ${report.rea.registeredInCrewConfig}`,
-            `rea tools: ${report.rea.staticTools} static allowed, ${report.rea.deniedByDefault} known ones denied unless an item allows their class (${report.rea.classes.join(', ')}); engine variables set: ${report.rea.engineEnvironment.join(', ') || 'none'}`,
-            ...(report.rea.skill === 'installed' || report.rea.setup === null
-              ? []
-              : [`rea setup: ${report.rea.setup}`]),
-          ]),
+      ...(report.rea === null ? [] : reaDoctorLines(report.rea)),
       `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(', ') || 'none'}`,
     ];
     o.stdout(`${lines.map(safe).join('\n')}\n`);

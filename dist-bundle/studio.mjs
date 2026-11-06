@@ -28988,7 +28988,7 @@ var resolveLang = shipped.resolve;
 var import_yaml2 = __toESM(require_dist(), 1);
 import { existsSync, lstatSync, readdirSync, readFileSync as readFileSync2, statSync } from "node:fs";
 import { join as join2 } from "node:path";
-var STUDIO_VERSION = "0.22.1";
+var STUDIO_VERSION = "0.22.2";
 var HTTPS_GIT = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(\.git)?$/;
 var VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
 var PLUGIN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -30288,7 +30288,7 @@ function reaMcpServer(o2) {
   };
 }
 function reaSetupHint(configDir, entry) {
-  return entry === void 0 ? "install the pinned REA package first (studio research install), then run its setup for the crew config dir" : `run CLAUDE_CONFIG_DIR=${configDir} node ${entry} setup --client claude_code --dry-run in a terminal, read the plan, then the same with --yes`;
+  return entry === void 0 ? "REA installs on first use after one confirmation (or studio setup research); then run its setup for the crew config dir" : `run CLAUDE_CONFIG_DIR=${configDir} node ${entry} setup --client claude_code --dry-run in a terminal, read the plan, then the same with --yes`;
 }
 function renderReaBrief(o2) {
   const open4 = o2.classes.length > 0 ? o2.classes.join(", ") : "(none)";
@@ -37075,12 +37075,19 @@ var reaInstallDir = (ownerRoot, version2) => {
   if (!REA_VERSION_RE.test(version2)) throw new Error(`rea_version ${version2} is not exact`);
   return join21(ownerRoot, "rea", version2);
 };
-function npmEnv(ownerRoot, home, path10) {
+var NPMRC_USER = ".npmrc-user";
+var NPMRC_GLOBAL = ".npmrc-global";
+function npmStagingEnv(ownerRoot, staging, path10) {
+  const home = ensureStateDir(ownerRoot, join21(staging, ".home"));
+  const userconfig = join21(staging, NPMRC_USER);
+  const globalconfig = join21(staging, NPMRC_GLOBAL);
+  writeStateFile(ownerRoot, userconfig, "");
+  writeStateFile(ownerRoot, globalconfig, "");
   return {
     PATH: path10,
     HOME: home,
-    npm_config_userconfig: "/dev/null",
-    npm_config_globalconfig: "/dev/null",
+    npm_config_userconfig: userconfig,
+    npm_config_globalconfig: globalconfig,
     npm_config_cache: join21(ownerRoot, "rea", "npm-cache"),
     npm_config_update_notifier: "false",
     npm_config_fund: "false",
@@ -37091,8 +37098,7 @@ async function installRea(o2) {
   const dir = reaInstallDir(o2.ownerRoot, o2.version);
   const staging = `${dir}.staging`;
   removeStateEntry(o2.ownerRoot, staging);
-  ensureStateDir(o2.ownerRoot, join21(staging, ".home"));
-  const env = npmEnv(o2.ownerRoot, join21(staging, ".home"), o2.path);
+  const env = npmStagingEnv(o2.ownerRoot, staging, o2.path);
   try {
     const view = await o2.npm.run(
       ["view", `${REA_PACKAGE}@${o2.version}`, "dist.integrity", "--json"],
@@ -37144,7 +37150,9 @@ async function installRea(o2) {
       `${JSON.stringify({ package: REA_PACKAGE, version: o2.version, integrity, ...o2.full === true ? { full: true } : {}, installedAt: o2.now.toISOString() }, null, 2)}
 `
     );
-    removeStateEntry(o2.ownerRoot, join21(staging, ".home"));
+    for (const p of [".home", NPMRC_USER, NPMRC_GLOBAL]) {
+      removeStateEntry(o2.ownerRoot, join21(staging, p));
+    }
     const previous = `${dir}.previous`;
     removeStateEntry(o2.ownerRoot, previous);
     assertStatePath(o2.ownerRoot, dir);
@@ -37191,7 +37199,7 @@ function ownedPlain(path10, kind, uid) {
 }
 function verifyReaInstall(ownerRoot, version2, uid = process.getuid?.(), mode = "static") {
   const dir = reaInstallDir(ownerRoot, version2);
-  const hint = `it installs on the first launch that needs it, after one confirmation by the owner (or studio research install) of ${REA_PACKAGE}@${version2}`;
+  const hint = `it installs on the first launch that needs it, after one confirmation by the owner (or studio setup research) of ${REA_PACKAGE}@${version2}`;
   try {
     ownedPlain(dir, "dir", uid);
     ownedPlain(join21(dir, REA_RECORD), "file", uid);
@@ -41386,12 +41394,26 @@ function reaState(config2, ownerConfig, configDir, ownerRoot) {
       entry = got.entry;
       installed = `yes (${got.integrity.slice(0, 19)}...)`;
     } catch (e) {
-      installed = `no: ${e.message.replace(/^[^:]*: /, "").replace(/; .*$/, "")}; it installs on first use after one confirmation (or studio research install)`;
+      installed = `no: ${e.message.replace(/^[^:]*: /, "").replace(/; .*$/, "")}; it installs on first use after one confirmation (or studio setup research)`;
     }
   }
+  let researchRoots;
+  if (roots.length === 0) {
+    researchRoots = "none granted: the first research launch asks for a folder after one confirmation (or studio setup research)";
+  } else {
+    const missing = roots.filter((r) => {
+      try {
+        return !statSync5(r).isDirectory();
+      } catch {
+        return true;
+      }
+    }).length;
+    researchRoots = `${roots.length} granted${missing === 0 ? "" : `, ${missing} missing on disk`}`;
+  }
   let artifacts;
-  if (config2?.research === void 0) artifacts = "not set in studio.yaml (research.artifacts)";
-  else if (roots.length === 0) artifacts = "refused: no research_roots in the owner config";
+  if (config2?.research === void 0) {
+    artifacts = "not set (optional: research items name their folder with --artifacts)";
+  } else if (roots.length === 0) artifacts = "refused: no research_roots in the owner config";
   else {
     try {
       const real = realpathSync7(config2.research.artifacts);
@@ -41430,15 +41452,28 @@ function reaState(config2, ownerConfig, configDir, ownerRoot) {
     // Trust mode (default): every class, full install. Strict: per-item classes, static install.
     mode: ownerConfig?.research.trust === false ? "strict" : "trust",
     installed,
+    researchRoots,
     analysisDirectory: artifacts,
     skill: skillState(configDir, REA_SKILL),
     registeredInCrewConfig: registered,
     engineEnvironment: Object.keys(ownerConfig?.reaEnv ?? {}).sort(),
+    knownTools: REA_KNOWN_TOOLS.length,
     staticTools: REA_STATIC_TOOLS.length,
-    deniedByDefault: REA_KNOWN_TOOLS.length - REA_STATIC_TOOLS.length,
+    // Trust mode opens every class to every item; strict mode only what an item was allowed.
+    deniedByDefault: ownerConfig?.research.trust === false ? REA_KNOWN_TOOLS.length - REA_STATIC_TOOLS.length : 0,
     classes: [...REA_CLASS_NAMES],
     setup: configDir === void 0 ? null : reaSetupHint(configDir, entry)
   };
+}
+function reaDoctorLines(rea) {
+  const tools = rea.mode === "trust" ? `all ${rea.knownTools} known ones allowed (trust mode: every class, ${rea.classes.join(", ")})` : `${rea.staticTools} static allowed, ${rea.deniedByDefault} known ones denied unless an item allows their class (strict mode: studio research allow; ${rea.classes.join(", ")})`;
+  return [
+    `rea: ${rea.server} (${rea.pinnedBy}), ${rea.mode} mode, installed: ${rea.installed}`,
+    `rea research_roots (owner config): ${rea.researchRoots}; studio.yaml research.artifacts: ${rea.analysisDirectory}`,
+    `rea skill in the crew config dir: ${rea.skill}; server registered there: ${rea.registeredInCrewConfig}`,
+    `rea tools: ${tools}; engine variables set: ${rea.engineEnvironment.join(", ") || "none"}`,
+    ...rea.skill === "installed" || rea.setup === null ? [] : [`rea setup: ${rea.setup}`]
+  ];
 }
 var BOARD_TRACKED_LINE = "warning: .studio/board.yaml is tracked by git, but the board is lead-machine state that Studio edits in the working tree: run git rm --cached .studio/board.yaml, add /.studio/board.yaml to .gitignore and commit both; studio roadmap --write writes the shareable ROADMAP.md";
 async function boardTrackedState(project, ports) {
@@ -41591,12 +41626,7 @@ async function runDoctor(o2) {
       `notify: ${report.notify}`,
       `notifications: ${report.notifications}`,
       `allow_api_billing: ${report.allowApiBilling ? "on" : "off"}`,
-      ...report.rea === null ? [] : [
-        `rea: ${report.rea.server} (${report.rea.pinnedBy}), installed: ${report.rea.installed}; analysis directory ${report.rea.analysisDirectory}`,
-        `rea skill in the crew config dir: ${report.rea.skill}; server registered there: ${report.rea.registeredInCrewConfig}`,
-        `rea tools: ${report.rea.staticTools} static allowed, ${report.rea.deniedByDefault} known ones denied unless an item allows their class (${report.rea.classes.join(", ")}); engine variables set: ${report.rea.engineEnvironment.join(", ") || "none"}`,
-        ...report.rea.skill === "installed" || report.rea.setup === null ? [] : [`rea setup: ${report.rea.setup}`]
-      ],
+      ...report.rea === null ? [] : reaDoctorLines(report.rea),
       `API key variables in the environment: ${report.apiKeyVarsInEnvironment.join(", ") || "none"}`
     ];
     o2.stdout(`${lines2.map(safe).join("\n")}

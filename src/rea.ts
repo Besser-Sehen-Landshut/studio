@@ -220,7 +220,7 @@ export function reaMcpServer(o: { node: string; wrapper: string; spec: string })
 /** What the owner types to give a crew config dir the REA skill and, by REA's own setup, its registration. */
 export function reaSetupHint(configDir: string, entry: string | undefined): string {
   return entry === undefined
-    ? 'install the pinned REA package first (studio research install), then run its setup for the crew config dir'
+    ? 'REA installs on first use after one confirmation (or studio setup research); then run its setup for the crew config dir'
     : `run CLAUDE_CONFIG_DIR=${configDir} node ${entry} setup --client claude_code --dry-run in a terminal, read the plan, then the same with --yes`;
 }
 
