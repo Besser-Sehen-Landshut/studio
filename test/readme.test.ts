@@ -195,7 +195,7 @@ describe('README relay workers', () => {
       'grace_minutes',
       'workers.serve',
       'studio relay serve',
-      'studio relay setup --lead-key',
+      'studio relay install --pair',
       'Match User studio-relay',
       'never forced',
       'never to a second attempt elsewhere',
@@ -207,7 +207,7 @@ describe('README relay workers', () => {
     ]) {
       expect(s).toContain(phrase);
     }
-    expect(readme).toContain('| `relay setup [--lead-key <line>] [--home <dir>]`');
+    expect(readme).toContain('| `relay unpair <label> [--home <dir>]`');
   });
   it('sets up a Windows relay worker in five steps, with a troubleshooting table', () => {
     const at = readme.indexOf('### Set up a Windows relay worker in 10 minutes');
@@ -219,7 +219,7 @@ describe('README relay workers', () => {
       'studio relay pair lab worker.example',
       'studio relay install --pair',
       'studio relay pair lab --connect',
-      'host key code',
+      'host key fingerprint',
       'studio doctor',
     ]) {
       expect(s).toContain(phrase);

@@ -83,9 +83,9 @@ export const COMMANDS: HelpEntry[] = [
     about: "On the lead: make the lead's key for a relay worker and print the one pairing line",
   },
   {
-    usage: 'relay pair <label> --connect [--code <code>]',
+    usage: 'relay pair <label> --connect',
     about:
-      "On the lead: show the worker's host key code, pin it once confirmed, write workers.relay.<label>",
+      'On the lead: pin the host key the worker proves with the pairing secret; write workers.relay.<label>',
   },
   {
     usage:
@@ -94,9 +94,13 @@ export const COMMANDS: HelpEntry[] = [
       'On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead',
   },
   {
-    usage: 'relay setup [--lead-key <line>] [--home <dir>]',
+    usage: 'relay unpair <label> [--home <dir>]',
+    about: "On a Windows worker, elevated: remove a lead's pairing and its authorized key",
+  },
+  {
+    usage: 'relay setup [--home <dir>] [--user <name>]',
     about:
-      'Print the one-time PowerShell script of a Windows relay worker (run it elevated); --lead-key authorizes the lead',
+      'Print the setup script of a Windows relay worker, to run elevated by hand (relay install runs it)',
   },
   {
     usage: 'overview',

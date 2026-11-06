@@ -55,18 +55,6 @@ export function sshdMatchBlock(o: { relayUser: string; home: string; command: st
   ].join('\n');
 }
 
-/** The line for the authorized keys file: the forced command, plus `restrict` as an extra. */
-export function authorizedKeyLine(o: { key: string; command: string }): string {
-  if (
-    !/^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa) [A-Za-z0-9+/]{40,2000}={0,2}( [^\p{Cc}"]{0,100})?$/u.test(
-      o.key,
-    )
-  ) {
-    throw new Error('not an SSH public key line: <type> <base64> [comment]');
-  }
-  return `restrict,command="${o.command.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" ${o.key}`;
-}
-
 /**
  * The broker's script: ends every process of the crew user (by SID, through CIM) and writes how
  * many it found and which are left, with the time, to its answer file. It takes no argument: the
@@ -249,8 +237,6 @@ export function relaySetupScript(o: {
   task: string;
   readPaths: readonly string[];
   command: string;
-  /** The lead's public key line, to authorize with the forced command. */
-  leadKey?: string;
   /** Plugin setup for the crew Claude config dir of the relay home. */
   pluginSetup: string;
   /**
@@ -264,10 +250,7 @@ export function relaySetupScript(o: {
   }
   if (!/^[A-Za-z0-9 _-]{1,64}$/.test(o.task)) throw new Error(`not a task name: ${o.task}`);
   const list = (ps: readonly string[]) => `@(${ps.map(psQuote).join(', ')})`;
-  const keyLine =
-    o.leadKey === undefined ? undefined : authorizedKeyLine({ key: o.leadKey, command: o.command });
   const block = sshdMatchBlock({ relayUser: o.relayUser, home: o.home, command: o.command });
-  const tag = o.leadKey?.trim().split(/\s+/)[2];
   return `${o.install === undefined ? '' : installHead()}#Requires -RunAsAdministrator
 # Studio: the one-time setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
@@ -296,11 +279,13 @@ function EnsureUser([string]$name, [string]$what, [string]$plain) {
 # The relay account: a standard user the lead logs in as over SSH, with a password nobody sees.
 $relaySid = (EnsureUser $relay 'Studio relay (SSH, forced command)' $null).SID.Value
 # The relay home: the relay account may change it, the crew user gets nothing (grants per run).
-New-Item -ItemType Directory -Force -Path $home_, (Join-Path $home_ 'broker') | Out-Null
+New-Item -ItemType Directory -Force -Path $home_, (Join-Path $home_ 'broker'), (Join-Path $home_ 'pairing') | Out-Null
 icacls $home_ /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($relaySid):(OI)(CI)M" /Q | Out-Null
-# The broker's folder: written by SYSTEM and administrators only, read by the relay account.
-$broker = Join-Path $home_ 'broker'
-icacls $broker /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($relaySid):(OI)(CI)RX" /Q | Out-Null
+# The broker's folder and the record of pairings: written by SYSTEM and administrators only, read
+# by the relay account.
+foreach ($f in @((Join-Path $home_ 'broker'), (Join-Path $home_ 'pairing'))) {
+  icacls $f /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($relaySid):(OI)(CI)RX" /Q | Out-Null
+}
 # The crew user, its password sealed for this machine (LocalMachine DPAPI): an SSH key logon cannot
 # open the relay account's own DPAPI keys. Only SYSTEM, administrators and the relay account read it.
 $credFile = ${psQuote(machineCredFile(o.home))}
@@ -368,20 +353,6 @@ foreach ($p in ${list(o.readPaths)}) {
 }
 # The pinned plugins in the crew Claude config dir of the relay home.
 ${o.pluginSetup}
-${
-  keyLine === undefined
-    ? '# No lead key given: run studio relay setup --lead-key "<public key line>" to authorize one.'
-    : `$keys = ${psQuote(authorizedKeysFile(o.home))}
-# One line per lead key, told apart by its comment: a key paired again replaces its own line only.
-$keep = @()
-${
-  tag === undefined
-    ? ''
-    : `if (Test-Path -LiteralPath $keys) { $keep = @(Get-Content -LiteralPath $keys | Where-Object { $_ -and -not $_.EndsWith(' ' + ${psQuote(tag)}) }) }`
-}
-Set-Content -LiteralPath $keys -Encoding ASCII -Value (@($keep) + ${psQuote(keyLine)})
-icacls $keys /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /Q | Out-Null`
-}
 ${o.install === undefined ? setupTail(block) : installTail(block, o.install)}`;
 }
 
@@ -398,10 +369,33 @@ const setupTail = (
 ) => `Write-Output 'Add this block at the end of sshd_config (C:\\ProgramData\\ssh\\sshd_config), then Restart-Service sshd:'
 Write-Output @'
 ${block}'@
-Write-Output 'Host key to pin on the lead (workers.relay.<label>.host_key):'
-Get-Content -LiteralPath (Join-Path $env:ProgramData 'ssh\\ssh_host_ed25519_key.pub') | ForEach-Object { ($_ -split ' ')[0..1] -join ' ' }
+Write-Output 'Authorize the lead with studio relay install --pair "<line>" (the line studio relay pair prints on the lead).'
 Write-Output "Studio relay worker is ready: relay account $relay, crew user $crew."
 `;
+
+/**
+ * Writes the relay account's authorized keys file whole: a temporary file in the same folder gets
+ * its ACL first (SYSTEM and administrators full control, the relay account read, nothing
+ * inherited), then replaces the old file in one rename. Run elevated.
+ */
+export function authorizedKeysScript(o: {
+  file: string;
+  lines: readonly string[];
+  relayUser: string;
+}): string {
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o.relayUser)) throw new Error('not a local user name');
+  // psQuote refuses control characters: each line is one quoted string, joined by CRLF in the script.
+  const text = `(@(${o.lines.map(psQuote).join(', ')}) | ForEach-Object { $_ + [char]13 + [char]10 }) -join ''`;
+  return `$ErrorActionPreference = 'Stop'
+$keys = ${psQuote(o.file)}
+$tmp = $keys + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
+$relaySid = (Get-LocalUser -Name ${psQuote(o.relayUser)}).SID.Value
+[IO.File]::WriteAllText($tmp, ${text}, (New-Object Text.ASCIIEncoding))
+icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw 'cannot set the ACL of the authorized keys file' }
+Move-Item -LiteralPath $tmp -Destination $keys -Force
+`;
+}
 
 /**
  * The prerequisites of `studio relay install`: Git and Claude Code through winget (for the whole

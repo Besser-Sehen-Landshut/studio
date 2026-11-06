@@ -28,7 +28,6 @@ import {
 import { relayHandoffScript, STUDIO_BIN, systemSpawnRunner } from '../src/relay-serve.js';
 import { sshArgs } from '../src/relay-transport.js';
 import {
-  authorizedKeyLine,
   brokerScript,
   brokerSweep,
   loopbackListeners,
@@ -496,7 +495,6 @@ describe('the Windows relay worker, with fakes', () => {
       task: 'Studio relay broker',
       readPaths: ['C:\\node'],
       command,
-      leadKey: key,
       pluginSetup: '# plugins',
     });
     expect(script).toMatch(/#Requires -RunAsAdministrator/);
@@ -506,7 +504,6 @@ describe('the Windows relay worker, with fakes', () => {
     expect(script).toContain('$sddl = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;$relaySid)"');
     expect(script).toContain("RegisterTaskDefinition($task, $def, 6, 'SYSTEM', $null, 5, $sddl)");
     expect(script).toContain('Set-Service -Name WebClient -StartupType Disabled');
-    expect(script).toContain(authorizedKeyLine({ key, command }).replace(/'/g, "''"));
     const block = sshdMatchBlock({
       relayUser: 'studio-relay',
       home: 'C:\\ProgramData\\Studio\\relay',
@@ -524,8 +521,6 @@ describe('the Windows relay worker, with fakes', () => {
     ]) {
       expect(block).toContain(line);
     }
-    expect(authorizedKeyLine({ key, command })).toMatch(/^restrict,command="/);
-    expect(() => authorizedKeyLine({ key: 'ssh-ed25519 x\nssh-rsa y', command })).toThrow();
     // The broker takes no argument: the crew user is written into it.
     expect(brokerScript({ crewUser: 'studio-crew', result: 'C:\\r.json' })).toContain(
       "'studio-crew'",

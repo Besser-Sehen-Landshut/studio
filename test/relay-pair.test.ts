@@ -1,4 +1,4 @@
-// Pairing a lead with a relay worker, and the install script of a Windows relay worker.
+// Pairing a lead with a relay worker, the worker's authorized keys, and the install script.
 import { execFileSync } from 'node:child_process';
 import {
   existsSync,
@@ -16,19 +16,22 @@ import { loadOwnerConfig } from '../src/config.js';
 import { realPorts } from '../src/ports.js';
 import { type Exec, relayContext, runRelayCommand } from '../src/relay-command.js';
 import {
-  hostKeyCode,
+  authorizedKeysPlan,
+  keyFingerprint,
   keyscanKey,
-  newPairCode,
-  PAIR_CODE_RE,
+  PAIR_TTL_MS,
+  pairProof,
+  pairProofs,
   parsePairLine,
+  proofHolds,
   readPairings,
   renderPairLine,
-  writePairing,
+  writePairings,
 } from '../src/relay-pair.js';
 import { encodeMessage, LineReader, readMessage } from '../src/relay-protocol.js';
 import { serveRelay } from '../src/relay-serve.js';
 import type { RelayTransport } from '../src/relay-transport.js';
-import { relaySetupScript } from '../src/relay-windows.js';
+import { authorizedKeysScript, relaySetupScript } from '../src/relay-windows.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-relay-pair-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -36,51 +39,75 @@ let n = 0;
 
 const keygen = (file: string) =>
   execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', file]);
-const pubOf = (file: string) =>
-  readFileSync(`${file}.pub`, 'utf8').trim().split(/\s+/).slice(0, 2).join(' ');
+const newKey = () => {
+  const f = join(root, `k${n++}`);
+  keygen(f);
+  return readFileSync(`${f}.pub`, 'utf8').trim().split(/\s+/).slice(0, 2).join(' ');
+};
+const SECRET = 'a'.repeat(43);
+const T0 = Date.parse('2026-11-06T10:00:00Z');
 
 async function* chunks(lines: Iterable<string>): AsyncGenerator<string> {
   for (const l of lines) yield l;
 }
 
-describe('pairing lines and codes', () => {
-  it('a line holds the label, a one-time code and the key, and nothing else parses', () => {
-    const f = join(root, `k${n++}`);
-    keygen(f);
-    const code = newPairCode();
-    expect(code).toMatch(PAIR_CODE_RE);
-    const line = renderPairLine({ label: 'lab', code, key: pubOf(f) });
-    expect(parsePairLine(line)).toEqual({ label: 'lab', code, key: pubOf(f) });
+describe('pairing lines, fingerprints and proofs', () => {
+  it('a line holds the label, the secret and the key, and nothing else parses', () => {
+    const key = newKey();
+    const line = renderPairLine({ label: 'lab', secret: SECRET, key });
+    expect(parsePairLine(line)).toEqual({ label: 'lab', secret: SECRET, key });
     for (const bad of [
       `${line} extra`,
       line.replace('studio-pair-1', 'studio-pair-2'),
-      line.replace(code, 'OOOO-0000'),
+      line.replace(SECRET, 'short'),
       line.replace('lab', 'Lab'),
-      'ssh-ed25519 AAAA',
     ]) {
       expect(() => parsePairLine(bad), bad).toThrow(/not a pairing line/);
     }
   });
 
-  it('the host key code is the key itself, the same on both machines', () => {
-    const f = join(root, `h${n++}`);
+  it('the fingerprint is the one ssh-keygen prints', () => {
+    const f = join(root, `fp${n++}`);
     keygen(f);
-    const key = pubOf(f);
-    expect(hostKeyCode(key)).toMatch(PAIR_CODE_RE);
-    expect(hostKeyCode(`${key} comment`)).toBe(hostKeyCode(key));
-    const g = join(root, `h${n++}`);
-    keygen(g);
-    expect(hostKeyCode(pubOf(g))).not.toBe(hostKeyCode(key));
-    expect(keyscanKey(`# comment\nworker.example ${key}\n`)).toBe(key);
-    expect(keyscanKey('worker.example ssh-rsa AAAA\n')).toBeUndefined();
+    const key = readFileSync(`${f}.pub`, 'utf8');
+    const printed = execFileSync('ssh-keygen', ['-l', '-E', 'sha256', '-f', `${f}.pub`], {
+      encoding: 'utf8',
+    }).split(' ')[1];
+    expect(keyFingerprint(key)).toBe(printed);
+    expect(keyscanKey(`# x\nworker.example ${key}`)).toBe(
+      key.trim().split(' ').slice(0, 2).join(' '),
+    );
   });
 
-  it('a worker keeps its pairings by label and names their codes in hello', async () => {
+  it('a proof binds one host key to one secret, compared in constant time', () => {
+    const host = newKey();
+    const other = newKey();
+    const mac = pairProof(SECRET, host);
+    expect(proofHolds(SECRET, host, mac)).toBe(true);
+    expect(proofHolds(SECRET, other, mac)).toBe(false);
+    expect(proofHolds('b'.repeat(43), host, mac)).toBe(false);
+    expect(proofHolds(SECRET, host, 'not hex')).toBe(false);
+  });
+
+  it('a worker proves its pairings for an hour, never after', () => {
+    const host = newKey();
+    const pairings = {
+      lab: { key: newKey(), secret: SECRET, pairedAt: new Date(T0).toISOString() },
+    };
+    expect(pairProofs(pairings, host, new Date(T0 + 10 * 60_000))).toEqual([
+      { label: 'lab', mac: pairProof(SECRET, host) },
+    ]);
+    expect(pairProofs(pairings, host, new Date(T0 + PAIR_TTL_MS + 1))).toEqual([]);
+    expect(pairProofs(pairings, undefined, new Date(T0))).toEqual([]);
+  });
+
+  it('hello names the proofs of the pairings the worker records', async () => {
     const home = join(root, `relay-home-${n++}`);
     mkdirSync(home);
-    writePairing(home, 'lab', 'ABCD-EFGH');
-    writePairing(home, 'lab', 'JKMN-PQRS');
-    expect(readPairings(home)).toEqual({ lab: 'JKMN-PQRS' });
+    const host = newKey();
+    writePairings(home, {
+      lab: { key: newKey(), secret: SECRET, pairedAt: new Date().toISOString() },
+    });
     const ctx = relayContext({
       owner: { env: { PATH: process.env.PATH }, homedir: home },
       home,
@@ -89,6 +116,7 @@ describe('pairing lines and codes', () => {
       homedir: home,
       platform: { platform: 'linux', wsl: 'none', automountRoot: '/mnt/' },
       load: async () => ({ cpuPercent: 1, freeDiskGb: 100 }),
+      hostKey: () => host,
       log: () => {},
     });
     let out = '';
@@ -96,21 +124,118 @@ describe('pairing lines and codes', () => {
       out += s;
     });
     const msg = await readMessage(new LineReader(chunks([out]), 1 << 20), 0);
-    expect(msg?.header).toMatchObject({ ok: true, pairCodes: ['JKMN-PQRS'] });
+    expect(msg?.header).toMatchObject({
+      ok: true,
+      pairProofs: [{ label: 'lab', mac: pairProof(SECRET, host) }],
+    });
+  });
+});
+
+describe('the authorized keys of a worker are exactly its pairings', () => {
+  const command = '"C:\\node.exe" "C:\\studio\\bin\\studio" relay serve --home "C:\\relay"';
+  it('one forced line per pairing, in label order; any other line is named as removed', () => {
+    const a = newKey();
+    const b = newKey();
+    const pairings = {
+      zeta: { key: b, secret: SECRET, pairedAt: '2026-11-06T10:00:00Z' },
+      lab: { key: a, secret: SECRET, pairedAt: '2026-11-06T10:00:00Z' },
+    };
+    const want = (k: string, l: string) =>
+      `restrict,command="\\"C:\\\\node.exe\\" \\"C:\\\\studio\\\\bin\\\\studio\\" relay serve --home \\"C:\\\\relay\\"" ${k} studio-relay-${l}`;
+    const plan = authorizedKeysPlan({
+      pairings,
+      command,
+      existing: `${want(a, 'lab')}\r\nssh-ed25519 ${'Z'.repeat(68)} someone-else\r\n\r\n`,
+    });
+    expect(plan.keyLines).toEqual([want(a, 'lab'), want(b, 'zeta')]);
+    expect(plan.removed).toEqual([`ssh-ed25519 ${'Z'.repeat(68)} someone-else`]);
+    expect(plan.lines).toEqual([
+      { label: 'lab', fingerprint: keyFingerprint(a) },
+      { label: 'zeta', fingerprint: keyFingerprint(b) },
+    ]);
+    expect(authorizedKeysPlan({ pairings: {}, command, existing: undefined }).keyLines).toEqual([]);
+  });
+
+  it('is written whole: ACL on a temporary file first, then one rename; only administrators write', () => {
+    const script = authorizedKeysScript({
+      file: 'C:\\relay\\authorized_keys',
+      lines: ['restrict,command="x" ssh-ed25519 AAAA studio-relay-lab'],
+      relayUser: 'studio-relay',
+    });
+    const acl = script.indexOf(
+      `icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R"`,
+    );
+    const move = script.indexOf('Move-Item -LiteralPath $tmp -Destination $keys -Force');
+    expect(acl).toBeGreaterThan(0);
+    expect(move).toBeGreaterThan(acl);
+    expect(() =>
+      authorizedKeysScript({ file: 'x', lines: ['a\nb'], relayUser: 'studio-relay' }),
+    ).toThrow();
+  });
+
+  it('install and unpair rewrite it from the record, and refuse off Windows or unelevated', async () => {
+    const home = join(root, `worker-${n++}`);
+    mkdirSync(home);
+    const key = newKey();
+    writePairings(home, { lab: { key, secret: SECRET, pairedAt: '2026-11-06T10:00:00Z' } });
+    writeFileSync(join(home, 'authorized_keys'), `ssh-ed25519 ${'Y'.repeat(68)} stray\n`);
+    const scripts: string[] = [];
+    const out: string[] = [];
+    const exec: Exec = async (_file, args) => {
+      scripts.push(args.at(-1) ?? '');
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const base = {
+      owner: { env: {}, homedir: home },
+      ports: realPorts(),
+      env: {},
+      stdin: chunks([]),
+      stdout: (s: string) => out.push(s),
+      stderr: () => {},
+      exec,
+      platform: { platform: 'win32' as const, wsl: 'none' as const, automountRoot: '/mnt/' },
+      elevated: async () => true,
+    };
+    expect(await runRelayCommand({ ...base, rest: ['unpair', 'lab'], values: { home } })).toBe(0);
+    expect(readPairings(home)).toEqual({});
+    // The file is written with no line at all, and the stray key is named as removed.
+    expect(scripts.at(-1)).toContain('(@() | ForEach-Object');
+    expect(out.join('')).toMatch(
+      /removed an authorized key no pairing names: SHA256:\S+ \(stray\)/,
+    );
+    expect(out.join('')).toContain('authorized: no lead');
+    await expect(
+      runRelayCommand({
+        ...base,
+        elevated: async () => false,
+        rest: ['unpair', 'lab'],
+        values: { home },
+      }),
+    ).rejects.toThrow(/elevated/);
+    await expect(
+      runRelayCommand({
+        ...base,
+        platform: { platform: 'linux', wsl: 'none', automountRoot: '/mnt/' },
+        rest: ['install'],
+        values: { home },
+      }),
+    ).rejects.toThrow(/sets up a Windows relay worker/);
   });
 });
 
 describe('studio relay pair on the lead', () => {
-  function setup() {
+  function setup(o: { workerSecret?: (line: string) => string; workerHost?: string } = {}) {
     const home = join(root, `lead-${n++}`);
     mkdirSync(home);
     const owner = { env: { PATH: process.env.PATH }, homedir: home };
-    const worker = join(root, `worker-host-${n++}`);
-    keygen(worker);
+    const host = newKey();
+    const presented = o.workerHost ?? host;
+    const now = { t: T0 };
     const out: string[] = [];
-    let pairCodes: string[] = [];
+    let secret: string | undefined;
     const transport: RelayTransport = {
       async call(header) {
+        expect(header.op).toBe('hello');
         const lines = [
           ...encodeMessage({
             studioRelay: 1,
@@ -120,37 +245,36 @@ describe('studio relay pair on the lead', () => {
             plugins: {},
             busy: null,
             held: null,
-            pairCodes,
+            // The worker proves its own host key, whatever key the lead was shown.
+            pairProofs:
+              secret === undefined ? [] : [{ label: 'lab', mac: pairProof(secret, host) }],
             warnings: [],
           }),
         ];
-        expect(header.op).toBe('hello');
         return (await readMessage(new LineReader(chunks(lines), 1 << 20), 0)) as {
           header: Record<string, unknown>;
         };
       },
     };
     const exec: Exec = async (file, args) => {
-      if (file === 'ssh-keyscan') {
-        return { code: 0, stdout: `worker.example ${pubOf(worker)}\n`, stderr: '' };
-      }
+      if (file === 'ssh-keyscan')
+        return { code: 0, stdout: `worker.example ${presented}\n`, stderr: '' };
       try {
-        const stdout = execFileSync(file, args, { encoding: 'utf8' });
-        return { code: 0, stdout, stderr: '' };
+        return { code: 0, stdout: execFileSync(file, args, { encoding: 'utf8' }), stderr: '' };
       } catch {
         return { code: 1, stdout: '', stderr: '' };
       }
     };
-    const run = (
-      rest: string[],
-      values: Record<string, unknown> = {},
-      readLine?: (p: string) => Promise<string | undefined>,
-    ) =>
+    const ports = {
+      ...realPorts(),
+      clock: { now: () => new Date(now.t), sleep: async () => {} },
+    };
+    const run = (rest: string[], values: Record<string, unknown> = {}) =>
       runRelayCommand({
         rest,
         values,
         owner,
-        ports: realPorts(),
+        ports,
         env: owner.env,
         homedir: home,
         stdin: chunks([]),
@@ -158,64 +282,64 @@ describe('studio relay pair on the lead', () => {
         stderr: () => {},
         transport: () => transport,
         exec,
-        ...(readLine === undefined ? {} : { readLine }),
       });
-    return {
-      home,
-      owner,
-      out,
-      run,
-      hostCode: hostKeyCode(pubOf(worker)),
-      hostKey: pubOf(worker),
-      setCodes: (c: string[]) => {
-        pairCodes = c;
-      },
+    /** The worker takes the line printed last (or another secret). */
+    const workerTakes = () => {
+      const line = /--pair "([^"]+)"/.exec(out.join(''))?.[1] as string;
+      const p = parsePairLine(line);
+      secret = o.workerSecret?.(p.secret) ?? p.secret;
+      return p;
     };
+    return { home, owner, out, run, now, host, workerTakes };
   }
 
-  it('prints one line, then pins the host key only when its code is confirmed', async () => {
+  it('pins the host key the worker proves with the secret, once', async () => {
     const s = setup();
     expect(await s.run(['pair', 'lab', 'worker.example'])).toBe(0);
-    const line = /studio relay install --pair "([^"]+)"/.exec(s.out.join(''))?.[1] as string;
-    const pair = parsePairLine(line);
-    expect(pair.label).toBe('lab');
     expect(existsSync(join(s.home, '.config', 'studio', 'relay', 'lab_ed25519'))).toBe(true);
-    // The worker took the pairing.
-    s.setCodes([pair.code]);
-    // A code that does not match pins nothing.
-    expect(await s.run(['pair', 'lab'], { connect: true, code: 'AAAA-AAAA' })).toBe(1);
-    expect(loadOwnerConfig(s.owner).workers?.relay.lab).toBeUndefined();
-    // Asked in a terminal, a "no" pins nothing either.
-    expect(await s.run(['pair', 'lab'], { connect: true }, async () => 'n')).toBe(1);
-    // Confirmed: the worker goes into the owner config with the pinned key.
-    expect(
-      await s.run(['pair', 'lab'], { connect: true }, async (prompt) => {
-        expect(prompt).toContain(s.hostCode);
-        return 'y';
-      }),
-    ).toBe(0);
+    s.workerTakes();
+    s.now.t += 20 * 60_000;
+    expect(await s.run(['pair', 'lab'], { connect: true })).toBe(0);
+    expect(s.out.join('')).toContain(keyFingerprint(s.host));
     expect(loadOwnerConfig(s.owner).workers?.relay.lab).toMatchObject({
       host: 'worker.example',
       user: 'studio-relay',
       port: 22,
-      hostKey: s.hostKey,
+      hostKey: s.host,
       identityFile: join(s.home, '.config', 'studio', 'relay', 'lab_ed25519'),
     });
+    // The secret is used up: a second connect has nothing to go on.
+    await expect(s.run(['pair', 'lab'], { connect: true })).rejects.toThrow(
+      /no pairing of lab is waiting/,
+    );
   });
 
-  it('refuses a worker that did not take this pairing, and a connect without a pairing', async () => {
-    const s = setup();
+  it('rejects another host key than the worker proves: nothing is pinned', async () => {
+    const s = setup({ workerHost: newKey() });
     await s.run(['pair', 'lab', 'worker.example']);
-    s.setCodes(['ZZZZ-ZZZZ']);
-    await expect(s.run(['pair', 'lab'], { connect: true, code: s.hostCode })).rejects.toThrow(
-      /did not take this pairing/,
+    s.workerTakes();
+    await expect(s.run(['pair', 'lab'], { connect: true })).rejects.toThrow(
+      /did not prove this host key/,
     );
     expect(loadOwnerConfig(s.owner).workers?.relay.lab).toBeUndefined();
-    await expect(s.run(['pair', 'other'], { connect: true, code: s.hostCode })).rejects.toThrow(
-      /no pairing of other is waiting/,
+  });
+
+  it('rejects a worker that holds another secret', async () => {
+    const s = setup({ workerSecret: () => 'c'.repeat(43) });
+    await s.run(['pair', 'lab', 'worker.example']);
+    s.workerTakes();
+    await expect(s.run(['pair', 'lab'], { connect: true })).rejects.toThrow(
+      /did not prove this host key/,
     );
-    // Without a terminal and without --code, nothing is pinned.
-    await expect(s.run(['pair', 'lab'], { connect: true })).rejects.toThrow(/no terminal/);
+  });
+
+  it('rejects an expired secret', async () => {
+    const s = setup();
+    await s.run(['pair', 'lab', 'worker.example']);
+    s.workerTakes();
+    s.now.t += PAIR_TTL_MS + 60_000;
+    await expect(s.run(['pair', 'lab'], { connect: true })).rejects.toThrow(/expired/);
+    expect(loadOwnerConfig(s.owner).workers?.relay.lab).toBeUndefined();
   });
 
   it('keeps what else the owner config holds, comments included', async () => {
@@ -224,11 +348,9 @@ describe('studio relay pair on the lead', () => {
     mkdirSync(join(s.home, '.config', 'studio'), { recursive: true });
     writeFileSync(file, '# my notes\nnotify: { quiet: "22:00-07:00" }\n');
     await s.run(['pair', 'lab', 'worker.example'], { port: '2222', user: 'relay-bot' });
-    const line = /--pair "([^"]+)"/.exec(s.out.join(''))?.[1] as string;
-    s.setCodes([parsePairLine(line).code]);
-    expect(await s.run(['pair', 'lab'], { connect: true, code: s.hostCode })).toBe(0);
-    const text = readFileSync(file, 'utf8');
-    expect(text).toContain('# my notes');
+    s.workerTakes();
+    expect(await s.run(['pair', 'lab'], { connect: true })).toBe(0);
+    expect(readFileSync(file, 'utf8')).toContain('# my notes');
     expect(loadOwnerConfig(s.owner).notify?.quiet).toBe('22:00-07:00');
     expect(loadOwnerConfig(s.owner).workers?.relay.lab).toMatchObject({
       port: 2222,
@@ -237,24 +359,8 @@ describe('studio relay pair on the lead', () => {
   });
 });
 
-describe('studio relay install', () => {
-  it('runs on Windows only', async () => {
-    await expect(
-      runRelayCommand({
-        rest: ['install'],
-        values: {},
-        owner: { env: {}, homedir: root },
-        ports: realPorts(),
-        env: {},
-        stdin: chunks([]),
-        stdout: () => {},
-        stderr: () => {},
-        platform: { platform: 'linux', wsl: 'none', automountRoot: '/mnt/' },
-      }),
-    ).rejects.toThrow(/sets up a Windows relay worker/);
-  });
-
-  it('its script: prerequisites, the sshd block between markers checked by sshd -t, sshd only from the scope', () => {
+describe('the install script', () => {
+  it('prerequisites, the sshd block between markers checked by sshd -t, sshd only from the scope', () => {
     const base = {
       relayUser: 'studio-relay',
       crewUser: 'studio-crew',
@@ -263,7 +369,6 @@ describe('studio relay install', () => {
       readPaths: [],
       command:
         '"C:\\node.exe" "C:\\studio\\bin\\studio" relay serve --home "C:\\ProgramData\\Studio\\relay"',
-      leadKey: `ssh-ed25519 ${'C'.repeat(68)} studio-relay-lab`,
       pluginSetup: '# plugins',
     };
     const tail = relaySetupScript({ ...base, install: { port: 22, scope: { tailscale: true } } });
@@ -279,19 +384,19 @@ describe('studio relay install', () => {
       '$scope = @{ InterfaceAlias = $ts.Name }',
       "Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Disable-NetFirewallRule",
       'Set-Service -Name WebClient -StartupType Disabled',
-      // A key paired again replaces its own line, and only that one.
-      "$_.EndsWith(' ' + 'studio-relay-lab')",
+      // The record of pairings: written by SYSTEM and administrators only.
+      "(Join-Path $home_ 'pairing')",
     ]) {
       expect(tail, s).toContain(s);
     }
-    expect(tail).not.toContain('Add this block at the end of sshd_config');
+    // No key is written by the script: authorized keys come from the record alone.
+    expect(tail).not.toMatch(/\$keys = |Set-Content -LiteralPath \$keys/);
     const source = relaySetupScript({
       ...base,
       install: { port: 2222, scope: { source: 'fd7a::/48' } },
     });
     expect(source).toContain("$scope = @{ RemoteAddress = 'fd7a::/48' }");
     expect(source).toContain('-LocalPort 2222');
-    // Without install it stays the printed setup.
     expect(relaySetupScript(base)).toContain('Add this block at the end of sshd_config');
   });
 });

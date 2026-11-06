@@ -59422,16 +59422,20 @@ var COMMANDS = [
     about: "On the lead: make the lead's key for a relay worker and print the one pairing line"
   },
   {
-    usage: "relay pair <label> --connect [--code <code>]",
-    about: "On the lead: show the worker's host key code, pin it once confirmed, write workers.relay.<label>"
+    usage: "relay pair <label> --connect",
+    about: "On the lead: pin the host key the worker proves with the pairing secret; write workers.relay.<label>"
   },
   {
     usage: "relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>]",
     about: "On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead"
   },
   {
-    usage: "relay setup [--lead-key <line>] [--home <dir>]",
-    about: "Print the one-time PowerShell script of a Windows relay worker (run it elevated); --lead-key authorizes the lead"
+    usage: "relay unpair <label> [--home <dir>]",
+    about: "On a Windows worker, elevated: remove a lead's pairing and its authorized key"
+  },
+  {
+    usage: "relay setup [--home <dir>] [--user <name>]",
+    about: "Print the setup script of a Windows relay worker, to run elevated by hand (relay install runs it)"
   },
   {
     usage: "overview",
@@ -60056,8 +60060,16 @@ var helloAnswer = external_exports.strictObject({
   busy: ITEM_ID.nullable(),
   /** Why a start would be held now (busy, load, disk); the lead sends nothing then. */
   held: relayLine.nullable(),
-  /** The one-time codes of the pairings this worker took (`relay install --pair`). */
-  pairCodes: external_exports.array(external_exports.string().regex(/^[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$/)).max(20).default([]),
+  /**
+   * For each pairing younger than an hour: HMAC-SHA256 of this worker's host key under the
+   * pairing's secret (src/relay-pair.ts), which proves the host key to the lead that paired.
+   */
+  pairProofs: external_exports.array(
+    external_exports.strictObject({
+      label: external_exports.string().regex(WORKER_LABEL_RE),
+      mac: external_exports.string().regex(/^[0-9a-f]{64}$/)
+    })
+  ).max(20).default([]),
   warnings
 });
 var probeAnswer = external_exports.strictObject({
@@ -60757,35 +60769,33 @@ async function relayDoctor(o2) {
 
 // src/relay-pair.ts
 var import_yaml17 = __toESM(require_dist(), 1);
-import { createHash as createHash8, randomInt } from "node:crypto";
+import { createHash as createHash8, createHmac, randomBytes as randomBytes12, timingSafeEqual } from "node:crypto";
 import { existsSync as existsSync16, mkdirSync as mkdirSync12, readFileSync as readFileSync51, renameSync as renameSync15, rmSync as rmSync11, writeFileSync as writeFileSync18 } from "node:fs";
 import { dirname as dirname15, join as join54 } from "node:path";
-var ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-var PAIR_CODE_RE = /^[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$/;
+var PAIR_TTL_MS = 60 * 6e4;
+var PAIR_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
 var PAIR_PREFIX = "studio-pair-1";
-function newPairCode() {
-  const c3 = Array.from({ length: 8 }, () => ALPHABET[randomInt(ALPHABET.length)]).join("");
-  return `${c3.slice(0, 4)}-${c3.slice(4)}`;
-}
-function hostKeyCode(key) {
+var newPairSecret = () => randomBytes12(32).toString("base64url");
+var keyOnly = (key) => key.trim().split(/\s+/).slice(0, 2).join(" ");
+function keyFingerprint(key) {
   const blob = Buffer.from(key.trim().split(/\s+/)[1] ?? "", "base64");
-  const digest3 = createHash8("sha256").update(blob).digest();
-  let out = "";
-  for (let i2 = 0; i2 < 8; i2++) out += ALPHABET[digest3[i2] % ALPHABET.length];
-  return `${out.slice(0, 4)}-${out.slice(4)}`;
+  return `SHA256:${createHash8("sha256").update(blob).digest("base64").replace(/=+$/, "")}`;
 }
-function renderPairLine(p) {
-  return `${PAIR_PREFIX} ${p.label} ${p.code} ${p.key}`;
+var pairProof = (secret, hostKey) => createHmac("sha256", secret).update(keyOnly(hostKey)).digest("hex");
+function proofHolds(secret, hostKey, mac3) {
+  if (!/^[0-9a-f]{64}$/.test(mac3)) return false;
+  return timingSafeEqual(Buffer.from(pairProof(secret, hostKey), "hex"), Buffer.from(mac3, "hex"));
 }
+var renderPairLine = (p) => `${PAIR_PREFIX} ${p.label} ${p.secret} ${p.key}`;
 function parsePairLine(line4) {
   const parts = line4.trim().split(/\s+/);
-  const [prefix, label, code, type, blob] = parts;
-  if (parts.length !== 5 || prefix !== PAIR_PREFIX || label === void 0 || !WORKER_LABEL_RE.test(label) || code === void 0 || !PAIR_CODE_RE.test(code) || !RELAY_HOST_KEY_RE.test(`${type} ${blob}`)) {
+  const [prefix, label, secret, type, blob] = parts;
+  if (parts.length !== 5 || prefix !== PAIR_PREFIX || label === void 0 || !WORKER_LABEL_RE.test(label) || secret === void 0 || !PAIR_SECRET_RE.test(secret) || !RELAY_HOST_KEY_RE.test(`${type} ${blob}`)) {
     throw new Error(
-      "not a pairing line: studio relay pair <label> <host> on the lead prints it (studio-pair-1 <label> <code> <key>)"
+      "not a pairing line: studio relay pair <label> <host> on the lead prints it (studio-pair-1 <label> <secret> <key>)"
     );
   }
-  return { label, code, key: `${type} ${blob}` };
+  return { label, secret, key: `${type} ${blob}` };
 }
 var leadKeyFile = (owner, label) => join54(ownerConfigDir(owner), "relay", `${label}_ed25519`);
 var pendingFile = (owner, label) => join54(ownerStateRootFor(owner), "relay", `pair-${label}.json`);
@@ -60795,13 +60805,19 @@ function writePending(owner, p) {
   writeStateFile(root, pendingFile(owner, p.label), `${JSON.stringify(p, null, 2)}
 `);
 }
-function readPending(owner, label) {
+function readPending(owner, label, now) {
   const f3 = pendingFile(owner, label);
   if (!existsSync16(f3)) return void 0;
   const p = JSON.parse(readFileSync51(f3, "utf8"));
-  if (p.label !== label || !RELAY_HOST_RE.test(p.host) || !PAIR_CODE_RE.test(p.code) || !Number.isInteger(p.port)) {
+  if (p.label !== label || !RELAY_HOST_RE.test(p.host) || !PAIR_SECRET_RE.test(p.secret) || !Number.isInteger(p.port) || Number.isNaN(Date.parse(p.createdAt))) {
     throw new Error(
       `${f3} has an unknown shape; start again with studio relay pair ${label} <host>`
+    );
+  }
+  if (now.getTime() - Date.parse(p.createdAt) > PAIR_TTL_MS) {
+    rmSync11(f3, { force: true });
+    throw new Error(
+      `the pairing of ${label} expired (an hour): start again with studio relay pair ${label} <host>`
     );
   }
   return p;
@@ -60851,28 +60867,58 @@ function writeRelayTarget(owner, label, t) {
     throw e;
   }
 }
-var pairingsFile = (home) => join54(home, "pairings.json");
+var pairingsFile = (home) => join54(home, "pairing", "pairings.json");
 function readPairings(home) {
+  let raw;
   try {
-    const raw = JSON.parse(readFileSync51(pairingsFile(home), "utf8"));
-    return Object.fromEntries(
-      Object.entries(raw).filter(
-        (e) => WORKER_LABEL_RE.test(e[0]) && typeof e[1] === "string" && PAIR_CODE_RE.test(e[1])
-      )
-    );
+    raw = JSON.parse(readFileSync51(pairingsFile(home), "utf8"));
   } catch {
     return {};
   }
+  if (raw === null || typeof raw !== "object") return {};
+  const out = {};
+  for (const [label, v] of Object.entries(raw)) {
+    if (WORKER_LABEL_RE.test(label) && typeof v?.key === "string" && RELAY_HOST_KEY_RE.test(v.key) && typeof v.secret === "string" && PAIR_SECRET_RE.test(v.secret) && typeof v.pairedAt === "string" && !Number.isNaN(Date.parse(v.pairedAt))) {
+      out[label] = { key: v.key, secret: v.secret, pairedAt: v.pairedAt };
+    }
+  }
+  return out;
 }
-function writePairing(home, label, code) {
-  const all = { ...readPairings(home), [label]: code };
-  writeFileSync18(pairingsFile(home), `${JSON.stringify(all, null, 2)}
+function writePairings(home, all) {
+  const file4 = pairingsFile(home);
+  mkdirSync12(dirname15(file4), { recursive: true });
+  const tmp = `${file4}.${process.pid}.tmp`;
+  writeFileSync18(tmp, `${JSON.stringify(all, null, 2)}
 `);
+  renameSync15(tmp, file4);
+}
+function pairProofs(pairings, hostKey, now) {
+  if (hostKey === void 0) return [];
+  return Object.entries(pairings).filter(([, p]) => now.getTime() - Date.parse(p.pairedAt) <= PAIR_TTL_MS).map(([label, p]) => ({ label, mac: pairProof(p.secret, hostKey) }));
+}
+var keyTag = (label) => `studio-relay-${label}`;
+function authorizedKeysPlan(o2) {
+  const command = o2.command.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const labels = Object.keys(o2.pairings).sort();
+  const want = labels.map(
+    (l) => `restrict,command="${command}" ${keyOnly(o2.pairings[l].key)} ${keyTag(l)}`
+  );
+  const removed = (o2.existing ?? "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !want.includes(l));
+  return {
+    text: want.length === 0 ? "" : `${want.join("\r\n")}\r
+`,
+    keyLines: want,
+    lines: labels.map((l) => ({
+      label: l,
+      fingerprint: keyFingerprint(o2.pairings[l].key)
+    })),
+    removed
+  };
 }
 
 // src/relay-serve.ts
 import { spawn as spawn5 } from "node:child_process";
-import { randomBytes as randomBytes12 } from "node:crypto";
+import { randomBytes as randomBytes13 } from "node:crypto";
 import {
   closeSync as closeSync9,
   existsSync as existsSync18,
@@ -61960,7 +62006,7 @@ async function serveRelay(c3, input2, out) {
           plugins: have === void 0 ? null : Object.fromEntries(have),
           busy: busy2?.id ?? null,
           held: held2 ?? null,
-          pairCodes: c3.home === void 0 ? [] : Object.values(readPairings(c3.home)).slice(0, 20),
+          pairProofs: c3.home === void 0 ? [] : pairProofs(readPairings(c3.home), c3.hostKey?.(), c3.ports.clock.now()).slice(0, 20),
           warnings: stored === void 0 ? [] : [stored]
         });
       }
@@ -62000,7 +62046,7 @@ async function serveRelay(c3, input2, out) {
   }
 }
 async function start(c3, job, bundle, out) {
-  const nonce = randomBytes12(16).toString("hex");
+  const nonce = randomBytes13(16).toString("hex");
   const prepared = await withRelayLock(c3, async () => {
     const busy2 = await busyJob(c3);
     if (busy2 !== void 0) {
@@ -62427,14 +62473,6 @@ function sshdMatchBlock(o2) {
     ""
   ].join("\n");
 }
-function authorizedKeyLine(o2) {
-  if (!/^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa) [A-Za-z0-9+/]{40,2000}={0,2}( [^\p{Cc}"]{0,100})?$/u.test(
-    o2.key
-  )) {
-    throw new Error("not an SSH public key line: <type> <base64> [comment]");
-  }
-  return `restrict,command="${o2.command.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}" ${o2.key}`;
-}
 var brokerScript = (o2) => [
   "# Studio relay broker: ends every process of the crew user. Written by the setup; runs as SYSTEM.",
   "$ErrorActionPreference = 'Stop'",
@@ -62557,9 +62595,7 @@ function relaySetupScript(o2) {
   }
   if (!/^[A-Za-z0-9 _-]{1,64}$/.test(o2.task)) throw new Error(`not a task name: ${o2.task}`);
   const list2 = (ps) => `@(${ps.map(psQuote).join(", ")})`;
-  const keyLine = o2.leadKey === void 0 ? void 0 : authorizedKeyLine({ key: o2.leadKey, command: o2.command });
   const block = sshdMatchBlock({ relayUser: o2.relayUser, home: o2.home, command: o2.command });
-  const tag = o2.leadKey?.trim().split(/\s+/)[2];
   return `${o2.install === void 0 ? "" : installHead()}#Requires -RunAsAdministrator
 # Studio: the one-time setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
@@ -62588,11 +62624,13 @@ function EnsureUser([string]$name, [string]$what, [string]$plain) {
 # The relay account: a standard user the lead logs in as over SSH, with a password nobody sees.
 $relaySid = (EnsureUser $relay 'Studio relay (SSH, forced command)' $null).SID.Value
 # The relay home: the relay account may change it, the crew user gets nothing (grants per run).
-New-Item -ItemType Directory -Force -Path $home_, (Join-Path $home_ 'broker') | Out-Null
+New-Item -ItemType Directory -Force -Path $home_, (Join-Path $home_ 'broker'), (Join-Path $home_ 'pairing') | Out-Null
 icacls $home_ /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($relaySid):(OI)(CI)M" /Q | Out-Null
-# The broker's folder: written by SYSTEM and administrators only, read by the relay account.
-$broker = Join-Path $home_ 'broker'
-icacls $broker /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($relaySid):(OI)(CI)RX" /Q | Out-Null
+# The broker's folder and the record of pairings: written by SYSTEM and administrators only, read
+# by the relay account.
+foreach ($f in @((Join-Path $home_ 'broker'), (Join-Path $home_ 'pairing'))) {
+  icacls $f /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($relaySid):(OI)(CI)RX" /Q | Out-Null
+}
 # The crew user, its password sealed for this machine (LocalMachine DPAPI): an SSH key logon cannot
 # open the relay account's own DPAPI keys. Only SYSTEM, administrators and the relay account read it.
 $credFile = ${psQuote(machineCredFile(o2.home))}
@@ -62660,21 +62698,27 @@ foreach ($p in ${list2(o2.readPaths)}) {
 }
 # The pinned plugins in the crew Claude config dir of the relay home.
 ${o2.pluginSetup}
-${keyLine === void 0 ? '# No lead key given: run studio relay setup --lead-key "<public key line>" to authorize one.' : `$keys = ${psQuote(authorizedKeysFile(o2.home))}
-# One line per lead key, told apart by its comment: a key paired again replaces its own line only.
-$keep = @()
-${tag === void 0 ? "" : `if (Test-Path -LiteralPath $keys) { $keep = @(Get-Content -LiteralPath $keys | Where-Object { $_ -and -not $_.EndsWith(' ' + ${psQuote(tag)}) }) }`}
-Set-Content -LiteralPath $keys -Encoding ASCII -Value (@($keep) + ${psQuote(keyLine)})
-icacls $keys /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /Q | Out-Null`}
 ${o2.install === void 0 ? setupTail(block) : installTail(block, o2.install)}`;
 }
 var setupTail = (block) => `Write-Output 'Add this block at the end of sshd_config (C:\\ProgramData\\ssh\\sshd_config), then Restart-Service sshd:'
 Write-Output @'
 ${block}'@
-Write-Output 'Host key to pin on the lead (workers.relay.<label>.host_key):'
-Get-Content -LiteralPath (Join-Path $env:ProgramData 'ssh\\ssh_host_ed25519_key.pub') | ForEach-Object { ($_ -split ' ')[0..1] -join ' ' }
+Write-Output 'Authorize the lead with studio relay install --pair "<line>" (the line studio relay pair prints on the lead).'
 Write-Output "Studio relay worker is ready: relay account $relay, crew user $crew."
 `;
+function authorizedKeysScript(o2) {
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o2.relayUser)) throw new Error("not a local user name");
+  const text = `(@(${o2.lines.map(psQuote).join(", ")}) | ForEach-Object { $_ + [char]13 + [char]10 }) -join ''`;
+  return `$ErrorActionPreference = 'Stop'
+$keys = ${psQuote(o2.file)}
+$tmp = $keys + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
+$relaySid = (Get-LocalUser -Name ${psQuote(o2.relayUser)}).SID.Value
+[IO.File]::WriteAllText($tmp, ${text}, (New-Object Text.ASCIIEncoding))
+icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw 'cannot set the ACL of the authorized keys file' }
+Move-Item -LiteralPath $tmp -Destination $keys -Force
+`;
+}
 var installHead = () => `#Requires -RunAsAdministrator
 $ErrorActionPreference = 'Stop'
 function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
@@ -63065,7 +63109,7 @@ function relayWindows(o2) {
 }
 
 // src/worker-lead.ts
-import { randomBytes as randomBytes13 } from "node:crypto";
+import { randomBytes as randomBytes14 } from "node:crypto";
 
 // src/worker-hub.ts
 import { mkdtempSync as mkdtempSync3, rmSync as rmSync12, writeFileSync as writeFileSync20 } from "node:fs";
@@ -63493,7 +63537,7 @@ async function openOffer(o2) {
     await o2.hub.lockOffer(o2.repo, mine.number);
     return { offer: mine.number, nonce: known.nonce };
   }
-  const nonce = randomBytes13(16).toString("hex");
+  const nonce = randomBytes14(16).toString("hex");
   const offer = await o2.hub.openOffer(o2.repo, title, renderOffer(o2.item, o2.lead, o2.now, nonce), [
     OFFER_LABEL,
     `studio-runs-on:${label}`
@@ -64133,6 +64177,7 @@ function relayContext(o2) {
     spawnRunner: o2.spawnRunner ?? systemSpawnRunner({ home: o2.home, platform: platform2().platform }),
     load: o2.load ?? (() => systemLoad(root)),
     ...o2.home === void 0 ? {} : { home: o2.home },
+    hostKey: o2.hostKey ?? (() => readHostKey(o2.env, platform2().platform)),
     log: o2.log,
     ...native ? {
       windows: relayWindows({
@@ -64157,6 +64202,18 @@ async function readAll(input2) {
   for await (const c3 of input2) s += typeof c3 === "string" ? c3 : Buffer.from(c3).toString("utf8");
   return s;
 }
+function readHostKey(env, platform2) {
+  const file4 = platform2 === "win32" ? join60(
+    env.ProgramData ?? env.PROGRAMDATA ?? "C:\\ProgramData",
+    "ssh",
+    "ssh_host_ed25519_key.pub"
+  ) : "/etc/ssh/ssh_host_ed25519_key.pub";
+  try {
+    return keyscanKey(`host ${readFileSync55(file4, "utf8")}`);
+  } catch {
+    return void 0;
+  }
+}
 async function runRelayCommand(o2) {
   const [sub, ...args] = o2.rest;
   const ctx = () => relayContext({
@@ -64168,6 +64225,7 @@ async function runRelayCommand(o2) {
     ...o2.platform === void 0 ? {} : { platform: o2.platform },
     ...o2.spawnRunner === void 0 ? {} : { spawnRunner: o2.spawnRunner },
     ...o2.load === void 0 ? {} : { load: o2.load },
+    ...o2.hostKey === void 0 ? {} : { hostKey: o2.hostKey },
     log: (l) => o2.stderr(`${l.replace(new RegExp("\\p{Cc}", "gu"), " ")}
 `)
   });
@@ -64184,21 +64242,28 @@ async function runRelayCommand(o2) {
 `);
     return state === "refused" ? 1 : 0;
   }
-  if ((sub === "setup" || sub === "install") && args.length === 0) {
-    const home = o2.values.home ?? relayHomeDefault(o2.env);
-    const relayUser = o2.values.user ?? "studio-relay";
-    if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(relayUser)) {
-      throw new Error("--user: a local user name of at most 20 characters");
-    }
+  const home = o2.values.home ?? relayHomeDefault(o2.env);
+  const relayUser = o2.values.user ?? "studio-relay";
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(relayUser)) {
+    throw new Error("--user: a local user name of at most 20 characters");
+  }
+  if (sub === "setup" && args.length === 0) {
+    if (o2.values.pair !== void 0) throw new Error("--pair works with relay install only");
+    o2.stdout(setupScriptFor({ owner: o2.owner, env: o2.env, home, relayUser, install: void 0 }));
+    return 0;
+  }
+  if (sub === "install" && args.length === 0) {
     const pair = o2.values.pair === void 0 ? void 0 : parsePairLine(o2.values.pair);
-    const leadKey = pair !== void 0 ? `${pair.key} studio-relay-${pair.label}` : o2.values["lead-key"];
-    const script = (install2) => setupScriptFor({ owner: o2.owner, env: o2.env, home, relayUser, leadKey, install: install2 });
-    if (sub === "setup") {
-      if (pair !== void 0) throw new Error("--pair works with relay install only");
-      o2.stdout(script());
-      return 0;
-    }
-    return await install({ ...o2, home, script, pair });
+    return await install({
+      ...o2,
+      home,
+      relayUser,
+      pair,
+      script: (i2) => setupScriptFor({ owner: o2.owner, env: o2.env, home, relayUser, install: i2 })
+    });
+  }
+  if (sub === "unpair" && args.length === 1) {
+    return await unpair({ ...o2, home, relayUser, label: args[0] });
   }
   if (sub === "pair" && o2.values.connect !== true && args.length === 2) {
     return await pairStart({ ...o2, label: args[0], host: args[1] });
@@ -64247,7 +64312,6 @@ function setupScriptFor(o2) {
       crewConfigDir: crewClaudeDir(owner)
     }),
     command: forcedCommand(process.execPath, STUDIO_BIN, o2.home),
-    ...o2.leadKey === void 0 ? {} : { leadKey: o2.leadKey },
     pluginSetup: `${pluginEnv2}; & ${q(process.execPath)} ${q(STUDIO_BIN)} account setup-plugins`,
     ...o2.install === void 0 ? {} : { install: o2.install }
   });
@@ -64258,17 +64322,56 @@ workers:
     deny:
       hosts: [local-subnets, tailnet-peers]
 `;
-async function install(o2) {
-  const exec = o2.exec ?? systemExec;
-  const platform2 = (o2.platform ?? detectPlatform()).platform;
-  if (platform2 !== "win32") {
+async function windowsAdmin(o2) {
+  if ((o2.platform ?? detectPlatform()).platform !== "win32") {
     throw new Error(
-      "relay install sets up a Windows relay worker; elsewhere run studio relay serve --home <dir> as the forced command of your sshd"
+      `relay ${o2.what} sets up a Windows relay worker; elsewhere run studio relay serve --home <dir> as the forced command of your sshd`
     );
   }
-  if (await elevated(runFile2) !== true) {
-    throw new Error("relay install needs an elevated PowerShell (run it as administrator)");
+  if (await (o2.elevated ?? (() => elevated(runFile2)))() !== true) {
+    throw new Error(`relay ${o2.what} needs an elevated PowerShell (run it as administrator)`);
   }
+}
+async function syncAuthorizedKeys(o2) {
+  const file4 = authorizedKeysFile(o2.home);
+  let existing;
+  try {
+    existing = readFileSync55(file4, "utf8");
+  } catch {
+    existing = void 0;
+  }
+  const plan = authorizedKeysPlan({
+    pairings: readPairings(o2.home),
+    command: forcedCommand(process.execPath, STUDIO_BIN, o2.home),
+    existing
+  });
+  const r = await o2.exec("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    authorizedKeysScript({ file: file4, lines: plan.keyLines, relayUser: o2.relayUser })
+  ]);
+  if (r.code !== 0) {
+    o2.stdout(`cannot write ${file4}: ${r.stderr.replace(new RegExp("\\p{Cc}", "gu"), " ").slice(0, 200)}
+`);
+    return false;
+  }
+  for (const line4 of plan.removed) {
+    const [, type, blob, ...rest] = /^(?:\S*\s+)?(ssh-\S+|ecdsa-\S+)\s+(\S+)(.*)$/.exec(line4) ?? [];
+    o2.stdout(
+      `removed an authorized key no pairing names: ${type === void 0 ? "a line that is no key" : `${keyFingerprint(`${type} ${blob}`)}${rest.join("").trim() === "" ? "" : ` (${rest.join("").trim().slice(0, 60)})`}`}
+`
+    );
+  }
+  o2.stdout(
+    plan.lines.length === 0 ? 'authorized: no lead (studio relay install --pair "<line>" authorizes one)\n' : plan.lines.map((l) => `authorized: ${l.label}, lead key ${l.fingerprint}
+`).join("")
+  );
+  return true;
+}
+async function install(o2) {
+  const exec = o2.exec ?? systemExec;
+  await windowsAdmin({ ...o2, what: "install" });
   const port = o2.values.port === void 0 ? 22 : Number(o2.values.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port: 1 to 65535");
   let scope;
@@ -64287,24 +64390,19 @@ async function install(o2) {
       "-Command",
       "@(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like '*Tailscale*' -or $_.Name -like 'Tailscale*' }).Count"
     ]);
-    if (ts.code === 0 && Number(ts.stdout.trim()) > 0) scope = { tailscale: true };
-    else {
-      const answer2 = (await o2.readLine?.(
-        "No Tailscale interface here. Which interface name, or which source range, may reach sshd? "
-      ))?.trim();
-      if (answer2 === void 0 || answer2 === "") {
-        throw new Error(
-          "no Tailscale interface here: run studio relay install --interface <name> or --source <range>"
-        );
-      }
-      scope = /^[0-9A-Fa-f.:/,-]+$/.test(answer2) ? { source: answer2 } : { interface: answer2 };
+    if (ts.code !== 0 || !(Number(ts.stdout.trim()) > 0)) {
+      throw new Error(
+        "no Tailscale interface here: say which interface or which source range may reach sshd (studio relay install --interface <name> or --source <range>)"
+      );
     }
+    scope = { tailscale: true };
   }
   o2.stdout(
     "Studio relay install: this stops and disables the WebClient service (WebDAV), which the crew sandbox does not hold.\n"
   );
   mkdirSync13(o2.home, { recursive: true });
-  const file4 = join60(mkdtempSync4(join60(tmpdir4(), "studio-relay-install-")), "install.ps1");
+  const dir = mkdtempSync4(join60(tmpdir4(), "studio-relay-install-"));
+  const file4 = join60(dir, "install.ps1");
   writeFileSync21(file4, o2.script({ port, scope }));
   let r;
   try {
@@ -64314,7 +64412,7 @@ async function install(o2) {
       { onOutput: o2.stdout }
     );
   } finally {
-    rmSync13(dirname18(file4), { recursive: true, force: true });
+    rmSync13(dir, { recursive: true, force: true });
   }
   if (r.code !== 0) {
     o2.stderr("studio: relay install stopped; fix what it says and run it again (it repairs)\n");
@@ -64325,31 +64423,42 @@ async function install(o2) {
     mkdirSync13(dirname18(config2), { recursive: true });
     writeFileSync21(config2, DEFAULT_SERVE_CONFIG);
   }
-  const summary = [];
   if (o2.pair !== void 0) {
-    writePairing(o2.home, o2.pair.label, o2.pair.code);
-    summary.push(
-      `paired: the lead's key for ${o2.pair.label} (code ${o2.pair.code}), forced to studio relay serve`
-    );
+    writePairings(o2.home, {
+      ...readPairings(o2.home),
+      [o2.pair.label]: {
+        key: o2.pair.key,
+        secret: o2.pair.secret,
+        pairedAt: o2.ports.clock.now().toISOString()
+      }
+    });
   }
-  const hostKey = join60(o2.env.ProgramData ?? "C:\\ProgramData", "ssh", "ssh_host_ed25519_key.pub");
-  let code;
-  try {
-    code = hostKeyCode(readFileSync55(hostKey, "utf8"));
-  } catch {
-    code = void 0;
-  }
-  summary.push(
-    code === void 0 ? `host key: cannot read ${hostKey}` : `host key code: ${code}; on the lead, studio relay pair <label> --connect shows a code: it must be this one`
+  if (!await syncAuthorizedKeys({ ...o2, exec })) return 1;
+  const hostKey = (o2.hostKey ?? (() => readHostKey(o2.env, "win32")))();
+  o2.stdout(
+    hostKey === void 0 ? "host key: cannot read the OpenSSH server host key\n" : `host key fingerprint: ${keyFingerprint(hostKey)}${o2.pair === void 0 ? "" : `
+On the lead, within the hour: studio relay pair ${o2.pair.label} --connect`}
+`
   );
-  o2.stdout(`
-${summary.join("\n")}
-`);
   return 0;
 }
-async function pairStart(o2) {
+async function unpair(o2) {
   if (!WORKER_LABEL_RE.test(o2.label))
+    throw new Error("relay unpair: a label is ^[a-z][a-z0-9-]{0,31}$");
+  await windowsAdmin({ ...o2, what: "unpair" });
+  const all = readPairings(o2.home);
+  const known = o2.label in all;
+  delete all[o2.label];
+  writePairings(o2.home, all);
+  o2.stdout(known ? `unpaired: ${o2.label}
+` : `no pairing of ${o2.label} here
+`);
+  return await syncAuthorizedKeys({ ...o2, exec: o2.exec ?? systemExec }) ? 0 : 1;
+}
+async function pairStart(o2) {
+  if (!WORKER_LABEL_RE.test(o2.label)) {
     throw new Error("relay pair: a label is ^[a-z][a-z0-9-]{0,31}$");
+  }
   if (!RELAY_HOST_RE.test(o2.host)) throw new Error("relay pair: a host name or an IP address");
   const port = o2.values.port === void 0 ? 22 : Number(o2.values.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port: 1 to 65535");
@@ -64373,29 +64482,30 @@ async function pairStart(o2) {
   ]);
   if (made.code !== 0) throw new Error("ssh-keygen could not make the key");
   const pub = readFileSync55(`${key}.pub`, "utf8").trim().split(/\s+/).slice(0, 2).join(" ");
-  const code = newPairCode();
+  const secret = newPairSecret();
   writePending(o2.owner, {
     label: o2.label,
     host: o2.host,
     port,
     user,
-    code,
+    secret,
     identityFile: key,
     createdAt: o2.ports.clock.now().toISOString()
   });
   o2.stdout(
-    `On the worker, in an elevated PowerShell:
-  studio relay install --pair "${renderPairLine({ label: o2.label, code, key: pub })}"
+    `On the worker, in an elevated PowerShell, within the hour:
+  studio relay install --pair "${renderPairLine({ label: o2.label, secret, key: pub })}"
 Then here: studio relay pair ${o2.label} --connect
+The line holds a single-use secret: paste it on the worker only.
 `
   );
   return 0;
 }
 async function pairConnect(o2) {
-  const p = readPending(o2.owner, o2.label);
+  const p = readPending(o2.owner, o2.label, o2.ports.clock.now());
   if (p === void 0) {
     throw new Error(
-      `no pairing of ${o2.label} is waiting: studio relay pair ${o2.label} <host> first`
+      `no pairing of ${o2.label} is waiting (none started, or used already): studio relay pair ${o2.label} <host>`
     );
   }
   const scan = await (o2.exec ?? systemExec)("ssh-keyscan", [
@@ -64409,25 +64519,8 @@ async function pairConnect(o2) {
   ]);
   const key = keyscanKey(scan.stdout);
   if (key === void 0) throw new Error(`cannot read the host key of ${p.host}:${p.port}`);
-  const code = hostKeyCode(key);
-  let confirmed;
-  if (o2.values.code !== void 0) confirmed = o2.values.code.trim().toUpperCase() === code;
-  else {
-    const a2 = await o2.readLine?.(
-      `Host key code of ${p.host}: ${code}. Does it match what studio relay install printed on the worker? [y/N] `
-    );
-    if (a2 === void 0) {
-      throw new Error(
-        `no terminal to confirm in: run studio relay pair ${o2.label} --connect --code <code the worker printed>`
-      );
-    }
-    confirmed = /^y(es)?$/i.test(a2.trim());
-  }
-  if (!confirmed) {
-    o2.stdout(`not paired: the host key code ${code} was not confirmed; nothing was pinned
+  o2.stdout(`host key fingerprint of ${p.host}: ${keyFingerprint(key)}
 `);
-    return 1;
-  }
   const target = relayTargetSchema.parse({
     host: p.host,
     port: p.port,
@@ -64438,9 +64531,10 @@ async function pairConnect(o2) {
   const transport = o2.transport?.(o2.label, target) ?? sshTransport({ label: o2.label, target, owner: o2.owner });
   const { answer: answer2 } = await relayCall(transport, "hello", {}, { timeoutMs: 6e4 });
   if (!answer2.ok) throw new Error(`the worker answered: ${answer2.line}`);
-  if (!answer2.pairCodes.includes(p.code)) {
+  const proof = answer2.pairProofs.find((x) => x.label === o2.label);
+  if (proof === void 0 || !proofHolds(p.secret, key, proof.mac)) {
     throw new Error(
-      `the worker did not take this pairing (code ${p.code}): run studio relay install --pair with the line studio relay pair printed`
+      `the worker did not prove this host key with the pairing's secret: nothing was pinned. Run studio relay install --pair with the line studio relay pair printed, within the hour, on the worker itself`
     );
   }
   writeRelayTarget(o2.owner, o2.label, {
@@ -64452,7 +64546,7 @@ async function pairConnect(o2) {
   });
   dropPending(o2.owner, o2.label);
   o2.stdout(
-    `paired: ${o2.label} is ${p.user}@${p.host}:${p.port}, Studio ${answer2.studio} on ${answer2.platform}, host key pinned (${code}). studio doctor checks it end to end.
+    `paired: ${o2.label} is ${p.user}@${p.host}:${p.port}, Studio ${answer2.studio} on ${answer2.platform}, host key pinned (${keyFingerprint(key)}). studio doctor checks it end to end.
 `
   );
   return 0;
@@ -65307,18 +65401,16 @@ async function runCli(argv, deps) {
     const relayOnly = [
       values.home,
       values.pipe,
-      values["lead-key"],
       values.pair,
       values.user,
       values.port,
       values.source,
       values.interface,
-      values.connect,
-      values.code
+      values.connect
     ];
     if (relayOnly.some((v) => v !== void 0) && cmd !== "relay") {
       throw new UsageError(
-        "--home, --pipe, --lead-key, --pair, --user, --port, --source, --interface, --connect and --code work with relay only"
+        "--home, --pipe, --pair, --user, --port, --source, --interface and --connect work with relay only"
       );
     }
     const reserveOnly = [values.number, values.for, values.purpose];
@@ -67633,12 +67725,11 @@ async function runCli(argv, deps) {
           ...deps.workerPlatform === void 0 ? {} : { platform: deps.workerPlatform },
           ...deps.relaySpawnRunner === void 0 ? {} : { spawnRunner: deps.relaySpawnRunner },
           ...deps.relayLoad === void 0 ? {} : { load: deps.relayLoad },
-          ...deps.readLine === void 0 || deps.isTerminal !== true ? {} : { readLine: deps.readLine },
           ...deps.relayTransport === void 0 ? {} : { transport: deps.relayTransport }
         });
         if (code === void 0) {
           throw new UsageError(
-            "relay takes: pair <label> <host>, pair <label> --connect, install [--pair <line>], setup, serve, run <id>"
+            "relay takes: pair <label> <host>, pair <label> --connect, install [--pair <line>], unpair <label>, setup, serve, run <id>"
           );
         }
         return code;
@@ -69455,14 +69546,12 @@ function parseCli(argv) {
         "follow-head": { type: "boolean" },
         home: { type: "string" },
         pipe: { type: "string" },
-        "lead-key": { type: "string" },
         pair: { type: "string" },
         user: { type: "string" },
         port: { type: "string" },
         source: { type: "string" },
         interface: { type: "string" },
-        connect: { type: "boolean" },
-        code: { type: "string" }
+        connect: { type: "boolean" }
       },
       allowPositionals: true,
       strict: true

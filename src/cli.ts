@@ -691,18 +691,16 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     const relayOnly = [
       values.home,
       values.pipe,
-      values['lead-key'],
       values.pair,
       values.user,
       values.port,
       values.source,
       values.interface,
       values.connect,
-      values.code,
     ];
     if (relayOnly.some((v) => v !== undefined) && cmd !== 'relay') {
       throw new UsageError(
-        '--home, --pipe, --lead-key, --pair, --user, --port, --source, --interface, --connect and --code work with relay only',
+        '--home, --pipe, --pair, --user, --port, --source, --interface and --connect work with relay only',
       );
     }
     const reserveOnly = [values.number, values.for, values.purpose];
@@ -3483,14 +3481,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ...(deps.workerPlatform === undefined ? {} : { platform: deps.workerPlatform }),
           ...(deps.relaySpawnRunner === undefined ? {} : { spawnRunner: deps.relaySpawnRunner }),
           ...(deps.relayLoad === undefined ? {} : { load: deps.relayLoad }),
-          ...(deps.readLine === undefined || deps.isTerminal !== true
-            ? {}
-            : { readLine: deps.readLine }),
           ...(deps.relayTransport === undefined ? {} : { transport: deps.relayTransport }),
         });
         if (code === undefined) {
           throw new UsageError(
-            'relay takes: pair <label> <host>, pair <label> --connect, install [--pair <line>], setup, serve, run <id>',
+            'relay takes: pair <label> <host>, pair <label> --connect, install [--pair <line>], unpair <label>, setup, serve, run <id>',
           );
         }
         return code;
@@ -5447,14 +5442,12 @@ function parseCli(argv: string[]) {
         'follow-head': { type: 'boolean' },
         home: { type: 'string' },
         pipe: { type: 'string' },
-        'lead-key': { type: 'string' },
         pair: { type: 'string' },
         user: { type: 'string' },
         port: { type: 'string' },
         source: { type: 'string' },
         interface: { type: 'string' },
         connect: { type: 'boolean' },
-        code: { type: 'string' },
       },
       allowPositionals: true,
       strict: true,

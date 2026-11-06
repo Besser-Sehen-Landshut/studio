@@ -133,9 +133,17 @@ export const helloAnswer = z.strictObject({
   busy: ITEM_ID.nullable(),
   /** Why a start would be held now (busy, load, disk); the lead sends nothing then. */
   held: relayLine.nullable(),
-  /** The one-time codes of the pairings this worker took (`relay install --pair`). */
-  pairCodes: z
-    .array(z.string().regex(/^[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$/))
+  /**
+   * For each pairing younger than an hour: HMAC-SHA256 of this worker's host key under the
+   * pairing's secret (src/relay-pair.ts), which proves the host key to the lead that paired.
+   */
+  pairProofs: z
+    .array(
+      z.strictObject({
+        label: z.string().regex(WORKER_LABEL_RE),
+        mac: z.string().regex(/^[0-9a-f]{64}$/),
+      }),
+    )
     .max(20)
     .default([]),
   warnings,

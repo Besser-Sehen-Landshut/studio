@@ -46,7 +46,7 @@ import {
 } from './paths.js';
 import { installedVersions, pinnedPlugins, STUDIO_VERSION } from './plugins.js';
 import type { Ports } from './ports.js';
-import { readPairings } from './relay-pair.js';
+import { pairProofs, readPairings } from './relay-pair.js';
 import {
   type CollectAnswer,
   encodeMessage,
@@ -118,6 +118,8 @@ export interface RelayContext {
   load: () => Promise<Load>;
   /** The relay home (`--home`): where the pairings this worker took are kept. */
   home?: string;
+  /** This machine's SSH host key (`<type> <base64>`), for the proofs of a pairing. */
+  hostKey?: () => string | undefined;
   /** Native Windows: the crew sandbox in relay mode (src/relay-windows.ts, through the CLI). */
   windows?: RelayWindows;
   log?: (line: string) => void;
@@ -524,7 +526,10 @@ export async function serveRelay(
           plugins: have === undefined ? null : Object.fromEntries(have),
           busy: busy?.id ?? null,
           held: held ?? null,
-          pairCodes: c.home === undefined ? [] : Object.values(readPairings(c.home)).slice(0, 20),
+          pairProofs:
+            c.home === undefined
+              ? []
+              : pairProofs(readPairings(c.home), c.hostKey?.(), c.ports.clock.now()).slice(0, 20),
           warnings: stored === undefined ? [] : [stored],
         });
       }
