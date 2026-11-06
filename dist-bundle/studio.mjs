@@ -40461,7 +40461,6 @@ var spawnKeeper = async (o2) => {
   try {
     const child = spawn("powershell.exe", o2.args, {
       env: o2.env,
-      detached: o2.detached,
       stdio: ["pipe", fd, fd],
       windowsHide: true
     });

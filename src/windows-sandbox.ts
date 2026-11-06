@@ -782,9 +782,11 @@ export type SpawnKeeper = (o: {
 export const spawnKeeper: SpawnKeeper = async (o) => {
   const fd = openSync(o.log, 'a');
   try {
+    // Never Node's `detached` (DETACHED_PROCESS): a PowerShell started so wrote nothing and never
+    // ran its script on the Windows runner. `windowsHide` gives it a hidden console of its own,
+    // which a closed terminal of the worker does not take down; `unref` lets the worker go on.
     const child = spawn('powershell.exe', o.args, {
       env: o.env,
-      detached: o.detached,
       stdio: ['pipe', fd, fd],
       windowsHide: true,
     });
