@@ -7237,7 +7237,7 @@ var require_public_api = __commonJS({
       const lineCounter$1 = options.lineCounter || prettyErrors && new lineCounter.LineCounter() || null;
       return { lineCounter: lineCounter$1, prettyErrors };
     }
-    function parseAllDocuments(source, options = {}) {
+    function parseAllDocuments2(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
       const parser$1 = new parser.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
@@ -7312,7 +7312,7 @@ var require_public_api = __commonJS({
       return new Document2.Document(value2, _replacer, options).toString(options);
     }
     exports.parse = parse4;
-    exports.parseAllDocuments = parseAllDocuments;
+    exports.parseAllDocuments = parseAllDocuments2;
     exports.parseDocument = parseDocument6;
     exports.stringify = stringify3;
   }
@@ -28230,7 +28230,7 @@ var EPIC_STAGE_WORDS = {
 };
 
 // src/config.ts
-var import_yaml3 = __toESM(require_dist(), 1);
+var import_yaml4 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync3 } from "node:fs";
 import { isIP } from "node:net";
 import { homedir } from "node:os";
@@ -29334,27 +29334,31 @@ function undeniableLine(configDir, invalid) {
 }
 
 // src/proofs.ts
-var PROOF_LANGUAGES = ["sql"];
-var ONLY_SQL = "comments_only reads sql only so far; more languages come later, each with its own adversarial review";
-function languageOf(path10, allowed) {
-  return allowed.includes("sql") && path10.toLowerCase().endsWith(".sql") ? "sql" : void 0;
-}
+var import_yaml3 = __toESM(require_dist(), 1);
+import { isDeepStrictEqual } from "node:util";
+
+// src/proof-tokens.ts
 var Unclassifiable = class extends Error {
 };
-var no = (why) => {
+function no(why) {
   throw new Unclassifiable(why);
-};
-var isIdent = (c3) => c3 !== void 0 && /[A-Za-z0-9_$]/.test(c3);
-var DIRECTIVE = /goose|sqlx|flyway|liquibase|changeset|rollback|precondition|migrate|no-transaction|sqlc|sqlfluff|squawk|noqa|lint|ignore|disable|enable|pragma/i;
-function meaningful(t) {
-  if (DIRECTIVE.test(t)) return true;
-  return /^--\s*(?:[+!@$#:%]|[A-Za-z_-]+\s*:)/.test(t);
 }
 var Out = class {
   segs = [];
-  push(kind, text) {
+  meaningful;
+  constructor(meaningful2) {
+    this.meaningful = meaningful2;
+  }
+  push(kind, text, opts = {}) {
+    if (text === "") return;
     if (kind === "comment") {
-      this.segs.push({ kind, text, ...meaningful(text) ? { meaningful: true } : {} });
+      const m = opts.meaningful === true || this.meaningful(text);
+      this.segs.push({
+        kind,
+        text,
+        ...m ? { meaningful: true } : {},
+        ...opts.eol === true ? { eol: true } : {}
+      });
       return;
     }
     const last = this.segs.at(-1);
@@ -29363,6 +29367,672 @@ var Out = class {
     } else this.segs.push({ kind, text });
   }
 };
+
+// src/proof-languages.ts
+var MAX_DEPTH = 200;
+var isAsciiIdentStart = (c3) => c3 !== void 0 && /[A-Za-z_]/.test(c3);
+var isAsciiIdent = (c3) => c3 !== void 0 && /[A-Za-z0-9_]/.test(c3);
+var nonAscii = (c3) => c3.charCodeAt(0) > 127;
+var TOOL_WORDS = /noqa|lint|ignore|disable|enable|pragma|nosec|generated|codegen|prettier|biome|eslint|istanbul|\bc8\b|coverage|shellcheck|clippy|rustfmt|safety|renovate|dependabot|schema|yaml-language-server|zizmor|release-please|checkov|tfsec|trivy|codespell|cspell|gitleaks|secret|taplo|fmt:|type:|coding|vim:|tidy|sourcemappingurl|sourceurl|webpack|vite|jsx|ts-|deno|\$flow|noinspection|spdx|__pure__|__no_side_effects__/i;
+function hashMeaningful(t) {
+  return TOOL_WORDS.test(t) || /^#\s*(?:[!+@$:%-]|[A-Za-z_-]+\s*:)/.test(t);
+}
+function jsMeaningful(t) {
+  return TOOL_WORDS.test(t) || /@[A-Za-z]/.test(t) || /^\/\/[/!#@$:+]/.test(t) || /^\/\*[!#@]/.test(t) || /^\/\*\s*(?:global|exported)\b/.test(t) || /#__/.test(t);
+}
+function rustMeaningful(t) {
+  return TOOL_WORDS.test(t) || /^\/\/[/!]/.test(t) || /^\/\*[*!]/.test(t);
+}
+function tokenizeRust(s) {
+  const out = new Out(rustMeaningful);
+  let i2 = 0;
+  if (s.startsWith("#!") && !/^#!\s*\[/.test(s)) {
+    const end = s.indexOf("\n");
+    i2 = end === -1 ? s.length : end;
+    out.push("code", s.slice(0, i2));
+  }
+  const escaped = (from, quote2) => {
+    let j = from;
+    for (; ; ) {
+      const c3 = s[j];
+      if (c3 === void 0) return no("an unterminated string");
+      if (c3 === "\\") j += 2;
+      else if (c3 === quote2) return j + 1;
+      else j++;
+    }
+  };
+  const raw = (at2) => {
+    let j = at2;
+    while (s[j] === "#") j++;
+    const hashes = j - at2;
+    if (hashes > 255) no("a raw string with too many #");
+    if (s[j] !== '"') return no("a # that is no raw string");
+    const close = `"${"#".repeat(hashes)}`;
+    const end = s.indexOf(close, j + 1);
+    if (end === -1) no("an unterminated raw string");
+    return end + close.length;
+  };
+  const charLit = (at2) => {
+    if (s[at2 + 1] === "\\") {
+      if (s[at2 + 2] === "'") {
+        if (s[at2 + 3] !== "'") no("a char literal that cannot be read");
+        return at2 + 4;
+      }
+      const end = s.indexOf("'", at2 + 2);
+      if (end === -1 || end - at2 > 12 || s.slice(at2, end).includes("\n")) {
+        no("a char literal that cannot be read");
+      }
+      return end + 1;
+    }
+    const cp = s.codePointAt(at2 + 1);
+    if (cp === void 0) return no("an unterminated char literal");
+    const len = cp > 65535 ? 2 : 1;
+    if (s[at2 + 1 + len] !== "'" || s[at2 + 1] === "'" || s[at2 + 1] === "\n") {
+      return no("a char literal that cannot be read");
+    }
+    return at2 + 2 + len;
+  };
+  while (i2 < s.length) {
+    const c3 = s[i2];
+    if (c3 === " " || c3 === "	" || c3 === "\n") {
+      out.push("ws", c3);
+      i2++;
+    } else if (s.startsWith("//", i2)) {
+      const end = s.indexOf("\n", i2);
+      const stop = end === -1 ? s.length : end;
+      out.push("comment", s.slice(i2, stop), { eol: true });
+      i2 = stop;
+    } else if (s.startsWith("/*", i2)) {
+      let depth = 1;
+      let j = i2 + 2;
+      while (depth > 0) {
+        if (j >= s.length) no("an unterminated block comment");
+        if (s.startsWith("/*", j)) {
+          depth++;
+          j += 2;
+        } else if (s.startsWith("*/", j)) {
+          depth--;
+          j += 2;
+        } else j++;
+      }
+      out.push("comment", s.slice(i2, j));
+      i2 = j;
+    } else if (c3 === '"') {
+      const end = escaped(i2 + 1, '"');
+      out.push("string", s.slice(i2, end));
+      i2 = end;
+    } else if (c3 === "'") {
+      const next = s[i2 + 1];
+      const astral = (s.codePointAt(i2 + 1) ?? 0) > 65535;
+      if (next === "\\" || s[i2 + 2] === "'" || astral && s[i2 + 3] === "'") {
+        const end = charLit(i2);
+        out.push("string", s.slice(i2, end));
+        i2 = end;
+      } else if (isAsciiIdentStart(next)) {
+        let j = i2 + 1;
+        while (isAsciiIdent(s[j])) j++;
+        if (s[j] === "'") no("a lifetime glued to a quote");
+        out.push("code", s.slice(i2, j));
+        i2 = j;
+      } else no("a quote that is neither a char literal nor a lifetime");
+    } else if (isAsciiIdentStart(c3)) {
+      let j = i2;
+      while (isAsciiIdent(s[j])) j++;
+      const word2 = s.slice(i2, j);
+      const after2 = s[j];
+      if (after2 === '"' && (word2 === "b" || word2 === "c")) {
+        const end = escaped(j + 1, '"');
+        out.push("string", s.slice(i2, end));
+        i2 = end;
+      } else if ((after2 === '"' || after2 === "#") && ["r", "br", "cr"].includes(word2)) {
+        if (after2 === "#" && word2 === "r" && isAsciiIdentStart(s[j + 1])) {
+          let k = j + 1;
+          while (isAsciiIdent(s[k])) k++;
+          out.push("code", s.slice(i2, k));
+          i2 = k;
+        } else {
+          const end = raw(j);
+          out.push("string", s.slice(i2, end));
+          i2 = end;
+        }
+      } else if (after2 === "'" && word2 === "b") {
+        const end = charLit(j);
+        out.push("string", s.slice(i2, end));
+        i2 = end;
+      } else if (after2 === '"' || after2 === "'" || after2 === "#") {
+        no("a name glued to a quote or #");
+      } else {
+        out.push("code", word2);
+        i2 = j;
+      }
+    } else if (c3 === "\\") {
+      no("a backslash in code");
+    } else if (nonAscii(c3)) {
+      no("a character that is not ASCII in code");
+    } else {
+      out.push("code", c3);
+      i2++;
+    }
+  }
+  const code = out.segs.filter((x) => x.kind === "code").map((x) => x.text).join(" ");
+  if (/\b(?:line|column)\s*!/.test(code)) no("line! or column!, whose value a moved line changes");
+  return out.segs;
+}
+var EXPR_WORDS = /* @__PURE__ */ new Set([
+  "return",
+  "typeof",
+  "instanceof",
+  "in",
+  "new",
+  "delete",
+  "void",
+  "throw",
+  "case",
+  "do",
+  "else",
+  "default",
+  "extends"
+]);
+var AMBIGUOUS_WORDS = /* @__PURE__ */ new Set([
+  "yield",
+  "await",
+  "of",
+  "let",
+  "static",
+  "get",
+  "set",
+  "async",
+  "as",
+  "satisfies",
+  "from",
+  "type",
+  "keyof",
+  "readonly",
+  "infer",
+  "is",
+  "asserts",
+  "declare",
+  "module",
+  "namespace",
+  "abstract",
+  "accessor",
+  "override",
+  "unique",
+  "out"
+]);
+var CONTROL_WORDS = /* @__PURE__ */ new Set(["if", "while", "for", "with"]);
+function tokenizeJs(s, jsx) {
+  const out = new Out(jsMeaningful);
+  let i2 = 0;
+  let depth = 0;
+  const deeper = () => {
+    if (++depth > MAX_DEPTH) no("nesting too deep");
+  };
+  if (s.startsWith("#!")) {
+    const end = s.indexOf("\n");
+    i2 = end === -1 ? s.length : end;
+    out.push("code", s.slice(0, i2));
+  }
+  const str = () => {
+    const q = s[i2];
+    let j = i2 + 1;
+    for (; ; ) {
+      const c3 = s[j];
+      if (c3 === void 0 || c3 === "\n") no("an unterminated string");
+      if (c3 === "\\") j += 2;
+      else if (c3 === q) break;
+      else j++;
+    }
+    out.push("string", s.slice(i2, j + 1));
+    i2 = j + 1;
+  };
+  const regex = () => {
+    let j = i2 + 1;
+    let cls = false;
+    for (; ; ) {
+      const c3 = s[j];
+      if (c3 === void 0 || c3 === "\n") no("an unterminated regular expression");
+      if (c3 === "\\") {
+        if (s[j + 1] === "\n" || s[j + 1] === void 0) no("an unterminated regular expression");
+        j += 2;
+        continue;
+      }
+      if (c3 === "[") cls = true;
+      else if (c3 === "]") cls = false;
+      else if (c3 === "/" && !cls) break;
+      j++;
+    }
+    out.push("string", s.slice(i2, j + 1));
+    i2 = j + 1;
+    let k = i2;
+    while (/[A-Za-z]/.test(s[k] ?? "")) k++;
+    out.push("code", s.slice(i2, k));
+    i2 = k;
+  };
+  const template = () => {
+    deeper();
+    let start = i2;
+    let j = i2 + 1;
+    for (; ; ) {
+      const c3 = s[j];
+      if (c3 === void 0) no("an unterminated template literal");
+      if (c3 === "\\") {
+        j += 2;
+      } else if (c3 === "`") {
+        out.push("string", s.slice(start, j + 1));
+        i2 = j + 1;
+        break;
+      } else if (c3 === "$" && s[j + 1] === "{") {
+        out.push("string", s.slice(start, j + 2));
+        i2 = j + 2;
+        code("}");
+        start = i2;
+        j = i2 + 1;
+      } else j++;
+    }
+    depth--;
+  };
+  const jsxExpr = () => {
+    out.push("code", "{");
+    i2++;
+    code("}");
+    out.push("code", "}");
+    i2++;
+  };
+  const jsxName = () => {
+    const m = /^[A-Za-z_$][A-Za-z0-9_$.:-]*/.exec(s.slice(i2, i2 + 256));
+    if (m === null) return no("a JSX name that cannot be read");
+    out.push("code", m[0]);
+    i2 += m[0].length;
+    return m[0];
+  };
+  const jsxSpace = () => {
+    while (s[i2] === " " || s[i2] === "	" || s[i2] === "\n") {
+      out.push("ws", s[i2]);
+      i2++;
+    }
+  };
+  const element = () => {
+    deeper();
+    out.push("code", "<");
+    i2++;
+    let name = "";
+    if (s[i2] !== ">") {
+      name = jsxName();
+      for (; ; ) {
+        jsxSpace();
+        const c3 = s[i2];
+        if (c3 === void 0) no("an unterminated JSX tag");
+        if (s.startsWith("/>", i2)) {
+          out.push("code", "/>");
+          i2 += 2;
+          depth--;
+          return;
+        }
+        if (c3 === ">") break;
+        if (c3 === "{") {
+          jsxExpr();
+          continue;
+        }
+        jsxName();
+        jsxSpace();
+        if (s[i2] !== "=") continue;
+        out.push("code", "=");
+        i2++;
+        jsxSpace();
+        const v = s[i2];
+        if (v === '"' || v === "'") {
+          const end = s.indexOf(v, i2 + 1);
+          if (end === -1) no("an unterminated JSX attribute");
+          out.push("string", s.slice(i2, end + 1));
+          i2 = end + 1;
+        } else if (v === "{") jsxExpr();
+        else if (v === "<") element();
+        else no("a JSX attribute value that cannot be read");
+      }
+    }
+    out.push("code", ">");
+    i2++;
+    let start = i2;
+    for (; ; ) {
+      const c3 = s[i2];
+      if (c3 === void 0) no("an unterminated JSX element");
+      if (c3 === "{" || c3 === "<") {
+        out.push("string", s.slice(start, i2));
+        if (c3 === "{") jsxExpr();
+        else if (s[i2 + 1] === "/") {
+          out.push("code", "</");
+          i2 += 2;
+          jsxSpace();
+          const closing2 = s[i2] === ">" ? "" : jsxName();
+          jsxSpace();
+          if (closing2 !== name || s[i2] !== ">") no("a JSX closing tag that does not match");
+          out.push("code", ">");
+          i2++;
+          depth--;
+          return;
+        } else element();
+        start = i2;
+      } else if (c3 === "}" || c3 === ">") {
+        no("a } or > in JSX text");
+      } else i2++;
+    }
+  };
+  const code = (until) => {
+    deeper();
+    let prev = "expr";
+    let braces = 0;
+    const parens = [];
+    let control = false;
+    let dot = false;
+    while (i2 < s.length) {
+      const c3 = s[i2];
+      if (c3 === " " || c3 === "	" || c3 === "\n") {
+        out.push("ws", c3);
+        i2++;
+        continue;
+      }
+      if (s.startsWith("//", i2)) {
+        const end = s.indexOf("\n", i2);
+        const stop = end === -1 ? s.length : end;
+        out.push("comment", s.slice(i2, stop), { eol: true });
+        i2 = stop;
+        continue;
+      }
+      if (s.startsWith("/*", i2)) {
+        const end = s.indexOf("*/", i2 + 2);
+        if (end === -1) no("an unterminated block comment");
+        out.push("comment", s.slice(i2, end + 2));
+        i2 = end + 2;
+        continue;
+      }
+      if (s.startsWith("<!--", i2) || s.startsWith("-->", i2)) no("<!-- or -->");
+      const wasControl = control;
+      const wasDot = dot;
+      control = false;
+      dot = false;
+      if (c3 === "/") {
+        if (prev === "value") {
+          out.push("code", c3);
+          i2++;
+          prev = "expr";
+        } else if (prev === "expr") {
+          regex();
+          prev = "value";
+        } else no("a / that may start a regular expression");
+      } else if (c3 === "<" && jsx && (isAsciiIdentStart(s[i2 + 1]) || s[i2 + 1] === ">" || s[i2 + 1] === "$")) {
+        if (prev === "expr") {
+          element();
+          prev = "value";
+        } else if (prev === "value") {
+          out.push("code", c3);
+          i2++;
+          prev = "expr";
+        } else no("a < that may start JSX");
+      } else if (c3 === '"' || c3 === "'") {
+        str();
+        prev = "value";
+      } else if (c3 === "`") {
+        template();
+        prev = "value";
+      } else if (isAsciiIdentStart(c3) || c3 === "$" || c3 === "#") {
+        let j = i2 + 1;
+        while (isAsciiIdent(s[j]) || s[j] === "$") j++;
+        const word2 = s.slice(i2, j);
+        out.push("code", word2);
+        i2 = j;
+        if (wasDot) prev = "value";
+        else if (EXPR_WORDS.has(word2)) prev = "expr";
+        else if (AMBIGUOUS_WORDS.has(word2)) prev = "unsure";
+        else if (CONTROL_WORDS.has(word2)) {
+          prev = "expr";
+          control = true;
+        } else prev = "value";
+        if (word2 === "await" && wasControl) control = true;
+      } else if (/[0-9]/.test(c3)) {
+        let j = i2 + 1;
+        while (/[0-9A-Za-z_]/.test(s[j] ?? "") || s[j] === "." && /[0-9]/.test(s[j + 1] ?? ""))
+          j++;
+        out.push("code", s.slice(i2, j));
+        i2 = j;
+        prev = "value";
+      } else if (c3 === "(") {
+        parens.push(wasControl);
+        out.push("code", c3);
+        i2++;
+        prev = "expr";
+      } else if (c3 === ")") {
+        const head = parens.pop();
+        if (head === void 0) no("an unbalanced )");
+        out.push("code", c3);
+        i2++;
+        prev = head ? "unsure" : "value";
+      } else if (c3 === "[") {
+        out.push("code", c3);
+        i2++;
+        prev = "expr";
+      } else if (c3 === "]") {
+        out.push("code", c3);
+        i2++;
+        prev = "value";
+      } else if (c3 === "{") {
+        braces++;
+        out.push("code", c3);
+        i2++;
+        prev = "expr";
+      } else if (c3 === "}") {
+        if (braces === 0) {
+          if (until !== "}") no("an unbalanced }");
+          if (parens.length > 0) no("an unbalanced (");
+          depth--;
+          return;
+        }
+        braces--;
+        out.push("code", c3);
+        i2++;
+        prev = "unsure";
+      } else if ((c3 === "+" || c3 === "-") && s[i2 + 1] === c3) {
+        out.push("code", s.slice(i2, i2 + 2));
+        i2 += 2;
+        prev = "unsure";
+      } else if (c3 === "!" && prev === "value" && s[i2 + 1] !== "=") {
+        out.push("code", c3);
+        i2++;
+        prev = "unsure";
+      } else if (c3 === "." && s.startsWith("...", i2)) {
+        out.push("code", "...");
+        i2 += 3;
+        prev = "expr";
+      } else if (c3 === ".") {
+        out.push("code", c3);
+        i2++;
+        prev = "expr";
+        dot = true;
+      } else if (c3 === "?" && s[i2 + 1] === "." && !/[0-9]/.test(s[i2 + 2] ?? "")) {
+        out.push("code", "?.");
+        i2 += 2;
+        prev = "expr";
+        dot = true;
+      } else if (c3 === "\\") {
+        no("a backslash in code");
+      } else if (nonAscii(c3)) {
+        no("a character that is not ASCII in code");
+      } else {
+        out.push("code", c3);
+        i2++;
+        prev = "expr";
+      }
+    }
+    if (until === "}") no("an unterminated template part or JSX expression");
+    if (parens.length > 0 || braces > 0) no("an unbalanced ( or {");
+    depth--;
+  };
+  code("eof");
+  return out.segs;
+}
+function tokenizeToml(s) {
+  const out = new Out(hashMeaningful);
+  let i2 = 0;
+  const multi = (q, escapes) => {
+    let j = i2 + 3;
+    for (; ; ) {
+      if (j >= s.length) return no("an unterminated multi-line string");
+      if (escapes && s[j] === "\\") {
+        j += 2;
+        continue;
+      }
+      if (s.startsWith(q.repeat(3), j)) {
+        let end = j + 3;
+        while (s[end] === q && end < j + 5) end++;
+        return end;
+      }
+      j++;
+    }
+  };
+  while (i2 < s.length) {
+    const c3 = s[i2];
+    if (c3 === " " || c3 === "	" || c3 === "\n") {
+      out.push("ws", c3);
+      i2++;
+    } else if (c3 === "#") {
+      const end = s.indexOf("\n", i2);
+      const stop = end === -1 ? s.length : end;
+      out.push("comment", s.slice(i2, stop), { eol: true });
+      i2 = stop;
+    } else if (c3 === '"' || c3 === "'") {
+      let end;
+      if (s.startsWith(c3.repeat(3), i2)) end = multi(c3, c3 === '"');
+      else {
+        let j = i2 + 1;
+        for (; ; ) {
+          const d = s[j];
+          if (d === void 0 || d === "\n") no("an unterminated string");
+          if (d === "\\" && c3 === '"') j += 2;
+          else if (d === c3) break;
+          else j++;
+        }
+        end = j + 1;
+      }
+      out.push("string", s.slice(i2, end));
+      i2 = end;
+    } else if (c3 === "\\") {
+      no("a backslash in code");
+    } else if (nonAscii(c3)) {
+      no("a character that is not ASCII in code");
+    } else {
+      out.push("code", c3);
+      i2++;
+    }
+  }
+  return out.segs;
+}
+function indentOf(line4) {
+  const m = /^[ \t]*/.exec(line4);
+  if (m[0].includes("	") && m[0].length < line4.length) no("a tab in indentation");
+  return m[0].length;
+}
+function tokenizeYaml(s) {
+  const out = new Out(hashMeaningful);
+  const lines2 = s.split("\n");
+  let flow = 0;
+  let prev;
+  for (let li = 0; li < lines2.length; li++) {
+    const line4 = lines2[li];
+    if (li > 0) out.push("ws", "\n");
+    if (/^[ \t]*$/.test(line4)) {
+      out.push("ws", line4);
+      continue;
+    }
+    const indent = indentOf(line4);
+    out.push("ws", line4.slice(0, indent));
+    if (line4[indent] === "#") {
+      out.push("comment", line4.slice(indent), { eol: true });
+      continue;
+    }
+    const startFlow = flow;
+    let i2 = indent;
+    let codeEnd = line4.length;
+    let comment;
+    while (i2 < line4.length) {
+      const c3 = line4[i2];
+      const before = i2 === indent ? " " : line4[i2 - 1];
+      if (c3 === "#" && (before === " " || before === "	")) {
+        codeEnd = i2;
+        comment = line4.slice(i2);
+        break;
+      }
+      if ((c3 === '"' || c3 === "'") && /[ \t[{,:]/.test(before)) {
+        let j = i2 + 1;
+        for (; ; ) {
+          const d = line4[j];
+          if (d === void 0) no("a quoted scalar over several lines");
+          if (c3 === '"' && d === "\\") j += 2;
+          else if (d === c3 && c3 === "'" && line4[j + 1] === "'") j += 2;
+          else if (d === c3) break;
+          else j++;
+        }
+        out.push("string", line4.slice(i2, j + 1));
+        i2 = j + 1;
+        continue;
+      }
+      if ((c3 === "[" || c3 === "{") && (flow > 0 || /[ \t[{,:-]/.test(before))) flow++;
+      else if ((c3 === "]" || c3 === "}") && flow > 0) flow--;
+      out.push(c3 === " " || c3 === "	" ? "ws" : "code", c3);
+      i2++;
+    }
+    if (comment !== void 0) out.push("comment", comment, { eol: true });
+    const text = line4.slice(indent, codeEnd).trimEnd();
+    const lead = /^(?:[-?:](?:[ \t]+|$))*/.exec(text);
+    const content = indent + lead[0].length;
+    const bare = text.replace(/(?:[ \t]+[&!][^ \t]*)+$/, "").replace(/^[&!][^ \t]*$/, "");
+    const structural = /^(?:[-?:](?:[ \t]|$)|---|\.\.\.|%)/.test(text) || /:(?:[ \t]|$)/.test(text.replace(/"[^"]*"|'[^']*'/g, '""'));
+    if (startFlow === 0 && prev !== void 0 && !prev.opens) {
+      if (indent > prev.content || !structural) no("a plain scalar over several lines");
+    }
+    const opens = flow > 0 || bare === "" || bare.endsWith(":") || /^(?:[-?](?:[ \t]+[-?])*)$/.test(bare) || text === "---" || /^---[ \t]/.test(text);
+    prev = { content, opens };
+    const last = text.split(/[ \t]+/).at(-1) ?? "";
+    if (flow === 0 && /^[|>][0-9+-]{0,2}$/.test(last)) {
+      const head = text.slice(0, text.length - last.length);
+      if (!/(?:^|[ \t])-[ \t]|:[ \t]|^\?[ \t]/.test(head)) no("a block scalar at the top level");
+      const spaces = (l) => /^ */.exec(l)[0].length;
+      let j = li + 1;
+      while (j < lines2.length && (/^[ \t]*$/.test(lines2[j]) || spaces(lines2[j]) > indent)) {
+        j++;
+      }
+      if (j > li + 1) {
+        out.push("ws", "\n");
+        out.push("string", lines2.slice(li + 1, j).join("\n"));
+        li = j - 1;
+      }
+      prev = { content, opens: false };
+    }
+  }
+  return out.segs;
+}
+
+// src/proofs.ts
+var PROOF_LANGUAGES = ["sql", "rust", "typescript", "javascript", "yaml", "toml"];
+var EXTENSIONS = {
+  sql: [".sql"],
+  rust: [".rs"],
+  typescript: [".ts", ".tsx", ".mts", ".cts"],
+  javascript: [".js", ".jsx", ".mjs", ".cjs"],
+  yaml: [".yml", ".yaml"],
+  toml: [".toml"]
+};
+var UNKNOWN_LANGUAGE = `comments_only reads ${PROOF_LANGUAGES.join(", ")}; shell and python never (a script reads its own source and line numbers in too many ways), any other language comes later, with its own adversarial review`;
+function languageOf(path10, allowed) {
+  const lower = path10.toLowerCase();
+  return allowed.find((l) => EXTENSIONS[l].some((ext) => lower.endsWith(ext)));
+}
+var mayHoldJsx = (path10) => !/\.[mc]?ts$/i.test(path10);
+var isIdent = (c3) => c3 !== void 0 && /[A-Za-z0-9_$]/.test(c3);
+var DIRECTIVE = /goose|sqlx|flyway|liquibase|changeset|rollback|precondition|migrate|no-transaction|sqlc|sqlfluff|squawk|noqa|lint|ignore|disable|enable|pragma/i;
+function meaningful(t) {
+  if (DIRECTIVE.test(t)) return true;
+  return /^--\s*(?:[+!@$#:%]|[A-Za-z_-]+\s*:)/.test(t);
+}
 function quoted(s, i2, quote2) {
   let j = i2 + 1;
   for (; ; ) {
@@ -29375,7 +30045,19 @@ function quoted(s, i2, quote2) {
     return k + 1;
   }
 }
-function plainText(bytes) {
+var SEPARATORS = /* @__PURE__ */ new Set([133, 8232, 8233]);
+var BIDI = /* @__PURE__ */ new Set([1564, 8206, 8207, 8234, 8235, 8236, 8237, 8238]);
+function refusedChar(raw) {
+  if (raw.charCodeAt(0) === 65279) return "a byte order mark";
+  for (let i2 = 0; i2 < raw.length; i2++) {
+    const c3 = raw.charCodeAt(i2);
+    if (c3 < 128) continue;
+    if (SEPARATORS.has(c3)) return "a line separator that is not a line feed";
+    if (BIDI.has(c3) || c3 >= 8294 && c3 <= 8297) return "a bidirectional control character";
+  }
+  return void 0;
+}
+function plainText(bytes, language = "sql") {
   let raw;
   if (typeof bytes === "string") raw = bytes;
   else {
@@ -29386,7 +30068,12 @@ function plainText(bytes) {
     }
   }
   if (raw.includes("\0")) return "binary";
-  if (raw.includes("\\")) return "a backslash";
+  if (language === "sql") {
+    if (raw.includes("\\")) return "a backslash";
+  } else {
+    const refused = refusedChar(raw);
+    if (refused !== void 0) return refused;
+  }
   if (/[\f\v]/.test(raw)) return "a form feed or vertical tab";
   if (/\r(?!\n)/.test(raw)) return "a carriage return without a line feed";
   const lf = (raw.match(/\n/g) ?? []).length;
@@ -29395,7 +30082,7 @@ function plainText(bytes) {
   return { text: raw.replace(/\r\n/g, "\n"), crlf: lf === 0 ? void 0 : crlf > 0 };
 }
 function tokenizeSql(s) {
-  const out = new Out();
+  const out = new Out(meaningful);
   let i2 = 0;
   while (i2 < s.length) {
     const c3 = s[i2];
@@ -29409,7 +30096,7 @@ function tokenizeSql(s) {
       }
       const end = s.indexOf("\n", i2);
       const stop = end === -1 ? s.length : end;
-      out.push("comment", s.slice(i2, stop));
+      out.push("comment", s.slice(i2, stop), { eol: true });
       i2 = stop;
     } else if (s.startsWith("/*", i2)) {
       const end = s.indexOf("*/", i2 + 2);
@@ -29451,14 +30138,61 @@ function tokenizeSql(s) {
   }
   return out.segs;
 }
-function normalized(text) {
+function tokenize2(text, language, path10) {
+  switch (language) {
+    case "sql":
+      return tokenizeSql(text);
+    case "rust":
+      return tokenizeRust(text);
+    case "typescript":
+    case "javascript":
+      return tokenizeJs(text, mayHoldJsx(path10));
+    case "yaml":
+      return tokenizeYaml(text);
+    case "toml":
+      return tokenizeToml(text);
+  }
+}
+function normalized(text, language, path10) {
   let segs;
   try {
-    segs = tokenizeSql(text);
+    segs = tokenize2(text, language, path10);
+    return language === "yaml" ? byLine(segs) : byGap(segs);
   } catch (e) {
-    if (e instanceof Unclassifiable) return void 0;
+    if (e instanceof Unclassifiable) return { why: e.message };
     throw e;
   }
+}
+function byLine(segs) {
+  const lines2 = [[]];
+  for (const seg of segs) {
+    if (seg.kind !== "ws") {
+      lines2.at(-1).push(seg);
+      continue;
+    }
+    for (const [k, part] of seg.text.split("\n").entries()) {
+      if (k > 0) lines2.push([]);
+      if (part !== "") lines2.at(-1).push({ kind: "ws", text: part });
+    }
+  }
+  const kept = [];
+  for (const line4 of lines2) {
+    let rest = line4;
+    const last = rest.findLastIndex((x) => x.kind !== "ws");
+    const tail = rest[last];
+    if (tail?.kind === "comment" && tail.meaningful !== true) {
+      rest = rest.slice(0, last);
+      while (rest.at(-1)?.kind === "ws") rest = rest.slice(0, -1);
+    }
+    if (rest.some((x) => x.kind === "comment" && x.meaningful !== true)) {
+      no("a comment that does not end its line");
+    }
+    if (!rest.some((x) => x.kind !== "ws")) continue;
+    kept.push(rest.map((x) => x.text).join(""));
+  }
+  return kept.join("\n");
+}
+function byGap(segs) {
   const parts = [];
   let gap = "none";
   const widen = (to) => {
@@ -29469,7 +30203,7 @@ function normalized(text) {
       widen(seg.text.includes("\n") ? "line" : "blank");
       continue;
     }
-    const line4 = seg.kind === "comment" && seg.text.startsWith("--");
+    const line4 = seg.kind === "comment" && seg.eol === true;
     if (seg.kind === "comment" && seg.meaningful !== true) {
       widen(line4 || seg.text.includes("\n") ? "line" : "blank");
       continue;
@@ -29480,18 +30214,36 @@ function normalized(text) {
   }
   return parts.join("");
 }
-function commentsOnlyWhy(base, head) {
-  const a2 = plainText(base);
-  const b = plainText(head);
+function sameYaml(a2, b) {
+  try {
+    const load2 = (text) => {
+      const docs = (0, import_yaml3.parseAllDocuments)(text);
+      const list2 = Array.isArray(docs) ? docs : [docs];
+      if (list2.some((d) => d.errors.length > 0)) return void 0;
+      return list2.map((d) => d.toJS({ maxAliasCount: 100 }));
+    };
+    const da = load2(a2);
+    const db = load2(b);
+    if (da === void 0 || db === void 0) return "it does not load as YAML";
+    return isDeepStrictEqual(da, db) ? void 0 : "it loads to other data";
+  } catch {
+    return "it does not load as YAML";
+  }
+}
+function commentsOnlyWhy(base, head, language = "sql", path10 = "") {
+  const a2 = plainText(base, language);
+  const b = plainText(head, language);
   if (typeof a2 === "string") return `the base has ${a2}`;
   if (typeof b === "string") return `the head has ${b}`;
   if (a2.crlf !== void 0 && b.crlf !== void 0 && a2.crlf !== b.crlf) {
     return "its line endings changed";
   }
-  const ca = normalized(a2.text);
-  const cb = normalized(b.text);
-  if (ca === void 0 || cb === void 0) return "it cannot be read for sure";
-  return ca === cb ? void 0 : "it changes more than plain comments";
+  const ca = normalized(a2.text, language, path10);
+  const cb = normalized(b.text, language, path10);
+  if (typeof ca !== "string") return `the base cannot be read for sure: ${ca.why}`;
+  if (typeof cb !== "string") return `the head cannot be read for sure: ${cb.why}`;
+  if (ca !== cb) return "it changes more than plain comments";
+  return language === "yaml" ? sameYaml(a2.text, b.text) : void 0;
 }
 function sqlStatements(bytes) {
   const plain2 = plainText(bytes);
@@ -30526,8 +31278,8 @@ var evidenceRuleSchema = external_exports.looseObject({
   // The CI job that reports the hit, e.g. a migration guard.
   guard: workflowJob,
   // Every changed file of the pull request must lie under `paths`. comments_only: each one is a
-  // .sql file that changes plain comments only. paths_only: that is all. command: `command`
-  // exits 0 and prints the run's proof line.
+  // file in one of `languages` that changes plain comments only. paths_only: that is all.
+  // command: `command` exits 0 and prints the run's proof line.
   proof: external_exports.enum(["comments_only", "whitespace_only", "paths_only", "command"]),
   // proof: command: the program and its arguments, no shell. The program is a name on the
   // sandbox's PATH, an absolute path, or a path in the base tree (`scripts/prove.mjs`).
@@ -30535,11 +31287,12 @@ var evidenceRuleSchema = external_exports.looseObject({
   // proof: command: wall clock and CPU seconds.
   timeoutSeconds: external_exports.number().int().min(1).max(600).optional(),
   paths: external_exports.array(globSchema).min(1).max(50),
-  // comments_only: the languages it reads (sql only so far); any other file proves nothing.
+  // comments_only: the languages it reads (PROOF_LANGUAGES, by file extension); any other file
+  // proves nothing.
   languages: external_exports.array(
     external_exports.string().refine(
       (l) => PROOF_LANGUAGES.includes(l),
-      ONLY_SQL
+      UNKNOWN_LANGUAGE
     )
   ).min(1).optional(),
   // A hit the proof does not explain goes to the owner, not the lead.
@@ -30794,7 +31547,7 @@ function loadConfig(projectDir) {
 function parseConfig(text, file3) {
   let raw;
   try {
-    raw = (0, import_yaml3.parse)(text);
+    raw = (0, import_yaml4.parse)(text);
   } catch (e) {
     throw new ConfigError(file3, `invalid YAML (${e.message})`);
   }
@@ -31017,7 +31770,7 @@ function loadOwnerConfig(opts = {}) {
   }
   let raw;
   try {
-    raw = (0, import_yaml3.parse)(text) ?? {};
+    raw = (0, import_yaml4.parse)(text) ?? {};
   } catch (e) {
     throw new ConfigError(file3, `invalid YAML (${e.message})`);
   }
@@ -31066,7 +31819,7 @@ function configWarnings(config2) {
 }
 
 // src/init.ts
-var import_yaml14 = __toESM(require_dist(), 1);
+var import_yaml15 = __toESM(require_dist(), 1);
 import {
   lstatSync as lstatSync30,
   mkdirSync as mkdirSync9,
@@ -31186,7 +31939,7 @@ async function capacityHoldsTwice(config2, ports, options = {}) {
 }
 
 // src/secret-command.ts
-var import_yaml12 = __toESM(require_dist(), 1);
+var import_yaml13 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync33, realpathSync as realpathSync8, statSync as statSync6 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
 import { join as join32 } from "node:path";
@@ -31762,7 +32515,7 @@ function credentialLocations(home, env) {
 }
 
 // src/report.ts
-var import_yaml4 = __toESM(require_dist(), 1);
+var import_yaml5 = __toESM(require_dist(), 1);
 import { randomBytes as randomBytes2 } from "node:crypto";
 import {
   closeSync as closeSync2,
@@ -31832,7 +32585,7 @@ function parseReport(text, item) {
   const front = m[1].replace(/^(head_sha:[ \t]*)([0-9a-fA-F]{40})[ \t]*$/m, '$1"$2"');
   let raw;
   try {
-    raw = (0, import_yaml4.parse)(front);
+    raw = (0, import_yaml5.parse)(front);
   } catch {
     throw new ReportError("report frontmatter is not valid YAML");
   }
@@ -33152,7 +33905,7 @@ function builtInAccount(o2, now) {
 }
 
 // src/setup-ci-command.ts
-var import_yaml6 = __toESM(require_dist(), 1);
+var import_yaml7 = __toESM(require_dist(), 1);
 import { randomBytes as randomBytes5 } from "node:crypto";
 import {
   readdirSync as readdirSync4,
@@ -33165,7 +33918,7 @@ import {
 import { join as join9 } from "node:path";
 
 // src/setup-ci.ts
-var import_yaml5 = __toESM(require_dist(), 1);
+var import_yaml6 = __toESM(require_dist(), 1);
 var RUNNER_JQ2 = '.runners[] | [.name, .status, .busy, ([.labels[].name] | join(","))] | @tsv';
 var RUNNER_LINE2 = /^(\S+)\t(online|offline)\t(true|false)\t([^\t]*)$/;
 var SAFE_NAME = /^[A-Za-z0-9_.-]+$/;
@@ -33351,7 +34104,7 @@ function resolveRunsOn(value2) {
 function parseWorkflow(text) {
   let doc;
   try {
-    doc = (0, import_yaml5.parse)(text);
+    doc = (0, import_yaml6.parse)(text);
   } catch (err) {
     return { ok: false, error: `cannot parse: ${clean(err instanceof Error ? err.message : err)}` };
   }
@@ -33542,13 +34295,13 @@ function syncMap(doc, map2, want) {
   if (!map2) return;
   for (const [key, value2] of Object.entries(want)) {
     const existing = map2.get(key, true);
-    if (isPlainObject2(value2) && (0, import_yaml6.isMap)(existing)) syncMap(doc, existing, value2);
-    else if ((0, import_yaml6.isScalar)(existing) && (value2 === null || typeof value2 !== "object")) {
+    if (isPlainObject2(value2) && (0, import_yaml7.isMap)(existing)) syncMap(doc, existing, value2);
+    else if ((0, import_yaml7.isScalar)(existing) && (value2 === null || typeof value2 !== "object")) {
       existing.value = value2;
     } else map2.set(key, doc.createNode(value2));
   }
   for (const pair of [...map2.items]) {
-    const key = (0, import_yaml6.isScalar)(pair.key) ? pair.key.value : pair.key;
+    const key = (0, import_yaml7.isScalar)(pair.key) ? pair.key.value : pair.key;
     if (typeof key !== "string" || !(key in want)) map2.delete(key);
   }
 }
@@ -33604,7 +34357,7 @@ async function readVisibility(gh, repo, timeoutMs) {
 function applyCi(doc, ci) {
   const want = snakeKeys(ci);
   const node2 = doc.get("ci", true);
-  if ((0, import_yaml6.isMap)(node2)) syncMap(doc, node2, want);
+  if ((0, import_yaml7.isMap)(node2)) syncMap(doc, node2, want);
   else doc.set("ci", doc.createNode(want));
   const raw = doc.toJS();
   if (isPlainObject2(raw) && "crew_toolchain_paths" in raw) {
@@ -33668,7 +34421,7 @@ async function runSetupCi(o2) {
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
     );
   }
-  const doc = (0, import_yaml6.parseDocument)(text);
+  const doc = (0, import_yaml7.parseDocument)(text);
   if (doc.errors.length > 0) throw new Error(".studio/studio.yaml is not valid YAML");
   const primary = assertPrimaryRepo(doc.get("primary_repo"));
   const notes = [];
@@ -33707,7 +34460,7 @@ async function runSetupCi(o2) {
     if (ciOut === void 0) lines2.push("  none");
     else
       lines2.push(
-        ...(0, import_yaml6.stringify)(ciOut).trimEnd().split("\n").map((l) => `  ${l}`)
+        ...(0, import_yaml7.stringify)(ciOut).trimEnd().split("\n").map((l) => `  ${l}`)
       );
     const section = (title, items) => {
       if (items.length > 0) lines2.push(`${title}:`, ...items.map((i2) => `  - ${i2}`));
@@ -34454,7 +35207,7 @@ import { lstatSync as lstatSync12, readFileSync as readFileSync16 } from "node:f
 import { join as join15 } from "node:path";
 
 // src/capabilities.ts
-var import_yaml7 = __toESM(require_dist(), 1);
+var import_yaml8 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync13 } from "node:fs";
 import { join as join12 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34523,7 +35276,7 @@ function loadCapabilities(dir = capabilitiesDir()) {
   const file3 = join12(dir, "INDEX.yaml");
   let raw;
   try {
-    raw = (0, import_yaml7.parse)(readFileSync13(file3, "utf8"));
+    raw = (0, import_yaml8.parse)(readFileSync13(file3, "utf8"));
   } catch (e) {
     throw new CapabilitiesError(`${file3}: cannot read (${e.message.split("\n")[0]})`);
   }
@@ -35016,7 +35769,7 @@ function checkReviewCaps(caps, report) {
 }
 
 // src/sources.ts
-var import_yaml8 = __toESM(require_dist(), 1);
+var import_yaml9 = __toESM(require_dist(), 1);
 import { createHash as createHash2 } from "node:crypto";
 import { lstatSync as lstatSync11, readdirSync as readdirSync6, readFileSync as readFileSync15, renameSync as renameSync8 } from "node:fs";
 import { join as join14 } from "node:path";
@@ -35064,7 +35817,7 @@ function loadSources(dir = capabilitiesDir()) {
   const file3 = join14(dir, "SOURCES.yaml");
   let raw;
   try {
-    raw = (0, import_yaml8.parse)(readFileSync15(file3, "utf8"));
+    raw = (0, import_yaml9.parse)(readFileSync15(file3, "utf8"));
   } catch (e) {
     throw new SourcesError(`${file3}: cannot read (${e.message.split("\n")[0]})`);
   }
@@ -37165,7 +37918,7 @@ function clearPause(root) {
 }
 
 // src/rea-consent.ts
-var import_yaml9 = __toESM(require_dist(), 1);
+var import_yaml10 = __toESM(require_dist(), 1);
 import {
   lstatSync as lstatSync19,
   mkdirSync as mkdirSync5,
@@ -37550,11 +38303,11 @@ function addResearchRoot(owner, dir, ownerRoot) {
   } catch (e) {
     if (e.code !== "ENOENT") throw e;
   }
-  const doc = (0, import_yaml9.parseDocument)(text === "" ? "{}" : text);
+  const doc = (0, import_yaml10.parseDocument)(text === "" ? "{}" : text);
   if (doc.errors.length > 0) throw new Error(`${file3}: invalid YAML; nothing changed`);
-  if (!(0, import_yaml9.isMap)(doc.contents)) throw new Error(`${file3}: not a map; nothing changed`);
+  if (!(0, import_yaml10.isMap)(doc.contents)) throw new Error(`${file3}: not a map; nothing changed`);
   const current = doc.get("research_roots");
-  const roots = (0, import_yaml9.isSeq)(current) ? current.items.map((i2) => String(i2.value ?? i2)) : [];
+  const roots = (0, import_yaml10.isSeq)(current) ? current.items.map((i2) => String(i2.value ?? i2)) : [];
   if (roots.some((r) => within(pathKey(real), pathKey(resolve5(r))))) return real;
   doc.set("research_roots", [...roots, real]);
   mkdirSync5(dirname7(file3), { recursive: true, mode: 448 });
@@ -47195,10 +47948,10 @@ var {
 } = getIpcExport();
 
 // src/evidence.ts
-var import_yaml11 = __toESM(require_dist(), 1);
+var import_yaml12 = __toESM(require_dist(), 1);
 
 // src/ci-jobs.ts
-var import_yaml10 = __toESM(require_dist(), 1);
+var import_yaml11 = __toESM(require_dist(), 1);
 var GIT_FETCH_MS2 = 12e4;
 var GIT_LOCAL_MS2 = 6e4;
 var WORKFLOWS_DIR = ".github/workflows/";
@@ -47233,7 +47986,7 @@ function runsOn(on6, event) {
 function readWorkflow(text, path10) {
   let doc;
   try {
-    doc = (0, import_yaml10.parse)(text);
+    doc = (0, import_yaml11.parse)(text);
   } catch {
     return void 0;
   }
@@ -48603,7 +49356,7 @@ async function rawOwnerBlocksAt(ctx, oid) {
   }
   let raw;
   try {
-    raw = (0, import_yaml11.parse)(text);
+    raw = (0, import_yaml12.parse)(text);
   } catch {
     const u2 = `unparsable:${digest(text)}`;
     return {
@@ -48761,7 +49514,8 @@ async function prove(ctx, p, r, ref) {
     if (c3.status !== "M") return { kind: "no", why: `${name} is not a plain change` };
     if (c3.srcMode !== c3.dstMode) return { kind: "no", why: `${name} changes its mode` };
     if (!REGULAR.test(c3.srcMode)) return { kind: "no", why: `${name} is no regular file` };
-    if (languageOf(c3.path, r.languages ?? []) === void 0) {
+    const language = languageOf(c3.path, r.languages ?? []);
+    if (language === void 0) {
       return { kind: "no", why: `${name} is in none of the languages` };
     }
     let before;
@@ -48777,7 +49531,7 @@ async function prove(ctx, p, r, ref) {
     } catch {
       return { kind: "retry", why: `${name} cannot be read` };
     }
-    const why = commentsOnlyWhy(before, after2);
+    const why = commentsOnlyWhy(before, after2, language, c3.path);
     if (why !== void 0) return { kind: "no", why: `${name}: ${why}` };
   }
   return { kind: "proven" };
@@ -49589,7 +50343,7 @@ function readPrimaryRepo(project) {
   const file3 = join32(project, ".studio", "studio.yaml");
   let raw;
   try {
-    raw = (0, import_yaml12.parse)(readFileSync33(file3, "utf8"));
+    raw = (0, import_yaml13.parse)(readFileSync33(file3, "utf8"));
   } catch {
     throw new Error("cannot read .studio/studio.yaml");
   }
@@ -49980,7 +50734,7 @@ async function runDoctor(o2) {
 }
 
 // src/stack.ts
-var import_yaml13 = __toESM(require_dist(), 1);
+var import_yaml14 = __toESM(require_dist(), 1);
 import { lstatSync as lstatSync29, readdirSync as readdirSync10, readFileSync as readFileSync34 } from "node:fs";
 import { join as join33 } from "node:path";
 var MAX_FILE_BYTES2 = 1024 * 1024;
@@ -50118,7 +50872,7 @@ function runSetupStack(o2) {
       `cannot read .studio/studio.yaml (${e.code ?? "error"})`
     );
   }
-  const doc = (0, import_yaml13.parseDocument)(text);
+  const doc = (0, import_yaml14.parseDocument)(text);
   if (doc.errors.length > 0) throw new Error(".studio/studio.yaml is not valid YAML");
   const { stacks, notes } = detectStacks(o2.project);
   let stored = [];
@@ -50571,7 +51325,7 @@ async function runInit(o2) {
     review_bases: [],
     ...found.components.length === 0 ? {} : { components: snakeKeys(found.components) }
   };
-  let body = (0, import_yaml14.stringify)(config2, { lineWidth: 0 });
+  let body = (0, import_yaml15.stringify)(config2, { lineWidth: 0 });
   if (ciUnread) body = body.replace(/^ci:/m, `${CI_UNREAD_COMMENT}
 ci:`);
   const configText = `# Studio project settings, written by studio init. See the Studio README for every key.
@@ -52969,7 +53723,7 @@ async function sendLocked(o2, notify, lock) {
 }
 
 // src/release.ts
-var import_yaml15 = __toESM(require_dist(), 1);
+var import_yaml16 = __toESM(require_dist(), 1);
 import { createHash as createHash6 } from "node:crypto";
 import { lstatSync as lstatSync35, readFileSync as readFileSync42 } from "node:fs";
 import { join as join41 } from "node:path";
@@ -53735,7 +54489,7 @@ async function dispatchProblem(git, co, sha, file3, o2) {
   if (text === void 0) return `${file3} is not in ${short2(sha)}`;
   let raw;
   try {
-    raw = (0, import_yaml15.parse)(text);
+    raw = (0, import_yaml16.parse)(text);
   } catch {
     return `${file3} at ${short2(sha)} is no valid YAML`;
   }

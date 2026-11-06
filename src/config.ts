@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { isLang, LANGS } from '../hooks/i18n/index.js';
 import { globProblem } from './glob.js';
 import { allowedPluginSchema, pluginPinSchema } from './plugins.js';
-import { ONLY_SQL, PROOF_LANGUAGES, type ProofLanguage } from './proofs.js';
+import { PROOF_LANGUAGES, type ProofLanguage, UNKNOWN_LANGUAGE } from './proofs.js';
 import { REA_VERSION_RE, reaEnvKeyOk } from './rea.js';
 
 export { globProblem };
@@ -351,8 +351,8 @@ export const evidenceRuleSchema = z
     // The CI job that reports the hit, e.g. a migration guard.
     guard: workflowJob,
     // Every changed file of the pull request must lie under `paths`. comments_only: each one is a
-    // .sql file that changes plain comments only. paths_only: that is all. command: `command`
-    // exits 0 and prints the run's proof line.
+    // file in one of `languages` that changes plain comments only. paths_only: that is all.
+    // command: `command` exits 0 and prints the run's proof line.
     proof: z.enum(['comments_only', 'whitespace_only', 'paths_only', 'command']),
     // proof: command: the program and its arguments, no shell. The program is a name on the
     // sandbox's PATH, an absolute path, or a path in the base tree (`scripts/prove.mjs`).
@@ -360,14 +360,15 @@ export const evidenceRuleSchema = z
     // proof: command: wall clock and CPU seconds.
     timeoutSeconds: z.number().int().min(1).max(600).optional(),
     paths: z.array(globSchema).min(1).max(50),
-    // comments_only: the languages it reads (sql only so far); any other file proves nothing.
+    // comments_only: the languages it reads (PROOF_LANGUAGES, by file extension); any other file
+    // proves nothing.
     languages: z
       .array(
         z
           .string()
           .refine(
             (l): l is ProofLanguage => (PROOF_LANGUAGES as readonly string[]).includes(l),
-            ONLY_SQL,
+            UNKNOWN_LANGUAGE,
           ),
       )
       .min(1)
