@@ -62,7 +62,16 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
     const r = await runFile(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script],
-      { timeoutMs: 180_000 },
+      // Windows PowerShell must not load the modules of the PowerShell 7 that runs this job.
+      {
+        timeoutMs: 180_000,
+        env: Object.fromEntries(
+          Object.entries(process.env).filter(
+            (e): e is [string, string] =>
+              e[1] !== undefined && e[0].toLowerCase() !== 'psmodulepath',
+          ),
+        ),
+      },
     );
     expect(r.stderr).toBe('');
     expect(r.code).toBe(0);

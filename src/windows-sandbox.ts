@@ -119,8 +119,8 @@ export function windowsSetupScript(o: {
   if (!CREW_USER_RE.test(o.user)) throw new Error(`not a crew user name: ${o.user}`);
   const list = (ps: readonly string[]) => `@(${ps.map(psQuote).join(', ')})`;
   return `#Requires -RunAsAdministrator
-# Studio: the crew sandbox user of this Windows worker. Run once in an elevated PowerShell, as the
-# account that runs \`studio worker\`. Nothing here leaves this machine.
+# Studio: the crew sandbox user of this Windows worker. Run once in an elevated Windows PowerShell
+# (powershell.exe), as the account that runs \`studio worker\`. Nothing here leaves this machine.
 $ErrorActionPreference = 'Stop'
 $name = ${psQuote(o.user)}
 $credFile = ${psQuote(o.credFile)}

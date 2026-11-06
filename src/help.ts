@@ -65,6 +65,11 @@ export const COMMANDS: HelpEntry[] = [
       'Serve offered items of this label on this machine: claim one, run its crew, open its pull request, hand the report back',
   },
   {
+    usage: 'worker windows-setup',
+    about:
+      'Print the one-time PowerShell script of the Windows crew sandbox user (run it elevated)',
+  },
+  {
     usage: 'overview',
     about: 'Owner only, in a terminal: every project of this owner, read only',
   },

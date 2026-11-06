@@ -38507,8 +38507,8 @@ function windowsSetupScript(o2) {
   if (!CREW_USER_RE.test(o2.user)) throw new Error(`not a crew user name: ${o2.user}`);
   const list2 = (ps) => `@(${ps.map(psQuote).join(", ")})`;
   return `#Requires -RunAsAdministrator
-# Studio: the crew sandbox user of this Windows worker. Run once in an elevated PowerShell, as the
-# account that runs \`studio worker\`. Nothing here leaves this machine.
+# Studio: the crew sandbox user of this Windows worker. Run once in an elevated Windows PowerShell
+# (powershell.exe), as the account that runs \`studio worker\`. Nothing here leaves this machine.
 $ErrorActionPreference = 'Stop'
 $name = ${psQuote(o2.user)}
 $credFile = ${psQuote(o2.credFile)}
@@ -47846,6 +47846,10 @@ var COMMANDS = [
   {
     usage: "worker --label <label> [--once]",
     about: "Serve offered items of this label on this machine: claim one, run its crew, open its pull request, hand the report back"
+  },
+  {
+    usage: "worker windows-setup",
+    about: "Print the one-time PowerShell script of the Windows crew sandbox user (run it elevated)"
   },
   {
     usage: "overview",

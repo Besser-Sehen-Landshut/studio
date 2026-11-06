@@ -1651,6 +1651,25 @@ describe('workers on other machines', () => {
     expect(w.github.refs.size).toBe(0);
   });
 
+  it('worker windows-setup prints the script for the configured crew user, and needs one', async () => {
+    const w = world();
+    const wm = workerMachine(w, 'win');
+    const wp = machinePorts(w, 'win-bot', workerGh(w, 'win-bot').gh, newCrew());
+    const without = await run(wm, wp, ['worker', 'windows-setup']);
+    expect(without.code).not.toBe(0);
+    expect(without.err).toMatch(/workers\.self\.windows\.crew_user/);
+    writeOwnerConfig(
+      wm.home,
+      `workers:\n  self:\n    lead: lead-user\n    lead_id: ${idOf('lead-user')}\n    windows: { crew_user: studio-crew }\n`,
+    );
+    const r = await run(wm, wp, ['worker', 'windows-setup']);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/^#Requires -RunAsAdministrator/);
+    expect(r.out).toContain("$name = 'studio-crew'");
+    expect(r.out).toContain('windows-crew.xml');
+    expect(w.github.refs.size).toBe(0);
+  });
+
   it("N6: a worker token of the lead's account is refused by id", async () => {
     const w = world();
     const wm = workerMachine(w, 'win');
