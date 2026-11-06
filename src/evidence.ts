@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
@@ -9,11 +9,29 @@ import {
   camelizeKeys,
   EVIDENCE_ID_RE,
   type EvidenceRule,
+  type OwnerConfig,
+  ownerConfigDir,
   parseConfig,
 } from './config.js';
 import { hostilePath, matchGlob, matchGlobExact } from './glob.js';
-import { acquireStateLock, type StateLock, writeStateFile } from './paths.js';
+import {
+  acquireStateLock,
+  canonicalToolchainPaths,
+  credentialLocations,
+  type StateLock,
+  stateBaseFor,
+  writeStateFile,
+} from './paths.js';
 import type { Gh, Git } from './ports.js';
+import {
+  LIMITS_REFUSED,
+  makeRunDir,
+  type ProofRunner,
+  proofEnv,
+  realProofRunner,
+  removeRunDir,
+} from './proof-sandbox.js';
+import { parseTree, type TreeEntry, writeTree } from './proof-tree.js';
 import { commentsOnlyWhy, languageOf } from './proofs.js';
 import { appendStateLine, type Check, checkKey } from './queue.js';
 import { readDefaultBranch, readPrFacts } from './review.js';
@@ -25,12 +43,14 @@ import { readDefaultBranch, readPrFacts } from './review.js';
  * the failed checks count as waived for that head, and the exception is logged with its evidence.
  * Without a proof the lead decides; a rule marked `owner_only` sends that decision to the owner.
  *
- * No command runs: Studio computes each proof itself, in TypeScript, over the files of the base
- * and the head that git gives it with pinned options (src/proofs.ts). The rules come only from
+ * A built-in proof runs nothing: Studio computes it itself, in TypeScript, over the files of the
+ * base and the head that git gives it with pinned options (src/proofs.ts). `proof: command` runs a
+ * command of the project, only when the owner config allows it and only in the proof sandbox
+ * (src/proof-sandbox.ts); without a sandbox it proves nothing. The rules come only from
  * studio.yaml at the commit the pull request is based on, on the default branch, never from the
  * working tree or the pull request, and a pull request that changes them gets no approval. The log
  * lives in the state root, which crews cannot write; only Studio and `studio exceptions grant`
- * (refused to crews) append to it. Custom proof commands come later, with a real sandbox.
+ * (refused to crews) append to it.
  */
 
 export const EXCEPTIONS_FILE = 'exceptions.jsonl';
@@ -89,6 +109,8 @@ const entrySchema = z.object({
   why: z.string().optional(),
   /** A grant: the lead's or the owner's one line. */
   reason: z.string().optional(),
+  /** proof: command: the command that ran (from the base's studio.yaml). */
+  command: z.array(z.string()).optional(),
 });
 export type ExceptionEntry = z.infer<typeof entrySchema>;
 
@@ -102,7 +124,69 @@ export interface EvidenceContext {
   checkout: { dir: string; remote: string };
   stateRoot: string;
   now: () => Date;
+  /** proof: command; without it, or not allowed, such rules prove nothing. */
+  commands?: ProofCommands;
 }
+
+/** What `proof: command` needs: the owner's yes, a sandbox and what the command may read. */
+export interface ProofCommands {
+  /** `allow_proof_commands` in the owner config. */
+  allowed: boolean;
+  /** Why they are off although allowed (a toolchain path that fails its check). */
+  off?: string;
+  runner: ProofRunner;
+  /** Read-only dirs for the command: the owner's toolchain paths, checked, real paths. */
+  read: string[];
+  /** Kept unreadable on macOS besides the fixed places: the home, state, configs. */
+  deny: string[];
+}
+
+/**
+ * What `proof: command` gets on this machine, from the owner config: allowed or not, and the
+ * toolchain paths (`crew_toolchain_paths`, checked against the real file system as for crews) as
+ * read-only dirs. The home, the state base, the owner config and the Claude config stay denied.
+ */
+export function proofCommandsFor(o: {
+  ownerConfig: Pick<OwnerConfig, 'allowProofCommands' | 'crewToolchainPaths'>;
+  env: Record<string, string | undefined>;
+  homedir: string;
+  projectDir: string;
+  stateRoot: string;
+  runner?: ProofRunner;
+}): ProofCommands {
+  const owner = { env: o.env, homedir: o.homedir };
+  const deny = [
+    o.homedir,
+    stateBaseFor(owner),
+    ownerConfigDir(owner),
+    o.env.CLAUDE_CONFIG_DIR || join(o.homedir, '.claude'),
+    ...credentialLocations(o.homedir, o.env).all,
+  ];
+  const runner = o.runner ?? realProofRunner;
+  if (!o.ownerConfig.allowProofCommands) return { allowed: false, runner, read: [], deny };
+  try {
+    const read = canonicalToolchainPaths(o.ownerConfig.crewToolchainPaths, {
+      home: o.homedir,
+      env: o.env,
+      projectDir: o.projectDir,
+      stateRoot: o.stateRoot,
+      extraCredentialPaths: credentialLocations(o.homedir, o.env).extra,
+    });
+    return { allowed: true, runner, read, deny };
+  } catch (e) {
+    return { allowed: true, off: (e as Error).message.slice(0, 200), runner, read: [], deny };
+  }
+}
+
+/** What a proof command prints, on a line of its own, to prove: this word and the run's nonce. */
+export const PROOF_LINE_WORD = 'proven';
+const GIT_ARCHIVE_MS = 300_000;
+/** What a proof command's base or head tree may hold; over it, no command runs. */
+const TREE_CAPS = { maxBytes: 128 * 1024 * 1024, maxFiles: 50_000 };
+/** Stdout a proof command may print. */
+const MAX_PROOF_OUTPUT = 1024 * 1024;
+/** The largest file a proof command may write in its tmp dir. */
+const MAX_PROOF_FILE = 256 * 1024 * 1024;
 
 const digest = (text: string): string =>
   `sha256:${createHash('sha256').update(text).digest('hex')}`;
@@ -167,7 +251,14 @@ export function recordException(stateRoot: string, entry: ExceptionEntry): Excep
     const answers = (e: ExceptionEntry) => e.by !== 'lead' || entry.by === 'lead';
     const applied = known.find((e) => e.outcome === 'applied' && answers(e));
     if (applied !== undefined) return applied;
-    const tried = known.find((e) => e.outcome === 'not_proven');
+    // A command's answer is logged beside a refusal before it ran (commands off, no sandbox), so
+    // runCommand finds it and never runs the command on that diff again.
+    const tried = known.find(
+      (e) =>
+        e.outcome === 'not_proven' &&
+        (entry.command === undefined ||
+          JSON.stringify(e.command) === JSON.stringify(entry.command)),
+    );
     if (entry.outcome === 'not_proven' && tried !== undefined) return tried;
     appendStateLine(stateRoot, EXCEPTIONS_FILE, JSON.stringify(entry));
     return entry;
@@ -474,10 +565,22 @@ const quotePath = (p: string): string => JSON.stringify(p.slice(0, 120));
 /** The mode of a regular file: 644 or 755, no link, no submodule. */
 const REGULAR = /^100(644|755)$/;
 
-type Proven = { kind: 'proven' } | { kind: 'no'; why: string } | { kind: 'retry'; why: string };
+type Proven =
+  /** `command`: the proof command that ran, for the log. */
+  | { kind: 'proven'; command?: string[] }
+  | { kind: 'no'; why: string; command?: string[] }
+  | { kind: 'retry'; why: string };
 
-/** Computes the built-in proof of `r` on the prepared diff. Nothing runs. */
-async function prove(ctx: EvidenceContext, p: Prepared, r: EvidenceRule): Promise<Proven> {
+/**
+ * Computes the proof of `r` on the prepared diff. A built-in proof runs nothing; `command` runs
+ * the rule's command in the proof sandbox (runCommand).
+ */
+async function prove(
+  ctx: EvidenceContext,
+  p: Prepared,
+  r: EvidenceRule,
+  ref: PrRef,
+): Promise<Proven> {
   // A path no reviewer can read at a glance proves nothing, whatever its content.
   const hostile = p.files.find(hostilePath);
   if (hostile !== undefined) return { kind: 'no', why: 'a changed path has a control character' };
@@ -487,6 +590,7 @@ async function prove(ctx: EvidenceContext, p: Prepared, r: EvidenceRule): Promis
   if (outside !== undefined)
     return { kind: 'no', why: `${quotePath(outside)} is outside the paths` };
   if (r.proof === 'paths_only') return { kind: 'proven' };
+  if (r.proof === 'command') return runCommand(ctx, p, r, ref);
   if (r.proof !== 'comments_only') return { kind: 'no', why: `${r.proof} is not in this version` };
   if (p.changes.length === 0) return { kind: 'no', why: 'no file changed' };
   for (const c of p.changes) {
@@ -519,6 +623,120 @@ async function prove(ctx: EvidenceContext, p: Prepared, r: EvidenceRule): Promis
     if (why !== undefined) return { kind: 'no', why: `${name}: ${why}` };
   }
   return { kind: 'proven' };
+}
+
+/**
+ * Runs the command of a `proof: command` rule: only when the owner config allows it, only in the
+ * proof sandbox (never without one), and from studio.yaml at the base (the rules come from there),
+ * so a pull request never runs or changes its own proof. The command starts in the base tree,
+ * written out blob by blob (src/proof-tree.ts: no `.gitattributes` processing, no link to the
+ * owner's repository), and reads the head's tree, the diff and the changed paths as data. It proves
+ * only by exiting 0 with a line `proven <nonce>`, the nonce drawn for this run and handed over on
+ * fd 3, never in the environment: no text of the pull request, and no child that reads the
+ * environment, can hold it. A command that ran on a
+ * diff never runs on it again: its answer is in the log. Extraction or start failures are retried.
+ */
+async function runCommand(
+  ctx: EvidenceContext,
+  p: Prepared,
+  r: EvidenceRule,
+  ref: PrRef,
+): Promise<Proven> {
+  const argv = r.command ?? [];
+  const c = ctx.commands;
+  if (c === undefined || !c.allowed) {
+    return { kind: 'no', why: 'proof commands are off on this machine (allow_proof_commands)' };
+  }
+  if (c.off !== undefined) return { kind: 'no', why: `proof commands are off: ${c.off}` };
+  const key = { rule: r.id, repo: ref.repo, pr: ref.pr, base: p.base, head: p.head };
+  const ran = readExceptions(ctx.stateRoot).find(
+    (e) =>
+      e.outcome === 'not_proven' &&
+      sameKey(e, key) &&
+      JSON.stringify(e.command) === JSON.stringify(argv),
+  );
+  if (ran !== undefined) return { kind: 'no', why: ran.why ?? 'it proved nothing', command: argv };
+  const unavailable = await c.runner.unavailable();
+  if (unavailable !== undefined) return { kind: 'no', why: `no sandbox: ${unavailable}` };
+  let dirs: { run: string; tmp: string };
+  try {
+    dirs = makeRunDir();
+  } catch {
+    return { kind: 'retry', why: 'the proof run dir cannot be made' };
+  }
+  try {
+    const base = join(dirs.run, 'base');
+    const head = join(dirs.run, 'head');
+    // Both trees are listed and checked before either is written: over the caps, or with a link,
+    // a submodule or an odd path, nothing runs.
+    const listed: [string, TreeEntry[]][] = [];
+    for (const [side, oid, dir] of [
+      ['base', p.base, base],
+      ['head', p.head, head],
+    ] as const) {
+      let out: string;
+      try {
+        out = await g(ctx, ['ls-tree', '-r', '-l', '-z', '--full-tree', oid]);
+      } catch {
+        return { kind: 'retry', why: `the ${side} tree cannot be listed` };
+      }
+      const entries = parseTree(out, TREE_CAPS);
+      if (typeof entries === 'string')
+        return { kind: 'no', why: `the ${side} tree has ${entries}` };
+      listed.push([dir, entries]);
+    }
+    try {
+      for (const [dir, entries] of listed) {
+        mkdirSync(dir);
+        await writeTree(ctx.checkout.dir, entries, dir, GIT_ARCHIVE_MS);
+      }
+    } catch {
+      return { kind: 'retry', why: 'the base and head cannot be written out' };
+    }
+    const diff = join(dirs.run, 'diff.patch');
+    const files = join(dirs.run, 'files');
+    writeFileSync(diff, p.diff, { mode: 0o400 });
+    // NUL-separated: a path may hold anything but NUL.
+    writeFileSync(files, p.files.map((f) => `${f}\0`).join(''), { mode: 0o400 });
+    const nonce = randomBytes(16).toString('hex');
+    const env = proofEnv(c.read, dirs.tmp, {
+      STUDIO_PROOF_RULE: r.id,
+      STUDIO_PROOF_REPO: ref.repo,
+      STUDIO_PROOF_PR: String(ref.pr),
+      STUDIO_PROOF_BASE: p.base,
+      STUDIO_PROOF_HEAD: p.head,
+      STUDIO_PROOF_HEAD_TREE: head,
+      STUDIO_PROOF_DIFF: diff,
+      STUDIO_PROOF_FILES: files,
+      // The nonce is not in the environment, which every child inherits: it comes on fd 3, for
+      // the command to read before it starts anything.
+      STUDIO_PROOF_NONCE_FD: '3',
+    });
+    const seconds = r.timeoutSeconds ?? 60;
+    const result = await c.runner.run(
+      argv,
+      env,
+      { run: dirs.run, tmp: dirs.tmp, cwd: base, read: c.read, deny: c.deny },
+      {
+        timeoutMs: seconds * 1000,
+        cpuSeconds: seconds,
+        maxOutput: MAX_PROOF_OUTPUT,
+        maxFileBytes: MAX_PROOF_FILE,
+      },
+      nonce,
+    );
+    if (result.kind === 'failed') return { kind: 'retry', why: result.why };
+    const no = (why: string): Proven => ({ kind: 'no', why, command: argv });
+    if (result.kind === 'timeout') return no(`timed out after ${seconds} s`);
+    if (result.tooLarge) return no('its output is over 1 MiB');
+    if (result.code === LIMITS_REFUSED) return no('its limits could not be set, or it exited 125');
+    if (result.code !== 0) return no(`exit code ${result.code}`);
+    const line = `${PROOF_LINE_WORD} ${nonce}`;
+    if (!result.stdout.split(/\r?\n/).includes(line)) return no('its output lacks the proof line');
+    return { kind: 'proven', command: argv };
+  } finally {
+    removeRunDir(dirs.run);
+  }
 }
 
 export type EvidenceVerdict =
@@ -618,7 +836,7 @@ export async function judgeFailedChecks(
         diff: digest(p.diff),
         proof: r.proof,
       };
-      const result = await prove(ctx, p, r);
+      const result = await prove(ctx, p, r, ref);
       if (result.kind === 'retry') {
         again ??= result.why;
         continue;
@@ -628,6 +846,7 @@ export async function judgeFailedChecks(
         outcome: result.kind === 'proven' ? 'applied' : 'not_proven',
         by: 'evidence',
         ...(result.kind === 'no' ? { why: result.why } : {}),
+        ...(result.command === undefined ? {} : { command: result.command }),
       });
       if (entry.outcome === 'applied' && holds(entry)) {
         proof = entry;

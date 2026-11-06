@@ -438,7 +438,7 @@ Fix limit: 3 attempts per finding (`finding_attempts`), hard stop after 6 rounds
 
 ### Exceptions by evidence
 
-A guard job in CI (a migration guard, a floor guard) can flag a change that is mechanically harmless: only comments changed, only docs moved. Instead of asking a person each time, a project binds the guard to a built-in proof in `studio.yaml`. Studio computes the proof itself, in TypeScript, over the files of the pull request's base and head; no command runs.
+A guard job in CI (a migration guard, a floor guard) can flag a change that is mechanically harmless: only comments changed, only docs moved. Instead of asking a person each time, a project binds the guard to a built-in proof in `studio.yaml`. Studio computes a built-in proof itself, in TypeScript, over the files of the pull request's base and head, with no command run; a proof command runs only where the owner allows it, sandboxed.
 
 ```yaml
 evidence:
@@ -452,6 +452,12 @@ evidence:
     guard: { workflow: .github/workflows/ci.yml, job: floor-guard }
     proof: paths_only
     paths: ["docs/**", "**/*.md"]
+  - id: migration-lint # a command of the project, sandboxed; needs allow_proof_commands in the owner config
+    guard: { workflow: .github/workflows/ci.yml, job: migration-guard }
+    proof: command
+    command: [node, scripts/prove-migration.mjs] # no shell; the program: a name on the sandbox PATH, an absolute path, or a file of the base tree
+    timeout_seconds: 60 # 1 to 600: wall clock and CPU seconds
+    paths: ["migrations/**"]
 ```
 
 - **The proofs.** Both cover every changed file of the pull request: one outside `paths` proves nothing, because a change elsewhere could be what the guard saw. `paths` match case-sensitively (`docs/**` never covers `DOCS/run.sh`), and a path with a control character proves nothing.
@@ -498,7 +504,11 @@ evidence:
   - A guard with an `owner_only` rule sends the line as `evidence (owner): ...`, which is pushed. It is waived only by a proof or by the owner's grant, in a terminal (`by: owner`), never by a lead's grant through any rule of that guard. An item marked `owner_only` takes the owner's grant too.
 - **Who is trusted.** The lead is trusted at this point: it runs as the owner. `owner_only` tells the owner's grant from the lead's by a terminal, not by authentication, so it guards against a lead's mistake, not against a compromised lead session.
 - **What a crew cannot do.** Crews cannot write the state root, so they cannot add to the log, and `studio exceptions grant` refuses `STUDIO_ROLE=crew`. A pull request that changes `evidence:` in `studio.yaml` gets no approval from Studio: the review item is blocked with `approval refused: ...; evidence is the owner's`, and the owner reviews and merges such a change himself. That check runs for every approval, from `studio.yaml` at the base, whatever the owner's checkout holds, and the approval waits when the check cannot be made. A pull request that adds a rule gains nothing for itself, because the rules come from the base.
-- **Custom proof commands come later.** No user-configured command runs in this version. A rule with `command`, `run` or `inputs` is refused with that message; such commands come with a real sandbox model.
+- **Proof commands (`proof: command`).** A rule can run a command of the project to prove a property of the change, for example a script that checks the changed migration. Off by default: it runs only on a machine whose owner config sets `allow_proof_commands: true`, and never without the proof sandbox. Elsewhere it proves nothing, with the reason in the lead line.
+  - **Where it comes from.** Like every rule, only from `studio.yaml` at the pull request's base on the default branch. The command starts in that base tree, written out blob by blob as git stores it (no `.gitattributes` processing; a tree with a link, a submodule, an odd path, more than 128 MiB or 50,000 files runs nothing), so its script is the base's too: a pull request can neither bring nor change its own proof, and one that changes `evidence:` gets no approval.
+  - **What it gets.** Its cwd is the base tree. `STUDIO_PROOF_HEAD_TREE` is the head tree, to read as data only: a proof command must never execute head content (a script, a config, a plugin, a build), or the pull request decides its own verdict. `STUDIO_PROOF_DIFF` is the diff, `STUDIO_PROOF_FILES` the changed paths (NUL-separated), plus `STUDIO_PROOF_RULE`, `_REPO`, `_PR`, `_BASE`, `_HEAD` and `STUDIO_PROOF_NONCE_FD=3`. Both trees are bare, with no installed dependencies: use programs on the sandbox PATH or self-contained scripts.
+  - **How it proves.** By exiting 0 and printing a line `proven <nonce>`, with the nonce drawn for that run. The nonce comes on file descriptor 3, never in the environment: read fd 3 to the end and close it before starting anything (`readFileSync(3, "utf8")` in Node), so no child can read it. Any other exit, a missing line, more than 1 MiB of output or the timeout means not proven. A start or extraction failure is retried like an unreadable pull request. A command that answered on a diff never runs on it again: the answer is in the log (`command` in the entry).
+  - **The sandbox** (`src/proof-sandbox.ts`): Seatbelt (`sandbox-exec`) on macOS, bubblewrap (`bwrap`, from `/usr/bin` or `/usr/local/bin`) on Linux, nothing anywhere else (native Windows refuses). No network. The run dir is readable and only its `tmp` is writable (HOME and TMPDIR point there). The system's programs and `crew_toolchain_paths` (checked as for crews) are readable. The home, other homes, the shared temp dirs, the state, the owner and Claude config, and on Linux everything not mounted in explicitly stay out. The environment is an allow-list (PATH, HOME, TMPDIR, a C.UTF-8 locale, `TZ=UTC`, the `STUDIO_PROOF_*` values). Limits are CPU time and file size (`ulimit`, inherited by children), the wall clock with the whole process group killed, and 1 MiB of stdout. Details and limits: SECURITY.md.
 - **Server-side protection still wins.** A guard that branch protection requires keeps GitHub from merging whatever Studio waives: leave guards that may be waived out of the required checks, or the merge fails with GitHub's reason.
 
 ## Releases
@@ -904,6 +914,7 @@ crew_toolchain_paths: [] # absolute directories a crew may read, e.g. a version 
 crew_allow_macos_trust_service: false # true lets crew shells on macOS reach the TLS trust service so gh works; weakens the network boundary, see SECURITY.md
 crew_credential_command: /absolute/path/to/provider # optional, see "Crew credentials and usage limits"
 allow_api_billing: false # true lets crew runs bill the API
+allow_proof_commands: false # true lets proof: command rules run here, in the proof sandbox (see "Exceptions by evidence")
 # research_roots: [/absolute/path] # optional, see "Reverse engineering for the researcher": where a project's research.artifacts may lie
 # rea_version: 6.7.0 # optional: the exact rea-agents version researcher crews run (studio research install)
 # rea_env: { GHIDRA_INSTALL_DIR: /absolute/path } # optional: engine variables for the REA server
