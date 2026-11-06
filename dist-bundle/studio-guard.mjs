@@ -618,6 +618,10 @@ function namedDeniedPort(cmd, ports) {
   }
   return void 0;
 }
+function namesNetworkPath(text) {
+  if (/\\{2,4}[?.]\\{1,2}UNC\\/i.test(text)) return true;
+  return /(?:^|[\s'"=(<>|;&,])(?:\\{2,4}|\/\/)[A-Za-z0-9_.-]+(?:@\d+)?[\\/]/.test(text);
+}
 var GUARD_LIMITS = { glob: 1e3, walk: 5e4 };
 var Deny = class extends Error {
 };
@@ -2131,7 +2135,7 @@ function check(input, ctx) {
   const c = ctx;
   if (c === null || typeof c !== "object" || typeof c.worktree !== "string" || !isStringArray(c.ownerOnly) || !isStringArray(c.deployCommands) || !isStringArray(c.secretGlobs) || c.crewAllowedWorkflows !== void 0 && !isStringArray(c.crewAllowedWorkflows) || c.crewAllowedWorkflowRefs !== void 0 && !isStringArray(c.crewAllowedWorkflowRefs) || c.protectedPaths !== void 0 && !isStringArray(c.protectedPaths) || c.readRoots !== void 0 && !isStringArray(c.readRoots) || c.skillRoots !== void 0 && !isStringArray(c.skillRoots) || c.toolResultGlobs !== void 0 && !isStringArray(c.toolResultGlobs) || c.skillRootWaivedGlobs !== void 0 && !isStringArray(c.skillRootWaivedGlobs) || c.item !== void 0 && (typeof c.item !== "string" || !/^[A-Z]+-\d+$/.test(c.item)) || c.base !== void 0 && (typeof c.base !== "string" || !/^[A-Za-z0-9._/-]+$/.test(c.base)) || c.mcpAllow !== void 0 && !isStringArray(c.mcpAllow) || c.blockedCommands !== void 0 && !isStringArray(c.blockedCommands) || c.reaClasses !== void 0 && !isStringArray(c.reaClasses) || c.noPush !== void 0 && typeof c.noPush !== "boolean" || c.onlyCommands !== void 0 && !isStringArray(c.onlyCommands) || c.onlyWrites !== void 0 && !(isStringArray(c.onlyWrites) && c.onlyWrites.every((p) => isAbsolute2(p))) || c.mcpKeys !== void 0 && !(c.mcpKeys !== null && typeof c.mcpKeys === "object" && Object.values(c.mcpKeys).every(
     (e) => isStringArray(e.keys) && isStringArray(e.paths) && isStringArray(e.text)
-  )) || c.artifacts !== void 0 && (typeof c.artifacts !== "string" || !isAbsolute2(c.artifacts) || c.artifacts === "/") || c.deniedPorts !== void 0 && !(Array.isArray(c.deniedPorts) && c.deniedPorts.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535))) {
+  )) || c.artifacts !== void 0 && (typeof c.artifacts !== "string" || !isAbsolute2(c.artifacts) || c.artifacts === "/") || c.noNetworkPaths !== void 0 && typeof c.noNetworkPaths !== "boolean" || c.deniedPorts !== void 0 && !(Array.isArray(c.deniedPorts) && c.deniedPorts.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535))) {
     deny("invalid guard context");
   }
   const wt = resolveReal(ctx.worktree, "/");
@@ -2190,11 +2194,22 @@ function check(input, ctx) {
     if (typeof command !== "string") deny(`${toolName} call without a command`);
     const port = namedDeniedPort(command, ctx.deniedPorts ?? []);
     if (port !== void 0) deny(`port ${port} is denied on this worker machine`);
+    if (ctx.noNetworkPaths === true && namesNetworkPath(command)) {
+      deny("network paths (\\\\host\\share) are not for crews on this worker machine");
+    }
     refuseArtifactsInBash(env, command, cwd);
     checkBash(env, command, cwd, 0);
     return;
   }
   if (toolInput.command !== void 0) deny(`${toolName} call with a command`);
+  if (ctx.noNetworkPaths === true) {
+    for (const key of ["file_path", "notebook_path", "path"]) {
+      const v = toolInput[key];
+      if (typeof v === "string" && namesNetworkPath(` ${v}`)) {
+        deny("network paths (\\\\host\\share) are not for crews on this worker machine");
+      }
+    }
+  }
   const writeKey = WRITE_TOOLS2[toolName];
   if (writeKey !== void 0) {
     const p = toolInput[writeKey];

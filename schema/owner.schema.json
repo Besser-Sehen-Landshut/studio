@@ -304,7 +304,8 @@
             "deny": {
               "default": {
                 "paths": [],
-                "ports": []
+                "ports": [],
+                "hosts": []
               },
               "type": "object",
               "properties": {
@@ -327,6 +328,15 @@
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 65535
+                  }
+                },
+                "hosts": {
+                  "default": [],
+                  "maxItems": 50,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 253
                   }
                 }
               },
@@ -367,6 +377,151 @@
             "lead",
             "lead_id"
           ],
+          "additionalProperties": false
+        },
+        "relay": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "maxLength": 253,
+                "pattern": "^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$|^[0-9A-Fa-f:]{2,39}$"
+              },
+              "user": {
+                "default": "studio-relay",
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,19}$"
+              },
+              "port": {
+                "default": 22,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "host_key": {
+                "type": "string",
+                "pattern": "^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|rsa-sha2-256|rsa-sha2-512|ssh-rsa) [A-Za-z0-9+/]{40,2000}={0,2}$"
+              },
+              "identity_file": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 500
+              },
+              "grace_minutes": {
+                "default": 30,
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 1440
+              }
+            },
+            "required": [
+              "host",
+              "host_key",
+              "identity_file"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "serve": {
+          "type": "object",
+          "properties": {
+            "deny": {
+              "default": {
+                "paths": [],
+                "ports": [],
+                "hosts": []
+              },
+              "type": "object",
+              "properties": {
+                "paths": {
+                  "default": [],
+                  "maxItems": 50,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 500,
+                    "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+                  }
+                },
+                "ports": {
+                  "default": [],
+                  "maxItems": 50,
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  }
+                },
+                "hosts": {
+                  "default": [],
+                  "maxItems": 50,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 253
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "allow_read": {
+              "default": [],
+              "maxItems": 50,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 500,
+                "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+              }
+            },
+            "windows": {
+              "type": "object",
+              "properties": {
+                "crew_user": {
+                  "default": "studio-crew",
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,19}$"
+                },
+                "broker": {
+                  "default": "Studio relay broker",
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9 _-]{1,64}$"
+                }
+              },
+              "additionalProperties": false
+            },
+            "max_cpu_percent": {
+              "default": 75,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "min_free_disk_gb": {
+              "default": 20,
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "probe_unreachable": {
+              "default": [],
+              "maxItems": 20,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9.:[\\]-]{1,253}:\\d{1,5}$"
+              }
+            }
+          },
           "additionalProperties": false
         }
       },

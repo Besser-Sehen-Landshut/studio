@@ -183,6 +183,69 @@ describe('README migration numbers', () => {
   });
 });
 
+describe('README relay workers', () => {
+  it('names the config, the forced command, the checks and the steps of a Windows setup', () => {
+    const at = readme.indexOf('## Relay workers');
+    expect(at).toBeGreaterThan(0);
+    const s = readme.slice(at, readme.indexOf('\n## ', at + 1));
+    for (const phrase of [
+      'workers.relay',
+      'host_key',
+      'identity_file',
+      'grace_minutes',
+      'workers.serve',
+      'studio relay serve',
+      'studio relay install --pair',
+      'Match User studio-relay',
+      'never forced',
+      'never to a second attempt elsewhere',
+      'local-subnets',
+      'tailnet-peers',
+      'WebClient',
+      'studio doctor',
+      'Experimental',
+    ]) {
+      expect(s).toContain(phrase);
+    }
+    expect(readme).toContain('| `relay unpair <label> [--home <dir>]`');
+  });
+  it('sets up a Windows relay worker in five steps, with a troubleshooting table', () => {
+    const at = readme.indexOf('### Set up a Windows relay worker in 10 minutes');
+    expect(at).toBeGreaterThan(0);
+    const s = readme.slice(at, readme.indexOf('\n## ', at));
+    const steps = [...s.matchAll(/^(\d)\. \*\*/gm)].map((m) => m[1]);
+    expect(steps).toEqual(['1', '2', '3', '4', '5']);
+    for (const phrase of [
+      'studio relay pair lab worker.example',
+      'studio relay install --pair',
+      'studio relay pair lab --connect',
+      'host key fingerprint',
+      'studio doctor',
+    ]) {
+      expect(s).toContain(phrase);
+    }
+    expect(s).toMatch(/\| What you see +\| Why +\| Fix +\|/);
+  });
+  it('SECURITY.md names both threat models, what runs elevated and the gaps the probe covers', () => {
+    const security = readFileSync(join(import.meta.dirname, '..', 'SECURITY.md'), 'utf8');
+    const at = security.indexOf('## Relay workers');
+    expect(at).toBeGreaterThan(0);
+    const s = security.slice(at, security.indexOf('\n## ', at + 1));
+    for (const phrase of [
+      'a compromised worker machine',
+      'a compromised lead key',
+      'What runs elevated',
+      'LocalMachine DPAPI',
+      'loopback',
+      'WebClient',
+      'IPC$',
+      'Not verified',
+    ]) {
+      expect(s).toContain(phrase);
+    }
+  });
+});
+
 describe('README workers on other machines', () => {
   const section = () => {
     const at = readme.indexOf('## Workers on other machines');

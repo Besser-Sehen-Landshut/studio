@@ -70,6 +70,39 @@ export const COMMANDS: HelpEntry[] = [
       'Print the one-time PowerShell script of the Windows crew sandbox user (run it elevated)',
   },
   {
+    usage: 'relay serve [--home <dir>] [--lead <name>]',
+    about:
+      "On a relay worker: the command sshd forces for the lead's key; one request in, one answer out",
+  },
+  {
+    usage: 'relay run <id> [--lead <name>] [--pipe <name>] [--home <dir>]',
+    about: 'On a relay worker: the runner a start hands its job to (Studio starts it, not you)',
+  },
+  {
+    usage: 'relay pair <label> <host> [--port <n>] [--user <name>]',
+    about: "On the lead: make the lead's key for a relay worker and print the one pairing line",
+  },
+  {
+    usage: 'relay pair <label> --connect',
+    about:
+      'On the lead: pin the host key the worker proves with the pairing secret; write workers.relay.<label>',
+  },
+  {
+    usage:
+      'relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--i-am-local] [--force-stop]',
+    about:
+      'On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead',
+  },
+  {
+    usage: 'relay unpair <label> [--home <dir>]',
+    about: "On a Windows worker, elevated: remove a lead's pairing and its authorized key",
+  },
+  {
+    usage: 'relay setup [--home <dir>] [--user <name>]',
+    about:
+      'Print the setup script of a Windows relay worker, to run elevated by hand (relay install runs it)',
+  },
+  {
     usage: 'overview',
     about: 'Owner only, in a terminal: every project of this owner, read only',
   },

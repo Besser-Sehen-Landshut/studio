@@ -44,6 +44,8 @@ export const STATE_PROTECTED_DIRS = [
   // A group member's reference cache and the changed paths of its contract check items.
   'reference',
   'contract-changes',
+  // Relay workers: the lead's incoming results, a worker's jobs and mirrors (src/relay-*.ts).
+  'relay',
 ];
 export const STATE_FILES = [
   'crew.json',
@@ -86,6 +88,8 @@ export const STATE_FILES = [
   'workers.lock',
   'worker.json',
   'worker.lock',
+  'relay.json',
+  'relay.lock',
 ];
 
 /** `$XDG_STATE_HOME/studio`, else `<home>/.local/state/studio`: the parent of every state root. */

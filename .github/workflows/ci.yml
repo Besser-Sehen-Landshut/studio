@@ -59,7 +59,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Windows crew sandbox
-        run: pnpm exec vitest run test/egress-proxy.test.ts test/windows-sandbox.test.ts test/windows-real.test.ts
+        run: pnpm exec vitest run test/egress-proxy.test.ts test/windows-sandbox.test.ts test/windows-real.test.ts test/relay-windows-real.test.ts
         env:
           STUDIO_WINDOWS_SANDBOX_TEST: "1"
 

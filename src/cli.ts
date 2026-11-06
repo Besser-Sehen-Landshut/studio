@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -62,6 +62,7 @@ import {
   type OwnerConfig,
   type OwnerEnv,
   ownerConfigDir,
+  type RelayTarget,
   type RoleConfig,
   type StudioConfig,
   WORKER_LABEL_RE,
@@ -205,6 +206,21 @@ import {
 import { readReaAllow, removeReaRun, updateReaAllow } from './rea-install.js';
 import { type Finding, recoverProject, TICK_LOCK, TICK_LOCK_STALE_MS } from './recover.js';
 import {
+  finishRelayItem,
+  followRelayItem,
+  isRelayItem,
+  type RelayLead,
+  relayDoctorLines,
+  relayRows,
+  relayTransportFor,
+  runRelayCommand,
+  startRelayItem,
+  withdrawRelayItem,
+} from './relay-command.js';
+import { relayReportFile } from './relay-lead.js';
+import type { RelayContext } from './relay-serve.js';
+import type { RelayTransport } from './relay-transport.js';
+import {
   advanceRelease,
   announce,
   approvalLines,
@@ -328,8 +344,15 @@ export interface CliDeps {
   windowsWorker?: typeof windowsWorker;
   /** Heartbeat interval during long git calls of a worker, in milliseconds; tests shorten it. */
   workerBeatMs?: number;
-  /** Test seam: where `studio worker` pushes a crew's branch instead of GitHub. */
+  /** Test seam: where `studio worker` (and the lead for a relay worker) pushes a crew's branch. */
   workerPushUrl?: (repo: string) => string;
+  /** The bytes `studio relay serve` and `relay run` read; the process's stdin when missing. */
+  stdin?: AsyncIterable<Uint8Array | string>;
+  /** Test seam: how the lead reaches a relay worker; ssh when missing. */
+  relayTransport?: (label: string, target: RelayTarget) => RelayTransport;
+  /** Test seams of a relay worker: its runner start and its load. */
+  relaySpawnRunner?: RelayContext['spawnRunner'];
+  relayLoad?: RelayContext['load'];
 }
 
 class UsageError extends Error {}
@@ -439,6 +462,8 @@ interface Tick {
   launched: { item: string; name: string; pid: number }[];
   /** Items offered to workers of their label in this tick (an issue each); absent without any. */
   offered?: { item: string; label: string; offer: number }[];
+  /** Items started on their relay worker in this tick; absent without any. */
+  relayed?: { item: string; label: string }[];
   queued: { item: string; pr: number; repo: string }[];
   merged: { item?: string; pr: number; repo: string }[];
   held: { item: string; reason: string }[];
@@ -547,6 +572,8 @@ interface StatusRow {
     attempt?: number;
     heartbeatAt?: string;
   };
+  /** An item on a relay worker: the job's state as the lead last saw it. */
+  relay?: { label: string; state: string; seenAt: string };
 }
 
 function runningPerRole(board: Board): Record<string, number> {
@@ -661,6 +688,26 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     if ((values.label !== undefined || values.once !== undefined) && cmd !== 'worker') {
       throw new UsageError('--label and --once work with worker only');
     }
+    const relayOnly = [
+      values.home,
+      values.pipe,
+      values.lead,
+      values.pair,
+      values.user,
+      values.port,
+      values.source,
+      values.interface,
+      values.connect,
+      values['keep-passwords'],
+      values['disable-spooler'],
+      values['i-am-local'],
+      values['force-stop'],
+    ];
+    if (relayOnly.some((v) => v !== undefined) && cmd !== 'relay') {
+      throw new UsageError(
+        '--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local and --force-stop work with relay only',
+      );
+    }
     const reserveOnly = [values.number, values.for, values.purpose];
     if (
       !(cmd === 'migration' && rest[0] === 'reserve') &&
@@ -690,6 +737,17 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     };
     /** GitHub as the lead sees it for workers: the machine's own gh login. */
     const leadHub = (): WorkerHub => ports.hub?.() ?? ghHub(ports.gh);
+    /** What the relay steps of the lead need (src/relay-command.ts). */
+    const relayLead = (): RelayLead => ({
+      project,
+      owner,
+      ports,
+      stateRoot: stateRoot(),
+      ownerRoot: ownerRoot(),
+      transport: (label) => relayTransportFor(owner, label, deps.relayTransport),
+      crewToken: (config) => crewTokenValue(config, owner),
+      ...(deps.workerPushUrl === undefined ? {} : { pushUrl: deps.workerPushUrl }),
+    });
     let crewUserRead: { user?: GitHubUser } | undefined;
     /** The account of this machine's crew token, once per process; undefined without a token. */
     const leadCrewUser = async (config: StudioConfig): Promise<GitHubUser | undefined> => {
@@ -1507,7 +1565,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       let report: Report;
       let fileName: string | undefined;
       let fromWorker: { worker: string; workerId: number; sha: string } | undefined;
-      if (item.runsOn !== undefined) {
+      const relayed = item.runsOn !== undefined && isRelayItem(loadOwnerConfig(owner), item);
+      if (relayed) {
+        // A relay worker's report, checked and stored by the lead (src/relay-lead.ts); the lead
+        // pushed its branch and opens the pull request below, as for a local crew.
+        const file = relayReportFile(stateRoot(), item.id);
+        if (!existsSync(file)) throw new Error(`${item.id}: no relay result yet; nothing moved`);
+        report = parseReport(readFileSync(file, 'utf8'), item);
+        fileName = `relay/${item.id}.report.md`;
+      } else if (item.runsOn !== undefined) {
         const got = await workerReport(item);
         report = got.report;
         fromWorker = { worker: got.worker, workerId: got.workerId, sha: got.sha };
@@ -1946,9 +2012,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const pr = report.pr !== undefined ? `${item.repo}#${report.pr}` : reviewDone.target;
         lessonsProposed = proposeLessons(stateRoot(), item.role, item.id, report.lessons, now, {
           report:
-            fromWorker === undefined
-              ? `clones/${item.id}/.studio/reports/${fileName}`
-              : `refs/studio/claims/${item.id}@${fromWorker.sha}`,
+            fromWorker !== undefined
+              ? `refs/studio/claims/${item.id}@${fromWorker.sha}`
+              : relayed
+                ? (fileName as string)
+                : `clones/${item.id}/.studio/reports/${fileName}`,
           ...(pr === undefined ? {} : { pr }),
         });
       } catch (e) {
@@ -2301,9 +2369,43 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         );
         if (onWorkers.length === 0) return;
         const ownerConfig = loadOwnerConfig(owner);
+        // Items on relay workers: their state by SSH, their result checked and pushed by the lead.
+        const caps = [config.limits?.dailyCostUsd, ownerConfig.limits?.dailyCostUsd].filter(
+          (c): c is number => c !== undefined,
+        );
+        for (const item of onWorkers.filter((i) => isRelayItem(ownerConfig, i))) {
+          beat();
+          try {
+            const step = await followRelayItem(relayLead(), config, item, {
+              ...(caps.length === 0 ? {} : { cap: Math.min(...caps) }),
+              ...(ownerConfig.crewLabelLimits.timezone === undefined
+                ? {}
+                : { timezone: ownerConfig.crewLabelLimits.timezone }),
+            });
+            if (step.kind === 'held') out.held.push({ item: item.id, reason: step.reason });
+            else if (step.kind === 'lead') lead(item.id, step.reason);
+            else {
+              if (step.note !== undefined) lead(item.id, step.note);
+              const r = await collect(item.id);
+              if (r.kind === 'moved') {
+                out.collected.push(r.out);
+                if (typeof r.out.review === 'string') fresh.add(r.out.review);
+                for (const e of await finishRelayItem(relayLead(), item)) {
+                  out.errors.push({ item: item.id, error: e });
+                }
+              } else if (r.kind !== 'refused') out.held.push({ item: item.id, reason: r.line });
+            }
+          } catch (e) {
+            if (e instanceof ReportError) {
+              lead(item.id, `${why(e)}; studio stop ${item.id} --requeue starts it once more`);
+            } else out.errors.push({ item: item.id, error: why(e) });
+          }
+        }
+        const onGitHub = onWorkers.filter((i) => !isRelayItem(ownerConfig, i));
+        if (onGitHub.length === 0) return;
         const records = readWorkers(root).items;
         const crewUser = await leadCrewUser(config);
-        for (const item of onWorkers) {
+        for (const item of onGitHub) {
           beat();
           try {
             const record = records[item.id];
@@ -2548,6 +2650,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         for (const o of plan.offer) {
           beat();
           try {
+            if (isRelayItem(loadOwnerConfig(owner), o)) {
+              await boundStateRoot();
+              const r = await startRelayItem(relayLead(), config, o);
+              out.relayed = [...(out.relayed ?? []), r];
+              continue;
+            }
             const r = await offerItem(config, o);
             out.offered = [...(out.offered ?? []), r];
           } catch (e) {
@@ -3001,7 +3109,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           out.workers = onWorkers.map((i) => ({
             item: i.id,
             label: i.runsOn,
-            would: 'follow the claim on GitHub; collect a report handed back',
+            would: isRelayItem(loadOwnerConfig(owner), i)
+              ? 'ask the relay worker over SSH; collect, check and push a result handed back'
+              : 'follow the claim on GitHub; collect a report handed back',
           }));
         }
       });
@@ -3042,9 +3152,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           out.offer = plan.offer.map((o) => ({
             item: o.id,
             label: o.runsOn,
-            ...(acceptedFor(ownerConfig, o.runsOn as string).length === 0
-              ? { held: `no worker is accepted for the label ${o.runsOn}` }
-              : {}),
+            ...(isRelayItem(ownerConfig, o)
+              ? { relay: true }
+              : acceptedFor(ownerConfig, o.runsOn as string).length === 0
+                ? { held: `no worker is accepted for the label ${o.runsOn}` }
+                : {}),
           }));
         }
         for (const d of plan.deferred) out.held.push({ item: d.id, reason: d.reason });
@@ -3358,6 +3470,31 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         } finally {
           await win?.close();
         }
+      }
+
+      case 'relay': {
+        refuseCrew(deps.env);
+        const code = await runRelayCommand({
+          rest,
+          values,
+          owner,
+          ports,
+          env: deps.env,
+          homedir: deps.homedir,
+          stdin: deps.stdin ?? process.stdin,
+          stdout,
+          stderr,
+          ...(deps.workerPlatform === undefined ? {} : { platform: deps.workerPlatform }),
+          ...(deps.relaySpawnRunner === undefined ? {} : { spawnRunner: deps.relaySpawnRunner }),
+          ...(deps.relayLoad === undefined ? {} : { load: deps.relayLoad }),
+          ...(deps.relayTransport === undefined ? {} : { transport: deps.relayTransport }),
+        });
+        if (code === undefined) {
+          throw new UsageError(
+            'relay takes: pair <label> <host>, pair <label> --connect, install [--pair <line>], unpair <label>, setup, serve, run <id>',
+          );
+        }
+        return code;
       }
 
       case 'init': {
@@ -3870,6 +4007,20 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             },
           });
         }
+        for (const [id, r] of relayRows(root)) {
+          const item = board.items.find((i) => i.id === id);
+          rows.push({
+            name: workerCrewName(r.label),
+            item: id,
+            role: item?.role ?? 'unknown',
+            pid: 0,
+            alive: r.state === 'starting' || r.state === 'running',
+            status: item?.status ?? 'unknown',
+            startedAt: r.startedAt,
+            ...componentField(config, item),
+            relay: { label: r.label, state: r.state, seenAt: r.seenAt },
+          });
+        }
         if (json) print(rows);
         else {
           const withComponents = config?.components !== undefined;
@@ -4099,6 +4250,18 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const target = findItem(board, rest[0]);
         const id = target.id;
         const root = stateRoot();
+        // An item on a relay worker: the worker stops its crew and cleans up; the lead forgets it.
+        if (target.runsOn !== undefined && isRelayItem(loadOwnerConfig(owner), target)) {
+          refuseCrew(deps.env);
+          await withdrawRelayItem(relayLead(), target, (l) => stderr(`warning: ${l}\n`));
+          const stoppedAt = ports.clock.now().toISOString();
+          print({
+            item: id,
+            stoppedAt,
+            ...(values.requeue === true ? { status: await requeueItem(id, stoppedAt) } : {}),
+          });
+          return 0;
+        }
         // An item on a worker has no crew here: withdrawing its offer stops the worker's crew.
         if (target.runsOn !== undefined) {
           if (values.requeue !== true) {
@@ -4201,8 +4364,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           throw new Error(`crew for ${id} is still running; run studio stop ${id} first`);
         }
         if (hold === 'unverified') throw new Error(unverifiedRefusal(rec as CrewRecord));
+        const dropping = findItem(loadBoard(project), id);
+        if (dropping.runsOn !== undefined && isRelayItem(loadOwnerConfig(owner), dropping)) {
+          await withdrawRelayItem(relayLead(), dropping, (l) => stderr(`warning: ${l}\n`));
+        }
         // An offer to workers is withdrawn first: the worker stops its crew when it sees it closed.
-        if (findItem(loadBoard(project), id).runsOn !== undefined) {
+        else if (dropping.runsOn !== undefined) {
           let offered = false;
           try {
             offered = readWorkers(stateRoot()).items[id] !== undefined;
@@ -4335,7 +4502,21 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
 
       case 'doctor': {
-        return await runDoctor({ project, owner, env: deps.env, ports, json, stdout });
+        let doctorConfig: StudioConfig | undefined;
+        try {
+          doctorConfig = loadConfig(project);
+        } catch {
+          doctorConfig = undefined;
+        }
+        return await runDoctor({
+          project,
+          owner,
+          env: deps.env,
+          ports,
+          json,
+          stdout,
+          relay: () => relayDoctorLines(owner, doctorConfig, deps.relayTransport),
+        });
       }
 
       case 'migration': {
@@ -5265,6 +5446,19 @@ function parseCli(argv: string[]) {
         purpose: { type: 'string' },
         wait: { type: 'boolean' },
         'follow-head': { type: 'boolean' },
+        home: { type: 'string' },
+        pipe: { type: 'string' },
+        lead: { type: 'string' },
+        pair: { type: 'string' },
+        user: { type: 'string' },
+        port: { type: 'string' },
+        source: { type: 'string' },
+        interface: { type: 'string' },
+        connect: { type: 'boolean' },
+        'keep-passwords': { type: 'boolean' },
+        'i-am-local': { type: 'boolean' },
+        'force-stop': { type: 'boolean' },
+        'disable-spooler': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: true,

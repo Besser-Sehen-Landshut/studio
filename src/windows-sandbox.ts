@@ -418,6 +418,11 @@ export class WindowsGrants {
       run: RunFile;
       /** The SID `/setowner` gives the places back to; read from `whoami` when absent. */
       owner?: string;
+      /**
+       * Ends every process of the crew user some other way than from this process, which must be
+       * elevated for it: a relay worker runs unelevated and asks its broker task (relay-windows.ts).
+       */
+      sweep?: () => Promise<void>;
     },
   ) {}
 
@@ -512,6 +517,7 @@ export class WindowsGrants {
 
   /** Ends what is left of the crew user; refuses when something cannot be ended. */
   private async sweep(): Promise<void> {
+    if (this.o.sweep !== undefined) return this.o.sweep();
     const r = await this.o.run(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-Command', sweepScript(this.o.user)],
@@ -614,7 +620,8 @@ param(
   [Parameter(Mandatory = $true)][string]$Out,
   [Parameter(Mandatory = $true)][string]$Err,
   [Parameter(Mandatory = $true)][string]$User,
-  [int]$WaitSeconds = 60
+  [int]$WaitSeconds = 60,
+  [switch]$Machine
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
@@ -685,7 +692,18 @@ try {
   $security.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($crew, 'ReadWrite', 'Allow')))
   $name = 'studio-' + [Guid]::NewGuid().ToString('N')
   $pipe = New-Object System.IO.Pipes.NamedPipeServerStream($name, 'Out', 1, 'Byte', 'Asynchronous', 0, 65536, $security)
-  $c = Import-Clixml -LiteralPath $Cred
+  if ($Machine) {
+    # A relay worker: the password is sealed for this machine (LocalMachine DPAPI) in a file only
+    # the relay account and SYSTEM may read; an SSH key logon cannot open the account's own DPAPI.
+    Add-Type -AssemblyName System.Security
+    $plain = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($Cred), $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
+    $secure = New-Object Security.SecureString
+    foreach ($ch in [Text.Encoding]::UTF8.GetString($plain).ToCharArray()) { $secure.AppendChar($ch) }
+    [Array]::Clear($plain, 0, $plain.Length)
+    $c = New-Object System.Management.Automation.PSCredential ("$env:COMPUTERNAME\\$User", $secure)
+  } else {
+    $c = Import-Clixml -LiteralPath $Cred
+  }
   $p = Start-Process -FilePath $Node -ArgumentList @(('"' + $HostBin + '"'), $name) -Credential $c -WorkingDirectory $Cwd -WindowStyle Hidden -PassThru -RedirectStandardOutput $Out -RedirectStandardError $Err
   [StudioJob]::Assign($job, $p.Handle)
   Note "host $($p.Id) started in the job"
@@ -726,7 +744,8 @@ exit $code
 
 export interface HostSpec {
   /** seed: only writes `seed` (a file the crew user owns), for the probe's later check. */
-  mode: 'run' | 'probe' | 'seed';
+  /** reset: as the crew user, takes away what a crew left to start in a later job. */
+  mode: 'run' | 'probe' | 'seed' | 'reset';
   seed?: string;
   /** run: what to start, where, its prompt on stdin and the log it appends to. */
   cmd?: string;
@@ -754,6 +773,22 @@ export interface ProbeSpec {
    * there: it must not change the file, its ACL, or add a file.
    */
   former?: { dir: string; file: string };
+  /**
+   * Relay workers: addresses (this machine's own on SMB, the owner's list) the crew user must not
+   * connect to directly; the firewall rule must hold them.
+   */
+  unreachable?: { host: string; port: number }[];
+  /** Denied ports that listen on loopback: the crew user must not connect to any of them. */
+  loopback?: { host: string; port: number }[];
+  /** Hosts whose `\\<host>\IPC$` the crew user opens without credentials (relay-hosts.ts). */
+  smb?: string[];
+  /** Whether the crew user must hold no stored credential (Credential Manager). */
+  noStoredCredentials?: boolean;
+  /**
+   * Whether the crew user's profile must hold nothing that starts a program in a later job: no cmd
+   * AutoRun, no environment values but TEMP and TMP, no Run keys, an empty Startup folder.
+   */
+  persistence?: boolean;
 }
 
 /** What PowerShell itself gets: what Windows programs need, no token, no PowerShell 7 modules. */
@@ -852,6 +887,8 @@ function keeperArgs(o: {
   out: string;
   err: string;
   user: string;
+  /** The credential file is sealed for the machine (a relay worker), not an Import-Clixml file. */
+  machine?: boolean;
 }): string[] {
   return [
     '-NoProfile',
@@ -874,6 +911,7 @@ function keeperArgs(o: {
     o.err,
     '-User',
     o.user,
+    ...(o.machine === true ? ['-Machine'] : []),
   ];
 }
 
@@ -910,6 +948,7 @@ export function windowsClaude(o: {
   run?: RunFile;
   spawn?: SpawnKeeper;
   node?: string;
+  machine?: boolean;
 }): Claude {
   const run = o.run ?? runFile;
   const start = o.spawn ?? spawnKeeper;
@@ -942,6 +981,7 @@ export function windowsClaude(o: {
           out: files.out,
           err: files.err,
           user: o.user,
+          ...(o.machine === true ? { machine: true } : {}),
         }),
         env: powershellEnv(env),
         stdin: `${JSON.stringify(o.grants.paths())}\n${JSON.stringify(spec)}`,
@@ -976,6 +1016,8 @@ export interface ProbeResult {
   check: string;
   ok: boolean;
   detail: string;
+  /** `smb`: the system error code per host, 0 for a session that opened. */
+  codes?: Record<string, number>;
 }
 
 /** The first check that did not hold, as the refusal line; undefined when all held. */
@@ -989,7 +1031,16 @@ export function probeProblem(results: readonly ProbeResult[] | undefined): strin
     : `the Windows crew sandbox does not hold here: ${bad.check}: ${bad.detail}`;
 }
 
-/** The checks a probe must report, every one of them. */
+/** The checks a probe must report, every one of them, and those its extras add. */
+export const probeChecks = (p: ProbeSpec): string[] => [
+  ...PROBE_CHECKS,
+  ...(p.unreachable === undefined ? [] : ['unreachable']),
+  ...(p.loopback === undefined ? [] : ['loopback']),
+  ...(p.smb === undefined ? [] : ['smb']),
+  ...(p.noStoredCredentials === true ? ['credentials'] : []),
+  ...(p.persistence === true ? ['persistence'] : []),
+];
+
 export const PROBE_CHECKS = [
   'user',
   'admin',
@@ -1028,7 +1079,25 @@ export async function probeWindowsSandbox(o: {
   spawn?: SpawnKeeper;
   node?: string;
   timeoutMs?: number;
+  /** A relay worker: the sealed machine credential, and the checks of its probe on top. */
+  machine?: boolean;
+  extra?: Pick<
+    ProbeSpec,
+    'unreachable' | 'loopback' | 'smb' | 'noStoredCredentials' | 'persistence'
+  >;
 }): Promise<string | undefined> {
+  const r = await probeWindowsResults(o);
+  return 'problem' in r ? r.problem : probeProblem(r.results);
+}
+
+/**
+ * The probe as `probeWindowsSandbox` runs it, with every result for a caller that judges more than
+ * pass or fail (a relay worker: SMB codes, loopback listeners). A probe that did not finish, or
+ * left out a check, is a problem.
+ */
+export async function probeWindowsResults(
+  o: Parameters<typeof probeWindowsSandbox>[0],
+): Promise<{ results: ProbeResult[] } | { problem: string }> {
   const start = o.spawn ?? spawnKeeper;
   const name = `probe-${randomBytes(4).toString('hex')}`;
   const files = ownerFiles(o.stateRoot, name);
@@ -1047,6 +1116,7 @@ export async function probeWindowsSandbox(o: {
         out: files.out,
         err: files.err,
         user: o.user,
+        ...(o.machine === true ? { machine: true } : {}),
       }),
       env: powershellEnv(o.env),
       stdin: `${JSON.stringify(revoke)}\n${JSON.stringify(spec)}`,
@@ -1075,7 +1145,7 @@ export async function probeWindowsSandbox(o: {
       await o.grants.grant([{ path: formerDir, rights: 'M' }]);
       const seeded = await host({ mode: 'seed', seed: file, env: o.env });
       await o.grants.revokeAll();
-      if (!seeded) return unfinished;
+      if (!seeded) return { problem: unfinished };
       former = { dir: formerDir, file };
     }
     const spec: HostSpec = {
@@ -1096,10 +1166,16 @@ export async function probeWindowsSandbox(o: {
         direct: { host: 'github.com', port: 443 },
         proxy: { port: o.proxyPort, refused: 'example.invalid' },
         ...(former === undefined ? {} : { former }),
+        ...(o.extra ?? {}),
       },
       env: { ...o.env, STUDIO_PROBE_MARK: mark },
     };
-    if (!(await host(spec))) return unfinished;
+    // A relay start: what an earlier crew left to start in this one goes first, as the crew user
+    // (who can reach no more than a crew could), and the probe then checks that it is gone.
+    if (o.extra?.persistence === true && !(await host({ mode: 'reset', env: o.env }))) {
+      return { problem: unfinished };
+    }
+    if (!(await host(spec))) return { problem: unfinished };
     let results: ProbeResult[] | undefined;
     try {
       const raw = JSON.parse(readFileSync(files.out, 'utf8')) as unknown;
@@ -1108,11 +1184,17 @@ export async function probeWindowsSandbox(o: {
       results = undefined;
     }
     // Every check must be there: a host that left one out proves nothing about it.
-    const missing = PROBE_CHECKS.find((c) => !(results ?? []).some((r) => r.check === c));
+    const missing = probeChecks(spec.probe as ProbeSpec).find(
+      (c) => !(results ?? []).some((r) => r.check === c),
+    );
     if (results !== undefined && missing !== undefined) {
-      return `the Windows crew sandbox could not be shown to hold here: the probe did not check ${missing}`;
+      return {
+        problem: `the Windows crew sandbox could not be shown to hold here: the probe did not check ${missing}`,
+      };
     }
-    return probeProblem(results);
+    if (results === undefined || results.length === 0)
+      return { problem: probeProblem(results) as string };
+    return { results };
   } finally {
     for (const f of Object.values(files)) removeStateEntry(o.stateRoot, f);
     removeStateEntry(o.stateRoot, formerDir);

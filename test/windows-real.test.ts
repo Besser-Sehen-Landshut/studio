@@ -136,6 +136,8 @@ describe.skipIf(!on)('the Windows crew sandbox on Windows', () => {
       proxyPort: proxy.port,
       env: env(),
       timeoutMs: 120_000,
+      // Nothing a crew could leave behind to run in a later job (a fresh crew user has none).
+      extra: { persistence: true },
     });
 
   it('a write grant an earlier setup left on the crew Claude config dir refuses, and the setup takes it off', async () => {

@@ -1105,6 +1105,9 @@ export function writeCrewSettings(
     // A research item opens no pull request and pushes nothing: the guard refuses every push.
     ...(item.type === 'research' ? { noPush: true } : {}),
     ...((dirs.deny?.ports ?? []).length > 0 ? { deniedPorts: [...(dirs.deny?.ports ?? [])] } : {}),
+    // Native Windows: SMB and WebDAV paths pass the crew user's firewall rule; the guard refuses
+    // network paths as a convenience, the probe before every start is the check.
+    ...(dirs.windows === true ? { noNetworkPaths: true } : {}),
     ...(dirs.rea === undefined ? {} : reaGuard(dirs.rea.artifacts, dirs.rea.classes)),
     ...(dirs.timeouts === undefined ? {} : { timeouts: dirs.timeouts }),
     ...(dirs.only === undefined
@@ -1415,6 +1418,71 @@ async function refuseIfRunning(
   return previous;
 }
 
+/**
+ * The Claude credential a crew runs with, by the owner's rules: the credential provider, else the
+ * active one of Studio's own accounts, else the environment's token. Parked labels and labels at
+ * their configured limit are never picked. The token stays with the caller; nothing is written.
+ * A relay start on the lead picks the same way (src/relay-lead.ts).
+ */
+export async function pickCrewCredential(o: {
+  item: WorkItem;
+  owner: LauncherEnv;
+  ownerConfig: ReturnType<typeof loadOwnerConfig>;
+  ports: Ports;
+  parks: ReturnType<typeof activeParks>;
+  usage: ReturnType<typeof labelUsage>;
+}): Promise<{ label: string; token: string | undefined; configDir: string | undefined }> {
+  const { owner, parks, usage } = o;
+  const penv = owner.env ?? process.env;
+  const refuseFull = (): never => {
+    throw new HeldError('credential limit: the label is at its configured parallel or daily limit');
+  };
+  const command = o.ownerConfig.crewCredentialCommand;
+  // Without a provider, accounts kept by Studio come next: only the active one, never another.
+  const account = command === undefined ? builtInAccount(owner, o.ports.clock.now()) : undefined;
+  if (account !== undefined) {
+    const parkedHere = parks[account.label];
+    if (parkedHere) throw new HeldError(allParkedLine(parkedHere.parkedUntil));
+    if (!(usage.remaining(account.label) > 0)) refuseFull();
+    return {
+      label: account.label,
+      token: account.token,
+      configDir: checkProviderConfigDir(crewDirOrRefuse(owner), owner),
+    };
+  }
+  if (command === undefined) {
+    if (parks[DEFAULT_LABEL]) throw new HeldError(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
+    if (!(usage.remaining(DEFAULT_LABEL) > 0)) refuseFull();
+    return {
+      label: DEFAULT_LABEL,
+      token: penv.CLAUDE_CODE_OAUTH_TOKEN || undefined,
+      configDir: undefined,
+    };
+  }
+  const parked = Object.keys(parks);
+  const exclude = [...new Set([...parked, ...usage.full])];
+  const got = await runCredentialProvider(
+    command,
+    { item: o.item.id, role: o.item.role, exclude },
+    o.ports,
+    owner,
+  );
+  if (got === undefined) {
+    if (usage.full.length > 0) throw new HeldError(LABEL_FULL_LINE);
+    if (parked.length > 0) throw new HeldError(allParkedLine(earliestReset(parks)));
+    throw new Error('credential provider: returned nothing while no label is parked');
+  }
+  if (Object.hasOwn(parks, got.label))
+    throw new Error('credential provider: returned a parked label');
+  if (exclude.includes(got.label) || !(usage.remaining(got.label) > 0)) refuseFull();
+  // A token comes with the crew config dir and its plugins, never with the owner's own login.
+  return {
+    label: got.label,
+    token: got.token,
+    configDir: checkProviderConfigDir(got.configDir ?? crewDirOrRefuse(owner), owner),
+  };
+}
+
 let launchChain: Promise<void> = Promise.resolve();
 
 async function launchCrewLocked(
@@ -1531,46 +1599,10 @@ async function launchCrewLocked(
   const pinned = await readPinnedRules(projectDir, ports, worker?.sha);
   // The credential, before the first side effect. Provider or not, the value stays in this function
   // and reaches only the environment of the spawned process.
-  let label = DEFAULT_LABEL;
-  let oauthToken = penv.CLAUDE_CODE_OAUTH_TOKEN || undefined;
-  let providerConfigDir: string | undefined;
-  const command = ownerConfig.crewCredentialCommand;
-  // Without a provider, accounts kept by Studio come next: only the active one, never another.
-  const account = command === undefined ? builtInAccount(owner, ports.clock.now()) : undefined;
-  if (account !== undefined) {
-    label = account.label;
-    oauthToken = account.token;
-    providerConfigDir = checkProviderConfigDir(crewDirOrRefuse(owner), owner);
-    const parkedHere = parks[label];
-    if (parkedHere) throw new HeldError(allParkedLine(parkedHere.parkedUntil));
-    if (!(usage.remaining(label) > 0)) refuseFull();
-  } else if (command === undefined) {
-    if (parks[DEFAULT_LABEL]) {
-      throw new HeldError(allParkedLine(parks[DEFAULT_LABEL].parkedUntil));
-    }
-    if (!(usage.remaining(DEFAULT_LABEL) > 0)) refuseFull();
-  } else {
-    const parked = Object.keys(parks);
-    const exclude = [...new Set([...parked, ...usage.full])];
-    const got = await runCredentialProvider(
-      command,
-      { item: item.id, role: item.role, exclude },
-      ports,
-      owner,
-    );
-    if (got === undefined) {
-      if (usage.full.length > 0) throw new HeldError(LABEL_FULL_LINE);
-      if (parked.length > 0) throw new HeldError(allParkedLine(earliestReset(parks)));
-      throw new Error('credential provider: returned nothing while no label is parked');
-    }
-    if (Object.hasOwn(parks, got.label))
-      throw new Error('credential provider: returned a parked label');
-    if (exclude.includes(got.label) || !(usage.remaining(got.label) > 0)) refuseFull();
-    label = got.label;
-    oauthToken = got.token;
-    // A token comes with the crew config dir and its plugins, never with the owner's own login.
-    providerConfigDir = checkProviderConfigDir(got.configDir ?? crewDirOrRefuse(owner), owner);
-  }
+  const picked = await pickCrewCredential({ item, owner, ownerConfig, ports, parks, usage });
+  const label = picked.label;
+  const oauthToken = picked.token;
+  const providerConfigDir = picked.configDir;
   // The Claude login and plugins live in the config dir; it holds no gh or git credentials.
   const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join(home, '.claude'));
   const billing = apiBillingProblem(

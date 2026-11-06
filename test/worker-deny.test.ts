@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { parseConfig, wildcardOverIp } from '../src/config.js';
-import { evaluateGuard } from '../src/guard.js';
+import { evaluateGuard, namesNetworkPath } from '../src/guard.js';
 import {
   automountRoot,
   detectPlatform,
@@ -16,6 +16,9 @@ import {
   sandboxProblem,
   type WorkerPlatform,
 } from '../src/worker-deny.js';
+
+/** A dotted IPv4 address from its parts: the repository refuses dotted literals. */
+const ip = (...p: number[]): string => p.join('.');
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-deny-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -201,7 +204,13 @@ describe('mergeDeny', () => {
   it('is the union: the repository can only add to the machine list, and the other way round', () => {
     expect(
       mergeDeny({ paths: ['/a'], ports: [5432] }, undefined, { paths: ['/b', '/a'], ports: [22] }),
-    ).toEqual({ paths: ['/a', '/b'], ports: [5432, 22] });
+    ).toEqual({ paths: ['/a', '/b'], ports: [5432, 22], hosts: [] });
+    expect(
+      mergeDeny(
+        { paths: [], ports: [], hosts: ['NAS'] },
+        { paths: [], ports: [], hosts: ['nas', 'db'] },
+      ),
+    ).toEqual({ paths: [], ports: [], hosts: ['nas', 'db'] });
   });
 });
 
@@ -239,6 +248,50 @@ describe('denied ports in the guard', () => {
         { ...ctx, deniedPorts: [0] },
       ).decision,
     ).toBe('deny');
+  });
+});
+
+describe('network paths on a native Windows worker', () => {
+  it('finds UNC, WebDAV and the long forms at the start of a word, never inside a URL', () => {
+    for (const c of [
+      'dir \\\\nas\\share',
+      `type "\\\\${ip(192, 0, 2, 5)}\\c$\\x"`,
+      'copy x \\\\\\\\nas\\\\share',
+      'ls //nas/share',
+      'dir \\\\nas@80\\DavWWWRoot',
+      'type \\\\?\\UNC\\nas\\share\\x',
+      'type \\\\.\\UNC\\nas\\share',
+    ]) {
+      expect(namesNetworkPath(c), c).toBe(true);
+    }
+    for (const c of ['curl https://example.com/x', 'echo a\\b', 'ls ./src', 'git log']) {
+      expect(namesNetworkPath(c), c).toBe(false);
+    }
+  });
+  it('the guard refuses them in commands and tool paths when the launch says so', () => {
+    const wt = join(root, 'wt-unc');
+    mkdirSync(wt, { recursive: true });
+    const ctx = {
+      worktree: wt,
+      ownerOnly: [],
+      deployCommands: [],
+      secretGlobs: [],
+      noNetworkPaths: true,
+    };
+    expect(
+      evaluateGuard({ toolName: 'Bash', toolInput: { command: 'dir \\\\nas\\share' } }, ctx)
+        .decision,
+    ).toBe('deny');
+    expect(
+      evaluateGuard({ toolName: 'Read', toolInput: { file_path: '\\\\nas\\share\\x.txt' } }, ctx)
+        .decision,
+    ).toBe('deny');
+    expect(
+      evaluateGuard(
+        { toolName: 'Bash', toolInput: { command: 'dir \\\\nas\\share' } },
+        { ...ctx, noNetworkPaths: undefined },
+      ).decision,
+    ).toBe('allow');
   });
 });
 

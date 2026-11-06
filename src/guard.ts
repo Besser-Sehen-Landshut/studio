@@ -56,6 +56,12 @@ export interface GuardContext {
    */
   deniedPorts?: number[];
   /**
+   * Native Windows crews: a network path (`\\host\share`, `//host/share`, `\\?\UNC\...`,
+   * `\\host@80\...`) in a tool path or a command is refused. A convenience: SMB and WebDAV pass the
+   * crew user's firewall rule, and the probe before every start is what checks them.
+   */
+  noNetworkPaths?: boolean;
+  /**
    * A researcher with REA (src/rea.ts): the MCP tools it may call (exact names; every other
    * `mcp__*` tool is denied), the one analysis directory those tools may reach (and nothing else,
    * the clone included; the crew's own shell and file tools never reach it), and shell commands it
@@ -111,6 +117,16 @@ export function namedDeniedPort(cmd: string, ports: readonly number[]): number |
     if (re.test(cmd)) return port;
   }
   return undefined;
+}
+
+/**
+ * A Windows network path in a command or a tool path: `\\host\...`, `//host/...` at the start of
+ * a word (never inside a URL), and the long forms `\\?\UNC\` and `\\.\UNC\`.
+ */
+export function namesNetworkPath(text: string): boolean {
+  // The long forms, also with the backslashes doubled as a shell string holds them.
+  if (/\\{2,4}[?.]\\{1,2}UNC\\/i.test(text)) return true;
+  return /(?:^|[\s'"=(<>|;&,])(?:\\{2,4}|\/\/)[A-Za-z0-9_.-]+(?:@\d+)?[\\/]/.test(text);
 }
 
 /** Caps for glob expansion and directory walks; exceeding one denies (never truncates). */
@@ -2067,6 +2083,7 @@ function check(input: GuardInput, ctx: GuardContext): void {
       )) ||
     (c.artifacts !== undefined &&
       (typeof c.artifacts !== 'string' || !isAbsolute(c.artifacts) || c.artifacts === '/')) ||
+    (c.noNetworkPaths !== undefined && typeof c.noNetworkPaths !== 'boolean') ||
     (c.deniedPorts !== undefined &&
       !(
         Array.isArray(c.deniedPorts) &&
@@ -2139,12 +2156,23 @@ function check(input: GuardInput, ctx: GuardContext): void {
     if (typeof command !== 'string') deny(`${toolName} call without a command`);
     const port = namedDeniedPort(command as string, ctx.deniedPorts ?? []);
     if (port !== undefined) deny(`port ${port} is denied on this worker machine`);
+    if (ctx.noNetworkPaths === true && namesNetworkPath(command as string)) {
+      deny('network paths (\\\\host\\share) are not for crews on this worker machine');
+    }
     refuseArtifactsInBash(env, command as string, cwd);
     checkBash(env, command as string, cwd, 0);
     return;
   }
   // Only Bash has this field; on another tool it is not what the checks below look at.
   if (toolInput.command !== undefined) deny(`${toolName} call with a command`);
+  if (ctx.noNetworkPaths === true) {
+    for (const key of ['file_path', 'notebook_path', 'path']) {
+      const v = toolInput[key];
+      if (typeof v === 'string' && namesNetworkPath(` ${v}`)) {
+        deny('network paths (\\\\host\\share) are not for crews on this worker machine');
+      }
+    }
+  }
 
   const writeKey = WRITE_TOOLS[toolName];
   if (writeKey !== undefined) {

@@ -736,6 +736,7 @@ describe('writeCrewSettings', () => {
           'rea',
           'reference',
           'contract-changes',
+          'relay',
         ].map((d) => join(state, d)),
         ...[
           'crew.json',
@@ -778,6 +779,8 @@ describe('writeCrewSettings', () => {
           'workers.lock',
           'worker.json',
           'worker.lock',
+          'relay.json',
+          'relay.lock',
         ].map((f) => join(state, f)),
         join(dirnameOf(state), 'owner'),
       ],

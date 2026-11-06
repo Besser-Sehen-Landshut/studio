@@ -271,7 +271,11 @@ const CONTENT_PATH = /^\.studio\/(roles|solutions)\/[A-Za-z0-9._-]{1,100}\.md$/;
  * the state root: the role text and the lessons of a brief come from `origin/main`, never from the
  * working tree. Only plain files with plain names; anything else is left out.
  */
-async function pinnedContent(c: WorkerContext, stateRoot: string, sha: string): Promise<string> {
+export async function pinnedContent(
+  c: Pick<WorkerContext, 'project' | 'ports'>,
+  stateRoot: string,
+  sha: string,
+): Promise<string> {
   const base = join(stateRoot, 'pinned');
   const dir = join(base, sha);
   if (existsSync(join(dir, '.complete'))) return dir;
