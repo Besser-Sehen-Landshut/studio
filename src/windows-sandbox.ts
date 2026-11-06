@@ -247,18 +247,18 @@ export function revokeArgs(user: string, path: string): string[] {
  * the account Studio runs as. The inheritable OWNER RIGHTS entry of the grant stays on the
  * directory, so even an owner keeps no rights of its own there.
  */
-export function revokeSteps(
-  user: string,
-  ownerSid: string,
-  path: string,
-  dir: boolean,
-): string[][] {
+export function rootRevokeSteps(user: string, ownerSid: string, path: string): string[][] {
+  if (!OWNER_SID_RE.test(ownerSid)) throw new Error(`not a SID: ${ownerSid}`);
+  return [revokeArgs(user, path), [path, '/setowner', ownerSid, '/C', '/L', '/Q']];
+}
+
+/** Below a directory, once its links are gone: ACLs back to inherited, owner back to Studio's. */
+export function deepRevokeSteps(ownerSid: string, path: string): string[][] {
   if (!OWNER_SID_RE.test(ownerSid)) throw new Error(`not a SID: ${ownerSid}`);
   // `/L` works on a link itself, never on what it points to; `removeLinks` has removed them anyway.
   return [
-    revokeArgs(user, path),
-    ...(dir ? [[join(path, '*'), '/reset', '/T', '/C', '/L', '/Q']] : []),
-    [path, '/setowner', ownerSid, ...(dir ? ['/T'] : []), '/C', '/L', '/Q'],
+    [join(path, '*'), '/reset', '/T', '/C', '/L', '/Q'],
+    [path, '/setowner', ownerSid, '/T', '/C', '/L', '/Q'],
   ];
 }
 
@@ -443,22 +443,41 @@ export class WindowsGrants {
     }
   }
 
-  private async revokeLocked(): Promise<void> {
+  /**
+   * Takes every recorded place back, in one fixed order per place: the grant on the root goes
+   * first and the root's owner becomes Studio's account, whatever happens next, so the crew user
+   * loses its access at once; then the links below are removed; only when that worked, the ACLs
+   * below go back to inherited and their owner to Studio's account. With `swept` false (processes
+   * of the crew user may still run) only the first two steps run. A place where any step failed is
+   * kept in the record and reported.
+   */
+  private async revokeLocked(swept = true): Promise<void> {
     const rec = readGrantRecord(this.o.ownerRoot, this.o.user);
     const failed: string[] = [];
     if (rec.paths.length > 0) this.sid ??= this.o.owner ?? (await ownerSid(this.o.run));
+    const sid = this.sid as string;
+    const icacls = async (args: string[]) => (await this.o.run('icacls', args)).code === 0;
     for (const p of rec.paths) {
       if (!existsSync(p)) continue;
       const dir = isDir(p);
+      const [remove, rootOwner] = rootRevokeSteps(this.o.user, sid, p) as [string[], string[]];
+      if (!(await icacls(remove)) || !(await icacls(rootOwner))) {
+        failed.push(p);
+        continue;
+      }
+      if (!dir) continue;
+      if (!swept) {
+        failed.push(p);
+        continue;
+      }
       try {
-        if (dir) removeLinks(p);
+        removeLinks(p);
       } catch {
         failed.push(p);
         continue;
       }
-      for (const args of revokeSteps(this.o.user, this.sid as string, p, dir)) {
-        const r = await this.o.run('icacls', args);
-        if (r.code !== 0) {
+      for (const args of deepRevokeSteps(sid, p)) {
+        if (!(await icacls(args))) {
           failed.push(p);
           break;
         }
@@ -470,9 +489,21 @@ export class WindowsGrants {
     }
   }
 
-  /** Takes every recorded grant off; a failure is thrown after all were tried. */
+  /**
+   * Takes every recorded grant off, after the sweep: no crew process may plant a link behind the
+   * walk. When the sweep refuses, the grants on the roots still go, and the sweep's refusal is
+   * thrown.
+   */
   revokeAll(): Promise<void> {
-    return this.locked(() => this.revokeLocked());
+    return this.locked(async () => {
+      try {
+        await this.sweep();
+      } catch (e) {
+        await this.revokeLocked(false).catch(() => {});
+        throw e;
+      }
+      await this.revokeLocked();
+    });
   }
 
   /** Ends what is left of the crew user; refuses when something cannot be ended. */

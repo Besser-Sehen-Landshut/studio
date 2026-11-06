@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -16,6 +17,7 @@ import { ipv4, LOOPBACK } from '../src/egress-proxy.js';
 import { HeldError } from '../src/held.js';
 import {
   CREW_HOST_BIN,
+  deepRevokeSteps,
   findClaude,
   grantArgs,
   type HostSpec,
@@ -34,7 +36,7 @@ import {
   type RunFile,
   removeLinks,
   revokeArgs,
-  revokeSteps,
+  rootRevokeSteps,
   runConfigDir,
   type SpawnKeeper,
   setupReadPaths,
@@ -223,8 +225,10 @@ describe('grants', () => {
     f.calls.length = 0;
     await g.grant([{ path: dir, rights: 'R' }]);
     // The grant goes, ACLs below go back to inherited, and the owner is Studio's account again.
-    expect(f.icacls().slice(0, 3)).toEqual([
+    // One fixed order: the grant on the root, its owner, then (links gone) everything below.
+    expect(f.icacls().slice(0, 4)).toEqual([
       ['icacls', dir, '/remove:g', 'crew', '/Q'],
+      ['icacls', dir, '/setowner', '*S-1-5-21-1-2-3-1001', '/C', '/L', '/Q'],
       ['icacls', join(dir, '*'), '/reset', '/T', '/C', '/L', '/Q'],
       ['icacls', dir, '/setowner', '*S-1-5-21-1-2-3-1001', '/T', '/C', '/L', '/Q'],
     ]);
@@ -289,12 +293,99 @@ describe('grants', () => {
   it('a file taken back gets its owner reset; a bad account name refuses', () => {
     const file = join(root, `rf${n++}`);
     writeFileSync(file, '');
-    expect(revokeSteps('crew', '*S-1-5-21-1-2-3-1001', file, false)).toEqual([
+    expect(rootRevokeSteps('crew', '*S-1-5-21-1-2-3-1001', file)).toEqual([
       [file, '/remove:g', 'crew', '/Q'],
       [file, '/setowner', '*S-1-5-21-1-2-3-1001', '/C', '/L', '/Q'],
     ]);
     // Only a SID: a name could lose its backslash on the way.
-    expect(() => revokeSteps('crew', 'HOST\\owner', file, false)).toThrow(/not a SID/);
+    expect(() => rootRevokeSteps('crew', 'HOST\\owner', file)).toThrow(/not a SID/);
+    expect(() => deepRevokeSteps('HOST\\owner', file)).toThrow(/not a SID/);
+  });
+
+  describe('taking back when a step fails', () => {
+    const setupPlace = async (run: RunFile) => {
+      const base = join(root, `fail${n++}`);
+      const ownerRoot = join(base, 'owner');
+      const dir = join(base, 'clone');
+      mkdirSync(dir, { recursive: true });
+      const g = new WindowsGrants({ ownerRoot, user: 'crew', run, owner: '*S-1-5-21-1-2-3-1001' });
+      await g.grant([{ path: dir, rights: 'M' }]);
+      return { g, dir };
+    };
+    const recording = (o: { sweepLeft?: number[]; failArg?: string } = {}) => {
+      const calls: string[][] = [];
+      const run: RunFile = async (file, args) => {
+        calls.push([file, ...args]);
+        if (file === 'powershell.exe') {
+          return {
+            code: 0,
+            stdout: JSON.stringify({ found: 0, left: o.sweepLeft ?? [] }),
+            stderr: '',
+          };
+        }
+        return {
+          code: o.failArg !== undefined && args.includes(o.failArg) ? 5 : 0,
+          stdout: '',
+          stderr: '',
+        };
+      };
+      return {
+        run,
+        calls,
+        icacls: () => calls.filter((c) => c[0] === 'icacls').map((c) => c.slice(1)),
+      };
+    };
+
+    // A folder that cannot be listed stands in for a walk that fails; chmod does not do that on Windows.
+    it.skipIf(process.platform === 'win32')(
+      'a walk that fails still takes the grant off the root, skips the recursive steps, and reports it',
+      async () => {
+        const r = recording();
+        const { g, dir } = await setupPlace(r.run);
+        const locked = join(dir, 'locked');
+        mkdirSync(locked);
+        chmodSync(locked, 0o000);
+        r.calls.length = 0;
+        try {
+          await expect(g.revokeAll()).rejects.toThrow(/cannot take the crew user's grants off/);
+        } finally {
+          chmodSync(locked, 0o700);
+        }
+        expect(r.icacls()).toEqual([
+          [dir, '/remove:g', 'crew', '/Q'],
+          [dir, '/setowner', '*S-1-5-21-1-2-3-1001', '/C', '/L', '/Q'],
+        ]);
+        expect(g.paths()).toEqual([dir]);
+      },
+    );
+
+    it('the sweep comes first; when it refuses, only the roots are taken back', async () => {
+      const r = recording();
+      const { g, dir } = await setupPlace(r.run);
+      const failing = recording({ sweepLeft: [77] });
+      const g2 = new WindowsGrants({
+        ownerRoot: join(dir, '..', 'owner'),
+        user: 'crew',
+        run: failing.run,
+        owner: '*S-1-5-21-1-2-3-1001',
+      });
+      await expect(g2.revokeAll()).rejects.toThrow(/still running \(77\)/);
+      expect(failing.calls[0]?.[0]).toBe('powershell.exe');
+      expect(failing.icacls()).toEqual([
+        [dir, '/remove:g', 'crew', '/Q'],
+        [dir, '/setowner', '*S-1-5-21-1-2-3-1001', '/C', '/L', '/Q'],
+      ]);
+      expect(g.paths()).toEqual([dir]);
+    });
+
+    it('a grant that cannot be removed is kept in the record, and nothing else runs on it', async () => {
+      const r = recording({ failArg: '/remove:g' });
+      const { g, dir } = await setupPlace(r.run);
+      r.calls.length = 0;
+      await expect(g.revokeAll()).rejects.toThrow(/cannot take the crew user's grants off/);
+      expect(r.icacls()).toEqual([[dir, '/remove:g', 'crew', '/Q']]);
+      expect(g.paths()).toEqual([dir]);
+    });
   });
 
   it('reads the owner SID from whoami, and refuses without one', async () => {
