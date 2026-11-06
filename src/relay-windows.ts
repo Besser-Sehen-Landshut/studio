@@ -1,19 +1,30 @@
 // A relay worker on native Windows (src/relay-serve.ts). The lead logs in over SSH as a dedicated
 // standard account whose key is forced to `studio relay serve`: no administrator over SSH. What the
-// crew sandbox needs elevated, and only that, runs in a broker task an administrator created once:
-// it ends every process of the crew user and writes what it found to a file only the relay account
+// crew sandbox needs elevated, and only that, runs in broker tasks an administrator created once:
+// they end every process of the crew users, delete them with their profiles, and make the fresh
+// crew user of a job (src/crew-accounts.ts), and write what they did to files only the relay account
 // and administrators read. Everything else of the Windows crew sandbox (src/windows-sandbox.ts) is
-// reused unchanged: the crew user, the keeper and its job object, the loopback egress proxy, the
-// grants per run and the probe before every start.
+// reused unchanged: the keeper and its job object, the loopback egress proxy, the grants per run
+// and the probe before every start.
 //
 // An SSH key logon has no password, so Windows cannot open the account's own DPAPI keys: the crew
 // user's password is sealed for the machine (LocalMachine DPAPI) in a file whose ACL lets only the
 // relay account, SYSTEM and administrators read it. Any process of those accounts on this machine
 // can open it; the crew user cannot read the file.
 import { posix, win32 } from 'node:path';
+import {
+  CREW_ACCOUNT_BODY,
+  CREW_DESCRIPTION,
+  type CrewAccountOp,
+  crewAccountFunctions,
+  crewAccountScript,
+  crewGroupSetup,
+  GIT_MIN_CHECK,
+  RELAY_SID_SLOT,
+} from './crew-accounts.js';
 import { ipv4 } from './egress-proxy.js';
 import type { Neighbor } from './relay-hosts.js';
-import { OUTSIDE, powershellEnv, psQuote, type RunFile } from './windows-sandbox.js';
+import { powershellEnv, psQuote, type RunFile } from './windows-sandbox.js';
 
 /** Every path here is a Windows path, also where tests run elsewhere (with POSIX folders). */
 const join = (...parts: string[]): string =>
@@ -35,10 +46,23 @@ export const relayHomeDefault = (env: Record<string, string | undefined>): strin
 export const relayMachineDefault = (env: Record<string, string | undefined>): string =>
   join(env.ProgramFiles ?? env.PROGRAMFILES ?? 'C:\\Program Files', 'Studio', 'relay');
 
-/** The crew user's password, sealed for this machine. */
+/** The password of the current crew user, sealed for this machine. */
 export const machineCredFile = (machine: string): string => join(machine, 'crew-credential.bin');
-/** The file the broker answers in; its folder only SYSTEM and administrators write. */
-export const brokerResultFile = (machine: string): string => join(machine, 'broker', 'answer.json');
+/** The files the broker tasks answer in; their folder only SYSTEM and administrators write. */
+export const brokerResultFiles = (machine: string): Record<CrewAccountOp, string> => ({
+  sweep: join(machine, 'broker', 'answer.json'),
+  retire: join(machine, 'broker', 'retire.json'),
+  fresh: join(machine, 'broker', 'fresh.json'),
+});
+/** The functions of the crew users the broker tasks load: admin-only, written by the setup. */
+export const brokerBodyFile = (machine: string): string =>
+  join(machine, 'broker', 'crew-accounts.ps1');
+/** The broker task of each operation: the sweep keeps the task name of earlier versions. */
+export const brokerTasks = (task: string): Record<CrewAccountOp, string> => ({
+  sweep: task,
+  retire: `${task} retire`,
+  fresh: `${task} fresh`,
+});
 /** The keys the leads log in with, each forced to `studio relay serve` (sshd `AuthorizedKeysFile`). */
 export const authorizedKeysFile = (machine: string): string => join(machine, 'authorized_keys');
 /** The Node.js and the Studio the forced command runs: admin-only copies. */
@@ -129,85 +153,35 @@ export function leadFromAuthInfo(
 }
 
 /**
- * The broker: ends every process of the crew user (by SID, through CIM) and writes what it found,
- * with the time, to its answer file. It is the task's action itself (no script file anyone could
- * change) and takes no argument: the crew user and the answer file are written into it by the
- * setup. It touches nothing of the crew user's files or registry: what a crew could leave there to
- * start in a later job is taken away by the crew user itself (studio-crew-reset.mjs), which can
- * reach no more than the crew could anyway.
+ * A broker task's script: one operation on the crew users (crew-accounts.ts) as SYSTEM, answering
+ * in its file. It is the task's action itself (no script file anyone could change) and takes no
+ * argument; a fresh crew user's password is sealed for the relay account, whose SID the setup puts
+ * in (`RELAY_SID_SLOT`).
  */
-export const brokerScript = (o: { crewUser: string; result: string }): string =>
-  [
-    "$ErrorActionPreference = 'Stop'",
-    `$result = ${psQuote(o.result)}`,
-    'try {',
-    `  $sid = (New-Object Security.Principal.NTAccount($env:COMPUTERNAME, ${psQuote(o.crewUser)})).Translate([Security.Principal.SecurityIdentifier]).Value`,
-    '  function Crew { @(Get-CimInstance Win32_Process | Where-Object { try { (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $sid } catch { $false } }) }',
-    '  $found = Crew',
-    '  foreach ($p in $found) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }',
-    '  if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }',
-    '  $left = @(Crew | ForEach-Object { [int]$_.ProcessId })',
-    "  $out = @{ at = (Get-Date).ToUniversalTime().ToString('o'); found = $found.Count; left = $left }",
-    '} catch {',
-    "  $out = @{ at = (Get-Date).ToUniversalTime().ToString('o'); error = $_.Exception.Message }",
-    '}',
-    'Set-Content -LiteralPath $result -Value (ConvertTo-Json -Compress $out) -Encoding UTF8',
-  ].join('\r\n');
-
-/** The broker as a task action: PowerShell with the script encoded, so no file holds it. */
-export const brokerArguments = (o: { crewUser: string; result: string }): string =>
-  `-NoProfile -NonInteractive -EncodedCommand ${Buffer.from(brokerScript(o), 'utf16le').toString('base64')}`;
+export const brokerScript = (o: { op: CrewAccountOp; prefix: string; machine: string }): string =>
+  crewAccountScript({
+    op: o.op,
+    prefix: o.prefix,
+    result: brokerResultFiles(o.machine)[o.op],
+    // The admin-only copies of the tree deleter and of the functions: nothing the relay account
+    // could change.
+    treeSource: join(machineStudio(o.machine), 'bin', 'studio-tree.cs'),
+    bodyFile: brokerBodyFile(o.machine),
+    ...(o.op === 'fresh' ? { credFile: machineCredFile(o.machine), reader: '$relaySid' } : {}),
+  })
+    // Short, for the task's action: no comment line, no indentation (no here-string in it).
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l !== '' && !l.startsWith('#'))
+    .join('\r\n');
 
 /**
- * Ends every process of the crew user through the broker task and reads its answer: one written
- * after this call started, with nothing left. Anything else refuses (fail closed).
+ * PowerShell of the setup that makes a broker task's arguments: the script, its relay SID put in,
+ * encoded for `-EncodedCommand`, so no file holds it. Sets `$brokerArgs`.
  */
-export async function brokerSweep(o: {
-  run: RunFile;
-  task: string;
-  result: string;
-  readFile: (file: string) => string | undefined;
-  now: () => Date;
-  sleep: (ms: number) => Promise<void>;
-  waitMs?: number;
-}): Promise<void> {
-  const started = o.now().getTime();
-  const r = await o.run('schtasks.exe', ['/Run', '/TN', o.task]);
-  if (r.code !== 0) {
-    throw new Error(
-      `cannot start the broker task ${o.task} (schtasks exit ${r.code}); run the script of studio relay setup again, elevated`,
-    );
-  }
-  const until = started + (o.waitMs ?? 60_000);
-  for (;;) {
-    const text = o.readFile(o.result)?.replace(/^\uFEFF/, '');
-    let answer: { at?: unknown; left?: unknown; error?: unknown } | undefined;
-    try {
-      answer = text === undefined ? undefined : (JSON.parse(text) as typeof answer);
-    } catch {
-      answer = undefined;
-    }
-    const at = typeof answer?.at === 'string' ? Date.parse(answer.at) : Number.NaN;
-    // Its own clock and this one are the same machine's; a second of slack for rounding.
-    if (answer !== undefined && at >= started - 1000) {
-      if (typeof answer.error === 'string') {
-        throw new Error(
-          `the broker could not end the crew user's processes: ${answer.error.slice(0, 200)}`,
-        );
-      }
-      const left = Array.isArray(answer.left) ? answer.left : undefined;
-      if (left === undefined) throw new Error('the broker answered in an unknown shape');
-      if (left.length > 0) {
-        throw new Error(
-          `processes of the crew user are still running (${left.join(', ')}) and the broker cannot end them`,
-        );
-      }
-      return;
-    }
-    if (o.now().getTime() >= until) throw new Error(`the broker task ${o.task} did not answer`);
-    await o.sleep(500);
-  }
-}
+export const brokerArgumentsSnippet = (script: string): string =>
+  `$brokerScript = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(script, 'utf8').toString('base64')}')).Replace('${RELAY_SID_SLOT}', $relaySid)
+$brokerArgs = '-NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($brokerScript))`;
 
 /** A PowerShell run of the relay account with a JSON answer; undefined when it failed. */
 async function psJson(run: RunFile, script: string): Promise<unknown> {
@@ -319,7 +293,11 @@ $tmp = Join-Path (Split-Path -Parent $target) ('.' + [Guid]::NewGuid().ToString(
 icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /L /Q | Out-Null
 if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $target" }
 icacls $tmp /setowner '*S-1-5-32-544' /L /Q | Out-Null
-if (Test-Path -LiteralPath $target) { [IO.File]::Replace($tmp, $target, $null) } else { [IO.File]::Move($tmp, $target) }`;
+if (Test-Path -LiteralPath $target) { [IO.File]::Replace($tmp, $target, [NullString]::Value) } else { [IO.File]::Move($tmp, $target) }
+# Replace keeps the DACL of the file it replaced: the intended one goes on again.
+icacls $target /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /L /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "cannot set the ACL of $target" }
+icacls $target /setowner '*S-1-5-32-544' /L /Q | Out-Null`;
 }
 
 /**
@@ -414,17 +392,18 @@ function NoLinksIn([string]$path) {
  * The one-time setup of a Windows relay worker, for an administrator to run in an elevated
  * PowerShell. It refuses a path of Studio's that holds a reparse point or a folder another account
  * owns; makes the admin-only tree (copies of Node.js and Studio the forced command runs, the sealed
- * crew credential, the broker's answer folder, the authorized keys) and the relay home (only its
- * `state` and `config` folders take the relay account's writes, and it can rename or remove
- * neither); creates the relay account (standard user, never an administrator; SSH only), the crew
- * user, the crew user's outbound firewall rule and denied logons, the broker task (SYSTEM, its
- * script in the action, only the relay account may start it), read grants for the toolchains, and
- * stops and disables WebClient. With a lead key, it writes the authorized keys. It prints the sshd
- * block; sshd_config itself is not changed here.
+ * password of the current crew user, the brokers' answer folder, the authorized keys) and the relay
+ * home (only its `state` folder takes the relay account's writes, and it can rename or remove it
+ * not); creates the relay account (standard user, never an administrator; SSH only), Studio's
+ * group of crew users with its outbound firewall rule, denied logons and read grants
+ * (crew-accounts.ts), the broker tasks (SYSTEM, each script in its action, only the relay account
+ * may start them), and stops and disables WebClient. It prints the sshd block; sshd_config itself
+ * is not changed here.
  */
 export function relaySetupScript(o: {
   relayUser: string;
-  crewUser: string;
+  /** The name prefix of the crew users (one per job). */
+  crewPrefix: string;
   home: string;
   machine: string;
   task: string;
@@ -437,8 +416,8 @@ export function relaySetupScript(o: {
    */
   install?: RelayInstall;
 }): string {
-  for (const u of [o.relayUser, o.crewUser]) {
-    if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(u)) throw new Error(`not a local user name: ${u}`);
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o.relayUser)) {
+    throw new Error(`not a local user name: ${o.relayUser}`);
   }
   if (!/^[A-Za-z0-9 _-]{1,64}$/.test(o.task)) throw new Error(`not a task name: ${o.task}`);
   const list = (ps: readonly string[]) => `@(${ps.map(psQuote).join(', ')})`;
@@ -450,20 +429,18 @@ export function relaySetupScript(o: {
 if ($LASTEXITCODE -ne 0) { throw 'the plugin setup failed' }
 $claude = ${psQuote(join(machineConfig(o.machine), 'studio', 'claude'))}
 foreach ($d in @((Join-Path $claude 'skills'), (Join-Path $claude 'plugins'))) {
-  if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($crewSid):(OI)(CI)RX" /L /Q | Out-Null }
+  if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
 }`;
-  return `${o.install === undefined ? '' : installHead(o.install, o.relayUser, o.crewUser)}#Requires -RunAsAdministrator
+  return `${o.install === undefined ? '' : installHead(o.install, o.relayUser, o.crewPrefix)}#Requires -RunAsAdministrator
 # Studio: the setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
 # Nothing here leaves this machine.
 $ErrorActionPreference = 'Stop'
 $relay = ${psQuote(o.relayUser)}
-$crew = ${psQuote(o.crewUser)}
 $home_ = ${psQuote(o.home)}
 $machine = ${psQuote(o.machine)}
 $task = ${psQuote(o.task)}
-${FOLDER_FUNCTIONS}function NewSecret { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b) + 'aA1!' }
-function EnsureUser([string]$name, [string]$what, [string]$plain) {
+${GIT_MIN_CHECK}${FOLDER_FUNCTIONS}${crewAccountFunctions(o.crewPrefix, join(o.source.studio, 'bin', 'studio-tree.cs'))}function EnsureUser([string]$name, [string]$what, [string]$plain) {
   $u = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
   if ($null -eq $u) {
     if (-not $plain) { $plain = NewSecret }
@@ -484,20 +461,17 @@ SafeFolder $home_ (Split-Path -Parent $dataStudio)
 SafeFolder $machine (Split-Path -Parent $filesStudio)
 # The relay account: a standard user the lead logs in as over SSH, with a password nobody sees.
 $relaySid = (EnsureUser $relay 'Studio relay (SSH, forced command)' $null).SID.Value
-$plain = $null
-$credFile = ${psQuote(machineCredFile(o.machine))}
-if (-not (Test-Path -LiteralPath $credFile) -or $null -eq (Get-LocalUser -Name $crew -ErrorAction SilentlyContinue)) {
-  $plain = NewSecret
-}
-$crewSid = (EnsureUser $crew 'Studio crew sandbox' $plain).SID.Value
-# The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew user reads
+# Studio's group of crew users (one user per job, made and deleted by the broker), with its firewall
+# rule, denied logons and read grants on Claude Code and the toolchains.
+$readPaths = ${list(o.readPaths)}
+${crewGroupSetup()}# The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew users read
 # Node.js and Studio only.
 $tree = 'ContainerInherit, ObjectInherit'
 $rx = 'ReadAndExecute, Synchronize'
 StrictFolder $filesStudio @(,@($relaySid, $rx, $tree, 'None'))
 StrictFolder $machine @(,@($relaySid, $rx, $tree, 'None'))
 foreach ($sub in @('broker', 'config', 'setup-state', 'pairing')) { StrictFolder (Join-Path $machine $sub) @(,@($relaySid, $rx, $tree, 'None')) }
-foreach ($sub in @('node', 'studio')) { StrictFolder (Join-Path $machine $sub) @(@($relaySid, $rx, $tree, 'None'), @($crewSid, $rx, $tree, 'None')) }
+foreach ($sub in @('node', 'studio')) { StrictFolder (Join-Path $machine $sub) @(@($relaySid, $rx, $tree, 'None'), @($groupSid, $rx, $tree, 'None')) }
 # The copies the forced command runs: never the files of an account that can change them, and no
 # junction of the source copied along.
 Copy-Item -LiteralPath ${psQuote(o.source.node)} -Destination ${psQuote(machineNode(o.machine))} -Force
@@ -511,64 +485,42 @@ StrictFolder $dataStudio @(,@($relaySid, $rx, 'None', 'None'))
 StrictFolder $home_ @(,@($relaySid, $rx, 'None', 'None'))
 NoLinksIn $home_
 StrictFolder (Join-Path $home_ 'state') @(@($relaySid, 'ReadAndExecute, CreateFiles, CreateDirectories, Synchronize', 'None', 'None'), @($relaySid, 'Modify, Synchronize', $tree, 'InheritOnly'))
-# The crew user's password, sealed for this machine (LocalMachine DPAPI): an SSH key logon cannot
-# open the relay account's own DPAPI keys. Only SYSTEM, administrators and the relay account read it.
-if ($plain) {
-  Add-Type -AssemblyName System.Security
-  $sealed = [Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes($plain), $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
-  $plain = $null
-  $tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
-  [IO.File]::WriteAllBytes($tmp, $sealed)
-  icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
-  if (Test-Path -LiteralPath $credFile) { [IO.File]::Replace($tmp, $credFile, $null) } else { [IO.File]::Move($tmp, $credFile) }
-}
-icacls $credFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($relaySid):R" /L /Q | Out-Null
-# No direct network for the crew user: every outbound connection to anything but loopback.
-$rule = 'Studio crew ' + $crew + ': no direct network'
-Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-New-NetFirewallRule -DisplayName $rule -Direction Outbound -Action Block -LocalUser "D:(A;;CC;;;$crewSid)" -RemoteAddress @(${OUTSIDE.map(psQuote).join(', ')}) | Out-Null
-# The crew user logs on only through the keeper: no batch job, service, network or remote desktop.
-$cfg = Join-Path $env:TEMP ('studio-rights-' + [Guid]::NewGuid().ToString('N') + '.inf')
-$db = [IO.Path]::ChangeExtension($cfg, '.sdb')
-secedit /export /cfg $cfg /areas USER_RIGHTS | Out-Null
-$lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $cfg)
-$at = $lines.IndexOf('[Privilege Rights]')
-if ($at -lt 0) { throw 'secedit gave no [Privilege Rights] section' }
-foreach ($right in @('SeDenyBatchLogonRight', 'SeDenyServiceLogonRight', 'SeDenyNetworkLogonRight', 'SeDenyRemoteInteractiveLogonRight')) {
-  $i = -1
-  for ($k = 0; $k -lt $lines.Count; $k++) { if ($lines[$k] -like "$right *") { $i = $k } }
-  if ($i -lt 0) { $lines.Insert($at + 1, "$right = *$crewSid") }
-  elseif ($lines[$i] -notlike "**$crewSid*") { $lines[$i] = $lines[$i] + ",*$crewSid" }
-}
-Set-Content -LiteralPath $cfg -Value $lines -Encoding Unicode
-secedit /configure /db $db /cfg $cfg /areas USER_RIGHTS /quiet | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "secedit could not set the logon rights ($LASTEXITCODE)" }
-Remove-Item -LiteralPath $cfg, $db -ErrorAction SilentlyContinue
-# The broker: ends every process of the crew user and resets its profile, as SYSTEM, with no
-# argument; its script is the action itself, so no file of it exists. Only the relay account (and
-# administrators) may start it; it answers in a folder the relay account can only read.
+# A crew user's password is sealed for this machine by the fresh broker, per job; one of a crew user
+# of an earlier version goes.
+Remove-Item -LiteralPath ${psQuote(machineCredFile(o.machine))} -Force -ErrorAction SilentlyContinue
+# The brokers: as SYSTEM, with no argument, each its script in its action, so no file of it exists:
+# one ends every process of the crew users, one also deletes them with their profiles, one also
+# makes the fresh crew user of a job. Only the relay account (and administrators) may start them;
+# they answer in a folder the relay account can only read.
 $service = New-Object -ComObject Schedule.Service
 $service.Connect()
 $folder = $service.GetFolder('\\')
+# SYSTEM runs them; SYSTEM and administrators own them; the relay account may read and run them.
+$sddl = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;$relaySid)"
+# The functions the brokers load, in their admin-only folder.
+[IO.File]::WriteAllText(${psQuote(brokerBodyFile(o.machine))}, [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(CREW_ACCOUNT_BODY, 'utf8').toString('base64')}')), (New-Object Text.UTF8Encoding($false)))
+${(['sweep', 'retire', 'fresh'] as const)
+  .map(
+    (
+      op,
+    ) => `${brokerArgumentsSnippet(brokerScript({ op, prefix: o.crewPrefix, machine: o.machine }))}
 $def = $service.NewTask(0)
-$def.Settings.ExecutionTimeLimit = 'PT5M'
+$def.Settings.ExecutionTimeLimit = 'PT10M'
 $def.Settings.MultipleInstances = 2
 $action = $def.Actions.Create(0)
 $action.Path = 'powershell.exe'
-$action.Arguments = ${psQuote(brokerArguments({ crewUser: o.crewUser, result: brokerResultFile(o.machine) }))}
-# SYSTEM runs it; SYSTEM and administrators own it; the relay account may read and run it.
-$sddl = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;$relaySid)"
-$null = $folder.RegisterTaskDefinition($task, $def, 6, 'SYSTEM', $null, 5, $sddl)
-# WebDAV paths (\\\\host@80\\) pass the crew user's firewall rule through the WebClient service:
+$action.Arguments = $brokerArgs
+$null = $folder.RegisterTaskDefinition(${psQuote(brokerTasks(o.task)[op])}, $def, 6, 'SYSTEM', $null, 5, $sddl)
+`,
+  )
+  .join(
+    '',
+  )}# WebDAV paths (\\\\host@80\\) pass the crew user's firewall rule through the WebClient service:
 # it is stopped and disabled.
 Write-Output 'Stopping and disabling the WebClient service (WebDAV), which the crew sandbox does not hold.'
 if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
   Stop-Service -Name WebClient -Force -ErrorAction SilentlyContinue
   Set-Service -Name WebClient -StartupType Disabled
-}
-# Read, never write, for the crew user on Claude Code and the toolchains.
-foreach ($p in ${list(o.readPaths)}) {
-  if (Test-Path -LiteralPath $p) { icacls $p /grant "\${crew}:(OI)(CI)RX" /L /Q | Out-Null }
 }
 # The pinned plugins in the crew Claude config dir of the relay home.
 ${pluginSetup}
@@ -595,7 +547,7 @@ const setupTail = (
 Write-Output @'
 ${block}'@
 Write-Output 'Authorize the lead with studio relay install --pair "<line>" (the line studio relay pair prints on the lead).'
-Write-Output "Studio relay worker is ready: relay account $relay, crew user $crew."
+Write-Output "Studio relay worker is ready: relay account $relay, crew users of group $($prefix)s, one per job."
 `;
 
 /**
@@ -624,7 +576,7 @@ ${adminFileSnippet({ file: o.file, lines: o.lines, readers: 'relay' })}
 const installHead = (
   i: RelayInstall,
   relayUser: string,
-  crewUser: string,
+  crewPrefix: string,
 ) => `#Requires -RunAsAdministrator
 $ErrorActionPreference = 'Stop'
 $ok = $false
@@ -633,27 +585,25 @@ function SshdOff {
   Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Disable-NetFirewallRule
 }
 # No relay job may run while the install walks the folders and sets their ACLs: a runner or crew
-# could plant a link between the two. Every process of the relay account or the crew user counts.
+# could plant a link between the two. Every process of the relay account or a crew user counts.
 $forceStop = ${i.forceStop === true ? '$true' : '$false'}
 function RelayProcesses {
-  @(foreach ($n in @(${psQuote(relayUser)}, ${psQuote(crewUser)})) {
-    $u = Get-LocalUser -Name $n -ErrorAction SilentlyContinue
-    if ($null -eq $u) { continue }
-    $sid = $u.SID.Value
-    Get-CimInstance Win32_Process | Where-Object { try { (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $sid } catch { $false } }
-  })
+  $crewRe = '^' + [regex]::Escape(${psQuote(crewPrefix)}) + '-[0-9a-f]{6}$'
+  $sids = @(Get-LocalUser | Where-Object { $_.Name -eq ${psQuote(relayUser)} -or ($_.Name -match $crewRe -and $_.Description -eq ${psQuote(CREW_DESCRIPTION)}) } | ForEach-Object { $_.SID.Value })
+  if ($sids.Count -eq 0) { return @() }
+  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })
 }
 function NoRelayJob {
   $running = RelayProcesses
   if ($running.Count -eq 0) { return }
-  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or the crew user): let it end, or run this again with --force-stop" }
-  Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew user (--force-stop)."
+  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or a crew user): let it end, or run this again with --force-stop" }
+  Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew users (--force-stop)."
   for ($t = 0; $t -lt 20 -and $running.Count -gt 0; $t++) {
     foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Milliseconds 500
     $running = RelayProcesses
   }
-  if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew user' }
+  if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew users' }
 }
 # Before sshd stops: a running job is refused while the lead can still reach it.
 NoRelayJob

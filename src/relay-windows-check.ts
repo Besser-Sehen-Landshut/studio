@@ -1,17 +1,20 @@
 // The Windows crew sandbox of a relay worker, put together (src/relay-serve.ts `RelayWindows`):
-// the checks before every start, as the relay account and as the crew user, the launch with the
-// egress proxy, and stopping a crew. The relay account is a standard user: what needs an
-// administrator (ending the crew user's processes) goes through the broker task.
+// the checks before every start, as the relay account and as the crew user of the job, the launch
+// with the egress proxy, and stopping a crew. The relay account is a standard user: what needs an
+// administrator (ending the crew users' processes, deleting them, making a fresh one per job) goes
+// through the broker tasks.
 import { readFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
+import { brokerCrewAccounts } from './crew-accounts.js';
 import { LOOPBACK } from './egress-proxy.js';
+import { HeldError } from './held.js';
 import type { Ports } from './ports.js';
 import { localSubnets, ownAddresses, smbCandidates, smbProblem } from './relay-hosts.js';
 import type { RelayWindows } from './relay-serve.js';
 import {
-  brokerResultFile,
-  brokerSweep,
+  brokerResultFiles,
+  brokerTasks,
   loopbackListeners,
   machineCredFile,
   machineCredProblem,
@@ -73,10 +76,11 @@ export function judgeRelayProbe(
 }
 
 export function relayWindows(o: {
-  user: string;
+  /** The name prefix of the crew users. */
+  prefix: string;
   /** The relay home (relay-windows.ts): state and config; the crew user must not read it. */
   home: string;
-  /** The admin-only tree: the sealed credential and the broker's answer. */
+  /** The admin-only tree: the sealed credential and the brokers' answers. */
   machine: string;
   task: string;
   stateRoot: string;
@@ -98,31 +102,28 @@ export function relayWindows(o: {
   const path = o.env.PATH ?? o.env.Path;
   const claudeBin = findClaude(path) ?? 'claude';
   const ifaces = () => (o.interfaces ?? networkInterfaces)();
-  const sweep = () =>
-    brokerSweep({
-      run,
-      task: o.task,
-      result: brokerResultFile(o.machine),
-      readFile: (f) => {
-        try {
-          return readFileSync(f, 'utf8');
-        } catch {
-          return undefined;
-        }
-      },
-      now: () => new Date(),
-      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-    });
-  const grants = new WindowsGrants({ ownerRoot: o.ownerRoot, user: o.user, run, sweep });
+  const accounts = brokerCrewAccounts({
+    run,
+    tasks: brokerTasks(o.task),
+    results: brokerResultFiles(o.machine),
+    credFile,
+    readFile: (f) => {
+      try {
+        return readFileSync(f, 'utf8');
+      } catch {
+        return undefined;
+      }
+    },
+    now: () => new Date(),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  });
+  const grants = new WindowsGrants({ ownerRoot: o.ownerRoot, accounts, run });
   const claude = () =>
     windowsClaude({
       stateRoot: o.stateRoot,
-      credFile,
       claudeBin,
-      user: o.user,
       grants,
       run,
-      machine: true,
       ...(o.spawn === undefined ? {} : { spawn: o.spawn }),
     });
   return {
@@ -141,8 +142,6 @@ export function relayWindows(o: {
           warnings,
         };
       }
-      const cred = await machineCredProblem(run, credFile);
-      if (cred !== undefined) return { problem: { kind: 'refused', line: cred }, warnings };
       const web = await webClientProblem(run);
       if (web !== undefined) return { problem: { kind: 'held', line: web }, warnings };
       // Loopback is not filtered by the Windows firewall, and the crew user's rule leaves it open
@@ -201,13 +200,36 @@ export function relayWindows(o: {
           return { host: e.slice(0, at).replace(/^\[|\]$/g, ''), port: Number(e.slice(at + 1)) };
         }),
       ];
+      // The crew user of the coming job: a fresh one, unless no crew ran as the one made before.
+      try {
+        const account = await grants.ready();
+        // What retiring the last crew users left to say: doctor shows it.
+        for (const line of account.notes?.problems ?? [])
+          warnings.push(`retiring a crew user: ${line}`);
+        const waiting = account.notes?.quarantined ?? 0;
+        if (waiting !== 0) {
+          warnings.push(
+            waiting < 0
+              ? 'the quarantine of retired crew profiles cannot be read'
+              : `${waiting} retired crew profile(s) wait in the quarantine; each retire deletes part of them`,
+          );
+        }
+      } catch (e) {
+        return {
+          problem: {
+            kind: e instanceof HeldError ? 'held' : 'refused',
+            line: `no crew user for the coming job: ${(e as Error).message}`,
+          },
+          warnings,
+        };
+      }
+      const cred = await machineCredProblem(run, credFile);
+      if (cred !== undefined) return { problem: { kind: 'refused', line: cred }, warnings };
       const proxy = await o.startProxy([...CLAUDE_HOSTS]);
       try {
         const tmp = join(o.stateRoot, 'tmp');
         const r = await probeWindowsResults({
           stateRoot: o.stateRoot,
-          credFile,
-          user: o.user,
           ownerHome: o.ownerHome,
           ownerConfigDir: o.ownerConfigDir,
           mustNotRead: [...deny.paths, o.home, credFile],
@@ -218,14 +240,12 @@ export function relayWindows(o: {
             ...windowsCrewEnv({ proxyPort: proxy.port, homeDir: tmp, tmpDir: tmp, base: o.env }),
             PATH: path ?? '',
           },
-          machine: true,
           timeoutMs: 300_000,
           extra: {
             unreachable,
             loopback,
             smb: candidates.hosts,
             noStoredCredentials: true,
-            persistence: true,
           },
           ...(o.spawn === undefined ? {} : { spawn: o.spawn }),
         });
@@ -248,12 +268,17 @@ export function relayWindows(o: {
       const proxy = await o.startProxy([...networkAllow, ...CLAUDE_HOSTS]);
       return {
         claude: claude(),
-        launch: { user: o.user, proxyPort: proxy.port, grant: (g) => grants.grant(g) },
+        launch: {
+          user: o.prefix,
+          proxyPort: proxy.port,
+          grant: (g) => grants.grant(g, { launch: true }),
+        },
         close: () => proxy.close(),
       };
     },
     claude,
-    sweep,
+    sweep: () => accounts.sweep(),
+    retire: () => grants.retire(),
   };
 }
 
@@ -305,6 +330,7 @@ if (Test-Path -LiteralPath (Join-Path ${h} 'state')) {
 # modify below it (inherit-only); it can rename or remove neither state nor anything above.
 $folders = @(
   @(${m}, 'read'), @((Join-Path ${m} 'node'), 'read'), @((Join-Path ${m} 'studio'), 'read'),
+  @((Join-Path ${m} 'broker'), 'read'),
   @((Join-Path ${m} 'config'), 'read'), @((Split-Path -Parent ${h}), 'read'), @(${h}, 'read'),
   @((Join-Path ${h} 'state'), 'fill')
 )

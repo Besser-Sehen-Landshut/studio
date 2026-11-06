@@ -16,6 +16,12 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { WorkItem } from '../src/board.js';
 import { relayTargetSchema } from '../src/config.js';
+import {
+  brokerCrewAccounts,
+  CREW_ACCOUNT_BODY,
+  GIT_MIN_CHECK,
+  RELAY_SID_SLOT,
+} from '../src/crew-accounts.js';
 import { realPorts } from '../src/ports.js';
 import { sessionLead } from '../src/relay-command.js';
 import {
@@ -44,9 +50,9 @@ import {
 import { sshArgs } from '../src/relay-transport.js';
 import {
   authorizedKeyLine,
-  brokerArguments,
+  brokerResultFiles,
   brokerScript,
-  brokerSweep,
+  brokerTasks,
   forcedCommand,
   leadFromAuthInfo,
   loopbackListeners,
@@ -386,70 +392,10 @@ describe("the worker reads a crew's clone as files only", () => {
   });
 });
 
-describe('what a crew leaves to start in a later job goes, as the crew user, never through a link', () => {
-  it('removes files and links as links; targets outside survive; folders are left and named', async () => {
-    const resetModule = new URL('../bin/studio-crew-reset.mjs', import.meta.url).href;
-    const { resetStartup } = (await import(resetModule)) as {
-      resetStartup: (dir: string) => { removed: string[]; left: string[] };
-    };
-    const outside = join(root, 'outside');
-    mkdirSync(join(outside, 'deep'), { recursive: true });
-    writeFileSync(join(outside, 'deep', 'precious.txt'), 'keep\n');
-    writeFileSync(join(outside, 'file.txt'), 'keep\n');
-    const startup = join(root, 'Startup');
-    mkdirSync(startup);
-    writeFileSync(join(startup, 'evil.cmd'), 'start x\n');
-    writeFileSync(join(startup, 'desktop.ini'), '[x]\n');
-    // A planted link to a folder outside (a junction on Windows) and one to a file outside.
-    symlinkSync(join(outside, 'deep'), join(startup, 'to-folder'), 'dir');
-    symlinkSync(join(outside, 'file.txt'), join(startup, 'to-file'));
-    mkdirSync(join(startup, 'sub'));
-    writeFileSync(join(startup, 'sub', 'inside.txt'), 'x\n');
-    const r = resetStartup(startup);
-    expect(r.removed.sort()).toEqual(['evil.cmd', 'to-file', 'to-folder']);
-    expect(r.left).toEqual(['sub']);
-    expect(readFileSync(join(outside, 'deep', 'precious.txt'), 'utf8')).toBe('keep\n');
-    expect(readFileSync(join(outside, 'file.txt'), 'utf8')).toBe('keep\n');
-    expect(readFileSync(join(startup, 'sub', 'inside.txt'), 'utf8')).toBe('x\n');
-    expect(readdirSync(startup).sort()).toEqual(['desktop.ini', 'sub']);
-    // A Startup folder that is itself a link is not touched.
-    const linked = join(root, 'StartupLink');
-    symlinkSync(join(outside, 'deep'), linked, 'dir');
-    expect(resetStartup(linked).removed).toEqual([]);
-    expect(readFileSync(join(outside, 'deep', 'precious.txt'), 'utf8')).toBe('keep\n');
-  });
-});
-
 describe("PowerShell modules of the crew user's own never stand in for core ones", () => {
-  const resetModule = new URL('../bin/studio-crew-reset.mjs', import.meta.url).href;
-  it('removes Documents PowerShell Modules folders, a link as a link, never following one', async () => {
-    const { resetProfiles } = (await import(resetModule)) as {
-      resetProfiles: (documents: string) => { removed: string[]; left: string[] };
-    };
-    const outside = join(root, 'modules-outside');
-    mkdirSync(join(outside, 'Evil'), { recursive: true });
-    writeFileSync(join(outside, 'Evil', 'Evil.psm1'), 'keep\n');
-    const documents = join(root, 'Documents');
-    // WindowsPowerShell\Modules is a link; PowerShell\Modules a folder with a link inside.
-    mkdirSync(join(documents, 'WindowsPowerShell'), { recursive: true });
-    symlinkSync(outside, join(documents, 'WindowsPowerShell', 'Modules'), 'dir');
-    mkdirSync(join(documents, 'PowerShell', 'Modules', 'Microsoft.PowerShell.Security'), {
-      recursive: true,
-    });
-    writeFileSync(
-      join(documents, 'PowerShell', 'Modules', 'Microsoft.PowerShell.Security', 'x.psm1'),
-      'x\n',
-    );
-    symlinkSync(outside, join(documents, 'PowerShell', 'Modules', 'linked'), 'dir');
-    const r = resetProfiles(documents);
-    expect(r.removed.sort()).toEqual(['PowerShell\\Modules', 'WindowsPowerShell\\Modules']);
-    expect(r.left).toEqual([]);
-    expect(readdirSync(join(documents, 'PowerShell'))).toEqual([]);
-    expect(readdirSync(join(documents, 'WindowsPowerShell'))).toEqual([]);
-    expect(readFileSync(join(outside, 'Evil', 'Evil.psm1'), 'utf8')).toBe('keep\n');
-  });
-  it('every PowerShell of the crew host and the reset runs pinned to $PSHOME modules', async () => {
-    const { pinnedPowerShell } = (await import(resetModule)) as {
+  const psModule = new URL('../bin/studio-crew-ps.mjs', import.meta.url).href;
+  it('every PowerShell of the crew host runs pinned to $PSHOME modules', async () => {
+    const { pinnedPowerShell } = (await import(psModule)) as {
       pinnedPowerShell: (script: string) => {
         file: string;
         args: string[];
@@ -472,7 +418,7 @@ describe("PowerShell modules of the crew user's own never stand in for core ones
       Object.assign(process.env, saved);
     }
     // No other way to PowerShell in the files the crew user runs.
-    for (const f of ['../bin/studio-crew-host.mjs', '../bin/studio-crew-reset.mjs']) {
+    for (const f of ['../bin/studio-crew-host.mjs', '../bin/studio-crew-ps.mjs']) {
       // The one full path of the pinned PowerShell aside.
       const text = readFileSync(new URL(f, import.meta.url), 'utf8').replace(
         "join(PS_HOME, 'powershell.exe')",
@@ -652,34 +598,64 @@ describe('the Windows relay worker, with fakes', () => {
       return { code: hit?.[1].code ?? 0, stdout: hit?.[1].stdout ?? '', stderr: '' };
     };
 
-  it('the broker answers in its file after the call, with nothing left; anything else refuses', async () => {
+  it('a broker task answers in its file after the call, with nothing left; anything else refuses', async () => {
     let t = Date.parse('2026-11-06T10:00:00Z');
     const now = () => new Date(t);
     const sleep = async (ms: number) => {
       t += ms;
     };
-    const fresh = JSON.stringify({ at: new Date(t + 500).toISOString(), found: 1, left: [] });
-    await expect(
-      brokerSweep({ run: fakeRun({}), task: 'T', result: 'r', readFile: () => fresh, now, sleep }),
-    ).resolves.toBeUndefined();
-    const stale = JSON.stringify({ at: '2026-11-06T09:00:00Z', found: 0, left: [] });
-    await expect(
-      brokerSweep({ run: fakeRun({}), task: 'T', result: 'r', readFile: () => stale, now, sleep }),
-    ).rejects.toThrow(/did not answer/);
-    const left = JSON.stringify({ at: new Date(t + 10).toISOString(), found: 2, left: [77] });
-    await expect(
-      brokerSweep({ run: fakeRun({}), task: 'T', result: 'r', readFile: () => left, now, sleep }),
-    ).rejects.toThrow(/still running \(77\)/);
-    await expect(
-      brokerSweep({
-        run: fakeRun({ schtasks: { code: 5 } }),
-        task: 'T',
-        result: 'r',
-        readFile: () => fresh,
+    const started: string[] = [];
+    const run =
+      (code = 0): RunFile =>
+      async (file, args) => {
+        if (file === 'schtasks.exe') started.push(args.at(-1) as string);
+        return { code, stdout: '', stderr: '' };
+      };
+    const accounts = (answer: object, code = 0) =>
+      brokerCrewAccounts({
+        run: run(code),
+        tasks: brokerTasks('T'),
+        results: brokerResultFiles('C:\\m'),
+        credFile: 'C:\\m\\crew-credential.bin',
+        readFile: () => JSON.stringify(answer),
         now,
         sleep,
-      }),
-    ).rejects.toThrow(/cannot start the broker task/);
+      });
+    const at = () => new Date(t + 500).toISOString();
+    await expect(accounts({ op: 'sweep', at: at(), found: 1, left: [] }).sweep()).resolves.toBe(
+      undefined,
+    );
+    expect(started).toEqual(['T']);
+    await expect(
+      accounts({ op: 'sweep', at: '2026-11-06T09:00:00Z', found: 0, left: [] }).sweep(),
+    ).rejects.toThrow(/did not answer/);
+    await expect(accounts({ op: 'sweep', at: at(), found: 2, left: [77] }).sweep()).rejects.toThrow(
+      /still running \(77\)/,
+    );
+    await expect(accounts({ op: 'sweep', at: at(), left: [] }, 5).sweep()).rejects.toThrow(
+      /cannot start the broker task/,
+    );
+    // A fresh crew user and a retire, each its own task.
+    started.length = 0;
+    const SID = 'S-1-5-21-1-2-3-1001';
+    expect(
+      await accounts({
+        op: 'fresh',
+        at: at(),
+        left: [],
+        user: 'studio-crew-0a1b2c',
+        sid: SID,
+      }).fresh(),
+    ).toMatchObject({ user: 'studio-crew-0a1b2c', sid: SID });
+    await accounts({ op: 'retire', at: at(), left: [] }).retire();
+    expect(started).toEqual(['T fresh', 'T retire']);
+    // An answer of another operation, or an error, refuses.
+    await expect(accounts({ op: 'sweep', at: at(), left: [] }).fresh()).rejects.toThrow(
+      /unknown shape/,
+    );
+    await expect(accounts({ op: 'retire', at: at(), error: 'busy' }).retire()).rejects.toThrow(
+      /could not retire the crew users: busy/,
+    );
   });
 
   it('WebClient must be stopped and disabled; a machine without it is fine', async () => {
@@ -753,7 +729,7 @@ describe('the Windows relay worker, with fakes', () => {
     const home = 'C:\\ProgramData\\Studio\\relay';
     const script = relaySetupScript({
       relayUser: 'studio-relay',
-      crewUser: 'studio-crew',
+      crewPrefix: 'studio-crew',
       home,
       machine,
       task: 'Studio relay broker',
@@ -818,16 +794,35 @@ describe('the Windows relay worker, with fakes', () => {
     expect(() =>
       authorizedKeyLine({ key: 'ssh-ed25519 x\nssh-rsa y', command: 'x', lead: 'lab' }),
     ).toThrow();
-    // The broker ends the crew user's processes and touches nothing of its files or registry:
-    // SYSTEM never walks a tree a crew could have planted links in.
-    const broker = brokerScript({ crewUser: 'studio-crew', result: 'C:\\r.json' });
-    expect(broker).toContain("'studio-crew'");
-    for (const s of ['Remove-Item', 'Remove-ItemProperty', 'reg.exe', 'Startup', 'HKEY_USERS']) {
-      expect(broker, s).not.toContain(s);
+    // Three broker tasks: sweep, retire and fresh, each its script in the action, the relay
+    // account's SID put in by the setup, so the fresh user's password is sealed for it alone.
+    for (const op of ['sweep', 'retire', 'fresh'] as const) {
+      const broker = brokerScript({ op, prefix: 'studio-crew', machine });
+      expect(broker).toContain("$prefix = 'studio-crew'");
+      expect(broker).toContain(`$out = @{ op = '${op}'`);
+      expect(script).toContain(Buffer.from(broker, 'utf8').toString('base64'));
+      expect(script).toContain(
+        `RegisterTaskDefinition('${brokerTasks('Studio relay broker')[op]}'`,
+      );
     }
-    const encoded =
-      brokerArguments({ crewUser: 'studio-crew', result: 'C:\\r.json' }).split(' ').at(-1) ?? '';
-    expect(Buffer.from(encoded, 'base64').toString('utf16le')).toBe(broker);
+    expect(brokerScript({ op: 'fresh', prefix: 'studio-crew', machine })).toContain(
+      `NewJobUser '${machine}\\crew-credential.bin' '${RELAY_SID_SLOT}'`,
+    );
+    expect(script).toContain(`.Replace('${RELAY_SID_SLOT}', $relaySid)`);
+    // The brokers load their functions from the admin-only broker folder, which the setup fills.
+    expect(script).toContain(Buffer.from(CREW_ACCOUNT_BODY, 'utf8').toString('base64'));
+    expect(brokerScript({ op: 'sweep', prefix: 'studio-crew', machine })).toContain(
+      `. ([ScriptBlock]::Create([IO.File]::ReadAllText('${machine}\\broker\\crew-accounts.ps1')))`,
+    );
+    // The brokers load the tree deleter from the admin-only copy of Studio only.
+    expect(brokerScript({ op: 'retire', prefix: 'studio-crew', machine })).toContain(
+      `$treeSource = '${machine}\\studio\\bin\\studio-tree.cs'`,
+    );
+    // Git for Windows 2.35.2 or later.
+    expect(script).toContain(GIT_MIN_CHECK);
+    // Studio's group carries the firewall rule, the denied logons and the read grants.
+    expect(script).toContain('-LocalUser "D:(A;;CC;;;$groupSid)"');
+    expect(script).toContain("@($groupSid, $rx, $tree, 'None')");
   });
 
   it('which lead a session is for: the key decides on Windows, a --lead must agree', () => {

@@ -3,10 +3,19 @@
 // a pipe only the runner it created may read. The runner here is a stand-in that writes what it got.
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { crewAccountFunctions, TREE_SOURCE } from '../src/crew-accounts.js';
 import { systemSpawnRunner } from '../src/relay-serve.js';
 import { FOLDER_FUNCTIONS } from '../src/relay-windows.js';
 import { machineTreeProblem } from '../src/relay-windows-check.js';
@@ -41,78 +50,152 @@ s.on('error', (e) => writeFileSync(${JSON.stringify(out)}, 'error ' + e.code));
   }, 120_000);
 });
 
-describe.skipIf(!on)('the profile reset of a crew user on Windows', () => {
-  it('leaves no Run value, also with spaces in its name or as the default, no AutoRun, no extra environment', async () => {
-    const reset = (await import(new URL('../bin/studio-crew-reset.mjs', import.meta.url).href)) as {
-      registryLeft: (base: string) => string[];
-      resetRegistry: (base: string) => string[];
-    };
-    // A root of its own under this user's key stands in for the crew user's HKCU.
-    const base = `HKCU:\\Software\\StudioResetTest-${randomBytes(4).toString('hex')}\\`;
-    const ps = (script: string) =>
+// Elevated (the windows-latest job): the backup and restore privileges are an administrator's.
+describe.skipIf(!(on && process.env.STUDIO_WINDOWS_SANDBOX_TEST === '1'))(
+  "deleting a crew user's profile",
+  () => {
+    it('follows no link, also one planted after the listing; a Deny entry and a long path do not stop it', () => {
+      const base = realpathSync(mkdtempSync(join(tmpdir(), 'studio-tree-')));
+      const outside = join(base, 'outside');
+      mkdirSync(outside);
+      writeFileSync(join(outside, 'owner.txt'), 'the owner');
+      const root = join(base, 'profile');
+      // A path of more than 260 characters, in a folder closed to everyone by a Deny entry.
+      const deep = join(
+        root,
+        'closed',
+        ...Array.from({ length: 8 }, (_, i) => `${i}${'d'.repeat(40)}`),
+      );
+      mkdirSync(deep, { recursive: true });
+      expect(deep.length).toBeGreaterThan(300);
+      writeFileSync(join(deep, 'deep.txt'), 'x');
+      symlinkSync(outside, join(deep, 'link-deep'), 'junction');
+      symlinkSync(outside, join(root, 'link'), 'junction');
+      writeFileSync(join(root, 'readonly.txt'), 'x');
+      const q = (p: string) => `'${p.replace(/'/g, "''")}'`;
+      const run = (script: string) =>
+        execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+          encoding: 'utf8',
+          env: powershellEnv(process.env),
+        });
+      run(
+        `Set-ItemProperty -LiteralPath ${q(join(root, 'readonly.txt'))} -Name IsReadOnly -Value $true; icacls ${q(join(root, 'closed'))} /deny '*S-1-1-0:(OI)(CI)F' /Q | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls' }`,
+      );
+      const before = run(`(Get-Acl -LiteralPath ${q(outside)}).Sddl`);
+      // A junction to the outside appears in the profile right after its listing.
+      run(`$ErrorActionPreference = 'Stop'
+Add-Type -Path ${q(TREE_SOURCE())}
+$script:planted = $false
+$hook = [Action[string]]{ param($d) if (-not $script:planted -and $d.TrimEnd('\\') -ieq ${q(`\\\\?\\${root}`)}) { $script:planted = $true; cmd /c mklink /J ${q(join(root, 'late'))} ${q(outside)} | Out-Null } }
+[StudioTree]::Remove(${q(root)}, $hook)
+if (-not $script:planted) { throw 'the hook never ran' }`);
+      expect(existsSync(root)).toBe(false);
+      expect(readFileSync(join(outside, 'owner.txt'), 'utf8')).toBe('the owner');
+      expect(run(`(Get-Acl -LiteralPath ${q(outside)}).Sddl`)).toBe(before);
+    }, 120_000);
+
+    it('deletes in bounded steps: 10,000 levels and a wide tree go over several calls, none crashes', () => {
+      const base = realpathSync(mkdtempSync(join(tmpdir(), 'studio-deep-')));
+      const q = (p: string) => `'${p.replace(/'/g, "''")}'`;
+      const run = (script: string) =>
+        execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+          encoding: 'utf8',
+          env: powershellEnv(process.env),
+          maxBuffer: 16 * 1024 * 1024,
+        }).trim();
+      const tree = `Add-Type -Path ${q(TREE_SOURCE())}`;
+      /** Prune calls of `budget` entries until the tree is gone; the entries each call deleted. */
+      const prune = (root: string, budget: number) =>
+        run(`$ErrorActionPreference = 'Stop'; ${tree}
+$out = @(); for ($i = 0; $i -lt 100; $i++) { $r = [StudioTree]::Prune(${q(root)}, ${budget}, $false, $null); $out += $r.Deleted; if ($r.Done) { break } }
+$out -join ','`)
+          .split(',')
+          .map(Number);
+      // 10,000 folders, one inside the other (a path of about 20,000 characters), built with short
+      // paths only: the chain moves one level down into a new top folder, 10,000 times.
+      const deep = join(base, 'c');
+      run(
+        `$b = ${q(base)}; [void][IO.Directory]::CreateDirectory("$b\\c"); [IO.File]::WriteAllText("$b\\c\\end.txt", 'x'); for ($i = 0; $i -lt 10000; $i++) { [void][IO.Directory]::CreateDirectory("$b\\n"); [IO.Directory]::Move("$b\\c", "$b\\n\\a"); [IO.Directory]::Move("$b\\n", "$b\\c") }`,
+      );
+      const deepRuns = prune(deep, 3000);
+      expect(deepRuns.slice(0, 3)).toEqual([3000, 3000, 3000]);
+      expect(deepRuns.reduce((x, y) => x + y, 0)).toBe(10_002);
+      expect(existsSync(deep)).toBe(false);
+      // A wide tree: 5,000 files in one folder.
+      const wide = join(base, 'wide');
+      run(
+        `[void][IO.Directory]::CreateDirectory(${q(wide)}); for ($i = 0; $i -lt 5000; $i++) { [IO.File]::WriteAllText((Join-Path ${q(wide)} ("f$i.txt")), 'x') }`,
+      );
+      expect(prune(wide, 1000)).toEqual([1000, 1000, 1000, 1000, 1000, 1]);
+      expect(existsSync(wide)).toBe(false);
+    }, 600_000);
+  },
+);
+
+describe.skipIf(!on)('retiring crew users, step by step per user (stand-ins for Windows)', () => {
+  const A = 'S-1-5-21-1-1-1-1001';
+  const B = 'S-1-5-21-1-1-1-1002';
+  /** RetireJobUsers with every step that touches Windows replaced by a stand-in that logs. */
+  const retire = (o: { leftSids: string[]; failMove?: string }) => {
+    const script = `$ErrorActionPreference = 'Stop'
+${crewAccountFunctions('p')}
+$log = New-Object Collections.Generic.List[string]
+$script:retired = @()
+function U($n, $s) { [pscustomobject]@{ Name = $n; SID = [pscustomobject]@{ Value = $s } } }
+function JobUsers { @((U 'p-aaaaaa' '${A}'), (U 'p-bbbbbb' '${B}')) }
+function LockJobUser($u) { $log.Add('lock ' + $u.Name) }
+function SweepJobUsers { $log.Add('sweep'); @{ found = 0; left = @(${o.leftSids.length > 0 ? '77' : ''}); leftSids = @(${o.leftSids.map((x) => `'${x}'`).join(', ')}) } }
+function Quarantine { 'C:\\nowhere' }
+function QuarantineProfile($u, $q) { if ($u.Name -eq '${o.failMove ?? ''}') { throw 'busy' }; $log.Add('move ' + $u.Name) }
+function ReadRetired { @($script:retired) }
+function WriteRetired([string[]]$sids) { $script:retired = @($sids) }
+function Remove-LocalUser { param($SID) $log.Add('delete ' + $SID) }
+function LoadTree { }
+$r = RetireJobUsers
+ConvertTo-Json -Compress -Depth 4 @{ log = @($log); retired = @($script:retired); left = @($r.left); problems = @($r.problems) }`;
+    return JSON.parse(
       execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
         encoding: 'utf8',
-      });
-    ps(`$ErrorActionPreference = 'Stop'
-$b = '${base}'
-$run = Join-Path $b 'Software\\Microsoft\\Windows\\CurrentVersion\\Run'
-$once = Join-Path $b 'Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'
-$cp = Join-Path $b 'Software\\Microsoft\\Command Processor'
-$envk = Join-Path $b 'Environment'
-foreach ($k in @($run, $once, $cp, $envk)) { New-Item -Path $k -Force | Out-Null }
-New-ItemProperty -LiteralPath $run -Name 'evil name with spaces' -Value 'calc.exe' | Out-Null
-Set-ItemProperty -LiteralPath $run -Name '(default)' -Value 'calc.exe'
-New-ItemProperty -LiteralPath $once -Name 'once' -Value 'calc.exe' | Out-Null
-New-ItemProperty -LiteralPath $cp -Name 'AutoRun' -Value 'calc.exe' | Out-Null
-New-ItemProperty -LiteralPath $envk -Name 'TEMP' -Value '%USERPROFILE%\\AppData\\Local\\Temp' -PropertyType ExpandString | Out-Null
-New-ItemProperty -LiteralPath $envk -Name 'MY VAR' -Value 'x' | Out-Null
-$cls = Join-Path $b 'Software\\Classes'
-New-Item -Path (Join-Path $cls 'CLSID\\{00000000-0000-0000-0000-00000000beef}\\InprocServer32') -Force | Out-Null
-New-Item -Path (Join-Path $cls 'Local Settings\\Software') -Force | Out-Null
-$usf = Join-Path $b 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders'
-$sf = Join-Path $b 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders'
-foreach ($k in @($usf, $sf)) { New-Item -Path $k -Force | Out-Null }
-New-ItemProperty -LiteralPath $usf -Name 'Startup' -Value 'C:\\elsewhere\\Startup' -PropertyType ExpandString | Out-Null
-New-ItemProperty -LiteralPath $usf -Name 'AppData' -Value '%USERPROFILE%\\AppData\\Roaming' -PropertyType ExpandString | Out-Null
-New-ItemProperty -LiteralPath $usf -Name 'Favorites' -Value '%USERPROFILE%\\..\\Public' -PropertyType ExpandString | Out-Null
-New-ItemProperty -LiteralPath $sf -Name 'Personal' -Value 'D:\\documents' | Out-Null
-New-ItemProperty -LiteralPath $sf -Name '!Do not use this registry key' -Value 'x' | Out-Null`);
-    try {
-      const before = reset.registryLeft(base).join('; ');
-      expect(before).toContain('evil name with spaces');
-      expect(before).toContain('(Default)');
-      expect(before).toContain('cmd AutoRun');
-      expect(before).toContain('MY VAR');
-      // A COM class of the user's own, shell folders out of the profile; Local Settings, AppData
-      // inside the profile and the "!" note are no finding.
-      expect(before).toContain('Software\\Classes');
-      expect(before).toContain('User Shell Folders: Startup, Favorites');
-      expect(before).toContain('Shell Folders: Personal');
-      expect(before).not.toContain('AppData');
-      expect(before).not.toContain('Do not use');
-      expect(reset.resetRegistry(base)).toEqual([]);
-      expect(reset.registryLeft(base)).toEqual([]);
-      // TEMP stays as it was, unexpanded.
-      expect(
-        ps(
-          `(Get-Item -LiteralPath (Join-Path '${base}' 'Environment')).GetValue('TEMP', $null, 'DoNotExpandEnvironmentNames')`,
-        ).trim(),
-      ).toBe('%USERPROFILE%\\AppData\\Local\\Temp');
-      // Windows keeps Local Settings there; the reset leaves it.
-      expect(
-        ps(
-          `Test-Path -LiteralPath (Join-Path '${base}' 'Software\\Classes\\Local Settings')`,
-        ).trim(),
-      ).toBe('True');
-    } finally {
-      ps(`Remove-Item -LiteralPath '${base}' -Recurse -Force`);
-    }
-  }, 120_000);
+        env: powershellEnv(process.env),
+      }),
+    ) as { log: string[]; retired: string[]; left: number[]; problems: string[] };
+  };
+
+  it('a user with a process left is kept, locked; its profile stays and it is not deleted', () => {
+    const r = retire({ leftSids: [A] });
+    expect(r.log).toEqual([
+      'lock p-aaaaaa',
+      'lock p-bbbbbb',
+      'sweep',
+      'move p-bbbbbb',
+      'sweep',
+      `delete ${B}`,
+    ]);
+    expect(r.retired).toEqual([B]);
+    // A fresh user waits: the process is still there.
+    expect(r.left).toEqual([77]);
+    expect(r.problems.join('\n')).toContain('p-aaaaaa: its processes are still running, kept');
+  }, 60_000);
+
+  it('a user whose profile cannot move is kept for the next retire; the other one goes', () => {
+    const r = retire({ leftSids: [], failMove: 'p-aaaaaa' });
+    expect(r.log).toEqual([
+      'lock p-aaaaaa',
+      'lock p-bbbbbb',
+      'sweep',
+      'move p-bbbbbb',
+      'sweep',
+      `delete ${B}`,
+    ]);
+    expect(r.retired).toEqual([B]);
+    expect(r.left).toEqual([]);
+    expect(r.problems.join('\n')).toContain('p-aaaaaa: its profile stays where it is, kept: busy');
+  }, 60_000);
 });
 
 describe.skipIf(!on)('the PowerShell of the crew user on Windows', () => {
   it('loads core modules from $PSHOME only, whatever PSModulePath it was given', async () => {
-    const reset = (await import(new URL('../bin/studio-crew-reset.mjs', import.meta.url).href)) as {
+    const reset = (await import(new URL('../bin/studio-crew-ps.mjs', import.meta.url).href)) as {
       powershell: (script: string) => string;
     };
     // A module named like a core one, first in the module path, that marks its own loading.

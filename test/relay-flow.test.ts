@@ -613,6 +613,7 @@ describe('relay workers', () => {
           swept += 1;
           throw new Error('processes of the crew user are still running (77)');
         },
+        retire: async () => {},
       },
     };
     const t = JSON.parse((await lead(w, ['tick'])).out);

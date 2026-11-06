@@ -67,7 +67,7 @@ export const COMMANDS: HelpEntry[] = [
   {
     usage: 'worker windows-setup',
     about:
-      'Print the one-time PowerShell script of the Windows crew sandbox user (run it elevated)',
+      'Print the one-time PowerShell script of the group of the Windows crew users, one per job (run it elevated)',
   },
   {
     usage: 'relay serve [--home <dir>] [--lead <name>]',

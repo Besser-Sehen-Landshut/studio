@@ -364,7 +364,7 @@
               "properties": {
                 "crew_user": {
                   "type": "string",
-                  "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,19}$"
+                  "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,12}$"
                 }
               },
               "required": [
@@ -490,7 +490,7 @@
                 "crew_user": {
                   "default": "studio-crew",
                   "type": "string",
-                  "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,19}$"
+                  "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,12}$"
                 },
                 "broker": {
                   "default": "Studio relay broker",

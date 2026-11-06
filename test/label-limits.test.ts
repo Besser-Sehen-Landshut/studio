@@ -255,6 +255,31 @@ describe('per-credential limits', () => {
     expect(p.started).toHaveLength(1);
   });
 
+  it('a crew on a relay worker counts on the label the lead handed over, until it ended', async () => {
+    const fx = makeFx(ITEMS);
+    ownerConfig(fx, 'crew_label_limits:\n  max_parallel: 1\n');
+    const p = makePorts();
+    // A first crew makes the state root; it has ended since.
+    expect((await cli(fx, p.ports, ['launch', 'APP-1'])).code).toBe(0);
+    p.alive.clear();
+    const relay = (state: string) =>
+      writeFileSync(
+        join(fx.state, 'relay.json'),
+        `${JSON.stringify({ items: { 'APP-9': { label: 'pc', credential: 'default', state, sha: 'x', from: 'main', startedAt: '', seenAt: '' } } })}\n`,
+      );
+    relay('running');
+    expect((await cli(fx, p.ports, ['launch', 'APP-2'])).err).toMatch(/credential limit/);
+    relay('starting');
+    expect((await cli(fx, p.ports, ['launch', 'APP-2'])).err).toMatch(/credential limit/);
+    // An unreadable relay file counts as a crew too: never as none.
+    writeFileSync(join(fx.state, 'relay.json'), '{not json');
+    expect((await cli(fx, p.ports, ['launch', 'APP-2'])).err).toMatch(/credential limit/);
+    relay('ended');
+    const r = await cli(fx, p.ports, ['launch', 'APP-2']);
+    expect(r.code, r.err).toBe(0);
+    expect(p.started).toHaveLength(2);
+  });
+
   it('a stopped or finished crew no longer counts as running', async () => {
     const fx = makeFx(ITEMS);
     ownerConfig(fx, 'crew_label_limits:\n  max_parallel: 1\n');
