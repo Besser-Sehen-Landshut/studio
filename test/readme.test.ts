@@ -103,6 +103,9 @@ describe('README quick start', () => {
     expect(readme).toContain('`blocks.json` in the owner root');
     expect(readme).toContain('.legacy-');
     expect(readme).toContain(`Status: ${STUDIO_VERSION},`);
+    expect(readme).toContain('**Adding a language** is one file');
+    expect(readme).toContain('`/studio lang en`');
+    expect(readme).toContain('`notify: { language: en }`');
     expect(readme).toContain('## Recovery after a crash or restart');
     expect(readme).toContain('**Lessons review.**');
     expect(readme).toContain('### Push notifications');

@@ -199,7 +199,11 @@ describe('paneItems', () => {
         },
       },
     );
-    expect(items[0]?.wait).toEqual({ code: 'queue_held', text: 'paused: nothing is merged' });
+    expect(items[0]?.wait).toEqual({
+      code: 'queue_held',
+      text: 'paused: nothing is merged',
+      reason: { code: 'paused' },
+    });
   });
 
   it('a ready item the latest tick deferred carries the reason', () => {

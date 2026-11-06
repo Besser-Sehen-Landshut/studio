@@ -1,6 +1,6 @@
 {
   "name": "studio",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "description": "Run a software studio of coding-agent sessions from one control room",
   "license": "MIT",
   "type": "module",
@@ -14,6 +14,7 @@
     "lint": "biome check .",
     "typecheck": "tsc --noEmit",
     "bundle": "node scripts/bundle.mjs",
+    "locales": "node scripts/gen-locales.mjs",
     "build": "tsc -p tsconfig.build.json && node scripts/gen-schema.ts"
   },
   "devDependencies": {

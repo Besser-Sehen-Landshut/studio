@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import { isLang, LANGS } from '../hooks/i18n/index.js';
 import { globProblem } from './glob.js';
 import { allowedPluginSchema, pluginPinSchema } from './plugins.js';
 import { ONLY_SQL, PROOF_LANGUAGES, type ProofLanguage } from './proofs.js';
@@ -842,7 +843,7 @@ export const ownerConfigSchema = z.strictObject({
     .default({}),
   // Push notifications: an absolute executable that gets each message in its environment (see
   // README). It lives here, not in studio.yaml, because it runs on the owner's machine. `quiet`
-  // and `language` shape the Pushover messages of `tick` (keys: `studio secret set pushover`).
+  // and `language` shape the pushes of `tick` (the topic: `studio setup --notifications`).
   notify: z
     .strictObject({
       channel: z
@@ -861,8 +862,15 @@ export const ownerConfigSchema = z.strictObject({
         .string()
         .refine(validTimeZone, { message: 'not a known IANA time zone' })
         .optional(),
-      // The language of the push text; default from the locale (LC_ALL, LC_MESSAGES, LANG).
-      language: z.enum(['en', 'de']).optional(),
+      // The language of pushes and notify messages: a code with a locale file (hooks/locales) or
+      // `auto` (the default): Claude Code's `language` setting, else the locale, else English.
+      language: z
+        .string()
+        .regex(/^(?:auto|[a-z]{2,3})$/, 'must be auto or a language code such as en')
+        .refine((v) => v === 'auto' || isLang(v), {
+          message: `must be auto or one of ${LANGS.join(', ')}`,
+        })
+        .optional(),
       // The ntfy server for self-hosters; default https://ntfy.sh.
       ntfyServer: z
         .string()

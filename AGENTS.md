@@ -12,7 +12,8 @@ pnpm test        # vitest run; must print a test count, never 0 tests
 pnpm test:mod    # the board mod's tests under claude plugin test, on a copy holding only the mod; needs the claude CLI; not run in CI, local only
 pnpm lint        # biome check .
 pnpm typecheck   # tsc --noEmit
-pnpm bundle      # rebuild dist-bundle/ from src/
+pnpm bundle      # rebuild dist-bundle/ from src/ (writes the language registry first)
+pnpm locales     # write hooks/locales/index.ts from the locale files
 pnpm build       # tsc build + JSON Schema generation (schema/)
 ```
 
@@ -37,5 +38,6 @@ Bundle drift check (what CI runs): `pnpm bundle`, then `git status --porcelain -
 - `SECURITY.md`: vulnerability reporting and the security model.
 - `CHANGELOG.md`: release notes; add an entry for user-visible changes.
 - `src/`: source; `dist-bundle/`: committed bundles; `schema/`: generated JSON Schemas.
+- `hooks/`: the board mod; `hooks/i18n/` and `hooks/locales/<code>.ts`: every displayed text, shared by the mod and the CLI. Only displayed text is localized; English is complete, other locales fall back to it.
 - `capabilities/`: trigger matrix, sources list, analyzers, design and knowledge files; loaded per row, never whole.
 - `skills/`: the lead and crew skills and the owner commands `init` and `add` (`/studio:init`, `/studio:add`); `test/`: tests, fixtures, skill baselines.

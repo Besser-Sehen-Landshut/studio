@@ -1,10 +1,13 @@
 import { lstatSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { type Lang, type Strings, stringsFor } from '../hooks/i18n/index.js';
+import { claudeLanguage } from './claude-language.js';
 import type { OwnerConfig, OwnerEnv } from './config.js';
 import { checkCredentialCommand, PROVIDER_MAX_BYTES, PROVIDER_TIMEOUT_MS } from './credentials.js';
 import { acquireStateLock, type StateLock, writeStateFile } from './paths.js';
 import type { Ports } from './ports.js';
+import { pushLanguage } from './push.js';
 import type { StateSnapshot } from './state.js';
 
 /** Most messages one run sends; the rest follows on the next run. */
@@ -16,9 +19,11 @@ export const LOCK_STALE_MS = 2 * 60_000;
 type Kind = 'owner-item' | 'usage-limit' | 'account-block';
 
 interface Message {
+  /** What makes it the same message next time: built from the English title, any language. */
   key: string;
   kind: Kind;
   id: string;
+  /** The message in the owner's language. */
   text: string;
 }
 
@@ -28,7 +33,16 @@ const cleanText = (s: string): string =>
     .slice(0, MAX_TEXT)
     .join('');
 
-function messagesOf(projectKey: string, snapshot: StateSnapshot): Message[] {
+/** An owner line in words: an item's own title as it is, Studio's lines by their code. */
+function ownerText(line: StateSnapshot['forOwner'][number], t: Strings): string {
+  if (line.code === undefined) return line.title;
+  return (
+    t.reason({ code: line.code, ...(line.params === undefined ? {} : { params: line.params }) }) ??
+    line.title
+  );
+}
+
+function messagesOf(projectKey: string, snapshot: StateSnapshot, t: Strings): Message[] {
   const notes = snapshot.notifications ?? [];
   const out: Message[] = [];
   for (const line of snapshot.forOwner) {
@@ -44,7 +58,7 @@ function messagesOf(projectKey: string, snapshot: StateSnapshot): Message[] {
       key: `${projectKey}:${line.id}:${line.title}`,
       kind,
       id: line.id,
-      text: line.title,
+      text: kind === 'owner-item' ? line.title : ownerText(line, t),
     });
   }
   for (const note of notes) {
@@ -53,7 +67,12 @@ function messagesOf(projectKey: string, snapshot: StateSnapshot): Message[] {
       note.label === undefined
         ? `block::${note.reason}`
         : `block:${note.label}:${note.reason}:${note.at}`;
-    out.push({ key, kind: 'account-block', id: note.id, text: note.title });
+    out.push({
+      key,
+      kind: 'account-block',
+      id: note.id,
+      text: t.accountBlocked(note.label ?? '', t.blockReason(note.reason)),
+    });
   }
   return out;
 }
@@ -97,6 +116,8 @@ export async function sendNotifications(o: {
   ownerConfig: OwnerConfig;
   ports: Ports;
   owner: OwnerEnv;
+  /** The project folder, for its Claude Code `language` setting. */
+  projectDir?: string;
 }): Promise<string[]> {
   const notify = commandOf(o.ownerConfig);
   if (notify === undefined) return [];
@@ -127,14 +148,16 @@ async function sendLocked(
       'notify: the notify command is not trusted (absolute, own regular file, not writable by others); nothing sent',
     ];
   }
-  const messages = messagesOf(o.projectKey, o.snapshot);
+  const penv = o.owner.env ?? process.env;
+  // The same language as the pushes: notify.language, Claude Code's setting, the locale.
+  const lang: Lang = pushLanguage(o.ownerConfig, penv, claudeLanguage(o.owner, o.projectDir));
+  const messages = messagesOf(o.projectKey, o.snapshot, stringsFor(lang));
   const current = new Set(messages.map((m) => m.key));
   const prefix = `${o.projectKey}:`;
   // Keys of this project (and of owner-wide blocks) that are no longer current are forgotten.
   const sent = new Set(
     read.keys.filter((k) => current.has(k) || !(k.startsWith(prefix) || k.startsWith('block:'))),
   );
-  const penv = o.owner.env ?? process.env;
   const errors: string[] = [];
   let sends = 0;
   for (const m of messages) {
@@ -148,6 +171,7 @@ async function sendLocked(
       STUDIO_NOTIFY_ID: cleanText(m.id),
       STUDIO_NOTIFY_PROJECT: cleanText(o.primaryRepo),
       STUDIO_NOTIFY_TEXT: cleanText(m.text),
+      STUDIO_NOTIFY_LANG: lang,
     };
     if (penv.PATH !== undefined) env.PATH = penv.PATH;
     lock.heartbeat(new Date());

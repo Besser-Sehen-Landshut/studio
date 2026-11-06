@@ -232,6 +232,7 @@ import {
   type CrewSnapshot,
   computeMetrics,
   type Notification,
+  ownerLine,
   readCrewRecords,
   readMetricEvents,
   type StateSnapshot,
@@ -1033,6 +1034,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ownerConfig: loadOwnerConfig(owner),
           owner,
           http: ports.http,
+          projectDir: project,
           now: ports.clock.now(),
         });
         // Nothing sent and nothing wrong: it went out before (a run that stopped after the send).
@@ -2722,6 +2724,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ownerConfig,
           owner,
           http: ports.http,
+          projectDir: project,
           now: ports.clock.now(),
         });
         return r.errors;
@@ -3468,6 +3471,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             ownerConfig,
             ports,
             owner,
+            projectDir: project,
           })) {
             stderr(`error: ${line}\n`);
           }
@@ -4995,17 +4999,16 @@ function buildSnapshot(
         .map((i) => ({ id: i.id, title: i.title })),
       // Exactly one line however many items wait or labels are blocked; a block outranks a limit.
       ...(blocked !== undefined
-        ? [{ id: 'account-block', title: blocked }]
+        ? [ownerLine('account-block', blocked)]
         : hold === undefined
           ? []
-          : [{ id: 'usage-limit', title: hold }]),
+          : [ownerLine('usage-limit', hold)]),
       ...(extra.crewRecordsUnreadable
         ? [
-            {
-              id: 'crew-records',
-              title:
-                'crew records of a project are unreadable: no crew starts and per-label usage is not shown until the owner inspects or removes the file',
-            },
+            ownerLine(
+              'crew-records',
+              'crew records of a project are unreadable: no crew starts and per-label usage is not shown until the owner inspects or removes the file',
+            ),
           ]
         : []),
     ],

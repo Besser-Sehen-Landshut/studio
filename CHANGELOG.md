@@ -3,6 +3,45 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.22.0] - 2026-11-06
+
+Localization done properly: one set of locale files for the pane, the `/studio` command, the pushes
+and the notify command, a language is one file, and the whole interface works in English. Only
+displayed text is translated; code, commands, codes, config keys and defaults stay English. Not
+tagged yet; the maintainers tag after the merge.
+
+### Added
+
+- Locale files `hooks/locales/<code>.ts`, one per language, each `{ code, names, strings }`; English
+  is complete and every other locale is merged over it, so a text a locale leaves out shows in English.
+  The registry `hooks/locales/index.ts` is written from the folder (`pnpm locales`; `pnpm bundle` runs
+  it), and the languages `/studio lang`, `notify.language` and the usage text offer come from it.
+  English and German ship complete.
+- One language chain for the pane and the pushes (`hooks/i18n/resolve.ts`): an explicit choice
+  (`/studio lang <code>` or `notify.language`), then Claude Code's `language` setting (for pushes read
+  from the project's `.claude/settings.local.json` and `.claude/settings.json`, then the user's
+  `settings.json`), then the locale (`LC_ALL`, `LC_MESSAGES`, `LANG`; BCP 47 tags and POSIX locales
+  such as `fr_FR.UTF-8`), then English. A language without a locale file means English.
+- Codes for Studio's own lines that reach the pane, the toasts and the messages: owner lines
+  (`forOwner[].code` and `params`), the holds of items and of the queue (`items[].wait.reason`), and
+  the account block reasons and queue steps (already codes) are worded per language. The English text
+  stays beside the code as the fallback and for the details view.
+- The notify command gets `STUDIO_NOTIFY_LANG`, and `STUDIO_NOTIFY_TEXT` in that language.
+- Tests: every locale covers every text or names what it leaves to English (`english`), a stub locale
+  is picked up by adding its file, an unknown language falls back to English, the pane and the pushes
+  resolve the same language from the same inputs, and snapshots of every English and German text.
+
+### Changed
+
+- Plurals by `Intl.PluralRules`, decimals and the cost by `Intl.NumberFormat`, and duration units per
+  language (German `1h 5min`, `1T 2h`; the cost `3,46 $`).
+- The `/studio` replies, the pane title, the command description and the REA confirmation toasts come
+  from the locale files.
+- `notify.language` accepts any shipped language code or `auto` (the default).
+- `pnpm build` compiles `src` together with the shared texts in `hooks/` (into `dist/src` and
+  `dist/hooks`).
+- Version 0.22.0.
+
 ## [0.21.0] - 2026-11-06
 
 Related repositories can now work as a group without becoming one project: each keeps its board, CI,
@@ -396,7 +435,7 @@ an `owner_only` rule goes to the owner. Not tagged yet; the maintainers tag afte
   The queue judges again right before the merge and reads the base commit once more immediately before it
   merges; a moved base is judged again. `collect`, `tick` and `queue run` print `exceptions`; `studio
   board` lists those of open items, the pane's details view those of the last seven days (`Exceptions by
-  evidence`, in German `Ausnahmen per Beweis`).
+  evidence`).
 - Without a proof, one line for the lead (`evidence: <job> failed on <repo>#<n> at <head> and no evidence
   proved a false alarm (<rule>: <why>); decide: ...`): the approval waits, or the merge fails. These lines
   are not pushed to the owner's phone; the pane shows them as `guard hit without evidence – decide`. A guard

@@ -124,10 +124,7 @@
         },
         "language": {
           "type": "string",
-          "enum": [
-            "en",
-            "de"
-          ]
+          "pattern": "^(?:auto|[a-z]{2,3})$"
         },
         "ntfy_server": {
           "type": "string"

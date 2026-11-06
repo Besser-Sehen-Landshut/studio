@@ -9,6 +9,7 @@ import type { LeadDecision, PaneItem } from './pane-data.js';
 import { acquireStateLock, assertStatePath, ensureStateDir, writeStateFile } from './paths.js';
 import type { Capacity } from './planner.js';
 import type { QueueState } from './queue.js';
+import { type Reason, reasonOf } from './reasons.js';
 
 export interface LeadTime {
   item: string | null;
@@ -77,6 +78,19 @@ export interface Notification {
   label?: string;
 }
 
+export interface OwnerLine {
+  id: string;
+  title: string;
+  code?: Reason['code'];
+  params?: Reason['params'];
+}
+
+/** An owner line of Studio's own: its English title with the title's code. */
+export function ownerLine(id: string, title: string): OwnerLine {
+  const reason = reasonOf(title);
+  return reason === undefined ? { id, title } : { id, title, ...reason };
+}
+
 export interface StateSnapshot {
   crew: CrewSnapshot[];
   queue: QueueState;
@@ -88,8 +102,12 @@ export interface StateSnapshot {
   usageDays?: Record<string, Record<string, number>>;
   mainBuild: MainBuild;
   counts: { ready: number; queued: number };
-  /** Owner-only items that are not merged or dropped, plus at most one `account-block` or `usage-limit` line. */
-  forOwner: { id: string; title: string }[];
+  /**
+   * Owner-only items that are not merged or dropped, plus at most one `account-block` or
+   * `usage-limit` line. `title` is English (an item's own title, or Studio's line); Studio's lines
+   * also carry `code` and `params`, which the pane and the messages word in the owner's language.
+   */
+  forOwner: OwnerLine[];
   /** Credential labels parked at a usage limit. */
   limits?: Parks;
   /** Crews running and runs today per credential label (labels only); absent when empty. */
