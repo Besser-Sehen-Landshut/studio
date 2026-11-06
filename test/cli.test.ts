@@ -5196,40 +5196,60 @@ describe('studio migration: the register of reserved migration numbers', () => {
   const MIG_YAML = `${STUDIO_YAML}migrations: { dir: db/m }\n`;
   type MigView = {
     main?: string[];
-    open?: { number: number; files: { path: string; changeType: string }[] }[];
-    prFiles?: Record<number, string[]>;
+    /** Open pull requests and the migrations each adds below db/m (over main as its merge base). */
+    open?: { number: number; adds: string[] }[];
     /** Lines that fail as GitHub would on an outage. */
     fail?: RegExp;
   };
+  const headOid = (n: number) => String(n).padStart(40, 'a');
+  const baseOid = (n: number) => String(n).padStart(40, 'b');
+  const tree = (names: string[]) => ({
+    stdout: JSON.stringify({
+      truncated: false,
+      tree: names.map((path) => ({ path, type: 'blob' })),
+    }),
+  });
   /** GitHub with migrations on main and in open pull requests; other lines go to `rest`. */
   const migGh = (o: MigView, rest: (line: string) => GhReply | undefined = () => undefined) =>
     fakeGh((l) => {
       if (o.fail?.test(l)) return { code: 1, stderr: 'HTTP 502' };
+      const main = o.main ?? [];
+      const open = o.open ?? [];
       if (l === 'repo view org/app --json defaultBranchRef') {
         return { stdout: JSON.stringify({ defaultBranchRef: { name: 'main' } }) };
       }
-      if (l === 'api repos/org/app/git/trees/main%3Adb%2Fm') {
+      const t = /^api repos\/org\/app\/git\/trees\/(\S+)$/.exec(l);
+      if (t) {
+        const ref = decodeURIComponent(t[1] as string).replace(/:db\/m$/, '');
+        if (ref === 'main') return tree(main);
+        const pr = open.find((p) => headOid(p.number) === ref);
+        if (pr) return tree([...main, ...pr.adds]);
+        if (open.some((p) => baseOid(p.number) === ref)) return tree(main);
+      }
+      const c = /^api repos\/org\/app\/compare\/\w+\.\.\.(\w+) --jq \.merge_base_commit\.sha$/.exec(
+        l,
+      );
+      const forCompare = c && open.find((p) => headOid(p.number) === c[1]);
+      if (forCompare) return { stdout: `${baseOid(forCompare.number)}\n` };
+      if (
+        l.startsWith('pr list --repo org/app --state open --limit 1000 --json number,headRefOid')
+      ) {
         return {
-          stdout: JSON.stringify({
-            truncated: false,
-            tree: (o.main ?? []).map((path) => ({ path, type: 'blob' })),
-          }),
+          stdout: JSON.stringify(
+            open.map((p) => ({
+              number: p.number,
+              headRefOid: headOid(p.number),
+              baseRefOid: 'c'.repeat(40),
+            })),
+          ),
         };
       }
-      if (l.startsWith('pr list --repo org/app --state open --limit 1000 --json number,files')) {
-        return { stdout: JSON.stringify(o.open ?? []) };
-      }
-      const m = /^api --paginate repos\/org\/app\/pulls\/(\d+)\/files/.exec(l);
-      if (m) {
+      const v = /^pr view (\d+) --repo org\/app --json headRefOid,baseRefOid$/.exec(l);
+      if (v) {
         return {
-          stdout: (o.prFiles?.[Number(m[1])] ?? [])
-            .map((f) => JSON.stringify(['added', f]))
-            .join('\n'),
+          stdout: JSON.stringify({ headRefOid: headOid(Number(v[1])), baseRefOid: 'c'.repeat(40) }),
         };
       }
-      const v = /^pr view (\d+) --repo org\/app --json changedFiles$/.exec(l);
-      if (v)
-        return { stdout: JSON.stringify({ changedFiles: o.prFiles?.[Number(v[1])]?.length ?? 0 }) };
       return rest(l);
     });
   const reserve = (num: number, holder: string, purpose: string) => ({
@@ -5256,15 +5276,14 @@ describe('studio migration: the register of reserved migration numbers', () => {
       : undefined;
   const PR31 = {
     main: ['0001_a.sql'],
-    open: [{ number: 31, files: [{ path: 'db/m/0003_x.sql', changeType: 'ADDED' }] }],
-    prFiles: { 31: ['db/m/0003_x.sql'] },
+    open: [{ number: 31, adds: ['0003_x.sql'] }],
   };
 
   it('reserve gives the next free number, list shows it, release frees it', async () => {
     const fx = makeFx([], MIG_YAML);
     const { gh } = migGh({
       main: ['0001_a.sql', '0002_b.sql'],
-      open: [{ number: 7, files: [{ path: 'db/m/0003_c.sql', changeType: 'ADDED' }] }],
+      open: [{ number: 7, adds: ['0003_c.sql'] }],
     });
     const { ports } = fakePorts(gh);
     const r = await cli(fx, ports, 'migration', 'reserve', '--for', 'APP-1', '--purpose', 'users');
@@ -5376,8 +5395,7 @@ describe('studio migration: the register of reserved migration numbers', () => {
     });
     const mig = migGh({
       main: ['0001_a.sql', '0002_landed.sql'],
-      open: [{ number: 5, files: [{ path: 'db/m/0002_mine.sql', changeType: 'ADDED' }] }],
-      prFiles: { 5: ['db/m/0002_mine.sql'] },
+      open: [{ number: 5, adds: ['0002_mine.sql'] }],
     });
     // The register's lines first, every other one as a passing queue run answers it.
     const gh: Gh = {
@@ -5407,8 +5425,7 @@ describe('studio migration: the register of reserved migration numbers', () => {
       const mig = migGh(
         {
           main: ['0001_a.sql'],
-          open: [{ number: 7, files: [{ path: 'db/m/0003_x.sql', changeType: 'ADDED' }] }],
-          prFiles: { 7: ['db/m/0003_x.sql'] },
+          open: [{ number: 7, adds: ['0003_x.sql'] }],
         },
         (l) => {
           if (/^pr view 7 --repo org\/app --json headRefOid,state,mergeable/.test(l)) {
