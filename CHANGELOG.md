@@ -3,6 +3,69 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses semantic versioning.
 
+## [0.23.0] - 2026-11-06
+
+Cheaper on disk, one merge queue for every pull request, a register of migration numbers, a shared build
+cache, more languages for comment proofs and project proof commands in a sandbox. Not tagged yet; the
+maintainers tag after the merge.
+
+### Added
+
+- Clean-up of finished items: each tick removes the clone, crew home and tmp dir of an item that is merged (or
+  dropped at least 7 days ago) once its crew is gone and every local branch tip is on GitHub (pull request head
+  or main). Git never runs in the clone; anything unclear keeps it, with the reason. A clone whose report a
+  pending lesson cites is trimmed to its report.
+- `studio gc [--apply]`: lists those folders with sizes (`.git`, `target`, `node_modules` broken out) and
+  verdicts; a dry run by default. `studio doctor` shows the clones' total size and how many can go.
+- `studio merge <pr> [--repo owner/name] [--by <name>] [--follow-head] [--wait]`: hand a pull request without a
+  board item to the merge queue. Only the head seen at `studio merge` is merged: a later push fails the entry
+  ("head moved since enqueue"), unless `--follow-head` lets a new head merge once its own checks pass. It skips
+  the branch update and Studio's approval (GitHub's branch protection decides), stops on the first failed
+  check, waits while a push build runs on the base branch, re-reads the board and the head right before merging
+  and merges with `--match-head-commit`. `--wait` reports `MERGED`, `FAILED` or `TIMEOUT`. `tick` pushes each
+  result once. A pull request of a board item is refused.
+- `merge.runner_load` in `studio.yaml` (`org`, `name_pattern`, `max_busy`, `samples`, `interval_s`): an optional
+  gate before every queue merge on the busy self-hosted runners of an organisation; a failed read counts as busy.
+- `studio queue` (`queue list`): the merge queue as JSON, external entries included, with a `status` per
+  finished entry.
+- Register of reserved migration numbers: `migrations: { dir, number_pattern, repo }` in `studio.yaml`, and
+  `studio migration reserve [--number <n>] --for <who> --purpose "<text>"`, `studio migration list` and
+  `studio migration release <n>`. Reservations live in the lead's state root under a lock. `collect` blocks a
+  crew pull request, and the queue refuses to merge one (external entries included), when a new migration takes
+  a number that is on main, reserved for someone else, or used by another open pull request. A list GitHub may
+  have cut short counts as unreadable. Numbers that land on main are marked landed automatically. `studio
+  doctor` shows the register.
+- Shared build cache per project (`cache:` in `studio.yaml`, off by default; needs `roles.cache`). A crew of the
+  new role `cache` builds `main` in a fresh, unseeded clone with no token; the guard limits it to the listed
+  `cargo`/`pnpm`/`npm` commands and its report. Studio publishes the result copy-on-write into
+  `<state root>/cache/` only for the launch it scheduled, at the pinned commit. Every other local crew starts
+  from copy-on-write copies in its own clone and `HOME`. `tick` schedules a rebuild every `every_days` and keeps
+  all caches below the owner's `cache.max_gb` (default 20) with a daily least-recently-used cleanup. `studio
+  doctor` shows the cache and its size.
+- `comments_only` reads Rust (`.rs`), TypeScript (`.ts`, `.tsx`, `.mts`, `.cts`), JavaScript (`.js`, `.jsx`,
+  `.mjs`, `.cjs`), YAML (`.yml`, `.yaml`) and TOML (`.toml`) besides SQL, chosen by file extension, each with a
+  conservative tokenizer: comment markers in strings, raw strings, templates, regular expressions, JSX text and
+  block scalars are content, and anything whose extent depends on context the tokenizer does not track proves
+  nothing. Rust doc comments and comments that tools read (pragmas, lint and type directives, JSDoc tags,
+  bundler hints) count as code. YAML compares every code line byte for byte and must also load to the same
+  data. Shell and Python are left out on purpose: a script can read its own source and line numbers in too
+  many ways, so for those files the proof does not apply.
+- `proof: command` evidence rules: a command of the project (`command`, `timeout_seconds`) proves a property of
+  a pull request by exiting 0 with the line `proven <nonce>`; the nonce arrives on file descriptor 3, never in
+  the environment. Opt-in per machine (`allow_proof_commands: true` in the owner config), never without the
+  proof sandbox: Seatbelt on macOS, bubblewrap on Linux, no network, no signals or process information outside
+  its own sandbox, the base tree as cwd and the head as a read-only extract written blob by blob (no
+  `.gitattributes` processing, links and submodules refused, a size cap), writes only in a private tmp dir, no
+  access to the home, credentials, the owner and Claude config or the state, an allow-listed environment, CPU
+  time, file size, wall clock and output limits. The rule and its script come from the base on the default
+  branch only; a command that answered on a diff never runs on it again. A proof command must never execute
+  head content. Elsewhere (native Windows, no bubblewrap) such rules prove nothing.
+
+### Changed
+
+- `--apply` works with `adopt` and `gc`; the usage error for other commands changed accordingly.
+- A queue entry that ran out of the time limit is recorded with `timeout: true` (shown as `TIMEOUT`).
+
 ## [0.22.2] - 2026-11-06
 
 Fixes from the owner's first real REA setup. Not tagged yet; the maintainers tag after the merge.

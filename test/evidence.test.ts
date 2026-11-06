@@ -301,14 +301,16 @@ describe('evidence rules in studio.yaml', () => {
       /extra: unknown key/,
     );
   });
-  it('no user-configured command runs: a command rule is refused, with when it comes', () => {
+  it('a command belongs to proof: command only; the keys of the earlier draft are refused', () => {
+    expect(() =>
+      load(rule('    proof: paths_only\n    paths: ["a"]\n    command: [node, a.mjs]\n')),
+    ).toThrow(/only proof: command takes a command/);
     for (const lines of [
-      '    proof: paths_only\n    paths: ["a"]\n    command: [node, a.mjs]\n',
       '    proof: paths_only\n    paths: ["a"]\n    run: ci\n',
       '    proof: paths_only\n    paths: ["a"]\n    inputs: ["a"]\n',
     ]) {
       expect(() => load(rule(lines))).toThrow(
-        /built-in proof \(comments_only, paths_only\); custom proof commands come later, with a real sandbox/,
+        /a proof command takes command and timeout_seconds only: it runs locally, sandboxed/,
       );
     }
   });
