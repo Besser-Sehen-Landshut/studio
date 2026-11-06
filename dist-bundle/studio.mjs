@@ -62680,19 +62680,30 @@ function SafeFolder([string]$path, [string]$top) {
     $walk = $up
   }
 }
+# The explicit entries of a DACL and whether it is protected, comparable as text.
+function AclKey($sec) {
+  $keys = foreach ($r in $sec.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    '{0}|{1}|{2}|{3}|{4}|{5}' -f $r.IdentityReference.Value, [int]$r.FileSystemRights, [int]$r.InheritanceFlags, [int]$r.PropagationFlags, [int]$r.AccessControlType, $r.IsInherited
+  }
+  [string]$sec.AreAccessRulesProtected + ':' + ((@($keys) | Sort-Object) -join ';')
+}
+# Every reparse point below a folder, found without following one.
+function LinksBelow([string]$path) {
+  $todo = New-Object Collections.Stack
+  $todo.Push($path)
+  while ($todo.Count -gt 0) {
+    foreach ($c in Get-ChildItem -LiteralPath $todo.Pop() -Force) {
+      if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { $c.FullName; continue }
+      if ($c.PSIsContainer) { $todo.Push($c.FullName) }
+    }
+  }
+}
 # A folder of Studio's with exactly the DACL it should have: built from scratch and protected, so
 # no entry anyone added before survives. An existing one must be a plain folder administrators own.
+# Setting a DACL hands its inheritable entries down the whole subtree, through any junction in it:
+# a folder that already has this DACL is left alone, and one that gets a new DACL may hold no
+# reparse point anywhere below.
 function StrictFolder([string]$path, [object[]]$rules) {
-  if (Test-Path -LiteralPath $path) {
-    $item = Get-Item -LiteralPath $path -Force
-    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$path is a reparse point: refusing to set up Studio there" }
-    $owner = (Get-Acl -LiteralPath $path).GetOwner([Security.Principal.SecurityIdentifier]).Value
-    if ($ownerSids -notcontains $owner) { throw "$path is owned by $owner, not by administrators: remove it, then run this again" }
-  } else {
-    New-Item -ItemType Directory -Path $path | Out-Null
-  }
-  icacls $path /setowner '*S-1-5-32-544' /L /Q | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "cannot make administrators the owner of $path" }
   $acl = New-Object Security.AccessControl.DirectorySecurity
   $acl.SetAccessRuleProtection($true, $false)
   $all = 'ContainerInherit, ObjectInherit'
@@ -62704,6 +62715,20 @@ function StrictFolder([string]$path, [object[]]$rules) {
       [Security.AccessControl.PropagationFlags]$r[3],
       [Security.AccessControl.AccessControlType]::Allow)))
   }
+  if (Test-Path -LiteralPath $path) {
+    $item = Get-Item -LiteralPath $path -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$path is a reparse point: refusing to set up Studio there" }
+    $now = Get-Acl -LiteralPath $path
+    $owner = $now.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($ownerSids -notcontains $owner) { throw "$path is owned by $owner, not by administrators: remove it, then run this again" }
+    if ($owner -eq 'S-1-5-32-544' -and (AclKey $now) -eq (AclKey $acl)) { return }
+    $links = @(LinksBelow $path)
+    if ($links.Count -gt 0) { throw "$($links[0]) is a reparse point below $($path): remove it, then run this again" }
+  } else {
+    New-Item -ItemType Directory -Path $path | Out-Null
+  }
+  icacls $path /setowner '*S-1-5-32-544' /L /Q | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "cannot make administrators the owner of $path" }
   (Get-Item -LiteralPath $path -Force).SetAccessControl($acl)
 }
 # Nothing below the relay home that the elevated steps reach may be a reparse point.
@@ -63212,6 +63237,21 @@ $problems = @()
 foreach ($p in @(Up ${m}) + @(Up (Join-Path ${h2} 'state'))) {
   if (-not (Test-Path -LiteralPath $p)) { $problems += "$p is missing"; continue }
   if ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { $problems += "$p is a reparse point" }
+}
+# No reparse point anywhere in the config (small, admin-only), none just below state: the elevated
+# install hands DACL entries down these folders.
+$todo = New-Object Collections.Stack
+if (Test-Path -LiteralPath (Join-Path ${m} 'config')) { $todo.Push((Join-Path ${m} 'config')) }
+while ($todo.Count -gt 0) {
+  foreach ($c in Get-ChildItem -LiteralPath $todo.Pop() -Force) {
+    if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { $problems += "$($c.FullName) is a reparse point"; continue }
+    if ($c.PSIsContainer) { $todo.Push($c.FullName) }
+  }
+}
+if (Test-Path -LiteralPath (Join-Path ${h2} 'state')) {
+  foreach ($c in Get-ChildItem -LiteralPath (Join-Path ${h2} 'state') -Force) {
+    if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { $problems += "$($c.FullName) is a reparse point" }
+  }
 }
 # Each folder of Studio's: owned by administrators, its DACL protected, and no entry but the ones
 # the setup makes. Only state takes the relay account's writes: files and folders added to it, and

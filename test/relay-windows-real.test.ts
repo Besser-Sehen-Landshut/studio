@@ -129,6 +129,29 @@ StrictFolder ${q(path)} ${rules}`);
     expect(() => strict(foreign, readOnly)).toThrow(/not by administrators/);
   }, 120_000);
 
+  it('a new DACL is never handed down through a junction below; an unchanged one is left alone', () => {
+    const fill = `@(@($relaySid, 'ReadAndExecute, CreateFiles, CreateDirectories, Synchronize', 'None', 'None'), @($relaySid, 'Modify, Synchronize', $tree, 'InheritOnly'))`;
+    const state = join(base, 'state');
+    const outside = join(base, 'outside');
+    ps(
+      `New-Item -ItemType Directory -Path ${q(join(state, 'deep'))} -Force | Out-Null; New-Item -ItemType Directory -Path ${q(outside)} | Out-Null`,
+    );
+    const before = ps(`(Get-Acl -LiteralPath ${q(outside)}).Sddl`);
+    ps(
+      `New-Item -ItemType Junction -Path ${q(join(state, 'deep', 'link'))} -Target ${q(outside)} | Out-Null`,
+    );
+    expect(() => strict(state, fill)).toThrow(/reparse point below/);
+    expect(ps(`(Get-Acl -LiteralPath ${q(outside)}).Sddl`)).toBe(before);
+    // Without the junction the DACL is set; set again, with a junction made since, nothing moves.
+    ps(`(Get-Item -LiteralPath ${q(join(state, 'deep', 'link'))} -Force).Delete()`);
+    strict(state, fill);
+    ps(
+      `New-Item -ItemType Junction -Path ${q(join(state, 'deep', 'link'))} -Target ${q(outside)} | Out-Null`,
+    );
+    strict(state, fill);
+    expect(ps(`(Get-Acl -LiteralPath ${q(outside)}).Sddl`)).toBe(before);
+  }, 120_000);
+
   it('the tree check holds for the setup layout and refuses a state with a foreign writer', async () => {
     const machine = join(base, 'pf', 'Studio', 'relay');
     const home = join(base, 'pd', 'Studio', 'relay');
@@ -155,6 +178,20 @@ StrictFolder ${q(path)} ${rules}`);
       node: join(machine, 'node', 'node.exe'),
       studioBin: join(machine, 'studio', 'bin', 'studio'),
     };
+    expect(await machineTreeProblem(runFile, tree)).toBeUndefined();
+    // A junction in the config, or just below state, is refused.
+    const outside = join(base, 'outside-tree');
+    ps(`New-Item -ItemType Directory -Path ${q(outside)} | Out-Null`);
+    ps(
+      `New-Item -ItemType Junction -Path ${q(join(machine, 'config', 'link'))} -Target ${q(outside)} | Out-Null`,
+    );
+    expect(await machineTreeProblem(runFile, tree)).toMatch(/config\\link is a reparse point/);
+    ps(`(Get-Item -LiteralPath ${q(join(machine, 'config', 'link'))} -Force).Delete()`);
+    ps(
+      `New-Item -ItemType Junction -Path ${q(join(home, 'state', 'link'))} -Target ${q(outside)} | Out-Null`,
+    );
+    expect(await machineTreeProblem(runFile, tree)).toMatch(/state\\link is a reparse point/);
+    ps(`(Get-Item -LiteralPath ${q(join(home, 'state', 'link'))} -Force).Delete()`);
     expect(await machineTreeProblem(runFile, tree)).toBeUndefined();
     ps(`icacls ${q(join(home, 'state'))} /grant '*S-1-5-32-545:(M)' /Q | Out-Null`);
     expect(await machineTreeProblem(runFile, tree)).toMatch(/writable by S-1-5-32-545/);
