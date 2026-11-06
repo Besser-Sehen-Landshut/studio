@@ -46,6 +46,7 @@ export const LEAD_PREFIX = 'evidence: ';
 export const OWNER_PREFIX = 'evidence (owner): ';
 
 const STUDIO_CONFIG = '.studio/studio.yaml';
+const STUDIO_BOARD = '.studio/board.yaml';
 const SHA = /^[0-9a-f]{40,64}$/i;
 const GIT_FETCH_MS = 120_000;
 const GIT_LOCAL_MS = 60_000;
@@ -667,11 +668,20 @@ export async function evidenceChange(
   ctx: EvidenceContext,
   baseOid: string | undefined,
   head: string,
-): Promise<{ problem?: string; area?: 'evidence' | 'release' | 'research'; unreadable?: true }> {
+): Promise<{
+  problem?: string;
+  area?: 'evidence' | 'release' | 'research' | 'board';
+  unreadable?: true;
+}> {
   if (baseOid === undefined || !SHA.test(baseOid) || !SHA.test(head)) return { unreadable: true };
   if (!(await fetchBoth(ctx, baseOid, head))) return { unreadable: true };
   const files = await changedFiles(ctx, baseOid, head);
   if (files === undefined) return { unreadable: true };
+  // The board is Studio's and the owner's: its dependencies, epics and member items reach into the
+  // other projects of a group. A crew's pull request that changes it gets no approval.
+  if (files.some((f) => f.toLowerCase() === STUDIO_BOARD)) {
+    return { problem: 'the pull request changes .studio/board.yaml', area: 'board' };
+  }
   const [atBase, atHead] = [
     await rawOwnerBlocksAt(ctx, baseOid),
     await rawOwnerBlocksAt(ctx, head),

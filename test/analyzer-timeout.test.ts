@@ -1,17 +1,22 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   agentStartOf,
+  agentsFileOf,
   analyzerTimeUp,
   isTimeoutResult,
+  markTimedOut,
   readAgentStarts,
+  readAgents,
   reviewTimeouts,
   skippedOwedParts,
   TIMEOUT_RESULT,
+  timedOutAgents,
   timeoutBrief,
   timeoutDecision,
+  timeoutReportProblem,
   timeoutsOfContext,
 } from '../src/analyzer-timeout.js';
 import { parseConfig } from '../src/config.js';
@@ -106,6 +111,69 @@ describe('agentStartOf', () => {
     expect(() => agentStartOf(file, '../x y', T0)).toThrow(/agent id/);
     writeFileSync(file, '[1]');
     expect(() => agentStartOf(file, 'a', T0)).toThrow();
+  });
+});
+
+describe('a subagent stopped for time is recorded and held against the report', () => {
+  const state = join(dir, 'state');
+  mkdirSync(join(state, 'guard'), { recursive: true });
+  const file = agentsFileOf(state, 'APP-9');
+  const analyzers = ['diff-review', 'spec-check', 'similar-bugs', 'motion'];
+  const pass = {
+    'diff-review': 'pass',
+    'spec-check': 'pass',
+    'similar-bugs': 'pass',
+    motion: 'pass',
+  };
+
+  it('keeps the start, the type and the timeout of each subagent', () => {
+    agentStartOf(file, 'agent-a', T0, 'general-purpose');
+    agentStartOf(file, 'agent-b', T0, 'similar-bugs');
+    expect(timedOutAgents(state, 'APP-9', analyzers)).toEqual({ count: 0, named: [] });
+    markTimedOut(file, 'agent-a', T0 + 31 * MIN);
+    markTimedOut(file, 'agent-a', T0 + 32 * MIN);
+    expect(readAgents(file)['agent-a']).toEqual({
+      start: T0,
+      timedOut: true,
+      type: 'general-purpose',
+    });
+    expect(timedOutAgents(state, 'APP-9', analyzers)).toEqual({ count: 1, named: [] });
+    markTimedOut(file, 'agent-b', T0 + 31 * MIN);
+    expect(timedOutAgents(state, 'APP-9', analyzers)).toEqual({
+      count: 2,
+      named: ['similar-bugs'],
+    });
+  });
+
+  it('an approval that reports every analyzer passed after a timeout goes to the lead', () => {
+    const t = { count: 1, named: [] };
+    expect(timeoutReportProblem(t, pass, analyzers)).toMatch(
+      /^approval refused: the guard stopped 1 subagent for time, but only 0 analyzers read skipped: timeout$/,
+    );
+    expect(classifyDecision(timeoutReportProblem(t, pass, analyzers) as string)).toBe(
+      'analyzer_timeout',
+    );
+    expect(timeoutReportProblem(t, { ...pass, motion: TIMEOUT_RESULT }, analyzers)).toBeUndefined();
+    expect(timeoutReportProblem({ count: 0, named: [] }, pass, analyzers)).toBeUndefined();
+  });
+
+  it('a subagent type named after an analyzer must be that analyzer', () => {
+    const t = { count: 1, named: ['similar-bugs'] };
+    expect(timeoutReportProblem(t, { ...pass, motion: TIMEOUT_RESULT }, analyzers)).toMatch(
+      /stopped similar-bugs for time/,
+    );
+    expect(
+      timeoutReportProblem(t, { ...pass, 'similar-bugs': TIMEOUT_RESULT }, analyzers),
+    ).toBeUndefined();
+  });
+
+  it('an unreadable record counts as a timeout, and an old record of bare starts still reads', () => {
+    const bad = join(state, 'guard', 'APP-8.agents.json');
+    writeFileSync(bad, '[');
+    expect(timedOutAgents(state, 'APP-8', analyzers).count).toBe(1);
+    writeFileSync(bad, JSON.stringify({ 'agent-x': T0 }));
+    expect(readAgentStarts(bad)).toEqual({ 'agent-x': T0 });
+    expect(timedOutAgents(state, 'APP-7', analyzers)).toEqual({ count: 0, named: [] });
   });
 });
 

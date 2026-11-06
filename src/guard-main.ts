@@ -2,7 +2,7 @@
 // Bundled to dist-bundle/studio-guard.mjs (see `pnpm bundle`); bin/studio-guard.mjs loads it.
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { agentStartOf, timeoutDecision } from './analyzer-timeout.js';
+import { agentStartOf, markTimedOut, timeoutDecision } from './analyzer-timeout.js';
 import { evaluateGuard, type GuardContext } from './guard.js';
 
 interface Summary {
@@ -35,13 +35,18 @@ function deny(reason: string, summary?: Summary): void {
 }
 
 /** Records a subagent's start for its analyzer timeout. It cannot block: errors are dropped. */
-function subagentStart(hook: { agent_id?: unknown }): void {
+function subagentStart(hook: { agent_id?: unknown; agent_type?: unknown }): void {
   try {
     const ctxPath = process.env.STUDIO_GUARD_CTX;
     if (!ctxPath || typeof hook.agent_id !== 'string') return;
     const ctx = JSON.parse(readFileSync(ctxPath, 'utf8')) as GuardContext;
     if (ctx.timeouts === undefined) return;
-    agentStartOf(ctx.timeouts.agentsFile, hook.agent_id, Date.now());
+    agentStartOf(
+      ctx.timeouts.agentsFile,
+      hook.agent_id,
+      Date.now(),
+      typeof hook.agent_type === 'string' ? hook.agent_type : undefined,
+    );
   } catch {
     // The first tool call of the subagent records its start instead.
   }
@@ -53,15 +58,19 @@ function overTime(hook: Record<string, unknown>, ctx: GuardContext): string | un
   if (t === undefined) return undefined;
   const now = Date.now();
   const agentId = typeof hook.agent_id === 'string' ? hook.agent_id : undefined;
-  return timeoutDecision(t, {
+  const type = typeof hook.agent_type === 'string' ? hook.agent_type : undefined;
+  const line = timeoutDecision(t, {
     now,
     ...(agentId === undefined
       ? {}
-      : { agentId, agentStart: agentStartOf(t.agentsFile, agentId, now) }),
+      : { agentId, agentStart: agentStartOf(t.agentsFile, agentId, now, type) }),
     toolName: String(hook.tool_name),
     toolInput: (hook.tool_input ?? {}) as Record<string, unknown>,
     ...(typeof hook.cwd === 'string' ? { cwd: hook.cwd } : {}),
   });
+  // A subagent refused for time is recorded, so collect never takes its analyzer as a pass.
+  if (line !== undefined && agentId !== undefined) markTimedOut(t.agentsFile, agentId, now, type);
+  return line;
 }
 
 let summary: Summary | undefined;

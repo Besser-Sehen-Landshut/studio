@@ -502,11 +502,11 @@ var require_shell_quote = __commonJS({
 
 // src/guard-main.ts
 import { appendFileSync, mkdirSync, readFileSync as readFileSync2 } from "node:fs";
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 
 // src/analyzer-timeout.ts
 import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 var REVIEW_GRACE_MS = 15 * 6e4;
 var TIMEOUT_RESULT = "skipped: timeout";
 var MAX_AGENTS = 500;
@@ -531,7 +531,7 @@ function timeoutDecision(t, call) {
   }
   return sessionTimeUp(t.reportFile);
 }
-function readAgentStarts(file) {
+function readAgents(file) {
   let text;
   try {
     if (!lstatSync(file).isFile()) throw new Error(`${file} is not a plain file`);
@@ -545,33 +545,62 @@ function readAgentStarts(file) {
     throw new Error(`${file} is not an object`);
   }
   const out = {};
-  for (const [k, v] of Object.entries(raw)) if (typeof v === "number") out[k] = v;
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === "number") out[k] = { start: v };
+    else if (v !== null && typeof v === "object" && typeof v.start === "number") {
+      const r = v;
+      out[k] = {
+        start: r.start,
+        ...r.timedOut === true ? { timedOut: true } : {},
+        ...typeof r.type === "string" && AGENT_TYPE_RE.test(r.type) ? { type: r.type } : {}
+      };
+    }
+  }
   return out;
 }
 var AGENT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
-function agentStartOf(file, agentId, now) {
-  if (!AGENT_ID_RE.test(agentId)) throw new Error("unexpected agent id");
-  const starts = readAgentStarts(file);
-  const known = starts[agentId];
-  if (known !== void 0) return known;
-  if (Object.keys(starts).length >= MAX_AGENTS) throw new Error("too many subagents in one run");
-  starts[agentId] = now;
-  const tmp = `${file}.${process.pid}.${now}.tmp`;
+var AGENT_TYPE_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+function writeAgents(file, agents, now) {
+  const tmp = `${file}.${process.pid}.${now}.${Math.random().toString(36).slice(2)}.tmp`;
   try {
-    writeFileSync(tmp, `${JSON.stringify(starts)}
+    writeFileSync(tmp, `${JSON.stringify(agents)}
 `, { mode: 384, flag: "wx" });
     renameSync(tmp, file);
   } catch (e) {
     rmSync(tmp, { force: true });
     throw e;
   }
+}
+function agentStartOf(file, agentId, now, type) {
+  if (!AGENT_ID_RE.test(agentId)) throw new Error("unexpected agent id");
+  const agents = readAgents(file);
+  const known = agents[agentId];
+  if (known !== void 0) return known.start;
+  if (Object.keys(agents).length >= MAX_AGENTS) throw new Error("too many subagents in one run");
+  agents[agentId] = {
+    start: now,
+    ...type !== void 0 && AGENT_TYPE_RE.test(type) ? { type } : {}
+  };
+  writeAgents(file, agents, now);
   return now;
+}
+function markTimedOut(file, agentId, now, type) {
+  if (!AGENT_ID_RE.test(agentId)) throw new Error("unexpected agent id");
+  const agents = readAgents(file);
+  const known = agents[agentId] ?? { start: now };
+  if (known.timedOut === true) return;
+  agents[agentId] = {
+    ...known,
+    timedOut: true,
+    ...known.type === void 0 && type !== void 0 && AGENT_TYPE_RE.test(type) ? { type } : {}
+  };
+  writeAgents(file, agents, now);
 }
 
 // src/guard.ts
 var import_shell_quote = __toESM(require_shell_quote(), 1);
 import { globSync, lstatSync as lstatSync2, readdirSync, readlinkSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute as isAbsolute2, join, normalize } from "node:path";
+import { basename, dirname, isAbsolute as isAbsolute2, join as join2, normalize } from "node:path";
 function namedDeniedPort(cmd, ports) {
   for (const port of ports) {
     const p = String(port);
@@ -725,8 +754,8 @@ function expandGlobPath(t, base) {
     for (const d of dirs) {
       if (hasMagic(leaf)) {
         const where = d === "" ? base : resolveReal(d, base);
-        for (const m of capped(globSync(leaf, { cwd: where }))) out.push(join(d, m));
-      } else out.push(join(d, leaf));
+        for (const m of capped(globSync(leaf, { cwd: where }))) out.push(join2(d, m));
+      } else out.push(join2(d, leaf));
     }
   } catch (err) {
     if (err instanceof Deny) throw err;
@@ -757,7 +786,7 @@ function checkWritePath(env, tok, cwd, why) {
   }
 }
 function checkSecretPath(env, tok, base) {
-  const lexical = isAbsolute2(tok) ? normalize(tok) : normalize(join(base, tok));
+  const lexical = isAbsolute2(tok) ? normalize(tok) : normalize(join2(base, tok));
   if (isSecretString(env, tok) || isSecretString(env, lexical)) {
     deny(`secret file access: ${tok}`);
   }
@@ -1974,7 +2003,7 @@ function scanDirForSecrets(env, dir) {
     }
     for (const e of entries) {
       if (++count > GUARD_LIMITS.walk) deny("too many paths to check");
-      const full = join(d, e.name);
+      const full = join2(d, e.name);
       if (e.isDirectory()) {
         if (e.name !== "node_modules" && e.name !== ".git") stack.push(full);
       } else if (isSecretString(env, full)) {
@@ -2049,7 +2078,7 @@ function checkSearch(env, path, globs, cwd) {
     if (typeof g !== "string" || g === "") continue;
     for (const e of braceExpand(g)) {
       if (e.includes(SUBST)) deny("unresolved search glob");
-      if (isSecretString(env, e) || isSecretString(env, join(base, e))) {
+      if (isSecretString(env, e) || isSecretString(env, join2(base, e))) {
         deny(`secret file access: ${e}`);
       }
       if (!hasMagic(e)) continue;
@@ -2066,7 +2095,7 @@ function checkSearch(env, path, globs, cwd) {
       } catch (err) {
         if (err instanceof Deny) throw err;
       }
-      for (const m of matches) if (isSecretString(env, join(base, m))) deny(`secret file: ${m}`);
+      for (const m of matches) if (isSecretString(env, join2(base, m))) deny(`secret file: ${m}`);
     }
   }
 }
@@ -2187,7 +2216,7 @@ function deny2(reason, summary2) {
     try {
       mkdirSync(dir, { recursive: true });
       appendFileSync(
-        join2(dir, "guard.jsonl"),
+        join3(dir, "guard.jsonl"),
         `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), tool: summary2?.tool ?? null, reason, input: summary2?.input ?? null })}
 `
       );
@@ -2201,7 +2230,12 @@ function subagentStart(hook) {
     if (!ctxPath || typeof hook.agent_id !== "string") return;
     const ctx = JSON.parse(readFileSync2(ctxPath, "utf8"));
     if (ctx.timeouts === void 0) return;
-    agentStartOf(ctx.timeouts.agentsFile, hook.agent_id, Date.now());
+    agentStartOf(
+      ctx.timeouts.agentsFile,
+      hook.agent_id,
+      Date.now(),
+      typeof hook.agent_type === "string" ? hook.agent_type : void 0
+    );
   } catch {
   }
 }
@@ -2210,13 +2244,16 @@ function overTime(hook, ctx) {
   if (t === void 0) return void 0;
   const now = Date.now();
   const agentId = typeof hook.agent_id === "string" ? hook.agent_id : void 0;
-  return timeoutDecision(t, {
+  const type = typeof hook.agent_type === "string" ? hook.agent_type : void 0;
+  const line = timeoutDecision(t, {
     now,
-    ...agentId === void 0 ? {} : { agentId, agentStart: agentStartOf(t.agentsFile, agentId, now) },
+    ...agentId === void 0 ? {} : { agentId, agentStart: agentStartOf(t.agentsFile, agentId, now, type) },
     toolName: String(hook.tool_name),
     toolInput: hook.tool_input ?? {},
     ...typeof hook.cwd === "string" ? { cwd: hook.cwd } : {}
   });
+  if (line !== void 0 && agentId !== void 0) markTimedOut(t.agentsFile, agentId, now, type);
+  return line;
 }
 var summary;
 try {

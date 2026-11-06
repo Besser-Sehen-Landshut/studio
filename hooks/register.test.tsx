@@ -46,6 +46,8 @@ type WorldOptions = {
   cwd?: string;
   /** What the session draws on; default one terminal. */
   surfaces?: ('terminal' | 'app')[];
+  /** Paths that stat as symbolic links. */
+  links?: string[];
   /** Claude Code settings as `$.settings.read` answers them; default none. */
   settings?: Record<string, unknown>;
 };
@@ -118,7 +120,13 @@ function world(on: On, options: WorldOptions = {}) {
     };
   });
   on('fs.stat', (_, e) => ({
-    value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath: e.path },
+    value: {
+      kind: files.has(e.path) ? 'file' : 'dir',
+      size: 0,
+      mtimeMs: 0,
+      isLink: options.links?.includes(e.path) ?? false,
+      realPath: e.path,
+    },
   }));
   on('fs.read', (_, e) => {
     if (options.unreadable?.includes(e.path)) throw new Error('too large');
@@ -577,7 +585,8 @@ test('the mod never writes a file or runs a process', async ($, on) => {
 
 // ---------- the one write: the owner's REA install confirmation ----------
 
-const OWNER_CONSENT = '/home/u/.local/state/studio/owner/rea-consent.json';
+const OWNER_ROOT = '/home/u/.local/state/studio/owner';
+const PANE_CONFIRM = `${OWNER_ROOT}/rea-confirm.json`;
 const reaState = () => ({
   ...LIST_STATE,
   needsLead: [
@@ -592,12 +601,7 @@ const reaState = () => ({
 });
 
 test('a press on the REA button writes the owner confirmation, and nothing else does', async ($, on) => {
-  const { seen, files } = world(on, {
-    files: {
-      ...withState(reaState()),
-      [OWNER_CONSENT]: JSON.stringify({ '6.6.0:full': { answer: 'no' } }),
-    },
-  });
+  const { seen, files } = world(on, { files: withState(reaState()) });
   await $.session.start(start);
   // Commands never confirm: only the press does.
   for (const args of ['', 'status', 'group', 'junk', 'list']) {
@@ -608,11 +612,11 @@ test('a press on the REA button writes the owner confirmation, and nothing else 
   expect(await ui.find({ key: 'rea-confirm' })).toBeDefined();
   await ui.press({ key: 'rea-confirm' });
   await ui.unmount();
-  expect(seen.forbidden).toEqual([`fs.write ${OWNER_CONSENT}`]);
-  const written = JSON.parse(files.get(OWNER_CONSENT) ?? '{}');
-  expect(written['6.6.0:full']).toEqual({ answer: 'no' });
-  expect(written['6.7.0:full']).toMatchObject({
-    answer: 'yes',
+  // Its own small file, never the shared record: Studio checks it and takes it in.
+  expect(seen.forbidden).toEqual([`fs.write ${PANE_CONFIRM}`]);
+  expect(JSON.parse(files.get(PANE_CONFIRM) ?? '{}')).toMatchObject({
+    version: '6.7.0',
+    mode: 'full',
     by: 'pane',
     folder: '/home/u/analysis',
   });
@@ -621,18 +625,23 @@ test('a press on the REA button writes the owner confirmation, and nothing else 
   );
 });
 
-test('no REA button without a pending install, and a consent file it cannot read is left alone', async ($, on) => {
-  const { seen, files } = world(on, {
-    files: { ...withState(reaState()), [OWNER_CONSENT]: '[not json' },
+for (const [what, links] of [
+  ['the owner folder', [OWNER_ROOT]],
+  ['the confirmation file', [PANE_CONFIRM]],
+] as const) {
+  test(`the REA button writes nothing when ${what} is a link`, async ($, on) => {
+    const { seen } = world(on, {
+      files: { ...withState(reaState()), [PANE_CONFIRM]: '{}' },
+      links: [...links],
+    });
+    await $.session.start(start);
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
+    await ui.press({ key: 'rea-confirm' });
+    await ui.unmount();
+    expect(seen.forbidden).toEqual([]);
+    expect(seen.toasts.at(-1)).toMatch(/could not be saved/);
   });
-  await $.session.start(start);
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' });
-  await ui.press({ key: 'rea-confirm' });
-  await ui.unmount();
-  expect(files.get(OWNER_CONSENT)).toBe('[not json');
-  expect(seen.forbidden).toEqual([]);
-  expect(seen.toasts.at(-1)).toMatch(/could not be saved/);
-});
+}
 
 test('a state without a pending install draws no button', async ($, on) => {
   world(on, { files: withState(LIST_STATE) });

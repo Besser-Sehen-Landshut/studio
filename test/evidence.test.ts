@@ -629,6 +629,19 @@ describe('judging a failed guard by a built-in proof', () => {
     expect(await evidenceChange(ctxFor(same, fakeGh(same).gh), same.base, same.head)).toEqual({});
   });
 
+  it('a pull request that changes .studio/board.yaml gets no approval: the board is the owner’s', async () => {
+    const r = makeRepo({
+      change: (dir) => {
+        writeFileSync(join(dir, '.studio/board.yaml'), 'items: []\n');
+        codeChange(dir);
+      },
+    });
+    expect(await evidenceChange(ctxFor(r, fakeGh(r).gh), r.base, r.head)).toEqual({
+      problem: 'the pull request changes .studio/board.yaml',
+      area: 'board',
+    });
+  });
+
   it('the research block is the owner’s: adding, changing or removing it gets no approval', async () => {
     const research = 'research:\n  artifacts: /analysis/target\n';
     const added = makeRepo({

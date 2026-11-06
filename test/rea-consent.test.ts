@@ -1,11 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,6 +23,7 @@ import { ownerStateRootFor, stateRootFor } from '../src/paths.js';
 import { type Ports, realPorts } from '../src/ports.js';
 import { REA_CLASS_NAMES } from '../src/rea.js';
 import {
+  addResearchRoot,
   consentQuestion,
   DEFAULT_ANALYSIS_DIR,
   ensureRea,
@@ -239,14 +243,13 @@ describe('the first REA install without a terminal', () => {
   const paneConfirms = (f: F, version: string, folder?: string) => {
     mkdirSync(f.ownerRoot, { recursive: true });
     writeFileSync(
-      join(f.ownerRoot, 'rea-consent.json'),
+      join(f.ownerRoot, 'rea-confirm.json'),
       JSON.stringify({
-        [`${version}:full`]: {
-          answer: 'yes',
-          at: '2026-11-06T10:00:00.000Z',
-          by: 'pane',
-          ...(folder === undefined ? {} : { folder }),
-        },
+        version,
+        mode: 'full',
+        at: '2026-11-06T10:00:00.000Z',
+        by: 'pane',
+        ...(folder === undefined ? {} : { folder }),
       }),
     );
   };
@@ -308,8 +311,10 @@ describe('the first REA install without a terminal', () => {
     const f = setup();
     await expect(launch(f)).rejects.toThrow(ReaInstallNeeded);
     paneConfirms(f, '6.7.0');
-    expect(readConsent(f.ownerRoot, '6.7.0', 'full')).toBe('yes');
     await launch(f);
+    // Taken into the record and removed.
+    expect(readConsent(f.ownerRoot, '6.7.0', 'full')).toBe('yes');
+    expect(existsSync(join(f.ownerRoot, 'rea-confirm.json'))).toBe(false);
     expect(f.npm.calls.map((c) => c[0])).toEqual(['view', 'install']);
     expect(f.started).toHaveLength(1);
   });
@@ -323,6 +328,23 @@ describe('the first REA install without a terminal', () => {
     await launch(f, undefined, research, inDefault(f));
     expect(loadOwnerConfig(f.owner).researchRoots).toEqual([folder]);
     expect(f.started).toHaveLength(1);
+  });
+
+  it('a pane file naming another folder, writable by others, or a link counts for nothing', async () => {
+    for (const spoil of ['folder', 'mode', 'link'] as const) {
+      const f = setup({ roots: false });
+      if (spoil === 'folder') paneConfirms(f, '6.7.0', join(f.home, 'elsewhere'));
+      else paneConfirms(f, '6.7.0', join(f.home, 'analysis'));
+      const file = join(f.ownerRoot, 'rea-confirm.json');
+      if (spoil === 'mode') chmodSync(file, 0o666);
+      if (spoil === 'link') {
+        renameSync(file, `${file}.real`);
+        symlinkSync(`${file}.real`, file);
+      }
+      await expect(launch(f, undefined, research, inDefault(f))).rejects.toThrow(ReaInstallNeeded);
+      expect(f.npm.calls).toEqual([]);
+      expect(loadOwnerConfig(f.owner).researchRoots).toEqual([]);
+    }
   });
 
   it('in the owner terminal --yes and --folder confirm without a question', async () => {
@@ -354,6 +376,28 @@ describe('the first REA install without a terminal', () => {
     await launch(f, a.asker).catch(() => undefined);
     expect(a.asked).toEqual([consentQuestion('6.8.0')]);
     expect(readConsent(f.ownerRoot, '6.8.0', 'full')).toBe('yes');
+  });
+});
+
+describe('a new research root', () => {
+  it('is a real folder of the owner, stored by its real path, never the home, a parent, a store or the state', () => {
+    const f = setup({ roots: false });
+    const add = (dir: string) => addResearchRoot(f.owner, dir, f.ownerRoot);
+    expect(() => add(f.home)).toThrow(/home directory or a parent/);
+    expect(() => add(join(f.home, '..'))).toThrow(/home directory or a parent/);
+    expect(() => add(join(f.home, '.ssh'))).toThrow(/credential location/);
+    expect(() => add(join(f.home, '.local', 'state', 'studio', 'x'))).toThrow(
+      /credential location/,
+    );
+    // A link where the folder should be is refused, even to a fine place.
+    const elsewhere = join(f.home, 'elsewhere');
+    mkdirSync(elsewhere);
+    symlinkSync(elsewhere, join(f.home, 'linked'));
+    expect(() => add(join(f.home, 'linked'))).toThrow(/not a plain folder/);
+    expect(loadOwnerConfig(f.owner).researchRoots).toEqual([]);
+    const ok = add('~/analysis');
+    expect(ok).toBe(realpathSync(join(f.home, 'analysis')));
+    expect(loadOwnerConfig(f.owner).researchRoots).toEqual([ok]);
   });
 });
 

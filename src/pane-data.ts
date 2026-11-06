@@ -266,6 +266,7 @@ function classify(item: string, reason: string): LeadDecision {
   // A mandatory analyzer ran out of time (src/analyzer-timeout.ts), or a whole review did.
   if (
     /^(?:approval refused: .*)?mandatory analyzer timed out: /.test(r) ||
+    r.startsWith('approval refused: the guard stopped ') ||
     r.startsWith('review timed out')
   ) {
     return of('analyzer_timeout', 'analyzer timed out', `show ${item}`);

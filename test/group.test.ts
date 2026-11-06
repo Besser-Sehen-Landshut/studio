@@ -24,6 +24,7 @@ import { ownerConfigSchema, parseConfig, type StudioConfig } from '../src/config
 import { editEpic, epicRows } from '../src/epics.js';
 import {
   CONTRACTS_FILE,
+  caseCollisions,
   checkContracts,
   depKey,
   formatGroupRows,
@@ -32,9 +33,11 @@ import {
   type Membership,
   memberStatusLookup,
   membershipOf,
+  readContractChange,
   readProjectBoard,
   readReference,
   referenceBrief,
+  referenceCollisions,
   resolveExternalDeps,
   writeReference,
 } from '../src/group.js';
@@ -311,6 +314,62 @@ describe('cross-project dependencies', () => {
     expect(p.blocked[0]?.reason).toMatch(/unreadable: not checked/);
   });
 
+  it('finds a cycle through any number of projects, and only a real one', () => {
+    const main = project('platform', 'org/platform');
+    const web = project('web', 'org/web', [
+      item({ id: 'WEB-1', repo: 'org/web', dependsOn: ['api:API-1'] }),
+      item({ id: 'WEB-2', repo: 'org/web', dependsOn: ['WEB-3'] }),
+      item({ id: 'WEB-3', repo: 'org/web', dependsOn: ['api:API-2'] }),
+    ]);
+    const api = project('api', 'org/api', [
+      item({ id: 'API-1', repo: 'org/api', dependsOn: ['platform:PLAT-1'] }),
+      item({ id: 'API-2', repo: 'org/api', dependsOn: ['platform:PLAT-9'] }),
+    ]);
+    const owner = ownerConfigSchema.parse({
+      groups: [
+        {
+          name: 'shop',
+          main: 'platform',
+          projects: [
+            { id: 'platform', repo: 'org/platform', dir: main },
+            { id: 'web', repo: 'org/web', dir: web },
+            { id: 'api', repo: 'org/api', dir: api },
+          ],
+          reference: ['docs/**'],
+        },
+      ],
+    });
+    const m = membershipOf(main, config('org/platform'), owner) as Membership;
+    const board: Board = {
+      items: [
+        waiting(['web:WEB-1'], 'PLAT-1'),
+        waiting(['web:WEB-2'], 'PLAT-2'),
+        { ...waiting([], 'PLAT-9'), status: 'merged' },
+      ],
+    };
+    const deps = resolveExternalDeps(board, m);
+    // PLAT-1 -> web:WEB-1 -> api:API-1 -> platform:PLAT-1: three projects round.
+    expect(deps.get(depKey('PLAT-1', 'web:WEB-1'))).toEqual({ state: 'cycle' });
+    // PLAT-2 -> WEB-2 -> WEB-3 -> API-2 -> PLAT-9 (merged): no cycle, just waiting.
+    expect(deps.get(depKey('PLAT-2', 'web:WEB-2'))).toEqual({ state: 'waiting', status: 'ready' });
+    const cap = { ciBusy: 0, ciTotal: 4, hostLoad: 0, ok: true, hostOk: true };
+    const p = planAssignments(
+      board,
+      config('org/platform'),
+      cap,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+    expect(p.blocked).toEqual([
+      { id: 'PLAT-1', reason: 'dependency cycle' },
+      { id: 'PLAT-2', reason: 'waiting on web:WEB-2' },
+    ]);
+  });
+
   it('a board whose studio.yaml names another repository is not read', () => {
     const { m, web } = setup([item({ id: 'WEB-1', repo: 'org/web', status: 'merged' })]);
     writeFileSync(join(web, '.studio', 'studio.yaml'), studioYaml('org/evil'));
@@ -462,6 +521,70 @@ describe('the reference excerpt', () => {
     expect(ref.files.find((f) => f.path === 'docs/contracts/api.md')?.content).toContain('v2');
   });
 
+  it('never copies a path with a secret-like segment', async () => {
+    const main = mainWithOrigin({
+      'docs/contracts/api.md': 'a\n',
+      'docs/contracts/secrets/token.md': 'x\n',
+      'docs/credentials/notes.md': 'x\n',
+      'docs/adr/.envrc': 'x\n',
+      'docs/adr/deploy.tfvars': 'x\n',
+      'docs/adr/app.keystore': 'x\n',
+      'docs/adr/.pypirc': 'x\n',
+    });
+    const web = project('web', 'org/web');
+    const owner = groupOf(main.dir, web);
+    const g = owner.groups?.[0];
+    if (g) g.reference = ['docs/**'];
+    const m = membershipOf(web, config('org/web'), owner) as Membership;
+    const state = join(root, `state-${n++}`);
+    mkdirSync(state, { recursive: true });
+    const ref = await readReference(m, state, countingPorts().ports);
+    expect(ref.files.map((f) => f.path)).toEqual(['docs/contracts/api.md']);
+    const why = Object.fromEntries(ref.omitted.map((o) => [o.path, o.why]));
+    for (const p of [
+      'docs/contracts/secrets/token.md',
+      'docs/credentials/notes.md',
+      'docs/adr/.envrc',
+      'docs/adr/deploy.tfvars',
+      'docs/adr/app.keystore',
+      'docs/adr/.pypirc',
+    ]) {
+      expect(why[p]).toBe('secret-like name');
+    }
+    expect(referenceCollisions(ref)).toEqual([]);
+  });
+
+  it('copies neither of two paths that differ only in case, and names them for the lead', async () => {
+    const main = mainWithOrigin({ 'docs/glossary.md': 'g\n' });
+    // A second spelling, added to the index directly: a case-insensitive disk cannot hold both.
+    const blob = git(main.dir, 'hash-object', '-w', '--stdin').trim();
+    git(main.dir, 'update-index', '--add', '--cacheinfo', `100644,${blob},docs/Glossary.md`);
+    git(main.dir, 'commit', '-q', '-m', 'case');
+    git(main.dir, 'push', '-q', 'origin', 'main');
+    const web = project('web', 'org/web');
+    const m = membershipOf(web, config('org/web'), groupOf(main.dir, web)) as Membership;
+    const state = join(root, `state-${n++}`);
+    mkdirSync(state, { recursive: true });
+    const ref = await readReference(m, state, countingPorts().ports);
+    expect(ref.files).toEqual([]);
+    expect(ref.omitted).toEqual([
+      { path: 'docs/Glossary.md', why: 'case collision with docs/glossary.md' },
+      { path: 'docs/glossary.md', why: 'case collision with docs/Glossary.md' },
+    ]);
+    expect(referenceCollisions(ref)).toEqual(['docs/Glossary.md', 'docs/glossary.md']);
+  });
+
+  it('finds case collisions of files and folders', () => {
+    expect(caseCollisions(['a/b.md', 'a/c.md'])).toEqual(new Map());
+    expect(caseCollisions(['Docs/a.md', 'docs/b.md'])).toEqual(
+      new Map([
+        ['docs/b.md', 'Docs/a.md'],
+        ['Docs/a.md', 'docs/b.md'],
+      ]),
+    );
+    expect([...caseCollisions(['docs', 'Docs/x.md']).keys()].sort()).toEqual(['Docs/x.md', 'docs']);
+  });
+
   it('refuses when the main project cannot be fetched', async () => {
     const { m, state, main } = setup();
     rmSync(`${main.dir}.git`, { recursive: true, force: true });
@@ -523,7 +646,7 @@ describe('contract changes', () => {
           if (crashAfterBoard) throw new Error('crash');
         },
       });
-    return { main, web, state, run, saves: () => saves };
+    return { main, web, state, run, m, saves: () => saves };
   };
   const checks = (web: string) =>
     loadBoard(web).items.filter((i) =>
@@ -539,7 +662,7 @@ describe('contract changes', () => {
   });
 
   it('a change adds one research item, once; another change adds the next', async () => {
-    const { main, web, run } = setup();
+    const { main, web, run, state } = setup();
     await run();
     main.push({ 'docs/contracts/api.md': 'v2\n', 'docs/adr/1.md': 'adr 2\n' });
     const r = await run();
@@ -550,11 +673,47 @@ describe('contract changes', () => {
     expect(it1?.title).toMatch(
       /^Check the contract change of platform at [0-9a-f]{12} \(1 file\)$/,
     );
-    expect(it1?.dod[0]).toContain('docs/contracts/api.md');
+    // Studio's own words in the item; the paths only in the change file, for the index as data.
+    expect(JSON.stringify(it1)).not.toContain('docs/contracts/api.md');
+    expect(it1?.dod[0]).toBe(
+      'Each file the reference index beside the brief lists as changed by this contract change is read',
+    );
+    expect(it1?.notes?.[0]).toMatch(
+      /^contract-change: shop@[0-9a-f]{16}\.\.[0-9a-f]{16}@[0-9a-f]{12}$/,
+    );
+    const change = readContractChange(state, 'WEB-2');
+    expect(change?.changed).toEqual(['docs/contracts/api.md']);
     expect(await run()).not.toHaveProperty('item');
     expect(checks(web)).toHaveLength(1);
     main.push({ 'docs/contracts/events.md': 'e2\n' });
     expect((await run())?.item).toBe('WEB-3');
+  });
+
+  it('a change, its revert and the change again each get their item', async () => {
+    const { main, web, run } = setup();
+    await run();
+    main.push({ 'docs/contracts/api.md': 'v2\n' });
+    expect((await run())?.item).toBe('WEB-2');
+    main.push({ 'docs/contracts/api.md': 'v1\n' });
+    expect((await run())?.item).toBe('WEB-3');
+    main.push({ 'docs/contracts/api.md': 'v2\n' });
+    expect((await run())?.item).toBe('WEB-4');
+    expect(checks(web)).toHaveLength(3);
+  });
+
+  it('the index of a check item lists the changed files as data', async () => {
+    const { main, run, state, m } = setup();
+    await run();
+    main.push({ 'docs/contracts/api.md': 'v2\n' });
+    await run();
+    const ref = await readReference(m, state, realPorts());
+    const b = writeReference(state, 'WEB-2', ref, readContractChange(state, 'WEB-2'));
+    const index = readFileSync(b.index, 'utf8');
+    expect(index).toMatch(
+      /## Changed by the contract change of this item \([0-9a-f]{12}\.\.[0-9a-f]{12}\)/,
+    );
+    expect(index).toContain('```text\ndocs/contracts/api.md\n```');
+    expect(referenceBrief(b).join('\n')).toContain('This item checks a contract change');
   });
 
   it('a crash between the board and the record never adds a second item', async () => {

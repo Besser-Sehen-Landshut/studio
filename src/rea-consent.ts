@@ -24,9 +24,10 @@ import {
   type OwnerEnv,
   ownerConfigFile,
   pathKey,
+  toolchainPathProblem,
   within,
 } from './config.js';
-import { ensureStateDir, writeStateFile } from './paths.js';
+import { credentialLocations, ensureStateDir, ownerStateRootFor, writeStateFile } from './paths.js';
 import type { Ports } from './ports.js';
 import { REA_DEFAULT_VERSION, REA_PACKAGE } from './rea.js';
 import { installRea, verifyReaInstall } from './rea-install.js';
@@ -98,6 +99,8 @@ export function readConsentEntry(
   ownerRoot: string,
   version: string,
   mode: ReaMode,
+  /** The only folder a remembered entry may name: `<home>/analysis`. */
+  home?: string,
 ): { answer: Answer; folder?: string } | undefined {
   try {
     const file = join(ownerRoot, CONSENT_FILE);
@@ -110,7 +113,7 @@ export function readConsentEntry(
     const a = e?.answer;
     if (a !== 'yes' && a !== 'no') return undefined;
     const folder =
-      typeof e?.folder === 'string' && isAbsolute(e.folder) && !/\p{Cc}/u.test(e.folder)
+      home !== undefined && typeof e?.folder === 'string' && e.folder === join(home, 'analysis')
         ? e.folder
         : undefined;
     return { answer: a, ...(folder === undefined ? {} : { folder }) };
@@ -125,6 +128,7 @@ export function recordConsent(
   mode: ReaMode,
   answer: Answer,
   now: Date,
+  extra: { by?: string; folder?: string } = {},
 ): void {
   const file = join(ownerRoot, CONSENT_FILE);
   let raw: Record<string, unknown> = {};
@@ -138,7 +142,7 @@ export function recordConsent(
   writeStateFile(
     ownerRoot,
     file,
-    `${JSON.stringify({ ...raw, [consentKey(version, mode)]: { answer, at: now.toISOString() } }, null, 2)}\n`,
+    `${JSON.stringify({ ...raw, [consentKey(version, mode)]: { answer, at: now.toISOString(), ...extra } }, null, 2)}\n`,
   );
 }
 
@@ -154,13 +158,46 @@ export function expandHome(dir: string, home: string): string {
  * through a temporary file and a rename. Creates the folder (0700) when it is missing. Returns the
  * absolute folder. A folder below a listed root is not added again.
  */
-export function addResearchRoot(owner: OwnerEnv, dir: string): string {
+export function addResearchRoot(owner: OwnerEnv, dir: string, ownerRoot?: string): string {
   const home = owner.homedir ?? homedir();
   const abs = resolve(expandHome(dir.trim(), home));
   if (!isAbsolute(expandHome(dir.trim(), home)) || /\p{Cc}/u.test(abs)) {
     throw new Error('the analysis folder must be an absolute path or start with ~/');
   }
+  // The checks of crew_toolchain_paths, plus the state base: never the home or a parent of it,
+  // never a credential store or the Claude config, never around or inside Studio's state.
+  const env = owner.env ?? process.env;
+  const stateBase = dirname(ownerRoot ?? ownerStateRootFor(owner));
+  const protectedPaths = [...credentialLocations(home, env).extra, stateBase];
+  const refuse = (p: string) => {
+    const problem = toolchainPathProblem(p, home, protectedPaths, owner.platform);
+    if (problem !== undefined)
+      throw new Error(`analysis folder ${abs}: ${problem}; nothing changed`);
+  };
+  refuse(abs);
   mkdirSync(abs, { recursive: true, mode: 0o700 });
+  // What is there now must be the owner's own real folder, not a link to somewhere else.
+  const st = lstatSync(abs);
+  const uid = owner.uid ?? process.getuid?.();
+  if (st.isSymbolicLink() || !st.isDirectory()) {
+    throw new Error(
+      `analysis folder ${abs}: not a plain folder (a link or a file); nothing changed`,
+    );
+  }
+  if (uid !== undefined && st.uid !== uid) {
+    throw new Error(`analysis folder ${abs}: belongs to another user; nothing changed`);
+  }
+  const real = realpathSync(abs);
+  refuse(real);
+  let realHome = home;
+  try {
+    realHome = realpathSync(home);
+  } catch {
+    // a home that cannot be resolved was checked by its spelling above
+  }
+  if (within(pathKey(realHome, owner.platform), pathKey(real, owner.platform))) {
+    throw new Error(`analysis folder ${abs}: must not be the home directory or a parent of it`);
+  }
   const file = ownerConfigFile(owner);
   let text = '';
   try {
@@ -175,8 +212,8 @@ export function addResearchRoot(owner: OwnerEnv, dir: string): string {
   const roots = isSeq(current)
     ? current.items.map((i) => String((i as { value?: unknown }).value ?? i))
     : [];
-  if (roots.some((r) => within(pathKey(abs), pathKey(resolve(r))))) return abs;
-  doc.set('research_roots', [...roots, abs]);
+  if (roots.some((r) => within(pathKey(real), pathKey(resolve(r))))) return real;
+  doc.set('research_roots', [...roots, real]);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   try {
@@ -188,7 +225,7 @@ export function addResearchRoot(owner: OwnerEnv, dir: string): string {
   }
   // Read back: a file Studio cannot load afterwards would stop every command.
   loadOwnerConfig(owner);
-  return abs;
+  return real;
 }
 
 /**
@@ -224,6 +261,42 @@ export function researchFolder(dir: string, roots: readonly string[], home: stri
     );
   }
   return real;
+}
+
+/** What a press of the pane's button writes (hooks/register.tsx), one file per press. */
+export const PANE_CONFIRM_FILE = 'rea-confirm.json';
+
+/**
+ * Takes in the pane's confirmation: a plain file of this user, writable by nobody else, holding one
+ * whole JSON object with an exact version, a mode and at most the folder `<home>/analysis`. It is
+ * folded into the consent record (written through a temporary file and a rename, mode 0600) and
+ * removed. Anything else is left as it is and counts for nothing: the lead's line stays.
+ */
+export function importPaneConfirmation(
+  ownerRoot: string,
+  home: string,
+  now: Date,
+  uid: number | undefined = process.getuid?.(),
+): boolean {
+  const file = join(ownerRoot, PANE_CONFIRM_FILE);
+  let raw: { version?: unknown; mode?: unknown; folder?: unknown };
+  try {
+    const st = lstatSync(file);
+    if (!st.isFile() || (st.mode & 0o022) !== 0) return false;
+    if (uid !== undefined && st.uid !== uid) return false;
+    raw = JSON.parse(readFileSync(file, 'utf8')) as typeof raw;
+  } catch {
+    return false;
+  }
+  if (typeof raw?.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(raw.version)) return false;
+  if (raw.mode !== 'full' && raw.mode !== 'static') return false;
+  if (raw.folder !== undefined && raw.folder !== join(home, 'analysis')) return false;
+  recordConsent(ownerRoot, raw.version, raw.mode, 'yes', now, {
+    by: 'pane',
+    ...(typeof raw.folder === 'string' ? { folder: raw.folder } : {}),
+  });
+  rmSync(file, { force: true });
+  return true;
 }
 
 /** How the owner can be asked right now: a terminal with a line reader, or nobody. */
@@ -290,7 +363,10 @@ export async function ensureRea(o: {
       'studio research install --yes and --folder count only in your own terminal; or confirm with the button in the Studio pane',
     );
   }
-  const remembered = readConsentEntry(o.ownerRoot, version, mode);
+  const home = o.owner.homedir ?? homedir();
+  // A press of the pane's button left its confirmation beside the record: take it in first.
+  importPaneConfirmation(o.ownerRoot, home, o.now, o.uid);
+  const remembered = readConsentEntry(o.ownerRoot, version, mode, home);
   let answer: Answer | undefined = o.yes === true ? 'yes' : remembered?.answer;
   // A folder confirmed with the pane's button counts like one named in the terminal.
   let folder = o.folder ?? (needsFolder && answer === 'yes' ? remembered?.folder : undefined);
@@ -314,7 +390,7 @@ export async function ensureRea(o: {
         throw new ReaInstallNeeded(installNeededLine(o.item ?? 'a researcher item', true));
       folder = (await o.asker.readLine?.(FOLDER_QUESTION))?.trim() || DEFAULT_ANALYSIS_DIR;
     }
-    root = addResearchRoot(o.owner, folder);
+    root = addResearchRoot(o.owner, folder, o.ownerRoot);
     ownerConfig = loadOwnerConfig(o.owner);
     o.asker.say?.(`research_roots: ${root}`);
   }

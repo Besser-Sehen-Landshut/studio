@@ -122,6 +122,8 @@ const isCiItem = (i: WorkItem): boolean => [...i.paths, ...i.touches].some(isGit
 const GIT_FETCH_MS = 120_000;
 /** The project config in the repository; a change to it always gets the security analyzer. */
 const STUDIO_CONFIG = '.studio/studio.yaml';
+/** The board: dependencies, epics and member items on it move work in other projects too. */
+const STUDIO_BOARD = '.studio/board.yaml';
 const GIT_LOCAL_MS = 60_000;
 
 /**
@@ -328,7 +330,8 @@ export async function resolveForItem(o: {
         );
   // The project config holds the plugin pins, the sandbox and the roles: a change is one of trust.
   const configChange =
-    paths !== 'unknown' && (facts?.files ?? []).some((f) => f.toLowerCase() === STUDIO_CONFIG);
+    paths !== 'unknown' &&
+    (facts?.files ?? []).some((f) => [STUDIO_CONFIG, STUDIO_BOARD].includes(f.toLowerCase()));
   const triggers = [
     ...itemTriggers(subject),
     ...(round > 0 ? ['after-fix'] : []),

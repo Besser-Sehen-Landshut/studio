@@ -13,7 +13,12 @@ import {
 } from './acceptance.js';
 import { runAccount } from './account-command.js';
 import { addItem, boardPrefix } from './add-item.js';
-import { REVIEW_GRACE_MS, timeoutsOfContext } from './analyzer-timeout.js';
+import {
+  REVIEW_GRACE_MS,
+  timedOutAgents,
+  timeoutReportProblem,
+  timeoutsOfContext,
+} from './analyzer-timeout.js';
 import {
   type ApprovedJob,
   acceptanceOf,
@@ -473,6 +478,13 @@ function latestReview(board: Board, target: string): WorkItem | undefined {
 }
 
 /** What one `tick` did and what it leaves to the lead. */
+/** The lead's line for reference files left out because their paths differ only in case. */
+const collisionLine = (paths: readonly string[]): string =>
+  `reference case collision: the main project has paths that differ only in case, none of them copied: ${paths
+    .slice(0, 10)
+    .join(', ')
+    .replace(/\p{Cc}/gu, ' ')}; rename one there`;
+
 interface Tick {
   collected: Record<string, unknown>[];
   /** Review items added for pull requests in review that had neither a review nor a verdict. */
@@ -1457,6 +1469,19 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
       // A review report that does not hold to its brief is a rejected report, like one that
       // cannot be read: `tick` hands both to the lead.
+      // A subagent the guard stopped for time never counts as a pass: the approval must show it.
+      const timeoutHold = () => {
+        if (item.type !== 'review' || report.status !== 'done' || report.verdict !== 'approve') {
+          return;
+        }
+        const analyzers = readCrewCaps(stateRoot(), item.id)?.analyzers ?? [];
+        const problem = timeoutReportProblem(
+          timedOutAgents(stateRoot(), item.id, analyzers),
+          report.analyzers ?? {},
+          analyzers,
+        );
+        if (problem !== undefined) throw new ReportError(problem);
+      };
       const reviewCaps = () => {
         try {
           return checkReviewCaps(readCrewCaps(stateRoot(), item.id), report);
@@ -1478,6 +1503,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         item.type === 'review' && report.status === 'done' && accepts === undefined
           ? reviewCaps()
           : { skipped: [] as string[], target: undefined, notRunHere: undefined };
+      timeoutHold();
       let approvedJobs: ApprovedJob[] = [];
       let covered: CoveredJob[] = [];
       let applied: ExceptionEntry[] = [];
@@ -1557,7 +1583,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             };
           }
           if (change.problem !== undefined) {
-            const note = `approval refused: ${change.problem}; ${change.area === 'release' ? 'the release rules are' : change.area === 'research' ? 'the research block is' : 'evidence is'} the owner's: the owner reviews and merges such a change himself`;
+            const note = `approval refused: ${change.problem}; ${change.area === 'release' ? 'the release rules are' : change.area === 'research' ? 'the research block is' : change.area === 'board' ? 'the board is' : 'evidence is'} the owner's: the owner reviews and merges such a change himself`;
             await withBoardLock(stateRoot(), ports.clock.now(), () => {
               const fresh = loadBoard(project);
               if (findItem(fresh, item.id).status !== item.status) {
@@ -2323,6 +2349,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
             const res = await launch(a.id);
             out.launched.push({ item: a.id, name: res.name, pid: res.pid });
             if (res.notice !== undefined) out.notices = [...(out.notices ?? []), res.notice];
+            if (res.collisions !== undefined) lead(a.id, collisionLine(res.collisions));
           } catch (e) {
             if (e instanceof HeldError) out.held.push({ item: a.id, reason: why(e) });
             // Nobody to ask in a tick: the owner confirms the REA install once, by command.
@@ -3189,6 +3216,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           say: (l) => stderr(`${l}\n`),
         });
         if (res.notice !== undefined) stderr(`note: ${res.notice}\n`);
+        if (res.collisions !== undefined) stderr(`warning: ${collisionLine(res.collisions)}\n`);
         print(res);
         return 0;
       }

@@ -6,7 +6,7 @@
 // session itself gets a deadline after which only the report may still be written. `tick` stops a
 // reviewer that is still alive well after that deadline and hands the item to the lead.
 import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 /** Default minutes per analyzer subagent: `review.analyzer_timeout_minutes` in studio.yaml. */
 export const DEFAULT_ANALYZER_TIMEOUT_MINUTES = 30;
@@ -95,8 +95,18 @@ export function timeoutDecision(
   return sessionTimeUp(t.reportFile);
 }
 
-/** The subagent starts of one run: agent id to epoch ms. A missing file is none yet. */
-export function readAgentStarts(file: string): Record<string, number> {
+/** One subagent of a reviewer run as the guard saw it. */
+export interface AgentRecord {
+  /** Its start, epoch ms. */
+  start: number;
+  /** The guard refused it for time at least once. */
+  timedOut?: true;
+  /** Its `agent_type`, when the hook named one: a subagent type named after an analyzer maps to it. */
+  type?: string;
+}
+
+/** The subagents of one run, by agent id. A missing file is none yet. An old bare start counts. */
+export function readAgents(file: string): Record<string, AgentRecord> {
   let text: string;
   try {
     if (!lstatSync(file).isFile()) throw new Error(`${file} is not a plain file`);
@@ -109,34 +119,128 @@ export function readAgentStarts(file: string): Record<string, number> {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error(`${file} is not an object`);
   }
-  const out: Record<string, number> = {};
-  for (const [k, v] of Object.entries(raw)) if (typeof v === 'number') out[k] = v;
+  const out: Record<string, AgentRecord> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === 'number') out[k] = { start: v };
+    else if (v !== null && typeof v === 'object' && typeof (v as AgentRecord).start === 'number') {
+      const r = v as AgentRecord;
+      out[k] = {
+        start: r.start,
+        ...(r.timedOut === true ? { timedOut: true as const } : {}),
+        ...(typeof r.type === 'string' && AGENT_TYPE_RE.test(r.type) ? { type: r.type } : {}),
+      };
+    }
+  }
   return out;
 }
 
-const AGENT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+/** The start of each subagent, epoch ms. */
+export const readAgentStarts = (file: string): Record<string, number> =>
+  Object.fromEntries(Object.entries(readAgents(file)).map(([k, v]) => [k, v.start]));
 
-/**
- * The start of subagent `agentId`: the recorded one, else `now`, recorded. Throws on an id of an
- * unexpected form or a file it cannot keep, so the guard denies (fail closed). Two calls racing
- * may both record; the later start wins, which errs towards more time, by at most one call.
- */
-export function agentStartOf(file: string, agentId: string, now: number): number {
-  if (!AGENT_ID_RE.test(agentId)) throw new Error('unexpected agent id');
-  const starts = readAgentStarts(file);
-  const known = starts[agentId];
-  if (known !== undefined) return known;
-  if (Object.keys(starts).length >= MAX_AGENTS) throw new Error('too many subagents in one run');
-  starts[agentId] = now;
-  const tmp = `${file}.${process.pid}.${now}.tmp`;
+const AGENT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const AGENT_TYPE_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+
+function writeAgents(file: string, agents: Record<string, AgentRecord>, now: number): void {
+  const tmp = `${file}.${process.pid}.${now}.${Math.random().toString(36).slice(2)}.tmp`;
   try {
-    writeFileSync(tmp, `${JSON.stringify(starts)}\n`, { mode: 0o600, flag: 'wx' });
+    writeFileSync(tmp, `${JSON.stringify(agents)}\n`, { mode: 0o600, flag: 'wx' });
     renameSync(tmp, file);
   } catch (e) {
     rmSync(tmp, { force: true });
     throw e;
   }
+}
+
+/**
+ * The start of subagent `agentId`: the recorded one, else `now`, recorded (with its type when
+ * known). Throws on an id of an unexpected form or a file it cannot keep, so the guard denies (fail
+ * closed). Two calls racing may both record; the later start wins, which errs towards more time, by
+ * at most one call.
+ */
+export function agentStartOf(file: string, agentId: string, now: number, type?: string): number {
+  if (!AGENT_ID_RE.test(agentId)) throw new Error('unexpected agent id');
+  const agents = readAgents(file);
+  const known = agents[agentId];
+  if (known !== undefined) return known.start;
+  if (Object.keys(agents).length >= MAX_AGENTS) throw new Error('too many subagents in one run');
+  agents[agentId] = {
+    start: now,
+    ...(type !== undefined && AGENT_TYPE_RE.test(type) ? { type } : {}),
+  };
+  writeAgents(file, agents, now);
   return now;
+}
+
+/**
+ * Records that the guard refused subagent `agentId` for time, so `collect` can hold the report to
+ * it: a timed-out subagent never counts as a pass. Throws when it cannot be kept (the guard then
+ * denies anyway).
+ */
+export function markTimedOut(file: string, agentId: string, now: number, type?: string): void {
+  if (!AGENT_ID_RE.test(agentId)) throw new Error('unexpected agent id');
+  const agents = readAgents(file);
+  const known = agents[agentId] ?? { start: now };
+  if (known.timedOut === true) return;
+  agents[agentId] = {
+    ...known,
+    timedOut: true,
+    ...(known.type === undefined && type !== undefined && AGENT_TYPE_RE.test(type) ? { type } : {}),
+  };
+  writeAgents(file, agents, now);
+}
+
+/** Where the guard keeps the subagents of a run (the `agentsFile` of its timeouts). */
+export const agentsFileOf = (stateRoot: string, id: string): string =>
+  join(stateRoot, 'guard', `${id}.agents.json`);
+
+/**
+ * What the guard's record says about the analyzers a report names: the subagents refused for time,
+ * and those whose `agent_type` names one of `analyzers`. An unreadable record counts as one timeout
+ * (fail closed); no record (no subagent, or a run without timeouts) as none.
+ */
+export function timedOutAgents(
+  stateRoot: string,
+  id: string,
+  analyzers: readonly string[],
+): { count: number; named: string[] } {
+  let agents: Record<string, AgentRecord>;
+  try {
+    agents = readAgents(agentsFileOf(stateRoot, id));
+  } catch {
+    return { count: 1, named: [] };
+  }
+  const out = Object.values(agents).filter((a) => a.timedOut === true);
+  return {
+    count: out.length,
+    named: [
+      ...new Set(
+        out.flatMap((a) => (a.type !== undefined && analyzers.includes(a.type) ? [a.type] : [])),
+      ),
+    ],
+  };
+}
+
+/**
+ * The approval rule for subagents the guard stopped: each one that timed out must show in the
+ * report as an analyzer reading `skipped: timeout` (by its name when its subagent type names an
+ * analyzer), or the approval goes to the lead. Undefined when it holds.
+ */
+export function timeoutReportProblem(
+  timedOut: { count: number; named: readonly string[] },
+  results: Readonly<Record<string, string | undefined>>,
+  analyzers: readonly string[],
+): string | undefined {
+  if (timedOut.count === 0) return undefined;
+  const reported = analyzers.filter((a) => isTimeoutResult(results[a]));
+  const unnamed = timedOut.named.filter((a) => !isTimeoutResult(results[a]));
+  if (unnamed.length > 0) {
+    return `approval refused: the guard stopped ${unnamed.join(', ')} for time, but the report does not read skipped: timeout for it`;
+  }
+  if (reported.length < timedOut.count) {
+    return `approval refused: the guard stopped ${timedOut.count} subagent${timedOut.count === 1 ? '' : 's'} for time, but only ${reported.length} analyzer${reported.length === 1 ? '' : 's'} read skipped: timeout`;
+  }
+  return undefined;
 }
 
 /** The timeouts in a guard context file, or undefined when the run has none or it is unreadable. */

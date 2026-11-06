@@ -147,10 +147,14 @@ const NOT_CONFIRMED: Record<Lang, string> = {
 };
 
 /**
- * The person pressed the REA install button: writes the one confirmation into the owner state
- * (`rea-consent.json`, as src/rea-consent.ts reads it), for the pinned version and mode the state
- * names, with `~/analysis` as the folder when none is granted. Only a press reaches here: a command
- * or the model cannot. A file it cannot read as JSON is left alone.
+ * The person pressed the REA install button: writes the one confirmation, for the pinned version
+ * and mode the state names (with `<home>/analysis` when no folder is granted), as its own small
+ * file in the owner state, `rea-confirm.json`. The engine's file calls have no rename and no mode,
+ * so the shared record is never rewritten here: Studio takes this file in, checks it (a plain file
+ * of this user, writable by nobody else, one whole JSON object, nothing but that folder) and folds
+ * it into its record with a temporary file and a rename. Nothing is written through a link: the
+ * owner folder and the file must not be links. Only a press reaches here: a command or the model
+ * cannot.
  */
 async function confirmRea($: EngineInterface): Promise<void> {
   const language = await read($, lang);
@@ -160,25 +164,21 @@ async function confirmRea($: EngineInterface): Promise<void> {
     const owner = await ownerRootOf($);
     const home = await $.env.get('HOME');
     if (want === undefined || owner === undefined) throw new Error('nothing to confirm');
-    const file = `${owner}/rea-consent.json`;
-    let raw: Record<string, unknown> = {};
+    const dir = await $.fs.stat(owner);
+    if (dir.isLink || dir.kind !== 'dir') throw new Error('the owner state is not a folder');
+    const file = `${owner}/rea-confirm.json`;
     if (await $.fs.exists(file)) {
-      const parsed = JSON.parse(await $.fs.read(file)) as unknown;
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('unreadable');
-      }
-      raw = parsed as Record<string, unknown>;
+      const st = await $.fs.stat(file);
+      if (st.isLink || st.kind !== 'file') throw new Error('not a plain file');
     }
-    const entry = {
-      answer: 'yes',
+    const confirmation = {
+      version: want.version,
+      mode: want.mode,
       at: new Date(await $.clock.now()).toISOString(),
       by: 'pane',
       ...(want.needsFolder && home ? { folder: `${withoutTrailingSlash(home)}/analysis` } : {}),
     };
-    await $.fs.write(
-      file,
-      `${JSON.stringify({ ...raw, [`${want.version}:${want.mode}`]: entry }, null, 2)}\n`,
-    );
+    await $.fs.write(file, `${JSON.stringify(confirmation)}\n`);
     $.ui.toast(CONFIRMED[language]);
   } catch {
     $.ui.toast(NOT_CONFIRMED[language]);

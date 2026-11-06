@@ -39,7 +39,14 @@ import {
   readCrewTokenFile,
   runCredentialProvider,
 } from './credentials.js';
-import { membershipOf, readReference, referenceBrief, writeReference } from './group.js';
+import {
+  membershipOf,
+  readContractChange,
+  readReference,
+  referenceBrief,
+  referenceCollisions,
+  writeReference,
+} from './group.js';
 import { DEFAULT_SECRET_GLOBS } from './guard.js';
 import { HeldError } from './held.js';
 import {
@@ -1256,7 +1263,7 @@ export async function launchCrew(
   ports: Ports,
   launcher: LauncherEnv = {},
   worker?: WorkerLaunch,
-): Promise<{ name: string; pid: number; log: string; notice?: string }> {
+): Promise<{ name: string; pid: number; log: string; notice?: string; collisions?: string[] }> {
   // Launches of one process wait for each other; launches of different processes are serialised
   // by the launch lock, taken inside once the state root is known and always released here.
   const turn = launchChain;
@@ -1633,7 +1640,9 @@ async function launchCrewLocked(
   ensureStateDir(stateRoot, tmpDir);
   const briefRules = writePinnedRules(stateRoot, item.id, pinned);
   const briefReference =
-    reference === undefined ? undefined : writeReference(stateRoot, item.id, reference);
+    reference === undefined
+      ? undefined
+      : writeReference(stateRoot, item.id, reference, readContractChange(stateRoot, item.id));
   if (reference === undefined)
     removeStateEntry(stateRoot, join(stateRoot, 'briefs', `${item.id}.reference`));
   const installedNames = new Set(installedSkills(claudeConfigDir).names);
@@ -1887,7 +1896,14 @@ async function launchCrewLocked(
   await updateCrewFile(stateRoot, (all) => {
     all[item.id] = { ...record, identity };
   });
-  return { name, pid, log, ...(trustNotice ? { notice: TRUST_NOTICE } : {}) };
+  const collisions = reference === undefined ? [] : referenceCollisions(reference);
+  return {
+    name,
+    pid,
+    log,
+    ...(trustNotice ? { notice: TRUST_NOTICE } : {}),
+    ...(collisions.length > 0 ? { collisions } : {}),
+  };
 }
 
 /** Session id of a crew run (first `system` event of its stream-json log), for `--resume`. */

@@ -66,6 +66,24 @@ after one confirmation. Not tagged yet; the maintainers tag after the merge.
 - The board mod writes one file: the REA install confirmation, on a press of its button.
 - Version 0.21.0.
 
+### Fixed (review of the pull request)
+
+- A subagent the guard stopped for time is recorded (`timedOut`, with its `agent_type`); `collect`
+  refuses an approval that does not report at least as many analyzers as `skipped: timeout` (by name
+  when the subagent type names an analyzer).
+- The pane's REA confirmation is its own file (`rea-confirm.json`), never written through a link,
+  taken in by Studio only when it is a plain file of the owner, not writable by others, whole, and
+  names no folder but `<home>/analysis`. New research roots get the toolchain-path checks, must be a
+  real folder of the owner and are stored by real path.
+- Contract check items are deduplicated on the transition (`<group>@<from>..<to>@<sha12>`), so a
+  revert gets its own item; changed paths go to the reference index as data, the Definition of Done
+  is Studio's own text.
+- The excerpt checks every path segment for secret-like names (more patterns, `secrets` and
+  `credentials` folders) and leaves out paths that differ only in case, with a lead line; `cat-file`
+  runs with `--no-replace-objects`.
+- A crew's pull request that changes `.studio/board.yaml` gets no approval and goes to the owner.
+- Dependency cycles are found across any number of projects (bounded walk).
+
 ## [0.20.0] - 2026-11-05
 
 Some questions are answered by a shipped program, not by a source tree. The researcher role can now use REA

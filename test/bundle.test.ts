@@ -206,7 +206,14 @@ describe('self-contained plugin bundle', () => {
     expect(reason(hook({ ...ls, agent_id: 'agent-1' }))).toBeUndefined();
     // The subagent started long ago: its calls are refused with the timeout line.
     writeFileSync(agentsFile, JSON.stringify({ 'agent-1': Date.now() - 120_000 }));
-    expect(reason(hook({ ...ls, agent_id: 'agent-1' }))).toMatch(/skipped: timeout/);
+    expect(reason(hook({ ...ls, agent_id: 'agent-1', agent_type: 'general-purpose' }))).toMatch(
+      /skipped: timeout/,
+    );
+    // The refusal is recorded, so collect holds the report to it.
+    expect(JSON.parse(readFileSync(agentsFile, 'utf8'))['agent-1']).toMatchObject({
+      timedOut: true,
+      type: 'general-purpose',
+    });
     // The session is over: only the report may be written.
     writeFileSync(
       ctxFile,
