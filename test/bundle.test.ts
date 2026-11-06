@@ -172,7 +172,7 @@ describe('self-contained plugin bundle', () => {
     const wt = join(plugin, 'wt-timeout');
     mkdirSync(wt);
     const ctxFile = join(plugin, 'ctx-timeout.json');
-    const agentsFile = join(plugin, 'agents.json');
+    const agentsFile = join(plugin, 'agents.agents.json');
     const reportFile = join(wt, '.studio', 'reports', 'r.md');
     const base = { worktree: wt, ownerOnly: [], deployCommands: [], secretGlobs: [] };
     const hook = (input: Record<string, unknown>) =>
@@ -210,10 +210,7 @@ describe('self-contained plugin bundle', () => {
       /skipped: timeout/,
     );
     // The refusal is recorded, so collect holds the report to it.
-    expect(JSON.parse(readFileSync(agentsFile, 'utf8'))['agent-1']).toMatchObject({
-      timedOut: true,
-      type: 'general-purpose',
-    });
+    expect(readFileSync(join(plugin, 'agents.timeouts'), 'utf8')).toBe('agent-1\n');
     // The session is over: only the report may be written.
     writeFileSync(
       ctxFile,

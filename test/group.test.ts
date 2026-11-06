@@ -681,7 +681,7 @@ describe('contract changes', () => {
     expect(it1?.notes?.[0]).toMatch(
       /^contract-change: shop@[0-9a-f]{16}\.\.[0-9a-f]{16}@[0-9a-f]{12}$/,
     );
-    const change = readContractChange(state, 'WEB-2');
+    const change = readContractChange(state, it1 as WorkItem);
     expect(change?.changed).toEqual(['docs/contracts/api.md']);
     expect(await run()).not.toHaveProperty('item');
     expect(checks(web)).toHaveLength(1);
@@ -702,12 +702,21 @@ describe('contract changes', () => {
   });
 
   it('the index of a check item lists the changed files as data', async () => {
-    const { main, run, state, m } = setup();
+    const { main, run, state, m, web } = setup();
     await run();
     main.push({ 'docs/contracts/api.md': 'v2\n' });
     await run();
     const ref = await readReference(m, state, realPorts());
-    const b = writeReference(state, 'WEB-2', ref, readContractChange(state, 'WEB-2'));
+    const item2 = loadBoard(web).items.find((i) => i.id === 'WEB-2') as WorkItem;
+    const b = writeReference(state, 'WEB-2', ref, readContractChange(state, item2));
+    // A change file counts only for the item whose note it matches.
+    expect(readContractChange(state, { ...item2, notes: [] })).toBeUndefined();
+    expect(
+      readContractChange(state, {
+        ...item2,
+        notes: (item2.notes ?? []).map((x) => x.replace(/@[0-9a-f]{12}$/, '@000000000000')),
+      }),
+    ).toBeUndefined();
     const index = readFileSync(b.index, 'utf8');
     expect(index).toMatch(
       /## Changed by the contract change of this item \([0-9a-f]{12}\.\.[0-9a-f]{12}\)/,

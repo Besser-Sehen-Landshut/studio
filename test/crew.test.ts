@@ -726,11 +726,20 @@ describe('writeCrewSettings', () => {
       base: 'main',
       protectedPaths: [
         ctxFile,
-        ...['guard', 'settings', 'briefs', 'logs', 'homes', 'tmp', 'rea'].map((d) =>
-          join(state, d),
-        ),
+        ...[
+          'guard',
+          'settings',
+          'briefs',
+          'logs',
+          'homes',
+          'tmp',
+          'rea',
+          'reference',
+          'contract-changes',
+        ].map((d) => join(state, d)),
         ...[
           'crew.json',
+          'group-contracts.json',
           'rea-allow.json',
           'queue.json',
           'state.json',

@@ -501,11 +501,18 @@ var require_shell_quote = __commonJS({
 });
 
 // src/guard-main.ts
-import { appendFileSync, mkdirSync, readFileSync as readFileSync2 } from "node:fs";
+import { appendFileSync as appendFileSync2, mkdirSync, readFileSync as readFileSync2 } from "node:fs";
 import { join as join3 } from "node:path";
 
 // src/analyzer-timeout.ts
-import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  lstatSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 var REVIEW_GRACE_MS = 15 * 6e4;
 var TIMEOUT_RESULT = "skipped: timeout";
@@ -551,7 +558,6 @@ function readAgents(file) {
       const r = v;
       out[k] = {
         start: r.start,
-        ...r.timedOut === true ? { timedOut: true } : {},
         ...typeof r.type === "string" && AGENT_TYPE_RE.test(r.type) ? { type: r.type } : {}
       };
     }
@@ -584,17 +590,17 @@ function agentStartOf(file, agentId, now, type) {
   writeAgents(file, agents, now);
   return now;
 }
-function markTimedOut(file, agentId, now, type) {
+var timeoutsFileOf = (agentsFile) => agentsFile.replace(/\.agents\.json$/, ".timeouts");
+function markTimedOut(agentsFile, agentId) {
   if (!AGENT_ID_RE.test(agentId)) throw new Error("unexpected agent id");
-  const agents = readAgents(file);
-  const known = agents[agentId] ?? { start: now };
-  if (known.timedOut === true) return;
-  agents[agentId] = {
-    ...known,
-    timedOut: true,
-    ...known.type === void 0 && type !== void 0 && AGENT_TYPE_RE.test(type) ? { type } : {}
-  };
-  writeAgents(file, agents, now);
+  const file = timeoutsFileOf(agentsFile);
+  try {
+    if (!lstatSync(file).isFile()) throw new Error(`${file} is not a plain file`);
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+  appendFileSync(file, `${agentId}
+`, { mode: 384, flag: "a" });
 }
 
 // src/guard.ts
@@ -2215,7 +2221,7 @@ function deny2(reason, summary2) {
   if (dir) {
     try {
       mkdirSync(dir, { recursive: true });
-      appendFileSync(
+      appendFileSync2(
         join3(dir, "guard.jsonl"),
         `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), tool: summary2?.tool ?? null, reason, input: summary2?.input ?? null })}
 `
@@ -2252,7 +2258,7 @@ function overTime(hook, ctx) {
     toolInput: hook.tool_input ?? {},
     ...typeof hook.cwd === "string" ? { cwd: hook.cwd } : {}
   });
-  if (line !== void 0 && agentId !== void 0) markTimedOut(t.agentsFile, agentId, now, type);
+  if (line !== void 0 && agentId !== void 0) markTimedOut(t.agentsFile, agentId);
   return line;
 }
 var summary;

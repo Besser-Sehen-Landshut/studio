@@ -19,6 +19,7 @@ import {
   type ReviewTimeouts,
   reviewTimeouts,
   timeoutBrief,
+  timeoutsFileOf,
 } from './analyzer-timeout.js';
 import type { WorkItem } from './board.js';
 import { boardPath, loadBoard, saveBoard } from './board.js';
@@ -1642,7 +1643,7 @@ async function launchCrewLocked(
   const briefReference =
     reference === undefined
       ? undefined
-      : writeReference(stateRoot, item.id, reference, readContractChange(stateRoot, item.id));
+      : writeReference(stateRoot, item.id, reference, readContractChange(stateRoot, item));
   if (reference === undefined)
     removeStateEntry(stateRoot, join(stateRoot, 'briefs', `${item.id}.reference`));
   const installedNames = new Set(installedSkills(claudeConfigDir).names);
@@ -1665,6 +1666,7 @@ async function launchCrewLocked(
   if (item.type === 'review' && caps.review !== undefined) {
     const agentsFile = join(stateRoot, 'guard', `${item.id}.agents.json`);
     removeStateEntry(stateRoot, agentsFile);
+    removeStateEntry(stateRoot, timeoutsFileOf(agentsFile));
     const analyzerMinutes =
       config.review?.analyzerTimeoutMinutes ?? DEFAULT_ANALYZER_TIMEOUT_MINUTES;
     timeouts = reviewTimeouts({

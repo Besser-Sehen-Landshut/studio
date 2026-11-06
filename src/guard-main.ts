@@ -69,7 +69,7 @@ function overTime(hook: Record<string, unknown>, ctx: GuardContext): string | un
     ...(typeof hook.cwd === 'string' ? { cwd: hook.cwd } : {}),
   });
   // A subagent refused for time is recorded, so collect never takes its analyzer as a pass.
-  if (line !== undefined && agentId !== undefined) markTimedOut(t.agentsFile, agentId, now, type);
+  if (line !== undefined && agentId !== undefined) markTimedOut(t.agentsFile, agentId);
   return line;
 }
 

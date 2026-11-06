@@ -68,9 +68,9 @@ after one confirmation. Not tagged yet; the maintainers tag after the merge.
 
 ### Fixed (review of the pull request)
 
-- A subagent the guard stopped for time is recorded (`timedOut`, with its `agent_type`); `collect`
-  refuses an approval that does not report at least as many analyzers as `skipped: timeout` (by name
-  when the subagent type names an analyzer).
+- A subagent the guard stopped for time is appended to `guard/<id>.timeouts`; after any timeout
+  `collect` refuses an approval unless every mandatory analyzer reads `skipped: timeout` and at least as
+  many analyzers read it as subagents were stopped (subagent types are not trusted).
 - The pane's REA confirmation is its own file (`rea-confirm.json`), never written through a link,
   taken in by Studio only when it is a plain file of the owner, not writable by others, whole, and
   names no folder but `<home>/analysis`. New research roots get the toolchain-path checks, must be a
@@ -82,6 +82,8 @@ after one confirmation. Not tagged yet; the maintainers tag after the merge.
   `credentials` folders) and leaves out paths that differ only in case, with a lead line; `cat-file`
   runs with `--no-replace-objects`.
 - A crew's pull request that changes `.studio/board.yaml` gets no approval and goes to the owner.
+- `reference/`, `contract-changes/` and `group-contracts.json` are protected state entries; a change
+  file counts only for the item whose `contract-change:` note it matches.
 - Dependency cycles are found across any number of projects (bounded walk).
 
 ## [0.20.0] - 2026-11-05

@@ -5,7 +5,14 @@
 // tool call of that subagent with a fixed line telling it to stop and answer `skipped: timeout`. The
 // session itself gets a deadline after which only the report may still be written. `tick` stops a
 // reviewer that is still alive well after that deadline and hands the item to the lead.
-import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  lstatSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 
 /** Default minutes per analyzer subagent: `review.analyzer_timeout_minutes` in studio.yaml. */
@@ -99,9 +106,7 @@ export function timeoutDecision(
 export interface AgentRecord {
   /** Its start, epoch ms. */
   start: number;
-  /** The guard refused it for time at least once. */
-  timedOut?: true;
-  /** Its `agent_type`, when the hook named one: a subagent type named after an analyzer maps to it. */
+  /** Its `agent_type`, when the hook named one: for the lead's eyes only, the model chooses it. */
   type?: string;
 }
 
@@ -126,7 +131,6 @@ export function readAgents(file: string): Record<string, AgentRecord> {
       const r = v as AgentRecord;
       out[k] = {
         start: r.start,
-        ...(r.timedOut === true ? { timedOut: true as const } : {}),
         ...(typeof r.type === 'string' && AGENT_TYPE_RE.test(r.type) ? { type: r.type } : {}),
       };
     }
@@ -172,22 +176,25 @@ export function agentStartOf(file: string, agentId: string, now: number, type?: 
   return now;
 }
 
+/** Where the stopped subagents of a run are kept: `<id>.timeouts` beside `<id>.agents.json`. */
+export const timeoutsFileOf = (agentsFile: string): string =>
+  agentsFile.replace(/\.agents\.json$/, '.timeouts');
+
 /**
- * Records that the guard refused subagent `agentId` for time, so `collect` can hold the report to
- * it: a timed-out subagent never counts as a pass. Throws when it cannot be kept (the guard then
- * denies anyway).
+ * Records that the guard refused subagent `agentId` for time: one line appended to the run's
+ * timeouts file (O_APPEND, so two guard calls racing never lose a line; a repeat is harmless, the
+ * reader counts ids once). `collect` holds the report to it: a stopped subagent never counts as a
+ * pass. Throws when it cannot be kept (the guard then denies anyway).
  */
-export function markTimedOut(file: string, agentId: string, now: number, type?: string): void {
+export function markTimedOut(agentsFile: string, agentId: string): void {
   if (!AGENT_ID_RE.test(agentId)) throw new Error('unexpected agent id');
-  const agents = readAgents(file);
-  const known = agents[agentId] ?? { start: now };
-  if (known.timedOut === true) return;
-  agents[agentId] = {
-    ...known,
-    timedOut: true,
-    ...(known.type === undefined && type !== undefined && AGENT_TYPE_RE.test(type) ? { type } : {}),
-  };
-  writeAgents(file, agents, now);
+  const file = timeoutsFileOf(agentsFile);
+  try {
+    if (!lstatSync(file).isFile()) throw new Error(`${file} is not a plain file`);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+  }
+  appendFileSync(file, `${agentId}\n`, { mode: 0o600, flag: 'a' });
 }
 
 /** Where the guard keeps the subagents of a run (the `agentsFile` of its timeouts). */
@@ -195,50 +202,46 @@ export const agentsFileOf = (stateRoot: string, id: string): string =>
   join(stateRoot, 'guard', `${id}.agents.json`);
 
 /**
- * What the guard's record says about the analyzers a report names: the subagents refused for time,
- * and those whose `agent_type` names one of `analyzers`. An unreadable record counts as one timeout
- * (fail closed); no record (no subagent, or a run without timeouts) as none.
+ * How many subagents of a run the guard stopped for time: the distinct ids in the timeouts file.
+ * A file that cannot be read, or a line of another form, counts as one more (fail closed); no file
+ * is none.
  */
-export function timedOutAgents(
-  stateRoot: string,
-  id: string,
-  analyzers: readonly string[],
-): { count: number; named: string[] } {
-  let agents: Record<string, AgentRecord>;
+export function timedOutAgents(stateRoot: string, id: string): number {
+  const file = timeoutsFileOf(agentsFileOf(stateRoot, id));
+  let text: string;
   try {
-    agents = readAgents(agentsFileOf(stateRoot, id));
-  } catch {
-    return { count: 1, named: [] };
+    if (!lstatSync(file).isFile()) return 1;
+    text = readFileSync(file, 'utf8');
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 0 : 1;
   }
-  const out = Object.values(agents).filter((a) => a.timedOut === true);
-  return {
-    count: out.length,
-    named: [
-      ...new Set(
-        out.flatMap((a) => (a.type !== undefined && analyzers.includes(a.type) ? [a.type] : [])),
-      ),
-    ],
-  };
+  const lines = text.split('\n').filter((l) => l !== '');
+  const ids = new Set(lines.filter((l) => AGENT_ID_RE.test(l)));
+  return ids.size + (lines.some((l) => !AGENT_ID_RE.test(l)) ? 1 : 0);
 }
 
 /**
- * The approval rule for subagents the guard stopped: each one that timed out must show in the
- * report as an analyzer reading `skipped: timeout` (by its name when its subagent type names an
- * analyzer), or the approval goes to the lead. Undefined when it holds.
+ * The approval rule after a timeout, simple and conservative: once any subagent of a review was
+ * stopped for time, an approval holds only when no mandatory analyzer reads a result (each reads
+ * `skipped: timeout`) and at least as many analyzers read `skipped: timeout` as subagents were
+ * stopped. Which subagent ran which analyzer is not trusted: the model names subagent types.
+ * Anything else goes to the lead. Undefined when it holds.
  */
 export function timeoutReportProblem(
-  timedOut: { count: number; named: readonly string[] },
+  stopped: number,
   results: Readonly<Record<string, string | undefined>>,
   analyzers: readonly string[],
+  mandatory: readonly string[],
 ): string | undefined {
-  if (timedOut.count === 0) return undefined;
-  const reported = analyzers.filter((a) => isTimeoutResult(results[a]));
-  const unnamed = timedOut.named.filter((a) => !isTimeoutResult(results[a]));
-  if (unnamed.length > 0) {
-    return `approval refused: the guard stopped ${unnamed.join(', ')} for time, but the report does not read skipped: timeout for it`;
+  if (stopped === 0) return undefined;
+  const subagents = `${stopped} subagent${stopped === 1 ? '' : 's'}`;
+  const answered = mandatory.filter((a) => !isTimeoutResult(results[a]));
+  if (answered.length > 0) {
+    return `approval refused: the guard stopped ${subagents} for time, and mandatory ${answered.join(', ')} read${answered.length === 1 ? 's' : ''} a result: the lead decides`;
   }
-  if (reported.length < timedOut.count) {
-    return `approval refused: the guard stopped ${timedOut.count} subagent${timedOut.count === 1 ? '' : 's'} for time, but only ${reported.length} analyzer${reported.length === 1 ? '' : 's'} read skipped: timeout`;
+  const reported = analyzers.filter((a) => isTimeoutResult(results[a]));
+  if (reported.length < stopped) {
+    return `approval refused: the guard stopped ${subagents} for time, but only ${reported.length} analyzer${reported.length === 1 ? '' : 's'} read skipped: timeout`;
   }
   return undefined;
 }

@@ -1474,11 +1474,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (item.type !== 'review' || report.status !== 'done' || report.verdict !== 'approve') {
           return;
         }
-        const analyzers = readCrewCaps(stateRoot(), item.id)?.analyzers ?? [];
+        const caps = readCrewCaps(stateRoot(), item.id);
         const problem = timeoutReportProblem(
-          timedOutAgents(stateRoot(), item.id, analyzers),
+          timedOutAgents(stateRoot(), item.id),
           report.analyzers ?? {},
-          analyzers,
+          caps?.analyzers ?? [],
+          caps?.mandatory ?? [],
         );
         if (problem !== undefined) throw new ReportError(problem);
       };

@@ -674,24 +674,41 @@ export const contractNote = (group: string, from: string, to: string, sha: strin
 export interface ContractChange {
   group: string;
   main: string;
+  /** The main project's commits before and after. */
   from: string;
   to: string;
+  /** The digests of the contract files before and after: with `to` they make the item's note. */
+  fromDigest: string;
+  toDigest: string;
   changed: string[];
 }
 
 const changeFile = (stateRoot: string, id: string) =>
   join(stateRoot, 'contract-changes', `${id}.json`);
 
-/** The change a check item was added for; undefined for any other item or an unreadable file. */
-export function readContractChange(stateRoot: string, id: string): ContractChange | undefined {
+/**
+ * The change a check item was added for: only when the item carries the note this change makes
+ * (same group, digests and commit), so a file left for another item, or a stale one under a
+ * reused id, never reaches a crew. Undefined for any other item or an unreadable file.
+ */
+export function readContractChange(stateRoot: string, item: WorkItem): ContractChange | undefined {
   try {
-    const file = changeFile(stateRoot, id);
+    const file = changeFile(stateRoot, item.id);
     assertStatePath(stateRoot, file);
     if (!lstatSync(file).isFile()) return undefined;
     const c = JSON.parse(readFileSync(file, 'utf8')) as ContractChange;
-    if (!Array.isArray(c.changed) || typeof c.from !== 'string' || typeof c.to !== 'string') {
+    if (
+      !Array.isArray(c.changed) ||
+      typeof c.group !== 'string' ||
+      typeof c.from !== 'string' ||
+      typeof c.to !== 'string' ||
+      typeof c.fromDigest !== 'string' ||
+      typeof c.toDigest !== 'string'
+    ) {
       return undefined;
     }
+    const note = contractNote(c.group, c.fromDigest, c.toDigest, c.to);
+    if (!(item.notes ?? []).includes(note)) return undefined;
     return {
       ...c,
       changed: c.changed.filter((p) => typeof p === 'string' && pathProblem(p) !== 'unusual path'),
@@ -885,6 +902,8 @@ export async function checkContracts(o: {
         main: o.m.main.id,
         from: before.sha,
         to: sha,
+        fromDigest: before.digest,
+        toDigest: digest,
         changed,
       };
       writeStateFile(o.stateRoot, changeFile(o.stateRoot, added.id), `${JSON.stringify(change)}\n`);

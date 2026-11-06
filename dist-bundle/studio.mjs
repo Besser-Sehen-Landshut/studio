@@ -30437,9 +30437,21 @@ import {
 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve2, sep as sep2 } from "node:path";
-var STATE_PROTECTED_DIRS = ["guard", "settings", "briefs", "logs", "homes", "tmp", "rea"];
+var STATE_PROTECTED_DIRS = [
+  "guard",
+  "settings",
+  "briefs",
+  "logs",
+  "homes",
+  "tmp",
+  "rea",
+  // A group member's reference cache and the changed paths of its contract check items.
+  "reference",
+  "contract-changes"
+];
 var STATE_FILES = [
   "crew.json",
+  "group-contracts.json",
   "rea-allow.json",
   "queue.json",
   "state.json",
@@ -33359,7 +33371,14 @@ import { basename as basename4, dirname as dirname9, join as join25, resolve as 
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/analyzer-timeout.ts
-import { lstatSync as lstatSync9, readFileSync as readFileSync12, renameSync as renameSync7, rmSync as rmSync4, writeFileSync as writeFileSync7 } from "node:fs";
+import {
+  appendFileSync,
+  lstatSync as lstatSync9,
+  readFileSync as readFileSync12,
+  renameSync as renameSync7,
+  rmSync as rmSync4,
+  writeFileSync as writeFileSync7
+} from "node:fs";
 import { isAbsolute as isAbsolute5, join as join11, resolve as resolve4 } from "node:path";
 var DEFAULT_ANALYZER_TIMEOUT_MINUTES = 30;
 var REVIEW_GRACE_MS = 15 * 6e4;
@@ -33374,61 +33393,32 @@ function reviewTimeouts(o2) {
     agentsFile: o2.agentsFile
   };
 }
-function readAgents(file3) {
+var AGENT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+var timeoutsFileOf = (agentsFile) => agentsFile.replace(/\.agents\.json$/, ".timeouts");
+var agentsFileOf = (stateRoot, id) => join11(stateRoot, "guard", `${id}.agents.json`);
+function timedOutAgents(stateRoot, id) {
+  const file3 = timeoutsFileOf(agentsFileOf(stateRoot, id));
   let text;
   try {
-    if (!lstatSync9(file3).isFile()) throw new Error(`${file3} is not a plain file`);
+    if (!lstatSync9(file3).isFile()) return 1;
     text = readFileSync12(file3, "utf8");
   } catch (e) {
-    if (e.code === "ENOENT") return {};
-    throw e;
+    return e.code === "ENOENT" ? 0 : 1;
   }
-  const raw = JSON.parse(text);
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(`${file3} is not an object`);
-  }
-  const out = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (typeof v === "number") out[k] = { start: v };
-    else if (v !== null && typeof v === "object" && typeof v.start === "number") {
-      const r = v;
-      out[k] = {
-        start: r.start,
-        ...r.timedOut === true ? { timedOut: true } : {},
-        ...typeof r.type === "string" && AGENT_TYPE_RE.test(r.type) ? { type: r.type } : {}
-      };
-    }
-  }
-  return out;
+  const lines = text.split("\n").filter((l) => l !== "");
+  const ids = new Set(lines.filter((l) => AGENT_ID_RE.test(l)));
+  return ids.size + (lines.some((l) => !AGENT_ID_RE.test(l)) ? 1 : 0);
 }
-var AGENT_TYPE_RE = /^[A-Za-z0-9._:-]{1,128}$/;
-var agentsFileOf = (stateRoot, id) => join11(stateRoot, "guard", `${id}.agents.json`);
-function timedOutAgents(stateRoot, id, analyzers) {
-  let agents;
-  try {
-    agents = readAgents(agentsFileOf(stateRoot, id));
-  } catch {
-    return { count: 1, named: [] };
+function timeoutReportProblem(stopped, results, analyzers, mandatory) {
+  if (stopped === 0) return void 0;
+  const subagents = `${stopped} subagent${stopped === 1 ? "" : "s"}`;
+  const answered = mandatory.filter((a2) => !isTimeoutResult(results[a2]));
+  if (answered.length > 0) {
+    return `approval refused: the guard stopped ${subagents} for time, and mandatory ${answered.join(", ")} read${answered.length === 1 ? "s" : ""} a result: the lead decides`;
   }
-  const out = Object.values(agents).filter((a2) => a2.timedOut === true);
-  return {
-    count: out.length,
-    named: [
-      ...new Set(
-        out.flatMap((a2) => a2.type !== void 0 && analyzers.includes(a2.type) ? [a2.type] : [])
-      )
-    ]
-  };
-}
-function timeoutReportProblem(timedOut, results, analyzers) {
-  if (timedOut.count === 0) return void 0;
   const reported = analyzers.filter((a2) => isTimeoutResult(results[a2]));
-  const unnamed = timedOut.named.filter((a2) => !isTimeoutResult(results[a2]));
-  if (unnamed.length > 0) {
-    return `approval refused: the guard stopped ${unnamed.join(", ")} for time, but the report does not read skipped: timeout for it`;
-  }
-  if (reported.length < timedOut.count) {
-    return `approval refused: the guard stopped ${timedOut.count} subagent${timedOut.count === 1 ? "" : "s"} for time, but only ${reported.length} analyzer${reported.length === 1 ? "" : "s"} read skipped: timeout`;
+  if (reported.length < stopped) {
+    return `approval refused: the guard stopped ${subagents} for time, but only ${reported.length} analyzer${reported.length === 1 ? "" : "s"} read skipped: timeout`;
   }
   return void 0;
 }
@@ -35720,15 +35710,17 @@ function referenceBrief(r) {
 var CONTRACT_NOTE = "contract-change: ";
 var contractNote = (group, from, to, sha) => `${CONTRACT_NOTE}${group}@${from}..${to}@${sha.slice(0, 12)}`;
 var changeFile = (stateRoot, id) => join18(stateRoot, "contract-changes", `${id}.json`);
-function readContractChange(stateRoot, id) {
+function readContractChange(stateRoot, item) {
   try {
-    const file3 = changeFile(stateRoot, id);
+    const file3 = changeFile(stateRoot, item.id);
     assertStatePath(stateRoot, file3);
     if (!lstatSync15(file3).isFile()) return void 0;
     const c3 = JSON.parse(readFileSync19(file3, "utf8"));
-    if (!Array.isArray(c3.changed) || typeof c3.from !== "string" || typeof c3.to !== "string") {
+    if (!Array.isArray(c3.changed) || typeof c3.group !== "string" || typeof c3.from !== "string" || typeof c3.to !== "string" || typeof c3.fromDigest !== "string" || typeof c3.toDigest !== "string") {
       return void 0;
     }
+    const note = contractNote(c3.group, c3.fromDigest, c3.toDigest, c3.to);
+    if (!(item.notes ?? []).includes(note)) return void 0;
     return {
       ...c3,
       changed: c3.changed.filter((p) => typeof p === "string" && pathProblem(p) !== "unusual path")
@@ -35843,6 +35835,8 @@ async function checkContracts(o2) {
         main: o2.m.main.id,
         from: before.sha,
         to: sha,
+        fromDigest: before.digest,
+        toDigest: digest3,
         changed
       };
       writeStateFile(o2.stateRoot, changeFile(o2.stateRoot, added.id), `${JSON.stringify(change)}
@@ -38091,7 +38085,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
   const briefRules = writePinnedRules(stateRoot, item.id, pinned);
-  const briefReference = reference === void 0 ? void 0 : writeReference(stateRoot, item.id, reference, readContractChange(stateRoot, item.id));
+  const briefReference = reference === void 0 ? void 0 : writeReference(stateRoot, item.id, reference, readContractChange(stateRoot, item));
   if (reference === void 0)
     removeStateEntry(stateRoot, join25(stateRoot, "briefs", `${item.id}.reference`));
   const installedNames = new Set(installedSkills(claudeConfigDir).names);
@@ -38110,6 +38104,7 @@ async function launchCrewLocked(projectDir, item, config2, ports, launcher2, hel
   if (item.type === "review" && caps.review !== void 0) {
     const agentsFile = join25(stateRoot, "guard", `${item.id}.agents.json`);
     removeStateEntry(stateRoot, agentsFile);
+    removeStateEntry(stateRoot, timeoutsFileOf(agentsFile));
     const analyzerMinutes = config2.review?.analyzerTimeoutMinutes ?? DEFAULT_ANALYZER_TIMEOUT_MINUTES;
     timeouts = reviewTimeouts({
       analyzerMinutes,
@@ -49439,11 +49434,12 @@ async function runCli(argv, deps) {
         if (item.type !== "review" || report.status !== "done" || report.verdict !== "approve") {
           return;
         }
-        const analyzers = readCrewCaps(stateRoot(), item.id)?.analyzers ?? [];
+        const caps = readCrewCaps(stateRoot(), item.id);
         const problem = timeoutReportProblem(
-          timedOutAgents(stateRoot(), item.id, analyzers),
+          timedOutAgents(stateRoot(), item.id),
           report.analyzers ?? {},
-          analyzers
+          caps?.analyzers ?? [],
+          caps?.mandatory ?? []
         );
         if (problem !== void 0) throw new ReportError(problem);
       };
@@ -57450,7 +57446,7 @@ var throwOnSerializableInput = (optionName, invalidItem) => {
 };
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/io/output-sync.js
-import { writeFileSync as writeFileSync16, appendFileSync } from "node:fs";
+import { writeFileSync as writeFileSync16, appendFileSync as appendFileSync2 } from "node:fs";
 
 // node_modules/.pnpm/execa@10.2.1/node_modules/execa/lib/verbose/output.js
 var shouldLogOutput = ({ stdioItems, encoding, verboseInfo, fdNumber }) => fdNumber !== "all" && isFullVerbose(verboseInfo, fdNumber) && !BINARY_ENCODINGS.has(encoding) && isFdVerbose(fdNumber) && (stdioItems.some(({ type, value }) => type === "native" && PIPED_STDIO_VALUES.has(value)) || stdioItems.every(({ type }) => TRANSFORM_TYPES.has(type)));
@@ -57582,7 +57578,7 @@ var writeToFiles = (chunks, stdioItems, outputFiles) => {
     }
     writtenPaths.add(path10);
     if (append || outputFiles.has(path10)) {
-      appendFileSync(path10, contents);
+      appendFileSync2(path10, contents);
     } else {
       writeFileSync16(path10, contents);
     }

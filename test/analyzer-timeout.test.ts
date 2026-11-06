@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +18,7 @@ import {
   timeoutBrief,
   timeoutDecision,
   timeoutReportProblem,
+  timeoutsFileOf,
   timeoutsOfContext,
 } from '../src/analyzer-timeout.js';
 import { parseConfig } from '../src/config.js';
@@ -126,54 +128,84 @@ describe('a subagent stopped for time is recorded and held against the report', 
     motion: 'pass',
   };
 
-  it('keeps the start, the type and the timeout of each subagent', () => {
+  const mandatory = ['diff-review', 'spec-check'];
+
+  it('keeps each stopped subagent as one appended line, counted once', () => {
     agentStartOf(file, 'agent-a', T0, 'general-purpose');
     agentStartOf(file, 'agent-b', T0, 'similar-bugs');
-    expect(timedOutAgents(state, 'APP-9', analyzers)).toEqual({ count: 0, named: [] });
-    markTimedOut(file, 'agent-a', T0 + 31 * MIN);
-    markTimedOut(file, 'agent-a', T0 + 32 * MIN);
-    expect(readAgents(file)['agent-a']).toEqual({
-      start: T0,
-      timedOut: true,
-      type: 'general-purpose',
-    });
-    expect(timedOutAgents(state, 'APP-9', analyzers)).toEqual({ count: 1, named: [] });
-    markTimedOut(file, 'agent-b', T0 + 31 * MIN);
-    expect(timedOutAgents(state, 'APP-9', analyzers)).toEqual({
-      count: 2,
-      named: ['similar-bugs'],
-    });
+    expect(readAgents(file)['agent-a']).toEqual({ start: T0, type: 'general-purpose' });
+    expect(timedOutAgents(state, 'APP-9')).toBe(0);
+    markTimedOut(file, 'agent-a');
+    markTimedOut(file, 'agent-a');
+    expect(readFileSync(timeoutsFileOf(file), 'utf8')).toBe('agent-a\nagent-a\n');
+    expect(timedOutAgents(state, 'APP-9')).toBe(1);
+    markTimedOut(file, 'agent-b');
+    expect(timedOutAgents(state, 'APP-9')).toBe(2);
   });
 
-  it('an approval that reports every analyzer passed after a timeout goes to the lead', () => {
-    const t = { count: 1, named: [] };
-    expect(timeoutReportProblem(t, pass, analyzers)).toMatch(
-      /^approval refused: the guard stopped 1 subagent for time, but only 0 analyzers read skipped: timeout$/,
+  it('marks racing from many processes are all kept (append only)', async () => {
+    const racing = agentsFileOf(state, 'APP-6');
+    const script = `import { appendFileSync } from 'node:fs';\nfor (let i = 0; i < 50; i++) appendFileSync(process.argv[2], 'agent-' + process.argv[3] + '\\n', { flag: 'a' });\n`;
+    const writer = join(dir, 'writer.mjs');
+    writeFileSync(writer, script);
+    // The same appends markTimedOut makes, from eight processes at once.
+    await Promise.all(
+      Array.from(
+        { length: 8 },
+        (_, k) =>
+          new Promise<void>((done, fail) => {
+            execFile(process.execPath, [writer, timeoutsFileOf(racing), String(k)], (e) =>
+              e ? fail(e) : done(),
+            );
+          }),
+      ),
     );
-    expect(classifyDecision(timeoutReportProblem(t, pass, analyzers) as string)).toBe(
-      'analyzer_timeout',
-    );
-    expect(timeoutReportProblem(t, { ...pass, motion: TIMEOUT_RESULT }, analyzers)).toBeUndefined();
-    expect(timeoutReportProblem({ count: 0, named: [] }, pass, analyzers)).toBeUndefined();
-  });
-
-  it('a subagent type named after an analyzer must be that analyzer', () => {
-    const t = { count: 1, named: ['similar-bugs'] };
-    expect(timeoutReportProblem(t, { ...pass, motion: TIMEOUT_RESULT }, analyzers)).toMatch(
-      /stopped similar-bugs for time/,
-    );
+    expect(timedOutAgents(state, 'APP-6')).toBe(8);
     expect(
-      timeoutReportProblem(t, { ...pass, 'similar-bugs': TIMEOUT_RESULT }, analyzers),
-    ).toBeUndefined();
+      readFileSync(timeoutsFileOf(racing), 'utf8')
+        .split('\n')
+        .filter((l) => l).length,
+    ).toBe(400);
   });
 
-  it('an unreadable record counts as a timeout, and an old record of bare starts still reads', () => {
-    const bad = join(state, 'guard', 'APP-8.agents.json');
-    writeFileSync(bad, '[');
-    expect(timedOutAgents(state, 'APP-8', analyzers).count).toBe(1);
-    writeFileSync(bad, JSON.stringify({ 'agent-x': T0 }));
-    expect(readAgentStarts(bad)).toEqual({ 'agent-x': T0 });
-    expect(timedOutAgents(state, 'APP-7', analyzers)).toEqual({ count: 0, named: [] });
+  it('after a timeout, never an approval while a mandatory analyzer reads a result', () => {
+    const problem = timeoutReportProblem(
+      1,
+      { ...pass, motion: TIMEOUT_RESULT },
+      analyzers,
+      mandatory,
+    );
+    expect(problem).toBe(
+      'approval refused: the guard stopped 1 subagent for time, and mandatory diff-review, spec-check read a result: the lead decides',
+    );
+    expect(classifyDecision(problem as string)).toBe('analyzer_timeout');
+    // Which subagent ran which analyzer is not trusted: a type named after an analyzer changes nothing.
+    expect(timeoutReportProblem(2, pass, analyzers, mandatory)).toMatch(/the lead decides$/);
+  });
+
+  it('holds only when every mandatory analyzer reads skipped: timeout and the count is met', () => {
+    const allTimeout = {
+      'diff-review': TIMEOUT_RESULT,
+      'spec-check': TIMEOUT_RESULT,
+      'similar-bugs': 'pass',
+      motion: 'pass',
+    };
+    expect(timeoutReportProblem(2, allTimeout, analyzers, mandatory)).toBeUndefined();
+    expect(timeoutReportProblem(3, allTimeout, analyzers, mandatory)).toMatch(
+      /stopped 3 subagents for time, but only 2 analyzers read skipped: timeout/,
+    );
+    expect(timeoutReportProblem(0, pass, analyzers, mandatory)).toBeUndefined();
+  });
+
+  it('a record that cannot be read, or a line of another form, counts as a timeout', () => {
+    const bad = timeoutsFileOf(agentsFileOf(state, 'APP-8'));
+    writeFileSync(bad, 'agent-1\n../x y\n');
+    expect(timedOutAgents(state, 'APP-8')).toBe(2);
+    rmSync(bad);
+    mkdirSync(bad);
+    expect(timedOutAgents(state, 'APP-8')).toBe(1);
+    expect(timedOutAgents(state, 'APP-7')).toBe(0);
+    expect(() => markTimedOut(agentsFileOf(state, 'APP-8'), 'agent-1')).toThrow();
   });
 });
 
