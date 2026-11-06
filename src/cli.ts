@@ -43,6 +43,7 @@ import {
   readWorkflowsAt,
   verifyNotRunHereJobs,
 } from './ci-jobs.js';
+import { gcLines, runCloneGc, TICK_REMOTE_MAX } from './clone-gc.js';
 import {
   configWarnings,
   loadConfig,
@@ -447,6 +448,8 @@ interface Tick {
   exceptions?: { rule: string; pr: string; item?: string; head: string; by: string }[];
   /** Open releases and those that ended in the last day; absent without any. */
   releases?: (ReturnType<typeof releaseRow> & { next?: string })[];
+  /** Finished items whose clone, crew home and tmp dir this tick removed; absent without any. */
+  cleaned?: string[];
 }
 
 /**
@@ -617,8 +620,11 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         '--since, --said, --at, --deployed and --not-deployed work with release only',
       );
     }
-    if ((values.from !== undefined || values.apply !== undefined) && cmd !== 'adopt') {
-      throw new UsageError('--from and --apply work with adopt only');
+    if (values.from !== undefined && cmd !== 'adopt') {
+      throw new UsageError('--from works with adopt only');
+    }
+    if (values.apply !== undefined && cmd !== 'adopt' && cmd !== 'gc') {
+      throw new UsageError('--apply works with adopt and gc only');
     }
     if ((values.label !== undefined || values.once !== undefined) && cmd !== 'worker') {
       throw new UsageError('--label and --once work with worker only');
@@ -2571,6 +2577,27 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (open.length > 0) out.lessonsReview = open;
       };
 
+      // Finished items give their disk back: a clone, crew home and tmp dir go once nothing needs
+      // them any more (src/clone-gc.ts). What stays is retried on the next tick.
+      const cleanupPhase = async () => {
+        const r = await runCloneGc({
+          stateRoot: root,
+          ownerRoot: ownerRoot(),
+          project,
+          ports,
+          apply: true,
+          sizes: false,
+          maxRemote: TICK_REMOTE_MAX,
+        });
+        const cleaned = [...(r.result?.removed ?? []), ...(r.result?.trimmed ?? [])];
+        if (cleaned.length > 0) out.cleaned = cleaned;
+        for (const s of r.result?.skipped ?? []) {
+          if (s.reason === 'a launch is in progress' || s.reason === 'its crew is running')
+            continue;
+          out.held.push({ item: s.item, reason: `clean-up: ${s.reason}` });
+        }
+      };
+
       // Releases: follow triggered ones on GitHub, list what waits for approvals. Never triggers:
       // that is the lead's `studio release <component>`.
       const releasesPhase = async () => {
@@ -2662,6 +2689,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ['releases', releasesPhase],
           ['skills check', skillsMonthly],
           ['lessons', lessonsWeekly],
+          ['cleanup', cleanupPhase],
         ] as const) {
           if (!(await phase(name, body))) return out;
         }
@@ -2985,6 +3013,28 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (skillsCheckDue(root, now).due) {
           out.skillsCheck = 'due: the tick runs the monthly skills check';
         }
+      });
+
+      // Without asking GitHub: a clone with commits shows as one the tick would check first.
+      await step('cleanup', async () => {
+        if (!rootExists) return;
+        const r = await runCloneGc({
+          stateRoot: root,
+          ownerRoot: ownerRoot(),
+          project,
+          ports,
+          apply: false,
+          sizes: false,
+          remote: false,
+        });
+        const cleanup = r.entries.flatMap((e) =>
+          e.verdict === 'remove' || e.verdict === 'trim'
+            ? [{ item: e.item, would: e.verdict === 'trim' ? 'trim to its report' : 'remove' }]
+            : e.verdict === 'unchecked'
+              ? [{ item: e.item, would: 'remove once GitHub shows its commits are pushed' }]
+              : [],
+        );
+        if (cleanup.length > 0) out.cleanup = cleanup;
       });
       return out;
     };
@@ -4077,6 +4127,23 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           stdout,
           name: rest[1],
         });
+      }
+
+      case 'gc': {
+        refuseCrew(deps.env);
+        if (rest.length > 0) throw new UsageError('gc takes no arguments, only --apply');
+        const apply = values.apply === true;
+        const r = await runCloneGc({
+          stateRoot: apply ? await boundStateRoot() : stateRoot(),
+          ownerRoot: ownerRoot(),
+          project,
+          ports,
+          apply,
+          sizes: true,
+        });
+        if (json) print(r);
+        else stdout(`${gcLines(r).join('\n')}\n`);
+        return r.result !== undefined && r.result.skipped.length > 0 ? 1 : 0;
       }
 
       case 'doctor': {

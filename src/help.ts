@@ -196,7 +196,12 @@ export const COMMANDS: HelpEntry[] = [
   {
     usage: 'doctor',
     about:
-      'What is set and what is missing, never values; warns when .studio/board.yaml is tracked',
+      'What is set and what is missing, never values; warns when .studio/board.yaml is tracked; the disk the clones use and how many can go',
+  },
+  {
+    usage: 'gc [--apply]',
+    about:
+      'List the clones, crew homes and tmp dirs of finished items with their sizes and whether they can go; a dry run without --apply, which removes them (the tick does too)',
   },
   {
     usage: 'account add <label>',
