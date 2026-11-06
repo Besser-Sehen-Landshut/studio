@@ -559,8 +559,8 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
     if (values.repo !== undefined && cmd !== 'add' && cmd !== 'merge') {
       throw new UsageError('--repo works with add and merge only');
     }
-    if (values.wait !== undefined && cmd !== 'merge') {
-      throw new UsageError('--wait works with merge only');
+    if ((values.wait !== undefined || values['follow-head'] !== undefined) && cmd !== 'merge') {
+      throw new UsageError('--wait and --follow-head work with merge only');
     }
     const epicEdit = cmd === 'epic' && rest[0] === 'edit';
     if (!epicEdit && values.title !== undefined) {
@@ -1065,13 +1065,20 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       if (view.state !== 'OPEN') throw new Error(`${repo}#${pr} is ${view.state.toLowerCase()}`);
       const root = await boundStateRoot();
       const at = ports.clock.now().toISOString();
-      const pending = enqueue(root, { pr, repo, external: { by, at } });
+      const followHead = values['follow-head'] === true;
+      const pending = enqueue(root, {
+        pr,
+        repo,
+        external: { by, at, head: view.head, ...(followHead ? { followHead: true as const } : {}) },
+      });
       return {
         queued: `${repo}#${pr}`,
         external: true,
         by,
         at,
         head: view.head,
+        // Without --follow-head only this head merges; a later push fails the entry.
+        followHead,
         pending,
         next: 'studio queue run (or the next tick) merges it; studio queue shows the queue',
       };
@@ -4932,6 +4939,7 @@ function parseCli(argv: string[]) {
         from: { type: 'string' },
         apply: { type: 'boolean' },
         wait: { type: 'boolean' },
+        'follow-head': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: true,

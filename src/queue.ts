@@ -25,10 +25,11 @@ import type { Clock, Gh, Git, Host } from './ports.js';
 
 export type QueueStep = 'update' | 'checks' | 'capacity' | 'merge';
 /**
- * A pull request handed to the queue without a board item (`studio merge`): who asked and when.
- * It skips the branch update and the board's approval; GitHub's branch protection decides.
+ * A pull request handed to the queue without a board item (`studio merge`): who asked, when, and
+ * the head it had then. It skips the branch update and the board's approval; GitHub's branch
+ * protection decides. Only that head is merged, unless `followHead` (`--follow-head`) is set.
  */
-export type ExternalMark = { by: string; at: string };
+export type ExternalMark = { by: string; at: string; head: string; followHead?: true };
 export type QueueEntry = { pr: number; repo: string; item?: string; external?: ExternalMark };
 export type QueueCurrent = QueueEntry & { head?: string; step: QueueStep };
 export type QueueDone = QueueEntry & {
@@ -51,6 +52,9 @@ export const doneStatus = (d: Pick<QueueDone, 'result' | 'timeout'>): string =>
 /** The step an entry starts at: an external pull request's branch is not Studio's to update. */
 export const firstStep = (e: QueueEntry): QueueStep =>
   e.external === undefined ? 'update' : 'checks';
+/** Why a pinned external entry fails when its pull request got another head. */
+export const headMovedLine = (old: string, now: string): string =>
+  `head moved since enqueue: ${old} -> ${now}; re-run studio merge`;
 /** Who may be named as having asked for an external merge: a short plain name. */
 export const ASKED_BY_RE = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$/;
 export type QueuePorts = { gh: Gh; clock: Clock; host: Host };
@@ -120,7 +124,14 @@ const entrySchema = z.strictObject({
   pr: z.number().int().positive(),
   repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
   item: z.string().min(1).optional(),
-  external: z.strictObject({ by: z.string().regex(ASKED_BY_RE), at: z.string() }).optional(),
+  external: z
+    .strictObject({
+      by: z.string().regex(ASKED_BY_RE),
+      at: z.string(),
+      head: z.string().regex(/^[0-9a-f]{40,64}$/),
+      followHead: z.literal(true).optional(),
+    })
+    .optional(),
 });
 const stateSchema = z.strictObject({
   current: entrySchema
@@ -701,6 +712,16 @@ export async function mergeOne(
     return mergeSha === undefined ? { result: 'merged' } : { result: 'merged', mergeSha };
   };
   const moved = `head moved ${MAX_ATTEMPTS} times`;
+  // An external entry merges only the head the lead saw at `studio merge`, unless it asked to
+  // follow the head (`--follow-head`): then a new head waits for its own checks like an item's.
+  const pinnedHead =
+    entry.external !== undefined && entry.external.followHead !== true
+      ? entry.external.head
+      : undefined;
+  const movedSinceEnqueue = (head: string): string | undefined =>
+    pinnedHead === undefined || pinnedHead.toLowerCase() === head.toLowerCase()
+      ? undefined
+      : headMovedLine(pinnedHead, head);
 
   // Failed checks an exception by evidence covers, for the one head they were judged on.
   const waived = new Map<string, ReadonlySet<string>>();
@@ -747,6 +768,8 @@ export async function mergeOne(
       if (typeof before === 'string') return failed(before);
       if (before.state === 'MERGED') return merged();
       if (before.state === 'CLOSED') return failed('pull request is closed');
+      const movedBefore = movedSinceEnqueue(before.head);
+      if (movedBefore !== undefined) return failed(movedBefore);
       for (;;) {
         const verdict = await judged(before.head);
         // The evidence proved nothing: the lead decides, a rerun would not change the diff.
@@ -773,6 +796,8 @@ export async function mergeOne(
       if (after.state === 'MERGED') return merged();
       if (after.state === 'CLOSED') return failed('pull request is closed');
       if (after.head !== before.head) {
+        const movedAfter = movedSinceEnqueue(after.head);
+        if (movedAfter !== undefined) return failed(movedAfter);
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
         headChanged();
         continue; // the checks may belong to the old head: evaluate again
@@ -797,6 +822,8 @@ export async function mergeOne(
       if (now.state === 'MERGED') return merged();
       if (now.state === 'CLOSED') return failed('pull request is closed');
       if (head === undefined || now.head !== head) {
+        const movedNow = movedSinceEnqueue(now.head);
+        if (movedNow !== undefined) return failed(movedNow);
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
         headChanged();
         step = 'checks';
@@ -850,6 +877,11 @@ export async function mergeOne(
       ]);
       if (r.code === 0) return merged();
       if (HEAD_MOVED.test(r.stderr)) {
+        if (pinnedHead !== undefined) {
+          // GitHub refused the pinned head: name the new one when it can be read.
+          const v = await viewPr(entry, gh);
+          return failed(headMovedLine(pinnedHead, typeof v === 'string' ? 'unknown' : v.head));
+        }
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
         headChanged();
         step = 'checks';

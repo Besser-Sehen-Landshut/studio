@@ -39753,6 +39753,7 @@ async function readMainBuild(config2, ports) {
 // src/queue.ts
 var doneStatus = (d) => d.result === "merged" ? "MERGED" : d.timeout === true ? "TIMEOUT" : "FAILED";
 var firstStep = (e) => e.external === void 0 ? "update" : "checks";
+var headMovedLine = (old, now) => `head moved since enqueue: ${old} -> ${now}; re-run studio merge`;
 var ASKED_BY_RE = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$/;
 var QueueHeld = class extends Error {
   constructor(line4) {
@@ -39771,7 +39772,12 @@ var entrySchema = external_exports.strictObject({
   pr: external_exports.number().int().positive(),
   repo: external_exports.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
   item: external_exports.string().min(1).optional(),
-  external: external_exports.strictObject({ by: external_exports.string().regex(ASKED_BY_RE), at: external_exports.string() }).optional()
+  external: external_exports.strictObject({
+    by: external_exports.string().regex(ASKED_BY_RE),
+    at: external_exports.string(),
+    head: external_exports.string().regex(/^[0-9a-f]{40,64}$/),
+    followHead: external_exports.literal(true).optional()
+  }).optional()
 });
 var stateSchema = external_exports.strictObject({
   current: entrySchema.extend({
@@ -40175,6 +40181,8 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
     return mergeSha === void 0 ? { result: "merged" } : { result: "merged", mergeSha };
   };
   const moved = `head moved ${MAX_ATTEMPTS} times`;
+  const pinnedHead = entry.external !== void 0 && entry.external.followHead !== true ? entry.external.head : void 0;
+  const movedSinceEnqueue = (head) => pinnedHead === void 0 || pinnedHead.toLowerCase() === head.toLowerCase() ? void 0 : headMovedLine(pinnedHead, head);
   const waived = /* @__PURE__ */ new Map();
   const waivedBase = /* @__PURE__ */ new Map();
   const judged = async (head) => {
@@ -40213,6 +40221,8 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
       if (typeof before === "string") return failed(before);
       if (before.state === "MERGED") return merged();
       if (before.state === "CLOSED") return failed("pull request is closed");
+      const movedBefore = movedSinceEnqueue(before.head);
+      if (movedBefore !== void 0) return failed(movedBefore);
       for (; ; ) {
         const verdict = await judged(before.head);
         if (verdict.kind === "evidence") return failed(verdict.reason);
@@ -40237,6 +40247,8 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
       if (after2.state === "MERGED") return merged();
       if (after2.state === "CLOSED") return failed("pull request is closed");
       if (after2.head !== before.head) {
+        const movedAfter = movedSinceEnqueue(after2.head);
+        if (movedAfter !== void 0) return failed(movedAfter);
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
         headChanged();
         continue;
@@ -40261,6 +40273,8 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
       if (now.state === "MERGED") return merged();
       if (now.state === "CLOSED") return failed("pull request is closed");
       if (head === void 0 || now.head !== head) {
+        const movedNow = movedSinceEnqueue(now.head);
+        if (movedNow !== void 0) return failed(movedNow);
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
         headChanged();
         step = "checks";
@@ -40304,6 +40318,10 @@ async function mergeOne(entry, config2, ports, persist, opts = {}) {
       ]);
       if (r.code === 0) return merged();
       if (HEAD_MOVED.test(r.stderr)) {
+        if (pinnedHead !== void 0) {
+          const v = await viewPr(entry, gh);
+          return failed(headMovedLine(pinnedHead, typeof v === "string" ? "unknown" : v.head));
+        }
         if (++attempts > MAX_ATTEMPTS) return failed(moved);
         headChanged();
         step = "checks";
@@ -47240,8 +47258,8 @@ var COMMANDS = [
   { usage: "queue run", about: "Merge the queued PRs, one at a time" },
   { usage: "queue [list]", about: "Show the merge queue (JSON), external entries included" },
   {
-    usage: "merge <pr> [--repo <owner/name>] [--by <name>] [--wait]",
-    about: "Hand a PR without a board item to the merge queue (checks, main build, capacity, runner load, exact head); --wait runs the queue and reports MERGED, FAILED or TIMEOUT"
+    usage: "merge <pr> [--repo <owner/name>] [--by <name>] [--follow-head] [--wait]",
+    about: "Hand a PR without a board item to the merge queue (checks, main build, capacity, runner load); only the head seen now merges unless --follow-head; --wait runs the queue and reports MERGED, FAILED or TIMEOUT"
   },
   { usage: "state", about: "Refresh state.json in the state root" },
   { usage: "pause", about: "Owner only: nothing new starts or merges until resume" },
@@ -50268,8 +50286,8 @@ async function runCli(argv, deps) {
     if (values.repo !== void 0 && cmd !== "add" && cmd !== "merge") {
       throw new UsageError("--repo works with add and merge only");
     }
-    if (values.wait !== void 0 && cmd !== "merge") {
-      throw new UsageError("--wait works with merge only");
+    if ((values.wait !== void 0 || values["follow-head"] !== void 0) && cmd !== "merge") {
+      throw new UsageError("--wait and --follow-head work with merge only");
     }
     const epicEdit = cmd === "epic" && rest[0] === "edit";
     if (!epicEdit && values.title !== void 0) {
@@ -50671,13 +50689,20 @@ async function runCli(argv, deps) {
       if (view.state !== "OPEN") throw new Error(`${repo}#${pr} is ${view.state.toLowerCase()}`);
       const root = await boundStateRoot();
       const at2 = ports.clock.now().toISOString();
-      const pending = enqueue(root, { pr, repo, external: { by, at: at2 } });
+      const followHead = values["follow-head"] === true;
+      const pending = enqueue(root, {
+        pr,
+        repo,
+        external: { by, at: at2, head: view.head, ...followHead ? { followHead: true } : {} }
+      });
       return {
         queued: `${repo}#${pr}`,
         external: true,
         by,
         at: at2,
         head: view.head,
+        // Without --follow-head only this head merges; a later push fails the entry.
+        followHead,
         pending,
         next: "studio queue run (or the next tick) merges it; studio queue shows the queue"
       };
@@ -54065,7 +54090,8 @@ function parseCli(argv) {
         artifacts: { type: "string" },
         from: { type: "string" },
         apply: { type: "boolean" },
-        wait: { type: "boolean" }
+        wait: { type: "boolean" },
+        "follow-head": { type: "boolean" }
       },
       allowPositionals: true,
       strict: true

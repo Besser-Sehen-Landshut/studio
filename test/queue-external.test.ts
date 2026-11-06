@@ -128,10 +128,11 @@ const rulesWith = (extra: Rule[]): Rule[] => [
   { prefix: MC, responses: [{ stdout: JSON.stringify({ mergeCommit: { oid: 'e'.repeat(40) } }) }] },
 ];
 
-const external = (): QueueCurrent => ({
+const MARK = { by: 'lead', at: '2026-10-31T09:00:00Z', head: H1 };
+const external = (followHead = false): QueueCurrent => ({
   pr: 5,
   repo: 'org/app',
-  external: { by: 'lead', at: '2026-10-31T09:00:00Z' },
+  external: followHead ? { ...MARK, followHead: true as const } : MARK,
   step: 'checks',
 });
 
@@ -141,12 +142,13 @@ async function run(
     runnerLoad?: Record<string, unknown>;
     api?: (path: string) => string;
     timeoutMs?: number;
+    followHead?: boolean;
   } = {},
 ) {
   const g = fakeGh(rules, o.api);
   const c = fakeClock();
   const result = await mergeOne(
-    external(),
+    external(o.followHead),
     mkConfig(o.runnerLoad),
     { gh: g.gh, clock: c.clock, host },
     () => {},
@@ -160,7 +162,7 @@ const merges = (calls: string[]) => calls.filter((c) => c.startsWith(MERGE));
 describe('external entries', () => {
   it('start at the checks step: Studio never updates a branch that is not its own', () => {
     expect(firstStep({ pr: 5, repo: 'org/app' })).toBe('update');
-    expect(firstStep({ pr: 5, repo: 'org/app', external: { by: 'lead', at: 'x' } })).toBe('checks');
+    expect(firstStep({ pr: 5, repo: 'org/app', external: MARK })).toBe('checks');
   });
 
   it('pending then green: waits, then squash-merges the head with --match-head-commit', async () => {
@@ -181,9 +183,45 @@ describe('external entries', () => {
     expect(merges(r.calls)).toEqual([]);
   });
 
-  it('a head that moved between the checks and the merge is read again and pinned', async () => {
-    // Checks see H1 before and after the poll; the merge step reads H2: back to the checks.
+  it('default: a head that moved since enqueue fails the entry before the merge', async () => {
+    // Checks see H1 before and after the poll; the merge step reads H2.
     const r = await run(rulesWith([{ prefix: VIEW, responses: [view(H1), view(H1), view(H2)] }]));
+    expect(r.result).toEqual({
+      result: 'failed',
+      reason: `head moved since enqueue: ${H1} -> ${H2}; re-run studio merge`,
+    });
+    expect(merges(r.calls)).toEqual([]);
+  });
+
+  it('default: a head that moved before the checks were read fails at once', async () => {
+    const r = await run(rulesWith([{ prefix: VIEW, responses: [view(H2)] }]));
+    expect(r.result.reason).toBe(`head moved since enqueue: ${H1} -> ${H2}; re-run studio merge`);
+    expect(r.calls.some((c) => c.startsWith(CHK))).toBe(false);
+    expect(merges(r.calls)).toEqual([]);
+  });
+
+  it('default: GitHub refusing the pinned head fails with the new head named', async () => {
+    const r = await run(
+      rulesWith([
+        { prefix: VIEW, responses: [view(H1), view(H1), view(H1), view(H2)] },
+        { prefix: MERGE, responses: [{ code: 1, stderr: 'Head branch was modified' }] },
+      ]),
+    );
+    expect(r.result.reason).toBe(`head moved since enqueue: ${H1} -> ${H2}; re-run studio merge`);
+    expect(merges(r.calls)).toHaveLength(1);
+  });
+
+  it('--follow-head: a moved head is read again, its checks awaited, and pinned', async () => {
+    const r = await run(
+      rulesWith([
+        { prefix: VIEW, responses: [view(H1), view(H1), view(H2)] },
+        {
+          prefix: CHK,
+          responses: [checks('pass'), checks('pass'), checks('pending'), checks('pass')],
+        },
+      ]),
+      { followHead: true },
+    );
     expect(r.result.result).toBe('merged');
     expect(merges(r.calls)).toEqual([`${MERGE} --squash --match-head-commit ${H2}`]);
   });
@@ -216,7 +254,7 @@ describe('external entries', () => {
   it('runQueue records the external mark and the timeout flag on the done entry', async () => {
     const g = fakeGh(rulesWith([{ prefix: CHK, responses: [checks('pending')] }]));
     const c = fakeClock();
-    const mark = { by: 'lead', at: '2026-10-31T09:00:00Z' };
+    const mark = MARK;
     const state: QueueState = { pending: [{ pr: 5, repo: 'org/app', external: mark }], done: [] };
     await runQueue(state, mkConfig(), { gh: g.gh, clock: c.clock, host }, () => {}, {
       timeoutMs: 30 * 60_000,

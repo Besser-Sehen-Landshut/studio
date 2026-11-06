@@ -312,7 +312,7 @@ describe('decisionsOf', () => {
 
   it('pushes each external merge result of the last day once, a failure only once with its lead line', () => {
     const s = setup();
-    const by = { by: 'lead', at: '2026-11-05T07:00:00.000Z' };
+    const by = { by: 'lead', at: '2026-11-05T07:00:00.000Z', head: 'a'.repeat(40) };
     const done = [
       {
         pr: 5,

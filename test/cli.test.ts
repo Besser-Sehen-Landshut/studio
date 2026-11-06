@@ -5229,7 +5229,11 @@ describe('merge: any pull request through the queue', () => {
     });
     const list = JSON.parse((await cli(fx, ports, 'queue')).out);
     expect(list.pending).toEqual([
-      { pr: 7, repo: 'org/app', external: { by: 'peer-session', at: expect.any(String) } },
+      {
+        pr: 7,
+        repo: 'org/app',
+        external: { by: 'peer-session', at: expect.any(String), head: HEAD },
+      },
     ]);
     const run = await cli(fx, ports, 'queue', 'run');
     expect(run.code).toBe(0);
@@ -5281,6 +5285,47 @@ describe('merge: any pull request through the queue', () => {
     const bad = await cli(fx2, fakePorts(externalGh('fail').gh).ports, 'merge', '7', '--wait');
     expect(bad.code).toBe(1);
     expect(JSON.parse(bad.out)).toMatchObject({ status: 'FAILED', reason: 'check ci failed' });
+  });
+
+  it('a push after studio merge fails the entry; with --follow-head the new head merges', async () => {
+    /** PR 7 at HEAD when queued, at OTHER from then on. */
+    const movingGh = () => {
+      let views = 0;
+      return fakeGh((l) => {
+        if (/^pr view 7 --repo org\/app --json headRefOid,state,mergeable/.test(l)) {
+          const head = views++ === 0 ? HEAD : OTHER;
+          return {
+            stdout: JSON.stringify({ headRefOid: head, state: 'OPEN', mergeable: 'MERGEABLE' }),
+          };
+        }
+        if (l.startsWith('run list --repo org/app')) return { stdout: '[]' };
+        if (l.startsWith('pr merge 7')) return {};
+        if (l.includes('--json mergeCommit')) {
+          return { stdout: JSON.stringify({ mergeCommit: { oid: 'c'.repeat(40) } }) };
+        }
+        return undefined;
+      });
+    };
+    const fx = makeFx([]);
+    const pinned = movingGh();
+    const r = await cli(fx, fakePorts(pinned.gh).ports, 'merge', '7', '--wait');
+    expect(r.code).toBe(1);
+    expect(JSON.parse(r.out)).toMatchObject({
+      followHead: false,
+      status: 'FAILED',
+      reason: `head moved since enqueue: ${HEAD} -> ${OTHER}; re-run studio merge`,
+    });
+    expect(pinned.calls.some((c) => c.startsWith('pr merge 7'))).toBe(false);
+
+    const fx2 = makeFx([]);
+    const follow = movingGh();
+    const f = await cli(fx2, fakePorts(follow.gh).ports, 'merge', '7', '--follow-head', '--wait');
+    expect(f.code).toBe(0);
+    expect(JSON.parse(f.out)).toMatchObject({ followHead: true, status: 'MERGED' });
+    expect(follow.calls).toContain(
+      `pr merge 7 --repo org/app --squash --match-head-commit ${OTHER}`,
+    );
+    expect((await cli(fx2, fakePorts(follow.gh).ports, 'queue', '--follow-head')).code).toBe(1);
   });
 
   it('a board item that took the PR meanwhile stops the external merge', async () => {
