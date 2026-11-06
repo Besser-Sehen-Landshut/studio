@@ -420,6 +420,69 @@ describe('what a crew leaves to start in a later job goes, as the crew user, nev
   });
 });
 
+describe("PowerShell modules of the crew user's own never stand in for core ones", () => {
+  const resetModule = new URL('../bin/studio-crew-reset.mjs', import.meta.url).href;
+  it('removes Documents PowerShell Modules folders, a link as a link, never following one', async () => {
+    const { resetProfiles } = (await import(resetModule)) as {
+      resetProfiles: (documents: string) => { removed: string[]; left: string[] };
+    };
+    const outside = join(root, 'modules-outside');
+    mkdirSync(join(outside, 'Evil'), { recursive: true });
+    writeFileSync(join(outside, 'Evil', 'Evil.psm1'), 'keep\n');
+    const documents = join(root, 'Documents');
+    // WindowsPowerShell\Modules is a link; PowerShell\Modules a folder with a link inside.
+    mkdirSync(join(documents, 'WindowsPowerShell'), { recursive: true });
+    symlinkSync(outside, join(documents, 'WindowsPowerShell', 'Modules'), 'dir');
+    mkdirSync(join(documents, 'PowerShell', 'Modules', 'Microsoft.PowerShell.Security'), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(documents, 'PowerShell', 'Modules', 'Microsoft.PowerShell.Security', 'x.psm1'),
+      'x\n',
+    );
+    symlinkSync(outside, join(documents, 'PowerShell', 'Modules', 'linked'), 'dir');
+    const r = resetProfiles(documents);
+    expect(r.removed.sort()).toEqual(['PowerShell\\Modules', 'WindowsPowerShell\\Modules']);
+    expect(r.left).toEqual([]);
+    expect(readdirSync(join(documents, 'PowerShell'))).toEqual([]);
+    expect(readdirSync(join(documents, 'WindowsPowerShell'))).toEqual([]);
+    expect(readFileSync(join(outside, 'Evil', 'Evil.psm1'), 'utf8')).toBe('keep\n');
+  });
+  it('every PowerShell of the crew host and the reset runs pinned to $PSHOME modules', async () => {
+    const { pinnedPowerShell } = (await import(resetModule)) as {
+      pinnedPowerShell: (script: string) => {
+        file: string;
+        args: string[];
+        env: Record<string, string>;
+      };
+    };
+    const saved = { ...process.env };
+    process.env.psmodulepath = 'C:\\evil';
+    process.env.PSModulePath = 'C:\\evil';
+    try {
+      const ps = pinnedPowerShell('Get-Acl x');
+      expect(ps.file).toMatch(/WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/);
+      expect(ps.env.PSModulePath).toMatch(/WindowsPowerShell[\\/]v1\.0[\\/]Modules$/);
+      expect(Object.keys(ps.env).filter((k) => k.toLowerCase() === 'psmodulepath')).toEqual([
+        'PSModulePath',
+      ]);
+      expect(ps.args.at(-1)).toMatch(/^\$env:PSModulePath = Join-Path \$PSHOME 'Modules'\n/);
+    } finally {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+    }
+    // No other way to PowerShell in the files the crew user runs.
+    for (const f of ['../bin/studio-crew-host.mjs', '../bin/studio-crew-reset.mjs']) {
+      // The one full path of the pinned PowerShell aside.
+      const text = readFileSync(new URL(f, import.meta.url), 'utf8').replace(
+        "join(PS_HOME, 'powershell.exe')",
+        '',
+      );
+      expect(text, f).not.toMatch(/['"`]powershell(\.exe)?['"`]/);
+    }
+  });
+});
+
 describe('the lead reads one answer, and no more than one answer may be', () => {
   it('stops at the cap of all bytes, and drops what comes after the answer', async () => {
     const big = (async function* () {

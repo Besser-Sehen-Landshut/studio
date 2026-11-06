@@ -17,6 +17,7 @@ import { closeSync, openSync, readdirSync, readFileSync, unlinkSync, writeFileSy
 import { connect } from 'node:net';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
+import { pinnedPowerShell, powershell as powershellSync } from './studio-crew-reset.mjs';
 
 const fail = (why) => {
   process.stderr.write(`studio-crew-host: ${why}\n`);
@@ -105,12 +106,14 @@ public static class StudioNet {
 '@
 `;
 
+// Every PowerShell of the crew user's runs with its modules from $PSHOME only (pinnedPowerShell).
 const powershell = (script) =>
   new Promise((resolve) => {
+    const ps = pinnedPowerShell(script);
     execFile(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', script],
-      { encoding: 'utf8', windowsHide: true, timeout: 60_000 },
+      ps.file,
+      ps.args,
+      { encoding: 'utf8', windowsHide: true, timeout: 60_000, env: ps.env },
       (err, stdout) => resolve(err === null ? stdout.trim() : undefined),
     );
   });
@@ -130,15 +133,8 @@ async function smbCode(host) {
 /** How many credentials this user has stored (Credential Manager); -1 when it cannot be read. */
 function storedCredentials() {
   try {
-    const out = execFileSync(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        `${NET_API}$n = 0; $p = [IntPtr]::Zero; if ([StudioNet]::CredEnumerate($null, 0, [ref]$n, [ref]$p)) { [StudioNet]::CredFree($p); [Console]::Out.Write($n) } elseif ([Runtime.InteropServices.Marshal]::GetLastWin32Error() -eq 1168) { [Console]::Out.Write(0) } else { [Console]::Out.Write(-1) }`,
-      ],
-      { encoding: 'utf8', windowsHide: true, timeout: 60_000 },
+    const out = powershellSync(
+      `${NET_API}$n = 0; $p = [IntPtr]::Zero; if ([StudioNet]::CredEnumerate($null, 0, [ref]$n, [ref]$p)) { [StudioNet]::CredFree($p); [Console]::Out.Write($n) } elseif ([Runtime.InteropServices.Marshal]::GetLastWin32Error() -eq 1168) { [Console]::Out.Write(0) } else { [Console]::Out.Write(-1) }`,
     ).trim();
     return /^-?\d+$/.test(out) ? Number(out) : -1;
   } catch {
@@ -337,33 +333,22 @@ async function probe(p) {
     const left = [...registryLeft()];
     let startup = [];
     try {
-      const dir = execFileSync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-Command', "[Environment]::GetFolderPath('Startup')"],
-        { encoding: 'utf8', windowsHide: true },
-      ).trim();
+      const dir = powershellSync("[Environment]::GetFolderPath('Startup')").trim();
       startup = dir === '' ? [] : readdirSync(dir).filter((n) => n.toLowerCase() !== 'desktop.ini');
     } catch (e) {
       if (e?.code !== 'ENOENT') left.push('the Startup folder cannot be read');
     }
     if (startup.length > 0) left.push(`${startup.length} item(s) in the Startup folder`);
     try {
-      const documents = execFileSync(
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          "[Environment]::GetFolderPath('MyDocuments')",
-        ],
-        { encoding: 'utf8', windowsHide: true },
-      ).trim();
+      const documents = powershellSync("[Environment]::GetFolderPath('MyDocuments')").trim();
       for (const sub of ['PowerShell', 'WindowsPowerShell']) {
         let names = [];
         try {
-          names = readdirSync(join(documents, sub)).filter((n) => /profile\.ps1$/i.test(n));
+          names = readdirSync(join(documents, sub)).filter((n) =>
+            /profile\.ps1$|^modules$/i.test(n),
+          );
         } catch {}
-        if (names.length > 0) left.push(`PowerShell profile(s) ${names.join(', ')}`);
+        if (names.length > 0) left.push(`PowerShell profile(s) or modules ${names.join(', ')}`);
       }
     } catch {
       left.push('the Documents folder cannot be read');
@@ -404,12 +389,7 @@ if (spec.mode === 'reset') {
     const { resetProfiles, resetRegistry, resetStartup } = await import('./studio-crew-reset.mjs');
     // The registry first: its shell folders go back to the defaults before they are asked for.
     const left = resetRegistry();
-    const folder = (name) =>
-      execFileSync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-Command', `[Environment]::GetFolderPath('${name}')`],
-        { encoding: 'utf8', windowsHide: true },
-      ).trim();
+    const folder = (name) => powershellSync(`[Environment]::GetFolderPath('${name}')`).trim();
     const startup = folder('Startup');
     const documents = folder('MyDocuments');
     report = {

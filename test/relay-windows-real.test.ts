@@ -110,6 +110,33 @@ New-ItemProperty -LiteralPath $sf -Name '!Do not use this registry key' -Value '
   }, 120_000);
 });
 
+describe.skipIf(!on)('the PowerShell of the crew user on Windows', () => {
+  it('loads core modules from $PSHOME only, whatever PSModulePath it was given', async () => {
+    const reset = (await import(new URL('../bin/studio-crew-reset.mjs', import.meta.url).href)) as {
+      powershell: (script: string) => string;
+    };
+    // A module named like a core one, first in the module path, that marks its own loading.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'studio-shadow-')));
+    const mod = join(dir, 'Microsoft.PowerShell.Security');
+    const marker = join(dir, 'loaded.txt');
+    execFileSync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `New-Item -ItemType Directory -Path '${mod}' | Out-Null; Set-Content -LiteralPath '${join(mod, 'Microsoft.PowerShell.Security.psm1')}' -Value "Set-Content -LiteralPath '${marker}' -Value x; function Get-Acl { 'shadow' }; Export-ModuleMember -Function Get-Acl"`,
+    ]);
+    const saved = process.env.PSModulePath;
+    process.env.PSModulePath = `${dir};${saved ?? ''}`;
+    try {
+      const out = reset.powershell('(Get-Acl -LiteralPath $env:SystemRoot).GetType().Name');
+      expect(out.trim()).toBe('DirectorySecurity');
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      process.env.PSModulePath = saved;
+    }
+  }, 120_000);
+});
+
 // Elevated only (the windows-latest job): folders with an owner and a DACL of the setup's.
 const elevated = on && process.env.STUDIO_WINDOWS_SANDBOX_TEST === '1';
 
