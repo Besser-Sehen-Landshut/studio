@@ -35,6 +35,16 @@ import {
   type WorkItem,
 } from './board.js';
 import { readSkillsMissing } from './brief-caps.js';
+import {
+  CACHE_MANIFESTS,
+  CACHE_ROLE,
+  cacheCleanup,
+  cacheDue,
+  openCacheItem,
+  publishCache,
+  systemCowCopy,
+  withCacheItem,
+} from './cache.js';
 import { capabilitiesDir } from './capabilities.js';
 import { capacityHoldsTwice, readCapacity, readCapacityTwice } from './capacity.js';
 import {
@@ -427,6 +437,8 @@ interface Tick {
     pinned?: { item: string; epic: string; sha: string; suites: { pass: number; fail: number } }[];
     started?: { item: string; workflow: string; sha: string }[];
   };
+  /** The build cache: the item this tick added to rebuild it, caches the size cleanup removed. */
+  cache?: { added?: string; removed?: number };
   /** Epics whose acceptance was green in this tick: one owner line each. */
   epicsDone?: { epic: string; title: string; item: string }[];
   /** Epics an acceptance reopened, with the items it added for its findings and failed suites. */
@@ -1405,6 +1417,31 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         const hits = privacyHits(text, 'report');
         if (hits.length > 0) throw new ReportError(privacyLine(hits));
       }
+      // A cache crew's build of main, done: what it left becomes the project's build cache
+      // (src/cache.ts). A publish that fails blocks the item with the reason, like a failed run.
+      let cached: { sha: string; sizeBytes: number } | undefined;
+      if (item.role === CACHE_ROLE && item.runsOn === undefined && report.status === 'done') {
+        try {
+          const meta = await publishCache({
+            stateRoot: stateRoot(),
+            ownerRoot: ownerRoot(),
+            item: item.id,
+            clone: join(stateRoot(), 'clones', item.id),
+            homeDir: join(stateRoot(), 'homes', item.id),
+            ownerConfig: loadOwnerConfig(owner),
+            cow: ports.cow ?? systemCowCopy(),
+            now: ports.clock.now(),
+          });
+          cached = { sha: meta.sha, sizeBytes: meta.sizeBytes };
+        } catch (e) {
+          const line = (e as Error).message.replace(/\p{Cc}/gu, ' ');
+          report = {
+            ...report,
+            status: 'failed',
+            questions: [...report.questions, `build cache not published: ${line}`],
+          };
+        }
+      }
       // A review report that does not hold to its brief is a rejected report, like one that
       // cannot be read: `tick` hands both to the lead.
       // A subagent the guard stopped for time never counts as a pass: the approval must show it.
@@ -1911,6 +1948,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         // Offered skills the launch found not installed: the lead installs them or lets them go.
         ...(skillsMissing.length === 0 ? {} : { skillsMissing }),
         ...(supersededBy === undefined ? {} : { supersededBy }),
+        ...(cached === undefined ? {} : { cache: cached }),
         ...(fixLimit ? { fixLimit } : {}),
         ...(acceptance === undefined ? {} : { acceptance }),
         ...(lessonsProposed > 0 ? { lessonsProposed } : {}),
@@ -2274,6 +2312,32 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         if (Object.keys(a).length > 0) out.acceptance = a;
       };
 
+      // The shared build cache (src/cache.ts): once a day the size cleanup over all projects, and a
+      // cache item when the cache is on and older than every_days. The item is launched like any.
+      const cachePhase = async () => {
+        const now = ports.clock.now();
+        const removed = await cacheCleanup({
+          stateBase: dirname(root),
+          ownerRoot: ownerRoot(),
+          ownerConfig: loadOwnerConfig(owner),
+          now,
+        });
+        if ((removed ?? []).length > 0) out.cache = { removed: removed?.length };
+        const config = loadConfig(project);
+        if (!cacheDue(root, config, now) || openCacheItem(loadBoard(project)) !== undefined) return;
+        // Only when main has something to cache: its root as the owner's checkout last fetched it.
+        const names = (
+          await ports.git.run(project, ['ls-tree', '--name-only', 'refs/remotes/origin/main'])
+        ).split('\n');
+        if (!CACHE_MANIFESTS.some((m) => names.includes(m))) return;
+        const id = await withBoardLock(root, now, () => {
+          const r = withCacheItem(loadBoard(project), config);
+          if (r.id !== undefined) saveBoard(project, r.board);
+          return r.id;
+        });
+        if (id !== undefined) out.cache = { ...out.cache, added: id };
+      };
+
       // (c) The plan, launched under every gate `launch` keeps.
       const launchPlanned = async () => {
         const { config, board } = loadAll();
@@ -2554,6 +2618,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           ['review', reviewMissing],
           ['workers', followWorkers],
           ['acceptance', acceptancePhase],
+          ['cache', cachePhase],
           ['launch', launchPlanned],
           ['queue add', queueApproved],
           ['sweep', sweep],

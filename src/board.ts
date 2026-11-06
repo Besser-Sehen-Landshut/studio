@@ -21,7 +21,14 @@ export type ItemStatus = (typeof ITEM_STATUSES)[number];
 
 // Same list as ROLE_TEMPLATES in config.ts (a test keeps them equal). Duplicated so that this file
 // takes only types from config.ts.
-export const BOARD_ROLES = ['builder', 'reviewer', 'designer', 'researcher', 'release'] as const;
+export const BOARD_ROLES = [
+  'builder',
+  'reviewer',
+  'designer',
+  'researcher',
+  'release',
+  'cache',
+] as const;
 
 const statusSchema = z.enum(ITEM_STATUSES);
 const strList = z.array(z.string()).default([]);

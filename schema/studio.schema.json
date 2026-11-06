@@ -166,7 +166,8 @@
           "reviewer",
           "designer",
           "researcher",
-          "release"
+          "release",
+          "cache"
         ]
       },
       "additionalProperties": {
@@ -575,6 +576,28 @@
         "daily_cost_usd": {
           "type": "number",
           "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "cache": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "every_days": {
+          "default": 7,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 90
+        },
+        "timeout_min": {
+          "default": 60,
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 240
         }
       },
       "additionalProperties": false

@@ -34,7 +34,8 @@
               "reviewer",
               "designer",
               "researcher",
-              "release"
+              "release",
+              "cache"
             ]
           },
           "repo": {

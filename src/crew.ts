@@ -31,6 +31,14 @@ import {
   resolveModel,
   writeCaps,
 } from './brief-caps.js';
+import {
+  CACHE_ROLE,
+  cacheEnv,
+  cacheSteps,
+  seedCrew,
+  systemCowCopy,
+  writeCacheRun,
+} from './cache.js';
 import { loadOwnerConfig, type OwnerEnv, pathKey, type StudioConfig, within } from './config.js';
 import { recordEndedRuns } from './costs.js';
 import {
@@ -776,6 +784,7 @@ export function writeBrief(
           })),
     ...(caps.reference === undefined ? [] : referenceBrief(caps.reference)),
     ...(caps.timeouts === undefined ? [] : timeoutBrief(caps.timeouts)),
+    ...(caps.cache === undefined ? [] : cacheBrief(caps.cache)),
     '## Working rules',
     '',
     '- Work only inside this checkout.',
@@ -895,6 +904,22 @@ export function writeBrief(
   return file;
 }
 
+/** A cache crew's task: run Studio's commands, nothing else; Studio publishes the result. */
+function cacheBrief(c: { sha: string; commands: string[]; minutes: number }): string[] {
+  return [
+    '## Build cache',
+    '',
+    `This checkout is main at ${c.sha}. Build it, so that Studio can keep what the build leaves as the shared build cache. Run exactly these commands, in this order, from the checkout root, each as one Bash call with a timeout of ${c.minutes} minutes, and nothing else:`,
+    '',
+    ...c.commands.map((cmd, i) => `${i + 1}. \`${cmd}\``),
+    '',
+    'The guard refuses every other command, every edit, every subagent and every write except the report. Do not change a file, fix a failure or retry with other options: this rule replaces the test, commit and push rules below.',
+    '- All commands passed: write the report with status done; the body lists each command with its last line of output.',
+    '- A command failed or timed out: stop there and write the report with status failed; the body names the command and its first error line. A download refused by the network is such a failure too.',
+    '',
+  ];
+}
+
 /**
  * Writes the per-session Claude Code settings file and the guard context it points to.
  * Keys verified against the Claude Code docs (2.1.314):
@@ -930,6 +955,11 @@ export function writeCrewSettings(
     deny?: { paths: readonly string[]; ports: readonly number[]; allowRead?: readonly string[] };
     /** A reviewer run: its analyzer and session time limits (src/analyzer-timeout.ts). */
     timeouts?: ReviewTimeouts;
+    /**
+     * A cache crew (src/cache.ts): the only commands it may run and files it may write, and the
+     * time each command may take (Claude Code's Bash limit, 2 minutes by default).
+     */
+    only?: { commands: readonly string[]; writes: readonly string[]; commandMs: number };
   },
   launcher: LauncherEnv = {},
 ): string {
@@ -1062,6 +1092,9 @@ export function writeCrewSettings(
     ...((dirs.deny?.ports ?? []).length > 0 ? { deniedPorts: [...(dirs.deny?.ports ?? [])] } : {}),
     ...(dirs.rea === undefined ? {} : reaGuard(dirs.rea.artifacts, dirs.rea.classes)),
     ...(dirs.timeouts === undefined ? {} : { timeouts: dirs.timeouts }),
+    ...(dirs.only === undefined
+      ? {}
+      : { onlyCommands: [...dirs.only.commands], onlyWrites: [...dirs.only.writes] }),
   };
   writeStateFile(stateRoot, ctxFile, `${JSON.stringify(ctx, null, 2)}\n`);
   const settings = {
@@ -1082,6 +1115,13 @@ export function writeCrewSettings(
       STUDIO_PROJECT: config.primaryRepo,
       STUDIO_GUARD_CTX: ctxFile,
       STUDIO_STATE_DIR: stateRoot,
+      // A build takes longer than a Bash call may by default (https://code.claude.com/docs/en/env-vars).
+      ...(dirs.only === undefined
+        ? {}
+        : {
+            BASH_DEFAULT_TIMEOUT_MS: String(dirs.only.commandMs),
+            BASH_MAX_TIMEOUT_MS: String(dirs.only.commandMs),
+          }),
     },
     disableAllHooks: false,
     // Crew needs neither the web nor MCP servers; the guard denies these tools too.
@@ -1371,6 +1411,20 @@ async function launchCrewLocked(
     throw new Error(`repo ${item.repo} is not configured (primary_repo/repos in studio.yaml)`);
   }
   githubHttpsUrl(item.repo);
+  // A cache crew builds main for every crew after it: only here, only when the cache is on, and
+  // only as an item that opens no pull request and gets no token (src/cache.ts).
+  const isCache = item.role === CACHE_ROLE;
+  if (isCache) {
+    if (config.cache?.enabled !== true) {
+      throw new Error(
+        `${item.id} builds the build cache, which is off (cache.enabled in studio.yaml)`,
+      );
+    }
+    if (worker !== undefined) throw new Error('a cache crew runs only on the lead machine');
+    if (item.type !== 'research' || item.repo !== config.primaryRepo) {
+      throw new Error(`${item.id}: a cache item is a research item of the primary repository`);
+    }
+  }
   // Fail closed: without the least-privilege token the session would fall back to ambient
   // credentials, so that needs an explicit opt-in.
   const home = launcher.homedir ?? homedir();
@@ -1551,6 +1605,7 @@ async function launchCrewLocked(
   const clonePath = join(stateRoot, 'clones', item.id);
   // A run stopped at a limit or a block keeps its work: never let prepareCheckout replace that clone.
   if (
+    !isCache &&
     (previous?.limit || previous?.block) &&
     existsNoFollow(clonePath) &&
     (cloneBranch(clonePath) !== `studio/${item.id}` ||
@@ -1562,7 +1617,8 @@ async function launchCrewLocked(
   }
   const tokenConfigDir = oauthToken !== undefined ? claudeConfigDir : undefined;
   // A clone that is about to be recreated has no session to go back to, and no crew has run in it.
-  const reused = isReusableClone(clonePath, item);
+  // A cache crew always starts over: a fresh clone at the commit of the rules, nothing resumed.
+  const reused = !isCache && isReusableClone(clonePath, item);
   const resumeId = (() => {
     const sessionId = previous?.limit?.sessionId;
     if (sessionId === undefined || !reused) return undefined;
@@ -1627,7 +1683,15 @@ async function launchCrewLocked(
   await recheck();
   // The clone can take minutes: beat before and after it, so the lock never looks silent.
   lock.heartbeat(ports.clock.now());
-  const wt = await prepareCheckout(stateRoot, projectDir, item, ports, worker?.from, worker?.sha);
+  if (isCache) removeStateEntry(stateRoot, clonePath);
+  const wt = await prepareCheckout(
+    stateRoot,
+    projectDir,
+    item,
+    ports,
+    worker?.from,
+    isCache ? pinned.sha : worker?.sha,
+  );
   lock.heartbeat(ports.clock.now());
   removeOldReport(stateRoot, wt.path, item.id);
   // Isolated HOME, recreated from scratch on every launch: only a git identity and a credential
@@ -1639,6 +1703,33 @@ async function launchCrewLocked(
   const tmpDir = join(stateRoot, 'tmp', item.id);
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
+  // The build cache: a cache crew gets the commands that fill it, read from its fresh clone; every
+  // other local crew starts from copy-on-write copies of it (src/cache.ts).
+  const cow = ports.cow ?? systemCowCopy(launcher.platform ?? process.platform);
+  const cacheCommands = isCache ? cacheSteps(wt.path).map((s) => s.command) : [];
+  if (isCache) {
+    if (cacheCommands.length === 0) {
+      throw new Error(
+        `${item.id}: main has no Cargo.toml, pnpm-lock.yaml or package-lock.json at its root: nothing to cache`,
+      );
+    }
+    writeCacheRun(stateRoot, {
+      item: item.id,
+      sha: pinned.sha,
+      commands: cacheCommands,
+      startedAt: ports.clock.now().toISOString(),
+    });
+  } else if (worker === undefined && config.cache?.enabled === true) {
+    await seedCrew({
+      stateRoot,
+      clone: wt.path,
+      homeDir,
+      freshClone: !reused,
+      cow,
+      now: ports.clock.now(),
+    });
+    lock.heartbeat(ports.clock.now());
+  }
   const briefRules = writePinnedRules(stateRoot, item.id, pinned);
   const briefReference =
     reference === undefined
@@ -1683,6 +1774,13 @@ async function launchCrewLocked(
   caps.pushByStudio = worker?.noToken === true;
   if (rea !== undefined) caps.rea = { artifacts: rea.artifacts, classes: rea.classes };
   if (briefReference !== undefined) caps.reference = briefReference;
+  if (isCache) {
+    caps.cache = {
+      sha: pinned.sha,
+      commands: cacheCommands,
+      minutes: config.cache?.timeoutMin ?? 60,
+    };
+  }
   caps.prByStudio =
     worker !== undefined ||
     ((launcher.platform ?? process.platform) === 'darwin' &&
@@ -1724,6 +1822,15 @@ async function launchCrewLocked(
           }),
       ...(worker === undefined ? {} : { deny: worker.deny }),
       ...(timeouts === undefined ? {} : { timeouts }),
+      ...(isCache
+        ? {
+            only: {
+              commands: cacheCommands,
+              writes: [join(wt.path, '.studio', 'reports', caps.reportName)],
+              commandMs: (config.cache?.timeoutMin ?? 60) * 60_000,
+            },
+          }
+        : {}),
     },
     owner,
   );
@@ -1776,6 +1883,7 @@ async function launchCrewLocked(
     }
   }
   Object.assign(env, settingsEnv);
+  if (config.cache?.enabled === true && worker === undefined) Object.assign(env, cacheEnv(homeDir));
   // A research item pushes nothing, so it gets no token that could push.
   if (token && item.type !== 'research') env.GH_TOKEN = token;
   const log = join(stateRoot, 'logs', `${item.id}.jsonl`);
