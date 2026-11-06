@@ -1,7 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { execa } from 'execa';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { findJob, jobInstances, readWorkflowsAt, type Workflows } from './ci-jobs.js';
@@ -32,6 +31,7 @@ import {
   realProofRunner,
   removeRunDir,
 } from './proof-sandbox.js';
+import { parseTree, type TreeEntry, writeTree } from './proof-tree.js';
 import { commentsOnlyWhy, languageOf } from './proofs.js';
 import { appendStateLine, type Check, checkKey } from './queue.js';
 import { readDefaultBranch, readPrFacts } from './review.js';
@@ -181,6 +181,8 @@ export function proofCommandsFor(o: {
 /** What a proof command prints, on a line of its own, to prove: this word and the run's nonce. */
 export const PROOF_LINE_WORD = 'proven';
 const GIT_ARCHIVE_MS = 300_000;
+/** What a proof command's base or head tree may hold; over it, no command runs. */
+const TREE_CAPS = { maxBytes: 128 * 1024 * 1024, maxFiles: 50_000 };
 /** Stdout a proof command may print. */
 const MAX_PROOF_OUTPUT = 1024 * 1024;
 /** The largest file a proof command may write in its tmp dir. */
@@ -626,10 +628,12 @@ async function prove(
 /**
  * Runs the command of a `proof: command` rule: only when the owner config allows it, only in the
  * proof sandbox (never without one), and from studio.yaml at the base (the rules come from there),
- * so a pull request never runs or changes its own proof. The command starts in an extract of the
- * base (`git archive`, no link to the owner's repository) and reads the head's extract, the diff
- * and the changed paths as data. It proves only by exiting 0 with a line `proven <nonce>`, the
- * nonce drawn for this run: no text of the pull request can hold it. A command that ran on a
+ * so a pull request never runs or changes its own proof. The command starts in the base tree,
+ * written out blob by blob (src/proof-tree.ts: no `.gitattributes` processing, no link to the
+ * owner's repository), and reads the head's tree, the diff and the changed paths as data. It proves
+ * only by exiting 0 with a line `proven <nonce>`, the nonce drawn for this run and handed over on
+ * fd 3, never in the environment: no text of the pull request, and no child that reads the
+ * environment, can hold it. A command that ran on a
  * diff never runs on it again: its answer is in the log. Extraction or start failures are retried.
  */
 async function runCommand(
@@ -663,19 +667,31 @@ async function runCommand(
   try {
     const base = join(dirs.run, 'base');
     const head = join(dirs.run, 'head');
+    // Both trees are listed and checked before either is written: over the caps, or with a link,
+    // a submodule or an odd path, nothing runs.
+    const listed: [string, TreeEntry[]][] = [];
+    for (const [side, oid, dir] of [
+      ['base', p.base, base],
+      ['head', p.head, head],
+    ] as const) {
+      let out: string;
+      try {
+        out = await g(ctx, ['ls-tree', '-r', '-l', '-z', '--full-tree', oid]);
+      } catch {
+        return { kind: 'retry', why: `the ${side} tree cannot be listed` };
+      }
+      const entries = parseTree(out, TREE_CAPS);
+      if (typeof entries === 'string')
+        return { kind: 'no', why: `the ${side} tree has ${entries}` };
+      listed.push([dir, entries]);
+    }
     try {
-      for (const [oid, dir] of [
-        [p.base, base],
-        [p.head, head],
-      ] as const) {
-        const tar = join(dirs.run, 'tree.tar');
+      for (const [dir, entries] of listed) {
         mkdirSync(dir);
-        await g(ctx, ['archive', '--format=tar', '-o', tar, oid], GIT_ARCHIVE_MS);
-        await execa('tar', ['-xf', tar, '-C', dir], { stdin: 'ignore', timeout: GIT_ARCHIVE_MS });
-        rmSync(tar);
+        await writeTree(ctx.checkout.dir, entries, dir, GIT_ARCHIVE_MS);
       }
     } catch {
-      return { kind: 'retry', why: 'the base and head cannot be extracted' };
+      return { kind: 'retry', why: 'the base and head cannot be written out' };
     }
     const diff = join(dirs.run, 'diff.patch');
     const files = join(dirs.run, 'files');
@@ -692,7 +708,9 @@ async function runCommand(
       STUDIO_PROOF_HEAD_TREE: head,
       STUDIO_PROOF_DIFF: diff,
       STUDIO_PROOF_FILES: files,
-      STUDIO_PROOF_NONCE: nonce,
+      // The nonce is not in the environment, which every child inherits: it comes on fd 3, for
+      // the command to read before it starts anything.
+      STUDIO_PROOF_NONCE_FD: '3',
     });
     const seconds = r.timeoutSeconds ?? 60;
     const result = await c.runner.run(
@@ -705,6 +723,7 @@ async function runCommand(
         maxOutput: MAX_PROOF_OUTPUT,
         maxFileBytes: MAX_PROOF_FILE,
       },
+      nonce,
     );
     if (result.kind === 'failed') return { kind: 'retry', why: result.why };
     const no = (why: string): Proven => ({ kind: 'no', why, command: argv });

@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -88,7 +89,11 @@ interface Repo {
 }
 
 /** main with studio.yaml (`rules`), CI, a prove script and a migration; a head that applies `change`. */
-function makeRepo(o: { rules?: string; change: (dir: string) => void }): Repo {
+function makeRepo(o: {
+  rules?: string;
+  change: (dir: string) => void;
+  base?: (dir: string) => void;
+}): Repo {
   const base = join(root, `r${n++}`);
   mkdirSync(base);
   const home = join(base, 'home');
@@ -105,9 +110,13 @@ function makeRepo(o: { rules?: string; change: (dir: string) => void }): Repo {
   write('.studio/studio.yaml', studioYaml(o.rules ?? RULE));
   write('.github/workflows/ci.yml', CI);
   write('scripts/migration-guard.mjs', 'process.exit(1);\n');
-  // biome-ignore lint/suspicious/noTemplateCurlyInString: the script's own template literal
-  write('scripts/prove.mjs', 'console.log(`proven ${process.env.STUDIO_PROOF_NONCE}`);\n');
+  write(
+    'scripts/prove.mjs',
+    // the nonce comes on fd 3, read to the end before anything else starts
+    "import { closeSync, readFileSync } from 'node:fs';\nconst nonce = readFileSync(3, 'utf8');\ncloseSync(3);\nconsole.log('proven ' + nonce);\n",
+  );
   write('migrations/001.sql', 'CREATE TABLE a (id int);\n');
+  o.base?.(project);
   git(project, 'add', '-A');
   git(project, 'commit', '-q', '-m', 'base');
   git(project, 'push', '-q', 'origin', 'main');
@@ -174,6 +183,7 @@ function fakeRunner(
     argv: readonly string[];
     env: Record<string, string>;
     plan: SandboxPlan;
+    secret: string;
   }) => SandboxRun,
   unavailable?: string,
 ) {
@@ -181,13 +191,14 @@ function fakeRunner(
     argv: readonly string[];
     env: Record<string, string>;
     plan: SandboxPlan;
+    secret: string;
     files: Record<string, string>;
   }[] = [];
   const runner: ProofRunner = {
     async unavailable() {
       return unavailable;
     },
-    async run(argv, env, plan) {
+    async run(argv, env, plan, _limits, secret) {
       // what lies in the run dir while the command runs (it is removed afterwards)
       const files = {
         baseScript: readFileSync(join(plan.cwd, 'scripts/prove.mjs'), 'utf8'),
@@ -198,8 +209,8 @@ function fakeRunner(
         diff: readFileSync(env.STUDIO_PROOF_DIFF as string, 'utf8'),
         files: readFileSync(env.STUDIO_PROOF_FILES as string, 'utf8'),
       };
-      calls.push({ argv, env, plan, files });
-      return answer({ argv, env, plan });
+      calls.push({ argv, env, plan, secret, files });
+      return answer({ argv, env, plan, secret });
     },
   };
   return { runner, calls };
@@ -223,10 +234,10 @@ const ref = { repo: 'org/app', pr: 9, item: 'APP-2' };
 const guardFail: Check = { name: 'migration-guard', bucket: 'fail', workflow: 'CI' };
 const judge = (r: Repo, c: ProofCommands | undefined) =>
   judgeFailedChecks(ctxFor(r, c), ref, r.head, [guardFail]);
-const proven = ({ env }: { env: Record<string, string> }): SandboxRun => ({
+const proven = ({ secret }: { secret: string }): SandboxRun => ({
   kind: 'exited',
   code: 0,
-  stdout: `checked\nproven ${env.STUDIO_PROOF_NONCE}\n`,
+  stdout: `checked\nproven ${secret}\n`,
   tooLarge: false,
 });
 
@@ -316,7 +327,7 @@ describe('a proof command, judged', { timeout: 60_000 }, () => {
     expect(v2.kind).toBe('waived');
     const call = f2.calls[0];
     expect(call?.argv).toEqual(['node', 'scripts/prove.mjs', '--strict']);
-    expect(call?.files.baseScript).toContain('STUDIO_PROOF_NONCE');
+    expect(call?.files.baseScript).toContain('readFileSync(3');
     expect(call?.files.headMigration).toBe('CREATE TABLE a (id int, b text);\n');
     expect(call?.files.diff).toContain('+CREATE TABLE a (id int, b text);');
     expect(call?.files.files).toBe('migrations/001.sql\0');
@@ -326,7 +337,12 @@ describe('a proof command, judged', { timeout: 60_000 }, () => {
         .filter((k) => !k.startsWith('STUDIO_PROOF_'))
         .sort(),
     ).toEqual(['HOME', 'LANG', 'LC_ALL', 'PATH', 'TMPDIR', 'TZ']);
-    expect(call?.env.STUDIO_PROOF_NONCE).toMatch(/^[0-9a-f]{32}$/);
+    expect(call?.secret).toMatch(/^[0-9a-f]{32}$/);
+    // the nonce is never in the environment, which every child of the command inherits
+    expect(call?.env.STUDIO_PROOF_NONCE_FD).toBe('3');
+    expect(Object.values(call?.env ?? {}).some((v) => v.includes(call?.secret as string))).toBe(
+      false,
+    );
     // the run dir is gone afterwards
     expect(existsSync(call?.plan.run as string)).toBe(false);
     const [entry] = readExceptions(r2.state);
@@ -336,6 +352,40 @@ describe('a proof command, judged', { timeout: 60_000 }, () => {
       proof: 'command',
       command: ['node', 'scripts/prove.mjs', '--strict'],
     });
+  });
+  it('the trees are written as git stores them: .gitattributes changes nothing', async () => {
+    const r = makeRepo({
+      base: (dir) => {
+        writeFileSync(
+          join(dir, '.gitattributes'),
+          'scripts/gone.txt export-ignore\nscripts/subst.txt export-subst\n',
+        );
+        writeFileSync(join(dir, 'scripts/gone.txt'), 'still here\n');
+        writeFileSync(join(dir, 'scripts/subst.txt'), '$Format:%H$\n');
+      },
+      change: migrate,
+    });
+    let seen: string[] = [];
+    const f = fakeRunner((s) => {
+      const tree = s.plan.cwd;
+      seen = [
+        readFileSync(join(tree, 'scripts/gone.txt'), 'utf8'),
+        readFileSync(join(tree, 'scripts/subst.txt'), 'utf8'),
+      ];
+      return proven(s);
+    });
+    expect((await judge(r, commands(f.runner))).kind).toBe('waived');
+    expect(seen).toEqual(['still here\n', '$Format:%H$\n']);
+  });
+  it('a symbolic link in a tree runs nothing', async () => {
+    const r = makeRepo({
+      base: (dir) => symlinkSync('/etc/hosts', join(dir, 'scripts/link')),
+      change: migrate,
+    });
+    const f = fakeRunner(proven);
+    const v = await judge(r, commands(f.runner));
+    expect(v.kind === 'lead' && v.reason).toMatch(/the base tree has a symbolic link/);
+    expect(f.calls).toHaveLength(0);
   });
   it('a rule that only the pull request adds runs nothing', async () => {
     const r = makeRepo({
@@ -350,7 +400,7 @@ describe('a proof command, judged', { timeout: 60_000 }, () => {
     expect(f.calls).toHaveLength(0);
   });
   it('without the nonce line, with an echoed line, a failed exit or a timeout: not proven, and never run again', async () => {
-    type Answer = (s: { env: Record<string, string> }) => SandboxRun;
+    type Answer = (s: { secret: string }) => SandboxRun;
     const answers: Answer[] = [
       () => ({ kind: 'exited', code: 0, stdout: 'ok\n', tooLarge: false }),
       // a line from the diff cannot hold the nonce
@@ -363,13 +413,13 @@ describe('a proof command, judged', { timeout: 60_000 }, () => {
       (s) => ({
         kind: 'exited',
         code: 1,
-        stdout: `proven ${s.env.STUDIO_PROOF_NONCE}\n`,
+        stdout: `proven ${s.secret}\n`,
         tooLarge: false,
       }),
       (s) => ({
         kind: 'exited',
         code: 0,
-        stdout: `proven ${s.env.STUDIO_PROOF_NONCE}\n`,
+        stdout: `proven ${s.secret}\n`,
         tooLarge: true,
       }),
       () => ({ kind: 'timeout' }),

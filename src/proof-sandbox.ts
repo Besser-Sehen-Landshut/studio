@@ -16,7 +16,10 @@ import { basename, dirname, join, resolve, sep } from 'node:path';
  * the shared temp dirs, the state root, the owner and Claude config, removable volumes, and on
  * Linux everything that is not mounted in explicitly (`/var`, `/run`, `/mnt`, `/opt`, ...). On
  * macOS the keychain and every other Mach service but a few for logging and user lookup are shut,
- * so the command cannot hand work to a process outside (LaunchServices, AppleEvents). The command
+ * so the command cannot hand work to a process outside (LaunchServices, AppleEvents); it registers
+ * no Mach service, uses no POSIX or System V IPC, and sees and signals no process outside its own
+ * sandbox. The macOS profile allows by default and denies all of that explicitly (SECURITY.md
+ * names what that leaves open). The command
  * gets a CPU-time and a file-size limit through `ulimit`, which its children inherit, a wall-clock
  * timeout that kills its whole process group, and a cap on what it prints.
  */
@@ -59,6 +62,8 @@ export interface ProofRunner {
     env: Record<string, string>,
     plan: SandboxPlan,
     limits: SandboxLimits,
+    /** Written to the command's fd 3 and closed: the one way a value reaches it unseen by the environment. */
+    secret: string,
   ): Promise<SandboxRun>;
 }
 
@@ -148,6 +153,14 @@ export function seatbeltProfile(plan: SandboxPlan, home = homedir()): string | u
     '(deny appleevent-send)',
     '(deny mach-lookup)',
     `(allow mach-lookup ${MAC_MACH.map((n) => `(global-name ${q(n)})`).join(' ')})`,
+    '(deny mach-register)',
+    // Signals and process information only within the sandbox: the command and its children.
+    '(deny signal)',
+    '(allow signal (target same-sandbox))',
+    '(deny process-info*)',
+    '(allow process-info* (target same-sandbox))',
+    '(deny ipc-posix*)',
+    '(deny ipc-sysv*)',
     '(deny file-write*)',
     `(allow file-write* (subpath ${q(tmp)}) (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))`,
     `(deny file-read* ${subpaths(deny)})`,
@@ -385,7 +398,13 @@ export function removeRunDir(run: string): void {
 function runGroup(
   file: string,
   args: string[],
-  opts: { cwd: string; env: Record<string, string>; timeoutMs: number; maxOutput: number },
+  opts: {
+    cwd: string;
+    env: Record<string, string>;
+    timeoutMs: number;
+    maxOutput: number;
+    secret: string;
+  },
 ): Promise<SandboxRun> {
   return new Promise((done) => {
     let settled = false;
@@ -402,7 +421,7 @@ function runGroup(
         cwd: opts.cwd,
         env: opts.env,
         detached: true,
-        stdio: ['ignore', 'pipe', 'ignore'],
+        stdio: ['ignore', 'pipe', 'ignore', 'pipe'],
       });
     } catch (e) {
       done({ kind: 'failed', why: `cannot start: ${(e as Error).message}` });
@@ -415,6 +434,13 @@ function runGroup(
         // gone already
       }
     };
+    // The secret goes to fd 3 and the pipe is closed at once: the command reads it to the end,
+    // and whatever it starts after that reads nothing there.
+    const secretPipe = child.stdio[3] as import('node:stream').Writable | null;
+    secretPipe?.on('error', () => {
+      // the command closed fd 3 without reading: it gets no secret
+    });
+    secretPipe?.end(opts.secret);
     const chunks: Buffer[] = [];
     let size = 0;
     let tooLarge = false;
@@ -458,7 +484,7 @@ export const realProofRunner: ProofRunner = {
     availability ??= Promise.resolve().then(() => sandboxUnavailable());
     return availability;
   },
-  async run(argv, env, plan, limits) {
+  async run(argv, env, plan, limits, secret) {
     const why = await this.unavailable();
     if (why !== undefined) return { kind: 'failed', why: `no sandbox: ${why}` };
     if (argv.length === 0) return { kind: 'failed', why: 'no command' };
@@ -471,6 +497,7 @@ export const realProofRunner: ProofRunner = {
       env,
       timeoutMs: limits.timeoutMs,
       maxOutput: limits.maxOutput,
+      secret,
     });
   },
 };

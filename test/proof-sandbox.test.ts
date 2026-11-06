@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { type AddressInfo, createServer } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
@@ -36,6 +36,18 @@ describe('the Seatbelt profile', () => {
     expect(p).toContain('(deny mach-lookup)');
     expect(p).toContain('(deny lsopen)');
     expect(p).toContain('(deny appleevent-send)');
+    // no other process: no signals, no process information, no IPC, no registered services
+    for (const rule of [
+      '(deny mach-register)',
+      '(deny signal)',
+      '(allow signal (target same-sandbox))',
+      '(deny process-info*)',
+      '(allow process-info* (target same-sandbox))',
+      '(deny ipc-posix*)',
+      '(deny ipc-sysv*)',
+    ]) {
+      expect(p).toContain(rule);
+    }
     expect(p).not.toMatch(/com\.apple\.(SecurityServer|securityd|trustd)/);
     // the allow-list of services comes after the deny, so it is the only way in
     expect(p.indexOf('(allow mach-lookup')).toBeGreaterThan(p.indexOf('(deny mach-lookup)'));
@@ -239,6 +251,7 @@ describe.skipIf(why !== undefined)(
           proofEnv([nodeDir], dirs.tmp, {}),
           { ...dirs, cwd: base, read: [nodeDir], deny: [scratch] },
           { timeoutMs, cpuSeconds: 20, maxOutput: 64 * 1024, maxFileBytes: 1024 * 1024 },
+          'the-secret',
         );
       } finally {
         removeRunDir(dirs.run);
@@ -309,6 +322,38 @@ describe.skipIf(why !== undefined)(
       const names = (/^env (.*)$/m.exec(r.text)?.[1] ?? '').split(',');
       expect(names).toEqual(expect.arrayContaining(own));
       expect(names.filter((n) => !own.includes(n) && !set.includes(n))).toEqual([]);
+    });
+    it('hands the secret on fd 3 only: a child started after the read finds nothing there', async () => {
+      const r = await out(`
+        const fs = require('node:fs');
+        const secret = fs.readFileSync(3, 'utf8');
+        const child = require('node:child_process').spawnSync(process.execPath, ['-e', \`
+          let got = 'nothing';
+          try { got = require('node:fs').readFileSync(3, 'utf8') || 'nothing'; } catch {}
+          console.log(got + ' ' + JSON.stringify(process.env).includes('the-secret'));
+        \`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore', 3] });
+        console.log('top ' + secret);
+        console.log('child ' + child.stdout.trim());
+      `);
+      expect(r.text).toContain('top the-secret');
+      expect(r.text).toContain('child nothing false');
+    });
+    it('cannot signal a process outside the sandbox', async () => {
+      const other = spawn('sleep', ['30'], { stdio: 'ignore' });
+      try {
+        const r = await out(
+          `
+          try { process.kill(Number(process.argv.at(-1)), 'SIGTERM'); console.log('signalled'); }
+          catch (e) { console.log('refused ' + e.code); }
+        `,
+          [String(other.pid)],
+        );
+        expect(r.text).toMatch(/^refused (EPERM|ESRCH)$/);
+        expect(other.exitCode).toBeNull();
+        expect(other.signalCode).toBeNull();
+      } finally {
+        other.kill();
+      }
     });
     it('caps the output and the wall clock', async () => {
       const big = await run(
