@@ -414,14 +414,14 @@ Fix limit: 3 attempts per finding (`finding_attempts`), hard stop after 6 rounds
 
 ### Exceptions by evidence
 
-A guard job in CI (a migration guard, a floor guard) can flag a change that is mechanically harmless: only SQL comments changed, only docs moved. Instead of asking a person each time, a project binds the guard to a built-in proof in `studio.yaml`. Studio computes the proof itself, in TypeScript, over the files of the pull request's base and head; no command runs.
+A guard job in CI (a migration guard, a floor guard) can flag a change that is mechanically harmless: only comments changed, only docs moved. Instead of asking a person each time, a project binds the guard to a built-in proof in `studio.yaml`. Studio computes the proof itself, in TypeScript, over the files of the pull request's base and head; no command runs.
 
 ```yaml
 evidence:
   - id: sql-comments # ^[a-z][a-z0-9-]{0,47}$, unique
     guard: { workflow: .github/workflows/ci.yml, job: migration-guard } # the job whose failure it explains
     proof: comments_only # or paths_only
-    languages: [sql] # comments_only only; sql is the one language so far
+    languages: [sql] # comments_only only: sql, rust, typescript, javascript, yaml, toml
     paths: ["migrations/**"] # every changed file of the pull request must lie here
     owner_only: false # true: a hit the proof does not explain goes to the owner
   - id: docs-only
@@ -431,15 +431,34 @@ evidence:
 ```
 
 - **The proofs.** Both cover every changed file of the pull request: one outside `paths` proves nothing, because a change elsewhere could be what the guard saw. `paths` match case-sensitively (`docs/**` never covers `DOCS/run.sh`), and a path with a control character proves nothing.
-  - `comments_only`: each changed file is a plain change of a regular `.sql` file in which only plain comment text was edited, added or removed, the boring case. Code, string literals, quoted identifiers, dollar-quoted bodies and comments with a meaning must stay byte for byte where they are. Between tokens only "a blank here" and "a line break here" count, and a line comment always ends a line. `sql` is the only language so far: a rule that names another is refused. More languages come later, each with an adversarial review of its own.
+  - `comments_only`: each changed file is a plain change of a regular file in one of `languages`, chosen by its extension, in which only plain comment text was edited, added or removed, the boring case. A file with any other extension proves nothing. Code, string literals and the like, and comments with a meaning must stay byte for byte where they are. In free-form languages only "a blank here" and "a line break here" count between tokens, and a line comment always ends a line; in YAML every line of code stays byte for byte, indentation included, and only lines that hold nothing but a plain comment or blanks may come and go. A rule that names another language is refused. Shell (`.sh`, `.bash`) and Python (`.py`) are left out on purpose: a script can read its own source and line numbers in too many ways (`$0`, `LINENO`, `caller`, `eval`, `set -v`, `__file__`, `inspect`, frames, `logging`, `warnings`, encoding lines), so a comment-only diff there may change what it does. For such files the proof does not apply.
+
+    | Language     | Extensions                    | What is content, not comment                                                                                        |
+    | ------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+    | `sql`        | `.sql`                        | strings, quoted identifiers, dollar-quoted bodies (PostgreSQL, see below)                                           |
+    | `rust`       | `.rs`                         | strings, byte and C strings, raw strings `r#"..."#`, char literals (told from lifetimes); block comments nest       |
+    | `typescript` | `.ts`, `.tsx`, `.mts`, `.cts` | strings, templates with `${...}`, regular expressions, JSX text and attributes (not in `.ts`, `.mts`, `.cts`)       |
+    | `javascript` | `.js`, `.jsx`, `.mjs`, `.cjs` | as `typescript`, JSX in every file                                                                                  |
+    | `yaml`       | `.yml`, `.yaml`               | quoted scalars, block scalars (`\|`, `>`) with every line below them; both versions must also load to the same data |
+    | `toml`       | `.toml`                       | basic, literal and multi-line strings                                                                               |
+
+    Doc comments in Rust (`///`, `//!`, `/** */`, `/*! */`) are never plain: they are `#[doc]` attributes, a code block in them runs as a doctest, and derive macros put their text into the program (command-line help, API schemas). Only `//` and `/* */` prose is plain there.
   - `paths_only`: every changed path, both sides of a rename, matches `paths`.
   - `whitespace_only` is not in this version: a rule that names it is refused. It comes later.
-- **PostgreSQL only, and only the boring case.** `comments_only` reads SQL as PostgreSQL does and proves nothing for anything else:
+- **SQL: PostgreSQL only, and only the boring case.** `comments_only` reads SQL as PostgreSQL does and proves nothing for anything else:
   - files: an added, deleted or renamed file, a mode change, a symlink, a submodule, a file over 2 MiB, bytes that are not valid UTF-8 (read exactly, as bytes; a byte order mark counts), a NUL byte;
   - characters anywhere in the base or the head, also inside comments and strings: a backslash (`E'...'` escapes, other dialects' strings), a carriage return not right before a line feed (PostgreSQL ends a `--` comment there), a form feed or vertical tab, and line endings that are neither all LF nor all CRLF, or that change between base and head;
   - forms: `--` without a blank after it (and so `--+` hints), a nested block comment, a block comment whose `/*` is not followed by a blank or `*` (`/*!...*/` runs in MySQL, `/*+...*/` is a hint), a backtick, a `$` that is neither a dollar quote with an ASCII tag of at most 63 characters nor a positional parameter `$1`, and anything unterminated.
 
   Comments with a meaning must be byte-identical in base and head and sit between the same tokens: line comments with a migration or query directive (`-- +goose Up`, `-- name: ...`, `-- no-transaction`) and any comment that names a tool (`goose`, `sqlx`, `flyway`, `liquibase`, `migrate`, `sqlc`, `noqa`, any `lint`, `ignore` or `disable`, and more; see `src/proofs.ts`). Each comment is judged on its own. The tokenizer is linear in the size of the file. When in doubt, not proven.
+- **The other languages, only the boring case.** Each tokenizer reads what it can classify for sure and proves nothing for anything else (`src/proof-languages.ts`):
+  - everywhere: the file rules above, a byte order mark, a line or paragraph separator or NEL (JavaScript and YAML end a line there), a bidirectional control character, and anything unterminated or unbalanced;
+  - code: a backslash outside a string, and a character that is not ASCII outside strings and comments (YAML excepted);
+  - Rust: a lifetime glued to a quote, a name glued to a quote or `#` that is no literal prefix, `line!` or `column!` anywhere (a moved line changes their value);
+  - TypeScript and JavaScript: a `/` or a `<` that may start a regular expression or JSX as well as not, that is after `)` of `if`, `while`, `for` or `with`, after `}`, after `++` or `--`, after a postfix `!`, or after a contextual word (`await`, `yield`, `of`, `type`, ...); `<!--` and `-->`; a JSX tag that does not close as it opened;
+  - YAML: a quoted scalar over several lines, a plain scalar over several lines outside a flow collection, a block scalar that is no mapping value or sequence entry, a tab in indentation, and a file that does not load or loads to other data in the `yaml` package.
+
+  Comments with a meaning count as code, also in these languages: a shebang line, tool words (`noqa`, `pragma`, `type:`, `fmt:`, `eslint`, `biome`, `prettier`, `shellcheck`, `clippy`, `SAFETY`, `renovate`, `yaml-language-server`, `$schema`, `coding`, and more), a `#` comment that starts with a word and a colon (`# key: value`), and in TypeScript and JavaScript any `@tag` (JSDoc types count under `checkJs`), triple-slash directives, `//#`, `/*!`, `#__PURE__` and bundler hints. Line numbers in stack traces and panic messages may still move with an added comment line.
 
   The diff comes from git with pinned options (`-c core.quotePath=false diff --no-color --no-ext-diff --no-textconv --ignore-submodules=none --no-renames`).
 - **When it applies.** Only when the rule is in `studio.yaml` at the pull request's base commit on the default branch, and the owner's checkout has evidence rules too (a rule not pulled yet applies to nothing). When a check fails and every failed check (a plain failed job; a cancelled check, a skipped required one or a commit status never) is a check of a rule's guard, `collect` (for an approval) and the merge queue judge it; any other failure fails as before. The guard job must be the same at the base and at the head.

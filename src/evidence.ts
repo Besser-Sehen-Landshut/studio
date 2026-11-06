@@ -20,7 +20,7 @@ import { readDefaultBranch, readPrFacts } from './review.js';
 
 /**
  * Exceptions by evidence. A project binds a guard job (a CI job such as a migration guard) to a
- * built-in proof in studio.yaml (`evidence:`): `comments_only` (SQL) or `paths_only`, each over
+ * built-in proof in studio.yaml (`evidence:`): `comments_only` (by language) or `paths_only`, each over
  * every changed file of the pull request. When the guard fails and the proof holds on exactly that diff,
  * the failed checks count as waived for that head, and the exception is logged with its evidence.
  * Without a proof the lead decides; a rule marked `owner_only` sends that decision to the owner.
@@ -497,7 +497,8 @@ async function prove(ctx: EvidenceContext, p: Prepared, r: EvidenceRule): Promis
     if (c.status !== 'M') return { kind: 'no', why: `${name} is not a plain change` };
     if (c.srcMode !== c.dstMode) return { kind: 'no', why: `${name} changes its mode` };
     if (!REGULAR.test(c.srcMode)) return { kind: 'no', why: `${name} is no regular file` };
-    if (languageOf(c.path, r.languages ?? []) === undefined) {
+    const language = languageOf(c.path, r.languages ?? []);
+    if (language === undefined) {
       return { kind: 'no', why: `${name} is in none of the languages` };
     }
     let before: Uint8Array;
@@ -514,7 +515,7 @@ async function prove(ctx: EvidenceContext, p: Prepared, r: EvidenceRule): Promis
     } catch {
       return { kind: 'retry', why: `${name} cannot be read` };
     }
-    const why = commentsOnlyWhy(before, after);
+    const why = commentsOnlyWhy(before, after, language, c.path);
     if (why !== undefined) return { kind: 'no', why: `${name}: ${why}` };
   }
   return { kind: 'proven' };
