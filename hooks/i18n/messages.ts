@@ -41,6 +41,131 @@ export type RowState = 'decision' | 'blocked' | 'running' | 'waiting' | 'ready';
 /** Duration units: each gets a whole number and returns it with its unit, e.g. `5s`. */
 export type Units = Record<'s' | 'm' | 'h' | 'd', (n: number) => string>;
 
+/** The texts of the setup flows: `studio setup`, `relay pair`, `relay install`, `account add`. */
+export interface SetupStrings {
+  /** `<n>. <step>: <status>` */
+  step: (n: number, name: string, status: string) => string;
+  /** `<n>. <step>:` with what follows on the next lines. */
+  stepOpen: (n: number, name: string) => string;
+  done: (detail: string) => string;
+  /** One line with the fix, the exact command in it. */
+  fix: (what: string) => string;
+  /** `--dry-run`: the first line, and one line per thing it would do. */
+  dryRun: string;
+  would: (what: string) => string;
+  /** The last line of a flow: what comes next. */
+  next: (what: string) => string;
+
+  machine: string;
+  windowsWhy: string;
+  windowsFix: string;
+  wsl1Why: string;
+  wsl1Fix: (distro: string) => string;
+  otherWhy: string;
+  otherFix: string;
+  missing: (label: string, list: string) => string;
+  nodeOld: (min: number, have: string) => string;
+  sandboxTools: string;
+  tool: (name: string, command: string) => string;
+  newTerminal: string;
+  onWindowsDrive: (label: string, folder: 'config' | 'state', dir: string) => string;
+  onWindowsDriveFix: string;
+  machineDone: (label: string, node: string) => string;
+  projectOnWindows: (path: string) => string;
+  sshLater: (command: string) => string;
+
+  gh: string;
+  ghFix: (fix: string) => string;
+  ghInstall: (command: string) => string;
+
+  token: string;
+  unusable: string;
+  missingWord: string;
+  tokenText: readonly string[];
+  noRepo: string;
+  repoPrompt: string;
+  repoLooksLikeToken: string;
+  repoNotOwnerName: string;
+  tokenNothing: string;
+
+  account: string;
+  accountWrong: string;
+  noneStored: string;
+  accountText: (defaultLabel: string) => readonly string[];
+  labelPrompt: (defaultLabel: string) => string;
+  labelLooksLikeToken: string;
+  labelBad: string;
+
+  terminal: string;
+  noPlugin: string;
+  localBinOff: string;
+  localBinHelp: readonly string[];
+  untilThen: (command: string) => string;
+  shimNote: string;
+  notAShim: (target: string) => string;
+  notAShimHelp: string;
+  writePrompt: (target: string) => string;
+  updatePrompt: (target: string) => string;
+  nothingWritten: (command: string) => string;
+  wrote: (target: string) => string;
+  notOnPath: string;
+  linkHint: string;
+  untilParen: (command: string) => string;
+
+  notifications: string;
+  notifyConfigBad: readonly string[];
+  notifyState: (state: 'bad' | 'ok' | 'none', transport: string) => string;
+  notifyText: readonly string[];
+  notifyPrompt: string;
+  notifyNone: (unchanged: boolean) => string;
+  notifyAnswer: string;
+  noHttps: string;
+  notifyOpen: string;
+  notifySecret: string;
+  notifyReady: string;
+  notifyLater: string;
+  notifyFailed: (why: string) => string;
+  notifySent: string;
+
+  research: string;
+  researchOptional: string;
+  researchConfigBad: string;
+  researchDone: (version: string, mode: string, roots: string) => string;
+  trustMode: string;
+  strictMode: string;
+  researchSkipped: string;
+  notSetUp: string;
+  researchText: readonly string[];
+  researchPrompt: string;
+  researchLater: string;
+  researchInstalled: (version: string, mode: string, now: boolean) => string;
+
+  finalNext: string;
+
+  pairPc: string;
+  pairWhat: (version: string) => string;
+  pairHasStudio: (command: string) => string;
+  pairThen: (command: string) => string;
+  pairSecret: string;
+  paired: (
+    label: string,
+    where: string,
+    studio: string,
+    platform: string,
+    fingerprint: string,
+  ) => string;
+  installWebClient: string;
+  installStopped: string;
+  hostKey: (fingerprint: string) => string;
+  hostKeyUnknown: string;
+  installNext: (label: string) => string;
+  uninstallNoRecord: string;
+  uninstallStopped: string;
+  uninstallNext: (leads: readonly string[]) => string;
+  accountStored: (label: string, active: boolean) => string;
+  accountNext: string;
+}
+
 export interface Strings {
   // ---------- formatting ----------
   units: Units;
@@ -159,6 +284,10 @@ export interface Strings {
   offPane: string;
   reaConfirmed: string;
   reaNotConfirmed: string;
+
+  // ---------- the setup flows in the owner's terminal (src/setup.ts, src/relay-command.ts) ----------
+  // Commands, flags, paths and values stay as they are in every language.
+  setup: SetupStrings;
 
   // ---------- pushes (src/push.ts) ----------
   push: Record<PushKind, string>;

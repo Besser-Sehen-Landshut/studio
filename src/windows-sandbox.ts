@@ -42,7 +42,7 @@ import {
   lockdownSection,
   POINT_AND_PRINT,
 } from './relay-lockdown.js';
-import { FOLDER_FUNCTIONS } from './relay-windows.js';
+import { FOLDER_FUNCTIONS, withSteps } from './relay-windows.js';
 
 /**
  * The crew sandbox of a worker on native Windows.
@@ -173,7 +173,7 @@ export function windowsSetupScript(o: {
     throw new Error(`not a crew user prefix (at most 13 characters): ${o.prefix}`);
   }
   const list = (ps: readonly string[]) => `@(${ps.map(psQuote).join(', ')})`;
-  return `#Requires -RunAsAdministrator
+  return withSteps(`#Requires -RunAsAdministrator
 # Studio: the crew users of this Windows worker. Run once in an elevated Windows PowerShell
 # (powershell.exe). Nothing here leaves this machine.
 $ErrorActionPreference = 'Stop'
@@ -187,6 +187,7 @@ foreach ($p in ${list(o.revokePaths ?? [])}) {
   }
 }
 $readPaths = ${list(o.readPaths)}
+Step 'Git, and the group of the crew users'
 ${crewGroupMake()}# The tree deleter, copied into a folder only administrators may change, with its compiler's
 # temporary folder: the elevated worker compiles it only from there.
 $crewDir = ${psQuote(o.crewDir)}
@@ -194,8 +195,10 @@ SafeFolder $crewDir (Split-Path -Parent $crewDir)
 StrictFolder $crewDir @()
 StrictFolder (Join-Path $crewDir 'tmp') @()
 Copy-Item -LiteralPath ${psQuote(TREE_SOURCE())} -Destination (Join-Path $crewDir 'studio-tree.cs') -Force
-${crewGroupFinish()}${lockdownSection(o.lockdown === undefined ? lockdownPlan({ denyHosts: [], denyPorts: [] }) : o.lockdown, '@($groupSid)')}${POINT_AND_PRINT}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
-`;
+Step "the crew users' group: firewall rule, logon rights, read grants"
+${crewGroupFinish()}Step 'network lockdown and printer drivers'
+${lockdownSection(o.lockdown === undefined ? lockdownPlan({ denyHosts: [], denyPorts: [] }) : o.lockdown, '@($groupSid)')}${POINT_AND_PRINT}Write-Output "Done. Studio's crew users (group $($prefix)s) are ready. Next: studio worker --label <label>"
+`);
 }
 
 // ---- Grants for one run ------------------------------------------------------------------------

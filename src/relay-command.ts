@@ -103,6 +103,7 @@ import {
   type SshdScope,
 } from './relay-windows.js';
 import { elevated, machineTreeProblem, relayWindows } from './relay-windows-check.js';
+import { setupText } from './setup-text.js';
 import { labelUsage, recordRun, USAGE_UNREADABLE } from './usage.js';
 import { findClaude, runFile, systemTool } from './windows-sandbox.js';
 import { pinnedMain } from './worker.js';
@@ -867,6 +868,7 @@ export interface RelayValues {
   'force-stop'?: boolean;
   'disable-spooler'?: boolean;
   'keep-tree'?: boolean;
+  'dry-run'?: boolean;
   'no-firewall'?: boolean;
   'force-path'?: boolean;
   'block-smb-lan'?: boolean;
@@ -989,8 +991,8 @@ function setupScriptFor(o: {
 }
 
 /**
- * The network lockdown of this relay worker (src/relay-lockdown.ts): the local ranges, its DNS
- * resolvers left open on port 53, and the deny list of its config; null with `--no-firewall`.
+ * The network lockdown of this relay worker (src/relay-lockdown.ts): the local ranges and the deny
+ * list of its config; null with `--no-firewall`.
  */
 async function relayLockdown(o: {
   values: RelayValues;
@@ -1101,6 +1103,7 @@ async function syncAuthorizedKeys(o: {
  * summary. Run again, it repairs and updates.
  */
 async function install(o: {
+  owner: OwnerEnv;
   home: string;
   machine: string;
   relayUser: string;
@@ -1117,6 +1120,19 @@ async function install(o: {
   hostKey?: () => string | undefined;
 }): Promise<number> {
   const exec = o.exec ?? systemExec;
+  const t = setupText({ owner: o.owner, env: o.env });
+  const dry = o.values['dry-run'] === true;
+  if (dry) {
+    // What it would do, without elevation: nothing is checked that needs an administrator.
+    if ((o.platform ?? detectPlatform()).platform !== 'win32') {
+      throw new Error(
+        'relay install sets up a Windows relay worker; elsewhere run studio relay serve --home <dir> as the forced command of your sshd',
+      );
+    }
+    o.stdout(`${t.dryRun}\n`);
+    for (const line of installPlan(o)) o.stdout(`${t.would(line)}\n`);
+    return 0;
+  }
   await windowsAdmin({ ...o, what: 'install' });
   // sshd is stopped while the install runs: over SSH it would cut its own session off.
   if (o.values['i-am-local'] !== true && (sshSessionVar(o.env) || (await underSshd(exec)))) {
@@ -1149,9 +1165,7 @@ async function install(o: {
     }
     scope = { tailscale: true };
   }
-  o.stdout(
-    'Studio relay install: this stops and disables the WebClient service (WebDAV), which the crew sandbox does not hold.\n',
-  );
+  o.stdout(`${t.installWebClient}\n`);
   // Nothing of the home is made here: the script makes every folder with its own DACL. It goes to
   // PowerShell on stdin, never as a file.
   const r = await runScript(
@@ -1166,7 +1180,7 @@ async function install(o: {
     o.stdout,
   );
   if (r.code !== 0) {
-    o.stderr('studio: relay install stopped; fix what it says and run it again (it repairs)\n');
+    o.stderr(`${t.installStopped}\n`);
     return 1;
   }
   // A new machine gets the defaults of a Windows relay worker; an existing config stays. The
@@ -1191,11 +1205,44 @@ async function install(o: {
   if (!(await syncAuthorizedKeys({ ...o, exec }))) return 1;
   const hostKey = (o.hostKey ?? (() => readHostKey(o.env, 'win32')))();
   o.stdout(
-    hostKey === undefined
-      ? 'host key: cannot read the OpenSSH server host key\n'
-      : `host key fingerprint: ${keyFingerprint(hostKey)}${o.pair === undefined ? '' : `\nOn the lead, within the hour: studio relay pair ${o.pair.label} --connect`}\n`,
+    `${hostKey === undefined ? t.hostKeyUnknown : t.hostKey(keyFingerprint(hostKey))}\n${o.pair === undefined ? '' : `${t.installNext(o.pair.label)}\n`}`,
   );
   return 0;
+}
+
+/** What `relay install --dry-run` says it would do, in order, from the flags alone. */
+function installPlan(o: {
+  machine: string;
+  home: string;
+  relayUser: string;
+  pair: PairLine | undefined;
+  values: RelayValues;
+}): string[] {
+  const port = o.values.port ?? '22';
+  const scope =
+    o.values.source !== undefined
+      ? `the source ${o.values.source}`
+      : o.values.interface !== undefined
+        ? `the interface ${o.values.interface}`
+        : 'the Tailscale interface (else it asks for --interface or --source)';
+  return [
+    'refuse in an SSH session and while a relay job runs (--force-stop ends it)',
+    'install Git and Claude Code with winget where missing, and the OpenSSH server; refuse Git older than 2.35.2',
+    'stop sshd and close it until everything checked out',
+    `create the relay account ${o.relayUser} (standard user) and the group of the crew users`,
+    `make the admin-only tree ${o.machine} (Node.js, Studio, config, broker) and the relay home ${o.home}`,
+    o.values['no-firewall'] === true
+      ? 'put NO network lockdown in place (--no-firewall, unsafe) and remove an earlier one'
+      : 'block the local network for the relay account and the crews in Windows Firewall and prove it with a throwaway user',
+    'let only administrators install printer drivers (Point and Print)',
+    `register the broker tasks; stop and disable WebClient${o.values['disable-spooler'] === true ? ' and the print spooler' : ''}`,
+    'install the pinned plugins for crews',
+    `write the sshd block (checked with sshd -t), start sshd on port ${port}, reachable only from ${scope}${o.values['keep-passwords'] === true ? '' : '; keys only for every account'}`,
+    o.pair === undefined
+      ? 'authorize the leads of the recorded pairings only'
+      : `record the pairing of ${o.pair.label} and authorize its key`,
+    'print the host key fingerprint',
+  ];
 }
 
 /**
@@ -1217,6 +1264,25 @@ async function uninstall(o: {
   elevated?: () => Promise<boolean | undefined>;
 }): Promise<number> {
   const exec = o.exec ?? systemExec;
+  const t = setupText({ owner: o.owner, env: o.env });
+  if (o.values['dry-run'] === true) {
+    o.stdout(`${t.dryRun}\n`);
+    for (const line of [
+      'remove every lead key and pairing first',
+      'refuse while a relay job runs (--force-stop ends it)',
+      'remove the broker tasks and the sealed crew credential',
+      'retire the crew users, then remove their group with its firewall rule, logon rights and read grants',
+      `remove the relay account ${o.relayUser ?? 'studio-relay'} and its profile (only a user with Studio's description)`,
+      "remove Studio's lines in sshd_config, its firewall rules and the network lockdown",
+      o.values['keep-tree'] === true
+        ? `keep ${o.machine} and the relay home (--keep-tree)`
+        : `remove ${o.machine} and the relay home`,
+      'turn services back on only as the install recorded them',
+    ]) {
+      o.stdout(`${t.would(line)}\n`);
+    }
+    return 0;
+  }
   await windowsAdmin({ ...o, what: 'uninstall' });
   if (o.values['i-am-local'] !== true && (sshSessionVar(o.env) || (await underSshd(exec)))) {
     throw new Error(
@@ -1269,28 +1335,19 @@ async function uninstall(o: {
     record,
     treeSource: TREE_SOURCE(),
   });
-  if (record === undefined) {
-    o.stdout(
-      'No install record here (an install of an earlier version): services Studio stopped stay as they are.\n',
-    );
-  }
+  if (record === undefined) o.stdout(`${t.uninstallNoRecord}\n`);
   const r = await runScript(exec, script, o.stdout);
   if (r.code !== 0) {
-    o.stderr(
-      'studio: relay uninstall stopped; fix what it says and run studio relay uninstall again (it goes on where it stopped)\n',
-    );
+    o.stderr(`${t.uninstallStopped}\n`);
     return 1;
   }
-  o.stdout(
-    leads.length === 0
-      ? 'Done. Next: on the lead, remove this worker from workers.relay in the owner config.\n'
-      : `Done. Next: on each lead, remove ${leads.map((l) => `workers.relay.${l}`).join(', ')} from the owner config.\n`,
-  );
+  o.stdout(`${t.uninstallNext(leads)}\n`);
   return 0;
 }
 
 /** `studio relay unpair <label>` on the worker: the pairing goes, and its key with it. */
 async function unpair(o: {
+  values?: RelayValues;
   home: string;
   machine: string;
   relayUser: string;
@@ -1302,6 +1359,12 @@ async function unpair(o: {
 }): Promise<number> {
   if (!WORKER_LABEL_RE.test(o.label))
     throw new Error('relay unpair: a label is ^[a-z][a-z0-9-]{0,31}$');
+  if (o.values?.['dry-run'] === true) {
+    o.stdout(
+      `would remove the pairing of ${o.label} and rewrite the authorized keys without its key\n`,
+    );
+    return 0;
+  }
   await windowsAdmin({ ...o, what: 'unpair' });
   const all = readPairings(o.machine);
   const known = o.label in all;
@@ -1336,6 +1399,7 @@ async function pairStart(o: {
   host: string;
   values: RelayValues;
   owner: OwnerEnv;
+  env: Record<string, string | undefined>;
   stdout: (s: string) => void;
   exec?: Exec;
   ports: Ports;
@@ -1351,6 +1415,14 @@ async function pairStart(o: {
   const exec = o.exec ?? systemExec;
   const key = leadKeyFile(o.owner, o.label);
   leadFilesProblem(o.owner, key, o.platform ?? detectPlatform());
+  const t = setupText({ owner: o.owner, env: o.env });
+  if (o.values['dry-run'] === true) {
+    o.stdout(`${t.dryRun}\n`);
+    o.stdout(
+      `${t.would(`make the key ${key} (ed25519) for ${user}@${o.host}:${port} and print the one line for the PC; it waits an hour`)}\n`,
+    );
+    return 0;
+  }
   mkdirSync(dirname(key), { recursive: true, mode: 0o700 });
   // A key paired before is replaced: the worker gets the new line, the old one goes with it.
   rmSync(key, { force: true });
@@ -1381,7 +1453,15 @@ async function pairStart(o: {
   });
   const line = renderPairLine({ label: o.label, secret, key: pub });
   o.stdout(
-    `On the Windows PC, in an elevated PowerShell (at the PC or over remote desktop, never over SSH), within the hour:\n  ${bootstrapCommand({ pair: line })}\nIt installs Node.js and Git if missing (it asks first), Studio ${STUDIO_VERSION} and the relay worker.\nWith Studio there already: studio relay install --pair "${line}"\nThen here: studio relay pair ${o.label} --connect\nThe line holds a single-use secret: paste it on the worker only.\n`,
+    [
+      `1. ${t.pairPc}`,
+      `   ${bootstrapCommand({ pair: line })}`,
+      `   ${t.pairWhat(STUDIO_VERSION)}`,
+      `   ${t.pairHasStudio(`studio relay install --pair "${line}"`)}`,
+      `2. ${t.pairThen(`studio relay pair ${o.label} --connect`)}`,
+      t.pairSecret,
+      '',
+    ].join('\n'),
   );
   return 0;
 }
@@ -1394,17 +1474,30 @@ async function pairStart(o: {
 async function pairConnect(o: {
   platform?: WorkerPlatform;
   label: string;
+  values: RelayValues;
   owner: OwnerEnv;
+  env: Record<string, string | undefined>;
   ports: Ports;
   stdout: (s: string) => void;
   transport?: (label: string, target: RelayTarget) => RelayTransport;
   exec?: Exec;
 }): Promise<number> {
-  const p = readPending(o.owner, o.label, o.ports.clock.now());
+  // A dry run reads the pending pairing without removing an expired one.
+  const p = readPending(o.owner, o.label, o.ports.clock.now(), {
+    keep: o.values['dry-run'] === true,
+  });
   if (p === undefined) {
     throw new Error(
       `no pairing of ${o.label} is waiting (none started, or used already): studio relay pair ${o.label} <host>`,
     );
+  }
+  const t = setupText({ owner: o.owner, env: o.env });
+  if (o.values['dry-run'] === true) {
+    o.stdout(`${t.dryRun}\n`);
+    o.stdout(
+      `${t.would(`read the host key of ${p.host}:${p.port}, connect with it pinned, keep it only with the pairing's proof, write workers.relay.${o.label} and check the worker end to end`)}\n`,
+    );
+    return 0;
   }
   const scan = await (o.exec ?? systemExec)('ssh-keyscan', [
     '-T',
@@ -1445,7 +1538,24 @@ async function pairConnect(o: {
   });
   dropPending(o.owner, o.label);
   o.stdout(
-    `paired: ${o.label} is ${p.user}@${p.host}:${p.port}, Studio ${answer.studio} on ${answer.platform}, host key pinned (${keyFingerprint(key)}). studio doctor checks it end to end.\n`,
+    `${t.paired(o.label, `${p.user}@${p.host}:${p.port}`, answer.studio, answer.platform, keyFingerprint(key))}\n`,
   );
-  return 0;
+  // What studio doctor would check for this worker, right away: one step less for the owner.
+  let pins: { name: string; version: string }[] = [];
+  try {
+    pins = pinnedPlugins(undefined, loadOwnerConfig(o.owner).allowedPlugins);
+  } catch {
+    pins = [];
+  }
+  let check: { ok: boolean; lines: string[] };
+  try {
+    check = await relayDoctor({ transport, label: o.label, studioVersion: STUDIO_VERSION, pins });
+  } catch (e) {
+    check = { ok: false, lines: [`${o.label}: ${(e as Error).message}`] };
+  }
+  for (const l of check.lines) o.stdout(`  ${l}\n`);
+  o.stdout(
+    `${t.next(check.ok ? `runs_on: ${o.label} on an item runs it there` : `fix what the lines above say, then studio doctor`)}\n`,
+  );
+  return check.ok ? 0 : 1;
 }

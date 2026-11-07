@@ -5,7 +5,15 @@ import { LOCALES } from '../locales/index.js';
 import type { Locale, Strings } from './messages.js';
 import { FALLBACK_LANG, type LanguageInputs, languageIn, resolveLanguage } from './resolve.js';
 
-export type { Locale, Params, PushKind, QueueStep, Reason, Strings } from './messages.js';
+export type {
+  Locale,
+  Params,
+  PushKind,
+  QueueStep,
+  Reason,
+  SetupStrings,
+  Strings,
+} from './messages.js';
 export { FALLBACK_LANG, type LanguageInputs } from './resolve.js';
 
 /** A language code with a locale file. */

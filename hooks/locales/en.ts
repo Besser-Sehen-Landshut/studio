@@ -314,6 +314,174 @@ const strings: Strings = {
   reaNotConfirmed:
     'The REA confirmation could not be saved; run studio research install in your own terminal.',
 
+  setup: {
+    step: (k, name, status) => `${k}. ${name}: ${status}`,
+    stepOpen: (k, name) => `${k}. ${name}:`,
+    done: (d) => `done (${d})`,
+    fix: (what) => `   Fix: ${what}`,
+    dryRun: 'Dry run: nothing is written, stored or changed.',
+    would: (what) => `   would ${what}`,
+    next: (what) => `Done. Next: ${what}`,
+
+    machine: 'This machine',
+    windowsWhy: 'the lead does not run on native Windows (Claude Code has no sandbox there)',
+    windowsFix:
+      'in PowerShell as administrator: wsl --install -d Ubuntu-24.04, restart the PC, open Ubuntu and run studio setup there (README, "Lead on a Windows PC (WSL2)")',
+    wsl1Why: 'this is WSL1 (or a WSL whose version cannot be told); the lead needs WSL2',
+    wsl1Fix: (d) =>
+      `in PowerShell: wsl --set-version ${d} 2, then open it again and run studio setup`,
+    otherWhy: 'this platform is not supported',
+    otherFix: 'run the lead on macOS, Linux or WSL2',
+    missing: (label, list) => `${label}; missing: ${list}`,
+    nodeOld: (min, have) => `Node.js ${min} (this is ${have})`,
+    sandboxTools: "bubblewrap and socat (Claude Code's sandbox)",
+    tool: (name, command) => `   ${name}: ${command}`,
+    newTerminal: '   Then open a new terminal and run studio setup again.',
+    onWindowsDrive: (label, folder, dir) =>
+      `${label}; Studio's ${folder} folder ${dir} is on a Windows drive, which keeps no file modes (tokens and keys there would be open)`,
+    onWindowsDriveFix:
+      '   Fix: unset XDG_CONFIG_HOME and XDG_STATE_HOME, or point them below ~ in the Linux file system, then run studio setup again.',
+    machineDone: (label, node) => `done (${label}, git, Node.js ${node}, claude)`,
+    projectOnWindows: (p) =>
+      `   Note: the project ${p} is on a Windows drive; clone it into the Linux file system (under ~) for speed and exact file modes.`,
+    sshLater: (command) => `   For relay workers later: ssh and ssh-keygen (${command}).`,
+
+    gh: 'GitHub CLI',
+    ghFix: (fix) => `   Fix: ${fix}, then run studio setup again.`,
+    ghInstall: (command) => `${command}, then gh auth login`,
+
+    token: 'Crew token',
+    unusable: 'the stored file is not usable',
+    missingWord: 'missing',
+    tokenText: [
+      '   Crews push their branches and open pull requests with a GitHub token of their own, never',
+      '   with your gh login. Create a fine-grained token on GitHub (Settings, Developer settings,',
+      "   Personal access tokens), limited to this project's repositories, with",
+      '   contents and pull requests read/write and nothing else (no administration, no workflows).',
+      '   Studio checks it once against the repository and stores it with mode 0600; it is never shown.',
+      '   The token goes only into the hidden prompt.',
+    ],
+    noRepo:
+      '   No GitHub repository found here. The next prompt is visible; the token comes after.',
+    repoPrompt: '   Repository the crews work on, as owner/name (visible): ',
+    repoLooksLikeToken: '   that looks like a token — it was not stored; enter owner/name',
+    repoNotOwnerName: '   that is not owner/name; nothing stored',
+    tokenNothing: '   Nothing stored. Fix the token on GitHub, then run studio setup again.',
+
+    account: 'Claude account for crews',
+    accountWrong: '   Run studio account list and studio doctor to see what is wrong.',
+    noneStored: 'none stored',
+    accountText: (def) => [
+      '   Crews run Claude Code with a token of their own, so your own login stays yours. In another',
+      '   terminal tab run: claude setup-token',
+      '   It prints a token valid for one year (it needs a Pro, Max, Ultra, Team or Enterprise plan).',
+      `   First you type a short label for this account (visible; Enter keeps ${def}).`,
+      '   Then you paste the token at the second prompt (hidden).',
+    ],
+    labelPrompt: (def) =>
+      `   Short label for this account, visible (Enter keeps ${def}) [${def}]: `,
+    labelLooksLikeToken: '   that looks like a token — it was not stored; enter a short label',
+    labelBad:
+      '   a label has letters, digits, dot, dash or underscore and does not start with a dot; nothing stored',
+
+    terminal: 'studio in your terminal',
+    noPlugin: 'cannot tell where the plugin is; nothing written',
+    localBinOff: '~/.local/bin is not on your PATH.',
+    localBinHelp: [
+      "   Studio does not edit shell files. Add ~/.local/bin to PATH in your shell's startup",
+      '   file, open a new terminal and run studio setup --link again.',
+    ],
+    untilThen: (command) => `   Until then: ${command}`,
+    shimNote: '   The shim finds the plugin again after an update; no need to run --link again.',
+    notAShim: (target) => `${target} is not a Studio shim; nothing changed.`,
+    notAShimHelp: '   Move it away and run studio setup --link again, or keep it.',
+    writePrompt: (target) => `   Write the Studio shim ${target}? [Y/n] `,
+    updatePrompt: (target) => `   Update the Studio shim ${target}? [Y/n] `,
+    nothingWritten: (command) => `   nothing written; until you do: ${command}`,
+    wrote: (target) => `   wrote ${target}`,
+    notOnPath: 'not on your PATH (Claude Code finds it on its own).',
+    linkHint: '   To use studio in any terminal: studio setup --link',
+    untilParen: (command) => `   (until then: ${command})`,
+
+    notifications: 'Notifications',
+    notifyConfigBad: [
+      'the owner config cannot be read; fix it with studio doctor, then run',
+      '   studio setup --notifications. Nothing stored.',
+    ],
+    notifyState: (state, transport) =>
+      state === 'bad'
+        ? 'the stored file is not usable'
+        : state === 'ok'
+          ? `set up (${transport}), set up again`
+          : 'none',
+    notifyText: [
+      '   Studio can push one line to your phone when it needs a decision: a fixed phrase, the item',
+      '   id and the project name, nothing else. It uses ntfy, which needs no account: Studio makes a',
+      '   secret topic, you subscribe to it in the ntfy app.',
+    ],
+    notifyPrompt: '   ntfy or none? [ntfy/none] (Enter: ntfy): ',
+    notifyNone: (unchanged) =>
+      `   ${unchanged ? 'unchanged' : 'no notifications'}; later: studio setup --notifications`,
+    notifyAnswer: '   answer ntfy or none; nothing stored',
+    noHttps: '   no HTTPS client in this process; nothing stored',
+    notifyOpen: '   Install the ntfy app and open this link:',
+    notifySecret:
+      '   The link is the secret: whoever has it reads your pushes. Studio shows it only here.',
+    notifyReady: '   Press Enter once you subscribed (type skip to stop): ',
+    notifyLater: '   nothing stored; later: studio setup --notifications',
+    notifyFailed: (why) => `   test push failed: ${why}; nothing stored`,
+    notifySent: '   test push sent; check your phone. Topic stored.',
+
+    research: 'Reverse engineering',
+    researchOptional: 'Reverse engineering (optional)',
+    researchConfigBad:
+      'the owner config cannot be read; fix it with studio doctor. Nothing changed.',
+    researchDone: (version, mode, roots) => `done (rea-agents ${version}, ${mode}, ${roots})`,
+    trustMode: 'trust mode',
+    strictMode: 'strict mode',
+    researchSkipped: 'skipped; studio setup research sets it up',
+    notSetUp: 'not set up',
+    researchText: [
+      '   A researcher crew can reverse engineer shipped programs with REA (rea-agents). Studio installs',
+      '   it once into its own state, checked against the npm registry, and grants it one analysis',
+      '   folder. REA tools run with your user rights outside the sandbox. Skip it if you never need it:',
+      '   Studio asks again the first time a researcher item needs it.',
+    ],
+    researchPrompt: '   Set it up now? [y/N] ',
+    researchLater: '   skipped; later: studio setup research',
+    researchInstalled: (version, mode, now) =>
+      `   done (rea-agents ${version}, ${mode}${now ? ', installed now' : ''})`,
+
+    finalNext: 'Done. Now open your project in Claude Code and run /studio:init.',
+
+    pairPc:
+      'On the Windows PC, in an elevated PowerShell (at the PC or over remote desktop, never over SSH), within the hour:',
+    pairWhat: (version) =>
+      `It installs Node.js and Git if missing (it asks first), Studio ${version} and the relay worker.`,
+    pairHasStudio: (command) => `With Studio there already: ${command}`,
+    pairThen: (command) => `Then here: ${command}`,
+    pairSecret: 'The line holds a single-use secret: paste it on the worker only.',
+    paired: (label, where, studio, platform, fp) =>
+      `paired: ${label} is ${where}, Studio ${studio} on ${platform}, host key pinned (${fp}).`,
+    installWebClient:
+      'Studio relay install: this stops and disables the WebClient service (WebDAV), which the crew sandbox does not hold.',
+    installStopped: 'studio: relay install stopped; fix what it says and run it again (it repairs)',
+    hostKey: (fp) => `host key fingerprint: ${fp}`,
+    hostKeyUnknown: 'host key: cannot read the OpenSSH server host key',
+    installNext: (label) =>
+      `Done. Next, on the lead within the hour: studio relay pair ${label} --connect`,
+    uninstallNoRecord:
+      'No install record here (an install of an earlier version): services Studio stopped stay as they are.',
+    uninstallStopped:
+      'studio: relay uninstall stopped; fix what it says and run studio relay uninstall again (it goes on where it stopped)',
+    uninstallNext: (leads) =>
+      leads.length === 0
+        ? 'Done. Next: on the lead, remove this worker from workers.relay in the owner config.'
+        : `Done. Next: on each lead, remove ${leads.map((l) => `workers.relay.${l}`).join(', ')} from the owner config.`,
+    accountStored: (label, active) => `account ${label} stored${active ? ' and active' : ''}`,
+    accountNext: 'Done. Next: studio doctor shows the account; studio setup runs the other steps.',
+  },
+
   push: {
     fix_limit: 'Fix limit reached',
     changes_requested: 'Changes requested',

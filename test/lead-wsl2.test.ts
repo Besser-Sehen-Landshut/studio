@@ -24,6 +24,7 @@ import {
   onPath,
   onWindowsDrive,
 } from '../src/lead-machine.js';
+import { pinnedPlugins, STUDIO_VERSION } from '../src/plugins.js';
 import { realPorts } from '../src/ports.js';
 import { type Exec, runRelayCommand } from '../src/relay-command.js';
 import { pairProof, parsePairLine } from '../src/relay-pair.js';
@@ -127,18 +128,29 @@ describe('relay pair from a WSL2 lead', () => {
     const out: string[] = [];
     let secret: string | undefined;
     const transport: RelayTransport = {
-      async call() {
-        const lines = encodeMessage({
-          studioRelay: 1,
-          ok: true,
-          studio: '9.9.9',
-          platform: 'win32',
-          plugins: {},
-          busy: null,
-          held: null,
-          pairProofs: secret === undefined ? [] : [{ label: 'lab', mac: pairProof(secret, host) }],
-          warnings: [],
-        });
+      async call(header) {
+        const lines =
+          header.op === 'probe'
+            ? encodeMessage({
+                studioRelay: 1,
+                ok: true,
+                problem: null,
+                kind: null,
+                load: { cpuPercent: 5, freeDiskGb: 100 },
+                warnings: [],
+              })
+            : encodeMessage({
+                studioRelay: 1,
+                ok: true,
+                studio: STUDIO_VERSION,
+                platform: 'win32',
+                plugins: Object.fromEntries(pinnedPlugins().map((p) => [p.name, p.version])),
+                busy: null,
+                held: null,
+                pairProofs:
+                  secret === undefined ? [] : [{ label: 'lab', mac: pairProof(secret, host) }],
+                warnings: [],
+              });
         return (await readMessage(
           new LineReader(
             (async function* () {

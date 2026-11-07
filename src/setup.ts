@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import type { SetupStrings } from '../hooks/i18n/index.js';
 import { runAccount } from './account-command.js';
 import { claudeLanguage } from './claude-language.js';
 import { loadOwnerConfig, type OwnerConfig, type OwnerEnv, ownerConfigDir } from './config.js';
@@ -41,6 +42,7 @@ import { ensureRea, reaMode, reaVersionOf, recordSetupSkip, setupSkipped } from 
 import { verifyReaInstall } from './rea-install.js';
 import { doctorReport, readPrimaryRepo, runSecretSet } from './secret-command.js';
 import { assertPrimaryRepo, safe } from './setup-ci-command.js';
+import { setupText } from './setup-text.js';
 import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
 
 export type SetupOptions = {
@@ -62,29 +64,14 @@ export type SetupOptions = {
   platform?: WorkerPlatform;
   /** Where a program is on PATH (tests); the PATH of `env` by default. */
   which?: (name: string) => string | undefined;
+  /** `--dry-run`: check every step, say what it would ask and store; write and ask nothing. */
+  dryRun?: boolean;
   stdout(s: string): void;
   stderr(s: string): void;
 };
 
 const DEFAULT_LABEL = 'main';
 const MAX_LABEL = 32;
-
-const TOKEN_TEXT = [
-  '   Crews push their branches and open pull requests with a GitHub token of their own, never',
-  '   with your gh login. Create a fine-grained token on GitHub (Settings, Developer settings,',
-  "   Personal access tokens), limited to this project's repositories, with",
-  '   contents and pull requests read/write and nothing else (no administration, no workflows).',
-  '   Studio checks it once against the repository and stores it with mode 0600; it is never shown.',
-  '   The token goes only into the hidden prompt.',
-];
-
-const ACCOUNT_TEXT = [
-  '   Crews run Claude Code with a token of their own, so your own login stays yours. In another',
-  '   terminal tab run: claude setup-token',
-  '   It prints a token valid for one year (it needs a Pro, Max, Ultra, Team or Enterprise plan).',
-  `   First you type a short label for this account (visible; Enter keeps ${DEFAULT_LABEL}).`,
-  '   Then you paste the token at the second prompt (hidden).',
-];
 
 /** Answers at a visible prompt that are tokens pasted at the wrong prompt. */
 const LOOKS_LIKE_TOKEN = /^(sk-ant|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)/;
@@ -137,9 +124,6 @@ fi
 exec node "$launcher" "$@"
 `;
 
-const SHIM_NOTE =
-  '   The shim finds the plugin again after an update; no need to run --link again.';
-
 /** One shell word in single quotes. */
 const shQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
@@ -157,7 +141,8 @@ function studioOnPath(env: Record<string, string | undefined>): string | undefin
   return undefined;
 }
 
-const yes = (answer: string) => /^(|y|yes)$/i.test(answer.trim());
+/** Yes at a `[Y/n]` prompt: Enter, y or yes; j or ja for a German one. */
+const yes = (answer: string) => /^(|y|yes|j|ja)$/i.test(answer.trim());
 
 /** Writes `text` to `file` through a new temporary file in the same folder and a rename. */
 function writeAtomic(file: string, text: string, mode: number): void {
@@ -173,7 +158,7 @@ function writeAtomic(file: string, text: string, mode: number): void {
 }
 
 /** The repository the crew token is checked against: studio.yaml, then origin, then asked. */
-async function tokenRepo(o: SetupOptions): Promise<string | undefined> {
+async function tokenRepo(o: SetupOptions, t: SetupStrings): Promise<string | undefined> {
   try {
     return readPrimaryRepo(o.project);
   } catch {
@@ -186,61 +171,56 @@ async function tokenRepo(o: SetupOptions): Promise<string | undefined> {
   } catch {
     // not a checkout with origin
   }
-  o.stdout(
-    '   No GitHub repository found here. The next prompt is visible; the token comes after.\n',
-  );
-  const answer = await o.readLine?.('   Repository the crews work on, as owner/name (visible): ');
+  if (o.dryRun === true) return undefined;
+  o.stdout(`${t.noRepo}\n`);
+  const answer = await o.readLine?.(t.repoPrompt);
   if (answer === undefined) return undefined;
   const repo = answer.trim();
   if (LOOKS_LIKE_TOKEN.test(repo) || repo.length > 100) {
-    o.stdout('   that looks like a token — it was not stored; enter owner/name\n');
+    o.stdout(`${t.repoLooksLikeToken}\n`);
     return undefined;
   }
   try {
     return assertPrimaryRepo(repo);
   } catch {
-    o.stdout('   that is not owner/name; nothing stored\n');
+    o.stdout(`${t.repoNotOwnerName}\n`);
     return undefined;
   }
 }
 
 /** The label for `account add`, checked before the hidden prompt; undefined when refused. */
-async function accountLabel(o: SetupOptions): Promise<string | undefined> {
-  const answer = await o.readLine?.(
-    `   Short label for this account, visible (Enter keeps ${DEFAULT_LABEL}) [${DEFAULT_LABEL}]: `,
-  );
+async function accountLabel(o: SetupOptions, t: SetupStrings): Promise<string | undefined> {
+  const answer = await o.readLine?.(t.labelPrompt(DEFAULT_LABEL));
   if (answer === undefined) return undefined;
   const label = answer.trim() === '' ? DEFAULT_LABEL : answer.trim();
   if (LOOKS_LIKE_TOKEN.test(label) || label.length > MAX_LABEL) {
-    o.stdout('   that looks like a token — it was not stored; enter a short label\n');
+    o.stdout(`${t.labelLooksLikeToken}\n`);
     return undefined;
   }
   if (!validLabel(label) || label.startsWith('.')) {
-    o.stdout(
-      '   a label has letters, digits, dot, dash or underscore and does not start with a dot; nothing stored\n',
-    );
+    o.stdout(`${t.labelBad}\n`);
     return undefined;
   }
   return label;
 }
 
 /** Step 4 with --link: a shim in ~/.local/bin when that is on PATH. 1 when it refuses. */
-async function link(o: SetupOptions, home: string): Promise<number> {
+async function link(o: SetupOptions, home: string, t: SetupStrings): Promise<number> {
   const say = (s: string) => o.stdout(`${safe(s)}\n`);
   if (o.launcher === undefined) {
-    say('4. studio in your terminal: cannot tell where the plugin is; nothing written');
+    say(t.step(4, t.terminal, t.noPlugin));
     return 0;
   }
   const launcher = o.launcher;
+  const run = `node ${shQuote(launcher)} <command>`;
   const localBin = join(home, '.local', 'bin');
   const onPath = (o.env.PATH ?? '')
     .split(':')
     .some((d) => d !== '' && resolve(d) === resolve(localBin));
   if (!onPath) {
-    say('4. studio in your terminal: ~/.local/bin is not on your PATH.');
-    say("   Studio does not edit shell files. Add ~/.local/bin to PATH in your shell's startup");
-    say('   file, open a new terminal and run studio setup --link again.');
-    say(`   Until then: node ${shQuote(launcher)} <command>`);
+    say(t.step(4, t.terminal, t.localBinOff));
+    for (const l of t.localBinHelp) say(l);
+    say(t.untilThen(run));
     return 0;
   }
   const target = join(localBin, 'studio');
@@ -257,40 +237,37 @@ async function link(o: SetupOptions, home: string): Promise<number> {
     writeAtomic(cache, `${launcher}\n`, 0o600);
   };
   if (current === SHIM) {
-    writeCache();
-    say(`4. studio in your terminal: done (${target})`);
-    say(SHIM_NOTE);
+    if (o.dryRun !== true) writeCache();
+    say(t.step(4, t.terminal, t.done(target)));
+    say(t.shimNote);
     return 0;
   }
   let prompt: string;
-  if (current === undefined) prompt = `   Write the Studio shim ${target}? [Y/n] `;
+  if (current === undefined) prompt = t.writePrompt(target);
   else if (current.split('\n')[1] === SHIM_MARKER) {
-    prompt = `   Update the Studio shim ${target}? [Y/n] `;
+    prompt = t.updatePrompt(target);
   } else {
-    say(`4. studio in your terminal: ${target} is not a Studio shim; nothing changed.`);
-    say('   Move it away and run studio setup --link again, or keep it.');
+    say(t.step(4, t.terminal, t.notAShim(target)));
+    say(t.notAShimHelp);
     return 1;
   }
-  say('4. studio in your terminal:');
+  say(t.stepOpen(4, t.terminal));
+  if (o.dryRun === true) {
+    say(t.would(`write ${target} and ${cache} (it asks first)`));
+    return 0;
+  }
   const answer = await o.readLine?.(safe(prompt));
   if (answer === undefined || !yes(answer)) {
-    say(`   nothing written; until you do: node ${shQuote(launcher)} <command>`);
+    say(t.nothingWritten(run));
     return 0;
   }
   mkdirSync(localBin, { recursive: true });
   writeCache();
   writeAtomic(target, SHIM, 0o755);
-  say(`   wrote ${target}`);
-  say(SHIM_NOTE);
+  say(t.wrote(target));
+  say(t.shimNote);
   return 0;
 }
-
-const RESEARCH_TEXT = [
-  '   A researcher crew can reverse engineer shipped programs with REA (rea-agents). Studio installs',
-  '   it once into its own state, checked against the npm registry, and grants it one analysis',
-  '   folder. REA tools run with your user rights outside the sandbox. Skip it if you never need it:',
-  '   Studio asks again the first time a researcher item needs it.',
-];
 
 /**
  * Step 6, optional: REA for researcher crews. Done when the pinned version is installed in the mode
@@ -300,18 +277,17 @@ const RESEARCH_TEXT = [
 export async function researchStep(o: SetupOptions, standalone: boolean): Promise<number> {
   const say = (s: string) => o.stdout(`${safe(s)}\n`);
   if (o.env.STUDIO_ROLE === 'crew') throw new Error('this command is not for crew sessions');
-  if (!o.isTerminal || o.readLine === undefined) {
+  if (o.dryRun !== true && (!o.isTerminal || o.readLine === undefined)) {
     throw new Error(
       'studio setup research needs your own terminal; without one use studio research install --yes --folder <dir>. Nothing changed',
     );
   }
+  const t = setupText(o);
   let config: OwnerConfig;
   try {
     config = loadOwnerConfig(o.owner);
   } catch {
-    say(
-      '6. Reverse engineering: the owner config cannot be read; fix it with studio doctor. Nothing changed.',
-    );
+    say(t.step(6, t.research, t.researchConfigBad));
     return 1;
   }
   const ownerRoot = ownerStateRootFor(o.owner);
@@ -323,26 +299,29 @@ export async function researchStep(o: SetupOptions, standalone: boolean): Promis
   } catch {
     installed = false;
   }
-  const modeWord = mode === 'full' ? 'trust mode' : 'strict mode';
+  const modeWord = mode === 'full' ? t.trustMode : t.strictMode;
   if (installed && config.researchRoots.length > 0) {
-    say(
-      `6. Reverse engineering: done (rea-agents ${version}, ${modeWord}, ${config.researchRoots.join(', ')})`,
-    );
+    say(t.step(6, t.research, t.researchDone(version, modeWord, config.researchRoots.join(', '))));
     return 0;
   }
   if (!standalone && setupSkipped(ownerRoot)) {
-    say('6. Reverse engineering (optional): skipped; studio setup research sets it up');
+    say(t.step(6, t.researchOptional, t.researchSkipped));
     return 0;
   }
-  say('6. Reverse engineering (optional): not set up');
-  for (const l of RESEARCH_TEXT) say(l);
+  say(t.step(6, t.researchOptional, t.notSetUp));
+  if (o.dryRun === true) {
+    say(t.would(`offer REA (rea-agents ${version}) for researcher crews; studio setup research`));
+    return 0;
+  }
+  for (const l of t.researchText) say(l);
+  const readLine = o.readLine as NonNullable<typeof o.readLine>;
   if (!standalone) {
-    const answer = await o.readLine('   Set it up now? [y/N] ');
+    const answer = await readLine(t.researchPrompt);
     // Enter is no here: the step is optional.
-    if (answer === undefined || !['y', 'yes'].includes(answer.trim().toLowerCase())) {
+    if (answer === undefined || !['y', 'yes', 'j', 'ja'].includes(answer.trim().toLowerCase())) {
       // Asked once: setup stays quiet about it from now on.
       recordSetupSkip(ownerRoot, o.ports.clock.now());
-      say('   skipped; later: studio setup research');
+      say(t.researchLater);
       return 0;
     }
   }
@@ -354,12 +333,12 @@ export async function researchStep(o: SetupOptions, standalone: boolean): Promis
       ports: o.ports,
       asker: {
         isTerminal: true,
-        readLine: (p) => (o.readLine as NonNullable<typeof o.readLine>)(`   ${p}`),
+        readLine: (p) => readLine(`   ${p}`),
         say: (l) => say(`   ${l}`),
       },
       now: o.ports.clock.now(),
     });
-    say(`   done (rea-agents ${r.version}, ${modeWord}${r.installed ? ', installed now' : ''})`);
+    say(t.researchInstalled(r.version, modeWord, r.installed));
     return 0;
   } catch (e) {
     say(`   ${(e as Error).message}`);
@@ -367,60 +346,72 @@ export async function researchStep(o: SetupOptions, standalone: boolean): Promis
   }
 }
 
-const NOTIFY_TEXT = [
-  '   Studio can push one line to your phone when it needs a decision: a fixed phrase, the item',
-  '   id and the project name, nothing else. It uses ntfy, which needs no account: Studio makes a',
-  '   secret topic, you subscribe to it in the ntfy app.',
-];
-
 /**
  * Step 5: push notifications through ntfy, or none. A new random topic, the subscribe link shown
  * once, a test push; the topic is stored only once that push went out. 1 when it fails.
  */
-async function notificationsStep(o: SetupOptions, again: boolean): Promise<number> {
+async function notificationsStep(
+  o: SetupOptions,
+  again: boolean,
+  t: SetupStrings,
+): Promise<number> {
   const say = (s: string) => o.stdout(`${safe(s)}\n`);
   let config: OwnerConfig;
   try {
     config = loadOwnerConfig(o.owner);
   } catch {
-    say('5. Notifications: the owner config cannot be read; fix it with studio doctor, then run');
-    say('   studio setup --notifications. Nothing stored.');
+    const [first, ...rest] = t.notifyConfigBad;
+    say(t.step(5, t.notifications, first ?? ''));
+    for (const l of rest) say(l);
     return 1;
   }
   const stored = readNotifySecret(o.owner);
   if (stored.kind === 'ok' && !again) {
-    say(`5. Notifications: done (${stored.secret.transport})`);
+    say(t.step(5, t.notifications, t.done(stored.secret.transport)));
     return 0;
   }
   say(
-    `5. Notifications: ${stored.kind === 'bad' ? 'the stored file is not usable' : stored.kind === 'ok' ? `set up (${stored.secret.transport}), set up again` : 'none'}`,
+    t.step(
+      5,
+      t.notifications,
+      t.notifyState(
+        stored.kind === 'absent' ? 'none' : stored.kind,
+        stored.kind === 'ok' ? stored.secret.transport : '',
+      ),
+    ),
   );
-  for (const l of NOTIFY_TEXT) say(l);
-  const answer = await o.readLine?.('   ntfy or none? [ntfy/none] (Enter: ntfy): ');
-  const choice = answer?.trim().toLowerCase();
-  if (choice === undefined || ['none', 'n', 'no', 'skip'].includes(choice)) {
+  if (o.dryRun === true) {
     say(
-      `   ${stored.kind === 'ok' ? 'unchanged' : 'no notifications'}; later: studio setup --notifications`,
+      t.would(
+        'offer push notifications through ntfy: a new secret topic, a test push, then stored',
+      ),
     );
     return 0;
   }
+  for (const l of t.notifyText) say(l);
+  const answer = await o.readLine?.(t.notifyPrompt);
+  const choice = answer?.trim().toLowerCase();
+  if (choice === undefined || ['none', 'n', 'no', 'nein', 'skip'].includes(choice)) {
+    say(t.notifyNone(stored.kind === 'ok'));
+    return 0;
+  }
   if (choice !== '' && choice !== 'ntfy') {
-    say('   answer ntfy or none; nothing stored');
+    say(t.notifyAnswer);
     return 1;
   }
   const http = o.ports.http;
   if (http === undefined) {
-    say('   no HTTPS client in this process; nothing stored');
+    say(t.noHttps);
     return 1;
   }
   const secret: NotifySecret = { transport: 'ntfy', topic: newNtfyTopic() };
   // The one place the topic is shown: the owner's own terminal.
-  say('   Install the ntfy app and open this link:');
+  say(t.notifyOpen);
   say(`   ${subscribeLink(config, secret)}`);
-  say('   The link is the secret: whoever has it reads your pushes. Studio shows it only here.');
-  const ready = await o.readLine?.('   Press Enter once you subscribed (type skip to stop): ');
+  say(t.notifySecret);
+  const ready = await o.readLine?.(t.notifyReady);
   if (ready === undefined || ready.trim().toLowerCase() === 'skip') {
-    say('   nothing stored; later: studio setup --notifications');
+    say(t.notifyLater);
     return 0;
   }
   const reply = await sendPush(http, secret, config, {
@@ -428,11 +419,11 @@ async function notificationsStep(o: SetupOptions, again: boolean): Promise<numbe
     urgent: false,
   });
   if (!reply.ok) {
-    say(`   test push failed: ${pushFailure(reply)}; nothing stored`);
+    say(t.notifyFailed(pushFailure(reply)));
     return 1;
   }
   installNotifySecret(secret, o.owner);
-  say('   test push sent; check your phone. Topic stored.');
+  say(t.notifySent);
   return 0;
 }
 
@@ -443,13 +434,23 @@ const MIN_NODE_MAJOR = 24;
  * WSL2; a missing git, claude or a Node.js older than 24 gets its install command for this machine;
  * under WSL2 Studio's own files must lie in the Linux file system. False when setup stops here.
  */
-function machineStep(o: SetupOptions, platform: WorkerPlatform, kind: LeadKind): boolean {
+function machineStep(
+  o: SetupOptions,
+  platform: WorkerPlatform,
+  kind: LeadKind,
+  t: SetupStrings,
+): boolean {
   const say = (s: string) => o.stdout(`${safe(s)}\n`);
   const which = o.which ?? ((name: string) => onPath(name, o.env));
-  const problem = leadMachineProblem(kind, o.env);
-  if (problem !== undefined) {
-    say(`0. This machine: ${problem.why}`);
-    say(`   Fix: ${problem.fix}`);
+  if (leadMachineProblem(kind, o.env) !== undefined) {
+    const [why, fix] =
+      kind === 'windows'
+        ? [t.windowsWhy, t.windowsFix]
+        : kind === 'wsl1'
+          ? [t.wsl1Why, t.wsl1Fix(o.env.WSL_DISTRO_NAME ?? '<distribution>')]
+          : [t.otherWhy, t.otherFix];
+    say(t.step(0, t.machine, why));
+    say(t.fix(fix));
     return false;
   }
   const label =
@@ -468,11 +469,12 @@ function machineStep(o: SetupOptions, platform: WorkerPlatform, kind: LeadKind):
       : []),
   ];
   if (missing.length > 0) {
-    say(
-      `0. This machine: ${label}; missing: ${missing.map((t) => (t === 'node' ? `Node.js ${MIN_NODE_MAJOR} (this is ${node})` : t === 'sandbox' ? "bubblewrap and socat (Claude Code's sandbox)" : t)).join(', ')}`,
+    const named = missing.map((m) =>
+      m === 'node' ? t.nodeOld(MIN_NODE_MAJOR, node) : m === 'sandbox' ? t.sandboxTools : m,
     );
-    for (const t of missing) say(`   ${t}: ${installCommand(t, kind)}`);
-    say('   Then open a new terminal and run studio setup again.');
+    say(t.step(0, t.machine, t.missing(label, named.join(', '))));
+    for (const m of missing) say(t.tool(m, installCommand(m, kind)));
+    say(t.newTerminal);
     return false;
   }
   if (kind === 'wsl2') {
@@ -481,131 +483,142 @@ function machineStep(o: SetupOptions, platform: WorkerPlatform, kind: LeadKind):
       ['state', ownerStateRootFor(o.owner)],
     ] as const) {
       if (onWindowsDrive(dir, platform)) {
-        say(
-          `0. This machine: ${label}; Studio's ${what} folder ${dir} is on a Windows drive, which keeps no file modes (tokens and keys there would be open)`,
-        );
-        say(
-          '   Fix: unset XDG_CONFIG_HOME and XDG_STATE_HOME, or point them below ~ in the Linux file system, then run studio setup again.',
-        );
+        say(t.step(0, t.machine, t.onWindowsDrive(label, what, dir)));
+        say(t.onWindowsDriveFix);
         return false;
       }
     }
   }
-  say(`0. This machine: done (${label}, git, Node.js ${node}, claude)`);
-  if (kind === 'wsl2' && onWindowsDrive(o.project, platform)) {
-    say(
-      `   Note: the project ${o.project} is on a Windows drive; clone it into the Linux file system (under ~) for speed and exact file modes.`,
-    );
-  }
+  say(t.step(0, t.machine, t.machineDone(label, node)));
+  if (kind === 'wsl2' && onWindowsDrive(o.project, platform)) say(t.projectOnWindows(o.project));
   if (which('ssh') === undefined || which('ssh-keygen') === undefined) {
-    say(`   For relay workers later: ssh and ssh-keygen (${installCommand('ssh', kind)}).`);
+    say(t.sshLater(installCommand('ssh', kind)));
   }
   return true;
 }
 
 /**
- * `studio setup [--link] [--notifications]`: the owner's one-time setup in a terminal. Each step is skipped when it
- * is done; secrets go through `secret set crew-token` and `account add`, never through here.
+ * `studio setup [--link] [--notifications] [--dry-run]`: the owner's one-time setup in a terminal.
+ * Each step is skipped when it is done; secrets go through `secret set crew-token` and `account
+ * add`, never through here. With `--dry-run` it checks every step and says what it would ask and
+ * store, and writes, stores and asks nothing.
  */
 export async function runSetup(o: SetupOptions): Promise<number> {
   if (o.env.STUDIO_ROLE === 'crew') throw new Error('this command is not for crew sessions');
-  if (!o.isTerminal || o.readSecret === undefined || o.readLine === undefined) {
+  const dry = o.dryRun === true;
+  if (!dry && (!o.isTerminal || o.readSecret === undefined || o.readLine === undefined)) {
     throw new Error(
-      'studio setup needs your own terminal (it asks for tokens with hidden input); run it there, not inside Claude Code. Nothing changed',
+      'studio setup needs your own terminal (it asks for tokens with hidden input); run it there, not inside Claude Code (studio setup --dry-run shows the steps anywhere). Nothing changed',
     );
   }
+  const t = setupText(o);
   const say = (s: string) => o.stdout(`${safe(s)}\n`);
   const home = o.owner.homedir ?? homedir();
-  if (o.notifications === true) return await notificationsStep(o, true);
+  if (dry) say(t.dryRun);
+  if (o.notifications === true) return await notificationsStep(o, true, t);
 
   const platform = o.platform ?? detectPlatform();
   const kind = leadKind(platform);
-  if (!machineStep(o, platform, kind)) return 1;
+  if (!machineStep(o, platform, kind, t)) return 1;
 
   const gh = await ghCheck(o.ports);
   if (gh.status !== 'pass') {
-    say(`1. GitHub CLI: ${gh.detail}`);
+    say(t.step(1, t.gh, gh.detail));
     const fix = gh.fix?.startsWith('install the GitHub CLI')
-      ? `${installCommand('gh', kind)}, then gh auth login`
+      ? t.ghInstall(installCommand('gh', kind))
       : (gh.fix ?? 'gh auth login');
-    say(`   Fix: ${fix}, then run studio setup again.`);
+    say(t.ghFix(fix));
     return 1;
   }
-  say(`1. GitHub CLI: done (${gh.detail})`);
+  say(t.step(1, t.gh, t.done(gh.detail)));
 
   const { report } = await doctorReport(o);
   if (report.crewToken.status === 'set') {
-    say(`2. Crew token: done (${report.crewToken.source ?? 'set'})`);
+    say(t.step(2, t.token, t.done(report.crewToken.source ?? 'set')));
   } else {
-    say(
-      `2. Crew token: ${report.crewToken.status === 'invalid' ? 'the stored file is not usable' : 'missing'}`,
-    );
-    for (const l of TOKEN_TEXT) say(l);
-    const repo = await tokenRepo(o);
-    if (repo === undefined) return 1;
-    const code = await runSecretSet({
-      project: o.project,
-      ports: o.ports,
-      owner: o.owner,
-      readSecret: o.readSecret,
-      stdout: (s) => o.stdout(`   ${s}`),
-      repo,
-    });
-    if (code !== 0) {
-      say('   Nothing stored. Fix the token on GitHub, then run studio setup again.');
-      return code;
-    }
-  }
-
-  if (report.claudeLogin.startsWith('accounts, but')) {
-    say(`3. Claude account for crews: ${report.claudeLogin}`);
-    say('   Run studio account list and studio doctor to see what is wrong.');
-    return 1;
-  }
-  if (report.credentialProvider !== null || report.accounts.length > 0) {
-    say(`3. Claude account for crews: done (${report.claudeLogin})`);
-  } else {
-    say('3. Claude account for crews: none stored');
-    for (const l of ACCOUNT_TEXT) say(l);
-    const label = await accountLabel(o);
-    if (label === undefined) return 1;
-    const code = await runAccount({
-      args: ['add', label],
-      owner: o.owner,
-      ownerRoot: ownerStateRootFor(o.owner),
-      ports: o.ports,
-      env: o.env,
-      json: false,
-      isTerminal: true,
-      readSecret: o.readSecret,
-      stdout: (s) => o.stdout(`   ${s}`),
-      stderr: o.stderr,
-    });
-    if (code !== 0) return code;
-  }
-
-  if (o.link) {
-    const code = await link(o, home);
-    if (code !== 0) return code;
-  } else {
-    const found = studioOnPath(o.env);
-    if (found !== undefined) say(`4. studio in your terminal: done (${found})`);
-    else {
-      say('4. studio in your terminal: not on your PATH (Claude Code finds it on its own).');
-      say('   To use studio in any terminal: studio setup --link');
-      if (o.launcher !== undefined) {
-        say(`   (until then: node ${shQuote(o.launcher)} <command>)`);
+    say(t.step(2, t.token, report.crewToken.status === 'invalid' ? t.unusable : t.missingWord));
+    if (dry) {
+      const repo = await tokenRepo(o, t);
+      say(
+        t.would(
+          `ask for the crew token at a hidden prompt, check it against ${repo ?? '<owner/name, asked first>'} and store it (mode 0600)`,
+        ),
+      );
+    } else {
+      for (const l of t.tokenText) say(l);
+      const repo = await tokenRepo(o, t);
+      if (repo === undefined) return 1;
+      const code = await runSecretSet({
+        project: o.project,
+        ports: o.ports,
+        owner: o.owner,
+        readSecret: o.readSecret as NonNullable<typeof o.readSecret>,
+        stdout: (s) => o.stdout(`   ${s}`),
+        repo,
+      });
+      if (code !== 0) {
+        say(t.tokenNothing);
+        return code;
       }
     }
   }
 
-  const notified = await notificationsStep(o, false);
+  if (report.claudeLogin.startsWith('accounts, but')) {
+    say(t.step(3, t.account, report.claudeLogin));
+    say(t.accountWrong);
+    return 1;
+  }
+  if (report.credentialProvider !== null || report.accounts.length > 0) {
+    say(t.step(3, t.account, t.done(report.claudeLogin)));
+  } else {
+    say(t.step(3, t.account, t.noneStored));
+    if (dry) {
+      say(
+        t.would(
+          `ask for a label (Enter keeps ${DEFAULT_LABEL}) and the token of claude setup-token at a hidden prompt, then store it`,
+        ),
+      );
+    } else {
+      for (const l of t.accountText(DEFAULT_LABEL)) say(l);
+      const label = await accountLabel(o, t);
+      if (label === undefined) return 1;
+      const code = await runAccount({
+        args: ['add', label],
+        owner: o.owner,
+        ownerRoot: ownerStateRootFor(o.owner),
+        ports: o.ports,
+        env: o.env,
+        json: false,
+        isTerminal: true,
+        readSecret: o.readSecret,
+        nested: true,
+        stdout: (s) => o.stdout(`   ${s}`),
+        stderr: o.stderr,
+      });
+      if (code !== 0) return code;
+    }
+  }
+
+  if (o.link) {
+    const code = await link(o, home, t);
+    if (code !== 0) return code;
+  } else {
+    const found = studioOnPath(o.env);
+    if (found !== undefined) say(t.step(4, t.terminal, t.done(found)));
+    else {
+      say(t.step(4, t.terminal, t.notOnPath));
+      say(t.linkHint);
+      if (o.launcher !== undefined) say(t.untilParen(`node ${shQuote(o.launcher)} <command>`));
+    }
+  }
+
+  const notified = await notificationsStep(o, false, t);
   if (notified !== 0) return notified;
 
   const researched = await researchStep(o, false);
   if (researched !== 0) return researched;
 
   say('');
-  say('Done. Now open your project in Claude Code and run /studio:init.');
+  say(dry ? t.dryRun : t.finalNext);
   return 0;
 }
