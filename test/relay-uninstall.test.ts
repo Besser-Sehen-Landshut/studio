@@ -541,7 +541,8 @@ New-LocalUser -Name '${other}' -Password $pw -Description 'someone else' | Out-N
       failed = String((e as { stdout?: string }).stdout ?? '') + String(e);
     }
     expect(failed).toContain(`WARNING: the user ${other} was not made by Studio`);
-    expect(failed).toContain('is not a folder Studio\\relay: nothing of it is removed');
+    // PowerShell wraps the error line; the start of it is enough.
+    expect(failed).toContain('is not a folder Studio\\relay');
     expect(ps(`[string](Get-LocalUser -Name '${other}').Enabled`)).toBe('False');
     expect(existsSync(join(plain, 'keep.txt'))).toBe(true);
     ps(`Remove-LocalUser -Name '${other}'`);
