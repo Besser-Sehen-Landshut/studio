@@ -40728,7 +40728,7 @@ foreach ($t in @($open.Keys)) {
 }
 [Console]::Out.Write((ConvertTo-Json -Compress $res))
 `;
-var NO_ROUTE = ["10051", "10065"];
+var NO_ROUTE = ["10051", "10065", "10049"];
 var FIREWALL_REFUSED = "10013";
 function unrefused(results) {
   const all = Object.entries(results);
@@ -40812,7 +40812,7 @@ function ProbeTargets {
   $local = '^(10\\.|100\\.(6[4-9]|[7-9]\\d|1[01]\\d|12[0-7])\\.|169\\.254\\.|172\\.(1[6-9]|2\\d|3[01])\\.|192\\.168\\.)'
   $gw = @(Get-NetRoute -DestinationPrefix '${ipv43(0, 0, 0, 0)}/0' -ErrorAction SilentlyContinue | ForEach-Object { [string]$_.NextHop } | Where-Object { $_ -match $local })
   $dns = @(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object { $_.ServerAddresses } | Where-Object { $_ -match $local })
-  $nb = @(Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { [string]$_.IPAddress -match $local -and @('Unreachable', 'Incomplete') -notcontains [string]$_.State } | Select-Object -First 3 | ForEach-Object { [string]$_.IPAddress })
+  $nb = @(Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { [string]$_.IPAddress -match $local -and [string]$_.IPAddress -notmatch '\\.(0|255)$' -and @('Unreachable', 'Incomplete', 'Permanent') -notcontains [string]$_.State } | Select-Object -First 3 | ForEach-Object { [string]$_.IPAddress })
   $t += @($gw | ForEach-Object { "$($_):445" }) + @($dns | ForEach-Object { "$($_):80" }) + @($nb | ForEach-Object { "$($_):445" })
   @($t | Select-Object -Unique | Select-Object -First 12)
 }
