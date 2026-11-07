@@ -166,6 +166,8 @@ export interface EnforcedDeny {
   ports: number[];
   /** Hosts a native Windows crew must not reach over SMB or WebDAV: its probe checks each. */
   hosts?: string[];
+  /** `deny.prefixes`: further networks the Windows lockdown blocks (and checks before a start). */
+  prefixes?: string[];
   /** Places inside a denied Windows mount the owner opened for reads (`workers.self.allow_read`). */
   allowRead: string[];
   /** One line per entry that is enforced more widely than written, for the worker's output. */
@@ -391,7 +393,15 @@ export function enforceDeny(o: {
     }
   }
   const hosts = [...new Set((o.deny.hosts ?? []).map((h) => h.toLowerCase()))];
-  return { paths, ports, allowRead, notes, ...(hosts.length === 0 ? {} : { hosts }) };
+  const prefixes = [...new Set(o.deny.prefixes ?? [])];
+  return {
+    paths,
+    ports,
+    allowRead,
+    notes,
+    ...(hosts.length === 0 ? {} : { hosts }),
+    ...(prefixes.length === 0 ? {} : { prefixes }),
+  };
 }
 
 /** The union of the repository's and the machine's deny lists: neither can lift the other's. */
@@ -399,14 +409,16 @@ export function mergeDeny(...lists: (DenyList | undefined)[]): WorkerDeny {
   const paths: string[] = [];
   const ports: number[] = [];
   const hosts: string[] = [];
+  const prefixes: string[] = [];
   for (const l of lists) {
+    for (const p of l?.prefixes ?? []) if (!prefixes.includes(p)) prefixes.push(p);
     for (const p of l?.paths ?? []) if (!paths.includes(p)) paths.push(p);
     for (const p of l?.ports ?? []) if (!ports.includes(p)) ports.push(p);
     for (const h of l?.hosts ?? []) {
       if (!hosts.includes(h.toLowerCase())) hosts.push(h.toLowerCase());
     }
   }
-  return { paths, ports, hosts };
+  return { paths, ports, hosts, ...(prefixes.length === 0 ? {} : { prefixes }) };
 }
 
 /** The literal and real spelling of `dir/name`, for the guard's globs. */
