@@ -15,8 +15,10 @@
 // well, so the output shows what the rule changed. Anything else fails the install closed. Every
 // start of a relay job checks the same as the relay account: the rule in the active policy, every
 // firewall profile on, every current local prefix inside the rule, and the probe.
+
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { hextets, ipv4 } from './egress-proxy.js';
+import { SYS_INIT } from './system-folders-ps.js';
 import { powershellEnv, psQuote, type RunFile } from './windows-sandbox.js';
 
 /** Resolves a name to its addresses, empty when it does not resolve. */
@@ -380,7 +382,7 @@ export function lockdownFunctions(plan: LockdownPlan): string {
   const list = (xs: readonly (string | number)[]) =>
     `@(${xs.map((x) => (typeof x === 'number' ? String(x) : psQuote(x))).join(', ')})`;
   const accepted = [...NO_ROUTE, FIREWALL_REFUSED].map((c) => `'${c}'`).join(', ');
-  return `$lockGroup = ${psQuote(LOCKDOWN_GROUP)}
+  return `${SYS_INIT}$lockGroup = ${psQuote(LOCKDOWN_GROUP)}
 $lockLocal = ${list(plan.local)}
 $lockHosts = ${list(plan.hosts)}
 $lockPorts = ${list(plan.ports)}

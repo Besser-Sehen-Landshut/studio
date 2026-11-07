@@ -732,7 +732,8 @@ describe('studio relay install and setup with and without --no-firewall', () => 
     const off = await run('install', { source: 'fd7a::/48', 'no-firewall': true });
     expect(off.script).not.toContain('LockdownProbe');
     expect(off.script).toContain('UNSAFE (--no-firewall)');
-  });
+    // The first call asks the system for its folders (a PowerShell start on Windows).
+  }, 60_000);
 
   it('setup prints the same lockdown', async () => {
     expect((await run('setup', {})).script).toContain('LockdownProbe $lockSids');

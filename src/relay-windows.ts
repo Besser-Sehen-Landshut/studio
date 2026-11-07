@@ -33,7 +33,7 @@ import {
   POINT_AND_PRINT,
   POINT_AND_PRINT_KEY,
 } from './relay-lockdown.js';
-import { SYSTEM_FOLDERS } from './system-folders-ps.js';
+import { SYS_INIT } from './system-folders-ps.js';
 import { powershellEnv, psQuote, type RunFile, systemFolders } from './windows-sandbox.js';
 
 /** Every path here is a Windows path, also where tests run elsewhere (with POSIX folders). */
@@ -668,7 +668,9 @@ icacls $recordFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($
  * (`[IO.File]::Replace`, which keeps its ACL). A refused one changes nothing. Without sshd.exe
  * the check is skipped only where `$mustTest` allows it (uninstall: removing lines).
  */
-export const SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text, [bool]$mustTest) {
+export const SSHD_SWAP =
+  `${SYS_INIT}` +
+  String.raw`function SshdConfigSwap([string]$conf, [string]$text, [bool]$mustTest) {
   $dir = Split-Path -Parent $conf
   $tmp = Join-Path $dir ('.sshd_config.' + [Guid]::NewGuid().ToString('N') + '.tmp')
   $keyDir = $null
@@ -809,8 +811,7 @@ export const installRecordFile = (machine: string): string => join(machine, 'ins
 export const MACHINE_PATH = `# Only the machine's PATH: a folder of the user's PATH is writable without elevation.
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 # The Windows, Program Files and ProgramData folders from the system, never from the environment.
-${SYSTEM_FOLDERS}$sys = SystemFolders
-`;
+${SYS_INIT}`;
 
 const PRIOR_CAPTURE = (
   machine: string,

@@ -40020,6 +40020,33 @@ import { fileURLToPath as fileURLToPath2 } from "node:url";
 // src/crew-accounts.ts
 import { createHash as createHash4 } from "node:crypto";
 import { dirname as dirname10, join as join28 } from "node:path";
+
+// src/system-folders-ps.ts
+var SYSTEM_FOLDERS = String.raw`function SystemFolders {
+  $win = [Environment]::GetFolderPath('Windows')
+  if ($win -notmatch '^[A-Za-z]:\\[^\\/:*?"<>|%]+$') { throw "Windows names no Windows folder ($win)" }
+  $drive = $win.Substring(0, 2)
+  $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+  $raw = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+  $pf = [string]$hklm.OpenSubKey('SOFTWARE\Microsoft\Windows\CurrentVersion').GetValue('ProgramFilesDir', $null, $raw)
+  $pd = [string]$hklm.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList').GetValue('ProgramData', $null, $raw)
+  $owners = @('S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464', 'S-1-5-18', 'S-1-5-32-544')
+  $out = @{ windows = $win }
+  foreach ($k in @(@('programFiles', $pf), @('programData', $pd))) {
+    $v = [regex]::Replace($k[1], '%SystemDrive%', $drive, 'IgnoreCase').TrimEnd('\')
+    if ($v -notmatch '^[A-Za-z]:\\[^\\/:*?"<>|%]+$' -or -not $v.StartsWith($drive + '\', [StringComparison]::OrdinalIgnoreCase) -or $v -ieq ($drive + '\Users') -or $v.StartsWith($drive + '\Users\', [StringComparison]::OrdinalIgnoreCase)) { throw "Windows names no usable $($k[0]) folder ($v)" }
+    if (-not [IO.Directory]::Exists($v)) { throw "$v ($($k[0])) does not exist" }
+    $owner = (New-Object IO.DirectoryInfo($v)).GetAccessControl([Security.AccessControl.AccessControlSections]::Owner).GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($owners -notcontains $owner) { throw "$v ($($k[0])) is owned by $owner, not by TrustedInstaller, SYSTEM or administrators" }
+    $out[$k[0]] = $v
+  }
+  $out
+}
+`;
+var SYS_INIT = `${SYSTEM_FOLDERS}if ($null -eq $sys) { $sys = SystemFolders }
+`;
+
+// src/crew-accounts.ts
 var PRUNE_BUDGET = 2e4;
 var TREE_SOURCE = () => join28(dirname10(CREW_HOST_BIN), "studio-tree.cs");
 var CREW_PREFIX_RE = /^[A-Za-z][A-Za-z0-9_-]{0,12}$/;
@@ -40519,7 +40546,7 @@ foreach ($p in $readPaths) {
   if (Test-Path -LiteralPath $p) { icacls $p /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
 }
 `;
-var GIT_MIN_CHECK = String.raw`$gitExe = Join-Path ($sys.programFiles) 'Git\cmd\git.exe'
+var GIT_MIN_CHECK = `${SYS_INIT}` + String.raw`$gitExe = Join-Path ($sys.programFiles) 'Git\cmd\git.exe'
 if (-not (Test-Path -LiteralPath $gitExe -PathType Leaf)) { throw 'Git for Windows is not installed for all users: install 2.35.2 or later (winget install --id Git.Git --exact --scope machine)' }
 $gitVersion = [string](& $gitExe --version)
 if ($gitVersion -notmatch '(\d+)\.(\d+)\.(\d+)') { throw "cannot read the version of Git: $gitVersion" }
@@ -41271,7 +41298,7 @@ function V6Target {
 function lockdownFunctions(plan) {
   const list2 = (xs) => `@(${xs.map((x) => typeof x === "number" ? String(x) : psQuote(x)).join(", ")})`;
   const accepted = [...NO_ROUTE, FIREWALL_REFUSED].map((c3) => `'${c3}'`).join(", ");
-  return `$lockGroup = ${psQuote(LOCKDOWN_GROUP)}
+  return `${SYS_INIT}$lockGroup = ${psQuote(LOCKDOWN_GROUP)}
 $lockLocal = ${list2(plan.local)}
 $lockHosts = ${list2(plan.hosts)}
 $lockPorts = ${list2(plan.ports)}
@@ -41634,31 +41661,6 @@ async function smbCodesAsMe(run2, hosts) {
 
 // src/relay-windows.ts
 import { posix as posix2, win32 } from "node:path";
-
-// src/system-folders-ps.ts
-var SYSTEM_FOLDERS = String.raw`function SystemFolders {
-  $win = [Environment]::GetFolderPath('Windows')
-  if ($win -notmatch '^[A-Za-z]:\\[^\\/:*?"<>|%]+$') { throw "Windows names no Windows folder ($win)" }
-  $drive = $win.Substring(0, 2)
-  $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
-  $raw = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
-  $pf = [string]$hklm.OpenSubKey('SOFTWARE\Microsoft\Windows\CurrentVersion').GetValue('ProgramFilesDir', $null, $raw)
-  $pd = [string]$hklm.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList').GetValue('ProgramData', $null, $raw)
-  $owners = @('S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464', 'S-1-5-18', 'S-1-5-32-544')
-  $out = @{ windows = $win }
-  foreach ($k in @(@('programFiles', $pf), @('programData', $pd))) {
-    $v = [regex]::Replace($k[1], '%SystemDrive%', $drive, 'IgnoreCase').TrimEnd('\')
-    if ($v -notmatch '^[A-Za-z]:\\[^\\/:*?"<>|%]+$' -or -not $v.StartsWith($drive + '\', [StringComparison]::OrdinalIgnoreCase) -or $v -ieq ($drive + '\Users') -or $v.StartsWith($drive + '\Users\', [StringComparison]::OrdinalIgnoreCase)) { throw "Windows names no usable $($k[0]) folder ($v)" }
-    if (-not [IO.Directory]::Exists($v)) { throw "$v ($($k[0])) does not exist" }
-    $owner = (New-Object IO.DirectoryInfo($v)).GetAccessControl([Security.AccessControl.AccessControlSections]::Owner).GetOwner([Security.Principal.SecurityIdentifier]).Value
-    if ($owners -notcontains $owner) { throw "$v ($($k[0])) is owned by $owner, not by TrustedInstaller, SYSTEM or administrators" }
-    $out[$k[0]] = $v
-  }
-  $out
-}
-`;
-
-// src/relay-windows.ts
 var join30 = (...parts) => parts[0]?.startsWith("/") === true ? posix2.join(...parts) : win32.join(...parts);
 var relayHomeDefault = (env) => join30(systemFolders(env).programData, "Studio", "relay");
 var relayMachineDefault = (env) => join30(systemFolders(env).programFiles, "Studio", "relay");
@@ -42085,7 +42087,7 @@ icacls $recordFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($
 }
 `);
 }
-var SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text, [bool]$mustTest) {
+var SSHD_SWAP = `${SYS_INIT}` + String.raw`function SshdConfigSwap([string]$conf, [string]$text, [bool]$mustTest) {
   $dir = Split-Path -Parent $conf
   $tmp = Join-Path $dir ('.sshd_config.' + [Guid]::NewGuid().ToString('N') + '.tmp')
   $keyDir = $null
@@ -42163,8 +42165,7 @@ var installRecordFile = (machine) => join30(machine, "install-record.json");
 var MACHINE_PATH = `# Only the machine's PATH: a folder of the user's PATH is writable without elevation.
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 # The Windows, Program Files and ProgramData folders from the system, never from the environment.
-${SYSTEM_FOLDERS}$sys = SystemFolders
-`;
+${SYS_INIT}`;
 var PRIOR_CAPTURE = (machine) => `${MACHINE_PATH}# What this machine had before Studio changed it: the first install records it for uninstall.
 function ServiceState([string]$name) {
   $s = Get-Service -Name $name -ErrorAction SilentlyContinue

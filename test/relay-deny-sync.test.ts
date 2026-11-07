@@ -7,6 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { GIT_MIN_CHECK } from '../src/crew-accounts.js';
 import { ipv4 } from '../src/egress-proxy.js';
 import { stateBaseFor, stateDirName } from '../src/paths.js';
 import { realPorts } from '../src/ports.js';
@@ -30,6 +31,8 @@ import {
   judgeLockdownAll,
   type LockdownState,
   lockdownFor,
+  lockdownFunctions,
+  lockdownPlan,
   lockdownWant,
   PROBE_FIXED,
 } from '../src/relay-lockdown.js';
@@ -47,8 +50,9 @@ import {
   MACHINE_PATH,
   machineConfig,
   relayDenyScript,
+  SSHD_SWAP,
 } from '../src/relay-windows.js';
-import { SYSTEM_FOLDERS } from '../src/system-folders-ps.js';
+import { SYS_INIT, SYSTEM_FOLDERS } from '../src/system-folders-ps.js';
 import { readSystemFolders, systemTool, windowsDirectory } from '../src/windows-sandbox.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-deny-sync-')));
@@ -458,7 +462,14 @@ describe('the system folders: HKLM and the kernel, never the environment', () =>
     expect(SYSTEM_FOLDERS).toContain("$v.StartsWith($drive + '\\Users\\'");
     expect(SYSTEM_FOLDERS).toContain('$owners -notcontains $owner');
     expect(SYSTEM_FOLDERS).not.toMatch(/\$env:/);
-    expect(MACHINE_PATH).toContain(`${SYSTEM_FOLDERS}$sys = SystemFolders`);
+    expect(MACHINE_PATH).toContain(SYS_INIT);
+    for (const s of [
+      SSHD_SWAP,
+      GIT_MIN_CHECK,
+      lockdownFunctions(lockdownPlan({ denyHosts: [], denyPorts: [] })),
+    ]) {
+      expect(s.startsWith(SYS_INIT) || s.includes(SYS_INIT)).toBe(true);
+    }
   });
   it('no script of Studio reads a folder from the environment', () => {
     for (const f of [

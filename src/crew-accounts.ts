@@ -10,8 +10,10 @@
 // Making and deleting users needs an administrator. A native worker runs elevated and runs these
 // scripts itself; a relay worker's account is a standard user and asks its broker tasks, which run
 // them as SYSTEM (src/relay-windows.ts).
+
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
+import { SYS_INIT } from './system-folders-ps.js';
 import { CREW_HOST_BIN, OUTSIDE, powershellEnv, psQuote, type RunFile } from './windows-sandbox.js';
 
 /** Entries of the quarantine deleted per retire: bounded time, a huge tree goes over several. */
@@ -713,7 +715,9 @@ foreach ($p in $readPaths) {
  * `.git` another user planted above a folder (CVE-2022-24765), and crews of other users work on
  * this machine.
  */
-export const GIT_MIN_CHECK = String.raw`$gitExe = Join-Path ($sys.programFiles) 'Git\cmd\git.exe'
+export const GIT_MIN_CHECK =
+  `${SYS_INIT}` +
+  String.raw`$gitExe = Join-Path ($sys.programFiles) 'Git\cmd\git.exe'
 if (-not (Test-Path -LiteralPath $gitExe -PathType Leaf)) { throw 'Git for Windows is not installed for all users: install 2.35.2 or later (winget install --id Git.Git --exact --scope machine)' }
 $gitVersion = [string](& $gitExe --version)
 if ($gitVersion -notmatch '(\d+)\.(\d+)\.(\d+)') { throw "cannot read the version of Git: $gitVersion" }

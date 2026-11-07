@@ -33,3 +33,10 @@ export const SYSTEM_FOLDERS = String.raw`function SystemFolders {
   $out
 }
 `;
+
+/**
+ * `SystemFolders` and `$sys` set once: the head of every snippet that uses `$sys`, so none depends
+ * on what its caller ran before.
+ */
+export const SYS_INIT = `${SYSTEM_FOLDERS}if ($null -eq $sys) { $sys = SystemFolders }
+`;

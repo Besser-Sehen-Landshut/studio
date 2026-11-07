@@ -510,7 +510,8 @@ describe('grants and the crew user of each job', () => {
     );
     // Nothing ran as a crew user.
     expect(spawned).toEqual([]);
-  });
+    // The first call asks the system for its folders (a PowerShell start on Windows).
+  }, 60_000);
 });
 
 describe('the crew user scripts', () => {
