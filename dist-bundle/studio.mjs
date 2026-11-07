@@ -39572,7 +39572,7 @@ import {
   rmdirSync,
   unlinkSync as unlinkSync5
 } from "node:fs";
-import { dirname as dirname10, join as join29, resolve as resolve6, sep as sep5 } from "node:path";
+import { dirname as dirname10, join as join29, resolve as resolve6, sep as sep5, win32 as win322 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/crew-accounts.ts
@@ -39589,7 +39589,9 @@ var prefixOf = (prefix) => {
   }
   return prefix;
 };
-var crewAccountFunctions = (prefix, o2) => `$prefix = ${psQuote(prefixOf(prefix))}
+var crewAccountFunctions = (prefix, o2) => `# Only the machine's PATH: a folder of the user's PATH is writable without elevation.
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+$prefix = ${psQuote(prefixOf(prefix))}
 $treeSource = ${psQuote(o2.treeSource)}
 $treeTemp = ${psQuote(o2.treeTemp ?? "")}
 $pruneBudget = ${Math.max(1, Math.trunc(o2.pruneBudget ?? PRUNE_BUDGET))}
@@ -40075,9 +40077,9 @@ foreach ($p in $readPaths) {
   if (Test-Path -LiteralPath $p) { icacls $p /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
 }
 `;
-var GIT_MIN_CHECK = String.raw`$gitCmd = Get-Command git -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($null -eq $gitCmd) { throw 'Git for Windows is not installed: install 2.35.2 or later (winget install --id Git.Git)' }
-$gitVersion = [string](& $gitCmd.Source --version)
+var GIT_MIN_CHECK = String.raw`$gitExe = Join-Path $env:ProgramFiles 'Git\cmd\git.exe'
+if (-not (Test-Path -LiteralPath $gitExe -PathType Leaf)) { throw 'Git for Windows is not installed for all users: install 2.35.2 or later (winget install --id Git.Git --exact --scope machine)' }
+$gitVersion = [string](& $gitExe --version)
 if ($gitVersion -notmatch '(\d+)\.(\d+)\.(\d+)') { throw "cannot read the version of Git: $gitVersion" }
 if ([version]('{0}.{1}.{2}' -f $Matches[1], $Matches[2], $Matches[3]) -lt [version]'2.35.2') { throw "Git $($Matches[0]) is older than 2.35.2: update Git for Windows (winget upgrade --id Git.Git)" }
 Write-Output "ok: Git $($Matches[0])"
@@ -41388,7 +41390,10 @@ foreach ($sub in @('broker', 'config', 'setup-state', 'pairing')) { StrictFolder
 foreach ($sub in @('node', 'studio')) { StrictFolder (Join-Path $machine $sub) @(@($relaySid, $rx, $tree, 'None'), @($groupSid, $rx, $tree, 'None')) }
 # The copies the forced command runs: never the files of an account that can change them, and no
 # junction of the source copied along.
-Copy-Item -LiteralPath ${psQuote(o2.source.node)} -Destination ${psQuote(machineNode(o2.machine))} -Force
+$nodeSource = ${psQuote(o2.source.node)}
+if (-not (Test-Path -LiteralPath $nodeSource -PathType Leaf)) { throw "Node.js is not installed for all users ($nodeSource): winget install --id OpenJS.NodeJS.LTS --exact --scope machine, then run this again" }
+if ([string](& $nodeSource --version) -notmatch '^v(\\d+)\\.' -or [int]$Matches[1] -lt 24) { throw "Node.js in $nodeSource is older than 24: winget upgrade --id OpenJS.NodeJS.LTS --exact, then run this again" }
+Copy-Item -LiteralPath $nodeSource -Destination ${psQuote(machineNode(o2.machine))} -Force
 & robocopy.exe ${psQuote(o2.source.studio)} ${psQuote(machineStudio(o2.machine))} /MIR /XJ /XD node_modules .git .worktrees /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "cannot copy Studio into $machine (robocopy $LASTEXITCODE)" }
 icacls ${psQuote(machineStudio(o2.machine))} /reset /T /C /L /Q | Out-Null
@@ -41516,7 +41521,8 @@ function NoRelayJob {
 }
 `;
 var installRecordFile = (machine) => join28(machine, "install-record.json");
-var PRIOR_CAPTURE = (machine) => `# What this machine had before Studio changed it: the first install records it for uninstall.
+var MACHINE_PATH = "# Only the machine's PATH: a folder of the user's PATH is writable without elevation.\n$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')\n";
+var PRIOR_CAPTURE = (machine) => `${MACHINE_PATH}# What this machine had before Studio changed it: the first install records it for uninstall.
 function ServiceState([string]$name) {
   $s = Get-Service -Name $name -ErrorAction SilentlyContinue
   if ($null -eq $s) { return @{ exists = $false } }
@@ -41558,16 +41564,26 @@ function SshdOff {
 ${relayJobFunctions({ relayUser, crewPrefix: crewPrefix2, forceStop: i2.forceStop === true, what: "install" })}# Before sshd stops: a running job is refused while the lead can still reach it.
 NoRelayJob
 try {
-function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
+# Only the machine's PATH, also after an install: never a folder of the user's.
+function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') }
+# winget from its package in Program Files (administrators only), never the alias in the user's
+# WindowsApps folder.
+function Winget {
+  $apps = Join-Path $env:ProgramFiles 'WindowsApps'
+  @(Get-ChildItem -LiteralPath $apps -Directory -Filter 'Microsoft.DesktopAppInstaller_*_8wekyb3d8bbwe' -ErrorAction SilentlyContinue |
+    Sort-Object { try { [version]($_.Name.Split('_')[1]) } catch { [version]'0.0' } } -Descending |
+    ForEach-Object { Join-Path $_.FullName 'winget.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }) | Select-Object -First 1
+}
 function Need([string]$what, [scriptblock]$have, [string]$id) {
   if (& $have) { Write-Output "ok: $what"; return }
-  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "$what is missing and winget is not there to install it; install $what by hand" }
+  $wg = Winget
+  if (-not $wg) { throw "$what is missing and winget is not installed for the machine; install $what for all users by hand, then run this again" }
   Write-Output "installing: $what (winget $id)"
-  winget install --id $id --exact --silent --scope machine --accept-package-agreements --accept-source-agreements | Out-Null
+  & $wg install --id $id --exact --silent --scope machine --accept-package-agreements --accept-source-agreements | Out-Null
   Fresh
-  if (-not (& $have)) { throw "$what is still missing after winget install $id; install it by hand" }
+  if (-not (& $have)) { throw "$what is still missing after winget install $id; install it for all users by hand" }
 }
-Need 'Git' { Get-Command git -ErrorAction SilentlyContinue } 'Git.Git'
+Need 'Git' { Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'
 Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
 $ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
 if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
@@ -41786,9 +41802,30 @@ function isDir2(p) {
     return false;
   }
 }
+var SYSTEM_TOOLS = /* @__PURE__ */ new Set([
+  "cmd",
+  "icacls",
+  "net",
+  "netsh",
+  "reg",
+  "robocopy",
+  "sc",
+  "schtasks",
+  "secedit",
+  "takeown",
+  "tasklist",
+  "whoami"
+]);
+function systemTool(file4, env = process.env, platform2 = process.platform) {
+  if (platform2 !== "win32") return file4;
+  const name = file4.toLowerCase().replace(/\.exe$/, "");
+  const sys = win322.join(env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows", "System32");
+  if (name === "powershell") return win322.join(sys, "WindowsPowerShell", "v1.0", "powershell.exe");
+  return SYSTEM_TOOLS.has(name) ? win322.join(sys, `${name}.exe`) : file4;
+}
 var runFile2 = (file4, args, opts = {}) => new Promise((resolve16) => {
   execFile2(
-    file4,
+    systemTool(file4),
     args,
     {
       ...opts.env === void 0 ? {} : { env: opts.env },
@@ -42186,7 +42223,7 @@ function powershellEnv(env) {
 var spawnKeeper = async (o2) => {
   const fd = openSync6(o2.log, "a");
   try {
-    const child = spawn("powershell.exe", o2.args, {
+    const child = spawn(systemTool("powershell.exe"), o2.args, {
       env: o2.env,
       stdio: ["pipe", fd, fd],
       windowsHide: true
@@ -61580,7 +61617,7 @@ import {
   writeFileSync as writeFileSync21
 } from "node:fs";
 import { homedir as homedir13 } from "node:os";
-import { dirname as dirname19, join as join62, resolve as resolve13 } from "node:path";
+import { dirname as dirname19, join as join62, resolve as resolve13, win32 as win324 } from "node:path";
 
 // src/relay-lead.ts
 import { existsSync as existsSync15, lstatSync as lstatSync43, readFileSync as readFileSync50, writeFileSync as writeFileSync17 } from "node:fs";
@@ -64099,7 +64136,10 @@ try {
 `;
 }
 var spawnWithInput = (file4, args, stdin) => new Promise((res) => {
-  const child = spawn5(file4, args, { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+  const child = spawn5(systemTool(file4), args, {
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "ignore"]
+  });
   let stdout = "";
   child.stdout?.on("data", (d) => {
     stdout += String(d);
@@ -64281,8 +64321,8 @@ async function indexAndCheck(c3, dir, hooks) {
 
 // src/relay-uninstall.ts
 import { readFileSync as readFileSync54 } from "node:fs";
-import { posix as posix3, win32 as win322 } from "node:path";
-var join59 = (...parts) => parts[0]?.startsWith("/") === true ? posix3.join(...parts) : win322.join(...parts);
+import { posix as posix3, win32 as win323 } from "node:path";
+var join59 = (...parts) => parts[0]?.startsWith("/") === true ? posix3.join(...parts) : win323.join(...parts);
 var RELAY_DESCRIPTION = "Studio relay (SSH, forced command)";
 var START_TYPES = ["Automatic", "Manual", "Disabled"];
 var service = (x) => {
@@ -66364,7 +66404,7 @@ var runScript = (exec, script, onOutput) => exec(
   }
 );
 var systemExec = (file4, args, o2 = {}) => new Promise((res) => {
-  const child = spawn6(file4, args, {
+  const child = spawn6(systemTool(file4), args, {
     windowsHide: true,
     stdio: [o2.input === void 0 ? "ignore" : "pipe", "pipe", "pipe"]
   });
@@ -66404,7 +66444,16 @@ function setupScriptFor(o2) {
       ...claude === void 0 ? [] : [dirname19(claude)],
       ...loadOwnerConfig(o2.owner).crewToolchainPaths
     ],
-    source: { node: process.execPath, studio: resolve13(dirname19(STUDIO_BIN), "..") },
+    // Node.js for all users, where only administrators change it: never the node this CLI runs on,
+    // which may lie in a folder of the user's.
+    source: {
+      node: win324.join(
+        o2.env.ProgramFiles ?? o2.env.PROGRAMFILES ?? "C:\\Program Files",
+        "nodejs",
+        "node.exe"
+      ),
+      studio: resolve13(dirname19(STUDIO_BIN), "..")
+    },
     ...o2.install === void 0 ? {} : { install: o2.install },
     lockdown: o2.lockdown
   });

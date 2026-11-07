@@ -67,6 +67,7 @@ import {
 } from './relay-protocol.js';
 import { parseReport, readReportText, reportName } from './report.js';
 import { readCrewRecords } from './state.js';
+import { systemTool } from './windows-sandbox.js';
 import { pinnedContent, strictPinProblem } from './worker.js';
 import { workerItemOf } from './worker-claim.js';
 import {
@@ -1054,7 +1055,10 @@ export type SpawnWithInput = (
 
 const spawnWithInput: SpawnWithInput = (file, args, stdin) =>
   new Promise((res) => {
-    const child = spawn(file, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+    const child = spawn(systemTool(file), args, {
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
     let stdout = '';
     child.stdout?.on('data', (d) => {
       stdout += String(d);
