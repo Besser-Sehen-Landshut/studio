@@ -63869,7 +63869,13 @@ if ($null -ne $group) {
   Get-NetFirewallRule -DisplayName ('Studio crews ' + $group.Name + ': no direct network') -ErrorAction SilentlyContinue | Remove-NetFirewallRule
   $cfg = Join-Path $env:TEMP ('studio-rights-' + [Guid]::NewGuid().ToString('N') + '.inf')
   $db = [IO.Path]::ChangeExtension($cfg, '.sdb')
-  secedit /export /cfg $cfg /areas USER_RIGHTS | Out-Null
+  # secedit can be busy right after another run of it: a few tries, then its own words.
+  $said = ''
+  for ($k = 0; $k -lt 5 -and -not (Test-Path -LiteralPath $cfg); $k++) {
+    $said = (secedit /export /cfg $cfg /areas USER_RIGHTS 2>&1 | Out-String).Trim()
+    if (-not (Test-Path -LiteralPath $cfg)) { Start-Sleep -Seconds 2 }
+  }
+  if (-not (Test-Path -LiteralPath $cfg)) { throw "secedit could not export the logon rights: $said" }
   $lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $cfg)
   $changed = $false
   for ($k = 0; $k -lt $lines.Count; $k++) {
