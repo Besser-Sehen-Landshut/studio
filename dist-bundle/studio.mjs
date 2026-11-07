@@ -40519,7 +40519,7 @@ foreach ($p in $readPaths) {
   if (Test-Path -LiteralPath $p) { icacls $p /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
 }
 `;
-var GIT_MIN_CHECK = String.raw`$gitExe = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Git\cmd\git.exe'
+var GIT_MIN_CHECK = String.raw`$gitExe = Join-Path ($sys.programFiles) 'Git\cmd\git.exe'
 if (-not (Test-Path -LiteralPath $gitExe -PathType Leaf)) { throw 'Git for Windows is not installed for all users: install 2.35.2 or later (winget install --id Git.Git --exact --scope machine)' }
 $gitVersion = [string](& $gitExe --version)
 if ($gitVersion -notmatch '(\d+)\.(\d+)\.(\d+)') { throw "cannot read the version of Git: $gitVersion" }
@@ -41320,7 +41320,7 @@ function ConnectAs([string]$name, [string]$sid, [string]$plain, [string[]]$targe
   foreach ($r in @(@('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'), @($sid, 'ReadAndExecute'))) {
     $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($r[0])), $r[1], 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
   }
-  $dir = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('studio-probe-' + [Guid]::NewGuid().ToString('N'))
+  $dir = Join-Path ($sys.programData) ('studio-probe-' + [Guid]::NewGuid().ToString('N'))
   $null = [IO.Directory]::CreateDirectory($dir, $acl)
   $file = Join-Path $dir 'probe.ps1'
   $out = Join-Path $dir 'out.json'
@@ -41330,8 +41330,8 @@ function ConnectAs([string]$name, [string]$sid, [string]$plain, [string[]]$targe
     [IO.File]::WriteAllText($file, $script, (New-Object Text.ASCIIEncoding))
     $secure = ConvertTo-SecureString $plain -AsPlainText -Force
     $c = New-Object System.Management.Automation.PSCredential ("$env:COMPUTERNAME\\$name", $secure)
-    $ps = Join-Path ([Environment]::GetFolderPath('Windows')) 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-    $p = Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $file + '"')) -Credential $c -WorkingDirectory ([Environment]::GetFolderPath('Windows')) -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+    $ps = Join-Path ($sys.windows) 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+    $p = Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $file + '"')) -Credential $c -WorkingDirectory ($sys.windows) -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
     if (-not $p.WaitForExit(120000)) { $p.Kill(); throw 'the probe as the throwaway user did not finish' }
     $raw = Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue
     if (-not $raw) { throw "the probe as the throwaway user gave no answer: $(Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)" }
@@ -41634,6 +41634,31 @@ async function smbCodesAsMe(run2, hosts) {
 
 // src/relay-windows.ts
 import { posix as posix2, win32 } from "node:path";
+
+// src/system-folders-ps.ts
+var SYSTEM_FOLDERS = String.raw`function SystemFolders {
+  $win = [Environment]::GetFolderPath('Windows')
+  if ($win -notmatch '^[A-Za-z]:\\[^\\/:*?"<>|%]+$') { throw "Windows names no Windows folder ($win)" }
+  $drive = $win.Substring(0, 2)
+  $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+  $raw = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+  $pf = [string]$hklm.OpenSubKey('SOFTWARE\Microsoft\Windows\CurrentVersion').GetValue('ProgramFilesDir', $null, $raw)
+  $pd = [string]$hklm.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList').GetValue('ProgramData', $null, $raw)
+  $owners = @('S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464', 'S-1-5-18', 'S-1-5-32-544')
+  $out = @{ windows = $win }
+  foreach ($k in @(@('programFiles', $pf), @('programData', $pd))) {
+    $v = [regex]::Replace($k[1], '%SystemDrive%', $drive, 'IgnoreCase').TrimEnd('\')
+    if ($v -notmatch '^[A-Za-z]:\\[^\\/:*?"<>|%]+$' -or -not $v.StartsWith($drive + '\', [StringComparison]::OrdinalIgnoreCase) -or $v -ieq ($drive + '\Users') -or $v.StartsWith($drive + '\Users\', [StringComparison]::OrdinalIgnoreCase)) { throw "Windows names no usable $($k[0]) folder ($v)" }
+    if (-not [IO.Directory]::Exists($v)) { throw "$v ($($k[0])) does not exist" }
+    $owner = (New-Object IO.DirectoryInfo($v)).GetAccessControl([Security.AccessControl.AccessControlSections]::Owner).GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($owners -notcontains $owner) { throw "$v ($($k[0])) is owned by $owner, not by TrustedInstaller, SYSTEM or administrators" }
+    $out[$k[0]] = $v
+  }
+  $out
+}
+`;
+
+// src/relay-windows.ts
 var join30 = (...parts) => parts[0]?.startsWith("/") === true ? posix2.join(...parts) : win32.join(...parts);
 var relayHomeDefault = (env) => join30(systemFolders(env).programData, "Studio", "relay");
 var relayMachineDefault = (env) => join30(systemFolders(env).programFiles, "Studio", "relay");
@@ -42066,7 +42091,7 @@ var SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text,
   $keyDir = $null
   [IO.File]::WriteAllText($tmp, $text, (New-Object Text.UTF8Encoding $false))
   try {
-    $exe = Join-Path ([Environment]::GetFolderPath('Windows')) 'System32\OpenSSH\sshd.exe'
+    $exe = Join-Path ($sys.windows) 'System32\OpenSSH\sshd.exe'
     if (Test-Path -LiteralPath $exe) {
       $sshdArgs = '-t -f "' + $tmp + '"'
       if (-not (Test-Path -LiteralPath (Join-Path $dir 'ssh_host_ed25519_key'))) {
@@ -42081,7 +42106,7 @@ var SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text,
         $made = Get-Item -LiteralPath $keyDir -Force
         if (($made.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-Acl -LiteralPath $keyDir).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw "$keyDir is not the admin-only folder this made" }
         $key = Join-Path $keyDir 'host_ed25519'
-        $kg = Start-Process -FilePath (Join-Path ([Environment]::GetFolderPath('Windows')) 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
+        $kg = Start-Process -FilePath (Join-Path ($sys.windows) 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
         if ($kg.ExitCode -ne 0) { throw 'cannot make a throwaway host key to check sshd_config; it stays as it was' }
         $sshdArgs += ' -h "' + $key + '"'
       }
@@ -42135,7 +42160,11 @@ function NoRelayJob {
 }
 `;
 var installRecordFile = (machine) => join30(machine, "install-record.json");
-var MACHINE_PATH = "# Only the machine's PATH: a folder of the user's PATH is writable without elevation.\n$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')\n";
+var MACHINE_PATH = `# Only the machine's PATH: a folder of the user's PATH is writable without elevation.
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+# The Windows, Program Files and ProgramData folders from the system, never from the environment.
+${SYSTEM_FOLDERS}$sys = SystemFolders
+`;
 var PRIOR_CAPTURE = (machine) => `${MACHINE_PATH}# What this machine had before Studio changed it: the first install records it for uninstall.
 function ServiceState([string]$name) {
   $s = Get-Service -Name $name -ErrorAction SilentlyContinue
@@ -42184,7 +42213,7 @@ function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Mach
 # winget from its package in Program Files (administrators only), never the alias in the user's
 # WindowsApps folder.
 function Winget {
-  $apps = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsApps'
+  $apps = Join-Path ($sys.programFiles) 'WindowsApps'
   @(Get-ChildItem -LiteralPath $apps -Directory -Filter 'Microsoft.DesktopAppInstaller_*_8wekyb3d8bbwe' -ErrorAction SilentlyContinue |
     Sort-Object { try { [version]($_.Name.Split('_')[1]) } catch { [version]'0.0' } } -Descending |
     ForEach-Object { Join-Path $_.FullName 'winget.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }) | Select-Object -First 1
@@ -42199,7 +42228,7 @@ function Need([string]$what, [scriptblock]$have, [string]$id) {
   if (-not (& $have)) { throw "$what is still missing after winget install $id; install it for all users by hand" }
 }
 Step 'prerequisites: Git, Claude Code, the OpenSSH server'
-Need 'Git' { Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'
+Need 'Git' { Test-Path -LiteralPath (Join-Path ($sys.programFiles) 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'
 Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
 $ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
 if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
@@ -42228,7 +42257,7 @@ KbdInteractiveAuthentication no
 # studio relay end global
 `;
   return `Step 'sshd: its block (checked with sshd -t), the firewall rule, start'
-$conf = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ssh\\sshd_config'
+$conf = Join-Path ($sys.programData) 'ssh\\sshd_config'
 if (-not (Test-Path -LiteralPath $conf)) {
   # The first start of sshd writes its default config; it stays stopped afterwards.
   Start-Service sshd
@@ -42473,15 +42502,19 @@ function readSystemFolders() {
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      "[Console]::Out.Write([Environment]::GetFolderPath('ProgramFiles') + '|' + [Environment]::GetFolderPath('CommonApplicationData'))"
+      `${SYSTEM_FOLDERS}$f = SystemFolders; [Console]::Out.Write($f.windows + '|' + $f.programFiles + '|' + $f.programData)`
     ],
-    { encoding: "utf8", windowsHide: true, timeout: 6e4, cwd: windows }
-  );
-  const [programFiles, programData] = out.trim().split("|");
-  for (const f3 of [programFiles, programData]) {
-    if (f3 === void 0 || !/^[A-Za-z]:\\[^\\/:*?"<>|]/.test(f3)) {
-      throw new Error(`Windows names no Program Files or ProgramData folder (${out.trim()})`);
+    {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 6e4,
+      cwd: windows,
+      env: { SystemRoot: windows, windir: windows, SystemDrive: windows.slice(0, 2) }
     }
+  );
+  const [win, programFiles, programData] = out.trim().split("|");
+  if (win?.toLowerCase() !== windows.toLowerCase() || !programFiles || !programData) {
+    throw new Error(`the system's folders cannot be read (${out.trim()})`);
   }
   return { windows, programFiles, programData };
 }
@@ -65573,7 +65606,7 @@ function relayUninstallScript(o2) {
   if (!/^[A-Za-z0-9 _-]{1,64}$/.test(o2.task)) throw new Error(`not a task name: ${o2.task}`);
   const tasks = Object.values(brokerTasks(o2.task));
   const step = (n4, what) => `Write-Output ${psQuote(`[${n4}/${UNINSTALL_STEPS}] ${what}`)}`;
-  const conf = o2.sshdConfig === void 0 ? "Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ssh\\sshd_config'" : psQuote(o2.sshdConfig);
+  const conf = o2.sshdConfig === void 0 ? "Join-Path ($sys.programData) 'ssh\\sshd_config'" : psQuote(o2.sshdConfig);
   const adminCopy = join62(machineStudio(o2.machine), "bin", "studio-tree.cs");
   return `#Requires -RunAsAdministrator
 # Studio: uninstall this Windows relay worker (studio relay uninstall). Run it in an elevated
@@ -67497,11 +67530,11 @@ async function pairUpdateDeny(o2) {
     issuedAt,
     signature: sshsigBlob(signed.stdout)
   });
-  const pf = "[Environment]::GetFolderPath('ProgramFiles')";
+  const pf = "$pf = [regex]::Replace([string][Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64').OpenSubKey('SOFTWARE\\Microsoft\\Windows\\CurrentVersion').GetValue('ProgramFilesDir', $null, 'DoNotExpandEnvironmentNames'), '%SystemDrive%', [Environment]::GetFolderPath('Windows').Substring(0, 2), 'IgnoreCase')";
   o2.stdout(
     [
       t.updateDenyPc,
-      `  & (Join-Path (${pf}) 'Studio\\relay\\node\\node.exe') (Join-Path (${pf}) 'Studio\\relay\\studio\\bin\\studio') relay update-deny '${line4}'`,
+      `  ${pf}; & (Join-Path $pf 'Studio\\relay\\node\\node.exe') (Join-Path $pf 'Studio\\relay\\studio\\bin\\studio') relay update-deny '${line4}'`,
       t.updateDenyWhat(denyText(lead.deny)),
       ""
     ].join("\n")

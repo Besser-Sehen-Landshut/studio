@@ -76,13 +76,31 @@ if ($overSsh) { Fail 'this runs in an SSH session, and the install stops sshd' '
 # elevated session starts by name must not come from there.
 function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') }
 Fresh
-# The machine's folders as Windows knows them (the known folders), never ProgramFiles or
-# ProgramData of this session's environment, which the user can set.
-$programFiles = [Environment]::GetFolderPath('ProgramFiles')
-$programData = [Environment]::GetFolderPath('CommonApplicationData')
-foreach ($f in @($programFiles, $programData)) {
-  if (-not $f -or $f -notmatch '^[A-Za-z]:\\' -or -not (Test-Path -LiteralPath $f -PathType Container)) { Fail "Windows names no folder for Program Files or ProgramData ($f)" 'run this on a regular Windows installation' }
+# The machine's folders from the system (HKLM, the kernel), never from this session's environment,
+# which the user can set (HKCU\Environment). The same function as Studio's elevated scripts.
+function SystemFolders {
+  $win = [Environment]::GetFolderPath('Windows')
+  if ($win -notmatch '^[A-Za-z]:\\[^\\/:*?"<>|%]+$') { throw "Windows names no Windows folder ($win)" }
+  $drive = $win.Substring(0, 2)
+  $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+  $raw = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+  $pf = [string]$hklm.OpenSubKey('SOFTWARE\Microsoft\Windows\CurrentVersion').GetValue('ProgramFilesDir', $null, $raw)
+  $pd = [string]$hklm.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList').GetValue('ProgramData', $null, $raw)
+  $owners = @('S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464', 'S-1-5-18', 'S-1-5-32-544')
+  $out = @{ windows = $win }
+  foreach ($k in @(@('programFiles', $pf), @('programData', $pd))) {
+    $v = [regex]::Replace($k[1], '%SystemDrive%', $drive, 'IgnoreCase').TrimEnd('\')
+    if ($v -notmatch '^[A-Za-z]:\\[^\\/:*?"<>|%]+$' -or -not $v.StartsWith($drive + '\', [StringComparison]::OrdinalIgnoreCase) -or $v -ieq ($drive + '\Users') -or $v.StartsWith($drive + '\Users\', [StringComparison]::OrdinalIgnoreCase)) { throw "Windows names no usable $($k[0]) folder ($v)" }
+    if (-not [IO.Directory]::Exists($v)) { throw "$v ($($k[0])) does not exist" }
+    $owner = (New-Object IO.DirectoryInfo($v)).GetAccessControl([Security.AccessControl.AccessControlSections]::Owner).GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($owners -notcontains $owner) { throw "$v ($($k[0])) is owned by $owner, not by TrustedInstaller, SYSTEM or administrators" }
+    $out[$k[0]] = $v
+  }
+  $out
 }
+$sys = SystemFolders
+$programFiles = $sys.programFiles
+$programData = $sys.programData
 # Node.js and Git run from where winget installs them for all users (Program Files, which only
 # administrators change), never from a folder the user could write.
 $nodeExe = Join-Path $programFiles 'nodejs\node.exe'
@@ -232,7 +250,7 @@ try {
     foreach ($k in @(Get-ChildItem Env: | Where-Object { $_.Name -like 'NODE_*' -or $_.Name -like 'npm_config_*' } | ForEach-Object { $_.Name })) { Remove-Item -LiteralPath "Env:$k" -ErrorAction SilentlyContinue }
     # The system's folders, as Windows knows them, for Node.js and everything it starts: a value of
     # the user's (HKCU\Environment) would steer where the install looks and writes.
-    $windowsDir = [Environment]::GetFolderPath('Windows')
+    $windowsDir = $sys.windows
     $env:ProgramFiles = $programFiles
     $env:ProgramData = $programData
     $env:ALLUSERSPROFILE = $programData

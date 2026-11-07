@@ -946,11 +946,14 @@ async function pairUpdateDeny(o: {
     issuedAt,
     signature: sshsigBlob(signed.stdout),
   });
-  const pf = "[Environment]::GetFolderPath('ProgramFiles')";
+  // Program Files from HKLM (64-bit view, only %SystemDrive% expanded from the Windows folder),
+  // never from the environment: this line runs node.exe elevated.
+  const pf =
+    "$pf = [regex]::Replace([string][Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64').OpenSubKey('SOFTWARE\\Microsoft\\Windows\\CurrentVersion').GetValue('ProgramFilesDir', $null, 'DoNotExpandEnvironmentNames'), '%SystemDrive%', [Environment]::GetFolderPath('Windows').Substring(0, 2), 'IgnoreCase')";
   o.stdout(
     [
       t.updateDenyPc,
-      `  & (Join-Path (${pf}) 'Studio\\relay\\node\\node.exe') (Join-Path (${pf}) 'Studio\\relay\\studio\\bin\\studio') relay update-deny '${line}'`,
+      `  ${pf}; & (Join-Path $pf 'Studio\\relay\\node\\node.exe') (Join-Path $pf 'Studio\\relay\\studio\\bin\\studio') relay update-deny '${line}'`,
       t.updateDenyWhat(denyText(lead.deny)),
       '',
     ].join('\n'),

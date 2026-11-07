@@ -11,6 +11,7 @@
 // user's password is sealed for the machine (LocalMachine DPAPI) in a file whose ACL lets only the
 // relay account, SYSTEM and administrators read it. Any process of those accounts on this machine
 // can open it; the crew user cannot read the file.
+
 import { posix, win32 } from 'node:path';
 import {
   CREW_ACCOUNT_BODY,
@@ -32,6 +33,7 @@ import {
   POINT_AND_PRINT,
   POINT_AND_PRINT_KEY,
 } from './relay-lockdown.js';
+import { SYSTEM_FOLDERS } from './system-folders-ps.js';
 import { powershellEnv, psQuote, type RunFile, systemFolders } from './windows-sandbox.js';
 
 /** Every path here is a Windows path, also where tests run elsewhere (with POSIX folders). */
@@ -672,7 +674,7 @@ export const SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [stri
   $keyDir = $null
   [IO.File]::WriteAllText($tmp, $text, (New-Object Text.UTF8Encoding $false))
   try {
-    $exe = Join-Path ([Environment]::GetFolderPath('Windows')) 'System32\OpenSSH\sshd.exe'
+    $exe = Join-Path ($sys.windows) 'System32\OpenSSH\sshd.exe'
     if (Test-Path -LiteralPath $exe) {
       $sshdArgs = '-t -f "' + $tmp + '"'
       if (-not (Test-Path -LiteralPath (Join-Path $dir 'ssh_host_ed25519_key'))) {
@@ -687,7 +689,7 @@ export const SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [stri
         $made = Get-Item -LiteralPath $keyDir -Force
         if (($made.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-Acl -LiteralPath $keyDir).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw "$keyDir is not the admin-only folder this made" }
         $key = Join-Path $keyDir 'host_ed25519'
-        $kg = Start-Process -FilePath (Join-Path ([Environment]::GetFolderPath('Windows')) 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
+        $kg = Start-Process -FilePath (Join-Path ($sys.windows) 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
         if ($kg.ExitCode -ne 0) { throw 'cannot make a throwaway host key to check sshd_config; it stays as it was' }
         $sshdArgs += ' -h "' + $key + '"'
       }
@@ -804,8 +806,11 @@ export const installRecordFile = (machine: string): string => join(machine, 'ins
  * there already (an install of an earlier version, which recorded nothing).
  */
 /** The first line of every elevated script: the machine's PATH alone, never a folder of the user's. */
-export const MACHINE_PATH =
-  "# Only the machine's PATH: a folder of the user's PATH is writable without elevation.\n$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')\n";
+export const MACHINE_PATH = `# Only the machine's PATH: a folder of the user's PATH is writable without elevation.
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+# The Windows, Program Files and ProgramData folders from the system, never from the environment.
+${SYSTEM_FOLDERS}$sys = SystemFolders
+`;
 
 const PRIOR_CAPTURE = (
   machine: string,
@@ -874,7 +879,7 @@ function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Mach
 # winget from its package in Program Files (administrators only), never the alias in the user's
 # WindowsApps folder.
 function Winget {
-  $apps = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsApps'
+  $apps = Join-Path ($sys.programFiles) 'WindowsApps'
   @(Get-ChildItem -LiteralPath $apps -Directory -Filter 'Microsoft.DesktopAppInstaller_*_8wekyb3d8bbwe' -ErrorAction SilentlyContinue |
     Sort-Object { try { [version]($_.Name.Split('_')[1]) } catch { [version]'0.0' } } -Descending |
     ForEach-Object { Join-Path $_.FullName 'winget.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }) | Select-Object -First 1
@@ -889,7 +894,7 @@ function Need([string]$what, [scriptblock]$have, [string]$id) {
   if (-not (& $have)) { throw "$what is still missing after winget install $id; install it for all users by hand" }
 }
 Step 'prerequisites: Git, Claude Code, the OpenSSH server'
-Need 'Git' { Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'
+Need 'Git' { Test-Path -LiteralPath (Join-Path ($sys.programFiles) 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'
 Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
 $ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
 if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
@@ -938,7 +943,7 @@ KbdInteractiveAuthentication no
 # studio relay end global
 `;
   return `Step 'sshd: its block (checked with sshd -t), the firewall rule, start'
-$conf = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ssh\\sshd_config'
+$conf = Join-Path ($sys.programData) 'ssh\\sshd_config'
 if (-not (Test-Path -LiteralPath $conf)) {
   # The first start of sshd writes its default config; it stays stopped afterwards.
   Start-Service sshd

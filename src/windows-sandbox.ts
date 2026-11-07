@@ -43,6 +43,7 @@ import {
   POINT_AND_PRINT,
 } from './relay-lockdown.js';
 import { FOLDER_FUNCTIONS, withSteps } from './relay-windows.js';
+import { SYSTEM_FOLDERS } from './system-folders-ps.js';
 
 /**
  * The crew sandbox of a worker on native Windows.
@@ -370,7 +371,7 @@ let folders: { windows: string; programFiles: string; programData: string } | un
 /**
  * The Windows, Program Files and ProgramData folders of this machine as Windows knows them: the
  * first from the kernel (`windowsDirectory`), the others from the known folders
- * (`[Environment]::GetFolderPath`, asked of the system's PowerShell), never from `ProgramFiles`,
+ * (HKLM, read by the system's PowerShell, `SystemFolders`), never from `ProgramFiles`,
  * `ProgramData` or `SystemRoot` of the environment, which a user can set for every process of theirs,
  * elevated ones included (HKCU\\Environment). Throws when they cannot be read. Elsewhere (tests,
  * and Linux and macOS, where nothing uses them) the environment's, with the usual defaults.
@@ -390,7 +391,12 @@ export function systemFolders(
   return folders;
 }
 
-/** `systemFolders` on Windows, read anew (the child PowerShell inherits this process's environment). */
+/**
+ * `systemFolders` on Windows, read anew: the system's PowerShell runs `SystemFolders`
+ * (src/system-folders-ps.ts: HKLM, the 64-bit view, only `%SystemDrive%` expanded) with an
+ * environment of exactly SystemRoot, windir and SystemDrive from the kernel's Windows folder, so
+ * nothing of this process's environment reaches it.
+ */
 export function readSystemFolders(): {
   windows: string;
   programFiles: string;
@@ -403,17 +409,21 @@ export function readSystemFolders(): {
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      "[Console]::Out.Write([Environment]::GetFolderPath('ProgramFiles') + '|' + [Environment]::GetFolderPath('CommonApplicationData'))",
+      `${SYSTEM_FOLDERS}$f = SystemFolders; [Console]::Out.Write($f.windows + '|' + $f.programFiles + '|' + $f.programData)`,
     ],
-    { encoding: 'utf8', windowsHide: true, timeout: 60_000, cwd: windows },
+    {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 60_000,
+      cwd: windows,
+      env: { SystemRoot: windows, windir: windows, SystemDrive: windows.slice(0, 2) },
+    },
   );
-  const [programFiles, programData] = out.trim().split('|');
-  for (const f of [programFiles, programData]) {
-    if (f === undefined || !/^[A-Za-z]:\\[^\\/:*?"<>|]/.test(f)) {
-      throw new Error(`Windows names no Program Files or ProgramData folder (${out.trim()})`);
-    }
+  const [win, programFiles, programData] = out.trim().split('|');
+  if (win?.toLowerCase() !== windows.toLowerCase() || !programFiles || !programData) {
+    throw new Error(`the system's folders cannot be read (${out.trim()})`);
   }
-  return { windows, programFiles: programFiles as string, programData: programData as string };
+  return { windows, programFiles, programData };
 }
 
 /**

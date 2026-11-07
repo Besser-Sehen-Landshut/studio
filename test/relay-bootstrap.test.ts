@@ -36,6 +36,7 @@ import {
   treeDigest,
 } from '../src/relay-bootstrap.js';
 import { renderPairLine } from '../src/relay-pair.js';
+import { SYSTEM_FOLDERS } from '../src/system-folders-ps.js';
 import { powershellEnv } from '../src/windows-sandbox.js';
 
 const repoRoot = join(import.meta.dirname, '..');
@@ -163,7 +164,9 @@ describe('the bootstrap template', () => {
     );
     expect(template.indexOf('$fs.Dispose()')).toBeGreaterThan(template.indexOf('$in.CopyTo($out)'));
     expect(template).toContain("$nodeExe = Join-Path $programFiles 'nodejs\\node.exe'");
-    expect(template).toContain("$programFiles = [Environment]::GetFolderPath('ProgramFiles')");
+    // The folders from the system, by the same function as the elevated scripts.
+    expect(template).toContain(SYSTEM_FOLDERS);
+    expect(template).toContain('$programFiles = $sys.programFiles');
     // Never read from the environment; only set (for Node.js) from the system's values.
     expect(template).not.toMatch(/\$env:(ProgramFiles|ProgramData|SystemRoot|windir)\b(?! = )/i);
     expect(template).not.toContain("GetEnvironmentVariable('Path', 'User')");

@@ -457,7 +457,7 @@ describe('the install script', () => {
     ).toContain('$forceStop = $true');
     for (const s of [
       // Git from Program Files, winget from its package there, the machine's PATH alone.
-      "Need 'Git' { Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'",
+      "Need 'Git' { Test-Path -LiteralPath (Join-Path ($sys.programFiles) 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'",
       '& $wg install --id $id --exact --silent --scope machine',
       "Get-ChildItem -LiteralPath $apps -Directory -Filter 'Microsoft.DesktopAppInstaller_*_8wekyb3d8bbwe'",
       "function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') }",
@@ -465,7 +465,7 @@ describe('the install script', () => {
       'Add-WindowsCapability -Online -Name $ssh.Name',
       '# studio relay begin',
       '# studio relay end',
-      "$exe = Join-Path ([Environment]::GetFolderPath('Windows')) 'System32\\OpenSSH\\sshd.exe'",
+      "$exe = Join-Path ($sys.windows) 'System32\\OpenSSH\\sshd.exe'",
       // The new config goes to a temporary file, sshd checks that one (with a throwaway host key
       // when there is none), and only an accepted one replaces the old in one step.
       "$tmp = Join-Path $dir ('.sshd_config.' + [Guid]::NewGuid().ToString('N') + '.tmp')",

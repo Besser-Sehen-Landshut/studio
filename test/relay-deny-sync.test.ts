@@ -42,7 +42,13 @@ import {
   renderPairLine,
   writePairings,
 } from '../src/relay-pair.js';
-import { installRecordFile, machineConfig, relayDenyScript } from '../src/relay-windows.js';
+import {
+  installRecordFile,
+  MACHINE_PATH,
+  machineConfig,
+  relayDenyScript,
+} from '../src/relay-windows.js';
+import { SYSTEM_FOLDERS } from '../src/system-folders-ps.js';
 import { readSystemFolders, systemTool, windowsDirectory } from '../src/windows-sandbox.js';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'studio-deny-sync-')));
@@ -337,7 +343,8 @@ describe('a deny entry added later holds the start; the --update-deny line fixes
     });
     expect(code, out.join('')).toBe(0);
     const text = out.join('');
-    expect(text).toContain("[Environment]::GetFolderPath('ProgramFiles')");
+    expect(text).toContain("OpenBaseKey('LocalMachine', 'Registry64')");
+    expect(text).toContain("GetValue('ProgramFilesDir', $null, 'DoNotExpandEnvironmentNames')");
     const line = /relay update-deny '(studio-deny-1 [^']+)'/.exec(text)?.[1] as string;
     const u = parseDenyUpdate(line);
     expect(u.deny).toEqual(WANT);
@@ -441,7 +448,71 @@ describe('a deny entry added later holds the start; the --update-deny line fixes
   });
 });
 
+describe('the system folders: HKLM and the kernel, never the environment', () => {
+  it('the function reads HKLM in the 64-bit view, unexpanded, and refuses another drive, Users and a foreign owner', () => {
+    expect(SYSTEM_FOLDERS).toContain('[Microsoft.Win32.RegistryView]::Registry64');
+    expect(SYSTEM_FOLDERS).toContain("GetValue('ProgramFilesDir', $null, $raw)");
+    expect(SYSTEM_FOLDERS).toContain(
+      "[regex]::Replace($k[1], '%SystemDrive%', $drive, 'IgnoreCase')",
+    );
+    expect(SYSTEM_FOLDERS).toContain("$v.StartsWith($drive + '\\Users\\'");
+    expect(SYSTEM_FOLDERS).toContain('$owners -notcontains $owner');
+    expect(SYSTEM_FOLDERS).not.toMatch(/\$env:/);
+    expect(MACHINE_PATH).toContain(`${SYSTEM_FOLDERS}$sys = SystemFolders`);
+  });
+  it('no script of Studio reads a folder from the environment', () => {
+    for (const f of [
+      'relay-windows',
+      'relay-uninstall',
+      'crew-accounts',
+      'relay-lockdown',
+      'windows-sandbox',
+      'relay-command',
+    ]) {
+      const text = readFileSync(join(import.meta.dirname, '..', 'src', `${f}.ts`), 'utf8');
+      expect(text, f).not.toMatch(
+        /\$env:(ProgramFiles|ProgramData|SystemRoot|windir|SystemDrive)\b/i,
+      );
+      expect(text, f).not.toMatch(/GetFolderPath\('(ProgramFiles|CommonApplicationData)'\)/);
+      // Only systemFolders' branch for other platforms (tests on Linux and macOS) reads them.
+      const rest =
+        f === 'windows-sandbox'
+          ? text.replace(/if \(platform !== 'win32'\) \{[\s\S]*?\n {2}\}/, '')
+          : text;
+      expect(rest, f).not.toMatch(/env\.(ProgramFiles|PROGRAMFILES|ProgramData|PROGRAMDATA)\b/);
+    }
+  });
+});
+
 describe.skipIf(process.platform !== 'win32')('the scripts parse in Windows PowerShell', () => {
+  it('SystemFolders gives the same answer under a hostile environment', () => {
+    const hostile = {
+      ...process.env,
+      ProgramFiles: 'C:\\Users\\Public\\fake',
+      ProgramData: 'C:\\Users\\Public\\fake',
+      ALLUSERSPROFILE: 'C:\\Users\\Public\\fake',
+      SystemRoot: 'C:\\Users\\Public\\fake',
+      windir: 'C:\\Users\\Public\\fake',
+      SystemDrive: 'Z:',
+    };
+    const ask = (env: NodeJS.ProcessEnv) =>
+      execFileSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `${SYSTEM_FOLDERS}$f = SystemFolders; [Console]::Out.Write($f.windows + '|' + $f.programFiles + '|' + $f.programData)`,
+        ],
+        { encoding: 'utf8', env },
+      );
+    const real = ask(process.env);
+    expect(ask(hostile)).toBe(real);
+    const f = readSystemFolders();
+    expect(real.toLowerCase()).toBe(
+      `${f.windows}|${f.programFiles}|${f.programData}`.toLowerCase(),
+    );
+  });
   it('Program Files and ProgramData come from the system, whatever the environment says', () => {
     const real = readSystemFolders();
     const keys = [

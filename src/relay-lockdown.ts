@@ -429,7 +429,7 @@ function ConnectAs([string]$name, [string]$sid, [string]$plain, [string[]]$targe
   foreach ($r in @(@('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'), @($sid, 'ReadAndExecute'))) {
     $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($r[0])), $r[1], 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
   }
-  $dir = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ('studio-probe-' + [Guid]::NewGuid().ToString('N'))
+  $dir = Join-Path ($sys.programData) ('studio-probe-' + [Guid]::NewGuid().ToString('N'))
   $null = [IO.Directory]::CreateDirectory($dir, $acl)
   $file = Join-Path $dir 'probe.ps1'
   $out = Join-Path $dir 'out.json'
@@ -439,8 +439,8 @@ function ConnectAs([string]$name, [string]$sid, [string]$plain, [string[]]$targe
     [IO.File]::WriteAllText($file, $script, (New-Object Text.ASCIIEncoding))
     $secure = ConvertTo-SecureString $plain -AsPlainText -Force
     $c = New-Object System.Management.Automation.PSCredential ("$env:COMPUTERNAME\\$name", $secure)
-    $ps = Join-Path ([Environment]::GetFolderPath('Windows')) 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-    $p = Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $file + '"')) -Credential $c -WorkingDirectory ([Environment]::GetFolderPath('Windows')) -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+    $ps = Join-Path ($sys.windows) 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+    $p = Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $file + '"')) -Credential $c -WorkingDirectory ($sys.windows) -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
     if (-not $p.WaitForExit(120000)) { $p.Kill(); throw 'the probe as the throwaway user did not finish' }
     $raw = Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue
     if (-not $raw) { throw "the probe as the throwaway user gave no answer: $(Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)" }
