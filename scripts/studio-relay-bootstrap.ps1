@@ -157,7 +157,9 @@ try {
   }
 } finally {
   # The install copied Studio into its admin-only tree; the download is not needed any more.
-  if (-not $DryRun) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+  # .NET deletes the tree without following a link (a recursive Remove-Item of Windows PowerShell
+  # may); the folder is admin-only, made by this run.
+  if (-not $DryRun -and (Test-Path -LiteralPath $work)) { try { [IO.Directory]::Delete($work, $true) } catch { Write-Output "    note: $work stays: $($_.Exception.Message)" } }
 }
 if ($code -ne 0) { Fail "$shown stopped (exit $code)" 'fix what it said above and run this line again: it repairs' }
 if ($DryRun) { Step 4 'done (dry run: nothing changed)' }
