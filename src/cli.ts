@@ -300,6 +300,7 @@ import {
 } from './usage.js';
 import {
   findClaude,
+  nativeCrewDir,
   setupReadPaths,
   windowsSetupScript,
   windowsWorker,
@@ -3379,6 +3380,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           stdout(
             windowsSetupScript({
               prefix,
+              crewDir: nativeCrewDir(deps.env),
               readPaths: setupReadPaths({
                 node: process.execPath,
                 claude: findClaude(deps.env.PATH ?? deps.env.Path),

@@ -9,6 +9,9 @@
 // budget and says whether the tree is gone, so a huge tree goes away over several calls and never
 // blocks anything. Memory grows with the depth only: the walk keeps the current path and nothing
 // else, and lists a folder anew (its first entries) each time it comes back to it.
+//
+// It also reads the owner of a process (OwnerOf) for the sweeps: null when it cannot be read,
+// which a caller counts as possibly a crew user's.
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -70,11 +73,61 @@ public static class StudioTree {
   static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref TokenPrivilege state, uint length, IntPtr previous, IntPtr returned);
   [DllImport("kernel32.dll")]
   static extern bool CloseHandle(IntPtr h);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+  [DllImport("advapi32.dll", SetLastError = true)]
+  static extern bool GetTokenInformation(IntPtr token, int cls, IntPtr buffer, int length, out int needed);
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool ConvertSidToStringSidW(IntPtr sid, out IntPtr text);
+  [DllImport("kernel32.dll")]
+  static extern IntPtr LocalFree(IntPtr h);
+
+  /** Lets an administrator open every process for its owner; quietly nothing without the right. */
+  public static void Debug() {
+    try { Enable("SeDebugPrivilege"); } catch (Exception) { }
+  }
+
+  /**
+   * The SID of the user a process runs as: "" when the process is gone, null when its owner cannot
+   * be read (a caller must count that as possibly a crew user's).
+   */
+  public static string OwnerOf(int pid) {
+    IntPtr process = OpenProcess(0x1000, false, pid);
+    if (process == IntPtr.Zero) return Marshal.GetLastWin32Error() == 87 ? "" : null;
+    try {
+      IntPtr token;
+      if (!OpenProcessToken(process, 8, out token)) return null;
+      try {
+        int length;
+        GetTokenInformation(token, 1, IntPtr.Zero, 0, out length);
+        if (length <= 0) return null;
+        IntPtr buffer = Marshal.AllocHGlobal(length);
+        try {
+          if (!GetTokenInformation(token, 1, buffer, length, out length)) return null;
+          IntPtr text;
+          if (!ConvertSidToStringSidW(Marshal.ReadIntPtr(buffer), out text)) return null;
+          try {
+            return Marshal.PtrToStringUni(text);
+          } finally {
+            LocalFree(text);
+          }
+        } finally {
+          Marshal.FreeHGlobal(buffer);
+        }
+      } finally {
+        CloseHandle(token);
+      }
+    } finally {
+      CloseHandle(process);
+    }
+  }
 
   /** What one Prune call did: entries deleted, and whether nothing is left to delete. */
   public class PruneResult {
     public long Deleted;
     public bool Done;
+    /** Entries that could not be deleted in this call (\\?\ paths). */
+    public List<string> Failed = new List<string>();
   }
 
   static void Enable(string name) {
@@ -156,7 +209,18 @@ public static class StudioTree {
    * handle per level and the current path, nothing per entry.
    */
   public static PruneResult Prune(string root, long budget, bool keepRoot, Action<string> afterList) {
+    return Prune(root, budget, keepRoot, afterList, null);
+  }
+
+  /**
+   * As above; `skip` names entries (paths as the result reports them) to leave alone: an entry that
+   * cannot be deleted is reported in Failed and skipped for the rest of the call, and a folder that
+   * holds only skipped entries is skipped too, so the walk goes on past them.
+   */
+  public static PruneResult Prune(string root, long budget, bool keepRoot, Action<string> afterList, string[] skip) {
     Privileges();
+    HashSet<string> skipped = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    if (skip != null) foreach (string x in skip) skipped.Add(Long(x));
     StringBuilder path = new StringBuilder(Long(root));
     Stack<int> lengths = new Stack<int>();
     Stack<SafeFileHandle> above = new Stack<SafeFileHandle>();
@@ -169,38 +233,65 @@ public static class StudioTree {
     try {
       while (r.Deleted < budget && steps++ < maxSteps) {
         string p = path.ToString();
-        BasicInfo info = Info(h, p);
         bool atRoot = above.Count == 0;
-        if (!RealFolder(info)) {
-          if (atRoot && keepRoot) throw new InvalidOperationException(root + " is not a plain folder");
-          Delete(h, p, info);
-          r.Deleted++;
+        bool up = false;
+        try {
+          BasicInfo info = Info(h, p);
+          if (!RealFolder(info)) {
+            if (atRoot && keepRoot) throw new InvalidOperationException(root + " is not a plain folder");
+            Delete(h, p, info);
+            r.Deleted++;
+            if (atRoot) { r.Done = true; return r; }
+            up = true;
+          } else {
+            bool sawSkipped;
+            string first = First(h, p, skipped, out sawSkipped);
+            if (afterList != null) afterList(p);
+            if (first == null) {
+              if (atRoot && keepRoot) { r.Done = !sawSkipped; return r; }
+              if (sawSkipped) {
+                // Held by an entry that is left alone: this folder is left alone as well.
+                skipped.Add(p);
+                if (atRoot) return r;
+                up = true;
+              } else {
+                // Something may have appeared since the listing: then the folder is listed again.
+                if (!TryDelete(h, p, info)) continue;
+                r.Deleted++;
+                if (atRoot) { r.Done = true; return r; }
+                up = true;
+              }
+            } else {
+              string childPath = p + "\\" + first;
+              SafeFileHandle child;
+              try {
+                child = OpenIn(h, first, p);
+              } catch (Win32Exception) {
+                r.Failed.Add(childPath);
+                skipped.Add(childPath);
+                continue;
+              }
+              // Gone since the listing: list again.
+              if (child == null) continue;
+              above.Push(h);
+              lengths.Push(path.Length);
+              path.Append('\\').Append(first);
+              h = child;
+              continue;
+            }
+          }
+        } catch (Win32Exception) {
+          // This entry cannot be deleted now: reported, and left alone for the rest of the call.
+          r.Failed.Add(p);
+          skipped.Add(p);
+          if (atRoot) return r;
+          up = true;
+        }
+        if (up) {
           h.Dispose();
-          if (atRoot) { h = null; r.Done = true; return r; }
           h = above.Pop();
           path.Length = lengths.Pop();
-          continue;
         }
-        string first = First(h, p);
-        if (afterList != null) afterList(p);
-        if (first == null) {
-          if (atRoot && keepRoot) { r.Done = true; return r; }
-          // Something may have appeared since the listing: then the folder is listed again.
-          if (!TryDelete(h, p, info)) continue;
-          r.Deleted++;
-          h.Dispose();
-          if (atRoot) { h = null; r.Done = true; return r; }
-          h = above.Pop();
-          path.Length = lengths.Pop();
-          continue;
-        }
-        SafeFileHandle child = OpenIn(h, first, p);
-        // Gone since the listing: list again.
-        if (child == null) continue;
-        above.Push(h);
-        lengths.Push(path.Length);
-        path.Append('\\').Append(first);
-        h = child;
       }
       return r;
     } finally {
@@ -259,7 +350,8 @@ public static class StudioTree {
   }
 
   /** The first entry of a folder, from its start; null when it is empty. */
-  static string First(SafeFileHandle h, string p) {
+  static string First(SafeFileHandle h, string p, HashSet<string> skipped, out bool sawSkipped) {
+    sawSkipped = false;
     IntPtr buffer = Marshal.AllocHGlobal(4096);
     try {
       int cls = FILE_FULL_DIRECTORY_RESTART_INFO;
@@ -276,7 +368,10 @@ public static class StudioTree {
           int next = Marshal.ReadInt32(entry, 0);
           int length = Marshal.ReadInt32(entry, 60);
           string name = Marshal.PtrToStringUni(IntPtr.Add(entry, 68), length / 2);
-          if (name != "." && name != "..") return name;
+          if (name != "." && name != "..") {
+            if (skipped.Count > 0 && skipped.Contains(p + "\\" + name)) sawSkipped = true;
+            else return name;
+          }
           if (next == 0) break;
           offset += next;
         }

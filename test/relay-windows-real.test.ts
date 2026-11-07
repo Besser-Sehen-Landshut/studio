@@ -15,7 +15,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { crewAccountFunctions, TREE_SOURCE } from '../src/crew-accounts.js';
+import { CREW_ACCOUNT_BODY, crewAccountFunctions, TREE_SOURCE } from '../src/crew-accounts.js';
 import { systemSpawnRunner } from '../src/relay-serve.js';
 import { FOLDER_FUNCTIONS } from '../src/relay-windows.js';
 import { machineTreeProblem } from '../src/relay-windows-check.js';
@@ -138,7 +138,7 @@ describe.skipIf(!on)('retiring crew users, step by step per user (stand-ins for 
   /** RetireJobUsers with every step that touches Windows replaced by a stand-in that logs. */
   const retire = (o: { leftSids: string[]; failMove?: string }) => {
     const script = `$ErrorActionPreference = 'Stop'
-${crewAccountFunctions('p')}
+${crewAccountFunctions('p', { treeSource: TREE_SOURCE() })}
 $log = New-Object Collections.Generic.List[string]
 $script:retired = @()
 function U($n, $s) { [pscustomobject]@{ Name = $n; SID = [pscustomobject]@{ Value = $s } } }
@@ -192,6 +192,83 @@ ConvertTo-Json -Compress -Depth 4 @{ log = @($log); retired = @($script:retired)
     expect(r.problems.join('\n')).toContain('p-aaaaaa: its profile stays where it is, kept: busy');
   }, 60_000);
 });
+
+describe.skipIf(!(on && process.env.STUDIO_WINDOWS_SANDBOX_TEST === '1'))(
+  'the broker loads only what it was made with, and pruning gets past what it cannot delete',
+  () => {
+    const q = (p: string) => `'${p.replace(/'/g, "''")}'`;
+    const run = (script: string) =>
+      execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+        encoding: 'utf8',
+        env: powershellEnv(process.env),
+      }).trim();
+
+    it('runs the functions only when their SHA-256 is the one baked into the task', () => {
+      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'studio-body-')));
+      const file = join(dir, 'crew-accounts.ps1');
+      const places = { treeSource: TREE_SOURCE(), bodyFile: file };
+      writeFileSync(file, CREW_ACCOUNT_BODY);
+      expect(
+        run(
+          `$ErrorActionPreference = 'Stop'\n${crewAccountFunctions('p', places)}\n[Console]::Out.Write([bool](Get-Command RetireJobUsers -ErrorAction SilentlyContinue))`,
+        ),
+      ).toBe('True');
+      writeFileSync(file, `${CREW_ACCOUNT_BODY}\nfunction Evil { }\n`);
+      expect(() =>
+        run(`$ErrorActionPreference = 'Stop'\n${crewAccountFunctions('p', places)}`),
+      ).toThrow(/are not the ones this task was made with/);
+    }, 60_000);
+
+    it('reports an entry it cannot delete, leaves it alone when told, and goes on past it', () => {
+      const base = realpathSync(mkdtempSync(join(tmpdir(), 'studio-stuck-')));
+      const tree = join(base, 'tree');
+      mkdirSync(join(tree, 'a'), { recursive: true });
+      mkdirSync(join(tree, 'b'), { recursive: true });
+      writeFileSync(join(tree, 'a', 'locked.txt'), 'x');
+      writeFileSync(join(tree, 'b', 'free.txt'), 'x');
+      const locked = `\\\\?\\${join(tree, 'a', 'locked.txt')}`;
+      const out = run(`$ErrorActionPreference = 'Stop'; Add-Type -Path ${q(TREE_SOURCE())}
+$hold = [IO.File]::Open(${q(join(tree, 'a', 'locked.txt'))}, 'Open', 'Read', 'None')
+$one = [StudioTree]::Prune(${q(tree)}, 1000, $false, $null)
+$two = [StudioTree]::Prune(${q(tree)}, 1000, $false, $null, [string[]]@($one.Failed))
+$hold.Dispose()
+$three = [StudioTree]::Prune(${q(tree)}, 1000, $false, $null)
+ConvertTo-Json -Compress @{ one = @($one.Failed); oneDone = $one.Done; twoFailed = @($two.Failed); twoDone = $two.Done; threeDone = $three.Done }`);
+      const r = JSON.parse(out) as {
+        one: string[];
+        oneDone: boolean;
+        twoFailed: string[];
+        twoDone: boolean;
+        threeDone: boolean;
+      };
+      expect(r.one).toEqual([locked]);
+      expect(r.oneDone).toBe(false);
+      // Told to leave it: no failure, and everything else is gone.
+      expect(r.twoFailed).toEqual([]);
+      expect(r.twoDone).toBe(false);
+      expect(existsSync(join(tree, 'b'))).toBe(false);
+      expect(r.threeDone).toBe(true);
+      expect(existsSync(tree)).toBe(false);
+    }, 60_000);
+
+    it('counts the runs an entry failed and names it once it is left alone', () => {
+      const base = realpathSync(mkdtempSync(join(tmpdir(), 'studio-track-')));
+      const stuck = join(base, 'stuck.bin');
+      writeFileSync(stuck, 'x');
+      const out = run(`$ErrorActionPreference = 'Stop'
+${crewAccountFunctions('p', { treeSource: TREE_SOURCE() })}
+function Quarantine { ${q(base)} }
+$path = '\\\\?\\' + ${q(stuck)}
+$runs = @()
+for ($i = 0; $i -lt 3; $i++) { $runs += ,@(TrackStuck (ReadStuck) @($path)) }
+ConvertTo-Json -Compress -Depth 3 @{ runs = $runs; counted = (ReadStuck)[$path] }`);
+      const r = JSON.parse(out) as { runs: unknown[]; counted: number };
+      expect(r.counted).toBe(3);
+      expect(JSON.stringify(r.runs[0])).not.toContain('stuck.bin');
+      expect(JSON.stringify(r.runs[2])).toContain('stuck.bin');
+    }, 60_000);
+  },
+);
 
 describe.skipIf(!on)('the PowerShell of the crew user on Windows', () => {
   it('loads core modules from $PSHOME only, whatever PSModulePath it was given', async () => {

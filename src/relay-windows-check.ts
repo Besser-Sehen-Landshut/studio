@@ -206,6 +206,11 @@ export function relayWindows(o: {
         // What retiring the last crew users left to say: doctor shows it.
         for (const line of account.notes?.problems ?? [])
           warnings.push(`retiring a crew user: ${line}`);
+        for (const path of account.notes?.stuck ?? []) {
+          warnings.push(
+            `the quarantine cannot delete ${path}; it is left alone: delete it by hand`,
+          );
+        }
         const waiting = account.notes?.quarantined ?? 0;
         if (waiting !== 0) {
           warnings.push(

@@ -19,6 +19,7 @@ import { relayTargetSchema } from '../src/config.js';
 import {
   brokerCrewAccounts,
   CREW_ACCOUNT_BODY,
+  CREW_ACCOUNT_BODY_SHA256,
   GIT_MIN_CHECK,
   RELAY_SID_SLOT,
 } from '../src/crew-accounts.js';
@@ -811,9 +812,22 @@ describe('the Windows relay worker, with fakes', () => {
     expect(script).toContain(`.Replace('${RELAY_SID_SLOT}', $relaySid)`);
     // The brokers load their functions from the admin-only broker folder, which the setup fills.
     expect(script).toContain(Buffer.from(CREW_ACCOUNT_BODY, 'utf8').toString('base64'));
-    expect(brokerScript({ op: 'sweep', prefix: 'studio-crew', machine })).toContain(
-      `. ([ScriptBlock]::Create([IO.File]::ReadAllText('${machine}\\broker\\crew-accounts.ps1')))`,
+    // They run exactly the bytes they hashed, and only with the SHA-256 the task was made with.
+    const sweep = brokerScript({ op: 'sweep', prefix: 'studio-crew', machine });
+    expect(sweep).toContain(
+      `$bodyBytes = [IO.File]::ReadAllBytes('${machine}\\broker\\crew-accounts.ps1')`,
     );
+    expect(sweep).toContain(`if ($bodyHash -ne '${CREW_ACCOUNT_BODY_SHA256()}')`);
+    expect(sweep).toContain(
+      '. ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($bodyBytes)))',
+    );
+    expect(sweep.indexOf('$bodyHash -ne')).toBeLessThan(sweep.indexOf('[ScriptBlock]::Create'));
+    // The tree deleter comes from the admin-only copy, its compiler writes in broker\tmp.
+    expect(sweep).toContain(`$treeTemp = '${machine}\\broker\\tmp'`);
+    expect(script).toContain(`$treeSource = '${machine}\\studio\\bin\\studio-tree.cs'`);
+    expect(script).not.toContain(`$treeSource = 'C:\\plugins`);
+    expect(script.indexOf('& robocopy.exe')).toBeLessThan(script.indexOf('$null = RetireJobUsers'));
+    expect(script).toContain("StrictFolder (Join-Path $machine 'broker\\tmp') @()");
     // The brokers load the tree deleter from the admin-only copy of Studio only.
     expect(brokerScript({ op: 'retire', prefix: 'studio-crew', machine })).toContain(
       `$treeSource = '${machine}\\studio\\bin\\studio-tree.cs'`,

@@ -20,9 +20,11 @@ import {
   type CrewAccount,
   type CrewAccounts,
   crewAccountFunctions,
-  crewGroupSetup,
+  crewGroupFinish,
+  crewGroupMake,
   GIT_MIN_CHECK,
   localCrewAccounts,
+  TREE_SOURCE,
 } from './crew-accounts.js';
 import { ipv4, LOOPBACK } from './egress-proxy.js';
 import { HeldError } from './held.js';
@@ -34,6 +36,7 @@ import {
   writeStateFile,
 } from './paths.js';
 import type { Claude } from './ports.js';
+import { FOLDER_FUNCTIONS } from './relay-windows.js';
 
 /**
  * The crew sandbox of a worker on native Windows.
@@ -124,6 +127,17 @@ export function windowsCrewEnv(o: {
   };
 }
 
+/**
+ * The admin-only folder of a native worker's crew users: the copy of the tree deleter the setup
+ * makes and the elevated worker compiles, and the folder its compiler writes in.
+ */
+export const nativeCrewDir = (env: Record<string, string | undefined>): string =>
+  join(env.ProgramFiles ?? env.PROGRAMFILES ?? 'C:\\Program Files', 'Studio crew');
+export const nativeCrewPlaces = (crewDir: string): { treeSource: string; treeTemp: string } => ({
+  treeSource: join(crewDir, 'studio-tree.cs'),
+  treeTemp: join(crewDir, 'tmp'),
+});
+
 /** A PowerShell single-quoted string literal. */
 export function psQuote(s: string): string {
   if (/[\p{Cc}]/u.test(s)) throw new Error(`refusing a control character in ${JSON.stringify(s)}`);
@@ -135,11 +149,14 @@ export function psQuote(s: string): string {
  * crew users with what every crew user gets through it (crew-accounts.ts): the outbound firewall
  * rule, the denied logons, and read on `readPaths` (toolchains, the Studio plugin, Claude Code, the
  * skills and plugins of the crew Claude config dir). The users themselves are made per job and
- * deleted after it, by the worker, which runs elevated. Idempotent; it takes away the shared crew
- * user of earlier versions.
+ * deleted after it, by the worker, which runs elevated. The tree deleter they need is copied into
+ * an admin-only folder (`crewDir`), and compiled only from there, its temporary files in an
+ * admin-only folder too. Idempotent; it takes away the shared crew user of earlier versions.
  */
 export function windowsSetupScript(o: {
   prefix: string;
+  /** The admin-only folder of the native worker's crew users (`nativeCrewDir`). */
+  crewDir: string;
   readPaths: readonly string[];
   /** Places an earlier setup may have opened for writing (the crew Claude config dir): closed first. */
   revokePaths?: readonly string[];
@@ -152,7 +169,7 @@ export function windowsSetupScript(o: {
 # Studio: the crew users of this Windows worker. Run once in an elevated Windows PowerShell
 # (powershell.exe). Nothing here leaves this machine.
 $ErrorActionPreference = 'Stop'
-${GIT_MIN_CHECK}${crewAccountFunctions(o.prefix)}
+${GIT_MIN_CHECK}${FOLDER_FUNCTIONS}${crewAccountFunctions(o.prefix, nativeCrewPlaces(o.crewDir))}
 # An earlier setup opened the crew Claude config dir for writing: that grant goes, all the way down.
 foreach ($p in ${list(o.revokePaths ?? [])}) {
   if (Test-Path -LiteralPath $p) {
@@ -162,7 +179,14 @@ foreach ($p in ${list(o.revokePaths ?? [])}) {
   }
 }
 $readPaths = ${list(o.readPaths)}
-${crewGroupSetup()}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
+${crewGroupMake()}# The tree deleter, copied into a folder only administrators may change, with its compiler's
+# temporary folder: the elevated worker compiles it only from there.
+$crewDir = ${psQuote(o.crewDir)}
+SafeFolder $crewDir (Split-Path -Parent $crewDir)
+StrictFolder $crewDir @()
+StrictFolder (Join-Path $crewDir 'tmp') @()
+Copy-Item -LiteralPath ${psQuote(TREE_SOURCE())} -Destination (Join-Path $crewDir 'studio-tree.cs') -Force
+${crewGroupFinish()}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
 `;
 }
 
@@ -335,6 +359,9 @@ function readGrantRecord(ownerRoot: string): GrantRecord {
         ? {
             problems: n.problems.filter((x): x is string => typeof x === 'string'),
             ...(typeof n.quarantined === 'number' ? { quarantined: n.quarantined } : {}),
+            ...(Array.isArray(n.stuck)
+              ? { stuck: n.stuck.filter((x): x is string => typeof x === 'string') }
+              : {}),
           }
         : undefined;
     const account =
@@ -1311,6 +1338,7 @@ export async function windowsWorker(o: {
       credFile: credFileIn(o.ownerConfigDir),
       run,
       reader: async () => (await ownerSid(run)).slice(1),
+      ...nativeCrewPlaces(nativeCrewDir(o.env)),
     });
   const grants = new WindowsGrants({ ownerRoot: o.ownerRoot, accounts, run });
   return {

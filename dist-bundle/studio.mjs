@@ -7852,9 +7852,9 @@ import { dirname as dirname21, join as join64, resolve as resolve15 } from "node
 import { parseArgs } from "node:util";
 
 // src/acceptance.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 import { lstatSync as lstatSync37, readFileSync as readFileSync43 } from "node:fs";
-import { join as join44 } from "node:path";
+import { join as join45 } from "node:path";
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -32052,7 +32052,7 @@ import {
   rmSync as rmSync8,
   writeFileSync as writeFileSync14
 } from "node:fs";
-import { join as join41 } from "node:path";
+import { join as join42 } from "node:path";
 
 // src/capacity.ts
 var DEFAULT_TIMEOUT_MS = 3e4;
@@ -32186,7 +32186,7 @@ async function capacityHoldsTwice(config2, ports, options = {}) {
 var import_yaml13 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync38, realpathSync as realpathSync10, statSync as statSync6 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
-import { join as join39 } from "node:path";
+import { join as join40 } from "node:path";
 
 // src/account-command.ts
 import { chmodSync as chmodSync4, existsSync as existsSync4, mkdirSync as mkdirSync4 } from "node:fs";
@@ -35810,7 +35810,7 @@ async function cacheCleanup(o2) {
 
 // src/clone-gc.ts
 import { lstatSync as lstatSync25, readdirSync as readdirSync12, readFileSync as readFileSync29 } from "node:fs";
-import { join as join30 } from "node:path";
+import { join as join31 } from "node:path";
 
 // src/crew.ts
 import {
@@ -35825,7 +35825,7 @@ import {
   writeFileSync as writeFileSync10
 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
-import { basename as basename4, dirname as dirname11, join as join29, resolve as resolve7, sep as sep6 } from "node:path";
+import { basename as basename4, dirname as dirname11, join as join30, resolve as resolve7, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/analyzer-timeout.ts
@@ -39569,10 +39569,11 @@ import {
   rmdirSync,
   unlinkSync as unlinkSync5
 } from "node:fs";
-import { dirname as dirname10, join as join28, resolve as resolve6, sep as sep5 } from "node:path";
+import { dirname as dirname10, join as join29, resolve as resolve6, sep as sep5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/crew-accounts.ts
+import { createHash as createHash4 } from "node:crypto";
 import { dirname as dirname9, join as join26 } from "node:path";
 var PRUNE_BUDGET = 2e4;
 var TREE_SOURCE = () => join26(dirname9(CREW_HOST_BIN), "studio-tree.cs");
@@ -39585,13 +39586,19 @@ var prefixOf = (prefix) => {
   }
   return prefix;
 };
-var crewAccountFunctions = (prefix, treeSource = TREE_SOURCE(), pruneBudget = PRUNE_BUDGET, bodyFile) => `$prefix = ${psQuote(prefixOf(prefix))}
-$treeSource = ${psQuote(treeSource)}
-$pruneBudget = ${Math.max(1, Math.trunc(pruneBudget))}
+var crewAccountFunctions = (prefix, o2) => `$prefix = ${psQuote(prefixOf(prefix))}
+$treeSource = ${psQuote(o2.treeSource)}
+$treeTemp = ${psQuote(o2.treeTemp ?? "")}
+$pruneBudget = ${Math.max(1, Math.trunc(o2.pruneBudget ?? PRUNE_BUDGET))}
 $crewDescription = ${psQuote(CREW_DESCRIPTION)}
 $groupDescription = ${psQuote(GROUP_DESCRIPTION)}
-${bodyFile === void 0 ? CREW_ACCOUNT_BODY : `. ([ScriptBlock]::Create([IO.File]::ReadAllText(${psQuote(bodyFile)})))
-`}`;
+${o2.bodyFile === void 0 ? CREW_ACCOUNT_BODY : bodyLoader(o2.bodyFile)}`;
+var CREW_ACCOUNT_BODY_SHA256 = () => createHash4("sha256").update(CREW_ACCOUNT_BODY, "utf8").digest("hex").toUpperCase();
+var bodyLoader = (file4) => `$bodyBytes = [IO.File]::ReadAllBytes(${psQuote(file4)})
+$bodyHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bodyBytes)).Replace('-', '')
+if ($bodyHash -ne '${CREW_ACCOUNT_BODY_SHA256()}') { throw "the functions in ${file4.replace(/"/g, "")} are not the ones this task was made with (SHA-256 $bodyHash): run studio relay install again, elevated" }
+. ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($bodyBytes)))
+`;
 var CREW_ACCOUNT_BODY = String.raw`function CrewGroup {
   $g = Get-LocalGroup -Name ($prefix + 's') -ErrorAction SilentlyContinue
   if ($null -eq $g) { throw "there is no group $($prefix)s: run the setup script of Studio again, elevated" }
@@ -39612,13 +39619,20 @@ function JobUsers {
   }
   @(Get-LocalUser | Where-Object { $_.Name -match $re -and $_.Description -eq $crewDescription })
 }
-# The processes of these SIDs, each with its owner.
+# The processes of these SIDs, each with its owner. A process whose owner cannot be read could be a
+# crew user's: it is listed as such (Unreadable), never left out. The minimal processes of the
+# kernel (pid 0 and 4, and those pid 4 started) have no owner to read.
 function Owned([string[]]$sids) {
+  LoadTree
+  [StudioTree]::Debug()
   @(Get-CimInstance Win32_Process | ForEach-Object {
-    try {
-      $o = (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid
-      if ($sids -contains $o) { [pscustomobject]@{ Id = [int]$_.ProcessId; Sid = $o } }
-    } catch { }
+    $id = [int]$_.ProcessId
+    $o = [StudioTree]::OwnerOf($id)
+    if ($null -eq $o) {
+      if (@(0, 4) -notcontains $id -and [int]$_.ParentProcessId -ne 4) { [pscustomobject]@{ Id = $id; Sid = ''; Name = [string]$_.Name; Unreadable = $true } }
+    } elseif ($sids -contains $o) {
+      [pscustomobject]@{ Id = $id; Sid = $o; Name = [string]$_.Name; Unreadable = $false }
+    }
   })
 }
 # The SIDs of deleted crew users whose processes were not yet seen gone (in the quarantine folder,
@@ -39634,18 +39648,30 @@ function WriteRetired([string[]]$sids) { Set-Content -LiteralPath (RetiredFile) 
 function SweepJobUsers {
   $retired = @(ReadRetired)
   $sids = @(@(JobUsers | ForEach-Object { $_.SID.Value }) + $retired | Select-Object -Unique)
-  if ($sids.Count -eq 0) { return @{ found = 0; left = @(); leftSids = @() } }
-  $found = Owned $sids
+  if ($sids.Count -eq 0) { return @{ found = 0; left = @(); leftSids = @(); leftNames = @() } }
+  $found = @(Owned $sids | Where-Object { -not $_.Unreadable })
   foreach ($p in $found) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
   if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }
-  $after = Owned $sids
-  $leftSids = @($after | ForEach-Object { $_.Sid } | Select-Object -Unique)
+  $after = @(Owned $sids)
+  # A process of an owner that cannot be read may be any crew user's: it holds them all.
+  $leftSids = if (@($after | Where-Object { $_.Unreadable }).Count -gt 0) { $sids } else { @($after | ForEach-Object { $_.Sid } | Select-Object -Unique) }
   # A retired SID with nothing left needs no more watching: no logon can start one again.
   $keep = @($retired | Where-Object { $leftSids -contains $_ })
   if ($keep.Count -ne $retired.Count) { WriteRetired $keep }
-  @{ found = $found.Count; left = @($after | ForEach-Object { $_.Id }); leftSids = $leftSids }
+  @{ found = $found.Count; left = @($after | ForEach-Object { $_.Id }); leftSids = $leftSids; leftNames = @($after | ForEach-Object { if ($_.Unreadable) { "$($_.Id) $($_.Name) (owner unreadable)" } else { "$($_.Id) $($_.Name)" } }) }
 }
-function LoadTree { if (-not ('StudioTree' -as [type])) { Add-Type -Path $treeSource } }
+# The tree deleter, compiled from an admin-only copy, its temporary files in an admin-only folder:
+# SYSTEM's own TEMP takes files of other users too.
+function LoadTree {
+  if ('StudioTree' -as [type]) { return }
+  if ($treeTemp) {
+    $t = Get-Item -LiteralPath $treeTemp -Force -ErrorAction SilentlyContinue
+    if ($null -eq $t -or ($t.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "$treeTemp is missing or a reparse point: run the setup of Studio again, elevated" }
+    $env:TEMP = $treeTemp
+    $env:TMP = $treeTemp
+  }
+  Add-Type -Path $treeSource
+}
 function ProfileRoot {
   $list = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
   [Environment]::ExpandEnvironmentVariables($list.ProfilesDirectory).TrimEnd('\')
@@ -39706,6 +39732,30 @@ function QuarantineProfile($u, [string]$q) {
   $key = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $sid
   if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
 }
+# Entries of the quarantine that could not be deleted, with the number of runs in a row they failed
+# (admin-only, in the quarantine). One that failed $stuckRuns times is left alone from then on and
+# named to doctor; pruning goes on past it.
+$stuckRuns = 3
+function StuckFile { Join-Path (Quarantine) 'stuck.txt' }
+function ReadStuck {
+  $f = StuckFile
+  $map = @{}
+  if (Test-Path -LiteralPath $f) {
+    foreach ($line in @(Get-Content -LiteralPath $f)) {
+      $at = $line.IndexOf([char]9)
+      if ($at -gt 0) { $map[$line.Substring($at + 1)] = [int]$line.Substring(0, $at) }
+    }
+  }
+  $map
+}
+# Counts this run's failures on, keeps entries that still exist, and returns those now left alone.
+function TrackStuck($stuck, [string[]]$failed) {
+  $next = @{}
+  foreach ($k in $stuck.Keys) { if ([IO.Directory]::Exists($k) -or [IO.File]::Exists($k)) { $next[$k] = $stuck[$k] } }
+  foreach ($f in $failed) { $next[$f] = 1 + $(if ($next.ContainsKey($f)) { $next[$f] } else { 0 }) }
+  Set-Content -LiteralPath (StuckFile) -Value @($next.Keys | ForEach-Object { "$($next[$_])" + [char]9 + $_ }) -Encoding UTF8
+  @($next.Keys | Where-Object { $next[$_] -ge $stuckRuns } | ForEach-Object { $_ -replace '^\\\\\?\\', '' })
+}
 # Retiring a crew user never waits for its profile to be deleted. Per user, each step runs only when
 # the one before it held: lock it, see none of its processes left, move its profile into the
 # quarantine, see none of its processes left once more, list its SID as retired, delete the
@@ -39739,18 +39789,21 @@ function RetireJobUsers {
       $gone += $u.Name
     } catch { $problems += "$($u.Name): cannot delete it, kept: $($_.Exception.Message)" }
   }
-  $quarantine = @{ trees = 0; pruned = 0; done = $false }
+  $quarantine = @{ trees = 0; pruned = 0; done = $false; stuck = @() }
   if ($null -ne $q) {
     $trees = Join-Path $q 'trees'
     try {
-      $r = [StudioTree]::Prune($trees, $pruneBudget, $true, $null)
+      $stuck = ReadStuck
+      $skip = @($stuck.Keys | Where-Object { $stuck[$_] -ge $stuckRuns })
+      $r = [StudioTree]::Prune($trees, $pruneBudget, $true, $null, [string[]]$skip)
       $quarantine.pruned = $r.Deleted
       $quarantine.done = $r.Done
+      $quarantine.stuck = @(TrackStuck $stuck @($r.Failed))
     } catch { $problems += "the quarantine: $($_.Exception.Message)" }
     try { $quarantine.trees = @(Get-ChildItem -LiteralPath $trees -Force -ErrorAction Stop).Count } catch { $quarantine.trees = -1 }
   }
   # Every process still running of a crew user, kept or retired: a fresh user waits for none.
-  @{ removed = $gone; problems = $problems; left = @($s2.left); quarantine = $quarantine }
+  @{ removed = $gone; problems = $problems; left = @($s2.left); leftNames = @($s2.leftNames); quarantine = $quarantine }
 }
 function NewSecret { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b) + 'aA1!' }
 # The password, sealed for this machine, in a file only SYSTEM, administrators and the reader read:
@@ -39795,6 +39848,7 @@ var RETIRE_BODY = [
   "  $out.removed = @($r.removed)",
   "  $out.problems = @($r.problems)",
   "  $out.left = @($r.left)",
+  "  $out.leftNames = @($r.leftNames)",
   "  $out.quarantine = $r.quarantine"
 ].join("\n");
 var RELAY_SID_SLOT = "__STUDIO_RELAY_SID__";
@@ -39806,7 +39860,7 @@ function crewAccountScript(o2) {
     throw new Error(`not a SID: ${o2.reader}`);
   }
   const reader = o2.reader === "$relaySid" ? `'${RELAY_SID_SLOT}'` : psQuote(o2.reader ?? "");
-  const body = o2.op === "sweep" ? "  $s = SweepJobUsers\n  $out.found = $s.found\n  $out.left = $s.left" : o2.op === "retire" ? RETIRE_BODY : `${RETIRE_BODY}
+  const body = o2.op === "sweep" ? "  $s = SweepJobUsers\n  $out.found = $s.found\n  $out.left = @($s.left)\n  $out.leftNames = @($s.leftNames)" : o2.op === "retire" ? RETIRE_BODY : `${RETIRE_BODY}
   if (@($out.left).Count -eq 0) {
     $n = NewJobUser ${psQuote(o2.credFile ?? "")} ${reader}
     $out.user = $n.user
@@ -39816,7 +39870,7 @@ function crewAccountScript(o2) {
   return `$ErrorActionPreference = 'Stop'
 $out = @{ op = ${psQuote(o2.op)}; at = (Get-Date).ToUniversalTime().ToString('o') }
 try {
-${crewAccountFunctions(o2.prefix, o2.treeSource ?? TREE_SOURCE(), o2.pruneBudget ?? PRUNE_BUDGET, o2.bodyFile)}
+${crewAccountFunctions(o2.prefix, o2.places)}
 ${body}
 } catch {
   $out.error = $_.Exception.Message
@@ -39835,11 +39889,16 @@ function judgeCrewAnswer(op, answer2) {
   if (left === void 0 || !left.every((n4) => Number.isInteger(n4))) return void 0;
   const problems = (list2(a2.problems) ?? []).filter((x) => typeof x === "string").map((x) => x.slice(0, 300)).slice(0, 20);
   const q = a2.quarantine;
+  const stuck = (list2(q?.stuck) ?? []).filter((x) => typeof x === "string").map((x) => x.slice(0, 500)).slice(0, 20);
   const notes = {
     problems,
-    ...typeof q?.trees === "number" && Number.isInteger(q.trees) ? { quarantined: q.trees } : {}
+    ...typeof q?.trees === "number" && Number.isInteger(q.trees) ? { quarantined: q.trees } : {},
+    ...stuck.length > 0 ? { stuck } : {}
   };
-  if (op !== "fresh" || left.length > 0) return { left, notes };
+  const names = (list2(a2.leftNames) ?? []).filter((x) => typeof x === "string").map((x) => x.slice(0, 200)).slice(0, 10);
+  if (op !== "fresh" || left.length > 0) {
+    return { left, ...names.length > 0 ? { names } : {}, notes };
+  }
   if (typeof a2.user !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,12}-[0-9a-f]{6}$/.test(a2.user) || typeof a2.sid !== "string" || !/^S-1-5-21(-\d+)+$/.test(a2.sid)) {
     return void 0;
   }
@@ -39850,8 +39909,9 @@ function settle2(op, raw, where) {
   if (j === void 0) throw new Error(`${where} answered in an unknown shape`);
   if ("error" in j) throw new Error(`${where} could not ${op} the crew users: ${j.error}`);
   if ("left" in j && j.left.length > 0) {
+    const which = "names" in j && j.names !== void 0 ? j.names.join(", ") : j.left.join(", ");
     throw new Error(
-      `processes of the crew users are still running (${j.left.join(", ")}) and ${where} cannot end them`
+      `processes of the crew users (or of an owner that cannot be read) are still running (${which}) and ${where} cannot end them`
     );
   }
   return "account" in j ? { account: j.account, notes: j.notes } : { notes: j.notes };
@@ -39875,7 +39935,11 @@ function localCrewAccounts(o2) {
     const script = crewAccountScript({
       op,
       prefix: o2.prefix,
-      ...o2.pruneBudget === void 0 ? {} : { pruneBudget: o2.pruneBudget },
+      places: {
+        treeSource: o2.treeSource,
+        treeTemp: o2.treeTemp,
+        ...o2.pruneBudget === void 0 ? {} : { pruneBudget: o2.pruneBudget }
+      },
       ...op === "fresh" ? { credFile: o2.credFile, reader: await o2.reader() } : {}
     });
     const elevated2 = `if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { [Console]::Out.Write('{"notElevated":true}'); exit 0 }
@@ -39959,19 +40023,21 @@ function brokerCrewAccounts(o2) {
     exists: (sid) => crewUserExists(o2.run, sid)
   };
 }
-var crewGroupSetup = () => `# Studio's group of crew users: every crew user is made in it for one job and deleted after.
+var crewGroupMake = () => `# Studio's group of crew users: every crew user is made in it for one job and deleted after.
 $group = Get-LocalGroup -Name ($prefix + 's') -ErrorAction SilentlyContinue
 if ($null -eq $group) { $group = New-LocalGroup -Name ($prefix + 's') -Description $groupDescription }
 elseif ($group.Description -ne $groupDescription) { throw "a group $($group.Name) exists and is not Studio's: remove it or choose another crew_user prefix" }
 $groupSid = $group.SID.Value
-# The shared crew user of earlier versions goes, with what it left.
+`;
+var crewGroupFinish = () => `# The shared crew user of earlier versions goes, with what it left.
 $old = Get-LocalUser -Name $prefix -ErrorAction SilentlyContinue
 if ($null -ne $old -and $old.Description -eq 'Studio crew sandbox') {
   LoadTree
   LockJobUser $old
-  foreach ($p in @(Owned @($old.SID.Value))) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+  foreach ($p in @(Owned @($old.SID.Value) | Where-Object { -not $_.Unreadable })) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
   Start-Sleep -Milliseconds 800
-  if (@(Owned @($old.SID.Value)).Count -gt 0) { throw "processes of the old crew user $prefix are still running: end them, then run this again" }
+  $oldLeft = @(Owned @($old.SID.Value))
+  if ($oldLeft.Count -gt 0) { throw "processes of the old crew user $prefix may still run ($(@($oldLeft | ForEach-Object { "$($_.Id) $($_.Name)" }) -join ', ')): end them, then run this again" }
   QuarantineProfile $old (Join-Path (Quarantine) 'trees')
   WriteRetired (@(@(ReadRetired) + $old.SID.Value | Select-Object -Unique))
   Remove-LocalUser -SID $old.SID
@@ -40500,6 +40566,479 @@ async function startEgressProxy(o2) {
   };
 }
 
+// src/relay-windows.ts
+import { posix as posix2, win32 } from "node:path";
+var join28 = (...parts) => parts[0]?.startsWith("/") === true ? posix2.join(...parts) : win32.join(...parts);
+var relayHomeDefault = (env) => join28(env.ProgramData ?? env.PROGRAMDATA ?? "C:\\ProgramData", "Studio", "relay");
+var relayMachineDefault = (env) => join28(env.ProgramFiles ?? env.PROGRAMFILES ?? "C:\\Program Files", "Studio", "relay");
+var machineCredFile = (machine) => join28(machine, "crew-credential.bin");
+var brokerResultFiles = (machine) => ({
+  sweep: join28(machine, "broker", "answer.json"),
+  retire: join28(machine, "broker", "retire.json"),
+  fresh: join28(machine, "broker", "fresh.json")
+});
+var brokerPlaces = (machine) => ({
+  treeSource: join28(machineStudio(machine), "bin", "studio-tree.cs"),
+  treeTemp: join28(machine, "broker", "tmp"),
+  bodyFile: brokerBodyFile(machine)
+});
+var brokerBodyFile = (machine) => join28(machine, "broker", "crew-accounts.ps1");
+var brokerTasks = (task) => ({
+  sweep: task,
+  retire: `${task} retire`,
+  fresh: `${task} fresh`
+});
+var authorizedKeysFile = (machine) => join28(machine, "authorized_keys");
+var machineNode = (machine) => join28(machine, "node", "node.exe");
+var machineStudio = (machine) => join28(machine, "studio");
+var machineStudioBin = (machine) => join28(machine, "studio", "bin", "studio");
+var machineConfig = (machine) => join28(machine, "config");
+var forcedCommand = (machine, home) => `"${machineNode(machine)}" "${machineStudioBin(machine)}" relay serve --home "${home}"`;
+function sshdMatchBlock(o2) {
+  const keys2 = authorizedKeysFile(o2.machine).replace(/\\/g, "/");
+  return [
+    `Match User ${o2.relayUser}`,
+    `    AuthorizedKeysFile "${keys2}"`,
+    `    ForceCommand ${o2.command}`,
+    "    ExposeAuthInfo yes",
+    "    PermitTTY no",
+    "    AllowTcpForwarding no",
+    "    AllowStreamLocalForwarding no",
+    "    X11Forwarding no",
+    "    PermitTunnel no",
+    "    AllowAgentForwarding no",
+    "    PasswordAuthentication no",
+    "    GatewayPorts no",
+    ""
+  ].join("\n");
+}
+var keyTag = (lead) => `studio-relay-${lead}`;
+function authorizedKeyLine(o2) {
+  const key = o2.key.trim().split(/\s+/).slice(0, 2).join(" ");
+  if (!/^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa) [A-Za-z0-9+/]{40,2000}={0,2}$/.test(key)) {
+    throw new Error("not an SSH public key line: <type> <base64> [comment]");
+  }
+  if (!/^[a-z][a-z0-9-]{0,31}$/.test(o2.lead)) throw new Error("not a lead name");
+  const command = `${o2.command} --lead ${o2.lead}`.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `restrict,command="${command}" ${key} ${keyTag(o2.lead)}`;
+}
+function leadFromAuthInfo(authInfo, keysText) {
+  if (authInfo === void 0 || keysText === void 0) return void 0;
+  const used = /^publickey (\S+) (\S+)/m.exec(authInfo);
+  if (used === null) return void 0;
+  for (const line4 of keysText.split(/\r?\n/)) {
+    const m = /(?:^|\s)(ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa) ([A-Za-z0-9+/]+={0,2})(?: (\S+))?\s*$/.exec(
+      line4
+    );
+    if (m !== null && m[1] === used[1] && m[2] === used[2]) {
+      const tag = /^studio-relay-([a-z][a-z0-9-]{0,31})$/.exec(m[3] ?? "");
+      return tag?.[1];
+    }
+  }
+  return void 0;
+}
+var brokerScript = (o2) => crewAccountScript({
+  op: o2.op,
+  prefix: o2.prefix,
+  result: brokerResultFiles(o2.machine)[o2.op],
+  // The admin-only copies of the tree deleter and of the functions (checked by their SHA-256),
+  // and an admin-only folder for the compiler: nothing the relay account could change.
+  places: brokerPlaces(o2.machine),
+  ...o2.op === "fresh" ? { credFile: machineCredFile(o2.machine), reader: "$relaySid" } : {}
+}).split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#")).join("\r\n");
+var brokerArgumentsSnippet = (script) => `$brokerScript = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(script, "utf8").toString("base64")}')).Replace('${RELAY_SID_SLOT}', $relaySid)
+$brokerArgs = '-NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($brokerScript))`;
+async function psJson(run2, script) {
+  const r = await run2("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    env: powershellEnv(process.env),
+    timeoutMs: 6e4
+  });
+  if (r.code !== 0) return void 0;
+  try {
+    return JSON.parse(r.stdout.trim() || "null");
+  } catch {
+    return void 0;
+  }
+}
+async function webClientProblem(run2) {
+  const s = await psJson(
+    run2,
+    `$s = Get-Service -Name WebClient -ErrorAction SilentlyContinue; if ($null -eq $s) { '{"exists":false}' } else { ConvertTo-Json -Compress @{ exists = $true; status = [string]$s.Status; start = [string]$s.StartType } }`
+  );
+  if (s === void 0 || s === null) return "the WebClient service cannot be read";
+  if (s.exists === false) return void 0;
+  if (s.status !== "Stopped" || s.start !== "Disabled") {
+    return `the WebClient service is ${String(s.status)} with start type ${String(s.start)}: WebDAV paths would pass the crew user's firewall rule; stop and disable it (Stop-Service WebClient; Set-Service WebClient -StartupType Disabled)`;
+  }
+  return void 0;
+}
+var onLoopback = (address) => /^127\./.test(address) || address === "::1" || address === ipv43(0, 0, 0, 0) || address === "::";
+async function loopbackListeners(run2) {
+  const raw = await psJson(
+    run2,
+    "$t = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | ForEach-Object { @{ p = 'tcp'; a = [string]$_.LocalAddress; n = [int]$_.LocalPort; o = [int]$_.OwningProcess } }); $u = @(Get-NetUDPEndpoint -ErrorAction SilentlyContinue | ForEach-Object { @{ p = 'udp'; a = [string]$_.LocalAddress; n = [int]$_.LocalPort; o = [int]$_.OwningProcess } }); ConvertTo-Json -Compress -InputObject @($t + $u)"
+  );
+  if (!Array.isArray(raw)) return void 0;
+  const out = [];
+  for (const x of raw) {
+    if (x.p !== "tcp" && x.p !== "udp" || typeof x.a !== "string" || typeof x.n !== "number") {
+      continue;
+    }
+    if (!onLoopback(x.a)) continue;
+    out.push({ protocol: x.p, address: x.a, port: x.n, pid: typeof x.o === "number" ? x.o : 0 });
+  }
+  return out;
+}
+async function neighborTable(run2) {
+  const raw = await psJson(
+    run2,
+    "ConvertTo-Json -Compress -InputObject @(Get-NetNeighbor -AddressFamily IPv4 -ErrorAction Stop | ForEach-Object { @{ a = [string]$_.IPAddress; s = [string]$_.State } })"
+  );
+  if (!Array.isArray(raw)) return void 0;
+  return raw.flatMap(
+    (x) => typeof x.a === "string" && typeof x.s === "string" ? [{ address: x.a, state: x.s }] : []
+  );
+}
+async function tailscaleStatus(run2) {
+  const r = await run2("tailscale", ["status", "--json"], { timeoutMs: 2e4 });
+  return r.code === 0 ? r.stdout : void 0;
+}
+async function machineCredProblem(run2, file4) {
+  const n4 = await psJson(
+    run2,
+    `Add-Type -AssemblyName System.Security; $b = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes(${psQuote(file4)}), $null, [Security.Cryptography.DataProtectionScope]::LocalMachine); $n = $b.Length; [Array]::Clear($b, 0, $b.Length); $n`
+  );
+  return typeof n4 === "number" && n4 > 0 ? void 0 : `the crew user's credential (${file4}) cannot be opened under this logon; run the script of studio relay setup again, elevated`;
+}
+function adminFileSnippet(o2) {
+  const text = `(@(${o2.lines.map(psQuote).join(", ")}) | ForEach-Object { $_ + [char]13 + [char]10 }) -join ''`;
+  const relay = o2.readers === "relay" ? ` "*$($relaySid):R"` : "";
+  return `$target = ${psQuote(o2.file)}
+$tmp = Join-Path (Split-Path -Parent $target) ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+[IO.File]::WriteAllText($tmp, ${text}, (New-Object Text.ASCIIEncoding))
+icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /L /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $target" }
+icacls $tmp /setowner '*S-1-5-32-544' /L /Q | Out-Null
+if (Test-Path -LiteralPath $target) { [IO.File]::Replace($tmp, $target, [NullString]::Value) } else { [IO.File]::Move($tmp, $target) }
+# Replace keeps the DACL of the file it replaced: the intended one goes on again.
+icacls $target /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /L /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "cannot set the ACL of $target" }
+icacls $target /setowner '*S-1-5-32-544' /L /Q | Out-Null`;
+}
+var FOLDER_FUNCTIONS = String.raw`$adminSids = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+# What may own a folder of Studio's before this run: administrators, SYSTEM, TrustedInstaller, or
+# the administrator running this script (who may own what it created on an earlier run).
+$ownerSids = $adminSids + @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+# Every folder of Studio's, from the drive down: no reparse point anywhere, and none another account
+# owns (a folder planted there before would keep its owner's rights).
+function SafeFolder([string]$path, [string]$top) {
+  $walk = $path
+  while ($walk) {
+    if (Test-Path -LiteralPath $walk) {
+      $item = Get-Item -LiteralPath $walk -Force
+      if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$walk is a reparse point: refusing to set up Studio there" }
+      if ($walk.Length -gt $top.Length -and $walk.StartsWith($top, [StringComparison]::OrdinalIgnoreCase)) {
+        $owner = (Get-Acl -LiteralPath $walk).GetOwner([Security.Principal.SecurityIdentifier]).Value
+        if ($ownerSids -notcontains $owner) { throw "$walk is owned by $owner, not by administrators: remove it, then run this again" }
+      }
+    }
+    $up = Split-Path -Parent $walk
+    if (-not $up -or $up -eq $walk) { break }
+    $walk = $up
+  }
+}
+# The explicit entries of a DACL and whether it is protected, comparable as text.
+function AclKey($sec) {
+  $entries = foreach ($r in $sec.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    '{0}|{1}|{2}|{3}|{4}|{5}' -f $r.IdentityReference.Value, [int]$r.FileSystemRights, [int]$r.InheritanceFlags, [int]$r.PropagationFlags, [int]$r.AccessControlType, $r.IsInherited
+  }
+  [string]$sec.AreAccessRulesProtected + ':' + ((@($entries) | Sort-Object) -join ';')
+}
+# Every reparse point below a folder, found without following one.
+function LinksBelow([string]$path) {
+  $todo = New-Object Collections.Stack
+  $todo.Push($path)
+  while ($todo.Count -gt 0) {
+    foreach ($c in Get-ChildItem -LiteralPath $todo.Pop() -Force) {
+      if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { $c.FullName; continue }
+      if ($c.PSIsContainer) { $todo.Push($c.FullName) }
+    }
+  }
+}
+# A folder of Studio's with exactly the DACL it should have: built from scratch and protected, so
+# no entry anyone added before survives. An existing one must be a plain folder administrators own.
+# Setting a DACL hands its inheritable entries down the whole subtree, through any junction in it:
+# a folder that already has this DACL is left alone, and one that gets a new DACL may hold no
+# reparse point anywhere below.
+function StrictFolder([string]$path, [object[]]$rules) {
+  $acl = New-Object Security.AccessControl.DirectorySecurity
+  $acl.SetAccessRuleProtection($true, $false)
+  $all = 'ContainerInherit, ObjectInherit'
+  foreach ($r in @(@('S-1-5-18', 'FullControl', $all, 'None'), @('S-1-5-32-544', 'FullControl', $all, 'None')) + $rules) {
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+      (New-Object Security.Principal.SecurityIdentifier($r[0])),
+      [Security.AccessControl.FileSystemRights]$r[1],
+      [Security.AccessControl.InheritanceFlags]$r[2],
+      [Security.AccessControl.PropagationFlags]$r[3],
+      [Security.AccessControl.AccessControlType]::Allow)))
+  }
+  if (Test-Path -LiteralPath $path) {
+    $item = Get-Item -LiteralPath $path -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$path is a reparse point: refusing to set up Studio there" }
+    $now = Get-Acl -LiteralPath $path
+    $owner = $now.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($ownerSids -notcontains $owner) { throw "$path is owned by $owner, not by administrators: remove it, then run this again" }
+    if ($owner -eq 'S-1-5-32-544' -and (AclKey $now) -eq (AclKey $acl)) { return }
+    $links = @(LinksBelow $path)
+    if ($links.Count -gt 0) { throw "$($links[0]) is a reparse point below $($path): remove it, then run this again" }
+  } else {
+    New-Item -ItemType Directory -Path $path | Out-Null
+  }
+  icacls $path /setowner '*S-1-5-32-544' /L /Q | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "cannot make administrators the owner of $path" }
+  (Get-Item -LiteralPath $path -Force).SetAccessControl($acl)
+}
+# Nothing below the relay home that the elevated steps reach may be a reparse point.
+function NoLinksIn([string]$path) {
+  if (-not (Test-Path -LiteralPath $path)) { return }
+  foreach ($c in Get-ChildItem -LiteralPath $path -Force) {
+    if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$($c.FullName) is a reparse point: remove it, then run this again" }
+  }
+}
+`;
+function relaySetupScript(o2) {
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o2.relayUser)) {
+    throw new Error(`not a local user name: ${o2.relayUser}`);
+  }
+  if (!/^[A-Za-z0-9 _-]{1,64}$/.test(o2.task)) throw new Error(`not a task name: ${o2.task}`);
+  const list2 = (ps) => `@(${ps.map(psQuote).join(", ")})`;
+  const command = forcedCommand(o2.machine, o2.home);
+  const block = sshdMatchBlock({ relayUser: o2.relayUser, machine: o2.machine, command });
+  const pluginSetup = `$env:XDG_CONFIG_HOME = ${psQuote(machineConfig(o2.machine))}; $env:XDG_STATE_HOME = ${psQuote(join28(o2.machine, "setup-state"))}; & ${psQuote(machineNode(o2.machine))} ${psQuote(machineStudioBin(o2.machine))} account setup-plugins
+if ($LASTEXITCODE -ne 0) { throw 'the plugin setup failed' }
+$claude = ${psQuote(join28(machineConfig(o2.machine), "studio", "claude"))}
+foreach ($d in @((Join-Path $claude 'skills'), (Join-Path $claude 'plugins'))) {
+  if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
+}`;
+  return `${o2.install === void 0 ? "" : installHead(o2.install, o2.relayUser, o2.crewPrefix)}#Requires -RunAsAdministrator
+# Studio: the setup of this Windows relay worker. Run it in an elevated Windows PowerShell
+# (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
+# Nothing here leaves this machine.
+$ErrorActionPreference = 'Stop'
+$relay = ${psQuote(o2.relayUser)}
+$home_ = ${psQuote(o2.home)}
+$machine = ${psQuote(o2.machine)}
+$task = ${psQuote(o2.task)}
+${GIT_MIN_CHECK}${FOLDER_FUNCTIONS}${crewAccountFunctions(o2.crewPrefix, { treeSource: brokerPlaces(o2.machine).treeSource, treeTemp: brokerPlaces(o2.machine).treeTemp })}function EnsureUser([string]$name, [string]$what, [string]$plain) {
+  $u = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
+  if ($null -eq $u) {
+    if (-not $plain) { $plain = NewSecret }
+    $u = New-LocalUser -Name $name -Password (ConvertTo-SecureString $plain -AsPlainText -Force) -PasswordNeverExpires -AccountNeverExpires -UserMayNotChangePassword -Description $what
+  } elseif ($plain) {
+    Set-LocalUser -Name $name -Password (ConvertTo-SecureString $plain -AsPlainText -Force)
+  }
+  # Users only, never Administrators (groups by SID: their names depend on the language).
+  $users = Get-LocalGroup -SID 'S-1-5-32-545'
+  if (-not (Get-LocalGroupMember -Group $users | Where-Object { $_.SID -eq $u.SID })) { Add-LocalGroupMember -Group $users -Member $u }
+  $admins = Get-LocalGroup -SID 'S-1-5-32-544'
+  if (Get-LocalGroupMember -Group $admins | Where-Object { $_.SID -eq $u.SID }) { throw "$name is an administrator: remove it from that group first" }
+  return $u
+}
+$dataStudio = Split-Path -Parent $home_
+$filesStudio = Split-Path -Parent $machine
+SafeFolder $home_ (Split-Path -Parent $dataStudio)
+SafeFolder $machine (Split-Path -Parent $filesStudio)
+# The relay account: a standard user the lead logs in as over SSH, with a password nobody sees.
+$relaySid = (EnsureUser $relay 'Studio relay (SSH, forced command)' $null).SID.Value
+# Studio's group of crew users (one user per job, made and deleted by the broker); what it carries
+# comes once the admin-only copy of Studio is in place.
+$readPaths = ${list2(o2.readPaths)}
+${crewGroupMake()}# The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew users read
+# Node.js and Studio only.
+$tree = 'ContainerInherit, ObjectInherit'
+$rx = 'ReadAndExecute, Synchronize'
+StrictFolder $filesStudio @(,@($relaySid, $rx, $tree, 'None'))
+StrictFolder $machine @(,@($relaySid, $rx, $tree, 'None'))
+foreach ($sub in @('broker', 'config', 'setup-state', 'pairing')) { StrictFolder (Join-Path $machine $sub) @(,@($relaySid, $rx, $tree, 'None')) }
+foreach ($sub in @('node', 'studio')) { StrictFolder (Join-Path $machine $sub) @(@($relaySid, $rx, $tree, 'None'), @($groupSid, $rx, $tree, 'None')) }
+# The copies the forced command runs: never the files of an account that can change them, and no
+# junction of the source copied along.
+Copy-Item -LiteralPath ${psQuote(o2.source.node)} -Destination ${psQuote(machineNode(o2.machine))} -Force
+& robocopy.exe ${psQuote(o2.source.studio)} ${psQuote(machineStudio(o2.machine))} /MIR /XJ /XD node_modules .git .worktrees /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "cannot copy Studio into $machine (robocopy $LASTEXITCODE)" }
+icacls ${psQuote(machineStudio(o2.machine))} /reset /T /C /L /Q | Out-Null
+# The compiler of the tree deleter writes here, as SYSTEM or as this setup: administrators only.
+StrictFolder (Join-Path $machine 'broker\\tmp') @()
+# What the group carries, and the crew users of earlier versions or a crash go: with the tree
+# deleter compiled from the admin-only copy just made.
+${crewGroupFinish()}# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
+# the home. The elevated steps only set the ACLs of these folders themselves, and refuse a reparse
+# point among them or just below the home.
+StrictFolder $dataStudio @(,@($relaySid, $rx, 'None', 'None'))
+StrictFolder $home_ @(,@($relaySid, $rx, 'None', 'None'))
+NoLinksIn $home_
+StrictFolder (Join-Path $home_ 'state') @(@($relaySid, 'ReadAndExecute, CreateFiles, CreateDirectories, Synchronize', 'None', 'None'), @($relaySid, 'Modify, Synchronize', $tree, 'InheritOnly'))
+# A crew user's password is sealed for this machine by the fresh broker, per job; one of a crew user
+# of an earlier version goes.
+Remove-Item -LiteralPath ${psQuote(machineCredFile(o2.machine))} -Force -ErrorAction SilentlyContinue
+# The brokers: as SYSTEM, with no argument, each its script in its action, so no file of it exists:
+# one ends every process of the crew users, one also deletes them with their profiles, one also
+# makes the fresh crew user of a job. Only the relay account (and administrators) may start them;
+# they answer in a folder the relay account can only read.
+$service = New-Object -ComObject Schedule.Service
+$service.Connect()
+$folder = $service.GetFolder('\\')
+# SYSTEM runs them; SYSTEM and administrators own them; the relay account may read and run them.
+$sddl = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;$relaySid)"
+# The functions the brokers load, in their admin-only folder.
+[IO.File]::WriteAllText(${psQuote(brokerBodyFile(o2.machine))}, [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(CREW_ACCOUNT_BODY, "utf8").toString("base64")}')), (New-Object Text.UTF8Encoding($false)))
+${["sweep", "retire", "fresh"].map(
+    (op) => `${brokerArgumentsSnippet(brokerScript({ op, prefix: o2.crewPrefix, machine: o2.machine }))}
+$def = $service.NewTask(0)
+$def.Settings.ExecutionTimeLimit = 'PT10M'
+$def.Settings.MultipleInstances = 2
+$action = $def.Actions.Create(0)
+$action.Path = 'powershell.exe'
+$action.Arguments = $brokerArgs
+$null = $folder.RegisterTaskDefinition(${psQuote(brokerTasks(o2.task)[op])}, $def, 6, 'SYSTEM', $null, 5, $sddl)
+`
+  ).join(
+    ""
+  )}# WebDAV paths (\\\\host@80\\) pass the crew user's firewall rule through the WebClient service:
+# it is stopped and disabled.
+Write-Output 'Stopping and disabling the WebClient service (WebDAV), which the crew sandbox does not hold.'
+if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
+  Stop-Service -Name WebClient -Force -ErrorAction SilentlyContinue
+  Set-Service -Name WebClient -StartupType Disabled
+}
+# The pinned plugins in the crew Claude config dir of the relay home.
+${pluginSetup}
+${o2.install === void 0 ? setupTail(block) : installTail(block, o2.install)}`;
+}
+var setupTail = (block) => `Write-Output 'Add this block at the end of sshd_config (C:\\ProgramData\\ssh\\sshd_config), then Restart-Service sshd:'
+Write-Output @'
+${block}'@
+Write-Output 'Authorize the lead with studio relay install --pair "<line>" (the line studio relay pair prints on the lead).'
+Write-Output "Studio relay worker is ready: relay account $relay, crew users of group $($prefix)s, one per job."
+`;
+function authorizedKeysScript(o2) {
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o2.relayUser)) throw new Error("not a local user name");
+  return `$ErrorActionPreference = 'Stop'
+$relaySid = (Get-LocalUser -Name ${psQuote(o2.relayUser)}).SID.Value
+${adminFileSnippet({ file: o2.file, lines: o2.lines, readers: "relay" })}
+`;
+}
+var installHead = (i2, relayUser, crewPrefix2) => `#Requires -RunAsAdministrator
+$ErrorActionPreference = 'Stop'
+$ok = $false
+function SshdOff {
+  Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue
+  Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Disable-NetFirewallRule
+}
+# No relay job may run while the install walks the folders and sets their ACLs: a runner or crew
+# could plant a link between the two. Every process of the relay account or a crew user counts.
+$forceStop = ${i2.forceStop === true ? "$true" : "$false"}
+function RelayProcesses {
+  $crewRe = '^' + [regex]::Escape(${psQuote(crewPrefix2)}) + '-[0-9a-f]{6}$'
+  $sids = @(Get-LocalUser | Where-Object { $_.Name -eq ${psQuote(relayUser)} -or ($_.Name -match $crewRe -and $_.Description -eq ${psQuote(CREW_DESCRIPTION)}) } | ForEach-Object { $_.SID.Value })
+  if ($sids.Count -eq 0) { return @() }
+  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })
+}
+function NoRelayJob {
+  $running = RelayProcesses
+  if ($running.Count -eq 0) { return }
+  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or a crew user): let it end, or run this again with --force-stop" }
+  Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew users (--force-stop)."
+  for ($t = 0; $t -lt 20 -and $running.Count -gt 0; $t++) {
+    foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 500
+    $running = RelayProcesses
+  }
+  if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew users' }
+}
+# Before sshd stops: a running job is refused while the lead can still reach it.
+NoRelayJob
+try {
+function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
+function Need([string]$what, [scriptblock]$have, [string]$id) {
+  if (& $have) { Write-Output "ok: $what"; return }
+  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "$what is missing and winget is not there to install it; install $what by hand" }
+  Write-Output "installing: $what (winget $id)"
+  winget install --id $id --exact --silent --scope machine --accept-package-agreements --accept-source-agreements | Out-Null
+  Fresh
+  if (-not (& $have)) { throw "$what is still missing after winget install $id; install it by hand" }
+}
+Need 'Git' { Get-Command git -ErrorAction SilentlyContinue } 'Git.Git'
+Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
+$ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
+if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
+if ($ssh.State -ne 'Installed') { Write-Output 'installing: OpenSSH server'; Add-WindowsCapability -Online -Name $ssh.Name | Out-Null } else { Write-Output 'ok: OpenSSH server' }
+SshdOff
+# With sshd off no new job starts: once more, for one that started in between.
+NoRelayJob
+Set-Service -Name sshd -StartupType Automatic
+${i2.disableSpooler === true ? `Write-Output 'Stopping and disabling the print spooler (--disable-spooler).'
+Stop-Service -Name Spooler -Force -ErrorAction SilentlyContinue
+Set-Service -Name Spooler -StartupType Disabled` : ""}
+`;
+function installTail(block, i2) {
+  if (!Number.isInteger(i2.port) || i2.port < 1 || i2.port > 65535) throw new Error("not a port");
+  const scope = "tailscale" in i2.scope ? `$ts = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like '*Tailscale*' -or $_.Name -like 'Tailscale*' } | Select-Object -First 1
+if ($null -eq $ts) { throw 'no Tailscale interface here: run studio relay install --interface <name> or --source <range>' }
+$scope = @{ InterfaceAlias = $ts.Name }
+$where = 'the Tailscale interface ' + $ts.Name` : "interface" in i2.scope ? `$scope = @{ InterfaceAlias = ${psQuote(i2.scope.interface)} }
+$where = 'the interface ' + ${psQuote(i2.scope.interface)}` : `$scope = @{ RemoteAddress = ${psQuote(i2.scope.source)} }
+$where = 'the source ' + ${psQuote(i2.scope.source)}`;
+  const global2 = i2.keepPasswords === true ? "" : `# studio relay begin global
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+# studio relay end global
+`;
+  return `$conf = Join-Path $env:ProgramData 'ssh\\sshd_config'
+if (-not (Test-Path -LiteralPath $conf)) {
+  # The first start of sshd writes its default config; it stays stopped afterwards.
+  Start-Service sshd
+  for ($k = 0; $k -lt 20 -and -not (Test-Path -LiteralPath $conf); $k++) { Start-Sleep -Milliseconds 500 }
+  SshdOff
+}
+$before = [IO.File]::ReadAllBytes($conf)
+$text = [Text.Encoding]::UTF8.GetString($before)
+$text = [regex]::Replace($text, '(?s)# studio relay begin global.*?# studio relay end global\\r?\\n?', '')
+$text = [regex]::Replace($text, '(?s)\\r?\\n?# studio relay begin\\r?\\n.*?# studio relay end\\r?\\n?', [Environment]::NewLine)
+$global = @'
+${global2}'@
+$ours = @'
+# studio relay begin
+${block}# studio relay end
+'@
+$new = $global + $text.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $ours
+[IO.File]::WriteAllText($conf, $new, (New-Object Text.UTF8Encoding $false))
+$exe = Join-Path $env:SystemRoot 'System32\\OpenSSH\\sshd.exe'
+$tested = $null
+if (Test-Path -LiteralPath $exe) { $tested = Start-Process -FilePath $exe -ArgumentList '-t' -Wait -PassThru -NoNewWindow }
+if ($null -eq $tested -or $tested.ExitCode -ne 0) {
+  [IO.File]::WriteAllBytes($conf, $before)
+  throw 'sshd does not accept the new sshd_config (or could not check it); it was put back as it was'
+}
+${scope}
+$rule = 'Studio relay: sshd'
+Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+New-NetFirewallRule -DisplayName $rule -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${i2.port} @scope | Out-Null
+Start-Service sshd
+Write-Output "ok: relay account $relay, crew user $crew, broker task $task"
+Write-Output "ok: sshd forces studio relay serve for $relay; port ${i2.port} only from $where${i2.keepPasswords === true ? "" : "; keys only, for every account"}"
+Write-Output 'ok: WebClient stopped and disabled'
+$ok = $true
+} finally {
+  if (-not $ok) {
+    SshdOff
+    Get-NetFirewallRule -DisplayName 'Studio relay: sshd' -ErrorAction SilentlyContinue | Disable-NetFirewallRule
+    Write-Output 'stopped: sshd is stopped and closed until studio relay install runs through'
+  }
+}
+`;
+}
+
 // src/windows-sandbox.ts
 var OUTSIDE = [
   `${ipv43(0, 0, 0, 0)}-${ipv43(126, 255, 255, 255)}`,
@@ -40532,8 +41071,8 @@ function windowsCrewEnv(o2) {
   return {
     ...env,
     USERPROFILE: o2.homeDir,
-    APPDATA: join28(o2.homeDir, "AppData", "Roaming"),
-    LOCALAPPDATA: join28(o2.homeDir, "AppData", "Local"),
+    APPDATA: join29(o2.homeDir, "AppData", "Roaming"),
+    LOCALAPPDATA: join29(o2.homeDir, "AppData", "Local"),
     TEMP: o2.tmpDir,
     TMP: o2.tmpDir,
     HTTPS_PROXY: proxy,
@@ -40546,6 +41085,11 @@ function windowsCrewEnv(o2) {
     DISABLE_ERROR_REPORTING: "1"
   };
 }
+var nativeCrewDir = (env) => join29(env.ProgramFiles ?? env.PROGRAMFILES ?? "C:\\Program Files", "Studio crew");
+var nativeCrewPlaces = (crewDir) => ({
+  treeSource: join29(crewDir, "studio-tree.cs"),
+  treeTemp: join29(crewDir, "tmp")
+});
 function psQuote(s) {
   if (/[\p{Cc}]/u.test(s)) throw new Error(`refusing a control character in ${JSON.stringify(s)}`);
   return `'${s.replace(/'/g, "''")}'`;
@@ -40559,7 +41103,7 @@ function windowsSetupScript(o2) {
 # Studio: the crew users of this Windows worker. Run once in an elevated Windows PowerShell
 # (powershell.exe). Nothing here leaves this machine.
 $ErrorActionPreference = 'Stop'
-${GIT_MIN_CHECK}${crewAccountFunctions(o2.prefix)}
+${GIT_MIN_CHECK}${FOLDER_FUNCTIONS}${crewAccountFunctions(o2.prefix, nativeCrewPlaces(o2.crewDir))}
 # An earlier setup opened the crew Claude config dir for writing: that grant goes, all the way down.
 foreach ($p in ${list2(o2.revokePaths ?? [])}) {
   if (Test-Path -LiteralPath $p) {
@@ -40569,7 +41113,14 @@ foreach ($p in ${list2(o2.revokePaths ?? [])}) {
   }
 }
 $readPaths = ${list2(o2.readPaths)}
-${crewGroupSetup()}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
+${crewGroupMake()}# The tree deleter, copied into a folder only administrators may change, with its compiler's
+# temporary folder: the elevated worker compiles it only from there.
+$crewDir = ${psQuote(o2.crewDir)}
+SafeFolder $crewDir (Split-Path -Parent $crewDir)
+StrictFolder $crewDir @()
+StrictFolder (Join-Path $crewDir 'tmp') @()
+Copy-Item -LiteralPath ${psQuote(TREE_SOURCE())} -Destination (Join-Path $crewDir 'studio-tree.cs') -Force
+${crewGroupFinish()}Write-Output "Studio's crew users (group $($prefix)s) are ready; start the worker again."
 `;
 }
 var OWNER_RIGHTS = "*S-1-3-4";
@@ -40594,7 +41145,7 @@ function rootRevokeSteps(sid, ownerSid2, path10) {
 function deepRevokeSteps(ownerSid2, path10) {
   if (!OWNER_SID_RE.test(ownerSid2)) throw new Error(`not a SID: ${ownerSid2}`);
   return [
-    [join28(path10, "*"), "/reset", "/T", "/C", "/L", "/Q"],
+    [join29(path10, "*"), "/reset", "/T", "/C", "/L", "/Q"],
     [path10, "/setowner", ownerSid2, "/T", "/C", "/L", "/Q"]
   ];
 }
@@ -40611,7 +41162,7 @@ function removeLinks(root) {
   const walk = (dir) => {
     if (!inside(realpathSync7(dir))) throw new Error(`${dir} leads outside ${root}`);
     for (const name of readdirSync10(dir)) {
-      const p = join28(dir, name);
+      const p = join29(dir, name);
       const st = lstatSync23(p);
       if (st.isSymbolicLink()) {
         try {
@@ -40663,12 +41214,13 @@ var LOCK_FILE = "windows-crew.lock";
 var LOCK_STALE_MS3 = 10 * 6e4;
 function readGrantRecord(ownerRoot) {
   try {
-    const raw = JSON.parse(readFileSync27(join28(ownerRoot, RECORD_FILE), "utf8"));
+    const raw = JSON.parse(readFileSync27(join29(ownerRoot, RECORD_FILE), "utf8"));
     const a2 = raw.account;
     const n4 = a2?.notes;
     const notes = n4 !== void 0 && n4 !== null && Array.isArray(n4.problems) ? {
       problems: n4.problems.filter((x) => typeof x === "string"),
-      ...typeof n4.quarantined === "number" ? { quarantined: n4.quarantined } : {}
+      ...typeof n4.quarantined === "number" ? { quarantined: n4.quarantined } : {},
+      ...Array.isArray(n4.stuck) ? { stuck: n4.stuck.filter((x) => typeof x === "string") } : {}
     } : void 0;
     const account = a2 !== void 0 && typeof a2.user === "string" && typeof a2.sid === "string" && typeof a2.at === "string" ? { user: a2.user, sid: a2.sid, at: a2.at, ...notes === void 0 ? {} : { notes } } : void 0;
     return {
@@ -40683,7 +41235,7 @@ function readGrantRecord(ownerRoot) {
     return { paths: [] };
   }
 }
-var writeGrantRecord = (ownerRoot, r) => writeStateFile(ownerRoot, join28(ownerRoot, RECORD_FILE), `${JSON.stringify(r)}
+var writeGrantRecord = (ownerRoot, r) => writeStateFile(ownerRoot, join29(ownerRoot, RECORD_FILE), `${JSON.stringify(r)}
 `);
 var processExists = (pid) => {
   try {
@@ -41061,12 +41613,12 @@ var spawnKeeper = async (o2) => {
   }
 };
 function ownerFiles(stateRoot, name) {
-  const logs = ensureStateDir(stateRoot, join28(stateRoot, "logs"));
+  const logs = ensureStateDir(stateRoot, join29(stateRoot, "logs"));
   if (lstatSync23(logs).isSymbolicLink()) throw new Error(`${logs} is a link`);
   const files = {
-    out: join28(logs, `${name}.host.out`),
-    err: join28(logs, `${name}.host.err`),
-    keeper: join28(logs, `${name}.keeper.log`)
+    out: join29(logs, `${name}.host.out`),
+    err: join29(logs, `${name}.host.err`),
+    keeper: join29(logs, `${name}.keeper.log`)
   };
   for (const f3 of Object.values(files)) {
     removeStateEntry(stateRoot, f3);
@@ -41075,7 +41627,7 @@ function ownerFiles(stateRoot, name) {
   return files;
 }
 function keeperFile(stateRoot) {
-  const file4 = join28(stateRoot, "settings", KEEPER_FILE);
+  const file4 = join29(stateRoot, "settings", KEEPER_FILE);
   writeStateFile(stateRoot, file4, KEEPER_SCRIPT);
   return file4;
 }
@@ -41205,8 +41757,8 @@ async function probeWindowsResults(o2) {
   const account = await o2.grants.ready();
   const name = `probe-${randomBytes9(4).toString("hex")}`;
   const files = ownerFiles(o2.stateRoot, name);
-  const canary = join28(o2.ownerConfigDir, "crew-probe-canary");
-  const formerDir = join28(o2.stateRoot, "tmp", `${name}-former`);
+  const canary = join29(o2.ownerConfigDir, "crew-probe-canary");
+  const formerDir = join29(o2.stateRoot, "tmp", `${name}-former`);
   writeStateFile(dirname10(canary), canary, "canary\n");
   const host = async (spec, revoke = []) => {
     for (const f3 of Object.values(files)) removeStateEntry(o2.stateRoot, f3);
@@ -41240,7 +41792,7 @@ ${JSON.stringify(spec)}`,
   try {
     const mark = randomBytes9(8).toString("hex");
     ensureStateDir(o2.stateRoot, formerDir);
-    const file4 = join28(formerDir, "made-by-the-crew-user.txt");
+    const file4 = join29(formerDir, "made-by-the-crew-user.txt");
     await o2.grants.grant([{ path: formerDir, rights: "M" }]);
     const seeded = await host({ mode: "seed", seed: file4, env: o2.env });
     await o2.grants.revokeAll();
@@ -41253,10 +41805,10 @@ ${JSON.stringify(spec)}`,
         mark,
         mustNotRead: [canary, o2.ownerHome, ...o2.mustNotRead],
         mustNotWrite: [
-          join28(o2.ownerHome, `studio-probe-${mark}`),
+          join29(o2.ownerHome, `studio-probe-${mark}`),
           ...o2.crewConfigDir === void 0 ? [] : [
-            join28(o2.crewConfigDir, `studio-probe-${mark}`),
-            join28(o2.crewConfigDir, "plugins", `studio-probe-${mark}`)
+            join29(o2.crewConfigDir, `studio-probe-${mark}`),
+            join29(o2.crewConfigDir, "plugins", `studio-probe-${mark}`)
           ]
         ],
         direct: { host: "github.com", port: 443 },
@@ -41292,12 +41844,12 @@ ${JSON.stringify(spec)}`,
     removeStateEntry(dirname10(canary), canary);
   }
 }
-var credFileIn = (ownerConfigDir2) => join28(ownerConfigDir2, "windows-crew.bin");
+var credFileIn = (ownerConfigDir2) => join29(ownerConfigDir2, "windows-crew.bin");
 function findClaude(path10) {
   for (const dir of (path10 ?? "").split(";")) {
     if (dir === "") continue;
     for (const name of ["claude.exe", "claude.cmd"]) {
-      const p = join28(dir, name);
+      const p = join29(dir, name);
       if (existsSync7(p)) return p;
     }
   }
@@ -41311,14 +41863,14 @@ function setupReadPaths(o2) {
       plugin,
       ...o2.claude === void 0 ? [] : [dirname10(o2.claude)],
       ...o2.toolchains,
-      join28(o2.crewConfigDir, "skills"),
-      join28(o2.crewConfigDir, "plugins")
+      join29(o2.crewConfigDir, "skills"),
+      join29(o2.crewConfigDir, "plugins")
     ])
   ];
 }
 function runConfigDir(homeDir, shared) {
-  const dir = join28(homeDir, ".claude-run");
-  mkdirSync7(join28(dir, "plugins"), { recursive: true });
+  const dir = join29(homeDir, ".claude-run");
+  mkdirSync7(join29(dir, "plugins"), { recursive: true });
   const copy = (from, to) => {
     let st;
     try {
@@ -41329,16 +41881,16 @@ function runConfigDir(homeDir, shared) {
     if (st.isSymbolicLink()) return;
     if (st.isDirectory()) {
       mkdirSync7(to, { recursive: true });
-      for (const n4 of readdirSync10(from)) copy(join28(from, n4), join28(to, n4));
+      for (const n4 of readdirSync10(from)) copy(join29(from, n4), join29(to, n4));
     } else if (st.isFile()) {
       copyFileSync(from, to);
     }
   };
-  copy(join28(shared, "skills"), join28(dir, "skills"));
+  copy(join29(shared, "skills"), join29(dir, "skills"));
   for (const f3 of ["installed_plugins.json", "known_marketplaces.json"]) {
-    copy(join28(shared, "plugins", f3), join28(dir, "plugins", f3));
+    copy(join29(shared, "plugins", f3), join29(dir, "plugins", f3));
   }
-  copy(join28(shared, "settings.json"), join28(dir, "settings.json"));
+  copy(join29(shared, "settings.json"), join29(dir, "settings.json"));
   return dir;
 }
 async function windowsWorker(o2) {
@@ -41350,7 +41902,8 @@ async function windowsWorker(o2) {
     prefix: o2.prefix,
     credFile: credFileIn(o2.ownerConfigDir),
     run: run2,
-    reader: async () => (await ownerSid(run2)).slice(1)
+    reader: async () => (await ownerSid(run2)).slice(1),
+    ...nativeCrewPlaces(nativeCrewDir(o2.env))
   });
   const grants = new WindowsGrants({ ownerRoot: o2.ownerRoot, accounts, run: run2 });
   return {
@@ -41380,7 +41933,7 @@ async function windowsWorker(o2) {
     close: () => proxy.close()
   };
   async function probe(mustNotRead) {
-    const tmp = ensureStateDir(o2.stateRoot, join28(o2.stateRoot, "tmp"));
+    const tmp = ensureStateDir(o2.stateRoot, join29(o2.stateRoot, "tmp"));
     const probeEnv = windowsCrewEnv({
       proxyPort: proxy.port,
       homeDir: tmp,
@@ -41435,7 +41988,7 @@ function githubHttpsUrl(repo) {
 }
 function cloneBranch(path10) {
   try {
-    const head = readFileSync28(join29(path10, ".git", "HEAD"), "utf8").trim();
+    const head = readFileSync28(join30(path10, ".git", "HEAD"), "utf8").trim();
     return /^ref: refs\/heads\/(.+)$/.exec(head)?.[1];
   } catch {
     return void 0;
@@ -41447,8 +42000,8 @@ async function prepareCheckout(stateRoot, projectDir2, item, ports, from = ITEM_
   if (from !== ITEM_BASE && from !== `studio/${item.id}`) {
     throw new Error(`invalid start branch for ${item.id}: ${JSON.stringify(from)}`);
   }
-  const clones = ensureStateDir(stateRoot, join29(stateRoot, "clones"));
-  const path10 = join29(clones, item.id);
+  const clones = ensureStateDir(stateRoot, join30(stateRoot, "clones"));
+  const path10 = join30(clones, item.id);
   const branch = `studio/${item.id}`;
   const crewOrigin = githubHttpsUrl(item.repo);
   assertStatePath(stateRoot, path10);
@@ -41479,7 +42032,7 @@ function removeOldReport(stateRoot, clone2, id) {
   assertItemId(id);
   let cur = clone2;
   for (const seg of [".studio", "reports", `${id}.md`]) {
-    cur = join29(cur, seg);
+    cur = join30(cur, seg);
     assertStatePath(stateRoot, cur);
     let st;
     try {
@@ -41521,13 +42074,13 @@ function isLink2(p) {
   }
 }
 function writeHomeFile(homeDir, name, content) {
-  const target = join29(homeDir, name);
+  const target = join30(homeDir, name);
   const realHome = realpathSync8(homeDir);
   const parent = realpathSync8(dirname11(target));
   if (parent !== realHome && !parent.startsWith(realHome + sep6)) {
     throw new Error(`refusing to write outside the crew home: ${target}`);
   }
-  writeFileSync10(join29(parent, basename4(target)), content, { flag: "wx" });
+  writeFileSync10(join30(parent, basename4(target)), content, { flag: "wx" });
 }
 var unique2 = (xs) => [...new Set(xs)];
 function realOr2(p) {
@@ -41548,13 +42101,13 @@ function entries(dir) {
 }
 function skillInstalled(configDir, name) {
   if (!Array.isArray(entries(configDir))) return void 0;
-  const skills = join29(configDir, "skills");
+  const skills = join30(configDir, "skills");
   const direct = entries(skills);
   if (direct === void 0) return void 0;
   if (direct !== null) {
-    if (existsSync8(join29(skills, name, "SKILL.md"))) return true;
+    if (existsSync8(join30(skills, name, "SKILL.md"))) return true;
   }
-  const cache2 = join29(configDir, "plugins", "cache");
+  const cache2 = join30(configDir, "plugins", "cache");
   const top = entries(cache2);
   if (top === void 0) return void 0;
   if (top !== null) {
@@ -41564,11 +42117,11 @@ function skillInstalled(configDir, name) {
       for (const d of dirs) {
         const names = entries(d);
         if (names === void 0) return void 0;
-        next.push(...(names ?? []).map((n4) => join29(d, n4)));
+        next.push(...(names ?? []).map((n4) => join30(d, n4)));
       }
       dirs = next;
     }
-    if (dirs.some((d) => existsSync8(join29(d, "skills", name, "SKILL.md")))) return true;
+    if (dirs.some((d) => existsSync8(join30(d, "skills", name, "SKILL.md")))) return true;
   }
   return false;
 }
@@ -41712,11 +42265,11 @@ async function readPinnedRules(projectDir2, ports, pin) {
 }
 function writePinnedRules(stateRoot, id, rules) {
   assertItemId(id);
-  const dir = join29(stateRoot, "briefs", `${id}.rules`);
+  const dir = join30(stateRoot, "briefs", `${id}.rules`);
   removeStateEntry(stateRoot, dir);
   const paths = [];
   for (const f3 of rules.files) {
-    const file4 = join29(dir, f3.name);
+    const file4 = join30(dir, f3.name);
     writeStateFile(stateRoot, file4, f3.content);
     paths.push(file4);
   }
@@ -41735,7 +42288,7 @@ function writeBrief(stateRoot, item, config2, projectDir2, rules, caps = plainCa
   const accepting = caps.review?.acceptance;
   let findingFile;
   if (item.finding !== void 0) {
-    findingFile = join29(stateRoot, "briefs", `${item.id}.caps`, "acceptance-finding.txt");
+    findingFile = join30(stateRoot, "briefs", `${item.id}.caps`, "acceptance-finding.txt");
     writeStateFile(
       stateRoot,
       findingFile,
@@ -41922,7 +42475,7 @@ ${item.finding}
       ""
     ] : []
   ];
-  const file4 = join29(stateRoot, "briefs", `${id}.md`);
+  const file4 = join30(stateRoot, "briefs", `${id}.md`);
   writeStateFile(stateRoot, file4, lines2.join("\n"));
   return file4;
 }
@@ -41972,33 +42525,33 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
     dirs.tmpDir,
     dirs.homeDir,
     ...toolchain,
-    ...loginDir === void 0 ? [] : ["skills", "plugins/cache", "plugins/marketplaces"].map((p) => join29(loginDir, p)),
+    ...loginDir === void 0 ? [] : ["skills", "plugins/cache", "plugins/marketplaces"].map((p) => join30(loginDir, p)),
     // The crew's own brief, caps and rules: the guard lets them be read, and a sandboxed read
     // (a shell command, or a file tool under the sandbox) must reach them too, or the crew
     // starts without its task. Nothing else of the state root comes back.
     // The reference excerpt of a group's main project (src/group.ts) is beside them.
-    ...["md", "caps", "rules", "reference"].map((ext) => join29(stateRoot, "briefs", `${id}.${ext}`)),
+    ...["md", "caps", "rules", "reference"].map((ext) => join30(stateRoot, "briefs", `${id}.${ext}`)),
     // Places a worker's owner opened inside its denied Windows mounts, for reads only.
     ...dirs.deny?.allowRead ?? []
   ];
-  const ctxFile = join29(stateRoot, "guard", `${id}.json`);
+  const ctxFile = join30(stateRoot, "guard", `${id}.json`);
   const protectedPaths = [
     ctxFile,
-    ...STATE_PROTECTED_DIRS.map((d) => join29(stateRoot, d)),
-    ...STATE_FILES.map((f3) => join29(stateRoot, f3)),
+    ...STATE_PROTECTED_DIRS.map((d) => join30(stateRoot, d)),
+    ...STATE_FILES.map((f3) => join30(stateRoot, f3)),
     // Below the state base, so the sandbox already keeps crews out; this is the second net.
-    join29(stateBase, OWNER_DIR)
+    join30(stateBase, OWNER_DIR)
   ];
-  const configDir = loginDir ?? (env.CLAUDE_CONFIG_DIR || join29(realHome, ".claude"));
+  const configDir = loginDir ?? (env.CLAUDE_CONFIG_DIR || join30(realHome, ".claude"));
   const skillRoots = unique2([
-    join29(configDir, "skills"),
-    join29(configDir, "plugins", "cache"),
-    join29(configDir, "plugins", "marketplaces")
+    join30(configDir, "skills"),
+    join30(configDir, "plugins", "cache"),
+    join30(configDir, "plugins", "marketplaces")
   ]);
   const toolResultGlobs = unique2(
     (dirs.runConfigDir === void 0 ? [configDir, realOr2(configDir)] : [dirs.runConfigDir]).flatMap(
       (dir) => [clone2, realOr2(clone2)].map(
-        (c3) => `${join29(dir, "projects", c3.replace(/[^A-Za-z0-9]/g, "-"))}/*/tool-results/**`
+        (c3) => `${join30(dir, "projects", c3.replace(/[^A-Za-z0-9]/g, "-"))}/*/tool-results/**`
       )
     )
   );
@@ -42007,10 +42560,10 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
     `${p}/**`
   ]);
   const readRoots = [
-    join29(stateRoot, "briefs", `${id}.md`),
-    join29(stateRoot, "briefs", `${id}.caps`),
-    join29(stateRoot, "briefs", `${id}.rules`),
-    join29(stateRoot, "briefs", `${id}.reference`),
+    join30(stateRoot, "briefs", `${id}.md`),
+    join30(stateRoot, "briefs", `${id}.caps`),
+    join30(stateRoot, "briefs", `${id}.rules`),
+    join30(stateRoot, "briefs", `${id}.reference`),
     dirs.homeDir,
     dirs.tmpDir,
     ...skillRoots
@@ -42128,7 +42681,7 @@ function writeCrewSettings(stateRoot, item, clone2, config2, dirs, launcher2 = {
       }
     }
   };
-  const file4 = join29(stateRoot, "settings", `${id}.json`);
+  const file4 = join30(stateRoot, "settings", `${id}.json`);
   writeStateFile(stateRoot, file4, `${JSON.stringify(settings, null, 2)}
 `);
   return file4;
@@ -42334,12 +42887,12 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
     extraCredentialPaths: credentialLocations(home, penv).extra
   });
   for (const sub of ["clones", "homes", "tmp"]) {
-    assertStatePath(stateRoot, join29(stateRoot, sub, item.id));
+    assertStatePath(stateRoot, join30(stateRoot, sub, item.id));
   }
   const previous = await refuseIfRunning(stateRoot, item, ports);
   const limits = readLimits(ownerRoot);
   if (!limits.ok) {
-    throw new Error(`${join29(ownerRoot, "limits.json")} is unreadable; refusing to launch`);
+    throw new Error(`${join30(ownerRoot, "limits.json")} is unreadable; refusing to launch`);
   }
   const parks = activeParks(limits.labels, ports.clock.now());
   const usage = labelUsage({ ownerRoot, ownerConfig, ports });
@@ -42352,9 +42905,9 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
   const label = picked.label;
   const oauthToken = picked.token;
   const providerConfigDir = picked.configDir;
-  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join29(home, ".claude"));
+  const claudeConfigDir = providerConfigDir ?? (penv.CLAUDE_CONFIG_DIR || join30(home, ".claude"));
   const billing = apiBillingProblem(
-    join29(claudeConfigDir, "settings.json"),
+    join30(claudeConfigDir, "settings.json"),
     ownerConfig.allowApiBilling
   );
   if (billing) throw new Error(billing);
@@ -42415,7 +42968,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
   if (pinOff) throw new Error(pinOff);
   const undeniable = installedSkills(claudeConfigDir).invalid;
   if (undeniable.length > 0) throw new Error(undeniableLine(claudeConfigDir, undeniable));
-  const clonePath = join29(stateRoot, "clones", item.id);
+  const clonePath = join30(stateRoot, "clones", item.id);
   if (!isCache && (previous?.limit || previous?.block) && existsNoFollow2(clonePath) && (cloneBranch(clonePath) !== `studio/${item.id}` || cloneOriginUrl(clonePath) !== githubHttpsUrl(item.repo))) {
     throw new Error(
       `the clone of ${item.id} left its branch after ${previous.limit ? "a usage limit" : "an account block"}; refusing to replace it (inspect it, then remove ${clonePath} to start over)`
@@ -42463,7 +43016,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
       }
     }
     const again = readLimits(ownerRoot);
-    if (!again.ok) throw new Error(`${join29(ownerRoot, "limits.json")} is unreadable; refusing`);
+    if (!again.ok) throw new Error(`${join30(ownerRoot, "limits.json")} is unreadable; refusing`);
     const parkedNow = activeParks(again.labels, ports.clock.now());
     if (Object.hasOwn(parkedNow, label)) {
       throw new HeldError(allParkedLine(parkedNow[label]?.parkedUntil));
@@ -42485,11 +43038,11 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
   );
   lock.heartbeat(ports.clock.now());
   removeOldReport(stateRoot, wt.path, item.id);
-  const homeDir = join29(stateRoot, "homes", item.id);
+  const homeDir = join30(stateRoot, "homes", item.id);
   removeStateEntry(stateRoot, homeDir);
   ensureStateDir(stateRoot, homeDir);
   writeHomeFile(homeDir, ".gitconfig", GITCONFIG);
-  const tmpDir = join29(stateRoot, "tmp", item.id);
+  const tmpDir = join30(stateRoot, "tmp", item.id);
   removeStateEntry(stateRoot, tmpDir);
   ensureStateDir(stateRoot, tmpDir);
   const cow = ports.cow ?? systemCowCopy(launcher2.platform ?? process.platform);
@@ -42523,7 +43076,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
   const briefRules = writePinnedRules(stateRoot, item.id, pinned);
   const briefReference = reference === void 0 ? void 0 : writeReference(stateRoot, item.id, reference, readContractChange(stateRoot, item));
   if (reference === void 0)
-    removeStateEntry(stateRoot, join29(stateRoot, "briefs", `${item.id}.reference`));
+    removeStateEntry(stateRoot, join30(stateRoot, "briefs", `${item.id}.reference`));
   const installedNames = new Set(installedSkills(claudeConfigDir).names);
   const caps = writeCaps({
     stateRoot,
@@ -42538,7 +43091,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
   caps.reportName = newReportName(stateRoot, item.id);
   let timeouts;
   if (item.type === "review" && caps.review !== void 0) {
-    const agentsFile = join29(stateRoot, "guard", `${item.id}.agents.json`);
+    const agentsFile = join30(stateRoot, "guard", `${item.id}.agents.json`);
     removeStateEntry(stateRoot, agentsFile);
     removeStateEntry(stateRoot, timeoutsFileOf(agentsFile));
     const analyzerMinutes = config2.review?.analyzerTimeoutMinutes ?? DEFAULT_ANALYZER_TIMEOUT_MINUTES;
@@ -42546,7 +43099,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
       analyzerMinutes,
       analyzers: caps.review.analyzers.length,
       now: ports.clock.now(),
-      reportFile: join29(wt.path, ".studio", "reports", caps.reportName),
+      reportFile: join30(wt.path, ".studio", "reports", caps.reportName),
       agentsFile
     });
     caps.timeouts = { analyzerMinutes, sessionEndsAt: timeouts.sessionEndsAt };
@@ -42597,18 +43150,18 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
       },
       ...worker === void 0 ? {} : { deny: worker.deny },
       ...timeouts === void 0 ? {} : { timeouts },
-      ...windows === void 0 ? {} : { windows: true, runConfigDir: join29(homeDir, ".claude-run") },
+      ...windows === void 0 ? {} : { windows: true, runConfigDir: join30(homeDir, ".claude-run") },
       ...isCache ? {
         only: {
           commands: cacheCommands,
-          writes: [join29(wt.path, ".studio", "reports", caps.reportName)],
+          writes: [join30(wt.path, ".studio", "reports", caps.reportName)],
           commandMs: (config2.cache?.timeoutMin ?? 60) * 6e4
         }
       } : {}
     },
     owner
   );
-  const mcpConfig = join29(stateRoot, "settings", `${item.id}.mcp.json`);
+  const mcpConfig = join30(stateRoot, "settings", `${item.id}.mcp.json`);
   let reaServer;
   if (rea !== void 0) {
     const run2 = prepareReaRun(stateRoot, item.id);
@@ -42637,9 +43190,9 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
   }
   env.HOME = homeDir;
   env.TMPDIR = tmpDir;
-  env.CARGO_HOME = join29(homeDir, ".cargo");
+  env.CARGO_HOME = join30(homeDir, ".cargo");
   const rustupHome = toolchainPaths.find(
-    (p) => existsSync8(join29(p, "settings.toml")) && existsSync8(join29(p, "toolchains"))
+    (p) => existsSync8(join30(p, "settings.toml")) && existsSync8(join30(p, "toolchains"))
   );
   if (rustupHome !== void 0) env.RUSTUP_HOME = rustupHome;
   env.CLAUDE_CONFIG_DIR = claudeConfigDir;
@@ -42653,7 +43206,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
   Object.assign(env, settingsEnv);
   if (config2.cache?.enabled === true && worker === void 0) Object.assign(env, cacheEnv(homeDir));
   if (token && item.type !== "research") env.GH_TOKEN = token;
-  const log2 = join29(stateRoot, "logs", `${item.id}.jsonl`);
+  const log2 = join30(stateRoot, "logs", `${item.id}.jsonl`);
   ensureStateDir(stateRoot, dirname11(log2));
   const logStart = fileSize(log2);
   if (windows !== void 0) {
@@ -42663,7 +43216,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
     );
     env.CLAUDE_CONFIG_DIR = runConfigDir(homeDir, claudeConfigDir);
     if (!existsNoFollow2(log2)) writeStateFile(stateRoot, log2, "");
-    const briefs = ["md", "caps", "rules", "reference"].map((ext) => join29(stateRoot, "briefs", `${item.id}.${ext}`)).filter(existsNoFollow2);
+    const briefs = ["md", "caps", "rules", "reference"].map((ext) => join30(stateRoot, "briefs", `${item.id}.${ext}`)).filter(existsNoFollow2);
     await windows.grant([
       { path: wt.path, rights: "M" },
       { path: homeDir, rights: "M" },
@@ -42671,7 +43224,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
       ...briefs.map((path10) => ({ path: path10, rights: "R" })),
       { path: settings, rights: "R" },
       { path: mcpConfig, rights: "R" },
-      { path: join29(stateRoot, "guard", `${item.id}.json`), rights: "R" },
+      { path: join30(stateRoot, "guard", `${item.id}.json`), rights: "R" },
       { path: log2, rights: "M" }
     ]);
   }
@@ -42725,7 +43278,7 @@ async function launchCrewLocked(projectDir2, item, config2, ports, launcher2, he
     env
   );
   const name = crewName(item);
-  const crewFile = join29(stateRoot, "crew.json");
+  const crewFile = join30(stateRoot, "crew.json");
   const record2 = {
     name,
     item: item.id,
@@ -42825,7 +43378,7 @@ function diskBytes2(path10, seen = /* @__PURE__ */ new Set()) {
     if (seen.has(key)) continue;
     seen.add(key);
     total += st.blocks !== void 0 ? st.blocks * 512 : st.size;
-    if (st.isDirectory()) for (const name of listDir(p)) stack.push(join30(p, name));
+    if (st.isDirectory()) for (const name of listDir(p)) stack.push(join31(p, name));
   }
   return total;
 }
@@ -42839,26 +43392,26 @@ function smallFile(p, max) {
   }
 }
 function localTips(clone2) {
-  const git2 = join30(clone2, ".git");
+  const git2 = join31(clone2, ".git");
   const tips = /* @__PURE__ */ new Set();
-  const head = smallFile(join30(git2, "HEAD"), MAX_REF_BYTES);
+  const head = smallFile(join31(git2, "HEAD"), MAX_REF_BYTES);
   if (head === void 0) return { ok: false, why: ".git/HEAD cannot be read as a plain file" };
   const h2 = head.trim();
   if (SHA.test(h2)) tips.add(h2);
   else if (!/^ref: refs\/heads\/\S+$/.test(h2)) return { ok: false, why: ".git/HEAD is unusual" };
-  if (lstatOr(join30(git2, "refs", "stash")) !== void 0)
+  if (lstatOr(join31(git2, "refs", "stash")) !== void 0)
     return { ok: false, why: "it has a stash" };
-  const refsSt = lstatOr(join30(git2, "refs"));
+  const refsSt = lstatOr(join31(git2, "refs"));
   if (refsSt !== void 0 && !refsSt.isDirectory())
     return { ok: false, why: ".git/refs is no folder" };
-  const stack = [join30(git2, "refs", "heads")];
+  const stack = [join31(git2, "refs", "heads")];
   while (stack.length > 0) {
     const dir = stack.pop();
     const st = lstatOr(dir);
     if (st === void 0) continue;
     if (!st.isDirectory()) return { ok: false, why: "a branch ref is no plain file" };
     for (const name of listDir(dir)) {
-      const p = join30(dir, name);
+      const p = join31(dir, name);
       const s = lstatOr(p);
       if (s?.isDirectory()) {
         stack.push(p);
@@ -42871,7 +43424,7 @@ function localTips(clone2) {
       tips.add(text);
     }
   }
-  const packedPath = join30(git2, "packed-refs");
+  const packedPath = join31(git2, "packed-refs");
   if (lstatOr(packedPath) !== void 0) {
     const packed = smallFile(packedPath, MAX_PACKED_BYTES);
     if (packed === void 0) return { ok: false, why: ".git/packed-refs cannot be read" };
@@ -42892,7 +43445,7 @@ function localTips(clone2) {
 function onlyReports(clone2) {
   const top = listDir(clone2);
   if (top.length !== 1 || top[0] !== ".studio") return false;
-  const inner = listDir(join30(clone2, ".studio"));
+  const inner = listDir(join31(clone2, ".studio"));
   return inner.length === 1 && inner[0] === "reports";
 }
 function droppedAt(item) {
@@ -42936,19 +43489,19 @@ async function prHead(ports, repo, pr) {
 }
 async function planCloneGc(o2) {
   const ids = /* @__PURE__ */ new Set();
-  for (const sub of ITEM_DIRS) for (const name of listDir(join30(o2.stateRoot, sub))) ids.add(name);
+  for (const sub of ITEM_DIRS) for (const name of listDir(join31(o2.stateRoot, sub))) ids.add(name);
   const sorted = [...ids].sort();
   const sized = (id, e) => {
-    const clone2 = join30(o2.stateRoot, "clones", id);
+    const clone2 = join31(o2.stateRoot, "clones", id);
     const entry = { item: id, clone: lstatOr(clone2) !== void 0, ...e };
     if (!o2.sizes) return entry;
     const seen = /* @__PURE__ */ new Set();
     const parts = {};
     for (const part of SIZE_PARTS) {
-      if (lstatOr(join30(clone2, part))?.isDirectory())
-        parts[part] = diskBytes2(join30(clone2, part), new Set(seen));
+      if (lstatOr(join31(clone2, part))?.isDirectory())
+        parts[part] = diskBytes2(join31(clone2, part), new Set(seen));
     }
-    entry.bytes = ITEM_DIRS.reduce((n4, sub) => n4 + diskBytes2(join30(o2.stateRoot, sub, id), seen), 0);
+    entry.bytes = ITEM_DIRS.reduce((n4, sub) => n4 + diskBytes2(join31(o2.stateRoot, sub, id), seen), 0);
     if (Object.keys(parts).length > 0) entry.parts = parts;
     return entry;
   };
@@ -43002,12 +43555,12 @@ async function planCloneGc(o2) {
     } catch {
       return keep("the item names no valid repository");
     }
-    const clone2 = join30(o2.stateRoot, "clones", id);
+    const clone2 = join31(o2.stateRoot, "clones", id);
     const cloneSt = lstatOr(clone2);
     let tips = [];
     if (cloneSt !== void 0) {
       if (!cloneSt.isDirectory()) return keep("the clone is no plain folder");
-      const gitSt = lstatOr(join30(clone2, ".git"));
+      const gitSt = lstatOr(join31(clone2, ".git"));
       if (gitSt !== void 0) {
         if (!gitSt.isDirectory()) return keep(".git is no plain folder");
         const t = localTips(clone2);
@@ -43016,7 +43569,7 @@ async function planCloneGc(o2) {
       }
     }
     if (lessons === void 0 && cloneSt !== void 0) return keep("lessons.json cannot be read");
-    const hasReports = lstatOr(join30(clone2, ".studio", "reports"))?.isDirectory() === true;
+    const hasReports = lstatOr(join31(clone2, ".studio", "reports"))?.isDirectory() === true;
     const cited = hasReports ? citingLessons(lessons ?? [], id) : [];
     if (cited.length > 0 && onlyReports(clone2)) {
       return keep(`only its report is left, cited by lesson ${cited.join(", ")}`);
@@ -43071,11 +43624,11 @@ async function applyCloneGc(o2) {
         continue;
       }
       try {
-        const clone2 = join30(o2.stateRoot, "clones", e.item);
+        const clone2 = join31(o2.stateRoot, "clones", e.item);
         if (e.verdict === "trim") trimToReports(o2.stateRoot, clone2);
         else removeStateEntry(o2.stateRoot, clone2);
-        removeStateEntry(o2.stateRoot, join30(o2.stateRoot, "homes", e.item));
-        removeStateEntry(o2.stateRoot, join30(o2.stateRoot, "tmp", e.item));
+        removeStateEntry(o2.stateRoot, join31(o2.stateRoot, "homes", e.item));
+        removeStateEntry(o2.stateRoot, join31(o2.stateRoot, "tmp", e.item));
         (e.verdict === "trim" ? out.trimmed : out.removed).push(e.item);
       } catch (err) {
         out.skipped.push({
@@ -43091,15 +43644,15 @@ async function applyCloneGc(o2) {
 }
 function trimToReports(stateRoot, clone2) {
   for (const name of listDir(clone2)) {
-    if (name !== ".studio") removeStateEntry(stateRoot, join30(clone2, name));
+    if (name !== ".studio") removeStateEntry(stateRoot, join31(clone2, name));
   }
-  const studio = join30(clone2, ".studio");
+  const studio = join31(clone2, ".studio");
   if (lstatOr(studio)?.isDirectory() !== true) {
     removeStateEntry(stateRoot, studio);
     return;
   }
   for (const name of listDir(studio)) {
-    if (name !== "reports") removeStateEntry(stateRoot, join30(studio, name));
+    if (name !== "reports") removeStateEntry(stateRoot, join31(studio, name));
   }
 }
 function formatBytes(n4) {
@@ -43190,7 +43743,7 @@ function gcLines(r) {
 
 // src/migration-numbers.ts
 import { existsSync as existsSync9, lstatSync as lstatSync26, readFileSync as readFileSync30 } from "node:fs";
-import { join as join31 } from "node:path";
+import { join as join32 } from "node:path";
 var REGISTER_FILE = "migration-numbers.json";
 var REGISTER_LOCK = "migration-numbers.lock";
 var LOCK_STALE_MS4 = 3e4;
@@ -43223,7 +43776,7 @@ function migrationScheme(config2) {
   if (m === void 0) return void 0;
   return { repo: m.repo ?? config2.primaryRepo, dir: m.dir, pattern: new RegExp(m.numberPattern) };
 }
-var registerFile = (root) => join31(root, REGISTER_FILE);
+var registerFile = (root) => join32(root, REGISTER_FILE);
 function readRegister(root) {
   const file4 = registerFile(root);
   assertStatePath(root, file4);
@@ -43591,12 +44144,12 @@ function registerDoctorLine(config2, root) {
 // src/push.ts
 import { randomBytes as randomBytes11 } from "node:crypto";
 import { lstatSync as lstatSync32, readFileSync as readFileSync37 } from "node:fs";
-import { join as join38 } from "node:path";
+import { join as join39 } from "node:path";
 
 // src/claude-language.ts
 import { lstatSync as lstatSync27, readFileSync as readFileSync31 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
-import { isAbsolute as isAbsolute9, join as join32 } from "node:path";
+import { isAbsolute as isAbsolute9, join as join33 } from "node:path";
 var MAX_BYTES = 1024 * 1024;
 function languageIn2(file4) {
   try {
@@ -43612,13 +44165,13 @@ function languageIn2(file4) {
 }
 function claudeLanguage(owner = {}, projectDir2) {
   const env = owner.env ?? process.env;
-  const configDir = env.CLAUDE_CONFIG_DIR !== void 0 && isAbsolute9(env.CLAUDE_CONFIG_DIR) ? env.CLAUDE_CONFIG_DIR : join32(owner.homedir ?? homedir7(), ".claude");
+  const configDir = env.CLAUDE_CONFIG_DIR !== void 0 && isAbsolute9(env.CLAUDE_CONFIG_DIR) ? env.CLAUDE_CONFIG_DIR : join33(owner.homedir ?? homedir7(), ".claude");
   const files = [
     ...projectDir2 === void 0 ? [] : [
-      join32(projectDir2, ".claude", "settings.local.json"),
-      join32(projectDir2, ".claude", "settings.json")
+      join33(projectDir2, ".claude", "settings.local.json"),
+      join33(projectDir2, ".claude", "settings.json")
     ],
-    join32(configDir, "settings.json")
+    join33(configDir, "settings.json")
   ];
   for (const file4 of files) {
     const language = languageIn2(file4);
@@ -43629,9 +44182,9 @@ function claudeLanguage(owner = {}, projectDir2) {
 
 // src/evidence.ts
 var import_yaml12 = __toESM(require_dist(), 1);
-import { createHash as createHash4, randomBytes as randomBytes10 } from "node:crypto";
+import { createHash as createHash5, randomBytes as randomBytes10 } from "node:crypto";
 import { existsSync as existsSync12, lstatSync as lstatSync30, mkdirSync as mkdirSync10, readFileSync as readFileSync35, writeFileSync as writeFileSync13 } from "node:fs";
-import { join as join36 } from "node:path";
+import { join as join37 } from "node:path";
 
 // src/ci-jobs.ts
 var import_yaml11 = __toESM(require_dist(), 1);
@@ -43880,7 +44433,7 @@ function approvedJobsProblem(jobs, checks) {
 import { spawn as spawn2, spawnSync as spawnSync2 } from "node:child_process";
 import { existsSync as existsSync10, lstatSync as lstatSync28, mkdirSync as mkdirSync8, mkdtempSync, readlinkSync, realpathSync as realpathSync9 } from "node:fs";
 import { homedir as homedir8, tmpdir } from "node:os";
-import { basename as basename5, dirname as dirname12, join as join33, resolve as resolve8, sep as sep7 } from "node:path";
+import { basename as basename5, dirname as dirname12, join as join34, resolve as resolve8, sep as sep7 } from "node:path";
 var SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 var BWRAP = ["/usr/bin/bwrap", "/usr/local/bin/bwrap", "/bin/bwrap"];
 var KILL_GRACE_MS = 2e3;
@@ -43890,7 +44443,7 @@ function realOr3(p) {
   const abs = resolve8(p);
   if (existsSync10(abs)) return realpathSync9(abs);
   const parent = dirname12(abs);
-  return parent === abs ? abs : join33(realOr3(parent), basename5(abs));
+  return parent === abs ? abs : join34(realOr3(parent), basename5(abs));
 }
 var ancestors = (p) => {
   const out = [];
@@ -44040,7 +44593,7 @@ var SYSTEM_PATH = [
 ];
 var PROOF_VAR = /^STUDIO_PROOF_[A-Z_]+$/;
 function proofEnv(read3, tmp, vars) {
-  const path10 = [...read3.flatMap((d) => [join33(d, "bin"), d]), ...SYSTEM_PATH];
+  const path10 = [...read3.flatMap((d) => [join34(d, "bin"), d]), ...SYSTEM_PATH];
   const env = {
     PATH: [...new Set(path10)].join(":"),
     HOME: tmp,
@@ -44058,8 +44611,8 @@ function proofEnv(read3, tmp, vars) {
 function makeRunDir(home = homedir8()) {
   let base2 = realOr3(tmpdir());
   if (within2(base2, realOr3(home))) base2 = realOr3("/tmp");
-  const run2 = realpathSync9(mkdtempSync(join33(base2, "studio-proof-")));
-  const tmp = join33(run2, "tmp");
+  const run2 = realpathSync9(mkdtempSync(join34(base2, "studio-proof-")));
+  const tmp = join34(run2, "tmp");
   mkdirSync8(tmp, { mode: 448 });
   return { run: run2, tmp };
 }
@@ -44210,7 +44763,7 @@ var realProofRunner = {
 
 // src/proof-tree.ts
 import { mkdirSync as mkdirSync9, writeFileSync as writeFileSync12 } from "node:fs";
-import { dirname as dirname13, join as join34 } from "node:path";
+import { dirname as dirname13, join as join35 } from "node:path";
 
 // node_modules/.pnpm/is-plain-obj@4.1.0/node_modules/is-plain-obj/index.js
 function isPlainObject3(value2) {
@@ -52066,7 +52619,7 @@ async function writeTree(gitDir, entries2, dest, timeoutMs) {
     if (body.length !== e.size || out[nl + 1 + e.size] !== 10) {
       throw new Error("git cat-file ended early");
     }
-    const file4 = join34(dest, e.path);
+    const file4 = join35(dest, e.path);
     mkdirSync9(dirname13(file4), { recursive: true });
     writeFileSync12(file4, body, { flag: "wx", mode: e.mode === "100755" ? 493 : 420 });
     at2 = nl + 2 + e.size;
@@ -52084,7 +52637,7 @@ import {
   writeSync as writeSync2
 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { dirname as dirname14, join as join35 } from "node:path";
+import { dirname as dirname14, join as join36 } from "node:path";
 
 // src/main-build.ts
 var UNKNOWN = { status: "unknown" };
@@ -52222,7 +52775,7 @@ var stateSchema = external_exports.strictObject({
     })
   )
 });
-var queueFile = (stateRoot) => join35(stateRoot, "queue.json");
+var queueFile = (stateRoot) => join36(stateRoot, "queue.json");
 function loadQueue(stateRoot) {
   const file4 = queueFile(stateRoot);
   assertStatePath(stateRoot, file4);
@@ -52318,7 +52871,7 @@ function installSignalRelease(lock) {
   };
 }
 function appendStateLine(stateRoot, name, line4) {
-  const file4 = join35(stateRoot, name);
+  const file4 = join36(stateRoot, name);
   assertStatePath(stateRoot, file4);
   let torn = false;
   if (existsSync11(file4)) {
@@ -52917,7 +53470,7 @@ function proofCommandsFor(o2) {
     o2.homedir,
     stateBaseFor(owner),
     ownerConfigDir(owner),
-    o2.env.CLAUDE_CONFIG_DIR || join36(o2.homedir, ".claude"),
+    o2.env.CLAUDE_CONFIG_DIR || join37(o2.homedir, ".claude"),
     ...credentialLocations(o2.homedir, o2.env).all
   ];
   const runner = o2.runner ?? realProofRunner;
@@ -52940,12 +53493,12 @@ var GIT_ARCHIVE_MS = 3e5;
 var TREE_CAPS = { maxBytes: 128 * 1024 * 1024, maxFiles: 5e4 };
 var MAX_PROOF_OUTPUT = 1024 * 1024;
 var MAX_PROOF_FILE = 256 * 1024 * 1024;
-var digest = (text) => `sha256:${createHash4("sha256").update(text).digest("hex")}`;
+var digest = (text) => `sha256:${createHash5("sha256").update(text).digest("hex")}`;
 var short = (sha) => sha.slice(0, 12);
 var guardName = (r) => `${r.guard.workflow} / ${r.guard.job}`;
 var sameKey = (e, k) => e.rule === k.rule && e.repo === k.repo && e.pr === k.pr && e.base.toLowerCase() === k.base.toLowerCase() && e.head.toLowerCase() === k.head.toLowerCase();
 function readExceptions(stateRoot) {
-  const file4 = join36(stateRoot, EXCEPTIONS_FILE);
+  const file4 = join37(stateRoot, EXCEPTIONS_FILE);
   if (!existsSync12(file4)) return [];
   if (lstatSync30(file4).isSymbolicLink()) {
     throw new Error(`refusing to read ${file4}: it is a symlink`);
@@ -52992,7 +53545,7 @@ function recordException(stateRoot, entry) {
   }
 }
 function retryAllowed(stateRoot, key, now) {
-  const file4 = join36(stateRoot, RETRIES_FILE);
+  const file4 = join37(stateRoot, RETRIES_FILE);
   let counts = {};
   try {
     if (existsSync12(file4) && !lstatSync30(file4).isSymbolicLink()) {
@@ -53255,8 +53808,8 @@ async function runCommand(ctx, p, r, ref) {
     return { kind: "retry", why: "the proof run dir cannot be made" };
   }
   try {
-    const base2 = join36(dirs.run, "base");
-    const head = join36(dirs.run, "head");
+    const base2 = join37(dirs.run, "base");
+    const head = join37(dirs.run, "head");
     const listed = [];
     for (const [side, oid, dir] of [
       ["base", p.base, base2],
@@ -53281,8 +53834,8 @@ async function runCommand(ctx, p, r, ref) {
     } catch {
       return { kind: "retry", why: "the base and head cannot be written out" };
     }
-    const diff = join36(dirs.run, "diff.patch");
-    const files = join36(dirs.run, "files");
+    const diff = join37(dirs.run, "diff.patch");
+    const files = join37(dirs.run, "files");
     writeFileSync13(diff, p.diff, { mode: 256 });
     writeFileSync13(files, p.files.map((f3) => `${f3}\0`).join(""), { mode: 256 });
     const nonce = randomBytes10(16).toString("hex");
@@ -53636,7 +54189,7 @@ async function remoteTip(ctx, branch) {
 
 // src/pane-data.ts
 import { lstatSync as lstatSync31, readFileSync as readFileSync36 } from "node:fs";
-import { join as join37 } from "node:path";
+import { join as join38 } from "node:path";
 var WORKER_WAIT = "worker: ";
 var PR_HELD = "pr held: ";
 var TICK_FILE = "tick.json";
@@ -53817,7 +54370,7 @@ var rows = (v) => Array.isArray(v) ? v.flatMap(
   (r) => r !== null && typeof r === "object" && typeof r.item === "string" && typeof r.reason === "string" ? [{ item: r.item, reason: r.reason }] : []
 ) : [];
 function readTickRecord(root) {
-  const file4 = join37(root, TICK_FILE);
+  const file4 = join38(root, TICK_FILE);
   try {
     assertStatePath(root, file4);
     const st = lstatSync31(file4, { throwIfNoEntry: false });
@@ -53832,7 +54385,7 @@ function readTickRecord(root) {
   }
 }
 function writeTickRecord(root, rec) {
-  writeStateFile(root, join37(root, TICK_FILE), `${JSON.stringify(rec, null, 2)}
+  writeStateFile(root, join38(root, TICK_FILE), `${JSON.stringify(rec, null, 2)}
 `);
 }
 function resolveZone(timezone) {
@@ -53922,7 +54475,7 @@ function decisionsOf(o2) {
     const key = `${o2.projectKey}:${item}:${kind}:${d.at}`;
     if (!out.some((x) => x.key === key)) out.push({ key, item, kind, urgent: false });
   }
-  const read3 = readBlocksFile(join38(o2.ownerRoot, "blocks.json"));
+  const read3 = readBlocksFile(join39(o2.ownerRoot, "blocks.json"));
   if (!read3.ok) {
     out.push({ key: "block::unreadable", item: "?", kind: "account_block", urgent: true });
   } else {
@@ -54004,7 +54557,7 @@ async function pushLocked(o2) {
   });
   if (!lock) return { sent: 0, deferred: "locked", errors: [] };
   try {
-    const file4 = join38(o2.ownerRoot, PUSHED_FILE);
+    const file4 = join39(o2.ownerRoot, PUSHED_FILE);
     const state = readPushed(file4);
     if (state === void 0) {
       return { sent: 0, errors: [`notify: ${PUSHED_FILE} is unreadable; nothing sent`] };
@@ -54063,7 +54616,7 @@ async function pushLocked(o2) {
 
 // src/secret-command.ts
 function readPrimaryRepo(project) {
-  const file4 = join39(project, ".studio", "studio.yaml");
+  const file4 = join40(project, ".studio", "studio.yaml");
   let raw;
   try {
     raw = (0, import_yaml13.parse)(readFileSync38(file4, "utf8"));
@@ -54121,7 +54674,7 @@ async function runSecretSet(o2) {
 }
 var API_KEY_VARS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
 async function crewConfigDir(command, owner, env, ports) {
-  const fallback = env.CLAUDE_CONFIG_DIR || join39(owner.homedir ?? homedir9(), ".claude");
+  const fallback = env.CLAUDE_CONFIG_DIR || join40(owner.homedir ?? homedir9(), ".claude");
   if (command === void 0) return fallback;
   try {
     const got = await runCredentialProvider(
@@ -54175,7 +54728,7 @@ function toolsOutside(env, home, toolchain) {
   const out = [];
   for (const tool of CREW_TOOLS) {
     for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
-      const file4 = join39(dir, tool);
+      const file4 = join40(dir, tool);
       try {
         if (!statSync6(file4).isFile()) continue;
       } catch {
@@ -54256,7 +54809,7 @@ function reaState(config2, ownerConfig, configDir, ownerRoot) {
   let registered = "not registered";
   if (configDir !== void 0) {
     try {
-      const raw = JSON.parse(readFileSync38(join39(configDir, ".claude.json"), "utf8"));
+      const raw = JSON.parse(readFileSync38(join40(configDir, ".claude.json"), "utf8"));
       const args = raw.mcpServers?.[REA_SERVER]?.args;
       const at2 = Array.isArray(args) ? args.find((a2) => typeof a2 === "string" && a2.startsWith(`${REA_PACKAGE}@`)) : void 0;
       if (typeof at2 === "string") {
@@ -54513,7 +55066,7 @@ async function runDoctor(o2) {
 // src/stack.ts
 var import_yaml14 = __toESM(require_dist(), 1);
 import { lstatSync as lstatSync33, readdirSync as readdirSync13, readFileSync as readFileSync39 } from "node:fs";
-import { join as join40 } from "node:path";
+import { join as join41 } from "node:path";
 var MAX_FILE_BYTES2 = 1024 * 1024;
 var MAX_ENTRIES = 200;
 var MONOREPO_DIRS = ["apps", "packages", "services", "crates", "libs"];
@@ -54556,7 +55109,7 @@ function readSmall(path10, notes, name) {
 }
 var isFileEntry = (dir, name) => {
   try {
-    return lstatSync33(join40(dir, name)).isFile();
+    return lstatSync33(join41(dir, name)).isFile();
   } catch {
     return false;
   }
@@ -54590,7 +55143,7 @@ function scanDir(dir, label, found, notes) {
     return;
   }
   const file4 = (n4) => isFileEntry(dir, n4);
-  const read3 = (n4) => readSmall(join40(dir, n4), notes, label ? `${label}/${n4}` : n4);
+  const read3 = (n4) => readSmall(join41(dir, n4), notes, label ? `${label}/${n4}` : n4);
   const some = (re) => names.some((n4) => re.test(n4) && file4(n4));
   const pkg = names.includes("package.json") && file4("package.json") ? read3("package.json") : void 0;
   if (pkg !== void 0) {
@@ -54600,7 +55153,7 @@ function scanDir(dir, label, found, notes) {
   }
   if (some(/^next\.config\./)) found.add("nextjs");
   if (some(/^components\.json$/)) found.add("shadcn");
-  if (isRealDir2(join40(dir, "migrations"))) found.add("postgres");
+  if (isRealDir2(join41(dir, "migrations"))) found.add("postgres");
   if (some(/^(Podfile|Package\.swift)$/) || names.some((n4) => n4.endsWith(".xcodeproj"))) {
     found.add("ios");
   }
@@ -54608,7 +55161,7 @@ function scanDir(dir, label, found, notes) {
     if (/WinUI|WindowsAppSDK/i.test(read3(n4) ?? "")) found.add("winui");
   }
   if (some(/^Cargo\.toml$/)) found.add("rust");
-  if (isRealDir2(join40(dir, "src-tauri"))) {
+  if (isRealDir2(join41(dir, "src-tauri"))) {
     found.add("tauri");
     found.add("rust");
   }
@@ -54617,7 +55170,7 @@ function scanDir(dir, label, found, notes) {
   if (some(/^svelte\.config\./)) found.add("svelte");
   if (some(/^(astro\.config\..*|vite\.config\..*|index\.html)$/)) found.add("web");
   if (some(/^Dockerfile/) || some(/^(docker-)?compose.*\.ya?ml$/)) found.add("docker");
-  if (some(/^wp-config\.php$/) || isRealDir2(join40(dir, "wp-content"))) found.add("wordpress");
+  if (some(/^wp-config\.php$/) || isRealDir2(join41(dir, "wp-content"))) found.add("wordpress");
   if (some(/^style\.css$/) && /Theme Name:/.test(read3("style.css") ?? "")) found.add("wordpress");
   for (const n4 of names.filter((x) => x.endsWith(".php") && file4(x))) {
     if (/Plugin Name:/.test(read3(n4) ?? "")) found.add("wordpress");
@@ -54627,20 +55180,20 @@ function detectStacks(dir) {
   const found = /* @__PURE__ */ new Set();
   const notes = [];
   scanDir(dir, "", found, notes);
-  if (isRealDir2(join40(dir, ".github", "workflows"))) found.add("gha");
+  if (isRealDir2(join41(dir, ".github", "workflows"))) found.add("gha");
   for (const group of MONOREPO_DIRS) {
-    const base2 = join40(dir, group);
+    const base2 = join41(dir, group);
     if (!isRealDir2(base2)) continue;
     for (const name of readdirSync13(base2).slice(0, MAX_ENTRIES)) {
       if (name.startsWith(".") || name === "node_modules") continue;
-      if (isRealDir2(join40(base2, name))) scanDir(join40(base2, name), `${group}/${name}`, found, notes);
+      if (isRealDir2(join41(base2, name))) scanDir(join41(base2, name), `${group}/${name}`, found, notes);
     }
   }
   if (OTHER_WEB.some((s) => found.has(s))) found.delete("web");
   return { stacks: [...found].sort(), notes };
 }
 function runSetupStack(o2) {
-  const file4 = join40(o2.project, ".studio", "studio.yaml");
+  const file4 = join41(o2.project, ".studio", "studio.yaml");
   let text;
   try {
     text = readFileSync39(file4, "utf8");
@@ -54755,11 +55308,11 @@ function componentId2(name, root, taken) {
 }
 function proposeComponents(project, repo) {
   const components = [];
-  const manifests = new Set(MANIFESTS.filter((m) => isRealFile2(join41(project, m))));
+  const manifests = new Set(MANIFESTS.filter((m) => isRealFile2(join42(project, m))));
   const notes = [];
   const taken = /* @__PURE__ */ new Set();
   for (const root of MONOREPO_DIRS) {
-    const base2 = join41(project, root);
+    const base2 = join42(project, root);
     if (!isRealDir3(base2)) continue;
     let names;
     try {
@@ -54769,8 +55322,8 @@ function proposeComponents(project, repo) {
       continue;
     }
     for (const name of names) {
-      if (name.startsWith(".") || name === "node_modules" || !isRealDir3(join41(base2, name))) continue;
-      const found = MANIFESTS.filter((m) => isRealFile2(join41(base2, name, m)));
+      if (name.startsWith(".") || name === "node_modules" || !isRealDir3(join42(base2, name))) continue;
+      const found = MANIFESTS.filter((m) => isRealFile2(join42(base2, name, m)));
       if (found.length === 0) continue;
       if (!PLAIN_NAME.test(name)) {
         notes.push(`${root}/${safe(name)}: name needs quoting in a glob, add it by hand`);
@@ -54785,7 +55338,7 @@ function proposeComponents(project, repo) {
       });
     }
   }
-  const tooling = TOOLING_DIRS.filter((d) => isRealDir3(join41(project, d)));
+  const tooling = TOOLING_DIRS.filter((d) => isRealDir3(join42(project, d)));
   if (components.length > 0 && tooling.length > 0) {
     components.push({
       id: componentId2("tooling", "tooling", taken),
@@ -54950,7 +55503,7 @@ var BOARD_IGNORE_TEXT = `# Studio: the board is lead-machine state; studio roadm
 ${BOARD_IGNORE}
 `;
 function ignoreBoard(project) {
-  const file4 = join41(project, ".gitignore");
+  const file4 = join42(project, ".gitignore");
   let text = "";
   if (exists3(file4)) {
     const st = lstatSync34(file4);
@@ -55006,13 +55559,13 @@ function writeBoth(o2, dir, files) {
   }
 }
 async function runInit(o2) {
-  const dotStudio = join41(o2.project, ".studio");
+  const dotStudio = join42(o2.project, ".studio");
   if (exists3(dotStudio) && !isRealDir3(dotStudio)) {
     throw new Error(
       ".studio is not a directory (a link or a file): nothing written; remove it first"
     );
   }
-  const present2 = STUDIO_FILES.filter((f3) => exists3(join41(o2.project, f3)));
+  const present2 = STUDIO_FILES.filter((f3) => exists3(join42(o2.project, f3)));
   if (present2.length > 0) {
     throw new Error(
       `${present2.join(" and ")} already exists: Studio is set up here, nothing written; edit the file by hand, or use studio setup ci, studio setup stack and studio doctor`
@@ -55110,7 +55663,7 @@ ${body}`;
   const boardText = BOARD_TEXT(prefix, repo);
   if (primary !== void 0) {
     try {
-      const file4 = join41(dotStudio, "studio.yaml");
+      const file4 = join42(dotStudio, "studio.yaml");
       parseBoard(boardText, boardPath(o2.project), parseConfig(configText, file4));
       checks.push({ name: "proposal", status: "pass", detail: "both files load" });
     } catch (e) {
@@ -55130,7 +55683,7 @@ ${body}`;
       refused = `nothing written: fix ${failed2.map((c3) => c3.name).join(", ") || "the checks"} first`;
     } else {
       writeBoth(o2, dotStudio, [
-        [join41(dotStudio, "studio.yaml"), configText],
+        [join42(dotStudio, "studio.yaml"), configText],
         [boardPath(o2.project), boardText]
       ]);
       written.push(...STUDIO_FILES);
@@ -55199,14 +55752,14 @@ ${body}`;
 
 // src/lessons-review.ts
 import { lstatSync as lstatSync35, readFileSync as readFileSync41 } from "node:fs";
-import { join as join42 } from "node:path";
+import { join as join43 } from "node:path";
 var LESSONS_REVIEW_DAYS = 7;
 var DAY_MS4 = 864e5;
 var LESSONS_NOTE = "lessons-review: ";
 var NUMBERS_NOTE = "lessons: ";
 var LEAD_WORK = "lead work: studio lessons, then accept or drop each proposal";
 var BY = "studio";
-var recordFile = (stateRoot) => join42(stateRoot, "lessons-review.json");
+var recordFile = (stateRoot) => join43(stateRoot, "lessons-review.json");
 function lastRun(stateRoot) {
   const file4 = recordFile(stateRoot);
   try {
@@ -55843,7 +56396,7 @@ import {
   rmSync as rmSync9,
   writeFileSync as writeFileSync15
 } from "node:fs";
-import { dirname as dirname15, isAbsolute as isAbsolute10, join as join43, relative as relative2, resolve as resolve9, sep as sep8 } from "node:path";
+import { dirname as dirname15, isAbsolute as isAbsolute10, join as join44, relative as relative2, resolve as resolve9, sep as sep8 } from "node:path";
 
 // src/epics.ts
 var ONE_LINE2 = /^[^\p{Cc}\p{Cf}]{1,300}$/u;
@@ -56076,7 +56629,7 @@ function projectFile(project, file4) {
   let dir = dirname15(wanted);
   while (!existsSync13(dir)) dir = dirname15(dir);
   const realDir = realpathSync11(dir);
-  const full = join43(realDir, relative2(dir, wanted));
+  const full = join44(realDir, relative2(dir, wanted));
   const rel = relative2(root, full);
   if (rel === "" || rel === ".." || rel.startsWith(`..${sep8}`) || isAbsolute10(rel)) {
     throw new Error(`${JSON.stringify(file4)}: must stay inside the project`);
@@ -56111,7 +56664,7 @@ function writeRoadmap(project, out, text, force) {
     );
   }
   if (old === text) return { written: out, changed: false };
-  const tmp = join43(dirname15(file4), `.${process.pid}.${Date.now()}.roadmap.tmp`);
+  const tmp = join44(dirname15(file4), `.${process.pid}.${Date.now()}.roadmap.tmp`);
   try {
     writeFileSync15(tmp, text, { flag: "wx" });
     renameSync14(tmp, file4);
@@ -56286,7 +56839,7 @@ var pinnedMain = (item) => {
 var piecesOf = (board, epicId) => board.items.filter((i2) => i2.epic === epicId && acceptanceOf(i2) === void 0);
 function epicState(board, epicId) {
   const ids = piecesOf(board, epicId).map((i2) => `${i2.id}:${i2.status}`).sort();
-  return createHash5("sha256").update(ids.join("\n")).digest("hex").slice(0, 12);
+  return createHash6("sha256").update(ids.join("\n")).digest("hex").slice(0, 12);
 }
 var acceptancesOf = (board, epicId) => board.items.filter((i2) => acceptanceOf(i2) === epicId);
 function acceptanceRepo(board, epicId, config2) {
@@ -56511,7 +57064,7 @@ var runsSchema = external_exports.record(
   })
 );
 function readRuns(stateRoot) {
-  const file4 = join44(stateRoot, RUNS_FILE);
+  const file4 = join45(stateRoot, RUNS_FILE);
   try {
     assertStatePath(stateRoot, file4);
     const st = lstatSync37(file4, { throwIfNoEntry: false });
@@ -56523,7 +57076,7 @@ function readRuns(stateRoot) {
     return void 0;
   }
 }
-var writeRuns = (stateRoot, runs) => writeStateFile(stateRoot, join44(stateRoot, RUNS_FILE), `${JSON.stringify(runs, null, 2)}
+var writeRuns = (stateRoot, runs) => writeStateFile(stateRoot, join45(stateRoot, RUNS_FILE), `${JSON.stringify(runs, null, 2)}
 `);
 async function prepareAcceptances(o2) {
   const out = {
@@ -56964,7 +57517,7 @@ function applyAcceptance(board, acceptance, done, now, config2) {
     (config2.acceptance?.suites ?? []).map((x) => `${x.workflow} / ${x.job}`)
   );
   for (const [k, suite] of done.failedSuites.entries()) {
-    const key = `${SUITE_NOTE}${createHash5("sha256").update(suite).digest("hex").slice(0, 12)}`;
+    const key = `${SUITE_NOTE}${createHash6("sha256").update(suite).digest("hex").slice(0, 12)}`;
     const already = next.items.some(
       (i2) => open3(i2) && i2.epic === done.epic && (i2.notes ?? []).includes(key)
     );
@@ -57026,19 +57579,19 @@ function applyAcceptance(board, acceptance, done, now, config2) {
 
 // src/adopt.ts
 import { lstatSync as lstatSync41, readdirSync as readdirSync16, readFileSync as readFileSync48, realpathSync as realpathSync12 } from "node:fs";
-import { join as join50, resolve as resolve10 } from "node:path";
+import { join as join51, resolve as resolve10 } from "node:path";
 
 // src/recover.ts
 import { existsSync as existsSync14, lstatSync as lstatSync40, readdirSync as readdirSync15 } from "node:fs";
-import { join as join49 } from "node:path";
+import { join as join50 } from "node:path";
 
 // src/flaky-ci.ts
 import { readFileSync as readFileSync45 } from "node:fs";
-import { join as join46 } from "node:path";
+import { join as join47 } from "node:path";
 
 // src/flaky.ts
 import { readFileSync as readFileSync44 } from "node:fs";
-import { join as join45 } from "node:path";
+import { join as join46 } from "node:path";
 var MAX_FLAKY = 500;
 var MAX_NAME2 = 200;
 var entrySchema3 = external_exports.object({
@@ -57047,7 +57600,7 @@ var entrySchema3 = external_exports.object({
   lastSha: external_exports.string(),
   lastAt: external_exports.string()
 });
-var fileOf = (stateRoot) => join45(stateRoot, "flaky.json");
+var fileOf = (stateRoot) => join46(stateRoot, "flaky.json");
 function read2(stateRoot) {
   const file4 = fileOf(stateRoot);
   assertStatePath(stateRoot, file4);
@@ -57110,7 +57663,7 @@ var entrySchema4 = external_exports.strictObject({
   outcome: external_exports.enum(["pass", "fail"]).optional()
 });
 function readLedger2(stateRoot) {
-  const file4 = join46(stateRoot, RERUNS_FILE);
+  const file4 = join47(stateRoot, RERUNS_FILE);
   assertStatePath(stateRoot, file4);
   let text;
   try {
@@ -57131,7 +57684,7 @@ function readLedger2(stateRoot) {
 }
 function writeLedger(stateRoot, entries2, now) {
   const kept = entries2.filter((e) => now.getTime() - Date.parse(e.at) < KEEP_MS2).slice(-MAX_ENTRIES3);
-  writeStateFile(stateRoot, join46(stateRoot, RERUNS_FILE), `${JSON.stringify(kept, null, 2)}
+  writeStateFile(stateRoot, join47(stateRoot, RERUNS_FILE), `${JSON.stringify(kept, null, 2)}
 `);
 }
 function withLedger(stateRoot, now, fn) {
@@ -57372,7 +57925,7 @@ function ciFailurePolicy(o2) {
 // src/notify.ts
 import { lstatSync as lstatSync38, readFileSync as readFileSync46 } from "node:fs";
 import { homedir as homedir10 } from "node:os";
-import { join as join47 } from "node:path";
+import { join as join48 } from "node:path";
 var MAX_SENDS_PER_RUN = 20;
 var MAX_TEXT2 = 500;
 var NOTIFY_LOCK = "notify.lock";
@@ -57439,7 +57992,7 @@ async function sendNotifications(o2) {
   }
 }
 async function sendLocked(o2, notify, lock) {
-  const file4 = join47(o2.ownerRoot, "notified.json");
+  const file4 = join48(o2.ownerRoot, "notified.json");
   const read3 = readNotified(file4);
   if (!read3.ok) return ["notify: notified.json is unreadable; nothing sent"];
   try {
@@ -57507,9 +58060,9 @@ async function sendLocked(o2, notify, lock) {
 
 // src/release.ts
 var import_yaml16 = __toESM(require_dist(), 1);
-import { createHash as createHash6 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 import { lstatSync as lstatSync39, readFileSync as readFileSync47 } from "node:fs";
-import { join as join48 } from "node:path";
+import { join as join49 } from "node:path";
 
 // src/migrations.ts
 var MIGRATION_RISKS = ["lock", "fails_on_data"];
@@ -58020,12 +58573,12 @@ var releaseSchema = external_exports.strictObject({
   reason: line2(600).optional()
 });
 var fileSchema2 = external_exports.strictObject({ v: external_exports.literal(1), releases: external_exports.array(releaseSchema) });
-var digest2 = (text) => `sha256:${createHash6("sha256").update(text).digest("hex")}`;
+var digest2 = (text) => `sha256:${createHash7("sha256").update(text).digest("hex")}`;
 var short2 = (sha) => sha.slice(0, 7);
 var clean6 = (s, max) => s.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ").trim().slice(0, max);
 var quote = (p) => JSON.stringify(clean6(p, 300));
 function readReleases(stateRoot) {
-  const file4 = join48(stateRoot, RELEASES_FILE);
+  const file4 = join49(stateRoot, RELEASES_FILE);
   assertStatePath(stateRoot, file4);
   const st = lstatSync39(file4, { throwIfNoEntry: false });
   if (st === void 0) return [];
@@ -58045,7 +58598,7 @@ function readReleases(stateRoot) {
 function writeReleases(stateRoot, releases) {
   writeStateFile(
     stateRoot,
-    join48(stateRoot, RELEASES_FILE),
+    join49(stateRoot, RELEASES_FILE),
     `${JSON.stringify({ v: 1, releases }, null, 2)}
 `
   );
@@ -59372,7 +59925,7 @@ var LOG_QUIET_MS = 30 * 6e4;
 function logWrittenAgo(stateRoot, item, now) {
   if (!isItemId(item)) return void 0;
   try {
-    const st = lstatSync40(join49(stateRoot, "logs", `${item}.jsonl`));
+    const st = lstatSync40(join50(stateRoot, "logs", `${item}.jsonl`));
     return st.isFile() ? Math.max(0, now.getTime() - st.mtimeMs) : void 0;
   } catch {
     return void 0;
@@ -59381,7 +59934,7 @@ function logWrittenAgo(stateRoot, item, now) {
 function hasReport2(stateRoot, item) {
   if (!isItemId(item)) return false;
   const name = reportName(stateRoot, item);
-  return name !== void 0 && existsSync14(join49(stateRoot, "clones", item, ".studio", "reports", name));
+  return name !== void 0 && existsSync14(join50(stateRoot, "clones", item, ".studio", "reports", name));
 }
 async function recoverProject(o2) {
   const out = { dryRun: o2.dryRun, findings: [], needsLead: [] };
@@ -59425,7 +59978,7 @@ async function recoverProject(o2) {
         continue;
       }
       for (const name of names) {
-        const file4 = join49(root, name);
+        const file4 = join50(root, name);
         const tmp = TMP.exec(name);
         let gone = false;
         if (ASIDE.test(name)) {
@@ -59656,13 +60209,13 @@ function isDir3(p) {
   }
 }
 function markerOrigin(root) {
-  const text = plainFile(join50(root, "marker.json"));
+  const text = plainFile(join51(root, "marker.json"));
   if (text === void 0) throw new Error(`${root} has no marker.json: it is not a state root`);
   let m;
   try {
     m = JSON.parse(text);
   } catch {
-    throw new Error(`${join50(root, "marker.json")} is unreadable`);
+    throw new Error(`${join51(root, "marker.json")} is unreadable`);
   }
   if (typeof m?.originUrl !== "string") throw new Error(`${root}/marker.json names no origin`);
   return m.originUrl;
@@ -59687,7 +60240,7 @@ async function busy(root, label, ports, now) {
       why.push(`${label}: ${what}`);
     }
   }
-  const q = plainFile(join50(root, QUEUE));
+  const q = plainFile(join51(root, QUEUE));
   if (q !== void 0) {
     try {
       const cur = JSON.parse(q).current;
@@ -59726,9 +60279,9 @@ async function adoptStateRoot(o2) {
   const files = [];
   const writes = [];
   for (const f3 of ADOPT_FILES) {
-    const old = plainFile(join50(from, f3.name));
+    const old = plainFile(join51(from, f3.name));
     if (old === void 0) continue;
-    const cur = isDir3(o2.to) ? plainFile(join50(o2.to, f3.name)) : void 0;
+    const cur = isDir3(o2.to) ? plainFile(join51(o2.to, f3.name)) : void 0;
     if (cur === void 0) {
       files.push({ name: f3.name, action: "copy" });
       writes.push({ name: f3.name, content: old });
@@ -59753,13 +60306,13 @@ async function adoptStateRoot(o2) {
   }
   let queueDone = [];
   let pendingLeft = 0;
-  const oldQueue = plainFile(join50(from, QUEUE));
+  const oldQueue = plainFile(join51(from, QUEUE));
   if (oldQueue !== void 0) {
     const q = JSON.parse(oldQueue);
     pendingLeft = q.pending?.length ?? 0;
     queueDone = q.done ?? [];
     if (queueDone.length > 0) {
-      const curText = isDir3(o2.to) ? plainFile(join50(o2.to, QUEUE)) : void 0;
+      const curText = isDir3(o2.to) ? plainFile(join51(o2.to, QUEUE)) : void 0;
       const have = new Set(
         (curText === void 0 ? {} : JSON.parse(curText)).done?.map(doneKey) ?? []
       );
@@ -59782,7 +60335,7 @@ async function adoptStateRoot(o2) {
     if (lock === void 0)
       throw new Error("not now: a tick is running in this root; nothing changed");
     try {
-      for (const w of writes) writeStateFile(o2.to, join50(o2.to, w.name), w.content);
+      for (const w of writes) writeStateFile(o2.to, join51(o2.to, w.name), w.content);
       if (queueDone.length > 0) {
         updateQueue(
           o2.to,
@@ -60102,11 +60655,11 @@ var USAGE = helpText();
 
 // src/overview.ts
 import { lstatSync as lstatSync42, readFileSync as readFileSync49 } from "node:fs";
-import { basename as basename6, isAbsolute as isAbsolute11, join as join51 } from "node:path";
+import { basename as basename6, isAbsolute as isAbsolute11, join as join52 } from "node:path";
 var line3 = (e) => (e instanceof Error ? e.message : String(e)).replace(/[\p{Cc}\p{Cf}]/gu, " ");
 var INCONSISTENT_ROOT = "inconsistent state root: its marker names a project whose state root is another one";
 function markerProject(root) {
-  const file4 = join51(root, "marker.json");
+  const file4 = join52(root, "marker.json");
   try {
     if (!lstatSync42(file4).isFile()) throw new Error(`${file4} is not a plain file`);
   } catch (e) {
@@ -60318,7 +60871,7 @@ function privacyLine(hits) {
 // src/pull-request.ts
 import { mkdtempSync as mkdtempSync2, rmSync as rmSync10, writeFileSync as writeFileSync16 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join52 } from "node:path";
+import { join as join53 } from "node:path";
 var PR_BODY_MAX = 2e4;
 function crewPrText(item, body, notRunHere) {
   return `Opened by Studio for ${item.id}; the text below the line was written by the crew.
@@ -60357,9 +60910,9 @@ async function openCrewPr(ports, item, title, body, notRunHere, token, capacity,
     throw new Error(`the pull request title for ${head} is empty; nothing moved`);
   const text = crewPrText(item, body, notRunHere);
   const withBody = async (use) => {
-    const dir = mkdtempSync2(join52(tmpdir2(), "studio-pr-"));
+    const dir = mkdtempSync2(join53(tmpdir2(), "studio-pr-"));
     try {
-      const file4 = join52(dir, "body.md");
+      const file4 = join53(dir, "body.md");
       writeFileSync16(file4, text, { mode: 384 });
       return await use(file4);
     } finally {
@@ -60435,10 +60988,10 @@ import { dirname as dirname19, join as join61, resolve as resolve13 } from "node
 
 // src/relay-lead.ts
 import { existsSync as existsSync15, lstatSync as lstatSync43, readFileSync as readFileSync50, writeFileSync as writeFileSync17 } from "node:fs";
-import { isAbsolute as isAbsolute12, join as join54, resolve as resolve11 } from "node:path";
+import { isAbsolute as isAbsolute12, join as join55, resolve as resolve11 } from "node:path";
 
 // src/relay-protocol.ts
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 var RELAY_PROTOCOL = 1;
 var MAX_HEADER_BYTES = 1024 * 1024;
 var MAX_START_BUNDLE_BYTES = 1024 * 1024 * 1024;
@@ -60619,7 +61172,7 @@ function* encodeMessage(header, payload) {
   yield `${JSON.stringify({ end: payload.length, sha256: sha256(payload) })}
 `;
 }
-var sha256 = (b) => createHash7("sha256").update(b).digest("hex");
+var sha256 = (b) => createHash8("sha256").update(b).digest("hex");
 var LineReader = class {
   constructor(input2, max, maxTotal = Number.POSITIVE_INFINITY) {
     this.max = max;
@@ -60752,17 +61305,17 @@ function parseAnswer(op, header) {
 
 // src/relay-transport.ts
 import { spawn as spawn4 } from "node:child_process";
-import { join as join53 } from "node:path";
+import { join as join54 } from "node:path";
 var RelayUnreachable = class extends Error {
 };
 var hostAlias = (label) => `studio-relay-${label}`;
 function knownHostsFile(owner, label) {
-  return join53(ownerStateRootFor(owner), "relay", `${label}.known_hosts`);
+  return join54(ownerStateRootFor(owner), "relay", `${label}.known_hosts`);
 }
 function writeKnownHosts(owner, label, target) {
   const root = ownerStateRootFor(owner);
   const file4 = knownHostsFile(owner, label);
-  ensureStateDir(root, join53(root, "relay"));
+  ensureStateDir(root, join54(root, "relay"));
   writeStateFile(root, file4, `${hostAlias(label)} ${target.hostKey}
 `);
   return file4;
@@ -60886,7 +61439,7 @@ var RELAY_FILE = "relay.json";
 var RELAY_LOCK = "relay.lock";
 var relayTarget = (ownerConfig, label) => label === void 0 ? void 0 : ownerConfig.workers?.relay[label];
 var relayLine2 = (label, what) => `worker: relay ${label}, ${what}`;
-var file3 = (stateRoot) => join54(stateRoot, RELAY_FILE);
+var file3 = (stateRoot) => join55(stateRoot, RELAY_FILE);
 function readRelay(stateRoot) {
   const f3 = file3(stateRoot);
   assertStatePath(stateRoot, f3);
@@ -60926,7 +61479,7 @@ function updateRelay(stateRoot, mutate) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
   }
 }
-var relayReportFile = (stateRoot, id) => join54(stateRoot, "relay", `${id}.report.md`);
+var relayReportFile = (stateRoot, id) => join55(stateRoot, "relay", `${id}.report.md`);
 function tokenGit(ports, token) {
   const auth = [
     "-c",
@@ -60941,18 +61494,18 @@ function tokenGit(ports, token) {
 }
 async function projectObjects(project, ports) {
   const common2 = (await ports.git.run(project, ["rev-parse", "--git-common-dir"])).trim();
-  return join54(isAbsolute12(common2) ? common2 : resolve11(project, common2), "objects");
+  return join55(isAbsolute12(common2) ? common2 : resolve11(project, common2), "objects");
 }
 async function relayGit(stateRoot, project, ports) {
-  const dir = join54(stateRoot, "relay", "git");
-  if (!existsSync15(join54(dir, "HEAD"))) {
-    ensureStateDir(stateRoot, join54(stateRoot, "relay"));
+  const dir = join55(stateRoot, "relay", "git");
+  if (!existsSync15(join55(dir, "HEAD"))) {
+    ensureStateDir(stateRoot, join55(stateRoot, "relay"));
     removeStateEntry(stateRoot, dir);
-    await ports.git.run(join54(stateRoot, "relay"), ["init", "-q", "--bare", "--template=", dir]);
+    await ports.git.run(join55(stateRoot, "relay"), ["init", "-q", "--bare", "--template=", dir]);
   }
   writeStateFile(
     stateRoot,
-    join54(dir, "objects", "info", "alternates"),
+    join55(dir, "objects", "info", "alternates"),
     `${await projectObjects(project, ports)}
 `
   );
@@ -60980,7 +61533,7 @@ async function startBundle(o2) {
   } else {
     await g3(["update-ref", "-d", branch]).catch(() => "");
   }
-  const out = join54(dir, `start-${o2.item.id}.bundle`);
+  const out = join55(dir, `start-${o2.item.id}.bundle`);
   try {
     await g3([
       "bundle",
@@ -61107,7 +61660,7 @@ async function collectRelay(o2) {
     const problem = await acceptResult({ ...o2, head: answer2.headSha, bundle: payload });
     if (problem !== void 0) return { kind: "failed", reason: problem, ...base2 };
   }
-  ensureStateDir(o2.stateRoot, join54(o2.stateRoot, "relay"));
+  ensureStateDir(o2.stateRoot, join55(o2.stateRoot, "relay"));
   writeStateFile(o2.stateRoot, relayReportFile(o2.stateRoot, o2.item.id), answer2.report);
   return { kind: "ok", ...base2 };
 }
@@ -61115,12 +61668,12 @@ async function acceptResult(o2) {
   const id = o2.item.id;
   const branch = `refs/heads/studio/${id}`;
   if (o2.bundle.length > MAX_RESULT_BUNDLE_BYTES) return "the result is larger than allowed";
-  const parent = ensureStateDir(o2.stateRoot, join54(o2.stateRoot, "relay"));
-  const dir = join54(parent, `in-${id}`);
+  const parent = ensureStateDir(o2.stateRoot, join55(o2.stateRoot, "relay"));
+  const dir = join55(parent, `in-${id}`);
   removeStateEntry(o2.stateRoot, dir);
   const noHooks = [
     "-c",
-    `core.hooksPath=${join54(dir, "no-hooks")}`,
+    `core.hooksPath=${join55(dir, "no-hooks")}`,
     "-c",
     "gc.auto=0",
     "-c",
@@ -61136,7 +61689,7 @@ async function acceptResult(o2) {
       ...o2.record.fromSha === void 0 ? [] : [[`refs/relay/${id}/from`, o2.record.fromSha]]
     ];
     for (const [ref2, sha2] of bases) await rg(["update-ref", ref2, sha2]);
-    const baseFile = join54(dir, "base.bundle");
+    const baseFile = join55(dir, "base.bundle");
     await rg(["bundle", "create", "-q", baseFile, ...bases.map(([ref2]) => ref2)]);
     await g3([
       "fetch",
@@ -61147,7 +61700,7 @@ async function acceptResult(o2) {
       ...bases.map(([ref2]) => `${ref2}:${ref2}`)
     ]);
     removeStateEntry(o2.stateRoot, baseFile);
-    const file4 = join54(dir, "result.bundle");
+    const file4 = join55(dir, "result.bundle");
     writeStateFile(o2.stateRoot, file4, "");
     writeFileSync17(file4, o2.bundle);
     let heads;
@@ -61275,476 +61828,9 @@ async function relayDoctor(o2) {
 
 // src/relay-pair.ts
 var import_yaml17 = __toESM(require_dist(), 1);
-import { createHash as createHash8, createHmac, randomBytes as randomBytes12, timingSafeEqual } from "node:crypto";
+import { createHash as createHash9, createHmac, randomBytes as randomBytes12, timingSafeEqual } from "node:crypto";
 import { existsSync as existsSync16, mkdirSync as mkdirSync12, readFileSync as readFileSync51, renameSync as renameSync15, rmSync as rmSync11, writeFileSync as writeFileSync18 } from "node:fs";
 import { dirname as dirname16, join as join56 } from "node:path";
-
-// src/relay-windows.ts
-import { posix as posix2, win32 } from "node:path";
-var join55 = (...parts) => parts[0]?.startsWith("/") === true ? posix2.join(...parts) : win32.join(...parts);
-var relayHomeDefault = (env) => join55(env.ProgramData ?? env.PROGRAMDATA ?? "C:\\ProgramData", "Studio", "relay");
-var relayMachineDefault = (env) => join55(env.ProgramFiles ?? env.PROGRAMFILES ?? "C:\\Program Files", "Studio", "relay");
-var machineCredFile = (machine) => join55(machine, "crew-credential.bin");
-var brokerResultFiles = (machine) => ({
-  sweep: join55(machine, "broker", "answer.json"),
-  retire: join55(machine, "broker", "retire.json"),
-  fresh: join55(machine, "broker", "fresh.json")
-});
-var brokerBodyFile = (machine) => join55(machine, "broker", "crew-accounts.ps1");
-var brokerTasks = (task) => ({
-  sweep: task,
-  retire: `${task} retire`,
-  fresh: `${task} fresh`
-});
-var authorizedKeysFile = (machine) => join55(machine, "authorized_keys");
-var machineNode = (machine) => join55(machine, "node", "node.exe");
-var machineStudio = (machine) => join55(machine, "studio");
-var machineStudioBin = (machine) => join55(machine, "studio", "bin", "studio");
-var machineConfig = (machine) => join55(machine, "config");
-var forcedCommand = (machine, home) => `"${machineNode(machine)}" "${machineStudioBin(machine)}" relay serve --home "${home}"`;
-function sshdMatchBlock(o2) {
-  const keys2 = authorizedKeysFile(o2.machine).replace(/\\/g, "/");
-  return [
-    `Match User ${o2.relayUser}`,
-    `    AuthorizedKeysFile "${keys2}"`,
-    `    ForceCommand ${o2.command}`,
-    "    ExposeAuthInfo yes",
-    "    PermitTTY no",
-    "    AllowTcpForwarding no",
-    "    AllowStreamLocalForwarding no",
-    "    X11Forwarding no",
-    "    PermitTunnel no",
-    "    AllowAgentForwarding no",
-    "    PasswordAuthentication no",
-    "    GatewayPorts no",
-    ""
-  ].join("\n");
-}
-var keyTag = (lead) => `studio-relay-${lead}`;
-function authorizedKeyLine(o2) {
-  const key = o2.key.trim().split(/\s+/).slice(0, 2).join(" ");
-  if (!/^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa) [A-Za-z0-9+/]{40,2000}={0,2}$/.test(key)) {
-    throw new Error("not an SSH public key line: <type> <base64> [comment]");
-  }
-  if (!/^[a-z][a-z0-9-]{0,31}$/.test(o2.lead)) throw new Error("not a lead name");
-  const command = `${o2.command} --lead ${o2.lead}`.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  return `restrict,command="${command}" ${key} ${keyTag(o2.lead)}`;
-}
-function leadFromAuthInfo(authInfo, keysText) {
-  if (authInfo === void 0 || keysText === void 0) return void 0;
-  const used = /^publickey (\S+) (\S+)/m.exec(authInfo);
-  if (used === null) return void 0;
-  for (const line4 of keysText.split(/\r?\n/)) {
-    const m = /(?:^|\s)(ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa) ([A-Za-z0-9+/]+={0,2})(?: (\S+))?\s*$/.exec(
-      line4
-    );
-    if (m !== null && m[1] === used[1] && m[2] === used[2]) {
-      const tag = /^studio-relay-([a-z][a-z0-9-]{0,31})$/.exec(m[3] ?? "");
-      return tag?.[1];
-    }
-  }
-  return void 0;
-}
-var brokerScript = (o2) => crewAccountScript({
-  op: o2.op,
-  prefix: o2.prefix,
-  result: brokerResultFiles(o2.machine)[o2.op],
-  // The admin-only copies of the tree deleter and of the functions: nothing the relay account
-  // could change.
-  treeSource: join55(machineStudio(o2.machine), "bin", "studio-tree.cs"),
-  bodyFile: brokerBodyFile(o2.machine),
-  ...o2.op === "fresh" ? { credFile: machineCredFile(o2.machine), reader: "$relaySid" } : {}
-}).split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#")).join("\r\n");
-var brokerArgumentsSnippet = (script) => `$brokerScript = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(script, "utf8").toString("base64")}')).Replace('${RELAY_SID_SLOT}', $relaySid)
-$brokerArgs = '-NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($brokerScript))`;
-async function psJson(run2, script) {
-  const r = await run2("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-    env: powershellEnv(process.env),
-    timeoutMs: 6e4
-  });
-  if (r.code !== 0) return void 0;
-  try {
-    return JSON.parse(r.stdout.trim() || "null");
-  } catch {
-    return void 0;
-  }
-}
-async function webClientProblem(run2) {
-  const s = await psJson(
-    run2,
-    `$s = Get-Service -Name WebClient -ErrorAction SilentlyContinue; if ($null -eq $s) { '{"exists":false}' } else { ConvertTo-Json -Compress @{ exists = $true; status = [string]$s.Status; start = [string]$s.StartType } }`
-  );
-  if (s === void 0 || s === null) return "the WebClient service cannot be read";
-  if (s.exists === false) return void 0;
-  if (s.status !== "Stopped" || s.start !== "Disabled") {
-    return `the WebClient service is ${String(s.status)} with start type ${String(s.start)}: WebDAV paths would pass the crew user's firewall rule; stop and disable it (Stop-Service WebClient; Set-Service WebClient -StartupType Disabled)`;
-  }
-  return void 0;
-}
-var onLoopback = (address) => /^127\./.test(address) || address === "::1" || address === ipv43(0, 0, 0, 0) || address === "::";
-async function loopbackListeners(run2) {
-  const raw = await psJson(
-    run2,
-    "$t = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | ForEach-Object { @{ p = 'tcp'; a = [string]$_.LocalAddress; n = [int]$_.LocalPort; o = [int]$_.OwningProcess } }); $u = @(Get-NetUDPEndpoint -ErrorAction SilentlyContinue | ForEach-Object { @{ p = 'udp'; a = [string]$_.LocalAddress; n = [int]$_.LocalPort; o = [int]$_.OwningProcess } }); ConvertTo-Json -Compress -InputObject @($t + $u)"
-  );
-  if (!Array.isArray(raw)) return void 0;
-  const out = [];
-  for (const x of raw) {
-    if (x.p !== "tcp" && x.p !== "udp" || typeof x.a !== "string" || typeof x.n !== "number") {
-      continue;
-    }
-    if (!onLoopback(x.a)) continue;
-    out.push({ protocol: x.p, address: x.a, port: x.n, pid: typeof x.o === "number" ? x.o : 0 });
-  }
-  return out;
-}
-async function neighborTable(run2) {
-  const raw = await psJson(
-    run2,
-    "ConvertTo-Json -Compress -InputObject @(Get-NetNeighbor -AddressFamily IPv4 -ErrorAction Stop | ForEach-Object { @{ a = [string]$_.IPAddress; s = [string]$_.State } })"
-  );
-  if (!Array.isArray(raw)) return void 0;
-  return raw.flatMap(
-    (x) => typeof x.a === "string" && typeof x.s === "string" ? [{ address: x.a, state: x.s }] : []
-  );
-}
-async function tailscaleStatus(run2) {
-  const r = await run2("tailscale", ["status", "--json"], { timeoutMs: 2e4 });
-  return r.code === 0 ? r.stdout : void 0;
-}
-async function machineCredProblem(run2, file4) {
-  const n4 = await psJson(
-    run2,
-    `Add-Type -AssemblyName System.Security; $b = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes(${psQuote(file4)}), $null, [Security.Cryptography.DataProtectionScope]::LocalMachine); $n = $b.Length; [Array]::Clear($b, 0, $b.Length); $n`
-  );
-  return typeof n4 === "number" && n4 > 0 ? void 0 : `the crew user's credential (${file4}) cannot be opened under this logon; run the script of studio relay setup again, elevated`;
-}
-function adminFileSnippet(o2) {
-  const text = `(@(${o2.lines.map(psQuote).join(", ")}) | ForEach-Object { $_ + [char]13 + [char]10 }) -join ''`;
-  const relay = o2.readers === "relay" ? ` "*$($relaySid):R"` : "";
-  return `$target = ${psQuote(o2.file)}
-$tmp = Join-Path (Split-Path -Parent $target) ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
-[IO.File]::WriteAllText($tmp, ${text}, (New-Object Text.ASCIIEncoding))
-icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /L /Q | Out-Null
-if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $target" }
-icacls $tmp /setowner '*S-1-5-32-544' /L /Q | Out-Null
-if (Test-Path -LiteralPath $target) { [IO.File]::Replace($tmp, $target, [NullString]::Value) } else { [IO.File]::Move($tmp, $target) }
-# Replace keeps the DACL of the file it replaced: the intended one goes on again.
-icacls $target /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F'${relay} /L /Q | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "cannot set the ACL of $target" }
-icacls $target /setowner '*S-1-5-32-544' /L /Q | Out-Null`;
-}
-var FOLDER_FUNCTIONS = String.raw`$adminSids = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
-# What may own a folder of Studio's before this run: administrators, SYSTEM, TrustedInstaller, or
-# the administrator running this script (who may own what it created on an earlier run).
-$ownerSids = $adminSids + @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
-# Every folder of Studio's, from the drive down: no reparse point anywhere, and none another account
-# owns (a folder planted there before would keep its owner's rights).
-function SafeFolder([string]$path, [string]$top) {
-  $walk = $path
-  while ($walk) {
-    if (Test-Path -LiteralPath $walk) {
-      $item = Get-Item -LiteralPath $walk -Force
-      if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$walk is a reparse point: refusing to set up Studio there" }
-      if ($walk.Length -gt $top.Length -and $walk.StartsWith($top, [StringComparison]::OrdinalIgnoreCase)) {
-        $owner = (Get-Acl -LiteralPath $walk).GetOwner([Security.Principal.SecurityIdentifier]).Value
-        if ($ownerSids -notcontains $owner) { throw "$walk is owned by $owner, not by administrators: remove it, then run this again" }
-      }
-    }
-    $up = Split-Path -Parent $walk
-    if (-not $up -or $up -eq $walk) { break }
-    $walk = $up
-  }
-}
-# The explicit entries of a DACL and whether it is protected, comparable as text.
-function AclKey($sec) {
-  $entries = foreach ($r in $sec.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
-    '{0}|{1}|{2}|{3}|{4}|{5}' -f $r.IdentityReference.Value, [int]$r.FileSystemRights, [int]$r.InheritanceFlags, [int]$r.PropagationFlags, [int]$r.AccessControlType, $r.IsInherited
-  }
-  [string]$sec.AreAccessRulesProtected + ':' + ((@($entries) | Sort-Object) -join ';')
-}
-# Every reparse point below a folder, found without following one.
-function LinksBelow([string]$path) {
-  $todo = New-Object Collections.Stack
-  $todo.Push($path)
-  while ($todo.Count -gt 0) {
-    foreach ($c in Get-ChildItem -LiteralPath $todo.Pop() -Force) {
-      if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { $c.FullName; continue }
-      if ($c.PSIsContainer) { $todo.Push($c.FullName) }
-    }
-  }
-}
-# A folder of Studio's with exactly the DACL it should have: built from scratch and protected, so
-# no entry anyone added before survives. An existing one must be a plain folder administrators own.
-# Setting a DACL hands its inheritable entries down the whole subtree, through any junction in it:
-# a folder that already has this DACL is left alone, and one that gets a new DACL may hold no
-# reparse point anywhere below.
-function StrictFolder([string]$path, [object[]]$rules) {
-  $acl = New-Object Security.AccessControl.DirectorySecurity
-  $acl.SetAccessRuleProtection($true, $false)
-  $all = 'ContainerInherit, ObjectInherit'
-  foreach ($r in @(@('S-1-5-18', 'FullControl', $all, 'None'), @('S-1-5-32-544', 'FullControl', $all, 'None')) + $rules) {
-    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
-      (New-Object Security.Principal.SecurityIdentifier($r[0])),
-      [Security.AccessControl.FileSystemRights]$r[1],
-      [Security.AccessControl.InheritanceFlags]$r[2],
-      [Security.AccessControl.PropagationFlags]$r[3],
-      [Security.AccessControl.AccessControlType]::Allow)))
-  }
-  if (Test-Path -LiteralPath $path) {
-    $item = Get-Item -LiteralPath $path -Force
-    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$path is a reparse point: refusing to set up Studio there" }
-    $now = Get-Acl -LiteralPath $path
-    $owner = $now.GetOwner([Security.Principal.SecurityIdentifier]).Value
-    if ($ownerSids -notcontains $owner) { throw "$path is owned by $owner, not by administrators: remove it, then run this again" }
-    if ($owner -eq 'S-1-5-32-544' -and (AclKey $now) -eq (AclKey $acl)) { return }
-    $links = @(LinksBelow $path)
-    if ($links.Count -gt 0) { throw "$($links[0]) is a reparse point below $($path): remove it, then run this again" }
-  } else {
-    New-Item -ItemType Directory -Path $path | Out-Null
-  }
-  icacls $path /setowner '*S-1-5-32-544' /L /Q | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "cannot make administrators the owner of $path" }
-  (Get-Item -LiteralPath $path -Force).SetAccessControl($acl)
-}
-# Nothing below the relay home that the elevated steps reach may be a reparse point.
-function NoLinksIn([string]$path) {
-  if (-not (Test-Path -LiteralPath $path)) { return }
-  foreach ($c in Get-ChildItem -LiteralPath $path -Force) {
-    if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "$($c.FullName) is a reparse point: remove it, then run this again" }
-  }
-}
-`;
-function relaySetupScript(o2) {
-  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o2.relayUser)) {
-    throw new Error(`not a local user name: ${o2.relayUser}`);
-  }
-  if (!/^[A-Za-z0-9 _-]{1,64}$/.test(o2.task)) throw new Error(`not a task name: ${o2.task}`);
-  const list2 = (ps) => `@(${ps.map(psQuote).join(", ")})`;
-  const command = forcedCommand(o2.machine, o2.home);
-  const block = sshdMatchBlock({ relayUser: o2.relayUser, machine: o2.machine, command });
-  const pluginSetup = `$env:XDG_CONFIG_HOME = ${psQuote(machineConfig(o2.machine))}; $env:XDG_STATE_HOME = ${psQuote(join55(o2.machine, "setup-state"))}; & ${psQuote(machineNode(o2.machine))} ${psQuote(machineStudioBin(o2.machine))} account setup-plugins
-if ($LASTEXITCODE -ne 0) { throw 'the plugin setup failed' }
-$claude = ${psQuote(join55(machineConfig(o2.machine), "studio", "claude"))}
-foreach ($d in @((Join-Path $claude 'skills'), (Join-Path $claude 'plugins'))) {
-  if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
-}`;
-  return `${o2.install === void 0 ? "" : installHead(o2.install, o2.relayUser, o2.crewPrefix)}#Requires -RunAsAdministrator
-# Studio: the setup of this Windows relay worker. Run it in an elevated Windows PowerShell
-# (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
-# Nothing here leaves this machine.
-$ErrorActionPreference = 'Stop'
-$relay = ${psQuote(o2.relayUser)}
-$home_ = ${psQuote(o2.home)}
-$machine = ${psQuote(o2.machine)}
-$task = ${psQuote(o2.task)}
-${GIT_MIN_CHECK}${FOLDER_FUNCTIONS}${crewAccountFunctions(o2.crewPrefix, join55(o2.source.studio, "bin", "studio-tree.cs"))}function EnsureUser([string]$name, [string]$what, [string]$plain) {
-  $u = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
-  if ($null -eq $u) {
-    if (-not $plain) { $plain = NewSecret }
-    $u = New-LocalUser -Name $name -Password (ConvertTo-SecureString $plain -AsPlainText -Force) -PasswordNeverExpires -AccountNeverExpires -UserMayNotChangePassword -Description $what
-  } elseif ($plain) {
-    Set-LocalUser -Name $name -Password (ConvertTo-SecureString $plain -AsPlainText -Force)
-  }
-  # Users only, never Administrators (groups by SID: their names depend on the language).
-  $users = Get-LocalGroup -SID 'S-1-5-32-545'
-  if (-not (Get-LocalGroupMember -Group $users | Where-Object { $_.SID -eq $u.SID })) { Add-LocalGroupMember -Group $users -Member $u }
-  $admins = Get-LocalGroup -SID 'S-1-5-32-544'
-  if (Get-LocalGroupMember -Group $admins | Where-Object { $_.SID -eq $u.SID }) { throw "$name is an administrator: remove it from that group first" }
-  return $u
-}
-$dataStudio = Split-Path -Parent $home_
-$filesStudio = Split-Path -Parent $machine
-SafeFolder $home_ (Split-Path -Parent $dataStudio)
-SafeFolder $machine (Split-Path -Parent $filesStudio)
-# The relay account: a standard user the lead logs in as over SSH, with a password nobody sees.
-$relaySid = (EnsureUser $relay 'Studio relay (SSH, forced command)' $null).SID.Value
-# Studio's group of crew users (one user per job, made and deleted by the broker), with its firewall
-# rule, denied logons and read grants on Claude Code and the toolchains.
-$readPaths = ${list2(o2.readPaths)}
-${crewGroupSetup()}# The admin-only tree: administrators and SYSTEM write; the relay account reads; the crew users read
-# Node.js and Studio only.
-$tree = 'ContainerInherit, ObjectInherit'
-$rx = 'ReadAndExecute, Synchronize'
-StrictFolder $filesStudio @(,@($relaySid, $rx, $tree, 'None'))
-StrictFolder $machine @(,@($relaySid, $rx, $tree, 'None'))
-foreach ($sub in @('broker', 'config', 'setup-state', 'pairing')) { StrictFolder (Join-Path $machine $sub) @(,@($relaySid, $rx, $tree, 'None')) }
-foreach ($sub in @('node', 'studio')) { StrictFolder (Join-Path $machine $sub) @(@($relaySid, $rx, $tree, 'None'), @($groupSid, $rx, $tree, 'None')) }
-# The copies the forced command runs: never the files of an account that can change them, and no
-# junction of the source copied along.
-Copy-Item -LiteralPath ${psQuote(o2.source.node)} -Destination ${psQuote(machineNode(o2.machine))} -Force
-& robocopy.exe ${psQuote(o2.source.studio)} ${psQuote(machineStudio(o2.machine))} /MIR /XJ /XD node_modules .git .worktrees /NFL /NDL /NJH /NJS /NP | Out-Null
-if ($LASTEXITCODE -ge 8) { throw "cannot copy Studio into $machine (robocopy $LASTEXITCODE)" }
-icacls ${psQuote(machineStudio(o2.machine))} /reset /T /C /L /Q | Out-Null
-# The relay home: the relay account may fill state, never rename or remove it, and nothing else of
-# the home. The elevated steps only set the ACLs of these folders themselves, and refuse a reparse
-# point among them or just below the home.
-StrictFolder $dataStudio @(,@($relaySid, $rx, 'None', 'None'))
-StrictFolder $home_ @(,@($relaySid, $rx, 'None', 'None'))
-NoLinksIn $home_
-StrictFolder (Join-Path $home_ 'state') @(@($relaySid, 'ReadAndExecute, CreateFiles, CreateDirectories, Synchronize', 'None', 'None'), @($relaySid, 'Modify, Synchronize', $tree, 'InheritOnly'))
-# A crew user's password is sealed for this machine by the fresh broker, per job; one of a crew user
-# of an earlier version goes.
-Remove-Item -LiteralPath ${psQuote(machineCredFile(o2.machine))} -Force -ErrorAction SilentlyContinue
-# The brokers: as SYSTEM, with no argument, each its script in its action, so no file of it exists:
-# one ends every process of the crew users, one also deletes them with their profiles, one also
-# makes the fresh crew user of a job. Only the relay account (and administrators) may start them;
-# they answer in a folder the relay account can only read.
-$service = New-Object -ComObject Schedule.Service
-$service.Connect()
-$folder = $service.GetFolder('\\')
-# SYSTEM runs them; SYSTEM and administrators own them; the relay account may read and run them.
-$sddl = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;$relaySid)"
-# The functions the brokers load, in their admin-only folder.
-[IO.File]::WriteAllText(${psQuote(brokerBodyFile(o2.machine))}, [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(CREW_ACCOUNT_BODY, "utf8").toString("base64")}')), (New-Object Text.UTF8Encoding($false)))
-${["sweep", "retire", "fresh"].map(
-    (op) => `${brokerArgumentsSnippet(brokerScript({ op, prefix: o2.crewPrefix, machine: o2.machine }))}
-$def = $service.NewTask(0)
-$def.Settings.ExecutionTimeLimit = 'PT10M'
-$def.Settings.MultipleInstances = 2
-$action = $def.Actions.Create(0)
-$action.Path = 'powershell.exe'
-$action.Arguments = $brokerArgs
-$null = $folder.RegisterTaskDefinition(${psQuote(brokerTasks(o2.task)[op])}, $def, 6, 'SYSTEM', $null, 5, $sddl)
-`
-  ).join(
-    ""
-  )}# WebDAV paths (\\\\host@80\\) pass the crew user's firewall rule through the WebClient service:
-# it is stopped and disabled.
-Write-Output 'Stopping and disabling the WebClient service (WebDAV), which the crew sandbox does not hold.'
-if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
-  Stop-Service -Name WebClient -Force -ErrorAction SilentlyContinue
-  Set-Service -Name WebClient -StartupType Disabled
-}
-# The pinned plugins in the crew Claude config dir of the relay home.
-${pluginSetup}
-${o2.install === void 0 ? setupTail(block) : installTail(block, o2.install)}`;
-}
-var setupTail = (block) => `Write-Output 'Add this block at the end of sshd_config (C:\\ProgramData\\ssh\\sshd_config), then Restart-Service sshd:'
-Write-Output @'
-${block}'@
-Write-Output 'Authorize the lead with studio relay install --pair "<line>" (the line studio relay pair prints on the lead).'
-Write-Output "Studio relay worker is ready: relay account $relay, crew users of group $($prefix)s, one per job."
-`;
-function authorizedKeysScript(o2) {
-  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o2.relayUser)) throw new Error("not a local user name");
-  return `$ErrorActionPreference = 'Stop'
-$relaySid = (Get-LocalUser -Name ${psQuote(o2.relayUser)}).SID.Value
-${adminFileSnippet({ file: o2.file, lines: o2.lines, readers: "relay" })}
-`;
-}
-var installHead = (i2, relayUser, crewPrefix2) => `#Requires -RunAsAdministrator
-$ErrorActionPreference = 'Stop'
-$ok = $false
-function SshdOff {
-  Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue
-  Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Disable-NetFirewallRule
-}
-# No relay job may run while the install walks the folders and sets their ACLs: a runner or crew
-# could plant a link between the two. Every process of the relay account or a crew user counts.
-$forceStop = ${i2.forceStop === true ? "$true" : "$false"}
-function RelayProcesses {
-  $crewRe = '^' + [regex]::Escape(${psQuote(crewPrefix2)}) + '-[0-9a-f]{6}$'
-  $sids = @(Get-LocalUser | Where-Object { $_.Name -eq ${psQuote(relayUser)} -or ($_.Name -match $crewRe -and $_.Description -eq ${psQuote(CREW_DESCRIPTION)}) } | ForEach-Object { $_.SID.Value })
-  if ($sids.Count -eq 0) { return @() }
-  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })
-}
-function NoRelayJob {
-  $running = RelayProcesses
-  if ($running.Count -eq 0) { return }
-  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or a crew user): let it end, or run this again with --force-stop" }
-  Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew users (--force-stop)."
-  for ($t = 0; $t -lt 20 -and $running.Count -gt 0; $t++) {
-    foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
-    Start-Sleep -Milliseconds 500
-    $running = RelayProcesses
-  }
-  if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew users' }
-}
-# Before sshd stops: a running job is refused while the lead can still reach it.
-NoRelayJob
-try {
-function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
-function Need([string]$what, [scriptblock]$have, [string]$id) {
-  if (& $have) { Write-Output "ok: $what"; return }
-  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "$what is missing and winget is not there to install it; install $what by hand" }
-  Write-Output "installing: $what (winget $id)"
-  winget install --id $id --exact --silent --scope machine --accept-package-agreements --accept-source-agreements | Out-Null
-  Fresh
-  if (-not (& $have)) { throw "$what is still missing after winget install $id; install it by hand" }
-}
-Need 'Git' { Get-Command git -ErrorAction SilentlyContinue } 'Git.Git'
-Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
-$ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
-if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
-if ($ssh.State -ne 'Installed') { Write-Output 'installing: OpenSSH server'; Add-WindowsCapability -Online -Name $ssh.Name | Out-Null } else { Write-Output 'ok: OpenSSH server' }
-SshdOff
-# With sshd off no new job starts: once more, for one that started in between.
-NoRelayJob
-Set-Service -Name sshd -StartupType Automatic
-${i2.disableSpooler === true ? `Write-Output 'Stopping and disabling the print spooler (--disable-spooler).'
-Stop-Service -Name Spooler -Force -ErrorAction SilentlyContinue
-Set-Service -Name Spooler -StartupType Disabled` : ""}
-`;
-function installTail(block, i2) {
-  if (!Number.isInteger(i2.port) || i2.port < 1 || i2.port > 65535) throw new Error("not a port");
-  const scope = "tailscale" in i2.scope ? `$ts = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like '*Tailscale*' -or $_.Name -like 'Tailscale*' } | Select-Object -First 1
-if ($null -eq $ts) { throw 'no Tailscale interface here: run studio relay install --interface <name> or --source <range>' }
-$scope = @{ InterfaceAlias = $ts.Name }
-$where = 'the Tailscale interface ' + $ts.Name` : "interface" in i2.scope ? `$scope = @{ InterfaceAlias = ${psQuote(i2.scope.interface)} }
-$where = 'the interface ' + ${psQuote(i2.scope.interface)}` : `$scope = @{ RemoteAddress = ${psQuote(i2.scope.source)} }
-$where = 'the source ' + ${psQuote(i2.scope.source)}`;
-  const global2 = i2.keepPasswords === true ? "" : `# studio relay begin global
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-# studio relay end global
-`;
-  return `$conf = Join-Path $env:ProgramData 'ssh\\sshd_config'
-if (-not (Test-Path -LiteralPath $conf)) {
-  # The first start of sshd writes its default config; it stays stopped afterwards.
-  Start-Service sshd
-  for ($k = 0; $k -lt 20 -and -not (Test-Path -LiteralPath $conf); $k++) { Start-Sleep -Milliseconds 500 }
-  SshdOff
-}
-$before = [IO.File]::ReadAllBytes($conf)
-$text = [Text.Encoding]::UTF8.GetString($before)
-$text = [regex]::Replace($text, '(?s)# studio relay begin global.*?# studio relay end global\\r?\\n?', '')
-$text = [regex]::Replace($text, '(?s)\\r?\\n?# studio relay begin\\r?\\n.*?# studio relay end\\r?\\n?', [Environment]::NewLine)
-$global = @'
-${global2}'@
-$ours = @'
-# studio relay begin
-${block}# studio relay end
-'@
-$new = $global + $text.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $ours
-[IO.File]::WriteAllText($conf, $new, (New-Object Text.UTF8Encoding $false))
-$exe = Join-Path $env:SystemRoot 'System32\\OpenSSH\\sshd.exe'
-$tested = $null
-if (Test-Path -LiteralPath $exe) { $tested = Start-Process -FilePath $exe -ArgumentList '-t' -Wait -PassThru -NoNewWindow }
-if ($null -eq $tested -or $tested.ExitCode -ne 0) {
-  [IO.File]::WriteAllBytes($conf, $before)
-  throw 'sshd does not accept the new sshd_config (or could not check it); it was put back as it was'
-}
-${scope}
-$rule = 'Studio relay: sshd'
-Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-New-NetFirewallRule -DisplayName $rule -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${i2.port} @scope | Out-Null
-Start-Service sshd
-Write-Output "ok: relay account $relay, crew user $crew, broker task $task"
-Write-Output "ok: sshd forces studio relay serve for $relay; port ${i2.port} only from $where${i2.keepPasswords === true ? "" : "; keys only, for every account"}"
-Write-Output 'ok: WebClient stopped and disabled'
-$ok = $true
-} finally {
-  if (-not $ok) {
-    SshdOff
-    Get-NetFirewallRule -DisplayName 'Studio relay: sshd' -ErrorAction SilentlyContinue | Disable-NetFirewallRule
-    Write-Output 'stopped: sshd is stopped and closed until studio relay install runs through'
-  }
-}
-`;
-}
-
-// src/relay-pair.ts
 var PAIR_TTL_MS = 60 * 6e4;
 var PAIR_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
 var PAIR_PREFIX = "studio-pair-1";
@@ -61752,7 +61838,7 @@ var newPairSecret = () => randomBytes12(32).toString("base64url");
 var keyOnly = (key) => key.trim().split(/\s+/).slice(0, 2).join(" ");
 function keyFingerprint(key) {
   const blob = Buffer.from(key.trim().split(/\s+/)[1] ?? "", "base64");
-  return `SHA256:${createHash8("sha256").update(blob).digest("base64").replace(/=+$/, "")}`;
+  return `SHA256:${createHash9("sha256").update(blob).digest("base64").replace(/=+$/, "")}`;
 }
 var pairProof = (secret, hostKey) => createHmac("sha256", secret).update(keyOnly(hostKey)).digest("hex");
 function proofHolds(secret, hostKey, mac3) {
@@ -63859,6 +63945,11 @@ function relayWindows(o2) {
         const account = await grants.ready();
         for (const line4 of account.notes?.problems ?? [])
           warnings2.push(`retiring a crew user: ${line4}`);
+        for (const path11 of account.notes?.stuck ?? []) {
+          warnings2.push(
+            `the quarantine cannot delete ${path11}; it is left alone: delete it by hand`
+          );
+        }
         const waiting = account.notes?.quarantined ?? 0;
         if (waiting !== 0) {
           warnings2.push(
@@ -68624,6 +68715,7 @@ async function runCli(argv, deps) {
           stdout(
             windowsSetupScript({
               prefix,
+              crewDir: nativeCrewDir(deps.env),
               readPaths: setupReadPaths({
                 node: process.execPath,
                 claude: findClaude(deps.env.PATH ?? deps.env.Path),

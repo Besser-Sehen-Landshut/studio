@@ -63,6 +63,7 @@ let n = 0;
 
 describe('the setup script', () => {
   const script = windowsSetupScript({
+    crewDir: 'C:\\Program Files\\Studio crew',
     prefix: 'studio-crew',
     readPaths: ['C:\\Program Files\\nodejs'],
     revokePaths: ['C:\\Users\\owner\\.config\\studio\\claude'],
@@ -82,6 +83,21 @@ describe('the setup script', () => {
     expect(script).not.toContain('New-LocalUser -Name $name -Password $secret');
     expect(script).not.toContain('Export-Clixml');
     expect(script).not.toMatch(/Write-Output .*\$plain/);
+  });
+
+  it('copies the tree deleter into an admin-only folder and compiles only that copy', () => {
+    expect(script).toContain("$crewDir = 'C:\\Program Files\\Studio crew'");
+    expect(script).toContain('StrictFolder $crewDir @()');
+    expect(script).toContain("StrictFolder (Join-Path $crewDir 'tmp') @()");
+    expect(script).toContain(
+      "$treeSource = 'C:\\Program Files\\Studio crew/studio-tree.cs'".replace(
+        '/',
+        process.platform === 'win32' ? '\\' : '/',
+      ),
+    );
+    expect(script.indexOf('Copy-Item -LiteralPath')).toBeLessThan(
+      script.indexOf('$null = RetireJobUsers'),
+    );
   });
 
   it('takes away the shared crew user of earlier versions and crew users a crash left', () => {
@@ -123,11 +139,13 @@ describe('the setup script', () => {
     expect(script).toContain("$readPaths = @('C:\\Program Files\\nodejs')");
     expect(script).toContain('"*$($groupSid):(OI)(CI)RX"');
     expect(script).not.toMatch(/\(OI\)\(CI\)M/);
-    expect(() => windowsSetupScript({ prefix: 'x; rm', readPaths: [] })).toThrow(/prefix/);
-    // `<prefix>-<6 hex>` must be a local user name of at most 20 characters.
-    expect(() => windowsSetupScript({ prefix: 'abcdefghijklmn', readPaths: [] })).toThrow(
-      /at most 13/,
+    expect(() => windowsSetupScript({ prefix: 'x; rm', crewDir: 'C:\\c', readPaths: [] })).toThrow(
+      /prefix/,
     );
+    // `<prefix>-<6 hex>` must be a local user name of at most 20 characters.
+    expect(() =>
+      windowsSetupScript({ prefix: 'abcdefghijklmn', crewDir: 'C:\\c', readPaths: [] }),
+    ).toThrow(/at most 13/);
   });
 
   it('opens of the crew Claude config dir only the skills and the plugins', () => {
@@ -189,6 +207,7 @@ describe('quoting and the keeper', () => {
 });
 
 const SID = 'S-1-5-21-1-2-3-1001';
+const PLACES = { treeSource: 'C:\\crew\\studio-tree.cs', treeTemp: 'C:\\crew\\tmp' };
 const OWNER = '*S-1-5-21-1-2-3-500';
 
 /** Crew users in memory: what was asked of them, in order. `left` makes the sweep refuse. */
@@ -496,12 +515,17 @@ describe('grants and the crew user of each job', () => {
 
 describe('the crew user scripts', () => {
   it("count only users of the prefix with Studio's description; retire never waits for a profile", () => {
-    const s = crewAccountScript({ op: 'retire', prefix: 'studio-crew', pruneBudget: 500 });
+    const s = crewAccountScript({
+      op: 'retire',
+      prefix: 'studio-crew',
+      places: { ...PLACES, pruneBudget: 500 },
+    });
     expect(s).toContain("$prefix = 'studio-crew'");
     expect(s).toContain(`$crewDescription = '${CREW_DESCRIPTION}'`);
     expect(s).toContain("'-[0-9a-f]{6}$'");
     expect(s).toContain('$_.Description -eq $crewDescription');
-    expect(s).toContain(`$treeSource = '${TREE_SOURCE()}'`);
+    expect(s).toContain("$treeSource = 'C:\\crew\\studio-tree.cs'");
+    expect(s).toContain("$treeTemp = 'C:\\crew\\tmp'");
     expect(s).toContain('$pruneBudget = 500');
     // Per user, each step only when the one before held: lock, no process left, profile into the
     // quarantine, no process left, its SID listed as retired, the account deleted.
@@ -518,7 +542,7 @@ describe('the crew user scripts', () => {
       'if ($s2.leftSids -contains $sid)',
       'WriteRetired (@(@(ReadRetired) + $sid | Select-Object -Unique))',
       'Remove-LocalUser -SID $sid',
-      '[StudioTree]::Prune($trees, $pruneBudget, $true, $null)',
+      '[StudioTree]::Prune($trees, $pruneBudget, $true, $null, [string[]]$skip)',
     ];
     for (let i = 1; i < order.length; i++) {
       expect(at(order[i - 1] as string), order[i - 1]).toBeGreaterThan(0);
@@ -526,6 +550,21 @@ describe('the crew user scripts', () => {
     }
     // Every sweep looks for the retired SIDs too, and every process still running holds a fresh user.
     expect(s).toContain('$retired = @(ReadRetired)');
+    // A process whose owner cannot be read is never ended, and it holds every crew user.
+    expect(s).toContain('if ($null -eq $o) {');
+    expect(s).toContain('Unreadable = $true');
+    expect(s).toContain('$found = @(Owned $sids | Where-Object { -not $_.Unreadable })');
+    expect(s).toContain(
+      '$leftSids = if (@($after | Where-Object { $_.Unreadable }).Count -gt 0) { $sids }',
+    );
+    // Entries that failed $stuckRuns times are left alone, and named to doctor.
+    expect(s).toContain('$stuckRuns = 3');
+    expect(s).toContain('$quarantine.stuck = @(TrackStuck $stuck @($r.Failed))');
+    // The compiler of the tree deleter writes into the admin-only folder, never SYSTEM's TEMP.
+    const load = s.slice(s.indexOf('function LoadTree'));
+    expect(load.indexOf('$env:TEMP = $treeTemp')).toBeLessThan(
+      load.indexOf('Add-Type -Path $treeSource'),
+    );
     expect(retire).toContain('left = @($s2.left)');
     expect(s).toContain('Disable-LocalUser -SID $u.SID');
     expect(s).toContain('Set-LocalUser -SID $u.SID -Password (ConvertTo-SecureString (NewSecret)');
@@ -551,6 +590,7 @@ describe('the crew user scripts', () => {
 
   it('a fresh user is a standard user in the group, its password sealed for the reader only', () => {
     const s = crewAccountScript({
+      places: PLACES,
       op: 'fresh',
       prefix: 'studio-crew',
       credFile: 'C:\\c\\crew.bin',
@@ -572,9 +612,17 @@ describe('the crew user scripts', () => {
         `icacls $file /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' "*$($reader):R" /L /Q`,
       ),
     );
-    expect(() => crewAccountScript({ op: 'fresh', prefix: 'studio-crew' })).toThrow(/reader/);
+    expect(() => crewAccountScript({ op: 'fresh', prefix: 'studio-crew', places: PLACES })).toThrow(
+      /reader/,
+    );
     expect(() =>
-      crewAccountScript({ op: 'fresh', prefix: 'x', credFile: 'c', reader: "a'b" }),
+      crewAccountScript({
+        op: 'fresh',
+        prefix: 'x',
+        credFile: 'c',
+        reader: "a'b",
+        places: PLACES,
+      }),
     ).toThrow(/not a SID/);
   });
 
@@ -623,6 +671,7 @@ describe('the crew user scripts', () => {
       sweep: { op: 'sweep', at: 'x', left: [5] },
     };
     const a = localCrewAccounts({
+      ...PLACES,
       prefix: 'crew',
       credFile: 'C:\\c.bin',
       reader: async () => 'S-1-5-21-9-9-9-1001',

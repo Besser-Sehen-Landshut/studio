@@ -10,6 +10,7 @@
 // Making and deleting users needs an administrator. A native worker runs elevated and runs these
 // scripts itself; a relay worker's account is a standard user and asks its broker tasks, which run
 // them as SYSTEM (src/relay-windows.ts).
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { CREW_HOST_BIN, OUTSIDE, powershellEnv, psQuote, type RunFile } from './windows-sandbox.js';
 
@@ -68,27 +69,41 @@ const prefixOf = (prefix: string): string => {
  * after every reparse point in it is removed as a link, never followed, and only when it is a folder
  * right below the profiles folder of this machine.
  */
-export const crewAccountFunctions = (
-  prefix: string,
-  treeSource: string = TREE_SOURCE(),
-  pruneBudget = PRUNE_BUDGET,
-  /**
-   * A broker: the functions come from this file of the admin-only tree (the setup writes
-   * `CREW_ACCOUNT_BODY` there), so the task's action stays short.
-   */
-  bodyFile?: string,
-): string =>
+export const crewAccountFunctions = (prefix: string, o: CrewScriptPlaces): string =>
   `$prefix = ${psQuote(prefixOf(prefix))}
-$treeSource = ${psQuote(treeSource)}
-$pruneBudget = ${Math.max(1, Math.trunc(pruneBudget))}
+$treeSource = ${psQuote(o.treeSource)}
+$treeTemp = ${psQuote(o.treeTemp ?? '')}
+$pruneBudget = ${Math.max(1, Math.trunc(o.pruneBudget ?? PRUNE_BUDGET))}
 $crewDescription = ${psQuote(CREW_DESCRIPTION)}
 $groupDescription = ${psQuote(GROUP_DESCRIPTION)}
-${
-  bodyFile === undefined
-    ? CREW_ACCOUNT_BODY
-    : `. ([ScriptBlock]::Create([IO.File]::ReadAllText(${psQuote(bodyFile)})))
-`
-}`;
+${o.bodyFile === undefined ? CREW_ACCOUNT_BODY : bodyLoader(o.bodyFile)}`;
+
+/** Where the scripts find what they load, and how much of the quarantine a run deletes. */
+export interface CrewScriptPlaces {
+  /** The tree deleter to compile (bin/studio-tree.cs): always a copy in an admin-only folder. */
+  treeSource: string;
+  /** An admin-only folder for the compiler's temporary files (SYSTEM's own TEMP is shared). */
+  treeTemp?: string;
+  /** Entries of the quarantine deleted in a run. */
+  pruneBudget?: number;
+  /**
+   * A broker: the functions come from this file of the admin-only tree (the setup writes
+   * `CREW_ACCOUNT_BODY` there), checked against its SHA-256 before they run, so the task's action
+   * stays short.
+   */
+  bodyFile?: string;
+}
+
+/** The SHA-256 of the functions as the setup writes them (UTF-8, no BOM), in upper-case hex. */
+export const CREW_ACCOUNT_BODY_SHA256 = (): string =>
+  createHash('sha256').update(CREW_ACCOUNT_BODY, 'utf8').digest('hex').toUpperCase();
+
+/** PowerShell that reads the functions once, checks their hash, and runs exactly those bytes. */
+const bodyLoader = (file: string): string => `$bodyBytes = [IO.File]::ReadAllBytes(${psQuote(file)})
+$bodyHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bodyBytes)).Replace('-', '')
+if ($bodyHash -ne '${CREW_ACCOUNT_BODY_SHA256()}') { throw "the functions in ${file.replace(/"/g, '')} are not the ones this task was made with (SHA-256 $bodyHash): run studio relay install again, elevated" }
+. ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($bodyBytes)))
+`;
 
 /** The functions of the crew users, without the variables they read. */
 export const CREW_ACCOUNT_BODY = String.raw`function CrewGroup {
@@ -111,13 +126,20 @@ function JobUsers {
   }
   @(Get-LocalUser | Where-Object { $_.Name -match $re -and $_.Description -eq $crewDescription })
 }
-# The processes of these SIDs, each with its owner.
+# The processes of these SIDs, each with its owner. A process whose owner cannot be read could be a
+# crew user's: it is listed as such (Unreadable), never left out. The minimal processes of the
+# kernel (pid 0 and 4, and those pid 4 started) have no owner to read.
 function Owned([string[]]$sids) {
+  LoadTree
+  [StudioTree]::Debug()
   @(Get-CimInstance Win32_Process | ForEach-Object {
-    try {
-      $o = (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid
-      if ($sids -contains $o) { [pscustomobject]@{ Id = [int]$_.ProcessId; Sid = $o } }
-    } catch { }
+    $id = [int]$_.ProcessId
+    $o = [StudioTree]::OwnerOf($id)
+    if ($null -eq $o) {
+      if (@(0, 4) -notcontains $id -and [int]$_.ParentProcessId -ne 4) { [pscustomobject]@{ Id = $id; Sid = ''; Name = [string]$_.Name; Unreadable = $true } }
+    } elseif ($sids -contains $o) {
+      [pscustomobject]@{ Id = $id; Sid = $o; Name = [string]$_.Name; Unreadable = $false }
+    }
   })
 }
 # The SIDs of deleted crew users whose processes were not yet seen gone (in the quarantine folder,
@@ -133,18 +155,30 @@ function WriteRetired([string[]]$sids) { Set-Content -LiteralPath (RetiredFile) 
 function SweepJobUsers {
   $retired = @(ReadRetired)
   $sids = @(@(JobUsers | ForEach-Object { $_.SID.Value }) + $retired | Select-Object -Unique)
-  if ($sids.Count -eq 0) { return @{ found = 0; left = @(); leftSids = @() } }
-  $found = Owned $sids
+  if ($sids.Count -eq 0) { return @{ found = 0; left = @(); leftSids = @(); leftNames = @() } }
+  $found = @(Owned $sids | Where-Object { -not $_.Unreadable })
   foreach ($p in $found) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
   if ($found.Count -gt 0) { Start-Sleep -Milliseconds 800 }
-  $after = Owned $sids
-  $leftSids = @($after | ForEach-Object { $_.Sid } | Select-Object -Unique)
+  $after = @(Owned $sids)
+  # A process of an owner that cannot be read may be any crew user's: it holds them all.
+  $leftSids = if (@($after | Where-Object { $_.Unreadable }).Count -gt 0) { $sids } else { @($after | ForEach-Object { $_.Sid } | Select-Object -Unique) }
   # A retired SID with nothing left needs no more watching: no logon can start one again.
   $keep = @($retired | Where-Object { $leftSids -contains $_ })
   if ($keep.Count -ne $retired.Count) { WriteRetired $keep }
-  @{ found = $found.Count; left = @($after | ForEach-Object { $_.Id }); leftSids = $leftSids }
+  @{ found = $found.Count; left = @($after | ForEach-Object { $_.Id }); leftSids = $leftSids; leftNames = @($after | ForEach-Object { if ($_.Unreadable) { "$($_.Id) $($_.Name) (owner unreadable)" } else { "$($_.Id) $($_.Name)" } }) }
 }
-function LoadTree { if (-not ('StudioTree' -as [type])) { Add-Type -Path $treeSource } }
+# The tree deleter, compiled from an admin-only copy, its temporary files in an admin-only folder:
+# SYSTEM's own TEMP takes files of other users too.
+function LoadTree {
+  if ('StudioTree' -as [type]) { return }
+  if ($treeTemp) {
+    $t = Get-Item -LiteralPath $treeTemp -Force -ErrorAction SilentlyContinue
+    if ($null -eq $t -or ($t.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "$treeTemp is missing or a reparse point: run the setup of Studio again, elevated" }
+    $env:TEMP = $treeTemp
+    $env:TMP = $treeTemp
+  }
+  Add-Type -Path $treeSource
+}
 function ProfileRoot {
   $list = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
   [Environment]::ExpandEnvironmentVariables($list.ProfilesDirectory).TrimEnd('\')
@@ -205,6 +239,30 @@ function QuarantineProfile($u, [string]$q) {
   $key = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $sid
   if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
 }
+# Entries of the quarantine that could not be deleted, with the number of runs in a row they failed
+# (admin-only, in the quarantine). One that failed $stuckRuns times is left alone from then on and
+# named to doctor; pruning goes on past it.
+$stuckRuns = 3
+function StuckFile { Join-Path (Quarantine) 'stuck.txt' }
+function ReadStuck {
+  $f = StuckFile
+  $map = @{}
+  if (Test-Path -LiteralPath $f) {
+    foreach ($line in @(Get-Content -LiteralPath $f)) {
+      $at = $line.IndexOf([char]9)
+      if ($at -gt 0) { $map[$line.Substring($at + 1)] = [int]$line.Substring(0, $at) }
+    }
+  }
+  $map
+}
+# Counts this run's failures on, keeps entries that still exist, and returns those now left alone.
+function TrackStuck($stuck, [string[]]$failed) {
+  $next = @{}
+  foreach ($k in $stuck.Keys) { if ([IO.Directory]::Exists($k) -or [IO.File]::Exists($k)) { $next[$k] = $stuck[$k] } }
+  foreach ($f in $failed) { $next[$f] = 1 + $(if ($next.ContainsKey($f)) { $next[$f] } else { 0 }) }
+  Set-Content -LiteralPath (StuckFile) -Value @($next.Keys | ForEach-Object { "$($next[$_])" + [char]9 + $_ }) -Encoding UTF8
+  @($next.Keys | Where-Object { $next[$_] -ge $stuckRuns } | ForEach-Object { $_ -replace '^\\\\\?\\', '' })
+}
 # Retiring a crew user never waits for its profile to be deleted. Per user, each step runs only when
 # the one before it held: lock it, see none of its processes left, move its profile into the
 # quarantine, see none of its processes left once more, list its SID as retired, delete the
@@ -238,18 +296,21 @@ function RetireJobUsers {
       $gone += $u.Name
     } catch { $problems += "$($u.Name): cannot delete it, kept: $($_.Exception.Message)" }
   }
-  $quarantine = @{ trees = 0; pruned = 0; done = $false }
+  $quarantine = @{ trees = 0; pruned = 0; done = $false; stuck = @() }
   if ($null -ne $q) {
     $trees = Join-Path $q 'trees'
     try {
-      $r = [StudioTree]::Prune($trees, $pruneBudget, $true, $null)
+      $stuck = ReadStuck
+      $skip = @($stuck.Keys | Where-Object { $stuck[$_] -ge $stuckRuns })
+      $r = [StudioTree]::Prune($trees, $pruneBudget, $true, $null, [string[]]$skip)
       $quarantine.pruned = $r.Deleted
       $quarantine.done = $r.Done
+      $quarantine.stuck = @(TrackStuck $stuck @($r.Failed))
     } catch { $problems += "the quarantine: $($_.Exception.Message)" }
     try { $quarantine.trees = @(Get-ChildItem -LiteralPath $trees -Force -ErrorAction Stop).Count } catch { $quarantine.trees = -1 }
   }
   # Every process still running of a crew user, kept or retired: a fresh user waits for none.
-  @{ removed = $gone; problems = $problems; left = @($s2.left); quarantine = $quarantine }
+  @{ removed = $gone; problems = $problems; left = @($s2.left); leftNames = @($s2.leftNames); quarantine = $quarantine }
 }
 function NewSecret { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b) + 'aA1!' }
 # The password, sealed for this machine, in a file only SYSTEM, administrators and the reader read:
@@ -298,6 +359,7 @@ const RETIRE_BODY = [
   '  $out.removed = @($r.removed)',
   '  $out.problems = @($r.problems)',
   '  $out.left = @($r.left)',
+  '  $out.leftNames = @($r.leftNames)',
   '  $out.quarantine = $r.quarantine',
 ].join('\n');
 
@@ -315,12 +377,8 @@ export function crewAccountScript(o: {
   credFile?: string;
   reader?: string;
   result?: string;
-  /** The tree deleter to load (bin/studio-tree.cs): the admin-only copy on a relay worker. */
-  treeSource?: string;
-  /** Entries of the quarantine deleted in this run. */
-  pruneBudget?: number;
-  /** A broker: the file of the admin-only tree the functions come from. */
-  bodyFile?: string;
+  /** What the script loads, from admin-only folders, and the prune budget. */
+  places: CrewScriptPlaces;
 }): string {
   if (o.op === 'fresh' && (o.credFile === undefined || o.reader === undefined)) {
     throw new Error('a fresh crew user needs a credential file and its reader');
@@ -332,7 +390,7 @@ export function crewAccountScript(o: {
   const reader = o.reader === '$relaySid' ? `'${RELAY_SID_SLOT}'` : psQuote(o.reader ?? '');
   const body =
     o.op === 'sweep'
-      ? '  $s = SweepJobUsers\n  $out.found = $s.found\n  $out.left = $s.left'
+      ? '  $s = SweepJobUsers\n  $out.found = $s.found\n  $out.left = @($s.left)\n  $out.leftNames = @($s.leftNames)'
       : o.op === 'retire'
         ? RETIRE_BODY
         : `${RETIRE_BODY}\n  if (@($out.left).Count -eq 0) {\n    $n = NewJobUser ${psQuote(o.credFile ?? '')} ${reader}\n    $out.user = $n.user\n    $out.sid = $n.sid\n  }`;
@@ -343,7 +401,7 @@ export function crewAccountScript(o: {
   return `$ErrorActionPreference = 'Stop'
 $out = @{ op = ${psQuote(o.op)}; at = (Get-Date).ToUniversalTime().ToString('o') }
 try {
-${crewAccountFunctions(o.prefix, o.treeSource ?? TREE_SOURCE(), o.pruneBudget ?? PRUNE_BUDGET, o.bodyFile)}
+${crewAccountFunctions(o.prefix, o.places)}
 ${body}
 } catch {
   $out.error = $_.Exception.Message
@@ -358,6 +416,8 @@ export interface CrewNotes {
   problems: string[];
   /** Profiles of retired users still waiting in the quarantine; -1 when it cannot be read. */
   quarantined?: number;
+  /** Entries of the quarantine that failed several runs and are left alone now. */
+  stuck?: string[];
 }
 
 /** An answer of a crew account script: undefined when it has not the shape it must have. */
@@ -366,7 +426,7 @@ export function judgeCrewAnswer(
   answer: unknown,
 ):
   | { error: string }
-  | { left: number[]; notes: CrewNotes }
+  | { left: number[]; names?: string[]; notes: CrewNotes }
   | { account: CrewAccount; notes: CrewNotes }
   | undefined {
   const a = answer as {
@@ -378,6 +438,7 @@ export function judgeCrewAnswer(
     sid?: unknown;
     problems?: unknown;
     quarantine?: unknown;
+    leftNames?: unknown;
   } | null;
   if (a === null || typeof a !== 'object' || a.op !== op || typeof a.at !== 'string') {
     return undefined;
@@ -392,12 +453,23 @@ export function judgeCrewAnswer(
     .filter((x): x is string => typeof x === 'string')
     .map((x) => x.slice(0, 300))
     .slice(0, 20);
-  const q = a.quarantine as { trees?: unknown } | undefined;
+  const q = a.quarantine as { trees?: unknown; stuck?: unknown } | undefined;
+  const stuck = (list(q?.stuck) ?? [])
+    .filter((x): x is string => typeof x === 'string')
+    .map((x) => x.slice(0, 500))
+    .slice(0, 20);
   const notes: CrewNotes = {
     problems,
     ...(typeof q?.trees === 'number' && Number.isInteger(q.trees) ? { quarantined: q.trees } : {}),
+    ...(stuck.length > 0 ? { stuck } : {}),
   };
-  if (op !== 'fresh' || left.length > 0) return { left: left as number[], notes };
+  const names = (list(a.leftNames) ?? [])
+    .filter((x): x is string => typeof x === 'string')
+    .map((x) => x.slice(0, 200))
+    .slice(0, 10);
+  if (op !== 'fresh' || left.length > 0) {
+    return { left: left as number[], ...(names.length > 0 ? { names } : {}), notes };
+  }
   if (
     typeof a.user !== 'string' ||
     !/^[A-Za-z][A-Za-z0-9_-]{0,12}-[0-9a-f]{6}$/.test(a.user) ||
@@ -419,8 +491,9 @@ function settle(
   if (j === undefined) throw new Error(`${where} answered in an unknown shape`);
   if ('error' in j) throw new Error(`${where} could not ${op} the crew users: ${j.error}`);
   if ('left' in j && j.left.length > 0) {
+    const which = 'names' in j && j.names !== undefined ? j.names.join(', ') : j.left.join(', ');
     throw new Error(
-      `processes of the crew users are still running (${j.left.join(', ')}) and ${where} cannot end them`,
+      `processes of the crew users (or of an owner that cannot be read) are still running (${which}) and ${where} cannot end them`,
     );
   }
   return 'account' in j ? { account: j.account, notes: j.notes } : { notes: j.notes };
@@ -452,6 +525,9 @@ export function localCrewAccounts(o: {
   run: RunFile;
   /** The SID of the account Studio runs as (`S-1-...`), which reads the sealed password. */
   reader: () => Promise<string>;
+  /** The admin-only copy of the tree deleter and the admin-only folder its compiler writes in. */
+  treeSource: string;
+  treeTemp: string;
   /** Entries of the quarantine deleted per retire (tests make it small). */
   pruneBudget?: number;
 }): CrewAccounts {
@@ -459,7 +535,11 @@ export function localCrewAccounts(o: {
     const script = crewAccountScript({
       op,
       prefix: o.prefix,
-      ...(o.pruneBudget === undefined ? {} : { pruneBudget: o.pruneBudget }),
+      places: {
+        treeSource: o.treeSource,
+        treeTemp: o.treeTemp,
+        ...(o.pruneBudget === undefined ? {} : { pruneBudget: o.pruneBudget }),
+      },
       ...(op === 'fresh' ? { credFile: o.credFile, reader: await o.reader() } : {}),
     });
     const elevated =
@@ -563,26 +643,34 @@ export function brokerCrewAccounts(o: {
 }
 
 /**
- * The part of a setup that makes Studio's group of crew users and what it carries: the outbound
- * firewall rule (nothing but loopback), the denied logons, and the read grants on `$readPaths`
- * (set before). It takes away the one shared crew user of earlier versions (named the prefix, with
- * Studio's old description), with its processes, its profile and its firewall rule. Sets
+ * The first part of a setup for Studio's group of crew users: the group itself. Sets `$group` and
  * `$groupSid`. Runs elevated, after `crewAccountFunctions`.
  */
-export const crewGroupSetup =
+export const crewGroupMake =
   (): string => `# Studio's group of crew users: every crew user is made in it for one job and deleted after.
 $group = Get-LocalGroup -Name ($prefix + 's') -ErrorAction SilentlyContinue
 if ($null -eq $group) { $group = New-LocalGroup -Name ($prefix + 's') -Description $groupDescription }
 elseif ($group.Description -ne $groupDescription) { throw "a group $($group.Name) exists and is not Studio's: remove it or choose another crew_user prefix" }
 $groupSid = $group.SID.Value
-# The shared crew user of earlier versions goes, with what it left.
+`;
+
+/**
+ * The rest of it, once the admin-only copy of the tree deleter is in place: it takes away the one
+ * shared crew user of earlier versions (named the prefix, with Studio's old description) with its
+ * processes, profile and firewall rule, and crew users a crash left; makes what the group carries:
+ * the outbound firewall rule (nothing but loopback), the denied logons, and the read grants on
+ * `$readPaths` (set before).
+ */
+export const crewGroupFinish =
+  (): string => `# The shared crew user of earlier versions goes, with what it left.
 $old = Get-LocalUser -Name $prefix -ErrorAction SilentlyContinue
 if ($null -ne $old -and $old.Description -eq 'Studio crew sandbox') {
   LoadTree
   LockJobUser $old
-  foreach ($p in @(Owned @($old.SID.Value))) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+  foreach ($p in @(Owned @($old.SID.Value) | Where-Object { -not $_.Unreadable })) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
   Start-Sleep -Milliseconds 800
-  if (@(Owned @($old.SID.Value)).Count -gt 0) { throw "processes of the old crew user $prefix are still running: end them, then run this again" }
+  $oldLeft = @(Owned @($old.SID.Value))
+  if ($oldLeft.Count -gt 0) { throw "processes of the old crew user $prefix may still run ($(@($oldLeft | ForEach-Object { "$($_.Id) $($_.Name)" }) -join ', ')): end them, then run this again" }
   QuarantineProfile $old (Join-Path (Quarantine) 'trees')
   WriteRetired (@(@(ReadRetired) + $old.SID.Value | Select-Object -Unique))
   Remove-LocalUser -SID $old.SID
