@@ -9,8 +9,10 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { stringsFor } from '../hooks/i18n/index.js';
 import { runAccount } from '../src/account-command.js';
 import { listAccounts } from '../src/accounts.js';
+import { ownerStateRootFor } from '../src/paths.js';
 import { realPorts } from '../src/ports.js';
 import { type Exec, runRelayCommand } from '../src/relay-command.js';
+import { writePending } from '../src/relay-pair.js';
 import { relaySetupScript, withSteps } from '../src/relay-windows.js';
 import { windowsSetupScript } from '../src/windows-sandbox.js';
 
@@ -93,6 +95,40 @@ describe('--dry-run of the relay commands: what they would do, nothing done', ()
     expect(existsSync(join(p.home, '.config', 'studio', 'relay'))).toBe(false);
   });
 
+  it('relay pair --connect --dry-run leaves an expired pairing where it is; the real run removes it', async () => {
+    const h = home();
+    const owner = { env: {}, homedir: h };
+    writePending(owner, {
+      label: 'lab',
+      host: 'worker.example',
+      port: 22,
+      user: 'studio-relay',
+      secret: 'a'.repeat(43),
+      identityFile: join(h, 'key'),
+      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+    });
+    const file = join(ownerStateRootFor(owner), 'relay', 'pair-lab.json');
+    expect(existsSync(file)).toBe(true);
+    const connect = (values: Record<string, unknown>) =>
+      runRelayCommand({
+        rest: ['pair', 'lab'],
+        values: { connect: true, ...values },
+        owner,
+        ports: realPorts(),
+        env: {},
+        homedir: h,
+        stdin: none(),
+        stdout: () => {},
+        stderr: () => {},
+        exec: async () => ({ code: 1, stdout: '', stderr: '' }),
+        platform: { platform: 'linux', wsl: 'none', automountRoot: '/mnt/' },
+      });
+    await expect(connect({ 'dry-run': true })).rejects.toThrow(/expired/);
+    expect(existsSync(file)).toBe(true);
+    await expect(connect({})).rejects.toThrow(/expired/);
+    expect(existsSync(file)).toBe(false);
+  });
+
   it('relay pair speaks German, the line and the commands unchanged', async () => {
     const h = home();
     const out: string[] = [];
@@ -117,7 +153,8 @@ describe('--dry-run of the relay commands: what they would do, nothing done', ()
     });
     const text = out.join('');
     expect(text).toContain('1. Auf dem Windows-PC, in einer PowerShell als Administrator');
-    expect(text).toContain("studio-relay-bootstrap.ps1))) -Pair 'studio-pair-1 lab ");
+    expect(text).toContain("studio-relay-bootstrap.ps1').RawContentStream.ToArray()");
+    expect(text).toContain("-Pair 'studio-pair-1 lab ");
     expect(text).toContain('2. Danach hier: studio relay pair lab --connect');
   });
 });

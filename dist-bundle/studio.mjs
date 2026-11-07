@@ -67425,7 +67425,9 @@ async function pairStart(o2) {
   return 0;
 }
 async function pairConnect(o2) {
-  const p = readPending(o2.owner, o2.label, o2.ports.clock.now());
+  const p = readPending(o2.owner, o2.label, o2.ports.clock.now(), {
+    keep: o2.values["dry-run"] === true
+  });
   if (p === void 0) {
     throw new Error(
       `no pairing of ${o2.label} is waiting (none started, or used already): studio relay pair ${o2.label} <host>`

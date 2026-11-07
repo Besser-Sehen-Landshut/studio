@@ -109,10 +109,15 @@ export function writePending(owner: OwnerEnv, p: PendingPair): void {
 }
 
 /**
- * The pairing of `label` the lead waits for; an expired one is removed and refused, a missing one
- * (never started, or used already) is undefined.
+ * The pairing of `label` the lead waits for; an expired one is refused (and removed, unless `keep`:
+ * a dry run changes nothing), a missing one (never started, or used already) is undefined.
  */
-export function readPending(owner: OwnerEnv, label: string, now: Date): PendingPair | undefined {
+export function readPending(
+  owner: OwnerEnv,
+  label: string,
+  now: Date,
+  o: { keep?: boolean } = {},
+): PendingPair | undefined {
   const f = pendingFile(owner, label);
   if (!existsSync(f)) return undefined;
   const p = JSON.parse(readFileSync(f, 'utf8')) as PendingPair;
@@ -128,7 +133,7 @@ export function readPending(owner: OwnerEnv, label: string, now: Date): PendingP
     );
   }
   if (now.getTime() - Date.parse(p.createdAt) > PAIR_TTL_MS) {
-    rmSync(f, { force: true });
+    if (o.keep !== true) rmSync(f, { force: true });
     throw new Error(
       `the pairing of ${label} expired (an hour): start again with studio relay pair ${label} <host>`,
     );

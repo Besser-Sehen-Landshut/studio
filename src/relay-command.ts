@@ -1482,7 +1482,10 @@ async function pairConnect(o: {
   transport?: (label: string, target: RelayTarget) => RelayTransport;
   exec?: Exec;
 }): Promise<number> {
-  const p = readPending(o.owner, o.label, o.ports.clock.now());
+  // A dry run reads the pending pairing without removing an expired one.
+  const p = readPending(o.owner, o.label, o.ports.clock.now(), {
+    keep: o.values['dry-run'] === true,
+  });
   if (p === undefined) {
     throw new Error(
       `no pairing of ${o.label} is waiting (none started, or used already): studio relay pair ${o.label} <host>`,
