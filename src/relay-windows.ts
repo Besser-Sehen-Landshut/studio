@@ -438,7 +438,7 @@ $claude = ${psQuote(join(machineConfig(o.machine), 'studio', 'claude'))}
 foreach ($d in @((Join-Path $claude 'skills'), (Join-Path $claude 'plugins'))) {
   if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
 }`;
-  return `${o.install === undefined ? '' : installHead(o.install, o.relayUser, o.crewPrefix)}#Requires -RunAsAdministrator
+  return `${PRIOR_CAPTURE(o.machine)}${o.install === undefined ? '' : installHead(o.install, o.relayUser, o.crewPrefix)}#Requires -RunAsAdministrator
 # Studio: the setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
 # Nothing here leaves this machine.
@@ -466,7 +466,10 @@ $dataStudio = Split-Path -Parent $home_
 $filesStudio = Split-Path -Parent $machine
 SafeFolder $home_ (Split-Path -Parent $dataStudio)
 SafeFolder $machine (Split-Path -Parent $filesStudio)
-# The relay account: a standard user the lead logs in as over SSH, with a password nobody sees.
+# The relay account: a standard user the lead logs in as over SSH, with a password nobody sees. A
+# user of that name Studio did not make is never taken over.
+$existing = Get-LocalUser -Name $relay -ErrorAction SilentlyContinue
+if ($null -ne $existing -and $existing.Description -ne 'Studio relay (SSH, forced command)') { throw "a user $relay exists that Studio did not make (its description is not Studio's): choose another name with studio relay install --user <name>, or remove that user, then run this again" }
 $relaySid = (EnsureUser $relay 'Studio relay (SSH, forced command)' $null).SID.Value
 # Studio's group of crew users (one user per job, made and deleted by the broker); what it carries
 # comes once the admin-only copy of Studio is in place.
@@ -481,7 +484,10 @@ foreach ($sub in @('broker', 'config', 'setup-state', 'pairing')) { StrictFolder
 foreach ($sub in @('node', 'studio')) { StrictFolder (Join-Path $machine $sub) @(@($relaySid, $rx, $tree, 'None'), @($groupSid, $rx, $tree, 'None')) }
 # The copies the forced command runs: never the files of an account that can change them, and no
 # junction of the source copied along.
-Copy-Item -LiteralPath ${psQuote(o.source.node)} -Destination ${psQuote(machineNode(o.machine))} -Force
+$nodeSource = ${psQuote(o.source.node)}
+if (-not (Test-Path -LiteralPath $nodeSource -PathType Leaf)) { throw "Node.js is not installed for all users ($nodeSource): winget install --id OpenJS.NodeJS.LTS --exact --scope machine, then run this again" }
+if ([string](& $nodeSource --version) -notmatch '^v(\\d+)\\.' -or [int]$Matches[1] -lt 24) { throw "Node.js in $nodeSource is older than 24: winget upgrade --id OpenJS.NodeJS.LTS --exact, then run this again" }
+Copy-Item -LiteralPath $nodeSource -Destination ${psQuote(machineNode(o.machine))} -Force
 & robocopy.exe ${psQuote(o.source.studio)} ${psQuote(machineStudio(o.machine))} /MIR /XJ /XD node_modules .git .worktrees /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "cannot copy Studio into $machine (robocopy $LASTEXITCODE)" }
 icacls ${psQuote(machineStudio(o.machine))} /reset /T /C /L /Q | Out-Null
@@ -533,10 +539,60 @@ if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
   Stop-Service -Name WebClient -Force -ErrorAction SilentlyContinue
   Set-Service -Name WebClient -StartupType Disabled
 }
-# The pinned plugins in the crew Claude config dir of the relay home.
+# What this machine had before, and what the install did: studio relay uninstall reads it.
+${recordSnippet({ machine: o.machine, spoolerDisabled: o.install?.disableSpooler === true })}# The pinned plugins in the crew Claude config dir of the relay home.
 ${pluginSetup}
 ${o.install === undefined ? setupTail(block) : installTail(block, o.install)}`;
 }
+
+/**
+ * PowerShell function `SshdConfigSwap $conf $text $mustTest`: the new sshd_config goes to a
+ * temporary file beside it, sshd checks that file (`sshd -t -f`, with a throwaway host key when
+ * the machine has none yet), and only a config sshd accepts replaces the old one, in one step
+ * (`[IO.File]::Replace`, which keeps its ACL). A refused one changes nothing. Without sshd.exe
+ * the check is skipped only where `$mustTest` allows it (uninstall: removing lines).
+ */
+export const SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text, [bool]$mustTest) {
+  $dir = Split-Path -Parent $conf
+  $tmp = Join-Path $dir ('.sshd_config.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+  $keyDir = $null
+  [IO.File]::WriteAllText($tmp, $text, (New-Object Text.UTF8Encoding $false))
+  try {
+    $exe = Join-Path $env:SystemRoot 'System32\OpenSSH\sshd.exe'
+    if (Test-Path -LiteralPath $exe) {
+      $sshdArgs = '-t -f "' + $tmp + '"'
+      if (-not (Test-Path -LiteralPath (Join-Path $dir 'ssh_host_ed25519_key'))) {
+        # Beside sshd_config, made with its final protected DACL (SYSTEM and administrators) in one
+        # step, and checked before use: no other account can put anything into it.
+        $acl = New-Object Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) { $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))) }
+        $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+        $keyDir = Join-Path $dir ('.studio-sshd-check-' + [Guid]::NewGuid().ToString('N'))
+        $null = [IO.Directory]::CreateDirectory($keyDir, $acl)
+        $made = Get-Item -LiteralPath $keyDir -Force
+        if (($made.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-Acl -LiteralPath $keyDir).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw "$keyDir is not the admin-only folder this made" }
+        $key = Join-Path $keyDir 'host_ed25519'
+        $kg = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
+        if ($kg.ExitCode -ne 0) { throw 'cannot make a throwaway host key to check sshd_config; it stays as it was' }
+        $sshdArgs += ' -h "' + $key + '"'
+      }
+      $tested = Start-Process -FilePath $exe -ArgumentList $sshdArgs -Wait -PassThru -NoNewWindow
+      if ($tested.ExitCode -ne 0) { throw "sshd does not accept the new sshd_config; $conf stays as it was" }
+    } elseif ($mustTest) {
+      throw "sshd.exe is not there to check the new sshd_config; $conf stays as it was"
+    }
+    if (Test-Path -LiteralPath $conf) { [IO.File]::Replace($tmp, $conf, [NullString]::Value) } else { [IO.File]::Move($tmp, $conf) }
+  } finally {
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    # Only the files it made, by name, then the empty folder: nothing is followed or recursed.
+    if ($keyDir) {
+      foreach ($f in @('host_ed25519', 'host_ed25519.pub')) { Remove-Item -LiteralPath (Join-Path $keyDir $f) -Force -ErrorAction SilentlyContinue }
+      Remove-Item -LiteralPath $keyDir -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+`;
 
 /** Where sshd may be reached from: the Tailscale interface, another interface, or a source range. */
 export type SshdScope = { tailscale: true } | { interface: string } | { source: string };
@@ -584,6 +640,99 @@ ${adminFileSnippet({ file: o.file, lines: o.lines, readers: 'relay' })}
  * sshd stopped and every inbound rule for it off. Then the prerequisites: Git and Claude Code
  * through winget (for the whole machine), the OpenSSH server as the Windows capability it is.
  */
+/**
+ * PowerShell functions that find and stop every process of the relay account and of the crew
+ * users: `RelayProcesses`, and `NoRelayJob`, which refuses while one runs unless `forceStop`.
+ * Install and uninstall run them before they touch anything a job could use.
+ */
+export const relayJobFunctions = (o: {
+  relayUser: string;
+  crewPrefix: string;
+  forceStop: boolean;
+  what: string;
+  /**
+   * Uninstall: the processes through `Owned` of the crew functions (the debug privilege on), and a
+   * process whose owner cannot be read counts as one of them.
+   */
+  owned?: boolean;
+}): string => `$forceStop = ${o.forceStop ? '$true' : '$false'}
+function RelayProcesses {
+  $crewRe = '^' + [regex]::Escape(${psQuote(o.crewPrefix)}) + '-[0-9a-f]{6}$'
+  $sids = @(Get-LocalUser | Where-Object { $_.Name -eq ${psQuote(o.relayUser)} -or ($_.Name -match $crewRe -and $_.Description -eq ${psQuote(CREW_DESCRIPTION)}) } | ForEach-Object { $_.SID.Value })
+  if ($sids.Count -eq 0) { return @() }
+${
+  o.owned === true
+    ? '  LoadTree\n  @(Owned $sids | ForEach-Object { [pscustomobject]@{ ProcessId = $_.Id; Name = $(if ($_.Unreadable) { "$($_.Name) (owner unreadable)" } else { $_.Name }) } })'
+    : '  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })'
+}
+}
+function NoRelayJob {
+  $running = RelayProcesses
+  if ($running.Count -eq 0) { return }
+  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or a crew user${o.owned === true ? ', or whose owner cannot be read' : ''}: $(@($running | Select-Object -First 5 | ForEach-Object { "$($_.ProcessId) $($_.Name)" }) -join ', ')): let it end, or run studio relay ${o.what} --force-stop" }
+  Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew users (--force-stop)."
+  for ($t = 0; $t -lt 20 -and $running.Count -gt 0; $t++) {
+    foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 500
+    $running = RelayProcesses
+  }
+  if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew users' }
+}
+`;
+
+/** The file in the admin-only tree where the install records what it found and what it did. */
+export const installRecordFile = (machine: string): string => join(machine, 'install-record.json');
+
+/**
+ * PowerShell that notes what the machine had before Studio changed anything, for
+ * `studio relay uninstall`: the services Studio stops or starts and the rule OpenSSH adds. Runs
+ * first, before anything else of the setup. `$priorMachine` says whether the admin-only tree was
+ * there already (an install of an earlier version, which recorded nothing).
+ */
+/** The first line of every elevated script: the machine's PATH alone, never a folder of the user's. */
+export const MACHINE_PATH =
+  "# Only the machine's PATH: a folder of the user's PATH is writable without elevation.\n$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')\n";
+
+const PRIOR_CAPTURE = (
+  machine: string,
+) => `${MACHINE_PATH}# What this machine had before Studio changed it: the first install records it for uninstall.
+function ServiceState([string]$name) {
+  $s = Get-Service -Name $name -ErrorAction SilentlyContinue
+  if ($null -eq $s) { return @{ exists = $false } }
+  @{ exists = $true; start = [string]$s.StartType; status = [string]$s.Status }
+}
+$priorWebClient = ServiceState 'WebClient'
+$priorSpooler = ServiceState 'Spooler'
+$priorSshd = ServiceState 'sshd'
+$priorRule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
+$priorSshdRule = if ($null -eq $priorRule) { @{ exists = $false } } else { @{ exists = $true; enabled = [string]$priorRule.Enabled } }
+$priorSshdCapability = $null
+$priorMachine = Test-Path -LiteralPath ${psQuote(machine)}
+`;
+
+/**
+ * PowerShell that writes the install record (admin-only, nobody else reads it). The state before
+ * Studio comes from the first install and is kept by every later one; an admin-only tree an
+ * earlier version made without a record leaves it unknown, and uninstall then restores nothing.
+ */
+const recordSnippet = (o: {
+  machine: string;
+  spoolerDisabled: boolean;
+}) => `$recordFile = ${psQuote(installRecordFile(o.machine))}
+$old = $null
+if (Test-Path -LiteralPath $recordFile) { try { $old = Get-Content -Raw -LiteralPath $recordFile | ConvertFrom-Json } catch { $old = $null } }
+if ($null -ne $old) { $prior = $old.prior }
+elseif ($priorMachine) { $prior = $null }
+else { $prior = @{ webClient = $priorWebClient; spooler = $priorSpooler; sshd = $priorSshd; sshdRule = $priorSshdRule; sshdCapability = $priorSshdCapability } }
+$record = @{ version = 1; relayUser = $relay; crewPrefix = $prefix; task = $task; home = $home_; readPaths = @($readPaths); spoolerDisabled = (${o.spoolerDisabled ? '$true' : '$false'} -or ($null -ne $old -and $old.spoolerDisabled -eq $true)); prior = $prior }
+$tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+[IO.File]::WriteAllText($tmp, (ConvertTo-Json -Compress -Depth 6 $record), (New-Object Text.ASCIIEncoding))
+icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' /L /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $recordFile" }
+if (Test-Path -LiteralPath $recordFile) { [IO.File]::Replace($tmp, $recordFile, [NullString]::Value) } else { [IO.File]::Move($tmp, $recordFile) }
+icacls $recordFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' /L /Q | Out-Null
+`;
+
 const installHead = (
   i: RelayInstall,
   relayUser: string,
@@ -597,41 +746,33 @@ function SshdOff {
 }
 # No relay job may run while the install walks the folders and sets their ACLs: a runner or crew
 # could plant a link between the two. Every process of the relay account or a crew user counts.
-$forceStop = ${i.forceStop === true ? '$true' : '$false'}
-function RelayProcesses {
-  $crewRe = '^' + [regex]::Escape(${psQuote(crewPrefix)}) + '-[0-9a-f]{6}$'
-  $sids = @(Get-LocalUser | Where-Object { $_.Name -eq ${psQuote(relayUser)} -or ($_.Name -match $crewRe -and $_.Description -eq ${psQuote(CREW_DESCRIPTION)}) } | ForEach-Object { $_.SID.Value })
-  if ($sids.Count -eq 0) { return @() }
-  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })
-}
-function NoRelayJob {
-  $running = RelayProcesses
-  if ($running.Count -eq 0) { return }
-  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or a crew user): let it end, or run this again with --force-stop" }
-  Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew users (--force-stop)."
-  for ($t = 0; $t -lt 20 -and $running.Count -gt 0; $t++) {
-    foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
-    Start-Sleep -Milliseconds 500
-    $running = RelayProcesses
-  }
-  if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew users' }
-}
-# Before sshd stops: a running job is refused while the lead can still reach it.
+${relayJobFunctions({ relayUser, crewPrefix, forceStop: i.forceStop === true, what: 'install' })}# Before sshd stops: a running job is refused while the lead can still reach it.
 NoRelayJob
 try {
-function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
+# Only the machine's PATH, also after an install: never a folder of the user's.
+function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') }
+# winget from its package in Program Files (administrators only), never the alias in the user's
+# WindowsApps folder.
+function Winget {
+  $apps = Join-Path $env:ProgramFiles 'WindowsApps'
+  @(Get-ChildItem -LiteralPath $apps -Directory -Filter 'Microsoft.DesktopAppInstaller_*_8wekyb3d8bbwe' -ErrorAction SilentlyContinue |
+    Sort-Object { try { [version]($_.Name.Split('_')[1]) } catch { [version]'0.0' } } -Descending |
+    ForEach-Object { Join-Path $_.FullName 'winget.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }) | Select-Object -First 1
+}
 function Need([string]$what, [scriptblock]$have, [string]$id) {
   if (& $have) { Write-Output "ok: $what"; return }
-  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "$what is missing and winget is not there to install it; install $what by hand" }
+  $wg = Winget
+  if (-not $wg) { throw "$what is missing and winget is not installed for the machine; install $what for all users by hand, then run this again" }
   Write-Output "installing: $what (winget $id)"
-  winget install --id $id --exact --silent --scope machine --accept-package-agreements --accept-source-agreements | Out-Null
+  & $wg install --id $id --exact --silent --scope machine --accept-package-agreements --accept-source-agreements | Out-Null
   Fresh
-  if (-not (& $have)) { throw "$what is still missing after winget install $id; install it by hand" }
+  if (-not (& $have)) { throw "$what is still missing after winget install $id; install it for all users by hand" }
 }
-Need 'Git' { Get-Command git -ErrorAction SilentlyContinue } 'Git.Git'
+Need 'Git' { Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'
 Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
 $ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
 if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
+$priorSshdCapability = @{ name = [string]$ssh.Name; state = [string]$ssh.State }
 if ($ssh.State -ne 'Installed') { Write-Output 'installing: OpenSSH server'; Add-WindowsCapability -Online -Name $ssh.Name | Out-Null } else { Write-Output 'ok: OpenSSH server' }
 SshdOff
 # With sshd off no new job starts: once more, for one that started in between.
@@ -692,14 +833,7 @@ $ours = @'
 ${block}# studio relay end
 '@
 $new = $global + $text.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $ours
-[IO.File]::WriteAllText($conf, $new, (New-Object Text.UTF8Encoding $false))
-$exe = Join-Path $env:SystemRoot 'System32\\OpenSSH\\sshd.exe'
-$tested = $null
-if (Test-Path -LiteralPath $exe) { $tested = Start-Process -FilePath $exe -ArgumentList '-t' -Wait -PassThru -NoNewWindow }
-if ($null -eq $tested -or $tested.ExitCode -ne 0) {
-  [IO.File]::WriteAllBytes($conf, $before)
-  throw 'sshd does not accept the new sshd_config (or could not check it); it was put back as it was'
-}
+${SSHD_SWAP}SshdConfigSwap $conf $new $true
 ${scope}
 $rule = 'Studio relay: sshd'
 Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule

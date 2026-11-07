@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, win32 } from 'node:path';
 import { crewClaudeDir } from './accounts.js';
 import { type Board, loadBoard, saveBoard, transition, type WorkItem } from './board.js';
 import {
@@ -28,6 +28,7 @@ import {
 } from './config.js';
 import { type RunUsage, recordLedgerRun, withItemUsage } from './costs.js';
 import { pickCrewCredential } from './crew.js';
+import { TREE_SOURCE } from './crew-accounts.js';
 import { startEgressProxy } from './egress-proxy.js';
 import { HeldError } from './held.js';
 import { activeParks, blockHold, parkUntil, readLimits, writeLimits } from './limits.js';
@@ -84,10 +85,12 @@ import {
   relayCall,
   sshTransport,
 } from './relay-transport.js';
+import { readInstallRecord, relayUninstallScript, treePathProblem } from './relay-uninstall.js';
 import {
   authorizedKeysFile,
   authorizedKeysScript,
   forcedCommand,
+  installRecordFile,
   leadFromAuthInfo,
   machineConfig,
   type RelayInstall,
@@ -98,7 +101,7 @@ import {
 } from './relay-windows.js';
 import { elevated, machineTreeProblem, relayWindows } from './relay-windows-check.js';
 import { labelUsage, recordRun, USAGE_UNREADABLE } from './usage.js';
-import { findClaude, runFile } from './windows-sandbox.js';
+import { findClaude, runFile, systemTool } from './windows-sandbox.js';
 import { pinnedMain } from './worker.js';
 import { detectPlatform, type WorkerPlatform } from './worker-deny.js';
 import { updateWorkers, workerCrewName } from './worker-lead.js';
@@ -790,6 +793,9 @@ export async function runRelayCommand(o: {
         setupScriptFor({ owner: o.owner, env: o.env, home, machine, relayUser, install: i }),
     });
   }
+  if (sub === 'uninstall' && args.length === 0) {
+    return await uninstall({ ...o, home: o.values.home, machine, relayUser: o.values.user });
+  }
   if (sub === 'unpair' && args.length === 1) {
     return await unpair({ ...o, home, machine, relayUser, label: args[0] as string });
   }
@@ -811,6 +817,8 @@ export interface RelayValues {
   'i-am-local'?: boolean;
   'force-stop'?: boolean;
   'disable-spooler'?: boolean;
+  'keep-tree'?: boolean;
+  'force-path'?: boolean;
   pair?: string;
   user?: string;
   port?: string;
@@ -823,12 +831,52 @@ export interface RelayValues {
 export type Exec = (
   file: string,
   args: string[],
-  o?: { onOutput?: (s: string) => void; timeoutMs?: number },
+  o?: { onOutput?: (s: string) => void; timeoutMs?: number; input?: string },
 ) => Promise<{ code: number; stdout: string; stderr: string }>;
+
+/**
+ * The PowerShell that runs a script handed over on stdin (base64 of its UTF-8): an elevated script
+ * is never a file in the user's TEMP, which a process of the same user without elevation could
+ * change between writing and running it.
+ */
+const STDIN_RUNNER = Buffer.from(
+  '$s = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())); try { & ([ScriptBlock]::Create($s)) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }',
+  'utf16le',
+).toString('base64');
+
+/** Runs an elevated setup script through stdin; `#Requires` lines go (elevation is checked before). */
+export const runScript = (
+  exec: Exec,
+  script: string,
+  onOutput: (s: string) => void,
+): ReturnType<Exec> =>
+  exec(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-EncodedCommand',
+      STDIN_RUNNER,
+    ],
+    {
+      onOutput,
+      input: Buffer.from(script.replace(/^#Requires .*\r?\n/gm, ''), 'utf8').toString('base64'),
+    },
+  );
+
+/** The script `runScript` handed over, for tests: undefined for any other call. */
+export const scriptOfRun = (o: { input?: string } | undefined): string | undefined =>
+  o?.input === undefined ? undefined : Buffer.from(o.input, 'base64').toString('utf8');
 
 const systemExec: Exec = (file, args, o = {}) =>
   new Promise((res) => {
-    const child = spawn(file, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(systemTool(file), args, {
+      windowsHide: true,
+      stdio: [o.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+    });
+    if (o.input !== undefined) child.stdin?.end(o.input);
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => child.kill(), o.timeoutMs ?? 30 * 60_000);
@@ -873,7 +921,16 @@ function setupScriptFor(o: {
       ...(claude === undefined ? [] : [dirname(claude)]),
       ...loadOwnerConfig(o.owner).crewToolchainPaths,
     ],
-    source: { node: process.execPath, studio: resolve(dirname(STUDIO_BIN), '..') },
+    // Node.js for all users, where only administrators change it: never the node this CLI runs on,
+    // which may lie in a folder of the user's.
+    source: {
+      node: win32.join(
+        o.env.ProgramFiles ?? o.env.PROGRAMFILES ?? 'C:\\Program Files',
+        'nodejs',
+        'node.exe',
+      ),
+      studio: resolve(dirname(STUDIO_BIN), '..'),
+    },
     ...(o.install === undefined ? {} : { install: o.install }),
   });
 }
@@ -1024,11 +1081,10 @@ async function install(o: {
   o.stdout(
     'Studio relay install: this stops and disables the WebClient service (WebDAV), which the crew sandbox does not hold.\n',
   );
-  // Nothing of the home is made here: the script makes every folder with its own DACL.
-  const dir = mkdtempSync(join(tmpdir(), 'studio-relay-install-'));
-  const file = join(dir, 'install.ps1');
-  writeFileSync(
-    file,
+  // Nothing of the home is made here: the script makes every folder with its own DACL. It goes to
+  // PowerShell on stdin, never as a file.
+  const r = await runScript(
+    exec,
     o.script({
       port,
       scope,
@@ -1036,17 +1092,8 @@ async function install(o: {
       ...(o.values['disable-spooler'] === true ? { disableSpooler: true } : {}),
       ...(o.values['force-stop'] === true ? { forceStop: true } : {}),
     }),
+    o.stdout,
   );
-  let r: Awaited<ReturnType<Exec>>;
-  try {
-    r = await exec(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file],
-      { onOutput: o.stdout },
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
   if (r.code !== 0) {
     o.stderr('studio: relay install stopped; fix what it says and run it again (it repairs)\n');
     return 1;
@@ -1076,6 +1123,97 @@ async function install(o: {
     hostKey === undefined
       ? 'host key: cannot read the OpenSSH server host key\n'
       : `host key fingerprint: ${keyFingerprint(hostKey)}${o.pair === undefined ? '' : `\nOn the lead, within the hour: studio relay pair ${o.pair.label} --connect`}\n`,
+  );
+  return 0;
+}
+
+/**
+ * `studio relay uninstall` on the worker, elevated and at the machine (it stops sshd and removes
+ * the account a lead logs in as). Names come from the install record, else from the flags and the
+ * worker's config; the script (src/relay-uninstall.ts) does the rest.
+ */
+async function uninstall(o: {
+  home: string | undefined;
+  machine: string;
+  relayUser: string | undefined;
+  values: RelayValues;
+  owner: OwnerEnv;
+  env: Record<string, string | undefined>;
+  stdout: (s: string) => void;
+  stderr: (s: string) => void;
+  platform?: WorkerPlatform;
+  exec?: Exec;
+  elevated?: () => Promise<boolean | undefined>;
+}): Promise<number> {
+  const exec = o.exec ?? systemExec;
+  await windowsAdmin({ ...o, what: 'uninstall' });
+  if (o.values['i-am-local'] !== true && (sshSessionVar(o.env) || (await underSshd(exec)))) {
+    throw new Error(
+      'relay uninstall stops sshd and removes the account the lead logs in as: run it at the machine or over remote desktop, never over SSH (--i-am-local if this is not an SSH session)',
+    );
+  }
+  // Node.js cannot delete the copy it runs from: removing the tree needs another copy of Studio.
+  const top = o.machine.toLowerCase().replace(/[\\/]+$/, '');
+  const inside = (p: string) =>
+    p.toLowerCase().startsWith(`${top}\\`) || p.toLowerCase().startsWith(`${top}/`);
+  if (o.values['keep-tree'] !== true && (inside(process.execPath) || inside(STUDIO_BIN))) {
+    throw new Error(
+      `relay uninstall cannot remove ${o.machine} while it runs from there: run it from another copy of Studio, or keep the tree with --keep-tree`,
+    );
+  }
+  const record = readInstallRecord(o.machine);
+  const home = o.home ?? record?.home ?? relayHomeDefault(o.env);
+  if (o.values['keep-tree'] !== true && o.values['force-path'] !== true) {
+    const problem = treePathProblem({
+      home,
+      machine: o.machine,
+      recordedHome: record?.home,
+      defaultHome: relayHomeDefault(o.env),
+      defaultMachine: relayMachineDefault(o.env),
+      machineMarked: existsSync(installRecordFile(o.machine)),
+    });
+    if (problem !== undefined) {
+      throw new Error(
+        `relay uninstall removes no tree it cannot tell is Studio's: ${problem}. Check --home and the path, or keep the trees with --keep-tree (--force-path removes them all the same)`,
+      );
+    }
+  }
+  let settings: ReturnType<typeof serveSettings> | undefined;
+  try {
+    settings = serveSettings(relayOwner(o.owner, o.home ?? relayHomeDefault(o.env), o.machine));
+  } catch {
+    settings = undefined;
+  }
+  const leads = Object.keys(readPairings(o.machine));
+  const script = relayUninstallScript({
+    relayUser: o.relayUser ?? record?.relayUser ?? 'studio-relay',
+    crewPrefix: record?.crewPrefix ?? settings?.windows?.crewUser ?? 'studio-crew',
+    task: record?.task ?? settings?.windows?.broker ?? 'Studio relay broker',
+    home,
+    machine: o.machine,
+    readPaths: record?.readPaths ?? [],
+    keepTree: o.values['keep-tree'] === true,
+    forceStop: o.values['force-stop'] === true,
+    forcePath: o.values['force-path'] === true,
+    record,
+    treeSource: TREE_SOURCE(),
+  });
+  if (record === undefined) {
+    o.stdout(
+      'No install record here (an install of an earlier version): services Studio stopped stay as they are.\n',
+    );
+  }
+  const r = await runScript(exec, script, o.stdout);
+  if (r.code !== 0) {
+    o.stderr(
+      'studio: relay uninstall stopped; fix what it says and run studio relay uninstall again (it goes on where it stopped)\n',
+    );
+    return 1;
+  }
+  o.stdout(
+    leads.length === 0
+      ? 'Done. Next: on the lead, remove this worker from workers.relay in the owner config.\n'
+      : `Done. Next: on each lead, remove ${leads.map((l) => `workers.relay.${l}`).join(', ')} from the owner config.\n`,
   );
   return 0;
 }

@@ -70,7 +70,9 @@ const prefixOf = (prefix: string): string => {
  * right below the profiles folder of this machine.
  */
 export const crewAccountFunctions = (prefix: string, o: CrewScriptPlaces): string =>
-  `$prefix = ${psQuote(prefixOf(prefix))}
+  `# Only the machine's PATH: a folder of the user's PATH is writable without elevation.
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+$prefix = ${psQuote(prefixOf(prefix))}
 $treeSource = ${psQuote(o.treeSource)}
 $treeTemp = ${psQuote(o.treeTemp ?? '')}
 $pruneBudget = ${Math.max(1, Math.trunc(o.pruneBudget ?? PRUNE_BUDGET))}
@@ -711,9 +713,9 @@ foreach ($p in $readPaths) {
  * `.git` another user planted above a folder (CVE-2022-24765), and crews of other users work on
  * this machine.
  */
-export const GIT_MIN_CHECK = String.raw`$gitCmd = Get-Command git -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($null -eq $gitCmd) { throw 'Git for Windows is not installed: install 2.35.2 or later (winget install --id Git.Git)' }
-$gitVersion = [string](& $gitCmd.Source --version)
+export const GIT_MIN_CHECK = String.raw`$gitExe = Join-Path $env:ProgramFiles 'Git\cmd\git.exe'
+if (-not (Test-Path -LiteralPath $gitExe -PathType Leaf)) { throw 'Git for Windows is not installed for all users: install 2.35.2 or later (winget install --id Git.Git --exact --scope machine)' }
+$gitVersion = [string](& $gitExe --version)
 if ($gitVersion -notmatch '(\d+)\.(\d+)\.(\d+)') { throw "cannot read the version of Git: $gitVersion" }
 if ([version]('{0}.{1}.{2}' -f $Matches[1], $Matches[2], $Matches[3]) -lt [version]'2.35.2') { throw "Git $($Matches[0]) is older than 2.35.2: update Git for Windows (winget upgrade --id Git.Git)" }
 Write-Output "ok: Git $($Matches[0])"

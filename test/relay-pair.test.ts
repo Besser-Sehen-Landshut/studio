@@ -409,16 +409,26 @@ describe('the install script', () => {
       }),
     ).toContain('$forceStop = $true');
     for (const s of [
-      "Need 'Git' { Get-Command git -ErrorAction SilentlyContinue } 'Git.Git'",
+      // Git from Program Files, winget from its package there, the machine's PATH alone.
+      "Need 'Git' { Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'",
+      '& $wg install --id $id --exact --silent --scope machine',
+      "Get-ChildItem -LiteralPath $apps -Directory -Filter 'Microsoft.DesktopAppInstaller_*_8wekyb3d8bbwe'",
+      "function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') }",
       "Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'",
       'Add-WindowsCapability -Online -Name $ssh.Name',
       '# studio relay begin',
       '# studio relay end',
       "$exe = Join-Path $env:SystemRoot 'System32\\OpenSSH\\sshd.exe'",
-      "Start-Process -FilePath $exe -ArgumentList '-t' -Wait -PassThru -NoNewWindow",
-      'if ($null -eq $tested -or $tested.ExitCode -ne 0) {',
-      // Put back byte for byte, never re-encoded.
-      '[IO.File]::WriteAllBytes($conf, $before)',
+      // The new config goes to a temporary file, sshd checks that one (with a throwaway host key
+      // when there is none), and only an accepted one replaces the old in one step.
+      "$tmp = Join-Path $dir ('.sshd_config.' + [Guid]::NewGuid().ToString('N') + '.tmp')",
+      "$sshdArgs = '-t -f \"' + $tmp + '\"'",
+      "$sshdArgs += ' -h \"' + $key + '\"'",
+      'if ($tested.ExitCode -ne 0) { throw "sshd does not accept the new sshd_config; $conf stays as it was" }',
+      '[IO.File]::Replace($tmp, $conf, [NullString]::Value)',
+      'SshdConfigSwap $conf $new $true',
+      // A user of the relay account's name that Studio did not make is never taken over.
+      "if ($null -ne $existing -and $existing.Description -ne 'Studio relay (SSH, forced command)') { throw",
       // Keys only for every account, at the top where sshd reads it first.
       '# studio relay begin global\nPasswordAuthentication no\nKbdInteractiveAuthentication no',
       // sshd stays stopped and closed until the end; a failure leaves it so.
@@ -443,7 +453,8 @@ describe('the install script', () => {
       tail.indexOf('-ExitCode -ne 0'),
     );
     expect(tail).not.toContain('Restart-Service sshd');
-    expect(tail).not.toContain('Spooler');
+    // The spooler's state is only read (for uninstall), never changed without --disable-spooler.
+    expect(tail).not.toMatch(/(Stop|Set)-Service -Name Spooler/);
     const kept = relaySetupScript({
       ...base,
       install: { port: 22, scope: { tailscale: true }, keepPasswords: true, disableSpooler: true },

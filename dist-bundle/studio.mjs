@@ -7846,9 +7846,9 @@ import { homedir as homedir16 } from "node:os";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
 
 // src/cli.ts
-import { existsSync as existsSync21, readFileSync as readFileSync58 } from "node:fs";
+import { existsSync as existsSync21, readFileSync as readFileSync59 } from "node:fs";
 import { homedir as homedir15 } from "node:os";
-import { dirname as dirname21, join as join64, resolve as resolve15 } from "node:path";
+import { dirname as dirname21, join as join65, resolve as resolve15 } from "node:path";
 import { parseArgs } from "node:util";
 
 // src/acceptance.ts
@@ -39569,7 +39569,7 @@ import {
   rmdirSync,
   unlinkSync as unlinkSync5
 } from "node:fs";
-import { dirname as dirname10, join as join29, resolve as resolve6, sep as sep5 } from "node:path";
+import { dirname as dirname10, join as join29, resolve as resolve6, sep as sep5, win32 as win322 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/crew-accounts.ts
@@ -39586,7 +39586,9 @@ var prefixOf = (prefix) => {
   }
   return prefix;
 };
-var crewAccountFunctions = (prefix, o2) => `$prefix = ${psQuote(prefixOf(prefix))}
+var crewAccountFunctions = (prefix, o2) => `# Only the machine's PATH: a folder of the user's PATH is writable without elevation.
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+$prefix = ${psQuote(prefixOf(prefix))}
 $treeSource = ${psQuote(o2.treeSource)}
 $treeTemp = ${psQuote(o2.treeTemp ?? "")}
 $pruneBudget = ${Math.max(1, Math.trunc(o2.pruneBudget ?? PRUNE_BUDGET))}
@@ -40072,9 +40074,9 @@ foreach ($p in $readPaths) {
   if (Test-Path -LiteralPath $p) { icacls $p /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
 }
 `;
-var GIT_MIN_CHECK = String.raw`$gitCmd = Get-Command git -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($null -eq $gitCmd) { throw 'Git for Windows is not installed: install 2.35.2 or later (winget install --id Git.Git)' }
-$gitVersion = [string](& $gitCmd.Source --version)
+var GIT_MIN_CHECK = String.raw`$gitExe = Join-Path $env:ProgramFiles 'Git\cmd\git.exe'
+if (-not (Test-Path -LiteralPath $gitExe -PathType Leaf)) { throw 'Git for Windows is not installed for all users: install 2.35.2 or later (winget install --id Git.Git --exact --scope machine)' }
+$gitVersion = [string](& $gitExe --version)
 if ($gitVersion -notmatch '(\d+)\.(\d+)\.(\d+)') { throw "cannot read the version of Git: $gitVersion" }
 if ([version]('{0}.{1}.{2}' -f $Matches[1], $Matches[2], $Matches[3]) -lt [version]'2.35.2') { throw "Git $($Matches[0]) is older than 2.35.2: update Git for Windows (winget upgrade --id Git.Git)" }
 Write-Output "ok: Git $($Matches[0])"
@@ -40820,7 +40822,7 @@ $claude = ${psQuote(join28(machineConfig(o2.machine), "studio", "claude"))}
 foreach ($d in @((Join-Path $claude 'skills'), (Join-Path $claude 'plugins'))) {
   if (Test-Path -LiteralPath $d) { icacls $d /grant "*$($groupSid):(OI)(CI)RX" /L /Q | Out-Null }
 }`;
-  return `${o2.install === void 0 ? "" : installHead(o2.install, o2.relayUser, o2.crewPrefix)}#Requires -RunAsAdministrator
+  return `${PRIOR_CAPTURE(o2.machine)}${o2.install === void 0 ? "" : installHead(o2.install, o2.relayUser, o2.crewPrefix)}#Requires -RunAsAdministrator
 # Studio: the setup of this Windows relay worker. Run it in an elevated Windows PowerShell
 # (powershell.exe). Run it again after an update of Studio or of the plugins: it repairs and updates.
 # Nothing here leaves this machine.
@@ -40848,7 +40850,10 @@ $dataStudio = Split-Path -Parent $home_
 $filesStudio = Split-Path -Parent $machine
 SafeFolder $home_ (Split-Path -Parent $dataStudio)
 SafeFolder $machine (Split-Path -Parent $filesStudio)
-# The relay account: a standard user the lead logs in as over SSH, with a password nobody sees.
+# The relay account: a standard user the lead logs in as over SSH, with a password nobody sees. A
+# user of that name Studio did not make is never taken over.
+$existing = Get-LocalUser -Name $relay -ErrorAction SilentlyContinue
+if ($null -ne $existing -and $existing.Description -ne 'Studio relay (SSH, forced command)') { throw "a user $relay exists that Studio did not make (its description is not Studio's): choose another name with studio relay install --user <name>, or remove that user, then run this again" }
 $relaySid = (EnsureUser $relay 'Studio relay (SSH, forced command)' $null).SID.Value
 # Studio's group of crew users (one user per job, made and deleted by the broker); what it carries
 # comes once the admin-only copy of Studio is in place.
@@ -40863,7 +40868,10 @@ foreach ($sub in @('broker', 'config', 'setup-state', 'pairing')) { StrictFolder
 foreach ($sub in @('node', 'studio')) { StrictFolder (Join-Path $machine $sub) @(@($relaySid, $rx, $tree, 'None'), @($groupSid, $rx, $tree, 'None')) }
 # The copies the forced command runs: never the files of an account that can change them, and no
 # junction of the source copied along.
-Copy-Item -LiteralPath ${psQuote(o2.source.node)} -Destination ${psQuote(machineNode(o2.machine))} -Force
+$nodeSource = ${psQuote(o2.source.node)}
+if (-not (Test-Path -LiteralPath $nodeSource -PathType Leaf)) { throw "Node.js is not installed for all users ($nodeSource): winget install --id OpenJS.NodeJS.LTS --exact --scope machine, then run this again" }
+if ([string](& $nodeSource --version) -notmatch '^v(\\d+)\\.' -or [int]$Matches[1] -lt 24) { throw "Node.js in $nodeSource is older than 24: winget upgrade --id OpenJS.NodeJS.LTS --exact, then run this again" }
+Copy-Item -LiteralPath $nodeSource -Destination ${psQuote(machineNode(o2.machine))} -Force
 & robocopy.exe ${psQuote(o2.source.studio)} ${psQuote(machineStudio(o2.machine))} /MIR /XJ /XD node_modules .git .worktrees /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "cannot copy Studio into $machine (robocopy $LASTEXITCODE)" }
 icacls ${psQuote(machineStudio(o2.machine))} /reset /T /C /L /Q | Out-Null
@@ -40911,10 +40919,52 @@ if (Get-Service -Name WebClient -ErrorAction SilentlyContinue) {
   Stop-Service -Name WebClient -Force -ErrorAction SilentlyContinue
   Set-Service -Name WebClient -StartupType Disabled
 }
-# The pinned plugins in the crew Claude config dir of the relay home.
+# What this machine had before, and what the install did: studio relay uninstall reads it.
+${recordSnippet({ machine: o2.machine, spoolerDisabled: o2.install?.disableSpooler === true })}# The pinned plugins in the crew Claude config dir of the relay home.
 ${pluginSetup}
 ${o2.install === void 0 ? setupTail(block) : installTail(block, o2.install)}`;
 }
+var SSHD_SWAP = String.raw`function SshdConfigSwap([string]$conf, [string]$text, [bool]$mustTest) {
+  $dir = Split-Path -Parent $conf
+  $tmp = Join-Path $dir ('.sshd_config.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+  $keyDir = $null
+  [IO.File]::WriteAllText($tmp, $text, (New-Object Text.UTF8Encoding $false))
+  try {
+    $exe = Join-Path $env:SystemRoot 'System32\OpenSSH\sshd.exe'
+    if (Test-Path -LiteralPath $exe) {
+      $sshdArgs = '-t -f "' + $tmp + '"'
+      if (-not (Test-Path -LiteralPath (Join-Path $dir 'ssh_host_ed25519_key'))) {
+        # Beside sshd_config, made with its final protected DACL (SYSTEM and administrators) in one
+        # step, and checked before use: no other account can put anything into it.
+        $acl = New-Object Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) { $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))) }
+        $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+        $keyDir = Join-Path $dir ('.studio-sshd-check-' + [Guid]::NewGuid().ToString('N'))
+        $null = [IO.Directory]::CreateDirectory($keyDir, $acl)
+        $made = Get-Item -LiteralPath $keyDir -Force
+        if (($made.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-Acl -LiteralPath $keyDir).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw "$keyDir is not the admin-only folder this made" }
+        $key = Join-Path $keyDir 'host_ed25519'
+        $kg = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\OpenSSH\ssh-keygen.exe') -ArgumentList ('-q -t ed25519 -N "" -f "' + $key + '"') -Wait -PassThru -NoNewWindow
+        if ($kg.ExitCode -ne 0) { throw 'cannot make a throwaway host key to check sshd_config; it stays as it was' }
+        $sshdArgs += ' -h "' + $key + '"'
+      }
+      $tested = Start-Process -FilePath $exe -ArgumentList $sshdArgs -Wait -PassThru -NoNewWindow
+      if ($tested.ExitCode -ne 0) { throw "sshd does not accept the new sshd_config; $conf stays as it was" }
+    } elseif ($mustTest) {
+      throw "sshd.exe is not there to check the new sshd_config; $conf stays as it was"
+    }
+    if (Test-Path -LiteralPath $conf) { [IO.File]::Replace($tmp, $conf, [NullString]::Value) } else { [IO.File]::Move($tmp, $conf) }
+  } finally {
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    # Only the files it made, by name, then the empty folder: nothing is followed or recursed.
+    if ($keyDir) {
+      foreach ($f in @('host_ed25519', 'host_ed25519.pub')) { Remove-Item -LiteralPath (Join-Path $keyDir $f) -Force -ErrorAction SilentlyContinue }
+      Remove-Item -LiteralPath $keyDir -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+`;
 var setupTail = (block) => `Write-Output 'Add this block at the end of sshd_config (C:\\ProgramData\\ssh\\sshd_config), then Restart-Service sshd:'
 Write-Output @'
 ${block}'@
@@ -40928,6 +40978,56 @@ $relaySid = (Get-LocalUser -Name ${psQuote(o2.relayUser)}).SID.Value
 ${adminFileSnippet({ file: o2.file, lines: o2.lines, readers: "relay" })}
 `;
 }
+var relayJobFunctions = (o2) => `$forceStop = ${o2.forceStop ? "$true" : "$false"}
+function RelayProcesses {
+  $crewRe = '^' + [regex]::Escape(${psQuote(o2.crewPrefix)}) + '-[0-9a-f]{6}$'
+  $sids = @(Get-LocalUser | Where-Object { $_.Name -eq ${psQuote(o2.relayUser)} -or ($_.Name -match $crewRe -and $_.Description -eq ${psQuote(CREW_DESCRIPTION)}) } | ForEach-Object { $_.SID.Value })
+  if ($sids.Count -eq 0) { return @() }
+${o2.owned === true ? '  LoadTree\n  @(Owned $sids | ForEach-Object { [pscustomobject]@{ ProcessId = $_.Id; Name = $(if ($_.Unreadable) { "$($_.Name) (owner unreadable)" } else { $_.Name }) } })' : "  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })"}
+}
+function NoRelayJob {
+  $running = RelayProcesses
+  if ($running.Count -eq 0) { return }
+  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or a crew user${o2.owned === true ? ", or whose owner cannot be read" : ""}: $(@($running | Select-Object -First 5 | ForEach-Object { "$($_.ProcessId) $($_.Name)" }) -join ', ')): let it end, or run studio relay ${o2.what} --force-stop" }
+  Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew users (--force-stop)."
+  for ($t = 0; $t -lt 20 -and $running.Count -gt 0; $t++) {
+    foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 500
+    $running = RelayProcesses
+  }
+  if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew users' }
+}
+`;
+var installRecordFile = (machine) => join28(machine, "install-record.json");
+var MACHINE_PATH = "# Only the machine's PATH: a folder of the user's PATH is writable without elevation.\n$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')\n";
+var PRIOR_CAPTURE = (machine) => `${MACHINE_PATH}# What this machine had before Studio changed it: the first install records it for uninstall.
+function ServiceState([string]$name) {
+  $s = Get-Service -Name $name -ErrorAction SilentlyContinue
+  if ($null -eq $s) { return @{ exists = $false } }
+  @{ exists = $true; start = [string]$s.StartType; status = [string]$s.Status }
+}
+$priorWebClient = ServiceState 'WebClient'
+$priorSpooler = ServiceState 'Spooler'
+$priorSshd = ServiceState 'sshd'
+$priorRule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
+$priorSshdRule = if ($null -eq $priorRule) { @{ exists = $false } } else { @{ exists = $true; enabled = [string]$priorRule.Enabled } }
+$priorSshdCapability = $null
+$priorMachine = Test-Path -LiteralPath ${psQuote(machine)}
+`;
+var recordSnippet = (o2) => `$recordFile = ${psQuote(installRecordFile(o2.machine))}
+$old = $null
+if (Test-Path -LiteralPath $recordFile) { try { $old = Get-Content -Raw -LiteralPath $recordFile | ConvertFrom-Json } catch { $old = $null } }
+if ($null -ne $old) { $prior = $old.prior }
+elseif ($priorMachine) { $prior = $null }
+else { $prior = @{ webClient = $priorWebClient; spooler = $priorSpooler; sshd = $priorSshd; sshdRule = $priorSshdRule; sshdCapability = $priorSshdCapability } }
+$record = @{ version = 1; relayUser = $relay; crewPrefix = $prefix; task = $task; home = $home_; readPaths = @($readPaths); spoolerDisabled = (${o2.spoolerDisabled ? "$true" : "$false"} -or ($null -ne $old -and $old.spoolerDisabled -eq $true)); prior = $prior }
+$tmp = Join-Path $machine ('.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+[IO.File]::WriteAllText($tmp, (ConvertTo-Json -Compress -Depth 6 $record), (New-Object Text.ASCIIEncoding))
+icacls $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' /L /Q | Out-Null
+if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $tmp -Force; throw "cannot set the ACL of $recordFile" }
+if (Test-Path -LiteralPath $recordFile) { [IO.File]::Replace($tmp, $recordFile, [NullString]::Value) } else { [IO.File]::Move($tmp, $recordFile) }
+icacls $recordFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' /L /Q | Out-Null
+`;
 var installHead = (i2, relayUser, crewPrefix2) => `#Requires -RunAsAdministrator
 $ErrorActionPreference = 'Stop'
 $ok = $false
@@ -40937,41 +41037,33 @@ function SshdOff {
 }
 # No relay job may run while the install walks the folders and sets their ACLs: a runner or crew
 # could plant a link between the two. Every process of the relay account or a crew user counts.
-$forceStop = ${i2.forceStop === true ? "$true" : "$false"}
-function RelayProcesses {
-  $crewRe = '^' + [regex]::Escape(${psQuote(crewPrefix2)}) + '-[0-9a-f]{6}$'
-  $sids = @(Get-LocalUser | Where-Object { $_.Name -eq ${psQuote(relayUser)} -or ($_.Name -match $crewRe -and $_.Description -eq ${psQuote(CREW_DESCRIPTION)}) } | ForEach-Object { $_.SID.Value })
-  if ($sids.Count -eq 0) { return @() }
-  @(Get-CimInstance Win32_Process | Where-Object { try { $sids -contains (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch { $false } })
-}
-function NoRelayJob {
-  $running = RelayProcesses
-  if ($running.Count -eq 0) { return }
-  if (-not $forceStop) { throw "a relay job is running ($($running.Count) process(es) of the relay account or a crew user): let it end, or run this again with --force-stop" }
-  Write-Output "Stopping $($running.Count) process(es) of the relay account and the crew users (--force-stop)."
-  for ($t = 0; $t -lt 20 -and $running.Count -gt 0; $t++) {
-    foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
-    Start-Sleep -Milliseconds 500
-    $running = RelayProcesses
-  }
-  if ($running.Count -gt 0) { throw 'cannot stop every process of the relay account and the crew users' }
-}
-# Before sshd stops: a running job is refused while the lead can still reach it.
+${relayJobFunctions({ relayUser, crewPrefix: crewPrefix2, forceStop: i2.forceStop === true, what: "install" })}# Before sshd stops: a running job is refused while the lead can still reach it.
 NoRelayJob
 try {
-function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
+# Only the machine's PATH, also after an install: never a folder of the user's.
+function Fresh { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') }
+# winget from its package in Program Files (administrators only), never the alias in the user's
+# WindowsApps folder.
+function Winget {
+  $apps = Join-Path $env:ProgramFiles 'WindowsApps'
+  @(Get-ChildItem -LiteralPath $apps -Directory -Filter 'Microsoft.DesktopAppInstaller_*_8wekyb3d8bbwe' -ErrorAction SilentlyContinue |
+    Sort-Object { try { [version]($_.Name.Split('_')[1]) } catch { [version]'0.0' } } -Descending |
+    ForEach-Object { Join-Path $_.FullName 'winget.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }) | Select-Object -First 1
+}
 function Need([string]$what, [scriptblock]$have, [string]$id) {
   if (& $have) { Write-Output "ok: $what"; return }
-  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "$what is missing and winget is not there to install it; install $what by hand" }
+  $wg = Winget
+  if (-not $wg) { throw "$what is missing and winget is not installed for the machine; install $what for all users by hand, then run this again" }
   Write-Output "installing: $what (winget $id)"
-  winget install --id $id --exact --silent --scope machine --accept-package-agreements --accept-source-agreements | Out-Null
+  & $wg install --id $id --exact --silent --scope machine --accept-package-agreements --accept-source-agreements | Out-Null
   Fresh
-  if (-not (& $have)) { throw "$what is still missing after winget install $id; install it by hand" }
+  if (-not (& $have)) { throw "$what is still missing after winget install $id; install it for all users by hand" }
 }
-Need 'Git' { Get-Command git -ErrorAction SilentlyContinue } 'Git.Git'
+Need 'Git' { Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Git\\cmd\\git.exe') -PathType Leaf } 'Git.Git'
 Need 'Claude Code' { Get-Command claude -ErrorAction SilentlyContinue } 'Anthropic.ClaudeCode'
 $ssh = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
 if ($null -eq $ssh) { throw 'this Windows has no OpenSSH server capability' }
+$priorSshdCapability = @{ name = [string]$ssh.Name; state = [string]$ssh.State }
 if ($ssh.State -ne 'Installed') { Write-Output 'installing: OpenSSH server'; Add-WindowsCapability -Online -Name $ssh.Name | Out-Null } else { Write-Output 'ok: OpenSSH server' }
 SshdOff
 # With sshd off no new job starts: once more, for one that started in between.
@@ -41012,14 +41104,7 @@ $ours = @'
 ${block}# studio relay end
 '@
 $new = $global + $text.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $ours
-[IO.File]::WriteAllText($conf, $new, (New-Object Text.UTF8Encoding $false))
-$exe = Join-Path $env:SystemRoot 'System32\\OpenSSH\\sshd.exe'
-$tested = $null
-if (Test-Path -LiteralPath $exe) { $tested = Start-Process -FilePath $exe -ArgumentList '-t' -Wait -PassThru -NoNewWindow }
-if ($null -eq $tested -or $tested.ExitCode -ne 0) {
-  [IO.File]::WriteAllBytes($conf, $before)
-  throw 'sshd does not accept the new sshd_config (or could not check it); it was put back as it was'
-}
+${SSHD_SWAP}SshdConfigSwap $conf $new $true
 ${scope}
 $rule = 'Studio relay: sshd'
 Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
@@ -41193,9 +41278,30 @@ function isDir2(p) {
     return false;
   }
 }
+var SYSTEM_TOOLS = /* @__PURE__ */ new Set([
+  "cmd",
+  "icacls",
+  "net",
+  "netsh",
+  "reg",
+  "robocopy",
+  "sc",
+  "schtasks",
+  "secedit",
+  "takeown",
+  "tasklist",
+  "whoami"
+]);
+function systemTool(file4, env = process.env, platform2 = process.platform) {
+  if (platform2 !== "win32") return file4;
+  const name = file4.toLowerCase().replace(/\.exe$/, "");
+  const sys = win322.join(env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows", "System32");
+  if (name === "powershell") return win322.join(sys, "WindowsPowerShell", "v1.0", "powershell.exe");
+  return SYSTEM_TOOLS.has(name) ? win322.join(sys, `${name}.exe`) : file4;
+}
 var runFile2 = (file4, args, opts = {}) => new Promise((resolve16) => {
   execFile2(
-    file4,
+    systemTool(file4),
     args,
     {
       ...opts.env === void 0 ? {} : { env: opts.env },
@@ -41593,7 +41699,7 @@ function powershellEnv(env) {
 var spawnKeeper = async (o2) => {
   const fd = openSync6(o2.log, "a");
   try {
-    const child = spawn("powershell.exe", o2.args, {
+    const child = spawn(systemTool("powershell.exe"), o2.args, {
       env: o2.env,
       stdio: ["pipe", fd, fd],
       windowsHide: true
@@ -60438,6 +60544,10 @@ var COMMANDS = [
     about: "On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead"
   },
   {
+    usage: "relay uninstall [--keep-tree] [--force-stop] [--force-path] [--user <name>] [--home <dir>] [--i-am-local]",
+    about: "On a Windows worker, elevated: remove everything relay install made, every lead first; run again to finish"
+  },
+  {
     usage: "relay unpair <label> [--home <dir>]",
     about: "On a Windows worker, elevated: remove a lead's pairing and its authorized key"
   },
@@ -60977,14 +61087,13 @@ import { spawn as spawn6 } from "node:child_process";
 import {
   existsSync as existsSync19,
   mkdirSync as mkdirSync13,
-  mkdtempSync as mkdtempSync4,
-  readFileSync as readFileSync55,
+  readFileSync as readFileSync56,
   renameSync as renameSync16,
   rmSync as rmSync13,
   writeFileSync as writeFileSync21
 } from "node:fs";
-import { homedir as homedir13, tmpdir as tmpdir4 } from "node:os";
-import { dirname as dirname19, join as join61, resolve as resolve13 } from "node:path";
+import { homedir as homedir13 } from "node:os";
+import { dirname as dirname19, join as join62, resolve as resolve13, win32 as win324 } from "node:path";
 
 // src/relay-lead.ts
 import { existsSync as existsSync15, lstatSync as lstatSync43, readFileSync as readFileSync50, writeFileSync as writeFileSync17 } from "node:fs";
@@ -63488,7 +63597,10 @@ try {
 `;
 }
 var spawnWithInput = (file4, args, stdin) => new Promise((res) => {
-  const child = spawn5(file4, args, { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+  const child = spawn5(systemTool(file4), args, {
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "ignore"]
+  });
   let stdout = "";
   child.stdout?.on("data", (d) => {
     stdout += String(d);
@@ -63668,10 +63780,313 @@ async function indexAndCheck(c3, dir, hooks) {
   return void 0;
 }
 
-// src/relay-windows-check.ts
+// src/relay-uninstall.ts
 import { readFileSync as readFileSync54 } from "node:fs";
+import { posix as posix3, win32 as win323 } from "node:path";
+var join59 = (...parts) => parts[0]?.startsWith("/") === true ? posix3.join(...parts) : win323.join(...parts);
+var RELAY_DESCRIPTION = "Studio relay (SSH, forced command)";
+var START_TYPES = ["Automatic", "Manual", "Disabled"];
+var service = (x) => {
+  const s = x;
+  if (s === null || typeof s !== "object" || typeof s.exists !== "boolean") return void 0;
+  return {
+    exists: s.exists,
+    ...typeof s.start === "string" ? { start: s.start } : {},
+    ...typeof s.status === "string" ? { status: s.status } : {}
+  };
+};
+function readInstallRecord(machine) {
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync54(installRecordFile(machine), "utf8").replace(/^﻿/, ""));
+  } catch {
+    return void 0;
+  }
+  return parseInstallRecord(raw);
+}
+function parseInstallRecord(raw) {
+  const r = raw;
+  if (r === null || typeof r !== "object" || r.version !== 1) return void 0;
+  const str = (k) => typeof r[k] === "string" ? { [k]: r[k] } : {};
+  const p = r.prior;
+  let prior = null;
+  if (p !== null && typeof p === "object") {
+    const rule = p.sshdRule;
+    const cap = p.sshdCapability;
+    const webClient = service(p.webClient);
+    const spooler = service(p.spooler);
+    const sshd = service(p.sshd);
+    prior = {
+      ...webClient === void 0 ? {} : { webClient },
+      ...spooler === void 0 ? {} : { spooler },
+      ...sshd === void 0 ? {} : { sshd },
+      ...rule !== void 0 && typeof rule.exists === "boolean" ? {
+        sshdRule: {
+          exists: rule.exists,
+          ...typeof rule.enabled === "string" ? { enabled: rule.enabled } : {}
+        }
+      } : {},
+      ...cap !== void 0 && cap !== null && typeof cap.name === "string" ? { sshdCapability: { name: cap.name, state: String(cap.state) } } : {}
+    };
+  }
+  const paths = Array.isArray(r.readPaths) ? r.readPaths : r.readPaths === void 0 ? [] : [r.readPaths];
+  return {
+    ...str("relayUser"),
+    ...str("crewPrefix"),
+    ...str("task"),
+    ...str("home"),
+    readPaths: paths.filter((x) => typeof x === "string"),
+    spoolerDisabled: r.spoolerDisabled === true,
+    prior
+  };
+}
+var startType = (s) => START_TYPES.find((t) => t === s?.start);
+function restoreSteps(record2) {
+  const prior = record2?.prior ?? null;
+  const out = [];
+  const say = (line4) => out.push(`Write-Output ${psQuote(line4)}`);
+  const restore = (name, s) => {
+    const start2 = startType(s);
+    if (s?.exists !== true || start2 === void 0 || start2 === "Disabled") {
+      say(`left as it is: ${name} (it was not enabled before the install, or no record says so)`);
+      return;
+    }
+    out.push(
+      `if (Get-Service -Name ${psQuote(name)} -ErrorAction SilentlyContinue) {`,
+      `  Set-Service -Name ${psQuote(name)} -StartupType ${start2}`,
+      ...s.status === "Running" ? [`  Start-Service -Name ${psQuote(name)}`] : [],
+      `  Write-Output ${psQuote(`restored: ${name} (${start2}${s.status === "Running" ? ", running" : ""}, as before the install)`)}`,
+      "}"
+    );
+  };
+  restore("WebClient", prior?.webClient);
+  if (record2?.spoolerDisabled === true) restore("Spooler", prior?.spooler);
+  const sshd = prior?.sshd;
+  out.push("if (Get-Service -Name sshd -ErrorAction SilentlyContinue) {");
+  if (prior !== null && sshd?.exists === true && sshd.status === "Running") {
+    out.push(
+      `  Set-Service -Name sshd -StartupType ${startType(sshd) ?? "Automatic"}`,
+      "  Restart-Service -Name sshd",
+      "  Write-Output 'restored: sshd runs as before the install, without Studio''s lines'"
+    );
+  } else {
+    const start2 = prior !== null && sshd?.exists === true ? startType(sshd) ?? "Disabled" : "Disabled";
+    out.push(
+      "  Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue",
+      `  Set-Service -Name sshd -StartupType ${start2}`,
+      prior === null ? "  Write-Output 'stopped: sshd (no record says it ran before; to use it again: Set-Service sshd -StartupType Automatic; Start-Service sshd)'" : `  Write-Output 'stopped: sshd, start type ${start2}, as before the install'`
+    );
+  }
+  out.push("}");
+  const cap = prior?.sshdCapability;
+  if (cap !== void 0 && cap !== null && cap.state !== "Installed" && /^OpenSSH\.Server~[\w.~-]+$/.test(cap.name)) {
+    out.push(
+      `if ((Get-WindowsCapability -Online -Name ${psQuote(cap.name)}).State -eq 'Installed') {`,
+      `  Remove-WindowsCapability -Online -Name ${psQuote(cap.name)} | Out-Null`,
+      "  Write-Output 'removed: the OpenSSH server the install added'",
+      "}"
+    );
+  }
+  if (prior?.sshdRule?.exists === true && prior.sshdRule.enabled === "True") {
+    out.push(
+      "Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Enable-NetFirewallRule",
+      "Write-Output 'restored: the firewall rule OpenSSH-Server-In-TCP is on, as before the install'"
+    );
+  }
+  return `${out.join("\n")}
+`;
+}
+var LSA_RIGHTS = String.raw`using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+public static class StudioLsa {
+  [StructLayout(LayoutKind.Sequential)]
+  struct Attributes { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public uint Attributes_; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
+  [DllImport("advapi32.dll")] static extern uint LsaOpenPolicy(IntPtr system, ref Attributes attributes, uint access, out IntPtr policy);
+  [DllImport("advapi32.dll")] static extern uint LsaRemoveAccountRights(IntPtr policy, byte[] sid, [MarshalAs(UnmanagedType.U1)] bool all, IntPtr rights, uint count);
+  [DllImport("advapi32.dll")] static extern uint LsaEnumerateAccountRights(IntPtr policy, byte[] sid, out IntPtr rights, out uint count);
+  [DllImport("advapi32.dll")] static extern uint LsaFreeMemory(IntPtr buffer);
+  [DllImport("advapi32.dll")] static extern uint LsaClose(IntPtr policy);
+  [DllImport("advapi32.dll")] static extern int LsaNtStatusToWinError(uint status);
+  const uint NotFound = 0xC0000034;
+  static IntPtr Open() {
+    var a = new Attributes();
+    a.Length = Marshal.SizeOf(a);
+    IntPtr h;
+    uint st = LsaOpenPolicy(IntPtr.Zero, ref a, 0x000F0FFF, out h);
+    if (st != 0) throw new Win32Exception(LsaNtStatusToWinError(st));
+    return h;
+  }
+  static byte[] Bytes(string sid) {
+    var s = new SecurityIdentifier(sid);
+    var b = new byte[s.BinaryLength];
+    s.GetBinaryForm(b, 0);
+    return b;
+  }
+  public static void RemoveAll(string sid) {
+    IntPtr h = Open();
+    try {
+      uint st = LsaRemoveAccountRights(h, Bytes(sid), true, IntPtr.Zero, 0);
+      if (st != 0 && st != NotFound) throw new Win32Exception(LsaNtStatusToWinError(st));
+    } finally { LsaClose(h); }
+  }
+  public static int Count(string sid) {
+    IntPtr h = Open();
+    try {
+      IntPtr rights;
+      uint count;
+      uint st = LsaEnumerateAccountRights(h, Bytes(sid), out rights, out count);
+      if (st == NotFound) return 0;
+      if (st != 0) throw new Win32Exception(LsaNtStatusToWinError(st));
+      LsaFreeMemory(rights);
+      return (int)count;
+    } finally { LsaClose(h); }
+  }
+}
+`;
+function treePathProblem(o2) {
+  const norm = (p) => p.replace(/[\\/]+$/, "").toLowerCase();
+  for (const p of [o2.home, o2.machine]) {
+    if (/^[a-z]:$/i.test(norm(p)) || norm(p) === "" || !/[\\/]studio[\\/]relay$/.test(norm(p))) {
+      return `${p} is not a folder Studio\\relay`;
+    }
+  }
+  if (norm(o2.home) !== norm(o2.recordedHome ?? o2.defaultHome) && norm(o2.home) !== norm(o2.defaultHome)) {
+    return `${o2.home} is not the relay home the install recorded (${o2.recordedHome ?? o2.defaultHome})`;
+  }
+  if (norm(o2.machine) !== norm(o2.defaultMachine) && !o2.machineMarked) {
+    return `${o2.machine} holds no install record of Studio's`;
+  }
+  return void 0;
+}
+var UNINSTALL_STEPS = 9;
+function relayUninstallScript(o2) {
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,19}$/.test(o2.relayUser)) {
+    throw new Error(`not a local user name: ${o2.relayUser}`);
+  }
+  if (!CREW_PREFIX_RE.test(o2.crewPrefix))
+    throw new Error(`not a crew user prefix: ${o2.crewPrefix}`);
+  if (!/^[A-Za-z0-9 _-]{1,64}$/.test(o2.task)) throw new Error(`not a task name: ${o2.task}`);
+  const tasks = Object.values(brokerTasks(o2.task));
+  const step = (n4, what) => `Write-Output ${psQuote(`[${n4}/${UNINSTALL_STEPS}] ${what}`)}`;
+  const conf = o2.sshdConfig === void 0 ? "Join-Path $env:ProgramData 'ssh\\sshd_config'" : psQuote(o2.sshdConfig);
+  const adminCopy = join59(machineStudio(o2.machine), "bin", "studio-tree.cs");
+  return `#Requires -RunAsAdministrator
+# Studio: uninstall this Windows relay worker (studio relay uninstall). Run it in an elevated
+# Windows PowerShell. Run it again when it stops: every step finds what is gone and goes on.
+$ErrorActionPreference = 'Stop'
+$relay = ${psQuote(o2.relayUser)}
+$home_ = ${psQuote(o2.home)}
+$machine = ${psQuote(o2.machine)}
+$readPaths = @(${o2.readPaths.map(psQuote).join(", ")})
+${crewAccountFunctions(o2.crewPrefix, { treeSource: adminCopy })}# The tree deleter from the admin-only copy, or once that is gone, from the Studio running this.
+if (-not (Test-Path -LiteralPath $treeSource)) { $treeSource = ${psQuote(o2.treeSource)} }
+${relayJobFunctions({ relayUser: o2.relayUser, crewPrefix: o2.crewPrefix, forceStop: o2.forceStop, what: "uninstall", owned: true })}${SSHD_SWAP}$forcePath = ${o2.forcePath === true ? "$true" : "$false"}
+${step(1, "leads: every key and pairing goes, so no lead can log in")}
+foreach ($f in @(${psQuote(authorizedKeysFile(o2.machine))}, ${psQuote(join59(o2.machine, "pairing", "pairings.json"))})) {
+  if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force; Write-Output "removed: $f" }
+}
+${step(2, "jobs: none may run while the rest goes")}
+NoRelayJob
+${step(3, "broker tasks")}
+foreach ($t in @(${tasks.map(psQuote).join(", ")})) {
+  if (Get-ScheduledTask -TaskName $t -TaskPath '\\' -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $t -TaskPath '\\' -Confirm:$false
+    Write-Output "removed: broker task $t"
+  }
+}
+Remove-Item -LiteralPath ${psQuote(machineCredFile(o2.machine))} -Force -ErrorAction SilentlyContinue
+${step(4, "crew users: retired as after every job")}
+$group = Get-LocalGroup -Name ($prefix + 's') -ErrorAction SilentlyContinue
+if ($null -ne $group -and $group.Description -ne $groupDescription) { throw "the group $($group.Name) is not Studio's: remove it by hand, or give the prefix of Studio's group with the worker config" }
+for ($i = 0; $i -lt 5 -and @(JobUsers).Count -gt 0; $i++) { $retired = RetireJobUsers }
+$left = @(JobUsers)
+if ($left.Count -gt 0) { throw "crew users are left ($(@($left | ForEach-Object { $_.Name }) -join ', ')): $(@($retired.problems) -join '; '); run studio relay uninstall --force-stop" }
+${step(5, "the crew users' group, its firewall rule, logon rights and read grants")}
+if ($null -ne $group) {
+  $groupSid = $group.SID.Value
+  Get-NetFirewallRule -DisplayName ('Studio crews ' + $group.Name + ': no direct network') -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+  # Every logon right the group holds (Studio gave it only the denied ones), straight through LSA:
+  # secedit's export fails on some machines with an extended error.
+  Add-Type -TypeDefinition ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(LSA_RIGHTS, "utf8").toString("base64")}')))
+  [StudioLsa]::RemoveAll($groupSid)
+  foreach ($p in $readPaths) {
+    if (Test-Path -LiteralPath $p) { icacls $p /remove:g "*$groupSid" /L /Q | Out-Null }
+  }
+  Remove-LocalGroup -SID $group.SID
+  Write-Output "removed: the group $($group.Name)"
+}
+${step(6, "the relay account and its profile")}
+$account = Get-LocalUser -Name $relay -ErrorAction SilentlyContinue
+if ($null -ne $account -and $account.Description -ne ${psQuote(RELAY_DESCRIPTION)}) {
+  # A user Studio did not make served as its relay account (an earlier version took it over): it is
+  # disabled, never deleted.
+  Disable-LocalUser -SID $account.SID
+  Write-Output "WARNING: the user $relay was not made by Studio but served as its relay account: it is DISABLED, not removed. Remove it, or turn it back on yourself: Enable-LocalUser -Name $relay"
+} elseif ($null -ne $account) {
+  LoadTree
+  LockJobUser $account
+  # Every process of the account, and every one whose owner cannot be read (it may be the
+  # account's): nothing goes on while one runs, unless --force-stop ends them by PID.
+  $still = @(Owned @($account.SID.Value))
+  for ($t = 0; $t -lt 5 -and $still.Count -gt 0; $t++) {
+    foreach ($p in $still) { if ($forceStop -or -not $p.Unreadable) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
+    Start-Sleep -Milliseconds 800
+    $still = @(Owned @($account.SID.Value))
+    if (-not $forceStop -and @($still | Where-Object { -not $_.Unreadable }).Count -eq 0) { break }
+  }
+  if ($still.Count -gt 0) { throw "processes of $relay (or whose owner cannot be read) still run ($(@($still | ForEach-Object { if ($_.Unreadable) { "$($_.Id) $($_.Name) (owner unreadable)" } else { "$($_.Id) $($_.Name)" } }) -join ', ')): run studio relay uninstall --force-stop" }
+  QuarantineProfile $account (Join-Path (Quarantine) 'trees')
+  Remove-LocalUser -SID $account.SID
+  Write-Output "removed: the relay account $relay and its profile"
+}
+# The quarantine of retired profiles: emptied, and removed once no group of Studio's crews is left.
+$q = Join-Path (ProfileRoot) 'Studio crew quarantine'
+if (Test-Path -LiteralPath $q) {
+  LoadTree
+  $trees = Join-Path $q 'trees'
+  if (Test-Path -LiteralPath $trees) { for ($i = 0; $i -lt 200; $i++) { if (([StudioTree]::Prune($trees, $pruneBudget, $true, $null)).Done) { break } } }
+  $waiting = @(Get-ChildItem -LiteralPath $trees -Force -ErrorAction SilentlyContinue).Count
+  $others = @(Get-LocalGroup | Where-Object { $_.Description -eq $groupDescription }).Count
+  if ($waiting -eq 0 -and $others -eq 0) { [StudioTree]::Remove($q, $null); Write-Output "removed: $q" }
+  else { Write-Output "left: $q ($waiting profile(s) waiting, $others other group(s) of Studio's crews)" }
+}
+${step(7, "Studio's lines in sshd_config and its firewall rules")}
+$conf = ${conf}
+if (Test-Path -LiteralPath $conf) {
+  $before = [IO.File]::ReadAllBytes($conf)
+  $text = [Text.Encoding]::UTF8.GetString($before)
+  $text = [regex]::Replace($text, '(?s)# studio relay begin global.*?# studio relay end global\\r?\\n?', '')
+  $text = [regex]::Replace($text, '(?s)\\r?\\n?# studio relay begin\\r?\\n.*?# studio relay end\\r?\\n?', [Environment]::NewLine)
+  if ($text -ne [Text.Encoding]::UTF8.GetString($before)) {
+    SshdConfigSwap $conf ($text.TrimEnd() + [Environment]::NewLine) $false
+    Write-Output "removed: Studio's lines in $conf"
+  }
+}
+Get-NetFirewallRule -DisplayName 'Studio relay: sshd' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+${step(8, o2.keepTree ? "the admin-only tree and the relay home stay (--keep-tree)" : "the admin-only tree and the relay home")}
+${o2.keepTree ? "" : `foreach ($p in @($home_, $machine)) {
+  $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+  if ($null -eq $item) { continue }
+  # Never a drive root, never a folder that is not Studio's relay folder, whatever was recorded.
+  $bare = $p.TrimEnd('\\', '/')
+  if (-not $forcePath -and ($bare -eq ([IO.Path]::GetPathRoot($p)).TrimEnd('\\', '/') -or $bare -notmatch '[\\\\/]Studio[\\\\/]relay$')) { throw "$p is not a folder Studio\\relay: nothing of it is removed (--force-path removes it all the same)" }
+  if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { $item.Delete() } else { LoadTree; [StudioTree]::Remove($p, $null) }
+  Write-Output "removed: $p"
+  $up = Split-Path -Parent $p
+  if ((Test-Path -LiteralPath $up) -and @(Get-ChildItem -LiteralPath $up -Force).Count -eq 0) { Remove-Item -LiteralPath $up -Force; Write-Output "removed: $up" }
+}
+`}${step(9, "services Studio changed")}
+${restoreSteps(o2.record)}Write-Output 'left installed: Git, Node.js and Claude Code (other programs may use them); to remove them: winget uninstall --id Git.Git; winget uninstall --id OpenJS.NodeJS.LTS; winget uninstall --id Anthropic.ClaudeCode'
+Write-Output 'done: Studio relay worker uninstalled'
+`;
+}
+
+// src/relay-windows-check.ts
+import { readFileSync as readFileSync55 } from "node:fs";
 import { networkInterfaces as networkInterfaces2 } from "node:os";
-import { join as join59 } from "node:path";
+import { join as join60 } from "node:path";
 
 // src/relay-hosts.ts
 import { networkInterfaces } from "node:os";
@@ -63861,7 +64276,7 @@ function relayWindows(o2) {
     credFile,
     readFile: (f3) => {
       try {
-        return readFileSync54(f3, "utf8");
+        return readFileSync55(f3, "utf8");
       } catch {
         return void 0;
       }
@@ -63969,7 +64384,7 @@ function relayWindows(o2) {
       if (cred !== void 0) return { problem: { kind: "refused", line: cred }, warnings: warnings2 };
       const proxy = await o2.startProxy([...CLAUDE_HOSTS]);
       try {
-        const tmp = join59(o2.stateRoot, "tmp");
+        const tmp = join60(o2.stateRoot, "tmp");
         const r = await probeWindowsResults({
           stateRoot: o2.stateRoot,
           ownerHome: o2.ownerHome,
@@ -64106,7 +64521,7 @@ import { randomBytes as randomBytes14 } from "node:crypto";
 // src/worker-hub.ts
 import { mkdtempSync as mkdtempSync3, rmSync as rmSync12, writeFileSync as writeFileSync20 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { join as join60 } from "node:path";
+import { join as join61 } from "node:path";
 var OFFER_LABEL = "studio-offer";
 var CLAIM_PREFIX = "refs/studio/claims/";
 var TIMEOUT_MS = 6e4;
@@ -64137,9 +64552,9 @@ function ghTransport(gh, token) {
       let r;
       if (body === void 0) r = await run2([]);
       else {
-        const dir = mkdtempSync3(join60(tmpdir3(), "studio-hub-"));
+        const dir = mkdtempSync3(join61(tmpdir3(), "studio-hub-"));
         try {
-          const file4 = join60(dir, "body.json");
+          const file4 = join61(dir, "body.json");
           writeFileSync20(file4, JSON.stringify(body), { mode: 384 });
           r = await run2(["--input", file4]);
         } finally {
@@ -65148,8 +65563,8 @@ function relayOwner(owner, home, machine) {
     ...owner,
     env: {
       ...owner.env ?? {},
-      XDG_CONFIG_HOME: machine === void 0 ? join61(home, "config") : machineConfig(machine),
-      XDG_STATE_HOME: join61(home, "state")
+      XDG_CONFIG_HOME: machine === void 0 ? join62(home, "config") : machineConfig(machine),
+      XDG_STATE_HOME: join62(home, "state")
     }
   };
 }
@@ -65199,13 +65614,13 @@ async function readAll(input2) {
   return s;
 }
 function readHostKey(env, platform2) {
-  const file4 = platform2 === "win32" ? join61(
+  const file4 = platform2 === "win32" ? join62(
     env.ProgramData ?? env.PROGRAMDATA ?? "C:\\ProgramData",
     "ssh",
     "ssh_host_ed25519_key.pub"
   ) : "/etc/ssh/ssh_host_ed25519_key.pub";
   try {
-    return keyscanKey(`host ${readFileSync55(file4, "utf8")}`);
+    return keyscanKey(`host ${readFileSync56(file4, "utf8")}`);
   } catch {
     return void 0;
   }
@@ -65213,7 +65628,7 @@ function readHostKey(env, platform2) {
 var readText2 = (file4) => {
   if (file4 === void 0) return void 0;
   try {
-    return readFileSync55(file4, "utf8");
+    return readFileSync56(file4, "utf8");
   } catch {
     return void 0;
   }
@@ -65280,7 +65695,7 @@ async function runRelayCommand(o2) {
       platform: platform2,
       flag: o2.values.lead,
       env: o2.env,
-      keysFile: platform2 === "win32" ? authorizedKeysFile(machineOf()) : join61(o2.homedir ?? homedir13(), ".ssh", "authorized_keys")
+      keysFile: platform2 === "win32" ? authorizedKeysFile(machineOf()) : join62(o2.homedir ?? homedir13(), ".ssh", "authorized_keys")
     });
     if ("problem" in lead) {
       refuse(o2.stdout, lead.problem);
@@ -65324,6 +65739,9 @@ async function runRelayCommand(o2) {
       script: (i2) => setupScriptFor({ owner: o2.owner, env: o2.env, home, machine, relayUser, install: i2 })
     });
   }
+  if (sub === "uninstall" && args.length === 0) {
+    return await uninstall({ ...o2, home: o2.values.home, machine, relayUser: o2.values.user });
+  }
   if (sub === "unpair" && args.length === 1) {
     return await unpair({ ...o2, home, machine, relayUser, label: args[0] });
   }
@@ -65335,8 +65753,31 @@ async function runRelayCommand(o2) {
   }
   return void 0;
 }
+var STDIN_RUNNER = Buffer.from(
+  "$s = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())); try { & ([ScriptBlock]::Create($s)) } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
+  "utf16le"
+).toString("base64");
+var runScript = (exec, script, onOutput) => exec(
+  "powershell.exe",
+  [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-EncodedCommand",
+    STDIN_RUNNER
+  ],
+  {
+    onOutput,
+    input: Buffer.from(script.replace(/^#Requires .*\r?\n/gm, ""), "utf8").toString("base64")
+  }
+);
 var systemExec = (file4, args, o2 = {}) => new Promise((res) => {
-  const child = spawn6(file4, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn6(systemTool(file4), args, {
+    windowsHide: true,
+    stdio: [o2.input === void 0 ? "ignore" : "pipe", "pipe", "pipe"]
+  });
+  if (o2.input !== void 0) child.stdin?.end(o2.input);
   let stdout = "";
   let stderr = "";
   const timer = setTimeout(() => child.kill(), o2.timeoutMs ?? 30 * 6e4);
@@ -65372,7 +65813,16 @@ function setupScriptFor(o2) {
       ...claude === void 0 ? [] : [dirname19(claude)],
       ...loadOwnerConfig(o2.owner).crewToolchainPaths
     ],
-    source: { node: process.execPath, studio: resolve13(dirname19(STUDIO_BIN), "..") },
+    // Node.js for all users, where only administrators change it: never the node this CLI runs on,
+    // which may lie in a folder of the user's.
+    source: {
+      node: win324.join(
+        o2.env.ProgramFiles ?? o2.env.PROGRAMFILES ?? "C:\\Program Files",
+        "nodejs",
+        "node.exe"
+      ),
+      studio: resolve13(dirname19(STUDIO_BIN), "..")
+    },
     ...o2.install === void 0 ? {} : { install: o2.install }
   });
 }
@@ -65406,7 +65856,7 @@ async function syncAuthorizedKeys(o2) {
   const file4 = authorizedKeysFile(o2.machine);
   let existing;
   try {
-    existing = readFileSync55(file4, "utf8");
+    existing = readFileSync56(file4, "utf8");
   } catch {
     existing = void 0;
   }
@@ -65475,33 +65925,22 @@ async function install(o2) {
   o2.stdout(
     "Studio relay install: this stops and disables the WebClient service (WebDAV), which the crew sandbox does not hold.\n"
   );
-  const dir = mkdtempSync4(join61(tmpdir4(), "studio-relay-install-"));
-  const file4 = join61(dir, "install.ps1");
-  writeFileSync21(
-    file4,
+  const r = await runScript(
+    exec,
     o2.script({
       port,
       scope,
       ...o2.values["keep-passwords"] === true ? { keepPasswords: true } : {},
       ...o2.values["disable-spooler"] === true ? { disableSpooler: true } : {},
       ...o2.values["force-stop"] === true ? { forceStop: true } : {}
-    })
+    }),
+    o2.stdout
   );
-  let r;
-  try {
-    r = await exec(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file4],
-      { onOutput: o2.stdout }
-    );
-  } finally {
-    rmSync13(dir, { recursive: true, force: true });
-  }
   if (r.code !== 0) {
     o2.stderr("studio: relay install stopped; fix what it says and run it again (it repairs)\n");
     return 1;
   }
-  const config2 = join61(machineConfig(o2.machine), "studio", "config.yaml");
+  const config2 = join62(machineConfig(o2.machine), "studio", "config.yaml");
   if (!existsSync19(config2)) {
     mkdirSync13(dirname19(config2), { recursive: true });
     const tmp = `${config2}.${process.pid}.tmp`;
@@ -65523,6 +65962,76 @@ async function install(o2) {
   o2.stdout(
     hostKey === void 0 ? "host key: cannot read the OpenSSH server host key\n" : `host key fingerprint: ${keyFingerprint(hostKey)}${o2.pair === void 0 ? "" : `
 On the lead, within the hour: studio relay pair ${o2.pair.label} --connect`}
+`
+  );
+  return 0;
+}
+async function uninstall(o2) {
+  const exec = o2.exec ?? systemExec;
+  await windowsAdmin({ ...o2, what: "uninstall" });
+  if (o2.values["i-am-local"] !== true && (sshSessionVar(o2.env) || await underSshd(exec))) {
+    throw new Error(
+      "relay uninstall stops sshd and removes the account the lead logs in as: run it at the machine or over remote desktop, never over SSH (--i-am-local if this is not an SSH session)"
+    );
+  }
+  const top = o2.machine.toLowerCase().replace(/[\\/]+$/, "");
+  const inside = (p) => p.toLowerCase().startsWith(`${top}\\`) || p.toLowerCase().startsWith(`${top}/`);
+  if (o2.values["keep-tree"] !== true && (inside(process.execPath) || inside(STUDIO_BIN))) {
+    throw new Error(
+      `relay uninstall cannot remove ${o2.machine} while it runs from there: run it from another copy of Studio, or keep the tree with --keep-tree`
+    );
+  }
+  const record2 = readInstallRecord(o2.machine);
+  const home = o2.home ?? record2?.home ?? relayHomeDefault(o2.env);
+  if (o2.values["keep-tree"] !== true && o2.values["force-path"] !== true) {
+    const problem = treePathProblem({
+      home,
+      machine: o2.machine,
+      recordedHome: record2?.home,
+      defaultHome: relayHomeDefault(o2.env),
+      defaultMachine: relayMachineDefault(o2.env),
+      machineMarked: existsSync19(installRecordFile(o2.machine))
+    });
+    if (problem !== void 0) {
+      throw new Error(
+        `relay uninstall removes no tree it cannot tell is Studio's: ${problem}. Check --home and the path, or keep the trees with --keep-tree (--force-path removes them all the same)`
+      );
+    }
+  }
+  let settings;
+  try {
+    settings = serveSettings(relayOwner(o2.owner, o2.home ?? relayHomeDefault(o2.env), o2.machine));
+  } catch {
+    settings = void 0;
+  }
+  const leads = Object.keys(readPairings(o2.machine));
+  const script = relayUninstallScript({
+    relayUser: o2.relayUser ?? record2?.relayUser ?? "studio-relay",
+    crewPrefix: record2?.crewPrefix ?? settings?.windows?.crewUser ?? "studio-crew",
+    task: record2?.task ?? settings?.windows?.broker ?? "Studio relay broker",
+    home,
+    machine: o2.machine,
+    readPaths: record2?.readPaths ?? [],
+    keepTree: o2.values["keep-tree"] === true,
+    forceStop: o2.values["force-stop"] === true,
+    forcePath: o2.values["force-path"] === true,
+    record: record2,
+    treeSource: TREE_SOURCE()
+  });
+  if (record2 === void 0) {
+    o2.stdout(
+      "No install record here (an install of an earlier version): services Studio stopped stay as they are.\n"
+    );
+  }
+  const r = await runScript(exec, script, o2.stdout);
+  if (r.code !== 0) {
+    o2.stderr(
+      "studio: relay uninstall stopped; fix what it says and run studio relay uninstall again (it goes on where it stopped)\n"
+    );
+    return 1;
+  }
+  o2.stdout(
+    leads.length === 0 ? "Done. Next: on the lead, remove this worker from workers.relay in the owner config.\n" : `Done. Next: on each lead, remove ${leads.map((l) => `workers.relay.${l}`).join(", ")} from the owner config.
 `
   );
   return 0;
@@ -65566,7 +66075,7 @@ async function pairStart(o2) {
     key
   ]);
   if (made.code !== 0) throw new Error("ssh-keygen could not make the key");
-  const pub = readFileSync55(`${key}.pub`, "utf8").trim().split(/\s+/).slice(0, 2).join(" ");
+  const pub = readFileSync56(`${key}.pub`, "utf8").trim().split(/\s+/).slice(0, 2).join(" ");
   const secret = newPairSecret();
   writePending(o2.owner, {
     label: o2.label,
@@ -65642,14 +66151,14 @@ import {
   chmodSync as chmodSync6,
   lstatSync as lstatSync46,
   mkdirSync as mkdirSync14,
-  readFileSync as readFileSync56,
+  readFileSync as readFileSync57,
   renameSync as renameSync17,
   rmSync as rmSync14,
   statSync as statSync7,
   writeFileSync as writeFileSync22
 } from "node:fs";
 import { homedir as homedir14 } from "node:os";
-import { dirname as dirname20, join as join62, resolve as resolve14 } from "node:path";
+import { dirname as dirname20, join as join63, resolve as resolve14 } from "node:path";
 var DEFAULT_LABEL2 = "main";
 var MAX_LABEL = 32;
 var TOKEN_TEXT = [
@@ -65710,7 +66219,7 @@ var SHIM_NOTE = "   The shim finds the plugin again after an update; no need to 
 var shQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 function studioOnPath(env) {
   for (const dir of (env.PATH ?? "").split(":").filter((d) => d !== "")) {
-    const file4 = join62(dir, "studio");
+    const file4 = join63(dir, "studio");
     try {
       const st = statSync7(file4);
       if (st.isFile() && (st.mode & 73) !== 0) return file4;
@@ -65721,7 +66230,7 @@ function studioOnPath(env) {
 }
 var yes = (answer2) => /^(|y|yes)$/i.test(answer2.trim());
 function writeAtomic2(file4, text, mode) {
-  const tmp = join62(dirname20(file4), `.studio-${process.pid}-${Date.now()}.tmp`);
+  const tmp = join63(dirname20(file4), `.studio-${process.pid}-${Date.now()}.tmp`);
   try {
     writeFileSync22(tmp, text, { flag: "wx", mode });
     chmodSync6(tmp, mode);
@@ -65785,7 +66294,7 @@ async function link(o2, home) {
     return 0;
   }
   const launcher2 = o2.launcher;
-  const localBin = join62(home, ".local", "bin");
+  const localBin = join63(home, ".local", "bin");
   const onPath = (o2.env.PATH ?? "").split(":").some((d) => d !== "" && resolve14(d) === resolve14(localBin));
   if (!onPath) {
     say("4. studio in your terminal: ~/.local/bin is not on your PATH.");
@@ -65794,14 +66303,14 @@ async function link(o2, home) {
     say(`   Until then: node ${shQuote(launcher2)} <command>`);
     return 0;
   }
-  const target = join62(localBin, "studio");
+  const target = join63(localBin, "studio");
   let current;
   try {
-    current = lstatSync46(target).isFile() ? readFileSync56(target, "utf8") : "";
+    current = lstatSync46(target).isFile() ? readFileSync57(target, "utf8") : "";
   } catch {
     current = void 0;
   }
-  const cache2 = join62(ownerConfigDir(o2.owner), "launcher");
+  const cache2 = join63(ownerConfigDir(o2.owner), "launcher");
   const writeCache = () => {
     mkdirSync14(dirname20(cache2), { recursive: true, mode: 448 });
     writeAtomic2(cache2, `${launcher2}
@@ -66063,20 +66572,20 @@ async function runSetup(o2) {
 }
 
 // src/skills-check.ts
-import { existsSync as existsSync20, lstatSync as lstatSync47, readFileSync as readFileSync57 } from "node:fs";
-import { join as join63 } from "node:path";
+import { existsSync as existsSync20, lstatSync as lstatSync47, readFileSync as readFileSync58 } from "node:fs";
+import { join as join64 } from "node:path";
 var SKILLS_CHECK_DAYS = 30;
 var DAY_MS6 = 864e5;
 var NOTE = "skills-update: ";
 var PLUGIN_TIMEOUT_MS = 3e5;
-var recordFile2 = (stateRoot) => join63(stateRoot, "skills-check.json");
+var recordFile2 = (stateRoot) => join64(stateRoot, "skills-check.json");
 var at = (v) => typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : void 0;
 function readRecord(stateRoot) {
   const file4 = recordFile2(stateRoot);
   try {
     assertStatePath(stateRoot, file4);
     if (!lstatSync47(file4).isFile()) return {};
-    const raw = JSON.parse(readFileSync57(file4, "utf8"));
+    const raw = JSON.parse(readFileSync58(file4, "utf8"));
     const lastRun2 = at(raw.lastRun);
     const lastAttempt = at(raw.lastAttempt);
     return {
@@ -66496,11 +67005,13 @@ async function runCli(argv, deps) {
       values["keep-passwords"],
       values["disable-spooler"],
       values["i-am-local"],
-      values["force-stop"]
+      values["force-stop"],
+      values["keep-tree"],
+      values["force-path"]
     ];
     if (relayOnly.some((v) => v !== void 0) && cmd !== "relay") {
       throw new UsageError(
-        "--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local and --force-stop work with relay only"
+        "--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local, --force-stop, --keep-tree and --force-path work with relay only"
       );
     }
     const reserveOnly = [values.number, values.for, values.purpose];
@@ -67203,7 +67714,7 @@ async function runCli(argv, deps) {
       if (relayed) {
         const file4 = relayReportFile(stateRoot(), item.id);
         if (!existsSync21(file4)) throw new Error(`${item.id}: no relay result yet; nothing moved`);
-        report = parseReport(readFileSync58(file4, "utf8"), item);
+        report = parseReport(readFileSync59(file4, "utf8"), item);
         fileName = `relay/${item.id}.report.md`;
       } else if (item.runsOn !== void 0) {
         const got = await workerReport(item);
@@ -67233,7 +67744,7 @@ async function runCli(argv, deps) {
           }
         }
         removeReaRun(stateRoot(), item.id);
-        const clone2 = join64(stateRoot(), "clones", item.id);
+        const clone2 = join65(stateRoot(), "clones", item.id);
         fileName = reportName(stateRoot(), item.id);
         if (fileName === void 0) {
           throw new ReportError(
@@ -67264,8 +67775,8 @@ async function runCli(argv, deps) {
             stateRoot: stateRoot(),
             ownerRoot: ownerRoot(),
             item: item.id,
-            clone: join64(stateRoot(), "clones", item.id),
-            homeDir: join64(stateRoot(), "homes", item.id),
+            clone: join65(stateRoot(), "clones", item.id),
+            homeDir: join65(stateRoot(), "homes", item.id),
             ownerConfig: loadOwnerConfig(owner),
             cow: ports.cow ?? systemCowCopy(),
             now: ports.clock.now(),
@@ -68190,7 +68701,7 @@ async function runCli(argv, deps) {
           if (item.status !== "assigned" && item.status !== "in_progress") continue;
           const rec = records[item.id];
           if (rec === void 0 || rec.stoppedAt !== void 0) continue;
-          const t = timeoutsOfContext(join64(root, "guard", `${item.id}.json`));
+          const t = timeoutsOfContext(join65(root, "guard", `${item.id}.json`));
           const ends = t === void 0 ? Number.NaN : Date.parse(t.sessionEndsAt);
           if (Number.isNaN(ends) || now < ends + REVIEW_GRACE_MS) continue;
           beat();
@@ -68820,7 +69331,7 @@ async function runCli(argv, deps) {
         });
         if (code === void 0) {
           throw new UsageError(
-            "relay takes: pair <label> <host>, pair <label> --connect, install [--pair <line>], unpair <label>, setup, serve, run <id>"
+            "relay takes: pair <label> <host>, pair <label> --connect, install [--pair <line>], uninstall, unpair <label>, setup, serve, run <id>"
           );
         }
         return code;
@@ -69459,7 +69970,7 @@ ${table2([["ITEM", "STATUS"], ...(row.members ?? []).map((x) => [x.ref, x.status
             hasReport: (item) => {
               if (!isItemId(item)) return false;
               const name = reportName(root, item);
-              return name !== void 0 && existsSync21(join64(root, "clones", item, ".studio", "reports", name));
+              return name !== void 0 && existsSync21(join65(root, "clones", item, ".studio", "reports", name));
             }
           }
         );
@@ -70647,7 +71158,9 @@ function parseCli(argv) {
         "keep-passwords": { type: "boolean" },
         "i-am-local": { type: "boolean" },
         "force-stop": { type: "boolean" },
-        "disable-spooler": { type: "boolean" }
+        "disable-spooler": { type: "boolean" },
+        "keep-tree": { type: "boolean" },
+        "force-path": { type: "boolean" }
       },
       allowPositionals: true,
       strict: true
@@ -71119,7 +71632,7 @@ function readVisibleLine(prompt, input2, output2) {
 
 // src/ports.ts
 import { spawn as spawn7 } from "node:child_process";
-import { closeSync as closeSync10, openSync as openSync10, readFileSync as readFileSync59 } from "node:fs";
+import { closeSync as closeSync10, openSync as openSync10, readFileSync as readFileSync60 } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 var HTTP_TIMEOUT_MS = 15e3;
 var realHttp = {
@@ -71206,13 +71719,13 @@ function realPorts(claudeBin = "claude") {
       return e.code === "EPERM";
     }
   };
-  const posix3 = process.platform !== "win32";
-  const alive = (pid) => posix3 && probe(-pid) || probe(pid);
+  const posix4 = process.platform !== "win32";
+  const alive = (pid) => posix4 && probe(-pid) || probe(pid);
   const signal = (pid, sig) => {
     try {
-      process.kill(posix3 ? -pid : pid, sig);
+      process.kill(posix4 ? -pid : pid, sig);
     } catch (e) {
-      if (!posix3 || e.code !== "ESRCH") return;
+      if (!posix4 || e.code !== "ESRCH") return;
       try {
         process.kill(pid, sig);
       } catch {
@@ -71247,7 +71760,7 @@ function realPorts(claudeBin = "claude") {
       if (!Number.isInteger(pid) || pid <= 0) return void 0;
       if (process.platform === "linux") {
         try {
-          return parseLinuxStartTime(readFileSync59(`/proc/${pid}/stat`, "utf8"));
+          return parseLinuxStartTime(readFileSync60(`/proc/${pid}/stat`, "utf8"));
         } catch {
           return void 0;
         }

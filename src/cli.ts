@@ -702,10 +702,12 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       values['disable-spooler'],
       values['i-am-local'],
       values['force-stop'],
+      values['keep-tree'],
+      values['force-path'],
     ];
     if (relayOnly.some((v) => v !== undefined) && cmd !== 'relay') {
       throw new UsageError(
-        '--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local and --force-stop work with relay only',
+        '--home, --pipe, --lead, --pair, --user, --port, --source, --interface, --connect, --keep-passwords, --disable-spooler, --i-am-local, --force-stop, --keep-tree and --force-path work with relay only',
       );
     }
     const reserveOnly = [values.number, values.for, values.purpose];
@@ -3491,7 +3493,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
         });
         if (code === undefined) {
           throw new UsageError(
-            'relay takes: pair <label> <host>, pair <label> --connect, install [--pair <line>], unpair <label>, setup, serve, run <id>',
+            'relay takes: pair <label> <host>, pair <label> --connect, install [--pair <line>], uninstall, unpair <label>, setup, serve, run <id>',
           );
         }
         return code;
@@ -5459,6 +5461,8 @@ function parseCli(argv: string[]) {
         'i-am-local': { type: 'boolean' },
         'force-stop': { type: 'boolean' },
         'disable-spooler': { type: 'boolean' },
+        'keep-tree': { type: 'boolean' },
+        'force-path': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: true,
