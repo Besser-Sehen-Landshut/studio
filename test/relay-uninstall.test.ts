@@ -81,6 +81,8 @@ describe('the uninstall script', () => {
       expect(s).toContain(`'${t}'`);
     }
     for (let n = 1; n <= 9; n++) expect(s).toContain(`[${n}/9]`);
+    // What stays installed, and how to remove it by hand.
+    expect(s).toContain('winget uninstall --id Git.Git; winget uninstall --id OpenJS.NodeJS.LTS');
   });
 
   it("removes only what is Studio's: the relay account by its description, the group by its own", () => {
