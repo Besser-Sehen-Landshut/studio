@@ -793,7 +793,7 @@ A new owner, a new project or a new PC: the lead runs one command, the PC runs o
 1. **Lead: pair.** `studio relay pair lab worker.example` makes the lead's key for the worker and prints the line for the PC:
 
    ```powershell
-   $b = (New-Object Net.WebClient).DownloadData('https://github.com/Besser-Sehen-Landshut/studio/releases/download/v<version>/studio-relay-bootstrap.ps1'); if (<SHA-256 of $b> -ne '<the bootstrap's SHA-256>') { throw ... }; & ([ScriptBlock]::Create(...)) -Pair 'studio-pair-1 lab <secret> ssh-ed25519 AAAA...' -Tree '<tree digest>'
+   [Net.ServicePointManager]::SecurityProtocol = ... -bor [Net.SecurityProtocolType]::Tls12; $b = (Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/Besser-Sehen-Landshut/studio/releases/download/v<version>/studio-relay-bootstrap.ps1').RawContentStream.ToArray(); if (<SHA-256 of $b> -ne '<the bootstrap's SHA-256>') { throw ... }; & ([ScriptBlock]::Create(...)) -Pair 'studio-pair-1 lab <secret> ssh-ed25519 AAAA...' -Tree '<tree digest>'
    ```
 
    The version is the lead's own, so both run the same Studio, and both checks come from the lead's own Studio, not from the release: the bootstrap runs only when its SHA-256 is the one the lead computes, and it installs the bundle only when its tree digest is the lead's (see SECURITY.md, "The bootstrap"). The secret in it is used once and expires after an hour: paste the line on the PC only.
