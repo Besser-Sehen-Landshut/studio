@@ -528,6 +528,25 @@ export const workerDenySchema = z.strictObject({
     )
     .max(50)
     .default([]),
+  // Windows lockdown: further networks the relay account and the crews must not reach, as
+  // address/prefix of either family (the delegated IPv6 /56 of the site, a VLAN the machine has
+  // no route to by itself). The local ranges and the routes of the machine are blocked anyway.
+  prefixes: z
+    .array(
+      z
+        .string()
+        .max(64)
+        .refine((p) => {
+          const m = /^([^/]+)\/(\d{1,3})$/.exec(p);
+          if (m === null) return false;
+          const bits = Number(m[2]);
+          return isIP(m[1] as string) === 4
+            ? bits <= 32
+            : isIP(m[1] as string) === 6 && bits <= 128;
+        }, 'an address and a prefix length, like 2001:db8::/56'),
+    )
+    .max(50)
+    .optional(),
 });
 export type WorkerDeny = z.infer<typeof workerDenySchema>;
 const NO_DENY = { paths: [], ports: [], hosts: [] };
@@ -565,6 +584,9 @@ export const relayTargetSchema = z.strictObject({
     .min(2)
     .max(500)
     .refine((p) => isAbsolute(p), 'must be an absolute path'),
+  // A worker installed with --no-firewall: its missing network lockdown is accepted (doctor notes
+  // it, starts go on); without this, doctor fails and nothing starts there.
+  acceptNoFirewall: z.boolean().optional(),
   // How long the worker may be unreachable before the item goes to the lead.
   graceMinutes: z
     .number()

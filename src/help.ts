@@ -65,7 +65,7 @@ export const COMMANDS: HelpEntry[] = [
       'Serve offered items of this label on this machine: claim one, run its crew, open its pull request, hand the report back',
   },
   {
-    usage: 'worker windows-setup',
+    usage: 'worker windows-setup [--no-firewall]',
     about:
       'Print the one-time PowerShell script of the group of the Windows crew users, one per job (run it elevated)',
   },
@@ -89,7 +89,7 @@ export const COMMANDS: HelpEntry[] = [
   },
   {
     usage:
-      'relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--i-am-local] [--force-stop]',
+      'relay install [--pair <line>] [--source <range> | --interface <name>] [--port <n>] [--user <name>] [--keep-passwords] [--disable-spooler] [--no-firewall] [--block-smb-lan] [--i-am-local] [--force-stop]',
     about:
       'On a Windows worker, elevated: install or repair everything a relay worker needs; --pair authorizes the lead',
   },
@@ -104,7 +104,7 @@ export const COMMANDS: HelpEntry[] = [
     about: "On a Windows worker, elevated: remove a lead's pairing and its authorized key",
   },
   {
-    usage: 'relay setup [--home <dir>] [--user <name>]',
+    usage: 'relay setup [--home <dir>] [--user <name>] [--no-firewall]',
     about:
       'Print the setup script of a Windows relay worker, to run elevated by hand (relay install runs it)',
   },

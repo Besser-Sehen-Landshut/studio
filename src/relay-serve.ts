@@ -50,6 +50,7 @@ import {
 } from './paths.js';
 import { installedVersions, pinnedPlugins, STUDIO_VERSION } from './plugins.js';
 import type { Ports } from './ports.js';
+import { NO_LOCKDOWN } from './relay-lockdown.js';
 import { pairProofs, readPairings } from './relay-pair.js';
 import {
   type CollectAnswer,
@@ -131,6 +132,8 @@ export interface RelayContext {
   hostKey?: () => string | undefined;
   /** Native Windows: the crew sandbox in relay mode (src/relay-windows.ts, through the CLI). */
   windows?: RelayWindows;
+  /** Native Windows: whether the install left the network lockdown out (`--no-firewall`). */
+  lockdownOff?: () => boolean;
   log?: (line: string) => void;
 }
 
@@ -583,7 +586,12 @@ export async function serveRelay(
                   // A lead learns only its own pairing's proof, never another's.
                   .filter((p) => p.label === c.lead || c.lead === 'default')
                   .slice(0, 20),
-          warnings: stored === undefined ? [] : [stored],
+          // Every answer of a worker without its lockdown says so; the lead starts nothing there
+          // unless it accepted that (accept_no_firewall).
+          warnings: [
+            ...(stored === undefined ? [] : [stored]),
+            ...(c.lockdownOff?.() === true ? [NO_LOCKDOWN] : []),
+          ],
         });
       }
       case 'probe': {
@@ -671,7 +679,10 @@ async function start(c: RelayContext, job: RelayJob, bundle: Buffer, out: Out): 
       if (j.state === 'held' || j.state === 'refused') {
         return fail(out, j.state, j.line ?? 'not started');
       }
-      return answer(out, { state: 'starting' });
+      return answer(out, {
+        state: 'starting',
+        warnings: c.lockdownOff?.() === true ? [NO_LOCKDOWN] : [],
+      });
     }
     if (c.ports.clock.now().getTime() >= until || !pidAlive(pid)) {
       if (j !== undefined)

@@ -49,6 +49,7 @@ import {
   stopRelay,
   updateRelay,
 } from './relay-lead.js';
+import { type LockdownPlan, lockdownFor, NO_LOCKDOWN } from './relay-lockdown.js';
 import {
   authorizedKeysPlan,
   dropPending,
@@ -196,6 +197,18 @@ export async function startRelayItem(
     const { answer: hello } = await relayCall(transport, 'hello', {}, { timeoutMs: 60_000 });
     if (!hello.ok) throw new HeldError(relayLine(label, hello.line));
     if (hello.held !== null) throw new HeldError(relayLine(label, hello.held));
+    // A worker without its network lockdown starts nothing unless the lead accepted that.
+    if (
+      hello.warnings.includes(NO_LOCKDOWN) &&
+      relayTarget(ownerConfig, label)?.acceptNoFirewall !== true
+    ) {
+      throw new HeldError(
+        relayLine(
+          label,
+          `${NO_LOCKDOWN}; run studio relay install there without --no-firewall, or accept it with workers.relay.${label}.accept_no_firewall: true`,
+        ),
+      );
+    }
   } catch (e) {
     if (e instanceof RelayUnreachable) throw new HeldError(relayLine(label, 'unreachable'));
     throw e;
@@ -503,6 +516,7 @@ export async function relayDoctorLines(
       label,
       studioVersion: STUDIO_VERSION,
       pins,
+      acceptNoFirewall: relayTarget(ownerConfig, label)?.acceptNoFirewall === true,
     });
     ok &&= r.ok;
     lines.push(...r.lines);
@@ -572,6 +586,7 @@ export function relayContext(o: {
         ? { pairings: machineOf() }
         : {}),
     hostKey: o.hostKey ?? (() => readHostKey(o.env, platform().platform)),
+    ...(native ? { lockdownOff: () => readInstallRecord(machineOf())?.firewall === false } : {}),
     log: o.log,
     ...(native
       ? {
@@ -776,8 +791,17 @@ export async function runRelayCommand(o: {
   }
   if (sub === 'setup' && args.length === 0) {
     if (o.values.pair !== undefined) throw new Error('--pair works with relay install only');
+    const lockdown = await relayLockdown({ ...o, home, machine, exec: o.exec ?? systemExec });
     o.stdout(
-      setupScriptFor({ owner: o.owner, env: o.env, home, machine, relayUser, install: undefined }),
+      setupScriptFor({
+        owner: o.owner,
+        env: o.env,
+        home,
+        machine,
+        relayUser,
+        install: undefined,
+        lockdown,
+      }),
     );
     return 0;
   }
@@ -789,8 +813,16 @@ export async function runRelayCommand(o: {
       relayUser,
       pair,
       machine,
-      script: (i) =>
-        setupScriptFor({ owner: o.owner, env: o.env, home, machine, relayUser, install: i }),
+      script: async (i) =>
+        setupScriptFor({
+          owner: o.owner,
+          env: o.env,
+          home,
+          machine,
+          relayUser,
+          install: i,
+          lockdown: await relayLockdown({ ...o, home, machine, exec: o.exec ?? systemExec }),
+        }),
     });
   }
   if (sub === 'uninstall' && args.length === 0) {
@@ -818,7 +850,9 @@ export interface RelayValues {
   'force-stop'?: boolean;
   'disable-spooler'?: boolean;
   'keep-tree'?: boolean;
+  'no-firewall'?: boolean;
   'force-path'?: boolean;
+  'block-smb-lan'?: boolean;
   pair?: string;
   user?: string;
   port?: string;
@@ -906,6 +940,7 @@ function setupScriptFor(o: {
   machine: string;
   relayUser: string;
   install: RelayInstall | undefined;
+  lockdown: LockdownPlan | null;
 }): string {
   const owner = relayOwner(o.owner, o.home, o.machine);
   const settings = serveSettings(owner);
@@ -932,6 +967,25 @@ function setupScriptFor(o: {
       studio: resolve(dirname(STUDIO_BIN), '..'),
     },
     ...(o.install === undefined ? {} : { install: o.install }),
+    lockdown: o.lockdown,
+  });
+}
+
+/**
+ * The network lockdown of this relay worker (src/relay-lockdown.ts): the local ranges, its DNS
+ * resolvers left open on port 53, and the deny list of its config; null with `--no-firewall`.
+ */
+async function relayLockdown(o: {
+  values: RelayValues;
+  owner: OwnerEnv;
+  home: string;
+  machine: string;
+  exec: Exec;
+}): Promise<LockdownPlan | null> {
+  if (o.values['no-firewall'] === true) return null;
+  return lockdownFor({
+    deny: serveSettings(relayOwner(o.owner, o.home, o.machine)).deny,
+    blockSmbLan: o.values['block-smb-lan'] === true,
   });
 }
 
@@ -1033,7 +1087,7 @@ async function install(o: {
   home: string;
   machine: string;
   relayUser: string;
-  script: (install: RelayInstall) => string;
+  script: (install: RelayInstall) => Promise<string>;
   pair: PairLine | undefined;
   values: RelayValues;
   env: Record<string, string | undefined>;
@@ -1085,7 +1139,7 @@ async function install(o: {
   // PowerShell on stdin, never as a file.
   const r = await runScript(
     exec,
-    o.script({
+    await o.script({
       port,
       scope,
       ...(o.values['keep-passwords'] === true ? { keepPasswords: true } : {}),

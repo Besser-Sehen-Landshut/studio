@@ -834,6 +834,14 @@
                   "type": "string",
                   "maxLength": 253
                 }
+              },
+              "prefixes": {
+                "maxItems": 50,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 64
+                }
               }
             },
             "additionalProperties": false

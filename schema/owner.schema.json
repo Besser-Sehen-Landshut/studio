@@ -338,6 +338,14 @@
                     "type": "string",
                     "maxLength": 253
                   }
+                },
+                "prefixes": {
+                  "maxItems": 50,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
                 }
               },
               "additionalProperties": false
@@ -414,6 +422,9 @@
                 "minLength": 2,
                 "maxLength": 500
               },
+              "accept_no_firewall": {
+                "type": "boolean"
+              },
               "grace_minutes": {
                 "default": 30,
                 "type": "integer",
@@ -468,6 +479,14 @@
                   "items": {
                     "type": "string",
                     "maxLength": 253
+                  }
+                },
+                "prefixes": {
+                  "maxItems": 50,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 64
                   }
                 }
               },

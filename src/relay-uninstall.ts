@@ -9,6 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { posix, win32 } from 'node:path';
 import { CREW_PREFIX_RE, crewAccountFunctions } from './crew-accounts.js';
+import { LOCKDOWN_GROUP, POINT_AND_PRINT_KEY } from './relay-lockdown.js';
 import {
   authorizedKeysFile,
   brokerTasks,
@@ -48,7 +49,13 @@ export interface InstallRecord {
     sshd?: ServiceState;
     sshdRule?: { exists: boolean; enabled?: string };
     sshdCapability?: { name: string; state: string } | null;
+    /** RestrictDriverInstallationToAdministrators before the install, when it was set. */
+    pointAndPrint?: { exists: boolean; value?: number };
   } | null;
+  /** Whether the install put the network lockdown in place (false after `--no-firewall`). */
+  firewall?: boolean;
+  /** The deny.hosts names the lockdown blocked, with the addresses their rules hold. */
+  lockdownNames?: Record<string, string[]>;
 }
 
 const START_TYPES = ['Automatic', 'Manual', 'Disabled'] as const;
@@ -83,6 +90,7 @@ export function parseInstallRecord(raw: unknown): InstallRecord | undefined {
   if (p !== null && typeof p === 'object') {
     const rule = p.sshdRule as { exists?: unknown; enabled?: unknown } | undefined;
     const cap = p.sshdCapability as { name?: unknown; state?: unknown } | null | undefined;
+    const pnp = p.pointAndPrint as { exists?: unknown; value?: unknown } | undefined;
     const webClient = service(p.webClient);
     const spooler = service(p.spooler);
     const sshd = service(p.sshd);
@@ -101,6 +109,14 @@ export function parseInstallRecord(raw: unknown): InstallRecord | undefined {
       ...(cap !== undefined && cap !== null && typeof cap.name === 'string'
         ? { sshdCapability: { name: cap.name, state: String(cap.state) } }
         : {}),
+      ...(pnp !== undefined && pnp !== null && typeof pnp.exists === 'boolean'
+        ? {
+            pointAndPrint: {
+              exists: pnp.exists,
+              ...(Number.isInteger(pnp.value) ? { value: pnp.value as number } : {}),
+            },
+          }
+        : {}),
     };
   }
   const paths = Array.isArray(r.readPaths)
@@ -115,6 +131,19 @@ export function parseInstallRecord(raw: unknown): InstallRecord | undefined {
     ...str('home'),
     readPaths: paths.filter((x): x is string => typeof x === 'string'),
     spoolerDisabled: r.spoolerDisabled === true,
+    ...(typeof r.firewall === 'boolean' ? { firewall: r.firewall } : {}),
+    ...(r.lockdownNames !== null && typeof r.lockdownNames === 'object'
+      ? {
+          lockdownNames: Object.fromEntries(
+            Object.entries(r.lockdownNames as Record<string, unknown>).map(([k, v]) => [
+              k,
+              (Array.isArray(v) ? v : v === undefined || v === null ? [] : [v]).filter(
+                (x): x is string => typeof x === 'string',
+              ),
+            ]),
+          ),
+        }
+      : {}),
     prior,
   };
 }
@@ -181,6 +210,19 @@ export function restoreSteps(record: InstallRecord | undefined): string {
       `  Remove-WindowsCapability -Online -Name ${psQuote(cap.name)} | Out-Null`,
       "  Write-Output 'removed: the OpenSSH server the install added'",
       '}',
+    );
+  }
+  // Point and Print: the value as it was, or none when there was none; without a record it stays.
+  const pnp = prior?.pointAndPrint;
+  if (pnp?.exists === false) {
+    out.push(
+      `Remove-ItemProperty -LiteralPath '${POINT_AND_PRINT_KEY}' -Name RestrictDriverInstallationToAdministrators -ErrorAction SilentlyContinue`,
+      "Write-Output 'restored: RestrictDriverInstallationToAdministrators unset, as before the install'",
+    );
+  } else if (pnp?.exists === true && pnp.value !== undefined) {
+    out.push(
+      `Set-ItemProperty -LiteralPath '${POINT_AND_PRINT_KEY}' -Name RestrictDriverInstallationToAdministrators -Type DWord -Value ${pnp.value}`,
+      `Write-Output 'restored: RestrictDriverInstallationToAdministrators=${pnp.value}, as before the install'`,
     );
   }
   if (prior?.sshdRule?.exists === true && prior.sshdRule.enabled === 'True') {
@@ -412,6 +454,7 @@ if (Test-Path -LiteralPath $conf) {
   }
 }
 Get-NetFirewallRule -DisplayName 'Studio relay: sshd' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+Get-NetFirewallRule -Group ${psQuote(LOCKDOWN_GROUP)} -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 ${step(8, o.keepTree ? 'the admin-only tree and the relay home stay (--keep-tree)' : 'the admin-only tree and the relay home')}
 ${
   o.keepTree
